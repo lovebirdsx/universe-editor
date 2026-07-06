@@ -116,6 +116,7 @@ export const EN_US_MESSAGES: MessageMap = {
   'action.newFile.title': 'New File…',
   'action.newFolder.title': 'New Folder…',
   'action.newUntitledFile.title': 'New File',
+  'action.agent.newSessionInCurrentEditor': 'New Agent Session in Current Editor',
   'action.nextEditor.title': 'Open Next Editor',
   'action.openContainingFolder.title': 'Open Containing Folder',
   'action.openDocs.title': 'Documentation',

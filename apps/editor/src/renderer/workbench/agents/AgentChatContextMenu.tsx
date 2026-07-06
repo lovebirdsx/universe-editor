@@ -10,6 +10,7 @@ import { ContextMenu } from '@universe-editor/workbench-ui'
 export interface AgentChatContextMenuState {
   readonly x: number
   readonly y: number
+  readonly args?: readonly unknown[]
 }
 
 interface Props {
@@ -24,6 +25,7 @@ export function AgentChatContextMenu({ state, commandService, contextKeyService,
     <ContextMenu
       menuId={MenuId.AcpChatContext}
       anchor={{ x: state.x, y: state.y }}
+      {...(state.args !== undefined ? { args: state.args } : {})}
       commandService={commandService}
       {...(contextKeyService !== undefined ? { contextKeyService } : {})}
       onClose={onClose}

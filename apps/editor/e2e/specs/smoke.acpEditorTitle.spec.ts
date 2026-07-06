@@ -2,7 +2,7 @@
  *  ACP Session Editor title-bar nav icons (@p1).
  *
  *  复现/守卫：当一个 acp.session editor 处于 active 时，editor tab 栏右上角应出现 5 个
- *  MenuId.EditorTitle 导航图标（jumpToPlan + 上一条/下一条/顶部/底部）。这些图标由
+ *  MenuId.EditorTitle inline 图标（当前 editor 新建 session + 上一条/下一条/顶部/底部）。这些图标由
  *  `activeEditorType == 'acp.session'` 门控，而 activeEditorType 写在每个 editor group
  *  的 scoped ContextKeyService 上（探针读不到 root key），故只能用 DOM testid 断言。
  *
@@ -18,11 +18,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
 
 const NAV_COMMANDS_IN_ORDER = [
-  'workbench.action.agent.jumpToPlan',
+  'workbench.action.agent.newSessionInCurrentEditor',
   'workbench.action.agent.focusPreviousTimelineItem',
   'workbench.action.agent.focusNextTimelineItem',
   'workbench.action.agent.focusTopTimelineItem',
   'workbench.action.agent.focusBottomTimelineItem',
+]
+
+const OVERFLOW_COMMANDS = [
+  'workbench.action.agent.showSessionChanges',
+  'workbench.action.agent.find',
+  'workbench.action.agent.jumpToPlan',
 ]
 
 test.describe('@p1 agents — editor title nav icons', () => {
@@ -49,12 +55,16 @@ test.describe('@p1 agents — editor title nav icons', () => {
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()))
       .toBe('acp.session')
 
-    // 关键断言：5 个导航图标按钮都可见。
+    // 关键断言：5 个 inline 图标按钮都可见。
     for (const cmd of NAV_COMMANDS_IN_ORDER) {
       await expect(page.locator(`[data-testid="view-title-action-${cmd}"]`)).toBeVisible()
     }
+    for (const cmd of OVERFLOW_COMMANDS) {
+      await expect(page.locator(`[data-testid="view-title-action-${cmd}"]`)).toHaveCount(0)
+    }
+    await expect(page.getByTestId('editor-title-overflow')).toBeVisible()
 
-    // 渲染顺序应为 order 1→5。
+    // 渲染顺序应为 order 0→5。
     const renderedOrder = await page.evaluate(() =>
       Array.from(document.querySelectorAll('[data-testid^="view-title-action-"]')).map((el) =>
         (el as HTMLElement).dataset['testid']!.replace('view-title-action-', ''),
@@ -65,7 +75,7 @@ test.describe('@p1 agents — editor title nav icons', () => {
         id.startsWith('workbench.action.agent.') &&
         (id.includes('TimelineItem') ||
           id.includes('Timeline') ||
-          id === 'workbench.action.agent.jumpToPlan'),
+          id === 'workbench.action.agent.newSessionInCurrentEditor'),
     )
     expect(navOnly).toEqual(NAV_COMMANDS_IN_ORDER)
   })

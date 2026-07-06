@@ -67,6 +67,7 @@ export function EditorTitleActions({ group }: { group: IEditorGroup }) {
         menuId={MenuId.EditorTitle}
         contextKeyService={ctx}
         group={NAVIGATION_GROUP}
+        actionArg={{ groupId: group.id }}
       />
       {hasOverflow && (
         <button

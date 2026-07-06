@@ -135,6 +135,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.agent.increaseFontSize': '增大聊天字体大小',
   'action.agent.jumpToPlan': '跳转到计划',
   'action.agent.newSession': '新建 Agent 会话',
+  'action.agent.newSessionInCurrentEditor': '在当前编辑器中新建 Agent 会话',
   'action.agent.openInEditor': '在编辑器中打开 Agent 会话',
   'action.agent.openMcpSettings': '打开 MCP 设置',
   'action.agent.openSettings': '打开 Agent 设置',

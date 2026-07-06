@@ -1,8 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Regression guard: an active ACP session editor must render the 5
- *  `MenuId.EditorTitle` navigation icons (jumpToPlan + 4 timeline moves),
- *  gated by `activeEditorType == 'acp.session'`. A non-ACP editor must not.
+ *  Regression guard: an active ACP session editor must render the inline
+ *  `MenuId.EditorTitle` navigation icons (new session in current editor + 4
+ *  timeline moves), while secondary session actions stay behind `...`.
+ *  Gated by `activeEditorType == 'acp.session'`. A non-ACP editor must not.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -32,11 +33,14 @@ import { EditorGroupsService } from '../../../services/editor/EditorGroupsServic
 import { ServicesContext } from '../../useService.js'
 import { AcpSessionEditorInput } from '../../../services/acp/acpSessionEditorInput.js'
 import {
+  ChatFindAction,
   FocusBottomAcpTimelineAction,
   FocusNextAcpTimelineItemAction,
   FocusPreviousAcpTimelineItemAction,
   FocusTopAcpTimelineAction,
   JumpToAcpPlanAction,
+  NewAgentSessionInCurrentEditorAction,
+  ShowAcpSessionChangesAction,
 } from '../../../actions/agentActions.js'
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import {
@@ -101,11 +105,16 @@ const componentMap = new Map<string, React.ComponentType<{ input: { label: strin
 ])
 
 const NAV_COMMANDS_IN_ORDER = [
-  JumpToAcpPlanAction.ID, // order 1
+  NewAgentSessionInCurrentEditorAction.ID, // order 0
   FocusPreviousAcpTimelineItemAction.ID, // order 2
   FocusNextAcpTimelineItemAction.ID, // order 3
   FocusTopAcpTimelineAction.ID, // order 4
   FocusBottomAcpTimelineAction.ID, // order 5
+]
+const OVERFLOW_SESSION_COMMANDS = [
+  ShowAcpSessionChangesAction.ID,
+  ChatFindAction.ID,
+  JumpToAcpPlanAction.ID,
 ]
 
 const disposables: IDisposable[] = []
@@ -116,7 +125,10 @@ afterEach(() => {
 
 function registerNavActions() {
   disposables.push(
+    registerAction2(NewAgentSessionInCurrentEditorAction),
     registerAction2(JumpToAcpPlanAction),
+    registerAction2(ShowAcpSessionChangesAction),
+    registerAction2(ChatFindAction),
     registerAction2(FocusPreviousAcpTimelineItemAction),
     registerAction2(FocusNextAcpTimelineItemAction),
     registerAction2(FocusTopAcpTimelineAction),
@@ -159,7 +171,7 @@ function scmDecorationsFor(resource: URI): IScmDecorationsServiceType {
 }
 
 describe('EditorGroupView — EditorTitle nav icons for ACP session', () => {
-  it('renders the 5 navigation icons (in order) for an active acp.session editor', async () => {
+  it('renders the inline navigation icons in order for an active acp.session editor', async () => {
     registerNavActions()
     const reg = EditorRegistry.registerEditorProvider({
       typeId: AcpSessionEditorInput.TYPE_ID,
@@ -180,7 +192,7 @@ describe('EditorGroupView — EditorTitle nav icons for ACP session', () => {
     )
 
     // The scoped contextKey is set in a parent effect; wait for the first icon.
-    await screen.findByTestId(`view-title-action-${JumpToAcpPlanAction.ID}`)
+    await screen.findByTestId(`view-title-action-${NewAgentSessionInCurrentEditorAction.ID}`)
 
     for (const cmd of NAV_COMMANDS_IN_ORDER) {
       expect(screen.getByTestId(`view-title-action-${cmd}`)).toBeTruthy()
@@ -190,6 +202,10 @@ describe('EditorGroupView — EditorTitle nav icons for ACP session', () => {
       container.querySelectorAll<HTMLElement>('[data-testid^="view-title-action-"]'),
     ).map((el) => el.dataset['testid']!.replace('view-title-action-', ''))
     expect(renderedOrder).toEqual(NAV_COMMANDS_IN_ORDER)
+    for (const cmd of OVERFLOW_SESSION_COMMANDS) {
+      expect(screen.queryByTestId(`view-title-action-${cmd}`)).toBeNull()
+    }
+    expect(screen.getByTestId('editor-title-overflow')).toBeTruthy()
   })
 
   it('does not render the ACP nav icons for a non-acp editor', async () => {
@@ -278,7 +294,9 @@ describe('EditorGroupView — EditorTitle nav icons for ACP session', () => {
     )
 
     await screen.findByTestId('fake-editor')
-    expect(screen.queryByTestId(`view-title-action-${JumpToAcpPlanAction.ID}`)).toBeNull()
+    expect(
+      screen.queryByTestId(`view-title-action-${NewAgentSessionInCurrentEditorAction.ID}`),
+    ).toBeNull()
 
     // The ACP session opens later and becomes active — this fires
     // onDidActiveEditorChange, which only updates activeEditorType if the hook's
@@ -287,7 +305,7 @@ describe('EditorGroupView — EditorTitle nav icons for ACP session', () => {
       svc.activeGroup.openEditor(new FakeEditor('sess', AcpSessionEditorInput.TYPE_ID))
     })
 
-    await screen.findByTestId(`view-title-action-${JumpToAcpPlanAction.ID}`)
+    await screen.findByTestId(`view-title-action-${NewAgentSessionInCurrentEditorAction.ID}`)
     for (const cmd of NAV_COMMANDS_IN_ORDER) {
       expect(screen.getByTestId(`view-title-action-${cmd}`)).toBeTruthy()
     }

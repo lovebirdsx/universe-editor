@@ -148,8 +148,8 @@ export class JumpToAcpPlanAction extends Action2 {
         {
           id: MenuId.EditorTitle,
           when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
-          group: 'navigation',
-          order: 1,
+          group: '0_session',
+          order: 30,
         },
       ],
       f1: true,
@@ -172,8 +172,8 @@ export class ShowAcpSessionChangesAction extends Action2 {
         {
           id: MenuId.EditorTitle,
           when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
-          group: 'navigation',
-          order: 0,
+          group: '0_session',
+          order: 10,
         },
       ],
       f1: true,
@@ -436,8 +436,8 @@ export class ChatFindAction extends Action2 {
         {
           id: MenuId.EditorTitle,
           when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
-          group: 'navigation',
-          order: 0,
+          group: '0_session',
+          order: 20,
         },
       ],
       f1: true,

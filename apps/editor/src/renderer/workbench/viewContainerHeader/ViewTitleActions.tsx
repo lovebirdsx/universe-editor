@@ -16,15 +16,17 @@ interface Props {
   menuId: MenuId
   contextKeyService: IContextKeyService
   group?: string
+  actionArg?: unknown
 }
 
-export function ViewTitleActions({ menuId, contextKeyService, group }: Props) {
+export function ViewTitleActions({ menuId, contextKeyService, group, actionArg }: Props) {
   const commandService = useService(ICommandService)
   const actions = useViewTitleActions(menuId, contextKeyService, group)
 
   if (actions.length === 0) return null
 
   const viewId = contextKeyService.get('view')
+  const arg = actionArg ?? viewId
 
   return (
     <>
@@ -35,7 +37,7 @@ export function ViewTitleActions({ menuId, contextKeyService, group }: Props) {
           <button
             key={a.command}
             className={styles['actionBtn']}
-            onClick={() => void commandService.executeCommand(a.command, viewId)}
+            onClick={() => void commandService.executeCommand(a.command, arg)}
             title={tooltip}
             aria-label={tooltip}
             data-testid={`view-title-action-${a.command}`}

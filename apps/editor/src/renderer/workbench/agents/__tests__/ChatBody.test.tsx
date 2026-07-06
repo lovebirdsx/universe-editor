@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { StrictMode } from 'react'
 import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import {
+  Action2,
   Event,
   IConfigurationService,
   ICommandService,
@@ -17,8 +18,12 @@ import {
   IFileService,
   InstantiationService,
   IWorkspaceService,
+  MenuId,
   observableValue,
+  registerAction2,
   ServiceCollection,
+  localize2,
+  type ServicesAccessor,
 } from '@universe-editor/platform'
 import type {
   IFileSearchService as IFileSearchServiceType,
@@ -72,6 +77,19 @@ afterEach(() => {
 
 const focusedClass = styles['timelineSlotFocused'] as string
 const emptySessionClass = styles['chatEmptySession'] as string
+
+class CaptureChatContextArgAction extends Action2 {
+  static readonly ID = 'test.acpChatContext.captureArg'
+  constructor() {
+    super({
+      id: CaptureChatContextArgAction.ID,
+      title: localize2('test.acpChatContext.captureArg', 'Capture Session Arg'),
+      menu: [{ id: MenuId.AcpChatContext, group: 'z_test', order: 1 }],
+    })
+  }
+
+  override run(_accessor: ServicesAccessor): void {}
+}
 
 function makeMessage(id: string, text: string): AcpMessage {
   return { id, role: 'agent', text, blocks: [{ type: 'text', text }], streaming: false }
@@ -152,7 +170,7 @@ const stubWorkspaceService = {
 
 function makeInstantiation(
   onRegister?: (w: AcpChatWidget) => void,
-  onCommand?: (id: string) => void,
+  onCommand?: (id: string, ...args: unknown[]) => void,
 ) {
   const services = new ServiceCollection()
   services.set(IContextKeyService, new ContextKeyService())
@@ -172,6 +190,7 @@ function makeInstantiation(
       return { dispose() {} }
     },
     focusSessionInput: () => false,
+    setHasSelection: () => {},
     setPopoverOpen: () => {},
     setFindVisible: () => {},
   } as unknown as IAcpChatWidgetService)
@@ -185,8 +204,8 @@ function makeInstantiation(
   } as unknown as IConfigurationService)
   services.set(ICommandService, {
     _serviceBrand: undefined,
-    executeCommand: (id: string) => {
-      onCommand?.(id)
+    executeCommand: (id: string, ...args: unknown[]) => {
+      onCommand?.(id, ...args)
       return Promise.resolve(undefined)
     },
   } as unknown as ICommandService)
@@ -241,6 +260,31 @@ describe('ChatBody — click to focus a timeline item', () => {
     })
     expect(slotEl(container, 'm:b').className).toContain(focusedClass)
     expect(slotEl(container, 'm:a').className).not.toContain(focusedClass)
+  })
+
+  it('passes the session id to chat context menu commands', () => {
+    const disposable = registerAction2(CaptureChatContextArgAction)
+    try {
+      const command = vi.fn()
+      const inst = makeInstantiation(undefined, command)
+      const oneMessage: readonly TimelineItem[] = [
+        { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
+      ]
+      const { container, getByText } = render(
+        <ServicesContext.Provider value={inst}>
+          <ChatBody session={makeSession('s-menu', oneMessage)} />
+        </ServicesContext.Provider>,
+      )
+
+      fireEvent.contextMenu(slotEl(container, 'm:a'))
+      fireEvent.click(getByText('Capture Session Arg'))
+
+      expect(command).toHaveBeenCalledWith(CaptureChatContextArgAction.ID, {
+        sessionId: 's-menu',
+      })
+    } finally {
+      disposable.dispose()
+    }
   })
 
   it('pulls DOM focus into the scroll container so Alt+J/K can fire', () => {

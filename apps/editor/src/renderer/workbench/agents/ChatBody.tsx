@@ -601,7 +601,7 @@ function ChatScroll({
     if (key) focusSlot(key)
     e.preventDefault()
     widgetService.setHasSelection(!!window.getSelection()?.toString())
-    setMenu({ x: e.clientX, y: e.clientY })
+    setMenu({ x: e.clientX, y: e.clientY, args: [{ sessionId: session.id }] })
   }
 
   // Pin to the very bottom. A single `scrollTop = scrollHeight` lands short in

@@ -8,6 +8,7 @@
 import {
   Action2,
   IDialogService,
+  IEditorGroupsService,
   IEditorService,
   IInstantiationService,
   INotificationService,
@@ -21,6 +22,7 @@ import {
   Severity,
   localize,
   localize2,
+  type IEditorGroup,
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -67,6 +69,74 @@ export class NewAgentSessionAction extends Action2 {
       }
       views.openViewContainer('workbench.view.agents')
     }
+  }
+}
+
+export class NewAgentSessionInCurrentEditorAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.newSessionInCurrentEditor'
+  constructor() {
+    super({
+      id: NewAgentSessionInCurrentEditorAction.ID,
+      title: localize2(
+        'action.agent.newSessionInCurrentEditor',
+        'New Agent Session in Current Editor',
+      ),
+      category: CATEGORY,
+      icon: 'add',
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
+          group: 'navigation',
+          order: 0,
+        },
+        {
+          id: MenuId.AcpChatContext,
+          group: '2_session',
+          order: 1.5,
+        },
+      ],
+      f1: true,
+    })
+  }
+
+  override async run(
+    accessor: ServicesAccessor,
+    arg?: { groupId?: unknown; sessionId?: unknown },
+  ): Promise<void> {
+    const sessions = accessor.get(IAcpSessionService)
+    const registry = accessor.get(IAcpAgentRegistry)
+    const groups = accessor.get(IEditorGroupsService)
+    const inst = accessor.get(IInstantiationService)
+    const dialog = accessor.get(IDialogService)
+
+    const group = resolveEditorGroup(arg, groups)
+    const current = resolveTargetSessionEditor(arg, group) ?? group.activeEditor
+    const agentId = resolveSessionEditorAgentId(current, sessions) ?? registry.defaultAgentId()
+
+    if (current instanceof AcpSessionEditorInput && current.confirmClose) {
+      const ok = await current.confirmClose(dialog)
+      if (!ok) return
+    }
+
+    const session = await sessions.createSession(agentId)
+    const nextInput = inst.createInstance(
+      AcpSessionEditorInput,
+      session.id,
+      session.agentId,
+      undefined,
+    )
+
+    if (current instanceof AcpSessionEditorInput) {
+      const index = group.indexOf(current)
+      openSessionEditorInGroup(group, nextInput, index >= 0 ? index : undefined)
+      group.closeEditor(current)
+      closeDuplicateSessionEditors(groups, group, session.id)
+      return
+    }
+
+    openSessionEditorInGroup(group, nextInput, undefined)
+    closeDuplicateSessionEditors(groups, group, session.id)
   }
 }
 
@@ -512,4 +582,87 @@ function resolveRenameTargetId(
   const active = editor.activeEditor.get()
   if (active instanceof AcpSessionEditorInput) return active.sessionId
   return sessions.activeSession.get()?.id
+}
+
+function resolveEditorGroup(
+  arg: { groupId?: unknown; sessionId?: unknown } | undefined,
+  groups: IEditorGroupsService,
+): IEditorGroup {
+  const groupId = typeof arg?.groupId === 'number' ? arg.groupId : undefined
+  if (groupId !== undefined) {
+    const group = groups.getGroup(groupId)
+    if (group !== undefined) return group
+  }
+  const sessionId = typeof arg?.sessionId === 'string' ? arg.sessionId : undefined
+  if (sessionId !== undefined) {
+    for (const group of groups.groups) {
+      if (
+        group.editors.some(
+          (editor) => editor instanceof AcpSessionEditorInput && editor.sessionId === sessionId,
+        )
+      ) {
+        return group
+      }
+    }
+  }
+  return groups.activeGroup
+}
+
+function resolveTargetSessionEditor(
+  arg: { sessionId?: unknown } | undefined,
+  group: IEditorGroup,
+): AcpSessionEditorInput | undefined {
+  const sessionId = typeof arg?.sessionId === 'string' ? arg.sessionId : undefined
+  if (sessionId === undefined) return undefined
+  return group.editors.find(
+    (editor): editor is AcpSessionEditorInput =>
+      editor instanceof AcpSessionEditorInput && editor.sessionId === sessionId,
+  )
+}
+
+function resolveSessionEditorAgentId(
+  editor: IEditorGroup['activeEditor'],
+  sessions: IAcpSessionService,
+): string | undefined {
+  if (editor instanceof AcpSessionEditorInput) {
+    return editor.agentId ?? sessions.getById(editor.sessionId)?.agentId
+  }
+  return sessions.activeSession.get()?.agentId
+}
+
+function openSessionEditorInGroup(
+  group: IEditorGroup,
+  input: AcpSessionEditorInput,
+  index: number | undefined,
+): void {
+  const existing = group.findEditor(input)
+  if (existing !== undefined) {
+    input.dispose()
+    if (index !== undefined && group.indexOf(existing) !== index) {
+      group.moveEditor(existing, index)
+    }
+    group.pinEditor(existing)
+    group.setActive(existing)
+    return
+  }
+  group.openEditor(input, {
+    activate: true,
+    pinned: true,
+    ...(index !== undefined ? { index } : {}),
+  })
+}
+
+function closeDuplicateSessionEditors(
+  groups: IEditorGroupsService,
+  targetGroup: IEditorGroup,
+  sessionId: string,
+): void {
+  for (const group of groups.groups) {
+    if (group === targetGroup) continue
+    for (const editor of [...group.editors]) {
+      if (editor instanceof AcpSessionEditorInput && editor.sessionId === sessionId) {
+        group.closeEditor(editor)
+      }
+    }
+  }
 }

@@ -71,7 +71,7 @@ export function StickyUserMessageBar({
     e.preventDefault()
     onFocusSlot?.(slotKey)
     widgetService.setHasSelection(!!window.getSelection()?.toString())
-    setMenu({ x: e.clientX, y: e.clientY })
+    setMenu({ x: e.clientX, y: e.clientY, args: [{ sessionId: session.id }] })
   }
 
   return (

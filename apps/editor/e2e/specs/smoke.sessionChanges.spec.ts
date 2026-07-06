@@ -4,7 +4,7 @@
  *  全链路烟雾：注入一个 stdio agent，它在 prompt 时把一个文件真实写到磁盘，并推送带
  *  `_meta.claudeCode.toolResponse.{filePath, structuredPatch}` 的 `Write` tool_call。断言：
  *    - SessionChangeTrackerService 记录该变更（读盘 current + 逆推 baseline）；
- *    - Session Editor 右上角出现 `diff` 入口图标（MenuId.EditorTitle，门控 acp.session）；
+ *    - Session Editor 右上角出现 `...` 菜单（Session Changes 入口在 overflow 内）；
  *    - 点击入口打开 Session Changes 容器，CHANGES 列表渲染出被修改文件一行；
  *    - 点击该行打开整文件 diff editor（typeId='diff'）。
  *
@@ -47,10 +47,11 @@ test.describe('@p1 session changes', () => {
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()))
       .toBe('acp.session')
 
-    // 3. 右上角 Session Changes 入口图标可见（门控 activeEditorType=='acp.session'）。
-    await expect(
-      page.locator(`[data-testid="view-title-action-${SHOW_CHANGES_CMD}"]`),
-    ).toBeVisible()
+    // 3. 右上角 overflow 菜单可见；Session Changes 不再作为 inline diff 图标出现。
+    await expect(page.getByTestId('editor-title-overflow')).toBeVisible()
+    await expect(page.locator(`[data-testid="view-title-action-${SHOW_CHANGES_CMD}"]`)).toHaveCount(
+      0,
+    )
 
     // 4. 发送 prompt（agent 写盘 + 推送 Write structuredPatch）。
     await page.evaluate(() => window.__E2E__!.sendAcpPrompt('go'))

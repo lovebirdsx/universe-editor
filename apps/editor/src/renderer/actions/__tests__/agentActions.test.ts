@@ -2,9 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   ContextKeyService,
+  IDialogService,
+  IEditorGroupsService,
   IEditorService,
   IHostService,
+  IInstantiationService,
   ILayoutService,
+  MenuId,
+  MenuRegistry,
   INotificationService,
   IQuickInputService,
   IUriIdentityService,
@@ -33,6 +38,7 @@ import {
   SelectPreviousAcpPromptSuggestionAction,
   AcceptAcpPromptSuggestionAction,
   HideAcpPromptSuggestionAction,
+  NewAgentSessionInCurrentEditorAction,
 } from '../agentActions.js'
 import {
   IAcpChatWidgetService,
@@ -49,6 +55,8 @@ import {
 } from '../../services/acp/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../../services/acp/acpChatLocationService.js'
 import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
+import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
+import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 
 describe('Agent timeline navigation actions', () => {
   const disposables: IDisposable[] = []
@@ -391,6 +399,99 @@ describe('Agent chat font zoom actions', () => {
       DecreaseAgentFontSizeAction.ID,
     )
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+0', ctx)).toBe(ResetAgentFontSizeAction.ID)
+  })
+})
+
+describe('NewAgentSessionInCurrentEditorAction', () => {
+  function fakeSession(id: string, agentId: string, title: string): IAcpSession {
+    return {
+      id,
+      agentId,
+      title,
+      status: observableValue('test.status', 'idle'),
+      sessionIdOnAgent: observableValue<string | undefined>('test.sessionIdOnAgent', id),
+    } as unknown as IAcpSession
+  }
+
+  it('is available from the session message context menu', () => {
+    const disposable = registerAction2(NewAgentSessionInCurrentEditorAction)
+    try {
+      const ctx = new ContextKeyService()
+      ctx.createKey<string>('activeEditorType', AcpSessionEditorInput.TYPE_ID)
+      expect(
+        MenuRegistry.getMenuItems(MenuId.AcpChatContext, ctx).some(
+          (item) => 'command' in item && item.command === NewAgentSessionInCurrentEditorAction.ID,
+        ),
+      ).toBe(true)
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  it('creates a same-agent session in the current session editor slot', async () => {
+    const groups = new EditorGroupsService()
+    const live = new Map<string, IAcpSession>()
+    live.set('old-session', fakeSession('old-session', 'codex', 'Old'))
+
+    const instRef: { current?: InstantiationService } = {}
+    const createSession = vi.fn(async (agentId?: string) => {
+      const session = fakeSession('new-session', agentId ?? 'missing-agent', 'New')
+      live.set(session.id, session)
+      // Simulate AcpChatLocationService's active-session autorun: createSession
+      // may already have opened the new session before the title action resumes.
+      groups.activeGroup.openEditor(
+        instRef.current!.createInstance(AcpSessionEditorInput, session.id, session.agentId, 'New'),
+      )
+      return session
+    })
+    const defaultAgentId = vi.fn(() => 'claude-code')
+
+    const services = new ServiceCollection()
+    services.set(IAcpSessionService, {
+      _serviceBrand: undefined,
+      createSession,
+      getById: (id: string) => live.get(id),
+      activeSession: observableValue<IAcpSession | undefined>('test.activeSession', undefined),
+    } as unknown as IAcpSessionService)
+    services.set(IAcpAgentRegistry, {
+      _serviceBrand: undefined,
+      defaultAgentId,
+    } as unknown as IAcpAgentRegistry)
+    services.set(IAcpSessionHistoryService, {
+      _serviceBrand: undefined,
+      entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.entries', []),
+      get: () => undefined,
+    } as unknown as IAcpSessionHistoryService)
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      register: vi.fn(),
+      focusSessionInput: vi.fn(),
+    } as unknown as IAcpChatWidgetService)
+    services.set(IEditorGroupsService, groups)
+    services.set(IDialogService, {
+      _serviceBrand: undefined,
+      confirm: vi.fn(),
+      prompt: vi.fn(),
+    } as unknown as IDialogService)
+    const inst = new InstantiationService(services)
+    instRef.current = inst
+    services.set(IInstantiationService, inst)
+
+    const oldInput = inst.createInstance(AcpSessionEditorInput, 'old-session', 'codex', 'Old')
+    groups.activeGroup.openEditor(oldInput)
+
+    await inst.invokeFunction((accessor) =>
+      new NewAgentSessionInCurrentEditorAction().run(accessor, {
+        sessionId: 'old-session',
+      }),
+    )
+
+    expect(createSession).toHaveBeenCalledWith('codex')
+    expect(defaultAgentId).not.toHaveBeenCalled()
+    expect(groups.activeGroup.editors).toHaveLength(1)
+    const active = groups.activeGroup.activeEditor
+    expect(active).toBeInstanceOf(AcpSessionEditorInput)
+    expect((active as AcpSessionEditorInput).sessionId).toBe('new-session')
   })
 })
 

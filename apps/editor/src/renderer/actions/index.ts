@@ -242,6 +242,7 @@ import {
   FocusPreviousAcpTimelineItemAction,
   ForkAgentSessionAction,
   NewAgentSessionAction,
+  NewAgentSessionInCurrentEditorAction,
   OpenAcpMcpSettingsAction,
   OpenAgentSettingsAction,
   OpenAgentInEditorAction,
@@ -546,6 +547,7 @@ registerAction2(FocusTerminalPanelAction)
 
 // Agents
 registerAction2(NewAgentSessionAction)
+registerAction2(NewAgentSessionInCurrentEditorAction)
 registerAction2(CancelAgentTurnAction)
 registerAction2(OpenAgentInEditorAction)
 registerAction2(OpenAgentViewAction)
