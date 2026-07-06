@@ -389,22 +389,31 @@ export function PromptMonacoEditor({
       disposables.push(ed.onDidContentSizeChange(() => applyHeight()))
       applyHeight()
 
-      // Enter submits (unless a popover consumes it via the global command, in
-      // which case that fires first and this never runs); Shift+Enter falls
-      // through to Monaco as a newline.
-      ed.addCommand(m.KeyCode.Enter, () => {
-        if (!onEnterRef.current()) {
-          const editor = editorRef.current
-          const mm = monacoRef.current
-          if (editor && mm) editor.trigger('keyboard', 'type', { text: '\n' })
-        }
-      })
-
       // ArrowUp on the first visual row opens prompt history. Registered as a
       // raw keydown listener (not addCommand) so it only fires from the top row
       // and lets Monaco move the cursor up within a soft-wrapped line elsewhere.
+      //
+      // Enter is handled here too, for the SAME scoping reason: a standalone
+      // editor's `addCommand(KeyCode.Enter, …)` registers on Monaco's shared
+      // StandaloneKeybindingService with no editor scope, so it fires for Enter
+      // in EVERY Monaco editor — including file editors — and there it ran this
+      // prompt's onEnter (submitting/swallowing), which is why pressing Enter in
+      // a .ts file stopped inserting a newline once a session editor mounted.
+      // A capture-phase keydown on THIS editor's own DOM node is naturally scoped.
       const dom = ed.getContainerDomNode()
       const keydownHandler = (e: KeyboardEvent): void => {
+        // Enter (no modifier) submits unless a popover consumes it; Shift+Enter
+        // (and other modifiers) fall through to Monaco as a newline. The popover
+        // Accept command (gated on acpPromptPopupVisible) resolves first through
+        // the global handler when a popover is open, so onEnter returns false
+        // then and we let the key through.
+        if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+          if (onEnterRef.current()) {
+            e.preventDefault()
+            e.stopPropagation()
+          }
+          return
+        }
         // Tab accepts an inline completion when ghost text is showing, matching a
         // normal editor. With editContext: true Monaco's own Tab dispatch can't be
         // relied on to commit (see inlineCompletionActions.ts), so we drive the
