@@ -21,6 +21,20 @@ export function isAbsolutePath(p: string): boolean {
   return /^[A-Za-z]:[/\\]/.test(p) || p.startsWith('/')
 }
 
+function decodeMarkdownLinkPath(rawPath: string): string {
+  if (!rawPath.includes('%')) return rawPath
+  try {
+    return decodeURIComponent(rawPath)
+  } catch {
+    return rawPath
+  }
+}
+
+function markdownLinkPathVariants(rawPath: string): readonly string[] {
+  const decoded = decodeMarkdownLinkPath(rawPath)
+  return decoded === rawPath ? [rawPath] : [decoded, rawPath]
+}
+
 /**
  * Ordered, de-duplicated list of concrete URIs to probe for {@link rawPath}.
  * Absolute paths yield a single candidate; relative paths are resolved against
@@ -32,10 +46,6 @@ export function markdownLinkCandidates(
   baseDir: URI | undefined,
   workspaceRoot: URI | undefined,
 ): URI[] {
-  if (isAbsolutePath(rawPath)) return [URI.file(rawPath)]
-
-  // Normalize separators so a Windows-style `a\b.ts` joins correctly.
-  const rel = rawPath.replace(/\\/g, '/')
   const out: URI[] = []
   const seen = new Set<string>()
   const push = (uri: URI): void => {
@@ -44,8 +54,16 @@ export function markdownLinkCandidates(
     seen.add(key)
     out.push(uri)
   }
-  if (baseDir) push(URI.joinPath(baseDir, rel))
-  if (workspaceRoot) push(URI.joinPath(workspaceRoot, rel))
+  for (const path of markdownLinkPathVariants(rawPath)) {
+    if (isAbsolutePath(path)) {
+      push(URI.file(path))
+      continue
+    }
+    // Normalize separators so a Windows-style `a\b.ts` joins correctly.
+    const rel = path.replace(/\\/g, '/')
+    if (baseDir) push(URI.joinPath(baseDir, rel))
+    if (workspaceRoot) push(URI.joinPath(workspaceRoot, rel))
+  }
   return out
 }
 
@@ -55,7 +73,7 @@ export function markdownLinkCandidates(
  * separators normalized to `/`.
  */
 export function searchPatternFor(rawPath: string): string {
-  return rawPath
+  return decodeMarkdownLinkPath(rawPath)
     .split(/[/\\]/)
     .filter((s) => s.length > 0 && s !== '.' && s !== '..')
     .join('/')

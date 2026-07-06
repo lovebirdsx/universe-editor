@@ -26,6 +26,27 @@ describe('markdownLinkCandidates', () => {
     expect(c.map((u) => u.path)).toEqual(['/etc/hosts'])
   })
 
+  it('decodes percent-encoded absolute paths before probing', () => {
+    const encoded =
+      'C:/Users/KURO/AppData/Local/Programs/Universe%20Editor/resources/docs/user/zh-CN/customization/ai-providers.md'
+    const c = markdownLinkCandidates(encoded, baseDir, root)
+
+    expect(c[0]!.fsPath).toContain('Universe Editor')
+    expect(c[0]!.fsPath).not.toContain('%20')
+    expect(c[1]!.fsPath).toContain('Universe%20Editor')
+  })
+
+  it('decodes percent-encoded relative paths before resolving candidates', () => {
+    const c = markdownLinkCandidates('docs/Universe%20Editor/ai-providers.md', baseDir, root)
+
+    expect(c.map((u) => u.path)).toEqual([
+      '/repo/docs/plan/docs/Universe Editor/ai-providers.md',
+      '/repo/docs/Universe Editor/ai-providers.md',
+      '/repo/docs/plan/docs/Universe%20Editor/ai-providers.md',
+      '/repo/docs/Universe%20Editor/ai-providers.md',
+    ])
+  })
+
   it('probes the source dir before the workspace root for a relative path', () => {
     const c = markdownLinkCandidates('foo.md', baseDir, root)
     expect(c.map((u) => u.path)).toEqual(['/repo/docs/plan/foo.md', '/repo/foo.md'])
@@ -67,6 +88,12 @@ describe('searchPatternFor', () => {
     expect(searchPatternFor('../../src/a.ts')).toBe('src/a.ts')
     expect(searchPatternFor('a\\b\\c.ts')).toBe('a/b/c.ts')
     expect(searchPatternFor('./x.ts')).toBe('x.ts')
+  })
+
+  it('decodes percent-encoded path segments', () => {
+    expect(searchPatternFor('docs/Universe%20Editor/ai-providers.md')).toBe(
+      'docs/Universe Editor/ai-providers.md',
+    )
   })
 
   it('is empty for a path of only relative segments', () => {

@@ -378,6 +378,32 @@ describe('MarkdownView', () => {
     expect(openEditor).not.toHaveBeenCalled()
   })
 
+  it('decodes percent-encoded Windows absolute file links before opening', async () => {
+    const encoded =
+      'C:/Users/KURO/AppData/Local/Programs/Universe%20Editor/resources/docs/user/zh-CN/customization/ai-providers.md'
+    const decoded =
+      'C:/Users/KURO/AppData/Local/Programs/Universe Editor/resources/docs/user/zh-CN/customization/ai-providers.md'
+    const resolverOpen = vi.fn().mockResolvedValue(undefined)
+    const exists = vi.fn((resource: URI) => resource.fsPath === decoded)
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver(resolverOpen))
+    services.set(IConfigurationService, makeConfig())
+    services.set(IFileService, makeFileService(exists))
+    services.set(IEditorService, makeEditorService())
+    const inst = new InstantiationService(services)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <MarkdownView text={`- [AI 供应商配置](${encoded})`} />
+      </ServicesContext.Provider>,
+    )
+
+    screen.getByRole('link', { name: 'AI 供应商配置' }).click()
+    await waitFor(() => expect(resolverOpen).toHaveBeenCalledTimes(1))
+    expect(exists.mock.calls.some(([resource]) => resource.fsPath === decoded)).toBe(true)
+    expect(resolverOpen.mock.calls[0]?.[0]?.fsPath).toBe(decoded)
+  })
+
   it('routes a mermaid fence to MermaidBlock and injects the rendered svg', async () => {
     renderMock.mockResolvedValue('<svg id="rendered"><g /></svg>')
     renderMarkdown('```mermaid\ngraph TD; A-->B\n```')
