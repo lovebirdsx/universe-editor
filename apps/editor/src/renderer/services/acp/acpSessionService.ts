@@ -79,6 +79,7 @@ import {
   type AskUserQuestionResult,
   type IAcpSession,
   type IAcpSessionInitState,
+  type RewindFilesResult,
 } from './acpSession.js'
 import {
   ACP_ACTIVE_SESSION_STORAGE_KEY,
@@ -109,6 +110,7 @@ export {
   type AcpUsage,
   type IAcpSession,
   type IAcpSessionInitState,
+  type RewindFilesResult,
   type TimelineItem,
 } from './acpSession.js'
 import { AcpForeignWorktreeError } from './acpErrors.js'
@@ -190,6 +192,31 @@ export interface IAcpSessionService {
    * the rename was applied.
    */
   renameSession(sessionId: string, title: string): boolean
+  /**
+   * Fork a session into a NEW independent session (分叉). The fork contains the
+   * conversation up to (and including) `messageId` — an earlier user turn — with
+   * everything after it dropped; omit `messageId` to fork from the current tip.
+   * The original session is left untouched. Backed by the agent's UNSTABLE
+   * `session/fork` (Claude only for now, gated on
+   * `sessionCapabilities.fork`): the fork is created resident on the agent, then
+   * resumed here via `session/load` so its truncated history replays into a fresh
+   * live session that is registered and made active. Rejects if the agent does
+   * not advertise fork support. Returns the new session.
+   */
+  forkSession(sessionId: string, messageId?: string): Promise<IAcpSession>
+  /**
+   * Rewind a live session to an earlier user message (回退) — delegates to the
+   * view-model's {@link IAcpSession.rewindTo}. `dryRun` previews the file impact
+   * without mutating anything. `rewindFiles` (default true) rolls back the
+   * agent-edited files; pass `false` to keep the working-tree edits and only
+   * truncate the conversation. Returns the agent's {@link RewindFilesResult}, or
+   * `undefined` when the session isn't live / doesn't support rewind.
+   */
+  rewindSession(
+    sessionId: string,
+    messageId: string,
+    options?: { dryRun?: boolean; rewindFiles?: boolean },
+  ): Promise<RewindFilesResult | undefined>
 }
 
 export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessionService')
@@ -872,6 +899,90 @@ export class AcpSessionService
     this._history.setHistoryManualTitle(entry.id)
     this._telemetry.publicLog('acp.session_renamed', { live: false })
     return true
+  }
+
+  async forkSession(sessionId: string, messageId?: string): Promise<IAcpSession> {
+    // Resolve the source session's durable coordinates. A live session carries
+    // its agent-issued id; otherwise fall back to the persisted history row.
+    const live = this._findSession(sessionId)
+    const sourceAgentSessionId = live?.sessionIdOnAgent.get() ?? sessionId
+    const entry = this._history.get(sourceAgentSessionId)
+    if (!entry) throw new Error(`Unknown session to fork: ${sessionId}`)
+    // Fork spawns / resumes the agent against the source's cwd. Refuse a
+    // cross-worktree fork for the same reason resume does — it would run the
+    // agent against a directory this window isn't rooted in.
+    const cwd = entry.cwd
+    const currentCwd = this._workspace.current?.folder.fsPath
+    if (
+      cwd !== undefined &&
+      currentCwd !== undefined &&
+      !this._uriIdentity.arePathsEqual(cwd, currentCwd)
+    ) {
+      throw new AcpForeignWorktreeError(sourceAgentSessionId, cwd, currentCwd)
+    }
+
+    const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
+    const conn = await this._client.connect(entry.agentId, {
+      ...(cwd !== undefined ? { cwd } : {}),
+    })
+    let newSessionId: string
+    try {
+      const initResult = await withTimeout(conn.initializeResult, timeoutMs, 'ACP initialize')
+      if (initResult.agentCapabilities?.sessionCapabilities?.fork == null) {
+        throw new Error('Agent does not advertise sessionCapabilities.fork — cannot fork')
+      }
+      const mcpServers = this._readMcpServers()
+      const { kept } = filterMcpServersByCapabilities(
+        mcpServers,
+        initResult.agentCapabilities?.mcpCapabilities,
+      )
+      const result = await withTimeout(
+        conn.conn.unstable_forkSession({
+          sessionId: sourceAgentSessionId,
+          cwd: cwd ?? '',
+          mcpServers: kept,
+          // Ask the fork to truncate at this user turn (回退 point) instead of the
+          // session tip. Unknown/absent id → the agent forks from the tip.
+          ...(messageId !== undefined ? { _meta: { rewindTo: messageId } } : {}),
+        }),
+        timeoutMs,
+        'ACP session/fork',
+      )
+      newSessionId = result.sessionId
+    } finally {
+      // Drop the temp lease used only for the fork RPC; resumeSession below opens
+      // its own lease (reusing the same pooled process) to load + replay.
+      conn.dispose()
+    }
+
+    // Register the fork as a durable history row so resumeSession can load it.
+    const forkTitle = localize('acp.session.forkTitle', '{title} (fork)', { title: entry.title })
+    this._history.add({
+      agentId: entry.agentId,
+      sessionIdOnAgent: newSessionId,
+      title: forkTitle,
+      ...(cwd !== undefined ? { cwd } : {}),
+      hasMessages: true,
+    })
+    this._telemetry.publicLog('acp.session_forked', {
+      agentId: entry.agentId,
+      fromMessage: messageId !== undefined,
+    })
+    // Load + replay the fork's (truncated) history into a fresh live session and
+    // make it active — resumeSession handles the session/load replay.
+    return this.resumeSession(newSessionId)
+  }
+
+  rewindSession(
+    sessionId: string,
+    messageId: string,
+    options?: { dryRun?: boolean; rewindFiles?: boolean },
+  ): Promise<RewindFilesResult | undefined> {
+    const session = this._findSession(sessionId)
+    if (!session || session.status.get() === 'closed' || !session.rewindSupported) {
+      return Promise.resolve(undefined)
+    }
+    return session.rewindTo(messageId, options ?? {})
   }
 
   /**

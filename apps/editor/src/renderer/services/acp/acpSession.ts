@@ -9,6 +9,7 @@
 import {
   Disposable,
   autorun,
+  generateUuid,
   observableValue,
   Emitter,
   TransactionImpl,
@@ -49,11 +50,13 @@ import {
   extractModelBreakdown,
   readFileChanges,
   readMcpServer,
+  readMessageId,
   readParentToolUseId,
   readTerminalOutput,
 } from './acpSessionUpdateMeta.js'
 import {
   AcpAbortError,
+  REWIND_SESSION_METHOD,
   SET_SESSION_TITLE_METHOD,
   type AcpChildItem,
   type AcpMcpServerStatus,
@@ -68,6 +71,7 @@ import {
   type AcpUsage,
   type IAcpSession,
   type IAcpSessionInitState,
+  type RewindFilesResult,
   type TimelineItem,
 } from './acpSessionModel.js'
 
@@ -76,6 +80,7 @@ import {
 export {
   AcpAbortError,
   ASK_USER_QUESTION_METHOD,
+  REWIND_SESSION_METHOD,
   SET_SESSION_TITLE_METHOD,
 } from './acpSessionModel.js'
 export type {
@@ -99,6 +104,7 @@ export type {
   AskUserQuestionResult,
   IAcpSession,
   IAcpSessionInitState,
+  RewindFilesResult,
   TimelineItem,
 } from './acpSessionModel.js'
 export {
@@ -239,6 +245,22 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   readonly imageSupported: ISettableObservable<boolean>
 
+  /**
+   * Whether the connected agent advertised `sessionCapabilities.fork`. Cached
+   * from the same `initialize()` response as {@link imageSupported}; observable
+   * because it arrives async after attach. `false` until known.
+   */
+  readonly forkSupported: ISettableObservable<boolean>
+
+  /**
+   * Rewind (回退) is a claude-code-only capability for the first release — it
+   * hinges on the fork's file-checkpointing + `resumeSessionAt` truncation that
+   * only the Claude agent implements. Static; other agents hide the affordance.
+   */
+  get rewindSupported(): boolean {
+    return this.agentId === 'claude-code'
+  }
+
   constructor(
     readonly id: string,
     readonly agentId: string,
@@ -293,6 +315,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       undefined,
     )
     this.imageSupported = observableValue<boolean>(`acp.session.imageSupported.${id}`, false)
+    this.forkSupported = observableValue<boolean>(`acp.session.forkSupported.${id}`, false)
     this._configOptions = new ConfigOptionStateMachine({
       getConn: () => this._conn,
       telemetry: _telemetry,
@@ -339,6 +362,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         const caps = res.agentCapabilities?.promptCapabilities
         this._embeddedContextSupported = caps?.embeddedContext === true
         this.imageSupported.set(caps?.image === true, undefined)
+        this.forkSupported.set(res.agentCapabilities?.sessionCapabilities?.fork != null, undefined)
       })
       .catch(() => {})
     this.sessionIdOnAgent.set(sessionIdOnAgent, undefined)
@@ -399,7 +423,10 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   private _flushQueuedPrompts(queued: readonly QueuedPrompt[]): void {
     for (const q of queued) {
-      this._dispatchPrompt(q.text, q.refs, q.contexts, q.images).then(q.resolve, q.reject)
+      this._dispatchPrompt(q.text, q.refs, q.contexts, q.images, q.messageId).then(
+        q.resolve,
+        q.reject,
+      )
     }
   }
 
@@ -512,16 +539,20 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (this.readOnly) return
     // 顺序敏感：派生 title 必须发生在 _appendMessage 之前——它依赖 _messages 仍为空来识别首条 prompt。
     this._maybeDeriveTitleFromPrompt(text)
+    // Client-generated anchor for this user turn. Stamped on the local message
+    // now (so rewind/fork can target it even before dispatch) and sent as
+    // PromptRequest.messageId; the agent echoes it back as userMessageId.
+    const messageId = generateUuid()
     // Always surface the user's message immediately, even while connecting, so
     // typing feels instant. The wire dispatch is deferred until the connection
     // is ready (queued) so the prompt is not lost.
-    this._appendMessage('user', text, composeImageBlocks(images ?? []))
+    this._appendMessage('user', text, composeImageBlocks(images ?? []), messageId)
     void this._maybeGenerateTitle(text)
     // Still connecting — buffer the prompt; the returned promise settles when it
     // is eventually dispatched (on connect) or rejected (on connection failure).
     if (!this._connection.isSettled) {
       try {
-        await this._connection.enqueue(text, refs ?? [], contexts ?? [], images ?? [])
+        await this._connection.enqueue(text, refs ?? [], contexts ?? [], images ?? [], messageId)
       } catch {
         // Connection failed before this queued prompt could be dispatched. The
         // failure is already surfaced as an [error] timeline message by
@@ -532,7 +563,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
     // Connection failed during startup — nothing to dispatch onto.
     if (this._conn === undefined) return
-    await this._dispatchPrompt(text, refs ?? [], contexts ?? [], images ?? [])
+    await this._dispatchPrompt(text, refs ?? [], contexts ?? [], images ?? [], messageId)
   }
 
   /**
@@ -547,6 +578,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     refs: readonly PlacedRef[],
     contexts: readonly SelectionContext[],
     images: readonly PromptImage[],
+    messageId: string,
   ): Promise<void> {
     const conn = this._conn
     const sid = this.sessionIdOnAgent.get()
@@ -564,6 +596,14 @@ export class AcpSession extends Disposable implements IAcpSession {
     const body = prompt.length > 0 ? [...prompt] : [{ type: 'text' as const, text }]
     const params: PromptRequest = {
       sessionId: sid,
+      // The client-generated anchor for this user turn so rewind/fork can later
+      // target this exact turn. Sent BOTH as the standard top-level `messageId`
+      // (for spec-compliant agents) and inside `_meta` — the built-in claude fork
+      // runs an older ACP schema that strips unknown top-level fields in zod
+      // validation, but passes `_meta` through untouched, so `_meta.messageId` is
+      // what actually reaches it.
+      messageId,
+      _meta: { messageId },
       // Fall back to a single text block for empty/no-mention prompts so we
       // keep the wire shape stable even for trivial cases.
       prompt: [...contextBlocks, ...imageBlocks, ...body],
@@ -589,6 +629,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     })
     try {
       const response = await Promise.race([conn.conn.prompt(params), abortPromise])
+      this._reconcileUserMessageId(messageId, response)
       this._ingestPromptResponse(response)
     } catch (err) {
       if (err instanceof AcpAbortError) {
@@ -629,6 +670,90 @@ export class AcpSession extends Disposable implements IAcpSession {
     // finally, which deletes from the live set.
     for (const a of [...this._inFlight]) a.abort()
     if (had) this._appendMessage('agent', '[cancelled]')
+  }
+
+  /**
+   * Rewind to an earlier user message (回退): roll back the agent's file edits
+   * since that message AND truncate the conversation past it. Two-phase:
+   *   1. Cancel any in-flight turn — a rewind mid-turn is nonsensical.
+   *   2. Ask the agent (`REWIND_SESSION_METHOD`) to `rewindFiles` + recreate its
+   *      Query truncated at the message, then replay the shortened history.
+   * We reset the local timeline right before the call so the agent's replay
+   * (delivered as `session/update` notifications during the ext-method) rebuilds
+   * it cleanly instead of appending onto the stale tail. A `dryRun` skips the
+   * reset and the file/conversation mutation, returning only the impact preview
+   * so the UI can confirm the destructive action first. Returns `undefined` when
+   * there's no live connection / agent-side session id, or for read-only previews.
+   */
+  async rewindTo(
+    messageId: string,
+    options?: { dryRun?: boolean; rewindFiles?: boolean },
+  ): Promise<RewindFilesResult | undefined> {
+    if (this.readOnly) return undefined
+    const conn = this._conn
+    const sid = this.sessionIdOnAgent.get()
+    if (conn === undefined || sid === undefined) return undefined
+    const dryRun = options?.dryRun === true
+    // Keep the working-tree edits when the caller opted out of the file rollback
+    // (保留修改并回退). Defaults to rolling files back.
+    const keepFiles = options?.rewindFiles === false
+    if (!dryRun) await this.cancelTurn()
+    // Reset + replay-gate before the ext-method: the agent streams the truncated
+    // history back as session/update notifications while it runs, so the local
+    // timeline must be empty first (otherwise the replay appends onto the tail).
+    if (!dryRun) {
+      this._resetForReplay()
+      this.beginHistoryReplay()
+    }
+    try {
+      const raw = await conn.conn.extMethod(REWIND_SESSION_METHOD, {
+        sessionId: sid,
+        messageId,
+        ...(dryRun ? { dryRun: true } : {}),
+        ...(keepFiles ? { rewindFiles: false } : {}),
+      })
+      const result = raw as unknown as RewindFilesResult
+      // Files were actually rolled back — the tracker's baseline is now stale.
+      // When the user kept their edits the files still reflect those changes, so
+      // the tracker must stay intact for session diff to remain accurate.
+      if (!dryRun && !keepFiles && result.canRewind !== false) this._changeTracker?.clear(sid)
+      this._telemetry.publicLog('acp.rewind', {
+        sessionId: sid,
+        dryRun,
+        keepFiles,
+        canRewind: result.canRewind !== false,
+      })
+      return result
+    } catch (err) {
+      this._telemetry.publicLogError('acp.rewind_failed', {
+        sessionId: sid,
+        error: (err as Error).message,
+      })
+      throw err
+    } finally {
+      if (!dryRun) this.endHistoryReplay()
+    }
+  }
+
+  /**
+   * Clear all streamed timeline state so a fresh history replay can repopulate
+   * it from scratch (rewind). Mirrors the field resets in {@link close} but
+   * keeps the session live and pushes the emptied observables out immediately.
+   */
+  private _resetForReplay(): void {
+    this._commitBatchedTx()
+    this._messages = []
+    this._toolCalls = []
+    this._timeline = []
+    this._orphanChildren.clear()
+    this._toolCallParent.clear()
+    this._terminalOutput.clear()
+    this._streamingIds.clear()
+    this._planSeen = false
+    this._setImmediate(this.messages, this._messages)
+    this._setImmediate(this.toolCalls, this._toolCalls)
+    this._setImmediate(this.timeline, this._timeline)
+    this._setImmediate(this.plan, [])
   }
 
   private _recomputeStatus(): void {
@@ -807,7 +932,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
     switch (update.sessionUpdate) {
       case 'user_message_chunk':
-        this._appendChunk('user', update.content, parentId)
+        this._appendChunk('user', update.content, parentId, readMessageId(update))
         break
       case 'agent_message_chunk':
         this._appendChunk('agent', update.content, parentId)
@@ -1003,6 +1128,30 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   /**
+   * Reconcile the user message's anchor with the id the agent echoed back. The
+   * client generates the messageId and the agent SHOULD echo the same value, but
+   * if it reports a different `userMessageId` we adopt the agent's — that is the
+   * id its rewind/fork APIs actually recognise. Locates the local user message by
+   * the id we sent and rewrites its `messageId` in place. No-op when the agent
+   * echoes the same id (the common case) or reports none.
+   */
+  private _reconcileUserMessageId(sentId: string, response: PromptResponse): void {
+    const echoed = (response as { userMessageId?: string | null }).userMessageId
+    if (echoed == null || echoed === sentId) return
+    const idx = this._messages.findIndex((m) => m.role === 'user' && m.messageId === sentId)
+    if (idx === -1) return
+    const prev = this._messages[idx]
+    if (prev === undefined) return
+    const next: AcpMessage = { ...prev, messageId: echoed }
+    this._messages = [...this._messages.slice(0, idx), next, ...this._messages.slice(idx + 1)]
+    this._upsertMessageInTimeline(next)
+    const tx = this._batchedTx()
+    this.messages.set(this._messages, tx)
+    this.timeline.set(this._timeline, tx)
+    this._commitBatchedTx()
+  }
+
+  /**
    * Finalize the locally-estimated Codex cost from the prompt response. Codex
    * never reports an authoritative cost, so we estimate from the session-
    * cumulative per-model token counts the fork stamps on the response. This is a
@@ -1030,7 +1179,12 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (sid !== undefined) this._history?.setHistoryUsage(sid, next)
   }
 
-  private _appendChunk(role: AcpMessageRole, block: ContentBlock, parentId?: string): void {
+  private _appendChunk(
+    role: AcpMessageRole,
+    block: ContentBlock,
+    parentId?: string,
+    messageId?: string,
+  ): void {
     if (parentId != null) {
       this._appendChildChunk(role, block, parentId)
       return
@@ -1039,7 +1193,18 @@ export class AcpSession extends Disposable implements IAcpSession {
     let next: AcpMessage
     if (last && last.role === role && this._isStreaming(last.id)) {
       const blocks = mergeStreamingBlock(last.blocks, block)
-      next = { id: last.id, role, blocks, text: blocksToText(blocks), streaming: true }
+      next = {
+        id: last.id,
+        role,
+        blocks,
+        text: blocksToText(blocks),
+        streaming: true,
+        ...(last.messageId !== undefined
+          ? { messageId: last.messageId }
+          : messageId !== undefined
+            ? { messageId }
+            : {}),
+      }
       this._messages = [...this._messages.slice(0, -1), next]
       this._upsertMessageInTimeline(next)
     } else {
@@ -1056,7 +1221,14 @@ export class AcpSession extends Disposable implements IAcpSession {
       const id = `m${++this._msgCounter}`
       this._streamingIds.add(id)
       const blocks: readonly ContentBlock[] = [block]
-      next = { id, role, blocks, text: blocksToText(blocks), streaming: true }
+      next = {
+        id,
+        role,
+        blocks,
+        text: blocksToText(blocks),
+        streaming: true,
+        ...(messageId !== undefined ? { messageId } : {}),
+      }
       this._messages = [...this._messages, next]
       for (const c of closed) this._upsertMessageInTimeline(c)
       this._upsertMessageInTimeline(next)
@@ -1119,13 +1291,21 @@ export class AcpSession extends Disposable implements IAcpSession {
     role: AcpMessageRole,
     text: string,
     leadingBlocks: readonly ContentBlock[] = [],
+    messageId?: string,
   ): void {
     const id = `m${++this._msgCounter}`
     // Image (or other) blocks lead, then the text block. Skip an empty text
     // block so an image-only message doesn't carry a blank paragraph.
     const textBlocks: readonly ContentBlock[] = text.length > 0 ? [{ type: 'text', text }] : []
     const blocks: readonly ContentBlock[] = [...leadingBlocks, ...textBlocks]
-    const message: AcpMessage = { id, role, blocks, text, streaming: false }
+    const message: AcpMessage = {
+      id,
+      role,
+      blocks,
+      text,
+      streaming: false,
+      ...(messageId !== undefined ? { messageId } : {}),
+    }
     this._messages = [...this._messages, message]
     this._upsertMessageInTimeline(message)
     // Atomic + synchronous: write both observables on the batched tx then commit

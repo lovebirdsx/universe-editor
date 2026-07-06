@@ -44,6 +44,8 @@ import {
   type AuthenticateResponse,
   type CancelNotification,
   type Client,
+  type ForkSessionRequest,
+  type ForkSessionResponse,
   type InitializeRequest,
   type InitializeResponse,
   type LoadSessionRequest,
@@ -61,6 +63,7 @@ import {
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
 import type { AskUserQuestionRequest } from '../acpSessionService.js'
+import { REWIND_SESSION_METHOD } from '../acpSession.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
@@ -79,7 +82,10 @@ import { createInMemoryAcpPair } from '../testing/inMemoryAcpPair.js'
 class FakeAgentRegistry implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
   list() {
-    return [{ id: 'fake', name: 'Fake Agent', command: '/x', args: [] }]
+    return [
+      { id: 'fake', name: 'Fake Agent', command: '/x', args: [] },
+      { id: 'claude-code', name: 'Claude Code', command: '/claude', args: [] },
+    ]
   }
   allAgentIds(): readonly string[] {
     // Empty on purpose — these tests exercise createSession/resumeSession in
@@ -88,7 +94,8 @@ class FakeAgentRegistry implements IAcpAgentRegistry {
     return []
   }
   get(agentId: string) {
-    if (agentId === 'fake') return this.list()[0]!
+    const found = this.list().find((a) => a.id === agentId)
+    if (found) return found
     throw new Error(`unknown agent ${agentId}`)
   }
   resolve(agentId: string) {
@@ -224,6 +231,14 @@ interface StubAgentOptions {
   loadSession?: boolean
   /** configOptions the agent returns from newSession (and loadSession). */
   newSessionConfigOptions?: readonly SessionConfigOption[]
+  /** Fixed PromptResponse to return (e.g. to echo a specific userMessageId). */
+  promptResponse?: PromptResponse
+  /** When true, advertise sessionCapabilities.fork so forkSession can proceed. */
+  forkCapable?: boolean
+  /** sessionId returned from unstable_forkSession (the new forked session id). */
+  forkedSessionId?: string
+  /** Result returned from extMethod(REWIND_SESSION_METHOD). */
+  rewindResult?: Record<string, unknown>
 }
 
 class StubAgent implements Agent {
@@ -234,6 +249,7 @@ class StubAgent implements Agent {
   readonly cancelCalls: CancelNotification[] = []
   readonly setConfigOptionCalls: SetSessionConfigOptionRequest[] = []
   readonly extMethodCalls: Array<{ method: string; params: Record<string, unknown> }> = []
+  readonly forkCalls: ForkSessionRequest[] = []
   /** Deferred controls for promptControl mode, one per in-flight prompt(). */
   readonly promptDeferreds: Array<{
     resolve: () => void
@@ -253,6 +269,7 @@ class StubAgent implements Agent {
       agentCapabilities: {
         loadSession: this._opts.loadSession ?? false,
         promptCapabilities: {},
+        ...(this._opts.forkCapable ? { sessionCapabilities: { fork: {} } } : {}),
         ...(this._opts.mcpCapabilities ? { mcpCapabilities: this._opts.mcpCapabilities } : {}),
       },
       authMethods: [],
@@ -280,7 +297,9 @@ class StubAgent implements Agent {
         })
       })
     }
-    return Promise.resolve({ stopReason: 'end_turn' } as unknown as PromptResponse)
+    return Promise.resolve(
+      this._opts.promptResponse ?? ({ stopReason: 'end_turn' } as unknown as PromptResponse),
+    )
   }
 
   cancel(params: CancelNotification): Promise<void> {
@@ -306,7 +325,17 @@ class StubAgent implements Agent {
 
   extMethod(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
     this.extMethodCalls.push({ method, params })
+    if (method === REWIND_SESSION_METHOD) {
+      return Promise.resolve(this._opts.rewindResult ?? { canRewind: true })
+    }
     return Promise.resolve({})
+  }
+
+  unstable_forkSession(params: ForkSessionRequest): Promise<ForkSessionResponse> {
+    this.forkCalls.push(params)
+    return Promise.resolve({
+      sessionId: this._opts.forkedSessionId ?? `${this._agentSessionId}-fork`,
+    } as unknown as ForkSessionResponse)
   }
 }
 
@@ -504,6 +533,53 @@ describe('AcpSessionService', () => {
     expect(msgsMid).toHaveLength(1)
     expect(msgsMid[0]?.text).toBe('foobar')
     expect(msgsMid[0]?.role).toBe('agent')
+  })
+
+  it('stamps a client-generated messageId on the user message and sends it as PromptRequest.messageId', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    await s.sendPrompt('anchor me')
+
+    const user = s.messages.get().find((m) => m.role === 'user')
+    expect(user?.messageId).toBeTruthy()
+    expect(conn.agent.promptCalls).toHaveLength(1)
+    // The id sent on the wire matches the one stamped on the local message.
+    expect(conn.agent.promptCalls[0]?.messageId).toBe(user?.messageId)
+  })
+
+  it('adopts the agent-echoed userMessageId when it differs from the sent id', async () => {
+    // Build a service whose stub echoes a different userMessageId on the response.
+    svc.dispose()
+    client = new FakeAcpClientService({
+      stubOptions: { promptResponse: { stopReason: 'end_turn', userMessageId: 'agent-uuid-xyz' } },
+    })
+    svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      new ConfigurationService(),
+      notifications,
+      { executeCommand: async () => undefined } as never,
+      new NoopTelemetryService(),
+      permission,
+      new StubLoggerService(),
+      makeHistory(),
+      new FakeStorage(),
+      makeAgentDefaults(),
+      new StubConfigOptionsCache(),
+      new StubSessionChangeTracker(),
+      new StubSessionTitleService(),
+      FAKE_URI_IDENTITY,
+    )
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    await s.sendPrompt('reconcile me')
+
+    const user = s.messages.get().find((m) => m.role === 'user')
+    expect(user?.messageId).toBe('agent-uuid-xyz')
   })
 
   it('batches observer notifications across a burst of chunks (16ms throttle)', async () => {
@@ -974,6 +1050,168 @@ describe('AcpSessionService', () => {
       questions: [{ question: 'Q?', header: 'Q', options: [{ label: 'A' }] }],
     } satisfies AskUserQuestionRequest)
     expect(result).toEqual({ cancelled: true })
+  })
+})
+
+describe('AcpSessionService — rewind / fork', () => {
+  function makeService(client: FakeAcpClientService, tracker: StubSessionChangeTracker) {
+    return new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      new ConfigurationService(),
+      new StubNotificationService(),
+      { executeCommand: async () => undefined } as never,
+      new NoopTelemetryService(),
+      new StubPermissionHandler(),
+      new StubLoggerService(),
+      makeHistory(),
+      new FakeStorage(),
+      makeAgentDefaults(),
+      new StubConfigOptionsCache(),
+      tracker,
+      new StubSessionTitleService(),
+      FAKE_URI_IDENTITY,
+    )
+  }
+
+  it('rewindSession sends the rewind ext-method with the target messageId and clears tracked changes', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({ stubOptions: { forkCapable: true } })
+    const svc = makeService(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const conn = client.connected[0]!
+      const messageId = s.messages.get().find((m) => m.role === 'user')?.messageId
+      expect(messageId).toBeTruthy()
+
+      const result = await svc.rewindSession(s.id, messageId!)
+
+      expect(result).toEqual({ canRewind: true })
+      const rewindCall = conn.agent.extMethodCalls.find((c) => c.method === REWIND_SESSION_METHOD)
+      expect(rewindCall?.params).toMatchObject({ sessionId: 'agent-1', messageId })
+      // Files were rolled back, so the baseline change tracker must be reset.
+      expect(tracker.clearedSessions).toContain('agent-1')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('rewindSession dryRun previews without cancelling the turn or clearing changes', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: {
+        forkCapable: true,
+        rewindResult: { canRewind: true, filesChanged: ['a.ts'], insertions: 3, deletions: 1 },
+      },
+    })
+    const svc = makeService(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const conn = client.connected[0]!
+      const messageId = s.messages.get().find((m) => m.role === 'user')?.messageId
+
+      const result = await svc.rewindSession(s.id, messageId!, { dryRun: true })
+
+      expect(result).toMatchObject({ filesChanged: ['a.ts'], insertions: 3, deletions: 1 })
+      const rewindCall = conn.agent.extMethodCalls.find((c) => c.method === REWIND_SESSION_METHOD)
+      expect(rewindCall?.params).toMatchObject({ dryRun: true })
+      // Preview must not mutate local state.
+      expect(tracker.clearedSessions).not.toContain('agent-1')
+      expect(conn.agent.cancelCalls).toHaveLength(0)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('rewindSession with rewindFiles:false truncates the conversation but keeps tracked changes', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({ stubOptions: { forkCapable: true } })
+    const svc = makeService(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const conn = client.connected[0]!
+      const messageId = s.messages.get().find((m) => m.role === 'user')?.messageId
+
+      const result = await svc.rewindSession(s.id, messageId!, { rewindFiles: false })
+
+      expect(result).toEqual({ canRewind: true })
+      const rewindCall = conn.agent.extMethodCalls.find((c) => c.method === REWIND_SESSION_METHOD)
+      expect(rewindCall?.params).toMatchObject({ rewindFiles: false })
+      // Files were kept, so the change tracker must stay intact.
+      expect(tracker.clearedSessions).not.toContain('agent-1')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('rewindSession is a no-op for a non-claude agent (capability-gated)', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, tracker)
+    try {
+      const s = await svc.createSession('fake')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const conn = client.connected[0]!
+      const messageId = s.messages.get().find((m) => m.role === 'user')?.messageId
+
+      const result = await svc.rewindSession(s.id, messageId!)
+
+      expect(result).toBeUndefined()
+      expect(conn.agent.extMethodCalls.some((c) => c.method === REWIND_SESSION_METHOD)).toBe(false)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSession forks at the given message and registers + activates the new session', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-fork-1' },
+    })
+    const svc = makeService(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const messageId = s.messages.get().find((m) => m.role === 'user')?.messageId
+
+      const fork = await svc.forkSession(s.id, messageId)
+
+      expect(fork.id).toBe('agent-fork-1')
+      // The fork RPC carried the source id + the rewind anchor.
+      const forkAgent = client.connected.find((c) => c.agent.forkCalls.length > 0)!
+      expect(forkAgent.agent.forkCalls[0]).toMatchObject({ sessionId: 'agent-1' })
+      expect(forkAgent.agent.forkCalls[0]?._meta).toMatchObject({ rewindTo: messageId })
+      // The new session is registered, distinct from the source, and active.
+      expect(svc.getById('agent-fork-1')).toBeDefined()
+      expect(svc.activeSession.get()?.id).toBe('agent-fork-1')
+      expect(fork.id).not.toBe(s.id)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSession rejects when the agent does not advertise fork capability', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const svc = makeService(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      await expect(svc.forkSession(s.id)).rejects.toThrow(/fork/)
+    } finally {
+      svc.dispose()
+    }
   })
 })
 

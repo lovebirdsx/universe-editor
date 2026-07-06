@@ -56,6 +56,18 @@ export function readParentToolUseId(update: SessionUpdate): string | undefined {
 }
 
 /**
+ * Read the client-generated messageId our agent fork stamps back onto message
+ * chunks (`agent_message_chunk` / `user_message_chunk` / `agent_thought_chunk`)
+ * during live streaming and history replay. Anchors a rendered message to a
+ * rewind/fork target. Returns undefined when absent (e.g. codex, or turns that
+ * predate the anchor).
+ */
+export function readMessageId(update: SessionUpdate): string | undefined {
+  const id = (update as { messageId?: unknown }).messageId
+  return typeof id === 'string' && id.length > 0 ? id : undefined
+}
+
+/**
  * Resolve the source MCP server for a tool_call(_update) from the agent fork's
  * `_meta.claudeCode.toolName` (`mcp__<server>__<tool>`). Returns undefined for
  * built-in tools or malformed names.

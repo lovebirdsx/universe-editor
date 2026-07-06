@@ -20,6 +20,7 @@ export interface StubSessionChangeRecord {
 export class StubSessionChangeTracker implements ISessionChangeTrackerService {
   declare readonly _serviceBrand: undefined
   readonly records: StubSessionChangeRecord[] = []
+  readonly clearedSessions: string[] = []
   private readonly _empty: IObservable<readonly SessionFileChange[]> = observableValue(
     'test.sessionChanges.empty',
     [],
@@ -47,5 +48,7 @@ export class StubSessionChangeTracker implements ISessionChangeTrackerService {
   }
   markDeleted(): void {}
   unmarkDeleted(): void {}
-  clear(): void {}
+  clear(sessionId: string): void {
+    this.clearedSessions.push(sessionId)
+  }
 }

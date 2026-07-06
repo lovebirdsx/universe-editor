@@ -101,6 +101,8 @@ function makeService(
     renameSession(): boolean {
       return false
     },
+    forkSession: (() => Promise.reject(new Error('not implemented'))) as never,
+    rewindSession: (() => Promise.resolve(undefined)) as never,
   } satisfies FakeAcpSessionService
 }
 

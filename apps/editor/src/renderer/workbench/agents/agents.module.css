@@ -278,6 +278,52 @@
   overflow: hidden;
 }
 
+.userMessageWrap {
+  position: relative;
+}
+
+/* Rewind / Fork hover affordances, pinned to the top-right of the user turn.
+   Hidden until the message row (or a button) is hovered / focused, mirroring the
+   session-row delete/rename reveal. */
+.userMessageActions {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: inline-flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.messageItem:hover .userMessageActions,
+.userMessageActions:focus-within {
+  opacity: 1;
+}
+
+.userMessageAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: var(--color-message-user-bg, #2a3550);
+  border: 0;
+  border-radius: 3px;
+  color: var(--color-message-role-fg, #888);
+  cursor: pointer;
+}
+
+.userMessageAction:hover {
+  background: var(--color-list-hover-bg, #2a2d2e);
+  color: var(--color-editor-fg, #d4d4d4);
+}
+
+.userMessageAction:focus-visible {
+  outline: 1px solid var(--color-badge-progress, #4fa6e2);
+  outline-offset: 1px;
+}
+
 .userMessageBody[data-collapsed='true'] {
   max-height: 160px;
 }

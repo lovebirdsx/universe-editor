@@ -1144,6 +1144,7 @@ function ChatScroll({
                   <TimelineSlot
                     slotKey={key}
                     item={item}
+                    session={session}
                     sessionRunning={slotRunning}
                     isFocused={key === focusedKey}
                     collapsed={resolveCollapsed(key, item, collapse)}
@@ -1167,6 +1168,7 @@ function ChatScroll({
                   key={key}
                   slotKey={key}
                   item={item}
+                  session={session}
                   sessionRunning={slotRunning}
                   isFocused={key === focusedKey}
                   collapsed={resolveCollapsed(key, item, collapse)}
@@ -1291,6 +1293,7 @@ function HintItem({ keys, label }: { keys: readonly string[]; label: string }) {
 const TimelineSlot = memo(function TimelineSlot({
   slotKey: key,
   item,
+  session,
   sessionRunning,
   isFocused,
   collapsed,
@@ -1299,6 +1302,7 @@ const TimelineSlot = memo(function TimelineSlot({
 }: {
   slotKey: string
   item: TimelineItem
+  session: IAcpSession
   sessionRunning: boolean
   isFocused: boolean
   collapsed: boolean
@@ -1335,7 +1339,12 @@ const TimelineSlot = memo(function TimelineSlot({
           }}
         >
           {isUser ? (
-            <UserMessageItem blocks={m.blocks} contentKey={`msg:${key}`} />
+            <UserMessageItem
+              blocks={m.blocks}
+              contentKey={`msg:${key}`}
+              session={session}
+              {...(m.messageId !== undefined ? { messageId: m.messageId } : {})}
+            />
           ) : (
             <MessageContent blocks={m.blocks} streaming={m.streaming} />
           )}

@@ -26,6 +26,14 @@ export interface AcpMessage {
   readonly blocks: readonly ContentBlock[]
   /** True while this message is still receiving streaming chunks; the UI uses this to render a blinking caret. */
   readonly streaming: boolean
+  /**
+   * Agent-side stable id for this message (a client-generated uuid sent as
+   * `PromptRequest.messageId` and echoed back as `PromptResponse.userMessageId`).
+   * Only user messages carry it; it is the anchor rewind/fork use to locate the
+   * turn on the agent. `undefined` for agent/thought messages and for user
+   * messages sent before this field existed.
+   */
+  readonly messageId?: string
 }
 
 export type AcpToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
@@ -152,6 +160,26 @@ export const ASK_USER_QUESTION_METHOD = 'universe-editor/ask_user_question'
  * and `session/list`'s `summary` clobbers it after `/compact`.
  */
 export const SET_SESSION_TITLE_METHOD = 'universe-editor/set_session_title'
+
+/**
+ * Custom ACP request that rewinds a session to a specific user message (回退):
+ * restores files edited since that message to their on-disk state at that point,
+ * and truncates the conversation history past it. Shared verbatim with the agent
+ * fork's `acp-agent.ts` (`REWIND_SESSION_METHOD`) — keep both in sync. Params:
+ * `{ sessionId, messageId, dryRun? }` where `messageId` is the id the client
+ * stamped on the user turn (see {@link AcpMessage.messageId}); the response is a
+ * {@link RewindFilesResult}.
+ */
+export const REWIND_SESSION_METHOD = 'universe-editor/rewind_session'
+
+/** Result the agent returns from {@link REWIND_SESSION_METHOD} (mirrors the SDK's RewindFilesResult). */
+export interface RewindFilesResult {
+  readonly canRewind: boolean
+  readonly error?: string
+  readonly filesChanged?: readonly string[]
+  readonly insertions?: number
+  readonly deletions?: number
+}
 
 /** One selectable option of an {@link AskUserQuestion}. */
 export interface AskUserQuestionOption {
@@ -320,6 +348,19 @@ export interface IAcpSession {
    */
   readonly imageSupported: IObservable<boolean>
   /**
+   * Whether the connected agent advertised `sessionCapabilities.fork` (the
+   * UNSTABLE `session/fork`). Gates the fork (分叉) affordance. Arrives async
+   * after the connection attaches; `false` until known.
+   */
+  readonly forkSupported: IObservable<boolean>
+  /**
+   * Whether this session supports rewind (回退). First release covers
+   * `claude-code` only (the file-checkpointing + `resumeSessionAt` machinery the
+   * `universe-editor/rewind_session` ext-method relies on); other agents degrade
+   * gracefully (the UI hides the affordance). Static per session.
+   */
+  readonly rewindSupported: boolean
+  /**
    * Fires when a prompt (or other agent call) fails because the agent has no
    * usable credentials. The session itself has no access to the notification /
    * command services, so AcpSessionService owns the user-facing guidance.
@@ -379,6 +420,27 @@ export interface IAcpSession {
    * agent so it survives `/compact`. No-op for read-only previews / blank input.
    */
   renameTitle(title: string): void
+  /**
+   * Rewind the session to an earlier user message (回退). Rolls back files the
+   * agent edited since that message to their on-disk state at that point AND
+   * truncates the conversation past it, so the user can edit-and-retry from a
+   * clean slate. Backed by the agent's `universe-editor/rewind_session`
+   * ext-method (Claude only for now); the agent replays the truncated history,
+   * so the local timeline is cleared and repopulated as the replay arrives.
+   *
+   * `dryRun` previews the file impact ({@link RewindFilesResult.filesChanged} /
+   * insertions / deletions) without mutating disk or the conversation — used to
+   * confirm the destructive action before committing. `rewindFiles` (default
+   * true) controls whether the agent-edited files are rolled back: pass `false`
+   * to truncate the conversation while keeping the working-tree edits (保留修改
+   * 并回退). Returns the agent's {@link RewindFilesResult}, or `undefined` when
+   * there's no live connection / agent-side session id. No-op for read-only
+   * previews.
+   */
+  rewindTo(
+    messageId: string,
+    options?: { dryRun?: boolean; rewindFiles?: boolean },
+  ): Promise<RewindFilesResult | undefined>
 }
 
 /**

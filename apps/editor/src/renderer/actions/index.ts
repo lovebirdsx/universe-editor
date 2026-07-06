@@ -240,6 +240,7 @@ import {
   FocusAgentInputAction,
   FocusNextAcpTimelineItemAction,
   FocusPreviousAcpTimelineItemAction,
+  ForkAgentSessionAction,
   NewAgentSessionAction,
   OpenAcpMcpSettingsAction,
   OpenAgentSettingsAction,
@@ -248,6 +249,7 @@ import {
   RefreshAgentSessionsAction,
   RenameAgentSessionAction,
   ResumeAgentSessionAction,
+  RewindAgentSessionAction,
   ScrollAcpTimelinePageDownAction,
   ScrollAcpTimelinePageUpAction,
   FocusBottomAcpTimelineAction,
@@ -559,6 +561,8 @@ registerAction2(ResumeAgentSessionAction)
 registerAction2(ClearAgentSessionHistoryAction)
 registerAction2(RefreshAgentSessionsAction)
 registerAction2(RenameAgentSessionAction)
+registerAction2(RewindAgentSessionAction)
+registerAction2(ForkAgentSessionAction)
 registerAction2(FocusNextAcpTimelineItemAction)
 registerAction2(FocusPreviousAcpTimelineItemAction)
 registerAction2(FocusTopAcpTimelineAction)

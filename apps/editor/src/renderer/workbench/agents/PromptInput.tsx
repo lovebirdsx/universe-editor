@@ -108,6 +108,7 @@ import { StopButton } from './StopButton.js'
 import { AcpPromptDraftCache } from '../../services/acp/acpPromptDraftCache.js'
 import { AcpPromptContextInbox } from '../../services/acp/acpPromptContextInbox.js'
 import { AcpPromptTextInbox } from '../../services/acp/acpPromptTextInbox.js'
+import { AcpPromptReplaceInbox } from '../../services/acp/acpPromptReplaceInbox.js'
 import { IAcpPromptHistoryService } from '../../services/acp/acpPromptHistoryService.js'
 import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
 import { UsageIndicator } from './UsageIndicator.js'
@@ -399,6 +400,28 @@ export function PromptInput({
     }
     pull()
     const sub = AcpPromptTextInbox.onDidDeposit((id) => {
+      if (id === session.id) pull()
+    })
+    return () => sub.dispose()
+  }, [session.id])
+
+  // Drain any replacement text the Rewind command deposited (edit-and-retry):
+  // unlike the append inbox above this OVERWRITES the draft, since the turn it
+  // came from — and everything after it — has been rewound out of the timeline.
+  // Clears any leftover contexts/images so the input reflects only the rewound
+  // prompt. Mirrors the drain-on-mount + onDidDeposit pattern.
+  useEffect(() => {
+    const pull = (): void => {
+      const incoming = AcpPromptReplaceInbox.drain(session.id)
+      if (incoming === undefined) return
+      const el = editorHandleRef.current
+      el?.setText(incoming, incoming.length)
+      setContexts([])
+      setImages([])
+      requestAnimationFrame(() => el?.focus())
+    }
+    pull()
+    const sub = AcpPromptReplaceInbox.onDidDeposit((id) => {
       if (id === session.id) pull()
     })
     return () => sub.dispose()

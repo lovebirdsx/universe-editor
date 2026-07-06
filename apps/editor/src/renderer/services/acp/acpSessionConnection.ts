@@ -42,6 +42,8 @@ export interface QueuedPrompt {
   readonly refs: readonly PlacedRef[]
   readonly contexts: readonly SelectionContext[]
   readonly images: readonly PromptImage[]
+  /** Client-generated messageId anchoring this prompt (see AcpMessage.messageId). */
+  readonly messageId: string
   readonly resolve: () => void
   readonly reject: (err: Error) => void
 }
@@ -91,9 +93,10 @@ export class AcpSessionConnection {
     refs: readonly PlacedRef[],
     contexts: readonly SelectionContext[],
     images: readonly PromptImage[],
+    messageId: string,
   ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      this._queued.push({ text, refs, contexts, images, resolve, reject })
+      this._queued.push({ text, refs, contexts, images, messageId, resolve, reject })
     })
   }
 
