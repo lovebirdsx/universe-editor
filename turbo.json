@@ -1,5 +1,5 @@
 {
-  "$schema": "https://v2-9-14.turborepo.dev/schema.json",
+  "$schema": "https://v2-10-3.turborepo.dev/schema.json",
   "//": "typecheck dependsOn ^build (not ^typecheck): extensions typecheck with `tsc --noEmit` and resolve upstream package types from dist/*.d.ts, which only `build` produces. typecheck.outputs is [] (never caches dist), so depending on ^build means a typecheck cache hit still restores upstream dist (build.outputs) to disk first — otherwise a clean CI checkout sees missing .d.ts and fails TS2307.",
   "tasks": {
     "build": {
