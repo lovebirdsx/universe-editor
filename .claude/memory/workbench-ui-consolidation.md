@@ -19,4 +19,4 @@ metadata:
 
 **Why:** 设计统一 + 可维护性，消除 4+ 份雷同弹出列表/6+ toolbar button/散落硬编码。
 
-**How to apply:** 新增通用控件优先在 workbench-ui 沉淀，别在 feature 目录再写 `<button>`+css。**渐进迁移技术债**：Diff/Terminal/SCM/Config/Search 的 `.iconBtn`、SessionsPopover/ConfigOptionsBar（交互模型不同）、未触及旧 css 的 token 化——动到相关文件时顺手迁。详见两份 CLAUDE.md。相关：[[e2e-electron-launch-broken-local]]
+**How to apply:** 新增通用控件优先在 workbench-ui 沉淀，别在 feature 目录再写 `<button>`+css。**渐进迁移技术债**：Diff/Terminal/SCM/Config/Search 的 `.iconBtn`、SessionsPopover/ConfigOptionsBar（交互模型不同）、未触及旧 css 的 token 化——动到相关文件时顺手迁。详见两份 CLAUDE.md。

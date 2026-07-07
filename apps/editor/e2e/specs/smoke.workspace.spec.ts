@@ -14,8 +14,14 @@ import { test, expect } from '../fixtures/sharedApp.js'
 
 const EXPLORER = 'workbench.view.explorer'
 
+// @serial: every case here opens a workspace (parcel watcher subscribe on the
+// main process). @parcel/watcher's windows backend has a cross-process native
+// race — concurrent subscribes/unsubscribes from several e2e worker instances
+// can fault (0xC0000005) the main process, surfacing elsewhere as "Target page
+// has been closed". Pin to one worker (same root cause as smoke.outline /
+// smoke.simpleFileDialog / smoke.folderDragNewWindow). See `pnpm e2e`.
 test.describe('@p0 workspace', () => {
-  test('openWorkspace sets current workspace path', async ({ workbench }) => {
+  test('openWorkspace sets current workspace path', { tag: '@serial' }, async ({ workbench }) => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ws-'))
     // URI.fsPath always returns forward slashes; normalize tmpDir to match
     const expectedPath = tmpDir.replace(/\\/g, '/')
@@ -29,7 +35,7 @@ test.describe('@p0 workspace', () => {
       .toBe(expectedPath)
   })
 
-  test('openFolder action reveals Explorer sidebar', async ({ workbench }) => {
+  test('openFolder action reveals Explorer sidebar', { tag: '@serial' }, async ({ workbench }) => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ws-'))
 
     // WorkspaceExplorerRevealContribution is instantiated at AfterRestore phase.

@@ -46,7 +46,6 @@
 - **根因**：本机环境对 Electron 二次启动 + `--inspect=0 --remote-debugging-port=0` 的 CDP 连接限制。**CI 上正常通过**，故不打 `@flaky`（否则削弱 CI 覆盖）。
 - **判定标准**：失败集合 ⊆ 上述裸启动 `@p1` 且报 "Process failed to launch" → 本机环境 flake，**只在 CI 验证**。
 - **注意**：自定义 `electron.launch` 必须先解构去掉 `ELECTRON_RUN_AS_NODE`（Claude Code shell 注入），否则确定性失败。
-- memory：`e2e-restore-specs-flaky-locally`、`e2e-relaunch-flake-windows`、`e2e-electron-launch-broken-local`。
 
 ### 4. 本机 markdown 插件命令 / TS LSP 未就绪（**不打 tag**）
 - **现象**：`smoke.markdownEditing` / `smoke.markdownLsp` 在本机报 `extension host may only execute _workbench.* commands` 或 LSP 拿不到符号。

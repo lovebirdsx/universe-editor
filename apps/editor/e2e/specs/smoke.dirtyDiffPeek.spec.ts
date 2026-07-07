@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { APP_ROOT, MAIN_ENTRY, closeApp } from '../fixtures/electronApp.js'
+import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', args, { cwd, stdio: 'ignore' })
@@ -92,7 +93,7 @@ test.describe('@p1 dirty diff peek', () => {
       await page.waitForFunction(() =>
         Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
       )
-      await page.evaluate(() => window.__E2E__!.whenRestored())
+      await evaluateWhenRestored(page)
 
       // Open the git workspace and wait for the git extension's source control.
       await page.evaluate((p) => window.__E2E__!.openWorkspace(p), repoDir)

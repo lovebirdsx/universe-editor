@@ -61,103 +61,111 @@ function overlayVisible(page: import('@playwright/test').Page): Promise<boolean>
   )
 }
 
+// @serial: both cases open a workspace via openSessionInEditor (parcel watcher
+// subscribe on the main process). @parcel/watcher's windows backend has a
+// cross-process native race — concurrent subscribes/unsubscribes from several
+// e2e worker instances can fault (0xC0000005) the main process, surfacing
+// elsewhere as "Target page has been closed". Pin to one worker (same root
+// cause as smoke.outline). See `pnpm e2e`.
 test.describe('@p1 session editor drag overlay', () => {
-  test('editor overlay stops glowing once the pointer moves onto the prompt input', async ({
-    page,
-    workbench,
-  }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-sedo-'))
-    await fs.writeFile(path.join(tmpDir, 'a.txt'), 'x')
-    await openSessionInEditor(page, workbench, tmpDir)
+  test(
+    'editor overlay stops glowing once the pointer moves onto the prompt input',
+    { tag: '@serial' },
+    async ({ page, workbench }) => {
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-sedo-'))
+      await fs.writeFile(path.join(tmpDir, 'a.txt'), 'x')
+      await openSessionInEditor(page, workbench, tmpDir)
 
-    const uri = `file:///${tmpDir.replace(/\\/g, '/')}/a.txt`
+      const uri = `file:///${tmpDir.replace(/\\/g, '/')}/a.txt`
 
-    // Phase 1: drag over the chat area (body, above the input) → overlay lights.
-    await page.evaluate((fileUri) => {
-      const dt = new DataTransfer()
-      dt.setData('text/uri-list', fileUri)
-      dt.setData('application/vnd.universe-editor.uri-list', fileUri)
-      const body = document.querySelector<HTMLElement>('[data-testid="editor-group-body"]')!
-      const r = body.getBoundingClientRect()
-      const opts = {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        clientX: r.left + r.width / 2,
-        clientY: r.top + 20,
-        dataTransfer: dt,
-      }
-      body.dispatchEvent(new DragEvent('dragenter', opts))
-      body.dispatchEvent(new DragEvent('dragover', opts))
-    }, uri)
-    await expect.poll(() => overlayVisible(page), { timeout: 3000 }).toBe(true)
+      // Phase 1: drag over the chat area (body, above the input) → overlay lights.
+      await page.evaluate((fileUri) => {
+        const dt = new DataTransfer()
+        dt.setData('text/uri-list', fileUri)
+        dt.setData('application/vnd.universe-editor.uri-list', fileUri)
+        const body = document.querySelector<HTMLElement>('[data-testid="editor-group-body"]')!
+        const r = body.getBoundingClientRect()
+        const opts = {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          clientX: r.left + r.width / 2,
+          clientY: r.top + 20,
+          dataTransfer: dt,
+        }
+        body.dispatchEvent(new DragEvent('dragenter', opts))
+        body.dispatchEvent(new DragEvent('dragover', opts))
+      }, uri)
+      await expect.poll(() => overlayVisible(page), { timeout: 3000 }).toBe(true)
 
-    // Phase 2: pointer moves down onto the prompt input. The dragover now
-    // originates from the input host and bubbles to the body handler, which must
-    // recognise it and drop the overlay — the input owns this drop.
-    await page.evaluate((fileUri) => {
-      const dt = new DataTransfer()
-      dt.setData('text/uri-list', fileUri)
-      dt.setData('application/vnd.universe-editor.uri-list', fileUri)
-      const host = document.querySelector<HTMLElement>('[data-testid="acp-prompt-drop-host"]')!
-      const r = host.getBoundingClientRect()
-      const opts = {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        clientX: r.left + r.width / 2,
-        clientY: r.top + r.height / 2,
-        dataTransfer: dt,
-      }
-      host.dispatchEvent(new DragEvent('dragover', opts))
-    }, uri)
+      // Phase 2: pointer moves down onto the prompt input. The dragover now
+      // originates from the input host and bubbles to the body handler, which must
+      // recognise it and drop the overlay — the input owns this drop.
+      await page.evaluate((fileUri) => {
+        const dt = new DataTransfer()
+        dt.setData('text/uri-list', fileUri)
+        dt.setData('application/vnd.universe-editor.uri-list', fileUri)
+        const host = document.querySelector<HTMLElement>('[data-testid="acp-prompt-drop-host"]')!
+        const r = host.getBoundingClientRect()
+        const opts = {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          clientX: r.left + r.width / 2,
+          clientY: r.top + r.height / 2,
+          dataTransfer: dt,
+        }
+        host.dispatchEvent(new DragEvent('dragover', opts))
+      }, uri)
 
-    await expect.poll(() => overlayVisible(page), { timeout: 3000 }).toBe(false)
+      await expect.poll(() => overlayVisible(page), { timeout: 3000 }).toBe(false)
 
-    await tryCleanup(tmpDir)
-  })
+      await tryCleanup(tmpDir)
+    },
+  )
 
-  test('editor overlay clears after the drag is cancelled (dragend, no drop on body)', async ({
-    page,
-    workbench,
-  }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-sedo2-'))
-    await fs.writeFile(path.join(tmpDir, 'a.txt'), 'x')
-    await openSessionInEditor(page, workbench, tmpDir)
+  test(
+    'editor overlay clears after the drag is cancelled (dragend, no drop on body)',
+    { tag: '@serial' },
+    async ({ page, workbench }) => {
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-sedo2-'))
+      await fs.writeFile(path.join(tmpDir, 'a.txt'), 'x')
+      await openSessionInEditor(page, workbench, tmpDir)
 
-    const uri = `file:///${tmpDir.replace(/\\/g, '/')}/a.txt`
+      const uri = `file:///${tmpDir.replace(/\\/g, '/')}/a.txt`
 
-    // Phase 1: drag over the editor body (above the input) to light the overlay.
-    await page.evaluate((fileUri) => {
-      const dt = new DataTransfer()
-      dt.setData('text/uri-list', fileUri)
-      dt.setData('application/vnd.universe-editor.uri-list', fileUri)
-      const body = document.querySelector<HTMLElement>('[data-testid="editor-group-body"]')!
-      const r = body.getBoundingClientRect()
-      const opts = {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        // Near the top of the body — above the prompt input, over the chat area.
-        clientX: r.left + r.width / 2,
-        clientY: r.top + 20,
-        dataTransfer: dt,
-      }
-      body.dispatchEvent(new DragEvent('dragenter', opts))
-      body.dispatchEvent(new DragEvent('dragover', opts))
-    }, uri)
+      // Phase 1: drag over the editor body (above the input) to light the overlay.
+      await page.evaluate((fileUri) => {
+        const dt = new DataTransfer()
+        dt.setData('text/uri-list', fileUri)
+        dt.setData('application/vnd.universe-editor.uri-list', fileUri)
+        const body = document.querySelector<HTMLElement>('[data-testid="editor-group-body"]')!
+        const r = body.getBoundingClientRect()
+        const opts = {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          // Near the top of the body — above the prompt input, over the chat area.
+          clientX: r.left + r.width / 2,
+          clientY: r.top + 20,
+          dataTransfer: dt,
+        }
+        body.dispatchEvent(new DragEvent('dragenter', opts))
+        body.dispatchEvent(new DragEvent('dragover', opts))
+      }, uri)
 
-    // Overlay is on (also lets React flush + the window safety-net register).
-    await expect.poll(() => overlayVisible(page), { timeout: 3000 }).toBe(true)
+      // Overlay is on (also lets React flush + the window safety-net register).
+      await expect.poll(() => overlayVisible(page), { timeout: 3000 }).toBe(true)
 
-    // Phase 2: user presses Esc / releases elsewhere — only a window `dragend`
-    // fires; the body gets no drop/leave.
-    await page.evaluate(() => {
-      window.dispatchEvent(new DragEvent('dragend', { bubbles: false, cancelable: true }))
-    })
+      // Phase 2: user presses Esc / releases elsewhere — only a window `dragend`
+      // fires; the body gets no drop/leave.
+      await page.evaluate(() => {
+        window.dispatchEvent(new DragEvent('dragend', { bubbles: false, cancelable: true }))
+      })
 
-    await expect.poll(() => overlayVisible(page), { timeout: 3000 }).toBe(false)
+      await expect.poll(() => overlayVisible(page), { timeout: 3000 }).toBe(false)
 
-    await tryCleanup(tmpDir)
-  })
+      await tryCleanup(tmpDir)
+    },
+  )
 })

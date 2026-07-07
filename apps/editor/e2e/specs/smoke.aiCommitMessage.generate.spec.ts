@@ -22,7 +22,7 @@ import { execFileSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { APP_ROOT, MAIN_ENTRY, closeApp } from '../fixtures/electronApp.js'
-import { expectNoLeaks } from '../pages/WorkbenchPO.js'
+import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
 const GENERATED_MESSAGE = 'feat: add greeting'
 
@@ -116,7 +116,9 @@ test.describe('@p0 ai commit message generation', () => {
       await page.waitForFunction(() =>
         Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
       )
-      await page.evaluate(() => window.__E2E__!.whenRestored())
+      // Self-launched spec: whenRestored() can race the startup navigation and
+      // throw "Execution context was destroyed". Use the hardened helper.
+      await evaluateWhenRestored(page)
 
       // Open the git workspace and wait for the SCM provider to register.
       await page.evaluate((p) => window.__E2E__!.openWorkspace(p), repoDir)

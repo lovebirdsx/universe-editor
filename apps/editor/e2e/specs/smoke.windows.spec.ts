@@ -18,7 +18,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/electronApp.js'
-import { expectNoLeaks } from '../pages/WorkbenchPO.js'
+import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 import type { Page } from '@playwright/test'
 
 // URI.fsPath returns forward slashes in this codebase; normalize to match.
@@ -31,7 +31,7 @@ async function waitForProbe(page: Page): Promise<void> {
   await page.waitForFunction(() =>
     Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
   )
-  await page.evaluate(() => window.__E2E__!.whenRestored())
+  await evaluateWhenRestored(page)
 }
 
 test.describe('@p0 windows', () => {

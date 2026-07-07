@@ -15,13 +15,14 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ARTIFACT = join(__dirname, '..', 'test-results', 'startup-metrics.json')
 
 test.describe('@perf startup performance', () => {
   test('records startup metrics artifact', async ({ page }, testInfo) => {
-    await page.evaluate(() => window.__E2E__!.whenRestored())
+    await evaluateWhenRestored(page)
 
     const metrics = await page.evaluate(() => window.__E2E__!.getStartupMetrics())
 

@@ -13,4 +13,4 @@ metadata:
 
 **How to apply**：用项目既有范式 `markAsSingleton(...)` 兜底（参考 `apps/editor/src/renderer/workbench/titlebar/useTitleBarMenus.ts:106` 的 `markAsSingleton(combinedDisposable(d1, d2))`）。正常 unmount（切换 view）effect cleanup 仍真正 dispose；reload 时 renderer 即将销毁，不 dispose 也无真泄漏，markAsSingleton 只抑制误报。已这样修过：`useTreeModel.ts`、`Tree.tsx`、`scmShared.tsx` 的 useMenuRevision。
 
-另一类**真**泄漏：render 阶段 `new XxxDisposable()`（如 `useOwnedTreeModel` 里 `create()`）在 StrictMode 双 render/并发被丢弃时会产生永不 dispose 的孤儿。用 `useRef` 守卫让创建幂等，并用一个 `created` 集合在 unmount 时 dispose 全部（含被丢弃 render 的实例）。这类可用「级联 dispose 断言」做确定性回归测试（直接断言 `model.isDisposed`，不走 tracker，因为 markAsSingleton 会让 tracker 失效）。相关：[[e2e-relaunch-flake-windows]]。
+另一类**真**泄漏：render 阶段 `new XxxDisposable()`（如 `useOwnedTreeModel` 里 `create()`）在 StrictMode 双 render/并发被丢弃时会产生永不 dispose 的孤儿。用 `useRef` 守卫让创建幂等，并用一个 `created` 集合在 unmount 时 dispose 全部（含被丢弃 render 的实例）。这类可用「级联 dispose 断言」做确定性回归测试（直接断言 `model.isDisposed`，不走 tracker，因为 markAsSingleton 会让 tracker 失效）。

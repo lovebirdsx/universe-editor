@@ -14,7 +14,7 @@ disable-model-invocation: true
 
 1. **真回归 vs flake**：本地 `--repeat-each=5` 能否复现（本地稳过+CI 偶发→flake；本地也挂→回归）；同 commit 重跑能过=flake，每次必挂=回归/结构性缺口；`git log -p` 看失败 spec 是否刚改过；核对 CI 堆栈绝对路径（`D:\a\...` 是 runner 路径）语义对得上你改的目录。
 2. **读 call log 失败形态**：count **波动**=背景元素间歇出现（噪音污染全局 count）；count/received **稳定停错值**=被测对象自身没就位（真回归/定时器没触发/fire-once 空转）；`waiting for locator` 恒 0=渲染没发生/探针没触发/选择器错；timeout 且无元素=往前看前置步骤。
-3. **已知噪音源**：extension host 偶发崩溃（`ExtensionHostClientService._handleCrash` 发背景 toast + error 日志）；进程启动慢/重启类（记忆 `e2e-relaunch-flake-windows`）；renderer 定时器竞态（auto-hide/auto-read 在 CI 晚几百 ms）。
+3. **已知噪音源**：extension host 偶发崩溃（`ExtensionHostClientService._handleCrash` 发背景 toast + error 日志）；renderer 定时器竞态（auto-hide/auto-read 在 CI 晚几百 ms）。
 4. **最小且鲁棒的修复**（优先对齐同文件已鲁棒化的兄弟断言）：噪音污染**列表**→`.filter({hasText:'<被测唯一文案>'})` 收敛；噪音污染**全局单值/一次性状态**→从源头禁用无关子系统（先 grep 确认无 spec 依赖）；定时器/异步竞态→`expect.poll`/`toHaveCount({timeout})`，少用固定 `waitForTimeout`+硬断言；纯环境型→别强改产品，记录案例库。
 5. **验证**：`pnpm --filter @universe-editor/editor exec playwright test e2e/specs/<spec>.ts [--repeat-each=5]`；全量 `pnpm e2e`（输出多，只截错误）。本地无法复现 CI 噪音是常态——目标是“鲁棒化没破坏 happy path”。
 6. **沉淀**：把“失败形态→根因→修法”追加到案例库，并新增/更新一条速记（与案例号互相引用）。这是本 skill 长期价值所在。
@@ -55,6 +55,7 @@ disable-model-invocation: true
 32. 一次“启动/性能优化”重构改变就位时序会同时放大多个无关 spec 的“就位前”竞态；且该提交往往自补部分探针却漏改同类路径——漏改处即回归。多 spec 同提交后一起变红、形态各异，但 `git show <opt-commit>` 能读到“workbench mounts before Monaco”这类自述时序变更。判定：`git show --stat` 看波及面，逐个失败对照“同类路径它修了没”。（案例 23）
 33. provider 拉取 `.then(...)` 缺 `.catch()`→冷启动 reject 掐断 retry 链（保活 `_maybeRetry` 只在 `.then` 调），结果恒空且 retry 救不回=伪 flake=真 bug。修：`.then().catch()` 双分支都调 `_maybeRetry` 保活，catch 加 `_currentModel!==model` 早退。（案例 23）
 34. `.catch()` 接得住 reject，接不住“pull 永久 pending（既不 resolve 也不 reject）”——凡“从 then/catch 调度下一次重试”的结构，一次 hang 掐死全链，比速记 33 更隐蔽。底层 web-worker RPC/动态 import 冷启动永久排队时触发。不对称鉴别：Windows✓/Ubuntu headless✗。修：给单次 pull 加超时竞速（`Promise.race` timeout-reject）保证必 settle。（案例 24）
+35. 报 `Target page ... closed`（速记 20）的 spec **未必是肇事者**：`sharedApp` 是 worker 级共享 Electron，`resetWindow` 每 test 前 `closeWorkspace()`→若同 worker 前个 test 开过 workspace 则触发 parcel `unsubscribe`，多 worker 并发崩，报错落在恰好在 reset 的**下一个受害 spec**（纯 renderer 的 output 也会背锅，崩点飘忽）。要隔离**加害者=`sharedApp ∩ openWorkspace` 的 test**（全打 `@serial`），受害者不用改。判别：`for f in $(grep -l fixtures/sharedApp *.spec.ts);do grep -q openWorkspace $f&&echo $f;done`。（案例 26）
 
 ## 案例库
 
@@ -110,12 +111,13 @@ disable-model-invocation: true
 
 **案例 25（速记 15）**：`smoke.markdownLsp.spec.ts:59` `@p1` 仅 CI Windows、首 `activeEditorLanguageId` poll received 恒 `""`——`openWorkspace`-then-`openFileUri` 冷启动，首 poll 吃 config CI 默认 10s 在 Windows 不够（后续 poll 都已带 10s，唯首 poll 漏改，同案例 23c 未对齐兄弟）。修：首 poll 加 `{timeout:20000}`。锚：`smoke.markdownLsp.spec.ts`；对齐基准 `smoke.markdownPreview.spec.ts:1197/1238`。
 
+**案例 26（速记 20/35）**：`smoke.output.spec.ts` `@p1`（纯 renderer，自己不 openWorkspace）本地全量偶发 `Target page ... has been closed`（**非** `Execution context destroyed`，故不被 `sharedApp.ts:105` catch 吞），栈在 `resetWindow` 的 `runCommand('clearHistory')`——whenRestored/closeWorkspace 都已过说明整个 page/主进程死了。根因同案例 12/16 parcel `0xC0000005`，但传播链是 sharedApp 模型：`sharedApp` worker 级共享 Electron，`resetWindow` 每 test 前无条件 `closeWorkspace()`→若同 worker 前个 test 开过 workspace，reload restore 它、reset `unwatch`→parcel `unsubscribe`，多 worker 并发 subscribe/unsubscribe 崩，output 只是恰好在 reset 撞上濒死进程的受害者（崩点飘忽、谁排在前谁背锅）。本地 4 轮(含全量 108 passed)复现不到=该 native 竞态低频。修：隔离加害者而非受害者——把主趟里所有 `sharedApp ∩ openWorkspace` 的 test 打 `{tag:'@serial'}`（workspace 2/editorTabDnD 2/inlineCompletion t1/nes t2/promptDragHighlight 2/simpleFileDialog 追加 2），主趟遂无 sharedApp test 进 workspace 状态→`closeFolder` 的 `if(_current===null)return` 让 closeWorkspace 变 no-op→主趟永不 parcel op，受害者自然不崩（主趟 108→98，@serial 趟接手，覆盖不变）。已在 @flaky/@regression 独立趟的 explorerDnD/explorerRowHeight/multiFileDragEditor/multiFilePromptDrag 天然不在主趟无需改。锚：`sharedApp.ts`（`resetWindow`→`closeWorkspace`）；`fileWatcherMainService._teardown`→`unsubscribe`；`workspaceMainService.closeFolder`。
+
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级
 - `apps/editor/e2e/fixtures/electronApp.ts` —— `workbench` fixture、`runCommand`/`waitForRestored`/`statusBar` 封装、`closeApp`
 - `apps/editor/src/renderer/e2e/probe.ts` —— `window.__E2E__` 探针
 - `apps/editor/src/renderer/services/extensions/ExtensionHostClientService.ts` —— ext host 崩溃→通知（CI 噪音主源）
-- 仓库根 `memory/e2e-relaunch-flake-windows.md` —— 重启类 flake 的环境性结论
 
 ## 其它
 - 后续用本 skill，发现新经验，需同步更新本文件

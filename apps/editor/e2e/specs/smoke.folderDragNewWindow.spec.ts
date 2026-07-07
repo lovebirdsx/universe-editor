@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { test, expect } from '../fixtures/electronApp.js'
-import { expectNoLeaks } from '../pages/WorkbenchPO.js'
+import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
 test.describe('@p1 folder drag → new window', () => {
   // @serial: this case cold-launches its own Electron, opens a workspace (root),
@@ -68,7 +68,7 @@ test.describe('@p1 folder drag → new window', () => {
       await newPage.waitForFunction(() =>
         Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
       )
-      await newPage.evaluate(() => window.__E2E__!.whenRestored())
+      await evaluateWhenRestored(newPage)
       await expect
         .poll(() => newPage.evaluate(() => window.__E2E__!.getCurrentWorkspacePath()), {
           timeout: 8000,

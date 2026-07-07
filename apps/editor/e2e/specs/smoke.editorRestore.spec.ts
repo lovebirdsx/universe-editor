@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
-import { expectNoLeaks } from '../pages/WorkbenchPO.js'
+import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
 /** Convert a filesystem path to the UriComponents format used by URI.file(). */
 function fsPathToUriComponents(fsPath: string) {
@@ -99,18 +99,7 @@ async function launchWithState(userDataDir: string) {
   await page.waitForFunction(() =>
     Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
   )
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      await page.evaluate(() => window.__E2E__!.whenRestored())
-      break
-    } catch (err) {
-      if (attempt === 1 || !/Execution context was destroyed/.test(String(err))) throw err
-      await page.waitForLoadState('domcontentloaded')
-      await page.waitForFunction(() =>
-        Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
-      )
-    }
-  }
+  await evaluateWhenRestored(page)
   return { app, page }
 }
 

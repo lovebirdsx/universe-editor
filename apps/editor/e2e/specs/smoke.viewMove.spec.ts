@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
-import { expectNoLeaks } from '../pages/WorkbenchPO.js'
+import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
 const SEARCH_VIEW = 'workbench.view.search.results'
 const EXPLORER_CONTAINER = 'workbench.view.explorer'
@@ -56,15 +56,7 @@ async function waitForRestored(page: import('@playwright/test').Page): Promise<v
   await page.waitForFunction(() =>
     Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
   )
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      await page.evaluate(() => window.__E2E__!.whenRestored())
-      return
-    } catch (err) {
-      if (attempt === 2 || !/Execution context was destroyed/.test(String(err))) throw err
-      await page.waitForLoadState('domcontentloaded')
-    }
-  }
+  await evaluateWhenRestored(page)
 }
 
 async function launchWithState(userDataDir: string) {

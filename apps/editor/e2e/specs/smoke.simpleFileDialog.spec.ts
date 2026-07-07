@@ -74,55 +74,60 @@ test.describe('@p1 simple file dialog', () => {
     },
   )
 
-  test('openFile navigates into a folder and selecting a file opens it', async ({
-    page,
-    workbench,
-  }) => {
-    const tmpDir = await makeTree()
-    await workbench.waitForRestored()
-    await workbench.openWorkspace(tmpDir)
-    await expect.poll(() => workbench.getCurrentWorkspacePath()).toContain('ue2-sfd-')
+  test(
+    'openFile navigates into a folder and selecting a file opens it',
+    { tag: '@serial' },
+    async ({ page, workbench }) => {
+      const tmpDir = await makeTree()
+      await workbench.waitForRestored()
+      await workbench.openWorkspace(tmpDir)
+      await expect.poll(() => workbench.getCurrentWorkspacePath()).toContain('ue2-sfd-')
 
-    await page.evaluate(() => {
-      void window.__E2E__!.runCommand('workbench.action.files.openFile')
-    })
-    await workbench.quickInput.waitForVisible()
+      await page.evaluate(() => {
+        void window.__E2E__!.runCommand('workbench.action.files.openFile')
+      })
+      await workbench.quickInput.waitForVisible()
 
-    // File mode lists both folders and files.
-    await expect(page.getByRole('option').filter({ hasText: 'childdir' })).toBeVisible()
-    await expect(page.getByRole('option').filter({ hasText: 'top.txt' })).toBeVisible()
+      // File mode lists both folders and files.
+      await expect(page.getByRole('option').filter({ hasText: 'childdir' })).toBeVisible()
+      await expect(page.getByRole('option').filter({ hasText: 'top.txt' })).toBeVisible()
 
-    // Enter a folder, then pick the file inside it.
-    await page.getByRole('option').filter({ hasText: 'childdir' }).click()
-    await expect(workbench.quickInput.dialog).toBeVisible()
-    const note = page.getByRole('option').filter({ hasText: 'note.txt' })
-    await expect(note).toBeVisible()
-    await note.click()
+      // Enter a folder, then pick the file inside it.
+      await page.getByRole('option').filter({ hasText: 'childdir' }).click()
+      await expect(workbench.quickInput.dialog).toBeVisible()
+      const note = page.getByRole('option').filter({ hasText: 'note.txt' })
+      await expect(note).toBeVisible()
+      await note.click()
 
-    await workbench.quickInput.waitForHidden()
-    await expect.poll(() => workbench.getActiveEditorUri()).toContain('note.txt')
-  })
+      await workbench.quickInput.waitForHidden()
+      await expect.poll(() => workbench.getActiveEditorUri()).toContain('note.txt')
+    },
+  )
 
-  test('the toggle button reveals hidden dotfiles', async ({ page, workbench }) => {
-    const tmpDir = await makeTree()
-    await workbench.waitForRestored()
-    await workbench.openWorkspace(tmpDir)
-    await expect.poll(() => workbench.getCurrentWorkspacePath()).toContain('ue2-sfd-')
+  test(
+    'the toggle button reveals hidden dotfiles',
+    { tag: '@serial' },
+    async ({ page, workbench }) => {
+      const tmpDir = await makeTree()
+      await workbench.waitForRestored()
+      await workbench.openWorkspace(tmpDir)
+      await expect.poll(() => workbench.getCurrentWorkspacePath()).toContain('ue2-sfd-')
 
-    await page.evaluate(() => {
-      void window.__E2E__!.runCommand('workbench.action.files.openFile')
-    })
-    await workbench.quickInput.waitForVisible()
+      await page.evaluate(() => {
+        void window.__E2E__!.runCommand('workbench.action.files.openFile')
+      })
+      await workbench.quickInput.waitForVisible()
 
-    // Dotfiles are hidden by default.
-    await expect(page.getByRole('option').filter({ hasText: 'top.txt' })).toBeVisible()
-    await expect(page.getByRole('option').filter({ hasText: '.hidden.txt' })).toHaveCount(0)
+      // Dotfiles are hidden by default.
+      await expect(page.getByRole('option').filter({ hasText: 'top.txt' })).toBeVisible()
+      await expect(page.getByRole('option').filter({ hasText: '.hidden.txt' })).toHaveCount(0)
 
-    // The toolbar button flips showDotFiles and re-lists.
-    await workbench.quickInput.dialog.getByTestId('quick-input-button').click()
-    await expect(page.getByRole('option').filter({ hasText: '.hidden.txt' })).toBeVisible()
+      // The toolbar button flips showDotFiles and re-lists.
+      await workbench.quickInput.dialog.getByTestId('quick-input-button').click()
+      await expect(page.getByRole('option').filter({ hasText: '.hidden.txt' })).toBeVisible()
 
-    await page.keyboard.press('Escape')
-    await workbench.quickInput.waitForHidden()
-  })
+      await page.keyboard.press('Escape')
+      await workbench.quickInput.waitForHidden()
+    },
+  )
 })

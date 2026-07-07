@@ -22,7 +22,7 @@ import { execFileSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { APP_ROOT, MAIN_ENTRY, closeApp } from '../fixtures/electronApp.js'
-import { expectNoLeaks } from '../pages/WorkbenchPO.js'
+import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
 const GENERATED_MESSAGE = 'feat: add greeting'
 const AI_DEBUG_CONTAINER = 'workbench.view.aiDebug'
@@ -111,7 +111,7 @@ test.describe('@p1 ai debug', () => {
       await page.waitForFunction(() =>
         Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
       )
-      await page.evaluate(() => window.__E2E__!.whenRestored())
+      await evaluateWhenRestored(page)
 
       // 1) The AI Debug view + container are registered in the side bar.
       expect(

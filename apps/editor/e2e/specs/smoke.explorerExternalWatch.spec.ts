@@ -13,13 +13,14 @@ import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import { test, expect } from '../fixtures/electronApp.js'
+import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 import type { Page } from '@playwright/test'
 
 async function waitForProbe(page: Page): Promise<void> {
   await page.waitForFunction(() =>
     Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
   )
-  await page.evaluate(() => window.__E2E__!.whenRestored())
+  await evaluateWhenRestored(page)
 }
 
 test.describe('@p1 explorer external file detection', () => {
