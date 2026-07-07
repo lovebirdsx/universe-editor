@@ -1,5 +1,26 @@
 [
   {
+    "version": "0.1.35",
+    "date": "2026-07-07",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "优化链接解析逻辑，能够识别带中文的相对路径",
+          "图标替换为Material Icon Theme 的彩色品牌 SVG"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复session outline中的item需要点击两次才能精准跳转消息位置的bug"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.34",
     "date": "2026-07-07",
     "groups": [
