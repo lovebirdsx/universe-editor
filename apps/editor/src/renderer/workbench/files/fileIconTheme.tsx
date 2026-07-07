@@ -1,45 +1,32 @@
 import type { JSX } from 'react'
-import {
-  CornerDownRight,
-  File,
-  FileCode2,
-  FileJson2,
-  FileText,
-  Folder,
-  FolderCode,
-  FolderCog,
-  FolderOpen,
-  type LucideIcon,
-} from 'lucide-react'
+import { CornerDownRight } from 'lucide-react'
 import type { URI } from '@universe-editor/platform'
-import { basenameOfResource, extensionOfBasename } from './resourceInfo.js'
+import { basenameOfResource } from './resourceInfo.js'
 import { languageForResource } from './resourceLanguage.js'
+import {
+  materialIconDefaults,
+  materialFileExtensions,
+  materialFileNames,
+  materialLanguageIds,
+  materialFolderNames,
+  materialFolderNamesExpanded,
+} from './materialIconMap.js'
 import styles from './FileIcon.module.css'
 
-export type FileIconTone =
-  | 'default'
-  | 'folder'
-  | 'folderSpecial'
-  | 'code'
-  | 'config'
-  | 'markdown'
-  | 'special'
+// Inline every generated Material SVG as raw markup. `eager` keeps them in the
+// main chunk (they're tiny and needed synchronously during tree rendering), and
+// `?raw` gives us the string we render via dangerouslySetInnerHTML — no <img>,
+// no custom scheme, and happy-dom tests can assert on the markup directly.
+const rawSvgs = import.meta.glob<string>('./icons/*.svg', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+})
 
-interface FileIconDescriptor {
-  readonly id: string
-  readonly icon: LucideIcon
-  readonly tone: FileIconTone
-}
-
-interface FileIconThemeData {
-  readonly file: FileIconDescriptor
-  readonly folder: FileIconDescriptor
-  readonly folderExpanded: FileIconDescriptor
-  readonly fileExtensions: Record<string, FileIconDescriptor>
-  readonly fileNames: Record<string, FileIconDescriptor>
-  readonly folderNames: Record<string, FileIconDescriptor>
-  readonly folderNamesExpanded: Record<string, FileIconDescriptor>
-  readonly languageIds: Record<string, FileIconDescriptor>
+const svgByName: Record<string, string> = {}
+for (const [path, source] of Object.entries(rawSvgs)) {
+  const name = path.slice(path.lastIndexOf('/') + 1, -'.svg'.length)
+  svgByName[name] = source
 }
 
 export interface ResolveFileIconOptions {
@@ -48,55 +35,28 @@ export interface ResolveFileIconOptions {
   readonly languageId?: string | undefined
 }
 
-const THEME: FileIconThemeData = {
-  file: { id: 'file-default', icon: File, tone: 'default' },
-  folder: { id: 'folder-default', icon: Folder, tone: 'folder' },
-  folderExpanded: { id: 'folder-default-open', icon: FolderOpen, tone: 'folder' },
-  fileExtensions: {
-    '.ts': { id: 'file-typescript', icon: FileCode2, tone: 'code' },
-    '.tsx': { id: 'file-typescriptreact', icon: FileCode2, tone: 'code' },
-    '.js': { id: 'file-javascript', icon: FileCode2, tone: 'code' },
-    '.jsx': { id: 'file-javascriptreact', icon: FileCode2, tone: 'code' },
-    '.mjs': { id: 'file-javascript', icon: FileCode2, tone: 'code' },
-    '.cjs': { id: 'file-javascript', icon: FileCode2, tone: 'code' },
-    '.json': { id: 'file-json', icon: FileJson2, tone: 'config' },
-    '.jsonc': { id: 'file-json', icon: FileJson2, tone: 'config' },
-    '.md': { id: 'file-markdown', icon: FileText, tone: 'markdown' },
-    '.markdown': { id: 'file-markdown', icon: FileText, tone: 'markdown' },
-    '.css': { id: 'file-stylesheet', icon: FileCode2, tone: 'special' },
-    '.scss': { id: 'file-stylesheet', icon: FileCode2, tone: 'special' },
-    '.less': { id: 'file-stylesheet', icon: FileCode2, tone: 'special' },
-    '.html': { id: 'file-html', icon: FileCode2, tone: 'special' },
-    '.htm': { id: 'file-html', icon: FileCode2, tone: 'special' },
-    '.xml': { id: 'file-xml', icon: FileCode2, tone: 'special' },
-    '.yaml': { id: 'file-yaml', icon: FileJson2, tone: 'config' },
-    '.yml': { id: 'file-yaml', icon: FileJson2, tone: 'config' },
-  },
-  fileNames: {
-    'package.json': { id: 'file-package', icon: FileJson2, tone: 'config' },
-    'tsconfig.json': { id: 'file-tsconfig', icon: FileJson2, tone: 'special' },
-    'readme.md': { id: 'file-readme', icon: FileText, tone: 'markdown' },
-  },
-  folderNames: {
-    src: { id: 'folder-src', icon: FolderCode, tone: 'folderSpecial' },
-    '.vscode': { id: 'folder-vscode', icon: FolderCog, tone: 'folderSpecial' },
-  },
-  folderNamesExpanded: {
-    src: { id: 'folder-src-open', icon: FolderCode, tone: 'folderSpecial' },
-    '.vscode': { id: 'folder-vscode-open', icon: FolderCog, tone: 'folderSpecial' },
-  },
-  languageIds: {
-    typescript: { id: 'file-typescript', icon: FileCode2, tone: 'code' },
-    javascript: { id: 'file-javascript', icon: FileCode2, tone: 'code' },
-    json: { id: 'file-json', icon: FileJson2, tone: 'config' },
-    markdown: { id: 'file-markdown', icon: FileText, tone: 'markdown' },
-    css: { id: 'file-stylesheet', icon: FileCode2, tone: 'special' },
-    scss: { id: 'file-stylesheet', icon: FileCode2, tone: 'special' },
-    less: { id: 'file-stylesheet', icon: FileCode2, tone: 'special' },
-    html: { id: 'file-html', icon: FileCode2, tone: 'special' },
-    xml: { id: 'file-xml', icon: FileCode2, tone: 'special' },
-    yaml: { id: 'file-yaml', icon: FileJson2, tone: 'config' },
-  },
+export interface FileIconDescriptor {
+  /** Material icon name; also the DOM `data-file-icon` value as `mi-<name>`. */
+  readonly icon: string
+  /** Stable identifier for tests/debugging (`mi-<icon>`). */
+  readonly id: string
+}
+
+function descriptor(iconName: string): FileIconDescriptor {
+  const icon = svgByName[iconName] ? iconName : materialIconDefaults.file
+  return { icon, id: `mi-${icon}` }
+}
+
+// Longest-suffix extension match: `foo.spec.ts` tries `spec.ts` then `ts`.
+function matchExtension(lowerName: string): string | undefined {
+  let from = lowerName.indexOf('.')
+  while (from !== -1) {
+    const suffix = lowerName.slice(from + 1)
+    const hit = materialFileExtensions[suffix]
+    if (hit) return hit
+    from = lowerName.indexOf('.', from + 1)
+  }
+  return undefined
 }
 
 export function resolveFileIcon(
@@ -104,25 +64,28 @@ export function resolveFileIcon(
   options: ResolveFileIconOptions,
 ): FileIconDescriptor {
   const name = basenameOfResource(resource).toLowerCase()
+
   if (options.isDirectory) {
     const special = options.expanded
-      ? (THEME.folderNamesExpanded[name] ?? THEME.folderNames[name])
-      : THEME.folderNames[name]
-    if (special) return special
-    return options.expanded ? THEME.folderExpanded : THEME.folder
+      ? (materialFolderNamesExpanded[name] ?? materialFolderNames[name])
+      : materialFolderNames[name]
+    if (special) return descriptor(special)
+    return descriptor(
+      options.expanded ? materialIconDefaults.folderExpanded : materialIconDefaults.folder,
+    )
   }
 
-  const byName = THEME.fileNames[name]
-  if (byName) return byName
+  const byName = materialFileNames[name]
+  if (byName) return descriptor(byName)
 
-  const ext = extensionOfBasename(name)
-  if (ext) {
-    const byExt = THEME.fileExtensions[ext]
-    if (byExt) return byExt
-  }
+  const byExt = matchExtension(name)
+  if (byExt) return descriptor(byExt)
 
   const language = options.languageId ?? languageForResource(resource)
-  return THEME.languageIds[language] ?? THEME.file
+  const byLang = materialLanguageIds[language]
+  if (byLang) return descriptor(byLang)
+
+  return descriptor(materialIconDefaults.file)
 }
 
 export interface FileIconProps extends ResolveFileIconOptions {
@@ -143,21 +106,20 @@ export function FileIcon({
   symbolicLink,
 }: FileIconProps): JSX.Element {
   const resolved = resolveFileIcon(resource, { isDirectory, expanded, languageId })
-  const Icon = resolved.icon
-  const toneClass =
-    resolved.tone === 'default'
-      ? ''
-      : resolved.tone === 'folderSpecial'
-        ? styles['tone-folderSpecial']
-        : styles[`tone-${resolved.tone}`]
+  const svg = svgByName[resolved.icon] ?? svgByName[materialIconDefaults.file]
 
   return (
     <span
-      className={[styles['fileIcon'], toneClass, className].filter(Boolean).join(' ')}
+      className={[styles['fileIcon'], className].filter(Boolean).join(' ')}
       data-file-icon={resolved.id}
+      style={{ width: size, height: size }}
       aria-hidden="true"
     >
-      <Icon size={size} strokeWidth={1.75} />
+      <span
+        className={styles['glyph']}
+        style={{ width: size, height: size }}
+        dangerouslySetInnerHTML={{ __html: svg ?? '' }}
+      />
       {symbolicLink && (
         <span className={styles['symlinkBadge']} data-symlink-badge="true">
           <CornerDownRight size={9} strokeWidth={2.5} />

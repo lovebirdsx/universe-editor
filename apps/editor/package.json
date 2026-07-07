@@ -75,6 +75,7 @@
     "electron-vite": "catalog:",
     "eslint": "catalog:",
     "happy-dom": "catalog:",
+    "material-icon-theme": "catalog:",
     "pixelmatch": "catalog:",
     "pngjs": "catalog:",
     "react": "catalog:",

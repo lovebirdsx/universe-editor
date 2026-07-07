@@ -32,12 +32,10 @@ describe('SearchResultsTree', () => {
     expect(screen.getByText('a.ts')).toBeTruthy()
     expect(screen.getByText('package.json')).toBeTruthy()
     expect(
-      screen.getByText('a.ts').parentElement?.querySelector('[data-file-icon="file-typescript"]'),
+      screen.getByText('a.ts').parentElement?.querySelector('[data-file-icon="mi-typescript"]'),
     ).toBeTruthy()
     expect(
-      screen
-        .getByText('package.json')
-        .parentElement?.querySelector('[data-file-icon="file-package"]'),
+      screen.getByText('package.json').parentElement?.querySelector('[data-file-icon="mi-nodejs"]'),
     ).toBeTruthy()
   })
 

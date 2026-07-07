@@ -200,8 +200,8 @@ describe('EditorGroupView — tab switching', () => {
     )
 
     const tabs = screen.getAllByRole('tab')
-    expect(tabs[0]?.querySelector('[data-file-icon="file-typescript"]')).toBeTruthy()
-    expect(tabs[1]?.querySelector('[data-file-icon="file-package"]')).toBeTruthy()
+    expect(tabs[0]?.querySelector('[data-file-icon="mi-typescript"]')).toBeTruthy()
+    expect(tabs[1]?.querySelector('[data-file-icon="mi-nodejs"]')).toBeTruthy()
 
     svc.dispose()
   })

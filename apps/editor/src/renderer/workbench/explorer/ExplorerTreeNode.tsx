@@ -207,7 +207,7 @@ function ExplorerTreeNodeImpl({
           resource={resource}
           isDirectory={isDirectory}
           expanded={expanded}
-          size={15}
+          size={16}
           {...(isSymbolicLink ? { symbolicLink: true } : {})}
         />
       </span>

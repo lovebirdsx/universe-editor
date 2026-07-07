@@ -45,6 +45,10 @@ catalog:
   allotment: ^1.20.0
   lucide-react: ^0.460.0
   '@vscode/codicons': ^0.0.45
+  # Build-time only: source of the Material file-icon SVGs + mapping manifest.
+  # Consumed by apps/editor/scripts/import-material-icons.mjs; the generated SVGs
+  # and materialIconMap.ts are committed, so this never ships in the bundle.
+  material-icon-theme: ^5.36.1
   '@fontsource/roboto': ^5.1.0
   monaco-editor: ^0.55.0
   '@floating-ui/react': ^0.27.0

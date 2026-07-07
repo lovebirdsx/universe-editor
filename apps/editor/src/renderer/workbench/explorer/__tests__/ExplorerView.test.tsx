@@ -202,8 +202,8 @@ describe('ExplorerView', () => {
 
     expect(screen.queryByText('📁')).toBeFalsy()
     expect(screen.queryByText('📄')).toBeFalsy()
-    expect(folderRow?.querySelector('[data-file-icon="folder-src"]')).toBeTruthy()
-    expect(fileRow?.querySelector('[data-file-icon="file-readme"]')).toBeTruthy()
+    expect(folderRow?.querySelector('[data-file-icon="mi-folder-src"]')).toBeTruthy()
+    expect(fileRow?.querySelector('[data-file-icon="mi-readme"]')).toBeTruthy()
   })
 
   it('clicking a file opens it through IEditorService', async () => {
