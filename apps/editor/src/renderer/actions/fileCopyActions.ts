@@ -6,16 +6,33 @@ import {
   MenuId,
   localize2,
   type ServicesAccessor,
+  type URI,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
+import { sameUri } from '../services/explorer/explorerTreeUtils.js'
 import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
 
-function resolveUri(accessor: ServicesAccessor, args: unknown[]) {
+/**
+ * Resolve every file the Copy Name/Path command should act on. From the Explorer
+ * this honors multi-select (all selected rows when the invoked row is part of the
+ * selection); from an editor tab or the command palette it falls back to the
+ * explicit target then the active editor. Filters to on-disk (`file`) resources.
+ */
+function resolveUris(accessor: ServicesAccessor, args: unknown[]): URI[] {
   const arg = args[0] as ITargetArg | undefined
   const explicit = reviveUri(arg?.target ?? arg?.resource ?? null)
-  if (explicit) return explicit
+  const explorer = accessor.get(IExplorerTreeService)
+  if (explicit) {
+    const selection = explorer.selection
+    if (selection.length > 1 && selection.some((uri) => sameUri(uri, explicit))) {
+      return selection.filter((uri) => uri.scheme === 'file' && !explorer.isRoot(uri))
+    }
+    return explicit.scheme === 'file' ? [explicit] : []
+  }
   const active = accessor.get(IEditorGroupsService).activeGroup.activeEditor
-  return active instanceof FileEditorInput ? active.resource : null
+  const resource = active instanceof FileEditorInput ? active.resource : null
+  return resource && resource.scheme === 'file' ? [resource] : []
 }
 
 export class CopyFileNameAction extends Action2 {
@@ -30,9 +47,10 @@ export class CopyFileNameAction extends Action2 {
     })
   }
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
-    const uri = resolveUri(accessor, args)
-    if (!uri || uri.scheme !== 'file') return
-    await navigator.clipboard.writeText(uri.path.slice(uri.path.lastIndexOf('/') + 1))
+    const uris = resolveUris(accessor, args)
+    if (uris.length === 0) return
+    const text = uris.map((uri) => uri.path.slice(uri.path.lastIndexOf('/') + 1)).join('\n')
+    await navigator.clipboard.writeText(text)
   }
 }
 
@@ -48,9 +66,9 @@ export class CopyFilePathAction extends Action2 {
     })
   }
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
-    const uri = resolveUri(accessor, args)
-    if (!uri || uri.scheme !== 'file') return
-    await navigator.clipboard.writeText(uri.fsPath)
+    const uris = resolveUris(accessor, args)
+    if (uris.length === 0) return
+    await navigator.clipboard.writeText(uris.map((uri) => uri.fsPath).join('\n'))
   }
 }
 
@@ -66,16 +84,16 @@ export class CopyFileRelativePathAction extends Action2 {
     })
   }
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
-    const uri = resolveUri(accessor, args)
-    if (!uri || uri.scheme !== 'file') return
+    const uris = resolveUris(accessor, args)
+    if (uris.length === 0) return
     const root = accessor.get(IWorkspaceService).current?.folder
-    let value = uri.fsPath
-    if (root) {
-      const relativePath = accessor
-        .get(IUriIdentityService)
-        .relativePathUnder(root.fsPath, uri.fsPath)
-      value = relativePath ?? value
-    }
-    await navigator.clipboard.writeText(value)
+    const uriId = accessor.get(IUriIdentityService)
+    const text = uris
+      .map((uri) => {
+        if (!root) return uri.fsPath
+        return uriId.relativePathUnder(root.fsPath, uri.fsPath) ?? uri.fsPath
+      })
+      .join('\n')
+    await navigator.clipboard.writeText(text)
   }
 }

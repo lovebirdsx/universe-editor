@@ -14,7 +14,7 @@ import {
   IExplorerTreeService,
   type ExplorerTreeService,
 } from '../services/explorer/ExplorerTreeService.js'
-import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
+import { resolveContextOperations, reviveUri, type ITargetArg } from './fileActionsCommon.js'
 
 function basename(path: string): string {
   const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
@@ -92,17 +92,25 @@ export class DeleteFileAction extends Action2 {
   }
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const tree = accessor.get(IExplorerTreeService)
-    const { target, isDirectory } = resolveTarget(tree, (args[0] as ITargetArg | undefined) ?? {})
-    if (!target) return
+    const targets = resolveContextOperations(tree, [(args[0] as ITargetArg | undefined) ?? {}])
+    if (targets.length === 0) return
     const dialog = accessor.get(IDialogService)
 
+    const anyDirectory = targets.some((t) => t.isDirectory)
     const confirmed = await dialog.confirm({
-      message: localize(
-        'dialog.file.delete.confirm.message',
-        'Are you sure you want to delete "{name}"?',
-        { name: basename(target.fsPath) },
-      ),
-      detail: isDirectory
+      message:
+        targets.length === 1
+          ? localize(
+              'dialog.file.delete.confirm.message',
+              'Are you sure you want to delete "{name}"?',
+              { name: basename(targets[0]!.resource.fsPath) },
+            )
+          : localize(
+              'dialog.file.delete.confirm.message.multiple',
+              'Are you sure you want to delete the {count} selected items?',
+              { count: targets.length },
+            ),
+      detail: anyDirectory
         ? localize(
             'dialog.file.delete.confirm.detail.directory',
             'This will permanently delete the folder and all of its contents.',
@@ -115,12 +123,31 @@ export class DeleteFileAction extends Action2 {
       type: 'warning',
     })
     if (!confirmed.confirmed) return
-    try {
-      await tree.delete(target, { recursive: isDirectory })
-    } catch (err) {
+    const failed: { resource: string; error: unknown }[] = []
+    for (const target of targets) {
+      try {
+        await tree.delete(target.resource, { recursive: target.isDirectory })
+      } catch (err) {
+        failed.push({ resource: target.resource.fsPath, error: err })
+      }
+    }
+    if (failed.length > 0) {
+      const first = failed[0]!
       await dialog.confirm({
         message: localize('dialog.file.delete.error', 'Failed to delete'),
-        detail: err instanceof Error ? err.message : String(err),
+        detail:
+          failed.length === 1
+            ? first.error instanceof Error
+              ? first.error.message
+              : String(first.error)
+            : localize(
+                'dialog.file.delete.error.multiple',
+                'Failed to delete {count} items. First error: {message}',
+                {
+                  count: failed.length,
+                  message: first.error instanceof Error ? first.error.message : String(first.error),
+                },
+              ),
         type: 'error',
       })
     }

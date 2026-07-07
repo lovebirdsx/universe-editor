@@ -16,15 +16,10 @@ import {
 } from '../services/explorer/ExplorerTreeService.js'
 import { parentOf, sameUri } from '../services/explorer/explorerTreeUtils.js'
 import { basenameOf, targetInDirectory } from '../services/explorer/explorerFileOperations.js'
-import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
+import { resolveContextOperations, reviveUri, type ITargetArg } from './fileActionsCommon.js'
 
 const EXPLORER_FOCUS_WHEN =
   "focusedView == 'workbench.view.explorer.tree' && !editorTextFocus && !terminalFocus"
-
-function resolvePrimaryTarget(args: unknown[]): URI | null {
-  const arg = args[0] as ITargetArg | undefined
-  return reviveUri(arg?.target ?? arg?.resource ?? null)
-}
 
 function resolveDestinationDir(tree: ExplorerTreeService, args: unknown[]): URI | null {
   const arg = args[0] as ITargetArg | undefined
@@ -41,23 +36,6 @@ function resolveDestinationDir(tree: ExplorerTreeService, args: unknown[]): URI 
     return parentOf(focused)
   }
   return tree.root
-}
-
-function resolveContextOperations(
-  tree: ExplorerTreeService,
-  args: unknown[],
-): IExplorerResourceOperation[] {
-  const primary = resolvePrimaryTarget(args)
-  const arg = args[0] as ITargetArg | undefined
-  const operations = tree.getContextResourceOperations(primary)
-  return operations
-    .map((operation) => {
-      if (primary && sameUri(operation.resource, primary) && arg?.isDirectory !== undefined) {
-        return { resource: operation.resource, isDirectory: arg.isDirectory }
-      }
-      return operation
-    })
-    .filter((operation) => !tree.isRoot(operation.resource))
 }
 
 async function writePathClipboard(resources: readonly IExplorerResourceOperation[]): Promise<void> {

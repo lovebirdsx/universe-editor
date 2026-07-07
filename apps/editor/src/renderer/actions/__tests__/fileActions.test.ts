@@ -829,6 +829,39 @@ describe('fileActions', () => {
       await run(h, DeleteFileAction.ID, { target, isDirectory: true })
       expect(spy).toHaveBeenCalledWith(expect.anything(), { recursive: true })
     })
+
+    it('deletes every selected entry when several are selected', async () => {
+      const root = URI.file('/ws')
+      const a = URI.joinPath(root, 'a.txt')
+      const b = URI.joinPath(root, 'b.txt')
+      const c = URI.joinPath(root, 'c.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(a.toString())
+      h.fs.files.add(b.toString())
+      h.fs.files.add(c.toString())
+      h.tree.setSelection([a, b, c], c)
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
+      // Context menu / keyboard dispatch passes the primary (focused) row as target.
+      await run(h, DeleteFileAction.ID, { target: c, isDirectory: false })
+      expect(h.fs.files.has(a.toString())).toBe(false)
+      expect(h.fs.files.has(b.toString())).toBe(false)
+      expect(h.fs.files.has(c.toString())).toBe(false)
+    })
+
+    it('deletes a single explicit target that is outside the selection', async () => {
+      const root = URI.file('/ws')
+      const a = URI.joinPath(root, 'a.txt')
+      const b = URI.joinPath(root, 'b.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(a.toString())
+      h.fs.files.add(b.toString())
+      h.tree.setSelection([a], a)
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
+      // Right-clicking a row that isn't part of the selection acts on that row only.
+      await run(h, DeleteFileAction.ID, { target: b, isDirectory: false })
+      expect(h.fs.files.has(a.toString())).toBe(true)
+      expect(h.fs.files.has(b.toString())).toBe(false)
+    })
   })
 
   describe('Explorer clipboard actions', () => {
