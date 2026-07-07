@@ -230,6 +230,12 @@ describe('MarkdownView', () => {
     expect(screen.queryByRole('link')).toBeNull()
   })
 
+  it('keeps inline-code markdown links as code outside preview mode', () => {
+    const { container } = renderMarkdown('`[春晓](./test2.md#春晓)`')
+    expect(screen.queryByRole('link')).toBeNull()
+    expect(container.querySelector('code')?.textContent).toBe('[春晓](./test2.md#春晓)')
+  })
+
   it('renders an angle-bracketed Windows file path with spaces as one full-path link', () => {
     const winPath = String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\docs\user\zh-CN\reference\keyboard-shortcuts.md`
     renderMarkdown(`see <${winPath}>`)
@@ -327,6 +333,49 @@ describe('MarkdownView', () => {
       makePreviewController({ scrollToAnchor }),
     )
     expect(scrollToAnchor).toHaveBeenCalledWith('hello')
+  })
+
+  it('renders inline-code markdown links as clickable preview links in preview mode', async () => {
+    const opened: { editor: EditorInput; options: unknown }[] = []
+    const openExternal = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver())
+    services.set(IConfigurationService, makeConfig())
+    services.set(
+      IFileService,
+      makeFileService((resource) => resource.path === '/repo/docs/test2.md'),
+    )
+    services.set(IEditorService, makeEditorService())
+    services.set(IEditorGroupsService, makeGroupsService(opened))
+    const inst = new InstantiationService(services)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <MarkdownView
+          text="* `[春晓](./test2.md#春晓)`"
+          baseUri={URI.file('/repo/docs')}
+          previewLinks
+        />
+      </ServicesContext.Provider>,
+    )
+
+    const link = screen.getByRole('link', { name: '春晓' })
+    expect(link.getAttribute('href')).toBe('./test2.md#春晓')
+    expect(link.closest('code')).toBeNull()
+    link.click()
+
+    await waitFor(() => expect(opened).toHaveLength(1))
+    expect(openExternal).not.toHaveBeenCalled()
+    const preview = opened[0]!.editor
+    expect(preview).toBeInstanceOf(MarkdownPreviewInput)
+    expect((preview as MarkdownPreviewInput).sourceUri.path).toBe('/repo/docs/test2.md')
+
+    const scrollToAnchor = vi.fn()
+    MarkdownPreviewRegistry.register(
+      (preview as MarkdownPreviewInput).sourceUri,
+      makePreviewController({ scrollToAnchor }),
+    )
+    expect(scrollToAnchor).toHaveBeenCalledWith('春晓')
   })
 
   it('strips @ from explicit file links before resolving them', async () => {

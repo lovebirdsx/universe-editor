@@ -21,6 +21,7 @@ import { IResourceAccessService } from '../../../shared/ipc/resourceAccessServic
 import {
   isAnchorHref,
   parseMarkdown,
+  parseInline,
   slugifyHeading,
   type MdInline,
   type MdListItem,
@@ -125,17 +126,19 @@ export function MarkdownView({
     <FileLinkContext.Provider value={openFileLink}>
       <AnchorScrollContext.Provider value={scrollToAnchor}>
         <BaseUriContext.Provider value={baseUri}>
-          <ImageRenderContext.Provider value={renderImage ?? defaultRenderImage}>
-            <div
-              ref={rootRef}
-              className={className ? `${styles['markdown']} ${className}` : styles['markdown']}
-              {...(testId !== undefined ? { 'data-testid': testId } : {})}
-            >
-              {nodes.map((node, i) => (
-                <Block key={i} node={node} />
-              ))}
-            </div>
-          </ImageRenderContext.Provider>
+          <InlineCodeMarkdownLinkContext.Provider value={previewLinks ?? false}>
+            <ImageRenderContext.Provider value={renderImage ?? defaultRenderImage}>
+              <div
+                ref={rootRef}
+                className={className ? `${styles['markdown']} ${className}` : styles['markdown']}
+                {...(testId !== undefined ? { 'data-testid': testId } : {})}
+              >
+                {nodes.map((node, i) => (
+                  <Block key={i} node={node} />
+                ))}
+              </div>
+            </ImageRenderContext.Provider>
+          </InlineCodeMarkdownLinkContext.Provider>
         </BaseUriContext.Provider>
       </AnchorScrollContext.Provider>
     </FileLinkContext.Provider>
@@ -177,6 +180,8 @@ const BaseUriContext = createContext<URI | undefined>(undefined)
 // Scrolls to the heading whose slug matches an in-document `#anchor` link. Scoped
 // per MarkdownView so an anchor only targets headings inside the same view.
 const AnchorScrollContext = createContext<(id: string) => void>(() => {})
+
+const InlineCodeMarkdownLinkContext = createContext(false)
 
 /**
  * When provided by a parent (e.g. DocEditor), relative `.md` links are routed
@@ -350,11 +355,17 @@ function InlineImage({ src, alt }: { src: string; alt: string }) {
   return <>{renderImage(resolved, alt)}</>
 }
 
-// Inline code that is exactly one file path becomes a clickable monospace link
-// (the common case: agents/docs wrap paths in backticks). Anything else stays a
-// plain `<code>` so prose and snippets are unaffected.
+// In preview surfaces, inline code that is exactly `[label](href)` renders as
+// the same safe link the normal markdown parser would emit. Inline code that is
+// exactly one file path also becomes a clickable monospace link (the common
+// case: agents/docs wrap paths in backticks). Anything else stays a plain
+// `<code>` so prose and snippets are unaffected.
 function InlineCode({ text }: { text: string }) {
   const openFileLink = useContext(FileLinkContext)
+  const renderMarkdownLink = useContext(InlineCodeMarkdownLinkContext)
+  const link = renderMarkdownLink ? parseInlineCodeMarkdownLink(text) : undefined
+  if (link) return <SafeLink href={link.href}>{renderInline(link.children)}</SafeLink>
+
   const match = matchFullFilePath(text)
   if (!match) return <code className={styles['inlineCode']}>{text}</code>
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
@@ -371,6 +382,17 @@ function InlineCode({ text }: { text: string }) {
       {text}
     </a>
   )
+}
+
+function parseInlineCodeMarkdownLink(
+  text: string,
+): { href: string; children: readonly MdInline[] } | undefined {
+  if (!text.startsWith('[')) return undefined
+  const nodes = parseInline(text)
+  if (nodes.length !== 1) return undefined
+  const node = nodes[0]
+  if (node?.type !== 'link') return undefined
+  return { href: node.href, children: node.children }
 }
 
 function SafeLink({ href, children }: { href: string; children: ReactNode }) {
