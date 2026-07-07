@@ -9,9 +9,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
+  ContextKeyService,
   Emitter,
   ICommandService,
   IConfigurationService,
+  IContextKeyService,
   IDialogService,
   IEditorGroupsService,
   IFileDialogService,
@@ -82,6 +84,7 @@ import {
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../services/exclude/testing/fakeExcludeService.js'
 import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
+import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import {
   IRecentFilesService,
   type IRecentFile,
@@ -585,6 +588,7 @@ interface Harness {
   quickInput: FakeQuickInputService
   fileSearch: ReturnType<typeof makeFileSearch>
   recentFiles: FakeRecentFilesService
+  contextKeys: ContextKeyService
 }
 
 function makeHarness(
@@ -600,6 +604,7 @@ function makeHarness(
   const quickInput = new FakeQuickInputService()
   const recentFiles = new FakeRecentFilesService()
   const fileSearch = makeFileSearch(fs)
+  const contextKeys = new ContextKeyService()
   const { group, service: groupsService } = makeGroup(opts.activeEditor)
 
   const services = new ServiceCollection()
@@ -633,6 +638,7 @@ function makeHarness(
     loadLayer() {},
     onDidChangeConfiguration: new Emitter<never>().event,
   } as unknown as IConfigurationService)
+  services.set(IContextKeyService, contextKeys)
   const inst = new InstantiationService(services)
   // ExplorerTreeService needs IWorkspaceService + IFileService.
   const tree = inst.createInstance(ExplorerTreeService)
@@ -655,6 +661,7 @@ function makeHarness(
     quickInput,
     fileSearch,
     recentFiles,
+    contextKeys,
   }
 }
 
@@ -804,6 +811,25 @@ describe('fileActions', () => {
       await run(h, RenameFileAction.ID, { target: source })
       expect(h.fs.files.has(source.toString())).toBe(true)
     })
+
+    it('renames the active editor file (not the drifted Explorer selection) from the command palette', async () => {
+      const root = URI.file('/ws')
+      const openFile = URI.joinPath(root, 'open.txt')
+      const explorerSelection = URI.joinPath(root, 'other.txt')
+      const activeEditor = new FileEditorInput(openFile, {} as never)
+      const h = makeHarness({ root, activeEditor })
+      h.fs.files.add(openFile.toString())
+      h.fs.files.add(explorerSelection.toString())
+      h.tree.setSelection([explorerSelection], explorerSelection)
+      h.contextKeys.set('focusedView', '')
+      h.dialog.promptResults.push('renamed.txt')
+
+      await run(h, RenameFileAction.ID)
+
+      expect(h.fs.files.has(URI.joinPath(root, 'renamed.txt').toString())).toBe(true)
+      expect(h.fs.files.has(openFile.toString())).toBe(false)
+      expect(h.fs.files.has(explorerSelection.toString())).toBe(true)
+    })
   })
 
   describe('DeleteFileAction', () => {
@@ -836,6 +862,44 @@ describe('fileActions', () => {
       h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
       await run(h, DeleteFileAction.ID)
       expect(h.fs.files.has(target.toString())).toBe(false)
+    })
+
+    it('deletes the active editor file (not the drifted Explorer selection) from the command palette', async () => {
+      const root = URI.file('/ws')
+      const openFile = URI.joinPath(root, 'open.txt')
+      const explorerSelection = URI.joinPath(root, 'other.txt')
+      const activeEditor = new FileEditorInput(openFile, {} as never)
+      const h = makeHarness({ root, activeEditor })
+      h.fs.files.add(openFile.toString())
+      h.fs.files.add(explorerSelection.toString())
+      // autoReveal off: the Explorer selection has drifted away from the open file.
+      h.tree.setSelection([explorerSelection], explorerSelection)
+      // Command palette invocation: no view holds focus, so focusedView is empty.
+      h.contextKeys.set('focusedView', '')
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
+
+      await run(h, DeleteFileAction.ID)
+
+      expect(h.fs.files.has(openFile.toString())).toBe(false)
+      expect(h.fs.files.has(explorerSelection.toString())).toBe(true)
+    })
+
+    it('deletes the Explorer selection when the Explorer tree owns focus', async () => {
+      const root = URI.file('/ws')
+      const openFile = URI.joinPath(root, 'open.txt')
+      const explorerSelection = URI.joinPath(root, 'other.txt')
+      const activeEditor = new FileEditorInput(openFile, {} as never)
+      const h = makeHarness({ root, activeEditor })
+      h.fs.files.add(openFile.toString())
+      h.fs.files.add(explorerSelection.toString())
+      h.tree.setSelection([explorerSelection], explorerSelection)
+      h.contextKeys.set('focusedView', 'workbench.view.explorer.tree')
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
+
+      await run(h, DeleteFileAction.ID)
+
+      expect(h.fs.files.has(explorerSelection.toString())).toBe(false)
+      expect(h.fs.files.has(openFile.toString())).toBe(true)
     })
 
     it('skips delete when the user cancels the confirm', async () => {
@@ -971,6 +1035,46 @@ describe('fileActions', () => {
       expect(h.fileDialog.openCalls[0]?.canSelectFolders).toBe(true)
       expect(h.fs.renames).toContainEqual({ source: source.toString(), target: target.toString() })
       expect(h.fs.files.has(target.toString())).toBe(true)
+    })
+
+    it('DuplicateFileAction targets the active editor file (not the drifted Explorer selection) from the command palette', async () => {
+      const root = URI.file('/ws')
+      const openFile = URI.joinPath(root, 'open.txt')
+      const explorerSelection = URI.joinPath(root, 'other.txt')
+      const activeEditor = new FileEditorInput(openFile, {} as never)
+      const h = makeHarness({ root, activeEditor })
+      h.fs.files.add(openFile.toString())
+      h.fs.files.add(explorerSelection.toString())
+      h.tree.setSelection([explorerSelection], explorerSelection)
+      h.contextKeys.set('focusedView', '')
+      h.dialog.promptResults.push('open copy.txt')
+
+      await run(h, DuplicateFileAction.ID)
+
+      expect(h.fs.copies).toContainEqual({
+        source: openFile.toString(),
+        target: URI.joinPath(root, 'open copy.txt').toString(),
+      })
+    })
+
+    it('DuplicateFileAction targets the Explorer selection when the Explorer tree owns focus', async () => {
+      const root = URI.file('/ws')
+      const openFile = URI.joinPath(root, 'open.txt')
+      const explorerSelection = URI.joinPath(root, 'other.txt')
+      const activeEditor = new FileEditorInput(openFile, {} as never)
+      const h = makeHarness({ root, activeEditor })
+      h.fs.files.add(openFile.toString())
+      h.fs.files.add(explorerSelection.toString())
+      h.tree.setSelection([explorerSelection], explorerSelection)
+      h.contextKeys.set('focusedView', 'workbench.view.explorer.tree')
+      h.dialog.promptResults.push('other copy.txt')
+
+      await run(h, DuplicateFileAction.ID)
+
+      expect(h.fs.copies).toContainEqual({
+        source: explorerSelection.toString(),
+        target: URI.joinPath(root, 'other copy.txt').toString(),
+      })
     })
   })
 

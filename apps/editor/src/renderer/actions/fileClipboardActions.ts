@@ -18,12 +18,21 @@ import { IExplorerFileOperationService } from '../services/explorer/ExplorerFile
 import type { ExplorerFileOperationService } from '../services/explorer/ExplorerFileOperationService.js'
 import { parentOf, sameUri } from '../services/explorer/explorerTreeUtils.js'
 import { basenameOf, targetInDirectory } from '../services/explorer/explorerFileOperations.js'
-import { resolveContextOperations, reviveUri, type ITargetArg } from './fileActionsCommon.js'
+import {
+  implicitPrimaryTarget,
+  resolveContextOperations,
+  reviveUri,
+  type ITargetArg,
+} from './fileActionsCommon.js'
 
 const EXPLORER_FOCUS_WHEN =
   "focusedView == 'workbench.view.explorer.tree' && !editorTextFocus && !terminalFocus"
 
-function resolveDestinationDir(tree: ExplorerTreeService, args: unknown[]): URI | null {
+function resolveDestinationDir(
+  accessor: ServicesAccessor,
+  tree: ExplorerTreeService,
+  args: unknown[],
+): URI | null {
   const arg = args[0] as ITargetArg | undefined
   const explicitParent = reviveUri(arg?.parent ?? null)
   if (explicitParent) return explicitParent
@@ -32,7 +41,7 @@ function resolveDestinationDir(tree: ExplorerTreeService, args: unknown[]): URI 
     if (arg?.isDirectory === true || tree.isDirectory(explicit)) return explicit
     return parentOf(explicit)
   }
-  const focused = tree.selectedResource
+  const focused = implicitPrimaryTarget(accessor) ?? tree.selectedResource
   if (focused) {
     if (tree.isDirectory(focused)) return focused
     return parentOf(focused)
@@ -103,7 +112,7 @@ export class CutFileAction extends Action2 {
 
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const tree = accessor.get(IExplorerTreeService)
-    const resources = resolveContextOperations(tree, args)
+    const resources = resolveContextOperations(accessor, tree, args)
     if (resources.length === 0) return
     tree.setToCopy(resources, true)
     await writePathClipboard(resources)
@@ -124,7 +133,7 @@ export class CopyExplorerFileAction extends Action2 {
 
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const tree = accessor.get(IExplorerTreeService)
-    const resources = resolveContextOperations(tree, args)
+    const resources = resolveContextOperations(accessor, tree, args)
     if (resources.length === 0) return
     tree.setToCopy(resources, false)
     await writePathClipboard(resources)
@@ -145,7 +154,7 @@ export class PasteExplorerFileAction extends Action2 {
 
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const tree = accessor.get(IExplorerTreeService)
-    const destinationDir = resolveDestinationDir(tree, args)
+    const destinationDir = resolveDestinationDir(accessor, tree, args)
     const resources = tree.clipboardResources
     if (!destinationDir || resources.length === 0) return
     const dialog = accessor.get(IDialogService)
@@ -203,7 +212,7 @@ export class DuplicateFileAction extends Action2 {
 
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const tree = accessor.get(IExplorerTreeService)
-    const source = resolveContextOperations(tree, args)[0]
+    const source = resolveContextOperations(accessor, tree, args)[0]
     if (!source) return
     const dialog = accessor.get(IDialogService)
     const fileOps = accessor.get(IExplorerFileOperationService)
@@ -238,7 +247,7 @@ export class MoveFileAction extends Action2 {
 
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const tree = accessor.get(IExplorerTreeService)
-    const resources = resolveContextOperations(tree, args)
+    const resources = resolveContextOperations(accessor, tree, args)
     if (resources.length === 0) return
     const workspace = accessor.get(IWorkspaceService)
     const currentParent = parentOf(resources[0]!.resource)

@@ -17,7 +17,12 @@ import {
   type ExplorerTreeService,
 } from '../services/explorer/ExplorerTreeService.js'
 import { IExplorerFileOperationService } from '../services/explorer/ExplorerFileOperationService.js'
-import { resolveContextOperations, reviveUri, type ITargetArg } from './fileActionsCommon.js'
+import {
+  implicitCommandResource,
+  resolveContextOperations,
+  reviveUri,
+  type ITargetArg,
+} from './fileActionsCommon.js'
 
 function basename(path: string): string {
   const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
@@ -42,6 +47,7 @@ function isDirectoryTarget(
 }
 
 function resolveTarget(
+  accessor: ServicesAccessor,
   tree: ExplorerTreeService,
   args: ITargetArg | undefined,
 ): { target: ReturnType<typeof reviveUri>; isDirectory: boolean } {
@@ -49,8 +55,8 @@ function resolveTarget(
   if (explicit) {
     return { target: explicit, isDirectory: args?.isDirectory === true }
   }
-  const selected = tree.selectedResource
-  return { target: selected, isDirectory: isDirectoryTarget(tree, selected) }
+  const target = implicitCommandResource(accessor, tree)
+  return { target, isDirectory: isDirectoryTarget(tree, target) }
 }
 
 export class RenameFileAction extends Action2 {
@@ -66,7 +72,7 @@ export class RenameFileAction extends Action2 {
   }
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const tree = accessor.get(IExplorerTreeService)
-    const { target } = resolveTarget(tree, args[0] as ITargetArg | undefined)
+    const { target } = resolveTarget(accessor, tree, args[0] as ITargetArg | undefined)
     if (!target) return
     const dialog = accessor.get(IDialogService)
     const fileOps = accessor.get(IExplorerFileOperationService)
@@ -102,7 +108,9 @@ export class DeleteFileAction extends Action2 {
   }
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const tree = accessor.get(IExplorerTreeService)
-    const targets = resolveContextOperations(tree, [(args[0] as ITargetArg | undefined) ?? {}])
+    const targets = resolveContextOperations(accessor, tree, [
+      (args[0] as ITargetArg | undefined) ?? {},
+    ])
     if (targets.length === 0) return
     const dialog = accessor.get(IDialogService)
     const config = accessor.get(IConfigurationService)
