@@ -19,7 +19,7 @@ import {
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
-import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
+import { IExplorerFileOperationService } from '../services/explorer/ExplorerFileOperationService.js'
 import { parentOf } from '../services/explorer/explorerTreeUtils.js'
 import { reviveUri } from './fileActionsCommon.js'
 
@@ -72,7 +72,7 @@ export class NewFileAction extends Action2 {
     const parent = resolveParent(accessor, args[0] as IParentArg)
     if (!parent) return
     const dialog = accessor.get(IDialogService)
-    const tree = accessor.get(IExplorerTreeService)
+    const fileOps = accessor.get(IExplorerFileOperationService)
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
 
@@ -82,7 +82,7 @@ export class NewFileAction extends Action2 {
     })
     if (!name) return
     try {
-      const created = await tree.createFile(parent, name)
+      const created = await fileOps.createFile(parent, name)
       const input = inst.createInstance(FileEditorInput, created)
       openInLockAwareGroup(groups, input, { activate: true })
     } catch (err) {
@@ -109,7 +109,7 @@ export class NewFolderAction extends Action2 {
     const parent = resolveParent(accessor, args[0] as IParentArg)
     if (!parent) return
     const dialog = accessor.get(IDialogService)
-    const tree = accessor.get(IExplorerTreeService)
+    const fileOps = accessor.get(IExplorerFileOperationService)
 
     const name = await dialog.prompt({
       title: localize('dialog.file.prompt.newFolder', 'New Folder'),
@@ -117,7 +117,7 @@ export class NewFolderAction extends Action2 {
     })
     if (!name) return
     try {
-      await tree.createFolder(parent, name)
+      await fileOps.createFolder(parent, name)
     } catch (err) {
       await dialog.confirm({
         message: localize('dialog.file.create.error.folder', 'Failed to create folder'),

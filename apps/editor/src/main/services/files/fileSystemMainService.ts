@@ -6,6 +6,7 @@
 
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { shell } from 'electron'
 import {
   createNamedLogger,
   FileSystemError,
@@ -249,9 +250,30 @@ export class FileSystemMainService implements IFileService {
     }
   }
 
-  async delete(resource: RawUri, opts?: { recursive?: boolean }): Promise<void> {
+  async delete(
+    resource: RawUri,
+    opts?: { recursive?: boolean; useTrash?: boolean },
+  ): Promise<void> {
     const uri = ensureFile(reviveUri(resource))
     const recursive = opts?.recursive === true
+    if (opts?.useTrash === true) {
+      // shell.trashItem goes through the OS shell API (IFileOperation on
+      // Windows), which rejects the forward-slash fsPath our URI produces —
+      // normalize to the platform separator first.
+      const trashPath = path.normalize(uri.fsPath)
+      try {
+        await shell.trashItem(trashPath)
+        this._logger.info(`delete (trash) ${trashPath}`)
+      } catch (err) {
+        const message =
+          process.platform === 'win32'
+            ? `Failed to move "${trashPath}" to the recycle bin`
+            : `Failed to move "${trashPath}" to the trash`
+        this._logger.warn(`delete (trash) failed ${trashPath}`, err)
+        throw new FileSystemError(err instanceof Error ? err.message : message, 'UNKNOWN')
+      }
+      return
+    }
     try {
       const s = await fs.stat(uri.fsPath)
       if (s.isDirectory()) {

@@ -26,6 +26,7 @@ import { JsonSchemaAssociationsContribution } from '../JsonSchemaAssociationsCon
 import { InlineCompletionConfigurationContribution } from '../InlineCompletionConfigurationContribution.js'
 import { BuiltInEditorBindingsContribution } from '../BuiltInEditorBindingsContribution.js'
 import { ExplorerClipboardContextContribution } from '../ExplorerClipboardContextContribution.js'
+import { ExplorerFileConfigurationContribution } from '../ExplorerFileConfigurationContribution.js'
 import { ExplorerMenuContribution } from '../ExplorerMenuContribution.js'
 import { EditMenuContribution } from '../EditMenuContribution.js'
 import { LogLevelContribution } from '../LogLevelContribution.js'
@@ -190,6 +191,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.inlineCompletionConfiguration',
   InlineCompletionConfigurationContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Explorer / files settings (delete-to-trash, confirm-delete, enable-undo) +
+// the explorerEnableUndo context key. BlockStartup so the Settings editor sees
+// the schema and the keybinding gate is set before the Explorer mounts.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.explorerFileConfiguration',
+  ExplorerFileConfigurationContribution,
   WorkbenchPhase.BlockStartup,
 )
 

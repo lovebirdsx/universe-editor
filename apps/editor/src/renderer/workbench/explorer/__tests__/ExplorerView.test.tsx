@@ -12,10 +12,15 @@ import {
   IEditorService,
   IFileService,
   IFileWatcherService,
+  ILoggerService,
+  INotificationService,
+  IUndoRedoService,
   IWorkspaceService,
   ICommandService,
   InstantiationService,
+  NullLogger,
   ServiceCollection,
+  UndoRedoService,
   URI,
   observableValue,
   type IConfirmResult,
@@ -33,6 +38,10 @@ import {
   ExplorerTreeService,
   IExplorerTreeService,
 } from '../../../services/explorer/ExplorerTreeService.js'
+import {
+  ExplorerFileOperationService,
+  IExplorerFileOperationService,
+} from '../../../services/explorer/ExplorerFileOperationService.js'
 import { ServicesContext } from '../../useService.js'
 import { EditorResolverService } from '../../../services/editor/EditorResolverService.js'
 import { IExcludeService } from '../../../services/exclude/ExcludeService.js'
@@ -153,8 +162,18 @@ function renderView(opts: { folder: URI | null; fs?: IFileServiceType }) {
   const inst = new InstantiationService(services)
   const editorResolver = inst.createInstance(EditorResolverService)
   services.set(IEditorResolverService, editorResolver)
+  services.set(ILoggerService, {
+    _serviceBrand: undefined,
+    createLogger: () => new NullLogger(),
+    setLevel: () => {},
+    getLevel: () => 0,
+  } as unknown as ILoggerService)
+  const notification = { notify: () => ({ dispose() {} }) } as unknown as INotificationService
+  services.set(INotificationService, notification)
+  services.set(IUndoRedoService, new UndoRedoService(dialog, notification))
   const tree = inst.createInstance(ExplorerTreeService)
   services.set(IExplorerTreeService, tree)
+  services.set(IExplorerFileOperationService, inst.createInstance(ExplorerFileOperationService))
   const result = render(
     <ServicesContext.Provider value={inst}>
       <ExplorerView />

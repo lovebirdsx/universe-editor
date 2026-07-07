@@ -203,6 +203,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.filesExplorer.duplicate': '复制副本…',
   'action.filesExplorer.move': '移动…',
   'action.filesExplorer.paste': '粘贴',
+  'action.filesExplorer.undo': '撤销',
+  'action.filesExplorer.redo': '重做',
   'action.diffEditor.nextChange.title': '转到下一处更改',
   'action.diffEditor.previousChange.title': '转到上一处更改',
   'action.editor.nextChange.title': '转到下一处更改',
@@ -357,7 +359,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'dialog.file.create.error.file': '创建文件失败',
   'dialog.file.create.error.folder': '创建文件夹失败',
   'dialog.file.delete.confirm.detail.directory': '这会永久删除该文件夹及其所有内容。',
-  'dialog.file.delete.confirm.detail.file': '如果系统支持，你可以从回收站中恢复它。',
+  'dialog.file.delete.confirm.detail.file': '这会永久删除该文件。',
+  'dialog.file.delete.confirm.detail.trash': '你可以从{trash}中恢复它。',
+  'dialog.file.delete.moveToTrash': '移到{trash}',
   'dialog.file.delete.confirm.message': '确定要删除"{name}"吗？',
   'dialog.file.delete.error': '删除失败',
   'dialog.file.duplicate.error': '复制副本失败',
@@ -515,6 +519,12 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.explorer': '资源管理器',
   'settings.explorer.autoReveal.description':
     '控制资源管理器是否在打开文件时自动定位并选中该文件。',
+  'settings.files.enableTrash': '删除文件/文件夹时移到系统回收站（废纸篓）。关闭后删除将无法恢复。',
+  'settings.explorer.confirmDelete': '从资源管理器删除文件或文件夹前弹出确认。',
+  'settings.explorer.enableUndo':
+    '为资源管理器的文件操作（新建、重命名、移动、复制、删除）启用撤销/重做（Ctrl+Z / Ctrl+Y）。',
+  'trash.recycleBin': '回收站',
+  'trash.trash': '废纸篓',
   'settings.files': '文件',
   'settings.files.autoSave.description': '控制未保存文件的自动保存行为。',
   'settings.files.autoSaveDelay.description':

@@ -415,6 +415,29 @@ export class ExplorerTreeService extends Disposable {
     this._model.refresh()
   }
 
+  /**
+   * Re-read the parent directory of each resource (deduped). Used by the
+   * reversible file-operation service so undo/redo refresh the affected rows.
+   */
+  async refreshParents(resources: readonly URI[]): Promise<void> {
+    await this._refreshParents(resources)
+  }
+
+  /** Drop cached node state for `resource` and all descendants (post move/delete). */
+  forgetSubtree(resource: URI): void {
+    this._deleteNodeSubtree(resource)
+  }
+
+  /** Fire onDidRunFileOperation so consumers (markdown link updating) can react. */
+  notifyDidRunFileOperation(renames: readonly IFileRenameOperation[]): void {
+    if (renames.length > 0) this._onDidRunFileOperation.fire(renames)
+  }
+
+  /** Select (and focus the first of) the given resources after an operation. */
+  selectOperationTargets(targets: readonly URI[]): void {
+    this._selectOperationTargets(targets)
+  }
+
   async createFile(parent: URI, name: string): Promise<URI> {
     const target = URI.joinPath(parent, name)
     if (await this._fileService.exists(target)) {
@@ -470,7 +493,7 @@ export class ExplorerTreeService extends Disposable {
     }
   }
 
-  async delete(target: URI, opts?: { recursive?: boolean }): Promise<void> {
+  async delete(target: URI, opts?: { recursive?: boolean; useTrash?: boolean }): Promise<void> {
     try {
       await this._fileService.delete(target, opts)
       const parent = parentOf(target)
@@ -481,7 +504,9 @@ export class ExplorerTreeService extends Disposable {
       } else {
         this._model.refresh()
       }
-      this._logger.info(`delete ${target.toString()} recursive=${opts?.recursive === true}`)
+      this._logger.info(
+        `delete ${target.toString()} recursive=${opts?.recursive === true} useTrash=${opts?.useTrash === true}`,
+      )
     } catch (err) {
       this._logger.error(`delete failed ${target.toString()}`, err)
       throw err

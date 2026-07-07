@@ -4,6 +4,8 @@
 
 ## 功能实现进展
 
+- [Explorer 删除到回收站 + Ctrl+Z 撤销](explorer-trash-and-undo-feature.md) — delete 加 useTrash 走 shell.trashItem；完整移植 VSCode IUndoRedoService 到 platform；新 ExplorerFileOperationService 编排撤销(删前内存备份重建,>10MB 不备份)+命令层键位 ctrl+z/ctrl+y；坑=action 须 await 前取完 service [[action2-async-accessor-invalidation]]
+
 - [agent 二进制静默下载 + e2e teardown 回归修复](agent-binary-silent-download-e2e-fix.md) — 通知噪音→connect silent 选项→codex/claude 二进制守卫按 agentId 修复→意外揭露 codex 真下载导致 e2e teardown timeout→allowDownload 网关 + prefetch e2e 门禁；**续修真根因**=预热引入的 tsserver 在 Windows 变孤儿卡 app.close()：vendored CLI 只在优雅退(stdin EOF/watchdog)跑 exit hook 回收 tsserver，treeKill /F 硬杀跳过它+甩掉 race 的 semantic server→改 lspClient/exthost 全链优雅关(stdin EOF 级联)+Playwright SIGKILL 不跑 in-app 钩子故 e2e 靠 fixture killOrphanedLanguageServers 扫死父孤儿
 
 - [ACP 输入框 Monaco 化 + 药丸引用](prompt-monaco-input-migration.md) — textarea→内嵌 Monaco，@/# 统一 by-range 药丸(对标 VSCode Copilot);M0–M4 全完成全绿;坑=programmatic vs user 变更源(非受控 Monaco 每次 setValue 都 fire onChange,须计数器区分)/ArrowUp 用 getTopForPosition 判视觉首行/e2e 无 input 改探针 getAcpPromptText+drop 宿主 testid acp-prompt-drop-host

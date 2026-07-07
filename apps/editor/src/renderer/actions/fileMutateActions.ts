@@ -5,7 +5,9 @@
 
 import {
   Action2,
+  IConfigurationService,
   IDialogService,
+  IHostService,
   localize,
   localize2,
   type ServicesAccessor,
@@ -14,11 +16,18 @@ import {
   IExplorerTreeService,
   type ExplorerTreeService,
 } from '../services/explorer/ExplorerTreeService.js'
+import { IExplorerFileOperationService } from '../services/explorer/ExplorerFileOperationService.js'
 import { resolveContextOperations, reviveUri, type ITargetArg } from './fileActionsCommon.js'
 
 function basename(path: string): string {
   const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
   return slash === -1 ? path : path.slice(slash + 1)
+}
+
+function trashName(platform: string): string {
+  return platform === 'win32'
+    ? localize('trash.recycleBin', 'Recycle Bin')
+    : localize('trash.trash', 'Trash')
 }
 
 function isDirectoryTarget(
@@ -60,6 +69,7 @@ export class RenameFileAction extends Action2 {
     const { target } = resolveTarget(tree, args[0] as ITargetArg | undefined)
     if (!target) return
     const dialog = accessor.get(IDialogService)
+    const fileOps = accessor.get(IExplorerFileOperationService)
 
     const current = basename(target.fsPath)
     const next = await dialog.prompt({
@@ -68,7 +78,7 @@ export class RenameFileAction extends Action2 {
     })
     if (!next || next === current) return
     try {
-      await tree.rename(target, next)
+      await fileOps.rename(target, next)
     } catch (err) {
       await dialog.confirm({
         message: localize('dialog.file.rename.error', 'Failed to rename'),
@@ -95,59 +105,58 @@ export class DeleteFileAction extends Action2 {
     const targets = resolveContextOperations(tree, [(args[0] as ITargetArg | undefined) ?? {}])
     if (targets.length === 0) return
     const dialog = accessor.get(IDialogService)
+    const config = accessor.get(IConfigurationService)
+    const platform = accessor.get(IHostService).platform
+    const fileOps = accessor.get(IExplorerFileOperationService)
+
+    const useTrash = config.get<boolean>('files.enableTrash') !== false
+    const confirmDelete = config.get<boolean>('explorer.confirmDelete') !== false
+    const trash = trashName(platform)
 
     const anyDirectory = targets.some((t) => t.isDirectory)
-    const confirmed = await dialog.confirm({
-      message:
-        targets.length === 1
+    if (confirmDelete) {
+      const confirmed = await dialog.confirm({
+        message:
+          targets.length === 1
+            ? localize(
+                'dialog.file.delete.confirm.message',
+                'Are you sure you want to delete "{name}"?',
+                { name: basename(targets[0]!.resource.fsPath) },
+              )
+            : localize(
+                'dialog.file.delete.confirm.message.multiple',
+                'Are you sure you want to delete the {count} selected items?',
+                { count: targets.length },
+              ),
+        detail: useTrash
           ? localize(
-              'dialog.file.delete.confirm.message',
-              'Are you sure you want to delete "{name}"?',
-              { name: basename(targets[0]!.resource.fsPath) },
+              'dialog.file.delete.confirm.detail.trash',
+              'You can restore it from the {trash}.',
+              { trash },
             )
-          : localize(
-              'dialog.file.delete.confirm.message.multiple',
-              'Are you sure you want to delete the {count} selected items?',
-              { count: targets.length },
-            ),
-      detail: anyDirectory
-        ? localize(
-            'dialog.file.delete.confirm.detail.directory',
-            'This will permanently delete the folder and all of its contents.',
-          )
-        : localize(
-            'dialog.file.delete.confirm.detail.file',
-            'You can restore it from the system trash if your platform supports it.',
-          ),
-      primaryButton: localize('common.delete', 'Delete'),
-      type: 'warning',
-    })
-    if (!confirmed.confirmed) return
-    const failed: { resource: string; error: unknown }[] = []
-    for (const target of targets) {
-      try {
-        await tree.delete(target.resource, { recursive: target.isDirectory })
-      } catch (err) {
-        failed.push({ resource: target.resource.fsPath, error: err })
-      }
+          : anyDirectory
+            ? localize(
+                'dialog.file.delete.confirm.detail.directory',
+                'This will permanently delete the folder and all of its contents.',
+              )
+            : localize(
+                'dialog.file.delete.confirm.detail.file',
+                'This will permanently delete the file.',
+              ),
+        primaryButton: useTrash
+          ? localize('dialog.file.delete.moveToTrash', 'Move to {trash}', { trash })
+          : localize('common.delete', 'Delete'),
+        type: 'warning',
+      })
+      if (!confirmed.confirmed) return
     }
-    if (failed.length > 0) {
-      const first = failed[0]!
+
+    try {
+      await fileOps.delete(targets, useTrash)
+    } catch (err) {
       await dialog.confirm({
         message: localize('dialog.file.delete.error', 'Failed to delete'),
-        detail:
-          failed.length === 1
-            ? first.error instanceof Error
-              ? first.error.message
-              : String(first.error)
-            : localize(
-                'dialog.file.delete.error.multiple',
-                'Failed to delete {count} items. First error: {message}',
-                {
-                  count: failed.length,
-                  message: first.error instanceof Error ? first.error.message : String(first.error),
-                },
-              ),
+        detail: err instanceof Error ? err.message : String(err),
         type: 'error',
       })
     }

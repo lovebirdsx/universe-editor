@@ -101,6 +101,8 @@ export const EN_US_MESSAGES: MessageMap = {
   'action.filesExplorer.duplicate': 'Duplicate...',
   'action.filesExplorer.move': 'Move...',
   'action.filesExplorer.paste': 'Paste',
+  'action.filesExplorer.undo': 'Undo',
+  'action.filesExplorer.redo': 'Redo',
   'action.deleteFile.title': 'Delete',
   'action.find.title': 'Find',
   'action.findInFiles.title': 'Find in Files',
@@ -159,8 +161,9 @@ export const EN_US_MESSAGES: MessageMap = {
   'dialog.file.create.error.folder': 'Failed to create folder',
   'dialog.file.delete.confirm.detail.directory':
     'This will permanently delete the folder and all of its contents.',
-  'dialog.file.delete.confirm.detail.file':
-    'You can restore it from the system trash if your platform supports it.',
+  'dialog.file.delete.confirm.detail.file': 'This will permanently delete the file.',
+  'dialog.file.delete.confirm.detail.trash': 'You can restore it from the {trash}.',
+  'dialog.file.delete.moveToTrash': 'Move to {trash}',
   'dialog.file.delete.confirm.message': 'Are you sure you want to delete "{name}"?',
   'dialog.file.delete.error': 'Failed to delete',
   'dialog.file.duplicate.error': 'Failed to duplicate',
@@ -216,6 +219,14 @@ export const EN_US_MESSAGES: MessageMap = {
   'settings.editor.wordWrap.wordWrapColumn': 'Lines will wrap at `editor.wordWrapColumn`.',
   'settings.explorer.autoReveal.description':
     'Controls whether the Explorer should automatically reveal and select files when opening them.',
+  'settings.files.enableTrash':
+    'Move files/folders to the OS trash (recycle bin) when deleting. When off, deletions are permanent.',
+  'settings.explorer.confirmDelete':
+    'Ask for confirmation before deleting a file or folder from the Explorer.',
+  'settings.explorer.enableUndo':
+    'Enable undo/redo (Ctrl+Z / Ctrl+Y) for Explorer file operations such as create, rename, move, copy, and delete.',
+  'trash.recycleBin': 'Recycle Bin',
+  'trash.trash': 'Trash',
   'settings.files.autoSave.description': 'Controls auto save of dirty files.',
   'settings.files.autoSaveDelay.description':
     'Auto save delay in milliseconds (when autoSave=afterDelay).',

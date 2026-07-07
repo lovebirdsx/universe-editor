@@ -14,6 +14,8 @@ import {
   type ExplorerTreeService,
   type IExplorerResourceOperation,
 } from '../services/explorer/ExplorerTreeService.js'
+import { IExplorerFileOperationService } from '../services/explorer/ExplorerFileOperationService.js'
+import type { ExplorerFileOperationService } from '../services/explorer/ExplorerFileOperationService.js'
 import { parentOf, sameUri } from '../services/explorer/explorerTreeUtils.js'
 import { basenameOf, targetInDirectory } from '../services/explorer/explorerFileOperations.js'
 import { resolveContextOperations, reviveUri, type ITargetArg } from './fileActionsCommon.js'
@@ -66,7 +68,7 @@ async function confirmMoveOverwrite(dialog: IDialogService, target: URI): Promis
 }
 
 async function moveWithOverwritePrompt(
-  tree: ExplorerTreeService,
+  fileOps: ExplorerFileOperationService,
   fileService: IFileService,
   dialog: IDialogService,
   resources: readonly IExplorerResourceOperation[],
@@ -82,7 +84,7 @@ async function moveWithOverwritePrompt(
       overwrite = await confirmMoveOverwrite(dialog, target)
       if (!overwrite) continue
     }
-    targets.push(...(await tree.moveResources([source], destinationDir, { overwrite })))
+    targets.push(...(await fileOps.moveResources([source], destinationDir, { overwrite })))
   }
   return targets
 }
@@ -147,10 +149,11 @@ export class PasteExplorerFileAction extends Action2 {
     const resources = tree.clipboardResources
     if (!destinationDir || resources.length === 0) return
     const dialog = accessor.get(IDialogService)
+    const fileOps = accessor.get(IExplorerFileOperationService)
     try {
       if (tree.clipboardIsCut) {
         await moveWithOverwritePrompt(
-          tree,
+          fileOps,
           accessor.get(IFileService),
           dialog,
           resources,
@@ -158,7 +161,7 @@ export class PasteExplorerFileAction extends Action2 {
         )
         tree.clearClipboard()
       } else {
-        await tree.copyResources(resources, destinationDir)
+        await fileOps.copyResources(resources, destinationDir)
       }
     } catch (err) {
       await dialog.confirm({
@@ -203,6 +206,7 @@ export class DuplicateFileAction extends Action2 {
     const source = resolveContextOperations(tree, args)[0]
     if (!source) return
     const dialog = accessor.get(IDialogService)
+    const fileOps = accessor.get(IExplorerFileOperationService)
     const defaultName = await tree.defaultDuplicateName(source)
     const name = await dialog.prompt({
       title: localize('dialog.file.prompt.duplicate', 'Duplicate'),
@@ -210,7 +214,7 @@ export class DuplicateFileAction extends Action2 {
     })
     if (!name) return
     try {
-      await tree.duplicate(source, name)
+      await fileOps.duplicate(source, name)
     } catch (err) {
       await dialog.confirm({
         message: localize('dialog.file.duplicate.error', 'Failed to duplicate'),
@@ -242,6 +246,7 @@ export class MoveFileAction extends Action2 {
     const fileDialog = accessor.get(IFileDialogService)
     const dialog = accessor.get(IDialogService)
     const fileService = accessor.get(IFileService)
+    const fileOps = accessor.get(IExplorerFileOperationService)
     const destinationDir = await fileDialog.showOpenDialog({
       title: localize('fileDialog.move.title', 'Select Destination Folder'),
       canSelectFiles: false,
@@ -251,7 +256,7 @@ export class MoveFileAction extends Action2 {
     })
     if (!destinationDir) return
     try {
-      await moveWithOverwritePrompt(tree, fileService, dialog, resources, destinationDir)
+      await moveWithOverwritePrompt(fileOps, fileService, dialog, resources, destinationDir)
     } catch (err) {
       await dialog.confirm({
         message: localize('dialog.file.move.error', 'Failed to move'),

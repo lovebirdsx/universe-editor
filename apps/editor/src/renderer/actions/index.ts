@@ -288,6 +288,10 @@ import {
   OutlineNavigateLeftAction,
   OutlineNavigateRightAction,
 } from './outlineActions.js'
+import {
+  UndoExplorerFileOperationAction,
+  RedoExplorerFileOperationAction,
+} from './explorerUndoActions.js'
 
 // Layout
 registerAction2(ToggleActivityBarVisibilityAction)
@@ -606,3 +610,9 @@ registerAction2(OutlineNavigateUpAction)
 registerAction2(OutlineNavigateDownAction)
 registerAction2(OutlineNavigateLeftAction)
 registerAction2(OutlineNavigateRightAction)
+
+// Explorer undo/redo — registered last so the newest-wins tie-break lets Ctrl+Z /
+// Ctrl+Y / Ctrl+Shift+Z beat Monaco's global undo/redo whenever the Explorer tree
+// is focused (and explorer.enableUndo is on).
+registerAction2(UndoExplorerFileOperationAction)
+registerAction2(RedoExplorerFileOperationAction)

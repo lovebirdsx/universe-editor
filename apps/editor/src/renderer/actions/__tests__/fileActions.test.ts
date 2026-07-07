@@ -11,6 +11,7 @@ import {
   CommandsRegistry,
   Emitter,
   ICommandService,
+  IConfigurationService,
   IDialogService,
   IEditorGroupsService,
   IFileDialogService,
@@ -19,10 +20,15 @@ import {
   IFileWatcherService,
   IHostService,
   IInstantiationService,
+  ILoggerService,
+  INotificationService,
   IQuickInputService,
+  IUndoRedoService,
   IWorkspaceService,
   InstantiationService,
+  NullLogger,
   ServiceCollection,
+  UndoRedoService,
   URI,
   makeExcludeMatcher,
   registerAction2,
@@ -69,6 +75,10 @@ import {
   ExplorerTreeService,
   IExplorerTreeService,
 } from '../../services/explorer/ExplorerTreeService.js'
+import {
+  ExplorerFileOperationService,
+  IExplorerFileOperationService,
+} from '../../services/explorer/ExplorerFileOperationService.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../services/exclude/testing/fakeExcludeService.js'
 import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
@@ -605,10 +615,29 @@ function makeHarness(
   services.set(IQuickInputService, quickInput)
   services.set(IRecentFilesService, recentFiles)
   services.set(ICommandService, cmd)
+  services.set(ILoggerService, {
+    _serviceBrand: undefined,
+    createLogger: () => new NullLogger(),
+    setLevel: () => {},
+    getLevel: () => 0,
+  } as unknown as ILoggerService)
+  const notification = { notify: () => ({ dispose() {} }) } as unknown as INotificationService
+  services.set(INotificationService, notification)
+  services.set(IUndoRedoService, new UndoRedoService(dialog, notification))
+  services.set(IConfigurationService, {
+    _serviceBrand: undefined,
+    get<T>(_key: string, defaultValue?: T): T | undefined {
+      return defaultValue
+    },
+    update() {},
+    loadLayer() {},
+    onDidChangeConfiguration: new Emitter<never>().event,
+  } as unknown as IConfigurationService)
   const inst = new InstantiationService(services)
   // ExplorerTreeService needs IWorkspaceService + IFileService.
   const tree = inst.createInstance(ExplorerTreeService)
   services.set(IExplorerTreeService, tree)
+  services.set(IExplorerFileOperationService, inst.createInstance(ExplorerFileOperationService))
   // Re-set inst's snapshot in case the runner needs it
   services.set(IInstantiationService, inst as unknown as IInstantiationService)
 
@@ -827,7 +856,7 @@ describe('fileActions', () => {
       h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
       const spy = vi.spyOn(h.fs, 'delete')
       await run(h, DeleteFileAction.ID, { target, isDirectory: true })
-      expect(spy).toHaveBeenCalledWith(expect.anything(), { recursive: true })
+      expect(spy).toHaveBeenCalledWith(expect.anything(), { recursive: true, useTrash: true })
     })
 
     it('deletes every selected entry when several are selected', async () => {

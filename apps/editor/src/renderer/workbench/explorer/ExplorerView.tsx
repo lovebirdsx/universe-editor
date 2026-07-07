@@ -46,6 +46,7 @@ import {
   type IExplorerEntry,
   type IExplorerResourceOperation,
 } from '../../services/explorer/ExplorerTreeService.js'
+import { IExplorerFileOperationService } from '../../services/explorer/ExplorerFileOperationService.js'
 import {
   IScmDecorationsService,
   scmPathKey,
@@ -73,6 +74,7 @@ export function ExplorerView() {
   const dialogService = useService(IDialogService)
   const configService = useService(IConfigurationService)
   const tree = useService(IExplorerTreeService)
+  const fileOps = useService(IExplorerFileOperationService)
   const scmDecorations = useOptionalService(IScmDecorationsService)
   const decorations = useObservable(scmDecorations?.decorations ?? EMPTY_DECORATIONS)
 
@@ -129,7 +131,7 @@ export function ExplorerView() {
     (resources: readonly IExplorerResourceOperation[], destDir: URI) => {
       void (async () => {
         try {
-          await tree.moveResources(resources, destDir)
+          await fileOps.moveResources(resources, destDir)
         } catch (err) {
           await dialogService.confirm({
             message: localize('dialog.file.move.error', 'Failed to move'),
@@ -139,7 +141,7 @@ export function ExplorerView() {
         }
       })()
     },
-    [tree, dialogService],
+    [fileOps, dialogService],
   )
 
   const root = tree.root

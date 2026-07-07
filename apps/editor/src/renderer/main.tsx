@@ -39,6 +39,8 @@ import {
   IContributionService,
   ILoggerService,
   INotificationService,
+  IUndoRedoService,
+  UndoRedoService,
   ITelemetryService,
   NoopTelemetryService,
   Severity,
@@ -99,6 +101,10 @@ import {
   ExplorerTreeService,
   IExplorerTreeService,
 } from './services/explorer/ExplorerTreeService.js'
+import {
+  ExplorerFileOperationService,
+  IExplorerFileOperationService,
+} from './services/explorer/ExplorerFileOperationService.js'
 import { setMonacoLoaderLogger } from './workbench/editor/monaco/MonacoLoader.js'
 import { restoreWorkbenchFocus } from './services/focus/workbenchFocusRestorer.js'
 import {
@@ -497,6 +503,12 @@ async function bootstrapWorkbench(): Promise<void> {
     })
   })
 
+  // IUndoRedoService — generic undo/redo stack (ported from VSCode). Depends on
+  // IDialogService + INotificationService (both registered above). Consumed by
+  // the Explorer's reversible file operations.
+  const undoRedoService = instantiation.createInstance(UndoRedoService)
+  services.set(IUndoRedoService, undoRedoService)
+
   // Tracks the user's recent edits per file; the raw material for Next Edit
   // Suggestions. Must exist before InlineCompletionService, which injects it.
   const recentEditsTracker = workbenchStore.add(instantiation.createInstance(RecentEditsTracker))
@@ -513,6 +525,12 @@ async function bootstrapWorkbench(): Promise<void> {
   // IWorkspaceService + IFileService so it must be created via DI.
   const explorerTreeService = workbenchStore.add(instantiation.createInstance(ExplorerTreeService))
   services.set(IExplorerTreeService, explorerTreeService)
+
+  // Reversible Explorer file operations (create/rename/move/copy/delete), pushing
+  // each onto IUndoRedoService so Ctrl+Z / Ctrl+Y in the Explorer work. Depends on
+  // the tree + IFileService + IUndoRedoService (all registered above).
+  const explorerFileOperationService = instantiation.createInstance(ExplorerFileOperationService)
+  services.set(IExplorerFileOperationService, explorerFileOperationService)
 
   // ACP (Agent Client Protocol) services. PathPolicy needs static platform/home
   // args; ClientService brings together host + permission + IFileService +

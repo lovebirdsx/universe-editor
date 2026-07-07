@@ -2,12 +2,15 @@
  *  Tests for apps/editor/src/main/services/files/fileSystemMainService.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, normalize } from 'node:path'
 import { FileSystemError, URI } from '@universe-editor/platform'
 import { FileSystemMainService } from '../fileSystemMainService.js'
+
+const trashItem = vi.fn(async (_p: string) => {})
+vi.mock('electron', () => ({ shell: { trashItem: (p: string) => trashItem(p) } }))
 
 describe('FileSystemMainService', () => {
   let root: string
@@ -134,6 +137,26 @@ describe('FileSystemMainService', () => {
       name: 'FileSystemError',
       code: 'ENOENT',
     })
+  })
+
+  it('delete with useTrash routes to shell.trashItem with an OS-normalized path', async () => {
+    trashItem.mockClear()
+    const target = URI.file(join(root, 'trashed.txt'))
+    await service.writeFile(target, 'x')
+    await service.delete(target, { useTrash: true })
+    expect(trashItem).toHaveBeenCalledTimes(1)
+    // shell.trashItem needs the platform separator, not the forward-slash fsPath.
+    expect(trashItem).toHaveBeenCalledWith(normalize(target.fsPath))
+    // The real file is untouched by our mock (mock does not actually trash).
+    await expect(service.exists(target)).resolves.toBe(true)
+  })
+
+  it('delete with useTrash wraps trash failures in FileSystemError', async () => {
+    trashItem.mockClear()
+    trashItem.mockRejectedValueOnce(new Error('boom'))
+    const target = URI.file(join(root, 'trash-fail.txt'))
+    await service.writeFile(target, 'x')
+    await expect(service.delete(target, { useTrash: true })).rejects.toBeInstanceOf(FileSystemError)
   })
 
   // -------- rename --------

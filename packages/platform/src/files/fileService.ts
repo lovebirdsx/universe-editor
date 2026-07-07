@@ -85,8 +85,13 @@ export interface IFileService {
    * Deletes a file or directory. For directories, callers must opt in with
    * `recursive: true` to remove non-empty trees; otherwise removing a
    * non-empty directory throws `FileSystemError('ENOTEMPTY')`.
+   *
+   * With `useTrash: true` the entry is moved to the OS trash / recycle bin
+   * instead of being permanently removed (the whole tree goes to trash, so
+   * `recursive` is irrelevant in that case). Falls back to a
+   * `FileSystemError('UNKNOWN')` when the platform trash operation fails.
    */
-  delete(resource: URI, opts?: { recursive?: boolean }): Promise<void>
+  delete(resource: URI, opts?: { recursive?: boolean; useTrash?: boolean }): Promise<void>
 
   /**
    * Renames or moves `source` to `target`. Without `overwrite: true`, an
