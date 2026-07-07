@@ -1,5 +1,26 @@
 [
   {
+    "version": "0.1.34",
+    "date": "2026-07-07",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "内联代码支持markdown链接预览",
+          "同editor创建session在同一个editor group中创建（锁定下也生效）"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "打开workspace时，焦点能够自动聚集到explorer或者editor，避免某些指令因为焦点在terminal无法生效"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.33",
     "date": "2026-07-06",
     "groups": [
