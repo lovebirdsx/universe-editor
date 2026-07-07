@@ -14,6 +14,15 @@ test.describe('@p0 activitybar', () => {
   test('switches between Explorer and Search containers', async ({ workbench }) => {
     const { activityBar, sideBar } = workbench
 
+    // The renderer's per-workspace view reconcile is fire-and-forget AFTER mount
+    // (main.tsx) with a 500ms internal fallback timer. It ends by destructively
+    // re-seeding the default (Explorer) active container. `whenRestored` (which
+    // resetWindow awaits) fires at mount — BEFORE that reconcile — so on a slow
+    // frame the reconcile lands right after our click(SEARCH) and clobbers it
+    // back to Explorer (stuck value, never recovers). Gate on the reconcile
+    // being settled before driving the activity bar.
+    await workbench.waitForBootstrapFocusSettled()
+
     await expect(activityBar.item(EXPLORER)).toBeVisible()
     await expect(activityBar.item(SEARCH)).toBeVisible()
 
