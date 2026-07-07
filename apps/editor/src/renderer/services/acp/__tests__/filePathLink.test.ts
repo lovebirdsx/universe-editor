@@ -47,6 +47,21 @@ describe('matchFilePathAt', () => {
     expect(matchFilePathAt('@path/to/file', 0)?.path).toBe('path/to/file')
   })
 
+  it('keeps CJK segments inside an @ file mention (does not truncate)', () => {
+    // Regression: explicit `@` mentions are deliberate file references and may
+    // carry CJK directory/file names. The bare-path grammar excludes non-ASCII
+    // to avoid Chinese-prose false positives, but that must NOT clip `@` paths —
+    // `@project/aki/个人考核/2026q1.md` was truncated at `@project/aki`.
+    expect(matchFilePathAt('@project/aki/个人考核/2026q1.md', 0)?.path).toBe(
+      'project/aki/个人考核/2026q1.md',
+    )
+    expect(matchFilePathAt('@project/aki/个人考核/2026q2', 0)?.path).toBe(
+      'project/aki/个人考核/2026q2',
+    )
+    // Full-width punctuation still bounds an @ mention (it is not \p{L}/\p{N}).
+    expect(matchFilePathAt('@project/aki（备注）', 0)?.path).toBe('project/aki')
+  })
+
   it('captures :line:col location', () => {
     expect(matchFilePathAt('src/a.ts:10:5', 0)).toEqual({
       full: 'src/a.ts:10:5',
@@ -98,13 +113,49 @@ describe('matchFilePathAt', () => {
     expect(inner?.path).toBe('workbench-ui/src/tree/Tree.tsx')
   })
 
-  it('does NOT swallow CJK text or full-width punctuation', () => {
-    // Regression (problem 1/2): paths must not extend into Chinese prose or
-    // full-width brackets/middle-dots/dashes around them.
+  it('stops a path at full-width punctuation and inline-code boundaries', () => {
+    // Full-width brackets/middle-dots/dashes are NOT \p{L}/\p{N}, so they still
+    // bound a path even though CJK letters are now allowed inside segments.
     expect(matchFilePathAt('（`workbench-ui/src/tree/`）内置虚拟化', 0)).toBeNull()
     expect(matchFilePathAt('02·P0/P1）——acpSession.ts', 0)).toBeNull()
-    // A clean path immediately followed by CJK stops at the boundary.
+    // A clean path immediately followed by CJK stops at the extension boundary.
     expect(matchFilePathAt('src/a.ts内置', 0)?.path).toBe('src/a.ts')
+  })
+
+  it('recognizes CJK segments in a bare relative path', () => {
+    // A relative path with a known extension keeps its CJK directory names —
+    // one separator is enough because the extension already signals a file.
+    expect(matchFilePathAt('project/aki/个人考核/2026q1.md', 0)?.path).toBe(
+      'project/aki/个人考核/2026q1.md',
+    )
+    expect(matchFilePathAt('个人考核/2026q1.md', 0)?.path).toBe('个人考核/2026q1.md')
+    // An extension-less CJK dir needs at least TWO separators (three-plus
+    // segments) to count, so it can't be an ordinary Chinese `词/词` phrase.
+    expect(matchFilePathAt('project/aki/个人考核/2026q2', 0)?.path).toBe(
+      'project/aki/个人考核/2026q2',
+    )
+  })
+
+  it('does NOT treat extension-less ASCII prose as a directory path', () => {
+    // The CJK gate: an extension-less relative path with NO non-ASCII segment is
+    // rejected, so `and/or`, dates, and `input/output` stay plain text.
+    expect(matchFilePathAt('and/or', 0)).toBeNull()
+    expect(matchFilePathAt('2024/01/02', 0)).toBeNull()
+    expect(matchFilePathAt('input/output/foo', 0)).toBeNull()
+  })
+
+  it('does NOT treat a single-separator CJK phrase as a directory path', () => {
+    // The two-separator rule: `词/词` phrases are prose, not links, when they
+    // lack a known extension. A known extension overrides this (tested above).
+    expect(matchFilePathAt('我的读/写', 0)).toBeNull()
+    expect(matchFilePathAt('输入/输出', 0)).toBeNull()
+    expect(matchFilePathAt('个人考核/2026q2', 0)).toBeNull()
+  })
+
+  it('does NOT start a bare path mid-CJK-word', () => {
+    // A deep CJK dir embedded after a CJK word must not start at the inner char:
+    // the preceding CJK char guards `见项目/子级/结构` from beginning at `项`.
+    expect(matchFilePathAt('见项目/子级/结构', 1)).toBeNull()
   })
 
   it('does not catastrophically backtrack on a slash-dense data: URL (freeze repro)', () => {
@@ -154,6 +205,8 @@ describe('looksLikeFilePath', () => {
     expect(looksLikeFilePath('@src/a.ts')).toBe(true)
     expect(looksLikeFilePath('@path/to/file')).toBe(true)
     expect(looksLikeFilePath('@./foo.md#hello')).toBe(true)
+    expect(looksLikeFilePath('@project/aki/个人考核/2026q1.md')).toBe(true)
+    expect(looksLikeFilePath('@project/aki/个人考核/2026q2')).toBe(true)
   })
 
   it('accepts absolute paths without an extension (directory targets)', () => {

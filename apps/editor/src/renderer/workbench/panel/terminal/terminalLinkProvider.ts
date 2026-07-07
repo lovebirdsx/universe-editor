@@ -4,7 +4,9 @@ import { FILE_PATH_PATTERN } from '../../../services/acp/filePathLink.js'
 
 // Reuse the same path grammar as rendered markdown so terminal and markdown
 // links recognize exactly the same set of files (extensions, location suffixes).
-const FILE_LINK_RE = new RegExp(FILE_PATH_PATTERN, 'g')
+// The `u` flag is required — FILE_PATH_PATTERN embeds Unicode property classes
+// (\p{L}\p{N}) so CJK file names are recognized.
+const FILE_LINK_RE = new RegExp(FILE_PATH_PATTERN, 'gu')
 
 function resolvePath(cwd: string, filePath: string): string {
   if (/^[A-Za-z]:[/\\]/.test(filePath) || filePath.startsWith('/')) return normalizeFsPath(filePath)
