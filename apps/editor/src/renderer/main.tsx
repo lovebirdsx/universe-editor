@@ -100,6 +100,7 @@ import {
   IExplorerTreeService,
 } from './services/explorer/ExplorerTreeService.js'
 import { setMonacoLoaderLogger } from './workbench/editor/monaco/MonacoLoader.js'
+import { restoreWorkbenchFocus } from './services/focus/workbenchFocusRestorer.js'
 import {
   IRecentFilesService,
   RecentFilesService,
@@ -624,6 +625,14 @@ async function bootstrapWorkbench(): Promise<void> {
   mark(PerfMarks.rendererDidBlockRestore)
 
   // E2E probe: only attaches when the app was launched with UNIVERSE_E2E=1.
+  // Bootstrap focus restore (below) is fire-and-forget and lands AFTER
+  // LifecyclePhase.Restored, so specs that gate on whenRestored() would race it.
+  // Expose a settle signal so a spec can wait for the one-shot startup focus to
+  // land before it drives focus somewhere else.
+  let resolveBootstrapFocusSettled: () => void
+  const bootstrapFocusSettled = new Promise<void>((resolve) => {
+    resolveBootstrapFocusSettled = resolve
+  })
   const d = installE2EProbeIfEnabled({
     commandService,
     contextKeyService,
@@ -649,6 +658,7 @@ async function bootstrapWorkbench(): Promise<void> {
     timerService: instantiation.invokeFunction((a) => a.get(ITimerService)),
     explorerTreeService,
     fileService: services.get(IFileService) as IFileService,
+    bootstrapFocusSettled,
     computeTeardownLeakReport: snapshotLeaks,
   })
   workbenchStore.add(d)
@@ -751,10 +761,15 @@ async function bootstrapWorkbench(): Promise<void> {
     .then(() => {
       rootLogger.info('bootstrap workspace state reconciled')
       mark(PerfMarks.rendererDidReconcileWorkspaceState)
+      return restoreWorkbenchFocus(editorGroupsService, layoutService, contextKeyService)
+    })
+    .then((result) => {
+      rootLogger.debug(`bootstrap focus restored target=${result.target} ok=${result.ok}`)
     })
     .catch((err: unknown) => {
       rootLogger.warn(`workspace state reconcile failed: ${(err as Error).message}`)
     })
+    .finally(() => resolveBootstrapFocusSettled())
 }
 
 void bootstrapWorkbench()

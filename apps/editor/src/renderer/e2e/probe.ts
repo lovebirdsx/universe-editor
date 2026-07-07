@@ -89,6 +89,12 @@ export interface E2EProbeServices {
   readonly timerService: ITimerService
   readonly explorerTreeService: ExplorerTreeService
   readonly fileService: IFileService
+  /**
+   * Resolves once the one-shot bootstrap focus restore has landed. That restore
+   * is fire-and-forget and runs AFTER LifecyclePhase.Restored, so specs must
+   * await this before driving focus themselves to avoid a race.
+   */
+  readonly bootstrapFocusSettled: Promise<void>
   /** Tears down React + snapshots the Disposable tracker; see E2EProbe. */
   readonly computeTeardownLeakReport: () => E2EDisposableLeakReport | null
 }
@@ -169,6 +175,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
   const probe: E2EProbe = {
     whenReady: () => services.lifecycleService.when(LifecyclePhase.Ready),
     whenRestored: () => services.lifecycleService.when(LifecyclePhase.Restored),
+    whenBootstrapFocusSettled: () => services.bootstrapFocusSettled,
     getLifecyclePhase: () => phaseToName(services.lifecycleService.phase),
     getContextKey: (key) => services.contextKeyService.get(key),
     runCommand: (id, ...args) => services.commandService.executeCommand(id, ...args),

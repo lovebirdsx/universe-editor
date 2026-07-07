@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
-import { observableValue } from '@universe-editor/platform'
+import { ILayoutService, PartId, observableValue } from '@universe-editor/platform'
 import { IWorkspaceService } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../../services/terminal/TerminalManagerService.js'
 import { ServicesContext } from '../../../useService.js'
@@ -69,9 +69,21 @@ function makeManager(initial: readonly string[]) {
 
 function renderView(manager: unknown) {
   const workspace = { current: { folder: { fsPath: '/work' } } }
+  const visible = observableValue('test.layout.visible', {
+    [PartId.ActivityBar]: true,
+    [PartId.SideBar]: true,
+    [PartId.SecondarySideBar]: false,
+    [PartId.EditorArea]: true,
+    [PartId.Panel]: true,
+    [PartId.StatusBar]: true,
+  })
+  const layout = {
+    visible,
+  }
   const map = new Map<unknown, unknown>([
     [ITerminalManagerService, manager],
     [IWorkspaceService, workspace],
+    [ILayoutService, layout],
   ])
   const container = {
     invokeFunction: (fn: (accessor: { get: (id: unknown) => unknown }) => unknown) =>

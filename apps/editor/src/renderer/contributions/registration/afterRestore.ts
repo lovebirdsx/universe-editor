@@ -17,6 +17,7 @@ import { DirtyDiffContribution } from '../DirtyDiffContribution.js'
 import { ExternalChangeWatcher } from '../ExternalChangeWatcher.js'
 import { GlobalDragAndDropContribution } from '../GlobalDragAndDropContribution.js'
 import { WorkspaceRecentMenuContribution } from '../WorkspaceRecentMenuContribution.js'
+import { WorkspaceFocusRestoreContribution } from '../WorkspaceFocusRestoreContribution.js'
 import { WorkspaceExplorerRevealContribution } from '../WorkspaceExplorerRevealContribution.js'
 import { WindowTitleContribution } from '../WindowTitleContribution.js'
 import { ExplorerAutoRevealContribution } from '../ExplorerAutoRevealContribution.js'
@@ -149,6 +150,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.workspaceRecentMenu',
   WorkspaceRecentMenuContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Runtime workspace switches restore editors/layout/terminal state asynchronously.
+// Once that restore wave settles, focus the active editor when one exists, else
+// the Explorer tree, so stale terminal focus cannot block global keybindings.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.workspaceFocusRestore',
+  WorkspaceFocusRestoreContribution,
   WorkbenchPhase.AfterRestore,
 )
 

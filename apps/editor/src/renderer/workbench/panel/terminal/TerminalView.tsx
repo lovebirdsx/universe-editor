@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Allotment } from 'allotment'
 import 'allotment/dist/style.css'
-import { IWorkspaceService, localize } from '@universe-editor/platform'
+import { ILayoutService, IWorkspaceService, PartId, localize } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
 import { useService, useObservable } from '../../useService.js'
 import { TerminalInstance } from './TerminalInstance.js'
@@ -12,10 +12,12 @@ import styles from './TerminalView.module.css'
 export function TerminalView() {
   const manager = useService(ITerminalManagerService)
   const workspaceService = useService(IWorkspaceService)
+  const layoutService = useService(ILayoutService)
   const terminals = useObservable(manager.panelTerminals)
   const groups = useObservable(manager.terminalGroups)
   const activeGroupId = useObservable(manager.activeGroupId)
   const activeId = useObservable(manager.activeTerminalId)
+  const panelVisible = useObservable(layoutService.visible)[PartId.Panel]
 
   // Spawn an initial terminal only on the very first mount with none open.
   // We mark didInit on the first frame regardless of outcome: once the view has
@@ -58,7 +60,7 @@ export function TerminalView() {
                       <TerminalInstance
                         id={id}
                         active={groupActive}
-                        focused={groupActive && id === activeId}
+                        focused={panelVisible && groupActive && id === activeId}
                         cwd={cwd}
                         resolveFile={resolveFile}
                         openFile={openFile}

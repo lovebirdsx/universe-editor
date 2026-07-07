@@ -129,6 +129,15 @@ export class WorkbenchPO {
     await this._evaluateWhenRestored()
   }
 
+  /**
+   * Wait for the one-shot bootstrap focus restore to land. Specs that focus the
+   * terminal (or anything else) right after startup must await this, otherwise
+   * the late restore steals focus back to the Explorer/editor.
+   */
+  async waitForBootstrapFocusSettled(): Promise<void> {
+    await this.page.evaluate(() => window.__E2E__!.whenBootstrapFocusSettled())
+  }
+
   private async _evaluateWhenRestored(): Promise<void> {
     await evaluateWhenRestored(this.page)
   }

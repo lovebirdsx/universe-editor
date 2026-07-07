@@ -86,6 +86,13 @@ export interface E2EProbe {
   whenReady(): Promise<void>
   /** Resolves once React has mounted and the workbench reached LifecyclePhase.Restored. */
   whenRestored(): Promise<void>
+  /**
+   * Resolves once the one-shot bootstrap focus restore has landed. This restore
+   * is fire-and-forget and runs AFTER whenRestored(), so a spec that then drives
+   * focus elsewhere (e.g. into the terminal) must await this first — otherwise
+   * the late restore steals focus back and makes the spec flaky.
+   */
+  whenBootstrapFocusSettled(): Promise<void>
   /** Returns the current lifecycle phase name. */
   getLifecyclePhase(): E2ELifecyclePhase
   /** Looks up a ContextKey value (falls back through scopes). */
