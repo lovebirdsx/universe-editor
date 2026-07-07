@@ -962,4 +962,30 @@ describe('ChatBody — outline controller active-slot sync', () => {
     expect(fires).toBeGreaterThan(0)
     sub.dispose()
   })
+
+  // Regression for "an outline click lands off and needs a second click": the
+  // clicked row's real DOM rect is the authoritative target, so scrollToKey must
+  // align scrollTop to it on the first call (the shared convergence loop's
+  // synchronous first frame), not leave it at the estimate-derived position.
+  it('scrolls the clicked slot to the top on the first scrollToKey call', () => {
+    const { container } = renderChat(makeSession('s1', items))
+    const scroll = scrollEl(container)
+    Object.defineProperty(scroll, 'scrollHeight', { value: 5000, configurable: true })
+    Object.defineProperty(scroll, 'clientHeight', { value: 300, configurable: true })
+    scroll.scrollTop = 0
+    // Container top at 0; the target row sits 500px below the viewport top.
+    ;(scroll as HTMLElement).getBoundingClientRect = (() => ({ top: 0 }) as DOMRect) as never
+    const target = container.querySelector<HTMLElement>('[data-sticky-key="m:c"]')!
+    ;(target as HTMLElement).getBoundingClientRect = (() => ({ top: 500 }) as DOMRect) as never
+
+    const controller = AcpSessionOutlineRegistry.get('s1')!
+    act(() => {
+      controller.scrollToKey('m:c')
+    })
+
+    // scrollTop + (rowTop - containerTop) = 0 + 500 → the row's top meets the
+    // viewport top, accurate without a second click.
+    expect(scroll.scrollTop).toBe(500)
+    expect(controller.getActiveKey()).toBe('m:c')
+  })
 })

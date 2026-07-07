@@ -612,6 +612,11 @@ function ChatScroll({
   // scrollTop = scrollHeight (never scrollToIndex) keeps the motion monotonic —
   // it only ever moves toward the bottom, so it never overshoots and flickers.
   const bottomRafRef = useRef<ReturnType<typeof requestAnimationFrame> | undefined>(undefined)
+  // The stop() of whichever hand-driven scroll loop currently owns scrollTop
+  // (bottom-pin on remount / anchor restore / outline jump). They all fight the
+  // estimate→measured shift by setting scrollTop each frame, so only one may run
+  // at a time — a new loop calls this first to tear the previous one down.
+  const activeScrollStopRef = useRef<(() => void) | undefined>(undefined)
   const scrollToBottomStable = useCallback(() => {
     const el = containerRef.current
     if (!el) return
@@ -628,6 +633,54 @@ function ChatScroll({
       }
     }
     step()
+  }, [])
+
+  // Drive scrollTop by hand across a short RAF window, re-running `applyOnce` every
+  // frame until it converges or the user scrolls. This is the shared engine behind
+  // two callers that both fight the estimate→measured coordinate shift: the restore
+  // effect (align a saved anchor) and handleStickyJump (reveal an outline target).
+  // As rows above the target measure their real height the target drifts, and each
+  // frame `applyOnce` pulls it back onto the exact spot. While it runs we suppress
+  // the virtualizer's own size-change correction (it independently nudges the offset
+  // and the two would creep against each other) and set restoringRef so handleScroll
+  // / the ResizeObserver treat the mid-flight position as not-yet-settled. Any real
+  // user scroll input aborts immediately and lets the new position stand.
+  const runScrollConvergence = useCallback((applyOnce: () => void) => {
+    const el = containerRef.current
+    if (!el) return
+    activeScrollStopRef.current?.()
+    restoringRef.current = true
+    const vz0 = virtualizerRef.current
+    if (vz0) vz0.shouldAdjustScrollPositionOnItemSizeChange = () => false
+
+    applyOnce()
+
+    let rafId: number | undefined
+    const startedAt = performance.now()
+    const stop = (): void => {
+      if (!restoringRef.current) return
+      restoringRef.current = false
+      if (activeScrollStopRef.current === stop) activeScrollStopRef.current = undefined
+      const vz = virtualizerRef.current
+      if (vz) vz.shouldAdjustScrollPositionOnItemSizeChange = undefined
+      if (rafId !== undefined) cancelAnimationFrame(rafId)
+      el.removeEventListener('wheel', stop)
+      el.removeEventListener('pointerdown', stop)
+      el.removeEventListener('keydown', stop)
+    }
+    const tick = (): void => {
+      rafId = undefined
+      if (!restoringRef.current) return
+      applyOnce()
+      if (performance.now() - startedAt < 600) rafId = requestAnimationFrame(tick)
+      else stop()
+    }
+    rafId = requestAnimationFrame(tick)
+    el.addEventListener('wheel', stop, { passive: true })
+    el.addEventListener('pointerdown', stop)
+    el.addEventListener('keydown', stop)
+    activeScrollStopRef.current = stop
+    return stop
   }, [])
 
   // Restore a non-stuck scroll position saved before this session was unmounted
@@ -662,6 +715,7 @@ function ChatScroll({
     // short window so the view rides the total to its settled value, aborting on
     // the first real user scroll input.
     if (!saved || saved.stuck) {
+      activeScrollStopRef.current?.()
       pinningRef.current = true
       stickRef.current = true
       const vz0 = virtualizerRef.current
@@ -672,6 +726,7 @@ function ChatScroll({
       const stop = (): void => {
         if (!pinningRef.current) return
         pinningRef.current = false
+        if (activeScrollStopRef.current === stop) activeScrollStopRef.current = undefined
         const vz = virtualizerRef.current
         if (vz) vz.shouldAdjustScrollPositionOnItemSizeChange = undefined
         if (rafId !== undefined) cancelAnimationFrame(rafId)
@@ -702,16 +757,9 @@ function ChatScroll({
       el.addEventListener('wheel', stop, { passive: true })
       el.addEventListener('pointerdown', stop)
       el.addEventListener('keydown', stop)
+      activeScrollStopRef.current = stop
       return stop
     }
-    restoringRef.current = true
-
-    // While restoring we drive scrollTop by hand each frame. The virtualizer's
-    // default correction independently nudges scrollOffset when an above-viewport
-    // row measures taller/shorter; the two fight and the position creeps. Suppress
-    // it for the restore window, then restore the native default on stop.
-    const vz0 = virtualizerRef.current
-    if (vz0) vz0.shouldAdjustScrollPositionOnItemSizeChange = () => false
 
     const anchor = saved.anchor
 
@@ -741,34 +789,7 @@ function ChatScroll({
       if (el.scrollTop !== saved.scrollTop) el.scrollTop = saved.scrollTop
     }
 
-    applyOnce()
-
-    let rafId: number | undefined
-    const startedAt = performance.now()
-    const stop = (): void => {
-      if (!restoringRef.current) return
-      restoringRef.current = false
-      const vz = virtualizerRef.current
-      if (vz) vz.shouldAdjustScrollPositionOnItemSizeChange = undefined
-      if (rafId !== undefined) cancelAnimationFrame(rafId)
-      el.removeEventListener('wheel', stop)
-      el.removeEventListener('pointerdown', stop)
-      el.removeEventListener('keydown', stop)
-    }
-    const tick = (): void => {
-      rafId = undefined
-      if (!restoringRef.current) return
-      applyOnce()
-      if (performance.now() - startedAt < 600) rafId = requestAnimationFrame(tick)
-      else stop()
-    }
-    rafId = requestAnimationFrame(tick)
-
-    el.addEventListener('wheel', stop, { passive: true })
-    el.addEventListener('pointerdown', stop)
-    el.addEventListener('keydown', stop)
-
-    return stop
+    return runScrollConvergence(applyOnce)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -851,26 +872,41 @@ function ChatScroll({
     })
   }, [])
 
-  // Jump back to a (possibly nested) card's top from its pinned sticky header.
-  // Reads the live DOM rect so it works in both render modes; falls back to the
-  // virtualizer when the top-level ancestor row is unmounted.
-  const handleStickyJump = useCallback((key: string) => {
-    const container = containerRef.current
-    if (!container) return
-    // A user-driven jump: end any in-flight restore and drop bottom-stick so the
-    // scroll lands (and stays) where we put it.
-    restoringRef.current = false
-    stickRef.current = false
-    const node = container.querySelector<HTMLElement>(`[data-sticky-key="${cssEscape(key)}"]`)
-    if (node) {
-      const top = node.getBoundingClientRect().top - container.getBoundingClientRect().top
-      container.scrollTop = Math.max(0, container.scrollTop + top)
-      return
-    }
-    const topKey = key.split('/')[0]
-    const idx = timelineRef.current.findIndex((it) => slotKey(it) === topKey)
-    if (idx >= 0) virtualizerRef.current?.scrollToIndex(idx, { align: 'start' })
-  }, [])
+  // Jump to a (possibly nested) card's top — from its pinned sticky header or from
+  // an Outline row click. In virtual mode the target row may be unmounted and its
+  // position is only an estimate until it (and the rows above it) measure their real
+  // height, so a single scrollToIndex lands off by the estimate error and needs a
+  // second click to settle. Run the shared convergence loop instead: each frame
+  // aligns by the target's real DOM rect once it mounts, pulling it onto the exact
+  // top as the estimate→measured shift resolves — accurate on the first click.
+  const handleStickyJump = useCallback(
+    (key: string) => {
+      const container = containerRef.current
+      if (!container) return
+      // A user-driven jump: drop bottom-stick so the scroll lands (and stays) where
+      // we put it. runScrollConvergence tears down any in-flight restore/pin loop.
+      stickRef.current = false
+      // Fall back to the top-level card for the virtualizer (it only indexes
+      // top-level rows); the DOM alignment below still targets the full nested key.
+      const topKey = key.split('/')[0] ?? key
+      const applyOnce = (): void => {
+        const node = container.querySelector<HTMLElement>(`[data-sticky-key="${cssEscape(key)}"]`)
+        if (node) {
+          const relTop = node.getBoundingClientRect().top - container.getBoundingClientRect().top
+          const max = Math.max(0, container.scrollHeight - container.clientHeight)
+          const next = Math.max(0, Math.min(container.scrollTop + relTop, max))
+          if (Math.abs(container.scrollTop - next) > 0.5) container.scrollTop = next
+          return
+        }
+        // Not mounted yet: bring the top-level row into the DOM via the virtualizer
+        // so a later frame can take the rect-aligned path above.
+        const idx = displayTimelineRef.current.findIndex((it) => slotKey(it) === topKey)
+        if (idx >= 0) virtualizerRef.current?.scrollToIndex(idx, { align: 'start' })
+      }
+      runScrollConvergence(applyOnce)
+    },
+    [runScrollConvergence],
+  )
 
   // Expose this timeline to the Outline view (full-screen session editor only):
   // it reads `timeline` to build the symbol tree and calls back to scroll/focus.
