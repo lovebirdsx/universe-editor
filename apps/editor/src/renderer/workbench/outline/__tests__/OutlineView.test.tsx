@@ -141,6 +141,24 @@ describe('OutlineView', () => {
     expect(screen.getByText('Alpha')).toBeTruthy()
   })
 
+  it('strips the leading `#` markup from markdown heading names', () => {
+    const { instantiation } = setup({
+      uri: 'file:///doc.md',
+      roots: [makeSymbol('# A', { children: [makeSymbol('## A.1', { line: 2 })] })],
+      languageId: 'markdown',
+      version: 1,
+    })
+
+    render(
+      <ServicesContext.Provider value={instantiation}>
+        <OutlineView />
+      </ServicesContext.Provider>,
+    )
+
+    expect(rowLabels()).toEqual(['A', 'A.1'])
+    expect(screen.queryByText('# A')).toBeNull()
+  })
+
   it('updates the symbol list when the outline changes to another file', () => {
     const { outline, instantiation } = setup({
       uri: 'file:///a.ts',

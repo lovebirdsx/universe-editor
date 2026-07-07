@@ -73,6 +73,13 @@ function compareSymbols(
   return comparePosition(a, b)
 }
 
+// Markdown heading symbols keep their `#` markup in the name (e.g. `## Title`).
+// The outline renders a `#` glyph for headings, so the leading markup is
+// redundant — strip it for display only, leaving the underlying symbol intact.
+function displaySymbolName(name: string, languageId: string | undefined): string {
+  return languageId === 'markdown' ? name.replace(/^#{1,6}\s+/, '') : name
+}
+
 function buildNodes(
   roots: readonly monaco.languages.DocumentSymbol[],
   order: OutlineSortOrder,
@@ -411,7 +418,9 @@ export function OutlineView() {
                     size={14}
                   />
                 </span>
-                <span className={styles['label']}>{node.element.symbol.name}</span>
+                <span className={styles['label']}>
+                  {displaySymbolName(node.element.symbol.name, outline.languageId)}
+                </span>
               </div>
             )
           }}
