@@ -1305,6 +1305,7 @@
 .sessionRow {
   display: flex;
   align-items: center;
+  position: relative;
   padding: 6px 6px;
   gap: 6px;
   font-size: var(--agent-font-size, 12px);
@@ -1398,6 +1399,9 @@
 }
 
 .sessionDelete {
+  position: absolute;
+  top: 4px;
+  right: 6px;
   background: none;
   border: 0;
   color: inherit;
@@ -1407,11 +1411,11 @@
   align-items: center;
   visibility: hidden;
   border-radius: 3px;
-  flex-shrink: 0;
 }
 
 .sessionRename {
   composes: sessionDelete;
+  right: 28px;
 }
 
 .sessionRow:hover .sessionDelete,
