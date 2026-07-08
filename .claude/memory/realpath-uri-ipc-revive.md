@@ -18,6 +18,6 @@ metadata:
 
 **修复**：`MainThreadFs._guardRealpath` 里 `URI.revive(await this._files.realpath(uri)) as URI` 再读 `.fsPath`（`MainThreadFs.ts`）。realpath 是 IFileService 里**唯一返回 URI 实例**的方法，故只有它跨 IPC 需消费端 revive；其它方法返回纯数据对象。回归单测：`MainThreadFs.test.ts` 用 `JSON.parse(JSON.stringify(URI.file(...)))` 模拟 IPC 降级 + 拒空 target 的 policy，无 revive 即红。
 
-**为何之前以为是环境问题**（见 [[e2e-markdown-exthost-fail-locally]]）：旧 `out/` 产物的 renderer 构建于 realpath 提交合入前，不含该调用；只有 `pnpm build` 重建产物后回归才显形。**本机 e2e 跑的是 `out/` 产物，产物陈旧会完全改变结论——诊断 LSP/markdown e2e 前必先 `pnpm build`/`pnpm --filter @universe-editor/editor build`**（与 [[e2e-async-session-prompt-not-settled]] 同教训）。
+**为何之前以为是环境问题**（见 [[e2e-markdown-exthost-fail-locally]]）：旧 `out/` 产物的 renderer 构建于 realpath 提交合入前，不含该调用；只有 `pnpm build` 重建产物后回归才显形。**本机 e2e 跑的是 `out/` 产物，产物陈旧会完全改变结论——诊断 LSP/markdown e2e 前必先 `pnpm build`/`pnpm --filter @universe-editor/editor build`**（同教训另见 skill `fix-ci-e2e-flake`「诊断前必做」+ 速记 24）。
 
 **How to apply**：再见任何「main 端服务方法返回 URI、renderer 端读 `.fsPath` 得空」→ 第一反应是跨 IPC 没 revive，不是路径计算错。给跨 IPC 边界返回 URI 的新方法，消费端一律 `URI.revive`。

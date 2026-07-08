@@ -56,11 +56,8 @@
 ## 工程约定 / 护栏
 
 - [ESLint 路径身份护栏](eslint-path-identity-guardrails.md) — no-restricted-syntax 禁手写 fsPath 大小写折叠/路径身份键(精准不误伤 slug/模型 id)；flat config 同名规则替换非合并的坑；测试+SCM 域豁免
-- [e2e @regression 分级 tag](e2e-regression-tag.md) — 用例级 @regression 把 bug 守护用例从本地 pnpm e2e 主趟剥离、CI 仍全量并行覆盖；tag 打 test 标题末尾(非 describe)靠 grep 匹配；4 处落点(package.json/ci.yml/spec/RUNBOOK);判定=只守护已修复 bug 非主路径冒烟；首落 markdown preview 25→6
 - [Action2 async run 的 accessor 失效坑](action2-async-accessor-invalidation.md) — ServicesAccessor 遇第一个 await 即失效；async run 须在 await 前同步取完所有 service(快照传后续 helper)；持久 accessor 的测试会假绿抓不到
 
-## 测试 flaky / 环境问题(非回归)
+## e2e flaky / 排查
 
-- [本机 Windows e2e 启动 flake](e2e-windows-launch-flake.md) — 裸 electron.launch 的 restore/relaunch 类 @p1 偶发 "Process failed to launch!" 是环境问题非回归；含 ELECTRON_RUN_AS_NODE fixture 修复与判别要点
-- [parcel watcher 多worker崩溃](e2e-parcel-watcher-multiworker-crash.md) — simpleFileDialog 切workspace用例多worker偶发 0xC0000005，是 @parcel/watcher 跨进程竞态，已 @serial 隔离
-- [E2E prompt 回复未落地](e2e-async-session-prompt-not-settled.md) — sendAcpPrompt 的 await 不等 echo 流式回复渲染；滚动/虚拟化类 ACP E2E 断言前须先 poll 消息数到位+高度收敛；诊断前先 pnpm build
+> e2e 偶发失败（CI 挂/本地稳过）的排查流程、案例库、速记全部收敛在 skill `fix-ci-e2e-flake`（按需加载，不占常驻索引）；已知环境 flake 的一句话登记见 `apps/editor/e2e/RUNBOOK.md`。

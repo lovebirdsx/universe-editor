@@ -43,4 +43,4 @@ metadata:
 
 相关：[[codex-session-skills-scan-slow]]（同样是 vendored 进程在 Windows 上的疑难，改不了 vendor 只能从外围治）、预热特性 commit ba60c0c0/f9a770ea。
 
-相关：[[e2e-windows-launch-flake]]（不同症状：裸 `electron.launch` 报 "Process failed to launch!"，本条是 fixture 正常关闭时的 teardown 超时，两者均 Windows-only 但触发机制不同）。
+相关：裸 `electron.launch` 报 "Process failed to launch!" 的 Windows-only 环境 flake（本条是 fixture 正常关闭时的 teardown 超时，两者均 Windows-only 但触发机制不同）详见 skill `fix-ci-e2e-flake` 案例 28。
