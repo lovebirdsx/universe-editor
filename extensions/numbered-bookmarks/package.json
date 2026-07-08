@@ -10,7 +10,7 @@
   "description": "Delphi-style numbered bookmarks (0-9): toggle, jump, gutter icons, sticky on edit (first-party Universe extension).",
   "main": "dist/extension.js",
   "engines": {
-    "universe": "^0.1.0"
+    "universe": ">=0.1.0 <1.0.0"
   },
   "activationEvents": [
     "onStartupFinished"

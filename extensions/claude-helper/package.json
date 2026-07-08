@@ -6,7 +6,7 @@
   "displayName": "Claude Helper",
   "description": "Smart editing for Claude config files (settings.json) via the official JSON schema.",
   "engines": {
-    "universe": "^0.1.0"
+    "universe": ">=0.1.0 <1.0.0"
   },
   "contributes": {
     "jsonValidation": [

@@ -50,10 +50,21 @@ describe('satisfies', () => {
     expect(satisfies('1.3.0', '>1.2.0')).toBe(true)
   })
 
+  it('honours space-joined AND ranges', () => {
+    expect(satisfies('0.2.0', '>=0.1.0 <1.0.0')).toBe(true)
+    expect(satisfies('0.1.0', '>=0.1.0 <1.0.0')).toBe(true)
+    expect(satisfies('1.0.0', '>=0.1.0 <1.0.0')).toBe(false)
+    expect(satisfies('0.0.9', '>=0.1.0 <1.0.0')).toBe(false)
+    // Every comparator must hold (AND, not OR).
+    expect(satisfies('0.2.0', '>=0.2.0 <1.0.0')).toBe(true)
+    expect(satisfies('0.1.0', '>=0.2.0 <1.0.0')).toBe(false)
+    // Tolerates extra internal whitespace.
+    expect(satisfies('0.2.0', '>=0.1.0   <1.0.0')).toBe(true)
+  })
+
   it('fails closed on unparseable versions and compound ranges', () => {
     expect(satisfies('not-a-version', '^1.0.0')).toBe(false)
     expect(satisfies('1.0.0', '^1.0.0 || ^2.0.0')).toBe(false)
-    expect(satisfies('1.0.0', '>=1.0.0 <2.0.0')).toBe(false)
     expect(satisfies('1.0.0', '1.0.0 - 2.0.0')).toBe(false)
   })
 })

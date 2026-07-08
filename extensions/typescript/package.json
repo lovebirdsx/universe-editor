@@ -10,7 +10,7 @@
   "description": "TS/JS language features (definition, references, hover, completion, signature help, document symbols, rename, diagnostics) backed by an in-process typescript-language-server.",
   "main": "dist/extension.js",
   "engines": {
-    "universe": "^0.1.0"
+    "universe": ">=0.1.0 <1.0.0"
   },
   "activationEvents": [
     "onLanguage:typescript",

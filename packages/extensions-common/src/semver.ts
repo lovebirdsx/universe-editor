@@ -2,10 +2,10 @@
  * A deliberately tiny semver `satisfies` for validating an extension's
  * `engines.universe` against the host API version. It covers only the range
  * syntax we actually emit/accept — exact, `*`/`x`, partial (`1`, `1.2`), caret
- * (`^`), tilde (`~`) and the comparison operators. Anything it can't parse
- * (compound `||`, hyphen ranges, space-joined ANDs) is rejected **fail-closed**:
- * an extension declaring an unrecognised range won't load rather than load
- * against an incompatible host.
+ * (`^`), tilde (`~`), the comparison operators, and space-joined ANDs (e.g.
+ * `>=0.1.0 <1.0.0`). Anything it can't parse (compound `||`, hyphen ranges) is
+ * rejected **fail-closed**: an extension declaring an unrecognised range won't
+ * load rather than load against an incompatible host.
  *
  * Prerelease/build metadata is ignored. The host is pre-1.0, so caret on a 0.x
  * base follows npm semantics (locks the minor).
@@ -63,10 +63,18 @@ export function satisfies(version: string, range: string): boolean {
 
   const r = range.trim()
   if (r === '' || r === '*' || r === 'x' || r === 'X') return true
-  // Compound ranges are unsupported → fail closed.
-  if (r.includes('||') || /\s/.test(r)) return false
+  // `||` (OR) is unsupported → fail closed.
+  if (r.includes('||')) return false
 
-  const m = /^(>=|<=|>|<|=|\^|~)?(.+)$/.exec(r)
+  // Space-joined comparators are ANDed together (e.g. `>=0.1.0 <1.0.0`). A single
+  // comparator is just the one-element case.
+  const parts = r.split(/\s+/)
+  return parts.every((part) => satisfiesOne(v, part))
+}
+
+/** Evaluate a single comparator (no whitespace) against an already-parsed version. */
+function satisfiesOne(v: Version, comparator: string): boolean {
+  const m = /^(>=|<=|>|<|=|\^|~)?(.+)$/.exec(comparator)
   if (!m) return false
   const op = m[1] ?? ''
   const rest = m[2]!
