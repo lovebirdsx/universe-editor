@@ -40,12 +40,10 @@
 cd extensions-external/pdf && pnpm build && node scripts/pack.mjs && cd -
 
 # 2) 发布进本地 stage（首次会创建 stage/gallery/）
-pnpm gallery:publish -- --stage ./market-stage \
-  extensions-external/pdf/universe.universe-pdf-0.1.0.vsix
+pnpm gallery:publish -- --stage ./market-stage extensions-external/pdf/universe.universe-pdf-0.1.0.vsix
 
 # 3) 同步到服务器市场根（--dir = server 的 --gallery-root；assets 先、registry.json 后）
-pnpm gallery:upload -- --stage ./market-stage \
-  --host <IP> --user deploy --dir /srv/universe-editor/gallery
+pnpm gallery:upload -- --stage ./market-stage --host iloop.aki.kuro.com  --user deploy --dir /srv/universe-editor/gallery
 ```
 
 `--stage` 也可用环境变量 `UE_GALLERY_STAGE`；`upload.mjs` 的 `--host/--user` 与 `scripts/release/upload.mjs` 共用 `UE_RELEASE_*`，而**市场根用独立的 `--dir`（或 `UE_GALLERY_DIR`）**，与更新目录 `UE_RELEASE_DIR` 解耦。
