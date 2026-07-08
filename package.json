@@ -8,6 +8,7 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "e2e": "pnpm build && pnpm --filter @universe-editor/editor e2e",
+    "e2ea": "pnpm build && pnpm --filter @universe-editor/editor e2ea",
     "lint": "turbo run lint",
     "lint:fix": "turbo run lint:fix",
     "check": "pnpm docs:check && turbo run lint typecheck test",
