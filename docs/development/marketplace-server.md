@@ -5,6 +5,10 @@
 ## 目录
 
 - [工作原理](#工作原理)
+- [最快路径：用内置静态 registry 服务器自建市场](#最快路径用内置静态-registry-服务器自建市场)
+  - [registry.json 格式](#registryjson-格式)
+  - [发布与下架](#发布与下架)
+  - [本地端到端联调](#本地端到端联调)
 - [把客户端指向你的服务器](#把客户端指向你的服务器)
   - [三种配置方式](#三种配置方式)
   - [关于配置文件的一个坑](#关于配置文件的一个坑)
@@ -39,6 +43,91 @@
 
 > **市场地址为空 = 关闭市场**。不配置 `GALLERY_URL` 时市场搜索恒为空，用户只能从本地 `.vsix` 安装（这是 OSS 语义，与 VSCode OSS 构建无 `extensionsGallery` 字段时一致）。已装扩展不受影响，照常运行。
 
+## 最快路径：用内置静态 registry 服务器自建市场
+
+**不想自己写后端？本仓库自带一套零依赖静态市场服务器**，与[自建更新服务器](../../scripts/server/README.md)是**同一个进程**——它在服务自动更新之外，同时按一份 `registry.json` 生成 `/extensionquery` 响应、静态托管 `.vsix`。你只需维护清单、发布 `.vsix`，无需数据库、无需实现协议。下面「服务器要实现的接口」几节是给想**从零写后端**（或对接 open-vsx）的人看的参考规范；用内置服务器可跳过。
+
+**一次部署，既服务更新又服务市场**：按 [`scripts/server/README.md`](../../scripts/server/README.md) 把服务器搭起来（`setup.sh` / `setup.ps1`，systemd / 计划任务），它就已经带市场路由。
+
+**更新根与市场根解耦**。URL 上市场固定挂在 `{base}gallery/` 命名空间下，但它在磁盘的位置由 `--gallery-root` 决定，**默认 `<root>/gallery`**——这样两种部署都自然：
+
+```
+① 合并部署（默认，零配置）: --root /srv/universe-editor
+   /srv/universe-editor/
+     latest.yml  *.exe  ...       更新产物
+     gallery/                     市场内容（= 默认 --gallery-root）
+       registry.json  control.json  assets/<publisher>.<name>/<version>/*.vsix
+
+② 独立部署: --root /srv/universe-editor  --gallery-root /data/extensions
+   /srv/universe-editor/          只有更新产物
+   /data/extensions/              市场内容（可另一块磁盘/另一套权限/另一节奏上传）
+     registry.json  control.json  assets/...
+```
+
+两种部署下客户端看到的 URL 完全一致（`{base}gallery/...`）。**本地开发**尤其需要解耦：更新产物在 `apps/editor/release/`，市场 stage 在别处，一条命令同时服务两者：
+
+```bash
+node scripts/server/server.mjs --root apps/editor/release --gallery-root market-stage/gallery --base /
+# 便捷脚本：pnpm server:serve（更新+市场）或 pnpm gallery:serve（纯市场）
+```
+
+客户端 `GALLERY_URL` 与更新地址同前缀同机：若 server 的 `--base` 是 `/universe-editor/`，则配 `GALLERY_URL=http://<host>/universe-editor`。
+
+### registry.json 格式
+
+服务器唯一读取的市场元数据。**推荐用 [`scripts/gallery`](../../scripts/gallery/README.md) 的 `publish.mjs` 从 `.vsix` 自动生成**（它从包内 `package.json` 抽 `publisher/name/version/displayName/description/categories/engines.universe`，避免手写与包内声明不一致而触发防投毒拒装）。格式：
+
+```jsonc
+{
+  "extensions": [
+    {
+      "publisher": "universe",
+      "name": "universe-pdf",
+      "displayName": "PDF Viewer",
+      "shortDescription": "在编辑器里预览 PDF",
+      "categories": ["Other"],
+      "versions": [
+        {
+          "version": "0.1.0",
+          "lastUpdated": "2026-07-08T00:00:00Z",
+          "engine": "^0.1.0",                          // 写进 properties[] 的 Universe.Editor.Engine
+          "assetDir": "assets/universe.universe-pdf/0.1.0",
+          "files": { "vsix": "universe.universe-pdf-0.1.0.vsix", "icon": "icon.png", "readme": "README.md" },
+          "installCount": 0                            // 可选统计
+        }
+      ]
+    }
+  ]
+}
+```
+
+服务器把每个 version 的 `files` 拼成**绝对下载 URL**（`{请求来源}{base}gallery/{assetDir}/{file}`）注入协议响应的 `files[]`。`versions[]` 首位视为最新版（`publish.mjs` 按 semver 降序维护）。改动 `registry.json` / `control.json` 后**无需重启**服务器——它按文件 mtime 自动重载。
+
+### 发布与下架
+
+用 [`scripts/gallery`](../../scripts/gallery/README.md) 的脚本（零依赖）：
+
+```bash
+# 打包扩展成 .vsix 后，发布进本地 stage
+pnpm gallery:publish -- --stage ./market-stage path/to/universe.universe-pdf-0.1.0.vsix
+# 同步到服务器的市场根（--dir = server 的 --gallery-root；先 assets、后 registry.json，避免半态）
+#   合并部署： --dir /srv/universe-editor/gallery
+#   独立部署： --dir /data/extensions
+pnpm gallery:upload -- --stage ./market-stage --host <IP> --user deploy --dir /srv/universe-editor/gallery
+# 下架
+pnpm gallery:unpublish -- --stage ./market-stage universe.universe-pdf@0.1.0
+```
+
+### 本地端到端联调
+
+```bash
+pnpm gallery:publish -- --stage ./market-stage extensions-external/pdf/universe.universe-pdf-0.1.0.vsix
+# --gallery-root 指向 stage 的 gallery，与更新根解耦（本地更新根随意，这里也用 stage）
+node scripts/server/server.mjs --root ./market-stage --gallery-root ./market-stage/gallery --port 8788 --base /
+UNIVERSE_GALLERY_URL=http://localhost:8788 pnpm dev   # 扩展视图搜索 → 安装 → 生效
+# 便捷等价：pnpm gallery:serve
+```
+
 ## 把客户端指向你的服务器
 
 ### 三种配置方式
@@ -68,6 +157,8 @@
 `<userData>` 是编辑器的用户数据目录（可用 `--user-data-dir` 或 `UNIVERSE_USER_DATA_DIR` 覆盖）。文件缺失或格式错误会被静默忽略，此时回退到环境变量 / 命令行。
 
 ## 服务器要实现的接口
+
+> 下面几节是给**从零写后端**或对接 open-vsx 的人看的协议参考。用[内置静态 registry 服务器](#最快路径用内置静态-registry-服务器自建市场)的话这些已经实现好了，可跳到[两个约定](#两个必须与后端对齐的约定)与[防投毒](#防投毒客户端会做的一致性校验)了解客户端行为即可。
 
 三个端点，全部相对 `GALLERY_URL`。
 

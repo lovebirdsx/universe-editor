@@ -34,7 +34,11 @@
     "release:upload": "node scripts/release/upload.mjs",
     "release:notes": "node scripts/release/changelog.mjs",
     "test:release": "node --test \"scripts/**/__tests__/**/*.test.mjs\"",
-    "server:serve": "node scripts/server/server.mjs --root apps/editor/release --port 8788 --base /"
+    "server:serve": "node scripts/server/server.mjs --root apps/editor/release --gallery-root market-stage/gallery --port 8788 --base /",
+    "gallery:serve": "node scripts/server/server.mjs --root market-stage --gallery-root market-stage/gallery --port 8788 --base /",
+    "gallery:publish": "node scripts/gallery/publish.mjs",
+    "gallery:unpublish": "node scripts/gallery/unpublish.mjs",
+    "gallery:upload": "node scripts/gallery/upload.mjs"
   },
   "devDependencies": {
     "@universe-editor/config-eslint": "workspace:*",

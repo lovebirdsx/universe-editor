@@ -14,6 +14,7 @@
 | [03-management-service.md](./03-management-service.md) | 安装 / 卸载 / 更新 / 启用禁用服务、用户扩展目录扫描 |
 | [04-ui-and-ux.md](./04-ui-and-ux.md) | 扩展视图、详情页、命令、状态与交互 |
 | [05-security-and-trust.md](./05-security-and-trust.md) | 安全模型、信任提示、恶意清单、未来硬隔离路线 |
+| [07-server-deployment-and-ops.md](./07-server-deployment-and-ops.md) | 市场后端（静态 registry 服务器）实现、发布运维脚本、部署与联调 |
 
 ---
 
@@ -219,6 +220,15 @@ apps/editor/src/
 
 - Node 权限模型默认开启且可靠
 - VSIX 签名验证（PKCS#7，对标 `@vscode/vsce-sign`）
+
+### Phase F — 市场后端部署与运维 ✅ 已完成
+> 目标：补齐分发链路的服务端——此前客户端与「后端该实现什么」的契约文档已齐，唯缺后端实现与内容运维。
+
+- 市场后端复用 `scripts/server` 的零依赖静态服务器：`server.mjs` 挂 `/extensionquery`（读 `gallery/registry.json` 过滤/排序/分页）+ `/control.json` + `.vsix` 静态托管，与自动更新**同一进程、同一部署**
+- 发布运维脚本 `scripts/gallery/{publish,unpublish,upload}.mjs`（从 `.vsix` 抽元数据生成 registry，assets 先/registry 后同步）
+- 文档：`docs/development/marketplace-server.md`（新增「内置静态 registry 服务器自建市场」实操）、`scripts/gallery/README.md`、`scripts/server/README.md`（兼服务市场）
+- **验证**：`pnpm test:release`（gallery 逻辑 + server 市场路由）；本地端到端 `publish → server → dev 搜索安装`
+- 详见 [07-server-deployment-and-ops.md](./07-server-deployment-and-ops.md)
 
 ---
 

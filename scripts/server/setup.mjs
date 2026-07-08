@@ -98,6 +98,7 @@ function platformDefaults() {
     return {
       appDir: 'C:\\universe-editor\\app',
       root: 'C:\\universe-editor\\data',
+      galleryRoot: 'C:\\universe-editor\\data\\gallery',
       port: '80',
       base: '/universe-editor/',
     }
@@ -105,6 +106,7 @@ function platformDefaults() {
   return {
     appDir: '/opt/universe-update-server',
     root: '/srv/universe-editor',
+    galleryRoot: '/srv/universe-editor/gallery',
     port: '80',
     base: '/universe-editor/',
   }
@@ -112,9 +114,12 @@ function platformDefaults() {
 
 function buildConfig(args) {
   const d = platformDefaults()
+  const root = resolve(args.root ?? d.root)
   return {
     appDir: args.appDir ?? d.appDir,
-    root: resolve(args.root ?? d.root),
+    root,
+    // 市场根，默认 <root>/gallery；--gallery-root 可指向独立目录/磁盘。
+    galleryRoot: resolve(args['gallery-root'] ?? join(root, 'gallery')),
     port: String(args.port ?? d.port),
     base: args.base ?? d.base,
   }
@@ -140,6 +145,7 @@ function installLinux(cfg) {
   const nodePath = resolveNodePath()
   const serverPath = deployServer(cfg.appDir)
   mkdirSync(cfg.root, { recursive: true })
+  mkdirSync(cfg.galleryRoot, { recursive: true })
 
   const unit = `[Unit]
 Description=Universe Editor 更新分发静态服务器
@@ -149,7 +155,7 @@ After=network.target
 Type=simple
 User=www-data
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-ExecStart=${nodePath} ${serverPath} --root ${cfg.root} --port ${cfg.port} --base ${cfg.base}
+ExecStart=${nodePath} ${serverPath} --root ${cfg.root} --gallery-root ${cfg.galleryRoot} --port ${cfg.port} --base ${cfg.base}
 Restart=always
 RestartSec=2
 StandardOutput=journal
@@ -161,8 +167,11 @@ WantedBy=multi-user.target
   writeFileSync(unitPath(), unit)
   info(`已写入 ${unitPath()}`)
 
-  // 发布目录归 www-data 可读写（上传脚本用别的账号写，运行用 www-data 读）。
+  // 发布目录 + 市场根归 www-data 可读写（上传脚本用别的账号写，运行用 www-data 读）。
   run('chown', ['-R', 'www-data:www-data', cfg.root], { ignoreFail: true })
+  if (!cfg.galleryRoot.startsWith(cfg.root + '/')) {
+    run('chown', ['-R', 'www-data:www-data', cfg.galleryRoot], { ignoreFail: true })
+  }
 
   run('systemctl', ['daemon-reload'])
   run('systemctl', ['enable', '--now', SERVICE_NAME])
@@ -200,9 +209,10 @@ function installWin(cfg) {
   const nodePath = resolveNodePath()
   const serverPath = deployServer(cfg.appDir)
   mkdirSync(cfg.root, { recursive: true })
+  mkdirSync(cfg.galleryRoot, { recursive: true })
 
   // /TR 全绝对路径：任务以 SYSTEM 跑、cwd 是 system32、无用户 PATH。
-  const tr = `"${nodePath}" "${serverPath}" --root "${cfg.root}" --port ${cfg.port} --base ${cfg.base}`
+  const tr = `"${nodePath}" "${serverPath}" --root "${cfg.root}" --gallery-root "${cfg.galleryRoot}" --port ${cfg.port} --base ${cfg.base}`
   run('schtasks', [
     '/Create',
     '/TN',
@@ -271,9 +281,10 @@ const action = args._[0] ?? 'install'
 const cfg = buildConfig(args)
 
 console.log(`\n🔧 universe-update-server setup [${action}] (${process.platform})`)
-console.log(`   appDir: ${cfg.appDir}`)
-console.log(`   root:   ${cfg.root}`)
-console.log(`   port:   ${cfg.port}  base: ${cfg.base}\n`)
+console.log(`   appDir:      ${cfg.appDir}`)
+console.log(`   root:        ${cfg.root}`)
+console.log(`   galleryRoot: ${cfg.galleryRoot}`)
+console.log(`   port:        ${cfg.port}  base: ${cfg.base}\n`)
 
 switch (action) {
   case 'install':
