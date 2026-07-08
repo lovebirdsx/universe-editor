@@ -138,4 +138,37 @@ describe('ExtensionGalleryMainService', () => {
     expect(control.deprecated['old.ext']).toEqual({ reason: 'stale', migrateTo: 'new.ext' })
     expect(control.deprecated['bare.ext']).toEqual({})
   })
+
+  it('fetches an icon as a data URL and caches it', async () => {
+    const fetchMock = vi.fn(async () => {
+      const res = jsonResponse('')
+      ;(res as unknown as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer = async () =>
+        new Uint8Array([0x89, 0x50]).buffer
+      ;(res as unknown as { headers: Headers }).headers = new Headers({
+        'content-type': 'image/png',
+      })
+      return res
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const svc = new ExtensionGalleryMainService({ galleryUrl: 'https://x' }, cacheDir)
+    const ext = galleryExtension({ iconUrl: 'https://host/icon.png' })
+
+    const dataUrl = await svc.getIcon(ext)
+    expect(dataUrl).toBe(`data:image/png;base64,${Buffer.from([0x89, 0x50]).toString('base64')}`)
+
+    const again = await svc.getIcon(ext)
+    expect(again).toBe(dataUrl)
+    expect(fetchMock).toHaveBeenCalledTimes(1) // second call was a cache hit
+  })
+
+  it('returns empty string when there is no icon or the fetch fails', async () => {
+    const svc = new ExtensionGalleryMainService({ galleryUrl: 'https://x' }, cacheDir)
+    expect(await svc.getIcon(galleryExtension())).toBe('') // no iconUrl → no fetch
+
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error('offline')
+    }) as unknown as typeof fetch
+    expect(await svc.getIcon(galleryExtension({ iconUrl: 'https://host/icon.png' }))).toBe('')
+  })
 })

@@ -54,6 +54,7 @@ export class ExtensionGalleryMainService extends Disposable implements IExtensio
   private readonly _logger: ILogger
   private _controlCache: IControlCache | undefined
   private _readmeCache = new Map<string, string>()
+  private _iconCache = new Map<string, string>()
 
   constructor(
     @IEnvironmentMainService private readonly _environment: IGalleryEnvironment,
@@ -139,6 +140,24 @@ export class ExtensionGalleryMainService extends Disposable implements IExtensio
       return text
     } catch (err) {
       this._logger.warn(`getReadme failed: ${(err as Error).message}`)
+      return ''
+    }
+  }
+
+  async getIcon(extension: IGalleryExtension): Promise<string> {
+    if (!extension.iconUrl) return ''
+    const cached = this._iconCache.get(extension.iconUrl)
+    if (cached !== undefined) return cached
+    try {
+      const res = await fetch(extension.iconUrl, { redirect: 'follow' })
+      if (!res.ok) return ''
+      const mime = res.headers.get('content-type')?.split(';')[0]?.trim() || 'image/png'
+      const base64 = Buffer.from(await res.arrayBuffer()).toString('base64')
+      const dataUrl = `data:${mime};base64,${base64}`
+      this._iconCache.set(extension.iconUrl, dataUrl)
+      return dataUrl
+    } catch (err) {
+      this._logger.warn(`getIcon failed: ${(err as Error).message}`)
       return ''
     }
   }

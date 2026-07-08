@@ -38,7 +38,6 @@ export interface IExtensionEntry {
   readonly publisherDisplayName?: string
   readonly description: string
   readonly version: string
-  readonly iconUrl?: string
   readonly installCount?: number
   readonly rating?: number
   /** Installed locally right now. */
@@ -87,6 +86,12 @@ export interface IExtensionsWorkbenchService {
 
   /** The README text for an entry's detail page. */
   getReadme(entry: IExtensionEntry): Promise<string>
+
+  /**
+   * Icon as a `data:` URL for an entry (empty string if none). Marketplace icons
+   * are remote https URLs the renderer CSP blocks, so main fetches + caches them.
+   */
+  getIcon(entry: IExtensionEntry): Promise<string>
 
   /** Find an entry by id across installed + search results (detail page lookup). */
   find(id: string): IExtensionEntry | undefined
@@ -254,6 +259,11 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     return Promise.resolve(entry.local?.manifest.description ?? '')
   }
 
+  getIcon(entry: IExtensionEntry): Promise<string> {
+    if (entry.gallery) return this._gallery.getIcon(entry.gallery)
+    return Promise.resolve('')
+  }
+
   find(id: string): IExtensionEntry | undefined {
     return (
       this.getInstalled().find((e) => e.id === id) ??
@@ -298,7 +308,6 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
       ...(gallery.publisherDisplayName
         ? { publisherDisplayName: gallery.publisherDisplayName }
         : {}),
-      ...(gallery.iconUrl ? { iconUrl: gallery.iconUrl } : {}),
       ...(gallery.installCount !== undefined ? { installCount: gallery.installCount } : {}),
       ...(gallery.rating !== undefined ? { rating: gallery.rating } : {}),
     }

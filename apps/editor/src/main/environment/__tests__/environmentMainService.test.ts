@@ -122,6 +122,25 @@ describe('galleryUrl', () => {
     const env = make({})
     expect(env.galleryUrl).toBeUndefined()
   })
+
+  it('reads galleryUrl from an update-config.json with a trailing comma (JSONC)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ue-env-'))
+    writeFileSync(join(dir, 'update-config.json'), '{\n  "galleryUrl": "http://file/",\n}')
+    const env = make({})
+    env.resolveFileConfig(dir)
+    expect(env.galleryUrl).toBe('http://file/')
+  })
+
+  it('reads galleryUrl from an update-config.json with // comments (JSONC)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ue-env-'))
+    writeFileSync(
+      join(dir, 'update-config.json'),
+      '{\n  // marketplace endpoint\n  "galleryUrl": "http://file/"\n}',
+    )
+    const env = make({})
+    env.resolveFileConfig(dir)
+    expect(env.galleryUrl).toBe('http://file/')
+  })
 })
 
 describe('configDir', () => {

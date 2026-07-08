@@ -18,6 +18,7 @@ import {
   type IExtensionEntry,
 } from '../../services/extensionsWorkbench/ExtensionsWorkbenchService.js'
 import { ExtensionEditorInput } from '../../services/editor/ExtensionEditorInput.js'
+import { useExtensionIcon } from './useExtensionIcon.js'
 import styles from './ExtensionsView.module.css'
 
 const SEARCH_DEBOUNCE_MS = 300
@@ -164,14 +165,11 @@ function ExtensionRow({
   onInstall: () => void
   onUninstall: () => void
 }) {
+  const iconUrl = useExtensionIcon(entry)
   return (
     <div className={styles.row} onClick={() => onOpen(entry)} data-testid="extension-row">
       <div className={styles.icon}>
-        {entry.iconUrl ? (
-          <img src={entry.iconUrl} alt="" width={32} height={32} />
-        ) : (
-          <Package size={28} />
-        )}
+        {iconUrl ? <img src={iconUrl} alt="" width={32} height={32} /> : <Package size={28} />}
       </div>
       <div className={styles.body}>
         <div className={styles.title}>

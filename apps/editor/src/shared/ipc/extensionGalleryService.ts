@@ -55,6 +55,14 @@ export interface IExtensionGalleryService {
   /** README text for the detail page (empty string if none / unavailable). */
   getReadme(extension: IGalleryExtension): Promise<string>
 
+  /**
+   * Fetch an extension's icon and return it as a `data:` URL the renderer can put
+   * straight into an <img> (the CSP allows `data:` but not remote `https:` images).
+   * Downloaded + cached in the main process. Empty string if there's no icon or
+   * it can't be fetched — callers fall back to a generic icon.
+   */
+  getIcon(extension: IGalleryExtension): Promise<string>
+
   /** The (cached) control manifest. Empty lists when no marketplace / offline. */
   getControlManifest(): Promise<IExtensionControlManifest>
 }

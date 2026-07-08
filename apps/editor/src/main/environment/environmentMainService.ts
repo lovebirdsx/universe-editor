@@ -10,6 +10,7 @@
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { parse } from 'jsonc-parser'
 import {
   CliConfigSource,
   ConfigResolver,
@@ -173,13 +174,17 @@ export class EnvironmentMainService {
   }
 
   private _readJsonFile(path: string): Record<string, unknown> {
+    let text: string
     try {
-      const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown
-      return parsed !== null && typeof parsed === 'object'
-        ? (parsed as Record<string, unknown>)
-        : {}
+      text = readFileSync(path, 'utf8')
     } catch {
       return {}
     }
+    // Tolerant JSONC parse (comments + trailing commas) — the deployment config
+    // files are hand-edited and documented with // comments, so a strict
+    // JSON.parse would silently drop a whole valid-looking file over a trailing
+    // comma. Aligns with how the rest of the app reads config (jsonc-parser).
+    const parsed = parse(text) as unknown
+    return parsed !== null && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
   }
 }
