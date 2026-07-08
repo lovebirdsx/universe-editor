@@ -12,8 +12,11 @@ import {
   IConfigurationService,
   IFileService,
   ILoggerService,
+  INotificationService,
   MutableDisposable,
   NullLogger,
+  Severity,
+  localize,
   type ILogger,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
@@ -24,6 +27,7 @@ import {
 } from '@universe-editor/extensions-common'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 import { ExtensionPointTranslator } from '../services/extensions/ExtensionPointTranslator.js'
+import { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
 import { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
 import { IRemoteSchemaService } from '../../shared/ipc/remoteSchemaService.js'
 import { resolveSchemaFromUrl } from '../services/preferences/schemaUrlResolver.js'
@@ -34,10 +38,12 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
 
   constructor(
     @IExtensionHostClientService private readonly _client: IExtensionHostClientService,
+    @IExtensionManagementService private readonly _management: IExtensionManagementService,
     @IUserKeybindingsService private readonly _userKeybindings: IUserKeybindingsService,
     @IConfigurationService private readonly _configuration: IConfigurationService,
     @IFileService private readonly _fileService: IFileService,
     @IRemoteSchemaService private readonly _remoteSchema: IRemoteSchemaService,
+    @INotificationService private readonly _notification: INotificationService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -56,6 +62,16 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
       ),
     )
 
+    // Installing / uninstalling an extension re-scans the restricted tier so the
+    // change takes effect without a full reload.
+    this._register(
+      this._management.onDidChangeExtensions(() => {
+        void this._client.refreshExtensions().catch((err: unknown) => {
+          this._logger.warn(`extension refresh failed: ${(err as Error).message}`)
+        })
+      }),
+    )
+
     try {
       const contributions = await this._client.getContributions()
       this._applyContributions(contributions)
@@ -66,6 +82,28 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
 
     await this._client.activateByEvent(STARTUP_ACTIVATION)
     await this._client.activateByEvent(STARTUP_FINISHED_ACTIVATION)
+
+    // Remote kill switch: disable any installed extension the control manifest
+    // now marks malicious (found bad after it was installed) and tell the user.
+    void this._quarantineMalicious()
+  }
+
+  private async _quarantineMalicious(): Promise<void> {
+    try {
+      const disabled = await this._management.quarantineMalicious()
+      if (disabled.length > 0) {
+        this._notification.notify({
+          severity: Severity.Warning,
+          message: localize(
+            'extensions.quarantined',
+            'Disabled {count} extension(s) flagged as malicious: {ids}',
+            { count: disabled.length, ids: disabled.join(', ') },
+          ),
+        })
+      }
+    } catch (err) {
+      this._logger.warn(`malicious quarantine failed: ${(err as Error).message}`)
+    }
   }
 
   /** Dispose the previous translation and re-apply the current contribution set. */

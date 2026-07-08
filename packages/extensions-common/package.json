@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./manifest-schema": {
+      "types": "./dist/manifest-schema.d.ts",
+      "default": "./dist/manifest-schema.js"
     }
   },
   "scripts": {
@@ -20,7 +24,8 @@
   },
   "dependencies": {
     "@universe-editor/platform": "workspace:*",
-    "vscode-languageserver-types": "catalog:"
+    "vscode-languageserver-types": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@universe-editor/config-ts": "workspace:*",

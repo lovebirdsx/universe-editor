@@ -29,6 +29,7 @@ import {
 } from '@universe-editor/platform'
 import type { IExtensionDescriptionDto } from '@universe-editor/extensions-common'
 import type { IExtensionHostService } from '../../../../shared/ipc/extensionHostService.js'
+import type { IExtensionManagementService } from '../../../../shared/ipc/extensionManagementService.js'
 import type { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeaturesService.js'
 import type { IAcpPathPolicy } from '../../acp/acpPathPolicy.js'
 import type { IScmService } from '../ScmService.js'
@@ -116,6 +117,7 @@ function makeService(host: IExtensionHostService, workspaceChange = Event.None) 
     {} as ILayoutService,
     {} as IViewsService,
     new UriIdentityService('linux'),
+    { getDisabledIds: vi.fn().mockResolvedValue([]) } as unknown as IExtensionManagementService,
   )
 }
 

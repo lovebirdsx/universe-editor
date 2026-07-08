@@ -1,5 +1,6 @@
 export * from './rpc.js'
 export * from './manifest.js'
+export * from './categories.js'
 export * from './activation.js'
 export * from './scmWire.js'
 export * from './aiWire.js'

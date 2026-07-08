@@ -220,10 +220,18 @@ async function main(): Promise<void> {
       ? process.env.UNIVERSE_USER_EXTENSIONS_DIR
       : process.env.UNIVERSE_BUILTIN_EXTENSIONS_DIR
   const extensions = dir ? await scanExtensions(dir, HOST_API_VERSION, locale) : []
+  const disabled = new Set(
+    (process.env.UNIVERSE_DISABLED_EXTENSIONS ?? '').split(',').filter(Boolean),
+  )
+  const activeExtensions =
+    disabled.size > 0 ? extensions.filter((e) => !disabled.has(e.id)) : extensions
   if (!dir) {
     console.error(`[ext-host] no extensions directory configured for ${kind} host`)
   } else {
-    console.error(`[ext-host] (${kind}) scanned ${extensions.length} extension(s) from ${dir}`)
+    console.error(
+      `[ext-host] (${kind}) scanned ${extensions.length} extension(s) from ${dir}` +
+        (disabled.size > 0 ? `, ${extensions.length - activeExtensions.length} disabled` : ''),
+    )
   }
 
   const workspaceRoot = process.env.UNIVERSE_WORKSPACE_ROOT || undefined
@@ -238,7 +246,7 @@ async function main(): Promise<void> {
 
   resolveService(
     new ExtensionService(
-      extensions,
+      activeExtensions,
       mainThreadCommands,
       mainThreadWindow,
       mainThreadScm,

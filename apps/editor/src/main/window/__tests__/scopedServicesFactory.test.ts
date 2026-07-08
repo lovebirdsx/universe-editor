@@ -16,6 +16,8 @@ describe('ApplicationServices type', () => {
       acpHost: {} as ApplicationServices['acpHost'],
       acpTerminal: {} as ApplicationServices['acpTerminal'],
       extensionHost: {} as ApplicationServices['extensionHost'],
+      extensionManagement: {} as ApplicationServices['extensionManagement'],
+      extensionGallery: {} as ApplicationServices['extensionGallery'],
       claudeBinary: {} as ApplicationServices['claudeBinary'],
       claudeConfig: {} as ApplicationServices['claudeConfig'],
       codexBinary: {} as ApplicationServices['codexBinary'],
@@ -34,7 +36,7 @@ describe('ApplicationServices type', () => {
       exchangeRate: {} as ApplicationServices['exchangeRate'],
       resourceAccess: {} as ApplicationServices['resourceAccess'],
     }
-    expect(Object.keys(svc)).toHaveLength(25)
+    expect(Object.keys(svc)).toHaveLength(27)
   })
 })
 

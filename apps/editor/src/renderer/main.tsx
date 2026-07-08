@@ -61,6 +61,7 @@ import { PerfMarks } from '../shared/perf/marks.js'
 import { IDisposableLeakService, ILogChannelService } from '../shared/ipc/services.js'
 import { IUpdateService } from '../shared/ipc/updateService.js'
 import { ITerminalService } from '../shared/ipc/terminalService.js'
+import { IExtensionManagementService } from '../shared/ipc/extensionManagementService.js'
 import { type IAiModelMainService } from '../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../shared/ipc/aiDebugService.js'
 import { ITimerService } from './services/performance/TimerService.js'
@@ -150,6 +151,10 @@ import {
   ExtensionHostClientService,
   IExtensionHostClientService,
 } from './services/extensions/ExtensionHostClientService.js'
+import {
+  ExtensionsWorkbenchService,
+  IExtensionsWorkbenchService,
+} from './services/extensionsWorkbench/ExtensionsWorkbenchService.js'
 import { IScmService, ScmService } from './services/extensions/ScmService.js'
 import {
   IScmDecorationsService,
@@ -598,6 +603,14 @@ async function bootstrapWorkbench(): Promise<void> {
   )
   services.set(IExtensionHostClientService, extensionHostClientService)
 
+  // Extensions UI facade: aggregates installed (management) + marketplace
+  // (gallery) into one view model. The Extensions view + detail editor depend
+  // only on this; it owns no wire logic beyond the two proxies.
+  const extensionsWorkbenchService = workbenchStore.add(
+    instantiation.createInstance(ExtensionsWorkbenchService),
+  )
+  services.set(IExtensionsWorkbenchService, extensionsWorkbenchService)
+
   // API usage indicator: single owner of the account-level usage snapshot +
   // polling loop. Created here so its proxy + config deps are available; the
   // UsageIndicator in PromptInput subscribes to its observable.
@@ -676,6 +689,9 @@ async function bootstrapWorkbench(): Promise<void> {
     timerService: instantiation.invokeFunction((a) => a.get(ITimerService)),
     explorerTreeService,
     fileService: services.get(IFileService) as IFileService,
+    extensionManagementService: services.get(
+      IExtensionManagementService,
+    ) as IExtensionManagementService,
     bootstrapFocusSettled,
     computeTeardownLeakReport: snapshotLeaks,
   })

@@ -1,0 +1,32 @@
+{
+  "name": "@universe-editor/extension-gallery",
+  "version": "0.0.0",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build",
+    "test": "vitest run",
+    "lint": "eslint src",
+    "lint:fix": "eslint --fix src",
+    "clean": "tsc --build --clean"
+  },
+  "dependencies": {
+    "@universe-editor/extensions-common": "workspace:*"
+  },
+  "devDependencies": {
+    "@universe-editor/config-ts": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

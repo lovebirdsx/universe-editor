@@ -85,6 +85,18 @@ export const UPDATE_URL: ConfigItem<'string'> = {
   validate: isHttpUrl,
 }
 
+/** Extension marketplace gallery URL. cli > env > file. Empty ⇒ marketplace disabled. */
+export const GALLERY_URL: ConfigItem<'string'> = {
+  id: 'galleryUrl',
+  type: 'string',
+  cli: 'gallery-url',
+  env: 'UNIVERSE_GALLERY_URL',
+  filePath: 'galleryUrl',
+  args: '<url>',
+  description: '覆盖扩展市场地址',
+  validate: isHttpUrl,
+}
+
 /** Platform data roots — env-only inputs to productPaths' identity resolution. */
 export const APP_DATA: ConfigItem<'string'> = { id: 'appData', type: 'string', env: 'APPDATA' }
 export const XDG_CONFIG_HOME: ConfigItem<'string'> = {
@@ -106,4 +118,5 @@ export const CLI_OPTIONS: readonly ConfigItem[] = [
   USER_DATA_DIR,
   CONFIG_DIR,
   UPDATE_URL,
+  GALLERY_URL,
 ]

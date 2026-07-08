@@ -34,6 +34,7 @@ import type {
   IExtensionHostService,
 } from '../../../shared/ipc/extensionHostService.js'
 import { resolveTsServerPaths } from './tsServerPaths.js'
+import { resolveUserExtensionsDir } from './userExtensionsDir.js'
 import { PerfMarks } from '../../../shared/perf/marks.js'
 
 /** Grace period after closing the host's stdin before we force-kill its tree. */
@@ -101,7 +102,7 @@ const defaultResolveExtensionsDir: ExtHostExtensionsDirResolver = () =>
 
 /** External (user-installed) extensions live under the user-data directory. */
 const defaultResolveUserExtensionsDir: ExtHostExtensionsDirResolver = () =>
-  path.join(app.getPath('userData'), 'extensions')
+  resolveUserExtensionsDir()
 
 interface ProcEntry {
   readonly proc: ManagedChildProcess
@@ -182,6 +183,10 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     // Display locale for manifest NLS (package.nls.<locale>.json) resolution.
     if (spec?.locale !== undefined) {
       env.UNIVERSE_DISPLAY_LOCALE = spec.locale
+    }
+    // Disabled / quarantined extensions the restricted host must skip scanning.
+    if (spec?.disabledIds && spec.disabledIds.length > 0) {
+      env.UNIVERSE_DISABLED_EXTENSIONS = spec.disabledIds.join(',')
     }
     args.push(entry)
 

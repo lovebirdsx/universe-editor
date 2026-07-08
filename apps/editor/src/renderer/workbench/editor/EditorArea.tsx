@@ -23,6 +23,7 @@ import { DocEditor } from './DocEditor.js'
 import { AcpSessionEditor } from '../agents/AcpSessionEditor.js'
 import { TerminalEditorView } from './TerminalEditorView.js'
 import { GitGraphEditor } from '../gitGraph/GitGraphEditor.js'
+import { ExtensionEditor } from '../extensions/ExtensionEditor.js'
 import { EditorGroupView } from './EditorGroupView.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import styles from './EditorArea.module.css'
@@ -44,6 +45,7 @@ editorComponentMap.set('startupPerformance', StartupPerformanceEditor)
 editorComponentMap.set('doc', DocEditor)
 editorComponentMap.set('agents.session', AcpSessionEditor)
 editorComponentMap.set('gitGraph', GitGraphEditor)
+editorComponentMap.set('extensionDetail', ExtensionEditor)
 editorComponentMap.set(
   'terminal.editor',
   TerminalEditorView as ComponentType<{ input: IEditorInput }>,

@@ -23,6 +23,7 @@ import { IFileService } from '@universe-editor/platform'
 import { IFileSearchService } from '@universe-editor/platform'
 import { ISecretStorageService } from '@universe-editor/platform'
 import { IMainStorageService } from '../storage.js'
+import { IEnvironmentMainService } from '../environment/environmentMainService.js'
 import { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 import {
   IDisposableLeakService,
@@ -33,6 +34,8 @@ import {
 } from '../../shared/ipc/services.js'
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
+import { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
+import { IExtensionGalleryService } from '../../shared/ipc/extensionGalleryService.js'
 import { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
 import { IClaudeConfigService } from '../../shared/ipc/claudeConfigService.js'
@@ -57,6 +60,8 @@ import {
 } from './workspace/recentWorkspacesMainService.js'
 import { AcpHostMainService } from './acpHost/acpHostMainService.js'
 import { ExtensionHostMainService } from './extensionHost/extensionHostMainService.js'
+import { ExtensionManagementMainService } from './extensionManagement/extensionManagementService.js'
+import { ExtensionGalleryMainService } from './extensionManagement/extensionGalleryService.js'
 import { AcpTerminalMainService } from './acpTerminal/acpTerminalMainService.js'
 import { ClaudeBinaryMainService } from './claudeBinary/claudeBinaryMainService.js'
 import { ClaudeConfigMainService } from './claudeConfig/claudeConfigMainService.js'
@@ -118,6 +123,25 @@ registerSingletonFactory(
       undefined,
       undefined,
       undefined,
+      acc.get(ILoggerService),
+    ),
+)
+registerSingletonFactory(
+  IExtensionGalleryService,
+  (acc) =>
+    new ExtensionGalleryMainService(
+      acc.get(IEnvironmentMainService),
+      undefined,
+      acc.get(ILoggerService),
+    ),
+)
+registerSingletonFactory(
+  IExtensionManagementService,
+  (acc) =>
+    new ExtensionManagementMainService(
+      undefined,
+      undefined,
+      acc.get(IExtensionGalleryService),
       acc.get(ILoggerService),
     ),
 )

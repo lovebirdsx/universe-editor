@@ -23,6 +23,7 @@ import {
   APP_DATA,
   CLI_OPTIONS,
   CONFIG_DIR,
+  GALLERY_URL,
   HELP,
   HOME,
   IS_E2E,
@@ -146,6 +147,10 @@ export class EnvironmentMainService {
 
   get updateUrl(): string | undefined {
     return this._resolver.get(UPDATE_URL)
+  }
+
+  get galleryUrl(): string | undefined {
+    return this._resolver.get(GALLERY_URL)
   }
 
   /**

@@ -52,6 +52,8 @@ import {
 } from '../shared/ipc/services.js'
 import { IAcpHostService } from '../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../shared/ipc/extensionHostService.js'
+import { IExtensionManagementService } from '../shared/ipc/extensionManagementService.js'
+import { IExtensionGalleryService } from '../shared/ipc/extensionGalleryService.js'
 import { IAcpTerminalService } from '../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../shared/ipc/claudeBinaryService.js'
 import { IClaudeConfigService } from '../shared/ipc/claudeConfigService.js'
@@ -336,6 +338,8 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       recentWorkspaces: accessor.get(IRecentWorkspacesService),
       acpHost: accessor.get(IAcpHostService),
       extensionHost: accessor.get(IExtensionHostService),
+      extensionManagement: accessor.get(IExtensionManagementService),
+      extensionGallery: accessor.get(IExtensionGalleryService),
       acpTerminal: accessor.get(IAcpTerminalService),
       claudeBinary: accessor.get(IClaudeBinaryService),
       claudeConfig: accessor.get(IClaudeConfigService),

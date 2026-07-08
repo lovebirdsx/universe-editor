@@ -292,6 +292,12 @@ import {
   UndoExplorerFileOperationAction,
   RedoExplorerFileOperationAction,
 } from './explorerUndoActions.js'
+import {
+  CheckForExtensionUpdatesAction,
+  InstallExtensionFromVsixAction,
+  ShowExtensionsAction,
+  UninstallExtensionAction,
+} from './extensionsActions.js'
 
 // Layout
 registerAction2(ToggleActivityBarVisibilityAction)
@@ -616,3 +622,7 @@ registerAction2(OutlineNavigateRightAction)
 // is focused (and explorer.enableUndo is on).
 registerAction2(UndoExplorerFileOperationAction)
 registerAction2(RedoExplorerFileOperationAction)
+registerAction2(InstallExtensionFromVsixAction)
+registerAction2(UninstallExtensionAction)
+registerAction2(ShowExtensionsAction)
+registerAction2(CheckForExtensionUpdatesAction)

@@ -93,3 +93,11 @@ export function satisfies(version: string, range: string): boolean {
       return false
   }
 }
+
+/**
+ * Compare two semver strings: -1 / 0 / 1. Unparseable versions sort as 0.0.0.
+ * Prerelease/build metadata ignored (mirrors {@link satisfies}).
+ */
+export function compareVersions(a: string, b: string): number {
+  return compare(parseVersion(a) ?? [0, 0, 0], parseVersion(b) ?? [0, 0, 0])
+}

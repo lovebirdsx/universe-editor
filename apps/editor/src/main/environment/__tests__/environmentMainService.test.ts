@@ -104,6 +104,26 @@ describe('updateUrl', () => {
   })
 })
 
+describe('galleryUrl', () => {
+  it('resolves cli > env', () => {
+    const env = make({
+      argv: ['node', 'main.js', '--gallery-url=http://cli/'],
+      env: { UNIVERSE_GALLERY_URL: 'http://env/' },
+    })
+    expect(env.galleryUrl).toBe('http://cli/')
+  })
+
+  it('skips an invalid (non-http) url', () => {
+    const env = make({ argv: ['node', 'main.js', '--gallery-url=ftp://bad/'] })
+    expect(env.galleryUrl).toBeUndefined()
+  })
+
+  it('is undefined by default (OSS: no marketplace)', () => {
+    const env = make({})
+    expect(env.galleryUrl).toBeUndefined()
+  })
+})
+
 describe('configDir', () => {
   it('falls back to userData when nothing overrides it', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ue-cfg-'))

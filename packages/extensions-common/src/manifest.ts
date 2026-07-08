@@ -120,6 +120,12 @@ export interface IExtensionContributionsDto extends Omit<
   jsonValidation?: IResolvedJsonValidation[]
 }
 
+/**
+ * `repository` may be a plain url string or the npm-style `{ type, url }` object.
+ * Marketplace UI only needs the url; both forms are accepted (additive).
+ */
+export type IExtensionRepository = string | { type?: string; url: string }
+
 /** The subset of an extension `package.json` the host cares about. */
 export interface IExtensionManifest {
   name: string
@@ -132,6 +138,21 @@ export interface IExtensionManifest {
   engines: { universe: string }
   activationEvents?: string[]
   contributes?: IExtensionContributions
+  // --- Marketplace display metadata (all optional, purely additive) ---
+  /** Category ids for filtering; see `EXTENSION_CATEGORIES`. */
+  categories?: string[]
+  /** Free-form search keywords. */
+  keywords?: string[]
+  /** Icon path relative to the extension root (recommended 128×128 png). */
+  icon?: string
+  /** Source repository link for the details page. */
+  repository?: IExtensionRepository
+  /** Homepage link for the details page. */
+  homepage?: string
+  /** SPDX license identifier. */
+  license?: string
+  /** Renders a "preview" badge in the marketplace. */
+  preview?: boolean
 }
 
 /**

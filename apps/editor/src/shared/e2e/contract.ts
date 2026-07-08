@@ -371,6 +371,13 @@ export interface E2EProbe {
   getScmSourceControlCount(): number
   /** Commit input box value of the first SCM source control (undefined if none). */
   getScmInputBoxValue(): string | undefined
+  // -- Extension management probe -------------------------------------------
+  /** Install a local `.vsix`, returning the installed extension's identifier. */
+  installVsixExtension(vsixPath: string): Promise<string>
+  /** Uninstall an extension by identifier. */
+  uninstallExtension(identifier: string): Promise<void>
+  /** Identifiers of every user-installed extension. */
+  getInstalledExtensionIds(): Promise<readonly string[]>
   // -- Markdown language server probe ---------------------------------------
   /**
    * Flattened document-symbol names for an open markdown file, via the markdown

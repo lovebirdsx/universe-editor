@@ -35,6 +35,8 @@ import {
 import { IResourceAccessService } from '../../shared/ipc/resourceAccessService.js'
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
+import { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
+import { IExtensionGalleryService } from '../../shared/ipc/extensionGalleryService.js'
 import { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import { ITerminalService } from '../../shared/ipc/terminalService.js'
 import { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
@@ -76,6 +78,8 @@ export const PROXY_SERVICE_BINDINGS: readonly ProxyServiceBinding[] = [
   { id: ILogFilesService, channel: ServiceChannels.LogFiles },
   { id: IAcpHostService, channel: ServiceChannels.AcpHost },
   { id: IExtensionHostService, channel: ServiceChannels.ExtensionHost },
+  { id: IExtensionManagementService, channel: ServiceChannels.ExtensionManagement },
+  { id: IExtensionGalleryService, channel: ServiceChannels.ExtensionGallery },
   { id: IAcpTerminalService, channel: ServiceChannels.AcpTerminal },
   { id: ITerminalService, channel: ServiceChannels.Terminal },
   { id: IClaudeBinaryService, channel: ServiceChannels.ClaudeBinary },

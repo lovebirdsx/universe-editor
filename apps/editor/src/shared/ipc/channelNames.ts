@@ -35,6 +35,8 @@ export const ServiceChannels = {
   Performance: 'performance',
   Lifecycle: 'lifecycle',
   ExtensionHost: 'extensionHost',
+  ExtensionManagement: 'extensionManagement',
+  ExtensionGallery: 'extensionGallery',
   SessionSwitcher: 'sessionSwitcher',
   RendererSessions: 'rendererSessions',
   Usage: 'usage',

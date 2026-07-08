@@ -61,7 +61,15 @@ export default defineConfig({
       // Dev only: the main sourcemap (~1.2MB) is dead weight inside the asar in
       // production and inflates Defender's first-run scan.
       sourcemap: process.env['NODE_ENV'] !== 'production',
-      externalizeDeps: { exclude: ['@universe-editor/platform'] },
+      externalizeDeps: {
+        exclude: [
+          '@universe-editor/platform',
+          '@universe-editor/extensions-common',
+          '@universe-editor/extension-api',
+          '@universe-editor/extension-gallery',
+          '@universe-editor/extension-packaging',
+        ],
+      },
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/main/index.ts') },
       },

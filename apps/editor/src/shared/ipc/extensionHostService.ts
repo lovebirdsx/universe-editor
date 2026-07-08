@@ -57,6 +57,12 @@ export interface ExtHostStartSpec {
    * the default `package.nls.json` (English) bundle.
    */
   readonly locale?: string
+  /**
+   * Identifiers to skip when scanning (disabled / quarantined extensions).
+   * A disabled extension is filtered out of the scan entirely, so it never
+   * activates. Restricted host only.
+   */
+  readonly disabledIds?: readonly string[]
 }
 
 /**

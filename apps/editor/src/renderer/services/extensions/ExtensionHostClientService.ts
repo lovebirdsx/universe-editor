@@ -48,6 +48,7 @@ import {
   type ExtHostKind,
   type ExtHostStartSpec,
 } from '../../../shared/ipc/extensionHostService.js'
+import { IExtensionManagementService } from '../../../shared/ipc/extensionManagementService.js'
 import { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 import { getCurrentLocale } from '../../../shared/i18n/availableLocales.js'
@@ -69,6 +70,13 @@ export interface IExtensionHostClientService {
   readonly onDidChangeContributions: Event<readonly IExtensionDescriptionDto[]>
   /** Activate every extension whose activationEvents match `event`, in both tiers. */
   activateByEvent(event: string): Promise<void>
+  /**
+   * Re-scan the restricted (external) tier after its installed set changed
+   * (install / uninstall). Starts the tier if it wasn't running (first-ever
+   * install), restarts it if it was, and re-emits contributions so the newly
+   * added / removed extensions' commands take effect.
+   */
+  refreshExtensions(): Promise<void>
   /** Execute a command contributed by an activated extension, via its owning tier. */
   executeContributedCommand(id: string, args: unknown[]): Promise<unknown>
   /** The trusted host's language RPC proxy, once connected (trusted-only). */
@@ -137,6 +145,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @ILayoutService private readonly _layout: ILayoutService,
     @IViewsService private readonly _views: IViewsService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+    @IExtensionManagementService private readonly _management: IExtensionManagementService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'extHostClient', name: 'Extension Host' })
@@ -203,10 +212,12 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   private async _connect(kind: ExtHostKind): Promise<void> {
     await this._workspace.whenReady
     const workspaceRoot = this._workspace.current?.folder.fsPath
+    const disabledIds = kind === 'restricted' ? await this._management.getDisabledIds() : []
     const spec: ExtHostStartSpec = {
       kind,
       locale: getCurrentLocale(),
       ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
+      ...(disabledIds.length > 0 ? { disabledIds } : {}),
     }
     const { handle } = await this._host.start(spec)
 
@@ -283,6 +294,19 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   async activateByEvent(event: string): Promise<void> {
     await this.start()
     await Promise.all(this._liveConnections().map((c) => c.extensions.$activateByEvent(event)))
+  }
+
+  async refreshExtensions(): Promise<void> {
+    // A live restricted tier is stopped + relaunched so it re-scans the changed
+    // set; if none is running this is the first-ever install, so clear the
+    // memoized "no external extensions" start (which early-returned without a
+    // connection) before relaunching. `_restart` handles both — it skips the stop
+    // when there's no current connection — and re-emits contributions + re-runs
+    // startup activation so the added / removed extensions take effect.
+    if (!this._restricted) {
+      this._startingRestricted = undefined
+    }
+    await this._restart('restricted', 'workspace')
   }
 
   async executeContributedCommand(id: string, args: unknown[]): Promise<unknown> {

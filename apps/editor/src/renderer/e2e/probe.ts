@@ -63,6 +63,7 @@ import {
 import type { IScmService } from '../services/extensions/ScmService.js'
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { ExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
+import type { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
 
 export interface E2EProbeServices {
   readonly commandService: ICommandService
@@ -89,6 +90,7 @@ export interface E2EProbeServices {
   readonly timerService: ITimerService
   readonly explorerTreeService: ExplorerTreeService
   readonly fileService: IFileService
+  readonly extensionManagementService: IExtensionManagementService
   /**
    * Resolves once the one-shot bootstrap focus restore has landed. That restore
    * is fire-and-forget and runs AFTER LifecyclePhase.Restored, so specs must
@@ -457,6 +459,16 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getScmSourceControlCount: (): number => services.scmService.sourceControls.get().length,
     getScmInputBoxValue: (): string | undefined =>
       services.scmService.sourceControls.get()[0]?.inputValue.get(),
+    installVsixExtension: async (vsixPath: string): Promise<string> => {
+      const local = await services.extensionManagementService.installVSIX(vsixPath)
+      return local.identifier
+    },
+    uninstallExtension: (identifier: string): Promise<void> =>
+      services.extensionManagementService.uninstall(identifier),
+    getInstalledExtensionIds: async (): Promise<readonly string[]> => {
+      const list = await services.extensionManagementService.getInstalled()
+      return list.map((e) => e.identifier)
+    },
     getMarkdownDocumentSymbols: async (uri: string): Promise<readonly string[]> => {
       const monacoNs = await MonacoLoader.ensureInitialized()
       const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))

@@ -83,6 +83,10 @@ catalog:
   # Archive extraction (on-demand claude binary download)
   tar: ^7.4.3
 
+  # VSIX (zip) read + extract for the extension packaging package
+  adm-zip: ^0.5.16
+  '@types/adm-zip': ^0.5.7
+
   # TOML parse/stringify (Codex config file `~/.codex/config.toml`)
   smol-toml: ^1.3.0
   '@vscode/ripgrep': ^1.18.0

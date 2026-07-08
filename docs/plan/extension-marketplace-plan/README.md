@@ -175,7 +175,9 @@ apps/editor/src/
 
 按"能尽早跑通一个最小闭环"排序，每个阶段独立可验证：
 
-### Phase A — 本地安装闭环（不依赖市场后端）
+> **实施状态（截至 2026-07）**：Phase A–D 已全部落地并通过 `pnpm check`；Phase E 按既定决策不做，仅登记为未来路线。实施中确定的次级问题决策见 [§6](#6-实施中已拍板的次级问题决策)。
+
+### Phase A — 本地安装闭环（不依赖市场后端） ✅ 已完成
 > 目标：能从一个 `.vsix` 文件手动安装扩展并生效。这把整条"落盘→重扫→生效"链路打通，且不阻塞在后端。
 
 - `extension-packaging` 包：VSIX 读取 + manifest 抽取 + 完整性校验
@@ -185,7 +187,7 @@ apps/editor/src/
 - 安装后触发 restricted host 重扫（复用现有重启机制）
 - **验证**：手动打包一个内置扩展成 vsix → 装 → 命令面板出现其命令 → 卸载消失
 
-### Phase B — 市场查询与安装
+### Phase B — 市场查询与安装 ✅ 已完成
 > 目标：接入自建后端，能搜索并一键安装。
 
 - `extension-gallery` 包：`/extensionquery` 请求构造 + 响应解析
@@ -195,7 +197,7 @@ apps/editor/src/
 - control manifest 拉取（恶意/弃用清单）
 - **验证**：配置指向后端（或临时 open-vsx 实例）→ 搜索 → 安装 → 生效
 
-### Phase C — 管理 UI
+### Phase C — 管理 UI ✅ 已完成
 > 目标：图形化的扩展视图与详情页。
 
 - Extensions 视图容器 + 视图（对标套路 B）
@@ -204,15 +206,15 @@ apps/editor/src/
 - 状态：安装中/已装/可更新 徽标
 - **验证**：e2e 冒烟——打开视图、搜索、安装、卸载
 
-### Phase D — 更新与信任
+### Phase D — 更新与信任 ✅ 已完成
 > 目标：生态运维能力。
 
 - 检查更新 / 自动更新（复用 UpdateContribution 的调度思路）
 - 发布者信任提示（首次安装某发布者弹确认）
-- 启用/禁用 UI
+- 启用/禁用（全局粒度）+ 恶意扩展启动时自动隔离
 - **验证**：装旧版→有更新徽标→更新到新版
 
-### Phase E（后置）— 硬隔离与签名
+### Phase E（后置）— 硬隔离与签名 ⏸️ 未做（登记未来路线）
 > 决策已定：MVP 不做。此处仅登记未来路线，见 [05-security-and-trust.md](./05-security-and-trust.md)。
 
 - Node 权限模型默认开启且可靠
@@ -220,14 +222,14 @@ apps/editor/src/
 
 ---
 
-## 6. 需要你后续拍板的次级问题
+## 6. 实施中已拍板的次级问题（决策）
 
-这些不阻塞方案成型，但实施前需明确（在各子文档里详述，此处汇总）：
+原方案 §6 列出四个待拍板问题，实施阶段按如下决策落地：
 
-1. **扩展 id 规范**：是否强制 `publisher.name` 且 publisher 必填？（VSCode 强制；我们现在 publisher 可选）→ 见 01 文档
-2. **市场后端形态**：完全自研 `/extensionquery` 服务，还是先起一个 open-vsx 实例？→ 见 02 文档
-3. **内置扩展是否也进市场**：git/markdown 等内置扩展是保持随包发布（System 类型不可卸），还是也上架市场？→ 见 03 文档
-4. **启用/禁用粒度**：MVP 只做全局，还是要 workspace 级？→ 见 03 文档
+1. **扩展 id 规范**：market 安装强制 `publisher.name`（发布者必填，防投毒校验依赖它）；本地 `.vsix` 仍容忍无 publisher 的扩展（id 退化为 name），照顾内置扩展打包场景。
+2. **市场后端形态**：客户端对齐 `/extensionquery`（`3.0-preview.1`），后端形态不锁死；`GALLERY_URL` 默认空 = OSS 语义（未配置则市场搜索为空，仅本地 `.vsix` 可用），可随时指向自建服务或 open-vsx 实例。
+3. **内置扩展是否进市场**：内置扩展为 System 类型（随包发布、不可卸），与用户从市场/VSIX 安装的 User 类型区分；市场只管理 User 扩展。
+4. **启用/禁用粒度**：MVP 只做**全局**启用/禁用（持久化在 `extensions.json`，restricted host 扫描时按 `UNIVERSE_DISABLED_EXTENSIONS` 过滤），workspace 级后置。
 
 ---
 

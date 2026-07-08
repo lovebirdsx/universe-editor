@@ -95,6 +95,8 @@ function makeOpts() {
       acpHost: {} as never,
       acpTerminal: {} as never,
       extensionHost: {} as never,
+      extensionManagement: {} as never,
+      extensionGallery: {} as never,
       typescriptLanguage: {} as never,
       claudeBinary: {} as never,
       claudeConfig: {} as never,
