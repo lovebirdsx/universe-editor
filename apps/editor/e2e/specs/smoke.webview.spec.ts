@@ -243,6 +243,26 @@ test.describe('@p1 webview custom editor', () => {
     await expect
       .poll(() => workbench.getContextKey<boolean>('quickInputVisible'), { timeout: 10000 })
       .toBe(true)
+    await workbench.page.keyboard.press('Escape')
+
+    // Ctrl+W from inside the webview must be neutralised: unblocked, Electron's
+    // native close-tab closes the WHOLE WINDOW (not just the tab). The bootstrap
+    // must preventDefault it (defaultPrevented === true) so only the forwarded
+    // host command (Close Editor) runs. defaultPrevented === false here means the
+    // native window-close would have fired — the exact bug this guards.
+    const closeTabPrevented = await frame.locator('body').evaluate((body) => {
+      const ev = new KeyboardEvent('keydown', {
+        key: 'w',
+        code: 'KeyW',
+        keyCode: 87,
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      })
+      body.dispatchEvent(ev)
+      return ev.defaultPrevented
+    })
+    expect(closeTabPrevented).toBe(true)
 
     await workbench.page.evaluate((id) => window.__E2E__!.uninstallExtension(id), installedId)
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })

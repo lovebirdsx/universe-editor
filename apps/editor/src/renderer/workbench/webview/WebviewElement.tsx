@@ -224,16 +224,18 @@ export function WebviewElement({ panel }: { panel: IWebviewPanelModel }) {
  * iframe boundary). Injected just after <head> so it runs before the page's own
  * scripts.
  *
- * Crucially, keystrokes that would trigger a BROWSER-native action (print,
- * find, save, undo/redo) are suppressed in the iframe before being forwarded —
- * otherwise Ctrl+P fires BOTH the host's Go to File AND the webview's own print.
- * We use `stopImmediatePropagation()` + `preventDefault()` (not just
- * preventDefault): pdf.js registers a capture-phase `window` keydown listener
- * that calls `window.print()` DIRECTLY (not a native default we could cancel),
- * so only stopping propagation to its listener works. Our bootstrap runs before
- * the page's own scripts (injected right after <head>) and also listens in the
- * capture phase, so it fires first and can stop the chain. This mirrors VSCode's
- * webview `handleInnerKeydown` (see vscode `webview/browser/pre/index.html`).
+ * Crucially, keystrokes that would trigger a BROWSER/Electron-native action
+ * (print, find, save, undo/redo, close-tab, new-window, refresh) are neutralised
+ * in the iframe before being forwarded — otherwise the frame acts on them IN
+ * ADDITION to the host command. The worst offender is Ctrl+W: unblocked, its
+ * native "close" closes the whole WINDOW, not just the tab (the bug this mirrors
+ * of VSCode's handleInnerKeydown fixes). We `preventDefault()` all of them, and
+ * for the subset the page's own scripts handle via a capture listener and act on
+ * DIRECTLY (pdf.js calls `window.print()` — not a native default preventDefault
+ * could cancel: P/F/S/Z/Y) we ALSO `stopImmediatePropagation()`. Our bootstrap
+ * runs before the page's own scripts (injected right after <head>) and listens in
+ * the capture phase, so it fires first and can stop the chain. This mirrors
+ * VSCode's webview `handleInnerKeydown` (see vscode `webview/browser/pre/index.html`).
  * Plain typing (a key with no ctrl/alt/meta) stays entirely in the webview.
  */
 function injectBootstrap(html: string): string {
@@ -252,10 +254,22 @@ function injectBootstrap(html: string): string {
       if (!d || d[CH] !== true) return;
       window.dispatchEvent(new MessageEvent('message', { data: d.payload }));
     });
-    // Suppress in-webview shortcuts the host owns, so e.g. Ctrl+P doesn't also
-    // pop the webview's own (pdf.js) print. keyCodes: P=80 F=70 S=83 Z=90 Y=89
-    // (with ctrl/meta). Matches VSCode's isPrint/isFind/isSave/isUndoRedo.
-    function isNativeShortcut(e){
+    // Keys that trigger a BROWSER/Electron-native action we must block inside the
+    // iframe, otherwise the frame acts on them in ADDITION to the host command we
+    // forward. keyCodes (with ctrl/meta): P=80 F=70 S=83 Z=90 Y=89 W=87 N=78 R=82.
+    // Ctrl+W is the critical one — left unblocked, Electron's native close closes
+    // the whole WINDOW (not just the tab). Mirrors VSCode's handleInnerKeydown
+    // (isPrint/isFind/isSave/isUndoRedo/isCloseTab/isNewWindow/isRefresh).
+    function isNativeBrowserAction(e){
+      const meta = e.ctrlKey || e.metaKey;
+      return meta && (e.keyCode === 80 || e.keyCode === 70 || e.keyCode === 83
+        || e.keyCode === 90 || e.keyCode === 89
+        || e.keyCode === 87 || e.keyCode === 78 || e.keyCode === 82);
+    }
+    // Subset the page's own scripts (pdf.js) also handle via a capture listener
+    // and act on DIRECTLY (e.g. window.print()), which preventDefault can't cancel
+    // — only stopping propagation to their listener works. P/F/S/Z/Y.
+    function isPageHandledShortcut(e){
       const meta = e.ctrlKey || e.metaKey;
       return meta && (e.keyCode === 80 || e.keyCode === 70 || e.keyCode === 83
         || e.keyCode === 90 || e.keyCode === 89);
@@ -266,7 +280,8 @@ function injectBootstrap(html: string): string {
     window.addEventListener('keydown', function(e){
       if (e.isComposing) return;
       if (!e.ctrlKey && !e.altKey && !e.metaKey) return;
-      if (isNativeShortcut(e)) { e.preventDefault(); e.stopImmediatePropagation(); }
+      if (isNativeBrowserAction(e)) e.preventDefault();
+      if (isPageHandledShortcut(e)) e.stopImmediatePropagation();
       parent.postMessage({ [KEY_CH]: true, init: {
         key: e.key, code: e.code,
         ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey, metaKey: e.metaKey,
