@@ -33,6 +33,42 @@ export const APP_PROTOCOL_SCHEME = 'universe-app'
 export const APP_SHELL_URL = `${APP_PROTOCOL_SCHEME}://root/index.html`
 /** Path prefix (under the shell origin) that addresses an arbitrary local resource. */
 export const RESOURCE_PATH_PREFIX = '_resource_'
+/**
+ * Path (under the shell origin) of the blank bootstrap document a webview iframe
+ * navigates to before its HTML is written. Served WITHOUT a CSP header so the
+ * extension's own `<meta>` CSP governs the webview — an `about:blank` iframe would
+ * instead inherit the shell's strict CSP and pdf.js-style module/inline scripts
+ * would be refused. KEEP IN SYNC with `WEBVIEW_BLANK_PATH` in
+ * `packages/extensions-common/src/webviewProtocol.ts`.
+ */
+export const WEBVIEW_BLANK_PATH = '_webview_blank_'
+
+/**
+ * Marker on the postMessage the renderer sends to hand the extension HTML to the
+ * blank document's loader (see WEBVIEW_BLANK_DOCUMENT). KEEP IN SYNC with
+ * `WEBVIEW_SETUP_MARKER` in `packages/extensions-common/src/webviewProtocol.ts`.
+ */
+const WEBVIEW_SETUP_MARKER = '__universe_webview_setup__'
+
+/**
+ * The blank bootstrap document served at {@link WEBVIEW_BLANK_PATH}. It carries a
+ * tiny loader instead of being written to directly, because the renderer's page
+ * and this document are cross-origin in dev (http://localhost vs
+ * universe-app://root) and `document.write` across origins throws. The loader
+ * waits for the WEBVIEW_SETUP_MARKER message, then does the same-origin write of
+ * the extension's HTML into its own document.
+ */
+const WEBVIEW_BLANK_DOCUMENT = `<!DOCTYPE html><html><head></head><body><script>
+(function () {
+  window.addEventListener('message', function (e) {
+    var d = e.data
+    if (!d || d.${WEBVIEW_SETUP_MARKER} !== true || typeof d.html !== 'string') return
+    document.open()
+    document.write(d.html)
+    document.close()
+  })
+})();
+</script></body></html>`
 
 export { allowResourceRoots } from './resourceRoots.js'
 
@@ -140,12 +176,30 @@ export function installAppProtocolHandler(packagedRendererDir: string): void {
     // handler. So local resources are addressed by a path prefix, not an
     // authority.
     if (url.hostname === 'root') {
+      if (url.pathname === `/${WEBVIEW_BLANK_PATH}`) {
+        // Blank bootstrap document for webview iframes. Intentionally ships NO
+        // Content-Security-Policy: the iframe's real HTML (handed in after this
+        // loads) carries the extension's own CSP, which only applies because this
+        // document doesn't force a stricter one to be inherited. It writes itself
+        // via a loader (see WEBVIEW_BLANK_DOCUMENT) because the renderer is
+        // cross-origin in dev and can't document.write across origins.
+        return new Response(WEBVIEW_BLANK_DOCUMENT, {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        })
+      }
       if (url.pathname.startsWith(`/${RESOURCE_PATH_PREFIX}/`)) {
         // Arbitrary local resource — only inside an allow-listed root.
         const encoded = url.pathname.slice(RESOURCE_PATH_PREFIX.length + 2)
         const target = decodeResourcePath('/' + encoded)
         if (!target) return new Response('Bad Request', { status: 400 })
-        if (!isPathAllowed(target)) return new Response('Forbidden', { status: 403 })
+        if (!isPathAllowed(target)) {
+          // Not under any allow-listed root — usually a webview/markdown preview
+          // whose `localResourceRoots` grant hasn't landed (or is missing the
+          // document's own dir). Log the rejected path so such 403s aren't silent.
+          console.warn(`[resourceProtocol] 403 (not in allow-listed roots): ${target}`)
+          return new Response('Forbidden', { status: 403 })
+        }
         return serveFile(target)
       }
       // Shell + assets: everything under the packaged renderer dir.

@@ -10,6 +10,7 @@
  */
 
 import type { ScmApi, SourceControl } from './scm.js'
+import type { CustomEditorOptions, CustomReadonlyEditorProvider } from './webview.js'
 import type {
   CompletionItem,
   CompletionList,
@@ -33,6 +34,7 @@ import type {
 } from 'vscode-languageserver-types'
 
 export * from './scm.js'
+export * from './webview.js'
 
 /** Re-exported LSP types that appear in language-provider signatures, so plugin
  *  authors get a self-contained API surface (the Universe equivalent of `vscode.d.ts`). */
@@ -68,7 +70,7 @@ export { FoldingRangeKind } from 'vscode-languageserver-types'
 /** Semantic version of this API surface. The host checks `engines.universe`.
  *  Bumping this is governed by COMPATIBILITY.md — keep it in sync with the
  *  package.json version and the contract test's frozen snapshot. */
-export const version = '0.1.0'
+export const version = '0.2.0'
 
 export interface Disposable {
   dispose(): void
@@ -178,6 +180,17 @@ export interface WindowApi {
   readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined>
   /** Create a reusable decoration style for {@link TextEditor.setDecorations}. */
   createTextEditorDecorationType(options: DecorationRenderOptions): TextEditorDecorationType
+  /**
+   * Register a webview-backed custom editor for `viewType`. The `viewType` must
+   * match a `contributes.customEditors[].viewType` entry so the workbench knows
+   * which files route here. The workbench owns the editor tab + webview iframe
+   * and calls the provider's `resolveCustomEditor` for each opened resource.
+   */
+  registerCustomEditorProvider(
+    viewType: string,
+    provider: CustomReadonlyEditorProvider,
+    options?: CustomEditorOptions,
+  ): Disposable
 }
 
 /** A text document open in the editor. URIs/positions are LSP-shaped. */
@@ -642,6 +655,11 @@ interface IExtensionHostBridge {
   createOutputChannel(name: string): OutputChannel
   readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined>
   createTextEditorDecorationType(options: DecorationRenderOptions): TextEditorDecorationType
+  registerCustomEditorProvider(
+    viewType: string,
+    provider: CustomReadonlyEditorProvider,
+    options?: CustomEditorOptions,
+  ): Disposable
   registerDefinitionProvider(selector: DocumentSelector, provider: DefinitionProvider): Disposable
   registerReferenceProvider(selector: DocumentSelector, provider: ReferenceProvider): Disposable
   registerImplementationProvider(
@@ -724,6 +742,8 @@ export const window: WindowApi = {
   getActiveTextEditor: () => bridge().getActiveTextEditor(),
   onDidChangeActiveTextEditor: (listener) => bridge().onDidChangeActiveTextEditor(listener),
   createTextEditorDecorationType: (options) => bridge().createTextEditorDecorationType(options),
+  registerCustomEditorProvider: (viewType, provider, options) =>
+    bridge().registerCustomEditorProvider(viewType, provider, options),
 }
 
 export const scm: ScmApi = {

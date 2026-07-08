@@ -53,6 +53,7 @@ import { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesSe
 import { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 import { getCurrentLocale } from '../../../shared/i18n/availableLocales.js'
 import { IScmService } from './ScmService.js'
+import { IWebviewService } from './WebviewService.js'
 import { HostConnection, type HostConnectionDeps } from './HostConnection.js'
 
 export interface IExtensionHostClientService {
@@ -134,6 +135,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @IStatusBarService private readonly _statusBar: IStatusBarService,
     @IDialogService private readonly _dialog: IDialogService,
     @IScmService private readonly _scm: IScmService,
+    @IWebviewService private readonly _webview: IWebviewService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IFileService private readonly _files: IFileService,
     @IAcpPathPolicy private readonly _pathPolicy: IAcpPathPolicy,
@@ -234,6 +236,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       pathPolicy: this._pathPolicy,
       commandService: this._commandService,
       storage: this._storage,
+      webview: this._webview,
       ...(kind === 'trusted'
         ? {
             scm: this._scm,
@@ -370,6 +373,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     // be lost when the IPC channel closes. Reset SCM state eagerly so the view
     // doesn't show stale source controls from the previous workspace.
     this._scm.resetSourceControls()
+    this._webview.reset(conn.kind)
     conn.dispose()
   }
 

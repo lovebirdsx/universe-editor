@@ -9,20 +9,26 @@
 
 import {
   Disposable,
+  DisposableStore,
   IConfigurationService,
+  IEditorResolverService,
   IFileService,
+  IInstantiationService,
   ILoggerService,
   INotificationService,
   MutableDisposable,
   NullLogger,
   Severity,
   localize,
+  type IDisposable,
   type ILogger,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import {
   STARTUP_ACTIVATION,
   STARTUP_FINISHED_ACTIVATION,
+  customEditorActivationEvent,
+  type ICustomEditorContribution,
   type IExtensionDescriptionDto,
 } from '@universe-editor/extensions-common'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
@@ -31,6 +37,7 @@ import { IExtensionManagementService } from '../../shared/ipc/extensionManagemen
 import { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
 import { IRemoteSchemaService } from '../../shared/ipc/remoteSchemaService.js'
 import { resolveSchemaFromUrl } from '../services/preferences/schemaUrlResolver.js'
+import { CustomEditorInput } from '../services/editor/CustomEditorInput.js'
 
 export class ExtensionsContribution extends Disposable implements IWorkbenchContribution {
   private readonly _translator = this._register(new MutableDisposable<ExtensionPointTranslator>())
@@ -44,6 +51,8 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
     @IFileService private readonly _fileService: IFileService,
     @IRemoteSchemaService private readonly _remoteSchema: IRemoteSchemaService,
     @INotificationService private readonly _notification: INotificationService,
+    @IEditorResolverService private readonly _editorResolver: IEditorResolverService,
+    @IInstantiationService private readonly _instantiation: IInstantiationService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -106,6 +115,34 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
     }
   }
 
+  /**
+   * Bind a contributed custom editor to the editor resolver: one glob → editor
+   * registration per selector. `priority: 'default'` auto-opens matching files
+   * (priority 100, above the catch-all file editor); otherwise it's an "option"
+   * only reachable via Reopen With (priority 1, below the file editor). Opening
+   * fires the `onCustomEditor:<viewType>` activation event so the extension
+   * registers its provider before the webview resolves. Returns a store the
+   * translator disposes when contributions are re-applied.
+   */
+  private _registerCustomEditor(editor: ICustomEditorContribution): IDisposable {
+    const store = new DisposableStore()
+    const priority = editor.priority === 'option' ? 1 : 100
+    for (const selector of editor.selector) {
+      const glob = toResolverGlob(selector.filenamePattern)
+      store.add(
+        this._editorResolver.registerEditor(
+          glob,
+          { typeId: CustomEditorInput.TYPE_ID, displayName: editor.displayName, priority },
+          (uri) => {
+            void this._client.activateByEvent(customEditorActivationEvent(editor.viewType))
+            return this._instantiation.createInstance(CustomEditorInput, editor.viewType, uri)
+          },
+        ),
+      )
+    }
+    return store
+  }
+
   /** Dispose the previous translation and re-apply the current contribution set. */
   private _applyContributions(contributions: readonly IExtensionDescriptionDto[]): void {
     this._translator.clear()
@@ -124,6 +161,7 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
           'jsonValidation',
         ),
       this._logger,
+      (editor) => this._registerCustomEditor(editor),
     )
     translator.translate(contributions)
     this._translator.value = translator
@@ -132,4 +170,15 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
     // keybindings so bindings to those commands (skipped at startup) take effect.
     void this._userKeybindings.reload()
   }
+}
+
+/**
+ * Turn a VSCode `customEditors` `filenamePattern` into an editor-resolver glob.
+ * A pattern without a slash matches by basename anywhere (e.g. `*.pdf` becomes a
+ * recursive basename glob), mirroring VSCode; a pattern that already includes a
+ * path is used as-is.
+ */
+function toResolverGlob(filenamePattern: string): string {
+  if (filenamePattern.includes('/')) return filenamePattern
+  return `**/${filenamePattern}`
 }

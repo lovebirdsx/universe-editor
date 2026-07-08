@@ -64,6 +64,17 @@ const jsonValidationSchema = z.object({
   url: z.string().min(1),
 })
 
+const customEditorSelectorSchema = z.object({
+  filenamePattern: z.string().min(1),
+})
+
+const customEditorSchema = z.object({
+  viewType: z.string().min(1),
+  displayName: z.string().min(1),
+  selector: z.array(customEditorSelectorSchema).min(1),
+  priority: z.enum(['default', 'option']).optional(),
+})
+
 const contributesSchema = z
   .object({
     commands: z.array(commandContributionSchema).optional(),
@@ -72,6 +83,7 @@ const contributesSchema = z
     keybindings: z.array(keybindingSchema).optional(),
     configuration: z.union([configurationSchema, z.array(configurationSchema)]).optional(),
     jsonValidation: z.array(jsonValidationSchema).optional(),
+    customEditors: z.array(customEditorSchema).optional(),
   })
   // Tolerate contribution points we don't understand yet (forward-compat).
   .passthrough()
@@ -93,7 +105,7 @@ const manifestSchema = z.object({
     .array(
       z.string().refine(isValidActivationEvent, {
         message:
-          'unknown activation event (expected "*", "onStartupFinished", or "onCommand:"/"onLanguage:"/"onView:" with an id)',
+          'unknown activation event (expected "*", "onStartupFinished", or "onCommand:"/"onLanguage:"/"onView:"/"onCustomEditor:" with an id)',
       }),
     )
     .optional(),

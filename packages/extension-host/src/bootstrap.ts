@@ -24,6 +24,7 @@ import {
   type IExtHostExtensions,
   type IExtHostLanguages,
   type IExtHostScm,
+  type IExtHostWebviews,
   type IMainThreadAi,
   type IMainThreadCommands,
   type IMainThreadEditor,
@@ -31,6 +32,7 @@ import {
   type IMainThreadLanguages,
   type IMainThreadOutput,
   type IMainThreadScm,
+  type IMainThreadWebviews,
   type IMainThreadWindow,
   type IMainThreadStorage,
   type StdioTransport,
@@ -96,6 +98,9 @@ const mainThreadEditor = ProxyChannel.toService<IMainThreadEditor>(
 )
 const mainThreadStorage = ProxyChannel.toService<IMainThreadStorage>(
   client.getChannel(ExtHostChannels.mainThreadStorage),
+)
+const mainThreadWebviews = ProxyChannel.toService<IMainThreadWebviews>(
+  client.getChannel(ExtHostChannels.mainThreadWebviews),
 )
 
 // Register channels synchronously so a renderer call that races the async scan
@@ -201,6 +206,17 @@ const extHostEditor: IExtHostEditor = {
     ;(await serviceReady).acceptActiveEditorChange(editor)
   },
 }
+const extHostWebviews: IExtHostWebviews = {
+  $resolveCustomEditor: async (providerHandle, panelHandle, viewType, uri) => {
+    await (await serviceReady).resolveCustomEditor(providerHandle, panelHandle, viewType, uri)
+  },
+  $onDidReceiveMessage: async (panelHandle, message) => {
+    ;(await serviceReady).acceptWebviewMessage(panelHandle, message)
+  },
+  $disposeWebviewPanel: async (panelHandle) => {
+    ;(await serviceReady).disposeWebviewPanel(panelHandle)
+  },
+}
 
 server.registerChannel(ExtHostChannels.extHostCommands, ProxyChannel.fromService(extHostCommands))
 server.registerChannel(
@@ -211,6 +227,7 @@ server.registerChannel(ExtHostChannels.extHostScm, ProxyChannel.fromService(extH
 server.registerChannel(ExtHostChannels.extHostLanguages, ProxyChannel.fromService(extHostLanguages))
 server.registerChannel(ExtHostChannels.extHostDocuments, ProxyChannel.fromService(extHostDocuments))
 server.registerChannel(ExtHostChannels.extHostEditor, ProxyChannel.fromService(extHostEditor))
+server.registerChannel(ExtHostChannels.extHostWebviews, ProxyChannel.fromService(extHostWebviews))
 
 async function main(): Promise<void> {
   const kind = process.env.UNIVERSE_EXT_HOST_KIND === 'restricted' ? 'restricted' : 'trusted'
@@ -258,6 +275,7 @@ async function main(): Promise<void> {
       mainThreadEditor,
       mainThreadAi,
       mainThreadStorage,
+      mainThreadWebviews,
     ),
   )
   console.error(`[ext-host] ready (${kind})`)

@@ -57,6 +57,7 @@ const NAMESPACE_METHODS: Record<string, readonly string[]> = {
     'getActiveTextEditor',
     'onDidChangeActiveTextEditor',
     'createTextEditorDecorationType',
+    'registerCustomEditorProvider',
   ],
   scm: ['createSourceControl'],
   ai: [

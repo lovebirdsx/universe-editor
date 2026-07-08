@@ -1,0 +1,34 @@
+{
+  "name": "universe-pdf",
+  "displayName": "PDF Viewer",
+  "description": "Display PDF files inside the editor via a webview (Mozilla pdf.js). Ported from vscode-pdf; the first webview-backed marketplace extension.",
+  "version": "0.1.0",
+  "publisher": "universe",
+  "license": "Apache-2.0",
+  "type": "module",
+  "icon": "icon.png",
+  "categories": ["Content Tools"],
+  "keywords": ["pdf", "viewer", "preview", "custom editor"],
+  "main": "dist/extension.js",
+  "engines": {
+    "universe": "^0.2.0"
+  },
+  "files": ["dist", "assets", "icon.png"],
+  "activationEvents": ["onCustomEditor:pdf.view"],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "pdf.view",
+        "displayName": "PDF View",
+        "selector": [{ "filenamePattern": "*.pdf" }],
+        "priority": "default"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "node scripts/pack.mjs"
+  }
+}

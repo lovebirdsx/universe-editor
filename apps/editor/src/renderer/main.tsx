@@ -156,6 +156,7 @@ import {
   IExtensionsWorkbenchService,
 } from './services/extensionsWorkbench/ExtensionsWorkbenchService.js'
 import { IScmService, ScmService } from './services/extensions/ScmService.js'
+import { IWebviewService, WebviewService } from './services/extensions/WebviewService.js'
 import {
   IScmDecorationsService,
   ScmDecorationsService,
@@ -579,6 +580,11 @@ async function bootstrapWorkbench(): Promise<void> {
   // ExtensionsContribution can inject it; it starts the host on an idle phase.
   const scmService = workbenchStore.add(new ScmService())
   services.set(IScmService, scmService)
+
+  // Custom-editor / webview model, shared across both extension host tiers. Set
+  // before ExtensionHostClientService is constructed so it can inject it.
+  const webviewService = workbenchStore.add(new WebviewService())
+  services.set(IWebviewService, webviewService)
 
   // Git status decorations derived from the SCM model; colours Explorer rows and
   // editor tabs by file change state.

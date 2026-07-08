@@ -18,6 +18,8 @@ import {
   type AiApi,
   type CodeActionProvider,
   type CompletionItemProvider,
+  type CustomEditorOptions,
+  type CustomReadonlyEditorProvider,
   type DecorationRenderOptions,
   type DefinitionProvider,
   type DiagnosticCollection,
@@ -69,6 +71,7 @@ import {
   type IMainThreadWindow,
   type IMainThreadAi,
   type IMainThreadStorage,
+  type IMainThreadWebviews,
 } from '@universe-editor/extensions-common'
 import type {
   CodeAction,
@@ -93,6 +96,7 @@ import type {
 import type { IScannedExtension } from './extensionScanner.js'
 import { installApiBridge, type IExtensionHostBridge } from './apiFactory.js'
 import { HostSourceControl } from './hostScm.js'
+import { HostWebviewManager } from './hostWebviews.js'
 import { HostAi } from './hostAi.js'
 import { ExtHostDocuments, HostTextDocument } from './hostDocuments.js'
 import {
@@ -120,6 +124,7 @@ export class ExtensionService implements IExtensionHostBridge {
   private readonly _activation: ExtensionActivationService
   private readonly _documents = new ExtHostDocuments()
   private readonly _sourceControls = new Map<number, HostSourceControl>()
+  private readonly _webviews?: HostWebviewManager
   private _statusBarHandle = 0
   private _scmHandle = 0
   private _outputHandle = 0
@@ -146,10 +151,12 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _mainThreadEditor?: IMainThreadEditor,
     private readonly _mainThreadAi?: IMainThreadAi,
     private readonly _mainThreadStorage?: IMainThreadStorage,
+    private readonly _mainThreadWebviews?: IMainThreadWebviews,
   ) {
     this._commands = new ExtensionCommandRegistry(_mainThreadCommands)
     this._languageRegistry = new LanguageProviderRegistry(() => this._languages(), this._documents)
     this._activation = new ExtensionActivationService(_extensions, _mainThreadStorage)
+    if (_mainThreadWebviews) this._webviews = new HostWebviewManager(_mainThreadWebviews)
     installApiBridge(this)
   }
 
@@ -212,6 +219,42 @@ export class ExtensionService implements IExtensionHostBridge {
     const handle = this._outputHandle++
     void this._mainThreadOutput.$registerOutputChannel(handle, name)
     return new HostOutputChannel(handle, name, this._mainThreadOutput)
+  }
+
+  // --- IExtensionHostBridge: webview / custom editors ---
+
+  registerCustomEditorProvider(
+    viewType: string,
+    provider: CustomReadonlyEditorProvider,
+    options?: CustomEditorOptions,
+  ): Disposable {
+    if (!this._webviews) {
+      throw new Error('custom editor support is not available in this extension host')
+    }
+    return this._webviews.registerCustomEditorProvider(viewType, provider, options)
+  }
+
+  /** IExtHostWebviews.$resolveCustomEditor */
+  resolveCustomEditor(
+    providerHandle: number,
+    panelHandle: number,
+    viewType: string,
+    uri: UriComponents,
+  ): Promise<void> {
+    if (!this._webviews) {
+      throw new Error('custom editor support is not available in this extension host')
+    }
+    return this._webviews.resolveCustomEditor(providerHandle, panelHandle, viewType, uri)
+  }
+
+  /** IExtHostWebviews.$onDidReceiveMessage */
+  acceptWebviewMessage(panelHandle: number, message: unknown): void {
+    this._webviews?.acceptMessage(panelHandle, message)
+  }
+
+  /** IExtHostWebviews.$disposeWebviewPanel */
+  disposeWebviewPanel(panelHandle: number): void {
+    this._webviews?.disposePanel(panelHandle)
   }
 
   // --- IExtensionHostBridge: scm ---
@@ -636,6 +679,7 @@ export class ExtensionService implements IExtensionHostBridge {
    * orphan when the host process dies.
    */
   dispose(): void {
+    this._webviews?.dispose()
     this._activation.disposeAll()
   }
 }

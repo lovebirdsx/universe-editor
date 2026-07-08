@@ -72,6 +72,11 @@
 
 - `0.1.0` — 首个有记录的 API 表面。namespaces：`commands` / `window` / `workspace` /
   `languages` / `scm` / `ai`。契约测试与本策略文档同时建立。
+- `0.2.0` — 新增 webview / 自定义编辑器表面（向后兼容的新增，minor）：
+  `window.registerCustomEditorProvider` + `Webview` / `WebviewPanel` /
+  `WebviewOptions` / `CustomDocument` / `CustomEditorOptions` /
+  `CustomReadonlyEditorProvider`（`src/webview.ts`）。新增激活事件
+  `onCustomEditor:<viewType>` 与 manifest 贡献点 `contributes.customEditors`。
 
 ## 激活事件清单（activation events）
 
@@ -92,6 +97,7 @@
 | `onCommand:<id>` | 贡献的命令首次被调用 | `ActivationEvents.onCommand(id)` |
 | `onLanguage:<languageId>` | 该语言的文档首次打开 | `ActivationEvents.onLanguage(lang)` |
 | `onView:<viewId>` | 贡献的视图首次显示 | `ActivationEvents.onView(viewId)` |
+| `onCustomEditor:<viewType>` | 该 viewType 的自定义编辑器首次打开 | `ActivationEvents.onCustomEditor(viewType)` |
 
 新增事件类型时：在 `extensions-common/src/activation.ts` 加构造器 + 把前缀加入
 `PARAMETERIZED_PREFIXES`，并更新本清单。

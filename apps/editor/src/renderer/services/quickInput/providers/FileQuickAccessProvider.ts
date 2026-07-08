@@ -8,8 +8,8 @@
 
 import {
   IEditorGroupsService,
+  IEditorResolverService,
   IFileSearchService,
-  IInstantiationService,
   IUriIdentityService,
   IWorkspaceService,
   URI,
@@ -23,8 +23,6 @@ import {
 import { IRecentFilesService } from '../../recentFiles/recentFilesService.js'
 import { IExcludeService } from '../../exclude/ExcludeService.js'
 import { resourceIconId } from '../quickPickResourceIcon.js'
-import { FileEditorInput } from '../../editor/FileEditorInput.js'
-import { openInLockAwareGroup } from '../../editor/openInLockAwareGroup.js'
 
 const GO_TO_FILE_MAX_RESULTS = 512
 const GO_TO_FILE_SEARCH_DELAY_MS = 200
@@ -46,10 +44,10 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IFileSearchService private readonly _fileSearch: IFileSearchService,
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
-    @IInstantiationService private readonly _instantiation: IInstantiationService,
     @IRecentFilesService private readonly _recentFiles: IRecentFilesService,
     @IExcludeService private readonly _exclude: IExcludeService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+    @IEditorResolverService private readonly _editorResolver: IEditorResolverService,
   ) {}
 
   provide(picker: IQuickPick<IQuickPickItem>, options: IQuickAccessProviderRunOptions): void {
@@ -58,20 +56,21 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     else this._provideRecentOnly(picker, options)
   }
 
-  /** Activate the editor if already open in any group, else open it. */
+  /** Activate the editor if already open in any group, else open it via the
+   *  editor resolver so contributed custom editors (e.g. the PDF viewer) win over
+   *  the plain text editor — mirroring how the Explorer opens files. */
   private _open(uri: URI, label: string, opts: { addRecent: boolean; pinned: boolean }): void {
     if (opts.addRecent) this._recentFiles.add(uri, label)
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
-        if (editor instanceof FileEditorInput && this._uriIdentity.isEqual(editor.resource, uri)) {
+        if (editor.resource && this._uriIdentity.isEqual(editor.resource, uri)) {
           this._groups.activateGroup(group)
           group.setActive(editor)
           return
         }
       }
     }
-    const input = this._instantiation.createInstance(FileEditorInput, uri)
-    openInLockAwareGroup(this._groups, input, { activate: true, pinned: opts.pinned })
+    void this._editorResolver.openEditor(uri, { pinned: opts.pinned })
   }
 
   private _provideWorkspace(

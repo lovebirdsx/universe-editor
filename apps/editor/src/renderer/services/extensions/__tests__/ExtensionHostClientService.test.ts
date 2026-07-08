@@ -33,6 +33,7 @@ import type { IExtensionManagementService } from '../../../../shared/ipc/extensi
 import type { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeaturesService.js'
 import type { IAcpPathPolicy } from '../../acp/acpPathPolicy.js'
 import type { IScmService } from '../ScmService.js'
+import type { IWebviewService } from '../WebviewService.js'
 
 const CONTRIBUTIONS: IExtensionDescriptionDto[] = [
   {
@@ -102,6 +103,11 @@ function makeService(host: IExtensionHostService, workspaceChange = Event.None) 
     {} as IStatusBarService,
     {} as IDialogService,
     { resetSourceControls: vi.fn() } as unknown as IScmService,
+    {
+      setExtHost: vi.fn(),
+      createMainThread: vi.fn(),
+      reset: vi.fn(),
+    } as unknown as IWebviewService,
     {
       onDidChangeWorkspace: workspaceChange,
       whenReady: Promise.resolve(),

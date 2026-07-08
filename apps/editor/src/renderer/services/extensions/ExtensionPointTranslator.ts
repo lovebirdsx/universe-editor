@@ -28,12 +28,14 @@ import {
   type IJSONSchema,
   type IKeybindingItem,
   type ILogger,
+  type IDisposable,
   NullLogger,
 } from '@universe-editor/platform'
 import {
   commandActivationEvent,
   type ICommandContribution,
   type IConfigurationContribution,
+  type ICustomEditorContribution,
   type IExtensionDescriptionDto,
   type IKeybindingContribution,
   type IMenuContribution,
@@ -71,6 +73,12 @@ export class ExtensionPointTranslator extends Disposable {
     /** Resolves an http(s) jsonValidation url into an inline schema (renderer-side download). */
     private readonly _resolveRemoteSchema?: (url: string) => Promise<IJSONSchema | undefined>,
     private readonly _logger: ILogger = new NullLogger(),
+    /**
+     * Bind a contributed custom editor to the editor resolver so matching files
+     * open in it. Supplied by ExtensionsContribution (which has DI access);
+     * returns a Disposable the translator tracks. Absent in unit tests.
+     */
+    private readonly _registerCustomEditor?: (editor: ICustomEditorContribution) => IDisposable,
   ) {
     super()
   }
@@ -97,7 +105,18 @@ export class ExtensionPointTranslator extends Disposable {
       }
       this._registerConfiguration(ext.id, contributes.configuration)
       this._registerJsonValidation(ext.id, contributes.jsonValidation ?? [])
+      for (const editor of contributes.customEditors ?? []) {
+        this._registerCustomEditorBinding(editor)
+      }
     }
+  }
+
+  private _registerCustomEditorBinding(editor: ICustomEditorContribution): void {
+    if (!this._registerCustomEditor) {
+      console.warn(`[extensions] ignoring customEditor "${editor.viewType}": no host wired`)
+      return
+    }
+    this._register(this._registerCustomEditor(editor))
   }
 
   private _registerCommand(command: ICommandContribution, hasExplicitPaletteEntry: boolean): void {

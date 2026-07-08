@@ -29,6 +29,11 @@ export function viewActivationEvent(viewId: string): string {
   return `onView:${viewId}`
 }
 
+/** The activation event fired when a custom editor of the given viewType first opens. */
+export function customEditorActivationEvent(viewType: string): string {
+  return `onCustomEditor:${viewType}`
+}
+
 /**
  * Typed builders for the supported activation events. The canonical way to
  * declare activation in a manifest, so ids stay consistent and typo-free.
@@ -39,6 +44,7 @@ export function viewActivationEvent(viewId: string): string {
  * - `onCommand(id)` — when a contributed command is first invoked.
  * - `onLanguage(languageId)` — when a document of that language first opens.
  * - `onView(viewId)` — when a contributed view is first revealed.
+ * - `onCustomEditor(viewType)` — when a custom editor of that viewType first opens.
  */
 export const ActivationEvents = {
   startup: STARTUP_ACTIVATION,
@@ -46,10 +52,11 @@ export const ActivationEvents = {
   onCommand: commandActivationEvent,
   onLanguage: languageActivationEvent,
   onView: viewActivationEvent,
+  onCustomEditor: customEditorActivationEvent,
 } as const
 
 /** Parameterized activation-event prefixes; each requires a non-empty argument. */
-const PARAMETERIZED_PREFIXES = ['onCommand:', 'onLanguage:', 'onView:'] as const
+const PARAMETERIZED_PREFIXES = ['onCommand:', 'onLanguage:', 'onView:', 'onCustomEditor:'] as const
 
 /**
  * True when `event` is a supported activation event: the two standalone events

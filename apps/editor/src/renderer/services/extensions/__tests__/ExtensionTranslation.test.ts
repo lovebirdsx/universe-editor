@@ -232,6 +232,68 @@ describe('ExtensionPointTranslator', () => {
     const uri = 'extension://claude.ext/jsonvalidation/0'
     expect(JSONContributionRegistry.getContributions().some((c) => c.uri === uri)).toBe(false)
   })
+
+  it('invokes the custom-editor callback for each contributed customEditor', () => {
+    const registered: string[] = []
+    const registerCustomEditor = vi.fn((editor: { viewType: string }) => {
+      registered.push(editor.viewType)
+      return { dispose: vi.fn() }
+    })
+    const t = new ExtensionPointTranslator(
+      vi.fn(),
+      vi.fn(),
+      undefined,
+      undefined,
+      registerCustomEditor,
+    )
+    disposables.push(t)
+    t.translate([
+      dto({
+        id: 'pdf.ext',
+        contributes: {
+          customEditors: [
+            {
+              viewType: 'pdf.view',
+              displayName: 'PDF View',
+              selector: [{ filenamePattern: '*.pdf' }],
+            },
+          ],
+        },
+      }),
+    ])
+    expect(registered).toEqual(['pdf.view'])
+    expect(registerCustomEditor).toHaveBeenCalledWith(
+      expect.objectContaining({ viewType: 'pdf.view', displayName: 'PDF View' }),
+    )
+  })
+
+  it('disposes custom-editor registrations when the translator is disposed', () => {
+    const dispose = vi.fn()
+    const registerCustomEditor = vi.fn(() => ({ dispose }))
+    const t = new ExtensionPointTranslator(
+      vi.fn(),
+      vi.fn(),
+      undefined,
+      undefined,
+      registerCustomEditor,
+    )
+    t.translate([
+      dto({
+        id: 'pdf.ext',
+        contributes: {
+          customEditors: [
+            {
+              viewType: 'pdf.view',
+              displayName: 'PDF View',
+              selector: [{ filenamePattern: '*.pdf' }],
+            },
+          ],
+        },
+      }),
+    ])
+    t.dispose()
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('MainThreadCommands', () => {

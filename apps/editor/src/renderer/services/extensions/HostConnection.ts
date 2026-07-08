@@ -42,6 +42,7 @@ import {
   type IExtHostExtensions,
   type IExtHostLanguages,
   type IExtHostScm,
+  type IExtHostWebviews,
 } from '@universe-editor/extensions-common'
 import type {
   ExtHostKind,
@@ -58,6 +59,7 @@ import { MainThreadStorage } from './MainThreadStorage.js'
 import { MainThreadWindow } from './MainThreadWindow.js'
 import type { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import type { IScmService } from './ScmService.js'
+import type { IWebviewService } from './WebviewService.js'
 import type { IAiModelService } from '@universe-editor/platform'
 
 export interface HostConnectionDeps {
@@ -81,6 +83,8 @@ export interface HostConnectionDeps {
   readonly aiModel?: IAiModelService
   /** Wired only for the trusted connection — persisted extension state. */
   readonly storage?: IStorageService
+  /** Shared across both tiers — custom-editor / webview model. */
+  readonly webview?: IWebviewService
   readonly output: IOutputService
   readonly layout: ILayoutService
   readonly views: IViewsService
@@ -209,6 +213,19 @@ export class HostConnection extends Disposable {
       server.registerChannel(
         ExtHostChannels.mainThreadStorage,
         ProxyChannel.fromService(mainThreadStorage),
+      )
+    }
+
+    if (deps.webview) {
+      deps.webview.setExtHost(
+        kind,
+        ProxyChannel.toService<IExtHostWebviews>(
+          client.getChannel(ExtHostChannels.extHostWebviews),
+        ),
+      )
+      server.registerChannel(
+        ExtHostChannels.mainThreadWebviews,
+        ProxyChannel.fromService(deps.webview.createMainThread(kind)),
       )
     }
   }

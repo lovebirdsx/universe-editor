@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   IEditorGroupsService,
+  IEditorResolverService,
   IFileSearchService,
   IInstantiationService,
   IWorkspaceService,
@@ -18,6 +19,7 @@ import {
   UriIdentityService,
   IUriIdentityService,
   type CancellationToken,
+  type IEditorResolverService as IEditorResolverServiceType,
   type IDisposable,
   type IEditorGroupsService as IEditorGroupsServiceType,
   type IFileSearchComplete,
@@ -78,6 +80,10 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   fireValue(value: string): void {
     this._value = value
     this._onDidChangeValue.fire(value)
+  }
+
+  fireAccept(items: T[]): void {
+    this._onDidAccept.fire(items)
   }
 
   show(): void {}
@@ -193,6 +199,23 @@ function makeGroups(): IEditorGroupsServiceType {
   } as unknown as IEditorGroupsServiceType
 }
 
+/** Records openEditor calls so tests can assert the picker routes through the
+ *  resolver (which picks custom editors for e.g. PDFs) rather than hard-coding a
+ *  text editor. */
+class FakeEditorResolverService implements IEditorResolverServiceType {
+  declare readonly _serviceBrand: undefined
+  readonly opened: Array<{ uri: URI; pinned: boolean | undefined }> = []
+  registerEditor(): IDisposable {
+    return { dispose() {} }
+  }
+  resolveEditors() {
+    return []
+  }
+  async openEditor(uri: URI, options?: { preferredTypeId?: string; pinned?: boolean }) {
+    this.opened.push({ uri, pinned: options?.pinned })
+  }
+}
+
 function flushPromises(): Promise<void> {
   return Promise.resolve().then(() => undefined)
 }
@@ -211,10 +234,12 @@ function setup(
   services.set(IRecentFilesService, recent)
   services.set(IExcludeService, opts.exclude ?? new FakeExcludeService())
   services.set(IUriIdentityService, new UriIdentityService('linux'))
+  const resolver = new FakeEditorResolverService()
+  services.set(IEditorResolverService, resolver)
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst as unknown as IInstantiationService)
   const provider = inst.createInstance(FileQuickAccessProvider)
-  return { provider, fileSearch, workspace }
+  return { provider, fileSearch, workspace, resolver }
 }
 
 function run(
@@ -335,5 +360,23 @@ describe('FileQuickAccessProvider', () => {
     ])
     expect(picker.items[0]).toMatchObject({ description: 'src/inside.ts' })
     expect(picker.items[1]).toMatchObject({ description: URI.file('/elsewhere/outside.ts').fsPath })
+  })
+
+  it('accepting a pick opens through the editor resolver (custom editors win)', async () => {
+    const { provider, fileSearch, resolver } = setup()
+    fileSearch.resultPaths = ['/ws/doc.pdf']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+
+    picker.fireValue('doc')
+    await vi.advanceTimersByTimeAsync(200)
+    await flushPromises()
+    expect(picker.items).toHaveLength(1)
+
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+
+    expect(resolver.opened).toHaveLength(1)
+    expect(resolver.opened[0]!.uri.fsPath).toBe(URI.file('/ws/doc.pdf').fsPath)
+    expect(resolver.opened[0]!.pinned).toBe(true)
   })
 })

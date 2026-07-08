@@ -70,9 +70,50 @@ describe('parseManifest', () => {
         'onCommand:git.commit',
         'onLanguage:typescript',
         'onView:scm',
+        'onCustomEditor:pdf.view',
       ],
     })
-    expect(m.activationEvents).toHaveLength(5)
+    expect(m.activationEvents).toHaveLength(6)
+  })
+
+  it('accepts a customEditors contribution', () => {
+    const m = parseManifest({
+      ...valid,
+      activationEvents: ['onCustomEditor:pdf.view'],
+      contributes: {
+        customEditors: [
+          {
+            viewType: 'pdf.view',
+            displayName: 'PDF View',
+            selector: [{ filenamePattern: '*.pdf' }],
+          },
+        ],
+      },
+    })
+    expect(m.contributes?.customEditors?.[0]?.viewType).toBe('pdf.view')
+    expect(m.contributes?.customEditors?.[0]?.selector?.[0]?.filenamePattern).toBe('*.pdf')
+  })
+
+  it('rejects a customEditor missing viewType', () => {
+    expect(() =>
+      parseManifest({
+        ...valid,
+        contributes: {
+          customEditors: [{ displayName: 'PDF', selector: [{ filenamePattern: '*.pdf' }] }],
+        },
+      }),
+    ).toThrow(/invalid manifest/)
+  })
+
+  it('rejects a customEditor with an empty selector', () => {
+    expect(() =>
+      parseManifest({
+        ...valid,
+        contributes: {
+          customEditors: [{ viewType: 'pdf.view', displayName: 'PDF', selector: [] }],
+        },
+      }),
+    ).toThrow(/invalid manifest/)
   })
 
   it('rejects a misspelled activation event', () => {

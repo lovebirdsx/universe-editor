@@ -72,6 +72,29 @@ export interface IConfigurationContribution {
 }
 
 /**
+ * One selector under a `contributes.customEditors[].selector[]`. Mirrors VSCode:
+ * a glob against the resource path decides whether this custom editor can open a
+ * file (e.g. `*.pdf`). The renderer translates it into an editor resolver binding.
+ */
+export interface ICustomEditorSelector {
+  filenamePattern: string
+}
+
+/**
+ * A single `contributes.customEditors[]` entry — a webview-backed editor an
+ * extension registers for matching files (via `window.registerCustomEditorProvider`
+ * at activation). `viewType` is the stable id both the manifest binding and the
+ * runtime provider registration key on.
+ */
+export interface ICustomEditorContribution {
+  viewType: string
+  displayName: string
+  selector: ICustomEditorSelector[]
+  /** VSCode's `priority`: `'default'` (auto-open) or `'option'` (Reopen With only). */
+  priority?: 'default' | 'option'
+}
+
+/**
  * A single `contributes.jsonValidation[]` entry: associates a JSON schema with
  * the files matched by `fileMatch`. `url` is a path relative to the extension
  * root (e.g. `./schemas/entity.json`), mirroring VSCode's jsonValidation point.
@@ -106,6 +129,8 @@ export interface IExtensionContributions {
   keybindings?: IKeybindingContribution[]
   configuration?: IConfigurationContribution | IConfigurationContribution[]
   jsonValidation?: IJsonValidationContribution[]
+  /** Webview-backed editors registered for matching files. */
+  customEditors?: ICustomEditorContribution[]
 }
 
 /**

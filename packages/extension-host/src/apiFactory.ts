@@ -8,6 +8,8 @@ import type {
   AiApi,
   CodeActionProvider,
   CompletionItemProvider,
+  CustomEditorOptions,
+  CustomReadonlyEditorProvider,
   DecorationRenderOptions,
   DefinitionProvider,
   DiagnosticCollection,
@@ -74,6 +76,11 @@ export interface IExtensionHostBridge {
   getActiveTextEditor(): Promise<TextEditor | undefined>
   readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined>
   createTextEditorDecorationType(options: DecorationRenderOptions): TextEditorDecorationType
+  registerCustomEditorProvider(
+    viewType: string,
+    provider: CustomReadonlyEditorProvider,
+    options?: CustomEditorOptions,
+  ): Disposable
   getWorkspaceRoot(): string | undefined
   fsReadFile(path: string): Promise<Uint8Array>
   fsWriteFile(path: string, content: Uint8Array): Promise<void>

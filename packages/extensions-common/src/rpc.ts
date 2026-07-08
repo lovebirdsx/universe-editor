@@ -65,6 +65,10 @@ export const ExtHostChannels = {
   mainThreadAi: 'mainThreadAi',
   /** Ext host → renderer: persisted key/value storage backing `context.workspaceState`/`globalState`. */
   mainThreadStorage: 'mainThreadStorage',
+  /** Ext host → renderer: custom-editor provider registration + webview panel control (html/options/postMessage). */
+  mainThreadWebviews: 'mainThreadWebviews',
+  /** Renderer → ext host: custom-editor resolution + webview message/lifecycle callbacks. */
+  extHostWebviews: 'extHostWebviews',
 } as const
 
 export type ExtHostChannelName = (typeof ExtHostChannels)[keyof typeof ExtHostChannels]
@@ -486,4 +490,56 @@ export interface IMainThreadStorage {
   $get(scope: ExtHostStorageScope, extId: string): Promise<string | undefined>
   /** Replace the whole state object for `extId` at `scope` with `valueJson`. */
   $set(scope: ExtHostStorageScope, extId: string, valueJson: string): Promise<void>
+}
+
+/** Webview capabilities crossing the wire. Mirrors the public `WebviewOptions`. */
+export interface IWebviewOptionsDto {
+  readonly enableScripts?: boolean
+  /** Extra allow-listed resource roots (abs fs paths), beyond the extension dir. */
+  readonly localResourceRoots?: readonly string[]
+}
+
+/**
+ * Ext host → exposed to the renderer: custom-editor provider registration and
+ * per-panel webview control. Providers are addressed by `providerHandle`
+ * (allocated by the host at `registerCustomEditorProvider`); live panels by
+ * `panelHandle` (allocated by the renderer when it opens a custom-editor tab and
+ * asks the host to resolve it). `html`/`options` writes flow host → renderer here;
+ * messages flow host → webview via `$postMessage`.
+ */
+export interface IMainThreadWebviews {
+  /** Announce that a custom editor for `viewType` now has a live provider in the host. */
+  $registerCustomEditorProvider(providerHandle: number, viewType: string): Promise<void>
+  $unregisterCustomEditorProvider(providerHandle: number): Promise<void>
+  /** Set the iframe capabilities + resource roots for a panel (before html). */
+  $setWebviewOptions(panelHandle: number, options: IWebviewOptionsDto): Promise<void>
+  /** Set (or replace) the panel's iframe HTML, re-rendering it. */
+  $setWebviewHtml(panelHandle: number, html: string): Promise<void>
+  /** Post a message to the scripts in the panel's webview. Resolves false if gone. */
+  $postMessageToWebview(panelHandle: number, message: unknown): Promise<boolean>
+}
+
+/**
+ * Renderer → exposed to the ext host: drives custom-editor resolution and relays
+ * webview lifecycle/messages back to the host-side provider + panel handles.
+ * When the user opens a matching file, the renderer creates the editor tab +
+ * iframe, allocates a `panelHandle`, then calls `$resolveCustomEditor` so the
+ * host runs the extension's `openCustomDocument` + `resolveCustomEditor`.
+ */
+export interface IExtHostWebviews {
+  /**
+   * Ask the host to resolve the custom editor for `viewType` against `uri` into
+   * the panel `panelHandle` the renderer just created. The host opens the
+   * document, then calls back through {@link IMainThreadWebviews} to fill it.
+   */
+  $resolveCustomEditor(
+    providerHandle: number,
+    panelHandle: number,
+    viewType: string,
+    uri: UriComponents,
+  ): Promise<void>
+  /** A message the webview scripts posted back, relayed to the panel's listener. */
+  $onDidReceiveMessage(panelHandle: number, message: unknown): Promise<void>
+  /** The editor tab hosting `panelHandle` was closed — dispose host-side state. */
+  $disposeWebviewPanel(panelHandle: number): Promise<void>
 }
