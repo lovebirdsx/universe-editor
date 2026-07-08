@@ -16,6 +16,7 @@ import {
 } from '@universe-editor/platform'
 import {
   ShowExplorerAction,
+  ShowExtensionsViewAction,
   TogglePanelAction,
   ToggleSecondarySidebarVisibilityAction,
   ToggleSidebarVisibilityAction,
@@ -247,6 +248,105 @@ describe('ShowExplorerAction', () => {
     })
 
     expect(layout.focusView).toHaveBeenCalledWith('workbench.view.explorer.tree', {
+      source: 'command',
+    })
+    expect(layout.setVisible).not.toHaveBeenCalled()
+  })
+})
+
+describe('ShowExtensionsViewAction', () => {
+  const disposables: IDisposable[] = []
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  function makePart(focused: boolean) {
+    return { focus: vi.fn(), isFocused: vi.fn().mockReturnValue(focused) }
+  }
+
+  function makeLayoutService(visible: boolean, focused: boolean) {
+    const part = makePart(focused)
+    const setVisible = vi.fn()
+    const focusView = vi.fn().mockResolvedValue(true)
+    const mock = {
+      _serviceBrand: undefined,
+      getVisible: vi.fn().mockReturnValue(visible),
+      setVisible,
+      getPart: vi.fn().mockReturnValue(part),
+      focusView,
+    } as never
+    return { mock, setVisible, focusView }
+  }
+
+  function makeViewsService(activeId: string | undefined) {
+    const mock = {
+      _serviceBrand: undefined,
+      getActiveViewContainerId: vi.fn().mockReturnValue(activeId),
+    } as never
+    return { mock }
+  }
+
+  it('registerAction2(ShowExtensionsViewAction) wires command + keybinding ctrl+shift+x + F1 menu', () => {
+    disposables.push(registerAction2(ShowExtensionsViewAction))
+    expect(CommandsRegistry.getCommand(ShowExtensionsViewAction.ID)).toBeDefined()
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+shift+x')).toBe(ShowExtensionsViewAction.ID)
+    expect(
+      MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
+        (i) => 'command' in i && i.command === ShowExtensionsViewAction.ID,
+      ),
+    ).toBe(true)
+  })
+
+  it('run() calls focusView when SideBar is hidden', async () => {
+    const layout = makeLayoutService(false, false)
+    const views = makeViewsService(undefined)
+    const services = new ServiceCollection()
+    services.set(ILayoutService, layout.mock)
+    services.set(IViewsService, views.mock)
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(ShowExtensionsViewAction))
+
+    await inst.invokeFunction((accessor) => {
+      return CommandsRegistry.getCommand(ShowExtensionsViewAction.ID)!.handler(accessor)
+    })
+
+    expect(layout.focusView).toHaveBeenCalledWith('workbench.view.extensions.main', {
+      source: 'command',
+    })
+    expect(layout.setVisible).not.toHaveBeenCalled()
+  })
+
+  it('run() hides SideBar when visible with extensions active and focused', async () => {
+    const layout = makeLayoutService(true, true)
+    const views = makeViewsService('workbench.view.extensions')
+    const services = new ServiceCollection()
+    services.set(ILayoutService, layout.mock)
+    services.set(IViewsService, views.mock)
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(ShowExtensionsViewAction))
+
+    await inst.invokeFunction((accessor) => {
+      return CommandsRegistry.getCommand(ShowExtensionsViewAction.ID)!.handler(accessor)
+    })
+
+    expect(layout.setVisible).toHaveBeenCalledWith(PartId.SideBar, false)
+    expect(layout.focusView).not.toHaveBeenCalled()
+  })
+
+  it('run() calls focusView when SideBar is visible with a different container', async () => {
+    const layout = makeLayoutService(true, false)
+    const views = makeViewsService('workbench.view.search')
+    const services = new ServiceCollection()
+    services.set(ILayoutService, layout.mock)
+    services.set(IViewsService, views.mock)
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(ShowExtensionsViewAction))
+
+    await inst.invokeFunction((accessor) => {
+      return CommandsRegistry.getCommand(ShowExtensionsViewAction.ID)!.handler(accessor)
+    })
+
+    expect(layout.focusView).toHaveBeenCalledWith('workbench.view.extensions.main', {
       source: 'command',
     })
     expect(layout.setVisible).not.toHaveBeenCalled()

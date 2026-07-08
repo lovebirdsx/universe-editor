@@ -215,6 +215,35 @@ export class ShowScmAction extends Action2 {
   }
 }
 
+export class ShowExtensionsViewAction extends Action2 {
+  static readonly ID = 'workbench.view.extensions'
+  constructor() {
+    super({
+      id: ShowExtensionsViewAction.ID,
+      title: localize2('action.showExtensions.title', 'Show Extensions'),
+      category: localize2('command.category.view', 'View'),
+      keybinding: { primary: 'ctrl+shift+x' },
+      menu: { id: MenuId.MenubarViewMenu, group: '1_open', order: 4 },
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const layoutService = accessor.get(ILayoutService)
+    const viewsService = accessor.get(IViewsService)
+    const sidebarVisible = layoutService.getVisible(PartId.SideBar)
+    const activeId = viewsService.getActiveViewContainerId(ViewContainerLocation.SideBar)
+    if (
+      sidebarVisible &&
+      activeId === 'workbench.view.extensions' &&
+      layoutService.getPart(PartId.SideBar)?.isFocused()
+    ) {
+      layoutService.setVisible(PartId.SideBar, false)
+      return
+    }
+    await layoutService.focusView('workbench.view.extensions.main', { source: 'command' })
+  }
+}
+
 export class ShowCommandsAction extends Action2 {
   static readonly ID = 'workbench.action.showCommands'
   constructor() {

@@ -326,6 +326,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.showAllCommands.title': '显示所有命令',
   'action.showAllSymbols.title': '转到工作区中的符号…',
   'action.showExplorer.title': '显示资源管理器',
+  'action.showExtensions.title': '显示扩展',
   'action.showLogs.title': '开发人员：显示日志...',
   'action.showOutputChannel.title': '输出：显示输出通道...',
   'action.showScm.title': '显示源代码管理',

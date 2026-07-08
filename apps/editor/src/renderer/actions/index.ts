@@ -32,6 +32,7 @@ import {
 import {
   ShowCommandsAction,
   ShowExplorerAction,
+  ShowExtensionsViewAction,
   ShowScmAction,
   FocusOutlineAction,
   ToggleActivityBarVisibilityAction,
@@ -312,6 +313,7 @@ registerAction2(DecreaseViewHeightAction)
 registerAction2(ShowCommandsAction)
 registerAction2(ShowExplorerAction)
 registerAction2(ShowScmAction)
+registerAction2(ShowExtensionsViewAction)
 registerAction2(FocusOutlineAction)
 
 // Editor — view
