@@ -6,21 +6,24 @@
  *  list/tree stayed permanently empty.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StrictMode } from 'react'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import {
   Event,
   ICommandService,
+  IEditorGroupsService,
   IEditorResolverService,
   IStorageService,
   InstantiationService,
   ServiceCollection,
   type ICommandService as ICommandServiceType,
+  type IEditorGroupsService as IEditorGroupsServiceType,
   type IEditorResolverService as IEditorResolverServiceType,
   type IStorageService as IStorageServiceType,
 } from '@universe-editor/platform'
 import { ScmView } from '../ScmView.js'
+import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
 import { IScmService, ScmService } from '../../../services/extensions/ScmService.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -34,23 +37,44 @@ const stubStorage: IStorageServiceType = {
   onDidChangeWorkspaceScope: Event.None,
 }
 
-const stubEditorResolver: IEditorResolverServiceType = {
-  _serviceBrand: undefined,
-  registerEditor: () => ({ dispose() {} }),
-  resolveEditors: () => [],
-  async openEditor() {},
+class FakeEditorGroup {
+  activeEditor: unknown
+  opened: Array<{ input: unknown; options: unknown }> = []
+
+  indexOf(): number {
+    return -1
+  }
+
+  openEditor(input: unknown, options?: unknown): void {
+    this.opened.push({ input, options })
+    this.activeEditor = input
+  }
+
+  closeEditor(): void {}
 }
 
 function setup() {
   const scm = new ScmService()
   const executeCommand = vi.fn().mockResolvedValue(undefined)
+  const openRealFile = vi.fn().mockResolvedValue(undefined)
+  const editorGroup = new FakeEditorGroup()
   const stubCommand: ICommandServiceType = {
     _serviceBrand: undefined,
     executeCommand,
   }
+  const stubEditorResolver: IEditorResolverServiceType = {
+    _serviceBrand: undefined,
+    registerEditor: () => ({ dispose() {} }),
+    resolveEditors: () => [],
+    openEditor: openRealFile,
+  }
   const services = new ServiceCollection()
   services.set(IScmService, scm)
   services.set(ICommandService, stubCommand)
+  services.set(IEditorGroupsService, {
+    _serviceBrand: undefined,
+    activeGroup: editorGroup,
+  } as unknown as IEditorGroupsServiceType)
   services.set(IStorageService, stubStorage)
   services.set(IEditorResolverService, stubEditorResolver)
   const inst = new InstantiationService(services)
@@ -61,8 +85,10 @@ function setup() {
       </StrictMode>
     </ServicesContext.Provider>,
   )
-  return { scm, executeCommand }
+  return { scm, executeCommand, openRealFile, editorGroup }
 }
+
+afterEach(() => cleanup())
 
 describe('ScmView under StrictMode', () => {
   it('renders resources that arrive after the provider view has mounted', async () => {
@@ -184,5 +210,57 @@ describe('ScmView under StrictMode', () => {
       rootUri: 'D:/repo',
       sourceControlId: 'git',
     })
+  })
+})
+
+describe('ScmView — markdown preview action', () => {
+  it('shows a preview button for markdown files and opens a markdown preview', async () => {
+    const { scm, executeCommand, openRealFile, editorGroup } = setup()
+
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'git', 'Git', 'D:/repo')
+      await scm.$registerGroup(0, 1, 'workingTree', 'Changes')
+      await scm.$updateGroupResourceStates(1, [
+        {
+          resourceUri: 'D:/repo/README.md',
+          contextValue: 'M',
+          command: { command: 'git.openChange', title: 'Open Change' },
+        },
+      ])
+    })
+
+    const label = await screen.findByText('README.md')
+    const row = label.closest('[role="treeitem"]')
+    expect(row).not.toBeNull()
+    fireEvent.click(within(row as HTMLElement).getByRole('button', { name: 'Open Preview' }))
+
+    expect(editorGroup.opened).toHaveLength(1)
+    const previewInput = editorGroup.opened[0]?.input
+    expect(previewInput).toBeInstanceOf(MarkdownPreviewInput)
+    expect(editorGroup.opened[0]?.options).toEqual({ activate: true, pinned: true })
+    expect((previewInput as MarkdownPreviewInput | undefined)?.sourceUri.fsPath).toContain(
+      'README.md',
+    )
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(openRealFile).not.toHaveBeenCalled()
+  })
+
+  it('does not show a preview button for non-markdown files', async () => {
+    const { scm } = setup()
+
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'git', 'Git', 'D:/repo')
+      await scm.$registerGroup(0, 1, 'workingTree', 'Changes')
+      await scm.$updateGroupResourceStates(1, [
+        {
+          resourceUri: 'D:/repo/src/main.ts',
+          contextValue: 'M',
+          command: { command: 'git.openChange', title: 'Open Change' },
+        },
+      ])
+    })
+
+    await screen.findByText('main.ts')
+    expect(screen.queryByTitle('Open Preview')).toBeNull()
   })
 })

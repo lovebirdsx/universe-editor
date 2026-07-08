@@ -27,6 +27,7 @@ import {
 } from 'react'
 import {
   ICommandService,
+  IEditorGroupsService,
   IEditorResolverService,
   IStorageService,
   autorun,
@@ -50,8 +51,11 @@ import {
 } from '@universe-editor/workbench-ui'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { FileIcon } from '../files/fileIconTheme.js'
+import { isMarkdownPreviewResource } from '../files/resourceLanguage.js'
 import { useService, useObservable } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
+import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
+import { openMarkdownPreviewInGroup } from '../../services/editor/openMarkdownPreview.js'
 import {
   IScmService,
   type IScmGroupModel,
@@ -364,6 +368,7 @@ const ScmFileRow = memo(function ScmFileRow({
   getSelectedUris: () => readonly string[]
 }) {
   const commandService = useService(ICommandService)
+  const editorGroupsService = useService(IEditorGroupsService)
   const editorResolverService = useService(IEditorResolverService)
   const resource = node.resource
   const rowScope = useMemo(
@@ -392,6 +397,20 @@ const ScmFileRow = memo(function ScmFileRow({
   }
 
   const uri = useMemo(() => URI.file(resource.resourceUri), [resource.resourceUri])
+  const canPreviewMarkdown = isMarkdownPreviewResource(uri)
+  const openMarkdownPreview = (): void => {
+    openMarkdownPreviewInGroup(
+      editorGroupsService.activeGroup,
+      new MarkdownPreviewInput(uri),
+      false,
+    )
+  }
+  const openMarkdownPreviewAction: ActionItem = {
+    id: 'scm.openPreview',
+    title: localize('scm.openPreview', 'Open Preview'),
+    command: '',
+    icon: 'open-preview',
+  }
   const openFile = (): void => {
     void editorResolverService.openEditor(uri, { pinned: true })
   }
@@ -420,6 +439,15 @@ const ScmFileRow = memo(function ScmFileRow({
       </span>
       {node.dir ? <span className={styles['resourceDir']}>{node.dir}</span> : null}
       <span className={styles['resourceActions']}>
+        {canPreviewMarkdown && (
+          <ActionButton
+            action={openMarkdownPreviewAction}
+            onRun={(e) => {
+              e.stopPropagation()
+              openMarkdownPreview()
+            }}
+          />
+        )}
         <ActionButton
           action={openFileAction}
           onRun={(e) => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { URI } from '@universe-editor/platform'
-import { languageForResource } from '../resourceLanguage.js'
+import { isMarkdownPreviewResource, languageForResource } from '../resourceLanguage.js'
 
 const lang = (path: string): string => languageForResource(URI.file(path))
 
@@ -58,5 +58,11 @@ describe('languageForResource', () => {
   it('falls back to plaintext for unknown or extension-less files', () => {
     expect(lang('/proj/notes.unknownext')).toBe('plaintext')
     expect(lang('/proj/LICENSE')).toBe('plaintext')
+  })
+
+  it('identifies resources that can use the markdown preview', () => {
+    expect(isMarkdownPreviewResource(URI.file('/proj/README.md'))).toBe(true)
+    expect(isMarkdownPreviewResource(URI.file('/proj/README.mdx'))).toBe(true)
+    expect(isMarkdownPreviewResource(URI.file('/proj/readme.txt'))).toBe(false)
   })
 })

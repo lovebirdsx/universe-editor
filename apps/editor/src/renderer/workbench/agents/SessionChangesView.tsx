@@ -33,7 +33,7 @@ import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput
 import { openMarkdownPreviewInGroup } from '../../services/editor/openMarkdownPreview.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { basenameOfResource, dirnameOfResource } from '../files/resourceInfo.js'
-import { languageForResource } from '../files/resourceLanguage.js'
+import { isMarkdownPreviewResource } from '../files/resourceLanguage.js'
 import { sessionChangesViewState, type SessionChangesViewMode } from './sessionChangesViewState.js'
 import styles from './SessionChangesView.module.css'
 
@@ -315,7 +315,7 @@ function ChangeRow({
   onOpenFile: (c: SessionFileChange) => void
   onOpenMarkdownPreview: (c: SessionFileChange) => void
 }) {
-  const canPreviewMarkdown = isMarkdownPreviewResource(change)
+  const canPreviewMarkdown = isMarkdownPreviewResource(change.uri)
   return (
     <li
       className={styles['row']}
@@ -363,11 +363,6 @@ function ChangeRow({
       </span>
     </li>
   )
-}
-
-function isMarkdownPreviewResource(change: SessionFileChange): boolean {
-  const languageId = languageForResource(change.uri)
-  return languageId === 'markdown' || languageId === 'mdx'
 }
 
 function statusLetter(status: SessionFileChange['status']): string {

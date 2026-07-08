@@ -130,3 +130,8 @@ export function languageForResource(resource: URI): string {
   const ext = extensionOfBasename(basename)
   return ext ? (LANG_BY_EXT[ext] ?? 'plaintext') : 'plaintext'
 }
+
+export function isMarkdownPreviewResource(resource: URI): boolean {
+  const languageId = languageForResource(resource)
+  return languageId === 'markdown' || languageId === 'mdx'
+}
