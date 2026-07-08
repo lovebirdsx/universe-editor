@@ -2,8 +2,8 @@
  * The git status-bar entries (branch + ahead/behind sync indicator). A single
  * shared pair of items renders whichever repo is currently active — switching
  * the SCM selection (via `git.setActiveRepo`) re-points these at the new repo,
- * mirroring VSCode's single-repo status bar. Clicking them runs the argument-less
- * `git.checkout` / `git.sync`, which route to the active repo through
+ * mirroring VSCode's single-repo status bar. Clicking them runs `git-graph.view`
+ * / the argument-less `git.sync`, which route to the active repo through
  * `RepositoryManager.resolveRepo`.
  */
 import {
@@ -22,8 +22,8 @@ export class GitStatusBarController {
 
   constructor(private readonly _mgr: RepositoryManager) {
     this._branchItem = window.createStatusBarItem(StatusBarAlignment.Left, 100)
-    this._branchItem.command = 'git.checkout'
-    this._branchItem.tooltip = 'Checkout branch'
+    this._branchItem.command = 'git-graph.view'
+    this._branchItem.tooltip = 'Open Git Graph'
 
     this._syncItem = window.createStatusBarItem(StatusBarAlignment.Left, 99)
     this._syncItem.command = 'git.sync'
