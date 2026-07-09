@@ -19,7 +19,12 @@ import {
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import type { monaco } from './monaco/MonacoLoader.js'
-import { collectEntries, interpolate, type Point } from './previewScrollMap.js'
+import {
+  collectEntries,
+  editorScrollTopForLine,
+  interpolate,
+  type Point,
+} from './previewScrollMap.js'
 import { useService } from '../useService.js'
 
 function clamp01(n: number): number {
@@ -63,12 +68,18 @@ function editorTopForPreview(
     reversePoints.push({ key: maxPreviewScroll, value: totalLines })
   }
 
-  // probeLine is a 1-based source line; clamp to >= 1 before reading line tops.
+  // probeLine is a 1-based source line; clamp so the preview scrolled to its
+  // bottom lands the last source line flush at the editor's bottom instead of
+  // yanking it up to the viewport top.
   const probeLine = interpolate(reversePoints, root.scrollTop)
-  const floor = Math.max(1, Math.floor(probeLine))
-  const lineTop = editor.getTopForLineNumber(floor)
-  const nextTop = editor.getTopForLineNumber(floor + 1)
-  return lineTop + (probeLine - floor) * (nextTop - lineTop)
+  const contentBottom = editor.getBottomForLineNumber(Math.max(1, totalLines))
+  const viewportHeight = editor.getLayoutInfo().height
+  return editorScrollTopForLine({
+    probeLine,
+    topForLine: (line) => editor.getTopForLineNumber(line),
+    contentBottom,
+    viewportHeight,
+  })
 }
 
 const SUPPRESS_MS = 100

@@ -89,3 +89,29 @@ export function clampRevealScrollTop(params: {
   const maxUseful = Math.max(0, params.contentBottom - params.viewportHeight)
   return Math.max(0, Math.min(params.lineTop, maxUseful))
 }
+
+/**
+ * Editor scrollTop that keeps the source aligned with the preview during
+ * preview→source sync. `probeLine` (1-based, may be fractional) is the source
+ * line the preview's top currently maps to; `topForLine(n)` returns line n's
+ * pixel offset in the editor. The result is clamped like `clampRevealScrollTop`
+ * so scrolling the preview to its very bottom lands the source's last line flush
+ * at the editor's bottom — without the clamp, `probeLine` reaching the last line
+ * yanks that line to the *top* of the viewport, jumping the source up a screen.
+ */
+export function editorScrollTopForLine(params: {
+  probeLine: number
+  topForLine: (line: number) => number
+  contentBottom: number
+  viewportHeight: number
+}): number {
+  const floor = Math.max(1, Math.floor(params.probeLine))
+  const lineTop = params.topForLine(floor)
+  const nextTop = params.topForLine(floor + 1)
+  const target = lineTop + (params.probeLine - floor) * (nextTop - lineTop)
+  return clampRevealScrollTop({
+    lineTop: target,
+    contentBottom: params.contentBottom,
+    viewportHeight: params.viewportHeight,
+  })
+}

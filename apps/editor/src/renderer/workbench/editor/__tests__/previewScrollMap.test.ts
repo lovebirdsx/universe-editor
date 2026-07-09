@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   clampRevealScrollTop,
+  editorScrollTopForLine,
   lineForPreviewTop,
   previewTopForLine,
   type LineEntry,
@@ -62,5 +63,43 @@ describe('clampRevealScrollTop', () => {
 
   it('never returns a negative scrollTop (content shorter than the viewport)', () => {
     expect(clampRevealScrollTop({ lineTop: 0, contentBottom: 200, viewportHeight: 400 })).toBe(0)
+  })
+})
+
+describe('editorScrollTopForLine', () => {
+  // 100 lines at 18px each: line N's top = (N-1)*18, content bottom = 1800.
+  const topForLine = (line: number) => (line - 1) * 18
+  const contentBottom = 100 * 18 // 1800
+  const viewportHeight = 400
+  const maxUseful = contentBottom - viewportHeight // 1400
+
+  it('maps a mid-document line to its pixel top', () => {
+    expect(
+      editorScrollTopForLine({ probeLine: 20, topForLine, contentBottom, viewportHeight }),
+    ).toBe(19 * 18)
+  })
+
+  it('interpolates a fractional probe line', () => {
+    // line 20 top = 342, line 21 top = 360; halfway = 351.
+    expect(
+      editorScrollTopForLine({ probeLine: 20.5, topForLine, contentBottom, viewportHeight }),
+    ).toBe(351)
+  })
+
+  it('clamps the last line flush to the bottom instead of yanking it to the top', () => {
+    // Regression: preview scrolled fully down maps to the last source line. The
+    // old code returned getTopForLineNumber(100) = 1782, scrolling the source a
+    // near-full screen past the useful bottom. It must clamp to maxUseful (1400)
+    // so the last line sits flush at the viewport bottom.
+    expect(
+      editorScrollTopForLine({ probeLine: 100, topForLine, contentBottom, viewportHeight }),
+    ).toBe(maxUseful)
+  })
+
+  it('does not clamp lines that still fit above the useful bottom', () => {
+    // maxUseful = 1400 → the first line whose top exceeds it is line 79 (1404).
+    expect(
+      editorScrollTopForLine({ probeLine: 70, topForLine, contentBottom, viewportHeight }),
+    ).toBe(69 * 18)
   })
 })
