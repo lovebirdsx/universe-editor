@@ -15,6 +15,7 @@
 import {
   Disposable,
   EditorInput,
+  ICommandService,
   IContextKeyService,
   IEditorService,
   IHistoryService,
@@ -25,6 +26,7 @@ import {
   toDisposable,
   type IDisposable,
 } from '@universe-editor/platform'
+import { GoBackAction, GoForwardAction } from '../actions/historyActions.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 
@@ -55,8 +57,11 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
     @IContextKeyService contextKeyService: IContextKeyService,
     @IEditorService editorService: IEditorService,
     @IStorageService storageService: IStorageService,
+    @ICommandService commandService: ICommandService,
   ) {
     super()
+
+    this._registerMouseNavigation(commandService)
 
     const canGoBack = contextKeyService.createKey<boolean>(
       'canGoBack',
@@ -130,6 +135,35 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
       toDisposable(() => {
         for (const listener of this._listeners.values()) this._detach(listener)
         this._listeners.clear()
+      }),
+    )
+  }
+
+  private _registerMouseNavigation(commandService: ICommandService): void {
+    // Mouse buttons 4/5 (MouseEvent.button 3/4) navigate back/forward, matching
+    // VSCode and the browser/OS convention. Fire on mousedown for a snappier feel
+    // and preventDefault on both down and up so Chromium's default history
+    // navigation never also runs.
+    const onMouseDownOrUp = (e: MouseEvent, isMouseDown: boolean): void => {
+      switch (e.button) {
+        case 3:
+          e.preventDefault()
+          if (isMouseDown) void commandService.executeCommand(GoBackAction.ID)
+          break
+        case 4:
+          e.preventDefault()
+          if (isMouseDown) void commandService.executeCommand(GoForwardAction.ID)
+          break
+      }
+    }
+    const onMouseDown = (e: MouseEvent): void => onMouseDownOrUp(e, true)
+    const onMouseUp = (e: MouseEvent): void => onMouseDownOrUp(e, false)
+    window.addEventListener('mousedown', onMouseDown)
+    window.addEventListener('mouseup', onMouseUp)
+    this._register(
+      toDisposable(() => {
+        window.removeEventListener('mousedown', onMouseDown)
+        window.removeEventListener('mouseup', onMouseUp)
       }),
     )
   }
