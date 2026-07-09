@@ -1,5 +1,40 @@
 [
   {
+    "version": "0.1.36",
+    "date": "2026-07-09",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "explorer中支持选择文件比较diff",
+          "markdown中YAML frontmatter部分的语法着色以及预览优化",
+          "插件管理界面的交互优化",
+          "插件可禁用/启用",
+          "优化session列表的布局，右侧对齐",
+          "状态栏分支点击打开Git图谱",
+          "加入ShowExtensionsViewAction",
+          "git changes列表中支持预览markdown",
+          "加入pdf文件预览插件",
+          "初步加入扩展市场支持",
+          "简化markdown的outline符号显示，去掉#前缀",
+          "explorer支持撤销回退"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复explorer中鼠标左键右键点击时，选中视觉表达不正确的bug",
+          "修复markdown双屏预览时，滚到底，源文件和预览位置没有对上的bug",
+          "修复关闭窗口问题，焦点在 webview 内按 Ctrl+W 关掉整个窗口",
+          "修复claude的上下文窗口大小在新建session时，计算不正常的bug",
+          "修复explorer中选中多个对象操作，只响应了一个对象的bug"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.35",
     "date": "2026-07-07",
     "groups": [
