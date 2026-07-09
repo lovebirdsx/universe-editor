@@ -7,6 +7,7 @@ import {
   ContextKeyService,
   EditorInput as ImportedEditorInput,
   Emitter,
+  ICommandService,
   IContextKeyService,
   IEditorService,
   IFileService,
@@ -19,6 +20,7 @@ import {
   derived,
   observableValue,
   type IEditorInput,
+  type ICommandService as ICommandServiceType,
   type IEditorService as IEditorServiceType,
   type IFileService as IFileServiceType,
   type IStorageService as IStorageServiceType,
@@ -135,6 +137,15 @@ function makeFakeStorageService(): {
   return { service, swapWorkspaceScope: () => scope.fire() }
 }
 
+function makeFakeCommandService(): ICommandServiceType {
+  return {
+    _serviceBrand: undefined,
+    executeCommand: vi.fn(async () => undefined),
+  }
+}
+
+const activeContributions: HistoryContribution[] = []
+
 function setup() {
   FileEditorRegistry._resetForTests()
   const services = new ServiceCollection()
@@ -147,8 +158,10 @@ function setup() {
   services.set(IEditorService, editor.service)
   const storage = makeFakeStorageService()
   services.set(IStorageService, storage.service)
+  services.set(ICommandService, makeFakeCommandService())
   const inst = new InstantiationService(services)
   const contrib = inst.createInstance(HistoryContribution)
+  activeContributions.push(contrib)
   return {
     historyService,
     contextKeyService,
@@ -162,10 +175,16 @@ function setup() {
 describe('HistoryContribution', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    vi.stubGlobal('window', {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
     FileEditorRegistry._resetForTests()
   })
   afterEach(() => {
+    for (const contrib of activeContributions.splice(0)) contrib.dispose()
     vi.useRealTimers()
+    vi.unstubAllGlobals()
     FileEditorRegistry._resetForTests()
   })
 
