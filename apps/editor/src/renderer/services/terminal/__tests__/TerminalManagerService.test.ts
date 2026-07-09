@@ -6,7 +6,12 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   Emitter,
+  observableValue,
+  URI,
+  type HostPlatform,
   type IConfigurationService,
+  type IEditorService,
+  type IHostService,
   type ILoggerService,
   type IStorageService,
   type IWorkspaceService,
@@ -20,7 +25,12 @@ import {
   type ITerminalSpawnSpec,
   type ITerminalTitleEvent,
 } from '../../../../shared/ipc/terminalService.js'
-import { TerminalManagerService } from '../TerminalManagerService.js'
+import type {
+  IEnvironmentSnapshot,
+  IEnvironmentSnapshotService,
+} from '../../../../shared/ipc/environmentSnapshotService.js'
+import { TerminalManagerService, computeTerminalCwd } from '../TerminalManagerService.js'
+import { ConfigurationResolverService } from '../../configurationResolver/ConfigurationResolverService.js'
 
 interface Harness {
   manager: TerminalManagerService
@@ -63,6 +73,7 @@ function makeHarness(
   cwd: string | null = '/work',
   configOverrides?: Record<string, unknown>,
   store?: Map<string, unknown>,
+  opts?: { platform?: HostPlatform; userHome?: string; activeFile?: string },
 ): Harness {
   const onData = new Emitter<ITerminalDataEvent>()
   const onExit = new Emitter<ITerminalExitEvent>()
@@ -109,7 +120,7 @@ function makeHarness(
   }
 
   const workspace = {
-    current: cwd ? { folder: { fsPath: cwd } } : undefined,
+    current: cwd ? { folder: URI.file(cwd), name: 'work' } : null,
   } as unknown as IWorkspaceService
 
   const loggerService = {
@@ -124,12 +135,41 @@ function makeHarness(
     }),
   } as unknown as ILoggerService
 
+  const host = {
+    _serviceBrand: undefined,
+    platform: opts?.platform ?? ('linux' as HostPlatform),
+  } as unknown as IHostService
+
+  const editor = {
+    _serviceBrand: undefined,
+    activeEditor: observableValue(
+      'activeEditor',
+      opts?.activeFile ? ({ resource: URI.file(opts.activeFile) } as never) : undefined,
+    ),
+  } as unknown as IEditorService
+
+  const snapshot: IEnvironmentSnapshot = {
+    userHome: opts?.userHome ?? '/home/tester',
+    cwd: '/main/cwd',
+    env: { FOO: 'bar' },
+  }
+  const envSnapshot: IEnvironmentSnapshotService = {
+    _serviceBrand: undefined,
+    getSnapshot: () => Promise.resolve(snapshot),
+  }
+
+  const config = makeConfig(configOverrides)
+  const resolver = new ConfigurationResolverService(workspace, editor, config, host, envSnapshot)
+
   const manager = new TerminalManagerService(
     terminal,
     workspace,
     loggerService,
     makeStorage(store),
-    makeConfig(configOverrides),
+    config,
+    host,
+    resolver,
+    envSnapshot,
   )
   return { manager, onData, onExit, created, released, inputs, resizes, warnings, terminalErrors }
 }
@@ -148,10 +188,41 @@ describe('TerminalManagerService', () => {
     expect(h.manager.activeTerminalId.get()).toBe('t0')
   })
 
-  it('omits cwd when no workspace is open', async () => {
-    const noWs = makeHarness(null)
+  it('falls back to the user home when no workspace is open', async () => {
+    const noWs = makeHarness(null, undefined, undefined, { userHome: '/home/tester' })
     await noWs.manager.newTerminal()
-    expect(noWs.created[0]!.spec.cwd).toBeUndefined()
+    expect(noWs.created[0]!.spec.cwd).toBe('/home/tester')
+  })
+
+  it('omits cwd entirely when there is neither workspace nor home', async () => {
+    const bare = makeHarness(null, undefined, undefined, { userHome: '' })
+    await bare.manager.newTerminal()
+    expect(bare.created[0]!.spec.cwd).toBeUndefined()
+  })
+
+  it('expands ${workspaceFolder} in terminal.integrated.cwd', async () => {
+    const withConfig = makeHarness(
+      'G:/aki_3.6/Source/Client/TypeScript',
+      { 'terminal.integrated.cwd': '${workspaceFolder}/Src/UniverseEditor' },
+      undefined,
+      { platform: 'win32' },
+    )
+    await withConfig.manager.newTerminal()
+    expect(withConfig.created[0]!.spec.cwd).toBe(
+      'G:/aki_3.6/Source/Client/TypeScript/Src/UniverseEditor',
+    )
+  })
+
+  it('falls back to home when terminal.integrated.cwd needs a workspace but none is open', async () => {
+    const noWs = makeHarness(
+      null,
+      { 'terminal.integrated.cwd': '${workspaceFolder}/Src/UniverseEditor' },
+      undefined,
+      { userHome: '/home/tester' },
+    )
+    await noWs.manager.newTerminal()
+    // Variable resolution throws (no folder); consumer degrades then falls back.
+    expect(noWs.created[0]!.spec.cwd).toBe('/home/tester')
   })
 
   it('routes onData to the attached writer', async () => {
@@ -358,5 +429,34 @@ describe('TerminalManagerService', () => {
       const groups = second.manager.terminalGroups.get()
       expect(groups.map((g) => g.terminals.length)).toEqual([2, 1])
     })
+  })
+})
+
+describe('computeTerminalCwd', () => {
+  it('uses an absolute resolved cwd as-is', () => {
+    expect(computeTerminalCwd('/abs/dir', '/work', '/home', 'linux')).toBe('/abs/dir')
+    expect(computeTerminalCwd('C:/abs', 'D:/work', 'D:/home', 'win32')).toBe('C:/abs')
+  })
+
+  it('joins a relative resolved cwd under the workspace root', () => {
+    expect(computeTerminalCwd('src/app', '/work', '/home', 'linux')).toBe('/work/src/app')
+  })
+
+  it('falls back to the workspace root when the relative cwd has no root and there is one', () => {
+    // A relative cwd always joins when a workspace exists, so exercise the empty case.
+    expect(computeTerminalCwd(undefined, '/work', '/home', 'linux')).toBe('/work')
+  })
+
+  it('drops a relative cwd with no workspace, then falls back to home', () => {
+    expect(computeTerminalCwd('src/app', undefined, '/home', 'linux')).toBe('/home')
+  })
+
+  it('falls back to home when there is no cwd and no workspace', () => {
+    expect(computeTerminalCwd(undefined, undefined, '/home', 'linux')).toBe('/home')
+  })
+
+  it('returns undefined when nothing is available', () => {
+    expect(computeTerminalCwd(undefined, undefined, undefined, 'linux')).toBeUndefined()
+    expect(computeTerminalCwd('', undefined, undefined, 'linux')).toBeUndefined()
   })
 })

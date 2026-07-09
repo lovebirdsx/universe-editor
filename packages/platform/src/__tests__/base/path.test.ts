@@ -5,8 +5,16 @@
 import { describe, expect, it } from 'vitest'
 import {
   arePathsEqual,
+  basename,
+  dirname,
+  extname,
   getPathComparisonKey,
+  isAbsolutePath,
+  joinPath,
+  normalizeDriveLetter,
   normalizeFsPath,
+  pathSeparator,
+  relativePath,
   relativePathUnder,
 } from '../../base/path.js'
 
@@ -146,5 +154,71 @@ describe('relativePathUnder', () => {
 
   it('preserves original casing in the returned relative segment', () => {
     expect(relativePathUnder('D:\\Proj', 'D:/Proj/SRC/Foo.ts', 'win32')).toBe('SRC/Foo.ts')
+  })
+})
+
+describe('path helpers for the variable resolver', () => {
+  it('pathSeparator is platform-native', () => {
+    expect(pathSeparator('win32')).toBe('\\')
+    expect(pathSeparator('linux')).toBe('/')
+    expect(pathSeparator('darwin')).toBe('/')
+  })
+
+  it('normalizeDriveLetter uppercases a leading drive only', () => {
+    expect(normalizeDriveLetter('d:/foo')).toBe('D:/foo')
+    expect(normalizeDriveLetter('/foo')).toBe('/foo')
+    expect(normalizeDriveLetter('relative')).toBe('relative')
+  })
+
+  it('isAbsolutePath recognizes roots per platform', () => {
+    expect(isAbsolutePath('C:/foo', 'win32')).toBe(true)
+    expect(isAbsolutePath('C:\\foo', 'win32')).toBe(true)
+    expect(isAbsolutePath('/foo', 'win32')).toBe(true)
+    expect(isAbsolutePath('//host/share', 'win32')).toBe(true)
+    expect(isAbsolutePath('foo/bar', 'win32')).toBe(false)
+    expect(isAbsolutePath('C:/foo', 'linux')).toBe(false)
+    expect(isAbsolutePath('/foo', 'linux')).toBe(true)
+    expect(isAbsolutePath('', 'linux')).toBe(false)
+  })
+
+  it('joinPath joins with forward slashes and collapses dup separators', () => {
+    expect(joinPath('/a', 'b', 'c')).toBe('/a/b/c')
+    expect(joinPath('C:/proj', 'src')).toBe('C:/proj/src')
+    expect(joinPath('/a/', '/b/')).toBe('/a/b/')
+    expect(joinPath('a\\b', 'c')).toBe('a/b/c')
+    expect(joinPath()).toBe('.')
+  })
+
+  it('basename returns the last segment', () => {
+    expect(basename('/a/b/c.ts')).toBe('c.ts')
+    expect(basename('/a/b/')).toBe('b')
+    expect(basename('C:\\a\\b')).toBe('b')
+    expect(basename('bare')).toBe('bare')
+  })
+
+  it('dirname returns the parent, keeping roots', () => {
+    expect(dirname('/a/b/c.ts')).toBe('/a/b')
+    expect(dirname('/a')).toBe('/')
+    expect(dirname('C:/foo')).toBe('C:/')
+    expect(dirname('bare')).toBe('.')
+  })
+
+  it('extname returns the extension including the dot', () => {
+    expect(extname('a.ts')).toBe('.ts')
+    expect(extname('/a/b.min.js')).toBe('.js')
+    expect(extname('noext')).toBe('')
+    expect(extname('.dotfile')).toBe('')
+  })
+
+  it('relativePath computes a relative path, climbing when needed', () => {
+    expect(relativePath('/a/b', '/a/b/c', 'linux')).toBe('c')
+    expect(relativePath('/a/b/c', '/a/b', 'linux')).toBe('..')
+    expect(relativePath('/a/b', '/a/c', 'linux')).toBe('../c')
+    expect(relativePath('/a/b', '/a/b', 'linux')).toBe('')
+  })
+
+  it('relativePath is case-insensitive on win32 and falls back across drives', () => {
+    expect(relativePath('D:\\Proj', 'd:/proj/src', 'win32')).toBe('src')
+    expect(relativePath('C:/a', 'D:/b', 'win32')).toBe('D:/b')
   })
 })

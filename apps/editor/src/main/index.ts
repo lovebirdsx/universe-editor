@@ -42,6 +42,7 @@ import { IAiModelMainService } from '../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../shared/ipc/aiDebugService.js'
 import { IRemoteSchemaService } from '../shared/ipc/remoteSchemaService.js'
 import { IResourceAccessService } from '../shared/ipc/resourceAccessService.js'
+import { IEnvironmentSnapshotService } from '../shared/ipc/environmentSnapshotService.js'
 import { IRecentWorkspacesService } from './services/workspace/recentWorkspacesMainService.js'
 import {
   IDisposableLeakService,
@@ -364,6 +365,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       remoteSchema: accessor.get(IRemoteSchemaService),
       exchangeRate: accessor.get(IExchangeRateService),
       resourceAccess: accessor.get(IResourceAccessService),
+      environmentSnapshot: accessor.get(IEnvironmentSnapshotService),
       sessionSwitcher: accessor.get(ISessionSwitcherService) as SessionSwitcherMainService,
       configLocation: accessor.get(IConfigLocationService) as ConfigLocationMainService,
     }))

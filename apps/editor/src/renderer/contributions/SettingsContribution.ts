@@ -427,7 +427,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             default: '',
             description: localize(
               'settings.terminal.integrated.cwd.description',
-              'Default working directory for new integrated terminals. Leave empty to use workspace root.',
+              'Default working directory for new integrated terminals. Supports variables like ${workspaceFolder}, ${userHome} and ${env:NAME}. Leave empty to use workspace root.',
             ),
           },
           'terminal.integrated.scrollback': {

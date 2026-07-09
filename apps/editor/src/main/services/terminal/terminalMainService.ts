@@ -17,6 +17,7 @@
 
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
+import { statSync } from 'node:fs'
 import {
   createNamedLogger,
   Disposable,
@@ -47,6 +48,8 @@ export type PtySpawner = (
     rows?: number
   },
 ) => IPty
+
+type CwdStat = (cwd: string) => { isDirectory(): boolean }
 
 const requireFromHere = createRequire(import.meta.url)
 
@@ -81,6 +84,25 @@ function sanitizeEnv(
   return buildChildEnv(base, { overrides }) as Record<string, string>
 }
 
+function normalizeWindowsDriveCwd(cwd: string, platform: NodeJS.Platform): string {
+  if (platform !== 'win32') return cwd
+  return /^\/[A-Za-z]:[\\/]/.test(cwd) ? cwd.slice(1) : cwd
+}
+
+/**
+ * Ported from VSCode terminalEnvironment.sanitizeCwd: strip a wrapping pair of
+ * quotes (see microsoft/vscode#160109) and uppercase a Windows drive letter (#9448).
+ */
+function sanitizeCwd(cwd: string, platform: NodeJS.Platform): string {
+  if (/^['"].*['"]$/.test(cwd)) {
+    cwd = cwd.substring(1, cwd.length - 1)
+  }
+  if (platform === 'win32' && cwd && cwd[1] === ':') {
+    return cwd[0]!.toUpperCase() + cwd.substring(1)
+  }
+  return cwd
+}
+
 interface TerminalEntry {
   readonly pty: IPty
   readonly info: ITerminalCreatedInfo
@@ -104,6 +126,8 @@ export class TerminalMainService extends Disposable implements ITerminalService 
   constructor(
     private readonly _spawn: PtySpawner = defaultSpawner,
     loggerService?: { createLogger(channel: ILogChannel): ILogger },
+    private readonly _cwdStat: CwdStat = statSync,
+    private readonly _platform: NodeJS.Platform = process.platform,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'terminal', name: 'Terminal' })
@@ -126,7 +150,8 @@ export class TerminalMainService extends Disposable implements ITerminalService 
       cols,
       rows,
     }
-    if (spec.cwd != null && spec.cwd.length > 0) options.cwd = spec.cwd
+    const cwd = this._resolveCwd(spec.cwd)
+    if (cwd !== undefined) options.cwd = cwd
 
     let pty: IPty
     try {
@@ -152,7 +177,7 @@ export class TerminalMainService extends Disposable implements ITerminalService 
       this._entries.delete(id)
     })
 
-    this._logger.info(`create id=${id} pid=${pty.pid} shell=${shell}`)
+    this._logger.info(`create id=${id} pid=${pty.pid} shell=${shell} cwd=${cwd ?? ''}`)
     return Promise.resolve(info)
   }
 
@@ -215,5 +240,25 @@ export class TerminalMainService extends Disposable implements ITerminalService 
     }
     this._entries.clear()
     super.dispose()
+  }
+
+  private _resolveCwd(rawCwd: string | undefined): string | undefined {
+    if (rawCwd == null || rawCwd.length === 0) return undefined
+    const cwd = sanitizeCwd(normalizeWindowsDriveCwd(rawCwd, this._platform), this._platform)
+    try {
+      const stat = this._cwdStat(cwd)
+      if (!stat.isDirectory()) {
+        this._logger.warn(`invalid cwd ignored cwd=${JSON.stringify(rawCwd)} reason=not-directory`)
+        return undefined
+      }
+      return cwd
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      const message = code ?? (err instanceof Error ? err.message : String(err))
+      this._logger.warn(
+        `invalid cwd ignored cwd=${JSON.stringify(rawCwd)} normalized=${JSON.stringify(cwd)} reason=${message}`,
+      )
+      return undefined
+    }
   }
 }

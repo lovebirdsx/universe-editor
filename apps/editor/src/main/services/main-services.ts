@@ -50,6 +50,7 @@ import { IAiModelMainService } from '../../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import { IRemoteSchemaService } from '../../shared/ipc/remoteSchemaService.js'
 import { IResourceAccessService } from '../../shared/ipc/resourceAccessService.js'
+import { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapshotService.js'
 import { MainPingService } from './ping/pingMainService.js'
 import { FileSystemMainService } from './files/fileSystemMainService.js'
 import { FileSearchMainService } from './fileSearch/fileSearchMainService.js'
@@ -82,6 +83,7 @@ import { AiDebugMainService } from './ai/aiDebugService.js'
 import { RemoteSchemaMainService } from './remoteSchema/remoteSchemaMainService.js'
 import { ExchangeRateMainService } from './exchangeRate/exchangeRateMainService.js'
 import { ResourceAccessMainService } from './resourceAccess/resourceAccessMainService.js'
+import { EnvironmentSnapshotMainService } from './environmentSnapshot/environmentSnapshotMainService.js'
 
 // Services whose constructors mix @-injected services with non-branded static
 // params (spawner stubs, Storage, filePath) are registered via
@@ -215,4 +217,8 @@ registerSingletonFactory(
 registerSingleton(
   IResourceAccessService,
   new SyncDescriptor<IResourceAccessService>(ResourceAccessMainService, [], false),
+)
+registerSingleton(
+  IEnvironmentSnapshotService,
+  new SyncDescriptor<IEnvironmentSnapshotService>(EnvironmentSnapshotMainService, [], false),
 )

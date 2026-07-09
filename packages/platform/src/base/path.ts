@@ -105,6 +105,103 @@ export function getPathComparisonKey(path: string, platform: HostPlatform): stri
 }
 
 /**
+ * The OS-native path separator for `${pathSeparator}` style substitution:
+ * backslash on win32, forward slash elsewhere. Note this is deliberately the
+ * *display* separator — the helpers below all emit forward slashes internally,
+ * matching how {@link URI.fsPath} represents paths across the codebase.
+ */
+export function pathSeparator(platform: HostPlatform): string {
+  return platform === 'win32' ? '\\' : '/'
+}
+
+/** Uppercase a leading Windows drive letter (`d:/foo` → `D:/foo`); other paths unchanged. */
+export function normalizeDriveLetter(p: string): string {
+  return /^[a-z]:/.test(p) ? p.charAt(0).toUpperCase() + p.slice(1) : p
+}
+
+/**
+ * Whether `p` is an absolute path for the given platform. win32 accepts a drive
+ * root (`C:/`, `C:\`), a bare rooted path (`/foo`) and UNC (`//host`); other
+ * platforms accept only a leading slash. Backslashes are treated as separators.
+ */
+export function isAbsolutePath(p: string, platform: HostPlatform): boolean {
+  if (p.length === 0) return false
+  const fwd = toForwardSlashes(p)
+  if (fwd.charCodeAt(0) === 47 /* / */) return true
+  return platform === 'win32' && /^[a-zA-Z]:\//.test(fwd)
+}
+
+/**
+ * Join path segments with forward slashes. Empty segments are skipped; interior
+ * duplicate slashes are collapsed. The result is *not* `.`/`..`-collapsed — run
+ * it through {@link normalizeFsPath} if you need that. Mirrors the subset of
+ * Node `path.join` the variable resolver needs (no platform-native separators).
+ */
+export function joinPath(...segments: readonly string[]): string {
+  const parts: string[] = []
+  for (const seg of segments) {
+    if (seg.length === 0) continue
+    parts.push(toForwardSlashes(seg))
+  }
+  if (parts.length === 0) return '.'
+  return parts.join('/').replace(/(?<!:)\/{2,}/g, '/')
+}
+
+/** Last path segment (`/a/b/c.ts` → `c.ts`). Trailing slashes are ignored. */
+export function basename(p: string): string {
+  const fwd = stripTrailingSlash(toForwardSlashes(p))
+  const slash = fwd.lastIndexOf('/')
+  return slash === -1 ? fwd : fwd.slice(slash + 1)
+}
+
+/**
+ * Directory portion (`/a/b/c.ts` → `/a/b`). Returns `.` for a bare name and
+ * preserves a drive/absolute root when the parent collapses to it.
+ */
+export function dirname(p: string): string {
+  const fwd = stripTrailingSlash(toForwardSlashes(p))
+  const slash = fwd.lastIndexOf('/')
+  if (slash === -1) return '.'
+  if (slash === 0) return '/'
+  // Keep the drive root, e.g. `C:/foo` → `C:/`.
+  if (/^[a-zA-Z]:$/.test(fwd.slice(0, slash))) return fwd.slice(0, slash + 1)
+  return fwd.slice(0, slash)
+}
+
+/** File extension including the dot (`c.ts` → `.ts`); `''` when none. */
+export function extname(p: string): string {
+  const base = basename(p)
+  const dot = base.lastIndexOf('.')
+  return dot <= 0 ? '' : base.slice(dot)
+}
+
+/**
+ * Relative path from `from` to `to` (both absolute), platform-aware. May climb
+ * with `..` segments. Returns the {@link normalizeFsPath}-collapsed `to` when
+ * the two live on different Windows drives (no relative path exists). Mirrors the
+ * subset of Node `path.relative` the variable resolver needs.
+ */
+export function relativePath(from: string, to: string, platform: HostPlatform): string {
+  const nf = normalizeFsPath(from)
+  const nt = normalizeFsPath(to)
+  if (nf.startsWith(ESCAPED_PREFIX) || nt.startsWith(ESCAPED_PREFIX)) return nt
+  const ci = isCaseInsensitive(platform)
+  const fromParts = nf.split('/').filter((s) => s.length > 0)
+  const toParts = nt.split('/').filter((s) => s.length > 0)
+  const eq = (a: string, b: string) => (ci ? a.toLowerCase() === b.toLowerCase() : a === b)
+  // Different roots (e.g. distinct Windows drives) — no relative path.
+  if (fromParts.length > 0 && toParts.length > 0 && !eq(fromParts[0]!, toParts[0]!)) {
+    if (/^[a-zA-Z]:$/.test(fromParts[0]!) || /^[a-zA-Z]:$/.test(toParts[0]!)) return nt
+  }
+  let i = 0
+  while (i < fromParts.length && i < toParts.length && eq(fromParts[i]!, toParts[i]!)) i++
+  const up = fromParts.slice(i).map(() => '..')
+  const down = toParts.slice(i)
+  const out = [...up, ...down]
+  return out.length === 0 ? '' : out.join('/')
+}
+
+/**
  * If `child` resolves under `parent`, return the relative path (`''` when
  * equal). Returns `null` when:
  *   - either input is empty or normalizes to an escaped result,

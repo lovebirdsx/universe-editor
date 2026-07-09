@@ -94,6 +94,10 @@ export function bootstrapWindowIpc(
     ProxyChannel.fromService(app.resourceAccess),
   )
   server.registerChannel(
+    ServiceChannels.EnvironmentSnapshot,
+    ProxyChannel.fromService(app.environmentSnapshot),
+  )
+  server.registerChannel(
     ServiceChannels.SessionSwitcher,
     ProxyChannel.fromService(app.sessionSwitcher),
   )

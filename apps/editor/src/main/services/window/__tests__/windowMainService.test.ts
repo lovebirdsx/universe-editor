@@ -118,6 +118,7 @@ function makeOpts() {
       remoteSchema: {} as never,
       exchangeRate: {} as never,
       resourceAccess: {} as never,
+      environmentSnapshot: {} as never,
     },
     logService,
     e2eEnabled: false,

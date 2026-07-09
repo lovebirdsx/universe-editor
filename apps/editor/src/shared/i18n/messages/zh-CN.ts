@@ -568,7 +568,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.terminal.external.windowsExec.description':
     '运行"在外部终端中打开"时，要在 Windows 上启动的终端。',
   'settings.terminal.integrated.cwd.description':
-    '新建集成终端的默认工作目录。留空则使用工作区根目录。',
+    '新建集成终端的默认工作目录。支持 ${workspaceFolder}、${userHome}、${env:NAME} 等变量。留空则使用工作区根目录。',
   'settings.terminal.integrated.fontFamily.description': '控制终端字体。',
   'settings.terminal.integrated.fontSize.description': '控制终端字体大小（像素）。',
   'settings.terminal.integrated.scrollback.description':

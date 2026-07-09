@@ -156,6 +156,73 @@ describe('TerminalMainService', () => {
     expect(captured?.['NODE_OPTIONS']).toBeUndefined()
   })
 
+  it('passes a valid cwd to the spawner', async () => {
+    let captured: Parameters<PtySpawner>[2] | undefined
+    const spawner: PtySpawner = (_file, _args, opts) => {
+      captured = opts
+      return new FakePty(1)
+    }
+    const service = new TerminalMainService(spawner, undefined, () => ({
+      isDirectory: () => true,
+    }))
+
+    await service.create({ cwd: 'G:/aki_3.6/Source/Client/TypeScript' })
+
+    expect(captured?.cwd).toBe('G:/aki_3.6/Source/Client/TypeScript')
+  })
+
+  it('normalizes a Windows drive cwd that arrived as a URI path', async () => {
+    let captured: Parameters<PtySpawner>[2] | undefined
+    const spawner: PtySpawner = (_file, _args, opts) => {
+      captured = opts
+      return new FakePty(1)
+    }
+    const service = new TerminalMainService(
+      spawner,
+      undefined,
+      () => ({ isDirectory: () => true }),
+      'win32',
+    )
+
+    await service.create({ cwd: '/G:/aki_3.6/Source/Client/TypeScript' })
+
+    expect(captured?.cwd).toBe('G:/aki_3.6/Source/Client/TypeScript')
+  })
+
+  it('omits an unavailable cwd before calling node-pty', async () => {
+    let captured: Parameters<PtySpawner>[2] | undefined
+    const spawner: PtySpawner = (_file, _args, opts) => {
+      captured = opts
+      return new FakePty(1)
+    }
+    const err = Object.assign(new Error('missing'), { code: 'ENOENT' })
+    const service = new TerminalMainService(spawner, undefined, () => {
+      throw err
+    })
+
+    await service.create({ cwd: '${workspaceFolder}/Src/UniverseEditor' })
+
+    expect(captured?.cwd).toBeUndefined()
+  })
+
+  it('strips wrapping quotes and uppercases the drive letter (sanitizeCwd)', async () => {
+    let captured: Parameters<PtySpawner>[2] | undefined
+    const spawner: PtySpawner = (_file, _args, opts) => {
+      captured = opts
+      return new FakePty(1)
+    }
+    const service = new TerminalMainService(
+      spawner,
+      undefined,
+      () => ({ isDirectory: () => true }),
+      'win32',
+    )
+
+    await service.create({ cwd: '"c:/Users/x/proj"' })
+
+    expect(captured?.cwd).toBe('C:/Users/x/proj')
+  })
+
   it('dispose kills every live terminal', async () => {
     const { service, ptys } = makeService()
     await service.create({})

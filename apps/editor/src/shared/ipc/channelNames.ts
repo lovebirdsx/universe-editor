@@ -45,6 +45,7 @@ export const ServiceChannels = {
   RemoteSchema: 'remoteSchema',
   ExchangeRate: 'exchangeRate',
   ResourceAccess: 'resourceAccess',
+  EnvironmentSnapshot: 'environmentSnapshot',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

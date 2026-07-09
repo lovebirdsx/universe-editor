@@ -19,21 +19,29 @@ import {
   Disposable,
   Emitter,
   IConfigurationService,
+  IHostService,
   InstantiationType,
+  isAbsolutePath,
   IStorageService,
   IWorkspaceService,
+  joinPath,
   observableValue,
   registerSingleton,
   StorageScope,
   toDisposable,
   ILoggerService,
   type Event,
+  type HostPlatform,
+  type IConfigurationResolverService,
   type IDisposable,
   type ILogger,
   type IObservable,
   type ISettableObservable,
+  type IWorkspaceFolderData,
 } from '@universe-editor/platform'
 import { ITerminalService, type ITerminalCreatedInfo } from '../../../shared/ipc/terminalService.js'
+import { IConfigurationResolverServiceRenderer } from '../configurationResolver/ConfigurationResolverService.js'
+import { IEnvironmentSnapshotService } from '../../../shared/ipc/environmentSnapshotService.js'
 
 export type TerminalTarget = 'panel' | 'editor'
 
@@ -143,6 +151,36 @@ function countNewlines(s: string): number {
   return n
 }
 
+/**
+ * Ported from VSCode terminalEnvironment.getCwd: turn an already variable-resolved
+ * custom cwd into the effective working directory.
+ *   - absolute → use as-is
+ *   - relative + workspace root → joined under the root
+ *   - relative with no root → dropped
+ *   - nothing usable → fall back to the workspace root, else the user home
+ * Returns undefined only when there is no cwd and no fallback (let node-pty pick
+ * the process default).
+ */
+export function computeTerminalCwd(
+  resolved: string | undefined,
+  workspaceCwd: string | undefined,
+  userHome: string | undefined,
+  platform: HostPlatform,
+): string | undefined {
+  let cwd: string | undefined
+  if (resolved && resolved.length > 0) {
+    if (isAbsolutePath(resolved, platform)) {
+      cwd = resolved
+    } else if (workspaceCwd) {
+      cwd = joinPath(workspaceCwd, resolved)
+    }
+  }
+  if (!cwd) {
+    cwd = workspaceCwd || userHome || undefined
+  }
+  return cwd
+}
+
 export class TerminalManagerService extends Disposable implements ITerminalManagerService {
   declare readonly _serviceBrand: undefined
 
@@ -196,6 +234,10 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     @ILoggerService loggerService: ILoggerService,
     @IStorageService private readonly _storage: IStorageService,
     @IConfigurationService private readonly _config: IConfigurationService,
+    @IHostService private readonly _host: IHostService,
+    @IConfigurationResolverServiceRenderer
+    private readonly _resolver: IConfigurationResolverService,
+    @IEnvironmentSnapshotService private readonly _envSnapshot: IEnvironmentSnapshotService,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'terminal', name: 'Terminal' })
@@ -260,8 +302,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
       spec?.shellArgs ??
       (this._config.get<readonly string[]>('terminal.integrated.shellArgs') || undefined) ??
       undefined
-    const configCwd = this._config.get<string>('terminal.integrated.cwd') || undefined
-    const cwd = spec?.cwd ?? configCwd ?? this._workspace.current?.folder?.fsPath
+    const cwd = await this._resolveCwd(spec?.cwd)
 
     const ipcSpec = {
       ...(shell ? { shell } : {}),
@@ -280,9 +321,54 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
       this._setAllTerminals([...this._terminals.get(), info])
       return info.id
     } catch (err) {
-      this._logger.warn(`create failed: ${(err as Error).message}`)
+      this._logger.warn(`create failed cwd=${cwd ?? ''}: ${(err as Error).message}`)
       return null
     }
+  }
+
+  /**
+   * Resolve the effective terminal cwd: expand `${...}` variables in the explicit
+   * / configured cwd (VSCode-style), then apply getCwd's absolute-vs-relative and
+   * workspace/home fallback rules. Variable resolution that throws (e.g.
+   * `${workspaceFolder}` with no folder open) degrades to "no custom cwd" so the
+   * fallback still yields a usable directory.
+   */
+  private async _resolveCwd(explicitCwd: string | undefined): Promise<string | undefined> {
+    const platform: HostPlatform = this._host.platform
+    const folder = this._workspace.current
+    const workspaceCwd = folder?.folder?.fsPath
+    const scope: IWorkspaceFolderData | undefined = folder
+      ? { uri: folder.folder, name: folder.name }
+      : undefined
+
+    const rawCwd = (explicitCwd ?? this._config.get<string>('terminal.integrated.cwd')) || undefined
+
+    let resolved: string | undefined
+    if (rawCwd && rawCwd.length > 0) {
+      try {
+        resolved = await this._resolver.resolveAsync(scope, rawCwd)
+      } catch (err) {
+        this._logger.warn(
+          `cwd variable resolution failed cwd=${JSON.stringify(rawCwd)}: ${(err as Error).message}`,
+        )
+        resolved = undefined
+      }
+    }
+
+    const userHome = await this._getUserHome()
+    return computeTerminalCwd(resolved, workspaceCwd, userHome, platform)
+  }
+
+  private _userHome: string | undefined
+  private async _getUserHome(): Promise<string | undefined> {
+    if (this._userHome === undefined) {
+      try {
+        this._userHome = (await this._envSnapshot.getSnapshot()).userHome
+      } catch {
+        this._userHome = ''
+      }
+    }
+    return this._userHome || undefined
   }
 
   closeTerminal(id: string): void {

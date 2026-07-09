@@ -48,6 +48,7 @@ import { IDocsService } from '../../shared/ipc/docsService.js'
 import { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 import { ISessionSwitcherService } from '../../shared/ipc/sessionSwitcher.js'
 import { IConfigLocationService } from '../../shared/ipc/configLocationService.js'
+import { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapshotService.js'
 
 interface ProxyServiceBinding {
   readonly id: ServiceIdentifier<object>
@@ -94,6 +95,7 @@ export const PROXY_SERVICE_BINDINGS: readonly ProxyServiceBinding[] = [
   { id: IUsageService, channel: ServiceChannels.Usage },
   { id: IExchangeRateService, channel: ServiceChannels.ExchangeRate },
   { id: IResourceAccessService, channel: ServiceChannels.ResourceAccess },
+  { id: IEnvironmentSnapshotService, channel: ServiceChannels.EnvironmentSnapshot },
 ]
 
 export function registerProxyChannelServices(
