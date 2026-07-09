@@ -106,6 +106,7 @@ import {
   ExplorerFileOperationService,
   IExplorerFileOperationService,
 } from './services/explorer/ExplorerFileOperationService.js'
+import { CompareService, ICompareService } from './services/explorer/CompareService.js'
 import { setMonacoLoaderLogger } from './workbench/editor/monaco/MonacoLoader.js'
 import { restoreWorkbenchFocus } from './services/focus/workbenchFocusRestorer.js'
 import {
@@ -541,6 +542,10 @@ async function bootstrapWorkbench(): Promise<void> {
   // the tree + IFileService + IUndoRedoService (all registered above).
   const explorerFileOperationService = instantiation.createInstance(ExplorerFileOperationService)
   services.set(IExplorerFileOperationService, explorerFileOperationService)
+
+  // Remembers the resource picked via "Select for Compare" for a later
+  // "Compare with Selected" (in-memory, mirrors VSCode).
+  services.set(ICompareService, workbenchStore.add(new CompareService()))
 
   // ACP (Agent Client Protocol) services. PathPolicy needs static platform/home
   // args; ClientService brings together host + permission + IFileService +

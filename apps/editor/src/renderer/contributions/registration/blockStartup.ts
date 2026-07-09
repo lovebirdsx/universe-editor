@@ -28,6 +28,7 @@ import { InlineCompletionConfigurationContribution } from '../InlineCompletionCo
 import { MarkdownConfigurationContribution } from '../MarkdownConfigurationContribution.js'
 import { BuiltInEditorBindingsContribution } from '../BuiltInEditorBindingsContribution.js'
 import { ExplorerClipboardContextContribution } from '../ExplorerClipboardContextContribution.js'
+import { CompareContextContribution } from '../CompareContextContribution.js'
 import { ExplorerFileConfigurationContribution } from '../ExplorerFileConfigurationContribution.js'
 import { ExplorerMenuContribution } from '../ExplorerMenuContribution.js'
 import { EditMenuContribution } from '../EditMenuContribution.js'
@@ -233,6 +234,12 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.explorerClipboardContext',
   ExplorerClipboardContextContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.compareContext',
+  CompareContextContribution,
   WorkbenchPhase.BlockStartup,
 )
 

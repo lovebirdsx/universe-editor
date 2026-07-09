@@ -17,6 +17,7 @@ export class DiffEditorInput extends EditorInput {
     private readonly _originalUri: URI,
     private _originalContent: string,
     private _modifiedContent: string,
+    private readonly _modifiedUri?: URI,
   ) {
     super()
   }
@@ -25,20 +26,55 @@ export class DiffEditorInput extends EditorInput {
     return DiffEditorInput.TYPE_ID
   }
 
+  /** True when the two sides are different files (Explorer "Compare With…"). */
+  private get _isCrossFile(): boolean {
+    return (
+      this._modifiedUri !== undefined &&
+      this._modifiedUri.toString() !== this._originalUri.toString()
+    )
+  }
+
+  /**
+   * True for a cross-file comparison (Explorer "Compare"), where the two sides are
+   * distinct files. Live-content sync contributions key off `originalUri` and would
+   * otherwise clobber the modified side with the original file's content — they must
+   * skip these.
+   */
+  get isCrossFile(): boolean {
+    return this._isCrossFile
+  }
+
   override get resource(): URI {
+    if (this._isCrossFile) {
+      return URI.from({
+        scheme: 'diff',
+        path: `${this._originalUri.path}↔${this._modifiedUri!.path}`,
+      })
+    }
     return URI.from({ scheme: 'diff', path: this._originalUri.path })
   }
 
   override get id(): string {
+    if (this._isCrossFile) {
+      return `diff:${this._originalUri.toString()}↔${this._modifiedUri!.toString()}`
+    }
     return `diff:${this._originalUri.toString()}`
   }
 
   override getName(): string {
+    if (this._isCrossFile) {
+      return `${basenameOfResource(this._originalUri)} ↔ ${basenameOfResource(this._modifiedUri!)}`
+    }
     return `${basenameOfResource(this._originalUri)} (Diff)`
   }
 
   get originalUri(): URI {
     return this._originalUri
+  }
+
+  /** The right-hand side's file URI. Falls back to the original for same-file diffs. */
+  get modifiedUri(): URI {
+    return this._modifiedUri ?? this._originalUri
   }
 
   get originalContent(): string {

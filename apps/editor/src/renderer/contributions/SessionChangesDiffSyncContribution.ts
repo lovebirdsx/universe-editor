@@ -61,7 +61,7 @@ export class SessionChangesDiffSyncContribution
 
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
-        if (!(editor instanceof DiffEditorInput)) continue
+        if (!(editor instanceof DiffEditorInput) || editor.isCrossFile) continue
         const change = byUri.get(editor.originalUri.toString())
         if (!change) continue
         // The tracker's `current` is read from disk. If the file is open in an

@@ -139,7 +139,8 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     const ed = diffEditorRef.current
 
     const language = languageForResource(diffInput.originalUri)
-    diffLanguageRef.current = language
+    const modifiedLanguage = languageForResource(diffInput.modifiedUri)
+    diffLanguageRef.current = modifiedLanguage
     const originalModel = monacoNs.editor.createModel(
       diffInput.originalContent,
       language,
@@ -147,11 +148,11 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     )
     const modifiedModel = monacoNs.editor.createModel(
       diffInput.modifiedContent,
-      language,
-      monacoNs.Uri.parse(diffModelUri(diffInput.originalUri, 'modified').toString()),
+      modifiedLanguage,
+      monacoNs.Uri.parse(diffModelUri(diffInput.modifiedUri, 'modified').toString()),
     )
     ed.setModel({ original: originalModel, modified: modifiedModel })
-    ed.updateOptions(getEditorFontOptions(configService, language))
+    ed.updateOptions(getEditorFontOptions(configService, modifiedLanguage))
     originalModelRef.current = originalModel
     modifiedModelRef.current = modifiedModel
     DiffEditorRegistry.register(diffInput, ed, group?.id)

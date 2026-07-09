@@ -84,6 +84,31 @@ export class ExplorerMenuContribution extends Disposable implements IWorkbenchCo
 
     this._register(
       MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+        command: 'selectForCompare',
+        when: '!explorerResourceIsFolder && !explorerResourceMultiSelected',
+        group: '3_compare',
+        order: 1,
+      }),
+    )
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+        command: 'compareSelected',
+        when: '!explorerResourceIsFolder && resourceSelectedForCompare && !explorerResourceMultiSelected',
+        group: '3_compare',
+        order: 2,
+      }),
+    )
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+        command: 'workbench.files.action.compareFiles',
+        when: 'explorerResourceTwoSelected',
+        group: '3_compare',
+        order: 3,
+      }),
+    )
+
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
         command: 'workbench.files.action.copyName',
         group: '4_copy',
         order: 1,

@@ -141,6 +141,11 @@ import {
   CopyFileRelativePathAction,
 } from './fileCopyActions.js'
 import {
+  CompareSelectedAction,
+  CompareWithSelectedAction,
+  SelectForCompareAction,
+} from './fileCompareActions.js'
+import {
   CancelCutExplorerFileAction,
   CopyExplorerFileAction,
   CutFileAction,
@@ -430,6 +435,9 @@ registerAction2(RevealInOSExplorerAction)
 registerAction2(CopyFileNameAction)
 registerAction2(CopyFilePathAction)
 registerAction2(CopyFileRelativePathAction)
+registerAction2(SelectForCompareAction)
+registerAction2(CompareWithSelectedAction)
+registerAction2(CompareSelectedAction)
 registerAction2(CutFileAction)
 registerAction2(CopyExplorerFileAction)
 registerAction2(PasteExplorerFileAction)

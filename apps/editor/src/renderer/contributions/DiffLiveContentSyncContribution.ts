@@ -90,7 +90,10 @@ export class DiffLiveContentSyncContribution extends Disposable implements IWork
     const open = new Set<DiffEditorInput>()
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
-        if (editor instanceof DiffEditorInput) open.add(editor)
+        // Only same-file diffs (session/dirty) track the live file model. A
+        // cross-file comparison (Explorer "Compare") has a distinct modified file
+        // and must not have its modified side overwritten with originalUri's model.
+        if (editor instanceof DiffEditorInput && !editor.isCrossFile) open.add(editor)
       }
     }
 
