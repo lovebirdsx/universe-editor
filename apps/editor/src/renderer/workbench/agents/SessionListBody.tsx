@@ -235,14 +235,6 @@ function SessionRow({
         <span className={styles['sessionRowLabelLine']}>
           <AgentIcon agentId={entry.agentId} size={14} className={styles['sessionRowAgentIcon']} />
           <span className={styles['sessionRowLabel']}>{foreignStat?.title ?? entry.title}</span>
-          {isForeign ? (
-            <GitBranch
-              size={12}
-              strokeWidth={1.75}
-              className={styles['sessionRowForeignIcon']}
-              aria-label={localize('acp.sessions.foreignWorktree', 'Belongs to another worktree')}
-            />
-          ) : null}
         </span>
         <span className={styles['sessionRowMeta']}>
           {relativeTime(entry.lastUsedAt)}
@@ -269,8 +261,19 @@ function SessionRow({
             </span>
           ) : null}
           {chip ? (
-            <span className={styles['sessionRowScope']} title={chip.title}>
-              {'‎' + chip.label}
+            <span className={styles['sessionRowScopeGroup']} title={chip.title}>
+              {isForeign ? (
+                <GitBranch
+                  size={12}
+                  strokeWidth={1.75}
+                  className={styles['sessionRowForeignIcon']}
+                  aria-label={localize(
+                    'acp.sessions.foreignWorktree',
+                    'Belongs to another worktree',
+                  )}
+                />
+              ) : null}
+              <span className={styles['sessionRowScope']}>{'‎' + chip.label}</span>
             </span>
           ) : null}
         </span>

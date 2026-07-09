@@ -1326,6 +1326,29 @@
   border-left-color: var(--color-badge-progress, #0e639c);
 }
 
+.sessionRow::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  right: 4px;
+  width: 44px;
+  height: 18px;
+  border-radius: 3px;
+  background: transparent;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.sessionRow:hover::after {
+  visibility: visible;
+  background: var(--color-list-hover-bg, #2a2d2e);
+}
+
+.sessionRow[data-active='true']::after {
+  visibility: visible;
+  background: var(--color-list-active-bg, #094771);
+}
+
 .sessionRowTitle {
   flex: 1;
   display: flex;
@@ -1339,6 +1362,7 @@
   align-items: center;
   gap: 4px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .sessionRowAgentIcon {
@@ -1347,6 +1371,8 @@
 }
 
 .sessionRowLabel {
+  flex: 1 1 auto;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1384,10 +1410,17 @@
   white-space: nowrap;
 }
 
-.sessionRowScope {
+.sessionRowScopeGroup {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   min-width: 0;
   max-width: 55%;
+}
+
+.sessionRowScope {
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1400,17 +1433,21 @@
 
 .sessionDelete {
   position: absolute;
-  top: 4px;
+  top: 6px;
   right: 6px;
   background: none;
   border: 0;
   color: inherit;
   cursor: pointer;
-  padding: 2px;
+  padding: 0;
+  width: 18px;
+  height: 18px;
   display: flex;
   align-items: center;
+  justify-content: center;
   visibility: hidden;
   border-radius: 3px;
+  z-index: 1;
 }
 
 .sessionRename {
@@ -1423,6 +1460,16 @@
 .sessionRow:hover .sessionRename,
 .sessionRow[data-active='true'] .sessionRename {
   visibility: visible;
+}
+
+.sessionRow:hover .sessionDelete,
+.sessionRow:hover .sessionRename {
+  background: var(--color-list-hover-bg, #2a2d2e);
+}
+
+.sessionRow[data-active='true'] .sessionDelete,
+.sessionRow[data-active='true'] .sessionRename {
+  background: var(--color-list-active-bg, #094771);
 }
 
 .sessionDelete:hover {
