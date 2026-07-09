@@ -81,6 +81,9 @@ const MD_TOKEN_RULES_DARK: monaco.editor.ITokenThemeRule[] = [
   { token: 'variable.source.md', foreground: 'ce9178' },
   { token: 'comment.md', foreground: '6a9955' },
   { token: 'string.link.md', foreground: '4fc1ff' },
+  // YAML frontmatter: keys as a type colour, values as a string colour.
+  { token: 'type.md', foreground: '4ec9b0' },
+  { token: 'operators.md', foreground: 'd4d4d4' },
 ]
 
 const MD_TOKEN_RULES_LIGHT: monaco.editor.ITokenThemeRule[] = [
@@ -92,6 +95,9 @@ const MD_TOKEN_RULES_LIGHT: monaco.editor.ITokenThemeRule[] = [
   { token: 'variable.source.md', foreground: 'a31515' },
   { token: 'comment.md', foreground: '008000' },
   { token: 'string.link.md', foreground: '0070c1' },
+  // YAML frontmatter: keys as a type colour, values as a string colour.
+  { token: 'type.md', foreground: '267f99' },
+  { token: 'operators.md', foreground: '000000' },
 ]
 
 function buildOutputThemeColors(

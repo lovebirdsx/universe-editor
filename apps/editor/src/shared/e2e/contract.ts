@@ -405,6 +405,15 @@ export interface E2EProbe {
   /** Markdown diagnostics currently set as Monaco markers (owner `markdown`). */
   getMarkdownMarkers(uri: string): Promise<readonly E2EMarker[]>
   /**
+   * Monarch token types for a single line of markdown source (1-based line),
+   * as `[startColumn, type]` pairs. Used to assert YAML frontmatter highlighting
+   * (keys tokenize as `type.md`, values as `string.md`).
+   */
+  getMarkdownLineTokens(
+    uri: string,
+    lineNumber: number,
+  ): Promise<ReadonlyArray<readonly [number, string]>>
+  /**
    * Resolved document-link target URIs for an open markdown file (the link
    * provider that powers Ctrl+Click navigation), each `resolveLink`-ed.
    */

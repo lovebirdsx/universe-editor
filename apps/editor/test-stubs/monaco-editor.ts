@@ -394,6 +394,7 @@ function makeDefaults() {
 export const languages = {
   register: () => {},
   setMonarchTokensProvider: () => ({ dispose: () => {} }),
+  registerTokensProviderFactory: () => ({ dispose: () => {} }),
 }
 
 // monaco 0.55 moved these language-service namespaces from `monaco.languages.*`

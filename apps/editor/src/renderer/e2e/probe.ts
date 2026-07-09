@@ -563,6 +563,21 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         startLineNumber: m.startLineNumber,
       }))
     },
+    getMarkdownLineTokens: async (
+      uri: string,
+      lineNumber: number,
+    ): Promise<ReadonlyArray<readonly [number, string]>> => {
+      const monacoNs = await MonacoLoader.ensureInitialized()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return []
+      // colorize forces the lazy tokens-provider factory to resolve; then
+      // tokenize the whole document so multi-line frontmatter state carries into
+      // the requested line. `editor.tokenize` returns per-line token arrays.
+      await monacoNs.editor.colorize('', 'markdown', {})
+      const perLine = monacoNs.editor.tokenize(model.getValue(), 'markdown')
+      const line = perLine[lineNumber - 1] ?? []
+      return line.map((t) => [t.offset + 1, t.type] as const)
+    },
     getMarkdownDocumentLinks: async (uri: string): Promise<readonly string[]> => {
       const monacoNs = await MonacoLoader.ensureInitialized()
       const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))

@@ -67,6 +67,22 @@ describe('createMdServer — diagnostics', () => {
     expect(await server.$computeDiagnostics(URI_A)).toEqual([])
   })
 
+  it('does not flag bracket text inside YAML frontmatter, but still flags the body', async () => {
+    const server = newServer()
+    await server.$didOpen({
+      uri: URI_A,
+      version: 1,
+      // `[hello]` in the preamble is YAML, not a reference link; `[missing]` in
+      // the body is a genuine broken reference link.
+      text: '---\ntitle: t\ndescription: [hello]\n---\n\n[missing][]\n',
+    })
+
+    const diagnostics = await server.$computeDiagnostics(URI_A)
+    // No diagnostic may land inside the frontmatter block (lines 0..3).
+    expect(diagnostics.every((d) => d.range.start.line > 3)).toBe(true)
+    expect(diagnostics.length).toBeGreaterThan(0)
+  })
+
   it('resolves a Windows drive-absolute link against the drive, not the doc dir', async () => {
     // Regression for the patched resolveInternalDocumentLink: `D:/…` used to fall
     // into the relative branch and get joined onto the document's directory

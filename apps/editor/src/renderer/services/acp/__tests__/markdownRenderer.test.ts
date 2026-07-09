@@ -246,6 +246,59 @@ describe('parseMarkdown — block layer', () => {
   })
 })
 
+describe('parseMarkdown — YAML frontmatter', () => {
+  it('treats a leading --- block as an hr when frontmatter is off (default)', () => {
+    const nodes = parseMarkdown('---\ntitle: hi\n---\n\n# Body\n')
+    expect(nodes.some((n) => n.type === 'frontmatter')).toBe(false)
+    expect(nodes[0]?.type).toBe('hr')
+  })
+
+  it('parses a leading --- block into a frontmatter node when enabled', () => {
+    const nodes = parseMarkdown('---\ntitle: hi\ncount: 3\n---\n\n# Body\n', {
+      frontmatter: true,
+    })
+    expect(nodes[0]).toEqual<MdNode>({
+      type: 'frontmatter',
+      entries: [
+        ['title', 'hi'],
+        ['count', '3'],
+      ],
+      line: 0,
+    })
+    expect(nodes[1]).toEqual<MdNode>({
+      type: 'heading',
+      level: 1,
+      children: [text('Body')],
+      line: 5,
+    })
+  })
+
+  it('keeps bracket values verbatim (no link parsing) and skips comments', () => {
+    const nodes = parseMarkdown('---\n# a comment\ndescription: [hello]\n---\n', {
+      frontmatter: true,
+    })
+    expect(nodes[0]).toEqual<MdNode>({
+      type: 'frontmatter',
+      entries: [['description', '[hello]']],
+      line: 0,
+    })
+  })
+
+  it('folds nested/indented lines into the preceding key value', () => {
+    const nodes = parseMarkdown('---\nmeta:\n  a: 1\n  b: 2\n---\n', { frontmatter: true })
+    expect(nodes[0]).toEqual<MdNode>({
+      type: 'frontmatter',
+      entries: [['meta', 'a: 1\nb: 2']],
+      line: 0,
+    })
+  })
+
+  it('does not treat a --- block as frontmatter when not on the first line', () => {
+    const nodes = parseMarkdown('# Title\n\n---\ntitle: hi\n---\n', { frontmatter: true })
+    expect(nodes.some((n) => n.type === 'frontmatter')).toBe(false)
+  })
+})
+
 describe('parseMarkdown — GFM tables', () => {
   it('parses a basic pipe table with header and data rows', () => {
     expect(parseMarkdown('| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |')).toEqual<

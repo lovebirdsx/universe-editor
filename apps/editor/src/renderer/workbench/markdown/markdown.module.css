@@ -150,6 +150,24 @@
   background: rgba(127, 127, 127, 0.05);
 }
 
+/* YAML frontmatter table: keys as row headers, values monospaced with wrapping
+   so multi-line/nested values stay readable. */
+.frontmatterTable {
+  margin-bottom: 1em;
+}
+
+.frontmatterTable th[scope='row'] {
+  white-space: nowrap;
+  vertical-align: top;
+  text-align: left;
+}
+
+.frontmatterTable td {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  white-space: pre-wrap;
+}
+
 .inlineCode {
   font-family: var(--font-mono);
   font-size: 0.9em;

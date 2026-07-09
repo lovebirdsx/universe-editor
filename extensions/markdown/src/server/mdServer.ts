@@ -24,6 +24,7 @@ import type { CodeActionContext, DocumentLink, Location, Range } from 'vscode-la
 import { type IMdClient, type IMdServer } from './types.js'
 import { DocumentStore, makeDoc } from './documentStore.js'
 import { LspWorkspace } from './lspWorkspace.js'
+import { detectFrontmatterRange } from './frontmatter.js'
 
 export interface MdServerHandle {
   readonly server: IMdServer
@@ -46,6 +47,28 @@ const DIAGNOSTIC_OPTIONS: DiagnosticOptions = {
 // so `#` after a file link suggests anchors across the workspace.
 const COMPLETION_OPTIONS: MdPathCompletionOptions = {
   includeWorkspaceHeaderCompletions: IncludeWorkspaceHeaderCompletions.onSingleOrDoubleHash,
+}
+
+/**
+ * Tokenize markdown, injecting a synthetic `code_block` token over any YAML
+ * frontmatter block so the language service's `NoLinkRanges` excludes it from
+ * link extraction and diagnostics (the library itself has no frontmatter
+ * awareness). Original tokens landing inside the block are dropped so a stray
+ * `[hello]` there never reaches the link scanner.
+ */
+function tokenizeWithFrontmatter(mdIt: MarkdownIt, text: string): Token[] {
+  const tokens = mdIt.parse(text, {}) as unknown as Token[]
+  const range = detectFrontmatterRange(text)
+  if (!range) return tokens
+  const kept = tokens.filter((t) => {
+    const map = t.map
+    return !map || (map[0] ?? 0) >= range.endLine
+  })
+  const synthetic = {
+    type: 'code_block',
+    map: [range.startLine, range.endLine],
+  } as unknown as Token
+  return [synthetic, ...kept]
 }
 
 /** Do two 0-based LSP ranges intersect (touching counts)? */
@@ -87,8 +110,7 @@ export function createMdServer(client: IMdClient, root: URI | undefined): MdServ
   const mdIt = MarkdownIt({ html: true, linkify: true })
   const parser: IMdParser = {
     slugifier: githubSlugifier,
-    tokenize: (document) =>
-      Promise.resolve(mdIt.parse(document.getText(), {}) as unknown as Token[]),
+    tokenize: (document) => Promise.resolve(tokenizeWithFrontmatter(mdIt, document.getText())),
   }
 
   const logger: ILogger = {

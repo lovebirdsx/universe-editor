@@ -49,3 +49,11 @@ declare module 'monaco-editor/esm/vs/editor/common/services/languageFeatures.js'
 declare module 'monaco-editor/esm/vs/editor/browser/services/bulkEditService.js' {
   export const IBulkEditService: unknown
 }
+
+// The built-in markdown Monarch grammar ships no .d.ts. We clone its `language`
+// object to add YAML frontmatter highlighting (see monacoMarkdownFrontmatter).
+declare module 'monaco-editor/esm/vs/basic-languages/markdown/markdown.js' {
+  import type { languages } from 'monaco-editor'
+  export const language: languages.IMonarchLanguage
+  export const conf: languages.LanguageConfiguration
+}

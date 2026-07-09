@@ -18,6 +18,7 @@ import { getCurrentLocale } from '../../../../shared/i18n/availableLocales.js'
 import { bridgeAllMonacoActions } from './monacoActionsBridge.js'
 import { applyMonacoNls } from './monacoNlsBootstrap.js'
 import { registerLogLanguage } from '../../panel/output/monacoLogLanguage.js'
+import { registerMarkdownFrontmatterHighlight } from './monacoMarkdownFrontmatter.js'
 import { PerfMarks } from '../../../../shared/perf/marks.js'
 
 export type { monaco }
@@ -234,6 +235,11 @@ async function loadMonaco(): Promise<typeof monaco> {
       // 走的是 onLanguageEncountered/getOrCreate，二者错配会导致 ```json 块不着色。
       // 主动建一个 json model 触发 onLanguage，把 tokens provider 提前注册上。
       monacoMod.editor.createModel('', 'json').dispose()
+      // Replace the built-in markdown tokens-provider factory with a
+      // frontmatter-aware clone so the leading `---` YAML block highlights
+      // keys/values. Must run before any markdown model is tokenized; it's cheap
+      // (registers a lazy factory, no import yet) so we do it inline here.
+      registerMarkdownFrontmatterHighlight(monacoMod)
       // Mirror every monaco-internal EditorAction + core command into our
       // CommandsRegistry / KeybindingsRegistry so the Keyboard Shortcuts
       // editor can list and rebind them. Fire-and-forget — failure here

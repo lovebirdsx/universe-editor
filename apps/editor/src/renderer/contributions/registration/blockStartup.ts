@@ -25,6 +25,7 @@ import { AgentFontContribution } from '../AgentFontContribution.js'
 import { JsonSchemaBridgeContribution } from '../JsonSchemaBridgeContribution.js'
 import { JsonSchemaAssociationsContribution } from '../JsonSchemaAssociationsContribution.js'
 import { InlineCompletionConfigurationContribution } from '../InlineCompletionConfigurationContribution.js'
+import { MarkdownConfigurationContribution } from '../MarkdownConfigurationContribution.js'
 import { BuiltInEditorBindingsContribution } from '../BuiltInEditorBindingsContribution.js'
 import { ExplorerClipboardContextContribution } from '../ExplorerClipboardContextContribution.js'
 import { ExplorerFileConfigurationContribution } from '../ExplorerFileConfigurationContribution.js'
@@ -200,6 +201,12 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.inlineCompletionConfiguration',
   InlineCompletionConfigurationContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.markdownConfiguration',
+  MarkdownConfigurationContribution,
   WorkbenchPhase.BlockStartup,
 )
 

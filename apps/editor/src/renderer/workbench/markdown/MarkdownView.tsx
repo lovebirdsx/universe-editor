@@ -76,6 +76,14 @@ interface MarkdownViewProps {
    * clickable thumbnail with a preview popover. Defaults to a plain `<img>`.
    */
   readonly renderImage?: (src: string, alt: string) => ReactNode
+  /**
+   * How to render a leading YAML `---` frontmatter block. `'table'` shows it as
+   * a GitHub-style key/value table; `'hidden'` drops it. Undefined (the default)
+   * treats `---` as a normal horizontal rule — the behaviour for ACP chat and
+   * other consumers that don't want frontmatter awareness. Only the doc preview
+   * passes this, driven by the `markdown.preview.renderYamlFrontmatter` setting.
+   */
+  readonly frontmatter?: 'table' | 'hidden'
 }
 
 export function MarkdownView({
@@ -87,8 +95,9 @@ export function MarkdownView({
   streaming,
   initialAnchor,
   renderImage,
+  frontmatter,
 }: MarkdownViewProps) {
-  const nodes = useMarkdownNodes(text, streaming ?? false)
+  const nodes = useMarkdownNodes(text, streaming ?? false, frontmatter !== undefined)
   const openFileLink = useMarkdownFileLink(baseUri, previewLinks ?? false)
   const resourceAccess = useOptionalService(IResourceAccessService)
   const workspaceFolder = useOptionalService(IWorkspaceService)?.current?.folder
@@ -128,15 +137,17 @@ export function MarkdownView({
         <BaseUriContext.Provider value={baseUri}>
           <InlineCodeMarkdownLinkContext.Provider value={previewLinks ?? false}>
             <ImageRenderContext.Provider value={renderImage ?? defaultRenderImage}>
-              <div
-                ref={rootRef}
-                className={className ? `${styles['markdown']} ${className}` : styles['markdown']}
-                {...(testId !== undefined ? { 'data-testid': testId } : {})}
-              >
-                {nodes.map((node, i) => (
-                  <Block key={i} node={node} />
-                ))}
-              </div>
+              <FrontmatterModeContext.Provider value={frontmatter}>
+                <div
+                  ref={rootRef}
+                  className={className ? `${styles['markdown']} ${className}` : styles['markdown']}
+                  {...(testId !== undefined ? { 'data-testid': testId } : {})}
+                >
+                  {nodes.map((node, i) => (
+                    <Block key={i} node={node} />
+                  ))}
+                </div>
+              </FrontmatterModeContext.Provider>
             </ImageRenderContext.Provider>
           </InlineCodeMarkdownLinkContext.Provider>
         </BaseUriContext.Provider>
@@ -150,11 +161,15 @@ export function MarkdownView({
  * lives in a ref tied to this component instance; it self-heals if the text ever
  * diverges from the cached prefix (message reset / non-monotonic growth).
  */
-function useMarkdownNodes(text: string, streaming: boolean): readonly MdNode[] {
+function useMarkdownNodes(
+  text: string,
+  streaming: boolean,
+  frontmatter: boolean,
+): readonly MdNode[] {
   const cacheRef = useRef(createMarkdownStreamCache())
   const staticNodes = useMemo(
-    () => (streaming ? undefined : parseMarkdown(text)),
-    [text, streaming],
+    () => (streaming ? undefined : parseMarkdown(text, { frontmatter })),
+    [text, streaming, frontmatter],
   )
   if (staticNodes !== undefined) return staticNodes
   return parseMarkdownStreaming(text, cacheRef.current)
@@ -182,6 +197,10 @@ const BaseUriContext = createContext<URI | undefined>(undefined)
 const AnchorScrollContext = createContext<(id: string) => void>(() => {})
 
 const InlineCodeMarkdownLinkContext = createContext(false)
+
+// How the preview should render a frontmatter node ('table' | 'hidden'). Only
+// set by the doc preview; undefined elsewhere (no frontmatter node is produced).
+const FrontmatterModeContext = createContext<'table' | 'hidden' | undefined>(undefined)
 
 /**
  * When provided by a parent (e.g. DocEditor), relative `.md` links are routed
@@ -264,7 +283,38 @@ function Block({ node }: { node: MdNode }): ReactNode {
       )
     case 'hr':
       return <hr {...lineAttr} />
+    case 'frontmatter':
+      return <FrontmatterBlock node={node} lineAttr={lineAttr} />
   }
+}
+
+/**
+ * Render a YAML frontmatter block. In `'table'` mode it shows a GitHub-style
+ * key/value table; in `'hidden'` mode (or when no mode is provided) it renders
+ * nothing. Values keep their raw text — no inline markdown parsing — since
+ * frontmatter is data, not prose.
+ */
+function FrontmatterBlock({
+  node,
+  lineAttr,
+}: {
+  node: Extract<MdNode, { type: 'frontmatter' }>
+  lineAttr: Record<string, unknown>
+}): ReactNode {
+  const mode = useContext(FrontmatterModeContext)
+  if (mode !== 'table' || node.entries.length === 0) return null
+  return (
+    <table {...lineAttr} className={styles['frontmatterTable']}>
+      <tbody>
+        {node.entries.map(([key, value], i) => (
+          <tr key={i}>
+            <th scope="row">{key}</th>
+            <td>{value}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
 }
 
 function alignStyle(align: TableAlign | null | undefined): React.CSSProperties | undefined {

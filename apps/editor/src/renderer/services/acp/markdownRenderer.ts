@@ -50,6 +50,11 @@ export type MdNode =
     }
   | { readonly type: 'blockquote'; readonly children: readonly MdInline[]; readonly line?: number }
   | {
+      readonly type: 'frontmatter'
+      readonly entries: readonly (readonly [key: string, value: string])[]
+      readonly line?: number
+    }
+  | {
       readonly type: 'table'
       readonly align: readonly (TableAlign | null)[]
       readonly header: readonly (readonly MdInline[])[]
@@ -90,14 +95,41 @@ export type MdInline =
   | { readonly type: 'softbreak' }
 
 /**
+ * Options for {@link parseMarkdown}. `frontmatter` enables YAML preamble
+ * handling: when set, a `---`-fenced block at the very start of the document
+ * becomes a single `frontmatter` node instead of an `hr` + paragraph. Off by
+ * default so the ACP chat and other streaming consumers treat `---` as an `hr`.
+ */
+export interface ParseMarkdownOptions {
+  readonly frontmatter?: boolean
+}
+
+/**
  * Parse a markdown string into an array of block-level nodes. Pure — no React,
  * no DOM. Safe to call repeatedly; results can be cached upstream by message
  * id since the AST is stable for a stable input.
  */
-export function parseMarkdown(input: string): readonly MdNode[] {
+export function parseMarkdown(input: string, options?: ParseMarkdownOptions): readonly MdNode[] {
   const lines = input.replace(/\r\n?/g, '\n').split('\n')
   const out: MdNode[] = []
   let i = 0
+
+  // YAML frontmatter: a `---` on the first line closed by a later `---`/`...`.
+  // Emitted as one node the preview renders as a table; skipped otherwise.
+  if (options?.frontmatter === true && /^---[ \t]*$/.test(lines[0] ?? '')) {
+    for (let j = 1; j < lines.length; j++) {
+      if (/^(?:---|\.\.\.)[ \t]*$/.test(lines[j] ?? '')) {
+        out.push({
+          type: 'frontmatter',
+          entries: parseFrontmatterEntries(lines.slice(1, j)),
+          line: 0,
+        })
+        i = j + 1
+        break
+      }
+    }
+  }
+
   while (i < lines.length) {
     const line = lines[i] ?? ''
 
@@ -288,6 +320,28 @@ export function parseMarkdown(input: string): readonly MdNode[] {
 
 function isListItemStart(line: string): boolean {
   return /^\s*(?:[-*+]|\d+\.)\s+/.test(line)
+}
+
+/**
+ * Parse frontmatter body lines into `[key, value]` pairs for the preview table.
+ * Deliberately minimal (no YAML dependency): only top-level `key: value` lines
+ * are split; nested/indented lines and block scalars are appended to the current
+ * key's value verbatim so nothing is lost. Comment lines (`#`) are skipped.
+ */
+function parseFrontmatterEntries(lines: readonly string[]): (readonly [string, string])[] {
+  const entries: [string, string][] = []
+  for (const raw of lines) {
+    if (raw.trim() === '' || /^\s*#/.test(raw)) continue
+    const topLevel = /^([^\s:#][^:]*?):(?:\s+(.*))?$/.exec(raw)
+    if (topLevel && !/^\s/.test(raw)) {
+      entries.push([topLevel[1] ?? '', (topLevel[2] ?? '').trim()])
+      continue
+    }
+    // Continuation of the previous key (nested map / list item / block scalar).
+    const last = entries[entries.length - 1]
+    if (last) last[1] = last[1] === '' ? raw.trim() : `${last[1]}\n${raw.trim()}`
+  }
+  return entries
 }
 
 /** Number of leading space characters (tabs count as one; agents emit spaces). */

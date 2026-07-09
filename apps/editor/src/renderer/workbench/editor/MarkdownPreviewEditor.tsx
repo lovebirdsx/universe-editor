@@ -11,7 +11,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useContext, useEffect, useRef, useState } from 'react'
-import { IEditorGroupsService, IEditorInput, IFileService, URI } from '@universe-editor/platform'
+import {
+  IConfigurationService,
+  IEditorGroupsService,
+  IEditorInput,
+  IFileService,
+  markAsSingleton,
+  URI,
+} from '@universe-editor/platform'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
 import { MonacoModelRegistry } from './monaco/MonacoModelRegistry.js'
@@ -29,15 +36,32 @@ import './markdownFindHighlight.css'
 export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
   const fileService = useService(IFileService)
   const groupsService = useService(IEditorGroupsService)
+  const configService = useService(IConfigurationService)
   const group = useContext(EditorGroupContext)
   const sourceUri = (input as MarkdownPreviewInput).sourceUri
   const stateKey = sourceUri.toString()
   const [content, setContent] = useState('')
+  const [renderFrontmatter, setRenderFrontmatter] = useState(
+    () => configService.get<boolean>('markdown.preview.renderYamlFrontmatter') ?? true,
+  )
   const rootRef = useRef<HTMLDivElement>(null)
   const activeGroup = groupsService.activeGroup
   const isActiveEditor = activeGroup === group && activeGroup.activeEditor === input
   useMarkdownSyncScroll(rootRef, sourceUri)
   useMarkdownPreviewScrollRestore(rootRef, stateKey)
+
+  useEffect(() => {
+    const d = markAsSingleton(
+      configService.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration('markdown.preview.renderYamlFrontmatter')) {
+          setRenderFrontmatter(
+            configService.get<boolean>('markdown.preview.renderYamlFrontmatter') ?? true,
+          )
+        }
+      }),
+    )
+    return () => d.dispose()
+  }, [configService])
 
   const { find, linkHints, helpVisible, closeHelp } = useMarkdownReaderNav({
     rootRef,
@@ -105,6 +129,7 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
         className={styles['previewBody'] ?? ''}
         baseUri={URI.joinPath(sourceUri, '..')}
         previewLinks
+        frontmatter={renderFrontmatter ? 'table' : 'hidden'}
       />
       {helpVisible && <MarkdownPreviewHelp onClose={closeHelp} />}
     </div>
