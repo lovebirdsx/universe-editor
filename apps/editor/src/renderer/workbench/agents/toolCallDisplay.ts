@@ -54,7 +54,58 @@ function deriveSearchDisplay(call: AcpToolCall): ToolCallDisplay {
   return { title: call.title }
 }
 
+/**
+ * Humanize an MCP tool segment (`mcp__<server>__<tool>`'s `<tool>`) into a
+ * friendly Title Case label: `ue_create_session` → `Create Session`,
+ * `read_object` → `Read Object`. Server attribution is shown separately as a
+ * badge, so it is not repeated here.
+ *
+ * The leading `ue_`-style vendor prefix (a short lowercase token followed by an
+ * underscore) is dropped as noise; we keep it if stripping would empty the
+ * label.
+ */
+export function humanizeMcpTool(tool: string): string {
+  const withoutPrefix = tool.replace(/^[a-z]{1,3}_(?=[a-z])/, '')
+  const base = withoutPrefix.length > 0 ? withoutPrefix : tool
+  const words = base
+    .split(/[_\s]+/)
+    .filter((w) => w.length > 0)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+  return words.length > 0 ? words.join(' ') : tool
+}
+
+/**
+ * MCP tools arrive with the raw tool name as their title (e.g.
+ * `mcp_universe-editor_ue_create_session`). Humanize the parsed `mcpTool`
+ * segment into a friendly Title Case title; the server is surfaced as a badge.
+ */
+function deriveMcpDisplay(call: AcpToolCall): ToolCallDisplay {
+  if (call.mcpTool && call.mcpTool.length > 0) {
+    return { title: humanizeMcpTool(call.mcpTool) }
+  }
+  return { title: call.title }
+}
+
+/**
+ * Detect and pretty-print a JSON payload so the UI can syntax-highlight it.
+ * Only trigger on text that clearly *is* a JSON object/array (starts with `{`
+ * or `[` and parses cleanly) so plain-text / markdown output stays on its
+ * original rendering path.
+ */
+export function tryPrettyJson(text: string): string | undefined {
+  const trimmed = text.trim()
+  if (trimmed.length === 0) return undefined
+  const first = trimmed[0]
+  if (first !== '{' && first !== '[') return undefined
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2)
+  } catch {
+    return undefined
+  }
+}
+
 export function deriveToolCallDisplay(call: AcpToolCall): ToolCallDisplay {
+  if (call.mcpServer !== undefined) return deriveMcpDisplay(call)
   switch (call.kind) {
     case 'execute':
       return deriveExecuteDisplay(call)

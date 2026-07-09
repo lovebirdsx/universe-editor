@@ -10,7 +10,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { memo, useState } from 'react'
-import { IEditorService, URI } from '@universe-editor/platform'
+import { IConfigurationService, IEditorService, URI, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import type {
   AcpMessage,
@@ -21,13 +21,34 @@ import type {
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { InlineDiffPreview } from './InlineDiffPreview.js'
+import { CodeBlock } from './CodeBlock.js'
 import { MessageContent } from './MessageContent.js'
-import { TerminalOutput, ToolCallStatusIcon } from './ToolCallOutput.js'
+import { TerminalOutput, ToolCallSection, ToolCallStatusIcon } from './ToolCallOutput.js'
+import { deriveToolCallDisplay, tryPrettyJson } from './toolCallDisplay.js'
 import { toolKindIcon } from './timelineIcons.js'
-import { deriveToolCallDisplay } from './toolCallDisplay.js'
 import { buildStickyKey } from './stickyScroll.js'
 import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
 import styles from './agents.module.css'
+
+/** Config key controlling which MCP-card sections start expanded. */
+const MCP_CARD_DEFAULT_EXPANDED = 'acp.mcpCard.defaultExpanded'
+type McpExpandMode = 'both' | 'output' | 'none'
+
+function readMcpExpand(mode: string | undefined): { input: boolean; output: boolean } {
+  const m: McpExpandMode = mode === 'output' || mode === 'none' ? mode : 'both'
+  return { input: m === 'both', output: m === 'both' || m === 'output' }
+}
+
+/** Non-empty object → pretty-printed JSON string for the MCP input panel. */
+function formatMcpInput(rawInput: unknown): string | undefined {
+  if (typeof rawInput !== 'object' || rawInput === null) return undefined
+  if (Object.keys(rawInput as Record<string, unknown>).length === 0) return undefined
+  try {
+    return JSON.stringify(rawInput, null, 2)
+  } catch {
+    return undefined
+  }
+}
 
 /**
  * Threads the unified collapse store into a controlled tool-call subtree so the
@@ -75,11 +96,14 @@ export const ToolCallCard = memo(function ToolCallCard({
   subtreeCollapse?: SubtreeCollapse
 }) {
   const editorService = useService(IEditorService)
+  const configService = useService(IConfigurationService)
+  const isMcp = call.mcpServer !== undefined
   // Controlled by the timeline (Alt+F / Ctrl+Alt+F); falls back to self-managed
-  // state when used standalone (ToolCallList). read/search start collapsed.
+  // state when used standalone (ToolCallList). read/search start collapsed, but
+  // MCP cards start expanded so their input/output panels are visible.
   const controlled = collapsedProp !== undefined
   const [internalCollapsed, setInternalCollapsed] = useState(
-    () => call.kind === 'read' || call.kind === 'search',
+    () => !isMcp && (call.kind === 'read' || call.kind === 'search'),
   )
   const collapsed = controlled ? collapsedProp : internalCollapsed
   const onToggle = controlled
@@ -119,7 +143,48 @@ export const ToolCallCard = memo(function ToolCallCard({
     </div>
   )
 
-  const body = isExecute ? (
+  const mcpBody =
+    isMcp &&
+    (() => {
+      const expand = readMcpExpand(configService.get<string>(MCP_CARD_DEFAULT_EXPANDED))
+      const inputJson = formatMcpInput(call.rawInput)
+      // Output is plain text unless the agent embedded images/resources; in the
+      // text case try to pretty-print JSON for a highlighted, readable panel.
+      const textOnlyOutput = call.blocks.every((b) => b.type === 'text')
+      const outputJson = textOnlyOutput ? tryPrettyJson(call.text) : undefined
+      const hasOutput = outputJson !== undefined || call.blocks.length > 0
+      return (
+        <>
+          {diffs}
+          {inputJson !== undefined && (
+            <ToolCallSection
+              label={localize('acp.mcp.input', 'Input')}
+              defaultExpanded={expand.input}
+              testId="acp-mcp-input"
+            >
+              <CodeBlock code={inputJson} lang="json" />
+            </ToolCallSection>
+          )}
+          {hasOutput && (
+            <ToolCallSection
+              label={localize('acp.mcp.output', 'Output')}
+              defaultExpanded={expand.output}
+              testId="acp-mcp-output"
+            >
+              {outputJson !== undefined ? (
+                <CodeBlock code={outputJson} lang="json" />
+              ) : (
+                <MessageContent blocks={call.blocks} />
+              )}
+            </ToolCallSection>
+          )}
+        </>
+      )
+    })()
+
+  const body = isMcp ? (
+    mcpBody
+  ) : isExecute ? (
     <>
       {diffs}
       {commandDetail}
@@ -179,7 +244,10 @@ export const ToolCallCard = memo(function ToolCallCard({
     <span className={styles['toolCallTitle']}>
       {display.title}
       {call.mcpServer !== undefined && (
-        <span className={styles['mcpBadge']} title={`MCP server: ${call.mcpServer}`}>
+        <span
+          className={styles['mcpBadge']}
+          title={call.mcpTool !== undefined ? `${call.mcpServer} · ${call.mcpTool}` : call.title}
+        >
           MCP · {call.mcpServer}
         </span>
       )}

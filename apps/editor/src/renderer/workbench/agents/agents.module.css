@@ -628,6 +628,45 @@
   font-size: calc(var(--agent-font-size, 12px) * 0.917);
 }
 
+/* MCP card Input / Output collapsible sections. */
+.toolCallSection {
+  margin: 6px 0 0;
+}
+
+.toolCallSectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 2px 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-message-role-fg, #888);
+  font-size: calc(var(--agent-font-size, 12px) * 0.786);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+.toolCallSectionHeader:hover {
+  color: var(--color-fg, #ccc);
+}
+
+.toolCallSectionChevron {
+  flex: none;
+  display: inline-flex;
+}
+
+.toolCallSectionLabel {
+  min-width: 0;
+}
+
+.toolCallSectionBody {
+  margin-top: 2px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.917);
+}
+
 /* Sub-agent timeline folded inside a parent Task card. */
 .toolCallChildren {
   list-style: none;

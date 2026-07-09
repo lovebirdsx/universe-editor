@@ -6,8 +6,8 @@
  *   - ToolCallStatusIcon: status text → lucide icon, spinning while in flight.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { Check, ChevronDown, ChevronUp, CircleX, Loader2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { Check, ChevronDown, ChevronRight, ChevronUp, CircleX, Loader2 } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import { parseAnsi, type AnsiSegment } from '../../services/acp/ansi.js'
 import type { AcpToolCallStatus } from '../../services/acp/acpSessionService.js'
@@ -15,6 +15,46 @@ import { useContentExpansion } from './chatContentExpansion.js'
 import styles from './agents.module.css'
 
 const COLLAPSED_MAX_PX = 240
+
+/**
+ * A labeled, collapsible sub-section inside a tool-call card (e.g. the MCP
+ * card's Input / Output panels). Initial expansion is seeded from the caller
+ * (config-driven); the toggle is local state so folding a section stays put for
+ * the card's lifetime.
+ */
+export function ToolCallSection({
+  label,
+  defaultExpanded,
+  children,
+  testId,
+}: {
+  label: string
+  defaultExpanded: boolean
+  children: ReactNode
+  testId?: string
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+  return (
+    <div className={styles['toolCallSection']} data-testid={testId}>
+      <button
+        type="button"
+        className={styles['toolCallSectionHeader']}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <span className={styles['toolCallSectionChevron']} aria-hidden="true">
+          {expanded ? (
+            <ChevronDown size={12} strokeWidth={1.75} />
+          ) : (
+            <ChevronRight size={12} strokeWidth={1.75} />
+          )}
+        </span>
+        <span className={styles['toolCallSectionLabel']}>{label}</span>
+      </button>
+      {expanded && <div className={styles['toolCallSectionBody']}>{children}</div>}
+    </div>
+  )
+}
 
 export function TerminalOutput({ text, contentKey }: { text: string; contentKey?: string }) {
   const segments = useMemo(() => parseAnsi(text), [text])

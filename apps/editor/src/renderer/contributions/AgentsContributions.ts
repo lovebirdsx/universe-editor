@@ -145,6 +145,15 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Default timeline collapse mode for new sessions per agent ID. Possible values: "default" (smart per-kind folding), "collapsed" (all folded), "expanded" (all unfolded). Example: { "claude-code": "default", "codex": "collapsed" }.',
             ),
           },
+          'acp.mcpCard.defaultExpanded': {
+            type: 'string',
+            enum: ['both', 'output', 'none'],
+            default: 'both',
+            description: localize(
+              'settings.acp.mcpCard.defaultExpanded',
+              'Which sections of an MCP tool-call card start expanded: "both" (input and output), "output" (output only), or "none" (all collapsed).',
+            ),
+          },
           'acp.fontSize': {
             type: 'number',
             default: AGENT_FONT_SIZE_DEFAULT,

@@ -50,6 +50,7 @@ import {
   extractModelBreakdown,
   readFileChanges,
   readMcpServer,
+  readMcpTool,
   readMessageId,
   readParentToolUseId,
   readTerminalOutput,
@@ -1042,6 +1043,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         if (effectiveParent == null) this._sealStreamingMessages()
         const { blocks, diffs } = splitToolCallContent(update.content ?? [])
         const mcpServer = readMcpServer(update)
+        const mcpTool = readMcpTool(update)
         const terminalText = this._accumulateTerminalOutput(update.toolCallId, update)
         this._upsertToolCall(
           {
@@ -1054,6 +1056,7 @@ export class AcpSession extends Disposable implements IAcpSession {
             text: terminalText ?? blocksToText(blocks),
             ...(update.rawInput !== undefined ? { rawInput: update.rawInput } : {}),
             ...(mcpServer !== undefined ? { mcpServer } : {}),
+            ...(mcpTool !== undefined ? { mcpTool } : {}),
           },
           effectiveParent,
         )
@@ -1073,6 +1076,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         const blocks = split?.blocks ?? existing?.blocks ?? []
         const diffs = split?.diffs ?? existing?.diffs ?? []
         const mcpServer = readMcpServer(update) ?? existing?.mcpServer
+        const mcpTool = readMcpTool(update) ?? existing?.mcpTool
         const terminalText = this._accumulateTerminalOutput(update.toolCallId, update)
         const rawInput = update.rawInput !== undefined ? update.rawInput : existing?.rawInput
         const next: AcpToolCall = {
@@ -1085,6 +1089,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           text: terminalText ?? blocksToText(blocks),
           ...(rawInput !== undefined ? { rawInput } : {}),
           ...(mcpServer !== undefined ? { mcpServer } : {}),
+          ...(mcpTool !== undefined ? { mcpTool } : {}),
         }
         this._upsertToolCall(next, effectiveParent)
         if (update.status === 'failed') {

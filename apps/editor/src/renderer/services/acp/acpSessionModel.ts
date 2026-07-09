@@ -81,6 +81,12 @@ export interface AcpToolCall {
    * for built-in tools. Drives the "MCP · <server>" attribution badge.
    */
   readonly mcpServer?: string
+  /**
+   * Source MCP tool segment (`<tool>` in `mcp__<server>__<tool>`). Kept so the
+   * UI can humanize it into a friendly card title (e.g. `ue_create_session` →
+   * `Create Session`). Absent for built-in tools.
+   */
+  readonly mcpTool?: string
 }
 
 /**

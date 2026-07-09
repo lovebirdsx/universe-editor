@@ -67,16 +67,29 @@ export function readMessageId(update: SessionUpdate): string | undefined {
   return typeof id === 'string' && id.length > 0 ? id : undefined
 }
 
+function readMcpToolName(update: SessionUpdate): { server: string; tool: string } | undefined {
+  const meta = (update as { _meta?: { claudeCode?: { toolName?: unknown } } | null })._meta
+  const toolName = meta?.claudeCode?.toolName
+  if (typeof toolName !== 'string' || toolName.length === 0) return undefined
+  return parseMcpToolName(toolName)
+}
+
 /**
  * Resolve the source MCP server for a tool_call(_update) from the agent fork's
  * `_meta.claudeCode.toolName` (`mcp__<server>__<tool>`). Returns undefined for
  * built-in tools or malformed names.
  */
 export function readMcpServer(update: SessionUpdate): string | undefined {
-  const meta = (update as { _meta?: { claudeCode?: { toolName?: unknown } } | null })._meta
-  const toolName = meta?.claudeCode?.toolName
-  if (typeof toolName !== 'string' || toolName.length === 0) return undefined
-  return parseMcpToolName(toolName)?.server
+  return readMcpToolName(update)?.server
+}
+
+/**
+ * Resolve the MCP tool segment (the `<tool>` in `mcp__<server>__<tool>`) so the
+ * UI can humanize it into a friendly card title. Returns undefined for built-in
+ * tools or malformed names.
+ */
+export function readMcpTool(update: SessionUpdate): string | undefined {
+  return readMcpToolName(update)?.tool
 }
 
 /**

@@ -77,6 +77,7 @@ async function runPrompt(id, params) {
       title: 'read_file',
       kind: 'read',
       status: 'in_progress',
+      rawInput: { path: '/tmp/example.txt', limit: 100 },
       _meta: { claudeCode: { toolName: 'mcp__fs__read_file' } },
     },
   })
@@ -91,7 +92,12 @@ async function runPrompt(id, params) {
       sessionUpdate: 'tool_call_update',
       toolCallId: 'fs-read',
       status: 'completed',
-      content: [{ type: 'content', content: { type: 'text', text: 'ok' } }],
+      content: [
+        {
+          type: 'content',
+          content: { type: 'text', text: '{"ok":true,"lines":2,"path":"/tmp/example.txt"}' },
+        },
+      ],
     },
   })
 

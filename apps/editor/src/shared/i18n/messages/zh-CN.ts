@@ -433,6 +433,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.acp.defaultAgentId': '"新建 Agent 会话"使用的默认 Agent。',
   'settings.acp.defaultCollapseModes':
     '按 Agent ID 设置新会话的默认时间线折叠模式。可选值："default"（按类型智能折叠）、"collapsed"（全部折叠）、"expanded"（全部展开）。示例：{ "claude-code": "default", "codex": "collapsed" }。',
+  'settings.acp.mcpCard.defaultExpanded':
+    'MCP 工具调用卡片默认展开哪些区域："both"（输入和输出）、"output"（仅输出）或 "none"（全部折叠）。',
   'settings.acp.fontFamily': '控制 Agent 聊天面板的字体。留空则继承工作台 UI 字体。',
   'settings.acp.fontSize':
     '控制 Agent 聊天面板的基础字体大小（像素）。代码块和其他内容会相对缩放。',
@@ -1148,6 +1150,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.mcp.none': '此会话没有配置 MCP 服务器。',
   'acp.mcp.noSession': '没有活跃的 Agent 会话。',
   'acp.mcp.openSettings': '配置 MCP 服务器',
+  'acp.mcp.input': '输入',
+  'acp.mcp.output': '输出',
   'acp.mention.empty': '没有匹配的文件',
   'acp.mention.loading': '正在扫描文件…',
   'acp.newSession': '新建会话',
