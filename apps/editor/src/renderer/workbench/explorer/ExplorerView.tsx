@@ -103,7 +103,14 @@ export function ExplorerView() {
     (resource: URI, options?: { preview?: boolean }) => {
       void (async () => {
         if (!(await confirmLargeFile(resource, fileService, dialogService))) return
-        await editorResolverService.openEditor(resource, { pinned: options?.preview !== true })
+        const preview = options?.preview === true
+        // Single-click / Space preview keeps focus in the Explorer so the
+        // selected row stays highlighted; double-click (pinned) hands focus to
+        // the editor as usual.
+        await editorResolverService.openEditor(resource, {
+          pinned: !preview,
+          ...(preview ? { preserveFocus: true } : {}),
+        })
       })()
     },
     [editorResolverService, fileService, dialogService],

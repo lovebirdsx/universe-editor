@@ -436,7 +436,13 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       if (editorRef.current) {
         registeredEditor = editorRef.current
         FileEditorRegistry.register(fileInput, registeredEditor, group?.id)
-        if (groupsService.activeGroup.activeEditor === fileInput) {
+        // Focus the editor once its model lands — unless the open asked to keep
+        // focus elsewhere (single-click preview from a list keeps focus in the
+        // originating tree so its selection highlight stays active).
+        if (
+          groupsService.activeGroup.activeEditor === fileInput &&
+          !groupsService.activeGroup.lastActivationPreservedFocus
+        ) {
           focusStandaloneEditor(editorRef.current, contextKeyService)
         }
         // Keep cache live so toJSON() always captures the latest position.
@@ -491,6 +497,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   useEffect(() => {
     if (activeGroup !== group) return
     if (activeGroupActiveEditor !== fileInput) return
+    if (activeGroup.lastActivationPreservedFocus) return
     if (editorRef.current) focusStandaloneEditor(editorRef.current, contextKeyService)
   }, [activeGroup, activeGroupActiveEditor, contextKeyService, fileInput, group])
 

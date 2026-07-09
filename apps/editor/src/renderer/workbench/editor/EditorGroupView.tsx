@@ -666,9 +666,13 @@ export const EditorGroupView = memo(function EditorGroupView({
     const wasActive = wasActiveGroupRef.current
     wasActiveGroupRef.current = isActiveGroup
     if (!isActiveGroup || !activeEditor) return
-    // Group just (re-)activated without an editor change → always focus.
+    // Group just (re-)activated without an editor change → focus, unless this
+    // activation asked to preserve focus (single-click preview from a list must
+    // leave focus in the originating tree). Record the activation either way so
+    // the already-active branch below doesn't re-focus it.
     if (!wasActive) {
       focusedActivationRef.current = group.activationId
+      if (group.lastActivationPreservedFocus) return
       focusEditorInput(activeEditor, contextKeyService, group.id)
       return
     }

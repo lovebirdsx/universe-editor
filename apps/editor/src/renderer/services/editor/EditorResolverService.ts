@@ -78,7 +78,7 @@ export class EditorResolverService implements IEditorResolverService {
 
   async openEditor(
     uri: URI,
-    options?: { preferredTypeId?: string; pinned?: boolean },
+    options?: { preferredTypeId?: string; pinned?: boolean; preserveFocus?: boolean },
   ): Promise<void> {
     const candidates = this.resolveEditors(uri)
 
@@ -96,6 +96,9 @@ export class EditorResolverService implements IEditorResolverService {
     this._logger.info(
       `openEditor uri=${uri.toString()} chosen=${chosen?.info.typeId ?? 'default'} candidates=${candidates.length}`,
     )
-    this._editor.openEditor(input, { pinned: options?.pinned ?? true })
+    this._editor.openEditor(input, {
+      pinned: options?.pinned ?? true,
+      ...(options?.preserveFocus === true ? { preserveFocus: true } : {}),
+    })
   }
 }

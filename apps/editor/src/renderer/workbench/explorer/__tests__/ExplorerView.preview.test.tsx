@@ -160,7 +160,7 @@ function renderView(folder: URI, fs: IFileServiceType) {
 afterEach(() => cleanup())
 
 describe('ExplorerView — preview', () => {
-  it('single-click opens with pinned:false (preview)', async () => {
+  it('single-click opens with pinned:false (preview) and preserves Explorer focus', async () => {
     const root = URI.file('/ws')
     const fs = makeFs({
       [root.toString()]: [{ name: 'README.md', isFile: true, isDirectory: false }],
@@ -169,9 +169,10 @@ describe('ExplorerView — preview', () => {
     fireEvent.click(await screen.findByText('README.md'))
     await waitFor(() => expect(editor.opened).toHaveLength(1))
     expect(editor.opened[0]?.options?.pinned).toBe(false)
+    expect(editor.opened[0]?.options?.preserveFocus).toBe(true)
   })
 
-  it('double-click opens with pinned:true', async () => {
+  it('double-click opens with pinned:true and hands focus to the editor', async () => {
     const root = URI.file('/ws')
     const fs = makeFs({
       [root.toString()]: [{ name: 'README.md', isFile: true, isDirectory: false }],
@@ -181,6 +182,8 @@ describe('ExplorerView — preview', () => {
     fireEvent.doubleClick(label)
     // dblclick in jsdom also fires a click event first; both should reach the handler.
     await waitFor(() => expect(editor.opened.length).toBeGreaterThanOrEqual(1))
-    expect(editor.opened.some((o) => o.options?.pinned === true)).toBe(true)
+    const pinnedOpen = editor.opened.find((o) => o.options?.pinned === true)
+    expect(pinnedOpen).toBeDefined()
+    expect(pinnedOpen?.options?.preserveFocus).not.toBe(true)
   })
 })

@@ -140,6 +140,19 @@ function ExplorerTreeNodeImpl({
     if (!isDirectory) onOpenFile(resource, { preview: false })
   }
 
+  // Right-click selects the clicked row (VSCode parity) so the context menu acts
+  // on it. A right-click inside the current selection keeps the whole selection;
+  // one outside it selects just that row.
+  const handleContextMenu = (
+    e: ReactMouseEvent,
+    target: { resource: URI; isDirectory: boolean },
+  ) => {
+    if (!tree.isSelected(target.resource)) {
+      tree.setSelection([target.resource], target.resource)
+    }
+    onContextMenu(e, target)
+  }
+
   const { dragHandleProps } = useDragHandle<{ resource: URI; isDirectory: boolean }>(
     {
       resource: compactRoot ?? resource,
@@ -186,7 +199,7 @@ function ExplorerTreeNodeImpl({
       style={style ? { ...indent, ...style } : indent}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
-      onContextMenu={(e) => onContextMenu(e, { resource, isDirectory })}
+      onContextMenu={(e) => handleContextMenu(e, { resource, isDirectory })}
       {...dragHandleProps}
       {...(isDirectory ? dropTargetProps : {})}
     >
@@ -231,7 +244,7 @@ function ExplorerTreeNodeImpl({
                 onContextMenu={(e) => {
                   e.preventDefault()
                   e.stopPropagation()
-                  onContextMenu(e, { resource: s.uri, isDirectory: true })
+                  handleContextMenu(e, { resource: s.uri, isDirectory: true })
                 }}
                 onDragEnter={() => {
                   dropDirRef.current = s.uri

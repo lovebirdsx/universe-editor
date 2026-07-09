@@ -236,6 +236,27 @@ describe('ExplorerView', () => {
     expect(editor.opened[0]?.type ?? (editor.opened[0] as { typeId?: string }).typeId).toBe('file')
   })
 
+  it('right-clicking a row selects it (moving selection off the previously selected row)', async () => {
+    const root = URI.file('/ws')
+    const fs = makeFs({
+      [root.toString()]: [
+        { name: 'alpha.txt', isFile: true, isDirectory: false },
+        { name: 'beta.txt', isFile: true, isDirectory: false },
+      ],
+    })
+    renderView({ folder: root, fs })
+
+    const alphaRow = (await screen.findByText('alpha.txt')).closest('[role="treeitem"]')!
+    const betaRow = screen.getByText('beta.txt').closest('[role="treeitem"]')!
+
+    fireEvent.click(alphaRow)
+    await waitFor(() => expect(alphaRow.getAttribute('aria-selected')).toBe('true'))
+
+    fireEvent.contextMenu(betaRow)
+    await waitFor(() => expect(betaRow.getAttribute('aria-selected')).toBe('true'))
+    expect(alphaRow.getAttribute('aria-selected')).toBe('false')
+  })
+
   it('dragging an internal file onto the root moves it (rename), not copies it', async () => {
     const root = URI.file('/ws')
     const sub = URI.joinPath(root, 'src')

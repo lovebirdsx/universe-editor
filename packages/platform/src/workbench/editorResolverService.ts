@@ -54,10 +54,16 @@ export interface IEditorResolverService {
    * - `preferredTypeId`: if specified, selects the matching registration over
    *   the highest-priority one (used by "Reopen With...").
    * - `pinned`: passed through to IEditorService.openEditor (default true).
+   * - `preserveFocus`: open without moving DOM focus to the editor (default
+   *   false). Used by single-click preview from list views so the originating
+   *   tree keeps focus (and its active-selection highlight).
    *
    * Falls back to creating a FileEditorInput when no registration matches.
    */
-  openEditor(uri: URI, options?: { preferredTypeId?: string; pinned?: boolean }): Promise<void>
+  openEditor(
+    uri: URI,
+    options?: { preferredTypeId?: string; pinned?: boolean; preserveFocus?: boolean },
+  ): Promise<void>
 }
 
 export const IEditorResolverService =
