@@ -423,6 +423,14 @@ describe('parseInline — inline layer', () => {
     ])
   })
 
+  it('parses code spans delimited by double backticks with inner single backticks', () => {
+    expect(parseInline('see `` `true` `` now')).toEqual<readonly MdInline[]>([
+      text('see '),
+      { type: 'code', text: '`true`' },
+      text(' now'),
+    ])
+  })
+
   it('parses links', () => {
     expect(parseInline('[Click](https://example.com)')).toEqual<readonly MdInline[]>([
       {

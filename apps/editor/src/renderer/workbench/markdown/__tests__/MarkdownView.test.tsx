@@ -236,6 +236,13 @@ describe('MarkdownView', () => {
     expect(container.querySelector('code')?.textContent).toBe('[春晓](./test2.md#春晓)')
   })
 
+  it('renders double-backtick code spans containing single backticks as one code element', () => {
+    const { container } = renderMarkdown('`` `true` ``')
+    const codes = container.querySelectorAll('code')
+    expect(codes).toHaveLength(1)
+    expect(codes[0]?.textContent).toBe('`true`')
+  })
+
   it('renders an angle-bracketed Windows file path with spaces as one full-path link', () => {
     const winPath = String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\docs\user\zh-CN\reference\keyboard-shortcuts.md`
     renderMarkdown(`see <${winPath}>`)

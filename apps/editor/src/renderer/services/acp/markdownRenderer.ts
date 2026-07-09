@@ -394,17 +394,23 @@ export function parseInline(text: string): readonly MdInline[] {
       continue
     }
 
-    // Inline code: `…` with the same number of backticks on both ends. We
-    // support single backticks only (common case); the spec also allows ``
-    // for content containing a single backtick — left as future work.
+    // Inline code: `...`, or `` `...` `` when the content itself contains
+    // single backticks. Closing delimiter must use the same backtick-run length.
     if (ch === '`') {
-      const close = text.indexOf('`', i + 1)
+      const tickCount = countBacktickRun(text, i)
+      const close = findClosingBacktickRun(text, i + tickCount, tickCount)
       if (close !== -1) {
         flush()
-        out.push({ type: 'code', text: text.slice(i + 1, close) })
-        i = close + 1
+        out.push({
+          type: 'code',
+          text: normalizeCodeSpanText(text.slice(i + tickCount, close)),
+        })
+        i = close + tickCount
         continue
       }
+      buf += text.slice(i, i + tickCount)
+      i += tickCount
+      continue
     }
 
     // Strikethrough: ~~text~~
@@ -571,6 +577,34 @@ function findMatching(text: string, start: number, open: string, close: string):
     }
   }
   return -1
+}
+
+function countBacktickRun(text: string, start: number): number {
+  let count = 0
+  while (text[start + count] === '`') count++
+  return count
+}
+
+function findClosingBacktickRun(text: string, start: number, tickCount: number): number {
+  let i = start
+  while (i < text.length) {
+    if (text[i] !== '`') {
+      i++
+      continue
+    }
+    const runLength = countBacktickRun(text, i)
+    if (runLength === tickCount) return i
+    i += runLength
+  }
+  return -1
+}
+
+function normalizeCodeSpanText(text: string): string {
+  const normalized = text.replace(/\r\n?|\n/g, ' ')
+  if (normalized.startsWith(' ') && normalized.endsWith(' ') && /[^ ]/.test(normalized)) {
+    return normalized.slice(1, -1)
+  }
+  return normalized
 }
 
 /**
