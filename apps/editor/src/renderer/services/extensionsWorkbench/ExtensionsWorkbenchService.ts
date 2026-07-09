@@ -26,6 +26,12 @@ import {
   type IGalleryExtension,
   type IQueryOptions,
 } from '../../../shared/ipc/extensionGalleryService.js'
+import {
+  IExtensionEnablementService,
+  EnablementState,
+} from '../extensions/ExtensionEnablementService.js'
+
+export { EnablementState }
 
 /** Storage key (APPLICATION scope) for the remembered set of trusted publishers. */
 const TRUSTED_PUBLISHERS_KEY = 'extensions.trustedPublishers'
@@ -46,6 +52,12 @@ export interface IExtensionEntry {
   readonly outdated: boolean
   /** An install/uninstall is in flight for this id. */
   readonly installing: boolean
+  /** A bundled built-in extension (git / typescript / …); cannot be uninstalled. */
+  readonly isBuiltin: boolean
+  /** Whether the extension is currently enabled (resolved global + workspace). */
+  readonly enabled: boolean
+  /** The resolved enablement state (drives which enable/disable actions to show). */
+  readonly enablementState: EnablementState
   /** Source references for actions (present when known). */
   readonly local?: ILocalExtension
   readonly gallery?: IGalleryExtension
@@ -84,6 +96,12 @@ export interface IExtensionsWorkbenchService {
   /** Uninstall an installed extension; tracks installing state + refreshes. */
   uninstall(entry: IExtensionEntry): Promise<void>
 
+  /** Enable / disable an extension at a given scope (global or workspace). */
+  setEnablement(entry: IExtensionEntry, state: EnablementState): Promise<void>
+
+  /** Whether a workspace is open (drives whether workspace-scope actions show). */
+  hasWorkspace(): boolean
+
   /** The README text for an entry's detail page. */
   getReadme(entry: IExtensionEntry): Promise<string>
 
@@ -108,6 +126,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
   readonly onDidChange: Event<void> = this._onDidChange.event
 
   private _installed: ILocalExtension[] = []
+  private _builtin: ILocalExtension[] = []
   private _results: IGalleryExtension[] = []
   private _searchText = ''
   private _searching = false
@@ -115,6 +134,8 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
   private readonly _installing = new Set<string>()
   /** Monotonic search token so a slow earlier query can't clobber a newer one. */
   private _searchSeq = 0
+  /** Resolved enablement state per id, refreshed alongside the installed set. */
+  private _enablementStates = new Map<string, EnablementState>()
 
   constructor(
     @IExtensionManagementService private readonly _management: IExtensionManagementService,
@@ -122,9 +143,11 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     @IDialogService private readonly _dialog: IDialogService,
     @IStorageService private readonly _storage: IStorageService,
     @INotificationService private readonly _notification: INotificationService,
+    @IExtensionEnablementService private readonly _enablement: IExtensionEnablementService,
   ) {
     super()
     this._register(this._management.onDidChangeExtensions(() => void this.refreshInstalled()))
+    this._register(this._enablement.onDidChangeEnablement(() => void this.refreshInstalled()))
   }
 
   get searchText(): string {
@@ -139,8 +162,13 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     return this._gallery.isEnabled()
   }
 
+  hasWorkspace(): boolean {
+    return this._enablement.hasWorkspace()
+  }
+
   getInstalled(): IExtensionEntry[] {
-    return this._installed.map((local) => this._entryFromLocal(local))
+    // Built-ins first, then user-installed; both carry enablement state.
+    return [...this._builtin, ...this._installed].map((local) => this._entryFromLocal(local))
   }
 
   getSearchResults(): IExtensionEntry[] {
@@ -148,8 +176,21 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
   }
 
   async refreshInstalled(): Promise<void> {
-    this._installed = await this._management.getInstalled()
+    const [installed, builtin] = await Promise.all([
+      this._management.getInstalled(),
+      this._management.listBuiltinExtensions(),
+    ])
+    this._installed = installed
+    this._builtin = builtin
+    // Resolve enablement for every id in one pass so entry mapping stays sync.
+    const ids = [...builtin, ...installed].map((e) => e.identifier)
+    const states = await Promise.all(ids.map((id) => this._enablement.getEnablementState(id)))
+    this._enablementStates = new Map(ids.map((id, i) => [id, states[i]!]))
     this._onDidChange.fire()
+  }
+
+  async setEnablement(entry: IExtensionEntry, state: EnablementState): Promise<void> {
+    await this._enablement.setEnablement(entry.id, state)
   }
 
   async search(text: string, options: IQueryOptions = {}): Promise<void> {
@@ -271,8 +312,18 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     )
   }
 
+  /** Resolved enablement state for an id (defaults to EnabledGlobally if unknown). */
+  private _stateOf(id: string): EnablementState {
+    return this._enablementStates.get(id) ?? EnablementState.EnabledGlobally
+  }
+
+  private _isEnabledState(state: EnablementState): boolean {
+    return state === EnablementState.EnabledGlobally || state === EnablementState.EnabledWorkspace
+  }
+
   private _entryFromLocal(local: ILocalExtension): IExtensionEntry {
     const m = local.manifest
+    const state = this._stateOf(local.identifier)
     return {
       id: local.identifier,
       displayName: m.displayName ?? m.name,
@@ -282,6 +333,9 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
       installed: true,
       outdated: false,
       installing: this._installing.has(local.identifier),
+      isBuiltin: local.source === 'builtin',
+      enabled: this._isEnabledState(state),
+      enablementState: state,
       local,
       ...(local.galleryMetadata?.publisherDisplayName
         ? { publisherDisplayName: local.galleryMetadata.publisherDisplayName }
@@ -294,6 +348,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 
   private _entryFromGallery(gallery: IGalleryExtension): IExtensionEntry {
     const local = this._installed.find((l) => l.identifier === gallery.identifier)
+    const state = this._stateOf(gallery.identifier)
     return {
       id: gallery.identifier,
       displayName: gallery.displayName,
@@ -303,6 +358,9 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
       installed: local !== undefined,
       outdated: local !== undefined && local.version !== gallery.version,
       installing: this._installing.has(gallery.identifier),
+      isBuiltin: false,
+      enabled: local === undefined || this._isEnabledState(state),
+      enablementState: state,
       gallery,
       ...(local ? { local } : {}),
       ...(gallery.publisherDisplayName

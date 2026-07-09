@@ -35,6 +35,7 @@ import type {
 } from '../../../shared/ipc/extensionHostService.js'
 import { resolveTsServerPaths } from './tsServerPaths.js'
 import { resolveUserExtensionsDir } from './userExtensionsDir.js'
+import { resolveBuiltinExtensionsDir } from './builtinExtensionsDir.js'
 import { PerfMarks } from '../../../shared/perf/marks.js'
 
 /** Grace period after closing the host's stdin before we force-kill its tree. */
@@ -91,14 +92,8 @@ function resolveFromRepo(relative: string): string {
 const defaultResolveEntry: ExtHostEntryResolver = () =>
   app.isPackaged ? path.join(process.resourcesPath, ENTRY_PACKAGED) : resolveFromRepo(ENTRY_DEV)
 
-/** Built-in extensions tree: repo `extensions/` in dev, `resources/extensions/` when packaged. */
-const EXTENSIONS_DEV = 'extensions'
-const EXTENSIONS_PACKAGED = 'extensions'
-
 const defaultResolveExtensionsDir: ExtHostExtensionsDirResolver = () =>
-  app.isPackaged
-    ? path.join(process.resourcesPath, EXTENSIONS_PACKAGED)
-    : resolveFromRepo(EXTENSIONS_DEV)
+  resolveBuiltinExtensionsDir()
 
 /** External (user-installed) extensions live under the user-data directory. */
 const defaultResolveUserExtensionsDir: ExtHostExtensionsDirResolver = () =>

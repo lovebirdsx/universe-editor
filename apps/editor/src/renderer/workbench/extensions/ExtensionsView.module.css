@@ -58,6 +58,33 @@
   background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.06));
 }
 
+.disabledRow .icon,
+.disabledRow .body {
+  opacity: 0.5;
+}
+
+.badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--color-badge-bg, rgba(255, 255, 255, 0.12));
+  color: var(--color-badge-fg, #cccccc);
+}
+
+.disabledBadge {
+  background: var(--color-warning-bg, rgba(255, 190, 80, 0.18));
+  color: var(--color-warning-fg, #d9a441);
+}
+
+.actionButtons {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .icon {
   flex-shrink: 0;
   width: 32px;

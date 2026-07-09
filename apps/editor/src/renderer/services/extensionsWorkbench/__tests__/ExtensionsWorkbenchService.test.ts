@@ -14,6 +14,10 @@ import type {
   IGalleryExtension,
 } from '../../../../shared/ipc/extensionGalleryService.js'
 import { ExtensionsWorkbenchService } from '../ExtensionsWorkbenchService.js'
+import {
+  EnablementState,
+  type IExtensionEnablementService,
+} from '../../extensions/ExtensionEnablementService.js'
 
 function localExtension(overrides: Partial<ILocalExtension> = {}): ILocalExtension {
   return {
@@ -49,9 +53,11 @@ function galleryExtension(overrides: Partial<IGalleryExtension> = {}): IGalleryE
 
 function makeMocks() {
   const onDidChangeExtensions = new Emitter<void>()
+  const onDidChangeEnablement = new Emitter<void>()
   const management = {
     onDidChangeExtensions: onDidChangeExtensions.event,
     getInstalled: vi.fn(async () => [] as ILocalExtension[]),
+    listBuiltinExtensions: vi.fn(async () => [] as ILocalExtension[]),
     installFromGallery: vi.fn(async () => localExtension()),
     installVSIX: vi.fn(),
     uninstall: vi.fn(async () => undefined),
@@ -73,7 +79,25 @@ function makeMocks() {
     set: vi.fn(async () => undefined),
   } as unknown as IStorageService
   const notification = { notify: vi.fn() } as unknown as INotificationService
-  return { management, gallery, dialog, storage, notification, onDidChangeExtensions }
+  const enablement = {
+    onDidChangeEnablement: onDidChangeEnablement.event,
+    hasWorkspace: vi.fn(() => false),
+    getEnablementState: vi.fn(async () => EnablementState.EnabledGlobally),
+    isEnabled: vi.fn(async () => true),
+    canChangeWorkspaceEnablement: vi.fn(() => false),
+    setEnablement: vi.fn(async () => undefined),
+    getEffectiveDisabledIds: vi.fn(async () => [] as string[]),
+  } as unknown as IExtensionEnablementService
+  return {
+    management,
+    gallery,
+    dialog,
+    storage,
+    notification,
+    enablement,
+    onDidChangeExtensions,
+    onDidChangeEnablement,
+  }
 }
 
 function makeService(mocks: ReturnType<typeof makeMocks>): ExtensionsWorkbenchService {
@@ -83,6 +107,7 @@ function makeService(mocks: ReturnType<typeof makeMocks>): ExtensionsWorkbenchSe
     mocks.dialog,
     mocks.storage,
     mocks.notification,
+    mocks.enablement,
   )
 }
 
@@ -209,5 +234,58 @@ describe('ExtensionsWorkbenchService', () => {
     await svc.install(svc.getSearchResults()[0]!)
 
     expect(mocks.management.installFromGallery).not.toHaveBeenCalled()
+  })
+
+  it('merges built-in extensions and marks them isBuiltin', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.listBuiltinExtensions).mockResolvedValue([
+      localExtension({ identifier: 'universe.git', source: 'builtin' }),
+    ])
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    const entries = svc.getInstalled()
+    expect(entries.map((e) => e.id)).toEqual(['universe.git', 'acme.installed'])
+    expect(entries.find((e) => e.id === 'universe.git')?.isBuiltin).toBe(true)
+    expect(entries.find((e) => e.id === 'acme.installed')?.isBuiltin).toBe(false)
+  })
+
+  it('reflects a disabled enablement state on the entry', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    vi.mocked(mocks.enablement.getEnablementState).mockResolvedValue(
+      EnablementState.DisabledGlobally,
+    )
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    const entry = svc.getInstalled()[0]!
+    expect(entry.enabled).toBe(false)
+    expect(entry.enablementState).toBe(EnablementState.DisabledGlobally)
+  })
+
+  it('forwards setEnablement to the enablement service', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    await svc.setEnablement(svc.getInstalled()[0]!, EnablementState.DisabledGlobally)
+    expect(mocks.enablement.setEnablement).toHaveBeenCalledWith(
+      'acme.installed',
+      EnablementState.DisabledGlobally,
+    )
+  })
+
+  it('refreshes when the enablement service fires a change', async () => {
+    const mocks = makeMocks()
+    const svc = makeService(mocks)
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    mocks.onDidChangeEnablement.fire()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(mocks.management.getInstalled).toHaveBeenCalled()
+    expect(svc.getInstalled()).toHaveLength(1)
   })
 })

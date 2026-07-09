@@ -13,7 +13,7 @@ import type { IExtensionManifest } from '@universe-editor/extensions-common'
 import type { IGalleryExtension } from './extensionGalleryService.js'
 
 /** How an installed extension entered the user extensions directory. */
-export type ExtensionInstallSource = 'vsix' | 'gallery'
+export type ExtensionInstallSource = 'vsix' | 'gallery' | 'builtin'
 
 /** Marketplace metadata carried forward for gallery-sourced installs (UI + updates). */
 export interface IExtensionGalleryMetadata {
@@ -51,6 +51,14 @@ export interface IExtensionManagementService {
 
   /** Every extension currently registered in `extensions.json` (and on disk). */
   getInstalled(): Promise<ILocalExtension[]>
+
+  /**
+   * The bundled built-in extensions (git / typescript / markdown / …). Scanned
+   * from the built-in extensions directory, not `extensions.json`. Surfaced to
+   * the Extensions UI so built-ins can be enabled / disabled like any other.
+   * `source` is `'builtin'`; they can never be uninstalled.
+   */
+  listBuiltinExtensions(): Promise<ILocalExtension[]>
 
   /**
    * Install from the marketplace: download the VSIX, verify its manifest matches

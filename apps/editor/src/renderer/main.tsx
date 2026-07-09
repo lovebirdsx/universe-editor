@@ -152,6 +152,10 @@ import {
   IExtensionHostClientService,
 } from './services/extensions/ExtensionHostClientService.js'
 import {
+  ExtensionEnablementService,
+  IExtensionEnablementService,
+} from './services/extensions/ExtensionEnablementService.js'
+import {
   ExtensionsWorkbenchService,
   IExtensionsWorkbenchService,
 } from './services/extensionsWorkbench/ExtensionsWorkbenchService.js'
@@ -604,14 +608,21 @@ async function bootstrapWorkbench(): Promise<void> {
   const activityService = workbenchStore.add(new ActivityService())
   services.set(IActivityService, activityService)
 
+  // Extension enablement (global + workspace scopes). Set before the host client
+  // and workbench facade, both of which inject it.
+  const extensionEnablementService = workbenchStore.add(
+    instantiation.createInstance(ExtensionEnablementService),
+  )
+  services.set(IExtensionEnablementService, extensionEnablementService)
+
   const extensionHostClientService = workbenchStore.add(
     instantiation.createInstance(ExtensionHostClientService),
   )
   services.set(IExtensionHostClientService, extensionHostClientService)
 
-  // Extensions UI facade: aggregates installed (management) + marketplace
-  // (gallery) into one view model. The Extensions view + detail editor depend
-  // only on this; it owns no wire logic beyond the two proxies.
+  // Extensions UI facade: aggregates installed (management) + built-in +
+  // marketplace (gallery) into one view model. The Extensions view + detail
+  // editor depend only on this; it owns no wire logic beyond the proxies.
   const extensionsWorkbenchService = workbenchStore.add(
     instantiation.createInstance(ExtensionsWorkbenchService),
   )
@@ -698,6 +709,7 @@ async function bootstrapWorkbench(): Promise<void> {
     extensionManagementService: services.get(
       IExtensionManagementService,
     ) as IExtensionManagementService,
+    extensionEnablementService,
     bootstrapFocusSettled,
     computeTeardownLeakReport: snapshotLeaks,
   })

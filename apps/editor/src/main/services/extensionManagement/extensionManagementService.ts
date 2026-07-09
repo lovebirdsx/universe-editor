@@ -39,6 +39,7 @@ import type {
 } from '../../../shared/ipc/extensionManagementService.js'
 import { IExtensionGalleryService } from '../../../shared/ipc/extensionGalleryService.js'
 import { resolveUserExtensionsDir } from '../extensionHost/userExtensionsDir.js'
+import { resolveBuiltinExtensionsDir } from '../extensionHost/builtinExtensionsDir.js'
 import {
   readInstalledRecords,
   writeInstalledRecords,
@@ -101,6 +102,7 @@ export class ExtensionManagementMainService
     private readonly _hostApiVersion: string = HOST_API_VERSION,
     @IExtensionGalleryService private readonly _gallery?: IManagementGallery,
     @ILoggerService loggerService?: ILoggerService,
+    private readonly _resolveBuiltinDir: UserExtensionsDirResolver = resolveBuiltinExtensionsDir,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, {
@@ -133,6 +135,38 @@ export class ExtensionManagementMainService
       } catch (err) {
         this._logger.warn(
           `installed extension ${rec.identifier} has an unreadable manifest: ${(err as Error).message}`,
+        )
+      }
+    }
+    return result
+  }
+
+  async listBuiltinExtensions(): Promise<ILocalExtension[]> {
+    const dir = this._resolveBuiltinDir()
+    let names: string[]
+    try {
+      names = (await fs.readdir(dir, { withFileTypes: true }))
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
+    } catch {
+      return [] // no built-in dir (unexpected, but degrade to empty)
+    }
+    const result: ILocalExtension[] = []
+    for (const name of names) {
+      const location = path.join(dir, name)
+      try {
+        const manifest = parseManifest(await readManifestJson(location))
+        result.push({
+          identifier: extensionId(manifest),
+          manifest,
+          version: manifest.version,
+          location,
+          source: 'builtin',
+          installedAt: 0,
+        })
+      } catch (err) {
+        this._logger.warn(
+          `built-in extension ${name} has an unreadable manifest: ${(err as Error).message}`,
         )
       }
     }
@@ -306,7 +340,10 @@ export class ExtensionManagementMainService
     else enablement[identifier] = false
     await writeEnablement(dir, enablement)
     this._logger.info(`${enabled ? 'enabled' : 'disabled'} extension ${identifier}`)
-    this._onDidChangeExtensions.fire()
+    // No onDidChangeExtensions here: global enablement is orchestrated by the
+    // renderer's ExtensionEnablementService, which fires its own change event
+    // (firing here too would double-restart the extension hosts). quarantine
+    // below is the exception — it runs stand-alone at startup and must signal.
   }
 
   async quarantineMalicious(): Promise<string[]> {

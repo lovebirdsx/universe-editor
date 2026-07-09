@@ -34,6 +34,7 @@ import type { ILanguageFeaturesService } from '../../languageFeatures/LanguageFe
 import type { IAcpPathPolicy } from '../../acp/acpPathPolicy.js'
 import type { IScmService } from '../ScmService.js'
 import type { IWebviewService } from '../WebviewService.js'
+import type { IExtensionEnablementService } from '../ExtensionEnablementService.js'
 
 const CONTRIBUTIONS: IExtensionDescriptionDto[] = [
   {
@@ -123,7 +124,15 @@ function makeService(host: IExtensionHostService, workspaceChange = Event.None) 
     {} as ILayoutService,
     {} as IViewsService,
     new UriIdentityService('linux'),
-    { getDisabledIds: vi.fn().mockResolvedValue([]) } as unknown as IExtensionManagementService,
+    {
+      getDisabledIds: vi.fn().mockResolvedValue([]),
+      getInstalled: vi.fn().mockResolvedValue([]),
+      listBuiltinExtensions: vi.fn().mockResolvedValue([]),
+    } as unknown as IExtensionManagementService,
+    {
+      onDidChangeEnablement: Event.None,
+      getEffectiveDisabledIds: vi.fn().mockResolvedValue([]),
+    } as unknown as IExtensionEnablementService,
   )
 }
 

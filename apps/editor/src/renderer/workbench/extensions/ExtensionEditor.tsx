@@ -18,6 +18,7 @@ import { Button, Spinner, cx } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import {
   IExtensionsWorkbenchService,
+  EnablementState,
   type IExtensionEntry,
 } from '../../services/extensionsWorkbench/ExtensionsWorkbenchService.js'
 import { ExtensionEditorInput } from '../../services/editor/ExtensionEditorInput.js'
@@ -108,9 +109,14 @@ function Header({
           {entry.installing ? (
             <Spinner size={16} />
           ) : entry.installed ? (
-            <Button variant="secondary" onClick={() => void service.uninstall(entry)}>
-              {localize('extensions.uninstall', 'Uninstall')}
-            </Button>
+            <>
+              <EnablementActions entry={entry} service={service} />
+              {!entry.isBuiltin && (
+                <Button variant="secondary" onClick={() => void service.uninstall(entry)}>
+                  {localize('extensions.uninstall', 'Uninstall')}
+                </Button>
+              )}
+            </>
           ) : (
             <Button onClick={() => void service.install(entry)}>
               {localize('extensions.install', 'Install')}
@@ -125,6 +131,45 @@ function Header({
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * Enable / disable controls. A primary button toggles the global state; when a
+ * workspace is open, a secondary button offers the workspace-scope override
+ * (VSCode's "Disable (Workspace)" / "Enable (Workspace)").
+ */
+function EnablementActions({
+  entry,
+  service,
+}: {
+  entry: IExtensionEntry
+  service: IExtensionsWorkbenchService
+}) {
+  const hasWorkspace = service.hasWorkspace()
+  const set = (state: EnablementState) => void service.setEnablement(entry, state)
+  return (
+    <>
+      {entry.enabled ? (
+        <Button variant="secondary" onClick={() => set(EnablementState.DisabledGlobally)}>
+          {localize('extensions.disable', 'Disable')}
+        </Button>
+      ) : (
+        <Button variant="secondary" onClick={() => set(EnablementState.EnabledGlobally)}>
+          {localize('extensions.enable', 'Enable')}
+        </Button>
+      )}
+      {hasWorkspace &&
+        (entry.enabled ? (
+          <Button variant="secondary" onClick={() => set(EnablementState.DisabledWorkspace)}>
+            {localize('extensions.disableWorkspace', 'Disable (Workspace)')}
+          </Button>
+        ) : (
+          <Button variant="secondary" onClick={() => set(EnablementState.EnabledWorkspace)}>
+            {localize('extensions.enableWorkspace', 'Enable (Workspace)')}
+          </Button>
+        ))}
+    </>
   )
 }
 

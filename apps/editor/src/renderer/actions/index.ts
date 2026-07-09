@@ -295,6 +295,10 @@ import {
 } from './explorerUndoActions.js'
 import {
   CheckForExtensionUpdatesAction,
+  DisableExtensionForWorkspaceAction,
+  DisableExtensionGloballyAction,
+  EnableExtensionForWorkspaceAction,
+  EnableExtensionGloballyAction,
   InstallExtensionFromVsixAction,
   ShowExtensionsAction,
   UninstallExtensionAction,
@@ -628,3 +632,7 @@ registerAction2(InstallExtensionFromVsixAction)
 registerAction2(UninstallExtensionAction)
 registerAction2(ShowExtensionsAction)
 registerAction2(CheckForExtensionUpdatesAction)
+registerAction2(EnableExtensionGloballyAction)
+registerAction2(DisableExtensionGloballyAction)
+registerAction2(EnableExtensionForWorkspaceAction)
+registerAction2(DisableExtensionForWorkspaceAction)

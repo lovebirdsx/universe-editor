@@ -378,6 +378,12 @@ export interface E2EProbe {
   uninstallExtension(identifier: string): Promise<void>
   /** Identifiers of every user-installed extension. */
   getInstalledExtensionIds(): Promise<readonly string[]>
+  /** Identifiers of every bundled built-in extension. */
+  getBuiltinExtensionIds(): Promise<readonly string[]>
+  /** Effective disabled identifiers (global ∪ workspace, workspace overrides applied). */
+  getDisabledExtensionIds(): Promise<readonly string[]>
+  /** Enable / disable an extension, globally (default) or for the current workspace. */
+  setExtensionEnablement(identifier: string, enabled: boolean, workspace?: boolean): Promise<void>
   // -- Markdown language server probe ---------------------------------------
   /**
    * Flattened document-symbol names for an open markdown file, via the markdown

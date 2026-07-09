@@ -64,6 +64,10 @@ import type { IScmService } from '../services/extensions/ScmService.js'
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { ExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import type { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
+import {
+  type IExtensionEnablementService,
+  EnablementState,
+} from '../services/extensions/ExtensionEnablementService.js'
 
 export interface E2EProbeServices {
   readonly commandService: ICommandService
@@ -91,6 +95,7 @@ export interface E2EProbeServices {
   readonly explorerTreeService: ExplorerTreeService
   readonly fileService: IFileService
   readonly extensionManagementService: IExtensionManagementService
+  readonly extensionEnablementService: IExtensionEnablementService
   /**
    * Resolves once the one-shot bootstrap focus restore has landed. That restore
    * is fire-and-forget and runs AFTER LifecyclePhase.Restored, so specs must
@@ -469,6 +474,27 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const list = await services.extensionManagementService.getInstalled()
       return list.map((e) => e.identifier)
     },
+    getBuiltinExtensionIds: async (): Promise<readonly string[]> => {
+      const list = await services.extensionManagementService.listBuiltinExtensions()
+      return list.map((e) => e.identifier)
+    },
+    getDisabledExtensionIds: (): Promise<readonly string[]> =>
+      services.extensionEnablementService.getEffectiveDisabledIds(),
+    setExtensionEnablement: (
+      identifier: string,
+      enabled: boolean,
+      workspace = false,
+    ): Promise<void> =>
+      services.extensionEnablementService.setEnablement(
+        identifier,
+        enabled
+          ? workspace
+            ? EnablementState.EnabledWorkspace
+            : EnablementState.EnabledGlobally
+          : workspace
+            ? EnablementState.DisabledWorkspace
+            : EnablementState.DisabledGlobally,
+      ),
     getMarkdownDocumentSymbols: async (uri: string): Promise<readonly string[]> => {
       const monacoNs = await MonacoLoader.ensureInitialized()
       const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))

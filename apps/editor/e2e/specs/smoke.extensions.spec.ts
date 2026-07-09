@@ -92,4 +92,35 @@ test.describe('@p1 extensions', () => {
 
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
+
+  test('disabling a built-in extension adds it to the effective disabled set @regression', async ({
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+
+    // Built-ins are listed and enabled by default.
+    const builtins = await workbench.page.evaluate(() => window.__E2E__!.getBuiltinExtensionIds())
+    expect(builtins.length).toBeGreaterThan(0)
+    const target = builtins[0]!
+
+    expect(
+      await workbench.page.evaluate(() => window.__E2E__!.getDisabledExtensionIds()),
+    ).not.toContain(target)
+
+    // Disable globally → it enters the effective disabled set.
+    await workbench.page.evaluate((id) => window.__E2E__!.setExtensionEnablement(id, false), target)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getDisabledExtensionIds()), {
+        timeout: 5000,
+      })
+      .toContain(target)
+
+    // Re-enable → it leaves the disabled set again.
+    await workbench.page.evaluate((id) => window.__E2E__!.setExtensionEnablement(id, true), target)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getDisabledExtensionIds()), {
+        timeout: 5000,
+      })
+      .not.toContain(target)
+  })
 })

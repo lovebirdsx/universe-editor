@@ -19,6 +19,10 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
+import {
+  IExtensionEnablementService,
+  EnablementState,
+} from '../services/extensions/ExtensionEnablementService.js'
 
 const CATEGORY = localize2('command.category.extensions', 'Extensions')
 
@@ -221,6 +225,190 @@ export class CheckForExtensionUpdatesAction extends Action2 {
       message: localize('action.extensions.checkForUpdates.done', 'Updated {count} extension(s).', {
         count: updates.length,
       }),
+    })
+  }
+}
+
+/** A pickable extension with its current enablement state. */
+interface IEnablementPickContext {
+  management: IExtensionManagementService
+  enablement: IExtensionEnablementService
+  quickInput: IQuickInputService
+  notification: INotificationService
+}
+
+/**
+ * Prompt for an installed / built-in extension whose current enablement matches
+ * `wantEnabled`, then apply `target`. Shared by the four enable/disable commands.
+ */
+async function pickAndSetEnablement(
+  ctx: IEnablementPickContext,
+  opts: {
+    wantEnabled: boolean
+    target: EnablementState
+    placeholder: string
+    emptyMessage: string
+  },
+): Promise<void> {
+  const all = [
+    ...(await ctx.management.listBuiltinExtensions()),
+    ...(await ctx.management.getInstalled()),
+  ]
+  const withState = await Promise.all(
+    all.map(async (ext) => ({
+      ext,
+      state: await ctx.enablement.getEnablementState(ext.identifier),
+    })),
+  )
+  const isEnabled = (s: EnablementState): boolean =>
+    s === EnablementState.EnabledGlobally || s === EnablementState.EnabledWorkspace
+  const candidates = withState.filter(({ state }) => isEnabled(state) === opts.wantEnabled)
+
+  if (candidates.length === 0) {
+    ctx.notification.notify({ severity: Severity.Info, message: opts.emptyMessage })
+    return
+  }
+
+  const items: (IQuickPickItem & { identifier: string })[] = candidates.map(({ ext }) => ({
+    id: ext.identifier,
+    identifier: ext.identifier,
+    label: ext.manifest.displayName ?? ext.identifier,
+    description: `${ext.identifier} · ${ext.version}`,
+  }))
+
+  const picked = await ctx.quickInput.pick(items, {
+    id: 'extensions.enablement',
+    placeholder: opts.placeholder,
+    matchOnDescription: true,
+  })
+  if (!picked) return
+
+  await ctx.enablement.setEnablement(picked.identifier, opts.target)
+}
+
+function enablementContext(accessor: ServicesAccessor): IEnablementPickContext {
+  return {
+    management: accessor.get(IExtensionManagementService),
+    enablement: accessor.get(IExtensionEnablementService),
+    quickInput: accessor.get(IQuickInputService),
+    notification: accessor.get(INotificationService),
+  }
+}
+
+export class EnableExtensionGloballyAction extends Action2 {
+  static readonly ID = 'extensions.enableGlobally'
+  constructor() {
+    super({
+      id: EnableExtensionGloballyAction.ID,
+      title: localize2('action.extensions.enableGlobally', 'Enable Extension'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    await pickAndSetEnablement(enablementContext(accessor), {
+      wantEnabled: false,
+      target: EnablementState.EnabledGlobally,
+      placeholder: localize(
+        'action.extensions.enable.placeholder',
+        'Select an extension to enable',
+      ),
+      emptyMessage: localize('action.extensions.enable.none', 'No disabled extensions.'),
+    })
+  }
+}
+
+export class DisableExtensionGloballyAction extends Action2 {
+  static readonly ID = 'extensions.disableGlobally'
+  constructor() {
+    super({
+      id: DisableExtensionGloballyAction.ID,
+      title: localize2('action.extensions.disableGlobally', 'Disable Extension'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    await pickAndSetEnablement(enablementContext(accessor), {
+      wantEnabled: true,
+      target: EnablementState.DisabledGlobally,
+      placeholder: localize(
+        'action.extensions.disable.placeholder',
+        'Select an extension to disable',
+      ),
+      emptyMessage: localize('action.extensions.disable.none', 'No enabled extensions.'),
+    })
+  }
+}
+
+export class EnableExtensionForWorkspaceAction extends Action2 {
+  static readonly ID = 'extensions.enableForWorkspace'
+  constructor() {
+    super({
+      id: EnableExtensionForWorkspaceAction.ID,
+      title: localize2('action.extensions.enableForWorkspace', 'Enable Extension (Workspace)'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const ctx = enablementContext(accessor)
+    if (!ctx.enablement.hasWorkspace()) {
+      ctx.notification.notify({
+        severity: Severity.Info,
+        message: localize(
+          'action.extensions.workspace.none',
+          'Open a folder to change workspace enablement.',
+        ),
+      })
+      return
+    }
+    await pickAndSetEnablement(ctx, {
+      wantEnabled: false,
+      target: EnablementState.EnabledWorkspace,
+      placeholder: localize(
+        'action.extensions.enableWorkspace.placeholder',
+        'Select an extension to enable for this workspace',
+      ),
+      emptyMessage: localize('action.extensions.enable.none', 'No disabled extensions.'),
+    })
+  }
+}
+
+export class DisableExtensionForWorkspaceAction extends Action2 {
+  static readonly ID = 'extensions.disableForWorkspace'
+  constructor() {
+    super({
+      id: DisableExtensionForWorkspaceAction.ID,
+      title: localize2('action.extensions.disableForWorkspace', 'Disable Extension (Workspace)'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const ctx = enablementContext(accessor)
+    if (!ctx.enablement.hasWorkspace()) {
+      ctx.notification.notify({
+        severity: Severity.Info,
+        message: localize(
+          'action.extensions.workspace.none',
+          'Open a folder to change workspace enablement.',
+        ),
+      })
+      return
+    }
+    await pickAndSetEnablement(ctx, {
+      wantEnabled: true,
+      target: EnablementState.DisabledWorkspace,
+      placeholder: localize(
+        'action.extensions.disableWorkspace.placeholder',
+        'Select an extension to disable for this workspace',
+      ),
+      emptyMessage: localize('action.extensions.disable.none', 'No enabled extensions.'),
     })
   }
 }

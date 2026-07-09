@@ -308,4 +308,37 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
     })
     svc.dispose()
   })
+
+  it('lists built-in extensions from the built-in dir with source=builtin', async () => {
+    const builtinDir = path.join(root, 'builtins')
+    const gitDir = path.join(builtinDir, 'git')
+    await mkdir(gitDir, { recursive: true })
+    await writeFile(
+      path.join(gitDir, 'package.json'),
+      JSON.stringify(manifest({ name: 'git', publisher: 'universe', displayName: 'Git' })),
+    )
+    const svc2 = new ExtensionManagementMainService(
+      () => extDir,
+      HOST_API,
+      undefined,
+      undefined,
+      () => builtinDir,
+    )
+    const builtins = await svc2.listBuiltinExtensions()
+    expect(builtins).toHaveLength(1)
+    expect(builtins[0]).toMatchObject({ identifier: 'universe.git', source: 'builtin' })
+    svc2.dispose()
+  })
+
+  it('returns [] when the built-in dir is absent', async () => {
+    const svc2 = new ExtensionManagementMainService(
+      () => extDir,
+      HOST_API,
+      undefined,
+      undefined,
+      () => path.join(root, 'nonexistent'),
+    )
+    expect(await svc2.listBuiltinExtensions()).toEqual([])
+    svc2.dispose()
+  })
 })

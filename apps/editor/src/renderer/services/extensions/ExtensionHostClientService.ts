@@ -54,6 +54,7 @@ import { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 import { getCurrentLocale } from '../../../shared/i18n/availableLocales.js'
 import { IScmService } from './ScmService.js'
 import { IWebviewService } from './WebviewService.js'
+import { IExtensionEnablementService } from './ExtensionEnablementService.js'
 import { HostConnection, type HostConnectionDeps } from './HostConnection.js'
 
 export interface IExtensionHostClientService {
@@ -125,6 +126,11 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     trusted: { windowStart: 0, count: 0 },
     restricted: { windowStart: 0, count: 0 },
   }
+  /** Signature of the disabled set each tier was last launched with, to skip no-op restarts. */
+  private readonly _launchedDisabledIds: Record<ExtHostKind, string> = {
+    trusted: '',
+    restricted: '',
+  }
 
   constructor(
     @IExtensionHostService private readonly _host: IExtensionHostService,
@@ -148,11 +154,13 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @IViewsService private readonly _views: IViewsService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IExtensionManagementService private readonly _management: IExtensionManagementService,
+    @IExtensionEnablementService private readonly _enablement: IExtensionEnablementService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'extHostClient', name: 'Extension Host' })
     this._register(this._host.onExit((evt) => this._onHostExit(evt)))
     this._register(this._workspace.onDidChangeWorkspace(() => void this._onWorkspaceChanged()))
+    this._register(this._enablement.onDidChangeEnablement(() => void this._onEnablementChanged()))
 
     // A window reload destroys this renderer without disposing its services, so
     // the async dispose() path never runs on reload. Synchronously stop every
@@ -214,7 +222,12 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   private async _connect(kind: ExtHostKind): Promise<void> {
     await this._workspace.whenReady
     const workspaceRoot = this._workspace.current?.folder.fsPath
-    const disabledIds = kind === 'restricted' ? await this._management.getDisabledIds() : []
+    // Both tiers filter their scan by the effective disabled set (global +
+    // workspace). Built-in extensions run in the trusted tier, so it too must
+    // honour disablement now. Scope to this tier's own ids so the signature only
+    // changes when a relevant extension toggles.
+    const disabledIds = await this._tierDisabledIds(kind)
+    this._launchedDisabledIds[kind] = disabledSignature(disabledIds)
     const spec: ExtHostStartSpec = {
       kind,
       locale: getCurrentLocale(),
@@ -262,6 +275,17 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     if (kind === 'trusted') this._trusted = connection
     else this._restricted = connection
     this._logger.info(`${kind} extension host connected handle=${handle}`)
+  }
+
+  /** The effective disabled ids that belong to a tier (built-in vs external). */
+  private async _tierDisabledIds(kind: ExtHostKind): Promise<string[]> {
+    const effective = new Set(await this._enablement.getEffectiveDisabledIds())
+    if (effective.size === 0) return []
+    const owned =
+      kind === 'trusted'
+        ? await this._management.listBuiltinExtensions()
+        : await this._management.getInstalled()
+    return owned.map((e) => e.identifier).filter((id) => effective.has(id))
   }
 
   private _claimCommand(id: string, kind: ExtHostKind): void {
@@ -411,6 +435,27 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     setTimeout(() => void this._restart(kind), delay)
   }
 
+  private async _onEnablementChanged(): Promise<void> {
+    // Enablement changed (a built-in or external extension was enabled/disabled,
+    // globally or for this workspace). Relaunch only the tiers whose effective
+    // disabled set actually changed — restarting the trusted tier needlessly
+    // would kill + respawn tsserver. A restricted tier may need to start for the
+    // first time (all its extensions were disabled before), so clear the
+    // memoized start; `_restart` skips the stop when there's no live connection.
+    await Promise.allSettled([this._startingTrusted, this._startingRestricted])
+
+    const restrictedSig = disabledSignature(await this._tierDisabledIds('restricted'))
+    if (restrictedSig !== this._launchedDisabledIds.restricted) {
+      if (!this._restricted) this._startingRestricted = undefined
+      await this._restart('restricted', 'workspace')
+    }
+
+    const trustedSig = disabledSignature(await this._tierDisabledIds('trusted'))
+    if (this._trusted && trustedSig !== this._launchedDisabledIds.trusted) {
+      await this._restart('trusted', 'workspace')
+    }
+  }
+
   private async _onWorkspaceChanged(): Promise<void> {
     // The host pins the workspace folder at launch; relaunch live tiers so
     // `workspace.rootPath` and the fs gateway's containment root update.
@@ -463,4 +508,9 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     await conn.extensions.$activateByEvent(STARTUP_FINISHED_ACTIVATION)
     this._logger.info(`${kind} extension host restarted (${reason})`)
   }
+}
+
+/** Order-independent signature of a disabled-id set, for cheap change detection. */
+function disabledSignature(ids: readonly string[]): string {
+  return [...ids].sort().join(',')
 }

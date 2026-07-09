@@ -15,6 +15,7 @@ import { Button, Input, Spinner, cx } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import {
   IExtensionsWorkbenchService,
+  EnablementState,
   type IExtensionEntry,
 } from '../../services/extensionsWorkbench/ExtensionsWorkbenchService.js'
 import { ExtensionEditorInput } from '../../services/editor/ExtensionEditorInput.js'
@@ -118,6 +119,14 @@ export function ExtensionsView() {
                 onOpen={openDetail}
                 onInstall={() => void service.install(entry)}
                 onUninstall={() => void service.uninstall(entry)}
+                onToggleEnablement={() =>
+                  void service.setEnablement(
+                    entry,
+                    entry.enabled
+                      ? EnablementState.DisabledGlobally
+                      : EnablementState.EnabledGlobally,
+                  )
+                }
               />
             ))}
             {installed.length === 0 && (
@@ -159,15 +168,25 @@ function ExtensionRow({
   onOpen,
   onInstall,
   onUninstall,
+  onToggleEnablement,
 }: {
   entry: IExtensionEntry
   onOpen: (entry: IExtensionEntry) => void
   onInstall: () => void
   onUninstall: () => void
+  onToggleEnablement?: () => void
 }) {
   const iconUrl = useExtensionIcon(entry)
+  const disabled = entry.installed && !entry.enabled
+  const workspaceScoped =
+    entry.enablementState === EnablementState.DisabledWorkspace ||
+    entry.enablementState === EnablementState.EnabledWorkspace
   return (
-    <div className={styles.row} onClick={() => onOpen(entry)} data-testid="extension-row">
+    <div
+      className={cx(styles.row, disabled && styles.disabledRow)}
+      onClick={() => onOpen(entry)}
+      data-testid="extension-row"
+    >
       <div className={styles.icon}>
         {iconUrl ? <img src={iconUrl} alt="" width={32} height={32} /> : <Package size={28} />}
       </div>
@@ -175,6 +194,16 @@ function ExtensionRow({
         <div className={styles.title}>
           <span className={styles.name}>{entry.displayName}</span>
           <span className={styles.version}>v{entry.version}</span>
+          {entry.isBuiltin && (
+            <span className={styles.badge}>{localize('extensions.builtin', 'Built-in')}</span>
+          )}
+          {disabled && (
+            <span className={cx(styles.badge, styles.disabledBadge)}>
+              {workspaceScoped
+                ? localize('extensions.disabledWorkspace', 'Disabled (Workspace)')
+                : localize('extensions.disabled', 'Disabled')}
+            </span>
+          )}
         </div>
         <div className={styles.publisher}>{entry.publisherDisplayName ?? entry.publisher}</div>
         <div className={styles.description}>{entry.description}</div>
@@ -183,13 +212,24 @@ function ExtensionRow({
         {entry.installing ? (
           <Spinner size={14} />
         ) : entry.installed ? (
-          <Button
-            variant="secondary"
-            onClick={onUninstall}
-            className={cx(entry.outdated && styles.outdated)}
-          >
-            {localize('extensions.uninstall', 'Uninstall')}
-          </Button>
+          <div className={styles.actionButtons}>
+            {onToggleEnablement && (
+              <Button variant="secondary" onClick={onToggleEnablement}>
+                {entry.enabled
+                  ? localize('extensions.disable', 'Disable')
+                  : localize('extensions.enable', 'Enable')}
+              </Button>
+            )}
+            {!entry.isBuiltin && (
+              <Button
+                variant="secondary"
+                onClick={onUninstall}
+                className={cx(entry.outdated && styles.outdated)}
+              >
+                {localize('extensions.uninstall', 'Uninstall')}
+              </Button>
+            )}
+          </div>
         ) : (
           <Button onClick={onInstall}>{localize('extensions.install', 'Install')}</Button>
         )}
