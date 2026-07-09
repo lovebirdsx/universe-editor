@@ -47,8 +47,8 @@
 
 .row {
   display: flex;
-  gap: 8px;
-  padding: 8px;
+  gap: 12px;
+  padding: 7px 14px;
   cursor: pointer;
   user-select: none;
   color: var(--color-sidebar-fg, #cccccc);
@@ -79,16 +79,52 @@
   color: var(--color-warning-fg, #d9a441);
 }
 
-.actionButtons {
+.menu {
+  min-width: 180px;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background: var(--workbench-menu-bg, #252526);
+  color: var(--workbench-menu-fg, #cccccc);
+  border: 1px solid var(--workbench-menu-border, #454545);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.menuItem {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  padding: 4px 16px;
+  cursor: pointer;
+  color: var(--workbench-menu-fg, #cccccc);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.menuItem:hover {
+  background: var(--workbench-menu-hover-bg, #094771);
+  outline: none;
+}
+
+.menuItemDanger {
+  color: var(--color-error-fg, #f48771);
+}
+
+.menuSep {
+  margin: 4px 0;
+  border: none;
+  border-top: 1px solid var(--workbench-menu-separator, #3c3c3c);
 }
 
 .icon {
   flex-shrink: 0;
-  width: 32px;
-  height: 32px;
+  align-self: flex-start;
+  margin-top: 2px;
+  width: 42px;
+  height: 42px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -100,7 +136,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
 .title {
@@ -117,35 +153,45 @@
   text-overflow: ellipsis;
 }
 
-.version {
-  font-size: 11px;
-  opacity: 0.6;
-  flex-shrink: 0;
-}
-
-.publisher {
-  font-size: 11px;
-  opacity: 0.7;
-}
-
 .description {
   font-size: 12px;
   opacity: 0.8;
   overflow: hidden;
   text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  white-space: nowrap;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.publisher {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .actions {
   flex-shrink: 0;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  gap: 4px;
 }
 
-.outdated {
-  border-color: var(--color-accent, #0e639c);
+.builtinIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-accent, #4daafc);
+  opacity: 0.85;
 }
 
 .empty {

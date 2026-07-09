@@ -6,9 +6,11 @@
   "files": [
     "dist",
     "package.nls.json",
-    "package.nls.zh-cn.json"
+    "package.nls.zh-cn.json",
+    "icon.svg"
   ],
   "displayName": "Git",
+  "icon": "icon.svg",
   "description": "Git source control integration (first-party Universe extension).",
   "main": "dist/extension.js",
   "engines": {

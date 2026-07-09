@@ -12,7 +12,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useMemo, useState } from 'react'
-import { Package } from 'lucide-react'
 import { type IEditorInput, localize } from '@universe-editor/platform'
 import { Button, Spinner, cx } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
@@ -23,7 +22,7 @@ import {
 } from '../../services/extensionsWorkbench/ExtensionsWorkbenchService.js'
 import { ExtensionEditorInput } from '../../services/editor/ExtensionEditorInput.js'
 import { MarkdownView } from '../markdown/MarkdownView.js'
-import { useExtensionIcon } from './useExtensionIcon.js'
+import { ExtensionIcon } from './ExtensionIcon.js'
 import styles from './ExtensionEditor.module.css'
 
 type Tab = 'readme' | 'contributions'
@@ -83,11 +82,10 @@ function Header({
   entry: IExtensionEntry
   service: IExtensionsWorkbenchService
 }) {
-  const iconUrl = useExtensionIcon(entry)
   return (
     <div className={styles.header}>
       <div className={styles.headerIcon}>
-        {iconUrl ? <img src={iconUrl} alt="" width={64} height={64} /> : <Package size={56} />}
+        <ExtensionIcon entry={entry} size={64} />
       </div>
       <div className={styles.headerMain}>
         <div className={styles.headerTitle}>

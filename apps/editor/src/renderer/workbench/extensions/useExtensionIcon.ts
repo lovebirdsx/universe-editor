@@ -1,9 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Resolve a marketplace extension's icon to a `data:` URL via the workbench
- *  facade. Marketplace icons are remote https URLs the renderer CSP blocks, so
- *  main fetches + caches them and hands back a data URL. Returns '' until loaded
- *  or when there's no icon — callers fall back to a generic icon.
+ *  Resolve an extension's icon to a `data:` URL via the workbench facade. Both
+ *  marketplace icons (remote https, blocked by the renderer CSP) and locally
+ *  installed / built-in icons (read from `file://`, also blocked) are fetched +
+ *  encoded by main. Returns '' until loaded or when there's no icon — callers
+ *  fall back to a semantic glyph.
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useState } from 'react'
@@ -16,9 +17,11 @@ import {
 export function useExtensionIcon(entry: IExtensionEntry): string {
   const service = useService(IExtensionsWorkbenchService)
   const [url, setUrl] = useState('')
-  const iconUrl = entry.gallery?.iconUrl
+  // An icon exists if the gallery advertises one, or the extension is installed
+  // (it may declare `manifest.icon` on disk — main resolves that).
+  const hasIcon = Boolean(entry.gallery?.iconUrl) || entry.installed
   useEffect(() => {
-    if (!iconUrl) {
+    if (!hasIcon) {
       setUrl('')
       return
     }
@@ -29,6 +32,6 @@ export function useExtensionIcon(entry: IExtensionEntry): string {
     return () => {
       cancelled = true
     }
-  }, [service, entry, iconUrl])
+  }, [service, entry, hasIcon])
   return url
 }

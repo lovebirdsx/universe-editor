@@ -83,6 +83,14 @@ export interface IExtensionManagementService {
   getDisabledIds(): Promise<string[]>
 
   /**
+   * Read a locally-installed / built-in extension's own icon (the manifest `icon`
+   * path, relative to its folder) as a `data:` URL. Returns '' when it declares
+   * no icon or the file can't be read. The renderer CSP blocks `file://`, so main
+   * reads + encodes it — same pattern as gallery icons.
+   */
+  getLocalIcon(identifier: string): Promise<string>
+
+  /**
    * Enable / disable an installed extension. Persists to `extensions.json` and
    * fires onDidChangeExtensions so the host re-scans (a disabled extension is
    * filtered out of the scan — it stops running entirely).

@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "icon.svg"
   ],
   "displayName": "Markdown Language Features",
+  "icon": "icon.svg",
   "description": "Markdown language features (document symbols, definition, references, workspace symbols, broken-link diagnostics) backed by an in-process vscode-markdown-languageservice.",
   "main": "dist/extension.js",
   "engines": {

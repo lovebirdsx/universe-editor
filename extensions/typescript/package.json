@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "icon.svg"
   ],
   "displayName": "TypeScript Language Features",
+  "icon": "icon.svg",
   "description": "TS/JS language features (definition, references, hover, completion, signature help, document symbols, rename, diagnostics) backed by an in-process typescript-language-server.",
   "main": "dist/extension.js",
   "engines": {

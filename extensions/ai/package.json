@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "icon.svg"
   ],
   "displayName": "AI Assist",
+  "icon": "icon.svg",
   "description": "AI-assisted editor features (first-party Universe extension).",
   "main": "dist/extension.js",
   "engines": {

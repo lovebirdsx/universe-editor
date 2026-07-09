@@ -83,6 +83,16 @@ function isNewerVersion(candidate: string, current: string): boolean {
   return compareVersions(candidate, current) > 0
 }
 
+/** Icon file extension → MIME type for the `data:` URL. */
+const ICON_MIME_BY_EXT: Record<string, string> = {
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+}
+
 export class ExtensionManagementMainService
   extends Disposable
   implements IExtensionManagementService
@@ -96,6 +106,9 @@ export class ExtensionManagementMainService
 
   /** Serializes install/uninstall so concurrent writes can't corrupt extensions.json. */
   private _queue: Promise<unknown> = Promise.resolve()
+
+  /** identifier → local icon data URL ('' when none); invalidated on install/uninstall. */
+  private readonly _localIconCache = new Map<string, string>()
 
   constructor(
     private readonly _resolveDir: UserExtensionsDirResolver = resolveUserExtensionsDir,
@@ -121,6 +134,12 @@ export class ExtensionManagementMainService
       () => undefined,
     )
     return run
+  }
+
+  /** Icon cache is keyed by identifier but folders change on install; drop it + notify. */
+  private _notifyChanged(): void {
+    this._localIconCache.clear()
+    this._onDidChangeExtensions.fire()
   }
 
   async getInstalled(): Promise<ILocalExtension[]> {
@@ -271,7 +290,7 @@ export class ExtensionManagementMainService
     await writeInstalledRecords(dir, next)
 
     this._logger.info(`installed extension ${id}@${version} from ${source}`)
-    this._onDidChangeExtensions.fire()
+    this._notifyChanged()
     return toLocalExtension(record, targetDir, manifest)
   }
 
@@ -321,12 +340,46 @@ export class ExtensionManagementMainService
       await writeObsolete(dir, marks)
     }
 
-    this._onDidChangeExtensions.fire()
+    this._notifyChanged()
   }
 
   async getDisabledIds(): Promise<string[]> {
     const enablement = await readEnablement(this._resolveDir())
     return Object.keys(enablement).filter((id) => enablement[id] === false)
+  }
+
+  /**
+   * Read a locally-installed extension's own icon (the manifest `icon` path,
+   * relative to its folder) as a `data:` URL — the renderer CSP blocks `file://`,
+   * same as gallery icons. Returns '' when the extension declares no icon, isn't
+   * found, or the file can't be read. Mirrors VSCode resolving `manifest.icon`
+   * against the extension location.
+   */
+  async getLocalIcon(identifier: string): Promise<string> {
+    const cached = this._localIconCache.get(identifier)
+    if (cached !== undefined) return cached
+    const dataUrl = await this._readLocalIcon(identifier)
+    this._localIconCache.set(identifier, dataUrl)
+    return dataUrl
+  }
+
+  private async _readLocalIcon(identifier: string): Promise<string> {
+    const all = [...(await this.getInstalled()), ...(await this.listBuiltinExtensions())]
+    const local = all.find((e) => e.identifier === identifier)
+    const iconPath = local?.manifest.icon
+    if (!local || !iconPath) return ''
+    try {
+      // Resolve within the extension folder; reject path escapes.
+      const resolved = path.resolve(local.location, iconPath)
+      const root = path.resolve(local.location)
+      if (resolved !== root && !resolved.startsWith(root + path.sep)) return ''
+      const bytes = await fs.readFile(resolved)
+      const mime = ICON_MIME_BY_EXT[path.extname(resolved).toLowerCase()] ?? 'image/png'
+      return `data:${mime};base64,${bytes.toString('base64')}`
+    } catch (err) {
+      this._logger.warn(`getLocalIcon ${identifier} failed: ${(err as Error).message}`)
+      return ''
+    }
   }
 
   setEnablement(identifier: string, enabled: boolean): Promise<void> {
@@ -371,7 +424,7 @@ export class ExtensionManagementMainService
       if (disabled.length > 0) {
         await writeEnablement(dir, enablement)
         this._logger.warn(`quarantined malicious extensions: ${disabled.join(', ')}`)
-        this._onDidChangeExtensions.fire()
+        this._notifyChanged()
       }
       return disabled
     })

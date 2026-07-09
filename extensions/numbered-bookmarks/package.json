@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "icon.svg"
   ],
   "displayName": "Numbered Bookmarks",
+  "icon": "icon.svg",
   "description": "Delphi-style numbered bookmarks (0-9): toggle, jump, gutter icons, sticky on edit (first-party Universe extension).",
   "main": "dist/extension.js",
   "engines": {

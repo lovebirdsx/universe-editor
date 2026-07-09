@@ -3,7 +3,11 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "files": [
+    "icon.svg"
+  ],
   "displayName": "Claude Helper",
+  "icon": "icon.svg",
   "description": "Smart editing for Claude config files (settings.json) via the official JSON schema.",
   "engines": {
     "universe": ">=0.1.0 <1.0.0"

@@ -302,6 +302,8 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 
   getIcon(entry: IExtensionEntry): Promise<string> {
     if (entry.gallery) return this._gallery.getIcon(entry.gallery)
+    // Installed / built-in: read the extension's own manifest icon from disk.
+    if (entry.installed) return this._management.getLocalIcon(entry.id)
     return Promise.resolve('')
   }
 
