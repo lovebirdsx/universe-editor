@@ -135,17 +135,11 @@ const UNIX_ABS = `\\.{0,2}/(?:${CJK_SEG}+/)*${CJK_SEG}+${EXT}`
 // Relative with at least one dir component:  src/foo/bar.ts  个人考核/2026q1.md
 const REL = `(?:${CJK_REL_SEG}+[/\\\\])+${CJK_REL_SEG}+${EXT}`
 // Extension-less variants. `@` mentions are explicit file references so they may
-// omit a known extension; bare relative dirs (REL_NO_EXT) are also accepted, but
-// ONLY when they contain a non-ASCII segment (enforced in matchFilePathAt by the
-// hasNonAscii check) so plain `and/or` / `2024/01/02` prose stays untouched.
+// omit a known extension; bare non-`@` relative paths still require a known
+// extension to avoid turning prose like `中文/中文/中文` into links.
 const WIN_ABS_NO_EXT = `[A-Za-z]:[/\\\\](?:${CJK_SEG}+[/\\\\])*${CJK_SEG}+`
 const UNIX_ABS_NO_EXT = `\\.{0,2}/(?:${CJK_SEG}+/)*${CJK_SEG}+`
 const REL_NO_EXT = `(?:${CJK_REL_SEG}+[/\\\\])+${CJK_REL_SEG}+`
-// Bare relative dir for the non-`@` matcher: a CJK path with NO known extension
-// is only a link when it has at least TWO separators (three-plus segments), so
-// single-slash Chinese phrases (`我的读/写`, `输入/输出`, `个人考核/2026q2`)
-// stay plain prose. `@` mentions and extension-anchored paths keep 1 separator.
-const REL_NO_EXT_DEEP = `(?:${CJK_REL_SEG}+[/\\\\]){2,}${CJK_REL_SEG}+`
 
 // Optional :line:col  or  (line,col)
 const LOC = `(?::(\\d+)(?::(\\d+))?|\\((\\d+)(?:,(\\d+))?\\))?`
@@ -158,22 +152,16 @@ const LOC = `(?::(\\d+)(?::(\\d+))?|\\((\\d+)(?:,(\\d+))?\\))?`
 export const FILE_PATH_PATTERN = `(${WIN_ABS}|${UNIX_ABS}|${REL})${LOC}`
 
 // Anchored at the start of a slice so callers can probe position-by-position.
-// Both flavors carry NAL, so both need the `u` flag. The non-`@` matcher adds a
-// bare extension-less directory branch (last alternative) gated by hasNonAscii.
-const FILE_PATH_AT_RE = new RegExp(`^(${WIN_ABS}|${UNIX_ABS}|${REL}|${REL_NO_EXT_DEEP})${LOC}`, 'u')
+// Both flavors carry NAL, so both need the `u` flag.
+const FILE_PATH_AT_RE = new RegExp(`^(${WIN_ABS}|${UNIX_ABS}|${REL})${LOC}`, 'u')
 const AT_FILE_PATH_AT_RE = new RegExp(
   `^@(${WIN_ABS_NO_EXT}|${UNIX_ABS_NO_EXT}|${REL_NO_EXT})${LOC}`,
   'u',
 )
-// A path is "extension-less" (fell through to the bare-dir branch) unless it
-// matches one of the extension-anchored grammars. Used to gate such matches on
-// containing a non-ASCII segment.
-const HAS_KNOWN_EXT_RE = new RegExp(`^(?:${WIN_ABS}|${UNIX_ABS}|${REL})${LOC}$`, 'u')
 // Preceding-char guard: a CJK letter/number just before the match means we're
 // mid-word (`我的读/写` must not start a path at `读`). ASCII word chars are
 // handled by a separate cheap test.
 const PREV_CJK_RE = new RegExp(`^${NAL}$`, 'u')
-const HAS_NON_ASCII_RE = /[^\x00-\x7f]/
 
 export interface FilePathMatch {
   /** Full matched text including any location suffix. */
@@ -216,10 +204,6 @@ export function matchFilePathAt(text: string, i: number): FilePathMatch | null {
   if (!m) return null
   const full = m[0]
   const path = m[1] ?? ''
-  // A non-`@` match that fell through to the extension-less bare-dir branch is
-  // only a link when it contains a non-ASCII (CJK) segment; otherwise plain
-  // prose like `and/or` or `2024/01/02` would be misread as a directory path.
-  if (!atPrefixed && !HAS_KNOWN_EXT_RE.test(full) && !HAS_NON_ASCII_RE.test(path)) return null
   const line = parseInt(m[2] ?? m[4] ?? '', 10) || undefined
   const col = parseInt(m[3] ?? m[5] ?? '', 10) || undefined
   return { full, path, line, col }

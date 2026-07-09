@@ -129,24 +129,17 @@ describe('matchFilePathAt', () => {
       'project/aki/个人考核/2026q1.md',
     )
     expect(matchFilePathAt('个人考核/2026q1.md', 0)?.path).toBe('个人考核/2026q1.md')
-    // An extension-less CJK dir needs at least TWO separators (three-plus
-    // segments) to count, so it can't be an ordinary Chinese `词/词` phrase.
-    expect(matchFilePathAt('project/aki/个人考核/2026q2', 0)?.path).toBe(
-      'project/aki/个人考核/2026q2',
-    )
   })
 
-  it('does NOT treat extension-less ASCII prose as a directory path', () => {
-    // The CJK gate: an extension-less relative path with NO non-ASCII segment is
-    // rejected, so `and/or`, dates, and `input/output` stay plain text.
+  it('does NOT treat extension-less prose as a directory path', () => {
     expect(matchFilePathAt('and/or', 0)).toBeNull()
     expect(matchFilePathAt('2024/01/02', 0)).toBeNull()
     expect(matchFilePathAt('input/output/foo', 0)).toBeNull()
+    expect(matchFilePathAt('中文/中文/中文', 0)).toBeNull()
+    expect(matchFilePathAt('项目/子级/结构/更多', 0)).toBeNull()
   })
 
   it('does NOT treat a single-separator CJK phrase as a directory path', () => {
-    // The two-separator rule: `词/词` phrases are prose, not links, when they
-    // lack a known extension. A known extension overrides this (tested above).
     expect(matchFilePathAt('我的读/写', 0)).toBeNull()
     expect(matchFilePathAt('输入/输出', 0)).toBeNull()
     expect(matchFilePathAt('个人考核/2026q2', 0)).toBeNull()
