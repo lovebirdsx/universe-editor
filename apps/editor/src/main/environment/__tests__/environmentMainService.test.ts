@@ -141,6 +141,32 @@ describe('galleryUrl', () => {
     env.resolveFileConfig(dir)
     expect(env.galleryUrl).toBe('http://file/')
   })
+
+  it('falls back to the bundled product config (lowest priority)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ue-env-'))
+    const product = join(dir, 'product.json')
+    writeFileSync(product, JSON.stringify({ galleryUrl: 'http://product/' }))
+    const env = make({})
+    env.resolveFileConfig(dir, product)
+    expect(env.galleryUrl).toBe('http://product/')
+  })
+
+  it('lets cli / env / update-config outrank the product config', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ue-env-'))
+    writeFileSync(join(dir, 'update-config.json'), JSON.stringify({ galleryUrl: 'http://file/' }))
+    const product = join(dir, 'product.json')
+    writeFileSync(product, JSON.stringify({ galleryUrl: 'http://product/' }))
+    const env = make({})
+    env.resolveFileConfig(dir, product)
+    expect(env.galleryUrl).toBe('http://file/')
+  })
+
+  it('tolerates a missing product config file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ue-env-'))
+    const env = make({})
+    env.resolveFileConfig(dir, join(dir, 'does-not-exist-product.json'))
+    expect(env.galleryUrl).toBeUndefined()
+  })
 })
 
 describe('configDir', () => {

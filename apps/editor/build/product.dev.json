@@ -1,0 +1,8 @@
+{
+  // 仅供 dev / 未打包构建的产品默认配置（对等 dev-app-update.yml 之于自动更新）。
+  // main 在 app.isPackaged === false 时读取本文件（app.getAppPath()/build/product.dev.json），
+  // 作为配置解析链的最低优先级源。把 galleryUrl 指向本地静态市场服务器即可端到端联调：
+  //   node scripts/server/server.mjs --root <stageDir> --port 8788 --base /
+  // 运行时仍可用 --gallery-url / UNIVERSE_GALLERY_URL / <userData>/update-config.json 覆盖。
+  "galleryUrl": "http://localhost:8788"
+}

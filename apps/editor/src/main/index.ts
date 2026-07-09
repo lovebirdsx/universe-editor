@@ -314,7 +314,15 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     mainLogger.info('create application services')
     // Phase two: userData is resolved, so the deployment config file can now be
     // layered in (lowest priority) before services that read it are constructed.
-    environmentService.resolveFileConfig(app.getPath('userData'))
+    // The bundled product defaults (galleryUrl etc.) rank below cli/env/user-file:
+    // packaged reads resources/product.json (staged by runtime-resources.mjs), dev
+    // reads build/product.dev.json. E2E stays on the OSS "no marketplace" default.
+    const productConfigFile = environmentService.isE2E
+      ? undefined
+      : app.isPackaged
+        ? join(process.resourcesPath, 'product.json')
+        : join(app.getAppPath(), 'build', 'product.dev.json')
+    environmentService.resolveFileConfig(app.getPath('userData'), productConfigFile)
 
     // Root DI container. Preset instances (constructed before the container,
     // because they resolve userData / log paths) + the declaratively-registered

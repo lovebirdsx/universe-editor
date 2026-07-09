@@ -73,6 +73,11 @@ const REQUIRED_SOURCE_FILES = [
     packaged: 'release-notes.json',
   },
   {
+    label: 'product defaults',
+    source: join(editorRoot, 'build/product.json'),
+    packaged: 'product.json',
+  },
+  {
     label: 'user guide docs',
     source: join(repoRoot, 'docs/user/zh-CN/index.md'),
     packaged: 'docs/user/zh-CN/index.md',
@@ -192,6 +197,7 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
     join(stageDir, 'typescript-language-server/node_modules'),
   )
   copyPath(join(editorRoot, 'resources/release-notes.json'), join(stageDir, 'release-notes.json'))
+  copyPath(join(editorRoot, 'build/product.json'), join(stageDir, 'product.json'))
 
   // User guide docs (docs/user/<locale>/**/*.md) ship as plain files beside
   // app.asar so agents can read them off disk; the renderer loads them via

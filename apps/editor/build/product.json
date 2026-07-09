@@ -1,0 +1,9 @@
+{
+  // 打包版内嵌的产品默认配置（对等 electron-builder.yml 的 publish.url 之于自动更新）。
+  // 由 scripts/release/runtime-resources.mjs stage 进 resources/product.json，随
+  // extraResources 内嵌进产物；main 在 app.isPackaged 时读取，作为配置解析链的
+  // 最低优先级源。运行时仍可覆盖（不必重新打包）：
+  //   --gallery-url=<url> / 环境变量 UNIVERSE_GALLERY_URL / <userData>/update-config.json 的 galleryUrl 字段。
+  // 置空该字段即回到无市场（OSS 语义）。市场与更新可不同源，各自独立默认。
+  "galleryUrl": "http://iloop.aki.kuro.com:9999/universe-editor"
+}

@@ -136,14 +136,27 @@ export class EnvironmentMainService {
 
   // ---- Phase two: requires a resolved userData directory ----------------------
 
-  /** Append the deployment config file (<userDataDir>/update-config.json) as the
-   *  lowest-priority source. Missing/invalid files are tolerated silently. */
-  resolveFileConfig(userDataDir: string): void {
+  /**
+   * Append the deployment config file (<userDataDir>/update-config.json) and,
+   * last, the bundled product defaults as the lowest-priority sources. Missing or
+   * invalid files are tolerated silently.
+   *
+   * `productConfigFile` is the packaged/dev product.json holding shipped defaults
+   * (e.g. galleryUrl) — the marketplace counterpart to the update feed baked into
+   * electron-builder's publish.url. It ranks below cli / env / update-config, so
+   * any of those still override it without repackaging. Omit it (e.g. under E2E)
+   * to keep the OSS "no marketplace" default.
+   */
+  resolveFileConfig(userDataDir: string, productConfigFile?: string): void {
     this._userDataDir = userDataDir
     const updateData = this._readJsonFile(join(userDataDir, UPDATE_CONFIG_FILE))
     this._resolver.appendSource(new FileConfigSource(updateData))
     const locationData = this._readJsonFile(join(userDataDir, CONFIG_LOCATION_FILE))
     this._resolver.appendSource(new FileConfigSource(locationData))
+    if (productConfigFile !== undefined) {
+      const productData = this._readJsonFile(productConfigFile)
+      this._resolver.appendSource(new FileConfigSource(productData))
+    }
   }
 
   get updateUrl(): string | undefined {
