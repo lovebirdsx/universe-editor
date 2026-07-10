@@ -614,7 +614,7 @@ const SYSTEM_PROMPT = [
   '* If the cursor is inside `/** ... */`, output only the comment body text.',
   '* If nothing should be inserted, reply with `<|newline|>false` and no text after it.',
   '* Prefer a short, local, syntactically valid completion.',
-].join('\\n');
+].join('\\n')
 
 /**
  * Clean a model reply into insertable text: read the leading `<|newline|>` line
