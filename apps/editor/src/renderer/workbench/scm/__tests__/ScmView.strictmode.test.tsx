@@ -195,7 +195,15 @@ describe('ScmView under StrictMode', () => {
     await act(async () => {
       await scm.$registerSourceControl(0, 'git', 'Git', 'D:/repo')
       await scm.$updateSourceControl(0, {
-        acceptInputCommand: { command: 'git.sync', title: 'Sync' },
+        acceptInputCommand: { command: 'git.commit', title: 'Commit' },
+        // With changes present, git reports the full commit split-button actions;
+        // the primary (first) is Commit.
+        acceptInputActions: [
+          { command: 'git.commit', title: 'Commit', icon: 'git-commit' },
+          { command: 'git.commitAmend', title: 'Commit (Amend)', icon: 'git-commit' },
+          { command: 'git.commitAndPush', title: 'Commit & Push', icon: 'push' },
+          { command: 'git.commitAndSync', title: 'Commit & Sync', icon: 'sync' },
+        ],
       })
       await scm.$registerGroup(0, 1, 'workingTree', 'Changes')
       await scm.$updateGroupResourceStates(1, [

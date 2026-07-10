@@ -26,6 +26,7 @@ function toCommandDto(cmd: Command): ICommandDto {
     title: cmd.title,
     ...(cmd.tooltip !== undefined ? { tooltip: cmd.tooltip } : {}),
     ...(cmd.disabled !== undefined ? { disabled: cmd.disabled } : {}),
+    ...(cmd.icon !== undefined ? { icon: cmd.icon } : {}),
     ...(cmd.arguments !== undefined ? { arguments: cmd.arguments } : {}),
   }
 }
@@ -127,6 +128,7 @@ export class HostSourceControl implements SourceControl {
   private _count: number | undefined
   private _commitTemplate: string | undefined
   private _acceptInputCommand: Command | undefined
+  private _acceptInputActions: Command[] | undefined
   private readonly _groups = new Set<HostResourceGroup>()
 
   constructor(
@@ -165,6 +167,14 @@ export class HostSourceControl implements SourceControl {
     this._updateFeatures()
   }
 
+  get acceptInputActions(): Command[] | undefined {
+    return this._acceptInputActions
+  }
+  set acceptInputActions(value: Command[] | undefined) {
+    this._acceptInputActions = value
+    this._updateFeatures()
+  }
+
   createResourceGroup(id: string, label: string): SourceControlResourceGroup {
     const handle = this._allocateHandle()
     const group = new HostResourceGroup(handle, id, label, this._scm, () => {
@@ -188,6 +198,9 @@ export class HostSourceControl implements SourceControl {
       ...(this._commitTemplate !== undefined ? { commitTemplate: this._commitTemplate } : {}),
       ...(this._acceptInputCommand !== undefined
         ? { acceptInputCommand: toCommandDto(this._acceptInputCommand) }
+        : {}),
+      ...(this._acceptInputActions !== undefined
+        ? { acceptInputActions: this._acceptInputActions.map(toCommandDto) }
         : {}),
     })
   }

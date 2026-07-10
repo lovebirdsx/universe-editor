@@ -77,47 +77,11 @@ const VIEW_MODE_STORAGE_KEY = 'scm.viewMode'
 const COMMIT_ACTION_STORAGE_KEY = 'scm.commitAction'
 const SELECTED_REPO_STORAGE_KEY = 'scm.selectedRepo'
 
-interface CommitAction {
-  readonly id: string
-  readonly label: string
-  readonly icon: string
-  readonly command: string
-}
-
 interface PrimaryCommitAction {
   readonly label: string
   readonly command: string
   readonly disabled: boolean
 }
-
-/** The commit-button choices; the last one picked becomes the sticky default. */
-const COMMIT_ACTIONS: readonly CommitAction[] = [
-  {
-    id: 'git.commit',
-    label: localize('scm.commit', 'Commit'),
-    icon: 'git-commit',
-    command: 'git.commit',
-  },
-  {
-    id: 'git.commitAmend',
-    label: localize('scm.commitAmend', 'Commit (Amend)'),
-    icon: 'git-commit',
-    command: 'git.commitAmend',
-  },
-  {
-    id: 'git.commitAndPush',
-    label: localize('scm.commitAndPush', 'Commit & Push'),
-    icon: 'push',
-    command: 'git.commitAndPush',
-  },
-  {
-    id: 'git.commitAndSync',
-    label: localize('scm.commitAndSync', 'Commit & Sync'),
-    icon: 'sync',
-    command: 'git.commitAndSync',
-  },
-]
-const DEFAULT_COMMIT_ACTION = COMMIT_ACTIONS[0]!
 
 function basename(path: string): string {
   const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
@@ -478,13 +442,16 @@ const ScmFileRow = memo(function ScmFileRow({
 const ScmFolderRow = memo(function ScmFolderRow({
   model,
   node,
+  providerId,
   rootUri,
   indentPadding,
   isSelected,
   isFocused,
   expanded,
+  revision,
 }: SharedRowProps & {
   node: Extract<ScmNode, { kind: 'folder' }>
+  providerId: string
   rootUri: string | undefined
   revision: number
 }) {
@@ -492,41 +459,22 @@ const ScmFolderRow = memo(function ScmFolderRow({
   const folderUri = useMemo(() => URI.file(node.name), [node.name])
   const absPath = useMemo(() => joinFolder(rootUri, node.path), [rootUri, node.path])
 
-  const run = (command: string, isDirectory = false): void => {
-    void commandService.executeCommand(command, { resourceUri: absPath, isDirectory })
-  }
+  const folderScope = useMemo(
+    () => ({ scmProvider: providerId, scmResourceGroup: node.groupId }),
+    [providerId, node.groupId],
+  )
+  // Folder-row inline actions are provider-driven: each SCM extension contributes
+  // to scm/resourceFolder/context with `when` clauses on scmResourceGroup. The
+  // host stays SCM-agnostic (no git/p4 command ids baked in here).
+  const actions = useMemo(
+    () => menuActions(MenuId.ScmResourceFolderContext, folderScope, 'inline'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [folderScope, revision],
+  )
 
-  const actions: { action: ActionItem; isDir?: boolean }[] =
-    node.groupId === 'index'
-      ? [
-          {
-            action: {
-              id: 'git.unstage',
-              title: localize('scm.unstageChanges', 'Unstage Changes'),
-              command: 'git.unstage',
-              icon: 'remove',
-            },
-          },
-        ]
-      : [
-          {
-            action: {
-              id: 'git.discard',
-              title: localize('scm.discardChanges', 'Discard Changes'),
-              command: 'git.discard',
-              icon: 'discard',
-            },
-            isDir: true,
-          },
-          {
-            action: {
-              id: 'git.stage',
-              title: localize('scm.stageChanges', 'Stage Changes'),
-              command: 'git.stage',
-              icon: 'add',
-            },
-          },
-        ]
+  const run = (command: string): void => {
+    void commandService.executeCommand(command, { resourceUri: absPath, isDirectory: true })
+  }
 
   return (
     <li
@@ -562,13 +510,13 @@ const ScmFolderRow = memo(function ScmFolderRow({
       />
       <span className={styles['folderLabel']}>{node.name}</span>
       <span className={styles['resourceActions']}>
-        {actions.map(({ action, isDir }) => (
+        {actions.map((action) => (
           <ActionButton
             key={action.id}
             action={action}
             onRun={(e) => {
               e.stopPropagation()
-              run(action.command, isDir)
+              run(action.command)
             }}
           />
         ))}
@@ -634,6 +582,7 @@ const ScmGroupRow = memo(function ScmGroupRow({
               void commandService.executeCommand(a.command, {
                 rootUri,
                 sourceControlId: providerId,
+                scmResourceGroupId: node.groupId,
               })
             }}
           />
@@ -653,25 +602,25 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
   const inputValue = useObservable(model.inputValue)
   const placeholder = useObservable(model.inputPlaceholder)
   const acceptCommand = useObservable(model.acceptCommand)
+  const acceptActions = useObservable(model.acceptActions)
   const groups = useObservable(model.groups)
   const viewMode = useObservable(scmViewState.viewMode)
 
   const [commitMenu, setCommitMenu] = useState<{ x: number; y: number } | null>(null)
-  const [stickyCommitId, setStickyCommitId] = useState<string>(DEFAULT_COMMIT_ACTION.id)
+  const [stickyCommitId, setStickyCommitId] = useState<string | undefined>(undefined)
   const [isCommitting, setIsCommitting] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
 
-  // Restore the last-picked commit action so the button defaults to it.
+  // Restore the last-picked commit action so the split button defaults to it.
   const restoredCommitRef = useRef(false)
   useEffect(() => {
     if (restoredCommitRef.current) return
     restoredCommitRef.current = true
     void storage.get<string>(COMMIT_ACTION_STORAGE_KEY, StorageScope.GLOBAL).then((stored) => {
-      if (stored && COMMIT_ACTIONS.some((a) => a.id === stored)) setStickyCommitId(stored)
+      if (stored) setStickyCommitId(stored)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  const stickyCommit = COMMIT_ACTIONS.find((a) => a.id === stickyCommitId) ?? DEFAULT_COMMIT_ACTION
 
   // Single TreeModel per provider; its data source reads a snapshot that is
   // rebuilt (during render) whenever groups / resources / view-mode change.
@@ -781,40 +730,30 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
       })
   }
 
-  const localChangeCount = useMemo(
-    () => groups.reduce((total, group) => total + group.resources.get().length, 0),
-    // dataRevision tracks resource mutations inside stable group objects.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [groups, dataRevision],
-  )
-  const hasLocalChanges = localChangeCount > 0
-  const isGitProvider = model.id === 'git'
+  // The commit bar is fully provider-driven (no SCM-specific knowledge here):
+  //  - `acceptActions` with >1 entries → a split button (primary + dropdown),
+  //    with the last-picked entry remembered as the sticky default.
+  //  - otherwise a single button from `acceptCommand`.
+  //  - neither → the bar is hidden.
+  const commitActions = acceptActions ?? []
+  const hasMultiActions = commitActions.length > 1
+  const stickyCommit = commitActions.find((a) => a.command === stickyCommitId) ?? commitActions[0]
   const primaryCommitAction = useMemo<PrimaryCommitAction | undefined>(() => {
-    if (isGitProvider) {
-      if (!hasLocalChanges) {
-        if (!acceptCommand) {
-          return {
-            label: DEFAULT_COMMIT_ACTION.label,
-            command: DEFAULT_COMMIT_ACTION.command,
-            disabled: true,
-          }
-        }
-        return {
-          label: acceptCommand.title || localize('scm.commit', 'Commit'),
-          command: acceptCommand.command,
-          disabled: acceptCommand.disabled === true,
-        }
-      }
+    if (hasMultiActions && stickyCommit) {
       return {
-        label: stickyCommit.label,
+        label: stickyCommit.title,
         command: stickyCommit.command,
-        disabled: false,
+        disabled: stickyCommit.disabled === true,
       }
     }
     if (!acceptCommand) return undefined
-    return { label: acceptCommand.title, command: acceptCommand.command, disabled: false }
-  }, [acceptCommand, hasLocalChanges, isGitProvider, stickyCommit])
-  const showCommitMenuButton = isGitProvider
+    return {
+      label: acceptCommand.title,
+      command: acceptCommand.command,
+      disabled: acceptCommand.disabled === true,
+    }
+  }, [acceptCommand, hasMultiActions, stickyCommit])
+  const showCommitMenuButton = hasMultiActions
 
   const collapseAll = (): void => {
     const folderIds = snapshotRef.current.collapsibleIds.filter((id) => id.startsWith('folder:'))
@@ -859,7 +798,14 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
       )
     if (n.kind === 'folder')
       return (
-        <ScmFolderRow key={n.id} {...shared} node={n} rootUri={model.rootUri} revision={revision} />
+        <ScmFolderRow
+          key={n.id}
+          {...shared}
+          node={n}
+          providerId={model.id}
+          rootUri={model.rootUri}
+          revision={revision}
+        />
       )
     return (
       <ScmFileRow
@@ -898,19 +844,19 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
 
   const commitRows = useMemo<OverflowRow[]>(
     () =>
-      COMMIT_ACTIONS.map((a) => ({
+      commitActions.map((a) => ({
         kind: 'item',
-        id: a.id,
-        label: a.label,
-        icon: a.icon,
+        id: a.command,
+        label: a.title,
+        ...(a.icon !== undefined ? { icon: a.icon } : {}),
         run: () => {
-          setStickyCommitId(a.id)
-          void storage.set(COMMIT_ACTION_STORAGE_KEY, a.id, StorageScope.GLOBAL)
+          setStickyCommitId(a.command)
+          void storage.set(COMMIT_ACTION_STORAGE_KEY, a.command, StorageScope.GLOBAL)
           runCommand(a.command)
         },
       })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [storage],
+    [storage, commitActions],
   )
 
   return (

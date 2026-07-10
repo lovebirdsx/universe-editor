@@ -53,6 +53,7 @@ const MENU_ID_BY_KEY: Readonly<Record<string, MenuId>> = {
   'scm/title': MenuId.ScmTitle,
   'scm/resourceState/context': MenuId.ScmResourceStateContext,
   'scm/resourceGroup/context': MenuId.ScmResourceGroupContext,
+  'scm/resourceFolder/context': MenuId.ScmResourceFolderContext,
   'scm/inputBox': MenuId.ScmInputBox,
 }
 

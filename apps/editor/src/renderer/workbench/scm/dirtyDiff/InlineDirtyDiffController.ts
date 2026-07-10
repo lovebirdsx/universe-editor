@@ -29,6 +29,9 @@ export interface InlineDirtyDiffCallbacks {
   readonly onStage: (region: DirtyDiffRegion) => void
   /** Open the full working-tree diff for the file in a new editor tab. */
   readonly onOpenChanges: () => void
+  /** Whether the owning SCM provider supports staging a hunk (git yes, Perforce
+   *  no). When false the Stage action is hidden. Re-read on each peek render. */
+  readonly canStage?: () => boolean
 }
 
 /** Header height in px, matching VSCode's peek-view title bar. */
@@ -389,9 +392,11 @@ export class InlineDirtyDiffController extends Disposable {
     addAction('discard', localize('dirtyDiff.peek.revert', 'Revert Change'), () =>
       this._callbacks.onRevert(region),
     )
-    addAction('add', localize('dirtyDiff.peek.stage', 'Stage Change'), () =>
-      this._callbacks.onStage(region),
-    )
+    if (this._callbacks.canStage?.() ?? true) {
+      addAction('add', localize('dirtyDiff.peek.stage', 'Stage Change'), () =>
+        this._callbacks.onStage(region),
+      )
+    }
     addAction('go-to-file', localize('dirtyDiff.peek.openChanges', 'Open Changes'), () =>
       this._callbacks.onOpenChanges(),
     )

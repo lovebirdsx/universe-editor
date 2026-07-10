@@ -24,13 +24,16 @@ import {
   type IEditorInput,
   type ILogger,
 } from '@universe-editor/platform'
-import { BlameCommands, type BlameResultDto } from '@universe-editor/extensions-common'
+import { blameCommandId, type BlameResultDto } from '@universe-editor/extensions-common'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { StatusBarService } from '../../services/statusbar/StatusBarService.js'
 import { CommandService } from '../../services/command/CommandService.js'
 import { ILanguageFeaturesService } from '../../services/languageFeatures/LanguageFeaturesService.js'
+import { IScmService } from '../../services/extensions/ScmService.js'
 import { GitBlameContribution } from '../GitBlameContribution.js'
+
+const GET_BLAME = blameCommandId('git')
 
 vi.mock('../../workbench/editor/monaco/MonacoLoader.js', () => {
   const Range = class {
@@ -134,6 +137,14 @@ function setup() {
   services.set(IStatusBarService, new StatusBarService())
   services.set(IConfigurationService, new ConfigurationService())
   services.set(ILanguageFeaturesService, languageFeatures)
+  // A single `git` provider rooted at `/ws`, so files under it resolve to `git`.
+  services.set(IScmService, {
+    _serviceBrand: undefined,
+    sourceControls: {
+      get: () => [{ id: 'git', rootUri: '/ws' }],
+      read: () => [{ id: 'git', rootUri: '/ws' }],
+    },
+  } as never)
 
   const statusBar = services.get(IStatusBarService) as StatusBarService
   const contrib = inst.createInstance(GitBlameContribution)
@@ -160,7 +171,7 @@ describe('GitBlameContribution', () => {
     active.set(input, undefined)
     await flushMicrotasks()
 
-    expect(logger.warn).not.toHaveBeenCalledWith(`command not found id=${BlameCommands.getBlame}`)
+    expect(logger.warn).not.toHaveBeenCalledWith(`command not found id=${GET_BLAME}`)
   })
 
   it('renders blame in the status bar once git.getBlame is registered', async () => {
@@ -178,7 +189,7 @@ describe('GitBlameContribution', () => {
       ],
       uncommittedLines: [],
     }
-    const reg = CommandsRegistry.registerCommand(BlameCommands.getBlame, () => result)
+    const reg = CommandsRegistry.registerCommand(GET_BLAME, () => result)
     try {
       const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))
       const editor = makeFakeEditor()

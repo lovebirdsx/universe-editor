@@ -2,8 +2,8 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
  *  Verifies ActiveRepoSyncContribution mirrors the SCM view's selected repo to
- *  the git host via `git.setActiveRepo`, using the same selected-or-first fallback
- *  as ScmView / ScmViewToolbar.
+ *  its provider host via `<providerId>.setActiveRepo`, using the same
+ *  selected-or-first fallback as ScmView / ScmViewToolbar.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -17,8 +17,8 @@ import type { IScmService, IScmSourceControlModel } from '../../services/extensi
 import { scmViewState } from '../../workbench/scm/scmViewState.js'
 import { ActiveRepoSyncContribution } from '../ActiveRepoSyncContribution.js'
 
-function sc(rootUri: string): IScmSourceControlModel {
-  return { rootUri } as unknown as IScmSourceControlModel
+function sc(rootUri: string, id = 'git'): IScmSourceControlModel {
+  return { id, rootUri } as unknown as IScmSourceControlModel
 }
 
 function makeFakeScm(initial: readonly IScmSourceControlModel[]): {
@@ -99,6 +99,16 @@ describe('ActiveRepoSyncContribution', () => {
     // /b disappears (e.g. workspace change) → fall back to the new first repo.
     scm.set([sc('/c')])
     expect(cmd.calls.at(-1)).toEqual(['git.setActiveRepo', ['/c']])
+    store.dispose()
+  })
+
+  it('derives the command id from the selected provider (not hardcoded git)', () => {
+    const store = new DisposableStore()
+    const scm = makeFakeScm([sc('/depot', 'perforce')])
+    const cmd = makeFakeCommands()
+    store.add(new ActiveRepoSyncContribution(scm.service, cmd.service))
+
+    expect(cmd.calls).toEqual([['perforce.setActiveRepo', ['/depot']]])
     store.dispose()
   })
 })

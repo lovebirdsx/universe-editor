@@ -14,6 +14,8 @@ export interface Command {
   title: string
   tooltip?: string
   disabled?: boolean
+  /** Optional codicon id, e.g. for a commit-bar dropdown entry. */
+  icon?: string
   arguments?: unknown[]
 }
 
@@ -67,6 +69,14 @@ export interface SourceControl {
   commitTemplate: string | undefined
   /** Primary action wired to the commit button / accept gesture. */
   acceptInputCommand: Command | undefined
+  /**
+   * Optional list of commit-bar actions (primary first). When set with more than
+   * one entry, the view renders a split button: the primary action plus a
+   * dropdown of the rest, remembering the last-picked one as the sticky default.
+   * A provider with a single accept gesture leaves this unset and just sets
+   * `acceptInputCommand`.
+   */
+  acceptInputActions: Command[] | undefined
   createResourceGroup(id: string, label: string): SourceControlResourceGroup
   dispose(): void
 }

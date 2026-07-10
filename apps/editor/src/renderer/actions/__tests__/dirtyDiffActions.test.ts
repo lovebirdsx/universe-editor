@@ -7,7 +7,7 @@ import {
   URI,
   type ICommandService as ICommandServiceType,
 } from '@universe-editor/platform'
-import { DirtyDiffCommands } from '@universe-editor/extensions-common'
+import { dirtyDiffCommandId } from '@universe-editor/extensions-common'
 import { OpenActiveFileChangesAction } from '../dirtyDiffActions.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
@@ -16,6 +16,12 @@ import {
   IScmDecorationsService,
   type IScmDecorationsService as IScmDecorationsServiceType,
 } from '../../services/scm/ScmDecorationsService.js'
+import {
+  IScmService,
+  type IScmService as IScmServiceType,
+} from '../../services/extensions/ScmService.js'
+
+const GET_HEAD = dirtyDiffCommandId('git', 'getHeadContent')
 
 const scmDecorations = (hasChanges: boolean): IScmDecorationsServiceType => ({
   _serviceBrand: undefined,
@@ -26,6 +32,16 @@ const scmDecorations = (hasChanges: boolean): IScmDecorationsServiceType => ({
   getFile: () => (hasChanges ? { color: '#e2c08d', letter: 'M' } : undefined),
   getFolder: () => undefined,
 })
+
+/** A minimal IScmService exposing one `git` provider rooted at `D:/repo`. */
+const scmService = (): IScmServiceType =>
+  ({
+    _serviceBrand: undefined,
+    sourceControls: {
+      get: () => [{ id: 'git', rootUri: 'D:/repo' }],
+      read: () => [{ id: 'git', rootUri: 'D:/repo' }],
+    },
+  }) as never
 
 async function runActionWithServices(services: ServiceCollection): Promise<void> {
   const instantiationService = new InstantiationService(services)
@@ -58,7 +74,7 @@ describe('OpenActiveFileChangesAction', () => {
     const commandService: ICommandServiceType = {
       _serviceBrand: undefined,
       executeCommand: vi.fn(async (id: string, ...args: unknown[]) => {
-        if (id === DirtyDiffCommands.getHeadContent) return 'head content\n'
+        if (id === GET_HEAD) return 'head content\n'
         if (id === '_workbench.openDiff') {
           payload = args[0]
           return undefined
@@ -72,13 +88,11 @@ describe('OpenActiveFileChangesAction', () => {
         [IEditorGroupsService, groups],
         [ICommandService, commandService],
         [IScmDecorationsService, scmDecorations(true)],
+        [IScmService, scmService()],
       ),
     )
 
-    expect(commandService.executeCommand).toHaveBeenCalledWith(
-      DirtyDiffCommands.getHeadContent,
-      input.resource.fsPath,
-    )
+    expect(commandService.executeCommand).toHaveBeenCalledWith(GET_HEAD, input.resource.fsPath)
     expect(payload).toMatchObject({
       original: 'head content\n',
       modified: 'unsaved buffer\n',
@@ -94,7 +108,7 @@ describe('OpenActiveFileChangesAction', () => {
     const commandService: ICommandServiceType = {
       _serviceBrand: undefined,
       executeCommand: vi.fn(async (id: string) =>
-        id === DirtyDiffCommands.getHeadContent ? null : undefined,
+        id === GET_HEAD ? null : undefined,
       ) as ICommandServiceType['executeCommand'],
     }
 
@@ -103,6 +117,7 @@ describe('OpenActiveFileChangesAction', () => {
         [IEditorGroupsService, groups],
         [ICommandService, commandService],
         [IScmDecorationsService, scmDecorations(false)],
+        [IScmService, scmService()],
       ),
     )
 

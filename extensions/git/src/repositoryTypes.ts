@@ -4,6 +4,7 @@
  * orchestration. No I/O here — everything is data or a pure function.
  */
 import type { Command } from '@universe-editor/extension-api'
+import { localize } from './nls.js'
 
 export interface RefreshOptions {
   readonly fetch?: boolean
@@ -41,6 +42,32 @@ export const GIT_PULL_REBASE_INPUT_COMMAND: Command = {
   title: 'Pull Rebase',
 }
 export const GIT_PUSH_INPUT_COMMAND: Command = { command: 'git.push', title: 'Push' }
+
+/**
+ * The commit-bar split-button choices (primary first). The host renders these as
+ * a primary button plus a dropdown, remembering the last-picked one. Titles are
+ * localized at construction in repository.ts.
+ */
+export function gitCommitActions(): Command[] {
+  return [
+    { command: 'git.commit', title: localize('git.command.commit', 'Commit'), icon: 'git-commit' },
+    {
+      command: 'git.commitAmend',
+      title: localize('git.command.commitAmend', 'Commit (Amend)'),
+      icon: 'git-commit',
+    },
+    {
+      command: 'git.commitAndPush',
+      title: localize('git.command.commitAndPush', 'Commit & Push'),
+      icon: 'push',
+    },
+    {
+      command: 'git.commitAndSync',
+      title: localize('git.command.commitAndSync', 'Commit & Sync'),
+      icon: 'sync',
+    },
+  ]
+}
 
 /** Pick the SCM input box's primary action from the repo's change / sync state. */
 export function gitPrimaryInputCommand({

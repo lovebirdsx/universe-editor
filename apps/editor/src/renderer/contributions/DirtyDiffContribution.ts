@@ -18,6 +18,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  CommandsRegistry,
   Disposable,
   DisposableStore,
   ICommandService,
@@ -28,11 +29,12 @@ import {
   type URI,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
-import { DirtyDiffCommands } from '@universe-editor/extensions-common'
+import { dirtyDiffCommandId } from '@universe-editor/extensions-common'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IDirtyDiffNavigationService } from '../services/scm/DirtyDiffNavigationService.js'
 import { IScmDecorationsService } from '../services/scm/ScmDecorationsService.js'
+import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
 import { InlineDirtyDiffController } from '../workbench/scm/dirtyDiff/InlineDirtyDiffController.js'
 import {
@@ -78,6 +80,7 @@ export class DirtyDiffContribution
     @IScmDecorationsService scmDecorationsService: IScmDecorationsService,
     @IDirtyDiffNavigationService private readonly _navigation: IDirtyDiffNavigationService,
     @IContextKeyService contextKeyService: IContextKeyService,
+    @IScmService private readonly _scm: IScmService,
   ) {
     super()
 
@@ -130,6 +133,7 @@ export class DirtyDiffContribution
           onRevert: (region) => this._revert(region),
           onStage: (region) => void this._stage(region),
           onOpenChanges: () => void this._openChanges(),
+          canStage: () => this._activeProviderSupportsStage(),
         }),
       )
 
@@ -185,8 +189,15 @@ export class DirtyDiffContribution
     const existing = this._inflight.get(path)
     if (existing) return existing
 
+    const providerId = resolveScmProviderId(this._scm.sourceControls.get(), path)
+    if (!providerId) {
+      // No SCM provider owns this path — no baseline, no dirty-diff.
+      this._headCache.set(path, null)
+      return Promise.resolve(null)
+    }
+
     const p = this._commandService
-      .executeCommand<string | null>(DirtyDiffCommands.getHeadContent, path)
+      .executeCommand<string | null>(dirtyDiffCommandId(providerId, 'getHeadContent'), path)
       .then((r) => {
         this._inflight.delete(path)
         // `undefined` = command not registered yet (extension host activating);
@@ -364,19 +375,40 @@ export class DirtyDiffContribution
   private async _stage(region: DirtyDiffRegion): Promise<void> {
     const path = this._activePath
     if (!path) return
+    const providerId = resolveScmProviderId(this._scm.sourceControls.get(), path)
+    if (!providerId) return
     // Persist edits to disk first: stage-hunk diffs the index against the
     // working-tree FILE, so unsaved buffer changes would be invisible to git.
     await this._commandService.executeCommand('workbench.action.files.save').catch(() => undefined)
     await this._commandService
-      .executeCommand(DirtyDiffCommands.stageChange, path, region.startLine, region.endLine)
+      .executeCommand(
+        dirtyDiffCommandId(providerId, 'stageChange'),
+        path,
+        region.startLine,
+        region.endLine,
+      )
       .catch(() => undefined)
     this.closePeek()
   }
 
   private async _openChanges(): Promise<void> {
+    const path = this._activePath
+    const providerId = path ? resolveScmProviderId(this._scm.sourceControls.get(), path) : undefined
+    if (!providerId) return
     await this._commandService
-      .executeCommand('git.openChange', undefined, { pinned: true })
+      .executeCommand(dirtyDiffCommandId(providerId, 'openChange'), undefined, { pinned: true })
       .catch(() => undefined)
+  }
+
+  /** Whether the SCM provider owning the active file implements per-hunk staging.
+   *  Providers without a staging area (Perforce) don't register the command, so
+   *  the Stage action is hidden. */
+  private _activeProviderSupportsStage(): boolean {
+    const path = this._activePath
+    if (!path) return false
+    const providerId = resolveScmProviderId(this._scm.sourceControls.get(), path)
+    if (!providerId) return false
+    return CommandsRegistry.getCommand(dirtyDiffCommandId(providerId, 'stageChange')) !== undefined
   }
 
   private _clear(): void {

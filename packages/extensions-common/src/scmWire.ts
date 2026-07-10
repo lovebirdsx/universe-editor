@@ -15,6 +15,7 @@ export interface ICommandDto {
   title: string
   tooltip?: string
   disabled?: boolean
+  icon?: string
   arguments?: unknown[]
 }
 
@@ -38,6 +39,8 @@ export interface ISourceControlFeaturesDto {
   count?: number
   commitTemplate?: string
   acceptInputCommand?: ICommandDto
+  /** Commit-bar actions (primary first); drives the split commit button. */
+  acceptInputActions?: ICommandDto[]
 }
 
 /** Mutable group-level features pushed on change. */

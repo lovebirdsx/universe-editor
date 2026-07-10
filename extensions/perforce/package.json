@@ -1,0 +1,141 @@
+{
+  "name": "@universe-editor/perforce",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist",
+    "package.nls.json",
+    "package.nls.zh-cn.json",
+    "icon.svg"
+  ],
+  "displayName": "Perforce",
+  "icon": "icon.svg",
+  "description": "Perforce (Helix Core) source control integration (first-party Universe extension).",
+  "main": "dist/extension.js",
+  "engines": {
+    "universe": ">=0.1.0 <1.0.0"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      { "command": "perforce.refresh", "title": "%perforce.command.refresh.title%", "category": "Perforce", "icon": "refresh" },
+      { "command": "perforce.cleanRefresh", "title": "%perforce.command.cleanRefresh.title%", "category": "Perforce", "icon": "refresh" },
+      { "command": "perforce.login", "title": "%perforce.command.login.title%", "category": "Perforce", "icon": "key" },
+      { "command": "perforce.logout", "title": "%perforce.command.logout.title%", "category": "Perforce", "icon": "sign-out" },
+      { "command": "perforce.showOutput", "title": "%perforce.command.showOutput.title%", "category": "Perforce", "icon": "output" },
+      { "command": "perforce.openChange", "title": "%perforce.command.openChange.title%", "category": "Perforce", "icon": "compare-changes" },
+      { "command": "perforce.openFile", "title": "%perforce.command.openFile.title%", "category": "Perforce", "icon": "go-to-file" },
+      { "command": "perforce.edit", "title": "%perforce.command.edit.title%", "category": "Perforce", "icon": "edit" },
+      { "command": "perforce.add", "title": "%perforce.command.add.title%", "category": "Perforce", "icon": "add" },
+      { "command": "perforce.delete", "title": "%perforce.command.delete.title%", "category": "Perforce", "icon": "trash" },
+      { "command": "perforce.revert", "title": "%perforce.command.revert.title%", "category": "Perforce", "icon": "discard" },
+      { "command": "perforce.revertUnchanged", "title": "%perforce.command.revertUnchanged.title%", "category": "Perforce", "icon": "discard" },
+      { "command": "perforce.submitDefault", "title": "%perforce.command.submit.title%", "category": "Perforce", "icon": "check" },
+      { "command": "perforce.submitChangelist", "title": "%perforce.command.submitChangelist.title%", "category": "Perforce", "icon": "check" },
+      { "command": "perforce.newChangelist", "title": "%perforce.command.newChangelist.title%", "category": "Perforce", "icon": "add" },
+      { "command": "perforce.reopen", "title": "%perforce.command.reopen.title%", "category": "Perforce", "icon": "arrow-right" },
+      { "command": "perforce.editChangelist", "title": "%perforce.command.editChangelist.title%", "category": "Perforce", "icon": "edit" },
+      { "command": "perforce.shelve", "title": "%perforce.command.shelve.title%", "category": "Perforce", "icon": "archive" },
+      { "command": "perforce.unshelve", "title": "%perforce.command.unshelve.title%", "category": "Perforce", "icon": "export" },
+      { "command": "perforce.deleteShelved", "title": "%perforce.command.deleteShelved.title%", "category": "Perforce", "icon": "trash" },
+      { "command": "perforce.resolve", "title": "%perforce.command.resolve.title%", "category": "Perforce", "icon": "merge" },
+      { "command": "perforce.resolveChangelist", "title": "%perforce.command.resolveChangelist.title%", "category": "Perforce", "icon": "merge" }
+    ],
+    "submenus": [
+      { "id": "perforce.refreshMenu", "label": "%perforce.submenu.refresh.label%", "icon": "refresh" }
+    ],
+    "menus": {
+      "scm/title": [
+        { "command": "perforce.refresh", "when": "scmProvider == perforce", "group": "navigation@1", "icon": "refresh" },
+        { "command": "perforce.newChangelist", "when": "scmProvider == perforce", "group": "navigation@2", "icon": "add" },
+        { "submenu": "perforce.refreshMenu", "when": "scmProvider == perforce", "group": "1_refresh@1" },
+        { "command": "perforce.login", "when": "scmProvider == perforce", "group": "2_connection@1", "icon": "key" },
+        { "command": "perforce.logout", "when": "scmProvider == perforce", "group": "2_connection@2", "icon": "sign-out" },
+        { "command": "perforce.showOutput", "when": "scmProvider == perforce", "group": "9_misc@1", "icon": "output" }
+      ],
+      "perforce.refreshMenu": [
+        { "command": "perforce.refresh", "group": "1@1", "icon": "refresh" },
+        { "command": "perforce.cleanRefresh", "group": "1@2", "icon": "refresh" }
+      ],
+      "scm/resourceState/context": [
+        { "command": "perforce.openChange", "when": "scmProvider == perforce && scmResourceState != S", "group": "inline@1", "icon": "compare-changes" },
+        { "command": "perforce.revert", "when": "scmProvider == perforce && scmResourceState != S", "group": "inline@2", "icon": "discard" },
+        { "command": "perforce.resolve", "when": "scmProvider == perforce && scmResourceState == U", "group": "inline@3", "icon": "merge" },
+        { "command": "perforce.openFile", "when": "scmProvider == perforce && scmResourceState != S", "group": "1_open@1", "icon": "go-to-file" },
+        { "command": "perforce.reopen", "when": "scmProvider == perforce && scmResourceState != S", "group": "2_modify@1", "icon": "arrow-right" }
+      ],
+      "scm/resourceGroup/context": [
+        { "command": "perforce.submitChangelist", "when": "scmProvider == perforce && scmResourceGroup =~ /^cl:/", "group": "inline@1", "icon": "check" },
+        { "command": "perforce.shelve", "when": "scmProvider == perforce && scmResourceGroup =~ /^cl:/", "group": "inline@2", "icon": "archive" },
+        { "command": "perforce.unshelve", "when": "scmProvider == perforce && scmResourceGroup =~ /^shelved:/", "group": "inline@1", "icon": "export" },
+        { "command": "perforce.deleteShelved", "when": "scmProvider == perforce && scmResourceGroup =~ /^shelved:/", "group": "inline@2", "icon": "trash" },
+        { "command": "perforce.editChangelist", "when": "scmProvider == perforce && scmResourceGroup =~ /^cl:/", "group": "1_edit@1", "icon": "edit" },
+        { "command": "perforce.resolveChangelist", "when": "scmProvider == perforce && scmResourceGroup =~ /^cl:/", "group": "1_edit@2", "icon": "merge" },
+        { "command": "perforce.revertUnchanged", "when": "scmProvider == perforce", "group": "2_revert@1", "icon": "discard" }
+      ]
+    },
+    "configuration": {
+      "title": "Perforce",
+      "properties": {
+        "perforce.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%perforce.config.enabled.description%"
+        },
+        "perforce.port": {
+          "type": "string",
+          "default": "",
+          "description": "%perforce.config.port.description%"
+        },
+        "perforce.user": {
+          "type": "string",
+          "default": "",
+          "description": "%perforce.config.user.description%"
+        },
+        "perforce.client": {
+          "type": "string",
+          "default": "",
+          "description": "%perforce.config.client.description%"
+        },
+        "perforce.maxConcurrent": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "description": "%perforce.config.maxConcurrent.description%"
+        },
+        "perforce.refreshInterval": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "%perforce.config.refreshInterval.description%"
+        },
+        "perforce.autoEdit": {
+          "type": "boolean",
+          "default": false,
+          "description": "%perforce.config.autoEdit.description%"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src",
+    "lint:fix": "eslint --fix src",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "devDependencies": {
+    "@universe-editor/config-ts": "workspace:*",
+    "@universe-editor/extension-api": "workspace:*",
+    "@types/node": "catalog:",
+    "esbuild": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

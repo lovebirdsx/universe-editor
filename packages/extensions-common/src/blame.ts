@@ -34,12 +34,22 @@ export interface BlameResultDto {
 }
 
 /**
- * Contributed-command id the `git` extension registers for blame. Kept here as
- * the single source of truth for the renderer side.
+ * Contributed-command suffix each SCM provider registers for blame, joined to
+ * its provider id (`git.getBlame`, `perforce.getBlame`). The renderer resolves
+ * the owning provider for a file and calls `<providerId>.getBlame`, so the host
+ * holds no SCM-specific knowledge.
  *
- * The handler takes a single absolute file path argument and returns a
+ * The handler takes `(fsPath, ignoreWhitespace?)` and returns a
  * {@link BlameResultDto}, or null when the file is outside any repo / untracked.
  */
-export const BlameCommands = {
-  getBlame: 'git.getBlame',
+export const BlameCapabilities = {
+  getBlame: 'getBlame',
 } as const
+
+/** Build a provider-scoped blame command id, e.g. `'git.getBlame'`. */
+export function blameCommandId(
+  providerId: string,
+  capability: keyof typeof BlameCapabilities = 'getBlame',
+): string {
+  return `${providerId}.${BlameCapabilities[capability]}`
+}

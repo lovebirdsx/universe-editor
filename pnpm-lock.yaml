@@ -492,6 +492,30 @@ importers:
         specifier: 'catalog:'
         version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.17)(happy-dom@17.6.3)
 
+  extensions/perforce:
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.17
+      '@universe-editor/config-ts':
+        specifier: workspace:*
+        version: link:../../packages/config-ts
+      '@universe-editor/extension-api':
+        specifier: workspace:*
+        version: link:../../packages/extension-api
+      esbuild:
+        specifier: 'catalog:'
+        version: 0.25.12
+      eslint:
+        specifier: 'catalog:'
+        version: 9.39.4
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.17)(happy-dom@17.6.3)
+
   extensions/typescript:
     devDependencies:
       '@types/node':

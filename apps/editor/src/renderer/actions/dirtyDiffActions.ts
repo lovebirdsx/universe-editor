@@ -14,7 +14,7 @@ import {
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { DirtyDiffCommands } from '@universe-editor/extensions-common'
+import { dirtyDiffCommandId } from '@universe-editor/extensions-common'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import {
@@ -22,6 +22,7 @@ import {
   findAdjacentChange,
 } from '../services/scm/DirtyDiffNavigationService.js'
 import { IScmDecorationsService } from '../services/scm/ScmDecorationsService.js'
+import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
 import { DirtyDiffPeekRegistry } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
 
 const WHEN = "editorTextFocus && !isInDiffEditor && quickDiffDecorationCount != '0'"
@@ -101,11 +102,15 @@ export class OpenActiveFileChangesAction extends Action2 {
 
     const commandService = accessor.get(ICommandService)
     const scmDecorations = accessor.get(IScmDecorationsService)
+    const scm = accessor.get(IScmService)
     const hasScmChanges = scmDecorations.getFile(active.resource) !== undefined
-    const head = await commandService.executeCommand<string | null>(
-      DirtyDiffCommands.getHeadContent,
-      active.resource.fsPath,
-    )
+    const providerId = resolveScmProviderId(scm.sourceControls.get(), active.resource.fsPath)
+    const head = providerId
+      ? await commandService.executeCommand<string | null>(
+          dirtyDiffCommandId(providerId, 'getHeadContent'),
+          active.resource.fsPath,
+        )
+      : null
     if (head == null && !hasScmChanges) return
 
     const model =

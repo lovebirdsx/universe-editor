@@ -43,6 +43,7 @@ export interface IScmSourceControlModel {
   readonly inputPlaceholder: IObservable<string>
   readonly count: IObservable<number | undefined>
   readonly acceptCommand: IObservable<ICommandDto | undefined>
+  readonly acceptActions: IObservable<readonly ICommandDto[] | undefined>
   readonly groups: IObservable<readonly IScmGroupModel[]>
 }
 
@@ -58,6 +59,40 @@ export interface IScmService {
 }
 
 export const IScmService = createDecorator<IScmService>('scmService')
+
+/**
+ * Resolve which SCM provider owns `fsPath` — the source control whose `rootUri`
+ * is the longest prefix of the path. Returns its provider id (e.g. `'git'` /
+ * `'perforce'`), so host features (dirty-diff baseline, blame) can address the
+ * owning provider's contributed commands as `<providerId>.<capability>` instead
+ * of hardcoding one SCM. Returns undefined when no provider contains the path.
+ *
+ * Keying goes through {@link scmProviderPathKey} (separator-agnostic, lower-cased)
+ * — a self-contained SCM-domain key, deliberately not routed through
+ * IUriIdentityService (mirrors ScmDecorationsService's scmPathKey rationale).
+ */
+export function resolveScmProviderId(
+  sourceControls: readonly IScmSourceControlModel[],
+  fsPath: string,
+): string | undefined {
+  const target = scmProviderPathKey(fsPath)
+  let bestId: string | undefined
+  let bestLen = -1
+  for (const sc of sourceControls) {
+    if (sc.rootUri === undefined) continue
+    const root = scmProviderPathKey(sc.rootUri)
+    if ((target === root || target.startsWith(`${root}/`)) && root.length > bestLen) {
+      bestId = sc.id
+      bestLen = root.length
+    }
+  }
+  return bestId
+}
+
+/** Separator-agnostic, case-insensitive path key for provider routing. */
+export function scmProviderPathKey(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
 
 class ScmGroupModel implements IScmGroupModel {
   readonly label: ISettableObservable<string>
@@ -81,6 +116,10 @@ class ScmSourceControlModel implements IScmSourceControlModel {
   readonly inputPlaceholder = observableValue<string>('scmInputPlaceholder', '')
   readonly count = observableValue<number | undefined>('scmCount', undefined)
   readonly acceptCommand = observableValue<ICommandDto | undefined>('scmAcceptCommand', undefined)
+  readonly acceptActions = observableValue<readonly ICommandDto[] | undefined>(
+    'scmAcceptActions',
+    undefined,
+  )
   readonly groups = observableValue<readonly IScmGroupModel[]>('scmGroups', [])
   /** Live groups in registration order; `groups` observable mirrors this. */
   readonly groupOrder: ScmGroupModel[] = []
@@ -146,6 +185,9 @@ export class ScmService extends Disposable implements IScmService, IMainThreadSc
       if (features.count !== undefined) model.count.set(features.count, undefined)
       if (features.acceptInputCommand !== undefined) {
         model.acceptCommand.set(features.acceptInputCommand, undefined)
+      }
+      if (features.acceptInputActions !== undefined) {
+        model.acceptActions.set(features.acceptInputActions, undefined)
       }
     }
     return Promise.resolve()

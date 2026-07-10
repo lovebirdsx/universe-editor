@@ -26,10 +26,11 @@ import {
   type IWorkbenchContribution,
   autorun,
 } from '@universe-editor/platform'
-import { BlameCommands, type BlameResultDto } from '@universe-editor/extensions-common'
+import { blameCommandId, type BlameResultDto } from '@universe-editor/extensions-common'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
+import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
 
 const OPEN_COMMIT_COMMAND = 'gitblame.openCommit'
@@ -87,6 +88,7 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
     @ICommandService private readonly _commandService: ICommandService,
     @IConfigurationService private readonly _configurationService: IConfigurationService,
     @ILanguageFeaturesService languageFeatures: ILanguageFeaturesService,
+    @IScmService private readonly _scm: IScmService,
   ) {
     super()
 
@@ -201,16 +203,19 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
 
   private _getBlame(path: string): Promise<BlameResultDto | null> {
     if (this._cache.has(path)) return Promise.resolve(this._cache.get(path) ?? null)
-    // The git extension registers `git.getBlame` only after it activates, and it
-    // never activates when the workspace isn't a git repo. Probe the registry
-    // first so a non-git workspace doesn't log "command not found" on every
-    // cursor move. The miss isn't cached, so a later activation still retries.
-    if (!CommandsRegistry.getCommand(BlameCommands.getBlame)) return Promise.resolve(null)
+    // Resolve which SCM provider owns this file and address its blame command.
+    // A provider registers `<id>.getBlame` only after it activates (and never in a
+    // non-SCM workspace), so probe the registry first — a miss isn't cached, so a
+    // later activation still retries.
+    const providerId = resolveScmProviderId(this._scm.sourceControls.get(), path)
+    if (!providerId) return Promise.resolve(null)
+    const commandId = blameCommandId(providerId)
+    if (!CommandsRegistry.getCommand(commandId)) return Promise.resolve(null)
     const existing = this._inflight.get(path)
     if (existing) return existing
 
     const p = this._commandService
-      .executeCommand<BlameResultDto | null>(BlameCommands.getBlame, path, this._ignoreWhitespace)
+      .executeCommand<BlameResultDto | null>(commandId, path, this._ignoreWhitespace)
       .then((r) => {
         this._inflight.delete(path)
         // `undefined` means the command isn't registered yet (extension host still

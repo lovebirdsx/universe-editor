@@ -42,6 +42,7 @@ import { RepositoryWatcher } from './repositoryWatcher.js'
 import { RepositoryWorktrees } from './repositoryWorktrees.js'
 import {
   GIT_COMMIT_INPUT_COMMAND,
+  gitCommitActions,
   gitPrimaryInputCommand,
   type FetchOptions,
   type RefreshOptions,
@@ -178,11 +179,16 @@ export class Repository {
     this._stagedCount = staged.length
     this._workingCount = working.length
     this._sc.count = staged.length + working.length
+    const hasChanges = staged.length + working.length > 0
     this._sc.acceptInputCommand = gitPrimaryInputCommand({
-      hasChanges: staged.length + working.length > 0,
+      hasChanges,
       ahead: status.ahead,
       behind: status.behind,
     })
+    // With changes, offer the full commit split-button (commit / amend / push /
+    // sync). With none, the single primary (push/pull/sync) button suffices, so
+    // clear the actions to collapse the dropdown.
+    this._sc.acceptInputActions = hasChanges ? gitCommitActions() : undefined
     this._branch = status.branch
     this._ahead = status.ahead
     this._behind = status.behind

@@ -68,6 +68,15 @@ Git 集成：提交、分支、GitGraph、Blame、冲突解决。
 - [会话更改](./git/session-changes.md)
 - [冲突解决](./git/conflicts.md)
 
+## Perforce（Helix Core）
+
+Perforce 集成：连接登录、changelist 管理、签出/提交/对比、搁置、冲突解决。
+
+- [概览与连接](./perforce/overview.md)
+- [日常操作：签出、提交、对比](./perforce/daily-workflow.md)
+- [Changelist 与搁置](./perforce/changelists-and-shelving.md)
+- [冲突解决与进阶设置](./perforce/resolve-and-advanced.md)
+
 ## 定制
 
 设置、快捷键、主题、插件、AI 供应商密钥。

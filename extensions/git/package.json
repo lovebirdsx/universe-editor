@@ -87,91 +87,96 @@
     ],
     "menus": {
       "scm/title": [
-        { "command": "git-graph.view", "group": "navigation@1", "icon": "git-graph" },
-        { "command": "git.refresh", "group": "navigation@2", "icon": "refresh" },
-        { "submenu": "git.commitMenu", "group": "1_commit@1" },
-        { "submenu": "git.changesMenu", "group": "2_changes@1" },
-        { "submenu": "git.pullMenu", "group": "3_sync@1" },
-        { "submenu": "git.pushMenu", "group": "3_sync@2" },
-        { "command": "git.sync", "group": "3_sync@3", "icon": "sync" },
-        { "submenu": "git.fetchMenu", "group": "3_sync@4" },
-        { "submenu": "git.branchMenu", "group": "4_branch@1" },
-        { "submenu": "git.worktreeMenu", "group": "4_branch@2" },
-        { "submenu": "git.stashMenu", "group": "5_stash@1" },
-        { "submenu": "git.remoteMenu", "group": "6_remote@1" },
-        { "submenu": "git.tagsMenu", "group": "6_remote@2" },
-        { "submenu": "git.submoduleMenu", "group": "7_submodule@1" }
+        { "command": "git-graph.view", "when": "scmProvider == git", "group": "navigation@1", "icon": "git-graph" },
+        { "command": "git.refresh", "when": "scmProvider == git", "group": "navigation@2", "icon": "refresh" },
+        { "submenu": "git.commitMenu", "when": "scmProvider == git", "group": "1_commit@1" },
+        { "submenu": "git.changesMenu", "when": "scmProvider == git", "group": "2_changes@1" },
+        { "submenu": "git.pullMenu", "when": "scmProvider == git", "group": "3_sync@1" },
+        { "submenu": "git.pushMenu", "when": "scmProvider == git", "group": "3_sync@2" },
+        { "command": "git.sync", "when": "scmProvider == git", "group": "3_sync@3", "icon": "sync" },
+        { "submenu": "git.fetchMenu", "when": "scmProvider == git", "group": "3_sync@4" },
+        { "submenu": "git.branchMenu", "when": "scmProvider == git", "group": "4_branch@1" },
+        { "submenu": "git.worktreeMenu", "when": "scmProvider == git", "group": "4_branch@2" },
+        { "submenu": "git.stashMenu", "when": "scmProvider == git", "group": "5_stash@1" },
+        { "submenu": "git.remoteMenu", "when": "scmProvider == git", "group": "6_remote@1" },
+        { "submenu": "git.tagsMenu", "when": "scmProvider == git", "group": "6_remote@2" },
+        { "submenu": "git.submoduleMenu", "when": "scmProvider == git", "group": "7_submodule@1" }
       ],
       "git.commitMenu": [
-        { "command": "git.commit", "group": "1@1", "icon": "git-commit" },
-        { "command": "git.commitAmend", "group": "1@2", "icon": "git-commit" },
-        { "command": "git.commitAndPush", "group": "1@3", "icon": "push" },
-        { "command": "git.commitAndSync", "group": "1@4", "icon": "sync" },
-        { "command": "git.undoLastCommit", "group": "2@1", "icon": "discard" }
+        { "command": "git.commit", "when": "scmProvider == git", "group": "1@1", "icon": "git-commit" },
+        { "command": "git.commitAmend", "when": "scmProvider == git", "group": "1@2", "icon": "git-commit" },
+        { "command": "git.commitAndPush", "when": "scmProvider == git", "group": "1@3", "icon": "push" },
+        { "command": "git.commitAndSync", "when": "scmProvider == git", "group": "1@4", "icon": "sync" },
+        { "command": "git.undoLastCommit", "when": "scmProvider == git", "group": "2@1", "icon": "discard" }
       ],
       "git.changesMenu": [
-        { "command": "git.stageAll", "group": "1@1", "icon": "stage-all" },
-        { "command": "git.unstageAll", "group": "1@2", "icon": "unstage-all" },
-        { "command": "git.discardAll", "group": "1@3", "icon": "discard-all" }
+        { "command": "git.stageAll", "when": "scmProvider == git", "group": "1@1", "icon": "stage-all" },
+        { "command": "git.unstageAll", "when": "scmProvider == git", "group": "1@2", "icon": "unstage-all" },
+        { "command": "git.discardAll", "when": "scmProvider == git", "group": "1@3", "icon": "discard-all" }
       ],
       "git.pullMenu": [
-        { "command": "git.pull", "group": "1@1", "icon": "pull" },
-        { "command": "git.pullRebase", "group": "1@2", "icon": "pull" },
-        { "command": "git.pullAutostash", "group": "1@3", "icon": "pull" }
+        { "command": "git.pull", "when": "scmProvider == git", "group": "1@1", "icon": "pull" },
+        { "command": "git.pullRebase", "when": "scmProvider == git", "group": "1@2", "icon": "pull" },
+        { "command": "git.pullAutostash", "when": "scmProvider == git", "group": "1@3", "icon": "pull" }
       ],
       "git.pushMenu": [
-        { "command": "git.push", "group": "1@1", "icon": "push" },
-        { "command": "git.pushForce", "group": "1@2", "icon": "push" },
-        { "command": "git.pushTo", "group": "1@3", "icon": "push" }
+        { "command": "git.push", "when": "scmProvider == git", "group": "1@1", "icon": "push" },
+        { "command": "git.pushForce", "when": "scmProvider == git", "group": "1@2", "icon": "push" },
+        { "command": "git.pushTo", "when": "scmProvider == git", "group": "1@3", "icon": "push" }
       ],
       "git.fetchMenu": [
-        { "command": "git.fetch", "group": "1@1", "icon": "fetch" },
-        { "command": "git.fetchPrune", "group": "1@2", "icon": "fetch" }
+        { "command": "git.fetch", "when": "scmProvider == git", "group": "1@1", "icon": "fetch" },
+        { "command": "git.fetchPrune", "when": "scmProvider == git", "group": "1@2", "icon": "fetch" }
       ],
       "git.branchMenu": [
-        { "command": "git.checkout", "group": "1@1", "icon": "checkout" },
-        { "command": "git.createBranch", "group": "1@2", "icon": "create-branch" },
-        { "command": "git.renameBranch", "group": "1@3", "icon": "checkout" },
-        { "command": "git.deleteBranch", "group": "1@4", "icon": "remove" },
-        { "command": "git.merge", "group": "2@1", "icon": "merge" },
-        { "command": "git.rebase", "group": "2@2", "icon": "merge" },
-        { "command": "git.publishBranch", "group": "3@1", "icon": "push" }
+        { "command": "git.checkout", "when": "scmProvider == git", "group": "1@1", "icon": "checkout" },
+        { "command": "git.createBranch", "when": "scmProvider == git", "group": "1@2", "icon": "create-branch" },
+        { "command": "git.renameBranch", "when": "scmProvider == git", "group": "1@3", "icon": "checkout" },
+        { "command": "git.deleteBranch", "when": "scmProvider == git", "group": "1@4", "icon": "remove" },
+        { "command": "git.merge", "when": "scmProvider == git", "group": "2@1", "icon": "merge" },
+        { "command": "git.rebase", "when": "scmProvider == git", "group": "2@2", "icon": "merge" },
+        { "command": "git.publishBranch", "when": "scmProvider == git", "group": "3@1", "icon": "push" }
       ],
       "git.worktreeMenu": [
-        { "command": "git.createWorktree", "group": "1@1", "icon": "new-folder" },
-        { "command": "git.openWorktree", "group": "2@1", "icon": "git-worktree" },
-        { "command": "git.openWorktreeInNewWindow", "group": "2@2", "icon": "empty-window" },
-        { "command": "git.deleteWorktree", "group": "3@1", "icon": "remove" }
+        { "command": "git.createWorktree", "when": "scmProvider == git", "group": "1@1", "icon": "new-folder" },
+        { "command": "git.openWorktree", "when": "scmProvider == git", "group": "2@1", "icon": "git-worktree" },
+        { "command": "git.openWorktreeInNewWindow", "when": "scmProvider == git", "group": "2@2", "icon": "empty-window" },
+        { "command": "git.deleteWorktree", "when": "scmProvider == git", "group": "3@1", "icon": "remove" }
       ],
       "git.stashMenu": [
-        { "command": "git.stash", "group": "1@1", "icon": "stash" },
-        { "command": "git.stashIncludeUntracked", "group": "1@2", "icon": "stash" },
-        { "command": "git.stashApply", "group": "2@1", "icon": "stash" },
-        { "command": "git.stashPop", "group": "2@2", "icon": "stash" },
-        { "command": "git.stashDrop", "group": "2@3", "icon": "stash" }
+        { "command": "git.stash", "when": "scmProvider == git", "group": "1@1", "icon": "stash" },
+        { "command": "git.stashIncludeUntracked", "when": "scmProvider == git", "group": "1@2", "icon": "stash" },
+        { "command": "git.stashApply", "when": "scmProvider == git", "group": "2@1", "icon": "stash" },
+        { "command": "git.stashPop", "when": "scmProvider == git", "group": "2@2", "icon": "stash" },
+        { "command": "git.stashDrop", "when": "scmProvider == git", "group": "2@3", "icon": "stash" }
       ],
       "git.remoteMenu": [
-        { "command": "git.addRemote", "group": "1@1", "icon": "remote" },
-        { "command": "git.removeRemote", "group": "1@2", "icon": "remote" }
+        { "command": "git.addRemote", "when": "scmProvider == git", "group": "1@1", "icon": "remote" },
+        { "command": "git.removeRemote", "when": "scmProvider == git", "group": "1@2", "icon": "remote" }
       ],
       "git.tagsMenu": [
-        { "command": "git.createTag", "group": "1@1", "icon": "tag" },
-        { "command": "git.deleteTag", "group": "1@2", "icon": "tag" }
+        { "command": "git.createTag", "when": "scmProvider == git", "group": "1@1", "icon": "tag" },
+        { "command": "git.deleteTag", "when": "scmProvider == git", "group": "1@2", "icon": "tag" }
       ],
       "git.submoduleMenu": [
-        { "command": "git.submoduleUpdateInit", "group": "1@1", "icon": "git-submodule" },
-        { "command": "git.submoduleSync",       "group": "1@2", "icon": "git-submodule" }
+        { "command": "git.submoduleUpdateInit", "when": "scmProvider == git", "group": "1@1", "icon": "git-submodule" },
+        { "command": "git.submoduleSync", "when": "scmProvider == git",       "group": "1@2", "icon": "git-submodule" }
       ],
       "scm/resourceState/context": [
-        { "command": "git.openMergeEditor", "when": "scmResourceState == U", "group": "inline", "icon": "merge" },
-        { "command": "git.stage", "when": "scmResourceGroup == workingTree", "group": "inline", "icon": "add" },
-        { "command": "git.discard", "when": "scmResourceGroup == workingTree", "group": "inline", "icon": "discard" },
-        { "command": "git.unstage", "when": "scmResourceGroup == index", "group": "inline", "icon": "remove" }
+        { "command": "git.openMergeEditor", "when": "scmProvider == git && scmResourceState == U", "group": "inline", "icon": "merge" },
+        { "command": "git.stage", "when": "scmProvider == git && scmResourceGroup == workingTree", "group": "inline", "icon": "add" },
+        { "command": "git.discard", "when": "scmProvider == git && scmResourceGroup == workingTree", "group": "inline", "icon": "discard" },
+        { "command": "git.unstage", "when": "scmProvider == git && scmResourceGroup == index", "group": "inline", "icon": "remove" }
       ],
       "scm/resourceGroup/context": [
-        { "command": "git.stageAll", "when": "scmResourceGroup == workingTree", "group": "inline", "icon": "stage-all" },
-        { "command": "git.discardAll", "when": "scmResourceGroup == workingTree", "group": "inline", "icon": "discard-all" },
-        { "command": "git.unstageAll", "when": "scmResourceGroup == index", "group": "inline", "icon": "unstage-all" }
+        { "command": "git.stageAll", "when": "scmProvider == git && scmResourceGroup == workingTree", "group": "inline", "icon": "stage-all" },
+        { "command": "git.discardAll", "when": "scmProvider == git && scmResourceGroup == workingTree", "group": "inline", "icon": "discard-all" },
+        { "command": "git.unstageAll", "when": "scmProvider == git && scmResourceGroup == index", "group": "inline", "icon": "unstage-all" }
+      ],
+      "scm/resourceFolder/context": [
+        { "command": "git.discard", "when": "scmProvider == git && scmResourceGroup == workingTree", "group": "inline", "icon": "discard" },
+        { "command": "git.stage", "when": "scmProvider == git && scmResourceGroup == workingTree", "group": "inline", "icon": "add" },
+        { "command": "git.unstage", "when": "scmProvider == git && scmResourceGroup == index", "group": "inline", "icon": "remove" }
       ],
       "editor/title": [
         { "command": "git.openChange", "when": "resourceScheme == file && scmActiveResourceHasChanges && !isInDiffEditor", "group": "navigation@2", "icon": "compare-changes" },

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <rect width="128" height="128" rx="24" fill="#2b2b2b"/>
+  <g transform="translate(64 64)" fill="#00a94f">
+    <path d="M-30 -30 H10 a20 20 0 0 1 0 40 H-10 V30 H-30 Z M-10 -12 V-8 H8 a2 2 0 0 0 0 -4 Z" fill="none"/>
+    <text x="0" y="22" font-family="Arial, sans-serif" font-size="64" font-weight="bold" text-anchor="middle" fill="#00a94f">P4</text>
+  </g>
+</svg>
