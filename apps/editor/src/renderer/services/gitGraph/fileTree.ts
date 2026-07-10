@@ -3,40 +3,48 @@
  *  Build a collapsible directory tree from a flat list of changed files, the way
  *  git-graph (and VSCode's explorer) presents commit changes. Single-child
  *  directory chains are compacted (`a/b/c`) for a denser tree.
+ *
+ *  Generic over the file-change shape so both the Git Graph and Perforce Graph
+ *  editors reuse it; the only fields it reads are `status` and `path`.
  *--------------------------------------------------------------------------------------------*/
 
-import type { GitGraphFileChangeDto } from '@universe-editor/extensions-common'
+export interface FileTreeFileLike {
+  readonly status: string
+  readonly path: string
+}
 
-export interface FileTreeFile {
+export interface FileTreeFile<T extends FileTreeFileLike = FileTreeFileLike> {
   readonly kind: 'file'
   /** Leaf label (basename). */
   readonly name: string
-  readonly file: GitGraphFileChangeDto
+  readonly file: T
 }
 
-export interface FileTreeDir {
+export interface FileTreeDir<T extends FileTreeFileLike = FileTreeFileLike> {
   readonly kind: 'dir'
   /** Display label (may span several path segments when compacted). */
   readonly name: string
   /** Full path from the root, used as a stable id for collapse state. */
   readonly path: string
-  readonly children: FileTreeNode[]
+  readonly children: FileTreeNode<T>[]
 }
 
-export type FileTreeNode = FileTreeDir | FileTreeFile
+export type FileTreeNode<T extends FileTreeFileLike = FileTreeFileLike> =
+  | FileTreeDir<T>
+  | FileTreeFile<T>
 
-interface MutableDir {
-  readonly dirs: Map<string, MutableDir>
-  readonly files: FileTreeFile[]
+interface MutableDir<T extends FileTreeFileLike> {
+  readonly dirs: Map<string, MutableDir<T>>
+  readonly files: FileTreeFile<T>[]
 }
 
-function emptyDir(): MutableDir {
+function emptyDir<T extends FileTreeFileLike>(): MutableDir<T> {
   return { dirs: new Map(), files: [] }
 }
 
 /** Build a compacted directory tree, directories first then files, each alphabetical. */
-export function buildFileTree(files: readonly GitGraphFileChangeDto[]): FileTreeNode[] {
-  const root = emptyDir()
+export function buildFileTree<T extends FileTreeFileLike>(files: readonly T[]): FileTreeNode<T>[] {
+  const root = emptyDir<T>()
   for (const file of files) {
     const segments = file.path.split('/').filter(Boolean)
     const name = segments.pop() ?? file.path
@@ -44,7 +52,7 @@ export function buildFileTree(files: readonly GitGraphFileChangeDto[]): FileTree
     for (const segment of segments) {
       let child = dir.dirs.get(segment)
       if (!child) {
-        child = emptyDir()
+        child = emptyDir<T>()
         dir.dirs.set(segment, child)
       }
       dir = child
@@ -54,8 +62,11 @@ export function buildFileTree(files: readonly GitGraphFileChangeDto[]): FileTree
   return toNodes(root, '')
 }
 
-function toNodes(dir: MutableDir, prefix: string): FileTreeNode[] {
-  const dirNodes: FileTreeDir[] = []
+function toNodes<T extends FileTreeFileLike>(
+  dir: MutableDir<T>,
+  prefix: string,
+): FileTreeNode<T>[] {
+  const dirNodes: FileTreeDir<T>[] = []
   for (const [name, child] of dir.dirs) {
     let label = name
     let cur = child

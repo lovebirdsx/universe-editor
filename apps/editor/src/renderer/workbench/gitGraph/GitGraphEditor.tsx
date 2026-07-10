@@ -307,7 +307,7 @@ function FileTreeView({
   onOpenFile,
   depth = 0,
 }: {
-  nodes: readonly FileTreeNode[]
+  nodes: readonly FileTreeNode<GitGraphFileChangeDto>[]
   collapsed: ReadonlySet<string>
   onToggle: (path: string) => void
   onOpen: (file: GitGraphFileChangeDto) => void

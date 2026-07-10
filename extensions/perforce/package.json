@@ -49,8 +49,9 @@
     ],
     "menus": {
       "scm/title": [
-        { "command": "perforce.refresh", "when": "scmProvider == perforce", "group": "navigation@1", "icon": "refresh" },
-        { "command": "perforce.newChangelist", "when": "scmProvider == perforce", "group": "navigation@2", "icon": "add" },
+        { "command": "perforce-graph.view", "when": "scmProvider == perforce", "group": "navigation@1", "icon": "git-graph" },
+        { "command": "perforce.refresh", "when": "scmProvider == perforce", "group": "navigation@2", "icon": "refresh" },
+        { "command": "perforce.newChangelist", "when": "scmProvider == perforce", "group": "navigation@3", "icon": "add" },
         { "submenu": "perforce.refreshMenu", "when": "scmProvider == perforce", "group": "1_refresh@1" },
         { "command": "perforce.login", "when": "scmProvider == perforce", "group": "2_connection@1", "icon": "key" },
         { "command": "perforce.logout", "when": "scmProvider == perforce", "group": "2_connection@2", "icon": "sign-out" },

@@ -776,6 +776,21 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'gitGraph.worktree.sync.summaryFailed': '失败：{items}',
   'gitGraph.worktree.sync.summaryNone': '无可执行的操作。',
 
+  // --- Perforce Graph ---
+  'perforceGraph.title': 'Perforce Graph',
+  'perforceGraph.changeCount': '{count} 个变更{more}',
+  'perforceGraph.onClient': ' · {client}',
+  'perforceGraph.search.placeholder': '搜索变更…',
+  'perforceGraph.client': '工作区',
+  'perforceGraph.header.change': '变更',
+  'perforceGraph.loadMore': '加载更多变更',
+  'perforceGraph.pendingCount': '待定变更（{count}）',
+  'perforceGraph.pendingChanges': '待定变更',
+  'perforceGraph.noPendingChanges': '没有待定的变更。',
+  'perforceGraph.noChangeDetails': '没有变更详情。',
+  'perforceGraph.copyId': '复制 changelist 编号',
+  'perforceGraph.unavailable': 'Perforce Graph 不可用——当前目录是否位于 Perforce 工作区内？',
+
   // --- Diff editor & Merge ---
   'diffEditor.nextChange': '下一处更改 ({key})',
   'diffEditor.openFile': '打开文件 ({key})',

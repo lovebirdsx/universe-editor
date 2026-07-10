@@ -10,6 +10,8 @@
  * spawns `git`. Everything is registered on `context.subscriptions`.
  */
 import { commands, workspace, window, type ExtensionContext } from '@universe-editor/extension-api'
+import { basename } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { ConcurrencyGate } from './concurrency.js'
 import { type P4Connection } from './p4Service.js'
 import { PerforceClient } from './client.js'
@@ -18,6 +20,7 @@ import { P4StatusBarController } from './p4StatusBar.js'
 import { AutoEditController } from './autoEdit.js'
 import { notifyP4Failure, setP4OutputShower, isMissingCli } from './p4Error.js'
 import { changelistIdFromGroupId } from './changelist.js'
+import { statusFromAction, fileDiffRevs, displayPath } from './p4GraphParser.js'
 import { localize } from './nls.js'
 
 function resourcePath(arg: unknown): string | undefined {
@@ -358,6 +361,126 @@ export async function activate(context: ExtensionContext): Promise<void> {
       const target = mgr.resolveClient(arg) ?? mgr.active
       await target?.resolveChangelist(groupChangelistId(arg) ?? 'default')
     }),
+
+    // --- Perforce Graph (read-only submitted-change history) ----------------
+    // The client the graph targets. Defaults to the active client; `setRepo`
+    // switches it to another discovered client (multi-client is a later
+    // refinement, but the plumbing mirrors git-graph so it's ready).
+    ...(() => {
+      let graphRoot: string | undefined
+
+      const graphClient = () =>
+        (graphRoot ? mgr.resolveClient({ rootUri: graphRoot }) : undefined) ?? mgr.active
+
+      const DEFAULT_MAX = 300
+
+      return [
+        commands.registerCommand('perforce-graph.getRepos', () =>
+          mgr.all.map((c) => ({ root: c.root, name: c.clientName })),
+        ),
+        commands.registerCommand('perforce-graph.setRepo', (...args: unknown[]) => {
+          const next = args[0] as string
+          if (next) graphRoot = next
+          return true
+        }),
+        commands.registerCommand('perforce-graph.getChanges', async (...args: unknown[]) => {
+          const opts = (args[0] ?? {}) as { maxChanges?: number }
+          const max = opts.maxChanges ?? DEFAULT_MAX
+          const target = graphClient()
+          if (!target) return null
+          const [changes, pendingCount] = await Promise.all([
+            target.getGraphChanges(max),
+            target.getPendingCount(),
+          ])
+          if (!changes) return null
+          const moreAvailable = changes.length > max
+          const visible = changes.slice(0, max)
+          const dtos = visible.map((c, i) => ({
+            id: c.id,
+            parents: visible[i + 1] ? [visible[i + 1]!.id] : [],
+            author: c.author,
+            client: c.client,
+            date: c.date,
+            message: c.message,
+          }))
+          return {
+            changes: dtos,
+            head: visible[0]?.id ?? null,
+            headClient: target.clientName,
+            moreAvailable,
+            pendingCount,
+          }
+        }),
+        commands.registerCommand('perforce-graph.getChangeDetails', async (...args: unknown[]) => {
+          const id = args[0] as string
+          const target = graphClient()
+          if (!target) return null
+          const detail = await target.getGraphChangeDetails(id)
+          if (!detail) return null
+          return {
+            id: detail.id,
+            author: detail.author,
+            client: detail.client,
+            date: detail.date,
+            body: detail.body,
+            files: detail.files.map((f) => ({
+              status: statusFromAction(f.action),
+              path: displayPath(f.depotFile),
+              oldPath: null,
+              depotFile: f.depotFile,
+              rev: f.rev,
+              localPath: detail.localPaths.get(f.depotFile) ?? null,
+            })),
+          }
+        }),
+        commands.registerCommand('perforce-graph.getPendingChanges', async () => {
+          const target = graphClient()
+          if (!target) return []
+          const opened = await target.getOpenedForGraph()
+          return opened.map((f) => {
+            const status = statusFromAction(f.action)
+            return {
+              status,
+              path: displayPath(f.depotFile),
+              oldPath: null,
+              depotFile: f.depotFile,
+              rev: f.rev ?? '',
+              localPath: f.localPath,
+            }
+          })
+        }),
+        commands.registerCommand('perforce-graph.openFileDiff', async (...args: unknown[]) => {
+          const req = args[0] as { depotFile: string; status: string; rev: string }
+          const target = graphClient()
+          if (!target) return
+          const { left, right } = fileDiffRevs(req.depotFile, req.status, req.rev)
+          const [original, modified] = await Promise.all([
+            target.printRevision(left),
+            target.printRevision(right),
+          ])
+          const leftLabel = left ? left.slice(left.indexOf('#')) : '∅'
+          const rightLabel = right ? right.slice(right.indexOf('#')) : '∅'
+          await commands.executeCommand('_workbench.openDiff', {
+            title: `${basename(displayPath(req.depotFile))} (${leftLabel} ↔ ${rightLabel})`,
+            originalUri: pathToFileURL(displayPath(req.depotFile)).href,
+            original,
+            modified,
+            pinned: false,
+            preserveFocus: false,
+          })
+        }),
+        commands.registerCommand(
+          'perforce-graph.openWorkingTreeFile',
+          async (...args: unknown[]) => {
+            const localPath = args[0] as string
+            if (!localPath) return
+            // Pending files: show the have-revision vs local diff (mirrors the
+            // SCM row's Open Changes), falling back to opening the file.
+            await mgr.resolveClient({ resourceUri: localPath })?.openChange(localPath)
+          },
+        ),
+      ]
+    })(),
   )
 }
 

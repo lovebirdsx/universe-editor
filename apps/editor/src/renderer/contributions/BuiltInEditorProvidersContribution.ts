@@ -34,6 +34,7 @@ import { TerminalEditorInput } from '../services/editor/TerminalEditorInput.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
 import { WelcomeEditorInput } from '../services/editor/WelcomeEditorInput.js'
 import { GitGraphEditorInput } from '../services/editor/GitGraphEditorInput.js'
+import { PerforceGraphEditorInput } from '../services/editor/PerforceGraphEditorInput.js'
 
 export class BuiltInEditorProvidersContribution
   extends Disposable
@@ -164,6 +165,13 @@ export class BuiltInEditorProvidersContribution
         typeId: GitGraphEditorInput.TYPE_ID,
         componentKey: 'gitGraph',
         deserialize: () => GitGraphEditorInput.deserialize(),
+      }),
+    )
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: PerforceGraphEditorInput.TYPE_ID,
+        componentKey: 'perforceGraph',
+        deserialize: () => PerforceGraphEditorInput.deserialize(),
       }),
     )
   }

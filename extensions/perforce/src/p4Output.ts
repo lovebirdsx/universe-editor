@@ -64,6 +64,64 @@ export function parseZtag(stdout: string): P4Record[] {
 }
 
 /**
+ * Convert `p4 -ztag` output into records shaped like `-Mj` JSON records: flat
+ * scalar keys (numbered parallel keys `depotFile0/1/…` are kept flat, NOT
+ * collapsed into arrays), so the `-Mj` parsers consume them unchanged.
+ *
+ * This is the fallback path for servers/commands where `-Mj` collapses every
+ * line into a single `{"data": "..."}` blob and drops the structured fields
+ * (observed on this project's P4D for `changes` / `describe` / `where` — the
+ * report-style commands; script-style commands like `fstat` stay structured).
+ * `-ztag` still carries the real fields there.
+ *
+ * Record boundaries are NOT taken from blank lines: a `describe` record has a
+ * blank line *inside* it (between a multi-line `desc` and the file list). Instead
+ * a new record starts when a key that's already present in the current record
+ * reappears (`change` for `changes`, `depotFile` for `where`). Non-tagged lines
+ * (no `... ` prefix) and blank lines append to the last field's value, so a
+ * multi-line `desc` is preserved in full.
+ */
+export function parseZtagAsMarshal(stdout: string): Record<string, string>[] {
+  const records: Record<string, string>[] = []
+  let current: Record<string, string> | undefined
+  let lastKey: string | undefined
+  let pendingBlank = false
+
+  const flush = (): void => {
+    if (current && Object.keys(current).length > 0) records.push(current)
+    current = undefined
+    lastKey = undefined
+    pendingBlank = false
+  }
+
+  for (const rawLine of stdout.split('\n')) {
+    const line = rawLine.replace(/\r$/, '')
+    if (line.startsWith('... ')) {
+      const rest = line.slice(4)
+      const sp = rest.indexOf(' ')
+      const key = sp === -1 ? rest : rest.slice(0, sp)
+      const value = sp === -1 ? '' : rest.slice(sp + 1)
+      if (current && key in current) flush()
+      if (!current) current = {}
+      current[key] = value
+      lastKey = key
+      pendingBlank = false
+    } else if (line.trim() === '') {
+      // Blank line: a record separator or the gap inside a describe record
+      // (between a multi-line desc and the file list). Never part of a value.
+      pendingBlank = current !== undefined
+    } else if (current && lastKey) {
+      // Continuation line of a multi-line value (e.g. a wrapped `desc`). A blank
+      // line seen just before it was a real in-value blank, so restore it.
+      current[lastKey] += pendingBlank ? `\n\n${line}` : `\n${line}`
+      pendingBlank = false
+    }
+  }
+  flush()
+  return records
+}
+
+/**
  * Fold parallel numbered keys (`depotFile0`, `depotFile1`, …) into a single
  * array field keyed by the base name (`depotFile`), preserving numeric order.
  * Plain keys pass through unchanged. Keys that end in digits but have no sibling

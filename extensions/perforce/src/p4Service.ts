@@ -12,7 +12,7 @@
  */
 import { spawn } from 'node:child_process'
 import type { ConcurrencyGate } from './concurrency.js'
-import { parseMarshalJson, parseZtag, type P4Record } from './p4Output.js'
+import { parseMarshalJson, parseZtag, parseZtagAsMarshal, type P4Record } from './p4Output.js'
 
 export interface P4ExecResult {
   readonly stdout: string
@@ -52,6 +52,18 @@ function sanitizeEnv(): NodeJS.ProcessEnv {
     out[k] = v
   }
   return out
+}
+
+/**
+ * Whether `-Mj` output collapsed into data blobs instead of structured records.
+ * Some servers emit report-style commands (`changes` / `describe` / `where`) as
+ * one `{"data": "..."}` line per output line under `-Mj`, dropping the fields the
+ * parsers need. Signature: at least one record, and every record carries `data`
+ * (a real structured record never does). Empty output ("no files opened") is NOT
+ * collapse — there's nothing to reshape, so the `-ztag` retry is skipped.
+ */
+export function isCollapsed(records: readonly Record<string, unknown>[]): boolean {
+  return records.length > 0 && records.every((r) => 'data' in r)
 }
 
 /** Build the global connection options (`-c/-u/-p`) from a connection. */
@@ -100,6 +112,30 @@ export class P4Service {
   ): Promise<{ result: P4ExecResult; records: Record<string, unknown>[] }> {
     const result = await this.exec(['-Mj', ...args], options)
     return { result, records: parseMarshalJson(result.stdout) }
+  }
+
+  /**
+   * Structured records for a report-style command, resilient to servers where
+   * `-Mj` collapses output into `{"data": "..."}` blobs (see {@link isCollapsed}).
+   * Runs `-Mj` first (cheapest); when the result carries structured fields it's
+   * used as-is, but when it collapses to data blobs it re-runs the command with
+   * `-ztag` and reshapes the tagged output into `-Mj`-compatible flat records so
+   * the existing parsers consume it unchanged. On a normal server this costs the
+   * same as {@link execJson} (no fallback spawn).
+   */
+  async execRecords(
+    args: readonly string[],
+    options?: P4ExecOptions,
+  ): Promise<{ result: P4ExecResult; records: Record<string, unknown>[] }> {
+    const mj = await this.exec(['-Mj', ...args], options)
+    if (mj.exitCode !== 0) return { result: mj, records: parseMarshalJson(mj.stdout) }
+    const records = parseMarshalJson(mj.stdout)
+    if (!isCollapsed(records)) return { result: mj, records }
+    // `-Mj` collapsed to data blobs on this server — retry with tagged output.
+    this._log?.('  (-Mj collapsed to data blobs; retrying with -ztag)')
+    const tagged = await this.exec(['-ztag', ...args], options)
+    if (tagged.exitCode !== 0) return { result: tagged, records: parseMarshalJson(tagged.stdout) }
+    return { result: tagged, records: parseZtagAsMarshal(tagged.stdout) }
   }
 
   /** Run with `-ztag` and parse into records (numbered keys collapsed). */

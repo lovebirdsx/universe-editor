@@ -21,7 +21,7 @@ export class BaselineProvider {
    * no have revision (e.g. an open-for-add file that isn't in the depot yet).
    */
   async getHaveContent(localPath: string): Promise<string | undefined> {
-    const fstat = await this._p4.execJson(['fstat', localPath])
+    const fstat = await this._p4.execRecords(['fstat', localPath])
     if (fstat.result.exitCode !== 0) return undefined
     const info = parseFstat(fstat.records)[0]
     if (!info || !info.haveRev) return undefined

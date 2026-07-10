@@ -32,6 +32,7 @@ import {
   descriptionFirstLine,
   shelvedGroupId,
   type PendingChangelist,
+  type P4Action,
 } from './changelist.js'
 import { toResourceStates, toShelvedResourceStates } from './p4Decoration.js'
 import { parseShelved, type ShelvedFile } from './shelveParser.js'
@@ -42,6 +43,13 @@ import {
   buildBlameResult,
   type P4BlameResult,
 } from './blameSource.js'
+import {
+  parseChangesList,
+  parseChangeDescribe,
+  parseWhereLocalPaths,
+  type GraphChangeMeta,
+  type GraphDescribe,
+} from './p4GraphParser.js'
 import { BaselineProvider } from './baselineProvider.js'
 import { classifyP4Error, notifyP4Failure, type P4FailureKind } from './p4Error.js'
 import { localize } from './nls.js'
@@ -155,13 +163,13 @@ export class PerforceClient {
   }
 
   private async _doRefresh(): Promise<void> {
-    const opened = await this._p4.execJson(['opened'])
+    const opened = await this._p4.execRecords(['opened'])
     if (this._disposed) return
     if (opened.result.exitCode !== 0) {
       this._goOffline(classifyP4Error(opened.result))
       return
     }
-    const changes = await this._p4.execJson(['changes', '-s', 'pending', '-c', this._clientName])
+    const changes = await this._p4.execRecords(['changes', '-s', 'pending', '-c', this._clientName])
     if (this._disposed) return
     if (changes.result.exitCode !== 0) {
       this._goOffline(classifyP4Error(changes.result))
@@ -233,7 +241,7 @@ export class PerforceClient {
   ): Promise<Map<string, ShelvedFile[]>> {
     const out = new Map<string, ShelvedFile[]>()
     for (const cl of pending) {
-      const res = await this._p4.execJson(['describe', '-S', '-s', cl.id])
+      const res = await this._p4.execRecords(['describe', '-S', '-s', cl.id])
       if (this._disposed) return out
       if (res.result.exitCode !== 0) {
         this._log?.(`[perforce] describe -S ${cl.id} failed: ${res.result.stderr.trim()}`)
@@ -560,6 +568,96 @@ export class PerforceClient {
     }
 
     return buildBlameResult(lines, summaries)
+  }
+
+  // --- Perforce Graph (read-only history view) -----------------------------
+
+  /** The client name, for the graph's repo picker / head label. */
+  get clientName(): string {
+    return this._clientName
+  }
+
+  /**
+   * Submitted-changelist history for the graph, newest-first, scoped to this
+   * client's depot view (`//...`). Each change's synthetic parent is the
+   * next-older change in the list, so the swim-lane layout draws a single lane.
+   * `pendingCount` is the number of currently open files (the synthetic pending
+   * node). Returns null on connection failure so the renderer shows "unavailable".
+   */
+  async getGraphChanges(maxChanges: number): Promise<GraphChangeMeta[] | null> {
+    const res = await this._p4.execRecords([
+      'changes',
+      '-s',
+      'submitted',
+      '-l',
+      '-m',
+      String(maxChanges + 1),
+      '//...',
+    ])
+    if (res.result.exitCode !== 0) return null
+    return parseChangesList(res.records)
+  }
+
+  /** Count files currently open in the workspace (the synthetic pending node). */
+  async getPendingCount(): Promise<number> {
+    const res = await this._p4.execRecords(['opened'])
+    if (res.result.exitCode !== 0) return 0
+    return parseOpened(res.records).length
+  }
+
+  /**
+   * Currently open files (across all pending changelists) as graph file entries,
+   * with resolved local paths. Feeds the synthetic "pending changes" node — the
+   * Perforce analogue of git's uncommitted-changes row.
+   */
+  async getOpenedForGraph(): Promise<
+    { depotFile: string; action: P4Action; rev: string | undefined; localPath: string | null }[]
+  > {
+    const res = await this._p4.execRecords(['opened'])
+    if (res.result.exitCode !== 0) return []
+    const opened = parseOpened(res.records)
+    const localByDepot = await this._whereLocalPaths(opened.map((f) => f.depotFile))
+    return opened.map((f) => ({
+      depotFile: f.depotFile,
+      action: f.action,
+      rev: f.rev,
+      localPath: f.clientFile ?? localByDepot.get(f.depotFile) ?? null,
+    }))
+  }
+
+  /**
+   * Full detail of one submitted change: metadata + changed files with resolved
+   * local paths (via `p4 where`). Returns null when the change can't be described.
+   */
+  async getGraphChangeDetails(
+    id: string,
+  ): Promise<(GraphDescribe & { localPaths: Map<string, string> }) | null> {
+    const res = await this._p4.execRecords(['describe', '-s', id])
+    if (res.result.exitCode !== 0) return null
+    const record = res.records[0]
+    if (!record) return null
+    const detail = parseChangeDescribe(record)
+    if (!detail) return null
+    const localPaths = await this._whereLocalPaths(detail.files.map((f) => f.depotFile))
+    return { ...detail, localPaths }
+  }
+
+  /** Resolve depot → local paths for a batch of files (`p4 where`). */
+  private async _whereLocalPaths(depotFiles: readonly string[]): Promise<Map<string, string>> {
+    if (depotFiles.length === 0) return new Map()
+    const res = await this._p4.execRecords(['where', ...depotFiles])
+    if (res.result.exitCode !== 0) return new Map()
+    return parseWhereLocalPaths(res.records)
+  }
+
+  /**
+   * Print a file revision's content (`p4 print -q <spec>`) for the diff editor,
+   * or empty string when the spec is null (an added/deleted side) or print fails.
+   */
+  async printRevision(spec: string | null): Promise<string> {
+    if (!spec) return ''
+    const res = await this._p4.exec(['print', '-q', spec])
+    return res.exitCode === 0 ? res.stdout : ''
   }
 
   /**

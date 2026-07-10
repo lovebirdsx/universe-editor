@@ -202,6 +202,7 @@ import {
   GitGraphFocusSearchAction,
   GitGraphToggleRemoteBranchesAction,
 } from './gitGraphActions.js'
+import { ViewPerforceGraphAction, PerforceGraphFocusSearchAction } from './perforceGraphActions.js'
 import {
   ToggleBlameEditorDecorationAction,
   ToggleBlameStatusBarItemAction,
@@ -509,6 +510,10 @@ registerAction2(PickSessionTitleModelAction)
 registerAction2(ViewGitGraphAction)
 registerAction2(GitGraphFocusSearchAction)
 registerAction2(GitGraphToggleRemoteBranchesAction)
+
+// Perforce Graph
+registerAction2(ViewPerforceGraphAction)
+registerAction2(PerforceGraphFocusSearchAction)
 
 // Git Blame
 registerAction2(ToggleBlameEditorDecorationAction)

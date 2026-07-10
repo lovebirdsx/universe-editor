@@ -1,4 +1,5 @@
 {
+  "perforce.command.viewGraph.title": "查看 Perforce Graph",
   "perforce.command.refresh.title": "刷新",
   "perforce.command.cleanRefresh.title": "刷新（清理）",
   "perforce.command.login.title": "登录",

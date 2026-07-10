@@ -102,6 +102,8 @@
 
 > Git 图谱相关的 View Git Graph / Focus Search / Toggle Remote Branches 以及 AI 的 Generate Commit Message 目前均只显示英文，用英文关键词搜索。更多见 [提交你的改动](../git/commit.md) 与 [提交历史图（Git 图谱）](../git/git-graph.md)。
 
+> Perforce 侧的等价功能为 **View Perforce Graph**（查看 Perforce Graph）与图谱内 `Ctrl+F` 的 **Focus Search**，同样只显示英文。更多见 [提交历史图（Perforce 图谱）](../perforce/perforce-graph.md)。
+
 ## Markdown
 
 Markdown 的格式命令与预览链接导航命令，目前有相当一部分只显示**英文原名**。下表给出中文释义供对照。

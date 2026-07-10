@@ -1,4 +1,5 @@
 {
+  "perforce.command.viewGraph.title": "View Perforce Graph",
   "perforce.command.refresh.title": "Refresh",
   "perforce.command.cleanRefresh.title": "Refresh (Clean)",
   "perforce.command.login.title": "Login",
