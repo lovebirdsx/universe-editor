@@ -161,6 +161,14 @@ export function ViewPaneContainer({
   } else {
     body = (
       <Allotment
+        // Keying on the view order forces a fresh Allotment on any reorder. Its
+        // pure-reorder reconciliation (v1.20.x) moves internal viewItems but
+        // leaves the parallel per-pane min/max descriptors + previous-keys in the
+        // old order, so a later collapse/expand applies size constraints to the
+        // wrong pane (expanded view pinned to its header, collapsed sibling fills
+        // the container). Remounting rebuilds all three arrays consistently;
+        // collapse/expand keeps the same key and still animates in place.
+        key={viewIdsKey}
         ref={allotmentRef}
         className={styles['paneContainerAllotment'] ?? ''}
         vertical

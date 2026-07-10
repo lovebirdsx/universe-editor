@@ -1024,6 +1024,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       services.viewDescriptorService.moveViewsToContainer(viewIds, targetContainerId),
     moveViewToLocation: (viewId: string, location: number) =>
       services.viewDescriptorService.moveViewToLocation(viewId, location),
+    moveViewInContainer: (containerId: string, viewId: string, targetViewId: string) =>
+      services.viewDescriptorService.moveViewInContainer(containerId, viewId, targetViewId),
     moveViewContainerToLocation: (containerId: string, location: number) =>
       services.viewDescriptorService.moveViewContainerToLocation(containerId, location),
     mergeViewContainerInto: (sourceContainerId: string, targetContainerId: string) =>

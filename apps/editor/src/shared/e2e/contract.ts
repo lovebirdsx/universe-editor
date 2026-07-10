@@ -577,6 +577,8 @@ export interface E2EProbe {
   moveViewsToContainer(viewIds: readonly string[], targetContainerId: string): void
   /** Move a view to a location, generating a new container there. */
   moveViewToLocation(viewId: string, location: number): void
+  /** Reorder a view within its container, dropping it onto `targetViewId`'s slot. */
+  moveViewInContainer(containerId: string, viewId: string, targetViewId: string): void
   /** Move a whole container to another location. */
   moveViewContainerToLocation(containerId: string, location: number): void
   /** Merge every view of one container into another (the drag-to-centre gesture). */
