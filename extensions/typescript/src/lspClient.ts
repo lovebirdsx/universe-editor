@@ -21,6 +21,7 @@ import {
 } from 'vscode-jsonrpc/node.js'
 import { URI } from 'vscode-uri'
 import type {
+  CodeLens,
   CompletionItem,
   CompletionList,
   Definition,
@@ -129,6 +130,9 @@ export class LspClient {
   private _semanticTokensLegend: SemanticTokensLegend | undefined
 
   private readonly _onDiagnostics: (e: PublishDiagnosticsEvent) => void
+  /** Called when the server asks the client to refresh CodeLenses
+   *  (`workspace/codeLens/refresh`), e.g. after project graph changes. */
+  private _onCodeLensRefresh: (() => void) | undefined
 
   constructor(
     private readonly _cli: string,
@@ -137,6 +141,12 @@ export class LspClient {
     onDiagnostics: (e: PublishDiagnosticsEvent) => void,
   ) {
     this._onDiagnostics = onDiagnostics
+  }
+
+  /** Register the CodeLens refresh listener (the plugin bridges it to the
+   *  provider's `onDidChangeCodeLenses`). */
+  onCodeLensRefresh(listener: () => void): void {
+    this._onCodeLensRefresh = listener
   }
 
   // --- prewarm -------------------------------------------------------------
@@ -311,6 +321,16 @@ export class LspClient {
     return conn.sendRequest('textDocument/semanticTokens/full', this._doc(uri))
   }
 
+  async provideCodeLenses(uri: string): Promise<CodeLens[] | null> {
+    const conn = await this._ready()
+    return conn.sendRequest('textDocument/codeLens', this._doc(uri))
+  }
+
+  async resolveCodeLens(lens: CodeLens): Promise<CodeLens | null> {
+    const conn = await this._ready()
+    return conn.sendRequest('codeLens/resolve', lens)
+  }
+
   // --- lifecycle -----------------------------------------------------------
 
   private _doc(uri: string): { textDocument: { uri: string } } {
@@ -363,6 +383,12 @@ export class LspClient {
         diagnostics: params.diagnostics ?? [],
       })
     })
+    // Server → client: "re-request CodeLenses". We ack with null and bridge the
+    // signal to the plugin, which fires the provider's onDidChangeCodeLenses.
+    conn.onRequest('workspace/codeLens/refresh', () => {
+      this._onCodeLensRefresh?.()
+      return null
+    })
     conn.listen()
 
     try {
@@ -371,6 +397,14 @@ export class LspClient {
         | undefined
       this._semanticTokensLegend = result?.capabilities?.semanticTokensProvider?.legend
       this._notify(conn, 'initialized', {})
+      // Enable references CodeLens (off by default in tsserver). implementations
+      // stays off to match VSCode's default and keep the gutter quiet.
+      this._notify(conn, 'workspace/didChangeConfiguration', {
+        settings: {
+          typescript: { referencesCodeLens: { enabled: true, showOnAllFunctions: false } },
+          javascript: { referencesCodeLens: { enabled: true, showOnAllFunctions: false } },
+        },
+      })
     } catch (err) {
       if (this._proc !== proc) return // superseded by a concurrent restart
       console.error(`[typescript] initialize failed: ${(err as Error).message}`)
@@ -425,6 +459,7 @@ export class LspClient {
           documentSymbol: { hierarchicalDocumentSymbolSupport: true },
           rename: { prepareSupport: true },
           publishDiagnostics: { relatedInformation: true, versionSupport: true },
+          codeLens: {},
           semanticTokens: {
             // We only use whole-document tokens; the server still advertises its
             // legend in the initialize response, which we read to decode `data`.
@@ -437,6 +472,8 @@ export class LspClient {
         workspace: {
           workspaceFolders: true,
           symbol: {},
+          // Lets the server ask us to re-request CodeLenses (workspace/codeLens/refresh).
+          codeLens: { refreshSupport: true },
         },
       },
     }

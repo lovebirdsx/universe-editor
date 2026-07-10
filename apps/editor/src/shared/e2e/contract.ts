@@ -99,6 +99,34 @@ export interface E2ESemanticTokenDebug {
   languageId?: string
 }
 
+/**
+ * Runtime state of the TS CodeLens chain at a probed position (see
+ * E2EProbe.getCodeLensDebug). All fields optional so early returns can carry
+ * just `error`.
+ */
+export interface E2ECodeLensDebug {
+  error?: string
+  providerCount?: number
+  /** Number of lenses provideCodeLenses returned for the whole document. */
+  lensCount?: number
+  /** Command id after resolveCodeLens on the lens covering the probed line (empty
+   *  when that lens has no command). */
+  resolvedCommandId?: string
+  /** Command title after resolve (e.g. "2 references"). */
+  resolvedCommandTitle?: string
+}
+
+/** One CodeLens Monaco's own controller has computed + rendered for the active
+ *  editor (the on-screen truth, not a direct provider call). */
+export interface E2ERenderedCodeLens {
+  /** 1-based line the lens sits above. */
+  readonly line: number
+  /** Resolved command id (empty until the viewport resolve fills it in). */
+  readonly commandId: string
+  /** Resolved command title, e.g. "1 reference". */
+  readonly title: string
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -444,6 +472,21 @@ export interface E2EProbe {
     lineNumber: number,
     column: number,
   ): Promise<E2ESemanticTokenDebug>
+  /**
+   * Runtime state of the TS CodeLens chain: provider registered, lenses returned
+   * by a direct provideCodeLenses call, and the command filled in by
+   * resolveCodeLens on the lens covering `lineNumber` (1-based).
+   */
+  getCodeLensDebug(uri: string, lineNumber: number): Promise<E2ECodeLensDebug>
+  /**
+   * The CodeLenses Monaco's own controller has computed for the ACTIVE editor —
+   * the real on-screen render path (gated by the `editor.codeLens` option, editor
+   * focus and viewport resolution), not a direct provider call. Empty when no
+   * lens is rendered (e.g. the option is off), which is exactly what
+   * getCodeLensDebug cannot detect. Used to assert the reference-count lens
+   * actually shows above the symbol.
+   */
+  getRenderedCodeLenses(): Promise<readonly E2ERenderedCodeLens[]>
   /**
    * Resolved document-link target URIs for an open markdown file (the link
    * provider that powers Ctrl+Click navigation), each `resolveLink`-ed.

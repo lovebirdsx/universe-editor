@@ -11,7 +11,9 @@ import {
   Disposable,
   DisposableMap,
   DisposableStore,
+  Emitter,
   URI,
+  toDisposable,
   type IDisposable,
   type UriComponents,
 } from '@universe-editor/platform'
@@ -28,6 +30,7 @@ import { diagnosticToMarker } from '../languageFeatures/typescript/lspMonacoConv
 import type { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import {
   createCodeActionProxy,
+  createCodeLensProxy,
   createCompletionProxy,
   createDefinitionProxy,
   createDocumentHighlightProxy,
@@ -47,6 +50,10 @@ import {
 
 export class MainThreadLanguages extends Disposable implements IMainThreadLanguages {
   private readonly _providers = this._register(new DisposableMap<number>())
+  /** Per-handle refresh signal for CodeLens providers: the host calls
+   *  `$emitCodeLensDidChange(handle)` and we fire the Emitter the provider's
+   *  `onDidChange` is wired to, making Monaco re-request that provider's lenses. */
+  private readonly _codeLensChange = new Map<number, Emitter<void>>()
 
   constructor(
     private readonly _extHost: IExtHostLanguages,
@@ -83,6 +90,10 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
     if (uri) this._setMarkers(owner, uri, [])
     else MonacoLoader.get().editor.removeAllMarkers(owner)
     return Promise.resolve()
+  }
+
+  $emitCodeLensDidChange(handle: number): void {
+    this._codeLensChange.get(handle)?.fire()
   }
 
   private _createProvider(
@@ -185,6 +196,15 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
             store.add(lf.registerDocumentSemanticTokensProvider(lang, p))
           }
         }
+        break
+      }
+      case 'codeLens': {
+        const changeEmitter = new Emitter<void>()
+        this._codeLensChange.set(handle, changeEmitter)
+        store.add(toDisposable(() => this._codeLensChange.delete(handle)))
+        store.add(changeEmitter)
+        const p = createCodeLensProxy(handle, ext, changeEmitter.event)
+        for (const lang of selector) store.add(lf.registerCodeLensProvider(lang, p))
         break
       }
     }

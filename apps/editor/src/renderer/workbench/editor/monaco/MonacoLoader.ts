@@ -62,6 +62,7 @@ export interface MonacoLanguageFeaturesService {
   readonly completionProvider: MonacoLanguageFeatureRegistry<monaco.languages.CompletionItemProvider>
   readonly referenceProvider: MonacoLanguageFeatureRegistry<monaco.languages.ReferenceProvider>
   readonly documentSemanticTokensProvider: MonacoLanguageFeatureRegistry<monaco.languages.DocumentSemanticTokensProvider>
+  readonly codeLensProvider: MonacoLanguageFeatureRegistry<monaco.languages.CodeLensProvider>
 }
 
 let _monaco: typeof monaco | undefined

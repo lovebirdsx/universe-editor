@@ -9,6 +9,8 @@
 import { type monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
 import type {
   CodeAction,
+  CodeLens,
+  Command,
   CompletionItem,
   CompletionList,
   Definition,
@@ -601,4 +603,62 @@ export function semanticTokensToMonaco(
     data: Uint32Array.from(tokens.data),
     ...(tokens.resultId !== undefined ? { resultId: tokens.resultId } : {}),
   }
+}
+
+/**
+ * A Monaco CodeLens carrying its originating LSP lens, so `resolveCodeLens` can
+ * hand the exact server lens back for resolution (mirrors MonacoDocumentLink).
+ */
+export interface MonacoCodeLens extends monaco.languages.CodeLens {
+  _lspLens: CodeLens
+}
+
+/**
+ * LSP `editor.action.showReferences` (the only built-in command tsserver's
+ * CodeLenses invoke) carries `[uri, position, locations]` in LSP shape; Monaco's
+ * command expects a `monaco.Uri`, an `IPosition`, and Monaco locations. Convert
+ * those args; any other command passes through verbatim (its handler owns the
+ * arg shape).
+ */
+function commandToMonaco(command: Command, monacoNs: typeof monaco): monaco.languages.Command {
+  const base: monaco.languages.Command = { id: command.command, title: command.title }
+  if (command.command === 'editor.action.showReferences' && command.arguments) {
+    const [uri, position, locations] = command.arguments as [string, Position, Location[]]
+    return {
+      ...base,
+      arguments: [
+        monacoNs.Uri.parse(uri),
+        { lineNumber: position.line + 1, column: position.character + 1 },
+        locations.map((l) => locationToMonaco(l, monacoNs)),
+      ],
+    }
+  }
+  return command.arguments ? { ...base, arguments: [...command.arguments] } : base
+}
+
+function codeLensToMonaco(lens: CodeLens, monacoNs: typeof monaco): MonacoCodeLens {
+  return {
+    range: rangeToMonaco(lens.range),
+    ...(lens.command ? { command: commandToMonaco(lens.command, monacoNs) } : {}),
+    _lspLens: lens,
+  }
+}
+
+export function codeLensesToMonaco(
+  lenses: CodeLens[] | null,
+  monacoNs: typeof monaco,
+): monaco.languages.CodeLensList {
+  if (!lenses) return { lenses: [], dispose: () => undefined }
+  return { lenses: lenses.map((l) => codeLensToMonaco(l, monacoNs)), dispose: () => undefined }
+}
+
+/** Fold a resolved LSP lens's `command` onto the Monaco lens Monaco passes to
+ *  `resolveCodeLens` (the range is unchanged; only the command was lazy). */
+export function resolvedCodeLensToMonaco(
+  resolved: CodeLens | null,
+  original: monaco.languages.CodeLens,
+  monacoNs: typeof monaco,
+): monaco.languages.CodeLens {
+  if (!resolved?.command) return original
+  return { ...original, command: commandToMonaco(resolved.command, monacoNs) }
 }

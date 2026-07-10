@@ -7,6 +7,7 @@
 import type {
   AiApi,
   CodeActionProvider,
+  CodeLensProvider,
   CompletionItemProvider,
   CustomEditorOptions,
   CustomReadonlyEditorProvider,
@@ -143,6 +144,7 @@ export interface IExtensionHostBridge {
     selector: DocumentSelector,
     provider: DocumentSemanticTokensProvider,
   ): Disposable
+  registerCodeLensProvider(selector: DocumentSelector, provider: CodeLensProvider): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
   getTextDocuments(): readonly TextDocument[]
   readonly onDidOpenTextDocument: Event<TextDocument>

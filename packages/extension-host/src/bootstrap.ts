@@ -191,6 +191,8 @@ const extHostLanguages: IExtHostLanguages = {
     (await serviceReady).provideCodeActions(handle, uri, range, context),
   $provideDocumentSemanticTokens: async (handle, uri) =>
     (await serviceReady).provideDocumentSemanticTokens(handle, uri),
+  $provideCodeLenses: async (handle, uri) => (await serviceReady).provideCodeLenses(handle, uri),
+  $resolveCodeLens: async (handle, lens) => (await serviceReady).resolveCodeLens(handle, lens),
 }
 const extHostDocuments: IExtHostDocuments = {
   $acceptDocumentOpen: async (uri, languageId, version, text) => {

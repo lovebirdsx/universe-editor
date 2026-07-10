@@ -15,6 +15,7 @@ import type {
   CompletionItem,
   CompletionList,
   CodeAction,
+  CodeLens,
   Definition,
   DefinitionLink,
   Diagnostic,
@@ -44,6 +45,7 @@ export type {
   CompletionItem,
   CompletionList,
   CodeAction,
+  CodeLens,
   Definition,
   DefinitionLink,
   Diagnostic,
@@ -74,7 +76,7 @@ export { FoldingRangeKind } from 'vscode-languageserver-types'
 /** Semantic version of this API surface. The host checks `engines.universe`.
  *  Bumping this is governed by COMPATIBILITY.md — keep it in sync with the
  *  package.json version and the contract test's frozen snapshot. */
-export const version = '0.2.0'
+export const version = '0.3.0'
 
 export interface Disposable {
   dispose(): void
@@ -494,6 +496,20 @@ export interface DocumentSemanticTokensProvider {
 }
 
 /**
+ * Provides CodeLenses — actionable annotations (e.g. "3 references") rendered
+ * above a line. Two-phase like completion: `provideCodeLenses` returns lenses
+ * with ranges (command optional), and Monaco calls `resolveCodeLens` lazily to
+ * fill in each lens's `command` only for the ones actually shown. Fire
+ * `onDidChangeCodeLenses` to make the editor re-request lenses (e.g. after a
+ * config change or a workspace edit that shifts reference counts).
+ */
+export interface CodeLensProvider {
+  onDidChangeCodeLenses?: Event<void>
+  provideCodeLenses(document: TextDocument): ProviderResult<CodeLens[]>
+  resolveCodeLens?(codeLens: CodeLens): ProviderResult<CodeLens>
+}
+
+/**
  * Owns a set of diagnostics surfaced as editor markers. `set` replaces a URI's
  * diagnostics (or clears it with `undefined`); the collection name is the marker
  * owner, so multiple providers can mark the same file without clobbering.
@@ -636,6 +652,7 @@ export interface LanguagesApi {
     selector: DocumentSelector,
     provider: DocumentSemanticTokensProvider,
   ): Disposable
+  registerCodeLensProvider(selector: DocumentSelector, provider: CodeLensProvider): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
 }
 /**
@@ -726,6 +743,7 @@ interface IExtensionHostBridge {
     selector: DocumentSelector,
     provider: DocumentSemanticTokensProvider,
   ): Disposable
+  registerCodeLensProvider(selector: DocumentSelector, provider: CodeLensProvider): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
   getTextDocuments(): readonly TextDocument[]
   readonly onDidOpenTextDocument: Event<TextDocument>
@@ -812,6 +830,8 @@ export const languages: LanguagesApi = {
     bridge().registerCodeActionsProvider(selector, provider),
   registerDocumentSemanticTokensProvider: (selector, provider) =>
     bridge().registerDocumentSemanticTokensProvider(selector, provider),
+  registerCodeLensProvider: (selector, provider) =>
+    bridge().registerCodeLensProvider(selector, provider),
   createDiagnosticCollection: (name) => bridge().createDiagnosticCollection(name),
 }
 

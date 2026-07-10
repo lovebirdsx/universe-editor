@@ -15,6 +15,7 @@ import type {
   CompletionItem,
   CompletionList,
   CodeAction,
+  CodeLens,
   Definition,
   DefinitionLink,
   Diagnostic,
@@ -233,6 +234,7 @@ export type LanguageProviderType =
   | 'selectionRange'
   | 'codeAction'
   | 'documentSemanticTokens'
+  | 'codeLens'
 
 /** Language ids a provider applies to. Empty for workspace-wide providers. */
 export type DocumentSelector = readonly string[]
@@ -358,6 +360,8 @@ export interface IExtHostLanguages {
     context: ICodeActionContext,
   ): Promise<CodeAction[] | null>
   $provideDocumentSemanticTokens(handle: number, uri: UriComponents): Promise<SemanticTokens | null>
+  $provideCodeLenses(handle: number, uri: UriComponents): Promise<CodeLens[] | null>
+  $resolveCodeLens(handle: number, lens: CodeLens): Promise<CodeLens | null>
 }
 
 /**
@@ -397,6 +401,13 @@ export interface IMainThreadLanguages {
     diagnostics: readonly Diagnostic[],
   ): Promise<void>
   $clearDiagnostics(owner: string, uri?: UriComponents): Promise<void>
+  /**
+   * A CodeLens provider's lenses changed (its `onDidChangeCodeLenses` fired):
+   * tell the renderer to re-request lenses for that provider. Provider → renderer
+   * push, the same direction as `$publishDiagnostics` (CodeLens is the only
+   * `provide*` feature with a server-driven refresh signal).
+   */
+  $emitCodeLensDidChange(handle: number): void
 }
 
 /** A single text edit applied by {@link IMainThreadEditor.$applyEdits}: replace

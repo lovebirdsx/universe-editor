@@ -97,6 +97,10 @@ export interface ILanguageFeaturesService {
     languageId: string,
     provider: monaco.languages.DocumentSemanticTokensProvider,
   ): IDisposable
+  registerCodeLensProvider(
+    languageId: string,
+    provider: monaco.languages.CodeLensProvider,
+  ): IDisposable
   registerInlineCompletionsProvider(
     languageSelector: monaco.languages.LanguageSelector,
     provider: monaco.languages.InlineCompletionsProvider,
@@ -367,6 +371,15 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
     provider: monaco.languages.DocumentSemanticTokensProvider,
   ): IDisposable {
     return MonacoLoader.get().languages.registerDocumentSemanticTokensProvider(languageId, provider)
+  }
+
+  registerCodeLensProvider(
+    languageId: string,
+    provider: monaco.languages.CodeLensProvider,
+  ): IDisposable {
+    // Not mirrored (no Outline consumer); forward straight to Monaco, which owns
+    // the CodeLens controller (rendering, click dispatch, onDidChange refresh).
+    return MonacoLoader.get().languages.registerCodeLensProvider(languageId, provider)
   }
 
   getWorkspaceSymbolProviders(): readonly IWorkspaceSymbolProvider[] {

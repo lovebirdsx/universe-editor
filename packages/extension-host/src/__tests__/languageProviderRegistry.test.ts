@@ -19,6 +19,7 @@ function recording(): {
   registered: Array<{ handle: number; type: LanguageProviderType; selector: DocumentSelector }>
   unregistered: number[]
   diagnostics: Array<{ owner: string; uri?: UriComponents; count?: number }>
+  codeLensRefreshes: number[]
 } {
   const registered: Array<{
     handle: number
@@ -27,10 +28,12 @@ function recording(): {
   }> = []
   const unregistered: number[] = []
   const diagnostics: Array<{ owner: string; uri?: UriComponents; count?: number }> = []
+  const codeLensRefreshes: number[] = []
   return {
     registered,
     unregistered,
     diagnostics,
+    codeLensRefreshes,
     impl: {
       $registerProvider: (
         handle: number,
@@ -52,6 +55,9 @@ function recording(): {
       $clearDiagnostics: (owner: string, uri?: UriComponents) => {
         diagnostics.push(uri !== undefined ? { owner, uri } : { owner })
         return Promise.resolve()
+      },
+      $emitCodeLensDidChange: (handle: number) => {
+        codeLensRefreshes.push(handle)
       },
     },
   }
@@ -110,6 +116,40 @@ describe('LanguageProviderRegistry', () => {
     ])
     collection.clear()
     expect(mt.diagnostics).toEqual([{ owner: 'my-linter', uri, count: 1 }, { owner: 'my-linter' }])
+  })
+
+  it('bridges a CodeLens provider onDidChangeCodeLenses to $emitCodeLensDidChange', () => {
+    const mt = recording()
+    const reg = new LanguageProviderRegistry(() => mt.impl, new ExtHostDocuments())
+    const listeners: Array<() => void> = []
+    const disposable = reg.registerCodeLensProvider('typescript', {
+      onDidChangeCodeLenses: (listener) => {
+        listeners.push(listener)
+        return { dispose: () => undefined }
+      },
+      provideCodeLenses: () => [],
+    })
+    expect(mt.registered).toEqual([{ handle: 0, type: 'codeLens', selector: ['typescript'] }])
+    listeners.forEach((l) => l())
+    expect(mt.codeLensRefreshes).toEqual([0])
+    disposable.dispose()
+    expect(mt.unregistered).toEqual([0])
+  })
+
+  it('stops forwarding CodeLens refreshes after dispose', () => {
+    const mt = recording()
+    const reg = new LanguageProviderRegistry(() => mt.impl, new ExtHostDocuments())
+    let disposed = false
+    const listeners: Array<() => void> = []
+    const disposable = reg.registerCodeLensProvider('typescript', {
+      onDidChangeCodeLenses: (listener) => {
+        listeners.push(listener)
+        return { dispose: () => (disposed = true) }
+      },
+      provideCodeLenses: () => [],
+    })
+    disposable.dispose()
+    expect(disposed).toBe(true)
   })
 
   it('throws when language features are unavailable', () => {

@@ -17,6 +17,7 @@ import {
   FileType,
   type AiApi,
   type CodeActionProvider,
+  type CodeLensProvider,
   type CompletionItemProvider,
   type CustomEditorOptions,
   type CustomReadonlyEditorProvider,
@@ -76,6 +77,7 @@ import {
 } from '@universe-editor/extensions-common'
 import type {
   CodeAction,
+  CodeLens,
   CompletionItem,
   CompletionList,
   Definition,
@@ -488,6 +490,10 @@ export class ExtensionService implements IExtensionHostBridge {
     return this._languageRegistry.registerDocumentSemanticTokensProvider(selector, provider)
   }
 
+  registerCodeLensProvider(selector: DocumentSelector, provider: CodeLensProvider): Disposable {
+    return this._languageRegistry.registerCodeLensProvider(selector, provider)
+  }
+
   createDiagnosticCollection(name?: string): DiagnosticCollection {
     return this._languageRegistry.createDiagnosticCollection(name)
   }
@@ -646,6 +652,14 @@ export class ExtensionService implements IExtensionHostBridge {
     uri: UriComponents,
   ): Promise<SemanticTokens | null> {
     return this._languageRegistry.provideDocumentSemanticTokens(handle, uri)
+  }
+
+  provideCodeLenses(handle: number, uri: UriComponents): Promise<CodeLens[] | null> {
+    return this._languageRegistry.provideCodeLenses(handle, uri)
+  }
+
+  resolveCodeLens(handle: number, lens: CodeLens): Promise<CodeLens | null> {
+    return this._languageRegistry.resolveCodeLens(handle, lens)
   }
 
   // --- RPC surface: scm / commands / extensions ---

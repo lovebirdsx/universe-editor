@@ -11,6 +11,7 @@
  */
 import type {
   CodeActionProvider,
+  CodeLensProvider,
   CompletionItemProvider,
   DefinitionProvider,
   DiagnosticCollection,
@@ -43,6 +44,7 @@ import {
 } from '@universe-editor/extensions-common'
 import type {
   CodeAction,
+  CodeLens,
   CompletionItem,
   CompletionList,
   Definition,
@@ -82,6 +84,7 @@ type AnyLanguageProvider =
   | DocumentHighlightProvider
   | SelectionRangeProvider
   | CodeActionProvider
+  | CodeLensProvider
   | DocumentSemanticTokensProvider
 
 interface RegisteredProvider {
@@ -263,6 +266,28 @@ export class LanguageProviderRegistry {
     return this._register('documentSemanticTokens', selector, provider, {
       semanticTokensLegend: provider.legend,
     })
+  }
+
+  /**
+   * CodeLens is the one feature whose provider can signal "my lenses changed"
+   * (`onDidChangeCodeLenses`). We inline the registration (rather than reuse
+   * `_register`) to capture the allocated handle and forward that signal to the
+   * renderer as `$emitCodeLensDidChange(handle)`, which makes Monaco re-request.
+   */
+  registerCodeLensProvider(selector: DocumentSelector, provider: CodeLensProvider): Disposable {
+    const languages = this._languages()
+    const handle = this._languageHandle++
+    this._providers.set(handle, { type: 'codeLens', provider })
+    void languages.$registerProvider(handle, 'codeLens', toSelector(selector))
+    const changeSub = provider.onDidChangeCodeLenses?.(() => {
+      languages.$emitCodeLensDidChange(handle)
+    })
+    return {
+      dispose: () => {
+        changeSub?.dispose()
+        if (this._providers.delete(handle)) void languages.$unregisterProvider(handle)
+      },
+    }
   }
 
   createDiagnosticCollection(name?: string): DiagnosticCollection {
@@ -487,5 +512,17 @@ export class LanguageProviderRegistry {
     return (
       (await provider.provideDocumentSemanticTokens(this._documents.getOrSynthesize(uri))) ?? null
     )
+  }
+
+  async provideCodeLenses(handle: number, uri: UriComponents): Promise<CodeLens[] | null> {
+    const provider = this._provider<CodeLensProvider>(handle, 'codeLens')
+    if (!provider) return null
+    return (await provider.provideCodeLenses(this._documents.getOrSynthesize(uri))) ?? null
+  }
+
+  async resolveCodeLens(handle: number, lens: CodeLens): Promise<CodeLens | null> {
+    const provider = this._provider<CodeLensProvider>(handle, 'codeLens')
+    if (!provider?.resolveCodeLens) return null
+    return (await provider.resolveCodeLens(lens)) ?? null
   }
 }

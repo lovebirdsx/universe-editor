@@ -18,6 +18,7 @@ import {
   type UriComponents,
 } from '@universe-editor/extension-api'
 import { URI } from 'vscode-uri'
+import { Emitter } from 'vscode-jsonrpc'
 import { LspClient } from './lspClient.js'
 
 const TS_JS_LANGUAGES = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact']
@@ -293,6 +294,21 @@ function registerProviders(context: ExtensionContext, client: LspClient): void {
     }),
     languages.registerWorkspaceSymbolProvider({
       provideWorkspaceSymbols: (query) => client.provideWorkspaceSymbols(query),
+    }),
+  )
+
+  // CodeLens (references count above symbols). Two-phase: provideCodeLenses
+  // returns ranges, resolveCodeLens fills each lens's command lazily. The server
+  // can ask for a refresh (workspace/codeLens/refresh); bridge that to Monaco via
+  // onDidChangeCodeLenses so counts update after edits.
+  const codeLensChange = new Emitter<void>()
+  client.onCodeLensRefresh(() => codeLensChange.fire())
+  context.subscriptions.push(
+    { dispose: () => codeLensChange.dispose() },
+    languages.registerCodeLensProvider(TS_JS_LANGUAGES, {
+      onDidChangeCodeLenses: codeLensChange.event,
+      provideCodeLenses: (doc) => client.provideCodeLenses(uriString(doc.uri)),
+      resolveCodeLens: (lens) => client.resolveCodeLens(lens),
     }),
   )
 

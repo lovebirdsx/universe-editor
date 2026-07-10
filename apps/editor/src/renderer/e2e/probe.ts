@@ -698,6 +698,66 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         languageId: model.getLanguageId(),
       }
     },
+    getCodeLensDebug: async (uri: string, lineNumber: number) => {
+      const monacoNs = await MonacoLoader.ensureInitialized()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return { error: 'no-model' }
+      const features = await MonacoLoader.getLanguageFeaturesService()
+      const providers = features.codeLensProvider.ordered(model)
+      if (!providers[0]) return { providerCount: 0 }
+
+      const list = await providers[0].provideCodeLenses(model, NONE_TOKEN)
+      const lenses = list?.lenses ?? []
+      // Resolve the lens covering the probed line (CodeLens ranges are 1-based).
+      const target = lenses.find((l) => l.range.startLineNumber === lineNumber)
+      let resolvedCommandId = ''
+      let resolvedCommandTitle = ''
+      if (target) {
+        const resolved =
+          !target.command && providers[0].resolveCodeLens
+            ? ((await providers[0].resolveCodeLens(model, target, NONE_TOKEN)) ?? target)
+            : target
+        resolvedCommandId = resolved.command?.id ?? ''
+        resolvedCommandTitle = resolved.command?.title ?? ''
+      }
+      return {
+        providerCount: providers.length,
+        lensCount: lenses.length,
+        resolvedCommandId,
+        resolvedCommandTitle,
+      }
+    },
+    getRenderedCodeLenses: async () => {
+      // Read the lenses Monaco's OWN CodeLens controller has computed for the
+      // active editor — the real render path, gated by the `editor.codeLens`
+      // option, editor focus and viewport resolution. Unlike getCodeLensDebug
+      // (which calls the provider directly and so stays green even when nothing
+      // renders on screen), this reflects what the user actually sees.
+      const active = services.editorGroupsService.activeGroup?.activeEditor
+      if (!(active instanceof FileEditorInput)) return []
+      const editor = FileEditorRegistry.get(active)
+      if (!editor) return []
+      const controller = editor.getContribution('css.editor.codeLens') as {
+        getModel?: () => Promise<
+          | {
+              lenses?: ReadonlyArray<{
+                symbol: {
+                  range: { startLineNumber: number }
+                  command?: { id: string; title: string }
+                }
+              }>
+            }
+          | undefined
+        >
+      } | null
+      if (!controller?.getModel) return []
+      const model = await controller.getModel()
+      return (model?.lenses ?? []).map((l) => ({
+        line: l.symbol.range.startLineNumber,
+        commandId: l.symbol.command?.id ?? '',
+        title: l.symbol.command?.title ?? '',
+      }))
+    },
     getMarkdownDocumentLinks: async (uri: string): Promise<readonly string[]> => {
       const monacoNs = await MonacoLoader.ensureInitialized()
       const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))

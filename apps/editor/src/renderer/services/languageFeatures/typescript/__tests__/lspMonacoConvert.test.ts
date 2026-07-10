@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 import type { monaco } from '../../../../workbench/editor/monaco/MonacoLoader.js'
 import type {
   CodeAction,
+  CodeLens,
   CompletionItem,
   Diagnostic,
   DocumentHighlight,
@@ -21,6 +22,7 @@ import type {
 } from 'vscode-languageserver-types'
 import {
   codeActionsToMonaco,
+  codeLensesToMonaco,
   completionItemToMonaco,
   definitionToMonaco,
   diagnosticToMarker,
@@ -30,6 +32,7 @@ import {
   hoverToMonaco,
   monacoPositionToLsp,
   rangeToMonaco,
+  resolvedCodeLensToMonaco,
   resolvedDocumentLinkToMonaco,
   selectionRangesToMonaco,
   semanticTokensToMonaco,
@@ -441,5 +444,70 @@ describe('semanticTokensToMonaco', () => {
 
   it('returns null for null', () => {
     expect(semanticTokensToMonaco(null)).toBeNull()
+  })
+})
+
+describe('codeLensesToMonaco', () => {
+  it('converts ranges and keeps the originating LSP lens for resolution', () => {
+    const lens: CodeLens = { range: range(2, 0, 2, 5), data: { uri: 'file:///a.ts' } }
+    const out = codeLensesToMonaco([lens], fakeMonaco)
+    expect(out.lenses).toHaveLength(1)
+    expect(out.lenses[0]?.range).toEqual(rangeToMonaco(lens.range))
+    // Carries the raw lens (untyped on the public shape) so resolveCodeLens can
+    // hand the exact server lens back.
+    expect((out.lenses[0] as unknown as { _lspLens: CodeLens })._lspLens).toBe(lens)
+    expect(out.lenses[0]?.command).toBeUndefined()
+  })
+
+  it('returns an empty, disposable list for null', () => {
+    const out = codeLensesToMonaco(null, fakeMonaco)
+    expect(out.lenses).toEqual([])
+    expect(() => out.dispose?.()).not.toThrow()
+  })
+})
+
+describe('resolvedCodeLensToMonaco', () => {
+  it('translates a resolved showReferences command (uri/position/locations)', () => {
+    const original = { range: rangeToMonaco(range(2, 0, 2, 5)) }
+    const locations: Location[] = [{ uri: 'file:///b.ts', range: range(9, 1, 9, 4) }]
+    const resolved: CodeLens = {
+      range: range(2, 0, 2, 5),
+      command: {
+        title: '2 references',
+        command: 'editor.action.showReferences',
+        arguments: ['file:///a.ts', { line: 2, character: 0 }, locations],
+      },
+    }
+    const out = resolvedCodeLensToMonaco(resolved, original, fakeMonaco)
+    expect(out.command?.id).toBe('editor.action.showReferences')
+    expect(out.command?.title).toBe('2 references')
+    const [uri, position, locs] = out.command?.arguments as [
+      { toString(): string },
+      monaco.IPosition,
+      monaco.languages.Location[],
+    ]
+    expect(uri.toString()).toBe('file:///a.ts')
+    // LSP 0-based position → Monaco 1-based.
+    expect(position).toEqual({ lineNumber: 3, column: 1 })
+    expect(locs[0]?.range).toEqual(rangeToMonaco(range(9, 1, 9, 4)))
+  })
+
+  it('passes a non-showReferences command through with its arguments', () => {
+    const original = { range: rangeToMonaco(range(0, 0, 0, 1)) }
+    const resolved: CodeLens = {
+      range: range(0, 0, 0, 1),
+      command: { title: 'Run', command: 'ext.run', arguments: [{ id: 42 }] },
+    }
+    const out = resolvedCodeLensToMonaco(resolved, original, fakeMonaco)
+    expect(out.command?.id).toBe('ext.run')
+    expect(out.command?.arguments).toEqual([{ id: 42 }])
+  })
+
+  it('returns the original lens when nothing resolved', () => {
+    const original = { range: rangeToMonaco(range(0, 0, 0, 1)) }
+    expect(resolvedCodeLensToMonaco(null, original, fakeMonaco)).toBe(original)
+    expect(resolvedCodeLensToMonaco({ range: range(0, 0, 0, 1) }, original, fakeMonaco)).toBe(
+      original,
+    )
   })
 })

@@ -8,12 +8,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { IExtHostLanguages, ISemanticTokensLegend } from '@universe-editor/extensions-common'
+import type { Event } from '@universe-editor/platform'
 import { MonacoLoader, type monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { PendingDocumentSync } from '../extensions/PendingDocumentSync.js'
 import type { IWorkspaceSymbolProvider } from './LanguageFeaturesService.js'
 import {
   applyResolvedCompletion,
   codeActionsToMonaco,
+  codeLensesToMonaco,
   completionListToMonaco,
   definitionToMonaco,
   documentHighlightsToMonaco,
@@ -23,11 +25,13 @@ import {
   hoverToMonaco,
   locationsToMonaco,
   monacoPositionToLsp,
+  resolvedCodeLensToMonaco,
   resolvedDocumentLinkToMonaco,
   selectionRangesToMonaco,
   semanticTokensToMonaco,
   signatureHelpToMonaco,
   workspaceEditToMonaco,
+  type MonacoCodeLens,
   type MonacoCompletionItem,
   type MonacoDocumentLink,
 } from './typescript/lspMonacoConvert.js'
@@ -296,5 +300,33 @@ export function createDocumentSemanticTokensProxy(
     // Monaco requires the method; the token stream carries no server-side handle
     // to release (tsserver full-tokens have no lifecycle), so this is a no-op.
     releaseDocumentSemanticTokens: () => undefined,
+  }
+}
+
+export function createCodeLensProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+  onDidChange: Event<void>,
+): monaco.languages.CodeLensProvider {
+  // Monaco types onDidChange as IEvent<this> (the listener receives the provider),
+  // but its CodeLens controller ignores the argument and just re-requests on any
+  // fire, so a value-less Event drives the refresh correctly. Cast through unknown
+  // since the two Event shapes don't structurally overlap.
+  const onDidChangeCodeLenses = onDidChange as unknown as NonNullable<
+    monaco.languages.CodeLensProvider['onDidChange']
+  >
+  return {
+    onDidChange: onDidChangeCodeLenses,
+    provideCodeLenses: async (model) =>
+      codeLensesToMonaco(await extHost.$provideCodeLenses(handle, model.uri), MonacoLoader.get()),
+    resolveCodeLens: async (_model, codeLens) => {
+      const monacoLens = codeLens as MonacoCodeLens
+      if (!monacoLens._lspLens) return codeLens
+      return resolvedCodeLensToMonaco(
+        await extHost.$resolveCodeLens(handle, monacoLens._lspLens),
+        codeLens,
+        MonacoLoader.get(),
+      )
+    },
   }
 }

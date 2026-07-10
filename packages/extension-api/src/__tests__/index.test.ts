@@ -80,6 +80,7 @@ const NAMESPACE_METHODS: Record<string, readonly string[]> = {
     'registerRenameProvider',
     'registerWorkspaceSymbolProvider',
     'registerFoldingRangeProvider',
+    'registerCodeLensProvider',
     'createDiagnosticCollection',
   ],
   workspace: [
