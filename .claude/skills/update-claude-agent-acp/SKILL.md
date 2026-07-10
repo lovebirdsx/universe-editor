@@ -137,6 +137,20 @@ git push -u origin chore/update-claude-agent-acp
 - **解法**：把测试里 trailing 的 `{ type: "system", subtype: "session_state_changed", state: "idle" }` **删掉**，让 stream 自然结束（settle 成 end_turn）——与相邻的两条已适配测试（`compact_boundary uses getContextUsage maxTokens…` / `falls back to used:0…`）完全一致，它们已带注释「No trailing idle: an idle with no preceding result now fails the turn as abandoned (issue #825), and a real compaction turn always produces a result」。真实的 compaction turn 总会产出 result，所以裸 idle 本就是不真实的构造。改完用 `git commit --fixup=<上下文计算提交sha>` 并入。
 - **教训**：与案例 4 同类——上游新增运行时校验会让我方旧测试的**人为构造序列**失效；判别标准是「这个构造在真实运行时会不会发生」，不真实就按上游新语义改测试，别去改上游逻辑。
 - **锚点**：`src/acp-agent.ts`（consumer 循环 `session_state_changed`/`idle` 分支的 `failActive(no_result)`、`TURN_NO_RESULT_MESSAGE`、`errorKindData("no_result")`）、`src/tests/acp-agent.test.ts`（`describe("usage_update computation")` 里三条 compact_boundary 测试，注意 trailing idle 的有无）。
+
+### 案例 7（0.55.0→0.58.1 复盘）：SDK 0.3.205 收紧类型 + 上游新测试 mock 缺字段，三处纯类型/mock 适配
+- **现象**：rebase 全程仅 5 处小冲突（见下），但 rebase 后 `npm run typecheck` 报 11 个 error、`npm test` 出 22 个新失败（外加 2 个已知 Windows toDisplayPath）。全部集中在测试文件，非逻辑冲突，靠 typecheck+test 才暴露（同案例 5/6 教训）。
+- **根因**（三类，都因上游升级而非我方 bug）：
+  1. **SDK `CanUseTool` 返回加 `| null`**（0.3.198→0.3.205，`sdk.d.ts` 的 `Promise<PermissionResult | null>`）→ 我方 live-bash 测试 `expect(result.behavior)` 报 `TS18047 'result' is possibly 'null'`（3 处，`src/tests/acp-agent.test.ts` ~8093/8113/8132）。
+  2. **TS lib `AsyncGenerator` 收紧**（要求 `[Symbol.asyncIterator]`/`[Symbol.asyncDispose]`）→ 我方 rewind/fork 测试 8 处 `injectGeneratorSession(agent, function* () {})` 的 sync generator 不再兼容 `(input)=>AsyncGenerator` 签名（`TS2345`）。
+  3. **上游新增 `src/tests/session-config-options.test.ts`（#843/#849）的 mock session 写 `settingsManager: {}`**（无 `getSettings`）→ 撞我方「上下文窗口计算」提交在 `applyConfigOptionValue` model 切换分支新引入的 `session.settingsManager.getSettings()` 调用 → 运行时 `TypeError: session.settingsManager.getSettings is not a function`（22 个测试全挂在这一行）。这与案例 4 同类：我方改动引入新依赖，上游后加的测试构造不满足。
+- **解法**（全部改测试适配、不动逻辑）：
+  1. 三处 `expect(result.behavior)` → `expect(result?.behavior)`（可选链，与文件里 `(result as any).updatedPermissions?.[0]` 的可选风格一致；null 时得 undefined 断言仍失败，语义不变）。`sed -i 's/expect(result\.behavior)/expect(result?.behavior)/g'`。
+  2. 八处 `function* () {}` → `async function* () {}`（空 generator 仅为建 session，sync→async 无语义影响）。`sed -i 's/injectGeneratorSession(agent, function\* () {})/injectGeneratorSession(agent, async function* () {})/g'`。
+  3. 上游 mock `settingsManager: {}` → `settingsManager: { getSettings: () => ({}) }`（真实 session 一定有 settingsManager，是上游 mock 缺字段，补齐即可）。
+- **归属 fixup**：三类分属不同我方提交（result?.behavior→live-bash、sync-generator→rewind、getSettings mock→上下文窗口计算、重生成的 lock→esbuild）。**同一文件混两类改动的分离技巧**：先 `sed` 临时把一类还原成提交态 → `git add` + `git commit --fixup=<A>` 另一类 → 再 `sed` 重新应用 → `git add` + `git commit --fixup=<B>`。最后 `GIT_SEQUENCE_EDITOR=: GIT_EDITOR=true git rebase -i --autosquash <上游HEAD>`。
+- **运维坑**：Windows 上 rebase/branch 操作偶发 `index.lock: File exists`（"Another git process..."），实为上一条 git 命令的残留锁；`rm -f <repoRoot>/.git/worktrees/<wt>/modules/vendor/claude-agent-acp/index.lock` 后重试即可（本仓库是 worktree，lock 在 `worktrees/<name>/modules/...` 下，不是 submodule 目录内）。
+- **锚点**：`node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts`（`CanUseTool`/`PermissionResult`）、`src/tests/acp-agent.test.ts`（`injectGeneratorSession` 调用点、live-bash `result?.behavior`）、`src/tests/session-config-options.test.ts` line ~113 的 mock、`src/acp-agent.ts`（`applyConfigOptionValue` 里 `computeInitialContextWindow(session.settingsManager.getSettings(), ...)`）。
 1. 调查阶段全程只读（`git ls-remote` / `gh api`），别在 plan mode 改 submodule。
 2. submodule 是 detached HEAD；**本地 `main` 分支常已过时**，rebase 基线和工作分支都用 `origin/main`/当前 HEAD 的真实 sha，别信本地 main。
 3. rebase 里 `--ours` = 被 rebase 到的上游侧、`--theirs` = 正在重放的我方提交（与平时相反）。`package-lock.json` 取 `--ours` 后用 `npm install` 重生成。
