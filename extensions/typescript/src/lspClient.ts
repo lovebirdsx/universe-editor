@@ -30,6 +30,7 @@ import type {
   Hover,
   Location,
   Position,
+  SemanticTokens,
   SignatureHelp,
   SymbolInformation,
   WorkspaceEdit,
@@ -122,6 +123,10 @@ export class LspClient {
    *  the project owning an open file. A user `didClose` of a pinned uri is ignored
    *  so its project stays resident. */
   private readonly _pinnedUris = new Set<string>()
+
+  /** Semantic-tokens legend the server announces in its `initialize` response.
+   *  Undefined until the handshake completes (or if the server omits it). */
+  private _semanticTokensLegend: SemanticTokensLegend | undefined
 
   private readonly _onDiagnostics: (e: PublishDiagnosticsEvent) => void
 
@@ -293,6 +298,19 @@ export class LspClient {
     return conn.sendRequest('textDocument/rename', { ...this._doc(uri), position, newName })
   }
 
+  /** The server's semantic-tokens legend, captured from the `initialize` response.
+   *  Waits for the handshake so callers registering the Monaco provider get the
+   *  real legend (its index → name mapping decodes `SemanticTokens.data`). */
+  async getSemanticTokensLegend(): Promise<SemanticTokensLegend | undefined> {
+    await this._ready()
+    return this._semanticTokensLegend
+  }
+
+  async provideDocumentSemanticTokens(uri: string): Promise<SemanticTokens | null> {
+    const conn = await this._ready()
+    return conn.sendRequest('textDocument/semanticTokens/full', this._doc(uri))
+  }
+
   // --- lifecycle -----------------------------------------------------------
 
   private _doc(uri: string): { textDocument: { uri: string } } {
@@ -348,7 +366,10 @@ export class LspClient {
     conn.listen()
 
     try {
-      await conn.sendRequest('initialize', this._initializeParams())
+      const result = (await conn.sendRequest('initialize', this._initializeParams())) as
+        | InitializeResult
+        | undefined
+      this._semanticTokensLegend = result?.capabilities?.semanticTokensProvider?.legend
       this._notify(conn, 'initialized', {})
     } catch (err) {
       if (this._proc !== proc) return // superseded by a concurrent restart
@@ -404,6 +425,14 @@ export class LspClient {
           documentSymbol: { hierarchicalDocumentSymbolSupport: true },
           rename: { prepareSupport: true },
           publishDiagnostics: { relatedInformation: true, versionSupport: true },
+          semanticTokens: {
+            // We only use whole-document tokens; the server still advertises its
+            // legend in the initialize response, which we read to decode `data`.
+            requests: { full: true, range: false },
+            formats: ['relative'],
+            tokenTypes: [],
+            tokenModifiers: [],
+          },
         },
         workspace: {
           workspaceFolders: true,
@@ -498,4 +527,19 @@ interface PublishDiagnosticsParams {
   uri: string
   version?: number
   diagnostics?: Diagnostic[]
+}
+
+/** LSP semantic-tokens legend: index → token-type / modifier name. */
+interface SemanticTokensLegend {
+  tokenTypes: string[]
+  tokenModifiers: string[]
+}
+
+/** Subset of the LSP `initialize` response we read (the semantic-tokens legend). */
+interface InitializeResult {
+  capabilities?: {
+    semanticTokensProvider?: {
+      legend?: SemanticTokensLegend
+    }
+  }
 }

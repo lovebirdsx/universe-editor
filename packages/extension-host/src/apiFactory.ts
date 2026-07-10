@@ -17,6 +17,7 @@ import type {
   DocumentHighlightProvider,
   DocumentLinkProvider,
   DocumentSelector,
+  DocumentSemanticTokensProvider,
   DocumentSymbolProvider,
   Event,
   ExtensionContext,
@@ -138,6 +139,10 @@ export interface IExtensionHostBridge {
     provider: SelectionRangeProvider,
   ): Disposable
   registerCodeActionsProvider(selector: DocumentSelector, provider: CodeActionProvider): Disposable
+  registerDocumentSemanticTokensProvider(
+    selector: DocumentSelector,
+    provider: DocumentSemanticTokensProvider,
+  ): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
   getTextDocuments(): readonly TextDocument[]
   readonly onDidOpenTextDocument: Event<TextDocument>

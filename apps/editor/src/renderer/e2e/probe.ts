@@ -56,6 +56,7 @@ import {
   type E2EDisposableLeakReport,
   type E2ELifecyclePhase,
   type E2EProbe,
+  type E2ESemanticTokenDebug,
   type E2EStatusBarEntry,
   type E2EUpdateState,
   type E2EAiDebugRecord,
@@ -577,6 +578,125 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const perLine = monacoNs.editor.tokenize(model.getValue(), 'markdown')
       const line = perLine[lineNumber - 1] ?? []
       return line.map((t) => [t.offset + 1, t.type] as const)
+    },
+    getSemanticTokenDebug: async (
+      uri: string,
+      lineNumber: number,
+      column: number,
+    ): Promise<E2ESemanticTokenDebug> => {
+      const monacoNs = await MonacoLoader.ensureInitialized()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return { error: 'no-model' }
+
+      // 1) Is a semantic-tokens provider registered for this model, and does it
+      //    return tokens when called directly? (host RPC + tsserver round-trip)
+      const features = await MonacoLoader.getLanguageFeaturesService()
+      const providers = features.documentSemanticTokensProvider.ordered(model)
+      let legend: { tokenTypes: readonly string[]; tokenModifiers: readonly string[] } | undefined
+      let directTokenCount = -1
+      if (providers[0]) {
+        try {
+          legend = providers[0].getLegend()
+          const result = await providers[0].provideDocumentSemanticTokens(model, null, NONE_TOKEN)
+          // Only whole-document tokens carry `.data`; edits are never requested here.
+          directTokenCount = result && 'data' in result ? result.data.length / 5 : 0
+        } catch (err) {
+          directTokenCount = -2
+          void err
+        }
+      }
+
+      // 2) Standalone config gate: editor.semanticHighlighting must resolve truthy
+      //    for the feature to fetch, and the active theme must expose a color for
+      //    the semantic token type at the probed position.
+      const { StandaloneServices } =
+        await import('monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js')
+      const { IConfigurationService } =
+        await import('monaco-editor/esm/vs/platform/configuration/common/configuration.js')
+      const configService = StandaloneServices.get<{
+        getValue: (section: string, overrides?: unknown) => unknown
+      }>(IConfigurationService)
+      const semanticHighlightingSetting = configService.getValue('editor.semanticHighlighting', {
+        overrideIdentifier: model.getLanguageId(),
+        resource: model.uri,
+      })
+
+      // 3) Was a semantic color actually applied to the merged line tokens? Force
+      //    tokenization, then read the foreground color id at the probed column.
+      const tokenization = (
+        model as unknown as {
+          tokenization: {
+            forceTokenization: (line: number) => void
+            getLineTokens: (line: number) => {
+              getCount: () => number
+              getStartOffset: (i: number) => number
+              getEndOffset: (i: number) => number
+              getForeground: (i: number) => number
+              getClassName: (i: number) => string
+            }
+          }
+        }
+      ).tokenization
+      tokenization.forceTokenization(lineNumber)
+      const lineTokens = tokenization.getLineTokens(lineNumber)
+      const offset = column - 1
+      let foreground = -1
+      let className = ''
+      for (let i = 0; i < lineTokens.getCount(); i++) {
+        if (offset >= lineTokens.getStartOffset(i) && offset < lineTokens.getEndOffset(i)) {
+          foreground = lineTokens.getForeground(i)
+          className = lineTokens.getClassName(i)
+          break
+        }
+      }
+
+      // Resolve the foreground color-id → hex via the theme's token color map so
+      // we can tell whether the applied color is the semantic property-blue or a
+      // grammar guess.
+      let foregroundHex = ''
+      try {
+        const { IStandaloneThemeService } =
+          await import('monaco-editor/esm/vs/editor/standalone/common/standaloneTheme.js')
+        const themeService = StandaloneServices.get<{
+          getColorTheme: () => {
+            tokenTheme: { getColorMap: () => Array<{ toString: () => string }> }
+          }
+        }>(IStandaloneThemeService)
+        const colorMap = themeService.getColorTheme().tokenTheme.getColorMap()
+        foregroundHex = colorMap[foreground]?.toString() ?? ''
+      } catch (err) {
+        foregroundHex = `err:${(err as Error).message}`
+      }
+
+      // Grammar-only foreground at the same spot (monaco.editor.tokenize bypasses
+      // semantic tokens entirely). If this already differs from the interface
+      // name's grammar color, a naive prop≠type comparison would pass even with
+      // semantic highlighting broken — so surface it to keep the check honest.
+      let grammarClassName = ''
+      try {
+        const perLine = monacoNs.editor.tokenize(model.getValue(), model.getLanguageId())
+        const lineGrammar = perLine[lineNumber - 1] ?? []
+        for (let i = lineGrammar.length - 1; i >= 0; i--) {
+          if (offset >= (lineGrammar[i]?.offset ?? 0)) {
+            grammarClassName = lineGrammar[i]?.type ?? ''
+            break
+          }
+        }
+      } catch (err) {
+        void err
+      }
+
+      return {
+        providerCount: providers.length,
+        ...(legend ? { legend } : {}),
+        directTokenCount,
+        semanticHighlightingSetting,
+        foreground,
+        foregroundHex,
+        className,
+        grammarClassName,
+        languageId: model.getLanguageId(),
+      }
     },
     getMarkdownDocumentLinks: async (uri: string): Promise<readonly string[]> => {
       const monacoNs = await MonacoLoader.ensureInitialized()

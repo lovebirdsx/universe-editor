@@ -27,6 +27,7 @@ import type {
   Position,
   Range,
   SelectionRange,
+  SemanticTokens,
   SignatureHelp,
   SymbolInformation,
   WorkspaceEdit,
@@ -231,15 +232,26 @@ export type LanguageProviderType =
   | 'documentHighlight'
   | 'selectionRange'
   | 'codeAction'
+  | 'documentSemanticTokens'
 
 /** Language ids a provider applies to. Empty for workspace-wide providers. */
 export type DocumentSelector = readonly string[]
 
-/** Extra registration data Monaco needs up front (trigger characters). */
+/** Extra registration data Monaco needs up front (trigger characters, legends). */
 export interface ILanguageProviderMetadata {
   readonly triggerCharacters?: readonly string[]
   readonly signatureHelpTriggerCharacters?: readonly string[]
   readonly signatureHelpRetriggerCharacters?: readonly string[]
+  /** Semantic-tokens legend (token type / modifier names, index = wire value).
+   *  Monaco's `getLegend()` must return it synchronously, so it rides along at
+   *  registration time rather than being fetched per request. */
+  readonly semanticTokensLegend?: ISemanticTokensLegend
+}
+
+/** Names for the numeric token-type / modifier indices in `SemanticTokens.data`. */
+export interface ISemanticTokensLegend {
+  readonly tokenTypes: readonly string[]
+  readonly tokenModifiers: readonly string[]
 }
 
 export interface IReferenceContext {
@@ -345,6 +357,7 @@ export interface IExtHostLanguages {
     range: Range,
     context: ICodeActionContext,
   ): Promise<CodeAction[] | null>
+  $provideDocumentSemanticTokens(handle: number, uri: UriComponents): Promise<SemanticTokens | null>
 }
 
 /**

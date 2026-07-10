@@ -27,6 +27,8 @@ import type {
   Position,
   Range,
   SelectionRange,
+  SemanticTokens,
+  SemanticTokensLegend,
   SignatureHelp,
   SymbolInformation,
   WorkspaceEdit,
@@ -56,6 +58,8 @@ export type {
   Position,
   Range,
   SelectionRange,
+  SemanticTokens,
+  SemanticTokensLegend,
   SignatureHelp,
   SymbolInformation,
   TextEdit,
@@ -480,6 +484,16 @@ export interface CodeActionProvider {
 }
 
 /**
+ * Whole-document semantic tokens. `legend` names the numeric token-type /
+ * modifier indices encoded in `SemanticTokens.data`; it's returned to Monaco
+ * synchronously at registration, so the provider carries it as a field.
+ */
+export interface DocumentSemanticTokensProvider {
+  readonly legend: SemanticTokensLegend
+  provideDocumentSemanticTokens(document: TextDocument): ProviderResult<SemanticTokens>
+}
+
+/**
  * Owns a set of diagnostics surfaced as editor markers. `set` replaces a URI's
  * diagnostics (or clears it with `undefined`); the collection name is the marker
  * owner, so multiple providers can mark the same file without clobbering.
@@ -618,6 +632,10 @@ export interface LanguagesApi {
     provider: SelectionRangeProvider,
   ): Disposable
   registerCodeActionsProvider(selector: DocumentSelector, provider: CodeActionProvider): Disposable
+  registerDocumentSemanticTokensProvider(
+    selector: DocumentSelector,
+    provider: DocumentSemanticTokensProvider,
+  ): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
 }
 /**
@@ -704,6 +722,10 @@ interface IExtensionHostBridge {
     provider: SelectionRangeProvider,
   ): Disposable
   registerCodeActionsProvider(selector: DocumentSelector, provider: CodeActionProvider): Disposable
+  registerDocumentSemanticTokensProvider(
+    selector: DocumentSelector,
+    provider: DocumentSemanticTokensProvider,
+  ): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
   getTextDocuments(): readonly TextDocument[]
   readonly onDidOpenTextDocument: Event<TextDocument>
@@ -788,6 +810,8 @@ export const languages: LanguagesApi = {
     bridge().registerSelectionRangeProvider(selector, provider),
   registerCodeActionsProvider: (selector, provider) =>
     bridge().registerCodeActionsProvider(selector, provider),
+  registerDocumentSemanticTokensProvider: (selector, provider) =>
+    bridge().registerDocumentSemanticTokensProvider(selector, provider),
   createDiagnosticCollection: (name) => bridge().createDiagnosticCollection(name),
 }
 

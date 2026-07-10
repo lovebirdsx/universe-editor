@@ -7,7 +7,7 @@
  *  MainThreadLanguages picks the right factory per LanguageProviderType.
  *--------------------------------------------------------------------------------------------*/
 
-import type { IExtHostLanguages } from '@universe-editor/extensions-common'
+import type { IExtHostLanguages, ISemanticTokensLegend } from '@universe-editor/extensions-common'
 import { MonacoLoader, type monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { PendingDocumentSync } from '../extensions/PendingDocumentSync.js'
 import type { IWorkspaceSymbolProvider } from './LanguageFeaturesService.js'
@@ -25,6 +25,7 @@ import {
   monacoPositionToLsp,
   resolvedDocumentLinkToMonaco,
   selectionRangesToMonaco,
+  semanticTokensToMonaco,
   signatureHelpToMonaco,
   workspaceEditToMonaco,
   type MonacoCompletionItem,
@@ -277,5 +278,23 @@ export function createCodeActionProxy(
         ),
         MonacoLoader.get(),
       ),
+  }
+}
+
+export function createDocumentSemanticTokensProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+  legend: ISemanticTokensLegend,
+): monaco.languages.DocumentSemanticTokensProvider {
+  return {
+    getLegend: () => ({
+      tokenTypes: [...legend.tokenTypes],
+      tokenModifiers: [...legend.tokenModifiers],
+    }),
+    provideDocumentSemanticTokens: async (model) =>
+      semanticTokensToMonaco(await extHost.$provideDocumentSemanticTokens(handle, model.uri)),
+    // Monaco requires the method; the token stream carries no server-side handle
+    // to release (tsserver full-tokens have no lifecycle), so this is a no-op.
+    releaseDocumentSemanticTokens: () => undefined,
   }
 }

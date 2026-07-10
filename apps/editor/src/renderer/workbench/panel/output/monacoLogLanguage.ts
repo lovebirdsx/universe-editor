@@ -100,6 +100,41 @@ const MD_TOKEN_RULES_LIGHT: monaco.editor.ITokenThemeRule[] = [
   { token: 'operators.md', foreground: '000000' },
 ]
 
+// Semantic-token colours (mirrors VSCode Dark+/Light+). Standalone Monaco matches
+// a semantic token's `type.modifier` scope against these theme rules, so a plain
+// token type maps by its bare name. The key fix: `property`/`parameter`/`variable`
+// no longer inherit TextMate's "uppercase ⇒ type" guess — tsserver tells us what
+// each identifier really is, so an uppercase interface field colours as a property.
+const SEMANTIC_TOKEN_RULES_DARK: monaco.editor.ITokenThemeRule[] = [
+  { token: 'class', foreground: '4ec9b0' },
+  { token: 'interface', foreground: '4ec9b0' },
+  { token: 'enum', foreground: '4ec9b0' },
+  { token: 'type', foreground: '4ec9b0' },
+  { token: 'typeParameter', foreground: '4ec9b0' },
+  { token: 'namespace', foreground: '4ec9b0' },
+  { token: 'property', foreground: '9cdcfe' },
+  { token: 'member', foreground: '9cdcfe' },
+  { token: 'parameter', foreground: '9cdcfe' },
+  { token: 'variable', foreground: '9cdcfe' },
+  { token: 'enumMember', foreground: '4fc1ff' },
+  { token: 'function', foreground: 'dcdcaa' },
+]
+
+const SEMANTIC_TOKEN_RULES_LIGHT: monaco.editor.ITokenThemeRule[] = [
+  { token: 'class', foreground: '267f99' },
+  { token: 'interface', foreground: '267f99' },
+  { token: 'enum', foreground: '267f99' },
+  { token: 'type', foreground: '267f99' },
+  { token: 'typeParameter', foreground: '267f99' },
+  { token: 'namespace', foreground: '267f99' },
+  { token: 'property', foreground: '001080' },
+  { token: 'member', foreground: '001080' },
+  { token: 'parameter', foreground: '001080' },
+  { token: 'variable', foreground: '001080' },
+  { token: 'enumMember', foreground: '0070c1' },
+  { token: 'function', foreground: '795e26' },
+]
+
 function buildOutputThemeColors(
   variant: 'dark' | 'light',
   overrides?: LineHighlightOverrides,
@@ -121,14 +156,18 @@ export function defineOutputThemes(m: typeof monaco, overrides?: LineHighlightOv
   m.editor.defineTheme('output-dark', {
     base: 'vs-dark',
     inherit: true,
-    rules: [...buildRules(LOG_COLORS_DARK), ...MD_TOKEN_RULES_DARK],
+    rules: [...buildRules(LOG_COLORS_DARK), ...MD_TOKEN_RULES_DARK, ...SEMANTIC_TOKEN_RULES_DARK],
     colors: buildOutputThemeColors('dark', overrides),
   })
 
   m.editor.defineTheme('output-light', {
     base: 'vs',
     inherit: true,
-    rules: [...buildRules(LOG_COLORS_LIGHT), ...MD_TOKEN_RULES_LIGHT],
+    rules: [
+      ...buildRules(LOG_COLORS_LIGHT),
+      ...MD_TOKEN_RULES_LIGHT,
+      ...SEMANTIC_TOKEN_RULES_LIGHT,
+    ],
     colors: buildOutputThemeColors('light', overrides),
   })
 }

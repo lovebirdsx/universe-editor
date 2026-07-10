@@ -24,6 +24,7 @@ import type {
   Position,
   Range,
   SelectionRange,
+  SemanticTokens,
   SignatureHelp,
   SymbolInformation,
   TextEdit,
@@ -583,4 +584,21 @@ export function codeActionsToMonaco(
     }
   })
   return { actions: converted, dispose: () => {} }
+}
+
+/**
+ * LSP SemanticTokens → Monaco SemanticTokens. Both use the identical 5-tuple
+ * delta encoding (deltaLine, deltaStartChar, length, tokenType, tokenModifiers),
+ * so the token stream passes through verbatim — only the container type differs
+ * (LSP `number[]` → Monaco's required `Uint32Array`). The legend (which names
+ * these numeric indices) is supplied to Monaco separately at registration.
+ */
+export function semanticTokensToMonaco(
+  tokens: SemanticTokens | null,
+): monaco.languages.SemanticTokens | null {
+  if (!tokens) return null
+  return {
+    data: Uint32Array.from(tokens.data),
+    ...(tokens.resultId !== undefined ? { resultId: tokens.resultId } : {}),
+  }
 }

@@ -295,6 +295,21 @@ function registerProviders(context: ExtensionContext, client: LspClient): void {
       provideWorkspaceSymbols: (query) => client.provideWorkspaceSymbols(query),
     }),
   )
+
+  // Semantic tokens re-color TextMate's guesses with real type info from tsserver
+  // (e.g. an uppercase property no longer shows as a type). Monaco's getLegend()
+  // is synchronous, so we must know the server's legend before registering — it
+  // arrives in the initialize response, hence the deferred registration.
+  void client.getSemanticTokensLegend().then((legend) => {
+    if (!legend) return
+    context.subscriptions.push(
+      languages.registerDocumentSemanticTokensProvider(TS_JS_LANGUAGES, {
+        legend,
+        provideDocumentSemanticTokens: (doc) =>
+          client.provideDocumentSemanticTokens(uriString(doc.uri)),
+      }),
+    )
+  })
 }
 
 function registerDocumentSync(context: ExtensionContext, client: LspClient): void {

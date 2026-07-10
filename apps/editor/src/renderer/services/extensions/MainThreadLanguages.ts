@@ -32,6 +32,7 @@ import {
   createDefinitionProxy,
   createDocumentHighlightProxy,
   createDocumentLinkProxy,
+  createDocumentSemanticTokensProxy,
   createDocumentSymbolProxy,
   createFoldingRangeProxy,
   createHoverProxy,
@@ -172,6 +173,18 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
       case 'codeAction': {
         const p = createCodeActionProxy(handle, ext)
         for (const lang of selector) store.add(lf.registerCodeActionProvider(lang, p))
+        break
+      }
+      case 'documentSemanticTokens': {
+        // The legend rides along in metadata: Monaco's getLegend() is synchronous,
+        // so it must be known at registration time, not fetched per request.
+        const legend = metadata?.semanticTokensLegend
+        if (legend) {
+          const p = createDocumentSemanticTokensProxy(handle, ext, legend)
+          for (const lang of selector) {
+            store.add(lf.registerDocumentSemanticTokensProvider(lang, p))
+          }
+        }
         break
       }
     }

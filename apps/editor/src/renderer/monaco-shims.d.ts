@@ -57,3 +57,17 @@ declare module 'monaco-editor/esm/vs/basic-languages/markdown/markdown.js' {
   export const language: languages.IMonarchLanguage
   export const conf: languages.LanguageConfiguration
 }
+
+// IConfigurationService decorator + lookup key for StandaloneServices.get. The
+// E2E semantic-token probe reads `editor.semanticHighlighting` off it to check
+// the standalone config gate.
+declare module 'monaco-editor/esm/vs/platform/configuration/common/configuration.js' {
+  export const IConfigurationService: unknown
+}
+
+// IStandaloneThemeService decorator + lookup key for StandaloneServices.get. The
+// E2E semantic-token probe resolves a foreground color-id to its hex through the
+// active theme's token color map.
+declare module 'monaco-editor/esm/vs/editor/standalone/common/standaloneTheme.js' {
+  export const IStandaloneThemeService: unknown
+}

@@ -18,6 +18,7 @@ import type {
   DocumentHighlightProvider,
   DocumentLinkProvider,
   DocumentSelector,
+  DocumentSemanticTokensProvider,
   DocumentSymbolProvider,
   FoldingRangeProvider,
   HoverProvider,
@@ -56,6 +57,7 @@ import type {
   Position,
   Range,
   SelectionRange,
+  SemanticTokens,
   SignatureHelp,
   SymbolInformation,
   WorkspaceEdit,
@@ -80,6 +82,7 @@ type AnyLanguageProvider =
   | DocumentHighlightProvider
   | SelectionRangeProvider
   | CodeActionProvider
+  | DocumentSemanticTokensProvider
 
 interface RegisteredProvider {
   readonly type: LanguageProviderType
@@ -251,6 +254,15 @@ export class LanguageProviderRegistry {
     provider: CodeActionProvider,
   ): Disposable {
     return this._register('codeAction', selector, provider)
+  }
+
+  registerDocumentSemanticTokensProvider(
+    selector: DocumentSelector,
+    provider: DocumentSemanticTokensProvider,
+  ): Disposable {
+    return this._register('documentSemanticTokens', selector, provider, {
+      semanticTokensLegend: provider.legend,
+    })
   }
 
   createDiagnosticCollection(name?: string): DiagnosticCollection {
@@ -460,6 +472,20 @@ export class LanguageProviderRegistry {
     return (
       (await provider.provideCodeActions(this._documents.getOrSynthesize(uri), range, context)) ??
       null
+    )
+  }
+
+  async provideDocumentSemanticTokens(
+    handle: number,
+    uri: UriComponents,
+  ): Promise<SemanticTokens | null> {
+    const provider = this._provider<DocumentSemanticTokensProvider>(
+      handle,
+      'documentSemanticTokens',
+    )
+    if (!provider) return null
+    return (
+      (await provider.provideDocumentSemanticTokens(this._documents.getOrSynthesize(uri))) ?? null
     )
   }
 }

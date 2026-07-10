@@ -32,6 +32,7 @@ import {
   rangeToMonaco,
   resolvedDocumentLinkToMonaco,
   selectionRangesToMonaco,
+  semanticTokensToMonaco,
   signatureHelpToMonaco,
   workspaceEditToMonaco,
   workspaceSymbolsToEntries,
@@ -421,5 +422,24 @@ describe('codeActionsToMonaco', () => {
 
   it('returns an empty list for null', () => {
     expect(codeActionsToMonaco(null, fakeMonaco).actions).toEqual([])
+  })
+})
+
+describe('semanticTokensToMonaco', () => {
+  it('passes the delta-encoded token stream through as a Uint32Array', () => {
+    const out = semanticTokensToMonaco({ data: [0, 5, 3, 9, 0, 1, 2, 4, 5, 0], resultId: 'r1' })
+    expect(out?.data).toBeInstanceOf(Uint32Array)
+    expect(Array.from(out?.data ?? [])).toEqual([0, 5, 3, 9, 0, 1, 2, 4, 5, 0])
+    expect(out?.resultId).toBe('r1')
+  })
+
+  it('omits resultId when absent', () => {
+    const out = semanticTokensToMonaco({ data: [0, 0, 1, 0, 0] })
+    expect(out?.resultId).toBeUndefined()
+    expect(Array.from(out?.data ?? [])).toEqual([0, 0, 1, 0, 0])
+  })
+
+  it('returns null for null', () => {
+    expect(semanticTokensToMonaco(null)).toBeNull()
   })
 })

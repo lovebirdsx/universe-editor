@@ -189,6 +189,8 @@ const extHostLanguages: IExtHostLanguages = {
     (await serviceReady).provideSelectionRanges(handle, uri, positions),
   $provideCodeActions: async (handle, uri, range, context) =>
     (await serviceReady).provideCodeActions(handle, uri, range, context),
+  $provideDocumentSemanticTokens: async (handle, uri) =>
+    (await serviceReady).provideDocumentSemanticTokens(handle, uri),
 }
 const extHostDocuments: IExtHostDocuments = {
   $acceptDocumentOpen: async (uri, languageId, version, text) => {

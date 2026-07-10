@@ -93,6 +93,10 @@ export interface ILanguageFeaturesService {
     languageId: string,
     provider: monaco.languages.CodeActionProvider,
   ): IDisposable
+  registerDocumentSemanticTokensProvider(
+    languageId: string,
+    provider: monaco.languages.DocumentSemanticTokensProvider,
+  ): IDisposable
   registerInlineCompletionsProvider(
     languageSelector: monaco.languages.LanguageSelector,
     provider: monaco.languages.InlineCompletionsProvider,
@@ -356,6 +360,13 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
     provider: monaco.languages.CodeActionProvider,
   ): IDisposable {
     return MonacoLoader.get().languages.registerCodeActionProvider(languageId, provider)
+  }
+
+  registerDocumentSemanticTokensProvider(
+    languageId: string,
+    provider: monaco.languages.DocumentSemanticTokensProvider,
+  ): IDisposable {
+    return MonacoLoader.get().languages.registerDocumentSemanticTokensProvider(languageId, provider)
   }
 
   getWorkspaceSymbolProviders(): readonly IWorkspaceSymbolProvider[] {

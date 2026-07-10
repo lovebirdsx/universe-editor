@@ -81,6 +81,24 @@ export interface E2EStartupMetrics {
   readonly phases: readonly E2EStartupPhase[]
 }
 
+/**
+ * Runtime state of the TS semantic-highlighting chain at a probed position (see
+ * E2EProbe.getSemanticTokenDebug). All fields optional so the `no-model` early
+ * return can carry just `error`.
+ */
+export interface E2ESemanticTokenDebug {
+  error?: string
+  providerCount?: number
+  legend?: { tokenTypes: readonly string[]; tokenModifiers: readonly string[] }
+  directTokenCount?: number
+  semanticHighlightingSetting?: unknown
+  foreground?: number
+  foregroundHex?: string
+  className?: string
+  grammarClassName?: string
+  languageId?: string
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -413,6 +431,19 @@ export interface E2EProbe {
     uri: string,
     lineNumber: number,
   ): Promise<ReadonlyArray<readonly [number, string]>>
+  /**
+   * Runtime state of the TS semantic-highlighting chain at a 1-based position,
+   * for diagnosing why semantic tokens aren't colored. Returns the registered
+   * provider count, the server legend, the token count a direct provider call
+   * yields (host RPC + tsserver), the resolved `editor.semanticHighlighting`
+   * setting, and the foreground color id + class actually applied to the merged
+   * line token at the probed column.
+   */
+  getSemanticTokenDebug(
+    uri: string,
+    lineNumber: number,
+    column: number,
+  ): Promise<E2ESemanticTokenDebug>
   /**
    * Resolved document-link target URIs for an open markdown file (the link
    * provider that powers Ctrl+Click navigation), each `resolveLink`-ed.

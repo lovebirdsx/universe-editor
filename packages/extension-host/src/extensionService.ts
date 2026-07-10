@@ -25,6 +25,7 @@ import {
   type DiagnosticCollection,
   type Disposable,
   type DocumentSelector,
+  type DocumentSemanticTokensProvider,
   type DocumentHighlightProvider,
   type DocumentLinkProvider,
   type DocumentSymbolProvider,
@@ -88,6 +89,7 @@ import type {
   Position,
   Range,
   SelectionRange,
+  SemanticTokens,
   SignatureHelp,
   SymbolInformation,
   WorkspaceEdit,
@@ -479,6 +481,13 @@ export class ExtensionService implements IExtensionHostBridge {
     return this._languageRegistry.registerCodeActionsProvider(selector, provider)
   }
 
+  registerDocumentSemanticTokensProvider(
+    selector: DocumentSelector,
+    provider: DocumentSemanticTokensProvider,
+  ): Disposable {
+    return this._languageRegistry.registerDocumentSemanticTokensProvider(selector, provider)
+  }
+
   createDiagnosticCollection(name?: string): DiagnosticCollection {
     return this._languageRegistry.createDiagnosticCollection(name)
   }
@@ -630,6 +639,13 @@ export class ExtensionService implements IExtensionHostBridge {
     context: ICodeActionContext,
   ): Promise<CodeAction[] | null> {
     return this._languageRegistry.provideCodeActions(handle, uri, range, context)
+  }
+
+  provideDocumentSemanticTokens(
+    handle: number,
+    uri: UriComponents,
+  ): Promise<SemanticTokens | null> {
+    return this._languageRegistry.provideDocumentSemanticTokens(handle, uri)
   }
 
   // --- RPC surface: scm / commands / extensions ---
