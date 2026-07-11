@@ -1,20 +1,23 @@
 /**
  * Provides the "have" revision content of a file for diffs. The SCM baseline in
  * Perforce is the depot revision you last synced (`#have`), whose content lives
- * on the server — fetched with `p4 print -q <file>#have`. Results are cached by
- * `depotPath#rev` so an unchanged revision isn't re-fetched (network savings).
+ * on the server — fetched with `p4 print -q <file>#have`.
  *
- * Unlike git's local HEAD blob, every baseline read is a server round-trip, so
- * caching matters. The cache is keyed on the resolved revision (from fstat), not
- * just the path, so a new sync invalidates naturally.
+ * Every baseline read is a server round-trip (unlike git's local HEAD blob), so
+ * results are cached through the shared {@link P4Cache}'s immutable `print`
+ * namespace, keyed on the resolved `depotFile#rev`. A new sync changes the have
+ * revision, so the key changes and the old content is never mis-served; the
+ * content itself is immutable, so it can even persist across sessions.
  */
 import type { P4Service } from './p4Service.js'
 import { parseFstat } from './fstatParser.js'
+import { P4Cache, P4CacheNs } from './p4Cache.js'
 
 export class BaselineProvider {
-  private readonly _cache = new Map<string, string>()
-
-  constructor(private readonly _p4: P4Service) {}
+  constructor(
+    private readonly _p4: P4Service,
+    private readonly _cache: P4Cache,
+  ) {}
 
   /**
    * Content of `localPath` at its have revision, or undefined when the file has
@@ -26,17 +29,10 @@ export class BaselineProvider {
     const info = parseFstat(fstat.records)[0]
     if (!info || !info.haveRev) return undefined
 
-    const cacheKey = `${info.depotFile}#${info.haveRev}`
-    const cached = this._cache.get(cacheKey)
-    if (cached !== undefined) return cached
-
-    const print = await this._p4.exec(['print', '-q', `${info.depotFile}#${info.haveRev}`])
-    if (print.exitCode !== 0) return undefined
-    this._cache.set(cacheKey, print.stdout)
-    return print.stdout
-  }
-
-  clear(): void {
-    this._cache.clear()
+    const spec = `${info.depotFile}#${info.haveRev}`
+    return this._cache.wrap(P4CacheNs.print, spec, async () => {
+      const print = await this._p4.exec(['print', '-q', spec])
+      return print.exitCode === 0 ? print.stdout : undefined
+    })
   }
 }

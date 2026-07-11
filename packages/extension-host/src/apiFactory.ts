@@ -49,6 +49,7 @@ import type {
 } from '@universe-editor/extension-api'
 import type { IScannedExtension } from './extensionScanner.js'
 import type { ExtHostStorageScope, IMainThreadStorage } from '@universe-editor/extensions-common'
+import { join } from 'node:path'
 
 /** The slice of the storage RPC the context factory needs (whole-object get/set). */
 export type IExtensionStorage = IMainThreadStorage
@@ -227,15 +228,22 @@ async function loadState(
  * Phase 3 context: subscriptions + path + persistent mementos. When no storage
  * backend is wired (restricted host probing, tests), falls back to in-memory
  * mementos so `activate` still gets a working context.
+ *
+ * `globalStorageHome` (from the host env) is the parent of every extension's
+ * private storage dir; the per-extension path is `<home>/<extId>`. Empty when
+ * unconfigured, so extensions can detect "no persistent storage available".
  */
 export async function createExtensionContext(
   ext: IScannedExtension,
   storage?: IExtensionStorage,
+  globalStorageHome?: string,
 ): Promise<ExtensionContext> {
+  const globalStoragePath = globalStorageHome ? join(globalStorageHome, ext.id) : ''
   if (!storage) {
     return {
       subscriptions: [],
       extensionPath: ext.extensionPath,
+      globalStoragePath,
       globalState: createInMemoryMemento(),
       workspaceState: createInMemoryMemento(),
     }
@@ -247,6 +255,7 @@ export async function createExtensionContext(
   return {
     subscriptions: [],
     extensionPath: ext.extensionPath,
+    globalStoragePath,
     globalState: createPersistentMemento(globalInitial, (state) => {
       void storage.$set(0, ext.id, JSON.stringify(state))
     }),

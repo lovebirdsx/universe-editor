@@ -117,6 +117,23 @@
           "type": "boolean",
           "default": false,
           "description": "%perforce.config.autoEdit.description%"
+        },
+        "perforce.cache.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%perforce.config.cache.enabled.description%"
+        },
+        "perforce.cache.workspaceTtl": {
+          "type": "number",
+          "default": 4000,
+          "minimum": 0,
+          "description": "%perforce.config.cache.workspaceTtl.description%"
+        },
+        "perforce.cache.diskLimitMb": {
+          "type": "number",
+          "default": 50,
+          "minimum": 0,
+          "description": "%perforce.config.cache.diskLimitMb.description%"
         }
       }
     }

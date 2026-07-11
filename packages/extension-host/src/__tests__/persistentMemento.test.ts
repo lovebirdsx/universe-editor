@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { join } from 'node:path'
 import { createExtensionContext, type IExtensionStorage } from '../apiFactory.js'
 import type { IScannedExtension } from '../extensionScanner.js'
 
@@ -61,5 +62,12 @@ describe('persistent Memento', () => {
     await storage.$set(1, EXT.id, '{ not valid json')
     const ctx = await createExtensionContext(EXT, storage)
     expect(ctx.workspaceState.get('x')).toBeUndefined()
+  })
+
+  it('derives globalStoragePath as <home>/<extId>, empty when no home', async () => {
+    const withHome = await createExtensionContext(EXT, fakeStorage(), join('/storage/home'))
+    expect(withHome.globalStoragePath).toBe(join('/storage/home', 'test.ext'))
+    const withoutHome = await createExtensionContext(EXT, fakeStorage())
+    expect(withoutHome.globalStoragePath).toBe('')
   })
 })

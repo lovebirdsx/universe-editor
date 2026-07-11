@@ -96,6 +96,13 @@ export interface Memento {
 export interface ExtensionContext {
   readonly subscriptions: Disposable[]
   readonly extensionPath: string
+  /**
+   * An extension-private directory (`<globalStorageHome>/<extId>`) for caching
+   * large data across sessions. Persists globally (all workspaces). The parent
+   * exists; the extension creates this directory on first write. Empty string
+   * when no storage home is configured (restricted-host probing, tests).
+   */
+  readonly globalStoragePath: string
   readonly globalState: Memento
   readonly workspaceState: Memento
 }

@@ -28,6 +28,7 @@ export class ExtensionActivationService {
   constructor(
     private readonly _extensions: readonly IScannedExtension[],
     private readonly _storage?: IExtensionStorage,
+    private readonly _globalStorageHome?: string,
   ) {}
 
   /** Activate every extension whose declared events match `event`. */
@@ -54,7 +55,7 @@ export class ExtensionActivationService {
   }
 
   private async _doActivate(ext: IScannedExtension): Promise<void> {
-    const context = await createExtensionContext(ext, this._storage)
+    const context = await createExtensionContext(ext, this._storage, this._globalStorageHome)
     try {
       let deactivate: (() => unknown) | undefined
       if (ext.mainPath) {

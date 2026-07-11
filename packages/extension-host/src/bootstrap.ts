@@ -271,6 +271,11 @@ async function main(): Promise<void> {
   const workspaceRoot = process.env.UNIVERSE_WORKSPACE_ROOT || undefined
   console.error(`[ext-host] workspace root: ${workspaceRoot ?? '(none)'}`)
 
+  // Parent dir for per-extension persistent storage (`<home>/<extId>`). Trusted
+  // host only — restricted extensions get no writable cache dir.
+  const globalStorageHome =
+    kind === 'trusted' ? process.env.UNIVERSE_GLOBAL_STORAGE_DIR || undefined : undefined
+
   // AI is a trusted-only capability; the renderer registers mainThreadAi only on
   // the trusted connection, so don't even open the proxy in a restricted host.
   const mainThreadAi =
@@ -293,6 +298,7 @@ async function main(): Promise<void> {
       mainThreadAi,
       mainThreadStorage,
       mainThreadWebviews,
+      globalStorageHome,
     ),
   )
   console.error(`[ext-host] ready (${kind})`)

@@ -14,7 +14,8 @@ import { basename } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { ConcurrencyGate } from './concurrency.js'
 import { type P4Connection } from './p4Service.js'
-import { PerforceClient } from './client.js'
+import { PerforceClient, type P4CacheOptions } from './client.js'
+import { P4CacheDisk } from './p4CacheDisk.js'
 import { ClientManager } from './clientManager.js'
 import { P4StatusBarController } from './p4StatusBar.js'
 import { AutoEditController } from './autoEdit.js'
@@ -79,11 +80,28 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const gate = new ConcurrencyGate(maxConcurrent)
   const fallback = await readFallbackConnection()
 
+  // Result caching (server round-trips are expensive). Immutable data (submitted
+  // changes, specific revisions) can persist across sessions under the extension's
+  // globalStoragePath; mutable workspace state uses a short TTL + post-mutation
+  // invalidation. All knobs live under `perforce.cache.*`.
+  const cacheEnabled = await cfg.get('cache.enabled', true)
+  const workspaceTtlMs = await cfg.get('cache.workspaceTtl', 4000)
+  const diskLimitMb = await cfg.get('cache.diskLimitMb', 50)
+  const disk =
+    cacheEnabled && context.globalStoragePath
+      ? P4CacheDisk.open(context.globalStoragePath, diskLimitMb * 1024 * 1024, Date.now, log)
+      : undefined
+  const cacheOptions: P4CacheOptions = {
+    enabled: cacheEnabled,
+    workspaceTtlMs,
+    ...(disk ? { disk } : {}),
+  }
+
   // Probe for a p4 CLI + a client for this folder. A missing binary or a folder
   // outside any Perforce workspace disables the provider without crashing.
   let client: PerforceClient | undefined
   try {
-    client = await PerforceClient.create(root, fallback, gate, log)
+    client = await PerforceClient.create(root, fallback, gate, cacheOptions, log)
   } catch (err) {
     if (isMissingCli(err)) {
       console.error('[perforce] p4 CLI not found; perforce source control disabled')

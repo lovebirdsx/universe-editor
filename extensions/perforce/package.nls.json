@@ -29,5 +29,8 @@
   "perforce.config.client.description": "Fallback P4CLIENT (workspace) used when no environment variable or P4CONFIG provides one.",
   "perforce.config.maxConcurrent.description": "Maximum number of concurrent p4 processes. Each p4 command is a process spawn plus a server round-trip, so a low cap protects the server and this machine.",
   "perforce.config.refreshInterval.description": "Seconds between background refreshes of the pending changelists. 0 disables polling (recommended for large depots); use explicit Refresh instead.",
-  "perforce.config.autoEdit.description": "Automatically open a file for edit (p4 edit) on its first local modification. Off by default — opening files for edit is a server operation."
+  "perforce.config.autoEdit.description": "Automatically open a file for edit (p4 edit) on its first local modification. Off by default — opening files for edit is a server operation.",
+  "perforce.config.cache.enabled.description": "Cache p4 command results to cut server round-trips. Immutable data (submitted changes, specific revisions) persists across sessions; mutable workspace state uses a short TTL and is invalidated after any change.",
+  "perforce.config.cache.workspaceTtl.description": "Milliseconds a cached workspace query (opened files, file mappings) stays valid before it is re-fetched. Cache is always invalidated after a mutation, so this only bounds staleness from changes made outside the editor. 0 disables workspace caching (immutable-history caching still applies).",
+  "perforce.config.cache.diskLimitMb.description": "Maximum size (MB) of the on-disk cache for immutable history data. Least-recently-used entries are evicted past this cap. 0 disables disk persistence (in-memory caching still applies)."
 }

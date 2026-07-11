@@ -51,6 +51,12 @@ import {
   type GraphDescribe,
 } from './p4GraphParser.js'
 import { BaselineProvider } from './baselineProvider.js'
+import {
+  P4Cache,
+  P4CacheNs,
+  registerP4CacheNamespaces,
+  type P4CacheDiskBackend,
+} from './p4Cache.js'
 import { classifyP4Error, notifyP4Failure, type P4FailureKind } from './p4Error.js'
 import { localize } from './nls.js'
 
@@ -70,9 +76,16 @@ export interface ClientStatus {
   readonly connection: ConnectionState
 }
 
+export interface P4CacheOptions {
+  readonly enabled: boolean
+  readonly workspaceTtlMs: number
+  readonly disk?: P4CacheDiskBackend
+}
+
 export class PerforceClient {
   private readonly _p4: P4Service
   private readonly _sc: SourceControl
+  private readonly _cache: P4Cache
   private readonly _baseline: BaselineProvider
   /** Live groups by group id (default / cl:<n>), so refresh can reuse or drop. */
   private readonly _groups = new Map<string, SourceControlResourceGroup>()
@@ -90,10 +103,13 @@ export class PerforceClient {
     private readonly _clientName: string,
     connection: P4Connection,
     gate: ConcurrencyGate,
+    cacheOptions: P4CacheOptions,
     private readonly _log?: (msg: string) => void,
   ) {
     this._p4 = new P4Service(root, gate, connection, _log)
-    this._baseline = new BaselineProvider(this._p4)
+    this._cache = new P4Cache(Date.now, cacheOptions.disk, cacheOptions.enabled)
+    registerP4CacheNamespaces(this._cache, cacheOptions.workspaceTtlMs)
+    this._baseline = new BaselineProvider(this._p4, this._cache)
     this._sc = scm.createSourceControl('perforce', `Perforce: ${_clientName}`, root)
     this._sc.inputBox.placeholder = localize(
       'perforce.input.placeholder',
@@ -111,6 +127,7 @@ export class PerforceClient {
     folder: string,
     fallback: P4Connection,
     gate: ConcurrencyGate,
+    cacheOptions: P4CacheOptions,
     log?: (msg: string) => void,
   ): Promise<PerforceClient | undefined> {
     // Connection-less probe first to resolve client + root from the environment.
@@ -124,7 +141,14 @@ export class PerforceClient {
     }
     if (!discovered) return undefined
     const connection = connectionFor(discovered, fallback)
-    return new PerforceClient(discovered.clientRoot, discovered.clientName, connection, gate, log)
+    return new PerforceClient(
+      discovered.clientRoot,
+      discovered.clientName,
+      connection,
+      gate,
+      cacheOptions,
+      log,
+    )
   }
 
   get status(): ClientStatus {
@@ -323,7 +347,7 @@ export class PerforceClient {
       await this.refresh()
       return false
     }
-    this._baseline.clear()
+    this._cache.invalidateWorkspace()
     await this.refresh()
     return true
   }
@@ -554,18 +578,27 @@ export class PerforceClient {
 
     const summaries = new Map<string, { summary: string; user?: string; time?: number }>()
     for (const cl of annotatedChangelists(lines)) {
-      const desc = await this._p4.execTagged(['describe', '-s', cl])
-      if (desc.result.exitCode !== 0) continue
-      const record = desc.records[0]
-      if (!record) continue
-      const raw = typeof record['desc'] === 'string' ? record['desc'] : ''
-      const user = typeof record['user'] === 'string' ? record['user'] : undefined
-      const timeSec = typeof record['time'] === 'string' ? record['time'] : undefined
-      summaries.set(cl, {
-        summary: descriptionFirstLine(raw),
-        ...(user ? { user } : {}),
-        ...(timeSec ? { time: Number(timeSec) * 1000 } : {}),
+      const json = await this._cache.wrap(P4CacheNs.describe, `summary:${cl}`, async () => {
+        const desc = await this._p4.execTagged(['describe', '-s', cl])
+        if (desc.result.exitCode !== 0) return undefined
+        const record = desc.records[0]
+        if (!record) return undefined
+        const raw = typeof record['desc'] === 'string' ? record['desc'] : ''
+        const user = typeof record['user'] === 'string' ? record['user'] : undefined
+        const timeSec = typeof record['time'] === 'string' ? record['time'] : undefined
+        return JSON.stringify({
+          summary: descriptionFirstLine(raw),
+          ...(user ? { user } : {}),
+          ...(timeSec ? { time: Number(timeSec) * 1000 } : {}),
+        })
       })
+      if (json === undefined) continue
+      summaries.set(
+        cl,
+        json
+          ? (JSON.parse(json) as { summary: string; user?: string; time?: number })
+          : { summary: '' },
+      )
     }
 
     return buildBlameResult(lines, summaries)
@@ -586,24 +619,29 @@ export class PerforceClient {
    * node). Returns null on connection failure so the renderer shows "unavailable".
    */
   async getGraphChanges(maxChanges: number): Promise<GraphChangeMeta[] | null> {
-    const res = await this._p4.execRecords([
-      'changes',
-      '-s',
-      'submitted',
-      '-l',
-      '-m',
-      String(maxChanges + 1),
-      '//...',
-    ])
-    if (res.result.exitCode !== 0) return null
-    return parseChangesList(res.records)
+    const json = await this._cache.wrap(
+      P4CacheNs.changesSubmitted,
+      String(maxChanges),
+      async () => {
+        const res = await this._p4.execRecords([
+          'changes',
+          '-s',
+          'submitted',
+          '-l',
+          '-m',
+          String(maxChanges + 1),
+          '//...',
+        ])
+        if (res.result.exitCode !== 0) return undefined
+        return JSON.stringify(parseChangesList(res.records))
+      },
+    )
+    return json === undefined ? null : (JSON.parse(json) as GraphChangeMeta[])
   }
 
   /** Count files currently open in the workspace (the synthetic pending node). */
   async getPendingCount(): Promise<number> {
-    const res = await this._p4.execRecords(['opened'])
-    if (res.result.exitCode !== 0) return 0
-    return parseOpened(res.records).length
+    return (await this._openedFiles()).length
   }
 
   /**
@@ -614,9 +652,7 @@ export class PerforceClient {
   async getOpenedForGraph(): Promise<
     { depotFile: string; action: P4Action; rev: string | undefined; localPath: string | null }[]
   > {
-    const res = await this._p4.execRecords(['opened'])
-    if (res.result.exitCode !== 0) return []
-    const opened = parseOpened(res.records)
+    const opened = await this._openedFiles()
     const localByDepot = await this._whereLocalPaths(opened.map((f) => f.depotFile))
     return opened.map((f) => ({
       depotFile: f.depotFile,
@@ -626,39 +662,66 @@ export class PerforceClient {
     }))
   }
 
+  /** Parsed `p4 opened` for the graph's pending consumers, cached (ttl) so the
+   *  count and the file list share one round-trip. */
+  private async _openedFiles(): Promise<ReturnType<typeof parseOpened>> {
+    const json = await this._cache.wrap(P4CacheNs.opened, 'all', async () => {
+      const res = await this._p4.execRecords(['opened'])
+      if (res.result.exitCode !== 0) return undefined
+      return JSON.stringify(parseOpened(res.records))
+    })
+    return json === undefined ? [] : (JSON.parse(json) as ReturnType<typeof parseOpened>)
+  }
+
   /**
    * Full detail of one submitted change: metadata + changed files with resolved
    * local paths (via `p4 where`). Returns null when the change can't be described.
+   * The describe half is immutable (submitted changes never change) and cached as
+   * such; local paths come from the separately-cached (ttl) `where` mapping.
    */
   async getGraphChangeDetails(
     id: string,
   ): Promise<(GraphDescribe & { localPaths: Map<string, string> }) | null> {
-    const res = await this._p4.execRecords(['describe', '-s', id])
-    if (res.result.exitCode !== 0) return null
-    const record = res.records[0]
-    if (!record) return null
-    const detail = parseChangeDescribe(record)
-    if (!detail) return null
+    const json = await this._cache.wrap(P4CacheNs.describe, id, async () => {
+      const res = await this._p4.execRecords(['describe', '-s', id])
+      if (res.result.exitCode !== 0) return undefined
+      const record = res.records[0]
+      if (!record) return undefined
+      const parsed = parseChangeDescribe(record)
+      return parsed ? JSON.stringify(parsed) : undefined
+    })
+    if (json === undefined) return null
+    const detail = JSON.parse(json) as GraphDescribe
     const localPaths = await this._whereLocalPaths(detail.files.map((f) => f.depotFile))
     return { ...detail, localPaths }
   }
 
-  /** Resolve depot → local paths for a batch of files (`p4 where`). */
+  /** Resolve depot → local paths for a batch of files (`p4 where`). Cached (ttl)
+   *  keyed on the sorted depot-file set so repeated lookups reuse one query. */
   private async _whereLocalPaths(depotFiles: readonly string[]): Promise<Map<string, string>> {
     if (depotFiles.length === 0) return new Map()
-    const res = await this._p4.execRecords(['where', ...depotFiles])
-    if (res.result.exitCode !== 0) return new Map()
-    return parseWhereLocalPaths(res.records)
+    const key = [...depotFiles].sort().join('\n')
+    const json = await this._cache.wrap(P4CacheNs.where, key, async () => {
+      const res = await this._p4.execRecords(['where', ...depotFiles])
+      if (res.result.exitCode !== 0) return undefined
+      return JSON.stringify([...parseWhereLocalPaths(res.records)])
+    })
+    return json === undefined ? new Map() : new Map(JSON.parse(json) as [string, string][])
   }
 
   /**
    * Print a file revision's content (`p4 print -q <spec>`) for the diff editor,
    * or empty string when the spec is null (an added/deleted side) or print fails.
+   * A concrete revision's content is immutable, so it's cached (and persisted)
+   * under the `print` namespace.
    */
   async printRevision(spec: string | null): Promise<string> {
     if (!spec) return ''
-    const res = await this._p4.exec(['print', '-q', spec])
-    return res.exitCode === 0 ? res.stdout : ''
+    const value = await this._cache.wrap(P4CacheNs.print, spec, async () => {
+      const res = await this._p4.exec(['print', '-q', spec])
+      return res.exitCode === 0 ? res.stdout : undefined
+    })
+    return value ?? ''
   }
 
   /**
@@ -688,6 +751,7 @@ export class PerforceClient {
   dispose(): void {
     this._disposed = true
     this.stopPolling()
+    this._cache.clear()
     for (const live of this._groups.values()) live.dispose()
     this._groups.clear()
     this._sc.dispose()

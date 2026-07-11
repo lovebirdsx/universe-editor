@@ -29,5 +29,8 @@
   "perforce.config.client.description": "当环境变量或 P4CONFIG 均未提供时使用的兜底 P4CLIENT（工作区）。",
   "perforce.config.maxConcurrent.description": "并发 p4 进程的最大数量。每个 p4 命令都是一次进程启动加一次服务器往返，较低的上限可保护服务器和本机。",
   "perforce.config.refreshInterval.description": "后台刷新待定 changelist 的间隔秒数。0 表示关闭轮询（大型 depot 建议关闭），改用显式刷新。",
-  "perforce.config.autoEdit.description": "在文件首次本地修改时自动签出以编辑（p4 edit）。默认关闭——签出是一次服务器操作。"
+  "perforce.config.autoEdit.description": "在文件首次本地修改时自动签出以编辑（p4 edit）。默认关闭——签出是一次服务器操作。",
+  "perforce.config.cache.enabled.description": "缓存 p4 命令结果以减少服务器往返。不可变数据（已提交变更、具体版本内容）跨会话持久化；可变的工作区状态使用短 TTL，并在任何变更后失效。",
+  "perforce.config.cache.workspaceTtl.description": "缓存的工作区查询（已打开文件、路径映射）在重新拉取前保持有效的毫秒数。每次变更后缓存都会失效，因此该值只限制来自编辑器外部改动的陈旧窗口。设为 0 关闭工作区缓存（不可变历史缓存仍生效）。",
+  "perforce.config.cache.diskLimitMb.description": "不可变历史数据磁盘缓存的最大容量（MB）。超过上限时按最近最少使用淘汰。设为 0 关闭磁盘持久化（内存缓存仍生效）。"
 }

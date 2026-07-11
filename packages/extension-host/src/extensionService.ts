@@ -156,10 +156,15 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _mainThreadAi?: IMainThreadAi,
     private readonly _mainThreadStorage?: IMainThreadStorage,
     private readonly _mainThreadWebviews?: IMainThreadWebviews,
+    private readonly _globalStorageHome?: string,
   ) {
     this._commands = new ExtensionCommandRegistry(_mainThreadCommands)
     this._languageRegistry = new LanguageProviderRegistry(() => this._languages(), this._documents)
-    this._activation = new ExtensionActivationService(_extensions, _mainThreadStorage)
+    this._activation = new ExtensionActivationService(
+      _extensions,
+      _mainThreadStorage,
+      _globalStorageHome,
+    )
     if (_mainThreadWebviews) this._webviews = new HostWebviewManager(_mainThreadWebviews)
     installApiBridge(this)
   }

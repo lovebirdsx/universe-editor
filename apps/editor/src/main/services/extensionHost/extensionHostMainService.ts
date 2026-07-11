@@ -171,6 +171,9 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
       const { cli, tsserver } = this._resolveTsServerPaths()
       env.UNIVERSE_TSLS_CLI = cli
       env.UNIVERSE_TSLS_TSSERVER = tsserver
+      // Parent dir for extensions' persistent cross-session storage
+      // (`context.globalStoragePath` = `<dir>/<extId>`). Trusted host only.
+      env.UNIVERSE_GLOBAL_STORAGE_DIR = path.join(app.getPath('userData'), 'extensionGlobalStorage')
     }
 
     // The open folder, surfaced to extensions as `workspace.rootPath`.
