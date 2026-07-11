@@ -395,8 +395,14 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     }
     // Fire-and-forget $unregisterSourceControl messages from the dying host may
     // be lost when the IPC channel closes. Reset SCM state eagerly so the view
-    // doesn't show stale source controls from the previous workspace.
-    this._scm.resetSourceControls()
+    // doesn't show stale source controls from the previous workspace. SCM is a
+    // trusted-only capability (restricted `createSourceControl` throws), so only
+    // a trusted teardown may clear it — otherwise a restricted host dying (its
+    // crash, or the restricted leg of a workspace-swap restart that runs after
+    // trusted already re-registered) would wipe the trusted host's git/p4
+    // providers, surfacing as "No source control providers registered" until a
+    // reload. Mirrors the per-tier `webview.reset(kind)` below.
+    if (conn.kind === 'trusted') this._scm.resetSourceControls()
     this._webview.reset(conn.kind)
     conn.dispose()
   }

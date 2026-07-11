@@ -88,6 +88,14 @@ function fakeHost(): IExtensionHostService {
 }
 
 function makeService(host: IExtensionHostService, workspaceChange = Event.None) {
+  return makeServiceWith(host, vi.fn(), workspaceChange)
+}
+
+function makeServiceWith(
+  host: IExtensionHostService,
+  resetSourceControls: () => void,
+  workspaceChange = Event.None,
+) {
   const nullLogger = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -103,7 +111,7 @@ function makeService(host: IExtensionHostService, workspaceChange = Event.None) 
     {} as IQuickInputService,
     {} as IStatusBarService,
     {} as IDialogService,
-    { resetSourceControls: vi.fn() } as unknown as IScmService,
+    { resetSourceControls } as unknown as IScmService,
     {
       setExtHost: vi.fn(),
       createMainThread: vi.fn(),
@@ -169,6 +177,49 @@ describe('ExtensionHostClientService', () => {
     expect(disposed).toContain('h1')
     expect(host.stop).toHaveBeenCalledWith('h1')
     expect(host.start).toHaveBeenCalledTimes(2)
+
+    svc.dispose()
+  })
+
+  it('does not wipe SCM providers when the restricted host tears down', async () => {
+    // Regression: git + p4 register their SCM providers ONLY on the trusted host
+    // (restricted `createSourceControl` throws). `_teardownConnection` reset SCM
+    // unconditionally, so tearing down the RESTRICTED tier (its crash, or the
+    // restricted leg of a workspace-swap restart that runs after trusted already
+    // re-registered) wiped the trusted host's providers — the intermittent
+    // "No source control providers registered". Reset must be trusted-only,
+    // mirroring the per-tier `webview.reset(kind)`.
+    disposed.length = 0
+    const resetSourceControls = vi.fn()
+    const onExit = new Emitter<{ handle: string; code: number | null; signal: string | null }>()
+    const kindByHandle = new Map<string, string>()
+    let n = 0
+    const host = {
+      onExit: onExit.event,
+      onStdout: Event.None,
+      onStderr: Event.None,
+      start: vi.fn().mockImplementation((spec: { kind: string }) => {
+        const handle = `h${++n}`
+        kindByHandle.set(handle, spec.kind)
+        return Promise.resolve({ handle })
+      }),
+      hasUserExtensions: vi.fn().mockResolvedValue(true),
+      writeStdin: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IExtensionHostService
+
+    const svc = makeServiceWith(host, resetSourceControls)
+    await svc.start()
+
+    const restrictedHandle = [...kindByHandle].find(([, k]) => k === 'restricted')?.[0]
+    expect(restrictedHandle).toBeDefined()
+
+    // The restricted host dies (teardown runs the same for a crash or a planned
+    // restart leg); a clean code keeps the assertion off the crash-notify path.
+    onExit.fire({ handle: restrictedHandle!, code: 0, signal: null })
+
+    // Trusted-owned SCM providers must survive a restricted teardown.
+    expect(resetSourceControls).not.toHaveBeenCalled()
 
     svc.dispose()
   })
