@@ -10,6 +10,7 @@
  * is defensive.
  */
 import type { OpenedFile, P4Action, PendingChangelist } from './changelist.js'
+import { clientToLocalPath } from './pathUtil.js'
 
 const KNOWN_ACTIONS: ReadonlySet<string> = new Set([
   'edit',
@@ -34,12 +35,22 @@ function normalizeAction(raw: string | undefined): P4Action {
 }
 
 /** Parse one `p4 opened` JSON record into an OpenedFile, or undefined if it
- *  carries no depot path (not an opened-file record). */
-export function parseOpenedRecord(record: Record<string, unknown>): OpenedFile | undefined {
+ *  carries no depot path (not an opened-file record).
+ *
+ *  `p4 opened` reports `clientFile` in *client syntax* (`//clientName/rel`), NOT a
+ *  local OS path — only `fstat` reports a local `clientFile`. Passing `clientRoot`
+ *  translates it to the on-disk path so downstream readFile / file: URIs work; when
+ *  omitted (tests feeding local paths directly) the value is kept verbatim. */
+export function parseOpenedRecord(
+  record: Record<string, unknown>,
+  clientRoot?: string,
+): OpenedFile | undefined {
   const depotFile = asString(record['depotFile'])
   if (!depotFile) return undefined
   const change = asString(record['change']) ?? 'default'
-  const clientFile = asString(record['clientFile'])
+  const rawClientFile = asString(record['clientFile'])
+  const clientFile =
+    rawClientFile && clientRoot ? clientToLocalPath(rawClientFile, clientRoot) : rawClientFile
   return {
     depotFile,
     clientFile,
@@ -52,10 +63,13 @@ export function parseOpenedRecord(record: Record<string, unknown>): OpenedFile |
   }
 }
 
-export function parseOpened(records: readonly Record<string, unknown>[]): OpenedFile[] {
+export function parseOpened(
+  records: readonly Record<string, unknown>[],
+  clientRoot?: string,
+): OpenedFile[] {
   const out: OpenedFile[] = []
   for (const r of records) {
-    const file = parseOpenedRecord(r)
+    const file = parseOpenedRecord(r, clientRoot)
     if (file) out.push(file)
   }
   return out

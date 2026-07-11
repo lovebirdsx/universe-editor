@@ -57,6 +57,56 @@ test.describe('@p1 perforce collect changes', () => {
     await expect(row).toBeHidden({ timeout: 30_000 })
   })
 
+  // Repro for "clicking a CHANGELIST/reconcile diff shows the edit as a full delete,
+  // and opening the source in the diff editor throws a `//` URI error". Root cause:
+  // `p4 opened`/`reconcile -n` report `clientFile` in CLIENT SYNTAX (`//client/rel`),
+  // not a local path — so readFile('//client/…') failed (empty modified side = looks
+  // deleted) and the `//` path broke the file: URI. The fake p4 now emits client
+  // syntax too, so this guards the client→local translation end-to-end.
+  test('clicking a reconcile row opens a real diff, not a phantom delete @regression', async ({
+    page,
+    workbench,
+    perforce,
+  }) => {
+    test.setTimeout(120_000)
+    await evaluateWhenRestored(page)
+
+    await workbench.openWorkspace(perforce.openDir)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
+        timeout: 60_000,
+        message: 'perforce extension should register a source control for the workspace',
+      })
+      .toBeGreaterThan(0)
+
+    await workbench.runCommand('workbench.view.scm')
+
+    const editedContent = 'line one\nEDITED line two\nline three\n'
+    writeFileSync(perforce.file(tracked), editedContent, 'utf8')
+
+    const row = page.locator('[role="treeitem"]', { hasText: tracked })
+    await expect(row).toBeVisible({ timeout: 30_000 })
+
+    // Click the row → the extension's perforce.openChange opens a diff of the file's
+    // have-revision (left) against the working-tree content (right).
+    await row.click()
+
+    // The diff's modified side must be the real on-disk edit — NOT empty (which is
+    // what a client-syntax readFile failure produced, rendering as a full delete).
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveDiffContent()?.modified), {
+        timeout: 30_000,
+        message: 'diff modified side should hold the working-tree content',
+      })
+      .toBe(editedContent)
+
+    const diff = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
+    // Left = have revision (the seeded content), right = the edit. If clientFile were
+    // still client syntax, modified would be '' and this would look like a delete.
+    expect(diff?.original).toBe(DEFAULT_SEEDS[0]!.content)
+    expect(diff?.modified).toBe(editedContent)
+  })
+
   // Reproduces the reported bug: opening a DEEP subdirectory of a large p4 client
   // (client root is far above the opened folder). The watcher used to watch the
   // whole client root recursively — which fails/degrades on big trees so a nested

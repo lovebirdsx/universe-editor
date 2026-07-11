@@ -67,6 +67,29 @@ function clientOf(state, depotFile) {
   return join(state.clientRoot, rel)
 }
 
+/** depotFile (//depot/...) → clientFile in CLIENT SYNTAX (`//clientName/rel`).
+ *  Real `p4 opened` / `reconcile -n` report `clientFile` in client syntax, not a
+ *  local path (only `fstat` gives a local path). Mirroring that here guards the
+ *  extension's client→local conversion end-to-end. */
+function clientSyntaxOf(state, depotFile) {
+  const rel = depotFile.slice(state.depotPrefix.length + 1)
+  return `//${state.client}/${rel}`
+}
+
+/** Any file arg (local OS path, depot syntax `//depot/…`, or client syntax
+ *  `//clientName/…`) → its depotFile key. Client syntax is rooted at the client
+ *  root, so its tail equals the depot tail; depot syntax is returned as-is; a
+ *  local path is mapped through the client root. */
+function toDepotFile(state, f) {
+  if (f.startsWith(`${state.depotPrefix}/`)) return f
+  if (f.startsWith(`//${state.client}/`)) {
+    const rel = f.slice(`//${state.client}/`.length)
+    return `${state.depotPrefix}/${rel}`
+  }
+  if (f.startsWith('//')) return f // some other depot/client spec: best-effort
+  return depotOf(state, f)
+}
+
 /** Every file on disk under the client root (abs OS paths), skipping VCS/state dirs. */
 function walkDisk(dir, out = []) {
   let entries
@@ -140,13 +163,13 @@ function computeReconcile(state) {
     if (opened.has(depotFile)) continue
     const known = state.files[depotFile]
     if (!known) {
-      results.push({ depotFile, clientFile: toPosix(clientFile), action: 'add' })
+      results.push({ depotFile, clientFile: clientSyntaxOf(state, depotFile), action: 'add' })
     } else {
       const diskContent = readFileSync(clientFile, 'utf8')
       if (diskContent !== known.content) {
         results.push({
           depotFile,
-          clientFile: toPosix(clientFile),
+          clientFile: clientSyntaxOf(state, depotFile),
           action: 'edit',
           rev: String(known.rev),
         })
@@ -159,7 +182,7 @@ function computeReconcile(state) {
     if (!onDisk.has(depotFile)) {
       results.push({
         depotFile,
-        clientFile: toPosix(clientOf(state, depotFile)),
+        clientFile: clientSyntaxOf(state, depotFile),
         action: 'delete',
         rev: String(known.rev),
       })
@@ -219,7 +242,7 @@ function main() {
     case 'opened': {
       const records = Object.entries(state.opened).map(([depotFile, o]) => ({
         depotFile,
-        clientFile: toPosix(clientOf(state, depotFile)),
+        clientFile: clientSyntaxOf(state, depotFile),
         change: o.change,
         action: o.action,
         rev: String(o.rev),
@@ -238,6 +261,42 @@ function main() {
     case 'describe': {
       // Shelved-file probe (`describe -S -s <cl>`): nothing shelved in the fake.
       emit([])
+      return 0
+    }
+
+    case 'fstat': {
+      // Per-file metadata. The diff baseline (BaselineProvider) reads `depotFile`
+      // + `haveRev` from here, then `print`s that revision. Args are file paths
+      // (local, depot, or client syntax).
+      const files = rest.filter((a) => !a.startsWith('-'))
+      const records = []
+      for (const f of files) {
+        const depotFile = toDepotFile(state, f)
+        const known = state.files[depotFile]
+        if (!known) continue
+        records.push({
+          depotFile,
+          clientFile: clientSyntaxOf(state, depotFile),
+          haveRev: String(known.rev),
+          headRev: String(known.rev),
+        })
+      }
+      emit(records)
+      return 0
+    }
+
+    case 'print': {
+      // `print -q <depotFile>#<rev>`: emit the have-revision content (plain stdout,
+      // no -Mj wrapper — the extension reads exec().stdout directly).
+      const spec = rest.filter((a) => !a.startsWith('-'))[0]
+      if (!spec) return 1
+      const depotFile = spec.replace(/#.*$/, '')
+      const known = state.files[depotFile]
+      if (!known) {
+        process.stderr.write(`${spec} - no such file(s).\n`)
+        return 1
+      }
+      process.stdout.write(known.content)
       return 0
     }
 

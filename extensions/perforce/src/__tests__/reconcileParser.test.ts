@@ -56,6 +56,16 @@ describe('parseReconcileRecord', () => {
     const file = parseReconcileRecord({ depotFile: '//depot/x.txt', action: 'edit' })
     expect(file?.clientFile).toBeUndefined()
   })
+
+  // Same client-syntax gotcha as `p4 opened`: `reconcile -n` reports `clientFile`
+  // in client syntax; with a clientRoot it must become the local path.
+  it('translates a client-syntax clientFile onto the client root', () => {
+    const file = parseReconcileRecord(
+      { depotFile: '//depot/Src/a.ts', clientFile: '//aki_ws/Src/a.ts', action: 'edit', rev: '2' },
+      'G:/aki_3.6',
+    )
+    expect(file?.clientFile).toBe('G:/aki_3.6/Src/a.ts')
+  })
 })
 
 describe('parseReconcile', () => {

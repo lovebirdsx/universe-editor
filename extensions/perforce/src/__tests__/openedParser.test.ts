@@ -65,6 +65,32 @@ describe('parseOpenedRecord', () => {
     })
     expect(add?.action).toBe('move/add')
   })
+
+  // Repro for "edited file shows as delete + `//` URI error": real `p4 opened`
+  // reports `clientFile` in client syntax (`//clientName/rel`), not a local path.
+  // With a clientRoot it must be translated to the on-disk path.
+  it('translates a client-syntax clientFile onto the client root', () => {
+    const file = parseOpenedRecord(
+      {
+        depotFile: '//depot/Src/Component/ElementalComponent.ts',
+        clientFile: '//aki_ws/Src/Component/ElementalComponent.ts',
+        change: 'default',
+        action: 'edit',
+        rev: '5',
+      },
+      'G:/aki_3.6',
+    )
+    expect(file?.clientFile).toBe('G:/aki_3.6/Src/Component/ElementalComponent.ts')
+  })
+
+  it('keeps clientFile verbatim when no clientRoot is given', () => {
+    const file = parseOpenedRecord({
+      depotFile: '//depot/a.txt',
+      clientFile: '//aki_ws/a.txt',
+      action: 'edit',
+    })
+    expect(file?.clientFile).toBe('//aki_ws/a.txt')
+  })
 })
 
 describe('parseOpened / parsePending', () => {

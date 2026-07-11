@@ -19,3 +19,29 @@ export function uriToFsPath(uri: { scheme?: string; path?: string }): string | u
   if (/^\/[a-zA-Z]:/.test(p)) p = p.slice(1)
   return p
 }
+
+/**
+ * Convert a Perforce **client-syntax** path to a local filesystem path.
+ *
+ * The `clientFile` field of `p4 opened` and `p4 reconcile -n` is in *client
+ * syntax* — `//<clientName>/relative/path` — NOT a local OS path (only `p4 fstat`
+ * reports `clientFile` as a local path). Feeding that `//…` form to `readFile`
+ * (Windows treats it as a UNC host) or to a `file:` URI (the `//` becomes a bogus
+ * authority) breaks diffs and file-open. Client syntax is always rooted at the
+ * client root by definition, so the conversion is a pure prefix swap: drop
+ * `//<clientName>/` and join the remainder onto `clientRoot`. No `p4 where`
+ * round-trip is needed.
+ *
+ * Values that are already local paths (drive-letter or posix-absolute, i.e. not
+ * starting with `//`) are returned unchanged, so this is safe to apply
+ * unconditionally to any `clientFile`. Output uses forward slashes.
+ */
+export function clientToLocalPath(clientFile: string, clientRoot: string): string {
+  if (!clientFile.startsWith('//')) return clientFile
+  const rest = clientFile.slice(2)
+  const slash = rest.indexOf('/')
+  if (slash === -1) return clientFile // degenerate: `//clientName` with no path
+  const relative = rest.slice(slash + 1)
+  const root = clientRoot.replace(/\\/g, '/').replace(/\/+$/, '')
+  return `${root}/${relative}`
+}

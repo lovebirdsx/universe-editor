@@ -16,7 +16,7 @@
  * double-lists it.
  */
 import type { P4Action } from './changelist.js'
-import { norm } from './pathUtil.js'
+import { clientToLocalPath, norm } from './pathUtil.js'
 
 const KNOWN_ACTIONS: ReadonlySet<string> = new Set([
   'edit',
@@ -53,22 +53,35 @@ export interface ReconcileFile {
 }
 
 /** Parse one `reconcile -n` JSON record into a ReconcileFile, or undefined if it
- *  carries no depot path (informational / non-file record). */
-export function parseReconcileRecord(record: Record<string, unknown>): ReconcileFile | undefined {
+ *  carries no depot path (informational / non-file record).
+ *
+ *  Like `p4 opened`, `reconcile -n` reports `clientFile` in *client syntax*
+ *  (`//clientName/rel`), not a local OS path — `clientRoot` translates it so the
+ *  row's diff/open works; omit it (tests) to keep the value verbatim. */
+export function parseReconcileRecord(
+  record: Record<string, unknown>,
+  clientRoot?: string,
+): ReconcileFile | undefined {
   const depotFile = asString(record['depotFile'])
   if (!depotFile) return undefined
+  const rawClientFile = asString(record['clientFile'])
+  const clientFile =
+    rawClientFile && clientRoot ? clientToLocalPath(rawClientFile, clientRoot) : rawClientFile
   return {
     depotFile,
-    clientFile: asString(record['clientFile']),
+    clientFile,
     action: normalizeAction(asString(record['action'])),
     rev: asString(record['rev']),
   }
 }
 
-export function parseReconcile(records: readonly Record<string, unknown>[]): ReconcileFile[] {
+export function parseReconcile(
+  records: readonly Record<string, unknown>[],
+  clientRoot?: string,
+): ReconcileFile[] {
   const out: ReconcileFile[] = []
   for (const r of records) {
-    const file = parseReconcileRecord(r)
+    const file = parseReconcileRecord(r, clientRoot)
     if (file) out.push(file)
   }
   return out

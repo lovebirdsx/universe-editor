@@ -285,7 +285,7 @@ export class PerforceClient {
     }
 
     this._connection = 'connected'
-    const openedFiles = parseOpened(opened.records)
+    const openedFiles = parseOpened(opened.records, this.root)
     const pending = parsePending(changes.records)
     this._pending = pending
     const groups = groupChangelists(openedFiles, pending, {
@@ -419,7 +419,7 @@ export class PerforceClient {
       this._setReconcileFiles([])
       return
     }
-    const files = parseReconcile(res.records).filter(
+    const files = parseReconcile(res.records, this.root).filter(
       (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
     )
     this._setReconcileFiles(files)
@@ -443,7 +443,7 @@ export class PerforceClient {
     if (this._disposed) return
     let fresh: ReconcileFile[] = []
     if (res.result.exitCode === 0) {
-      fresh = parseReconcile(res.records).filter(
+      fresh = parseReconcile(res.records, this.root).filter(
         (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
       )
     } else {
@@ -901,7 +901,7 @@ export class PerforceClient {
     const json = await this._cache.wrap(P4CacheNs.opened, 'all', async () => {
       const res = await this._p4.execRecords(['opened'])
       if (res.result.exitCode !== 0) return undefined
-      return JSON.stringify(parseOpened(res.records))
+      return JSON.stringify(parseOpened(res.records, this.root))
     })
     return json === undefined ? [] : (JSON.parse(json) as ReturnType<typeof parseOpened>)
   }
