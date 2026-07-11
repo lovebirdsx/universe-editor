@@ -34,11 +34,13 @@ import {
   IEditorResolverService,
   IFileService,
   INotificationService,
+  IStorageService,
   Severity,
+  StorageScope,
   URI,
   localize,
 } from '@universe-editor/platform'
-import { FileSymlink } from 'lucide-react'
+import { FileSymlink, Globe } from 'lucide-react'
 import {
   PerforceGraphCommands,
   type P4GraphChangeDto,
@@ -77,6 +79,9 @@ const PENDING_ID = '*'
 const AUTO_REFRESH_DEBOUNCE = 500
 /** Minimum width (px) a draggable column can shrink to. */
 const MIN_COL_WIDTH = 60
+
+/** Storage key for the per-workspace "whole repo vs opened folder" scope toggle. */
+const WHOLE_REPO_KEY = 'perforceGraph.wholeRepo'
 
 const PALETTE = ['#0085d9']
 
@@ -244,6 +249,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   const editorResolverService = useService(IEditorResolverService)
   const fileService = useService(IFileService)
   const notification = useService(INotificationService)
+  const storage = useService(IStorageService)
   const [result, setResult] = useState<P4GraphLoadResult | null>(
     () => perforceGraphViewState.result,
   )
@@ -276,9 +282,10 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   )
   const [searchQuery, setSearchQuery] = useState(() => perforceGraphViewState.searchQuery)
   const deferredQuery = useDeferredValue(searchQuery)
+  const [wholeRepo, setWholeRepo] = useState(() => perforceGraphViewState.wholeRepo)
 
-  const queryRef = useRef<P4GraphLoadOptions>({ maxChanges: limit })
-  queryRef.current = { maxChanges: limit }
+  const queryRef = useRef<P4GraphLoadOptions>({ maxChanges: limit, wholeRepo })
+  queryRef.current = { maxChanges: limit, wholeRepo }
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const detailBodyRef = useRef<HTMLDivElement>(null)
@@ -324,6 +331,25 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   useEffect(() => {
     perforceGraphViewState.searchQuery = searchQuery
   }, [searchQuery])
+  useEffect(() => {
+    perforceGraphViewState.wholeRepo = wholeRepo
+  }, [wholeRepo])
+
+  // Persist the scope toggle per-workspace so it's remembered across restarts.
+  const wholeRepoLoadedRef = useRef(false)
+  useEffect(() => {
+    void storage.get<boolean>(WHOLE_REPO_KEY, StorageScope.WORKSPACE).then((stored) => {
+      if (typeof stored === 'boolean' && stored !== perforceGraphViewState.wholeRepo) {
+        setWholeRepo(stored)
+      }
+      wholeRepoLoadedRef.current = true
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => {
+    if (!wholeRepoLoadedRef.current) return
+    void storage.set(WHOLE_REPO_KEY, wholeRepo, StorageScope.WORKSPACE)
+  }, [wholeRepo, storage])
 
   const load = useCallback(() => {
     let cancelled = false
@@ -415,6 +441,17 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     }
     revalidate()
   }, [limit, revalidate])
+
+  // Switching scope changes the entire result set, so do a full (loading) reload
+  // rather than a silent revalidate. Skip the initial mount.
+  const firstScope = useRef(true)
+  useEffect(() => {
+    if (firstScope.current) {
+      firstScope.current = false
+      return
+    }
+    return load()
+  }, [wholeRepo, load])
 
   const onSelectRepo = useCallback(
     (root: string) => {
@@ -828,6 +865,20 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
             ))}
           </select>
         )}
+        <button
+          type="button"
+          className={`${styles['toolBtn']} ${wholeRepo ? styles['toolBtnActive'] : ''}`}
+          onClick={() => setWholeRepo((v) => !v)}
+          title={
+            wholeRepo
+              ? localize('perforceGraph.scope.showFolder', 'Show current folder changes only')
+              : localize('perforceGraph.scope.showWholeRepo', 'Show whole repository changes')
+          }
+          aria-label={localize('perforceGraph.scope.toggle', 'Toggle repository scope')}
+          aria-pressed={wholeRepo}
+        >
+          <Globe size={14} />
+        </button>
         <button
           type="button"
           className={styles['toolBtn']}

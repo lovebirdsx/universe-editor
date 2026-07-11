@@ -42,6 +42,12 @@ export interface P4GraphRepoDto {
 export interface P4GraphLoadOptions {
   /** Upper bound on changes returned. */
   maxChanges?: number
+  /**
+   * When true, list changes across the whole client depot (`//...`); otherwise
+   * (the default) scope to the opened workspace folder so the graph mirrors what
+   * the user actually has open.
+   */
+  wholeRepo?: boolean
 }
 
 /** Result of `perforce-graph.getChanges`. */

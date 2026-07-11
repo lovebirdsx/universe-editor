@@ -842,16 +842,17 @@ export class PerforceClient {
   }
 
   /**
-   * Submitted-changelist history for the graph, newest-first, scoped to this
-   * client's depot view (`//...`). Each change's synthetic parent is the
+   * Submitted-changelist history for the graph, newest-first, scoped to `scope`
+   * (a p4 filespec — the opened workspace folder as `<path>/...` by default, or
+   * the whole client depot `//...`). Each change's synthetic parent is the
    * next-older change in the list, so the swim-lane layout draws a single lane.
    * `pendingCount` is the number of currently open files (the synthetic pending
    * node). Returns null on connection failure so the renderer shows "unavailable".
    */
-  async getGraphChanges(maxChanges: number): Promise<GraphChangeMeta[] | null> {
+  async getGraphChanges(maxChanges: number, scope: string): Promise<GraphChangeMeta[] | null> {
     const json = await this._cache.wrap(
       P4CacheNs.changesSubmitted,
-      String(maxChanges),
+      `${scope}:${maxChanges}`,
       async () => {
         const res = await this._p4.execRecords([
           'changes',
@@ -860,7 +861,7 @@ export class PerforceClient {
           '-l',
           '-m',
           String(maxChanges + 1),
-          '//...',
+          scope,
         ])
         if (res.result.exitCode !== 0) return undefined
         return JSON.stringify(parseChangesList(res.records))

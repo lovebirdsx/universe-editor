@@ -12,8 +12,10 @@ import {
   IEditorResolverService,
   IFileService,
   INotificationService,
+  IStorageService,
   InstantiationService,
   ServiceCollection,
+  StorageScope,
   observableValue,
 } from '@universe-editor/platform'
 import {
@@ -121,22 +123,34 @@ function makeNotificationService(): INotificationService {
   } as unknown as INotificationService
 }
 
+function makeStorageService(): IStorageService {
+  return {
+    _serviceBrand: undefined,
+    get: vi.fn().mockResolvedValue(undefined),
+    set: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
+    onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
+  } as unknown as IStorageService
+}
+
 function renderEditor() {
   const commandService = makeCommandService()
   const editorResolverService = makeEditorResolverService()
+  const storageService = makeStorageService()
   const services = new ServiceCollection()
   services.set(ICommandService, commandService)
   services.set(IScmService, makeScmService())
   services.set(IFileService, makeFileService())
   services.set(IEditorResolverService, editorResolverService)
   services.set(INotificationService, makeNotificationService())
+  services.set(IStorageService, storageService)
   const instantiation = new InstantiationService(services)
   const utils = render(
     <ServicesContext.Provider value={instantiation}>
       <PerforceGraphEditor input={{} as never} />
     </ServicesContext.Provider>,
   )
-  return { commandService, editorResolverService, ...utils }
+  return { commandService, editorResolverService, storageService, ...utils }
 }
 
 async function flush(): Promise<void> {
@@ -152,6 +166,7 @@ beforeEach(() => {
   perforceGraphViewState.pendingFiles = null
   perforceGraphViewState.repos = []
   perforceGraphViewState.selectedRepo = null
+  perforceGraphViewState.wholeRepo = false
 })
 
 afterEach(() => {
@@ -161,6 +176,7 @@ afterEach(() => {
   perforceGraphViewState.pendingFiles = null
   perforceGraphViewState.repos = []
   perforceGraphViewState.selectedRepo = null
+  perforceGraphViewState.wholeRepo = false
   scmViewState.setSelectedRepo(undefined)
   vi.clearAllMocks()
 })
@@ -173,6 +189,31 @@ describe('PerforceGraphEditor', () => {
     expect(screen.getByText('Fix widget')).toBeTruthy()
     expect(screen.getByText('Initial')).toBeTruthy()
     expect(screen.getByText('#4521')).toBeTruthy()
+  })
+
+  it('defaults to the opened folder and toggles to whole-repo scope', async () => {
+    const { commandService, storageService } = renderEditor()
+    await flush()
+
+    // Initial load scopes to the opened folder (wholeRepo omitted/false).
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      PerforceGraphCommands.getChanges,
+      expect.objectContaining({ wholeRepo: false }),
+    )
+
+    fireEvent.click(screen.getByLabelText('Toggle repository scope'))
+    await flush()
+
+    // Flipping the toggle reloads with the whole-repo scope and persists it.
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      PerforceGraphCommands.getChanges,
+      expect.objectContaining({ wholeRepo: true }),
+    )
+    expect(storageService.set).toHaveBeenCalledWith(
+      'perforceGraph.wholeRepo',
+      true,
+      StorageScope.WORKSPACE,
+    )
   })
 
   it('expands a change detail and opens a file diff', async () => {
@@ -237,6 +278,7 @@ describe('PerforceGraphEditor', () => {
     services.set(IFileService, makeFileService())
     services.set(IEditorResolverService, makeEditorResolverService())
     services.set(INotificationService, makeNotificationService())
+    services.set(IStorageService, makeStorageService())
     render(
       <ServicesContext.Provider value={new InstantiationService(services)}>
         <PerforceGraphEditor input={{} as never} />

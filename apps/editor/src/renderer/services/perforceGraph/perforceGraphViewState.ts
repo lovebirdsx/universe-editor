@@ -50,6 +50,9 @@ export interface PerforceGraphViewState {
   repos: P4GraphRepoDto[]
   /** Root of the currently targeted client, or null for the default. */
   selectedRepo: string | null
+  /** Whether to list changes across the whole client depot instead of only the
+   *  opened workspace folder. Persisted per-workspace; see the editor. */
+  wholeRepo: boolean
 }
 
 /** Page size for the initial load and each "Load more". */
@@ -72,6 +75,7 @@ export const perforceGraphViewState: PerforceGraphViewState = {
   },
   repos: [],
   selectedRepo: null,
+  wholeRepo: false,
 }
 
 /** Stable key for the current selection, used to scope collapse state. */

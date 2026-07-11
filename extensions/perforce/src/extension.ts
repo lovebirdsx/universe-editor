@@ -471,6 +471,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
       const DEFAULT_MAX = 300
 
+      // Default graph scope: the opened workspace folder as a p4 filespec
+      // (`<path>/...`), so the graph mirrors what the user actually has open
+      // rather than the whole client depot. `wholeRepo` widens it to `//...`.
+      const workspaceScope = `${root.replace(/[/\\]+$/, '')}/...`
+
       return [
         commands.registerCommand('perforce-graph.getRepos', () =>
           mgr.all.map((c) => ({ root: c.root, name: c.clientName })),
@@ -481,12 +486,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
           return true
         }),
         commands.registerCommand('perforce-graph.getChanges', async (...args: unknown[]) => {
-          const opts = (args[0] ?? {}) as { maxChanges?: number }
+          const opts = (args[0] ?? {}) as { maxChanges?: number; wholeRepo?: boolean }
           const max = opts.maxChanges ?? DEFAULT_MAX
+          const scope = opts.wholeRepo ? '//...' : workspaceScope
           const target = graphClient()
           if (!target) return null
           const [changes, pendingCount] = await Promise.all([
-            target.getGraphChanges(max),
+            target.getGraphChanges(max, scope),
             target.getPendingCount(),
           ])
           if (!changes) return null
