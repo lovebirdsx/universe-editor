@@ -91,6 +91,8 @@ export interface P4CacheOptions {
   readonly enabled: boolean
   readonly workspaceTtlMs: number
   readonly disk?: P4CacheDiskBackend
+  /** Injectable clock for TTL logic; defaults to `Date.now`. Tests advance it. */
+  readonly now?: () => number
 }
 
 export class PerforceClient {
@@ -147,7 +149,7 @@ export class PerforceClient {
     private readonly _log?: (msg: string) => void,
   ) {
     this._p4 = new P4Service(root, gate, connection, _log)
-    this._cache = new P4Cache(Date.now, cacheOptions.disk, cacheOptions.enabled)
+    this._cache = new P4Cache(cacheOptions.now ?? Date.now, cacheOptions.disk, cacheOptions.enabled)
     registerP4CacheNamespaces(this._cache, cacheOptions.workspaceTtlMs)
     this._baseline = new BaselineProvider(this._p4, this._cache)
     this._sc = scm.createSourceControl('perforce', `Perforce: ${_clientName}`, root)
@@ -907,8 +909,13 @@ export class PerforceClient {
   /**
    * Full detail of one submitted change: metadata + changed files with resolved
    * local paths (via `p4 where`). Returns null when the change can't be described.
-   * The describe half is immutable (submitted changes never change) and cached as
-   * such; local paths come from the separately-cached (ttl) `where` mapping.
+   *
+   * A submitted change never changes, so `describe` is cached immutably (and
+   * persisted across sessions). The depot→local resolution is separately cached
+   * immutably per change id, but in memory only — the mapping depends on the
+   * client view, which can differ across sessions, so it isn't persisted. This
+   * keeps reopening a change a zero-round-trip cache hit within a session
+   * (previously the `where` half re-ran on every open once its short TTL lapsed).
    */
   async getGraphChangeDetails(
     id: string,
@@ -918,13 +925,32 @@ export class PerforceClient {
       if (res.result.exitCode !== 0) return undefined
       const record = res.records[0]
       if (!record) return undefined
-      const parsed = parseChangeDescribe(record)
-      return parsed ? JSON.stringify(parsed) : undefined
+      const detail = parseChangeDescribe(record)
+      return detail ? JSON.stringify(detail) : undefined
     })
     if (json === undefined) return null
     const detail = JSON.parse(json) as GraphDescribe
-    const localPaths = await this._whereLocalPaths(detail.files.map((f) => f.depotFile))
+    const localPaths = await this._changeLocalPaths(
+      id,
+      detail.files.map((f) => f.depotFile),
+    )
     return { ...detail, localPaths }
+  }
+
+  /** Depot→local resolution for one submitted change's files, cached immutably
+   *  (in memory, not persisted) per change id so reopening the change never
+   *  re-runs `p4 where`. A submitted change's file set is fixed, so the mapping is
+   *  stable for the session. */
+  private async _changeLocalPaths(
+    id: string,
+    depotFiles: readonly string[],
+  ): Promise<Map<string, string>> {
+    if (depotFiles.length === 0) return new Map()
+    const json = await this._cache.wrap(P4CacheNs.changeDetailPaths, id, async () => {
+      const map = await this._whereLocalPaths(depotFiles)
+      return JSON.stringify([...map])
+    })
+    return json === undefined ? new Map() : new Map(JSON.parse(json) as [string, string][])
   }
 
   /** Resolve depot → local paths for a batch of files (`p4 where`). Cached (ttl)

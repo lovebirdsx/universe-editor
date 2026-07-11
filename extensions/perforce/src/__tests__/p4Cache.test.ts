@@ -144,6 +144,19 @@ describe('P4Cache', () => {
     await cache.wrap('mut', 'k', async () => 'v')
     expect(disk.store.size).toBe(0)
   })
+
+  it('an immutable namespace with persist:false caches in memory but never touches disk', async () => {
+    const disk = fakeDisk()
+    const cache = new P4Cache(Date.now, disk)
+    cache.register('imm', { kind: 'immutable', persist: false })
+    let fetches = 0
+    // Cached in memory: a second read is a hit (no refetch).
+    expect(await cache.wrap('imm', 'k', async () => `v${++fetches}`)).toBe('v1')
+    expect(await cache.wrap('imm', 'k', async () => `v${++fetches}`)).toBe('v1')
+    expect(fetches).toBe(1)
+    // But nothing was written to disk.
+    expect(disk.store.size).toBe(0)
+  })
 })
 
 describe('registerP4CacheNamespaces', () => {

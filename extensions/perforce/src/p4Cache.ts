@@ -21,7 +21,11 @@
 
 /** How long an entry in a namespace stays valid. */
 export type P4CachePolicy =
-  | { readonly kind: 'immutable' }
+  /** Content-addressed, never expires. `persist` (default true) also mirrors it to
+   *  the {@link P4CacheDisk} so it survives sessions; set false for data that is
+   *  immutable within a session but not across them (e.g. a depot→local mapping
+   *  that depends on the client view). */
+  | { readonly kind: 'immutable'; readonly persist?: boolean }
   | { readonly kind: 'ttl'; readonly ttlMs: number }
 
 /** Persistent backend for immutable entries. Sync-shaped reads come from an
@@ -121,8 +125,9 @@ export class P4Cache {
       if (entry.expiresAt === undefined || entry.expiresAt > this._now()) return entry.value
       entries!.delete(key) // expired
     }
-    // Immutable entries can be served from the persistent backend on a cold cache.
-    if (policy.kind === 'immutable' && this._disk) {
+    // Immutable entries can be served from the persistent backend on a cold cache
+    // (unless the namespace opted out of persistence).
+    if (policy.kind === 'immutable' && policy.persist !== false && this._disk) {
       const disk = this._disk.get(ns, key)
       if (disk !== undefined) {
         this._put(ns, key, { value: disk, expiresAt: undefined })
@@ -135,7 +140,8 @@ export class P4Cache {
   private _write(ns: string, key: string, value: string, policy: P4CachePolicy): void {
     const expiresAt = policy.kind === 'ttl' ? this._now() + policy.ttlMs : undefined
     this._put(ns, key, { value, expiresAt })
-    if (policy.kind === 'immutable' && this._disk) this._disk.set(ns, key, value)
+    if (policy.kind === 'immutable' && policy.persist !== false && this._disk)
+      this._disk.set(ns, key, value)
   }
 
   private _put(ns: string, key: string, entry: Entry): void {
@@ -157,6 +163,12 @@ export const P4CacheNs = {
   print: 'print',
   /** `where <depotFiles>` — client-view mapping (stable while the view is). */
   where: 'where',
+  /** Resolved depot→local paths for one *submitted* change's files, keyed by
+   *  change id. Immutable within a session (a submitted change's file set never
+   *  changes), so reopening the change never re-runs `p4 where` — but NOT
+   *  persisted, since the mapping depends on the client view which can differ
+   *  across sessions. */
+  changeDetailPaths: 'changeDetailPaths',
   /** `opened` — files currently open in the workspace. */
   opened: 'opened',
   /** `changes -s submitted -m N //...` — the graph history list (grows). */
@@ -170,6 +182,7 @@ export type P4CacheNamespace = (typeof P4CacheNs)[keyof typeof P4CacheNs]
 export function registerP4CacheNamespaces(cache: P4Cache, workspaceTtlMs: number): void {
   cache.register(P4CacheNs.describe, { kind: 'immutable' })
   cache.register(P4CacheNs.print, { kind: 'immutable' })
+  cache.register(P4CacheNs.changeDetailPaths, { kind: 'immutable', persist: false })
   cache.register(P4CacheNs.where, { kind: 'ttl', ttlMs: Math.max(workspaceTtlMs, 30_000) })
   cache.register(P4CacheNs.opened, { kind: 'ttl', ttlMs: workspaceTtlMs })
   cache.register(P4CacheNs.changesSubmitted, {
