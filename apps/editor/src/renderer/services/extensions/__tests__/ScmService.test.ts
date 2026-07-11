@@ -5,7 +5,13 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import type { IExtHostScm } from '@universe-editor/extensions-common'
-import { ScmService } from '../ScmService.js'
+import {
+  ScmService,
+  encodeScmProviderIds,
+  resolveScmProviderId,
+  resolveScmProviderIds,
+  type IScmSourceControlModel,
+} from '../ScmService.js'
 
 function make(): { scm: ScmService; extHost: IExtHostScm; onChange: ReturnType<typeof vi.fn> } {
   const scm = new ScmService()
@@ -66,5 +72,38 @@ describe('ScmService', () => {
 
     await scm.$unregisterSourceControl(0)
     expect(scm.sourceControls.get()).toHaveLength(0)
+  })
+})
+
+describe('resolveScmProviderId(s)', () => {
+  const model = (id: string, rootUri: string): IScmSourceControlModel =>
+    ({ id, rootUri }) as IScmSourceControlModel
+
+  it('resolveScmProviderId picks the single most-specific owner', () => {
+    const controls = [model('perforce', '/depot/Client'), model('git', '/depot/Client/Src/Ue')]
+    expect(resolveScmProviderId(controls, '/depot/Client/Src/Ue/main.ts')).toBe('git')
+    expect(resolveScmProviderId(controls, '/depot/Client/other/x.ts')).toBe('perforce')
+    expect(resolveScmProviderId(controls, '/elsewhere/x.ts')).toBeUndefined()
+  })
+
+  it('resolveScmProviderIds returns every owner (nested git inside a p4 workspace)', () => {
+    const controls = [model('perforce', '/depot/Client'), model('git', '/depot/Client/Src/Ue')]
+    // The reported bug: a file under the nested git repo is owned by BOTH.
+    expect(resolveScmProviderIds(controls, '/depot/Client/Src/Ue/main.ts')).toEqual([
+      'perforce',
+      'git',
+    ])
+    // A file outside the git repo is owned by perforce only.
+    expect(resolveScmProviderIds(controls, '/depot/Client/other/x.ts')).toEqual(['perforce'])
+    expect(resolveScmProviderIds(controls, '/elsewhere/x.ts')).toEqual([])
+  })
+
+  it('encodeScmProviderIds pipe-delimits for when-clause membership matching', () => {
+    expect(encodeScmProviderIds(['perforce', 'git'])).toBe('|perforce|git|')
+    expect(encodeScmProviderIds([])).toBe('')
+    // The encoded value must match a per-provider membership regex.
+    expect(/\|perforce\|/.test(encodeScmProviderIds(['perforce', 'git']))).toBe(true)
+    expect(/\|git\|/.test(encodeScmProviderIds(['perforce', 'git']))).toBe(true)
+    expect(/\|perforce\|/.test(encodeScmProviderIds(['git']))).toBe(false)
   })
 })

@@ -179,7 +179,7 @@
         { "command": "git.unstage", "when": "scmProvider == git && scmResourceGroup == index", "group": "inline", "icon": "remove" }
       ],
       "editor/title": [
-        { "command": "git.openChange", "when": "resourceScheme == file && scmActiveResourceHasChanges && !isInDiffEditor", "group": "navigation@2", "icon": "compare-changes" }
+        { "command": "git.openChange", "when": "resourceScmProvider =~ /\\|git\\|/ && scmActiveResourceHasChanges && !isInDiffEditor", "group": "navigation@2", "icon": "compare-changes" }
       ]
     },
     "keybindings": [

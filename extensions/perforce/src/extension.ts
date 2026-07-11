@@ -171,11 +171,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
     // Collect (reconcile) a file's working-tree change into open state. From an
     // SCM "changes to reconcile" row: `{ resourceUri }`; from explorer/editor:
-    // the active file. Enables discovery so the group keeps tracking drift.
+    // the active file. A directory target (explorer right-click on a folder)
+    // recurses via p4's `<dir>/...` syntax so the whole subtree is collected.
+    // Enables discovery so the group keeps tracking drift.
     commands.registerCommand('perforce.reconcile', async (...args: unknown[]) => {
       const path = await resolveTargetPath(args[0])
       if (!path) return
-      await mgr.resolveClient({ resourceUri: path })?.reconcile([path])
+      const isDirectory = (args[0] as { isDirectory?: boolean } | undefined)?.isDirectory === true
+      const target = isDirectory ? `${path.replace(/[/\\]+$/, '')}/...` : path
+      await mgr.resolveClient({ resourceUri: path })?.reconcile([target])
     }),
 
     // Collect every discovered reconcile candidate at once (group title action).

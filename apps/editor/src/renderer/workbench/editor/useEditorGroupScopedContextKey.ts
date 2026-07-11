@@ -22,6 +22,11 @@ import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { matchSchemasForUri } from '../../services/preferences/schemaMatch.js'
 import { IDirtyDiffNavigationService } from '../../services/scm/DirtyDiffNavigationService.js'
 import { IScmDecorationsService } from '../../services/scm/ScmDecorationsService.js'
+import {
+  IScmService,
+  encodeScmProviderIds,
+  resolveScmProviderIds,
+} from '../../services/extensions/ScmService.js'
 import { useOptionalService, useService } from '../useService.js'
 
 export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKeyService {
@@ -29,6 +34,7 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
   const uriIdentity = useService(IUriIdentityService)
   const dirtyDiff = useOptionalService(IDirtyDiffNavigationService)
   const scmDecorations = useOptionalService(IScmDecorationsService)
+  const scmService = useOptionalService(IScmService)
   const scopedRef = useRef<IScopedContextKeyService | null>(null)
   const [, forceUpdate] = useReducer((n: number) => n + 1, 0)
 
@@ -65,6 +71,12 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
         dirtyDiff.regions.length > 0
       const hasScmChanges =
         active instanceof FileEditorInput && scmDecorations?.getFile(active.resource) !== undefined
+      const scmProvider =
+        active instanceof FileEditorInput && scmService
+          ? encodeScmProviderIds(
+              resolveScmProviderIds(scmService.sourceControls.get(), active.resource.fsPath),
+            )
+          : ''
       s.set('activeEditorLanguageId', active instanceof FileEditorInput ? active.language : '')
       s.set('hasActiveEditor', active !== undefined)
       s.set('isInDiffEditor', active instanceof DiffEditorInput)
@@ -74,6 +86,7 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
       )
       s.set('activeEditorGroupLocked', group.isLocked)
       s.set('resourceScheme', resource?.scheme ?? '')
+      s.set('resourceScmProvider', scmProvider)
       s.set('scmActiveResourceHasChanges', hasDirtyDiffChanges || hasScmChanges)
       s.set(
         'activeEditorHasJsonSchema',
@@ -101,6 +114,15 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
               sync()
             })
           : { dispose: () => {} },
+        // SCM providers register asynchronously after the extension host connects;
+        // re-evaluate resourceScmProvider so provider-gated title actions appear
+        // once the owning provider (git / perforce) shows up.
+        scmService
+          ? autorun((reader) => {
+              scmService.sourceControls.read(reader)
+              sync()
+            })
+          : { dispose: () => {} },
         // Remote schemas (e.g. claude-helper's http schema) register asynchronously
         // after the file opens — re-evaluate so the icon appears once they land.
         JSONContributionRegistry.onDidChangeContributions(sync),
@@ -111,7 +133,7 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
       scopedRef.current?.dispose()
       scopedRef.current = null
     }
-  }, [dirtyDiff, group, rootCtx, scmDecorations, uriIdentity])
+  }, [dirtyDiff, group, rootCtx, scmDecorations, scmService, uriIdentity])
 
   return scopedRef.current
 }

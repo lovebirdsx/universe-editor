@@ -111,7 +111,12 @@ dirty-diff gutter 与 inline blame 原本硬编码 `git.*` 命令；已抽象为
 
 ## 菜单 & when 子句（`package.json`）
 
-- SCM 视图内菜单用 `scmProvider == perforce` 门控（**`scmProvider` 只在 SCM 视图作用域有效，explorer/editor 菜单用不了它**——这是踩过的坑）。**explorer/editor 菜单改用 `resourceScheme == file` 门控**（可选叠 `!explorerResourceIsFolder` / `scmActiveResourceHasChanges` / `!isInDiffEditor`）；p4 的签出/新增/删除/打开更改/收集就是这么进 explorer 右键 + editor 标题栏的，命令 handler 复用 SCM 版同一个。
+- SCM 视图内菜单用 `scmProvider == perforce` 门控（**`scmProvider` 只在 SCM 视图作用域有效，explorer/editor 菜单用不了它**——这是踩过的坑）。**explorer/editor 菜单用 `resourceScmProvider =~ /\|perforce\|/` 门控**（可选叠 `!explorerResourceIsFolder` / `scmActiveResourceHasChanges` / `!isInDiffEditor`）；p4 的签出/新增/删除/打开更改/收集就是这么进 explorer 右键 + editor 标题栏的，命令 handler 复用 SCM 版同一个。
+  - ⚠️ **别用 `resourceScheme == file` 门控**（曾踩过：它对**任何**文件都成立 → 打开非 p4 仓库时 p4 菜单项照样冒出来，且 git/p4 的 `openChange` 在对方仓库互相串台）。`resourceScmProvider` 是**通用**「该资源归属哪些 SCM provider」context key，与 dirty-diff/blame 宿主泛化同源，app 核心不写死单一 SCM 名。
+  - ⚠️⚠️ **值是「归属集合」不是单个 id**（第二次踩过：git 仓库嵌套在 p4 workspace 里时，同一文件**同时**归属 git+p4）。曾用 `resolveScmProviderId`（最长前缀，只返回**一个**最具体 owner）→ 嵌套 git 根前缀更长 → 值 = `git` → p4 菜单 `== perforce` 判定失败**消失**。修法：`resolveScmProviderIds`（返回**全部** owner）+ `encodeScmProviderIds`（编码成两端带竖线的 `|git|perforce|`）→ 门控用**成员正则** `=~ /\|perforce\|/`（两端竖线防 `perforce` 误配 `perforce-graph`）。`resolveScmProviderId`（单数）**保留**给 dirty-diff/blame 的命令路由（那里就要最具体的单个 owner），别混用。
+  - ⚠️ **package.json 里正则要双反斜杠**：JSON 字符串 `"...=~ /\\|perforce\\|/..."` → 解析后 `=~ /\|perforce\|/`（含反斜杠）→ scanner 正确读成「字面竖线」。漏写反斜杠 → `/|perforce|/` 是**空 alternation 匹配一切**，门控恒真（静默失效，测试务必覆盖「仅 git / 空归属 → 隐藏」）。
+  - **key 由谁设**：explorer 右键 = `ExplorerContextMenu.tsx`（scoped ctx-key，`encodeScmProviderIds(resolveScmProviderIds(...))`）；editor 标题栏 = `useEditorGroupScopedContextKey.ts`（per-group scoped，随活动编辑器 + `scmService.sourceControls` autorun 重算）。两处都 `useOptionalService(IScmService)`，非 file scheme / 无归属 → 空串。给 git 侧 `editor/title` 也补了 `resourceScmProvider =~ /\|git\|/` 对称门控。测试见 `ScmService.test.ts`（resolveScmProviderIds 嵌套用例 + encode）与 `ExplorerContextMenu.test.tsx`（嵌套 git-in-p4 显示 p4 项）。
+- **目录级命令**：explorer 右键传 `{ resource, isDirectory }`（见 `ExplorerContextMenu` args）；handler 读 `isDirectory` 决定是否把路径转成 p4 递归语法 `<dir>/...`（见 `extension.ts` `perforce.reconcile`：目录 → `${path}/...`，复用同一命令 + 同一「收集改动」标题，不新增命令）。要支持目录版的其它 p4 操作照此办：菜单项去掉 `!explorerResourceIsFolder`，handler 分叉 `<dir>/...`。
 - 行选择靠 `scmResourceState`（单字母，来自 `p4Decoration.ts` `contextValue`：E/A/D/B/I/M，未 resolve=U，搁置=S，**待收集=RC**）。组选择靠 `scmResourceGroup == reconcile`（固定组）/ `=~ /^cl:/` / `=~ /^shelved:/`（正则）。
 - 加行内动作：`scm/resourceState/context` `group: "inline@N"`；组动作：`scm/resourceGroup/context`；标题栏：`scm/title`。
 - **explorer/editor 命令传参坑**：explorer 右键把 `resource` 作为 **`UriComponents`**（`{$mid,scheme,path}`）传，**跨 RPC 丢 `fsPath` getter**（`.fsPath` 读出空串）→ 用 `pathUtil.ts` `uriToFsPath(resource)` 从 scheme+path 重建路径（见 `extension.ts` `resolveTargetPath`），别读 `.fsPath`。
@@ -166,7 +171,7 @@ pnpm check                                       # lint+typecheck+全测+docs:ch
 - `extensions/perforce/src/{openedParser,fstatParser,shelveParser,blameSource,changeSpec}.ts` —— 领域解析（各带 __tests__）
 - `extensions/perforce/src/{baselineProvider,p4Decoration,p4Error,autoEdit,p4StatusBar,concurrency,pathUtil,nls}.ts`
 - `packages/extensions-common/src/{dirtyDiff,blame}.ts` —— provider capability 契约（宿主泛化）
-- `apps/editor/src/renderer/services/extensions/ScmService.ts` —— `resolveScmProviderId` / `scmProviderPathKey`
+- `apps/editor/src/renderer/services/extensions/ScmService.ts` —— `resolveScmProviderId`（单个最具体 owner，dirty-diff/blame 路由）/ `resolveScmProviderIds`（全部 owner，菜单门控）/ `encodeScmProviderIds`（`|a|b|` 成员编码）/ `scmProviderPathKey`
 - `apps/editor/src/renderer/contributions/{DirtyDiffContribution,GitBlameContribution}.ts` —— 渲染侧消费 capability + `CommandsRegistry.getCommand` 能力探测
 - `extensions/git/` —— 对照样板（Repository/RepositoryManager/gitError/nls 都是 p4 的镜像来源）
 - 相关 skill：`create-extension`（插件通用套路）、`dirty-diff-inline-peek`（内联 diff peek UI）

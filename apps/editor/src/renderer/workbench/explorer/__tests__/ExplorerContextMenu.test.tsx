@@ -5,16 +5,25 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
+import type { ReactElement } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   CommandsRegistry,
   ContextKeyService,
+  ICommandService,
+  InstantiationService,
   MenuId,
   MenuRegistry,
+  ServiceCollection,
   URI,
-  type ICommandService,
+  observableValue,
 } from '@universe-editor/platform'
 import type { ExplorerTreeService } from '../../../services/explorer/ExplorerTreeService.js'
+import {
+  IScmService,
+  type IScmSourceControlModel,
+} from '../../../services/extensions/ScmService.js'
+import { ServicesContext } from '../../useService.js'
 import { ExplorerContextMenu } from '../ExplorerContextMenu.js'
 
 class FakeCommandService {
@@ -28,6 +37,37 @@ class FakeCommandService {
 }
 
 afterEach(() => cleanup())
+
+/** Minimal IScmSourceControlModel: provider gating only reads id + rootUri. */
+function scmModel(id: string, rootUri: string): IScmSourceControlModel {
+  return {
+    handle: 0,
+    id,
+    label: id,
+    rootUri,
+    inputValue: observableValue('v', ''),
+    inputPlaceholder: observableValue('p', ''),
+    count: observableValue<number | undefined>('c', undefined),
+    acceptCommand: observableValue('ac', undefined),
+    acceptActions: observableValue('aa', undefined),
+    groups: observableValue('g', []),
+  }
+}
+
+/** Render `node` inside a DI container exposing an IScmService with `controls`. */
+function renderWithScm(
+  controls: readonly IScmSourceControlModel[],
+  node: ReactElement,
+): ReturnType<typeof render> {
+  const scmService = {
+    _serviceBrand: undefined,
+    sourceControls: observableValue('scm', controls),
+  } as unknown as IScmService
+  const services = new ServiceCollection()
+  services.set(IScmService, scmService as never)
+  const instantiation = new InstantiationService(services)
+  return render(<ServicesContext.Provider value={instantiation}>{node}</ServicesContext.Provider>)
+}
 
 describe('ExplorerContextMenu', () => {
   it('clicking a menu item passes target/resource/parent args for a file target', () => {
@@ -157,6 +197,95 @@ describe('ExplorerContextMenu', () => {
         />,
       )
       expect(screen.getByText('Open for Edit')).toBeDefined()
+    } finally {
+      contextKeyService.dispose()
+      menuDisposable.dispose()
+      cmdDisposable.dispose()
+    }
+  })
+
+  it('gates provider-specific items on resourceScmProvider (shown when the file is owned)', () => {
+    const cmdId = 'perforce.edit'
+    const cmdDisposable = CommandsRegistry.registerCommand(cmdId, () => {}, {
+      description: 'Open for Edit (Perforce)',
+    })
+    const menuDisposable = MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+      command: cmdId,
+      title: 'Open for Edit (Perforce)',
+      when: 'resourceScmProvider =~ /\\|perforce\\|/ && !explorerResourceIsFolder',
+    })
+    const contextKeyService = new ContextKeyService()
+
+    try {
+      const commandService = new FakeCommandService()
+      const root = URI.file('/ws')
+      const file = URI.joinPath(root, 'main.ts')
+
+      // A perforce provider whose root contains the file → item visible.
+      const owned = renderWithScm(
+        [scmModel('perforce', root.fsPath)],
+        <ExplorerContextMenu
+          state={{ x: 0, y: 0, target: { resource: file, isDirectory: false } }}
+          rootResource={root}
+          commandService={commandService as unknown as ICommandService}
+          contextKeyService={contextKeyService}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByText('Open for Edit (Perforce)')).toBeDefined()
+      owned.unmount()
+
+      // Only a git provider present → the file is not perforce-owned → hidden.
+      renderWithScm(
+        [scmModel('git', root.fsPath)],
+        <ExplorerContextMenu
+          state={{ x: 0, y: 0, target: { resource: file, isDirectory: false } }}
+          rootResource={root}
+          commandService={commandService as unknown as ICommandService}
+          contextKeyService={contextKeyService}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.queryByText('Open for Edit (Perforce)')).toBeNull()
+    } finally {
+      contextKeyService.dispose()
+      menuDisposable.dispose()
+      cmdDisposable.dispose()
+    }
+  })
+
+  it('shows Perforce items for a file in a git repo nested inside a Perforce workspace', () => {
+    const cmdId = 'perforce.edit'
+    const cmdDisposable = CommandsRegistry.registerCommand(cmdId, () => {}, {
+      description: 'Open for Edit (Perforce)',
+    })
+    const menuDisposable = MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+      command: cmdId,
+      title: 'Open for Edit (Perforce)',
+      when: 'resourceScmProvider =~ /\\|perforce\\|/ && !explorerResourceIsFolder',
+    })
+    const contextKeyService = new ContextKeyService()
+
+    try {
+      const commandService = new FakeCommandService()
+      // Perforce workspace at the top, a git repo nested below it — the file is
+      // owned by both. The git root is the longer (more specific) prefix, which
+      // must NOT hide the outer Perforce actions.
+      const p4Root = URI.file('/depot/Client')
+      const gitRoot = URI.joinPath(p4Root, 'Src', 'UniverseEditor')
+      const file = URI.joinPath(gitRoot, 'main.ts')
+
+      renderWithScm(
+        [scmModel('perforce', p4Root.fsPath), scmModel('git', gitRoot.fsPath)],
+        <ExplorerContextMenu
+          state={{ x: 0, y: 0, target: { resource: file, isDirectory: false } }}
+          rootResource={p4Root}
+          commandService={commandService as unknown as ICommandService}
+          contextKeyService={contextKeyService}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByText('Open for Edit (Perforce)')).toBeDefined()
     } finally {
       contextKeyService.dispose()
       menuDisposable.dispose()

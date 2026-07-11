@@ -89,6 +89,45 @@ export function resolveScmProviderId(
   return bestId
 }
 
+/**
+ * All SCM provider ids whose root contains `fsPath` — a resource can belong to
+ * more than one provider at once (e.g. a git repo nested inside a Perforce
+ * workspace, so files under it are tracked by both). Unlike
+ * {@link resolveScmProviderId} (which picks the single most-specific owner for
+ * dirty-diff / blame command routing), this returns every owner so menu gating
+ * can ask "is provider X one of the owners?" — otherwise a nested git repo would
+ * hide the outer Perforce actions.
+ *
+ * Deduplicated by provider id (multiple roots of the same provider count once),
+ * preserving first-seen order.
+ */
+export function resolveScmProviderIds(
+  sourceControls: readonly IScmSourceControlModel[],
+  fsPath: string,
+): string[] {
+  const target = scmProviderPathKey(fsPath)
+  const ids: string[] = []
+  for (const sc of sourceControls) {
+    if (sc.rootUri === undefined) continue
+    const root = scmProviderPathKey(sc.rootUri)
+    if ((target === root || target.startsWith(`${root}/`)) && !ids.includes(sc.id)) {
+      ids.push(sc.id)
+    }
+  }
+  return ids
+}
+
+/**
+ * Encode the owning-provider ids as a `when`-clause-matchable context key value.
+ * Pipe-delimited on both ends (`|git|perforce|`) so a menu can test membership
+ * with a regex — `resourceScmProvider =~ /\|perforce\|/` — without a substring
+ * matching e.g. `perforce` against a hypothetical `perforce-graph`. Empty string
+ * when nothing owns the path.
+ */
+export function encodeScmProviderIds(ids: readonly string[]): string {
+  return ids.length ? `|${ids.join('|')}|` : ''
+}
+
 /** Separator-agnostic, case-insensitive path key for provider routing. */
 export function scmProviderPathKey(p: string): string {
   return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()

@@ -77,7 +77,7 @@ disable-model-invocation: true
 
 **受限（restricted）host 拿不到高权能力**——通过 `HostConnectionDeps` 里把这些设为**可选**、只在 `kind === 'trusted'` 时传：
 
-- **SCM**（`deps.scm`）：SCM 服务是全局单例，是 trusted 能力；受限连接不注册 `mainThreadScm`，host 侧 `createSourceControl` 在 `kind='restricted'` 时抛错。
+- **SCM**（`deps.scm`）：SCM 服务是全局单例，是 trusted 能力；受限连接不注册 `mainThreadScm`，host 侧 `createSourceControl` 在 `kind='restricted'` 时抛错（`extensionService.ts`）。**⚠️ teardown 必须对称按 tier 清理**：`ScmService._sourceControls` 是全局列表，但 provider 只注册在 trusted 宿主 → `_teardownConnection` 里 `resetSourceControls()` **只能在 `kind === 'trusted'` 时调**（与同处 `webview.reset(conn.kind)` 的按-tier 精确清理对齐）。无条件调用会让 restricted 宿主崩溃 / 工作区切换重启（`[trusted, restricted]` 顺序：trusted 先重注册好 provider，紧接 restricted teardown）把刚注册的 git/p4 provider 全清空 → 偶现 "No source control providers registered"、git+p4 同时消失、reload 或禁用启用任一插件才恢复。见坑速记 13。
 - **语言特性**（`deps.languageFeatures` + `editorService`+`uriIdentity`）：语言插件 trusted-only（见 [[extend-language-plugin]]，是本层 `mainThreadLanguages` 桥的下游）。
 - **AI 模型**（`deps.aiModel`）：AI 能力只给 trusted 内置扩展（贯穿红线）。
 - **共享给两 tier**：commands/window/fs（走网关）/output/storage/webview。**fs 必走 `MainThreadFs` 网关**（复用 `AcpPathPolicy` 拒 .ssh/.aws/.env + 禁逃逸，cwd=workspaceRoot）；可信扩展要 raw node:fs 仍可直接用（git 即此）。
@@ -140,6 +140,7 @@ disable-model-invocation: true
 10. **DI 注册顺序**（`main.tsx`）：`ExtensionEnablementService` 必须 **先于** `ExtensionHostClientService` 与 `ExtensionsWorkbenchService`（两者都注入它）。
 11. **Action2 async run 的 accessor 首个 await 即失效**：enablement 命令在第一个 `await` 前同步取完 service（快照传后续 helper），见 [[action2-async-accessor-invalidation]]。
 12. **restricted 失败只 warn**：外部扩展是可选的，受限 host 起不来绝不能拖垮 workbench 或 trusted。
+13. **teardown 必须按 tier 对称清理全局能力**：`_teardownConnection` 清 trusted-only 的全局状态（`resetSourceControls()`）时**必须** `if (conn.kind === 'trusted')` 门控，与 `webview.reset(conn.kind)` 对齐——否则 restricted 崩溃/切工作区重启会误清 trusted 刚注册的 SCM provider（git+p4 同时消失，reload/禁用启用才恢复）。复现测试 `ExtensionHostClientService.test.ts`「does not wipe SCM providers when the restricted host tears down」。历史：`resetSourceControls` 由 6c8d3aca（切工作区 SCM 不更新）引入 teardown，当时无 restricted 宿主故未暴露，外部插件系统上线后才显形。
 
 ## E2E
 

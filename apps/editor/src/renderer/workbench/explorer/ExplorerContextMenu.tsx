@@ -7,14 +7,27 @@
 import { useEffect, useMemo } from 'react'
 import {
   markAsSingleton,
+  observableValue,
   type ICommandService,
   type IContextKeyService,
   MenuId,
 } from '@universe-editor/platform'
 import { ContextMenu } from '@universe-editor/workbench-ui'
-import type { URI } from '@universe-editor/platform'
+import type { IObservable, URI } from '@universe-editor/platform'
 import type { ExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
 import { parentOf } from '../../services/explorer/explorerTreeUtils.js'
+import {
+  IScmService,
+  encodeScmProviderIds,
+  resolveScmProviderIds,
+  type IScmSourceControlModel,
+} from '../../services/extensions/ScmService.js'
+import { useObservable, useOptionalService } from '../useService.js'
+
+const EMPTY_SOURCE_CONTROLS: IObservable<readonly IScmSourceControlModel[]> = observableValue(
+  'emptyScmProviders',
+  [],
+)
 
 export interface ContextMenuState {
   readonly x: number
@@ -52,6 +65,20 @@ export function ExplorerContextMenu({
   const hasClipboard = tree?.hasClipboard ?? false
   const hasCutItems = tree?.hasCutItems ?? false
   const resourceScheme = resource.scheme
+
+  // Which SCM provider(s) own this resource — so provider-specific Explorer
+  // actions (e.g. Perforce checkout) only show inside that provider's workspace,
+  // not for any file. A resource can belong to several providers at once (a git
+  // repo nested in a Perforce workspace), so encode all owners and gate menus
+  // with a membership regex. Mirrors the dirty-diff / blame host generalization:
+  // the app core stays free of any single SCM's name.
+  const scmService = useOptionalService(IScmService)
+  const sourceControls = useObservable(scmService?.sourceControls ?? EMPTY_SOURCE_CONTROLS)
+  const resourceScmProvider =
+    resourceScheme === 'file'
+      ? encodeScmProviderIds(resolveScmProviderIds(sourceControls, resource.fsPath))
+      : ''
+
   const scopedContext = useMemo(
     () =>
       contextKeyService
@@ -60,12 +87,21 @@ export function ExplorerContextMenu({
               explorerResourceIsFolder: isDirectory,
               explorerResourceIsRoot: isRoot,
               resourceScheme,
+              resourceScmProvider,
               fileCopied: hasClipboard,
               explorerResourceCut: hasCutItems,
             }),
           )
         : undefined,
-    [contextKeyService, isDirectory, isRoot, resourceScheme, hasClipboard, hasCutItems],
+    [
+      contextKeyService,
+      isDirectory,
+      isRoot,
+      resourceScheme,
+      resourceScmProvider,
+      hasClipboard,
+      hasCutItems,
+    ],
   )
 
   useEffect(() => () => scopedContext?.dispose(), [scopedContext])

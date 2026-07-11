@@ -85,14 +85,14 @@
         { "command": "perforce.revertChangelist", "when": "scmProvider == perforce && (scmResourceGroup == default || scmResourceGroup =~ /^cl:/)", "group": "2_revert@2", "icon": "discard" }
       ],
       "explorer/context": [
-        { "command": "perforce.edit", "when": "resourceScheme == file && !explorerResourceIsFolder", "group": "7_perforce@1" },
-        { "command": "perforce.add", "when": "resourceScheme == file && !explorerResourceIsFolder", "group": "7_perforce@2" },
-        { "command": "perforce.delete", "when": "resourceScheme == file && !explorerResourceIsFolder", "group": "7_perforce@3" },
-        { "command": "perforce.reconcile", "when": "resourceScheme == file && !explorerResourceIsFolder", "group": "7_perforce@4" },
-        { "command": "perforce.openChange", "when": "resourceScheme == file && !explorerResourceIsFolder", "group": "7_perforce@5" }
+        { "command": "perforce.edit", "when": "resourceScmProvider =~ /\\|perforce\\|/ && !explorerResourceIsFolder", "group": "7_perforce@1" },
+        { "command": "perforce.add", "when": "resourceScmProvider =~ /\\|perforce\\|/ && !explorerResourceIsFolder", "group": "7_perforce@2" },
+        { "command": "perforce.delete", "when": "resourceScmProvider =~ /\\|perforce\\|/ && !explorerResourceIsFolder", "group": "7_perforce@3" },
+        { "command": "perforce.reconcile", "when": "resourceScmProvider =~ /\\|perforce\\|/", "group": "7_perforce@4" },
+        { "command": "perforce.openChange", "when": "resourceScmProvider =~ /\\|perforce\\|/ && !explorerResourceIsFolder", "group": "7_perforce@5" }
       ],
       "editor/title": [
-        { "command": "perforce.openChange", "when": "resourceScheme == file && scmActiveResourceHasChanges && !isInDiffEditor", "group": "navigation@3", "icon": "compare-changes" }
+        { "command": "perforce.openChange", "when": "resourceScmProvider =~ /\\|perforce\\|/ && scmActiveResourceHasChanges && !isInDiffEditor", "group": "navigation@3", "icon": "compare-changes" }
       ]
     },
     "configuration": {
