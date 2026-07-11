@@ -3,9 +3,10 @@
  *  AnchoredSurface — the single positioning primitive for coordinate-anchored popups
  *  (context menus, overflow menus, quick-settings, tooltips, …). Given a viewport
  *  point `{x, y}` it positions floating content with Floating UI so it never spills
- *  off-screen: `flip` swaps sides, `shift` slides it back into view, and `size`
- *  caps the height to the available space. Rendered in a `FloatingPortal`, with
- *  optional click-outside + Escape dismissal wired through `onClose`.
+ *  off-screen: `shift` slides it back into view along both axes (so a menu
+ *  anchored below the cursor moves up rather than flipping to a cramped side),
+ *  and `size` caps the height to the viewport. Rendered in a `FloatingPortal`,
+ *  with optional click-outside + Escape dismissal wired through `onClose`.
  *
  *  This replaces the hand-written `style={{ top, left }}` + document listeners that
  *  each popup used to duplicate (and which had no off-screen handling).
@@ -16,7 +17,6 @@ import {
   useFloating,
   autoUpdate,
   offset,
-  flip,
   shift,
   size,
   useDismiss,
@@ -62,16 +62,25 @@ export function AnchoredSurface({
     whileElementsMounted: autoUpdate,
     middleware: [
       offset(offsetPx),
-      flip({ padding }),
-      shift({ padding }),
+      // Cap the height to the whole viewport (not to the anchor→edge distance):
+      // combined with cross-axis `shift` below, a menu that fits the viewport is
+      // shown in full, and a scrollbar only appears when the menu is taller than
+      // the viewport itself.
       size({
         padding,
         apply({ availableHeight, elements }) {
+          const viewportHeight = elements.floating.ownerDocument.documentElement.clientHeight
+          const cap = viewportHeight > 0 ? viewportHeight - 2 * padding : availableHeight
           Object.assign(elements.floating.style, {
-            maxHeight: `${Math.max(0, availableHeight)}px`,
+            maxHeight: `${Math.max(0, cap)}px`,
           })
         },
       }),
+      // No `flip`: instead of jumping to the opposite side (which can clip when
+      // that side is also small), slide the whole surface along both axes to keep
+      // it fully in view. `crossAxis: true` lets a menu anchored below the cursor
+      // move up so it stays inside the viewport, using the full vertical space.
+      shift({ mainAxis: true, crossAxis: true, padding }),
     ],
   })
 
