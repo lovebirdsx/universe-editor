@@ -10,6 +10,7 @@ import { rgPath } from '@vscode/ripgrep'
 import {
   createNamedLogger,
   Disposable,
+  DisposableStore,
   Emitter,
   ILoggerService,
   URI,
@@ -310,50 +311,56 @@ export class TextSearchMainService extends Disposable implements ITextSearchMain
     }
 
     return await new Promise<ITextSearchMainComplete>((resolve, reject) => {
-      child.onStdout((data: Buffer) => handleData(decoder.write(data)))
-      child.onStderr((data: Buffer) => {
-        const next = data.toString()
-        if (stderr.length + next.length < STDERR_LIMIT) stderr += next
-      })
-      child.onDidExit((exit) => {
-        this._sessions.delete(query.sessionId)
-        child.dispose()
-        if (exit.error !== undefined) {
-          reject(new Error(exit.error))
-          return
-        }
-        const code = exit.code
-        handleData(decoder.end())
-        if (remainder.trim().length > 0) {
-          handleLine(remainder.trim())
-          remainder = ''
-        }
-        const durationMs = Date.now() - startedAt
-        const progress = progressOf(
-          Math.max(filesScanned, results.size),
-          results.size,
-          totalMatches,
-          limitHit,
-        )
-        emitProgress(true)
+      const listeners = new DisposableStore()
+      listeners.add(child.onStdout((data: Buffer) => handleData(decoder.write(data))))
+      listeners.add(
+        child.onStderr((data: Buffer) => {
+          const next = data.toString()
+          if (stderr.length + next.length < STDERR_LIMIT) stderr += next
+        }),
+      )
+      listeners.add(
+        child.onDidExit((exit) => {
+          this._sessions.delete(query.sessionId)
+          listeners.dispose()
+          child.dispose()
+          if (exit.error !== undefined) {
+            reject(new Error(exit.error))
+            return
+          }
+          const code = exit.code
+          handleData(decoder.end())
+          if (remainder.trim().length > 0) {
+            handleLine(remainder.trim())
+            remainder = ''
+          }
+          const durationMs = Date.now() - startedAt
+          const progress = progressOf(
+            Math.max(filesScanned, results.size),
+            results.size,
+            totalMatches,
+            limitHit,
+          )
+          emitProgress(true)
 
-        this._logger.info(
-          `textSearch finished files=${progress.filesScanned} matched=${progress.filesMatched} ` +
-            `matches=${progress.totalMatches} limit=${progress.limitHit ?? 'none'} ` +
-            `cancelled=${running.cancelled} ms=${durationMs}`,
-        )
+          this._logger.info(
+            `textSearch finished files=${progress.filesScanned} matched=${progress.filesMatched} ` +
+              `matches=${progress.totalMatches} limit=${progress.limitHit ?? 'none'} ` +
+              `cancelled=${running.cancelled} ms=${durationMs}`,
+          )
 
-        if (!running.cancelled && !running.killedForLimit && code !== 0 && code !== 1) {
-          reject(new Error(errorMessageFromRipgrep(stderr, `ripgrep exited with code ${code}`)))
-          return
-        }
+          if (!running.cancelled && !running.killedForLimit && code !== 0 && code !== 1) {
+            reject(new Error(errorMessageFromRipgrep(stderr, `ripgrep exited with code ${code}`)))
+            return
+          }
 
-        resolve({
-          results: [...results.values()],
-          progress,
-          durationMs,
-        })
-      })
+          resolve({
+            results: [...results.values()],
+            progress,
+            durationMs,
+          })
+        }),
+      )
     })
   }
 

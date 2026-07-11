@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { URI } from '@universe-editor/platform'
+import { DisposableTracker, setDisposableTracker, URI } from '@universe-editor/platform'
 import { resolveRipgrepDiskPath, TextSearchMainService } from '../textSearchMainService.js'
 
 const tempRoots: string[] = []
@@ -165,5 +165,21 @@ describe('TextSearchMainService', () => {
     sub.dispose()
 
     expect(events.some((id) => id.startsWith('test-'))).toBe(true)
+  })
+
+  it('disposes child-process event subscriptions after a search completes', async () => {
+    const root = await makeTempRoot()
+    await writeFile(path.join(root, 'a.txt'), 'leak-check-token\n')
+    const svc = new TextSearchMainService()
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+
+    try {
+      await svc.search(baseQuery(root, 'leak-check-token'))
+      expect(tracker.computeLeakingDisposables()).toBeUndefined()
+    } finally {
+      setDisposableTracker(null)
+      svc.dispose()
+    }
   })
 })

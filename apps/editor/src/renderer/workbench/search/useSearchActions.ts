@@ -24,7 +24,7 @@ import {
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
+import { waitForFileEditor } from '../../services/editor/revealEditorPosition.js'
 import { MonacoModelRegistry } from '../editor/monaco/MonacoModelRegistry.js'
 import { applyReplacements, type IReplaceEdit } from '../../services/search/replace.js'
 import { saveReplacedFile } from '../../services/search/saveReplacedFile.js'
@@ -61,15 +61,14 @@ export function useSearchActions(
     (resource: URI, match: ITextSearchMatch, rangeIndex: number, preview = true) => {
       const input = instantiation.createInstance(FileEditorInput, resource)
       editorService.openEditor(input, { pinned: !preview })
-      // Reveal against the *active* editor input, not the one we just created:
-      // openEditor dedupes by resource and discards our fresh input when the file
-      // is already open, so FileEditorRegistry only knows the original instance.
-      const reveal = (): boolean => {
-        const active = editorService.activeEditor.get()
-        if (!(active instanceof FileEditorInput)) return false
-        const editor = FileEditorRegistry.get(active)
+      // openEditor dedupes by resource and can discard the fresh input, so reveal
+      // against the active instance that actually owns the mounted Monaco editor.
+      const active = editorService.activeEditor.get()
+      if (!(active instanceof FileEditorInput)) return
+      void (async () => {
+        const editor = await waitForFileEditor(active)
         const range = match.ranges[rangeIndex]
-        if (!editor || !range) return false
+        if (!editor || !range) return
         editor.setSelection({
           startLineNumber: match.lineNumber,
           startColumn: range.startColumn,
@@ -78,11 +77,7 @@ export function useSearchActions(
         })
         editor.revealLineInCenter(match.lineNumber)
         if (!preview) editor.focus()
-        return true
-      }
-      // Monaco may not be mounted yet on first open; retry after a frame.
-      if (reveal()) return
-      setTimeout(reveal, 50)
+      })()
     },
     [editorService, instantiation],
   )
