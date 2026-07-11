@@ -14,10 +14,11 @@ Perforce 图谱是一个专门用来**可视化浏览已提交 changelist 历史
 
 ## 打开 Perforce 图谱
 
-两种方式：
+三种方式：
 
 - 命令面板运行 **View Perforce Graph**（查看 Perforce Graph）；
-- 点 Perforce 源代码管理侧栏标题栏最左边的图谱图标。
+- 点 Perforce 源代码管理侧栏标题栏最左边的图谱图标；
+- 或点击底部状态栏左侧的当前客户端名称。
 
 > 命令面板里这条命令显示的是英文 **"View Perforce Graph"**（分类 "Perforce Graph"），搜索时请用英文。
 

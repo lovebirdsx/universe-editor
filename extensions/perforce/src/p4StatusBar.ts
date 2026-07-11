@@ -2,7 +2,7 @@
  * The Perforce status-bar entry: client name + connection state. A single item
  * renders whichever client is active — switching the SCM selection re-points it,
  * mirroring VSCode's single-repo status bar (and git's GitStatusBarController).
- * Clicking opens the Perforce output channel.
+ * Clicking opens the Perforce graph.
  */
 import {
   window,
@@ -19,7 +19,7 @@ export class P4StatusBarController {
 
   constructor(private readonly _mgr: ClientManager) {
     this._item = window.createStatusBarItem(StatusBarAlignment.Left, 100)
-    this._item.command = 'perforce.showOutput'
+    this._item.command = 'perforce-graph.view'
   }
 
   /** Re-point at the active client and re-render. Call after the active client
@@ -49,14 +49,7 @@ export class P4StatusBarController {
         reconcileCount > 0 ? ` ${openedCount} $(edit) ${reconcileCount} $(diff)` : ` ${openedCount}`
       this._item.text = `$(server) ${clientName}${counts}`
     }
-    this._item.tooltip =
-      connection === 'connected'
-        ? localize('perforce.status.tooltip', 'Perforce: {0} · {1} open, {2} to reconcile', {
-            0: clientName,
-            1: openedCount,
-            2: reconcileCount,
-          })
-        : `Perforce client: ${clientName}`
+    this._item.tooltip = 'Open Perforce Graph'
     this._item.show()
   }
 
