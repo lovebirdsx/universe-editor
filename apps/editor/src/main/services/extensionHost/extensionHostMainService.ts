@@ -104,6 +104,8 @@ interface ProcEntry {
   /** Owns `proc` + its stdout/stderr/exit subscriptions; disposed on exit or service dispose. */
   readonly store: DisposableStore
   readonly stdoutDecoder: StringDecoder
+  /** Carry-over of a partial (newline-less) stderr chunk, flushed line by line. */
+  stderrLineBuffer: string
   exited: boolean
 }
 
@@ -212,6 +214,7 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
       proc,
       store,
       stdoutDecoder: new StringDecoder('utf8'),
+      stderrLineBuffer: '',
       exited: false,
     }
     this._procs.set(handle, procEntry)
@@ -228,13 +231,20 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     )
     store.add(
       proc.onStderr((data: Buffer) => {
-        this._onStderr.fire({ handle, data: decodeDiagnostic(data) })
+        const text = decodeDiagnostic(data)
+        this._onStderr.fire({ handle, data: text })
+        // Also persist to disk. The renderer routes stderr only to a non-persisted
+        // Output channel, so a crash's stack (the host has no uncaughtException
+        // handler — Node prints it to stderr then exits 1) would be lost once the
+        // window is gone. Buffer by line so multi-chunk stacks stay readable.
+        this._logStderr(handle, procEntry, text)
       }),
     )
     store.add(
       proc.onDidExit((exit) => {
         if (procEntry.exited) return
         procEntry.exited = true
+        this._flushStderr(handle, procEntry)
         if (exit.error !== undefined) {
           this._logger.warn(`proc error handle=${handle}: ${exit.error}`)
           this._onExit.fire({ handle, code: null, signal: null, error: exit.error })
@@ -254,6 +264,28 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
 
     this._logger.info(`start handle=${handle} entry=${entry}`)
     return Promise.resolve({ handle })
+  }
+
+  /** Append complete stderr lines to the log, holding any trailing partial line. */
+  private _logStderr(handle: string, entry: ProcEntry, chunk: string): void {
+    const buf = entry.stderrLineBuffer + chunk
+    const lastNl = buf.lastIndexOf('\n')
+    if (lastNl === -1) {
+      entry.stderrLineBuffer = buf
+      return
+    }
+    const complete = buf.slice(0, lastNl)
+    entry.stderrLineBuffer = buf.slice(lastNl + 1)
+    for (const line of complete.split('\n')) {
+      if (line.length > 0) this._logger.warn(`[stderr ${handle}] ${line}`)
+    }
+  }
+
+  /** Flush any buffered partial stderr line (e.g. a crash's final stack frame). */
+  private _flushStderr(handle: string, entry: ProcEntry): void {
+    const rest = entry.stderrLineBuffer.trimEnd()
+    entry.stderrLineBuffer = ''
+    if (rest.length > 0) this._logger.warn(`[stderr ${handle}] ${rest}`)
   }
 
   writeStdin(handle: string, data: string): Promise<void> {

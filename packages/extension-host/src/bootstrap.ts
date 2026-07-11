@@ -60,6 +60,19 @@ process.on('unhandledRejection', (reason: unknown) => {
   console.error(`[ext-host] unhandled rejection: ${formatUnknownError(reason)}`)
 })
 
+// Without this, an uncaught synchronous throw exits with the stack on stderr but
+// no marker — and on a fast exit that stderr can be lost before main drains the
+// pipe. Log it explicitly (main persists host stderr to extensionHost.log) so a
+// crash is always diagnosable, then exit(1) to keep Node's default crash
+// semantics (which drives the renderer's crash-restart).
+process.on('uncaughtException', (err: unknown) => {
+  try {
+    console.error(`[ext-host] uncaught exception: ${formatUnknownError(err)}`)
+  } finally {
+    process.exit(1)
+  }
+})
+
 const onData = new Emitter<string>()
 process.stdin.setEncoding('utf8')
 process.stdin.on('data', (chunk: string) => onData.fire(chunk))
