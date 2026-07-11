@@ -112,7 +112,11 @@ export const ToolCallCard = memo(function ToolCallCard({
 
   const openDiff = (diff: AcpToolCallDiff): void => {
     const uri = diff.path.includes('://') ? URI.parse(diff.path) : URI.file(diff.path)
-    void editorService.openEditor(new DiffEditorInput(uri, diff.oldText, diff.newText))
+    // Only local files can be reopened as a source file from the diff title bar.
+    const openable = uri.scheme === 'file' ? uri : undefined
+    void editorService.openEditor(
+      new DiffEditorInput(uri, diff.oldText, diff.newText, undefined, openable),
+    )
   }
 
   const className = extraClassName

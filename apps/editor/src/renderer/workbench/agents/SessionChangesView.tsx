@@ -105,9 +105,12 @@ export function SessionChangesView() {
 function useOpenChange(): (c: SessionFileChange, preview: boolean) => void {
   const editorService = useService(IEditorService)
   return (c, preview) => {
-    void editorService.openEditor(new DiffEditorInput(c.uri, c.baseline, c.current), {
-      pinned: !preview,
-    })
+    void editorService.openEditor(
+      new DiffEditorInput(c.uri, c.baseline, c.current, undefined, c.uri),
+      {
+        pinned: !preview,
+      },
+    )
   }
 }
 

@@ -18,6 +18,7 @@ export class DiffEditorInput extends EditorInput {
     private _originalContent: string,
     private _modifiedContent: string,
     private readonly _modifiedUri?: URI,
+    private readonly _openableResource?: URI,
   ) {
     super()
   }
@@ -75,6 +76,17 @@ export class DiffEditorInput extends EditorInput {
   /** The right-hand side's file URI. Falls back to the original for same-file diffs. */
   get modifiedUri(): URI {
     return this._modifiedUri ?? this._originalUri
+  }
+
+  /**
+   * The real, on-disk file this diff should open when the user clicks "Open File"
+   * in the diff editor title bar. Undefined when there is no such file — e.g. an
+   * Explorer cross-file compare (no single "source"), or a diff whose sides are
+   * depot/revision blobs with no local counterpart — in which case the title-bar
+   * button is hidden rather than opening a bogus path.
+   */
+  get openableResource(): URI | undefined {
+    return this._openableResource
   }
 
   get originalContent(): string {

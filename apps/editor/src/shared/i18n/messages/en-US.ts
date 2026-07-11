@@ -248,7 +248,7 @@ export const EN_US_MESSAGES: MessageMap = {
   'action.diffEditor.previousChange.title': 'Go to Previous Difference',
   'action.editor.nextChange.title': 'Go to Next Change',
   'action.editor.previousChange.title': 'Go to Previous Change',
-  'diffEditor.openFile': 'Open File ({key})',
+  'action.diffEditor.openFile.title': 'Open File',
   'diffEditor.previousChange': 'Previous Change ({key})',
   'diffEditor.nextChange': 'Next Change ({key})',
   'gitGraph.openFile.failed': 'Unable to open {path}: {error}',

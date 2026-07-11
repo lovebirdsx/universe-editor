@@ -97,6 +97,12 @@ export interface P4GraphFileDiffRequest {
   status: string
   /** Revision number this change created. */
   rev: string
+  /**
+   * Resolved local filesystem path, or null when the file isn't in the client
+   * view. Lets the diff editor's "Open File" button reopen the working-tree copy;
+   * omitted/null hides that button (depot blobs have no local counterpart).
+   */
+  localPath?: string | null
 }
 
 /**

@@ -269,6 +269,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
         modified: content.modified,
         pinned: false,
         preserveFocus: false,
+        openableUri: pathToFileURL(content.path).href,
       })
     }),
 

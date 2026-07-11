@@ -9,6 +9,7 @@
 import {
   Action2,
   IEditorGroupsService,
+  IInstantiationService,
   MenuId,
   URI,
   localize2,
@@ -16,6 +17,7 @@ import {
 } from '@universe-editor/platform'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
+import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 
 export interface OpenDiffPayload {
   readonly title: string
@@ -29,6 +31,12 @@ export interface OpenDiffPayload {
   readonly pinned?: boolean
   /** When true the diff opens without stealing focus (e.g. Space-preview from the SCM list). */
   readonly preserveFocus?: boolean
+  /**
+   * Serialized `file:` URI of the real on-disk file the "Open File" title-bar
+   * button should open. Omit when the diff has no local source (depot/revision
+   * blobs, cross-file compare) — the button is then hidden.
+   */
+  readonly openableUri?: string
 }
 
 export class OpenDiffAction extends Action2 {
@@ -60,9 +68,51 @@ export class OpenDiffAction extends Action2 {
       URI.parse(payload.originalUri),
       payload.original,
       payload.modified,
+      undefined,
+      payload.openableUri ? URI.parse(payload.openableUri) : undefined,
     )
     // Single-click uses the preview slot; double-click opens a permanent tab.
     group.openEditor(input, { activate: true, pinned, preserveFocus })
+  }
+}
+
+/**
+ * Opens the real on-disk source file backing the active diff, mirroring VSCode's
+ * "Open File" button in the diff editor title bar. Only visible when the diff
+ * declared an `openableResource` (see DiffEditorInput) — diffs over depot or
+ * revision blobs, or Explorer cross-file compares, have none and hide the button.
+ */
+export class OpenDiffSourceFileAction extends Action2 {
+  static readonly ID = 'workbench.action.diffEditor.openFile'
+
+  constructor() {
+    super({
+      id: OpenDiffSourceFileAction.ID,
+      title: localize2('action.diffEditor.openFile.title', 'Open File'),
+      category: localize2('command.category.diffEditor', 'Diff Editor'),
+      icon: 'go-to-file',
+      precondition: 'isInDiffEditor && diffEditorHasOpenableFile',
+      keybinding: { primary: 'shift+alt+y', when: 'isInDiffEditor && diffEditorHasOpenableFile' },
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          group: 'navigation',
+          order: 1,
+          when: 'isInDiffEditor && diffEditorHasOpenableFile',
+        },
+      ],
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    const group = accessor.get(IEditorGroupsService).activeGroup
+    const active = group.activeEditor
+    if (!(active instanceof DiffEditorInput)) return
+    const resource = active.openableResource
+    if (!resource) return
+    const input = accessor.get(IInstantiationService).createInstance(FileEditorInput, resource)
+    group.openEditor(input, { activate: true, pinned: true })
   }
 }
 

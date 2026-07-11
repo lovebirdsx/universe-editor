@@ -192,6 +192,7 @@ describe('PerforceGraphEditor', () => {
       depotFile: '//depot/main/a.txt',
       status: 'M',
       rev: '3',
+      localPath: 'C:/ws/main/a.txt',
     })
   })
 

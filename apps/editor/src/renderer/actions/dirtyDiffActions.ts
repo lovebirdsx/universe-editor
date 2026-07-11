@@ -122,6 +122,7 @@ export class OpenActiveFileChangesAction extends Action2 {
       originalUri: active.resource.toString(),
       original: head ?? '',
       modified,
+      openableUri: active.resource.toString(),
     })
   }
 }

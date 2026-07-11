@@ -793,7 +793,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- Diff editor & Merge ---
   'diffEditor.nextChange': '下一处更改 ({key})',
-  'diffEditor.openFile': '打开文件 ({key})',
+  'action.diffEditor.openFile.title': '打开源文件',
   'diffEditor.previousChange': '上一处更改 ({key})',
   'mergeConflict.acceptBoth': '保留双方更改',
   'mergeConflict.acceptCurrent': '采用当前更改',

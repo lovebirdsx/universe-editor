@@ -561,6 +561,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
         depotFile: file.depotFile,
         status: file.status,
         rev: file.rev,
+        localPath: file.localPath,
       }
       void commands.executeCommand(PerforceGraphCommands.openFileDiff, req)
     },

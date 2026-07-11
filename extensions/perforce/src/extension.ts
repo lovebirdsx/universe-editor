@@ -450,7 +450,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
           })
         }),
         commands.registerCommand('perforce-graph.openFileDiff', async (...args: unknown[]) => {
-          const req = args[0] as { depotFile: string; status: string; rev: string }
+          const req = args[0] as {
+            depotFile: string
+            status: string
+            rev: string
+            localPath?: string | null
+          }
           const target = graphClient()
           if (!target) return
           const { left, right } = fileDiffRevs(req.depotFile, req.status, req.rev)
@@ -467,6 +472,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
             modified,
             pinned: false,
             preserveFocus: false,
+            ...(req.localPath ? { openableUri: pathToFileURL(req.localPath).href } : {}),
           })
         }),
         commands.registerCommand(

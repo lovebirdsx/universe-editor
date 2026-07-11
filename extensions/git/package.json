@@ -179,8 +179,7 @@
         { "command": "git.unstage", "when": "scmProvider == git && scmResourceGroup == index", "group": "inline", "icon": "remove" }
       ],
       "editor/title": [
-        { "command": "git.openChange", "when": "resourceScheme == file && scmActiveResourceHasChanges && !isInDiffEditor", "group": "navigation@2", "icon": "compare-changes" },
-        { "command": "git.openFile", "when": "isInDiffEditor", "group": "navigation@1", "icon": "go-to-file" }
+        { "command": "git.openChange", "when": "resourceScheme == file && scmActiveResourceHasChanges && !isInDiffEditor", "group": "navigation@2", "icon": "compare-changes" }
       ]
     },
     "keybindings": [
@@ -192,11 +191,6 @@
         "command": "git.openChange",
         "key": "shift+alt+y",
         "when": "!isInDiffEditor"
-      },
-      {
-        "command": "git.openFile",
-        "key": "shift+alt+y",
-        "when": "isInDiffEditor"
       }
     ],
     "configuration": {

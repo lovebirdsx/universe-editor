@@ -520,6 +520,7 @@ export class PerforceClient {
       modified,
       pinned: false,
       preserveFocus: false,
+      openableUri: pathToFileURL(localPath).href,
     })
   }
 

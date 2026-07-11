@@ -85,6 +85,7 @@ export class GitMergeConflictContribution extends Disposable implements IWorkben
       original: conflict.current.content,
       modified: conflict.incoming.content,
       pinned: true,
+      openableUri: model.uri.toString(),
     })
   }
 

@@ -769,6 +769,7 @@ export class Repository {
       modified,
       pinned,
       preserveFocus,
+      openableUri: pathToFileURL(absPath).href,
     })
   }
 

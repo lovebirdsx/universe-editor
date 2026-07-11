@@ -34,4 +34,12 @@ describe('DiffEditorInput', () => {
     expect(input.getName()).toBe('a.ts (Diff)')
     expect(input.isCrossFile).toBe(false)
   })
+
+  it('exposes openableResource only when provided', () => {
+    const uri = URI.file('/ws/a.ts')
+    expect(new DiffEditorInput(uri, 'base', 'current').openableResource).toBeUndefined()
+    const openable = URI.file('/ws/a.ts')
+    const input = new DiffEditorInput(uri, 'base', 'current', undefined, openable)
+    expect(input.openableResource?.toString()).toBe(openable.toString())
+  })
 })
