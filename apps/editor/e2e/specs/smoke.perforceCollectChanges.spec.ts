@@ -1,0 +1,107 @@
+/*---------------------------------------------------------------------------------------------
+ *  Perforce "collect changes" smoke (@p1).
+ *
+ *  Repro + guard for "I edited a file but it never showed up in Changes to
+ *  Reconcile". The extension has no server push and p4 only tracks opened files,
+ *  so a workspace file watch must drive a reconcile-discovery refresh whenever the
+ *  disk changes — from the editor or an external tool.
+ *
+ *  Backed by the fake p4 (fixtures/fake-p4.mjs): a real on-disk depot model whose
+ *  `reconcile -n` diffs the workspace against have-revision content, so the whole
+ *  flow is exercised without a live p4d. See fixtures/perforceApp.ts.
+ *--------------------------------------------------------------------------------------------*/
+
+import { writeFileSync } from 'node:fs'
+import { test, expect, DEFAULT_SEEDS } from '../fixtures/perforceApp.js'
+import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
+
+const tracked = DEFAULT_SEEDS[0]!.relPath
+
+test.describe('@p1 perforce collect changes', () => {
+  test('an edited-but-unopened file appears in Changes to Reconcile @regression', async ({
+    page,
+    workbench,
+    perforce,
+  }) => {
+    // Cold boot + host relaunch on workspace open + reconcile scan; give headroom
+    // like the other extension-host smokes.
+    test.setTimeout(120_000)
+    await evaluateWhenRestored(page)
+
+    // Open the fake Perforce workspace; wait for the provider to register.
+    await workbench.openWorkspace(perforce.openDir)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
+        timeout: 60_000,
+        message: 'perforce extension should register a source control for the workspace',
+      })
+      .toBeGreaterThan(0)
+
+    // Reveal the SCM view.
+    await workbench.runCommand('workbench.view.scm')
+
+    // Edit a tracked file on disk out-of-band (mimics an external tool / a save).
+    // The workspace watcher must run reconcile discovery and surface it in the
+    // "Changes to Reconcile" group without any manual refresh.
+    writeFileSync(perforce.file(tracked), 'edited on disk\n', 'utf8')
+
+    const group = page.locator('[role="treeitem"]', { hasText: 'Changes to Reconcile' })
+    await expect(group).toBeVisible({ timeout: 30_000 })
+
+    const row = page.locator('[role="treeitem"]', { hasText: tracked })
+    await expect(row).toBeVisible({ timeout: 30_000 })
+
+    // Revert the edit back to the have-revision content. The incremental watcher
+    // re-reconciles just this path and, finding it clean, drops it from the group.
+    writeFileSync(perforce.file(tracked), DEFAULT_SEEDS[0]!.content, 'utf8')
+    await expect(row).toBeHidden({ timeout: 30_000 })
+  })
+
+  // Reproduces the reported bug: opening a DEEP subdirectory of a large p4 client
+  // (client root is far above the opened folder). The watcher used to watch the
+  // whole client root recursively — which fails/degrades on big trees so a nested
+  // edit was never seen. It must watch the opened folder instead.
+  test.describe('opening a nested subdirectory', () => {
+    test.use({
+      openSubdir: 'Source/Client/TypeScript',
+      p4Seeds: {
+        files: [
+          { relPath: 'Source/Client/TypeScript/gulpfile.ts', content: 'export const x = 1\n' },
+          // A file outside the opened folder to prove scope narrowing doesn't break.
+          { relPath: 'Source/Server/readme.md', content: '# server\n' },
+        ],
+      },
+    })
+
+    test('a nested edit still appears in Changes to Reconcile @regression', async ({
+      page,
+      workbench,
+      perforce,
+    }) => {
+      test.setTimeout(120_000)
+      await evaluateWhenRestored(page)
+
+      await workbench.openWorkspace(perforce.openDir)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
+          timeout: 60_000,
+          message: 'perforce extension should register a source control for the nested folder',
+        })
+        .toBeGreaterThan(0)
+
+      await workbench.runCommand('workbench.view.scm')
+
+      // Edit the deeply-nested file — the exact failing case from the report.
+      writeFileSync(
+        perforce.file('Source/Client/TypeScript/gulpfile.ts'),
+        'export const x = 2\n',
+        'utf8',
+      )
+
+      const group = page.locator('[role="treeitem"]', { hasText: 'Changes to Reconcile' })
+      await expect(group).toBeVisible({ timeout: 30_000 })
+      const row = page.locator('[role="treeitem"]', { hasText: 'gulpfile.ts' })
+      await expect(row).toBeVisible({ timeout: 30_000 })
+    })
+  })
+})

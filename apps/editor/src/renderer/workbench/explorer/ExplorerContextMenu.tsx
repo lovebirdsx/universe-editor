@@ -51,6 +51,7 @@ export function ExplorerContextMenu({
   const isRoot = tree?.isRoot(resource) ?? resource.toString() === rootResource.toString()
   const hasClipboard = tree?.hasClipboard ?? false
   const hasCutItems = tree?.hasCutItems ?? false
+  const resourceScheme = resource.scheme
   const scopedContext = useMemo(
     () =>
       contextKeyService
@@ -58,12 +59,13 @@ export function ExplorerContextMenu({
             contextKeyService.createScoped({
               explorerResourceIsFolder: isDirectory,
               explorerResourceIsRoot: isRoot,
+              resourceScheme,
               fileCopied: hasClipboard,
               explorerResourceCut: hasCutItems,
             }),
           )
         : undefined,
-    [contextKeyService, isDirectory, isRoot, hasClipboard, hasCutItems],
+    [contextKeyService, isDirectory, isRoot, resourceScheme, hasClipboard, hasCutItems],
   )
 
   useEffect(() => () => scopedContext?.dispose(), [scopedContext])

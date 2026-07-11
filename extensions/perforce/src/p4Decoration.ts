@@ -4,11 +4,13 @@
  *
  * `contextValue` is a single status letter (E/A/D/B/I/M, or U for unresolved),
  * matching how the host renders the row badge AND how menu `when` clauses select
- * rows (e.g. `scmResourceState == U` for a resolve action). The full p4 action is
- * kept in the tooltip for humans.
+ * rows (e.g. `scmResourceState == U` for a resolve action). Reconcile (not-yet-
+ * opened) rows use `RC`, shelved rows use `S`. The full p4 action is kept in the
+ * tooltip for humans.
  */
 import type { SourceControlResourceState } from '@universe-editor/extension-api'
 import type { OpenedFile, P4Action } from './changelist.js'
+import type { ReconcileFile } from './reconcileParser.js'
 import type { ShelvedFile } from './shelveParser.js'
 
 interface ActionStyle {
@@ -99,4 +101,42 @@ export function toShelvedResourceStates(
   files: readonly ShelvedFile[],
 ): SourceControlResourceState[] {
   return files.map(toShelvedResourceState)
+}
+
+/**
+ * A "changes to reconcile" row: a file whose working-tree state diverged from the
+ * depot but that isn't opened yet (from `p4 reconcile -n`). The `RC` context
+ * value lets menu `when` clauses target these rows (e.g. the inline "collect"
+ * action) distinctly from opened rows. Clicking shows the have-vs-local diff for
+ * edit/delete, or just opens the file for add (no depot base yet).
+ */
+export function toReconcileResourceState(
+  file: ReconcileFile,
+): SourceControlResourceState | undefined {
+  if (!file.clientFile) return undefined
+  const style = ACTION_STYLE[file.action]
+  return {
+    resourceUri: file.clientFile,
+    contextValue: 'RC',
+    decorations: {
+      tooltip: `Not opened · ${style.tooltip}`,
+      color: style.color,
+      ...(style.strikeThrough ? { strikeThrough: true } : {}),
+    },
+    command:
+      file.action === 'add'
+        ? { command: 'perforce.openFile', title: 'Open File' }
+        : { command: 'perforce.openChange', title: 'Open Changes' },
+  }
+}
+
+export function toReconcileResourceStates(
+  files: readonly ReconcileFile[],
+): SourceControlResourceState[] {
+  const out: SourceControlResourceState[] = []
+  for (const f of files) {
+    const state = toReconcileResourceState(f)
+    if (state) out.push(state)
+  }
+  return out
 }

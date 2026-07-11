@@ -19,9 +19,11 @@ import { P4CacheDisk } from './p4CacheDisk.js'
 import { ClientManager } from './clientManager.js'
 import { P4StatusBarController } from './p4StatusBar.js'
 import { AutoEditController } from './autoEdit.js'
+import { WorkspaceWatchController } from './workspaceWatcher.js'
 import { notifyP4Failure, setP4OutputShower, isMissingCli } from './p4Error.js'
 import { changelistIdFromGroupId } from './changelist.js'
 import { statusFromAction, fileDiffRevs, displayPath } from './p4GraphParser.js'
+import { uriToFsPath } from './pathUtil.js'
 import { localize } from './nls.js'
 
 function resourcePath(arg: unknown): string | undefined {
@@ -36,12 +38,15 @@ function groupChangelistId(arg: unknown): string | undefined {
 }
 
 /** Resolve the file a file-scoped command acts on: the SCM resource's path when
- *  invoked from the SCM view, else the active editor's file (explorer/editor /
- *  command-palette entry points). Explorer passes `{ resource }` as a URI-ish. */
+ *  invoked from the SCM view, else the explorer selection, else the active
+ *  editor's file (command-palette / editor-title entry points). Explorer passes
+ *  `{ resource }` as a `UriComponents` (its `fsPath` getter is lost over RPC), so
+ *  reconstruct the path from scheme + path. */
 async function resolveTargetPath(arg: unknown): Promise<string | undefined> {
   const fromResource = resourcePath(arg)
   if (fromResource) return fromResource
-  const fromExplorer = (arg as { resource?: { fsPath?: string } } | undefined)?.resource?.fsPath
+  const resource = (arg as { resource?: { scheme?: string; path?: string } } | undefined)?.resource
+  const fromExplorer = resource ? uriToFsPath(resource) : undefined
   if (fromExplorer) return fromExplorer
   return commands.executeCommand<string | undefined>('_workbench.getActiveEditorFile')
 }
@@ -128,10 +133,25 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const refreshInterval = await cfg.get('refreshInterval', 0)
   client.startPolling(refreshInterval)
 
+  // Reconcile discovery: when on, every refresh also scans the working tree for
+  // uncollected drift (edited / created / deleted on disk but not opened). Off by
+  // default — the scan is heavy on large workspaces; use Clean Refresh / Collect
+  // to enable it on demand.
+  if (await cfg.get('autoReconcile', false)) client.setAutoReconcile(true)
+
   // Auto-checkout on edit (opt-in). Disabled config → no subscription.
   const autoEdit = new AutoEditController(mgr, log)
   context.subscriptions.push(autoEdit)
   void autoEdit.start(cfg)
+
+  // Watch the opened workspace folder on disk (default on). A save from the
+  // editor or an edit from an external tool schedules a reconcile-discovery
+  // refresh, so drifted files surface in "changes to reconcile" without a manual
+  // Clean Refresh. We watch the opened folder (not the far larger p4 client root)
+  // and narrow the reconcile scan to it — see WorkspaceWatchController.
+  const watcher = new WorkspaceWatchController(mgr, log)
+  context.subscriptions.push(watcher)
+  watcher.start(await cfg.get('autoRefresh', true), root)
 
   context.subscriptions.push(
     // Point argument-less commands at the SCM-selected client. Pushed by the
@@ -142,9 +162,27 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }),
 
     commands.registerCommand('perforce.refresh', (arg) => mgr.resolveClient(arg)?.refresh()),
-    // Clean refresh is a full re-query; for Phase 1 it's the same lightweight
-    // refresh (heavy status/reconcile discovery arrives with the mutating phase).
-    commands.registerCommand('perforce.cleanRefresh', (arg) => mgr.resolveClient(arg)?.refresh()),
+    // Clean refresh additionally runs the `reconcile -n` discovery pass so the
+    // "changes to reconcile" group reflects working-tree drift (files edited /
+    // created / deleted on disk but not opened yet).
+    commands.registerCommand('perforce.cleanRefresh', (arg) =>
+      mgr.resolveClient(arg)?.refresh({ reconcile: true }),
+    ),
+
+    // Collect (reconcile) a file's working-tree change into open state. From an
+    // SCM "changes to reconcile" row: `{ resourceUri }`; from explorer/editor:
+    // the active file. Enables discovery so the group keeps tracking drift.
+    commands.registerCommand('perforce.reconcile', async (...args: unknown[]) => {
+      const path = await resolveTargetPath(args[0])
+      if (!path) return
+      await mgr.resolveClient({ resourceUri: path })?.reconcile([path])
+    }),
+
+    // Collect every discovered reconcile candidate at once (group title action).
+    commands.registerCommand('perforce.reconcileAll', async (arg) => {
+      const target = mgr.resolveClient(arg) ?? mgr.active
+      await target?.reconcileAll()
+    }),
 
     commands.registerCommand('perforce.showOutput', () => out.show()),
 
@@ -254,6 +292,30 @@ export async function activate(context: ExtensionContext): Promise<void> {
       await target?.revertUnchanged(groupChangelistId(arg))
     }),
 
+    // Revert every open file in a changelist (destructive — confirm first).
+    commands.registerCommand('perforce.revertChangelist', async (arg) => {
+      const target = mgr.resolveClient(arg) ?? mgr.active
+      const changelist = groupChangelistId(arg) ?? 'default'
+      if (!target) return
+      const label =
+        changelist === 'default'
+          ? localize('perforce.group.default', 'Default Changelist')
+          : `#${changelist}`
+      const BTN_REVERT = localize('perforce.btn.revertAll', 'Revert All')
+      const confirm = await window.showWarningMessage(
+        localize(
+          'perforce.revertChangelist.confirm',
+          'Revert all files in {0}? Local changes will be lost.',
+          {
+            0: label,
+          },
+        ),
+        BTN_REVERT,
+      )
+      if (confirm !== BTN_REVERT) return
+      await target.revertChangelist(changelist)
+    }),
+
     // Submit the default changelist using the SCM input-box description.
     commands.registerCommand('perforce.submitDefault', async (arg) => {
       const target = mgr.resolveClient(arg) ?? mgr.active
@@ -265,6 +327,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
         )
         return
       }
+      const BTN_SUBMIT = localize('perforce.btn.submit', 'Submit')
+      const confirm = await window.showWarningMessage(
+        localize(
+          'perforce.submit.confirmDefault',
+          'Submit the default changelist to the depot? This cannot be undone.',
+        ),
+        BTN_SUBMIT,
+      )
+      if (confirm !== BTN_SUBMIT) return
       if (await target.submit('default', description)) target.description = ''
     }),
 
@@ -275,7 +346,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
       if (!target || !changelist || changelist === 'default') return
       const BTN_SUBMIT = localize('perforce.btn.submit', 'Submit')
       const confirm = await window.showWarningMessage(
-        localize('perforce.submit.confirmNumbered', 'Submit changelist #{0}?', { 0: changelist }),
+        localize(
+          'perforce.submit.confirmNumbered',
+          'Submit changelist #{0} to the depot? This cannot be undone.',
+          { 0: changelist },
+        ),
         BTN_SUBMIT,
       )
       if (confirm !== BTN_SUBMIT) return

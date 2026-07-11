@@ -55,6 +55,21 @@ function sanitizeEnv(): NodeJS.ProcessEnv {
 }
 
 /**
+ * The p4 executable to spawn. Defaults to `p4` (resolved from PATH), matching the
+ * git extension's `spawn('git')`. `UNIVERSE_P4_PATH` overrides it — used by e2e to
+ * point at a fake p4 (a Node script driven via `node <script>`), and available as
+ * an escape hatch when `p4` isn't on PATH. When the override ends in `.mjs`/`.js`
+ * /`.cjs` it's run through the current Node runtime (`process.execPath <script>`)
+ * so the fake needs no executable bit / shebang and works identically on Windows.
+ */
+export function resolveP4Command(): { command: string; prefixArgs: readonly string[] } {
+  const override = process.env.UNIVERSE_P4_PATH
+  if (!override) return { command: 'p4', prefixArgs: [] }
+  if (/\.[mc]?js$/.test(override)) return { command: process.execPath, prefixArgs: [override] }
+  return { command: override, prefixArgs: [] }
+}
+
+/**
  * Whether `-Mj` output collapsed into data blobs instead of structured records.
  * Some servers emit report-style commands (`changes` / `describe` / `where`) as
  * one `{"data": "..."}` line per output line under `-Mj`, dropping the fields the
@@ -149,11 +164,18 @@ export class P4Service {
 
   private _spawn(args: readonly string[], options?: P4ExecOptions): Promise<P4ExecResult> {
     return new Promise((resolve, reject) => {
+      const { command, prefixArgs } = resolveP4Command()
       this._log?.(`> p4 ${args.join(' ')}`)
       const start = Date.now()
-      const proc = spawn('p4', [...args], {
+      const env = sanitizeEnv()
+      // When the fake p4 is a JS script we run it through this runtime. In the
+      // extension host that runtime is Electron-as-node, and sanitizeEnv strips
+      // ELECTRON_RUN_AS_NODE — re-add it so the child stays a Node process rather
+      // than launching a full Electron app.
+      if (command === process.execPath) env.ELECTRON_RUN_AS_NODE = '1'
+      const proc = spawn(command, [...prefixArgs, ...args], {
         cwd: this._cwd,
-        env: sanitizeEnv(),
+        env,
         windowsHide: true,
         shell: false,
       })

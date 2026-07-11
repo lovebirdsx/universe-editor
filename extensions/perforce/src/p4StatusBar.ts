@@ -37,15 +37,26 @@ export class P4StatusBarController {
       this._item.hide()
       return
     }
-    const { clientName, connection } = client.status
-    const suffix =
-      connection === 'offline'
-        ? ` (${localize('perforce.status.offline', 'offline')})`
-        : connection === 'not-logged-in'
-          ? ` (${localize('perforce.status.notLoggedIn', 'not logged in')})`
-          : ''
-    this._item.text = `$(server) ${clientName}${suffix}`
-    this._item.tooltip = `Perforce client: ${clientName}`
+    const { clientName, connection, openedCount, reconcileCount } = client.status
+    if (connection === 'offline') {
+      this._item.text = `$(server) ${clientName} (${localize('perforce.status.offline', 'offline')})`
+    } else if (connection === 'not-logged-in') {
+      this._item.text = `$(server) ${clientName} (${localize('perforce.status.notLoggedIn', 'not logged in')})`
+    } else {
+      // Connected: client name + open-file count, and the uncollected count when
+      // reconcile discovery has surfaced any (mirrors git's ahead/behind chips).
+      const counts =
+        reconcileCount > 0 ? ` ${openedCount} $(edit) ${reconcileCount} $(diff)` : ` ${openedCount}`
+      this._item.text = `$(server) ${clientName}${counts}`
+    }
+    this._item.tooltip =
+      connection === 'connected'
+        ? localize('perforce.status.tooltip', 'Perforce: {0} · {1} open, {2} to reconcile', {
+            0: clientName,
+            1: openedCount,
+            2: reconcileCount,
+          })
+        : `Perforce client: ${clientName}`
     this._item.show()
   }
 

@@ -5,11 +5,12 @@
 
 const ZH_CN: Readonly<Record<string, string>> = {
   // client.ts
-  'perforce.input.placeholder': '描述（提交时填写）',
+  'perforce.input.placeholder': '默认 changelist 的提交描述',
   'perforce.group.default': '默认 Changelist',
   'perforce.group.numbered': '#{0}: {1}',
   'perforce.group.numberedNoDesc': '#{0}',
   'perforce.group.shelved': '已搁置的文件',
+  'perforce.group.reconcile': '待收集的改动',
   // command titles reused at runtime
   'perforce.command.commit': '提交',
   'perforce.command.submit.title': '提交',
@@ -21,8 +22,11 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.delete.confirm': '将 “{0}” 标记为删除？',
   'perforce.btn.revert': '还原',
   'perforce.revert.confirm': '还原 “{0}”？本地更改将丢失。',
+  'perforce.btn.revertAll': '全部还原',
+  'perforce.revertChangelist.confirm': '还原 {0} 中的所有文件？本地更改将丢失。',
   'perforce.btn.submit': '提交',
-  'perforce.submit.confirmNumbered': '提交 changelist #{0}？',
+  'perforce.submit.confirmDefault': '将默认 changelist 提交到 depot？此操作不可撤销。',
+  'perforce.submit.confirmNumbered': '将 changelist #{0} 提交到 depot？此操作不可撤销。',
   'perforce.submit.noDescription': '请先填写 changelist 描述。',
   // changelist management / shelve / resolve (Phase 3)
   'perforce.newChangelist.prompt': '新建 changelist 的描述',
@@ -42,6 +46,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   // status bar
   'perforce.status.offline': '离线',
   'perforce.status.notLoggedIn': '未登录',
+  'perforce.status.tooltip': 'Perforce：{0} · {1} 个已打开，{2} 个待收集',
 }
 
 const useZhCn = (process.env.UNIVERSE_DISPLAY_LOCALE ?? '').toLowerCase().startsWith('zh')

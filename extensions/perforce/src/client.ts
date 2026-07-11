@@ -31,11 +31,18 @@ import {
   changelistIdFromGroupId,
   descriptionFirstLine,
   shelvedGroupId,
+  RECONCILE_GROUP_ID,
   type PendingChangelist,
   type P4Action,
 } from './changelist.js'
-import { toResourceStates, toShelvedResourceStates } from './p4Decoration.js'
+import {
+  toResourceStates,
+  toShelvedResourceStates,
+  toReconcileResourceStates,
+} from './p4Decoration.js'
 import { parseShelved, type ShelvedFile } from './shelveParser.js'
+import { parseReconcile, mergeReconcile, type ReconcileFile } from './reconcileParser.js'
+import { norm } from './pathUtil.js'
 import { buildNewChangeSpec, replaceDescription, parseDescription } from './changeSpec.js'
 import {
   parseAnnotate,
@@ -74,6 +81,10 @@ export type ConnectionState = 'connected' | 'offline' | 'not-logged-in'
 export interface ClientStatus {
   readonly clientName: string
   readonly connection: ConnectionState
+  /** Files currently open across all changelists (the SCM badge count). */
+  readonly openedCount: number
+  /** Files discovered as diverged-but-not-opened (the reconcile group size). */
+  readonly reconcileCount: number
 }
 
 export interface P4CacheOptions {
@@ -89,12 +100,41 @@ export class PerforceClient {
   private readonly _baseline: BaselineProvider
   /** Live groups by group id (default / cl:<n>), so refresh can reuse or drop. */
   private readonly _groups = new Map<string, SourceControlResourceGroup>()
+  /** The always-present "changes to reconcile" group (git's untracked/modified
+   *  analogue). Created first so it renders at the top; kept out of {@link _groups}
+   *  so the reconcile pass owns it and `_applyGroups` never disposes it. */
+  private readonly _reconcileGroup: SourceControlResourceGroup
+  /** Last reconcile discovery (files whose working tree diverged, not yet opened).
+   *  Re-filtered against the opened set on every refresh so a just-collected file
+   *  drops out without a full re-scan. */
+  private _reconcileFiles: readonly ReconcileFile[] = []
+  /** Normalized client paths currently opened, from the last refresh. Used to
+   *  filter incremental (watcher-driven) reconcile scans without a fresh `opened`
+   *  round-trip. */
+  private _openedPaths: ReadonlySet<string> = new Set()
+  /** Opened-file count from the last refresh (mirrors the SCM badge). */
+  private _openedCount = 0
   private readonly _changeListeners = new Set<() => void>()
   /** Pending numbered changelists from the last refresh, for reopen quick-picks. */
   private _pending: readonly PendingChangelist[] = []
   private _connection: ConnectionState = 'connected'
   private _refreshing = false
   private _queued = false
+  /** Whether reconcile discovery is on: sticky after the first explicit scan
+   *  (clean refresh / collect / file-watch), or always when `perforce.autoReconcile`
+   *  is set. When on, the "changes to reconcile" group reflects working-tree drift. */
+  private _reconcileActive = false
+  /** Whether every refresh should run a full `reconcile -n <scope>` walk. Only set
+   *  by `perforce.autoReconcile`; ordinary refreshes re-filter the cached list
+   *  instead of walking the tree (see {@link _refreshReconcile}). */
+  private _autoReconcile = false
+  /** One-shot request for a full reconcile walk on the next refresh (set by a
+   *  clean refresh); consumed and cleared inside `_doRefresh`. */
+  private _fullScanRequested = false
+  /** Depot/local scope the reconcile-discovery pass covers. Defaults to the whole
+   *  client (`//...`); narrowed to the opened folder so a huge depot isn't scanned
+   *  on every refresh (see {@link setReconcileScope}). */
+  private _reconcileScope = '//...'
   private _disposed = false
   private _pollTimer: ReturnType<typeof setInterval> | undefined
 
@@ -111,9 +151,16 @@ export class PerforceClient {
     registerP4CacheNamespaces(this._cache, cacheOptions.workspaceTtlMs)
     this._baseline = new BaselineProvider(this._p4, this._cache)
     this._sc = scm.createSourceControl('perforce', `Perforce: ${_clientName}`, root)
+    // Created first so it renders above the changelist groups (SCM view shows
+    // groups in creation order). Hidden until reconcile discovery finds drift.
+    this._reconcileGroup = this._sc.createResourceGroup(
+      RECONCILE_GROUP_ID,
+      localize('perforce.group.reconcile', 'Changes to Reconcile'),
+    )
+    this._reconcileGroup.hideWhenEmpty = true
     this._sc.inputBox.placeholder = localize(
       'perforce.input.placeholder',
-      'Description (used on submit)',
+      'Message for the default changelist',
     )
     this._sc.acceptInputCommand = {
       command: 'perforce.submitDefault',
@@ -152,7 +199,12 @@ export class PerforceClient {
   }
 
   get status(): ClientStatus {
-    return { clientName: this._clientName, connection: this._connection }
+    return {
+      clientName: this._clientName,
+      connection: this._connection,
+      openedCount: this._openedCount,
+      reconcileCount: this._reconcileFiles.length,
+    }
   }
 
   /** Subscribe to connection-state changes for the status bar. */
@@ -167,10 +219,20 @@ export class PerforceClient {
 
   /**
    * Refresh the pending changelists (opened files + numbered CL metadata) and
-   * rebuild the groups. Lightweight — server metadata queries only, no `status`/
-   * `reconcile` (those are heavy and stay explicit). Coalesces concurrent calls.
+   * rebuild the groups. Lightweight by default — server metadata queries only.
+   *
+   * When reconcile discovery is active (after a clean refresh / collect, or with
+   * `perforce.autoReconcile`), a `p4 reconcile -n` pass also runs to populate the
+   * "changes to reconcile" group. That pass can be heavy on a large workspace, so
+   * ordinary post-mutation refreshes leave it off unless it's already sticky.
+   * Pass `{ reconcile: true }` to force the pass on (and make it sticky).
+   * Coalesces concurrent calls.
    */
-  async refresh(): Promise<void> {
+  async refresh(options?: { reconcile?: boolean }): Promise<void> {
+    if (options?.reconcile) {
+      this._reconcileActive = true
+      this._fullScanRequested = true
+    }
     if (this._refreshing) {
       this._queued = true
       return
@@ -184,6 +246,26 @@ export class PerforceClient {
     } finally {
       this._refreshing = false
     }
+  }
+
+  /** Turn reconcile discovery on/off (from `perforce.autoReconcile`). Enabling it
+   *  makes every subsequent refresh run a full `reconcile -n` walk. */
+  setAutoReconcile(enabled: boolean): void {
+    this._autoReconcile = enabled
+    if (enabled) this._reconcileActive = true
+  }
+
+  /** Narrow the reconcile-discovery scan to `localPath` (the opened folder) so a
+   *  huge depot isn't walked as `//...` on every refresh. A local filesystem path
+   *  is passed to p4 as `<path>/...`; `undefined` restores the whole-client `//...`
+   *  default. */
+  setReconcileScope(localPath: string | undefined): void {
+    if (!localPath) {
+      this._reconcileScope = '//...'
+      return
+    }
+    const trimmed = localPath.replace(/[/\\]+$/, '')
+    this._reconcileScope = `${trimmed}/...`
   }
 
   private async _doRefresh(): Promise<void> {
@@ -238,7 +320,17 @@ export class PerforceClient {
     }
 
     this._applyGroups(desired)
-    this._sc.count = countOpened(groups)
+    this._openedPaths = new Set(
+      openedFiles
+        .map((f) => (f.clientFile ? norm(f.clientFile) : undefined))
+        .filter(Boolean) as string[],
+    )
+    const fullScan = this._fullScanRequested || this._autoReconcile
+    this._fullScanRequested = false
+    await this._refreshReconcile(fullScan)
+    if (this._disposed) return
+    this._openedCount = countOpened(groups)
+    this._sc.count = this._openedCount
     const defaultHasFiles = groups.some((g) => g.isDefault && g.files.length > 0)
     this._sc.acceptInputActions = defaultHasFiles
       ? [
@@ -277,6 +369,100 @@ export class PerforceClient {
     return out
   }
 
+  /**
+   * Refresh the "changes to reconcile" group during a full workspace refresh.
+   *
+   * When discovery is inactive the group is emptied (hidden). With `fullScan` on
+   * (clean refresh / `perforce.autoReconcile`) it runs a full `reconcile -n -a -e -d
+   * <scope>` walk — heavy on large trees, so only on demand. Otherwise (an ordinary
+   * post-mutation refresh) it re-filters the cached list against the freshly fetched
+   * opened set, so a just-collected file drops out without walking the tree again.
+   *
+   * `p4 reconcile -n` is a dry run — it never mutates server state (collecting a
+   * file is a separate real `reconcile`). Files already opened are filtered out
+   * (their disk edits are tracked in a changelist group). A failed walk logs and
+   * clears the group rather than sinking the whole refresh.
+   */
+  private async _refreshReconcile(fullScan: boolean): Promise<void> {
+    if (!this._reconcileActive) {
+      this._setReconcileFiles([])
+      return
+    }
+    if (!fullScan) {
+      // Cheap path: no tree walk. Drop cached entries that are now opened
+      // (e.g. just collected) and re-render.
+      this._setReconcileFiles(
+        this._reconcileFiles.filter(
+          (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
+        ),
+      )
+      return
+    }
+    const res = await this._p4.execRecords([
+      'reconcile',
+      '-n',
+      '-a',
+      '-e',
+      '-d',
+      this._reconcileScope,
+    ])
+    if (this._disposed) return
+    if (res.result.exitCode !== 0) {
+      // `reconcile -n` exits non-zero with "no file(s) to reconcile" when the
+      // tree is clean — that's not an error, just an empty result.
+      const stderr = res.result.stderr.toLowerCase()
+      if (!stderr.includes('no file(s) to reconcile') && !stderr.includes('- no such file')) {
+        this._log?.(`[perforce] reconcile -n failed: ${res.result.stderr.trim()}`)
+      }
+      this._setReconcileFiles([])
+      return
+    }
+    const files = parseReconcile(res.records).filter(
+      (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
+    )
+    this._setReconcileFiles(files)
+  }
+
+  /**
+   * Incrementally reconcile just the given changed paths (from the file watcher)
+   * instead of walking the whole opened folder. Runs `reconcile -n -a -e -d` on the
+   * exact paths, merges the result into the cached group (see {@link mergeReconcile})
+   * and re-renders — so cost is O(changed files), not O(tree size).
+   *
+   * Enables discovery (so the group keeps reflecting drift) but never sets the
+   * full-scan flag, so it stays cheap. A path that comes back clean drops out; a
+   * newly diverged path is added. Safe to interleave with a full refresh — p4
+   * calls are serialized and the merge always reads the latest cached list.
+   */
+  async refreshReconcilePaths(paths: readonly string[]): Promise<void> {
+    if (this._disposed || paths.length === 0) return
+    this._reconcileActive = true
+    const res = await this._p4.execRecords(['reconcile', '-n', '-a', '-e', '-d', ...paths])
+    if (this._disposed) return
+    let fresh: ReconcileFile[] = []
+    if (res.result.exitCode === 0) {
+      fresh = parseReconcile(res.records).filter(
+        (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
+      )
+    } else {
+      // Non-zero with "no file(s) to reconcile" / "no such file" just means these
+      // paths are clean now → an empty `fresh` removes them from the group below.
+      const stderr = res.result.stderr.toLowerCase()
+      if (!stderr.includes('no file(s) to reconcile') && !stderr.includes('- no such file')) {
+        this._log?.(`[perforce] incremental reconcile -n failed: ${res.result.stderr.trim()}`)
+        return
+      }
+    }
+    this._setReconcileFiles(mergeReconcile(this._reconcileFiles, paths, fresh))
+    this._emitChange()
+  }
+
+  /** Set the reconcile file list and mirror it into the group's resource states. */
+  private _setReconcileFiles(files: readonly ReconcileFile[]): void {
+    this._reconcileFiles = files
+    this._reconcileGroup.resourceStates = toReconcileResourceStates(files)
+  }
+
   /** Reconcile the live ResourceGroups with the freshly computed groups: create
    *  new ones, update existing, dispose those that vanished. */
   private _applyGroups(groups: readonly DesiredGroup[]): void {
@@ -305,6 +491,10 @@ export class PerforceClient {
     this._connection =
       kind === 'session-expired' || kind === 'not-logged-in' ? 'not-logged-in' : 'offline'
     for (const live of this._groups.values()) live.resourceStates = []
+    this._reconcileGroup.resourceStates = []
+    this._reconcileFiles = []
+    this._openedPaths = new Set()
+    this._openedCount = 0
     this._sc.count = 0
     this._log?.(`[perforce] ${this._clientName} → ${this._connection} (${kind})`)
     this._emitChange()
@@ -367,9 +557,49 @@ export class PerforceClient {
     return this._mutate('delete', ['delete'], paths)
   }
 
+  /**
+   * Collect (reconcile) working-tree changes into open state: run the real
+   * `p4 reconcile -a -e -d` on `paths`, which opens each file for the action that
+   * matches its on-disk state (add / edit / delete). The file then leaves the
+   * "changes to reconcile" group and appears in a changelist group. Enables
+   * reconcile discovery so the group keeps reflecting drift afterwards.
+   */
+  async reconcile(paths: readonly string[]): Promise<boolean> {
+    if (paths.length === 0) return false
+    this._reconcileActive = true
+    return this._mutate('reconcile', ['reconcile', '-a', '-e', '-d'], paths)
+  }
+
+  /** Collect every currently discovered reconcile candidate at once. */
+  async reconcileAll(): Promise<boolean> {
+    const paths = this._reconcileFiles
+      .map((f) => f.clientFile)
+      .filter((p): p is string => p !== undefined)
+    if (paths.length === 0) {
+      // Nothing discovered yet — run a whole-tree reconcile so "collect all"
+      // works even before an explicit scan populated the group.
+      this._reconcileActive = true
+      return this._mutate('reconcile', ['reconcile', '-a', '-e', '-d', '//...'])
+    }
+    return this.reconcile(paths)
+  }
+
   /** Revert files — discards the open state and restores the have revision. */
   async revert(paths: readonly string[]): Promise<boolean> {
     return this._mutate('revert', ['revert'], paths)
+  }
+
+  /**
+   * Revert every open file in a changelist (`p4 revert -c <id> //...`), discarding
+   * all its local edits. Destructive — the caller confirms first. `'default'`
+   * reverts the default changelist's files.
+   */
+  async revertChangelist(changelist: string): Promise<boolean> {
+    const args =
+      changelist === 'default'
+        ? ['revert', '-c', 'default', '//...']
+        : ['revert', '-c', changelist, '//...']
+    return this._mutate('revert', args)
   }
 
   /**
@@ -754,6 +984,7 @@ export class PerforceClient {
     this._cache.clear()
     for (const live of this._groups.values()) live.dispose()
     this._groups.clear()
+    this._reconcileGroup.dispose()
     this._sc.dispose()
     this._changeListeners.clear()
   }

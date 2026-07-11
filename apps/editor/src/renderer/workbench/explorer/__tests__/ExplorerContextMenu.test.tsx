@@ -129,4 +129,38 @@ describe('ExplorerContextMenu', () => {
       cmdDisposable.dispose()
     }
   })
+
+  it('exposes resourceScheme so file-gated items (e.g. Perforce) show for file targets', () => {
+    const cmdId = 'test.explorer.p4edit'
+    const cmdDisposable = CommandsRegistry.registerCommand(cmdId, () => {}, {
+      description: 'Open for Edit',
+    })
+    const menuDisposable = MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+      command: cmdId,
+      title: 'Open for Edit',
+      when: 'resourceScheme == file && !explorerResourceIsFolder',
+    })
+    const contextKeyService = new ContextKeyService()
+
+    try {
+      const commandService = new FakeCommandService()
+      const root = URI.file('/ws')
+      const file = URI.joinPath(root, 'main.ts')
+
+      render(
+        <ExplorerContextMenu
+          state={{ x: 0, y: 0, target: { resource: file, isDirectory: false } }}
+          rootResource={root}
+          commandService={commandService as unknown as ICommandService}
+          contextKeyService={contextKeyService}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByText('Open for Edit')).toBeDefined()
+    } finally {
+      contextKeyService.dispose()
+      menuDisposable.dispose()
+      cmdDisposable.dispose()
+    }
+  })
 })

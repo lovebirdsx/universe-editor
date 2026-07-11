@@ -59,6 +59,11 @@ export interface ChangelistGroup {
 
 export const DEFAULT_GROUP_ID = 'default'
 
+/** Fixed group id for the "changes to reconcile" group — files whose working-tree
+ *  state has diverged from the depot but that aren't opened yet (git's untracked/
+ *  modified analogue). Always at the top, hidden when empty. */
+export const RECONCILE_GROUP_ID = 'reconcile'
+
 /** Build the `cl:<n>` group id for a numbered changelist. */
 export function numberedGroupId(id: string): string {
   return `cl:${id}`

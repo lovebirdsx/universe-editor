@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # 扩展内置 Perforce（p4）插件
 
-`extensions/perforce` 是一等（trusted）SCM 插件，与 git 扩展地位对等：它在 extension-host 进程里 `spawn('p4', argv)`，把一个 Perforce client（workspace）通过 VSCode 式 **SCM API**（`scm.createSourceControl`）呈现成侧栏源代码管理提供方。功能深度已覆盖 core + advanced（连接/登录、changelist 分组、edit/add/delete/revert、submit、diff、编号 changelist 管理 + reopen、shelve/unshelve、resolve、autoEdit、dirty-diff、annotate blame）。
+`extensions/perforce` 是一等（trusted）SCM 插件，与 git 扩展地位对等：它在 extension-host 进程里 `spawn('p4', argv)`，把一个 Perforce client（workspace）通过 VSCode 式 **SCM API**（`scm.createSourceControl`）呈现成侧栏源代码管理提供方。功能深度已覆盖 core + advanced（连接/登录、changelist 分组、edit/add/delete/revert、submit、diff、编号 changelist 管理 + reopen、shelve/unshelve、resolve、autoEdit、dirty-diff、annotate blame）**+「收集修改」体验对齐 git**（待收集/reconcile 置顶分组 + 一键收集、explorer/editor 签出入口、聚焦刷新、组级还原、状态栏计数）。
 
 > ⚠️ **头号红线（务必逐字保持）**：密码 / ticket **绝不进明文 settings/aiSettings/线协议**。登录只把密码经 **stdin** 喂给 `p4 login`（`client.ts` `login()`），ticket 由 `p4` 自身按 `P4TICKETS` 机制保存，插件**不自管凭据**。任何新功能都不得把凭据落盘、打日志、或经 RPC 明文传。
 >
@@ -50,6 +50,17 @@ git 是「staged / working 两个固定组」；p4 是「一个文件属于**恰
 - 组 id ↔ changelist id 互转：`numberedGroupId`/`shelvedGroupId`/`changelistIdFromGroupId`。组作用域命令靠宿主附在 group action 上的 `scmResourceGroupId` 定位 CL（见 `extension.ts` `groupChangelistId`）。
 - `sc.count` = 打开文件总数（不含搁置）；`acceptInputCommand`/`acceptInputActions` 在默认组有文件时挂 Submit / Revert Unchanged。
 
+## 「收集修改」= 待收集(reconcile)分组（对标 git untracked/modified）
+
+**根因**：git 面板 = 磁盘真相（`git status`），p4 面板 = 服务器 `p4 opened`（只显示**已签出**的文件）→ 磁盘上改了/建了/删了但没签出的文件面板看不到，形成「改了看不到、想签点不到」死结。补法是一个**固定置顶分组**「待收集的改动」（组 id `RECONCILE_GROUP_ID = 'reconcile'`，`changelist.ts`）。
+
+- **发现**：`p4 reconcile -n -a -e -d //...`（`-n` = **dry-run，绝不改服务器**）报告偏离 depot 的文件；`reconcileParser.ts`（纯函数 + 单测）把记录 → `ReconcileFile[]`（字段同 `opened`：depotFile/clientFile/action/rev）。`client.ts` `_refreshReconcile()` 跑它并**过滤掉已 opened 的路径**（用 `norm()` 比对，防同一文件双列）。
+- **收集**：`reconcile()` / `reconcileAll()` 跑**真** `p4 reconcile -a -e -d`（去掉 `-n`），文件签出进 changelist、离开待收集组。
+- **性能门控（关键取舍）**：reconcile 扫描在大 workspace 慢，**默认不在每次 refresh 跑**。`_reconcileActive` 粘性开关：`refresh({reconcile:true})`（cleanRefresh）/ 收集操作 / `perforce.autoReconcile` 才开启；关闭时 `_refreshReconcile` 直接清空组返回，**零额外 p4 调用**。
+- **固定组生命周期**：reconcile 组在**构造函数里第一个** `createResourceGroup`（SCM 视图按创建序渲染 → 保证置顶），`hideWhenEmpty=true`，**不进 `_groups` Map**（`_applyGroups` 对账不碰它，避免被 dispose），`dispose()` 里单独释放。
+- **行 contextValue = `RC`**（`p4Decoration.ts` `toReconcileResourceState`），与已签出行区分，menu `when` 用 `scmResourceState == RC` 单独挂「收集」inline。
+- **cleanRefresh 正名**：原来与普通 refresh 等价（占位），现在 = 带 reconcile 发现的全量刷新。
+
 ## 命令路由（一 id 多 client）
 
 所有 p4 source control 共享 id `perforce`，靠**每个 client 唯一的 root** 路由（`clientManager.ts`）：
@@ -64,12 +75,19 @@ git 是「staged / working 两个固定组」；p4 是「一个文件属于**恰
 绝大多数 mutating 操作走 `_mutate(label, args, paths?)`：跑 p4 → 失败 toast（`notifyP4Failure`）→ **清 baseline 缓存** → **refresh**。加新操作时优先复用它。
 
 - 需要 spec 表单的（`change -i`、`change -o` 改描述）走 stdin `input`，见 `newChangelist`/`editChangelistDescription` + `changeSpec.ts`（`buildNewChangeSpec`/`replaceDescription`/`parseDescription` 纯函数）。
-- `refresh()` 有**合并（coalesce）**：并发调用排队成一次，`_refreshing`/`_queued` 守卫；每步查完 `if (this._disposed) return`。
-- 破坏性操作（delete/revert/submit numbered/deleteShelved）在 `extension.ts` 命令层 `showWarningMessage` 二次确认，**不要**把确认塞进 client 方法。
+- `refresh()` 有**合并（coalesce）**：并发调用排队成一次，`_refreshing`/`_queued` 守卫；每步查完 `if (this._disposed) return`。支持 `refresh({reconcile:true})` 开启 reconcile 发现（见上文待收集分组）。
+- 破坏性操作（delete/revert/revertChangelist/submit/deleteShelved）在 `extension.ts` 命令层 `showWarningMessage` 二次确认，**不要**把确认塞进 client 方法。**submit 直达 depot 不可撤销**（不像 git 有 amend/undo）→ 确认框文案须注明「This cannot be undone / 此操作不可撤销」。
+- **还原两档**：`revert`（单文件）、`revertChangelist`（整组 `p4 revert -c <id> //...`，破坏性、需确认）、`revertUnchanged`（`revert -a`，只还原内容未变的、安全、无需确认）——三者别混。
 
 ## 连接状态 & 离线
 
-server 端状态、**无 FS watcher**。`ConnectionState` = `connected|offline|not-logged-in`。任何 p4 命令非零退出经 `p4Error.ts` `classifyP4Error` 分类：session 过期/未登录 → `not-logged-in`（提示重新登录），连接失败 → `offline`。`_goOffline` 清空组 + count=0 + emit（状态栏更新），**不刷屏弹错**。轮询（`startPolling`，opt-in，`perforce.refreshInterval` 秒，最小 10s 地板）是唯一能捕捉编辑器外改动的手段。
+server 端状态、**无 FS watcher**。`ConnectionState` = `connected|offline|not-logged-in`。任何 p4 命令非零退出经 `p4Error.ts` `classifyP4Error` 分类：session 过期/未登录 → `not-logged-in`（提示重新登录），连接失败 → `offline`。`_goOffline` 清空组 + count=0 + emit（状态栏更新），**不刷屏弹错**。
+
+捕捉**编辑器外改动**有三条互补手段（都因服务器无 watcher 而必需）：
+- **文件监视自动刷新**（`workspaceWatcher.ts`，`perforce.autoRefresh` 默认**开**）：node `fs.watch(**打开的文件夹** workspace.rootPath,{recursive:true})` 监视磁盘（对齐 git `repositoryWatcher.ts`），**去抖（400ms）**后触发 `refresh({reconcile:true})`，编辑器保存与外部工具改动都覆盖。递归不可用时降级为非递归 watch（会落日志），忽略 `.git`/`node_modules`/临时文件。**⚠️ 坑：绝不能监视 `client.root`**——p4 client root 是整个 workspace 映射（大型游戏项目可能在打开文件夹的很多层之上），对它递归 watch 在 Windows 上慢且常直接失败→降级非递归→**嵌套子目录的改动永远看不到**（"改了文件不进待收集组"的真 bug）。同理 reconcile 扫描范围也从 `//...` 收窄到打开文件夹（`client.setReconcileScope(folder)` → `reconcile -n <folder>/...`），否则大 depot 每次保存全盘扫。**首party 可信扩展跑在 host 进程，可直接用 `node:fs`**。
+- **autoEdit**（`autoEdit.ts`，默认关）：`onDidChangeTextDocument` 首次改动即 `p4 edit`。
+- **轮询**（`startPolling`，`perforce.refreshInterval` 秒，最小 10s 地板，默认关）：定时兜底，留给共享盘/CI。
+- **状态栏计数**：`ClientStatus` 带 `openedCount`/`reconcileCount`，`p4StatusBar.ts` 连接态下显示「client名 N个已打开 M个待收集」，对标 git ahead/behind。刷新在 `_doRefresh` 末尾更新 `_openedCount`，`_goOffline` 清零。
 
 ## 宿主泛化：p4/git 共用一个无偏见 host
 
@@ -84,13 +102,15 @@ dirty-diff gutter 与 inline blame 原本硬编码 `git.*` 命令；已抽象为
 
 ## 菜单 & when 子句（`package.json`）
 
-- SCM 视图内菜单用 `scmProvider == perforce` 门控（**`scmProvider` 只在 SCM 视图作用域有效，explorer/editor 菜单用不了它**——这是踩过的坑，别给 p4 加 explorer/editor 菜单再指望 `scmProvider`）。
-- 行选择靠 `scmResourceState`（单字母，来自 `p4Decoration.ts` `contextValue`：E/A/D/B/I/M/R，未 resolve=U，搁置=S）。组选择靠 `scmResourceGroup =~ /^cl:/` 或 `/^shelved:/`（正则）。
+- SCM 视图内菜单用 `scmProvider == perforce` 门控（**`scmProvider` 只在 SCM 视图作用域有效，explorer/editor 菜单用不了它**——这是踩过的坑）。**explorer/editor 菜单改用 `resourceScheme == file` 门控**（可选叠 `!explorerResourceIsFolder` / `scmActiveResourceHasChanges` / `!isInDiffEditor`）；p4 的签出/新增/删除/打开更改/收集就是这么进 explorer 右键 + editor 标题栏的，命令 handler 复用 SCM 版同一个。
+- 行选择靠 `scmResourceState`（单字母，来自 `p4Decoration.ts` `contextValue`：E/A/D/B/I/M，未 resolve=U，搁置=S，**待收集=RC**）。组选择靠 `scmResourceGroup == reconcile`（固定组）/ `=~ /^cl:/` / `=~ /^shelved:/`（正则）。
 - 加行内动作：`scm/resourceState/context` `group: "inline@N"`；组动作：`scm/resourceGroup/context`；标题栏：`scm/title`。
+- **explorer/editor 命令传参坑**：explorer 右键把 `resource` 作为 **`UriComponents`**（`{$mid,scheme,path}`）传，**跨 RPC 丢 `fsPath` getter**（`.fsPath` 读出空串）→ 用 `pathUtil.ts` `uriToFsPath(resource)` 从 scheme+path 重建路径（见 `extension.ts` `resolveTargetPath`），别读 `.fsPath`。
+- **多选（宿主受限，暂缺）**：SCM 视图（`ScmView.tsx`）行命令只传**单个** `resource`，真多选需改宿主选择模型 + 命令传参协议 → 目前 revert/reconcile 等都是单文件；批量走**组级**命令（`reconcileAll`/`revertChangelist`）绕过。
 
 ## 解析器测试套路（纯函数，node 环境）
 
-领域/输出解析全部纯函数 + `src/__tests__/*.test.ts`，对 fixture 断言（`openedParser`/`changeSpec`/`changelist`/`shelveParser`/`blameSource`/`pathUtil`/`p4Output`）。**新增任何解析逻辑先写纯函数 + 单测**，client 只做编排。mock extension-api 套路见 create-extension（`vi.mock('@universe-editor/extension-api', …)`）。当前 perforce 包 7 个测试文件 49 例。
+领域/输出解析全部纯函数 + `src/__tests__/*.test.ts`，对 fixture 断言（`openedParser`/`reconcileParser`/`changeSpec`/`changelist`/`shelveParser`/`blameSource`/`pathUtil`/`p4Output`）。**新增任何解析逻辑先写纯函数 + 单测**，client 只做编排。mock extension-api 套路见 create-extension（`vi.mock('@universe-editor/extension-api', …)`）。当前 perforce 包 13 个测试文件 117 例。
 
 ## 密钥 / env 安全红线（重申）
 
@@ -100,7 +120,7 @@ dirty-diff gutter 与 inline blame 原本硬编码 `git.*` 命令；已抽象为
 
 ## 配置项（`perforce.*`）
 
-`enabled`(默认 true)、`port`/`user`/`client`（连接兜底，优先 `p4 set`/P4CONFIG）、`maxConcurrent`(4)、`refreshInterval`(0=关，最小 10s)、`autoEdit`(false)。加新配置：`package.json` `contributes.configuration` + nls description key，读用 `workspace.getConfiguration('perforce').get(key, default)`。
+`enabled`(默认 true)、`port`/`user`/`client`（连接兜底，优先 `p4 set`/P4CONFIG）、`maxConcurrent`(4)、`refreshInterval`(0=关，最小 10s)、`autoEdit`(false)、`autoReconcile`(false，每次 refresh 带 reconcile 发现)、`autoRefresh`(true，文件监视触发带 reconcile 发现的自动刷新)、`cache.*`。加新配置：`package.json` `contributes.configuration` + nls description key，读用 `workspace.getConfiguration('perforce').get(key, default)`。
 
 ## 验证
 
@@ -115,12 +135,23 @@ pnpm check                                       # lint+typecheck+全测+docs:ch
 - 交互流程改动 → `pnpm e2e`（本地 Windows 有 launch flake，交 CI）。
 - 打包自动收录：`scripts/release/runtime-resources.mjs` `discoverBuiltinExtensions` 用 `readdirSync` 扫 `extensions/`，perforce 的 `files:["dist","package.nls.json","package.nls.zh-cn.json","icon.svg"]` 必须齐（`assertPackagedFile` 校验）。
 
+## e2e：fake p4（无需真 p4d）
+
+本机 / CI 有 `p4` client 但**无可达 p4d**，`p4 info` 发现失败 → provider 整体禁用，任何 p4 端到端链路都跑不起来。故有一套 **fake p4**：
+- `p4Service._spawn` 认 **`UNIVERSE_P4_PATH`** 覆盖 `spawn('p4')`；`.mjs/.js/.cjs` 结尾则用 `process.execPath <script>` 跑（宿主里是 Electron-as-node，`sanitizeEnv` 会剥 `ELECTRON_RUN_AS_NODE`，`_spawn` 对该情况**重新补回** `=1` 否则起成 GUI Electron）。纯逻辑 `resolveP4Command()` 已导出 + `p4Service.test.ts` 守。
+- `apps/editor/e2e/fixtures/fake-p4.mjs`：**磁盘状态** fake，depot/have/opened 存一个 JSON（`UNIVERSE_P4_FAKE_STATE`）；`reconcile -n` 真去 walk client root 比对磁盘 vs have-revision，`edit/add/delete/reconcile/revert` 真改 opened 集。依赖零、纯 Node。要覆盖新 p4 子命令就在它的 `switch(command)` 里加一个 case，注意 `-Mj`(默认) 与 `-ztag` 两种输出模式（`emit()` 已分流）。
+- `apps/editor/e2e/fixtures/perforceApp.ts`：cold-launch fixture（开 workspace 会重启宿主，不能用 shared 实例），`test.use({ p4Seeds:{files:[...]}, openSubdir })` 定制，`perforce` fixture 给 `clientRoot`/`openDir`/`file()`。样例 spec：`smoke.perforceCollectChanges.spec.ts`（改盘上文件 → 断言进「Changes to Reconcile」组；含"打开深层子目录"用例，`@regression`）。**⚠️ Playwright option fixture 的值不能是裸数组**（会被当 tuple 只取首元素 → `seeds is not iterable`），故种子包一层对象 `P4SeedConfig{files}`。
+- 改了扩展 `src/` 后 e2e 用的是 `dist/`：先 `pnpm --filter @universe-editor/perforce build`；改了 app 侧（renderer/main）先 `pnpm --filter @universe-editor/editor build`（e2e 跑 `out/`）。单跑：`pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts e2e/specs/smoke.perforceCollectChanges.spec.ts`。
+
 ## 关键参考路径
 
 - `docs/plan/perforce-scm-plugin-plan.md` —— 5 阶段实施计划 + 设计（§2 分组模型差异、host 泛化策略、密钥红线原文）
+- `docs/plan/perforce-collect-changes-ux-plan.md` —— 「收集修改」体验对齐 git 的设计 + 实施状态（reconcile 分组、菜单入口、聚焦刷新、组级还原、多选宿主受限）
 - `extensions/perforce/src/p4Service.ts` —— CLI 封装 + env 净化 + `-Mj`/`-ztag`
-- `extensions/perforce/src/client.ts` —— PerforceClient：分组对账 + `_mutate` + 全操作方法 + getHeadContent/getBlame/openChange + polling
-- `extensions/perforce/src/extension.ts` —— activate + 全命令注册 + 路由 helper（resourcePath/groupChangelistId/resolveTargetPath）
+- `extensions/perforce/src/client.ts` —— PerforceClient：分组对账 + `_mutate` + 全操作方法 + reconcile 分组/收集 + getHeadContent/getBlame/openChange + polling + 状态计数
+- `extensions/perforce/src/extension.ts` —— activate + 全命令注册 + 路由 helper（resourcePath/groupChangelistId/resolveTargetPath，含 `uriToFsPath` explorer 传参修正）
+- `extensions/perforce/src/reconcileParser.ts` —— `reconcile -n` 输出解析（纯 + 单测），待收集分组数据源
+- `extensions/perforce/src/refreshController.ts` —— 聚焦刷新（`onDidChangeActiveTextEditor` 去抖）
 - `extensions/perforce/src/clientManager.ts` / `clientDiscovery.ts` —— 路由 / `p4 info` 发现
 - `extensions/perforce/src/changelist.ts` / `p4Output.ts` —— 分组纯逻辑 / 输出解析（numbered 并行键）
 - `extensions/perforce/src/{openedParser,fstatParser,shelveParser,blameSource,changeSpec}.ts` —— 领域解析（各带 __tests__）
@@ -130,7 +161,7 @@ pnpm check                                       # lint+typecheck+全测+docs:ch
 - `apps/editor/src/renderer/contributions/{DirtyDiffContribution,GitBlameContribution}.ts` —— 渲染侧消费 capability + `CommandsRegistry.getCommand` 能力探测
 - `extensions/git/` —— 对照样板（Repository/RepositoryManager/gitError/nls 都是 p4 的镜像来源）
 - 相关 skill：`create-extension`（插件通用套路）、`dirty-diff-inline-peek`（内联 diff peek UI）
-- 相关 memory：`extension-system-progress` / `eslint-path-identity-guardrails` / `dirty-diff-inline-peek-feature` / `path-comparison-convergence`
+- 相关 memory：`extension-system-progress` / `eslint-path-identity-guardrails` / `dirty-diff-inline-peek-feature` / `path-comparison-convergence` / `perforce-collect-changes-ux`
 
 ## 其它
 

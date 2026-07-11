@@ -23,6 +23,8 @@
     "commands": [
       { "command": "perforce.refresh", "title": "%perforce.command.refresh.title%", "category": "Perforce", "icon": "refresh" },
       { "command": "perforce.cleanRefresh", "title": "%perforce.command.cleanRefresh.title%", "category": "Perforce", "icon": "refresh" },
+      { "command": "perforce.reconcile", "title": "%perforce.command.reconcile.title%", "category": "Perforce", "icon": "add" },
+      { "command": "perforce.reconcileAll", "title": "%perforce.command.reconcileAll.title%", "category": "Perforce", "icon": "stage-all" },
       { "command": "perforce.login", "title": "%perforce.command.login.title%", "category": "Perforce", "icon": "key" },
       { "command": "perforce.logout", "title": "%perforce.command.logout.title%", "category": "Perforce", "icon": "sign-out" },
       { "command": "perforce.showOutput", "title": "%perforce.command.showOutput.title%", "category": "Perforce", "icon": "output" },
@@ -33,6 +35,7 @@
       { "command": "perforce.delete", "title": "%perforce.command.delete.title%", "category": "Perforce", "icon": "trash" },
       { "command": "perforce.revert", "title": "%perforce.command.revert.title%", "category": "Perforce", "icon": "discard" },
       { "command": "perforce.revertUnchanged", "title": "%perforce.command.revertUnchanged.title%", "category": "Perforce", "icon": "discard" },
+      { "command": "perforce.revertChangelist", "title": "%perforce.command.revertChangelist.title%", "category": "Perforce", "icon": "discard" },
       { "command": "perforce.submitDefault", "title": "%perforce.command.submit.title%", "category": "Perforce", "icon": "check" },
       { "command": "perforce.submitChangelist", "title": "%perforce.command.submitChangelist.title%", "category": "Perforce", "icon": "check" },
       { "command": "perforce.newChangelist", "title": "%perforce.command.newChangelist.title%", "category": "Perforce", "icon": "add" },
@@ -62,20 +65,34 @@
         { "command": "perforce.cleanRefresh", "group": "1@2", "icon": "refresh" }
       ],
       "scm/resourceState/context": [
-        { "command": "perforce.openChange", "when": "scmProvider == perforce && scmResourceState != S", "group": "inline@1", "icon": "compare-changes" },
-        { "command": "perforce.revert", "when": "scmProvider == perforce && scmResourceState != S", "group": "inline@2", "icon": "discard" },
+        { "command": "perforce.reconcile", "when": "scmProvider == perforce && scmResourceState == RC", "group": "inline@1", "icon": "add" },
+        { "command": "perforce.openChange", "when": "scmProvider == perforce && scmResourceState != S && scmResourceState != RC", "group": "inline@1", "icon": "compare-changes" },
+        { "command": "perforce.revert", "when": "scmProvider == perforce && scmResourceState != S && scmResourceState != RC", "group": "inline@2", "icon": "discard" },
         { "command": "perforce.resolve", "when": "scmProvider == perforce && scmResourceState == U", "group": "inline@3", "icon": "merge" },
         { "command": "perforce.openFile", "when": "scmProvider == perforce && scmResourceState != S", "group": "1_open@1", "icon": "go-to-file" },
-        { "command": "perforce.reopen", "when": "scmProvider == perforce && scmResourceState != S", "group": "2_modify@1", "icon": "arrow-right" }
+        { "command": "perforce.edit", "when": "scmProvider == perforce && scmResourceState == RC", "group": "1_open@2", "icon": "edit" },
+        { "command": "perforce.reopen", "when": "scmProvider == perforce && scmResourceState != S && scmResourceState != RC", "group": "2_modify@1", "icon": "arrow-right" }
       ],
       "scm/resourceGroup/context": [
+        { "command": "perforce.reconcileAll", "when": "scmProvider == perforce && scmResourceGroup == reconcile", "group": "inline@1", "icon": "stage-all" },
         { "command": "perforce.submitChangelist", "when": "scmProvider == perforce && scmResourceGroup =~ /^cl:/", "group": "inline@1", "icon": "check" },
         { "command": "perforce.shelve", "when": "scmProvider == perforce && scmResourceGroup =~ /^cl:/", "group": "inline@2", "icon": "archive" },
         { "command": "perforce.unshelve", "when": "scmProvider == perforce && scmResourceGroup =~ /^shelved:/", "group": "inline@1", "icon": "export" },
         { "command": "perforce.deleteShelved", "when": "scmProvider == perforce && scmResourceGroup =~ /^shelved:/", "group": "inline@2", "icon": "trash" },
         { "command": "perforce.editChangelist", "when": "scmProvider == perforce && scmResourceGroup =~ /^cl:/", "group": "1_edit@1", "icon": "edit" },
         { "command": "perforce.resolveChangelist", "when": "scmProvider == perforce && scmResourceGroup =~ /^cl:/", "group": "1_edit@2", "icon": "merge" },
-        { "command": "perforce.revertUnchanged", "when": "scmProvider == perforce", "group": "2_revert@1", "icon": "discard" }
+        { "command": "perforce.revertUnchanged", "when": "scmProvider == perforce && scmResourceGroup != reconcile", "group": "2_revert@1", "icon": "discard" },
+        { "command": "perforce.revertChangelist", "when": "scmProvider == perforce && (scmResourceGroup == default || scmResourceGroup =~ /^cl:/)", "group": "2_revert@2", "icon": "discard" }
+      ],
+      "explorer/context": [
+        { "command": "perforce.edit", "when": "resourceScheme == file && !explorerResourceIsFolder", "group": "7_perforce@1" },
+        { "command": "perforce.add", "when": "resourceScheme == file && !explorerResourceIsFolder", "group": "7_perforce@2" },
+        { "command": "perforce.delete", "when": "resourceScheme == file && !explorerResourceIsFolder", "group": "7_perforce@3" },
+        { "command": "perforce.reconcile", "when": "resourceScheme == file && !explorerResourceIsFolder", "group": "7_perforce@4" },
+        { "command": "perforce.openChange", "when": "resourceScheme == file && !explorerResourceIsFolder", "group": "7_perforce@5" }
+      ],
+      "editor/title": [
+        { "command": "perforce.openChange", "when": "resourceScheme == file && scmActiveResourceHasChanges && !isInDiffEditor", "group": "navigation@3", "icon": "compare-changes" }
       ]
     },
     "configuration": {
@@ -117,6 +134,16 @@
           "type": "boolean",
           "default": false,
           "description": "%perforce.config.autoEdit.description%"
+        },
+        "perforce.autoReconcile": {
+          "type": "boolean",
+          "default": false,
+          "description": "%perforce.config.autoReconcile.description%"
+        },
+        "perforce.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "%perforce.config.autoRefresh.description%"
         },
         "perforce.cache.enabled": {
           "type": "boolean",
