@@ -2,26 +2,24 @@
  *  Tests for RevealActiveFileInExplorerAction (主题 11 WP6).
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   Emitter,
   IEditorGroupsService,
   IHostService,
-  IViewsService,
+  ILayoutService,
   IWorkspaceService,
   InstantiationService,
   ServiceCollection,
   URI,
-  observableValue,
   registerAction2,
   type EditorInput,
   type Event,
   type IEditorGroup,
   type IEditorGroupsService as IEditorGroupsServiceType,
   type IHostService as IHostServiceType,
-  type IObservable,
-  type IViewsService as IViewsServiceType,
+  type ILayoutService as ILayoutServiceType,
   type IWorkspace,
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
@@ -49,20 +47,6 @@ function makeGroups(active?: EditorInput): IEditorGroupsServiceType {
   return { activeGroup: group } as unknown as IEditorGroupsServiceType
 }
 
-class FakeViews implements IViewsServiceType {
-  declare readonly _serviceBrand: undefined
-  readonly openedContainers: string[] = []
-  readonly activeContainerByLocation: IObservable<Readonly<Record<number, string | undefined>>> =
-    observableValue('views.active', {})
-  openViewContainer(containerId: string): void {
-    this.openedContainers.push(containerId)
-  }
-  closeViewContainer(): void {}
-  getActiveViewContainerId(): string | undefined {
-    return undefined
-  }
-}
-
 class FakeExplorerTree {
   declare readonly _serviceBrand: undefined
   selectedResource: URI | null = null
@@ -72,6 +56,11 @@ class FakeExplorerTree {
     this.revealed.push(target.toString())
     return true
   }
+}
+
+class FakeLayout {
+  declare readonly _serviceBrand: undefined
+  readonly focusView = vi.fn(async () => true)
 }
 
 class FakeHost {
@@ -103,18 +92,18 @@ function makeWorkspaceService(folder?: URI): IWorkspaceServiceType {
 }
 
 function makeHarness(active?: EditorInput, selectedResource?: URI, workspaceFolder?: URI) {
-  const views = new FakeViews()
   const tree = new FakeExplorerTree()
+  const layout = new FakeLayout()
   tree.selectedResource = selectedResource ?? null
   const host = new FakeHost()
   const services = new ServiceCollection()
   services.set(IEditorGroupsService, makeGroups(active))
-  services.set(IViewsService, views)
+  services.set(ILayoutService, layout as unknown as ILayoutServiceType)
   services.set(IExplorerTreeService, tree as unknown as ExplorerTreeService)
   services.set(IHostService, host as unknown as IHostServiceType)
   services.set(IWorkspaceService, makeWorkspaceService(workspaceFolder))
   const inst = new InstantiationService(services)
-  return { inst, views, tree, host }
+  return { inst, layout, tree, host }
 }
 
 function run(inst: InstantiationService, id: string, args?: unknown): Promise<unknown> {
@@ -144,7 +133,33 @@ describe('RevealInExplorerAction', () => {
 
     await run(h.inst, RevealInExplorerAction.ID, target.toJSON())
 
-    expect(h.views.openedContainers).toEqual(['workbench.view.explorer'])
+    expect(h.layout.focusView).toHaveBeenCalledWith('workbench.view.explorer.tree', {
+      source: 'command',
+    })
+    expect(h.tree.revealed).toEqual([target.toString()])
+  })
+
+  it('waits for the Explorer tree to be focused before revealing, so its scroll listener is mounted', async () => {
+    const target = URI.file('/ws/src/deeply-nested.ts')
+    const h = makeHarness()
+    let completeFocus: (() => void) | undefined
+    h.layout.focusView.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          completeFocus = () => resolve(true)
+        }),
+    )
+
+    const reveal = run(h.inst, RevealInExplorerAction.ID, target.toJSON())
+
+    expect(h.layout.focusView).toHaveBeenCalledWith('workbench.view.explorer.tree', {
+      source: 'command',
+    })
+    expect(h.tree.revealed).toEqual([])
+
+    completeFocus?.()
+    await reveal
+
     expect(h.tree.revealed).toEqual([target.toString()])
   })
 
@@ -154,7 +169,9 @@ describe('RevealInExplorerAction', () => {
 
     await run(h.inst, RevealInExplorerAction.ID, { resource: target.toJSON() })
 
-    expect(h.views.openedContainers).toEqual(['workbench.view.explorer'])
+    expect(h.layout.focusView).toHaveBeenCalledWith('workbench.view.explorer.tree', {
+      source: 'command',
+    })
     expect(h.tree.revealed).toEqual([target.toString()])
   })
 
@@ -164,7 +181,9 @@ describe('RevealInExplorerAction', () => {
 
     await run(h.inst, RevealInExplorerAction.ID, { resourceUri: target.fsPath })
 
-    expect(h.views.openedContainers).toEqual(['workbench.view.explorer'])
+    expect(h.layout.focusView).toHaveBeenCalledWith('workbench.view.explorer.tree', {
+      source: 'command',
+    })
     expect(h.tree.revealed).toEqual([target.toString()])
   })
 
@@ -174,7 +193,9 @@ describe('RevealInExplorerAction', () => {
 
     await run(h.inst, RevealInExplorerAction.ID)
 
-    expect(h.views.openedContainers).toEqual(['workbench.view.explorer'])
+    expect(h.layout.focusView).toHaveBeenCalledWith('workbench.view.explorer.tree', {
+      source: 'command',
+    })
     expect(h.tree.revealed).toEqual([target.toString()])
   })
 
@@ -183,7 +204,7 @@ describe('RevealInExplorerAction', () => {
 
     await run(h.inst, RevealInExplorerAction.ID, URI.parse('untitled:Untitled-1').toJSON())
 
-    expect(h.views.openedContainers).toHaveLength(0)
+    expect(h.layout.focusView).not.toHaveBeenCalled()
     expect(h.tree.revealed).toHaveLength(0)
   })
 })
@@ -194,7 +215,9 @@ describe('RevealActiveFileInExplorerAction', () => {
     const input = makeFileInput(target)
     const h = makeHarness(input)
     await run(h.inst, RevealActiveFileInExplorerAction.ID)
-    expect(h.views.openedContainers).toEqual(['workbench.view.explorer'])
+    expect(h.layout.focusView).toHaveBeenCalledWith('workbench.view.explorer.tree', {
+      source: 'command',
+    })
     expect(h.tree.revealed).toEqual([target.toString()])
   })
 
@@ -202,7 +225,9 @@ describe('RevealActiveFileInExplorerAction', () => {
     const target = URI.file('/ws/lib/util.ts')
     const h = makeHarness()
     await run(h.inst, RevealActiveFileInExplorerAction.ID, { resource: target.toJSON() })
-    expect(h.views.openedContainers).toEqual(['workbench.view.explorer'])
+    expect(h.layout.focusView).toHaveBeenCalledWith('workbench.view.explorer.tree', {
+      source: 'command',
+    })
     expect(h.tree.revealed).toEqual([target.toString()])
   })
 
@@ -210,14 +235,14 @@ describe('RevealActiveFileInExplorerAction', () => {
     const untitled = new UntitledEditorInput()
     const h = makeHarness(untitled)
     await run(h.inst, RevealActiveFileInExplorerAction.ID)
-    expect(h.views.openedContainers).toHaveLength(0)
+    expect(h.layout.focusView).not.toHaveBeenCalled()
     expect(h.tree.revealed).toHaveLength(0)
   })
 
   it('does nothing when there is no active editor and no argument', async () => {
     const h = makeHarness()
     await run(h.inst, RevealActiveFileInExplorerAction.ID)
-    expect(h.views.openedContainers).toHaveLength(0)
+    expect(h.layout.focusView).not.toHaveBeenCalled()
     expect(h.tree.revealed).toHaveLength(0)
   })
 })

@@ -12,8 +12,8 @@ import {
   Action2,
   IEditorGroupsService,
   IHostService,
+  ILayoutService,
   IWorkspaceService,
-  IViewsService,
   MenuId,
   URI,
   localize2,
@@ -24,6 +24,7 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 
 const URI_STRING_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//
+const EXPLORER_TREE_VIEW_ID = 'workbench.view.explorer.tree'
 
 function reviveUriLike(value: unknown): URI | null {
   if (!value) return null
@@ -57,8 +58,10 @@ function activeFileResource(accessor: ServicesAccessor): URI | null {
 async function revealInExplorer(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
   const resource = resourceFromArg(args[0]) ?? activeFileResource(accessor)
   if (!resource || resource.scheme !== 'file') return
-  accessor.get(IViewsService).openViewContainer('workbench.view.explorer')
-  await accessor.get(IExplorerTreeService).reveal(resource)
+  const layoutService = accessor.get(ILayoutService)
+  const treeService = accessor.get(IExplorerTreeService)
+  await layoutService.focusView(EXPLORER_TREE_VIEW_ID, { source: 'command' })
+  await treeService.reveal(resource)
 }
 
 export class RevealInExplorerAction extends Action2 {
