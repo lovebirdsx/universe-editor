@@ -52,10 +52,18 @@ export interface OutlineViewState {
   readonly scrollLeft: number
 }
 
+/** Which kind of editor the current outline is derived from (undefined when none). */
+export type OutlineSourceKind = 'file' | 'preview' | 'session'
+
 export interface IOutlineService {
   readonly _serviceBrand: undefined
   readonly outline: IObservable<OutlineModel | undefined>
   readonly activeSymbol: IObservable<monaco.languages.DocumentSymbol | undefined>
+  /**
+   * The kind of editor backing the current outline. Consumers use it to gate
+   * file-only actions (e.g. Go to Definition works only for a code editor).
+   */
+  readonly sourceKind: IObservable<OutlineSourceKind | undefined>
   /** Move the active editor's cursor to a symbol and focus it. */
   revealSymbol(symbol: monaco.languages.DocumentSymbol): void
   /** Snapshot the active editor's selection + scroll (for preview restore). */
@@ -114,6 +122,12 @@ export class OutlineService extends Disposable implements IOutlineService {
   readonly outline: IObservable<OutlineModel | undefined> = this._outline
   readonly activeSymbol: IObservable<monaco.languages.DocumentSymbol | undefined> =
     this._activeSymbol
+
+  private readonly _sourceKind = observableValue<OutlineSourceKind | undefined>(
+    'OutlineService.sourceKind',
+    undefined,
+  )
+  readonly sourceKind: IObservable<OutlineSourceKind | undefined> = this._sourceKind
 
   /** Subscriptions bound to the currently-attached model + editor. */
   private readonly _attachListeners = this._register(new DisposableStore())
@@ -241,21 +255,26 @@ export class OutlineService extends Disposable implements IOutlineService {
     if (!sessionInput) this._sessionOutline = undefined
 
     if (sessionInput) {
+      this._sourceKind.set('session', undefined)
       this._attachSession(sessionInput)
       return
     }
 
     if (previewInput) {
+      this._sourceKind.set('preview', undefined)
       this._attachPreview(previewInput, samePreview, generation)
       return
     }
 
     if (!fileInput) {
+      this._sourceKind.set(undefined, undefined)
       this._currentModel = undefined
       this._clearRetry()
       this._publish(undefined, undefined)
       return
     }
+
+    this._sourceKind.set('file', undefined)
 
     const editor = FileEditorRegistry.get(fileInput)
     const model = editor?.getModel() ?? MonacoModelRegistry.peek(fileInput.resource)

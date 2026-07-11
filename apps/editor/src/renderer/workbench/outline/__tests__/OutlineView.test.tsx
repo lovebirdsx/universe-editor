@@ -14,11 +14,13 @@ import {
   observableValue,
   type IObservable,
 } from '@universe-editor/platform'
+import { ICommandService } from '@universe-editor/platform'
 import type { monaco } from '../../editor/monaco/MonacoLoader.js'
 import {
   IOutlineService,
   OutlineService,
   type OutlineModel,
+  type OutlineSourceKind,
 } from '../../../services/languageFeatures/OutlineService.js'
 import {
   Emitter,
@@ -69,26 +71,34 @@ function makeSymbol(
   }
 }
 
-function setup(initial: OutlineModel | undefined) {
+function setup(initial: OutlineModel | undefined, sourceKindValue: OutlineSourceKind = 'file') {
   const outline = observableValue<OutlineModel | undefined>('test.outline', initial)
   const activeSymbol = observableValue<monaco.languages.DocumentSymbol | undefined>(
     'test.activeSymbol',
     undefined,
+  )
+  const sourceKind = observableValue<OutlineSourceKind | undefined>(
+    'test.sourceKind',
+    sourceKindValue,
   )
   const revealSymbol = vi.fn()
   const outlineService = {
     _serviceBrand: undefined,
     outline: outline as IObservable<OutlineModel | undefined>,
     activeSymbol,
+    sourceKind,
     revealSymbol,
     captureViewState: () => undefined,
     previewSymbol: () => {},
     restoreViewState: () => {},
   }
+  const executeCommand = vi.fn()
+  const commandService = { _serviceBrand: undefined, executeCommand } as never
   const services = new ServiceCollection()
   services.set(IOutlineService, outlineService as never)
+  services.set(ICommandService, commandService)
   const instantiation = new InstantiationService(services)
-  return { outline, activeSymbol, revealSymbol, instantiation }
+  return { outline, activeSymbol, sourceKind, revealSymbol, executeCommand, instantiation }
 }
 
 afterEach(() => cleanup())
@@ -343,6 +353,113 @@ describe('OutlineView', () => {
   })
 })
 
+describe('OutlineView — context menu', () => {
+  const rowByLabel = (label: string): HTMLElement => {
+    const el = Array.from(document.querySelectorAll('[role="treeitem"]')).find(
+      (r) => r.lastElementChild?.textContent === label,
+    )
+    if (!el) throw new Error(`row not found: ${label}`)
+    return el as HTMLElement
+  }
+  const menuItems = (): HTMLElement[] =>
+    Array.from(document.querySelectorAll('[role="menu"] [role="menuitem"]')) as HTMLElement[]
+  const menuItemByText = (text: string): HTMLElement => {
+    const el = menuItems().find((i) => i.textContent?.trim() === text)
+    if (!el) throw new Error(`menu item not found: ${text}`)
+    return el
+  }
+
+  it('collapses/expands the whole subtree from the row menu', () => {
+    const { instantiation } = setup({
+      uri: 'file:///a.ts',
+      roots: [
+        makeSymbol('Parent', {
+          line: 1,
+          children: [
+            makeSymbol('Child', { line: 2, children: [makeSymbol('Grand', { line: 3 })] }),
+          ],
+        }),
+      ],
+      languageId: 'typescript',
+      version: 1,
+    })
+    renderView(instantiation)
+    expect(screen.getByText('Grand')).toBeTruthy()
+
+    act(() => fireEvent.contextMenu(rowByLabel('Parent')))
+    act(() => menuItemByText('Collapse Subtree').click())
+
+    // Whole subtree collapsed: neither descendant is visible.
+    expect(screen.queryByText('Child')).toBeNull()
+    expect(screen.queryByText('Grand')).toBeNull()
+
+    // Re-open (row still there) and expand the subtree again.
+    act(() => fireEvent.contextMenu(rowByLabel('Parent')))
+    act(() => menuItemByText('Expand Subtree').click())
+    expect(screen.getByText('Child')).toBeTruthy()
+    expect(screen.getByText('Grand')).toBeTruthy()
+  })
+
+  it('jumps to the symbol from the Go to submenu', () => {
+    const { revealSymbol, instantiation } = setup({
+      uri: 'file:///a.ts',
+      roots: [makeSymbol('Alpha', { line: 1 })],
+      languageId: 'typescript',
+      version: 1,
+    })
+    renderView(instantiation)
+
+    act(() => fireEvent.contextMenu(rowByLabel('Alpha')))
+    act(() => fireEvent.mouseEnter(menuItemByText('Go to')))
+    act(() => menuItemByText('Go to Symbol').click())
+
+    expect(revealSymbol).toHaveBeenCalledTimes(1)
+    expect(revealSymbol.mock.calls[0]?.[0]?.name).toBe('Alpha')
+  })
+
+  it('runs a navigation command (reveal + executeCommand) for a code editor', () => {
+    const { revealSymbol, executeCommand, instantiation } = setup(
+      {
+        uri: 'file:///a.ts',
+        roots: [makeSymbol('Alpha', { line: 1 })],
+        languageId: 'typescript',
+        version: 1,
+      },
+      'file',
+    )
+    renderView(instantiation)
+
+    act(() => fireEvent.contextMenu(rowByLabel('Alpha')))
+    act(() => fireEvent.mouseEnter(menuItemByText('Go to')))
+    const def = menuItemByText('Go to Definition')
+    expect(def.getAttribute('aria-disabled')).toBeNull()
+    act(() => def.click())
+
+    expect(revealSymbol).toHaveBeenCalledTimes(1)
+    expect(executeCommand).toHaveBeenCalledWith('editor.action.revealDefinition')
+  })
+
+  it('disables file-only navigation for a non-code editor (session/preview)', () => {
+    const { executeCommand, instantiation } = setup(
+      {
+        uri: 'acp:///s1',
+        roots: [makeSymbol('First', { line: 1 })],
+        languageId: 'acp.session',
+        version: 1,
+      },
+      'session',
+    )
+    renderView(instantiation)
+
+    act(() => fireEvent.contextMenu(rowByLabel('First')))
+    act(() => fireEvent.mouseEnter(menuItemByText('Go to')))
+    const def = menuItemByText('Go to Definition')
+    expect(def.getAttribute('aria-disabled')).toBe('true')
+    act(() => def.click())
+    expect(executeCommand).not.toHaveBeenCalled()
+  })
+})
+
 // Keyboard navigation parity with Explorer: Enter jumps to the symbol (does NOT
 // toggle non-leaf rows); expand/collapse is driven by Left/Right arrows. The
 // emacs Ctrl+P/N/B/F aliases are real commands (see outlineActions) routed
@@ -490,6 +607,7 @@ describe('OutlineView — agent session active-slot sync (end-to-end)', () => {
     const services = new ServiceCollection()
     services.set(IEditorService, editorService as never)
     services.set(IOutlineService, svc as never)
+    services.set(ICommandService, { _serviceBrand: undefined, executeCommand: vi.fn() } as never)
     const instantiation = new InstantiationService(services)
     return { svc, activeEditor, instantiation }
   }

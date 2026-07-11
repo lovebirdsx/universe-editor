@@ -24,6 +24,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
 import { localize } from '@universe-editor/platform'
+import { ICommandService } from '@universe-editor/platform'
 import {
   Tree,
   TreeModel,
@@ -38,6 +39,11 @@ import { IOutlineService } from '../../services/languageFeatures/OutlineService.
 import { SymbolIcon } from '../symbols/symbolIcon.js'
 import { outlineViewState, type OutlineSortOrder } from './outlineViewState.js'
 import { OutlineNavigatorRegistry } from './outlineNavigatorRegistry.js'
+import {
+  OutlineContextMenu,
+  type OutlineContextMenuState,
+  type OutlineMenuItem,
+} from './OutlineContextMenu.js'
 import styles from './OutlineView.module.css'
 
 interface OutlineNode {
@@ -155,8 +161,10 @@ function collectMatchedIds(
 
 export function OutlineView() {
   const outlineService = useService(IOutlineService)
+  const commandService = useService(ICommandService)
   const outline = useObservable(outlineService.outline)
   const activeSymbol = useObservable(outlineService.activeSymbol)
+  const sourceKind = useObservable(outlineService.sourceKind)
   const sortBy = useObservable(outlineViewState.sortBy)
   const followCursor = useObservable(outlineViewState.followCursor)
   const filterOnType = useObservable(outlineViewState.filterOnType)
@@ -165,6 +173,7 @@ export function OutlineView() {
 
   const [findActive, setFindActive] = useState(false)
   const [filterText, setFilterText] = useState('')
+  const [menu, setMenu] = useState<OutlineContextMenuState | null>(null)
   const query = filterText.trim().toLowerCase()
 
   const containerRef = useRef<HTMLDivElement>(null)
@@ -296,6 +305,122 @@ export function OutlineView() {
   const activeId = activeSymbol ? display.idBySymbol.get(activeSymbol) : undefined
   activeIdRef.current = activeId
 
+  // Build the "Go to" submenu: jump to the symbol (all editors), then the
+  // file-only Monaco navigation commands (disabled unless a code editor backs
+  // the outline). Each navigation first reveals the symbol — which positions the
+  // cursor and focuses the editor — then triggers the command at that position.
+  const buildGotoItems = useCallback(
+    (symbol: monaco.languages.DocumentSymbol): OutlineMenuItem[] => {
+      const isFile = sourceKind === 'file'
+      const nav =
+        (commandId: string): (() => void) =>
+        () => {
+          outlineService.revealSymbol(symbol)
+          void commandService.executeCommand(commandId)
+        }
+      return [
+        {
+          kind: 'item',
+          label: localize('outline.goToSymbol', 'Go to Symbol'),
+          run: () => outlineService.revealSymbol(symbol),
+        },
+        { kind: 'sep' },
+        {
+          kind: 'item',
+          label: localize('outline.goToDefinition', 'Go to Definition'),
+          disabled: !isFile,
+          run: nav('editor.action.revealDefinition'),
+        },
+        {
+          kind: 'item',
+          label: localize('outline.goToTypeDefinition', 'Go to Type Definition'),
+          disabled: !isFile,
+          run: nav('editor.action.goToTypeDefinition'),
+        },
+        {
+          kind: 'item',
+          label: localize('outline.goToImplementation', 'Go to Implementations'),
+          disabled: !isFile,
+          run: nav('editor.action.goToImplementation'),
+        },
+        {
+          kind: 'item',
+          label: localize('outline.goToReferences', 'Go to References'),
+          disabled: !isFile,
+          run: nav('editor.action.goToReferences'),
+        },
+      ]
+    },
+    [sourceKind, outlineService, commandService],
+  )
+
+  const openRowMenu = useCallback(
+    (e: ReactMouseEvent, node: OutlineNode) => {
+      e.preventDefault()
+      e.stopPropagation()
+      model.setSelection([node.id], node.id)
+      const items: OutlineMenuItem[] = []
+      if (node.children.length > 0) {
+        const expanded = model.isExpanded(node.id)
+        const setSubtree = (value: boolean): void =>
+          model.setExpansion(collectExpandableIds([node]).map((id) => [id, value] as const))
+        items.push({
+          kind: 'item',
+          label: expanded
+            ? localize('outline.collapse', 'Collapse')
+            : localize('outline.expand', 'Expand'),
+          run: () => (expanded ? model.collapse(node) : void model.expand(node)),
+        })
+        items.push({
+          kind: 'item',
+          label: expanded
+            ? localize('outline.collapseSubtree', 'Collapse Subtree')
+            : localize('outline.expandSubtree', 'Expand Subtree'),
+          run: () => setSubtree(!expanded),
+        })
+        items.push({ kind: 'sep' })
+      }
+      items.push({
+        kind: 'item',
+        label: localize('outline.expandAll', 'Expand All'),
+        run: () => outlineViewState.requestExpandAll(),
+      })
+      items.push({
+        kind: 'item',
+        label: localize('outline.collapseAll', 'Collapse All'),
+        run: () => outlineViewState.requestCollapseAll(),
+      })
+      items.push({ kind: 'sep' })
+      items.push({
+        kind: 'submenu',
+        label: localize('outline.goTo', 'Go to'),
+        children: buildGotoItems(node.symbol),
+      })
+      setMenu({ x: e.clientX, y: e.clientY, items })
+    },
+    [model, buildGotoItems],
+  )
+
+  const openEmptyMenu = useCallback((e: ReactMouseEvent) => {
+    e.preventDefault()
+    setMenu({
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        {
+          kind: 'item',
+          label: localize('outline.expandAll', 'Expand All'),
+          run: () => outlineViewState.requestExpandAll(),
+        },
+        {
+          kind: 'item',
+          label: localize('outline.collapseAll', 'Collapse All'),
+          run: () => outlineViewState.requestCollapseAll(),
+        },
+      ],
+    })
+  }, [])
+
   // Follow cursor: expand to + select + scroll the active symbol into view.
   useEffect(() => {
     if (!followCursor || query !== '' || !activeId) return
@@ -395,6 +520,7 @@ export function OutlineView() {
                     : { paddingLeft: ctx.indentPadding }
                 }
                 onClick={onClick}
+                onContextMenu={(e) => openRowMenu(e, node.element)}
               >
                 <span
                   className={styles['chevron']}
@@ -426,6 +552,10 @@ export function OutlineView() {
           }}
           onActivate={(node) => outlineService.revealSymbol(node.element.symbol)}
           onFocus={onTreeFocus}
+          onContextMenu={(e, node) => {
+            if (node) openRowMenu(e, node.element)
+            else openEmptyMenu(e)
+          }}
           activateNonLeafOnEnter
         />
       ) : (
@@ -433,6 +563,7 @@ export function OutlineView() {
           {localize('outline.noMatches', 'No matching symbols.')}
         </div>
       )}
+      {menu && <OutlineContextMenu state={menu} onClose={() => setMenu(null)} />}
     </div>
   )
 }
