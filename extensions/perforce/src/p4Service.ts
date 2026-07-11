@@ -32,7 +32,19 @@ export interface P4ExecOptions {
   readonly input?: string
   /** Skip the connection global options (e.g. bare `p4 set` / `p4 info`). */
   readonly noConnection?: boolean
+  /** Override the stdout byte cap ({@link DEFAULT_MAX_OUTPUT_BYTES}). */
+  readonly maxOutputBytes?: number
 }
+
+/**
+ * Upper bound on a single command's stdout before we abort it. V8 caps a JS
+ * string at ~512MB (0x1fffffe8); `Buffer.concat(...).toString()` past that
+ * throws `Cannot create a string longer than ...`, which — thrown from the
+ * async `close` handler with no try/catch — crashed the whole extension host.
+ * We stop well below the limit (also bounding memory) and fail the command
+ * gracefully instead. No real p4 read the editor consumes approaches this.
+ */
+export const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024 * 1024
 
 /** Same rationale as the git spawner — see extensionHostMainService. */
 const ENV_DENYLIST: readonly string[] = [
@@ -179,16 +191,48 @@ export class P4Service {
         windowsHide: true,
         shell: false,
       })
+      const maxBytes = options?.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
       const stdout: Buffer[] = []
       const stderr: Buffer[] = []
-      proc.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
+      let stdoutBytes = 0
+      let overflowed = false
+      proc.stdout.on('data', (chunk: Buffer) => {
+        if (overflowed) return
+        stdoutBytes += chunk.length
+        if (stdoutBytes > maxBytes) {
+          // Abort rather than accumulate into a string V8 can't build. Kill the
+          // child so p4 stops streaming; the `close` handler resolves the error.
+          overflowed = true
+          stdout.length = 0
+          proc.kill()
+          return
+        }
+        stdout.push(chunk)
+      })
       proc.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
       proc.on('error', reject)
       proc.on('close', (code) => {
-        const result: P4ExecResult = {
-          stdout: Buffer.concat(stdout).toString('utf8'),
-          stderr: Buffer.concat(stderr).toString('utf8'),
-          exitCode: code ?? 0,
+        if (overflowed) {
+          const mb = Math.round(maxBytes / (1024 * 1024))
+          const msg = `p4 ${args[0] ?? ''} output exceeded ${mb}MB and was aborted`
+          this._log?.(`  ${msg}`)
+          resolve({ stdout: '', stderr: msg, exitCode: code ?? 1 })
+          return
+        }
+        let result: P4ExecResult
+        try {
+          result = {
+            stdout: Buffer.concat(stdout).toString('utf8'),
+            stderr: Buffer.concat(stderr).toString('utf8'),
+            exitCode: code ?? 0,
+          }
+        } catch (err) {
+          // Defensive: even under the cap, decoding can still throw on pathological
+          // input. Never let it escape into an uncaught exception (host crash).
+          const msg = `p4 ${args[0] ?? ''} output could not be decoded: ${(err as Error).message}`
+          this._log?.(`  ${msg}`)
+          resolve({ stdout: '', stderr: msg, exitCode: code ?? 1 })
+          return
         }
         const elapsed = Date.now() - start
         const stderrNote = result.stderr.trim() ? `\n  stderr: ${result.stderr.trim()}` : ''
