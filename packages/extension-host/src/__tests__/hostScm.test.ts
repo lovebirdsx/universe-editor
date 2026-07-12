@@ -28,20 +28,23 @@ const noopWindow: IMainThreadWindow = {
 function recordingScm(): IMainThreadScm & {
   registerSourceControl: ReturnType<typeof vi.fn>
   registerGroup: ReturnType<typeof vi.fn>
+  updateSourceControl: ReturnType<typeof vi.fn>
   updateGroupResourceStates: ReturnType<typeof vi.fn>
   setInputBoxValue: ReturnType<typeof vi.fn>
 } {
   const registerSourceControl = vi.fn().mockResolvedValue(undefined)
   const registerGroup = vi.fn().mockResolvedValue(undefined)
+  const updateSourceControl = vi.fn().mockResolvedValue(undefined)
   const updateGroupResourceStates = vi.fn().mockResolvedValue(undefined)
   const setInputBoxValue = vi.fn().mockResolvedValue(undefined)
   return {
     registerSourceControl,
     registerGroup,
+    updateSourceControl,
     updateGroupResourceStates,
     setInputBoxValue,
     $registerSourceControl: registerSourceControl,
-    $updateSourceControl: () => Promise.resolve(),
+    $updateSourceControl: updateSourceControl,
     $unregisterSourceControl: () => Promise.resolve(),
     $registerGroup: registerGroup,
     $updateGroup: () => Promise.resolve(),
@@ -103,5 +106,26 @@ describe('host SCM bridge', () => {
     service.onInputBoxValueChange(0, 'user typed')
     expect(sc.inputBox.value).toBe('user typed')
     expect(changed).toHaveBeenCalledWith('user typed')
+  })
+
+  it('sends a cleared acceptInputActions so the renderer can collapse the split button', () => {
+    // Regression: setting acceptInputActions back to undefined (git does this
+    // after a commit, when only a single Push button should remain) must still
+    // reach the renderer. A spread that drops undefined keys leaves the renderer
+    // holding the stale commit actions, so the button never becomes "Push".
+    const scm = recordingScm()
+    const service = new ExtensionService([], noopCommands, noopWindow, scm)
+    const sc = service.createSourceControl('git', 'Git')
+
+    sc.acceptInputActions = [
+      { command: 'git.commit', title: 'Commit' },
+      { command: 'git.commitAndPush', title: 'Commit & Push' },
+    ]
+    const withActions = scm.updateSourceControl.mock.calls.at(-1)![1]
+    expect(withActions.acceptInputActions).toHaveLength(2)
+
+    sc.acceptInputActions = undefined
+    const cleared = scm.updateSourceControl.mock.calls.at(-1)![1]
+    expect(cleared.acceptInputActions).toEqual([])
   })
 })

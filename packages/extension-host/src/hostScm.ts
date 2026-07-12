@@ -199,9 +199,11 @@ export class HostSourceControl implements SourceControl {
       ...(this._acceptInputCommand !== undefined
         ? { acceptInputCommand: toCommandDto(this._acceptInputCommand) }
         : {}),
-      ...(this._acceptInputActions !== undefined
-        ? { acceptInputActions: this._acceptInputActions.map(toCommandDto) }
-        : {}),
+      // Always send the actions (empty array when cleared): an omitted key can't
+      // clear the renderer's stale split-button set, so a commit that flips this
+      // back to "no actions" would otherwise leave the button showing Commit
+      // instead of collapsing to the single Push button.
+      acceptInputActions: (this._acceptInputActions ?? []).map(toCommandDto),
     })
   }
 }

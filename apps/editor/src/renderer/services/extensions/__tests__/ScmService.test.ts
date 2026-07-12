@@ -61,6 +61,31 @@ describe('ScmService', () => {
     expect(onChange).toHaveBeenCalledWith(0, 'typed by user')
   })
 
+  it('clears commit split-button actions when the host sends an empty array', async () => {
+    // Regression: after a commit, git flips acceptInputActions from the commit
+    // split-button set back to "no actions" (a single Push button). The host
+    // reports the cleared state as an empty array; the renderer must apply it so
+    // the split button collapses instead of keeping the stale Commit actions.
+    const { scm } = make()
+    await scm.$registerSourceControl(0, 'git', 'Git', '/repo')
+
+    await scm.$updateSourceControl(0, {
+      acceptInputCommand: { command: 'git.commit', title: 'Commit' },
+      acceptInputActions: [
+        { command: 'git.commit', title: 'Commit' },
+        { command: 'git.commitAndPush', title: 'Commit & Push' },
+      ],
+    })
+    expect(scm.sourceControls.get()[0]!.acceptActions.get()).toHaveLength(2)
+
+    await scm.$updateSourceControl(0, {
+      acceptInputCommand: { command: 'git.push', title: 'Push' },
+      acceptInputActions: [],
+    })
+    expect(scm.sourceControls.get()[0]!.acceptActions.get()).toEqual([])
+    expect(scm.sourceControls.get()[0]!.acceptCommand.get()?.command).toBe('git.push')
+  })
+
   it('removes groups and source controls on unregister', async () => {
     const { scm } = make()
     await scm.$registerSourceControl(0, 'git', 'Git')
