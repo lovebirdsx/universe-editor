@@ -417,6 +417,13 @@ export interface E2EProbe {
   getScmSourceControlCount(): number
   /** Commit input box value of the first SCM source control (undefined if none). */
   getScmInputBoxValue(): string | undefined
+  /**
+   * Resource-group ids that are *visible* in the SCM view (a group is hidden when
+   * it's empty and `hideWhenEmpty`). Flattened across every source control, in
+   * registration order. Lets a spec assert a freshly created (still-empty)
+   * changelist group shows up.
+   */
+  getVisibleScmGroupIds(): readonly string[]
   // -- Extension management probe -------------------------------------------
   /** Install a local `.vsix`, returning the installed extension's identifier. */
   installVsixExtension(vsixPath: string): Promise<string>

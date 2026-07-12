@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { IScmGroupModel } from '../../../services/extensions/ScmService.js'
-import { buildSnapshot } from '../ScmView.js'
+import { buildSnapshot, groupIconName } from '../ScmView.js'
 
 type FolderLike = { kind: 'folder'; id: string; name: string; path: string }
 
@@ -88,5 +88,24 @@ describe('ScmView — compact folders (tree mode)', () => {
     expect(top.map((f) => f.name)).toEqual(['a'])
     const sub = folders(snap.childrenMap, top[0]!.id)
     expect(sub.map((f) => f.name).sort()).toEqual(['b', 'd'])
+  })
+})
+
+describe('groupIconName', () => {
+  it('gives the default and numbered changelists the same (changelist) glyph', () => {
+    // The whole point of the icon: sibling changelists read as one category, so
+    // the default group no longer looks unlike a numbered one.
+    expect(groupIconName('default')).toBe('changelist')
+    expect(groupIconName('cl:8084918')).toBe('changelist')
+  })
+
+  it('distinguishes reconcile and shelved groups', () => {
+    expect(groupIconName('reconcile')).toBe('reconcile')
+    expect(groupIconName('shelved:5')).toBe('archive')
+  })
+
+  it('returns undefined for unrecognized group ids (no icon rendered)', () => {
+    expect(groupIconName('workingTree')).toBeUndefined()
+    expect(groupIconName('index')).toBeUndefined()
   })
 })

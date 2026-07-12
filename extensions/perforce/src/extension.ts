@@ -51,6 +51,26 @@ async function resolveTargetPath(arg: unknown): Promise<string | undefined> {
   return commands.executeCommand<string | undefined>('_workbench.getActiveEditorFile')
 }
 
+/** Pull the file paths out of an SCM multi-selection argument (the second arg the
+ *  view passes on inline actions: an array of `{ resourceUri }`). Pure, so the
+ *  multi-select fan-out is unit-testable without the command layer. Returns an
+ *  empty array when the value isn't a non-empty selection array. */
+export function selectionPaths(selection: unknown): string[] {
+  if (!Array.isArray(selection)) return []
+  return selection.map(resourcePath).filter((p): p is string => !!p)
+}
+
+/** Resolve every path a file-scoped command should act on. When the SCM view runs
+ *  an inline action on a multi-selection it passes the full selection as the second
+ *  argument (each `{ resourceUri }`); otherwise this falls back to the single
+ *  clicked/active path via {@link resolveTargetPath}. */
+async function resolveTargetPaths(args: readonly unknown[]): Promise<string[]> {
+  const fromSelection = selectionPaths(args[1])
+  if (fromSelection.length > 0) return fromSelection
+  const single = await resolveTargetPath(args[0])
+  return single ? [single] : []
+}
+
 async function readFallbackConnection(): Promise<P4Connection> {
   const cfg = workspace.getConfiguration('perforce')
   const port = await cfg.get('port', '')
@@ -250,45 +270,53 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // entry points fall back to the active editor's file.
 
     commands.registerCommand('perforce.edit', async (...args: unknown[]) => {
-      const path = await resolveTargetPath(args[0])
-      if (!path) return
-      await mgr.resolveClient({ resourceUri: path })?.edit([path])
+      const paths = await resolveTargetPaths(args)
+      if (paths.length === 0) return
+      await mgr.resolveClient({ resourceUri: paths[0]! })?.edit(paths)
     }),
 
     commands.registerCommand('perforce.add', async (...args: unknown[]) => {
-      const path = await resolveTargetPath(args[0])
-      if (!path) return
-      await mgr.resolveClient({ resourceUri: path })?.add([path])
+      const paths = await resolveTargetPaths(args)
+      if (paths.length === 0) return
+      await mgr.resolveClient({ resourceUri: paths[0]! })?.add(paths)
     }),
 
     commands.registerCommand('perforce.delete', async (...args: unknown[]) => {
-      const path = await resolveTargetPath(args[0])
-      if (!path) return
-      const target = mgr.resolveClient({ resourceUri: path })
+      const paths = await resolveTargetPaths(args)
+      if (paths.length === 0) return
+      const target = mgr.resolveClient({ resourceUri: paths[0]! })
       if (!target) return
       const BTN_DELETE = localize('perforce.btn.delete', 'Mark for Delete')
-      const confirm = await window.showWarningMessage(
-        localize('perforce.delete.confirm', "Open '{0}' for delete?", { 0: path }),
-        BTN_DELETE,
-      )
+      const message =
+        paths.length === 1
+          ? localize('perforce.delete.confirm', "Open '{0}' for delete?", { 0: paths[0]! })
+          : localize('perforce.delete.confirmMany', 'Open {0} files for delete?', {
+              0: String(paths.length),
+            })
+      const confirm = await window.showWarningMessage(message, BTN_DELETE)
       if (confirm !== BTN_DELETE) return
-      await target.delete([path])
+      await target.delete(paths)
     }),
 
     commands.registerCommand('perforce.revert', async (...args: unknown[]) => {
-      const path = resourcePath(args[0])
-      if (!path) return
-      const target = mgr.resolveClient({ resourceUri: path })
+      const paths = await resolveTargetPaths(args)
+      if (paths.length === 0) return
+      const target = mgr.resolveClient({ resourceUri: paths[0]! })
       if (!target) return
       const BTN_REVERT = localize('perforce.btn.revert', 'Revert')
-      const confirm = await window.showWarningMessage(
-        localize('perforce.revert.confirm', "Revert '{0}'? Local changes will be lost.", {
-          0: path,
-        }),
-        BTN_REVERT,
-      )
+      const message =
+        paths.length === 1
+          ? localize('perforce.revert.confirm', "Revert '{0}'? Local changes will be lost.", {
+              0: paths[0]!,
+            })
+          : localize(
+              'perforce.revert.confirmMany',
+              'Revert {0} files? Local changes will be lost.',
+              { 0: String(paths.length) },
+            )
+      const confirm = await window.showWarningMessage(message, BTN_REVERT)
       if (confirm !== BTN_REVERT) return
-      await target.revert([path])
+      await target.revert(paths)
     }),
 
     commands.registerCommand('perforce.revertUnchanged', async (arg) => {
@@ -373,28 +401,68 @@ export async function activate(context: ExtensionContext): Promise<void> {
       await target.newChangelist(description)
     }),
 
-    // Move the clicked resource into a changelist chosen from a quick-pick.
+    // Move the clicked resource(s) into a changelist chosen from a quick-pick.
     commands.registerCommand('perforce.reopen', async (...args: unknown[]) => {
-      const path = resourcePath(args[0])
-      if (!path) return
-      const target = mgr.resolveClient({ resourceUri: path })
+      const paths = await resolveTargetPaths(args)
+      if (paths.length === 0) return
+      const target = mgr.resolveClient({ resourceUri: paths[0]! })
       if (!target) return
       const picks = await target.changelistPicks()
       const choice = await window.showQuickPick(picks, {
         placeHolder: localize('perforce.reopen.placeholder', 'Move file to changelist'),
       })
       if (!choice) return
-      let destination = choice.id
-      if (destination === 'new') {
+      if (choice.id === 'new') {
         const description = await window.showInputBox({
           prompt: localize('perforce.newChangelist.prompt', 'New changelist description'),
         })
         if (description === undefined) return
-        const created = await target.newChangelist(description)
-        if (!created) return
-        destination = created
+        await target.moveToNewChangelist(description, paths)
+        return
       }
-      await target.reopen(destination, [path])
+      await target.reopen(choice.id, paths)
+    }),
+
+    // Drag-and-drop target: move dropped files directly into the changelist whose
+    // group header they were dropped on — no quick-pick. Registered at runtime (not
+    // in package.json's `commands`) so the SCM host can probe it via
+    // CommandsRegistry to decide a group accepts drops, without a menu declaration
+    // shadowing this handler. args: (groupArg with scmResourceGroupId, selection).
+    commands.registerCommand('perforce.reopenTo', async (...args: unknown[]) => {
+      const changelist = groupChangelistId(args[0])
+      // Only the default or a numbered pending changelist is a valid reopen target
+      // — not the reconcile group or a shelved-files group.
+      if (changelist === undefined || (changelist !== 'default' && !/^\d+$/.test(changelist)))
+        return
+      const paths = selectionPaths(args[1])
+      if (paths.length === 0) return
+      const target = mgr.resolveClient(args[0]) ?? mgr.resolveClient({ resourceUri: paths[0]! })
+      if (!target) return
+      await target.reopen(changelist, paths)
+    }),
+
+    // One-step "group these edits into a new changelist": from a changelist group
+    // header (moves the whole group) or a file-row selection (moves those files).
+    commands.registerCommand('perforce.moveToNewChangelist', async (...args: unknown[]) => {
+      const arg = args[0]
+      const groupId = groupChangelistId(arg)
+      const target =
+        mgr.resolveClient(arg) ??
+        (resourcePath(arg) ? mgr.resolveClient({ resourceUri: resourcePath(arg)! }) : undefined) ??
+        mgr.active
+      if (!target) return
+      // Group-header invocation (a group id but no concrete resource) moves every
+      // file in that changelist; a file-row invocation moves the selection.
+      const paths =
+        groupId && !resourcePath(arg)
+          ? target.pathsInChangelist(groupId)
+          : await resolveTargetPaths(args)
+      if (paths.length === 0) return
+      const description = await window.showInputBox({
+        prompt: localize('perforce.newChangelist.prompt', 'New changelist description'),
+      })
+      if (description === undefined) return
+      await target.moveToNewChangelist(description, paths)
     }),
 
     commands.registerCommand('perforce.editChangelist', async (arg) => {
@@ -412,46 +480,106 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
     // --- Shelve / unshelve (Phase 3) --------------------------------------
 
+    // Shelve a whole changelist. Works from a group header or a file row (both
+    // carry `scmResourceGroupId`) — per the design, a file-row shelve archives the
+    // file's entire changelist. The default changelist can't be shelved directly
+    // (p4 requires a numbered CL), so its files are first moved into a fresh
+    // numbered changelist (description prompted), then shelved.
     commands.registerCommand('perforce.shelve', async (arg) => {
       const target = mgr.resolveClient(arg) ?? mgr.active
       const changelist = groupChangelistId(arg)
-      if (!target || !changelist || changelist === 'default') {
-        await window.showWarningMessage(
-          localize('perforce.shelve.needNumbered', 'Only numbered changelists can be shelved.'),
-        )
+      if (!target || !changelist) return
+      if (changelist === 'default') {
+        const paths = target.pathsInChangelist('default')
+        if (paths.length === 0) {
+          await window.showWarningMessage(
+            localize(
+              'perforce.shelve.defaultEmpty',
+              'The default changelist has no files to shelve.',
+            ),
+          )
+          return
+        }
+        const description = await window.showInputBox({
+          prompt: localize(
+            'perforce.shelve.defaultPrompt',
+            'Description for the new changelist to shelve into',
+          ),
+        })
+        if (description === undefined) return
+        const created = await target.moveToNewChangelist(description, paths)
+        if (!created) return
+        await target.shelve(created)
         return
       }
       await target.shelve(changelist)
     }),
 
+    // Unshelve a whole changelist (group header) or a single shelved file (row).
     commands.registerCommand('perforce.unshelve', async (arg) => {
       const target = mgr.resolveClient(arg) ?? mgr.active
       const changelist = groupChangelistId(arg)
       if (!target || !changelist || changelist === 'default') return
-      await target.unshelve(changelist)
+      const depotFile = resourcePath(arg)
+      if (depotFile) await target.unshelveFile(changelist, depotFile)
+      else await target.unshelve(changelist)
     }),
 
+    // Restore an arbitrary shelved changelist by number (command palette) — for a
+    // shelf not shown in this workspace's panel. Force-overwrites, so confirm.
+    commands.registerCommand('perforce.unshelveByNumber', async (arg) => {
+      const target = mgr.resolveClient(arg) ?? mgr.active
+      if (!target) return
+      const changelist = await window.showInputBox({
+        prompt: localize('perforce.unshelveByNumber.prompt', 'Changelist number to unshelve'),
+      })
+      const id = changelist?.trim()
+      if (!id) return
+      if (!/^\d+$/.test(id)) {
+        await window.showWarningMessage(
+          localize('perforce.unshelveByNumber.invalid', 'Enter a numeric changelist id.'),
+        )
+        return
+      }
+      const BTN_UNSHELVE = localize('perforce.btn.unshelve', 'Unshelve')
+      const confirm = await window.showWarningMessage(
+        localize(
+          'perforce.unshelveByNumber.confirm',
+          'Unshelve changelist #{0}? This overwrites local copies of any files it touches.',
+          { 0: id },
+        ),
+        BTN_UNSHELVE,
+      )
+      if (confirm !== BTN_UNSHELVE) return
+      await target.unshelveByNumber(id)
+    }),
+
+    // Delete a whole changelist's shelf (group header) or a single shelved file (row).
     commands.registerCommand('perforce.deleteShelved', async (arg) => {
       const target = mgr.resolveClient(arg) ?? mgr.active
       const changelist = groupChangelistId(arg)
       if (!target || !changelist || changelist === 'default') return
+      const depotFile = resourcePath(arg)
       const BTN_DELETE = localize('perforce.btn.deleteShelved', 'Delete Shelved')
-      const confirm = await window.showWarningMessage(
-        localize('perforce.deleteShelved.confirm', 'Delete shelved files in changelist #{0}?', {
-          0: changelist,
-        }),
-        BTN_DELETE,
-      )
+      const message = depotFile
+        ? localize('perforce.deleteShelved.confirmFile', "Delete shelved file '{0}'?", {
+            0: depotFile,
+          })
+        : localize('perforce.deleteShelved.confirm', 'Delete shelved files in changelist #{0}?', {
+            0: changelist,
+          })
+      const confirm = await window.showWarningMessage(message, BTN_DELETE)
       if (confirm !== BTN_DELETE) return
-      await target.deleteShelved(changelist)
+      if (depotFile) await target.deleteShelvedFile(changelist, depotFile)
+      else await target.deleteShelved(changelist)
     }),
 
     // --- Resolve (Phase 3) ------------------------------------------------
 
     commands.registerCommand('perforce.resolve', async (...args: unknown[]) => {
-      const path = resourcePath(args[0])
-      if (!path) return
-      await mgr.resolveClient({ resourceUri: path })?.resolve([path])
+      const paths = await resolveTargetPaths(args)
+      if (paths.length === 0) return
+      await mgr.resolveClient({ resourceUri: paths[0]! })?.resolve(paths)
     }),
 
     commands.registerCommand('perforce.resolveChangelist', async (arg) => {

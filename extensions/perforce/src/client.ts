@@ -114,6 +114,10 @@ export class PerforceClient {
    *  filter incremental (watcher-driven) reconcile scans without a fresh `opened`
    *  round-trip. */
   private _openedPaths: ReadonlySet<string> = new Set()
+  /** Normalized client path → the changelist it's open in ('default' or a numbered
+   *  id), from the last refresh. Lets file-scoped shelve resolve which changelist a
+   *  clicked row belongs to without another `p4 opened` round-trip. */
+  private _changelistByPath: ReadonlyMap<string, string> = new Map()
   /** Opened-file count from the last refresh (mirrors the SCM badge). */
   private _openedCount = 0
   private readonly _changeListeners = new Set<() => void>()
@@ -289,7 +293,7 @@ export class PerforceClient {
     const pending = parsePending(changes.records)
     this._pending = pending
     const groups = groupChangelists(openedFiles, pending, {
-      default: () => localize('perforce.group.default', 'Default Changelist'),
+      default: () => localize('perforce.group.defaultShort', 'Default'),
       numbered: (id, firstLine) =>
         firstLine
           ? localize('perforce.group.numbered', '#{0}: {1}', { 0: id, 1: firstLine })
@@ -306,7 +310,11 @@ export class PerforceClient {
       desired.push({
         id: group.id,
         label: group.label,
-        hideWhenEmpty: !group.isDefault,
+        // A pending changelist (default or numbered) stays visible even when empty
+        // — matching P4V, where a changelist exists until you delete it. Otherwise a
+        // freshly created (still-empty) numbered changelist would vanish, leaving no
+        // drop target to move files into.
+        hideWhenEmpty: false,
         states: toResourceStates(group.files),
       })
       const clId = changelistIdFromGroupId(group.id)
@@ -326,6 +334,11 @@ export class PerforceClient {
       openedFiles
         .map((f) => (f.clientFile ? norm(f.clientFile) : undefined))
         .filter(Boolean) as string[],
+    )
+    this._changelistByPath = new Map(
+      openedFiles
+        .filter((f) => f.clientFile)
+        .map((f) => [norm(f.clientFile!), f.changelist] as const),
     )
     const fullScan = this._fullScanRequested || this._autoReconcile
     this._fullScanRequested = false
@@ -662,6 +675,28 @@ export class PerforceClient {
     return this._mutate('reopen', ['reopen', '-c', cl], paths)
   }
 
+  /** The changelist a currently-opened local path belongs to ('default' or a
+   *  numbered id), from the last refresh, or undefined if the path isn't open. */
+  changelistOf(localPath: string): string | undefined {
+    return this._changelistByPath.get(norm(localPath))
+  }
+
+  /**
+   * Create a new numbered changelist with `description` and move `paths` into it
+   * in one step — the common "group these edits into a new changelist" intent,
+   * instead of creating an empty changelist and moving files separately. Returns
+   * the new changelist id, or undefined on failure.
+   */
+  async moveToNewChangelist(
+    description: string,
+    paths: readonly string[],
+  ): Promise<string | undefined> {
+    const created = await this.newChangelist(description)
+    if (!created) return undefined
+    if (paths.length > 0) await this.reopen(created, paths)
+    return created
+  }
+
   /**
    * Quick-pick targets for {@link reopen}: the default changelist, every pending
    * numbered changelist (from the last refresh), and a "New Changelist" entry
@@ -716,22 +751,67 @@ export class PerforceClient {
 
   // --- Shelve / unshelve (Phase 3) -----------------------------------------
 
-  /** Shelve a changelist's open files (`p4 shelve -c <id>`), leaving them open. */
+  /** Local paths of files currently open in `changelist` ('default' or a numbered
+   *  id), from the last refresh. Lets the default-changelist shelve flow gather the
+   *  files to move into a fresh numbered changelist before shelving. */
+  pathsInChangelist(changelist: string): string[] {
+    const out: string[] = []
+    for (const [path, cl] of this._changelistByPath) {
+      if (cl === changelist) out.push(path)
+    }
+    return out
+  }
+
+  /** Shelve a changelist's open files (`p4 shelve -c <id>`), leaving them open.
+   *  The default changelist can't be shelved directly (p4 requires a numbered CL);
+   *  the command handler moves its files into a fresh numbered CL first. */
   async shelve(changelist: string): Promise<boolean> {
     if (changelist === 'default') return false
     return this._mutate('shelve', ['shelve', '-r', '-c', changelist])
   }
 
-  /** Restore shelved files into the workspace (`p4 unshelve -s <id>`). */
+  /** Restore a whole changelist's shelved files into the workspace
+   *  (`p4 unshelve -s <id>`), overwriting local copies (`-f`). */
   async unshelve(changelist: string): Promise<boolean> {
     if (changelist === 'default') return false
     return this._mutate('unshelve', ['unshelve', '-s', changelist, '-c', changelist, '-f'])
+  }
+
+  /** Restore a single shelved file into the workspace (`p4 unshelve -s <id> <depotFile>`),
+   *  overwriting the local copy (`-f`). */
+  async unshelveFile(changelist: string, depotFile: string): Promise<boolean> {
+    if (changelist === 'default') return false
+    return this._mutate('unshelve', [
+      'unshelve',
+      '-s',
+      changelist,
+      '-c',
+      changelist,
+      '-f',
+      depotFile,
+    ])
+  }
+
+  /**
+   * Restore an arbitrary changelist's shelf into the default changelist
+   * (`p4 unshelve -s <n> -f`) — for shelves that aren't shown in this workspace's
+   * panel (a teammate's, or one made on another machine). Destructive: `-f`
+   * overwrites local copies, so the command handler confirms first.
+   */
+  async unshelveByNumber(changelist: string): Promise<boolean> {
+    return this._mutate('unshelve', ['unshelve', '-s', changelist, '-f'])
   }
 
   /** Delete a changelist's shelved files from the server (`p4 shelve -d`). */
   async deleteShelved(changelist: string): Promise<boolean> {
     if (changelist === 'default') return false
     return this._mutate('delete shelved', ['shelve', '-d', '-c', changelist])
+  }
+
+  /** Delete a single shelved file from the server (`p4 shelve -d -c <id> <depotFile>`). */
+  async deleteShelvedFile(changelist: string, depotFile: string): Promise<boolean> {
+    if (changelist === 'default') return false
+    return this._mutate('delete shelved', ['shelve', '-d', '-c', changelist, depotFile])
   }
 
   // --- Resolve (Phase 3) ---------------------------------------------------

@@ -465,6 +465,17 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getScmSourceControlCount: (): number => services.scmService.sourceControls.get().length,
     getScmInputBoxValue: (): string | undefined =>
       services.scmService.sourceControls.get()[0]?.inputValue.get(),
+    getVisibleScmGroupIds: (): readonly string[] => {
+      const out: string[] = []
+      for (const sc of services.scmService.sourceControls.get()) {
+        for (const g of sc.groups.get()) {
+          // Mirror ScmView's visibility rule: hide only when empty AND hideWhenEmpty.
+          if (g.resources.get().length === 0 && g.hideWhenEmpty.get()) continue
+          out.push(g.id)
+        }
+      }
+      return out
+    },
     installVsixExtension: async (vsixPath: string): Promise<string> => {
       const local = await services.extensionManagementService.installVSIX(vsixPath)
       return local.identifier

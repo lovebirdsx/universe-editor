@@ -53,11 +53,15 @@ interface FakeState {
   depotPrefix: string
   files: Record<string, { rev: number; content: string }>
   opened: Record<string, unknown>
+  changelists?: Record<string, { description: string }>
 }
 
 const toPosix = (p: string): string => p.split('\\').join('/')
 
-function seedWorkspace(seeds: readonly SeedFile[]): {
+function seedWorkspace(
+  seeds: readonly SeedFile[],
+  changelists: Readonly<Record<string, string>> = {},
+): {
   workspaceDir: string
   stateFile: string
 } {
@@ -80,6 +84,13 @@ function seedWorkspace(seeds: readonly SeedFile[]): {
     depotPrefix,
     files,
     opened: {},
+    ...(Object.keys(changelists).length > 0
+      ? {
+          changelists: Object.fromEntries(
+            Object.entries(changelists).map(([id, description]) => [id, { description }]),
+          ),
+        }
+      : {}),
   }
   writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf8')
   return { workspaceDir, stateFile }
@@ -102,6 +113,9 @@ export const DEFAULT_SEEDS: readonly SeedFile[] = [
 // so `test.use({ p4Seeds: { files: [...] } })` round-trips intact.
 export interface P4SeedConfig {
   readonly files: readonly SeedFile[]
+  /** Pending numbered changelists to pre-create, keyed by id → description. Used to
+   *  assert that an (empty) numbered changelist stays visible in the SCM view. */
+  readonly changelists?: Readonly<Record<string, string>>
 }
 
 export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; openSubdir: string }>({
@@ -121,7 +135,7 @@ export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; open
       JSON.stringify({ 'welcome.agentOnboarding.seen': true }, null, 2),
       'utf8',
     )
-    const { workspaceDir, stateFile } = seedWorkspace(p4Seeds.files)
+    const { workspaceDir, stateFile } = seedWorkspace(p4Seeds.files, p4Seeds.changelists)
     const openDir = openSubdir ? join(workspaceDir, openSubdir) : workspaceDir
     const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
     const app = await electron.launch({

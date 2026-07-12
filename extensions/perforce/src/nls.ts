@@ -7,6 +7,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   // client.ts
   'perforce.input.placeholder': '默认 changelist 的提交描述',
   'perforce.group.default': '默认 Changelist',
+  'perforce.group.defaultShort': '默认',
   'perforce.group.numbered': '#{0}: {1}',
   'perforce.group.numberedNoDesc': '#{0}',
   'perforce.group.shelved': '已搁置的文件',
@@ -20,8 +21,10 @@ const ZH_CN: Readonly<Record<string, string>> = {
   // mutating command confirmations + buttons
   'perforce.btn.delete': '标记删除',
   'perforce.delete.confirm': '将 “{0}” 标记为删除？',
+  'perforce.delete.confirmMany': '将 {0} 个文件标记为删除？',
   'perforce.btn.revert': '还原',
   'perforce.revert.confirm': '还原 “{0}”？本地更改将丢失。',
+  'perforce.revert.confirmMany': '还原 {0} 个文件？本地更改将丢失。',
   'perforce.btn.revertAll': '全部还原',
   'perforce.revertChangelist.confirm': '还原 {0} 中的所有文件？本地更改将丢失。',
   'perforce.btn.submit': '提交',
@@ -33,9 +36,16 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.reopen.placeholder': '将文件移动到 changelist',
   'perforce.reopen.newChangelist': '新建 Changelist…',
   'perforce.editChangelist.prompt': 'Changelist 描述',
-  'perforce.shelve.needNumbered': '只有编号的 changelist 才能搁置。',
+  'perforce.shelve.defaultEmpty': '默认 changelist 没有可搁置的文件。',
+  'perforce.shelve.defaultPrompt': '搁置到的新建 changelist 的描述',
+  'perforce.btn.unshelve': '取出搁置',
+  'perforce.unshelveByNumber.prompt': '要取出搁置的 changelist 编号',
+  'perforce.unshelveByNumber.invalid': '请输入数字形式的 changelist 编号。',
+  'perforce.unshelveByNumber.confirm':
+    '取出 changelist #{0} 的搁置内容？将覆盖其涉及文件的本地副本。',
   'perforce.btn.deleteShelved': '删除搁置',
   'perforce.deleteShelved.confirm': '删除 changelist #{0} 中已搁置的文件？',
+  'perforce.deleteShelved.confirmFile': '删除已搁置的文件 “{0}”？',
   // p4Error.ts
   'perforce.btn.openOutput': '打开 Perforce 输出',
   'perforce.error.offline': 'Perforce 服务器不可达——请检查连接与 P4PORT',

@@ -40,12 +40,20 @@ if (!STATE_PATH) {
  *   depotPrefix: string,
  *   files: Record<string, DepotFile>,
  *   opened: Record<string, OpenedEntry>,
+ *   changelists?: Record<string, { description: string }>,
+ *   shelved?: Record<string, Record<string, { action: string, rev: number }>>,
+ *   nextChange?: number,
  * }} State
  */
 
 /** @returns {State} */
 function loadState() {
-  return JSON.parse(readFileSync(STATE_PATH, 'utf8'))
+  const state = JSON.parse(readFileSync(STATE_PATH, 'utf8'))
+  // Default the changelist/shelf model so seeds written before it existed still load.
+  state.changelists ??= {}
+  state.shelved ??= {}
+  state.nextChange ??= 1000
+  return state
 }
 
 /** @param {State} state */
@@ -146,6 +154,22 @@ function emitZtag(records) {
 function emit(records) {
   if (mode === 'ztag') emitZtag(records)
   else emitMj(records)
+}
+
+/** Value following a flag in an arg list (e.g. `-c` → the changelist id), or
+ *  undefined if the flag is absent / has no following token. */
+function argAfter(args, flag) {
+  const idx = args.indexOf(flag)
+  return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined
+}
+
+/** Read all of stdin synchronously (for spec-fed commands like `change -i`). */
+function readStdin() {
+  try {
+    return readFileSync(0, 'utf8')
+  } catch {
+    return ''
+  }
 }
 
 // --- reconcile discovery: diff disk vs have-revision ---------------------------
@@ -252,15 +276,36 @@ function main() {
     }
 
     case 'changes': {
-      // Pending changelists. The fake only models the default changelist, which
-      // p4 never lists here, so report none.
-      emit([])
+      // Pending changelists this client owns. The default changelist is never
+      // listed by p4; report each numbered changelist we've created.
+      emit(
+        Object.entries(state.changelists).map(([id, cl]) => ({
+          change: id,
+          desc: cl.description,
+          status: 'pending',
+          client: state.client,
+          user: state.user,
+        })),
+      )
       return 0
     }
 
     case 'describe': {
-      // Shelved-file probe (`describe -S -s <cl>`): nothing shelved in the fake.
-      emit([])
+      // Shelved-file probe (`describe -S -s <cl>`): report the shelf as parallel
+      // depotFile/rev/action keys, matching real `-Mj describe -S`.
+      const clId = argAfter(rest, '-s')
+      const shelf = clId ? state.shelved[clId] : undefined
+      if (!shelf || Object.keys(shelf).length === 0) {
+        emit([])
+        return 0
+      }
+      const record = { change: clId }
+      Object.entries(shelf).forEach(([depotFile, s], idx) => {
+        record[`depotFile${idx}`] = depotFile
+        record[`rev${idx}`] = String(s.rev)
+        record[`action${idx}`] = s.action
+      })
+      emit([record])
       return 0
     }
 
@@ -380,6 +425,84 @@ function main() {
       }
       saveState(state)
       emit(records)
+      return 0
+    }
+
+    case 'change': {
+      // `change -i` (create/update from a spec on stdin) or `change -o <id>` (emit a
+      // spec). Only the Description field is meaningful in the fake.
+      if (rest.includes('-o')) {
+        const clId = rest.filter((a) => !a.startsWith('-'))[0]
+        const desc = clId && state.changelists[clId] ? state.changelists[clId].description : ''
+        process.stdout.write(
+          `Change: ${clId ?? 'new'}\nClient: ${state.client}\nUser: ${state.user}\nStatus: pending\nDescription:\n\t${desc}\n`,
+        )
+        return 0
+      }
+      // `change -i`: allocate (or update) a numbered changelist from the spec.
+      const spec = readStdin()
+      const descMatch = /Description:\s*\n((?:[ \t].*\n?)*)/.exec(spec)
+      const description = descMatch
+        ? descMatch[1]
+            .split('\n')
+            .map((l) => l.replace(/^\t/, ''))
+            .join('\n')
+            .trim()
+        : ''
+      const changeField = /^Change:\s*(\S+)/m.exec(spec)?.[1]
+      const id = changeField && changeField !== 'new' ? changeField : String(state.nextChange++)
+      state.changelists[id] = { description }
+      saveState(state)
+      process.stdout.write(`Change ${id} created.\n`)
+      return 0
+    }
+
+    case 'reopen': {
+      // Move files into a changelist (`reopen -c <id|default> <file...>`).
+      const target = argAfter(rest, '-c') ?? 'default'
+      const files = rest.filter((a) => !a.startsWith('-') && a !== target)
+      const records = []
+      for (const f of files) {
+        const depotFile = f.startsWith('//') ? toDepotFile(state, f) : depotOf(state, f)
+        if (state.opened[depotFile]) {
+          state.opened[depotFile].change = target === 'default' ? 'default' : target
+          records.push({ depotFile, action: state.opened[depotFile].action, change: target })
+        }
+      }
+      saveState(state)
+      emit(records)
+      return 0
+    }
+
+    case 'shelve': {
+      // `shelve -r -c <id>` archives the changelist's opened files; `shelve -d -c <id>
+      // [file]` removes the shelf (whole CL or a single depot file).
+      const clId = argAfter(rest, '-c')
+      if (!clId) return 1
+      if (rest.includes('-d')) {
+        const only = rest.filter((a) => !a.startsWith('-') && a !== clId)
+        if (state.shelved[clId]) {
+          if (only.length > 0)
+            for (const f of only) delete state.shelved[clId][toDepotFile(state, f)]
+          else delete state.shelved[clId]
+        }
+        saveState(state)
+        return 0
+      }
+      state.shelved[clId] ??= {}
+      for (const [depotFile, o] of Object.entries(state.opened)) {
+        if (o.change === clId) state.shelved[clId][depotFile] = { action: o.action, rev: o.rev }
+      }
+      saveState(state)
+      return 0
+    }
+
+    case 'unshelve': {
+      // Restore a shelf (`unshelve -s <src> [-c <dst>] [-f] [file...]`). The fake
+      // just needs to succeed so the extension's refresh + toasts flow; it doesn't
+      // rewrite disk content.
+      const src = argAfter(rest, '-s')
+      if (!src) return 1
       return 0
     }
 

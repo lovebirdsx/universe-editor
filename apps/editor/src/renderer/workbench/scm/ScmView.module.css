@@ -273,6 +273,11 @@
   letter-spacing: 0.04em;
 }
 
+.groupIcon {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
 .groupCount {
   min-width: 16px;
   padding: 0 5px;
@@ -334,6 +339,13 @@
 
 .tree:not([data-focused='true']) .focused {
   outline: none;
+}
+
+/* Drag-over highlight when moving files onto a changelist group header. */
+.groupHeader.dropTarget {
+  background: var(--color-list-drop-bg, rgba(0, 112, 224, 0.24));
+  outline: 1px dashed var(--color-focus-border, #0070e0);
+  outline-offset: -1px;
 }
 
 .chevron {

@@ -24,6 +24,7 @@ import {
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
+  type DragEvent as ReactDragEvent,
 } from 'react'
 import {
   ICommandService,
@@ -31,6 +32,7 @@ import {
   IEditorResolverService,
   IStorageService,
   autorun,
+  CommandsRegistry,
   MenuId,
   StorageScope,
   URI,
@@ -46,12 +48,16 @@ import {
   useOwnedTreeModel,
   resourceDragProps,
   selectionDragUris,
+  useDropTarget,
+  dragContainsResources,
   type ITreeDataSource,
   type ITreeRowRenderContext,
 } from '@universe-editor/workbench-ui'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { FileIcon } from '../files/fileIconTheme.js'
+import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
 import { isMarkdownPreviewResource } from '../files/resourceLanguage.js'
+import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import { useService, useObservable } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
@@ -65,6 +71,7 @@ import {
   ActionButton,
   TitleOverflowMenu,
   menuActions,
+  menuToRows,
   useMenuRevision,
   type ActionItem,
   type OverflowRow,
@@ -81,6 +88,54 @@ interface PrimaryCommitAction {
   readonly label: string
   readonly command: string
   readonly disabled: boolean
+}
+
+/** Payload a file-row command receives: the resource DTO fields the extension host
+ *  reads (`resourceUri` / `contextValue`) plus the group id the row lives in, so
+ *  group-scoped file commands (unshelve/delete a single shelved file) can resolve
+ *  their changelist. Used both for the clicked primary arg and each selected row. */
+interface ScmResourceArg {
+  readonly resourceUri: string
+  readonly contextValue?: string
+  readonly scmResourceGroupId: string
+}
+
+/** Command payload for a file row: its path, optional status letter, and owning
+ *  group. Shared by the multi-selection and folder-subtree collectors. */
+function fileNodeToArg(node: Extract<ScmNode, { kind: 'file' }>): ScmResourceArg {
+  return {
+    resourceUri: node.resource.resourceUri,
+    ...(node.resource.contextValue !== undefined
+      ? { contextValue: node.resource.contextValue }
+      : {}),
+    scmResourceGroupId: node.groupId,
+  }
+}
+
+/**
+ * Convention command a provider registers to accept a drop of file resources onto
+ * a resource group — "move these files into this group" (p4: reopen into a
+ * changelist). Named `<providerId>.reopenTo` and probed via CommandsRegistry, the
+ * same capability-by-registration pattern dirty-diff/blame use, so the host stays
+ * SCM-agnostic: a group is a drop target only when its provider registers this.
+ */
+function reopenToCommandId(providerId: string): string {
+  return `${providerId}.reopenTo`
+}
+
+/**
+ * Header icon name for a resource group, by group-id kind, so every group row
+ * carries a leading glyph for quick recognition and sibling groups of the same
+ * kind read as the same category (e.g. p4's default + numbered changelists both
+ * show the changelist glyph). Purely visual — a lookup table like icon-map, not
+ * SCM logic — and returns undefined for unrecognized ids (no icon rendered).
+ */
+export function groupIconName(groupId: string): string | undefined {
+  if (groupId === 'reconcile') return 'reconcile'
+  if (groupId.startsWith('shelved:')) return 'archive'
+  // A pending changelist: the default one or a numbered `cl:<n>`.
+  if (groupId === 'default' || groupId.startsWith('cl:')) return 'changelist'
+  return undefined
 }
 
 function basename(path: string): string {
@@ -314,6 +369,7 @@ interface SharedRowProps {
   isFocused: boolean
   expanded: boolean
   hasChildren: boolean
+  showContextMenu: (anchor: { x: number; y: number }, rows: OverflowRow[]) => void
 }
 
 const ScmFileRow = memo(function ScmFileRow({
@@ -325,11 +381,14 @@ const ScmFileRow = memo(function ScmFileRow({
   isFocused,
   revision,
   getSelectedUris,
+  getSelectedResources,
+  showContextMenu,
 }: SharedRowProps & {
   node: Extract<ScmNode, { kind: 'file' }>
   providerId: string
   revision: number
   getSelectedUris: () => readonly string[]
+  getSelectedResources: () => readonly ScmResourceArg[]
 }) {
   const commandService = useService(ICommandService)
   const editorGroupsService = useService(IEditorGroupsService)
@@ -350,7 +409,32 @@ const ScmFileRow = memo(function ScmFileRow({
   )
 
   const run = (command: string): void => {
-    void commandService.executeCommand(command, resource)
+    // The clicked row is the primary arg (kept back-compatible: it still carries
+    // `resourceUri` + `contextValue`); `scmResourceGroupId` lets group-scoped file
+    // commands (e.g. unshelve a single shelved file) resolve their changelist. The
+    // second arg is the full selection so a command can act on every selected row.
+    const primary: ScmResourceArg = { ...resource, scmResourceGroupId: node.groupId }
+    const selected = getSelectedResources()
+    // Only forward a multi-selection when this row is part of it; acting on a
+    // single clicked row shouldn't sweep in an unrelated prior selection.
+    const selection =
+      selected.length > 1 && selected.some((s) => s.resourceUri === resource.resourceUri)
+        ? selected
+        : [primary]
+    void commandService.executeCommand(command, primary, selection)
+  }
+  // Right-click opens the full menu (every group, not just the inline actions), so
+  // provider commands living in non-inline groups (e.g. p4's "Move to Changelist")
+  // still have a UI entry point. Selecting the row first if it isn't already part
+  // of the selection mirrors the explorer, so `run` acts on the clicked row.
+  const onContextMenu = (e: ReactMouseEvent): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!isSelected) model.setSelection([node.id], node.id)
+    showContextMenu(
+      { x: e.clientX, y: e.clientY },
+      menuToRows(MenuId.ScmResourceStateContext, rowScope, run),
+    )
   }
   const openChange = (): void => {
     if (resource.command) void commandService.executeCommand(resource.command.command, resource)
@@ -395,6 +479,7 @@ const ScmFileRow = memo(function ScmFileRow({
       title={resource.decorations?.tooltip ?? resource.resourceUri}
       onClick={(e) => rowClick(model, node, e, openChange)}
       onDoubleClick={openChangePinned}
+      onContextMenu={onContextMenu}
       {...resourceDragProps(() => selectionDragUris(uri.toString(), getSelectedUris()))}
     >
       <FileIcon resource={uri} className={styles['fileIcon']} isDirectory={false} size={16} />
@@ -449,11 +534,14 @@ const ScmFolderRow = memo(function ScmFolderRow({
   isFocused,
   expanded,
   revision,
+  showContextMenu,
+  getFolderFileResources,
 }: SharedRowProps & {
   node: Extract<ScmNode, { kind: 'folder' }>
   providerId: string
   rootUri: string | undefined
   revision: number
+  getFolderFileResources: (node: Extract<ScmNode, { kind: 'folder' }>) => readonly ScmResourceArg[]
 }) {
   const commandService = useService(ICommandService)
   const folderUri = useMemo(() => URI.file(node.name), [node.name])
@@ -472,8 +560,22 @@ const ScmFolderRow = memo(function ScmFolderRow({
     [folderScope, revision],
   )
 
+  // A folder command acts on the whole subtree: the primary arg carries the folder
+  // path + `isDirectory` (so a provider can recurse via its own path syntax, e.g.
+  // p4's `<dir>/...`), and the second arg is every file row beneath it — reusing
+  // the same multi-selection fan-out file rows use, so no per-command folder logic
+  // is needed in the extension. Both carry the group id for group-scoped routing.
   const run = (command: string): void => {
-    void commandService.executeCommand(command, { resourceUri: absPath, isDirectory: true })
+    const primary = { resourceUri: absPath, isDirectory: true, scmResourceGroupId: node.groupId }
+    void commandService.executeCommand(command, primary, getFolderFileResources(node))
+  }
+  const onContextMenu = (e: ReactMouseEvent): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    showContextMenu(
+      { x: e.clientX, y: e.clientY },
+      menuToRows(MenuId.ScmResourceFolderContext, folderScope, run),
+    )
   }
 
   return (
@@ -485,6 +587,10 @@ const ScmFolderRow = memo(function ScmFolderRow({
       className={rowClassName(styles['folder'] ?? '', isSelected, isFocused)}
       style={{ paddingLeft: indentPadding }}
       onClick={(e) => rowClick(model, node, e, () => void model.toggle(node))}
+      onContextMenu={onContextMenu}
+      {...resourceDragProps(() =>
+        getFolderFileResources(node).map((r) => URI.file(r.resourceUri).toString()),
+      )}
     >
       {expanded ? (
         <ChevronDown
@@ -536,6 +642,7 @@ const ScmGroupRow = memo(function ScmGroupRow({
   expanded,
   hasChildren,
   revision,
+  showContextMenu,
 }: SharedRowProps & {
   node: Extract<ScmNode, { kind: 'group' }>
   providerId: string
@@ -553,15 +660,69 @@ const ScmGroupRow = memo(function ScmGroupRow({
     [groupScope, revision],
   )
 
+  // Group-scoped commands carry the group id so the extension can route to the
+  // right changelist (submit / revert / move-to-new a whole group).
+  const runGroup = (command: string): void => {
+    void commandService.executeCommand(command, {
+      rootUri,
+      sourceControlId: providerId,
+      scmResourceGroupId: node.groupId,
+    })
+  }
+  const onContextMenu = (e: ReactMouseEvent): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    showContextMenu(
+      { x: e.clientX, y: e.clientY },
+      menuToRows(MenuId.ScmResourceGroupContext, groupScope, runGroup),
+    )
+  }
+
+  // A group is a drop target for "move files here" only when its provider
+  // registers the reopen-to convention command (p4 does; git doesn't — it has no
+  // changelists). Probed via CommandsRegistry so the host bakes in no SCM
+  // specifics. Dropping the dragged file resources runs it with the group id and
+  // the dropped paths as a selection payload (same shape file rows send).
+  const reopenTo = reopenToCommandId(providerId)
+  const acceptsDrop = CommandsRegistry.getCommand(reopenTo) !== undefined
+  const [dropActive, setDropActive] = useState(false)
+  const { dropTargetProps } = useDropTarget<unknown>((_payload, e) => {
+    setDropActive(false)
+    if (!acceptsDrop) return
+    const resources = readDroppedResources(e).map((u) => ({
+      resourceUri: u.fsPath,
+      scmResourceGroupId: node.groupId,
+    }))
+    if (resources.length === 0) return
+    void commandService.executeCommand(
+      reopenTo,
+      { rootUri, sourceControlId: providerId, scmResourceGroupId: node.groupId },
+      resources,
+    )
+  })
+  const onDragOver = (e: ReactDragEvent): void => {
+    if (!acceptsDrop) return
+    dropTargetProps.onDragOver(e)
+    if (dragContainsResources(e.dataTransfer)) setDropActive(true)
+  }
+
   return (
     <div
       data-row-key={node.id}
       role="treeitem"
       aria-expanded={hasChildren ? expanded : undefined}
       aria-selected={isSelected}
-      className={rowClassName(styles['groupHeader'] ?? '', isSelected, isFocused)}
+      className={rowClassName(
+        `${styles['groupHeader'] ?? ''} ${dropActive ? (styles['dropTarget'] ?? '') : ''}`,
+        isSelected,
+        isFocused,
+      )}
       style={{ paddingLeft: indentPadding }}
       onClick={(e) => rowClick(model, node, e, () => void model.toggle(node))}
+      onContextMenu={onContextMenu}
+      onDragOver={onDragOver}
+      onDragLeave={() => setDropActive(false)}
+      onDrop={dropTargetProps.onDrop}
     >
       <span className={styles['chevron']} aria-hidden="true">
         {hasChildren &&
@@ -571,6 +732,17 @@ const ScmGroupRow = memo(function ScmGroupRow({
             <ChevronRight size={16} strokeWidth={1.75} />
           ))}
       </span>
+      {(() => {
+        const GroupIcon = resolveHeaderIcon(groupIconName(node.groupId))
+        return GroupIcon ? (
+          <GroupIcon
+            size={16}
+            strokeWidth={1.75}
+            className={styles['groupIcon']}
+            aria-hidden="true"
+          />
+        ) : null
+      })()}
       <span className={styles['groupLabel']}>{node.label}</span>
       <span className={styles['groupActions']}>
         {groupActions.map((a) => (
@@ -579,11 +751,7 @@ const ScmGroupRow = memo(function ScmGroupRow({
             action={a}
             onRun={(e) => {
               e.stopPropagation()
-              void commandService.executeCommand(a.command, {
-                rootUri,
-                sourceControlId: providerId,
-                scmResourceGroupId: node.groupId,
-              })
+              runGroup(a.command)
             }}
           />
         ))}
@@ -607,6 +775,17 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
   const viewMode = useObservable(scmViewState.viewMode)
 
   const [commitMenu, setCommitMenu] = useState<{ x: number; y: number } | null>(null)
+  const [ctxMenu, setCtxMenu] = useState<{
+    anchor: { x: number; y: number }
+    rows: OverflowRow[]
+  } | null>(null)
+  const showContextMenu = useCallback(
+    (anchor: { x: number; y: number }, rows: OverflowRow[]): void => {
+      // An empty menu (no command's `when` matched) shouldn't pop an empty box.
+      if (rows.length > 0) setCtxMenu({ anchor, rows })
+    },
+    [],
+  )
   const [stickyCommitId, setStickyCommitId] = useState<string | undefined>(undefined)
   const [isCommitting, setIsCommitting] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
@@ -775,6 +954,39 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
     return out
   }, [treeModel])
 
+  // Selected file rows as command payloads (path + owning group), read lazily so a
+  // multi-selection inline action can act on every selected row. Stable identity
+  // keeps ScmFileRow memoized.
+  const getSelectedResources = useCallback((): ScmResourceArg[] => {
+    const ids = new Set(treeModel.selection)
+    const out: ScmResourceArg[] = []
+    for (const children of snapshotRef.current.childrenMap.values()) {
+      for (const n of children) {
+        if (n.kind === 'file' && ids.has(n.id)) out.push(fileNodeToArg(n))
+      }
+    }
+    return out
+  }, [treeModel])
+
+  // Every file row beneath a folder node (recursively). Drives folder-scoped
+  // commands and folder drags, reusing the same command payload shape as a
+  // multi-selection so the extension needs no folder-specific handling. Stable
+  // identity keeps ScmFolderRow memoized.
+  const getFolderFileResources = useCallback(
+    (folder: Extract<ScmNode, { kind: 'folder' }>): ScmResourceArg[] => {
+      const out: ScmResourceArg[] = []
+      const walk = (id: string): void => {
+        for (const child of snapshotRef.current.childrenMap.get(id) ?? []) {
+          if (child.kind === 'file') out.push(fileNodeToArg(child))
+          else if (child.kind === 'folder') walk(child.id)
+        }
+      }
+      walk(folder.id)
+      return out
+    },
+    [],
+  )
+
   const renderRow = (ctx: ITreeRowRenderContext<ScmNode>) => {
     const n = ctx.node.element
     const shared = {
@@ -784,6 +996,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
       isFocused: ctx.isFocused,
       expanded: ctx.node.expanded,
       hasChildren: ctx.node.hasChildren,
+      showContextMenu,
     }
     if (n.kind === 'group')
       return (
@@ -805,6 +1018,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
           providerId={model.id}
           rootUri={model.rootUri}
           revision={revision}
+          getFolderFileResources={getFolderFileResources}
         />
       )
     return (
@@ -815,6 +1029,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
         providerId={model.id}
         revision={revision}
         getSelectedUris={getSelectedUris}
+        getSelectedResources={getSelectedResources}
       />
     )
   }
@@ -964,6 +1179,13 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
           anchor={commitMenu}
           rows={commitRows}
           onClose={() => setCommitMenu(null)}
+        />
+      )}
+      {ctxMenu && (
+        <TitleOverflowMenu
+          anchor={ctxMenu.anchor}
+          rows={ctxMenu.rows}
+          onClose={() => setCtxMenu(null)}
         />
       )}
     </section>
