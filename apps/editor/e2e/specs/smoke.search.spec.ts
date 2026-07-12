@@ -23,28 +23,28 @@ function writeWorkspace(): { dir: string; target: string } {
 }
 
 test.describe('@p1 search', () => {
-  test(
-    'clicking a result once opens the file and moves the cursor to the match @regression',
-    async ({ page, workbench }) => {
-      await workbench.waitForRestored()
-      await workbench.waitForBootstrapFocusSettled()
+  test('clicking a result once opens the file and moves the cursor to the match @regression', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
 
-      const { dir, target } = writeWorkspace()
-      await workbench.openWorkspace(dir)
-      await workbench.activityBar.click(SEARCH)
+    const { dir, target } = writeWorkspace()
+    await workbench.openWorkspace(dir)
+    await workbench.activityBar.click(SEARCH)
 
-      const searchView = page.getByTestId('search-view')
-      await expect(searchView).toBeVisible()
-      await searchView.getByRole('textbox', { name: 'Search', exact: true }).fill(NEEDLE)
-      const result = searchView.getByText(NEEDLE)
-      await expect(result).toBeVisible({ timeout: 10000 })
+    const searchView = page.getByTestId('search-view')
+    await expect(searchView).toBeVisible()
+    await searchView.getByRole('textbox', { name: 'Search', exact: true }).fill(NEEDLE)
+    const result = searchView.getByText(NEEDLE)
+    await expect(result).toBeVisible({ timeout: 10000 })
 
-      await result.click()
+    await result.click()
 
-      await expect.poll(() => workbench.getActiveEditorUri()).toBe(pathToFileURL(target).toString())
-      await expect
-        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorCursor()?.lineNumber))
-        .toBe(MATCH_LINE)
-    },
-  )
+    await expect.poll(() => workbench.getActiveEditorUri()).toBe(pathToFileURL(target).toString())
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorCursor()?.lineNumber))
+      .toBe(MATCH_LINE)
+  })
 })
