@@ -48,6 +48,13 @@
   color: var(--color-statusbar-prominent-fg, #5fa8ff);
 }
 
+/* Inline `$(codicon)` glyph rendered within an entry's text. */
+.text-icon {
+  font-size: 14px;
+  line-height: 1;
+  vertical-align: text-bottom;
+}
+
 .spin {
   animation: statusbar-spin 1.4s linear infinite;
   transform-origin: 50% 50%;

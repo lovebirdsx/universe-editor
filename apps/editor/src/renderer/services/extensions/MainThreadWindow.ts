@@ -29,9 +29,6 @@ import {
   type IMainThreadWindow,
 } from '@universe-editor/extensions-common'
 
-/** Leading `$(icon)` syntax in status-bar text → a separate icon field. */
-const ICON_PREFIX = /^\$\(([^)]+)\)\s*/
-
 function mapSeverity(severity: ExtHostMessageSeverity): Severity {
   return severity === 'error'
     ? Severity.Error
@@ -125,15 +122,13 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
   }
 
   private _toEntry(entry: IExtHostStatusBarEntryDto): IStatusBarEntry {
-    const match = ICON_PREFIX.exec(entry.text)
-    const icon = match?.[1]
-    const text = match ? entry.text.slice(match[0].length) : entry.text
+    // `$(codicon)` markers in the text are rendered inline by the status bar
+    // (mirrors VSCode), so pass the text through untouched.
     const alignment = entry.alignment === 1 ? StatusBarAlignment.Right : StatusBarAlignment.Left
     return {
-      text,
+      text: entry.text,
       alignment,
       priority: entry.priority,
-      ...(icon !== undefined ? { icon } : {}),
       ...(entry.tooltip !== undefined ? { tooltip: entry.tooltip } : {}),
       ...(entry.command !== undefined ? { command: entry.command } : {}),
       ...(entry.showProgress !== undefined ? { showProgress: entry.showProgress } : {}),

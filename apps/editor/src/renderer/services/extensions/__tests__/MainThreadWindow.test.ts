@@ -118,7 +118,7 @@ describe('MainThreadWindow', () => {
     )
   })
 
-  it('parses a $(icon) prefix and tracks the status-bar entry by handle', async () => {
+  it('passes $(icon) text through untouched and tracks the entry by handle', async () => {
     const sb = fakeStatusBar()
     const mt = new MainThreadWindow(
       {} as INotificationService,
@@ -128,14 +128,14 @@ describe('MainThreadWindow', () => {
     )
 
     await mt.$setStatusBarEntry(7, {
-      text: '$(git-branch) main',
+      text: '$(git-branch) main $(edit) 3',
       alignment: 1,
       priority: 100,
       command: 'git.checkout',
     })
     const [entry] = [...sb.entries.values()]
-    expect(entry?.icon).toBe('git-branch')
-    expect(entry?.text).toBe('main')
+    expect(entry?.text).toBe('$(git-branch) main $(edit) 3')
+    expect(entry?.icon).toBeUndefined()
     expect(entry?.alignment).toBe(StatusBarAlignment.Right)
     expect(entry?.command).toBe('git.checkout')
 
