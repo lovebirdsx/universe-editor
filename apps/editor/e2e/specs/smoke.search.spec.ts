@@ -5,7 +5,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { URI } from '@universe-editor/platform'
 import { test, expect } from '../fixtures/sharedApp.js'
 
 const SEARCH = 'workbench.view.search'
@@ -42,7 +42,7 @@ test.describe('@p1 search', () => {
 
     await result.click()
 
-    await expect.poll(() => workbench.getActiveEditorUri()).toBe(pathToFileURL(target).toString())
+    await expect.poll(() => workbench.getActiveEditorUri()).toBe(URI.file(target).toString())
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorCursor()?.lineNumber))
       .toBe(MATCH_LINE)
