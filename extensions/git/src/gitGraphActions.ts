@@ -141,14 +141,17 @@ export interface WorktreeSyncResult {
  * exists in `targetBranch` by patch-id. `git cherry` is used rather than ancestry
  * (`merge-base --is-ancestor`) so squash/rebase-merged worktrees, whose commits
  * landed in the target under different hashes, are still recognised as merged.
- * Anything not mergeable is skipped into the matching bucket. `targetBranch` is a
- * ref name (e.g. `main`), so each reset worktree's branch ends up exactly at the
+ * Anything not mergeable is skipped into the matching bucket unless `force` is
+ * set. Force mode still protects worktrees with uncommitted changes, but discards
+ * committed work that is not contained in `targetBranch`. `targetBranch` is a ref
+ * name (e.g. `main`), so each reset worktree's branch ends up exactly at the
  * target commit.
  */
 export const syncWorktreesToBranch = async (
   targetBranch: string,
   worktrees: readonly SyncWorktreeRef[],
   log: Log,
+  force = false,
 ): Promise<WorktreeSyncResult> => {
   const result: WorktreeSyncResult = {
     synced: [],
@@ -166,21 +169,21 @@ export const syncWorktreesToBranch = async (
       result.skippedDirty.push(wt.name)
       continue
     }
-    // Only reset when the worktree's commits are already in the target — otherwise
-    // reset --hard would silently drop them. `git cherry <target> HEAD` lists the
-    // worktree's commits relative to the target: a `+` prefix marks a commit whose
-    // change is NOT yet present in the target (by patch-id), `-` one that is. Any
-    // `+` line means there is unmerged work, so we skip. Empty output (worktree is
-    // an ancestor of the target) is mergeable.
-    const cherry = await gitExec(['cherry', targetBranch, 'HEAD'], wt.path, log)
-    if (cherry.exitCode !== 0) {
-      result.failed.push({ name: wt.name, error: gitErrorText(cherry) })
-      continue
-    }
-    const hasUnmerged = cherry.stdout.split('\n').some((line) => line.startsWith('+'))
-    if (hasUnmerged) {
-      result.skippedUnmerged.push(wt.name)
-      continue
+    // In normal mode, only reset when the worktree's commits are already in the
+    // target — otherwise reset --hard would silently drop them. `git cherry
+    // <target> HEAD` lists commits relative to the target: a `+` prefix marks a
+    // change not yet present by patch-id. Force mode deliberately skips this check.
+    if (!force) {
+      const cherry = await gitExec(['cherry', targetBranch, 'HEAD'], wt.path, log)
+      if (cherry.exitCode !== 0) {
+        result.failed.push({ name: wt.name, error: gitErrorText(cherry) })
+        continue
+      }
+      const hasUnmerged = cherry.stdout.split('\n').some((line) => line.startsWith('+'))
+      if (hasUnmerged) {
+        result.skippedUnmerged.push(wt.name)
+        continue
+      }
     }
     const reset = await gitExec(['reset', '--hard', targetBranch], wt.path, log)
     if (reset.exitCode !== 0) {

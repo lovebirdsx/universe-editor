@@ -262,9 +262,30 @@ describe('GitGraphEditor worktree sync', () => {
     fireEvent.click(within(dialog).getByText(/^Sync \(/))
     await flush()
 
-    expect(executeCommand).toHaveBeenCalledWith(GitGraphCommands.syncWorktrees, 'main', [
-      { path: featureWt.path, name: featureWt.name },
-    ])
+    expect(executeCommand).toHaveBeenCalledWith(
+      GitGraphCommands.syncWorktrees,
+      'main',
+      [{ path: featureWt.path, name: featureWt.name }],
+      false,
+    )
+  })
+
+  it('force-syncs selected clean worktrees while preserving the force flag', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    const { executeCommand } = renderEditor()
+    await flush()
+
+    fireEvent.contextMenu(screen.getByText('✓ repo'))
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Force sync worktrees to main…'))
+    fireEvent.click(within(screen.getByRole('dialog')).getByText(/^Force sync \(/))
+    await flush()
+
+    expect(executeCommand).toHaveBeenCalledWith(
+      GitGraphCommands.syncWorktrees,
+      'main',
+      [{ path: featureWt.path, name: featureWt.name }],
+      true,
+    )
   })
 
   it('does not sync when the picker is cancelled', async () => {

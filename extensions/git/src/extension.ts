@@ -287,8 +287,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
       await mgr.resolveRepo({ rootUri: gitGraphRoot })?.removeWorktreeAt(path, basename(path))
     }),
     commands.registerCommand('git-graph.syncWorktrees', async (...args: unknown[]) => {
-      const [targetBranch, worktrees] = args as [string, gga.SyncWorktreeRef[]]
-      const result = await gga.syncWorktreesToBranch(targetBranch, worktrees ?? [], log)
+      const [targetBranch, worktrees, force] = args as [string, gga.SyncWorktreeRef[], boolean?]
+      const result = await gga.syncWorktreesToBranch(
+        targetBranch,
+        worktrees ?? [],
+        log,
+        force === true,
+      )
       await mgr.resolveRepo({ rootUri: gitGraphRoot })?.refresh()
       return result
     }),

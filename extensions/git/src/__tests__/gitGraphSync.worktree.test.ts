@@ -118,6 +118,38 @@ describe('syncWorktreesToBranch', () => {
     expect(calls.some((c) => c.args[0] === 'reset' && c.cwd === '/repo.wt/a')).toBe(false)
   })
 
+  it('force-syncs a clean worktree with commits not contained in the target', async () => {
+    const calls = setup({
+      cherry: { '/repo.wt/a': '+ 2222222222222222222222222222222222222222\n' },
+    })
+
+    const res = await syncWorktreesToBranch(
+      'main',
+      [{ path: '/repo.wt/a', name: 'a' }],
+      undefined,
+      true,
+    )
+
+    expect(res.synced).toEqual(['a'])
+    expect(res.skippedUnmerged).toEqual([])
+    expect(calls).not.toContainEqual({ args: ['cherry', 'main', 'HEAD'], cwd: '/repo.wt/a' })
+    expect(calls).toContainEqual({ args: ['reset', '--hard', 'main'], cwd: '/repo.wt/a' })
+  })
+
+  it('still skips dirty worktrees in force mode', async () => {
+    const calls = setup({ status: { '/repo.wt/a': ' M file.ts\n' } })
+
+    const res = await syncWorktreesToBranch(
+      'main',
+      [{ path: '/repo.wt/a', name: 'a' }],
+      undefined,
+      true,
+    )
+
+    expect(res.skippedDirty).toEqual(['a'])
+    expect(calls.some((c) => c.args[0] === 'reset')).toBe(false)
+  })
+
   it('records a reset failure with the git error text', async () => {
     setup({ reset: { '/repo.wt/a': fail('fatal: ambiguous argument') } })
     const res = await syncWorktreesToBranch('main', [{ path: '/repo.wt/a', name: 'a' }], undefined)

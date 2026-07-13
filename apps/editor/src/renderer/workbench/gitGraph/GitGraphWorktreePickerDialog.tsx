@@ -15,6 +15,8 @@ import styles from './GitGraphEditor.module.css'
 export interface GitGraphWorktreePickerState {
   /** Branch the selected worktrees will be reset to. */
   readonly targetBranch: string
+  /** Force reset committed work not yet merged into the target branch. */
+  readonly force: boolean
   /** Candidate worktrees (target excluded by the caller). */
   readonly candidates: readonly GitGraphWorktreeDto[]
 }
@@ -60,9 +62,13 @@ export function GitGraphWorktreePickerDialog({
       <div className={styles['pickerBackdrop']} onClick={onClose} />
       <div ref={ref} role="dialog" aria-modal="true" className={styles['pickerDialog']}>
         <div className={styles['pickerTitle']}>
-          {localize('gitGraph.worktree.sync.title', 'Sync worktrees to {branch}', {
-            branch: state.targetBranch,
-          })}
+          {state.force
+            ? localize('gitGraph.worktree.forceSync.title', 'Force sync worktrees to {branch}', {
+                branch: state.targetBranch,
+              })
+            : localize('gitGraph.worktree.sync.title', 'Sync worktrees to {branch}', {
+                branch: state.targetBranch,
+              })}
         </div>
         <label className={styles['pickerSelectAll']}>
           <input type="checkbox" checked={allChecked} onChange={toggleAll} />
@@ -91,7 +97,13 @@ export function GitGraphWorktreePickerDialog({
             disabled={selected.size === 0}
             onClick={() => onConfirm([...selected])}
           >
-            {localize('gitGraph.worktree.sync.confirm', 'Sync ({count})', { count: selected.size })}
+            {state.force
+              ? localize('gitGraph.worktree.forceSync.confirm', 'Force sync ({count})', {
+                  count: selected.size,
+                })
+              : localize('gitGraph.worktree.sync.confirm', 'Sync ({count})', {
+                  count: selected.size,
+                })}
           </button>
         </div>
       </div>

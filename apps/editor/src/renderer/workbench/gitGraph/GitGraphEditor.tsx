@@ -1255,9 +1255,9 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   }, [result])
 
   // Reset the picked worktrees' branches to the target, then report a summary and
-  // reload the graph. dirty worktrees are skipped by the extension side.
+  // reload the graph. Dirty worktrees are always skipped by the extension side.
   const runWorktreeSync = useCallback(
-    async (targetBranch: string, selectedPaths: string[]) => {
+    async (targetBranch: string, selectedPaths: string[], force: boolean) => {
       setWorktreePicker(null)
       const selected = allWorktrees.filter((wt) => selectedPaths.includes(wt.path))
       const refs = selected.map((wt) => ({ path: wt.path, name: wt.name }))
@@ -1265,6 +1265,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         GitGraphCommands.syncWorktrees,
         targetBranch,
         refs,
+        force,
       )
       revalidate()
       if (!summary) return
@@ -1353,7 +1354,20 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
             label: localize('gitGraph.worktree.syncToThis', 'Sync worktrees to {branch}…', {
               branch,
             }),
-            run: () => setWorktreePicker({ targetBranch: branch, candidates: others }),
+            run: () =>
+              setWorktreePicker({ targetBranch: branch, candidates: others, force: false }),
+          },
+          {
+            kind: 'item',
+            label: localize(
+              'gitGraph.worktree.forceSyncToThis',
+              'Force sync worktrees to {branch}…',
+              {
+                branch,
+              },
+            ),
+            danger: true,
+            run: () => setWorktreePicker({ targetBranch: branch, candidates: others, force: true }),
           },
         )
       }
@@ -1862,7 +1876,9 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       {worktreePicker && (
         <GitGraphWorktreePickerDialog
           state={worktreePicker}
-          onConfirm={(paths) => void runWorktreeSync(worktreePicker.targetBranch, paths)}
+          onConfirm={(paths) =>
+            void runWorktreeSync(worktreePicker.targetBranch, paths, worktreePicker.force)
+          }
           onClose={() => setWorktreePicker(null)}
         />
       )}
