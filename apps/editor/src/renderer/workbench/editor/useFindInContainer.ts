@@ -93,8 +93,20 @@ function clearHighlights(hlAll: string, hlCurrent: string): void {
   api.registry.delete(hlCurrent)
 }
 
-function reveal(match: DomMatch | undefined): void {
-  match?.node.parentElement?.scrollIntoView({ block: 'nearest' })
+// Reveal the current match centered in the container. We only scroll when the
+// match isn't already fully in view, so navigating between matches that already
+// share the viewport doesn't jump the scroll position around; when a scroll is
+// needed we center it (block: 'center') instead of nudging it to the nearest
+// edge, which used to leave the new match pinned to the bottom with almost no
+// context around it.
+function reveal(root: HTMLElement, match: DomMatch | undefined): void {
+  const el = match?.node.parentElement
+  if (!el) return
+  const containerRect = root.getBoundingClientRect()
+  const elRect = el.getBoundingClientRect()
+  const fullyVisible = elRect.top >= containerRect.top && elRect.bottom <= containerRect.bottom
+  if (fullyVisible) return
+  el.scrollIntoView({ block: 'center' })
 }
 
 export interface FindInContainerState {
@@ -147,7 +159,7 @@ export function useFindInContainer<T extends HTMLElement>(
       currentIndexRef.current = idx
       setCurrentIndex(idx)
       applyHighlights(found, idx, hlAll, hlCurrent)
-      if (doReveal && idx >= 0) reveal(found[idx])
+      if (doReveal && idx >= 0) reveal(root, found[idx])
     },
     [containerRef, query, hlAll, hlCurrent],
   )
@@ -185,9 +197,10 @@ export function useFindInContainer<T extends HTMLElement>(
       currentIndexRef.current = idx
       setCurrentIndex(idx)
       applyHighlights(found, idx, hlAll, hlCurrent)
-      reveal(found[idx])
+      const root = containerRef.current
+      if (root) reveal(root, found[idx])
     },
-    [hlAll, hlCurrent],
+    [containerRef, hlAll, hlCurrent],
   )
 
   const next = useCallback(() => move(1), [move])
