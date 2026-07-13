@@ -16,6 +16,7 @@ import { BuiltInEditorProvidersContribution } from '../BuiltInEditorProvidersCon
 import { BuiltInViewContainersContribution } from '../BuiltInViewContainersContribution.js'
 import { BuiltInViewsContribution } from '../BuiltInViewsContribution.js'
 import { ExtensionsViewContribution } from '../ExtensionsViewContribution.js'
+import { SwarmViewContribution } from '../SwarmViewContribution.js'
 import { SettingsContribution } from '../SettingsContribution.js'
 import { ThemeContribution } from '../ThemeContribution.js'
 import { AiConfigurationContribution } from '../AiConfigurationContribution.js'
@@ -127,6 +128,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.extensionsView',
   ExtensionsViewContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Swarm Reviews viewlet (Activity Bar container + view). Registered alongside the
+// other containers so its icon appears on first paint.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.swarmView',
+  SwarmViewContribution,
   WorkbenchPhase.BlockStartup,
 )
 

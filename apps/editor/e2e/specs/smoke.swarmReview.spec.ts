@@ -1,0 +1,126 @@
+/*---------------------------------------------------------------------------------------------
+ *  Swarm (P4 Code Review) — end-to-end smoke over a fake Swarm REST server.
+ *
+ *  Exercises the review layer against fixtures/fake-swarm.mjs (no real Helix
+ *  Swarm needed): open the Swarm Reviews view → load the dashboard → open a
+ *  review's detail tab → vote → change state → add a review-level comment, and
+ *  assert the extension issued the matching Swarm requests (recorded by the fake
+ *  server). Interactions that are awkward to drive by mouse go through runCommand.
+ *--------------------------------------------------------------------------------------------*/
+
+import { expect, test } from '../fixtures/swarmApp.js'
+
+test.describe('@p1 swarm reviews', () => {
+  test('loads the dashboard, opens a review, votes, transitions, comments', async ({
+    page,
+    swarm,
+  }) => {
+    // Open the Swarm Reviews view container by clicking its Activity Bar item.
+    // (A runCommand right after cold boot races ViewsService.reconcileFromStorage,
+    // which can clobber the freshly-set active container; the click is the robust
+    // user-facing path.)
+    await page.locator('[data-testid="activitybar-item-workbench.view.swarm"]').click()
+
+    const view = page.locator('[data-testid="swarm-reviews-view"]')
+    await expect(view).toBeVisible()
+
+    // The dashboard derives "needs my action" from the reviews the user authored
+    // / participates in (it deliberately does NOT hit the v9 dashboards/action
+    // endpoint), so the poll shows up as GET reviews list queries.
+    await swarm.waitForRequest((r) => r.method === 'GET' && r.path === 'reviews')
+
+    // The seeded review #1001 needs the e2e user's action → a row shows.
+    const row = page.locator('[data-testid="swarm-review-row"]').first()
+    await expect(row).toBeVisible()
+    await expect(row.getByText('#1001')).toBeVisible()
+
+    // Open its detail tab.
+    await row.click()
+    const editor = page.locator('[data-testid="swarm-review-editor"]')
+    await expect(editor).toBeVisible()
+    await swarm.waitForRequest((r) => r.method === 'GET' && r.path === 'reviews/1001')
+    await swarm.waitForRequest((r) => r.method === 'GET' && r.path === 'reviews/1001/transitions')
+
+    // Vote up.
+    await editor.getByRole('button', { name: 'Vote Up' }).click()
+    await swarm.waitForRequest((r) => r.method === 'POST' && r.path === 'reviews/1001/vote')
+
+    // Transition: the fake server offers "Reject" as a legal transition.
+    await editor.getByRole('button', { name: 'Reject' }).click()
+    await swarm.waitForRequest((r) => r.method === 'PATCH' && r.path === 'reviews/1001/state')
+
+    // The recorded requests carry the expected bodies.
+    const reqs = swarm.requests()
+    const vote = reqs.find((r) => r.path === 'reviews/1001/vote')
+    expect((vote?.body as { vote?: string })?.vote).toBe('up')
+    const state = reqs.find((r) => r.path === 'reviews/1001/state')
+    expect((state?.body as { state?: string })?.state).toBe('rejected')
+  })
+
+  test('switching reviews refreshes the whole detail, not just comments', async ({
+    page,
+    swarm,
+  }) => {
+    await page.locator('[data-testid="activitybar-item-workbench.view.swarm"]').click()
+    const view = page.locator('[data-testid="swarm-reviews-view"]')
+    await expect(view).toBeVisible()
+    await swarm.waitForRequest((r) => r.method === 'GET' && r.path === 'reviews')
+
+    // Open review #1001 (author alice) and confirm its header rendered.
+    await view.locator('[data-testid="swarm-review-row"]', { hasText: '#1001' }).first().click()
+    const editor = page.locator('[data-testid="swarm-review-editor"]')
+    await expect(editor).toBeVisible()
+    await expect(editor.getByText('Review #1001')).toBeVisible()
+    await expect(editor.getByText('alice')).toBeVisible()
+
+    // Switch to review #1002 (author bob). The header, author and description must
+    // all reflect #1002 — a stale-state bug would leave everything but the comments
+    // panel showing #1001.
+    await view.locator('[data-testid="swarm-review-row"]', { hasText: '#1002' }).first().click()
+    const editor1002 = page.locator('[data-testid="swarm-review-editor"]')
+    await expect(editor1002.getByText('Review #1002')).toBeVisible()
+    await expect(editor1002.getByText('bob')).toBeVisible()
+    await expect(editor1002.getByText('Fix farewell')).toBeVisible()
+    await expect(editor1002.getByText('Review #1001')).toHaveCount(0)
+  })
+
+  test('restores an open review and switches its changed files between list and tree', async ({
+    page,
+    swarm,
+    workbench,
+  }) => {
+    await page.locator('[data-testid="activitybar-item-workbench.view.swarm"]').click()
+    const view = page.locator('[data-testid="swarm-reviews-view"]')
+    await expect(view).toBeVisible()
+    await swarm.waitForRequest((r) => r.method === 'GET' && r.path === 'reviews')
+
+    await view.locator('[data-testid="swarm-review-row"]', { hasText: '#1001' }).first().click()
+    let editor = page.locator('[data-testid="swarm-review-editor"]')
+    await expect(editor.getByText('Review #1001')).toBeVisible()
+    await expect(editor.getByText('a.ts')).toBeVisible()
+    await expect(editor.getByText('depot/src/editor')).toBeVisible()
+
+    await editor.getByRole('button', { name: 'View as Tree' }).click()
+    await expect(editor.locator('[data-testid="swarm-review-file-folder"]')).toHaveCount(3)
+    await editor.getByText('editor', { exact: true }).click()
+    await expect(editor.getByText('a.ts')).toHaveCount(0)
+    await expect(editor.getByText('b.ts')).toBeVisible()
+
+    await editor.getByRole('button', { name: 'View as List' }).click()
+    await expect(editor.locator('[data-testid="swarm-review-file-folder"]')).toHaveCount(0)
+    await expect(editor.getByText('depot/src/runtime')).toBeVisible()
+
+    await editor.getByRole('button', { name: 'View as Tree' }).click()
+    await expect(editor.locator('[data-testid="swarm-review-file-folder"]')).toHaveCount(3)
+    const requestsBeforeRestart = swarm.requests().filter((r) => r.path === 'reviews/1001').length
+    await workbench.waitForRestartRestore()
+
+    editor = page.locator('[data-testid="swarm-review-editor"]')
+    await expect(editor.getByText('Review #1001')).toBeVisible()
+    await expect(editor.getByText('Review #1001 is unavailable.')).toHaveCount(0)
+    await expect(editor.locator('[data-testid="swarm-review-file-folder"]')).toHaveCount(3)
+    await expect
+      .poll(() => swarm.requests().filter((r) => r.path === 'reviews/1001').length)
+      .toBeGreaterThan(requestsBeforeRestart)
+  })
+})

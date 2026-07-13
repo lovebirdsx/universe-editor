@@ -1,0 +1,125 @@
+# Swarm 代码审核（P4 Code Review）
+
+本编辑器把 **Helix Swarm**（新名 P4 Code Review）的代码审核工作流搬进了编辑器：**发起审核、查看审核状态、打分评论、修改审核状态**都能在编辑器内闭环，体验对标 GitHub Pull Request。
+
+> Swarm 是架在 Helix Core 之上的审核层，审核对象是一个**已搁置（shelved）的 changelist**；作者每次重新 shelve 就产生一个新**版本（version）**。审核状态（needsReview / needsRevision / approved / rejected / archived）由服务器裁定，编辑器只呈现服务器给出的合法操作。
+
+## 目录
+
+- [前提与开启](#前提与开启)
+- [认证：复用 p4 登录态](#认证复用-p4-登录态)
+- [Swarm Reviews 侧栏](#swarm-reviews-侧栏)
+- [状态栏与通知](#状态栏与通知)
+- [发起审核](#发起审核)
+- [审核详情：投票、改状态、评论](#审核详情投票改状态评论)
+- [看 diff 与行内评论](#看-diff-与行内评论)
+- [作者侧闭环：打回后修订](#作者侧闭环打回后修订)
+- [深链接](#深链接)
+- [配置项一览](#配置项一览)
+
+## 前提与开启
+
+- 已按 [Perforce 概览与连接](./overview.md) 完成连接（能正常登录 p4）。
+- 有一台可达的 Swarm 服务器地址。
+- Swarm 集成默认开启，默认服务器 URL 为 `http://swarm.aki.kuro.com/`。需要连接其它服务器时，在[设置](../customization/settings.md)里修改 `perforce.swarm.url`。
+
+开启后可在命令面板运行 **"Perforce: Swarm：检查连接"**（分类 Perforce）做连通性自检——成功会提示已连接。
+
+## 认证：复用 p4 登录态
+
+默认认证方式是**复用你本机已有的 p4 登录态**——无需任何额外配置或密钥。编辑器先用 `p4 login -s` 判断当前是否已登录，已登录时再用 `p4 tickets` **读取本机已缓存的 ticket**（该命令只读 P4TICKETS 文件，**从不重新登录、从不弹密码**），作为 Swarm 的 HTTP Basic 认证密码。
+
+- **不会弹密码 / 不会卡住**：只要你本机已 `p4 login`，Swarm 直接复用该会话缓存的 ticket，零额外交互；**绝不会**在后台运行会重新认证的登录命令。
+- **未登录 / 无缓存 ticket 时**：编辑器不会尝试代你登录，而是提示你先运行 **"Perforce: 登录"**，登录后再重试。
+- **凭据红线**：ticket 只在内存与请求头里出现，**绝不写入设置、日志或任何数据结构**；日志只记录请求路径、状态码与耗时（详见下方[排查与日志](#排查与日志)）。
+- Swarm 会话过期（HTTP 401）时，编辑器会提示你**登录 Perforce** 后重试。
+
+## Swarm Reviews 侧栏
+
+日常主入口是活动栏里的 **Swarm Reviews** 视图（图标为 Pull Request）。也可用命令面板运行 **"Show Swarm Reviews"** 打开。
+
+视图按「行动看板」智能分组：
+
+- **Needs My Action** —— 需要我处理的审核（我是 reviewer 且未投票 / 被打回）。
+- **Authored by Me** —— 我发起的审核。
+
+每行显示：**状态图标**（按状态分色，鼠标悬停显示状态名，以节省横向空间）、审核号、描述；下方一行依次是**最后更新时间**（相对时间，与 AGENTS 会话历史表达一致）、作者、投票数、评论 / 未解决任务数、测试状态。顶部有关键词过滤框，输入即筛选。**单击**某行在主编辑区打开审核详情。
+
+## 状态栏与通知
+
+底部状态栏左侧有一个 **Pull Request 图标 + 数字**，表示「需要我处理」的审核数；点击聚焦 Swarm Reviews 视图。
+
+打开轮询（`perforce.swarm.pollInterval` 设为秒数，最小 10 秒）后，编辑器会定期刷新看板；**当有新的审核需要我处理时弹出通知**（带「打开」按钮直接跳转）。通知按新增审核去重，不会刷屏。
+
+## 发起审核
+
+对一个 **numbered pending changelist** 发起审核：
+
+- 在 Perforce 源代码管理侧栏，changelist 组头右键 / 行内动作里选 **「请求 Swarm 审核」**；
+- 或命令面板运行 **"Perforce: Request Swarm Review"**。
+
+流程会依次：
+
+1. 若是 default changelist，先移到一个 numbered changelist（Swarm 需要编号 CL）；
+2. 搁置（shelve）该 changelist；
+3. 询问审核描述（默认取 CL 描述）；
+4. 询问审核人（逗号分隔，可选；以 `!` 前缀表示**必选** reviewer）；
+5. 调用 Swarm 创建审核，成功后直接打开审核详情标签页。
+
+## 审核详情：投票、改状态、评论
+
+审核详情标签页顶部是头部区（审核号、状态徽章、作者、参与者与投票），下面依次是操作按钮、版本选择、文件列表与评论面板。文件区右上角可以在**列表**和**目录树**两种形式间切换：列表会在文件名后显示目录，目录树会按路径分组并支持折叠；选择会全局记忆，重启编辑器后继续沿用。
+
+- **投票**：`Vote Up` / `Vote Down` / `Clear Vote`，绑定当前所选版本，提交后刷新。
+- **改状态**：编辑器**只显示服务器允许的合法迁移**（自动处理「作者不能自批」「moderator 才能 approve」等权限，无需你判断）。点对应按钮即迁移状态。
+  - 其中 **approve 且提交（commit）** 会把搁置的改动**直接提交到仓库、不可撤销**——点击时会弹出二次确认，请谨慎。
+- **评论**：右侧评论面板列出 review 级评论，可直接发表新评论（`Ctrl/Cmd+Enter` 快捷提交）。
+
+## 看 diff 与行内评论
+
+在文件列表里**单击某个文件**，打开该文件在所选两个版本之间的 diff（左侧为对比版本、右侧为当前所选版本；两侧都取自对应版本的搁置快照，行号与 Swarm 一致）。顶部「Compare」下拉可切换要对比的版本。
+
+diff 里支持 **GitHub PR 式行内评论**：
+
+- 鼠标移到某一行，左侧行号槽出现 **`+`** 图标，点击即在该行下方展开评论框。
+- 已有评论的行会直接显示评论线程，可**回复**。
+- 评论可勾选 **Mark as task** 升级为任务；任务状态机为 `open → addressed → verified`（作者标 addressed，reviewer 标 verified），每条评论上有对应的状态按钮。
+
+## 作者侧闭环：打回后修订
+
+审核被打回（needsRevision）后：
+
+1. 在 Perforce 源代码管理里继续改代码；
+2. 打开该审核详情，点 **Update Review**（仅在 needsRevision 状态出现）；
+3. 编辑器会重新 shelve 指定 changelist 并作为**新版本**关联到审核，状态回到 needsReview。
+
+评论里的未解决任务清单会提示你哪些还没处理。
+
+## 深链接
+
+支持从外部（邮件 / IM）用系统级链接直接打开某审核：
+
+```
+universe-editor://swarm/review/1234
+```
+
+点击后编辑器会聚焦窗口并打开审核 #1234 的详情标签页。
+
+## 配置项一览
+
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `perforce.swarm.enabled` | `true` | 是否开启 Swarm 集成。 |
+| `perforce.swarm.url` | `http://swarm.aki.kuro.com/` | Swarm 服务器 URL。**凭据绝不进配置**。 |
+| `perforce.swarm.apiVersion` | `v9` | Swarm REST API 版本。`v9` 端点覆盖最全（含 action 看板）；仅当服务器版本要求时改 `v11`。 |
+| `perforce.swarm.pollInterval` | `0` | 轮询看板的秒数，`0` 关闭，最小 10 秒。 |
+| `perforce.swarm.authMode` | `ticket` | 认证方式：`ticket`（复用 p4 登录态）。 |
+| `perforce.swarm.trace` | `false` | 是否记录详细诊断（请求体、查询参数、重试、耗时、错误响应体）到 **Swarm** 输出通道。凭据绝不记录。排查问题时打开。 |
+
+## 排查与日志
+
+Swarm 的所有日志走**独立的 `Swarm` 输出通道**（与 Perforce 的 p4 CLI 日志分开）：打开「输出」面板，在右上角下拉里选 **Swarm** 即可。每行格式为 `时:分:秒.毫秒 [级别] [范围] 内容`，范围为 `api`（REST 请求）/ `client` / `status`（状态栏轮询）/ `cmd`（命令）/ `auth`（认证）。
+
+默认只记录 `info` 及以上（每次请求的 `方法 路径 → 状态码 in 耗时`、重试、失败原因）。排查疑难时把 `perforce.swarm.trace` 设为 `true`，会额外记录请求体、查询参数、错误响应体等 `debug` 明细（改动即时生效，无需重载）。**任何情况下凭据都不会写入日志。**
+
+> 更多 Perforce 基础见 [Perforce 概览与连接](./overview.md) 与 [Changelist 与搁置](./changelists-and-shelving.md)。

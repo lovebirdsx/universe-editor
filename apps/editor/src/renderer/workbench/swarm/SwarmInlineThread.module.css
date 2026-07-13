@@ -1,0 +1,96 @@
+.thread {
+  background: var(--color-editor-widget-bg, #252526);
+  border: 1px solid var(--color-editor-border, rgba(255, 255, 255, 0.15));
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.comment {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.author {
+  font-weight: 600;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.taskBadge {
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: rgba(204, 120, 0, 0.25);
+  color: #e0a44b;
+}
+
+.taskBadge[data-state='verified'] {
+  background: rgba(40, 160, 70, 0.25);
+  color: #5fc27e;
+}
+
+.taskAction {
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--color-input-border, rgba(255, 255, 255, 0.15));
+  color: inherit;
+  border-radius: 3px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+
+.taskAction:hover {
+  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.08));
+}
+
+.body {
+  white-space: pre-wrap;
+  opacity: 0.9;
+}
+
+.compose {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.input {
+  resize: vertical;
+  min-height: 48px;
+  background: var(--color-input-bg, #3c3c3c);
+  color: inherit;
+  border: 1px solid var(--color-input-border, rgba(255, 255, 255, 0.15));
+  border-radius: 3px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.composeActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.taskToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  opacity: 0.85;
+}

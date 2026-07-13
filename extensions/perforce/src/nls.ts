@@ -57,6 +57,26 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.status.offline': '离线',
   'perforce.status.notLoggedIn': '未登录',
   'perforce.status.tooltip': 'Perforce：{0} · {1} 个已打开，{2} 个待收集',
+  // swarm (P4 Code Review)
+  'perforce.swarm.notConfigured':
+    '尚未配置 Swarm。请设置 perforce.swarm.enabled 与 perforce.swarm.url。',
+  'perforce.swarm.ping.ok': '已连接到 Swarm：{0}。',
+  'perforce.swarm.error.unauthorized': 'Swarm 认证失败。请登录 Perforce 后重试。',
+  'perforce.swarm.btn.login': '登录',
+  'perforce.swarm.error.generic': 'Swarm 请求失败：{0}',
+  'perforce.swarm.status.tooltip': '打开 Swarm 审核',
+  'perforce.swarm.status.count': '{0} 个审核需要你处理',
+  'perforce.swarm.status.none': '没有需要你处理的审核',
+  'perforce.swarm.requestReview.clPrompt': '要审核的 changelist（编号，或 “default”）',
+  'perforce.swarm.requestReview.descPrompt': '审核描述',
+  'perforce.swarm.requestReview.reviewersPrompt': '审核人（逗号分隔，可选）。以 ! 前缀表示必选。',
+  'perforce.swarm.requestReview.shelveFailed': '无法为审核搁置该 changelist（是否为空？）。',
+  'perforce.swarm.requestReview.created': '已创建 Swarm 审核 #{0}。',
+  'perforce.swarm.updateReview.clPrompt': '要为本审核重新搁置的 changelist（编号，或 “default”）',
+  'perforce.swarm.updateReview.done': '已更新 Swarm 审核 #{0}。',
+  'perforce.swarm.notify.one': '审核 #{0} 需要你处理。',
+  'perforce.swarm.notify.many': '有 {0} 个新审核需要你处理。',
+  'perforce.swarm.notify.open': '打开',
 }
 
 const useZhCn = (process.env.UNIVERSE_DISPLAY_LOCALE ?? '').toLowerCase().startsWith('zh')

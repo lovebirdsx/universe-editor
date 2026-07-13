@@ -39,5 +39,14 @@
   "perforce.config.autoRefresh.description": "Watch the workspace on disk and refresh automatically when files change — a save in the editor, or an edit from an external tool. Populates the \"Changes to Reconcile\" group (via p4 reconcile -n) so drifted files surface without a manual Refresh (Clean). On by default and debounced; turn it off on very large depots where the reconcile scan is slow, and use Refresh (Clean) on demand instead.",
   "perforce.config.cache.enabled.description": "Cache p4 command results to cut server round-trips. Immutable data (submitted changes, specific revisions) persists across sessions; mutable workspace state uses a short TTL and is invalidated after any change.",
   "perforce.config.cache.workspaceTtl.description": "Milliseconds a cached workspace query (opened files, file mappings) stays valid before it is re-fetched. Cache is always invalidated after a mutation, so this only bounds staleness from changes made outside the editor. 0 disables workspace caching (immutable-history caching still applies).",
-  "perforce.config.cache.diskLimitMb.description": "Maximum size (MB) of the on-disk cache for immutable history data. Least-recently-used entries are evicted past this cap. 0 disables disk persistence (in-memory caching still applies)."
+  "perforce.config.cache.diskLimitMb.description": "Maximum size (MB) of the on-disk cache for immutable history data. Least-recently-used entries are evicted past this cap. 0 disables disk persistence (in-memory caching still applies).",
+  "perforce.command.swarm.ping.title": "Swarm: Check Connection",
+  "perforce.command.swarm.requestReview.title": "Request Swarm Review",
+  "perforce.command.swarm.refreshReviews.title": "Refresh Swarm Reviews",
+  "perforce.config.swarm.enabled.description": "Enable the Swarm (P4 Code Review) integration.",
+  "perforce.config.swarm.url.description": "Swarm server URL. Credentials are never stored here — Swarm reuses the p4 login ticket.",
+  "perforce.config.swarm.apiVersion.description": "Swarm REST API version segment (default v9 — its endpoint set is the most complete, including the action dashboard; use v11 only if your server requires it).",
+  "perforce.config.swarm.pollInterval.description": "Seconds between background polls for review updates. 0 disables polling. Minimum 10s.",
+  "perforce.config.swarm.authMode.description": "How Swarm authenticates: 'ticket' reuses the p4 login ticket (default), 'token' uses an independent Swarm API token from secret storage.",
+  "perforce.config.swarm.trace.description": "Log verbose Swarm diagnostics (request bodies, query params, retries, timings, error response bodies) to the Swarm output channel. Credentials are never logged. Use when troubleshooting."
 }

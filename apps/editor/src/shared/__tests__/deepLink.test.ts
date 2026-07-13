@@ -68,6 +68,26 @@ describe('parseDeepLink — command links', () => {
   })
 })
 
+describe('parseDeepLink — swarm links', () => {
+  it('maps a swarm review link to the swarm.openReview command', () => {
+    const target = parseDeepLink('universe-editor://swarm/review/1234')
+    expect(target).toEqual({
+      kind: 'command',
+      id: 'swarm.openReview',
+      query: encodeURIComponent(JSON.stringify('1234')),
+    })
+    // Round-trips into a command opener target carrying the id as a JSON arg.
+    expect(deepLinkToOpenerTarget(target!)).toBe(
+      `command:swarm.openReview?${encodeURIComponent('"1234"')}`,
+    )
+  })
+
+  it('returns undefined for a malformed swarm link', () => {
+    expect(parseDeepLink('universe-editor://swarm/review/')).toBeUndefined()
+    expect(parseDeepLink('universe-editor://swarm/unknown/1')).toBeUndefined()
+  })
+})
+
 describe('deepLinkFilePath', () => {
   it('returns the path for a file link', () => {
     expect(deepLinkFilePath({ kind: 'file', path: '/a.ts' })).toBe('/a.ts')

@@ -24,6 +24,8 @@ import { notifyP4Failure, setP4OutputShower, isMissingCli } from './p4Error.js'
 import { changelistIdFromGroupId } from './changelist.js'
 import { statusFromAction, fileDiffRevs, displayPath } from './p4GraphParser.js'
 import { uriToFsPath } from './pathUtil.js'
+import { registerSwarmCommands } from './swarm/swarmCommands.js'
+import { createSwarmLogger } from './swarm/swarmLog.js'
 import { localize } from './nls.js'
 
 function resourcePath(arg: unknown): string | undefined {
@@ -172,6 +174,18 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const watcher = new WorkspaceWatchController(mgr, log)
   context.subscriptions.push(watcher)
   watcher.start(await cfg.get('autoRefresh', true), root)
+
+  // Swarm (P4 Code Review) commands. Registered unconditionally — the handlers
+  // themselves read `perforce.swarm.enabled` / `.url` at call time and no-op with
+  // a friendly toast when unconfigured, so toggling config takes effect without a
+  // reload. All handlers live in the extension host (safe to declare in commands).
+  // Its own output channel + structured logger so Swarm REST / poll logs are
+  // timestamped, levelled, and don't mingle with p4 CLI logs. Verbose request
+  // tracing is gated behind `perforce.swarm.trace`.
+  const swarmOut = window.createOutputChannel('Swarm')
+  context.subscriptions.push(swarmOut)
+  const swarmLogger = createSwarmLogger((line) => swarmOut.appendLine(line))
+  context.subscriptions.push(registerSwarmCommands(mgr, swarmLogger))
 
   context.subscriptions.push(
     // Point argument-less commands at the SCM-selected client. Pushed by the

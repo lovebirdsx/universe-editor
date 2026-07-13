@@ -4,8 +4,6 @@
 
 ## 功能实现进展
 
-> Perforce Graph（对等 Git Graph 的单泳道 changelist 历史编辑器）的完整技术栈、复用点、注册三件套、数据层坑与 e2e 套路,收敛在 skill `extend-perforce-graph`(按需加载)。头号坑另见护栏区 [[renderer-action-shadowed-by-extension-command-decl]]。
-
 - [Explorer 删除到回收站 + Ctrl+Z 撤销](explorer-trash-and-undo-feature.md) — delete 加 useTrash 走 shell.trashItem；完整移植 VSCode IUndoRedoService 到 platform；新 ExplorerFileOperationService 编排撤销(删前内存备份重建,>10MB 不备份)+命令层键位 ctrl+z/ctrl+y；坑=action 须 await 前取完 service [[action2-async-accessor-invalidation]]
 
 - [agent 二进制静默下载 + e2e teardown 回归修复](agent-binary-silent-download-e2e-fix.md) — 通知噪音→connect silent 选项→codex/claude 二进制守卫按 agentId 修复→意外揭露 codex 真下载导致 e2e teardown timeout→allowDownload 网关 + prefetch e2e 门禁；**续修真根因**=预热引入的 tsserver 在 Windows 变孤儿卡 app.close()：vendored CLI 只在优雅退(stdin EOF/watchdog)跑 exit hook 回收 tsserver，treeKill /F 硬杀跳过它+甩掉 race 的 semantic server→改 lspClient/exthost 全链优雅关(stdin EOF 级联)+Playwright SIGKILL 不跑 in-app 钩子故 e2e 靠 fixture killOrphanedLanguageServers 扫死父孤儿
@@ -59,6 +57,7 @@
 
 - [ESLint 路径身份护栏](eslint-path-identity-guardrails.md) — no-restricted-syntax 禁手写 fsPath 大小写折叠/路径身份键(精准不误伤 slug/模型 id)；flat config 同名规则替换非合并的坑；测试+SCM 域豁免
 - [Action2 async run 的 accessor 失效坑](action2-async-accessor-invalidation.md) — ServicesAccessor 遇第一个 await 即失效；async run 须在 await 前同步取完所有 service(快照传后续 helper)；持久 accessor 的测试会假绿抓不到
+- [spawn CLI 不关 stdin 挂起 / 选错命令](cli-stdin-hang-on-prompt.md) — spawn 交互型 CLI 需要输入时永久挂起；空 stdin 只防挂起不解决问题，真正解法是换只读命令。p4 案例：`login -p` 是重新认证(会要密码)非读 ticket，正解 `p4 tickets`(只读缓存文件)；查状态用 `login -s`
 - [renderer Action2 被扩展命令声明遮蔽](renderer-action-shadowed-by-extension-command-decl.md) — handler 在 renderer Action2 的命令(如 *-graph.view)绝不能写进扩展 package.json 的 commands 数组,否则被无 handler 的扩展宿主命令静默遮蔽成 no-op(executeCommand 不抛错、编辑器不开);只写进 menus 即可
 
 ## e2e flaky / 排查

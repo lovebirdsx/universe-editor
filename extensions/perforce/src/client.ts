@@ -54,6 +54,8 @@ import {
   parseChangesList,
   parseChangeDescribe,
   parseWhereLocalPaths,
+  statusFromAction,
+  displayPath,
   type GraphChangeMeta,
   type GraphDescribe,
 } from './p4GraphParser.js'
@@ -921,6 +923,52 @@ export class PerforceClient {
   /** The client name, for the graph's repo picker / head label. */
   get clientName(): string {
     return this._clientName
+  }
+
+  /** The bound p4 service, so the Swarm submodule can resolve a login ticket over
+   *  the same connection (Swarm auth reuses the p4 session — see swarmAuth). */
+  get p4Service(): P4Service {
+    return this._p4
+  }
+
+  /** The p4 user this client authenticates as (for Swarm Basic auth). */
+  get user(): string | undefined {
+    return this._p4.connection?.user
+  }
+
+  /**
+   * Ensure a changelist is a numbered, shelved change ready for Swarm review, and
+   * return its numbered id. The default changelist can't be shelved directly, so
+   * its files are first moved into a fresh numbered changelist (using `description`
+   * or a placeholder). Then `p4 shelve -r -c <id>` (re)shelves. Returns undefined
+   * on failure (surfaced via toast by `shelve`/`moveToNewChangelist`).
+   */
+  async shelveForReview(changelist: string, description?: string): Promise<string | undefined> {
+    let target = changelist
+    if (target === 'default') {
+      const paths = this.pathsInChangelist('default')
+      if (paths.length === 0) return undefined
+      const created = await this.moveToNewChangelist(description?.trim() || 'Review', paths)
+      if (!created) return undefined
+      target = created
+    }
+    const ok = await this.shelve(target)
+    return ok ? target : undefined
+  }
+  async describeChangeFiles(
+    change: string,
+  ): Promise<{ status: string; path: string; depotFile: string }[]> {
+    const res = await this._p4.execRecords(['describe', '-S', '-s', change])
+    if (res.result.exitCode !== 0) return []
+    const record = res.records[0]
+    if (!record) return []
+    const detail = parseChangeDescribe(record)
+    if (!detail) return []
+    return detail.files.map((f) => ({
+      status: statusFromAction(f.action),
+      path: displayPath(f.depotFile),
+      depotFile: f.depotFile,
+    }))
   }
 
   /**

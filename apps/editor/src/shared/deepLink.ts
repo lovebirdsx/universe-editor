@@ -7,10 +7,12 @@
  *  Two shapes, mirroring VSCode's `vscode://file/…` / `vscode://command/…`:
  *    universe-editor://file/<abs-path>[:line[:col]]   open a file, optional position
  *    universe-editor://command/<commandId>[?<args>]   run a whitelisted command
+ *    universe-editor://swarm/review/<id>              open a Swarm review tab
  *
  *  Command deep-links are the highest-risk surface — anyone can craft one and
  *  hand it to the OS. Only ids in {@link DEEP_LINK_ALLOWED_COMMANDS} may run;
- *  the list is deliberately limited to safe "configuration" entry points.
+ *  the list is deliberately limited to safe entry points. The `swarm` shape is a
+ *  convenience alias that resolves to the `swarm.openReview` command (allowlisted).
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '@universe-editor/platform'
@@ -19,8 +21,8 @@ export const DEEP_LINK_PROTOCOL = 'universe-editor'
 
 /**
  * Command ids a `universe-editor://command/…` link may invoke. Keep this to
- * side-effect-free "open this configuration surface" commands — never anything
- * that mutates files, runs agents, or executes shell.
+ * side-effect-free "open this surface" commands — never anything that mutates
+ * files, runs agents, or executes shell.
  */
 export const DEEP_LINK_ALLOWED_COMMANDS: readonly string[] = [
   'workbench.action.openSettings',
@@ -30,6 +32,8 @@ export const DEEP_LINK_ALLOWED_COMMANDS: readonly string[] = [
   'workbench.action.openWorkspaceSettings',
   'workbench.action.selectTheme',
   'workbench.action.configureDisplayLanguage',
+  // Opens a read-only Swarm review tab by id — no file mutation.
+  'swarm.openReview',
 ]
 
 export type DeepLinkTarget =
@@ -58,6 +62,19 @@ export function parseDeepLink(url: string): DeepLinkTarget | undefined {
     const id = trimLeadingSlash(uri.path)
     if (!id) return undefined
     return { kind: 'command', id, query: uri.query }
+  }
+
+  // universe-editor://swarm/review/<id> → swarm.openReview command with the id.
+  if (uri.authority === 'swarm') {
+    const segments = trimLeadingSlash(uri.path).split('/')
+    if (segments[0] === 'review' && segments[1]) {
+      return {
+        kind: 'command',
+        id: 'swarm.openReview',
+        query: encodeURIComponent(JSON.stringify(segments[1])),
+      }
+    }
+    return undefined
   }
 
   if (uri.authority === 'file') {

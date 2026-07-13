@@ -506,7 +506,19 @@ function main() {
       return 0
     }
 
-    case 'login':
+    case 'login': {
+      // `p4 login -s` (session check) succeeds with no output = logged in.
+      // `p4 login -p` intentionally emits nothing here: Swarm auth reads the
+      // cached ticket via `p4 tickets`, not by re-running login.
+      return 0
+    }
+    case 'tickets': {
+      // `p4 tickets` prints the on-disk P4TICKETS entries (never re-auths).
+      // Line format: `serverAddress (user) TICKETVALUE`.
+      const port = state.port ?? 'fake:1666'
+      process.stdout.write(`${port} (${state.user}) FAKE0SWARM0TICKET0DEADBEEF\n`)
+      return 0
+    }
     case 'logout':
     case 'set': {
       return 0

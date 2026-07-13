@@ -1,0 +1,163 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  SwarmDiffEditor — a Monaco side-by-side diff for one file in a Swarm review,
+ *  with GitHub-PR-style inline comments layered on via SwarmInlineCommentController.
+ *
+ *  Both sides come from p4 snapshots at their version's backing change (passed on
+ *  the SwarmDiffEditorInput), so line numbers match Swarm's inline-comment
+ *  coordinates. Comments are loaded / posted through ICommandService, and the
+ *  controller anchors them by (side, line) → Swarm context.left/rightLine.
+ *--------------------------------------------------------------------------------------------*/
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  ICommandService,
+  IConfigurationService,
+  type IEditorInput,
+} from '@universe-editor/platform'
+import {
+  SwarmCommands,
+  type SwarmAddCommentRequest,
+  type SwarmCommentDto,
+} from '@universe-editor/extensions-common'
+import { useService } from '../useService.js'
+import type { monaco } from '../editor/monaco/MonacoLoader.js'
+import { MonacoLoader } from '../editor/monaco/MonacoLoader.js'
+import { buildBridgedEditorOptions } from '../editor/monaco/editorOptionsFromConfig.js'
+import { languageForResource } from '../files/resourceLanguage.js'
+import { diffModelUri } from '../editor/diffModelUri.js'
+import { SwarmDiffEditorInput } from '../../services/editor/SwarmDiffEditorInput.js'
+import {
+  SwarmInlineCommentController,
+  type SwarmInlineSubmit,
+} from './SwarmInlineCommentController.js'
+import styles from './SwarmDiffEditor.module.css'
+
+export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
+  const diffInput = input as SwarmDiffEditorInput
+  const commands = useService(ICommandService)
+  const configService = useService(IConfigurationService)
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null)
+  const controllerRef = useRef<SwarmInlineCommentController | null>(null)
+  const [monacoNs, setMonacoNs] = useState<typeof monaco | null>(null)
+
+  const { reviewId } = diffInput.context
+
+  const loadComments = useCallback(() => {
+    void commands
+      .executeCommand<SwarmCommentDto[]>(SwarmCommands.listComments, { reviewId })
+      .then((all) => {
+        // Only comments anchored to this file.
+        const forFile = (all ?? []).filter((c) => c.context?.file === diffInput.context.depotFile)
+        controllerRef.current?.setComments(forFile)
+      })
+      .catch(() => {
+        /* leave threads as-is */
+      })
+  }, [commands, reviewId, diffInput.context.depotFile])
+
+  const postComment = useCallback(
+    async (submit: SwarmInlineSubmit): Promise<void> => {
+      const version =
+        submit.side === 'right' ? diffInput.context.rightVersion : diffInput.context.leftVersion
+      const req: SwarmAddCommentRequest = {
+        reviewId,
+        body: submit.body,
+        ...(submit.asTask ? { asTask: true } : {}),
+        context: {
+          file: diffInput.context.depotFile,
+          ...(submit.side === 'right' ? { rightLine: submit.line } : { leftLine: submit.line }),
+          ...(version !== null ? { version } : {}),
+        },
+        content: submit.content,
+      }
+      await commands.executeCommand(SwarmCommands.addComment, req)
+      loadComments()
+    },
+    [commands, reviewId, diffInput.context, loadComments],
+  )
+
+  const setTaskState = useCallback(
+    async (commentId: string, taskState: string): Promise<void> => {
+      await commands.executeCommand(SwarmCommands.setTaskState, { commentId, taskState })
+      loadComments()
+    },
+    [commands, loadComments],
+  )
+
+  useEffect(() => {
+    let cancelled = false
+    void MonacoLoader.ensureInitialized().then((m) => {
+      if (!cancelled) setMonacoNs(m)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Create the diff editor + inline-comment controller, set models.
+  useEffect(() => {
+    if (!monacoNs || !containerRef.current) return
+    const ed = monacoNs.editor.createDiffEditor(containerRef.current, {
+      theme:
+        configService.get<string>('workbench.colorTheme') === 'light'
+          ? 'output-light'
+          : 'output-dark',
+      automaticLayout: true,
+      editContext: true,
+      ...buildBridgedEditorOptions(configService),
+      readOnly: true,
+      originalEditable: false,
+      renderSideBySide: true,
+      glyphMargin: true,
+      scrollBeyondLastLine: false,
+    })
+    diffEditorRef.current = ed
+
+    const language = languageForResource(diffInput.fileUri)
+    const original = monacoNs.editor.createModel(
+      diffInput.originalContent,
+      language,
+      monacoNs.Uri.parse(diffModelUri(diffInput.fileUri, 'original').toString()),
+    )
+    const modified = monacoNs.editor.createModel(
+      diffInput.modifiedContent,
+      language,
+      monacoNs.Uri.parse(diffModelUri(diffInput.fileUri, 'modified').toString()),
+    )
+    ed.setModel({ original, modified })
+
+    const controller = new SwarmInlineCommentController(ed, {
+      onSubmit: postComment,
+      onReply: postComment,
+      onSetTaskState: setTaskState,
+    })
+    controllerRef.current = controller
+    loadComments()
+
+    return () => {
+      controller.dispose()
+      controllerRef.current = null
+      ed.setModel(null)
+      original.dispose()
+      modified.dispose()
+      ed.dispose()
+      diffEditorRef.current = null
+    }
+  }, [monacoNs, diffInput, configService, postComment, setTaskState, loadComments])
+
+  if (!monacoNs) {
+    return (
+      <div className={styles['diffEditor']} data-testid="swarm-diff-editor">
+        <div className={styles['loading']}>正在加载编辑器…</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className={styles['diffEditor']} data-testid="swarm-diff-editor">
+      <div ref={containerRef} className={styles['monacoContainer']} />
+    </div>
+  )
+}

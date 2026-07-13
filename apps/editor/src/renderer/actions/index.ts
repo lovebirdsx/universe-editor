@@ -205,6 +205,12 @@ import {
 } from './gitGraphActions.js'
 import { ViewPerforceGraphAction, PerforceGraphFocusSearchAction } from './perforceGraphActions.js'
 import {
+  OpenSwarmReviewsAction,
+  OpenSwarmReviewAction,
+  WorkbenchOpenSwarmReviewAction,
+  WorkbenchOpenSwarmReviewsAction,
+} from './swarmActions.js'
+import {
   ToggleBlameEditorDecorationAction,
   ToggleBlameStatusBarItemAction,
 } from './gitBlameActions.js'
@@ -515,6 +521,12 @@ registerAction2(GitGraphToggleRemoteBranchesAction)
 // Perforce Graph
 registerAction2(ViewPerforceGraphAction)
 registerAction2(PerforceGraphFocusSearchAction)
+
+// Swarm Reviews
+registerAction2(OpenSwarmReviewsAction)
+registerAction2(OpenSwarmReviewAction)
+registerAction2(WorkbenchOpenSwarmReviewAction)
+registerAction2(WorkbenchOpenSwarmReviewsAction)
 
 // Git Blame
 registerAction2(ToggleBlameEditorDecorationAction)

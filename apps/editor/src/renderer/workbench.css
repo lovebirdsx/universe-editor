@@ -511,6 +511,17 @@ html, body, #root {
   opacity: 0.5;
 }
 
+/* Swarm inline-comment gutter affordance: a `+` glyph shown on the hovered line
+   so the user can start a comment thread on any line (GitHub PR style). */
+.swarm-inline-add-glyph {
+  color: var(--color-tab-active-border, #0070e0);
+  cursor: pointer;
+  font-size: 14px;
+}
+.swarm-inline-add-glyph:hover {
+  opacity: 0.8;
+}
+
 /* Inline merge-conflict regions (git markers in a plain file editor). Whole-line
    tints mirror VSCode's merge-conflict extension: green = current/ours,
    blue = incoming/theirs, neutral = diff3 base; the marker lines get a stronger

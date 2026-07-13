@@ -35,6 +35,8 @@ import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
 import { WelcomeEditorInput } from '../services/editor/WelcomeEditorInput.js'
 import { GitGraphEditorInput } from '../services/editor/GitGraphEditorInput.js'
 import { PerforceGraphEditorInput } from '../services/editor/PerforceGraphEditorInput.js'
+import { SwarmReviewEditorInput } from '../services/editor/SwarmReviewEditorInput.js'
+import { SwarmDiffEditorInput } from '../services/editor/SwarmDiffEditorInput.js'
 
 export class BuiltInEditorProvidersContribution
   extends Disposable
@@ -172,6 +174,19 @@ export class BuiltInEditorProvidersContribution
         typeId: PerforceGraphEditorInput.TYPE_ID,
         componentKey: 'perforceGraph',
         deserialize: () => PerforceGraphEditorInput.deserialize(),
+      }),
+    )
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: SwarmReviewEditorInput.TYPE_ID,
+        componentKey: 'swarmReview',
+        deserialize: (data) => SwarmReviewEditorInput.deserialize(data),
+      }),
+    )
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: SwarmDiffEditorInput.TYPE_ID,
+        componentKey: 'swarmDiff',
       }),
     )
   }

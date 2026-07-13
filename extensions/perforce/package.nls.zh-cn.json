@@ -39,5 +39,14 @@
   "perforce.config.autoRefresh.description": "监视磁盘上的工作区，文件发生变化时（编辑器内保存，或外部工具的改动）自动刷新。会通过 p4 reconcile -n 填充「待收集的改动」分组，让偏离 depot 的文件无需手动「刷新（清理）」即可出现。默认开启并做去抖处理；在 reconcile 扫描较慢的超大型 depot 上可关闭，改为按需使用「刷新（清理）」。",
   "perforce.config.cache.enabled.description": "缓存 p4 命令结果以减少服务器往返。不可变数据（已提交变更、具体版本内容）跨会话持久化；可变的工作区状态使用短 TTL，并在任何变更后失效。",
   "perforce.config.cache.workspaceTtl.description": "缓存的工作区查询（已打开文件、路径映射）在重新拉取前保持有效的毫秒数。每次变更后缓存都会失效，因此该值只限制来自编辑器外部改动的陈旧窗口。设为 0 关闭工作区缓存（不可变历史缓存仍生效）。",
-  "perforce.config.cache.diskLimitMb.description": "不可变历史数据磁盘缓存的最大容量（MB）。超过上限时按最近最少使用淘汰。设为 0 关闭磁盘持久化（内存缓存仍生效）。"
+  "perforce.config.cache.diskLimitMb.description": "不可变历史数据磁盘缓存的最大容量（MB）。超过上限时按最近最少使用淘汰。设为 0 关闭磁盘持久化（内存缓存仍生效）。",
+  "perforce.command.swarm.ping.title": "Swarm：检查连接",
+  "perforce.command.swarm.requestReview.title": "发起 Swarm 审核",
+  "perforce.command.swarm.refreshReviews.title": "刷新 Swarm 审核",
+  "perforce.config.swarm.enabled.description": "启用 Swarm（P4 Code Review）集成。",
+  "perforce.config.swarm.url.description": "Swarm 服务器 URL。凭据绝不存于此——Swarm 复用 p4 登录 ticket。",
+  "perforce.config.swarm.apiVersion.description": "Swarm REST API 版本段（默认 v9——其端点集最全，含 action 看板；仅当服务器要求时改用 v11）。",
+  "perforce.config.swarm.pollInterval.description": "后台轮询审核更新的间隔秒数。0 表示关闭轮询。最小 10 秒。",
+  "perforce.config.swarm.authMode.description": "Swarm 认证方式：'ticket' 复用 p4 登录 ticket（默认），'token' 使用密钥存储中的独立 Swarm API token。",
+  "perforce.config.swarm.trace.description": "将详细的 Swarm 诊断信息（请求体、查询参数、重试、耗时、错误响应体）记录到 Swarm 输出通道。凭据绝不记录。排查问题时启用。"
 }

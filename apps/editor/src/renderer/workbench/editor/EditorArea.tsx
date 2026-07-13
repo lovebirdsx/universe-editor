@@ -24,6 +24,8 @@ import { AcpSessionEditor } from '../agents/AcpSessionEditor.js'
 import { TerminalEditorView } from './TerminalEditorView.js'
 import { GitGraphEditor } from '../gitGraph/GitGraphEditor.js'
 import { PerforceGraphEditor } from '../perforceGraph/PerforceGraphEditor.js'
+import { SwarmReviewEditor } from '../swarm/SwarmReviewEditor.js'
+import { SwarmDiffEditor } from '../swarm/SwarmDiffEditor.js'
 import { ExtensionEditor } from '../extensions/ExtensionEditor.js'
 import { CustomEditorHost } from './CustomEditorHost.js'
 import { EditorGroupView } from './EditorGroupView.js'
@@ -48,6 +50,8 @@ editorComponentMap.set('doc', DocEditor)
 editorComponentMap.set('agents.session', AcpSessionEditor)
 editorComponentMap.set('gitGraph', GitGraphEditor)
 editorComponentMap.set('perforceGraph', PerforceGraphEditor)
+editorComponentMap.set('swarmReview', SwarmReviewEditor)
+editorComponentMap.set('swarmDiff', SwarmDiffEditor)
 editorComponentMap.set('extensionDetail', ExtensionEditor)
 editorComponentMap.set('customEditor', CustomEditorHost)
 editorComponentMap.set(
