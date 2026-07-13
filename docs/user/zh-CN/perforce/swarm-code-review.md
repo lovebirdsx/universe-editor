@@ -11,6 +11,7 @@
 - [Swarm Reviews 侧栏](#swarm-reviews-侧栏)
 - [状态栏与通知](#状态栏与通知)
 - [发起审核](#发起审核)
+- [更新已有审核](#更新已有审核)
 - [审核详情：投票、改状态、评论](#审核详情投票改状态评论)
 - [看 diff 与行内评论](#看-diff-与行内评论)
 - [作者侧闭环：打回后修订](#作者侧闭环打回后修订)
@@ -55,8 +56,8 @@
 
 对一个 **numbered pending changelist** 发起审核：
 
-- 在 Perforce 源代码管理侧栏，changelist 组头右键 / 行内动作里选 **「请求 Swarm 审核」**；
-- 或命令面板运行 **"Perforce: Request Swarm Review"**。
+- 在 Perforce 源代码管理侧栏，changelist 组头右键 / 行内动作里选 **「发起新的 Swarm 审核…」**；
+- 或命令面板运行 **"Perforce: Request New Swarm Review…"**。
 
 流程会依次：
 
@@ -65,6 +66,22 @@
 3. 询问审核描述（默认取 CL 描述）；
 4. 询问审核人（逗号分隔，可选；以 `!` 前缀表示**必选** reviewer）；
 5. 调用 Swarm 创建审核，成功后直接打开审核详情标签页。
+
+## 更新已有审核
+
+要把当前 changelist 的改动，作为**新版本**关联到一个**你已发起的审核**上（对标 P4V 的 *Update a Swarm Review…*）：
+
+- 在 changelist 组头右键 / 行内动作里选 **「更新 Swarm 审核…」**；
+- 或命令面板运行 **"Perforce: Update a Swarm Review…"**。
+
+流程会依次：
+
+1. 弹出你名下**进行中审核**的选择列表（`needsRevision` 打回待修订的排在最前，其次 `needsReview`；已关闭的审核不会出现）——每项显示审核号、状态、描述首行与投票/评论数；列表底部始终有「输入审核编号…」项，可手动指定任意审核；
+2. 重新 shelve 选定的 changelist；
+3. 作为**新版本**关联到所选审核（替换当前版本文件），成功后打开该审核详情标签页。
+
+> 这与审核详情页里的 **Update Review** 按钮殊途同归：详情页按钮已知道是哪个审核，从 changelist 出发的这条路径则让你**先选审核**——适合你手上有改动、但审核详情页没开着的情况。
+
 
 ## 审核详情：投票、改状态、评论
 
@@ -91,6 +108,7 @@ diff 里支持 **GitHub PR 式行内评论**：
 
 1. 在 Perforce 源代码管理里继续改代码；
 2. 打开该审核详情，点 **Update Review**（仅在 needsRevision 状态出现）；
+   - 或不打开详情页，直接在 changelist 组头右键选 **「更新 Swarm 审核…」**（见[更新已有审核](#更新已有审核)）；
 3. 编辑器会重新 shelve 指定 changelist 并作为**新版本**关联到审核，状态回到 needsReview。
 
 评论里的未解决任务清单会提示你哪些还没处理。

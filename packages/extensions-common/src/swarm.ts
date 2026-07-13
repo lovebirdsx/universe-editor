@@ -277,6 +277,7 @@ export const SwarmCommands = {
   transition: 'perforce.swarm.transition',
   addChange: 'perforce.swarm.addChange',
   updateReview: 'perforce.swarm.updateReview',
+  updateReviewFromChangelist: 'perforce.swarm.updateReviewFromChangelist',
   listComments: 'perforce.swarm.listComments',
   addComment: 'perforce.swarm.addComment',
   setTaskState: 'perforce.swarm.setTaskState',

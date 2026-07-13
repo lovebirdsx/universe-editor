@@ -16,6 +16,7 @@ import { SwarmClient, type SwarmReviewFilter } from './swarmClient.js'
 import { SwarmError, SwarmErrorCode } from './swarmApi.js'
 import { SwarmStatusBarController } from './swarmStatusBar.js'
 import type { SwarmLogger } from './swarmLog.js'
+import { buildReviewPicks } from './swarmReviewPick.js'
 import { localize } from '../nls.js'
 
 /** Command id constants (mirror of extensions-common `SwarmCommands`; kept local
@@ -31,6 +32,7 @@ const Cmd = {
   transition: 'perforce.swarm.transition',
   addChange: 'perforce.swarm.addChange',
   updateReview: 'perforce.swarm.updateReview',
+  updateReviewFromChangelist: 'perforce.swarm.updateReviewFromChangelist',
   listComments: 'perforce.swarm.listComments',
   addComment: 'perforce.swarm.addComment',
   setTaskState: 'perforce.swarm.setTaskState',
@@ -377,6 +379,106 @@ export function registerSwarmCommands(mgr: ClientManager, logger: SwarmLogger): 
         void statusBar.refresh()
       }
       return ok
+    }),
+
+    // "Update a Swarm Review…" (P4V parity): from a changelist, pick one of the
+    // reviews you authored and attach a fresh version. Entry points: SCM
+    // changelist group header (arg carries `scmResourceGroupId`) or the command
+    // palette. Unlike `updateReview` (driven by the review detail tab, which
+    // already knows its reviewId), this flow starts from the changelist and lets
+    // the author choose which existing review to update.
+    commands.registerCommand(Cmd.updateReviewFromChangelist, async (arg: unknown) => {
+      const active = mgr.resolveClient(arg) ?? mgr.active
+      if (!active) return
+      const config = await readSwarmConfig()
+      if (!config) {
+        await window.showWarningMessage(
+          localize(
+            'perforce.swarm.notConfigured',
+            'Swarm is not configured. Set perforce.swarm.enabled and perforce.swarm.url.',
+          ),
+        )
+        return
+      }
+      // Resolve the target changelist from the group arg, or prompt for one.
+      const groupId = (arg as { scmResourceGroupId?: string } | undefined)?.scmResourceGroupId
+      let changelist = groupId ? changelistIdFromGroupId(groupId) : undefined
+      if (!changelist) {
+        const typed = await window.showInputBox({
+          prompt: localize(
+            'perforce.swarm.requestReview.clPrompt',
+            'Changelist to review (number, or "default")',
+          ),
+          value: 'default',
+        })
+        if (typed === undefined) return
+        changelist = typed.trim() || 'default'
+      }
+
+      // Let the author pick which of their open reviews to update.
+      const me = active.user
+      const reviews = await guard(
+        'updateReviewFromChangelist: listReviews',
+        (c) => c.listReviews({ ...(me ? { author: [me] } : {}), max: 100 }).then((r) => r.reviews),
+        [],
+      )
+      const picks = buildReviewPicks(reviews)
+      const enterManually = localize(
+        'perforce.swarm.updateReview.enterId',
+        'Enter a review number…',
+      )
+      const chosen = await window.showQuickPick(
+        [...picks, { label: enterManually, description: '', detail: '', reviewId: '' }],
+        {
+          placeHolder: picks.length
+            ? localize(
+                'perforce.swarm.updateReview.pickPlaceholder',
+                'Select a Swarm review to update with changelist {0}',
+                { 0: changelist },
+              )
+            : localize(
+                'perforce.swarm.updateReview.noneAuthored',
+                'You have no open reviews — enter a review number to update',
+              ),
+        },
+      )
+      if (!chosen) return
+      let reviewId = (chosen as { reviewId?: string }).reviewId ?? ''
+      if (!reviewId) {
+        const typed = await window.showInputBox({
+          prompt: localize('perforce.swarm.updateReview.idPrompt', 'Swarm review number to update'),
+        })
+        if (typed === undefined) return
+        reviewId = typed.trim()
+        if (!reviewId) return
+      }
+
+      const change = await active.shelveForReview(changelist)
+      if (!change) {
+        await window.showWarningMessage(
+          localize(
+            'perforce.swarm.requestReview.shelveFailed',
+            'Could not shelve the changelist for review (is it empty?).',
+          ),
+        )
+        return
+      }
+      const ok = await guard(
+        `updateReviewFromChangelist #${reviewId} change=${change}`,
+        async (c) => {
+          await c.addChange(reviewId, change, 'replace')
+          return true
+        },
+        false,
+      )
+      if (!ok) return
+      await window.showInformationMessage(
+        localize('perforce.swarm.updateReview.done', 'Updated Swarm review #{0}.', {
+          0: reviewId,
+        }),
+      )
+      await commands.executeCommand('_workbench.openSwarmReview', reviewId)
+      void statusBar.refresh()
     }),
 
     commands.registerCommand(Cmd.listComments, (req: unknown) =>
