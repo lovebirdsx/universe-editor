@@ -550,16 +550,16 @@ export function registerSwarmCommands(mgr: ClientManager, logger: SwarmLogger): 
       return active.describeChangeFiles(String(change))
     }),
 
-    // Print a depot file's content at a given change (`p4 print @=<change>`) for
-    // the review diff. Both diff sides come from version-backing changes so the
-    // line numbers match Swarm's inline-comment coordinates. Returns '' when the
-    // side is null (added / deleted) or print fails.
+    // Print a depot file at either its review-base revision (`#<rev>`) or an
+    // immutable version snapshot (`@=<change>`). The suffix is deliberately
+    // constrained before it reaches p4 so this data command cannot become a
+    // general filespec escape hatch.
     commands.registerCommand(Cmd.getFileContent, async (req: unknown) => {
-      const r = req as { depotFile: string; change: string | null }
+      const r = req as { depotFile: string; revision: string }
       const active = mgr.active
-      if (!active || !r?.depotFile || !r.change) return ''
-      logger.debug('cmd', `getFileContent ${r.depotFile}@=${r.change} (p4 print)`)
-      return active.printRevision(`${r.depotFile}@=${r.change}`)
+      if (!active || !r?.depotFile || !/^#\d+$|^@=\d+$/.test(r.revision)) return ''
+      logger.debug('cmd', `getFileContent ${r.depotFile}${r.revision} (p4 print)`)
+      return active.printRevision(`${r.depotFile}${r.revision}`)
     }),
   ]
 

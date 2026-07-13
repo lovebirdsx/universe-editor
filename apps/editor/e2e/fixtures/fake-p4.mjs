@@ -41,7 +41,7 @@ if (!STATE_PATH) {
  *   files: Record<string, DepotFile>,
  *   opened: Record<string, OpenedEntry>,
  *   changelists?: Record<string, { description: string }>,
- *   shelved?: Record<string, Record<string, { action: string, rev: number }>>,
+ *   shelved?: Record<string, Record<string, { action: string, rev: number, content?: string }>>,
  *   nextChange?: number,
  * }} State
  */
@@ -309,6 +309,22 @@ function main() {
       return 0
     }
 
+    case 'where': {
+      const files = rest.filter((a) => !a.startsWith('-'))
+      const records = []
+      for (const file of files) {
+        const depotFile = toDepotFile(state, file)
+        if (!depotFile.startsWith(`${state.depotPrefix}/`)) continue
+        records.push({
+          depotFile,
+          clientFile: clientSyntaxOf(state, depotFile),
+          path: clientOf(state, depotFile),
+        })
+      }
+      emit(records)
+      return 0
+    }
+
     case 'fstat': {
       // Per-file metadata. The diff baseline (BaselineProvider) reads `depotFile`
       // + `haveRev` from here, then `print`s that revision. Args are file paths
@@ -335,7 +351,13 @@ function main() {
       // no -Mj wrapper — the extension reads exec().stdout directly).
       const spec = rest.filter((a) => !a.startsWith('-'))[0]
       if (!spec) return 1
-      const depotFile = spec.replace(/#.*$/, '')
+      const shelfChange = /@=(\d+)$/.exec(spec)?.[1]
+      const depotFile = spec.replace(/(?:#.*|@=.*)$/, '')
+      const shelved = shelfChange ? state.shelved[shelfChange]?.[depotFile] : undefined
+      if (shelved?.content !== undefined) {
+        process.stdout.write(shelved.content)
+        return 0
+      }
       const known = state.files[depotFile]
       if (!known) {
         process.stderr.write(`${spec} - no such file(s).\n`)

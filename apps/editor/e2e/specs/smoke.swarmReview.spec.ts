@@ -11,6 +11,71 @@
 import { expect, test } from '../fixtures/swarmApp.js'
 
 test.describe('@p1 swarm reviews', () => {
+  test('opens a review diff with standard navigation and source-file actions', async ({
+    page,
+    swarm,
+    workbench,
+  }) => {
+    await page.locator('[data-testid="activitybar-item-workbench.view.swarm"]').click()
+    const view = page.locator('[data-testid="swarm-reviews-view"]')
+    await expect(view).toBeVisible()
+    await swarm.waitForRequest((r) => r.method === 'GET' && r.path === 'reviews')
+
+    await view.locator('[data-testid="swarm-review-row"]', { hasText: '#1001' }).first().click()
+    const review = page.locator('[data-testid="swarm-review-editor"]')
+    await expect(review.getByText('a.ts')).toBeVisible()
+    await review.getByText('a.ts').click()
+    await expect(page.locator('[data-testid="swarm-diff-editor"]')).toBeVisible()
+
+    const openFile = page.locator(
+      '[data-testid="view-title-action-workbench.action.diffEditor.openFile"]',
+    )
+    const previous = page.locator(
+      '[data-testid="view-title-action-workbench.action.compareEditor.previousChange"]',
+    )
+    const next = page.locator(
+      '[data-testid="view-title-action-workbench.action.compareEditor.nextChange"]',
+    )
+    await expect(openFile).toBeVisible()
+    await expect(previous).toBeVisible()
+    await expect(next).toBeVisible()
+
+    await expect
+      .poll(
+        async () => {
+          const state = await page.evaluate(() => window.__E2E__!.getActiveDiffViewState())
+          return state?.firstVisibleLine ?? 0
+        },
+        { timeout: 10_000 },
+      )
+      .toBeGreaterThan(1)
+    await expect
+      .poll(async () => {
+        const state = await page.evaluate(() => window.__E2E__!.getActiveDiffViewState())
+        return state?.cursorLine
+      })
+      .toBe(60)
+
+    await next.click()
+    await expect
+      .poll(async () => {
+        const state = await page.evaluate(() => window.__E2E__!.getActiveDiffViewState())
+        return state?.cursorLine
+      })
+      .toBe(100)
+
+    await previous.click()
+    await expect
+      .poll(async () => {
+        const state = await page.evaluate(() => window.__E2E__!.getActiveDiffViewState())
+        return state?.cursorLine
+      })
+      .toBe(60)
+
+    await openFile.click()
+    await expect.poll(() => workbench.getActiveEditorUri()).toContain('/src/editor/a.ts')
+  })
+
   test('loads the dashboard, opens a review, votes, transitions, comments', async ({
     page,
     swarm,

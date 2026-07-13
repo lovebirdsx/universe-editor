@@ -22,6 +22,7 @@ import {
   SwarmCommands,
   type SwarmAddCommentRequest,
   type SwarmCommentDto,
+  type SwarmFileContentRequest,
   type SwarmReviewDetailDto,
   type SwarmReviewFileDto,
   type SwarmTransitionRequest,
@@ -180,12 +181,16 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       .finally(() => setBusy(false))
   }, [commands, reviewId, busy, load])
 
-  // The change backing a given version (for the diff sides).
+  // Prefer Swarm's immutable archive shelf: the author's changelist can be
+  // re-shelved after this version was recorded.
   const changeForVersion = useCallback(
     (version: number | null): string | null =>
       version === null
         ? null
-        : (detail?.versions.find((v) => v.version === version)?.change ?? null),
+        : (() => {
+            const entry = detail?.versions.find((v) => v.version === version)
+            return entry?.archiveChange ?? entry?.change ?? null
+          })(),
     [detail],
   )
 
@@ -199,24 +204,32 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       // Left = the explicit compare version, or the one just before the selected.
       const idx = detail.versions.findIndex((v) => v.version === selectedVersion)
       const prev = idx > 0 ? (detail.versions[idx - 1]?.version ?? null) : null
-      const leftVersion = compareVersion ?? prev
-      const leftChange = changeForVersion(leftVersion)
+      const leftVersion = compareVersion ?? prev ?? 0
+      const leftChange = leftVersion === 0 ? null : changeForVersion(leftVersion)
       const added = file.status.charAt(0) === 'A'
       const deleted = file.status.charAt(0) === 'D'
+      const originalRevision =
+        leftVersion === 0
+          ? file.baseRevision
+            ? `#${file.baseRevision}`
+            : null
+          : leftChange
+            ? `@=${leftChange}`
+            : null
+      const modifiedRevision = rightChange ? `@=${rightChange}` : null
+      const getContent = async (revision: string | null): Promise<string> => {
+        if (!revision) return ''
+        return (
+          (await commands.executeCommand<string>(SwarmCommands.getFileContent, {
+            depotFile: file.depotFile,
+            revision,
+          } satisfies SwarmFileContentRequest)) ?? ''
+        )
+      }
       try {
         const [original, modified] = await Promise.all([
-          added || !leftChange
-            ? Promise.resolve('')
-            : commands.executeCommand<string>(SwarmCommands.getFileContent, {
-                depotFile: file.depotFile,
-                change: leftChange,
-              }),
-          deleted || !rightChange
-            ? Promise.resolve('')
-            : commands.executeCommand<string>(SwarmCommands.getFileContent, {
-                depotFile: file.depotFile,
-                change: rightChange,
-              }),
+          getContent(added ? null : originalRevision),
+          getContent(deleted ? null : modifiedRevision),
         ])
         await editorService.openEditor(
           new SwarmDiffEditorInput(
@@ -224,6 +237,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
               reviewId: detail.id,
               depotFile: file.depotFile,
               displayPath: file.path,
+              localPath: file.localPath,
               leftVersion: added ? null : leftVersion,
               rightVersion: deleted ? null : selectedVersion,
             },

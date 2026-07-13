@@ -9,10 +9,13 @@
  *  controller anchors them by (side, line) → Swarm context.left/rightLine.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useRef, useState } from 'react'
 import {
   ICommandService,
   IConfigurationService,
+  IContextKeyService,
+  IEditorGroupsService,
+  type IDisposable,
   type IEditorInput,
 } from '@universe-editor/platform'
 import {
@@ -27,6 +30,9 @@ import { buildBridgedEditorOptions } from '../editor/monaco/editorOptionsFromCon
 import { languageForResource } from '../files/resourceLanguage.js'
 import { diffModelUri } from '../editor/diffModelUri.js'
 import { SwarmDiffEditorInput } from '../../services/editor/SwarmDiffEditorInput.js'
+import { DiffEditorRegistry } from '../../services/editor/DiffEditorRegistry.js'
+import { syncEditorFocusContext } from '../../services/editor/editorFocus.js'
+import { EditorGroupContext } from '../editor/EditorGroupContext.js'
 import {
   SwarmInlineCommentController,
   type SwarmInlineSubmit,
@@ -37,6 +43,9 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
   const diffInput = input as SwarmDiffEditorInput
   const commands = useService(ICommandService)
   const configService = useService(IConfigurationService)
+  const contextKeyService = useService(IContextKeyService)
+  const groupsService = useService(IEditorGroupsService)
+  const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null)
   const controllerRef = useRef<SwarmInlineCommentController | null>(null)
@@ -127,6 +136,20 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
       monacoNs.Uri.parse(diffModelUri(diffInput.fileUri, 'modified').toString()),
     )
     ed.setModel({ original, modified })
+    DiffEditorRegistry.register(diffInput, ed, group?.id)
+
+    const activeGroup = groupsService.activeGroup
+    if (activeGroup.activeEditor === diffInput && !activeGroup.lastActivationPreservedFocus) {
+      ed.focus()
+      syncEditorFocusContext(contextKeyService)
+      queueMicrotask(() => syncEditorFocusContext(contextKeyService))
+    }
+
+    let updateDiffSub: IDisposable | undefined = ed.onDidUpdateDiff(() => {
+      updateDiffSub?.dispose()
+      updateDiffSub = undefined
+      ed.revealFirstDiff()
+    })
 
     const controller = new SwarmInlineCommentController(ed, {
       onSubmit: postComment,
@@ -139,13 +162,25 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
     return () => {
       controller.dispose()
       controllerRef.current = null
+      updateDiffSub?.dispose()
+      DiffEditorRegistry.unregister(diffInput, ed)
       ed.setModel(null)
       original.dispose()
       modified.dispose()
       ed.dispose()
       diffEditorRef.current = null
     }
-  }, [monacoNs, diffInput, configService, postComment, setTaskState, loadComments])
+  }, [
+    monacoNs,
+    diffInput,
+    configService,
+    postComment,
+    setTaskState,
+    loadComments,
+    group,
+    groupsService,
+    contextKeyService,
+  ])
 
   if (!monacoNs) {
     return (

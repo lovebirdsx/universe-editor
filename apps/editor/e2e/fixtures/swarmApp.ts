@@ -75,12 +75,22 @@ export const test = base.extend<SwarmFixtures>({
     const portfile = join(fakeDir, 'port.json')
     const logfile = join(fakeDir, 'requests.log')
     const stateFile = join(fakeDir, 'p4state.json')
+    const baselineA =
+      Array.from({ length: 120 }, (_, i) => `export const line${i + 1} = ${i + 1}`).join('\n') +
+      '\n'
+    const shelvedA =
+      Array.from({ length: 120 }, (_, i) => {
+        const line = i + 1
+        return line === 60 || line === 100
+          ? `export const line${line} = ${line} + 1`
+          : `export const line${line} = ${line}`
+      }).join('\n') + '\n'
 
     // Seed a minimal p4 depot so discovery succeeds + shelve has something.
     mkdirSync(join(workspaceDir, 'src', 'editor'), { recursive: true })
     mkdirSync(join(workspaceDir, 'src', 'runtime'), { recursive: true })
     writeFileSync(join(workspaceDir, 'hello.txt'), 'hello\n', 'utf8')
-    writeFileSync(join(workspaceDir, 'src', 'editor', 'a.ts'), 'export const a = 1\n', 'utf8')
+    writeFileSync(join(workspaceDir, 'src', 'editor', 'a.ts'), baselineA, 'utf8')
     writeFileSync(join(workspaceDir, 'src', 'runtime', 'b.ts'), 'export const b = 1\n', 'utf8')
     writeFileSync(
       stateFile,
@@ -91,14 +101,18 @@ export const test = base.extend<SwarmFixtures>({
         depotPrefix: '//depot',
         files: {
           '//depot/hello.txt': { rev: 1, content: 'hello\n' },
-          '//depot/src/editor/a.ts': { rev: 1, content: 'export const a = 1\n' },
+          '//depot/src/editor/a.ts': { rev: 1, content: baselineA },
           '//depot/src/runtime/b.ts': { rev: 1, content: 'export const b = 1\n' },
         },
         opened: {},
         shelved: {
           '900': {
-            '//depot/src/editor/a.ts': { action: 'edit', rev: 2 },
-            '//depot/src/runtime/b.ts': { action: 'add', rev: 1 },
+            '//depot/src/editor/a.ts': { action: 'edit', rev: 1, content: shelvedA },
+            '//depot/src/runtime/b.ts': {
+              action: 'add',
+              rev: 1,
+              content: 'export const b = 2\n',
+            },
           },
         },
       }),

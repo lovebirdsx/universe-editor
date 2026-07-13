@@ -13,6 +13,7 @@ import {
   IStorageService,
   InstantiationService,
   ServiceCollection,
+  URI,
   type ICommand,
 } from '@universe-editor/platform'
 import {
@@ -22,6 +23,8 @@ import {
 } from '@universe-editor/extensions-common'
 import { ServicesContext } from '../../useService.js'
 import { SwarmReviewEditorInput } from '../../../services/editor/SwarmReviewEditorInput.js'
+import { SwarmDiffEditorInput } from '../../../services/editor/SwarmDiffEditorInput.js'
+import { DiffEditorInput } from '../../../services/editor/DiffEditorInput.js'
 import { swarmReviewDetailCache } from '../../../services/swarm/swarmViewState.js'
 import { SwarmReviewEditor } from '../SwarmReviewEditor.js'
 import { SwarmReviewFiles } from '../SwarmReviewFiles.js'
@@ -42,8 +45,20 @@ const DETAIL: SwarmReviewDetailDto = {
 }
 
 const FILES: SwarmReviewFileDto[] = [
-  { status: 'M', path: 'src/editor/a.ts', depotFile: '//depot/src/editor/a.ts' },
-  { status: 'A', path: 'src/runtime/b.ts', depotFile: '//depot/src/runtime/b.ts' },
+  {
+    status: 'M',
+    path: 'src/editor/a.ts',
+    depotFile: '//depot/src/editor/a.ts',
+    baseRevision: '1',
+    localPath: 'C:/workspace/src/editor/a.ts',
+  },
+  {
+    status: 'A',
+    path: 'src/runtime/b.ts',
+    depotFile: '//depot/src/runtime/b.ts',
+    baseRevision: null,
+    localPath: 'C:/workspace/src/runtime/b.ts',
+  },
 ]
 
 class RegistryCommandService {
@@ -76,10 +91,11 @@ function renderReview() {
     _serviceBrand: undefined,
     confirm: vi.fn(async () => ({ confirmed: false })),
   } as unknown as IDialogService)
-  services.set(IEditorService, {
+  const editorService = {
     _serviceBrand: undefined,
     openEditor: vi.fn(),
-  } as unknown as IEditorService)
+  }
+  services.set(IEditorService, editorService as unknown as IEditorService)
   services.set(IStorageService, new FakeStorage() as unknown as IStorageService)
   const instantiation = new InstantiationService(services)
   const result = render(
@@ -87,7 +103,7 @@ function renderReview() {
       <SwarmReviewEditor input={new SwarmReviewEditorInput('1001')} />
     </ServicesContext.Provider>,
   )
-  return { ...result, commands }
+  return { ...result, commands, editorService }
 }
 
 beforeEach(() => {
@@ -102,6 +118,48 @@ afterEach(() => {
 })
 
 describe('SwarmReviewEditor restore', () => {
+  it('opens a first-version edit against its depot base instead of an empty file', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const getFileContent = registerCommand(
+      SwarmCommands.getFileContent,
+      (_accessor, request: unknown) =>
+        (request as { revision: string }).revision === '#1'
+          ? 'export const a = 1\n'
+          : 'export const a = 2\n',
+    )
+    const { commands, editorService } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      fireEvent.click(screen.getByText('a.ts'))
+      await act(async () => Promise.resolve())
+
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getFileContent, {
+        depotFile: '//depot/src/editor/a.ts',
+        revision: '#1',
+      })
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getFileContent, {
+        depotFile: '//depot/src/editor/a.ts',
+        revision: '@=2001',
+      })
+      const diffInput = editorService.openEditor.mock.calls[0]?.[0] as SwarmDiffEditorInput
+      expect(diffInput).toBeInstanceOf(SwarmDiffEditorInput)
+      expect(diffInput).toBeInstanceOf(DiffEditorInput)
+      expect(diffInput.openableResource?.toString()).toBe(
+        URI.file('C:/workspace/src/editor/a.ts').toString(),
+      )
+      expect(diffInput.originalContent).toBe('export const a = 1\n')
+      expect(diffInput.modifiedContent).toBe('export const a = 2\n')
+      expect(diffInput.context.leftVersion).toBe(0)
+      expect(diffInput.context.rightVersion).toBe(1)
+      expect(diffInput.getName()).toBe('a.ts (base ↔ v1)')
+    } finally {
+      getFileContent.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
   it('waits for the runtime command instead of treating startup undefined as a missing review', async () => {
     const { commands } = renderReview()
 

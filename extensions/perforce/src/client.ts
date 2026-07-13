@@ -955,20 +955,32 @@ export class PerforceClient {
     const ok = await this.shelve(target)
     return ok ? target : undefined
   }
-  async describeChangeFiles(
-    change: string,
-  ): Promise<{ status: string; path: string; depotFile: string }[]> {
+  async describeChangeFiles(change: string): Promise<
+    {
+      status: string
+      path: string
+      depotFile: string
+      localPath: string | null
+      baseRevision: string | null
+    }[]
+  > {
     const res = await this._p4.execRecords(['describe', '-S', '-s', change])
     if (res.result.exitCode !== 0) return []
     const record = res.records[0]
     if (!record) return []
     const detail = parseChangeDescribe(record)
     if (!detail) return []
-    return detail.files.map((f) => ({
-      status: statusFromAction(f.action),
-      path: displayPath(f.depotFile),
-      depotFile: f.depotFile,
-    }))
+    const localPaths = await this._whereLocalPaths(detail.files.map((file) => file.depotFile))
+    return detail.files.map((f) => {
+      const status = statusFromAction(f.action)
+      return {
+        status,
+        path: displayPath(f.depotFile),
+        depotFile: f.depotFile,
+        localPath: localPaths.get(f.depotFile) ?? null,
+        baseRevision: status === 'A' ? null : f.rev || null,
+      }
+    })
   }
 
   /**
@@ -1097,11 +1109,15 @@ export class PerforceClient {
   /**
    * Print a file revision's content (`p4 print -q <spec>`) for the diff editor,
    * or empty string when the spec is null (an added/deleted side) or print fails.
-   * A concrete revision's content is immutable, so it's cached (and persisted)
-   * under the `print` namespace.
+   * A concrete `#revision` is immutable and cached. A pending shelf selected by
+   * `@=change` can be replaced in place, so it must bypass the persistent cache.
    */
   async printRevision(spec: string | null): Promise<string> {
     if (!spec) return ''
+    if (spec.includes('@=')) {
+      const res = await this._p4.exec(['print', '-q', spec])
+      return res.exitCode === 0 ? res.stdout : ''
+    }
     const value = await this._cache.wrap(P4CacheNs.print, spec, async () => {
       const res = await this._p4.exec(['print', '-q', spec])
       return res.exitCode === 0 ? res.stdout : undefined

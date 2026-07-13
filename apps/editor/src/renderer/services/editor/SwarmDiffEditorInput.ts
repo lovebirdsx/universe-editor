@@ -9,44 +9,49 @@
  *  one tab (see memory `editor-input-identity-isolation`).
  *--------------------------------------------------------------------------------------------*/
 
-import { EditorInput, URI } from '@universe-editor/platform'
+import { URI } from '@universe-editor/platform'
+import { DiffEditorInput } from './DiffEditorInput.js'
 
 export interface SwarmDiffContext {
   readonly reviewId: string
   readonly depotFile: string
   readonly displayPath: string
-  /** Left (base) side version number, or null for an added file. */
+  /** Current client workspace path, or null when the depot file is not mapped. */
+  readonly localPath: string | null
+  /** Left side: 0 = review base, 1+ = review version, null = file absent. */
   readonly leftVersion: number | null
   /** Right (target) side version number, or null for a deleted file. */
   readonly rightVersion: number | null
 }
 
-export class SwarmDiffEditorInput extends EditorInput {
-  static readonly TYPE_ID = 'swarmDiff'
+function swarmFileUri(context: SwarmDiffContext): URI {
+  return URI.from({ scheme: 'swarm', path: `/${context.displayPath}` })
+}
+
+export class SwarmDiffEditorInput extends DiffEditorInput {
+  static readonly TYPE_ID: string = 'swarmDiff'
 
   constructor(
     private readonly _context: SwarmDiffContext,
-    private _originalContent: string,
-    private _modifiedContent: string,
+    originalContent: string,
+    modifiedContent: string,
   ) {
-    super()
+    super(
+      swarmFileUri(_context),
+      originalContent,
+      modifiedContent,
+      undefined,
+      _context.localPath ? URI.file(_context.localPath) : undefined,
+    )
   }
 
   get context(): SwarmDiffContext {
     return this._context
   }
 
-  get originalContent(): string {
-    return this._originalContent
-  }
-
-  get modifiedContent(): string {
-    return this._modifiedContent
-  }
-
   /** A file: URI over the display path, used for language detection + labels. */
   get fileUri(): URI {
-    return URI.from({ scheme: 'swarm', path: `/${this._context.displayPath}` })
+    return this.originalUri
   }
 
   override get typeId(): string {
@@ -67,8 +72,13 @@ export class SwarmDiffEditorInput extends EditorInput {
 
   override getName(): string {
     const base = this._context.displayPath.split('/').pop() ?? this._context.displayPath
-    const l = this._context.leftVersion ? `v${this._context.leftVersion}` : '∅'
-    const r = this._context.rightVersion ? `v${this._context.rightVersion}` : '∅'
+    const l =
+      this._context.leftVersion === 0
+        ? 'base'
+        : this._context.leftVersion !== null
+          ? `v${this._context.leftVersion}`
+          : '∅'
+    const r = this._context.rightVersion !== null ? `v${this._context.rightVersion}` : '∅'
     return `${base} (${l} ↔ ${r})`
   }
 }

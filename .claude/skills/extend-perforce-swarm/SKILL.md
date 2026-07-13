@@ -75,11 +75,21 @@ Swarm 的 comment 端点**不挂在 review 下**——它是独立的 topic-base
 
 ## 📐 diff 数据源铁律
 
-**diff 的两侧都用本地 `p4 print @=<version-change>` 取同一版本快照**（`getFileContent` 命令 → `client.printRevision(`${depotFile}@=${change}`)`）。
+**diff 两侧都从 p4 快照读取，绝不用工作区文件**（`getFileContent` 命令 → `client.printRevision(...)`）：
 
-- 左右两侧都是 **version 快照**（不同 version 的 changelist 号），所以**行号与 Swarm 行内评论的坐标严格对齐**。
+- 首版默认比较是 **base(0) → v1**，不是「空 → v1」：`p4 describe -S -s <change>` 的 `rev#` 是 shelved 文件的 depot 基线 revision；非新增文件左侧读 `${depotFile}#${rev}`，新增文件左侧才为空。否则所有 v1 edit 都会显示成整文件新增。
+- v2+ 默认比较前一 version → 当前 version，两侧读各自 `${depotFile}@=${versionChange}`；删除文件右侧为空。
+- Swarm version 有 `archiveChange` 时优先用它作为不可变快照，回退 `change`。作者 changelist 会被重新 shelve，不能拿它代表旧 version。
+- `#revision` 可进 immutable print cache；`@=<pending-change>` 可被 reshelve 原地替换，不能进永久缓存。
 - **绝不用工作区当前文件当右侧**——它会随本地编辑漂移，行号对不上 Swarm 评论锚点。
-- 文件列表 / 版本元数据走 `describeVersion`（`p4 describe -s @=<change>`，报表型命令走 `execRecords()` 防 `-Mj` 塌陷，见 `extend-perforce-plugin`）。
+- 文件列表 / 版本元数据走 `describeVersion`（pending shelf 用 `p4 describe -S -s <change>`，报表型命令走 `execRecords()` 防 `-Mj` 塌陷，见 `extend-perforce-plugin`）。
+- “打开文件”目标是当前 client 的工作区副本，路径必须批量走 `p4 where <depotFile...>`；不能从 depot/display path 猜本地路径。无映射时 DTO 传 `localPath:null`，标题栏隐藏该动作。
+
+## diff 编辑器基础能力接入
+
+- `SwarmDiffEditorInput` 必须继承通用 `DiffEditorInput`（仍覆写自己的 `typeId/id/resource`），这样 `isInDiffEditor`、`diffEditorHasOpenableFile` 与标准标题栏 Action2 才能识别：打开文件 / 上一个差异 / 下一个差异。
+- `SwarmDiffEditor` 在 `setModel` 后用 `EditorGroupContext` 的 group id 注册 `DiffEditorRegistry`，cleanup 对称 unregister；否则标准导航、焦点与 e2e diff 探针都找不到 live Monaco 实例。
+- 首次 `onDidUpdateDiff` 一次性调用 `revealFirstDiff()` 并立即注销监听；不能在 `setModel` 后同步 `goToDiff()`，此时 diff/layout 尚未计算完成。
 
 ## 行内评论锚定（Swarm API 要求）
 
@@ -93,14 +103,14 @@ Swarm 的 comment 端点**不挂在 review 下**——它是独立的 topic-base
 两个 EditorInput 都覆写 `id` 让不同审核 / 不同 diff = 不同 tab（见 memory `editor-input-identity-isolation`）：
 
 - `SwarmReviewEditorInput`：`TYPE_ID='swarmReview'`，`resource = universe:/swarmReview/{id}`，`id` 含 reviewId。
-- `SwarmDiffEditorInput`：`TYPE_ID='swarmDiff'`，`id = swarmDiff:{reviewId}:{depotFile}:{left}-{right}`，`resource` scheme `swarm-diff` + query 带 `l=/r=` 版本。**transient（不 deserialize）**——审核 diff 是临时视图，重启不恢复。
+- `SwarmDiffEditorInput`：继承 `DiffEditorInput`；`TYPE_ID='swarmDiff'`，`id = swarmDiff:{reviewId}:{depotFile}:{left}-{right}`，`resource` scheme `swarm-diff` + query 带 `l=/r=` 版本。**transient（不 deserialize）**——审核 diff 是临时视图，重启不恢复。
 
 ## 注册套路
 
 **主编辑区编辑器三件套**（`swarmReview` + `swarmDiff` 各一套，缺一不显示）：
 1. `contributions/BuiltInEditorProvidersContribution.ts` —— `EditorRegistry.registerEditorProvider({ typeId, componentKey, deserialize })`（swarmDiff 无 deserialize、transient）
 2. `workbench/editor/EditorArea.tsx` —— `editorComponentMap.set('swarmReview'/'swarmDiff', …)`
-3. `services/editor/Swarm*EditorInput.ts` —— `EditorInput` 子类
+3. `services/editor/Swarm*EditorInput.ts` —— review 是 `EditorInput` 子类；diff 是 `DiffEditorInput` 子类
 
 **侧栏 view 容器**：`contributions/SwarmViewContribution.ts` 注册 `workbench.view.swarm` 容器 + view，`ViewComponentRegistry` 映射到 `SwarmReviewsView`。Action2 在 `actions/index.ts` `registerAction2`。
 

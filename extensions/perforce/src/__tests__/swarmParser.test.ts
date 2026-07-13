@@ -92,7 +92,13 @@ describe('swarmParser.parseReviewDetail', () => {
         description: 'full\nbody',
         versions: [
           { rev: 1, change: '100', pending: true, time: 1_700_000_000 },
-          { rev: 2, change: '105', pending: false, time: 1_700_000_100 },
+          {
+            rev: 2,
+            change: '105',
+            archiveChange: '106',
+            pending: false,
+            time: 1_700_000_100,
+          },
         ],
         participants: { bob: { vote: { value: 1 } } },
       },
@@ -100,7 +106,12 @@ describe('swarmParser.parseReviewDetail', () => {
     expect(detail).toBeDefined()
     expect(detail!.description).toBe('full\nbody')
     expect(detail!.versions).toHaveLength(2)
-    expect(detail!.versions[1]).toMatchObject({ version: 2, change: '105', pending: false })
+    expect(detail!.versions[1]).toMatchObject({
+      version: 2,
+      change: '105',
+      archiveChange: '106',
+      pending: false,
+    })
     expect(detail!.participants[0]).toMatchObject({ user: 'bob', vote: 1 })
   })
 })

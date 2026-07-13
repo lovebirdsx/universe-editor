@@ -40,6 +40,7 @@ export interface SwarmParticipant {
 export interface SwarmVersion {
   version: number
   change: string
+  archiveChange?: string
   pending: boolean
   time: number
 }
@@ -178,9 +179,11 @@ function parseVersions(raw: unknown): SwarmVersion[] {
   if (!Array.isArray(raw)) return []
   return raw.map((entry, i) => {
     const r = (entry ?? {}) as Record<string, unknown>
+    const archiveChange = asString(r['archiveChange'])
     return {
       version: asNumber(r['rev']) ?? i + 1,
       change: asString(r['change']) ?? asString(r['stream']) ?? '',
+      ...(archiveChange ? { archiveChange } : {}),
       pending: r['pending'] !== false,
       time: toMillis(r['time']),
     }

@@ -73,6 +73,8 @@ export interface SwarmVersionDto {
   version: number
   /** The p4 change backing this version. */
   change: string
+  /** Swarm's immutable shelved snapshot for this version, when available. */
+  archiveChange?: string
   /** Whether this version is committed (vs shelved). */
   pending: boolean
   /** Version creation time, Unix ms. */
@@ -87,6 +89,10 @@ export interface SwarmReviewFileDto {
   path: string
   /** Full depot path, for p4 operations. */
   depotFile: string
+  /** Current client workspace path, or null when the depot file is not mapped. */
+  localPath: string | null
+  /** Depot revision the shelved file was based on; null for an added file. */
+  baseRevision: string | null
 }
 
 /** Full review detail loaded when a review is opened. */
@@ -244,6 +250,13 @@ export interface SwarmAddCommentRequest {
 export interface SwarmSetTaskStateRequest {
   commentId: string
   taskState: SwarmTaskState
+}
+
+/** Argument for `perforce.swarm.getFileContent`. */
+export interface SwarmFileContentRequest {
+  depotFile: string
+  /** A validated p4 revision suffix such as `#4` or `@=12345`. */
+  revision: string
 }
 
 /** Argument for `perforce.swarm.getFileDiff` — the two version snapshots to compare. */

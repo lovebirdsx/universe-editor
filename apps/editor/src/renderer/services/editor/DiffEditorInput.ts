@@ -7,7 +7,7 @@
 import { EditorInput, Emitter, URI, type Event } from '@universe-editor/platform'
 import { basenameOfResource } from '../../workbench/files/resourceInfo.js'
 export class DiffEditorInput extends EditorInput {
-  static readonly TYPE_ID = 'diff'
+  static readonly TYPE_ID: string = 'diff'
 
   private readonly _onDidChangeContent = this._register(new Emitter<void>())
   /** Fires when original/modified content is refreshed in place (e.g. after a discard). */
