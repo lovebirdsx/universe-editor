@@ -73,8 +73,11 @@ export class OpenFolderInNewWindowAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
+    // Resolve all services synchronously up front: the accessor is only valid
+    // during invokeFunction's call, not across the showOpenDialog await.
     const fileDialog = accessor.get(IFileDialogService)
     const workspace = accessor.get(IWorkspaceService)
+    const windowsService = accessor.get(IWindowsService)
     const folder = await fileDialog.showOpenDialog({
       title: localize('fileDialog.openFolder.title', 'Open Folder'),
       canSelectFiles: false,
@@ -83,7 +86,7 @@ export class OpenFolderInNewWindowAction extends Action2 {
       ...(workspace.current ? { defaultUri: workspace.current.folder } : {}),
     })
     if (!folder) return
-    await accessor.get(IWindowsService).openWindow(folder)
+    await windowsService.openWindow(folder)
   }
 }
 

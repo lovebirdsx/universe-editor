@@ -4,6 +4,7 @@ import {
   DisposableTracker,
   Emitter,
   IDialogService,
+  IFileDialogService,
   IHostService,
   ILifecycleService,
   ILoggerService,
@@ -15,15 +16,22 @@ import {
   NullLogger,
   ServiceCollection,
   ShutdownReason,
+  URI,
+  IWindowsService,
+  IWorkspaceService,
   registerAction2,
   setDisposableTracker,
   type IConfirmResult,
   type IDisposable,
+  type IFileDialogService as IFileDialogServiceType,
   type IHostService as IHostServiceType,
+  type IWindowsService as IWindowsServiceType,
+  type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import {
   AboutAction,
   CloseWindowAction,
+  OpenFolderInNewWindowAction,
   ReloadWindowAction,
   ToggleDevToolsAction,
 } from '../windowActions.js'
@@ -210,6 +218,51 @@ describe('windowActions', () => {
     })
     expect(confirm).toHaveBeenCalledTimes(1)
     expect(dialog.lastDetail).toContain('1.2.3')
+  })
+
+  it('OpenFolderInNewWindow.run opens the picked folder in a new window (accessor survives await)', async () => {
+    disposables.push(registerAction2(OpenFolderInNewWindowAction))
+
+    const picked = URI.file('/tmp/picked-folder')
+    const fileDialog: IFileDialogServiceType = {
+      _serviceBrand: undefined,
+      // Resolve on a later microtask so invokeFunction has already returned and
+      // its accessor `done` guard is armed — this is what makes a post-await
+      // `accessor.get(...)` throw, reproducing the original bug.
+      showOpenDialog: vi.fn(async () => {
+        await Promise.resolve()
+        return picked
+      }),
+      showSaveDialog: vi.fn(async () => undefined),
+    }
+    const openWindow = vi.fn((_folder?: unknown) => Promise.resolve())
+    const windowsService = {
+      _serviceBrand: undefined,
+      onDidChangeWindows: new Emitter<void>().event,
+      getWindows: vi.fn(async () => []),
+      isCurrentWindowFirst: vi.fn(async () => true),
+      focusWindow: vi.fn(async () => undefined),
+      openWindow,
+      quit: vi.fn(async () => undefined),
+    } as unknown as IWindowsServiceType
+    const workspaceService = {
+      _serviceBrand: undefined,
+      current: null,
+    } as unknown as IWorkspaceServiceType
+
+    const services = new ServiceCollection()
+    services.set(IFileDialogService, fileDialog)
+    services.set(IWindowsService, windowsService)
+    services.set(IWorkspaceService, workspaceService)
+    const inst = new InstantiationService(services)
+
+    await inst.invokeFunction((accessor) => {
+      const cmd = CommandsRegistry.getCommand(OpenFolderInNewWindowAction.ID)!
+      return cmd.handler(accessor) as unknown as Promise<void>
+    })
+
+    expect(openWindow).toHaveBeenCalledTimes(1)
+    expect(openWindow.mock.calls[0]?.[0]).toBe(picked)
   })
 })
 
