@@ -122,7 +122,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.agent.clearHistory': '清除 Agent 会话历史',
   'action.agent.copyFocusedMessage': '复制消息',
   'action.agent.cycleTimelineCollapse': '循环切换时间线折叠状态（全部）',
-  'action.agent.decreaseFontSize': '减小聊天字体大小',
   'action.agent.find': '在会话中查找',
   'action.agent.findClose': '关闭查找',
   'action.agent.findNext': '查找下一个',
@@ -132,7 +131,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.agent.focusNextTimelineItem': '聚焦下一个时间线项',
   'action.agent.focusPreviousTimelineItem': '聚焦上一个时间线项',
   'action.agent.focusTopTimelineItem': '聚焦时间线顶部项',
-  'action.agent.increaseFontSize': '增大聊天字体大小',
   'action.agent.jumpToPlan': '跳转到计划',
   'action.agent.newSession': '新建 Agent 会话',
   'action.agent.newSessionInCurrentEditor': '在当前编辑器中新建 Agent 会话',
@@ -145,7 +143,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.agent.prompt.selectNextSuggestion': '选择下一个建议',
   'action.agent.prompt.selectPreviousSuggestion': '选择上一个建议',
   'action.agent.refreshSessions': '刷新 Agent 会话列表',
-  'action.agent.resetFontSize': '重置聊天字体大小',
   'action.agent.resumeSession': '恢复 Agent 会话…',
   'action.agent.scrollTimelineDown': '向下滚动时间线',
   'action.agent.scrollTimelinePageDown': '时间线向下翻页',
@@ -354,6 +351,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.toggleTerminal.title': '切换终端',
   'action.toggleWordWrap.title': '切换自动换行',
   'action.undo.title': '撤销',
+  'action.zoomIn.title': '放大',
+  'action.zoomOut.title': '缩小',
+  'action.zoomReset.title': '重置缩放',
 
   // --- Dialogs ---
   'dialog.default.cancel': '取消',

@@ -121,6 +121,7 @@ import {
   OpenRecentAction,
   OpenWorkspaceInVSCodeAction,
 } from './workspaceActions.js'
+import { ZoomInAction, ZoomOutAction, ResetZoomAction } from './zoomActions.js'
 import { SaveAllFilesAction, SaveFileAction, SaveFileAsAction } from './fileSaveActions.js'
 import { NewFileAction, NewFolderAction, NewUntitledFileAction } from './fileCreateActions.js'
 import { DeleteFileAction, RenameFileAction } from './fileMutateActions.js'
@@ -283,9 +284,6 @@ import {
   SwitchSessionAction,
   CopyFocusedAcpMessageAction,
   CopySelectedTextAction,
-  IncreaseAgentFontSizeAction,
-  DecreaseAgentFontSizeAction,
-  ResetAgentFontSizeAction,
   SelectNextAcpPromptSuggestionAction,
   SelectPreviousAcpPromptSuggestionAction,
   AcceptAcpPromptSuggestionAction,
@@ -461,6 +459,14 @@ registerAction2(OpenFolderInNewWindowAction)
 registerAction2(SwitchWindowAction)
 registerAction2(ExitAction)
 registerAction2(ToggleDevToolsAction)
+
+// Window — zoom (registered before the Agents chat font-size trio so that, when
+// the chat is focused, the chat-font commands — which carry an ACP_NAV_WHEN
+// when-clause and are registered later — win the newest-first tie-break; anywhere
+// else these global window-zoom bindings claim ctrl+= / ctrl+- / ctrl+0).
+registerAction2(ZoomInAction)
+registerAction2(ZoomOutAction)
+registerAction2(ResetZoomAction)
 registerAction2(AboutAction)
 registerAction2(OpenDocsAction)
 registerAction2(OpenEditorGuideAction)
@@ -623,9 +629,6 @@ registerAction2(CycleAcpTimelineCollapseAction)
 registerAction2(SwitchSessionAction)
 registerAction2(CopyFocusedAcpMessageAction)
 registerAction2(CopySelectedTextAction)
-registerAction2(IncreaseAgentFontSizeAction)
-registerAction2(DecreaseAgentFontSizeAction)
-registerAction2(ResetAgentFontSizeAction)
 // Prompt suggestion popover — registered last so its `escape` / `enter` / `tab`
 // / `ctrl+j` / `ctrl+n` / `ctrl+p` bindings win the newest-wins tie-break over
 // global shortcuts whenever `acpPromptPopupVisible` is set.

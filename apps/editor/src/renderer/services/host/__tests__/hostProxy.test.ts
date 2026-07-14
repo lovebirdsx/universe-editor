@@ -32,6 +32,9 @@ class FakeHost implements IHostServiceWire {
   readonly close = vi.fn().mockResolvedValue(undefined)
   readonly restartWindow = vi.fn().mockResolvedValue(undefined)
   readonly devTools = vi.fn().mockResolvedValue(undefined)
+  readonly zoomInFn = vi.fn().mockResolvedValue(undefined)
+  readonly zoomOutFn = vi.fn().mockResolvedValue(undefined)
+  readonly resetZoomFn = vi.fn().mockResolvedValue(undefined)
 
   isMaximized(): Promise<boolean> {
     return Promise.resolve(this.isMaximizedValue)
@@ -50,6 +53,15 @@ class FakeHost implements IHostServiceWire {
   }
   toggleDevTools(): Promise<void> {
     return this.devTools()
+  }
+  zoomIn(): Promise<void> {
+    return this.zoomInFn()
+  }
+  zoomOut(): Promise<void> {
+    return this.zoomOutFn()
+  }
+  resetZoom(): Promise<void> {
+    return this.resetZoomFn()
   }
   getVersionInfo(): Promise<{
     productName: string
@@ -173,6 +185,17 @@ describe('IHostService proxy', () => {
     expect(h.fake.close).toHaveBeenCalledTimes(1)
     expect(h.fake.restartWindow).toHaveBeenCalledTimes(1)
     expect(h.fake.devTools).toHaveBeenCalledTimes(1)
+    h.dispose()
+  })
+
+  it('forwards zoom calls to the server implementation', async () => {
+    const h = setup()
+    await h.proxy.zoomIn()
+    await h.proxy.zoomOut()
+    await h.proxy.resetZoom()
+    expect(h.fake.zoomInFn).toHaveBeenCalledTimes(1)
+    expect(h.fake.zoomOutFn).toHaveBeenCalledTimes(1)
+    expect(h.fake.resetZoomFn).toHaveBeenCalledTimes(1)
     h.dispose()
   })
 

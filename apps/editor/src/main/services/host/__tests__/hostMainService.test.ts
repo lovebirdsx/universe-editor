@@ -24,6 +24,15 @@ class FakeWindow extends EventEmitter {
   private _maximized = false
   private _destroyed = false
   reloadCount = 0
+  zoomLevel = 0
+
+  readonly webContents = {
+    toggleDevTools: (): void => {},
+    getZoomLevel: (): number => this.zoomLevel,
+    setZoomLevel: (level: number): void => {
+      this.zoomLevel = level
+    },
+  }
 
   isMaximized(): boolean {
     return this._maximized
@@ -140,6 +149,30 @@ describe('MainHostService', () => {
     expect(info.productName).toBe('Test')
     expect(info.version).toBe('1.0.0')
     expect(info.node).toBe(process.versions.node)
+    svc.dispose()
+  })
+
+  it('zoom in / out steps the zoom level and reset returns to zero', async () => {
+    const svc = new MainHostService(win.asWin())
+    await svc.zoomIn()
+    expect(win.zoomLevel).toBe(1)
+    await svc.zoomIn()
+    expect(win.zoomLevel).toBe(2)
+    await svc.zoomOut()
+    expect(win.zoomLevel).toBe(1)
+    await svc.resetZoom()
+    expect(win.zoomLevel).toBe(0)
+    svc.dispose()
+  })
+
+  it('clamps the zoom level to the webFrame range', async () => {
+    const svc = new MainHostService(win.asWin())
+    win.zoomLevel = 9
+    await svc.zoomIn()
+    expect(win.zoomLevel).toBe(9)
+    win.zoomLevel = -8
+    await svc.zoomOut()
+    expect(win.zoomLevel).toBe(-8)
     svc.dispose()
   })
 })

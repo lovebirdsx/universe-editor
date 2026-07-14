@@ -298,6 +298,9 @@ class FakeHostService implements IHostServiceType {
   async closeWindow() {}
   async restart() {}
   async toggleDevTools() {}
+  async zoomIn() {}
+  async zoomOut() {}
+  async resetZoom() {}
   async getVersionInfo() {
     return {
       productName: 'Universe Editor',

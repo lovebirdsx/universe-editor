@@ -85,6 +85,9 @@ function makeHostStub(): IHostServiceType & {
     closeWindow: vi.fn().mockResolvedValue(undefined) as unknown as () => Promise<void>,
     restart: vi.fn().mockResolvedValue(undefined) as unknown as () => Promise<void>,
     toggleDevTools: vi.fn().mockResolvedValue(undefined) as unknown as () => Promise<void>,
+    zoomIn: vi.fn().mockResolvedValue(undefined) as unknown as () => Promise<void>,
+    zoomOut: vi.fn().mockResolvedValue(undefined) as unknown as () => Promise<void>,
+    resetZoom: vi.fn().mockResolvedValue(undefined) as unknown as () => Promise<void>,
     getVersionInfo: vi.fn().mockResolvedValue({
       productName: 'Universe Editor',
       version: '1.2.3',

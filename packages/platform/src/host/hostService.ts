@@ -44,6 +44,13 @@ export interface IHostService {
   restart(): Promise<void>
   toggleDevTools(): Promise<void>
 
+  /** Increase the window's zoom level by one step (clamped to the webFrame range). */
+  zoomIn(): Promise<void>
+  /** Decrease the window's zoom level by one step (clamped to the webFrame range). */
+  zoomOut(): Promise<void>
+  /** Reset the window's zoom level back to the default (100%). */
+  resetZoom(): Promise<void>
+
   /**
    * Request the host to open a new application window. The new window
    * inherits the current workspace context.

@@ -32,9 +32,6 @@ import {
   FocusBottomAcpTimelineAction,
   FocusTopAcpTimelineAction,
   JumpToAcpPlanAction,
-  IncreaseAgentFontSizeAction,
-  DecreaseAgentFontSizeAction,
-  ResetAgentFontSizeAction,
   SelectNextAcpPromptSuggestionAction,
   SelectPreviousAcpPromptSuggestionAction,
   AcceptAcpPromptSuggestionAction,
@@ -373,34 +370,6 @@ describe('Agent prompt suggestion popover actions', () => {
     const hide = makeWidget()
     run(HideAcpPromptSuggestionAction.ID, hide.widget)
     expect(hide.popoverHide).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('Agent chat font zoom actions', () => {
-  const disposables: IDisposable[] = []
-
-  afterEach(() => {
-    while (disposables.length > 0) disposables.pop()?.dispose()
-  })
-
-  function focusedContext(): ContextKeyService {
-    const ctx = new ContextKeyService()
-    ctx.createKey<boolean>('acpChatFocused', true)
-    return ctx
-  }
-
-  it('binds zoom keybindings only while the chat is focused', () => {
-    disposables.push(registerAction2(IncreaseAgentFontSizeAction))
-    disposables.push(registerAction2(DecreaseAgentFontSizeAction))
-    disposables.push(registerAction2(ResetAgentFontSizeAction))
-    const ctx = focusedContext()
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+=', ctx)).toBe(
-      IncreaseAgentFontSizeAction.ID,
-    )
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+-', ctx)).toBe(
-      DecreaseAgentFontSizeAction.ID,
-    )
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+0', ctx)).toBe(ResetAgentFontSizeAction.ID)
   })
 })
 

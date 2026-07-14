@@ -76,7 +76,11 @@ interface FakeWin {
   setAlwaysOnTop(flag: boolean): void
   flashFrame(flag: boolean): void
   readonly id: number
-  readonly webContents: { toggleDevTools(): void }
+  readonly webContents: {
+    toggleDevTools(): void
+    getZoomLevel(): number
+    setZoomLevel(level: number): void
+  }
   __fire(event: 'maximize' | 'unmaximize'): void
   __setFocused(focused: boolean): void
 }
@@ -87,6 +91,7 @@ function makeFakeWin(): FakeWin & { calls: string[] } {
   let maximized = false
   let focused = false
   let minimized = false
+  let zoomLevel = 0
   const fake: FakeWin & { calls: string[] } = {
     calls,
     id: 1,
@@ -142,6 +147,13 @@ function makeFakeWin(): FakeWin & { calls: string[] } {
     webContents: {
       toggleDevTools() {
         calls.push('toggleDevTools')
+      },
+      getZoomLevel() {
+        return zoomLevel
+      },
+      setZoomLevel(level: number) {
+        zoomLevel = level
+        calls.push(`setZoomLevel:${level}`)
       },
     },
     on(event, handler) {

@@ -39,6 +39,16 @@ export interface RestartHooks {
   getRendererLifecycle?: () => IRendererLifecycleService | undefined
 }
 
+// Zoom level is Chromium's logarithmic step: each unit is a ~20% factor. Clamp to
+// the range Electron's webFrame accepts so repeated presses can't run off-scale.
+const ZOOM_STEP = 1
+const ZOOM_MIN = -8
+const ZOOM_MAX = 9
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
 export class MainHostService implements IHostServiceWire, IDisposable {
   declare readonly _serviceBrand: undefined
 
@@ -107,6 +117,28 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     if (!this._win.isDestroyed()) {
       this._win.webContents.toggleDevTools()
       this._logger.debug(`toggleDevTools id=${this._win.id}`)
+    }
+    return Promise.resolve()
+  }
+
+  zoomIn(): Promise<void> {
+    return this._applyZoom((level) => level + ZOOM_STEP)
+  }
+
+  zoomOut(): Promise<void> {
+    return this._applyZoom((level) => level - ZOOM_STEP)
+  }
+
+  resetZoom(): Promise<void> {
+    return this._applyZoom(() => 0)
+  }
+
+  private _applyZoom(next: (current: number) => number): Promise<void> {
+    if (!this._win.isDestroyed()) {
+      const wc = this._win.webContents
+      const level = clamp(next(wc.getZoomLevel()), ZOOM_MIN, ZOOM_MAX)
+      wc.setZoomLevel(level)
+      this._logger.debug(`setZoomLevel ${level} id=${this._win.id}`)
     }
     return Promise.resolve()
   }
