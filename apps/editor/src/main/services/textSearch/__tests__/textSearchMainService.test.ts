@@ -7,7 +7,11 @@ import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { DisposableTracker, setDisposableTracker, URI } from '@universe-editor/platform'
-import { resolveRipgrepDiskPath, TextSearchMainService } from '../textSearchMainService.js'
+import {
+  rgErrorMsgForDisplay,
+  resolveRipgrepDiskPath,
+  TextSearchMainService,
+} from '../textSearchMainService.js'
 
 const tempRoots: string[] = []
 
@@ -211,4 +215,45 @@ describe('TextSearchMainService', () => {
       svc.dispose()
     }
   })
+
+  it('classifies fatal ripgrep stderr but ignores non-fatal path errors', () => {
+    // Broken symlink / unreadable path → non-fatal, results should be kept.
+    expect(
+      rgErrorMsgForDisplay(
+        String.raw`rg: .\node_modules\eslint-plugin-rule: 系统找不到指定的文件。 (os error 2)`,
+      ),
+    ).toBeUndefined()
+    expect(rgErrorMsgForDisplay('rg: /some/path: No such file or directory (os error 2)')).toBe(
+      undefined,
+    )
+
+    // Genuinely fatal diagnostics → surface as a failure.
+    expect(rgErrorMsgForDisplay('regex parse error:\n  unclosed group')).toContain(
+      'regex parse error',
+    )
+    expect(rgErrorMsgForDisplay('grep config error: unknown encoding: utf-99')).toBe(
+      'Unknown encoding: utf-99',
+    )
+    expect(rgErrorMsgForDisplay('error parsing glob **/[: bad glob')).toContain('rror parsing glob')
+  })
+
+  it('keeps results when ripgrep follows a broken symlink and exits non-zero', async () => {
+    const root = await makeTempRoot()
+    await writeFile(path.join(root, 'a.txt'), 'broken-link-token\n')
+    // Point a link at a target that does not exist so --follow makes ripgrep
+    // emit an "os error 2" on stderr and exit with code 2, mirroring the pnpm
+    // dangling-symlink case from the field report.
+    if (!(await tryDirLink(path.join(root, 'does-not-exist'), path.join(root, 'dangling')))) return
+
+    const svc = new TextSearchMainService()
+    try {
+      const complete = await svc.search(baseQuery(root, 'broken-link-token'))
+      expect(complete.results).toHaveLength(1)
+      expect(path.normalize(URI.revive(complete.results[0]!.resource)!.fsPath)).toBe(
+        path.normalize(path.join(root, 'a.txt')),
+      )
+    } finally {
+      svc.dispose()
+    }
+  }, 15_000)
 })

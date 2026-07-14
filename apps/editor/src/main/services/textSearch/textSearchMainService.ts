@@ -167,6 +167,32 @@ function errorMessageFromRipgrep(stderr: string, fallback: string): string {
   return firstLine ?? fallback
 }
 
+// Mirrors VSCode's ripgrepTextSearchEngine: ripgrep exits with a non-zero code
+// (typically 2) when it hits *any* problem, including non-fatal ones such as a
+// single unreadable path or a broken symlink (`.node_modules\... (os error 2)`),
+// while still searching the rest of the tree and producing valid results.
+// Only genuinely fatal diagnostics — a bad regex, a bad glob, an unknown
+// encoding, or a disallowed literal — should surface as a search failure.
+// Everything else returns undefined so the results are kept and no error is
+// reported to the user.
+export function rgErrorMsgForDisplay(msg: string): string | undefined {
+  const lines = msg.split('\n').filter((line) => line.trim().length > 0)
+  const firstLine = lines[0]?.trim() ?? ''
+
+  if (lines.some((line) => line.trim().startsWith('regex parse error'))) {
+    return errorMessageFromRipgrep(msg, 'regex parse error')
+  }
+
+  const encodingMatch = firstLine.match(/grep config error: unknown encoding: (.*)/)
+  if (encodingMatch) return `Unknown encoding: ${encodingMatch[1]}`
+
+  if (firstLine.startsWith('error parsing glob') || firstLine.startsWith('the literal')) {
+    return firstLine.charAt(0).toUpperCase() + firstLine.slice(1)
+  }
+
+  return undefined
+}
+
 export class TextSearchMainService extends Disposable implements ITextSearchMainService {
   declare readonly _serviceBrand: undefined
 
@@ -385,8 +411,19 @@ export class TextSearchMainService extends Disposable implements ITextSearchMain
           )
 
           if (!running.cancelled && !running.killedForLimit && code !== 0 && code !== 1) {
-            reject(new Error(errorMessageFromRipgrep(stderr, `ripgrep exited with code ${code}`)))
-            return
+            const fatal = rgErrorMsgForDisplay(stderr)
+            if (fatal !== undefined) {
+              reject(new Error(fatal))
+              return
+            }
+            // Non-fatal exit (e.g. an unreadable path or broken symlink): the
+            // rest of the tree was searched, so keep the results and only log.
+            if (stderr.trim().length > 0) {
+              this._logger.warn(
+                `textSearch ignored non-fatal rg exit code=${code}: ` +
+                  errorMessageFromRipgrep(stderr, `ripgrep exited with code ${code}`),
+              )
+            }
           }
 
           resolve({
