@@ -95,6 +95,9 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   const commentsRef = useRef(comments)
   const commentsLoadRef = useRef(0)
   const consumedFilesRefreshRef = useRef(0)
+  /** The archive-shelf change whose file list is already loaded — lets refresh
+   *  ticks skip re-describing an immutable snapshot entirely. */
+  const loadedImmutableChangeRef = useRef<string | null>(null)
   const filesViewModeRestoredRef = useRef(false)
   const [filesRefreshGeneration, setFilesRefreshGeneration] = useState(0)
 
@@ -437,13 +440,34 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     () => changeForVersion(selectedVersion),
     [changeForVersion, selectedVersion],
   )
+  // An archive shelf is a permanent snapshot: describe it once, cache forever,
+  // and never force-refresh it. Only a version that falls back to the author's
+  // (re-shelvable) changelist stays on the short-TTL + force path — otherwise the
+  // minute-interval refresh would re-run `p4 describe -S -s` every tick and churn
+  // the file list even though the archived snapshot can't have changed.
+  const selectedChangeImmutable = useMemo(() => {
+    if (selectedVersion === null) return false
+    const entry = detail?.versions.find((v) => v.version === selectedVersion)
+    return entry?.archiveChange !== undefined
+  }, [detail, selectedVersion])
   useEffect(() => {
     if (!selectedChange) {
       setFiles(null)
       return
     }
-    const force = filesRefreshGeneration > consumedFilesRefreshRef.current
-    if (force) consumedFilesRefreshRef.current = filesRefreshGeneration
+    // An already-loaded archive shelf can't change: skip the whole round-trip on
+    // subsequent refresh ticks so the file list never re-renders needlessly.
+    if (selectedChangeImmutable && loadedImmutableChangeRef.current === selectedChange) {
+      if (filesRefreshGeneration > consumedFilesRefreshRef.current) {
+        consumedFilesRefreshRef.current = filesRefreshGeneration
+      }
+      return
+    }
+    const force =
+      !selectedChangeImmutable && filesRefreshGeneration > consumedFilesRefreshRef.current
+    if (filesRefreshGeneration > consumedFilesRefreshRef.current) {
+      consumedFilesRefreshRef.current = filesRefreshGeneration
+    }
     const controller = new AbortController()
     void (async () => {
       const ready = await waitForSwarmCommand(SwarmCommands.describeVersion, controller.signal)
@@ -456,14 +480,17 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
         {
           change: selectedChange,
           ...(force ? { force: true } : {}),
+          ...(selectedChangeImmutable ? { immutable: true } : {}),
         } satisfies SwarmDescribeVersionRequest,
       )
-      if (!controller.signal.aborted) setFiles(result ?? [])
+      if (controller.signal.aborted) return
+      if (selectedChangeImmutable) loadedImmutableChangeRef.current = selectedChange
+      setFiles(result ?? [])
     })().catch(() => {
       if (!controller.signal.aborted) setFiles((current) => current ?? [])
     })
     return () => controller.abort()
-  }, [commands, selectedChange, filesRefreshGeneration])
+  }, [commands, selectedChange, selectedChangeImmutable, filesRefreshGeneration])
 
   if (error) {
     return (

@@ -588,11 +588,11 @@ export function registerSwarmCommands(
       const active = mgr.active
       const request =
         typeof arg === 'object' && arg !== null
-          ? (arg as { change: string; force?: boolean })
+          ? (arg as { change: string; force?: boolean; immutable?: boolean })
           : { change: String(arg) }
       if (!active || !request.change) return []
       logger.debug('cmd', `describeVersion change=${request.change} (p4 describe)`)
-      return active.describeChangeFiles(request.change, request.force)
+      return active.describeChangeFiles(request.change, request.force, request.immutable)
     }),
 
     // Print a depot file at either its review-base revision (`#<rev>`) or an

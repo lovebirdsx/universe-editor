@@ -1311,6 +1311,7 @@ export class PerforceClient {
   async describeChangeFiles(
     change: string,
     force = false,
+    immutable = false,
   ): Promise<
     {
       status: string
@@ -1320,8 +1321,13 @@ export class PerforceClient {
       baseRevision: string | null
     }[]
   > {
-    if (force) this._cache.invalidate(P4CacheNs.shelvedDescribe, change)
-    const cached = await this._cache.wrap(P4CacheNs.shelvedDescribe, change, async () => {
+    // An archive shelf is a permanent, content-addressed snapshot: cache it
+    // forever and never let a caller's `force` re-run p4 on it. Only a mutable
+    // pending shelf (the author's changelist, re-shelvable in place) uses the
+    // short-TTL namespace + force invalidation.
+    const ns = immutable ? P4CacheNs.archiveDescribe : P4CacheNs.shelvedDescribe
+    if (force && !immutable) this._cache.invalidate(P4CacheNs.shelvedDescribe, change)
+    const cached = await this._cache.wrap(ns, change, async () => {
       const res = await this._p4.execRecords(['describe', '-S', '-s', change])
       if (res.result.exitCode !== 0) return undefined
       const record = res.records[0]

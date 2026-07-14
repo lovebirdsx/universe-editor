@@ -234,6 +234,12 @@ export const P4CacheNs = {
   changesSubmitted: 'changesSubmitted',
   /** `describe -S -s <pendingCL>` — mutable because a shelf can be replaced. */
   shelvedDescribe: 'shelvedDescribe',
+  /** `describe -S -s <archiveShelfCL>` — immutable: an archive shelf is a
+   *  content-addressed snapshot that never changes once recorded, so it caches
+   *  forever and ignores force invalidation (unlike {@link shelvedDescribe}).
+   *  In-memory only: the file list embeds depot→local paths (`p4 where`) which
+   *  depend on the client view, so it isn't persisted across sessions. */
+  archiveDescribe: 'archiveDescribe',
 } as const
 
 export type P4CacheNamespace = (typeof P4CacheNs)[keyof typeof P4CacheNs]
@@ -247,6 +253,7 @@ export function registerP4CacheNamespaces(cache: P4Cache, workspaceTtlMs: number
   cache.register(P4CacheNs.where, { kind: 'ttl', ttlMs: Math.max(workspaceTtlMs, 30_000) })
   cache.register(P4CacheNs.opened, { kind: 'ttl', ttlMs: workspaceTtlMs })
   cache.register(P4CacheNs.shelvedDescribe, { kind: 'ttl', ttlMs: workspaceTtlMs })
+  cache.register(P4CacheNs.archiveDescribe, { kind: 'immutable', persist: false })
   cache.register(P4CacheNs.changesSubmitted, {
     kind: 'ttl',
     ttlMs: Math.max(workspaceTtlMs, 20_000),

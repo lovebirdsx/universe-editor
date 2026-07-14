@@ -143,4 +143,71 @@ describe('PerforceClient Swarm diff files', () => {
 
     client!.dispose()
   })
+
+  it('caches an immutable archive shelf forever, ignoring force and short TTL', async () => {
+    let clock = 0
+    spawnMock.mockImplementation((...args: unknown[]) => {
+      const argv = (args[1] as string[]) ?? []
+      const child = new FakeChildProcess()
+      queueMicrotask(() => {
+        const cmd = subcommand(argv)
+        if (cmd === 'info') {
+          child.stdout.emit(
+            'data',
+            Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),
+          )
+        } else if (cmd === 'describe') {
+          child.stdout.emit(
+            'data',
+            Buffer.from(
+              JSON.stringify({
+                change: '2999',
+                depotFile0: '//depot/src/a.ts',
+                action0: 'edit',
+                rev0: '3',
+              }),
+            ),
+          )
+        } else if (cmd === 'where') {
+          child.stdout.emit(
+            'data',
+            Buffer.from(
+              JSON.stringify({
+                depotFile: '//depot/src/a.ts',
+                clientFile: '//testclient/src/a.ts',
+                path: `${ROOT}/src/a.ts`,
+              }),
+            ),
+          )
+        }
+        child.emit('close', 0)
+      })
+      return child
+    })
+
+    const client = await PerforceClient.create(ROOT, {}, new ConcurrencyGate(4), {
+      enabled: true,
+      workspaceTtlMs: 4000,
+      now: () => clock,
+    })
+    expect(client).toBeDefined()
+
+    const describeCount = () =>
+      spawnMock.mock.calls.filter((call) => subcommand((call[1] as string[]) ?? []) === 'describe')
+        .length
+
+    await client!.describeChangeFiles('2999', false, true)
+    expect(describeCount()).toBe(1)
+
+    // Well past the workspace TTL: an immutable snapshot must still be a cache hit.
+    clock += 60_000
+    await client!.describeChangeFiles('2999', false, true)
+    expect(describeCount()).toBe(1)
+
+    // force is ignored for an immutable change — no re-fetch.
+    await client!.describeChangeFiles('2999', true, true)
+    expect(describeCount()).toBe(1)
+
+    client!.dispose()
+  })
 })

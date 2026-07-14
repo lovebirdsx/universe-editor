@@ -286,8 +286,11 @@ export interface SwarmFileContentRequest {
 /** Argument for `perforce.swarm.describeVersion`. */
 export interface SwarmDescribeVersionRequest {
   change: string
-  /** Bypass the short-lived pending-shelf cache. */
+  /** Bypass the short-lived pending-shelf cache. Ignored for immutable snapshots. */
   force?: boolean
+  /** The change is an immutable archive shelf — cache permanently, never re-fetch
+   *  (skips the short-TTL pending-shelf cache and any force invalidation). */
+  immutable?: boolean
 }
 
 /** Argument for `perforce.swarm.getFileDiff` — the two version snapshots to compare. */

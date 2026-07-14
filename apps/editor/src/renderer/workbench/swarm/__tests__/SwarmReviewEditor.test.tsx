@@ -260,6 +260,7 @@ describe('SwarmReviewEditor restore', () => {
 
       expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.describeVersion, {
         change: '2999',
+        immutable: true,
       })
       expect(commands.executeCommand).not.toHaveBeenCalledWith(SwarmCommands.describeVersion, {
         change: '2002',
@@ -369,6 +370,43 @@ describe('SwarmReviewEditor restore', () => {
       })
       expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.describeVersion, {
         change: '2001',
+        force: true,
+      })
+    } finally {
+      describeVersion.dispose()
+      listComments.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('describes an archive-shelf version as immutable and skips it on refresh ticks', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL_WITH_ARCHIVE)
+    const listComments = registerCommand(SwarmCommands.listComments, () => [])
+    let describeCalls = 0
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => {
+      describeCalls++
+      return FILES
+    })
+    const { commands } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+
+      // Selected the latest version (2), whose archiveChange is 2999 — described
+      // once as an immutable snapshot (never with force).
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.describeVersion, {
+        change: '2999',
+        immutable: true,
+      })
+      expect(describeCalls).toBe(1)
+
+      // Minute-interval auto-refresh must NOT re-run describe for the immutable
+      // archive shelf — that churn is exactly the reported regression.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000)
+      })
+      expect(describeCalls).toBe(1)
+      expect(commands.executeCommand).not.toHaveBeenCalledWith(SwarmCommands.describeVersion, {
+        change: '2999',
         force: true,
       })
     } finally {
