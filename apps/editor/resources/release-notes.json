@@ -1,5 +1,36 @@
 [
   {
+    "version": "0.1.39",
+    "date": "2026-07-14",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "session加入标签功能支持",
+          "再次点击应用图标时，打开新的窗口",
+          "p4优化shelve表达，支持删除changelist，本地修改列表持久化",
+          "swarm支持自定义过滤，并优化标题显示规则"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复go to file速度慢的bug",
+          "修复OpenFolderInNewWindowAction中accessor跨await失效问题",
+          "修复渲染进程崩溃日志死循环黑屏不自愈",
+          "修复codex长会话推送过多的文件编辑tool_call，没有处理同时打开句柄限制而造成的闪退",
+          "修复e2e测试中p4 reconcile竞态与fixture失真",
+          "修复session偶现的上下滚动闪烁bug",
+          "修复更新的提示弹窗在后台窗口弹出的bug",
+          "修复拖拽侧边栏时，会误触explorer中的项，造成一起拖拽的bug",
+          "修复了搜索误报\"搜索失败\"的问题"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.38",
     "date": "2026-07-14",
     "groups": [
