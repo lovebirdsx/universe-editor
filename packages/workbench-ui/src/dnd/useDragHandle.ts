@@ -1,6 +1,7 @@
 import { useCallback, useContext, type DragEvent } from 'react'
 import { DragSessionContext } from './DragSessionContext.js'
 import { writeUriList } from './uriList.js'
+import { isResizeEdgeDrag } from './resizeEdgeGuard.js'
 
 export interface UseDragHandleOptions {
   /**
@@ -31,6 +32,13 @@ export function useDragHandle<T>(payload: T, options?: UseDragHandleOptions): Us
 
   const onDragStart = useCallback(
     (e: DragEvent) => {
+      // A press on the row's left/right edge is a resize-sash gesture, not a
+      // content drag — cancel so the sash underneath (Explorer row width fills
+      // the pane, overlapping the sidebar resize seam) receives it.
+      if (isResizeEdgeDrag(e.currentTarget, e.clientX)) {
+        e.preventDefault()
+        return
+      }
       if (e.dataTransfer) {
         e.dataTransfer.effectAllowed = 'all'
         e.dataTransfer.setData('text/plain', '')

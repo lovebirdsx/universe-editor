@@ -22,6 +22,17 @@ function DropTarget({ onDrop }: { onDrop: (p: string | undefined) => void }) {
   )
 }
 
+// happy-dom's synthetic drag events drop clientX; dispatch a native event with
+// it defined. Returns false if the handler called preventDefault (drag cancelled).
+function dispatchDragStart(el: HTMLElement, clientX: number): boolean {
+  const ev = new Event('dragstart', { bubbles: true, cancelable: true })
+  Object.defineProperty(ev, 'clientX', { value: clientX })
+  Object.defineProperty(ev, 'dataTransfer', {
+    value: { setData: () => {}, getData: () => '', effectAllowed: 'none' },
+  })
+  return el.dispatchEvent(ev)
+}
+
 describe('DnD hooks', () => {
   afterEach(() => cleanup())
   it('dragstart stores payload in context', () => {
@@ -72,5 +83,44 @@ describe('DnD hooks', () => {
     fireEvent.drop(screen.getByTestId('target'))
 
     expect(onDrop).toHaveBeenCalledWith(undefined)
+  })
+
+  it('suppresses a drag that starts on the row edge (resize sash seam)', () => {
+    const onDrop = vi.fn()
+    render(
+      <DragSessionProvider>
+        <DragSource payload="edge" />
+        <DropTarget onDrop={onDrop} />
+      </DragSessionProvider>,
+    )
+    const source = screen.getByTestId('source')
+    // happy-dom returns a zero rect by default; stub a real one so the guard has
+    // measurable edges (left 0 → right 200).
+    source.getBoundingClientRect = () => ({ left: 0, right: 200 }) as DOMRect
+
+    // Press 2px from the right edge — a resize gesture, not a content drag.
+    // fireEvent drops clientX from synthetic drag events, so dispatch natively.
+    const cancelled = !dispatchDragStart(source, 198)
+    expect(cancelled).toBe(true)
+    fireEvent.drop(screen.getByTestId('target'))
+    // No payload was stored, so the drop sees nothing from this drag.
+    expect(onDrop).toHaveBeenCalledWith(undefined)
+  })
+
+  it('allows a drag from the row interior', () => {
+    const onDrop = vi.fn()
+    render(
+      <DragSessionProvider>
+        <DragSource payload="interior" />
+        <DropTarget onDrop={onDrop} />
+      </DragSessionProvider>,
+    )
+    const source = screen.getByTestId('source')
+    source.getBoundingClientRect = () => ({ left: 0, right: 200 }) as DOMRect
+
+    const cancelled = !dispatchDragStart(source, 100)
+    expect(cancelled).toBe(false)
+    fireEvent.drop(screen.getByTestId('target'))
+    expect(onDrop).toHaveBeenCalledWith('interior')
   })
 })

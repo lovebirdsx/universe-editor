@@ -9,7 +9,12 @@
   --separator-border: #0f0f11;
   --sash-hover-transition-duration: 0.1s;
   --sash-hover-size: 4px;
-  --sash-size: 4px;
+  /* Keep in sync with Allotment's internal default (8px): the JS positions the
+     sash at `edge - size/2`, so a smaller --sash-size shrinks the grab strip to
+     a hard-to-hit sliver AND shoves it inside the pane edge, where the
+     full-width draggable rows underneath steal the press and start a content
+     drag instead of a resize. The visible line stays thin via --sash-hover-size. */
+  --sash-size: 8px;
 }
 
 .split-view-view {
@@ -21,9 +26,12 @@
   background: transparent;
 }
 
-.sash:hover,
-.sash.hover,
-.sash.active {
+/* Paint the highlight on Allotment's centered --sash-hover-size strip (its
+   ::before), NOT the whole 8px grab area — filling the full element would make
+   the visible line as wide as the (deliberately wide) grab strip. `sash-active`
+   keeps it lit while dragging even if the pointer leaves the strip. */
+.sash:hover::before,
+.sash.sash-active::before {
   background: var(--focus-border);
   opacity: 0.7;
   transition: background var(--sash-hover-transition-duration) ease-in-out;
