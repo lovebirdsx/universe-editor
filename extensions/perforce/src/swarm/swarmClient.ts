@@ -136,15 +136,27 @@ export class SwarmClient {
   /** The action-dashboard grouping: needs-my-action / authored / participating.
    *  Concurrent callers (the sidebar view + the status-bar poll fire nearly
    *  simultaneously on open) share one in-flight fetch instead of each fanning
-   *  out its own pair of requests. */
-  async dashboard(force = false): Promise<SwarmDashboard> {
+   *  out its own pair of requests.
+   *
+   *  A `keywords` filter is pushed down to the underlying review-list query so
+   *  the server narrows results instead of the renderer fetching everything and
+   *  filtering in memory. Keyword queries bypass the unfiltered in-flight
+   *  coalescing (which exists to share the status-bar + first-load fan-out); the
+   *  per-filter TTL cache in {@link listReviews} still dedups repeats. */
+  async dashboard(opts: { force?: boolean; keywords?: string } = {}): Promise<SwarmDashboard> {
     const me = this._config.user
     if (!me) return { needsAction: [], authored: [], participating: [] }
+    const keywords = opts.keywords?.trim() ? opts.keywords.trim() : undefined
+    const force = opts.force ?? false
+    if (keywords !== undefined) {
+      if (force) this._cache.invalidateNamespace(SwarmCacheNs.reviewList)
+      return this._loadDashboard(me, keywords)
+    }
     if (this._dashboardInFlight) {
       if (!force || this._dashboardInFlightIsForce) return this._dashboardInFlight
       if (this._dashboardQueuedForce) return this._dashboardQueuedForce
       const queued = this._dashboardInFlight
-        .then(() => this.dashboard(true))
+        .then(() => this.dashboard({ force: true }))
         .finally(() => {
           if (this._dashboardQueuedForce === queued) this._dashboardQueuedForce = undefined
         })
@@ -163,15 +175,19 @@ export class SwarmClient {
     return run
   }
 
-  private async _loadDashboard(me: string): Promise<SwarmDashboard> {
+  private async _loadDashboard(me: string, keywords?: string): Promise<SwarmDashboard> {
     // needsAction is derived locally from authored + participating (see
     // deriveNeedsAction). We deliberately do NOT call `dashboards/action`: it is a
     // v9-only endpoint that is redundant with this derivation and, on many Swarm
     // deployments, slow enough that a fronting gateway 504s on it — there is no
     // upside to paying that request.
     const [authored, participating] = await Promise.all([
-      this.listReviews({ author: [me], max: 50 }).then((r) => r.reviews),
-      this.listReviews({ participants: [me], max: 50 }).then((r) => r.reviews),
+      this.listReviews({ author: [me], max: 50, ...(keywords ? { keywords } : {}) }).then(
+        (r) => r.reviews,
+      ),
+      this.listReviews({ participants: [me], max: 50, ...(keywords ? { keywords } : {}) }).then(
+        (r) => r.reviews,
+      ),
     ])
     return {
       needsAction: deriveNeedsAction(me, authored, participating),

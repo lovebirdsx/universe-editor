@@ -253,6 +253,35 @@ test.describe('@p1 swarm reviews', () => {
       .toBeGreaterThan(requestsBeforeRestart)
   })
 
+  test('pushes the keyword filter down to the server query', async ({ page, swarm }) => {
+    await page.locator('[data-testid="activitybar-item-workbench.view.swarm"]').click()
+    const view = page.locator('[data-testid="swarm-reviews-view"]')
+    await expect(view).toBeVisible()
+    await swarm.waitForRequest((r) => r.method === 'GET' && r.path === 'reviews')
+
+    // Both seeded reviews show up unfiltered.
+    await expect(
+      view.locator('[data-testid="swarm-review-row"]', { hasText: 'Add greeting' }).first(),
+    ).toBeVisible()
+    await expect(
+      view.locator('[data-testid="swarm-review-row"]', { hasText: 'Fix farewell' }).first(),
+    ).toBeVisible()
+
+    // Typing a keyword pushes it down as a `keywords` query param (not a
+    // fetch-everything-then-filter-in-memory pass), and the list narrows to the
+    // single matching review without a manual refresh.
+    await view.getByPlaceholder('Filter reviews…').fill('greeting')
+    await swarm.waitForRequest(
+      (r) => r.method === 'GET' && r.path === 'reviews' && r.query.includes('keywords=greeting'),
+    )
+    await expect(
+      view.locator('[data-testid="swarm-review-row"]', { hasText: 'Add greeting' }).first(),
+    ).toBeVisible()
+    await expect(
+      view.locator('[data-testid="swarm-review-row"]', { hasText: 'Fix farewell' }),
+    ).toHaveCount(0)
+  })
+
   test('manual refresh in the view title bar re-fetches the dashboard', async ({ page, swarm }) => {
     await page.locator('[data-testid="activitybar-item-workbench.view.swarm"]').click()
     const view = page.locator('[data-testid="swarm-reviews-view"]')

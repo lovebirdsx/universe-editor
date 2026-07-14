@@ -49,7 +49,7 @@ describe('SwarmClient.dashboard', () => {
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }))
     })
 
-    const dash = await client().dashboard()
+    const dash = await client().dashboard({})
 
     expect(dash.authored.map((r) => r.id)).toEqual(['1001'])
     expect(dash.needsAction.map((r) => r.id)).toEqual(['1001'])
@@ -60,6 +60,28 @@ describe('SwarmClient.dashboard', () => {
     expect(actionCalls).toHaveLength(0)
   })
 
+  it('pushes a keyword filter down to both list queries', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ reviews: [] }), { status: 200 }))
+
+    await client().dashboard({ keywords: 'greeting' })
+
+    // Both the authored and participating queries carry the keyword — the server
+    // narrows the result instead of the renderer fetching everything and filtering.
+    const urls = fetchMock.mock.calls.map(([url]) => String(url))
+    expect(urls).toHaveLength(2)
+    for (const url of urls) expect(url).toContain('keywords=greeting')
+    expect(urls.some((u) => u.includes('author[]=songxiao'))).toBe(true)
+    expect(urls.some((u) => u.includes('participants[]=songxiao'))).toBe(true)
+  })
+
+  it('trims a whitespace-only keyword back to an unfiltered query', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ reviews: [] }), { status: 200 }))
+
+    await client().dashboard({ keywords: '   ' })
+
+    for (const [url] of fetchMock.mock.calls) expect(String(url)).not.toContain('keywords=')
+  })
+
   it('excludes closed reviews from the derived needsAction set', async () => {
     fetchMock.mockImplementation((url: string) => {
       const body = url.includes('author[]')
@@ -68,7 +90,7 @@ describe('SwarmClient.dashboard', () => {
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }))
     })
 
-    const dash = await client().dashboard()
+    const dash = await client().dashboard({})
 
     // Only the still-open review is actionable; the approved one is done.
     expect(dash.needsAction.map((r) => r.id)).toEqual(['1002'])
@@ -83,8 +105,8 @@ describe('SwarmClient.dashboard', () => {
     })
 
     const c = client()
-    const a = c.dashboard()
-    const b = c.dashboard() // second caller while the first is still in flight
+    const a = c.dashboard({})
+    const b = c.dashboard({}) // second caller while the first is still in flight
     resolveList?.()
     await Promise.all([a, b])
 
@@ -292,11 +314,11 @@ describe('SwarmClient cache', () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ reviews: [] }), { status: 200 }))
     const c = client()
 
-    await c.dashboard()
-    await c.dashboard()
+    await c.dashboard({})
+    await c.dashboard({})
     expect(fetchMock).toHaveBeenCalledTimes(2)
 
-    await c.dashboard(true)
+    await c.dashboard({ force: true })
     expect(fetchMock).toHaveBeenCalledTimes(4)
   })
 
@@ -309,8 +331,8 @@ describe('SwarmClient cache', () => {
     })
     const c = client()
 
-    const first = c.dashboard(true)
-    const second = c.dashboard(true)
+    const first = c.dashboard({ force: true })
+    const second = c.dashboard({ force: true })
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
     resolveLists?.()
     await Promise.all([first, second])
@@ -330,9 +352,9 @@ describe('SwarmClient cache', () => {
     )
     const c = client()
 
-    const ordinary = c.dashboard()
+    const ordinary = c.dashboard({})
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
-    const forced = c.dashboard(true)
+    const forced = c.dashboard({ force: true })
     expect(fetchMock).toHaveBeenCalledTimes(2)
     resolvers.splice(0).forEach((resolve) => resolve())
     await ordinary

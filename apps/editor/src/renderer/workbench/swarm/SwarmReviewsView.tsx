@@ -139,25 +139,38 @@ export function SwarmReviewsView() {
     needsAction: false,
     authored: false,
   })
-  const [transitions, setTransitions] = useState<Record<string, SwarmTransitionDto[]>>({})
+  const [transitions, setTransitions] = useState<Record<string, SwarmTransitionDto[]>>(
+    swarmReviewsViewState.transitions,
+  )
   const [filterConfig, setFilterConfig] = useState<SwarmReviewFilterConfig>(() =>
     readFilterConfig(configuration),
   )
   const [menu, setMenu] = useState<SwarmReviewContextMenuState | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const transitionsRef = useRef<Record<string, SwarmTransitionDto[]>>({})
+  const transitionsRef = useRef<Record<string, SwarmTransitionDto[]>>(
+    swarmReviewsViewState.transitions,
+  )
+  // Latest keyword, read inside `load` so its identity stays stable (the query is
+  // pushed down to the server; `load` must not be recreated on every keystroke).
+  const keywordRef = useRef(keyword)
 
   const loadTransitions = useCallback(
-    async (reviewId: string): Promise<SwarmTransitionDto[]> => {
-      const cached = transitionsRef.current[reviewId]
-      if (cached) return cached
+    async (reviewId: string, force = false): Promise<SwarmTransitionDto[]> => {
+      if (!force) {
+        const cached = transitionsRef.current[reviewId]
+        if (cached) return cached
+      }
       const result =
         (await commands.executeCommand<SwarmTransitionDto[]>(
           SwarmCommands.getTransitions,
           reviewId,
         )) ?? []
+      // Merge (never replace wholesale) so a forced refresh updates one review's
+      // verdict without dropping the others — keeping the approvable filter stable
+      // instead of briefly widening the list while verdicts reload.
       transitionsRef.current = { ...transitionsRef.current, [reviewId]: result }
-      setTransitions(transitionsRef.current)
+      swarmReviewsViewState.transitions = transitionsRef.current
+      setTransitions((prev) => ({ ...prev, [reviewId]: result }))
       return result
     },
     [commands],
@@ -167,8 +180,12 @@ export function SwarmReviewsView() {
     (attempt = 0, force = false) => {
       setLoading(true)
       setError(null)
+      const keywords = keywordRef.current.trim()
       void commands
-        .executeCommand<SwarmDashboardResult>(SwarmCommands.dashboard, { force })
+        .executeCommand<SwarmDashboardResult>(SwarmCommands.dashboard, {
+          force,
+          ...(keywords ? { keywords } : {}),
+        })
         .then((r) => {
           // `undefined` means the perforce extension host hasn't registered the
           // command yet (activation races the view's first mount). Retry with a
@@ -179,7 +196,24 @@ export function SwarmReviewsView() {
           }
           setDashboard(r)
           swarmReviewsViewState.dashboard = r
-          for (const review of r.needsAction) void loadTransitions(review.id).catch(() => {})
+          // On a forced reload, re-fetch each verdict but keep the previous one
+          // visible until it resolves (loadTransitions merges), so an active
+          // approvable filter never briefly widens the list.
+          const staleIds = new Set(Object.keys(transitionsRef.current))
+          for (const review of r.needsAction) {
+            void loadTransitions(review.id, force).catch(() => {})
+            staleIds.delete(review.id)
+          }
+          // Drop verdicts for reviews no longer in the needs-action set.
+          if (staleIds.size > 0) {
+            for (const id of staleIds) delete transitionsRef.current[id]
+            swarmReviewsViewState.transitions = transitionsRef.current
+            setTransitions((prev) => {
+              const next = { ...prev }
+              for (const id of staleIds) delete next[id]
+              return next
+            })
+          }
         })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setLoading(false))
@@ -195,13 +229,12 @@ export function SwarmReviewsView() {
     load()
   }, [load])
 
-  // Drop the transitions cache and re-fetch, forcing the extension host to bypass
-  // its short-lived review-list cache. Used when a review mutated (in a detail
-  // tab) or the user hit manual refresh, so the list reflects fresh server state
-  // (and re-derives the approvable icons).
+  // Force the extension host to bypass its short-lived review-list cache and
+  // re-derive the approvable icons. Used when a review mutated (in a detail tab)
+  // or the user hit manual refresh. Verdicts are refreshed in place (load →
+  // loadTransitions with force), never wiped first, so an active approvable
+  // filter keeps the list narrow instead of flashing the full list.
   const reload = useCallback(() => {
-    transitionsRef.current = {}
-    setTransitions({})
     load(0, true)
   }, [load])
 
@@ -233,6 +266,7 @@ export function SwarmReviewsView() {
     (value: string) => {
       setKeyword(value)
       swarmReviewsViewState.keyword = value
+      keywordRef.current = value
       if (debounceRef.current) clearTimeout(debounceRef.current)
       debounceRef.current = setTimeout(() => load(), KEYWORD_DEBOUNCE_MS)
     },

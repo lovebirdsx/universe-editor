@@ -11,6 +11,7 @@ import type {
   SwarmDashboardResult,
   SwarmReviewDetailDto,
   SwarmReviewFilter,
+  SwarmTransitionDto,
 } from '@universe-editor/extensions-common'
 
 export type SwarmReviewFilesViewMode = 'list' | 'tree'
@@ -18,6 +19,10 @@ export type SwarmReviewFilesViewMode = 'list' | 'tree'
 export interface SwarmReviewsViewState {
   /** Last loaded dashboard grouping, or null if never loaded. */
   dashboard: SwarmDashboardResult | null
+  /** Per-review legal transitions, keyed by review id. Persisted so reopening the
+   *  view keeps the approvable filter accurate immediately (no flash of the full
+   *  list while verdicts reload). */
+  transitions: Record<string, SwarmTransitionDto[]>
   /** Active list filter (state / author / keyword). */
   filter: SwarmReviewFilter
   /** Free-text keyword typed into the filter bar. */
@@ -30,6 +35,7 @@ export interface SwarmReviewsViewState {
 
 export const swarmReviewsViewState: SwarmReviewsViewState = {
   dashboard: null,
+  transitions: {},
   filter: {},
   keyword: '',
   scrollTop: 0,

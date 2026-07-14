@@ -270,11 +270,21 @@ export function registerSwarmCommands(
     ),
 
     commands.registerCommand(Cmd.dashboard, (arg: unknown) =>
-      guard('dashboard', (c) => c.dashboard((arg as { force?: boolean } | undefined)?.force), {
-        needsAction: [],
-        authored: [],
-        participating: [],
-      }),
+      guard(
+        'dashboard',
+        (c) => {
+          const r = (arg ?? {}) as { force?: boolean; keywords?: string }
+          return c.dashboard({
+            ...(r.force ? { force: true } : {}),
+            ...(r.keywords ? { keywords: r.keywords } : {}),
+          })
+        },
+        {
+          needsAction: [],
+          authored: [],
+          participating: [],
+        },
+      ),
     ),
 
     commands.registerCommand(Cmd.getReview, (arg: unknown) => {

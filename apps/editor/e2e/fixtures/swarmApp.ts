@@ -37,7 +37,7 @@ export interface SwarmHarness {
   requests(): Array<{ method: string; path: string; query: string; body?: unknown }>
   /** Wait until a request matching the predicate has been recorded. */
   waitForRequest(
-    match: (r: { method: string; path: string }) => boolean,
+    match: (r: { method: string; path: string; query: string }) => boolean,
     timeoutMs?: number,
   ): Promise<void>
 }

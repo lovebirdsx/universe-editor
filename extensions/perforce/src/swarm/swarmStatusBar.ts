@@ -80,7 +80,7 @@ export class SwarmStatusBarController {
       return
     }
     try {
-      const dash = await client.dashboard(true)
+      const dash = await client.dashboard({ force: true })
       if (this._disposed) return
       const count = dash.needsAction.length
       this._logger?.debug(

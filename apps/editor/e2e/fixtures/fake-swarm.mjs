@@ -113,10 +113,22 @@ const server = createServer(async (req, res) => {
   const body = method === 'GET' ? undefined : await readBody(req)
   logRequest({ method, path, query: url.search, body })
 
-  // GET reviews (list / ping)
+  // GET reviews (list / ping). Honours the `keywords` query so the extension can
+  // push keyword filtering down to the server (matched against description /
+  // author / id, mirroring the renderer's client-side fallback).
   if (method === 'GET' && path === 'reviews') {
+    const keywords = (url.searchParams.get('keywords') ?? '').trim().toLowerCase()
+    let list = Object.values(reviews)
+    if (keywords) {
+      list = list.filter(
+        (r) =>
+          r.description.toLowerCase().includes(keywords) ||
+          r.author.toLowerCase().includes(keywords) ||
+          r.id.includes(keywords),
+      )
+    }
     send(res, 200, {
-      reviews: Object.values(reviews).map(reviewListItem),
+      reviews: list.map(reviewListItem),
       lastSeen: null,
     })
     return

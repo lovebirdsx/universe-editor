@@ -181,6 +181,15 @@ export interface SwarmGetReviewRequest {
   force?: boolean
 }
 
+/** Argument for `perforce.swarm.dashboard`. */
+export interface SwarmDashboardRequest {
+  /** Bypass the short-lived review-list cache and re-fetch. */
+  force?: boolean
+  /** Free-text keyword pushed down to the review-list query, so filtering happens
+   *  server-side instead of fetching everything and filtering in the renderer. */
+  keywords?: string
+}
+
 /** The action-dashboard grouping the list view renders. */
 export interface SwarmDashboardResult {
   /** Reviews needing the current user's action (reviewer, not yet voted / recalled). */
