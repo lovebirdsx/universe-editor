@@ -86,9 +86,14 @@ test.describe('@p1 agents — sticky scroll pins long card headers', () => {
       .toBeLessThan(before)
 
     // Re-enter the card and fold it from the sticky chevron → the in-place card's
-    // header reports collapsed (aria-expanded=false).
+    // header reports collapsed (aria-expanded=false). The jump above kicks off a
+    // ~600ms scroll-convergence loop that re-pins scrollTop to the target every
+    // frame and only yields to a REAL user gesture (wheel/pointer/key) — a bare
+    // synthetic 'scroll' would be fought back. Dispatch a wheel first (as a real
+    // re-scroll would) to abort that loop, then drive scrollTop to the middle.
     await page.evaluate((sel) => {
       const el = document.querySelector(sel)!.parentElement as HTMLElement
+      el.dispatchEvent(new WheelEvent('wheel', { deltaY: 1, bubbles: true }))
       el.scrollTop = Math.floor((el.scrollHeight - el.clientHeight) / 2)
       el.dispatchEvent(new Event('scroll'))
     }, TIMELINE)
