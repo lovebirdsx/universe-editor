@@ -224,6 +224,12 @@ if (!hasSingleInstanceLock) {
           await services.windows.openWindowForFolder(URI.file(resolvedPath))
           return
         }
+      } else {
+        // A bare re-launch (e.g. clicking the app icon while already running)
+        // carries no file/folder. Match VSCode and open a fresh empty window
+        // instead of only focusing the existing one.
+        await services.windows.createWindow({})
+        return
       }
 
       // Route the file to the window whose workspace contains it; else first window.
