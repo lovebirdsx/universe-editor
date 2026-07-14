@@ -53,6 +53,7 @@ import { ChatBody } from '../ChatBody.js'
 import { ServicesContext } from '../../useService.js'
 import styles from '../agents.module.css'
 import { IAcpPromptHistoryService } from '../../../services/acp/acpPromptHistoryService.js'
+import { ISessionBookmarkService } from '../../../services/acp/sessionBookmarkService.js'
 
 // All cases here stay below the virtualization threshold, so the virtualizer's
 // return value is never used. The real @tanstack/react-virtual, however, attaches
@@ -214,6 +215,16 @@ function makeInstantiation(
     entries: observableValue<readonly string[]>('t.history', []),
     push: () => {},
   } as IAcpPromptHistoryService)
+  services.set(ISessionBookmarkService, {
+    _serviceBrand: undefined,
+    revision: observableValue<number>('t.bookmarks.revision', 0),
+    initialize: () => Promise.resolve(),
+    toggle: () => {},
+    jump: () => {},
+    clearActiveSession: () => {},
+    bookmarksForSession: () => new Map<string, number>(),
+    list: () => [],
+  } as unknown as ISessionBookmarkService)
   return new InstantiationService(services)
 }
 
@@ -967,7 +978,10 @@ describe('ChatBody — outline controller active-slot sync', () => {
   // clicked row's real DOM rect is the authoritative target, so scrollToKey must
   // align scrollTop to it on the first call (the shared convergence loop's
   // synchronous first frame), not leave it at the estimate-derived position.
-  it('scrolls the clicked slot to the top on the first scrollToKey call', () => {
+  // The landing is offset up by the target's header height plus a small gap so
+  // sticky scroll does not pin the card onto itself and hide it (and its
+  // bookmark badge) behind the sticky-header overlay.
+  it('scrolls the clicked slot just below the sticky header on the first scrollToKey call', () => {
     const { container } = renderChat(makeSession('s1', items))
     const scroll = scrollEl(container)
     Object.defineProperty(scroll, 'scrollHeight', { value: 5000, configurable: true })
@@ -977,15 +991,20 @@ describe('ChatBody — outline controller active-slot sync', () => {
     ;(scroll as HTMLElement).getBoundingClientRect = (() => ({ top: 0 }) as DOMRect) as never
     const target = container.querySelector<HTMLElement>('[data-sticky-key="m:c"]')!
     ;(target as HTMLElement).getBoundingClientRect = (() => ({ top: 500 }) as DOMRect) as never
+    // Give the card header a measurable height so the reveal offset is exercised.
+    const header = target.querySelector<HTMLElement>(
+      'button[data-testid="acp-collapsible-toggle"]',
+    )!
+    ;(header as HTMLElement).getBoundingClientRect = (() => ({ height: 24 }) as DOMRect) as never
 
     const controller = AcpSessionOutlineRegistry.get('s1')!
     act(() => {
       controller.scrollToKey('m:c')
     })
 
-    // scrollTop + (rowTop - containerTop) = 0 + 500 → the row's top meets the
-    // viewport top, accurate without a second click.
-    expect(scroll.scrollTop).toBe(500)
+    // scrollTop + (rowTop - containerTop) - (headerHeight + gap) = 0 + 500 - (24 + 8)
+    // → the row's top lands just under the sticky header, accurate without a second click.
+    expect(scroll.scrollTop).toBe(468)
     expect(controller.getActiveKey()).toBe('m:c')
   })
 })

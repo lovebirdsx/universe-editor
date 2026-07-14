@@ -1,6 +1,27 @@
 .collapsibleSlot {
   display: flex;
   flex-direction: column;
+  position: relative;
+}
+
+.slotBadge {
+  position: absolute;
+  top: var(--spacing-3);
+  left: calc(-1 * var(--spacing-2));
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--color-accent, #0070e0);
+  color: var(--color-accent-fg, #fff);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
 }
 
 .collapsibleHeader {

@@ -43,6 +43,7 @@ import { AcpChatViewStateCache } from '../../../services/acp/acpChatViewStateCac
 import type { SessionConfigOption, ContentBlock } from '@agentclientprotocol/sdk'
 import { ServicesContext } from '../../useService.js'
 import { IAcpPromptHistoryService } from '../../../services/acp/acpPromptHistoryService.js'
+import { ISessionBookmarkService } from '../../../services/acp/sessionBookmarkService.js'
 
 // Replace MessageContent with a counter keyed by its first text block so we can
 // detect exactly which slots re-rendered.
@@ -173,6 +174,16 @@ function makeInstantiation(threshold?: number) {
     entries: observableValue<readonly string[]>('t.history', []),
     push: () => {},
   } as IAcpPromptHistoryService)
+  services.set(ISessionBookmarkService, {
+    _serviceBrand: undefined,
+    revision: observableValue<number>('t.bookmarks.revision', 0),
+    initialize: () => Promise.resolve(),
+    toggle: () => {},
+    jump: () => {},
+    clearActiveSession: () => {},
+    bookmarksForSession: () => new Map<string, number>(),
+    list: () => [],
+  } as unknown as ISessionBookmarkService)
   return new InstantiationService(services)
 }
 

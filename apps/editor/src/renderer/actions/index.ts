@@ -296,6 +296,12 @@ import {
 } from './agentActions.js'
 import { agentContextActions } from './agentContextActions.js'
 import {
+  ToggleSessionBookmarkActions,
+  JumpToSessionBookmarkActions,
+  ListSessionBookmarksAction,
+  ClearSessionBookmarksAction,
+} from './agentBookmarkActions.js'
+import {
   OutlineNavigateUpAction,
   OutlineNavigateDownAction,
   OutlineNavigateLeftAction,
@@ -645,6 +651,13 @@ registerAction2(ChatFindAction)
 registerAction2(ChatFindNextAction)
 registerAction2(ChatFindPreviousAction)
 registerAction2(ChatFindCloseAction)
+// Session numbered bookmarks (0-9). The digit keybindings gate on ACP_NAV_WHEN,
+// so Ctrl+0..9 only bind while a session editor is focused (global Ctrl+0 =
+// Reset Zoom stays intact elsewhere via the newest-wins tie-break).
+for (const action of ToggleSessionBookmarkActions) registerAction2(action)
+for (const action of JumpToSessionBookmarkActions) registerAction2(action)
+registerAction2(ListSessionBookmarksAction)
+registerAction2(ClearSessionBookmarksAction)
 for (const action of agentContextActions) registerAction2(action)
 
 // Outline — emacs-style navigation (Ctrl+P/N/B/F). Registered last so the

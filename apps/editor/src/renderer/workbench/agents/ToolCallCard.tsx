@@ -9,7 +9,7 @@
  *   - other     → inline diff previews + markdown blocks (default behaviour).
  *--------------------------------------------------------------------------------------------*/
 
-import { memo, useState } from 'react'
+import { memo, useState, type ReactNode } from 'react'
 import { IConfigurationService, IEditorService, URI, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import type {
@@ -85,6 +85,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   collapsed: collapsedProp,
   onToggleCollapse,
   subtreeCollapse,
+  badge,
 }: {
   call: AcpToolCall
   extraClassName?: string
@@ -94,6 +95,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   collapsed?: boolean
   onToggleCollapse?: () => void
   subtreeCollapse?: SubtreeCollapse
+  badge?: ReactNode
 }) {
   const editorService = useService(IEditorService)
   const configService = useService(IConfigurationService)
@@ -266,6 +268,7 @@ export const ToolCallCard = memo(function ToolCallCard({
       title={titleNode}
       summary={titleNode}
       statusIcon={<ToolCallStatusIcon status={call.status} />}
+      {...(badge !== undefined ? { badge } : {})}
       collapsed={collapsed}
       onToggle={onToggle}
       rootProps={{

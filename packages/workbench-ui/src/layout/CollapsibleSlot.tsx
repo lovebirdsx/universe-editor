@@ -42,6 +42,9 @@ export interface CollapsibleSlotProps {
   readonly summary?: ReactNode
   /** Optional trailing status icon (tool-call status). */
   readonly statusIcon?: ReactNode
+  /** Optional marker pinned to the row's left edge (e.g. a numbered bookmark),
+   *  absolutely positioned so it never shifts the header layout or sticky rects. */
+  readonly badge?: ReactNode
   readonly collapsed: boolean
   readonly onToggle: () => void
   /** Collapsible body, rendered only when expanded. */
@@ -57,6 +60,7 @@ export function CollapsibleSlot({
   title,
   summary,
   statusIcon,
+  badge,
   collapsed,
   onToggle,
   children,
@@ -70,6 +74,7 @@ export function CollapsibleSlot({
     : styles['collapsibleSlot']
   return (
     <Tag className={cls} {...restRoot}>
+      {badge != null && <span className={styles['slotBadge']}>{badge}</span>}
       <button
         type="button"
         className={styles['collapsibleHeader']}

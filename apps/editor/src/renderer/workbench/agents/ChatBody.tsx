@@ -74,6 +74,7 @@ import {
   AcpSessionOutlineRegistry,
   type IAcpSessionOutlineController,
 } from '../../services/acp/acpSessionOutlineRegistry.js'
+import { ISessionBookmarkService } from '../../services/acp/sessionBookmarkService.js'
 import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
 import { ContentExpansionProvider, type ContentExpansionStore } from './chatContentExpansion.js'
 import { shouldAdjustTimelineScrollOnSizeChange } from './timelineVirtualScroll.js'
@@ -338,6 +339,13 @@ function ChatScroll({
   const commandService = useService(ICommandService)
   const contextKeyService = useService(IContextKeyService)
   const widgetService = useService(IAcpChatWidgetService)
+
+  // Numbered session bookmarks for this session: slotKey → bookmark digit. Re-read
+  // whenever the store's revision bumps (toggle / clear / session close / load) so
+  // the gutter badges repaint. Keyed on the top-level slot key, matching itemSlotKey.
+  const bookmarkService = useService(ISessionBookmarkService)
+  useObservable(bookmarkService.revision)
+  const bookmarkedSlots = bookmarkService.bookmarksForSession(session.id)
 
   // Signals the Outline view that the active slot may have changed — fired from
   // handleScroll (viewport moved) and from the focusedKey effect below (keyboard
@@ -910,8 +918,15 @@ function ChatScroll({
         const node = container.querySelector<HTMLElement>(`[data-sticky-key="${cssEscape(key)}"]`)
         if (node) {
           const relTop = node.getBoundingClientRect().top - container.getBoundingClientRect().top
+          // Land the card a little BELOW the viewport top rather than flush against
+          // it. Sticky scroll pins any card whose top has reached scrollTop
+          // (top <= scrollTop < bottom), so a flush landing pins the target onto
+          // itself — the real card (and its bookmark badge) then hides behind the
+          // sticky header overlay. Offsetting down by one header height keeps the
+          // target unpinned and its top visible just under any ancestor headers.
+          const offset = stickyRevealOffset(node)
           const max = Math.max(0, container.scrollHeight - container.clientHeight)
-          const next = Math.max(0, Math.min(container.scrollTop + relTop, max))
+          const next = Math.max(0, Math.min(container.scrollTop + relTop - offset, max))
           if (Math.abs(container.scrollTop - next) > 0.5) container.scrollTop = next
           return
         }
@@ -1201,6 +1216,7 @@ function ChatScroll({
                     session={session}
                     sessionRunning={slotRunning}
                     isFocused={key === focusedKey}
+                    {...bookmarkProp(bookmarkedSlots, key)}
                     collapsed={resolveCollapsed(key, item, collapse)}
                     collapse={collapse}
                     onToggleCollapse={handleToggleCollapse}
@@ -1225,6 +1241,7 @@ function ChatScroll({
                   session={session}
                   sessionRunning={slotRunning}
                   isFocused={key === focusedKey}
+                  {...bookmarkProp(bookmarkedSlots, key)}
                   collapsed={resolveCollapsed(key, item, collapse)}
                   collapse={collapse}
                   onToggleCollapse={handleToggleCollapse}
@@ -1350,6 +1367,7 @@ const TimelineSlot = memo(function TimelineSlot({
   session,
   sessionRunning,
   isFocused,
+  bookmark,
   collapsed,
   collapse,
   onToggleCollapse,
@@ -1359,11 +1377,18 @@ const TimelineSlot = memo(function TimelineSlot({
   session: IAcpSession
   sessionRunning: boolean
   isFocused: boolean
+  bookmark?: number
   collapsed: boolean
   collapse: CollapseState
   onToggleCollapse: (key: string) => void
 }) {
   const focusedClass = isFocused ? ` ${styles['timelineSlotFocused']}` : ''
+  const badge =
+    bookmark !== undefined ? (
+      <span data-testid="acp-bookmark-badge" data-bookmark-slot={bookmark}>
+        {bookmark}
+      </span>
+    ) : undefined
   switch (item.kind) {
     case 'message': {
       const m = item.message
@@ -1381,6 +1406,7 @@ const TimelineSlot = memo(function TimelineSlot({
           icon={roleIcon(m.role)}
           kindLabel={m.role}
           summary={firstLineSummary(m.text)}
+          {...(badge !== undefined ? { badge } : {})}
           collapsed={collapsed}
           onToggle={() => onToggleCollapse(key)}
           rootProps={{
@@ -1420,6 +1446,7 @@ const TimelineSlot = memo(function TimelineSlot({
           collapsed={collapsed}
           onToggleCollapse={() => onToggleCollapse(key)}
           subtreeCollapse={{ stickyKey: key, depth: 0, collapse, toggle: onToggleCollapse }}
+          {...(badge !== undefined ? { badge } : {})}
           {...(isFocused ? { extraClassName: styles['timelineSlotFocused'] ?? '' } : {})}
         />
       )
@@ -1428,6 +1455,16 @@ const TimelineSlot = memo(function TimelineSlot({
 
 function slotKey(item: TimelineItem): string {
   return itemSlotKey(item)
+}
+
+// Build the optional `bookmark` prop without tripping exactOptionalPropertyTypes:
+// return an empty object when unbookmarked rather than `{ bookmark: undefined }`.
+function bookmarkProp(
+  bookmarks: ReadonlyMap<string, number>,
+  key: string,
+): { bookmark: number } | Record<string, never> {
+  const slot = bookmarks.get(key)
+  return slot === undefined ? {} : { bookmark: slot }
 }
 
 // Capture the slot at the top of the viewport plus how far into it we've
@@ -1544,6 +1581,20 @@ function hasRenderableTimelineContent(timeline: readonly TimelineItem[]): boolea
 function cssEscape(value: string): string {
   const css = (globalThis as { CSS?: { escape?: (s: string) => string } }).CSS
   return css?.escape ? css.escape(value) : value.replace(/["\\]/g, '\\$&')
+}
+
+// Vertical gap (px) left above a jump target so its top edge — and its bookmark
+// badge — sits clearly below the sticky header, not flush against it.
+const STICKY_REVEAL_GAP = 8
+
+// How far above a jump target to land the scroll so sticky scroll does not pin
+// the target onto itself (which would hide the real card behind the overlay).
+// One header height clears the self-pin threshold (top <= scrollTop); ancestors,
+// whose tops sit higher still, keep pinning above the revealed card.
+function stickyRevealOffset(node: HTMLElement): number {
+  const header = node.querySelector<HTMLElement>('button[data-testid="acp-collapsible-toggle"]')
+  const headerHeight = header?.getBoundingClientRect().height ?? 0
+  return headerHeight + STICKY_REVEAL_GAP
 }
 
 function EmptyChat({ onCreate }: { onCreate: () => void }) {
