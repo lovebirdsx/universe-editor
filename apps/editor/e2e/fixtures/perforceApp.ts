@@ -74,8 +74,7 @@ function seedWorkspace(
     writeFileSync(abs, seed.content, 'utf8')
     files[`${depotPrefix}/${toPosix(seed.relPath)}`] = { rev: 1, content: seed.content }
   }
-  const stateDir = join(workspaceDir, '.p4fake')
-  mkdirSync(stateDir, { recursive: true })
+  const stateDir = mkdtempSync(join(tmpdir(), 'ue2-p4-state-'))
   const stateFile = join(stateDir, 'state.json')
   const state: FakeState = {
     user: 'e2e',

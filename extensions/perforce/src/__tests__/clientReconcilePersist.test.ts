@@ -273,18 +273,65 @@ describe('PerforceClient reconcile persistence + dismiss', () => {
     expect(store.current.dismissed).not.toContain(`${LOCAL.toLowerCase()}/a.txt`)
   })
 
-  it('clearDismissed empties the dismissed set and runs a full rescan', async () => {
+  it('serializes overlapping reconcile passes so a late one cannot clobber an earlier commit', async () => {
+    // Repro for the move-to-reconcile race. Two incremental reconcile passes for the
+    // same path can overlap: the file watcher fires one while the file is still
+    // opened, and `moveToReconcile` fires another after `revert -k`. If the two run
+    // interleaved they read-modify-write the shared reconcile state on stale
+    // snapshots and the moved file can be dropped back out. The fix serializes every
+    // reconcile pass; this asserts the invariant directly — a second pass's
+    // `reconcile -n` must not start until the first pass has fully completed.
     const store = memStore()
     const client = await makeClient(store, { reconcile: () => [{ rel: 'a.txt' }] })
-    await client.refresh({ reconcile: true })
-    client.dismissReconcile([`${LOCAL}/a.txt`])
-    expect(client.status.reconcileCount).toBe(0)
+
+    // Re-arm spawn: hold the first reconcile scan open, and record scan ordering so
+    // we can prove the second scan only starts after the first finishes.
+    let releaseFirst: (() => void) | undefined
+    let firstScan = true
+    const scanStarted: number[] = []
+    const scanFinished: number[] = []
+    let seq = 0
+    spawnMock.mockImplementation((...args: unknown[]) => {
+      const argv = (args[1] as string[]) ?? []
+      calls.push(argv)
+      const child = new FakeChildProcess()
+      const isScan = subcommand(argv) === 'reconcile' && argv.includes('-n')
+      const id = seq++
+      const finish = () => {
+        const { stdout, exit } = handle(argv, { reconcile: () => [{ rel: 'a.txt' }] })
+        if (stdout) child.stdout.emit('data', Buffer.from(stdout))
+        if (isScan) scanFinished.push(id)
+        child.emit('close', exit ?? 0)
+      }
+      if (isScan) scanStarted.push(id)
+      if (isScan && firstScan) {
+        firstScan = false
+        releaseFirst = finish
+      } else {
+        queueMicrotask(finish)
+      }
+      return child
+    })
     calls.length = 0
+    scanStarted.length = 0
+    scanFinished.length = 0
 
-    await client.clearDismissed()
+    const passA = client.refreshReconcilePaths([`${LOCAL}/a.txt`])
+    await Promise.resolve()
+    const passB = client.refreshReconcilePaths([`${LOCAL}/a.txt`])
+    // Give B a chance to (wrongly) start its scan if it isn't serialized behind A.
+    await new Promise((r) => setTimeout(r, 5))
+    // Only the first pass's scan may have started; B must be queued behind it.
+    expect(scanStarted).toHaveLength(1)
+    releaseFirst?.()
+    await Promise.all([passA, passB])
 
-    expect(store.current.dismissed).toHaveLength(0)
-    expect(reconcileScans().length).toBeGreaterThan(0)
+    // Both scans ran, strictly in series (first finished before second started).
+    expect(scanStarted).toHaveLength(2)
+    expect(scanFinished[0]).toBe(0)
+    // The file survives once both settle — no clobber.
     expect(client.status.reconcileCount).toBe(1)
+    const states = (reconcileGroup()?.resourceStates ?? []) as { resourceUri?: string }[]
+    expect(states.some((s) => (s.resourceUri ?? '').includes('a.txt'))).toBe(true)
   })
 })

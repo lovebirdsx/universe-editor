@@ -162,6 +162,15 @@ export class PerforceClient {
   private _connection: ConnectionState = 'connected'
   private _refreshing = false
   private _queued = false
+  /** Serializes reconcile-group mutations against full refreshes. `refresh` and
+   *  `refreshReconcilePaths` both read-modify-write the shared reconcile state
+   *  (`_reconcileFiles` / `_openedPaths`); without ordering, a watcher-driven
+   *  incremental pass that started while a file was still opened can complete
+   *  *after* a Move-to-Reconcile pass and clobber the group back to empty (its
+   *  own `reconcile -n` saw the file as opened → empty result → merge drops it).
+   *  Every pass awaits the previous one on this chain so each sees the last
+   *  pass's committed state. */
+  private _reconcileChain: Promise<void> = Promise.resolve()
   /** Whether reconcile discovery is on: sticky after the first explicit scan
    *  (clean refresh / collect / file-watch), or always when `perforce.autoReconcile`
    *  is set. When on, the "changes to reconcile" group reflects working-tree drift. */
@@ -305,14 +314,29 @@ export class PerforceClient {
       return
     }
     this._refreshing = true
-    try {
-      do {
-        this._queued = false
-        await this._doRefresh()
-      } while (this._queued && !this._disposed)
-    } finally {
-      this._refreshing = false
-    }
+    await this._runSerial(async () => {
+      try {
+        do {
+          this._queued = false
+          await this._doRefresh()
+        } while (this._queued && !this._disposed)
+      } finally {
+        this._refreshing = false
+      }
+    })
+  }
+
+  /** Serialize a reconcile-state mutation behind any in-flight refresh / reconcile
+   *  pass, so each read-modify-write of the shared reconcile state sees the prior
+   *  pass's committed result instead of a stale snapshot. A failing task never
+   *  breaks the chain for the next one. */
+  private _runSerial<T>(task: () => Promise<T>): Promise<T> {
+    const result = this._reconcileChain.then(task, task)
+    this._reconcileChain = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
   }
 
   /** Turn reconcile discovery on/off (from `perforce.autoReconcile`). Enabling it
@@ -534,25 +558,28 @@ export class PerforceClient {
    */
   async refreshReconcilePaths(paths: readonly string[]): Promise<void> {
     if (this._disposed || paths.length === 0) return
-    this._reconcileActive = true
-    const res = await this._p4.execRecords(['reconcile', '-n', '-a', '-e', '-d', ...paths])
-    if (this._disposed) return
-    let fresh: ReconcileFile[] = []
-    if (res.result.exitCode === 0) {
-      fresh = parseReconcile(res.records, this.root).filter(
-        (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
-      )
-    } else {
-      // Non-zero with "no file(s) to reconcile" / "no such file" just means these
-      // paths are clean now → an empty `fresh` removes them from the group below.
-      const stderr = res.result.stderr.toLowerCase()
-      if (!stderr.includes('no file(s) to reconcile') && !stderr.includes('- no such file')) {
-        this._log?.(`[perforce] incremental reconcile -n failed: ${res.result.stderr.trim()}`)
-        return
+    await this._runSerial(async () => {
+      if (this._disposed) return
+      this._reconcileActive = true
+      const res = await this._p4.execRecords(['reconcile', '-n', '-a', '-e', '-d', ...paths])
+      if (this._disposed) return
+      let fresh: ReconcileFile[] = []
+      if (res.result.exitCode === 0) {
+        fresh = parseReconcile(res.records, this.root).filter(
+          (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
+        )
+      } else {
+        // Non-zero with "no file(s) to reconcile" / "no such file" just means these
+        // paths are clean now → an empty `fresh` removes them from the group below.
+        const stderr = res.result.stderr.toLowerCase()
+        if (!stderr.includes('no file(s) to reconcile') && !stderr.includes('- no such file')) {
+          this._log?.(`[perforce] incremental reconcile -n failed: ${res.result.stderr.trim()}`)
+          return
+        }
       }
-    }
-    this._setReconcileFiles(mergeReconcile(this._reconcileFiles, paths, fresh))
-    this._emitChange()
+      this._setReconcileFiles(mergeReconcile(this._reconcileFiles, paths, fresh))
+      this._emitChange()
+    })
   }
 
   /** Set the reconcile file list and mirror it into the group's resource states.

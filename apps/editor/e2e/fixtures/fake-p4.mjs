@@ -63,6 +63,17 @@ function saveState(state) {
 
 const toPosix = (p) => p.split(sep).join('/')
 
+/** Posix form with a lower-cased Windows drive letter, so path comparisons are
+ *  case-insensitive on the drive the way real p4 is on Windows. Mirrors the
+ *  extension's `norm` (pathUtil.ts) — the SCM view keys default-changelist paths
+ *  through it (lower-cased drive), so a straight case-sensitive string compare
+ *  against on-disk paths (upper-cased drive) would spuriously miss. */
+function normPath(p) {
+  let s = toPosix(p).replace(/\/+$/, '')
+  if (/^[a-zA-Z]:/.test(s)) s = s[0].toLowerCase() + s.slice(1)
+  return s
+}
+
 /** clientFile (abs, OS path) → depotFile (//depot/...) */
 function depotOf(state, clientFile) {
   const rel = toPosix(relative(state.clientRoot, clientFile))
@@ -227,16 +238,16 @@ function targetsFromArgs(state, args, discovered) {
   // Directory-scoped wildcards: `<something>/...` → prefix match on clientFile.
   const dirScopes = files
     .filter((f) => f.endsWith('/...'))
-    .map((f) => toPosix(f.slice(0, -'/...'.length)))
+    .map((f) => normPath(f.slice(0, -'/...'.length)))
   if (dirScopes.length > 0) {
     return discovered.filter((d) => {
-      const abs = toPosix(clientOf(state, d.depotFile))
+      const abs = normPath(clientOf(state, d.depotFile))
       return dirScopes.some((s) => abs === s || abs.startsWith(`${s}/`))
     })
   }
   return discovered.filter((d) => {
-    const abs = clientOf(state, d.depotFile)
-    return files.some((f) => toPosix(f) === toPosix(abs) || f === d.depotFile)
+    const abs = normPath(clientOf(state, d.depotFile))
+    return files.some((f) => normPath(f) === abs || toDepotFile(state, f) === d.depotFile)
   })
 }
 
