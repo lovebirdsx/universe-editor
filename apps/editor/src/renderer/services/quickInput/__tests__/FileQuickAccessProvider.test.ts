@@ -1,16 +1,18 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Tests for FileQuickAccessProvider: debounced workspace search, excludes
- *  filtering, the result cap, token cancellation, and the no-workspace fallback
- *  to the recent files list. Migrated from the old GoToFileAction coverage.
+ *  Tests for FileQuickAccessProvider: warms the full file listing once when the
+ *  picker opens (reusing the @-mention cache) then filters it in-memory on every
+ *  keystroke, the exact-path fast path, the 512 result cap, token cancellation,
+ *  and the no-workspace fallback to the recent files list.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   Emitter,
   IEditorGroupsService,
   IEditorResolverService,
   IFileSearchService,
+  IFileService,
   IInstantiationService,
   IWorkspaceService,
   InstantiationService,
@@ -24,6 +26,7 @@ import {
   type IEditorGroupsService as IEditorGroupsServiceType,
   type IFileSearchComplete,
   type IFileSearchService as IFileSearchServiceType,
+  type IFileService as IFileServiceType,
   type IQuickInputButton,
   type IQuickPick,
   type IQuickPickItem,
@@ -36,6 +39,7 @@ import { FileQuickAccessProvider } from '../providers/FileQuickAccessProvider.js
 import { IExcludeService } from '../../exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../exclude/testing/fakeExcludeService.js'
 import { IRecentFilesService, type IRecentFile } from '../../recentFiles/recentFilesService.js'
+import { invalidateMentionFileCache } from '../../acp/mentionFileSearch.js'
 
 class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   private readonly _onDidAccept = new Emitter<T[]>()
@@ -119,7 +123,9 @@ class FakeWorkspaceService implements IWorkspaceServiceType {
 interface FakeFileSearch extends IFileSearchServiceType {
   readonly calls: Array<{
     pattern: string
+    matchAll: boolean | undefined
     excludes: readonly string[]
+    ignore: readonly string[]
     maxResults: number | undefined
   }>
   resultPaths: string[]
@@ -142,7 +148,9 @@ function makeFileSearch(root: URI): FakeFileSearch {
     async search(query): Promise<IFileSearchComplete> {
       calls.push({
         pattern: query.pattern,
+        matchAll: query.matchAll,
         excludes: query.excludes ?? [],
+        ignore: query.ignore ?? [],
         maxResults: query.maxResults,
       })
       const max = query.maxResults ?? Number.MAX_SAFE_INTEGER
@@ -186,6 +194,16 @@ class FakeRecentFilesService implements IRecentFilesService {
   clear(): void {}
 }
 
+/** Minimal IFileService: only exists() is exercised (exact-path fast path). */
+function makeFileService(existing: Iterable<string> = []): IFileServiceType {
+  const set = new Set([...existing].map((p) => URI.file(p).toString()))
+  return {
+    async exists(uri: URI): Promise<boolean> {
+      return set.has(uri.toString())
+    },
+  } as unknown as IFileServiceType
+}
+
 function makeGroups(): IEditorGroupsServiceType {
   const group = {
     editors: [],
@@ -217,11 +235,16 @@ class FakeEditorResolverService implements IEditorResolverServiceType {
 }
 
 function flushPromises(): Promise<void> {
-  return Promise.resolve().then(() => undefined)
+  return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 function setup(
-  opts: { root?: URI | null; recent?: readonly IRecentFile[]; exclude?: IExcludeService } = {},
+  opts: {
+    root?: URI | null
+    recent?: readonly IRecentFile[]
+    exclude?: IExcludeService
+    existingFiles?: Iterable<string>
+  } = {},
 ) {
   const root = opts.root === undefined ? URI.file('/ws') : opts.root
   const workspace = new FakeWorkspaceService(root)
@@ -234,6 +257,7 @@ function setup(
   services.set(IRecentFilesService, recent)
   services.set(IExcludeService, opts.exclude ?? new FakeExcludeService())
   services.set(IUriIdentityService, new UriIdentityService('linux'))
+  services.set(IFileService, makeFileService(opts.existingFiles))
   const resolver = new FakeEditorResolverService()
   services.set(IEditorResolverService, resolver)
   const inst = new InstantiationService(services)
@@ -269,31 +293,59 @@ function run(
 
 describe('FileQuickAccessProvider', () => {
   beforeEach(() => {
-    vi.useFakeTimers()
+    // The workspace listing is cached (module-level, shared with @-mention) with a
+    // short TTL; clear it so each test walks fresh and asserts its own calls.
+    invalidateMentionFileCache()
   })
   afterEach(() => {
-    vi.useRealTimers()
+    invalidateMentionFileCache()
   })
 
-  it('enables external filtering and debounces the search 200ms', async () => {
+  it('enables external filtering and warms the full listing once, then filters in-memory', async () => {
     const { provider, fileSearch } = setup()
-    fileSearch.resultPaths = ['/ws/src/a.ts']
+    fileSearch.resultPaths = ['/ws/src/a.ts', '/ws/src/b.ts']
     const picker = new FakeQuickPick<IQuickPickItem>()
     run(provider, picker)
     expect(picker.filterExternally).toBe(true)
 
-    picker.fireValue('a')
-    await vi.advanceTimersByTimeAsync(199)
-    expect(fileSearch.calls).toHaveLength(0)
-
-    await vi.advanceTimersByTimeAsync(1)
+    // The listing is prefetched on open (one matchAll walk), before any typing.
     await flushPromises()
     expect(fileSearch.calls).toHaveLength(1)
-    expect(fileSearch.calls[0]!.pattern).toBe('a')
+    expect(fileSearch.calls[0]!.matchAll).toBe(true)
+    expect(fileSearch.calls[0]!.pattern).toBe('')
+
+    // Typing filters the cached listing — no further search calls.
+    picker.fireValue('a')
+    expect(fileSearch.calls).toHaveLength(1)
+    expect(picker.items).toHaveLength(1)
     expect(picker.items[0]).toMatchObject({ label: 'a.ts', description: 'src/a.ts' })
+
+    picker.fireValue('b')
+    expect(fileSearch.calls).toHaveLength(1)
+    expect(picker.items[0]).toMatchObject({ label: 'b.ts', description: 'src/b.ts' })
   })
 
-  it('forwards exclude globs and caps results at 512', async () => {
+  it('re-runs the in-flight query once the listing lands (early keystroke not lost)', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.deferred = true
+    fileSearch.resultPaths = ['/ws/src/a.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+
+    // Type before the listing arrives: the picker shows the spinner, no items yet.
+    picker.fireValue('a')
+    expect(picker.busy).toBe(true)
+    expect(picker.items).toHaveLength(0)
+
+    // Listing lands → the current query re-runs against it.
+    fileSearch.resolveAll()
+    await flushPromises()
+    expect(picker.busy).toBe(false)
+    expect(picker.items).toHaveLength(1)
+    expect(picker.items[0]).toMatchObject({ label: 'a.ts' })
+  })
+
+  it('forwards exclude globs / ignored dirs to the warm-up and caps results at 512', async () => {
     const exclude: IExcludeService = {
       _serviceBrand: undefined,
       onDidChange: new Emitter<void>().event,
@@ -303,14 +355,30 @@ describe('FileQuickAccessProvider', () => {
       getSearchExcludeGlobs: () => ['**/*.min.js'],
     }
     const { provider, fileSearch } = setup({ exclude })
+    // 600 files all matching 'x' — filtering must cap the visible list at 512.
+    fileSearch.resultPaths = Array.from({ length: 600 }, (_, i) => `/ws/x${i}.ts`)
     const picker = new FakeQuickPick<IQuickPickItem>()
     run(provider, picker)
+    await flushPromises()
+
+    expect(fileSearch.calls[0]!.excludes).toEqual(['**/*.min.js'])
+    expect(fileSearch.calls[0]!.ignore).toEqual(['node_modules'])
 
     picker.fireValue('x')
-    await vi.advanceTimersByTimeAsync(200)
+    expect(picker.items).toHaveLength(512)
+  })
+
+  it('prepends an exact path match for a slash query even outside the listing', async () => {
+    const { provider, fileSearch } = setup({ existingFiles: ['/ws/deep/exact.ts'] })
+    // The listing does NOT contain the exact file; only the exists() probe finds it.
+    fileSearch.resultPaths = ['/ws/src/other.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
     await flushPromises()
-    expect(fileSearch.calls[0]!.excludes).toEqual(['**/*.min.js'])
-    expect(fileSearch.calls[0]!.maxResults).toBe(512)
+
+    picker.fireValue('deep/exact.ts')
+    await flushPromises()
+    expect(picker.items[0]).toMatchObject({ label: 'exact.ts', description: 'deep/exact.ts' })
   })
 
   it('discards results that arrive after the token is cancelled', async () => {
@@ -321,9 +389,6 @@ describe('FileQuickAccessProvider', () => {
     const { token } = run(provider, picker)
 
     picker.fireValue('late')
-    await vi.advanceTimersByTimeAsync(200)
-    expect(fileSearch.calls).toHaveLength(1)
-
     token.isCancellationRequested = true
     fileSearch.resolveAll()
     await flushPromises()
@@ -348,12 +413,11 @@ describe('FileQuickAccessProvider', () => {
       { uri: URI.file('/ws/src/inside.ts'), name: 'inside.ts', lastOpened: 2 },
       { uri: URI.file('/elsewhere/outside.ts'), name: 'outside.ts', lastOpened: 1 },
     ]
-    const { provider, fileSearch } = setup({ recent })
+    const { provider } = setup({ recent })
     const picker = new FakeQuickPick<IQuickPickItem>()
     run(provider, picker)
     await flushPromises()
 
-    expect(fileSearch.calls).toHaveLength(0)
     expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual([
       'inside.ts',
       'outside.ts',
@@ -367,10 +431,9 @@ describe('FileQuickAccessProvider', () => {
     fileSearch.resultPaths = ['/ws/doc.pdf']
     const picker = new FakeQuickPick<IQuickPickItem>()
     run(provider, picker)
+    await flushPromises()
 
     picker.fireValue('doc')
-    await vi.advanceTimersByTimeAsync(200)
-    await flushPromises()
     expect(picker.items).toHaveLength(1)
 
     picker.fireAccept([picker.items[0] as IQuickPickItem])
