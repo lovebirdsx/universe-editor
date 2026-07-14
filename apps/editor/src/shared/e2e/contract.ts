@@ -424,6 +424,12 @@ export interface E2EProbe {
    * changelist group shows up.
    */
   getVisibleScmGroupIds(): readonly string[]
+  /**
+   * Group ids whose resource list contains a file whose path ends with `suffix`
+   * (case-insensitive, separator-agnostic) — for asserting which changelist /
+   * reconcile group a file landed in after a drag-and-drop move.
+   */
+  getScmGroupIdsForResource(suffix: string): readonly string[]
   // -- Extension management probe -------------------------------------------
   /** Install a local `.vsix`, returning the installed extension's identifier. */
   installVsixExtension(vsixPath: string): Promise<string>

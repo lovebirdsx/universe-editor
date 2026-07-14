@@ -123,3 +123,48 @@ export function mergeReconcile(
   }
   return out
 }
+
+/**
+ * Drop reconcile entries the user has permanently dismissed ("move out of the
+ * list"). `dismissed` holds normalized local paths ({@link norm}); a file is
+ * removed when its `clientFile` matches. Entries without a local path are always
+ * kept (they can't be keyed by dismissal). Pure — no p4 I/O.
+ */
+export function filterDismissed(
+  files: readonly ReconcileFile[],
+  dismissed: ReadonlySet<string>,
+): ReconcileFile[] {
+  if (dismissed.size === 0) return [...files]
+  return files.filter((f) => !f.clientFile || !dismissed.has(norm(f.clientFile)))
+}
+
+/**
+ * Expand a dismiss target selection into the concrete local paths to add to the
+ * dismissed set. A file target contributes itself; a directory target (folder
+ * row / group) contributes every currently-listed reconcile file whose path sits
+ * under it. Directories aren't real reconcile entries, so they're matched as a
+ * normalized path prefix against the live list. Returns normalized local paths.
+ */
+export function expandDismissPaths(
+  targets: readonly string[],
+  files: readonly ReconcileFile[],
+): string[] {
+  const out = new Set<string>()
+  const listed = files
+    .map((f) => f.clientFile)
+    .filter((p): p is string => p !== undefined)
+    .map(norm)
+  const listedSet = new Set(listed)
+  for (const raw of targets) {
+    const key = norm(raw)
+    if (listedSet.has(key)) {
+      out.add(key)
+      continue
+    }
+    // Not an exact listed file → treat as a directory prefix and pull in every
+    // listed file under it.
+    const prefix = `${key}/`
+    for (const p of listed) if (p.startsWith(prefix)) out.add(p)
+  }
+  return [...out]
+}

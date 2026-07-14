@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { mergeReconcile, parseReconcile, parseReconcileRecord } from '../reconcileParser.js'
+import {
+  expandDismissPaths,
+  filterDismissed,
+  mergeReconcile,
+  parseReconcile,
+  parseReconcileRecord,
+} from '../reconcileParser.js'
 import type { ReconcileFile } from '../reconcileParser.js'
 
 describe('parseReconcileRecord', () => {
@@ -119,5 +125,68 @@ describe('mergeReconcile', () => {
     const merged = mergeReconcile([prevAdd], ['d:/WORK/a.txt'], [edit('a.txt')])
     expect(merged).toHaveLength(1)
     expect(merged[0]?.action).toBe('edit')
+  })
+})
+
+describe('filterDismissed', () => {
+  const edit = (p: string): ReconcileFile => ({
+    depotFile: `//depot/${p}`,
+    clientFile: `D:/work/${p}`,
+    action: 'edit',
+    rev: '1',
+  })
+
+  it('returns a copy unchanged when nothing is dismissed', () => {
+    const files = [edit('a.txt'), edit('b.txt')]
+    expect(filterDismissed(files, new Set())).toEqual(files)
+  })
+
+  it('drops files whose normalized path is dismissed', () => {
+    const files = [edit('a.txt'), edit('b.txt')]
+    const dismissed = new Set(['d:/work/a.txt'])
+    expect(filterDismissed(files, dismissed).map((f) => f.clientFile)).toEqual(['D:/work/b.txt'])
+  })
+
+  it('keeps entries without a local path (can’t be keyed)', () => {
+    const noPath: ReconcileFile = {
+      depotFile: '//depot/x.txt',
+      clientFile: undefined,
+      action: 'edit',
+      rev: '1',
+    }
+    expect(filterDismissed([noPath], new Set(['whatever']))).toEqual([noPath])
+  })
+})
+
+describe('expandDismissPaths', () => {
+  const edit = (p: string): ReconcileFile => ({
+    depotFile: `//depot/${p}`,
+    clientFile: `D:/work/${p}`,
+    action: 'edit',
+    rev: '1',
+  })
+
+  it('returns the file itself for an exact listed target', () => {
+    const files = [edit('a.txt'), edit('sub/b.txt')]
+    expect(expandDismissPaths(['D:/work/a.txt'], files)).toEqual(['d:/work/a.txt'])
+  })
+
+  it('expands a directory target into every listed file under it', () => {
+    const files = [edit('sub/b.txt'), edit('sub/deep/c.txt'), edit('other.txt')]
+    expect(expandDismissPaths(['D:/work/sub'], files).sort()).toEqual([
+      'd:/work/sub/b.txt',
+      'd:/work/sub/deep/c.txt',
+    ])
+  })
+
+  it('dedupes overlapping file + directory targets', () => {
+    const files = [edit('sub/b.txt')]
+    expect(expandDismissPaths(['D:/work/sub', 'D:/work/sub/b.txt'], files)).toEqual([
+      'd:/work/sub/b.txt',
+    ])
+  })
+
+  it('yields nothing for a directory with no listed files under it', () => {
+    expect(expandDismissPaths(['D:/work/empty'], [edit('a.txt')])).toEqual([])
   })
 })

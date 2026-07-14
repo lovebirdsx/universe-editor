@@ -12,6 +12,7 @@
 import {
   commands,
   scm,
+  type Command,
   type Disposable,
   type QuickPickItem,
   type SourceControl,
@@ -41,7 +42,13 @@ import {
   toReconcileResourceStates,
 } from './p4Decoration.js'
 import { parseShelved, type ShelvedFile } from './shelveParser.js'
-import { parseReconcile, mergeReconcile, type ReconcileFile } from './reconcileParser.js'
+import {
+  parseReconcile,
+  mergeReconcile,
+  filterDismissed,
+  expandDismissPaths,
+  type ReconcileFile,
+} from './reconcileParser.js'
 import { norm } from './pathUtil.js'
 import { buildNewChangeSpec, replaceDescription, parseDescription } from './changeSpec.js'
 import {
@@ -76,6 +83,9 @@ interface DesiredGroup {
   readonly label: string
   readonly hideWhenEmpty: boolean
   readonly states: SourceControlResourceState[]
+  /** Id of the changelist group this one nests under (shelved files under their
+   *  owning changelist), or undefined for a top-level group. */
+  readonly parentId?: string
 }
 
 export type ConnectionState = 'connected' | 'offline' | 'not-logged-in'
@@ -87,6 +97,9 @@ export interface ClientStatus {
   readonly openedCount: number
   /** Files discovered as diverged-but-not-opened (the reconcile group size). */
   readonly reconcileCount: number
+  /** Label of a long-running p4 operation in flight (e.g. "Submitting"), or
+   *  undefined when idle. Drives the status-bar spinner. */
+  readonly busy: string | undefined
 }
 
 export interface P4CacheOptions {
@@ -95,6 +108,22 @@ export interface P4CacheOptions {
   readonly disk?: P4CacheDiskBackend
   /** Injectable clock for TTL logic; defaults to `Date.now`. Tests advance it. */
   readonly now?: () => number
+}
+
+/** Persisted snapshot of the "changes to reconcile" group: the last discovered
+ *  file list plus the set of permanently dismissed (normalized) local paths. */
+export interface ReconcilePersistState {
+  readonly files: readonly ReconcileFile[]
+  readonly dismissed: readonly string[]
+}
+
+/** Persistence adapter for the reconcile group, backed by the extension's
+ *  `workspaceState` Memento in production (see extension.ts). Injected into the
+ *  client so it never depends on the whole ExtensionContext; tests pass an
+ *  in-memory stub, and omitting it entirely disables persistence (no-op). */
+export interface ReconcileStore {
+  load(): ReconcilePersistState
+  save(state: ReconcilePersistState): void
 }
 
 export class PerforceClient {
@@ -112,6 +141,11 @@ export class PerforceClient {
    *  Re-filtered against the opened set on every refresh so a just-collected file
    *  drops out without a full re-scan. */
   private _reconcileFiles: readonly ReconcileFile[] = []
+  /** Normalized local paths the user permanently dismissed from the reconcile
+   *  group ("move out of the list"). Persisted; every list update filters these
+   *  out (see {@link _setReconcileFiles}) so a dismissed file never reappears —
+   *  even after a Clean Refresh — until it's collected or dismissals are cleared. */
+  private _dismissed = new Set<string>()
   /** Normalized client paths currently opened, from the last refresh. Used to
    *  filter incremental (watcher-driven) reconcile scans without a fresh `opened`
    *  round-trip. */
@@ -145,6 +179,12 @@ export class PerforceClient {
   private _reconcileScope = '//...'
   private _disposed = false
   private _pollTimer: ReturnType<typeof setInterval> | undefined
+  /** Whether Swarm is enabled + configured, so the commit bar offers "Request New
+   *  Swarm Review…" as the default submit action. Set from config at activate. */
+  private _swarmAvailable = false
+  /** Labels of in-flight long-running p4 operations (a stack so overlapping ops
+   *  keep the spinner up until the last one finishes). */
+  private readonly _busyOps: string[] = []
 
   private constructor(
     readonly root: string,
@@ -153,6 +193,7 @@ export class PerforceClient {
     gate: ConcurrencyGate,
     cacheOptions: P4CacheOptions,
     private readonly _log?: (msg: string) => void,
+    private readonly _store?: ReconcileStore,
   ) {
     this._p4 = new P4Service(root, gate, connection, _log)
     this._cache = new P4Cache(cacheOptions.now ?? Date.now, cacheOptions.disk, cacheOptions.enabled)
@@ -184,6 +225,7 @@ export class PerforceClient {
     gate: ConcurrencyGate,
     cacheOptions: P4CacheOptions,
     log?: (msg: string) => void,
+    store?: ReconcileStore,
   ): Promise<PerforceClient | undefined> {
     // Connection-less probe first to resolve client + root from the environment.
     const probe = new P4Service(folder, gate, undefined, log)
@@ -203,6 +245,7 @@ export class PerforceClient {
       gate,
       cacheOptions,
       log,
+      store,
     )
   }
 
@@ -212,6 +255,22 @@ export class PerforceClient {
       connection: this._connection,
       openedCount: this._openedCount,
       reconcileCount: this._reconcileFiles.length,
+      busy: this._busyOps[this._busyOps.length - 1],
+    }
+  }
+
+  /** Run `fn` while a busy label is active (drives the status-bar spinner). The
+   *  label is pushed before and popped after, with a change emitted each way so
+   *  the status bar shows "<clientName>: <label>…" for the duration. */
+  private async _withBusy<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    this._busyOps.push(label)
+    this._emitChange()
+    try {
+      return await fn()
+    } finally {
+      const i = this._busyOps.lastIndexOf(label)
+      if (i !== -1) this._busyOps.splice(i, 1)
+      this._emitChange()
     }
   }
 
@@ -261,6 +320,13 @@ export class PerforceClient {
   setAutoReconcile(enabled: boolean): void {
     this._autoReconcile = enabled
     if (enabled) this._reconcileActive = true
+  }
+
+  /** Mark whether Swarm is available (enabled + configured) so the commit bar
+   *  offers "Request New Swarm Review…" as the default submit action. Re-renders
+   *  the commit actions on the next refresh; call `refresh()` to apply now. */
+  setSwarmAvailable(available: boolean): void {
+    this._swarmAvailable = available
   }
 
   /** Narrow the reconcile-discovery scan to `localPath` (the opened folder) so a
@@ -326,7 +392,8 @@ export class PerforceClient {
           id: shelvedGroupId(clId),
           label: localize('perforce.group.shelved', 'Shelved Files'),
           hideWhenEmpty: true,
-          states: toShelvedResourceStates(shelved),
+          states: toShelvedResourceStates(shelved, clId),
+          parentId: group.id,
         })
       }
     }
@@ -349,21 +416,35 @@ export class PerforceClient {
     this._openedCount = countOpened(groups)
     this._sc.count = this._openedCount
     const defaultHasFiles = groups.some((g) => g.isDefault && g.files.length > 0)
-    this._sc.acceptInputActions = defaultHasFiles
-      ? [
-          {
-            command: 'perforce.submitDefault',
-            title: localize('perforce.command.submit.title', 'Submit'),
-            icon: 'check',
-          },
-          {
-            command: 'perforce.revertUnchanged',
-            title: localize('perforce.command.revertUnchanged.title', 'Revert Unchanged'),
-            icon: 'discard',
-          },
-        ]
-      : undefined
+    this._sc.acceptInputActions = defaultHasFiles ? this._buildAcceptActions() : undefined
     this._emitChange()
+  }
+
+  /** Commit-bar actions for the default changelist. When Swarm is available, the
+   *  primary (default) action is "Request New Swarm Review…", matching P4V's
+   *  default; Submit + Revert Unchanged follow. Without Swarm the primary is
+   *  Submit. Primary is always first (the view remembers the last-picked one, but
+   *  defaults to index 0). */
+  private _buildAcceptActions(): Command[] {
+    const submit: Command = {
+      command: 'perforce.submitDefault',
+      title: localize('perforce.command.submit.title', 'Submit'),
+      icon: 'check',
+    }
+    const revertUnchanged: Command = {
+      command: 'perforce.revertUnchanged',
+      title: localize('perforce.command.revertUnchanged.title', 'Revert Unchanged'),
+      icon: 'discard',
+    }
+    if (this._swarmAvailable) {
+      const requestReview: Command = {
+        command: 'perforce.swarm.requestReview',
+        title: localize('perforce.command.swarm.requestReview.title', 'Request New Swarm Review…'),
+        icon: 'git-pull-request',
+      }
+      return [requestReview, submit, revertUnchanged]
+    }
+    return [submit, revertUnchanged]
   }
 
   /** Fetch shelved files for each pending numbered changelist that has any,
@@ -474,10 +555,38 @@ export class PerforceClient {
     this._emitChange()
   }
 
-  /** Set the reconcile file list and mirror it into the group's resource states. */
+  /** Set the reconcile file list and mirror it into the group's resource states.
+   *  Dismissed files are filtered out here so every producer (full scan, cheap
+   *  re-filter, incremental merge, restore) is uniformly clean, then the result
+   *  is persisted so it survives a reload without a fresh scan. */
   private _setReconcileFiles(files: readonly ReconcileFile[]): void {
-    this._reconcileFiles = files
-    this._reconcileGroup.resourceStates = toReconcileResourceStates(files)
+    const visible = filterDismissed(files, this._dismissed)
+    this._reconcileFiles = visible
+    this._reconcileGroup.resourceStates = toReconcileResourceStates(visible)
+    this._persistReconcile()
+  }
+
+  /** Mirror the current reconcile list + dismissed set into the injected store
+   *  (no-op when no store was provided, e.g. in tests). */
+  private _persistReconcile(): void {
+    this._store?.save({ files: this._reconcileFiles, dismissed: [...this._dismissed] })
+  }
+
+  /**
+   * Restore the reconcile group from the persisted snapshot at activation, before
+   * the first refresh. Loads the dismissed set and the last-known file list and
+   * renders it immediately — so a reload shows the group right away — WITHOUT a
+   * `reconcile -n` walk (cheap). Reconcile discovery is turned on (sticky) so the
+   * next ordinary refresh re-filters the restored list against the fresh `opened`
+   * set (dropping anything already collected) instead of clearing it.
+   */
+  restoreReconcile(): void {
+    if (!this._store) return
+    const { files, dismissed } = this._store.load()
+    this._dismissed = new Set(dismissed.map(norm))
+    if (files.length > 0 || dismissed.length > 0) this._reconcileActive = true
+    this._setReconcileFiles(files)
+    this._emitChange()
   }
 
   /** Reconcile the live ResourceGroups with the freshly computed groups: create
@@ -488,7 +597,11 @@ export class PerforceClient {
       seen.add(group.id)
       let live = this._groups.get(group.id)
       if (!live) {
-        live = this._sc.createResourceGroup(group.id, group.label)
+        live = this._sc.createResourceGroup(
+          group.id,
+          group.label,
+          group.parentId !== undefined ? { parentId: group.parentId } : undefined,
+        )
         live.hideWhenEmpty = group.hideWhenEmpty
         this._groups.set(group.id, live)
       } else {
@@ -548,15 +661,45 @@ export class PerforceClient {
     paths: readonly string[] = [],
   ): Promise<boolean> {
     if (args.length === 0) return false
-    const result = await this._p4.exec([...args, ...paths])
-    if (result.exitCode !== 0) {
-      await notifyP4Failure(label, result)
+    return this._withBusy(this._busyLabel(label), async () => {
+      const result = await this._p4.exec([...args, ...paths])
+      if (result.exitCode !== 0) {
+        await notifyP4Failure(label, result)
+        await this.refresh()
+        return false
+      }
+      this._cache.invalidateWorkspace()
       await this.refresh()
-      return false
+      return true
+    })
+  }
+
+  /** Human-friendly busy label for a raw p4 command label (e.g. `revert -k` →
+   *  "Reverting"). Falls back to a generic "Working" for unmapped commands. */
+  private _busyLabel(label: string): string {
+    const full: Record<string, string> = {
+      'delete changelist': localize('perforce.busy.deleteChangelist', 'Deleting changelist'),
+      'delete shelved': localize('perforce.busy.deleteShelved', 'Deleting shelved files'),
+      'revert -a': localize('perforce.busy.revert', 'Reverting'),
+      'revert -k': localize('perforce.busy.reopen', 'Moving files'),
     }
-    this._cache.invalidateWorkspace()
-    await this.refresh()
-    return true
+    if (full[label]) return full[label]!
+    const base = label.split(' ')[0] ?? label
+    const map: Record<string, string> = {
+      edit: localize('perforce.busy.edit', 'Opening for edit'),
+      add: localize('perforce.busy.add', 'Opening for add'),
+      delete: localize('perforce.busy.delete', 'Opening for delete'),
+      revert: localize('perforce.busy.revert', 'Reverting'),
+      clean: localize('perforce.busy.revert', 'Reverting'),
+      reconcile: localize('perforce.busy.reconcile', 'Collecting changes'),
+      submit: localize('perforce.busy.submit', 'Submitting'),
+      reopen: localize('perforce.busy.reopen', 'Moving files'),
+      shelve: localize('perforce.busy.shelve', 'Shelving'),
+      unshelve: localize('perforce.busy.unshelve', 'Unshelving'),
+      resolve: localize('perforce.busy.resolve', 'Resolving'),
+      change: localize('perforce.busy.change', 'Updating changelist'),
+    }
+    return map[base] ?? localize('perforce.busy.generic', 'Working')
   }
 
   /** Open files for edit (checkout). */
@@ -584,7 +727,27 @@ export class PerforceClient {
   async reconcile(paths: readonly string[]): Promise<boolean> {
     if (paths.length === 0) return false
     this._reconcileActive = true
+    this._undismiss(paths)
     return this._mutate('reconcile', ['reconcile', '-a', '-e', '-d'], paths)
+  }
+
+  /**
+   * Collect working-tree changes straight into a specific changelist
+   * (`p4 reconcile -a -e -d -c <cl>`): the "changes to reconcile" analogue of
+   * {@link reopen}, used when a reconcile row is dropped onto a changelist group.
+   * Unlike {@link reopen} (which only moves *already-opened* files), this opens
+   * the not-yet-opened files for their on-disk action directly in `changelist`.
+   * `'default'` collects into the default changelist (no `-c`).
+   */
+  async reconcileInto(changelist: string, paths: readonly string[]): Promise<boolean> {
+    if (paths.length === 0) return false
+    this._reconcileActive = true
+    this._undismiss(paths)
+    const args =
+      changelist === 'default'
+        ? ['reconcile', '-a', '-e', '-d']
+        : ['reconcile', '-a', '-e', '-d', '-c', changelist]
+    return this._mutate('reconcile', args, paths)
   }
 
   /** Collect every currently discovered reconcile candidate at once. */
@@ -832,6 +995,169 @@ export class PerforceClient {
   async resolveChangelist(changelist: string): Promise<boolean> {
     if (changelist === 'default') return this._mutate('resolve', ['resolve', '-am'])
     return this._mutate('resolve', ['resolve', '-am', '-c', changelist])
+  }
+
+  /**
+   * Open a diff of a shelved file: left = the file's base revision content from
+   * the depot (`depotFile#rev`), right = the shelved content (`depotFile@=<cl>`).
+   * An added file has no base revision, so it just opens the shelved content on
+   * the right (empty left). Shelved files have no local working copy, so both
+   * sides come from `p4 print`.
+   */
+  async openShelvedFile(
+    changelist: string,
+    depotFile: string,
+    rev: string | undefined,
+    action: P4Action,
+  ): Promise<void> {
+    const isAdd = action === 'add' || action === 'branch' || action === 'import'
+    const baseSpec = !isAdd && rev ? `${depotFile}#${rev}` : null
+    const shelfSpec = `${depotFile}@=${changelist}`
+    const [original, modified] = await Promise.all([
+      this.printRevision(baseSpec),
+      this.printRevision(shelfSpec),
+    ])
+    const name = basename(displayPath(depotFile))
+    await commands.executeCommand('_workbench.openDiff', {
+      title: `${name} (Shelved #${changelist})`,
+      originalUri: pathToFileURL(displayPath(depotFile)).href,
+      original,
+      modified,
+      pinned: false,
+      preserveFocus: false,
+    })
+  }
+
+  /**
+   * Delete a pending numbered changelist (`p4 change -d <n>`). Perforce refuses to
+   * delete a changelist that still has open files, so the caller guards on that
+   * first (matching P4V). Shelved files DO block `change -d`, so any shelf is
+   * removed first (`shelve -d`) — mirroring P4V, where a shelf doesn't stop you
+   * deleting the changelist. The default changelist can't be deleted.
+   */
+  async deleteChangelist(changelist: string): Promise<boolean> {
+    if (changelist === 'default' || !/^\d+$/.test(changelist)) return false
+    // Drop any shelved files first so `change -d` isn't blocked by them.
+    const describe = await this._p4.execRecords(['describe', '-S', '-s', changelist])
+    if (describe.result.exitCode === 0 && parseShelved(describe.records).length > 0) {
+      const del = await this._p4.exec(['shelve', '-d', '-c', changelist])
+      if (del.exitCode !== 0) {
+        await notifyP4Failure('delete changelist', del)
+        await this.refresh()
+        return false
+      }
+    }
+    return this._mutate('delete changelist', ['change', '-d', changelist])
+  }
+
+  /** Whether a changelist currently has any open files (blocks deletion). Reads
+   *  the last refresh's opened→changelist map, so no extra round-trip. */
+  hasOpenFiles(changelist: string): boolean {
+    for (const cl of this._changelistByPath.values()) {
+      if (cl === changelist) return true
+    }
+    return false
+  }
+
+  /**
+   * Move files out of their changelist without touching the working tree
+   * (`p4 revert -k`): the open state is discarded but local content is kept, so
+   * the files reappear in the "changes to reconcile" group (their disk state has
+   * diverged from the depot but they're no longer opened).
+   *
+   * Only the moved paths are re-scanned (`refreshReconcilePaths`, O(paths)) — the
+   * paths are known, so there's no need for a full `reconcile -n` walk of the
+   * whole workspace (which was slow on large depots). Any prior dismissal of a
+   * moved path is cleared, since moving it out is an explicit request to see it.
+   */
+  async moveToReconcile(paths: readonly string[]): Promise<boolean> {
+    if (paths.length === 0) return false
+    this._reconcileActive = true
+    this._undismiss(paths)
+    const ok = await this._mutate('revert -k', ['revert', '-k'], paths)
+    if (ok) {
+      // `revert -k` dropped these from `opened`, but `_openedPaths` is only rebuilt
+      // by a full refresh. Clear the moved paths locally first so the incremental
+      // `refreshReconcilePaths` below doesn't filter them back out as still-opened.
+      this._forgetOpenedPaths(paths)
+      await this.refreshReconcilePaths(paths)
+    }
+    return ok
+  }
+
+  /** Drop paths from the opened-tracking maps without a full refresh, so an
+   *  incremental reconcile rescan sees them as no longer opened. */
+  private _forgetOpenedPaths(paths: readonly string[]): void {
+    if (paths.length === 0) return
+    const keys = new Set(paths.map(norm))
+    this._openedPaths = new Set([...this._openedPaths].filter((p) => !keys.has(p)))
+    this._changelistByPath = new Map([...this._changelistByPath].filter(([p]) => !keys.has(p)))
+  }
+
+  /**
+   * Discard working-tree changes for not-yet-opened (reconcile) files
+   * (`p4 clean -a -e -d`): re-adds files deleted on disk, deletes files added on
+   * disk, and reverts edited-on-disk content back to the have revision. Destructive
+   * (local edits are lost) — the command layer confirms first.
+   *
+   * Only the affected paths are re-scanned afterwards (they come back clean and
+   * drop out of the group) — no full-tree walk. A directory target (`<dir>/...`)
+   * is expanded to the concrete listed files under it for the rescan.
+   */
+  async revertReconcile(paths: readonly string[]): Promise<boolean> {
+    if (paths.length === 0) return false
+    this._reconcileActive = true
+    const affected = this._concreteReconcilePaths(paths)
+    const ok = await this._mutate('clean', ['clean', '-a', '-e', '-d'], paths)
+    if (ok && affected.length > 0) await this.refreshReconcilePaths(affected)
+    return ok
+  }
+
+  /**
+   * Permanently dismiss ("move out of") reconcile entries: add their normalized
+   * local paths to the dismissed set so they never reappear in the group (even
+   * after a Clean Refresh) until collected or cleared. Targets may be concrete
+   * files, folder rows, or the whole group — directories are expanded to the
+   * currently-listed files under them ({@link expandDismissPaths}). Persists and
+   * re-renders without any p4 round-trip.
+   */
+  dismissReconcile(paths: readonly string[]): void {
+    const keys = expandDismissPaths(
+      paths.map((p) => p.replace(/[/\\]\.\.\.$/, '')),
+      this._reconcileFiles,
+    )
+    if (keys.length === 0) return
+    for (const k of keys) this._dismissed.add(k)
+    // Re-render from the current list; _setReconcileFiles filters + persists.
+    this._setReconcileFiles(this._reconcileFiles)
+    this._emitChange()
+  }
+
+  /** Clear all dismissals (the "unignore everything" escape hatch) and run a full
+   *  reconcile scan so any still-diverged files that were dismissed reappear. */
+  async clearDismissed(): Promise<void> {
+    if (this._dismissed.size === 0) return
+    this._dismissed.clear()
+    this._persistReconcile()
+    await this.refresh({ reconcile: true })
+  }
+
+  /** Remove the given paths from the dismissed set (they're being re-included,
+   *  e.g. explicitly collected or moved out again). Persists if anything changed. */
+  private _undismiss(paths: readonly string[]): void {
+    let changed = false
+    for (const p of paths) if (this._dismissed.delete(norm(p))) changed = true
+    if (changed) this._persistReconcile()
+  }
+
+  /** Expand reconcile targets (concrete files or `<dir>/...` / directory paths)
+   *  into the concrete listed reconcile-file paths they cover, for an incremental
+   *  rescan. Strips the p4 `/...` recursion suffix before prefix-matching. */
+  private _concreteReconcilePaths(targets: readonly string[]): string[] {
+    return expandDismissPaths(
+      targets.map((p) => p.replace(/[/\\]\.\.\.$/, '')),
+      this._reconcileFiles,
+    )
   }
 
   /**

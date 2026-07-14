@@ -14,16 +14,21 @@ import { basename } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { ConcurrencyGate } from './concurrency.js'
 import { type P4Connection } from './p4Service.js'
-import { PerforceClient, type P4CacheOptions } from './client.js'
+import {
+  PerforceClient,
+  type P4CacheOptions,
+  type ReconcileStore,
+  type ReconcilePersistState,
+} from './client.js'
 import { P4CacheDisk } from './p4CacheDisk.js'
 import { ClientManager } from './clientManager.js'
 import { P4StatusBarController } from './p4StatusBar.js'
 import { AutoEditController } from './autoEdit.js'
 import { WorkspaceWatchController } from './workspaceWatcher.js'
 import { notifyP4Failure, setP4OutputShower, isMissingCli } from './p4Error.js'
-import { changelistIdFromGroupId } from './changelist.js'
+import { changelistIdFromGroupId, RECONCILE_GROUP_ID, type P4Action } from './changelist.js'
 import { statusFromAction, fileDiffRevs, displayPath } from './p4GraphParser.js'
-import { uriToFsPath } from './pathUtil.js'
+import { uriToFsPath, norm } from './pathUtil.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
 import { createSwarmLogger } from './swarm/swarmLog.js'
 import { localize } from './nls.js'
@@ -85,6 +90,22 @@ async function readFallbackConnection(): Promise<P4Connection> {
   }
 }
 
+/** Build a per-client {@link ReconcileStore} backed by the extension's
+ *  `workspaceState` Memento (persisted per workspace by the host). Keyed by the
+ *  normalized client root so multiple clients in one workspace don't clobber each
+ *  other's reconcile snapshot. */
+function createReconcileStore(context: ExtensionContext, root: string): ReconcileStore {
+  const key = `perforce.reconcile.${norm(root)}`
+  return {
+    load(): ReconcilePersistState {
+      return context.workspaceState.get<ReconcilePersistState>(key, { files: [], dismissed: [] })
+    },
+    save(state: ReconcilePersistState): void {
+      void context.workspaceState.update(key, state)
+    },
+  }
+}
+
 export async function activate(context: ExtensionContext): Promise<void> {
   const root = workspace.rootPath
   if (!root) {
@@ -128,7 +149,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // outside any Perforce workspace disables the provider without crashing.
   let client: PerforceClient | undefined
   try {
-    client = await PerforceClient.create(root, fallback, gate, cacheOptions, log)
+    client = await PerforceClient.create(
+      root,
+      fallback,
+      gate,
+      cacheOptions,
+      log,
+      createReconcileStore(context, root),
+    )
   } catch (err) {
     if (isMissingCli(err)) {
       console.error('[perforce] p4 CLI not found; perforce source control disabled')
@@ -149,6 +177,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const statusBar = new P4StatusBarController(mgr)
   context.subscriptions.push(statusBar)
   statusBar.refresh()
+  // Restore the persisted "changes to reconcile" snapshot (+ dismissed set) so it
+  // shows immediately on reload. This turns reconcile discovery on (sticky) but
+  // does NOT trigger a full `reconcile -n` walk — the first refresh below just
+  // re-filters the restored list against fresh `opened`, keeping startup cheap on
+  // large depots. Use Clean Refresh for an authoritative rescan.
+  client.restoreReconcile()
   void client.refresh()
 
   // Low-frequency background polling (opt-in; server has no FS watcher).
@@ -186,6 +220,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
   context.subscriptions.push(swarmOut)
   const swarmLogger = createSwarmLogger((line) => swarmOut.appendLine(line))
   context.subscriptions.push(registerSwarmCommands(mgr, swarmLogger, cacheEnabled))
+
+  // When Swarm is enabled + configured, the commit bar defaults to "Request New
+  // Swarm Review…" (P4V parity). Read the same config the swarm handlers use.
+  const swarmEnabled = await cfg.get('swarm.enabled', true)
+  const swarmUrl = ((await cfg.get('swarm.url', '')) as string).trim()
+  client.setSwarmAvailable(Boolean(swarmEnabled) && swarmUrl.length > 0)
+  void client.refresh()
 
   context.subscriptions.push(
     // Point argument-less commands at the SCM-selected client. Pushed by the
@@ -261,6 +302,23 @@ export async function activate(context: ExtensionContext): Promise<void> {
         (await commands.executeCommand<string | undefined>('_workbench.getActiveEditorFile'))
       if (!path) return
       await mgr.resolveClient({ resourceUri: path })?.openChange(path)
+    }),
+
+    // Open a diff for a shelved file (no local copy exists): shelved content vs
+    // its base revision. The row carries `{ changelist, depotFile, rev, action }`
+    // as the command argument (there's no local path to resolve a client from, so
+    // route via the active client).
+    commands.registerCommand('perforce.openShelvedFile', async (...args: unknown[]) => {
+      const req = args[0] as
+        | { changelist?: string; depotFile?: string; rev?: string; action?: string }
+        | undefined
+      if (!req?.changelist || !req.depotFile) return
+      await mgr.active?.openShelvedFile(
+        req.changelist,
+        req.depotFile,
+        req.rev,
+        (req.action ?? 'edit') as P4Action,
+      )
     }),
 
     // Dirty-diff baseline: the file's have-revision content (host addresses this
@@ -362,6 +420,113 @@ export async function activate(context: ExtensionContext): Promise<void> {
       await target.revertChangelist(changelist)
     }),
 
+    // Delete an empty numbered changelist (P4V parity). Blocked when it still has
+    // open files; any shelf is removed first inside `deleteChangelist`.
+    commands.registerCommand('perforce.deleteChangelist', async (arg) => {
+      const target = mgr.resolveClient(arg) ?? mgr.active
+      const changelist = groupChangelistId(arg)
+      if (!target || !changelist || changelist === 'default') return
+      if (target.hasOpenFiles(changelist)) {
+        await window.showWarningMessage(
+          localize(
+            'perforce.deleteChangelist.notEmpty',
+            'Changelist #{0} still has open files. Move or revert them before deleting it.',
+            { 0: changelist },
+          ),
+        )
+        return
+      }
+      const BTN_DELETE = localize('perforce.btn.deleteChangelist', 'Delete Changelist')
+      const confirm = await window.showWarningMessage(
+        localize(
+          'perforce.deleteChangelist.confirm',
+          'Delete changelist #{0}? Any shelved files it holds will also be deleted.',
+          { 0: changelist },
+        ),
+        BTN_DELETE,
+      )
+      if (confirm !== BTN_DELETE) return
+      await target.deleteChangelist(changelist)
+    }),
+
+    // Move file(s) / folder / whole changelist out of their changelist without
+    // touching the working tree (`p4 revert -k`): they leave the changelist and
+    // reappear under "Changes to Reconcile". From a group header (moves the whole
+    // changelist), a folder subtree, or a file selection.
+    commands.registerCommand('perforce.moveToReconcile', async (...args: unknown[]) => {
+      const arg = args[0]
+      const groupId = groupChangelistId(arg)
+      const target =
+        mgr.resolveClient(arg) ??
+        (resourcePath(arg) ? mgr.resolveClient({ resourceUri: resourcePath(arg)! }) : undefined) ??
+        mgr.active
+      if (!target) return
+      const paths =
+        groupId && !resourcePath(arg)
+          ? target.pathsInChangelist(groupId)
+          : await resolveTargetPaths(args)
+      if (paths.length === 0) return
+      await target.moveToReconcile(paths)
+    }),
+
+    // Discard working-tree changes for not-yet-opened (reconcile) files
+    // (`p4 clean`). Destructive — confirm first. A directory target recurses via
+    // p4's `<dir>/...` syntax.
+    commands.registerCommand('perforce.revertReconcile', async (...args: unknown[]) => {
+      const paths = await resolveTargetPaths(args)
+      if (paths.length === 0) return
+      const arg0 = args[0] as { isDirectory?: boolean } | undefined
+      const target = mgr.resolveClient({ resourceUri: paths[0]! }) ?? mgr.active
+      if (!target) return
+      const BTN_REVERT = localize('perforce.btn.revert', 'Revert')
+      const message =
+        paths.length === 1
+          ? localize(
+              'perforce.revertReconcile.confirm',
+              "Discard working-tree changes for '{0}'? This cannot be undone.",
+              { 0: paths[0]! },
+            )
+          : localize(
+              'perforce.revertReconcile.confirmMany',
+              'Discard working-tree changes for {0} files? This cannot be undone.',
+              { 0: String(paths.length) },
+            )
+      const confirm = await window.showWarningMessage(message, BTN_REVERT)
+      if (confirm !== BTN_REVERT) return
+      const targets =
+        arg0?.isDirectory === true && paths.length === 1
+          ? [`${paths[0]!.replace(/[/\\]+$/, '')}/...`]
+          : paths
+      await target.revertReconcile(targets)
+    }),
+
+    // Permanently remove file(s) / a folder subtree / the whole group from the
+    // "changes to reconcile" list (dismiss). Non-destructive: the working tree is
+    // untouched; the entries are just hidden and won't reappear (even after a
+    // Clean Refresh) until collected or dismissals are cleared. From the group
+    // header this sweeps every listed reconcile file (root as a directory target).
+    commands.registerCommand('perforce.dismissReconcile', async (...args: unknown[]) => {
+      const arg = args[0]
+      const isGroup = (arg as { scmResourceGroupId?: string } | undefined)?.scmResourceGroupId
+      const target =
+        mgr.resolveClient(arg) ??
+        (resourcePath(arg) ? mgr.resolveClient({ resourceUri: resourcePath(arg)! }) : undefined) ??
+        mgr.active
+      if (!target) return
+      // Group header (no concrete resource) → sweep the whole list via the root.
+      const paths =
+        isGroup && !resourcePath(arg) ? [`${target.root}/...`] : await resolveTargetPaths(args)
+      if (paths.length === 0) return
+      target.dismissReconcile(paths)
+    }),
+
+    // Clear all dismissals (unignore everything) and rescan so still-diverged
+    // files that were dismissed reappear in the group.
+    commands.registerCommand('perforce.clearDismissed', async (arg) => {
+      const target = mgr.resolveClient(arg) ?? mgr.active
+      await target?.clearDismissed()
+    }),
+
     // Submit the default changelist using the SCM input-box description.
     commands.registerCommand('perforce.submitDefault', async (arg) => {
       const target = mgr.resolveClient(arg) ?? mgr.active
@@ -437,22 +602,45 @@ export async function activate(context: ExtensionContext): Promise<void> {
       await target.reopen(choice.id, paths)
     }),
 
-    // Drag-and-drop target: move dropped files directly into the changelist whose
-    // group header they were dropped on — no quick-pick. Registered at runtime (not
-    // in package.json's `commands`) so the SCM host can probe it via
-    // CommandsRegistry to decide a group accepts drops, without a menu declaration
-    // shadowing this handler. args: (groupArg with scmResourceGroupId, selection).
+    // Drag-and-drop target: move dropped files directly into the group they were
+    // dropped on — no quick-pick. Bidirectional between changelists and the
+    // "changes to reconcile" group:
+    //  - onto a changelist (default / numbered): already-opened files are moved
+    //    with `reopen -c`; not-yet-opened reconcile files are collected straight
+    //    into it with `reconcile -a -e -d -c`.
+    //  - onto the reconcile group: opened files are moved out with `revert -k`
+    //    (reconcile rows dropped there are already uncollected — a no-op).
+    // Registered at runtime (not in package.json's `commands`) so the SCM host can
+    // probe it via CommandsRegistry to decide a group accepts drops, without a menu
+    // declaration shadowing this handler. args: (groupArg with scmResourceGroupId,
+    // selection).
     commands.registerCommand('perforce.reopenTo', async (...args: unknown[]) => {
-      const changelist = groupChangelistId(args[0])
-      // Only the default or a numbered pending changelist is a valid reopen target
-      // — not the reconcile group or a shelved-files group.
-      if (changelist === undefined || (changelist !== 'default' && !/^\d+$/.test(changelist)))
-        return
+      const groupId = (args[0] as { scmResourceGroupId?: string } | undefined)?.scmResourceGroupId
       const paths = selectionPaths(args[1])
-      if (paths.length === 0) return
+      if (groupId === undefined || paths.length === 0) return
       const target = mgr.resolveClient(args[0]) ?? mgr.resolveClient({ resourceUri: paths[0]! })
       if (!target) return
-      await target.reopen(changelist, paths)
+
+      // Dropped onto the reconcile group → move the opened ones out (`revert -k`);
+      // paths already uncollected are skipped (nothing to move out).
+      if (groupId === RECONCILE_GROUP_ID) {
+        const opened = paths.filter((p) => target.changelistOf(p) !== undefined)
+        if (opened.length > 0) await target.moveToReconcile(opened)
+        return
+      }
+
+      // Otherwise a changelist target: only the default or a numbered pending
+      // changelist is valid. A shelved-files group id also survives
+      // `changelistIdFromGroupId` as a bare number, so reject it by raw id first.
+      if (groupId.startsWith('shelved:')) return
+      const changelist = changelistIdFromGroupId(groupId)
+      if (changelist !== 'default' && !/^\d+$/.test(changelist)) return
+      // Split by open state: opened files are reopened into the target; not-yet-
+      // opened reconcile files are collected straight into it.
+      const opened = paths.filter((p) => target.changelistOf(p) !== undefined)
+      const uncollected = paths.filter((p) => target.changelistOf(p) === undefined)
+      if (uncollected.length > 0) await target.reconcileInto(changelist, uncollected)
+      if (opened.length > 0) await target.reopen(changelist, opened)
     }),
 
     // One-step "group these edits into a new changelist": from a changelist group

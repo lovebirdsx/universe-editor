@@ -76,6 +76,8 @@
 - 在 Perforce 源代码管理侧栏，changelist 组头右键 / 行内动作里选 **「发起新的 Swarm 审核…」**；
 - 或命令面板运行 **"Perforce: Request New Swarm Review…"**。
 
+> **提交按钮默认发起审核**：Swarm 开启且配置了 URL 时，默认 changelist 输入框旁按钮的默认动作会变为 **「发起新的 Swarm 审核…」**（下拉里仍可切回直接提交）。这样"先审核后提交"成为默认路径。详见[日常操作 · 提交](./daily-workflow.md#提交)。
+
 流程会依次：
 
 1. 若是 default changelist，先移到一个 numbered changelist（Swarm 需要编号 CL）；

@@ -476,6 +476,25 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       }
       return out
     },
+    // Group ids whose resource list contains a file whose path ends with `suffix`
+    // (case-insensitive, separator-agnostic). Lets specs assert which changelist /
+    // reconcile group a file landed in after a drag-and-drop move.
+    getScmGroupIdsForResource: (suffix: string): readonly string[] => {
+      // SCM-domain suffix match: normalize separators + case just to compare a
+      // resource path tail against `suffix` (mirrors ScmView's pathKey). Not a
+      // persisted identity key, so the base path util is unnecessary here.
+      // eslint-disable-next-line no-restricted-syntax -- SCM-domain suffix compare only
+      const normalize = (p: string): string => p.replace(/\\/g, '/').toLowerCase()
+      const needle = normalize(suffix)
+      const out: string[] = []
+      for (const sc of services.scmService.sourceControls.get()) {
+        for (const g of sc.groups.get()) {
+          const hit = g.resources.get().some((r) => normalize(r.resourceUri).endsWith(needle))
+          if (hit) out.push(g.id)
+        }
+      }
+      return out
+    },
     installVsixExtension: async (vsixPath: string): Promise<string> => {
       const local = await services.extensionManagementService.installVSIX(vsixPath)
       return local.identifier

@@ -14,10 +14,12 @@ function group(
   id: string,
   handle: number,
   resources: Array<{ resourceUri: string; contextValue?: string }>,
+  parentId?: string,
 ): IScmGroupModel {
   return {
     id,
     handle,
+    parentId,
     label: { get: () => id },
     hideWhenEmpty: { get: () => false },
     resources: { get: () => resources },
@@ -88,6 +90,46 @@ describe('ScmView — compact folders (tree mode)', () => {
     expect(top.map((f) => f.name)).toEqual(['a'])
     const sub = folders(snap.childrenMap, top[0]!.id)
     expect(sub.map((f) => f.name).sort()).toEqual(['b', 'd'])
+  })
+})
+
+describe('ScmView — nested groups (parentId)', () => {
+  it('nests a child group under its parent group node instead of at top level', () => {
+    const snap = buildSnapshot(
+      [
+        group('cl:5', 1, [{ resourceUri: `${ROOT}/a.txt`, contextValue: 'E' }]),
+        group('shelved:5', 2, [{ resourceUri: '//depot/a.txt', contextValue: 'S' }], 'cl:5'),
+      ],
+      ROOT,
+      'list',
+    )
+
+    // Only the parent changelist is a top-level group; the shelved group is nested.
+    const topGroups = snap.roots.filter((n) => n.kind === 'group')
+    expect(topGroups.map((n) => n.id)).toEqual(['group:cl:5'])
+
+    // The shelved group node hangs under the changelist group, after its files.
+    const clChildren = snap.childrenMap.get('group:cl:5') ?? []
+    const nestedGroup = clChildren.find((n) => n.kind === 'group')
+    expect(nestedGroup?.id).toBe('group:shelved:5')
+    // Its parent is recorded so keyboard navigation / reveal works.
+    expect(snap.parentMap.get('group:shelved:5')?.id).toBe('group:cl:5')
+    // The shelved file hangs under the nested group.
+    const shelvedFiles = (snap.childrenMap.get('group:shelved:5') ?? []).filter(
+      (n) => n.kind === 'file',
+    )
+    expect(shelvedFiles).toHaveLength(1)
+  })
+
+  it('falls back to top level when the parent group is absent', () => {
+    const snap = buildSnapshot(
+      [group('shelved:9', 1, [{ resourceUri: '//depot/x.txt', contextValue: 'S' }], 'cl:9')],
+      ROOT,
+      'list',
+    )
+    expect(snap.roots.filter((n) => n.kind === 'group').map((n) => n.id)).toEqual([
+      'group:shelved:9',
+    ])
   })
 })
 

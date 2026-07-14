@@ -2,6 +2,7 @@ import {
   Archive,
   ArrowDown,
   ArrowDownToLine,
+  ArrowLeft,
   ArrowRight,
   ArrowUp,
   ArrowUpToLine,
@@ -72,6 +73,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   // Perforce SCM actions.
   archive: Archive,
   'arrow-right': ArrowRight,
+  'arrow-left': ArrowLeft,
   'new-file': FilePlus,
   export: FileOutput,
   edit: SquarePen,

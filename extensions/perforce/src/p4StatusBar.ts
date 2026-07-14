@@ -37,7 +37,17 @@ export class P4StatusBarController {
       this._item.hide()
       return
     }
-    const { clientName, connection, openedCount, reconcileCount } = client.status
+    const { clientName, connection, openedCount, reconcileCount, busy } = client.status
+    if (busy) {
+      // A long-running p4 operation is in flight — show a spinner + its label so
+      // the user sees the client isn't stalled (mirrors git's syncing indicator).
+      this._item.text = `$(server) ${clientName}: ${busy}…`
+      this._item.showProgress = 'spinning'
+      this._item.tooltip = busy
+      this._item.show()
+      return
+    }
+    this._item.showProgress = undefined
     if (connection === 'offline') {
       this._item.text = `$(server) ${clientName} (${localize('perforce.status.offline', 'offline')})`
     } else if (connection === 'not-logged-in') {

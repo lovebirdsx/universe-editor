@@ -12,6 +12,7 @@ import type {
   SourceControl,
   SourceControlInputBox,
   SourceControlResourceGroup,
+  SourceControlResourceGroupOptions,
   SourceControlResourceState,
 } from '@universe-editor/extension-api'
 import type {
@@ -87,6 +88,7 @@ class HostResourceGroup implements SourceControlResourceGroup {
     private readonly _handle: number,
     readonly id: string,
     label: string,
+    readonly parentId: string | undefined,
     private readonly _scm: IMainThreadScm,
     private readonly _onDispose: () => void,
   ) {
@@ -175,13 +177,18 @@ export class HostSourceControl implements SourceControl {
     this._updateFeatures()
   }
 
-  createResourceGroup(id: string, label: string): SourceControlResourceGroup {
+  createResourceGroup(
+    id: string,
+    label: string,
+    options?: SourceControlResourceGroupOptions,
+  ): SourceControlResourceGroup {
     const handle = this._allocateHandle()
-    const group = new HostResourceGroup(handle, id, label, this._scm, () => {
+    const parentId = options?.parentId
+    const group = new HostResourceGroup(handle, id, label, parentId, this._scm, () => {
       this._groups.delete(group)
     })
     this._groups.add(group)
-    void this._scm.$registerGroup(this._handle, handle, id, label)
+    void this._scm.$registerGroup(this._handle, handle, id, label, parentId)
     return group
   }
 

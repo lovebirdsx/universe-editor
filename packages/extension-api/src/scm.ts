@@ -41,9 +41,22 @@ export interface SourceControlResourceState {
   readonly contextValue?: string
 }
 
+/** Options for {@link SourceControl.createResourceGroup}. */
+export interface SourceControlResourceGroupOptions {
+  /**
+   * Id of another group this one nests under, so the view renders it as a child
+   * of that group instead of a top-level sibling (e.g. p4's shelved files under
+   * their owning changelist). The parent must be a group of the same provider;
+   * an unknown parent id falls back to top-level rendering.
+   */
+  readonly parentId?: string
+}
+
 /** A named bucket of resource states, e.g. "Staged Changes" / "Changes". */
 export interface SourceControlResourceGroup {
   readonly id: string
+  /** Id of the parent group this one nests under, when created with one. */
+  readonly parentId: string | undefined
   label: string
   hideWhenEmpty: boolean | undefined
   /** Assigning replaces the group's rows and re-renders the view. */
@@ -77,7 +90,11 @@ export interface SourceControl {
    * `acceptInputCommand`.
    */
   acceptInputActions: Command[] | undefined
-  createResourceGroup(id: string, label: string): SourceControlResourceGroup
+  createResourceGroup(
+    id: string,
+    label: string,
+    options?: SourceControlResourceGroupOptions,
+  ): SourceControlResourceGroup
   dispose(): void
 }
 

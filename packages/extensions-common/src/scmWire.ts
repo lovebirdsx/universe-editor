@@ -62,6 +62,7 @@ export interface IMainThreadScm {
     groupHandle: number,
     id: string,
     label: string,
+    parentId?: string,
   ): Promise<void>
   $updateGroup(groupHandle: number, features: ISourceControlGroupFeaturesDto): Promise<void>
   $updateGroupResourceStates(

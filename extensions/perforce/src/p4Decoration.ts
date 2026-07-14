@@ -81,9 +81,15 @@ export function toResourceStates(files: readonly OpenedFile[]): SourceControlRes
  * A shelved file row. Shelved files live only in the depot, so the row is
  * anchored to the depot path (no local file exists to open). The `S` context
  * value lets menu `when` clauses target shelved rows (e.g. unshelve / delete
- * shelved), and clicking is a no-op (there's no useful local diff).
+ * shelved). Clicking opens a diff of the shelved content against its base
+ * revision (`perforce.openShelvedFile`), carrying the owning changelist +
+ * depot path + base revision as command arguments so the handler can resolve
+ * the revisions without a local file to anchor to.
  */
-export function toShelvedResourceState(file: ShelvedFile): SourceControlResourceState {
+export function toShelvedResourceState(
+  file: ShelvedFile,
+  changelist: string,
+): SourceControlResourceState {
   const style = ACTION_STYLE[file.action]
   return {
     resourceUri: file.depotFile,
@@ -94,13 +100,19 @@ export function toShelvedResourceState(file: ShelvedFile): SourceControlResource
       faded: true,
       ...(style.strikeThrough ? { strikeThrough: true } : {}),
     },
+    command: {
+      command: 'perforce.openShelvedFile',
+      title: 'Open Shelved Changes',
+      arguments: [{ changelist, depotFile: file.depotFile, rev: file.rev, action: file.action }],
+    },
   }
 }
 
 export function toShelvedResourceStates(
   files: readonly ShelvedFile[],
+  changelist: string,
 ): SourceControlResourceState[] {
-  return files.map(toShelvedResourceState)
+  return files.map((f) => toShelvedResourceState(f, changelist))
 }
 
 /**

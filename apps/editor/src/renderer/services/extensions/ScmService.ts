@@ -29,6 +29,8 @@ import type {
 export interface IScmGroupModel {
   readonly handle: number
   readonly id: string
+  /** Id of the parent group this one nests under, when the provider set one. */
+  readonly parentId: string | undefined
   readonly label: IObservable<string>
   readonly hideWhenEmpty: IObservable<boolean>
   readonly resources: IObservable<readonly ISourceControlResourceStateDto[]>
@@ -145,6 +147,7 @@ class ScmGroupModel implements IScmGroupModel {
     readonly handle: number,
     readonly id: string,
     label: string,
+    readonly parentId: string | undefined,
   ) {
     this.label = observableValue<string>('scmGroupLabel', label)
   }
@@ -247,10 +250,11 @@ export class ScmService extends Disposable implements IScmService, IMainThreadSc
     groupHandle: number,
     id: string,
     label: string,
+    parentId?: string,
   ): Promise<void> {
     const sc = this._byHandle.get(sourceControlHandle)
     if (sc) {
-      const group = new ScmGroupModel(groupHandle, id, label)
+      const group = new ScmGroupModel(groupHandle, id, label, parentId)
       sc.groupOrder.push(group)
       sc.groups.set([...sc.groupOrder], undefined)
       this._groupsByHandle.set(groupHandle, { sc, group })

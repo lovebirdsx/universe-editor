@@ -172,6 +172,15 @@ function decorationStyle(resource: ISourceControlResourceStateDto): CSSPropertie
   }
 }
 
+/** Arguments to pass when running a resource row's click command. A provider can
+ *  attach explicit `command.arguments` (e.g. p4's shelved rows, which have no
+ *  local file so they carry the changelist + depot path instead); otherwise the
+ *  resource DTO itself is the argument (the common file-row case). */
+function commandArgs(resource: ISourceControlResourceStateDto): unknown[] {
+  const explicit = resource.command?.arguments
+  return explicit && explicit.length > 0 ? explicit : [resource]
+}
+
 // --- Tree model ------------------------------------------------------------
 
 interface FolderNode {
@@ -225,7 +234,9 @@ function buildFolderTree(
   return rootNode
 }
 
-/** Materialise the provider's groups into a flat-navigable tree snapshot. */
+/** Materialise the provider's groups into a flat-navigable tree snapshot. A group
+ *  with a `parentId` that matches another group renders nested under it (after the
+ *  parent's own files), e.g. p4's shelved files under their changelist. */
 export function buildSnapshot(
   groups: readonly IScmGroupModel[],
   rootUri: string | undefined,
@@ -235,6 +246,11 @@ export function buildSnapshot(
   const childrenMap = new Map<string, ScmNode[]>()
   const parentMap = new Map<string, ScmNode>()
   const collapsibleIds: string[] = []
+
+  // Group-id → the node + its direct-children array, so a child group can attach
+  // under its parent (rendered after the parent's own files). Nesting is a single
+  // level (p4's shelved-under-changelist); a child group's own children are files.
+  const groupNodeById = new Map<string, { node: ScmNode; children: ScmNode[] }>()
 
   for (const g of groups) {
     const resources = g.resources.get()
@@ -248,10 +264,17 @@ export function buildSnapshot(
       label: g.label.get(),
       count: resources.length,
     }
-    roots.push(groupNode)
+    const parentEntry = g.parentId ? groupNodeById.get(g.parentId) : undefined
+    if (parentEntry) {
+      parentEntry.children.push(groupNode)
+      parentMap.set(groupNodeId, parentEntry.node)
+    } else {
+      roots.push(groupNode)
+    }
     collapsibleIds.push(groupNodeId)
     const groupChildren: ScmNode[] = []
     childrenMap.set(groupNodeId, groupChildren)
+    groupNodeById.set(g.id, { node: groupNode, children: groupChildren })
 
     if (viewMode === 'tree') {
       const tree = buildFolderTree(resources, rootUri)
@@ -437,11 +460,14 @@ const ScmFileRow = memo(function ScmFileRow({
     )
   }
   const openChange = (): void => {
-    if (resource.command) void commandService.executeCommand(resource.command.command, resource)
+    if (resource.command)
+      void commandService.executeCommand(resource.command.command, ...commandArgs(resource))
   }
   const openChangePinned = (): void => {
     if (resource.command)
-      void commandService.executeCommand(resource.command.command, resource, { pinned: true })
+      void commandService.executeCommand(resource.command.command, ...commandArgs(resource), {
+        pinned: true,
+      })
   }
 
   const uri = useMemo(() => URI.file(resource.resourceUri), [resource.resourceUri])
@@ -1165,11 +1191,18 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
           if (n.kind !== 'file' || !n.resource.command) return
           if (opts.preview) {
             // Space previews the change without stealing focus from the list.
-            void commandService.executeCommand(n.resource.command.command, n.resource, {
-              preserveFocus: true,
-            })
+            void commandService.executeCommand(
+              n.resource.command.command,
+              ...commandArgs(n.resource),
+              {
+                preserveFocus: true,
+              },
+            )
           } else {
-            void commandService.executeCommand(n.resource.command.command, n.resource)
+            void commandService.executeCommand(
+              n.resource.command.command,
+              ...commandArgs(n.resource),
+            )
           }
         }}
       />

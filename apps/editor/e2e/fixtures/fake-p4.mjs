@@ -23,8 +23,8 @@
  *  in the extension host with no build step.
  *--------------------------------------------------------------------------------------------*/
 
-import { readFileSync, writeFileSync, readdirSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { readFileSync, writeFileSync, readdirSync, mkdirSync, rmSync } from 'node:fs'
+import { join, relative, sep, dirname } from 'node:path'
 
 const STATE_PATH = process.env.UNIVERSE_P4_FAKE_STATE
 if (!STATE_PATH) {
@@ -386,11 +386,13 @@ function main() {
         )
         return 0
       }
-      // Real reconcile: open each discovered target for its action.
+      // Real reconcile: open each discovered target for its action, into the
+      // changelist named by `-c` (default when absent).
+      const into = argAfter(rest, '-c') ?? 'default'
       for (const t of targets) {
         state.opened[t.depotFile] = {
           action: t.action,
-          change: 'default',
+          change: into,
           rev: t.rev ? Number(t.rev) : 1,
         }
       }
@@ -450,9 +452,58 @@ function main() {
       return 0
     }
 
+    case 'clean': {
+      // `clean -a -e -d <targets>`: discard working-tree drift for not-opened
+      // files — delete disk-adds, restore disk-deletes, revert disk-edits to the
+      // have revision. Mirrors real `p4 clean` on the reconcile candidates.
+      const discovered = computeReconcile(state)
+      const targets = targetsFromArgs(state, rest, discovered)
+      const records = []
+      for (const t of targets) {
+        const abs = clientOf(state, t.depotFile)
+        if (t.action === 'add') {
+          // Added on disk, not in depot → remove it.
+          try {
+            rmSync(abs)
+          } catch {
+            /* already gone */
+          }
+        } else {
+          // Edited or deleted on disk → rewrite have-revision content back.
+          const known = state.files[t.depotFile]
+          if (known) {
+            mkdirSync(dirname(abs), { recursive: true })
+            writeFileSync(abs, known.content)
+          }
+        }
+        records.push({ depotFile: t.depotFile, clientFile: t.clientFile, action: t.action })
+      }
+      saveState(state)
+      emit(records)
+      return 0
+    }
+
     case 'change': {
-      // `change -i` (create/update from a spec on stdin) or `change -o <id>` (emit a
-      // spec). Only the Description field is meaningful in the fake.
+      // `change -i` (create/update from a spec on stdin), `change -o <id>` (emit a
+      // spec), or `change -d <id>` (delete an empty pending changelist).
+      if (rest.includes('-d')) {
+        const clId = argAfter(rest, '-d')
+        if (clId && state.changelists[clId]) {
+          // Real p4 refuses if files are still open in it.
+          const hasOpen = Object.values(state.opened).some((o) => o.change === clId)
+          if (hasOpen) {
+            process.stderr.write(
+              `Change ${clId} has ${Object.keys(state.opened).length} open file(s) and can't be deleted.\n`,
+            )
+            return 1
+          }
+          delete state.changelists[clId]
+          delete state.shelved[clId]
+          saveState(state)
+          process.stdout.write(`Change ${clId} deleted.\n`)
+        }
+        return 0
+      }
       if (rest.includes('-o')) {
         const clId = rest.filter((a) => !a.startsWith('-'))[0]
         const desc = clId && state.changelists[clId] ? state.changelists[clId].description : ''
@@ -513,7 +564,21 @@ function main() {
       }
       state.shelved[clId] ??= {}
       for (const [depotFile, o] of Object.entries(state.opened)) {
-        if (o.change === clId) state.shelved[clId][depotFile] = { action: o.action, rev: o.rev }
+        if (o.change === clId) {
+          // Snapshot the current working-tree content so a shelved diff has real
+          // content (real p4 stores the shelved file revision server-side).
+          let content
+          try {
+            content = readFileSync(clientOf(state, depotFile), 'utf8')
+          } catch {
+            content = undefined
+          }
+          state.shelved[clId][depotFile] = {
+            action: o.action,
+            rev: o.rev,
+            ...(content !== undefined ? { content } : {}),
+          }
+        }
       }
       saveState(state)
       return 0
