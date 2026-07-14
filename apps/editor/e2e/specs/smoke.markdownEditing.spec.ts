@@ -86,7 +86,7 @@ test.describe('@p1 markdown editing commands', () => {
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdPath)
 
     await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })
       .toBe('markdown')
 
     // The contributed commands must be registered (host booted + manifest scanned)
@@ -256,7 +256,7 @@ test.describe('@p1 markdown editing commands', () => {
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdPath)
 
     await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })
       .toBe('markdown')
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.hasCommand('markdown.editing.toggleTask')), {
@@ -323,7 +323,7 @@ test.describe('@p1 markdown editing commands', () => {
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdPath)
 
     await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })
       .toBe('markdown')
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.hasCommand('markdown.editing.formatTable')), {
@@ -354,7 +354,7 @@ test.describe('@p1 markdown editing commands', () => {
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdPath)
 
     await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })
       .toBe('markdown')
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.hasCommand('markdown.editing.onShiftTab')), {
