@@ -17,6 +17,7 @@ import { BuiltInViewContainersContribution } from '../BuiltInViewContainersContr
 import { BuiltInViewsContribution } from '../BuiltInViewsContribution.js'
 import { ExtensionsViewContribution } from '../ExtensionsViewContribution.js'
 import { SwarmViewContribution } from '../SwarmViewContribution.js'
+import { SwarmConfigurationContribution } from '../SwarmConfigurationContribution.js'
 import { SettingsContribution } from '../SettingsContribution.js'
 import { ThemeContribution } from '../ThemeContribution.js'
 import { AiConfigurationContribution } from '../AiConfigurationContribution.js'
@@ -144,6 +145,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.settings',
   SettingsContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Swarm Reviews list filter settings (needs-action author set / approvable-only,
+// authored hide-approved). Registered near the Swarm view so its schema exists
+// before the view reads it.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.swarmConfiguration',
+  SwarmConfigurationContribution,
   WorkbenchPhase.BlockStartup,
 )
 

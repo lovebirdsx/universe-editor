@@ -6,7 +6,7 @@
  *  perforceGraphViewState (module-level singleton, matching the renderer registries).
  *--------------------------------------------------------------------------------------------*/
 
-import { observableValue, type IObservable } from '@universe-editor/platform'
+import { Emitter, observableValue, type Event, type IObservable } from '@universe-editor/platform'
 import type {
   SwarmDashboardResult,
   SwarmReviewDetailDto,
@@ -38,6 +38,33 @@ export const swarmReviewsViewState: SwarmReviewsViewState = {
 
 /** Per-review detail cache, keyed by review id, so reopening a review tab is instant. */
 export const swarmReviewDetailCache = new Map<string, SwarmReviewDetailDto>()
+
+/**
+ * Cross-component bus tying the review detail editor to the Swarm Reviews view.
+ * Module-level singleton Emitters (never disposed — see memory
+ * `strictmode-useref-emitter-dispose-dev-only`): they outlive any single mounted
+ * component, so the list can react to an action taken in a detail tab.
+ */
+const _onDidMutateReview = new Emitter<string>()
+const _onDidRequestRefresh = new Emitter<void>()
+
+export const swarmReviewEvents = {
+  /** Fired after a review's state changed in a detail tab (vote / transition /
+   *  update / obliterate). Carries the review id. */
+  onDidMutateReview: _onDidMutateReview.event as Event<string>,
+  /** Fired by the title-bar manual-refresh command. */
+  onDidRequestRefresh: _onDidRequestRefresh.event as Event<void>,
+}
+
+/** Signal that a review mutated so the list can re-fetch its dashboard. */
+export function notifyReviewMutated(reviewId: string): void {
+  _onDidMutateReview.fire(reviewId)
+}
+
+/** Signal a manual refresh request (from the view title bar). */
+export function requestSwarmReviewsRefresh(): void {
+  _onDidRequestRefresh.fire()
+}
 
 const _reviewFilesViewMode = observableValue<SwarmReviewFilesViewMode>(
   'swarm.reviewFiles.viewMode',

@@ -12,10 +12,12 @@ import {
   IEditorService,
   ILayoutService,
   IViewsService,
+  MenuId,
   PartId,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { SwarmReviewEditorInput } from '../services/editor/SwarmReviewEditorInput.js'
+import { requestSwarmReviewsRefresh } from '../services/swarm/swarmViewState.js'
 
 /** Focus (and reveal) the Swarm Reviews view container in the primary side bar. */
 function revealSwarmContainer(accessor: ServicesAccessor): void {
@@ -94,5 +96,35 @@ export class WorkbenchOpenSwarmReviewsAction extends Action2 {
 
   override async run(accessor: ServicesAccessor): Promise<void> {
     revealSwarmContainer(accessor)
+  }
+}
+
+/**
+ * Manual refresh for the Swarm Reviews list, shown as an icon in the view title
+ * bar. Fires the refresh bus the mounted view subscribes to (it owns the fetch +
+ * transitions cache), so this action stays free of any HTTP or service lookups.
+ */
+export class RefreshSwarmReviewsAction extends Action2 {
+  static readonly ID = 'swarm.refreshReviews'
+
+  constructor() {
+    super({
+      id: RefreshSwarmReviewsAction.ID,
+      title: 'Refresh Swarm Reviews',
+      category: 'Swarm',
+      icon: 'refresh',
+      menu: [
+        {
+          id: MenuId.ViewTitle,
+          when: 'view == workbench.view.swarm.reviews',
+          group: 'navigation',
+          order: 1,
+        },
+      ],
+    })
+  }
+
+  override run(): void {
+    requestSwarmReviewsRefresh()
   }
 }

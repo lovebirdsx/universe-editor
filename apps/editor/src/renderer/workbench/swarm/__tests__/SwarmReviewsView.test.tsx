@@ -6,6 +6,7 @@ import {
   IDialogService,
   IEditorService,
   IOpenerService,
+  IQuickInputService,
   InstantiationService,
   ServiceCollection,
 } from '@universe-editor/platform'
@@ -46,6 +47,7 @@ function createServices(executeCommand: ReturnType<typeof vi.fn>): Instantiation
     _serviceBrand: undefined,
     get: (key: string) =>
       key === 'perforce.swarm.url' ? 'https://swarm.example.test/' : undefined,
+    onDidChangeConfiguration: () => ({ dispose: () => {} }),
   } as never)
   services.set(IDialogService, {
     _serviceBrand: undefined,
@@ -58,6 +60,11 @@ function createServices(executeCommand: ReturnType<typeof vi.fn>): Instantiation
   services.set(IOpenerService, {
     _serviceBrand: undefined,
     open: vi.fn().mockResolvedValue(true),
+  } as never)
+  services.set(IQuickInputService, {
+    _serviceBrand: undefined,
+    pick: vi.fn().mockResolvedValue(undefined),
+    createQuickPick: vi.fn(),
   } as never)
   return new InstantiationService(services)
 }

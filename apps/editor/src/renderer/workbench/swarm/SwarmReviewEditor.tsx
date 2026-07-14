@@ -44,6 +44,7 @@ import { buildSwarmReviewUrl } from '../../services/swarm/swarmReviewUrl.js'
 import {
   swarmReviewDetailCache,
   swarmReviewFilesViewState,
+  notifyReviewMutated,
   type SwarmReviewFilesViewMode,
 } from '../../services/swarm/swarmViewState.js'
 import { SwarmReviewFiles } from './SwarmReviewFiles.js'
@@ -176,7 +177,10 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       if (selectedVersion !== null) req.version = selectedVersion
       void commands
         .executeCommand(SwarmCommands.vote, req)
-        .then(() => load(true))
+        .then(() => {
+          notifyReviewMutated(reviewId)
+          load(true)
+        })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setBusy(false))
     },
@@ -206,7 +210,10 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       if (commit) req.commit = true
       void commands
         .executeCommand(SwarmCommands.transition, req)
-        .then(() => load(true))
+        .then(() => {
+          notifyReviewMutated(reviewId)
+          load(true)
+        })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setBusy(false))
     },
@@ -221,6 +228,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       .executeCommand(SwarmCommands.updateReview, req)
       .then((ok) => {
         if (ok) {
+          notifyReviewMutated(reviewId)
           load(true)
           setFilesRefreshGeneration((value) => value + 1)
         }
@@ -248,6 +256,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       } satisfies SwarmObliterateReviewRequest)
       if (succeeded) {
         swarmReviewDetailCache.delete(reviewId)
+        notifyReviewMutated(reviewId)
         editorService.closeEditor(input.id)
       }
     } catch (e: unknown) {

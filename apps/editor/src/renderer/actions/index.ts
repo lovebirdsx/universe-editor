@@ -210,6 +210,7 @@ import {
   OpenSwarmReviewAction,
   WorkbenchOpenSwarmReviewAction,
   WorkbenchOpenSwarmReviewsAction,
+  RefreshSwarmReviewsAction,
 } from './swarmActions.js'
 import {
   ToggleBlameEditorDecorationAction,
@@ -533,6 +534,7 @@ registerAction2(OpenSwarmReviewsAction)
 registerAction2(OpenSwarmReviewAction)
 registerAction2(WorkbenchOpenSwarmReviewAction)
 registerAction2(WorkbenchOpenSwarmReviewsAction)
+registerAction2(RefreshSwarmReviewsAction)
 
 // Git Blame
 registerAction2(ToggleBlameEditorDecorationAction)

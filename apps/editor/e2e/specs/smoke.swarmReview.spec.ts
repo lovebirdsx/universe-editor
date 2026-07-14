@@ -21,7 +21,10 @@ test.describe('@p1 swarm reviews', () => {
     await expect(view).toBeVisible()
     await swarm.waitForRequest((r) => r.method === 'GET' && r.path === 'reviews')
 
-    await view.locator('[data-testid="swarm-review-row"]', { hasText: '#1001' }).first().click()
+    await view
+      .locator('[data-testid="swarm-review-row"]', { hasText: 'Add greeting' })
+      .first()
+      .click()
     const review = page.locator('[data-testid="swarm-review-editor"]')
     await expect(review.getByText('a.ts')).toBeVisible()
     await review.getByText('a.ts').click()
@@ -97,7 +100,7 @@ test.describe('@p1 swarm reviews', () => {
     // The seeded review #1001 needs the e2e user's action → a row shows.
     const row = page.locator('[data-testid="swarm-review-row"]').first()
     await expect(row).toBeVisible()
-    await expect(row.getByText('#1001')).toBeVisible()
+    await expect(row.getByText('Add greeting')).toBeVisible()
 
     // Open its detail tab.
     await row.click()
@@ -143,7 +146,9 @@ test.describe('@p1 swarm reviews', () => {
     await page.locator('[data-testid="activitybar-item-workbench.view.swarm"]').click()
     const view = page.locator('[data-testid="swarm-reviews-view"]')
     await swarm.waitForRequest((request) => request.method === 'GET' && request.path === 'reviews')
-    const row = view.locator('[data-testid="swarm-review-row"]', { hasText: '#1001' }).first()
+    const row = view
+      .locator('[data-testid="swarm-review-row"]', { hasText: 'Add greeting' })
+      .first()
     await expect(row).toBeVisible()
     await swarm.waitForRequest(
       (request) => request.method === 'GET' && request.path === 'reviews/1001/transitions',
@@ -182,7 +187,10 @@ test.describe('@p1 swarm reviews', () => {
     await swarm.waitForRequest((r) => r.method === 'GET' && r.path === 'reviews')
 
     // Open review #1001 (author alice) and confirm its header rendered.
-    await view.locator('[data-testid="swarm-review-row"]', { hasText: '#1001' }).first().click()
+    await view
+      .locator('[data-testid="swarm-review-row"]', { hasText: 'Add greeting' })
+      .first()
+      .click()
     const editor = page.locator('[data-testid="swarm-review-editor"]')
     await expect(editor).toBeVisible()
     await expect(editor.getByText('Review #1001')).toBeVisible()
@@ -191,7 +199,10 @@ test.describe('@p1 swarm reviews', () => {
     // Switch to review #1002 (author bob). The header, author and description must
     // all reflect #1002 — a stale-state bug would leave everything but the comments
     // panel showing #1001.
-    await view.locator('[data-testid="swarm-review-row"]', { hasText: '#1002' }).first().click()
+    await view
+      .locator('[data-testid="swarm-review-row"]', { hasText: 'Fix farewell' })
+      .first()
+      .click()
     const editor1002 = page.locator('[data-testid="swarm-review-editor"]')
     await expect(editor1002.getByText('Review #1002')).toBeVisible()
     await expect(editor1002.getByText('bob')).toBeVisible()
@@ -209,7 +220,10 @@ test.describe('@p1 swarm reviews', () => {
     await expect(view).toBeVisible()
     await swarm.waitForRequest((r) => r.method === 'GET' && r.path === 'reviews')
 
-    await view.locator('[data-testid="swarm-review-row"]', { hasText: '#1001' }).first().click()
+    await view
+      .locator('[data-testid="swarm-review-row"]', { hasText: 'Add greeting' })
+      .first()
+      .click()
     let editor = page.locator('[data-testid="swarm-review-editor"]')
     await expect(editor.getByText('Review #1001')).toBeVisible()
     await expect(editor.getByText('a.ts')).toBeVisible()
@@ -237,5 +251,25 @@ test.describe('@p1 swarm reviews', () => {
     await expect
       .poll(() => swarm.requests().filter((r) => r.path === 'reviews/1001').length)
       .toBeGreaterThan(requestsBeforeRestart)
+  })
+
+  test('manual refresh in the view title bar re-fetches the dashboard', async ({ page, swarm }) => {
+    await page.locator('[data-testid="activitybar-item-workbench.view.swarm"]').click()
+    const view = page.locator('[data-testid="swarm-reviews-view"]')
+    await expect(view).toBeVisible()
+    await swarm.waitForRequest((r) => r.method === 'GET' && r.path === 'reviews')
+
+    // Rows show the description, not the leading #id.
+    const row = view
+      .locator('[data-testid="swarm-review-row"]', { hasText: 'Add greeting' })
+      .first()
+    await expect(row).toBeVisible()
+    await expect(view.getByText('#1001')).toHaveCount(0)
+
+    const listRequestsBefore = swarm.requests().filter((r) => r.path === 'reviews').length
+    await page.locator('[data-testid="view-title-action-swarm.refreshReviews"]').click()
+    await expect
+      .poll(() => swarm.requests().filter((r) => r.path === 'reviews').length)
+      .toBeGreaterThan(listRequestsBefore)
   })
 })

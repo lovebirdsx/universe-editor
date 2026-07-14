@@ -13,6 +13,9 @@ import type { LucideIcon } from 'lucide-react'
 import {
   ChevronDown,
   ChevronRight,
+  Filter,
+  FilterX,
+  ListFilter,
   MessageSquare,
   ListChecks,
   Check,
@@ -29,9 +32,11 @@ import {
   IDialogService,
   IEditorService,
   IOpenerService,
+  IQuickInputService,
+  ConfigurationTarget,
   localize,
 } from '@universe-editor/platform'
-import { Input, Spinner, cx } from '@universe-editor/workbench-ui'
+import { IconButton, Input, Spinner, cx } from '@universe-editor/workbench-ui'
 import {
   SwarmCommands,
   type SwarmDashboardResult,
@@ -41,8 +46,16 @@ import {
 } from '@universe-editor/extensions-common'
 import { useService } from '../useService.js'
 import { SwarmReviewEditorInput } from '../../services/editor/SwarmReviewEditorInput.js'
-import { swarmReviewsViewState } from '../../services/swarm/swarmViewState.js'
+import { swarmReviewsViewState, swarmReviewEvents } from '../../services/swarm/swarmViewState.js'
 import { buildSwarmReviewUrl } from '../../services/swarm/swarmReviewUrl.js'
+import {
+  canApproveReview,
+  filterAuthored,
+  filterNeedsAction,
+  SwarmFilterConfigKeys,
+  type SwarmReviewFilterConfig,
+} from '../../services/swarm/swarmReviewFilter.js'
+import { configureNeedsActionFilter } from '../../services/swarm/swarmFilterPicker.js'
 import {
   SwarmReviewContextMenu,
   type SwarmReviewContextMenuState,
@@ -56,13 +69,7 @@ export function swarmReviewName(review: SwarmReviewDto): string {
   return review.description.trim() || `Review #${review.id}`
 }
 
-export function canApproveReview(transitions: readonly SwarmTransitionDto[] | undefined): boolean {
-  return (
-    transitions?.some(
-      (transition) => transition.state === 'approved' || transition.state === 'approved:commit',
-    ) ?? false
-  )
-}
+export { canApproveReview }
 
 function isDangerousTransition(state: string): boolean {
   return state.includes('commit') || state === 'rejected' || state === 'archived'
@@ -96,6 +103,17 @@ function relativeTime(timestamp: number): string {
 
 type GroupKey = 'needsAction' | 'authored'
 
+/** Snapshot the three persisted list-filter settings. */
+function readFilterConfig(configuration: IConfigurationService): SwarmReviewFilterConfig {
+  return {
+    needsActionAuthors: configuration.get<string[]>(SwarmFilterConfigKeys.needsActionAuthors) ?? [],
+    needsActionApprovableOnly:
+      configuration.get<boolean>(SwarmFilterConfigKeys.needsActionApprovableOnly) ?? false,
+    authoredHideApproved:
+      configuration.get<boolean>(SwarmFilterConfigKeys.authoredHideApproved) ?? true,
+  }
+}
+
 const GROUP_LABELS: Record<GroupKey, string> = {
   needsAction: localize('swarm.group.needsAction', 'Needs My Action'),
   authored: localize('swarm.group.authored', 'Authored by Me'),
@@ -109,6 +127,7 @@ export function SwarmReviewsView() {
   const dialog = useService(IDialogService)
   const editorService = useService(IEditorService)
   const opener = useService(IOpenerService)
+  const quickInput = useService(IQuickInputService)
 
   const [dashboard, setDashboard] = useState<SwarmDashboardResult | null>(
     swarmReviewsViewState.dashboard,
@@ -121,6 +140,9 @@ export function SwarmReviewsView() {
     authored: false,
   })
   const [transitions, setTransitions] = useState<Record<string, SwarmTransitionDto[]>>({})
+  const [filterConfig, setFilterConfig] = useState<SwarmReviewFilterConfig>(() =>
+    readFilterConfig(configuration),
+  )
   const [menu, setMenu] = useState<SwarmReviewContextMenuState | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const transitionsRef = useRef<Record<string, SwarmTransitionDto[]>>({})
@@ -142,17 +164,17 @@ export function SwarmReviewsView() {
   )
 
   const load = useCallback(
-    (attempt = 0) => {
+    (attempt = 0, force = false) => {
       setLoading(true)
       setError(null)
       void commands
-        .executeCommand<SwarmDashboardResult>(SwarmCommands.dashboard)
+        .executeCommand<SwarmDashboardResult>(SwarmCommands.dashboard, { force })
         .then((r) => {
           // `undefined` means the perforce extension host hasn't registered the
           // command yet (activation races the view's first mount). Retry with a
           // short backoff instead of caching an empty dashboard forever.
           if (r === undefined) {
-            if (attempt < 20) setTimeout(() => load(attempt + 1), 250)
+            if (attempt < 20) setTimeout(() => load(attempt + 1, force), 250)
             return
           }
           setDashboard(r)
@@ -172,6 +194,40 @@ export function SwarmReviewsView() {
     // host's activation (command returns undefined) retries until it resolves.
     load()
   }, [load])
+
+  // Drop the transitions cache and re-fetch, forcing the extension host to bypass
+  // its short-lived review-list cache. Used when a review mutated (in a detail
+  // tab) or the user hit manual refresh, so the list reflects fresh server state
+  // (and re-derives the approvable icons).
+  const reload = useCallback(() => {
+    transitionsRef.current = {}
+    setTransitions({})
+    load(0, true)
+  }, [load])
+
+  useEffect(() => {
+    const d1 = swarmReviewEvents.onDidMutateReview(() => reload())
+    const d2 = swarmReviewEvents.onDidRequestRefresh(() => reload())
+    return () => {
+      d1.dispose()
+      d2.dispose()
+    }
+  }, [reload])
+
+  // Keep the local filter snapshot in sync with settings.json edits (from the
+  // gear menu, the authored toggle, or a hand edit) so the list re-renders.
+  useEffect(() => {
+    const sub = configuration.onDidChangeConfiguration((e) => {
+      if (
+        e.affectsConfiguration(SwarmFilterConfigKeys.needsActionAuthors) ||
+        e.affectsConfiguration(SwarmFilterConfigKeys.needsActionApprovableOnly) ||
+        e.affectsConfiguration(SwarmFilterConfigKeys.authoredHideApproved)
+      ) {
+        setFilterConfig(readFilterConfig(configuration))
+      }
+    })
+    return () => sub.dispose()
+  }, [configuration])
 
   const onKeywordChange = useCallback(
     (value: string) => {
@@ -220,11 +276,9 @@ export function SwarmReviewsView() {
       const request: SwarmTransitionRequest = { reviewId: review.id, state: transition.state }
       if (transition.state.includes('commit')) request.commit = true
       await commands.executeCommand(SwarmCommands.transition, request)
-      transitionsRef.current = {}
-      setTransitions({})
-      load()
+      reload()
     },
-    [commands, dialog, load],
+    [commands, dialog, reload],
   )
 
   const obliterateReview = useCallback(
@@ -243,11 +297,9 @@ export function SwarmReviewsView() {
         reviewId: review.id,
       })
       if (!succeeded) return
-      transitionsRef.current = {}
-      setTransitions({})
-      load()
+      reload()
     },
-    [commands, dialog, load],
+    [commands, dialog, reload],
   )
 
   const createMenuItems = useCallback(
@@ -332,7 +384,7 @@ export function SwarmReviewsView() {
   )
 
   const kw = keyword.trim().toLowerCase()
-  const filterReviews = (reviews: SwarmReviewDto[]): SwarmReviewDto[] =>
+  const filterKeyword = (reviews: SwarmReviewDto[]): SwarmReviewDto[] =>
     kw
       ? reviews.filter(
           (r) =>
@@ -341,6 +393,29 @@ export function SwarmReviewsView() {
             r.author.toLowerCase().includes(kw),
         )
       : reviews
+
+  const groupedReviews: Record<GroupKey, SwarmReviewDto[]> = {
+    needsAction: dashboard
+      ? filterNeedsAction(filterKeyword(dashboard.needsAction), filterConfig, transitions)
+      : [],
+    authored: dashboard ? filterAuthored(filterKeyword(dashboard.authored), filterConfig) : [],
+  }
+
+  const toggleAuthoredHideApproved = useCallback(() => {
+    configuration.update(
+      SwarmFilterConfigKeys.authoredHideApproved,
+      !filterConfig.authoredHideApproved,
+      ConfigurationTarget.User,
+    )
+  }, [configuration, filterConfig.authoredHideApproved])
+
+  const openNeedsActionFilter = useCallback(() => {
+    const authors = dashboard ? [...new Set(dashboard.needsAction.map((r) => r.author))] : []
+    void configureNeedsActionFilter(quickInput, configuration, filterConfig, authors)
+  }, [configuration, dashboard, filterConfig, quickInput])
+
+  const needsActionFilterActive =
+    filterConfig.needsActionAuthors.length > 0 || filterConfig.needsActionApprovableOnly
 
   return (
     <div className={styles['container']} data-testid="swarm-reviews-view">
@@ -352,6 +427,30 @@ export function SwarmReviewsView() {
           placeholder={localize('swarm.filter.placeholder', 'Filter reviews…')}
         />
         {loading && <Spinner />}
+        <IconButton
+          active={needsActionFilterActive}
+          label={localize('swarm.filter.needsAction.tooltip', 'Filter "Needs My Action"')}
+          onClick={openNeedsActionFilter}
+          data-testid="swarm-needs-action-filter"
+        >
+          <ListFilter size={14} strokeWidth={1.75} />
+        </IconButton>
+        <IconButton
+          active={filterConfig.authoredHideApproved}
+          label={
+            filterConfig.authoredHideApproved
+              ? localize('swarm.filter.authored.showApproved', 'Show approved authored reviews')
+              : localize('swarm.filter.authored.hideApproved', 'Hide approved authored reviews')
+          }
+          onClick={toggleAuthoredHideApproved}
+          data-testid="swarm-authored-hide-approved"
+        >
+          {filterConfig.authoredHideApproved ? (
+            <FilterX size={14} strokeWidth={1.75} />
+          ) : (
+            <Filter size={14} strokeWidth={1.75} />
+          )}
+        </IconButton>
       </div>
       <div className={styles['scroll']}>
         {error && <div className={styles['error']}>{error}</div>}
@@ -361,21 +460,18 @@ export function SwarmReviewsView() {
           </div>
         )}
         {dashboard &&
-          GROUP_KEYS.map((key) => {
-            const reviews = filterReviews(dashboard[key])
-            return (
-              <ReviewGroup
-                key={key}
-                label={GROUP_LABELS[key]}
-                reviews={reviews}
-                collapsed={collapsed[key]}
-                onToggle={() => toggle(key)}
-                onOpen={openReview}
-                onContextMenu={openReviewMenu}
-                transitions={transitions}
-              />
-            )
-          })}
+          GROUP_KEYS.map((key) => (
+            <ReviewGroup
+              key={key}
+              label={GROUP_LABELS[key]}
+              reviews={groupedReviews[key]}
+              collapsed={collapsed[key]}
+              onToggle={() => toggle(key)}
+              onOpen={openReview}
+              onContextMenu={openReviewMenu}
+              transitions={transitions}
+            />
+          ))}
         {dashboard &&
           !loading &&
           dashboard.needsAction.length === 0 &&
@@ -459,7 +555,6 @@ function ReviewRow({
             <StateIcon size={13} />
           </span>
         )}
-        <span className={styles['reviewId']}>#{review.id}</span>
         <span className={styles['desc']} title={review.description}>
           {review.description || localize('swarm.noDescription', '(no description)')}
         </span>

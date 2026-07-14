@@ -269,8 +269,8 @@ export function registerSwarmCommands(
       }),
     ),
 
-    commands.registerCommand(Cmd.dashboard, () =>
-      guard('dashboard', (c) => c.dashboard(), {
+    commands.registerCommand(Cmd.dashboard, (arg: unknown) =>
+      guard('dashboard', (c) => c.dashboard((arg as { force?: boolean } | undefined)?.force), {
         needsAction: [],
         authored: [],
         participating: [],

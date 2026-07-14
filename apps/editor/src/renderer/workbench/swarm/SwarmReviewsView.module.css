@@ -72,12 +72,6 @@
   min-width: 0;
 }
 
-.reviewId {
-  font-variant-numeric: tabular-nums;
-  opacity: 0.7;
-  flex-shrink: 0;
-}
-
 .desc {
   flex: 1;
   overflow: hidden;
