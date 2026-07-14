@@ -60,7 +60,7 @@ export class UpdateMainService implements IUpdateService {
   private _disposed = false
   /** Shutdown-veto gate run before installing (running-session guard). Wired by
    *  the app entry once WindowMainService exists; absent → install proceeds. */
-  private _quitConfirmer: (() => Promise<boolean>) | undefined
+  private _quitConfirmer: ((requestingWindowId?: number) => Promise<boolean>) | undefined
 
   constructor(
     @IEnvironmentMainService private readonly _environment: IUpdateEnvironment,
@@ -102,7 +102,7 @@ export class UpdateMainService implements IUpdateService {
    * Register the shutdown-veto gate (running-session guard). quitAndInstall runs
    * it before spawning the installer so "cancel" actually aborts the update.
    */
-  setQuitConfirmer(confirm: () => Promise<boolean>): void {
+  setQuitConfirmer(confirm: (requestingWindowId?: number) => Promise<boolean>): void {
     this._quitConfirmer = confirm
   }
 
@@ -132,14 +132,14 @@ export class UpdateMainService implements IUpdateService {
     }
   }
 
-  async quitAndInstall(): Promise<void> {
+  async quitAndInstall(requestingWindowId?: number): Promise<void> {
     if (this._state.type !== 'downloaded') return
     // Run the same shutdown-veto chain a normal quit would (running-session
     // guard). electron-updater's quitAndInstall spawns the installer BEFORE it
     // calls app.quit(), so before-quit's veto can no longer stop it — the check
     // must happen here, or a cancelled prompt still installs the update.
     if (this._quitConfirmer) {
-      const ok = await this._quitConfirmer()
+      const ok = await this._quitConfirmer(requestingWindowId)
       if (!ok) {
         this._logger.info('quitAndInstall vetoed (running sessions)')
         return
@@ -285,5 +285,20 @@ export class UpdateMainService implements IUpdateService {
     if (state.type === 'idle' && (state.error !== undefined || state.notAvailable)) {
       this._state = { type: 'idle', currentVersion: this._currentVersion }
     }
+  }
+}
+
+/** Bind the application update singleton to the BrowserWindow serving one IPC channel. */
+export function createWindowScopedUpdateService(
+  update: UpdateMainService,
+  windowId: number,
+): IUpdateService {
+  return {
+    _serviceBrand: undefined,
+    onDidChangeState: update.onDidChangeState,
+    getState: () => update.getState(),
+    checkForUpdates: (explicit) => update.checkForUpdates(explicit),
+    downloadUpdate: () => update.downloadUpdate(),
+    quitAndInstall: () => update.quitAndInstall(windowId),
   }
 }

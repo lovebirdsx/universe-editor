@@ -24,7 +24,7 @@ import type {
   IExchangeRateService,
 } from '../../shared/ipc/services.js'
 import type { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
-import type { IUpdateService } from '../../shared/ipc/updateService.js'
+import type { UpdateMainService } from '../services/update/updateMainService.js'
 import type { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import type { IDocsService } from '../../shared/ipc/docsService.js'
 import type { IAcpHostService } from '../../shared/ipc/acpHostService.js'
@@ -64,7 +64,7 @@ export interface ApplicationServices {
   readonly codexBinary: ICodexBinaryService
   readonly codexConfig: ICodexConfigService
   readonly disposableLeak: IDisposableLeakService
-  readonly update: IUpdateService
+  readonly update: UpdateMainService
   readonly releaseNotes: IReleaseNotesService
   readonly docs: IDocsService
   readonly performance: IPerformanceMarksService

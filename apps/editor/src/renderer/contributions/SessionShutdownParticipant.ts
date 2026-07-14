@@ -25,14 +25,30 @@ export class SessionShutdownParticipant extends Disposable implements IWorkbench
   ) {
     super()
     this._register(
-      lifecycle.onBeforeShutdown((e) => e.veto(this._maybeVeto(e.reason), 'acp.runningSessions')),
+      lifecycle.onBeforeShutdown((e) =>
+        e.veto(
+          this._maybeVeto(
+            e.reason,
+            e.context?.runningSessionCount,
+            e.context?.skipRunningSessionPrompt === true,
+          ),
+          'acp.runningSessions',
+        ),
+      ),
     )
   }
 
   /** @returns true to veto (cancel the action), false to proceed. */
-  private async _maybeVeto(reason: ShutdownReason): Promise<boolean> {
-    const running = this._sessions.sessions.get().filter((s) => s.status.get() === 'running')
-    if (running.length === 0) return false
+  private async _maybeVeto(
+    reason: ShutdownReason,
+    aggregateRunningCount?: number,
+    skipPrompt = false,
+  ): Promise<boolean> {
+    if (skipPrompt) return false
+    const runningCount =
+      aggregateRunningCount ??
+      this._sessions.sessions.get().filter((s) => s.status.get() === 'running').length
+    if (runningCount === 0) return false
 
     // E2E runs headless: a modal confirm has no one to answer it and would hang
     // app.close() until SIGKILL, which orphans child processes (node-pty / ACP
@@ -47,7 +63,7 @@ export class SessionShutdownParticipant extends Disposable implements IWorkbench
       message: localize(
         'shutdown.runningSessions.message',
         '{count} 个会话正在运行，{action}将中断它们',
-        { count: running.length, action: actionLabel(reason) },
+        { count: runningCount, action: actionLabel(reason) },
       ),
       detail: localize('shutdown.runningSessions.detail', '是否继续？'),
       primaryButton: localize('shutdown.runningSessions.continue', '继续'),

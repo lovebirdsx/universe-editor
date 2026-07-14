@@ -35,9 +35,18 @@ export const enum ShutdownReason {
   SwitchWorkspace,
 }
 
+export interface ShutdownConfirmationContext {
+  /** Application-wide running-session count supplied by a quit coordinator. */
+  readonly runningSessionCount?: number
+  /** Another window already owns the application-wide running-session prompt. */
+  readonly skipRunningSessionPrompt?: boolean
+}
+
 export interface BeforeShutdownEvent {
   /** Why shutdown was initiated. */
   readonly reason: ShutdownReason
+  /** Optional coordination data for multi-window shutdown. */
+  readonly context?: ShutdownConfirmationContext
 
   /**
    * Call this to veto the shutdown.
@@ -78,14 +87,17 @@ export interface ILifecycleService extends IDisposable {
    * workspace) that need confirmation but are not a real shutdown.
    * @returns whether the shutdown was vetoed.
    */
-  confirmBeforeShutdown(reason: ShutdownReason): Promise<boolean>
+  confirmBeforeShutdown(
+    reason: ShutdownReason,
+    context?: ShutdownConfirmationContext,
+  ): Promise<boolean>
 
   /**
    * Initiates the shutdown sequence (fires onBeforeShutdown, then onWillShutdown).
    * Resolves when all async join() operations have completed (or timeout).
    * @returns whether the shutdown was vetoed (true → shutdown was cancelled).
    */
-  shutdown(reason: ShutdownReason): Promise<boolean>
+  shutdown(reason: ShutdownReason, context?: ShutdownConfirmationContext): Promise<boolean>
 }
 
 export const ILifecycleService = createDecorator<ILifecycleService>('lifecycleService')
@@ -160,10 +172,14 @@ export class LifecycleService extends Disposable implements ILifecycleService {
     return barrier.promise
   }
 
-  async confirmBeforeShutdown(reason: ShutdownReason): Promise<boolean> {
+  async confirmBeforeShutdown(
+    reason: ShutdownReason,
+    context?: ShutdownConfirmationContext,
+  ): Promise<boolean> {
     const vetos: { value: boolean | Promise<boolean>; reason: string }[] = []
     this._onBeforeShutdown.fire({
       reason,
+      ...(context ? { context } : {}),
       veto(value, reason) {
         vetos.push({ value, reason })
       },
@@ -188,9 +204,9 @@ export class LifecycleService extends Disposable implements ILifecycleService {
     return false
   }
 
-  async shutdown(reason: ShutdownReason): Promise<boolean> {
+  async shutdown(reason: ShutdownReason, context?: ShutdownConfirmationContext): Promise<boolean> {
     // --- Before shutdown (veto phase) ---
-    const vetoed = await this.confirmBeforeShutdown(reason)
+    const vetoed = await this.confirmBeforeShutdown(reason, context)
     if (vetoed) {
       return true
     }

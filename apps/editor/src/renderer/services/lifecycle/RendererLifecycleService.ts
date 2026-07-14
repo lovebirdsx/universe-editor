@@ -5,7 +5,11 @@
  *  the lifecycle veto chain and report whether the action may proceed.
  *--------------------------------------------------------------------------------------------*/
 
-import { type ILifecycleService, type ShutdownReason } from '@universe-editor/platform'
+import {
+  type ILifecycleService,
+  type ShutdownConfirmationContext,
+  type ShutdownReason,
+} from '@universe-editor/platform'
 import type { IRendererLifecycleService } from '../../../shared/ipc/lifecycleService.js'
 
 export class RendererLifecycleService implements IRendererLifecycleService {
@@ -13,8 +17,11 @@ export class RendererLifecycleService implements IRendererLifecycleService {
 
   constructor(private readonly _lifecycle: ILifecycleService) {}
 
-  async confirmShutdown(reason: ShutdownReason): Promise<boolean> {
-    const vetoed = await this._lifecycle.confirmBeforeShutdown(reason)
+  async confirmShutdown(
+    reason: ShutdownReason,
+    context?: ShutdownConfirmationContext,
+  ): Promise<boolean> {
+    const vetoed = await this._lifecycle.confirmBeforeShutdown(reason, context)
     return !vetoed
   }
 }

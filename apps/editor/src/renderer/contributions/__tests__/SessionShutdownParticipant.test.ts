@@ -72,4 +72,41 @@ describe('SessionShutdownParticipant', () => {
     expect(vetoed).toBe(true)
     expect(dialog.confirm).toHaveBeenCalledTimes(1)
   })
+
+  it('prompts with the aggregate count when another window owns the running session', async () => {
+    const lifecycle: ILifecycleService = new LifecycleService()
+    const dialog = makeDialog(true)
+    new SessionShutdownParticipant(
+      lifecycle,
+      makeSessionService([sessionWithStatus('idle')]),
+      dialog,
+    )
+
+    const vetoed = await lifecycle.confirmBeforeShutdown(ShutdownReason.Quit, {
+      runningSessionCount: 2,
+    })
+
+    expect(vetoed).toBe(false)
+    expect(dialog.confirm).toHaveBeenCalledTimes(1)
+    expect(dialog.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('2') }),
+    )
+  })
+
+  it('does not repeat the running-session prompt in non-requesting windows', async () => {
+    const lifecycle: ILifecycleService = new LifecycleService()
+    const dialog = makeDialog(true)
+    new SessionShutdownParticipant(
+      lifecycle,
+      makeSessionService([sessionWithStatus('running')]),
+      dialog,
+    )
+
+    const vetoed = await lifecycle.confirmBeforeShutdown(ShutdownReason.Quit, {
+      skipRunningSessionPrompt: true,
+    })
+
+    expect(vetoed).toBe(false)
+    expect(dialog.confirm).not.toHaveBeenCalled()
+  })
 })

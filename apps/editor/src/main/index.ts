@@ -355,7 +355,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       codexBinary: accessor.get(ICodexBinaryService),
       codexConfig: accessor.get(ICodexConfigService),
       disposableLeak: accessor.get(IDisposableLeakService),
-      update: accessor.get(IUpdateService),
+      update: accessor.get(IUpdateService) as UpdateMainService,
       releaseNotes: accessor.get(IReleaseNotesService),
       docs: accessor.get(IDocsService),
       performance: accessor.get(IPerformanceMarksService),
@@ -385,7 +385,9 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     // Without this, electron-updater spawns the installer before before-quit can
     // veto, so a cancelled confirm still installs. confirmQuit polls every window.
     const windows = windowMainService
-    ;(applicationServices.update as UpdateMainService).setQuitConfirmer(() => windows.confirmQuit())
+    applicationServices.update.setQuitConfirmer((requestingWindowId) =>
+      windows.confirmQuit(requestingWindowId),
+    )
   }
   return { app: applicationServices, windows: windowMainService }
 }

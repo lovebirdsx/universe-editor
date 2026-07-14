@@ -6,7 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '@universe-editor/platform'
-import type { ShutdownReason } from '@universe-editor/platform'
+import type { ShutdownConfirmationContext, ShutdownReason } from '@universe-editor/platform'
 
 export interface IRendererLifecycleService {
   readonly _serviceBrand: undefined
@@ -14,7 +14,7 @@ export interface IRendererLifecycleService {
    * Ask the renderer whether it is OK to proceed with the given shutdown reason.
    * @returns true if the renderer cleared the action; false if it was vetoed.
    */
-  confirmShutdown(reason: ShutdownReason): Promise<boolean>
+  confirmShutdown(reason: ShutdownReason, context?: ShutdownConfirmationContext): Promise<boolean>
 }
 
 export const IRendererLifecycleService = createDecorator<IRendererLifecycleService>(

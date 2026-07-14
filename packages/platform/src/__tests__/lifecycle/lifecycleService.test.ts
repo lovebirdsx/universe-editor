@@ -80,6 +80,18 @@ describe('LifecycleService', () => {
     expect(seen).toBe(ShutdownReason.SwitchWorkspace)
   })
 
+  it('passes shutdown confirmation context to participants', async () => {
+    const svc = new LifecycleService()
+    let runningSessionCount: number | undefined
+    svc.onBeforeShutdown((e) => {
+      runningSessionCount = e.context?.runningSessionCount
+    })
+
+    await svc.confirmBeforeShutdown(ShutdownReason.Quit, { runningSessionCount: 2 })
+
+    expect(runningSessionCount).toBe(2)
+  })
+
   it('shutdown() returns whether it was vetoed', async () => {
     const svc = new LifecycleService()
     svc.onBeforeShutdown((e) => e.veto(true, 'test'))

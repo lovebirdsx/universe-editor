@@ -18,6 +18,7 @@ import { type IRendererLifecycleService } from '../../shared/ipc/lifecycleServic
 import { type IRendererSessionsService } from '../../shared/ipc/sessionSwitcher.js'
 import { createMainProtocolForWindow } from './electronProtocol.js'
 import type { ApplicationServices, WindowScopedServices } from '../window/scopedServicesFactory.js'
+import { createWindowScopedUpdateService } from '../services/update/updateMainService.js'
 
 export interface WindowIpcBootstrap {
   readonly disposable: IDisposable
@@ -80,7 +81,10 @@ export function bootstrapWindowIpc(
     ServiceChannels.DisposableLeak,
     ProxyChannel.fromService(app.disposableLeak),
   )
-  server.registerChannel(ServiceChannels.Update, ProxyChannel.fromService(app.update))
+  server.registerChannel(
+    ServiceChannels.Update,
+    ProxyChannel.fromService(createWindowScopedUpdateService(app.update, win.id)),
+  )
   server.registerChannel(ServiceChannels.ReleaseNotes, ProxyChannel.fromService(app.releaseNotes))
   server.registerChannel(ServiceChannels.Docs, ProxyChannel.fromService(app.docs))
   server.registerChannel(ServiceChannels.Performance, ProxyChannel.fromService(app.performance))

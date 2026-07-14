@@ -30,7 +30,8 @@ vi.mock('electron-updater', () => ({
   default: { autoUpdater: fakeAutoUpdater },
 }))
 
-const { UpdateMainService } = await import('../updateMainService.js')
+const { UpdateMainService, createWindowScopedUpdateService } =
+  await import('../updateMainService.js')
 
 const environment = { updateUrl: undefined }
 // Minimal ConfigLocationMainService stand-in: no config file, never fires changes.
@@ -68,9 +69,9 @@ describe('UpdateMainService.quitAndInstall', () => {
     const confirm = vi.fn(async () => true)
     service.setQuitConfirmer(confirm)
 
-    await service.quitAndInstall()
+    await createWindowScopedUpdateService(service, 42).quitAndInstall()
 
-    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(confirm).toHaveBeenCalledWith(42)
     expect(quitAndInstallSpy).toHaveBeenCalledWith(true, true)
   })
 
@@ -79,9 +80,9 @@ describe('UpdateMainService.quitAndInstall', () => {
     const confirm = vi.fn(async () => false)
     service.setQuitConfirmer(confirm)
 
-    await service.quitAndInstall()
+    await createWindowScopedUpdateService(service, 42).quitAndInstall()
 
-    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(confirm).toHaveBeenCalledWith(42)
     expect(quitAndInstallSpy).not.toHaveBeenCalled()
   })
 

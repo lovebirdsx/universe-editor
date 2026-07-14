@@ -20,6 +20,7 @@ import {
   URI,
   type Event,
   type IOpenWindowInfo,
+  type ShutdownConfirmationContext,
   type IWorkspace,
 } from '@universe-editor/platform'
 import { E2E_PROBE_ARGV_FLAG } from '../../../shared/e2e/contract.js'
@@ -82,7 +83,7 @@ export interface IWindowMainService {
   getOpenWindowInfos(): IOpenWindowInfo[]
   openWindowForFolder(folder?: URI, sessionToOpen?: string): Promise<void>
   captureSessionForQuit(): Promise<void>
-  confirmQuit(): Promise<boolean>
+  confirmQuit(requestingWindowId?: number): Promise<boolean>
   isQuitConfirmed(): boolean
   dispose(): void
 }
@@ -488,7 +489,41 @@ export class WindowMainService implements IWindowMainService {
    * veto chain; a single veto aborts the quit. On success, marks every window
    * as cleared so their close handlers bypass the per-window confirm.
    */
-  async confirmQuit(): Promise<boolean> {
+  async confirmQuit(requestingWindowId?: number): Promise<boolean> {
+    if (requestingWindowId !== undefined) {
+      const requestingWindow = this._windows.get(requestingWindowId)
+      if (requestingWindow && !requestingWindow.win.isDestroyed()) {
+        const sessions = await this._opts.appServices.sessionSwitcher.getAllSessions()
+        const runningSessionCount = sessions.filter(
+          (session) => session.status === 'running',
+        ).length
+        this._opts.logService
+          .createLogger({ id: 'window', name: 'Window' })
+          .info(
+            `confirmQuit requester=${requestingWindowId} runningSessions=${runningSessionCount}`,
+          )
+        if (
+          !(await this._canProceed(requestingWindow.rendererLifecycle, ShutdownReason.Quit, {
+            runningSessionCount,
+          }))
+        ) {
+          return false
+        }
+        for (const [windowId, { win, rendererLifecycle }] of this._windows) {
+          if (windowId === requestingWindowId || win.isDestroyed()) continue
+          if (
+            !(await this._canProceed(rendererLifecycle, ShutdownReason.Quit, {
+              skipRunningSessionPrompt: true,
+            }))
+          ) {
+            return false
+          }
+        }
+        this.markQuitConfirmed()
+        return true
+      }
+    }
+
     for (const { win, rendererLifecycle } of this._windows.values()) {
       if (win.isDestroyed()) continue
       if (!(await this._canProceed(rendererLifecycle, ShutdownReason.Quit))) return false
@@ -520,9 +555,10 @@ export class WindowMainService implements IWindowMainService {
   private async _canProceed(
     rendererLifecycle: IRendererLifecycleService,
     reason: ShutdownReason,
+    context?: ShutdownConfirmationContext,
   ): Promise<boolean> {
     try {
-      return await rendererLifecycle.confirmShutdown(reason)
+      return await rendererLifecycle.confirmShutdown(reason, context)
     } catch {
       return true
     }

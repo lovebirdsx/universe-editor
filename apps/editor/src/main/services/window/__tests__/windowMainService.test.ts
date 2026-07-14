@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { combinedDisposable, URI } from '@universe-editor/platform'
+import { combinedDisposable, ShutdownReason, URI } from '@universe-editor/platform'
 
 // --- Mock IPC bootstrap ---
 vi.mock('../../../ipc/registerMainServices.js', () => ({
@@ -153,6 +153,57 @@ describe('WindowMainService', () => {
     const id2 = await svc.createWindow()
     expect(id1).not.toBe(id2)
     expect(svc.getWindows()).toHaveLength(2)
+  })
+
+  it('routes an update quit confirmation to the requesting window', async () => {
+    const backgroundLifecycle = {
+      _serviceBrand: undefined,
+      confirmShutdown: vi.fn().mockResolvedValue(true),
+    }
+    const requestingLifecycle = {
+      _serviceBrand: undefined,
+      confirmShutdown: vi.fn().mockResolvedValue(true),
+    }
+    vi.mocked(bootstrapWindowIpc)
+      .mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: backgroundLifecycle,
+        rendererSessions: {} as never,
+      }))
+      .mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: requestingLifecycle,
+        rendererSessions: {} as never,
+      }))
+    const opts = makeOpts()
+    const getAllSessions = vi.fn().mockResolvedValue([
+      {
+        windowId: 1,
+        workspaceName: 'background',
+        sessionId: 'running-session',
+        title: 'Running',
+        status: 'running',
+        agentId: 'claude',
+      },
+    ])
+    Object.assign(opts.appServices.sessionSwitcher, { getAllSessions })
+    const svc = new WindowMainService(opts)
+    await svc.createWindow()
+    const requestingWindowId = await svc.createWindow()
+
+    const confirmed = await svc.confirmQuit(requestingWindowId)
+
+    expect(confirmed).toBe(true)
+    expect(getAllSessions).toHaveBeenCalledTimes(1)
+    expect(requestingLifecycle.confirmShutdown).toHaveBeenCalledWith(ShutdownReason.Quit, {
+      runningSessionCount: 1,
+    })
+    expect(backgroundLifecycle.confirmShutdown).toHaveBeenCalledWith(ShutdownReason.Quit, {
+      skipRunningSessionPrompt: true,
+    })
+    expect(requestingLifecycle.confirmShutdown.mock.invocationCallOrder[0]).toBeLessThan(
+      backgroundLifecycle.confirmShutdown.mock.invocationCallOrder[0]!,
+    )
   })
 
   it('marks only the first created window as the current session first window', async () => {
