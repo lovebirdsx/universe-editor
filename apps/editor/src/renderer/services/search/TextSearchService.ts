@@ -73,6 +73,11 @@ export class TextSearchService implements ITextSearchService {
       if (event.sessionId !== sessionId) return
       opts.onProgress?.(event.progress)
     })
+    const resultsListener = this._mainSearch.onDidSearchResults((event) => {
+      if (event.sessionId !== sessionId) return
+      if (opts.signal?.aborted) return
+      opts.onResults?.(event.results)
+    })
     const onAbort = (): void => {
       void this._mainSearch.cancel(sessionId).catch((err: unknown) => {
         this._logger.warn(`search cancel failed: ${(err as Error).message}`)
@@ -109,6 +114,7 @@ export class TextSearchService implements ITextSearchService {
     } finally {
       opts.signal?.removeEventListener('abort', onAbort)
       progressListener.dispose()
+      resultsListener.dispose()
     }
   }
 }

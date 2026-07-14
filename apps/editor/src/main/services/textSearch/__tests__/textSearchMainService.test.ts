@@ -167,6 +167,35 @@ describe('TextSearchMainService', () => {
     expect(events.some((id) => id.startsWith('test-'))).toBe(true)
   })
 
+  it('emits incremental result batches for the matching session', async () => {
+    const root = await makeTempRoot()
+    await Promise.all(
+      Array.from({ length: 20 }, (_, i) =>
+        writeFile(path.join(root, `hit-${i}.txt`), 'incremental-token\n'),
+      ),
+    )
+    const svc = new TextSearchMainService()
+    const batchedFiles: string[] = []
+    const query = baseQuery(root, 'incremental-token')
+    const sub = svc.onDidSearchResults((event) => {
+      if (event.sessionId !== query.sessionId) return
+      for (const fm of event.results) {
+        batchedFiles.push(URI.revive(fm.resource)!.toString())
+      }
+    })
+
+    try {
+      const complete = await svc.search(query)
+      // Every file surfaced through an incremental batch (deduped by resource),
+      // and the batches never exceed the authoritative final result set.
+      expect(complete.results.length).toBe(20)
+      expect(new Set(batchedFiles).size).toBe(20)
+    } finally {
+      sub.dispose()
+      svc.dispose()
+    }
+  }, 15_000)
+
   it('disposes child-process event subscriptions after a search completes', async () => {
     const root = await makeTempRoot()
     await writeFile(path.join(root, 'a.txt'), 'leak-check-token\n')

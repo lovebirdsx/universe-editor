@@ -29,12 +29,19 @@ import {
   type ITextSearchMainComplete,
   type ITextSearchMainProgressEvent,
   type ITextSearchMainQuery,
+  type ITextSearchMainResultsEvent,
 } from '../../../shared/ipc/textSearchService.js'
 
 const DEFAULT_MAX_RESULTS = 10000
 const DEFAULT_MAX_MATCHES_PER_FILE = 1000
 const DEFAULT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
 const PROGRESS_INTERVAL_MS = 100
+// Incremental result flush cadence, mirroring VSCode's batching intent: the
+// first files stream out immediately (no wait) so the user sees hits at once;
+// afterwards changed files are coalesced on this interval to keep IPC and
+// re-render frequency bounded on very large result sets.
+const RESULTS_FLUSH_INTERVAL_MS = 100
+const RESULTS_FLUSH_AFTER_COUNT = 50
 const STDERR_LIMIT = 1_000_000
 
 export function resolveRipgrepDiskPath(ripgrepPath: string = rgPath): string {
@@ -169,6 +176,8 @@ export class TextSearchMainService extends Disposable implements ITextSearchMain
     new Emitter<ITextSearchMainProgressEvent>(),
   )
   readonly onDidSearchProgress = this._onDidSearchProgress.event
+  private readonly _onDidSearchResults = this._register(new Emitter<ITextSearchMainResultsEvent>())
+  readonly onDidSearchResults = this._onDidSearchResults.event
 
   constructor(@ILoggerService loggerService?: ILoggerServiceType) {
     super()
@@ -215,6 +224,30 @@ export class TextSearchMainService extends Disposable implements ITextSearchMain
     let totalMatches = 0
     let limitHit: SearchLimitHit | undefined
     let lastProgressAt = 0
+    // Keys of files whose match set changed since the last incremental flush.
+    const dirtyKeys = new Set<string>()
+    let flushedCount = 0
+    let lastFlushAt = 0
+
+    const flushResults = (force = false): void => {
+      if (dirtyKeys.size === 0) return
+      const now = Date.now()
+      // Stream the first files out immediately; coalesce the rest on an interval.
+      if (!force && flushedCount >= RESULTS_FLUSH_AFTER_COUNT) {
+        if (now - lastFlushAt < RESULTS_FLUSH_INTERVAL_MS) return
+      }
+      lastFlushAt = now
+      const batch: IFileMatch[] = []
+      for (const key of dirtyKeys) {
+        const fm = results.get(key)
+        if (fm) batch.push(fm)
+      }
+      dirtyKeys.clear()
+      flushedCount += batch.length
+      if (batch.length > 0) {
+        this._onDidSearchResults.fire({ sessionId: query.sessionId, results: batch })
+      }
+    }
 
     const emitProgress = (force = false): void => {
       const now = Date.now()
@@ -280,7 +313,9 @@ export class TextSearchMainService extends Disposable implements ITextSearchMain
       } else {
         results.set(key, { resource, matches: [match] })
       }
+      dirtyKeys.add(key)
       emitProgress()
+      flushResults()
       if (totalMatches >= maxResults) {
         limitHit = 'matches'
         stopForLimit()

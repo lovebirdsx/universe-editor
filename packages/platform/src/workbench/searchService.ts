@@ -59,6 +59,15 @@ export interface ITextSearchProgress {
 
 export interface ITextSearchOptions {
   readonly onProgress?: (progress: ITextSearchProgress) => void
+  /**
+   * Incremental result batches delivered while the search is still running, so a
+   * large result set fills in progressively instead of appearing all at once.
+   * Each entry is a file's *full current* match set; consumers accumulate by
+   * resource (a later batch for the same file replaces the earlier snapshot).
+   * The promise's final result stays authoritative — treat it as the source of
+   * truth on completion.
+   */
+  readonly onResults?: (batch: readonly IFileMatch[]) => void
   readonly signal?: AbortSignal
   /**
    * Apply the configured files.exclude / search.exclude globs (default true).

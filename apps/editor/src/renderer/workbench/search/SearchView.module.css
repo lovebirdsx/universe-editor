@@ -270,6 +270,15 @@
   outline: none;
 }
 
+/* Inner VirtualList scroller: a plain block scroll container. It must NOT be a
+   flex column — the virtualizer's absolutely-positioned spacer would become a
+   shrinkable flex item, collapsing the scroll range so the thumb jumps while
+   browsing a large result set. Mirrors Explorer/Outline's `.virtualList`. */
+.resultsTreeVirtual {
+  flex: 1;
+  min-height: 0;
+}
+
 .row {
   display: flex;
   align-items: center;

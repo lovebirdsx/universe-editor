@@ -24,6 +24,10 @@ import {
 import { useService } from '../useService.js'
 
 const DEBOUNCE_MS = 250
+// Coalesce incremental result batches into the tree on this cadence, so a large
+// result set fills in progressively without re-rendering on every batch. Mirrors
+// VSCode's ~80ms refresh scheduler.
+const RESULTS_REFRESH_MS = 80
 
 export interface ISearchQuery {
   readonly pattern: string
@@ -63,6 +67,11 @@ export function useSearchEngine(
   const abortRef = useRef<AbortController | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const statusEntryRef = useRef<IStatusBarEntryAccessor | null>(null)
+  // Incremental accumulation: batches arrive silently into this ordered map and
+  // are coalesced into React state on a timer, so the tree grows progressively
+  // (append-only, stable order) instead of appearing all at once at the end.
+  const accumRef = useRef<Map<string, IFileMatch>>(new Map())
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // On a remount with cached results for the same query, skip the first debounced
   // run so switching sidebars back doesn't re-search (and flash the status bar).
   const skipFirstRef = useRef(initialResults.length > 0 && query.pattern.length > 0)
@@ -73,6 +82,11 @@ export function useSearchEngine(
   const runSearch = useCallback(
     (q: string) => {
       abortRef.current?.abort()
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current)
+        flushTimerRef.current = null
+      }
+      accumRef.current = new Map()
       if (q.length === 0) {
         setResults([])
         setProgress(null)
@@ -86,6 +100,17 @@ export function useSearchEngine(
       setIsSearching(true)
       setRegexError(null)
       setIsStale(false)
+
+      const flush = (): void => {
+        flushTimerRef.current = null
+        if (ac.signal.aborted) return
+        setResults([...accumRef.current.values()])
+      }
+      const scheduleFlush = (): void => {
+        if (flushTimerRef.current !== null) return
+        flushTimerRef.current = setTimeout(flush, RESULTS_REFRESH_MS)
+      }
+
       void searchService
         .search(
           {
@@ -102,10 +127,25 @@ export function useSearchEngine(
             onProgress: (p) => {
               if (!ac.signal.aborted) setProgress(p)
             },
+            onResults: (batch) => {
+              if (ac.signal.aborted) return
+              for (const fm of batch) {
+                accumRef.current.set((URI.revive(fm.resource) as URI).toString(), fm)
+              }
+              scheduleFlush()
+            },
           },
         )
         .then((res) => {
           if (ac.signal.aborted) return
+          if (flushTimerRef.current) {
+            clearTimeout(flushTimerRef.current)
+            flushTimerRef.current = null
+          }
+          // The promise result is authoritative — replace any accumulated batches.
+          accumRef.current = new Map(
+            res.map((fm) => [(URI.revive(fm.resource) as URI).toString(), fm]),
+          )
           setResults(res)
           setIsSearching(false)
         })
@@ -133,6 +173,10 @@ export function useSearchEngine(
   useEffect(() => {
     return () => {
       abortRef.current?.abort()
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current)
+        flushTimerRef.current = null
+      }
       statusEntryRef.current?.dispose()
       statusEntryRef.current = null
     }

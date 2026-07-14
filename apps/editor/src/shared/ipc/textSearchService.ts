@@ -24,6 +24,12 @@ export interface ITextSearchMainProgressEvent {
   readonly progress: ITextSearchProgress
 }
 
+export interface ITextSearchMainResultsEvent {
+  readonly sessionId: string
+  /** File match snapshots that changed since the last batch (full per-file). */
+  readonly results: readonly IFileMatch[]
+}
+
 export interface ITextSearchMainComplete {
   readonly results: readonly IFileMatch[]
   readonly progress: ITextSearchProgress
@@ -33,6 +39,7 @@ export interface ITextSearchMainComplete {
 export interface ITextSearchMainService {
   readonly _serviceBrand: undefined
   readonly onDidSearchProgress: Event<ITextSearchMainProgressEvent>
+  readonly onDidSearchResults: Event<ITextSearchMainResultsEvent>
   search(query: ITextSearchMainQuery): Promise<ITextSearchMainComplete>
   cancel(sessionId: string): Promise<void>
 }

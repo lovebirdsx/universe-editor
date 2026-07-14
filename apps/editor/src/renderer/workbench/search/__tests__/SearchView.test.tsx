@@ -38,12 +38,20 @@ class FakeTextSearch implements ITextSearchServiceType {
   searchCalls = 0
   lastSignal: AbortSignal | undefined
   delayMs = 0
+  /** When set, emit these batches via onResults before resolving (incremental). */
+  batches: readonly (readonly IFileMatch[])[] | undefined
   async search(
     _query: ITextSearchQuery,
     opts?: ITextSearchOptions,
   ): Promise<readonly IFileMatch[]> {
     this.searchCalls++
     this.lastSignal = opts?.signal
+    if (this.batches) {
+      for (const batch of this.batches) {
+        if (opts?.signal?.aborted) return []
+        opts?.onResults?.(batch)
+      }
+    }
     if (this.delayMs > 0) {
       await new Promise((r) => setTimeout(r, this.delayMs))
     }
@@ -203,6 +211,37 @@ describe('SearchView', () => {
       await vi.advanceTimersByTimeAsync(260)
     })
     expect(search.searchCalls).toBe(1)
+  })
+
+  it('renders incremental batches before the search resolves', async () => {
+    const search = new FakeTextSearch()
+    // The search resolves slowly, but batches stream in immediately. The tree
+    // must show the batched files before the promise settles.
+    search.delayMs = 1000
+    const early = makeFileMatch('/ws/early.ts', 1, 'foo early')
+    search.batches = [[early]]
+    search.results = [early, makeFileMatch('/ws/late.ts', 2, 'foo late')]
+    renderWithServices(search)
+    const input = screen.getByLabelText('Search') as HTMLInputElement
+    act(() => {
+      fireEvent.change(input, { target: { value: 'foo' } })
+    })
+    // Fire debounce (250ms) → runSearch → onResults batch → 80ms flush timer.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(260)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100)
+    })
+    // early.ts is visible from the incremental batch, before the 1000ms resolve.
+    expect(screen.getByText('early.ts')).toBeTruthy()
+    expect(screen.queryByText('late.ts')).toBeFalsy()
+    // After the search resolves, the authoritative full result set replaces it.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(screen.getByText('early.ts')).toBeTruthy()
+    expect(screen.getByText('late.ts')).toBeTruthy()
   })
 
   it('clears results when the query is emptied', async () => {

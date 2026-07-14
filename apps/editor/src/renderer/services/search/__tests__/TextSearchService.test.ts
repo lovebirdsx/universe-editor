@@ -20,6 +20,7 @@ import type {
   ITextSearchMainComplete,
   ITextSearchMainProgressEvent,
   ITextSearchMainQuery,
+  ITextSearchMainResultsEvent,
   ITextSearchMainService,
 } from '../../../../shared/ipc/textSearchService.js'
 
@@ -45,6 +46,8 @@ class FakeMainSearch implements ITextSearchMainService {
   declare readonly _serviceBrand: undefined
   private readonly _onDidSearchProgress = new Emitter<ITextSearchMainProgressEvent>()
   readonly onDidSearchProgress = this._onDidSearchProgress.event
+  private readonly _onDidSearchResults = new Emitter<ITextSearchMainResultsEvent>()
+  readonly onDidSearchResults = this._onDidSearchResults.event
   readonly queries: ITextSearchMainQuery[] = []
   readonly cancelCalls: string[] = []
   results: readonly IFileMatch[] = []
@@ -59,6 +62,9 @@ class FakeMainSearch implements ITextSearchMainService {
       totalMatches: 1,
     }
     this._onDidSearchProgress.fire({ sessionId: query.sessionId, progress })
+    if (this.results.length > 0) {
+      this._onDidSearchResults.fire({ sessionId: query.sessionId, results: this.results })
+    }
     if (this.waitForCancel) {
       await new Promise<void>((resolve) => {
         this._resolveCancel = resolve
