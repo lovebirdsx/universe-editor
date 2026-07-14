@@ -42,7 +42,6 @@ import {
   RefreshCw,
   SquarePen,
   Tag,
-  Terminal,
   Trash2,
   Undo2,
   type LucideIcon,
@@ -79,7 +78,6 @@ const ICON_MAP: Record<string, LucideIcon> = {
   trash: Trash2,
   key: KeyRound,
   'sign-out': LogOut,
-  output: Terminal,
   // SCM resource-group header icons (by group kind).
   changelist: ListChecks,
   reconcile: ListPlus,
