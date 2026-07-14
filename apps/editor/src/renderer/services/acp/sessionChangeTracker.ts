@@ -95,6 +95,35 @@ export const ISessionChangeTrackerService = createDecorator<ISessionChangeTracke
 const STORAGE_KEY = 'acp.sessionChanges'
 const SCHEMA_VERSION = 2
 
+/**
+ * Throttle window for `record`-driven recomputes. An agent can push hundreds of
+ * edit tool-calls within a few seconds; without coalescing, each one would
+ * re-read every tracked file (O(edits × files)) and exhaust file handles
+ * (`EMFILE`), crashing the editor. Recomputes collapse to at most one per window.
+ */
+const RECOMPUTE_THROTTLE_MS = 150
+
+/** Max concurrent file reads inside a single recompute — caps open handles so a
+ *  session tracking hundreds of files can never trigger `EMFILE`. */
+const RECOMPUTE_READ_CONCURRENCY = 8
+
+/** Map `items` through `fn` with a bounded number of in-flight calls. */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const worker = async (): Promise<void> => {
+    for (let i = next++; i < items.length; i = next++) {
+      results[i] = await fn(items[i]!)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
+}
+
 /** Per-file tracking record: accumulated hunk batches. */
 interface FileRecord {
   batches: DiffBatch[]
@@ -132,6 +161,13 @@ export class SessionChangeTrackerService
     ISettableObservable<readonly SessionFileChange[]>
   >()
 
+  /** Sessions with a recompute pending inside the current throttle window. */
+  private readonly _pendingRecompute = new Map<string, ReturnType<typeof setTimeout>>()
+
+  /** Throttle window between a `record` and its recompute. Overridable in tests
+   *  (set to 0 for a synchronous flush). */
+  recomputeThrottleMs = RECOMPUTE_THROTTLE_MS
+
   constructor(
     @IStorageService storage: IStorageService,
     @IWorkspaceService workspace: IWorkspaceService,
@@ -145,6 +181,12 @@ export class SessionChangeTrackerService
       loggerName: 'ACP Session Changes',
       persistFailureEvent: 'acp.session_changes_persist_failed',
     })
+  }
+
+  override dispose(): void {
+    for (const timer of this._pendingRecompute.values()) clearTimeout(timer)
+    this._pendingRecompute.clear()
+    super.dispose()
   }
 
   // -- PersistedStateBase hooks ---------------------------------------
@@ -225,7 +267,7 @@ export class SessionChangeTrackerService
     if (idx >= 0) batches[idx] = batch
     else batches.push(batch)
     this._scheduleWrite()
-    void this._recompute(sessionId, files)
+    this._scheduleRecompute(sessionId)
   }
 
   changesFor(sessionId: string): IObservable<readonly SessionFileChange[]> {
@@ -325,6 +367,20 @@ export class SessionChangeTrackerService
     return { filesChanged, insertions, deletions }
   }
 
+  /**
+   * Coalesce `record`-driven recomputes: an agent edit storm delivers many
+   * updates per second, but the whole-file diff only needs recomputing once the
+   * dust settles. Collapses to at most one recompute per throttle window.
+   */
+  private _scheduleRecompute(sessionId: string): void {
+    if (this._pendingRecompute.has(sessionId)) return
+    const timer = setTimeout(() => {
+      this._pendingRecompute.delete(sessionId)
+      void this._recompute(sessionId, this._state.get(sessionId))
+    }, this.recomputeThrottleMs)
+    this._pendingRecompute.set(sessionId, timer)
+  }
+
   private async _recompute(
     sessionId: string,
     files: Map<string, FileRecord> | undefined,
@@ -335,8 +391,10 @@ export class SessionChangeTrackerService
       obs.set([], undefined)
       return
     }
-    const changes = await Promise.all(
-      [...files.entries()].map(([path, rec]) => this._buildChange(path, rec)),
+    const changes = await mapWithConcurrency(
+      [...files.entries()],
+      RECOMPUTE_READ_CONCURRENCY,
+      ([path, rec]) => this._buildChange(path, rec),
     )
     obs.set(
       changes.filter((c): c is SessionFileChange => c !== undefined),

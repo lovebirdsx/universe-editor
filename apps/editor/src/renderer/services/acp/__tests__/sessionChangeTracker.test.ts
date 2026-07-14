@@ -75,6 +75,13 @@ class StubLoggerService implements ILoggerService {
 class FakeFileService implements IFileService {
   declare readonly _serviceBrand: undefined
   readonly files = new Map<string, string>()
+  /** Total readFileText calls — asserts the tracker doesn't fan out unboundedly. */
+  reads = 0
+  /** Currently in-flight reads and the peak, to bound open-handle pressure. */
+  private _inFlight = 0
+  peakInFlight = 0
+  /** When set, readFileText resolves on the next microtask to expose concurrency. */
+  deferReads = false
   set(path: string, content: string): void {
     this.files.set(URI.file(path).fsPath, content)
   }
@@ -82,9 +89,17 @@ class FakeFileService implements IFileService {
     this.files.delete(URI.file(path).fsPath)
   }
   async readFileText(resource: URI): Promise<string> {
-    const c = this.files.get(resource.fsPath)
-    if (c === undefined) throw new Error('ENOENT')
-    return c
+    this.reads++
+    this._inFlight++
+    this.peakInFlight = Math.max(this.peakInFlight, this._inFlight)
+    try {
+      if (this.deferReads) await Promise.resolve()
+      const c = this.files.get(resource.fsPath)
+      if (c === undefined) throw new Error('ENOENT')
+      return c
+    } finally {
+      this._inFlight--
+    }
   }
   async readFile(): Promise<Uint8Array> {
     throw new Error('not implemented')
@@ -119,6 +134,7 @@ function makeService(): { svc: SessionChangeTrackerService; files: FakeFileServi
     new StubLoggerService(),
     files,
   )
+  svc.recomputeThrottleMs = 0 // no throttle in tests — the 5ms flush settles it
   return { svc, files }
 }
 
@@ -258,5 +274,62 @@ describe('SessionChangeTrackerService — restore (codex rewind file rollback)',
     await flush()
     const impact = await svc.restore(SID, ['tc-missing'])
     expect(impact.filesChanged).toEqual([])
+  })
+})
+
+describe('SessionChangeTrackerService — edit-storm resilience (EMFILE guard)', () => {
+  /** Build a service with a real throttle so a burst of records coalesces. */
+  function makeThrottled(throttleMs: number): {
+    svc: SessionChangeTrackerService
+    files: FakeFileService
+  } {
+    const files = new FakeFileService()
+    const svc = new SessionChangeTrackerService(
+      new FakeStorage(),
+      new FakeWorkspaceService(),
+      new NoopTelemetryService(),
+      new StubLoggerService(),
+      files,
+    )
+    svc.recomputeThrottleMs = throttleMs
+    return { svc, files }
+  }
+
+  it('coalesces a burst of records into a single recompute', async () => {
+    const { svc, files } = makeThrottled(20)
+    await svc.initialize()
+    // 200 tracked files, each edited many times in a tight loop — the shape that
+    // exhausted file handles in production.
+    for (let f = 0; f < 200; f++) files.set(`/work/f${f}.ts`, `v${f}`)
+    const obs = svc.changesFor(SID)
+    for (let round = 0; round < 50; round++) {
+      for (let f = 0; f < 200; f++) {
+        svc.record(SID, `/work/f${f}.ts`, `tc-${f}-${round}`, [createHunk([`v${f}`])], true)
+      }
+    }
+    // Before the throttle fires, no recompute reads have happened yet.
+    expect(files.reads).toBe(0)
+    await new Promise((r) => setTimeout(r, 40))
+    // Exactly one recompute pass ran: one read per file, not per (file × edit).
+    expect(files.reads).toBe(200)
+    expect(obs.get()).toHaveLength(200)
+    svc.dispose()
+  })
+
+  it('bounds concurrent reads within a recompute', async () => {
+    const { svc, files } = makeThrottled(0)
+    await svc.initialize()
+    const obs = svc.changesFor(SID)
+    files.deferReads = true
+    for (let f = 0; f < 100; f++) {
+      files.set(`/work/f${f}.ts`, `v${f}`)
+      svc.record(SID, `/work/f${f}.ts`, `tc-${f}`, [createHunk([`v${f}`])], true)
+    }
+    await new Promise((r) => setTimeout(r, 20))
+    expect(files.reads).toBe(100)
+    expect(obs.get()).toHaveLength(100)
+    // Never open more than the concurrency cap at once, regardless of file count.
+    expect(files.peakInFlight).toBeLessThanOrEqual(8)
+    svc.dispose()
   })
 })
