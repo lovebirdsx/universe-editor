@@ -10,8 +10,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ICommandService,
+  IConfigurationService,
   IDialogService,
   IEditorService,
+  IOpenerService,
   IStorageService,
   StorageScope,
   type IEditorInput,
@@ -23,6 +25,7 @@ import {
   type SwarmAddCommentRequest,
   type SwarmCommentDto,
   type SwarmFileContentRequest,
+  type SwarmObliterateReviewRequest,
   type SwarmReviewDetailDto,
   type SwarmReviewFileDto,
   type SwarmTransitionRequest,
@@ -33,6 +36,7 @@ import { useObservable, useService } from '../useService.js'
 import { SwarmReviewEditorInput } from '../../services/editor/SwarmReviewEditorInput.js'
 import { SwarmDiffEditorInput } from '../../services/editor/SwarmDiffEditorInput.js'
 import { waitForSwarmCommand } from '../../services/swarm/swarmCommandReady.js'
+import { buildSwarmReviewUrl } from '../../services/swarm/swarmReviewUrl.js'
 import {
   swarmReviewDetailCache,
   swarmReviewFilesViewState,
@@ -58,8 +62,10 @@ function isCommitTransition(state: string): boolean {
 
 export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   const commands = useService(ICommandService)
+  const configuration = useService(IConfigurationService)
   const dialog = useService(IDialogService)
   const editorService = useService(IEditorService)
+  const opener = useService(IOpenerService)
   const storage = useService(IStorageService)
   const reviewId = input instanceof SwarmReviewEditorInput ? input.reviewId : ''
   const filesViewMode = useObservable(swarmReviewFilesViewState.viewMode)
@@ -78,6 +84,8 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   const [commentDraft, setCommentDraft] = useState('')
   const loadAbortRef = useRef<AbortController | null>(null)
   const filesViewModeRestoredRef = useRef(false)
+
+  const reviewUrl = buildSwarmReviewUrl(configuration.get<string>('perforce.swarm.url'), reviewId)
 
   const load = useCallback(() => {
     if (!reviewId) return
@@ -180,6 +188,34 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
   }, [commands, reviewId, busy, load])
+
+  const obliterateReview = useCallback(async () => {
+    if (!reviewId || busy) return
+    const result = await dialog.confirm({
+      type: 'warning',
+      message: localize('swarm.obliterate.confirm', 'Obliterate review #{0}?', { 0: reviewId }),
+      detail: localize(
+        'swarm.obliterate.detail',
+        'This permanently discards the review. This action cannot be undone.',
+      ),
+      primaryButton: localize('swarm.obliterate.button', 'Obliterate Review'),
+    })
+    if (!result.confirmed) return
+    setBusy(true)
+    try {
+      const succeeded = await commands.executeCommand<boolean>(SwarmCommands.obliterateReview, {
+        reviewId,
+      } satisfies SwarmObliterateReviewRequest)
+      if (succeeded) {
+        swarmReviewDetailCache.delete(reviewId)
+        editorService.closeEditor(input.id)
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, commands, dialog, editorService, input.id, reviewId])
 
   // Prefer Swarm's immutable archive shelf: the author's changelist can be
   // re-shelved after this version was recorded.
@@ -377,7 +413,16 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     <div className={styles['container']} data-testid="swarm-review-editor">
       <div className={styles['header']}>
         <div className={styles['titleRow']}>
-          <span className={styles['title']}>Review #{detail.id}</span>
+          <a
+            className={styles['titleLink']}
+            href={reviewUrl}
+            onClick={(event) => {
+              event.preventDefault()
+              if (reviewUrl) void opener.open(reviewUrl, { fromUserGesture: true })
+            }}
+          >
+            Review #{detail.id}
+          </a>
           <span className={cx(styles['badge'], STATE_CLASS[detail.state])}>
             {detail.stateLabel}
           </span>
@@ -414,6 +459,15 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
               {t.label}
             </Button>
           ))}
+          <Button
+            className={styles['dangerAction']}
+            size="sm"
+            variant="secondary"
+            busy={busy}
+            onClick={() => void obliterateReview()}
+          >
+            {localize('swarm.obliterate.button', 'Obliterate Review')}
+          </Button>
         </div>
         {detail.participants.length > 0 && (
           <div className={styles['participants']}>

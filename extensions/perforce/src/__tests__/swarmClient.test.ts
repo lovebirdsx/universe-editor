@@ -147,3 +147,55 @@ describe('SwarmClient comment endpoints', () => {
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({ taskState: 'addressed' })
   })
 })
+
+describe('SwarmClient review mutation endpoints', () => {
+  const fetchMock = vi.fn()
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockReset()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function client() {
+    return new SwarmClient(fakeP4('songxiao'), {
+      baseUrl: 'https://swarm.example.com/',
+      apiVersion: 'v9',
+      user: 'songxiao',
+    })
+  }
+
+  it('loads server-authoritative transitions via GET /reviews/{id}/transitions', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ transitions: { approved: 'Approve' } }), { status: 200 }),
+    )
+
+    await expect(client().getTransitions('8089913')).resolves.toEqual([
+      { state: 'approved', label: 'Approve' },
+    ])
+
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect((init as RequestInit).method).toBe('GET')
+    expect(url).toBe('https://swarm.example.com/api/v9/reviews/8089913/transitions')
+  })
+
+  it('obliterates a review via POST /reviews/{id}/obliterate without a body', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          isValid: true,
+          message: 'The review with id [8089913] has been obliterated.',
+          code: 200,
+        }),
+        { status: 200 },
+      ),
+    )
+    await client().obliterateReview('8089913')
+
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect((init as RequestInit).method).toBe('POST')
+    expect(url).toBe('https://swarm.example.com/api/v9/reviews/8089913/obliterate')
+    expect((init as RequestInit).body).toBeUndefined()
+  })
+})

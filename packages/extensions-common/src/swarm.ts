@@ -215,6 +215,12 @@ export interface SwarmTransitionRequest {
   description?: string
 }
 
+/** Argument for `perforce.swarm.obliterateReview`. This permanently removes the
+ *  review; callers must confirm the destructive action before invoking it. */
+export interface SwarmObliterateReviewRequest {
+  reviewId: string
+}
+
 /** Argument for `perforce.swarm.addChange` — associate a new version (author
  *  closure: re-shelve then link the change to the review). */
 export interface SwarmAddChangeRequest {
@@ -285,9 +291,11 @@ export const SwarmCommands = {
   listReviews: 'perforce.swarm.listReviews',
   dashboard: 'perforce.swarm.dashboard',
   getReview: 'perforce.swarm.getReview',
+  getTransitions: 'perforce.swarm.getTransitions',
   createReview: 'perforce.swarm.createReview',
   vote: 'perforce.swarm.vote',
   transition: 'perforce.swarm.transition',
+  obliterateReview: 'perforce.swarm.obliterateReview',
   addChange: 'perforce.swarm.addChange',
   updateReview: 'perforce.swarm.updateReview',
   updateReviewFromChangelist: 'perforce.swarm.updateReviewFromChangelist',

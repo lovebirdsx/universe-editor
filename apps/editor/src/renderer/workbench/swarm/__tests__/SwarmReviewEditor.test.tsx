@@ -8,8 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   ICommandService,
+  IConfigurationService,
   IDialogService,
   IEditorService,
+  IOpenerService,
   IStorageService,
   InstantiationService,
   ServiceCollection,
@@ -87,23 +89,36 @@ function renderReview() {
   const services = new ServiceCollection()
   const commands = new RegistryCommandService()
   services.set(ICommandService, commands as unknown as ICommandService)
-  services.set(IDialogService, {
+  services.set(IConfigurationService, {
+    _serviceBrand: undefined,
+    get: (key: string) =>
+      key === 'perforce.swarm.url' ? 'https://swarm.example.com///' : undefined,
+  } as unknown as IConfigurationService)
+  const dialog = {
     _serviceBrand: undefined,
     confirm: vi.fn(async () => ({ confirmed: false })),
-  } as unknown as IDialogService)
+  }
+  services.set(IDialogService, dialog as unknown as IDialogService)
   const editorService = {
     _serviceBrand: undefined,
     openEditor: vi.fn(),
+    closeEditor: vi.fn(),
   }
   services.set(IEditorService, editorService as unknown as IEditorService)
+  const opener = {
+    _serviceBrand: undefined,
+    open: vi.fn(async () => true),
+  }
+  services.set(IOpenerService, opener as unknown as IOpenerService)
   services.set(IStorageService, new FakeStorage() as unknown as IStorageService)
   const instantiation = new InstantiationService(services)
+  const input = new SwarmReviewEditorInput('1001')
   const result = render(
     <ServicesContext.Provider value={instantiation}>
-      <SwarmReviewEditor input={new SwarmReviewEditorInput('1001')} />
+      <SwarmReviewEditor input={input} />
     </ServicesContext.Provider>,
   )
-  return { ...result, commands, editorService }
+  return { ...result, commands, dialog, editorService, input, opener }
 }
 
 beforeEach(() => {
@@ -118,6 +133,66 @@ afterEach(() => {
 })
 
 describe('SwarmReviewEditor restore', () => {
+  it('opens the linked review title in the external opener', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const { opener } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+
+      const title = screen.getByRole('link', { name: 'Review #1001' })
+      expect(title.getAttribute('href')).toBe('https://swarm.example.com/reviews/1001')
+      fireEvent.click(title)
+
+      expect(opener.open).toHaveBeenCalledWith('https://swarm.example.com/reviews/1001', {
+        fromUserGesture: true,
+      })
+    } finally {
+      getReview.dispose()
+    }
+  })
+
+  it('does not obliterate the review when confirmation is cancelled', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const { commands, editorService } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      await act(async () =>
+        fireEvent.click(screen.getByRole('button', { name: 'Obliterate Review' })),
+      )
+
+      expect(commands.executeCommand).not.toHaveBeenCalledWith(SwarmCommands.obliterateReview, {
+        reviewId: '1001',
+      })
+      expect(editorService.closeEditor).not.toHaveBeenCalled()
+    } finally {
+      getReview.dispose()
+    }
+  })
+
+  it('obliterates a confirmed review, clears its cache, and closes the editor', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const obliterate = registerCommand(SwarmCommands.obliterateReview, () => true)
+    const { commands, dialog, editorService, input } = renderReview()
+    dialog.confirm.mockResolvedValueOnce({ confirmed: true })
+    try {
+      await act(async () => Promise.resolve())
+      expect(swarmReviewDetailCache.has('1001')).toBe(true)
+
+      await act(async () =>
+        fireEvent.click(screen.getByRole('button', { name: 'Obliterate Review' })),
+      )
+
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.obliterateReview, {
+        reviewId: '1001',
+      })
+      expect(swarmReviewDetailCache.has('1001')).toBe(false)
+      expect(editorService.closeEditor).toHaveBeenCalledWith(input.id)
+    } finally {
+      obliterate.dispose()
+      getReview.dispose()
+    }
+  })
+
   it('opens a first-version edit against its depot base instead of an empty file', async () => {
     const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
     const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)

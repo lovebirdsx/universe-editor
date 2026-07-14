@@ -186,6 +186,20 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  // POST reviews/{id}/obliterate
+  m = /^reviews\/([^/]+)\/obliterate$/.exec(path)
+  if (method === 'POST' && m) {
+    const id = m[1]
+    if (!reviews[id]) return send(res, 404, { error: 'not found' })
+    delete reviews[id]
+    send(res, 200, {
+      isValid: true,
+      message: `The review with id [${id}] has been obliterated.`,
+      code: 200,
+    })
+    return
+  }
+
   // PATCH reviews/{id}/state
   m = /^reviews\/([^/]+)\/state$/.exec(path)
   if (method === 'PATCH' && m) {

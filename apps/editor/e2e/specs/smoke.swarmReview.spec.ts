@@ -122,6 +122,42 @@ test.describe('@p1 swarm reviews', () => {
     expect((state?.body as { state?: string })?.state).toBe('rejected')
   })
 
+  test('shows approvable reviews, exposes row actions, and obliterates with confirmation', async ({
+    page,
+    swarm,
+  }) => {
+    await page.locator('[data-testid="activitybar-item-workbench.view.swarm"]').click()
+    const view = page.locator('[data-testid="swarm-reviews-view"]')
+    await swarm.waitForRequest((request) => request.method === 'GET' && request.path === 'reviews')
+    const row = view.locator('[data-testid="swarm-review-row"]', { hasText: '#1001' }).first()
+    await expect(row).toBeVisible()
+    await swarm.waitForRequest(
+      (request) => request.method === 'GET' && request.path === 'reviews/1001/transitions',
+    )
+    await expect(row.locator('.lucide-circle-check')).toBeVisible()
+
+    await row.click({ button: 'right' })
+    const menu = page.getByRole('menu')
+    await expect(menu.getByRole('menuitem', { name: 'Approve', exact: true })).toBeVisible()
+    await expect(menu.getByRole('menuitem', { name: 'Open Review in Browser' })).toBeVisible()
+    await expect(menu.getByRole('menuitem', { name: 'Copy Review Name' })).toBeVisible()
+    await expect(menu.getByRole('menuitem', { name: 'Copy Review Link' })).toBeVisible()
+    await menu.getByRole('menuitem', { name: 'Open Review', exact: true }).click()
+
+    const editor = page.locator('[data-testid="swarm-review-editor"]')
+    const title = editor.getByRole('link', { name: 'Review #1001' })
+    await expect(title).toHaveAttribute('href', /\/reviews\/1001$/)
+    await editor.getByRole('button', { name: 'Obliterate Review' }).click()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toContainText('cannot be undone')
+    await dialog.getByRole('button', { name: 'Obliterate Review' }).click()
+
+    await swarm.waitForRequest(
+      (request) => request.method === 'POST' && request.path === 'reviews/1001/obliterate',
+    )
+    await expect(editor).toHaveCount(0)
+  })
+
   test('switching reviews refreshes the whole detail, not just comments', async ({
     page,
     swarm,

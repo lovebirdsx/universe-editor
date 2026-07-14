@@ -199,6 +199,11 @@ export class SwarmClient {
     await this._api.patch(`reviews/${encodeURIComponent(id)}/state`, body)
   }
 
+  /** Permanently remove a review. This is distinct from archiving it. */
+  async obliterateReview(id: string): Promise<void> {
+    await this._api.post(`reviews/${encodeURIComponent(id)}/obliterate`)
+  }
+
   /** List comments on a review. Swarm comments are a topic-based resource:
    *  `GET /comments?topic=reviews/{id}` (NOT a nested `comments/reviews/{id}`). */
   async listComments(

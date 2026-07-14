@@ -21,9 +21,21 @@
   gap: 10px;
 }
 
-.title {
+.titleLink {
   font-size: 16px;
   font-weight: 600;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.titleLink:hover {
+  color: var(--color-text-link-foreground, #4daafc);
+}
+
+.titleLink:focus-visible {
+  outline: 1px solid var(--color-focus-border, #007fd4);
+  outline-offset: 2px;
 }
 
 .badge {
@@ -64,6 +76,14 @@
   display: flex;
   gap: 6px;
   align-items: center;
+}
+
+.dangerAction {
+  color: var(--color-error-fg, #f48771);
+}
+
+.dangerAction:hover:not(:disabled) {
+  border-color: var(--color-error-fg, #f48771);
 }
 
 .participants {

@@ -8,7 +8,7 @@
  *  component owns no HTTP. Mirrors ExtensionsView / PerforceGraphEditor patterns.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import {
   ChevronDown,
@@ -23,19 +23,50 @@ import {
   CircleX,
   Archive,
 } from 'lucide-react'
-import { ICommandService, IEditorService, localize } from '@universe-editor/platform'
+import {
+  ICommandService,
+  IConfigurationService,
+  IDialogService,
+  IEditorService,
+  IOpenerService,
+  localize,
+} from '@universe-editor/platform'
 import { Input, Spinner, cx } from '@universe-editor/workbench-ui'
 import {
   SwarmCommands,
   type SwarmDashboardResult,
   type SwarmReviewDto,
+  type SwarmTransitionDto,
+  type SwarmTransitionRequest,
 } from '@universe-editor/extensions-common'
 import { useService } from '../useService.js'
 import { SwarmReviewEditorInput } from '../../services/editor/SwarmReviewEditorInput.js'
 import { swarmReviewsViewState } from '../../services/swarm/swarmViewState.js'
+import { buildSwarmReviewUrl } from '../../services/swarm/swarmReviewUrl.js'
+import {
+  SwarmReviewContextMenu,
+  type SwarmReviewContextMenuState,
+  type SwarmReviewMenuItem,
+} from './SwarmReviewContextMenu.js'
 import styles from './SwarmReviewsView.module.css'
 
 const KEYWORD_DEBOUNCE_MS = 300
+
+export function swarmReviewName(review: SwarmReviewDto): string {
+  return review.description.trim() || `Review #${review.id}`
+}
+
+export function canApproveReview(transitions: readonly SwarmTransitionDto[] | undefined): boolean {
+  return (
+    transitions?.some(
+      (transition) => transition.state === 'approved' || transition.state === 'approved:commit',
+    ) ?? false
+  )
+}
+
+function isDangerousTransition(state: string): boolean {
+  return state.includes('commit') || state === 'rejected' || state === 'archived'
+}
 
 /** Per-state colored icon — replaces the wide text badge to save horizontal space. */
 const STATE_ICON: Record<string, { icon: LucideIcon; className: string | undefined }> = {
@@ -74,7 +105,10 @@ const GROUP_KEYS: GroupKey[] = ['needsAction', 'authored']
 
 export function SwarmReviewsView() {
   const commands = useService(ICommandService)
+  const configuration = useService(IConfigurationService)
+  const dialog = useService(IDialogService)
   const editorService = useService(IEditorService)
+  const opener = useService(IOpenerService)
 
   const [dashboard, setDashboard] = useState<SwarmDashboardResult | null>(
     swarmReviewsViewState.dashboard,
@@ -86,7 +120,26 @@ export function SwarmReviewsView() {
     needsAction: false,
     authored: false,
   })
+  const [transitions, setTransitions] = useState<Record<string, SwarmTransitionDto[]>>({})
+  const [menu, setMenu] = useState<SwarmReviewContextMenuState | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const transitionsRef = useRef<Record<string, SwarmTransitionDto[]>>({})
+
+  const loadTransitions = useCallback(
+    async (reviewId: string): Promise<SwarmTransitionDto[]> => {
+      const cached = transitionsRef.current[reviewId]
+      if (cached) return cached
+      const result =
+        (await commands.executeCommand<SwarmTransitionDto[]>(
+          SwarmCommands.getTransitions,
+          reviewId,
+        )) ?? []
+      transitionsRef.current = { ...transitionsRef.current, [reviewId]: result }
+      setTransitions(transitionsRef.current)
+      return result
+    },
+    [commands],
+  )
 
   const load = useCallback(
     (attempt = 0) => {
@@ -104,11 +157,12 @@ export function SwarmReviewsView() {
           }
           setDashboard(r)
           swarmReviewsViewState.dashboard = r
+          for (const review of r.needsAction) void loadTransitions(review.id).catch(() => {})
         })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setLoading(false))
     },
-    [commands],
+    [commands, loadTransitions],
   )
 
   useEffect(() => {
@@ -139,6 +193,143 @@ export function SwarmReviewsView() {
   const toggle = useCallback((key: GroupKey) => {
     setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }))
   }, [])
+
+  const reviewUrl = useCallback(
+    (reviewId: string) =>
+      buildSwarmReviewUrl(configuration.get<string>('perforce.swarm.url'), reviewId),
+    [configuration],
+  )
+
+  const applyTransition = useCallback(
+    async (review: SwarmReviewDto, transition: SwarmTransitionDto) => {
+      if (isDangerousTransition(transition.state)) {
+        const result = await dialog.confirm({
+          type: 'warning',
+          message: localize('swarm.transition.confirm', '{0} review #{1}?', {
+            0: transition.label,
+            1: review.id,
+          }),
+          detail: localize(
+            'swarm.transition.confirmDetail',
+            'This review operation may be irreversible.',
+          ),
+          primaryButton: transition.label,
+        })
+        if (!result.confirmed) return
+      }
+      const request: SwarmTransitionRequest = { reviewId: review.id, state: transition.state }
+      if (transition.state.includes('commit')) request.commit = true
+      await commands.executeCommand(SwarmCommands.transition, request)
+      transitionsRef.current = {}
+      setTransitions({})
+      load()
+    },
+    [commands, dialog, load],
+  )
+
+  const obliterateReview = useCallback(
+    async (review: SwarmReviewDto) => {
+      const result = await dialog.confirm({
+        type: 'warning',
+        message: localize('swarm.obliterate.confirm', 'Obliterate review #{0}?', { 0: review.id }),
+        detail: localize(
+          'swarm.obliterate.confirmDetail',
+          'This permanently discards the review and cannot be undone.',
+        ),
+        primaryButton: localize('swarm.obliterate.action', 'Obliterate Review'),
+      })
+      if (!result.confirmed) return
+      const succeeded = await commands.executeCommand<boolean>(SwarmCommands.obliterateReview, {
+        reviewId: review.id,
+      })
+      if (!succeeded) return
+      transitionsRef.current = {}
+      setTransitions({})
+      load()
+    },
+    [commands, dialog, load],
+  )
+
+  const createMenuItems = useCallback(
+    (
+      review: SwarmReviewDto,
+      allowedTransitions: readonly SwarmTransitionDto[],
+    ): SwarmReviewMenuItem[] => {
+      const url = reviewUrl(review.id)
+      const transitionItems: SwarmReviewMenuItem[] = allowedTransitions.map((transition) => ({
+        kind: 'item',
+        label: transition.label,
+        danger: isDangerousTransition(transition.state),
+        run: () => void applyTransition(review, transition),
+      }))
+      return [
+        {
+          kind: 'item',
+          label: localize('swarm.menu.open', 'Open Review'),
+          run: () => openReview(review.id),
+        },
+        ...(url
+          ? ([
+              {
+                kind: 'item',
+                label: localize('swarm.menu.openBrowser', 'Open Review in Browser'),
+                run: () => void opener.open(url, { fromUserGesture: true }),
+              },
+            ] satisfies SwarmReviewMenuItem[])
+          : []),
+        ...(transitionItems.length > 0
+          ? ([{ kind: 'separator' }, ...transitionItems] satisfies SwarmReviewMenuItem[])
+          : []),
+        { kind: 'separator' },
+        {
+          kind: 'item',
+          label: localize('swarm.menu.copyName', 'Copy Review Name'),
+          run: () => void navigator.clipboard?.writeText(swarmReviewName(review)),
+        },
+        ...(url
+          ? ([
+              {
+                kind: 'item',
+                label: localize('swarm.menu.copyLink', 'Copy Review Link'),
+                run: () => void navigator.clipboard?.writeText(url),
+              },
+            ] satisfies SwarmReviewMenuItem[])
+          : []),
+        { kind: 'separator' },
+        {
+          kind: 'item',
+          label: localize('swarm.obliterate.action', 'Obliterate Review'),
+          danger: true,
+          run: () => void obliterateReview(review),
+        },
+      ]
+    },
+    [applyTransition, obliterateReview, openReview, opener, reviewUrl],
+  )
+
+  const openReviewMenu = useCallback(
+    (event: ReactMouseEvent, review: SwarmReviewDto) => {
+      event.preventDefault()
+      event.stopPropagation()
+      const x = event.clientX
+      const y = event.clientY
+      const show = (allowedTransitions: readonly SwarmTransitionDto[]) =>
+        setMenu({ x, y, reviewId: review.id, items: createMenuItems(review, allowedTransitions) })
+      show(transitionsRef.current[review.id] ?? [])
+      if (!transitionsRef.current[review.id]) {
+        void loadTransitions(review.id)
+          .then((result) => {
+            setMenu((current) =>
+              current?.reviewId === review.id
+                ? { ...current, items: createMenuItems(review, result) }
+                : current,
+            )
+          })
+          .catch(() => {})
+      }
+    },
+    [createMenuItems, loadTransitions],
+  )
 
   const kw = keyword.trim().toLowerCase()
   const filterReviews = (reviews: SwarmReviewDto[]): SwarmReviewDto[] =>
@@ -180,6 +371,8 @@ export function SwarmReviewsView() {
                 collapsed={collapsed[key]}
                 onToggle={() => toggle(key)}
                 onOpen={openReview}
+                onContextMenu={openReviewMenu}
+                transitions={transitions}
               />
             )
           })}
@@ -190,6 +383,7 @@ export function SwarmReviewsView() {
             <div className={styles['message']}>{localize('swarm.empty', 'No reviews found.')}</div>
           )}
       </div>
+      {menu && <SwarmReviewContextMenu state={menu} onClose={() => setMenu(null)} />}
     </div>
   )
 }
@@ -200,12 +394,16 @@ function ReviewGroup({
   collapsed,
   onToggle,
   onOpen,
+  onContextMenu,
+  transitions,
 }: {
   label: string
   reviews: SwarmReviewDto[]
   collapsed: boolean
   onToggle: () => void
   onOpen: (id: string) => void
+  onContextMenu: (event: ReactMouseEvent, review: SwarmReviewDto) => void
+  transitions: Readonly<Record<string, SwarmTransitionDto[]>>
 }) {
   return (
     <div className={styles['section']}>
@@ -215,16 +413,42 @@ function ReviewGroup({
         <span className={styles['count']}>{reviews.length}</span>
       </button>
       {!collapsed &&
-        reviews.map((review) => <ReviewRow key={review.id} review={review} onOpen={onOpen} />)}
+        reviews.map((review) => (
+          <ReviewRow
+            key={review.id}
+            review={review}
+            onOpen={onOpen}
+            onContextMenu={onContextMenu}
+            canApprove={canApproveReview(transitions[review.id])}
+          />
+        ))}
     </div>
   )
 }
 
-function ReviewRow({ review, onOpen }: { review: SwarmReviewDto; onOpen: (id: string) => void }) {
-  const stateIcon = STATE_ICON[review.state]
+function ReviewRow({
+  review,
+  onOpen,
+  onContextMenu,
+  canApprove,
+}: {
+  review: SwarmReviewDto
+  onOpen: (id: string) => void
+  onContextMenu: (event: ReactMouseEvent, review: SwarmReviewDto) => void
+  canApprove: boolean
+}) {
+  const stateIcon =
+    review.state === 'needsReview' && canApprove
+      ? { icon: CircleCheck, className: styles['stateCanApprove'] }
+      : STATE_ICON[review.state]
   const StateIcon = stateIcon?.icon
   return (
-    <div className={styles['row']} onClick={() => onOpen(review.id)} data-testid="swarm-review-row">
+    <div
+      className={styles['row']}
+      onClick={() => onOpen(review.id)}
+      onContextMenu={(event) => onContextMenu(event, review)}
+      data-testid="swarm-review-row"
+    >
       <div className={styles['rowTop']}>
         {StateIcon && (
           <span

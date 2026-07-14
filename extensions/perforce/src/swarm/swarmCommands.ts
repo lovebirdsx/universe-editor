@@ -27,9 +27,11 @@ const Cmd = {
   listReviews: 'perforce.swarm.listReviews',
   dashboard: 'perforce.swarm.dashboard',
   getReview: 'perforce.swarm.getReview',
+  getTransitions: 'perforce.swarm.getTransitions',
   createReview: 'perforce.swarm.createReview',
   vote: 'perforce.swarm.vote',
   transition: 'perforce.swarm.transition',
+  obliterateReview: 'perforce.swarm.obliterateReview',
   addChange: 'perforce.swarm.addChange',
   updateReview: 'perforce.swarm.updateReview',
   updateReviewFromChangelist: 'perforce.swarm.updateReviewFromChangelist',
@@ -272,6 +274,10 @@ export function registerSwarmCommands(mgr: ClientManager, logger: SwarmLogger): 
       guard(`getReview #${String(id)}`, (c) => c.getReview(String(id)), undefined),
     ),
 
+    commands.registerCommand(Cmd.getTransitions, (id: unknown) =>
+      guard(`getTransitions #${String(id)}`, (c) => c.getTransitions(String(id)), []),
+    ),
+
     commands.registerCommand(Cmd.createReview, (req: unknown) =>
       guard(
         'createReview',
@@ -314,6 +320,18 @@ export function registerSwarmCommands(mgr: ClientManager, logger: SwarmLogger): 
             ...(r.commit ? { commit: true } : {}),
             ...(r.description ? { description: r.description } : {}),
           })
+          return true
+        },
+        false,
+      ),
+    ),
+
+    commands.registerCommand(Cmd.obliterateReview, (req: unknown) =>
+      guard(
+        `obliterateReview #${(req as { reviewId?: string })?.reviewId ?? '?'}`,
+        async (c) => {
+          const r = req as { reviewId: string }
+          await c.obliterateReview(r.reviewId)
           return true
         },
         false,

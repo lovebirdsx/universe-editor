@@ -95,6 +95,10 @@
   color: #4daafc;
 }
 
+.stateCanApprove {
+  color: #4daafc;
+}
+
 .stateNeedsRevision {
   color: #e0a44b;
 }
