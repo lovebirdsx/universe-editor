@@ -72,6 +72,16 @@
   flex: 1;
 }
 
+.refreshing {
+  animation: swarm-review-spin 0.8s linear infinite;
+}
+
+@keyframes swarm-review-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .actions {
   display: flex;
   gap: 6px;

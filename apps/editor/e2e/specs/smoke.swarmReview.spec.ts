@@ -105,6 +105,20 @@ test.describe('@p1 swarm reviews', () => {
     await expect(editor).toBeVisible()
     await swarm.waitForRequest((r) => r.method === 'GET' && r.path === 'reviews/1001')
     await swarm.waitForRequest((r) => r.method === 'GET' && r.path === 'reviews/1001/transitions')
+    await swarm.waitForRequest((r) => r.method === 'GET' && r.path === 'comments')
+
+    // Manual refresh bypasses the short-lived extension-host cache and reloads
+    // detail, legal transitions, and review comments as one user action.
+    const countRequests = (path: string) => swarm.requests().filter((r) => r.path === path).length
+    const detailBeforeRefresh = countRequests('reviews/1001')
+    const transitionsBeforeRefresh = countRequests('reviews/1001/transitions')
+    const commentsBeforeRefresh = countRequests('comments')
+    await editor.getByRole('button', { name: 'Refresh review' }).click()
+    await expect.poll(() => countRequests('reviews/1001')).toBeGreaterThan(detailBeforeRefresh)
+    await expect
+      .poll(() => countRequests('reviews/1001/transitions'))
+      .toBeGreaterThan(transitionsBeforeRefresh)
+    await expect.poll(() => countRequests('comments')).toBeGreaterThan(commentsBeforeRefresh)
 
     // Vote up.
     await editor.getByRole('button', { name: 'Vote Up' }).click()

@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { RefreshCw } from 'lucide-react'
 import {
   ICommandService,
   IConfigurationService,
@@ -19,12 +20,15 @@ import {
   type IEditorInput,
   localize,
 } from '@universe-editor/platform'
-import { Button, Spinner, cx } from '@universe-editor/workbench-ui'
+import { Button, IconButton, Spinner, cx } from '@universe-editor/workbench-ui'
 import {
   SwarmCommands,
   type SwarmAddCommentRequest,
   type SwarmCommentDto,
+  type SwarmDescribeVersionRequest,
   type SwarmFileContentRequest,
+  type SwarmGetReviewRequest,
+  type SwarmListCommentsRequest,
   type SwarmObliterateReviewRequest,
   type SwarmReviewDetailDto,
   type SwarmReviewFileDto,
@@ -46,6 +50,7 @@ import { SwarmReviewFiles } from './SwarmReviewFiles.js'
 import styles from './SwarmReviewEditor.module.css'
 
 const FILES_VIEW_MODE_STORAGE_KEY = 'swarm.reviewFiles.viewMode'
+const REVIEW_REFRESH_INTERVAL_MS = 60_000
 
 const STATE_CLASS: Record<string, string | undefined> = {
   needsReview: styles['stateNeedsReview'],
@@ -77,59 +82,91 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [files, setFiles] = useState<SwarmReviewFileDto[] | null>(null)
-  const [selectedVersion, setSelectedVersion] = useState<number | null>(null)
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(
+    detail?.versions[detail.versions.length - 1]?.version ?? null,
+  )
   /** The base version to compare against (left side); null = the version before it. */
   const [compareVersion, setCompareVersion] = useState<number | null>(null)
   const [comments, setComments] = useState<SwarmCommentDto[] | null>(null)
   const [commentDraft, setCommentDraft] = useState('')
   const loadAbortRef = useRef<AbortController | null>(null)
+  const detailRef = useRef(detail)
+  const commentsRef = useRef(comments)
+  const commentsLoadRef = useRef(0)
+  const consumedFilesRefreshRef = useRef(0)
   const filesViewModeRestoredRef = useRef(false)
+  const [filesRefreshGeneration, setFilesRefreshGeneration] = useState(0)
 
   const reviewUrl = buildSwarmReviewUrl(configuration.get<string>('perforce.swarm.url'), reviewId)
 
-  const load = useCallback(() => {
-    if (!reviewId) return
-    loadAbortRef.current?.abort()
-    const controller = new AbortController()
-    loadAbortRef.current = controller
-    setLoading(true)
-    setError(null)
-    void (async () => {
-      const ready = await waitForSwarmCommand(SwarmCommands.getReview, controller.signal)
-      if (controller.signal.aborted) return
-      if (!ready) {
-        setError(
-          localize(
-            'swarm.commands.unavailable',
-            'Swarm is unavailable. Check the Perforce extension and connection.',
-          ),
+  useEffect(() => {
+    detailRef.current = detail
+  }, [detail])
+
+  useEffect(() => {
+    commentsRef.current = comments
+  }, [comments])
+
+  const load = useCallback(
+    (force = false) => {
+      if (!reviewId) return
+      loadAbortRef.current?.abort()
+      const controller = new AbortController()
+      loadAbortRef.current = controller
+      setLoading(true)
+      setError(null)
+      void (async () => {
+        const ready = await waitForSwarmCommand(SwarmCommands.getReview, controller.signal)
+        if (controller.signal.aborted) return
+        if (!ready) {
+          if (!detailRef.current) {
+            setError(
+              localize(
+                'swarm.commands.unavailable',
+                'Swarm is unavailable. Check the Perforce extension and connection.',
+              ),
+            )
+          }
+          return
+        }
+        const r = await commands.executeCommand<SwarmReviewDetailDto | undefined>(
+          SwarmCommands.getReview,
+          (force ? { reviewId, force: true } : { reviewId }) satisfies SwarmGetReviewRequest,
         )
-        return
-      }
-      const r = await commands.executeCommand<SwarmReviewDetailDto | undefined>(
-        SwarmCommands.getReview,
-        reviewId,
-      )
-      if (controller.signal.aborted) return
-      if (!r) {
-        setError(
-          localize('swarm.review.unavailable', 'Review #{0} is unavailable.', { 0: reviewId }),
+        if (controller.signal.aborted) return
+        if (!r) {
+          if (!detailRef.current) {
+            setError(
+              localize('swarm.review.unavailable', 'Review #{0} is unavailable.', { 0: reviewId }),
+            )
+          }
+          return
+        }
+        detailRef.current = r
+        setDetail(r)
+        swarmReviewDetailCache.set(reviewId, r)
+        const latest = r.versions[r.versions.length - 1]?.version ?? null
+        setSelectedVersion((current) => {
+          if (current === null) return latest
+          return r.versions.some((version) => version.version === current) ? current : latest
+        })
+        setCompareVersion((current) =>
+          current === null || r.versions.some((version) => version.version === current)
+            ? current
+            : null,
         )
-        return
-      }
-      setDetail(r)
-      swarmReviewDetailCache.set(reviewId, r)
-      // Default to the latest version.
-      const latest = r.versions[r.versions.length - 1]?.version ?? null
-      setSelectedVersion(latest)
-    })()
-      .catch((e: unknown) => {
-        if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e))
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
-      })
-  }, [commands, reviewId])
+      })()
+        .catch((e: unknown) => {
+          if (!controller.signal.aborted && !detailRef.current) {
+            setError(e instanceof Error ? e.message : String(e))
+          }
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setLoading(false)
+        })
+    },
+    [commands, reviewId],
+  )
 
   const vote = useCallback(
     (value: 'up' | 'down' | 'clear') => {
@@ -139,7 +176,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       if (selectedVersion !== null) req.version = selectedVersion
       void commands
         .executeCommand(SwarmCommands.vote, req)
-        .then(() => load())
+        .then(() => load(true))
         .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setBusy(false))
     },
@@ -169,7 +206,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       if (commit) req.commit = true
       void commands
         .executeCommand(SwarmCommands.transition, req)
-        .then(() => load())
+        .then(() => load(true))
         .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setBusy(false))
     },
@@ -183,7 +220,10 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     void commands
       .executeCommand(SwarmCommands.updateReview, req)
       .then((ok) => {
-        if (ok) load()
+        if (ok) {
+          load(true)
+          setFilesRefreshGeneration((value) => value + 1)
+        }
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -289,8 +329,9 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   )
 
   const loadComments = useCallback(
-    (signal?: AbortSignal) => {
+    (signal?: AbortSignal, force = false) => {
       if (!reviewId) return
+      const request = ++commentsLoadRef.current
       void (async () => {
         const ready = await waitForSwarmCommand(SwarmCommands.listComments, signal)
         if (!ready || signal?.aborted) {
@@ -301,11 +342,18 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
           SwarmCommands.listComments,
           {
             reviewId,
-          },
+            ...(force ? { force: true } : {}),
+          } satisfies SwarmListCommentsRequest,
         )
-        if (!signal?.aborted) setComments(result ?? [])
+        if (!signal?.aborted && request === commentsLoadRef.current) setComments(result ?? [])
       })().catch(() => {
-        if (!signal?.aborted) setComments([])
+        if (
+          !signal?.aborted &&
+          request === commentsLoadRef.current &&
+          commentsRef.current === null
+        ) {
+          setComments([])
+        }
       })
     },
     [commands, reviewId],
@@ -320,20 +368,16 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       .executeCommand(SwarmCommands.addComment, req)
       .then(() => {
         setCommentDraft('')
-        loadComments()
+        loadComments(undefined, true)
+        load(true)
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
-  }, [commands, reviewId, commentDraft, busy, loadComments])
+  }, [commands, reviewId, commentDraft, busy, loadComments, load])
 
   useEffect(() => {
-    if (detail) {
-      const latest = detail.versions[detail.versions.length - 1]?.version ?? null
-      setSelectedVersion((v) => v ?? latest)
-    } else {
-      load()
-    }
-  }, [detail, load])
+    load()
+  }, [load])
 
   useEffect(() => {
     if (!detail) return
@@ -343,6 +387,17 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   }, [detail, loadComments])
 
   useEffect(() => () => loadAbortRef.current?.abort(), [])
+
+  const refresh = useCallback(() => {
+    setFilesRefreshGeneration((value) => value + 1)
+    load(true)
+    loadComments(undefined, true)
+  }, [load, loadComments])
+
+  useEffect(() => {
+    const timer = setInterval(refresh, REVIEW_REFRESH_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [refresh])
 
   useEffect(() => {
     let active = true
@@ -373,28 +428,36 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       setFiles(null)
       return
     }
+    const force = filesRefreshGeneration > consumedFilesRefreshRef.current
+    if (force) consumedFilesRefreshRef.current = filesRefreshGeneration
     const controller = new AbortController()
     void (async () => {
       const ready = await waitForSwarmCommand(SwarmCommands.describeVersion, controller.signal)
       if (!ready || controller.signal.aborted) {
-        if (!controller.signal.aborted) setFiles([])
+        if (!controller.signal.aborted) setFiles((current) => current ?? [])
         return
       }
       const result = await commands.executeCommand<SwarmReviewFileDto[]>(
         SwarmCommands.describeVersion,
-        selectedChange,
+        {
+          change: selectedChange,
+          ...(force ? { force: true } : {}),
+        } satisfies SwarmDescribeVersionRequest,
       )
       if (!controller.signal.aborted) setFiles(result ?? [])
     })().catch(() => {
-      if (!controller.signal.aborted) setFiles([])
+      if (!controller.signal.aborted) setFiles((current) => current ?? [])
     })
     return () => controller.abort()
-  }, [commands, selectedChange])
+  }, [commands, selectedChange, filesRefreshGeneration])
 
   if (error) {
     return (
       <div className={styles['container']} data-testid="swarm-review-editor">
         <div className={styles['error']}>{error}</div>
+        <Button size="sm" variant="secondary" onClick={refresh}>
+          {localize('common.refresh', 'Refresh')}
+        </Button>
       </div>
     )
   }
@@ -429,6 +492,18 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
           <span className={styles['author']}>{detail.author}</span>
           <span className={styles['spacer']} />
           {(loading || busy) && <Spinner />}
+          <IconButton
+            label={localize('swarm.review.refresh', 'Refresh review')}
+            disabled={loading || busy}
+            onClick={refresh}
+            data-testid="swarm-review-refresh"
+          >
+            <RefreshCw
+              size={14}
+              strokeWidth={1.75}
+              className={loading ? styles['refreshing'] : undefined}
+            />
+          </IconButton>
         </div>
         <div className={styles['actions']}>
           <Button size="sm" variant="ghost" busy={busy} onClick={() => vote('up')}>

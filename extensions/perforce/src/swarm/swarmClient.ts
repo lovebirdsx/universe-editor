@@ -10,6 +10,7 @@
  * header swarmApi injects.
  */
 import type { P4Service } from '../p4Service.js'
+import { P4Cache, type P4Clock } from '../p4Cache.js'
 import { SwarmApi } from './swarmApi.js'
 import type { SwarmLogger } from './swarmLog.js'
 import { resolveSwarmCredential } from './swarmAuth.js'
@@ -47,15 +48,33 @@ export interface SwarmDashboard {
   participating: SwarmReview[]
 }
 
+export interface SwarmCacheOptions {
+  readonly enabled?: boolean
+  readonly ttlMs?: number
+  readonly now?: P4Clock
+}
+
+const DEFAULT_SWARM_CACHE_TTL_MS = 60_000
+
+const SwarmCacheNs = {
+  reviewList: 'swarm.reviewList',
+  reviewDetail: 'swarm.reviewDetail',
+  transitions: 'swarm.transitions',
+  comments: 'swarm.comments',
+} as const
+
 export class SwarmClient {
   private readonly _api: SwarmApi
-  /** Coalesces concurrent dashboard() callers (view + status bar) onto one fetch. */
+  private readonly _cache: P4Cache
   private _dashboardInFlight: Promise<SwarmDashboard> | undefined
+  private _dashboardInFlightIsForce = false
+  private _dashboardQueuedForce: Promise<SwarmDashboard> | undefined
 
   constructor(
     private readonly _p4: P4Service,
     private readonly _config: SwarmClientConfig,
     private readonly _logger?: SwarmLogger,
+    cacheOptions: SwarmCacheOptions = {},
   ) {
     this._api = new SwarmApi({
       baseUrl: _config.baseUrl,
@@ -63,6 +82,11 @@ export class SwarmClient {
       getAuth: () => this._auth(),
       ...(_logger ? { logger: _logger } : {}),
     })
+    this._cache = new P4Cache(cacheOptions.now ?? Date.now, undefined, cacheOptions.enabled ?? true)
+    const ttlMs = cacheOptions.ttlMs ?? DEFAULT_SWARM_CACHE_TTL_MS
+    for (const namespace of Object.values(SwarmCacheNs)) {
+      this._cache.register(namespace, { kind: 'ttl', ttlMs })
+    }
   }
 
   /** The p4 user this client authenticates as. */
@@ -101,26 +125,45 @@ export class SwarmClient {
     if (filter.state) query['state'] = filter.state
     if (filter.keywords) query['keywords'] = filter.keywords
     if (filter.after) query['after'] = filter.after
-    const raw = await this._api.get('reviews', { query })
-    return parseReviewList(raw)
+    const key = reviewFilterKey(filter)
+    const cached = await this._cache.wrap(SwarmCacheNs.reviewList, key, async () => {
+      const raw = await this._api.get('reviews', { query })
+      return JSON.stringify(parseReviewList(raw))
+    })
+    return JSON.parse(cached as string) as { reviews: SwarmReview[]; lastSeen: string | null }
   }
 
   /** The action-dashboard grouping: needs-my-action / authored / participating.
    *  Concurrent callers (the sidebar view + the status-bar poll fire nearly
    *  simultaneously on open) share one in-flight fetch instead of each fanning
    *  out its own pair of requests. */
-  async dashboard(): Promise<SwarmDashboard> {
-    if (this._dashboardInFlight) return this._dashboardInFlight
-    const run = this._dashboard().finally(() => {
-      this._dashboardInFlight = undefined
+  async dashboard(force = false): Promise<SwarmDashboard> {
+    const me = this._config.user
+    if (!me) return { needsAction: [], authored: [], participating: [] }
+    if (this._dashboardInFlight) {
+      if (!force || this._dashboardInFlightIsForce) return this._dashboardInFlight
+      if (this._dashboardQueuedForce) return this._dashboardQueuedForce
+      const queued = this._dashboardInFlight
+        .then(() => this.dashboard(true))
+        .finally(() => {
+          if (this._dashboardQueuedForce === queued) this._dashboardQueuedForce = undefined
+        })
+      this._dashboardQueuedForce = queued
+      return queued
+    }
+    if (force) this._cache.invalidateNamespace(SwarmCacheNs.reviewList)
+    this._dashboardInFlightIsForce = force
+    const run = this._loadDashboard(me).finally(() => {
+      if (this._dashboardInFlight === run) {
+        this._dashboardInFlight = undefined
+        this._dashboardInFlightIsForce = false
+      }
     })
     this._dashboardInFlight = run
     return run
   }
 
-  private async _dashboard(): Promise<SwarmDashboard> {
-    const me = this._config.user
-    if (!me) return { needsAction: [], authored: [], participating: [] }
+  private async _loadDashboard(me: string): Promise<SwarmDashboard> {
     // needsAction is derived locally from authored + participating (see
     // deriveNeedsAction). We deliberately do NOT call `dashboards/action`: it is a
     // v9-only endpoint that is redundant with this derivation and, on many Swarm
@@ -140,20 +183,32 @@ export class SwarmClient {
   /** Full detail of one review. */
   async getReview(
     id: string,
+    force = false,
   ): Promise<(SwarmReviewDetail & { transitions: SwarmTransition[] }) | undefined> {
+    if (force) {
+      this._cache.invalidate(SwarmCacheNs.reviewDetail, id)
+      this._cache.invalidate(SwarmCacheNs.transitions, id)
+    }
     const [detailRaw, transitions] = await Promise.all([
-      this._api.get(`reviews/${encodeURIComponent(id)}`),
+      this._cache.wrap(SwarmCacheNs.reviewDetail, id, async () => {
+        const raw = await this._api.get(`reviews/${encodeURIComponent(id)}`)
+        const detail = parseReviewDetail(raw)
+        return detail ? JSON.stringify(detail) : undefined
+      }),
       this.getTransitions(id).catch(() => [] as SwarmTransition[]),
     ])
-    const detail = parseReviewDetail(detailRaw)
-    if (!detail) return undefined
+    if (!detailRaw) return undefined
+    const detail = JSON.parse(detailRaw) as SwarmReviewDetail
     return { ...detail, transitions }
   }
 
   /** Legal state transitions for the current user (server-authoritative). */
   async getTransitions(id: string): Promise<SwarmTransition[]> {
-    const raw = await this._api.get(`reviews/${encodeURIComponent(id)}/transitions`)
-    return parseTransitions(raw)
+    const cached = await this._cache.wrap(SwarmCacheNs.transitions, id, async () => {
+      const raw = await this._api.get(`reviews/${encodeURIComponent(id)}/transitions`)
+      return JSON.stringify(parseTransitions(raw))
+    })
+    return JSON.parse(cached as string) as SwarmTransition[]
   }
 
   /** Create a review from a shelved changelist. Returns the new review id. */
@@ -168,7 +223,9 @@ export class SwarmClient {
     if (req.reviewers?.length) body['reviewers'] = req.reviewers
     if (req.requiredReviewers?.length) body['requiredReviewers'] = req.requiredReviewers
     const raw = await this._api.post('reviews', body)
-    return parseCreatedReviewId(raw)
+    const id = parseCreatedReviewId(raw)
+    this._invalidateReviewLists()
+    return id
   }
 
   /** Associate a new change (version) with a review. */
@@ -178,6 +235,7 @@ export class SwarmClient {
     mode: 'replace' | 'append' = 'append',
   ): Promise<void> {
     await this._api.post(`reviews/${encodeURIComponent(id)}/changes`, { change, mode })
+    this._invalidateReview(id)
   }
 
   /** Vote on a review version. */
@@ -185,6 +243,7 @@ export class SwarmClient {
     const body: Record<string, unknown> = { vote }
     if (version !== undefined) body['version'] = version
     await this._api.post(`reviews/${encodeURIComponent(id)}/vote`, body)
+    this._invalidateReview(id)
   }
 
   /** Transition a review's state (optionally committing on approve). */
@@ -197,6 +256,7 @@ export class SwarmClient {
     if (opts?.commit) body['commit'] = true
     if (opts?.description) body['description'] = opts.description
     await this._api.patch(`reviews/${encodeURIComponent(id)}/state`, body)
+    this._invalidateReview(id)
   }
 
   /** Permanently remove a review. This is distinct from archiving it. */
@@ -208,7 +268,7 @@ export class SwarmClient {
    *  `GET /comments?topic=reviews/{id}` (NOT a nested `comments/reviews/{id}`). */
   async listComments(
     id: string,
-    opts?: { tasksOnly?: boolean; max?: number; after?: string },
+    opts?: { tasksOnly?: boolean; max?: number; after?: string; force?: boolean },
   ): Promise<SwarmComment[]> {
     const query: Record<string, string | number | boolean | undefined> = {
       topic: `reviews/${id}`,
@@ -216,8 +276,13 @@ export class SwarmClient {
     if (opts?.tasksOnly) query['tasksOnly'] = true
     if (opts?.max) query['max'] = opts.max
     if (opts?.after) query['after'] = opts.after
-    const raw = await this._api.get('comments', { query })
-    return parseComments(raw)
+    const key = commentFilterKey(id, opts)
+    if (opts?.force) this._cache.invalidate(SwarmCacheNs.comments, key)
+    const cached = await this._cache.wrap(SwarmCacheNs.comments, key, async () => {
+      const raw = await this._api.get('comments', { query })
+      return JSON.stringify(parseComments(raw))
+    })
+    return JSON.parse(cached as string) as SwarmComment[]
   }
 
   /** Add a comment (review-level or file-line) to a review. */
@@ -241,14 +306,58 @@ export class SwarmClient {
     const raw = await this._api.post('comments', payload)
     const root = (raw ?? {}) as Record<string, unknown>
     const rec = (root['comment'] ?? root) as Record<string, unknown>
-    return parseComments({ comments: [rec] })[0]
+    const comment = parseComments({ comments: [rec] })[0]
+    this._invalidateReview(id)
+    return comment
   }
 
   /** Change a comment's task state (open / addressed / verified).
    *  Swarm edits a comment via `PATCH /comments/{id}` (no `/edit` sub-path). */
-  async setTaskState(commentId: string, taskState: string): Promise<void> {
+  async setTaskState(reviewId: string, commentId: string, taskState: string): Promise<void> {
     await this._api.patch(`comments/${encodeURIComponent(commentId)}`, { taskState })
+    this._invalidateReview(reviewId)
   }
+
+  dispose(): void {
+    this._cache.clear()
+  }
+
+  private _invalidateReview(id: string): void {
+    this._cache.invalidate(SwarmCacheNs.reviewDetail, id)
+    this._cache.invalidate(SwarmCacheNs.transitions, id)
+    this._cache.invalidateNamespace(SwarmCacheNs.comments)
+    this._invalidateReviewLists()
+    this._logger?.debug('client', `invalidated cached review #${id}`)
+  }
+
+  private _invalidateReviewLists(): void {
+    this._cache.invalidateNamespace(SwarmCacheNs.reviewList)
+  }
+}
+
+function reviewFilterKey(filter: SwarmReviewFilter): string {
+  const sorted = (values: string[] | undefined): string[] | null =>
+    values?.length ? [...values].sort() : null
+  return JSON.stringify({
+    author: sorted(filter.author),
+    participants: sorted(filter.participants),
+    state: sorted(filter.state),
+    keywords: filter.keywords ?? null,
+    max: filter.max ?? 50,
+    after: filter.after ?? null,
+  })
+}
+
+function commentFilterKey(
+  id: string,
+  opts?: { tasksOnly?: boolean; max?: number; after?: string },
+): string {
+  return JSON.stringify({
+    id,
+    tasksOnly: opts?.tasksOnly ?? false,
+    max: opts?.max ?? null,
+    after: opts?.after ?? null,
+  })
 }
 
 /**

@@ -63,6 +63,11 @@ const FILES: SwarmReviewFileDto[] = [
   },
 ]
 
+const DETAIL_WITH_NEW_VERSION: SwarmReviewDetailDto = {
+  ...DETAIL,
+  versions: [...DETAIL.versions, { version: 2, change: '2002', pending: true, time: 2 }],
+}
+
 class RegistryCommandService {
   declare readonly _serviceBrand: undefined
   readonly executeCommand = vi.fn(async <T,>(id: string, ...args: unknown[]) => {
@@ -239,7 +244,9 @@ describe('SwarmReviewEditor restore', () => {
     const { commands } = renderReview()
 
     await act(async () => Promise.resolve())
-    expect(commands.executeCommand).not.toHaveBeenCalledWith(SwarmCommands.getReview, '1001')
+    expect(commands.executeCommand).not.toHaveBeenCalledWith(SwarmCommands.getReview, {
+      reviewId: '1001',
+    })
     expect(screen.queryByText('Review #1001 is unavailable.')).toBeNull()
 
     const registration = registerCommand(SwarmCommands.getReview, () => DETAIL)
@@ -268,6 +275,122 @@ describe('SwarmReviewEditor restore', () => {
 
     expect(screen.getByText('Review #1001 is unavailable.')).toBeTruthy()
     registration.dispose()
+  })
+
+  it('manually refreshes review detail, comments, and version files', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const listComments = registerCommand(SwarmCommands.listComments, () => [])
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const { commands } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      commands.executeCommand.mockClear()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh review' }))
+      await act(async () => Promise.resolve())
+
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getReview, {
+        reviewId: '1001',
+        force: true,
+      })
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.listComments, {
+        reviewId: '1001',
+        force: true,
+      })
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.describeVersion, {
+        change: '2001',
+        force: true,
+      })
+    } finally {
+      describeVersion.dispose()
+      listComments.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('automatically refreshes an open review every minute', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const listComments = registerCommand(SwarmCommands.listComments, () => [])
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const { commands, unmount } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      commands.executeCommand.mockClear()
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000)
+      })
+
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getReview, {
+        reviewId: '1001',
+        force: true,
+      })
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.listComments, {
+        reviewId: '1001',
+        force: true,
+      })
+
+      unmount()
+      commands.executeCommand.mockClear()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000)
+      })
+      expect(commands.executeCommand).not.toHaveBeenCalled()
+    } finally {
+      describeVersion.dispose()
+      listComments.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('keeps a selected version when a refresh discovers a newer version', async () => {
+    let detailLoads = 0
+    const getReview = registerCommand(SwarmCommands.getReview, () =>
+      ++detailLoads === 1 ? DETAIL : DETAIL_WITH_NEW_VERSION,
+    )
+    const listComments = registerCommand(SwarmCommands.listComments, () => [])
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      const versionSelect = screen.getAllByRole('combobox')[1] as HTMLSelectElement
+      expect(versionSelect.value).toBe('1')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh review' }))
+      await act(async () => Promise.resolve())
+
+      expect(versionSelect.value).toBe('1')
+      expect(screen.getByRole('option', { name: 'v2 (2002)' })).toBeTruthy()
+    } finally {
+      describeVersion.dispose()
+      listComments.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('keeps existing files when a background file refresh fails', async () => {
+    let fileLoads = 0
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const listComments = registerCommand(SwarmCommands.listComments, () => [])
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => {
+      if (++fileLoads === 1) return FILES
+      throw new Error('temporary p4 failure')
+    })
+    renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      expect(screen.getByText('a.ts')).toBeTruthy()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh review' }))
+      await act(async () => Promise.resolve())
+
+      expect(screen.getByText('a.ts')).toBeTruthy()
+      expect(screen.queryByText('No files in this version.')).toBeNull()
+    } finally {
+      describeVersion.dispose()
+      listComments.dispose()
+      getReview.dispose()
+    }
   })
 })
 

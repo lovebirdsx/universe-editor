@@ -50,6 +50,10 @@ interface Entry {
 export class P4Cache {
   private readonly _policies = new Map<string, P4CachePolicy>()
   private readonly _store = new Map<string, Map<string, Entry>>()
+  private readonly _inFlight = new Map<string, Map<string, Promise<string | undefined>>>()
+  private readonly _namespaceGenerations = new Map<string, number>()
+  private readonly _keyGenerations = new Map<string, Map<string, number>>()
+  private _generation = 0
 
   constructor(
     private readonly _now: P4Clock = Date.now,
@@ -64,8 +68,9 @@ export class P4Cache {
   }
 
   setEnabled(enabled: boolean): void {
+    if (this._enabled === enabled) return
     this._enabled = enabled
-    if (!enabled) this._store.clear()
+    if (!enabled) this.clear()
   }
 
   /**
@@ -86,29 +91,79 @@ export class P4Cache {
     const hit = this._read(ns, key, policy)
     if (hit !== undefined) return hit
 
-    const value = await fetch()
-    if (value === undefined) return undefined
-    this._write(ns, key, value, policy)
-    return value
+    const existing = this._inFlight.get(ns)?.get(key)
+    if (existing) return existing
+
+    const generation = this._generation
+    const namespaceGeneration = this._namespaceGenerations.get(ns) ?? 0
+    const keyGeneration = this._keyGenerations.get(ns)?.get(key) ?? 0
+    const promise = (async () => {
+      const value = await fetch()
+      if (value === undefined) return undefined
+      if (
+        this._enabled &&
+        generation === this._generation &&
+        namespaceGeneration === (this._namespaceGenerations.get(ns) ?? 0) &&
+        keyGeneration === (this._keyGenerations.get(ns)?.get(key) ?? 0)
+      ) {
+        this._write(ns, key, value, policy)
+      }
+      return value
+    })()
+    let inFlight = this._inFlight.get(ns)
+    if (!inFlight) {
+      inFlight = new Map()
+      this._inFlight.set(ns, inFlight)
+    }
+    inFlight.set(key, promise)
+    try {
+      return await promise
+    } finally {
+      if (this._inFlight.get(ns)?.get(key) === promise) {
+        this._inFlight.get(ns)?.delete(key)
+      }
+    }
+  }
+
+  /** Drop one exact entry without disturbing unrelated data in the namespace. */
+  invalidate(ns: string, key: string): void {
+    this._store.get(ns)?.delete(key)
+    let generations = this._keyGenerations.get(ns)
+    if (!generations) {
+      generations = new Map()
+      this._keyGenerations.set(ns, generations)
+    }
+    generations.set(key, (generations.get(key) ?? 0) + 1)
+    this._inFlight.get(ns)?.delete(key)
+  }
+
+  /** Drop every entry in one namespace. */
+  invalidateNamespace(ns: string): void {
+    this._store.get(ns)?.clear()
+    this._namespaceGenerations.set(ns, (this._namespaceGenerations.get(ns) ?? 0) + 1)
+    this._keyGenerations.delete(ns)
+    this._inFlight.delete(ns)
   }
 
   /** Drop every entry in `ttl` namespaces (post-mutation refresh). Immutable
    *  namespaces are content-addressed and stay. */
   invalidateWorkspace(): void {
-    for (const [ns, entries] of this._store) {
-      const policy = this._policies.get(ns)
-      if (policy?.kind === 'ttl') entries.clear()
+    for (const [ns, policy] of this._policies) {
+      if (policy.kind === 'ttl') this.invalidateNamespace(ns)
     }
   }
 
   /** Drop ttl-namespace entries whose key mentions `needle` (a depot or local
    *  path), for single-file operations. Immutable entries stay. */
   invalidateFile(needle: string): void {
-    for (const [ns, entries] of this._store) {
-      const policy = this._policies.get(ns)
+    for (const [ns, policy] of this._policies) {
       if (policy?.kind !== 'ttl') continue
-      for (const key of [...entries.keys()]) {
-        if (key.includes(needle)) entries.delete(key)
+      const keys = new Set([
+        ...(this._store.get(ns)?.keys() ?? []),
+        ...(this._inFlight.get(ns)?.keys() ?? []),
+      ])
+      for (const key of keys) {
+        if (key.includes(needle)) this.invalidate(ns, key)
       }
     }
   }
@@ -116,6 +171,10 @@ export class P4Cache {
   /** Drop everything (e.g. going offline / disposing). */
   clear(): void {
     this._store.clear()
+    this._inFlight.clear()
+    this._namespaceGenerations.clear()
+    this._keyGenerations.clear()
+    this._generation++
   }
 
   private _read(ns: string, key: string, policy: P4CachePolicy): string | undefined {
@@ -173,6 +232,8 @@ export const P4CacheNs = {
   opened: 'opened',
   /** `changes -s submitted -m N //...` — the graph history list (grows). */
   changesSubmitted: 'changesSubmitted',
+  /** `describe -S -s <pendingCL>` — mutable because a shelf can be replaced. */
+  shelvedDescribe: 'shelvedDescribe',
 } as const
 
 export type P4CacheNamespace = (typeof P4CacheNs)[keyof typeof P4CacheNs]
@@ -185,6 +246,7 @@ export function registerP4CacheNamespaces(cache: P4Cache, workspaceTtlMs: number
   cache.register(P4CacheNs.changeDetailPaths, { kind: 'immutable', persist: false })
   cache.register(P4CacheNs.where, { kind: 'ttl', ttlMs: Math.max(workspaceTtlMs, 30_000) })
   cache.register(P4CacheNs.opened, { kind: 'ttl', ttlMs: workspaceTtlMs })
+  cache.register(P4CacheNs.shelvedDescribe, { kind: 'ttl', ttlMs: workspaceTtlMs })
   cache.register(P4CacheNs.changesSubmitted, {
     kind: 'ttl',
     ttlMs: Math.max(workspaceTtlMs, 20_000),

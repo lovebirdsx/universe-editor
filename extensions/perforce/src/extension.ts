@@ -185,7 +185,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const swarmOut = window.createOutputChannel('Swarm')
   context.subscriptions.push(swarmOut)
   const swarmLogger = createSwarmLogger((line) => swarmOut.appendLine(line))
-  context.subscriptions.push(registerSwarmCommands(mgr, swarmLogger))
+  context.subscriptions.push(registerSwarmCommands(mgr, swarmLogger, cacheEnabled))
 
   context.subscriptions.push(
     // Point argument-less commands at the SCM-selected client. Pushed by the

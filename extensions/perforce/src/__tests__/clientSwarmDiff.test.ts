@@ -131,6 +131,15 @@ describe('PerforceClient Swarm diff files', () => {
         baseRevision: null,
       },
     ])
+    await client!.describeChangeFiles('900')
+    expect(
+      spawnMock.mock.calls.filter((call) => subcommand((call[1] as string[]) ?? []) === 'describe'),
+    ).toHaveLength(1)
+
+    await client!.describeChangeFiles('900', true)
+    expect(
+      spawnMock.mock.calls.filter((call) => subcommand((call[1] as string[]) ?? []) === 'describe'),
+    ).toHaveLength(2)
 
     client!.dispose()
   })

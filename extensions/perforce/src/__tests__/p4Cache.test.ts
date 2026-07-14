@@ -56,6 +56,54 @@ describe('P4Cache', () => {
     expect(fetches).toBe(2)
   })
 
+  it('coalesces concurrent reads for the same key', async () => {
+    const cache = new P4Cache()
+    cache.register('ns', { kind: 'ttl', ttlMs: 1000 })
+    let resolve: ((value: string) => void) | undefined
+    let fetches = 0
+    const fetch = () => {
+      fetches++
+      return new Promise<string>((r) => (resolve = r))
+    }
+
+    const first = cache.wrap('ns', 'k', fetch)
+    const second = cache.wrap('ns', 'k', fetch)
+    expect(fetches).toBe(1)
+    resolve?.('value')
+
+    await expect(Promise.all([first, second])).resolves.toEqual(['value', 'value'])
+  })
+
+  it('does not let an invalidated in-flight read repopulate stale data', async () => {
+    const cache = new P4Cache()
+    cache.register('ns', { kind: 'ttl', ttlMs: 1000 })
+    let resolveStale: ((value: string) => void) | undefined
+    const stale = cache.wrap(
+      'ns',
+      'k',
+      () => new Promise<string>((resolve) => (resolveStale = resolve)),
+    )
+
+    cache.invalidate('ns', 'k')
+    await expect(cache.wrap('ns', 'k', async () => 'fresh')).resolves.toBe('fresh')
+    resolveStale?.('stale')
+    await expect(stale).resolves.toBe('stale')
+    await expect(cache.wrap('ns', 'k', async () => 'wrong')).resolves.toBe('fresh')
+  })
+
+  it('invalidates one namespace without dropping another', async () => {
+    const cache = new P4Cache()
+    cache.register('a', { kind: 'ttl', ttlMs: 1000 })
+    cache.register('b', { kind: 'ttl', ttlMs: 1000 })
+    await cache.wrap('a', 'k', async () => 'a1')
+    await cache.wrap('b', 'k', async () => 'b1')
+
+    cache.invalidateNamespace('a')
+
+    await expect(cache.wrap('a', 'k', async () => 'a2')).resolves.toBe('a2')
+    await expect(cache.wrap('b', 'k', async () => 'b2')).resolves.toBe('b1')
+  })
+
   it('expires a ttl entry after its window', async () => {
     const clock = fakeClock()
     const cache = new P4Cache(clock.now)

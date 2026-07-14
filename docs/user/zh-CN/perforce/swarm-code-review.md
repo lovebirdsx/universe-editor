@@ -71,7 +71,7 @@
 
 ## 更新已有审核
 
-要把当前 changelist 的改动，作为**新版本**关联到一个**你已发起的审核**上（对标 P4V 的 *Update a Swarm Review…*）：
+要把当前 changelist 的改动，作为**新版本**关联到一个**你已发起的审核**上（对标 P4V 的 _Update a Swarm Review…_）：
 
 - 在 changelist 组头右键 / 行内动作里选 **「更新 Swarm 审核…」**；
 - 或命令面板运行 **"Perforce: Update a Swarm Review…"**。
@@ -84,10 +84,11 @@
 
 > 这与审核详情页里的 **Update Review** 按钮殊途同归：详情页按钮已知道是哪个审核，从 changelist 出发的这条路径则让你**先选审核**——适合你手上有改动、但审核详情页没开着的情况。
 
-
 ## 审核详情：投票、改状态、评论
 
 审核详情标签页顶部是头部区（审核号、状态徽章、作者、参与者与投票），下面依次是操作按钮、版本选择、文件列表与评论面板。审核号 **Review #编号** 本身是网页链接，点击会用系统浏览器打开对应的 Swarm 页面。文件区右上角可以在**列表**和**目录树**两种形式间切换：列表会在文件名后显示目录，目录树会按路径分组并支持折叠；选择会全局记忆，重启编辑器后继续沿用。
+
+打开的审核详情会每 **1 分钟**在后台刷新一次详情、评论和当前版本文件列表。需要立即获取服务器最新数据时，点击标题栏右侧的**刷新**图标；手动刷新会绕过短期缓存。刷新期间会保留当前选择的历史版本，不会强制跳回最新版本。
 
 - **投票**：`Vote Up` / `Vote Down` / `Clear Vote`，绑定当前所选版本，提交后刷新。
 - **改状态**：编辑器**只显示服务器允许的合法迁移**（自动处理「作者不能自批」「moderator 才能 approve」等权限，无需你判断）。点对应按钮即迁移状态。
@@ -130,14 +131,15 @@ universe-editor://swarm/review/1234
 
 ## 配置项一览
 
-| 配置项 | 默认 | 说明 |
-|---|---|---|
-| `perforce.swarm.enabled` | `true` | 是否开启 Swarm 集成。 |
-| `perforce.swarm.url` | `http://swarm.aki.kuro.com/` | Swarm 服务器 URL。**凭据绝不进配置**。 |
-| `perforce.swarm.apiVersion` | `v9` | Swarm REST API 版本。`v9` 端点覆盖最全（含 action 看板）；仅当服务器版本要求时改 `v11`。 |
-| `perforce.swarm.pollInterval` | `0` | 轮询看板的秒数，`0` 关闭，最小 10 秒。 |
-| `perforce.swarm.authMode` | `ticket` | 认证方式：`ticket`（复用 p4 登录态）。 |
-| `perforce.swarm.trace` | `false` | 是否记录详细诊断（请求体、查询参数、重试、耗时、错误响应体）到 **Swarm** 输出通道。凭据绝不记录。排查问题时打开。 |
+| 配置项                        | 默认                         | 说明                                                                                                              |
+| ----------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `perforce.swarm.enabled`      | `true`                       | 是否开启 Swarm 集成。                                                                                             |
+| `perforce.swarm.url`          | `http://swarm.aki.kuro.com/` | Swarm 服务器 URL。**凭据绝不进配置**。                                                                            |
+| `perforce.swarm.apiVersion`   | `v9`                         | Swarm REST API 版本。`v9` 端点覆盖最全（含 action 看板）；仅当服务器版本要求时改 `v11`。                          |
+| `perforce.swarm.pollInterval` | `0`                          | 轮询看板的秒数，`0` 关闭，最小 10 秒。                                                                            |
+| `perforce.swarm.authMode`     | `ticket`                     | 认证方式：`ticket`（复用 p4 登录态）。                                                                            |
+| `perforce.swarm.trace`        | `false`                      | 是否记录详细诊断（请求体、查询参数、重试、耗时、错误响应体）到 **Swarm** 输出通道。凭据绝不记录。排查问题时打开。 |
+| `perforce.cache.enabled`      | `true`                       | 是否缓存 p4 与 Swarm 查询结果以减少服务器往返；Swarm 写操作和手动刷新会立即失效相关缓存。                         |
 
 ## 排查与日志
 

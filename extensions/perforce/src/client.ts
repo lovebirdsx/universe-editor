@@ -955,7 +955,10 @@ export class PerforceClient {
     const ok = await this.shelve(target)
     return ok ? target : undefined
   }
-  async describeChangeFiles(change: string): Promise<
+  async describeChangeFiles(
+    change: string,
+    force = false,
+  ): Promise<
     {
       status: string
       path: string
@@ -964,23 +967,37 @@ export class PerforceClient {
       baseRevision: string | null
     }[]
   > {
-    const res = await this._p4.execRecords(['describe', '-S', '-s', change])
-    if (res.result.exitCode !== 0) return []
-    const record = res.records[0]
-    if (!record) return []
-    const detail = parseChangeDescribe(record)
-    if (!detail) return []
-    const localPaths = await this._whereLocalPaths(detail.files.map((file) => file.depotFile))
-    return detail.files.map((f) => {
-      const status = statusFromAction(f.action)
-      return {
-        status,
-        path: displayPath(f.depotFile),
-        depotFile: f.depotFile,
-        localPath: localPaths.get(f.depotFile) ?? null,
-        baseRevision: status === 'A' ? null : f.rev || null,
-      }
+    if (force) this._cache.invalidate(P4CacheNs.shelvedDescribe, change)
+    const cached = await this._cache.wrap(P4CacheNs.shelvedDescribe, change, async () => {
+      const res = await this._p4.execRecords(['describe', '-S', '-s', change])
+      if (res.result.exitCode !== 0) return undefined
+      const record = res.records[0]
+      if (!record) return undefined
+      const detail = parseChangeDescribe(record)
+      if (!detail) return undefined
+      const localPaths = await this._whereLocalPaths(detail.files.map((file) => file.depotFile))
+      return JSON.stringify(
+        detail.files.map((f) => {
+          const status = statusFromAction(f.action)
+          return {
+            status,
+            path: displayPath(f.depotFile),
+            depotFile: f.depotFile,
+            localPath: localPaths.get(f.depotFile) ?? null,
+            baseRevision: status === 'A' ? null : f.rev || null,
+          }
+        }),
+      )
     })
+    return cached === undefined
+      ? []
+      : (JSON.parse(cached) as {
+          status: string
+          path: string
+          depotFile: string
+          localPath: string | null
+          baseRevision: string | null
+        }[])
   }
 
   /**

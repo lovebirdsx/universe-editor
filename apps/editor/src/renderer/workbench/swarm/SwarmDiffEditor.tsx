@@ -89,7 +89,11 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
 
   const setTaskState = useCallback(
     async (commentId: string, taskState: string): Promise<void> => {
-      await commands.executeCommand(SwarmCommands.setTaskState, { commentId, taskState })
+      await commands.executeCommand(SwarmCommands.setTaskState, {
+        reviewId,
+        commentId,
+        taskState,
+      })
       loadComments()
     },
     [commands, loadComments],

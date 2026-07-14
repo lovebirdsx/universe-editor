@@ -174,6 +174,13 @@ export interface SwarmReviewListResult {
   lastSeen: string | null
 }
 
+/** Argument for `perforce.swarm.getReview`. */
+export interface SwarmGetReviewRequest {
+  reviewId: string
+  /** Bypass the short-lived Swarm cache. */
+  force?: boolean
+}
+
 /** The action-dashboard grouping the list view renders. */
 export interface SwarmDashboardResult {
   /** Reviews needing the current user's action (reviewer, not yet voted / recalled). */
@@ -252,8 +259,19 @@ export interface SwarmAddCommentRequest {
   content?: string[]
 }
 
+/** Argument for `perforce.swarm.listComments`. */
+export interface SwarmListCommentsRequest {
+  reviewId: string
+  tasksOnly?: boolean
+  max?: number
+  after?: string
+  /** Bypass the short-lived Swarm cache. */
+  force?: boolean
+}
+
 /** Argument for `perforce.swarm.setTaskState`. */
 export interface SwarmSetTaskStateRequest {
+  reviewId: string
   commentId: string
   taskState: SwarmTaskState
 }
@@ -263,6 +281,13 @@ export interface SwarmFileContentRequest {
   depotFile: string
   /** A validated p4 revision suffix such as `#4` or `@=12345`. */
   revision: string
+}
+
+/** Argument for `perforce.swarm.describeVersion`. */
+export interface SwarmDescribeVersionRequest {
+  change: string
+  /** Bypass the short-lived pending-shelf cache. */
+  force?: boolean
 }
 
 /** Argument for `perforce.swarm.getFileDiff` — the two version snapshots to compare. */

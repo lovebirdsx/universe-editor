@@ -65,13 +65,18 @@ async function readSwarmConfig(): Promise<SwarmConfig | undefined> {
  * client changes, so switching workspaces / editing the URL takes effect without
  * a reload.
  */
-export function registerSwarmCommands(mgr: ClientManager, logger: SwarmLogger): Disposable {
+export function registerSwarmCommands(
+  mgr: ClientManager,
+  logger: SwarmLogger,
+  cacheEnabled = true,
+): Disposable {
   let client: SwarmClient | undefined
   let signature = ''
 
   const swarm = async (): Promise<SwarmClient | undefined> => {
     const config = await readSwarmConfig()
     if (!config) {
+      client?.dispose()
       client = undefined
       signature = ''
       return undefined
@@ -81,6 +86,7 @@ export function registerSwarmCommands(mgr: ClientManager, logger: SwarmLogger): 
     const sig = `${config.url}|${config.apiVersion}|${config.authMode}|${user ?? ''}`
     if (!client || sig !== signature) {
       if (!active) return undefined
+      client?.dispose()
       logger.info(
         'client',
         `(re)building SwarmClient: url=${config.url} api=${config.apiVersion} auth=${config.authMode} user=${user ?? '(unknown)'}`,
@@ -89,6 +95,7 @@ export function registerSwarmCommands(mgr: ClientManager, logger: SwarmLogger): 
         active.p4Service,
         { baseUrl: config.url, apiVersion: config.apiVersion, user },
         logger,
+        { enabled: cacheEnabled },
       )
       signature = sig
     }
@@ -270,9 +277,17 @@ export function registerSwarmCommands(mgr: ClientManager, logger: SwarmLogger): 
       }),
     ),
 
-    commands.registerCommand(Cmd.getReview, (id: unknown) =>
-      guard(`getReview #${String(id)}`, (c) => c.getReview(String(id)), undefined),
-    ),
+    commands.registerCommand(Cmd.getReview, (arg: unknown) => {
+      const request =
+        typeof arg === 'object' && arg !== null
+          ? (arg as { reviewId: string; force?: boolean })
+          : { reviewId: String(arg) }
+      return guard(
+        `getReview #${request.reviewId}`,
+        (c) => c.getReview(request.reviewId, request.force),
+        undefined,
+      )
+    }),
 
     commands.registerCommand(Cmd.getTransitions, (id: unknown) =>
       guard(`getTransitions #${String(id)}`, (c) => c.getTransitions(String(id)), []),
@@ -503,10 +518,18 @@ export function registerSwarmCommands(mgr: ClientManager, logger: SwarmLogger): 
       guard(
         `listComments #${(req as { reviewId?: string })?.reviewId ?? '?'}`,
         (c) => {
-          const r = (req ?? {}) as { reviewId: string; tasksOnly?: boolean; max?: number }
+          const r = (req ?? {}) as {
+            reviewId: string
+            tasksOnly?: boolean
+            max?: number
+            after?: string
+            force?: boolean
+          }
           return c.listComments(r.reviewId, {
             ...(r.tasksOnly ? { tasksOnly: true } : {}),
             ...(r.max ? { max: r.max } : {}),
+            ...(r.after ? { after: r.after } : {}),
+            ...(r.force ? { force: true } : {}),
           })
         },
         [],
@@ -550,8 +573,8 @@ export function registerSwarmCommands(mgr: ClientManager, logger: SwarmLogger): 
       guard(
         `setTaskState comment=${(req as { commentId?: string })?.commentId ?? '?'}→${(req as { taskState?: string })?.taskState ?? '?'}`,
         async (c) => {
-          const r = req as { commentId: string; taskState: string }
-          await c.setTaskState(r.commentId, r.taskState)
+          const r = req as { reviewId: string; commentId: string; taskState: string }
+          await c.setTaskState(r.reviewId, r.commentId, r.taskState)
           return true
         },
         false,
@@ -561,11 +584,15 @@ export function registerSwarmCommands(mgr: ClientManager, logger: SwarmLogger): 
     // List the files in a review version's backing (shelved) change. Uses the
     // active PerforceClient's p4 connection (not the Swarm REST API) — the review
     // snapshot lives in the depot as a shelved change.
-    commands.registerCommand(Cmd.describeVersion, async (change: unknown) => {
+    commands.registerCommand(Cmd.describeVersion, async (arg: unknown) => {
       const active = mgr.active
-      if (!active || !change) return []
-      logger.debug('cmd', `describeVersion change=${String(change)} (p4 describe)`)
-      return active.describeChangeFiles(String(change))
+      const request =
+        typeof arg === 'object' && arg !== null
+          ? (arg as { change: string; force?: boolean })
+          : { change: String(arg) }
+      if (!active || !request.change) return []
+      logger.debug('cmd', `describeVersion change=${request.change} (p4 describe)`)
+      return active.describeChangeFiles(request.change, request.force)
     }),
 
     // Print a depot file at either its review-base revision (`#<rev>`) or an
@@ -598,6 +625,7 @@ export function registerSwarmCommands(mgr: ClientManager, logger: SwarmLogger): 
     dispose: () => {
       statusBar.dispose()
       for (const s of subs) s.dispose()
+      client?.dispose()
       client = undefined
     },
   }

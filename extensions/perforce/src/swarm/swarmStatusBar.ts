@@ -18,6 +18,8 @@ export class SwarmStatusBarController {
   private readonly _item: StatusBarItem
   private _timer: ReturnType<typeof setInterval> | undefined
   private _disposed = false
+  private _refreshing: Promise<void> | undefined
+  private _refreshQueued = false
   /** Review ids that needed my action on the last poll; drives new-review toasts. */
   private _knownNeedsAction = new Set<string>()
   /** First poll primes the baseline without notifying (avoids a startup burst). */
@@ -54,13 +56,31 @@ export class SwarmStatusBarController {
    *  unconfigured or the fetch fails (no noise). */
   async refresh(): Promise<void> {
     if (this._disposed) return
+    if (this._refreshing) {
+      this._refreshQueued = true
+      return this._refreshing
+    }
+    const refresh = (async () => {
+      do {
+        this._refreshQueued = false
+        await this._refreshOnce()
+      } while (this._refreshQueued && !this._disposed)
+    })().finally(() => {
+      if (this._refreshing === refresh) this._refreshing = undefined
+    })
+    this._refreshing = refresh
+    return refresh
+  }
+
+  private async _refreshOnce(): Promise<void> {
+    if (this._disposed) return
     const client = await this._getClient()
     if (!client) {
       this._item.hide()
       return
     }
     try {
-      const dash = await client.dashboard()
+      const dash = await client.dashboard(true)
       if (this._disposed) return
       const count = dash.needsAction.length
       this._logger?.debug(
