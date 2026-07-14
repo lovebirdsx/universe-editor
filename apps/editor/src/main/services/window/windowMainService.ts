@@ -516,10 +516,12 @@ export class WindowMainService implements IWindowMainService {
         if (existing.win.isMinimized()) existing.win.restore()
         existing.win.focus()
         if (sessionToOpen) existing.win.webContents.send('ue:open-session', sessionToOpen)
+        await this._opts.appServices.recentWorkspaces.add(workspace)
       }
       return
     }
-    await this._opts.appServices.recentWorkspaces.add(workspace)
+    // WorkspaceMainService.restoreCurrent() (invoked by createWindow below) bumps
+    // the shared recent list itself, so no need to add() again here.
     await this.createWindow({ workspace, ...(sessionToOpen ? { sessionToOpen } : {}) })
   }
 

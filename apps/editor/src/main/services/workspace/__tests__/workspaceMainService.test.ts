@@ -180,7 +180,7 @@ describe('WorkspaceMainService', () => {
     svc.dispose()
   })
 
-  it('restoreCurrent fires onDidChangeWorkspace, binds scope, and marks hydrated', async () => {
+  it('restoreCurrent fires onDidChangeWorkspace, binds scope, marks hydrated, and bumps recent', async () => {
     const storage = makeStorage()
     const svc = new WorkspaceMainService(storage, makeRecents(), makeDialog())
     const recentEvents: (IRecentWorkspace[] | null)[] = []
@@ -191,8 +191,10 @@ describe('WorkspaceMainService', () => {
     const folder = URI.file('/tmp/r')
     await svc.restoreCurrent({ folder, name: 'r' })
     expect(restoreSpy).toHaveBeenCalledTimes(1)
-    expect(recentEvents).toEqual([])
+    expect(recentEvents).toEqual([[expect.objectContaining({ name: 'r' })]])
     expect((await svc.getCurrent())?.folder.toString()).toBe(folder.toString())
+    const recent = await svc.getRecent()
+    expect(recent.map((r) => r.folder.toString())).toEqual([folder.toString()])
     // scope bound exactly once by restoreCurrent; getCurrent must not re-switch
     expect(storage.switchCalls).toHaveLength(1)
     expect(storage.switchCalls[0]).toBeTypeOf('string')
@@ -207,7 +209,7 @@ describe('WorkspaceMainService', () => {
     svc.dispose()
   })
 
-  it('openFolder focuses an existing window and aborts when the interceptor returns true', async () => {
+  it('openFolder focuses an existing window, bumps recent, and aborts when the interceptor returns true', async () => {
     const storage = makeStorage()
     const seen: string[] = []
     const svc = new WorkspaceMainService(storage, makeRecents(), makeDialog(), undefined, (id) => {
@@ -218,9 +220,14 @@ describe('WorkspaceMainService', () => {
     svc.onDidChangeWorkspace((w) => workspaceEvents.push(w))
     await svc.openFolder(URI.file('/tmp/already-open'))
     expect(seen).toHaveLength(1)
-    // aborted: no current set, no event fired, no scope swap to a real id
+    // aborted: no current set, no workspace event fired, no scope swap to a real id
     await expect(svc.getCurrent()).resolves.toBeNull()
     expect(workspaceEvents).toEqual([])
+    // still counts as "opened" for recency purposes
+    const recent = await svc.getRecent()
+    expect(recent.map((r) => r.folder.toString())).toEqual([
+      URI.file('/tmp/already-open').toString(),
+    ])
     svc.dispose()
   })
 

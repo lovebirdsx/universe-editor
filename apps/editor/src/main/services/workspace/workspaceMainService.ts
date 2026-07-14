@@ -136,6 +136,7 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
     // windows writing the same workspaces/<id>.json concurrently).
     if (this._onBeforeOpen?.(workspaceId)) {
       this._logger.info(`openFolder focused existing window for ${workspace.folder.toString()}`)
+      await this._recents.add(workspace)
       return
     }
     // Flush + swap storage scope BEFORE firing onDidChangeWorkspace so
@@ -181,13 +182,16 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
   /**
    * Restore a workspace into this window at startup (multi-window session
    * restore). Marks the service hydrated so a later getCurrent() does not
-   * re-run the WORKSPACE-scope swap.
+   * re-run the WORKSPACE-scope swap. Also bumps the shared recent list so a
+   * workspace kept open across app restarts (the common case) doesn't go
+   * stale relative to folders opened explicitly via Open Folder/Open Recent.
    */
   async restoreCurrent(workspace: IWorkspace): Promise<void> {
     await this._storage.switchWorkspace(workspaceIdFromUri(workspace.folder.toString()))
     this._current = workspace
     this._hydrated = true
     this._onDidChangeWorkspace.fire(workspace)
+    await this._recents.add(workspace)
     this._logger.info(`restoreCurrent ${workspace.folder.toString()}`)
   }
 
