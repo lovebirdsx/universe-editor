@@ -40,6 +40,15 @@ export interface LogAppendEvent {
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 const FLUSH_DEBOUNCE_MS = 150
 const MAX_BUFFER_LINES = 10000
+// A healthy channel never rotates a 10 MB file more than a handful of times a
+// minute. A tight rotate burst means something is writing pathologically fast —
+// classically a feedback loop where an append fans out over IPC, fails against a
+// dead renderer frame, logs that failure, and re-enters here. When we see the
+// burst we stop fanning appends out (_onChunk) for a cooldown: the file keeps
+// recording for post-mortem, but the loop's amplification path is severed.
+const ROTATE_BURST_WINDOW_MS = 10_000
+const ROTATE_BURST_THRESHOLD = 3
+const CHUNK_SUPPRESS_MS = 30_000
 export const SESSION_DIR_RE = /^\d{8}T\d{6}$/
 
 const LOG_LEVEL_LABELS: Record<LogLevel, string> = {
@@ -87,6 +96,10 @@ class FileLogger extends AbstractLogger {
   private _pendingFlush: ReturnType<typeof setTimeout> | null = null
   private _estimatedSize = 0
   private _timestampFormat: string = LOG_TIMESTAMP_FORMAT_DEFAULT
+  // Rotate-burst circuit breaker. When rotations come faster than a real workload
+  // ever would, we suppress the append fan-out (_onChunk) until the burst subsides.
+  private _rotateTimes: number[] = []
+  private _chunkSuppressedUntil = 0
 
   constructor(
     sessionDir: string,
@@ -172,7 +185,9 @@ class FileLogger extends AbstractLogger {
         await this._rotate()
       }
       await fs.appendFile(this._logPath, content, 'utf8')
-      this._onChunk(this._channelId, content, maxLevel, this._windowId)
+      if (Date.now() >= this._chunkSuppressedUntil) {
+        this._onChunk(this._channelId, content, maxLevel, this._windowId)
+      }
     } catch (err) {
       // Critical: use the pre-interceptor console so a logging failure cannot
       // recurse through the console interceptor back into this same logger.
@@ -195,6 +210,20 @@ class FileLogger extends AbstractLogger {
       // File may not exist yet; ignore
     }
     this._estimatedSize = 0
+    this._recordRotation()
+  }
+
+  /** Trip the circuit breaker when rotations arrive in a tight burst. */
+  private _recordRotation(): void {
+    const now = Date.now()
+    this._rotateTimes.push(now)
+    this._rotateTimes = this._rotateTimes.filter((t) => now - t <= ROTATE_BURST_WINDOW_MS)
+    if (this._rotateTimes.length >= ROTATE_BURST_THRESHOLD) {
+      this._chunkSuppressedUntil = now + CHUNK_SUPPRESS_MS
+      getOriginalConsole().error(
+        `[LogMainService] channel '${this._channelId}' rotate burst (${this._rotateTimes.length} in ${ROTATE_BURST_WINDOW_MS}ms) — suppressing append fan-out for ${CHUNK_SUPPRESS_MS}ms`,
+      )
+    }
   }
 
   override dispose(): void {

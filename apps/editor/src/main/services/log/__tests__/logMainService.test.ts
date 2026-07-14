@@ -177,6 +177,39 @@ describe('LogMainService', () => {
     expect(current).toContain('after-rotate line')
   })
 
+  it('suppresses onDidAppendEntry fan-out after a rotate burst (feedback-loop circuit breaker)', async () => {
+    const svc = new LogMainService()
+    const events: Array<{ channelId: string }> = []
+    svc.onDidAppendEntry((e) => events.push(e))
+
+    const logger = svc.createLogger({ id: 'burst', name: 'Burst' })
+    const inner = logger as unknown as { _estimatedSize: number }
+
+    // Force enough back-to-back rotations to exceed the burst threshold. Each
+    // flush is pushed over the size cap so _rotate() runs and records a rotation.
+    for (let i = 0; i < 4; i++) {
+      inner._estimatedSize = 11 * 1024 * 1024
+      logger.info(`line ${i}`)
+      logger.flush()
+      await new Promise((r) => setTimeout(r, 30))
+    }
+
+    const countAfterBurst = events.length
+
+    // A subsequent normal write must NOT fan out while suppression is active,
+    // even though the file itself keeps recording.
+    inner._estimatedSize = 0
+    logger.info('post-burst line')
+    logger.flush()
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(events.length).toBe(countAfterBurst)
+
+    const sessionDir = join(tmpDir, 'logs', svc.getSessionId())
+    const current = await fs.readFile(join(sessionDir, 'burst.log'), 'utf8')
+    expect(current).toContain('post-burst line')
+  })
+
   it('fires onDidAppendEntry after a successful flush with the written chunk', async () => {
     const svc = new LogMainService()
     const events: Array<{ channelId: string; chunk: string; maxLevel: LogLevel }> = []

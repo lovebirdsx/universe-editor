@@ -48,6 +48,7 @@
 - [diff 视图重开显示旧内容](diff-view-stale-on-reopen.md) — session diff 文件二次改动后重开 tab 仍旧内容；根因 openEditor 去重时 dispose 新 input 复用旧快照；加 EditorInput.updateFrom 钩子，DiffEditorInput 实现之
 - [markdown 移动后残留旧路径诊断](markdown-move-stale-diagnostic-fix.md) — B 移动(A 关闭)后重开 A 仍警告旧 B 路径；根因 MdDocumentInfoCache 不听 create + LspWorkspace 缺 watchFile，bulk edit 改关闭文件无文档事件；修法新增 $didChangeFiles 主动通知语言服务磁盘变更
 - [StrictMode 空跑 dispose useRef 持有的 Emitter](strictmode-useref-emitter-dispose-dev-only.md) — session outline 高亮 dev-only 不跟随键盘移动；根因=effect cleanup 里 dispose useRef 持有的 Emitter，StrictMode 空跑把它 dispose 而 ref 不重建→.fire() 落死对象；修法惰性创建+不 dispose；教训:useRef 持有的 disposable 绝不在 cleanup dispose
+- [渲染崩溃→日志死循环→黑屏不自愈](renderer-crash-log-feedback-loop-blackscreen.md) — 长任务窗口变黑(可拖动)=渲染崩溃后主进程仍向死帧 send,Electron 33 不抛异常而内部 console.error→被拦截写日志→onDidAppendEntry 又推回死帧→无限循环写爆盘打满 CPU;修=ElectronProtocol 加 render-process-gone/reload 事件闸门(try/catch+isDestroyed 拦不住)+崩溃弹窗一键 reload+FileLogger rotate 突发熔断
 
 ## 打包 / 构建
 

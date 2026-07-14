@@ -122,6 +122,9 @@ export class WindowMainService implements IWindowMainService {
   /** Window ids cleared to close — set after a confirmed close/quit so the
    *  close handler bypasses the renderer veto round-trip on the second pass. */
   private readonly _allowClose = new Set<number>()
+  /** Window ids with a crash-recovery dialog currently showing, so a crash storm
+   *  never stacks multiple prompts. Cleared when the dialog resolves. */
+  private readonly _crashHandled = new Set<number>()
   private _sessionPersistTimer: ReturnType<typeof setTimeout> | null = null
   private _hasCreatedFirstWindow = false
 
@@ -201,6 +204,51 @@ export class WindowMainService implements IWindowMainService {
       ) {
         event.preventDefault()
       }
+    })
+
+    // Renderer crash recovery. A dead renderer leaves the window frame drawable
+    // (draggable) but blank — the content process is gone. Without this the user
+    // is stuck at a black window with no way back. `clean-exit` is a normal
+    // teardown (e.g. reload) and must be ignored; anything else (crashed / oom /
+    // killed) offers a one-click reload. `_crashHandled` de-bounces the dialog so
+    // a crash storm never stacks multiple prompts.
+    win.webContents.on('render-process-gone', (_event, details) => {
+      if (details.reason === 'clean-exit') return
+      logger.error(
+        `render-process-gone id=${win.id} reason=${details.reason} exitCode=${details.exitCode ?? 'n/a'}`,
+      )
+      if (this._crashHandled.has(win.id)) return
+      this._crashHandled.add(win.id)
+      if (win.isDestroyed()) return
+      void dialog
+        .showMessageBox(win, {
+          type: 'error',
+          buttons: [localize('crash.reload', '重新加载'), localize('crash.close', '关闭窗口')],
+          defaultId: 0,
+          cancelId: 1,
+          title: localize('crash.title', '编辑器窗口已崩溃'),
+          message: localize('crash.title', '编辑器窗口已崩溃'),
+          detail: localize(
+            'crash.detail',
+            '渲染进程意外退出（{reason}）。重新加载可恢复窗口，正在进行的任务可能已中断。',
+            { reason: details.reason },
+          ),
+        })
+        .then((result) => {
+          this._crashHandled.delete(win.id)
+          if (win.isDestroyed()) return
+          if (result.response === 0) {
+            logger.info(`crash reload id=${win.id}`)
+            win.reload()
+          } else {
+            logger.info(`crash close id=${win.id}`)
+            this._allowClose.add(win.id)
+            win.close()
+          }
+        })
+        .catch(() => {
+          this._crashHandled.delete(win.id)
+        })
     })
 
     win.once('ready-to-show', () => {
@@ -313,6 +361,7 @@ export class WindowMainService implements IWindowMainService {
     win.on('closed', () => {
       this._windows.delete(win.id)
       this._allowClose.delete(win.id)
+      this._crashHandled.delete(win.id)
       this._opts.appServices.sessionSwitcher.unregisterWindow(win.id)
       logger.info(`closed id=${win.id}`)
       this._onDidChangeWindows.fire()
