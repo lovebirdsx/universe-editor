@@ -76,6 +76,7 @@ import {
 } from '../../services/acp/acpSessionOutlineRegistry.js'
 import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
 import { ContentExpansionProvider, type ContentExpansionStore } from './chatContentExpansion.js'
+import { shouldAdjustTimelineScrollOnSizeChange } from './timelineVirtualScroll.js'
 import { ChatFindWidget } from './ChatFindWidget.js'
 import { useChatFind } from './useChatFind.js'
 import styles from './agents.module.css'
@@ -486,6 +487,18 @@ function ChatScroll({
   const virtualizerRef = useRef<Virtualizer<HTMLDivElement, Element> | null>(null)
   virtualizerRef.current = virtualizer
 
+  useLayoutEffect(() => {
+    virtualizer.shouldAdjustScrollPositionOnItemSizeChange = shouldAdjustTimelineScrollOnSizeChange
+    return () => {
+      if (
+        virtualizer.shouldAdjustScrollPositionOnItemSizeChange ===
+        shouldAdjustTimelineScrollOnSizeChange
+      ) {
+        virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined
+      }
+    }
+  }, [virtualizer])
+
   // measureElement, but also remember the row's slotKey as genuinely measured so
   // persist() can tell real heights from estimates. The virtualizer reads the
   // index off data-index; we read data-slot-key (set on the same node) to record
@@ -662,7 +675,9 @@ function ChatScroll({
       restoringRef.current = false
       if (activeScrollStopRef.current === stop) activeScrollStopRef.current = undefined
       const vz = virtualizerRef.current
-      if (vz) vz.shouldAdjustScrollPositionOnItemSizeChange = undefined
+      if (vz) {
+        vz.shouldAdjustScrollPositionOnItemSizeChange = shouldAdjustTimelineScrollOnSizeChange
+      }
       if (rafId !== undefined) cancelAnimationFrame(rafId)
       el.removeEventListener('wheel', stop)
       el.removeEventListener('pointerdown', stop)
@@ -728,7 +743,9 @@ function ChatScroll({
         pinningRef.current = false
         if (activeScrollStopRef.current === stop) activeScrollStopRef.current = undefined
         const vz = virtualizerRef.current
-        if (vz) vz.shouldAdjustScrollPositionOnItemSizeChange = undefined
+        if (vz) {
+          vz.shouldAdjustScrollPositionOnItemSizeChange = shouldAdjustTimelineScrollOnSizeChange
+        }
         if (rafId !== undefined) cancelAnimationFrame(rafId)
         el.removeEventListener('wheel', stop)
         el.removeEventListener('pointerdown', stop)
@@ -1125,6 +1142,7 @@ function ChatScroll({
       <div
         ref={containerRef}
         className={styles['chatBody']}
+        data-virtualized={virtualize ? 'true' : undefined}
         tabIndex={-1}
         onScroll={handleScroll}
         onClick={handleClick}

@@ -101,6 +101,10 @@
   gap: 8px;
 }
 
+.chatBody[data-virtualized='true'] {
+  overflow-anchor: none;
+}
+
 /* Focused programmatically on click to enable Alt+J/K; no keyboard-style ring. */
 .chatBody:focus {
   outline: none;

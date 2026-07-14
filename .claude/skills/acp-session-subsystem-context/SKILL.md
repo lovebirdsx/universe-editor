@@ -121,6 +121,7 @@ disable-model-invocation: true
 5. **FakeSession stub 漏新接口成员**：`IAcpSession` 加方法（如 `whenConnected`）后，`ConfigOptionsBar.test.tsx` / `PromptInput.test.tsx` / `SessionChangesView.test.tsx` 等的本地 stub 要同步补，否则 typecheck 红。
 6. **FakeStorage 启动 fire workspace-swap**：异步 createSession 下，启动期的 `onDidChangeWorkspaceScope` 微任务会触发 `_onWorkspaceSwap` 把刚建、未 attach 的 session close 掉——测试给 service 自身的 storage 要退订该启动事件。见 [[async-session-create]]。
 7. **其余 SDK 协议坑**（ToolKind 10 枚举 / setConfigOption 无 type:'select' / void 序列化为 {} / cancel 双步 / terminal ownership / stderr 独立通道 / env denylist / stdio MCP 不带 type）：全在 CLAUDE.md 易踩坑 #2-#10，改协议层前必读。
+8. **长 timeline 从底向上滚动抖动**：`ChatBody` 的动态虚拟行从 `estimateRow` 切到真实高度时，TanStack Virtual 默认以 `item.start < scrollOffset` 判断是否补偿，会把顶部半可见行也按完整高度差反向修正 `scrollTop`，与用户向上滚动互相拉扯；滚到顶、行高测完后才稳定。正常滚动的 `shouldAdjustScrollPositionOnItemSizeChange` 必须只在整行位于视口上方（`item.end <= scrollOffset`）时返回 true；虚拟模式同时设 `overflow-anchor: none`，避免 Chromium 原生锚定重复补偿。restore / bottom-pin 收敛窗口可临时设 `() => false`，结束后必须恢复自定义策略，不能恢复为 `undefined`（否则退回 TanStack 默认规则）。回归测试见 `timelineVirtualScroll.test.ts`。
 
 ## 测试套路
 
