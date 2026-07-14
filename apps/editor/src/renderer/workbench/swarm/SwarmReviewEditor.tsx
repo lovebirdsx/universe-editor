@@ -286,10 +286,12 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     async (file: SwarmReviewFileDto) => {
       if (!detail) return
       const rightChange = changeForVersion(selectedVersion)
-      // Left = the explicit compare version, or the one just before the selected.
-      const idx = detail.versions.findIndex((v) => v.version === selectedVersion)
-      const prev = idx > 0 ? (detail.versions[idx - 1]?.version ?? null) : null
-      const leftVersion = compareVersion ?? prev ?? 0
+      // Left defaults to the depot base (0), matching the file list — which is
+      // computed as "shelf vs depot base". Comparing against the previous version
+      // instead would show an empty diff for files unchanged between versions but
+      // still listed (they differ from base, not from the prior version). The
+      // Compare dropdown lets the user pick an earlier version for a version diff.
+      const leftVersion = compareVersion ?? 0
       const leftChange = leftVersion === 0 ? null : changeForVersion(leftVersion)
       const added = file.status.charAt(0) === 'A'
       const deleted = file.status.charAt(0) === 'D'
@@ -427,10 +429,13 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     void storage.set(FILES_VIEW_MODE_STORAGE_KEY, filesViewMode, StorageScope.GLOBAL)
   }, [filesViewMode, storage])
 
-  // Load the selected version's files.
+  // Load the selected version's files. Use the immutable archive shelf (via
+  // changeForVersion), not the author's raw changelist: the latter can be
+  // re-shelved / emptied after the version was recorded, which would make the
+  // file list drift or come back empty (see the diff data-source rule).
   const selectedChange = useMemo(
-    () => detail?.versions.find((v) => v.version === selectedVersion)?.change ?? null,
-    [detail, selectedVersion],
+    () => changeForVersion(selectedVersion),
+    [changeForVersion, selectedVersion],
   )
   useEffect(() => {
     if (!selectedChange) {
@@ -579,7 +584,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
             value={compareVersion ?? ''}
             onChange={(e) => setCompareVersion(e.target.value ? Number(e.target.value) : null)}
           >
-            <option value="">{localize('swarm.previousVersion', '(previous)')}</option>
+            <option value="">{localize('swarm.baseVersion', '(base)')}</option>
             {detail.versions.map((v) => (
               <option key={v.version} value={v.version}>
                 v{v.version}

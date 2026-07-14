@@ -68,6 +68,16 @@ const DETAIL_WITH_NEW_VERSION: SwarmReviewDetailDto = {
   versions: [...DETAIL.versions, { version: 2, change: '2002', pending: true, time: 2 }],
 }
 
+// Two versions where the latest carries an immutable archiveChange (the author's
+// changelist 2002 can be re-shelved / emptied after the version was recorded).
+const DETAIL_WITH_ARCHIVE: SwarmReviewDetailDto = {
+  ...DETAIL,
+  versions: [
+    { version: 1, change: '2001', pending: true, time: 1 },
+    { version: 2, change: '2002', archiveChange: '2999', pending: true, time: 2 },
+  ],
+}
+
 class RegistryCommandService {
   declare readonly _serviceBrand: undefined
   readonly executeCommand = vi.fn(async <T,>(id: string, ...args: unknown[]) => {
@@ -235,6 +245,66 @@ describe('SwarmReviewEditor restore', () => {
       expect(diffInput.getName()).toBe('a.ts (base ↔ v1)')
     } finally {
       getFileContent.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('lists the latest version files from its immutable archive shelf, not the mutable changelist', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL_WITH_ARCHIVE)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const listComments = registerCommand(SwarmCommands.listComments, () => [])
+    const { commands } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.describeVersion, {
+        change: '2999',
+      })
+      expect(commands.executeCommand).not.toHaveBeenCalledWith(SwarmCommands.describeVersion, {
+        change: '2002',
+      })
+    } finally {
+      listComments.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('diffs a multi-version file against the depot base by default, not the previous version', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL_WITH_ARCHIVE)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const listComments = registerCommand(SwarmCommands.listComments, () => [])
+    const getFileContent = registerCommand(
+      SwarmCommands.getFileContent,
+      (_accessor, request: unknown) =>
+        (request as { revision: string }).revision === '#1'
+          ? 'export const a = 1\n'
+          : 'export const a = 2\n',
+    )
+    const { commands, editorService } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      fireEvent.click(screen.getByText('a.ts'))
+      await act(async () => Promise.resolve())
+
+      // Left = depot base (#baseRevision), right = the selected version's archive shelf.
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getFileContent, {
+        depotFile: '//depot/src/editor/a.ts',
+        revision: '#1',
+      })
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getFileContent, {
+        depotFile: '//depot/src/editor/a.ts',
+        revision: '@=2999',
+      })
+      const diffInput = editorService.openEditor.mock.calls[0]?.[0] as SwarmDiffEditorInput
+      expect(diffInput.context.leftVersion).toBe(0)
+      expect(diffInput.context.rightVersion).toBe(2)
+      expect(diffInput.originalContent).toBe('export const a = 1\n')
+      expect(diffInput.modifiedContent).toBe('export const a = 2\n')
+    } finally {
+      getFileContent.dispose()
+      listComments.dispose()
       describeVersion.dispose()
       getReview.dispose()
     }

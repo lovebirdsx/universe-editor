@@ -81,11 +81,11 @@ Swarm 的 comment 端点**不挂在 review 下**——它是独立的 topic-base
 **diff 两侧都从 p4 快照读取，绝不用工作区文件**（`getFileContent` 命令 → `client.printRevision(...)`）：
 
 - 首版默认比较是 **base(0) → v1**，不是「空 → v1」：`p4 describe -S -s <change>` 的 `rev#` 是 shelved 文件的 depot 基线 revision；非新增文件左侧读 `${depotFile}#${rev}`，新增文件左侧才为空。否则所有 v1 edit 都会显示成整文件新增。
-- v2+ 默认比较前一 version → 当前 version，两侧读各自 `${depotFile}@=${versionChange}`；删除文件右侧为空。
+- **多 version 时默认左侧仍是 depot 基线(0)，不是「上一个 version」**：文件列表按 shelf vs 基线算，若默认拿上一 version 作左侧，一个在版本间没变、但相对基线有改动的文件会显示成空 diff（列表说改了、diff 两边一样，自相矛盾）。对标 GitHub PR 单文件默认对 base diff。用户可用 Compare 下拉显式选更早 version 做版本间比较。右侧读 `${depotFile}@=${versionChange}`；删除文件右侧为空。
 - Swarm version 有 `archiveChange` 时优先用它作为不可变快照，回退 `change`。作者 changelist 会被重新 shelve，不能拿它代表旧 version。
 - `#revision` 可进 immutable print cache；`@=<pending-change>` 可被 reshelve 原地替换，不能进永久缓存。
 - **绝不用工作区当前文件当右侧**——它会随本地编辑漂移，行号对不上 Swarm 评论锚点。
-- 文件列表 / 版本元数据走 `describeVersion`（pending shelf 用 `p4 describe -S -s <change>`，报表型命令走 `execRecords()` 防 `-Mj` 塌陷，见 `extend-perforce-plugin`）。
+- 文件列表 / 版本元数据走 `describeVersion`（pending shelf 用 `p4 describe -S -s <change>`，报表型命令走 `execRecords()` 防 `-Mj` 塌陷，见 `extend-perforce-plugin`）。**`describeVersion` 的入参 change 也必须走 `archiveChange ?? change`**：作者的 `version.change`（如 8105452）可能被 re-shelve/清空，直接用它会让文件列表时有时无、内容漂移成空；archive shelf（如 8105475）才是不可变快照。这条与右侧内容 `changeForVersion` 是同一铁律的两个消费点，别只修一处。
 - “打开文件”目标是当前 client 的工作区副本，路径必须批量走 `p4 where <depotFile...>`；不能从 depot/display path 猜本地路径。无映射时 DTO 传 `localPath:null`，标题栏隐藏该动作。
 
 ## diff 编辑器基础能力接入
