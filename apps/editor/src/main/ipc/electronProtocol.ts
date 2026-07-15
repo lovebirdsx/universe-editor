@@ -55,7 +55,10 @@ export class ElectronProtocol implements IMessagePassingProtocol {
   // send→error→log→send loop that pins CPU and floods the disk. Closing this
   // gate the instant the frame goes away is what breaks that loop at the source.
   private _frameAlive = true
-  private readonly _frameListeners: Array<{ event: string; handler: () => void }> = []
+  private readonly _frameListeners: Array<{
+    event: string
+    handler: (...args: unknown[]) => void
+  }> = []
 
   constructor(private readonly _webContents: WebContents) {
     this._senderId = _webContents.id
@@ -64,9 +67,9 @@ export class ElectronProtocol implements IMessagePassingProtocol {
     const wc = _webContents as unknown as {
       on(e: string, h: (...args: unknown[]) => void): void
     }
-    const bind = (event: string, handler: () => void): void => {
+    const bind = (event: string, handler: (...args: unknown[]) => void): void => {
       // WebContents.on is heavily overloaded per event name; these lifecycle
-      // events all carry payloads we ignore, so bind through a widened signature.
+      // events all carry payloads, so bind through a widened signature.
       wc.on(event, handler)
       this._frameListeners.push({ event, handler })
     }
@@ -76,10 +79,22 @@ export class ElectronProtocol implements IMessagePassingProtocol {
     bind('render-process-gone', () => {
       this._frameAlive = false
     })
-    bind('did-start-loading', () => {
-      this._frameAlive = false
+    // Close the gate only for a MAIN-frame navigation (a reload). `did-start-loading`
+    // was tempting but is WebContents-wide: an extension webview <iframe> navigating
+    // to its blank doc fires it too, closing the gate — and nothing reopens it for a
+    // subframe (dom-ready/did-finish-load only refire for the main frame), so the
+    // main-frame IPC channel stays pinned shut forever and every custom-editor RPC
+    // times out. `did-start-navigation` carries isMainFrame, so we can ignore
+    // subframe loads. Same-document navigations (hashchange/pushState) keep the
+    // frame alive.
+    bind('did-start-navigation', (...args: unknown[]) => {
+      const details = args[0] as { isMainFrame?: boolean; isSameDocument?: boolean } | undefined
+      if (details?.isMainFrame && !details.isSameDocument) {
+        this._frameAlive = false
+      }
     })
-    // The new frame is ready to receive once the document commits.
+    // The new frame is ready to receive once the document commits. dom-ready fires
+    // for the main frame's document; did-finish-load when the main navigation ends.
     bind('dom-ready', () => {
       this._frameAlive = true
     })

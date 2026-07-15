@@ -74,14 +74,32 @@ describe('ElectronProtocol dead-frame gate', () => {
     expect(wc.sent).toHaveLength(0)
   })
 
-  it('drops sends during a reload window (did-start-loading) then resumes after did-finish-load', () => {
+  it('drops sends during a main-frame reload (did-start-navigation) then resumes after did-finish-load', () => {
     const { wc, protocol } = make()
-    wc.emit('did-start-loading')
+    wc.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })
     protocol.send(new Uint8Array([1]))
     expect(wc.sent).toHaveLength(0)
 
     wc.emit('did-finish-load')
     protocol.send(new Uint8Array([2]))
+    expect(wc.sent).toHaveLength(1)
+  })
+
+  it('keeps sending when a SUBFRAME (webview iframe) navigates', () => {
+    // Regression: a webview <iframe> navigating fires did-start-navigation with
+    // isMainFrame=false. It must NOT close the gate — nothing reopens it for a
+    // subframe, so the main-frame IPC channel would stay pinned shut and every
+    // custom-editor RPC would time out.
+    const { wc, protocol } = make()
+    wc.emit('did-start-navigation', { isMainFrame: false, isSameDocument: false })
+    protocol.send(new Uint8Array([1]))
+    expect(wc.sent).toHaveLength(1)
+  })
+
+  it('keeps sending on a same-document main-frame navigation (hashchange/pushState)', () => {
+    const { wc, protocol } = make()
+    wc.emit('did-start-navigation', { isMainFrame: true, isSameDocument: true })
+    protocol.send(new Uint8Array([1]))
     expect(wc.sent).toHaveLength(1)
   })
 
