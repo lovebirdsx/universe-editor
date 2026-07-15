@@ -19,6 +19,14 @@ import { sameUri } from '../services/explorer/explorerTreeUtils.js'
 
 const EXPLORER_TREE_VIEW_ID = 'workbench.view.explorer.tree'
 
+/**
+ * When-clause gating Explorer file-command keybindings to the moment the
+ * Explorer tree owns keyboard focus (and no text editor / terminal does). Keeps
+ * a global stroke like F2 from stealing the keystroke away from Monaco's own
+ * binding (e.g. `editor.action.rename`) when the cursor is in a code editor.
+ */
+export const EXPLORER_FOCUS_WHEN = `focusedView == '${EXPLORER_TREE_VIEW_ID}' && !editorTextFocus && !terminalFocus`
+
 export function reviveUri(value: URI | UriComponents | null): URI | null {
   if (!value) return null
   return value instanceof URI ? value : (URI.revive(value) as URI)

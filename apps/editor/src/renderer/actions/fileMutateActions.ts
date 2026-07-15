@@ -18,6 +18,7 @@ import {
 } from '../services/explorer/ExplorerTreeService.js'
 import { IExplorerFileOperationService } from '../services/explorer/ExplorerFileOperationService.js'
 import {
+  EXPLORER_FOCUS_WHEN,
   implicitCommandResource,
   resolveContextOperations,
   reviveUri,
@@ -66,7 +67,7 @@ export class RenameFileAction extends Action2 {
       id: RenameFileAction.ID,
       title: localize2('action.rename.title', 'Rename…'),
       category: localize2('command.category.file', 'File'),
-      keybinding: { primary: 'f2' },
+      keybinding: { primary: 'f2', when: EXPLORER_FOCUS_WHEN },
       f1: true,
     })
   }
@@ -102,7 +103,7 @@ export class DeleteFileAction extends Action2 {
       id: DeleteFileAction.ID,
       title: localize2('action.deleteFile.title', 'Delete'),
       category: localize2('command.category.file', 'File'),
-      keybinding: { primary: 'delete' },
+      keybinding: { primary: 'delete', when: EXPLORER_FOCUS_WHEN },
       f1: true,
     })
   }

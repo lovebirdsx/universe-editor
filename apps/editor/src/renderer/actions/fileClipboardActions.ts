@@ -19,14 +19,12 @@ import type { ExplorerFileOperationService } from '../services/explorer/Explorer
 import { parentOf, sameUri } from '../services/explorer/explorerTreeUtils.js'
 import { basenameOf, targetInDirectory } from '../services/explorer/explorerFileOperations.js'
 import {
+  EXPLORER_FOCUS_WHEN,
   implicitPrimaryTarget,
   resolveContextOperations,
   reviveUri,
   type ITargetArg,
 } from './fileActionsCommon.js'
-
-const EXPLORER_FOCUS_WHEN =
-  "focusedView == 'workbench.view.explorer.tree' && !editorTextFocus && !terminalFocus"
 
 function resolveDestinationDir(
   accessor: ServicesAccessor,
