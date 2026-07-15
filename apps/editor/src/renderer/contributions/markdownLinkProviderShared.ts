@@ -7,7 +7,13 @@
  *  `assets/` write + embed — lives here once and both contributions adapt to it.
  *--------------------------------------------------------------------------------------------*/
 
-import { URI, type IFileService, type ILogger, type HostPlatform } from '@universe-editor/platform'
+import {
+  URI,
+  dirname,
+  type IFileService,
+  type ILogger,
+  type HostPlatform,
+} from '@universe-editor/platform'
 import { markdownLinksFromUriList } from './markdownPasteLinks.js'
 import { formatAssetStamp } from './markdownAssetLinks.js'
 import { saveDroppedImageAsset } from './markdownAssetDropper.js'
@@ -59,6 +65,7 @@ export function toPlatformUri(monacoUriString: string): URI | undefined {
 }
 
 export interface MarkdownLinkContext {
+  /** Fallback root when `modelUriString` fails to parse as a URI (should not happen in practice). */
   readonly workspaceFolderFsPath: string | undefined
   readonly platform: HostPlatform
   readonly fileService: Pick<IFileService, 'createDirectory' | 'writeFile' | 'exists'>
@@ -84,19 +91,23 @@ export async function computeMarkdownLinkInsert(
   ctx: MarkdownLinkContext,
   isCancelled: () => boolean,
 ): Promise<string | undefined> {
+  const mdUri = toPlatformUri(modelUriString)
+
   const uriEntry = dataTransfer.get(URI_LIST_MIME)
   if (uriEntry) {
     const raw = await uriEntry.asString()
     if (isCancelled()) return undefined
     if (raw.trim()) {
-      const links = markdownLinksFromUriList(raw, ctx.workspaceFolderFsPath, ctx.platform)
+      // Relative to the *document's own directory* so the link still resolves
+      // when the document doesn't live at the workspace root.
+      const targetDirFsPath = mdUri ? dirname(mdUri.fsPath) : ctx.workspaceFolderFsPath
+      const links = markdownLinksFromUriList(raw, targetDirFsPath, ctx.platform)
       if (links) return links
     }
   }
 
   const image = findImageFileEntry(dataTransfer)
   if (image) {
-    const mdUri = toPlatformUri(modelUriString)
     if (!mdUri) return undefined
     const bytes = await image.file.data()
     if (isCancelled()) return undefined

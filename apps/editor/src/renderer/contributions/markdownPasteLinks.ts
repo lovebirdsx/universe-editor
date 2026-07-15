@@ -5,7 +5,7 @@
  *  escaping) is unit-testable in isolation (see MarkdownPasteContribution).
  *--------------------------------------------------------------------------------------------*/
 
-import { relativePathUnder, type HostPlatform } from '@universe-editor/platform'
+import { relativePath, type HostPlatform } from '@universe-editor/platform'
 
 const IMAGE_EXTENSIONS = new Set([
   '.png',
@@ -66,13 +66,17 @@ export function markdownLinkSnippet(relPath: string, isImage: boolean, index: nu
  * A pasted `text/uri-list` (files dragged from Explorer / OS) → one markdown
  * image (`![${n:alt text}](path)`) or link (`[${n:text}](path)`) snippet per file
  * uri, space-joined with an incrementing placeholder index so each link text can
- * be tab-edited in turn. Paths are made relative to `rootFsPath` when they resolve
- * under it. Returns undefined when nothing parsed (caller falls through to the
- * default paste).
+ * be tab-edited in turn. Paths are made relative to `targetDirFsPath` — the
+ * *document's own directory*, not the workspace root, matching how a markdown
+ * link is actually resolved when the file is later rendered/opened. Climbs with
+ * `../` when the source lives outside that directory; falls back to the
+ * normalized absolute path when the two are on different Windows drives.
+ * Returns undefined when nothing parsed (caller falls through to the default
+ * paste).
  */
 export function markdownLinksFromUriList(
   raw: string,
-  rootFsPath: string | undefined,
+  targetDirFsPath: string | undefined,
   platform: HostPlatform,
 ): string | undefined {
   const parts: string[] = []
@@ -82,8 +86,9 @@ export function markdownLinksFromUriList(
     if (!entry || entry.startsWith('#')) continue
     const fsPath = tryParseFileUri(entry)
     if (!fsPath) continue
-    const rel = rootFsPath ? relativePathUnder(rootFsPath, fsPath, platform) : null
-    const rawPath = rel ?? fsPath.replace(/\\/g, '/')
+    const rawPath = targetDirFsPath
+      ? relativePath(targetDirFsPath, fsPath, platform)
+      : fsPath.replace(/\\/g, '/')
     parts.push(markdownLinkSnippet(rawPath, isImagePath(fsPath), index++))
   }
   return parts.length ? parts.join(' ') : undefined

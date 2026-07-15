@@ -5,7 +5,8 @@
  *  `documentDropEditProvider` on monaco's internal ILanguageFeaturesService —
  *  there is no public `monaco.languages.*` drop API. Two cases:
  *    - drop a file (uri-list, e.g. dragged from Explorer/OS) → `![](relPath)`
- *      for images, `[](relPath)` otherwise, relative to the workspace folder.
+ *      for images, `[](relPath)` otherwise, relative to the target markdown
+ *      document's own directory (not the workspace root).
  *    - drop a binary image (screenshot / web image with no disk path) → written
  *      to an `assets/` folder beside the markdown file, then embedded.
  *  Monaco's own `dropIntoEditor` is enabled per-model only for markdown (see
