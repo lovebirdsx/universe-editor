@@ -346,6 +346,12 @@ export interface E2EProbe {
    */
   sendAcpPrompt(text: string): Promise<void>
   /**
+   * Force the active session's timeline collapse mode ('default' | 'collapsed' |
+   * 'expanded'). Lets a spec expand every card so async-height bodies (terminal
+   * output, etc.) actually mount — the scroll-jitter repro needs expanded cards.
+   */
+  setAcpCollapseMode(mode: 'default' | 'collapsed' | 'expanded'): void
+  /**
    * Current text in the active session's prompt editor. The input is a Monaco
    * editor (no DOM `<input>`), so specs read it through this probe instead of
    * `locator.inputValue()`.

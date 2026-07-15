@@ -6,7 +6,14 @@
  *   - ToolCallStatusIcon: status text → lucide icon, spinning while in flight.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react'
 import { Check, ChevronDown, ChevronRight, ChevronUp, CircleX, Loader2 } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import { parseAnsi, type AnsiSegment } from '../../services/acp/ansi.js'
@@ -15,6 +22,31 @@ import { useContentExpansion } from './chatContentExpansion.js'
 import styles from './agents.module.css'
 
 const COLLAPSED_MAX_PX = 240
+
+// Synchronous first-render estimate of whether the terminal body exceeds the
+// collapsed cap, from the text alone (no DOM measurement). WHY this matters: the
+// row must render at its FINAL (clamped) height on the very first paint. In
+// virtual mode the timeline remounts a row every time it scrolls back into the
+// overscan window; if the first render were full-height (overflows=false) and an
+// async effect clamped it afterwards, the virtualizer's measureElement would
+// record the tall height at commit, then the clamp would fire a size-change
+// correction — and because the correction re-mounts the row it flashes tall
+// again, an endless scrollTop oscillation (the reported jitter). Seeding
+// overflows from a stable pure function of the text keeps the committed height
+// identical on every mount, so no correction fires. The layout-effect below
+// still refines it, but for typical output the estimate already agrees.
+const TERMINAL_LINE_PX = 16
+const TERMINAL_WRAP_COLS = 80
+const TERMINAL_VPAD_PX = 8
+
+function estimateTerminalOverflow(text: string): boolean {
+  let lines = 0
+  for (const seg of text.split('\n')) {
+    lines += Math.max(1, Math.ceil(seg.length / TERMINAL_WRAP_COLS))
+    if (lines * TERMINAL_LINE_PX + TERMINAL_VPAD_PX > COLLAPSED_MAX_PX) return true
+  }
+  return lines * TERMINAL_LINE_PX + TERMINAL_VPAD_PX > COLLAPSED_MAX_PX
+}
 
 /**
  * A labeled, collapsible sub-section inside a tool-call card (e.g. the MCP
@@ -59,7 +91,11 @@ export function ToolCallSection({
 export function TerminalOutput({ text, contentKey }: { text: string; contentKey?: string }) {
   const segments = useMemo(() => parseAnsi(text), [text])
   const innerRef = useRef<HTMLPreElement | null>(null)
-  const [overflows, setOverflows] = useState(false)
+  // Seed from a synchronous estimate (not `false`) so the FIRST render already
+  // clamps when the body is long — see estimateTerminalOverflow. A false→true
+  // flip after mount would change the row's measured height post-commit and, in
+  // the virtualized timeline, drive an endless scroll correction loop.
+  const [overflows, setOverflows] = useState(() => estimateTerminalOverflow(text))
   // Persist expansion across unmount → remount (session / tab switch,
   // virtualization scroll-off); local fallback when no store/key is threaded.
   const store = useContentExpansion()
@@ -71,10 +107,18 @@ export function TerminalOutput({ text, contentKey }: { text: string; contentKey?
     else setLocalExpanded((v) => !v)
   }
 
-  useEffect(() => {
+  // Refine the estimate against the real rendered height, and keep tracking async
+  // growth (ANSI colouring, font load). useLayoutEffect (not useEffect) so the
+  // correction lands before the browser paints — no visible tall→short flash, and
+  // the virtualizer measures the settled height. Only flip state when it actually
+  // changes to avoid a redundant re-render.
+  useLayoutEffect(() => {
     const el = innerRef.current
     if (!el) return
-    const measure = () => setOverflows(el.scrollHeight > COLLAPSED_MAX_PX + 1)
+    const measure = () => {
+      const next = el.scrollHeight > COLLAPSED_MAX_PX + 1
+      setOverflows((prev) => (prev === next ? prev : next))
+    }
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)

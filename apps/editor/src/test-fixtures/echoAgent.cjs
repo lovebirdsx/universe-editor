@@ -24,6 +24,7 @@
 
 let buffer = ''
 let nextSessionId = 1
+let nextExecId = 1
 const activeTurns = new Map() // sessionId -> { cancelled: boolean }
 
 function send(msg) {
@@ -74,6 +75,46 @@ async function runPrompt(id, params) {
         },
       })
     }
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
+  // Test directive: "emit-exec:<lines>" emits an `execute` tool_call whose output
+  // is <lines> lines of text. Rendered via TerminalOutput, which mounts at full
+  // height, then an async ResizeObserver clamps it to a fixed max-height — so the
+  // row's measured height differs between fresh-mount and settled, and resets on
+  // every virtualization remount. This is the shape that drives the scroll-jitter
+  // limit cycle (plain text measures identically each mount and cannot).
+  const execDirective = /^emit-exec:(\d+)/.exec(userText)
+  if (execDirective) {
+    const lines = Number(execDirective[1])
+    const out = Array.from({ length: lines }, (_, k) => `output line ${k} ${'z'.repeat(60)}`).join(
+      '\n',
+    )
+    // Unique id per turn: a fixed id makes every turn's tool_call collapse onto
+    // the same timeline slot (the renderer keys by toolCallId), so N prompts
+    // would show as one card.
+    const execId = `exec-tool-${nextExecId++}`
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: execId,
+        title: 'run command',
+        kind: 'execute',
+        status: 'in_progress',
+      },
+    })
+    await delay(5)
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: execId,
+        status: 'completed',
+        content: [{ type: 'content', content: { type: 'text', text: out } }],
+      },
+    })
     activeTurns.delete(sessionId)
     return reply(id, { stopReason: 'end_turn' })
   }
