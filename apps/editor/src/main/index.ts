@@ -34,6 +34,7 @@ import { installImageProtocol, IMAGE_SCHEME_PRIVILEGE } from './ipc/imageProtoco
 import { APP_SCHEME_PRIVILEGE, installAppProtocolHandler } from './ipc/resourceProtocol.js'
 import { LogMainService, ILogMainService } from './services/log/logMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
+import { WindowsJumpList } from './services/window/windowsJumpList.js'
 import { UpdateMainService } from './services/update/updateMainService.js'
 import type { SessionSwitcherMainService } from './services/sessionSwitcher/sessionSwitcherMainService.js'
 import type { ConfigLocationMainService } from './services/configLocation/configLocationMainService.js'
@@ -308,6 +309,7 @@ function routeDeepLink(target: DeepLinkTarget): void {
 let rootInstantiation: InstantiationService | null = null
 let applicationServices: ApplicationServices | null = null
 let windowMainService: WindowMainService | null = null
+let windowsJumpList: WindowsJumpList | null = null
 // 打包后的 Windows 任务栏 / Alt+Tab 图标来自可执行文件内嵌图标（electron-builder `win.icon`）。
 // 给 BrowserWindow.icon 传 asar 内路径会用一个加载失败的空图标把它覆盖成默认 Electron 图标，
 // 所以仅在 dev（运行的是通用 electron.exe）下显式设置，并使用专属的 dev 图标以区分发布版。
@@ -394,6 +396,9 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     applicationServices.update.setQuitConfirmer((requestingWindowId) =>
       windows.confirmQuit(requestingWindowId),
     )
+    // Windows taskbar Jump List (right-click the pinned icon). Tracks the shared
+    // recent-workspaces list; no-op on non-Windows platforms.
+    windowsJumpList = new WindowsJumpList(applicationServices.recentWorkspaces, logMainService)
   }
   return { app: applicationServices, windows: windowMainService }
 }
@@ -496,6 +501,7 @@ app.on('before-quit', (e) => {
 
 app.on('will-quit', () => {
   mainLogger.info('will-quit')
+  windowsJumpList?.dispose()
   windowMainService?.dispose()
   // Disposes every materialized application service (acpHost kills child
   // processes, recentWorkspaces flushes its writes, update tears down, etc.).

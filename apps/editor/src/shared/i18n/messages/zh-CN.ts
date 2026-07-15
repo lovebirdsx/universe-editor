@@ -927,6 +927,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'configLocation.switched': '配置目录已切换到 {dir}。',
 
   // --- Window, workspace & shutdown ---
+  'jumpList.newWindow': '新建窗口',
+  'jumpList.newWindowDesc': '打开一个新窗口',
+  'jumpList.recentFolders': '最近的文件夹',
   'progress.openFolder': '正在打开文件夹…',
   'progress.openRecent': '正在打开 {name}…',
   'reload.leakDetected.message': '检测到 {count} 个未释放的 Disposable',
