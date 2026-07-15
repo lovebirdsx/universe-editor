@@ -12,6 +12,7 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useSyncExternalStore,
   useState,
@@ -30,11 +31,14 @@ import {
   IEditorResolverService,
   IFileService,
   IInstantiationService,
+  ILoggerService,
+  INotificationService,
   IWindowsService,
   localize,
   markAsSingleton,
   MenuId,
   observableValue,
+  Severity,
   type IEditorGroup,
   type IEditorGroupsService,
   type IEditorInput,
@@ -400,6 +404,12 @@ export const EditorGroupView = memo(function EditorGroupView({
   const fileService = useService(IFileService)
   const windowsService = useService(IWindowsService)
   const instantiationService = useService(IInstantiationService)
+  const notificationService = useOptionalService(INotificationService)
+  const loggerService = useOptionalService(ILoggerService)
+  const dndLogger = useMemo(
+    () => loggerService?.createLogger({ id: 'editorDnd', name: 'Editor DnD' }),
+    [loggerService],
+  )
   const dragSession = useContext(DragSessionContext)
   const [tabMenu, setTabMenu] = useState<TabMenuState | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
@@ -472,8 +482,31 @@ export const EditorGroupView = memo(function EditorGroupView({
   })
 
   const openDroppedResources = (e: ReactDragEvent): void => {
-    for (const resource of readDroppedResources(e)) {
-      void openDroppedResource(resource, { fileService, windowsService, editorResolverService })
+    const resources = readDroppedResources(e)
+    if (resources.length === 0) {
+      // A drop reached the editor but carried nothing we can open (no file
+      // handle and no `text/uri-list`) — e.g. selected text, an image blob, or a
+      // browser link. Tell the user rather than swallowing the gesture silently.
+      dndLogger?.info('drop carried no openable resource (no files / uri-list)')
+      notificationService?.notify({
+        severity: Severity.Info,
+        message: localize(
+          'dnd.open.noResource',
+          'The dropped item is not a file or folder that can be opened here.',
+        ),
+      })
+      return
+    }
+    for (const resource of resources) {
+      void openDroppedResource(resource, {
+        fileService,
+        windowsService,
+        editorResolverService,
+        groupsService,
+        targetGroup: group,
+        ...(notificationService ? { notificationService } : {}),
+        ...(dndLogger ? { logger: dndLogger } : {}),
+      })
     }
   }
 
