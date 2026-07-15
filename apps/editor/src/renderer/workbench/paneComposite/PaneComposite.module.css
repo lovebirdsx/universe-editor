@@ -100,6 +100,11 @@
 
 .tab.active {
   color: var(--color-tab-active-fg, #ffffff);
+  /* Lift the active tab above Allotment's pane separator (::before, z-index:5),
+     which otherwise paints over the 1px focus line on the Panel's top edge —
+     the SideBar/Secondary panes never hit this because their separator is a
+     vertical line on the side, not across the top. */
+  z-index: 6;
 }
 
 .tab.active::after {
