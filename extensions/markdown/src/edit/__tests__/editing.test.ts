@@ -5,7 +5,13 @@ import { toggleTask } from '../task.js'
 import { computeSmartEnter, computeIndent, computeOutdent } from '../smartList.js'
 import { renumberOrderedLists } from '../renumber.js'
 import { formatTable, formatTables, navigateTable } from '../table.js'
-import { splitLines, type EditOp, type EditResult, type Selection } from '../textEditing.js'
+import {
+  literalInsert,
+  splitLines,
+  type EditOp,
+  type EditResult,
+  type Selection,
+} from '../textEditing.js'
 
 function sel(line: number, character: number, endLine = line, endChar = character): Selection {
   return { anchor: { line, character }, active: { line: endLine, character: endChar } }
@@ -245,6 +251,40 @@ describe('computeIndent / computeOutdent', () => {
 
   it('returns default when outdenting a top-level item', () => {
     expect(computeOutdent(['- item'], [sel(0, 2)])).toBe('default')
+  })
+})
+
+describe('literalInsert (Tab/Enter fallback)', () => {
+  it('inserts an indent at a single cursor and returns one caret after it', () => {
+    const r = literalInsert([sel(0, 0)], '  ')
+    expect(apply(['ab'], r)).toEqual(['  ab'])
+    expect(r.selections).toEqual([sel(0, 2)])
+  })
+
+  // Regression: the earlier version emitted `selections: [caret]` for the first
+  // cursor only, so `setSelections` collapsed an N-cursor Tab down to one. Both
+  // lines must be indented AND both cursors must survive.
+  it('keeps one caret per cursor when Tab hits multiple cursors', () => {
+    const lines = ['ab', 'cd']
+    const r = literalInsert([sel(0, 0), sel(1, 0)], '  ')
+    expect(apply(lines, r)).toEqual(['  ab', '  cd'])
+    expect(r.selections).toEqual([sel(0, 2), sel(1, 2)])
+  })
+
+  it('shifts lower cursors down when Enter inserts newlines above them', () => {
+    // Two cursors, one per line. Enter inserts a line break at each, so the
+    // second cursor lands two lines lower (its own break + the first one above).
+    const lines = ['ab', 'cd']
+    const r = literalInsert([sel(0, 1), sel(1, 1)], '\n')
+    expect(apply(lines, r)).toEqual(['a', 'b', 'c', 'd'])
+    expect(r.selections).toEqual([sel(1, 0), sel(3, 0)])
+  })
+
+  it('replaces each non-empty selection and leaves a caret at each insertion end', () => {
+    const lines = ['abcd', 'efgh']
+    const r = literalInsert([sel(0, 1, 0, 3), sel(1, 1, 1, 3)], '  ')
+    expect(apply(lines, r)).toEqual(['a  d', 'e  h'])
+    expect(r.selections).toEqual([sel(0, 3), sel(1, 3)])
   })
 })
 

@@ -6,24 +6,13 @@
  * winning binding, the smart Enter/Tab commands reproduce the default keystroke
  * themselves when the cursor isn't in a list/table.
  */
-import { commands, type ExtensionContext, type Position } from '@universe-editor/extension-api'
-import {
-  activeMarkdown,
-  applyResult,
-  cursor,
-  isEmpty,
-  range,
-  type ActiveMarkdown,
-  type EditResult,
-  type Selection,
-} from './textEditing.js'
+import { commands, type ExtensionContext } from '@universe-editor/extension-api'
+import { activeMarkdown, applyResult, isEmpty, literalInsert } from './textEditing.js'
 import { toggleDelimiter } from './toggleDelimiter.js'
 import { changeHeadingLevel } from './heading.js'
 import { toggleTask } from './task.js'
 import { computeSmartEnter, computeIndent, computeOutdent, INDENT_UNIT } from './smartList.js'
 import { formatTables, navigateTable } from './table.js'
-
-type ActiveMd = ActiveMarkdown
 
 export const MARKDOWN_COMMANDS = {
   toggleBold: 'markdown.editing.toggleBold',
@@ -61,27 +50,6 @@ async function applyHeading(delta: number): Promise<void> {
   await applyResult(md.editor, changeHeadingLevel(md.lines, md.selections, delta))
 }
 
-/** Replace every selection with `text`, leaving the cursor after it. The
- *  fallback for smart Enter/Tab when no list/table handling applies. */
-function literalInsert(md: ActiveMd, text: string): EditResult {
-  const edits = md.selections.map((sel) => {
-    const [start, end] = orderEnds(sel)
-    return { range: range(start.line, start.character, end.line, end.character), text }
-  })
-  const sel = md.selections[0]!
-  const [start] = orderEnds(sel)
-  const caret =
-    text === '\n' ? cursor(start.line + 1, 0) : cursor(start.line, start.character + text.length)
-  return { edits, selections: [caret] }
-}
-
-function orderEnds(sel: Selection): [Position, Position] {
-  const a = sel.anchor
-  const b = sel.active
-  if (a.line < b.line || (a.line === b.line && a.character <= b.character)) return [a, b]
-  return [b, a]
-}
-
 export function registerEditingCommands(context: ExtensionContext): void {
   register(context, MARKDOWN_COMMANDS.toggleBold, () => applyToggle('**'))
   register(context, MARKDOWN_COMMANDS.toggleItalic, () => applyToggle('*'))
@@ -101,7 +69,7 @@ export function registerEditingCommands(context: ExtensionContext): void {
     const md = await activeMarkdown()
     if (!md) return
     const smart = computeSmartEnter(md.lines, md.selections)
-    await applyResult(md.editor, smart === 'default' ? literalInsert(md, '\n') : smart)
+    await applyResult(md.editor, smart === 'default' ? literalInsert(md.selections, '\n') : smart)
   })
 
   register(context, MARKDOWN_COMMANDS.onTab, async () => {
@@ -110,7 +78,10 @@ export function registerEditingCommands(context: ExtensionContext): void {
     const nav = navigateTable(md.lines, md.selections, 'next')
     if (nav) return applyResult(md.editor, nav)
     const indent = computeIndent(md.lines, md.selections)
-    await applyResult(md.editor, indent === 'default' ? literalInsert(md, INDENT_UNIT) : indent)
+    await applyResult(
+      md.editor,
+      indent === 'default' ? literalInsert(md.selections, INDENT_UNIT) : indent,
+    )
   })
 
   register(context, MARKDOWN_COMMANDS.onShiftTab, async () => {

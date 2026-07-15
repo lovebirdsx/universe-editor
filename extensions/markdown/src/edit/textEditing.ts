@@ -106,3 +106,37 @@ export async function applyResult(editor: TextEditor, result: EditResult): Promi
 export function replaceLine(lineIndex: number, lineText: string, newText: string): EditOp {
   return { range: range(lineIndex, 0, lineIndex, lineText.length), text: newText }
 }
+
+/**
+ * Replace every selection with `text` and return the caret to leave after each
+ * one — the fallback for smart Enter/Tab when no list/table handling applies.
+ *
+ * Crucially this returns *one caret per selection* so multi-cursor edits keep
+ * all their cursors. Emitting a single caret (as an earlier version did) made
+ * the editor's `setSelections` collapse an N-cursor Tab/Enter down to one.
+ * Cursors are computed in the original document's coordinate space while
+ * tracking the running line delta the earlier insertions introduce, matching how
+ * the editor applies all edits atomically.
+ */
+export function literalInsert(selections: readonly Selection[], text: string): EditResult {
+  const sorted = selections.map(ordered).sort((a, b) => {
+    if (a.start.line !== b.start.line) return a.start.line - b.start.line
+    return a.start.character - b.start.character
+  })
+  const edits = sorted.map(({ start, end }) => ({
+    range: range(start.line, start.character, end.line, end.character),
+    text,
+  }))
+
+  const newlineCount = (text.match(/\n/g) ?? []).length
+  const lastLineLength = text.length - (text.lastIndexOf('\n') + 1)
+  let lineDelta = 0
+  const outSelections = sorted.map(({ start, end }) => {
+    const caretLine = start.line + lineDelta + newlineCount
+    const caretChar = newlineCount > 0 ? lastLineLength : start.character + text.length
+    // Each insertion shifts the lines below it by (inserted − removed) lines.
+    lineDelta += newlineCount - (end.line - start.line)
+    return cursor(caretLine, caretChar)
+  })
+  return { edits, selections: outSelections }
+}
