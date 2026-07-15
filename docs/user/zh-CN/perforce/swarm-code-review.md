@@ -184,7 +184,7 @@ universe-editor://swarm/review/1234
 
 ## 排查与日志
 
-Swarm 的所有日志走**独立的 `Swarm` 输出通道**（与 Perforce 的 p4 CLI 日志分开）：打开「输出」面板，在右上角下拉里选 **Swarm** 即可。每行格式为 `时:分:秒.毫秒 [级别] [范围] 内容`，范围为 `api`（REST 请求）/ `client` / `status`（状态栏轮询）/ `cmd`（命令）/ `auth`（认证）。
+Swarm 的所有日志走**独立的 `Swarm` 输出通道**（与 Perforce 的 p4 CLI 日志分开）：打开「输出」底栏，在右上角下拉里选 **Swarm** 即可。每行格式为 `时:分:秒.毫秒 [级别] [范围] 内容`，范围为 `api`（REST 请求）/ `client` / `status`（状态栏轮询）/ `cmd`（命令）/ `auth`（认证）。
 
 默认只记录 `info` 及以上（每次请求的 `方法 路径 → 状态码 in 耗时`、重试、失败原因）。排查疑难时把 `perforce.swarm.trace` 设为 `true`，会额外记录请求体、查询参数、错误响应体等 `debug` 明细（改动即时生效，无需重载）。**任何情况下凭据都不会写入日志。**
 

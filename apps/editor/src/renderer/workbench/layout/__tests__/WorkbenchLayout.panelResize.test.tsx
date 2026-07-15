@@ -159,7 +159,7 @@ describe('WorkbenchLayout – panel resize deferral', () => {
   it('does not call onPanelResize when panel is maximized (Allotment fills full height)', () => {
     const onPanelResize = vi.fn()
 
-    // 面板已可见、已初始化，再最大化
+    // 底栏已可见、已初始化，再最大化
     const { rerender } = render(
       <WorkbenchLayout
         {...makeProps({ onPanelResize, panelVisible: true, panelMaximized: false })}
@@ -170,7 +170,7 @@ describe('WorkbenchLayout – panel resize deferral', () => {
     expect(onPanelResize).toHaveBeenCalledWith(200)
     onPanelResize.mockClear()
 
-    // 最大化面板
+    // 最大化底栏
     rerender(
       <WorkbenchLayout
         {...makeProps({ onPanelResize, panelVisible: true, panelMaximized: true })}

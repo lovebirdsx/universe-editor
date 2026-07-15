@@ -50,9 +50,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'menuBar.ariaLabel': '菜单栏',
 
   // --- Workbench structure ---
-  'panel.maximize': '最大化面板大小',
+  'panel.maximize': '最大化底栏大小',
   'panel.output': '输出',
-  'panel.restore': '还原面板大小',
+  'panel.restore': '还原底栏大小',
   'sidebar.empty': '没有注册任何视图。',
   'titleBar.empty': '（空）',
   'view.agents.main': 'Agents',
@@ -87,7 +87,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'editorTabs.scrollRight': '向右滚动标签页',
 
   // --- Layout, status bar & window controls ---
-  'layoutControls.togglePanelWithKey': '切换面板 (Ctrl+J)',
+  'layoutControls.togglePanelWithKey': '切换底栏 (Ctrl+J)',
   'layoutControls.togglePrimarySideBarWithKey': '切换主侧边栏 (Ctrl+B)',
   'layoutControls.toggleSecondarySideBarWithKey': '切换辅助侧边栏 (Ctrl+Alt+B)',
   'status.cursorPosition': '光标位置',
@@ -111,7 +111,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'welcome.docs.center': '浏览文档中心',
   'welcome.docs.title': '文档',
   'welcome.editorGuide': '编辑器使用说明',
-  'welcome.outputPanel': '切换输出面板',
+  'welcome.outputPanel': '切换输出底栏',
   'welcome.recent': '最近打开',
   'welcome.splitEditor': '拆分编辑器',
 
@@ -342,10 +342,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.toggleActivityBar.title': '切换活动栏',
   'action.toggleDeveloperTools.title': '切换开发者工具',
   'action.toggleKeybindingsLog.title': '开发人员：切换键盘快捷方式故障排查',
-  'action.toggleMaximizedPanel.title': '切换最大化面板',
+  'action.toggleMaximizedPanel.title': '切换最大化底栏',
   'action.toggleMinimap.title': '切换小地图',
   'action.toggleOutput.title': '视图：切换输出',
-  'action.togglePanel.title': '切换面板',
+  'action.togglePanel.title': '切换底栏',
   'action.togglePrimarySideBar.title': '切换主侧边栏',
   'action.toggleSecondarySideBar.title': '切换辅助侧边栏',
   'action.toggleTerminal.title': '切换终端',
@@ -551,8 +551,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.origin.vscodeWorkspace': 'VSCode 工作区',
   'settings.origin.workspace': '工作区',
   'settings.output': '输出',
-  'settings.output.fontFamily.description': '控制输出面板的字体。',
-  'settings.output.fontSize.description': '控制输出面板的字体大小（像素）。',
+  'settings.output.fontFamily.description': '控制输出底栏的字体。',
+  'settings.output.fontSize.description': '控制输出底栏的字体大小（像素）。',
   'settings.performance': '性能',
   'settings.performance.startupWarning.developmentThresholdMs.description':
     '仅当开发构建启动超过此毫秒数时显示启动警告。',

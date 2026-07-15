@@ -351,7 +351,7 @@ describe('useGlobalKeybindingHandler — ESC always fires globally', () => {
     )
   }
 
-  // ESC 必须能穿透 isEditableTarget 守卫，这样当焦点在 Output 面板的 <select>
+  // ESC 必须能穿透 isEditableTarget 守卫，这样当焦点在 Output 底栏的 <select>
   // 或其他非编辑类但被归为"editable"的元素上时，ESC 仍能将焦点还给编辑器。
   //
   // 新机制下不靠 ESC 硬编码特例：ESC 的 e.key === 'Escape' 长度为 6，不是单字符，
