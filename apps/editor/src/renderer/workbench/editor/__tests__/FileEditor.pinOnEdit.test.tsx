@@ -85,7 +85,8 @@ vi.mock('../monaco/MonacoLoader.js', () => {
       },
       setTheme: () => {},
     },
-    KeyCode: { F1: 0 },
+    KeyCode: { F1: 0, KeyK: 41, KeyL: 42 },
+    KeyMod: { CtrlCmd: 2048, chord: (a: number, b: number) => (a & 0xffff) | (b << 16) },
   }
   return {
     MonacoLoader: {

@@ -195,6 +195,15 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     const addSelectionAction = ed.addAction({
       id: 'workbench.action.agent.addSelectionToChat',
       label: localize('action.agent.addSelectionToChat', 'Add Selection to Agent Chat'),
+      // Mirror the global `ctrl+k ctrl+l` chord (agentContextActions.ts) so Monaco's
+      // native context menu renders the shortcut next to the item. Monaco reads the
+      // hint from its own keybinding service, which doesn't know our global binding.
+      keybindings: [
+        monacoNs.KeyMod.chord(
+          monacoNs.KeyMod.CtrlCmd | monacoNs.KeyCode.KeyK,
+          monacoNs.KeyMod.CtrlCmd | monacoNs.KeyCode.KeyL,
+        ),
+      ],
       contextMenuGroupId: '1_agent',
       contextMenuOrder: 1,
       precondition: 'editorHasSelection',

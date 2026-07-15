@@ -46,7 +46,8 @@ vi.mock('../monaco/MonacoLoader.js', () => {
     Uri: {
       parse: (value: string) => ({ toString: () => value }),
     },
-    KeyCode: { F1: 59 },
+    KeyCode: { F1: 59, KeyK: 41, KeyL: 42 },
+    KeyMod: { CtrlCmd: 2048, chord: (a: number, b: number) => (a & 0xffff) | (b << 16) },
     editor: {
       createModel: (text: string, language: string, uri: unknown) => makeModel(text, language, uri),
       getModel: (_uri: unknown) => null,
