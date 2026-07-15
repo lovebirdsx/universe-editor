@@ -56,6 +56,13 @@ export class FileEditorInput extends EditorInput {
   ) {
     super()
     this._language = languageForResource(this._resource)
+    this._register(
+      MonacoModelRegistry.onDidMarkModelClean((model) => {
+        if (MonacoModelRegistry.peek(this._resource) === model) {
+          this._acceptModelClean(model)
+        }
+      }),
+    )
   }
 
   get isReadonly(): boolean {
@@ -119,7 +126,7 @@ export class FileEditorInput extends EditorInput {
     const model = MonacoModelRegistry.acquire(this._resource, text)
     this._modelRefAcquired = true
     if (!hadPendingDirtyContent) {
-      this.markModelClean(model)
+      this._acceptModelClean(model)
     }
     return model
   }
@@ -166,7 +173,12 @@ export class FileEditorInput extends EditorInput {
   }
 
   markModelClean(model: monaco.editor.ITextModel): void {
+    MonacoModelRegistry.markModelClean(model)
+  }
+
+  private _acceptModelClean(model: monaco.editor.ITextModel): void {
     this._backupContent = model.getValue()
+    this._pendingDirtyContent = undefined
     this._savedAlternativeVersionId = model.getAlternativeVersionId()
     this.setDirty(false)
   }

@@ -50,6 +50,9 @@ class Registry {
   private readonly _onDidAddModel = new Emitter<URI>()
   readonly onDidAddModel = this._onDidAddModel.event
 
+  private readonly _onDidMarkModelClean = new Emitter<monaco.editor.ITextModel>()
+  readonly onDidMarkModelClean = this._onDidMarkModelClean.event
+
   /**
    * Acquire a TextModel for `resource`. Creates it (with `text` as initial
    * content) on first call; subsequent callers receive the existing model and
@@ -89,6 +92,10 @@ class Registry {
   /** Look up an existing model without changing its refcount. */
   peek(resource: URI): monaco.editor.ITextModel | undefined {
     return this._entries.get(monacoModelKey(resource))?.model
+  }
+
+  markModelClean(model: monaco.editor.ITextModel): void {
+    this._onDidMarkModelClean.fire(model)
   }
 
   /**

@@ -74,6 +74,8 @@ vi.mock('../../../workbench/editor/monaco/MonacoLoader.js', () => ({
 vi.mock('../../../workbench/editor/monaco/MonacoModelRegistry.js', () => ({
   MonacoModelRegistry: {
     peek: (resource: { toString(): string }) => previewModels.get(resource.toString()),
+    onDidMarkModelClean: () => ({ dispose() {} }),
+    markModelClean() {},
     onDidAddModel: (cb: (uri: { toString(): string }) => void) => {
       modelAddListeners.push(cb)
       return {

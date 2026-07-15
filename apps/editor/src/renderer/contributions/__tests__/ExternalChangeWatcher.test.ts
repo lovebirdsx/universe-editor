@@ -35,6 +35,8 @@ const liveModels = new Map<
 vi.mock('../../workbench/editor/monaco/MonacoModelRegistry.js', () => ({
   MonacoModelRegistry: {
     peek: (uri: { toString: () => string }) => liveModels.get(uri.toString()),
+    onDidMarkModelClean: () => ({ dispose() {} }),
+    markModelClean() {},
   },
 }))
 

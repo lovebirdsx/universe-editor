@@ -140,6 +140,47 @@ describe('FileEditorInput', () => {
     input.dispose()
   })
 
+  it('saving one input clears dirty state in every input sharing the model', async () => {
+    const leftInput = inst.createInstance(FileEditorInput, uri)
+    const rightInput = inst.createInstance(FileEditorInput, uri)
+    const leftModel = await leftInput.resolveModel()
+    const rightModel = await rightInput.resolveModel()
+    expect(rightModel).toBe(leftModel)
+
+    leftModel.setValue('{"a":2}')
+    leftInput.updateDirtyFromModel(leftModel)
+    rightInput.updateDirtyFromModel(rightModel)
+    expect(leftInput.isDirty).toBe(true)
+    expect(rightInput.isDirty).toBe(true)
+
+    await leftInput.save()
+
+    expect(leftInput.isDirty).toBe(false)
+    expect(rightInput.isDirty).toBe(false)
+    expect(rightInput.backupContent).toBe('{"a":2}')
+    leftInput.dispose()
+    rightInput.dispose()
+  })
+
+  it('saving clears pending dirty content in an unresolved input sharing the resource', async () => {
+    const leftInput = inst.createInstance(FileEditorInput, uri)
+    const rightInput = inst.invokeFunction((accessor) =>
+      FileEditorInput.deserialize(
+        { resource: uri.toJSON(), dirtyContent: '{"stale":true}' },
+        accessor,
+      ),
+    )!
+    const model = await leftInput.resolveModel()
+    model.setValue('{"a":2}')
+    leftInput.updateDirtyFromModel(model)
+
+    await leftInput.save()
+
+    expect(rightInput.serialize()).not.toHaveProperty('dirtyContent')
+    leftInput.dispose()
+    rightInput.dispose()
+  })
+
   it('uses a BOM-free editor baseline but preserves an existing BOM on save', async () => {
     const bomUri = URI.file('/tmp/bom.txt')
     fs.store[bomUri.toString()] = '\uFEFFhello'
