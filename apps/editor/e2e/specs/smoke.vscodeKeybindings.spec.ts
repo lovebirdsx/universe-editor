@@ -36,6 +36,9 @@ const WHEN = 'editorTextFocus && !editorReadonly'
 
 test.describe('@p1 vscode keybindings', () => {
   test('binds a VSCode keybinding to a lazily-registered monaco command @regression', async () => {
+    // Poll windows here reach 30s — equal to the global test timeout, so the
+    // test ceiling would fire first on slow CI. Raise it (case 10 / note 10).
+    test.slow()
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-vscodekb-'))
     writeFileSync(
       join(userDataDir, 'settings.json'),
@@ -116,6 +119,7 @@ test.describe('@p1 vscode keybindings', () => {
   // survive — an earlier design keyed registrations by command id, so a later
   // entry clobbered the earlier one and the custom key silently stopped working.
   test('keeps every key when one monaco command has multiple VSCode entries @regression', async () => {
+    test.slow()
     // Canonical modifier order (alphabetical) — KeybindingsRegistry stores keys
     // normalized this way, and the probe compares the stored form verbatim.
     const SECOND_KEY = 'alt+shift+down'

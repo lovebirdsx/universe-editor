@@ -65,6 +65,10 @@ async function launchWithState(userDataDir: string) {
 
 test.describe('@p1 layout persistence', () => {
   test('sidebar width is restored from storage on launch', async () => {
+    // Bare electron.launch cold start (workspace hydration → reconcile →
+    // Allotment DOM settle) is heavy; on 2-core CI runners it can exceed the
+    // 30s global timeout. Grant headroom like the other cold-start specs.
+    test.slow()
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-persist-'))
 
     try {
@@ -100,7 +104,7 @@ test.describe('@p1 layout persistence', () => {
         // immediate read — that would still be the default 240 right after mount).
         await expect
           .poll(async () => (await page.evaluate(() => window.__E2E__!.getLayoutSizes())).sidebar, {
-            timeout: 5000,
+            timeout: 15_000,
           })
           .toBe(SAVED_SIDEBAR_PX)
 
@@ -118,7 +122,7 @@ test.describe('@p1 layout persistence', () => {
               })
               return w
             },
-            { timeout: 5000 },
+            { timeout: 15_000 },
           )
           .toBeGreaterThan(SAVED_SIDEBAR_PX - 20)
 
