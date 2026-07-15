@@ -1095,6 +1095,11 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           label: localize('gitGraph.checkout', 'Checkout'),
           run: () => runOp(GitGraphCommands.checkout, name),
         },
+        {
+          kind: 'item',
+          label: localize('gitGraph.copyBranchName', 'Copy branch name'),
+          run: () => void navigator.clipboard?.writeText(name),
+        },
         { kind: 'sep' },
         {
           kind: 'item',
@@ -1188,6 +1193,11 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
             })
             if (local?.trim()) runOp(GitGraphCommands.checkoutRemote, name, local.trim())
           },
+        },
+        {
+          kind: 'item',
+          label: localize('gitGraph.copyBranchName', 'Copy branch name'),
+          run: () => void navigator.clipboard?.writeText(name),
         },
         { kind: 'sep' },
         {

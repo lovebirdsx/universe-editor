@@ -693,6 +693,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'gitGraph.cherryPick': '拣选…',
   'gitGraph.commitCount': '{count} 次提交{more}',
   'gitGraph.comparing': '正在比较 {left} ↔ {right}',
+  'gitGraph.copyBranchName': '复制分支名字',
   'gitGraph.copyHash': '复制提交哈希',
   'gitGraph.copyMessage': '复制提交信息',
   'gitGraph.createBranchHere': '在此处创建分支…',
