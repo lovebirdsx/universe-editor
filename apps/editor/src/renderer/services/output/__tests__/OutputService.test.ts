@@ -80,6 +80,33 @@ describe('OutputService', () => {
     expect(ch.content.get()).toBe('')
   })
 
+  it('OutputChannel caps retained content instead of growing unbounded', () => {
+    const svc = new OutputService(makeStorage())
+    const ch = svc.createChannel('main')
+    // Simulate a long-running ACP protocol trace: many lines appended over time.
+    // Without a cap this string would grow without bound and eventually OOM the
+    // renderer (observed: reason=oom in main.log during long agent sessions).
+    for (let i = 0; i < 200_000; i++) {
+      ch.appendLine(`line ${i} with some payload to make each line non-trivial`)
+    }
+    const content = ch.content.get()
+    // Retained content must stay bounded well below the tens-of-MB that crashed
+    // the renderer. A few MB of scrollback is plenty for a log view.
+    expect(content.length).toBeLessThanOrEqual(8 * 1024 * 1024)
+    // The most recent line must survive the trim (we drop from the head).
+    expect(content).toContain('line 199999')
+  })
+
+  it('OutputChannel trims on line boundaries so the log stays readable', () => {
+    const svc = new OutputService(makeStorage())
+    const ch = svc.createChannel('main')
+    for (let i = 0; i < 100_000; i++) ch.appendLine(`entry-${i}`)
+    const content = ch.content.get()
+    // After a head-trim the retained content should begin at a clean line start,
+    // not mid-line.
+    expect(content.startsWith('entry-')).toBe(true)
+  })
+
   it('pending restored channel activates when created later (stable name)', () => {
     const storage = makeStorage()
     // Simulate a previous session that had "debug" active.

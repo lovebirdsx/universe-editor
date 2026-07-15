@@ -15,6 +15,25 @@ import type { IOutputService, IOutputChannel } from '@universe-editor/platform'
 
 const OUTPUT_ACTIVE_CHANNEL_KEY = 'output.activeChannel'
 
+/**
+ * Hard cap on the characters an OutputChannel retains in memory. A channel's
+ * content is a single string that observers (the Output panel) subscribe to;
+ * high-volume producers — notably the ACP protocol tracer, which appends a
+ * multi-line pretty-JSON block for every `session/update` chunk — would
+ * otherwise grow it without bound and OOM the renderer over a long agent
+ * session (observed: reason=oom in main.log). When the retained content exceeds
+ * this, the oldest lines are dropped so the tail (the interesting, recent part
+ * of any log) is always kept.
+ */
+const MAX_RETAINED_CHARS = 4 * 1024 * 1024
+
+/**
+ * Extra headroom kept before trimming, so a channel at the limit doesn't
+ * re-scan + reallocate on every single append. Mirrors the terminal
+ * scrollback compaction in TerminalManagerService.
+ */
+const TRIM_SLACK_CHARS = 256 * 1024
+
 export class OutputChannel implements IOutputChannel {
   readonly content = observableValue<string>('OutputChannel.content', '')
 
@@ -24,11 +43,26 @@ export class OutputChannel implements IOutputChannel {
   ) {}
 
   append(text: string): void {
-    this.content.set(this.content.get() + text, undefined)
+    this.content.set(this._capped(this.content.get() + text), undefined)
   }
 
   appendLine(text: string): void {
     this.append(text + '\n')
+  }
+
+  /**
+   * Trim `next` from the head to stay under {@link MAX_RETAINED_CHARS}, cutting
+   * at a line boundary so the retained log never starts mid-line. Only runs once
+   * the content exceeds the cap plus a slack window, keeping the steady-state
+   * append a no-op string concat.
+   */
+  private _capped(next: string): string {
+    if (next.length <= MAX_RETAINED_CHARS + TRIM_SLACK_CHARS) return next
+    const cutoff = next.length - MAX_RETAINED_CHARS
+    const nl = next.indexOf('\n', cutoff)
+    // Prefer the next line boundary at/after the cutoff; fall back to a hard cut
+    // if the tail is one gigantic line with no newline.
+    return nl >= 0 ? next.slice(nl + 1) : next.slice(cutoff)
   }
 
   clear(): void {
