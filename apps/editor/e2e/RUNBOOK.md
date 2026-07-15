@@ -53,6 +53,12 @@
 - **判定标准**：仅 markdown 类 @p1 失败 → 本机环境噪声，不当回归。
 - memory：`e2e-markdown-exthost-fail-locally`、`e2e-disable-exthost-flake`。
 
+### 5. Ubuntu 多用例随机在 E2E probe 前纯黑（已修复）
+- **现象**：多个无关 spec 同轮随机卡在 fixture `waitForFunction(__E2E__)`；Electron/window 很快创建但页面纯黑，test body 未执行，retry 常恢复。
+- **根因**：`ElectronProtocol` 在主 frame 导航开始时关闭发送 gate；renderer 在 `dom-ready` 前发出的首个 bootstrap RPC 可到 main，但同步响应被 gate 丢弃，导致 probe/React 之前的 Promise 永久 pending。
+- **修复**：renderer 入站 IPC 先重开 frame gate，再分发给 `ChannelServer`；入站本身证明新 frame 已可执行 IPC。不要通过放宽 fixture timeout 掩盖永久死锁。
+- **判定标准**：trace 中 launch/firstWindow 很快，probe 恒无且截图纯黑；失败在业务无关 spec 间漂移。锚：`src/main/ipc/electronProtocol.ts`；skill 案例 33。
+
 ---
 
 ## 诊断前必做

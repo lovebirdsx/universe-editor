@@ -85,6 +85,22 @@ describe('ElectronProtocol dead-frame gate', () => {
     expect(wc.sent).toHaveLength(1)
   })
 
+  it('resumes before dom-ready when the new renderer sends its first IPC request', () => {
+    const { wc, protocol } = make()
+    const received: Uint8Array[] = []
+    protocol.onMessage((message) => received.push(message))
+
+    wc.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })
+    protocol.send(new Uint8Array([1]))
+    expect(wc.sent).toHaveLength(0)
+
+    protocol.acceptMessage(new Uint8Array([2]))
+    expect(received).toEqual([new Uint8Array([2])])
+
+    protocol.send(new Uint8Array([3]))
+    expect(wc.sent).toHaveLength(1)
+  })
+
   it('keeps sending when a SUBFRAME (webview iframe) navigates', () => {
     // Regression: a webview <iframe> navigating fires did-start-navigation with
     // isMainFrame=false. It must NOT close the gate — nothing reopens it for a

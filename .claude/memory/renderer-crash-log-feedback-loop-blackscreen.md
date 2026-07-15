@@ -15,6 +15,8 @@ metadata:
 1. `ElectronProtocol` 加 `_frameAlive` 闸门:监听 `render-process-gone`/`did-start-navigation`(仅 `isMainFrame && !isSameDocument` 才置死)+`dom-ready`/`did-finish-load`(恢复),send 前判断,从源头断循环;send 抛异常也翻闸。`webContents.on/removeListener` 重载多签名,须包成 `{on(e:string,h:(...a:unknown[])=>void):void}` 保 `this` 绑定(勿解构成变量调用,会丢 this)。
 
    **⚠️ 关门事件坑(会反噬 @p1 webview custom editor e2e)**：最初用 `did-start-loading` 关门是**错的**——它是 WebContents 级粗粒度事件,custom editor 的 webview `<iframe>` 导航到 `WEBVIEW_BLANK_URL` 也触发它把闸门置死;而 `dom-ready`/`did-finish-load` 主帧初次加载后不因子帧再触发→主帧 IPC 通道被子帧加载**永久闸死**,`resolveCustomEditor`/`asWebviewUri` 授权等 RPC 全超时。必须改用带 `isMainFrame` 的 `did-start-navigation`,只认主帧真实 reload。回归用例:子帧导航 + 同文档主帧导航(hashchange/pushState)都不能关门。
+
+   **⚠️ 重开时机坑(会让 renderer 启动纯黑)**：不能只等 `dom-ready`/`did-finish-load` 重开。renderer ES module 可在 `dom-ready` 前发首个 bootstrap RPC（当前是 `initializeRendererNls`）；若 main 收到请求后同步生成的响应仍被 gate 丢弃，renderer Promise 无 timeout 会永久 pending，probe/React 都不安装。入站 protocol 消息本身已证明新 frame 存活，`onIncoming` 必须先 `_frameAlive=true` 再 `Emitter.fire`，否则同一调用栈里的 response 仍会被吞。CI 信号=多条无关 spec 随机卡 `waitForFunction(__E2E__)`、纯黑、retry 恢复；不要靠放宽 fixture timeout 掩盖。
 2. `windowMainService.createWindow` 监听 `render-process-gone`,非 `clean-exit` 弹 dialog 一键 reload,`_crashHandled` set 防抖(closed 时清)。
 3. `FileLogger` rotate 突发熔断(10s 内≥3 次 rotate→抑制 `_onChunk` 30s,文件继续写盘但不再 fire onDidAppendEntry 往渲染推),防复发。`localize` 第三参是 `Record<string,unknown>` 占位对象(`{reason}`)非位置参。
 
