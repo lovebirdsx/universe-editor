@@ -37,7 +37,7 @@ export interface PublishDiagnosticsEvent {
 export interface EslintClientHooks {
   readonly onDiagnostics: (e: PublishDiagnosticsEvent) => void
   readonly log: (level: EslintLogLevel, message: string) => void
-  readonly onStatus: (status: EslintStatus, message?: string) => void
+  readonly onStatus: (status: EslintStatus, message?: string, busy?: boolean) => void
 }
 
 /** ELECTRON_* / NODE_OPTIONS stripped from the child env (same rationale as the
@@ -209,7 +209,7 @@ export class EslintClient {
       this._hooks.log(p.level, p.message)
     })
     conn.onNotification(EslintMethods.status, (p: StatusParams) => {
-      this._hooks.onStatus(p.status, p.message)
+      this._hooks.onStatus(p.status, p.message, p.busy)
     })
     conn.listen()
 

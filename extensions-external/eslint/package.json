@@ -2,7 +2,7 @@
   "name": "universe-eslint",
   "displayName": "ESLint",
   "description": "Integrates ESLint into the editor: diagnostics, quick fixes, fix-all, format-as-formatter and fix-all-on-save — backed by a standalone ESLint language server that resolves the workspace's own eslint.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "universe",
   "license": "MIT",
   "type": "module",

@@ -96,7 +96,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
       diagnostics.set(uriComponents(e.uri), e.diagnostics)
     },
     log,
-    onStatus: (s: EslintStatus, message?: string) => applyStatus(status, s, message),
+    onStatus: (s: EslintStatus, message?: string, busy?: boolean) =>
+      applyStatus(status, s, message, busy),
   })
 
   context.subscriptions.push(output, status, diagnostics, { dispose: () => client.dispose() })
@@ -121,8 +122,24 @@ function makeLogger(output: OutputChannel): (level: EslintLogLevel, message: str
 }
 
 /** Map a coarse status to the status-bar item's text/tooltip (a click opens the
- *  output channel). Uses `$(icon)` glyph syntax the workbench renders. */
-function applyStatus(item: StatusBarItem, status: EslintStatus, message?: string): void {
+ *  output channel). Uses `$(icon)` glyph syntax the workbench renders. While
+ *  `busy` (a lint pass in flight) a rotating spinner replaces the glyph — the
+ *  first type-aware pass can take 10s+, so this is the only sign work is
+ *  happening. */
+function applyStatus(
+  item: StatusBarItem,
+  status: EslintStatus,
+  message?: string,
+  busy?: boolean,
+): void {
+  if (busy) {
+    item.showProgress = 'syncing'
+    item.text = 'ESLint'
+    item.tooltip = message ?? 'ESLint — linting…'
+    item.show()
+    return
+  }
+  item.showProgress = undefined
   const glyph = status === 'ok' ? '$(check)' : status === 'warn' ? '$(warning)' : '$(error)'
   item.text = `${glyph} ESLint`
   item.tooltip = message ?? 'ESLint — click to open the output channel'

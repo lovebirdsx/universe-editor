@@ -118,7 +118,6 @@ class EslintServer {
     this._ctorByDir.set(dir, ctor)
     if (ctor) {
       this._log('info', `resolved ESLint from ${dir}`)
-      this._status('ok')
     } else {
       this._log('warn', `no ESLint resolvable from ${dir} (install eslint in the workspace)`)
       this._status('warn', `No ESLint library found near ${dir}`)
@@ -136,13 +135,30 @@ class EslintServer {
     if (!doc || !this._shouldValidate(uri)) return
     const filePath = filePathOf(uri)
     if (!filePath) return
+    // Resolving the workspace eslint (first `import`) and the first type-aware
+    // pass together take 10s+ on a large project. Flag busy up front — before
+    // resolution — so the UI shows progress instead of looking broken; every
+    // exit below clears it (via _status) so the spinner never sticks.
+    this._status('ok', `Linting ${filePath}…`, true)
+    // The first `import(eslint)` synchronously blocks this process's event loop
+    // (V8 compiles the whole eslint + typescript-eslint module graph), which
+    // would hold back the busy notification's stdout flush until it finishes —
+    // defeating the point. Yield one turn so the notification reaches the client
+    // (a separate process, free to render the spinner) before we block.
+    await new Promise<void>((resolve) => setImmediate(resolve))
     const Ctor = await this._ctorFor(uri)
-    if (!Ctor) return
+    if (!Ctor) {
+      // eslint unresolvable (or cached negative) — settle to a definitive
+      // status so the busy spinner always clears.
+      this._status('warn', 'No ESLint library found in the workspace')
+      return
+    }
     try {
       const eslint: EslintApi = new Ctor(this._settings.options)
       const { diagnostics } = await lintDocument(eslint, doc.text, filePath)
       this._log('info', `linted ${filePath}: ${diagnostics.length} problem(s)`)
       this._publish({ uri, diagnostics })
+      this._status('ok')
     } catch (err) {
       this._log('error', `lint failed for ${filePath}: ${(err as Error).message}`)
       this._status('error', `Lint failed: ${(err as Error).message}`)
@@ -203,8 +219,12 @@ class EslintServer {
     void this._conn.sendNotification(EslintMethods.logMessage, params).catch(() => undefined)
   }
 
-  private _status(status: EslintStatus, message?: string): void {
-    const params: StatusParams = message !== undefined ? { status, message } : { status }
+  private _status(status: EslintStatus, message?: string, busy?: boolean): void {
+    const params: StatusParams = {
+      status,
+      ...(message !== undefined ? { message } : {}),
+      ...(busy !== undefined ? { busy } : {}),
+    }
     void this._conn.sendNotification(EslintMethods.status, params).catch(() => undefined)
   }
 }

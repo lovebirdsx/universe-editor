@@ -93,10 +93,13 @@ export type EslintStatus = 'ok' | 'warn' | 'error'
 
 /** Notification: server → client. Coarse health so the UI can show a state
  *  indicator (e.g. "no ESLint resolvable" vs. "linting"). `message` is an
- *  optional human-readable detail for the tooltip. */
+ *  optional human-readable detail for the tooltip. `busy` drives a progress
+ *  spinner while a lint pass runs — type-aware configs can take 10s+ on the
+ *  first pass, and without it the UI looks idle/broken. */
 export interface StatusParams {
   readonly status: EslintStatus
   readonly message?: string
+  readonly busy?: boolean
 }
 
 /** Method names (kept as constants so client and server can't drift). */
