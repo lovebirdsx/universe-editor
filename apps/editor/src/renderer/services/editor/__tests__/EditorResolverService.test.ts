@@ -361,4 +361,27 @@ describe('EditorResolverService', () => {
     expect(group.editors).toEqual([pdfTab])
     expect(group.openCalls).toHaveLength(0)
   })
+
+  it('self-heal ignores transient inputs not produced by the resolver (webview diff)', () => {
+    const { resolver, group } = makeEnv()
+    const uri = URI.file('/virtual/right.uediff')
+
+    // A webview diff tab is open. Its resource is the right-hand URI (matches the
+    // custom-editor glob) but its typeId is NOT resolver-registered — it carries
+    // in-memory diff bytes and must survive a late custom-editor registration.
+    const diffTab = { typeId: 'webviewDiff', resource: uri } as unknown as EditorInput
+    group.editors.push(diffTab)
+    group.activeEditor = diffTab
+    group.openCalls.length = 0
+
+    // The diff-capable custom editor registers late (extension host ready).
+    resolver.registerEditor(
+      '**/*.uediff',
+      { typeId: 'customEditor', displayName: 'E2E Diff', priority: 100 },
+      () => ({ typeId: 'customEditor', resource: uri }) as unknown as EditorInput,
+    )
+
+    expect(group.editors).toEqual([diffTab])
+    expect(group.openCalls).toHaveLength(0)
+  })
 })

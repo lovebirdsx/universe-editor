@@ -97,8 +97,15 @@ export class EditorResolverService implements IEditorResolverService {
         if (matcher !== null && !matcher(uri.path)) continue
         if (editor.typeId === reg.info.typeId) continue
         if (this._explicitChoices.has(uri.toString())) continue
+        // Only touch tabs this resolver produced. Transient inputs that merely
+        // reuse a matching `resource` but are not resolver-registered (a webview
+        // diff whose right-hand URI matches the glob, the built-in diff/merge
+        // editors) have no registration for their typeId — `_priorityOf` is 0 —
+        // and must never be "upgraded", which would drop their in-memory payload.
+        const currentPriority = this._priorityOf(uri, editor.typeId)
+        if (currentPriority === 0) continue
         // Only upgrade — never replace a tab already showing an equal/higher-priority editor.
-        if (reg.info.priority <= this._priorityOf(uri, editor.typeId)) continue
+        if (reg.info.priority <= currentPriority) continue
 
         const index = group.indexOf(editor)
         const wasActive = group.activeEditor === editor
