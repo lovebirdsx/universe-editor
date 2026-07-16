@@ -26,6 +26,7 @@ import {
   type IGalleryExtension,
   type IQueryOptions,
 } from '../../../shared/ipc/extensionGalleryService.js'
+import { GallerySortBy } from '@universe-editor/extension-gallery'
 import {
   IExtensionEnablementService,
   EnablementState,
@@ -86,6 +87,16 @@ export interface IExtensionsWorkbenchService {
 
   /** Run a marketplace search (debounced by the caller). Empty text clears results. */
   search(text: string, options?: IQueryOptions): Promise<void>
+
+  /**
+   * Load the default "Market Extensions" listing (most-installed) with no search
+   * term. Drives the always-on marketplace group. Network failure degrades to an
+   * empty list (never throws).
+   */
+  loadFeatured(): Promise<void>
+
+  /** Install a local `.vsix` by path (drag-and-drop onto the view). Refreshes. */
+  installVSIX(vsixPath: string): Promise<void>
 
   /** Refresh the installed set from main (called on onDidChangeExtensions). */
   refreshInstalled(): Promise<void>
@@ -217,6 +228,44 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
         this._onDidChange.fire()
       }
     }
+  }
+
+  async loadFeatured(): Promise<void> {
+    this._searchText = ''
+    const seq = ++this._searchSeq
+    this._searching = true
+    this._onDidChange.fire()
+    try {
+      const result = await this._gallery.query({ sortBy: GallerySortBy.InstallCount })
+      if (seq !== this._searchSeq) return // a newer query superseded this one
+      this._results = [...result.extensions]
+    } finally {
+      if (seq === this._searchSeq) {
+        this._searching = false
+        this._onDidChange.fire()
+      }
+    }
+  }
+
+  async installVSIX(vsixPath: string): Promise<void> {
+    try {
+      const local = await this._management.installVSIX(vsixPath)
+      this._notification.notify({
+        severity: Severity.Info,
+        message: localize('extensions.installVsix.done', 'Installed "{name}" ({version}).', {
+          name: local.manifest.displayName ?? local.identifier,
+          version: local.version,
+        }),
+      })
+    } catch (err) {
+      this._notification.notify({
+        severity: Severity.Error,
+        message: localize('extensions.installVsix.failed', 'Failed to install extension: {error}', {
+          error: (err as Error).message,
+        }),
+      })
+    }
+    await this.refreshInstalled()
   }
 
   async install(entry: IExtensionEntry): Promise<void> {

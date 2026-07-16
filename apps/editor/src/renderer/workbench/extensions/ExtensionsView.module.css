@@ -5,6 +5,12 @@
   overflow: hidden;
 }
 
+.dropActive {
+  outline: 1px dashed var(--color-accent, #4daafc);
+  outline-offset: -2px;
+  background: var(--color-list-drop-bg, rgba(77, 170, 252, 0.08));
+}
+
 .searchRow {
   padding: 8px;
   flex-shrink: 0;

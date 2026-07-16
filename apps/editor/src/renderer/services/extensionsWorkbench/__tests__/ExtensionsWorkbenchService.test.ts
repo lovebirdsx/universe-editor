@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { Emitter } from '@universe-editor/platform'
+import { Emitter, Severity } from '@universe-editor/platform'
+import { GallerySortBy } from '@universe-editor/extension-gallery'
 import type {
   IDialogService,
   INotificationService,
@@ -59,7 +60,7 @@ function makeMocks() {
     getInstalled: vi.fn(async () => [] as ILocalExtension[]),
     listBuiltinExtensions: vi.fn(async () => [] as ILocalExtension[]),
     installFromGallery: vi.fn(async () => localExtension()),
-    installVSIX: vi.fn(),
+    installVSIX: vi.fn(async () => localExtension()),
     uninstall: vi.fn(async () => undefined),
   } as unknown as IExtensionManagementService
   const gallery = {
@@ -278,14 +279,42 @@ describe('ExtensionsWorkbenchService', () => {
     )
   })
 
-  it('refreshes when the enablement service fires a change', async () => {
+  it('loadFeatured queries the marketplace sorted by install count', async () => {
     const mocks = makeMocks()
+    vi.mocked(mocks.gallery.query).mockResolvedValue({
+      extensions: [galleryExtension()],
+      total: 1,
+    })
     const svc = makeService(mocks)
+    await svc.loadFeatured()
+
+    expect(mocks.gallery.query).toHaveBeenCalledWith({ sortBy: GallerySortBy.InstallCount })
+    expect(svc.getSearchResults().map((e) => e.id)).toEqual(['acme.market'])
+    expect(svc.searchText).toBe('')
+  })
+
+  it('installVSIX forwards the path, refreshes, and notifies', async () => {
+    const mocks = makeMocks()
     vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
-    mocks.onDidChangeEnablement.fire()
-    await Promise.resolve()
-    await Promise.resolve()
+    const svc = makeService(mocks)
+    await svc.installVSIX('/tmp/ext.vsix')
+
+    expect(mocks.management.installVSIX).toHaveBeenCalledWith('/tmp/ext.vsix')
     expect(mocks.management.getInstalled).toHaveBeenCalled()
-    expect(svc.getInstalled()).toHaveLength(1)
+    expect(mocks.notification.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: Severity.Info }),
+    )
+  })
+
+  it('installVSIX notifies an error and still refreshes when install fails', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.installVSIX).mockRejectedValue(new Error('bad package'))
+    const svc = makeService(mocks)
+    await svc.installVSIX('/tmp/broken.vsix')
+
+    expect(mocks.notification.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: Severity.Error }),
+    )
+    expect(mocks.management.getInstalled).toHaveBeenCalled()
   })
 })

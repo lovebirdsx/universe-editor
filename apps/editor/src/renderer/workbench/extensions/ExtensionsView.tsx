@@ -1,18 +1,29 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  ExtensionsView — the Extensions viewlet. A search box drives a marketplace
- *  query (debounced); results show under MARKETPLACE while the installed set
- *  shows under INSTALLED. With no marketplace configured (GALLERY_URL empty), the
- *  search box + MARKETPLACE group hide and only INSTALLED remains, alongside the
- *  "install from VSIX" command. Clicking a row opens its detail editor. All state
- *  is read through IExtensionsWorkbenchService — this component owns no wire logic.
+ *  ExtensionsView — the Extensions viewlet. INSTALLED is always shown; when a
+ *  marketplace is configured (GALLERY_URL set) a search box drives it and the
+ *  "Market Extensions" group lists installable extensions (most-installed by
+ *  default, search results while typing). With no marketplace the search box +
+ *  Market group hide and only INSTALLED remains, alongside "install from VSIX".
+ *  Dropping a `.vsix` file onto the view installs/updates it. Focusing the view
+ *  (Ctrl+Shift+X) puts the caret in the search box. Clicking a row opens its
+ *  detail editor. All state is read through IExtensionsWorkbenchService.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, ShieldCheck, Settings } from 'lucide-react'
-import { IEditorService, localize } from '@universe-editor/platform'
-import { Button, IconButton, Input, Spinner, cx } from '@universe-editor/workbench-ui'
+import { IEditorService, INotificationService, Severity, localize } from '@universe-editor/platform'
+import {
+  Button,
+  IconButton,
+  Input,
+  Spinner,
+  cx,
+  dragContainsResources,
+} from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
+import { useViewFocusable } from '../useViewFocusable.js'
+import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import {
   IExtensionsWorkbenchService,
   EnablementState,
@@ -24,6 +35,9 @@ import { ExtensionActionsMenu, type ExtensionActionsMenuState } from './Extensio
 import styles from './ExtensionsView.module.css'
 
 const SEARCH_DEBOUNCE_MS = 300
+
+/** The view id — must match the descriptor registered in ExtensionsViewContribution. */
+const VIEW_ID = 'workbench.view.extensions.main'
 
 /** Re-render whenever the workbench facade fires a change. */
 function useWorkbenchTick(service: IExtensionsWorkbenchService): number {
@@ -38,15 +52,26 @@ function useWorkbenchTick(service: IExtensionsWorkbenchService): number {
 export function ExtensionsView() {
   const service = useService(IExtensionsWorkbenchService)
   const editorService = useService(IEditorService)
+  const notificationService = useService(INotificationService)
   useWorkbenchTick(service)
 
   const [marketplaceEnabled, setMarketplaceEnabled] = useState(false)
   const [query, setQuery] = useState('')
+  const [dropActive, setDropActive] = useState(false)
   const [menu, setMenu] = useState<ExtensionActionsMenuState | undefined>(undefined)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
+  useViewFocusable(
+    VIEW_ID,
+    useCallback(() => inputRef.current, []),
+  )
 
   useEffect(() => {
-    void service.isMarketplaceEnabled().then(setMarketplaceEnabled)
+    void service.isMarketplaceEnabled().then((enabled) => {
+      setMarketplaceEnabled(enabled)
+      if (enabled) void service.loadFeatured()
+    })
     void service.refreshInstalled()
   }, [service])
 
@@ -54,7 +79,10 @@ export function ExtensionsView() {
     (value: string) => {
       setQuery(value)
       if (debounceRef.current) clearTimeout(debounceRef.current)
-      debounceRef.current = setTimeout(() => void service.search(value), SEARCH_DEBOUNCE_MS)
+      debounceRef.current = setTimeout(() => {
+        if (value.trim()) void service.search(value)
+        else void service.loadFeatured()
+      }, SEARCH_DEBOUNCE_MS)
     },
     [service],
   )
@@ -77,16 +105,60 @@ export function ExtensionsView() {
     setMenu({ entry, x, y })
   }, [])
 
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    if (!dragContainsResources(e.dataTransfer)) return
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'copy'
+    setDropActive(true)
+  }, [])
+
+  const onDragLeave = useCallback((e: React.DragEvent) => {
+    // Only clear when the pointer actually leaves the view, not on child enter.
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+    setDropActive(false)
+  }, [])
+
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      if (!dragContainsResources(e.dataTransfer)) return
+      e.preventDefault()
+      e.stopPropagation()
+      setDropActive(false)
+      const resources = readDroppedResources(e)
+      if (resources.length === 0) return
+      const nonVsix = resources.filter((uri) => !/\.vsix$/i.test(uri.fsPath))
+      if (nonVsix.length > 0) {
+        notificationService.notify({
+          severity: Severity.Error,
+          message: localize(
+            'extensions.drop.notVsix',
+            'Only .vsix packages can be installed by dropping them here.',
+          ),
+        })
+        return
+      }
+      for (const uri of resources) void service.installVSIX(uri.fsPath)
+    },
+    [service, notificationService],
+  )
+
   const installed = service.getInstalled()
   const searching = service.searching
   const results = service.getSearchResults()
-  const showMarketplace = marketplaceEnabled && query.trim().length > 0
 
   return (
-    <div className={styles.container} data-testid="extensions-view">
+    <div
+      className={cx(styles.container, dropActive && styles.dropActive)}
+      data-testid="extensions-view"
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
       {marketplaceEnabled && (
         <div className={styles.searchRow}>
           <Input
+            ref={inputRef}
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
             placeholder={localize('extensions.search.placeholder', 'Search Extensions Marketplace')}
@@ -96,9 +168,26 @@ export function ExtensionsView() {
       )}
 
       <div className={styles.scroll}>
-        {showMarketplace ? (
+        <Section title={localize('extensions.group.installed', 'Installed')}>
+          {installed.map((entry) => (
+            <ExtensionRow
+              key={entry.id}
+              entry={entry}
+              onOpen={openDetail}
+              onInstall={() => void service.install(entry)}
+              onOpenMenu={openMenu}
+            />
+          ))}
+          {installed.length === 0 && (
+            <div className={styles.empty}>
+              {localize('extensions.noneInstalled', 'No extensions installed')}
+            </div>
+          )}
+        </Section>
+
+        {marketplaceEnabled && (
           <Section
-            title={localize('extensions.group.marketplace', 'Marketplace')}
+            title={localize('extensions.group.marketplace', 'Market Extensions')}
             loading={searching}
           >
             {results.map((entry) => (
@@ -113,23 +202,6 @@ export function ExtensionsView() {
             {!searching && results.length === 0 && (
               <div className={styles.empty}>
                 {localize('extensions.noResults', 'No extensions found')}
-              </div>
-            )}
-          </Section>
-        ) : (
-          <Section title={localize('extensions.group.installed', 'Installed')}>
-            {installed.map((entry) => (
-              <ExtensionRow
-                key={entry.id}
-                entry={entry}
-                onOpen={openDetail}
-                onInstall={() => void service.install(entry)}
-                onOpenMenu={openMenu}
-              />
-            ))}
-            {installed.length === 0 && (
-              <div className={styles.empty}>
-                {localize('extensions.noneInstalled', 'No extensions installed')}
               </div>
             )}
           </Section>
