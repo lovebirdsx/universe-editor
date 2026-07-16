@@ -1,5 +1,33 @@
 [
   {
+    "version": "0.1.40",
+    "date": "2026-07-16",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "为Windows任务栏图标添加跳转列表支持",
+          "底栏的激活图标表达加强",
+          "swarm插件NeedsMyAction查询优化与UI状态持久化",
+          "为 Add Selection to Agent Chat 添加快捷键提示",
+          "git graph分支菜单新增复制分支名功能"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复timeline从底向上滚动抖动问题",
+          "修复F2键位在编辑器中被资源管理器抢占的问题",
+          "修复编辑器脏状态未跨group同步的bug",
+          "修复Tab和Enter多光标时只保留一个光标的bug",
+          "修复打开最近工作区没有按照时间排序的bug"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.39",
     "date": "2026-07-14",
     "groups": [
