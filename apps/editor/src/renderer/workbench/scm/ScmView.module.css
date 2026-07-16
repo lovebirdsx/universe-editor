@@ -258,6 +258,7 @@
   align-items: center;
   gap: 4px;
   padding: 2px 4px;
+  overflow: hidden;
   cursor: pointer;
   user-select: none;
 }
@@ -267,6 +268,11 @@
 }
 
 .groupLabel {
+  flex: 0 1 auto;
+  min-width: 3em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
   font-size: 11px;
   text-transform: uppercase;

@@ -769,7 +769,9 @@ const ScmGroupRow = memo(function ScmGroupRow({
           />
         ) : null
       })()}
-      <span className={styles['groupLabel']}>{node.label}</span>
+      <span className={styles['groupLabel']} title={node.label}>
+        {node.label}
+      </span>
       <span className={styles['groupActions']}>
         {groupActions.map((a) => (
           <ActionButton
