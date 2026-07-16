@@ -9,6 +9,7 @@
 
 import {
   memo,
+  useCallback,
   useContext,
   useEffect,
   useLayoutEffect,
@@ -631,22 +632,33 @@ export const EditorGroupView = memo(function EditorGroupView({
   }, [groupVersion])
 
   // Keep scroll-arrow visibility in sync with the tab bar's scroll state.
+  const updateScrollButtons = useCallback(() => {
+    const el = tabBarRef.current
+    if (!el) return
+    setCanScrollLeft(el.scrollLeft > 0)
+    setCanScrollRight(Math.ceil(el.scrollLeft + el.clientWidth) < el.scrollWidth)
+  }, [])
+
   useEffect(() => {
     const el = tabBarRef.current
     if (!el) return
-    const update = () => {
-      setCanScrollLeft(el.scrollLeft > 0)
-      setCanScrollRight(Math.ceil(el.scrollLeft + el.clientWidth) < el.scrollWidth)
-    }
-    update()
-    el.addEventListener('scroll', update, { passive: true })
-    const ro = new ResizeObserver(() => requestAnimationFrame(update))
+    updateScrollButtons()
+    el.addEventListener('scroll', updateScrollButtons, { passive: true })
+    const ro = new ResizeObserver(() => requestAnimationFrame(updateScrollButtons))
     ro.observe(el)
     return () => {
-      el.removeEventListener('scroll', update)
+      el.removeEventListener('scroll', updateScrollButtons)
       ro.disconnect()
     }
-  }, [])
+  }, [updateScrollButtons])
+
+  // Adding/removing a tab grows the tab bar's scrollWidth without changing its
+  // box size, so the ResizeObserver above never fires for it. Recompute the
+  // arrow visibility whenever the tab set (or active tab) changes — otherwise
+  // opening files one-by-one past the overflow point leaves the arrows hidden.
+  useLayoutEffect(() => {
+    updateScrollButtons()
+  }, [groupVersion, updateScrollButtons])
 
   // Track real DOM focus inside the editor body so we can mute the tab highlight
   // when the user is interacting with another part of the workbench (sidebar,
