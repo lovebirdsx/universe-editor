@@ -44,6 +44,13 @@ export function rangeToMonaco(r: Range): monaco.IRange {
   }
 }
 
+/** LSP TextEdit[] → Monaco `languages.TextEdit[]` (range 0-based → 1-based). Used
+ *  by document-formatting providers, whose result is a set of edits over the doc. */
+export function textEditsToMonaco(edits: TextEdit[] | null): monaco.languages.TextEdit[] {
+  if (!edits) return []
+  return edits.map((e) => ({ range: rangeToMonaco(e.range), text: e.newText }))
+}
+
 /** Monaco 1-based position → LSP 0-based position. */
 export function monacoPositionToLsp(p: monaco.IPosition): Position {
   return { line: p.lineNumber - 1, character: p.column - 1 }
@@ -392,9 +399,21 @@ export function diagnosticToMarker(
     endLineNumber: d.range.end.line + 1,
     endColumn: d.range.end.character + 1,
     ...(d.source ? { source: d.source } : {}),
-    ...(d.code !== undefined ? { code: String(d.code) } : {}),
+    ...(d.code !== undefined ? { code: codeForMarker(d, monacoNs) } : {}),
     ...(tags.length > 0 ? { tags } : {}),
   }
+}
+
+/** A diagnostic `code` becomes a plain string, or a `{ value, target }` link when
+ *  the server sent a `codeDescription.href` (LSP 3.16) — Monaco renders that as a
+ *  clickable "open rule documentation" link in the marker (used by ESLint). */
+function codeForMarker(
+  d: Diagnostic,
+  monacoNs: typeof monaco,
+): string | { value: string; target: monaco.Uri } {
+  const value = String(d.code)
+  const href = d.codeDescription?.href
+  return href ? { value, target: monacoNs.Uri.parse(href) } : value
 }
 
 /**

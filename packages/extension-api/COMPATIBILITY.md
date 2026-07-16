@@ -81,11 +81,19 @@
   `WebviewOptions` / `CustomDocument` / `CustomEditorOptions` /
   `CustomReadonlyEditorProvider`（`src/webview.ts`）。新增激活事件
   `onCustomEditor:<viewType>` 与 manifest 贡献点 `contributes.customEditors`。
-- `0.4.0` — 新增 webview diff 表面（向后兼容的新增，minor）：`WebviewPanel.diffContext`
-  可选字段 + `WebviewDiffContext` 接口（`src/webview.ts`）。当工作台经内部命令
-  `_workbench.openWebviewDiff` 以"两份内容对比"方式打开一个 custom editor 时，
-  provider 在 `resolveCustomEditor` 里读 `panel.diffContext`（存在→渲染 diff，
-  不存在→单文件预览）。纯新增可选字段，不改既有签名。
+- `0.4.0` — 两组向后兼容的新增（minor）：
+  - webview diff 表面：`WebviewPanel.diffContext` 可选字段 + `WebviewDiffContext`
+    接口（`src/webview.ts`）。当工作台经内部命令 `_workbench.openWebviewDiff` 以
+    "两份内容对比"方式打开一个 custom editor 时，provider 在 `resolveCustomEditor`
+    里读 `panel.diffContext`（存在→渲染 diff，不存在→单文件预览）。纯新增可选字段，
+    不改既有签名。
+  - 文档格式化与保存前钩子表面，支撑语言插件做「作为格式化器」与「保存时 fixAll」：
+    - `languages.registerDocumentFormattingEditProvider` +
+      `DocumentFormattingEditProvider` / `FormattingOptions`。
+    - `workspace.onWillSaveTextDocument` + `WillSaveTextDocumentEvent`（含
+      `waitUntil(thenable)`）+ `TextDocumentSaveReason` 枚举。宿主在文件保存前同步
+      派发该事件，收集各监听器 `waitUntil` 贡献的 `TextEdit[]`（带超时兜底）并应用
+      到模型。
 
 ## 激活事件清单（activation events）
 

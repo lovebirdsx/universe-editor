@@ -41,6 +41,7 @@ import { TerminalEditorLifecycleContribution } from '../TerminalEditorLifecycleC
 import { MonacoKeybindingSyncContribution } from '../MonacoKeybindingSyncContribution.js'
 import { MonacoDefaultKeybindingOverrideContribution } from '../MonacoDefaultKeybindingOverrideContribution.js'
 import { DocumentSyncContribution } from '../DocumentSyncContribution.js'
+import { WillSaveParticipantContribution } from '../WillSaveParticipantContribution.js'
 import { MarkdownPasteContribution } from '../MarkdownPasteContribution.js'
 import { MarkdownDropContribution } from '../MarkdownDropContribution.js'
 import { MarkdownUpdateLinksOnRenameContribution } from '../MarkdownUpdateLinksOnRenameContribution.js'
@@ -337,6 +338,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.documentSync',
   DocumentSyncContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Bridge the save flow to the trusted host's onWillSaveTextDocument listeners:
+// run them before each file save and apply their edits (e.g. ESLint fix-all-on-
+// save) to the model. AfterRestore so the host client + Monaco models are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.willSaveParticipant',
+  WillSaveParticipantContribution,
   WorkbenchPhase.AfterRestore,
 )
 

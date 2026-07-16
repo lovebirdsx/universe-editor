@@ -31,6 +31,7 @@ import type {
   SemanticTokens,
   SignatureHelp,
   SymbolInformation,
+  TextEdit,
   WorkspaceEdit,
   WorkspaceSymbol,
 } from 'vscode-languageserver-types'
@@ -233,6 +234,7 @@ export type LanguageProviderType =
   | 'documentHighlight'
   | 'selectionRange'
   | 'codeAction'
+  | 'documentFormatting'
   | 'documentSemanticTokens'
   | 'codeLens'
 
@@ -280,6 +282,13 @@ export interface ISignatureHelpContext {
  */
 export interface ICodeActionContext {
   readonly only?: readonly string[]
+}
+
+/** Formatting options Monaco passes to a document-formatting provider. Mirrors
+ *  LSP `FormattingOptions` (the two fields every formatter gets). */
+export interface IFormattingOptionsDto {
+  readonly tabSize: number
+  readonly insertSpaces: boolean
 }
 
 /**
@@ -359,6 +368,11 @@ export interface IExtHostLanguages {
     range: Range,
     context: ICodeActionContext,
   ): Promise<CodeAction[] | null>
+  $provideDocumentFormattingEdits(
+    handle: number,
+    uri: UriComponents,
+    options: IFormattingOptionsDto,
+  ): Promise<TextEdit[] | null>
   $provideDocumentSemanticTokens(handle: number, uri: UriComponents): Promise<SemanticTokens | null>
   $provideCodeLenses(handle: number, uri: UriComponents): Promise<CodeLens[] | null>
   $resolveCodeLens(handle: number, lens: CodeLens): Promise<CodeLens | null>
@@ -379,7 +393,20 @@ export interface IExtHostDocuments {
   ): Promise<void>
   $acceptDocumentChange(uri: UriComponents, version: number, text: string): Promise<void>
   $acceptDocumentClose(uri: UriComponents): Promise<void>
+  /**
+   * Renderer → host, WAITING round trip (unlike the fire-and-forget `$accept*`
+   * above): the renderer is about to save `uri` and asks the host to run every
+   * `onWillSaveTextDocument` listener, collecting the text edits they contribute
+   * (e.g. ESLint fix-all-on-save). The host bounds each listener with a timeout
+   * and returns the merged edits; the renderer applies them to the model before
+   * writing to disk. `reason` mirrors LSP `TextDocumentSaveReason`
+   * (1 = manual, 2 = after delay, 3 = focus out).
+   */
+  $provideWillSaveEdits(uri: UriComponents, reason: WillSaveReason): Promise<TextEdit[]>
 }
+
+/** Why a save is happening. Mirrors LSP `TextDocumentSaveReason`. */
+export type WillSaveReason = 1 | 2 | 3
 
 /**
  * Ext host → exposed to the renderer: a plugin registers/unregisters language

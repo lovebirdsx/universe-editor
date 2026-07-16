@@ -32,6 +32,7 @@ import type {
   SemanticTokensLegend,
   SignatureHelp,
   SymbolInformation,
+  TextEdit,
   WorkspaceEdit,
   WorkspaceSymbol,
 } from 'vscode-languageserver-types'
@@ -220,6 +221,30 @@ export interface TextDocumentChangeEvent {
   readonly document: TextDocument
 }
 
+/** Why a document is being saved. Mirrors VSCode's `TextDocumentSaveReason`. */
+export enum TextDocumentSaveReason {
+  /** Manually triggered, e.g. by the user pressing save. */
+  Manual = 1,
+  /** Automatic after a delay. */
+  AfterDelay = 2,
+  /** When the editor lost focus. */
+  FocusOut = 3,
+}
+
+/**
+ * Fired by `onWillSaveTextDocument` before a document is written to disk. A
+ * listener may contribute edits applied prior to the save by calling
+ * `waitUntil` with a promise of {@link TextEdit}s — the save waits for it (up to
+ * a host-imposed timeout). This is how ESLint's fix-all-on-save works.
+ */
+export interface WillSaveTextDocumentEvent {
+  readonly document: TextDocument
+  readonly reason: TextDocumentSaveReason
+  /** Delay the save until `thenable` resolves, then apply its edits to the
+   *  document. Multiple listeners' edits are applied in registration order. */
+  waitUntil(thenable: Promise<TextEdit[]>): void
+}
+
 /** A selection in a {@link TextEditor}. `anchor` is the fixed end, `active` the
  *  moving end (where the cursor is); they're equal for an empty selection. */
 export interface Selection {
@@ -314,6 +339,12 @@ export interface WorkspaceApi {
   readonly onDidOpenTextDocument: Event<TextDocument>
   readonly onDidChangeTextDocument: Event<TextDocumentChangeEvent>
   readonly onDidCloseTextDocument: Event<TextDocument>
+  /**
+   * Fires before a text document is saved. A listener may call
+   * `event.waitUntil(Promise<TextEdit[]>)` to contribute edits applied before the
+   * save (bounded by a host timeout). Used for save-time fixups like ESLint.
+   */
+  readonly onWillSaveTextDocument: Event<WillSaveTextDocumentEvent>
   /**
    * Read configuration values. `section` is an optional key prefix (e.g. `'git'`),
    * so `getConfiguration('git').get('autofetch', true)` reads `git.autofetch`.
@@ -492,6 +523,20 @@ export interface CodeActionProvider {
   ): ProviderResult<CodeAction[]>
 }
 
+/** Options a formatter receives (mirrors LSP `FormattingOptions`: the two fields
+ *  every provider gets — the editor's indentation settings for the document). */
+export interface FormattingOptions {
+  readonly tabSize: number
+  readonly insertSpaces: boolean
+}
+
+export interface DocumentFormattingEditProvider {
+  provideDocumentFormattingEdits(
+    document: TextDocument,
+    options: FormattingOptions,
+  ): ProviderResult<TextEdit[]>
+}
+
 /**
  * Whole-document semantic tokens. `legend` names the numeric token-type /
  * modifier indices encoded in `SemanticTokens.data`; it's returned to Monaco
@@ -655,6 +700,10 @@ export interface LanguagesApi {
     provider: SelectionRangeProvider,
   ): Disposable
   registerCodeActionsProvider(selector: DocumentSelector, provider: CodeActionProvider): Disposable
+  registerDocumentFormattingEditProvider(
+    selector: DocumentSelector,
+    provider: DocumentFormattingEditProvider,
+  ): Disposable
   registerDocumentSemanticTokensProvider(
     selector: DocumentSelector,
     provider: DocumentSemanticTokensProvider,
@@ -746,6 +795,10 @@ interface IExtensionHostBridge {
     provider: SelectionRangeProvider,
   ): Disposable
   registerCodeActionsProvider(selector: DocumentSelector, provider: CodeActionProvider): Disposable
+  registerDocumentFormattingEditProvider(
+    selector: DocumentSelector,
+    provider: DocumentFormattingEditProvider,
+  ): Disposable
   registerDocumentSemanticTokensProvider(
     selector: DocumentSelector,
     provider: DocumentSemanticTokensProvider,
@@ -756,6 +809,7 @@ interface IExtensionHostBridge {
   readonly onDidOpenTextDocument: Event<TextDocument>
   readonly onDidChangeTextDocument: Event<TextDocumentChangeEvent>
   readonly onDidCloseTextDocument: Event<TextDocument>
+  readonly onWillSaveTextDocument: Event<WillSaveTextDocumentEvent>
   readonly ai: AiApi
 }
 
@@ -835,6 +889,8 @@ export const languages: LanguagesApi = {
     bridge().registerSelectionRangeProvider(selector, provider),
   registerCodeActionsProvider: (selector, provider) =>
     bridge().registerCodeActionsProvider(selector, provider),
+  registerDocumentFormattingEditProvider: (selector, provider) =>
+    bridge().registerDocumentFormattingEditProvider(selector, provider),
   registerDocumentSemanticTokensProvider: (selector, provider) =>
     bridge().registerDocumentSemanticTokensProvider(selector, provider),
   registerCodeLensProvider: (selector, provider) =>
@@ -860,6 +916,7 @@ export const workspace: WorkspaceApi = {
   onDidOpenTextDocument: (listener) => bridge().onDidOpenTextDocument(listener),
   onDidChangeTextDocument: (listener) => bridge().onDidChangeTextDocument(listener),
   onDidCloseTextDocument: (listener) => bridge().onDidCloseTextDocument(listener),
+  onWillSaveTextDocument: (listener) => bridge().onWillSaveTextDocument(listener),
   getConfiguration: (section) => ({
     get: <T>(key: string, defaultValue: T): Promise<T> =>
       bridge().getConfiguration(section, key, defaultValue) as Promise<T>,

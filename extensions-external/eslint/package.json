@@ -1,0 +1,96 @@
+{
+  "name": "universe-eslint",
+  "displayName": "ESLint",
+  "description": "Integrates ESLint into the editor: diagnostics, quick fixes, fix-all, format-as-formatter and fix-all-on-save — backed by a standalone ESLint language server that resolves the workspace's own eslint.",
+  "version": "0.1.0",
+  "publisher": "universe",
+  "license": "MIT",
+  "type": "module",
+  "icon": "icon.svg",
+  "categories": ["Programming Languages", "Linters"],
+  "keywords": ["eslint", "lint", "linter", "javascript", "typescript"],
+  "main": "dist/extension.js",
+  "engines": {
+    "universe": ">=0.4.0 <1.0.0"
+  },
+  "files": [
+    "dist",
+    "package.nls.json",
+    "package.nls.zh-cn.json",
+    "icon.svg"
+  ],
+  "activationEvents": [
+    "onLanguage:javascript",
+    "onLanguage:javascriptreact",
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact",
+    "onLanguage:vue",
+    "onLanguage:svelte",
+    "onLanguage:astro"
+  ],
+  "contributes": {
+    "commands": [
+      { "command": "eslint.executeAutofix", "title": "%eslint.command.executeAutofix.title%", "category": "ESLint" },
+      { "command": "eslint.restart", "title": "%eslint.command.restart.title%", "category": "ESLint" },
+      { "command": "eslint.showOutputChannel", "title": "%eslint.command.showOutputChannel.title%", "category": "ESLint" }
+    ],
+    "configuration": {
+      "title": "ESLint",
+      "properties": {
+        "eslint.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "%eslint.config.enable.description%"
+        },
+        "eslint.run": {
+          "type": "string",
+          "enum": ["onType", "onSave"],
+          "default": "onType",
+          "description": "%eslint.config.run.description%"
+        },
+        "eslint.validate": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "javascript",
+            "javascriptreact",
+            "typescript",
+            "typescriptreact"
+          ],
+          "description": "%eslint.config.validate.description%"
+        },
+        "eslint.format.enable": {
+          "type": "boolean",
+          "default": false,
+          "description": "%eslint.config.format.enable.description%"
+        },
+        "eslint.codeActionsOnSave.enable": {
+          "type": "boolean",
+          "default": false,
+          "description": "%eslint.config.codeActionsOnSave.enable.description%"
+        },
+        "eslint.options": {
+          "type": "object",
+          "default": {},
+          "description": "%eslint.config.options.description%"
+        }
+      }
+    },
+    "jsonValidation": [
+      {
+        "fileMatch": [".eslintrc", ".eslintrc.json"],
+        "url": "https://json.schemastore.org/eslintrc.json"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "typecheck": "node ../../extensions/typescript/node_modules/typescript/bin/tsc --noEmit",
+    "lint": "node ../../extensions/typescript/node_modules/eslint/bin/eslint.js src",
+    "lint:fix": "node ../../extensions/typescript/node_modules/eslint/bin/eslint.js --fix src",
+    "test": "node ../../extensions/typescript/node_modules/vitest/vitest.mjs run",
+    "package": "node scripts/pack.mjs",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  }
+}

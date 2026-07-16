@@ -33,6 +33,7 @@ import {
   createCodeLensProxy,
   createCompletionProxy,
   createDefinitionProxy,
+  createDocumentFormattingProxy,
   createDocumentHighlightProxy,
   createDocumentLinkProxy,
   createDocumentSemanticTokensProxy,
@@ -184,6 +185,11 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
       case 'codeAction': {
         const p = createCodeActionProxy(handle, ext)
         for (const lang of selector) store.add(lf.registerCodeActionProvider(lang, p))
+        break
+      }
+      case 'documentFormatting': {
+        const p = createDocumentFormattingProxy(handle, ext)
+        for (const lang of selector) store.add(lf.registerDocumentFormattingEditProvider(lang, p))
         break
       }
       case 'documentSemanticTokens': {

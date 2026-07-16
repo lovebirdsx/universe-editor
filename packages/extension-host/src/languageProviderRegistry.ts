@@ -16,6 +16,7 @@ import type {
   DefinitionProvider,
   DiagnosticCollection,
   Disposable,
+  DocumentFormattingEditProvider,
   DocumentHighlightProvider,
   DocumentLinkProvider,
   DocumentSelector,
@@ -36,6 +37,7 @@ import type {
 import {
   type ICodeActionContext,
   type ICompletionContext,
+  type IFormattingOptionsDto,
   type ILanguageProviderMetadata,
   type IMainThreadLanguages,
   type IReferenceContext,
@@ -62,6 +64,7 @@ import type {
   SemanticTokens,
   SignatureHelp,
   SymbolInformation,
+  TextEdit,
   WorkspaceEdit,
   WorkspaceSymbol,
 } from 'vscode-languageserver-types'
@@ -84,6 +87,7 @@ type AnyLanguageProvider =
   | DocumentHighlightProvider
   | SelectionRangeProvider
   | CodeActionProvider
+  | DocumentFormattingEditProvider
   | CodeLensProvider
   | DocumentSemanticTokensProvider
 
@@ -257,6 +261,13 @@ export class LanguageProviderRegistry {
     provider: CodeActionProvider,
   ): Disposable {
     return this._register('codeAction', selector, provider)
+  }
+
+  registerDocumentFormattingEditProvider(
+    selector: DocumentSelector,
+    provider: DocumentFormattingEditProvider,
+  ): Disposable {
+    return this._register('documentFormatting', selector, provider)
   }
 
   registerDocumentSemanticTokensProvider(
@@ -497,6 +508,21 @@ export class LanguageProviderRegistry {
     return (
       (await provider.provideCodeActions(this._documents.getOrSynthesize(uri), range, context)) ??
       null
+    )
+  }
+
+  async provideDocumentFormattingEdits(
+    handle: number,
+    uri: UriComponents,
+    options: IFormattingOptionsDto,
+  ): Promise<TextEdit[] | null> {
+    const provider = this._provider<DocumentFormattingEditProvider>(handle, 'documentFormatting')
+    if (!provider) return null
+    return (
+      (await provider.provideDocumentFormattingEdits(
+        this._documents.getOrSynthesize(uri),
+        options,
+      )) ?? null
     )
   }
 

@@ -25,6 +25,7 @@ import {
   type DefinitionProvider,
   type DiagnosticCollection,
   type Disposable,
+  type DocumentFormattingEditProvider,
   type DocumentSelector,
   type DocumentSemanticTokensProvider,
   type DocumentHighlightProvider,
@@ -60,6 +61,7 @@ import {
   type IActiveTextEditorDto,
   type ICodeActionContext,
   type ICompletionContext,
+  type IFormattingOptionsDto,
   type IExtHostFileStatDto,
   type IExtensionDescriptionDto,
   type IReferenceContext,
@@ -75,6 +77,7 @@ import {
   type IMainThreadStorage,
   type IMainThreadWebviews,
   type IWebviewDiffContextDto,
+  type WillSaveReason,
 } from '@universe-editor/extensions-common'
 import type {
   CodeAction,
@@ -95,6 +98,7 @@ import type {
   SemanticTokens,
   SignatureHelp,
   SymbolInformation,
+  TextEdit,
   WorkspaceEdit,
   WorkspaceSymbol,
 } from 'vscode-languageserver-types'
@@ -142,6 +146,7 @@ export class ExtensionService implements IExtensionHostBridge {
   readonly onDidOpenTextDocument = this._documents.onDidOpen
   readonly onDidChangeTextDocument = this._documents.onDidChange
   readonly onDidCloseTextDocument = this._documents.onDidClose
+  readonly onWillSaveTextDocument = this._documents.onWillSave
 
   constructor(
     private readonly _extensions: readonly IScannedExtension[],
@@ -490,6 +495,13 @@ export class ExtensionService implements IExtensionHostBridge {
     return this._languageRegistry.registerCodeActionsProvider(selector, provider)
   }
 
+  registerDocumentFormattingEditProvider(
+    selector: DocumentSelector,
+    provider: DocumentFormattingEditProvider,
+  ): Disposable {
+    return this._languageRegistry.registerDocumentFormattingEditProvider(selector, provider)
+  }
+
   registerDocumentSemanticTokensProvider(
     selector: DocumentSelector,
     provider: DocumentSemanticTokensProvider,
@@ -531,6 +543,11 @@ export class ExtensionService implements IExtensionHostBridge {
   /** IExtHostDocuments.$acceptDocumentClose */
   acceptDocumentClose(uri: UriComponents): void {
     this._documents.acceptClose(uri)
+  }
+
+  /** IExtHostDocuments.$provideWillSaveEdits */
+  provideWillSaveEdits(uri: UriComponents, reason: WillSaveReason): Promise<TextEdit[]> {
+    return this._documents.provideWillSaveEdits(uri, reason)
   }
 
   // --- RPC surface: languages (delegated to the registry) ---
@@ -652,6 +669,14 @@ export class ExtensionService implements IExtensionHostBridge {
     context: ICodeActionContext,
   ): Promise<CodeAction[] | null> {
     return this._languageRegistry.provideCodeActions(handle, uri, range, context)
+  }
+
+  provideDocumentFormattingEdits(
+    handle: number,
+    uri: UriComponents,
+    options: IFormattingOptionsDto,
+  ): Promise<TextEdit[] | null> {
+    return this._languageRegistry.provideDocumentFormattingEdits(handle, uri, options)
   }
 
   provideDocumentSemanticTokens(

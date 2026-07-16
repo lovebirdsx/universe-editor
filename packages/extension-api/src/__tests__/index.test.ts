@@ -22,6 +22,7 @@ const RUNTIME_EXPORTS = [
   'FoldingRangeKind',
   'OverviewRulerLane',
   'StatusBarAlignment',
+  'TextDocumentSaveReason',
   'ai',
   'commands',
   'languages',
@@ -80,6 +81,8 @@ const NAMESPACE_METHODS: Record<string, readonly string[]> = {
     'registerRenameProvider',
     'registerWorkspaceSymbolProvider',
     'registerFoldingRangeProvider',
+    'registerCodeActionsProvider',
+    'registerDocumentFormattingEditProvider',
     'registerCodeLensProvider',
     'createDiagnosticCollection',
   ],
@@ -88,6 +91,7 @@ const NAMESPACE_METHODS: Record<string, readonly string[]> = {
     'onDidOpenTextDocument',
     'onDidChangeTextDocument',
     'onDidCloseTextDocument',
+    'onWillSaveTextDocument',
   ],
 }
 

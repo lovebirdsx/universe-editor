@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../packages/config-ts/node.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "typeRoots": ["../../extensions/typescript/node_modules/@types"],
+    "baseUrl": ".",
+    "paths": {
+      "@universe-editor/extension-api": ["../../packages/extension-api/dist/index.d.ts"],
+      "vscode-jsonrpc": ["../../extensions/typescript/node_modules/vscode-jsonrpc"],
+      "vscode-jsonrpc/node.js": ["../../extensions/typescript/node_modules/vscode-jsonrpc/node.d.ts"],
+      "vscode-languageserver-types": [
+        "../../extensions/typescript/node_modules/vscode-languageserver-types/lib/umd/main.d.ts"
+      ],
+      "vscode-uri": ["../../extensions/typescript/node_modules/vscode-uri/lib/umd/index.d.ts"]
+    }
+  },
+  "include": ["src", "esbuild.config.mjs"]
+}

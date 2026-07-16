@@ -16,6 +16,7 @@ import {
 import { basenameOfResource } from '../../workbench/files/resourceInfo.js'
 import { languageForResource } from '../../workbench/files/resourceLanguage.js'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
+import { SaveParticipant } from '../extensions/SaveParticipant.js'
 import { applyMinimalTextEdit } from './minimalModelEdit.js'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 
@@ -155,6 +156,10 @@ export class FileEditorInput extends EditorInput {
     if (this._isReadonly) return true
     const model = MonacoModelRegistry.peek(this._resource)
     if (!model) return true
+    // Let save participants (e.g. ESLint fix-all-on-save via
+    // workspace.onWillSaveTextDocument) mutate the model before we read it.
+    await SaveParticipant.participate(model, 1)
+    if (model.isDisposed()) return true
     const text = model.getValue()
     await this._fileService.writeFile(this._resource, this._hasLeadingBom ? UTF8_BOM + text : text)
     this.markModelClean(model)

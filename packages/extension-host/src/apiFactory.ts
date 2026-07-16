@@ -15,6 +15,7 @@ import type {
   DefinitionProvider,
   DiagnosticCollection,
   Disposable,
+  DocumentFormattingEditProvider,
   DocumentHighlightProvider,
   DocumentLinkProvider,
   DocumentSelector,
@@ -45,6 +46,7 @@ import type {
   TextEditor,
   TextEditorDecorationType,
   TypeDefinitionProvider,
+  WillSaveTextDocumentEvent,
   WorkspaceSymbolProvider,
 } from '@universe-editor/extension-api'
 import type { IScannedExtension } from './extensionScanner.js'
@@ -141,6 +143,10 @@ export interface IExtensionHostBridge {
     provider: SelectionRangeProvider,
   ): Disposable
   registerCodeActionsProvider(selector: DocumentSelector, provider: CodeActionProvider): Disposable
+  registerDocumentFormattingEditProvider(
+    selector: DocumentSelector,
+    provider: DocumentFormattingEditProvider,
+  ): Disposable
   registerDocumentSemanticTokensProvider(
     selector: DocumentSelector,
     provider: DocumentSemanticTokensProvider,
@@ -151,6 +157,7 @@ export interface IExtensionHostBridge {
   readonly onDidOpenTextDocument: Event<TextDocument>
   readonly onDidChangeTextDocument: Event<TextDocumentChangeEvent>
   readonly onDidCloseTextDocument: Event<TextDocument>
+  readonly onWillSaveTextDocument: Event<WillSaveTextDocumentEvent>
   /** The `ai` namespace — trusted-only; throws in a restricted host. */
   readonly ai: AiApi
 }

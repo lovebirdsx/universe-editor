@@ -93,6 +93,10 @@ export interface ILanguageFeaturesService {
     languageId: string,
     provider: monaco.languages.CodeActionProvider,
   ): IDisposable
+  registerDocumentFormattingEditProvider(
+    languageId: string,
+    provider: monaco.languages.DocumentFormattingEditProvider,
+  ): IDisposable
   registerDocumentSemanticTokensProvider(
     languageId: string,
     provider: monaco.languages.DocumentSemanticTokensProvider,
@@ -364,6 +368,15 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
     provider: monaco.languages.CodeActionProvider,
   ): IDisposable {
     return MonacoLoader.get().languages.registerCodeActionProvider(languageId, provider)
+  }
+
+  registerDocumentFormattingEditProvider(
+    languageId: string,
+    provider: monaco.languages.DocumentFormattingEditProvider,
+  ): IDisposable {
+    // Not mirrored (no Outline consumer); forward straight to Monaco, which owns
+    // the format-document command dispatch.
+    return MonacoLoader.get().languages.registerDocumentFormattingEditProvider(languageId, provider)
   }
 
   registerDocumentSemanticTokensProvider(

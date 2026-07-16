@@ -51,6 +51,7 @@ interface StoredDecoration {
 function makeModel(initial: string, language: string, uri: unknown) {
   let value = normalizeModelText(initial)
   let versionId = 1
+  let disposed = false
   const listeners = new Set<Listener>()
   const decorations = new Map<string, StoredDecoration>()
   let decoSeq = 0
@@ -211,11 +212,29 @@ function makeModel(initial: string, language: string, uri: unknown) {
       applyOneEdit(0, value.length, normalizeModelText(next))
       fire()
     },
+    pushEditOperations: (
+      _before: unknown,
+      edits: Array<{
+        range: {
+          startLineNumber: number
+          startColumn: number
+          endLineNumber: number
+          endColumn: number
+        }
+        text: string
+        forceMoveMarkers?: boolean
+      }>,
+    ) => {
+      model.applyEdits(edits)
+      return null
+    },
+    isDisposed: () => disposed,
     onDidChangeContent: (cb: Listener) => {
       listeners.add(cb)
       return { dispose: () => listeners.delete(cb) }
     },
     dispose: () => {
+      disposed = true
       listeners.clear()
       decorations.clear()
     },

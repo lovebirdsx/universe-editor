@@ -30,6 +30,7 @@ import {
   selectionRangesToMonaco,
   semanticTokensToMonaco,
   signatureHelpToMonaco,
+  textEditsToMonaco,
   workspaceEditToMonaco,
   type MonacoCodeLens,
   type MonacoCompletionItem,
@@ -281,6 +282,21 @@ export function createCodeActionProxy(
           { ...(context.only ? { only: [context.only] } : {}) },
         ),
         MonacoLoader.get(),
+      ),
+  }
+}
+
+export function createDocumentFormattingProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+): monaco.languages.DocumentFormattingEditProvider {
+  return {
+    provideDocumentFormattingEdits: async (model, options) =>
+      textEditsToMonaco(
+        await extHost.$provideDocumentFormattingEdits(handle, model.uri, {
+          tabSize: options.tabSize,
+          insertSpaces: options.insertSpaces,
+        }),
       ),
   }
 }

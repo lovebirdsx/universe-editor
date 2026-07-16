@@ -38,9 +38,13 @@
 ```bash
 # 1) 打包扩展成 .vsix（各扩展自带打包脚本，如 extensions-external/pdf/scripts/pack.mjs）
 cd extensions-external/pdf && pnpm build && node scripts/pack.mjs && cd -
+# ESLint 同理（双 bundle：client + 独立 LSP server）：
+cd extensions-external/eslint && pnpm build && pnpm package && cd -
 
-# 2) 发布进本地 stage（首次会创建 stage/gallery/）
-pnpm gallery:publish -- --stage ./market-stage extensions-external/pdf/universe.universe-pdf-0.1.0.vsix
+# 2) 发布进本地 stage（首次会创建 stage/gallery/；可一次传多个 .vsix）
+pnpm gallery:publish -- --stage ./market-stage \
+  extensions-external/pdf/universe.universe-pdf-0.1.0.vsix \
+  extensions-external/eslint/universe.universe-eslint-0.1.0.vsix
 
 # 3) 同步到服务器市场根（--dir = server 的 --gallery-root；assets 先、registry.json 后）
 pnpm gallery:upload -- --stage ./market-stage --host iloop.aki.kuro.com  --user deploy --dir /srv/universe-editor/gallery

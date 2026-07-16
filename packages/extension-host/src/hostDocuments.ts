@@ -8,8 +8,17 @@ import { Emitter, URI, type Event } from '@universe-editor/platform'
 import type {
   TextDocument,
   TextDocumentChangeEvent,
+  TextDocumentSaveReason,
   UriComponents,
+  WillSaveTextDocumentEvent,
 } from '@universe-editor/extension-api'
+import type { WillSaveReason } from '@universe-editor/extensions-common'
+import type { TextEdit } from 'vscode-languageserver-types'
+
+/** Per-listener budget for `onWillSaveTextDocument` participants. A slow or
+ *  hung listener must not block the save indefinitely — its edits are dropped
+ *  once this elapses (mirrors VSCode's save-participant timeout). */
+const WILL_SAVE_LISTENER_TIMEOUT_MS = 1_500
 
 export class HostTextDocument implements TextDocument {
   constructor(
@@ -30,10 +39,12 @@ export class ExtHostDocuments {
   private readonly _onDidOpen = new Emitter<TextDocument>()
   private readonly _onDidChange = new Emitter<TextDocumentChangeEvent>()
   private readonly _onDidClose = new Emitter<TextDocument>()
+  private readonly _onWillSave = new Emitter<WillSaveTextDocumentEvent>()
 
   readonly onDidOpen: Event<TextDocument> = this._onDidOpen.event
   readonly onDidChange: Event<TextDocumentChangeEvent> = this._onDidChange.event
   readonly onDidClose: Event<TextDocument> = this._onDidClose.event
+  readonly onWillSave: Event<WillSaveTextDocumentEvent> = this._onWillSave.event
 
   private _key(uri: UriComponents): string {
     return URI.revive(uri)?.toString() ?? ''
@@ -68,5 +79,48 @@ export class ExtHostDocuments {
     const doc = this._docs.get(key)
     this._docs.delete(key)
     if (doc) this._onDidClose.fire(doc)
+  }
+
+  /**
+   * Run every `onWillSaveTextDocument` listener for a pending save and collect
+   * the text edits they contribute. Each listener calls `waitUntil(thenable)`
+   * synchronously inside the event dispatch; we await those thenables here (each
+   * bounded by {@link WILL_SAVE_LISTENER_TIMEOUT_MS}) and concatenate their edits
+   * in registration order. A listener that throws, rejects, or times out simply
+   * contributes nothing — a broken participant never blocks the save.
+   */
+  async provideWillSaveEdits(uri: UriComponents, reason: WillSaveReason): Promise<TextEdit[]> {
+    const doc = this.getOrSynthesize(uri)
+    const thenables: Promise<TextEdit[]>[] = []
+    const event: WillSaveTextDocumentEvent = {
+      document: doc,
+      reason: reason as unknown as TextDocumentSaveReason,
+      waitUntil: (thenable) => {
+        thenables.push(thenable)
+      },
+    }
+    // Fire synchronously so every listener registers its waitUntil before we await.
+    this._onWillSave.fire(event)
+    if (thenables.length === 0) return []
+
+    const results = await Promise.all(thenables.map((t) => withTimeout(t)))
+    return results.flat()
+  }
+}
+
+/** Await a save-participant thenable, resolving to `[]` if it rejects or exceeds
+ *  {@link WILL_SAVE_LISTENER_TIMEOUT_MS}. Never rejects — a bad participant is
+ *  isolated, not propagated into the save. */
+async function withTimeout(thenable: Promise<TextEdit[]>): Promise<TextEdit[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<TextEdit[]>((resolve) => {
+    timer = setTimeout(() => resolve([]), WILL_SAVE_LISTENER_TIMEOUT_MS)
+  })
+  try {
+    return await Promise.race([thenable.then((edits) => edits ?? []), timeout])
+  } catch {
+    return []
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 }

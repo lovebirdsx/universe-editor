@@ -202,6 +202,8 @@ const extHostLanguages: IExtHostLanguages = {
     (await serviceReady).provideSelectionRanges(handle, uri, positions),
   $provideCodeActions: async (handle, uri, range, context) =>
     (await serviceReady).provideCodeActions(handle, uri, range, context),
+  $provideDocumentFormattingEdits: async (handle, uri, options) =>
+    (await serviceReady).provideDocumentFormattingEdits(handle, uri, options),
   $provideDocumentSemanticTokens: async (handle, uri) =>
     (await serviceReady).provideDocumentSemanticTokens(handle, uri),
   $provideCodeLenses: async (handle, uri) => (await serviceReady).provideCodeLenses(handle, uri),
@@ -217,6 +219,8 @@ const extHostDocuments: IExtHostDocuments = {
   $acceptDocumentClose: async (uri) => {
     ;(await serviceReady).acceptDocumentClose(uri)
   },
+  $provideWillSaveEdits: async (uri, reason) =>
+    (await serviceReady).provideWillSaveEdits(uri, reason),
 }
 const extHostEditor: IExtHostEditor = {
   $acceptActiveEditorChange: async (editor) => {

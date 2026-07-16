@@ -1,0 +1,12 @@
+{
+  "eslint.command.executeAutofix.title": "Fix all auto-fixable Problems",
+  "eslint.command.restart.title": "Restart ESLint Server",
+  "eslint.command.showOutputChannel.title": "Show Output Channel",
+
+  "eslint.config.enable.description": "Controls whether ESLint is enabled for the workspace.",
+  "eslint.config.run.description": "Run the linter on save (onSave) or as you type (onType).",
+  "eslint.config.validate.description": "Language identifiers ESLint should validate.",
+  "eslint.config.format.enable.description": "Enable ESLint as a formatter (`Format Document` will apply ESLint fixes).",
+  "eslint.config.codeActionsOnSave.enable.description": "Run ESLint's fix-all as a code action when a file is saved.",
+  "eslint.config.options.description": "Options passed directly to the ESLint API (e.g. overrideConfigFile). See the ESLint API docs."
+}

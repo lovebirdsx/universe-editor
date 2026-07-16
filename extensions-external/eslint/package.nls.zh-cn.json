@@ -1,0 +1,12 @@
+{
+  "eslint.command.executeAutofix.title": "修复所有可自动修复的问题",
+  "eslint.command.restart.title": "重启 ESLint 服务",
+  "eslint.command.showOutputChannel.title": "显示输出通道",
+
+  "eslint.config.enable.description": "控制是否为工作区启用 ESLint。",
+  "eslint.config.run.description": "在保存时（onSave）还是在输入时（onType）运行检查。",
+  "eslint.config.validate.description": "ESLint 应校验的语言标识符。",
+  "eslint.config.format.enable.description": "将 ESLint 作为格式化程序启用（「格式化文档」会应用 ESLint 修复）。",
+  "eslint.config.codeActionsOnSave.enable.description": "保存文件时以代码操作的形式运行 ESLint 的一键修复。",
+  "eslint.config.options.description": "直接传给 ESLint API 的选项（例如 overrideConfigFile）。详见 ESLint API 文档。"
+}
