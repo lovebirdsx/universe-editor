@@ -139,7 +139,7 @@
 
 diff 打开后会自动定位到第一个差异。编辑器标题栏提供**上一个差异**（`Shift+Alt+F5`）、**下一个差异**（`Alt+F5`）和**打开文件**（`Shift+Alt+Y`）；仅当 depot 文件映射到当前 Perforce client 工作区时才显示“打开文件”。
 
-diff 里支持 **GitHub PR 式行内评论**：
+diff 里支持 **GitHub PR 式行内评论**（**默认关闭**，需在设置里把 `perforce.swarm.inlineComments.enabled` 设为 `true` 开启；改动即时生效，无需重开 diff）：
 
 - 鼠标移到某一行，左侧行号槽出现 **`+`** 图标，点击即在该行下方展开评论框。
 - 已有评论的行会直接显示评论线程，可**回复**。
@@ -181,6 +181,7 @@ universe-editor://swarm/review/1234
 | `perforce.swarm.needsActionApprovableOnly` | `false`          | 「Needs My Action」只显示当前用户可批准的审核。由侧栏过滤菜单维护。 |
 | `perforce.swarm.authoredHideApproved`      | `true`           | 「Authored by Me」隐藏已批准的审核。由侧栏图标开关维护。 |
 | `perforce.swarm.notifications.enabled`     | `true`           | 有新审核进入「Needs My Action」且窗口未聚焦时弹出系统桌面通知；点击打开该审核。 |
+| `perforce.swarm.inlineComments.enabled`    | `false`          | 是否在审核 diff 上叠加 GitHub PR 式行内评论；关闭时 diff 只显示代码。改动即时生效。 |
 | `perforce.cache.enabled`      | `true`                       | 是否缓存 p4 与 Swarm 查询结果以减少服务器往返；Swarm 写操作和手动刷新会立即失效相关缓存。                         |
 
 ## 排查与日志

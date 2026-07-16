@@ -55,6 +55,14 @@ export class SwarmConfigurationContribution extends Disposable implements IWorkb
               'Show an OS desktop notification when a new review enters "Needs My Action" while the editor window is not focused. Clicking the notification opens the review.',
             ),
           },
+          'perforce.swarm.inlineComments.enabled': {
+            type: 'boolean',
+            default: false,
+            description: localize(
+              'settings.swarm.inlineComments.enabled',
+              'Show GitHub-PR-style inline comments layered on a Swarm review diff. When off, the diff shows code only. Off by default.',
+            ),
+          },
         },
       }),
     )

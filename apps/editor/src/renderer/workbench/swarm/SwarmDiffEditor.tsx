@@ -39,6 +39,9 @@ import {
 } from './SwarmInlineCommentController.js'
 import styles from './SwarmDiffEditor.module.css'
 
+/** When off (default) the diff shows code only — no inline comment threads / affordance. */
+const INLINE_COMMENTS_CONFIG_KEY = 'perforce.swarm.inlineComments.enabled'
+
 export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
   const diffInput = input as SwarmDiffEditorInput
   const commands = useService(ICommandService)
@@ -50,6 +53,9 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
   const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null)
   const controllerRef = useRef<SwarmInlineCommentController | null>(null)
   const [monacoNs, setMonacoNs] = useState<typeof monaco | null>(null)
+  const [inlineCommentsEnabled, setInlineCommentsEnabled] = useState(
+    () => configService.get<boolean>(INLINE_COMMENTS_CONFIG_KEY) ?? false,
+  )
 
   const { reviewId } = diffInput.context
 
@@ -109,6 +115,15 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
     }
   }, [])
 
+  useEffect(() => {
+    const sub = configService.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration(INLINE_COMMENTS_CONFIG_KEY)) {
+        setInlineCommentsEnabled(configService.get<boolean>(INLINE_COMMENTS_CONFIG_KEY) ?? false)
+      }
+    })
+    return () => sub.dispose()
+  }, [configService])
+
   // Create the diff editor + inline-comment controller, set models.
   useEffect(() => {
     if (!monacoNs || !containerRef.current) return
@@ -155,16 +170,18 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
       ed.revealFirstDiff()
     })
 
-    const controller = new SwarmInlineCommentController(ed, {
-      onSubmit: postComment,
-      onReply: postComment,
-      onSetTaskState: setTaskState,
-    })
+    const controller = inlineCommentsEnabled
+      ? new SwarmInlineCommentController(ed, {
+          onSubmit: postComment,
+          onReply: postComment,
+          onSetTaskState: setTaskState,
+        })
+      : null
     controllerRef.current = controller
-    loadComments()
+    if (controller) loadComments()
 
     return () => {
-      controller.dispose()
+      controller?.dispose()
       controllerRef.current = null
       updateDiffSub?.dispose()
       DiffEditorRegistry.unregister(diffInput, ed)
@@ -178,6 +195,7 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
     monacoNs,
     diffInput,
     configService,
+    inlineCommentsEnabled,
     postComment,
     setTaskState,
     loadComments,
