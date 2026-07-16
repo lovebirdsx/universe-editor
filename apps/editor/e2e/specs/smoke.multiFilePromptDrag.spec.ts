@@ -48,6 +48,12 @@ async function openSessionWithPrompt(
     .toBe(1)
   const prompt = page.getByTestId('acp-prompt-drop-host')
   await expect(prompt).toBeVisible({ timeout: 10000 })
+  // The drop host div renders immediately, but the drop handler's insertRef()
+  // no-ops until the embedded Monaco editor has mounted (its editor/tracker
+  // refs are set in the same synchronous block that adds `.monaco-editor` to
+  // the DOM). On slow CI the drop can fire before that → zero mentions. Gate on
+  // the editor's DOM node so the drop always lands on a ready editor.
+  await expect(prompt.locator('.monaco-editor').first()).toBeVisible({ timeout: 10000 })
   return prompt
 }
 
@@ -102,9 +108,12 @@ test.describe('@p1 multi-file drag → prompt', () => {
       input.remove()
     })
 
-    await page.waitForTimeout(400)
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window.__E2E__!.getAcpPromptText().match(/@/g) ?? []).length),
+      )
+      .toBe(3)
     const value = await page.evaluate(() => window.__E2E__!.getAcpPromptText())
-    expect((value.match(/@/g) ?? []).length).toBe(3)
     expect(value).not.toContain('file:///')
 
     await tryCleanup(tmpDir)
@@ -144,9 +153,12 @@ test.describe('@p1 multi-file drag → prompt', () => {
       fire('drop')
     }, root)
 
-    await page.waitForTimeout(400)
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window.__E2E__!.getAcpPromptText().match(/@/g) ?? []).length),
+      )
+      .toBe(3)
     const value = await page.evaluate(() => window.__E2E__!.getAcpPromptText())
-    expect((value.match(/@/g) ?? []).length).toBe(3)
     expect(value).not.toContain('file:///')
 
     await tryCleanup(tmpDir)
