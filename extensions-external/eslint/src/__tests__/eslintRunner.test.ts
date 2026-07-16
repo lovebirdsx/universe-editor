@@ -4,10 +4,12 @@ import {
   computeFixAll,
   fileDirOf,
   filePathOf,
+  findWorkingDirectory,
   lintDocument,
   type EslintApi,
   type EslintConstructor,
 } from '../eslintRunner.js'
+import * as path from 'node:path'
 
 /** Minimal fake ESLint honoring the subset of the API the runner uses. */
 function fakeEslint(
@@ -148,6 +150,65 @@ describe('computeFixAll', () => {
       }
     })() as unknown as EslintConstructor
     expect(await computeFixAll(Ctor, {}, text, '/w/a.js')).toEqual([])
+  })
+})
+
+describe('findWorkingDirectory', () => {
+  // Build an `exists` predicate from a set of present config files, matching on
+  // path separator-insensitively so the test reads the same on POSIX / Windows.
+  const existsFrom = (present: readonly string[]) => {
+    const set = new Set(present.map((p) => p.replace(/\\/g, '/')))
+    return (p: string) => set.has(p.replace(/\\/g, '/'))
+  }
+  const join = (...parts: string[]) => path.join(...parts)
+  const root = path.join('w', 'proj')
+  const inner = path.join(root, 'packages', 'inner')
+  const file = path.join(inner, 'src', 'a.ts')
+
+  it('finds a nested flat config, anchoring cwd to that directory', () => {
+    const exists = existsFrom([join(root, 'eslint.config.mjs'), join(inner, 'eslint.config.js')])
+    expect(findWorkingDirectory(root, file, exists)).toEqual({
+      directory: inner,
+      isFlatConfig: true,
+    })
+  })
+
+  it('finds a nested eslintrc even when an outer flat config exists (no walk past it)', () => {
+    const exists = existsFrom([join(root, 'eslint.config.mjs'), join(inner, '.eslintrc.js')])
+    expect(findWorkingDirectory(root, file, exists)).toEqual({
+      directory: inner,
+      isFlatConfig: false,
+    })
+  })
+
+  it('walks up to the outer config when no nested config exists', () => {
+    const exists = existsFrom([join(root, 'eslint.config.mjs')])
+    expect(findWorkingDirectory(root, file, exists)).toEqual({
+      directory: root,
+      isFlatConfig: true,
+    })
+  })
+
+  it('prefers a flat config over a sibling eslintrc in the same directory', () => {
+    const exists = existsFrom([join(inner, 'eslint.config.mjs'), join(inner, '.eslintrc.json')])
+    expect(findWorkingDirectory(root, file, exists)).toEqual({
+      directory: inner,
+      isFlatConfig: true,
+    })
+  })
+
+  it('returns undefined when nothing is found up to the workspace root', () => {
+    expect(findWorkingDirectory(root, file, existsFrom([]))).toBeUndefined()
+  })
+
+  it('never probes inside node_modules', () => {
+    const dep = path.join(root, 'node_modules', 'pkg', 'index.js')
+    const exists = existsFrom([join(root, 'node_modules', 'pkg', '.eslintrc.js')])
+    expect(findWorkingDirectory(root, dep, exists)).toBeUndefined()
+  })
+
+  it('returns undefined for a missing file path', () => {
+    expect(findWorkingDirectory(root, undefined, existsFrom([]))).toBeUndefined()
   })
 })
 

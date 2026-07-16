@@ -38,8 +38,10 @@ import {
   computeFixAll,
   fileDirOf,
   filePathOf,
+  findWorkingDirectory,
   lintDocument,
-  resolveEslintConstructor,
+  resolveEslintClass,
+  resolveEslintModule,
   type EslintApi,
   type EslintConstructor,
 } from './eslintRunner.js'
@@ -56,15 +58,28 @@ const DEFAULT_SETTINGS: EslintSettings = {
   options: {},
 }
 
+/** ESLint class + the cwd config discovery must be anchored to (per working
+ *  directory). `cwd` drives which config file eslint picks up. */
+interface ResolvedEslint {
+  readonly Ctor: EslintConstructor
+  readonly cwd: string
+}
+
 class EslintServer {
   private _settings: EslintSettings = DEFAULT_SETTINGS
+  private _workspaceRoot: string | undefined
   private readonly _open = new Map<string, OpenDoc>()
-  /** ESLint constructor resolved per file directory (a monorepo may have several). */
-  private readonly _ctorByDir = new Map<string, EslintConstructor | undefined>()
+  /** ESLint resolved per working-directory + config mode (a monorepo may have
+   *  several eslint installs and mixed flat/eslintrc configs). */
+  private readonly _resolvedByKey = new Map<string, ResolvedEslint | undefined>()
+  /** Serializes the process.chdir critical section — chdir is process-global, so
+   *  concurrent lints of different working directories must not overlap. */
+  private _cwdChain: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly _conn: MessageConnection) {
     _conn.onRequest(EslintMethods.initialize, (p: InitializeParams) => {
       this._settings = p.settings
+      this._workspaceRoot = p.rootUri ? (filePathOf(p.rootUri) ?? undefined) : undefined
       this._log(
         'info',
         `server initialized (run=${p.settings.run}, validate=[${p.settings.validate.join(', ')}])`,
@@ -110,19 +125,52 @@ class EslintServer {
     )
   }
 
-  private async _ctorFor(uri: string): Promise<EslintConstructor | undefined> {
+  private async _resolveFor(uri: string): Promise<ResolvedEslint | undefined> {
     const dir = fileDirOf(uri)
-    if (!dir) return undefined
-    if (this._ctorByDir.has(dir)) return this._ctorByDir.get(dir)
-    const ctor = await resolveEslintConstructor(dir)
-    this._ctorByDir.set(dir, ctor)
-    if (ctor) {
-      this._log('info', `resolved ESLint from ${dir}`)
-    } else {
-      this._log('warn', `no ESLint resolvable from ${dir} (install eslint in the workspace)`)
-      this._status('warn', `No ESLint library found near ${dir}`)
+    const filePath = filePathOf(uri)
+    if (!dir || !filePath) return undefined
+
+    // Anchor config discovery to the file: walk up to the nearest eslint config
+    // and use its directory as cwd so that config wins over an outer config.
+    // Critical: even for eslintrc mode, cwd must be the config directory, not the
+    // workspace root — otherwise ESLint 9 will walk past eslintrc and find the outer
+    // flat config (flat config discovery is independent of useFlatConfig mode).
+    const wd = findWorkingDirectory(this._workspaceRoot, filePath)
+
+    const cwd = wd ? wd.directory : dir
+    const useFlatConfig = wd?.isFlatConfig
+
+    const key = `${dir}|${useFlatConfig ?? 'auto'}|${cwd}`
+    if (this._resolvedByKey.has(key)) return this._resolvedByKey.get(key)
+
+    try {
+      const mod = await resolveEslintModule(dir)
+      if (!mod) {
+        this._log('warn', `no ESLint module resolvable from ${dir}`)
+        this._resolvedByKey.set(key, undefined)
+        return undefined
+      }
+      const Ctor = await resolveEslintClass(
+        mod,
+        useFlatConfig !== undefined ? { cwd, useFlatConfig } : { cwd },
+      )
+      if (!Ctor) {
+        this._log('warn', `no ESLint class available from ${dir}`)
+        this._resolvedByKey.set(key, undefined)
+        return undefined
+      }
+      const resolved: ResolvedEslint = { Ctor, cwd }
+      this._resolvedByKey.set(key, resolved)
+      this._log(
+        'info',
+        `resolved ESLint from ${dir} (cwd=${cwd}, config=${wd ? (wd.isFlatConfig ? 'flat' : 'eslintrc') : 'auto'})`,
+      )
+      return resolved
+    } catch (err) {
+      this._log('error', `_resolveFor failed for ${dir}: ${(err as Error).message}`)
+      this._resolvedByKey.set(key, undefined)
+      return undefined
     }
-    return ctor
   }
 
   private _shouldValidate(uri: string): boolean {
@@ -146,16 +194,18 @@ class EslintServer {
     // defeating the point. Yield one turn so the notification reaches the client
     // (a separate process, free to render the spinner) before we block.
     await new Promise<void>((resolve) => setImmediate(resolve))
-    const Ctor = await this._ctorFor(uri)
-    if (!Ctor) {
+    const resolved = await this._resolveFor(uri)
+    if (!resolved) {
       // eslint unresolvable (or cached negative) — settle to a definitive
       // status so the busy spinner always clears.
       this._status('warn', 'No ESLint library found in the workspace')
       return
     }
     try {
-      const eslint: EslintApi = new Ctor(this._settings.options)
-      const { diagnostics } = await lintDocument(eslint, doc.text, filePath)
+      const { diagnostics } = await this._withCwd(resolved.cwd, async () => {
+        const eslint: EslintApi = new resolved.Ctor(this._optionsWithCwd(resolved.cwd))
+        return lintDocument(eslint, doc.text, filePath)
+      })
       this._log('info', `linted ${filePath}: ${diagnostics.length} problem(s)`)
       this._publish({ uri, diagnostics })
       this._status('ok')
@@ -165,27 +215,75 @@ class EslintServer {
     }
   }
 
+  /** ESLint constructor options with `cwd` merged in (drives config discovery). */
+  private _optionsWithCwd(cwd: string): Record<string, unknown> {
+    return { ...this._settings.options, cwd }
+  }
+
+  /**
+   * Run `fn` with `process.cwd()` temporarily set to `cwd`, restoring it after.
+   * eslint-plugin-import rules like `import/no-restricted-paths` resolve their
+   * `basePath` against `process.cwd()` — NOT the ESLint `cwd` option — so the
+   * server's spawn cwd (an arbitrary directory) makes those rules mis-fire.
+   * Mirrors vscode-eslint's `withClass` process.chdir dance. Serialized because
+   * chdir is process-global and lints run concurrently.
+   */
+  private _withCwd<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
+    const run = this._cwdChain.then(async () => {
+      const previous = process.cwd()
+      let changed = false
+      try {
+        if (previous !== cwd) {
+          process.chdir(cwd)
+          changed = true
+        }
+      } catch (err) {
+        this._log('warn', `chdir to ${cwd} failed: ${(err as Error).message}`)
+      }
+      try {
+        return await fn()
+      } finally {
+        if (changed) {
+          try {
+            process.chdir(previous)
+          } catch {
+            // best-effort restore
+          }
+        }
+      }
+    })
+    // Keep the chain alive regardless of this run's outcome.
+    this._cwdChain = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
+
   private async _codeAction(p: CodeActionParams): Promise<EslintCodeAction[]> {
     const doc = this._open.get(p.uri)
     if (!doc || !this._shouldValidate(p.uri)) return []
     const filePath = filePathOf(p.uri)
     if (!filePath) return []
-    const Ctor = await this._ctorFor(p.uri)
-    if (!Ctor) return []
+    const resolved = await this._resolveFor(p.uri)
+    if (!resolved) return []
+    const options = this._optionsWithCwd(resolved.cwd)
     try {
-      const eslint: EslintApi = new Ctor(this._settings.options)
-      const { messages } = await lintDocument(eslint, doc.text, filePath)
-      const actions = buildCodeActions(doc.text, messages, p.range)
-      // Append a document-wide fix-all action when anything is fixable.
-      const fixAllEdits = await computeFixAll(Ctor, this._settings.options, doc.text, filePath)
-      if (fixAllEdits.length > 0) {
-        actions.push({
-          title: 'Fix all auto-fixable ESLint problems',
-          kind: 'source.fixAll.eslint',
-          edits: fixAllEdits,
-        })
-      }
-      return actions
+      return await this._withCwd(resolved.cwd, async () => {
+        const eslint: EslintApi = new resolved.Ctor(options)
+        const { messages } = await lintDocument(eslint, doc.text, filePath)
+        const actions = buildCodeActions(doc.text, messages, p.range)
+        // Append a document-wide fix-all action when anything is fixable.
+        const fixAllEdits = await computeFixAll(resolved.Ctor, options, doc.text, filePath)
+        if (fixAllEdits.length > 0) {
+          actions.push({
+            title: 'Fix all auto-fixable ESLint problems',
+            kind: 'source.fixAll.eslint',
+            edits: fixAllEdits,
+          })
+        }
+        return actions
+      })
     } catch (err) {
       this._log('error', `codeAction failed for ${filePath}: ${(err as Error).message}`)
       return []
@@ -197,10 +295,12 @@ class EslintServer {
     if (!doc || !this._shouldValidate(p.uri)) return { edits: [] }
     const filePath = filePathOf(p.uri)
     if (!filePath) return { edits: [] }
-    const Ctor = await this._ctorFor(p.uri)
-    if (!Ctor) return { edits: [] }
+    const resolved = await this._resolveFor(p.uri)
+    if (!resolved) return { edits: [] }
     try {
-      const edits = await computeFixAll(Ctor, this._settings.options, doc.text, filePath)
+      const edits = await this._withCwd(resolved.cwd, () =>
+        computeFixAll(resolved.Ctor, this._optionsWithCwd(resolved.cwd), doc.text, filePath),
+      )
       return { edits }
     } catch (err) {
       this._log('error', `fixAll failed for ${filePath}: ${(err as Error).message}`)

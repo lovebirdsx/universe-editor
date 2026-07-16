@@ -6,6 +6,8 @@
  */
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
+import { existsSync } from 'node:fs'
+import * as path from 'node:path'
 import { URI } from 'vscode-uri'
 import type { Diagnostic, TextEdit } from 'vscode-languageserver-types'
 import { LineIndex } from './textUtils.js'
@@ -54,26 +56,128 @@ export interface EslintApi {
 /** Constructs an ESLint instance; `fix` toggles autofix output. */
 export type EslintConstructor = new (options: Record<string, unknown>) => EslintApi
 
+/** The subset of the `eslint` module we touch. `loadESLint` exists since eslint
+ *  8.57 / 9.x and picks the right class (flat vs eslintrc) for us. */
+interface EslintModule {
+  ESLint?: EslintConstructor
+  loadESLint?: (options?: { cwd?: string; useFlatConfig?: boolean }) => Promise<EslintConstructor>
+}
+
 /**
- * Resolve the workspace's `eslint` package from `fromDir` (the linted file's
+ * Resolve the workspace's `eslint` module from `fromDir` (the linted file's
  * directory). Returns undefined when the workspace has no eslint installed — the
  * server then stays quiet for that file instead of throwing, mirroring
  * vscode-eslint's "no ESLint library" degradation.
  */
-export async function resolveEslintConstructor(
-  fromDir: string,
-): Promise<EslintConstructor | undefined> {
+export async function resolveEslintModule(fromDir: string): Promise<EslintModule | undefined> {
   try {
     const require = createRequire(pathToFileURL(`${fromDir}/__resolve__.js`))
     const entry = require.resolve('eslint')
-    const mod = (await import(pathToFileURL(entry).href)) as {
-      ESLint?: EslintConstructor
-      default?: { ESLint?: EslintConstructor }
+    const mod = (await import(pathToFileURL(entry).href)) as EslintModule & {
+      default?: EslintModule
     }
-    return mod.ESLint ?? mod.default?.ESLint
+    const resolved: EslintModule = {}
+    const ESLint = mod.ESLint ?? mod.default?.ESLint
+    const loadESLint = mod.loadESLint ?? mod.default?.loadESLint
+    if (ESLint) resolved.ESLint = ESLint
+    if (loadESLint) resolved.loadESLint = loadESLint
+    return resolved.ESLint || resolved.loadESLint ? resolved : undefined
   } catch {
     return undefined
   }
+}
+
+/**
+ * Pick the ESLint class for the resolved module, honoring the config `mode`.
+ * `loadESLint({ useFlatConfig })` (eslint ≥8.57) selects the flat vs eslintrc
+ * class explicitly — critical when a nested `.eslintrc.*` must win over an outer
+ * flat config that eslint 9 would otherwise discover by walking up from `cwd`.
+ * Falls back to the plain `ESLint` class on older eslint (no `loadESLint`).
+ */
+export async function resolveEslintClass(
+  mod: EslintModule,
+  opts: { cwd: string; useFlatConfig?: boolean },
+): Promise<EslintConstructor | undefined> {
+  if (mod.loadESLint) {
+    try {
+      const loadOpts: { cwd: string; useFlatConfig?: boolean } = { cwd: opts.cwd }
+      if (opts.useFlatConfig !== undefined) loadOpts.useFlatConfig = opts.useFlatConfig
+      const cls = await mod.loadESLint(loadOpts)
+      return cls || mod.ESLint
+    } catch {
+      return mod.ESLint
+    }
+  }
+  return mod.ESLint
+}
+
+/** Config files that mark a working directory, tagged by config system. Ordered
+ *  flat-first so a flat config in a directory wins over a sibling eslintrc. */
+const CONFIG_INDICATORS: readonly { readonly fileName: string; readonly isFlatConfig: boolean }[] =
+  [
+    { fileName: 'eslint.config.js', isFlatConfig: true },
+    { fileName: 'eslint.config.mjs', isFlatConfig: true },
+    { fileName: 'eslint.config.cjs', isFlatConfig: true },
+    { fileName: 'eslint.config.ts', isFlatConfig: true },
+    { fileName: 'eslint.config.cts', isFlatConfig: true },
+    { fileName: 'eslint.config.mts', isFlatConfig: true },
+    { fileName: '.eslintrc', isFlatConfig: false },
+    { fileName: '.eslintrc.js', isFlatConfig: false },
+    { fileName: '.eslintrc.cjs', isFlatConfig: false },
+    { fileName: '.eslintrc.json', isFlatConfig: false },
+    { fileName: '.eslintrc.yaml', isFlatConfig: false },
+    { fileName: '.eslintrc.yml', isFlatConfig: false },
+  ]
+
+export interface WorkingDirectory {
+  /** Directory holding the nearest config (used as `cwd` for flat configs). */
+  readonly directory: string
+  readonly isFlatConfig: boolean
+}
+
+/**
+ * Walk up from the linted file's directory to `workspaceRoot`, returning the
+ * nearest ESLint config and whether it's flat or eslintrc. This anchors config
+ * discovery to the file (matching vscode-eslint's `findWorkingDirectory`) so a
+ * nested project's own config wins over an outer monorepo config — the walk
+ * that fixes "outer eslint.config.mjs applied to an inner package".
+ *
+ * `exists` is injected for tests; it defaults to `fs.existsSync`.
+ */
+export function findWorkingDirectory(
+  workspaceRoot: string | undefined,
+  filePath: string | undefined,
+  exists: (p: string) => boolean = existsSync,
+): WorkingDirectory | undefined {
+  if (!filePath) return undefined
+  // Never probe inside node_modules (matches vscode-eslint).
+  if (filePath.includes(`${path.sep}node_modules${path.sep}`)) return undefined
+
+  const rootN = workspaceRoot ? normalizePath(workspaceRoot) : undefined
+  let directory = path.dirname(filePath)
+  while (directory) {
+    if (rootN !== undefined && !normalizePath(directory).startsWith(rootN)) break
+    for (const { fileName, isFlatConfig } of CONFIG_INDICATORS) {
+      if (exists(path.join(directory, fileName))) return { directory, isFlatConfig }
+    }
+    if (rootN !== undefined && normalizePath(directory) === rootN) break
+    const parent = path.dirname(directory)
+    if (parent === directory) break
+    directory = parent
+  }
+  return undefined
+}
+
+/** Lower-cased, forward-slash path for case/separator-insensitive prefix checks
+ *  (Windows drive-letter casing and `\` vs `/` both vary across sources).
+ *
+ *  This standalone server subprocess has no platform DI, so IUriIdentityService
+ *  is unreachable — this is a deliberately independent path-identity domain
+ *  (same category as acpPathPolicy / MonacoModelKey). It only gates the
+ *  workspace-root containment walk, never a persisted identity key. */
+function normalizePath(p: string): string {
+  // eslint-disable-next-line no-restricted-syntax -- see doc comment: no platform DI here
+  return p.replace(/\\/g, '/').toLowerCase()
 }
 
 /** Directory of a `file:` uri (POSIX slashes), for eslint resolution + filePath. */
