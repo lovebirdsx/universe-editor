@@ -163,6 +163,13 @@ test.describe('@p1 webview diff', () => {
 
     await workbench.openWorkspace(tmpDir)
 
+    // Opening a folder enters Restricted Mode (untrusted by default). The test
+    // extension declares a `main`, so it is gated off in an untrusted workspace
+    // and its custom-editor provider never registers — the diff webview would
+    // stay blank (mirroring the real Excel diff extension). Trust the workspace,
+    // as a user would, so the host activates it and the provider registers.
+    await workbench.runCommand('workbench.trust.grant')
+
     const toUri = (fsPath: string) => {
       const forward = fsPath.replace(/\\/g, '/')
       const p = forward.startsWith('/') ? forward : `/${forward}`
