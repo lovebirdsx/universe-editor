@@ -78,9 +78,6 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.swarm.updateReview.pickPlaceholder': '选择要用 changelist {0} 更新的 Swarm 审核',
   'perforce.swarm.updateReview.noneAuthored': '你没有进行中的审核——请输入要更新的审核编号',
   'perforce.swarm.updateReview.idPrompt': '要更新的 Swarm 审核编号',
-  'perforce.swarm.notify.one': '审核 #{0} 需要你处理。',
-  'perforce.swarm.notify.many': '有 {0} 个新审核需要你处理。',
-  'perforce.swarm.notify.open': '打开',
 }
 
 const useZhCn = (process.env.UNIVERSE_DISPLAY_LOCALE ?? '').toLowerCase().startsWith('zh')

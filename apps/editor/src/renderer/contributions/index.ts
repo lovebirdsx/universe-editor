@@ -25,6 +25,7 @@ export { BuiltInViewContainersContribution } from './BuiltInViewContainersContri
 export { BuiltInViewsContribution } from './BuiltInViewsContribution.js'
 export { SwarmViewContribution } from './SwarmViewContribution.js'
 export { SwarmConfigurationContribution } from './SwarmConfigurationContribution.js'
+export { SwarmReviewNotificationContribution } from './SwarmReviewNotificationContribution.js'
 export { BuiltInEditorBindingsContribution } from './BuiltInEditorBindingsContribution.js'
 export { ContextKeyContribution } from './ContextKeyContribution.js'
 export { ExplorerClipboardContextContribution } from './ExplorerClipboardContextContribution.js'

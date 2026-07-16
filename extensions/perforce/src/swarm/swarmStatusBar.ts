@@ -3,13 +3,13 @@
  * dashboard on an interval (opt-in via `perforce.swarm.pollInterval`) and on
  * demand. Clicking focuses the Swarm Reviews view (a renderer Action2, routed via
  * the command service). Mirrors p4StatusBar's lifecycle.
+ *
+ * Surfacing *new* actionable reviews (desktop notifications) is the renderer's job
+ * — SwarmReviewNotificationContribution polls the same dashboard and notifies based
+ * on the list as finally displayed (author / approvable / ignore filters applied).
+ * This controller only owns the badge count.
  */
-import {
-  window,
-  commands,
-  StatusBarAlignment,
-  type StatusBarItem,
-} from '@universe-editor/extension-api'
+import { window, StatusBarAlignment, type StatusBarItem } from '@universe-editor/extension-api'
 import type { SwarmClient } from './swarmClient.js'
 import type { SwarmLogger } from './swarmLog.js'
 import { localize } from '../nls.js'
@@ -20,10 +20,6 @@ export class SwarmStatusBarController {
   private _disposed = false
   private _refreshing: Promise<void> | undefined
   private _refreshQueued = false
-  /** Review ids that needed my action on the last poll; drives new-review toasts. */
-  private _knownNeedsAction = new Set<string>()
-  /** First poll primes the baseline without notifying (avoids a startup burst). */
-  private _primed = false
 
   constructor(
     private readonly _getClient: () => Promise<SwarmClient | undefined>,
@@ -103,42 +99,10 @@ export class SwarmStatusBarController {
             })
           : localize('perforce.swarm.status.none', 'No reviews need your attention')
       this._item.show()
-      this._notifyNewReviews(dash.needsAction.map((r) => r.id))
     } catch (err) {
       this._logger?.warn('status', `refresh failed: ${err instanceof Error ? err.message : err}`)
       this._item.hide()
     }
-  }
-
-  /** Toast once per newly-appeared needs-action review (throttled: only the ids
-   *  not seen on the previous poll). The first poll only primes the baseline. */
-  private _notifyNewReviews(ids: string[]): void {
-    const current = new Set(ids)
-    if (!this._primed) {
-      this._knownNeedsAction = current
-      this._primed = true
-      return
-    }
-    const fresh = ids.filter((id) => !this._knownNeedsAction.has(id))
-    this._knownNeedsAction = current
-    if (fresh.length === 0) return
-    const message =
-      fresh.length === 1
-        ? localize('perforce.swarm.notify.one', 'Review #{0} needs your attention.', {
-            0: fresh[0] as string,
-          })
-        : localize('perforce.swarm.notify.many', '{0} new reviews need your attention.', {
-            0: String(fresh.length),
-          })
-    const open = localize('perforce.swarm.notify.open', 'Open')
-    void window.showInformationMessage(message, open).then((picked) => {
-      if (picked !== open) return
-      if (fresh.length === 1) {
-        void commands.executeCommand('_workbench.openSwarmReview', fresh[0])
-      } else {
-        void commands.executeCommand('_workbench.openSwarmReviews')
-      }
-    })
   }
 
   dispose(): void {

@@ -564,6 +564,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.search.exclude.description':
     '配置搜索和快速打开时要排除的文件和文件夹 glob 模式。继承 files.exclude。',
   'settings.search.placeholder': '搜索设置（{count}）',
+  'settings.swarm.notifications.enabled':
+    '当有新审核进入「需我处理」列表且编辑器窗口未聚焦时，显示系统桌面通知。点击通知会打开该审核。',
   'settings.tab.user': '用户',
   'settings.tab.workspace': '工作区',
   'settings.terminal': '终端',
@@ -804,6 +806,12 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'perforceGraph.noChangeDetails': '没有变更详情。',
   'perforceGraph.copyId': '复制 changelist 编号',
   'perforceGraph.unavailable': 'Perforce Graph 不可用——当前目录是否位于 Perforce 工作区内？',
+
+  // --- Swarm ---
+  'swarm.notify.needsAction.title': '有新的 Swarm 审核待你处理',
+  'swarm.notify.needsAction.one': '审核 #{0}：{1}',
+  'swarm.notify.needsAction.oneNoDesc': '审核 #{0}',
+  'swarm.notify.needsAction.many': '有 {0} 个新审核待你处理',
 
   // --- Diff editor & Merge ---
   'diffEditor.nextChange': '下一处更改 ({key})',

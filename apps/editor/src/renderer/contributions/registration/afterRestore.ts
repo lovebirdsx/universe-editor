@@ -33,6 +33,7 @@ import {
   AgentsSessionRestoreContribution,
 } from '../AgentsContributions.js'
 import { AgentNotificationContribution } from '../AgentNotificationContribution.js'
+import { SwarmReviewNotificationContribution } from '../SwarmReviewNotificationContribution.js'
 import { FirstRunAgentOnboardingContribution } from '../FirstRunAgentOnboardingContribution.js'
 import { SessionShutdownParticipant } from '../SessionShutdownParticipant.js'
 import { StartupPerformanceStatusContribution } from '../StartupPerformanceStatusContribution.js'
@@ -261,6 +262,16 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.agentNotification',
   AgentNotificationContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// OS-level desktop notification when a new review enters the Swarm "Needs My
+// Action" list while the window is blurred. Polls the dashboard on its own timer
+// so it fires even when the (visible-only) Swarm view is closed. AfterRestore so
+// the host service + swarm open actions are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.swarmReviewNotification',
+  SwarmReviewNotificationContribution,
   WorkbenchPhase.AfterRestore,
 )
 

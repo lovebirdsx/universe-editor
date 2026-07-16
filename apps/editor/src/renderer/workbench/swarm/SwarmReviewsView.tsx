@@ -55,6 +55,7 @@ import {
   canApproveReview,
   filterAuthored,
   filterNeedsAction,
+  readSwarmFilterConfig,
   SwarmFilterConfigKeys,
   type SwarmReviewFilterConfig,
 } from '../../services/swarm/swarmReviewFilter.js'
@@ -106,17 +107,6 @@ function relativeTime(timestamp: number): string {
 
 type GroupKey = 'needsAction' | 'ignored' | 'authored'
 
-/** Snapshot the three persisted list-filter settings. */
-function readFilterConfig(configuration: IConfigurationService): SwarmReviewFilterConfig {
-  return {
-    needsActionAuthors: configuration.get<string[]>(SwarmFilterConfigKeys.needsActionAuthors) ?? [],
-    needsActionApprovableOnly:
-      configuration.get<boolean>(SwarmFilterConfigKeys.needsActionApprovableOnly) ?? false,
-    authoredHideApproved:
-      configuration.get<boolean>(SwarmFilterConfigKeys.authoredHideApproved) ?? true,
-  }
-}
-
 const GROUP_LABELS: Record<GroupKey, string> = {
   needsAction: localize('swarm.group.needsAction', 'Needs My Action'),
   ignored: localize('swarm.group.ignored', 'Ignored'),
@@ -147,7 +137,7 @@ export function SwarmReviewsView() {
     swarmReviewsViewState.transitions,
   )
   const [filterConfig, setFilterConfig] = useState<SwarmReviewFilterConfig>(() =>
-    readFilterConfig(configuration),
+    readSwarmFilterConfig(configuration),
   )
   const [menu, setMenu] = useState<SwarmReviewContextMenuState | null>(null)
   // Bumped whenever the ignore store changes, so grouping recomputes. The store is
@@ -298,7 +288,7 @@ export function SwarmReviewsView() {
         e.affectsConfiguration(SwarmFilterConfigKeys.needsActionApprovableOnly) ||
         e.affectsConfiguration(SwarmFilterConfigKeys.authoredHideApproved)
       ) {
-        setFilterConfig(readFilterConfig(configuration))
+        setFilterConfig(readSwarmFilterConfig(configuration))
       }
     })
     return () => sub.dispose()

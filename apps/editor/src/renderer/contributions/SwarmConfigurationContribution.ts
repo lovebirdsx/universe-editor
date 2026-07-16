@@ -47,6 +47,14 @@ export class SwarmConfigurationContribution extends Disposable implements IWorkb
               'Hide already-approved reviews from the "Authored by Me" group.',
             ),
           },
+          'perforce.swarm.notifications.enabled': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.swarm.notifications.enabled',
+              'Show an OS desktop notification when a new review enters "Needs My Action" while the editor window is not focused. Clicking the notification opens the review.',
+            ),
+          },
         },
       }),
     )

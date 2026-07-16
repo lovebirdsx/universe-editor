@@ -6,6 +6,7 @@
  *  the loaded transitions map), so they can be unit-tested without React.
  *--------------------------------------------------------------------------------------------*/
 
+import type { IConfigurationService } from '@universe-editor/platform'
 import type { SwarmReviewDto, SwarmTransitionDto } from '@universe-editor/extensions-common'
 
 /** Settings keys (persisted to settings.json under `perforce.swarm.*`). */
@@ -22,6 +23,21 @@ export interface SwarmReviewFilterConfig {
   needsActionAuthors: readonly string[]
   needsActionApprovableOnly: boolean
   authoredHideApproved: boolean
+}
+
+/** Snapshot the three persisted list-filter settings from configuration. Shared by
+ *  SwarmReviewsView and the background review-notification contribution so both
+ *  compute the "final displayed" list identically. */
+export function readSwarmFilterConfig(
+  configuration: IConfigurationService,
+): SwarmReviewFilterConfig {
+  return {
+    needsActionAuthors: configuration.get<string[]>(SwarmFilterConfigKeys.needsActionAuthors) ?? [],
+    needsActionApprovableOnly:
+      configuration.get<boolean>(SwarmFilterConfigKeys.needsActionApprovableOnly) ?? false,
+    authoredHideApproved:
+      configuration.get<boolean>(SwarmFilterConfigKeys.authoredHideApproved) ?? true,
+  }
 }
 
 /** Whether the loaded transitions permit an Approve action (drives the blue check
