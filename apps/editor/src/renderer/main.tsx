@@ -456,7 +456,8 @@ async function bootstrapWorkbench(): Promise<void> {
     workbenchStore.add(instantiation.createInstance(KeyboardDebugService)),
   )
 
-  // EditorResolverService depends on IInstantiationService + IEditorService, both available now.
+  // EditorResolverService depends on IInstantiationService + IEditorService +
+  // IEditorGroupsService, all available now.
   const editorResolverService = instantiation.createInstance(EditorResolverService)
   services.set(IEditorResolverService, editorResolverService)
 

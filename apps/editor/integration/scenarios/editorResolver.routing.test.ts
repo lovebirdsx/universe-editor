@@ -10,6 +10,7 @@ import {
   NullLogger,
   URI,
   type EditorInput,
+  type IEditorGroupsService,
   type IEditorService,
   type IInstantiationService,
   type ILoggerService,
@@ -25,6 +26,9 @@ import { EditorResolverService } from '../../src/renderer/services/editor/Editor
 // Minimal stubs for DI-injected constructor params — only openEditor() uses them
 const mockInst = { createInstance: vi.fn() } as unknown as IInstantiationService
 const mockEditor = { openEditor: vi.fn() } as unknown as IEditorService
+// No editors open in these routing tests, so an empty group list is enough for
+// the self-heal pass (`_upgradeOpenEditors`) to iterate over nothing.
+const mockGroups = { groups: [] } as unknown as IEditorGroupsService
 const mockLoggerService: ILoggerService = {
   _serviceBrand: undefined,
   createLogger: () => new NullLogger(),
@@ -36,7 +40,7 @@ describe('editorResolver.routing (integration)', () => {
   let resolver: EditorResolverService
 
   beforeEach(() => {
-    resolver = new EditorResolverService(mockInst, mockEditor, mockLoggerService)
+    resolver = new EditorResolverService(mockInst, mockEditor, mockGroups, mockLoggerService)
   })
 
   afterEach(() => {

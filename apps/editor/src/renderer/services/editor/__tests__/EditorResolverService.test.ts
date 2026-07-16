@@ -6,6 +6,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest'
 import {
   EditorInput,
   Event,
+  IEditorGroupsService,
   IEditorService,
   IFileService,
   ILoggerService,
@@ -13,9 +14,13 @@ import {
   LogLevel,
   ServiceCollection,
   URI,
+  type EditorInput as EditorInputType,
+  type IEditorGroup,
+  type IEditorGroupsService as IEditorGroupsServiceType,
   type IEditorService as IEditorServiceType,
   type IFileService as IFileServiceType,
   type ILogger,
+  type IOpenEditorOptions,
 } from '@universe-editor/platform'
 import { EditorResolverService } from '../EditorResolverService.js'
 import { FileEditorInput } from '../FileEditorInput.js'
@@ -30,6 +35,45 @@ function makeEditorService(): IEditorServiceType {
     activeEditorId: { read: () => undefined } as unknown as IEditorServiceType['activeEditorId'],
     activeEditor: { read: () => undefined } as unknown as IEditorServiceType['activeEditor'],
   }
+}
+
+/**
+ * A minimal single-group stand-in for IEditorGroupsService that supports the
+ * open / close / index / active bookkeeping `_upgradeOpenEditors` relies on.
+ */
+function makeGroups(): {
+  groupsService: IEditorGroupsServiceType
+  group: {
+    editors: EditorInputType[]
+    activeEditor: EditorInputType | undefined
+    openCalls: Array<{ input: EditorInputType; options?: IOpenEditorOptions }>
+  }
+} {
+  const editors: EditorInputType[] = []
+  const openCalls: Array<{ input: EditorInputType; options?: IOpenEditorOptions }> = []
+  const group = {
+    editors,
+    activeEditor: undefined as EditorInputType | undefined,
+    openCalls,
+    indexOf: (e: EditorInputType) => editors.indexOf(e),
+    closeEditor: (e: EditorInputType) => {
+      const i = editors.indexOf(e)
+      if (i !== -1) editors.splice(i, 1)
+      if (group.activeEditor === e) group.activeEditor = undefined
+      return i !== -1
+    },
+    openEditor: (input: EditorInputType, options?: IOpenEditorOptions) => {
+      openCalls.push(options ? { input, options } : { input })
+      const at = options?.index ?? editors.length
+      editors.splice(at, 0, input)
+      if (options?.activate !== false) group.activeEditor = input
+    },
+  }
+  const groupsService = {
+    _serviceBrand: undefined,
+    groups: [group as unknown as IEditorGroup],
+  } as unknown as IEditorGroupsServiceType
+  return { groupsService, group }
 }
 
 function makeFs(): IFileServiceType {
@@ -75,8 +119,10 @@ function makeLogger(): ILogger {
 function makeEnv() {
   const editorService = makeEditorService()
   const logger = makeLogger()
+  const { groupsService, group } = makeGroups()
   const services = new ServiceCollection()
   services.set(IEditorService, editorService)
+  services.set(IEditorGroupsService, groupsService)
   services.set(IFileService, makeFs())
   services.set(ILoggerService, {
     _serviceBrand: undefined,
@@ -86,7 +132,7 @@ function makeEnv() {
   })
   const inst = new InstantiationService(services)
   const resolver = inst.createInstance(EditorResolverService)
-  return { resolver, editorService, inst, logger }
+  return { resolver, editorService, group, inst, logger }
 }
 
 afterEach(() => {
@@ -227,5 +273,92 @@ describe('EditorResolverService', () => {
     // With preferredTypeId: use 'file' even though 'chart' has higher priority
     await resolver.openEditor(uri, { preferredTypeId: 'file' })
     expect(editorService.openEditor).toHaveBeenLastCalledWith(fileInput, { pinned: true })
+  })
+
+  it('self-heal: a later higher-priority registration upgrades an open fallback tab in place', () => {
+    const { resolver, group } = makeEnv()
+    const uri = URI.file('/project/doc.pdf')
+
+    // Catch-all fallback opens the pdf as a text file (the race the bug hits).
+    resolver.registerEditor(
+      '**/*',
+      { typeId: 'file', displayName: 'File Editor', priority: 1 },
+      (u) => ({ typeId: 'file', resource: u }) as unknown as EditorInput,
+    )
+    const fileTab = { typeId: 'file', resource: uri } as unknown as EditorInput
+    group.editors.push(fileTab)
+    group.activeEditor = fileTab
+
+    // The PDF custom editor registers late (after the extension host is ready).
+    const pdfInput = { typeId: 'customEditor', resource: uri } as unknown as EditorInput
+    resolver.registerEditor(
+      '**/*.pdf',
+      { typeId: 'customEditor', displayName: 'PDF View', priority: 100 },
+      () => pdfInput,
+    )
+
+    // The open fallback tab was re-opened in place as the custom editor.
+    expect(group.editors).toEqual([pdfInput])
+    expect(group.openCalls.at(-1)?.input).toBe(pdfInput)
+    expect(group.openCalls.at(-1)?.options).toMatchObject({ index: 0, activate: true })
+  })
+
+  it('self-heal respects "Reopen With": an explicitly chosen editor is not upgraded', async () => {
+    const { resolver, group } = makeEnv()
+    const uri = URI.file('/project/doc.pdf')
+
+    resolver.registerEditor(
+      '**/*',
+      { typeId: 'file', displayName: 'File Editor', priority: 1 },
+      (u) => ({ typeId: 'file', resource: u }) as unknown as EditorInput,
+    )
+    // User explicitly reopened the pdf as text via "Reopen With...".
+    const fileInput = { typeId: 'file', resource: uri } as unknown as EditorInput
+    resolver.registerEditor(
+      '**/*.pdf',
+      { typeId: 'file', displayName: 'File Editor', priority: 1 },
+      () => fileInput,
+    )
+    await resolver.openEditor(uri, { preferredTypeId: 'file' })
+    group.editors.length = 0
+    group.editors.push(fileInput)
+    group.activeEditor = fileInput
+    group.openCalls.length = 0
+
+    // A higher-priority PDF editor registers afterwards — must NOT steal the tab.
+    resolver.registerEditor(
+      '**/*.pdf',
+      { typeId: 'customEditor', displayName: 'PDF View', priority: 100 },
+      () => ({ typeId: 'customEditor', resource: uri }) as unknown as EditorInput,
+    )
+
+    expect(group.editors).toEqual([fileInput])
+    expect(group.openCalls).toHaveLength(0)
+  })
+
+  it('self-heal does not touch a tab already at equal/higher priority', () => {
+    const { resolver, group } = makeEnv()
+    const uri = URI.file('/project/doc.pdf')
+
+    // The pdf is already open in the custom editor (priority 100).
+    resolver.registerEditor(
+      '**/*.pdf',
+      { typeId: 'customEditor', displayName: 'PDF View', priority: 100 },
+      () => ({ typeId: 'customEditor', resource: uri }) as unknown as EditorInput,
+    )
+    const pdfTab = { typeId: 'customEditor', resource: uri } as unknown as EditorInput
+    group.editors.push(pdfTab)
+    group.activeEditor = pdfTab
+    group.openCalls.length = 0
+
+    // A lower-priority catch-all registers later — must not replace the tab.
+    resolver.registerEditor(
+      '**/*',
+      { typeId: 'file', displayName: 'File Editor', priority: 1 },
+      () => ({ typeId: 'file', resource: uri }) as unknown as EditorInput,
+    )
+
+    expect(group.editors).toEqual([pdfTab])
+    expect(group.openCalls).toHaveLength(0)
   })
 })
