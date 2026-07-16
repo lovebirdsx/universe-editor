@@ -1,5 +1,32 @@
 [
   {
+    "version": "0.1.41",
+    "date": "2026-07-16",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "扩展视图支持拖拽安装和精选列表",
+          "调大活动栏和面板图标尺寸",
+          "extension重构为单宿主+Workspace Trust",
+          "初步加入eslint插件",
+          "新增 Swarm 审核桌面通知，窗口未聚焦时提醒",
+          "新增 webview diff 通路及 Excel 对比插件"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复扩展卸载/重装残留与竞态扫描问题",
+          "fork会话继承源会话运行配置，避免回退默认值",
+          "修复标签页溢出时滚动箭头不显示的bug"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.40",
     "date": "2026-07-16",
     "groups": [
