@@ -233,6 +233,90 @@ describe('ExternalChangeWatcher', () => {
     expect(inputB.checks).toHaveLength(0)
   })
 
+  // Regression (OOM): watching a huge, high-churn tree (e.g. a game engine
+  // folder that constantly creates/deletes temp files) fires thousands of
+  // change events per batch. The watcher must NOT issue a cross-process `stat`
+  // for every deleted event — only for those that could affect an open editor.
+  // Before the fix each deleted event cost one `_exists` stat, so a churning
+  // engine dir piled up unbounded pending IPC + stacked _handle calls → the
+  // renderer OOMed (observed: reason=oom in main.log with a 25k-line stat storm
+  // in fileSystem.log).
+  it('does not stat unrelated deleted events (no matching editor open)', async () => {
+    const openUri = URI.file('/ws/open.txt')
+    const input = makeFileInput(openUri)
+    const groups = makeGroups([input])
+    const watcher = new FakeWatcher()
+    let statCalls = 0
+    const fileService = {
+      _serviceBrand: undefined,
+      async stat(_resource: URI) {
+        statCalls++
+        throw new Error('ENOENT')
+      },
+      async readFileText() {
+        return ''
+      },
+    } as unknown as IFileServiceType
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      fileService,
+      makeLoggerService(),
+      new FakeUserData(),
+      makeUriIdentity(),
+    )
+
+    // 1000 temp files under an unrelated tree, each churning delete.
+    const events: IFileChangeEvent[] = Array.from({ length: 1000 }, (_, i) => ({
+      type: 'deleted',
+      resource: URI.file(`/engine/tmp/t${i}.tmp`).toJSON(),
+    }))
+    watcher.fire(events)
+    await flush()
+    expect(statCalls).toBe(0)
+    expect(groups.closed).toEqual([])
+  })
+
+  // Guard the flip side: a deleted event that IS at/under an open editor still
+  // gets confirmed against disk (the atomic-rewrite → reload path relies on it).
+  it('still stats a deleted event that matches an open editor', async () => {
+    const openUri = URI.file('/ws/open.txt')
+    const input = makeFileInput(openUri) as FileEditorInput & { checks: number[] }
+    const groups = makeGroups([input])
+    const watcher = new FakeWatcher()
+    let statCalls = 0
+    const fileService = {
+      _serviceBrand: undefined,
+      async stat(resource: URI) {
+        statCalls++
+        // Survives → treated as a content change (git checkout rewrite).
+        return { resource, isFile: true, isDirectory: false, size: 0, mtime: 1 }
+      },
+      async readFileText() {
+        return ''
+      },
+    } as unknown as IFileServiceType
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      fileService,
+      makeLoggerService(),
+      new FakeUserData(),
+      makeUriIdentity(),
+    )
+
+    watcher.fire([
+      { type: 'deleted', resource: URI.file('/engine/tmp/x.tmp').toJSON() },
+      { type: 'deleted', resource: openUri.toJSON() },
+    ])
+    await flush()
+    // Only the matching event is confirmed against disk, not the unrelated one.
+    expect(statCalls).toBe(1)
+    expect(input.checks).toHaveLength(1)
+  })
+
   it('ignores untitled inputs and unrelated URIs', async () => {
     const uriFile = URI.file('/ws/file.txt')
     const fileInput = makeFileInput(uriFile) as FileEditorInput & { checks: number[] }

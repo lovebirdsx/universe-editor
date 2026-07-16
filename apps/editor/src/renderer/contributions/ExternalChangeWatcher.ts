@@ -149,20 +149,64 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     await this._reloadChangedFileEditors(new Set([this._uriIdentity.getComparisonKey(uri)]), true)
   }
 
+  /**
+   * Resources of everything currently open that reacts to disk changes:
+   * file editors, diff editors (original side), and markdown preview sources.
+   * Used to pre-filter watcher batches so we never touch the filesystem for a
+   * change that can't affect any open editor.
+   */
+  private _collectWatchedResources(): { keys: Set<string>; resources: URI[] } {
+    const keys = new Set<string>()
+    const resources: URI[] = []
+    const add = (uri: URI): void => {
+      keys.add(this._uriIdentity.getComparisonKey(uri))
+      resources.push(uri)
+    }
+    for (const group of this._groups.groups) {
+      for (const editor of group.editors) {
+        if (editor instanceof FileEditorInput) add(editor.resource)
+        else if (editor instanceof DiffEditorInput) add(editor.originalUri)
+        else if (editor instanceof MarkdownPreviewInput) add(editor.sourceUri)
+      }
+    }
+    return { keys, resources }
+  }
+
   private async _handle(events: readonly IFileChangeEvent[]): Promise<void> {
     if (events.length === 0) return
-    this._logger.debug(`handleExternalChanges events=${events.length}`)
+
+    // Pre-filter against the open editors before doing any work. Watching a
+    // large, high-churn tree (e.g. a game-engine folder that constantly writes
+    // and deletes temp files) fires thousands of events per batch; without this
+    // gate every deleted event triggered a cross-process `stat`, piling up
+    // unbounded pending IPC + stacked _handle calls until the renderer OOMed.
+    // A change is relevant only if it matches an open editor, or (for a delete)
+    // is an ancestor directory of one — the exact conditions the handlers below
+    // act on.
+    const watched = this._collectWatchedResources()
+    if (watched.resources.length === 0) return
+
     const deletedResources: URI[] = []
     const changedKeys = new Set<string>()
     for (const ev of events) {
       const u = URI.revive(ev.resource as Parameters<typeof URI.revive>[0])
       if (!u) continue
       if (ev.type === 'deleted') {
-        deletedResources.push(u)
+        const key = this._uriIdentity.getComparisonKey(u)
+        // Relevant if it IS an open editor (atomic-rewrite → reload) or an
+        // ancestor of one (directory delete → close descendant tabs).
+        if (watched.keys.has(key) || watched.resources.some((r) => isDescendant(u, r))) {
+          deletedResources.push(u)
+        }
       } else {
-        changedKeys.add(this._uriIdentity.getComparisonKey(u))
+        const key = this._uriIdentity.getComparisonKey(u)
+        if (watched.keys.has(key)) changedKeys.add(key)
       }
     }
+    if (deletedResources.length === 0 && changedKeys.size === 0) return
+    this._logger.debug(
+      `handleExternalChanges events=${events.length} relevant deleted=${deletedResources.length} changed=${changedKeys.size}`,
+    )
 
     // A 'deleted' event is frequently just an atomic rewrite (e.g. `git
     // checkout` rewriting the file). Confirm the path is really gone before
