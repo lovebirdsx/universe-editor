@@ -218,6 +218,12 @@
           "minimum": 0,
           "description": "%perforce.config.swarm.pollInterval.description%"
         },
+        "perforce.swarm.reviewWindowDays": {
+          "type": "number",
+          "default": 7,
+          "minimum": 0,
+          "description": "%perforce.config.swarm.reviewWindowDays.description%"
+        },
         "perforce.swarm.authMode": {
           "type": "string",
           "enum": ["ticket", "token"],

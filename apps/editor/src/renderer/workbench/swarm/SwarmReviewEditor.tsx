@@ -31,6 +31,7 @@ import {
   type SwarmListCommentsRequest,
   type SwarmObliterateReviewRequest,
   type SwarmReviewDetailDto,
+  type SwarmReviewDto,
   type SwarmReviewFileDto,
   type SwarmTransitionRequest,
   type SwarmUpdateReviewRequest,
@@ -44,9 +45,12 @@ import { buildSwarmReviewUrl } from '../../services/swarm/swarmReviewUrl.js'
 import {
   swarmReviewDetailCache,
   swarmReviewFilesViewState,
+  getSwarmReviewEditorState,
+  updateSwarmReviewEditorState,
   notifyReviewMutated,
   type SwarmReviewFilesViewMode,
 } from '../../services/swarm/swarmViewState.js'
+import { swarmIgnoreStore } from '../../services/swarm/swarmIgnoreStore.js'
 import { SwarmReviewFiles } from './SwarmReviewFiles.js'
 import styles from './SwarmReviewEditor.module.css'
 
@@ -79,17 +83,25 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   const [detail, setDetail] = useState<SwarmReviewDetailDto | null>(
     swarmReviewDetailCache.get(reviewId) ?? null,
   )
+  // Restore the per-review editor UI state (version selectors, draft, scroll)
+  // captured when this tab was last active — survives the unmount that happens
+  // whenever the tab is deactivated. In-memory only (not across restarts). Read
+  // once at mount (useRef) so our own scroll writes don't churn the restore.
+  const savedStateRef = useRef(getSwarmReviewEditorState(reviewId))
+  const savedState = savedStateRef.current
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [files, setFiles] = useState<SwarmReviewFileDto[] | null>(null)
   const [selectedVersion, setSelectedVersion] = useState<number | null>(
-    detail?.versions[detail.versions.length - 1]?.version ?? null,
+    savedState?.selectedVersion ?? detail?.versions[detail.versions.length - 1]?.version ?? null,
   )
   /** The base version to compare against (left side); null = the version before it. */
-  const [compareVersion, setCompareVersion] = useState<number | null>(null)
+  const [compareVersion, setCompareVersion] = useState<number | null>(
+    savedState?.compareVersion ?? null,
+  )
   const [comments, setComments] = useState<SwarmCommentDto[] | null>(null)
-  const [commentDraft, setCommentDraft] = useState('')
+  const [commentDraft, setCommentDraft] = useState(savedState?.commentDraft ?? '')
   const loadAbortRef = useRef<AbortController | null>(null)
   const detailRef = useRef(detail)
   const commentsRef = useRef(comments)
@@ -100,6 +112,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   const loadedImmutableChangeRef = useRef<string | null>(null)
   const filesViewModeRestoredRef = useRef(false)
   const [filesRefreshGeneration, setFilesRefreshGeneration] = useState(0)
+  const [ignored, setIgnored] = useState(() => swarmIgnoreStore.isIgnored(reviewId))
 
   const reviewUrl = buildSwarmReviewUrl(configuration.get<string>('perforce.swarm.url'), reviewId)
 
@@ -110,6 +123,23 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   useEffect(() => {
     commentsRef.current = comments
   }, [comments])
+
+  // Persist the per-review editor UI state so it survives the unmount that
+  // happens whenever this tab is deactivated (in-memory, keyed by review id).
+  useEffect(() => {
+    if (!reviewId) return
+    updateSwarmReviewEditorState(reviewId, { selectedVersion })
+  }, [reviewId, selectedVersion])
+
+  useEffect(() => {
+    if (!reviewId) return
+    updateSwarmReviewEditorState(reviewId, { compareVersion })
+  }, [reviewId, compareVersion])
+
+  useEffect(() => {
+    if (!reviewId) return
+    updateSwarmReviewEditorState(reviewId, { commentDraft })
+  }, [reviewId, commentDraft])
 
   const load = useCallback(
     (force = false) => {
@@ -269,8 +299,38 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     }
   }, [busy, commands, dialog, editorService, input.id, reviewId])
 
-  // Prefer Swarm's immutable archive shelf: the author's changelist can be
-  // re-shelved after this version was recorded.
+  // Ignore / unignore this review — moves it out of "Needs My Action" into the
+  // Ignored group in the sidebar. Pure client state (swarmIgnoreStore, shared
+  // with the list view); the snapshot lets the Ignored group render even if the
+  // dashboard later stops returning this review.
+  const toggleIgnore = useCallback(() => {
+    if (!reviewId) return
+    if (swarmIgnoreStore.isIgnored(reviewId)) {
+      swarmIgnoreStore.unignore(reviewId)
+      return
+    }
+    const d = detailRef.current
+    const snapshot: SwarmReviewDto = {
+      id: reviewId,
+      state: d?.state ?? 'needsReview',
+      stateLabel: d?.stateLabel ?? '',
+      author: d?.author ?? '',
+      description: (d?.description ?? '').split('\n')[0] ?? '',
+      upVotes: d?.participants.filter((p) => p.vote > 0).length ?? 0,
+      downVotes: d?.participants.filter((p) => p.vote < 0).length ?? 0,
+      commentCount: d?.commentCount ?? 0,
+      openTaskCount: d?.openTaskCount ?? 0,
+      testStatus: d?.testStatus ?? 'none',
+      updated: d?.updated ?? Date.now(),
+    }
+    swarmIgnoreStore.ignore(snapshot)
+  }, [reviewId])
+
+  useEffect(() => {
+    void swarmIgnoreStore.attach(storage)
+    const sub = swarmIgnoreStore.onDidChange(() => setIgnored(swarmIgnoreStore.isIgnored(reviewId)))
+    return () => sub.dispose()
+  }, [storage, reviewId])
   const changeForVersion = useCallback(
     (version: number | null): string | null =>
       version === null
@@ -576,6 +636,17 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
             </Button>
           ))}
           <Button
+            size="sm"
+            variant="ghost"
+            busy={busy}
+            onClick={toggleIgnore}
+            data-testid="swarm-review-ignore"
+          >
+            {ignored
+              ? localize('swarm.unignore.button', 'Unignore')
+              : localize('swarm.ignore.button', 'Ignore')}
+          </Button>
+          <Button
             className={styles['dangerAction']}
             size="sm"
             variant="secondary"
@@ -651,6 +722,10 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
               viewMode={filesViewMode}
               onViewModeChange={(mode) => swarmReviewFilesViewState.setViewMode(mode)}
               onOpenFile={(file) => void openFileDiff(file)}
+              initialScrollTop={savedState?.filesScrollTop}
+              onScrollTopChange={(scrollTop) =>
+                updateSwarmReviewEditorState(reviewId, { filesScrollTop: scrollTop })
+              }
             />
           )}
         </div>

@@ -7,6 +7,7 @@ import {
   IEditorService,
   IOpenerService,
   IQuickInputService,
+  IStorageService,
   InstantiationService,
   ServiceCollection,
 } from '@universe-editor/platform'
@@ -66,13 +67,19 @@ function createServices(executeCommand: ReturnType<typeof vi.fn>): Instantiation
     pick: vi.fn().mockResolvedValue(undefined),
     createQuickPick: vi.fn(),
   } as never)
+  services.set(IStorageService, {
+    _serviceBrand: undefined,
+    get: vi.fn().mockResolvedValue(undefined),
+    set: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
+    onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
+  } as never)
   return new InstantiationService(services)
 }
 
 afterEach(() => {
   cleanup()
   swarmReviewsViewState.dashboard = null
-  swarmReviewsViewState.keyword = ''
   vi.restoreAllMocks()
 })
 

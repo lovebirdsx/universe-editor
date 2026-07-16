@@ -18,8 +18,8 @@ function fakeP4(user: string): P4Service {
   } as unknown as P4Service
 }
 
-function reviewJson(id: string, state: string) {
-  return { id, state, author: 'songxiao', description: `review ${id}` }
+function reviewJson(id: string, state: string, author = 'songxiao') {
+  return { id, state, author, description: `review ${id}` }
 }
 
 describe('SwarmClient.dashboard', () => {
@@ -112,6 +112,101 @@ describe('SwarmClient.dashboard', () => {
 
     // One fan-out total (author + participants), not two.
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('folds the needsActionAuthors query into needsAction (covers project-only links)', async () => {
+    // A review the user is only linked to through a Swarm project has no
+    // individual reviewer role, so participants=me never returns it. The
+    // configured author query surfaces it.
+    fetchMock.mockImplementation((url: string) => {
+      const u = String(url)
+      // The needsActionAuthors query is the one carrying an explicit state[] filter.
+      if (u.includes('state[]=needsReview')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ reviews: [reviewJson('8113801', 'needsReview', 'zouwei')] }),
+            {
+              status: 200,
+            },
+          ),
+        )
+      }
+      return Promise.resolve(new Response(JSON.stringify({ reviews: [] }), { status: 200 }))
+    })
+
+    const dash = await client().dashboard({ needsActionAuthors: ['zouwei'] })
+
+    expect(dash.needsAction.map((r) => r.id)).toEqual(['8113801'])
+    // Three list queries now: authored, participating, and the author query.
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    const authorQuery = fetchMock.mock.calls
+      .map(([url]) => String(url))
+      .find((u) => u.includes('state[]=needsReview'))
+    expect(authorQuery).toContain('author[]=zouwei')
+    expect(authorQuery).toContain('state[]=needsRevision')
+  })
+
+  it('sends no author query and matches participants-only behavior when the set is empty', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ reviews: [] }), { status: 200 }))
+
+    const dash = await client().dashboard({ needsActionAuthors: [] })
+
+    expect(dash.needsAction).toEqual([])
+    // Only authored + participating — no third state-filtered query.
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    for (const [url] of fetchMock.mock.calls) {
+      expect(String(url)).not.toContain('state[]=needsReview')
+    }
+  })
+
+  it('drops reviews updated older than the configured window (client-side)', async () => {
+    // Clock is fixed; reviews carry `updated` in Unix seconds (toMillis * 1000).
+    const nowMs = 10_000 * 86_400_000 // day 10000 in ms
+    const recentSec = (nowMs - 3 * 86_400_000) / 1000 // 3 days ago → within a 7-day window
+    const staleSec = (nowMs - 30 * 86_400_000) / 1000 // 30 days ago → outside it
+    fetchMock.mockImplementation((url: string) => {
+      const body = url.includes('author[]')
+        ? {
+            reviews: [
+              { ...reviewJson('1001', 'needsReview'), updated: recentSec },
+              { ...reviewJson('1002', 'needsReview'), updated: staleSec },
+            ],
+          }
+        : { reviews: [] }
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }))
+    })
+
+    const c = new SwarmClient(
+      fakeP4('songxiao'),
+      { baseUrl: 'https://swarm.example.com/', apiVersion: 'v9', user: 'songxiao' },
+      undefined,
+      { now: () => nowMs },
+    )
+    const dash = await c.dashboard({ windowDays: 7 })
+
+    expect(dash.authored.map((r) => r.id)).toEqual(['1001'])
+    expect(dash.needsAction.map((r) => r.id)).toEqual(['1001'])
+  })
+
+  it('applies no time limit when windowDays is 0 / omitted', async () => {
+    const nowMs = 10_000 * 86_400_000
+    const staleSec = (nowMs - 365 * 86_400_000) / 1000 // a year old
+    fetchMock.mockImplementation((url: string) => {
+      const body = url.includes('author[]')
+        ? { reviews: [{ ...reviewJson('1002', 'needsReview'), updated: staleSec }] }
+        : { reviews: [] }
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }))
+    })
+
+    const c = new SwarmClient(
+      fakeP4('songxiao'),
+      { baseUrl: 'https://swarm.example.com/', apiVersion: 'v9', user: 'songxiao' },
+      undefined,
+      { now: () => nowMs },
+    )
+    const dash = await c.dashboard({ windowDays: 0 })
+
+    expect(dash.authored.map((r) => r.id)).toEqual(['1002'])
   })
 })
 

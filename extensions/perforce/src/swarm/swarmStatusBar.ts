@@ -28,6 +28,8 @@ export class SwarmStatusBarController {
   constructor(
     private readonly _getClient: () => Promise<SwarmClient | undefined>,
     private readonly _logger?: SwarmLogger,
+    private readonly _getNeedsActionAuthors?: () => Promise<readonly string[]>,
+    private readonly _getReviewWindowDays?: () => Promise<number>,
   ) {
     this._item = window.createStatusBarItem(StatusBarAlignment.Left, 99)
     // Focus the Swarm Reviews view (renderer Action2 id).
@@ -80,7 +82,13 @@ export class SwarmStatusBarController {
       return
     }
     try {
-      const dash = await client.dashboard({ force: true })
+      const needsActionAuthors = (await this._getNeedsActionAuthors?.()) ?? []
+      const windowDays = (await this._getReviewWindowDays?.()) ?? 0
+      const dash = await client.dashboard({
+        force: true,
+        ...(needsActionAuthors.length ? { needsActionAuthors: [...needsActionAuthors] } : {}),
+        ...(windowDays > 0 ? { windowDays } : {}),
+      })
       if (this._disposed) return
       const count = dash.needsAction.length
       this._logger?.debug(

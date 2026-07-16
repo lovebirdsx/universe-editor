@@ -135,6 +135,18 @@ export interface SwarmReviewFilesProps {
   readonly viewMode: SwarmReviewFilesViewMode
   readonly onViewModeChange?: ((mode: SwarmReviewFilesViewMode) => void) | undefined
   readonly onOpenFile: (file: SwarmReviewFileDto) => void
+  /** Vertical scroll offset restored on mount (survives tab switches). */
+  readonly initialScrollTop?: number | undefined
+  /** Reports the file list's scroll offset so it can be persisted. */
+  readonly onScrollTopChange?: ((scrollTop: number) => void) | undefined
+}
+
+/** The element that actually scrolls: the tree root in non-virtual mode, or its
+ *  inner virtual scroller (>200 files). Both set `overflow: auto`. */
+function findScroller(root: HTMLElement): HTMLElement {
+  if (root.scrollHeight > root.clientHeight) return root
+  const nested = root.querySelector<HTMLElement>('[style*="overflow"]')
+  return nested ?? root
 }
 
 export function SwarmReviewFiles({
@@ -142,8 +154,13 @@ export function SwarmReviewFiles({
   viewMode,
   onViewModeChange,
   onOpenFile,
+  initialScrollTop,
+  onScrollTopChange,
 }: SwarmReviewFilesProps) {
   const snapshotRef = useRef<SwarmFilesSnapshot>(EMPTY_SNAPSHOT)
+  const treeRootRef = useRef<HTMLDivElement | null>(null)
+  const scrollChangeRef = useRef(onScrollTopChange)
+  scrollChangeRef.current = onScrollTopChange
   const treeModel = useOwnedTreeModel<SwarmFileNode>(() => {
     const dataSource: ITreeDataSource<SwarmFileNode> = {
       getId: (node) => node.id,
@@ -161,6 +178,27 @@ export function SwarmReviewFiles({
   const snapshot = useMemo(() => buildSnapshot(files, viewMode), [files, viewMode])
   snapshotRef.current = snapshot
   useLayoutEffect(() => treeModel.refresh(), [snapshot, treeModel])
+
+  // Persist + restore the file-list scroll offset across tab switches. Listen in
+  // the capture phase so both scroll modes are covered (the tree root itself when
+  // non-virtual, or the inner virtual scroller for >200 files); restore once the
+  // rows have laid out.
+  useLayoutEffect(() => {
+    const root = treeRootRef.current
+    if (!root) return
+    if (initialScrollTop && initialScrollTop > 0) {
+      const scroller = findScroller(root)
+      if (scroller.scrollTop !== initialScrollTop) scroller.scrollTop = initialScrollTop
+    }
+    const onScroll = (event: Event): void => {
+      const target = event.target as HTMLElement | null
+      if (target) scrollChangeRef.current?.(target.scrollTop)
+    }
+    root.addEventListener('scroll', onScroll, { capture: true, passive: true })
+    return () => root.removeEventListener('scroll', onScroll, { capture: true })
+    // Re-run when the file set changes (layout / scroller identity may change),
+    // restoring the saved offset for the freshly-rendered list.
+  }, [initialScrollTop, snapshot])
 
   const collapseAll = (): void => {
     treeModel.setExpansion(snapshotRef.current.folderIds.map((id) => [id, false] as const))
@@ -290,6 +328,7 @@ export function SwarmReviewFiles({
         ariaLabel={localize('swarm.files', 'Files')}
         rowHeight={22}
         indentWidth={12}
+        rootRef={treeRootRef}
         renderRow={renderRow}
         onActivate={(node) => {
           if (node.element.kind === 'file') onOpenFile(node.element.file)

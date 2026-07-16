@@ -27,7 +27,10 @@ import { ServicesContext } from '../../useService.js'
 import { SwarmReviewEditorInput } from '../../../services/editor/SwarmReviewEditorInput.js'
 import { SwarmDiffEditorInput } from '../../../services/editor/SwarmDiffEditorInput.js'
 import { DiffEditorInput } from '../../../services/editor/DiffEditorInput.js'
-import { swarmReviewDetailCache } from '../../../services/swarm/swarmViewState.js'
+import {
+  swarmReviewDetailCache,
+  clearSwarmReviewEditorStates,
+} from '../../../services/swarm/swarmViewState.js'
 import { SwarmReviewEditor } from '../SwarmReviewEditor.js'
 import { SwarmReviewFiles } from '../SwarmReviewFiles.js'
 
@@ -139,12 +142,14 @@ function renderReview() {
 beforeEach(() => {
   vi.useFakeTimers()
   swarmReviewDetailCache.clear()
+  clearSwarmReviewEditorStates()
 })
 
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
   swarmReviewDetailCache.clear()
+  clearSwarmReviewEditorStates()
 })
 
 describe('SwarmReviewEditor restore', () => {

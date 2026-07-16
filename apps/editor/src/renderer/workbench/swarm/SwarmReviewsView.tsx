@@ -33,6 +33,7 @@ import {
   IEditorService,
   IOpenerService,
   IQuickInputService,
+  IStorageService,
   ConfigurationTarget,
   localize,
 } from '@universe-editor/platform'
@@ -47,6 +48,8 @@ import {
 import { useService } from '../useService.js'
 import { SwarmReviewEditorInput } from '../../services/editor/SwarmReviewEditorInput.js'
 import { swarmReviewsViewState, swarmReviewEvents } from '../../services/swarm/swarmViewState.js'
+import { swarmIgnoreStore, splitIgnored } from '../../services/swarm/swarmIgnoreStore.js'
+import { swarmReviewsUiStore } from '../../services/swarm/swarmReviewsUiStore.js'
 import { buildSwarmReviewUrl } from '../../services/swarm/swarmReviewUrl.js'
 import {
   canApproveReview,
@@ -101,7 +104,7 @@ function relativeTime(timestamp: number): string {
   })
 }
 
-type GroupKey = 'needsAction' | 'authored'
+type GroupKey = 'needsAction' | 'ignored' | 'authored'
 
 /** Snapshot the three persisted list-filter settings. */
 function readFilterConfig(configuration: IConfigurationService): SwarmReviewFilterConfig {
@@ -116,10 +119,11 @@ function readFilterConfig(configuration: IConfigurationService): SwarmReviewFilt
 
 const GROUP_LABELS: Record<GroupKey, string> = {
   needsAction: localize('swarm.group.needsAction', 'Needs My Action'),
+  ignored: localize('swarm.group.ignored', 'Ignored'),
   authored: localize('swarm.group.authored', 'Authored by Me'),
 }
 
-const GROUP_KEYS: GroupKey[] = ['needsAction', 'authored']
+const GROUP_KEYS: GroupKey[] = ['needsAction', 'ignored', 'authored']
 
 export function SwarmReviewsView() {
   const commands = useService(ICommandService)
@@ -128,17 +132,17 @@ export function SwarmReviewsView() {
   const editorService = useService(IEditorService)
   const opener = useService(IOpenerService)
   const quickInput = useService(IQuickInputService)
+  const storage = useService(IStorageService)
 
   const [dashboard, setDashboard] = useState<SwarmDashboardResult | null>(
     swarmReviewsViewState.dashboard,
   )
-  const [keyword, setKeyword] = useState(swarmReviewsViewState.keyword)
+  const [keyword, setKeyword] = useState(swarmReviewsUiStore.keyword)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [collapsed, setCollapsed] = useState<Record<GroupKey, boolean>>({
-    needsAction: false,
-    authored: false,
-  })
+  const [collapsed, setCollapsed] = useState<Record<GroupKey, boolean>>(
+    () => swarmReviewsUiStore.collapsed,
+  )
   const [transitions, setTransitions] = useState<Record<string, SwarmTransitionDto[]>>(
     swarmReviewsViewState.transitions,
   )
@@ -146,6 +150,14 @@ export function SwarmReviewsView() {
     readFilterConfig(configuration),
   )
   const [menu, setMenu] = useState<SwarmReviewContextMenuState | null>(null)
+  // Bumped whenever the ignore store changes, so grouping recomputes. The store is
+  // a module singleton (shared with the review editor); we read it live below.
+  const [, setIgnoreVersion] = useState(0)
+  // Gate the first render until the persisted ignore set has hydrated, so an
+  // ignored review never flashes in "Needs My Action" before splitIgnored can
+  // reclassify it. The contribution attaches the store at app start, so this is
+  // usually already true on mount.
+  const [ignoreReady, setIgnoreReady] = useState(() => swarmIgnoreStore.isReady)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const transitionsRef = useRef<Record<string, SwarmTransitionDto[]>>(
     swarmReviewsViewState.transitions,
@@ -247,6 +259,36 @@ export function SwarmReviewsView() {
     }
   }, [reload])
 
+  // Bind the ignore store to storage (idempotent) and re-render on any change,
+  // whether it originated here or in a review detail tab.
+  useEffect(() => {
+    void swarmIgnoreStore.attach(storage)
+    const sub = swarmIgnoreStore.onDidChange(() => {
+      setIgnoreReady(swarmIgnoreStore.isReady)
+      setIgnoreVersion((v) => v + 1)
+    })
+    return () => sub.dispose()
+  }, [storage])
+
+  // Hydrate + track the persisted sidebar UI state (group collapse + keyword).
+  // The contribution attaches it at app start; re-sync local state on hydrate so
+  // the saved collapse / keyword paint even if this view mounted first.
+  useEffect(() => {
+    void swarmReviewsUiStore.attach(storage)
+    const sub = swarmReviewsUiStore.onDidChange(() => {
+      setCollapsed(swarmReviewsUiStore.collapsed)
+      const stored = swarmReviewsUiStore.keyword
+      if (stored !== keywordRef.current) {
+        keywordRef.current = stored
+        setKeyword(stored)
+        // Keyword is pushed down to the server query; re-load so restored text
+        // narrows the list server-side, not just via the client-side filter.
+        load()
+      }
+    })
+    return () => sub.dispose()
+  }, [storage, load])
+
   // Keep the local filter snapshot in sync with settings.json edits (from the
   // gear menu, the authored toggle, or a hand edit) so the list re-renders.
   useEffect(() => {
@@ -265,7 +307,7 @@ export function SwarmReviewsView() {
   const onKeywordChange = useCallback(
     (value: string) => {
       setKeyword(value)
-      swarmReviewsViewState.keyword = value
+      swarmReviewsUiStore.setKeyword(value)
       keywordRef.current = value
       if (debounceRef.current) clearTimeout(debounceRef.current)
       debounceRef.current = setTimeout(() => load(), KEYWORD_DEBOUNCE_MS)
@@ -280,8 +322,20 @@ export function SwarmReviewsView() {
     [editorService],
   )
 
+  const ignoreReview = useCallback((review: SwarmReviewDto) => {
+    swarmIgnoreStore.ignore(review)
+  }, [])
+
+  const unignoreReview = useCallback((reviewId: string) => {
+    swarmIgnoreStore.unignore(reviewId)
+  }, [])
+
   const toggle = useCallback((key: GroupKey) => {
-    setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }))
+    setCollapsed((prev) => {
+      const next = { ...prev, [key]: !prev[key] }
+      swarmReviewsUiStore.setCollapsed(key, next[key])
+      return next
+    })
   }, [])
 
   const reviewUrl = useCallback(
@@ -363,6 +417,18 @@ export function SwarmReviewsView() {
               },
             ] satisfies SwarmReviewMenuItem[])
           : []),
+        { kind: 'separator' },
+        swarmIgnoreStore.isIgnored(review.id)
+          ? {
+              kind: 'item',
+              label: localize('swarm.menu.unignore', 'Unignore Review'),
+              run: () => unignoreReview(review.id),
+            }
+          : {
+              kind: 'item',
+              label: localize('swarm.menu.ignore', 'Ignore Review'),
+              run: () => ignoreReview(review),
+            },
         ...(transitionItems.length > 0
           ? ([{ kind: 'separator' }, ...transitionItems] satisfies SwarmReviewMenuItem[])
           : []),
@@ -390,7 +456,15 @@ export function SwarmReviewsView() {
         },
       ]
     },
-    [applyTransition, obliterateReview, openReview, opener, reviewUrl],
+    [
+      applyTransition,
+      obliterateReview,
+      openReview,
+      opener,
+      reviewUrl,
+      ignoreReview,
+      unignoreReview,
+    ],
   )
 
   const openReviewMenu = useCallback(
@@ -428,10 +502,30 @@ export function SwarmReviewsView() {
         )
       : reviews
 
+  // Ignored reviews are pulled out of "Needs My Action" into their own group.
+  // The group's data comes from the live dashboard when still present, falling
+  // back to the snapshot captured at ignore time (the dashboard may no longer
+  // return it — e.g. its author left the needsActionAuthors filter).
+  const ignoredIds = new Set(swarmIgnoreStore.list())
+  const { active: needsActionActive, ignored: needsActionIgnored } = splitIgnored(
+    dashboard ? filterNeedsAction(dashboard.needsAction, filterConfig, transitions) : [],
+    ignoredIds,
+  )
+  const ignoredReviews: SwarmReviewDto[] = (() => {
+    if (ignoredIds.size === 0) return []
+    const byId = new Map<string, SwarmReviewDto>()
+    for (const r of needsActionIgnored) byId.set(r.id, r)
+    for (const id of ignoredIds) {
+      if (byId.has(id)) continue
+      const meta = swarmIgnoreStore.getMeta(id)
+      if (meta) byId.set(id, meta)
+    }
+    return [...byId.values()]
+  })()
+
   const groupedReviews: Record<GroupKey, SwarmReviewDto[]> = {
-    needsAction: dashboard
-      ? filterNeedsAction(filterKeyword(dashboard.needsAction), filterConfig, transitions)
-      : [],
+    needsAction: filterKeyword(needsActionActive),
+    ignored: filterKeyword(ignoredReviews),
     authored: dashboard ? filterAuthored(filterKeyword(dashboard.authored), filterConfig) : [],
   }
 
@@ -493,19 +587,22 @@ export function SwarmReviewsView() {
             {localize('swarm.notConfigured', 'Swarm is not configured. Set perforce.swarm.url.')}
           </div>
         )}
-        {dashboard &&
-          GROUP_KEYS.map((key) => (
-            <ReviewGroup
-              key={key}
-              label={GROUP_LABELS[key]}
-              reviews={groupedReviews[key]}
-              collapsed={collapsed[key]}
-              onToggle={() => toggle(key)}
-              onOpen={openReview}
-              onContextMenu={openReviewMenu}
-              transitions={transitions}
-            />
-          ))}
+        {(dashboard || groupedReviews.ignored.length > 0) &&
+          ignoreReady &&
+          GROUP_KEYS.filter((key) => key !== 'ignored' || groupedReviews.ignored.length > 0).map(
+            (key) => (
+              <ReviewGroup
+                key={key}
+                label={GROUP_LABELS[key]}
+                reviews={groupedReviews[key]}
+                collapsed={collapsed[key]}
+                onToggle={() => toggle(key)}
+                onOpen={openReview}
+                onContextMenu={openReviewMenu}
+                transitions={transitions}
+              />
+            ),
+          )}
         {dashboard &&
           !loading &&
           dashboard.needsAction.length === 0 &&

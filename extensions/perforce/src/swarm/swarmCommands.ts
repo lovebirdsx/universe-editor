@@ -58,6 +58,26 @@ async function readSwarmConfig(): Promise<SwarmConfig | undefined> {
   return { url, apiVersion, authMode }
 }
 
+/** The persisted `perforce.swarm.needsActionAuthors` set. Drives an extra
+ *  server-side `author=` query in the dashboard so reviews the user is only
+ *  linked to through a Swarm project/group (not an individual reviewer) still
+ *  surface in Needs My Action. Empty = participants-only behavior. */
+async function readNeedsActionAuthors(): Promise<string[]> {
+  const cfg = workspace.getConfiguration('perforce')
+  const raw = await cfg.get<unknown>('swarm.needsActionAuthors', [])
+  return Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : []
+}
+
+/** The persisted `perforce.swarm.reviewWindowDays` (default 7). Limits the review
+ *  lists to those updated within the last N days; 0 = no time limit. Swarm has no
+ *  server-side "updated since" filter, so the window is applied client-side in
+ *  {@link SwarmClient.dashboard}. */
+async function readReviewWindowDays(): Promise<number> {
+  const cfg = workspace.getConfiguration('perforce')
+  const raw = (await cfg.get('swarm.reviewWindowDays', 7)) as number
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 0
+}
+
 /**
  * Registers Swarm commands. Returns a Disposable that tears down every command +
  * the SwarmClient. `getManager` yields the active PerforceClient for connection
@@ -272,11 +292,15 @@ export function registerSwarmCommands(
     commands.registerCommand(Cmd.dashboard, (arg: unknown) =>
       guard(
         'dashboard',
-        (c) => {
+        async (c) => {
           const r = (arg ?? {}) as { force?: boolean; keywords?: string }
+          const needsActionAuthors = await readNeedsActionAuthors()
+          const windowDays = await readReviewWindowDays()
           return c.dashboard({
             ...(r.force ? { force: true } : {}),
             ...(r.keywords ? { keywords: r.keywords } : {}),
+            ...(needsActionAuthors.length ? { needsActionAuthors } : {}),
+            ...(windowDays > 0 ? { windowDays } : {}),
           })
         },
         {
@@ -620,7 +644,12 @@ export function registerSwarmCommands(
 
   // Status bar: "N reviews need my attention", polled on an interval. Reuses the
   // same lazily-built SwarmClient so it shares connection + credential resolution.
-  const statusBar = new SwarmStatusBarController(swarm, logger)
+  const statusBar = new SwarmStatusBarController(
+    swarm,
+    logger,
+    readNeedsActionAuthors,
+    readReviewWindowDays,
+  )
   void readSwarmConfig().then(async () => {
     const cfg = workspace.getConfiguration('perforce')
     const pollInterval = (await cfg.get('swarm.pollInterval', 0)) as number

@@ -208,6 +208,7 @@ import { ViewPerforceGraphAction, PerforceGraphFocusSearchAction } from './perfo
 import {
   OpenSwarmReviewsAction,
   OpenSwarmReviewAction,
+  OpenSwarmReviewByIdAction,
   WorkbenchOpenSwarmReviewAction,
   WorkbenchOpenSwarmReviewsAction,
   RefreshSwarmReviewsAction,
@@ -538,6 +539,7 @@ registerAction2(PerforceGraphFocusSearchAction)
 // Swarm Reviews
 registerAction2(OpenSwarmReviewsAction)
 registerAction2(OpenSwarmReviewAction)
+registerAction2(OpenSwarmReviewByIdAction)
 registerAction2(WorkbenchOpenSwarmReviewAction)
 registerAction2(WorkbenchOpenSwarmReviewsAction)
 registerAction2(RefreshSwarmReviewsAction)

@@ -140,6 +140,9 @@ export const test = base.extend<SwarmFixtures>({
           'perforce.swarm.enabled': true,
           'perforce.swarm.url': baseUrl,
           'perforce.swarm.apiVersion': 'v9',
+          // The seeded reviews use fixed 2023 timestamps; disable the time window
+          // so the default 7-day limit doesn't filter them all out.
+          'perforce.swarm.reviewWindowDays': 0,
         },
         null,
         2,

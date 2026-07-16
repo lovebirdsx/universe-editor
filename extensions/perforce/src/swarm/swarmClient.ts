@@ -63,11 +63,15 @@ const SwarmCacheNs = {
   comments: 'swarm.comments',
 } as const
 
+const DAY_MS = 86_400_000
+
 export class SwarmClient {
   private readonly _api: SwarmApi
   private readonly _cache: P4Cache
+  private readonly _now: P4Clock
   private _dashboardInFlight: Promise<SwarmDashboard> | undefined
   private _dashboardInFlightIsForce = false
+  private _dashboardInFlightKey = ''
   private _dashboardQueuedForce: Promise<SwarmDashboard> | undefined
 
   constructor(
@@ -82,7 +86,8 @@ export class SwarmClient {
       getAuth: () => this._auth(),
       ...(_logger ? { logger: _logger } : {}),
     })
-    this._cache = new P4Cache(cacheOptions.now ?? Date.now, undefined, cacheOptions.enabled ?? true)
+    this._now = cacheOptions.now ?? Date.now
+    this._cache = new P4Cache(this._now, undefined, cacheOptions.enabled ?? true)
     const ttlMs = cacheOptions.ttlMs ?? DEFAULT_SWARM_CACHE_TTL_MS
     for (const namespace of Object.values(SwarmCacheNs)) {
       this._cache.register(namespace, { kind: 'ttl', ttlMs })
@@ -138,25 +143,53 @@ export class SwarmClient {
    *  simultaneously on open) share one in-flight fetch instead of each fanning
    *  out its own pair of requests.
    *
+   *  `needsActionAuthors` (the persisted `perforce.swarm.needsActionAuthors` set)
+   *  adds a server-side `author=` query whose open reviews are folded into
+   *  needsAction. This covers reviews the user is only associated with through a
+   *  Swarm project/group (no individual reviewer role) — `participants=me` alone
+   *  never returns those (the filter does NOT expand group/project membership).
+   *  Empty set → no extra query → identical to the participants-only behavior.
+   *
    *  A `keywords` filter is pushed down to the underlying review-list query so
    *  the server narrows results instead of the renderer fetching everything and
    *  filtering in memory. Keyword queries bypass the unfiltered in-flight
    *  coalescing (which exists to share the status-bar + first-load fan-out); the
-   *  per-filter TTL cache in {@link listReviews} still dedups repeats. */
-  async dashboard(opts: { force?: boolean; keywords?: string } = {}): Promise<SwarmDashboard> {
+   *  per-filter TTL cache in {@link listReviews} still dedups repeats.
+   *
+   *  `windowDays` (> 0) drops reviews whose last-updated time is older than that
+   *  many days. Swarm's `GET /reviews` has no native "updated since" filter (only
+   *  author / state / participants are honored), so this window is applied
+   *  client-side here after the lists come back. 0 / undefined = no time limit. */
+  async dashboard(
+    opts: {
+      force?: boolean
+      keywords?: string
+      needsActionAuthors?: readonly string[]
+      windowDays?: number
+    } = {},
+  ): Promise<SwarmDashboard> {
     const me = this._config.user
     if (!me) return { needsAction: [], authored: [], participating: [] }
     const keywords = opts.keywords?.trim() ? opts.keywords.trim() : undefined
     const force = opts.force ?? false
+    const authors = opts.needsActionAuthors?.length ? opts.needsActionAuthors : undefined
+    const windowDays = opts.windowDays && opts.windowDays > 0 ? opts.windowDays : undefined
+    const key = `${authors ? [...authors].sort().join(',') : ''}|${windowDays ?? 0}`
     if (keywords !== undefined) {
       if (force) this._cache.invalidateNamespace(SwarmCacheNs.reviewList)
-      return this._loadDashboard(me, keywords)
+      return this._loadDashboard(me, keywords, authors, windowDays)
     }
-    if (this._dashboardInFlight) {
+    if (this._dashboardInFlight && this._dashboardInFlightKey === key) {
       if (!force || this._dashboardInFlightIsForce) return this._dashboardInFlight
       if (this._dashboardQueuedForce) return this._dashboardQueuedForce
       const queued = this._dashboardInFlight
-        .then(() => this.dashboard({ force: true }))
+        .then(() =>
+          this.dashboard({
+            force: true,
+            ...(authors ? { needsActionAuthors: authors } : {}),
+            ...(windowDays ? { windowDays } : {}),
+          }),
+        )
         .finally(() => {
           if (this._dashboardQueuedForce === queued) this._dashboardQueuedForce = undefined
         })
@@ -165,32 +198,55 @@ export class SwarmClient {
     }
     if (force) this._cache.invalidateNamespace(SwarmCacheNs.reviewList)
     this._dashboardInFlightIsForce = force
-    const run = this._loadDashboard(me).finally(() => {
+    this._dashboardInFlightKey = key
+    const run = this._loadDashboard(me, undefined, authors, windowDays).finally(() => {
       if (this._dashboardInFlight === run) {
         this._dashboardInFlight = undefined
         this._dashboardInFlightIsForce = false
+        this._dashboardInFlightKey = ''
       }
     })
     this._dashboardInFlight = run
     return run
   }
 
-  private async _loadDashboard(me: string, keywords?: string): Promise<SwarmDashboard> {
-    // needsAction is derived locally from authored + participating (see
-    // deriveNeedsAction). We deliberately do NOT call `dashboards/action`: it is a
-    // v9-only endpoint that is redundant with this derivation and, on many Swarm
-    // deployments, slow enough that a fronting gateway 504s on it — there is no
-    // upside to paying that request.
-    const [authored, participating] = await Promise.all([
+  private async _loadDashboard(
+    me: string,
+    keywords?: string,
+    needsActionAuthors?: readonly string[],
+    windowDays?: number,
+  ): Promise<SwarmDashboard> {
+    // needsAction is derived locally from authored + participating + the
+    // needsActionAuthors query (see deriveNeedsAction). We deliberately do NOT
+    // call `dashboards/action`: it is a v9-only endpoint that is redundant with
+    // this derivation and, on many Swarm deployments, slow enough that a fronting
+    // gateway 504s on it — there is no upside to paying that request.
+    const [authoredRaw, participatingRaw, byAuthorRaw] = await Promise.all([
       this.listReviews({ author: [me], max: 50, ...(keywords ? { keywords } : {}) }).then(
         (r) => r.reviews,
       ),
       this.listReviews({ participants: [me], max: 50, ...(keywords ? { keywords } : {}) }).then(
         (r) => r.reviews,
       ),
+      needsActionAuthors?.length
+        ? this.listReviews({
+            author: [...needsActionAuthors],
+            state: ['needsReview', 'needsRevision'],
+            max: 50,
+            ...(keywords ? { keywords } : {}),
+          }).then((r) => r.reviews)
+        : Promise.resolve<SwarmReview[]>([]),
     ])
+    // Swarm can't filter by "updated since" server-side, so apply the time window
+    // here. A review with no updated time (0) is kept — never hide on missing data.
+    const cutoff = windowDays && windowDays > 0 ? this._now() - windowDays * DAY_MS : undefined
+    const withinWindow = (reviews: SwarmReview[]): SwarmReview[] =>
+      cutoff === undefined ? reviews : reviews.filter((r) => !r.updated || r.updated >= cutoff)
+    const authored = withinWindow(authoredRaw)
+    const participating = withinWindow(participatingRaw)
+    const byAuthor = withinWindow(byAuthorRaw)
     return {
-      needsAction: deriveNeedsAction(me, authored, participating),
+      needsAction: deriveNeedsAction(me, authored, participating, byAuthor),
       authored,
       participating,
     }
@@ -378,18 +434,21 @@ function commentFilterKey(
 
 /**
  * Local fallback for the `dashboards/action` endpoint (v9-only): approximate the
- * "needs my action" set from the reviews the user authored or participates in.
- * A review is actionable while it is still open (needsReview / needsRevision);
- * approved / rejected / archived reviews are done. Deduped by id, authored first.
+ * "needs my action" set from the reviews the user authored, participates in, or
+ * that were pulled by the configured needsActionAuthors query (covers reviews the
+ * user is only linked to through a Swarm project/group). A review is actionable
+ * while it is still open (needsReview / needsRevision); approved / rejected /
+ * archived reviews are done. Deduped by id, authored first.
  */
 function deriveNeedsAction(
   _me: string,
   authored: SwarmReview[],
   participating: SwarmReview[],
+  byAuthor: SwarmReview[] = [],
 ): SwarmReview[] {
   const seen = new Set<string>()
   const out: SwarmReview[] = []
-  for (const r of [...authored, ...participating]) {
+  for (const r of [...authored, ...participating, ...byAuthor]) {
     if (seen.has(r.id)) continue
     if (r.state !== 'needsReview' && r.state !== 'needsRevision') continue
     seen.add(r.id)

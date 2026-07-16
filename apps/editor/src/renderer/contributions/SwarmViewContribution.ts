@@ -7,17 +7,27 @@
 
 import {
   Disposable,
+  IStorageService,
   IWorkbenchContribution,
   ViewContainerLocation,
   ViewContainerRegistry,
   localize,
 } from '@universe-editor/platform'
 import { registerViewWithComponent } from '../services/views/ViewComponentRegistry.js'
+import { swarmIgnoreStore } from '../services/swarm/swarmIgnoreStore.js'
+import { swarmReviewsUiStore } from '../services/swarm/swarmReviewsUiStore.js'
 import { SwarmReviewsView } from '../workbench/swarm/SwarmReviewsView.js'
 
 export class SwarmViewContribution extends Disposable implements IWorkbenchContribution {
-  constructor() {
+  constructor(@IStorageService storage: IStorageService) {
     super()
+
+    // Hydrate the persisted client-side stores as early as possible (app start,
+    // before the view mounts) so the first render already reflects the ignored
+    // set and the saved collapse / keyword state — no flash of an ignored review
+    // in "Needs My Action" while hydration catches up.
+    void swarmIgnoreStore.attach(storage)
+    void swarmReviewsUiStore.attach(storage)
 
     this._register(
       ViewContainerRegistry.registerViewContainer({

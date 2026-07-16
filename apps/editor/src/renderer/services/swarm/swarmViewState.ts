@@ -10,7 +10,6 @@ import { Emitter, observableValue, type Event, type IObservable } from '@univers
 import type {
   SwarmDashboardResult,
   SwarmReviewDetailDto,
-  SwarmReviewFilter,
   SwarmTransitionDto,
 } from '@universe-editor/extensions-common'
 
@@ -23,27 +22,59 @@ export interface SwarmReviewsViewState {
    *  view keeps the approvable filter accurate immediately (no flash of the full
    *  list while verdicts reload). */
   transitions: Record<string, SwarmTransitionDto[]>
-  /** Active list filter (state / author / keyword). */
-  filter: SwarmReviewFilter
-  /** Free-text keyword typed into the filter bar. */
-  keyword: string
-  /** Vertical scroll offset, restored on remount. */
-  scrollTop: number
-  /** Callback registered by the mounted view to focus its filter input. */
-  focusFilter: (() => void) | null
 }
 
 export const swarmReviewsViewState: SwarmReviewsViewState = {
   dashboard: null,
   transitions: {},
-  filter: {},
-  keyword: '',
-  scrollTop: 0,
-  focusFilter: null,
 }
 
 /** Per-review detail cache, keyed by review id, so reopening a review tab is instant. */
 export const swarmReviewDetailCache = new Map<string, SwarmReviewDetailDto>()
+
+/**
+ * Per-review editor UI state, keyed by review id. The review detail editor
+ * unmounts whenever its tab is deactivated (only the active editor renders),
+ * which would otherwise reset the version selectors, the draft comment and the
+ * file-list scroll offset on every return. This module-level singleton survives
+ * unmount so switching tabs and coming back rehydrates instantly. In-memory
+ * only (mirrors swarmReviewDetailCache) — not persisted across restarts.
+ */
+export interface SwarmReviewEditorState {
+  /** Right-hand (selected) version, or null before the detail loads. */
+  selectedVersion: number | null
+  /** Left-hand (compare) version; null = the depot base. */
+  compareVersion: number | null
+  /** Unsent review-level comment draft. */
+  commentDraft: string
+  /** Vertical scroll offset of the changed-file list. */
+  filesScrollTop: number
+}
+
+const _reviewEditorStates = new Map<string, SwarmReviewEditorState>()
+
+export function getSwarmReviewEditorState(reviewId: string): SwarmReviewEditorState | undefined {
+  return _reviewEditorStates.get(reviewId)
+}
+
+export function updateSwarmReviewEditorState(
+  reviewId: string,
+  patch: Partial<SwarmReviewEditorState>,
+): void {
+  if (!reviewId) return
+  const prev = _reviewEditorStates.get(reviewId) ?? {
+    selectedVersion: null,
+    compareVersion: null,
+    commentDraft: '',
+    filesScrollTop: 0,
+  }
+  _reviewEditorStates.set(reviewId, { ...prev, ...patch })
+}
+
+/** Test-only: drop all per-review editor UI state (module singleton). */
+export function clearSwarmReviewEditorStates(): void {
+  _reviewEditorStates.clear()
+}
 
 /**
  * Cross-component bus tying the review detail editor to the Swarm Reviews view.

@@ -11,9 +11,11 @@ import {
   Action2,
   IEditorService,
   ILayoutService,
+  IQuickInputService,
   IViewsService,
   MenuId,
   PartId,
+  localize,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { SwarmReviewEditorInput } from '../services/editor/SwarmReviewEditorInput.js'
@@ -58,6 +60,52 @@ export class OpenSwarmReviewAction extends Action2 {
     const id = typeof reviewId === 'string' ? reviewId : String(reviewId ?? '')
     if (!id) return
     await accessor.get(IEditorService).openEditor(new SwarmReviewEditorInput(id))
+  }
+}
+
+/**
+ * Prompt for a review id and open its detail tab. Entry points: the Swarm Reviews
+ * view title bar (a go-to-file icon) and the command palette. A renderer Action2 —
+ * its id must NOT appear in the extension's package.json `commands`.
+ */
+export class OpenSwarmReviewByIdAction extends Action2 {
+  static readonly ID = 'swarm.openReviewById'
+
+  constructor() {
+    super({
+      id: OpenSwarmReviewByIdAction.ID,
+      title: 'Open Swarm Review by ID…',
+      category: 'Swarm',
+      f1: true,
+      icon: 'go-to-file',
+      menu: [
+        {
+          id: MenuId.ViewTitle,
+          when: 'view == workbench.view.swarm.reviews',
+          group: 'navigation',
+          order: 0,
+        },
+      ],
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const quickInput = accessor.get(IQuickInputService)
+    const editorService = accessor.get(IEditorService)
+    const entered = await quickInput.input({
+      prompt: localize('swarm.openById.prompt', 'Enter a Swarm review id to open'),
+      placeholder: localize('swarm.openById.placeholder', 'Review id, e.g. 8113801'),
+      validateInput: (value: string) => {
+        const trimmed = value.trim()
+        if (!trimmed) return undefined
+        return /^\d+$/.test(trimmed)
+          ? undefined
+          : localize('swarm.openById.invalid', 'Enter a numeric review id.')
+      },
+    })
+    const id = entered?.trim()
+    if (!id || !/^\d+$/.test(id)) return
+    await editorService.openEditor(new SwarmReviewEditorInput(id))
   }
 }
 
