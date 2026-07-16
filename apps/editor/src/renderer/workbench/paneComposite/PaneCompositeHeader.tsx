@@ -178,7 +178,7 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
               }}
             >
               {Icon ? (
-                <Icon size={14} strokeWidth={1.75} aria-hidden="true" />
+                <Icon size={17} strokeWidth={1.75} aria-hidden="true" />
               ) : (
                 <span className={styles['tabFallback']}>{c.label.slice(0, 2)}</span>
               )}
@@ -205,9 +205,9 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
             data-testid={`view-container-header-maximize-${partId}`}
           >
             {panelMaximized ? (
-              <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+              <Minimize2 size={16} strokeWidth={1.75} aria-hidden="true" />
             ) : (
-              <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+              <Maximize2 size={16} strokeWidth={1.75} aria-hidden="true" />
             )}
           </button>
         ) : null}
@@ -218,7 +218,7 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
           aria-label={localize('viewContainer.close', 'Close')}
           data-testid={`view-container-header-close-${partId}`}
         >
-          <X size={14} strokeWidth={1.75} aria-hidden="true" />
+          <X size={16} strokeWidth={1.75} aria-hidden="true" />
         </button>
       </div>
     </div>

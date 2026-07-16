@@ -76,7 +76,7 @@ function ActivityBarItem({
       aria-pressed={isActive}
       data-testid={`activitybar-item-${descriptor.id}`}
     >
-      <Icon size={18} strokeWidth={1.75} aria-hidden />
+      <Icon size={22} strokeWidth={1.75} aria-hidden />
       {badge && badge.count > 0 && (
         <span className={styles['badge']} data-testid={`activitybar-badge-${descriptor.id}`}>
           {badge.count > 99 ? '99+' : badge.count}
