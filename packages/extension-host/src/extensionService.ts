@@ -74,6 +74,7 @@ import {
   type IMainThreadAi,
   type IMainThreadStorage,
   type IMainThreadWebviews,
+  type IWebviewDiffContextDto,
 } from '@universe-editor/extensions-common'
 import type {
   CodeAction,
@@ -249,11 +250,12 @@ export class ExtensionService implements IExtensionHostBridge {
     panelHandle: number,
     viewType: string,
     uri: UriComponents,
+    diff?: IWebviewDiffContextDto,
   ): Promise<void> {
     if (!this._webviews) {
       throw new Error('custom editor support is not available in this extension host')
     }
-    return this._webviews.resolveCustomEditor(providerHandle, panelHandle, viewType, uri)
+    return this._webviews.resolveCustomEditor(providerHandle, panelHandle, viewType, uri, diff)
   }
 
   /** IExtHostWebviews.$onDidReceiveMessage */

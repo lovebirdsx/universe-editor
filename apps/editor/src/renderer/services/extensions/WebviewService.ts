@@ -29,6 +29,7 @@ import {
 import type {
   IExtHostWebviews,
   IMainThreadWebviews,
+  IWebviewDiffContextDto,
   IWebviewOptionsDto,
 } from '@universe-editor/extensions-common'
 import type { ExtHostKind } from '../../../shared/ipc/extensionHostService.js'
@@ -57,9 +58,15 @@ export interface IWebviewService {
   /**
    * Open a panel for `resource` under `viewType` and ask the owning host to
    * resolve it. Returns the panel model (its html/options populate async) or
-   * undefined when no provider is registered for the viewType.
+   * undefined when no provider is registered for the viewType. Pass `diff` to
+   * open the panel as a two-content comparison (`_workbench.openWebviewDiff`)
+   * instead of a single-file view.
    */
-  openPanel(viewType: string, resource: URI): IWebviewPanelModel | undefined
+  openPanel(
+    viewType: string,
+    resource: URI,
+    diff?: IWebviewDiffContextDto,
+  ): IWebviewPanelModel | undefined
   /** Close a panel (editor tab closed): notify the host and drop it. */
   closePanel(panelHandle: number): void
   /** Wire a host tier's proxy once its connection is up. */
@@ -178,7 +185,11 @@ export class WebviewService extends Disposable implements IWebviewService {
     }
   }
 
-  openPanel(viewType: string, resource: URI): IWebviewPanelModel | undefined {
+  openPanel(
+    viewType: string,
+    resource: URI,
+    diff?: IWebviewDiffContextDto,
+  ): IWebviewPanelModel | undefined {
     const provider = this._providersByViewType.get(viewType)
     if (!provider) return undefined
     const extHost = this._extHosts.get(provider.kind)
@@ -195,6 +206,7 @@ export class WebviewService extends Disposable implements IWebviewService {
       panelHandle,
       viewType,
       resource.toJSON(),
+      diff,
     )
     return panel
   }

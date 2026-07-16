@@ -18,6 +18,7 @@ import {
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { WebviewDiffInput } from '../services/editor/WebviewDiffInput.js'
 
 export interface OpenDiffPayload {
   readonly title: string
@@ -72,6 +73,77 @@ export class OpenDiffAction extends Action2 {
       payload.openableUri ? URI.parse(payload.openableUri) : undefined,
     )
     // Single-click uses the preview slot; double-click opens a permanent tab.
+    group.openEditor(input, { activate: true, pinned, preserveFocus })
+  }
+}
+
+/**
+ * Payload for `_workbench.openWebviewDiff` — the extension-host counterpart of
+ * `_workbench.openDiff`, but for a diff rendered by an extension's custom editor
+ * (webview) instead of Monaco. The two sides' bytes are passed by value (base64)
+ * because they may not exist on disk (a Git HEAD blob, a Perforce have-revision),
+ * exactly like `openDiff` ships already-resolved text.
+ */
+export interface OpenWebviewDiffPayload {
+  /** The custom-editor viewType that renders this diff (e.g. `universe.excel`). */
+  readonly viewType: string
+  readonly title: string
+  /** Serialized `file:` URI of the left-hand (baseline) side, for labels. */
+  readonly leftUri: string
+  /** Serialized `file:` URI of the right-hand (modified) side, for labels. */
+  readonly rightUri: string
+  /** Base64-encoded bytes of the left-hand side. */
+  readonly leftBase64: string
+  /** Base64-encoded bytes of the right-hand side. */
+  readonly rightBase64: string
+  readonly pinned?: boolean
+  readonly preserveFocus?: boolean
+}
+
+/** Decode base64 (from the JSON payload) back into bytes for the input. */
+function fromBase64(base64: string): Uint8Array {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
+/**
+ * Open (or re-activate) a webview-rendered diff. Mirrors {@link OpenDiffAction}
+ * but builds a WebviewDiffInput, letting the owning extension render the two
+ * sides in its custom editor (e.g. a spreadsheet diff) rather than Monaco.
+ */
+export class OpenWebviewDiffAction extends Action2 {
+  static readonly ID = '_workbench.openWebviewDiff'
+
+  constructor() {
+    super({ id: OpenWebviewDiffAction.ID, title: 'Open Webview Diff' })
+  }
+
+  override run(accessor: ServicesAccessor, payload: OpenWebviewDiffPayload): void {
+    const groups = accessor.get(IEditorGroupsService)
+    const group = groups.activeGroup
+    const leftUri = URI.parse(payload.leftUri)
+    const rightUri = URI.parse(payload.rightUri)
+    const pinned = payload.pinned ?? false
+    const preserveFocus = payload.preserveFocus ?? false
+
+    const input = new WebviewDiffInput(
+      payload.viewType,
+      leftUri,
+      rightUri,
+      fromBase64(payload.leftBase64),
+      fromBase64(payload.rightBase64),
+      payload.title,
+    )
+
+    // Reuse an already-open diff for the same identity (viewType + both URIs):
+    // re-activate it instead of opening a duplicate.
+    const existing = group.editors.find((e) => e.id === input.id)
+    if (existing) {
+      group.openEditor(existing, { activate: true, pinned, preserveFocus })
+      return
+    }
     group.openEditor(input, { activate: true, pinned, preserveFocus })
   }
 }

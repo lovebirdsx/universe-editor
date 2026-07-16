@@ -9,6 +9,7 @@ import {
   GoToPreviousDifferenceAction,
   OpenDiffAction,
   OpenDiffSourceFileAction,
+  OpenWebviewDiffAction,
 } from './diffActions.js'
 import {
   CloseDirtyDiffPeekAction,
@@ -569,6 +570,7 @@ registerAction2(ShowJsonSchemaAction)
 
 // Diff (internal, invoked by the extension host)
 registerAction2(OpenDiffAction)
+registerAction2(OpenWebviewDiffAction)
 registerAction2(OpenDiffSourceFileAction)
 registerAction2(GoToNextDifferenceAction)
 registerAction2(GoToPreviousDifferenceAction)

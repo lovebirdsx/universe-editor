@@ -81,6 +81,11 @@
   `WebviewOptions` / `CustomDocument` / `CustomEditorOptions` /
   `CustomReadonlyEditorProvider`（`src/webview.ts`）。新增激活事件
   `onCustomEditor:<viewType>` 与 manifest 贡献点 `contributes.customEditors`。
+- `0.4.0` — 新增 webview diff 表面（向后兼容的新增，minor）：`WebviewPanel.diffContext`
+  可选字段 + `WebviewDiffContext` 接口（`src/webview.ts`）。当工作台经内部命令
+  `_workbench.openWebviewDiff` 以"两份内容对比"方式打开一个 custom editor 时，
+  provider 在 `resolveCustomEditor` 里读 `panel.diffContext`（存在→渲染 diff，
+  不存在→单文件预览）。纯新增可选字段，不改既有签名。
 
 ## 激活事件清单（activation events）
 

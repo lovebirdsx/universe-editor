@@ -224,8 +224,8 @@ const extHostEditor: IExtHostEditor = {
   },
 }
 const extHostWebviews: IExtHostWebviews = {
-  $resolveCustomEditor: async (providerHandle, panelHandle, viewType, uri) => {
-    await (await serviceReady).resolveCustomEditor(providerHandle, panelHandle, viewType, uri)
+  $resolveCustomEditor: async (providerHandle, panelHandle, viewType, uri, diff) => {
+    await (await serviceReady).resolveCustomEditor(providerHandle, panelHandle, viewType, uri, diff)
   },
   $onDidReceiveMessage: async (panelHandle, message) => {
     ;(await serviceReady).acceptWebviewMessage(panelHandle, message)

@@ -92,6 +92,14 @@ export interface ICustomEditorContribution {
   selector: ICustomEditorSelector[]
   /** VSCode's `priority`: `'default'` (auto-open) or `'option'` (Reopen With only). */
   priority?: 'default' | 'option'
+  /**
+   * When true, this custom editor can render a two-content comparison (its
+   * `resolveCustomEditor` reads `panel.diffContext`). It then participates in the
+   * Explorer's built-in compare menu ("Select for Compare" / "Compare with
+   * Selected") for matching resources — the workbench builds a WebviewDiffInput
+   * instead of the text diff editor. Defaults to false.
+   */
+  supportsDiff?: boolean
 }
 
 /**

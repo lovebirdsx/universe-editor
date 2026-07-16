@@ -126,6 +126,14 @@ export interface ReconcileStore {
   save(state: ReconcilePersistState): void
 }
 
+const SPREADSHEET_EXTS = ['.xlsx', '.xls', '.xlsm', '.csv']
+
+/** True when a path is a spreadsheet the Excel extension should diff in a webview. */
+function isSpreadsheetPath(path: string): boolean {
+  const lower = path.toLowerCase()
+  return SPREADSHEET_EXTS.some((ext) => lower.endsWith(ext))
+}
+
 export class PerforceClient {
   private readonly _p4: P4Service
   private readonly _sc: SourceControl
@@ -1193,6 +1201,10 @@ export class PerforceClient {
    * there's no have revision (e.g. open-for-add).
    */
   async openChange(localPath: string): Promise<void> {
+    if (isSpreadsheetPath(localPath)) {
+      await this._openSpreadsheetChange(localPath)
+      return
+    }
     const baseline = await this._baseline.getHaveContent(localPath)
     if (baseline === undefined) {
       await commands.executeCommand('_workbench.openFile', localPath)
@@ -1212,6 +1224,35 @@ export class PerforceClient {
       pinned: false,
       preserveFocus: false,
       openableUri: pathToFileURL(localPath).href,
+    })
+  }
+
+  /**
+   * Open a spreadsheet's have revision vs local content as a webview diff (the
+   * Excel extension renders it). Baseline + local are read as raw bytes so the
+   * xlsx isn't corrupted by UTF-8 decoding, then passed by value (base64).
+   */
+  private async _openSpreadsheetChange(localPath: string): Promise<void> {
+    const baseline = await this._baseline.getHaveContentBytes(localPath)
+    if (baseline === undefined) {
+      await commands.executeCommand('_workbench.openFile', localPath)
+      return
+    }
+    let modified: Buffer
+    try {
+      modified = await readFile(localPath)
+    } catch {
+      modified = Buffer.alloc(0) // deleted on disk
+    }
+    await commands.executeCommand('_workbench.openWebviewDiff', {
+      viewType: 'universe.excel',
+      title: `${basename(localPath)} (Perforce)`,
+      leftUri: pathToFileURL(localPath).href,
+      rightUri: pathToFileURL(localPath).href,
+      leftBase64: baseline.toString('base64'),
+      rightBase64: modified.toString('base64'),
+      pinned: false,
+      preserveFocus: false,
     })
   }
 

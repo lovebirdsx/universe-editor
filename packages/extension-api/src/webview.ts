@@ -55,6 +55,27 @@ export interface Webview {
 }
 
 /**
+ * Two versions of a resource to compare, carried on a {@link WebviewPanel} when
+ * the workbench opened it as a webview diff (via the internal
+ * `_workbench.openWebviewDiff` command) rather than for a single file. Content is
+ * passed by value as raw bytes — the "left"/"right" sides may not exist on disk
+ * (a Git HEAD blob, a Perforce have-revision), so a provider that renders a diff
+ * reads these instead of reading `document.uri`.
+ */
+export interface WebviewDiffContext {
+  /** The left-hand (original / baseline) side's resource, for labels. */
+  readonly leftUri: UriComponents
+  /** The right-hand (modified) side's resource, for labels. */
+  readonly rightUri: UriComponents
+  /** Raw bytes of the left-hand side. */
+  readonly left: Uint8Array
+  /** Raw bytes of the right-hand side. */
+  readonly right: Uint8Array
+  /** A human-readable title for the comparison (e.g. `book.xlsx (Working Tree)`). */
+  readonly title: string
+}
+
+/**
  * A webview hosted as an editor. For a custom editor the workbench creates and
  * owns the panel; the extension fills it in `resolveCustomEditor`.
  */
@@ -63,6 +84,13 @@ export interface WebviewPanel {
   readonly viewType: string
   /** The content surface. */
   readonly webview: Webview
+  /**
+   * Present when the workbench opened this panel as a diff (two versions of a
+   * resource) rather than a single file. A provider that supports diffing checks
+   * this in `resolveCustomEditor`: when set, render `left` vs `right`; when
+   * undefined, render the single document at `document.uri`.
+   */
+  readonly diffContext?: WebviewDiffContext
   /** Focus the editor tab hosting this panel. */
   reveal(): void
   /** Close the panel (and its editor tab). */

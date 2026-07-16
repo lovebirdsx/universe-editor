@@ -25,7 +25,7 @@ import {
   type SourceControlResourceGroup,
 } from '@universe-editor/extension-api'
 import { localize } from './nls.js'
-import { gitExec } from './gitService.js'
+import { gitExec, gitExecBinary } from './gitService.js'
 import { selectHunkPatch } from './hunkPatch.js'
 import { notifyGitFailure } from './gitError.js'
 import { parseStatus } from './statusParser.js'
@@ -57,6 +57,14 @@ export {
   type RepoStatus,
   type WorktreeRemoveFailure,
 } from './repositoryTypes.js'
+
+const SPREADSHEET_EXTS = ['.xlsx', '.xls', '.xlsm', '.csv']
+
+/** True when a path is a spreadsheet the Excel extension should diff in a webview. */
+function isSpreadsheetPath(path: string): boolean {
+  const lower = path.toLowerCase()
+  return SPREADSHEET_EXTS.some((ext) => lower.endsWith(ext))
+}
 
 export class Repository {
   private readonly _sc: SourceControl
@@ -754,6 +762,12 @@ export class Repository {
   /** Open a diff of the file's HEAD revision against its current working-tree content. */
   async openChange(absPath: string, pinned = false, preserveFocus = false): Promise<void> {
     const rel = relative(this.root, absPath).replace(/\\/g, '/')
+    // Spreadsheets can't diff as text: route them to the Excel extension's
+    // webview diff (HEAD blob vs working-tree bytes), if that extension is present.
+    if (isSpreadsheetPath(absPath)) {
+      await this._openSpreadsheetChange(absPath, rel, pinned, preserveFocus)
+      return
+    }
     const head = await gitExec(['show', `HEAD:${rel}`], this.root, this._log)
     const original = head.exitCode === 0 ? head.stdout : '' // new file → no HEAD revision
     let modified = ''
@@ -770,6 +784,37 @@ export class Repository {
       pinned,
       preserveFocus,
       openableUri: pathToFileURL(absPath).href,
+    })
+  }
+
+  /**
+   * Open a spreadsheet's HEAD revision vs working tree as a webview diff (the
+   * Excel extension renders it). Bytes go by value, base64-encoded; the HEAD
+   * blob is read binary so xlsx isn't corrupted by UTF-8 decoding.
+   */
+  private async _openSpreadsheetChange(
+    absPath: string,
+    rel: string,
+    pinned: boolean,
+    preserveFocus: boolean,
+  ): Promise<void> {
+    const head = await gitExecBinary(['show', `HEAD:${rel}`], this.root, this._log)
+    const original = head.exitCode === 0 ? head.stdout : Buffer.alloc(0)
+    let modified: Buffer
+    try {
+      modified = await readFile(absPath)
+    } catch {
+      modified = Buffer.alloc(0) // deleted in the working tree
+    }
+    await commands.executeCommand('_workbench.openWebviewDiff', {
+      viewType: 'universe.excel',
+      title: `${basename(absPath)} (Working Tree)`,
+      leftUri: pathToFileURL(absPath).href,
+      rightUri: pathToFileURL(absPath).href,
+      leftBase64: original.toString('base64'),
+      rightBase64: modified.toString('base64'),
+      pinned,
+      preserveFocus,
     })
   }
 

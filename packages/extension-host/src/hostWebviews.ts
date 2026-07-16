@@ -18,6 +18,7 @@ import type {
   Disposable,
   UriComponents,
   Webview,
+  WebviewDiffContext,
   WebviewOptions,
   WebviewPanel,
 } from '@universe-editor/extension-api'
@@ -25,6 +26,7 @@ import {
   fsPathToWebviewUrl,
   WEBVIEW_CSP_SOURCE,
   type IMainThreadWebviews,
+  type IWebviewDiffContextDto,
   type IWebviewOptionsDto,
 } from '@universe-editor/extensions-common'
 
@@ -32,6 +34,17 @@ interface RegisteredProvider {
   readonly viewType: string
   readonly provider: CustomReadonlyEditorProvider
   readonly options: CustomEditorOptions | undefined
+}
+
+/** Decode a wire diff DTO (base64 bytes) into the public `WebviewDiffContext`. */
+function reviveDiffContext(dto: IWebviewDiffContextDto): WebviewDiffContext {
+  return {
+    leftUri: dto.leftUri,
+    rightUri: dto.rightUri,
+    left: new Uint8Array(Buffer.from(dto.leftBase64, 'base64')),
+    right: new Uint8Array(Buffer.from(dto.rightBase64, 'base64')),
+    title: dto.title,
+  }
 }
 
 /** Host-side Webview handle: write-through html/options + two-way messaging. */
@@ -89,6 +102,7 @@ class HostWebview implements Webview {
 /** Host-side WebviewPanel handle owned by the workbench editor tab. */
 class HostWebviewPanel implements WebviewPanel {
   readonly webview: HostWebview
+  readonly diffContext?: WebviewDiffContext
   private readonly _onDidDispose = new Emitter<void>()
   readonly onDidDispose: Event<void> = this._onDidDispose.event
   private _disposed = false
@@ -97,8 +111,10 @@ class HostWebviewPanel implements WebviewPanel {
     private readonly _panelHandle: number,
     readonly viewType: string,
     rpc: IMainThreadWebviews,
+    diffContext?: WebviewDiffContext,
   ) {
     this.webview = new HostWebview(_panelHandle, rpc)
+    if (diffContext) this.diffContext = diffContext
   }
 
   reveal(): void {
@@ -157,12 +173,18 @@ export class HostWebviewManager {
     panelHandle: number,
     viewType: string,
     uri: UriComponents,
+    diff?: IWebviewDiffContextDto,
   ): Promise<void> {
     const registered = this._providers.get(providerHandle)
     if (!registered) {
       throw new Error(`no custom-editor provider registered for handle ${providerHandle}`)
     }
-    const panel = new HostWebviewPanel(panelHandle, viewType, this._rpc)
+    const panel = new HostWebviewPanel(
+      panelHandle,
+      viewType,
+      this._rpc,
+      diff ? reviveDiffContext(diff) : undefined,
+    )
     this._panels.set(panelHandle, panel)
     const document = await registered.provider.openCustomDocument(uri)
     this._documents.set(panelHandle, document)

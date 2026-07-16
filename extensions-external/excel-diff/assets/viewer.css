@@ -1,0 +1,192 @@
+:root {
+  --bg: #1e1e1e;
+  --fg: #d4d4d4;
+  --border: #3c3c3c;
+  --header-bg: #252526;
+  --hover: #2a2d2e;
+  --added-bg: rgba(70, 149, 74, 0.28);
+  --removed-bg: rgba(180, 60, 60, 0.28);
+  --modified-bg: rgba(200, 160, 40, 0.22);
+  --cell-changed-bg: rgba(200, 160, 40, 0.5);
+  --accent: #0e639c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+  font-size: 12px;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+#toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--header-bg);
+}
+
+#toolbar .title {
+  font-weight: 600;
+}
+
+#toolbar .legend {
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
+  align-items: center;
+}
+
+#toolbar .legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#toolbar .swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+#toolbar button,
+#toolbar label {
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+#toolbar button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+  padding: 4px 8px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--header-bg);
+  overflow-x: auto;
+}
+
+#tabs .tab {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#tabs .tab.active {
+  background: var(--bg);
+  font-weight: 600;
+}
+
+#tabs .tab .badge {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--modified-bg);
+  font-size: 10px;
+}
+
+#tabs .tab.added .badge {
+  background: var(--added-bg);
+}
+#tabs .tab.removed .badge {
+  background: var(--removed-bg);
+}
+
+#grid {
+  flex: 1 1 auto;
+  overflow: auto;
+  position: relative;
+}
+
+table {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+}
+
+th,
+td {
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  text-align: left;
+  vertical-align: top;
+  white-space: pre;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+thead th {
+  position: sticky;
+  top: 0;
+  background: var(--header-bg);
+  z-index: 2;
+  text-align: center;
+  font-weight: 600;
+}
+
+.rownum {
+  position: sticky;
+  left: 0;
+  background: var(--header-bg);
+  z-index: 1;
+  text-align: right;
+  color: #888;
+  min-width: 44px;
+}
+
+tr.added td {
+  background: var(--added-bg);
+}
+tr.removed td {
+  background: var(--removed-bg);
+}
+tr.modified td.changed {
+  background: var(--cell-changed-bg);
+}
+tr.modified {
+  background: var(--modified-bg);
+}
+
+td.side-empty {
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 4px,
+    rgba(255, 255, 255, 0.04) 4px,
+    rgba(255, 255, 255, 0.04) 8px
+  );
+}
+
+.error {
+  padding: 20px;
+  color: #f48771;
+}

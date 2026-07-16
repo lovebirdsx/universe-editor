@@ -29,6 +29,16 @@ const EMPTY_SOURCE_CONTROLS: IObservable<readonly IScmSourceControlModel[]> = ob
   [],
 )
 
+/** The resource's extension incl. leading dot, lowercased (`.xlsx`), or '' when
+ *  none — matches VSCode's `resourceExtname` context key. */
+function extnameOf(resource: URI): string {
+  const path = resource.path
+  const slash = path.lastIndexOf('/')
+  const base = slash >= 0 ? path.slice(slash + 1) : path
+  const dot = base.lastIndexOf('.')
+  return dot > 0 ? base.slice(dot).toLowerCase() : ''
+}
+
 export interface ContextMenuState {
   readonly x: number
   readonly y: number
@@ -65,6 +75,9 @@ export function ExplorerContextMenu({
   const hasClipboard = tree?.hasClipboard ?? false
   const hasCutItems = tree?.hasCutItems ?? false
   const resourceScheme = resource.scheme
+  // The clicked file's extension incl. leading dot, lowercased (VSCode's
+  // `resourceExtname`), so extensions can gate Explorer menus by file type.
+  const resourceExtname = extnameOf(resource)
 
   // Which SCM provider(s) own this resource — so provider-specific Explorer
   // actions (e.g. Perforce checkout) only show inside that provider's workspace,
@@ -87,6 +100,7 @@ export function ExplorerContextMenu({
               explorerResourceIsFolder: isDirectory,
               explorerResourceIsRoot: isRoot,
               resourceScheme,
+              resourceExtname,
               resourceScmProvider,
               fileCopied: hasClipboard,
               explorerResourceCut: hasCutItems,
@@ -98,6 +112,7 @@ export function ExplorerContextMenu({
       isDirectory,
       isRoot,
       resourceScheme,
+      resourceExtname,
       resourceScmProvider,
       hasClipboard,
       hasCutItems,

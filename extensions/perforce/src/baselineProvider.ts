@@ -35,4 +35,19 @@ export class BaselineProvider {
       return print.exitCode === 0 ? print.stdout : undefined
     })
   }
+
+  /**
+   * Have-revision content of `localPath` as raw bytes, for binary files (e.g.
+   * xlsx) that a UTF-8 string baseline would corrupt. Not cached (binary blobs
+   * bypass the string `print` cache); returns undefined when there is no have rev.
+   */
+  async getHaveContentBytes(localPath: string): Promise<Buffer | undefined> {
+    const fstat = await this._p4.execRecords(['fstat', localPath])
+    if (fstat.result.exitCode !== 0) return undefined
+    const info = parseFstat(fstat.records)[0]
+    if (!info || !info.haveRev) return undefined
+    const spec = `${info.depotFile}#${info.haveRev}`
+    const print = await this._p4.execBinary(['print', '-q', spec])
+    return print.exitCode === 0 ? print.stdout : undefined
+  }
 }

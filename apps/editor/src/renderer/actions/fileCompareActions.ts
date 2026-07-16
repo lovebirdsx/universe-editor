@@ -10,6 +10,7 @@
 import {
   Action2,
   IDialogService,
+  IEditorResolverService,
   IEditorService,
   IFileService,
   localize,
@@ -20,23 +21,57 @@ import {
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import { ICompareService } from '../services/explorer/CompareService.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
+import { WebviewDiffInput } from '../services/editor/WebviewDiffInput.js'
 import { confirmLargeFile } from '../services/editor/largeFileGuard.js'
 import { sameUri } from '../services/explorer/explorerTreeUtils.js'
 import { implicitPrimaryTarget, resolvePrimaryTarget } from './fileActionsCommon.js'
+
+/** Last path segment of a URI, for diff tab labels. */
+function basenameOf(uri: URI): string {
+  const p = uri.path
+  const slash = p.lastIndexOf('/')
+  return slash >= 0 ? p.slice(slash + 1) : p
+}
 
 /**
  * Read both files (after a large-file guard on each) and open a cross-file diff
  * with `left` on the original side and `right` on the modified side. Snapshots
  * every service up front so the accessor is not used after the first await.
+ *
+ * When the right-hand resource resolves to a custom editor that declares
+ * `supportsDiff` (e.g. the Excel viewer for `.xlsx`), the comparison is handed to
+ * that editor as a WebviewDiffInput over the two sides' raw bytes; otherwise it
+ * falls back to the built-in Monaco text diff.
  */
 async function openFileDiff(accessor: ServicesAccessor, left: URI, right: URI): Promise<void> {
   const fileService = accessor.get(IFileService)
   const dialog = accessor.get(IDialogService)
   const editorService = accessor.get(IEditorService)
+  const editorResolver = accessor.get(IEditorResolverService)
   if (sameUri(left, right)) return
   if (!(await confirmLargeFile(left, fileService, dialog))) return
   if (!(await confirmLargeFile(right, fileService, dialog))) return
+
+  const custom = editorResolver.resolveEditors(right)[0]
   try {
+    if (custom?.info.supportsDiff && custom.info.viewType) {
+      const [leftBytes, rightBytes] = await Promise.all([
+        fileService.readFile(left),
+        fileService.readFile(right),
+      ])
+      editorService.openEditor(
+        new WebviewDiffInput(
+          custom.info.viewType,
+          left,
+          right,
+          leftBytes,
+          rightBytes,
+          `${basenameOf(left)} ↔ ${basenameOf(right)}`,
+        ),
+        { pinned: true },
+      )
+      return
+    }
     const [leftText, rightText] = await Promise.all([
       fileService.readFileText(left),
       fileService.readFileText(right),

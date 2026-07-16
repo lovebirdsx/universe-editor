@@ -28,6 +28,7 @@ import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
 import { ExtensionEditorInput } from '../services/editor/ExtensionEditorInput.js'
 import { CustomEditorInput } from '../services/editor/CustomEditorInput.js'
+import { WebviewDiffInput } from '../services/editor/WebviewDiffInput.js'
 import { SchemaViewerInput } from '../services/editor/SchemaViewerInput.js'
 import { StartupPerformanceInput } from '../services/editor/StartupPerformanceInput.js'
 import { TerminalEditorInput } from '../services/editor/TerminalEditorInput.js'
@@ -77,6 +78,15 @@ export class BuiltInEditorProvidersContribution
         typeId: CustomEditorInput.TYPE_ID,
         componentKey: 'customEditor',
         deserialize: (data) => CustomEditorInput.deserialize(data),
+      }),
+    )
+    // Transient like DiffEditorInput — holds the two sides' bytes in memory (a
+    // Git HEAD blob / Perforce have-revision has no on-disk file), so no
+    // deserialize: a webview diff tab is dropped on window restore.
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: WebviewDiffInput.TYPE_ID,
+        componentKey: 'webviewDiff',
       }),
     )
     // Transient read-only schema viewer — no deserialize: it carries in-memory

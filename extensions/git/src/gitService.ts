@@ -81,6 +81,39 @@ export function gitExec(
   })
 }
 
+/**
+ * Like {@link gitExec} but returns stdout as raw bytes, for binary blobs (e.g.
+ * `git show HEAD:file.xlsx`) that UTF-8 decoding would corrupt. Resolves the byte
+ * buffer with the exit code; stderr is still decoded as text for diagnostics.
+ */
+export function gitExecBinary(
+  args: readonly string[],
+  cwd: string,
+  log?: (msg: string) => void,
+): Promise<{ stdout: Buffer; stderr: string; exitCode: number }> {
+  return new Promise((resolve, reject) => {
+    log?.(`> git ${args.join(' ')}`)
+    const proc = spawn('git', [...args], {
+      cwd,
+      env: sanitizeEnv(),
+      windowsHide: true,
+      shell: false,
+    })
+    const stdout: Buffer[] = []
+    const stderr: Buffer[] = []
+    proc.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
+    proc.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
+    proc.on('error', reject)
+    proc.on('close', (code) => {
+      resolve({
+        stdout: Buffer.concat(stdout),
+        stderr: Buffer.concat(stderr).toString('utf8'),
+        exitCode: code ?? 0,
+      })
+    })
+  })
+}
+
 /** Absolute path of the repository containing `cwd`, or undefined if none. */
 export async function detectRepoRoot(cwd: string): Promise<string | undefined> {
   try {

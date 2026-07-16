@@ -174,6 +174,46 @@ export class P4Service {
     return { result, records: parseZtag(result.stdout) }
   }
 
+  /**
+   * Run `p4 <args>` and resolve with stdout as raw bytes, for binary files (e.g.
+   * `p4 print` of an xlsx) that UTF-8 decoding would corrupt. Same connection
+   * globals + concurrency gate as {@link exec}; stderr decoded as text.
+   */
+  execBinary(
+    args: readonly string[],
+    options?: P4ExecOptions,
+  ): Promise<{ stdout: Buffer; stderr: string; exitCode: number }> {
+    const globals = options?.noConnection ? [] : connectionArgs(this._connection)
+    const full = [...globals, ...args]
+    return this._gate.run(
+      () =>
+        new Promise((resolve, reject) => {
+          const { command, prefixArgs } = resolveP4Command()
+          this._log?.(`> p4 ${full.join(' ')} (binary)`)
+          const env = sanitizeEnv()
+          if (command === process.execPath) env.ELECTRON_RUN_AS_NODE = '1'
+          const proc = spawn(command, [...prefixArgs, ...full], {
+            cwd: this._cwd,
+            env,
+            windowsHide: true,
+            shell: false,
+          })
+          const stdout: Buffer[] = []
+          const stderr: Buffer[] = []
+          proc.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
+          proc.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
+          proc.on('error', reject)
+          proc.on('close', (code) => {
+            resolve({
+              stdout: Buffer.concat(stdout),
+              stderr: Buffer.concat(stderr).toString('utf8'),
+              exitCode: code ?? 0,
+            })
+          })
+        }),
+    )
+  }
+
   private _spawn(args: readonly string[], options?: P4ExecOptions): Promise<P4ExecResult> {
     return new Promise((resolve, reject) => {
       const { command, prefixArgs } = resolveP4Command()

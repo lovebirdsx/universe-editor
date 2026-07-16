@@ -54,6 +54,7 @@ editorComponentMap.set('swarmReview', SwarmReviewEditor)
 editorComponentMap.set('swarmDiff', SwarmDiffEditor)
 editorComponentMap.set('extensionDetail', ExtensionEditor)
 editorComponentMap.set('customEditor', CustomEditorHost)
+editorComponentMap.set('webviewDiff', CustomEditorHost)
 editorComponentMap.set(
   'terminal.editor',
   TerminalEditorView as ComponentType<{ input: IEditorInput }>,

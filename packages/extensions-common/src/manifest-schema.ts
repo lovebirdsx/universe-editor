@@ -73,6 +73,7 @@ const customEditorSchema = z.object({
   displayName: z.string().min(1),
   selector: z.array(customEditorSelectorSchema).min(1),
   priority: z.enum(['default', 'option']).optional(),
+  supportsDiff: z.boolean().optional(),
 })
 
 const contributesSchema = z

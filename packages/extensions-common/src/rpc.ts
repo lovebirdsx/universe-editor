@@ -524,6 +524,22 @@ export interface IWebviewOptionsDto {
 }
 
 /**
+ * Two versions of a resource to compare, crossing the wire when the workbench
+ * opens a custom editor as a diff (`_workbench.openWebviewDiff`). Content bytes
+ * are base64-encoded so the payload stays JSON-safe across ProxyChannel. Mirrors
+ * the public `WebviewDiffContext` (bytes decoded back to `Uint8Array` host-side).
+ */
+export interface IWebviewDiffContextDto {
+  readonly leftUri: UriComponents
+  readonly rightUri: UriComponents
+  /** Base64-encoded bytes of the left-hand (baseline) side. */
+  readonly leftBase64: string
+  /** Base64-encoded bytes of the right-hand (modified) side. */
+  readonly rightBase64: string
+  readonly title: string
+}
+
+/**
  * Ext host → exposed to the renderer: custom-editor provider registration and
  * per-panel webview control. Providers are addressed by `providerHandle`
  * (allocated by the host at `registerCustomEditorProvider`); live panels by
@@ -561,6 +577,7 @@ export interface IExtHostWebviews {
     panelHandle: number,
     viewType: string,
     uri: UriComponents,
+    diff?: IWebviewDiffContextDto,
   ): Promise<void>
   /** A message the webview scripts posted back, relayed to the panel's listener. */
   $onDidReceiveMessage(panelHandle: number, message: unknown): Promise<void>

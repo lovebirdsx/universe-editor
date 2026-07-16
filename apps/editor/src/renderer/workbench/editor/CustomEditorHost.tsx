@@ -7,8 +7,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useState } from 'react'
-import { localize, type IEditorInput } from '@universe-editor/platform'
-import { customEditorActivationEvent } from '@universe-editor/extensions-common'
+import { localize, URI, type IEditorInput } from '@universe-editor/platform'
+import {
+  customEditorActivationEvent,
+  type IWebviewDiffContextDto,
+} from '@universe-editor/extensions-common'
 import { useService } from '../useService.js'
 import {
   IWebviewService,
@@ -16,17 +19,48 @@ import {
 } from '../../services/extensions/WebviewService.js'
 import { IExtensionHostClientService } from '../../services/extensions/ExtensionHostClientService.js'
 import { CustomEditorInput } from '../../services/editor/CustomEditorInput.js'
+import { WebviewDiffInput } from '../../services/editor/WebviewDiffInput.js'
 import { WebviewElement } from '../webview/WebviewElement.js'
 import styles from './CustomEditorHost.module.css'
 
+/** Base64-encode bytes for the JSON-safe diff DTO carried over RPC. */
+function toBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!)
+  return btoa(binary)
+}
+
+/** Normalize either custom-editor input type into what the panel open needs. */
+function resolveOpenArgs(input: IEditorInput): {
+  viewType: string
+  resource: URI
+  diff?: IWebviewDiffContextDto
+} {
+  if (input instanceof WebviewDiffInput) {
+    return {
+      viewType: input.viewType,
+      resource: input.rightUri,
+      diff: {
+        leftUri: input.leftUri.toJSON(),
+        rightUri: input.rightUri.toJSON(),
+        leftBase64: toBase64(input.left),
+        rightBase64: toBase64(input.right),
+        title: input.title,
+      },
+    }
+  }
+  const custom = input as CustomEditorInput
+  return { viewType: custom.viewType, resource: custom.resource }
+}
+
 export function CustomEditorHost({ input }: { input: IEditorInput }) {
-  const customInput = input as CustomEditorInput
   const webviewService = useService(IWebviewService)
   const extensionHost = useService(IExtensionHostClientService)
   const [panel, setPanel] = useState<IWebviewPanelModel | null>(null)
   const [failed, setFailed] = useState(false)
 
   useEffect(() => {
+    const { viewType, resource, diff } = resolveOpenArgs(input)
     let opened: IWebviewPanelModel | undefined
     setFailed(false)
     setPanel(null)
@@ -37,7 +71,7 @@ export function CustomEditorHost({ input }: { input: IEditorInput }) {
     // — without this the extension never activates, no provider registers, and the
     // restored tab stays blank. Activation is idempotent, so the normal path is
     // unaffected. The provider then arrives via onDidChangeProviders (retry below).
-    void extensionHost.activateByEvent(customEditorActivationEvent(customInput.viewType))
+    void extensionHost.activateByEvent(customEditorActivationEvent(viewType))
 
     // The provider registers asynchronously: opening the file fires the
     // `onCustomEditor:` activation event, the extension activates in the host,
@@ -45,7 +79,7 @@ export function CustomEditorHost({ input }: { input: IEditorInput }) {
     // retry whenever the provider set changes, giving up only if the extension
     // never registers a provider for this viewType.
     const tryOpen = (): boolean => {
-      opened = webviewService.openPanel(customInput.viewType, customInput.resource)
+      opened = webviewService.openPanel(viewType, resource, diff)
       if (opened) {
         setPanel(opened)
         return true
@@ -73,7 +107,7 @@ export function CustomEditorHost({ input }: { input: IEditorInput }) {
       if (opened) webviewService.closePanel(opened.panelHandle)
       setPanel(null)
     }
-  }, [webviewService, extensionHost, customInput])
+  }, [webviewService, extensionHost, input])
 
   return (
     <div className={styles['customEditorRoot']} data-testid="custom-editor">

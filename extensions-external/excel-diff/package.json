@@ -1,0 +1,43 @@
+{
+  "name": "universe-excel-diff",
+  "displayName": "Excel Viewer & Diff",
+  "description": "Preview Excel/CSV spreadsheets inside the editor and diff two versions cell-by-cell (SheetJS). Works with the Explorer compare commands and with Git / Perforce version comparison.",
+  "version": "0.1.0",
+  "publisher": "universe",
+  "license": "Apache-2.0",
+  "type": "module",
+  "icon": "icon.png",
+  "categories": ["Content Tools"],
+  "keywords": ["excel", "xlsx", "csv", "spreadsheet", "diff", "compare", "custom editor"],
+  "main": "dist/extension.js",
+  "engines": {
+    "universe": ">=0.4.0 <1.0.0"
+  },
+  "files": ["dist", "assets", "icon.png"],
+  "activationEvents": ["onCustomEditor:universe.excel"],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "universe.excel",
+        "displayName": "Excel Viewer",
+        "selector": [
+          { "filenamePattern": "*.xlsx" },
+          { "filenamePattern": "*.xls" },
+          { "filenamePattern": "*.xlsm" },
+          { "filenamePattern": "*.csv" }
+        ],
+        "priority": "default",
+        "supportsDiff": true
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "node esbuild.config.mjs && node scripts/pack.mjs"
+  },
+  "dependencies": {
+    "xlsx": "0.18.5"
+  }
+}

@@ -132,7 +132,13 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
       store.add(
         this._editorResolver.registerEditor(
           glob,
-          { typeId: CustomEditorInput.TYPE_ID, displayName: editor.displayName, priority },
+          {
+            typeId: CustomEditorInput.TYPE_ID,
+            displayName: editor.displayName,
+            priority,
+            viewType: editor.viewType,
+            supportsDiff: editor.supportsDiff ?? false,
+          },
           (uri) => {
             void this._client.activateByEvent(customEditorActivationEvent(editor.viewType))
             return this._instantiation.createInstance(CustomEditorInput, editor.viewType, uri)

@@ -17,11 +17,19 @@ export interface IEditorResolverInfo {
    * Defaults to 1 if not provided.
    */
   priority?: number
+  /**
+   * For custom-editor registrations: the extension's `viewType`. All custom
+   * editors share one `typeId`, so this carries the specific view identity that
+   * diff dispatch needs to build a WebviewDiffInput.
+   */
+  viewType?: string
+  /** True when this editor can render a two-content comparison (see manifest `supportsDiff`). */
+  supportsDiff?: boolean
 }
 
 export interface IEditorResolverRegistration {
   readonly glob: string
-  readonly info: Required<IEditorResolverInfo>
+  readonly info: IEditorResolverInfo & { readonly priority: number }
   readonly factory: (uri: URI) => EditorInput
 }
 
