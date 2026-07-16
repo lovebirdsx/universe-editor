@@ -352,7 +352,21 @@ export class WindowMainService implements IWindowMainService {
       if (this._allowClose.has(win.id)) {
         // Cleared: flush pending workspace writes before teardown, otherwise
         // debounced persistence (e.g. editor-group state) can be lost on close.
-        void windowStorage.flush().finally(() => disposables.dispose())
+        const tasks: Promise<void>[] = [windowStorage.flush()]
+        // Capture this window's FINAL geometry into the session now, while it is
+        // still live and registered. `close` is the last synchronous moment the
+        // window's bounds/fullscreen state are readable (captureWindowState fails
+        // once destroyed). Without this, closing the last window loses its final
+        // fullscreen/maximized state: the trackWindowState debounce is cancelled
+        // by dispose() below, the closed handler skips persist at size 0, and
+        // captureSessionForQuit is likewise a no-op — so the restore list keeps a
+        // stale pre-fullscreen snapshot. The synchronous capture inside
+        // _persistSessionNow runs before the window is torn down; only the write
+        // is async. Skip while quitting: captureSessionForQuit already snapshotted
+        // the full window set, and per-window persist here could race the closed
+        // handlers into shrinking that list.
+        if (!this._quitting) tasks.push(this._persistSessionNow())
+        void Promise.all(tasks).finally(() => disposables.dispose())
         return
       }
       e.preventDefault()
