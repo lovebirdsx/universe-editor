@@ -47,6 +47,8 @@ import {
   writeEnablement,
   readObsolete,
   writeObsolete,
+  deleteExtensionFolder,
+  sweepDeletedFolders,
   type IInstalledExtensionRecord,
 } from './installedExtensionsManifest.js'
 
@@ -255,10 +257,13 @@ export class ExtensionManagementMainService
 
     await fs.mkdir(dir, { recursive: true })
 
-    // Idempotent: same id+version already installed and on disk → return it.
+    // Idempotent for a local .vsix: same id+version already on disk → return it.
+    // Gallery reinstalls deliberately fall through and overwrite: a dev rebuild
+    // keeps the version but changes dist/, and the user clicking reinstall expects
+    // the new bits, not a short-circuit to the stale folder.
     const records = await readInstalledRecords(dir)
     const existing = records.find((r) => r.identifier === id && r.version === version)
-    if (existing && (await pathExists(targetDir))) {
+    if (source === 'vsix' && existing && (await pathExists(targetDir))) {
       this._logger.info(`extension ${id}@${version} already installed`)
       return toLocalExtension(existing, targetDir, manifest)
     }
@@ -270,8 +275,9 @@ export class ExtensionManagementMainService
     try {
       await fs.mkdir(tmpDir, { recursive: true })
       await extractVsix(vsixPath, tmpDir)
-      // If a stale folder exists (same version reinstall after partial state), drop it.
-      await fs.rm(targetDir, { recursive: true, force: true })
+      // A stale folder (same-version overwrite) is renamed out of the way before
+      // the atomic rename-in, so a concurrent host rescan can't re-adopt it.
+      await deleteExtensionFolder(dir, location)
       await fs.rename(tmpDir, targetDir)
     } catch (err) {
       await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined)
@@ -326,14 +332,15 @@ export class ExtensionManagementMainService
     const next = records.filter((r) => r.identifier !== identifier)
     await writeInstalledRecords(dir, next)
 
-    const targetDir = path.join(dir, record.location)
-    try {
-      await fs.rm(targetDir, { recursive: true, force: true })
+    // Rename-then-delete: the folder name disappears atomically so a host rescan
+    // (fired by _notifyChanged below) can't re-adopt a half-deleted directory.
+    // Only if even the rename fails do we fall back to an obsolete mark for the
+    // startup sweep.
+    if (await deleteExtensionFolder(dir, record.location)) {
       this._logger.info(`uninstalled extension ${identifier}`)
-    } catch (err) {
-      // Windows may hold the files open (extension running); mark for later sweep.
+    } else {
       this._logger.warn(
-        `uninstall ${identifier}: could not remove folder now, marking obsolete: ${(err as Error).message}`,
+        `uninstall ${identifier}: could not remove folder now, marking obsolete for next start`,
       )
       const marks = await readObsolete(dir)
       marks[record.location] = true
@@ -475,6 +482,8 @@ export class ExtensionManagementMainService
   /** Delete every folder still marked obsolete; drop the ones we manage to remove. */
   private async _sweepObsolete(): Promise<void> {
     const dir = this._resolveDir()
+    // Collect any `.vsctmp` folders left by an interrupted rename-then-delete.
+    await sweepDeletedFolders(dir)
     const marks = await readObsolete(dir)
     const remaining: typeof marks = {}
     let changed = false

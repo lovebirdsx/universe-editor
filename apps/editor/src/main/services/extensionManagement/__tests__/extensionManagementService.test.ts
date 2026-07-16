@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, writeFile, mkdir, stat } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, mkdir, stat, readFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import AdmZip from 'adm-zip'
@@ -7,6 +7,7 @@ import {
   ExtensionManagementMainService,
   type IManagementGallery,
 } from '../extensionManagementService.js'
+import { deleteExtensionFolder, sweepDeletedFolders } from '../installedExtensionsManifest.js'
 
 const HOST_API = '0.1.0'
 
@@ -23,10 +24,15 @@ function manifest(overrides: Record<string, unknown> = {}): Record<string, unkno
 }
 
 /** Write a VSIX file with the given manifest + an entry file, return its path. */
-async function makeVsix(dir: string, name: string, m: Record<string, unknown>): Promise<string> {
+async function makeVsix(
+  dir: string,
+  name: string,
+  m: Record<string, unknown>,
+  entrySource = 'module.exports={}',
+): Promise<string> {
   const zip = new AdmZip()
   zip.addFile('extension/package.json', Buffer.from(JSON.stringify(m)))
-  zip.addFile('extension/dist/extension.js', Buffer.from('module.exports={}'))
+  zip.addFile('extension/dist/extension.js', Buffer.from(entrySource))
   const p = path.join(dir, name)
   await writeFile(p, zip.toBuffer())
   return p
@@ -94,6 +100,18 @@ describe('ExtensionManagementMainService', () => {
     const again = await svc.installVSIX(vsix)
     expect(again.identifier).toBe('acme.sample')
     expect(await svc.getInstalled()).toHaveLength(1)
+  })
+
+  it('uninstall removes the folder from disk without leaving a .vsctmp residue', async () => {
+    const vsix = await makeVsix(root, 'sample.vsix', manifest())
+    await svc.installVSIX(vsix)
+    await svc.uninstall('acme.sample')
+
+    expect(await exists(path.join(extDir, 'acme.sample-1.0.0'))).toBe(false)
+    // No leftover .obsolete mark and no half-deleted rename-target folder.
+    expect(await exists(path.join(extDir, '.obsolete'))).toBe(false)
+    const leftovers = (await readdir(extDir)).filter((n) => n.endsWith('.vsctmp'))
+    expect(leftovers).toEqual([])
   })
 
   it('rejects an extension incompatible with the host API version', async () => {
@@ -188,6 +206,29 @@ describe('ExtensionManagementMainService — gallery install', () => {
 
     const list = await svc.getInstalled()
     expect(list[0]?.source).toBe('gallery')
+    svc.dispose()
+  })
+
+  it('reinstalling the same gallery version overwrites the on-disk contents', async () => {
+    // A dev rebuild keeps the version number but changes dist/extension.js. The
+    // user reinstalls from the gallery expecting the new bits — the old idempotent
+    // short-circuit returned early and left the stale code on disk.
+    let entry = 'OLD-BITS'
+    const gallery: IManagementGallery = {
+      download: async () => makeVsix(root, `download-${entry}.vsix`, manifest(), entry),
+      getControlManifest: async () => ({ malicious: [] }),
+      getExtensions: async () => [],
+    }
+    const svc = new ExtensionManagementMainService(() => extDir, HOST_API, gallery)
+
+    await svc.installFromGallery(galleryExtension())
+    const entryPath = path.join(extDir, 'acme.sample-1.0.0', 'dist', 'extension.js')
+    expect(await readFile(entryPath, 'utf8')).toBe('OLD-BITS')
+
+    entry = 'NEW-BITS'
+    await svc.installFromGallery(galleryExtension())
+    expect(await readFile(entryPath, 'utf8')).toBe('NEW-BITS')
+    expect(await svc.getInstalled()).toHaveLength(1)
     svc.dispose()
   })
 
@@ -340,5 +381,38 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
     )
     expect(await svc2.listBuiltinExtensions()).toEqual([])
     svc2.dispose()
+  })
+})
+
+describe('deleteExtensionFolder / sweepDeletedFolders', () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'ext-del-'))
+  })
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  it('renames-then-deletes a folder, leaving no residue', async () => {
+    const loc = 'acme.sample-1.0.0'
+    await mkdir(path.join(dir, loc, 'dist'), { recursive: true })
+    await writeFile(path.join(dir, loc, 'dist', 'extension.js'), 'x')
+
+    const ok = await deleteExtensionFolder(dir, loc)
+    expect(ok).toBe(true)
+    const remaining = await readdir(dir)
+    expect(remaining).toEqual([])
+  })
+
+  it('reports success when the folder is already gone', async () => {
+    expect(await deleteExtensionFolder(dir, 'not-here-1.0.0')).toBe(true)
+  })
+
+  it('sweeps leftover .vsctmp folders', async () => {
+    await mkdir(path.join(dir, 'acme.sample-1.0.0.abc123.vsctmp'), { recursive: true })
+    await mkdir(path.join(dir, 'keep-1.0.0'), { recursive: true })
+    await sweepDeletedFolders(dir)
+    expect((await readdir(dir)).sort()).toEqual(['keep-1.0.0'])
   })
 })

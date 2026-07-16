@@ -10,18 +10,20 @@ import {
   languages,
   window,
   workspace,
+  StatusBarAlignment,
   type CodeAction,
   type CodeActionContext,
   type ExtensionContext,
   type OutputChannel,
   type Range,
+  type StatusBarItem,
   type TextDocument,
   type TextEdit,
   type UriComponents,
 } from '@universe-editor/extension-api'
 import { URI } from 'vscode-uri'
 import { EslintClient, type PublishDiagnosticsEvent } from './eslintClient.js'
-import { type EslintSettings } from './protocol.js'
+import { type EslintLogLevel, type EslintSettings, type EslintStatus } from './protocol.js'
 
 /** Languages we register providers for (superset of the default validate list;
  *  the server still gates on the effective `eslint.validate` setting). */
@@ -79,22 +81,52 @@ export async function activate(context: ExtensionContext): Promise<void> {
   }
 
   const output = window.createOutputChannel('ESLint')
+  const log = makeLogger(output)
+  const status = window.createStatusBarItem(StatusBarAlignment.Right, 0)
+  status.command = 'eslint.showOutputChannel'
+  applyStatus(status, 'ok')
+
   const serverModule = `${context.extensionPath}/dist/server.js`
   const rootUri = workspace.rootPath ? URI.file(workspace.rootPath).toString() : null
 
   const settings = await loadSettings()
   const diagnostics = languages.createDiagnosticCollection('eslint')
-  const client = new EslintClient(serverModule, rootUri, settings, (e: PublishDiagnosticsEvent) => {
-    diagnostics.set(uriComponents(e.uri), e.diagnostics)
+  const client = new EslintClient(serverModule, rootUri, settings, {
+    onDiagnostics: (e: PublishDiagnosticsEvent) => {
+      diagnostics.set(uriComponents(e.uri), e.diagnostics)
+    },
+    log,
+    onStatus: (s: EslintStatus, message?: string) => applyStatus(status, s, message),
   })
 
-  context.subscriptions.push(output, diagnostics, { dispose: () => client.dispose() })
-  output.appendLine(`ESLint server module: ${serverModule}`)
+  context.subscriptions.push(output, status, diagnostics, { dispose: () => client.dispose() })
+  log('info', `activating ESLint extension (root=${rootUri ?? '(none)'})`)
+  log('info', `server module: ${serverModule}`)
+  log('info', `settings: run=${settings.run}, validate=[${settings.validate.join(', ')}]`)
 
   registerDocumentSync(context, client)
   registerCodeActions(context, client)
   registerCommands(context, client, output)
-  await registerFormattingAndSave(context, client)
+  await registerFormattingAndSave(context, client, log)
+}
+
+/** Two-digit-padded `HH:MM:SS` prefix so channel lines read like a real log. */
+function makeLogger(output: OutputChannel): (level: EslintLogLevel, message: string) => void {
+  const pad = (n: number): string => (n < 10 ? `0${n}` : `${n}`)
+  return (level, message) => {
+    const d = new Date()
+    const ts = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    output.appendLine(`[${ts}] [${level}] ${message}`)
+  }
+}
+
+/** Map a coarse status to the status-bar item's text/tooltip (a click opens the
+ *  output channel). Uses `$(icon)` glyph syntax the workbench renders. */
+function applyStatus(item: StatusBarItem, status: EslintStatus, message?: string): void {
+  const glyph = status === 'ok' ? '$(check)' : status === 'warn' ? '$(warning)' : '$(error)'
+  item.text = `${glyph} ESLint`
+  item.tooltip = message ?? 'ESLint — click to open the output channel'
+  item.show()
 }
 
 function registerDocumentSync(context: ExtensionContext, client: EslintClient): void {
@@ -169,12 +201,15 @@ function registerCommands(
 async function registerFormattingAndSave(
   context: ExtensionContext,
   client: EslintClient,
+  log: (level: EslintLogLevel, message: string) => void,
 ): Promise<void> {
   const cfg = workspace.getConfiguration('eslint')
   const [formatEnable, codeActionsOnSave] = await Promise.all([
     cfg.get<boolean>('format.enable', false),
     cfg.get<boolean>('codeActionsOnSave.enable', false),
   ])
+
+  log('info', `format.enable=${formatEnable}, codeActionsOnSave.enable=${codeActionsOnSave}`)
 
   if (formatEnable) {
     context.subscriptions.push(

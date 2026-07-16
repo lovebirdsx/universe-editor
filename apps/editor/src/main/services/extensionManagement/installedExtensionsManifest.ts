@@ -10,11 +10,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { promises as fs } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import type {
   ExtensionInstallSource,
   IExtensionGalleryMetadata,
 } from '../../../shared/ipc/extensionManagementService.js'
+
+/**
+ * Suffix for a folder that has been renamed out of the way for deletion. The
+ * extension scanner ignores these, so a slow / retried `rm` can't be re-adopted
+ * by a host rescan in the meantime. Mirrors VSCode's `.vsctmp` postfix.
+ */
+export const DELETED_FOLDER_POSTFIX = '.vsctmp'
 
 /** One entry in `extensions.json` `installed[]`. */
 export interface IInstalledExtensionRecord {
@@ -142,4 +150,44 @@ export async function writeObsolete(dir: string, marks: ObsoleteMarks): Promise<
   const normalized: ObsoleteMarks = {}
   for (const k of entries) normalized[k] = true
   await writeJsonAtomic(obsoletePath(dir), normalized)
+}
+
+/**
+ * Remove an installed extension's folder from disk with a rename-then-delete so a
+ * concurrent host rescan can never re-adopt a half-deleted directory: the folder
+ * is first renamed to `<location>.<hash>.vsctmp` (atomic — the original name
+ * disappears at once, and the scanner skips `.vsctmp`), then the renamed copy is
+ * removed. Returns true on success. If even the rename fails (folder genuinely
+ * locked), the caller falls back to an `.obsolete` mark for a startup sweep.
+ */
+export async function deleteExtensionFolder(dir: string, location: string): Promise<boolean> {
+  const target = path.join(dir, location)
+  const renamed = path.join(dir, `${location}.${randomUUID().slice(0, 8)}${DELETED_FOLDER_POSTFIX}`)
+  try {
+    await fs.rename(target, renamed)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return true // already gone
+    return false
+  }
+  // The original name is already gone; a failed rm here only leaks a .vsctmp
+  // folder, which the startup sweep collects. Treat the uninstall as done.
+  await fs.rm(renamed, { recursive: true, force: true }).catch(() => undefined)
+  return true
+}
+
+/** Delete every `*.vsctmp` folder left behind by an interrupted rename-then-delete. */
+export async function sweepDeletedFolders(dir: string): Promise<void> {
+  let entries: string[]
+  try {
+    entries = await fs.readdir(dir)
+  } catch {
+    return
+  }
+  await Promise.all(
+    entries
+      .filter((name) => name.endsWith(DELETED_FOLDER_POSTFIX))
+      .map((name) =>
+        fs.rm(path.join(dir, name), { recursive: true, force: true }).catch(() => undefined),
+      ),
+  )
 }

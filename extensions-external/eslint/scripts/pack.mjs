@@ -29,7 +29,7 @@ zip.addFile('extension.vsixmanifest', Buffer.from('<PackageManifest/>'))
 
 // The client only reads `extension/**`; ship exactly what package.json lists.
 zip.addLocalFile(resolve(extRoot, 'package.json'), 'extension')
-zip.addLocalFile(resolve(extRoot, 'icon.svg'), 'extension')
+zip.addLocalFile(resolve(extRoot, 'icon.png'), 'extension')
 zip.addLocalFolder(resolve(extRoot, 'dist'), 'extension/dist')
 // NLS bundles (localized command titles / config descriptions) + README.
 for (const rel of ['package.nls.json', 'package.nls.zh-cn.json', 'README.md']) {

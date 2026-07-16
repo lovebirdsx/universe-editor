@@ -54,6 +54,15 @@ describe('scanExtensions', () => {
     expect(ids).toEqual(['good'])
   })
 
+  it('skips a folder being deleted (.vsctmp rename target)', async () => {
+    await writeExtension('good', goodManifest)
+    // A rename-then-delete in progress leaves a `<id>-<ver>.<hash>.vsctmp` folder
+    // that still has a valid manifest; the scanner must not re-adopt it.
+    await writeExtension('acme.sample-1.0.0.abc123.vsctmp', { ...goodManifest, name: 'stale' })
+    const ids = (await scanExtensions(dir)).map((e) => e.id)
+    expect(ids).toEqual(['good'])
+  })
+
   it('omits mainPath for a declaration-only extension', async () => {
     const { main: _omit, ...noMain } = goodManifest
     await writeExtension('decl', noMain)

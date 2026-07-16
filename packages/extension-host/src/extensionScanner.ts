@@ -39,6 +39,14 @@ function extensionId(manifest: IExtensionManifest): string {
 }
 
 /**
+ * Suffix of a folder renamed out of the way for deletion (see the management
+ * service's rename-then-delete). Such a folder still holds a valid manifest, so
+ * it must be skipped or a rescan mid-uninstall would re-adopt it. Kept in sync
+ * with `DELETED_FOLDER_POSTFIX` in installedExtensionsManifest.ts.
+ */
+const DELETED_FOLDER_POSTFIX = '.vsctmp'
+
+/**
  * Resolve every `contributes.jsonValidation` entry. Local schema files are read +
  * parsed into an inline schema (Monaco's JSON worker can't fetch files); http(s)
  * urls are passed through verbatim for the renderer to download. A single bad
@@ -123,6 +131,9 @@ export async function scanExtensions(
   const result: IScannedExtension[] = []
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
+    // A `.vsctmp` folder is a deletion in progress — skip it so a rescan racing
+    // an uninstall doesn't re-adopt the extension being removed.
+    if (entry.name.endsWith(DELETED_FOLDER_POSTFIX)) continue
     const extensionPath = path.join(dir, entry.name)
     try {
       result.push(await scanOne(extensionPath, hostApiVersion, locale))

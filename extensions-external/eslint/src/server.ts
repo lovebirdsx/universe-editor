@@ -22,11 +22,15 @@ import {
   type DidOpenParams,
   type DidSaveParams,
   type EslintCodeAction,
+  type EslintLogLevel,
   type EslintSettings,
+  type EslintStatus,
   type FixAllParams,
   type FixAllResult,
   type InitializeParams,
+  type LogMessageParams,
   type PublishDiagnosticsParams,
+  type StatusParams,
   type UpdateSettingsParams,
 } from './protocol.js'
 import {
@@ -61,10 +65,19 @@ class EslintServer {
   constructor(private readonly _conn: MessageConnection) {
     _conn.onRequest(EslintMethods.initialize, (p: InitializeParams) => {
       this._settings = p.settings
+      this._log(
+        'info',
+        `server initialized (run=${p.settings.run}, validate=[${p.settings.validate.join(', ')}])`,
+      )
+      this._status('ok')
       return { ok: true }
     })
     _conn.onNotification(EslintMethods.updateSettings, (p: UpdateSettingsParams) => {
       this._settings = p.settings
+      this._log(
+        'info',
+        `settings updated (run=${p.settings.run}, validate=[${p.settings.validate.join(', ')}])`,
+      )
       // Re-lint everything open so a validate/options change takes effect at once.
       for (const uri of this._open.keys()) void this._lintAndPublish(uri)
     })
@@ -103,7 +116,13 @@ class EslintServer {
     if (this._ctorByDir.has(dir)) return this._ctorByDir.get(dir)
     const ctor = await resolveEslintConstructor(dir)
     this._ctorByDir.set(dir, ctor)
-    if (!ctor) console.error(`[eslint][server] no eslint resolvable from ${dir}`)
+    if (ctor) {
+      this._log('info', `resolved ESLint from ${dir}`)
+      this._status('ok')
+    } else {
+      this._log('warn', `no ESLint resolvable from ${dir} (install eslint in the workspace)`)
+      this._status('warn', `No ESLint library found near ${dir}`)
+    }
     return ctor
   }
 
@@ -122,9 +141,11 @@ class EslintServer {
     try {
       const eslint: EslintApi = new Ctor(this._settings.options)
       const { diagnostics } = await lintDocument(eslint, doc.text, filePath)
+      this._log('info', `linted ${filePath}: ${diagnostics.length} problem(s)`)
       this._publish({ uri, diagnostics })
     } catch (err) {
-      console.error(`[eslint][server] lint failed for ${uri}: ${(err as Error).message}`)
+      this._log('error', `lint failed for ${filePath}: ${(err as Error).message}`)
+      this._status('error', `Lint failed: ${(err as Error).message}`)
     }
   }
 
@@ -150,7 +171,7 @@ class EslintServer {
       }
       return actions
     } catch (err) {
-      console.error(`[eslint][server] codeAction failed for ${p.uri}: ${(err as Error).message}`)
+      this._log('error', `codeAction failed for ${filePath}: ${(err as Error).message}`)
       return []
     }
   }
@@ -166,7 +187,7 @@ class EslintServer {
       const edits = await computeFixAll(Ctor, this._settings.options, doc.text, filePath)
       return { edits }
     } catch (err) {
-      console.error(`[eslint][server] fixAll failed for ${p.uri}: ${(err as Error).message}`)
+      this._log('error', `fixAll failed for ${filePath}: ${(err as Error).message}`)
       return { edits: [] }
     }
   }
@@ -176,6 +197,16 @@ class EslintServer {
       .sendNotification(EslintMethods.publishDiagnostics, params)
       .catch(() => undefined)
   }
+
+  private _log(level: EslintLogLevel, message: string): void {
+    const params: LogMessageParams = { level, message }
+    void this._conn.sendNotification(EslintMethods.logMessage, params).catch(() => undefined)
+  }
+
+  private _status(status: EslintStatus, message?: string): void {
+    const params: StatusParams = message !== undefined ? { status, message } : { status }
+    void this._conn.sendNotification(EslintMethods.status, params).catch(() => undefined)
+  }
 }
 
 const connection = createMessageConnection(
@@ -184,4 +215,6 @@ const connection = createMessageConnection(
 )
 new EslintServer(connection)
 connection.listen()
-console.error('[eslint][server] started')
+// Pre-handshake liveness marker; the client forwards server stderr to the
+// ESLint output channel, so this confirms the subprocess actually spawned.
+console.error('[eslint][server] process started, awaiting initialize')

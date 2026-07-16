@@ -76,6 +76,7 @@ const MIME = {
   '.blockmap': 'application/octet-stream',
   '.vsix': 'application/octet-stream',
   '.png': 'image/png',
+  '.svg': 'image/svg+xml',
   '.md': 'text/markdown; charset=utf-8',
 }
 

@@ -6,7 +6,7 @@
   "publisher": "universe",
   "license": "MIT",
   "type": "module",
-  "icon": "icon.svg",
+  "icon": "icon.png",
   "categories": ["Programming Languages", "Linters"],
   "keywords": ["eslint", "lint", "linter", "javascript", "typescript"],
   "main": "dist/extension.js",
@@ -17,7 +17,7 @@
     "dist",
     "package.nls.json",
     "package.nls.zh-cn.json",
-    "icon.svg"
+    "icon.png"
   ],
   "activationEvents": [
     "onLanguage:javascript",

@@ -18,14 +18,26 @@ import type { Diagnostic } from 'vscode-languageserver-types'
 import {
   EslintMethods,
   type EslintCodeAction,
+  type EslintLogLevel,
   type EslintSettings,
+  type EslintStatus,
   type FixAllResult,
+  type LogMessageParams,
   type PublishDiagnosticsParams,
+  type StatusParams,
 } from './protocol.js'
 
 export interface PublishDiagnosticsEvent {
   readonly uri: string
   readonly diagnostics: readonly Diagnostic[]
+}
+
+/** Callbacks the client raises into the extension host (diagnostics, log lines
+ *  for the ESLint output channel, and coarse status for a state indicator). */
+export interface EslintClientHooks {
+  readonly onDiagnostics: (e: PublishDiagnosticsEvent) => void
+  readonly log: (level: EslintLogLevel, message: string) => void
+  readonly onStatus: (status: EslintStatus, message?: string) => void
 }
 
 /** ELECTRON_* / NODE_OPTIONS stripped from the child env (same rationale as the
@@ -85,7 +97,7 @@ export class EslintClient {
     private readonly _serverModule: string,
     private readonly _rootUri: string | null,
     private _settings: EslintSettings,
-    private readonly _onDiagnostics: (e: PublishDiagnosticsEvent) => void,
+    private readonly _hooks: EslintClientHooks,
   ) {}
 
   updateSettings(settings: EslintSettings): void {
@@ -169,14 +181,19 @@ export class EslintClient {
       })
     } catch (err) {
       this._starting = undefined
-      console.error(`[eslint] spawn failed module=${this._serverModule}: ${(err as Error).message}`)
+      this._hooks.log(
+        'error',
+        `spawn failed module=${this._serverModule}: ${(err as Error).message}`,
+      )
+      this._hooks.onStatus('error', 'Failed to start ESLint server')
       throw err as Error
     }
 
     this._proc = proc
-    proc.stderr.on('data', (buf: Buffer) =>
-      console.error(`[eslint][server] ${buf.toString('utf8')}`),
-    )
+    proc.stderr.on('data', (buf: Buffer) => {
+      const text = buf.toString('utf8').trimEnd()
+      if (text) this._hooks.log('info', `[server] ${text}`)
+    })
     proc.on('error', (e) => this._onProcGone(proc, `error ${e.message}`))
     proc.on('exit', (code, signal) => this._onProcGone(proc, `exit code=${code} signal=${signal}`))
 
@@ -186,7 +203,13 @@ export class EslintClient {
     )
     this._conn = conn
     conn.onNotification(EslintMethods.publishDiagnostics, (p: PublishDiagnosticsParams) => {
-      this._onDiagnostics({ uri: p.uri, diagnostics: p.diagnostics ?? [] })
+      this._hooks.onDiagnostics({ uri: p.uri, diagnostics: p.diagnostics ?? [] })
+    })
+    conn.onNotification(EslintMethods.logMessage, (p: LogMessageParams) => {
+      this._hooks.log(p.level, p.message)
+    })
+    conn.onNotification(EslintMethods.status, (p: StatusParams) => {
+      this._hooks.onStatus(p.status, p.message)
     })
     conn.listen()
 
@@ -198,7 +221,8 @@ export class EslintClient {
       })
     } catch (err) {
       if (this._proc !== proc) return
-      console.error(`[eslint] initialize failed: ${(err as Error).message}`)
+      this._hooks.log('error', `initialize failed: ${(err as Error).message}`)
+      this._hooks.onStatus('error', 'ESLint server initialize failed')
       this._clearConnection()
       throw err as Error
     }
@@ -212,7 +236,7 @@ export class EslintClient {
         text: doc.text,
       })
     }
-    console.error(`[eslint] server started root=${this._rootUri ?? '(none)'}`)
+    this._hooks.log('info', `server started root=${this._rootUri ?? '(none)'}`)
   }
 
   private _onProcGone(proc: ChildProcessWithoutNullStreams, reason: string): void {
@@ -220,12 +244,15 @@ export class EslintClient {
     this._clearConnection()
     if (this._disposed) return
     if (!this._registerRestartAttempt()) {
-      console.error(
-        `[eslint] server gone (${reason}); too many restarts, will retry on next request`,
+      this._hooks.log(
+        'error',
+        `server gone (${reason}); too many restarts, will retry on next request`,
       )
+      this._hooks.onStatus('error', 'ESLint server keeps crashing')
       return
     }
-    console.error(`[eslint] server gone (${reason}); restarting`)
+    this._hooks.log('warn', `server gone (${reason}); restarting`)
+    this._hooks.onStatus('warn', 'Restarting ESLint server…')
     this._starting = this._start()
     void this._starting.catch(() => undefined)
   }

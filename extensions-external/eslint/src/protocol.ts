@@ -79,6 +79,26 @@ export interface UpdateSettingsParams {
   readonly settings: EslintSettings
 }
 
+/** Log severity mirrored to the ESLint output channel (client renders a prefix). */
+export type EslintLogLevel = 'info' | 'warn' | 'error'
+
+/** Notification: server → client. A line for the ESLint output channel. */
+export interface LogMessageParams {
+  readonly level: EslintLogLevel
+  readonly message: string
+}
+
+/** Runtime health of the ESLint integration, surfaced in the status bar. */
+export type EslintStatus = 'ok' | 'warn' | 'error'
+
+/** Notification: server → client. Coarse health so the UI can show a state
+ *  indicator (e.g. "no ESLint resolvable" vs. "linting"). `message` is an
+ *  optional human-readable detail for the tooltip. */
+export interface StatusParams {
+  readonly status: EslintStatus
+  readonly message?: string
+}
+
 /** Method names (kept as constants so client and server can't drift). */
 export const EslintMethods = {
   initialize: 'initialize',
@@ -90,6 +110,8 @@ export const EslintMethods = {
   publishDiagnostics: 'textDocument/publishDiagnostics',
   codeAction: 'textDocument/codeAction',
   fixAllEdits: 'eslint/fixAllEdits',
+  logMessage: 'eslint/logMessage',
+  status: 'eslint/status',
 } as const
 
 /** Code-action kinds (mirror LSP / Monaco standard kinds). */
