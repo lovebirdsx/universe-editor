@@ -104,6 +104,7 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 1. **rewind 报 `Unknown messageId`**：SDK 1.1.0 zod strip 顶层 messageId。→ 走 `_meta.messageId`。
 2. **fork 无历史（显示空会话）**：旧实现用内存态 resumeSessionAt fork **不落盘**，session/load replay 读磁盘=空。→ 用 `sdkForkSession()` 写新文件。
 3. **fork 含被点消息本身 / rewind 消息列表不变 / rewind 关闭重开回弹**：三个都源于 **inclusive 语义 + 只改内存不改磁盘**。→ fork/rewind 都 key 在**前驱**；rewind 加 `replaySessionHistory({stopBeforeUuid})`（内存）**和** `truncateTranscriptBefore`（磁盘物理截断，持久化）。
+4. **rewind/fork 后运行期 model/effort 丢失回落默认**（claude 专属，codex 无因 thread 存活）：claude rewind teardown+`createSession` 重建 Query 时用的是**最初** `newSessionParams`，effort 又从 settings.json 重新 seed——运行期 `setConfigOption` 改的 model/effort/fast/agent 从未写回。→ vendor `rewindSession` teardown **前** `snapshotRuntimeConfig(session)`（从 live `configOptions` 读 model/effort/fast/agent，model 优先序），重建后 `reapplyRuntimeConfig` 按序走 `setSessionConfigOption`（复用 model→effort 级联），逐项 best-effort（失败只 log）。fork 侧不重建进程但**新 history 行没继承源配置**→ renderer `forkSession` 注册行时带 `snapshotConfigSelections(live.configOptions.get())` 的 `configOptions`/`configLabels`，resume 的 `setConfigDesired` 借现成 flush 机制 push 回 fork 线程（fork 侧零新增 push 逻辑）。
 
 ## 常见任务 → 改哪里
 

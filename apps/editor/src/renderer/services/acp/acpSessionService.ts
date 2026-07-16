@@ -957,12 +957,27 @@ export class AcpSessionService
 
     // Register the fork as a durable history row so resumeSession can load it.
     const forkTitle = localize('acp.session.forkTitle', '{title} (fork)', { title: entry.title })
+    // Carry the source session's config (model / effort / …) onto the fork's row.
+    // The forked agent thread starts on its own defaults; resumeSession seeds these
+    // as the "desired" values and pushes them back to the agent, so the fork keeps
+    // running the config the source was using instead of silently reverting to
+    // defaults. Prefer the live session's current selections; fall back to the
+    // source row's cached snapshot when the source isn't resident.
+    const forkConfig = live
+      ? snapshotConfigSelections(live.configOptions.get())
+      : {
+          values: entry.configOptions ?? {},
+          labels: entry.configLabels ?? {},
+        }
     this._history.add({
       agentId: entry.agentId,
       sessionIdOnAgent: newSessionId,
       title: forkTitle,
       ...(cwd !== undefined ? { cwd } : {}),
       hasMessages: true,
+      ...(Object.keys(forkConfig.values).length > 0
+        ? { configOptions: forkConfig.values, configLabels: forkConfig.labels }
+        : {}),
     })
     this._telemetry.publicLog('acp.session_forked', {
       agentId: entry.agentId,

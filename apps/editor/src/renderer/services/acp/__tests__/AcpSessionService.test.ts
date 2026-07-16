@@ -1056,7 +1056,12 @@ describe('AcpSessionService', () => {
 
 describe('AcpSessionService — rewind / fork', () => {
   function makeService(client: FakeAcpClientService, tracker: StubSessionChangeTracker) {
-    return new AcpSessionService(
+    return makeServiceWithHistory(client, tracker).svc
+  }
+
+  function makeServiceWithHistory(client: FakeAcpClientService, tracker: StubSessionChangeTracker) {
+    const history = makeHistory()
+    const svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
@@ -1066,7 +1071,7 @@ describe('AcpSessionService — rewind / fork', () => {
       new NoopTelemetryService(),
       new StubPermissionHandler(),
       new StubLoggerService(),
-      makeHistory(),
+      history,
       new FakeStorage(),
       makeAgentDefaults(),
       new StubConfigOptionsCache(),
@@ -1074,6 +1079,7 @@ describe('AcpSessionService — rewind / fork', () => {
       new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
     )
+    return { svc, history }
   }
 
   it('rewindSession sends the rewind ext-method with the target messageId and clears tracked changes', async () => {
@@ -1240,6 +1246,56 @@ describe('AcpSessionService — rewind / fork', () => {
       expect(svc.getById('agent-fork-1')).toBeDefined()
       expect(svc.activeSession.get()?.id).toBe('agent-fork-1')
       expect(fork.id).not.toBe(s.id)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSession carries the source session runtime config onto the fork history row', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const forkConfig: readonly SessionConfigOption[] = [
+      {
+        id: 'model',
+        name: 'Model',
+        category: 'model',
+        type: 'select',
+        currentValue: 'claude-opus-4-8',
+        options: [
+          { value: 'claude-fable-5', name: 'Claude Fable 5' },
+          { value: 'claude-opus-4-8', name: 'Claude Opus 4.8' },
+        ],
+      } as unknown as SessionConfigOption,
+      {
+        id: 'effort',
+        name: 'Effort',
+        category: 'thought_level',
+        type: 'select',
+        currentValue: 'high',
+        options: [{ value: 'high', name: 'High' }],
+      } as unknown as SessionConfigOption,
+    ]
+    const client = new FakeAcpClientService({
+      stubOptions: {
+        forkCapable: true,
+        loadSession: true,
+        forkedSessionId: 'agent-fork-2',
+        newSessionConfigOptions: forkConfig,
+      },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const messageId = s.messages.get().find((m) => m.role === 'user')?.messageId
+
+      await svc.forkSession(s.id, messageId)
+
+      // The fork's durable row must inherit the source's model/effort so its
+      // resume can push them back to the freshly-forked agent thread.
+      const entry = history.get('agent-fork-2')
+      expect(entry?.configOptions).toMatchObject({ model: 'claude-opus-4-8', effort: 'high' })
+      expect(entry?.configLabels).toMatchObject({ model: 'Claude Opus 4.8', effort: 'High' })
     } finally {
       svc.dispose()
     }
