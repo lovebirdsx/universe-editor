@@ -51,6 +51,7 @@ function installScmBridge(): void {
 
 const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
+const { MAX_PATH_ARGS_CHARS } = await import('../p4Service.js')
 type PerforceClientInstance = import('../client.js').PerforceClient
 type ReconcileStore = import('../client.js').ReconcileStore
 type ReconcilePersistState = import('../client.js').ReconcilePersistState
@@ -333,5 +334,36 @@ describe('PerforceClient reconcile persistence + dismiss', () => {
     expect(client.status.reconcileCount).toBe(1)
     const states = (reconcileGroup()?.resourceStates ?? []) as { resourceUri?: string }[]
     expect(states.some((s) => (s.resourceUri ?? '').includes('a.txt'))).toBe(true)
+  })
+
+  // Regression (ENAMETOOLONG): a huge changed-path set must be split across
+  // several `reconcile -n` scans so no single argv overflows the command line.
+  it('splits a huge incremental path set into multiple bounded reconcile scans', async () => {
+    const store = memStore()
+    // Every scanned path comes back as a reconcile candidate so all survive.
+    const client = await makeClient(store, {
+      reconcile: () => [],
+    })
+    calls.length = 0
+
+    // ~3000 long paths → well past the 8000-char argv budget for one command.
+    const paths = Array.from(
+      { length: 3000 },
+      (_, i) => `${LOCAL}/very/deeply/nested/directory/structure/file_${i}.uasset`,
+    )
+    await client.refreshReconcilePaths(paths)
+
+    const scans = reconcileScans()
+    // Must have fanned out into more than one scan.
+    expect(scans.length).toBeGreaterThan(1)
+    // No scan's path portion exceeds the budget, and no path is lost.
+    const seen = new Set<string>()
+    for (const argv of scans) {
+      const scanPaths = argv.filter((a) => a.startsWith(LOCAL))
+      const len = scanPaths.reduce((n, p) => n + p.length + 1, 0)
+      expect(len).toBeLessThanOrEqual(MAX_PATH_ARGS_CHARS)
+      for (const p of scanPaths) seen.add(p)
+    }
+    for (const p of paths) expect(seen.has(p)).toBe(true)
   })
 })

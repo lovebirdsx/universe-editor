@@ -154,4 +154,68 @@ test.describe('@p1 perforce collect changes', () => {
       await expect(row).toBeVisible({ timeout: 30_000 })
     })
   })
+
+  // Layout regression: the SCM tree is a flex column (so the virtualized
+  // scroller can size itself). If the row elements don't opt out of flex
+  // shrinking, a group with more rows than fit the viewport gets its rows
+  // squashed on top of each other (reported: "all rows collapsed into one").
+  // Guard it by seeding many reconcile rows and asserting they stack with real,
+  // non-overlapping vertical positions.
+  test.describe('many reconcile rows layout', () => {
+    const manyFiles = Array.from({ length: 40 }, (_, i) => ({
+      relPath: `dir${i % 5}/file${i}.txt`,
+      content: `seed ${i}\n`,
+    }))
+    test.use({ p4Seeds: { files: manyFiles } })
+
+    test('rows do not collapse on top of each other @regression', async ({
+      page,
+      workbench,
+      perforce,
+    }) => {
+      test.setTimeout(120_000)
+      await evaluateWhenRestored(page)
+
+      await workbench.openWorkspace(perforce.openDir)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
+          timeout: 60_000,
+          message: 'perforce extension should register a source control for the workspace',
+        })
+        .toBeGreaterThan(0)
+
+      await workbench.runCommand('workbench.view.scm')
+
+      // Edit every seeded file on disk so they all surface in Changes to Reconcile.
+      for (const f of manyFiles) writeFileSync(perforce.file(f.relPath), `edited ${f.relPath}\n`)
+
+      const group = page.locator('[role="treeitem"]', { hasText: 'Changes to Reconcile' })
+      await expect(group).toBeVisible({ timeout: 30_000 })
+
+      // Wait until a good number of rows have surfaced.
+      const rows = page.locator('[role="treeitem"]')
+      await expect
+        .poll(() => rows.count(), { timeout: 30_000, message: 'reconcile rows should render' })
+        .toBeGreaterThan(10)
+
+      // Collect the vertical box of every visible row and assert they don't
+      // overlap: sorted by top, each row starts at or below the previous row's
+      // bottom (small negative epsilon for sub-pixel rounding), and each row has
+      // a real height. A collapsed layout would show near-identical tops.
+      const boxes = await rows.evaluateAll((els) =>
+        els
+          .map((el) => {
+            const r = el.getBoundingClientRect()
+            return { top: r.top, bottom: r.bottom, height: r.height }
+          })
+          .filter((b) => b.height > 0)
+          .sort((a, b) => a.top - b.top),
+      )
+      expect(boxes.length).toBeGreaterThan(10)
+      for (const b of boxes) expect(b.height).toBeGreaterThanOrEqual(14)
+      for (let i = 1; i < boxes.length; i++) {
+        expect(boxes[i]!.top).toBeGreaterThanOrEqual(boxes[i - 1]!.bottom - 1)
+      }
+    })
+  })
 })

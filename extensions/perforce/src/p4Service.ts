@@ -46,6 +46,45 @@ export interface P4ExecOptions {
  */
 export const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024 * 1024
 
+/**
+ * Budget (in characters) for the variable path list of a single p4 command.
+ * Windows caps a whole command line at 32767 chars; a p4 invocation also spends
+ * some of that on the executable path, connection globals (`-p/-u/-c`) and the
+ * fixed subcommand args, so we keep the path portion well under the limit. A
+ * changelist with tens of thousands of files (observed: 70k) otherwise expanded
+ * `reconcile`/`where` into one over-long argv and `spawn` threw `ENAMETOOLONG`,
+ * surfacing as an unhandled rejection in the extension host.
+ */
+export const MAX_PATH_ARGS_CHARS = 8000
+
+/**
+ * Split `items` into batches whose joined length (with one separator char per
+ * item) stays within `maxChars`. A single item longer than the budget still
+ * gets its own batch — a path can't be split, and one over-long path is rarer
+ * (and less fatal) than a whole list blowing the command-line limit. Preserves
+ * order; never emits an empty batch.
+ */
+export function chunkByLength(
+  items: readonly string[],
+  maxChars = MAX_PATH_ARGS_CHARS,
+): string[][] {
+  const batches: string[][] = []
+  let current: string[] = []
+  let currentLen = 0
+  for (const item of items) {
+    const cost = item.length + 1
+    if (current.length > 0 && currentLen + cost > maxChars) {
+      batches.push(current)
+      current = []
+      currentLen = 0
+    }
+    current.push(item)
+    currentLen += cost
+  }
+  if (current.length > 0) batches.push(current)
+  return batches
+}
+
 /** Same rationale as the git spawner — see extensionHostMainService. */
 const ENV_DENYLIST: readonly string[] = [
   'ELECTRON_RUN_AS_NODE',

@@ -2,7 +2,10 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  overflow-y: auto;
+  /* The tree owns vertical scrolling now (its own overflow); keep the shell
+   * itself clipped so the commit input / commit bar stay pinned and only the
+   * row list scrolls. */
+  overflow: hidden;
   outline: none;
 }
 
@@ -15,6 +18,8 @@
 .provider {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
   padding: 6px 8px;
 }
 
@@ -261,6 +266,7 @@
   overflow: hidden;
   cursor: pointer;
   user-select: none;
+  flex-shrink: 0;
 }
 
 .groupHeader:hover {
@@ -321,6 +327,22 @@
 
 .tree {
   outline: none;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Below the virtualization threshold, rows render inline as flex children;
+   * this makes .tree the scroll container for them (the VirtualList brings its
+   * own scroller above the threshold). */
+  overflow-y: auto;
+}
+
+/* Virtualized scroller (large changelists) — fills the remaining tree height so
+ * @tanstack/react-virtual can window rows instead of mounting one <li> per file
+ * (a 70k-file changelist otherwise OOMed the renderer). Mirrors ExplorerView. */
+.virtualList {
+  flex: 1;
+  min-height: 0;
 }
 
 /* Selection / keyboard-focus states shared by group / folder / file rows. */
@@ -379,6 +401,10 @@
   padding: 2px 4px;
   cursor: pointer;
   font-size: 13px;
+  /* Fixed height + no shrink: rows are flex children of the flex-column .tree
+   * (needed so the virtualized scroller can size itself). Without this, a group
+   * with more rows than fit the viewport gets its rows squashed together. */
+  flex-shrink: 0;
 }
 
 .resource:hover,

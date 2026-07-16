@@ -23,7 +23,7 @@ import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { ConcurrencyGate } from './concurrency.js'
-import { P4Service, type P4Connection, type P4ExecResult } from './p4Service.js'
+import { P4Service, chunkByLength, type P4Connection, type P4ExecResult } from './p4Service.js'
 import { discoverClient, connectionFor, type DiscoveredClient } from './clientDiscovery.js'
 import { parseOpened, parsePending } from './openedParser.js'
 import {
@@ -569,23 +569,37 @@ export class PerforceClient {
     await this._runSerial(async () => {
       if (this._disposed) return
       this._reconcileActive = true
-      const res = await this._p4.execRecords(['reconcile', '-n', '-a', '-e', '-d', ...paths])
-      if (this._disposed) return
-      let fresh: ReconcileFile[] = []
-      if (res.result.exitCode === 0) {
-        fresh = parseReconcile(res.records, this.root).filter(
-          (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
-        )
-      } else {
-        // Non-zero with "no file(s) to reconcile" / "no such file" just means these
-        // paths are clean now → an empty `fresh` removes them from the group below.
-        const stderr = res.result.stderr.toLowerCase()
-        if (!stderr.includes('no file(s) to reconcile') && !stderr.includes('- no such file')) {
-          this._log?.(`[perforce] incremental reconcile -n failed: ${res.result.stderr.trim()}`)
-          return
+      // Split the changed paths into command-line-sized batches so a huge set
+      // (tens of thousands of files from a busy tree) can't overflow the OS
+      // argv limit (Windows `ENAMETOOLONG`). Results merge across batches.
+      const batches = chunkByLength(paths)
+      const fresh: ReconcileFile[] = []
+      // Only paths from batches that actually completed a scan (clean or with
+      // results) count as "re-scanned" for the merge; a genuinely failed batch's
+      // paths are left out so their prior entries are carried over, not dropped.
+      const scanned: string[] = []
+      for (const batch of batches) {
+        const res = await this._p4.execRecords(['reconcile', '-n', '-a', '-e', '-d', ...batch])
+        if (this._disposed) return
+        if (res.result.exitCode === 0) {
+          for (const f of parseReconcile(res.records, this.root)) {
+            if (!f.clientFile || !this._openedPaths.has(norm(f.clientFile))) fresh.push(f)
+          }
+          scanned.push(...batch)
+        } else {
+          // Non-zero with "no file(s) to reconcile" / "no such file" just means
+          // this batch is clean now → re-scanned, contributes nothing. A different
+          // error is logged and its paths are NOT marked scanned (prior entries
+          // for them survive), while other batches still apply.
+          const stderr = res.result.stderr.toLowerCase()
+          if (stderr.includes('no file(s) to reconcile') || stderr.includes('- no such file')) {
+            scanned.push(...batch)
+          } else {
+            this._log?.(`[perforce] incremental reconcile -n failed: ${res.result.stderr.trim()}`)
+          }
         }
       }
-      this._setReconcileFiles(mergeReconcile(this._reconcileFiles, paths, fresh))
+      this._setReconcileFiles(mergeReconcile(this._reconcileFiles, scanned, fresh))
       this._emitChange()
     })
   }
@@ -1516,9 +1530,16 @@ export class PerforceClient {
     if (depotFiles.length === 0) return new Map()
     const key = [...depotFiles].sort().join('\n')
     const json = await this._cache.wrap(P4CacheNs.where, key, async () => {
-      const res = await this._p4.execRecords(['where', ...depotFiles])
-      if (res.result.exitCode !== 0) return undefined
-      return JSON.stringify([...parseWhereLocalPaths(res.records)])
+      // Batch the depot paths so a large set (a changelist with tens of thousands
+      // of files) can't overflow the OS command-line limit (`ENAMETOOLONG`); each
+      // batch's records merge into one map. A failed batch fails the whole lookup.
+      const merged = new Map<string, string>()
+      for (const batch of chunkByLength(depotFiles)) {
+        const res = await this._p4.execRecords(['where', ...batch])
+        if (res.result.exitCode !== 0) return undefined
+        for (const [depot, local] of parseWhereLocalPaths(res.records)) merged.set(depot, local)
+      }
+      return JSON.stringify([...merged])
     })
     return json === undefined ? new Map() : new Map(JSON.parse(json) as [string, string][])
   }

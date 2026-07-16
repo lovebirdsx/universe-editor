@@ -393,6 +393,9 @@ interface SharedRowProps {
   expanded: boolean
   hasChildren: boolean
   showContextMenu: (anchor: { x: number; y: number }, rows: OverflowRow[]) => void
+  /** Virtualization positioning style from <Tree> (absolute top/height); merged
+   *  onto the row root. Undefined in the non-virtualized (inline) branch. */
+  rowStyle?: CSSProperties
 }
 
 const ScmFileRow = memo(function ScmFileRow({
@@ -406,6 +409,7 @@ const ScmFileRow = memo(function ScmFileRow({
   getSelectedUris,
   getSelectedResources,
   showContextMenu,
+  rowStyle,
 }: SharedRowProps & {
   node: Extract<ScmNode, { kind: 'file' }>
   providerId: string
@@ -501,7 +505,9 @@ const ScmFileRow = memo(function ScmFileRow({
       role="treeitem"
       aria-selected={isSelected}
       className={rowClassName(styles['resource'] ?? '', isSelected, isFocused)}
-      style={{ paddingLeft: indentPadding }}
+      style={
+        rowStyle ? { paddingLeft: indentPadding, ...rowStyle } : { paddingLeft: indentPadding }
+      }
       title={resource.decorations?.tooltip ?? resource.resourceUri}
       onClick={(e) => rowClick(model, node, e, openChange)}
       onDoubleClick={openChangePinned}
@@ -562,6 +568,7 @@ const ScmFolderRow = memo(function ScmFolderRow({
   revision,
   showContextMenu,
   getFolderFileResources,
+  rowStyle,
 }: SharedRowProps & {
   node: Extract<ScmNode, { kind: 'folder' }>
   providerId: string
@@ -611,7 +618,9 @@ const ScmFolderRow = memo(function ScmFolderRow({
       aria-expanded={expanded}
       aria-selected={isSelected}
       className={rowClassName(styles['folder'] ?? '', isSelected, isFocused)}
-      style={{ paddingLeft: indentPadding }}
+      style={
+        rowStyle ? { paddingLeft: indentPadding, ...rowStyle } : { paddingLeft: indentPadding }
+      }
       onClick={(e) => rowClick(model, node, e, () => void model.toggle(node))}
       onContextMenu={onContextMenu}
       {...resourceDragProps(() =>
@@ -669,6 +678,7 @@ const ScmGroupRow = memo(function ScmGroupRow({
   hasChildren,
   revision,
   showContextMenu,
+  rowStyle,
 }: SharedRowProps & {
   node: Extract<ScmNode, { kind: 'group' }>
   providerId: string
@@ -743,7 +753,9 @@ const ScmGroupRow = memo(function ScmGroupRow({
         isSelected,
         isFocused,
       )}
-      style={{ paddingLeft: indentPadding }}
+      style={
+        rowStyle ? { paddingLeft: indentPadding, ...rowStyle } : { paddingLeft: indentPadding }
+      }
       onClick={(e) => rowClick(model, node, e, () => void model.toggle(node))}
       onContextMenu={onContextMenu}
       onDragOver={onDragOver}
@@ -1025,6 +1037,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
       expanded: ctx.node.expanded,
       hasChildren: ctx.node.hasChildren,
       showContextMenu,
+      ...(ctx.style !== undefined ? { rowStyle: ctx.style } : {}),
     }
     if (n.kind === 'group')
       return (
@@ -1184,8 +1197,8 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
       <Tree<ScmNode>
         model={treeModel}
         className={styles['tree'] ?? ''}
+        virtualListClassName={styles['virtualList'] ?? ''}
         rootRef={treeRef}
-        virtualizationThreshold={Number.MAX_SAFE_INTEGER}
         indentBase={0}
         renderRow={renderRow}
         onActivate={(node, opts) => {
