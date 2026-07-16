@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for WebviewService: custom-editor provider registration, panel open →
- *  host resolve, html/options/message plumbing, and tier reset teardown.
+ *  host resolve, html/options/message plumbing, and host reset teardown.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
@@ -39,8 +39,8 @@ describe('WebviewService', () => {
   it('registers a provider, opens a panel, and asks the owning host to resolve it', () => {
     const svc = new WebviewService()
     const extHost = fakeExtHost()
-    svc.setExtHost('trusted', extHost)
-    const mainThread = svc.createMainThread('trusted')
+    svc.setExtHost('local', extHost)
+    const mainThread = svc.createMainThread('local')
 
     void mainThread.$registerCustomEditorProvider(7, 'pdf.view')
     expect(svc.hasProviderForViewType('pdf.view')).toBe(true)
@@ -55,15 +55,15 @@ describe('WebviewService', () => {
 
   it('returns undefined opening a panel for an unregistered viewType', () => {
     const svc = new WebviewService()
-    svc.setExtHost('trusted', fakeExtHost())
+    svc.setExtHost('local', fakeExtHost())
     expect(svc.openPanel('missing.view', URI.file('/a.pdf'))).toBeUndefined()
   })
 
   it('flows html/options from the host into the panel observables', () => {
     const svc = new WebviewService()
     const extHost = fakeExtHost()
-    svc.setExtHost('trusted', extHost)
-    const mainThread = svc.createMainThread('trusted')
+    svc.setExtHost('local', extHost)
+    const mainThread = svc.createMainThread('local')
     void mainThread.$registerCustomEditorProvider(0, 'pdf.view')
     const panel = svc.openPanel('pdf.view', URI.file('/a.pdf'))!
 
@@ -80,8 +80,8 @@ describe('WebviewService', () => {
   it('relays messages both ways', () => {
     const svc = new WebviewService()
     const extHost = fakeExtHost()
-    svc.setExtHost('trusted', extHost)
-    const mainThread = svc.createMainThread('trusted')
+    svc.setExtHost('local', extHost)
+    const mainThread = svc.createMainThread('local')
     void mainThread.$registerCustomEditorProvider(0, 'pdf.view')
     const panel = svc.openPanel('pdf.view', URI.file('/a.pdf'))!
 
@@ -97,8 +97,8 @@ describe('WebviewService', () => {
   it('closing a panel notifies the host and drops it', () => {
     const svc = new WebviewService()
     const extHost = fakeExtHost()
-    svc.setExtHost('trusted', extHost)
-    const mainThread = svc.createMainThread('trusted')
+    svc.setExtHost('local', extHost)
+    const mainThread = svc.createMainThread('local')
     void mainThread.$registerCustomEditorProvider(0, 'pdf.view')
     const panel = svc.openPanel('pdf.view', URI.file('/a.pdf'))!
 
@@ -106,14 +106,14 @@ describe('WebviewService', () => {
     expect(extHost.disposed).toEqual([panel.panelHandle])
   })
 
-  it('reset(kind) drops that tier’s providers and panels', () => {
+  it('reset(kind) drops the host’s providers and panels', () => {
     const svc = new WebviewService()
-    svc.setExtHost('restricted', fakeExtHost())
-    const mainThread = svc.createMainThread('restricted')
+    svc.setExtHost('local', fakeExtHost())
+    const mainThread = svc.createMainThread('local')
     void mainThread.$registerCustomEditorProvider(0, 'pdf.view')
     svc.openPanel('pdf.view', URI.file('/a.pdf'))
 
-    svc.reset('restricted')
+    svc.reset('local')
     expect(svc.hasProviderForViewType('pdf.view')).toBe(false)
     expect(svc.openPanel('pdf.view', URI.file('/a.pdf'))).toBeUndefined()
   })

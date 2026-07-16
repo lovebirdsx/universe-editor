@@ -171,6 +171,8 @@ export interface IExtensionManifest {
   engines: { universe: string }
   activationEvents?: string[]
   contributes?: IExtensionContributions
+  /** VSCode-style capability declarations (currently: Workspace Trust support). */
+  capabilities?: IExtensionCapabilities
   // --- Marketplace display metadata (all optional, purely additive) ---
   /** Category ids for filtering; see `EXTENSION_CATEGORIES`. */
   categories?: string[]
@@ -189,6 +191,34 @@ export interface IExtensionManifest {
 }
 
 /**
+ * VSCode `capabilities.untrustedWorkspaces`. Declares whether the extension may
+ * run in an untrusted workspace:
+ *  - `true` — fully supported (runs even when untrusted).
+ *  - `{ supported: false }` — not supported: the extension is NOT activated in an
+ *    untrusted workspace (VSCode `DisabledByTrustRequirement`).
+ *  - `{ supported: 'limited' }` — runs with reduced functionality; the extension
+ *    itself checks `workspace.isTrusted` and disables the unsafe parts.
+ *
+ * An extension with a `main` entry that declares nothing defaults to requiring
+ * trust (treated as `supported: false`), matching VSCode.
+ */
+export type ExtensionUntrustedWorkspaceSupport =
+  | true
+  | { readonly supported: false; readonly description: string }
+  | {
+      readonly supported: 'limited'
+      readonly description: string
+      readonly restrictedConfigurations?: readonly string[]
+    }
+
+export interface IExtensionCapabilities {
+  readonly untrustedWorkspaces?: ExtensionUntrustedWorkspaceSupport
+}
+
+/** The three-way support type after applying the "has main → default false" rule. */
+export type UntrustedWorkspaceSupportType = true | false | 'limited'
+
+/**
  * What the host sends the renderer per scanned extension. The renderer never
  * sees the filesystem — it translates these into the core registries. `id` is
  * `<publisher>.<name>` when a publisher is present, else `<name>`.
@@ -199,4 +229,24 @@ export interface IExtensionDescriptionDto {
   readonly displayName?: string
   readonly activationEvents: readonly string[]
   readonly contributes: IExtensionContributionsDto
+  /** Whether this extension has a `main` entry (activation gate applies only then). */
+  readonly hasMain: boolean
+  /** Declared untrusted-workspace support, verbatim from the manifest. */
+  readonly untrustedWorkspaces?: ExtensionUntrustedWorkspaceSupport
+}
+
+/**
+ * Resolve an extension's effective untrusted-workspace support (VSCode
+ * `getExtensionUntrustedWorkspaceSupportType`):
+ *  - explicit declaration wins;
+ *  - a UI-only extension (no `main`) needs no trust → `true`;
+ *  - a `main` extension that declares nothing defaults to `false` (needs trust).
+ */
+export function getUntrustedWorkspaceSupportType(
+  ext: Pick<IExtensionDescriptionDto, 'hasMain' | 'untrustedWorkspaces'>,
+): UntrustedWorkspaceSupportType {
+  const declared = ext.untrustedWorkspaces
+  if (declared === true) return true
+  if (declared) return declared.supported
+  return ext.hasMain ? false : true
 }

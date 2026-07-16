@@ -29,20 +29,43 @@ const goodManifest = {
 
 describe('scanExtensions', () => {
   it('returns [] for a non-existent directory', async () => {
-    expect(await scanExtensions(join(dir, 'nope'))).toEqual([])
+    expect(await scanExtensions(join(dir, 'nope'), false)).toEqual([])
   })
 
   it('scans a valid extension and resolves its main path', async () => {
     await writeExtension('good', goodManifest)
-    const [ext, ...rest] = await scanExtensions(dir)
+    const [ext, ...rest] = await scanExtensions(dir, false)
     expect(rest).toHaveLength(0)
     expect(ext?.id).toBe('good')
     expect(ext?.mainPath).toBe(join(dir, 'good', 'dist', 'extension.js'))
   })
 
+  it('marks results with the builtin flag passed to the scan', async () => {
+    await writeExtension('good', goodManifest)
+    const [builtin] = await scanExtensions(dir, true)
+    expect(builtin?.builtin).toBe(true)
+    const [user] = await scanExtensions(dir, false)
+    expect(user?.builtin).toBe(false)
+  })
+
+  it('parses capabilities.untrustedWorkspaces from the manifest', async () => {
+    await writeExtension('trust', {
+      ...goodManifest,
+      name: 'trust',
+      capabilities: {
+        untrustedWorkspaces: { supported: false, description: 'needs trust' },
+      },
+    })
+    const [ext] = await scanExtensions(dir, false)
+    expect(ext?.manifest.capabilities?.untrustedWorkspaces).toEqual({
+      supported: false,
+      description: 'needs trust',
+    })
+  })
+
   it('derives id from publisher.name when a publisher is present', async () => {
     await writeExtension('pub', { ...goodManifest, name: 'git', publisher: 'universe' })
-    const [ext] = await scanExtensions(dir)
+    const [ext] = await scanExtensions(dir, false)
     expect(ext?.id).toBe('universe.git')
   })
 
@@ -50,7 +73,7 @@ describe('scanExtensions', () => {
     await writeExtension('good', goodManifest)
     await writeExtension('bad', { name: 'bad' }) // missing version + engines
     await writeFile(join(dir, 'loose.txt'), 'not a folder', 'utf8')
-    const ids = (await scanExtensions(dir)).map((e) => e.id)
+    const ids = (await scanExtensions(dir, false)).map((e) => e.id)
     expect(ids).toEqual(['good'])
   })
 
@@ -59,20 +82,20 @@ describe('scanExtensions', () => {
     // A rename-then-delete in progress leaves a `<id>-<ver>.<hash>.vsctmp` folder
     // that still has a valid manifest; the scanner must not re-adopt it.
     await writeExtension('acme.sample-1.0.0.abc123.vsctmp', { ...goodManifest, name: 'stale' })
-    const ids = (await scanExtensions(dir)).map((e) => e.id)
+    const ids = (await scanExtensions(dir, false)).map((e) => e.id)
     expect(ids).toEqual(['good'])
   })
 
   it('omits mainPath for a declaration-only extension', async () => {
     const { main: _omit, ...noMain } = goodManifest
     await writeExtension('decl', noMain)
-    const [ext] = await scanExtensions(dir)
+    const [ext] = await scanExtensions(dir, false)
     expect(ext?.mainPath).toBeUndefined()
   })
 
   it('keeps an extension whose engines.universe satisfies the host API version', async () => {
     await writeExtension('good', goodManifest) // engines.universe ^0.1.0
-    const ids = (await scanExtensions(dir, '0.1.5')).map((e) => e.id)
+    const ids = (await scanExtensions(dir, false, '0.1.5')).map((e) => e.id)
     expect(ids).toEqual(['good'])
   })
 
@@ -83,7 +106,7 @@ describe('scanExtensions', () => {
       name: 'future',
       engines: { universe: '^2.0.0' },
     })
-    const ids = (await scanExtensions(dir, '0.1.5')).map((e) => e.id)
+    const ids = (await scanExtensions(dir, false, '0.1.5')).map((e) => e.id)
     expect(ids).toEqual(['good'])
   })
 
@@ -93,7 +116,7 @@ describe('scanExtensions', () => {
       name: 'future',
       engines: { universe: '^2.0.0' },
     })
-    const ids = (await scanExtensions(dir)).map((e) => e.id)
+    const ids = (await scanExtensions(dir, false)).map((e) => e.id)
     expect(ids).toEqual(['future'])
   })
 
@@ -116,7 +139,7 @@ describe('scanExtensions', () => {
       JSON.stringify({ type: 'object', required: ['id'] }),
       'utf8',
     )
-    const [ext] = await scanExtensions(dir)
+    const [ext] = await scanExtensions(dir, false)
     expect(ext?.resolvedJsonValidation).toEqual([
       { fileMatch: ['**/*.entity.json'], schema: { type: 'object', required: ['id'] } },
     ])
@@ -130,7 +153,7 @@ describe('scanExtensions', () => {
         jsonValidation: [{ fileMatch: ['**/*.entity.json'], url: './schemas/missing.json' }],
       },
     })
-    const [ext, ...rest] = await scanExtensions(dir)
+    const [ext, ...rest] = await scanExtensions(dir, false)
     expect(rest).toHaveLength(0)
     expect(ext?.id).toBe('gc')
     expect(ext?.resolvedJsonValidation).toBeUndefined()
@@ -146,7 +169,7 @@ describe('scanExtensions', () => {
         ],
       },
     })
-    const [ext] = await scanExtensions(dir)
+    const [ext] = await scanExtensions(dir, false)
     expect(ext?.resolvedJsonValidation).toEqual([
       { fileMatch: ['**/.claude/settings.json'], url: 'https://example.com/schema.json' },
     ])
@@ -175,13 +198,13 @@ describe('scanExtensions', () => {
       'utf8',
     )
 
-    const [zh] = await scanExtensions(dir, undefined, 'zh-CN')
+    const [zh] = await scanExtensions(dir, false, undefined, 'zh-CN')
     expect(zh?.manifest.contributes?.commands?.[0]?.title).toBe('你好')
 
-    const [en] = await scanExtensions(dir, undefined, 'en-US')
+    const [en] = await scanExtensions(dir, false, undefined, 'en-US')
     expect(en?.manifest.contributes?.commands?.[0]?.title).toBe('Hi')
 
-    const [dflt] = await scanExtensions(dir)
+    const [dflt] = await scanExtensions(dir, false)
     expect(dflt?.manifest.contributes?.commands?.[0]?.title).toBe('Hi')
   })
 })

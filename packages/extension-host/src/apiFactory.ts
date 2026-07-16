@@ -158,7 +158,7 @@ export interface IExtensionHostBridge {
   readonly onDidChangeTextDocument: Event<TextDocumentChangeEvent>
   readonly onDidCloseTextDocument: Event<TextDocument>
   readonly onWillSaveTextDocument: Event<WillSaveTextDocumentEvent>
-  /** The `ai` namespace — trusted-only; throws in a restricted host. */
+  /** The `ai` namespace. */
   readonly ai: AiApi
 }
 
@@ -233,8 +233,8 @@ async function loadState(
 
 /**
  * Phase 3 context: subscriptions + path + persistent mementos. When no storage
- * backend is wired (restricted host probing, tests), falls back to in-memory
- * mementos so `activate` still gets a working context.
+ * backend is wired (tests), falls back to in-memory mementos so `activate` still
+ * gets a working context.
  *
  * `globalStorageHome` (from the host env) is the parent of every extension's
  * private storage dir; the per-extension path is `<home>/<extId>`. Empty when

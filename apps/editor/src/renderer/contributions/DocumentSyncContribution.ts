@@ -141,7 +141,7 @@ export class DocumentSyncContribution extends Disposable implements IWorkbenchCo
 
   private async _openDoc(entry: OpenDoc): Promise<void> {
     await this._activate(entry.languageId)
-    const documents = this._client.getTrustedDocuments()
+    const documents = this._client.getDocuments()
     if (!documents || entry.model.isDisposed()) return
     this._ignore(
       documents.$acceptDocumentOpen(
@@ -163,7 +163,7 @@ export class DocumentSyncContribution extends Disposable implements IWorkbenchCo
 
   private async _pushChange(model: monaco.editor.ITextModel): Promise<void> {
     if (model.isDisposed()) return
-    const documents = this._client.getTrustedDocuments()
+    const documents = this._client.getDocuments()
     if (!documents) return
     await documents.$acceptDocumentChange(model.uri, model.getVersionId(), model.getValue())
   }
@@ -188,7 +188,7 @@ export class DocumentSyncContribution extends Disposable implements IWorkbenchCo
     if (entry.timer) clearTimeout(entry.timer)
     this._open.delete(key)
     PendingDocumentSync.unregister(key)
-    const documents = this._client.getTrustedDocuments()
+    const documents = this._client.getDocuments()
     if (documents) this._ignore(documents.$acceptDocumentClose(entry.model.uri))
     entry.store.dispose()
   }

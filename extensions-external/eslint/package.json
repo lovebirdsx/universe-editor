@@ -2,7 +2,7 @@
   "name": "universe-eslint",
   "displayName": "ESLint",
   "description": "Integrates ESLint into the editor: diagnostics, quick fixes, fix-all, format-as-formatter and fix-all-on-save — backed by a standalone ESLint language server that resolves the workspace's own eslint.",
-  "version": "0.1.1",
+  "version": "0.1.0",
   "publisher": "universe",
   "license": "MIT",
   "type": "module",
@@ -12,6 +12,12 @@
   "main": "dist/extension.js",
   "engines": {
     "universe": ">=0.4.0 <1.0.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "ESLint 会加载并执行工作区的 ESLint 配置与插件代码，因此需要信任工作区。"
+    }
   },
   "files": [
     "dist",

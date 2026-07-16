@@ -329,6 +329,18 @@ export interface WorkspaceApi {
    */
   readonly rootPath: string | undefined
   /**
+   * Whether the current workspace is trusted (VSCode Workspace Trust). An
+   * extension that runs workspace-provided code should gate that behind this.
+   * Fixed at activation; a later grant fires {@link onDidGrantWorkspaceTrust}.
+   */
+  readonly isTrusted: boolean
+  /**
+   * Fires when the user grants trust to a previously-untrusted workspace. Trust
+   * is never revoked in place (the host restarts instead), so there is no
+   * corresponding revoke event.
+   */
+  readonly onDidGrantWorkspaceTrust: Event<void>
+  /**
    * Gated filesystem access. Every call is routed through the host's path policy
    * (denies sensitive locations, forbids escaping the workspace root) before
    * touching disk — the only filesystem an external/restricted extension gets.
@@ -732,6 +744,8 @@ interface IExtensionHostBridge {
   createSourceControl(id: string, label: string, rootUri?: string): SourceControl
   getActiveTextEditor(): Promise<TextEditor | undefined>
   getWorkspaceRoot(): string | undefined
+  isWorkspaceTrusted(): boolean
+  readonly onDidGrantWorkspaceTrust: Event<void>
   fsReadFile(path: string): Promise<Uint8Array>
   fsWriteFile(path: string, content: Uint8Array): Promise<void>
   fsStat(path: string): Promise<FileStat>
@@ -902,6 +916,10 @@ export const workspace: WorkspaceApi = {
   get rootPath() {
     return bridge().getWorkspaceRoot()
   },
+  get isTrusted() {
+    return bridge().isWorkspaceTrusted()
+  },
+  onDidGrantWorkspaceTrust: (listener) => bridge().onDidGrantWorkspaceTrust(listener),
   fs: {
     readFile: (path) => bridge().fsReadFile(path),
     writeFile: (path, content) => bridge().fsWriteFile(path, content),

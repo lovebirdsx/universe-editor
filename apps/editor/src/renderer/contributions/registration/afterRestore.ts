@@ -23,6 +23,7 @@ import { WindowTitleContribution } from '../WindowTitleContribution.js'
 import { ExplorerAutoRevealContribution } from '../ExplorerAutoRevealContribution.js'
 import { RecentFilesContribution } from '../RecentFilesContribution.js'
 import { NotificationStatusContribution } from '../NotificationStatusContribution.js'
+import { WorkspaceTrustContribution } from '../WorkspaceTrustContribution.js'
 import { UpdateContribution } from '../UpdateContribution.js'
 import { ReleaseNotesContribution } from '../ReleaseNotesContribution.js'
 import { LogTailContribution } from '../LogTailContribution.js'
@@ -198,6 +199,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.notificationStatus',
   NotificationStatusContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Workspace Trust: Restricted Mode status entry + one-shot startup prompt.
+// AfterRestore so the status bar + workspace are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.workspaceTrust',
+  WorkspaceTrustContribution,
   WorkbenchPhase.AfterRestore,
 )
 

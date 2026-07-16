@@ -1,15 +1,15 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Renderer-side owner of the Extension Host connections. Runs two trust tiers:
- *  a `trusted` host for built-in extensions (raw Node, SCM) and a `restricted`
- *  host for external extensions (filesystem only via the gated gateway). Each is
- *  a HostConnection over its own stdio RPC.
+ *  Renderer-side owner of the Extension Host connection. Runs a single local host
+ *  for both built-in and external extensions (a HostConnection over stdio RPC),
+ *  following VSCode's model where activation is gated by Workspace Trust rather
+ *  than by install source.
  *
- *  Responsibilities beyond wiring (which lives in HostConnection): lazy start of
- *  both tiers, merging their contributions, routing contributed-command
- *  execution to the owning tier, and lifecycle — crash detection with bounded
- *  restart, plus a coordinated restart when the workspace folder changes (the
- *  host pins the folder at launch, so a swap requires a relaunch).
+ *  Responsibilities beyond wiring (which lives in HostConnection): lazy start,
+ *  exposing contributions, routing contributed-command execution to the host, and
+ *  lifecycle — crash detection with bounded restart, plus a coordinated restart
+ *  when the workspace folder changes (the host pins the folder at launch, so a
+ *  swap requires a relaunch).
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -31,6 +31,7 @@ import {
   IUriIdentityService,
   IViewsService,
   IWorkspaceService,
+  IWorkspaceTrustManagementService,
   Severity,
   type Event,
   type ILogger,
@@ -45,7 +46,6 @@ import {
 import {
   IExtensionHostService,
   type ExtHostExitEvent,
-  type ExtHostKind,
   type ExtHostStartSpec,
 } from '../../../shared/ipc/extensionHostService.js'
 import { IExtensionManagementService } from '../../../shared/ipc/extensionManagementService.js'
@@ -59,32 +59,32 @@ import { HostConnection, type HostConnectionDeps } from './HostConnection.js'
 
 export interface IExtensionHostClientService {
   readonly _serviceBrand: undefined
-  /** Spawn both host tiers and connect their RPC. Idempotent per tier. */
+  /** Spawn the host and connect its RPC. Idempotent. */
   start(): Promise<void>
-  /** All scanned extensions' static contributions across both tiers, for the translator. */
+  /** All scanned extensions' static contributions, for the translator. */
   getContributions(): Promise<IExtensionDescriptionDto[]>
   /**
    * Fires the merged static contributions whenever the live host set changes —
-   * i.e. after a tier is relaunched (workspace swap or crash recovery). The
+   * i.e. after the host is relaunched (workspace swap or crash recovery). The
    * translator re-applies them so contributed commands survive a restart that
    * raced the initial boot's one-shot translation.
    */
   readonly onDidChangeContributions: Event<readonly IExtensionDescriptionDto[]>
-  /** Activate every extension whose activationEvents match `event`, in both tiers. */
+  /** Activate every extension whose activationEvents match `event`. */
   activateByEvent(event: string): Promise<void>
   /**
-   * Re-scan the restricted (external) tier after its installed set changed
-   * (install / uninstall). Starts the tier if it wasn't running (first-ever
-   * install), restarts it if it was, and re-emits contributions so the newly
-   * added / removed extensions' commands take effect.
+   * Re-scan after the installed (external) set changed (install / uninstall).
+   * Starts the host if it wasn't running (first-ever install), restarts it if it
+   * was, and re-emits contributions so the newly added / removed extensions'
+   * commands take effect.
    */
   refreshExtensions(): Promise<void>
-  /** Execute a command contributed by an activated extension, via its owning tier. */
+  /** Execute a command contributed by an activated extension, via the host. */
   executeContributedCommand(id: string, args: unknown[]): Promise<unknown>
-  /** The trusted host's language RPC proxy, once connected (trusted-only). */
-  getTrustedLanguages(): IExtHostLanguages | undefined
-  /** The trusted host's document-mirror RPC proxy, once connected (trusted-only). */
-  getTrustedDocuments(): IExtHostDocuments | undefined
+  /** The host's language RPC proxy, once connected. */
+  getLanguages(): IExtHostLanguages | undefined
+  /** The host's document-mirror RPC proxy, once connected. */
+  getDocuments(): IExtHostDocuments | undefined
 }
 
 export const IExtensionHostClientService = createDecorator<IExtensionHostClientService>(
@@ -105,10 +105,8 @@ export class ExtensionHostClientService extends Disposable implements IExtension
 
   private readonly _logger: ILogger
 
-  private _trusted: HostConnection | undefined
-  private _restricted: HostConnection | undefined
-  private _startingTrusted: Promise<void> | undefined
-  private _startingRestricted: Promise<void> | undefined
+  private _conn: HostConnection | undefined
+  private _starting: Promise<void> | undefined
 
   /** Connections keyed by their live handle, for routing onExit. */
   private readonly _byHandle = new Map<string, HostConnection>()
@@ -122,15 +120,9 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   readonly onDidChangeContributions = this._onDidChangeContributions.event
   /** Handles we asked to stop (planned restarts) — their exit must not trigger crash handling. */
   private readonly _stopping = new Set<string>()
-  private readonly _restartState: Record<ExtHostKind, RestartState> = {
-    trusted: { windowStart: 0, count: 0 },
-    restricted: { windowStart: 0, count: 0 },
-  }
-  /** Signature of the disabled set each tier was last launched with, to skip no-op restarts. */
-  private readonly _launchedDisabledIds: Record<ExtHostKind, string> = {
-    trusted: '',
-    restricted: '',
-  }
+  private readonly _restartState: RestartState = { windowStart: 0, count: 0 }
+  /** Signature of the disabled set the host was last launched with, to skip no-op restarts. */
+  private _launchedDisabledIds = ''
 
   constructor(
     @IExtensionHostService private readonly _host: IExtensionHostService,
@@ -155,12 +147,15 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IExtensionManagementService private readonly _management: IExtensionManagementService,
     @IExtensionEnablementService private readonly _enablement: IExtensionEnablementService,
+    @IWorkspaceTrustManagementService
+    private readonly _workspaceTrust: IWorkspaceTrustManagementService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'extHostClient', name: 'Extension Host' })
     this._register(this._host.onExit((evt) => this._onHostExit(evt)))
     this._register(this._workspace.onDidChangeWorkspace(() => void this._onWorkspaceChanged()))
     this._register(this._enablement.onDidChangeEnablement(() => void this._onEnablementChanged()))
+    this._register(this._workspaceTrust.onDidChangeTrust((t) => void this._onTrustChanged(t)))
 
     // A window reload destroys this renderer without disposing its services, so
     // the async dispose() path never runs on reload. Synchronously stop every
@@ -185,60 +180,33 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   }
 
   start(): Promise<void> {
-    return Promise.allSettled([this._startTrusted(), this._startRestricted()]).then(() => undefined)
-  }
-
-  private _startTrusted(): Promise<void> {
-    if (!this._startingTrusted) {
-      this._startingTrusted = this._connect('trusted').catch((err: unknown) => {
-        this._startingTrusted = undefined
+    if (!this._starting) {
+      this._starting = this._connect().catch((err: unknown) => {
+        this._starting = undefined
         throw err
       })
     }
-    return this._startingTrusted
+    return this._starting
   }
 
-  private _startRestricted(): Promise<void> {
-    if (!this._startingRestricted) {
-      this._startingRestricted = this._connectRestricted().catch((err: unknown) => {
-        // External extensions are optional — a failed restricted host must never
-        // take down the workbench or the trusted tier.
-        this._startingRestricted = undefined
-        this._logger.warn(`restricted extension host unavailable: ${(err as Error).message}`)
-      })
-    }
-    return this._startingRestricted
-  }
-
-  private async _connectRestricted(): Promise<void> {
-    // Skip the second process entirely when there are no external extensions.
-    if (!(await this._host.hasUserExtensions())) {
-      this._logger.info('no external extensions installed; restricted host not started')
-      return
-    }
-    await this._connect('restricted')
-  }
-
-  private async _connect(kind: ExtHostKind): Promise<void> {
+  private async _connect(): Promise<void> {
     await this._workspace.whenReady
     const workspaceRoot = this._workspace.current?.folder.fsPath
-    // Both tiers filter their scan by the effective disabled set (global +
-    // workspace). Built-in extensions run in the trusted tier, so it too must
-    // honour disablement now. Scope to this tier's own ids so the signature only
-    // changes when a relevant extension toggles.
-    const disabledIds = await this._tierDisabledIds(kind)
-    this._launchedDisabledIds[kind] = disabledSignature(disabledIds)
+    // Single local host: filter the scan by the effective disabled set (global +
+    // workspace) across both built-in and external extensions.
+    const disabledIds = await this._disabledIds()
+    this._launchedDisabledIds = disabledSignature(disabledIds)
+    // Only scan the user (external) dir when it actually has extensions.
+    const includeUser = await this._host.hasUserExtensions()
     const spec: ExtHostStartSpec = {
-      kind,
       locale: getCurrentLocale(),
       ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
+      ...(includeUser ? {} : { userExtensionsDir: '' }),
       ...(disabledIds.length > 0 ? { disabledIds } : {}),
     }
     const { handle } = await this._host.start(spec)
 
-    const stderr = this._output.createChannel(
-      kind === 'trusted' ? 'Extension Host' : 'Extension Host (External)',
-    )
+    const stderr = this._output.createChannel('Extension Host')
     const deps: HostConnectionDeps = {
       host: this._host,
       notification: this._notification,
@@ -250,47 +218,66 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       commandService: this._commandService,
       storage: this._storage,
       webview: this._webview,
-      ...(kind === 'trusted'
-        ? {
-            scm: this._scm,
-            languageFeatures: this._languageFeatures,
-            editorService: this._editorService,
-            uriIdentity: this._uriIdentity,
-            aiModel: this._aiModel,
-          }
-        : {}),
+      scm: this._scm,
+      languageFeatures: this._languageFeatures,
+      editorService: this._editorService,
+      uriIdentity: this._uriIdentity,
+      aiModel: this._aiModel,
       output: this._output,
       layout: this._layout,
       views: this._views,
       stderr,
       logger: this._logger,
       ledger: {
-        claim: (id) => this._claimCommand(id, kind),
+        claim: (id) => this._claimCommand(id),
         release: (id) => this._commandOwner.delete(id),
       },
     }
 
-    const connection = this._register(new HostConnection(kind, handle, workspaceRoot, deps))
+    const connection = this._register(new HostConnection('local', handle, workspaceRoot, deps))
     this._byHandle.set(handle, connection)
-    if (kind === 'trusted') this._trusted = connection
-    else this._restricted = connection
-    this._logger.info(`${kind} extension host connected handle=${handle}`)
+    this._conn = connection
+    // Seed Workspace Trust before any activation so `workspace.isTrusted` is
+    // correct inside extensions' `activate`.
+    await this._workspaceTrust.workspaceTrustInitialized
+    await connection.extensions.$initializeWorkspaceTrust(this._workspaceTrust.isWorkspaceTrusted())
+    this._logger.info(`extension host connected handle=${handle}`)
   }
 
-  /** The effective disabled ids that belong to a tier (built-in vs external). */
-  private async _tierDisabledIds(kind: ExtHostKind): Promise<string[]> {
+  /**
+   * Trust flipped. A grant is dynamic — tell the host and re-run activation so
+   * newly-eligible extensions start (VSCode's `$onDidGrantWorkspaceTrust`). A
+   * revoke can't unload already-activated extensions in place, so it restarts
+   * the host, which recomputes the activation gate from scratch.
+   */
+  private async _onTrustChanged(trusted: boolean): Promise<void> {
+    await Promise.allSettled([this._starting])
+    if (trusted) {
+      const conn = this._conn
+      if (!conn || conn.dead) return
+      // The host replays every activation event it has seen, so gated-off
+      // extensions activate for already-open documents too — no renderer replay.
+      await conn.extensions.$onDidGrantWorkspaceTrust()
+      this._logger.info('workspace trust granted; host replayed activation')
+    } else {
+      this._logger.info('workspace trust revoked; restarting extension host')
+      await this._restart('workspace')
+    }
+  }
+
+  /** The effective disabled ids across all installed extensions. */
+  private async _disabledIds(): Promise<string[]> {
     const effective = new Set(await this._enablement.getEffectiveDisabledIds())
     if (effective.size === 0) return []
-    const owned =
-      kind === 'trusted'
-        ? await this._management.listBuiltinExtensions()
-        : await this._management.getInstalled()
+    const owned = [
+      ...(await this._management.listBuiltinExtensions()),
+      ...(await this._management.getInstalled()),
+    ]
     return owned.map((e) => e.identifier).filter((id) => effective.has(id))
   }
 
-  private _claimCommand(id: string, kind: ExtHostKind): void {
-    const conn = kind === 'trusted' ? this._trusted : this._restricted
-    if (conn) this._commandOwner.set(id, conn)
+  private _claimCommand(id: string): void {
+    if (this._conn) this._commandOwner.set(id, this._conn)
   }
 
   async getContributions(): Promise<IExtensionDescriptionDto[]> {
@@ -324,39 +311,34 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   }
 
   async refreshExtensions(): Promise<void> {
-    // A live restricted tier is stopped + relaunched so it re-scans the changed
-    // set; if none is running this is the first-ever install, so clear the
-    // memoized "no external extensions" start (which early-returned without a
-    // connection) before relaunching. `_restart` handles both — it skips the stop
-    // when there's no current connection — and re-emits contributions + re-runs
-    // startup activation so the added / removed extensions take effect.
-    if (!this._restricted) {
-      this._startingRestricted = undefined
+    // The installed (external) set changed. Restart the single host so it
+    // re-scans both dirs and re-emits contributions. `_restart` handles the
+    // not-yet-started case (skips the stop when there's no connection).
+    if (!this._conn) {
+      this._starting = undefined
     }
-    await this._restart('restricted', 'workspace')
+    await this._restart('workspace')
   }
 
   async executeContributedCommand(id: string, args: unknown[]): Promise<unknown> {
     await this.start()
-    const conn = this._commandOwner.get(id) ?? this._trusted
+    const conn = this._commandOwner.get(id) ?? this._conn
     if (!conn || conn.dead) {
       throw new Error(`No extension host owns command "${id}"`)
     }
     return conn.commands.$executeContributedCommand(id, args)
   }
 
-  getTrustedLanguages(): IExtHostLanguages | undefined {
-    return this._trusted?.languages
+  getLanguages(): IExtHostLanguages | undefined {
+    return this._conn?.languages
   }
 
-  getTrustedDocuments(): IExtHostDocuments | undefined {
-    return this._trusted?.documents
+  getDocuments(): IExtHostDocuments | undefined {
+    return this._conn?.documents
   }
 
   private _liveConnections(): HostConnection[] {
-    return [this._trusted, this._restricted].filter(
-      (c): c is HostConnection => c !== undefined && !c.dead,
-    )
+    return this._conn && !this._conn.dead ? [this._conn] : []
   }
 
   // --- Lifecycle: crash detection + restart -------------------------------
@@ -369,15 +351,15 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     const planned = this._stopping.delete(evt.handle)
     const abnormal = evt.code !== 0 && evt.code !== null
     this._logger.warn(
-      `${conn.kind} extension host exited handle=${evt.handle} code=${evt.code} signal=${evt.signal}` +
+      `extension host exited handle=${evt.handle} code=${evt.code} signal=${evt.signal}` +
         (evt.error ? ` error=${evt.error}` : ''),
     )
     if (!planned && abnormal) {
-      this._handleCrash(conn.kind, evt)
+      this._handleCrash(evt)
     }
   }
 
-  /** Drop a connection from all routing tables and dispose its channels. */
+  /** Drop the connection from all routing tables and dispose its channels. */
   private _teardownConnection(conn: HostConnection): void {
     conn.markDead()
     this._byHandle.delete(conn.handle)
@@ -385,30 +367,20 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     for (const [id, owner] of this._commandOwner) {
       if (owner === conn) this._commandOwner.delete(id)
     }
-    if (this._trusted === conn) {
-      this._trusted = undefined
-      this._startingTrusted = undefined
-    }
-    if (this._restricted === conn) {
-      this._restricted = undefined
-      this._startingRestricted = undefined
+    if (this._conn === conn) {
+      this._conn = undefined
+      this._starting = undefined
     }
     // Fire-and-forget $unregisterSourceControl messages from the dying host may
-    // be lost when the IPC channel closes. Reset SCM state eagerly so the view
-    // doesn't show stale source controls from the previous workspace. SCM is a
-    // trusted-only capability (restricted `createSourceControl` throws), so only
-    // a trusted teardown may clear it — otherwise a restricted host dying (its
-    // crash, or the restricted leg of a workspace-swap restart that runs after
-    // trusted already re-registered) would wipe the trusted host's git/p4
-    // providers, surfacing as "No source control providers registered" until a
-    // reload. Mirrors the per-tier `webview.reset(kind)` below.
-    if (conn.kind === 'trusted') this._scm.resetSourceControls()
+    // be lost when the IPC channel closes. Reset SCM + webview state eagerly so
+    // the view doesn't show stale providers from the previous workspace.
+    this._scm.resetSourceControls()
     this._webview.reset(conn.kind)
     conn.dispose()
   }
 
-  private _handleCrash(kind: ExtHostKind, evt: ExtHostExitEvent): void {
-    const state = this._restartState[kind]
+  private _handleCrash(evt: ExtHostExitEvent): void {
+    const state = this._restartState
     const now = Date.now()
     if (now - state.windowStart > RESTART_WINDOW_MS) {
       state.windowStart = now
@@ -419,13 +391,13 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     if (state.count > MAX_RESTARTS) {
       this._notification.notify({
         severity: Severity.Error,
-        message: `The ${kind} extension host keeps crashing (code ${evt.code ?? 'n/a'}) and won't be restarted automatically.`,
+        message: `The extension host keeps crashing (code ${evt.code ?? 'n/a'}) and won't be restarted automatically.`,
         actions: [
           {
             label: 'Restart',
             run: () => {
               state.count = 0
-              void this._restart(kind)
+              void this._restart()
             },
           },
         ],
@@ -435,74 +407,63 @@ export class ExtensionHostClientService extends Disposable implements IExtension
 
     this._notification.notify({
       severity: Severity.Warning,
-      message: `The ${kind} extension host crashed (code ${evt.code ?? 'n/a'}). Restarting…`,
+      message: `The extension host crashed (code ${evt.code ?? 'n/a'}). Restarting…`,
     })
     const delay = RESTART_BASE_DELAY_MS * 2 ** (state.count - 1)
-    setTimeout(() => void this._restart(kind), delay)
+    setTimeout(() => void this._restart(), delay)
   }
 
   private async _onEnablementChanged(): Promise<void> {
-    // Enablement changed (a built-in or external extension was enabled/disabled,
-    // globally or for this workspace). Relaunch only the tiers whose effective
-    // disabled set actually changed — restarting the trusted tier needlessly
-    // would kill + respawn tsserver. A restricted tier may need to start for the
-    // first time (all its extensions were disabled before), so clear the
-    // memoized start; `_restart` skips the stop when there's no live connection.
-    await Promise.allSettled([this._startingTrusted, this._startingRestricted])
+    // Enablement changed (an extension was enabled/disabled, globally or for this
+    // workspace). Relaunch the host only when the effective disabled set actually
+    // changed — restarting needlessly would kill + respawn tsserver. If the host
+    // isn't running yet (all extensions were disabled before), clear the memoized
+    // start; `_restart` skips the stop when there's no live connection.
+    await Promise.allSettled([this._starting])
 
-    const restrictedSig = disabledSignature(await this._tierDisabledIds('restricted'))
-    if (restrictedSig !== this._launchedDisabledIds.restricted) {
-      if (!this._restricted) this._startingRestricted = undefined
-      await this._restart('restricted', 'workspace')
-    }
-
-    const trustedSig = disabledSignature(await this._tierDisabledIds('trusted'))
-    if (this._trusted && trustedSig !== this._launchedDisabledIds.trusted) {
-      await this._restart('trusted', 'workspace')
+    const sig = disabledSignature(await this._disabledIds())
+    if (sig !== this._launchedDisabledIds) {
+      if (!this._conn) this._starting = undefined
+      await this._restart('workspace')
     }
   }
 
   private async _onWorkspaceChanged(): Promise<void> {
-    // The host pins the workspace folder at launch; relaunch live tiers so
-    // `workspace.rootPath` and the fs gateway's containment root update.
+    // The host pins the workspace folder at launch; relaunch so `workspace.rootPath`
+    // updates.
     //
-    // A swap can land while the initial boot is still spawning a tier — the
-    // Electron-as-node spawn is slow enough on Windows CI to widen this window.
-    // At that point `this._trusted` isn't assigned yet (the `_connect` await
-    // hasn't returned), so reading it directly would drop the swap and leave the
-    // host pinned to the launch-time (empty) workspace forever — git then sees no
-    // rootPath and never registers its SCM provider. Wait for any in-flight start
-    // to settle first so the relaunch sees the freshly-connected tiers.
-    await Promise.allSettled([this._startingTrusted, this._startingRestricted])
-    const kinds: ExtHostKind[] = []
-    if (this._trusted) kinds.push('trusted')
-    if (this._restricted) kinds.push('restricted')
-    for (const kind of kinds) {
-      await this._restart(kind, 'workspace')
-    }
+    // A swap can land while the initial boot is still spawning — the Electron-as-node
+    // spawn is slow enough on Windows CI to widen this window. At that point
+    // `this._conn` isn't assigned yet (the `_connect` await hasn't returned), so
+    // reading it directly would drop the swap and leave the host pinned to the
+    // launch-time (empty) workspace forever — git then sees no rootPath and never
+    // registers its SCM provider. Wait for any in-flight start to settle first so the
+    // relaunch sees the freshly-connected host.
+    await Promise.allSettled([this._starting])
+    if (this._conn) await this._restart('workspace')
   }
 
-  /** Stop (if alive) and relaunch a tier, then re-index and re-run startup activation. */
-  private async _restart(
-    kind: ExtHostKind,
-    reason: 'crash' | 'workspace' = 'crash',
-  ): Promise<void> {
-    const current = kind === 'trusted' ? this._trusted : this._restricted
+  /** Stop (if alive) and relaunch the host, then re-index and re-run startup activation. */
+  private async _restart(reason: 'crash' | 'workspace' = 'crash'): Promise<void> {
+    const current = this._conn
     if (current && reason === 'workspace') {
       this._stopping.add(current.handle)
       await this._host.stop(current.handle)
       this._teardownConnection(current)
     }
 
+    this._starting = this._connect().catch((err: unknown) => {
+      this._starting = undefined
+      throw err
+    })
     try {
-      if (kind === 'trusted') await this._startTrusted()
-      else await this._startRestricted()
+      await this._starting
     } catch (err) {
-      this._logger.warn(`${kind} extension host restart failed: ${(err as Error).message}`)
+      this._logger.warn(`extension host restart failed: ${(err as Error).message}`)
       return
     }
 
-    const conn = kind === 'trusted' ? this._trusted : this._restricted
+    const conn = this._conn
     if (!conn) return
     await this._fetchAndIndex(conn)
     // Re-translate before activation: the new host's commands must be back in the
@@ -512,7 +473,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     this._onDidChangeContributions.fire(this._mergedContributions())
     await conn.extensions.$activateByEvent(STARTUP_ACTIVATION)
     await conn.extensions.$activateByEvent(STARTUP_FINISHED_ACTIVATION)
-    this._logger.info(`${kind} extension host restarted (${reason})`)
+    this._logger.info(`extension host restarted (${reason})`)
   }
 }
 

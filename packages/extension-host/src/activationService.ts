@@ -7,7 +7,10 @@
  */
 import { pathToFileURL } from 'node:url'
 import type { ExtensionContext } from '@universe-editor/extension-api'
-import { matchesActivationEvent } from '@universe-editor/extensions-common'
+import {
+  getUntrustedWorkspaceSupportType,
+  matchesActivationEvent,
+} from '@universe-editor/extensions-common'
 import type { IScannedExtension } from './extensionScanner.js'
 import { createExtensionContext, type IExtensionStorage } from './apiFactory.js'
 
@@ -24,22 +27,59 @@ interface ExtensionModule {
 export class ExtensionActivationService {
   private readonly _activated = new Map<string, ActivatedExtension>()
   private readonly _activating = new Map<string, Promise<void>>()
+  /** Every activation event seen so far, replayed after a trust grant. */
+  private readonly _firedEvents = new Set<string>()
 
   constructor(
     private readonly _extensions: readonly IScannedExtension[],
+    private readonly _isTrusted: () => boolean,
     private readonly _storage?: IExtensionStorage,
     private readonly _globalStorageHome?: string,
   ) {}
 
   /** Activate every extension whose declared events match `event`. */
   async activateByEvent(event: string): Promise<void> {
+    this._firedEvents.add(event)
     const pending: Promise<void>[] = []
     for (const ext of this._extensions) {
+      if (!this._isActivatable(ext)) continue
       if (matchesActivationEvent(ext.manifest.activationEvents ?? [], event)) {
         pending.push(this._activate(ext))
       }
     }
     await Promise.all(pending)
+  }
+
+  /**
+   * Re-run every activation event seen so far. Called after a trust grant so
+   * extensions that were gated off (and whose `onLanguage:` / other events fired
+   * while untrusted, e.g. for already-open documents) now activate — without the
+   * renderer having to replay document opens.
+   */
+  async replayFiredEvents(): Promise<void> {
+    await Promise.all([...this._firedEvents].map((event) => this.activateByEvent(event)))
+  }
+
+  /**
+   * VSCode `DisabledByTrustRequirement`: an extension whose untrusted-workspace
+   * support is `false` is not activated at all in an untrusted workspace. A
+   * `'limited'` extension still activates and gates itself via `workspace.isTrusted`.
+   */
+  private _isActivatable(ext: IScannedExtension): boolean {
+    if (this._isTrusted()) return true
+    // Built-ins ship with the app — implicitly trusted, like VSCode system extensions.
+    if (ext.builtin) return true
+    const support = getUntrustedWorkspaceSupportType({
+      hasMain: ext.mainPath !== undefined,
+      ...(ext.manifest.capabilities?.untrustedWorkspaces !== undefined
+        ? { untrustedWorkspaces: ext.manifest.capabilities.untrustedWorkspaces }
+        : {}),
+    })
+    if (support === false) {
+      console.error(`[ext-host] ${ext.id} not activated: requires a trusted workspace`)
+      return false
+    }
+    return true
   }
 
   private _activate(ext: IScannedExtension): Promise<void> {

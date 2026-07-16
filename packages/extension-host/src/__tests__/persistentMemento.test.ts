@@ -6,6 +6,7 @@ import type { IScannedExtension } from '../extensionScanner.js'
 const EXT: IScannedExtension = {
   id: 'test.ext',
   extensionPath: '/fake/path',
+  builtin: false,
   manifest: { name: 'ext', version: '0.0.0', engines: { universe: '^0.1.0' } },
   mainPath: '/fake/path/main.js',
 }

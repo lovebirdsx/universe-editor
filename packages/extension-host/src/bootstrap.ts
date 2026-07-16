@@ -161,6 +161,12 @@ const extHostExtensions: IExtHostExtensions = {
   $activateByEvent: async (event) => {
     await (await serviceReady).activateByEvent(event)
   },
+  $initializeWorkspaceTrust: async (trusted) => {
+    ;(await serviceReady).initializeWorkspaceTrust(trusted)
+  },
+  $onDidGrantWorkspaceTrust: async () => {
+    await (await serviceReady).grantWorkspaceTrust()
+  },
 }
 const extHostScm: IExtHostScm = {
   $onInputBoxValueChange: async (handle, value) => {
@@ -251,23 +257,32 @@ server.registerChannel(ExtHostChannels.extHostEditor, ProxyChannel.fromService(e
 server.registerChannel(ExtHostChannels.extHostWebviews, ProxyChannel.fromService(extHostWebviews))
 
 async function main(): Promise<void> {
-  const kind = process.env.UNIVERSE_EXT_HOST_KIND === 'restricted' ? 'restricted' : 'trusted'
   const locale = process.env.UNIVERSE_DISPLAY_LOCALE || undefined
-  const dir =
-    kind === 'restricted'
-      ? process.env.UNIVERSE_USER_EXTENSIONS_DIR
-      : process.env.UNIVERSE_BUILTIN_EXTENSIONS_DIR
-  const extensions = dir ? await scanExtensions(dir, HOST_API_VERSION, locale) : []
+  // A single local host scans both the built-in dir and the user (external) dir;
+  // trust is a runtime gate, not a process split. Built-in first so a built-in
+  // extension wins an id collision with a user extension.
+  const dirs = [
+    { dir: process.env.UNIVERSE_BUILTIN_EXTENSIONS_DIR, builtin: true },
+    { dir: process.env.UNIVERSE_USER_EXTENSIONS_DIR, builtin: false },
+  ].filter((d): d is { dir: string; builtin: boolean } => !!d.dir)
+  const scanned = (
+    await Promise.all(dirs.map((d) => scanExtensions(d.dir, d.builtin, HOST_API_VERSION, locale)))
+  ).flat()
+  // De-dupe by id, keeping the first occurrence (built-in wins over user).
+  const seen = new Set<string>()
+  const extensions = scanned.filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)))
   const disabled = new Set(
     (process.env.UNIVERSE_DISABLED_EXTENSIONS ?? '').split(',').filter(Boolean),
   )
   const activeExtensions =
     disabled.size > 0 ? extensions.filter((e) => !disabled.has(e.id)) : extensions
-  if (!dir) {
-    console.error(`[ext-host] no extensions directory configured for ${kind} host`)
+  if (dirs.length === 0) {
+    console.error('[ext-host] no extensions directory configured')
   } else {
     console.error(
-      `[ext-host] (${kind}) scanned ${extensions.length} extension(s) from ${dir}` +
+      `[ext-host] scanned ${extensions.length} extension(s) from [${dirs
+        .map((d) => d.dir)
+        .join(', ')}]` +
         (disabled.size > 0 ? `, ${extensions.length - activeExtensions.length} disabled` : ''),
     )
   }
@@ -275,17 +290,12 @@ async function main(): Promise<void> {
   const workspaceRoot = process.env.UNIVERSE_WORKSPACE_ROOT || undefined
   console.error(`[ext-host] workspace root: ${workspaceRoot ?? '(none)'}`)
 
-  // Parent dir for per-extension persistent storage (`<home>/<extId>`). Trusted
-  // host only — restricted extensions get no writable cache dir.
-  const globalStorageHome =
-    kind === 'trusted' ? process.env.UNIVERSE_GLOBAL_STORAGE_DIR || undefined : undefined
+  // Parent dir for per-extension persistent storage (`<home>/<extId>`).
+  const globalStorageHome = process.env.UNIVERSE_GLOBAL_STORAGE_DIR || undefined
 
-  // AI is a trusted-only capability; the renderer registers mainThreadAi only on
-  // the trusted connection, so don't even open the proxy in a restricted host.
-  const mainThreadAi =
-    kind === 'trusted'
-      ? ProxyChannel.toService<IMainThreadAi>(client.getChannel(ExtHostChannels.mainThreadAi))
-      : undefined
+  const mainThreadAi = ProxyChannel.toService<IMainThreadAi>(
+    client.getChannel(ExtHostChannels.mainThreadAi),
+  )
 
   resolveService(
     new ExtensionService(
@@ -295,7 +305,6 @@ async function main(): Promise<void> {
       mainThreadScm,
       workspaceRoot,
       mainThreadFs,
-      kind,
       mainThreadOutput,
       mainThreadLanguages,
       mainThreadEditor,
@@ -305,7 +314,7 @@ async function main(): Promise<void> {
       globalStorageHome,
     ),
   )
-  console.error(`[ext-host] ready (${kind})`)
+  console.error('[ext-host] ready')
 }
 
 void main().catch((err: unknown) => {

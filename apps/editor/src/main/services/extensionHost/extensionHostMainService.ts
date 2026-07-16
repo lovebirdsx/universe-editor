@@ -8,7 +8,7 @@
  *  of the raw byte stream. Mirrors AcpHostMainService.
  *--------------------------------------------------------------------------------------------*/
 
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
@@ -125,9 +125,6 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
 
   private readonly _logger: ILogger
 
-  /** Cached result of probing whether this runtime accepts the Node permission model. */
-  private _permissionModelSupported: boolean | undefined
-
   /** Set once the first host process spawns, so the perf mark fires only once. */
   private _didMarkFirstSpawn = false
 
@@ -145,36 +142,27 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
 
   start(spec?: ExtHostStartSpec): Promise<ExtHostStartResult> {
     const handle = randomUUID()
-    const kind = spec?.kind ?? 'trusted'
     // The host runs as Electron-as-node, so re-add ELECTRON_RUN_AS_NODE.
     const env = buildChildEnv(process.env, { runAsNode: true })
-    env.UNIVERSE_EXT_HOST_KIND = kind
 
     const command = process.execPath
     const entry = this._resolveEntry()
     const args: string[] = []
 
-    if (kind === 'restricted') {
-      const extDir = spec?.extensionsDir ?? this._resolveUserExtensionsDir()
-      env.UNIVERSE_USER_EXTENSIONS_DIR = extDir
-      // Best-effort OS-level lockdown: read only the extensions dir + the
-      // bootstrap; no workspace read, no write, no child_process. Workspace fs
-      // must go through the main gateway. Skipped when the runtime (Electron)
-      // doesn't accept the flags — soft isolation then relies on not handing
-      // external code raw capabilities. See the plan's "honest boundary" note.
-      args.push(...this._permissionArgs(extDir, path.dirname(entry)))
-    } else {
-      // Tell the host where to scan for built-in extensions (survives the denylist).
-      env.UNIVERSE_BUILTIN_EXTENSIONS_DIR = spec?.extensionsDir ?? this._resolveExtensionsDir()
-      // The `typescript` built-in plugin spawns the LSP server itself; hand it the
-      // vendored CLI + tsserver paths (the only Electron-aware resolution).
-      const { cli, tsserver } = this._resolveTsServerPaths()
-      env.UNIVERSE_TSLS_CLI = cli
-      env.UNIVERSE_TSLS_TSSERVER = tsserver
-      // Parent dir for extensions' persistent cross-session storage
-      // (`context.globalStoragePath` = `<dir>/<extId>`). Trusted host only.
-      env.UNIVERSE_GLOBAL_STORAGE_DIR = path.join(app.getPath('userData'), 'extensionGlobalStorage')
-    }
+    // A single local extension host scans both the bundled built-in dir and the
+    // user (external) dir. Trust is a runtime gate (Workspace Trust), not a
+    // process/capability split — every local extension gets the full API and raw
+    // Node access once its workspace is trusted.
+    env.UNIVERSE_BUILTIN_EXTENSIONS_DIR = spec?.extensionsDir ?? this._resolveExtensionsDir()
+    env.UNIVERSE_USER_EXTENSIONS_DIR = spec?.userExtensionsDir ?? this._resolveUserExtensionsDir()
+    // The `typescript` built-in plugin spawns the LSP server itself; hand it the
+    // vendored CLI + tsserver paths (the only Electron-aware resolution).
+    const { cli, tsserver } = this._resolveTsServerPaths()
+    env.UNIVERSE_TSLS_CLI = cli
+    env.UNIVERSE_TSLS_TSSERVER = tsserver
+    // Parent dir for extensions' persistent cross-session storage
+    // (`context.globalStoragePath` = `<dir>/<extId>`).
+    env.UNIVERSE_GLOBAL_STORAGE_DIR = path.join(app.getPath('userData'), 'extensionGlobalStorage')
 
     // The open folder, surfaced to extensions as `workspace.rootPath`.
     if (spec?.workspaceRoot !== undefined) {
@@ -184,7 +172,7 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     if (spec?.locale !== undefined) {
       env.UNIVERSE_DISPLAY_LOCALE = spec.locale
     }
-    // Disabled / quarantined extensions the restricted host must skip scanning.
+    // Disabled / quarantined extensions the host must skip scanning.
     if (spec?.disabledIds && spec.disabledIds.length > 0) {
       env.UNIVERSE_DISABLED_EXTENSIONS = spec.disabledIds.join(',')
     }
@@ -371,46 +359,6 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     } catch {
       return Promise.resolve(false) // ENOENT (no dir) or unreadable → nothing to load
     }
-  }
-
-  /**
-   * Build the Node permission-model argv for a restricted host, or [] otherwise.
-   *
-   * OFF by default: narrowing fs-read can stop Electron-as-node from reading its
-   * own resources and crash-loop the host, and we can't verify support on every
-   * runtime. Opt in with `UNIVERSE_EXT_HOST_PERMISSION=1`; even then we probe
-   * first and fall back to soft isolation (no raw capability handed to external
-   * code + fs only via the gateway) if the runtime rejects the flags.
-   */
-  private _permissionArgs(extDir: string, entryDir: string): string[] {
-    if (process.env.UNIVERSE_EXT_HOST_PERMISSION !== '1') return []
-    if (!this._supportsPermissionModel()) {
-      this._logger.warn(
-        'restricted extension host: Node permission model unavailable; falling back to soft isolation',
-      )
-      return []
-    }
-    // Read the extension code + the bootstrap; deny workspace read, all writes,
-    // and child_process. Workspace access is forced through the main fs gateway.
-    return ['--experimental-permission', `--allow-fs-read=${extDir}`, `--allow-fs-read=${entryDir}`]
-  }
-
-  /** Probe (once) whether the runtime accepts `--experimental-permission`. */
-  private _supportsPermissionModel(): boolean {
-    if (this._permissionModelSupported !== undefined) return this._permissionModelSupported
-    let supported = false
-    try {
-      const res = spawnSync(
-        process.execPath,
-        ['--experimental-permission', '--allow-fs-read=*', '-e', '0'],
-        { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true, timeout: 5000 },
-      )
-      supported = res.status === 0
-    } catch {
-      supported = false
-    }
-    this._permissionModelSupported = supported
-    return supported
   }
 
   override dispose(): void {

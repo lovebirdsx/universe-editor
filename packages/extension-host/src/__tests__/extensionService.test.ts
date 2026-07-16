@@ -88,6 +88,7 @@ function scanned(activationEvents: string[]): IScannedExtension {
   return {
     id: 'test.ext',
     extensionPath: dir,
+    builtin: true,
     mainPath,
     manifest: {
       name: 'ext',
@@ -197,6 +198,7 @@ describe('ExtensionService', () => {
     const ext: IScannedExtension = {
       id: 'test.disposing',
       extensionPath: dir,
+      builtin: true,
       mainPath: disposingMain,
       manifest: {
         name: 'disposing',

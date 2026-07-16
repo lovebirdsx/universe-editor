@@ -33,6 +33,7 @@ function dto(overrides: Partial<IExtensionDescriptionDto> = {}): IExtensionDescr
     name: 'ext',
     activationEvents: ['onCommand:test.cmd'],
     contributes: { commands: [{ command: 'test.cmd', title: 'Test Command', category: 'Test' }] },
+    hasMain: true,
     ...overrides,
   }
 }

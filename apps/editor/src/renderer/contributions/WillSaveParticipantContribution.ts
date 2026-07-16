@@ -26,7 +26,7 @@ export class WillSaveParticipantContribution extends Disposable implements IWork
   }
 
   private async _participate(model: monaco.editor.ITextModel, reason: SaveReason): Promise<void> {
-    const documents = this._client.getTrustedDocuments()
+    const documents = this._client.getDocuments()
     if (!documents) return
 
     // Push the current (possibly debounced) buffer to the host first, so

@@ -24,6 +24,12 @@ export interface IScannedExtension {
   readonly manifest: IExtensionManifest
   /** Absolute path to the extension's root folder. */
   readonly extensionPath: string
+  /**
+   * True for extensions shipped with the app (built-in dir). Built-ins are
+   * implicitly trusted — they bypass the Workspace Trust activation gate, like
+   * VSCode's system extensions.
+   */
+  readonly builtin: boolean
   /** Absolute path to the entry module, or undefined for a declaration-only extension. */
   readonly mainPath?: string
   /**
@@ -82,6 +88,7 @@ async function resolveJsonValidation(
 
 async function scanOne(
   extensionPath: string,
+  builtin: boolean,
   hostApiVersion?: string,
   locale?: string,
 ): Promise<IScannedExtension> {
@@ -101,6 +108,7 @@ async function scanOne(
     id: extensionId(manifest),
     manifest,
     extensionPath,
+    builtin,
     ...(manifest.main !== undefined
       ? { mainPath: path.resolve(extensionPath, manifest.main) }
       : {}),
@@ -114,9 +122,11 @@ async function scanOne(
  * doesn't satisfy it are skipped (logged), same as a malformed manifest.
  * `locale` selects the `package.nls.<locale>.json` bundle for manifest
  * localization (falls back to `package.nls.json`, then to the raw `%key%`).
+ * `builtin` marks the results as app-shipped (trusted; bypasses the trust gate).
  */
 export async function scanExtensions(
   dir: string,
+  builtin: boolean,
   hostApiVersion?: string,
   locale?: string,
 ): Promise<IScannedExtension[]> {
@@ -136,7 +146,7 @@ export async function scanExtensions(
     if (entry.name.endsWith(DELETED_FOLDER_POSTFIX)) continue
     const extensionPath = path.join(dir, entry.name)
     try {
-      result.push(await scanOne(extensionPath, hostApiVersion, locale))
+      result.push(await scanOne(extensionPath, builtin, hostApiVersion, locale))
     } catch (err) {
       console.error(`[ext-host] skipping ${entry.name}: ${(err as Error).message}`)
     }

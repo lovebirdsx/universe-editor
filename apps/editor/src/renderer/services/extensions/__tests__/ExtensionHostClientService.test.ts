@@ -25,6 +25,7 @@ import {
   type IStorageService,
   type IViewsService,
   type IWorkspaceService,
+  type IWorkspaceTrustManagementService,
   UriIdentityService,
 } from '@universe-editor/platform'
 import type { IExtensionDescriptionDto } from '@universe-editor/extensions-common'
@@ -42,6 +43,7 @@ const CONTRIBUTIONS: IExtensionDescriptionDto[] = [
     name: 'ai',
     activationEvents: ['onCommand:ai.generateCommitMessage'],
     contributes: { commands: [{ command: 'ai.generateCommitMessage', title: 'Generate' }] },
+    hasMain: true,
   },
 ]
 
@@ -57,6 +59,8 @@ vi.mock('../HostConnection.js', () => {
     extensions = {
       $getContributions: vi.fn().mockResolvedValue(CONTRIBUTIONS),
       $activateByEvent: vi.fn().mockResolvedValue(undefined),
+      $initializeWorkspaceTrust: vi.fn().mockResolvedValue(undefined),
+      $onDidGrantWorkspaceTrust: vi.fn().mockResolvedValue(undefined),
     }
     constructor(kind: string, handle: string) {
       this.kind = kind
@@ -141,6 +145,11 @@ function makeServiceWith(
       onDidChangeEnablement: Event.None,
       getEffectiveDisabledIds: vi.fn().mockResolvedValue([]),
     } as unknown as IExtensionEnablementService,
+    {
+      onDidChangeTrust: Event.None,
+      workspaceTrustInitialized: Promise.resolve(),
+      isWorkspaceTrusted: () => true,
+    } as unknown as IWorkspaceTrustManagementService,
   )
 }
 
@@ -173,7 +182,7 @@ describe('ExtensionHostClientService', () => {
     await vi.waitFor(() => expect(seen).toHaveLength(1))
 
     expect(seen[0]).toEqual(CONTRIBUTIONS)
-    // The old trusted connection was torn down and a fresh one launched.
+    // The old connection was torn down and a fresh one launched.
     expect(disposed).toContain('h1')
     expect(host.stop).toHaveBeenCalledWith('h1')
     expect(host.start).toHaveBeenCalledTimes(2)
@@ -181,53 +190,10 @@ describe('ExtensionHostClientService', () => {
     svc.dispose()
   })
 
-  it('does not wipe SCM providers when the restricted host tears down', async () => {
-    // Regression: git + p4 register their SCM providers ONLY on the trusted host
-    // (restricted `createSourceControl` throws). `_teardownConnection` reset SCM
-    // unconditionally, so tearing down the RESTRICTED tier (its crash, or the
-    // restricted leg of a workspace-swap restart that runs after trusted already
-    // re-registered) wiped the trusted host's providers — the intermittent
-    // "No source control providers registered". Reset must be trusted-only,
-    // mirroring the per-tier `webview.reset(kind)`.
-    disposed.length = 0
-    const resetSourceControls = vi.fn()
-    const onExit = new Emitter<{ handle: string; code: number | null; signal: string | null }>()
-    const kindByHandle = new Map<string, string>()
-    let n = 0
-    const host = {
-      onExit: onExit.event,
-      onStdout: Event.None,
-      onStderr: Event.None,
-      start: vi.fn().mockImplementation((spec: { kind: string }) => {
-        const handle = `h${++n}`
-        kindByHandle.set(handle, spec.kind)
-        return Promise.resolve({ handle })
-      }),
-      hasUserExtensions: vi.fn().mockResolvedValue(true),
-      writeStdin: vi.fn().mockResolvedValue(undefined),
-      stop: vi.fn().mockResolvedValue(undefined),
-    } as unknown as IExtensionHostService
-
-    const svc = makeServiceWith(host, resetSourceControls)
-    await svc.start()
-
-    const restrictedHandle = [...kindByHandle].find(([, k]) => k === 'restricted')?.[0]
-    expect(restrictedHandle).toBeDefined()
-
-    // The restricted host dies (teardown runs the same for a crash or a planned
-    // restart leg); a clean code keeps the assertion off the crash-notify path.
-    onExit.fire({ handle: restrictedHandle!, code: 0, signal: null })
-
-    // Trusted-owned SCM providers must survive a restricted teardown.
-    expect(resetSourceControls).not.toHaveBeenCalled()
-
-    svc.dispose()
-  })
-
-  it('relaunches the tier when a workspace swap races the initial spawn', async () => {
+  it('relaunches the host when a workspace swap races the initial spawn', async () => {
     // Regression: a swap fired while the first `host.start` is still pending must
-    // not be dropped. Before the fix `_onWorkspaceChanged` read `this._trusted`
-    // (still undefined mid-spawn), saw no live tier, and silently skipped the
+    // not be dropped. Before the fix `_onWorkspaceChanged` read `this._conn`
+    // (still undefined mid-spawn), saw no live host, and silently skipped the
     // relaunch — leaving the host pinned to the launch-time (empty) workspace, so
     // git never registered its SCM provider (Windows-CI-only flake, slow spawn).
     disposed.length = 0

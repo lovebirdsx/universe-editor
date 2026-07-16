@@ -94,6 +94,20 @@ const repositorySchema = z.union([
   z.object({ type: z.string().optional(), url: z.string().min(1) }),
 ])
 
+const untrustedWorkspacesSchema = z.union([
+  z.literal(true),
+  z.object({ supported: z.literal(false), description: z.string().min(1) }),
+  z.object({
+    supported: z.literal('limited'),
+    description: z.string().min(1),
+    restrictedConfigurations: z.array(z.string().min(1)).optional(),
+  }),
+])
+
+const capabilitiesSchema = z
+  .object({ untrustedWorkspaces: untrustedWorkspacesSchema.optional() })
+  .passthrough()
+
 const manifestSchema = z.object({
   name: z.string().min(1),
   version: z.string().min(1),
@@ -111,6 +125,7 @@ const manifestSchema = z.object({
     )
     .optional(),
   contributes: contributesSchema.optional(),
+  capabilities: capabilitiesSchema.optional(),
   // Marketplace display metadata (additive, all optional).
   categories: z.array(z.string().min(1)).optional(),
   keywords: z.array(z.string().min(1)).optional(),

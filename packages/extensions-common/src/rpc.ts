@@ -98,6 +98,18 @@ export interface IExtHostExtensions {
    * per extension and logged to stderr, never rejecting the whole batch).
    */
   $activateByEvent(event: string): Promise<void>
+  /**
+   * Seed the initial Workspace Trust state before any activation. The renderer
+   * calls this once, right after connecting, so `workspace.isTrusted` reads the
+   * correct value inside extensions' `activate`.
+   */
+  $initializeWorkspaceTrust(trusted: boolean): Promise<void>
+  /**
+   * Trust was granted for the current workspace (untrusted → trusted). Flips
+   * `workspace.isTrusted` and fires `onDidGrantWorkspaceTrust`. A revoke is not
+   * sent here — it restarts the whole host (activated extensions can't unload).
+   */
+  $onDidGrantWorkspaceTrust(): Promise<void>
 }
 
 /**

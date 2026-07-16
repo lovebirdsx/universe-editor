@@ -5,7 +5,7 @@ import {
   localize,
 } from '@universe-editor/platform'
 import type { IPart, IStatusBarEntry } from '@universe-editor/platform'
-import { Bell, Loader2, RefreshCw, Sparkles, type LucideIcon } from 'lucide-react'
+import { Bell, Loader2, RefreshCw, Shield, Sparkles, type LucideIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useService, useObservable } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
@@ -15,6 +15,7 @@ import styles from './StatusBar.module.css'
 const ICON_MAP: Record<string, LucideIcon> = {
   bell: Bell,
   sparkle: Sparkles,
+  shield: Shield,
 }
 
 /** Inline `$(codicon)` syntax anywhere in status-bar text (mirrors VSCode). */

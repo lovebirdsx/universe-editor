@@ -143,6 +143,10 @@ export class ExtensionService implements IExtensionHostBridge {
   readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined> =
     this._onDidChangeActiveTextEditor.event
 
+  /** Workspace Trust state; seeded via `$initializeWorkspaceTrust`, flipped by a grant. */
+  private _trusted = false
+  private readonly _onDidGrantWorkspaceTrust = new Emitter<void>()
+
   readonly onDidOpenTextDocument = this._documents.onDidOpen
   readonly onDidChangeTextDocument = this._documents.onDidChange
   readonly onDidCloseTextDocument = this._documents.onDidClose
@@ -155,7 +159,6 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _mainThreadScm: IMainThreadScm,
     private readonly _workspaceRoot?: string,
     private readonly _mainThreadFs?: IMainThreadFs,
-    private readonly _kind: 'trusted' | 'restricted' = 'trusted',
     private readonly _mainThreadOutput?: IMainThreadOutput,
     private readonly _mainThreadLanguages?: IMainThreadLanguages,
     private readonly _mainThreadEditor?: IMainThreadEditor,
@@ -168,6 +171,7 @@ export class ExtensionService implements IExtensionHostBridge {
     this._languageRegistry = new LanguageProviderRegistry(() => this._languages(), this._documents)
     this._activation = new ExtensionActivationService(
       _extensions,
+      () => this._trusted,
       _mainThreadStorage,
       _globalStorageHome,
     )
@@ -276,11 +280,6 @@ export class ExtensionService implements IExtensionHostBridge {
   // --- IExtensionHostBridge: scm ---
 
   createSourceControl(id: string, label: string, rootUri?: string): SourceControl {
-    if (this._kind === 'restricted') {
-      throw new Error(
-        'scm.createSourceControl is not available to restricted (external) extensions',
-      )
-    }
     const handle = this._scmHandle++
     const sc = new HostSourceControl(
       handle,
@@ -300,6 +299,30 @@ export class ExtensionService implements IExtensionHostBridge {
 
   getWorkspaceRoot(): string | undefined {
     return this._workspaceRoot
+  }
+
+  isWorkspaceTrusted(): boolean {
+    return this._trusted
+  }
+
+  get onDidGrantWorkspaceTrust(): Event<void> {
+    return this._onDidGrantWorkspaceTrust.event
+  }
+
+  /** Seed the initial trust state (renderer calls this once before activation). */
+  initializeWorkspaceTrust(trusted: boolean): void {
+    this._trusted = trusted
+  }
+
+  /** Trust granted at runtime: flip the flag, notify extensions, replay activation. */
+  async grantWorkspaceTrust(): Promise<void> {
+    if (this._trusted) return
+    this._trusted = true
+    this._onDidGrantWorkspaceTrust.fire()
+    // Extensions gated off while untrusted now become activatable; replay every
+    // activation event seen so far so `onLanguage:`-gated plugins start for
+    // already-open documents.
+    await this._activation.replayFiredEvents()
   }
 
   private _fs(): IMainThreadFs {
@@ -725,6 +748,10 @@ export class ExtensionService implements IExtensionHostBridge {
             ? { jsonValidation: ext.resolvedJsonValidation }
             : {}),
         },
+        hasMain: ext.manifest.main !== undefined,
+        ...(ext.manifest.capabilities?.untrustedWorkspaces !== undefined
+          ? { untrustedWorkspaces: ext.manifest.capabilities.untrustedWorkspaces }
+          : {}),
       }
     })
   }

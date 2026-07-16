@@ -33,6 +33,8 @@ import {
   IFocusTrackerService,
   IUriIdentityService,
   UriIdentityService,
+  IWorkspaceTrustManagementService,
+  WorkspaceTrustManagementService,
   type IWorkspaceServiceWire,
   ConfigurationService,
   ContributionService,
@@ -410,6 +412,14 @@ async function bootstrapWorkbench(): Promise<void> {
   // workbenchStore so the container — and every service it materializes — is
   // disposed on unload (the kernel marks materialized services as singletons).
   const instantiation = workbenchStore.add(new InstantiationService(services))
+
+  // Workspace Trust: the runtime authority for whether extensions may activate
+  // in the current folder. Depends on IStorageService (app-scope trusted-folder
+  // list) + IWorkspaceService + IUriIdentityService, all registered above.
+  const workspaceTrustService = workbenchStore.add(
+    instantiation.createInstance(WorkspaceTrustManagementService),
+  )
+  services.set(IWorkspaceTrustManagementService, workspaceTrustService)
 
   // Renderer-only service implementations (pure local state, no IPC).
   const editorGroupsService = workbenchStore.add(

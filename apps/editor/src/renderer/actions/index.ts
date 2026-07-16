@@ -323,6 +323,11 @@ import {
   ShowExtensionsAction,
   UninstallExtensionAction,
 } from './extensionsActions.js'
+import {
+  GrantWorkspaceTrustAction,
+  ManageWorkspaceTrustAction,
+  RevokeWorkspaceTrustAction,
+} from './workspaceTrustActions.js'
 
 // Layout
 registerAction2(ToggleActivityBarVisibilityAction)
@@ -685,3 +690,8 @@ registerAction2(EnableExtensionGloballyAction)
 registerAction2(DisableExtensionGloballyAction)
 registerAction2(EnableExtensionForWorkspaceAction)
 registerAction2(DisableExtensionForWorkspaceAction)
+
+// Workspace Trust
+registerAction2(GrantWorkspaceTrustAction)
+registerAction2(RevokeWorkspaceTrustAction)
+registerAction2(ManageWorkspaceTrustAction)

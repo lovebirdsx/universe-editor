@@ -29,8 +29,13 @@ export interface ExtHostStartResult {
   readonly handle: string
 }
 
-/** Which trust tier an Extension Host runs at. */
-export type ExtHostKind = 'trusted' | 'restricted'
+/**
+ * Identifies an Extension Host. There is a single local host now (Workspace
+ * Trust gates activation at runtime rather than splitting extensions across
+ * processes), so this has one value — kept as a named type because the webview
+ * router keys panel ownership on it.
+ */
+export type ExtHostKind = 'local'
 
 /** Launch parameters for the Extension Host. */
 export interface ExtHostStartSpec {
@@ -40,17 +45,15 @@ export interface ExtHostStartSpec {
    */
   readonly workspaceRoot?: string
   /**
-   * Trust tier. `trusted` (default) runs built-in extensions with raw Node
-   * access. `restricted` runs external extensions: filesystem goes through the
-   * main gateway, and (where the runtime supports it) the process is launched
-   * under the Node permission model.
-   */
-  readonly kind?: ExtHostKind
-  /**
-   * Override the directory scanned for extensions. Defaults per `kind`:
-   * trusted → bundled built-in dir; restricted → `<userData>/extensions`.
+   * Override the built-in extensions directory the host scans. Defaults to the
+   * bundled built-in dir. Tests inject a fixture dir here.
    */
   readonly extensionsDir?: string
+  /**
+   * Override the user (external) extensions directory the host scans, in
+   * addition to the built-in dir. Defaults to `<userData>/extensions`.
+   */
+  readonly userExtensionsDir?: string
   /**
    * Display locale (e.g. `zh-CN`) used to localize each extension manifest's
    * `%key%` placeholders against its `package.nls.<locale>.json`. Omitted →
@@ -60,7 +63,7 @@ export interface ExtHostStartSpec {
   /**
    * Identifiers to skip when scanning (disabled / quarantined extensions).
    * A disabled extension is filtered out of the scan entirely, so it never
-   * activates. Restricted host only.
+   * activates.
    */
   readonly disabledIds?: readonly string[]
 }
@@ -93,8 +96,7 @@ export interface IExtensionHostService {
   stopAll(): Promise<void>
   /**
    * Whether the user (external) extensions directory exists and is non-empty.
-   * Lets the renderer skip spawning the restricted host when there's nothing to
-   * load (the common case today).
+   * Lets the renderer decide whether to include external extensions in the scan.
    */
   hasUserExtensions(): Promise<boolean>
 }

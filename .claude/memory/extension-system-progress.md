@@ -42,3 +42,21 @@ metadata:
 **下一步**：Phase 6 已完成（外部加载+semver、真 Diff、双 host 隔离、崩溃/workspace-swap 重启）。**可选后续**：① git `@p1` e2e（临时仓库 stage+commit + 真 diff，需 SCM 探针 + fixture，本机 e2e 失效无法验证）；② 在真 Electron 上验证 Node 权限模型可行性，可行则把硬隔离设为默认；③ 受限 host 的软隔离再加固（模块加载器 denylist 拒绝外部扩展 `import('node:fs')`，目前是 best-effort）；④ 真机手测：外部插件加载、真 diff 打开、杀 ext host 自动恢复、切 workspace 重启。
 
 **验证限制**：本机 e2e 启动失效，里程碑的运行时验证（命令面板实跑 Hello World）本机无法执行；Phase 1 RPC 核心已用 node 单测 `stdioProtocol.test.ts` 覆盖回环 + 分帧。
+
+---
+
+## 重大重构（2026-07-16）：双 host → 单 host + Workspace Trust（对照 VSCode）
+
+**动机**：外置插件（eslint）跑在 `restricted` host 拿不到 languages/documents 通道 → 诊断出不来、server 从不 spawn。根因是"按安装来源分进程"，VSCode 不这么做。详见 skill `workspace-trust-single-host`。
+
+**已全部完成，`pnpm check`(47) + `pnpm e2e`(112+16) 全绿**：
+- **Phase 0 合并单 host**：删 `trusted`/`restricted` 双进程，所有本地扩展（内置+外置）跑同一 host，享完整 API。`ExtHostKind` 塌成单值 `'local'`（仅 WebviewService 路由留用）；`ExtensionHostClientService` 单 `_conn`/`_starting`；`HostConnection` 去所有 `if(deps.x)` 能力门（deps 恒注入）；bootstrap 合并扫 builtin+user 两目录（builtin 胜 id 碰撞）；**放弃 restricted fs 网关**（信任即全权，裸 node:fs/spawn 同内置）。
+- **Phase 1 Trust 状态+API**：platform 新增 `IWorkspaceTrustManagementService`（`packages/platform/src/workspace/workspaceTrust.ts`，照抄 VSCode `doGetUriTrustInfo` 最长父前缀继承，存 app-scope；**我们 storage 是 async**，故 `workspaceTrustInitialized` promise）；extension-api `workspace.isTrusted`+`onDidGrantWorkspaceTrust`；rpc `IExtHostExtensions.$initializeWorkspaceTrust`/`$onDidGrantWorkspaceTrust`；host `_trusted` + `grantWorkspaceTrust()`；renderer 连接后 seed trust + 订阅 `onDidChangeTrust`（授予=动态、撤销=重启 host）。
+- **Phase 2 manifest capabilities + 激活门控**：manifest 加 `capabilities.untrustedWorkspaces`(true|{supported:false}|{supported:'limited'})+zod；`getUntrustedWorkspaceSupportType`(有 main 未声明→默认 false)；`ExtensionActivationService` 加 `_isTrusted` 回调门控（`supported:false`+不受信→不激活=VSCode DisabledByTrustRequirement），**built-in 恒豁免**（scanner 加 `builtin` 标志）；DTO 加 `hasMain`+`untrustedWorkspaces`；授予后 `replayFiredEvents()` 重放已 fire 的激活事件（否则已开文档的 `onLanguage:` 不再触发）。eslint manifest 声明 `supported:false`。
+- **Phase 3 UI**：`WorkspaceTrustContribution`(AfterRestore)=状态栏 "Restricted Mode"(shield 图标,点击 manage)+首开未信任文件夹一次性弹窗(**E2E 探针在场时跳过弹窗**避免阻塞)；`workspaceTrustActions.ts`=Grant/Revoke/Manage 三命令。
+
+**关键坑/决策**：
+- 撤销信任**必须重启 host**（已激活扩展无法就地卸载，对照 VSCode）；授予是动态（replay 激活事件）。
+- built-in 扩展隐式受信（否则 TS/git 在未信任窗口全挂）——门控只针对外置。
+- 我们的 `IStorageService` 是 Promise 版（VSCode 是同步），trust 服务用 `workspaceTrustInitialized` 让消费方 await 首次加载。
+- 过时测试删除：`ExtensionHostClientService.test` 里"restricted 拆除不 wipe SCM"前提已不存在（单 host 拆除恒 reset SCM）。
