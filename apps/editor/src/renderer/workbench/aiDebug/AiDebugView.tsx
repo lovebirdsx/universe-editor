@@ -15,12 +15,19 @@ import {
 } from '@universe-editor/platform'
 import { IAiDebugService } from '../../../shared/ipc/aiDebugService.js'
 import { useService } from '../useService.js'
+import { useScrollRestore } from '@universe-editor/workbench-ui'
 import styles from './AiDebugView.module.css'
 
 export function AiDebugView() {
   const service = useService(IAiDebugService)
   const [records, setRecords] = useState<readonly AiDebugRecordSummary[]>([])
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
+
+  const listRef = useRef<HTMLUListElement | null>(null)
+  useScrollRestore(
+    'aiDebug',
+    useCallback(() => listRef.current, []),
+  )
 
   const refresh = useCallback(() => {
     void service.listRecords().then(setRecords)
@@ -55,7 +62,7 @@ export function AiDebugView() {
         </button>
       </div>
       <div className={styles['body']}>
-        <ul className={styles['list']}>
+        <ul className={styles['list']} ref={listRef}>
           {records.length === 0 && (
             <li className={styles['empty']} data-testid="ai-debug-empty">
               {localize('aiDebug.none', 'No AI requests recorded yet.')}

@@ -485,6 +485,7 @@ export function OutlineView() {
         <Tree<OutlineNode>
           model={model}
           rootRef={containerRef}
+          scrollStateKey="outline"
           className={styles['view'] ?? ''}
           virtualListClassName={styles['virtualList'] ?? ''}
           ariaLabel={localize('outline.label', 'Outline')}

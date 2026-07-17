@@ -8,7 +8,7 @@
  *  on-disk content.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Eye, FileSymlink } from 'lucide-react'
 import {
   IEditorGroupsService,
@@ -22,7 +22,7 @@ import {
   type IObservable,
 } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
-import { resourceDragProps } from '@universe-editor/workbench-ui'
+import { resourceDragProps, useScrollRestore } from '@universe-editor/workbench-ui'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import {
   ISessionChangeTrackerService,
@@ -60,6 +60,12 @@ export function SessionChangesView() {
   const changes = useObservable(sessionIdOnAgent ? tracker.changesFor(sessionIdOnAgent) : EMPTY_OBS)
   const viewMode = useObservable(sessionChangesViewState.viewMode)
 
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  useScrollRestore(
+    'sessionChanges',
+    useCallback(() => scrollRef.current, []),
+  )
+
   // This view owns the IStorageService dependency, so it restores the persisted
   // view mode into the shared store on mount and writes it back on change. The
   // title toolbar flips the mode through `sessionChangesViewState`.
@@ -92,7 +98,7 @@ export function SessionChangesView() {
     )
   }
   return (
-    <div className={styles['view']} data-testid="acp-changes-view">
+    <div className={styles['view']} data-testid="acp-changes-view" ref={scrollRef}>
       {viewMode === 'tree' ? (
         <ChangeTree changes={changes} />
       ) : (

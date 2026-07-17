@@ -25,6 +25,7 @@ import {
   type Ref,
 } from 'react'
 import { VirtualList, type VirtualListHandle } from '../list/VirtualList.js'
+import { useScrollRestore } from '../list/useScrollRestore.js'
 import { markAsSingleton } from '@universe-editor/platform'
 import { type IVisibleNode, type TreeModel } from './TreeModel.js'
 import { useTreeModel } from './useTreeModel.js'
@@ -84,6 +85,12 @@ export interface ITreeProps<T> {
   readonly onContextMenu?: (e: ReactMouseEvent, node: IVisibleNode<T> | null) => void
   /** Called when the tree container receives DOM focus — before built-in focus state update. */
   readonly onFocus?: () => void
+  /**
+   * Stable key identifying this logical view; when set, the tree's scroll
+   * position is saved on unmount and restored on remount through
+   * ScrollStateCache (survives container switches, not a window reload).
+   */
+  readonly scrollStateKey?: string
 }
 
 export function Tree<T>(props: ITreeProps<T>) {
@@ -104,6 +111,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     onContextMenu,
     onFocus,
     activateNonLeafOnEnter = false,
+    scrollStateKey,
   } = props
 
   const { selectionVersion, visibleNodes } = useTreeModel(model)
@@ -123,6 +131,15 @@ export function Tree<T>(props: ITreeProps<T>) {
     },
     [rootRef],
   )
+
+  // The scroll element differs by mode: in virtual mode the VirtualList parent
+  // scrolls (the root div doesn't); otherwise the root div itself is the
+  // overflow-y:auto scroller. Resolved lazily so it follows a threshold switch.
+  const getScrollElement = useCallback(
+    (): HTMLElement | null => virtualRef.current?.getScrollElement() ?? containerRef.current,
+    [],
+  )
+  useScrollRestore(scrollStateKey, getScrollElement)
 
   // Reveal: defer scroll to after commit. Prefer scrollIntoView on the row
   // element (works virtual + non-virtual); fall back to scrollToIndex when the

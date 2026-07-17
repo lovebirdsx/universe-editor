@@ -21,6 +21,8 @@ export interface VirtualListProps<T> {
 
 export interface VirtualListHandle {
   scrollToIndex(index: number, opts?: { align?: 'auto' | 'start' | 'center' | 'end' }): void
+  /** The scrollable element (this list's own scroller). Null before mount. */
+  getScrollElement(): HTMLElement | null
 }
 
 interface CachedStyle {
@@ -48,6 +50,9 @@ function VirtualListInner<T>(
     () => ({
       scrollToIndex(index, opts) {
         virtualizer.scrollToIndex(index, opts)
+      },
+      getScrollElement() {
+        return parentRef.current
       },
     }),
     [virtualizer],

@@ -20,6 +20,7 @@ import {
   Spinner,
   cx,
   dragContainsResources,
+  useScrollRestore,
 } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
@@ -61,6 +62,12 @@ export function ExtensionsView() {
   const [menu, setMenu] = useState<ExtensionActionsMenuState | undefined>(undefined)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+
+  useScrollRestore(
+    'extensions',
+    useCallback(() => scrollRef.current, []),
+  )
 
   useViewFocusable(
     VIEW_ID,
@@ -167,7 +174,7 @@ export function ExtensionsView() {
         </div>
       )}
 
-      <div className={styles.scroll}>
+      <div className={styles.scroll} ref={scrollRef}>
         <Section title={localize('extensions.group.installed', 'Installed')}>
           {installed.map((entry) => (
             <ExtensionRow

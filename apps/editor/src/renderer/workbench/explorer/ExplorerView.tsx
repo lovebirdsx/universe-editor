@@ -219,6 +219,7 @@ export function ExplorerView() {
         <Tree<IExplorerEntry>
           model={tree.model}
           rootRef={containerRef}
+          scrollStateKey="explorer"
           className={styles['view'] ?? ''}
           virtualListClassName={styles['virtualList'] ?? ''}
           virtualizationThreshold={threshold}

@@ -37,7 +37,7 @@ import {
   ConfigurationTarget,
   localize,
 } from '@universe-editor/platform'
-import { IconButton, Input, Spinner, cx } from '@universe-editor/workbench-ui'
+import { IconButton, Input, Spinner, cx, useScrollRestore } from '@universe-editor/workbench-ui'
 import {
   SwarmCommands,
   type SwarmDashboardResult,
@@ -149,6 +149,11 @@ export function SwarmReviewsView() {
   // usually already true on mount.
   const [ignoreReady, setIgnoreReady] = useState(() => swarmIgnoreStore.isReady)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  useScrollRestore(
+    'swarmReviews',
+    useCallback(() => scrollRef.current, []),
+  )
   const transitionsRef = useRef<Record<string, SwarmTransitionDto[]>>(
     swarmReviewsViewState.transitions,
   )
@@ -570,7 +575,7 @@ export function SwarmReviewsView() {
           )}
         </IconButton>
       </div>
-      <div className={styles['scroll']}>
+      <div className={styles['scroll']} ref={scrollRef}>
         {error && <div className={styles['error']}>{error}</div>}
         {!error && dashboard === null && !loading && (
           <div className={styles['message']}>

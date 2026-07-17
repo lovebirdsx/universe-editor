@@ -1199,6 +1199,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
         className={styles['tree'] ?? ''}
         virtualListClassName={styles['virtualList'] ?? ''}
         rootRef={treeRef}
+        scrollStateKey={`scm:${model.id}`}
         indentBase={0}
         renderRow={renderRow}
         onActivate={(node, opts) => {
