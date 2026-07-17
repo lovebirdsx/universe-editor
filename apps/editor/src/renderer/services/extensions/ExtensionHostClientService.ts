@@ -107,6 +107,16 @@ export class ExtensionHostClientService extends Disposable implements IExtension
 
   private _conn: HostConnection | undefined
   private _starting: Promise<void> | undefined
+  /**
+   * In-flight workspace re-pin. When the workspace folder changes, the host must
+   * be relaunched to re-pin `workspace.rootPath` (see {@link _onWorkspaceChanged}).
+   * That relaunch is async, so a command racing it — e.g. the markdown
+   * update-links-on-rename flush firing on the same `onDidRunFileOperation` burst
+   * that just swapped the workspace — could otherwise execute against the host
+   * still pinned to the *previous* (often empty) workspace, whose workspace scan
+   * returns nothing. `start()` awaits this so every command sees the re-pinned host.
+   */
+  private _repinning: Promise<void> | undefined
 
   /** Connections keyed by their live handle, for routing onExit. */
   private readonly _byHandle = new Map<string, HostConnection>()
@@ -153,7 +163,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     super()
     this._logger = loggerService.createLogger({ id: 'extHostClient', name: 'Extension Host' })
     this._register(this._host.onExit((evt) => this._onHostExit(evt)))
-    this._register(this._workspace.onDidChangeWorkspace(() => void this._onWorkspaceChanged()))
+    this._register(this._workspace.onDidChangeWorkspace(() => this._onWorkspaceChanged()))
     this._register(this._enablement.onDidChangeEnablement(() => void this._onEnablementChanged()))
     this._register(this._workspaceTrust.onDidChangeTrust((t) => void this._onTrustChanged(t)))
 
@@ -187,6 +197,23 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       })
     }
     return this._starting
+  }
+
+  /**
+   * Await the host being ready AND pinned to the current workspace: block on any
+   * in-flight workspace re-pin (see {@link _repinning}) before returning the live
+   * start. A command must never run against a host still pinned to the previous
+   * workspace — its workspace scan would come back empty.
+   */
+  private async _whenReady(): Promise<void> {
+    // Drain the re-pin barrier: a swap arriving while we await one replaces it
+    // with a fresh (chained) barrier, so loop until none is outstanding.
+    let inflight: Promise<void> | undefined
+    while (this._repinning && this._repinning !== inflight) {
+      inflight = this._repinning
+      await inflight
+    }
+    await this.start()
   }
 
   private async _connect(): Promise<void> {
@@ -306,7 +333,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   }
 
   async activateByEvent(event: string): Promise<void> {
-    await this.start()
+    await this._whenReady()
     await Promise.all(this._liveConnections().map((c) => c.extensions.$activateByEvent(event)))
   }
 
@@ -321,7 +348,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   }
 
   async executeContributedCommand(id: string, args: unknown[]): Promise<unknown> {
-    await this.start()
+    await this._whenReady()
     const conn = this._commandOwner.get(id) ?? this._conn
     if (!conn || conn.dead) {
       throw new Error(`No extension host owns command "${id}"`)
@@ -428,10 +455,25 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     }
   }
 
-  private async _onWorkspaceChanged(): Promise<void> {
+  private _onWorkspaceChanged(): void {
     // The host pins the workspace folder at launch; relaunch so `workspace.rootPath`
-    // updates.
-    //
+    // updates. Arm the re-pin barrier synchronously (before the first await) so a
+    // command firing on the same event turn — e.g. the update-links-on-rename flush
+    // debounced off the same file-operation burst that swapped the workspace —
+    // blocks on `_whenReady` until the host is re-pinned, rather than racing this
+    // async relaunch and reading the previous (often empty) workspace's scan.
+    const previous = this._repinning
+    const done = (async () => {
+      if (previous) await previous
+      await this._repin()
+    })()
+    this._repinning = done
+    void done.finally(() => {
+      if (this._repinning === done) this._repinning = undefined
+    })
+  }
+
+  private async _repin(): Promise<void> {
     // A swap can land while the initial boot is still spawning — the Electron-as-node
     // spawn is slow enough on Windows CI to widen this window. At that point
     // `this._conn` isn't assigned yet (the `_connect` await hasn't returned), so

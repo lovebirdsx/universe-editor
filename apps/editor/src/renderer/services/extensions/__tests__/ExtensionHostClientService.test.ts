@@ -55,7 +55,9 @@ vi.mock('../HostConnection.js', () => {
     readonly kind: string
     readonly handle: string
     dead = false
-    commands = { $executeContributedCommand: vi.fn().mockResolvedValue(undefined) }
+    commands = {
+      $executeContributedCommand: vi.fn().mockImplementation(() => Promise.resolve(this.handle)),
+    }
     extensions = {
       $getContributions: vi.fn().mockResolvedValue(CONTRIBUTIONS),
       $activateByEvent: vi.fn().mockResolvedValue(undefined),
@@ -226,6 +228,51 @@ describe('ExtensionHostClientService', () => {
     // The relaunch must still happen: original tier stopped, a fresh one spawned.
     await vi.waitFor(() => expect(host.start).toHaveBeenCalledTimes(2))
     expect(host.stop).toHaveBeenCalledWith('h1')
+
+    svc.dispose()
+  })
+
+  it('blocks a command racing a workspace swap until the host is re-pinned', async () => {
+    // Regression (Windows-CI-only flake): a command firing on the same turn as a
+    // workspace swap — e.g. the markdown update-links-on-rename flush debounced off
+    // the file-operation burst that swapped the workspace — must not execute against
+    // the host still pinned to the previous (empty) workspace, whose workspace scan
+    // returns nothing. `_whenReady` must drain the re-pin barrier first, so the
+    // command lands on the freshly re-pinned host (h2), not the torn-down one (h1).
+    disposed.length = 0
+    let releaseStop!: () => void
+    const stopped = new Promise<void>((r) => (releaseStop = r))
+    let n = 0
+    const host = {
+      onExit: Event.None,
+      onStdout: Event.None,
+      onStderr: Event.None,
+      start: vi.fn().mockImplementation(() => Promise.resolve({ handle: `h${++n}` })),
+      hasUserExtensions: vi.fn().mockResolvedValue(false),
+      writeStdin: vi.fn().mockResolvedValue(undefined),
+      // Hold the stop open so the re-pin window is wide, mirroring a slow
+      // treeKill of the Electron-as-node host on a contended CI runner.
+      stop: vi.fn().mockImplementation(() => stopped),
+    } as unknown as IExtensionHostService
+    const workspaceChange = new Emitter<void>()
+    const svc = makeService(host, workspaceChange.event)
+
+    await svc.start()
+    expect(host.start).toHaveBeenCalledTimes(1)
+
+    // Swap fires (arms the barrier synchronously); the command races in immediately.
+    workspaceChange.fire()
+    const commandResult = svc.executeContributedCommand('ai.generateCommitMessage', [])
+
+    // The stop is still pending, so the command must not have resolved against h1.
+    let resolvedEarly = false
+    void commandResult.then(() => (resolvedEarly = true))
+    await Promise.resolve()
+    expect(resolvedEarly).toBe(false)
+
+    // Let the restart complete; the command now runs on the re-pinned host.
+    releaseStop()
+    await expect(commandResult).resolves.toBe('h2')
 
     svc.dispose()
   })
