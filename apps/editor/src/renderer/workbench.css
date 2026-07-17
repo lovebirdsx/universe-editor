@@ -571,4 +571,14 @@ html, body, #root {
   text-decoration: underline;
 }
 
+/* Peek References 预览面板 blank 修复。
+   monaco 的 `.preview.inline` 是 display:inline-block(收缩到内容),宽高只靠内部 monaco
+   编辑器撑开;而我们的编辑器 automaticLayout:true 让预览继承了 ResizeObserver 去观察这个容器,
+   形成"容器收缩↔编辑器变小"的死锁(首个引用需异步读盘的多文件 peek 稳定复现)。
+   slot(.split-view-view) 由 SplitView 显式定尺寸、恒定可靠,让预览容器直接填满它即可断环。 */
+.monaco-editor .reference-zone-widget .split-view-view > .preview.inline {
+  width: 100% !important;
+  height: 100% !important;
+}
+
 

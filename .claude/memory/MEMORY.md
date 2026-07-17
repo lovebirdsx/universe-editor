@@ -21,7 +21,6 @@
 - [窗口私有日志隔离](window-private-log-isolation.md) — renderer 日志按 BrowserWindow.id 分流到 window-<id>/ 子目录，main 日志共享，logFiles 改 per-window 过滤合并
 - [monaco 0.55 EditContext + NLS 索引制](monaco-055-editcontext-nls.md) — 升级修中文 IME 加粗（editContext:true）；0.55 NLS 改索引制致旧 string-key 机制失效，改英文桥接（vscode 源码 key→英文 ⋈ zh-cn.json）
 - [Session 执行时间统计](session-timer-feature.md) — 只计 running 净时长，输入框下方 + AGENTS 面板均显示，useSessionTimer hook + 持久化恢复
-- [Session 人民币开销显示](session-cost-feature.md) — agent 上报真实 USD（modelUsage 含子 Agent）→ _meta 带 per-model 明细 → ¥ chip + 按模型弹窗 + 汇率服务（er-api 24h 缓存回退 7.2）
 - [会话级 diff 功能](session-diff-feature.md) — 逆推 baseline 跟踪 agent 改动，Side Bar list/tree 视图 + 单击预览双击钉住，Activity Bar 用 FileStack
 - [新建 session 异步化](async-session-create.md) — createSession 同步返回立即渲染，后台握手；双 id（本地 uuid id vs agent 颁发 sessionIdOnAgent）；queued prompts 自动派发；whenConnected 为测试 await 点
 - [Codex 三种登录方案建模](codex-three-auth-modes.md) — gateway 须自包含 provider（experimental_bearer_token），绝不碰 openai_base_url/requires_openai_auth；统一 applyCredential 原子入口
@@ -49,6 +48,7 @@
 - [markdown 移动后残留旧路径诊断](markdown-move-stale-diagnostic-fix.md) — B 移动(A 关闭)后重开 A 仍警告旧 B 路径；根因 MdDocumentInfoCache 不听 create + LspWorkspace 缺 watchFile，bulk edit 改关闭文件无文档事件；修法新增 $didChangeFiles 主动通知语言服务磁盘变更
 - [StrictMode 空跑 dispose useRef 持有的 Emitter](strictmode-useref-emitter-dispose-dev-only.md) — session outline 高亮 dev-only 不跟随键盘移动；根因=effect cleanup 里 dispose useRef 持有的 Emitter，StrictMode 空跑把它 dispose 而 ref 不重建→.fire() 落死对象；修法惰性创建+不 dispose；教训:useRef 持有的 disposable 绝不在 cleanup dispose
 - [渲染崩溃→日志死循环→黑屏不自愈](renderer-crash-log-feedback-loop-blackscreen.md) — 长任务窗口变黑(可拖动)=渲染崩溃后主进程仍向死帧 send,Electron 33 不抛异常而内部 console.error→被拦截写日志→onDidAppendEntry 又推回死帧→无限循环写爆盘打满 CPU;修=ElectronProtocol 加 render-process-gone/reload 事件闸门(try/catch+isDestroyed 拦不住)+崩溃弹窗一键 reload+FileLogger rotate 突发熔断
+- [Peek 预览面板 blank](peek-preview-blank-embedded-automaticlayout.md) — 真根因=`.preview.inline`(inline-block 收缩到内容)与继承来的 automaticLayout ResizeObserver 互相观察成 5×5 死锁;首个引用跨文件(异步读盘)稳定复现;修=CSS 让 `.preview` 填满恒定的 split-view slot 断环(updateOptions 关 observer 无效,构造后才 fire 且从不 stopObserving)
 
 ## 打包 / 构建
 
