@@ -230,14 +230,27 @@ export function WorkbenchLayout({
                   // full column, not the user's preferred size.
                   if (panelMaximizedRef.current) return
                   if (panelJustShownRef.current) {
-                    // Defer to break the ResizeObserver loop: Allotment fires this
-                    // callback synchronously from its own ResizeObserver during the
-                    // panel show transition. Calling onPanelResize here would update
-                    // sizes.panel → re-render → new preferredSize → another Allotment
-                    // layout pass, triggering the browser's "loop" warning.
+                    // First onChange after the panel appears. Allotment 1.20.5's
+                    // distributeEmptySpace greedily fills the editor pane and
+                    // ignores the panel's preferredSize, so `second` here is the
+                    // mis-distributed height, NOT the user's saved size. Replaying
+                    // the saved height via resize (deferred to rAF to break the
+                    // ResizeObserver loop — see the horizontal path) both restores
+                    // the panel on workspace reopen and reopens it at its
+                    // remembered height on a manual toggle. The corrected resize
+                    // fires another onChange that persists the right value.
                     panelJustShownRef.current = false
+                    const savedPanel = initialSizesRef.current.panel
+                    const first = typeof s[0] === 'number' ? s[0] : 0
+                    const total = first + second
                     requestAnimationFrame(() => {
-                      if (panelVisibleRef.current) onPanelResizeRef.current(second)
+                      if (!panelVisibleRef.current || panelMaximizedRef.current) return
+                      const editor = total - savedPanel
+                      if (editor > 0 && Math.abs(second - savedPanel) >= 1) {
+                        verticalAllotmentRef.current?.resize([editor, savedPanel])
+                      } else {
+                        onPanelResizeRef.current(second)
+                      }
                     })
                     return
                   }
