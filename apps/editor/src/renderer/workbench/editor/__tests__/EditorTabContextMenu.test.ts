@@ -1,0 +1,95 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Regression guard: the editor tab right-click menu must gate its entries on
+ *  the *clicked* tab. File commands (Copy Name/Path, Reveal, Reopen With) only
+ *  show for on-disk `file:` tabs; "Rename Agent Session…" only for acp.session
+ *  tabs. A diff tab (virtual `diff:` scheme) shows none of them.
+ *--------------------------------------------------------------------------------------------*/
+
+import { afterEach, describe, expect, it } from 'vitest'
+import {
+  ContextKeyService,
+  MenuRegistry,
+  MenuId,
+  registerAction2,
+  type IDisposable,
+} from '@universe-editor/platform'
+import {
+  CopyFileNameAction,
+  CopyFilePathAction,
+  CopyFileRelativePathAction,
+} from '../../../actions/fileCopyActions.js'
+import { RevealInExplorerAction, RevealInOSExplorerAction } from '../../../actions/revealActions.js'
+import { ReopenWithAction } from '../../../actions/editorResolverActions.js'
+import { RenameAgentSessionAction } from '../../../actions/agentSessionActions.js'
+import { AcpSessionEditorInput } from '../../../services/acp/acpSessionEditorInput.js'
+
+const disposables: IDisposable[] = []
+
+function register(): void {
+  disposables.push(
+    registerAction2(CopyFileNameAction),
+    registerAction2(CopyFilePathAction),
+    registerAction2(CopyFileRelativePathAction),
+    registerAction2(RevealInExplorerAction),
+    registerAction2(RevealInOSExplorerAction),
+    registerAction2(ReopenWithAction),
+    registerAction2(RenameAgentSessionAction),
+    // "Reopen With…" is registered as a bare MenuRegistry item (not via the
+    // ReopenWithAction's own menu), mirroring BuiltInEditorBindingsContribution.
+    MenuRegistry.addMenuItem(MenuId.EditorTabContext, {
+      command: ReopenWithAction.ID,
+      title: 'Reopen With...',
+      when: 'resourceScheme == file',
+      group: 'z_commands',
+      order: 1,
+    }),
+  )
+}
+
+function menuCommandsFor(overrides: Record<string, unknown>): string[] {
+  const ctx = new ContextKeyService().createScoped(overrides)
+  disposables.push(ctx)
+  return MenuRegistry.getMenuItems(MenuId.EditorTabContext, ctx)
+    .filter((e): e is { command: string } => 'command' in e)
+    .map((e) => e.command)
+}
+
+const FILE_COMMANDS = [
+  CopyFileNameAction.ID,
+  CopyFilePathAction.ID,
+  CopyFileRelativePathAction.ID,
+  RevealInExplorerAction.ID,
+  RevealInOSExplorerAction.ID,
+  ReopenWithAction.ID,
+]
+
+afterEach(() => {
+  while (disposables.length) disposables.pop()!.dispose()
+})
+
+describe('EditorTabContext menu — per-tab gating', () => {
+  it('a diff tab shows neither file commands nor Rename Agent Session', () => {
+    register()
+    const commands = menuCommandsFor({ resourceScheme: 'diff', activeEditorType: 'diff' })
+    for (const id of FILE_COMMANDS) expect(commands).not.toContain(id)
+    expect(commands).not.toContain(RenameAgentSessionAction.ID)
+  })
+
+  it('a file tab shows the file commands but not Rename Agent Session', () => {
+    register()
+    const commands = menuCommandsFor({ resourceScheme: 'file', activeEditorType: 'file' })
+    for (const id of FILE_COMMANDS) expect(commands).toContain(id)
+    expect(commands).not.toContain(RenameAgentSessionAction.ID)
+  })
+
+  it('an acp.session tab shows Rename Agent Session but no file commands', () => {
+    register()
+    const commands = menuCommandsFor({
+      resourceScheme: 'universe',
+      activeEditorType: AcpSessionEditorInput.TYPE_ID,
+    })
+    expect(commands).toContain(RenameAgentSessionAction.ID)
+    for (const id of FILE_COMMANDS) expect(commands).not.toContain(id)
+  })
+})

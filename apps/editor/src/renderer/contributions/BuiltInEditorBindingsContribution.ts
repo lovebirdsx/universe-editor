@@ -63,12 +63,15 @@ export class BuiltInEditorBindingsContribution
       )
     }
 
-    // "Reopen With..." entry in the editor tab context menu.
+    // "Reopen With..." entry in the editor tab context menu. Only for on-disk
+    // files: the resolver keys off the `file:` URI, so virtual tabs (diff /
+    // agent session / settings) have nothing to reopen and the item is hidden.
     // EditorTabContextMenu passes { resource: state.resource.toJSON() } as args.
     this._register(
       MenuRegistry.addMenuItem(MenuId.EditorTabContext, {
         command: 'workbench.action.reopenWith',
         title: 'Reopen With...',
+        when: 'resourceScheme == file',
         group: 'z_commands',
         order: 1,
       }),

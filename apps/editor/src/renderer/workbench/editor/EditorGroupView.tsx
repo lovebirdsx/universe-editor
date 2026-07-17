@@ -37,7 +37,6 @@ import {
   IWindowsService,
   localize,
   markAsSingleton,
-  MenuId,
   observableValue,
   Severity,
   type IEditorGroup,
@@ -47,7 +46,6 @@ import {
   URI,
 } from '@universe-editor/platform'
 import {
-  ContextMenu,
   DragSessionContext,
   dragContainsResources,
   useHover,
@@ -68,6 +66,7 @@ import {
 } from '../../services/scm/ScmDecorationsService.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorTitleActions } from './EditorTitleActions.js'
+import { EditorTabContextMenu } from './EditorTabContextMenu.js'
 import { ToggleEditorGroupLockAction } from '../../actions/editorActions.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
@@ -86,6 +85,7 @@ interface TabMenuState {
   readonly y: number
   readonly groupId: number
   readonly editorId: string
+  readonly editorType: string
   readonly resource: URI | null
 }
 
@@ -838,6 +838,7 @@ export const EditorGroupView = memo(function EditorGroupView({
                     y: ev.clientY,
                     groupId: group.id,
                     editorId: e.id,
+                    editorType: e.typeId,
                     resource: resourceLike instanceof URI ? resourceLike : null,
                   })
                 }}
@@ -897,17 +898,15 @@ export const EditorGroupView = memo(function EditorGroupView({
         )}
       </div>
       {tabMenu && (
-        <ContextMenu
-          menuId={MenuId.EditorTabContext}
-          anchor={{ x: tabMenu.x, y: tabMenu.y }}
-          args={[
-            {
-              groupId: tabMenu.groupId,
-              editorId: tabMenu.editorId,
-              resource: tabMenu.resource?.toJSON() ?? undefined,
-            },
-          ]}
+        <EditorTabContextMenu
+          x={tabMenu.x}
+          y={tabMenu.y}
+          groupId={tabMenu.groupId}
+          editorId={tabMenu.editorId}
+          editorType={tabMenu.editorType}
+          resource={tabMenu.resource}
           commandService={commandService}
+          contextKeyService={contextKeyService}
           onClose={() => setTabMenu(null)}
         />
       )}

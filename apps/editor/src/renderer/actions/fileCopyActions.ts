@@ -42,7 +42,9 @@ export class CopyFileNameAction extends Action2 {
       id: CopyFileNameAction.ID,
       title: localize2('action.copyName.title', 'Copy Name'),
       category: localize2('command.category.file', 'File'),
-      menu: [{ id: MenuId.EditorTabContext, group: '2_path', order: 1 }],
+      menu: [
+        { id: MenuId.EditorTabContext, group: '2_path', order: 1, when: 'resourceScheme == file' },
+      ],
       f1: true,
     })
   }
@@ -61,7 +63,9 @@ export class CopyFilePathAction extends Action2 {
       id: CopyFilePathAction.ID,
       title: localize2('action.copyFilePath.title', 'Copy Path'),
       category: localize2('command.category.file', 'File'),
-      menu: [{ id: MenuId.EditorTabContext, group: '2_path', order: 2 }],
+      menu: [
+        { id: MenuId.EditorTabContext, group: '2_path', order: 2, when: 'resourceScheme == file' },
+      ],
       f1: true,
     })
   }
@@ -79,7 +83,9 @@ export class CopyFileRelativePathAction extends Action2 {
       id: CopyFileRelativePathAction.ID,
       title: localize2('action.copyRelativeFilePath.title', 'Copy Relative Path'),
       category: localize2('command.category.file', 'File'),
-      menu: [{ id: MenuId.EditorTabContext, group: '2_path', order: 3 }],
+      menu: [
+        { id: MenuId.EditorTabContext, group: '2_path', order: 3, when: 'resourceScheme == file' },
+      ],
       f1: true,
     })
   }

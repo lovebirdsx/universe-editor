@@ -71,7 +71,9 @@ export class RevealInExplorerAction extends Action2 {
       id: RevealInExplorerAction.ID,
       title: localize2('action.revealInExplorer.title', 'Reveal in Explorer View'),
       category: localize2('command.category.file', 'File'),
-      menu: [{ id: MenuId.EditorTabContext, group: 'reveal', order: 1 }],
+      menu: [
+        { id: MenuId.EditorTabContext, group: 'reveal', order: 1, when: 'resourceScheme == file' },
+      ],
       f1: false,
     })
   }
@@ -105,7 +107,9 @@ export class RevealInOSExplorerAction extends Action2 {
       keybinding: {
         primary: 'alt+shift+e',
       },
-      menu: [{ id: MenuId.EditorTabContext, group: 'reveal', order: 2 }],
+      menu: [
+        { id: MenuId.EditorTabContext, group: 'reveal', order: 2, when: 'resourceScheme == file' },
+      ],
       f1: true,
     })
   }
