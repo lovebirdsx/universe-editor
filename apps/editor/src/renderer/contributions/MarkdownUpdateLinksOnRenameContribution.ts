@@ -48,6 +48,20 @@ const DID_CHANGE_FILES_COMMAND = 'markdown.didChangeFiles'
 /** Merge a burst of renames (multi-select move) into one prompt. */
 const DEBOUNCE_MS = 50
 
+/**
+ * Retry `getRenameFileEdits` when it comes back empty. Right after a move, an
+ * empty result is almost always a not-ready race: on a cold host (notably slow
+ * CI) the plugin's workspace file scan (gated `workspace.fs`) or the host itself
+ * may not be ready at flush time, so the language service finds no referrers and
+ * returns no edits — and this flush is fire-once, so the links would never get
+ * updated. A move that genuinely touches no links just spends these few
+ * best-effort background attempts and then stops.
+ */
+const EMPTY_EDIT_RETRIES = 5
+const EMPTY_EDIT_RETRY_DELAY_MS = 300
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
 /** Extensions whose move should trigger a link update (markdown + linkable assets). */
 const TRIGGER_EXTENSIONS = new Set([
   'md',
@@ -167,16 +181,7 @@ export class MarkdownUpdateLinksOnRenameContribution
     // Re-check: the setting may have flipped to `never` between event and flush.
     if (this._setting() === 'never') return
 
-    let edit: WorkspaceEdit | null
-    try {
-      await this._client.activateByEvent('onLanguage:markdown')
-      edit = (await this._client.executeContributedCommand(GET_RENAME_FILE_EDITS_COMMAND, [
-        renames,
-      ])) as WorkspaceEdit | null
-    } catch (err) {
-      this._logger.warn(`getRenameFileEdits failed: ${String(err)}`)
-      return
-    }
+    const edit = await this._getRenameEditsWithRetry(renames)
 
     const files = edit ? affectedResources(edit) : []
     if (!edit || files.length === 0) {
@@ -199,6 +204,34 @@ export class MarkdownUpdateLinksOnRenameContribution
     } catch (err) {
       this._logger.error(`applying link updates failed: ${String(err)}`)
     }
+  }
+
+  /**
+   * Ask the plugin for the link-fixing edits, retrying while the result is empty.
+   * An empty edit right after a move is almost always a cold-host not-ready race
+   * (see {@link EMPTY_EDIT_RETRIES}); a genuine no-link move just exhausts the
+   * cheap background retries. A thrown error (host not started yet) is treated
+   * the same as empty so it retries rather than dropping the update silently.
+   */
+  private async _getRenameEditsWithRetry(
+    renames: readonly RenameDto[],
+  ): Promise<WorkspaceEdit | null> {
+    for (let attempt = 0; attempt <= EMPTY_EDIT_RETRIES; attempt++) {
+      if (attempt > 0) await delay(EMPTY_EDIT_RETRY_DELAY_MS)
+      if (this._setting() === 'never') return null
+      let edit: WorkspaceEdit | null = null
+      try {
+        await this._client.activateByEvent('onLanguage:markdown')
+        edit = (await this._client.executeContributedCommand(GET_RENAME_FILE_EDITS_COMMAND, [
+          renames,
+        ])) as WorkspaceEdit | null
+      } catch (err) {
+        this._logger.warn(`getRenameFileEdits failed (attempt ${attempt + 1}): ${String(err)}`)
+        continue
+      }
+      if (edit && affectedResources(edit).length > 0) return edit
+    }
+    return null
   }
 
   /**

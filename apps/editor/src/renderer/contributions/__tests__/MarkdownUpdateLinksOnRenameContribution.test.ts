@@ -47,7 +47,7 @@ interface CommandCall {
   readonly args: unknown[]
 }
 
-function setup(setting?: 'never' | 'prompt' | 'always') {
+function setup(setting?: 'never' | 'prompt' | 'always', respond?: (call: number) => unknown) {
   const onDidRunFileOperation = new Emitter<readonly IFileRenameOperation[]>()
   const services = new ServiceCollection()
 
@@ -64,8 +64,14 @@ function setup(setting?: 'never' | 'prompt' | 'always') {
       return Promise.resolve()
     },
     executeContributedCommand: (id: string, args: unknown[]) => {
+      const call = commandCalls.length
       commandCalls.push({ id, args })
-      return Promise.resolve(null) // no edits → stops before the Monaco apply path
+      // Default: no edits → stops before the Monaco apply path (but now retries).
+      try {
+        return Promise.resolve(respond ? respond(call) : null)
+      } catch (err) {
+        return Promise.reject(err) // respond() threw → simulate a host-side failure
+      }
     },
   } as unknown as IExtensionHostClientService)
 
@@ -124,7 +130,7 @@ describe('MarkdownUpdateLinksOnRenameContribution', () => {
     onDidRunFileOperation.fire([md('a')])
     await vi.runAllTimersAsync()
     expect(activations).toContain('onLanguage:markdown')
-    expect(commandCalls).toHaveLength(1)
+    expect(commandCalls.length).toBeGreaterThanOrEqual(1)
     expect(commandCalls[0]?.id).toBe('markdown.getRenameFileEdits')
     const renames = commandCalls[0]?.args[0] as { oldUri: string; newUri: string }[]
     expect(renames[0]?.newUri).toBe(URI.file('/ws/a.md').toString())
@@ -148,20 +154,51 @@ describe('MarkdownUpdateLinksOnRenameContribution', () => {
       { oldUri: URI.file('/ws/dir-old'), newUri: URI.file('/ws/dir'), isDirectory: true },
     ])
     await vi.runAllTimersAsync()
-    expect(commandCalls).toHaveLength(1)
+    expect(commandCalls.length).toBeGreaterThanOrEqual(1)
     const renames = commandCalls[0]?.args[0] as unknown[]
     expect(renames).toHaveLength(2)
     contrib.dispose()
   })
 
-  it('debounces a burst of renames into a single call', async () => {
+  it('debounces a burst of renames into a single flush', async () => {
     const { onDidRunFileOperation, commandCalls, contrib } = setup()
     onDidRunFileOperation.fire([md('a')])
     onDidRunFileOperation.fire([md('b')])
     await vi.runAllTimersAsync()
-    expect(commandCalls).toHaveLength(1)
-    const renames = commandCalls[0]?.args[0] as unknown[]
-    expect(renames).toHaveLength(2)
+    expect(commandCalls.length).toBeGreaterThanOrEqual(1)
+    // Every attempt carries the merged rename batch (debounced into one flush).
+    for (const call of commandCalls) {
+      expect((call.args[0] as unknown[]).length).toBe(2)
+    }
+    contrib.dispose()
+  })
+
+  it('gives up after a bounded number of empty results', async () => {
+    // Always empty → bounded retries then stop (a genuine no-link move).
+    // Regression for the fire-once flush dropping the update on slow CI: an empty
+    // result must be retried, not silently accepted on the first attempt.
+    const { onDidRunFileOperation, commandCalls, contrib } = setup('always')
+    onDidRunFileOperation.fire([md('a')])
+    await vi.runAllTimersAsync()
+    const editCalls = commandCalls.filter((c) => c.id === 'markdown.getRenameFileEdits')
+    // 1 initial + EMPTY_EDIT_RETRIES attempts.
+    expect(editCalls).toHaveLength(6)
+    contrib.dispose()
+  })
+
+  it('retries when the plugin throws, then continues on empty (host not ready)', async () => {
+    // First attempt throws (host still starting); the rest come back empty. A
+    // thrown error must be treated like empty (retried), not dropped silently.
+    const respond = (call: number): unknown => {
+      if (call === 0) throw new Error('No extension host owns command')
+      return null
+    }
+    const { onDidRunFileOperation, commandCalls, contrib } = setup('always', respond)
+    onDidRunFileOperation.fire([md('a')])
+    await vi.runAllTimersAsync()
+    const editCalls = commandCalls.filter((c) => c.id === 'markdown.getRenameFileEdits')
+    // throw (attempt 1) + 5 empty retries = 6 attempts; the throw did not abort.
+    expect(editCalls).toHaveLength(6)
     contrib.dispose()
   })
 })
