@@ -416,6 +416,15 @@ export const EditorGroupView = memo(function EditorGroupView({
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [bodyZone, setBodyZone] = useState<BodyDropZone | null>(null)
   const tabBarRef = useRef<HTMLDivElement>(null)
+  // The tab bar element only exists while the group has editors, so it mounts
+  // *after* this component's first render. Effects that attach listeners to it
+  // must re-run when it appears/disappears — a plain ref won't trigger that, so
+  // we mirror the element into state via a callback ref.
+  const [tabBarEl, setTabBarEl] = useState<HTMLDivElement | null>(null)
+  const setTabBar = useCallback((el: HTMLDivElement | null) => {
+    tabBarRef.current = el
+    setTabBarEl(el)
+  }, [])
   const bodyRef = useRef<HTMLDivElement>(null)
   /** Last pointer position relative to the body — read on drop to recompute zone. */
   const bodyDropPosRef = useRef<{ x: number; y: number } | null>(null)
@@ -640,7 +649,7 @@ export const EditorGroupView = memo(function EditorGroupView({
   }, [])
 
   useEffect(() => {
-    const el = tabBarRef.current
+    const el = tabBarEl
     if (!el) return
     updateScrollButtons()
     el.addEventListener('scroll', updateScrollButtons, { passive: true })
@@ -650,7 +659,7 @@ export const EditorGroupView = memo(function EditorGroupView({
       el.removeEventListener('scroll', updateScrollButtons)
       ro.disconnect()
     }
-  }, [updateScrollButtons])
+  }, [tabBarEl, updateScrollButtons])
 
   // Adding/removing a tab grows the tab bar's scrollWidth without changing its
   // box size, so the ResizeObserver above never fires for it. Recompute the
@@ -688,7 +697,7 @@ export const EditorGroupView = memo(function EditorGroupView({
   // React's onWheel is passive and can't preventDefault; use a native listener so the
   // wheel doesn't bubble up and scroll an ancestor instead.
   useEffect(() => {
-    const el = tabBarRef.current
+    const el = tabBarEl
     if (!el) return
     const onWheel = (e: WheelEvent) => {
       if (e.deltaX !== 0) return
@@ -699,7 +708,7 @@ export const EditorGroupView = memo(function EditorGroupView({
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [])
+  }, [tabBarEl])
 
   // When this group becomes active (e.g. user returns from sidebar without changing file),
   // focus the Monaco editor so keyboard input goes to the editor immediately — unless the
@@ -784,7 +793,7 @@ export const EditorGroupView = memo(function EditorGroupView({
             </button>
           )}
           <div
-            ref={tabBarRef}
+            ref={setTabBar}
             className={styles['tabBar']}
             role="tablist"
             data-testid="editor-group-tabbar"
