@@ -80,6 +80,14 @@ import './services/main-services.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
+// Stamp the OS process-creation time as the earliest mark (before mainDidStart)
+// so the pre-JS gap — spawn → first line here — shows up in the startup timeline.
+// getCreationTime() returns epoch ms, the same base as the perf polyfill's Date.now().
+const _processCreatedAt = process.getCreationTime()
+if (_processCreatedAt !== null) {
+  mark(PerfMarks.mainProcessCreated, { startTime: _processCreatedAt })
+}
+
 mark(PerfMarks.mainDidStart)
 
 // Must run before app.whenReady(): Electron only accepts privileged-scheme

@@ -12,6 +12,8 @@ function mainMarksStub(marks: PerformanceMark[]): IPerformanceMarksService {
   return {
     _serviceBrand: undefined,
     getMarks: () => Promise.resolve(marks),
+    getStartupContext: () => Promise.resolve({ postUpdate: false, currentVersion: '0.0.0-test' }),
+    reportStartupTiming: () => Promise.resolve(),
   }
 }
 
@@ -47,6 +49,22 @@ describe('TimerService', () => {
     const svc = new TimerService(mainMarksStub(FULL_TIMELINE))
     const metrics = await svc.getStartupMetrics()
     expect(metrics.totalTime).toBe(800) // 1800 - 1000
+  })
+
+  it('extends totalTime back to process-created and adds the pre-JS phase', async () => {
+    // mainProcessCreated (OS spawn) precedes timeOrigin (first JS mark); the gap is
+    // the antivirus first-scan window on a post-update launch.
+    const withPreJs: PerformanceMark[] = [
+      { name: PerfMarks.mainProcessCreated, startTime: 700 },
+      ...FULL_TIMELINE,
+    ]
+    const svc = new TimerService(mainMarksStub(withPreJs))
+    const metrics = await svc.getStartupMetrics()
+    expect(metrics.totalTime).toBe(1100) // 1800 - 700
+    const first = metrics.phases[0]
+    expect(first?.from).toBe('Process created')
+    expect(first?.to).toBe('Main process started')
+    expect(first?.duration).toBe(310) // 1010 - 700
   })
 
   it('builds contiguous phases between adjacent milestones', async () => {
@@ -94,6 +112,8 @@ describe('TimerService', () => {
     const failing: IPerformanceMarksService = {
       _serviceBrand: undefined,
       getMarks: () => Promise.reject(new Error('channel down')),
+      getStartupContext: () => Promise.resolve({ postUpdate: false, currentVersion: '0.0.0-test' }),
+      reportStartupTiming: () => Promise.resolve(),
     }
     const svc = new TimerService(failing)
     const marks = await svc.getPerfMarks()

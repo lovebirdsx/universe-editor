@@ -121,6 +121,28 @@ export const IDisposableLeakService =
 // -------- Performance Marks (main -> renderer startup timing) --------
 
 /**
+ * Whether this launch is the first run of a freshly installed version, plus the
+ * version it replaced. Lets the renderer tag its startup-timing log so a slow
+ * post-update first launch (antivirus first-scanning the new exe/asar) is
+ * distinguishable from steady-state launches after the fact.
+ */
+export interface StartupContext {
+  readonly postUpdate: boolean
+  readonly currentVersion: string
+  readonly previousVersion?: string
+}
+
+/** One startup timeline the renderer hands back to the main log after mount. */
+export interface StartupTimingReport {
+  /** Total time from the earliest mark (process created) to workbench mount, ms. */
+  readonly totalTime: number
+  /** Process created → first main-process JS line, ms; undefined if unavailable. */
+  readonly preJsGapMs?: number
+  /** Adjacent-milestone phases: label → duration ms. */
+  readonly phases: ReadonlyArray<{ readonly label: string; readonly duration: number }>
+}
+
+/**
  * Exposes the main process's performance marks to the renderer so the timer
  * service can merge both processes' marks into a single startup timeline.
  * Read-only and generic: any future main-side perf instrumentation surfaces here.
@@ -128,6 +150,10 @@ export const IDisposableLeakService =
 export interface IPerformanceMarksService {
   readonly _serviceBrand: undefined
   getMarks(): Promise<PerformanceMark[]>
+  /** Whether this launch is a post-update first run (see StartupContext). */
+  getStartupContext(): Promise<StartupContext>
+  /** Persist one startup timeline to the shared main log (called once, first window). */
+  reportStartupTiming(report: StartupTimingReport): Promise<void>
 }
 
 export const IPerformanceMarksService =

@@ -51,6 +51,7 @@ interface IMilestone {
 // order) keeps phase durations non-negative even for lazy marks — the extension
 // host spawn and Monaco init fire on demand and can land after the window mount.
 const MILESTONES: readonly IMilestone[] = [
+  { mark: PerfMarks.mainProcessCreated, label: 'Process created' },
   { mark: PerfMarks.mainDidStart, label: 'Main process started' },
   { mark: PerfMarks.mainAppReady, label: 'Electron app ready' },
   { mark: PerfMarks.mainDidCreateServices, label: 'Main services created' },
@@ -111,7 +112,13 @@ export class TimerService implements ITimerService {
 
     const firstPresent = present[0]
     const lastPresent = present[present.length - 1]
-    const origin = at.get(PerfMarks.timeOrigin) ?? (firstPresent ? at.get(firstPresent.mark) : 0)
+    // Prefer the OS process-creation time (earlier than timeOrigin, the first JS
+    // mark) so totalTime spans the pre-JS gap — the antivirus first-scan window on
+    // a post-update launch. Fall back to timeOrigin, then to the first milestone.
+    const origin =
+      at.get(PerfMarks.mainProcessCreated) ??
+      at.get(PerfMarks.timeOrigin) ??
+      (firstPresent ? at.get(firstPresent.mark) : 0)
     const end =
       at.get(PerfMarks.rendererDidMount) ?? (lastPresent ? at.get(lastPresent.mark) : origin)
     const totalTime = (end ?? 0) - (origin ?? 0)

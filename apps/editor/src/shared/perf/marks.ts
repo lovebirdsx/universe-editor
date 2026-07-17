@@ -10,6 +10,13 @@ export const PerfMarks = {
   /** Injected automatically by the perf util as the first mark in each process. */
   timeOrigin: 'code/timeOrigin',
 
+  /**
+   * Main: OS process creation time (from `process.getCreationTime()`), stamped as
+   * the earliest mark so the pre-JS gap — process spawn → first main-process line
+   * executing — becomes measurable. This window is where antivirus first-scans the
+   * freshly written exe/asar, the dominant cost of the slow post-update first launch.
+   */
+  mainProcessCreated: 'code/main/processCreated',
   mainDidStart: 'code/main/didStart',
   mainAppReady: 'code/main/appReady',
   mainDidCreateServices: 'code/main/didCreateServices',

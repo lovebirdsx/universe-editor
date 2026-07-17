@@ -176,9 +176,9 @@ registerSingletonFactory(
   IDocsService,
   (acc) => new DocsMainService(undefined, acc.get(ILoggerService)),
 )
-registerSingleton(
+registerSingletonFactory(
   IPerformanceMarksService,
-  new SyncDescriptor<IPerformanceMarksService>(PerformanceMainService, [], false),
+  (acc) => new PerformanceMainService(acc.get(IMainStorageService), acc.get(ILoggerService)),
 )
 registerSingleton(
   ISessionSwitcherService,

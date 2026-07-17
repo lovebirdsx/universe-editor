@@ -9,6 +9,7 @@ import { ContributionsRegistry, WorkbenchPhase } from '@universe-editor/platform
 import { AgentBinaryPrefetchContribution } from '../AgentBinaryPrefetchContribution.js'
 import { ExtensionsContribution } from '../ExtensionsContribution.js'
 import { LanguageServicePrewarmContribution } from '../LanguageServicePrewarmContribution.js'
+import { StartupTimingLogContribution } from '../StartupTimingLogContribution.js'
 import { WorkspaceWatchContribution } from '../WorkspaceWatchContribution.js'
 
 // Idle-time background prefetch of the Claude / codex-acp binaries so upgrading
@@ -47,5 +48,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.workspaceWatch',
   WorkspaceWatchContribution,
+  WorkbenchPhase.Eventually,
+)
+
+// Logs one startup timeline (tagged post-update or steady-state) to the shared
+// main log after mount, so a slow first launch right after an auto-update is
+// measurable without opening the Startup Performance report on that launch.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.startupTimingLog',
+  StartupTimingLogContribution,
   WorkbenchPhase.Eventually,
 )
