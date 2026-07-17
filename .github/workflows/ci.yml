@@ -135,6 +135,19 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # The Excel diff extension lives OUTSIDE the pnpm workspace (ships as a
+      # `.vsix`, gitignored) and is the only e2e that installs a real on-disk
+      # vsix — smoke.swarmSpreadsheetDiff resolves it by path. Without it adm-zip
+      # throws "Invalid filename" on the missing file. Its own node_modules
+      # (SheetJS) install via npm; `package` bundles + zips the vsix (needs
+      # packages/extension-api/dist from `pnpm build` above, and esbuild borrowed
+      # from a workspace extension — both present by now).
+      - name: Build Excel diff extension vsix (swarm spreadsheet diff e2e)
+        shell: bash
+        run: |
+          npm --prefix extensions-external/excel-diff ci
+          npm --prefix extensions-external/excel-diff run package
+
       - name: Run E2E smoke (Linux, xvfb)
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert "@visual|@serial|@flaky|@perf|@regression" --shard=${{ matrix.shard }}/2
