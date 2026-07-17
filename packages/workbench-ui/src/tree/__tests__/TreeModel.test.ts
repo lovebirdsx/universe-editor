@@ -138,6 +138,19 @@ describe('TreeModel', () => {
     expect(onReveal).toHaveBeenCalledWith({ id: 'a1b1' })
   })
 
+  it('reveal fires onReveal even when the target is already the sole selection', async () => {
+    const leaf: N = { id: 'a1b1' }
+    const root: N = { id: 'a', children: [{ id: 'a1', children: [leaf] }] }
+    const model = new TreeModel({ dataSource: eagerSource([root]) })
+    await model.reveal(leaf)
+    const onReveal = vi.fn()
+    model.onReveal(onReveal)
+    // Second reveal changes nothing about the selection, but must still fire so
+    // the view can scroll a scrolled-off-screen row back into view.
+    await model.reveal(leaf)
+    expect(onReveal).toHaveBeenCalledWith({ id: 'a1b1' })
+  })
+
   describe('navigate', () => {
     function tree(): TreeModel<N> {
       const model = new TreeModel({

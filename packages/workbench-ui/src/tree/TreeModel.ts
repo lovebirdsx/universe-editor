@@ -343,6 +343,11 @@ export class TreeModel<T> extends Disposable {
   /**
    * Expand every ancestor of `element` (requires getParent), make it the sole
    * selection + focus, and fire onReveal so the view can scroll it into view.
+   *
+   * onReveal fires unconditionally at the end: setSelection early-returns
+   * (and skips onReveal) when the target is already the sole selection + focus,
+   * but "Reveal in Explorer" on an already-selected row that the user scrolled
+   * off-screen must still scroll it back into view.
    */
   async reveal(element: T): Promise<void> {
     const getParent = this._dataSource.getParent
@@ -357,7 +362,9 @@ export class TreeModel<T> extends Disposable {
         await this.expand(ancestor)
       }
     }
-    this.setSelection([this._dataSource.getId(element)])
+    const id = this._dataSource.getId(element)
+    this.setSelection([id])
+    this._onReveal.fire({ id })
   }
 
   // --- internals -----------------------------------------------------------
