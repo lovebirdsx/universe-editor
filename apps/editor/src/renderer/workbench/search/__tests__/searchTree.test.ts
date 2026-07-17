@@ -81,4 +81,38 @@ describe('buildSearchSnapshot', () => {
     expect(snap.expandableIds).toContain('folder:src')
     expect(snap.expandableIds.some((id) => id.startsWith('file:'))).toBe(true)
   })
+
+  it('orders files by path regardless of arrival order (ripgrep is nondeterministic)', () => {
+    const paths = [
+      '/ws/dir2/a.ts',
+      '/ws/dir10/a.ts',
+      '/ws/dir1/f10.ts',
+      '/ws/dir1/f2.ts',
+      '/ws/a.ts',
+    ]
+    const relOf = (nodes: SearchNode[]): string[] =>
+      nodes
+        .filter((n) => n.kind === 'file')
+        .map((n) => (n as Extract<SearchNode, { kind: 'file' }>).relPath)
+
+    // Two different arrival orders must produce the identical visible order.
+    const forward = relOf(
+      buildSearchSnapshot(
+        paths.map((p) => fileMatch(p, [{ line: 1, ranges: 1 }])),
+        root,
+        'list',
+      ).roots,
+    )
+    const reversed = relOf(
+      buildSearchSnapshot(
+        [...paths].reverse().map((p) => fileMatch(p, [{ line: 1, ranges: 1 }])),
+        root,
+        'list',
+      ).roots,
+    )
+    expect(reversed).toEqual(forward)
+    // Basename is numeric-aware (f2 before f10); directory segments use plain
+    // string order like VSCode's comparePaths (dir10 before dir2). Root first.
+    expect(forward).toEqual(['a.ts', 'dir1/f2.ts', 'dir1/f10.ts', 'dir10/a.ts', 'dir2/a.ts'])
+  })
 })

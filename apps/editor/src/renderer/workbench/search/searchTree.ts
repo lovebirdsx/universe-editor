@@ -12,6 +12,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI, type IFileMatch, type ITextSearchMatch } from '@universe-editor/platform'
+import { comparePaths } from './searchCompare.js'
 import type { SearchViewMode } from './searchViewState.js'
 
 export type SearchNode =
@@ -95,6 +96,15 @@ export function buildSearchSnapshot(
   const expandableIds: string[] = []
   const roots: SearchNode[] = []
 
+  // Order files purely by their resource path — never by ripgrep's arrival
+  // order, which is nondeterministic across runs (see searchCompare.ts).
+  const sorted = [...results].sort((a, b) =>
+    comparePaths(
+      (URI.revive(a.resource) as URI).fsPath.replace(/\\/g, '/'),
+      (URI.revive(b.resource) as URI).fsPath.replace(/\\/g, '/'),
+    ),
+  )
+
   const childList = (id: string): SearchNode[] => {
     let list = childrenMap.get(id)
     if (!list) {
@@ -108,7 +118,7 @@ export function buildSearchSnapshot(
   // count badge like files do.
   const folderCount = new Map<string, number>()
   if (mode === 'tree') {
-    for (const fm of results) {
+    for (const fm of sorted) {
       const { dirs } = toSegments(rootUri, URI.revive(fm.resource) as URI)
       const count = countMatches(fm)
       let acc = ''
@@ -145,7 +155,7 @@ export function buildSearchSnapshot(
     return parent
   }
 
-  for (const fm of results) {
+  for (const fm of sorted) {
     const resource = URI.revive(fm.resource) as URI
     const { dirs, name } = toSegments(rootUri, resource)
     const parentFolder = ensureFolderChain(dirs)
