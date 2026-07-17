@@ -38,6 +38,9 @@ vi.mock('../monaco/MonacoLoader.js', () => {
         return disposable()
       },
       onDidScrollChange: () => disposable(),
+      getPosition: () => ({ lineNumber: 1, column: 1 }),
+      setPosition: () => {},
+      revealLineInCenter: () => {},
     }
   }
 

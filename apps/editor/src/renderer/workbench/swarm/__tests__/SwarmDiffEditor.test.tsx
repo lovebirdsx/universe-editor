@@ -6,6 +6,7 @@ type Listener = () => void
 interface DiffEditorStub {
   model: unknown
   revealFirstDiffCalls: number
+  readonly restoreViewStateCalls: unknown[]
   setModel(model: unknown): void
   fireUpdateDiff(): void
 }
@@ -23,11 +24,29 @@ vi.mock('../../editor/monaco/MonacoLoader.js', () => {
     return { uri, dispose: () => {} }
   }
 
+  // Monaco fires an initial cursor event while a model attaches; mimic it so the
+  // view-state flush runs before the diff is computed.
+  function makeCodeEditor() {
+    return {
+      onDidChangeCursorPosition: (listener: Listener) => {
+        listener()
+        return disposable()
+      },
+      onDidScrollChange: () => disposable(),
+      getPosition: () => ({ lineNumber: 1, column: 1 }),
+      setPosition: () => {},
+      revealLineInCenter: () => {},
+    }
+  }
+
   function makeDiffEditor(): DiffEditorStub {
     const listeners = new Set<Listener>()
+    const original = makeCodeEditor()
+    const modified = makeCodeEditor()
     const editor = {
       model: null as unknown,
       revealFirstDiffCalls: 0,
+      restoreViewStateCalls: [] as unknown[],
       setModel(model: unknown) {
         this.model = model
       },
@@ -41,8 +60,13 @@ vi.mock('../../editor/monaco/MonacoLoader.js', () => {
       fireUpdateDiff() {
         for (const listener of [...listeners]) listener()
       },
-      getOriginalEditor: () => ({}),
-      getModifiedEditor: () => ({}),
+      // A freshly-created editor already has a (top-of-file) view state.
+      saveViewState: () => ({ kind: 'auto-flushed' }),
+      restoreViewState(state: unknown) {
+        this.restoreViewStateCalls.push(state)
+      },
+      getOriginalEditor: () => original,
+      getModifiedEditor: () => modified,
       focus: () => {},
       dispose: () => {},
     }
@@ -84,6 +108,7 @@ import {
 } from '@universe-editor/platform'
 import { SwarmDiffEditorInput } from '../../../services/editor/SwarmDiffEditorInput.js'
 import { DiffEditorRegistry } from '../../../services/editor/DiffEditorRegistry.js'
+import { EditorViewStateCache } from '../../../services/editor/EditorViewStateCache.js'
 import { ServicesContext } from '../../useService.js'
 import { EditorGroupContext } from '../../editor/EditorGroupContext.js'
 import { SwarmDiffEditor } from '../SwarmDiffEditor.js'
@@ -136,6 +161,7 @@ async function waitForDiffEditor(): Promise<DiffEditorStub> {
 afterEach(() => {
   cleanup()
   DiffEditorRegistry._resetForTests()
+  EditorViewStateCache._resetForTests()
   monacoTestState.diffEditors.length = 0
 })
 
@@ -160,5 +186,47 @@ describe('SwarmDiffEditor', () => {
 
     result.unmount()
     expect(DiffEditorRegistry.get(input, group.id)).toBeUndefined()
+  })
+
+  it('restores a saved view state instead of revealing the first change', async () => {
+    const input = createInput()
+    const group = { id: 8 }
+    const savedState = { modified: { cursorState: [] } }
+    EditorViewStateCache.save(group.id, input.resource.toString(), savedState)
+
+    render(
+      <ServicesContext.Provider value={createInstantiationService()}>
+        <EditorGroupContext.Provider value={group as never}>
+          <SwarmDiffEditor input={input} />
+        </EditorGroupContext.Provider>
+      </ServicesContext.Provider>,
+    )
+
+    const editor = await waitForDiffEditor()
+    editor.fireUpdateDiff()
+
+    // Applied once on open and re-applied once the diff lands — both the original
+    // snapshot, not the cache value clobbered by the initial cursor event.
+    expect(editor.restoreViewStateCalls).toEqual([savedState, savedState])
+    expect(editor.revealFirstDiffCalls).toBe(0)
+  })
+
+  it('persists the view state on unmount', async () => {
+    const input = createInput()
+    const group = { id: 9 }
+    const result = render(
+      <ServicesContext.Provider value={createInstantiationService()}>
+        <EditorGroupContext.Provider value={group as never}>
+          <SwarmDiffEditor input={input} />
+        </EditorGroupContext.Provider>
+      </ServicesContext.Provider>,
+    )
+
+    await waitForDiffEditor()
+    result.unmount()
+
+    expect(EditorViewStateCache.load(group.id, input.resource.toString())).toEqual({
+      kind: 'auto-flushed',
+    })
   })
 })

@@ -25,6 +25,9 @@ vi.mock('../monaco/MonacoLoader.js', () => {
     return {
       onDidChangeCursorPosition: () => disposable(),
       onDidScrollChange: () => disposable(),
+      getPosition: () => ({ lineNumber: 1, column: 1 }),
+      setPosition: () => {},
+      revealLineInCenter: () => {},
     }
   }
   function makeModel(initial: string, language: string, uri: unknown) {

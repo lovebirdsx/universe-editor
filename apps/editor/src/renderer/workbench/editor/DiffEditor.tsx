@@ -13,7 +13,6 @@ import {
   IConfigurationService,
   IContextKeyService,
   IEditorGroupsService,
-  type IDisposable,
   type IEditorInput,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
@@ -26,7 +25,7 @@ import {
 import { languageForResource } from '../files/resourceLanguage.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../../services/editor/DiffEditorRegistry.js'
-import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
+import { wireDiffEditorViewState } from './diffEditorViewState.js'
 import { syncEditorFocusContext } from '../../services/editor/editorFocus.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { diffModelUri } from './diffModelUri.js'
@@ -168,85 +167,14 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       queueMicrotask(() => syncEditorFocusContext(contextKeyService))
     }
 
-    const groupId = group?.id
-    const resourceUri = diffInput.resource.toString()
-    const fileUri = diffInput.originalUri.toString()
-
-    const flushViewState = () => {
-      if (groupId === undefined) return
-      const state = diffEditorRef.current?.saveViewState()
-      if (state) EditorViewStateCache.save(groupId, resourceUri, state)
-      // Share the modified-side cursor under the real file URI so a switch to the
-      // plain file editor for the same file lands on it. The original side is old
-      // content, so it never drives the shared cursor.
-      const pos = diffEditorRef.current?.getModifiedEditor().getPosition()
-      if (pos) {
-        EditorViewStateCache.saveCursor(groupId, fileUri, {
-          lineNumber: pos.lineNumber,
-          column: pos.column,
-        })
-      }
-    }
-
-    // Apply a cursor written by another editor (the plain file editor) for the
-    // same file to the modified side. Returns whether it moved the cursor.
-    const applySharedCursor = (): boolean => {
-      if (groupId === undefined) return false
-      const sharedCursor = EditorViewStateCache.loadCursor(groupId, fileUri)
-      if (!sharedCursor) return false
-      const modified = ed.getModifiedEditor()
-      const cur = modified.getPosition()
-      if (cur && cur.lineNumber === sharedCursor.lineNumber && cur.column === sharedCursor.column) {
-        return false
-      }
-      modified.setPosition(sharedCursor)
-      modified.revealLineInCenter(sharedCursor.lineNumber)
-      return true
-    }
-
-    // Snapshot the persisted view state up front. The cursor/scroll listeners
-    // registered below fire synchronously while Monaco initialises the fresh
-    // models, overwriting the cache with a top-of-file state before the diff is
-    // even computed — so re-loading from the cache inside onDidUpdateDiff would
-    // read that bogus state and skip the first-change reveal. Capture the
-    // original saved state and re-apply that exact value instead.
-    const savedViewState =
-      groupId !== undefined
-        ? (EditorViewStateCache.load(groupId, resourceUri) as
-            | monaco.editor.IDiffEditorViewState
-            | undefined)
-        : undefined
-
-    if (savedViewState) ed.restoreViewState(savedViewState)
-
-    // Diff layout is computed asynchronously; re-apply the saved scroll position
-    // once the first diff lands, or reveal the first change for a freshly-opened
-    // diff without a saved state. revealFirstDiff() waits for the diff
-    // computation (and the ensuing layout) internally — goToDiff does not — so
-    // the view reliably lands on the first change.
-    let updateDiffSub: IDisposable | undefined = ed.onDidUpdateDiff(() => {
-      updateDiffSub?.dispose()
-      updateDiffSub = undefined
-      if (savedViewState) ed.restoreViewState(savedViewState)
-      // A more recent cursor from the plain file editor wins over the diff's own
-      // (stale) viewState and over the default first-change reveal.
-      const applied = applySharedCursor()
-      if (!savedViewState && !applied) ed.revealFirstDiff()
+    const viewState = wireDiffEditorViewState(ed, {
+      groupId: group?.id,
+      resourceKey: diffInput.resource.toString(),
+      sharedCursorUri: diffInput.originalUri.toString(),
     })
 
-    const original = ed.getOriginalEditor()
-    const modified = ed.getModifiedEditor()
-    const subs = [
-      original.onDidChangeCursorPosition(flushViewState),
-      modified.onDidChangeCursorPosition(flushViewState),
-      original.onDidScrollChange(flushViewState),
-      modified.onDidScrollChange(flushViewState),
-    ]
-
     return () => {
-      flushViewState()
-      updateDiffSub?.dispose()
-      for (const s of subs) s.dispose()
+      viewState.dispose()
       DiffEditorRegistry.unregister(diffInput, ed)
       // create-effect cleanup may have already disposed the instance (React runs
       // effect cleanups in declaration order), so guard against a disposed editor.

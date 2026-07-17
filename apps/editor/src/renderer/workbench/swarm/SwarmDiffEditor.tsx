@@ -15,7 +15,6 @@ import {
   IConfigurationService,
   IContextKeyService,
   IEditorGroupsService,
-  type IDisposable,
   type IEditorInput,
 } from '@universe-editor/platform'
 import {
@@ -29,6 +28,7 @@ import { MonacoLoader } from '../editor/monaco/MonacoLoader.js'
 import { buildBridgedEditorOptions } from '../editor/monaco/editorOptionsFromConfig.js'
 import { languageForResource } from '../files/resourceLanguage.js'
 import { diffModelUri } from '../editor/diffModelUri.js'
+import { wireDiffEditorViewState } from '../editor/diffEditorViewState.js'
 import { SwarmDiffEditorInput } from '../../services/editor/SwarmDiffEditorInput.js'
 import { DiffEditorRegistry } from '../../services/editor/DiffEditorRegistry.js'
 import { syncEditorFocusContext } from '../../services/editor/editorFocus.js'
@@ -164,10 +164,13 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
       queueMicrotask(() => syncEditorFocusContext(contextKeyService))
     }
 
-    let updateDiffSub: IDisposable | undefined = ed.onDidUpdateDiff(() => {
-      updateDiffSub?.dispose()
-      updateDiffSub = undefined
-      ed.revealFirstDiff()
+    // Persist / restore scroll + cursor across tab switches — same mechanism as
+    // the generic DiffEditor. It also handles the first-change reveal on a fresh
+    // open. No shared cursor: swarm sides are depot snapshots that drift from the
+    // local working copy, so a cross-editor cursor would land on the wrong line.
+    const viewState = wireDiffEditorViewState(ed, {
+      groupId: group?.id,
+      resourceKey: diffInput.resource.toString(),
     })
 
     const controller = inlineCommentsEnabled
@@ -183,7 +186,8 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
     return () => {
       controller?.dispose()
       controllerRef.current = null
-      updateDiffSub?.dispose()
+      // Dispose before ed.dispose() so the final view-state flush reads a live editor.
+      viewState.dispose()
       DiffEditorRegistry.unregister(diffInput, ed)
       ed.setModel(null)
       original.dispose()
