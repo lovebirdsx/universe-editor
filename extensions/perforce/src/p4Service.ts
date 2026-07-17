@@ -32,6 +32,14 @@ export interface P4ExecOptions {
   readonly input?: string
   /** Skip the connection global options (e.g. bare `p4 set` / `p4 info`). */
   readonly noConnection?: boolean
+  /**
+   * Drop only the client (`-c`) global while keeping `-p`/`-u`. A depot-syntax
+   * read (`p4 print //depot/…#rev` or `…@=change`) is otherwise filtered through
+   * the current client's view, so a file not mapped in that view prints empty —
+   * which is exactly what an out-of-workspace Swarm diff hits. Without a client,
+   * p4 has no view to filter against and the depot spec resolves unrestricted.
+   */
+  readonly noClient?: boolean
   /** Override the stdout byte cap ({@link DEFAULT_MAX_OUTPUT_BYTES}). */
   readonly maxOutputBytes?: number
 }
@@ -132,13 +140,14 @@ export function isCollapsed(records: readonly Record<string, unknown>[]): boolea
   return records.length > 0 && records.every((r) => 'data' in r)
 }
 
-/** Build the global connection options (`-c/-u/-p`) from a connection. */
-export function connectionArgs(conn: P4Connection | undefined): string[] {
+/** Build the global connection options (`-c/-u/-p`) from a connection. When
+ *  `dropClient` is set the `-c` client option is omitted (see {@link P4ExecOptions.noClient}). */
+export function connectionArgs(conn: P4Connection | undefined, dropClient = false): string[] {
   if (!conn) return []
   const args: string[] = []
   if (conn.port) args.push('-p', conn.port)
   if (conn.user) args.push('-u', conn.user)
-  if (conn.client) args.push('-c', conn.client)
+  if (conn.client && !dropClient) args.push('-c', conn.client)
   return args
 }
 
@@ -166,7 +175,7 @@ export class P4Service {
   /** Run `p4 <args>` and resolve with stdout/stderr/exitCode (never rejects on a
    *  non-zero exit; rejects only if the process can't spawn — e.g. p4 missing). */
   exec(args: readonly string[], options?: P4ExecOptions): Promise<P4ExecResult> {
-    const globals = options?.noConnection ? [] : connectionArgs(this._connection)
+    const globals = options?.noConnection ? [] : connectionArgs(this._connection, options?.noClient)
     const full = [...globals, ...args]
     return this._gate.run(() => this._spawn(full, options))
   }
@@ -222,7 +231,7 @@ export class P4Service {
     args: readonly string[],
     options?: P4ExecOptions,
   ): Promise<{ stdout: Buffer; stderr: string; exitCode: number }> {
-    const globals = options?.noConnection ? [] : connectionArgs(this._connection)
+    const globals = options?.noConnection ? [] : connectionArgs(this._connection, options?.noClient)
     const full = [...globals, ...args]
     return this._gate.run(
       () =>

@@ -79,6 +79,77 @@ test.describe('@p1 swarm reviews', () => {
     await expect.poll(() => workbench.getActiveEditorUri()).toContain('/src/editor/a.ts')
   })
 
+  test('diffs a file outside the client view (not in the workspace)', async ({ page }) => {
+    await page.locator('[data-testid="activitybar-item-workbench.view.swarm"]').click()
+    const view = page.locator('[data-testid="swarm-reviews-view"]')
+    await expect(view).toBeVisible()
+
+    await view
+      .locator('[data-testid="swarm-review-row"]', { hasText: 'Patch shared lib' })
+      .first()
+      .click()
+    const review = page.locator('[data-testid="swarm-review-editor"]')
+    // `//other/lib/c.ts` is shelved in the review but lies outside the client
+    // view (unmapped by `p4 where`). Its diff sides come from `p4 print` read
+    // with no client, so both sides must carry real content — a regression would
+    // show a blank diff (the bug this guards).
+    await expect(review.getByText('c.ts')).toBeVisible()
+    await review.getByText('c.ts').click()
+    await expect(page.locator('[data-testid="swarm-diff-editor"]')).toBeVisible()
+
+    await expect
+      .poll(async () => {
+        const content = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
+        return content?.original
+      })
+      .toContain('export const c = 1')
+    await expect
+      .poll(async () => {
+        const content = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
+        return content?.modified
+      })
+      .toContain('export const c = 2')
+
+    // No local mapping → the title-bar "Open File" action is hidden.
+    await expect(
+      page.locator('[data-testid="view-title-action-workbench.action.diffEditor.openFile"]'),
+    ).toHaveCount(0)
+  })
+
+  test('diffs a review backed by a submitted change against the pre-edit base', async ({
+    page,
+  }) => {
+    await page.locator('[data-testid="activitybar-item-workbench.view.swarm"]').click()
+    const view = page.locator('[data-testid="swarm-reviews-view"]')
+    await expect(view).toBeVisible()
+
+    await view
+      .locator('[data-testid="swarm-review-row"]', { hasText: 'Bump d constant' })
+      .first()
+      .click()
+    const review = page.locator('[data-testid="swarm-review-editor"]')
+    // Change 906 is submitted, so `describe -S` reports d.ts at #6 (the revision
+    // containing the edit). The base must resolve to #5, not #6 — otherwise both
+    // diff sides show the post-edit content and the diff is blank. Assert the two
+    // sides differ (base #5 vs the edit).
+    await expect(review.getByText('d.ts')).toBeVisible()
+    await review.getByText('d.ts').click()
+    await expect(page.locator('[data-testid="swarm-diff-editor"]')).toBeVisible()
+
+    await expect
+      .poll(async () => {
+        const content = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
+        return content?.original
+      })
+      .toContain('export const d = 1')
+    await expect
+      .poll(async () => {
+        const content = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
+        return content?.modified
+      })
+      .toContain('export const d = 2')
+  })
+
   test('loads the dashboard, opens a review, votes, transitions, comments', async ({
     page,
     swarm,

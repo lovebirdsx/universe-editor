@@ -144,6 +144,61 @@ describe('PerforceClient Swarm diff files', () => {
     client!.dispose()
   })
 
+  it('prints an out-of-view shelved file by dropping the client (-c) global', async () => {
+    // Model real p4's client-view filter: `p4 print //depot/…@=<change>` bound to
+    // a client (`-c`) prints empty for a depot path not mapped in that client's
+    // view (the out-of-workspace Swarm diff case). Without `-c` the depot spec has
+    // no view to filter against and prints. This is the whole bug: the diff was
+    // blank because printRevision spawned with `-c` and the shelf print failed.
+    const printArgvs: string[][] = []
+    spawnMock.mockImplementation((...args: unknown[]) => {
+      const argv = (args[1] as string[]) ?? []
+      const child = new FakeChildProcess()
+      queueMicrotask(() => {
+        const cmd = subcommand(argv)
+        if (cmd === 'info') {
+          child.stdout.emit(
+            'data',
+            Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),
+          )
+          child.emit('close', 0)
+          return
+        }
+        if (cmd === 'print') {
+          printArgvs.push(argv)
+          const spec = argv[argv.indexOf('print') + 2] ?? ''
+          const outOfView = spec.startsWith('//unmapped/')
+          const boundToClient = argv.includes('-c')
+          if (outOfView && boundToClient) {
+            child.stderr.emit('data', Buffer.from(`${spec} - no such file(s).\n`))
+            child.emit('close', 1)
+          } else {
+            child.stdout.emit('data', Buffer.from('SHELVED CONTENT\n'))
+            child.emit('close', 0)
+          }
+          return
+        }
+        child.emit('close', 0)
+      })
+      return child
+    })
+
+    const client = await PerforceClient.create(ROOT, {}, new ConcurrencyGate(4), {
+      enabled: true,
+      workspaceTtlMs: 4000,
+    })
+    expect(client).toBeDefined()
+
+    const content = await client!.printRevision('//unmapped/b.ts@=900')
+    expect(content).toBe('SHELVED CONTENT\n')
+
+    const printArgv = printArgvs.at(-1)!
+    expect(printArgv).not.toContain('-c')
+    expect(printArgv).toContain('-u')
+
+    client!.dispose()
+  })
+
   it('caches an immutable archive shelf forever, ignoring force and short TTL', async () => {
     let clock = 0
     spawnMock.mockImplementation((...args: unknown[]) => {
@@ -208,6 +263,98 @@ describe('PerforceClient Swarm diff files', () => {
     await client!.describeChangeFiles('2999', true, true)
     expect(describeCount()).toBe(1)
 
+    client!.dispose()
+  })
+
+  // `describe -S` reports a file's `rev` with a state-dependent meaning: for a
+  // SUBMITTED change it's the revision that contains the edit (base = rev-1); for
+  // a PENDING shelf it's already the pre-edit base (base = rev). Getting this
+  // wrong made both diff sides identical (blank diff) for committed reviews.
+  function describeReturning(fields: Record<string, string>) {
+    return (...args: unknown[]) => {
+      const argv = (args[1] as string[]) ?? []
+      const child = new FakeChildProcess()
+      queueMicrotask(() => {
+        const cmd = subcommand(argv)
+        if (cmd === 'info') {
+          child.stdout.emit(
+            'data',
+            Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),
+          )
+        } else if (cmd === 'describe') {
+          child.stdout.emit('data', Buffer.from(JSON.stringify(fields)))
+        } else if (cmd === 'where') {
+          child.stdout.emit(
+            'data',
+            Buffer.from(
+              JSON.stringify({
+                depotFile: '//depot/src/a.ts',
+                clientFile: '//testclient/src/a.ts',
+                path: `${ROOT}/src/a.ts`,
+              }),
+            ),
+          )
+        }
+        child.emit('close', 0)
+      })
+      return child
+    }
+  }
+
+  it('bases a submitted change on rev-1 (the pre-edit revision)', async () => {
+    spawnMock.mockImplementation(
+      describeReturning({
+        change: '8143439',
+        status: 'submitted',
+        depotFile0: '//depot/src/a.ts',
+        action0: 'edit',
+        rev0: '18',
+      }),
+    )
+    const client = await PerforceClient.create(ROOT, {}, new ConcurrencyGate(4), {
+      enabled: true,
+      workspaceTtlMs: 4000,
+    })
+    const files = await client!.describeChangeFiles('8143439')
+    expect(files[0]?.baseRevision).toBe('17')
+    client!.dispose()
+  })
+
+  it('bases a pending shelf on its reported rev (already the pre-edit base)', async () => {
+    spawnMock.mockImplementation(
+      describeReturning({
+        change: '8144405',
+        status: 'pending',
+        depotFile0: '//depot/src/a.ts',
+        action0: 'edit',
+        rev0: '3',
+      }),
+    )
+    const client = await PerforceClient.create(ROOT, {}, new ConcurrencyGate(4), {
+      enabled: true,
+      workspaceTtlMs: 4000,
+    })
+    const files = await client!.describeChangeFiles('8144405')
+    expect(files[0]?.baseRevision).toBe('3')
+    client!.dispose()
+  })
+
+  it('has no base for a submitted change whose file is at rev 1', async () => {
+    spawnMock.mockImplementation(
+      describeReturning({
+        change: '500',
+        status: 'submitted',
+        depotFile0: '//depot/src/a.ts',
+        action0: 'edit',
+        rev0: '1',
+      }),
+    )
+    const client = await PerforceClient.create(ROOT, {}, new ConcurrencyGate(4), {
+      enabled: true,
+      workspaceTtlMs: 4000,
+    })
+    const files = await client!.describeChangeFiles('500')
+    expect(files[0]?.baseRevision).toBeNull()
     client!.dispose()
   })
 })

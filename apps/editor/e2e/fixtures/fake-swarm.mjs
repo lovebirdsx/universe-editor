@@ -69,9 +69,37 @@ const reviews = {
     openTaskCount: 0,
     testStatus: 'pass',
   },
+  1004: {
+    id: '1004',
+    state: 'needsReview',
+    stateLabel: 'Needs Review',
+    author: 'dave',
+    description: 'Patch shared lib\n\nEdits a file outside the workspace client view.',
+    updated: 1_700_000_300,
+    versions: [{ rev: 1, change: '904', pending: true, time: 1_700_000_300 }],
+    participants: { e2e: { vote: { value: 0 }, required: true } },
+    commentCount: 0,
+    openTaskCount: 0,
+    testStatus: 'pass',
+  },
+  1005: {
+    id: '1005',
+    state: 'needsReview',
+    stateLabel: 'Needs Review',
+    author: 'erin',
+    description: 'Bump d constant\n\nBacked by a submitted changelist.',
+    updated: 1_700_000_400,
+    // Backing change 906 is SUBMITTED: describe -S reports the file at #6 (the
+    // revision containing the edit), so the diff base must resolve to #5.
+    versions: [{ rev: 1, change: '906', pending: false, time: 1_700_000_400 }],
+    participants: { e2e: { vote: { value: 0 }, required: true } },
+    commentCount: 0,
+    openTaskCount: 0,
+    testStatus: 'pass',
+  },
 }
 const comments = {}
-let nextReviewId = 1003
+let nextReviewId = 1005
 let nextCommentId = 1
 
 function logRequest(entry) {

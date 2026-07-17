@@ -1418,6 +1418,18 @@ export class PerforceClient {
       const detail = parseChangeDescribe(record)
       if (!detail) return undefined
       const localPaths = await this._whereLocalPaths(detail.files.map((file) => file.depotFile))
+      // `describe -S` reports each file's `rev` with a state-dependent meaning
+      // (confirmed against a real server): for a SUBMITTED change the rev is the
+      // revision that CONTAINS this edit (e.g. #18), so the pre-edit base is
+      // #(rev-1); for a PENDING shelf the rev is already the pre-edit base (the
+      // edit only lives in the shelf), so it's used as-is. Using `#rev` for a
+      // submitted change made both diff sides the post-edit content (blank diff).
+      const submitted = detail.status === 'submitted'
+      const baseRevisionOf = (rev: string): string | null => {
+        if (!submitted) return rev || null
+        const n = Number(rev)
+        return Number.isFinite(n) && n > 1 ? String(n - 1) : null
+      }
       return JSON.stringify(
         detail.files.map((f) => {
           const status = statusFromAction(f.action)
@@ -1426,7 +1438,7 @@ export class PerforceClient {
             path: displayPath(f.depotFile),
             depotFile: f.depotFile,
             localPath: localPaths.get(f.depotFile) ?? null,
-            baseRevision: status === 'A' ? null : f.rev || null,
+            baseRevision: status === 'A' ? null : baseRevisionOf(f.rev),
           }
         }),
       )
@@ -1580,13 +1592,25 @@ export class PerforceClient {
    */
   async printRevision(spec: string | null): Promise<string> {
     if (!spec) return ''
+    // Read via depot syntax with no client (`noClient`), so a file not mapped in
+    // the current client's view still prints — the out-of-workspace Swarm diff
+    // case. A shelf spec (`@=change`) can be re-shelved in place, so it bypasses
+    // the persistent cache; a concrete `#revision` is immutable and cached.
     if (spec.includes('@=')) {
-      const res = await this._p4.exec(['print', '-q', spec])
-      return res.exitCode === 0 ? res.stdout : ''
+      const res = await this._p4.exec(['print', '-q', spec], { noClient: true })
+      if (res.exitCode !== 0) {
+        this._log?.(`[perforce] print ${spec} failed (exit ${res.exitCode}): ${res.stderr.trim()}`)
+        return ''
+      }
+      return res.stdout
     }
     const value = await this._cache.wrap(P4CacheNs.print, spec, async () => {
-      const res = await this._p4.exec(['print', '-q', spec])
-      return res.exitCode === 0 ? res.stdout : undefined
+      const res = await this._p4.exec(['print', '-q', spec], { noClient: true })
+      if (res.exitCode !== 0) {
+        this._log?.(`[perforce] print ${spec} failed (exit ${res.exitCode}): ${res.stderr.trim()}`)
+        return undefined
+      }
+      return res.stdout
     })
     return value ?? ''
   }
@@ -1599,8 +1623,12 @@ export class PerforceClient {
    */
   async printRevisionBytes(spec: string | null): Promise<Buffer> {
     if (!spec) return Buffer.alloc(0)
-    const res = await this._p4.execBinary(['print', '-q', spec])
-    return res.exitCode === 0 ? res.stdout : Buffer.alloc(0)
+    const res = await this._p4.execBinary(['print', '-q', spec], { noClient: true })
+    if (res.exitCode !== 0) {
+      this._log?.(`[perforce] print ${spec} failed (exit ${res.exitCode}): ${res.stderr.trim()}`)
+      return Buffer.alloc(0)
+    }
+    return res.stdout
   }
 
   /**

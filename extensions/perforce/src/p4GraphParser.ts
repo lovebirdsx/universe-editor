@@ -73,6 +73,10 @@ export interface GraphDescribe {
   readonly date: number
   readonly body: string
   readonly files: GraphDescribeFile[]
+  /** `submitted` | `pending` — governs what a shelved file's `rev` means (see
+   *  describeChangeFiles): submitted → rev is the change that CONTAINS the edit;
+   *  pending → rev is the pre-edit base. Absent when p4 didn't report it. */
+  readonly status?: string
 }
 
 /**
@@ -94,6 +98,7 @@ export function parseChangeDescribe(record: Record<string, unknown>): GraphDescr
       rev: revs[i] ?? '',
     })
   }
+  const status = asString(record['status'])
   return {
     id,
     author: asString(record['user']) ?? '',
@@ -101,6 +106,7 @@ export function parseChangeDescribe(record: Record<string, unknown>): GraphDescr
     date: Number(asString(record['time']) ?? 0),
     body: asString(record['desc'])?.replace(/\n+$/, '') ?? '',
     files,
+    ...(status ? { status } : {}),
   }
 }
 

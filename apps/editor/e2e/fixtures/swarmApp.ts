@@ -121,9 +121,30 @@ export const test = base.extend<SwarmFixtures>({
           '//depot/hello.txt': { rev: 1, content: 'hello\n' },
           '//depot/src/editor/a.ts': { rev: 1, content: baselineA },
           '//depot/src/runtime/b.ts': { rev: 1, content: 'export const b = 1\n' },
+          // A depot path OUTSIDE the client view (not under //depot, the mapped
+          // prefix): `p4 where` returns no mapping and a client-bound `p4 print`
+          // fails. It must still diff, because printRevision reads it with no
+          // client. Regression guard for the blank out-of-workspace diff.
+          '//other/lib/c.ts': { rev: 4, content: 'export const c = 1\n' },
+          // A file with revision history, edited by SUBMITTED change 906 (below).
+          // #6 (head) contains the edit; #5 is the pre-edit base. `describe -S` of
+          // a submitted change reports #6, so the base must be #5 — else both diff
+          // sides show #6 and the diff is blank (the committed-review bug).
+          '//depot/src/editor/d.ts': {
+            rev: 6,
+            content: 'export const d = 2\n',
+            revisions: { 5: 'export const d = 1\n', 6: 'export const d = 2\n' },
+          },
           [xlsxDepot]: { rev: 3, contentBase64: xlsxBase.toString('base64') },
         },
         opened: {},
+        // Submitted changelists (describe -S reports status=submitted; a file's
+        // `rev` is the revision that CONTAINS the edit, so its base is rev-1).
+        submitted: {
+          '906': {
+            '//depot/src/editor/d.ts': { action: 'edit', rev: 6 },
+          },
+        },
         shelved: {
           '900': {
             '//depot/src/editor/a.ts': { action: 'edit', rev: 1, content: shelvedA },
@@ -132,6 +153,11 @@ export const test = base.extend<SwarmFixtures>({
               rev: 1,
               content: 'export const b = 2\n',
             },
+          },
+          // A shelf whose only file lies outside the client view (see files map);
+          // backs review #1004, the out-of-workspace diff regression guard.
+          '904': {
+            '//other/lib/c.ts': { action: 'edit', rev: 4, content: 'export const c = 2\n' },
           },
           '903': {
             [xlsxDepot]: {

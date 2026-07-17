@@ -52,6 +52,7 @@ function loadState() {
   // Default the changelist/shelf model so seeds written before it existed still load.
   state.changelists ??= {}
   state.shelved ??= {}
+  state.submitted ??= {}
   state.nextChange ??= 1000
   return state
 }
@@ -131,15 +132,17 @@ function walkDisk(dir, out = []) {
 const argv = process.argv.slice(2)
 let mode = 'plain' // 'plain' | 'mj' | 'ztag'
 let i = 0
+let hadClientGlobal = false // whether a `-c <client>` global was passed
 const WITH_VALUE = new Set(['-p', '-u', '-c', '-C', '-d', '-H', '-L', '-z', '-Q'])
 for (; i < argv.length; i++) {
   const a = argv[i]
   if (a === '-Mj') mode = 'mj'
   else if (a === '-ztag') mode = 'ztag'
   else if (a === '-G') mode = 'marshal'
-  else if (WITH_VALUE.has(a))
+  else if (WITH_VALUE.has(a)) {
+    if (a === '-c') hadClientGlobal = true
     i++ // skip the flag's value
-  else if (a.startsWith('-'))
+  } else if (a.startsWith('-'))
     continue // other global flag, no value
   else break
 }
@@ -302,16 +305,20 @@ function main() {
     }
 
     case 'describe': {
-      // Shelved-file probe (`describe -S -s <cl>`): report the shelf as parallel
-      // depotFile/rev/action keys, matching real `-Mj describe -S`.
+      // Shelved / submitted file probe (`describe -S -s <cl>`): report the change
+      // as parallel depotFile/rev/action keys, matching real `-Mj describe -S`.
+      // `status` (submitted|pending) is what tells the extension whether `rev` is
+      // the pre-edit base (pending shelf) or the change that contains the edit
+      // (submitted → base is rev-1). A submitted change takes precedence.
       const clId = argAfter(rest, '-s')
-      const shelf = clId ? state.shelved[clId] : undefined
-      if (!shelf || Object.keys(shelf).length === 0) {
+      const submitted = clId ? state.submitted?.[clId] : undefined
+      const files = submitted ?? (clId ? state.shelved[clId] : undefined)
+      if (!files || Object.keys(files).length === 0) {
         emit([])
         return 0
       }
-      const record = { change: clId }
-      Object.entries(shelf).forEach(([depotFile, s], idx) => {
+      const record = { change: clId, status: submitted ? 'submitted' : 'pending' }
+      Object.entries(files).forEach(([depotFile, s], idx) => {
         record[`depotFile${idx}`] = depotFile
         record[`rev${idx}`] = String(s.rev)
         record[`action${idx}`] = s.action
@@ -364,6 +371,15 @@ function main() {
       if (!spec) return 1
       const shelfChange = /@=(\d+)$/.exec(spec)?.[1]
       const depotFile = spec.replace(/(?:#.*|@=.*)$/, '')
+      // Client-view filter: real p4 resolves a depot spec against the current
+      // client's view when bound to one (`-c`). A file outside the view prints
+      // empty — the out-of-workspace Swarm diff bug. printRevision fixes it by
+      // dropping `-c` (no client → no view to filter against), so this guard only
+      // bites when the caller still passed a client global.
+      if (hadClientGlobal && !depotFile.startsWith(`${state.depotPrefix}/`)) {
+        process.stderr.write(`${spec} - file(s) not in client view.\n`)
+        return 1
+      }
       const shelved = shelfChange ? state.shelved[shelfChange]?.[depotFile] : undefined
       // Binary files (e.g. xlsx) are seeded as `contentBase64` so the raw bytes
       // survive JSON + are emitted to stdout as a Buffer (never utf8-encoded).
@@ -379,6 +395,15 @@ function main() {
       if (!known) {
         process.stderr.write(`${spec} - no such file(s).\n`)
         return 1
+      }
+      // A specific `#<rev>` reads that revision's historical content when the file
+      // models a revision history (`revisions: {17: '…', 18: '…'}`); otherwise the
+      // single head content. Lets a submitted-change diff show base (#rev-1) vs the
+      // edit (#rev / shelf).
+      const askedRev = /#(\d+)$/.exec(spec)?.[1]
+      if (askedRev && known.revisions?.[askedRev] !== undefined) {
+        process.stdout.write(known.revisions[askedRev])
+        return 0
       }
       if (known.contentBase64 !== undefined) {
         process.stdout.write(Buffer.from(known.contentBase64, 'base64'))
