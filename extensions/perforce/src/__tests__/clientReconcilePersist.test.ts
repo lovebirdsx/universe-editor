@@ -241,8 +241,57 @@ describe('PerforceClient reconcile persistence + dismiss', () => {
     expect(reconcileGroup()?.resourceStates).toHaveLength(1)
   })
 
+  it('re-verifies restored entries on an ordinary refresh, dropping ones changed back to clean', async () => {
+    // A file persisted as diverged, but its change was discarded while the editor
+    // was closed (edited back to the have revision). On reload, restore renders it
+    // WITHOUT a scan; the first ordinary refresh must re-verify it against disk and
+    // drop it — using an incremental scan over just that path, never a full walk.
+    const store = memStore({
+      files: [
+        { depotFile: '//depot/a.txt', clientFile: `${LOCAL}/a.txt`, action: 'edit', rev: '1' },
+      ],
+      dismissed: [],
+    })
+    // The path now reconciles clean (no rows) — its change was discarded.
+    const client = await makeClient(store, { reconcile: () => [] })
+    client.restoreReconcile()
+    expect(client.status.reconcileCount).toBe(1)
+    calls.length = 0
+
+    // Ordinary refresh (no `reconcile: true`) → cheap re-verify path.
+    await client.refresh()
+
+    expect(client.status.reconcileCount).toBe(0)
+    const scans = reconcileScans()
+    expect(scans.length).toBeGreaterThan(0)
+    for (const argv of scans) {
+      expect(argv).not.toContain('//...')
+      expect(argv).not.toContain(`${LOCAL}/...`)
+      expect(argv).toContain(`${LOCAL}/a.txt`)
+    }
+  })
+
+  it('keeps a still-diverged entry across an ordinary refresh', async () => {
+    // The mirror of the above: an entry that is still diverged on disk must survive
+    // the cheap re-verify (the scan still reports it).
+    const store = memStore({
+      files: [
+        { depotFile: '//depot/a.txt', clientFile: `${LOCAL}/a.txt`, action: 'edit', rev: '1' },
+      ],
+      dismissed: [],
+    })
+    const client = await makeClient(store, { reconcile: () => [{ rel: 'a.txt' }] })
+    client.restoreReconcile()
+    expect(client.status.reconcileCount).toBe(1)
+
+    await client.refresh()
+
+    expect(client.status.reconcileCount).toBe(1)
+    const states = (reconcileGroup()?.resourceStates ?? []) as { resourceUri?: string }[]
+    expect(states.some((s) => (s.resourceUri ?? '').includes('a.txt'))).toBe(true)
+  })
+
   it('a dismissed file stays out of the group even after a full Clean Refresh', async () => {
-    // Both files diverge on every scan.
     const store = memStore()
     const client = await makeClient(store, {
       reconcile: () => [{ rel: 'a.txt' }, { rel: 'b.txt' }],

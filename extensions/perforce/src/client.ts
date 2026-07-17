@@ -506,7 +506,10 @@ export class PerforceClient {
    * (clean refresh / `perforce.autoReconcile`) it runs a full `reconcile -n -a -e -d
    * <scope>` walk — heavy on large trees, so only on demand. Otherwise (an ordinary
    * post-mutation refresh) it re-filters the cached list against the freshly fetched
-   * opened set, so a just-collected file drops out without walking the tree again.
+   * opened set AND re-verifies each surviving entry against disk with an incremental
+   * `reconcile -n` over just those paths — so an entry whose change was discarded
+   * (edited back / disk-add deleted / disk-delete restored) drops out without
+   * walking the whole tree.
    *
    * `p4 reconcile -n` is a dry run — it never mutates server state (collecting a
    * file is a separate real `reconcile`). Files already opened are filtered out
@@ -519,13 +522,23 @@ export class PerforceClient {
       return
     }
     if (!fullScan) {
-      // Cheap path: no tree walk. Drop cached entries that are now opened
-      // (e.g. just collected) and re-render.
-      this._setReconcileFiles(
-        this._reconcileFiles.filter(
-          (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
-        ),
+      // Cheap path: no whole-tree walk. First drop cached entries that are now
+      // opened (e.g. just collected). Then re-verify the surviving entries against
+      // disk with an incremental `reconcile -n` over just those paths (O(list
+      // size), not O(tree)) so an entry whose change was discarded — edited back
+      // to the have revision, a disk-add deleted, a disk-delete restored — drops
+      // out automatically. An empty list makes zero p4 calls.
+      const candidates = this._reconcileFiles.filter(
+        (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
       )
+      const paths = candidates.map((f) => f.clientFile).filter((p): p is string => p !== undefined)
+      if (paths.length === 0) {
+        this._setReconcileFiles(candidates)
+        return
+      }
+      const { scanned, fresh } = await this._rescanReconcilePaths(paths)
+      if (this._disposed) return
+      this._setReconcileFiles(mergeReconcile(candidates, scanned, fresh))
       return
     }
     const res = await this._p4.execRecords([
@@ -569,39 +582,54 @@ export class PerforceClient {
     await this._runSerial(async () => {
       if (this._disposed) return
       this._reconcileActive = true
-      // Split the changed paths into command-line-sized batches so a huge set
-      // (tens of thousands of files from a busy tree) can't overflow the OS
-      // argv limit (Windows `ENAMETOOLONG`). Results merge across batches.
-      const batches = chunkByLength(paths)
-      const fresh: ReconcileFile[] = []
-      // Only paths from batches that actually completed a scan (clean or with
-      // results) count as "re-scanned" for the merge; a genuinely failed batch's
-      // paths are left out so their prior entries are carried over, not dropped.
-      const scanned: string[] = []
-      for (const batch of batches) {
-        const res = await this._p4.execRecords(['reconcile', '-n', '-a', '-e', '-d', ...batch])
-        if (this._disposed) return
-        if (res.result.exitCode === 0) {
-          for (const f of parseReconcile(res.records, this.root)) {
-            if (!f.clientFile || !this._openedPaths.has(norm(f.clientFile))) fresh.push(f)
-          }
-          scanned.push(...batch)
-        } else {
-          // Non-zero with "no file(s) to reconcile" / "no such file" just means
-          // this batch is clean now → re-scanned, contributes nothing. A different
-          // error is logged and its paths are NOT marked scanned (prior entries
-          // for them survive), while other batches still apply.
-          const stderr = res.result.stderr.toLowerCase()
-          if (stderr.includes('no file(s) to reconcile') || stderr.includes('- no such file')) {
-            scanned.push(...batch)
-          } else {
-            this._log?.(`[perforce] incremental reconcile -n failed: ${res.result.stderr.trim()}`)
-          }
-        }
-      }
+      const { scanned, fresh } = await this._rescanReconcilePaths(paths)
+      if (this._disposed) return
       this._setReconcileFiles(mergeReconcile(this._reconcileFiles, scanned, fresh))
       this._emitChange()
     })
+  }
+
+  /**
+   * Run the incremental `reconcile -n -a -e -d` scan for `paths` and report which
+   * paths were actually re-scanned (`scanned`) plus the still-diverged results
+   * (`fresh`), for {@link mergeReconcile} to fold into the cached list.
+   *
+   * Split the paths into command-line-sized batches so a huge set (tens of
+   * thousands of files from a busy tree) can't overflow the OS argv limit
+   * (Windows `ENAMETOOLONG`); results merge across batches. Only paths from
+   * batches that actually completed a scan (clean or with results) count as
+   * "re-scanned"; a genuinely failed batch's paths are left out so their prior
+   * entries are carried over, not dropped. A batch that comes back clean ("no
+   * file(s) to reconcile" / "no such file") is re-scanned and contributes nothing.
+   *
+   * Deliberately does NOT enter the serial chain or touch shared state — callers
+   * own ordering (via {@link _runSerial}) and merging, so it's safe to invoke
+   * from inside an already-serialized refresh (the cheap re-verify path).
+   */
+  private async _rescanReconcilePaths(
+    paths: readonly string[],
+  ): Promise<{ scanned: string[]; fresh: ReconcileFile[] }> {
+    const batches = chunkByLength(paths)
+    const fresh: ReconcileFile[] = []
+    const scanned: string[] = []
+    for (const batch of batches) {
+      const res = await this._p4.execRecords(['reconcile', '-n', '-a', '-e', '-d', ...batch])
+      if (this._disposed) return { scanned, fresh }
+      if (res.result.exitCode === 0) {
+        for (const f of parseReconcile(res.records, this.root)) {
+          if (!f.clientFile || !this._openedPaths.has(norm(f.clientFile))) fresh.push(f)
+        }
+        scanned.push(...batch)
+      } else {
+        const stderr = res.result.stderr.toLowerCase()
+        if (stderr.includes('no file(s) to reconcile') || stderr.includes('- no such file')) {
+          scanned.push(...batch)
+        } else {
+          this._log?.(`[perforce] incremental reconcile -n failed: ${res.result.stderr.trim()}`)
+        }
+      }
+    }
+    return { scanned, fresh }
   }
 
   /** Set the reconcile file list and mirror it into the group's resource states.
