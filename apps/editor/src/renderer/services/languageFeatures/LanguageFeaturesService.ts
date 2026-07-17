@@ -213,11 +213,16 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
   whenLanguageServersSettled(): Promise<void> {
     if (!this.hasStartingLanguageServer()) return Promise.resolve()
     return new Promise<void>((resolve) => {
-      const sub = this._onDidChangeLanguageServerStatus.event(() => {
-        if (this.hasStartingLanguageServer()) return
-        sub.dispose()
-        resolve()
-      })
+      // Register the subscription so it's disposed if the service itself is torn
+      // down while a server is still starting (the promise would otherwise never
+      // resolve and the listener would leak — see e2e teardown).
+      const sub = this._register(
+        this._onDidChangeLanguageServerStatus.event(() => {
+          if (this.hasStartingLanguageServer()) return
+          sub.dispose()
+          resolve()
+        }),
+      )
     })
   }
 

@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it, vi } from 'vitest'
+import { DisposableTracker, setDisposableTracker } from '@universe-editor/platform'
 
 const registerDocumentSymbolProvider = vi.fn(() => ({ dispose: vi.fn() }))
 const registerDefinitionProvider = vi.fn(() => ({ dispose: vi.fn() }))
@@ -116,6 +117,22 @@ describe('LanguageFeaturesService', () => {
       await p
       expect(resolved).toBe(true)
       svc.dispose()
+    })
+
+    it('does not leak the settle listener when disposed while a server is still starting', () => {
+      const tracker = new DisposableTracker()
+      setDisposableTracker(tracker)
+      try {
+        const svc = new LanguageFeaturesService()
+        svc.setLanguageServerStatus('typescript', 'starting')
+        // Never settles: the returned promise stays pending forever, matching an
+        // e2e teardown where the language server is still cold-starting.
+        void svc.whenLanguageServersSettled()
+        svc.dispose()
+        expect(tracker.computeLeakingDisposables()).toBeUndefined()
+      } finally {
+        setDisposableTracker(null)
+      }
     })
   })
 })
