@@ -13,7 +13,7 @@ import styles from './agents.module.css'
 export function SessionListPanel() {
   return (
     <div className={styles['sessionList']} data-testid="acp-session-list">
-      <SessionListBody />
+      <SessionListBody scrollStateKey="agentsSessionList" />
     </div>
   )
 }

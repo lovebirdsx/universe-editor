@@ -9,7 +9,14 @@
  *  can collapse themselves.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
 import {
   localize,
   IDialogService,
@@ -22,7 +29,13 @@ import {
   ICommandService,
 } from '@universe-editor/platform'
 import { X, Trash2, GitBranch, Pencil } from 'lucide-react'
-import { IconButton, Input, fuzzyMatchField, scoreFuzzyMatch } from '@universe-editor/workbench-ui'
+import {
+  IconButton,
+  Input,
+  fuzzyMatchField,
+  scoreFuzzyMatch,
+  useScrollRestore,
+} from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService, type IAcpSession } from '../../services/acp/acpSessionService.js'
 import {
@@ -167,6 +180,13 @@ export interface SessionListBodyProps {
   /** Suppress the inline "no sessions" line — popovers render their own. */
   hideEmptyState?: boolean
   /**
+   * Stable key identifying the hosting view; when set, the row list's scroll
+   * position is saved on unmount and restored on remount through
+   * ScrollStateCache (survives sidebar container switches, not a window reload).
+   * The popover variant omits it — it re-mounts fresh on every open.
+   */
+  scrollStateKey?: string
+  /**
    * Called after a row is picked. Popover variant uses this to dismiss itself.
    * The list still drives session activation + editor open; this hook is
    * fire-and-forget.
@@ -306,7 +326,7 @@ function SessionRow({
   )
 }
 
-export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps) {
+export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: SessionListBodyProps) {
   const service = useService(IAcpSessionService)
   const history = useService(IAcpSessionHistoryService)
   const filterService = useService(IAcpSessionFilterService)
@@ -339,6 +359,12 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
   }, [config])
 
   const currentCwd = workspace.current?.folder.fsPath
+
+  const scrollRef = useRef<HTMLUListElement | null>(null)
+  useScrollRestore(
+    scrollStateKey,
+    useCallback(() => scrollRef.current, []),
+  )
 
   // In `workspace` scope keep only exact-cwd rows so narrowing applies instantly
   // without waiting for the next replace-mode hydrate. `worktree`/`all` trust the
@@ -437,7 +463,7 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
           {localize('acp.sessions.noMatch', 'No matching sessions.')}
         </p>
       ) : (
-        <ul className={styles['sessionRows']}>
+        <ul className={styles['sessionRows']} ref={scrollRef}>
           {visible.map((entry) => {
             const live = service.getById(entry.id)
             // A read-only foreign preview is a live AcpSession instance but must
