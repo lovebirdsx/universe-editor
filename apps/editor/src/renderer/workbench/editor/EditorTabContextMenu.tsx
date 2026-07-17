@@ -8,12 +8,13 @@
  *  preconditions (hasActiveEditor / editorIsOpen / …) still resolve correctly.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useMemo } from 'react'
+import { useEffect, useReducer, useRef } from 'react'
 import {
   markAsSingleton,
   MenuId,
   type ICommandService,
   type IContextKeyService,
+  type IScopedContextKeyService,
   type URI,
 } from '@universe-editor/platform'
 import { ContextMenu } from '@universe-editor/workbench-ui'
@@ -42,19 +43,32 @@ export function EditorTabContextMenu({
   onClose,
 }: Props) {
   const resourceScheme = resource?.scheme ?? ''
+  const scopedRef = useRef<IScopedContextKeyService | null>(null)
+  const [, forceUpdate] = useReducer((n: number) => n + 1, 0)
 
-  const scopedContext = useMemo(
-    () =>
-      markAsSingleton(
-        contextKeyService.createScoped({
-          activeEditorType: editorType,
-          resourceScheme,
-        }),
-      ),
-    [contextKeyService, editorType, resourceScheme],
-  )
+  if (scopedRef.current === null) {
+    scopedRef.current = markAsSingleton(
+      contextKeyService.createScoped({ activeEditorType: editorType, resourceScheme }),
+    )
+  }
 
-  useEffect(() => () => scopedContext.dispose(), [scopedContext])
+  useEffect(() => {
+    // StrictMode's dev dry-run runs this effect's cleanup (disposing + nulling
+    // the scoped service, which *clears its keys*) before the real mount. If we
+    // don't recreate it, a later re-render re-evaluates each `resourceScheme ==
+    // file` when-clause against an emptied context and every file command
+    // silently vanishes, leaving only the unconditional Close group.
+    if (scopedRef.current === null) {
+      scopedRef.current = markAsSingleton(
+        contextKeyService.createScoped({ activeEditorType: editorType, resourceScheme }),
+      )
+      forceUpdate()
+    }
+    return () => {
+      scopedRef.current?.dispose()
+      scopedRef.current = null
+    }
+  }, [contextKeyService, editorType, resourceScheme])
 
   return (
     <ContextMenu
@@ -68,7 +82,7 @@ export function EditorTabContextMenu({
         },
       ]}
       commandService={commandService}
-      contextKeyService={scopedContext}
+      contextKeyService={scopedRef.current}
       onClose={onClose}
     />
   )
