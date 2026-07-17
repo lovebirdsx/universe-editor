@@ -74,4 +74,48 @@ describe('LanguageFeaturesService', () => {
     expect(registerReferenceProvider).toHaveBeenCalledTimes(1)
     svc.dispose()
   })
+
+  describe('language server status', () => {
+    it('treats an unreported server as ready', () => {
+      const svc = new LanguageFeaturesService()
+      expect(svc.getLanguageServerStatus('typescript')).toBe('ready')
+      expect(svc.hasStartingLanguageServer()).toBe(false)
+      svc.dispose()
+    })
+
+    it('tracks status and fires on change', () => {
+      const svc = new LanguageFeaturesService()
+      const seen: Array<{ id: string; status: string }> = []
+      svc.onDidChangeLanguageServerStatus((e) => seen.push(e))
+      svc.setLanguageServerStatus('typescript', 'starting')
+      svc.setLanguageServerStatus('typescript', 'starting') // dedup, no event
+      svc.setLanguageServerStatus('typescript', 'ready')
+      expect(seen).toEqual([
+        { id: 'typescript', status: 'starting' },
+        { id: 'typescript', status: 'ready' },
+      ])
+      svc.dispose()
+    })
+
+    it('whenLanguageServersSettled resolves immediately when none is starting', async () => {
+      const svc = new LanguageFeaturesService()
+      svc.setLanguageServerStatus('typescript', 'ready')
+      await expect(svc.whenLanguageServersSettled()).resolves.toBeUndefined()
+      svc.dispose()
+    })
+
+    it('whenLanguageServersSettled waits for a starting server to settle', async () => {
+      const svc = new LanguageFeaturesService()
+      svc.setLanguageServerStatus('typescript', 'starting')
+      let resolved = false
+      const p = svc.whenLanguageServersSettled().then(() => {
+        resolved = true
+      })
+      expect(resolved).toBe(false)
+      svc.setLanguageServerStatus('typescript', 'ready')
+      await p
+      expect(resolved).toBe(true)
+      svc.dispose()
+    })
+  })
 })

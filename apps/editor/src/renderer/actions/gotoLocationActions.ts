@@ -19,6 +19,9 @@
 import {
   Action2,
   IEditorGroupsService,
+  IProgressService,
+  ProgressLocation,
+  localize,
   localize2,
   type IAction2Keybinding,
   type IAction2Options,
@@ -27,6 +30,7 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
 
 interface NavCommandDef {
   /** Monaco/VSCode command id, reused verbatim as our Action2 id. */
@@ -101,8 +105,31 @@ function runMonacoNavAction(accessor: ServicesAccessor, actionId: string): void 
   if (!(active instanceof FileEditorInput)) return
   const editor = FileEditorRegistry.get(active)
   if (!editor) return
+
+  // Snapshot the remaining services synchronously — the async progress task below
+  // outlives the accessor (Action2 async-accessor rule), so it can't call get().
+  const languageFeatures = accessor.get(ILanguageFeaturesService)
+  const progress = accessor.get(IProgressService)
+
   editor.focus()
+  // Dispatch the navigation now: the Monaco action awaits its providers, which in
+  // turn block on the language server's `initialize` handshake and resolve once
+  // ready — so the jump fires automatically after startup, no user retry needed.
   editor.trigger('universe', actionId, {})
+
+  // If a language server is still starting, the dispatch above is silently
+  // blocked. Surface a status-bar spinner (delayed, so a warm server stays
+  // invisible) that clears once every server settles.
+  if (!languageFeatures.hasStartingLanguageServer()) return
+
+  void progress.withProgress(
+    {
+      location: ProgressLocation.Window,
+      title: localize('lsp.starting', 'Starting language service…'),
+      delay: 500,
+    },
+    () => languageFeatures.whenLanguageServersSettled(),
+  )
 }
 
 function createNavAction(def: NavCommandDef): new () => Action2 {

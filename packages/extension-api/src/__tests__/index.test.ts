@@ -85,6 +85,7 @@ const NAMESPACE_METHODS: Record<string, readonly string[]> = {
     'registerDocumentFormattingEditProvider',
     'registerCodeLensProvider',
     'createDiagnosticCollection',
+    'setLanguageServerStatus',
   ],
   workspace: [
     'getConfiguration',

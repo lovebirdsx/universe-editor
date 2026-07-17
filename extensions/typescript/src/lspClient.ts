@@ -13,6 +13,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { basename } from 'node:path'
 import { Writable } from 'node:stream'
+import { Emitter, type Event } from 'vscode-jsonrpc'
 import {
   createMessageConnection,
   StreamMessageReader,
@@ -43,6 +44,14 @@ export interface PublishDiagnosticsEvent {
   readonly version?: number
   readonly diagnostics: readonly Diagnostic[]
 }
+
+/**
+ * Lifecycle state of the language server, surfaced so the UI can tell the user
+ * it is coming up. `starting` covers the spawn + `initialize` handshake window
+ * (during which every language request blocks in `_ready()`); `ready` once the
+ * handshake completes; `error` when the server can't be started.
+ */
+export type LspServerState = 'starting' | 'ready' | 'error'
 
 /** Mirrors LSP `CompletionContext` (triggerKind 1 = invoked, 2 = char, 3 = re-trigger). */
 export interface CompletionContext {
@@ -76,6 +85,16 @@ const ENV_DENYLIST: readonly string[] = [
 /** Crash-restart backstop: at most N respawns inside a rolling window. */
 const MAX_CRASH_RESTARTS = 3
 const CRASH_WINDOW_MS = 60_000
+
+/** After the `initialize` handshake, how long to wait for tsserver to begin
+ *  loading a project before declaring the server ready anyway. Covers workspaces
+ *  with no TS/JS project (nothing ever loads) without hanging the spinner. */
+const READY_GRACE_MS = 2_000
+
+/** tsserver's project-load progress carries this title (matches VSCode). We only
+ *  treat progress whose title starts with this as "loading a project"; other
+ *  workDoneProgress (e.g. go-to-source-definition) must not gate readiness. */
+const PROJECT_LOADING_TITLE = 'Initializing'
 
 function sanitizeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {}
@@ -134,6 +153,26 @@ export class LspClient {
    *  (`workspace/codeLens/refresh`), e.g. after project graph changes. */
   private _onCodeLensRefresh: (() => void) | undefined
 
+  /** Current lifecycle state, fed to `onDidChangeState`. Starts `starting` since
+   *  construction is immediately followed by a prewarm/first request that spawns. */
+  private _state: LspServerState = 'starting'
+  private readonly _onDidChangeState = new Emitter<LspServerState>()
+  /** Fires whenever the server's lifecycle state changes (starting/ready/error). */
+  readonly onDidChangeState: Event<LspServerState> = this._onDidChangeState.event
+
+  /** In-flight project-load progress tokens (from `window/workDoneProgress`, title
+   *  "Initializing JS/TS…"). Non-empty ⇒ tsserver is still building a program, so
+   *  semantic tokens / CodeLens aren't accurate yet. This — not the near-instant
+   *  `initialize` handshake — is what "ready" tracks. */
+  private readonly _loadingTokens = new Set<ProgressToken>()
+  /** After the handshake, wait briefly for a project load to start. If none does
+   *  (a workspace with no TS project, or a pure-JS folder), settle to `ready` so
+   *  the spinner doesn't hang forever. Cleared once a load begins. */
+  private _readyGraceTimer: ReturnType<typeof setTimeout> | undefined
+  /** True between a successful handshake and the moment we've resolved readiness
+   *  (either a project finished loading, or the grace window elapsed with none). */
+  private _awaitingProjectLoad = false
+
   constructor(
     private readonly _cli: string,
     private readonly _tsserver: string,
@@ -147,6 +186,17 @@ export class LspClient {
    *  provider's `onDidChangeCodeLenses`). */
   onCodeLensRefresh(listener: () => void): void {
     this._onCodeLensRefresh = listener
+  }
+
+  /** The server's current lifecycle state. */
+  get state(): LspServerState {
+    return this._state
+  }
+
+  private _setState(state: LspServerState): void {
+    if (this._state === state) return
+    this._state = state
+    this._onDidChangeState.fire(state)
   }
 
   // --- prewarm -------------------------------------------------------------
@@ -345,6 +395,7 @@ export class LspClient {
   }
 
   private async _start(): Promise<void> {
+    this._setState('starting')
     const env = sanitizeEnv(process.env)
     env.ELECTRON_RUN_AS_NODE = '1'
 
@@ -358,6 +409,7 @@ export class LspClient {
       })
     } catch (err) {
       this._starting = undefined
+      this._setState('error')
       console.error(`[typescript] spawn failed cli=${this._cli}: ${(err as Error).message}`)
       throw err as Error
     }
@@ -389,6 +441,15 @@ export class LspClient {
       this._onCodeLensRefresh?.()
       return null
     })
+    // Server → client: create a progress token. tsserver uses this for project
+    // loading ("Initializing JS/TS language features…"); we ack so the server
+    // then streams `$/progress` begin/end for it. Requires
+    // capabilities.window.workDoneProgress in `initialize` (below), else tsserver
+    // silently drops all project-load progress.
+    conn.onRequest('window/workDoneProgress/create', () => null)
+    conn.onNotification('$/progress', (params: ProgressParams) => {
+      this._onProgress(params)
+    })
     conn.listen()
 
     try {
@@ -407,6 +468,7 @@ export class LspClient {
       })
     } catch (err) {
       if (this._proc !== proc) return // superseded by a concurrent restart
+      this._setState('error')
       console.error(`[typescript] initialize failed: ${(err as Error).message}`)
       this._clearConnection()
       throw err as Error
@@ -418,7 +480,50 @@ export class LspClient {
         textDocument: { uri, languageId: doc.languageId, version: doc.version, text: doc.text },
       })
     }
+    // The handshake is near-instant, but semantic tokens / CodeLens only become
+    // accurate once tsserver finishes loading the project — reported via
+    // `$/progress`. Stay `starting` and wait for that (see `_onProgress`); if no
+    // load begins within the grace window (no TS project in this workspace),
+    // settle to `ready` anyway.
+    this._awaitingProjectLoad = true
+    this._armReadyGrace()
     console.error(`[typescript] server started root=${this._workspaceRoot ?? '(none)'}`)
+  }
+
+  /** Handle `$/progress`: track project-load progress to drive the ready state. */
+  private _onProgress(params: ProgressParams): void {
+    const value = params.value
+    if (value.kind === 'begin') {
+      if (!value.title || !value.title.startsWith(PROJECT_LOADING_TITLE)) return
+      this._clearReadyGrace()
+      this._awaitingProjectLoad = false
+      this._loadingTokens.add(params.token)
+      this._setState('starting')
+    } else if (value.kind === 'end') {
+      if (!this._loadingTokens.delete(params.token)) return
+      if (this._loadingTokens.size === 0) this._setState('ready')
+    }
+  }
+
+  /** Start (or restart) the post-handshake grace timer: if no project load has
+   *  begun when it fires, declare the server ready. */
+  private _armReadyGrace(): void {
+    this._clearReadyGrace()
+    this._readyGraceTimer = setTimeout(() => {
+      this._readyGraceTimer = undefined
+      // Only settle if we're still just waiting for a load that never came.
+      if (this._awaitingProjectLoad && this._loadingTokens.size === 0) {
+        this._awaitingProjectLoad = false
+        this._setState('ready')
+      }
+    }, READY_GRACE_MS)
+  }
+
+  private _clearReadyGrace(): void {
+    if (this._readyGraceTimer !== undefined) {
+      clearTimeout(this._readyGraceTimer)
+      this._readyGraceTimer = undefined
+    }
   }
 
   private _initializeParams(): InitializeParams {
@@ -475,6 +580,14 @@ export class LspClient {
           // Lets the server ask us to re-request CodeLenses (workspace/codeLens/refresh).
           codeLens: { refreshSupport: true },
         },
+        window: {
+          // Opt into server-initiated progress. tsserver gates its project-load
+          // progress ("Initializing JS/TS language features…") on this — without
+          // it, `createWorkDoneProgress` returns a null reporter and no
+          // begin/end `$/progress` is ever sent, so we can't tell when the
+          // project (and thus semantic tokens / CodeLens) is actually ready.
+          workDoneProgress: true,
+        },
       },
     }
   }
@@ -484,6 +597,7 @@ export class LspClient {
     this._clearConnection()
     if (this._disposed) return
     if (!this._registerRestartAttempt()) {
+      this._setState('error')
       console.error(
         `[typescript] server gone (${reason}); too many restarts, will retry on next request`,
       )
@@ -503,6 +617,11 @@ export class LspClient {
     this._conn = undefined
     this._proc = undefined
     this._starting = undefined
+    // Drop any project-load tracking: a restart re-primes from scratch, and a
+    // stale token would wedge the state (its `end` will never arrive).
+    this._clearReadyGrace()
+    this._loadingTokens.clear()
+    this._awaitingProjectLoad = false
   }
 
   private _registerRestartAttempt(): boolean {
@@ -529,6 +648,7 @@ export class LspClient {
 
   dispose(): void {
     this._disposed = true
+    this._onDidChangeState.dispose()
     const proc = this._proc
     if (proc) {
       // The spawned CLI (`typescript-language-server`) forks tsserver as its own
@@ -564,6 +684,16 @@ interface PublishDiagnosticsParams {
   uri: string
   version?: number
   diagnostics?: Diagnostic[]
+}
+
+/** LSP progress token (opaque, numeric or string). */
+type ProgressToken = number | string
+
+/** LSP `$/progress` notification carrying a `WorkDoneProgress` value. We only act
+ *  on `begin` (with a title) and `end`; `report` is ignored. */
+interface ProgressParams {
+  token: ProgressToken
+  value: { kind: 'begin' | 'report' | 'end'; title?: string; message?: string }
 }
 
 /** LSP semantic-tokens legend: index → token-type / modifier name. */

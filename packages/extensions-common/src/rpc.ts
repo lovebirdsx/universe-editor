@@ -253,6 +253,13 @@ export type LanguageProviderType =
 /** Language ids a provider applies to. Empty for workspace-wide providers. */
 export type DocumentSelector = readonly string[]
 
+/**
+ * Lifecycle state of a language server, reported by a plugin so the renderer can
+ * tell the user it is coming up. `starting` covers spawn + handshake (during
+ * which language requests block); `ready` once usable; `error` on start failure.
+ */
+export type LanguageServerStatus = 'starting' | 'ready' | 'error'
+
 /** Extra registration data Monaco needs up front (trigger characters, legends). */
 export interface ILanguageProviderMetadata {
   readonly triggerCharacters?: readonly string[]
@@ -447,6 +454,14 @@ export interface IMainThreadLanguages {
    * `provide*` feature with a server-driven refresh signal).
    */
   $emitCodeLensDidChange(handle: number): void
+  /**
+   * A plugin reported its language server's lifecycle state (starting/ready/error),
+   * keyed by `id` (e.g. `'typescript'`). Provider → renderer push; the renderer
+   * surfaces it (status-bar spinner) and lets navigation commands await readiness
+   * instead of blocking silently. Not tied to a provider handle — the server's
+   * state spans all its providers.
+   */
+  $setLanguageServerStatus(id: string, status: LanguageServerStatus): void
 }
 
 /** A single text edit applied by {@link IMainThreadEditor.$applyEdits}: replace

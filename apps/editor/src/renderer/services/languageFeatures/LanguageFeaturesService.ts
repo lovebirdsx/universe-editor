@@ -22,6 +22,7 @@ import {
   type IDisposable,
 } from '@universe-editor/platform'
 import type { SymbolInformation, WorkspaceSymbol } from 'vscode-languageserver-types'
+import type { LanguageServerStatus } from '@universe-editor/extensions-common'
 import { MonacoLoader, type monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 
 export interface IDocumentSymbolProvidersChangeEvent {
@@ -116,6 +117,28 @@ export interface ILanguageFeaturesService {
   hasImplementationProvider(languageId: string): boolean
   hasReferenceProvider(languageId: string): boolean
   getWorkspaceSymbolProviders(): readonly IWorkspaceSymbolProvider[]
+  /**
+   * Lifecycle state of a language server, keyed by id (e.g. `'typescript'`),
+   * pushed by its plugin. Absent id → never reported → treated as `'ready'`
+   * (no server, or a language without one, must not make navigation wait).
+   */
+  getLanguageServerStatus(id: string): LanguageServerStatus
+  /** Whether any reported language server is currently `starting`. */
+  hasStartingLanguageServer(): boolean
+  /** Fires when any language server's status changes. */
+  readonly onDidChangeLanguageServerStatus: Event<ILanguageServerStatusChangeEvent>
+  setLanguageServerStatus(id: string, status: LanguageServerStatus): void
+  /**
+   * Resolves once every currently-`starting` language server reaches `ready` (or
+   * `error`). Resolves immediately when none is starting. Used by navigation
+   * commands to await a cold-starting server instead of blocking silently.
+   */
+  whenLanguageServersSettled(): Promise<void>
+}
+
+export interface ILanguageServerStatusChangeEvent {
+  readonly id: string
+  readonly status: LanguageServerStatus
 }
 
 export const ILanguageFeaturesService =
@@ -164,6 +187,39 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
 
   private readonly _onDidChangeProviders = this._register(new Emitter<void>())
   readonly onDidChangeProviders = this._onDidChangeProviders.event
+
+  /** Per-server lifecycle state. An id absent from the map has never reported,
+   *  so it's treated as `ready` (see getLanguageServerStatus). */
+  private readonly _languageServerStatus = new Map<string, LanguageServerStatus>()
+  private readonly _onDidChangeLanguageServerStatus = this._register(
+    new Emitter<ILanguageServerStatusChangeEvent>(),
+  )
+  readonly onDidChangeLanguageServerStatus = this._onDidChangeLanguageServerStatus.event
+
+  getLanguageServerStatus(id: string): LanguageServerStatus {
+    return this._languageServerStatus.get(id) ?? 'ready'
+  }
+
+  hasStartingLanguageServer(): boolean {
+    return [...this._languageServerStatus.values()].some((s) => s === 'starting')
+  }
+
+  setLanguageServerStatus(id: string, status: LanguageServerStatus): void {
+    if (this._languageServerStatus.get(id) === status) return
+    this._languageServerStatus.set(id, status)
+    this._onDidChangeLanguageServerStatus.fire({ id, status })
+  }
+
+  whenLanguageServersSettled(): Promise<void> {
+    if (!this.hasStartingLanguageServer()) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      const sub = this._onDidChangeLanguageServerStatus.event(() => {
+        if (this.hasStartingLanguageServer()) return
+        sub.dispose()
+        resolve()
+      })
+    })
+  }
 
   registerDocumentSymbolProvider(
     languageId: string,

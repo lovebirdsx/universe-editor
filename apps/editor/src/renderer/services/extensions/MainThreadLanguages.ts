@@ -23,6 +23,7 @@ import type {
   ILanguageProviderMetadata,
   IMainThreadLanguages,
   LanguageProviderType,
+  LanguageServerStatus,
 } from '@universe-editor/extensions-common'
 import type { Diagnostic } from 'vscode-languageserver-types'
 import { MonacoLoader } from '../../workbench/editor/monaco/MonacoLoader.js'
@@ -95,6 +96,10 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
 
   $emitCodeLensDidChange(handle: number): void {
     this._codeLensChange.get(handle)?.fire()
+  }
+
+  $setLanguageServerStatus(id: string, status: LanguageServerStatus): void {
+    this._languageFeatures.setLanguageServerStatus(id, status)
   }
 
   private _createProvider(

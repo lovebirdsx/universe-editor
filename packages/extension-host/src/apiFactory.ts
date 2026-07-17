@@ -29,6 +29,7 @@ import type {
   HoverProvider,
   ImplementationProvider,
   InputBoxOptions,
+  LanguageServerStatus,
   Memento,
   OutputChannel,
   QuickPickItem,
@@ -153,6 +154,7 @@ export interface IExtensionHostBridge {
   ): Disposable
   registerCodeLensProvider(selector: DocumentSelector, provider: CodeLensProvider): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
+  setLanguageServerStatus(id: string, status: LanguageServerStatus): void
   getTextDocuments(): readonly TextDocument[]
   readonly onDidOpenTextDocument: Event<TextDocument>
   readonly onDidChangeTextDocument: Event<TextDocumentChangeEvent>

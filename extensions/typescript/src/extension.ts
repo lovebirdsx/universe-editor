@@ -9,8 +9,10 @@
  */
 import {
   languages,
+  window,
   workspace,
   FileType,
+  StatusBarAlignment,
   type CompletionContext,
   type ExtensionContext,
   type SignatureHelpContext,
@@ -19,7 +21,8 @@ import {
 } from '@universe-editor/extension-api'
 import { URI } from 'vscode-uri'
 import { Emitter } from 'vscode-jsonrpc'
-import { LspClient } from './lspClient.js'
+import { LspClient, type LspServerState } from './lspClient.js'
+import { localize } from './nls.js'
 
 const TS_JS_LANGUAGES = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact']
 
@@ -85,6 +88,7 @@ export function activate(context: ExtensionContext): void {
 
   context.subscriptions.push(diagnostics, { dispose: () => client.dispose() })
 
+  registerStatusIndicator(context, client)
   registerProviders(context, client)
   registerDocumentSync(context, client)
 
@@ -243,6 +247,52 @@ function relative(root: string, full: string): string {
 function extname(name: string): string {
   const dot = name.lastIndexOf('.')
   return dot > 0 ? name.slice(dot).toLowerCase() : ''
+}
+
+/** The language-server id reported to the renderer for the status signal. Keyed
+ *  so future language servers (markdown, …) can each report independently. */
+const LANGUAGE_SERVER_ID = 'typescript'
+
+/**
+ * Bridge the LSP lifecycle state to two surfaces: (1) a status-bar item showing a
+ * spinner while the server comes up (VSCode-style language status), and (2) a
+ * renderer-side signal so navigation commands (Go to Definition / References) can
+ * show progress instead of silently blocking until the handshake completes.
+ */
+function registerStatusIndicator(context: ExtensionContext, client: LspClient): void {
+  const item = window.createStatusBarItem(StatusBarAlignment.Right, 100)
+
+  const apply = (state: LspServerState): void => {
+    languages.setLanguageServerStatus(LANGUAGE_SERVER_ID, state)
+    switch (state) {
+      case 'starting':
+        item.text = localize('ts.status.starting.text', 'TypeScript')
+        item.tooltip = localize(
+          'ts.status.starting.tooltip',
+          'Starting TypeScript language service…',
+        )
+        item.showProgress = 'spinning'
+        item.show()
+        break
+      case 'ready':
+        // Converge to a quiet state once ready (matches VSCode hiding the spinner).
+        item.showProgress = false
+        item.hide()
+        break
+      case 'error':
+        item.text = localize('ts.status.error.text', 'TypeScript')
+        item.tooltip = localize(
+          'ts.status.error.tooltip',
+          'TypeScript language service failed to start',
+        )
+        item.showProgress = false
+        item.show()
+        break
+    }
+  }
+
+  apply(client.state)
+  context.subscriptions.push(item, client.onDidChangeState(apply))
 }
 
 function registerProviders(context: ExtensionContext, client: LspClient): void {

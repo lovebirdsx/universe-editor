@@ -59,6 +59,7 @@ function recording(): {
       $emitCodeLensDidChange: (handle: number) => {
         codeLensRefreshes.push(handle)
       },
+      $setLanguageServerStatus: () => {},
     },
   }
 }

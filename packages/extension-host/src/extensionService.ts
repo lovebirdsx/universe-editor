@@ -36,6 +36,7 @@ import {
   type HoverProvider,
   type ImplementationProvider,
   type InputBoxOptions,
+  type LanguageServerStatus,
   type OutputChannel,
   type QuickPickItem,
   type QuickPickOptions,
@@ -538,6 +539,10 @@ export class ExtensionService implements IExtensionHostBridge {
 
   createDiagnosticCollection(name?: string): DiagnosticCollection {
     return this._languageRegistry.createDiagnosticCollection(name)
+  }
+
+  setLanguageServerStatus(id: string, status: LanguageServerStatus): void {
+    this._languages().$setLanguageServerStatus(id, status)
   }
 
   // --- IExtensionHostBridge: ai (trusted-only) ---

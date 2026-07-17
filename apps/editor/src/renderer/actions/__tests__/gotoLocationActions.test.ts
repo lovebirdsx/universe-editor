@@ -9,6 +9,7 @@ import {
   IFileService,
   IInstantiationService,
   InstantiationService,
+  IProgressService,
   KeybindingsRegistry,
   MenuId,
   MenuRegistry,
@@ -20,6 +21,7 @@ import {
 import { gotoLocationActions } from '../gotoLocationActions.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
+import { ILanguageFeaturesService } from '../../services/languageFeatures/LanguageFeaturesService.js'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
 
 function stubFs() {
@@ -75,7 +77,19 @@ describe('gotoLocationActions', () => {
       _serviceBrand: undefined,
       activeGroup: { activeEditor: input },
     } as never)
-    return { inst, triggerSpy, focusSpy }
+    services.set(ILanguageFeaturesService, {
+      _serviceBrand: undefined,
+      hasStartingLanguageServer: () => false,
+      whenLanguageServersSettled: () => Promise.resolve(),
+    } as never)
+    const withProgressSpy = vi.fn(
+      (_options: unknown, task: (...args: unknown[]) => Promise<unknown>) => task(),
+    )
+    services.set(IProgressService, {
+      _serviceBrand: undefined,
+      withProgress: withProgressSpy,
+    } as never)
+    return { inst, triggerSpy, focusSpy, withProgressSpy }
   }
 
   it('registers every command with category, F1 palette entry', () => {
@@ -129,6 +143,40 @@ describe('gotoLocationActions', () => {
 
     expect(focusSpy).toHaveBeenCalledTimes(1)
     expect(triggerSpy).toHaveBeenCalledWith('universe', 'editor.action.revealDefinition', {})
+  })
+
+  it('shows progress while a language server is still starting', async () => {
+    const revealCtor = gotoLocationActions.find(
+      (c) => new c().desc.id === 'editor.action.revealDefinition',
+    )!
+    disposables.push(registerAction2(revealCtor))
+    const services = new ServiceCollection()
+    services.set(IFileService, stubFs() as never)
+    const inst = new InstantiationService(services)
+    services.set(IInstantiationService, inst)
+    const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.ts'))
+    FileEditorRegistry.register(input, { trigger: vi.fn(), focus: vi.fn() } as never)
+    disposables.push({ dispose: () => input.dispose() })
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      activeGroup: { activeEditor: input },
+    } as never)
+    services.set(ILanguageFeaturesService, {
+      _serviceBrand: undefined,
+      hasStartingLanguageServer: () => true,
+      whenLanguageServersSettled: () => Promise.resolve(),
+    } as never)
+    const withProgressSpy = vi.fn((_options: unknown, task: () => Promise<unknown>) => task())
+    services.set(IProgressService, {
+      _serviceBrand: undefined,
+      withProgress: withProgressSpy,
+    } as never)
+
+    await inst.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand('editor.action.revealDefinition')!.handler(accessor)
+    })
+
+    expect(withProgressSpy).toHaveBeenCalledTimes(1)
   })
 
   it('run() is a no-op when there is no active editor', async () => {

@@ -77,7 +77,7 @@ export { FoldingRangeKind } from 'vscode-languageserver-types'
 /** Semantic version of this API surface. The host checks `engines.universe`.
  *  Bumping this is governed by COMPATIBILITY.md — keep it in sync with the
  *  package.json version and the contract test's frozen snapshot. */
-export const version = '0.4.0'
+export const version = '0.5.0'
 
 export interface Disposable {
   dispose(): void
@@ -666,6 +666,15 @@ export interface AiApi {
   sendRequest(messages: readonly AiMessage[], options: AiRequestOptions): AiResponse
 }
 
+/**
+ * Lifecycle state of a language server backing a plugin's providers. Reported via
+ * {@link LanguagesApi.setLanguageServerStatus} so the editor can tell the user the
+ * server is coming up (a status-bar spinner) and let navigation commands await
+ * readiness instead of blocking silently. `starting` covers spawn + handshake;
+ * `ready` once usable; `error` on start failure.
+ */
+export type LanguageServerStatus = 'starting' | 'ready' | 'error'
+
 /** The `languages` namespace: register language feature providers with the editor. */
 export interface LanguagesApi {
   registerDefinitionProvider(selector: DocumentSelector, provider: DefinitionProvider): Disposable
@@ -722,6 +731,13 @@ export interface LanguagesApi {
   ): Disposable
   registerCodeLensProvider(selector: DocumentSelector, provider: CodeLensProvider): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
+  /**
+   * Report the lifecycle state of a language server, keyed by `id` (e.g.
+   * `'typescript'`). The editor surfaces `starting` as a status-bar spinner and
+   * makes navigation commands (Go to Definition / References) show progress and
+   * wait for `ready` rather than blocking silently during startup.
+   */
+  setLanguageServerStatus(id: string, status: LanguageServerStatus): void
 }
 /**
  * The host bridge contract installed on globalThis. KEEP IN SYNC with the
@@ -819,6 +835,7 @@ interface IExtensionHostBridge {
   ): Disposable
   registerCodeLensProvider(selector: DocumentSelector, provider: CodeLensProvider): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
+  setLanguageServerStatus(id: string, status: LanguageServerStatus): void
   getTextDocuments(): readonly TextDocument[]
   readonly onDidOpenTextDocument: Event<TextDocument>
   readonly onDidChangeTextDocument: Event<TextDocumentChangeEvent>
@@ -910,6 +927,7 @@ export const languages: LanguagesApi = {
   registerCodeLensProvider: (selector, provider) =>
     bridge().registerCodeLensProvider(selector, provider),
   createDiagnosticCollection: (name) => bridge().createDiagnosticCollection(name),
+  setLanguageServerStatus: (id, status) => bridge().setLanguageServerStatus(id, status),
 }
 
 export const workspace: WorkspaceApi = {

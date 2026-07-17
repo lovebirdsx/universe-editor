@@ -95,6 +95,12 @@
       派发该事件，收集各监听器 `waitUntil` 贡献的 `TextEdit[]`（带超时兜底）并应用
       到模型。
 
+- `0.5.0` — 向后兼容的新增（minor）：`languages.setLanguageServerStatus(id, status)` +
+  `LanguageServerStatus` 类型（`'starting' | 'ready' | 'error'`）。语言插件（如
+  TypeScript）用它上报后端语言服务的启动状态，工作台据此在状态栏显示启动 spinner，
+  并让「转到定义 / 查看引用」等导航命令在服务启动期间显示进度、就绪后自动执行，而非
+  静默阻塞。纯新增方法，不改既有签名。
+
 ## 激活事件清单（activation events）
 
 扩展在 `package.json` 的 `activationEvents` 声明唤醒时机。手写字符串易拼错（拼错则
