@@ -9,6 +9,8 @@
  */
 import { gitExec, type GitExecResult } from './gitService.js'
 import { gitErrorText } from './gitError.js'
+import { parseWorktrees } from './worktreeParser.js'
+import { norm } from './pathUtil.js'
 
 export type ResetMode = 'soft' | 'mixed' | 'hard'
 
@@ -19,6 +21,76 @@ export const checkout = (root: string, ref: string, log: Log): Promise<GitExecRe
 
 export const cherrypick = (root: string, hash: string, log: Log): Promise<GitExecResult> =>
   gitExec(['cherry-pick', hash], root, log)
+
+/** Synthesize a failed GitExecResult so callers surface a message via the normal path. */
+const failure = (message: string): GitExecResult => ({ stdout: '', stderr: message, exitCode: 1 })
+
+/**
+ * Cherry-pick `hash` onto `targetBranch`.
+ *
+ * A branch checked out by another worktree (the classic case: `main` held by the
+ * main working tree while you work in a linked one) can't be checked out here —
+ * git rejects it with "'<branch>' is already used by worktree at …". So when the
+ * target is checked out somewhere, we cherry-pick *inside that worktree's own
+ * directory* instead: its HEAD advances there and this working tree never moves.
+ * That worktree must be clean, or the pick would apply on top of pending edits —
+ * we refuse with a clear message rather than leave a half-applied state.
+ *
+ * Otherwise (the target isn't checked out anywhere) we check it out here,
+ * cherry-pick, then restore the original HEAD (branch name or detached SHA). A
+ * clean pick leaves the caller exactly where they started, only with the target
+ * advanced; a conflict leaves HEAD on the target so it can be resolved or aborted.
+ */
+export const cherryPickToBranch = async (
+  root: string,
+  hash: string,
+  targetBranch: string,
+  log: Log,
+): Promise<GitExecResult> => {
+  const wtRes = await gitExec(['worktree', 'list', '--porcelain'], root, log)
+  const worktrees = wtRes.exitCode === 0 ? parseWorktrees(wtRes.stdout) : []
+  const holder = worktrees.find((wt) => wt.branch === targetBranch)
+
+  if (holder) {
+    // Picking into the current worktree needs no checkout; into another one, run
+    // it there so this tree stays put. Either way, guard against a dirty tree.
+    const isCurrent = norm(holder.path) === norm(root)
+    const status = await gitExec(['status', '--porcelain'], holder.path, log)
+    if (status.exitCode !== 0) return status
+    if (status.stdout.trim()) {
+      return failure(
+        isCurrent
+          ? `The working tree has uncommitted changes; commit or stash them before cherry-picking onto '${targetBranch}'.`
+          : `Worktree at '${holder.path}' has '${targetBranch}' checked out with uncommitted changes; commit or stash them there before cherry-picking.`,
+      )
+    }
+    return gitExec(['cherry-pick', hash], holder.path, log)
+  }
+
+  const headName = await gitExec(['symbolic-ref', '--short', '-q', 'HEAD'], root, log)
+  const original = headName.stdout.trim()
+  if (!original) {
+    const sha = await gitExec(['rev-parse', 'HEAD'], root, log)
+    if (sha.exitCode !== 0) return sha
+    return runCherryPickOnBranch(root, hash, targetBranch, sha.stdout.trim(), log)
+  }
+  return runCherryPickOnBranch(root, hash, targetBranch, original, log)
+}
+
+const runCherryPickOnBranch = async (
+  root: string,
+  hash: string,
+  targetBranch: string,
+  restoreRef: string,
+  log: Log,
+): Promise<GitExecResult> => {
+  const co = await gitExec(['checkout', targetBranch], root, log)
+  if (co.exitCode !== 0) return co
+  const pick = await gitExec(['cherry-pick', hash], root, log)
+  if (pick.exitCode !== 0) return pick // leave HEAD on target so the conflict is resolvable
+  await gitExec(['checkout', restoreRef], root, log)
+  return pick
+}
 
 export const revert = (root: string, hash: string, log: Log): Promise<GitExecResult> =>
   gitExec(['revert', '--no-edit', hash], root, log)

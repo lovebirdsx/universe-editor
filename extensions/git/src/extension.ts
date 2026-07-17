@@ -21,6 +21,7 @@ import {
   getCommitDetails as getGitGraphCommitDetails,
   getUncommittedChanges as getGitGraphUncommittedChanges,
   getRepos as getGitGraphRepos,
+  getBranches as getGitGraphBranches,
   compareCommits as compareGitGraphCommits,
   getFileDiffContent as getGitGraphFileDiffContent,
   type GitGraphLoadOptions,
@@ -255,6 +256,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
       const [from, to] = args as [string, string]
       return compareGitGraphCommits(gitGraphRoot, from, to, log)
     }),
+    commands.registerCommand('git-graph.getBranches', () => getGitGraphBranches(gitGraphRoot, log)),
     commands.registerCommand('git-graph.openWorkingTreeFile', (...args: unknown[]) => {
       const path = args[0] as string
       return mgr.resolveRepo({ rootUri: gitGraphRoot })?.openChange(join(gitGraphRoot, path))
@@ -306,6 +308,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
     ),
     commands.registerCommand('git-graph.cherrypick', (...a: unknown[]) =>
       finishOp('cherry-pick', gga.cherrypick(gitGraphRoot, a[0] as string, log)),
+    ),
+    commands.registerCommand('git-graph.cherryPickToBranch', (...a: unknown[]) =>
+      finishOp(
+        'cherry-pick to branch',
+        gga.cherryPickToBranch(gitGraphRoot, a[0] as string, a[1] as string, log),
+      ),
     ),
     commands.registerCommand('git-graph.revert', (...a: unknown[]) =>
       finishOp('revert', gga.revert(gitGraphRoot, a[0] as string, log)),

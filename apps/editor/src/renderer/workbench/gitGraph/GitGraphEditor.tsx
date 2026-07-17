@@ -72,6 +72,10 @@ import {
   GitGraphWorktreePickerDialog,
   type GitGraphWorktreePickerState,
 } from './GitGraphWorktreePickerDialog.js'
+import {
+  GitGraphBranchPickerDialog,
+  type GitGraphBranchPickerState,
+} from './GitGraphBranchPickerDialog.js'
 import { SendCommitToAgentChatAction } from '../../actions/agentContextActions.js'
 import styles from './GitGraphEditor.module.css'
 
@@ -441,6 +445,9 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   const [loading, setLoading] = useState(() => gitGraphViewState.result === null)
   const [menu, setMenu] = useState<GitGraphMenuState | null>(null)
   const [worktreePicker, setWorktreePicker] = useState<GitGraphWorktreePickerState | null>(null)
+  const [branchPicker, setBranchPicker] = useState<
+    (GitGraphBranchPickerState & { onPick: (branch: string) => void }) | null
+  >(null)
 
   // Selected commit(s): one hash to expand details, two to compare.
   const [selection, setSelection] = useState<string[]>(() => gitGraphViewState.selection)
@@ -927,6 +934,35 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     [commands, revalidate],
   )
 
+  // Prompt for a target branch, then cherry-pick `hash` onto it. The branch list
+  // is fetched lazily on menu selection so the graph doesn't pay for it upfront.
+  const openCherryPickToBranch = useCallback(
+    (hash: string) => {
+      void (async () => {
+        const branches = await commands.executeCommand<string[]>(GitGraphCommands.getBranches)
+        if (!branches || branches.length === 0) {
+          notification.notify({
+            severity: Severity.Info,
+            message: localize('gitGraph.cherryPickToBranch.noBranches', 'No branches available.'),
+          })
+          return
+        }
+        setBranchPicker({
+          title: localize('gitGraph.cherryPickToBranch.title', 'Cherry-pick {hash} to branch', {
+            hash: shortHash(hash),
+          }),
+          branches,
+          ...(result?.headName ? { exclude: result.headName } : {}),
+          onPick: (branch) => {
+            setBranchPicker(null)
+            runOp(GitGraphCommands.cherryPickToBranch, hash, branch)
+          },
+        })
+      })()
+    },
+    [commands, notification, result?.headName, runOp],
+  )
+
   const openCommitMenu = useCallback(
     (commit: GitGraphCommitDto, e: MouseEvent) => {
       e.preventDefault()
@@ -997,6 +1033,11 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           kind: 'item',
           label: localize('gitGraph.cherryPick', 'Cherry-pick…'),
           run: () => runOp(GitGraphCommands.cherrypick, hash),
+        },
+        {
+          kind: 'item',
+          label: localize('gitGraph.cherryPickToBranch', 'Cherry-pick to branch…'),
+          run: () => openCherryPickToBranch(hash),
         },
         {
           kind: 'item',
@@ -1082,7 +1123,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       ]
       setMenu({ x: e.clientX, y: e.clientY, items })
     },
-    [commands, dialog, runOp],
+    [commands, dialog, runOp, openCherryPickToBranch],
   )
 
   const openBranchMenu = useCallback(
@@ -1890,6 +1931,13 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
             void runWorktreeSync(worktreePicker.targetBranch, paths, worktreePicker.force)
           }
           onClose={() => setWorktreePicker(null)}
+        />
+      )}
+      {branchPicker && (
+        <GitGraphBranchPickerDialog
+          state={branchPicker}
+          onConfirm={branchPicker.onPick}
+          onClose={() => setBranchPicker(null)}
         />
       )}
     </div>

@@ -167,6 +167,7 @@ export const GitGraphCommands = {
   getCommitDetails: 'git-graph.getCommitDetails',
   getUncommittedChanges: 'git-graph.getUncommittedChanges',
   compareCommits: 'git-graph.compareCommits',
+  getBranches: 'git-graph.getBranches',
   openFileDiff: 'git-graph.openFileDiff',
   openWorkingTreeFile: 'git-graph.openWorkingTreeFile',
   openWorktree: 'git-graph.openWorktree',
@@ -176,6 +177,7 @@ export const GitGraphCommands = {
   // extension; the renderer refreshes the graph afterwards regardless.
   checkout: 'git-graph.checkout',
   cherrypick: 'git-graph.cherrypick',
+  cherryPickToBranch: 'git-graph.cherryPickToBranch',
   revert: 'git-graph.revert',
   reset: 'git-graph.reset',
   merge: 'git-graph.merge',

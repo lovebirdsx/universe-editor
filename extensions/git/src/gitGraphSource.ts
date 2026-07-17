@@ -312,6 +312,20 @@ export async function getRepos(
   return repos.map(({ root, name }) => ({ root, name }))
 }
 
+/** Local branch names, current branch first, for the cherry-pick target picker. */
+export async function getBranches(root: string, log?: Log): Promise<string[]> {
+  const res = await gitExec(
+    ['for-each-ref', '--format=%(refname:short)', '--sort=-committerdate', 'refs/heads'],
+    root,
+    log,
+  )
+  if (res.exitCode !== 0) return []
+  return res.stdout
+    .split('\n')
+    .map((b) => b.trim())
+    .filter(Boolean)
+}
+
 /** Count changed files in the working tree (one porcelain line per path). */
 async function countUncommitted(root: string, log: Log): Promise<number> {
   const res = await gitExec(['status', '--porcelain'], root, log)
