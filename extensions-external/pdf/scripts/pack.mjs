@@ -1,36 +1,26 @@
 /*
  * Package this extension into a `.vsix` (a plain zip whose body lives under
  * `extension/`), the format `extensionManagementService.installVSIX` consumes.
- * Run after `build` so `dist/extension.js` exists. Resolves adm-zip from the repo
- * root (this extension is out-of-workspace and has no local node_modules).
+ * Run after `build` so `dist/extension.js` exists.
+ *
+ * The payload (which files land in the VSIX) is derived from this extension's
+ * `package.json` `files[]` by the shared `createVsix`, so it never drifts from
+ * what the runtime ships. This extension is out-of-workspace and has no local
+ * node_modules, so we import the packer from the repo-root package's `dist`.
  */
-import { createRequire } from 'node:module'
 import { readFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = dirname(fileURLToPath(import.meta.url))
 const extRoot = resolve(root, '..')
 const repoRoot = resolve(extRoot, '../..')
-const require = createRequire(
-  resolve(repoRoot, 'packages/extension-packaging/package.json'),
+const { createVsix } = await import(
+  pathToFileURL(resolve(repoRoot, 'packages/extension-packaging/dist/index.js')).href
 )
-const AdmZip = require('adm-zip')
 
 const manifest = JSON.parse(await readFile(resolve(extRoot, 'package.json'), 'utf8'))
 const outName = `${manifest.publisher}.${manifest.name}-${manifest.version}.vsix`
-const outPath = resolve(extRoot, outName)
 
-const zip = new AdmZip()
-// Server-side OPC files the client ignores — present for VSIX shape parity.
-zip.addFile('[Content_Types].xml', Buffer.from('<Types/>'))
-zip.addFile('extension.vsixmanifest', Buffer.from('<PackageManifest/>'))
-
-// The client only reads `extension/**`; ship exactly what package.json lists.
-zip.addLocalFile(resolve(extRoot, 'package.json'), 'extension')
-zip.addLocalFile(resolve(extRoot, 'icon.png'), 'extension')
-zip.addLocalFolder(resolve(extRoot, 'dist'), 'extension/dist')
-zip.addLocalFolder(resolve(extRoot, 'assets'), 'extension/assets')
-
-zip.writeZip(outPath)
+await createVsix(extRoot, resolve(extRoot, outName))
 console.log(`packaged → ${outName}`)

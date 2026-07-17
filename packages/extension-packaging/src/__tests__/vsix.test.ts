@@ -3,7 +3,7 @@ import { mkdtemp, rm, readFile, mkdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import AdmZip from 'adm-zip'
-import { readVsixManifest, extractVsix } from '../vsix.js'
+import { readVsixManifest, extractVsix, createVsix } from '../vsix.js'
 
 const validManifest = {
   name: 'sample',
@@ -98,5 +98,63 @@ describe('extension-packaging vsix', () => {
     const target = path.join(dir, 'out')
     await mkdir(target, { recursive: true })
     await expect(extractVsix(vsix, target)).rejects.toThrow(/escapes the target directory/)
+  })
+
+  describe('createVsix', () => {
+    /** Lay out an extension directory on disk and return its path. */
+    async function writeExtension(files: Record<string, string>): Promise<string> {
+      const extDir = path.join(dir, 'ext')
+      for (const [rel, content] of Object.entries(files)) {
+        const abs = path.join(extDir, rel)
+        await mkdir(path.dirname(abs), { recursive: true })
+        await writeFile(abs, content)
+      }
+      return extDir
+    }
+
+    it('round-trips: packs files[] payload and reads back the manifest', async () => {
+      const extDir = await writeExtension({
+        'package.json': JSON.stringify({ ...validManifest, files: ['dist', 'icon.png'] }),
+        'dist/extension.js': 'CODE',
+        'icon.png': 'PNG',
+        'src/extension.ts': 'SOURCE', // not in files[] → must be excluded
+      })
+      const out = path.join(dir, 'out.vsix')
+      await createVsix(extDir, out)
+
+      expect(readVsixManifest(out).name).toBe('sample')
+      const target = path.join(dir, 'unpacked')
+      await mkdir(target, { recursive: true })
+      await extractVsix(out, target)
+      expect(await readFile(path.join(target, 'dist', 'extension.js'), 'utf8')).toBe('CODE')
+      expect(await readFile(path.join(target, 'icon.png'), 'utf8')).toBe('PNG')
+      await expect(stat(path.join(target, 'src', 'extension.ts'))).rejects.toThrow()
+    })
+
+    it('bundles README/CHANGELOG even when not listed in files[]', async () => {
+      const extDir = await writeExtension({
+        'package.json': JSON.stringify({ ...validManifest, files: ['dist'] }),
+        'dist/extension.js': 'CODE',
+        'README.md': '# readme',
+        'CHANGELOG.md': '# changes',
+      })
+      const out = path.join(dir, 'docs.vsix')
+      await createVsix(extDir, out)
+      const target = path.join(dir, 'unpacked')
+      await mkdir(target, { recursive: true })
+      await extractVsix(out, target)
+      expect(await readFile(path.join(target, 'README.md'), 'utf8')).toBe('# readme')
+      expect(await readFile(path.join(target, 'CHANGELOG.md'), 'utf8')).toBe('# changes')
+    })
+
+    it('throws on a missing manifest', async () => {
+      const extDir = await writeExtension({ 'dist/extension.js': 'CODE' })
+      await expect(createVsix(extDir, path.join(dir, 'x.vsix'))).rejects.toThrow(/missing/)
+    })
+
+    it('throws on an invalid manifest', async () => {
+      const extDir = await writeExtension({ 'package.json': JSON.stringify({ name: 'x' }) })
+      await expect(createVsix(extDir, path.join(dir, 'x.vsix'))).rejects.toThrow(/invalid manifest/)
+    })
   })
 })

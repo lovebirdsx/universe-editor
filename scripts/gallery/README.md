@@ -35,10 +35,12 @@
 
 ## 发布一个扩展
 
+> 发布 `extensions-external/*` 里的自研扩展，**首选 [`pnpm ext:release`](../../docs/development/publishing-extensions.md)**——它自动 build + 打包 + 调用本目录的 `publish.mjs`/`upload.mjs`，支持自动发现与增量。下面是本目录脚本的**底层手动流程**，用于第三方 `.vsix` 或需要精细控制 stage 的场景。
+
 ```bash
-# 1) 打包扩展成 .vsix（各扩展自带打包脚本，如 extensions-external/pdf/scripts/pack.mjs）
-cd extensions-external/pdf && pnpm build && node scripts/pack.mjs && cd -
-# ESLint 同理（双 bundle：client + 独立 LSP server）：
+# 1) 打包扩展成 .vsix（各扩展自带打包脚本 scripts/pack.mjs，都是 createVsix 的薄封装）
+cd extensions-external/pdf && pnpm build && pnpm package && cd -
+# ESLint 同理（其 build 产双 bundle：client + 独立 LSP server）：
 cd extensions-external/eslint && pnpm build && pnpm package && cd -
 
 # 2) 发布进本地 stage（首次会创建 stage/gallery/；可一次传多个 .vsix）

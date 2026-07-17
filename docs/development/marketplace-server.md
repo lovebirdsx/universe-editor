@@ -105,7 +105,14 @@ node scripts/server/server.mjs --root apps/editor/release --gallery-root market-
 
 ### 发布与下架
 
-用 [`scripts/gallery`](../../scripts/gallery/README.md) 的脚本（零依赖）：
+从源码发布 `extensions-external/*` 的扩展，用 [`pnpm ext:release`](publishing-extensions.md)（自动 build + 打包 + 发布 + 上传，支持增量）：
+
+```bash
+pnpm ext:release                    # 发布所有有改动的外部扩展并上传
+pnpm ext:release -- --no-upload     # 只写本地 stage
+```
+
+若你手上已有现成的 `.vsix`（第三方产物），或想单独操作 stage/下架，用 [`scripts/gallery`](../../scripts/gallery/README.md) 的脚本（零依赖）：
 
 ```bash
 # 打包扩展成 .vsix 后，发布进本地 stage

@@ -19,6 +19,10 @@ import {
 } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  extensionPackageFiles as sharedExtensionPackageFiles,
+  normalizePackageFileEntry as sharedNormalizePackageFileEntry,
+} from '../../packages/extension-packaging/dist/packageFiles.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '../..')
@@ -97,36 +101,11 @@ function assertExists(path, label) {
 }
 
 function normalizePackageFileEntry(entry) {
-  if (typeof entry !== 'string' || entry.trim() === '') {
-    fail(`Invalid package files entry: ${String(entry)}`)
-  }
-  let normalized = entry.trim().replaceAll('\\', '/').replace(/^\.\/+/, '')
-  if (normalized.endsWith('/**')) normalized = normalized.slice(0, -3)
-  if (
-    normalized.startsWith('/') ||
-    normalized.includes(':') ||
-    normalized === '..' ||
-    normalized.startsWith('../') ||
-    normalized.includes('/../')
-  ) {
-    fail(`Package files entry must stay inside the extension: ${entry}`)
-  }
-  if (/[*?[\]{}]/.test(normalized)) {
-    fail(`Package files entry must be a literal file or directory: ${entry}`)
-  }
-  return normalized
-}
-
-function unique(values) {
-  return [...new Set(values)]
+  return sharedNormalizePackageFileEntry(entry)
 }
 
 export function extensionPackageFiles(manifest) {
-  const explicitFiles = Array.isArray(manifest.files)
-    ? manifest.files.map(normalizePackageFileEntry)
-    : null
-  const defaultFiles = manifest.main ? ['dist'] : []
-  return unique(['package.json', ...(explicitFiles ?? defaultFiles)])
+  return sharedExtensionPackageFiles(manifest)
 }
 
 export function discoverBuiltinExtensions(root = extensionsRoot) {

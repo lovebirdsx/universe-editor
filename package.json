@@ -22,7 +22,7 @@
     "bundle-size": "node scripts/bench/bundle-size.mjs",
     "bundle-size:update": "node scripts/bench/bundle-size.mjs --update",
     "agent:build": "node scripts/release/vendor-install.mjs && npm --prefix vendor/claude-agent-acp run build && npm --prefix vendor/codex-acp run build",
-    "ext:build": "turbo run build --filter=@universe-editor/extension-host --filter=\"./extensions/*\"",
+    "ext:build": "turbo run build --filter=@universe-editor/extension-host --filter=@universe-editor/extension-packaging --filter=\"./extensions/*\"",
     "runtime:stage": "pnpm -w run agent:build && pnpm -w run ext:build && node scripts/release/runtime-resources.mjs stage",
     "runtime:verify:source": "node scripts/release/runtime-resources.mjs verify-source",
     "runtime:verify:packaged": "node scripts/release/runtime-resources.mjs verify-packaged",
@@ -38,7 +38,8 @@
     "gallery:serve": "node scripts/server/server.mjs --root market-stage --gallery-root market-stage/gallery --port 8788 --base /",
     "gallery:publish": "node scripts/gallery/publish.mjs",
     "gallery:unpublish": "node scripts/gallery/unpublish.mjs",
-    "gallery:upload": "node scripts/gallery/upload.mjs"
+    "gallery:upload": "node scripts/gallery/upload.mjs",
+    "ext:release": "node scripts/ext-release/release.mjs"
   },
   "devDependencies": {
     "@universe-editor/config-eslint": "workspace:*",
