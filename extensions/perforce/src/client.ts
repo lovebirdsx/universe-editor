@@ -1543,6 +1543,18 @@ export class PerforceClient {
   }
 
   /**
+   * Print a file revision's content as raw bytes (`p4 print -q <spec>`), for
+   * binary files (e.g. xlsx) that UTF-8 decoding would corrupt. Not cached (the
+   * string `print` cache stores decoded text); returns an empty buffer when the
+   * spec is null (an added/deleted side) or print fails.
+   */
+  async printRevisionBytes(spec: string | null): Promise<Buffer> {
+    if (!spec) return Buffer.alloc(0)
+    const res = await this._p4.execBinary(['print', '-q', spec])
+    return res.exitCode === 0 ? res.stdout : Buffer.alloc(0)
+  }
+
+  /**
    * Start a low-frequency background refresh every `seconds` (0 / negative
    * disables). Perforce state lives on the server with no FS watcher, so polling
    * is the only way to catch changes made outside the editor — kept opt-in and

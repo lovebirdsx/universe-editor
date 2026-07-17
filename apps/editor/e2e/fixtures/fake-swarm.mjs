@@ -56,9 +56,22 @@ const reviews = {
     openTaskCount: 0,
     testStatus: 'pass',
   },
+  1003: {
+    id: '1003',
+    state: 'needsReview',
+    stateLabel: 'Needs Review',
+    author: 'carol',
+    description: 'Tune buff table\n\nEdits a binary spreadsheet.',
+    updated: 1_700_000_200,
+    versions: [{ rev: 1, change: '903', pending: true, time: 1_700_000_200 }],
+    participants: { e2e: { vote: { value: 0 }, required: true } },
+    commentCount: 0,
+    openTaskCount: 0,
+    testStatus: 'pass',
+  },
 }
 const comments = {}
-let nextReviewId = 1002
+let nextReviewId = 1003
 let nextCommentId = 1
 
 function logRequest(entry) {

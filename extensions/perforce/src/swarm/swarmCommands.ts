@@ -39,6 +39,7 @@ const Cmd = {
   addComment: 'perforce.swarm.addComment',
   setTaskState: 'perforce.swarm.setTaskState',
   getFileContent: 'perforce.swarm.getFileContent',
+  getFileContentBytes: 'perforce.swarm.getFileContentBytes',
   describeVersion: 'perforce.swarm.describeVersion',
 } as const
 
@@ -639,6 +640,18 @@ export function registerSwarmCommands(
       if (!active || !r?.depotFile || !/^#\d+$|^@=\d+$/.test(r.revision)) return ''
       logger.debug('cmd', `getFileContent ${r.depotFile}${r.revision} (p4 print)`)
       return active.printRevision(`${r.depotFile}${r.revision}`)
+    }),
+
+    // Same as getFileContent but returns raw bytes base64-encoded, for binary
+    // files (e.g. xlsx) that UTF-8 decoding would corrupt — consumed by the
+    // spreadsheet webview diff. Same revision-suffix guard as the text variant.
+    commands.registerCommand(Cmd.getFileContentBytes, async (req: unknown) => {
+      const r = req as { depotFile: string; revision: string }
+      const active = mgr.active
+      if (!active || !r?.depotFile || !/^#\d+$|^@=\d+$/.test(r.revision)) return ''
+      logger.debug('cmd', `getFileContentBytes ${r.depotFile}${r.revision} (p4 print, binary)`)
+      const bytes = await active.printRevisionBytes(`${r.depotFile}${r.revision}`)
+      return bytes.toString('base64')
     }),
   ]
 

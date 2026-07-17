@@ -365,6 +365,12 @@ function main() {
       const shelfChange = /@=(\d+)$/.exec(spec)?.[1]
       const depotFile = spec.replace(/(?:#.*|@=.*)$/, '')
       const shelved = shelfChange ? state.shelved[shelfChange]?.[depotFile] : undefined
+      // Binary files (e.g. xlsx) are seeded as `contentBase64` so the raw bytes
+      // survive JSON + are emitted to stdout as a Buffer (never utf8-encoded).
+      if (shelved?.contentBase64 !== undefined) {
+        process.stdout.write(Buffer.from(shelved.contentBase64, 'base64'))
+        return 0
+      }
       if (shelved?.content !== undefined) {
         process.stdout.write(shelved.content)
         return 0
@@ -373,6 +379,10 @@ function main() {
       if (!known) {
         process.stderr.write(`${spec} - no such file(s).\n`)
         return 1
+      }
+      if (known.contentBase64 !== undefined) {
+        process.stdout.write(Buffer.from(known.contentBase64, 'base64'))
+        return 0
       }
       process.stdout.write(known.content)
       return 0

@@ -340,6 +340,10 @@ export const SwarmCommands = {
   addComment: 'perforce.swarm.addComment',
   setTaskState: 'perforce.swarm.setTaskState',
   getFileContent: 'perforce.swarm.getFileContent',
+  /** Like {@link SwarmCommands.getFileContent} but returns the revision's raw
+   *  bytes base64-encoded, for binary files (e.g. xlsx) that UTF-8 decoding would
+   *  corrupt. Consumed by the spreadsheet webview diff. */
+  getFileContentBytes: 'perforce.swarm.getFileContentBytes',
   describeVersion: 'perforce.swarm.describeVersion',
 } as const
 

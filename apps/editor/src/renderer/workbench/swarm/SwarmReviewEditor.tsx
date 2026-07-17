@@ -17,6 +17,7 @@ import {
   IOpenerService,
   IStorageService,
   StorageScope,
+  URI,
   type IEditorInput,
   localize,
 } from '@universe-editor/platform'
@@ -40,6 +41,7 @@ import {
 import { useObservable, useService } from '../useService.js'
 import { SwarmReviewEditorInput } from '../../services/editor/SwarmReviewEditorInput.js'
 import { SwarmDiffEditorInput } from '../../services/editor/SwarmDiffEditorInput.js'
+import { type OpenWebviewDiffPayload } from '../../actions/diffActions.js'
 import { waitForSwarmCommand } from '../../services/swarm/swarmCommandReady.js'
 import { buildSwarmReviewUrl } from '../../services/swarm/swarmReviewUrl.js'
 import {
@@ -56,6 +58,17 @@ import styles from './SwarmReviewEditor.module.css'
 
 const FILES_VIEW_MODE_STORAGE_KEY = 'swarm.reviewFiles.viewMode'
 const REVIEW_REFRESH_INTERVAL_MS = 60_000
+
+/** Custom-editor viewType of the bundled Excel viewer/diff (mirrors the local
+ *  Perforce spreadsheet diff in the perforce extension's `client.ts`). */
+const SPREADSHEET_VIEW_TYPE = 'universe.excel'
+const SPREADSHEET_EXTS = ['.xlsx', '.xls', '.xlsm', '.csv']
+
+/** True when a path is a spreadsheet the Excel viewer should diff in a webview. */
+function isSpreadsheetPath(path: string): boolean {
+  const lower = path.toLowerCase()
+  return SPREADSHEET_EXTS.some((ext) => lower.endsWith(ext))
+}
 
 const STATE_CLASS: Record<string, string | undefined> = {
   needsReview: styles['stateNeedsReview'],
@@ -367,6 +380,55 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
             ? `@=${leftChange}`
             : null
       const modifiedRevision = rightChange ? `@=${rightChange}` : null
+
+      // Spreadsheets can't be shown in a Monaco text diff — utf8-decoding the zip
+      // bytes yields garbage and the diff looks empty. Route them to the Excel
+      // webview over the two revisions' raw bytes (base64), mirroring the local
+      // Perforce spreadsheet diff (client.ts `_openSpreadsheetChange`). We match by
+      // extension + hardcode the viewType exactly as the local path does, rather
+      // than gating on the editor resolver's `supportsDiff` — the custom editor
+      // registers asynchronously and an older Excel extension may not declare the
+      // flag, either of which would silently drop us back to the empty text diff.
+      if (isSpreadsheetPath(file.path)) {
+        try {
+          const getBytes = async (revision: string | null): Promise<string> => {
+            if (!revision) return ''
+            return (
+              (await commands.executeCommand<string>(SwarmCommands.getFileContentBytes, {
+                depotFile: file.depotFile,
+                revision,
+              } satisfies SwarmFileContentRequest)) ?? ''
+            )
+          }
+          const [leftBase64, rightBase64] = await Promise.all([
+            getBytes(added ? null : originalRevision),
+            getBytes(deleted ? null : modifiedRevision),
+          ])
+          // Distinct left/right URIs carrying the version pair keep the diff tab's
+          // identity unique per comparison (WebviewDiffInput ids by both URIs), and
+          // the .xlsx path drives the tab icon. See memory editor-input-identity-isolation.
+          const sideUri = (side: 'l' | 'r', version: number | null): string =>
+            URI.from({
+              scheme: 'swarm',
+              path: `/${detail.id}/${file.path}`,
+              query: `${side}=${version ?? ''}`,
+            }).toString()
+          await commands.executeCommand('_workbench.openWebviewDiff', {
+            viewType: SPREADSHEET_VIEW_TYPE,
+            title: `${file.path.split('/').pop() ?? file.path} (Swarm)`,
+            leftUri: sideUri('l', added ? null : leftVersion),
+            rightUri: sideUri('r', deleted ? null : selectedVersion),
+            leftBase64,
+            rightBase64,
+            pinned: false,
+            preserveFocus: false,
+          } satisfies OpenWebviewDiffPayload)
+        } catch (e: unknown) {
+          setError(e instanceof Error ? e.message : String(e))
+        }
+        return
+      }
+
       const getContent = async (revision: string | null): Promise<string> => {
         if (!revision) return ''
         return (

@@ -66,6 +66,16 @@ const FILES: SwarmReviewFileDto[] = [
   },
 ]
 
+const FILES_WITH_SPREADSHEET: SwarmReviewFileDto[] = [
+  {
+    status: 'M',
+    path: 'tables/buff.xlsx',
+    depotFile: '//depot/tables/buff.xlsx',
+    baseRevision: '3',
+    localPath: 'C:/workspace/tables/buff.xlsx',
+  },
+]
+
 const DETAIL_WITH_NEW_VERSION: SwarmReviewDetailDto = {
   ...DETAIL,
   versions: [...DETAIL.versions, { version: 2, change: '2002', pending: true, time: 2 }],
@@ -249,6 +259,63 @@ describe('SwarmReviewEditor restore', () => {
       expect(diffInput.context.rightVersion).toBe(1)
       expect(diffInput.getName()).toBe('a.ts (base ↔ v1)')
     } finally {
+      getFileContent.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('diffs a spreadsheet file through the Excel webview instead of the empty text diff', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const describeVersion = registerCommand(
+      SwarmCommands.describeVersion,
+      () => FILES_WITH_SPREADSHEET,
+    )
+    // Text print must not be used for a binary xlsx (UTF-8 decoding corrupts bytes).
+    const getFileContent = registerCommand(SwarmCommands.getFileContent, () => 'CORRUPTED')
+    const getFileContentBytes = registerCommand(
+      SwarmCommands.getFileContentBytes,
+      (_accessor, request: unknown) =>
+        (request as { revision: string }).revision === '#3'
+          ? Buffer.from('LEFT-BYTES').toString('base64')
+          : Buffer.from('RIGHT-BYTES').toString('base64'),
+    )
+    const { commands, editorService } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      fireEvent.click(screen.getByText('buff.xlsx'))
+      await act(async () => Promise.resolve())
+
+      // Binary content command is used for both sides, not the utf8 text print.
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getFileContentBytes, {
+        depotFile: '//depot/tables/buff.xlsx',
+        revision: '#3',
+      })
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getFileContentBytes, {
+        depotFile: '//depot/tables/buff.xlsx',
+        revision: '@=2001',
+      })
+      expect(commands.executeCommand).not.toHaveBeenCalledWith(
+        SwarmCommands.getFileContent,
+        expect.anything(),
+      )
+
+      // The diff is handed to the webview custom editor, not a Monaco text diff.
+      expect(editorService.openEditor).not.toHaveBeenCalled()
+      const call = commands.executeCommand.mock.calls.find(
+        ([id]) => id === '_workbench.openWebviewDiff',
+      )
+      expect(call).toBeTruthy()
+      const payload = call?.[1] as {
+        viewType: string
+        leftBase64: string
+        rightBase64: string
+      }
+      expect(payload.viewType).toBe('universe.excel')
+      expect(Buffer.from(payload.leftBase64, 'base64').toString()).toBe('LEFT-BYTES')
+      expect(Buffer.from(payload.rightBase64, 'base64').toString()).toBe('RIGHT-BYTES')
+    } finally {
+      getFileContentBytes.dispose()
       getFileContent.dispose()
       describeVersion.dispose()
       getReview.dispose()

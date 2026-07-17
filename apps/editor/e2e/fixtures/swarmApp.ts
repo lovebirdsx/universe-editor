@@ -86,12 +86,25 @@ export const test = base.extend<SwarmFixtures>({
           : `export const line${line} = ${line}`
       }).join('\n') + '\n'
 
+    // A real spreadsheet (valid xlsx bytes made with SheetJS) so the Excel
+    // extension actually parses + diffs it. A text-diff path would utf8-corrupt the
+    // zip bytes and show nothing; the review must route it through the webview diff
+    // over raw base64 bytes. Deep path mirrors the real depot layout of the bug.
+    const xlsxDepot = '//depot/AkiBase/Source/Config/z.battle/b.Buff/b.Buff_LevelNew.xlsx'
+    const xlsxRel = 'AkiBase/Source/Config/z.battle/b.Buff/b.Buff_LevelNew.xlsx'
+    const xlsxBase = readFileSync(resolve(__dirname, 'assets', 'buff-base.xlsx'))
+    const xlsxShelf = readFileSync(resolve(__dirname, 'assets', 'buff-shelf.xlsx'))
+
     // Seed a minimal p4 depot so discovery succeeds + shelve has something.
     mkdirSync(join(workspaceDir, 'src', 'editor'), { recursive: true })
     mkdirSync(join(workspaceDir, 'src', 'runtime'), { recursive: true })
+    mkdirSync(join(workspaceDir, 'AkiBase', 'Source', 'Config', 'z.battle', 'b.Buff'), {
+      recursive: true,
+    })
     writeFileSync(join(workspaceDir, 'hello.txt'), 'hello\n', 'utf8')
     writeFileSync(join(workspaceDir, 'src', 'editor', 'a.ts'), baselineA, 'utf8')
     writeFileSync(join(workspaceDir, 'src', 'runtime', 'b.ts'), 'export const b = 1\n', 'utf8')
+    writeFileSync(join(workspaceDir, xlsxRel), xlsxShelf)
     writeFileSync(
       stateFile,
       JSON.stringify({
@@ -103,6 +116,7 @@ export const test = base.extend<SwarmFixtures>({
           '//depot/hello.txt': { rev: 1, content: 'hello\n' },
           '//depot/src/editor/a.ts': { rev: 1, content: baselineA },
           '//depot/src/runtime/b.ts': { rev: 1, content: 'export const b = 1\n' },
+          [xlsxDepot]: { rev: 3, contentBase64: xlsxBase.toString('base64') },
         },
         opened: {},
         shelved: {
@@ -112,6 +126,13 @@ export const test = base.extend<SwarmFixtures>({
               action: 'add',
               rev: 1,
               content: 'export const b = 2\n',
+            },
+          },
+          '903': {
+            [xlsxDepot]: {
+              action: 'edit',
+              rev: 3,
+              contentBase64: xlsxShelf.toString('base64'),
             },
           },
         },
