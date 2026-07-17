@@ -126,6 +126,30 @@ const server = createServer(async (req, res) => {
   const body = method === 'GET' ? undefined : await readBody(req)
   logRequest({ method, path, query: url.search, body })
 
+  // Test-only control endpoint (not part of the Swarm API): inject a brand-new
+  // review at runtime so specs can exercise the "new review needs my action"
+  // notification path. Deliberately outside the /api/vN prefix so it can never
+  // collide with a real endpoint. Not recorded above as a Swarm request.
+  if (method === 'POST' && url.pathname === '/__control__/add-review') {
+    const id = body.id ?? String(nextReviewId++)
+    reviews[id] = {
+      id,
+      state: 'needsReview',
+      stateLabel: 'Needs Review',
+      author: body.author ?? 'dave',
+      description: body.description ?? `Injected review ${id}`,
+      updated: 1_700_000_900,
+      versions: [{ rev: 1, change: body.change ?? '0', pending: true, time: 1_700_000_900 }],
+      // Make the e2e user a required participant so it lands in needs-my-action.
+      participants: { e2e: { vote: { value: 0 }, required: true } },
+      commentCount: 0,
+      openTaskCount: 0,
+      testStatus: 'none',
+    }
+    send(res, 200, { review: reviews[id] })
+    return
+  }
+
   // GET reviews (list / ping). Honours the `keywords` query so the extension can
   // push keyword filtering down to the server (matched against description /
   // author / id, mirroring the renderer's client-side fallback).

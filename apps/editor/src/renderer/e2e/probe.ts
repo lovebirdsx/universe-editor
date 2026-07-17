@@ -48,6 +48,7 @@ import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
 import { MonacoLoader } from '../workbench/editor/monaco/MonacoLoader.js'
 import { DirtyDiffPeekRegistry } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
 import { AcpPromptDraftCache } from '../services/acp/acpPromptDraftCache.js'
+import { swarmNotificationE2E } from '../services/swarm/swarmNotificationE2E.js'
 import { applyViewDrop } from '../workbench/dnd/applyViewDrop.js'
 import {
   E2E_PROBE_ENABLED_KEY,
@@ -1285,6 +1286,13 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         })),
       }
     },
+    driveSwarmNotificationPoll: async () => {
+      await swarmNotificationE2E.driveRefresh?.()
+    },
+    getSwarmNotifiedReviewIds: () => swarmNotificationE2E.notified.map((ids) => [...ids]),
+    getSwarmNotifyDiag: () => ({
+      lastActionable: [...swarmNotificationE2E.lastActionable],
+    }),
   }
 
   window[E2E_PROBE_KEY] = probe

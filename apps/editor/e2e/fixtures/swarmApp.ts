@@ -33,6 +33,8 @@ const toPosix = (p: string): string => p.split('\\').join('/')
 
 export interface SwarmHarness {
   readonly clientRoot: string
+  /** The fake Swarm server's base URL (for control-endpoint calls). */
+  readonly baseUrl: string
   /** Read the recorded Swarm requests (method + path + body), newest last. */
   requests(): Array<{ method: string; path: string; query: string; body?: unknown }>
   /** Wait until a request matching the predicate has been recorded. */
@@ -40,6 +42,9 @@ export interface SwarmHarness {
     match: (r: { method: string; path: string; query: string }) => boolean,
     timeoutMs?: number,
   ): Promise<void>
+  /** Inject a brand-new review into the fake server (test-only control endpoint),
+   *  so a subsequent dashboard poll surfaces it as newly needing the user's action. */
+  addReview(opts: { id?: string; author?: string; description?: string }): Promise<void>
 }
 
 export type SwarmFixtures = {
@@ -193,10 +198,12 @@ export const test = base.extend<SwarmFixtures>({
       _clientRoot: string
       _logfile: string
       _swarmProc: ChildProcess
+      _baseUrl: string
     }
     handle._clientRoot = workspaceDir
     handle._logfile = logfile
     handle._swarmProc = swarmProc
+    handle._baseUrl = baseUrl
     await use(app)
     await closeApp(app)
     swarmProc.kill()
@@ -214,7 +221,11 @@ export const test = base.extend<SwarmFixtures>({
     await use(new WorkbenchPO(page))
   },
   swarm: async ({ electronApp }, use) => {
-    const handle = electronApp as unknown as { _clientRoot: string; _logfile: string }
+    const handle = electronApp as unknown as {
+      _clientRoot: string
+      _logfile: string
+      _baseUrl: string
+    }
     const readLog = (): Array<{
       method: string
       path: string
@@ -229,6 +240,7 @@ export const test = base.extend<SwarmFixtures>({
     }
     await use({
       clientRoot: toPosix(handle._clientRoot),
+      baseUrl: handle._baseUrl,
       requests: readLog,
       waitForRequest: async (matchFn, timeoutMs = 10_000) => {
         const start = Date.now()
@@ -237,6 +249,14 @@ export const test = base.extend<SwarmFixtures>({
           await new Promise((r) => setTimeout(r, 150))
         }
         throw new Error('timed out waiting for a matching Swarm request')
+      },
+      addReview: async (opts) => {
+        const res = await fetch(`${handle._baseUrl}/__control__/add-review`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(opts),
+        })
+        if (!res.ok) throw new Error(`add-review failed: ${res.status}`)
       },
     })
   },

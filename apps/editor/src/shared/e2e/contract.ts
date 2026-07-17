@@ -702,6 +702,22 @@ export interface E2EProbe {
    * observability. See renderer TimerService.getStartupMetrics().
    */
   getStartupMetrics(): Promise<E2EStartupMetrics>
+  /**
+   * Drive one poll cycle of the Swarm review-notification contribution
+   * synchronously (its own timer is 60s — far too slow for a spec). Resolves once
+   * the poll + notify decision has run. No-op if the contribution isn't live.
+   */
+  driveSwarmNotificationPoll(): Promise<void>
+  /**
+   * Ids of each batch of newly-actionable reviews the Swarm notification
+   * contribution decided to notify about, in order. Observes the contribution's
+   * actual job — independent of the main-side blur gate / OS notification support
+   * that make the desktop toast unobservable in a headless run.
+   */
+  getSwarmNotifiedReviewIds(): readonly (readonly string[])[]
+  /** Diagnostic snapshot of the Swarm notification contribution's most recent poll:
+   *  the actionable id set, so a spec can detect when the baseline has primed. */
+  getSwarmNotifyDiag(): { lastActionable: readonly string[] }
 }
 
 declare global {

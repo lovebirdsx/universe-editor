@@ -31,7 +31,9 @@ import {
 import { swarmIgnoreStore, splitIgnored } from '../services/swarm/swarmIgnoreStore.js'
 import { swarmReviewsViewState } from '../services/swarm/swarmViewState.js'
 import { filterNeedsAction, readSwarmFilterConfig } from '../services/swarm/swarmReviewFilter.js'
+import { swarmNotificationE2E } from '../services/swarm/swarmNotificationE2E.js'
 import { OpenSwarmReviewAction, OpenSwarmReviewsAction } from '../actions/swarmActions.js'
+import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 
 const POLL_INTERVAL_MS = 60_000
 
@@ -60,6 +62,11 @@ export class SwarmReviewNotificationContribution
 
     this._timer = setInterval(() => void this.refresh(), POLL_INTERVAL_MS)
     this._register({ dispose: () => this._stop() })
+    // E2E: let a spec drive one poll synchronously (the 60s timer is far too slow
+    // for a test, and the window is focused so the OS toast is gated away anyway).
+    if (typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true) {
+      swarmNotificationE2E.driveRefresh = () => this.refresh()
+    }
     // Prime + start immediately so a review that appeared before launch doesn't
     // notify on first paint, but a genuinely new one during this session does.
     void this.refresh()
@@ -82,14 +89,21 @@ export class SwarmReviewNotificationContribution
     if (this._running) return
     this._running = true
     try {
+      // `force: true` bypasses the dashboard's 60s TTL cache: this poll is the
+      // only thing driving new-review detection, so a stale cached list would
+      // never surface a review that appeared within the window and we'd never
+      // notify. (Mirrors the old status-bar poll, which also forced.)
       const dashboard = await this._commands.executeCommand<SwarmDashboardResult>(
         SwarmCommands.dashboard,
-        {},
+        { force: true },
       )
       // `undefined` = the perforce extension host hasn't registered the command yet
       // (activation race). Skip this tick without disturbing the primed baseline.
       if (dashboard === undefined) return
       const actionable = await this._computeActionable(dashboard)
+      if (typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true) {
+        swarmNotificationE2E.lastActionable = actionable.map((r) => r.id)
+      }
       this._notifyNew(actionable)
     } catch {
       // Swarm unconfigured / offline — stay quiet, retry next tick.
@@ -143,6 +157,9 @@ export class SwarmReviewNotificationContribution
     this._known = current
     if (fresh.length === 0) return
     if (!this._enabled()) return
+    if (typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true) {
+      swarmNotificationE2E.notified.push(fresh.map((r) => r.id))
+    }
     void this._fire(fresh)
   }
 

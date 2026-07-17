@@ -161,6 +161,22 @@ describe('SwarmReviewNotificationContribution', () => {
     t.instance.dispose()
   })
 
+  it('forces a cache-bypassing dashboard fetch on every poll', async () => {
+    // The dashboard result is TTL-cached (60s) in the extension host. Since this
+    // background poll is the only thing driving new-review detection, it must pass
+    // `force: true` — a non-forced poll would keep hitting the stale cached list
+    // and a review that appeared within the window would never notify (regression).
+    const t = await setup()
+    await t.refresh()
+    for (const call of t.executeCommand.mock.calls) {
+      if (call[0] === 'perforce.swarm.dashboard') {
+        expect(call[1]).toMatchObject({ force: true })
+      }
+    }
+    expect(t.executeCommand.mock.calls.some((c) => c[0] === 'perforce.swarm.dashboard')).toBe(true)
+    t.instance.dispose()
+  })
+
   it('does not re-notify an already-notified review', async () => {
     const t = await setup()
     t.setDashboard([review('1')])
