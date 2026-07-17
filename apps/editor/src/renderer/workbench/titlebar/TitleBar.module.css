@@ -233,19 +233,26 @@
 
 .update-btn {
   position: relative;
-  width: 28px;
   height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 5px;
   background: transparent;
-  border: none;
-  padding: 0;
+  border: 1px solid transparent;
+  padding: 0 8px;
+  margin: 0 2px;
   cursor: default;
-  border-radius: 3px;
+  border-radius: 4px;
   color: var(--color-foreground-muted, #8a8a92);
   -webkit-app-region: no-drag;
   flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.update-label {
+  font-size: 12px;
+  line-height: 1;
 }
 
 .update-btn:hover {
@@ -254,51 +261,29 @@
 }
 
 .update-btn--available {
-  color: #6bbfff;
-  background: rgba(0, 120, 240, 0.22);
+  color: #ffffff;
+  background: var(--color-accent, #0070e0);
+  border-color: var(--color-accent, #0070e0);
   animation: update-pulse-available 2s ease-in-out infinite;
 }
 
 .update-btn--available:hover {
-  color: #6bbfff;
-  background: rgba(0, 120, 240, 0.32);
+  color: #ffffff;
+  background: var(--color-accent-hover, #0a84ff);
+  border-color: var(--color-accent-hover, #0a84ff);
 }
 
 .update-btn--downloaded {
-  color: #ffd166;
-  background: rgba(255, 160, 0, 0.22);
+  color: #1f1400;
+  background: #ffc043;
+  border-color: #ffc043;
   animation: update-pulse-downloaded 1.6s ease-in-out infinite;
 }
 
 .update-btn--downloaded:hover {
-  color: #ffd166;
-  background: rgba(255, 160, 0, 0.32);
-}
-
-.update-btn--available::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  right: 3px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #6bbfff;
-  border: 1.5px solid var(--color-titlebar, #0f0f11);
-  pointer-events: none;
-}
-
-.update-btn--downloaded::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  right: 3px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #ffd166;
-  border: 1.5px solid var(--color-titlebar, #0f0f11);
-  pointer-events: none;
+  color: #1f1400;
+  background: #ffce6b;
+  border-color: #ffce6b;
 }
 
 @keyframes update-pulse-available {
@@ -332,8 +317,8 @@
 
 .update-progress {
   position: absolute;
-  left: 4px;
-  right: 4px;
+  left: 8px;
+  right: 8px;
   bottom: 2px;
   height: 2px;
   border-radius: 1px;

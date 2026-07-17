@@ -1,11 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Title-bar update indicator. A single icon-only button that matches the adjacent
- *  layout controls: it appears only when there's something to show (checking /
- *  available / downloading / downloaded), uses a distinct update glyph (not the AI
- *  sparkle), and carries a native tooltip. Clicking dispatches by state — available
- *  → download, downloaded → restart, checking → nothing, otherwise a manual check.
- *  While downloading, a thin determinate bar sits under the icon.
+ *  Title-bar update indicator. A horizontal icon + label pill (VSCode-style) that
+ *  appears only when there's something to show (checking / available / downloading /
+ *  downloaded). The short label makes it far easier to notice than an icon alone; the
+ *  actionable states (available / downloaded) render as a prominent accent button.
+ *  Clicking dispatches by state — available → download, downloaded → restart, checking
+ *  → nothing, otherwise a manual check. While downloading, a thin determinate bar sits
+ *  under the label.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useState } from 'react'
@@ -20,6 +21,8 @@ type Glyph = 'checking' | 'available' | 'downloading' | 'downloaded'
 
 interface Presentation {
   readonly glyph: Glyph
+  /** Short label shown next to the glyph, e.g. "Update", "Checking…". */
+  readonly label: string
   readonly tooltip: string
   readonly prominent: boolean
   readonly percent?: number
@@ -47,12 +50,14 @@ export function present(state: UpdateState): Presentation | undefined {
     case 'checking':
       return {
         glyph: 'checking',
+        label: localize('update.checkingLabel', 'Checking…'),
         tooltip: localize('update.checkingShort', 'Checking for updates…'),
         prominent: false,
       }
     case 'available':
       return {
         glyph: 'available',
+        label: localize('update.availableLabel', 'Update'),
         tooltip: localize(
           'update.availableTooltip',
           'A new version ({version}) is available — click to download',
@@ -63,6 +68,9 @@ export function present(state: UpdateState): Presentation | undefined {
     case 'downloading':
       return {
         glyph: 'downloading',
+        label: localize('update.downloadingLabel', 'Downloading… {percent}%', {
+          percent: state.percent,
+        }),
         tooltip: localize('update.downloadingShort', 'Downloading update… {percent}%', {
           percent: state.percent,
         }),
@@ -72,6 +80,7 @@ export function present(state: UpdateState): Presentation | undefined {
     case 'downloaded':
       return {
         glyph: 'downloaded',
+        label: localize('update.downloadedLabel', 'Restart to update'),
         tooltip: localize(
           'update.downloadedTooltip',
           'Version {version} downloaded — click to restart and install',
@@ -138,6 +147,7 @@ export function UpdateIndicator() {
       data-testid="titlebar-update-indicator"
     >
       <GlyphIcon glyph={view.glyph} />
+      <span className={styles['update-label']}>{view.label}</span>
       {view.percent !== undefined && (
         <span className={styles['update-progress']} aria-hidden>
           <span className={styles['update-progress-fill']} style={{ width: `${view.percent}%` }} />

@@ -20,12 +20,14 @@ describe('present (title-bar update indicator)', () => {
     const v = present({ type: 'available', currentVersion: cv, version: '0.2.0', explicit: false })
     expect(v?.glyph).toBe('available')
     expect(v?.prominent).toBe(true)
+    expect(v?.label).toBeTruthy()
     expect(v?.tooltip).toContain('0.2.0')
   })
 
   it('downloading → progress percent surfaced', () => {
     const v = present({ type: 'downloading', currentVersion: cv, version: '0.2.0', percent: 42 })
     expect(v?.percent).toBe(42)
+    expect(v?.label).toContain('42')
     expect(v?.tooltip).toContain('42')
     expect(v?.glyph).toBe('downloading')
   })
@@ -34,6 +36,17 @@ describe('present (title-bar update indicator)', () => {
     const v = present({ type: 'downloaded', currentVersion: cv, version: '0.2.0' })
     expect(v?.glyph).toBe('downloaded')
     expect(v?.prominent).toBe(true)
+    expect(v?.label).toBeTruthy()
+  })
+
+  it('every detailed state carries a non-empty label', () => {
+    const states: UpdateState[] = [
+      { type: 'checking', currentVersion: cv, explicit: false },
+      { type: 'available', currentVersion: cv, version: '1', explicit: false },
+      { type: 'downloading', currentVersion: cv, version: '1', percent: 0 },
+      { type: 'downloaded', currentVersion: cv, version: '1' },
+    ]
+    for (const s of states) expect(present(s)?.label).toBeTruthy()
   })
 })
 
