@@ -81,22 +81,14 @@ extensions/ai/e2e/
 
 契约落在 fixture 参数上，spec 侧零感知。每个扩展的 `*.project.ts` 声明自己的 allowlist。
 
-### 3. Playwright projects 聚合（P1 起）
+### 3. 每扩展独立 Playwright 配置（P1 起）
 
-一个根 `playwright.config.ts`（放 `apps/editor/e2e`，路径引用各扩展 `e2e/specs`）用 `projects` 聚合：
+**决策修订**（相对初稿的"单根 config + projects"）:改为**每个扩展 e2e 拥有自己的 `e2e/playwright.config.ts` + turbo `e2e` task**。理由:turbo affected(P4)按**包**计算影响面并跑该包的 `e2e` task —— 只有 spec + config 都住在扩展包内、且扩展包有自己的 `e2e` script,`turbo run e2e --filter=...[changed]` 才能把"改 perforce"精确关联到"跑 perforce e2e"。单根 config+projects 做不到按包切分 affected。
 
-```ts
-projects: [
-  { name: 'core',       testDir: '../specs' },                          // 内核
-  { name: 'perforce',   testDir: '../../../extensions/perforce/e2e/specs' },
-  { name: 'typescript', testDir: '../../../extensions/typescript/e2e/specs' },
-  // …
-]
-```
-
-- 本地：`playwright test --project=perforce` 只跑一组；不带 `--project` 跑全部。
-- 现有 tag 体系（`@p0/@p1/@regression/@serial/@flaky/@perf/@visual`）**完全保留**，与 project 正交：project 管「哪个模块」，tag 管「什么性质」。**不新增 `@ext:` 归属 tag** —— project 就是归属维度。
-- 每个扩展 `*.project.ts` 导出自己的片段（testDir、allowlist、专属 globalSetup 如 fake-swarm），根 config import 拼装。删扩展时连片段一起删。
+- 内核:`apps/editor` 保留自己的 `e2e/playwright.config.ts`(testDir=`./specs`,即 core 套件)。
+- 每扩展:`extensions/<ext>/e2e/playwright.config.ts`(testDir=`./specs`),`package.json` 加 `"e2e": "playwright test -c e2e/playwright.config.ts"` + `@playwright/test`/`@universe-editor/e2e-harness` devDep + `e2e/tsconfig.json`(纳入 `typecheck`)。
+- 本地:`pnpm --filter @universe-editor/perforce e2e` 只跑该扩展;`turbo run e2e` 跑全部。
+- 现有 tag 体系(`@p0/@p1/@regression/@serial/@flaky/@perf/@visual`)**完全保留**;各扩展 config 复制内核 config 的 timeout/retries/workers 分流,行为一致。spec 文件名去掉 `smoke.` 前缀(归属已由包体现)。
 
 ### 4. CI affected 执行（P4）
 

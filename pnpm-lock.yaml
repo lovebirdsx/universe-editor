@@ -500,12 +500,18 @@ importers:
 
   extensions/perforce:
     devDependencies:
+      '@playwright/test':
+        specifier: 'catalog:'
+        version: 1.60.0
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.17
       '@universe-editor/config-ts':
         specifier: workspace:*
         version: link:../../packages/config-ts
+      '@universe-editor/e2e-harness':
+        specifier: workspace:*
+        version: link:../../packages/e2e-harness
       '@universe-editor/extension-api':
         specifier: workspace:*
         version: link:../../packages/extension-api

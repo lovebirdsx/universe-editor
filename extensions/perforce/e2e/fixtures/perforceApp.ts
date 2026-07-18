@@ -14,21 +14,29 @@
  *  relaunches the extension host — main-process state a window reload won't reset.
  *--------------------------------------------------------------------------------------------*/
 
-import {
-  test as base,
-  _electron as electron,
-  type ElectronApplication,
-  type Page,
-} from '@playwright/test'
+import { test as base, type ElectronApplication, type Page } from '@playwright/test'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { WorkbenchPO, expectNoLeaks } from '../pages/WorkbenchPO.js'
-import { APP_ROOT, MAIN_ENTRY, closeApp } from './electronApp.js'
+import {
+  WorkbenchPO,
+  closeApp,
+  expectNoLeaks,
+  launchApp,
+  resolveEditorBuild,
+  seedBaselineUserData,
+  waitForProbe,
+} from '@universe-editor/e2e-harness'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const FAKE_P4 = resolve(__dirname, 'fake-p4.mjs')
+const { appRoot: APP_ROOT, mainEntry: MAIN_ENTRY } = resolveEditorBuild()
+
+// Only the Perforce extension is activated for these specs (P2 minimal set): its
+// SCM provider is all they exercise, so skipping TS/markdown/ai LSP startup keeps
+// the cold launch lean and free of unrelated warmup flake.
+const PERFORCE_EXTENSIONS = ['@universe-editor/perforce'] as const
 
 /** A depot file the fake p4 knows about: its content is the have-revision. */
 export interface SeedFile {
@@ -124,26 +132,15 @@ export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; open
   openSubdir: ['', { option: true }],
   electronApp: async ({ p4Seeds, openSubdir }, use) => {
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-p4-'))
-    writeFileSync(
-      join(userDataDir, 'settings.json'),
-      JSON.stringify({ 'workbench.language': 'en-US', 'update.mode': 'manual' }, null, 2),
-      'utf8',
-    )
-    writeFileSync(
-      join(userDataDir, 'state.json'),
-      JSON.stringify({ 'welcome.agentOnboarding.seen': true }, null, 2),
-      'utf8',
-    )
+    seedBaselineUserData(userDataDir)
     const { workspaceDir, stateFile } = seedWorkspace(p4Seeds.files, p4Seeds.changelists)
     const openDir = openSubdir ? join(workspaceDir, openSubdir) : workspaceDir
-    const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
-    const app = await electron.launch({
-      args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
-      cwd: APP_ROOT,
+    const app = await launchApp({
+      appRoot: APP_ROOT,
+      mainEntry: MAIN_ENTRY,
+      userDataDir,
+      extensions: PERFORCE_EXTENSIONS,
       env: {
-        ...inheritedEnv,
-        UNIVERSE_E2E: '1',
-        NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production',
         UNIVERSE_P4_PATH: FAKE_P4,
         UNIVERSE_P4_FAKE_STATE: stateFile,
       },
@@ -157,9 +154,7 @@ export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; open
   page: async ({ electronApp }, use) => {
     const page = await electronApp.firstWindow()
     await page.waitForLoadState('domcontentloaded')
-    await page.waitForFunction(() =>
-      Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
-    )
+    await waitForProbe(page)
     await use(page)
     await expectNoLeaks(page)
   },

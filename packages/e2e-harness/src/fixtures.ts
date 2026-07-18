@@ -50,7 +50,7 @@ export type E2ETest = TestType<
   PlaywrightWorkerArgs & PlaywrightWorkerOptions
 >
 
-async function waitForProbe(page: Page): Promise<void> {
+export async function waitForProbe(page: Page): Promise<void> {
   await page.waitForFunction(() =>
     Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
   )

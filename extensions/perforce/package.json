@@ -241,14 +241,17 @@
   "scripts": {
     "build": "node esbuild.config.mjs",
     "dev": "node esbuild.config.mjs --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --project e2e/tsconfig.json",
     "test": "vitest run",
     "lint": "eslint src",
     "lint:fix": "eslint --fix src",
+    "e2e": "playwright test -c e2e/playwright.config.ts",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "devDependencies": {
+    "@playwright/test": "catalog:",
     "@universe-editor/config-ts": "workspace:*",
+    "@universe-editor/e2e-harness": "workspace:*",
     "@universe-editor/extension-api": "workspace:*",
     "@types/node": "catalog:",
     "esbuild": "catalog:",

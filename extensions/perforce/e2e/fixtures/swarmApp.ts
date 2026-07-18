@@ -11,23 +11,28 @@
  *  fixture so specs can assert the right calls were made.
  *--------------------------------------------------------------------------------------------*/
 
-import {
-  test as base,
-  _electron as electron,
-  type ElectronApplication,
-  type Page,
-} from '@playwright/test'
+import { test as base, type ElectronApplication, type Page } from '@playwright/test'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { WorkbenchPO, expectNoLeaks } from '../pages/WorkbenchPO.js'
-import { APP_ROOT, MAIN_ENTRY, closeApp } from './electronApp.js'
+import {
+  WorkbenchPO,
+  closeApp,
+  expectNoLeaks,
+  launchApp,
+  resolveEditorBuild,
+  waitForProbe,
+} from '@universe-editor/e2e-harness'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const FAKE_P4 = resolve(__dirname, 'fake-p4.mjs')
 const FAKE_SWARM = resolve(__dirname, 'fake-swarm.mjs')
+const { appRoot: APP_ROOT, mainEntry: MAIN_ENTRY } = resolveEditorBuild()
+
+// Swarm review lives in the Perforce extension; activate only it (P2 minimal set).
+const PERFORCE_EXTENSIONS = ['@universe-editor/perforce'] as const
 
 const toPosix = (p: string): string => p.split('\\').join('/')
 
@@ -207,14 +212,13 @@ export const test = base.extend<SwarmFixtures>({
       'utf8',
     )
 
-    const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
-    const app = await electron.launch({
-      args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`, workspaceDir],
-      cwd: APP_ROOT,
+    const app = await launchApp({
+      appRoot: APP_ROOT,
+      mainEntry: MAIN_ENTRY,
+      userDataDir,
+      extensions: PERFORCE_EXTENSIONS,
+      extraArgs: [workspaceDir],
       env: {
-        ...inheritedEnv,
-        UNIVERSE_E2E: '1',
-        NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production',
         UNIVERSE_P4_PATH: FAKE_P4,
         UNIVERSE_P4_FAKE_STATE: stateFile,
         UNIVERSE_SWARM_BASE_URL: baseUrl,
@@ -237,9 +241,7 @@ export const test = base.extend<SwarmFixtures>({
   page: async ({ electronApp }, use) => {
     const page = await electronApp.firstWindow()
     await page.waitForLoadState('domcontentloaded')
-    await page.waitForFunction(() =>
-      Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
-    )
+    await waitForProbe(page)
     await use(page)
     await expectNoLeaks(page)
   },

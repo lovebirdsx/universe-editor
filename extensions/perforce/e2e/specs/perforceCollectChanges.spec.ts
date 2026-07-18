@@ -13,7 +13,7 @@
 
 import { writeFileSync } from 'node:fs'
 import { test, expect, DEFAULT_SEEDS } from '../fixtures/perforceApp.js'
-import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
+import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 
 const tracked = DEFAULT_SEEDS[0]!.relPath
 

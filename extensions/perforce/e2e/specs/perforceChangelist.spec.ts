@@ -15,7 +15,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect, DEFAULT_SEEDS } from '../fixtures/perforceApp.js'
-import { evaluateWhenRestored, type WorkbenchPO } from '../pages/WorkbenchPO.js'
+import { evaluateWhenRestored, type WorkbenchPO } from '@universe-editor/e2e-harness'
 import { writeFileSync } from 'node:fs'
 
 const tracked = DEFAULT_SEEDS[0]!.relPath

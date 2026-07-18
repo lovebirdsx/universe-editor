@@ -15,14 +15,44 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { _electron as electron, type ElectronApplication } from '@playwright/test'
-import { join } from 'node:path'
-import { writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { existsSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 
 // Env var the app's extension-host bootstrap reads as an allowlist (P2). When
 // unset the host activates every scanned extension; when set (even to empty) it
 // activates only the listed ids plus core built-ins.
 export const ENABLED_EXTENSIONS_ENV = 'UNIVERSE_ENABLED_EXTENSIONS'
+
+export interface EditorBuild {
+  /** cwd for electron.launch (the editor package root, apps/editor). */
+  readonly appRoot: string
+  /** Path to the packaged main entry (apps/editor/out/main/index.js). */
+  readonly mainEntry: string
+}
+
+/**
+ * Locate the editor's packaged build by walking up from this module until a
+ * directory containing `apps/editor/out/main/index.js` is found. Lets per-
+ * extension e2e fixtures (which sit at different depths under the workspace)
+ * resolve the app without hardcoding `../../..` relative paths. Throws with a
+ * clear hint when the build is missing (run `pnpm build` first).
+ */
+export function resolveEditorBuild(): EditorBuild {
+  let dir = dirname(fileURLToPath(import.meta.url))
+  for (let i = 0; i < 12; i++) {
+    const appRoot = join(dir, 'apps', 'editor')
+    const mainEntry = join(appRoot, 'out', 'main', 'index.js')
+    if (existsSync(mainEntry)) return { appRoot, mainEntry }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  throw new Error(
+    'resolveEditorBuild: could not find apps/editor/out/main/index.js — run `pnpm build` first',
+  )
+}
 
 // `app.close()` waits for Playwright's pipe connection to the Electron process
 // to close. On Windows the main process can exit cleanly (exitCode 0) yet the
@@ -180,6 +210,8 @@ export interface LaunchAppOptions {
   readonly extensions?: readonly string[]
   /** Extra env merged on top (e.g. perforce fake wiring). */
   readonly env?: Readonly<Record<string, string>>
+  /** Extra positional args appended after --user-data-dir (e.g. a workspace folder to open). */
+  readonly extraArgs?: readonly string[]
 }
 
 /**
@@ -197,7 +229,11 @@ export async function launchApp(options: LaunchAppOptions): Promise<ElectronAppl
     extraEnv[ENABLED_EXTENSIONS_ENV] = options.extensions.join(',')
   }
   return electron.launch({
-    args: [options.mainEntry, `--user-data-dir=${options.userDataDir}`],
+    args: [
+      options.mainEntry,
+      `--user-data-dir=${options.userDataDir}`,
+      ...(options.extraArgs ?? []),
+    ],
     cwd: options.appRoot,
     env: {
       ...inheritedEnv,

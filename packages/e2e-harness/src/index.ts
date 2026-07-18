@@ -13,12 +13,16 @@ export {
 export {
   closeApp,
   launchApp,
+  resolveEditorBuild,
   seedBaselineUserData,
   ENABLED_EXTENSIONS_ENV,
   INITIAL_SETTINGS,
   INITIAL_STATE,
+  type EditorBuild,
   type LaunchAppOptions,
 } from './launch.js'
+
+export { waitForProbe } from './fixtures.js'
 
 export { WorkbenchPO, expectNoLeaks, evaluateWhenRestored } from './pages/WorkbenchPO.js'
 export { ActivityBarPO } from './pages/ActivityBarPO.js'
