@@ -52,7 +52,7 @@ function writeWorkspace(): { dir: string; filePath: string; tsconfig: string } {
 }
 
 test.describe('@p1 typescript semantic highlighting', () => {
-  test('recolors uppercase interface fields as properties, not types @regression', async ({
+  test('recolors uppercase interface fields as properties, not types @p1', async ({
     page,
     workbench,
   }) => {

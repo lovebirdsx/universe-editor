@@ -29,10 +29,13 @@
     "lint:fix": "eslint --fix src",
     "test": "vitest run",
     "e2e": "playwright test -c e2e/playwright.config.ts",
+    "e2ea": "cross-env UNIVERSE_E2E_INCLUDE_REGRESSION=1 playwright test -c e2e/playwright.config.ts",
+    "e2eg": "cross-env UNIVERSE_E2E_NO_TAG_FILTER=1 playwright test -c e2e/playwright.config.ts --grep ",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "devDependencies": {
     "@playwright/test": "catalog:",
+    "cross-env": "catalog:",
     "@universe-editor/config-ts": "workspace:*",
     "@universe-editor/e2e-harness": "workspace:*",
     "@universe-editor/extension-api": "workspace:*",

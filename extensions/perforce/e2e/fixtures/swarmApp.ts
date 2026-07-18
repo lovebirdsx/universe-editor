@@ -53,6 +53,14 @@ export interface SwarmHarness {
 }
 
 export type SwarmFixtures = {
+  swarmBackend: {
+    readonly clientRoot: string
+    readonly workspaceDir: string
+    readonly userDataDir: string
+    readonly stateFile: string
+    readonly logfile: string
+    readonly baseUrl: string
+  }
   electronApp: ElectronApplication
   page: Page
   workbench: WorkbenchPO
@@ -76,7 +84,12 @@ async function waitForPortfile(portfile: string, timeoutMs = 10_000): Promise<st
 }
 
 export const test = base.extend<SwarmFixtures>({
-  electronApp: async ({}, use) => {
+  // Seed the fake p4 depot + workspace, start the fake Swarm server, and seed the
+  // matching userData. Exposed as a first-class fixture so both electronApp (launch
+  // wiring) and the `swarm` harness (request log / control endpoint) read it from
+  // here — nothing is smuggled onto the ElectronApplication handle. The fake Swarm
+  // server is torn down in this fixture's own teardown.
+  swarmBackend: async ({}, use) => {
     // Temp dirs: user data, workspace, swarm portfile + request log.
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-swarm-'))
     const workspaceDir = mkdtempSync(join(tmpdir(), 'ue2-swarm-ws-'))
@@ -212,31 +225,34 @@ export const test = base.extend<SwarmFixtures>({
       'utf8',
     )
 
+    try {
+      await use({
+        clientRoot: workspaceDir,
+        workspaceDir,
+        userDataDir,
+        stateFile,
+        logfile,
+        baseUrl,
+      })
+    } finally {
+      swarmProc.kill()
+    }
+  },
+  electronApp: async ({ swarmBackend }, use) => {
     const app = await launchApp({
       appRoot: APP_ROOT,
       mainEntry: MAIN_ENTRY,
-      userDataDir,
+      userDataDir: swarmBackend.userDataDir,
       extensions: PERFORCE_EXTENSIONS,
-      extraArgs: [workspaceDir],
+      extraArgs: [swarmBackend.workspaceDir],
       env: {
         UNIVERSE_P4_PATH: FAKE_P4,
-        UNIVERSE_P4_FAKE_STATE: stateFile,
-        UNIVERSE_SWARM_BASE_URL: baseUrl,
+        UNIVERSE_P4_FAKE_STATE: swarmBackend.stateFile,
+        UNIVERSE_SWARM_BASE_URL: swarmBackend.baseUrl,
       },
     })
-    const handle = app as unknown as {
-      _clientRoot: string
-      _logfile: string
-      _swarmProc: ChildProcess
-      _baseUrl: string
-    }
-    handle._clientRoot = workspaceDir
-    handle._logfile = logfile
-    handle._swarmProc = swarmProc
-    handle._baseUrl = baseUrl
     await use(app)
     await closeApp(app)
-    swarmProc.kill()
   },
   page: async ({ electronApp }, use) => {
     const page = await electronApp.firstWindow()
@@ -248,27 +264,23 @@ export const test = base.extend<SwarmFixtures>({
   workbench: async ({ page }, use) => {
     await use(new WorkbenchPO(page))
   },
-  swarm: async ({ electronApp }, use) => {
-    const handle = electronApp as unknown as {
-      _clientRoot: string
-      _logfile: string
-      _baseUrl: string
-    }
+  swarm: async ({ swarmBackend }, use) => {
+    const { clientRoot, logfile, baseUrl } = swarmBackend
     const readLog = (): Array<{
       method: string
       path: string
       query: string
       body?: unknown
     }> => {
-      if (!existsSync(handle._logfile)) return []
-      return readFileSync(handle._logfile, 'utf8')
+      if (!existsSync(logfile)) return []
+      return readFileSync(logfile, 'utf8')
         .split('\n')
         .filter((l) => l.trim())
         .map((l) => JSON.parse(l))
     }
     await use({
-      clientRoot: toPosix(handle._clientRoot),
-      baseUrl: handle._baseUrl,
+      clientRoot: toPosix(clientRoot),
+      baseUrl,
       requests: readLog,
       waitForRequest: async (matchFn, timeoutMs = 10_000) => {
         const start = Date.now()
@@ -279,7 +291,7 @@ export const test = base.extend<SwarmFixtures>({
         throw new Error('timed out waiting for a matching Swarm request')
       },
       addReview: async (opts) => {
-        const res = await fetch(`${handle._baseUrl}/__control__/add-review`, {
+        const res = await fetch(`${baseUrl}/__control__/add-review`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(opts),

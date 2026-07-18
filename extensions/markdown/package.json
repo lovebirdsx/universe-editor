@@ -19,36 +19,124 @@
   ],
   "contributes": {
     "commands": [
-      { "command": "markdown.editing.toggleBold", "title": "Toggle Bold", "category": "Markdown" },
-      { "command": "markdown.editing.toggleItalic", "title": "Toggle Italic", "category": "Markdown" },
-      { "command": "markdown.editing.toggleInlineCode", "title": "Toggle Inline Code", "category": "Markdown" },
-      { "command": "markdown.editing.toggleStrikethrough", "title": "Toggle Strikethrough", "category": "Markdown" },
-      { "command": "markdown.editing.toggleMath", "title": "Toggle Math", "category": "Markdown" },
-      { "command": "markdown.editing.headingUp", "title": "Increase Heading Level", "category": "Markdown" },
-      { "command": "markdown.editing.headingDown", "title": "Decrease Heading Level", "category": "Markdown" },
-      { "command": "markdown.editing.toggleTask", "title": "Toggle Task Completion", "category": "Markdown" },
-      { "command": "markdown.editing.formatTable", "title": "Format Table", "category": "Markdown" },
-      { "command": "markdown.organizeLinkDefinitions", "title": "Organize Link Definitions", "category": "Markdown" }
+      {
+        "command": "markdown.editing.toggleBold",
+        "title": "Toggle Bold",
+        "category": "Markdown"
+      },
+      {
+        "command": "markdown.editing.toggleItalic",
+        "title": "Toggle Italic",
+        "category": "Markdown"
+      },
+      {
+        "command": "markdown.editing.toggleInlineCode",
+        "title": "Toggle Inline Code",
+        "category": "Markdown"
+      },
+      {
+        "command": "markdown.editing.toggleStrikethrough",
+        "title": "Toggle Strikethrough",
+        "category": "Markdown"
+      },
+      {
+        "command": "markdown.editing.toggleMath",
+        "title": "Toggle Math",
+        "category": "Markdown"
+      },
+      {
+        "command": "markdown.editing.headingUp",
+        "title": "Increase Heading Level",
+        "category": "Markdown"
+      },
+      {
+        "command": "markdown.editing.headingDown",
+        "title": "Decrease Heading Level",
+        "category": "Markdown"
+      },
+      {
+        "command": "markdown.editing.toggleTask",
+        "title": "Toggle Task Completion",
+        "category": "Markdown"
+      },
+      {
+        "command": "markdown.editing.formatTable",
+        "title": "Format Table",
+        "category": "Markdown"
+      },
+      {
+        "command": "markdown.organizeLinkDefinitions",
+        "title": "Organize Link Definitions",
+        "category": "Markdown"
+      }
     ],
     "keybindings": [
-      { "command": "markdown.editing.toggleBold", "key": "ctrl+b", "when": "editorTextFocus && editorLangId == markdown" },
-      { "command": "markdown.editing.toggleItalic", "key": "ctrl+i", "when": "editorTextFocus && editorLangId == markdown" },
-      { "command": "markdown.editing.toggleInlineCode", "key": "ctrl+m", "when": "editorTextFocus && editorLangId == markdown" },
-      { "command": "markdown.editing.toggleMath", "key": "ctrl+shift+m", "when": "editorTextFocus && editorLangId == markdown" },
-      { "command": "markdown.editing.headingUp", "key": "ctrl+shift+]", "when": "editorTextFocus && editorLangId == markdown" },
-      { "command": "markdown.editing.headingDown", "key": "ctrl+shift+[", "when": "editorTextFocus && editorLangId == markdown" },
-      { "command": "markdown.editing.toggleTask", "key": "alt+c", "when": "editorTextFocus && editorLangId == markdown" },
-      { "command": "markdown.editing.formatTable", "key": "ctrl+alt+t", "when": "editorTextFocus && editorLangId == markdown" },
-      { "command": "markdown.editing.onEnter", "key": "enter", "when": "editorTextFocus && editorLangId == markdown && !suggestWidgetVisible" },
-      { "command": "markdown.editing.onTab", "key": "tab", "when": "editorTextFocus && editorLangId == markdown && !suggestWidgetVisible" },
-      { "command": "markdown.editing.onShiftTab", "key": "shift+tab", "when": "editorTextFocus && editorLangId == markdown && !suggestWidgetVisible" }
+      {
+        "command": "markdown.editing.toggleBold",
+        "key": "ctrl+b",
+        "when": "editorTextFocus && editorLangId == markdown"
+      },
+      {
+        "command": "markdown.editing.toggleItalic",
+        "key": "ctrl+i",
+        "when": "editorTextFocus && editorLangId == markdown"
+      },
+      {
+        "command": "markdown.editing.toggleInlineCode",
+        "key": "ctrl+m",
+        "when": "editorTextFocus && editorLangId == markdown"
+      },
+      {
+        "command": "markdown.editing.toggleMath",
+        "key": "ctrl+shift+m",
+        "when": "editorTextFocus && editorLangId == markdown"
+      },
+      {
+        "command": "markdown.editing.headingUp",
+        "key": "ctrl+shift+]",
+        "when": "editorTextFocus && editorLangId == markdown"
+      },
+      {
+        "command": "markdown.editing.headingDown",
+        "key": "ctrl+shift+[",
+        "when": "editorTextFocus && editorLangId == markdown"
+      },
+      {
+        "command": "markdown.editing.toggleTask",
+        "key": "alt+c",
+        "when": "editorTextFocus && editorLangId == markdown"
+      },
+      {
+        "command": "markdown.editing.formatTable",
+        "key": "ctrl+alt+t",
+        "when": "editorTextFocus && editorLangId == markdown"
+      },
+      {
+        "command": "markdown.editing.onEnter",
+        "key": "enter",
+        "when": "editorTextFocus && editorLangId == markdown && !suggestWidgetVisible"
+      },
+      {
+        "command": "markdown.editing.onTab",
+        "key": "tab",
+        "when": "editorTextFocus && editorLangId == markdown && !suggestWidgetVisible"
+      },
+      {
+        "command": "markdown.editing.onShiftTab",
+        "key": "shift+tab",
+        "when": "editorTextFocus && editorLangId == markdown && !suggestWidgetVisible"
+      }
     ],
     "configuration": {
       "title": "Markdown",
       "properties": {
         "markdown.updateLinksOnFileMove.enabled": {
           "type": "string",
-          "enum": ["never", "prompt", "always"],
+          "enum": [
+            "never",
+            "prompt",
+            "always"
+          ],
           "enumDescriptions": [
             "Never update links automatically.",
             "Prompt before updating links.",
@@ -66,12 +154,15 @@
     "typecheck": "tsc --noEmit && tsc --project e2e/tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "e2e": "playwright test -c e2e/playwright.config.ts",
+    "e2ea": "cross-env UNIVERSE_E2E_INCLUDE_REGRESSION=1 playwright test -c e2e/playwright.config.ts",
+    "e2eg": "cross-env UNIVERSE_E2E_NO_TAG_FILTER=1 playwright test -c e2e/playwright.config.ts --grep ",
     "lint": "eslint src",
     "lint:fix": "eslint --fix src",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "devDependencies": {
     "@playwright/test": "catalog:",
+    "cross-env": "catalog:",
     "@universe-editor/config-ts": "workspace:*",
     "@universe-editor/e2e-harness": "workspace:*",
     "@universe-editor/extension-api": "workspace:*",

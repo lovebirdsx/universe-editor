@@ -63,7 +63,7 @@
 
 ## 诊断前必做
 
-1. **先 `pnpm build`**：子包级 `pnpm exec playwright test` **不会** rebuild，`out/` 可能是过期构建。只有根 `pnpm e2e` 会先 build。
+1. **产物要新**：子包级 `pnpm exec playwright test` / 裸 `pnpm --filter <ext> e2e` **不会** rebuild，`out/`、`dist/` 可能过期。根级 `pnpm e2e`（走 turbo）会经依赖链自动 build 宿主+扩展；单跑某扩展用 `pnpm e2e:ext <包>`。手动诊断单 spec 前先 `pnpm build`。
 2. **异步会话**：依赖 timeline 高度/虚拟化/滚动的 ACP 用例，断言前必须 `expect.poll` 等消息数到位 + 高度收敛，不能依赖 `sendAcpPrompt` 的 await（它不等 echo 回复渲染）。memory：`e2e-async-session-prompt-not-settled`。
 3. **stash 基线对比**：怀疑回归时用 `git stash` 在纯净基线复跑；注意对比前两边都要 `pnpm build`。
 

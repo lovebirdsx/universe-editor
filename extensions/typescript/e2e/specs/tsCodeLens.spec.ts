@@ -51,7 +51,7 @@ function writeWorkspace(): { dir: string; filePath: string } {
 }
 
 test.describe('@p1 typescript codelens', () => {
-  test('renders a references CodeLens resolving to showReferences @regression', async ({
+  test('renders a references CodeLens resolving to showReferences @p1', async ({
     page,
     workbench,
   }) => {

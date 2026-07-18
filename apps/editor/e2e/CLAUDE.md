@@ -64,35 +64,53 @@ harness 的启动 fixture 接收 `extensions: string[]`(扩展 id allowlist),拼
 
 ## tag 体系与脚本
 
-tag 打在**用例级** `test('... @p0')` 标题末尾（`@regression` 尤其是单用例级，不打在 `describe` 上）。
+tag 打在**用例级** `test('... @p0')` 标题末尾（`@regression` 尤其是单用例级，不打在 `describe` 上）。**过滤策略集中在共享 config**（`packages/e2e-harness/src/playwrightConfig.ts` 的 `grepOptions`），core 与**每个扩展**同一套——script/CI **不传 `--grep`**，只翻两个 env：`UNIVERSE_E2E_INCLUDE_REGRESSION=1`（把 @regression 并回主趟，即 `e2ea`）、`UNIVERSE_E2E_ONLY_TAG=<tag>`（只跑某 tag，用于 serial/regression/flaky/perf/visual 独立趟）。加/改 tag 分流只改这一处。
 
-| tag | 含义 | 本地 `pnpm e2e` | CI |
+> **坑：裸 `playwright test --grep "<标题>"` 想跑某个用例却报 `No tests found`。** 因为 config 默认设了 `grepInvert`（排除 @visual/@flaky/@perf/@serial/@regression），你的 `--grep` 与它**取交集**——若目标用例带这些 tag（如 `@regression`）就被过滤空。要跑：① 调试用 `pnpm e2eg "<标题>"`（设 `UNIVERSE_E2E_NO_TAG_FILTER=1` 关掉默认排除，能选中任意 tag）；② 或前缀 `UNIVERSE_E2E_ONLY_TAG=@regression` 再 `--grep`。
+
+| tag | 含义 | 默认 `pnpm e2e` | CI |
 |---|---|---|---|
 | `@p0` | 核心冒烟，失败**阻塞** CI | ✅ 跑 | 并行趟 shard×2 |
 | `@p1` | 一般冒烟，阻塞 | ✅ 跑 | 并行趟 shard×2 |
-| `@regression` | 守护已修复 bug（非主路径冒烟） | ❌ 排除（保持轻快） | 单独并行趟 |
-| `@serial` | 跨进程 native 竞态需隔离 | ✅ 但 `--workers=1` 串行趟 | 单独串行趟 |
+| `@regression` | 守护已修复 bug（非主路径冒烟） | ❌ 排除（`e2ea` 并回） | 单独并行趟 |
+| `@serial` | 跨进程 native 竞态需隔离 | 单独 `--workers=1` 串行趟 | 单独串行趟 |
 | `@flaky` | headless 偶发（如 DnD） | 排除 | 单独趟 `continue-on-error`，不阻塞 |
 | `@perf` | 启动性能观测 | 排除 | 单独趟，写 metrics 工件 |
 | `@visual` | 视觉回归 | 排除 | 默认排除，需显式跑 |
 
 **何时打 `@regression`**：该用例只为守护某个已修复 bug、不是命令主路径/协议/导航入口的冒烟。核心主路径留主趟。
 
-脚本（`apps/editor/package.json`，前缀 `pnpm --filter @universe-editor/editor`；**根 `pnpm e2e` 会先 `pnpm build`**，子包级不会）：
+脚本分两层——**根级 `pnpm e2e` 走 turbo 缓存跑全量（core + 所有扩展）**；子包级（前缀 `pnpm --filter @universe-editor/editor`）只跑 core 且**不 build**（需自己保证 `out/` 新）：
 ```bash
-pnpm e2e            # 主门禁：并行趟(排除 visual/serial/flaky/perf/regression) + @serial 串行趟
-pnpm e2ea          # 全量（含 regression），根级 `pnpm e2ea` 前置 build
-pnpm e2e:regression # 只跑 @regression
-pnpm e2eg -- "@p0"  # 按 grep 跑（透传 --grep 值）
-pnpm e2e:ui         # 本地交互调试
-pnpm test:visual / visual:update  # 视觉基线（仅 Linux CI 更新，见 baselines/README.md）
+# 根级（走 turbo 缓存，自动 build 依赖链）
+pnpm e2e            # 全量：core（默认主趟排除特殊 tag + @serial 串行趟）+ 所有扩展，串行、缓存
+pnpm e2ea          # 含 @regression 的全量（turbo `e2ea` task，独立缓存条目）
+pnpm e2e:force     # 忽略缓存强制真跑（复跑 flaky 用），build 仍走缓存不重复
+pnpm e2ea:force    # 同上，含 @regression
+pnpm e2e:ext @universe-editor/<ext>   # 只跑单个扩展 suite（turbo 自动 build 宿主+扩展）
+
+# 子包级（只 core，不 build——诊断单 spec 用，先自行 build）
+pnpm --filter @universe-editor/editor e2e:regression # 只跑 @regression
+pnpm --filter @universe-editor/editor e2eg "<用例标题或grep>"  # 自由 grep 调试（NO_TAG_FILTER，能选中任意 tag）
+pnpm --filter @universe-editor/editor e2e:ui         # 本地交互调试
+pnpm --filter @universe-editor/editor test:visual    # 视觉基线（仅 Linux CI 更新，见 baselines/README.md）
 ```
+
+> **`pnpm e2e` 走 turbo 缓存**：core 与扩展 e2e 都是 turbo task，输入未变则命中缓存**不重跑**（缓存 key 含 `editor#build` 的 output hash，改宿主自动令全部下游 e2e 失效）。要无视缓存强制真跑用 `pnpm e2e:force`——它先 `turbo run build`（走缓存）再 `turbo run e2e --force --only`（`--only` 只跑 e2e 不重建 build，避免 `--force` 连带把 editor build 跑多次）。`--concurrency=1` 让 suite 串行，避免多个独立 Electron 并发的资源争抢 flake。
+
+**改了扩展代码要跑单个 suite？走 turbo，别裸 playwright。** 裸 `pnpm --filter <ext> e2e` 只执行 `playwright test`，**不 build 任何东西**——既不重建该扩展的 `dist/`，也不重建被测的 editor `out/` 宿主，跑的是旧产物（假绿/假红）。turbo 的 `e2e` task 声明了对 `@universe-editor/editor#build` 的依赖（e2e 跑 editor 产物 + 从 `extensions/<ext>/dist` 读内置扩展，而扩展不依赖 editor，故显式挂上），所以走 turbo 会自动把「宿主 + 被测扩展 + 上游」全 build 到最新再跑：
+```bash
+pnpm e2e:ext @universe-editor/perforce   # = turbo run e2e --filter @universe-editor/perforce，自动 build 宿主+扩展
+# 等价直呼 turbo（可用 glob 简写）：
+turbo run e2e --filter '*markdown'
+```
+core 套件（`@universe-editor/editor#e2e`）走通用 `e2e` task 规则即可：它的 `core*App` scoped fixture 激活 git/typescript/markdown、从其 `dist` 读产物，而这三个扩展是 `@universe-editor/editor` 的 devDependencies（既让 turbo affected 在它们变更时重跑 core，也让 `^build` 自动把它们 build 到最新——见 `scripts/e2e/affected-e2e-matrix.mjs`），无需在 turbo 里为它们单列 `#build`。
 
 ## 踩坑（本目录高频）
 
 > 排查「CI 偶发挂、本地稳过」的 flaky（区分真回归 vs 环境噪音、读 call log 失败形态、鲁棒化断言）有专门的 skill **`fix-ci-e2e-flake`**——它的案例库 + 速记是 flaky 知识的单一事实源（parcel watcher 多 worker 崩溃、异步 ACP prompt、裸 launch "Process failed to launch"、scroll 恢复过冲…都在里面)。遇到 flaky 先查它。
 
-- **诊断前先 `pnpm build`**：子包级 playwright **不 rebuild**，`out/` 可能过期。只有根 `pnpm e2e` 先 build。
+- **诊断前先把产物 build 新**：裸 `playwright test` / 子包级 `pnpm --filter <ext> e2e` **不 rebuild**，`out/`、`dist/` 可能过期。要么走 turbo（`pnpm e2e:ext <包>` / `turbo run e2e --filter …` 会自动 build 宿主+扩展），要么先手动 `pnpm build`。只有根 `pnpm e2e` 内建了前置 build。
 - **异步 ACP 会话**：`sendAcpPrompt` 的 await **不等** echo 流式回复渲染完。依赖 timeline 高度/虚拟化/滚动的断言前，先 `expect.poll` 等消息数到位 + 高度收敛（详见 skill `fix-ci-e2e-flake` 速记 24 / 案例 15）。
 - **可见性别用 `toBeVisible()`**：Allotment.Pane 用 CSS visibility 隐藏后代，DOM 可见性会误判。走 ContextKey + `expect.poll`。
 - **长任务命令 fire-and-forget**：`showCommands` 之类内部 await 用户输入的命令必须 `void window.__E2E__!.runCommand(id)`，否则死锁。

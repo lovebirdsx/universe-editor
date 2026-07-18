@@ -34,6 +34,9 @@ catalog:
   eslint-plugin-react-hooks: ^5.2.0
   prettier: ^3.0.0
 
+  # Test tooling
+  cross-env: ^7.0.3
+
   # API
   hono: ^4.7.0
 

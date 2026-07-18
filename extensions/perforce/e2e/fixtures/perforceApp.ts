@@ -104,6 +104,7 @@ function seedWorkspace(
 }
 
 export type PerforceFixtures = {
+  p4Workspace: PerforceHarness & { stateFile: string }
   electronApp: ElectronApplication
   page: Page
   workbench: WorkbenchPO
@@ -130,11 +131,22 @@ export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; open
   // Relative subdir to open instead of the client root ('' = open the root) —
   // reproducing "open a deep folder of a huge p4 client".
   openSubdir: ['', { option: true }],
-  electronApp: async ({ p4Seeds, openSubdir }, use) => {
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-p4-'))
-    seedBaselineUserData(userDataDir)
+  // The seeded depot/workspace is a first-class fixture: both electronApp (which
+  // launches the app against its state file) and the `perforce` harness read it
+  // from here, so nothing has to be smuggled onto the ElectronApplication handle.
+  p4Workspace: async ({ p4Seeds, openSubdir }, use) => {
     const { workspaceDir, stateFile } = seedWorkspace(p4Seeds.files, p4Seeds.changelists)
     const openDir = openSubdir ? join(workspaceDir, openSubdir) : workspaceDir
+    await use({
+      clientRoot: workspaceDir,
+      openDir,
+      stateFile,
+      file: (relPath: string) => toPosix(join(workspaceDir, relPath)),
+    })
+  },
+  electronApp: async ({ p4Workspace }, use) => {
+    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-p4-'))
+    seedBaselineUserData(userDataDir)
     const app = await launchApp({
       appRoot: APP_ROOT,
       mainEntry: MAIN_ENTRY,
@@ -142,12 +154,9 @@ export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; open
       extensions: PERFORCE_EXTENSIONS,
       env: {
         UNIVERSE_P4_PATH: FAKE_P4,
-        UNIVERSE_P4_FAKE_STATE: stateFile,
+        UNIVERSE_P4_FAKE_STATE: p4Workspace.stateFile,
       },
     })
-    const handle = app as unknown as { _p4ClientRoot: string; _p4OpenDir: string }
-    handle._p4ClientRoot = workspaceDir
-    handle._p4OpenDir = openDir
     await use(app)
     await closeApp(app)
   },
@@ -161,14 +170,9 @@ export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; open
   workbench: async ({ page }, use) => {
     await use(new WorkbenchPO(page))
   },
-  perforce: async ({ electronApp }, use) => {
-    const handle = electronApp as unknown as { _p4ClientRoot: string; _p4OpenDir: string }
-    const clientRoot = handle._p4ClientRoot
-    await use({
-      clientRoot,
-      openDir: handle._p4OpenDir,
-      file: (relPath: string) => toPosix(join(clientRoot, relPath)),
-    })
+  perforce: async ({ p4Workspace }, use) => {
+    const { clientRoot, openDir, file } = p4Workspace
+    await use({ clientRoot, openDir, file })
   },
 })
 

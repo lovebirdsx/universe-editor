@@ -46,6 +46,12 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # Root-level scripts (release / e2e affected matrix / gallery) live outside
+      # any workspace package, so `turbo run test` doesn't cover them. Run their
+      # node:test suites here so e.g. the affected-e2e-matrix routing rules are gated.
+      - name: Test scripts
+        run: pnpm test:release
+
       - name: Build
         run: pnpm build
 
@@ -176,22 +182,23 @@ jobs:
 
       - name: Run E2E smoke (Linux, xvfb)
         if: runner.os == 'Linux'
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert "@visual|@serial|@flaky|@perf|@regression" --shard=${{ matrix.shard }}/2
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --shard=${{ matrix.shard }}/2
 
       # @regression cases guard specific fixed bugs (not core-path smoke). They are
       # excluded from the local `pnpm e2e` main pass to keep the day-to-day loop
       # fast, but still block CI here — same parallel shard×2 mechanism as the main
-      # pass. See apps/editor/e2e/RUNBOOK.md.
+      # pass. Tag filtering lives in the shared config (UNIVERSE_E2E_ONLY_TAG); no
+      # --grep flag. See apps/editor/e2e/RUNBOOK.md.
       - name: Run E2E regression (Linux, xvfb)
         if: runner.os == 'Linux'
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep @regression --shard=${{ matrix.shard }}/2
+        run: UNIVERSE_E2E_ONLY_TAG=@regression xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --shard=${{ matrix.shard }}/2
 
       # @serial cases switch the workspace twice and trip a cross-process race in
       # @parcel/watcher's windows backend under parallel workers; pin to one
       # worker. Run only on shard 1 so the (small) serial set isn't duplicated.
       - name: Run E2E smoke serial (Linux, xvfb)
         if: runner.os == 'Linux' && matrix.shard == 1
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep @serial --workers=1
+        run: UNIVERSE_E2E_ONLY_TAG=@serial xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
 
       # @flaky cases (e.g. headless drag-and-drop) are environment-sensitive, not
       # regressions — run them separately, report-only, so they never block the
@@ -199,7 +206,7 @@ jobs:
       - name: Run E2E flaky (Linux, xvfb, non-blocking)
         if: runner.os == 'Linux' && matrix.shard == 1
         continue-on-error: true
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep @flaky --workers=1
+        run: UNIVERSE_E2E_ONLY_TAG=@flaky xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
 
       # @perf records the startup timeline into a JSON artifact (observe-only, no
       # budget assertion). Single worker, Linux+shard 1 only. Non-blocking; the
@@ -207,7 +214,7 @@ jobs:
       - name: Run E2E startup perf (Linux, xvfb, observe-only)
         if: runner.os == 'Linux' && matrix.shard == 1
         continue-on-error: true
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep @perf --workers=1
+        run: UNIVERSE_E2E_ONLY_TAG=@perf xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
 
       - name: Upload startup metrics
         if: always() && runner.os == 'Linux' && matrix.shard == 1
@@ -221,25 +228,26 @@ jobs:
       - name: Run E2E smoke (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert "@visual|@serial|@flaky|@perf|@regression" --shard=${{ matrix.shard }}/2
+        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --shard=${{ matrix.shard }}/2
 
       # @regression: bug-guard cases excluded from the local main pass; still block
-      # CI here via the same parallel shard×2 mechanism. See e2e/RUNBOOK.md.
+      # CI here via the same parallel shard×2 mechanism. Tag filtering lives in the
+      # shared config (UNIVERSE_E2E_ONLY_TAG); no --grep flag. See e2e/RUNBOOK.md.
       - name: Run E2E regression (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep @regression --shard=${{ matrix.shard }}/2
+        run: UNIVERSE_E2E_ONLY_TAG=@regression pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --shard=${{ matrix.shard }}/2
 
       - name: Run E2E smoke serial (Windows)
         if: runner.os == 'Windows' && matrix.shard == 1
         shell: bash
-        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep @serial --workers=1
+        run: UNIVERSE_E2E_ONLY_TAG=@serial pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
 
       - name: Run E2E flaky (Windows, non-blocking)
         if: runner.os == 'Windows' && matrix.shard == 1
         continue-on-error: true
         shell: bash
-        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep @flaky --workers=1
+        run: UNIVERSE_E2E_ONLY_TAG=@flaky pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
 
       # - name: Run visual regression (Linux only)
       #   if: runner.os == 'Linux'

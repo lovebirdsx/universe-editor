@@ -32,6 +32,8 @@ export { QuickInputPO } from './pages/QuickInputPO.js'
 export { EditorAreaPO } from './pages/EditorAreaPO.js'
 export { PanelPO } from './pages/PanelPO.js'
 
+export { defineE2EConfig, type E2EConfigOptions } from './playwrightConfig.js'
+
 export type {
   E2EDisposableLeakReport,
   E2EOpenWindow,

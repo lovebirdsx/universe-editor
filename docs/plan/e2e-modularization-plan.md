@@ -101,7 +101,7 @@ turbo 已有 `e2e` task（`dependsOn: ["^build","build"]`）。CI 改为：
 **实现**（已落地）：
 - `scripts/e2e/affected-e2e-matrix.mjs`：直接调 turbo bin（不走 npx，Win/Linux 一致）`run e2e --filter=...[<base>] --dry=json`，产出两路 GITHUB_OUTPUT——`core`(bool) 与 `extensions`(JSON 数组 `{name,dir,prep}`)。`--all` 时全开。
 - CI 三段式：`detect-affected` job 算矩阵 → `e2e` (core) job `if: core=='true'` → `e2e-extensions` matrix job `if: has-extensions` + `matrix.suite: fromJson(extensions)`，每 suite 按 `prep` 条件化装 tsserver / excel-diff vsix。
-- **core 依赖修正**：`apps/editor` 无扩展 package.json 依赖，但核心 scoped fixture 运行时用到 git/typescript/markdown。脚本的 `CORE_EXTRA_PACKAGES` 显式把这几个扩展纳入「触发 core 重跑」的集合，避免改这些扩展时漏跑核心例外 spec。
+- **core 依赖修正**：核心 scoped fixture 运行时用到 git/typescript/markdown。**初版**曾在脚本里手工维护 `CORE_EXTRA_PACKAGES` 清单显式纳入这几个扩展；**后续收敛**为把它们声明成 `apps/editor` 的 devDependencies，让 turbo affected 经依赖图自动 fanout 到 core（`core` = `@universe-editor/editor` 是否 affected），消除手工清单漂移。routing 由 `scripts/e2e/__tests__/affected-e2e-matrix.test.mjs` 单测守护。
 
 **依赖顺序**：affected 依赖 P1-P3 的物理迁移完成（spec 住扩展包里，turbo 才能把「改扩展」关联到「跑它的 e2e」）。
 

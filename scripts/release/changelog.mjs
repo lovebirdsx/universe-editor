@@ -37,15 +37,21 @@ const GROUP_ORDER = [
 ]
 
 /**
- * Parse a commit subject. Returns `{ type, group, summary }` when the
- * commit qualifies for release notes (must have `!`), or `null` otherwise.
+ * Parse a commit subject into `{ type, group, breaking, summary }` when it
+ * qualifies for release notes, or `null` otherwise. A commit qualifies when it is
+ * a known user-facing type (feat/fix/perf/security), OR it is breaking (`!`) —
+ * a breaking change of any type still matters to users and lands in `other`.
+ * Non-conventional subjects and empty summaries return `null`.
  */
 export function parseCommit(subject) {
-  const m = /^(\w+)(?:\([^)]*\))?!:\s*(.+)$/.exec(subject.trim())
+  const m = /^(\w+)(?:\([^)]*\))?(!)?:\s*(.+)$/.exec(subject.trim())
   if (!m) return null
-  const [, type, summary] = m
-  const group = KNOWN_TYPES.has(type) ? type : 'other'
-  return { type, group, summary: summary.trim() }
+  const [, type, bang, summary] = m
+  const breaking = bang === '!'
+  const known = KNOWN_TYPES.has(type)
+  if (!known && !breaking) return null
+  const group = known ? type : 'other'
+  return { type, group, breaking, summary: summary.trim() }
 }
 
 /** Build the `groups` array for one version from its commit subjects. */
