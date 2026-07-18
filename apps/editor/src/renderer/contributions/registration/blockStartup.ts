@@ -21,6 +21,7 @@ import { SwarmConfigurationContribution } from '../SwarmConfigurationContributio
 import { SettingsContribution } from '../SettingsContribution.js'
 import { ThemeContribution } from '../ThemeContribution.js'
 import { AiConfigurationContribution } from '../AiConfigurationContribution.js'
+import { UpdateConfigurationContribution } from '../UpdateConfigurationContribution.js'
 import { StatusBarComponentsContribution } from '../StatusBarComponentsContribution.js'
 import { WorkbenchFontContribution } from '../WorkbenchFontContribution.js'
 import { AgentFontContribution } from '../AgentFontContribution.js'
@@ -170,6 +171,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.aiConfiguration',
   AiConfigurationContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// JSON schema for update-config.json (deployment overrides for the update feed /
+// marketplace gallery urls). BlockStartup so the schema is registered before any
+// update-config.json editor opens.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.updateConfiguration',
+  UpdateConfigurationContribution,
   WorkbenchPhase.BlockStartup,
 )
 
