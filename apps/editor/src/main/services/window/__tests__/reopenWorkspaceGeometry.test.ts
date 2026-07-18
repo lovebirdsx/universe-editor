@@ -1,13 +1,15 @@
 /*---------------------------------------------------------------------------------------------
- *  Reproduction for: closing the last window loses the final fullscreen/maximized
- *  geometry, so the workspace reopens un-maximized. Drives real events through a
- *  fake BrowserWindow (EventEmitter) so the close/quit teardown ordering is exercised.
+ *  Reproduction for: closing a workspace window (while other windows stay open),
+ *  then reopening that workspace, loses its window position/size — it comes back
+ *  at the default centred 1280x800 instead of where the user left it.
+ *
+ *  Drives real close/reopen events through a fake BrowserWindow and asserts the
+ *  reopened window is constructed with the previously-persisted geometry.
  *--------------------------------------------------------------------------------------------*/
 
 import { EventEmitter } from 'node:events'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { combinedDisposable, URI } from '@universe-editor/platform'
-import type { IPersistedWindow } from '../../../windowsSession.js'
 
 // --- Mock IPC bootstrap (renderer confirms shutdown immediately) ---
 vi.mock('../../../ipc/registerMainServices.js', () => ({
@@ -18,18 +20,26 @@ vi.mock('../../../ipc/registerMainServices.js', () => ({
   })),
 }))
 
-// --- Mock per-window workspace stack ---
+// --- Mock per-window workspace stack. `current` reflects the workspace passed to
+//     restoreCurrent so the service can key geometry by folder. ---
 const flushSpy = vi.fn().mockResolvedValue(undefined)
 vi.mock('../../storage/storageMainService.js', () => ({
   MainStorageService: vi.fn().mockImplementation(() => ({ flush: flushSpy, dispose: vi.fn() })),
 }))
 vi.mock('../../workspace/workspaceMainService.js', () => ({
-  WorkspaceMainService: vi.fn().mockImplementation(() => ({
-    current: { folder: URI.file('/tmp/proj'), name: 'proj' },
-    onDidChangeWorkspace: vi.fn(() => ({ dispose: vi.fn() })),
-    restoreCurrent: vi.fn().mockResolvedValue(undefined),
-    dispose: vi.fn(),
-  })),
+  WorkspaceMainService: vi.fn().mockImplementation(() => {
+    const state: { current: unknown } = { current: null }
+    return {
+      get current() {
+        return state.current
+      },
+      onDidChangeWorkspace: vi.fn(() => ({ dispose: vi.fn() })),
+      restoreCurrent: vi.fn(async (ws: unknown) => {
+        state.current = ws
+      }),
+      dispose: vi.fn(),
+    }
+  }),
 }))
 vi.mock('../../userData/userDataMainService.js', () => ({
   UserDataMainService: vi.fn().mockImplementation(() => ({ dispose: vi.fn() })),
@@ -38,54 +48,50 @@ vi.mock('../../workspace/electronFolderDialog.js', () => ({
   ElectronFolderDialog: vi.fn().mockImplementation(() => ({})),
 }))
 
-// --- Capture what the app-singleton storage persists ---
-const persisted: { list: IPersistedWindow[] | null } = { list: null }
+// --- Capture what the app-singleton storage persists (a tiny in-memory store so
+//     the per-workspace geometry map round-trips across close → reopen). ---
 const store: Record<string, unknown> = {}
 vi.mock('../../../storage.js', () => ({
   getDefaultStorage: () => ({
     get: vi.fn(async (key: string) => store[key]),
     set: vi.fn(async (key: string, value: unknown) => {
       store[key] = value
-      if (key === 'workbench.windowsState') persisted.list = value as IPersistedWindow[]
     }),
-    remove: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn(async (key: string) => {
+      delete store[key]
+    }),
     flush: vi.fn().mockResolvedValue(undefined),
     flushSync: vi.fn(),
   }),
   workspaceIdFromUri: (s: string) => s,
 }))
 
-// --- Fake BrowserWindow: EventEmitter with a close() that mimics Electron's
-//     preventable close → closed sequence, plus mutable fullscreen/maximize flags. ---
+// --- Fake BrowserWindow with configurable bounds. ---
 class FakeWindow extends EventEmitter {
   static nextId = 1
   readonly id = FakeWindow.nextId++
   private _destroyed = false
-  fullscreen = false
-  maximized = false
+  bounds = { x: 100, y: 80, width: 1280, height: 800 }
   readonly webContents = Object.assign(new EventEmitter(), {
     isDevToolsOpened: () => false,
     openDevTools: vi.fn(),
     setWindowOpenHandler: vi.fn(),
+    send: vi.fn(),
   })
 
   isDestroyed = (): boolean => this._destroyed
-  isFullScreen = (): boolean => this.fullscreen
-  isMaximized = (): boolean => this.maximized
+  isFullScreen = (): boolean => false
+  isMaximized = (): boolean => false
   isMinimized = (): boolean => false
-  getNormalBounds = (): { x: number; y: number; width: number; height: number } => ({
-    x: 100,
-    y: 80,
-    width: 1280,
-    height: 800,
-  })
-  getBounds = this.getNormalBounds
+  getNormalBounds = (): { x: number; y: number; width: number; height: number } => this.bounds
+  getBounds = (): { x: number; y: number; width: number; height: number } => this.bounds
   show = vi.fn()
   focus = vi.fn()
   restore = vi.fn()
   maximize = vi.fn()
   loadURL = vi.fn().mockResolvedValue(undefined)
   setFullScreen = vi.fn()
+  setPosition = vi.fn()
 
   close(): void {
     if (this._destroyed) return
@@ -102,14 +108,25 @@ class FakeWindow extends EventEmitter {
   }
 }
 
+const constructedOptions: Array<Record<string, unknown>> = []
+
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/ue-state' },
-  BrowserWindow: vi.fn().mockImplementation(() => new FakeWindow()),
+  BrowserWindow: vi.fn().mockImplementation((opts: Record<string, unknown>) => {
+    constructedOptions.push(opts)
+    return new FakeWindow()
+  }),
   dialog: { showMessageBox: vi.fn().mockResolvedValue({ response: 0 }) },
   shell: { openExternal: vi.fn() },
   screen: {
-    getAllDisplays: () => [{ id: 1, workArea: { x: 0, y: 0, width: 3000, height: 2000 } }],
-    getDisplayNearestPoint: () => ({ id: 1 }),
+    getAllDisplays: () => [
+      {
+        id: 1,
+        bounds: { x: 0, y: 0, width: 3000, height: 2000 },
+        workArea: { x: 0, y: 0, width: 3000, height: 2000 },
+      },
+    ],
+    getDisplayNearestPoint: () => ({ id: 1, bounds: { x: 0, y: 0, width: 3000, height: 2000 } }),
   },
 }))
 
@@ -119,6 +136,7 @@ const { LogMainService } = await import('../../log/logMainService.js')
 function makeOpts() {
   return {
     appServices: {
+      recentWorkspaces: { add: vi.fn().mockResolvedValue(undefined) },
       sessionSwitcher: { registerWindow: () => {}, unregisterWindow: () => {} },
       configLocation: { onDidChangeConfigDir: () => ({ dispose: () => {} }), currentDir: '' },
     } as never,
@@ -131,39 +149,43 @@ function makeOpts() {
   }
 }
 
-// trackWindowState (500ms) + _scheduleSessionPersist (300ms) debounces stack.
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 const settlePersist = (): Promise<void> => sleep(1000)
 
-describe('window state persistence on teardown', () => {
+describe('reopen workspace geometry', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    persisted.list = null
     for (const k of Object.keys(store)) delete store[k]
+    constructedOptions.length = 0
     FakeWindow.nextId = 1
   })
 
-  it('persists fullscreen when the last window is closed shortly after going fullscreen', async () => {
+  it('restores the previous position/size when a closed workspace is reopened', async () => {
     const svc = new WindowMainService(makeOpts())
-    await svc.createWindow({ workspace: { folder: URI.file('/tmp/proj'), name: 'proj' } })
-    const win = svc.getWindows()[0] as unknown as FakeWindow
+    const folderA = URI.file('/tmp/projA')
+    const folderB = URI.file('/tmp/projB')
 
-    // Initial debounced persist settles with the non-fullscreen state.
-    await settlePersist()
-    expect(persisted.list?.[0]?.uiState?.isFullscreen).toBe(false)
+    // Open workspace A and a second workspace B (so the app is not quitting).
+    await svc.createWindow({ workspace: { folder: folderA, name: 'projA' } })
+    await svc.createWindow({ workspace: { folder: folderB, name: 'projB' } })
 
-    // User goes fullscreen, then closes the window before the debounce fires.
-    win.fullscreen = true
-    win.emit('enter-full-screen')
-    win.close()
-
-    // Let the renderer-veto round-trip resolve (async); the real close then runs.
+    const winA = svc.getWindows()[0] as unknown as FakeWindow
+    // User moves/resizes window A to a distinctive geometry.
+    winA.bounds = { x: 640, y: 360, width: 1600, height: 900 }
+    winA.emit('resize')
     await settlePersist()
 
-    // Simulate the post-close app quit (window-all-closed → before-quit).
-    await svc.confirmQuit()
-    await svc.captureSessionForQuit()
+    // Close window A (B stays open → app keeps running).
+    winA.close()
+    await settlePersist()
+    expect(svc.getWindows()).toHaveLength(1)
 
-    expect(persisted.list?.[0]?.uiState?.isFullscreen).toBe(true)
+    constructedOptions.length = 0
+
+    // Reopen workspace A.
+    await svc.openWindowForFolder(folderA)
+
+    const reopenedOpts = constructedOptions.at(-1)
+    expect(reopenedOpts).toMatchObject({ x: 640, y: 360, width: 1600, height: 900 })
   })
 }, 20000)

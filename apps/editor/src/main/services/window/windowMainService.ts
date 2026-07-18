@@ -49,6 +49,8 @@ import { observeDevToolsState } from '../../devToolsState.js'
 import { getDefaultStorage, workspaceIdFromUri } from '../../storage.js'
 import {
   serializeWindow,
+  loadWorkspaceGeometry,
+  saveWorkspaceGeometry,
   WINDOWS_SESSION_STORAGE_KEY,
   type IPersistedWindow,
   type IRestoreWindow,
@@ -536,7 +538,14 @@ export class WindowMainService implements IWindowMainService {
     }
     // WorkspaceMainService.restoreCurrent() (invoked by createWindow below) bumps
     // the shared recent list itself, so no need to add() again here.
-    await this.createWindow({ workspace, ...(sessionToOpen ? { sessionToOpen } : {}) })
+    // Restore the geometry this workspace was last seen at, so reopening a closed
+    // folder returns to where the user left it (falls back to default if none).
+    const uiState = await loadWorkspaceGeometry(getDefaultStorage(), workspaceId)
+    await this.createWindow({
+      workspace,
+      ...(uiState ? { uiState } : {}),
+      ...(sessionToOpen ? { sessionToOpen } : {}),
+    })
   }
 
   /**
@@ -670,17 +679,27 @@ export class WindowMainService implements IWindowMainService {
       this._sessionPersistTimer = null
     }
     const list: IPersistedWindow[] = []
+    // Per-workspace geometry updates, keyed by workspaceId. Captured alongside
+    // the session list so that reopening a closed workspace (while the app keeps
+    // running) restores its last position/size — the session list only holds
+    // currently-open windows and forgets a closed one.
+    const geometryUpdates: Array<{ workspaceId: string; state: IWindowState }> = []
     for (const { win, workspace } of this._windows.values()) {
       if (win.isDestroyed()) continue
-      list.push(
-        serializeWindow(
-          workspace.current,
-          captureWindowState(win),
-          win.webContents.isDevToolsOpened(),
-        ),
-      )
+      const state = captureWindowState(win)
+      list.push(serializeWindow(workspace.current, state, win.webContents.isDevToolsOpened()))
+      if (workspace.current) {
+        geometryUpdates.push({
+          workspaceId: workspaceIdFromUri(workspace.current.folder.toString()),
+          state,
+        })
+      }
     }
-    await getDefaultStorage().set(WINDOWS_SESSION_STORAGE_KEY, list)
+    const storage = getDefaultStorage()
+    await storage.set(WINDOWS_SESSION_STORAGE_KEY, list)
+    for (const { workspaceId, state } of geometryUpdates) {
+      await saveWorkspaceGeometry(storage, workspaceId, state)
+    }
   }
 
   dispose(): void {

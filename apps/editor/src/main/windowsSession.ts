@@ -5,6 +5,33 @@ import { validateWindowState, type IWindowState } from './windowState.js'
 
 export const WINDOWS_SESSION_STORAGE_KEY = 'workbench.windowsState'
 
+// Per-workspace last-known window geometry, keyed by workspaceId. Independent of
+// the session list (which only holds currently-open windows): this survives a
+// workspace being closed while the app keeps running, so reopening it restores
+// the position/size the user left it at, VSCode-style.
+export const WORKSPACE_GEOMETRY_STORAGE_KEY = 'workbench.workspaceWindowState'
+
+type PersistedGeometryMap = Record<string, IWindowState>
+
+export async function loadWorkspaceGeometry(
+  storage: Storage,
+  workspaceId: string,
+): Promise<IWindowState | undefined> {
+  const map = await storage.get<PersistedGeometryMap>(WORKSPACE_GEOMETRY_STORAGE_KEY)
+  if (!map || typeof map !== 'object') return undefined
+  return validateWindowState(map[workspaceId])
+}
+
+export async function saveWorkspaceGeometry(
+  storage: Storage,
+  workspaceId: string,
+  state: IWindowState,
+): Promise<void> {
+  const map = (await storage.get<PersistedGeometryMap>(WORKSPACE_GEOMETRY_STORAGE_KEY)) ?? {}
+  const next: PersistedGeometryMap = { ...map, [workspaceId]: state }
+  await storage.set(WORKSPACE_GEOMETRY_STORAGE_KEY, next)
+}
+
 interface PersistedWorkspace {
   readonly folder: UriComponents
   readonly name: string
