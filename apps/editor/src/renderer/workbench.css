@@ -581,4 +581,10 @@ html, body, #root {
   height: 100% !important;
 }
 
+/* 折叠箭头(twistie)与文件名之间留出呼吸空间:monaco 默认只给 6px padding,
+   在没有文件图标的多文件分组头里箭头会紧贴文件名,阅读体验差。 */
+.monaco-editor .reference-zone-widget .ref-tree .monaco-tl-twistie {
+  margin-right: 6px;
+}
+
 

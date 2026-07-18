@@ -413,7 +413,11 @@ export const MonacoLoader = {
    */
   async getListService(): Promise<{
     readonly lastFocusedList:
-      | { getFocus(): unknown[]; setSelection(items: unknown[], browserEvent?: unknown): void }
+      | {
+          getFocus(): unknown[]
+          setSelection(items: unknown[], browserEvent?: unknown): void
+          onDidChangeFocus(listener: () => void): { dispose(): void }
+        }
       | undefined
   }> {
     await loadMonaco()
@@ -423,7 +427,11 @@ export const MonacoLoader = {
     ])
     return StandaloneServices.get<{
       readonly lastFocusedList:
-        | { getFocus(): unknown[]; setSelection(items: unknown[], browserEvent?: unknown): void }
+        | {
+            getFocus(): unknown[]
+            setSelection(items: unknown[], browserEvent?: unknown): void
+            onDidChangeFocus(listener: () => void): { dispose(): void }
+          }
         | undefined
     }>(IListService)
   },

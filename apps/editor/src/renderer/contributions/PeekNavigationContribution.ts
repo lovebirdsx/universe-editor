@@ -21,12 +21,17 @@
  *     list shows no live preview. `selectionNavigation: true` only sets a context
  *     key; the actual focus→selection mirroring lives in workbench list
  *     keybindings the standalone editor doesn't ship. We re-add it by mirroring
- *     the new focus onto the selection after the tree moves it, which drives the
+ *     the new focus onto the selection *after* the tree moves it, which drives the
  *     navigator's `show` (preview) path with focus preserved on the tree.
  *
- *  The listener runs in the *capture* phase because the list's own
- *  KeyboardController swallows Enter (stopPropagation) in the bubble phase, so a
- *  monaco keybinding could never see it.
+ *     Timing is the subtle part: the list's KeyboardController moves the focus in
+ *     the *bubble* phase (after our capture listener), so we cannot read the new
+ *     focus synchronously. A `queueMicrotask` is also wrong — the microtask
+ *     checkpoint runs when the capture callback's stack empties, i.e. *before* the
+ *     bubble-phase move, so it mirrors the stale (previous) focus and the preview
+ *     lags one keystroke behind. Instead we hook the tree's own
+ *     `onDidChangeFocus`: it fires exactly when the KeyboardController lands the
+ *     move, so mirroring there is correct by construction.
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable, type IWorkbenchContribution } from '@universe-editor/platform'
@@ -39,10 +44,15 @@ export class PeekNavigationContribution extends Disposable implements IWorkbench
   private _listService:
     | {
         readonly lastFocusedList:
-          | { getFocus(): unknown[]; setSelection(items: unknown[], browserEvent?: unknown): void }
+          | {
+              getFocus(): unknown[]
+              setSelection(items: unknown[], browserEvent?: unknown): void
+              onDidChangeFocus(listener: () => void): { dispose(): void }
+            }
           | undefined
       }
     | undefined
+  private _pendingFocusMirror: { dispose(): void } | undefined
 
   constructor() {
     super()
@@ -74,15 +84,26 @@ export class PeekNavigationContribution extends Disposable implements IWorkbench
       if (PREVIEW_NAV_KEYS.has(e.key)) {
         const list = this._listService?.lastFocusedList
         if (!list) return
-        // Let the tree's bubble-phase KeyboardController move the focus first,
-        // then mirror focus → selection so the navigator previews it. Passing the
-        // keyboard event keeps preserveFocus (focus stays on the tree).
-        queueMicrotask(() => list.setSelection(list.getFocus(), e))
+        // The bubble-phase KeyboardController is about to move the focus. Hook a
+        // one-shot focus-change listener so we mirror focus → selection at the
+        // exact moment the move lands (not a keystroke early). A rapid second
+        // press before the first move fires supersedes the still-pending one.
+        this._pendingFocusMirror?.dispose()
+        const sub = list.onDidChangeFocus(() => {
+          sub.dispose()
+          if (this._pendingFocusMirror === sub) this._pendingFocusMirror = undefined
+          // Passing the keyboard event keeps preserveFocus (focus stays on the tree).
+          list.setSelection(list.getFocus(), e)
+        })
+        this._pendingFocusMirror = sub
       }
     }
     document.addEventListener('keydown', onKeyDown, true)
     this._register({
-      dispose: () => document.removeEventListener('keydown', onKeyDown, true),
+      dispose: () => {
+        this._pendingFocusMirror?.dispose()
+        document.removeEventListener('keydown', onKeyDown, true)
+      },
     })
   }
 }
