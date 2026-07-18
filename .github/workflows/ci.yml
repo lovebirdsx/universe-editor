@@ -83,9 +83,48 @@ jobs:
       - name: Run integration tests
         run: pnpm --filter @universe-editor/editor test:integration
 
+  # Decide which E2E suites to run. On a PR we scope to what the change touched
+  # (turbo affected, base = origin/main); on a main push we force EVERYTHING —
+  # the full run is the safety net for the affected heuristic. Outputs drive the
+  # `e2e` (core) gate and the `e2e-extensions` matrix below.
+  detect-affected:
+    name: Detect affected E2E
+    needs: ci
+    runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.detect.outputs.core }}
+      extensions: ${{ steps.detect.outputs.extensions }}
+      has-extensions: ${{ steps.detect.outputs.has-extensions }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # affected diffing needs history back to the merge base with main.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Compute affected E2E matrix
+        id: detect
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin ${{ github.base_ref }}
+            node scripts/e2e/affected-e2e-matrix.mjs --base origin/${{ github.base_ref }}
+          else
+            node scripts/e2e/affected-e2e-matrix.mjs --all
+          fi
+
   e2e:
     name: E2E Smoke (${{ matrix.os }} ${{ matrix.shard }}/2)
-    needs: ci
+    needs: detect-affected
+    if: needs.detect-affected.outputs.core == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -123,30 +162,17 @@ jobs:
         if: runner.os == 'Linux'
         run: pnpm --filter @universe-editor/editor exec playwright install-deps
 
-      # The `typescript` built-in extension spawns the vendored
-      # typescript-language-server, whose node_modules live OUTSIDE the pnpm
-      # workspace (installed via npm, not `pnpm install`). Without it the TS
-      # plugin never activates and the outline e2e sees empty symbols. Install
-      # just this vendor — NOT the full vendor-install/agent:build, which also
-      # needs the claude-agent-acp submodule (not checked out in this job).
-      - name: Install vendored typescript-language-server (TS LSP for outline e2e)
+      # The core suite's scoped fixtures (smoke.peekPreview / smoke.outline) drive
+      # a real tsserver via the typescript extension, whose vendored
+      # typescript-language-server lives OUTSIDE the pnpm workspace (installed via
+      # npm). Without it those specs see empty symbols. Install just this vendor —
+      # NOT the full vendor-install/agent:build, which needs the claude-agent-acp
+      # submodule (not checked out in this job).
+      - name: Install vendored typescript-language-server (TS LSP for peek/outline e2e)
         run: npm --prefix vendor/typescript-language-server ci
 
       - name: Build
         run: pnpm build
-
-      # The Excel diff extension lives OUTSIDE the pnpm workspace (ships as a
-      # `.vsix`, gitignored) and is the only e2e that installs a real on-disk
-      # vsix — smoke.swarmSpreadsheetDiff resolves it by path. Without it adm-zip
-      # throws "Invalid filename" on the missing file. Its own node_modules
-      # (SheetJS) install via npm; `package` bundles + zips the vsix (needs
-      # packages/extension-api/dist from `pnpm build` above, and esbuild borrowed
-      # from a workspace extension — both present by now).
-      - name: Build Excel diff extension vsix (swarm spreadsheet diff e2e)
-        shell: bash
-        run: |
-          npm --prefix extensions-external/excel-diff ci
-          npm --prefix extensions-external/excel-diff run package
 
       - name: Run E2E smoke (Linux, xvfb)
         if: runner.os == 'Linux'
@@ -243,6 +269,85 @@ jobs:
         with:
           name: playwright-traces-${{ matrix.os }}-${{ matrix.shard }}
           path: apps/editor/e2e/test-results
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # Per-extension E2E: one job per affected extension (see detect-affected). Each
+  # extension owns its e2e/ dir + playwright.config.ts and runs against the shared
+  # packaged editor build with ONLY that extension activated (P2 minimal set). The
+  # matrix is empty on PRs that touch no extension → the job is skipped entirely.
+  e2e-extensions:
+    name: E2E ${{ matrix.suite.dir }}
+    needs: detect-affected
+    if: needs.detect-affected.outputs.has-extensions == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJson(needs.detect-affected.outputs.extensions) }}
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
+      - name: Install Playwright system dependencies (Linux)
+        run: pnpm --filter @universe-editor/editor exec playwright install-deps
+
+      # typescript extension specs drive the vendored typescript-language-server
+      # (outside the pnpm workspace). Only install it for suites that need it.
+      - name: Install vendored typescript-language-server
+        if: matrix.suite.prep == 'tsserver'
+        run: npm --prefix vendor/typescript-language-server ci
+
+      - name: Build
+        run: pnpm build
+
+      # The perforce suite's smoke.swarmSpreadsheetDiff installs a real on-disk
+      # Excel-diff .vsix (lives outside the workspace, gitignored). Build it only
+      # for that suite; other extension suites don't touch it.
+      - name: Build Excel diff extension vsix
+        if: matrix.suite.prep == 'excel-diff'
+        run: |
+          npm --prefix extensions-external/excel-diff ci
+          npm --prefix extensions-external/excel-diff run package
+
+      - name: Run extension E2E (xvfb)
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter ${{ matrix.suite.name }} e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ matrix.suite.prep }}-${{ strategy.job-index }}
+          path: ${{ matrix.suite.dir }}/playwright-report
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload Playwright test results (traces / videos / screenshots)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces-${{ matrix.suite.prep }}-${{ strategy.job-index }}
+          path: ${{ matrix.suite.dir }}/test-results
           retention-days: 14
           if-no-files-found: ignore
 

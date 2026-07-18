@@ -94,9 +94,14 @@ extensions/ai/e2e/
 
 turbo 已有 `e2e` task（`dependsOn: ["^build","build"]`）。CI 改为：
 
-- **PR**：`turbo run e2e --filter='...[origin/main]'` → 只有被改动的包（及下游）跑 e2e。改 perforce 只跑 perforce project；改 `platform`/`e2e-harness`（上游）→ 依赖传递天然触发全量兜底。
+- **PR**：`turbo run e2e --filter='...[origin/main]'` → 只有被改动的包（及下游）跑 e2e。改 perforce 只跑 perforce；改 `platform`/`e2e-harness`（上游）→ 依赖传递天然触发全量兜底。
 - **main / nightly**：无条件全量，防 affected 漏网。
-- 保留 shard×2 于全量趟；扩展专属准备步骤（tsls / excel-diff vsix）按 project 条件化，减少无关 job 开销。
+- 保留 shard×2 于核心趟；扩展专属准备步骤（tsls / excel-diff vsix）按 suite 条件化，减少无关 job 开销。
+
+**实现**（已落地）：
+- `scripts/e2e/affected-e2e-matrix.mjs`：直接调 turbo bin（不走 npx，Win/Linux 一致）`run e2e --filter=...[<base>] --dry=json`，产出两路 GITHUB_OUTPUT——`core`(bool) 与 `extensions`(JSON 数组 `{name,dir,prep}`)。`--all` 时全开。
+- CI 三段式：`detect-affected` job 算矩阵 → `e2e` (core) job `if: core=='true'` → `e2e-extensions` matrix job `if: has-extensions` + `matrix.suite: fromJson(extensions)`，每 suite 按 `prep` 条件化装 tsserver / excel-diff vsix。
+- **core 依赖修正**：`apps/editor` 无扩展 package.json 依赖，但核心 scoped fixture 运行时用到 git/typescript/markdown。脚本的 `CORE_EXTRA_PACKAGES` 显式把这几个扩展纳入「触发 core 重跑」的集合，避免改这些扩展时漏跑核心例外 spec。
 
 **依赖顺序**：affected 依赖 P1-P3 的物理迁移完成（spec 住扩展包里，turbo 才能把「改扩展」关联到「跑它的 e2e」）。
 
@@ -108,7 +113,7 @@ turbo 已有 `e2e` task（`dependsOn: ["^build","build"]`）。CI 改为：
 | **P1** 试点 perforce ✅ | perforce 6 spec + 2 fake + workspace 迁 `extensions/perforce/e2e`，扩展自带 `playwright.config.ts` + `e2e` script | perforce e2e 与旧结果一致 | P0 |
 | **P2** 最小扩展集 ✅ | bootstrap 加 allowlist（`UNIVERSE_ENABLED_EXTENSIONS`）；harness launch 传 `extensions`；core fixture 空 allow、扩展 fixture allow 自己 | 内核冷启动变快、tsserver 不再 spawn | P0 |
 | **P3** 铺开其余扩展 ✅ | markdown(6)/typescript(2)/ai(3) 迁 `extensions/<ext>/e2e`；core baseline 收成 `extensions: []`，少数需 provider 的核心 spec 走 scoped fixture（coreGitApp / coreTypescriptApp / coreTypescriptSharedApp / coreMarkdownApp） | 各扩展 e2e + 核心例外 spec 全绿 | P1/P2 |
-| **P4** CI affected | 切 `turbo run e2e --filter=...[origin/main]` + 主干全量；扩展准备步骤条件化 | PR 只跑受影响扩展的 e2e | P3 |
+| **P4** CI affected ✅ | `scripts/e2e/affected-e2e-matrix.mjs` 产出 core/extensions 矩阵；CI 三段式 detect→core→ext-matrix，PR 只跑受影响、main 全量；扩展 prep 按 suite 条件化 | 本地 `--base` 三态验证正确（HEAD~1→core+markdown/ts/ai；perforce-only→只 perforce；无 diff→空） | P3 |
 
 > **P3 关键发现**：markdown/mermaid **预览渲染是核心**（`apps/editor/src/renderer/workbench/markdown/`），markdown *扩展* 只提供 LSP；ACP/agents 亦是核心。故 core baseline 能收到 `extensions: []`，仅 5 个核心 spec 需某扩展来**搭建**其（核心 UI 的）场景：dirtyDiffPeek/vscodeKeybindings→git，peekPreview→typescript，outline→typescript(shared)，peekNavigation→markdown LSP。
 
