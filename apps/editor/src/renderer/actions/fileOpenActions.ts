@@ -7,6 +7,7 @@ import {
   Action2,
   IDialogService,
   IEditorGroupsService,
+  IEditorService,
   IFileDialogService,
   IFileService,
   IHostService,
@@ -20,6 +21,7 @@ import {
 import { IRecentFilesService } from '../services/recentFiles/recentFilesService.js'
 import { IQuickAccessController } from '../services/quickInput/QuickAccessController.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { confirmLargeFile } from '../services/editor/largeFileGuard.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
@@ -119,12 +121,35 @@ export class GoToFileAction extends Action2 {
   /**
    * Unified quick open. An optional string `args[0]` (e.g. from a keybinding's
    * `args: "@:"`) prefills the picker so it lands directly in that mode; mirrors
-   * VSCode's `workbench.action.quickOpen` argument.
+   * VSCode's `workbench.action.quickOpen` argument. With no argument, a non-empty
+   * editor selection seeds the file filter (VSCode parity), so "search the file
+   * whose name I just selected" is one keystroke.
    */
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
-    const initial = typeof args[0] === 'string' ? args[0] : GO_TO_FILE_PREFIX
+    const initial =
+      typeof args[0] === 'string'
+        ? args[0]
+        : (activeEditorSelectionText(accessor.get(IEditorService)) ?? GO_TO_FILE_PREFIX)
     await accessor.get(IQuickAccessController).show(initial)
   }
+}
+
+/**
+ * The active file editor's first non-empty selection, trimmed to its first line
+ * so it reads as a filename search term. Returns undefined when nothing usable is
+ * selected. Mirrors `collectActiveSelectionContexts`' way of reaching the mounted
+ * Monaco editor via {@link FileEditorRegistry}.
+ */
+export function activeEditorSelectionText(editorService: IEditorService): string | undefined {
+  const active = editorService.activeEditor.get()
+  if (!(active instanceof FileEditorInput)) return undefined
+  const editor = FileEditorRegistry.get(active)
+  const model = editor?.getModel()
+  if (!editor || !model) return undefined
+  const selection = editor.getSelection()
+  if (!selection || selection.isEmpty()) return undefined
+  const text = model.getValueInRange(selection).split('\n', 1)[0]?.trim()
+  return text ? text : undefined
 }
 
 export class RefreshExplorerAction extends Action2 {
