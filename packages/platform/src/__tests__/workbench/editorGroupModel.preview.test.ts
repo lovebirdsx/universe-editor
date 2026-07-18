@@ -56,7 +56,11 @@ describe('EditorGroupModel — preview slot', () => {
     expect(model.editors[0]).toBe(b)
     expect(model.previewEditor).toBe(b)
     expect(a.disposed).toBe(true)
-    expect(events.some((e) => e.kind === 'previewReplace' && e.editor === b)).toBe(true)
+    const replace = events.find((e) => e.kind === 'previewReplace')
+    expect(replace?.editor).toBe(b)
+    // The evicted preview is exposed so listeners (e.g. ClosedEditorsService) can
+    // capture it for reopen before it is disposed.
+    expect(replace?.replacedEditor).toBe(a)
   })
 
   it('promotes the existing preview to pinned when re-opened with pinned:true', () => {

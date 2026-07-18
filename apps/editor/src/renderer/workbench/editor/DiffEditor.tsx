@@ -13,6 +13,7 @@ import {
   IConfigurationService,
   IContextKeyService,
   IEditorGroupsService,
+  type IDisposable,
   type IEditorInput,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
@@ -68,6 +69,12 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
   const originalModelRef = useRef<monaco.editor.ITextModel | null>(null)
   const modifiedModelRef = useRef<monaco.editor.ITextModel | null>(null)
   const diffLanguageRef = useRef<string>('plaintext')
+  // Holds the current view-state wiring so the create-effect cleanup can flush it
+  // (persist scroll/cursor) *before* it disposes the Monaco instance — otherwise,
+  // on unmount, React runs the create-effect cleanup first and disposes the editor,
+  // leaving the set-model effect's later flush reading a dead editor (empty state →
+  // scroll reset when switching diff↔file and back).
+  const viewStateRef = useRef<IDisposable | null>(null)
   const [monacoNs, setMonacoNs] = useState<typeof monaco | null>(null)
 
   // Load Monaco on demand.
@@ -103,6 +110,11 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     })
     diffEditorRef.current = ed
     return () => {
+      // Flush the current view state while the editor is still live (persist
+      // scroll/cursor), then dispose. The set-model effect's cleanup runs after
+      // this one on unmount and would otherwise flush against a dead editor.
+      viewStateRef.current?.dispose()
+      viewStateRef.current = null
       ed.dispose()
       diffEditorRef.current = null
     }
@@ -172,9 +184,17 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       resourceKey: diffInput.resource.toString(),
       sharedCursorUri: diffInput.originalUri.toString(),
     })
+    viewStateRef.current = viewState
 
     return () => {
-      viewState.dispose()
+      // On an input swap (editor stays live) this flushes the outgoing diff's
+      // state. On unmount the create-effect cleanup already ran first, flushing
+      // and nulling the ref; guard so we don't flush a second time against the
+      // now-disposed editor (which would overwrite the good state with an empty one).
+      if (viewStateRef.current === viewState) {
+        viewState.dispose()
+        viewStateRef.current = null
+      }
       DiffEditorRegistry.unregister(diffInput, ed)
       // create-effect cleanup may have already disposed the instance (React runs
       // effect cleanups in declaration order), so guard against a disposed editor.

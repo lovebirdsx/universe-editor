@@ -284,6 +284,25 @@ describe('ClosedEditorsService — stack behavior', () => {
     groups.dispose()
   })
 
+  it('records a preview editor evicted in-place (single-click replace), not just closes', () => {
+    // Single-click in the SCM list opens into the single preview slot; clicking a
+    // second file replaces the first in-place (previewReplace, no 'close' event).
+    // The evicted preview must still be reopenable via Ctrl+Shift+T.
+    const groups = new EditorGroupsService()
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const a = new FakeVirtualInput('preview-a')
+    const b = new FakeVirtualInput('preview-b')
+    groups.activeGroup.openEditor(a, { pinned: false })
+    groups.activeGroup.openEditor(b, { pinned: false }) // evicts a in-place
+
+    const entry = svc.popMostRecent()
+    expect(entry).toBeDefined()
+    expect(entry!.resource.toString()).toBe(a.resource.toString())
+    expect(entry!.serializedData).toEqual(a.serialize())
+    svc.dispose()
+    groups.dispose()
+  })
+
   it('stack is LIFO — most recently closed comes first', () => {
     const groups = new EditorGroupsService()
     const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))

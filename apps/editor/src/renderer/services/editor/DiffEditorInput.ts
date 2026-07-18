@@ -4,8 +4,28 @@
  *  diff editor. Holds original and modified text for a single file.
  *--------------------------------------------------------------------------------------------*/
 
-import { EditorInput, Emitter, URI, type Event } from '@universe-editor/platform'
+import {
+  EditorInput,
+  Emitter,
+  URI,
+  type Event,
+  type UriComponents,
+} from '@universe-editor/platform'
 import { basenameOfResource } from '../../workbench/files/resourceInfo.js'
+
+/** Structural + content snapshot for reopen / session restore. A diff's two sides
+ *  are frequently passed by value with no on-disk backing (a Git HEAD blob, a
+ *  Perforce shelved/have revision, an agent session baseline), so the text itself
+ *  must be persisted — re-fetching from disk/SCM only works for a working-tree
+ *  diff and would collapse every other diff into two identical (empty) panes. */
+interface ISerializedDiffEditor {
+  readonly originalUri: UriComponents
+  readonly originalContent: string
+  readonly modifiedContent: string
+  readonly modifiedUri?: UriComponents
+  readonly openableResource?: UriComponents
+}
+
 export class DiffEditorInput extends EditorInput {
   static readonly TYPE_ID: string = 'diff'
 
@@ -113,5 +133,44 @@ export class DiffEditorInput extends EditorInput {
     if (other instanceof DiffEditorInput) {
       this.update(other._originalContent, other._modifiedContent)
     }
+  }
+
+  /**
+   * Persist the structural identity (the URIs) AND both sides' text. The two
+   * sides are commonly passed by value with no reproducible on-disk source (a
+   * depot/HEAD blob, a shelved revision, an agent session baseline), so the
+   * content is captured here rather than re-fetched on restore.
+   */
+  override serialize(): ISerializedDiffEditor {
+    return {
+      originalUri: this._originalUri.toJSON(),
+      originalContent: this._originalContent,
+      modifiedContent: this._modifiedContent,
+      ...(this._isCrossFile && { modifiedUri: this._modifiedUri!.toJSON() }),
+      ...(this._openableResource && { openableResource: this._openableResource.toJSON() }),
+    }
+  }
+
+  /**
+   * Rebuild a diff input from its persisted structure + content (Ctrl+Shift+T /
+   * window restore). Both sides are restored verbatim; live SCM/session
+   * contributions refresh them in place once the tab is mounted if the
+   * underlying file has changed since.
+   */
+  static deserialize(data: unknown): DiffEditorInput | null {
+    const d = data as ISerializedDiffEditor | null
+    if (!d || !d.originalUri) return null
+    const originalUri = URI.revive(d.originalUri) as URI
+    const modifiedUri = d.modifiedUri ? (URI.revive(d.modifiedUri) as URI) : undefined
+    const openableResource = d.openableResource
+      ? (URI.revive(d.openableResource) as URI)
+      : undefined
+    return new DiffEditorInput(
+      originalUri,
+      d.originalContent ?? '',
+      d.modifiedContent ?? '',
+      modifiedUri,
+      openableResource,
+    )
   }
 }

@@ -107,6 +107,74 @@ test.describe('@p1 perforce collect changes', () => {
     expect(diff?.modified).toBe(editedContent)
   })
 
+  // Repro for "reopen a closed p4 diff (Ctrl+Shift+T) and both sides show the same
+  // content — no diff". A DiffEditorInput persists only its URIs; on reopen the two
+  // sides are rebuilt (baseline via `perforce.getHeadContent`, modified from disk).
+  // The bug: the rebuilt baseline came back equal to the modified side (or empty),
+  // so the diff rendered two identical panes. Guard the full close→reopen→rehydrate
+  // path end-to-end against the fake depot.
+  test('reopening a closed diff rebuilds distinct baseline/working sides @regression', async ({
+    page,
+    workbench,
+    perforce,
+  }) => {
+    test.setTimeout(120_000)
+    await evaluateWhenRestored(page)
+
+    await workbench.openWorkspace(perforce.openDir)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
+        timeout: 60_000,
+        message: 'perforce extension should register a source control for the workspace',
+      })
+      .toBeGreaterThan(0)
+
+    await workbench.runCommand('workbench.view.scm')
+
+    const editedContent = 'line one\nEDITED line two\nline three\n'
+    writeFileSync(perforce.file(tracked), editedContent, 'utf8')
+
+    const row = page.locator('[role="treeitem"]', { hasText: tracked })
+    await expect(row).toBeVisible({ timeout: 30_000 })
+
+    // Double-click the row to open a PINNED (permanent) diff — the reopen stack only
+    // restores real, non-preview tabs, and this exercises the serialize/rehydrate path.
+    await row.dblclick()
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 30_000 })
+      .toBe('diff')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveDiffContent()?.modified), {
+        timeout: 30_000,
+      })
+      .toBe(editedContent)
+
+    // Close it, then reopen via Ctrl+Shift+T. The restored input starts empty and
+    // rehydrates asynchronously (baseline from perforce.getHeadContent, modified from disk).
+    await workbench.runCommand('workbench.action.closeActiveEditor')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 30_000 })
+      .not.toBe('diff')
+
+    await workbench.runCommand('workbench.action.reopenClosedEditor')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 30_000 })
+      .toBe('diff')
+
+    // The rehydrated diff must show the SAME two sides as the original open: the
+    // depot baseline on the left and the working-tree edit on the right — NOT two
+    // identical panes.
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveDiffContent()?.original), {
+        timeout: 30_000,
+        message: 'reopened diff baseline should be the depot have-revision',
+      })
+      .toBe(DEFAULT_SEEDS[0]!.content)
+    const reopened = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
+    expect(reopened?.modified).toBe(editedContent)
+    expect(reopened?.original).not.toBe(reopened?.modified)
+  })
+
   // Reproduces the reported bug: opening a DEEP subdirectory of a large p4 client
   // (client root is far above the opened folder). The watcher used to watch the
   // whole client root recursively — which fails/degrades on big trees so a nested

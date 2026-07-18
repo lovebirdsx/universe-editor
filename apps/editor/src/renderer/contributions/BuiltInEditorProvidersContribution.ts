@@ -122,6 +122,7 @@ export class BuiltInEditorProvidersContribution
       EditorRegistry.registerEditorProvider({
         typeId: DiffEditorInput.TYPE_ID,
         componentKey: 'diff',
+        deserialize: (data) => DiffEditorInput.deserialize(data),
       }),
     )
     this._register(

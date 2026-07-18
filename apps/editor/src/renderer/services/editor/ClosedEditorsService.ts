@@ -13,6 +13,7 @@ import {
   IUriIdentityService,
   URI,
   createDecorator,
+  type EditorInput,
   type IDisposable,
   type IEditorGroup,
 } from '@universe-editor/platform'
@@ -85,16 +86,25 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
     if (this._groupWatchers.has(group.id)) return
     const d = this._register(
       group.onDidChangeModel((event) => {
-        if (event.kind !== 'close' || !event.editor?.resource) return
-        this._stack.push({
-          resource: event.editor.resource,
-          typeId: event.editor.typeId,
-          groupId: group.id,
-          serializedData: event.editor.serialize?.() ?? null,
-        })
-        if (this._stack.length > MAX_ENTRIES) this._stack.shift()
+        // A closed tab, or a preview tab evicted in-place by opening another file
+        // into the single preview slot (single-click in the SCM list): the old
+        // preview is about to be disposed and never fires a 'close', so capture it
+        // here or Ctrl+Shift+T could never reopen it.
+        if (event.kind === 'close') this._record(group.id, event.editor)
+        else if (event.kind === 'previewReplace') this._record(group.id, event.replacedEditor)
       }),
     )
     this._groupWatchers.set(group.id, d)
+  }
+
+  private _record(groupId: number, editor: EditorInput | undefined): void {
+    if (!editor?.resource) return
+    this._stack.push({
+      resource: editor.resource,
+      typeId: editor.typeId,
+      groupId,
+      serializedData: editor.serialize?.() ?? null,
+    })
+    if (this._stack.length > MAX_ENTRIES) this._stack.shift()
   }
 }

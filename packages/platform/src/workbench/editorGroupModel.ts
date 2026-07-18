@@ -31,6 +31,10 @@ export interface IEditorGroupModelChangeEvent {
   editor: EditorInput | undefined
   oldIndex?: number
   newIndex?: number
+  /** On a `previewReplace`, the preview editor that was evicted (and is about to
+   *  be disposed). Lets listeners capture it — e.g. record it for reopen — while
+   *  it is still alive. Undefined for every other change kind. */
+  replacedEditor?: EditorInput
 }
 
 export interface IOpenEditorOptions {
@@ -200,6 +204,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
           editor,
           oldIndex: slotIndex,
           newIndex: slotIndex,
+          replacedEditor: oldPreview,
         })
         this._editorStore.delete(oldPreview)
         if (activate || wasActive) {

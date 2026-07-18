@@ -293,7 +293,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }),
 
     commands.registerCommand('perforce.openChange', async (...args: unknown[]) => {
-      const [arg] = args
+      const [arg, options] = args as [
+        unknown,
+        ({ pinned?: boolean; preserveFocus?: boolean } | undefined)?,
+      ]
       // From an SCM row: `{ resourceUri }`. From the dirty-diff host / editor
       // title: a bare path string, or undefined → fall back to the active editor.
       const path =
@@ -301,7 +304,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
         (typeof arg === 'string' ? arg : undefined) ??
         (await commands.executeCommand<string | undefined>('_workbench.getActiveEditorFile'))
       if (!path) return
-      await mgr.resolveClient({ resourceUri: path })?.openChange(path)
+      // Double-click on an SCM row asks to pin (promote out of the preview slot);
+      // Space-preview asks to preserve focus. Mirrors git.openChange.
+      await mgr
+        .resolveClient({ resourceUri: path })
+        ?.openChange(path, options?.pinned ?? false, options?.preserveFocus ?? false)
     }),
 
     // Open a diff for a shelved file (no local copy exists): shelved content vs

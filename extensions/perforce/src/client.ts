@@ -1242,9 +1242,9 @@ export class PerforceClient {
    * right = the local file content. Falls back to just opening the file when
    * there's no have revision (e.g. open-for-add).
    */
-  async openChange(localPath: string): Promise<void> {
+  async openChange(localPath: string, pinned = false, preserveFocus = false): Promise<void> {
     if (isSpreadsheetPath(localPath)) {
-      await this._openSpreadsheetChange(localPath)
+      await this._openSpreadsheetChange(localPath, pinned, preserveFocus)
       return
     }
     const baseline = await this._baseline.getHaveContent(localPath)
@@ -1263,8 +1263,8 @@ export class PerforceClient {
       originalUri: pathToFileURL(localPath).href,
       original: baseline,
       modified,
-      pinned: false,
-      preserveFocus: false,
+      pinned,
+      preserveFocus,
       openableUri: pathToFileURL(localPath).href,
     })
   }
@@ -1274,7 +1274,11 @@ export class PerforceClient {
    * Excel extension renders it). Baseline + local are read as raw bytes so the
    * xlsx isn't corrupted by UTF-8 decoding, then passed by value (base64).
    */
-  private async _openSpreadsheetChange(localPath: string): Promise<void> {
+  private async _openSpreadsheetChange(
+    localPath: string,
+    pinned = false,
+    preserveFocus = false,
+  ): Promise<void> {
     const baseline = await this._baseline.getHaveContentBytes(localPath)
     if (baseline === undefined) {
       await commands.executeCommand('_workbench.openFile', localPath)
@@ -1293,8 +1297,8 @@ export class PerforceClient {
       rightUri: pathToFileURL(localPath).href,
       leftBase64: baseline.toString('base64'),
       rightBase64: modified.toString('base64'),
-      pinned: false,
-      preserveFocus: false,
+      pinned,
+      preserveFocus,
     })
   }
 
