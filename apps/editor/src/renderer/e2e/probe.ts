@@ -802,7 +802,18 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         >
       } | null
       if (!controller?.getModel) return []
-      const model = await controller.getModel()
+      // Monaco's CodeLens controller cancels the previous in-flight getModel()
+      // promise (via a RunOnceScheduler) every time it recomputes lenses on a
+      // model/viewport/focus change. On slow CI cold starts (tsserver spin-up)
+      // that recompute races this probe and rejects our await with `Canceled`.
+      // Swallow it and report "not ready yet" so the caller's poll retries,
+      // instead of letting the rejection abort the poll.
+      let model: Awaited<ReturnType<NonNullable<typeof controller.getModel>>> | undefined
+      try {
+        model = await controller.getModel()
+      } catch {
+        return []
+      }
       return (model?.lenses ?? []).map((l) => ({
         line: l.symbol.range.startLineNumber,
         commandId: l.symbol.command?.id ?? '',
