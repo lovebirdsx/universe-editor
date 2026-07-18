@@ -352,6 +352,19 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     })
   }
 
+  writeClipboardImage(dataBase64: string): Promise<void> {
+    const image = nativeImage.createFromBuffer(Buffer.from(dataBase64, 'base64'))
+    if (image.isEmpty()) {
+      this._logger.debug('writeClipboardImage: decoded image is empty, skipping')
+      return Promise.resolve()
+    }
+    clipboard.writeImage(image)
+    this._logger.debug(
+      `writeClipboardImage: wrote ${image.getSize().width}x${image.getSize().height}`,
+    )
+    return Promise.resolve()
+  }
+
   getVersionInfo(): Promise<IVersionInfo> {
     return Promise.resolve({
       productName: app.getName(),

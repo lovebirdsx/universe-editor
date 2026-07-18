@@ -24,8 +24,9 @@ import {
   type WheelEvent,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { X } from 'lucide-react'
-import { localize } from '@universe-editor/platform'
+import { Check, Copy, X } from 'lucide-react'
+import { IHostService, localize } from '@universe-editor/platform'
+import { useOptionalService } from '../useService.js'
 import styles from './agents.module.css'
 
 export function ChatImage({
@@ -147,6 +148,8 @@ function ImagePreviewPopover({
   const [size, setSize] = useState<DisplaySize | null>(null)
   const [placement, setPlacement] = useState<Placement | null>(null)
   const [t, setT] = useState<Transform>(IDENTITY)
+  const [copied, setCopied] = useState(false)
+  const hostService = useOptionalService(IHostService)
   const drag = useRef<{
     pointerId: number
     startX: number
@@ -301,6 +304,27 @@ function ImagePreviewPopover({
     if (drag.current?.pointerId === e.pointerId) drag.current = null
   }, [])
 
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (copyTimer.current) clearTimeout(copyTimer.current)
+    },
+    [],
+  )
+
+  const onCopy = useCallback(async () => {
+    if (!hostService) return
+    try {
+      const base64 = await toPngBase64(src)
+      await hostService.writeClipboardImage(base64)
+      setCopied(true)
+      if (copyTimer.current) clearTimeout(copyTimer.current)
+      copyTimer.current = setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // Best-effort: leave the button in its idle state on failure.
+    }
+  }, [src, hostService])
+
   return createPortal(
     <>
       {size?.isLarge ? (
@@ -319,6 +343,24 @@ function ImagePreviewPopover({
               { left: '0px', top: '0px', visibility: 'hidden' }
         }
       >
+        <button
+          type="button"
+          className={styles['imagePreviewCopy']}
+          title={
+            copied
+              ? localize('acp.image.copied', 'Copied')
+              : localize('acp.image.copy', 'Copy image')
+          }
+          aria-label={localize('acp.image.copy', 'Copy image')}
+          onClick={onCopy}
+          data-testid="acp-image-preview-copy"
+        >
+          {copied ? (
+            <Check size={14} strokeWidth={2} aria-hidden="true" />
+          ) : (
+            <Copy size={14} strokeWidth={2} aria-hidden="true" />
+          )}
+        </button>
         <button
           type="button"
           className={styles['imagePreviewClose']}
@@ -356,4 +398,25 @@ function ImagePreviewPopover({
 
 function clamp(v: number, min: number, max: number): number {
   return v < min ? min : v > max ? max : v
+}
+
+/** Turn an image `src` (a `data:` URI or a fetchable URL) into raw base64 PNG
+ *  bytes for the host clipboard: strip the `data:` prefix when already a PNG
+ *  data URI, otherwise fetch/decode and re-encode via a canvas. */
+async function toPngBase64(src: string): Promise<string> {
+  const pngPrefix = 'data:image/png;base64,'
+  if (src.startsWith(pngPrefix)) {
+    return src.slice(pngPrefix.length)
+  }
+  const blob = await (await fetch(src)).blob()
+  const bitmap = await createImageBitmap(blob)
+  const canvas = document.createElement('canvas')
+  canvas.width = bitmap.width
+  canvas.height = bitmap.height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('2d context unavailable')
+  ctx.drawImage(bitmap, 0, 0)
+  bitmap.close()
+  const dataUrl = canvas.toDataURL('image/png')
+  return dataUrl.slice(dataUrl.indexOf(',') + 1)
 }

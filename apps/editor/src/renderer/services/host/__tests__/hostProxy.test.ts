@@ -86,6 +86,9 @@ class FakeHost implements IHostServiceWire {
   readClipboardImage(): Promise<null> {
     return Promise.resolve(null)
   }
+  writeClipboardImage(): Promise<void> {
+    return Promise.resolve()
+  }
   showSaveFileDialog(): Promise<null> {
     return Promise.resolve(null)
   }

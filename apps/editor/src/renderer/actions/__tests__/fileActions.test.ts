@@ -323,6 +323,7 @@ class FakeHostService implements IHostServiceType {
   async readClipboardImage() {
     return null
   }
+  async writeClipboardImage(_dataBase64: string) {}
   async openWithDefaultApp(_path: string) {
     return ''
   }

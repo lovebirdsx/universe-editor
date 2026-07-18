@@ -120,6 +120,15 @@ export interface IHostService {
    */
   readClipboardImage(): Promise<IClipboardImage | null>
 
+  /**
+   * Write a PNG image onto the OS clipboard via the main-process `clipboard`
+   * module. Mirrors {@link readClipboardImage}: the renderer's
+   * `navigator.clipboard.write()` for images is gated behind an Electron
+   * permission the app doesn't grant, so the reliable sink is the main process.
+   * `dataBase64` is raw PNG bytes as base64 (no `data:` prefix).
+   */
+  writeClipboardImage(dataBase64: string): Promise<void>
+
   /** Application and runtime version info, for the About dialog. */
   getVersionInfo(): Promise<IVersionInfo>
 }

@@ -2309,6 +2309,29 @@
   background: var(--color-toolbar-hover-bg, rgba(0, 0, 0, 0.85));
 }
 
+/* Copy-image button, sitting immediately left of the close button. */
+.imagePreviewCopy {
+  position: absolute;
+  top: 4px;
+  right: 28px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border: none;
+  border-radius: 3px;
+  background: var(--color-badge-bg, rgba(0, 0, 0, 0.6));
+  color: var(--color-input-fg, #d4d4d4);
+  opacity: 0.85;
+  cursor: pointer;
+}
+
+.imagePreviewCopy:hover {
+  opacity: 1;
+  background: var(--color-toolbar-hover-bg, rgba(0, 0, 0, 0.85));
+}
+
 .imagePreviewStage {
   display: flex;
   align-items: center;
