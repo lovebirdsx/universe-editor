@@ -38,6 +38,7 @@ import {
   type StdioTransport,
 } from '@universe-editor/extensions-common'
 import { scanExtensions } from './extensionScanner.js'
+import { computeActiveExtensions, parseIdSet } from './extensionActivationFilter.js'
 import { ExtensionService } from './extensionService.js'
 import { protectStdout } from './stdoutProtection.js'
 import { version as HOST_API_VERSION } from '@universe-editor/extension-api'
@@ -268,14 +269,14 @@ async function main(): Promise<void> {
   const scanned = (
     await Promise.all(dirs.map((d) => scanExtensions(d.dir, d.builtin, HOST_API_VERSION, locale)))
   ).flat()
-  // De-dupe by id, keeping the first occurrence (built-in wins over user).
-  const seen = new Set<string>()
-  const extensions = scanned.filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)))
-  const disabled = new Set(
-    (process.env.UNIVERSE_DISABLED_EXTENSIONS ?? '').split(',').filter(Boolean),
-  )
-  const activeExtensions =
-    disabled.size > 0 ? extensions.filter((e) => !disabled.has(e.id)) : extensions
+  // De-dupe by id (built-in wins over user), then apply the disabled set and the
+  // optional allowlist (e2e minimal-extension-set). See extensionActivationFilter.
+  const disabled = parseIdSet(process.env.UNIVERSE_DISABLED_EXTENSIONS)
+  const allowlist = parseIdSet(process.env.UNIVERSE_ENABLED_EXTENSIONS)
+  const { deduped: extensions, active: activeExtensions } = computeActiveExtensions(scanned, {
+    ...(disabled !== undefined ? { disabled } : {}),
+    ...(allowlist !== undefined ? { allowlist } : {}),
+  })
   if (dirs.length === 0) {
     console.error('[ext-host] no extensions directory configured')
   } else {
@@ -283,7 +284,13 @@ async function main(): Promise<void> {
       `[ext-host] scanned ${extensions.length} extension(s) from [${dirs
         .map((d) => d.dir)
         .join(', ')}]` +
-        (disabled.size > 0 ? `, ${extensions.length - activeExtensions.length} disabled` : ''),
+        (allowlist !== undefined
+          ? `, allowlist active → ${activeExtensions.length} enabled [${activeExtensions
+              .map((e) => e.id)
+              .join(', ')}]`
+          : disabled !== undefined && disabled.size > 0
+            ? `, ${extensions.length - activeExtensions.length} disabled`
+            : ''),
     )
   }
 

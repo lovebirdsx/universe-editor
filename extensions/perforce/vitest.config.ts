@@ -6,5 +6,8 @@ export default defineConfig({
   test: {
     testTimeout: 30000,
     hookTimeout: 30000,
+    // Unit tests live under src/. e2e/ holds Playwright specs (import
+    // @playwright/test, driven by `pnpm e2e`), which vitest must not collect.
+    include: ['src/**/*.{test,spec}.ts'],
   },
 })
