@@ -71,7 +71,10 @@ export function CustomEditorHost({ input }: { input: IEditorInput }) {
     // — without this the extension never activates, no provider registers, and the
     // restored tab stays blank. Activation is idempotent, so the normal path is
     // unaffected. The provider then arrives via onDidChangeProviders (retry below).
-    void extensionHost.activateByEvent(customEditorActivationEvent(viewType))
+    const activateOwner = (): void => {
+      void extensionHost.activateByEvent(customEditorActivationEvent(viewType))
+    }
+    activateOwner()
 
     // The provider registers asynchronously: opening the file fires the
     // `onCustomEditor:` activation event, the extension activates in the host,
@@ -82,17 +85,33 @@ export function CustomEditorHost({ input }: { input: IEditorInput }) {
       opened = webviewService.openPanel(viewType, resource, diff)
       if (opened) {
         setPanel(opened)
+        setFailed(false)
         return true
       }
       return false
     }
 
     let sub: { dispose(): void } | undefined
+    let contribSub: { dispose(): void } | undefined
     let timer: ReturnType<typeof setTimeout> | undefined
     if (!tryOpen()) {
       sub = webviewService.onDidChangeProviders(() => {
         if (opened) return
         if (tryOpen()) clearTimeout(timer)
+      })
+      // The extension host can relaunch (an extension was just installed/removed,
+      // the workspace was swapped, or it crashed and recovered). A relaunch wipes
+      // the provider set and re-scans on a *fresh* connection, but nobody re-fires
+      // our `onCustomEditor:` activation event — so without this the provider would
+      // never re-register on the new host and the panel would stay blank. This also
+      // covers the install-then-open race: our one-shot activation above can land on
+      // the pre-install host (which lacks the extension), and only the relaunch's
+      // contribution change surfaces the freshly scanned provider. Re-activate on
+      // every contribution change; the provider's registration then drives the
+      // onDidChangeProviders retry above.
+      contribSub = extensionHost.onDidChangeContributions(() => {
+        if (opened) return
+        activateOwner()
       })
       // If no provider ever registers (extension missing/broken), surface a
       // message rather than a permanent blank.
@@ -103,6 +122,7 @@ export function CustomEditorHost({ input }: { input: IEditorInput }) {
 
     return () => {
       sub?.dispose()
+      contribSub?.dispose()
       clearTimeout(timer)
       if (opened) webviewService.closePanel(opened.panelHandle)
       setPanel(null)

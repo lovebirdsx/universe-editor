@@ -90,10 +90,11 @@ test.describe('@p1 webview diff', () => {
   test('opens a webview diff via _workbench.openWebviewDiff and renders both sides @regression', async ({
     workbench,
   }) => {
-    // Extension host is a child process (Electron-as-node spawn, slow to cold-start
-    // on Windows CI); the iframe only mounts after the provider registers over RPC,
-    // which the product tolerates up to 15s. Chained ≥15s waits can breach the 30s
-    // global test timeout, so lift the ceiling.
+    // Extension host is a child process; installing this vsix relaunches it, and
+    // the custom-editor provider only registers on the fresh connection. The host
+    // re-activates the owner on the relaunch (CustomEditorHost listens for the
+    // contribution change), so the iframe mounts within a few seconds — but give
+    // the cold-start extension host room on a loaded CI runner.
     test.slow()
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-webviewdiff-'))
     const vsixPath = await makeDiffEditorVsix(tmpDir)
@@ -133,16 +134,17 @@ test.describe('@p1 webview diff', () => {
       )
       .toBe('webviewDiff')
 
-    // The iframe only mounts once the provider registers over RPC (host child
-    // process); CustomEditorHost tolerates this up to 15s, so match that ceiling
-    // rather than giving up at 10s while the product is still legitimately waiting.
+    // The iframe mounts once the provider registers over RPC. The host relaunch
+    // triggered by the install re-activates the owner (see CustomEditorHost), so
+    // this resolves quickly; 10s covers a loaded CI runner without masking a
+    // genuinely-never-registered provider (the product itself gives up at 15s).
     const frameEl = workbench.page.locator('[data-testid="webview-frame"]')
-    await expect(frameEl).toBeVisible({ timeout: 15000 })
+    await expect(frameEl).toBeVisible({ timeout: 10000 })
 
     // The extension decoded panel.diffContext.left/right and rendered them.
     const frame = workbench.page.frameLocator('[data-testid="webview-frame"]')
     const marker = frame.locator(`#${MARKER}`)
-    await expect(marker).toHaveText('LEFT_SIDE|RIGHT_SIDE', { timeout: 15000 })
+    await expect(marker).toHaveText('LEFT_SIDE|RIGHT_SIDE', { timeout: 10000 })
 
     await workbench.page.evaluate((id) => window.__E2E__!.uninstallExtension(id), installedId)
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
@@ -152,8 +154,10 @@ test.describe('@p1 webview diff', () => {
     workbench,
   }) => {
     // Heavier than the sibling: opens a workspace (Restricted Mode) then trusts it,
-    // which relaunches the extension host before the provider can register. Lift the
-    // 30s global timeout and match the product's 15s provider-wait ceiling below.
+    // which relaunches the extension host before the provider can register. The host
+    // re-activates the owner on that relaunch (see CustomEditorHost), so the iframe
+    // mounts once the fresh connection scans the trusted extension; give the
+    // cold-start host room on a loaded CI runner.
     test.slow()
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-webviewdiff-native-'))
     const vsixPath = await makeDiffEditorVsix(tmpDir, true)
@@ -207,7 +211,7 @@ test.describe('@p1 webview diff', () => {
 
     const frame = workbench.page.frameLocator('[data-testid="webview-frame"]')
     const marker = frame.locator(`#${MARKER}`)
-    await expect(marker).toHaveText('LEFT_SIDE|RIGHT_SIDE', { timeout: 15000 })
+    await expect(marker).toHaveText('LEFT_SIDE|RIGHT_SIDE', { timeout: 10000 })
 
     await workbench.page.evaluate((id) => window.__E2E__!.uninstallExtension(id), installedId)
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
