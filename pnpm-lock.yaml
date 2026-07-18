@@ -276,6 +276,12 @@ importers:
       '@universe-editor/config-ts':
         specifier: workspace:*
         version: link:../../packages/config-ts
+      '@universe-editor/e2e-contract':
+        specifier: workspace:*
+        version: link:../../packages/e2e-contract
+      '@universe-editor/e2e-harness':
+        specifier: workspace:*
+        version: link:../../packages/e2e-harness
       '@universe-editor/extension-api':
         specifier: workspace:*
         version: link:../../packages/extension-api
@@ -568,6 +574,46 @@ importers:
         version: 8.58.2(eslint@9.39.4)(typescript@5.9.3)
 
   packages/config-ts: {}
+
+  packages/e2e-contract:
+    devDependencies:
+      '@universe-editor/config-eslint':
+        specifier: workspace:*
+        version: link:../config-eslint
+      '@universe-editor/config-ts':
+        specifier: workspace:*
+        version: link:../config-ts
+      eslint:
+        specifier: 'catalog:'
+        version: 9.39.4
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+
+  packages/e2e-harness:
+    dependencies:
+      '@playwright/test':
+        specifier: 'catalog:'
+        version: 1.60.0
+      '@universe-editor/e2e-contract':
+        specifier: workspace:*
+        version: link:../e2e-contract
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.17
+      '@universe-editor/config-eslint':
+        specifier: workspace:*
+        version: link:../config-eslint
+      '@universe-editor/config-ts':
+        specifier: workspace:*
+        version: link:../config-ts
+      eslint:
+        specifier: 'catalog:'
+        version: 9.39.4
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
 
   packages/extension-api:
     devDependencies:

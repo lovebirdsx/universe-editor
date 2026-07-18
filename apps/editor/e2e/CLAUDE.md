@@ -7,14 +7,16 @@ Playwright + `_electron` 冒烟栈。跑的是 `out/` 打包产物，通过 `win
 ## 目录结构
 
 ```
-fixtures/     两套 Electron 启动 fixture（见下）
-pages/        Page Object：WorkbenchPO 聚合 6 个子 PO + 直通探针方法
-specs/        smoke.*.spec.ts（+ 1 个 visual.*.spec.ts）
-baselines/    视觉回归基线截图（仅 Linux CI 生成，勿在本机更新）
-test-results/ 运行产物（trace/video/screenshot），勿提交
-playwright.config.ts  timeout/retries/workers（CI vs 本地分流）
-RUNBOOK.md    已知 flaky 登记：根因 + workaround + 判定标准
+fixtures/     两套 Electron 启动 fixture 的**薄 shim**(见下)+ 扩展专属 fixture(perforce/swarm)
+pages/        WorkbenchPO.js **薄 shim**,re-export 自 harness
+specs/        smoke.*.spec.ts(+ 1 个 visual.*.spec.ts)
+baselines/    视觉回归基线截图(仅 Linux CI 生成,勿在本机更新)
+test-results/ 运行产物(trace/video/screenshot),勿提交
+playwright.config.ts  timeout/retries/workers(CI vs 本地分流)
+RUNBOOK.md    已知 flaky 登记:根因 + workaround + 判定标准
 ```
+
+> **基座已抽包**:通用 driver(两套 fixture 工厂 + 6 个 PO + `expectNoLeaks`/`evaluateWhenRestored` + 启动契约)住在 `packages/e2e-harness`;探针类型契约(`E2EProbe` + `window.__E2E__` 全局 + 运行时 key 常量)住在零依赖包 `packages/e2e-contract`(app 与 harness 共享,单一事实源)。本目录的 `fixtures/electronApp.ts`、`fixtures/sharedApp.ts`、`pages/WorkbenchPO.ts` 都只是把 harness 工厂**绑定到本 app 的 `out/` 产物路径**的薄 shim,spec import 路径不变。改通用 driver → 改 `packages/e2e-harness`;改探针接口 → 改 `packages/e2e-contract`(app 的 `src/shared/e2e/contract.ts` 是它的 re-export barrel)。
 
 ## 选哪套 fixture（关键决策）
 

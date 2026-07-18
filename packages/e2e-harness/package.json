@@ -1,0 +1,34 @@
+{
+  "name": "@universe-editor/e2e-harness",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build",
+    "lint": "eslint src",
+    "lint:fix": "eslint --fix src",
+    "dev": "tsc --build --watch",
+    "clean": "tsc --build --clean"
+  },
+  "dependencies": {
+    "@playwright/test": "catalog:",
+    "@universe-editor/e2e-contract": "workspace:*"
+  },
+  "devDependencies": {
+    "@universe-editor/config-eslint": "workspace:*",
+    "@universe-editor/config-ts": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:"
+  }
+}
