@@ -81,6 +81,20 @@ const { WindowMainService } = await import('../windowMainService.js')
 const { bootstrapWindowIpc } = await import('../../../ipc/registerMainServices.js')
 const { LogMainService } = await import('../../log/logMainService.js')
 const { WorkspaceMainService } = await import('../../workspace/workspaceMainService.js')
+const { UserDataMainService } = await import('../../userData/userDataMainService.js')
+const { BrowserWindow } = await import('electron')
+
+function grabLastWindowCloseHandler(): (e: { preventDefault: () => void }) => void {
+  const win = vi.mocked(BrowserWindow).mock.results.at(-1)?.value as {
+    on: { mock: { calls: Array<[string, (...args: never[]) => void]> } }
+  }
+  // The window registers more than one `close` listener (geometry tracking plus
+  // the teardown handler). The disposal handler is registered last, so take the
+  // final `close` call — not the first.
+  const call = win.on.mock.calls.filter(([event]) => event === 'close').at(-1)
+  if (!call) throw new Error('no close handler registered')
+  return call[1] as (e: { preventDefault: () => void }) => void
+}
 
 function makeOpts() {
   const logService = new LogMainService()
@@ -262,5 +276,24 @@ describe('WindowMainService', () => {
       restoreCurrent: ReturnType<typeof vi.fn>
     }
     expect(instance.restoreCurrent).toHaveBeenCalledTimes(1)
+  })
+
+  it('disposes per-window resources synchronously on a confirmed-close window', async () => {
+    const svc = new WindowMainService(makeOpts())
+    await svc.createWindow()
+    const userData = vi.mocked(UserDataMainService).mock.results.at(-1)?.value as {
+      dispose: ReturnType<typeof vi.fn>
+    }
+    const close = grabLastWindowCloseHandler()
+
+    // Quit path: mark confirmed so `close` takes the _allowClose branch. On quit
+    // the `closed` handler removes the entry from the window map, so the only
+    // teardown of per-window disposables is inside `close`. It must run
+    // synchronously — deferring it behind a promise loses the race with
+    // will-quit → process.exit and leaks every per-window Disposable.
+    svc.markQuitConfirmed()
+    close({ preventDefault: () => {} })
+
+    expect(userData.dispose).toHaveBeenCalled()
   })
 })

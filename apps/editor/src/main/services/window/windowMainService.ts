@@ -368,7 +368,14 @@ export class WindowMainService implements IWindowMainService {
         // the full window set, and per-window persist here could race the closed
         // handlers into shrinking that list.
         if (!this._quitting) tasks.push(this._persistSessionNow())
-        void Promise.all(tasks).finally(() => disposables.dispose())
+        // Dispose the per-window resources SYNCHRONOUSLY. Deferring this behind
+        // the flush/persist promise chain loses the race on quit: `closed` removes
+        // the entry from `_windows` immediately, so will-quit's dispose() finds it
+        // gone, and process.exit fires before the `.finally` runs — leaking every
+        // per-window Disposable. Flushing reads only already-captured in-memory
+        // state, so it stays correct after dispose().
+        void Promise.all(tasks)
+        disposables.dispose()
         return
       }
       e.preventDefault()
