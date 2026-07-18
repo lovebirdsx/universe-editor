@@ -42,13 +42,18 @@ function runNpm(args, opts = {}) {
     : run('npm', args, opts)
 }
 
-// Build the editor once; the suites all run against its packaged out/.
-console.log('› building editor for external e2e…')
+// Build the editor once; the suites all run against its packaged out/. The
+// extension host (`@universe-editor/extension-host`) is NOT an editor dep — the
+// main process loads its bundled dist/bootstrap.js by PATH at runtime — so it
+// must be built explicitly, else the host scans zero user extensions and every
+// suite fails. The `...` suffix pulls each target's workspace deps in too.
+console.log('› building editor + extension host for external e2e…')
 const build = run(process.execPath, [
   resolve(repoRoot, 'node_modules/turbo/bin/turbo'),
   'run',
   'build',
-  '--filter=@universe-editor/editor',
+  '--filter=@universe-editor/editor...',
+  '--filter=@universe-editor/extension-host...',
 ])
 if (build !== 0) process.exit(build)
 

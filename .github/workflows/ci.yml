@@ -407,8 +407,13 @@ jobs:
       # bypassing turbo — so it wouldn't build the editor's workspace deps first
       # (e.g. @universe-editor/extension-gallery), and vite fails to resolve their
       # dist entry. Go through turbo with the `...` suffix to build deps + editor.
-      - name: Build editor
-        run: pnpm build --filter=@universe-editor/editor...
+      #
+      # @universe-editor/extension-host is NOT an editor dependency (the main
+      # process loads its bundled dist/bootstrap.js by PATH at runtime, never
+      # imports it), so `editor...` alone leaves that dist stale/absent and the
+      # host scans zero user extensions → these suites all fail. Build it too.
+      - name: Build editor + extension host
+        run: pnpm build --filter=@universe-editor/editor... --filter=@universe-editor/extension-host...
 
       # The Excel extension bundles SheetJS from its own node_modules; install it
       # before the suite's build step runs. pdf / eslint self-resolve their build
