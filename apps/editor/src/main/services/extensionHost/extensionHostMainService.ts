@@ -9,7 +9,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
@@ -355,7 +355,17 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     try {
       const dir = this._resolveUserExtensionsDir()
       const entries = readdirSync(dir, { withFileTypes: true })
-      return Promise.resolve(entries.some((e) => e.isDirectory()))
+      // Follow symlinked dir entries too: an e2e/dev-linked extension (VSCode's
+      // `--extensionDevelopmentPath` model) is a directory junction, reported as
+      // a symlink — not a directory — by readdir. Mirrors the scanner's filter.
+      return Promise.resolve(
+        entries.some(
+          (e) =>
+            e.isDirectory() ||
+            (e.isSymbolicLink() &&
+              statSync(path.join(dir, e.name), { throwIfNoEntry: false })?.isDirectory() === true),
+        ),
+      )
     } catch {
       return Promise.resolve(false) // ENOENT (no dir) or unreadable → nothing to load
     }

@@ -391,6 +391,12 @@ export interface E2EProbe {
   getOutputChannelNames(): readonly string[]
   /** Create a named output channel (for testing restore without ACP). */
   createOutputChannel(name: string): void
+  /**
+   * Retained content of a named output channel, or `''` if no such channel.
+   * Lets extension suites assert what a plugin logged (e.g. an ESLint server's
+   * resolution / lint trace).
+   */
+  getOutputChannelContent(name: string): string
   // -- Terminal probe ------------------------------------------------------
   /**
    * Create an integrated terminal directly via ITerminalService and return its
@@ -469,6 +475,13 @@ export interface E2EProbe {
   getMarkdownFoldingRanges(uri: string): Promise<ReadonlyArray<readonly [number, number]>>
   /** Markdown diagnostics currently set as Monaco markers (owner `markdown`). */
   getMarkdownMarkers(uri: string): Promise<readonly E2EMarker[]>
+  /**
+   * Monaco markers for a file, optionally filtered by owner (a diagnostic
+   * collection name, e.g. `eslint`). Omit `owner` for markers from every owner.
+   * Generic counterpart to {@link getMarkdownMarkers}, used by extension suites
+   * asserting their own diagnostics.
+   */
+  getMarkers(uri: string, owner?: string): Promise<readonly E2EMarker[]>
   /**
    * Monarch token types for a single line of markdown source (1-based line),
    * as `[startColumn, type]` pairs. Used to assert YAML frontmatter highlighting

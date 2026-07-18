@@ -57,6 +57,30 @@ export const EXTENSION_SUITES = [
   { name: '@universe-editor/perforce', dir: 'extensions/perforce', prep: 'excel-diff' },
 ]
 
+// Out-of-workspace marketplace extensions with their own e2e suite. They are NOT
+// in turbo's graph, so their affectedness is computed by git path diff (below),
+// not turbo `...[base]`. `prep` names the extra CI setup the suite needs:
+//   - 'xlsx':  the Excel extension bundles SheetJS (npm ci in its dir first)
+//   - 'none':  self-contained (pdf), or borrows a workspace dep at build (eslint)
+export const EXTERNAL_SUITES = [
+  { name: 'eslint', dir: 'extensions-external/eslint', prep: 'none' },
+  { name: 'pdf', dir: 'extensions-external/pdf', prep: 'none' },
+  { name: 'excel-diff', dir: 'extensions-external/excel-diff', prep: 'xlsx' },
+]
+
+// A change to any of these shared inputs fans out to EVERY external suite: they
+// run the editor's packaged build and import the harness at runtime, so a change
+// to either can break all of them. (Turbo captures this for in-workspace suites;
+// external ones need it spelled out.)
+const EXTERNAL_SHARED_PATHS = [
+  'apps/editor/',
+  'packages/e2e-harness/',
+  'packages/e2e-contract/',
+  'packages/extension-host/',
+  'packages/extension-api/',
+  'scripts/e2e/',
+]
+
 function parseArgs(argv) {
   const args = { all: false, base: undefined }
   for (let i = 0; i < argv.length; i++) {
@@ -98,6 +122,19 @@ export function computeMatrix(affected, { all = false } = {}) {
 }
 
 /**
+ * Which external suites are affected by a set of changed file paths. Pure so the
+ * routing is unit-testable. A suite runs iff a shared input changed (fans out to
+ * all) OR a path under its own dir changed. `all` forces the full set.
+ */
+export function computeExternalMatrix(changedPaths, { all = false } = {}) {
+  if (all) return EXTERNAL_SUITES
+  const paths = [...changedPaths]
+  const sharedTouched = paths.some((p) => EXTERNAL_SHARED_PATHS.some((s) => p.startsWith(s)))
+  if (sharedTouched) return EXTERNAL_SUITES
+  return EXTERNAL_SUITES.filter((s) => paths.some((p) => p.startsWith(`${s.dir}/`)))
+}
+
+/**
  * Ask turbo which packages have an affected `e2e` task. Returns the set of
  * package names with a real (non-<NONEXISTENT>) e2e command. Filter is
  * `...[<base>]` — the `...` includes dependents so a dep change fans out.
@@ -114,15 +151,31 @@ function affectedE2ePackages(base) {
   return e2ePackagesFromPlan(JSON.parse(out))
 }
 
+/** Files changed since `base` (git name-only diff), as forward-slash paths. */
+function changedPathsSince(base) {
+  const out = execFileSync('git', ['diff', '--name-only', `${base}...HEAD`], {
+    encoding: 'utf8',
+    maxBuffer: 32 * 1024 * 1024,
+  })
+  return out
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+}
+
 function main() {
   const { all, base } = parseArgs(process.argv.slice(2))
-  const affected = all || !base ? new Set() : affectedE2ePackages(base)
-  const { core, extensions } = computeMatrix(affected, { all: all || !base })
+  const forceAll = all || !base
+  const affected = forceAll ? new Set() : affectedE2ePackages(base)
+  const { core, extensions } = computeMatrix(affected, { all: forceAll })
+  const external = computeExternalMatrix(forceAll ? [] : changedPathsSince(base), { all: forceAll })
 
   const outputs = {
     core: String(core),
     extensions: JSON.stringify(extensions),
     'has-extensions': String(extensions.length > 0),
+    external: JSON.stringify(external),
+    'has-external': String(external.length > 0),
   }
 
   const gh = process.env.GITHUB_OUTPUT

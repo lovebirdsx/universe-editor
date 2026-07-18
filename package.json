@@ -10,6 +10,8 @@
     "e2e": "turbo run e2e --filter=@universe-editor/editor --filter=./extensions/* --concurrency=1",
     "e2ea": "turbo run e2ea --filter=@universe-editor/editor --filter=./extensions/* --concurrency=1",
     "e2e:ext": "turbo run e2e --filter",
+    "e2e:external": "node scripts/e2e/run-external-e2e-all.mjs",
+    "e2ea:external": "node scripts/e2e/run-external-e2e-all.mjs --regression",
     "e2e:force": "turbo run build && turbo run e2e --filter=@universe-editor/editor --filter=./extensions/* --force --only --concurrency=1",
     "e2ea:force": "turbo run build && turbo run e2ea --filter=@universe-editor/editor --filter=./extensions/* --force --only --concurrency=1",
     "lint": "turbo run lint",

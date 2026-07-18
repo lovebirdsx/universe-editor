@@ -37,6 +37,12 @@ export interface AppFixtureConfig {
   readonly mainEntry: string
   /** Extension allowlist (P2). Omit to activate all scanned extensions. */
   readonly extensions?: readonly string[]
+  /**
+   * Extra env merged onto the launch (e.g. UNIVERSE_USER_EXTENSIONS_DIR to load
+   * an out-of-workspace marketplace extension straight off disk, VSCode's
+   * `--extensionDevelopmentPath` model). Applied to every launch this fixture makes.
+   */
+  readonly env?: Readonly<Record<string, string>>
 }
 
 export interface E2EFixtures {
@@ -70,6 +76,7 @@ export function createColdAppTest(config: AppFixtureConfig): E2ETest {
         mainEntry: config.mainEntry,
         userDataDir,
         ...(config.extensions !== undefined ? { extensions: config.extensions } : {}),
+        ...(config.env !== undefined ? { env: config.env } : {}),
       })
       await use(app)
       await closeApp(app)
@@ -195,6 +202,7 @@ export function createSharedAppTest(config: AppFixtureConfig): SharedE2ETest {
           mainEntry: config.mainEntry,
           userDataDir,
           ...(config.extensions !== undefined ? { extensions: config.extensions } : {}),
+          ...(config.env !== undefined ? { env: config.env } : {}),
         })
         const page = await app.firstWindow()
         await page.waitForLoadState('domcontentloaded')

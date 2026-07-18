@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { scanExtensions } from '../extensionScanner.js'
@@ -38,6 +38,28 @@ describe('scanExtensions', () => {
     expect(rest).toHaveLength(0)
     expect(ext?.id).toBe('good')
     expect(ext?.mainPath).toBe(join(dir, 'good', 'dist', 'extension.js'))
+  })
+
+  it('follows a symlinked/junctioned extension dir (dev/e2e --extensionDevelopmentPath model)', async () => {
+    // A real extension outside the scan dir, linked in as a directory symlink.
+    const outside = await mkdtemp(join(tmpdir(), 'ue-scan-ext-'))
+    await mkdir(join(outside, 'linked-ext'), { recursive: true })
+    await writeFile(
+      join(outside, 'linked-ext', 'package.json'),
+      JSON.stringify({ ...goodManifest, name: 'linked' }),
+      'utf8',
+    )
+    try {
+      // 'junction' works on Windows without admin; the type arg is ignored elsewhere.
+      await symlink(join(outside, 'linked-ext'), join(dir, 'linked-ext'), 'junction')
+    } catch {
+      // Some sandboxes forbid symlink creation; skip rather than fail spuriously.
+      await rm(outside, { recursive: true, force: true })
+      return
+    }
+    const ids = (await scanExtensions(dir, false)).map((e) => e.id)
+    expect(ids).toContain('linked')
+    await rm(outside, { recursive: true, force: true })
   })
 
   it('marks results with the builtin flag passed to the scan', async () => {

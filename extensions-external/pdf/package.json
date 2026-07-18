@@ -29,6 +29,9 @@
     "build": "node esbuild.config.mjs",
     "dev": "node esbuild.config.mjs --watch",
     "typecheck": "tsc --noEmit",
+    "e2e": "node ../../scripts/e2e/run-external-e2e.mjs",
+    "e2ea": "node ../../scripts/e2e/run-external-e2e.mjs --regression",
+    "e2eg": "node ../../scripts/e2e/run-external-e2e.mjs --no-tag-filter --grep",
     "package": "node scripts/pack.mjs"
   }
 }

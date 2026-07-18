@@ -19,8 +19,10 @@ import { dirname, join } from 'node:path'
 import {
   CORE_PACKAGE,
   EXTENSION_SUITES,
+  EXTERNAL_SUITES,
   e2ePackagesFromPlan,
   computeMatrix,
+  computeExternalMatrix,
 } from '../affected-e2e-matrix.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -96,6 +98,46 @@ test('an empty affected set runs nothing (PR that touches no e2e package)', () =
   const { core, extensions } = computeMatrix(new Set())
   assert.equal(core, false)
   assert.deepEqual(extensions, [])
+})
+
+// --- external (out-of-workspace marketplace) suites ------------------------
+// These aren't in turbo, so affectedness is a git path diff, routed by
+// computeExternalMatrix.
+
+test('--all forces every external suite', () => {
+  assert.deepEqual(computeExternalMatrix([], { all: true }), EXTERNAL_SUITES)
+})
+
+test('no changed paths runs no external suite', () => {
+  assert.deepEqual(computeExternalMatrix([]), [])
+})
+
+test('changing one external extension runs only that suite', () => {
+  const external = computeExternalMatrix(['extensions-external/pdf/src/extension.ts'])
+  assert.deepEqual(
+    external.map((s) => s.name),
+    ['pdf'],
+  )
+})
+
+test('a shared-input change fans out to every external suite', () => {
+  for (const shared of [
+    'packages/e2e-harness/src/launch.ts',
+    'packages/e2e-contract/src/index.ts',
+    'apps/editor/src/main/services/extensionHost/extensionHostMainService.ts',
+    'packages/extension-host/src/extensionScanner.ts',
+    'scripts/e2e/run-external-e2e.mjs',
+  ]) {
+    assert.deepEqual(
+      computeExternalMatrix([shared]),
+      EXTERNAL_SUITES,
+      `${shared} should fan out to all external suites`,
+    )
+  }
+})
+
+test('an unrelated change runs no external suite', () => {
+  assert.deepEqual(computeExternalMatrix(['docs/user/foo.md', 'README.md']), [])
 })
 
 // Structural guard: the core-fixture extensions MUST be declared deps of

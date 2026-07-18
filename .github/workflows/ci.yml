@@ -101,6 +101,8 @@ jobs:
       core: ${{ steps.detect.outputs.core }}
       extensions: ${{ steps.detect.outputs.extensions }}
       has-extensions: ${{ steps.detect.outputs.has-extensions }}
+      external: ${{ steps.detect.outputs.external }}
+      has-external: ${{ steps.detect.outputs.has-external }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -355,6 +357,79 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-traces-${{ matrix.suite.prep }}-${{ strategy.job-index }}
+          path: ${{ matrix.suite.dir }}/test-results
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # Per-external-extension E2E: the marketplace extensions under extensions-external/*
+  # are OUTSIDE the pnpm/turbo workspace, so they can't ride the turbo-affected matrix
+  # above. detect-affected computes them by git path diff instead (a change to a
+  # suite's dir, or to shared infra — editor / harness / contract / extension-host —
+  # fans out to all). Each suite loads its extension off disk (VSCode's
+  # --extensionDevelopmentPath model) via its own `e2e` script; no vsix install.
+  e2e-external:
+    name: E2E ${{ matrix.suite.dir }}
+    needs: detect-affected
+    if: needs.detect-affected.outputs.has-external == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJson(needs.detect-affected.outputs.external) }}
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
+      - name: Install Playwright system dependencies (Linux)
+        run: pnpm --filter @universe-editor/editor exec playwright install-deps
+
+      - name: Build editor
+        run: pnpm --filter @universe-editor/editor build
+
+      # The Excel extension bundles SheetJS from its own node_modules; install it
+      # before the suite's build step runs. pdf / eslint self-resolve their build
+      # deps from a workspace package (borrow), so they need no prep.
+      - name: Install Excel extension deps
+        if: matrix.suite.prep == 'xlsx'
+        run: npm --prefix extensions-external/${{ matrix.suite.name }} ci
+
+      - name: Run external extension E2E (xvfb)
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" npm --prefix extensions-external/${{ matrix.suite.name }} run e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-external-${{ matrix.suite.name }}
+          path: ${{ matrix.suite.dir }}/playwright-report
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload Playwright test results (traces / videos / screenshots)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces-external-${{ matrix.suite.name }}
           path: ${{ matrix.suite.dir }}/test-results
           retention-days: 14
           if-no-files-found: ignore

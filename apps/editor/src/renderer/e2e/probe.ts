@@ -454,6 +454,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     createOutputChannel: (name: string) => {
       services.outputService.createChannel(name)
     },
+    getOutputChannelContent: (name: string) =>
+      services.outputService.getChannel(name)?.content.get() ?? '',
     terminalCreate: async (): Promise<string> => {
       const info = await services.terminalService.create({})
       if (!terminalBuffers.has(info.id)) terminalBuffers.set(info.id, '')
@@ -593,6 +595,18 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const monacoNs = await MonacoLoader.ensureInitialized()
       const markers = monacoNs.editor.getModelMarkers({
         owner: 'markdown',
+        resource: monacoNs.Uri.parse(uri),
+      })
+      return markers.map((m) => ({
+        message: m.message,
+        severity: m.severity,
+        startLineNumber: m.startLineNumber,
+      }))
+    },
+    getMarkers: async (uri: string, owner?: string) => {
+      const monacoNs = await MonacoLoader.ensureInitialized()
+      const markers = monacoNs.editor.getModelMarkers({
+        ...(owner !== undefined ? { owner } : {}),
         resource: monacoNs.Uri.parse(uri),
       })
       return markers.map((m) => ({

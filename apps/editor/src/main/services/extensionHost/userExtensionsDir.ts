@@ -8,7 +8,17 @@
 import * as path from 'node:path'
 import { app } from 'electron'
 
-/** `<userData>/extensions` — where user-installed extensions live. */
+/**
+ * `<userData>/extensions` — where user-installed extensions live.
+ *
+ * Honours a `UNIVERSE_USER_EXTENSIONS_DIR` env override so e2e can point the
+ * host at a fixture directory holding an unpackaged extension (VSCode's
+ * `--extensionDevelopmentPath` model: load a `dist/` + `package.json` straight
+ * off disk, no vsix install, no host relaunch). Production never sets it, so it
+ * falls back to the real user-data path.
+ */
 export function resolveUserExtensionsDir(): string {
+  const override = process.env.UNIVERSE_USER_EXTENSIONS_DIR
+  if (override) return override
   return path.join(app.getPath('userData'), 'extensions')
 }

@@ -114,6 +114,9 @@ turbo 已有 `e2e` task（`dependsOn: ["^build","build"]`）。CI 改为：
 | **P2** 最小扩展集 ✅ | bootstrap 加 allowlist（`UNIVERSE_ENABLED_EXTENSIONS`）；harness launch 传 `extensions`；core fixture 空 allow、扩展 fixture allow 自己 | 内核冷启动变快、tsserver 不再 spawn | P0 |
 | **P3** 铺开其余扩展 ✅ | markdown(6)/typescript(2)/ai(3) 迁 `extensions/<ext>/e2e`；core baseline 收成 `extensions: []`，少数需 provider 的核心 spec 走 scoped fixture（coreGitApp / coreTypescriptApp / coreTypescriptSharedApp / coreMarkdownApp） | 各扩展 e2e + 核心例外 spec 全绿 | P1/P2 |
 | **P4** CI affected ✅ | `scripts/e2e/affected-e2e-matrix.mjs` 产出 core/extensions 矩阵；CI 三段式 detect→core→ext-matrix，PR 只跑受影响、main 全量；扩展 prep 按 suite 条件化 | 本地 `--base` 三态验证正确（HEAD~1→core+markdown/ts/ai；perforce-only→只 perforce；无 diff→空） | P3 |
+| **P5** 外部 marketplace 扩展 ✅ | `extensions-external/*`（eslint/pdf/excel-diff）各自独立 e2e：对齐 VSCode `--extensionDevelopmentPath`，经 `UNIVERSE_USER_EXTENSIONS_DIR` 从磁盘目录加载 unpacked 扩展（不打 vsix、不重启 host）；`run-external-e2e.mjs` 相对 import harness + 借唯一 playwright CLI；`run-external-e2e-all.mjs` + `pnpm e2e:external`；affected 用 git path diff（`computeExternalMatrix`）驱动 `e2e-external` matrix job | 三 suite `pnpm e2e:external` 全绿；新增 `getMarkers`/`getOutputChannelContent` 探针 | P4 |
+
+> **P5 关键发现**：① 外部扩展不在 workspace，bare-import 解析不到 harness/playwright，靠相对 import + 借单份 CLI 破解；② **Windows junction 报 symlink 非 directory**，`scanExtensions`/`hasUserExtensions` 须 `stat` 跟随 symlink dir（内核真修复，也惠及真·dev-link 扩展）；③ ESLint 9 flat config 用 `export default` 须 `eslint.config.mjs`；④ turbo 看不见外部扩展，affected 改走 git path diff（改共享基建扇出全部）。
 
 > **P3 关键发现**：markdown/mermaid **预览渲染是核心**（`apps/editor/src/renderer/workbench/markdown/`），markdown *扩展* 只提供 LSP；ACP/agents 亦是核心。故 core baseline 能收到 `extensions: []`，仅 5 个核心 spec 需某扩展来**搭建**其（核心 UI 的）场景：dirtyDiffPeek/vscodeKeybindings→git，peekPreview→typescript，outline→typescript(shared)，peekNavigation→markdown LSP。
 

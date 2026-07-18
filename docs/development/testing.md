@@ -88,6 +88,19 @@ pnpm e2e:ext @universe-editor/perforce
 
 > **改了扩展代码，别裸 `pnpm --filter <ext> e2e`**：子包级 `e2e` script 只执行 `playwright test`，**不 build**——既不重建该扩展 `dist/`，也不重建被测的 editor `out/` 宿主，跑的是旧产物。走 `pnpm e2e:ext <包>`（或直接 `turbo run e2e --filter …`）：turbo 的 `e2e` task 依赖 `@universe-editor/editor#build`（e2e 跑 editor 产物 + 从 `extensions/<ext>/dist` 读内置扩展，扩展却不依赖 editor），会自动把宿主 + 被测扩展 + 上游全 build 到最新再跑。core 套件的 `core*App` fixture 激活 git/typescript/markdown，这三个是 editor 的 devDependencies，故其 `^build` 已自动带上。
 
+### 外部（marketplace）扩展 E2E
+
+`extensions-external/*`（eslint / pdf / excel-diff）是独立发布的 marketplace 扩展，**不在 pnpm/turbo workspace 内**，走单独一套 e2e。对齐 VSCode 的 `--extensionDevelopmentPath`：**从磁盘目录直接加载 unpacked 扩展跑测**（内核认 `UNIVERSE_USER_EXTENSIONS_DIR` env，fixture 把扩展根 junction 进隔离临时目录），**不打 vsix、不重启 host**。
+
+```bash
+pnpm e2e:external    # 建 editor 一次 + 串行跑 eslint/pdf/excel-diff 全部外部 suite
+pnpm e2ea:external   # 同上，含 @regression
+npm --prefix extensions-external/<ext> run e2e   # 单个外部 suite（先本地建过 editor）
+```
+
+> 外部扩展 bare-import 解析不到 workspace 里的 harness / `@playwright/test`，故其 `playwright.config.ts` 用**相对 import** 拉 harness dist，且 runner（`scripts/e2e/run-external-e2e.mjs`）从 harness 包解析出**唯一一份** playwright CLI 来 spawn。tag 分流仍复用 `UNIVERSE_E2E_*` env（单一事实源 `grepOptions`）。套路详见 skill `e2e-architecture` 的「外部扩展 e2e 套路」。
+
+
 ## CI affected 选择性执行
 
 E2E 在 CI 里**按改动范围选择性执行**，避免插件越多 E2E 越重：
@@ -96,6 +109,7 @@ E2E 在 CI 里**按改动范围选择性执行**，避免插件越多 E2E 越重
 - **main / nightly**：无条件全量（`--all`），防 affected 漏网。
 - CI 三段式：`detect-affected` 算矩阵 → `e2e`(核心) 按 `core` 门控 → `e2e-extensions` matrix 按 `fromJson(extensions)` 展开，每 suite 按 `prep` 条件化装 vendored tsserver / excel-diff vsix。
 - 核心 scoped fixture 运行时激活 git/typescript/markdown，这三个已声明为 `apps/editor` 的 devDependencies，故 turbo affected 在它们变更时会经依赖图 fanout 到 core（`@universe-editor/editor`），自动触发核心重跑——无需手工维护额外的包清单。
+- **外部扩展**（`extensions-external/*`）turbo 看不见，改用 **git path diff**：`affected-e2e-matrix.mjs` 的 `computeExternalMatrix` 算受影响 suite（改某 suite 目录只跑它，改共享基建 editor / e2e-harness / e2e-contract / extension-host / extension-api / scripts/e2e 扇出全部），输出喂 `e2e-external` matrix job。
 
 本地预演矩阵：
 

@@ -8,7 +8,7 @@
  *   <dir>/<extension>/package.json
  *   <dir>/<extension>/<manifest.main>      e.g. dist/extension.js
  */
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import * as path from 'node:path'
 import {
@@ -18,6 +18,15 @@ import {
 } from '@universe-editor/extensions-common'
 import { parseManifest } from './manifest.js'
 import { loadNlsBundle, localizeManifest } from './nls.js'
+
+/** Whether `p` resolves (through symlinks) to a directory. */
+async function isDir(p: string): Promise<boolean> {
+  try {
+    return (await stat(p)).isDirectory()
+  } catch {
+    return false
+  }
+}
 
 export interface IScannedExtension {
   readonly id: string
@@ -140,7 +149,15 @@ export async function scanExtensions(
 
   const result: IScannedExtension[] = []
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue
+    // Follow symlinked dir entries: a dev/e2e-linked extension (VSCode's
+    // `--extensionDevelopmentPath` model) is a directory symlink/junction, which
+    // reports as a symlink — not a directory — from readdir. `stat` resolves the
+    // link target so those still scan.
+    if (
+      !entry.isDirectory() &&
+      !(entry.isSymbolicLink() && (await isDir(path.join(dir, entry.name))))
+    )
+      continue
     // A `.vsctmp` folder is a deletion in progress — skip it so a rescan racing
     // an uninstall doesn't re-adopt the extension being removed.
     if (entry.name.endsWith(DELETED_FOLDER_POSTFIX)) continue

@@ -96,6 +96,9 @@
     "lint": "node ../../extensions/typescript/node_modules/eslint/bin/eslint.js src",
     "lint:fix": "node ../../extensions/typescript/node_modules/eslint/bin/eslint.js --fix src",
     "test": "node ../../extensions/typescript/node_modules/vitest/vitest.mjs run",
+    "e2e": "node ../../scripts/e2e/run-external-e2e.mjs",
+    "e2ea": "node ../../scripts/e2e/run-external-e2e.mjs --regression",
+    "e2eg": "node ../../scripts/e2e/run-external-e2e.mjs --no-tag-filter --grep",
     "package": "node scripts/pack.mjs",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   }
