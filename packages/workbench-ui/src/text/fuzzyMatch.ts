@@ -99,6 +99,26 @@ export function scoreFuzzyMatch(text: string, query: string): number {
   return result ? result.score : -1
 }
 
+/**
+ * Tie-breaker for fuzzy-ranked file results: sort by score descending, then —
+ * when scores are equal — prefer the shorter path so files closer to the root
+ * rank above deeply nested ones, falling back to a stable locale order. Mirrors
+ * VSCode's `fallbackCompare`, whose first discriminator after score is the
+ * label+description length. Without this, an all-basenames-match query like
+ * `package.json` degrades to a pure alphabetical order and buries the top-level
+ * `apps/editor/package.json` beneath a deep `.runtime-resources/.../package.json`.
+ */
+export function compareByScoreThenPath(
+  scoreA: number,
+  scoreB: number,
+  pathA: string,
+  pathB: string,
+): number {
+  if (scoreA !== scoreB) return scoreB - scoreA
+  if (pathA.length !== pathB.length) return pathA.length - pathB.length
+  return pathA.localeCompare(pathB)
+}
+
 function normalizeWordQuery(query: string): string {
   return query.trim().replace(/\s+/g, ' ').toLowerCase()
 }

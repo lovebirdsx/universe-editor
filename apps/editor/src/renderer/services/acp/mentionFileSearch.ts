@@ -12,7 +12,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI, type IFileSearchService } from '@universe-editor/platform'
-import { fuzzyMatchField } from '@universe-editor/workbench-ui'
+import { compareByScoreThenPath, fuzzyMatchField } from '@universe-editor/workbench-ui'
 
 export interface MentionFileEntry {
   /** Absolute file:// URI (the value stored on the AcpContentBlock.resource_link). */
@@ -122,6 +122,6 @@ export function filterMentionFiles(
     else if (fuzzyMatchField(entry.relPath, query)) score = 50
     if (score >= 0) scored.push({ entry, score })
   }
-  scored.sort((a, b) => b.score - a.score || a.entry.relPath.localeCompare(b.entry.relPath))
+  scored.sort((a, b) => compareByScoreThenPath(a.score, b.score, a.entry.relPath, b.entry.relPath))
   return scored.slice(0, limit).map((s) => s.entry)
 }

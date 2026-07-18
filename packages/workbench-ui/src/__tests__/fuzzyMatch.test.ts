@@ -4,7 +4,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { fuzzyMatchField, fuzzyScore, scoreFuzzyMatch, wordMatchField } from '../text/fuzzyMatch.js'
+import {
+  compareByScoreThenPath,
+  fuzzyMatchField,
+  fuzzyScore,
+  scoreFuzzyMatch,
+  wordMatchField,
+} from '../text/fuzzyMatch.js'
 
 describe('fuzzyMatchField', () => {
   it('matches the full text for an empty query', () => {
@@ -112,6 +118,31 @@ describe('fuzzyScore', () => {
     const wordStarts = fuzzyScore('get_data', 'gd')?.score ?? -1
     const scattered = fuzzyScore('gxdyozza', 'gd')?.score ?? -1
     expect(wordStarts).toBeGreaterThan(scattered)
+  })
+})
+
+describe('compareByScoreThenPath', () => {
+  it('orders higher scores first', () => {
+    expect(compareByScoreThenPath(500, 200, 'a.ts', 'b.ts')).toBeLessThan(0)
+    expect(compareByScoreThenPath(200, 500, 'a.ts', 'b.ts')).toBeGreaterThan(0)
+  })
+
+  // The bug report: every `package.json` scores identically, so the tie-break
+  // must surface the shallow top-level file above deeply nested ones instead of
+  // degrading to a pure alphabetical order (which buried apps/editor/package.json).
+  it('prefers the shorter path when scores are equal', () => {
+    const paths = [
+      'apps/editor/.runtime-resources/extensions/ai/package.json',
+      'apps/editor/.runtime-resources/extensions/git/package.json',
+      'apps/editor/package.json',
+      'extensions-external/pdf/package.json',
+    ]
+    const ranked = [...paths].sort((a, b) => compareByScoreThenPath(2988, 2988, a, b))
+    expect(ranked[0]).toBe('apps/editor/package.json')
+  })
+
+  it('falls back to a stable locale order for equal score and length', () => {
+    expect(compareByScoreThenPath(100, 100, 'a/x.ts', 'b/x.ts')).toBeLessThan(0)
   })
 })
 

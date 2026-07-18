@@ -23,7 +23,7 @@ import {
   type IQuickPick,
   type IQuickPickItem,
 } from '@universe-editor/platform'
-import { scoreFuzzyMatch } from '@universe-editor/workbench-ui'
+import { compareByScoreThenPath, scoreFuzzyMatch } from '@universe-editor/workbench-ui'
 import { IRecentFilesService } from '../../recentFiles/recentFilesService.js'
 import { IExcludeService } from '../../exclude/ExcludeService.js'
 import { loadWorkspaceFiles, type MentionFileEntry } from '../../acp/mentionFileSearch.js'
@@ -144,7 +144,9 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         const score = scoreFileMatch(entry.name, entry.relPath, pattern)
         if (score >= 0) scored.push({ entry, score })
       }
-      scored.sort((a, b) => b.score - a.score || a.entry.relPath.localeCompare(b.entry.relPath))
+      scored.sort((a, b) =>
+        compareByScoreThenPath(a.score, b.score, a.entry.relPath, b.entry.relPath),
+      )
       return scored.slice(0, GO_TO_FILE_MAX_RESULTS).map((s) => entryToPick(s.entry))
     }
 
