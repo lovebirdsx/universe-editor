@@ -80,15 +80,19 @@ export function GitGraphBranchPickerDialog({
             </div>
           ) : (
             visible.map((branch) => (
-              <button
+              <label
                 key={branch}
-                type="button"
-                className={`${styles['pickerRow']} ${branch === selected ? styles['rowSelected'] : ''}`}
-                onClick={() => setSelected(branch)}
+                className={styles['pickerRow']}
                 onDoubleClick={() => confirm(branch)}
               >
+                <input
+                  type="radio"
+                  name="gitGraph-branch-pick"
+                  checked={branch === selected}
+                  onChange={() => setSelected(branch)}
+                />
                 <span className={styles['pickerRowName']}>{branch}</span>
-              </button>
+              </label>
             ))
           )}
         </div>

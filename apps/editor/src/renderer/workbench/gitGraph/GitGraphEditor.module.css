@@ -671,17 +671,6 @@
   background: var(--color-list-hover-bg);
 }
 
-/* Branch-picker rows are <button>s reusing .pickerRow; strip button chrome so
-   they read as list rows and left-align like the label-based worktree rows. */
-button.pickerRow {
-  width: 100%;
-  border: none;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-}
-
 .pickerRowName {
   flex: 0 0 auto;
 }
