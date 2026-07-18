@@ -2,6 +2,10 @@
 
 面向本仓库开发者与部署方的文档索引。用户向的使用说明在 [`docs/user/`](../user/zh-CN/index.md)。
 
+## 测试
+
+- [测试](testing.md) — 单元 / 集成 / E2E 三层测试，E2E 内核·插件分离与最小扩展集启动、tag 体系、CI affected 选择性执行。
+
 ## 构建与发布
 
 - [发布外部扩展](publishing-extensions.md) — `pnpm ext:release` 把 `extensions-external/*` 自动打包成 `.vsix` 并发布进市场（自动发现、增量跳过）。
