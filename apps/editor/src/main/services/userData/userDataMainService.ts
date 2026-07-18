@@ -145,6 +145,10 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     this._installSlot(UserDataFile.Settings, join(userFilesDir, 'settings.json'))
     this._installSlot(UserDataFile.Keybindings, join(userFilesDir, 'keybindings.json'))
     this._installSlot(UserDataFile.AiSettings, join(userFilesDir, 'aiSettings.json'))
+    // update-config.json is pinned to userData (deployment config for the update
+    // feed) and does not follow a relocated config directory — hence `userData`,
+    // not `userFilesDir`, and it stays out of relocate().
+    this._installSlot(UserDataFile.UpdateConfig, join(userData, 'update-config.json'))
     this._installSlot(UserDataFile.VSCodeUserSettings, defaultVSCodeUserSettingsPath(), {
       readOnly: true,
     })

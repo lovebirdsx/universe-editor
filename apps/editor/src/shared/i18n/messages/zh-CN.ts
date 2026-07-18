@@ -280,6 +280,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.openRecent.title': '打开最近打开的项…',
   'action.openSettings.title': '打开设置',
   'action.openSettingsJson.title': '打开设置（JSON）',
+  'action.openUpdateConfigJson.title': '打开更新配置（JSON）',
   'action.openUserDataFolder.title': '开发人员：打开用户数据文件夹',
   'action.openVSCodeKeybindingsJson.notFound':
     '未找到 VS Code 键盘快捷方式文件（可能未安装 VS Code）。',

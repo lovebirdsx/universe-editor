@@ -50,6 +50,11 @@ const KEYBINDINGS_JSON_TEMPLATE = `// User keybinding overrides — edit and sav
 []
 `
 
+const UPDATE_CONFIG_JSON_TEMPLATE = `// Deployment config for auto-update (packaged builds only).
+// "updateUrl" overrides the update server; the channel stays the packaged default.
+{}
+`
+
 async function openUserDataFile(
   services: {
     files: IUserDataFilesService
@@ -243,6 +248,26 @@ export class OpenKeybindingsJsonAction extends Action2 {
       userDataFileServices(accessor),
       UserDataFile.Keybindings,
       KEYBINDINGS_JSON_TEMPLATE,
+    )
+  }
+}
+
+export class OpenUpdateConfigJsonAction extends Action2 {
+  static readonly ID = 'workbench.action.openUpdateConfigJson'
+  constructor() {
+    super({
+      id: OpenUpdateConfigJsonAction.ID,
+      title: localize2('action.openUpdateConfigJson.title', 'Open Update Config (JSON)'),
+      category: localize2('command.category.preferences', 'Preferences'),
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    void openUserDataFile(
+      userDataFileServices(accessor),
+      UserDataFile.UpdateConfig,
+      UPDATE_CONFIG_JSON_TEMPLATE,
     )
   }
 }

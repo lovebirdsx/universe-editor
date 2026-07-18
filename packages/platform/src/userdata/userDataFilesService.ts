@@ -17,6 +17,12 @@ export const enum UserDataFile {
   Keybindings = 'keybindings',
   /** AI configuration (provider groups, per-model config, active models): `<userData>/aiSettings.json`. */
   AiSettings = 'aiSettings',
+  /**
+   * Deployment config for auto-update (e.g. `updateUrl` feed override).
+   * Always `<userData>/update-config.json` — pinned to userData, not the
+   * relocatable config directory.
+   */
+  UpdateConfig = 'updateConfig',
   /** Project-level settings: `<workspace>/.universe-editor/settings.json`. */
   ProjectSettings = 'projectSettings',
   /** Read-only VSCode-compatible workspace settings: `<workspace>/.vscode/settings.json`. */

@@ -134,6 +134,7 @@ export const EN_US_MESSAGES: MessageMap = {
   'action.openRecent.title': 'Open Recent…',
   'action.openSettingsJson.title': 'Open Settings (JSON)',
   'action.openSettings.title': 'Open Settings',
+  'action.openUpdateConfigJson.title': 'Open Update Config (JSON)',
   'action.openWithDefaultApplication.title': 'Open with Default Application',
   'action.previousEditor.title': 'Open Previous Editor',
   'action.quickTextSearch.title': 'Quick Search',

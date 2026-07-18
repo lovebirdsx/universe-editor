@@ -93,6 +93,7 @@ import {
   OpenKeybindingsJsonAction,
   OpenSettingsAction,
   OpenSettingsJsonAction,
+  OpenUpdateConfigJsonAction,
   OpenVSCodeKeybindingsJsonAction,
   OpenVSCodeSettingsJsonAction,
   OpenWorkspaceSettingsAction,
@@ -418,6 +419,7 @@ registerAction2(OpenSettingsAction)
 registerAction2(OpenKeybindingsEditorAction)
 registerAction2(OpenSettingsJsonAction)
 registerAction2(OpenKeybindingsJsonAction)
+registerAction2(OpenUpdateConfigJsonAction)
 registerAction2(OpenVSCodeKeybindingsJsonAction)
 registerAction2(OpenVSCodeSettingsJsonAction)
 registerAction2(ConfigureDisplayLanguageAction)
