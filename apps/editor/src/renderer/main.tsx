@@ -75,7 +75,7 @@ import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { DISPOSABLE_LEAK_REPORT_KEY, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
 import { registerProxyChannelServices } from './ipc/registerProxyServices.js'
-import { installRendererErrorHandlers } from './errors.js'
+import { installRendererErrorHandlers, isBenignError } from './errors.js'
 import { RendererLoggerService } from './services/log/rendererLoggerService.js'
 import { CommandService } from './services/command/CommandService.js'
 import { EditorService } from './services/editor/EditorService.js'
@@ -331,6 +331,7 @@ async function bootstrapWorkbench(): Promise<void> {
 
   setMonacoLoaderLogger(loggerService.createLogger({ id: 'monaco', name: 'Monaco' }))
   setUnexpectedErrorHandler((e) => {
+    if (isBenignError(e)) return
     const msg = e instanceof Error ? (e.stack ?? e.message) : String(e)
     rootLogger.error(msg)
   })
@@ -516,6 +517,7 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(INotificationService, notificationService)
   // Route unhandled errors to the sticky Error toast so they're visible to users.
   setUnexpectedErrorHandler((e) => {
+    if (isBenignError(e)) return
     const msg = e instanceof Error ? (e.stack ?? e.message) : String(e)
     rootLogger.error(msg)
     notificationService.notify({
