@@ -403,8 +403,12 @@ jobs:
       - name: Install Playwright system dependencies (Linux)
         run: pnpm --filter @universe-editor/editor exec playwright install-deps
 
+      # `pnpm --filter <pkg> build` calls the package's own build script directly,
+      # bypassing turbo — so it wouldn't build the editor's workspace deps first
+      # (e.g. @universe-editor/extension-gallery), and vite fails to resolve their
+      # dist entry. Go through turbo with the `...` suffix to build deps + editor.
       - name: Build editor
-        run: pnpm --filter @universe-editor/editor build
+        run: pnpm build --filter=@universe-editor/editor...
 
       # The Excel extension bundles SheetJS from its own node_modules; install it
       # before the suite's build step runs. pdf / eslint self-resolve their build
