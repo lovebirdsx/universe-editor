@@ -74,6 +74,11 @@ import {
 } from './environment/environmentMainService.js'
 import { getDefaultStorage, IMainStorageService } from './storage.js'
 import { loadSession } from './windowsSession.js'
+import {
+  clearShutdownTrace,
+  readShutdownTrace,
+  recordShutdownMark,
+} from './services/update/updateShutdownTrace.js'
 import type { ApplicationServices } from './window/scopedServicesFactory.js'
 // Side-effect: registers all application-singleton main services with registerSingleton.
 import './services/main-services.js'
@@ -89,6 +94,36 @@ if (_processCreatedAt !== null) {
 }
 
 mark(PerfMarks.mainDidStart)
+
+// Post-update first launch: fold the previous process's cross-process shutdown
+// trace (click → will-quit.end, in epoch ms) into a single timeline and expose
+// the otherwise-invisible NSIS-install + relaunch gap (will-quit.end → this
+// process's OS creation time). Logged once, then the trace file is deleted.
+function logShutdownTraceIfPresent(log: (msg: string) => void): void {
+  const entries = readShutdownTrace()
+  if (!entries) return
+  const parts: string[] = []
+  for (let i = 1; i < entries.length; i++) {
+    const prev = entries[i - 1]
+    const cur = entries[i]
+    if (!prev || !cur) continue
+    parts.push(`${prev.label}→${cur.label}:${Math.round(cur.at - prev.at)}ms`)
+  }
+  const last = entries[entries.length - 1]
+  if (last && _processCreatedAt !== null) {
+    // The dominant post-update cost: from the old process's final synchronous
+    // mark to the new process being created by the OS (NSIS overwrite + AV
+    // first-scan of the freshly written exe/asar + relaunch).
+    parts.push(`${last.label}→processCreated:${Math.round(_processCreatedAt - last.at)}ms`)
+  }
+  const first = entries[0]
+  const total =
+    first && _processCreatedAt !== null ? Math.round(_processCreatedAt - first.at) : undefined
+  log(
+    `update shutdown trace${total !== undefined ? ` clickToRelaunch=${total}ms` : ''} [${parts.join(', ')}]`,
+  )
+  clearShutdownTrace()
+}
 
 // Must run before app.whenReady(): Electron only accepts privileged-scheme
 // registration during this window, and ONLY ONCE — every custom scheme must be
@@ -426,6 +461,7 @@ void app.whenReady().then(async () => {
   if (!hasSingleInstanceLock) return
   mark(PerfMarks.mainAppReady)
   mainLogger.info(`app ready locale=${app.getLocale()} e2e=${e2eEnabled}`)
+  logShutdownTraceIfPresent((msg) => mainLogger.info(msg))
   installImageProtocol()
   installAppProtocolHandler(join(__dirname, '../renderer'))
   initializeMainNls(await loadMainSettingsText(), app.getLocale())
@@ -480,6 +516,7 @@ app.on('before-quit', (e) => {
   // handlers don't shrink the persisted list to empty.
   if (windowMainService?.isQuitConfirmed() || !windowMainService) {
     mainLogger.info('before-quit proceed')
+    recordShutdownMark('beforeQuit.proceed')
     void windowMainService?.captureSessionForQuit()
     return
   }
@@ -509,6 +546,7 @@ app.on('before-quit', (e) => {
 
 app.on('will-quit', () => {
   mainLogger.info('will-quit')
+  recordShutdownMark('willQuit.start')
   windowsJumpList?.dispose()
   windowMainService?.dispose()
   // Disposes every materialized application service (acpHost kills child
@@ -520,4 +558,8 @@ app.on('will-quit', () => {
   getDefaultStorage().flushSync()
   consoleInterceptor.dispose()
   logMainService.dispose()
+  // Last synchronous mark before the process exits and the NSIS installer takes
+  // over: the gap from here to the next launch's process-creation time is the
+  // pure install + relaunch cost (see updateShutdownTrace.ts).
+  recordShutdownMark('willQuit.end')
 })

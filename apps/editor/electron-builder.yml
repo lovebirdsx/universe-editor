@@ -18,6 +18,16 @@ publish:
   provider: generic
   url: http://iloop.aki.kuro.com:9999/universe-editor/
   channel: latest
+# 只保留应用实际用到的 Chromium locale。Electron 默认带 55 个 .pak(~41MB,多为
+# 印度语系),而本应用 NLS 只有 en-US + zh-CN。删掉多余的省 ~39MB 净荷——静默更新
+# 的安装耗时随净荷字节近似线性(NSIS 解压把净荷双写落盘 + Defender 扫描),故瘦身
+# 直接缩短安装停机。electron-builder 会按此列表裁掉不匹配的 locales/*.pak(全平台生效)。
+electronLanguages:
+  - en-US
+  - zh-CN
+# 打包后删框架释放到根目录、运行期用不到的大文件(LICENSES.chromium.html ~8.7MB)。
+# `files: '!'` 管不到框架文件,只能走 afterPack 钩子。见 build/afterPack.cjs。
+afterPack: build/afterPack.cjs
 files:
   - out/**/*
   - package.json

@@ -35,7 +35,7 @@
 
 ## 性能 / 疑难根因
 
-- [自动更新弹目录选择+Defender 提示](autoupdate-silent-install-coupling.md) — 根因 quitAndInstall 须传 isSilent=true（给 NSIS 加 /S）；updateMainService + electron-updater doInstall + installer.nsh 的 IfSilent 三方耦合
+> NSIS 安装器 / 自动更新（非静默进度弹窗守卫链、WM_SETTINGCHANGE 广播阻塞、Defender 排除、安装耗时测量方法学）全部收敛在 skill `nsis-installer-autoupdate`（按需加载，不占常驻索引）。
 
 - [computeLineDiff 须保持 Myers O(ND)](linediff-myers-perf.md) — dirty-diff 复用它对大文件切换做全文 diff，勿退回 O(m·n)
 - [codex session 新建慢 5 秒](codex-session-skills-scan-slow.md) — 真因:thread/start 内 codex 原生 spawn 的 git rev-parse --git-dir 在 Windows 挂起 ~4.5s(cwd 是 git 仓库才触发);kill 该 git 即恢复;adapter 修不了

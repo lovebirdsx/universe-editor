@@ -31,6 +31,7 @@ import { IEnvironmentMainService } from '../../environment/environmentMainServic
 import { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
 import type { ConfigLocationMainService } from '../configLocation/configLocationMainService.js'
 import type { IUpdateService, UpdateState } from '../../../shared/ipc/updateService.js'
+import { beginShutdownTrace, recordShutdownMark } from './updateShutdownTrace.js'
 
 const { autoUpdater } = electronUpdater
 
@@ -134,6 +135,10 @@ export class UpdateMainService implements IUpdateService {
 
   async quitAndInstall(requestingWindowId?: number): Promise<void> {
     if (this._state.type !== 'downloaded') return
+    // Arm the cross-process shutdown trace: stamps the click moment, then each
+    // milestone through will-quit, so the next launch can expose the NSIS-install
+    // gap that no in-process mark can reach (see updateShutdownTrace.ts).
+    beginShutdownTrace()
     // Run the same shutdown-veto chain a normal quit would (running-session
     // guard). electron-updater's quitAndInstall spawns the installer BEFORE it
     // calls app.quit(), so before-quit's veto can no longer stop it — the check
@@ -145,11 +150,15 @@ export class UpdateMainService implements IUpdateService {
         return
       }
     }
-    // isSilent=true → the NSIS installer runs with /S: reinstalls into the same
-    // INSTDIR without the directory-picker, and installer.nsh's IfSilent guards skip
-    // the Defender-exclusion UAC prompt (the first-install exclusion is path-based
-    // and still applies). isForceRunAfter=true relaunches the app after install.
-    autoUpdater.quitAndInstall(true, true)
+    recordShutdownMark('confirmed')
+    // isSilent=false → the assisted installer runs visibly so users see a progress
+    // page during the multi-second install instead of a silent blackout. All
+    // interactive pages are still skipped: --updated skips license/directory
+    // (skipPageIfUpdated), installer.nsh's customInstallMode skips the install-mode
+    // page, customFinishPage auto-relaunches and closes, and the Defender prompt is
+    // guarded by isUpdated. isForceRunAfter=true covers the silent fallback paths.
+    autoUpdater.quitAndInstall(false, true)
+    recordShutdownMark('afterQuitAndInstall')
   }
 
   dispose(): void {

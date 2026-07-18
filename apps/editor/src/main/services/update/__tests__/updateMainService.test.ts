@@ -72,7 +72,7 @@ describe('UpdateMainService.quitAndInstall', () => {
     await createWindowScopedUpdateService(service, 42).quitAndInstall()
 
     expect(confirm).toHaveBeenCalledWith(42)
-    expect(quitAndInstallSpy).toHaveBeenCalledWith(true, true)
+    expect(quitAndInstallSpy).toHaveBeenCalledWith(false, true)
   })
 
   it('does NOT install when the quit confirmer vetoes (user cancelled)', async () => {
@@ -91,6 +91,6 @@ describe('UpdateMainService.quitAndInstall', () => {
 
     await service.quitAndInstall()
 
-    expect(quitAndInstallSpy).toHaveBeenCalledWith(true, true)
+    expect(quitAndInstallSpy).toHaveBeenCalledWith(false, true)
   })
 })

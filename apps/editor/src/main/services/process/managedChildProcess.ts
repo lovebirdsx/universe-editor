@@ -15,6 +15,7 @@
 
 import { execFile, execFileSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { Disposable, Emitter, type ILogger } from '@universe-editor/platform'
+import { recordShutdownMark } from '../update/updateShutdownTrace.js'
 
 export const DEFAULT_KILL_TIMEOUT_MS = 2000
 
@@ -246,8 +247,14 @@ export class ManagedChildProcess extends Disposable {
       // is synchronous. Use a blocking tree-kill so the main process cannot exit
       // before the grandchild agent is reaped (otherwise it survives holding the
       // inherited pipe open). A plain SIGKILL suffices off the tree-kill path.
+      //
+      // Bracket the synchronous kill with shutdown marks: on the update-restart
+      // path this is a prime suspect for a slow quit (blocking taskkill /T /F of a
+      // slow-reaping tsserver tree). Marks are no-ops outside an armed install.
+      recordShutdownMark(`kill.start:${this._label}`)
       if (this._shouldTreeKill()) this._killTreeNow(true)
       else this._send('SIGKILL')
+      recordShutdownMark(`kill.end:${this._label}`)
     }
     super.dispose()
   }
