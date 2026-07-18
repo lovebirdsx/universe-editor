@@ -18,6 +18,23 @@ RUNBOOK.md    已知 flaky 登记:根因 + workaround + 判定标准
 
 > **基座已抽包**:通用 driver(两套 fixture 工厂 + 6 个 PO + `expectNoLeaks`/`evaluateWhenRestored` + 启动契约)住在 `packages/e2e-harness`;探针类型契约(`E2EProbe` + `window.__E2E__` 全局 + 运行时 key 常量)住在零依赖包 `packages/e2e-contract`(app 与 harness 共享,单一事实源)。本目录的 `fixtures/electronApp.ts`、`fixtures/sharedApp.ts`、`pages/WorkbenchPO.ts` 都只是把 harness 工厂**绑定到本 app 的 `out/` 产物路径**的薄 shim,spec import 路径不变。改通用 driver → 改 `packages/e2e-harness`;改探针接口 → 改 `packages/e2e-contract`(app 的 `src/shared/e2e/contract.ts` 是它的 re-export barrel)。
 
+> **本目录只放核心 spec**:扩展专属的 e2e 已物理迁到各扩展目录 `extensions/<ext>/e2e/`(perforce/markdown/typescript/ai),各自带 `playwright.config.ts` + `e2e` script + scoped fixture(传自己的 `extensions: [...]` allowlist)。删扩展即删其测试。新增扩展 e2e 照抄 `extensions/markdown/e2e/` 结构。
+
+## 最小扩展集启动（P2 基线）
+
+harness 的启动 fixture 接收 `extensions: string[]`(扩展 id allowlist),拼进 launch env `UNIVERSE_ENABLED_EXTENSIONS`,bootstrap 只激活列表内扩展 + 核心 built-in。**本目录 core fixture 基线是 `extensions: []`**——核心 spec 默认不启任何扩展,冷启动不 spawn tsserver / markdown-LSP,消除大半 LSP-warmup flake。
+
+少数核心 spec 需要某扩展来**搭建**其(核心 UI 的)测试场景,走 scoped fixture(基线 `[]` 之上只加所需扩展):
+
+| scoped fixture | allowlist | 用于 |
+|---|---|---|
+| `fixtures/coreGitApp.ts` | git | dirtyDiffPeek(quick-diff 色条)、vscodeKeybindings(键位 reload 哨兵)。含 `launchCoreGitApp()` 供自启动 spec 用 |
+| `fixtures/coreTypescriptApp.ts` | typescript | peekPreview(跨文件引用预览,冷启) |
+| `fixtures/coreTypescriptSharedApp.ts` | typescript | outline(跨文件切换的符号,shared 复用) |
+| `fixtures/coreMarkdownApp.ts` | markdown | peekNavigation(跨文件 md 链接定义) |
+
+> 注意区分:markdown/mermaid **预览渲染是核心**(`src/renderer/workbench/markdown/`),ACP/agents 亦是核心——它们的 spec 用基线 `[]` 即可,**不需要** markdown/ai 扩展。只有 LSP(符号/定义/诊断)、SCM(quick-diff/git 命令)、tsserver 语义这些**扩展提供的能力**才需 scoped fixture。
+
 ## 选哪套 fixture（关键决策）
 
 | fixture | 启动模型 | 用于 | import |

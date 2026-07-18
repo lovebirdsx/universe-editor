@@ -9,13 +9,13 @@
  *  covered by the extension's unit tests, not here.
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect, _electron as electron } from '@playwright/test'
+import { test, expect } from '@playwright/test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { APP_ROOT, MAIN_ENTRY, closeApp } from '../fixtures/electronApp.js'
-import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
+import { closeApp, expectNoLeaks, evaluateWhenRestored } from '@universe-editor/e2e-harness'
+import { launchAiApp } from '../fixtures/aiApp.js'
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', args, { cwd, stdio: 'ignore' })
@@ -51,16 +51,7 @@ test.describe('@p1 ai commit message', () => {
     git(repoDir, 'commit', '-m', 'init')
     writeFileSync(join(repoDir, 'README.md'), '# hello world\n', 'utf8')
 
-    const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
-    const app = await electron.launch({
-      args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
-      cwd: APP_ROOT,
-      env: {
-        ...inheritedEnv,
-        UNIVERSE_E2E: '1',
-        NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production',
-      },
-    })
+    const app = await launchAiApp({ userDataDir })
     try {
       const page = await app.firstWindow()
       await page.waitForLoadState('domcontentloaded')

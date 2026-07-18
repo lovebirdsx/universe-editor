@@ -13,12 +13,12 @@
  *  initial (top-of-file) viewport. HEAD content comes from the git extension.
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect, _electron as electron } from '@playwright/test'
+import { test, expect } from '@playwright/test'
 import { mkdtempSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { APP_ROOT, MAIN_ENTRY, closeApp } from '../fixtures/electronApp.js'
+import { closeApp, launchCoreGitApp } from '../fixtures/coreGitApp.js'
 import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
 function git(cwd: string, ...args: string[]): void {
@@ -76,16 +76,7 @@ test.describe('@p1 dirty diff peek', () => {
     git(repoDir, 'add', '-A')
     git(repoDir, 'commit', '-m', 'init')
 
-    const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
-    const app = await electron.launch({
-      args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
-      cwd: APP_ROOT,
-      env: {
-        ...inheritedEnv,
-        UNIVERSE_E2E: '1',
-        NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production',
-      },
-    })
+    const app = await launchCoreGitApp({ userDataDir })
 
     try {
       const page = await app.firstWindow()

@@ -104,11 +104,13 @@ turbo 已有 `e2e` task（`dependsOn: ["^build","build"]`）。CI 改为：
 
 | 阶段 | 内容 | 验证 | 依赖 |
 |---|---|---|---|
-| **P0** 抽基座 | 建 `packages/e2e-harness`，迁 fixtures/PO/probes + 启动契约脚手架；`apps/editor/e2e` 改 import。不搬 spec、不改行为 | `pnpm e2e` 全绿 | — |
-| **P1** 试点 perforce | perforce 6 spec + 2 fake + workspace 迁 `extensions/perforce/e2e`；根 config 加 `perforce` project | `--project=perforce` 与旧结果一致 | P0 |
-| **P2** 最小扩展集 | bootstrap 加 allowlist；harness launch 传 `extensions`；core project 空 allow、perforce project allow 自己 | 内核 project 冷启动变快、tsserver 不再 spawn（看 host stderr） | P0 |
-| **P3** 铺开其余扩展 | markdown/typescript/ai 依样迁移 | 各 `--project` 绿 | P1/P2 |
-| **P4** CI affected | 切 `turbo run e2e --filter=...[origin/main]` + 主干全量；扩展准备步骤条件化 | PR 只跑受影响 project | P3 |
+| **P0** 抽基座 ✅ | 建 `packages/e2e-harness` + `packages/e2e-contract`（探针契约单一事实源）；迁 fixtures/PO/probes + 启动契约；`apps/editor/e2e` 改薄 shim | `pnpm e2e` 全绿 | — |
+| **P1** 试点 perforce ✅ | perforce 6 spec + 2 fake + workspace 迁 `extensions/perforce/e2e`，扩展自带 `playwright.config.ts` + `e2e` script | perforce e2e 与旧结果一致 | P0 |
+| **P2** 最小扩展集 ✅ | bootstrap 加 allowlist（`UNIVERSE_ENABLED_EXTENSIONS`）；harness launch 传 `extensions`；core fixture 空 allow、扩展 fixture allow 自己 | 内核冷启动变快、tsserver 不再 spawn | P0 |
+| **P3** 铺开其余扩展 ✅ | markdown(6)/typescript(2)/ai(3) 迁 `extensions/<ext>/e2e`；core baseline 收成 `extensions: []`，少数需 provider 的核心 spec 走 scoped fixture（coreGitApp / coreTypescriptApp / coreTypescriptSharedApp / coreMarkdownApp） | 各扩展 e2e + 核心例外 spec 全绿 | P1/P2 |
+| **P4** CI affected | 切 `turbo run e2e --filter=...[origin/main]` + 主干全量；扩展准备步骤条件化 | PR 只跑受影响扩展的 e2e | P3 |
+
+> **P3 关键发现**：markdown/mermaid **预览渲染是核心**（`apps/editor/src/renderer/workbench/markdown/`），markdown *扩展* 只提供 LSP；ACP/agents 亦是核心。故 core baseline 能收到 `extensions: []`，仅 5 个核心 spec 需某扩展来**搭建**其（核心 UI 的）场景：dirtyDiffPeek/vscodeKeybindings→git，peekPreview→typescript，outline→typescript(shared)，peekNavigation→markdown LSP。
 
 ## 风险与注意
 

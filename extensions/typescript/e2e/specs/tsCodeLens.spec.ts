@@ -21,7 +21,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/typescriptApp.js'
 
 // `greet` is referenced once (line 6), so its references CodeLens reads
 // "1 reference". The exported symbol on line 1 anchors the lens we probe.

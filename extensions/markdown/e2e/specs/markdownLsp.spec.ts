@@ -20,7 +20,7 @@
 import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/markdownApp.js'
 
 function writeWorkspace(): { dir: string; aPath: string; cPath: string; fmPath: string } {
   const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-mdls-'))

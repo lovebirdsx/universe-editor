@@ -19,8 +19,8 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test, expect } from '../fixtures/electronApp.js'
-import type { WorkbenchPO } from '../pages/WorkbenchPO.js'
+import { test, expect } from '../fixtures/markdownApp.js'
+import type { WorkbenchPO } from '@universe-editor/e2e-harness'
 
 function writeWorkspace(): { dir: string; mdPath: string } {
   const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-mdedit-'))

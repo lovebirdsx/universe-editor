@@ -19,7 +19,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/coreTypescriptApp.js'
 
 // `helper` is referenced from main.ts (cross-file) before its local use, so the
 // peek's first/nearest reference resolves to a not-yet-open file — the case that

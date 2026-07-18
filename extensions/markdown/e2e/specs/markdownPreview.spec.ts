@@ -12,7 +12,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/markdownApp.js'
 
 // A 1×1 red PNG — the smallest valid image to prove the universe-resource
 // protocol actually streamed real bytes (naturalWidth > 0), not just that an

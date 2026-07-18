@@ -17,7 +17,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/typescriptApp.js'
 
 // An interface whose fields start with an uppercase letter — the exact shape that
 // TextMate mis-colors as a type. `Target` is both a property (line 4) and, via

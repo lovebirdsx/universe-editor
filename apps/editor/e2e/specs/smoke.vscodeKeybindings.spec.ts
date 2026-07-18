@@ -21,11 +21,11 @@
  *  避免污染宿主机真实 VSCode 配置。
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect, _electron as electron } from '@playwright/test'
+import { test, expect } from '@playwright/test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { APP_ROOT, MAIN_ENTRY, closeApp } from '../fixtures/electronApp.js'
+import { closeApp, launchCoreGitApp } from '../fixtures/coreGitApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
 const KEY = 'ctrl+shift+d'
@@ -59,16 +59,9 @@ test.describe('@p1 vscode keybindings', () => {
     const filePath = join(userDataDir, 'sample.txt')
     writeFileSync(filePath, 'line one\nline two\n', 'utf8')
 
-    const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
-    const app = await electron.launch({
-      args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
-      cwd: APP_ROOT,
-      env: {
-        ...inheritedEnv,
-        UNIVERSE_E2E: '1',
-        UNIVERSE_VSCODE_KEYBINDINGS_PATH: vscodeKeybindingsPath,
-        NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production',
-      },
+    const app = await launchCoreGitApp({
+      userDataDir,
+      env: { UNIVERSE_VSCODE_KEYBINDINGS_PATH: vscodeKeybindingsPath },
     })
     try {
       const page = await app.firstWindow()
@@ -150,16 +143,9 @@ test.describe('@p1 vscode keybindings', () => {
     const filePath = join(userDataDir, 'sample.txt')
     writeFileSync(filePath, 'line one\nline two\n', 'utf8')
 
-    const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
-    const app = await electron.launch({
-      args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
-      cwd: APP_ROOT,
-      env: {
-        ...inheritedEnv,
-        UNIVERSE_E2E: '1',
-        UNIVERSE_VSCODE_KEYBINDINGS_PATH: vscodeKeybindingsPath,
-        NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production',
-      },
+    const app = await launchCoreGitApp({
+      userDataDir,
+      env: { UNIVERSE_VSCODE_KEYBINDINGS_PATH: vscodeKeybindingsPath },
     })
     try {
       const page = await app.firstWindow()
