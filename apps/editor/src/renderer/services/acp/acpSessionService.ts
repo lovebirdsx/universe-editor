@@ -73,6 +73,7 @@ import { AcpPromptDraftCache } from './acpPromptDraftCache.js'
 import { AcpQuestionDraftCache } from './acpQuestionDraftCache.js'
 import {
   AcpSession,
+  COMPACTION_METHOD,
   type AcpPendingPermission,
   type AcpPendingQuestion,
   type AskUserQuestionRequest,
@@ -1044,6 +1045,10 @@ export class AcpSessionService
   }
 
   onExtNotification(method: string, params: Record<string, unknown>): void {
+    if (method === COMPACTION_METHOD) {
+      this._handleCompactionNotification(params)
+      return
+    }
     if (method !== SDK_MESSAGE_EXT_METHOD) return
     const sessionId = params['sessionId']
     const message = params['message']
@@ -1060,6 +1065,18 @@ export class AcpSessionService
       })
       .map((s) => ({ name: s.name, status: s.status }))
     session.applyMcpServerSnapshot(servers)
+  }
+
+  private _handleCompactionNotification(params: Record<string, unknown>): void {
+    const sessionId = params['sessionId']
+    const id = params['id']
+    const phase = params['phase']
+    if (typeof sessionId !== 'string' || typeof id !== 'string') return
+    if (phase !== 'start' && phase !== 'success' && phase !== 'failed') return
+    const session = this._findSession(sessionId)
+    if (!session) return
+    const reason = typeof params['reason'] === 'string' ? params['reason'] : undefined
+    session.applyCompaction(id, phase === 'start' ? 'running' : phase, reason)
   }
 
   async onRequestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {

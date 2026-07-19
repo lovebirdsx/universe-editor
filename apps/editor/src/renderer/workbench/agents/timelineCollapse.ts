@@ -24,6 +24,9 @@ export function defaultCollapsed(item: TimelineItem | AcpChildItem, mode: Collap
       return item.message.role === 'thought'
     case 'toolCall':
       return item.call.kind !== 'edit' && item.call.kind !== 'switch_mode'
+    case 'compaction':
+      // A single-line status card — nothing to fold.
+      return false
   }
 }
 

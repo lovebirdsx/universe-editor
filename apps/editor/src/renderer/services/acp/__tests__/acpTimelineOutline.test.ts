@@ -8,9 +8,12 @@ import {
   decodeAcpOutlineKind,
   timelineToOutline,
 } from '../acpTimelineOutline.js'
-import type { AcpMessage, AcpToolCall, TimelineItem } from '../acpSessionModel.js'
+import type { AcpChildItem, AcpMessage, AcpToolCall } from '../acpSessionModel.js'
 
-function msg(id: string, role: AcpMessage['role'], text: string): TimelineItem {
+type MessageNode = Extract<AcpChildItem, { kind: 'message' }>
+type ToolNode = Extract<AcpChildItem, { kind: 'toolCall' }>
+
+function msg(id: string, role: AcpMessage['role'], text: string): MessageNode {
   return {
     kind: 'message',
     id,
@@ -22,8 +25,8 @@ function tool(
   id: string,
   title: string,
   kind: string,
-  children?: readonly TimelineItem[],
-): TimelineItem {
+  children?: readonly AcpChildItem[],
+): ToolNode {
   const call: AcpToolCall = {
     id,
     title,

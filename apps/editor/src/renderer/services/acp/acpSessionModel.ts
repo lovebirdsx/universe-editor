@@ -136,6 +136,32 @@ export interface AcpMcpServerStatus {
 export type TimelineItem =
   | { readonly kind: 'message'; readonly id: string; readonly message: AcpMessage }
   | { readonly kind: 'toolCall'; readonly id: string; readonly call: AcpToolCall }
+  | { readonly kind: 'compaction'; readonly id: string; readonly compaction: AcpCompaction }
+
+/** Lifecycle phase of a context-compaction event surfaced on the timeline. */
+export type AcpCompactionPhase = 'running' | 'success' | 'failed'
+
+/**
+ * A context-compaction marker on the timeline. The agent summarizes older
+ * conversation to free context space; this slot renders a dedicated status card
+ * (spinner while `running`, a settled marker on `success`/`failed`) instead of
+ * leaking plain-text "Compacting…" chunks into the assistant message stream.
+ * The `running` slot is replaced in place with its outcome via the stable `id`.
+ */
+export interface AcpCompaction {
+  readonly phase: AcpCompactionPhase
+  /** Failure detail on `phase: 'failed'`, if the agent reported one. */
+  readonly reason?: string
+  /**
+   * Wall-clock start (ms, `Date.now()`) stamped when `running` begins. The SDK
+   * compaction is an atomic summarization call with no real progress signal, so
+   * the card renders a live stopwatch from this — mirroring the CLI's elapsed
+   * timer — to reassure the user something is happening.
+   */
+  readonly startedAt?: number
+  /** Elapsed ms at settle, computed on `success`/`failed` from `startedAt`. */
+  readonly durationMs?: number
+}
 
 export interface AcpPendingPermission {
   readonly toolCallId: string
@@ -182,6 +208,17 @@ export const SET_SESSION_TITLE_METHOD = 'universe-editor/set_session_title'
  * {@link RewindFilesResult}.
  */
 export const REWIND_SESSION_METHOD = 'universe-editor/rewind_session'
+
+/**
+ * Custom ACP extension notification the agent fork sends to surface
+ * context-compaction lifecycle (`start` / `success` / `failed`) so the editor
+ * renders a dedicated timeline card instead of parsing plain-text chunks out of
+ * the assistant message stream. Shared verbatim with the agent fork's
+ * `acp-agent.ts` (`COMPACTION_METHOD`) — keep both in sync. Params:
+ * `{ sessionId, id, phase, reason? }` where `id` is stable across a single
+ * compaction so the in-progress card is replaced in place with its outcome.
+ */
+export const COMPACTION_METHOD = '_universe/compaction'
 
 /** Result the agent returns from {@link REWIND_SESSION_METHOD} (mirrors the SDK's RewindFilesResult). */
 export interface RewindFilesResult {

@@ -112,6 +112,7 @@ import { AcpPromptReplaceInbox } from '../../services/acp/acpPromptReplaceInbox.
 import { IAcpPromptHistoryService } from '../../services/acp/acpPromptHistoryService.js'
 import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
 import { UsageIndicator } from './UsageIndicator.js'
+import { CompactionThresholdChip } from './CompactionThresholdChip.js'
 import { SessionCostIndicator } from './SessionCostIndicator.js'
 import styles from './agents.module.css'
 
@@ -1260,6 +1261,7 @@ export function PromptInput({
             {formatRunningTime(totalRunningMs)}
           </span>
         ) : null}
+        <CompactionThresholdChip session={session} />
         <SessionCostIndicator session={session} />
         <UsageIndicator />
         <CollapseToggleButton mode={collapseMode} onCycle={() => session.cycleCollapseMode()} />

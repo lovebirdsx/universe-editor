@@ -65,6 +65,7 @@ import { StickyUserMessageBar } from './StickyUserMessageBar.js'
 import { PromptInput } from './PromptInput.js'
 import { ForeignSessionFooter } from './ForeignSessionPreview.js'
 import { ToolCallCard } from './ToolCallCard.js'
+import { CompactionCard } from './CompactionCard.js'
 import { roleIcon } from './timelineIcons.js'
 import { UserMessageItem } from './UserMessageItem.js'
 import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
@@ -1450,6 +1451,10 @@ const TimelineSlot = memo(function TimelineSlot({
           {...(isFocused ? { extraClassName: styles['timelineSlotFocused'] ?? '' } : {})}
         />
       )
+    case 'compaction':
+      return (
+        <CompactionCard compaction={item.compaction} dataTimelineKey={key} dataStickyKey={key} />
+      )
   }
 })
 
@@ -1540,6 +1545,9 @@ function estimateRow(item: TimelineItem | undefined, collapsed: boolean): number
       const lines = estimateLineCount(item.call.text)
       return Math.min(78 + lines * 20, 3000)
     }
+    case 'compaction':
+      // A single-line status card — fixed, compact height.
+      return 44
   }
 }
 
@@ -1564,12 +1572,18 @@ export function tailContentSignature(timeline: readonly TimelineItem[]): number 
           0,
         ) ?? 0)
       )
+    case 'compaction':
+      // Replaced in place on the running → success/failed transition, so the tail
+      // grows without a length change; fold phase (+ reason) into the signature so
+      // the bottom-pin effect re-fires when the card settles.
+      return last.compaction.phase.length + (last.compaction.reason?.length ?? 0)
   }
 }
 
 function hasRenderableTimelineContent(timeline: readonly TimelineItem[]): boolean {
   return timeline.some((item) => {
     if (item.kind === 'toolCall') return true
+    if (item.kind === 'compaction') return true
     const message = item.message
     return message.streaming || message.role === 'user' || hasVisibleMessageContent(message.blocks)
   })

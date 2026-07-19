@@ -10,12 +10,19 @@
 
 import type { AcpChildItem, TimelineItem } from '../../services/acp/acpSession.js'
 
-/** Stable per-card identity, shared with ChatBody's timeline keys (`m:`/`t:`). */
+/** Stable per-card identity, shared with ChatBody's timeline keys (`m:`/`t:`/`c:`). */
 export function itemSlotKey(item: {
-  readonly kind: 'message' | 'toolCall'
+  readonly kind: 'message' | 'toolCall' | 'compaction'
   readonly id: string
 }): string {
-  return item.kind === 'message' ? `m:${item.id}` : `t:${item.id}`
+  switch (item.kind) {
+    case 'message':
+      return `m:${item.id}`
+    case 'toolCall':
+      return `t:${item.id}`
+    case 'compaction':
+      return `c:${item.id}`
+  }
 }
 
 /** Compose a nested card key by joining a parent's sticky key with a child slot key. */

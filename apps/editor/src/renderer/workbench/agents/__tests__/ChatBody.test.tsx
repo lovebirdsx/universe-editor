@@ -1008,3 +1008,58 @@ describe('ChatBody — outline controller active-slot sync', () => {
     expect(controller.getActiveKey()).toBe('m:c')
   })
 })
+
+describe('ChatBody — compaction slot', () => {
+  it('renders a running compaction card with status text', () => {
+    const items: readonly TimelineItem[] = [
+      { kind: 'message', id: 'a', message: makeMessage('a', 'hi') },
+      { kind: 'compaction', id: 'compaction:c1', compaction: { phase: 'running' } },
+    ]
+    const { container } = renderChat(makeSession('s-cmp', items))
+    const card = container.querySelector<HTMLElement>('[data-testid="acp-compaction-card"]')
+    expect(card).not.toBeNull()
+    expect(card?.dataset['phase']).toBe('running')
+    expect(card?.textContent).toContain('Compacting context')
+  })
+
+  it('renders the failure reason on a failed compaction', () => {
+    const items: readonly TimelineItem[] = [
+      { kind: 'compaction', id: 'compaction:c2', compaction: { phase: 'failed', reason: 'boom' } },
+    ]
+    const { container } = renderChat(makeSession('s-cmp2', items))
+    const card = container.querySelector<HTMLElement>('[data-testid="acp-compaction-card"]')
+    expect(card?.dataset['phase']).toBe('failed')
+    expect(card?.textContent).toContain('boom')
+  })
+
+  it('shows a live stopwatch with estimated percent while running and freezes the total on settle', () => {
+    const running: readonly TimelineItem[] = [
+      {
+        kind: 'compaction',
+        id: 'compaction:c3',
+        compaction: { phase: 'running', startedAt: Date.now() - 5_000 },
+      },
+    ]
+    const { container } = renderChat(makeSession('s-cmp3', running))
+    const timer = container.querySelector<HTMLElement>('[data-testid="acp-compaction-timer"]')
+    // ~5s in with tau=6s → ~57%; assert the shape rather than the exact value.
+    expect(timer?.textContent).toMatch(/^\d{1,2}% · 5s$/)
+    const bar = container.querySelector<HTMLElement>('[role="progressbar"]')
+    expect(bar).not.toBeNull()
+    const now = Number(bar?.getAttribute('aria-valuenow'))
+    expect(now).toBeGreaterThan(0)
+    expect(now).toBeLessThan(100)
+
+    const settled: readonly TimelineItem[] = [
+      {
+        kind: 'compaction',
+        id: 'compaction:c4',
+        compaction: { phase: 'success', durationMs: 72_000 },
+      },
+    ]
+    const { container: c2 } = renderChat(makeSession('s-cmp4', settled))
+    const settledTimer = c2.querySelector<HTMLElement>('[data-testid="acp-compaction-timer"]')
+    expect(settledTimer?.textContent).toBe('1:12')
+    expect(c2.querySelector('[role="progressbar"]')).toBeNull()
+  })
+})

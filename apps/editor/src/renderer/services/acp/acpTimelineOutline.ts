@@ -99,14 +99,17 @@ function itemLabel(item: TimelineItem | AcpChildItem): string {
     const summary = summarize(item.message.text || blocksToText(item.message.blocks))
     return summary.length > 0 ? summary : item.message.role
   }
+  if (item.kind === 'compaction') {
+    return `Compaction (${item.compaction.phase})`
+  }
   const title = deriveToolCallDisplay(item.call).title
   return title.length > 0 ? title : item.call.kind
 }
 
 function itemKind(item: TimelineItem | AcpChildItem): number {
-  return item.kind === 'message'
-    ? encodeMessageKind(item.message.role)
-    : encodeToolKind(item.call.kind)
+  if (item.kind === 'message') return encodeMessageKind(item.message.role)
+  if (item.kind === 'compaction') return encodeToolKind('other')
+  return encodeToolKind(item.call.kind)
 }
 
 function range(startLine: number, endLine: number): monaco.IRange {

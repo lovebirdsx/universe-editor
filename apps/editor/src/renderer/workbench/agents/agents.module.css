@@ -1033,6 +1033,90 @@
   flex-shrink: 0;
 }
 
+.compactionChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+  white-space: nowrap;
+  flex-shrink: 0;
+  background: var(--color-badge-bg, rgba(128, 128, 128, 0.15));
+  color: var(--color-message-role-fg, #888);
+}
+
+.compactionChip[data-state='warn'] {
+  color: var(--color-notifications-warning-icon, #cca700);
+}
+
+.compactionChip[data-state='danger'] {
+  color: var(--color-badge-error, #a1260d);
+}
+
+.compactionChipText {
+  white-space: nowrap;
+}
+
+.compactionCard {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  margin: 2px 0;
+  border-radius: 4px;
+  color: var(--color-message-role-fg, #888);
+  font-size: calc(var(--agent-font-size, 12px) * 0.929);
+  background: var(--color-message-bg, #2a2a2a);
+}
+
+.compactionCard[data-phase='failed'] {
+  color: var(--color-badge-error, #a1260d);
+}
+
+.compactionIcon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.compactionText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compactionTimer {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: 8px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.compactionProgress {
+  flex-shrink: 0;
+  width: 64px;
+  height: 4px;
+  margin-left: auto;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--color-progress-track, rgba(255, 255, 255, 0.12));
+}
+
+.compactionProgress + .compactionTimer {
+  margin-left: 0;
+}
+
+.compactionProgressFill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--color-progress-bar, #0e70c0);
+  transition: width 0.9s linear;
+}
+
 .sessionCostWrap {
   position: relative;
   display: inline-flex;

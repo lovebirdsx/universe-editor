@@ -1497,6 +1497,70 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     svc.dispose()
   })
 
+  it('routes _universe/compaction notifications to a timeline slot that settles in place', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, new ConfigurationService())
+    const session = await svc.createSession()
+    await session.whenConnected()
+
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-1',
+      phase: 'start',
+    })
+    const running = session.timeline.get().filter((it) => it.kind === 'compaction')
+    expect(running).toHaveLength(1)
+    expect(running[0]).toMatchObject({ kind: 'compaction', compaction: { phase: 'running' } })
+
+    // The terminal event shares the id, so it replaces the running slot in place
+    // rather than appending a second card.
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-1',
+      phase: 'success',
+    })
+    const settled = session.timeline.get().filter((it) => it.kind === 'compaction')
+    expect(settled).toHaveLength(1)
+    expect(settled[0]).toMatchObject({ kind: 'compaction', compaction: { phase: 'success' } })
+    svc.dispose()
+  })
+
+  it('carries the failure reason on a failed compaction', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, new ConfigurationService())
+    const session = await svc.createSession()
+    await session.whenConnected()
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-2',
+      phase: 'failed',
+      reason: 'boom',
+    })
+    const slot = session.timeline.get().find((it) => it.kind === 'compaction')
+    expect(slot).toMatchObject({
+      kind: 'compaction',
+      compaction: { phase: 'failed', reason: 'boom' },
+    })
+    svc.dispose()
+  })
+
+  it('ignores malformed _universe/compaction payloads', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, new ConfigurationService())
+    const session = await svc.createSession()
+    await session.whenConnected()
+    // Missing id.
+    svc.onExtNotification('_universe/compaction', { sessionId: session.id, phase: 'start' })
+    // Unknown phase.
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-x',
+      phase: 'bogus',
+    })
+    expect(session.timeline.get().filter((it) => it.kind === 'compaction')).toEqual([])
+    svc.dispose()
+  })
+
   it('attributes MCP tool calls to their server from _meta.claudeCode.toolName', async () => {
     const client = new FakeAcpClientService()
     const svc = makeService(client, new ConfigurationService())

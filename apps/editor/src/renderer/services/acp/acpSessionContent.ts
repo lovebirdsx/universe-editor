@@ -70,7 +70,16 @@ export function toolCallToText(call: AcpToolCall): string {
 
 /** Plain-text representation of any timeline slot, suitable for clipboard copy. */
 export function timelineItemToText(item: TimelineItem | AcpChildItem): string {
-  return item.kind === 'message' ? item.message.text : toolCallToText(item.call)
+  switch (item.kind) {
+    case 'message':
+      return item.message.text
+    case 'toolCall':
+      return toolCallToText(item.call)
+    case 'compaction':
+      return item.compaction.reason
+        ? `Compaction ${item.compaction.phase}: ${item.compaction.reason}`
+        : `Compaction ${item.compaction.phase}`
+  }
 }
 
 /**

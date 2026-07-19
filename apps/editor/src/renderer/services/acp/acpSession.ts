@@ -66,6 +66,8 @@ import {
   type AcpPendingPermission,
   type AcpPendingQuestion,
   type AcpPlanEntry,
+  type AcpCompaction,
+  type AcpCompactionPhase,
   type AcpSessionStatus,
   type AcpToolCall,
   type AcpToolCallStatus,
@@ -81,11 +83,14 @@ import {
 export {
   AcpAbortError,
   ASK_USER_QUESTION_METHOD,
+  COMPACTION_METHOD,
   REWIND_SESSION_METHOD,
   SET_SESSION_TITLE_METHOD,
 } from './acpSessionModel.js'
 export type {
   AcpChildItem,
+  AcpCompaction,
+  AcpCompactionPhase,
   AcpMcpServerStatus,
   AcpMessage,
   AcpMessageRole,
@@ -1415,6 +1420,44 @@ export class AcpSession extends Disposable implements IAcpSession {
     // mid-stream `[cancelled]`/`[error]` sentinel landing between two chunks).
     const tx = this._batchedTx()
     this.messages.set(this._messages, tx)
+    this.timeline.set(this._timeline, tx)
+    this._commitBatchedTx()
+  }
+
+  /**
+   * Surface a context-compaction lifecycle event on the timeline. The `running`
+   * slot is appended when compaction starts; the terminal `success`/`failed`
+   * event replaces it in place via the stable `id`, so a single compaction shows
+   * as one card that settles rather than two stacked entries. Read-only preview
+   * sessions ignore these (they never run turns).
+   */
+  applyCompaction(id: string, phase: AcpCompactionPhase, reason?: string): void {
+    if (this.readOnly) return
+    const slotId = `compaction:${id}`
+    const idx = this._timeline.findIndex((it) => it.kind === 'compaction' && it.id === slotId)
+    const prev = idx === -1 ? undefined : this._timeline[idx]
+    const prevStartedAt = prev?.kind === 'compaction' ? prev.compaction.startedAt : undefined
+    // The SDK compaction has no true progress; the card shows a live stopwatch
+    // from `startedAt`. Stamp it when `running` begins, then settle a fixed
+    // `durationMs` at the terminal phase so the elapsed time freezes.
+    const startedAt = phase === 'running' ? Date.now() : prevStartedAt
+    const durationMs =
+      phase !== 'running' && startedAt !== undefined
+        ? Math.max(0, Date.now() - startedAt)
+        : undefined
+    const compaction: AcpCompaction = {
+      phase,
+      ...(reason != null ? { reason } : {}),
+      ...(startedAt !== undefined ? { startedAt } : {}),
+      ...(durationMs !== undefined ? { durationMs } : {}),
+    }
+    const slot: TimelineItem = { kind: 'compaction', id: slotId, compaction }
+    if (idx === -1) {
+      this._timeline = [...this._timeline, slot]
+    } else {
+      this._timeline = [...this._timeline.slice(0, idx), slot, ...this._timeline.slice(idx + 1)]
+    }
+    const tx = this._batchedTx()
     this.timeline.set(this._timeline, tx)
     this._commitBatchedTx()
   }
