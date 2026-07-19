@@ -331,15 +331,6 @@ jobs:
       - name: Build
         run: pnpm build
 
-      # The perforce suite's smoke.swarmSpreadsheetDiff installs a real on-disk
-      # Excel-diff .vsix (lives outside the workspace, gitignored). Build it only
-      # for that suite; other extension suites don't touch it.
-      - name: Build Excel diff extension vsix
-        if: matrix.suite.prep == 'excel-diff'
-        run: |
-          npm --prefix extensions-external/excel-diff ci
-          npm --prefix extensions-external/excel-diff run package
-
       - name: Run extension E2E (xvfb)
         run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter ${{ matrix.suite.name }} e2e
 

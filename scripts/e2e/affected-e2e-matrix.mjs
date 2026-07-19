@@ -8,7 +8,7 @@
  *                  affected and must run.
  *    - extensions: JSON array of {name, dir, prep} for each extension whose own
  *                  `e2e` task turbo marks affected. `prep` names the extra CI
- *                  setup that extension's specs need (tsserver / excel-diff vsix).
+ *                  setup that extension's specs need (tsserver).
  *
  *  How "affected" is computed: `turbo run e2e --filter=...[<base>] --dry=json`.
  *  Turbo walks the workspace dependency graph, so editing `platform` marks every
@@ -54,7 +54,7 @@ export const EXTENSION_SUITES = [
   { name: '@universe-editor/markdown', dir: 'extensions/markdown', prep: 'none' },
   { name: '@universe-editor/typescript', dir: 'extensions/typescript', prep: 'tsserver' },
   { name: '@universe-editor/ai', dir: 'extensions/ai', prep: 'none' },
-  { name: '@universe-editor/perforce', dir: 'extensions/perforce', prep: 'excel-diff' },
+  { name: '@universe-editor/perforce', dir: 'extensions/perforce', prep: 'none' },
 ]
 
 // Out-of-workspace marketplace extensions with their own e2e suite. They are NOT

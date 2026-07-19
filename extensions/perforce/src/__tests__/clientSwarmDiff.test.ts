@@ -357,4 +357,67 @@ describe('PerforceClient Swarm diff files', () => {
     expect(files[0]?.baseRevision).toBeNull()
     client!.dispose()
   })
+
+  // printRevisionBytes backs the spreadsheet webview diff: it must return the
+  // exact bytes p4 printed (base64 round-trips them to the Excel extension), so a
+  // binary xlsx isn't corrupted the way a utf8 string `print` would corrupt it.
+  it('returns exact raw bytes for a binary revision (no utf8 corruption)', async () => {
+    // A minimal zip header + bytes that are not valid UTF-8 (0xff 0xfe 0x00).
+    const bytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff, 0xfe, 0x00, 0x01])
+    spawnMock.mockImplementation((...args: unknown[]) => {
+      const argv = (args[1] as string[]) ?? []
+      const child = new FakeChildProcess()
+      queueMicrotask(() => {
+        const cmd = subcommand(argv)
+        if (cmd === 'info') {
+          child.stdout.emit(
+            'data',
+            Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),
+          )
+        } else if (cmd === 'print') {
+          child.stdout.emit('data', bytes)
+        }
+        child.emit('close', 0)
+      })
+      return child
+    })
+
+    const client = await PerforceClient.create(ROOT, {}, new ConcurrencyGate(4), {
+      enabled: true,
+      workspaceTtlMs: 4000,
+    })
+    const out = await client!.printRevisionBytes('//depot/x.xlsx@=900')
+    expect(Buffer.isBuffer(out)).toBe(true)
+    expect(out).toEqual(bytes)
+    client!.dispose()
+  })
+
+  it('returns an empty buffer for a null spec (added/deleted side)', async () => {
+    spawnMock.mockImplementation((...args: unknown[]) => {
+      const argv = (args[1] as string[]) ?? []
+      const child = new FakeChildProcess()
+      queueMicrotask(() => {
+        if (subcommand(argv) === 'info') {
+          child.stdout.emit(
+            'data',
+            Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),
+          )
+        }
+        child.emit('close', 0)
+      })
+      return child
+    })
+
+    const client = await PerforceClient.create(ROOT, {}, new ConcurrencyGate(4), {
+      enabled: true,
+      workspaceTtlMs: 4000,
+    })
+    const out = await client!.printRevisionBytes(null)
+    expect(out).toEqual(Buffer.alloc(0))
+    // A null spec must not spawn a print at all.
+    expect(
+      spawnMock.mock.calls.filter((call) => subcommand((call[1] as string[]) ?? []) === 'print'),
+    ).toHaveLength(0)
+    client!.dispose()
+  })
 })
