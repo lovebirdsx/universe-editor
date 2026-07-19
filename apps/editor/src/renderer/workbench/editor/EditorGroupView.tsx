@@ -67,6 +67,7 @@ import {
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorTitleActions } from './EditorTitleActions.js'
 import { EditorTabContextMenu } from './EditorTabContextMenu.js'
+import { tabContextMenuResource } from './tabContextMenuResource.js'
 import { ToggleEditorGroupLockAction } from '../../actions/editorActions.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
@@ -832,14 +833,13 @@ export const EditorGroupView = memo(function EditorGroupView({
                 onClose={() => void closeEditorWithConfirm(e, group, dialogService)}
                 onContextMenu={(ev) => {
                   ev.preventDefault()
-                  const resourceLike = (e as unknown as { resource?: URI }).resource
                   setTabMenu({
                     x: ev.clientX,
                     y: ev.clientY,
                     groupId: group.id,
                     editorId: e.id,
                     editorType: e.typeId,
-                    resource: resourceLike instanceof URI ? resourceLike : null,
+                    resource: tabContextMenuResource(e),
                   })
                 }}
               />

@@ -23,6 +23,7 @@ import { RevealInExplorerAction, RevealInOSExplorerAction } from '../../../actio
 import { ReopenWithAction } from '../../../actions/editorResolverActions.js'
 import { RenameAgentSessionAction } from '../../../actions/agentSessionActions.js'
 import { AcpSessionEditorInput } from '../../../services/acp/acpSessionEditorInput.js'
+import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
 
 const disposables: IDisposable[] = []
 
@@ -79,6 +80,19 @@ describe('EditorTabContext menu — per-tab gating', () => {
   it('a file tab shows the file commands but not Rename Agent Session', () => {
     register()
     const commands = menuCommandsFor({ resourceScheme: 'file', activeEditorType: 'file' })
+    for (const id of FILE_COMMANDS) expect(commands).toContain(id)
+    expect(commands).not.toContain(RenameAgentSessionAction.ID)
+  })
+
+  it('a markdown preview tab shows the file commands (resource mapped to the source .md)', () => {
+    // EditorGroupView maps a preview tab's virtual `markdown-preview:` URI to its
+    // source `file:` URI, so the scoped `resourceScheme` is `file` even though the
+    // editor type is markdown.preview. The file commands must appear.
+    register()
+    const commands = menuCommandsFor({
+      resourceScheme: 'file',
+      activeEditorType: MarkdownPreviewInput.TYPE_ID,
+    })
     for (const id of FILE_COMMANDS) expect(commands).toContain(id)
     expect(commands).not.toContain(RenameAgentSessionAction.ID)
   })
