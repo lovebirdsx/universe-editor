@@ -1092,12 +1092,21 @@ export class AcpSessionService
           name: o.name,
           ...(o.kind !== undefined ? { kind: o.kind } : {}),
         })),
-        resolve: (optionId) => {
+        resolve: (optionId, feedback) => {
           if (allowAlways && optionId === allowAlways.optionId && params.toolCall.kind) {
             this._permission.persistAllow(params.toolCall.kind)
           }
           this._telemetry.publicLog('acp.permission_resolved', { optionId })
-          settle({ outcome: { outcome: 'selected', optionId } })
+          const trimmed = feedback?.trim()
+          settle({
+            outcome: {
+              outcome: 'selected',
+              optionId,
+              // ExitPlanMode 的「继续规划」意见走 ACP `_meta` 透传给 fork，由其作为
+              // deny message 反馈给 agent（fork 端读 `_meta.feedback`）。
+              ...(trimmed ? { _meta: { feedback: trimmed } } : {}),
+            },
+          })
         },
         cancel: () => {
           this._telemetry.publicLog('acp.permission_cancelled', {})

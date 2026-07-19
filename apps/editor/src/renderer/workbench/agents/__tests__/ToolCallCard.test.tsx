@@ -223,4 +223,40 @@ describe('ToolCallCard', () => {
     expect(screen.queryByTestId('acp-mcp-input')).toBeNull()
     expect(screen.getByTestId('acp-mcp-output')).toBeTruthy()
   })
+
+  it('renders a rejected ExitPlanMode as a neutral "kept planning" card', () => {
+    renderCard(
+      makeCall({
+        kind: 'switch_mode',
+        title: 'Ready to code?',
+        status: 'failed',
+        text: 'User rejected request to exit plan mode.',
+        blocks: [{ type: 'text', text: 'User rejected request to exit plan mode.' }],
+      }),
+    )
+    // Friendly title, not the raw "Ready to code?".
+    expect(screen.getByText('已继续规划')).toBeTruthy()
+    // The internal (default, no-note) rejection text is suppressed from the body.
+    expect(screen.queryByText(/User rejected request to exit plan mode/)).toBeNull()
+    expect(screen.queryByTestId('acp-keep-planning-feedback')).toBeNull()
+    // Status is downgraded from the red failed icon to a neutral completed one.
+    expect(screen.getByLabelText('completed')).toBeTruthy()
+    expect(screen.queryByLabelText('failed')).toBeNull()
+  })
+
+  it('surfaces the user steering note on a kept-planning card', () => {
+    renderCard(
+      makeCall({
+        kind: 'switch_mode',
+        title: 'Ready to code?',
+        status: 'failed',
+        text: '先不做了',
+        blocks: [{ type: 'text', text: '先不做了' }],
+      }),
+    )
+    expect(screen.getByText('已继续规划')).toBeTruthy()
+    const feedback = screen.getByTestId('acp-keep-planning-feedback')
+    expect(feedback.textContent).toContain('先不做了')
+    expect(screen.getByLabelText('completed')).toBeTruthy()
+  })
 })

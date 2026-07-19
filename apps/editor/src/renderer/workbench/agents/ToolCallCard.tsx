@@ -24,7 +24,12 @@ import { InlineDiffPreview } from './InlineDiffPreview.js'
 import { CodeBlock } from './CodeBlock.js'
 import { MessageContent } from './MessageContent.js'
 import { TerminalOutput, ToolCallSection, ToolCallStatusIcon } from './ToolCallOutput.js'
-import { deriveToolCallDisplay, tryPrettyJson } from './toolCallDisplay.js'
+import {
+  deriveToolCallDisplay,
+  isKeepPlanning,
+  keepPlanningFeedback,
+  tryPrettyJson,
+} from './toolCallDisplay.js'
 import { toolKindIcon } from './timelineIcons.js'
 import { buildStickyKey } from './stickyScroll.js'
 import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
@@ -128,6 +133,12 @@ export const ToolCallCard = memo(function ToolCallCard({
   const hasDiffs = call.diffs.length > 0
   const isExecute = call.kind === 'execute'
   const display = deriveToolCallDisplay(call)
+  // "继续规划"是正常流程而非错误：把红色失败态降级为中性完成态，并抑制那句给模型看的
+  // 内部拒绝文案（body）。若用户在 steering 输入框写下了意见，则改为把该意见作为「你的
+  // 反馈」展示出来——这也是回放时该意见的唯一可见来源。
+  const keepPlanning = isKeepPlanning(call)
+  const effectiveStatus = keepPlanning ? 'completed' : call.status
+  const steerFeedback = keepPlanningFeedback(call)
 
   const diffs = hasDiffs && (
     <div className={styles['toolCallDiffs']}>
@@ -207,11 +218,20 @@ export const ToolCallCard = memo(function ToolCallCard({
     <>
       {diffs}
       {commandDetail}
-      {call.blocks.length > 0 && (
-        <div className={styles['toolCallBody']}>
-          <MessageContent blocks={call.blocks} />
-        </div>
-      )}
+      {keepPlanning
+        ? steerFeedback !== undefined && (
+            <div className={styles['toolCallFeedback']} data-testid="acp-keep-planning-feedback">
+              <span className={styles['toolCallFeedbackLabel']}>
+                {localize('acp.switchMode.feedbackLabel', '你的反馈')}
+              </span>
+              <span>{steerFeedback}</span>
+            </div>
+          )
+        : call.blocks.length > 0 && (
+            <div className={styles['toolCallBody']}>
+              <MessageContent blocks={call.blocks} />
+            </div>
+          )}
     </>
   )
 
@@ -267,13 +287,13 @@ export const ToolCallCard = memo(function ToolCallCard({
       kindLabel={call.kind}
       title={titleNode}
       summary={titleNode}
-      statusIcon={<ToolCallStatusIcon status={call.status} />}
+      statusIcon={<ToolCallStatusIcon status={effectiveStatus} />}
       {...(badge !== undefined ? { badge } : {})}
       collapsed={collapsed}
       onToggle={onToggle}
       rootProps={{
         className,
-        'data-status': call.status,
+        'data-status': effectiveStatus,
         'data-kind': call.kind,
         ...(dataTimelineKey !== undefined ? { 'data-timeline-key': dataTimelineKey } : {}),
         ...(dataStickyKey !== undefined ? { 'data-sticky-key': dataStickyKey } : {}),

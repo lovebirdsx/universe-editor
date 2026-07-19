@@ -632,6 +632,26 @@
   font-size: calc(var(--agent-font-size, 12px) * 0.917);
 }
 
+/* 「继续规划」卡片里回放用户 steering 意见的反馈块（区别于红色错误 body）。 */
+.toolCallFeedback {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border-left: 2px solid var(--color-badge-progress, #4fa6e2);
+  background: var(--color-input-bg, rgba(127, 127, 127, 0.1));
+  font-size: calc(var(--agent-font-size, 12px) * 0.917);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.toolCallFeedbackLabel {
+  font-size: 0.85em;
+  color: var(--color-message-role-fg, #888);
+}
+
 /* MCP card Input / Output collapsible sections. */
 .toolCallSection {
   margin: 6px 0 0;
@@ -1884,6 +1904,23 @@
 
 .permissionDeny {
   background: var(--color-danger-bg, #a1260d);
+}
+
+.permissionSteer {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+  margin-top: 8px;
+}
+
+.permissionSteer .questionFreeform {
+  flex: 1 1 auto;
+  resize: vertical;
+}
+
+.permissionSteer .permissionAllow:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .questionCard {

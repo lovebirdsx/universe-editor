@@ -250,4 +250,46 @@ describe('ConfigOptionStateMachine', () => {
     // push-back picks it up.
     expect(fakeDefaults.calls).toEqual([{ agentId: 'fake', configId: 'MODEL', value: 'b' }])
   })
+
+  it('flushPendingPushes resolves only after every pending push has been sent to the agent', async () => {
+    const fakeConn = makeFakeConn({
+      setSessionConfigOption: async (req) => ({
+        configOptions: [makeConfigOption(String(req.configId), String(req.value))],
+      }),
+    })
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => fakeConn.conn,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
+    })
+    // A `plan` mode was picked while connecting: desired differs from the bag's
+    // server value, so reconcile queues it in _needsPush.
+    sm.setDesired({ MODE: 'b' })
+    sm.applyInitState([makeConfigOption('MODE', 'a')])
+    // attachConnection awaits this before dispatching queued prompts. When it
+    // resolves the RPC must already have been issued — otherwise a queued prompt
+    // races ahead of the mode push and the agent runs under the default mode.
+    await sm.flushPendingPushes()
+    expect(fakeConn.calls).toEqual([{ sessionId: 'ag-1', configId: 'MODE', value: 'b' }])
+    expect(sm.configOptions.get()[0]?.currentValue).toBe('b')
+  })
+
+  it('a re-entrant flushPendingPushes awaits the sequence already running', async () => {
+    const fakeConn = makeFakeConn({
+      setSessionConfigOption: async (req) => ({
+        configOptions: [makeConfigOption(String(req.configId), String(req.value))],
+      }),
+    })
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => fakeConn.conn,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
+    })
+    sm.setDesired({ MODE: 'b' })
+    // applyInitState kicks off a flush internally; attachConnection's own call
+    // must join that in-flight sequence rather than resolve immediately past it.
+    sm.applyInitState([makeConfigOption('MODE', 'a')])
+    await sm.flushPendingPushes()
+    expect(fakeConn.calls).toEqual([{ sessionId: 'ag-1', configId: 'MODE', value: 'b' }])
+  })
 })

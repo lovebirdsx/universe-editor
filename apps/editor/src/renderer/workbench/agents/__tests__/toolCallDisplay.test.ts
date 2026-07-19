@@ -5,7 +5,14 @@
 
 import { describe, expect, it } from 'vitest'
 import type { AcpToolCall } from '../../../services/acp/acpSessionService.js'
-import { deriveToolCallDisplay, humanizeMcpTool, tryPrettyJson } from '../toolCallDisplay.js'
+import {
+  DEFAULT_KEEP_PLANNING_MESSAGE,
+  deriveToolCallDisplay,
+  humanizeMcpTool,
+  isKeepPlanning,
+  keepPlanningFeedback,
+  tryPrettyJson,
+} from '../toolCallDisplay.js'
 
 function makeCall(overrides: Partial<AcpToolCall>): AcpToolCall {
   return {
@@ -83,6 +90,77 @@ describe('deriveToolCallDisplay', () => {
   it('falls back to raw title when MCP tool segment is missing', () => {
     const d = deriveToolCallDisplay(makeCall({ kind: 'other', title: 'raw name', mcpServer: 'fs' }))
     expect(d.title).toBe('raw name')
+  })
+
+  it('shows a neutral "keep planning" title for a rejected ExitPlanMode', () => {
+    const d = deriveToolCallDisplay(
+      makeCall({ kind: 'switch_mode', title: 'Ready to code?', status: 'failed' }),
+    )
+    expect(d.title).toBe('已继续规划')
+  })
+
+  it('keeps the raw title for a switch_mode that was NOT rejected', () => {
+    const d = deriveToolCallDisplay(
+      makeCall({ kind: 'switch_mode', title: 'Ready to code?', status: 'completed' }),
+    )
+    expect(d.title).toBe('Ready to code?')
+  })
+})
+
+describe('isKeepPlanning', () => {
+  it('is true only for a failed switch_mode', () => {
+    expect(isKeepPlanning(makeCall({ kind: 'switch_mode', status: 'failed' }))).toBe(true)
+    expect(isKeepPlanning(makeCall({ kind: 'switch_mode', status: 'completed' }))).toBe(false)
+    expect(isKeepPlanning(makeCall({ kind: 'execute', status: 'failed' }))).toBe(false)
+  })
+})
+
+describe('keepPlanningFeedback', () => {
+  it('returns the user steering note when the deny body is not the default', () => {
+    expect(
+      keepPlanningFeedback(
+        makeCall({ kind: 'switch_mode', status: 'failed', text: '  先不做了  ' }),
+      ),
+    ).toBe('先不做了')
+  })
+
+  it('suppresses the default (no-note) reject body', () => {
+    expect(
+      keepPlanningFeedback(
+        makeCall({ kind: 'switch_mode', status: 'failed', text: DEFAULT_KEEP_PLANNING_MESSAGE }),
+      ),
+    ).toBeUndefined()
+  })
+
+  it('strips the fork error fence and suppresses the fenced default body', () => {
+    expect(
+      keepPlanningFeedback(
+        makeCall({
+          kind: 'switch_mode',
+          status: 'failed',
+          text: '```\nUser rejected request to exit plan mode.\n```',
+        }),
+      ),
+    ).toBeUndefined()
+  })
+
+  it('strips the fork error fence around a real steering note', () => {
+    expect(
+      keepPlanningFeedback(
+        makeCall({ kind: 'switch_mode', status: 'failed', text: '```\n先不做了\n```' }),
+      ),
+    ).toBe('先不做了')
+  })
+
+  it('returns undefined for empty body or non-keep-planning calls', () => {
+    expect(
+      keepPlanningFeedback(makeCall({ kind: 'switch_mode', status: 'failed', text: '' })),
+    ).toBeUndefined()
+    expect(
+      keepPlanningFeedback(
+        makeCall({ kind: 'switch_mode', status: 'completed', text: '先不做了' }),
+      ),
+    ).toBeUndefined()
   })
 })
 

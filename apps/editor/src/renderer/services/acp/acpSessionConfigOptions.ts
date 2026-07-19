@@ -79,8 +79,13 @@ export class ConfigOptionStateMachine {
    */
   private readonly _needsPush = new Set<string>()
 
-  /** True while a `flushPendingPushes` sequence is running, to avoid re-entry. */
-  private _flushing = false
+  /**
+   * The in-flight `flushPendingPushes` sequence, or undefined when idle. Guards
+   * against re-entry and lets a re-entrant caller (e.g. `attachConnection` after
+   * `applyInitState` already kicked one off) await the sequence already running
+   * instead of racing past it.
+   */
+  private _flushing: Promise<void> | undefined
 
   /**
    * Ids shown from the optimistic seed but not yet authoritatively advertised by
@@ -117,7 +122,7 @@ export class ConfigOptionStateMachine {
     const next = this._reconcile(opts, () => true)
     for (const o of next) this._provisional.add(o.id)
     this.configOptions.set(next, undefined)
-    this.flushPendingPushes()
+    void this.flushPendingPushes()
   }
 
   /** Replay the configOptions bag returned by `session/new` or `session/load`. */
@@ -133,7 +138,7 @@ export class ConfigOptionStateMachine {
     // Ids now authoritatively present are no longer provisional.
     for (const id of present) this._provisional.delete(id)
     this.configOptions.set([...reconciled, ...carried], undefined)
-    this.flushPendingPushes()
+    void this.flushPendingPushes()
   }
 
   /** Handle a `config_option_update` notification — filters out echoes for in-flight user pushes. */
@@ -163,7 +168,7 @@ export class ConfigOptionStateMachine {
       for (const f of reconciled) byId.set(f.id, f)
       this.configOptions.set(Array.from(byId.values()), undefined)
     }
-    this.flushPendingPushes()
+    void this.flushPendingPushes()
   }
 
   /**
@@ -180,45 +185,54 @@ export class ConfigOptionStateMachine {
    * final writers. The whole sequence is fenced in a microtask so it never runs
    * inside an observable reaction.
    */
-  flushPendingPushes(): void {
-    if (this._flushing || this._needsPush.size === 0) return
+  flushPendingPushes(): Promise<void> {
+    if (this._flushing !== undefined) return this._flushing
+    if (this._needsPush.size === 0) return Promise.resolve()
     const conn = this._deps.getConn()
     const sessionId = this._deps.sessionInfo.getSessionId()
-    if (conn === undefined || sessionId === undefined) return
-    this._flushing = true
-    queueMicrotask(async () => {
-      try {
-        // Drain until empty rather than over a snapshot: pushing `model` makes
-        // the agent rebuild and advertise `effort` via a later
-        // `config_option_update`, which lands in `_needsPush` *after* this flush
-        // started. A snapshot loop would miss it and the dependent option would
-        // never be pushed. Re-selecting `model` first each round keeps it the
-        // option that runs before its dependents.
-        while (this._needsPush.size > 0) {
-          const remaining = [...this._needsPush]
-          const id = remaining.find((x) => x === 'model') ?? (remaining[0] as string | undefined)
-          if (id === undefined) break
-          const want = this._desired[id]
-          if (want === undefined) {
-            this._needsPush.delete(id)
-            continue
+    if (conn === undefined || sessionId === undefined) return Promise.resolve()
+    // Resolve only after the whole sequence settles so callers (notably
+    // `attachConnection`) can await the push — mode/model must land on the agent
+    // before any queued prompt is dispatched, or a prompt races ahead of a
+    // pending `plan` mode and the agent runs it under the default mode.
+    const running = new Promise<void>((resolve) => {
+      queueMicrotask(async () => {
+        try {
+          // Drain until empty rather than over a snapshot: pushing `model` makes
+          // the agent rebuild and advertise `effort` via a later
+          // `config_option_update`, which lands in `_needsPush` *after* this flush
+          // started. A snapshot loop would miss it and the dependent option would
+          // never be pushed. Re-selecting `model` first each round keeps it the
+          // option that runs before its dependents.
+          while (this._needsPush.size > 0) {
+            const remaining = [...this._needsPush]
+            const id = remaining.find((x) => x === 'model') ?? (remaining[0] as string | undefined)
+            if (id === undefined) break
+            const want = this._desired[id]
+            if (want === undefined) {
+              this._needsPush.delete(id)
+              continue
+            }
+            try {
+              // `_needsPush` membership means the agent value still differs even
+              // though we already overrode the *display* — push unconditionally.
+              await this.setConfigOption(id, want)
+            } catch (err) {
+              this._deps.warn?.(
+                `failed to restore configOption ${id}=${want}: ${(err as Error).message}`,
+              )
+            } finally {
+              this._needsPush.delete(id)
+            }
           }
-          try {
-            // `_needsPush` membership means the agent value still differs even
-            // though we already overrode the *display* — push unconditionally.
-            await this.setConfigOption(id, want)
-          } catch (err) {
-            this._deps.warn?.(
-              `failed to restore configOption ${id}=${want}: ${(err as Error).message}`,
-            )
-          } finally {
-            this._needsPush.delete(id)
-          }
+        } finally {
+          this._flushing = undefined
+          resolve()
         }
-      } finally {
-        this._flushing = false
-      }
+      })
     })
+    this._flushing = running
+    return running
   }
 
   /**
@@ -298,7 +312,7 @@ export class ConfigOptionStateMachine {
         )
         for (const o of resp.configOptions) this._provisional.delete(o.id)
         this.configOptions.set(this._overlayPending(reconciled), undefined)
-        this.flushPendingPushes()
+        void this.flushPendingPushes()
       }
       const { agentId } = this._deps.sessionInfo
       this._deps.history?.setHistoryConfigOption(

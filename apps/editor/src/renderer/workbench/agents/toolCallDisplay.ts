@@ -13,6 +13,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { AcpToolCall } from '../../services/acp/acpSessionService.js'
+import { localize } from '@universe-editor/platform'
 
 export interface ToolCallDisplay {
   /** Human-readable title shown as the card header. */
@@ -104,6 +105,46 @@ export function tryPrettyJson(text: string): string | undefined {
   }
 }
 
+/**
+ * ExitPlanMode（`switch_mode`）被拒不是错误，而是用户选择「继续规划」——无论点
+ * "No, keep planning" 还是在 steering 输入框写下意见，fork 端都返回 deny，SDK 把它
+ * 映射成 `status: 'failed'` 且 body 为 deny message。这句是给模型看的内部文案，
+ * 展示给用户会误以为出错，故识别出来降级为中性提示。
+ */
+export function isKeepPlanning(call: AcpToolCall): boolean {
+  return call.kind === 'switch_mode' && call.status === 'failed'
+}
+
+/**
+ * fork 在用户未填写 steering 意见时的默认 deny 文案（见 vendor/claude-agent-acp）。
+ * 正常情况下 fork 已把它过滤为空 content，此处仅作为兼容旧产物的兜底判定。
+ */
+export const DEFAULT_KEEP_PLANNING_MESSAGE = 'User rejected request to exit plan mode.'
+
+/** 去掉 fork 对错误内容添加的 ```\n…\n``` 代码围栏，还原纯文本。 */
+function stripErrorFence(text: string): string {
+  const m = /^```(?:\w*)?\n([\s\S]*?)\n```$/.exec(text.trim())
+  return (m?.[1] ?? text).trim()
+}
+
+/**
+ * 从「继续规划」工具调用里提取用户填写的 steering 意见；无意见（默认文案或空）时
+ * 返回 undefined。用户意见走 deny message 通道落盘，故回放与实时同源，均从此读取。
+ */
+export function keepPlanningFeedback(call: AcpToolCall): string | undefined {
+  if (!isKeepPlanning(call)) return undefined
+  const text = stripErrorFence(call.text)
+  if (text.length === 0 || text === DEFAULT_KEEP_PLANNING_MESSAGE) return undefined
+  return text
+}
+
+function deriveSwitchModeDisplay(call: AcpToolCall): ToolCallDisplay {
+  if (isKeepPlanning(call)) {
+    return { title: localize('acp.switchMode.keepPlanning', '已继续规划') }
+  }
+  return { title: call.title }
+}
+
 export function deriveToolCallDisplay(call: AcpToolCall): ToolCallDisplay {
   if (call.mcpServer !== undefined) return deriveMcpDisplay(call)
   switch (call.kind) {
@@ -111,6 +152,8 @@ export function deriveToolCallDisplay(call: AcpToolCall): ToolCallDisplay {
       return deriveExecuteDisplay(call)
     case 'search':
       return deriveSearchDisplay(call)
+    case 'switch_mode':
+      return deriveSwitchModeDisplay(call)
     default:
       return { title: call.title }
   }

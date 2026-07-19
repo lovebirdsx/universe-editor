@@ -393,10 +393,14 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (this._pendingTitle !== undefined) {
       this._applyHistoryTitle(sessionIdOnAgent, this._pendingTitle, this._pendingTitleKind)
     }
-    this._flushQueuedPrompts(drained)
-    // Now that the connection + sessionId exist, push any configOption values
-    // that were overridden for display but not yet adopted by the agent.
-    this._configOptions.flushPendingPushes()
+    // Push any configOption values overridden for display but not yet adopted by
+    // the agent (notably a `plan` mode picked while connecting) BEFORE dispatching
+    // queued prompts. Otherwise a prompt queued during connect races ahead of the
+    // pending mode push and the agent runs it under the default mode — skipping
+    // the plan-mode approval gate entirely.
+    void this._configOptions.flushPendingPushes().then(() => {
+      this._flushQueuedPrompts(drained)
+    })
   }
 
   /**

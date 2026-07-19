@@ -146,7 +146,12 @@ export interface AcpPendingPermission {
     readonly name: string
     readonly kind?: string
   }[]
-  resolve(optionId: string): void
+  /**
+   * 用户选择某个选项。`feedback` 仅对 ExitPlanMode 的 reject（"继续规划"）有意义：
+   * 用户在 steering 输入框写下的意见，会作为被拒工具的 deny message 回传给 agent，
+   * 从而落盘为可回放的 tool_result（而非丢失的 queued_command）。
+   */
+  resolve(optionId: string, feedback?: string): void
   cancel(): void
 }
 
