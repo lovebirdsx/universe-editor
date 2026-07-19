@@ -19,6 +19,13 @@ import styles from '../AgentSettingsEditor.module.css'
 /** Env keys the Authentication panel owns — never shown in the free editor. */
 const AUTH_ENV_KEYS = new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'])
 
+/** Env keys the Model & Thinking panel's "Show Fable" toggle owns — hidden here. */
+const CUSTOM_MODEL_ENV_KEYS = new Set([
+  'ANTHROPIC_CUSTOM_MODEL_OPTION',
+  'ANTHROPIC_CUSTOM_MODEL_OPTION_NAME',
+  'ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION',
+])
+
 const AUTO_COMPACT_KEY = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'
 const PROMPT_CACHING_KEY = 'ENABLE_PROMPT_CACHING_1H'
 
@@ -35,7 +42,11 @@ export function AdvancedEnvPanel({ config }: { config: UseClaudeConfig }) {
   useEffect(() => setAutoCompact(env[AUTO_COMPACT_KEY] ?? ''), [env])
 
   const customEntries = Object.entries(env).filter(
-    ([k]) => !AUTH_ENV_KEYS.has(k) && k !== AUTO_COMPACT_KEY && k !== PROMPT_CACHING_KEY,
+    ([k]) =>
+      !AUTH_ENV_KEYS.has(k) &&
+      !CUSTOM_MODEL_ENV_KEYS.has(k) &&
+      k !== AUTO_COMPACT_KEY &&
+      k !== PROMPT_CACHING_KEY,
   )
 
   return (

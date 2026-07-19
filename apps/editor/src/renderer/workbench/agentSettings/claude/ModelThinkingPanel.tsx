@@ -16,6 +16,19 @@ import styles from '../AgentSettingsEditor.module.css'
 
 const EFFORT_LEVELS: readonly ClaudeEffortLevel[] = ['low', 'medium', 'high', 'xhigh']
 
+// `ANTHROPIC_CUSTOM_MODEL_OPTION` (+ _NAME/_DESCRIPTION) is Claude Code's official
+// way to append one extra entry to the model picker without replacing the built-in
+// models or changing the default — exactly what "show Fable as a selectable option"
+// needs. It's read by the CLI child from settings.json's env block, so this toggle
+// just writes/removes the trio. Whether Fable ultimately appears still depends on
+// server/account policy (org allowlist, ZDR, CLI version).
+const CUSTOM_MODEL_KEY = 'ANTHROPIC_CUSTOM_MODEL_OPTION'
+const CUSTOM_MODEL_NAME_KEY = 'ANTHROPIC_CUSTOM_MODEL_OPTION_NAME'
+const CUSTOM_MODEL_DESC_KEY = 'ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION'
+const FABLE_MODEL_ID = 'claude-fable-5'
+const FABLE_MODEL_NAME = 'Fable 5'
+const FABLE_MODEL_DESC = 'Claude Fable 5'
+
 export function ModelThinkingPanel({ config }: { config: UseClaudeConfig }) {
   const { settings, patch } = config
 
@@ -24,6 +37,21 @@ export function ModelThinkingPanel({ config }: { config: UseClaudeConfig }) {
   const [language, setLanguage] = useState(settings.language ?? '')
   useEffect(() => setModel(settings.model ?? ''), [settings.model])
   useEffect(() => setLanguage(settings.language ?? ''), [settings.language])
+
+  const showFable = settings.env?.[CUSTOM_MODEL_KEY] === FABLE_MODEL_ID
+  const toggleShowFable = useCallback(
+    (checked: boolean) => {
+      const env: Record<string, string | null> = checked
+        ? {
+            [CUSTOM_MODEL_KEY]: FABLE_MODEL_ID,
+            [CUSTOM_MODEL_NAME_KEY]: FABLE_MODEL_NAME,
+            [CUSTOM_MODEL_DESC_KEY]: FABLE_MODEL_DESC,
+          }
+        : { [CUSTOM_MODEL_KEY]: null, [CUSTOM_MODEL_NAME_KEY]: null, [CUSTOM_MODEL_DESC_KEY]: null }
+      void patch({ env })
+    },
+    [patch],
+  )
 
   const commitText = useCallback(
     (key: 'model' | 'language', value: string) => {
@@ -54,6 +82,25 @@ export function ModelThinkingPanel({ config }: { config: UseClaudeConfig }) {
             placeholder="claude-opus-4-8"
             onChange={(e) => setModel(e.target.value)}
             onBlur={() => commitText('model', model)}
+          />
+        </div>
+
+        <div className={styles['fieldRow']}>
+          <div className={styles['radioBody']}>
+            <span className={styles['label']}>
+              {localize('agentSettings.showFable', 'Show Fable in the model picker')}
+            </span>
+            <span className={styles['desc']}>
+              {localize(
+                'agentSettings.showFable.desc',
+                'Append Claude Fable 5 as a selectable model without changing the default (env.ANTHROPIC_CUSTOM_MODEL_OPTION). Availability still depends on your account/plan.',
+              )}
+            </span>
+          </div>
+          <Toggle
+            checked={showFable}
+            onChange={toggleShowFable}
+            aria-label={localize('agentSettings.showFable', 'Show Fable in the model picker')}
           />
         </div>
 

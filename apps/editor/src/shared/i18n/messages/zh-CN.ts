@@ -7,6 +7,11 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'app.description': '一个遵循 VSCode 范式的游戏内容编辑器。',
   'app.name': 'Universe Editor',
 
+  // --- Agent settings ---
+  'agentSettings.showFable': '在模型选择器中显示 Fable',
+  'agentSettings.showFable.desc':
+    '将 Claude Fable 5 追加为可选模型，不改变默认模型（env.ANTHROPIC_CUSTOM_MODEL_OPTION）。能否使用仍取决于你的账号 / 套餐。',
+
   // --- Common ---
   'common.cancel': '取消',
   'common.close': '关闭',
