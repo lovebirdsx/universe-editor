@@ -88,7 +88,9 @@ export class WorkspaceRecentMenuContribution extends Disposable implements IWork
       this._dynamic.add(
         MenuRegistry.addMenuItem(MenuId.MenubarFileOpenRecentMenu, {
           command: commandId,
-          title: entry.name,
+          // Full path disambiguates same-named folders in different locations
+          // (VSCode shows the full path here too).
+          title: entry.folder.fsPath,
           ...(isOpen ? { icon: 'check' } : {}),
           group: RECENT_GROUP,
           order: index,

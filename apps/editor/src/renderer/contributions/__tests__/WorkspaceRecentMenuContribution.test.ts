@@ -153,8 +153,8 @@ describe('WorkspaceRecentMenuContribution', () => {
     const titles = items
       .filter((i): i is { command: string; title?: string } => 'command' in i)
       .map((i) => i.title)
-    expect(titles).toContain('a')
-    expect(titles).toContain('b')
+    expect(titles).toContain(URI.file('/tmp/a').fsPath)
+    expect(titles).toContain(URI.file('/tmp/b').fsPath)
     expect(titles).toContain('Clear Recently Opened')
   })
 
@@ -198,12 +198,14 @@ describe('WorkspaceRecentMenuContribution', () => {
         .filter((i): i is { command: string; title?: string } => 'command' in i)
         .map((i) => i.title)
 
+    const pathA = URI.file('/tmp/a').fsPath
+    const pathB = URI.file('/tmp/b').fsPath
     const titles = titlesOf()
-    expect(titles).toContain('a')
-    expect(titles).toContain('b')
+    expect(titles).toContain(pathA)
+    expect(titles).toContain(pathB)
     const openEntry = MenuRegistry.getMenuItems(MenuId.MenubarFileOpenRecentMenu).find(
       (i): i is { command: string; title?: string; icon?: string } =>
-        'command' in i && i.title === 'a',
+        'command' in i && i.title === pathA,
     )
     expect(openEntry?.icon).toBe('check')
 
@@ -217,7 +219,7 @@ describe('WorkspaceRecentMenuContribution', () => {
     const entries = MenuRegistry.getMenuItems(MenuId.MenubarFileOpenRecentMenu).filter(
       (i): i is { command: string; title?: string; icon?: string } => 'command' in i,
     )
-    expect(entries.find((i) => i.title === 'a')?.icon).toBe('check')
-    expect(entries.find((i) => i.title === 'b')?.icon).toBe('check')
+    expect(entries.find((i) => i.title === pathA)?.icon).toBe('check')
+    expect(entries.find((i) => i.title === pathB)?.icon).toBe('check')
   })
 })
