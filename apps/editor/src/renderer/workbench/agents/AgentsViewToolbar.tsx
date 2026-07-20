@@ -28,6 +28,7 @@ export function AgentsViewToolbar() {
   const location = useService(IAcpChatLocationService)
   const filterService = useService(IAcpSessionFilterService)
   const loc = useObservable(location.location)
+  const sidebarEnabled = useObservable(location.sidebarEnabled)
   const searchOpen = useObservable(filterService.searchOpen)
   const filterDefault = useObservable(filterService.isFilterDefault)
   const defaultAgentId = useObservable(registry.defaultAgentIdObs)
@@ -128,13 +129,15 @@ export function AgentsViewToolbar() {
           className={refreshing ? styles['spin'] : undefined}
         />
       </IconButton>
-      <IconButton
-        label={localize('acp.switchToSidebar.tooltip', 'Move chat into the sidebar')}
-        onClick={() => location.setLocation('sidebar')}
-        data-testid="acp-switch-to-sidebar"
-      >
-        <ArrowLeftRight size={14} strokeWidth={1.75} />
-      </IconButton>
+      {sidebarEnabled && (
+        <IconButton
+          label={localize('acp.switchToSidebar.tooltip', 'Move chat into the sidebar')}
+          onClick={() => location.setLocation('sidebar')}
+          data-testid="acp-switch-to-sidebar"
+        >
+          <ArrowLeftRight size={14} strokeWidth={1.75} />
+        </IconButton>
+      )}
       {filterOpen && <SessionsFilterPopover onDismiss={() => setFilterOpen(false)} />}
     </span>
   )

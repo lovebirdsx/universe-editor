@@ -45,6 +45,14 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Custom ACP-compatible agent commands. Each entry needs `id`, `command`; `args`, `env`, `cwd` are optional. Env values are stored in plain text — keep API keys in real environment variables.',
             ),
           },
+          'acp.chat.enableSidebarLocation': {
+            type: 'boolean',
+            default: false,
+            description: localize(
+              'settings.acp.chat.enableSidebarLocation',
+              'Allow docking the Agent chat panel into the sidebar (Agents view) instead of opening sessions as editor tabs. Experimental and incomplete — it may be removed in a future release. Disabled by default; when off, chat only opens in the editor area.',
+            ),
+          },
           'acp.defaultAgentId': {
             type: 'string',
             default: 'claude-code',

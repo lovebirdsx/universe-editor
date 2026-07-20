@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   ContextKeyService,
   Event,
+  Emitter,
   InstantiationService,
   LogLevel,
   NoopTelemetryService,
@@ -19,6 +20,8 @@ import {
   StorageScope,
   observableValue,
   type EditorInput,
+  type IConfigurationChangeEvent,
+  type IConfigurationService,
   type IContextKeyService,
   type IEditorGroup,
   type IEditorGroupsService,
@@ -65,6 +68,25 @@ class StubLoggerService implements ILoggerService {
   setLevel(): void {}
   getLevel(): LogLevel {
     return LogLevel.Info
+  }
+}
+
+/** Minimal config stub: only `acp.chat.enableSidebarLocation` matters here. */
+class FakeConfig {
+  declare readonly _serviceBrand: undefined
+  private readonly _onDidChange = new Emitter<IConfigurationChangeEvent>()
+  readonly onDidChangeConfiguration = this._onDidChange.event
+  constructor(private _sidebarEnabled = false) {}
+  get<T>(key: string): T | undefined {
+    if (key === 'acp.chat.enableSidebarLocation') return this._sidebarEnabled as unknown as T
+    return undefined
+  }
+  setSidebarEnabled(enabled: boolean): void {
+    if (this._sidebarEnabled === enabled) return
+    this._sidebarEnabled = enabled
+    this._onDidChange.fire({
+      affectsConfiguration: (k) => k === 'acp.chat.enableSidebarLocation',
+    })
   }
 }
 
@@ -143,9 +165,13 @@ interface Harness {
   groups: FakeEditorGroupsService
   sessions: FakeSessionService
   inst: IInstantiationService
+  config: FakeConfig
 }
 
-function makeHarness(storage: FakeStorage = new FakeStorage()): Harness {
+function makeHarness(
+  storage: FakeStorage = new FakeStorage(),
+  config: FakeConfig = new FakeConfig(true),
+): Harness {
   const ctx = new ContextKeyService()
   const groups = new FakeEditorGroupsService()
   const editor = new FakeEditorService(groups)
@@ -170,8 +196,9 @@ function makeHarness(storage: FakeStorage = new FakeStorage()): Harness {
     new NoopTelemetryService(),
     new StubLoggerService(),
     inst,
+    config as unknown as IConfigurationService,
   )
-  return { svc, storage, ctx, editor, groups, sessions, inst }
+  return { svc, storage, ctx, editor, groups, sessions, inst, config }
 }
 
 /** Drain the 100ms debounce + the async set() microtask. */
@@ -420,6 +447,72 @@ describe('AcpChatLocationService — side effects', () => {
     h.svc.setLocation('sidebar')
     expect(seen).toEqual([true])
     expect(h.svc.isMigrating).toBe(false)
+    h.svc.dispose()
+  })
+})
+
+describe('AcpChatLocationService — sidebar gating (acp.chat.enableSidebarLocation)', () => {
+  it('exposes sidebarEnabled + context key from the setting (default off)', async () => {
+    const h = makeHarness(new FakeStorage(), new FakeConfig(false))
+    await h.svc.initialize()
+    expect(h.svc.sidebarEnabled.get()).toBe(false)
+    expect(h.ctx.get('acpChatSidebarEnabled')).toBe(false)
+    h.svc.dispose()
+  })
+
+  it('setLocation(sidebar) is ignored while the setting is off', async () => {
+    const h = makeHarness(new FakeStorage(), new FakeConfig(false))
+    await h.svc.initialize()
+    h.svc.setLocation('sidebar')
+    expect(h.svc.location.get()).toBe('editor')
+    expect(h.ctx.get('acpChatLocation')).toBe('editor')
+    h.svc.dispose()
+  })
+
+  it('toggle stays in editor while the setting is off', async () => {
+    const h = makeHarness(new FakeStorage(), new FakeConfig(false))
+    await h.svc.initialize()
+    h.svc.toggle()
+    expect(h.svc.location.get()).toBe('editor')
+    h.svc.dispose()
+  })
+
+  it('falls back to editor for a persisted sidebar value while off, without clobbering storage', async () => {
+    const storage = new FakeStorage()
+    storage.store.set('acp.chatLocation', { schemaVersion: 1, location: 'sidebar' })
+    const h = makeHarness(storage, new FakeConfig(false))
+    await h.svc.initialize()
+    expect(h.svc.location.get()).toBe('editor')
+    // The stored preference is preserved for when the setting is re-enabled.
+    expect(storage.store.get('acp.chatLocation')).toEqual({
+      schemaVersion: 1,
+      location: 'sidebar',
+    })
+    h.svc.dispose()
+  })
+
+  it('migrates back to editor when the setting is turned off while docked', async () => {
+    const config = new FakeConfig(true)
+    const h = makeHarness(new FakeStorage(), config)
+    await h.svc.initialize()
+    h.sessions.setActiveSession(makeSession('s1', 'fake'))
+    h.svc.setLocation('sidebar')
+    expect(h.svc.location.get()).toBe('sidebar')
+
+    config.setSidebarEnabled(false)
+    expect(h.svc.sidebarEnabled.get()).toBe(false)
+    expect(h.svc.location.get()).toBe('editor')
+    expect(h.ctx.get('acpChatLocation')).toBe('editor')
+    h.svc.dispose()
+  })
+
+  it('turning the setting off while already in editor mode is a no-op on location', async () => {
+    const config = new FakeConfig(true)
+    const h = makeHarness(new FakeStorage(), config)
+    await h.svc.initialize()
+    expect(h.svc.location.get()).toBe('editor')
+    config.setSidebarEnabled(false)
+    expect(h.svc.location.get()).toBe('editor')
     h.svc.dispose()
   })
 })

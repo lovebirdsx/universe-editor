@@ -197,6 +197,7 @@ export class ToggleAgentChatLocationAction extends Action2 {
       title: localize2('action.agent.toggleChatLocation', 'Toggle Agent Chat Location'),
       category: CATEGORY,
       f1: true,
+      precondition: 'acpChatSidebarEnabled',
     })
   }
   override run(accessor: ServicesAccessor): void {

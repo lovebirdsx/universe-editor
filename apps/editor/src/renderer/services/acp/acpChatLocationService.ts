@@ -18,6 +18,7 @@ import {
   autorun,
   createDecorator,
   Disposable,
+  IConfigurationService,
   IContextKeyService,
   IEditorGroupsService,
   IEditorService,
@@ -43,6 +44,14 @@ export interface IAcpChatLocationService {
   readonly _serviceBrand: undefined
   readonly location: IObservable<AcpChatLocation>
   /**
+   * Whether docking chat into the sidebar is allowed, mirroring the
+   * `acp.chat.enableSidebarLocation` setting (default false). While false,
+   * `setLocation('sidebar')` is a no-op and any persisted 'sidebar' value is
+   * treated as 'editor'. UI/commands read this to hide the switch-to-sidebar
+   * affordances.
+   */
+  readonly sidebarEnabled: IObservable<boolean>
+  /**
    * True synchronously while `setLocation` is closing/opening editor tabs as
    * part of a chat-location migration. Consumed by
    * `AgentsSessionEditorLifecycleContribution` to distinguish a user-driven
@@ -60,6 +69,7 @@ export const IAcpChatLocationService =
   createDecorator<IAcpChatLocationService>('acpChatLocationService')
 
 const STORAGE_KEY = 'acp.chatLocation'
+const SIDEBAR_ENABLED_KEY = 'acp.chat.enableSidebarLocation'
 const SCHEMA_VERSION = 1
 const DEFAULT_LOCATION: AcpChatLocation = 'editor'
 
@@ -72,6 +82,7 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
   declare readonly _serviceBrand: undefined
 
   readonly location: ISettableObservable<AcpChatLocation>
+  readonly sidebarEnabled: ISettableObservable<boolean>
 
   private _location: AcpChatLocation = DEFAULT_LOCATION
   private _loaded = false
@@ -79,6 +90,7 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
   private _writeTimer: ReturnType<typeof setTimeout> | undefined
   private _migrating = false
   private readonly _contextKey: IContextKey<string>
+  private readonly _sidebarEnabledKey: IContextKey<boolean>
   private readonly _logger: ILogger
 
   constructor(
@@ -90,6 +102,7 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
     @ITelemetryService private readonly _telemetry: ITelemetryService,
     @ILoggerService loggerService: ILoggerService,
     @IInstantiationService private readonly _inst: IInstantiationService,
+    @IConfigurationService private readonly _config: IConfigurationService,
   ) {
     super()
     this._logger = loggerService.createLogger({
@@ -97,7 +110,22 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
       name: 'ACP Chat Location',
     })
     this.location = observableValue<AcpChatLocation>('acp.chatLocation', DEFAULT_LOCATION)
+    const sidebarEnabled = this._readSidebarEnabled()
+    this.sidebarEnabled = observableValue<boolean>('acp.chatSidebarEnabled', sidebarEnabled)
     this._contextKey = contextKeyService.createKey<string>('acpChatLocation', DEFAULT_LOCATION)
+    this._sidebarEnabledKey = contextKeyService.createKey<boolean>(
+      'acpChatSidebarEnabled',
+      sidebarEnabled,
+    )
+    // React to the setting flipping at runtime. Turning it off while docked in
+    // the sidebar migrates chat back to the editor area; the persisted
+    // 'sidebar' value is left untouched so re-enabling restores the preference.
+    this._register(
+      this._config.onDidChangeConfiguration((e) => {
+        if (!e.affectsConfiguration(SIDEBAR_ENABLED_KEY)) return
+        this._syncSidebarEnabled()
+      }),
+    )
     // Keep the editor area in sync with activeSession changes when in 'editor'
     // mode. Both `location` and `activeSession` are read unconditionally so the
     // autorun keeps its subscription alive across mode flips — bailing out via
@@ -153,6 +181,10 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
   }
 
   setLocation(location: AcpChatLocation): void {
+    if (location === 'sidebar' && !this.sidebarEnabled.get()) {
+      this._logger.info('ignoring setLocation(sidebar): acp.chat.enableSidebarLocation is off')
+      return
+    }
     if (this._location === location) return
     this._location = location
     this._publish()
@@ -186,6 +218,29 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
     this._contextKey.set(this._location)
   }
 
+  private _readSidebarEnabled(): boolean {
+    return this._config.get<boolean>(SIDEBAR_ENABLED_KEY) === true
+  }
+
+  private _syncSidebarEnabled(): void {
+    const enabled = this._readSidebarEnabled()
+    this.sidebarEnabled.set(enabled, undefined)
+    this._sidebarEnabledKey.set(enabled)
+    // Turned off while docked → migrate back to the editor area. Route through
+    // the same side effect as a normal flip; do NOT persist so the sidebar
+    // preference survives for when the setting is turned back on.
+    if (!enabled && this._location === 'sidebar') {
+      this._location = 'editor'
+      this._publish()
+      this._migrating = true
+      try {
+        this._applySideEffect('editor')
+      } finally {
+        this._migrating = false
+      }
+    }
+  }
+
   private async _load(): Promise<void> {
     try {
       const raw = await this._storage.get<PersistedShape>(STORAGE_KEY, StorageScope.GLOBAL)
@@ -195,7 +250,11 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
         raw.schemaVersion === SCHEMA_VERSION &&
         (raw.location === 'editor' || raw.location === 'sidebar')
       ) {
-        this._location = raw.location
+        // A persisted 'sidebar' preference only takes effect while the setting
+        // allows it; otherwise stay in 'editor' without clobbering storage so
+        // re-enabling later restores the preference.
+        this._location =
+          raw.location === 'sidebar' && !this.sidebarEnabled.get() ? 'editor' : raw.location
         this._publish()
       } else if (raw !== undefined) {
         this._logger.warn(
