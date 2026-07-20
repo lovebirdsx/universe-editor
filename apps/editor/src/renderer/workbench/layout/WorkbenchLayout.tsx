@@ -10,6 +10,7 @@ import {
   SIDEBAR_MAX,
   PANEL_MIN,
   PANEL_MAX,
+  EDITOR_MIN,
 } from '../../services/layout/layoutConstraints.js'
 
 interface WorkbenchLayoutProps {
@@ -217,7 +218,7 @@ export function WorkbenchLayout({
             >
               <div className={styles['pane']}>{sidebar}</div>
             </Allotment.Pane>
-            <Allotment.Pane>
+            <Allotment.Pane minSize={EDITOR_MIN}>
               <Allotment
                 vertical
                 ref={verticalAllotmentRef}
