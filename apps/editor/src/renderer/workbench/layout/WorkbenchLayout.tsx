@@ -63,6 +63,16 @@ export function WorkbenchLayout({
   // We override that layout the moment we see the first onChange with a
   // non-zero total (= container is sized, initial distribution just happened).
   const isInitializedRef = useRef(false)
+  // The nested vertical Allotment (editor + panel) populates its viewItems
+  // lazily — only after its own ResizeObserver reports a non-zero size, which
+  // happens strictly AFTER the outer horizontal Allotment lays out. Until it
+  // has fired onChange at least once, calling resize() on it would index past an
+  // empty viewItems array inside allotment's SplitView.resizeViews (crash:
+  // "Cannot read properties of undefined (reading 'minimumSize')"). This flag —
+  // distinct from the horizontal isInitializedRef — gates the sizes.panel effect
+  // so a workspace restore that flips the panel visible + writes sizes.panel
+  // does not resize the vertical split before it exists.
+  const isVerticalInitializedRef = useRef(false)
   // The sizes to apply on the first real Allotment layout pass. Kept current on
   // every render (not frozen at mount) so a post-mount reconcile — the startup
   // plan restores the persisted workspace layout AFTER React mounts, flipping
@@ -76,8 +86,11 @@ export function WorkbenchLayout({
 
   // Track live [sidebar, editor, secondary] sizes reported by Allotment.
   const currentSizesRef = useRef<[number, number, number]>([sizes.sidebar, 0, 0])
-  // Track live [editor, panel] sizes reported by the vertical Allotment.
-  const currentVerticalRef = useRef<[number, number]>([0, sizes.panel])
+  // Track live [editor, panel] sizes reported by the vertical Allotment. Seeded
+  // to [0, 0] (not [0, sizes.panel]) so the `total <= 0` guard in the panel
+  // resize effect actually holds until the vertical Allotment has reported real
+  // sizes — a non-zero seed would let that effect run before viewItems exist.
+  const currentVerticalRef = useRef<[number, number]>([0, 0])
 
   // When secondarySidebarVisible changes, capture the pre-change sizes so
   // we can override Allotment's redistribution (which gives freed space to
@@ -161,7 +174,7 @@ export function WorkbenchLayout({
   }, [sizes.sidebar, sizes.secondarySidebar])
 
   useEffect(() => {
-    if (!isInitializedRef.current) return
+    if (!isVerticalInitializedRef.current) return
     if (!panelVisibleRef.current || panelMaximizedRef.current) return
     const [curEditor, curPanel] = currentVerticalRef.current
     const total = curEditor + curPanel
@@ -226,6 +239,10 @@ export function WorkbenchLayout({
                 onChange={(s) => {
                   const second = s[1]
                   if (typeof second !== 'number' || !panelVisibleRef.current) return
+                  // Reaching here means the vertical Allotment has laid out with
+                  // both panes present, so its viewItems are populated and it is
+                  // now safe for the sizes.panel effect to call resize() on it.
+                  isVerticalInitializedRef.current = true
                   if (typeof s[0] === 'number') currentVerticalRef.current = [s[0], second]
                   // Don't persist the panel's height while maximized — it's the
                   // full column, not the user's preferred size.
