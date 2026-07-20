@@ -6,10 +6,18 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel superseded runs on the same ref. On a PR, a new push cancels the prior
+# run (cancel-in-progress). On main, the group is per-SHA so pushes never cancel
+# each other — every main commit keeps its full run as the safety-net record.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
 jobs:
   ci:
     name: Lint / Typecheck / Test / Build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
@@ -59,6 +67,7 @@ jobs:
     name: Integration Tests
     needs: ci
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
@@ -97,12 +106,14 @@ jobs:
     name: Detect affected E2E
     needs: ci
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       core: ${{ steps.detect.outputs.core }}
       extensions: ${{ steps.detect.outputs.extensions }}
       has-extensions: ${{ steps.detect.outputs.has-extensions }}
       external: ${{ steps.detect.outputs.external }}
       has-external: ${{ steps.detect.outputs.has-external }}
+      package-windows: ${{ steps.detect.outputs.package-windows }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -139,6 +150,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         shard: [1, 2]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     env:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
@@ -295,6 +307,7 @@ jobs:
       matrix:
         suite: ${{ fromJson(needs.detect-affected.outputs.extensions) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
@@ -367,6 +380,7 @@ jobs:
       matrix:
         suite: ${{ fromJson(needs.detect-affected.outputs.external) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
@@ -438,6 +452,7 @@ jobs:
     name: Benchmark
     needs: ci
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     continue-on-error: true
     env:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
@@ -489,8 +504,10 @@ jobs:
 
   package-windows:
     name: Package Windows Executable
-    needs: ci
+    needs: detect-affected
+    if: needs.detect-affected.outputs.package-windows == 'true'
     runs-on: windows-latest
+    timeout-minutes: 60
     env:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 

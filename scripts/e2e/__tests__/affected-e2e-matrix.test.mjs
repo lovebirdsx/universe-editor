@@ -23,6 +23,7 @@ import {
   e2ePackagesFromPlan,
   computeMatrix,
   computeExternalMatrix,
+  computeShouldPackage,
 } from '../affected-e2e-matrix.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -138,6 +139,42 @@ test('a shared-input change fans out to every external suite', () => {
 
 test('an unrelated change runs no external suite', () => {
   assert.deepEqual(computeExternalMatrix(['docs/user/foo.md', 'README.md']), [])
+})
+
+// --- package-windows gating -------------------------------------------------
+// The expensive Windows packaging job runs on every main push / tag / manual
+// dispatch (forced --all), but on a PR only when a packaging-mechanism path is
+// touched — business-only renderer/main edits no longer trigger it.
+
+test('--all forces the Windows packaging job on (main / tag / manual)', () => {
+  assert.equal(computeShouldPackage([], { all: true }), true)
+})
+
+test('a packaging-mechanism change gates the Windows packaging job on', () => {
+  for (const p of [
+    'apps/editor/electron-builder.yml',
+    'apps/editor/build/installer.nsh',
+    'apps/editor/package.json',
+    'apps/editor/electron.vite.config.ts',
+    'scripts/release/runtime-resources.mjs',
+    'vendor/claude-agent-acp/dist/index.js',
+    'pnpm-workspace.yaml',
+    'pnpm-lock.yaml',
+  ]) {
+    assert.equal(computeShouldPackage([p]), true, `${p} should gate packaging on`)
+  }
+})
+
+test('a business-only / unrelated change does NOT trigger Windows packaging', () => {
+  for (const p of [
+    'apps/editor/src/renderer/workbench/sidebar/SideBar.tsx',
+    'apps/editor/src/main/services/window/windowMainService.ts',
+    'packages/platform/src/ipc/ipc.ts',
+    'docs/user/foo.md',
+    'README.md',
+  ]) {
+    assert.equal(computeShouldPackage([p]), false, `${p} should not trigger packaging`)
+  }
 })
 
 // Structural guard: the core-fixture extensions MUST be declared deps of

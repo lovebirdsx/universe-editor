@@ -3,7 +3,9 @@
 > 依据：[06-extensions-engineering.md](../architecture-review-202607/06-extensions-engineering.md) P2 #1/#2 + P3 若干。
 > 批次：任务 1 第一批（P1）；任务 2-4 第二批（P2）；机会型见末尾。
 
-## 任务 1：CI 三板斧 ⬜（P1，第一批，预估 0.5 天）
+## 任务 1：CI 三板斧 ✅（P1，第一批，预估 0.5 天）
+
+> 已完成（2026-07-20）：ci.yml 顶层加 `concurrency`（PR 取消旧 run，main push 按 SHA 分组不取消保留全量兜底）；8 个 job 全部加 `timeout-minutes`（ci/integration 20、detect-affected 10、e2e 45、extensions/external 30、bench 25、package-windows 60）；package-windows 改 `needs: detect-affected` + `if: package-windows == 'true'`，新增输出由 `affected-e2e-matrix.mjs` 的 `computeShouldPackage` 纯函数按打包机制路径（electron-builder.yml/build/package.json/electron.vite.config.ts/scripts/release/vendor/lockfiles）计算，main/tag/手动走 `--all` 强制全量。纯函数已补 3 个路由单测。
 
 **背景**：`ci.yml` 全文无 `concurrency:` / `timeout-minutes:`；package-windows 每个 PR 无条件跑完整 Windows 打包（ci.yml:490-493）。同一 PR 连续 push 排队跑全量流水线，挂死 job 只能等 GitHub 默认 6h。这是当前 CI 成本/时长的最大杠杆，改动只有几行 yaml。
 

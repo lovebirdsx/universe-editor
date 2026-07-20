@@ -9,6 +9,8 @@
  *    - extensions: JSON array of {name, dir, prep} for each extension whose own
  *                  `e2e` task turbo marks affected. `prep` names the extra CI
  *                  setup that extension's specs need (tsserver).
+ *    - package-windows: "true"/"false" — whether the expensive Windows packaging
+ *                  job should run (packaging-mechanism paths, or forced on --all).
  *
  *  How "affected" is computed: `turbo run e2e --filter=...[<base>] --dry=json`.
  *  Turbo walks the workspace dependency graph, so editing `platform` marks every
@@ -81,6 +83,24 @@ const EXTERNAL_SHARED_PATHS = [
   'scripts/e2e/',
 ]
 
+// The Windows packaging job is expensive (full electron-builder run) and used to
+// fire on every PR. It validates the PACKAGING MECHANISM (electron-builder config,
+// NSIS installer, vendor extraResources, runtime staging) rather than business
+// logic — those are covered by e2e. So on a PR it runs only when a change could
+// affect the packaged artifact's mechanism; everything else (main push / tag /
+// manual dispatch) forces it on via `--all`. Business-only renderer/main edits no
+// longer trigger it — the main-push full run is the safety net.
+const PACKAGE_PATHS = [
+  'apps/editor/electron-builder.yml',
+  'apps/editor/build/', // NSIS installer.nsh, icons, entitlements
+  'apps/editor/package.json', // packaging scripts / electron dep bumps
+  'apps/editor/electron.vite.config.ts',
+  'scripts/release/', // runtime-resources staging, vendor-install
+  'vendor/', // agent forks bundled into resources/
+  'pnpm-workspace.yaml',
+  'pnpm-lock.yaml',
+]
+
 function parseArgs(argv) {
   const args = { all: false, base: undefined }
   for (let i = 0; i < argv.length; i++) {
@@ -135,6 +155,17 @@ export function computeExternalMatrix(changedPaths, { all = false } = {}) {
 }
 
 /**
+ * Whether the Windows packaging job should run for a set of changed file paths.
+ * Pure so the routing is unit-testable. `all` forces it on (main push / tag /
+ * manual dispatch); otherwise it runs iff a change touches the packaging
+ * mechanism (see {@link PACKAGE_PATHS}).
+ */
+export function computeShouldPackage(changedPaths, { all = false } = {}) {
+  if (all) return true
+  return [...changedPaths].some((p) => PACKAGE_PATHS.some((prefix) => p.startsWith(prefix)))
+}
+
+/**
  * Ask turbo which packages have an affected `e2e` task. Returns the set of
  * package names with a real (non-<NONEXISTENT>) e2e command. Filter is
  * `...[<base>]` — the `...` includes dependents so a dep change fans out.
@@ -168,7 +199,9 @@ function main() {
   const forceAll = all || !base
   const affected = forceAll ? new Set() : affectedE2ePackages(base)
   const { core, extensions } = computeMatrix(affected, { all: forceAll })
-  const external = computeExternalMatrix(forceAll ? [] : changedPathsSince(base), { all: forceAll })
+  const changedPaths = forceAll ? [] : changedPathsSince(base)
+  const external = computeExternalMatrix(changedPaths, { all: forceAll })
+  const shouldPackage = computeShouldPackage(changedPaths, { all: forceAll })
 
   const outputs = {
     core: String(core),
@@ -176,6 +209,7 @@ function main() {
     'has-extensions': String(extensions.length > 0),
     external: JSON.stringify(external),
     'has-external': String(external.length > 0),
+    'package-windows': String(shouldPackage),
   }
 
   const gh = process.env.GITHUB_OUTPUT
