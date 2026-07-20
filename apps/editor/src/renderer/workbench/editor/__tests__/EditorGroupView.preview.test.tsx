@@ -99,4 +99,27 @@ describe('EditorGroupView — preview tab', () => {
     expect(svc.activeGroup.count).toBe(0)
     expect(svc.activeGroup.previewEditor).toBeUndefined()
   })
+
+  it('middle-clicking a tab closes it', () => {
+    const svc = new EditorGroupsService()
+    const a = new FakeEditor('a')
+    svc.activeGroup.openEditor(a, { pinned: true })
+    renderWithServices(
+      <EditorGroupView group={svc.activeGroup} groupsService={svc} componentMap={map as never} />,
+    )
+    expect(svc.activeGroup.count).toBe(1)
+    fireEvent(screen.getByRole('tab'), new MouseEvent('auxclick', { bubbles: true, button: 1 }))
+    expect(svc.activeGroup.count).toBe(0)
+  })
+
+  it('middle-click ignores non-middle buttons', () => {
+    const svc = new EditorGroupsService()
+    const a = new FakeEditor('a')
+    svc.activeGroup.openEditor(a, { pinned: true })
+    renderWithServices(
+      <EditorGroupView group={svc.activeGroup} groupsService={svc} componentMap={map as never} />,
+    )
+    fireEvent(screen.getByRole('tab'), new MouseEvent('auxclick', { bubbles: true, button: 2 }))
+    expect(svc.activeGroup.count).toBe(1)
+  })
 })

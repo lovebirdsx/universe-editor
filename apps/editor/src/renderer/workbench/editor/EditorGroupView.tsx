@@ -31,6 +31,7 @@ import {
   IDialogService,
   IEditorResolverService,
   IFileService,
+  IHostService,
   IInstantiationService,
   ILoggerService,
   INotificationService,
@@ -284,6 +285,9 @@ const EditorTab = memo(function EditorTab({
   groupId: number
   showDropIndicator: boolean
 }) {
+  const host = useOptionalService(IHostService)
+  const isLinux = host?.platform === 'linux'
+
   const resource = input.resource
   const iconId = input.getIconId?.()
   const showsFileIcon =
@@ -334,6 +338,21 @@ const EditorTab = memo(function EditorTab({
       onClick={onActivate}
       onDoubleClick={onPin}
       onContextMenu={onContextMenu}
+      onMouseDown={(e) => {
+        // 中键按下时阻止默认的自动滚动光标（Windows/Linux 三键鼠标常见行为）。
+        if (e.button === 1) e.preventDefault()
+      }}
+      onMouseUp={(e) => {
+        // X11 下中键释放会把选区文本粘贴到焦点元素，需要单独拦截（对齐 VSCode）。
+        if (isLinux && e.button === 1) e.preventDefault()
+      }}
+      onAuxClick={(e) => {
+        // "click" 事件只在主键触发，中键触发的是 auxclick，故此处无需与 onActivate 互斥。
+        if (e.button !== 1) return
+        e.preventDefault()
+        e.stopPropagation()
+        onClose()
+      }}
       role="tab"
       aria-selected={isActive}
       data-drop-before={showDropIndicator ? 'true' : undefined}
