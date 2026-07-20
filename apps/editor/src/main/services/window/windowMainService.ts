@@ -115,6 +115,11 @@ export interface WindowMainServiceOptions {
 
 const SESSION_PERSIST_DEBOUNCE_MS = 300
 
+// Upper bound on the renderer's shutdown-veto round-trip. Long enough for a busy
+// but healthy renderer to answer a confirm dialog; short enough that a wedged one
+// can't stall quit indefinitely. On timeout the veto is released (app proceeds).
+const CONFIRM_SHUTDOWN_TIMEOUT_MS = 10_000
+
 export class WindowMainService implements IWindowMainService {
   private readonly _windows = new Map<number, WindowEntry>()
   private _quitting = false
@@ -632,14 +637,29 @@ export class WindowMainService implements IWindowMainService {
     if (!entry.win.isDestroyed()) entry.win.close()
   }
 
-  /** Ask the renderer; treat an unreachable renderer / error as "proceed". */
+  /** Ask the renderer; treat an unreachable renderer / error / timeout as "proceed". */
   private async _canProceed(
     rendererLifecycle: IRendererLifecycleService,
     reason: ShutdownReason,
     context?: ShutdownConfirmationContext,
   ): Promise<boolean> {
     try {
-      return await rendererLifecycle.confirmShutdown(reason, context)
+      // A wedged renderer (e.g. a hung JS main thread) may never answer the veto
+      // round-trip. The IPC channel only rejects on window teardown, so without a
+      // timeout here the quit/close flow would hang silently forever. Bound the
+      // wait and treat a non-answer as "release the veto" — an unresponsive
+      // renderer must not be able to block the app from quitting.
+      return await Promise.race([
+        rendererLifecycle.confirmShutdown(reason, context),
+        new Promise<boolean>((resolve) =>
+          setTimeout(() => {
+            this._opts.logService
+              .createLogger({ id: 'window', name: 'Window' })
+              .warn(`confirmShutdown timed out after ${CONFIRM_SHUTDOWN_TIMEOUT_MS}ms; proceeding`)
+            resolve(true)
+          }, CONFIRM_SHUTDOWN_TIMEOUT_MS),
+        ),
+      ])
     } catch {
       return true
     }

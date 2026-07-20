@@ -6,6 +6,7 @@
 
 import { Disposable, IDisposable, toDisposable } from '../base/lifecycle.js'
 import { Emitter, Event } from '../base/event.js'
+import { URI, type UriComponents } from '../base/uri.js'
 
 // -------- Transport abstraction --------
 
@@ -87,7 +88,20 @@ type ResponseMessage = {
   type: 'response'
   id: number
   data?: unknown
-  error?: string
+  error?: WireError
+}
+
+/**
+ * Structured error carried over the wire. Preserves the error's `name` and an
+ * optional machine-readable `code` so the remote side can branch on identity
+ * instead of pattern-matching the human `message` (which breaks the moment the
+ * wording changes). `message` is always present; older peers that sent a bare
+ * string are tolerated on decode (see {@link reviveWireError}).
+ */
+type WireError = {
+  name: string
+  message: string
+  code?: string | number
 }
 
 type EventMessage = {
@@ -117,6 +131,19 @@ type IpcMessage =
   | SubscribeMessage
   | UnsubscribeMessage
 
+/**
+ * Rejection reason for any request still pending when a {@link ChannelClient} is
+ * disposed (e.g. its window closed). Named so callers can distinguish a torn-down
+ * channel from a genuine remote error and swallow it during shutdown.
+ */
+export class IpcChannelDisposedError extends Error {
+  readonly code = 'IPC_CHANNEL_DISPOSED'
+  constructor(message = 'IPC channel disposed before response') {
+    super(message)
+    this.name = 'IpcChannelDisposedError'
+  }
+}
+
 // Binary payloads (file contents, etc.) must survive the JSON envelope: a raw
 // `Uint8Array` would stringify to `{"0":..,"1":..}` and revive as a plain object
 // (no `.length`/`.subarray`), silently corrupting binary IPC. Tag every byte
@@ -124,6 +151,15 @@ type IpcMessage =
 // `Uint8Array`, so this covers main-process reads too.
 const U8_TAG = '$u8'
 const B64_CHUNK = 0x8000
+
+// URIs must survive the envelope as real `URI` instances, not bare
+// `UriComponents`. `URI.toJSON()` already stamps `{ $mid: 1, scheme, ... }` when
+// `JSON.stringify` walks a URI (so the replacer needs nothing), but the parse
+// side would otherwise hand back a plain object with no `.fsPath`/`.with()` —
+// forcing 50+ call sites to remember a manual `URI.revive`. The reviver rebuilds
+// any `$mid: 1` object into a URI, killing that whole class of "forgot to revive"
+// bugs. `URI.revive` is idempotent, so existing manual calls stay safe.
+const URI_MID = 1
 
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = ''
@@ -146,8 +182,14 @@ function replacer(_key: string, value: unknown): unknown {
 
 function reviver(_key: string, value: unknown): unknown {
   if (value !== null && typeof value === 'object') {
-    const tagged = (value as Record<string, unknown>)[U8_TAG]
-    if (typeof tagged === 'string') return base64ToBytes(tagged)
+    const obj = value as Record<string, unknown>
+    if (typeof obj[U8_TAG] === 'string') return base64ToBytes(obj[U8_TAG] as string)
+    // A `$mid: 1` object is a serialized URI (see URI.toJSON). Revive it to a real
+    // instance. Guarded on scheme being a string so a hostile/garbage payload
+    // can't crash `URI.from`; falls through to the plain object otherwise.
+    if (obj['$mid'] === URI_MID && typeof obj['scheme'] === 'string') {
+      return URI.revive(obj as unknown as UriComponents)
+    }
   }
   return value
 }
@@ -158,6 +200,38 @@ function encode(msg: IpcMessage): Uint8Array {
 
 function decode(data: Uint8Array): IpcMessage {
   return JSON.parse(new TextDecoder().decode(data), reviver) as IpcMessage
+}
+
+/** Field an `Error` may carry a machine-readable code under (matches Node's `err.code`). */
+interface ErrorWithCode extends Error {
+  code?: string | number
+}
+
+/** Serialize a thrown value into the structured wire form (preserves name/code). */
+function serializeError(err: unknown): WireError {
+  if (err instanceof Error) {
+    const code = (err as ErrorWithCode).code
+    return {
+      name: err.name,
+      message: err.message,
+      ...(typeof code === 'string' || typeof code === 'number' ? { code } : {}),
+    }
+  }
+  return { name: 'Error', message: String(err) }
+}
+
+/**
+ * Rebuild an `Error` from the wire form, restoring `name` and (if present) `code`.
+ * Tolerates the legacy shape where `error` was a bare message string so a new
+ * client can still talk to an old server mid-rollout.
+ */
+function reviveWireError(wire: WireError | string | undefined): Error {
+  if (typeof wire === 'string') return new Error(wire)
+  if (!wire) return new Error('Unknown IPC error')
+  const err: ErrorWithCode = new Error(wire.message)
+  if (wire.name) err.name = wire.name
+  if (wire.code !== undefined) err.code = wire.code
+  return err
 }
 
 /**
@@ -184,7 +258,7 @@ export class ChannelClient extends Disposable implements IChannelClient {
       if (pending) {
         this._pendingRequests.delete(msg.id)
         if (msg.error) {
-          pending.reject(new Error(msg.error))
+          pending.reject(reviveWireError(msg.error))
         } else {
           pending.resolve(msg.data)
         }
@@ -233,7 +307,15 @@ export class ChannelClient extends Disposable implements IChannelClient {
 
   override dispose(): void {
     this._disposed = true
-    this._pendingRequests.clear()
+    // Reject every in-flight request so callers awaiting a response don't hang
+    // forever once the transport is gone (window closed / renderer torn down).
+    if (this._pendingRequests.size > 0) {
+      const err = new IpcChannelDisposedError()
+      for (const pending of this._pendingRequests.values()) {
+        pending.reject(err)
+      }
+      this._pendingRequests.clear()
+    }
     for (const emitter of this._eventEmitters.values()) {
       emitter.dispose()
     }
@@ -278,7 +360,7 @@ export class ChannelServer extends Disposable implements IChannelServer {
         encode({
           type: 'response',
           id,
-          error: `Channel '${channelName}' not found`,
+          error: { name: 'ChannelNotFoundError', message: `Channel '${channelName}' not found` },
         }),
       )
       return
@@ -290,8 +372,7 @@ export class ChannelServer extends Disposable implements IChannelServer {
         this._protocol.send(encode({ type: 'response', id, data }))
       })
       .catch((err: unknown) => {
-        const error = err instanceof Error ? err.message : String(err)
-        this._protocol.send(encode({ type: 'response', id, error }))
+        this._protocol.send(encode({ type: 'response', id, error: serializeError(err) }))
       })
   }
 

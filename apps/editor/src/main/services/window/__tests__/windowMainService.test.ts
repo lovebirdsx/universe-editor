@@ -296,4 +296,31 @@ describe('WindowMainService', () => {
 
     expect(userData.dispose).toHaveBeenCalled()
   })
+
+  it('proceeds with quit when a wedged renderer never answers confirmShutdown', async () => {
+    // A renderer whose main thread is stuck never resolves the veto round-trip.
+    // Without the timeout in _canProceed this would hang confirmQuit forever;
+    // instead it must release the veto (return true) after CONFIRM_SHUTDOWN_TIMEOUT_MS.
+    const wedgedLifecycle = {
+      _serviceBrand: undefined,
+      confirmShutdown: vi.fn(() => new Promise<boolean>(() => {})), // never settles
+    }
+    vi.mocked(bootstrapWindowIpc).mockImplementationOnce(() => ({
+      disposable: combinedDisposable(),
+      rendererLifecycle: wedgedLifecycle,
+      rendererSessions: {} as never,
+    }))
+    const svc = new WindowMainService(makeOpts())
+    await svc.createWindow()
+
+    vi.useFakeTimers()
+    try {
+      const pending = svc.confirmQuit()
+      await vi.advanceTimersByTimeAsync(10_000)
+      await expect(pending).resolves.toBe(true)
+      expect(wedgedLifecycle.confirmShutdown).toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

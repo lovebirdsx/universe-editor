@@ -21,7 +21,11 @@ import {
 } from '@universe-editor/platform'
 import { buildChildEnv } from '../process/env.js'
 import { decodeDiagnostic } from '../process/decode.js'
-import { ManagedChildProcess } from '../process/managedChildProcess.js'
+import {
+  CHILD_PROCESS_EXITED_CODE,
+  CHILD_STDIN_NOT_WRITABLE_CODE,
+  ManagedChildProcess,
+} from '../process/managedChildProcess.js'
 import type {
   AcpExitEvent,
   AcpLaunchSpec,
@@ -87,6 +91,19 @@ const BUNDLED_CLAUDE_ENTRY_PACKAGED = 'claude-agent-acp/dist/index.js'
 const BUNDLED_CODEX_ENTRY_DEV = '../../vendor/codex-acp/dist/index.js'
 /** Bundled Codex agent entry under `resourcesPath` in a packaged build. */
 const BUNDLED_CODEX_ENTRY_PACKAGED = 'codex-acp/dist/index.js'
+
+/**
+ * Code stamped on `writeStdin` rejections after the child can no longer accept
+ * input (exited / stdin destroyed). Consumers classify by this code rather than
+ * matching the message; it rides the structured IPC error envelope to the renderer.
+ */
+export const ACP_HOST_STDIN_NOT_WRITABLE_CODE = 'ACP_HOST_STDIN_NOT_WRITABLE'
+
+function acpHostStdinError(message: string): Error & { code: string } {
+  const err = new Error(message) as Error & { code: string }
+  err.code = ACP_HOST_STDIN_NOT_WRITABLE_CODE
+  return err
+}
 
 const defaultResolveNodeEntry: NodeEntryResolver = (entry) => {
   const dev = entry === 'codex' ? BUNDLED_CODEX_ENTRY_DEV : BUNDLED_CLAUDE_ENTRY_DEV
@@ -241,13 +258,16 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
   writeStdin(handle: string, data: string): Promise<void> {
     const entry = this._procs.get(handle)
     if (!entry || entry.exited) {
-      return Promise.reject(new Error(`AcpHost: unknown or exited handle ${handle}`))
+      return Promise.reject(acpHostStdinError(`AcpHost: unknown or exited handle ${handle}`))
     }
     return entry.proc.writeStdin(data).catch((err: Error) => {
-      // Normalize the managed wrapper's message to AcpHost's contract so the
-      // renderer's existing "not writable" / "unknown or exited" handling holds.
-      if (/not writable|has exited/.test(err.message)) {
-        throw new Error(`AcpHost: stdin is not writable for handle ${handle}`)
+      // Normalize the managed wrapper's not-writable/exited rejection to AcpHost's
+      // contract. Branch on the structured `code` (not the human message, which can
+      // be reworded) and re-throw with a code so the renderer can classify it after
+      // the error crosses IPC.
+      const code = (err as { code?: unknown }).code
+      if (code === CHILD_STDIN_NOT_WRITABLE_CODE || code === CHILD_PROCESS_EXITED_CODE) {
+        throw acpHostStdinError(`AcpHost: stdin is not writable for handle ${handle}`)
       }
       throw err
     })

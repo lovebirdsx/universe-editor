@@ -9,7 +9,9 @@
 - **反向 RPC 悬挂即永久**：`ChannelClient.call` 的 Promise 只在收到 response 时 settle（`ipc.ts:203-211`）；`dispose()` 只 clear 不 reject（`ipc.ts:234-236`）；帧死后 send 静默丢弃（`electronProtocol.ts:115-128`）。renderer 假死时 `confirmQuit` 的 `await rendererLifecycle.confirmShutdown(...)`（`windowMainService.ts:642`）永不返回，退出流程无声卡住。
 - **IPC 错误只传 message 字符串**（`ipc.ts:295-297`）：下游被迫正则匹配错误语义（`acpHostMainService.ts:249` `/not writable|has exited/`），改措辞即破坏远端判断。
 
-## 任务 1：URI 自动 marshalling ⬜（P1，第一批）
+## 任务 1：URI 自动 marshalling ✅（P1，第一批）
+
+> 已完成（2026-07-20）。落地：`packages/platform/src/ipc/ipc.ts` 的信封 reviver 在既有 base64/Uint8Array 标记同层新增 `$mid: 1` 识别——序列化端无需改（`URI.toJSON()` 已按 VSCode 约定打 `$mid:1`），reviver 端遇标记（带 string `scheme` 守卫，避免裸对象误判）经 `URI.revive` 还原为真 `URI` 实例，深度遍历复用现有路径。platform 补 5 例往返单测（单值 / 嵌套 / 数组 / 与 Uint8Array 混合 / 未打标记的裸 `UriComponents` 保持不变，断言用 `instanceof URI` 真还原）。**本批只上机制**：50+ 处手写 `URI.revive` 与 5 份 `toURI` helper 暂不删，待全量 e2e 长期稳定后再分批清理（步骤 3 明确要求）。既有 realpath @p1 防护 e2e 仍绿（全量 `pnpm e2e` 20 job 全过）。
 
 **目标**：跨 IPC 的 URI 自动还原为真 `URI` 实例，一次性消灭 "revive 忘写" 这一类 bug。
 
@@ -24,7 +26,12 @@
 
 **验收**：新写跨进程接口传 URI 不再需要任何手写 revive；手写 revive 调用点清零（或仅剩注释登记的豁免）。
 
-## 任务 2：ChannelClient dispose-reject + 反向 RPC 超时 ⬜（P1，第一批）
+## 任务 2：ChannelClient dispose-reject + 反向 RPC 超时 ✅（P1，第一批）
+
+> 已完成（2026-07-20）。落地：
+> - `ChannelClient.dispose()` 现 reject 全部 pending 请求，错误为新增的 `IpcChannelDisposedError`（`code = 'IPC_CHANNEL_DISPOSED'`），async 闭包不再随窗口关闭悬挂泄漏。
+> - `windowMainService.ts` 的 `_canProceed` 把 `rendererLifecycle.confirmShutdown(...)` 套 `Promise.race` 超时（常量 `CONFIRM_SHUTDOWN_TIMEOUT_MS = 10_000`，注释理由）；renderer 假死超时后按"视为放行"返回 `true` 并 warn 日志，退出流程不再无声卡死。
+> - 单测：platform 侧 dispose 时 pending reject（1 例）；windowMainService 侧用 `vi.useFakeTimers()` + `advanceTimersByTimeAsync(10_000)` 模拟 renderer 永不响应 confirmShutdown，断言退出在超时后继续（1 例）。正常响应路径不受影响。
 
 **步骤**：
 
@@ -34,7 +41,12 @@
 
 **验收**：renderer 假死场景下 app 能在超时窗口内正常退出；窗口关闭无 pending Promise 泄漏。
 
-## 任务 3：wire 结构化错误 ⬜（P1，第一批）
+## 任务 3：wire 结构化错误 ✅（P1，第一批）
+
+> 已完成（2026-07-20）。落地：
+> - IPC 错误信封升级为 `{ name, message, code? }`（`ResponseMessage.error` 由 `string` 改为 `WireError`）；序列化端 `serializeError(err)`、接收端 `reviveWireError(wire)` 还原为带 `name`/`code` 的 Error，`ChannelClient._handleMessage` 与 `ChannelServer._handleRequest`（channel-not-found → `ChannelNotFoundError`；catch → `serializeError`）全部走新信封。
+> - 迁移 message 正则判断为 code 判断：`managedChildProcess.ts` 导出 `CHILD_PROCESS_EXITED_CODE`/`CHILD_STDIN_NOT_WRITABLE_CODE`（`childProcessError` helper 打码，消息措辞不变以保既有单测）；`acpHostMainService.ts` 与 `extensionHostMainService.ts` 的 `writeStdin` 改按 `err.code` 分支（原 `/not writable|has exited/` 正则删除），acpHost 侧重抛带 `ACP_HOST_STDIN_NOT_WRITABLE_CODE` 的错误供 renderer 跨 IPC 后分类。grep 全仓无其余对 IPC 错误 message 做语义匹配的生产代码（余下 `.message` 匹配均为 notification 文案测试断言）。
+> - 单测：错误往返保留 name/code（2 例）；旧格式无 code 容错。
 
 **步骤**：
 

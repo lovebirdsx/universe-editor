@@ -25,7 +25,11 @@ import {
 } from '@universe-editor/platform'
 import { buildChildEnv } from '../process/env.js'
 import { decodeDiagnostic } from '../process/decode.js'
-import { ManagedChildProcess } from '../process/managedChildProcess.js'
+import {
+  CHILD_PROCESS_EXITED_CODE,
+  CHILD_STDIN_NOT_WRITABLE_CODE,
+  ManagedChildProcess,
+} from '../process/managedChildProcess.js'
 import type {
   ExtHostExitEvent,
   ExtHostStartResult,
@@ -285,7 +289,8 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
       return Promise.reject(new Error(`ExtensionHost: unknown or exited handle ${handle}`))
     }
     return entry.proc.writeStdin(data).catch((err: Error) => {
-      if (/not writable|has exited/.test(err.message)) {
+      const code = (err as { code?: unknown }).code
+      if (code === CHILD_STDIN_NOT_WRITABLE_CODE || code === CHILD_PROCESS_EXITED_CODE) {
         throw new Error(`ExtensionHost: stdin is not writable for handle ${handle}`)
       }
       throw err

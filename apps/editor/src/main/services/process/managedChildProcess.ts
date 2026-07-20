@@ -20,6 +20,26 @@ import { recordShutdownMark } from '../update/updateShutdownTrace.js'
 export const DEFAULT_KILL_TIMEOUT_MS = 2000
 
 /**
+ * Machine-readable codes stamped on `writeStdin` rejections. Consumers (acpHost /
+ * extensionHost) branch on `err.code` instead of pattern-matching the human
+ * message, and the structured IPC error envelope carries the code to the renderer
+ * (see packages/platform ipc.ts). Both mean "the child can no longer accept input".
+ */
+export const CHILD_PROCESS_EXITED_CODE = 'CHILD_PROCESS_EXITED'
+export const CHILD_STDIN_NOT_WRITABLE_CODE = 'CHILD_STDIN_NOT_WRITABLE'
+
+/** An `Error` carrying one of the child-process rejection codes above. */
+export interface ChildProcessError extends Error {
+  code: string
+}
+
+function childProcessError(message: string, code: string): ChildProcessError {
+  const err = new Error(message) as ChildProcessError
+  err.code = code
+  return err
+}
+
+/**
  * Tear down a whole process tree by PID. On Windows a `shell: true` spawn wraps
  * the real command in `cmd.exe`; `child.kill()` (TerminateProcess) then only
  * reaps the wrapper, leaving the grandchild (node/npx agent, shell command)
@@ -130,13 +150,23 @@ export class ManagedChildProcess extends Disposable {
 
   writeStdin(data: string): Promise<void> {
     if (this._exited) {
-      return Promise.reject(new Error(`ManagedChildProcess(${this._label}): process has exited`))
+      return Promise.reject(
+        childProcessError(
+          `ManagedChildProcess(${this._label}): process has exited`,
+          CHILD_PROCESS_EXITED_CODE,
+        ),
+      )
     }
     const stdin = this._child.stdin
     // Defend against the narrow race where the child died after spawn but before
     // its exit/error event reached us — stdin can already be destroyed.
     if (stdin.destroyed || stdin.writable === false) {
-      return Promise.reject(new Error(`ManagedChildProcess(${this._label}): stdin is not writable`))
+      return Promise.reject(
+        childProcessError(
+          `ManagedChildProcess(${this._label}): stdin is not writable`,
+          CHILD_STDIN_NOT_WRITABLE_CODE,
+        ),
+      )
     }
     return new Promise<void>((resolve, reject) => {
       stdin.write(data, 'utf8', (err) => {
