@@ -102,7 +102,7 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
       })
       loadComments()
     },
-    [commands, loadComments],
+    [commands, loadComments, reviewId],
   )
 
   useEffect(() => {
