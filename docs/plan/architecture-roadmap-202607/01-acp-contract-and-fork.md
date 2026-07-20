@@ -30,7 +30,9 @@
 
 **验收**：契约测试入 CI 并在相关路径变更时运行；两个 fork 的 5 个 ext-method + `_meta` 印章全部有 wire 形状断言。
 
-## 任务 2：claude fork 维护文档 + upstream remote ⬜（P1，第一批，预估 0.5 天）
+## 任务 2：claude fork 维护文档 + upstream remote ✅（P1，第一批，预估 0.5 天）
+
+> 已完成（2026-07-20）：新建 `vendor/claude-agent-acp/CLAUDE.md`（提交在 fork 仓库自身，对齐 codex fork 归属），覆盖四要素——红线（diff 最小/本仓库自有 prettier 配置与父项目相反/PostToolUse 钩子已 grep vendor 但仅本地状态/新功能落新文件）、本地改动清单（19 个提交逐条列功能+落点文件+5 个 ext-method 名，标注 rewind/AskUserQuestion/esbuild 三处新文件热区）、rebase 核对表（以父项目跨仓契约测试为回归底线）、上游同步节奏（每月或 minor 发版）。新增 `scripts/setup-vendor-remotes.mjs`（幂等，已实跑为两个 fork 配好 upstream），命令写进两个 fork CLAUDE.md。
 
 **步骤**：
 
