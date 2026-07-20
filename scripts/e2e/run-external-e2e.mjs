@@ -19,8 +19,12 @@
  *       (UNIVERSE_E2E_INCLUDE_REGRESSION / UNIVERSE_E2E_NO_TAG_FILTER), so the tag
  *       policy stays the single source of truth in playwrightConfig.ts.
  *    4. Build the extension FIRST (fresh dist/), so the suite never runs a stale
- *       bundle (the "green on old output" trap). The editor build is the caller's
- *       job (root `e2e:external` / CI builds it once).
+ *       bundle (the "green on old output" trap). It ALSO freshens the editor +
+ *       extension-host build the suite cold-launches (via turbo), so running this
+ *       directly inside an extension dir (`pnpm run e2ea`) never tests a stale
+ *       editor `out/`. When already inside a turbo task (TURBO_HASH set) or the
+ *       root `e2e:external` orchestrator (which builds them once up front), that
+ *       step is skipped.
  *
  *  Usage (from an extension's package.json script, cwd = the extension dir):
  *    node ../../scripts/e2e/run-external-e2e.mjs [--regression] [--grep "<title>"]
@@ -87,7 +91,30 @@ function run(command, args, opts = {}) {
   return res.status ?? 1
 }
 
-// 1) Build the extension so the suite loads a fresh dist/ (avoids the stale-output
+// 1) Freshen the editor + extension-host build the suite cold-launches (its
+//    packaged out/ + the host's dist/bootstrap.js). Skipped when already inside a
+//    turbo task (TURBO_HASH) or when the root e2e:external orchestrator already
+//    built them once (UNIVERSE_E2E_EDITOR_PREBUILT). Cache hits make it near-
+//    instant when fresh; otherwise it prevents the "green on a stale editor" trap.
+if (!process.env['TURBO_HASH'] && !process.env['UNIVERSE_E2E_EDITOR_PREBUILT']) {
+  const editorBuild = run(
+    process.execPath,
+    [
+      resolve(repoRoot, 'node_modules/turbo/bin/turbo'),
+      'run',
+      'build',
+      '--filter=@universe-editor/editor...',
+      '--filter=@universe-editor/extension-host...',
+    ],
+    { env: inheritedEnv, cwd: repoRoot },
+  )
+  if (editorBuild !== 0) {
+    console.error('run-external-e2e: editor/extension-host build failed')
+    process.exit(editorBuild)
+  }
+}
+
+// 2) Build the extension so the suite loads a fresh dist/ (avoids the stale-output
 //    trap). Self-resolves esbuild via the borrow in each esbuild.config.mjs.
 const buildStatus = run(process.execPath, [resolve(extDir, 'esbuild.config.mjs')], {
   env: inheritedEnv,
@@ -97,7 +124,7 @@ if (buildStatus !== 0) {
   process.exit(buildStatus)
 }
 
-// 2) Run Playwright with the tag-filter env seams set (never --grep-invert flags).
+// 3) Run Playwright with the tag-filter env seams set (never --grep-invert flags).
 const status = run(process.execPath, [playwrightCli, 'test', '-c', config, ...passthrough], {
   env: {
     ...inheritedEnv,

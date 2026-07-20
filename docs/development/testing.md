@@ -86,7 +86,7 @@ pnpm e2e:ext @universe-editor/perforce
 
 > **想无视缓存强制真跑 → `pnpm e2e:force` / `pnpm e2ea:force`**（例如复跑 flaky、或怀疑缓存掩盖问题；`e2ea:force` 含 @regression）。它分两步：先 `turbo run build`（**走缓存**，命中即秒过），再 `turbo run e2e … --force --only`——`--force` 忽略 e2e 缓存强制重跑，`--only` 只执行 e2e task 不执行父 build（否则 `--force` 会把 `editor#build` 也一起重建，造成 build 重复跑）。
 
-> **改了扩展代码，别裸 `pnpm --filter <ext> e2e`**：子包级 `e2e` script 只执行 `playwright test`，**不 build**——既不重建该扩展 `dist/`，也不重建被测的 editor `out/` 宿主，跑的是旧产物。走 `pnpm e2e:ext <包>`（或直接 `turbo run e2e --filter …`）：turbo 的 `e2e` task 依赖 `@universe-editor/editor#build`（e2e 跑 editor 产物 + 从 `extensions/<ext>/dist` 读内置扩展，扩展却不依赖 editor），会自动把宿主 + 被测扩展 + 上游全 build 到最新再跑。core 套件的 `core*App` fixture 激活 git/typescript/markdown，这三个是 editor 的 devDependencies，故其 `^build` 已自动带上。
+> **子包裸跑 e2e 也会自动 build 了**：`pnpm --filter <ext> e2e`（及 `e2ea`/`e2eg`/core 的 `e2e:regression`/`e2e:headed`/`e2e:ui`）的脚本前置了 `scripts/e2e/ensure-e2e-build.mjs`——裸跑时先 `turbo run build --filter=editor... --filter=<self>...` 把宿主 + 被测扩展 + 上游全刷新到最新（命中缓存则秒过），再启动 Playwright，杜绝「跑旧产物假绿/假红」。已在 turbo task 上下文里（根 `pnpm e2e`/`e2e:ext`，探测 `TURBO_HASH`）则跳过，不嵌套第二个 turbo。**与 `pnpm e2e:ext <包>` 的差别**：`e2e:ext` 走 turbo 的 `e2e` task、连 e2e **结果**都进缓存（输入未变直接返回上次结果）；子包裸跑只保证 **build** 新鲜、e2e 每次真跑（适合诊断单 spec、反复调）。core 套件的 `core*App` fixture 激活 git/typescript/markdown，这三个是 editor 的 devDependencies，`--filter=editor...` 的 `...` 已自动带上。
 
 ### 外部（marketplace）扩展 E2E
 
@@ -95,10 +95,10 @@ pnpm e2e:ext @universe-editor/perforce
 ```bash
 pnpm e2e:external    # 建 editor 一次 + 串行跑 eslint/pdf/excel-diff 全部外部 suite
 pnpm e2ea:external   # 同上，含 @regression
-npm --prefix extensions-external/<ext> run e2e   # 单个外部 suite（先本地建过 editor）
+npm --prefix extensions-external/<ext> run e2e   # 单个外部 suite（runner 会自动先建 editor+host）
 ```
 
-> 外部扩展 bare-import 解析不到 workspace 里的 harness / `@playwright/test`，故其 `playwright.config.ts` 用**相对 import** 拉 harness dist，且 runner（`scripts/e2e/run-external-e2e.mjs`）从 harness 包解析出**唯一一份** playwright CLI 来 spawn。tag 分流仍复用 `UNIVERSE_E2E_*` env（单一事实源 `grepOptions`）。套路详见 skill `e2e-architecture` 的「外部扩展 e2e 套路」。
+> 外部扩展 bare-import 解析不到 workspace 里的 harness / `@playwright/test`，故其 `playwright.config.ts` 用**相对 import** 拉 harness dist，且 runner（`scripts/e2e/run-external-e2e.mjs`）从 harness 包解析出**唯一一份** playwright CLI 来 spawn。tag 分流仍复用 `UNIVERSE_E2E_*` env（单一事实源 `grepOptions`）。runner 会先刷新 editor + extension-host 的 build（`turbo`，命中缓存则秒过）再 build 该扩展 `dist/`，故单包裸跑也不会测到旧宿主；根 `e2e:external` 已一次性建好时用 `UNIVERSE_E2E_EDITOR_PREBUILT` 跳过重复。套路详见 skill `e2e-architecture` 的「外部扩展 e2e 套路」。
 
 
 ## CI affected 选择性执行

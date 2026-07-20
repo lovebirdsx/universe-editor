@@ -37,9 +37,7 @@ function run(command, args, opts = {}) {
 // On Windows, Node refuses to spawn `.cmd` files without a shell (EINVAL since the
 // CVE-2024-27980 fix), so npm runs go through the shell there.
 function runNpm(args, opts = {}) {
-  return isWin
-    ? run('npm', args, { shell: true, ...opts })
-    : run('npm', args, opts)
+  return isWin ? run('npm', args, { shell: true, ...opts }) : run('npm', args, opts)
 }
 
 // Build the editor once; the suites all run against its packaged out/. The
@@ -65,7 +63,12 @@ for (const suite of SUITES) {
     continue
   }
   console.log(`\n› external e2e: ${suite}${regression ? ' (+@regression)' : ''}`)
-  const status = runNpm(['run', regression ? 'e2ea' : 'e2e'], { cwd: dir })
+  // Editor + extension-host are already built above; tell the per-suite runner
+  // to skip its own editor freshen (it would be a redundant turbo round-trip).
+  const status = runNpm(['run', regression ? 'e2ea' : 'e2e'], {
+    cwd: dir,
+    env: { ...process.env, UNIVERSE_E2E_EDITOR_PREBUILT: '1' },
+  })
   if (status !== 0) failed++
 }
 

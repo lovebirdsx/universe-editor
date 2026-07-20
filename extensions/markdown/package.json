@@ -153,9 +153,9 @@
     "dev": "node esbuild.config.mjs --watch",
     "typecheck": "tsc --noEmit && tsc --project e2e/tsconfig.json",
     "test": "vitest run --passWithNoTests",
-    "e2e": "playwright test -c e2e/playwright.config.ts",
-    "e2ea": "cross-env UNIVERSE_E2E_INCLUDE_REGRESSION=1 playwright test -c e2e/playwright.config.ts",
-    "e2eg": "cross-env UNIVERSE_E2E_NO_TAG_FILTER=1 playwright test -c e2e/playwright.config.ts --grep ",
+    "e2e": "node ../../scripts/e2e/ensure-e2e-build.mjs @universe-editor/markdown && playwright test -c e2e/playwright.config.ts",
+    "e2ea": "node ../../scripts/e2e/ensure-e2e-build.mjs @universe-editor/markdown && cross-env UNIVERSE_E2E_INCLUDE_REGRESSION=1 playwright test -c e2e/playwright.config.ts",
+    "e2eg": "node ../../scripts/e2e/ensure-e2e-build.mjs @universe-editor/markdown && cross-env UNIVERSE_E2E_NO_TAG_FILTER=1 playwright test -c e2e/playwright.config.ts --grep ",
     "lint": "eslint src",
     "lint:fix": "eslint --fix src",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
