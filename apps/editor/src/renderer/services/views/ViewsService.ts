@@ -158,7 +158,11 @@ export class ViewsService extends Disposable implements IViewsService {
 
     this._suspendPersist = true
     try {
-      const merged: Record<number, string | undefined> = {}
+      // Base on the current selection so a persisted scope that only records
+      // some locations doesn't drop the runtime selection of the others.
+      const merged: Record<number, string | undefined> = {
+        ...this.activeContainerByLocation.get(),
+      }
       for (const [k, v] of Object.entries(data.activeContainerByLocation)) {
         if (typeof v === 'string') merged[Number(k)] = v
       }
@@ -184,17 +188,17 @@ export class ViewsService extends Disposable implements IViewsService {
     }
   }
 
-  /** Reset to empty then re-load from the new WORKSPACE scope. */
+  /**
+   * Re-load the active-container selection from the new WORKSPACE scope. Keeps
+   * the current runtime selection as the base: switching to a workspace that
+   * has no persisted views must not clobber the container the user has open
+   * (VSCode keeps the current viewlet across workspace switches). Persisted
+   * selections still override per location.
+   */
   private async _reload(): Promise<void> {
     if (this._saveTimer) {
       clearTimeout(this._saveTimer)
       this._saveTimer = undefined
-    }
-    this._suspendPersist = true
-    try {
-      this.activeContainerByLocation.set({}, undefined)
-    } finally {
-      this._suspendPersist = false
     }
     await this._loadFromStorage()
   }

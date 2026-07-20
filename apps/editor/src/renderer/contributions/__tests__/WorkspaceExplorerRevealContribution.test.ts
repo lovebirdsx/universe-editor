@@ -76,20 +76,24 @@ function makeLayoutStub(): {
   return { service, setVisibleCalls }
 }
 
-function makeViewsStub(): {
+function makeViewsStub(activeId?: string): {
   service: (typeof IViewsService)['prototype']
   openContainerCalls: string[]
 } {
   const openContainerCalls: string[] = []
+  let active = activeId
   const service = {
     _serviceBrand: undefined,
     activeContainerByLocation: observableValue(
       'views.active',
       {} as Readonly<Record<number, string | undefined>>,
     ),
-    openViewContainer: (id: string) => openContainerCalls.push(id),
+    openViewContainer: (id: string) => {
+      active = id
+      openContainerCalls.push(id)
+    },
     closeViewContainer: () => {},
-    getActiveViewContainerId: () => undefined,
+    getActiveViewContainerId: () => active,
   } as unknown as (typeof IViewsService)['prototype']
   return { service, openContainerCalls }
 }
@@ -147,6 +151,36 @@ describe('WorkspaceExplorerRevealContribution', () => {
 
     expect(setVisibleCalls).toHaveLength(2)
     expect(openContainerCalls).toHaveLength(2)
+
+    contribution.dispose()
+  })
+
+  it('preserves a non-Explorer container the user already activated', () => {
+    // Regression: opening a folder fires onDidChangeWorkspace asynchronously; if
+    // the user has already switched the side bar to Search (e.g. clicked it right
+    // after opening the folder), the late-arriving reveal must NOT clobber it.
+    const ws = makeWorkspaceStub()
+    const { service: layout, setVisibleCalls } = makeLayoutStub()
+    const { service: views, openContainerCalls } = makeViewsStub('workbench.view.search')
+    const contribution = makeContribution(ws, layout, views)
+
+    ws.fireWorkspaceChange({ folder: URI.file('/tmp/myProject'), name: 'myProject' })
+
+    expect(openContainerCalls).toHaveLength(0)
+    expect(setVisibleCalls).toHaveLength(0)
+
+    contribution.dispose()
+  })
+
+  it('reveals Explorer when the side bar has no active container yet', () => {
+    const ws = makeWorkspaceStub()
+    const { service: layout } = makeLayoutStub()
+    const { service: views, openContainerCalls } = makeViewsStub(undefined)
+    const contribution = makeContribution(ws, layout, views)
+
+    ws.fireWorkspaceChange({ folder: URI.file('/tmp/myProject'), name: 'myProject' })
+
+    expect(openContainerCalls).toContain('workbench.view.explorer')
 
     contribution.dispose()
   })

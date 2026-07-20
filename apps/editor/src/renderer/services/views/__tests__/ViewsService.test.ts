@@ -160,5 +160,31 @@ describe('ViewsService', () => {
       await tick()
       expect(svc.getActiveViewContainerId(ViewContainerLocation.SideBar)).toBe('explorer')
     })
+
+    it('keeps the runtime selection when switching to a workspace with no persisted views', async () => {
+      // No persisted PersistedViews for either scope (fresh mkdtemp folder in
+      // the search e2e). A runtime-activated container must NOT be clobbered
+      // back to the default when the workspace scope switches.
+      const emitter = new Emitter<void>()
+      const storage: IStorageService = {
+        ...stubStorage,
+        get: async () => undefined,
+        onDidChangeWorkspaceScope: emitter.event,
+      }
+      const workspace = { current: null } as unknown as IWorkspaceService
+      const svc = new ViewsService(storage, workspace, stubViewDescriptors)
+
+      const loadPromise = svc.load()
+      emitter.fire()
+      await loadPromise
+
+      svc.openViewContainer('search')
+      expect(svc.getActiveViewContainerId(ViewContainerLocation.SideBar)).toBe('search')
+
+      // Genuine runtime workspace switch to an empty-storage folder.
+      emitter.fire()
+      await tick()
+      expect(svc.getActiveViewContainerId(ViewContainerLocation.SideBar)).toBe('search')
+    })
   })
 })
