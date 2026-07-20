@@ -189,6 +189,13 @@
   text-decoration: underline;
 }
 
+/* Inline code used as a link's text (e.g. [`foo`](foo.md)): keep the pill but
+   inherit the link colour + underline so it still reads as clickable. */
+.mdLink .inlineCode {
+  color: var(--color-badge-progress, #4fa6e2);
+  text-decoration: underline;
+}
+
 .mermaidBlock {
   display: flex;
   justify-content: center;
