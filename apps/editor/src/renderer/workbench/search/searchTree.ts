@@ -99,10 +99,7 @@ export function buildSearchSnapshot(
   // Order files purely by their resource path — never by ripgrep's arrival
   // order, which is nondeterministic across runs (see searchCompare.ts).
   const sorted = [...results].sort((a, b) =>
-    comparePaths(
-      (URI.revive(a.resource) as URI).fsPath.replace(/\\/g, '/'),
-      (URI.revive(b.resource) as URI).fsPath.replace(/\\/g, '/'),
-    ),
+    comparePaths(a.resource.fsPath.replace(/\\/g, '/'), b.resource.fsPath.replace(/\\/g, '/')),
   )
 
   const childList = (id: string): SearchNode[] => {
@@ -119,7 +116,7 @@ export function buildSearchSnapshot(
   const folderCount = new Map<string, number>()
   if (mode === 'tree') {
     for (const fm of sorted) {
-      const { dirs } = toSegments(rootUri, URI.revive(fm.resource) as URI)
+      const { dirs } = toSegments(rootUri, fm.resource)
       const count = countMatches(fm)
       let acc = ''
       for (const seg of dirs) {
@@ -156,7 +153,7 @@ export function buildSearchSnapshot(
   }
 
   for (const fm of sorted) {
-    const resource = URI.revive(fm.resource) as URI
+    const resource = fm.resource
     const { dirs, name } = toSegments(rootUri, resource)
     const parentFolder = ensureFolderChain(dirs)
     const relPath = dirs.length > 0 ? `${dirs.join('/')}/${name}` : name

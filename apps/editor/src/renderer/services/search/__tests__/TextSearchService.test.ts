@@ -107,7 +107,7 @@ function makeLoggerService(): ILoggerService {
 
 function makeMatch(path: string): IFileMatch {
   return {
-    resource: URI.file(path).toJSON(),
+    resource: URI.file(path),
     matches: [{ lineNumber: 1, preview: 'foo', ranges: [{ startColumn: 1, endColumn: 4 }] }],
   }
 }

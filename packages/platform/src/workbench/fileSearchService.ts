@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '../di/instantiation.js'
-import type { URI, UriComponents } from '../base/uri.js'
+import type { URI } from '../base/uri.js'
 
 export interface IFileSearchQuery {
   readonly root: URI
@@ -18,7 +18,7 @@ export interface IFileSearchQuery {
 }
 
 export interface IFileSearchMatch {
-  readonly resource: UriComponents
+  readonly resource: URI
   readonly fsPath: string
   readonly relativePath: string
   readonly basename: string

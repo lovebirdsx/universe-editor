@@ -298,8 +298,8 @@ export class TextSearchMainService extends Disposable implements ITextSearchMain
     const addMatch = (data: RgMatchData): void => {
       if (limitHit === 'matches') return
       const relPath = bytesOrTextToString(data.path).replace(/\\/g, '/')
-      const resource = URI.file(path.join(root.fsPath, relPath)).toJSON()
-      const key = URI.revive(resource)!.toString()
+      const resource = URI.file(path.join(root.fsPath, relPath))
+      const key = resource.toString()
       const line = bytesOrTextToString(data.lines).replace(/\r?\n$/, '')
       const submatches =
         data.submatches.length > 0

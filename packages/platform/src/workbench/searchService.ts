@@ -9,7 +9,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '../di/instantiation.js'
-import type { UriComponents } from '../base/uri.js'
+import type { URI } from '../base/uri.js'
 
 export interface ITextSearchQuery {
   readonly pattern: string
@@ -44,7 +44,7 @@ export interface ITextSearchMatch {
 }
 
 export interface IFileMatch {
-  readonly resource: UriComponents
+  readonly resource: URI
   readonly matches: readonly ITextSearchMatch[]
 }
 

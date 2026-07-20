@@ -16,19 +16,18 @@ import {
   type IWorkspaceService,
   type IWorkspaceServiceWire,
   URI,
-  type UriComponents,
 } from '@universe-editor/platform'
 
 function reviveWorkspace(raw: IWorkspace | null): IWorkspace | null {
   if (!raw) return null
-  const folder =
-    raw.folder instanceof URI ? raw.folder : (URI.revive(raw.folder as UriComponents) as URI)
-  return { folder, name: raw.name }
+  // `folder` arrives as a real URI: the IPC envelope revives $mid-stamped URIs
+  // on the way across, so no manual revive is needed here.
+  return { folder: raw.folder, name: raw.name }
 }
 
 function reviveRecent(raw: readonly IRecentWorkspace[]): readonly IRecentWorkspace[] {
   return raw.map((r) => ({
-    folder: r.folder instanceof URI ? r.folder : (URI.revive(r.folder as UriComponents) as URI),
+    folder: r.folder,
     name: r.name,
     lastOpened: r.lastOpened,
   }))

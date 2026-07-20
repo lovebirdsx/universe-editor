@@ -81,8 +81,8 @@ class FakeUserData implements IUserDataFilesService {
   async setValue(): Promise<boolean> {
     return true
   }
-  async getFileUri(file: UserDataFile): Promise<UriComponents | null> {
-    return this._uris.get(file)?.toJSON() ?? null
+  async getFileUri(file: UserDataFile): Promise<URI | null> {
+    return this._uris.get(file) ?? null
   }
   fire(file: UserDataFile, source: 'self' | 'external' = 'external'): void {
     this._emitter.fire({ file, source })
@@ -227,7 +227,7 @@ describe('ExternalChangeWatcher', () => {
       makeUriIdentity(),
     )
 
-    watcher.fire([{ type: 'modified', resource: uriA.toJSON() }])
+    watcher.fire([{ type: 'modified', resource: uriA }])
     await flush()
     expect(inputA.checks).toHaveLength(1)
     expect(inputB.checks).toHaveLength(0)
@@ -270,7 +270,7 @@ describe('ExternalChangeWatcher', () => {
     // 1000 temp files under an unrelated tree, each churning delete.
     const events: IFileChangeEvent[] = Array.from({ length: 1000 }, (_, i) => ({
       type: 'deleted',
-      resource: URI.file(`/engine/tmp/t${i}.tmp`).toJSON(),
+      resource: URI.file(`/engine/tmp/t${i}.tmp`),
     }))
     watcher.fire(events)
     await flush()
@@ -308,8 +308,8 @@ describe('ExternalChangeWatcher', () => {
     )
 
     watcher.fire([
-      { type: 'deleted', resource: URI.file('/engine/tmp/x.tmp').toJSON() },
-      { type: 'deleted', resource: openUri.toJSON() },
+      { type: 'deleted', resource: URI.file('/engine/tmp/x.tmp') },
+      { type: 'deleted', resource: openUri },
     ])
     await flush()
     // Only the matching event is confirmed against disk, not the unrelated one.
@@ -333,7 +333,7 @@ describe('ExternalChangeWatcher', () => {
       makeUriIdentity(),
     )
 
-    watcher.fire([{ type: 'modified', resource: URI.file('/ws/other.txt').toJSON() }])
+    watcher.fire([{ type: 'modified', resource: URI.file('/ws/other.txt') }])
     await flush()
     expect(fileInput.checks).toHaveLength(0)
   })
@@ -353,7 +353,7 @@ describe('ExternalChangeWatcher', () => {
       makeUriIdentity(),
     )
 
-    watcher.fire([{ type: 'deleted', resource: uri.toJSON() }])
+    watcher.fire([{ type: 'deleted', resource: uri }])
     await flush()
     expect(groups.closed).toEqual([fileInput])
     expect(fileInput.checks).toHaveLength(0)
@@ -375,7 +375,7 @@ describe('ExternalChangeWatcher', () => {
       makeUriIdentity(),
     )
 
-    watcher.fire([{ type: 'deleted', resource: uri.toJSON() }])
+    watcher.fire([{ type: 'deleted', resource: uri }])
     await flush()
     expect(groups.closed).toEqual([])
     expect(fileInput.checks).toHaveLength(1)
@@ -398,7 +398,7 @@ describe('ExternalChangeWatcher', () => {
       makeUriIdentity(),
     )
 
-    watcher.fire([{ type: 'deleted', resource: URI.file('/ws/folder').toJSON() }])
+    watcher.fire([{ type: 'deleted', resource: URI.file('/ws/folder') }])
     await flush()
     expect(groups.closed).toEqual([inputInside])
     expect(groups.group.editors).toEqual([inputOutside])
@@ -419,7 +419,7 @@ describe('ExternalChangeWatcher', () => {
       makeUriIdentity(),
     )
 
-    watcher.fire([{ type: 'modified', resource: uri.toJSON() }])
+    watcher.fire([{ type: 'modified', resource: uri }])
     await flush()
     // Discard reverts working tree to HEAD → modified side now equals original.
     expect(diff.modifiedContent).toBe('head')
@@ -445,7 +445,7 @@ describe('ExternalChangeWatcher', () => {
       makeUriIdentity(),
     )
 
-    watcher.fire([{ type: 'modified', resource: uri.toJSON() }])
+    watcher.fire([{ type: 'modified', resource: uri }])
     await flush()
     expect(diff.modifiedContent).toBe('live-edit')
     liveModels.delete(uri.toString())
@@ -592,7 +592,7 @@ describe('ExternalChangeWatcher', () => {
       makeUriIdentity('win32'),
     )
 
-    watcher.fire([{ type: 'modified', resource: eventUri.toJSON() }])
+    watcher.fire([{ type: 'modified', resource: eventUri }])
     await flush()
     expect(input.checks).toHaveLength(1)
   })
@@ -625,7 +625,7 @@ describe('ExternalChangeWatcher', () => {
       makeUriIdentity('win32'),
     )
 
-    watcher.fire([{ type: 'modified', resource: eventUri.toJSON() }])
+    watcher.fire([{ type: 'modified', resource: eventUri }])
     await flush()
     expect(modelValue).toBe('# new')
     liveModels.delete(sourceUri.toString())
@@ -650,7 +650,7 @@ describe('ExternalChangeWatcher', () => {
       makeUriIdentity(),
     )
 
-    watcher.fire([{ type: 'modified', resource: sourceUri.toJSON() }])
+    watcher.fire([{ type: 'modified', resource: sourceUri }])
     await flush()
     expect(source.checks).toHaveLength(1)
   })

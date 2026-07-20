@@ -8,7 +8,7 @@ import { buildSearchSnapshot, type SearchNode } from '../searchTree.js'
 
 function fileMatch(path: string, lines: { line: number; ranges: number }[]): IFileMatch {
   return {
-    resource: URI.file(path).toJSON(),
+    resource: URI.file(path),
     matches: lines.map((l) => ({
       lineNumber: l.line,
       preview: 'preview',

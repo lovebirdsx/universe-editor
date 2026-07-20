@@ -162,7 +162,7 @@ function makeFileSearch(root: URI): FakeFileSearch {
             ? norm.slice(rootPath.length + 1)
             : norm
           return {
-            resource: uri.toJSON(),
+            resource: uri,
             fsPath: uri.fsPath,
             relativePath,
             basename: relativePath.split('/').at(-1) ?? relativePath,

@@ -15,7 +15,6 @@ import {
   ITextSearchService,
   IWorkspaceService,
   StatusBarAlignment,
-  URI,
   markAsSingleton,
   type IFileMatch,
   type IStatusBarEntryAccessor,
@@ -130,7 +129,7 @@ export function useSearchEngine(
             onResults: (batch) => {
               if (ac.signal.aborted) return
               for (const fm of batch) {
-                accumRef.current.set((URI.revive(fm.resource) as URI).toString(), fm)
+                accumRef.current.set(fm.resource.toString(), fm)
               }
               scheduleFlush()
             },
@@ -143,9 +142,7 @@ export function useSearchEngine(
             flushTimerRef.current = null
           }
           // The promise result is authoritative — replace any accumulated batches.
-          accumRef.current = new Map(
-            res.map((fm) => [(URI.revive(fm.resource) as URI).toString(), fm]),
-          )
+          accumRef.current = new Map(res.map((fm) => [fm.resource.toString(), fm]))
           setResults(res)
           setIsSearching(false)
         })
@@ -184,11 +181,11 @@ export function useSearchEngine(
 
   useEffect(() => {
     if (results.length === 0) return
-    const known = new Set(results.map((fm) => (URI.revive(fm.resource) as URI).toString()))
+    const known = new Set(results.map((fm) => fm.resource.toString()))
     const disposable = markAsSingleton(
       fileWatcherService.onDidChangeFiles((events) => {
         for (const ev of events) {
-          const key = (URI.revive(ev.resource) as URI).toString()
+          const key = ev.resource.toString()
           if (known.has(key)) {
             setIsStale(true)
             return

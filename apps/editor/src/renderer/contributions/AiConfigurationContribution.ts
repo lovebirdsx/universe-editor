@@ -15,7 +15,6 @@ import {
   IWorkbenchContribution,
   JSONContributionRegistry,
   MutableDisposable,
-  URI,
   UserDataFile,
   type IJSONSchema,
 } from '@universe-editor/platform'
@@ -145,7 +144,7 @@ export class AiConfigurationContribution extends Disposable implements IWorkbenc
       this._schema.clear()
       return
     }
-    const fileMatch = schemaFileMatchForUri(URI.revive(components) as URI)
+    const fileMatch = schemaFileMatchForUri(components)
     const ids = (await this._aiModel.getModels()).map((m) => m.id)
     this._schema.value = JSONContributionRegistry.registerSchema({
       uri: AI_SETTINGS_SCHEMA_URI,

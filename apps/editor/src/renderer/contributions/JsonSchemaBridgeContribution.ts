@@ -25,7 +25,6 @@ import {
   IWorkbenchContribution,
   JSONContributionRegistry,
   NullLogger,
-  URI,
   UserDataFile,
   type IJSONSchema,
   type ILogger,
@@ -124,7 +123,7 @@ export class JsonSchemaBridgeContribution extends Disposable implements IWorkben
   private async _fileMatch(file: UserDataFile): Promise<string | null> {
     const components = await this._userDataFiles.getFileUri(file)
     if (!components) return null
-    return schemaFileMatchForUri(URI.revive(components) as URI)
+    return schemaFileMatchForUri(components)
   }
 
   private async _refreshSettingsSchema(): Promise<void> {

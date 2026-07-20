@@ -129,7 +129,7 @@ export function useSearchActions(
           })
         }
       }
-      const resource = URI.revive(fileMatch.resource) as URI
+      const resource = fileMatch.resource
       void replaceFile(resource, edits)
       setResults((prev) => prev.filter((fm) => fm !== fileMatch))
     },
@@ -138,7 +138,7 @@ export function useSearchActions(
 
   const onReplaceFile = useCallback(
     (resource: URI) => {
-      const fm = results.find((r) => uriIdentity.isEqual(URI.revive(r.resource) as URI, resource))
+      const fm = results.find((r) => uriIdentity.isEqual(r.resource, resource))
       if (fm) replaceFileMatch(fm)
     },
     [results, replaceFileMatch, uriIdentity],
@@ -159,7 +159,7 @@ export function useSearchActions(
       setResults((prev) =>
         prev
           .map((fm) => {
-            if ((URI.revive(fm.resource) as URI).toString() !== resource.toString()) return fm
+            if (fm.resource.toString() !== resource.toString()) return fm
             const matches = fm.matches
               .map((m) => {
                 if (m !== match) return m
@@ -200,7 +200,7 @@ export function useSearchActions(
           })
         }
       }
-      await replaceFile(URI.revive(fm.resource) as URI, edits)
+      await replaceFile(fm.resource, edits)
     }
     setResults([])
   }, [results, replaceFile, replacePattern, dialogService, setResults])
@@ -210,7 +210,7 @@ export function useSearchActions(
       setResults((prev) =>
         prev
           .map((fm) => {
-            if ((URI.revive(fm.resource) as URI).toString() !== resource.toString()) return fm
+            if (fm.resource.toString() !== resource.toString()) return fm
             const matches = fm.matches
               .map((m) => {
                 if (m !== match) return m
@@ -228,9 +228,7 @@ export function useSearchActions(
 
   const dismissFile = useCallback(
     (resource: URI) => {
-      setResults((prev) =>
-        prev.filter((fm) => (URI.revive(fm.resource) as URI).toString() !== resource.toString()),
-      )
+      setResults((prev) => prev.filter((fm) => fm.resource.toString() !== resource.toString()))
     },
     [setResults],
   )

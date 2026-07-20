@@ -680,11 +680,9 @@ export class ExplorerTreeService extends Disposable {
   /** (Re-)arm or tear down the recursive file watcher for `root`. Idempotent — the main-process watcher dedupes same-root re-subscribes. */
   private _syncWatch(root: URI | null): void {
     if (root) {
-      void this._watcher
-        .watch(root.toJSON(), { excludes: this._exclude.currentWatcherGlobs })
-        .catch(() => {
-          this._logger.warn(`watch failed ${root.toString()}`)
-        })
+      void this._watcher.watch(root, { excludes: this._exclude.currentWatcherGlobs }).catch(() => {
+        this._logger.warn(`watch failed ${root.toString()}`)
+      })
     } else {
       void this._watcher.unwatch().catch(() => {})
     }
@@ -717,9 +715,7 @@ export class ExplorerTreeService extends Disposable {
     if (!this._root || events.length === 0) return
     const seen = new Set<string>()
     for (const ev of events) {
-      const raw = URI.revive(ev.resource)
-      if (!raw) continue
-      const resource = normalizeUri(raw)
+      const resource = normalizeUri(ev.resource)
       const parent = parentOf(resource)
       if (!parent) continue
       const key = parent.toString()

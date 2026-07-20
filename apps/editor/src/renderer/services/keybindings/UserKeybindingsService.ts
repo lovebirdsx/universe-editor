@@ -27,7 +27,6 @@ import {
   normalizeKeybindingString,
   type IKeybindingItem,
   registerSingleton,
-  URI,
   UserDataFile,
 } from '@universe-editor/platform'
 import { formatKey, formatChord } from '../../workbench/titlebar/keybindingFormat.js'
@@ -218,8 +217,7 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     // bootstrapWorkbench() runs.
     this._takeDefaultSnapshot()
     void this._files.getFileUri(UserDataFile.VSCodeKeybindings).then((uri) => {
-      const revived = uri ? URI.revive(uri) : undefined
-      if (revived) this._diagnostics.vscodeFilePath = revived.fsPath
+      if (uri) this._diagnostics.vscodeFilePath = uri.fsPath
     })
   }
 

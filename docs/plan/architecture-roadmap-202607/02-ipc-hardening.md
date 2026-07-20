@@ -11,7 +11,12 @@
 
 ## 任务 1：URI 自动 marshalling ✅（P1，第一批）
 
-> 已完成（2026-07-20）。落地：`packages/platform/src/ipc/ipc.ts` 的信封 reviver 在既有 base64/Uint8Array 标记同层新增 `$mid: 1` 识别——序列化端无需改（`URI.toJSON()` 已按 VSCode 约定打 `$mid:1`），reviver 端遇标记（带 string `scheme` 守卫，避免裸对象误判）经 `URI.revive` 还原为真 `URI` 实例，深度遍历复用现有路径。platform 补 5 例往返单测（单值 / 嵌套 / 数组 / 与 Uint8Array 混合 / 未打标记的裸 `UriComponents` 保持不变，断言用 `instanceof URI` 真还原）。**本批只上机制**：50+ 处手写 `URI.revive` 与 5 份 `toURI` helper 暂不删，待全量 e2e 长期稳定后再分批清理（步骤 3 明确要求）。既有 realpath @p1 防护 e2e 仍绿（全量 `pnpm e2e` 20 job 全过）。
+> 已完成（2026-07-20）。落地：`packages/platform/src/ipc/ipc.ts` 的信封 reviver 在既有 base64/Uint8Array 标记同层新增 `$mid: 1` 识别——序列化端无需改（`URI.toJSON()` 已按 VSCode 约定打 `$mid:1`），reviver 端遇标记（带 string `scheme` 守卫，避免裸对象误判）经 `URI.revive` 还原为真 `URI` 实例，深度遍历复用现有路径。platform 补 5 例往返单测（单值 / 嵌套 / 数组 / 与 Uint8Array 混合 / 未打标记的裸 `UriComponents` 保持不变，断言用 `instanceof URI` 真还原）。
+>
+> **手写 revive 清理（步骤 3，2026-07-20 续做完成）**：先上机制、全量 e2e 稳定后清理。采用**类型驱动**策略——把跨 IPC 的 wire DTO 从 `UriComponents` 收紧为 `URI`（`IFileMatch`/`IFileSearchMatch`/`IFileChangeEvent`/`IUserDataFilesService.getFileUri`/`IWorkspace(.folder)`/`IRecentWorkspace`），生产端（main）去掉手动 `.toJSON()`、消费端删 `URI.revive()`，让 strict typecheck 精确逼出每个连锁点。清理域：MainThreadFs realpath、搜索结果消费（QuickTextSearch/useSearchEngine/useSearchActions/searchTree/mentionFileSearch）、文件监听事件消费（ExternalChangeWatcher/ExplorerTreeService）、`getFileUri` 全部消费点（aiActions/preferencesActions/4 个 Contribution/UserKeybindings/AiModelsPanel）、workspace wire（RendererWorkspaceService）。相应 realpath @p1 防护测试改为断言"envelope 已 revive、消费端直接读 `.fsPath`"的新契约。
+> - **刻意保留**（56→36 文件）：编辑器 `deserialize`（FileEditorInput/DiffEditorInput/…）、`_storage.get` 持久化反序列化（recentFiles/workspaceTrust/recentWorkspaces）、main 侧 `URI | UriComponents | string` 多态归一 helper（fileSystem/fileSearch/fileWatcher/textSearch/workspace 的 `reviveUri`，IPC 已 revive 时 `instanceof URI` 提前返回不触发）、extension-host 进程内值、以及 MainThreadLanguages/windowsMainService/editorResolver 等无法静态断定"入参恒带 `$mid`"的存疑点——均非 IPC 边界冗余，删了会破坏非 IPC 路径。
+>
+> 既有 realpath @p1 防护 e2e 仍绿（全量 `pnpm e2e` 20 job 全过）。
 
 **目标**：跨 IPC 的 URI 自动还原为真 `URI` 实例，一次性消灭 "revive 忘写" 这一类 bug。
 

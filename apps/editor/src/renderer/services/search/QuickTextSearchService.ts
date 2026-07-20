@@ -119,10 +119,8 @@ function sortFileMatches(
 ): IFileMatch[] {
   const active = activeResource?.toString()
   return [...matches].sort((a, b) => {
-    const aUri = URI.revive(a.resource) as URI | undefined
-    const bUri = URI.revive(b.resource) as URI | undefined
-    const aKey = aUri?.toString() ?? ''
-    const bKey = bUri?.toString() ?? ''
+    const aKey = a.resource.toString()
+    const bKey = b.resource.toString()
     if (active) {
       if (aKey === active && bKey !== active) return -1
       if (bKey === active && aKey !== active) return 1
@@ -141,8 +139,7 @@ function toPicks(
   const sorted = sortFileMatches(results, activeResource).slice(0, MAX_FILES_SHOWN)
 
   for (const fileMatch of sorted) {
-    const resource = URI.revive(fileMatch.resource) as URI | undefined
-    if (!resource) continue
+    const resource = fileMatch.resource
 
     const rel = workspaceRelativePath(root, resource)
     const matchPicks: QuickTextSearchPick[] = []

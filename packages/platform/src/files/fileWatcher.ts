@@ -8,26 +8,25 @@
 
 import { createDecorator } from '../di/instantiation.js'
 import type { Event } from '../base/event.js'
-import type { UriComponents } from '../base/uri.js'
+import type { URI } from '../base/uri.js'
 
 export type FileChangeType = 'added' | 'deleted' | 'modified'
 
 export interface IFileChangeEvent {
   readonly type: FileChangeType
-  readonly resource: UriComponents
+  readonly resource: URI
 }
 
 export interface IFileWatcherService {
   readonly _serviceBrand: undefined
 
   /**
-   * Replace the current watch with a recursive watch on `folder`. Pass a
-   * `file:` URI as `UriComponents` so the call works across the IPC boundary.
-   * No-op if the new folder equals the current one. `options.excludes` are
-   * glob patterns (workspace-relative); matching paths are dropped before any
-   * change event is emitted.
+   * Replace the current watch with a recursive watch on `folder`. No-op if the
+   * new folder equals the current one. `options.excludes` are glob patterns
+   * (workspace-relative); matching paths are dropped before any change event is
+   * emitted. URIs marshal across the IPC boundary automatically.
    */
-  watch(folder: UriComponents, options?: { excludes?: readonly string[] }): Promise<void>
+  watch(folder: URI, options?: { excludes?: readonly string[] }): Promise<void>
 
   /**
    * Update the exclude globs applied to the active watch without tearing down
@@ -45,7 +44,7 @@ export interface IFileWatcherService {
    * Pass an empty array to clear all extra watches. Events from these paths
    * are emitted through `onDidChangeFiles` alongside workspace events.
    */
-  watchOutOfWorkspace(uris: readonly UriComponents[]): Promise<void>
+  watchOutOfWorkspace(uris: readonly URI[]): Promise<void>
 
   /**
    * Fires for every batch of debounced filesystem events. The same resource

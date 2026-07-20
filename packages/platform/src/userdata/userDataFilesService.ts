@@ -7,7 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { Event } from '../base/event.js'
-import type { UriComponents } from '../base/uri.js'
+import type { URI } from '../base/uri.js'
 import { createDecorator } from '../di/instantiation.js'
 
 export const enum UserDataFile {
@@ -81,7 +81,7 @@ export interface IUserDataFilesService {
    * Absolute path to the backing file. Returns null when the file is
    * unavailable (ProjectSettings without a workspace).
    */
-  getFileUri(file: UserDataFile): Promise<UriComponents | null>
+  getFileUri(file: UserDataFile): Promise<URI | null>
 }
 
 export const IUserDataFilesService = createDecorator<IUserDataFilesService>('userDataFilesService')

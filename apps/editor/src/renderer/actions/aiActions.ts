@@ -17,7 +17,6 @@ import {
   IQuickInputService,
   IUserDataFilesService,
   Severity,
-  URI,
   UserDataFile,
   localize,
   localize2,
@@ -116,7 +115,7 @@ export class OpenAiSettingsJsonAction extends Action2 {
     await aiModel.updateGroups(await aiModel.getGroups())
     const uri = await userData.getFileUri(UserDataFile.AiSettings)
     if (!uri) return
-    const input = inst.createInstance(FileEditorInput, URI.revive(uri) as URI)
+    const input = inst.createInstance(FileEditorInput, uri)
     openInLockAwareGroup(groups, input, { activate: true })
   }
 }

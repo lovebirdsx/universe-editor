@@ -296,7 +296,7 @@ function makeFileSearch(paths: readonly string[]): IFileSearchServiceType {
               : norm
           const name = rel.split('/').pop() ?? rel
           return {
-            resource: URI.file(abs).toJSON(),
+            resource: URI.file(abs),
             fsPath: abs,
             relativePath: rel,
             basename: name,

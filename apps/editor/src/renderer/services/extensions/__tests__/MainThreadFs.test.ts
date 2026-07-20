@@ -104,16 +104,14 @@ describe('MainThreadFs', () => {
     expect(await fs.$readFile('/repo/link')).toBe(bytesToBase64(bytes))
   })
 
-  it('revives realpath UriComponents that crossed the IPC boundary before re-checking', async () => {
-    // The real IFileService.realpath returns a URI, but ProxyChannel serializes
-    // it through a JSON envelope that doesn't revive class instances — the
-    // consumer receives plain UriComponents whose `.fsPath` getter is absent.
-    // MainThreadFs must URI.revive() it; otherwise it hands the policy an empty
-    // path and every gated read of an unopened file is wrongly denied. A policy
-    // that rejects empty targets (mirroring AcpPathPolicy's "empty path" guard)
-    // turns the regression red.
+  it('re-checks the policy against the realpath URI (envelope revives it across IPC)', async () => {
+    // IFileService.realpath returns a URI; in production it crosses ProxyChannel,
+    // whose envelope now auto-revives $mid-stamped URIs (see ipc.test.ts URI
+    // marshalling round-trip). So MainThreadFs receives a real URI and reads
+    // `.fsPath` off it directly — no local revive. A policy that rejects empty
+    // targets (mirroring AcpPathPolicy's "empty path" guard) would turn red if
+    // `.fsPath` came back empty, catching a regression in that contract.
     const bytes = new Uint8Array([3, 4])
-    const wireComponents = JSON.parse(JSON.stringify(URI.file('/repo/sub/target.txt')))
     const emptyAwarePolicy: IAcpPathPolicy = {
       _serviceBrand: undefined,
       check: (_cwd, target) =>
@@ -123,7 +121,7 @@ describe('MainThreadFs', () => {
       '/repo',
       emptyAwarePolicy,
       fakeFiles({
-        realpath: () => Promise.resolve(wireComponents as URI),
+        realpath: () => Promise.resolve(URI.file('/repo/sub/target.txt')),
         readFile: () => Promise.resolve(bytes),
       }),
     )

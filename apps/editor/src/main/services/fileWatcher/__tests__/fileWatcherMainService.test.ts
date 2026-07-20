@@ -61,7 +61,7 @@ describe('FileWatcherMainService', () => {
   it(
     'emits an event when a file is created',
     async () => {
-      await svc.watch(URI.file(root).toJSON())
+      await svc.watch(URI.file(root))
       const target = join(root, 'new.txt')
       const c = startCollecting(svc)
       await fs.writeFile(target, 'hello')
@@ -82,7 +82,7 @@ describe('FileWatcherMainService', () => {
     async () => {
       const target = join(root, 'gone.txt')
       await fs.writeFile(target, 'x')
-      await svc.watch(URI.file(root).toJSON())
+      await svc.watch(URI.file(root))
       const c = startCollecting(svc)
       await fs.rm(target)
       await vi.waitFor(() => {
@@ -97,7 +97,7 @@ describe('FileWatcherMainService', () => {
 
   it('ignores changes inside node_modules', async () => {
     await fs.mkdir(join(root, 'node_modules'), { recursive: true })
-    await svc.watch(URI.file(root).toJSON())
+    await svc.watch(URI.file(root))
     const c = startCollecting(svc)
     await fs.writeFile(join(root, 'node_modules', 'pkg.json'), '{}')
     await new Promise((r) => setTimeout(r, NO_EVENT_WINDOW_MS))
@@ -111,7 +111,7 @@ describe('FileWatcherMainService', () => {
 
   it('applies excludes passed to watch()', async () => {
     await fs.mkdir(join(root, 'build'), { recursive: true })
-    await svc.watch(URI.file(root).toJSON(), { excludes: ['**/build', '**/build/**'] })
+    await svc.watch(URI.file(root), { excludes: ['**/build', '**/build/**'] })
     const c = startCollecting(svc)
     await fs.writeFile(join(root, 'build', 'out.js'), '1')
     await new Promise((r) => setTimeout(r, NO_EVENT_WINDOW_MS))
@@ -126,7 +126,7 @@ describe('FileWatcherMainService', () => {
   it(
     'setExcludes re-applies the ignore set on the active watch',
     async () => {
-      await svc.watch(URI.file(root).toJSON())
+      await svc.watch(URI.file(root))
       // node_modules is no longer ignored once we install an empty exclude set.
       await svc.setExcludes([])
       await fs.mkdir(join(root, 'node_modules'), { recursive: true })
@@ -147,7 +147,7 @@ describe('FileWatcherMainService', () => {
   it(
     'debounces rapid writes into a small number of batches',
     async () => {
-      await svc.watch(URI.file(root).toJSON())
+      await svc.watch(URI.file(root))
       const target = join(root, 'rapid.txt')
       const batches: number[] = []
       const sub = svc.onDidChangeFiles((batch) => batches.push(batch.length))
@@ -172,8 +172,8 @@ describe('FileWatcherMainService', () => {
       const file = join(outRoot, 'external.txt')
       await fs.writeFile(file, 'initial')
       try {
-        await svc.watch(URI.file(root).toJSON()) // workspace root ≠ outRoot
-        await svc.watchOutOfWorkspace([URI.file(file).toJSON()])
+        await svc.watch(URI.file(root)) // workspace root ≠ outRoot
+        await svc.watchOutOfWorkspace([URI.file(file)])
         const c = startCollecting(svc)
         await fs.writeFile(file, 'modified')
         await vi.waitFor(() => {
@@ -196,10 +196,10 @@ describe('FileWatcherMainService', () => {
       // so watchOutOfWorkspace should skip them and not set up extra fs.watch.
       const inWorkspace = join(root, 'inws.txt')
       await fs.writeFile(inWorkspace, 'v1')
-      await svc.watch(URI.file(root).toJSON())
+      await svc.watch(URI.file(root))
       // watchOutOfWorkspace is a no-op for in-workspace paths — the parcel
       // watcher covers them; calling it should not break anything.
-      await svc.watchOutOfWorkspace([URI.file(inWorkspace).toJSON()])
+      await svc.watchOutOfWorkspace([URI.file(inWorkspace)])
       // Parcel still fires for workspace-internal changes.
       const c = startCollecting(svc)
       await fs.writeFile(inWorkspace, 'v2')

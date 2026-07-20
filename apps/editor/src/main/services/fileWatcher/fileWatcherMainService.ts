@@ -126,7 +126,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   // Extra (out-of-workspace) file watches: dirPath → { watcher, files }
   private _extraDirWatchers = new Map<string, { watcher: FSWatcher; files: Set<string> }>()
 
-  async watch(folder: UriComponents, options?: { excludes?: readonly string[] }): Promise<void> {
+  async watch(folder: URI, options?: { excludes?: readonly string[] }): Promise<void> {
     const uri = reviveUri(folder)
     if (uri.scheme !== 'file') {
       throw new Error(`FileWatcher: unsupported scheme: ${uri.scheme}`)
@@ -154,7 +154,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     await this._teardown()
   }
 
-  async watchOutOfWorkspace(uris: readonly UriComponents[]): Promise<void> {
+  async watchOutOfWorkspace(uris: readonly URI[]): Promise<void> {
     // Build new dirPath → files mapping, skipping files under the workspace root.
     const newDirMap = new Map<string, Set<string>>()
     for (const u of uris) {
@@ -314,7 +314,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     this._pending.clear()
     const batch: IFileChangeEvent[] = entries.map(([abs, type]) => ({
       type,
-      resource: URI.file(abs).toJSON(),
+      resource: URI.file(abs),
     }))
     if (batch.length > 0) {
       this._logger.debug(`file events count=${batch.length}`)

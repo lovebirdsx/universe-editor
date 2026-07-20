@@ -17,7 +17,6 @@ import {
   IUserDataFilesService,
   MenuId,
   Severity,
-  URI,
   UserDataFile,
   localize,
   localize2,
@@ -68,9 +67,8 @@ async function openUserDataFile(
 ): Promise<void> {
   const { files, groups, instantiation, uriIdentity } = services
 
-  const uriComponents = await files.getFileUri(file)
-  if (!uriComponents) return
-  const uri = URI.revive(uriComponents) as URI
+  const uri = await files.getFileUri(file)
+  if (!uri) return
 
   // Seed the file with a template if it doesn't exist yet, so users see useful
   // scaffolding instead of an empty buffer. Skipped for files we don't own
@@ -292,7 +290,7 @@ export class OpenVSCodeKeybindingsJsonAction extends Action2 {
     const notification = accessor.get(INotificationService)
 
     const uriComponents = await services.files.getFileUri(UserDataFile.VSCodeKeybindings)
-    if (uriComponents && (await fileService.exists(URI.revive(uriComponents) as URI))) {
+    if (uriComponents && (await fileService.exists(uriComponents))) {
       // Open editable (not read-only) so users can change VS Code's own
       // keybindings; never seed our template into VS Code's file.
       await openUserDataFile(services, UserDataFile.VSCodeKeybindings, '', { seedTemplate: false })
@@ -326,7 +324,7 @@ export class OpenVSCodeSettingsJsonAction extends Action2 {
     const notification = accessor.get(INotificationService)
 
     const uriComponents = await services.files.getFileUri(UserDataFile.VSCodeUserSettings)
-    if (uriComponents && (await fileService.exists(URI.revive(uriComponents) as URI))) {
+    if (uriComponents && (await fileService.exists(uriComponents))) {
       // Open editable (not read-only) so users can change VS Code's own
       // settings; never seed our template into VS Code's file.
       await openUserDataFile(services, UserDataFile.VSCodeUserSettings, '', { seedTemplate: false })

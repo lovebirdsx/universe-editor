@@ -72,9 +72,8 @@ export async function loadWorkspaceFiles(
     maxResults: MAX_FILES,
   })
   const entries = complete.results.map((match) => {
-    const resource = URI.revive(match.resource) ?? URI.file(match.fsPath)
     return {
-      uri: resource.toString(),
+      uri: match.resource.toString(),
       relPath: match.relativePath,
       name: match.basename,
     }

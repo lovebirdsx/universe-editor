@@ -117,7 +117,7 @@ export class FileSearchMainService implements IFileSearchService {
 
     const pushMatch = (absPath: string, relPath: string, basename: string, score: number): void => {
       scored.push({
-        resource: URI.file(absPath).toJSON(),
+        resource: URI.file(absPath),
         fsPath: absPath,
         relativePath: relPath,
         basename,

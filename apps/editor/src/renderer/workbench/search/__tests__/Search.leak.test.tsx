@@ -39,7 +39,7 @@ afterEach(() => {
 
 function makeMatch(path: string): IFileMatch {
   return {
-    resource: URI.file(path).toJSON(),
+    resource: URI.file(path),
     matches: [{ lineNumber: 1, preview: 'foo bar', ranges: [{ startColumn: 1, endColumn: 4 }] }],
   }
 }

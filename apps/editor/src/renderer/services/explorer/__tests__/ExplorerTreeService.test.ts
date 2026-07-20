@@ -525,7 +525,7 @@ describe('ExplorerTreeService', () => {
       ...(fs.dirs.get(root.toString()) ?? []),
       { name: 'new.txt', isFile: true, isDirectory: false },
     ])
-    watcher.fire([{ type: 'modified', resource: URI.joinPath(root, 'new.txt').toJSON() }])
+    watcher.fire([{ type: 'modified', resource: URI.joinPath(root, 'new.txt') }])
     await flush()
     expect(fs.calls.list).toContain(root.toString())
     expect(tree.getChildren(root)?.some((c) => c.name === 'new.txt')).toBe(true)
@@ -536,7 +536,7 @@ describe('ExplorerTreeService', () => {
     await flush()
     fs.calls.list.length = 0
     const stranger = URI.file('/elsewhere/x.txt')
-    watcher.fire([{ type: 'modified', resource: stranger.toJSON() }])
+    watcher.fire([{ type: 'modified', resource: stranger }])
     await flush()
     expect(fs.calls.list).toHaveLength(0)
     expect(tree).toBeDefined()

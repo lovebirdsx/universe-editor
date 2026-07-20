@@ -34,7 +34,7 @@ function fakeFileSearch(paths: readonly string[]): IFileSearchService {
           const rel = relativePath(query.root, abs)
           const name = rel.split('/').pop() ?? rel
           return {
-            resource: URI.file(abs).toJSON(),
+            resource: URI.file(abs),
             fsPath: abs,
             relativePath: rel,
             basename: name,
@@ -79,7 +79,7 @@ describe('loadWorkspaceFiles', () => {
         return {
           results: [
             {
-              resource: URI.file('/repo/a.ts').toJSON(),
+              resource: URI.file('/repo/a.ts'),
               fsPath: '/repo/a.ts',
               relativePath: 'a.ts',
               basename: 'a.ts',
@@ -108,7 +108,7 @@ describe('loadWorkspaceFiles', () => {
         return {
           results: [
             {
-              resource: URI.file('/repo/a.ts').toJSON(),
+              resource: URI.file('/repo/a.ts'),
               fsPath: '/repo/a.ts',
               relativePath: 'a.ts',
               basename: 'a.ts',

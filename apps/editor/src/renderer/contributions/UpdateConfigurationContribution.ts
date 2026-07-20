@@ -14,7 +14,6 @@ import {
   IWorkbenchContribution,
   JSONContributionRegistry,
   MutableDisposable,
-  URI,
   UserDataFile,
   type IJSONSchema,
 } from '@universe-editor/platform'
@@ -57,7 +56,7 @@ export class UpdateConfigurationContribution extends Disposable implements IWork
       this._schema.clear()
       return
     }
-    const fileMatch = schemaFileMatchForUri(URI.revive(components) as URI)
+    const fileMatch = schemaFileMatchForUri(components)
     this._schema.value = JSONContributionRegistry.registerSchema({
       uri: UPDATE_CONFIG_SCHEMA_URI,
       fileMatch: [fileMatch],

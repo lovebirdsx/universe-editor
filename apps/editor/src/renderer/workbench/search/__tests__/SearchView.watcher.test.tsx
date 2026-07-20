@@ -139,7 +139,7 @@ function renderWithServices(search: FakeTextSearch) {
 
 function makeFileMatch(path: string): IFileMatch {
   return {
-    resource: URI.file(path).toJSON(),
+    resource: URI.file(path),
     matches: [{ lineNumber: 1, preview: 'foo', ranges: [{ startColumn: 1, endColumn: 4 }] }],
   }
 }
@@ -173,7 +173,7 @@ describe('SearchView watcher + workspace', () => {
     await runQuery(search)
     expect(screen.queryByTestId('search-stale')).toBeNull()
     act(() => {
-      ctx.watcherEmitter.fire([{ type: 'modified', resource: URI.file('/ws/a.ts').toJSON() }])
+      ctx.watcherEmitter.fire([{ type: 'modified', resource: URI.file('/ws/a.ts') }])
     })
     expect(screen.queryByTestId('search-stale')).toBeTruthy()
   })
@@ -184,7 +184,7 @@ describe('SearchView watcher + workspace', () => {
     const ctx = renderWithServices(search)
     await runQuery(search)
     act(() => {
-      ctx.watcherEmitter.fire([{ type: 'modified', resource: URI.file('/ws/other.ts').toJSON() }])
+      ctx.watcherEmitter.fire([{ type: 'modified', resource: URI.file('/ws/other.ts') }])
     })
     expect(screen.queryByTestId('search-stale')).toBeNull()
   })

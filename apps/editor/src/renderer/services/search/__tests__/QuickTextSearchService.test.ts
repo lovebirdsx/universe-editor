@@ -189,7 +189,7 @@ function fakeFileService(): IFileService {
 
 function makeMatch(path: string, preview = 'const needle = true'): IFileMatch {
   return {
-    resource: URI.file(path).toJSON(),
+    resource: URI.file(path),
     matches: [
       {
         lineNumber: 3,

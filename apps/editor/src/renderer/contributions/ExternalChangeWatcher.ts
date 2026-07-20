@@ -24,7 +24,6 @@ import {
   type ILogger,
   type ILoggerService as ILoggerServiceType,
   type IWorkbenchContribution,
-  type UriComponents,
   type UserDataFile,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -123,16 +122,16 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
   }
 
   private async _updateExtraWatches(): Promise<void> {
-    const uris: UriComponents[] = []
+    const uris: URI[] = []
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
         if (editor instanceof FileEditorInput) {
-          uris.push(editor.resource.toJSON())
+          uris.push(editor.resource)
         } else if (editor instanceof MarkdownPreviewInput) {
           // A pure-preview (toggle or link-reached) has no FileEditorInput to
           // pull the source into the watch set, so watch its source directly —
           // otherwise an out-of-workspace preview never sees external edits.
-          uris.push(editor.sourceUri.toJSON())
+          uris.push(editor.sourceUri)
         }
       }
     }
@@ -140,9 +139,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
   }
 
   private async _handleUserDataChange(file: UserDataFile): Promise<void> {
-    const components = await this._userData.getFileUri(file)
-    if (!components) return
-    const uri = URI.revive(components as Parameters<typeof URI.revive>[0])
+    const uri = await this._userData.getFileUri(file)
     if (!uri) return
     // force: a same-content atomic rewrite can leave mtime unchanged at coarse
     // filesystem granularity, so reconcile against disk content directly.
@@ -189,8 +186,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     const deletedResources: URI[] = []
     const changedKeys = new Set<string>()
     for (const ev of events) {
-      const u = URI.revive(ev.resource as Parameters<typeof URI.revive>[0])
-      if (!u) continue
+      const u = ev.resource
       if (ev.type === 'deleted') {
         const key = this._uriIdentity.getComparisonKey(u)
         // Relevant if it IS an open editor (atomic-rewrite → reload) or an

@@ -12,7 +12,6 @@ import {
   ServiceCollection,
   URI,
   UserDataFile,
-  type UriComponents,
 } from '@universe-editor/platform'
 import { UserSettingsSync } from '../UserSettingsSync.js'
 
@@ -67,8 +66,8 @@ class FakeUserData implements IUserDataFilesService {
     this.files.set(file, JSON.stringify(obj, null, 2))
     return true
   }
-  async getFileUri(_file: UserDataFile): Promise<UriComponents | null> {
-    return URI.file('/fake/path').toJSON()
+  async getFileUri(_file: UserDataFile): Promise<URI | null> {
+    return URI.file('/fake/path')
   }
   fire(file: UserDataFile, source: 'self' | 'external' = 'external'): void {
     this._emitter.fire({ file, source })

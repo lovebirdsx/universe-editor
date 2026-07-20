@@ -496,7 +496,7 @@ function makeFileSearch(fs: ReturnType<typeof makeFs>): IFileSearchServiceType &
             : norm
           const basename = relativePath.split('/').at(-1) ?? relativePath
           return {
-            resource: uri.toJSON(),
+            resource: uri,
             fsPath: uri.fsPath,
             relativePath,
             basename,

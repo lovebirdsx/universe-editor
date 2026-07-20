@@ -12,7 +12,6 @@ import {
   type IStorageService,
   type IUserDataFilesService,
   type StorageScope,
-  type UriComponents,
 } from '@universe-editor/platform'
 import { UserKeybindingsService } from '../UserKeybindingsService.js'
 
@@ -56,8 +55,8 @@ class FakeUserData implements IUserDataFilesService {
     return true
   }
 
-  async getFileUri(_file: UserDataFile): Promise<UriComponents | null> {
-    return URI.file('/fake/keybindings.json').toJSON()
+  async getFileUri(_file: UserDataFile): Promise<URI | null> {
+    return URI.file('/fake/keybindings.json')
   }
 }
 

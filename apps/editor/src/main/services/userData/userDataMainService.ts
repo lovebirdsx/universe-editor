@@ -25,7 +25,6 @@ import {
   type IUserDataFilesService,
   URI,
   UserDataFile,
-  type UriComponents,
 } from '@universe-editor/platform'
 import type { WorkspaceMainService } from '../workspace/workspaceMainService.js'
 
@@ -253,10 +252,10 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     return true
   }
 
-  async getFileUri(file: UserDataFile): Promise<UriComponents | null> {
+  async getFileUri(file: UserDataFile): Promise<URI | null> {
     const slot = this._slots.get(file)
     if (!slot) return null
-    return URI.file(slot.fullPath).toJSON()
+    return URI.file(slot.fullPath)
   }
 
   /**

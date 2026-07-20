@@ -37,7 +37,6 @@ import {
   IUserDataFilesService,
   Severity,
   StorageScope,
-  URI,
   UserDataFile,
   localize,
   type AiCustomModelConfig,
@@ -265,7 +264,7 @@ export function AiModelsPanel() {
     await aiModel.updateGroups(await aiModel.getGroups())
     const uri = await userData.getFileUri(UserDataFile.AiSettings)
     if (!uri) return
-    const input = instantiation.createInstance(FileEditorInput, URI.revive(uri) as URI)
+    const input = instantiation.createInstance(FileEditorInput, uri)
     void openInLockAwareGroup(editorGroups, input, { activate: true })
   }, [aiModel, editorGroups, instantiation, userData])
 
