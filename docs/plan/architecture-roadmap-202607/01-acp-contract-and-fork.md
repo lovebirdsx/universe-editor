@@ -16,10 +16,11 @@
 > 已完成（2026-07-20）。落地：
 > - **共用定义**：新增 `acpExtMethods.ts`（`ACP_EXT_METHODS` 5 个方法名 + `ACP_META_KEYS`），`acpSessionModel.ts` 的 4 个常量 + `acpSessionService.ts` 的 `SDK_MESSAGE_EXT_METHOD` 全部改为 re-export 这份单一定义（生产与测试共用，不再各抄一份）。
 > - **真子进程工具**：`integration/fixtures/realForkConnection.ts` 用系统 node spawn `vendor/<fork>/dist/index.js`（同生产 `ELECTRON_RUN_AS_NODE` 启动物），经 stdio ndJsonStream 建 `ClientSideConnection`；`forkDistExists` 缺 dist 时让 spec skip（本地无 agent:build 不炸）。
-> - **契约 spec**：`integration/scenarios/acpForkContract.integration.test.ts`（7 例）——名称表 == fork 期望字面量（双向锁）；claude/codex 两个 fork 的 initialize 跨 SDK 版本握手（editor SDK 0.22.1 ↔ claude/codex fork 1.2.x）+ capabilities/`_meta` 形状；claude 的 rewind/set_session_title 走真连接断言方法路由 + 参数契约 + 结构化错误 wire（不发真 prompt）。
-> - **破坏性验证**：篡改 fork dist 的 `rewind_session` 方法名 → 测试红（`"Method not found"`）；恢复 → 绿。
+> - **契约 spec**：`integration/scenarios/acpForkContract.integration.test.ts`（14 例）——名称表 == editor 期望字面量（editor 自洽双向锁）；**dist-scan 离线断言**（新增）逐个断言 claude dist 含全 5 个、codex dist 含其实现的 2 个（rewind/set_title）方法名字面量；claude/codex 两个 fork 的 initialize 跨 SDK 版本握手（editor SDK 0.22.1 ↔ claude/codex fork 1.2.x）+ capabilities/`_meta` 形状；claude 的 rewind/set_session_title 走真连接断言方法路由 + 参数契约 + 结构化错误 wire（不发真 prompt）。
+> - **dist-scan 补 CI 缺口**：名称表断言只证明 editor 自身一致（两侧都在 editor 仓、不读 fork），无法抓 fork 侧改名；而抓 fork 改名的真连接路由腿又因需 Claude 二进制在 CI self-skip。dist-scan 直接读 `vendor/<fork>/dist/index.js` 文本断言方法名字面量存在——**离线、CI 恒跑**，是"破坏性验证"的 CI 可执行等价物（改 fork 方法名 → dist 里字面量消失 → 测试红，已自检）。
+> - **破坏性验证**：篡改期望方法名 → dist-scan 红（claude+codex 双抓）；真连接腿（有二进制时）篡改 fork dist 方法名 → 红（`"Method not found"`）；恢复 → 绿。
 > - **CI 接入**：新增 `acp-contract` job（`needs: detect-affected` + `if: acp-contract == 'true'` + submodule recursive + `pnpm agent:build`），触发路径由 `affected-e2e-matrix.mjs` 的 `computeShouldRunAcpContract` 纯函数按 `vendor/**` / acp renderer 服务 / acpHost·claude·codex main 服务 / 契约测试自身计算，main push `--all` 全量兜底；普通 `integration` job 里该 spec 因无 dist 自动 skip。补 3 个路由单测。
-> - **claude ext-method 腿的 binary 前置**：实测中 claude fork 的 `session/new` 会**急切 spawn Claude 原生 CLI**（SDK `query()` 在建会话时即启动，非首个 prompt 才启动），故 rewind/set_session_title 三例改为门控在 `claudeBinaryAvailable()`（`CLAUDE_CODE_EXECUTABLE` 指向真实存在的二进制）——本地装了 Claude 才跑，CI 无二进制自动 skip；离线核心（名称表 + 双 fork 握手）无此依赖恒跑。
+> - **claude ext-method 腿的 binary 前置**：实测中 claude fork 的 `session/new` 会**急切 spawn Claude 原生 CLI**（SDK `query()` 在建会话时即启动，非首个 prompt 才启动），故 rewind/set_session_title 三例改为门控在 `claudeBinaryAvailable()`（`CLAUDE_CODE_EXECUTABLE` 指向真实存在的二进制）——本地装了 Claude 才跑，CI 无二进制自动 skip；离线核心（名称表 + dist-scan + 双 fork 握手）无此依赖恒跑。
 > - **边界说明**：`ask_user_question`/`_universe/compaction`/`_claude/sdkMessage` 为 agent→client 方向，需真 prompt 才触发，契约测试以名称表锁其 wire 名；notification `_meta` 印章的解析形状由 editor 侧 `acpSessionUpdateMeta.ts` 既有单测覆盖。
 
 **目标**：editor CI 中有一道自动化闸门，能在 ext-method / `_meta` wire 形状漂移时失败。

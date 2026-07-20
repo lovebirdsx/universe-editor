@@ -15,7 +15,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -61,6 +61,17 @@ export interface RealForkConnection {
 /** Whether both fork dist artifacts exist (i.e. `pnpm agent:build` has run). */
 export function forkDistExists(fork: ForkId): boolean {
   return existsSync(FORK_DIST[fork])
+}
+
+/**
+ * The built dist bundle text for a fork. The ext-method wire names survive
+ * esbuild as plain string literals, so scanning this text is a cheap OFFLINE
+ * proxy for "does the fork still declare the method name the editor expects" —
+ * the CI-runnable equivalent of the live rewind/set_title routing probe, which
+ * needs a real Claude binary and thus self-skips on CI.
+ */
+export function readForkDist(fork: ForkId): string {
+  return readFileSync(FORK_DIST[fork], 'utf8')
 }
 
 /**

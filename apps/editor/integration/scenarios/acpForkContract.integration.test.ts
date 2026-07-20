@@ -15,8 +15,10 @@
  *      claude fork spawns its native CLI at session/new, so this leg runs only
  *      when a real Claude binary is reachable (CLAUDE_CODE_EXECUTABLE); the
  *      name-table + handshake legs need no binary and always run.
- *    - the editor's shared ext-method NAME table equals the literal strings the
- *      forks expect, so a rename on either side fails here.
+ *    - the editor's shared ext-method NAME table is internally consistent; and,
+ *      crucially, each fork's BUILT dist still declares the wire names the editor
+ *      calls — an OFFLINE text scan that runs on CI (no binary), catching a
+ *      fork-side rename the binary-gated routing leg would otherwise miss.
  *
  *  When `pnpm agent:build` hasn't run (no fork dist), the suite skips rather than
  *  fails — CI runs agent:build first (see ci.yml integration job).
@@ -32,6 +34,7 @@ import {
   claudeBinaryAvailable,
   forkDistExists,
   type ForkId,
+  readForkDist,
   type RealForkConnection,
   spawnForkConnection,
   withTimeout,
@@ -57,6 +60,42 @@ describe('editor ext-method name table is the single source of truth', () => {
   it('matches the literal wire strings the forks expect', () => {
     expect(ACP_EXT_METHODS).toEqual(EXPECTED_METHOD_NAMES)
   })
+})
+
+// The ext-method wire names each fork's BUILT dist must still declare. This is
+// what the name-table assertion above CANNOT catch: that table only proves the
+// editor is self-consistent (ACP_EXT_METHODS === a literal copy in this file);
+// neither side reads the fork. A fork-side rename (bad rebase, typo) would slip
+// through until the live routing probe caught it — but that probe needs a real
+// Claude binary and self-skips on CI. Scanning the dist text closes that gap
+// OFFLINE (no spawn, no binary), so CI fails the instant a fork drops/renames a
+// method the editor still calls.
+//
+// claude declares all five; codex only the two client->agent request methods it
+// implements (rewind/set_title — it does file rollback client-side and has no
+// compaction / sdkMessage / ask_user_question surface).
+const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
+  claude: [
+    EXPECTED_METHOD_NAMES.askUserQuestion,
+    EXPECTED_METHOD_NAMES.setSessionTitle,
+    EXPECTED_METHOD_NAMES.rewindSession,
+    EXPECTED_METHOD_NAMES.compaction,
+    EXPECTED_METHOD_NAMES.sdkMessage,
+  ],
+  codex: [EXPECTED_METHOD_NAMES.setSessionTitle, EXPECTED_METHOD_NAMES.rewindSession],
+}
+
+describe('fork dist declares the ext-method wire names the editor expects', () => {
+  for (const fork of ['claude', 'codex'] as const) {
+    describe.skipIf(!forkDistExists(fork))(fork, () => {
+      const dist = forkDistExists(fork) ? readForkDist(fork) : ''
+      for (const method of EXPECTED_DIST_METHODS[fork]) {
+        it(`declares ${method}`, () => {
+          expect(dist).toContain(method)
+        })
+      }
+    })
+  }
 })
 
 // One shared handshake suite per fork. Both forks implement the ACP handshake and
