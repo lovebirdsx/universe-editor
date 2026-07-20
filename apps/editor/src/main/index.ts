@@ -1,4 +1,4 @@
-import { app, BrowserWindow, protocol } from 'electron'
+import { app, BrowserWindow, Menu, protocol } from 'electron'
 import { promises as fs } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
@@ -461,6 +461,17 @@ void app.whenReady().then(async () => {
   if (!hasSingleInstanceLock) return
   mark(PerfMarks.mainAppReady)
   mainLogger.info(`app ready locale=${app.getLocale()} e2e=${e2eEnabled}`)
+
+  // Drop Electron's built-in application menu on Windows/Linux. Those platforms
+  // render a self-drawn title bar (frame:false), so the default menu is invisible
+  // yet still registers accelerators — notably Ctrl+R / Ctrl+Shift+R / F5, which
+  // fire webContents.reload() directly, bypassing the confirmBeforeShutdown guard
+  // and silently killing running sessions. Reload stays available through the
+  // ReloadWindowAction command (Ctrl+Alt+R), which honours that guard. macOS is
+  // excluded: it depends on the app menu for Cmd+Q/Cmd+C/Cmd+V and other standard
+  // roles, so we leave its menu in place (matching VSCode).
+  if (process.platform !== 'darwin') Menu.setApplicationMenu(null)
+
   logShutdownTraceIfPresent((msg) => mainLogger.info(msg))
   installImageProtocol()
   installAppProtocolHandler(join(__dirname, '../renderer'))
