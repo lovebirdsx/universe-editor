@@ -62,6 +62,7 @@ import {
   type SetSessionConfigOptionResponse,
 } from '@agentclientprotocol/sdk'
 import { AcpForeignWorktreeError, AcpSessionService } from '../acpSessionService.js'
+import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import {
   IAcpClientService,
   type IAcpClientConnection,
@@ -421,6 +422,11 @@ function buildService(
     new StubSessionChangeTracker(),
     new StubSessionTitleService(),
     FAKE_URI_IDENTITY,
+    new AcpCompactionStatsService(
+      new FakeStorage(),
+      new NoopTelemetryService(),
+      new StubLoggerService(),
+    ),
   )
   return { svc, client, history, agentDefaults, notifications, storage }
 }
@@ -1016,6 +1022,11 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
+      new AcpCompactionStatsService(
+        new FakeStorage(),
+        new NoopTelemetryService(),
+        new StubLoggerService(),
+      ),
     )
     // Kick off history hydration but DO NOT await — race the resume call.
     void history.initialize()
@@ -1129,6 +1140,11 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
+      new AcpCompactionStatsService(
+        new FakeStorage(),
+        new NoopTelemetryService(),
+        new StubLoggerService(),
+      ),
     )
     expect(svc.activeSession.get()).toBeUndefined()
     await svc.tryRestoreActiveSession()
@@ -1180,6 +1196,11 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
+      new AcpCompactionStatsService(
+        new FakeStorage(),
+        new NoopTelemetryService(),
+        new StubLoggerService(),
+      ),
     )
     // Let _loadPendingRestore() resolve.
     await Promise.resolve()
@@ -1226,6 +1247,11 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
+      new AcpCompactionStatsService(
+        new FakeStorage(),
+        new NoopTelemetryService(),
+        new StubLoggerService(),
+      ),
     )
     await Promise.resolve()
     await svc.tryRestoreActiveSession()
@@ -1277,6 +1303,11 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
+      new AcpCompactionStatsService(
+        new FakeStorage(),
+        new NoopTelemetryService(),
+        new StubLoggerService(),
+      ),
     )
     await Promise.resolve()
     await Promise.all([svc.tryRestoreActiveSession(), svc.tryRestoreActiveSession()])

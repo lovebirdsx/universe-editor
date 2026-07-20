@@ -50,6 +50,7 @@ import {
   type SetSessionConfigOptionResponse,
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
+import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
@@ -306,6 +307,11 @@ describe('AcpSessionService — onDidCloseSession', () => {
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
+      new AcpCompactionStatsService(
+        new FakeStorage(),
+        new NoopTelemetryService(),
+        new StubLoggerService(),
+      ),
     )
   })
 

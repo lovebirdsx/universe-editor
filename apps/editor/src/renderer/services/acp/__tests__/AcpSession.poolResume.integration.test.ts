@@ -72,6 +72,7 @@ import type { ICodexBinaryService } from '../../../../shared/ipc/codexBinaryServ
 import { AcpClientService } from '../acpClientService.js'
 import { AcpPathPolicy } from '../acpPathPolicy.js'
 import { AcpSessionService } from '../acpSessionService.js'
+import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
@@ -454,6 +455,11 @@ function build(storage: FakeStorage): Built {
     new StubSessionChangeTracker(),
     new StubSessionTitleService(),
     FAKE_URI_IDENTITY,
+    new AcpCompactionStatsService(
+      new FakeStorage(),
+      new NoopTelemetryService(),
+      new StubLoggerService(),
+    ),
   )
   return {
     client,

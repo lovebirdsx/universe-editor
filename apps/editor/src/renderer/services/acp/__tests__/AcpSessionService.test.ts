@@ -65,6 +65,7 @@ import { AcpSessionService } from '../acpSessionService.js'
 import type { AskUserQuestionRequest } from '../acpSessionService.js'
 import { REWIND_SESSION_METHOD } from '../acpSession.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
+import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
@@ -197,6 +198,14 @@ function makeHistory(): AcpSessionHistoryService {
     new NoopTelemetryService(),
     new StubLoggerService(),
     FAKE_URI_IDENTITY,
+  )
+}
+
+function makeCompactionStats(): AcpCompactionStatsService {
+  return new AcpCompactionStatsService(
+    new FakeStorage(),
+    new NoopTelemetryService(),
+    new StubLoggerService(),
   )
 }
 
@@ -443,6 +452,7 @@ describe('AcpSessionService', () => {
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
+      makeCompactionStats(),
     )
   })
 
@@ -573,6 +583,7 @@ describe('AcpSessionService', () => {
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
+      makeCompactionStats(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -782,6 +793,7 @@ describe('AcpSessionService', () => {
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
+      makeCompactionStats(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -823,6 +835,7 @@ describe('AcpSessionService', () => {
         new StubSessionChangeTracker(),
         new StubSessionTitleService(),
         FAKE_URI_IDENTITY,
+        makeCompactionStats(),
       )
     }
 
@@ -1078,6 +1091,7 @@ describe('AcpSessionService — rewind / fork', () => {
       tracker,
       new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
+      makeCompactionStats(),
     )
     return { svc, history }
   }
@@ -1339,6 +1353,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
+      makeCompactionStats(),
     )
     // createSession returns synchronously now; the handshake fails in the
     // background after the startup timeout fires, sealing the session via
@@ -1372,6 +1387,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
+      makeCompactionStats(),
     )
     const s = await svc.createSession()
     // Submit a prompt while still connecting — it is buffered by the connection
@@ -1393,7 +1409,11 @@ describe('AcpSessionService — startup timeout', () => {
 })
 
 describe('AcpSessionService — mcpServers capability gating', () => {
-  function makeService(client: FakeAcpClientService, config: ConfigurationService) {
+  function makeService(
+    client: FakeAcpClientService,
+    config: ConfigurationService,
+    compactionStats: AcpCompactionStatsService = makeCompactionStats(),
+  ) {
     return new AcpSessionService(
       client,
       new FakeAgentRegistry(),
@@ -1411,6 +1431,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
+      compactionStats,
     )
   }
 
@@ -1561,6 +1582,80 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     svc.dispose()
   })
 
+  it('records the duration of a successful compaction back to the stats service', async () => {
+    const client = new FakeAcpClientService()
+    const stats = makeCompactionStats()
+    const recorded: Array<{ agentId: string; durationMs: number }> = []
+    const origRecord = stats.record.bind(stats)
+    stats.record = (agentId: string, durationMs: number) => {
+      recorded.push({ agentId, durationMs })
+      origRecord(agentId, durationMs)
+    }
+    const svc = makeService(client, new ConfigurationService(), stats)
+    const session = await svc.createSession()
+    await session.whenConnected()
+
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-record',
+      phase: 'start',
+    })
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-record',
+      phase: 'success',
+    })
+    // A settled success feeds the per-agent history so the next run can estimate.
+    expect(recorded).toHaveLength(1)
+    expect(recorded[0]!.agentId).toBe(session.agentId)
+    expect(recorded[0]!.durationMs).toBeGreaterThanOrEqual(0)
+    svc.dispose()
+  })
+
+  it('seeds expectedDurationMs on a running compaction from recorded history', async () => {
+    const client = new FakeAcpClientService()
+    const stats = makeCompactionStats()
+    const svc = makeService(client, new ConfigurationService(), stats)
+    const session = await svc.createSession()
+    await session.whenConnected()
+    // Pre-seed history for this agent so the running card carries an estimate.
+    stats.record(session.agentId, 8000)
+
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-seed',
+      phase: 'start',
+    })
+    const running = session.timeline.get().find((it) => it.kind === 'compaction')
+    expect(running).toMatchObject({
+      kind: 'compaction',
+      compaction: { phase: 'running', expectedDurationMs: 8000 },
+    })
+    svc.dispose()
+  })
+
+  it('does not record a failed compaction into stats history', async () => {
+    const client = new FakeAcpClientService()
+    const stats = makeCompactionStats()
+    const svc = makeService(client, new ConfigurationService(), stats)
+    const session = await svc.createSession()
+    await session.whenConnected()
+
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-fail',
+      phase: 'start',
+    })
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-fail',
+      phase: 'failed',
+      reason: 'boom',
+    })
+    expect(stats.getExpectedDurationMs(session.agentId)).toBeUndefined()
+    svc.dispose()
+  })
+
   it('attributes MCP tool calls to their server from _meta.claudeCode.toolName', async () => {
     const client = new FakeAcpClientService()
     const svc = makeService(client, new ConfigurationService())
@@ -1613,6 +1708,7 @@ describe('AcpSessionService — AI session title push-back', () => {
       new StubSessionChangeTracker(),
       title,
       FAKE_URI_IDENTITY,
+      makeCompactionStats(),
     )
     return { svc, history }
   }
@@ -1741,6 +1837,7 @@ describe('AcpSessionService — configOptions history snapshot', () => {
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
+      makeCompactionStats(),
     )
     return { svc, history }
   }

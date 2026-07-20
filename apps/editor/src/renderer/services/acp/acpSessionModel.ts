@@ -161,6 +161,14 @@ export interface AcpCompaction {
   readonly startedAt?: number
   /** Elapsed ms at settle, computed on `success`/`failed` from `startedAt`. */
   readonly durationMs?: number
+  /**
+   * Expected total duration (ms) for this compaction, seeded when `running`
+   * begins from the median of past successful compactions for the same agent
+   * (see {@link IAcpCompactionStatsService}). The card drives its progress
+   * estimate off this so the bar reaches ~90% around the historically typical
+   * finish time instead of a fixed constant. Absent until enough samples exist.
+   */
+  readonly expectedDurationMs?: number
 }
 
 export interface AcpPendingPermission {

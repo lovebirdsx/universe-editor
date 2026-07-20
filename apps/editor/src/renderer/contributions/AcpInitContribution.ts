@@ -16,6 +16,7 @@ import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
 import { IAcpAgentDefaultsService } from '../services/acp/acpAgentDefaultsService.js'
 import { IAcpConfigOptionsCacheService } from '../services/acp/acpConfigOptionsCache.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
+import { IAcpCompactionStatsService } from '../services/acp/acpCompactionStats.js'
 import { ISessionChangeTrackerService } from '../services/acp/sessionChangeTracker.js'
 import { IAcpSessionFilterService } from '../services/acp/acpSessionFilterService.js'
 import { ISessionBookmarkService } from '../services/acp/sessionBookmarkService.js'
@@ -26,6 +27,7 @@ export class AcpInitContribution extends Disposable implements IWorkbenchContrib
     @IAcpAgentDefaultsService agentDefaults: IAcpAgentDefaultsService,
     @IAcpConfigOptionsCacheService configOptionsCache: IAcpConfigOptionsCacheService,
     @IAcpChatLocationService chatLocation: IAcpChatLocationService,
+    @IAcpCompactionStatsService compactionStats: IAcpCompactionStatsService,
     @ISessionChangeTrackerService changeTracker: ISessionChangeTrackerService,
     @IAcpSessionFilterService sessionFilter: IAcpSessionFilterService,
     @ISessionBookmarkService sessionBookmarks: ISessionBookmarkService,
@@ -35,6 +37,7 @@ export class AcpInitContribution extends Disposable implements IWorkbenchContrib
     void agentDefaults.initialize()
     void configOptionsCache.initialize()
     void chatLocation.initialize()
+    void compactionStats.initialize()
     void changeTracker.initialize()
     void sessionFilter.initialize()
     void sessionBookmarks.initialize()

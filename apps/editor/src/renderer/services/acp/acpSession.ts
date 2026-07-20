@@ -31,6 +31,7 @@ import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import type { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import type { ISessionChangeTrackerService } from './sessionChangeTracker.js'
 import type { IAcpSessionTitleService } from './acpSessionTitleService.js'
+import type { IAcpCompactionStatsService } from './acpCompactionStats.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
 import { AcpSessionConnection, type QueuedPrompt } from './acpSessionConnection.js'
@@ -282,6 +283,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     private readonly _changeTracker?: ISessionChangeTrackerService,
     private readonly _titleService?: IAcpSessionTitleService,
     readonly readOnly: boolean = false,
+    private readonly _compactionStats?: IAcpCompactionStatsService,
   ) {
     super()
     this.sessionIdOnAgent = observableValue<string | undefined>(
@@ -1437,6 +1439,8 @@ export class AcpSession extends Disposable implements IAcpSession {
     const idx = this._timeline.findIndex((it) => it.kind === 'compaction' && it.id === slotId)
     const prev = idx === -1 ? undefined : this._timeline[idx]
     const prevStartedAt = prev?.kind === 'compaction' ? prev.compaction.startedAt : undefined
+    const prevExpected =
+      prev?.kind === 'compaction' ? prev.compaction.expectedDurationMs : undefined
     // The SDK compaction has no true progress; the card shows a live stopwatch
     // from `startedAt`. Stamp it when `running` begins, then settle a fixed
     // `durationMs` at the terminal phase so the elapsed time freezes.
@@ -1445,11 +1449,21 @@ export class AcpSession extends Disposable implements IAcpSession {
       phase !== 'running' && startedAt !== undefined
         ? Math.max(0, Date.now() - startedAt)
         : undefined
+    // Seed the estimate from observed history when starting; record the real
+    // duration back on success so subsequent compactions estimate more sharply.
+    const expectedDurationMs =
+      phase === 'running'
+        ? this._compactionStats?.getExpectedDurationMs(this.agentId)
+        : prevExpected
+    if (phase === 'success' && durationMs !== undefined) {
+      this._compactionStats?.record(this.agentId, durationMs)
+    }
     const compaction: AcpCompaction = {
       phase,
       ...(reason != null ? { reason } : {}),
       ...(startedAt !== undefined ? { startedAt } : {}),
       ...(durationMs !== undefined ? { durationMs } : {}),
+      ...(expectedDurationMs !== undefined ? { expectedDurationMs } : {}),
     }
     const slot: TimelineItem = { kind: 'compaction', id: slotId, compaction }
     if (idx === -1) {

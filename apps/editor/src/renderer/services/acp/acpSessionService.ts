@@ -58,6 +58,7 @@ import {
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { isAuthRequiredError } from './acpAuthError.js'
 import { IAcpPermissionHandler } from './acpPermissionHandler.js'
+import { IAcpCompactionStatsService } from './acpCompactionStats.js'
 import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
@@ -291,6 +292,7 @@ export class AcpSessionService
     @ISessionChangeTrackerService private readonly _changeTracker: ISessionChangeTrackerService,
     @IAcpSessionTitleService private readonly _titleService: IAcpSessionTitleService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+    @IAcpCompactionStatsService private readonly _compactionStats: IAcpCompactionStatsService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
@@ -431,6 +433,8 @@ export class AcpSessionService
       this._agentDefaults,
       this._changeTracker,
       this._titleService,
+      false,
+      this._compactionStats,
     )
     this._register(session)
     this._wireAuthGuidance(session)
@@ -713,6 +717,7 @@ export class AcpSessionService
         // title, so we must not regenerate (and overwrite) it on the next turn.
         undefined,
         readOnly,
+        this._compactionStats,
       )
       session.attachConnection(conn, entry.sessionIdOnAgent)
       this._register(session)
