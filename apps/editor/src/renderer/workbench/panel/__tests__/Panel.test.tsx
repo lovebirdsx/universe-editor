@@ -44,6 +44,8 @@ const mockConfigService: IConfigurationService = {
   loadLayer: vi.fn(),
   getLayerSnapshot: vi.fn().mockReturnValue({}),
   getValueOrigin: vi.fn().mockReturnValue(undefined),
+  getValueForTarget: vi.fn().mockReturnValue(undefined),
+  getValueOriginForTarget: vi.fn().mockReturnValue(undefined),
   onDidChangeConfiguration: { event: vi.fn(), dispose: vi.fn() } as never,
 }
 

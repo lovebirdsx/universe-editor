@@ -262,6 +262,47 @@ describe('ConfigurationService.getValueOrigin', () => {
   })
 })
 
+describe('ConfigurationService.getValueForTarget / getValueOriginForTarget', () => {
+  it('ignores layers above the requested target', () => {
+    const svc = new ConfigurationService()
+    svc.update('theme', 'dark', ConfigurationTarget.User)
+    svc.update('theme', 'light', ConfigurationTarget.Project)
+
+    // From the User scope, the Project-only override must not leak in.
+    expect(svc.getValueForTarget('theme', ConfigurationTarget.User)).toBe('dark')
+    expect(svc.getValueOriginForTarget('theme', ConfigurationTarget.User)).toBe(
+      ConfigurationTarget.User,
+    )
+
+    // From the Project scope, the higher layer wins as usual.
+    expect(svc.getValueForTarget('theme', ConfigurationTarget.Project)).toBe('light')
+    expect(svc.getValueOriginForTarget('theme', ConfigurationTarget.Project)).toBe(
+      ConfigurationTarget.Project,
+    )
+    svc.dispose()
+  })
+
+  it('falls back to inherited lower layers when the target layer is unset', () => {
+    const svc = new ConfigurationService()
+    svc.update('theme', 'light', ConfigurationTarget.Project)
+
+    // User scope sees only the default (undefined here), not the Project value.
+    expect(svc.getValueForTarget('theme', ConfigurationTarget.User)).toBeUndefined()
+    expect(svc.getValueOriginForTarget('theme', ConfigurationTarget.User)).toBeUndefined()
+
+    // Project scope inherits from User when itself unset.
+    svc.update('theme', 'dark', ConfigurationTarget.User)
+    const svc2 = new ConfigurationService()
+    svc2.update('theme', 'dark', ConfigurationTarget.User)
+    expect(svc2.getValueForTarget('theme', ConfigurationTarget.Project)).toBe('dark')
+    expect(svc2.getValueOriginForTarget('theme', ConfigurationTarget.Project)).toBe(
+      ConfigurationTarget.User,
+    )
+    svc.dispose()
+    svc2.dispose()
+  })
+})
+
 describe('ConfigurationService layer precedence (5 layers)', () => {
   it('VSCodeWorkspace overrides User but is overridden by Project', () => {
     const svc = new ConfigurationService()

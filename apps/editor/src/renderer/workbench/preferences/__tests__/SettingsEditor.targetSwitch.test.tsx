@@ -168,6 +168,40 @@ describe('SettingsEditor target switching', () => {
     ).toBeUndefined()
   })
 
+  it('User tab does not show a value set only in the Workspace layer', () => {
+    registerSchema()
+    const { container, config } = mount({ workspaceOpen: true })
+
+    // Switch to Workspace tab and set a workspace-only value.
+    const wsBtn = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Workspace',
+    )!
+    fireEvent.click(wsBtn)
+    const wsInput = container.querySelector(
+      '[data-key="test.value"] input[type=text]',
+    ) as HTMLInputElement
+    fireEvent.change(wsInput, { target: { value: 'workspace-val' } })
+
+    // Sanity: only the Project layer got the value.
+    expect(
+      (config.getLayerSnapshot(ConfigurationTarget.User) as Record<string, unknown>)['test.value'],
+    ).toBeUndefined()
+
+    // Switch back to the User tab — it must show the inherited default ('hello'),
+    // NOT the Workspace layer's value, and its origin badge must not read Workspace.
+    const userBtn = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'User',
+    )!
+    fireEvent.click(userBtn)
+
+    const userInput = container.querySelector(
+      '[data-key="test.value"] input[type=text]',
+    ) as HTMLInputElement
+    expect(userInput.value).toBe('hello')
+    const badge = container.querySelector('[data-key="test.value"] [class*=originBadge]')
+    expect(badge?.textContent).toBe('Default')
+  })
+
   it('edits in User tab write to User layer', () => {
     registerSchema()
     const { container, config } = mount()
@@ -198,9 +232,14 @@ describe('SettingsEditor target switching', () => {
     expect(badge?.textContent).toBe('User')
   })
 
-  it('origin badge shows Workspace after Project-layer write', () => {
+  it('origin badge shows Workspace after Project-layer write (on the Workspace tab)', () => {
     registerSchema()
-    const { container, config } = mount()
+    const { container, config } = mount({ workspaceOpen: true })
+    // The Workspace-scoped origin is only visible from the Workspace tab.
+    const wsBtn = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Workspace',
+    )!
+    fireEvent.click(wsBtn)
     act(() => {
       config.update('test.value', 'x', ConfigurationTarget.Project)
     })

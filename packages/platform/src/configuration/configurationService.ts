@@ -66,6 +66,20 @@ export interface IConfigurationService {
   getLayerSnapshot(target: ConfigurationTarget): Readonly<Record<string, unknown>>
 
   /**
+   * Read the effective value as seen from a specific target layer: the value of
+   * the highest layer at or below `target` that owns the key. Layers with higher
+   * priority than `target` are ignored. This is what the settings UI must use so
+   * that, e.g., viewing the User scope does not leak a Workspace-only value.
+   */
+  getValueForTarget<T>(key: string, target: ConfigurationTarget): T | undefined
+
+  /**
+   * Like {@link getValueOrigin} but scoped: returns the highest layer at or below
+   * `target` that owns the key, ignoring higher-priority layers.
+   */
+  getValueOriginForTarget(key: string, target: ConfigurationTarget): ConfigurationTarget | undefined
+
+  /**
    * Return the highest-priority layer that owns the given key.
    * Returns undefined if the key is not present in any layer.
    */
@@ -199,6 +213,31 @@ export class ConfigurationService extends Disposable implements IConfigurationSe
       throw new Error(`Unknown configuration target: ${target}`)
     }
     return { ...layer }
+  }
+
+  getValueForTarget<T>(key: string, target: ConfigurationTarget): T | undefined {
+    // Walk from `target` down to Default, ignoring higher-priority layers so the
+    // returned value reflects only what this scope (and the ones it inherits) set.
+    for (let i = target; i >= 0; i--) {
+      const layer = this._layers[i]
+      if (layer && Object.prototype.hasOwnProperty.call(layer, key)) {
+        return layer[key] as T
+      }
+    }
+    return undefined
+  }
+
+  getValueOriginForTarget(
+    key: string,
+    target: ConfigurationTarget,
+  ): ConfigurationTarget | undefined {
+    for (let i = target; i >= 0; i--) {
+      const layer = this._layers[i]
+      if (layer && Object.prototype.hasOwnProperty.call(layer, key)) {
+        return i as ConfigurationTarget
+      }
+    }
+    return undefined
   }
 
   getValueOrigin(key: string): ConfigurationTarget | undefined {

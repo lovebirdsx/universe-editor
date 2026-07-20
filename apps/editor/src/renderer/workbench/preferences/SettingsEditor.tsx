@@ -288,8 +288,8 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
                   key={key}
                   configKey={key}
                   schema={schema}
-                  value={config.get(key)}
-                  origin={config.getValueOrigin(key)}
+                  value={config.getValueForTarget(key, activeTarget)}
+                  origin={config.getValueOriginForTarget(key, activeTarget)}
                   onChange={(v) => config.update(key, v, activeTarget)}
                 />
               ))}
