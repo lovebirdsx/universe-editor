@@ -9,6 +9,7 @@
 
 import type { AvailableCommand, ContentBlock, SessionConfigOption } from '@agentclientprotocol/sdk'
 import type { Event, IObservable } from '@universe-editor/platform'
+import { ACP_EXT_METHODS } from './acpExtMethods.js'
 import type { McpTransport } from './acpMcpServers.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import type { SelectionContext } from './promptContext.js'
@@ -228,7 +229,7 @@ export interface AcpPendingPermission {
  * the user's answers back. The string is shared verbatim with the agent fork's
  * `interactive.ts` — keep both in sync.
  */
-export const ASK_USER_QUESTION_METHOD = 'universe-editor/ask_user_question'
+export const ASK_USER_QUESTION_METHOD = ACP_EXT_METHODS.askUserQuestion
 
 /**
  * Custom ACP request that persists an AI-generated session title onto the
@@ -237,7 +238,7 @@ export const ASK_USER_QUESTION_METHOD = 'universe-editor/ask_user_question'
  * keep both in sync. Without this round-trip the title lives only client-side
  * and `session/list`'s `summary` clobbers it after `/compact`.
  */
-export const SET_SESSION_TITLE_METHOD = 'universe-editor/set_session_title'
+export const SET_SESSION_TITLE_METHOD = ACP_EXT_METHODS.setSessionTitle
 
 /**
  * Custom ACP request that rewinds a session to a specific user message (回退):
@@ -248,7 +249,7 @@ export const SET_SESSION_TITLE_METHOD = 'universe-editor/set_session_title'
  * stamped on the user turn (see {@link AcpMessage.messageId}); the response is a
  * {@link RewindFilesResult}.
  */
-export const REWIND_SESSION_METHOD = 'universe-editor/rewind_session'
+export const REWIND_SESSION_METHOD = ACP_EXT_METHODS.rewindSession
 
 /**
  * Custom ACP extension notification the agent fork sends to surface
@@ -259,7 +260,7 @@ export const REWIND_SESSION_METHOD = 'universe-editor/rewind_session'
  * `{ sessionId, id, phase, reason? }` where `id` is stable across a single
  * compaction so the in-progress card is replaced in place with its outcome.
  */
-export const COMPACTION_METHOD = '_universe/compaction'
+export const COMPACTION_METHOD = ACP_EXT_METHODS.compaction
 
 /** Result the agent returns from {@link REWIND_SESSION_METHOD} (mirrors the SDK's RewindFilesResult). */
 export interface RewindFilesResult {

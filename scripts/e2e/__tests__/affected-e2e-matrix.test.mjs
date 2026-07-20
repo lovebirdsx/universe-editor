@@ -24,6 +24,7 @@ import {
   computeMatrix,
   computeExternalMatrix,
   computeShouldPackage,
+  computeShouldRunAcpContract,
 } from '../affected-e2e-matrix.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -174,6 +175,38 @@ test('a business-only / unrelated change does NOT trigger Windows packaging', ()
     'README.md',
   ]) {
     assert.equal(computeShouldPackage([p]), false, `${p} should not trigger packaging`)
+  }
+})
+
+// --- acp-contract gating ----------------------------------------------------
+// The cross-repo ACP contract test spawns the real fork dist (submodule +
+// agent:build), so on a PR it runs only when the editor↔fork wire surface changes.
+
+test('--all forces the ACP contract test on (main safety net)', () => {
+  assert.equal(computeShouldRunAcpContract([], { all: true }), true)
+})
+
+test('a change to the editor↔fork wire surface gates the ACP contract test on', () => {
+  for (const p of [
+    'vendor/claude-agent-acp/src/acp-agent.ts',
+    'vendor/codex-acp/src/CodexAcpServer.ts',
+    'apps/editor/src/renderer/services/acp/acpSessionModel.ts',
+    'apps/editor/src/main/services/acpHost/acpHostMainService.ts',
+    'apps/editor/src/main/services/claudeBinary/claudeBinaryService.ts',
+    'apps/editor/src/main/services/codexConfig/codexConfigService.ts',
+    'apps/editor/integration/scenarios/acpForkContract.integration.test.ts',
+  ]) {
+    assert.equal(computeShouldRunAcpContract([p]), true, `${p} should gate the contract test on`)
+  }
+})
+
+test('an unrelated change does NOT trigger the ACP contract test', () => {
+  for (const p of [
+    'apps/editor/src/renderer/workbench/sidebar/SideBar.tsx',
+    'packages/platform/src/ipc/ipc.ts',
+    'docs/user/foo.md',
+  ]) {
+    assert.equal(computeShouldRunAcpContract([p]), false, `${p} should not trigger the contract test`)
   }
 })
 

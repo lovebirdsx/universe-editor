@@ -11,6 +11,9 @@
  *                  setup that extension's specs need (tsserver).
  *    - package-windows: "true"/"false" — whether the expensive Windows packaging
  *                  job should run (packaging-mechanism paths, or forced on --all).
+ *    - acp-contract: "true"/"false" — whether the cross-repo ACP contract test
+ *                  (spawns real fork dist) should run (editor↔fork wire paths, or
+ *                  forced on --all).
  *
  *  How "affected" is computed: `turbo run e2e --filter=...[<base>] --dry=json`.
  *  Turbo walks the workspace dependency graph, so editing `platform` marks every
@@ -101,6 +104,23 @@ const PACKAGE_PATHS = [
   'pnpm-lock.yaml',
 ]
 
+// The cross-repo ACP contract test spawns the REAL fork dist, so it needs a
+// submodule checkout + `pnpm agent:build` — too expensive to run every PR. It runs
+// only when a change could shift the editor↔fork wire contract: the forks
+// themselves, the editor's ACP renderer services, or the main-side agent host /
+// binary / config services. main push forces it on via `--all` (full safety net).
+const ACP_CONTRACT_PATHS = [
+  'vendor/',
+  'apps/editor/src/renderer/services/acp/',
+  'apps/editor/src/main/services/acpHost/',
+  'apps/editor/src/main/services/claudeBinary/',
+  'apps/editor/src/main/services/claudeConfig/',
+  'apps/editor/src/main/services/codexBinary/',
+  'apps/editor/src/main/services/codexConfig/',
+  'apps/editor/integration/fixtures/realForkConnection.ts',
+  'apps/editor/integration/scenarios/acpForkContract.integration.test.ts',
+]
+
 function parseArgs(argv) {
   const args = { all: false, base: undefined }
   for (let i = 0; i < argv.length; i++) {
@@ -166,6 +186,17 @@ export function computeShouldPackage(changedPaths, { all = false } = {}) {
 }
 
 /**
+ * Whether the cross-repo ACP contract test should run for a set of changed file
+ * paths. Pure so the routing is unit-testable. `all` forces it on (main push);
+ * otherwise it runs iff a change touches the editor↔fork wire surface (see
+ * {@link ACP_CONTRACT_PATHS}).
+ */
+export function computeShouldRunAcpContract(changedPaths, { all = false } = {}) {
+  if (all) return true
+  return [...changedPaths].some((p) => ACP_CONTRACT_PATHS.some((prefix) => p.startsWith(prefix)))
+}
+
+/**
  * Ask turbo which packages have an affected `e2e` task. Returns the set of
  * package names with a real (non-<NONEXISTENT>) e2e command. Filter is
  * `...[<base>]` — the `...` includes dependents so a dep change fans out.
@@ -202,6 +233,7 @@ function main() {
   const changedPaths = forceAll ? [] : changedPathsSince(base)
   const external = computeExternalMatrix(changedPaths, { all: forceAll })
   const shouldPackage = computeShouldPackage(changedPaths, { all: forceAll })
+  const shouldRunAcpContract = computeShouldRunAcpContract(changedPaths, { all: forceAll })
 
   const outputs = {
     core: String(core),
@@ -210,6 +242,7 @@ function main() {
     external: JSON.stringify(external),
     'has-external': String(external.length > 0),
     'package-windows': String(shouldPackage),
+    'acp-contract': String(shouldRunAcpContract),
   }
 
   const gh = process.env.GITHUB_OUTPUT

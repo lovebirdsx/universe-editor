@@ -56,6 +56,7 @@ import {
   type IAcpClientNotificationSink,
 } from './acpClientService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
+import { ACP_EXT_METHODS } from './acpExtMethods.js'
 import { isAuthRequiredError } from './acpAuthError.js'
 import { IAcpPermissionHandler } from './acpPermissionHandler.js'
 import { IAcpCompactionStatsService } from './acpCompactionStats.js'
@@ -233,7 +234,7 @@ const HISTORY_SCOPE_KEY = 'acp.sessions.historyScope'
 const AUTH_NOTIFICATION_COOLDOWN_MS = 10_000
 
 /** ext-notification method the agent fork uses to forward raw Claude SDK messages. */
-const SDK_MESSAGE_EXT_METHOD = '_claude/sdkMessage'
+const SDK_MESSAGE_EXT_METHOD = ACP_EXT_METHODS.sdkMessage
 
 /**
  * `_meta` passed on session/new + session/load that asks the agent fork to

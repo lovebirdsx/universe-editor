@@ -98,6 +98,70 @@ jobs:
       - name: Run integration tests
         run: pnpm --filter @universe-editor/editor test:integration
 
+  # Cross-repo ACP contract test: spawns the REAL built fork dist and asserts the
+  # editor↔fork ext-method / _meta wire shape (see acpForkContract.integration.test).
+  # Needs the submodules + `pnpm agent:build`, so it's gated by detect-affected to
+  # the editor↔fork wire surface (main push forces it on). In the plain
+  # `integration` job above the same spec self-skips (no fork dist there).
+  acp-contract:
+    name: ACP Cross-Repo Contract
+    needs: detect-affected
+    if: needs.detect-affected.outputs.acp-contract == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
+      - name: Cache agent vendor deps
+        uses: actions/cache@v4
+        with:
+          path: vendor/claude-agent-acp/node_modules
+          key: agent-deps-${{ runner.os }}-${{ hashFiles('vendor/claude-agent-acp/package-lock.json') }}
+
+      - name: Cache codex agent vendor deps
+        uses: actions/cache@v4
+        with:
+          path: vendor/codex-acp/node_modules
+          key: codex-agent-deps-${{ runner.os }}-${{ hashFiles('vendor/codex-acp/package-lock.json') }}
+
+      # The contract test imports editor renderer source; platform dist must exist.
+      - name: Build (platform dist required for integration imports)
+        run: pnpm build --filter=@universe-editor/platform...
+
+      # Build both fork dist artifacts (the real subprocess the contract test spawns).
+      - name: Build agent forks
+        run: pnpm agent:build
+
+      # Runs the offline contract core: the ext-method NAME table + the
+      # initialize handshake for both forks. The claude ext-method routing leg
+      # self-skips here (it needs a real Claude binary via CLAUDE_CODE_EXECUTABLE,
+      # which CI has no reason to install); it runs in local dev instead.
+      - name: Run ACP contract test
+        run: pnpm --filter @universe-editor/editor test:integration acpForkContract
+
   # Decide which E2E suites to run. On a PR we scope to what the change touched
   # (turbo affected, base = origin/main); on a main push we force EVERYTHING —
   # the full run is the safety net for the affected heuristic. Outputs drive the
@@ -114,6 +178,7 @@ jobs:
       external: ${{ steps.detect.outputs.external }}
       has-external: ${{ steps.detect.outputs.has-external }}
       package-windows: ${{ steps.detect.outputs.package-windows }}
+      acp-contract: ${{ steps.detect.outputs.acp-contract }}
     steps:
       - uses: actions/checkout@v4
         with:
