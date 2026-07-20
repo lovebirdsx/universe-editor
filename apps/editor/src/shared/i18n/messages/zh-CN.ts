@@ -824,6 +824,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'swarm.notify.needsAction.one': '审核 #{0}：{1}',
   'swarm.notify.needsAction.oneNoDesc': '审核 #{0}',
   'swarm.notify.needsAction.many': '有 {0} 个新审核待你处理',
+  'swarm.notify.needsAction.inAppOne': '有新的 Swarm 审核 #{0} 待你处理：{1}',
+  'swarm.notify.needsAction.inAppOneNoDesc': '有新的 Swarm 审核 #{0} 待你处理',
+  'swarm.notify.needsAction.open': '打开审核',
+  'swarm.notify.needsAction.openList': '打开 Swarm 审核列表',
 
   // --- Diff editor & Merge ---
   'diffEditor.nextChange': '下一处更改 ({key})',

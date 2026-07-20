@@ -52,7 +52,7 @@ disable-model-invocation: true
 | 解析 | `extensions/perforce/src/swarm/swarmParser.ts` | Swarm JSON → DTO 的**纯函数**（`parseReviewList`/`parseReviewDetail`/`parseTransitions`/`parseComments`…）。可对 fixture 单测 |
 | 客户端编排 | `extensions/perforce/src/swarm/swarmClient.ts` | `SwarmClient`：每个审核操作一个方法（`dashboard`/`listReviews`/`getReview`/`vote`/`transition`/`addComment`…）。组合 api + parser。持有 `SwarmClientConfig {baseUrl, apiVersion, user}` |
 | 命令注册 | `extensions/perforce/src/swarm/swarmCommands.ts` | 注册全部 `perforce.swarm.*` 命令（`commands.registerCommand`）；`guard()` 把「未配置/未授权」失败映射成安全回退值；`SwarmClient` 按 config+active-client 签名**懒重建** |
-| 状态栏 + 轮询 | `extensions/perforce/src/swarm/swarmStatusBar.ts` | 定时 poll `dashboards/action`，状态栏显示"需我处理"计数；新审核变可处理时 toast（走 `_workbench.openSwarmReview(s)`，**首轮 poll 只 prime 基线不 toast**） |
+| 状态栏 + 轮询 | `extensions/perforce/src/swarm/swarmStatusBar.ts` | 定时 poll dashboard，状态栏只管"需我处理"计数角标；**新审核通知不在这里**——由 renderer 的 `contributions/SwarmReviewNotificationContribution.ts` 自带 60s 轮询（首轮只 prime 基线不通知），以侧栏**最终显示**列表（作者/仅可审批/ignore 过滤后）为准发桌面通知；**窗口聚焦时 main 侧 `hostMainService.notify` 会门控掉 OS toast（`shown:false`），此时必须回退应用内 `INotificationService` toast（带打开动作）**——上升沿在发通知前已记入 `_known` 基线只消费一次，静默丢弃会导致该审核永远不再通知（曾是真 bug） |
 | 审核列表侧栏 | `apps/editor/src/renderer/workbench/swarm/SwarmReviewsView.tsx` | Swarm Reviews viewlet：分组 + 关键词过滤 + 点开详情；`getTransitions` 驱动可审批图标与右键操作，菜单含打开/网页/复制/transition/obliterate |
 | 审核详情主编辑区 | `apps/editor/src/renderer/workbench/swarm/SwarmReviewEditor.tsx` | 头部（审核网页链接/状态/作者/参与者/vote/transition/Update/Obliterate）+ 描述 + 版本选择器 + 文件列表 + review 级评论面板 |
 | 文件 diff 编辑区 | `apps/editor/src/renderer/workbench/swarm/SwarmDiffEditor.tsx` + `SwarmInlineCommentController.ts` + `SwarmInlineThread.tsx` | Monaco diff + 行内评论（view-zone + overlay widget 托 React，对标 `InlineDirtyDiffController`） |
@@ -182,7 +182,7 @@ pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.con
 - `extensions/perforce/src/swarm/swarmParser.ts`（+ `__tests__/swarmParser.test.ts`）—— 纯解析
 - `extensions/perforce/src/swarm/swarmClient.ts` —— 审核操作编排（搜 `dashboard`）
 - `extensions/perforce/src/swarm/swarmCommands.ts` —— 命令注册（搜 `guard`）
-- `extensions/perforce/src/swarm/swarmStatusBar.ts` —— 轮询 + toast
+- `extensions/perforce/src/swarm/swarmStatusBar.ts` —— 轮询 + 计数角标（通知在 renderer `SwarmReviewNotificationContribution.ts`）
 - `extensions/perforce/package.json` —— 只有 `ping`/`requestReview` 进 commands（头号坑）
 - `apps/editor/src/renderer/workbench/swarm/` —— 全部 React UI（列表/详情/diff/行内评论）
 - `apps/editor/src/renderer/actions/swarmActions.ts` —— Action2（openReviews/openReview + `_workbench.*` 双胞胎）

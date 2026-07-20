@@ -72,6 +72,9 @@ async function freshModules() {
 interface SetupOpts {
   enabled?: boolean
   clicked?: boolean
+  /** Whether the OS toast was actually displayed (false = gated: window focused
+   *  or notifications unsupported). Defaults to true. */
+  shown?: boolean
   config?: Record<string, unknown>
   transitions?: Record<string, SwarmTransitionDto[]>
   ignoredIds?: string[]
@@ -104,12 +107,20 @@ async function setup(opts: SetupOpts = {}) {
     return undefined
   })
   const notify = vi.fn(async (_opts: { title: string; body: string }) => ({
-    shown: true,
+    shown: opts.shown ?? true,
     clicked: opts.clicked ?? false,
+  }))
+  const inAppNotify = vi.fn((_opts: unknown) => ({
+    id: 'n1',
+    progress: { report: () => {}, done: () => {} },
+    updateMessage: () => {},
+    updateSeverity: () => {},
+    dispose: () => {},
   }))
 
   const commands = { executeCommand } as never
   const host = { notify } as never
+  const notification = { notify: inAppNotify } as never
   const configValues: Record<string, unknown> = {
     'perforce.swarm.notifications.enabled': opts.enabled ?? true,
     ...opts.config,
@@ -125,6 +136,7 @@ async function setup(opts: SetupOpts = {}) {
     config,
     storage,
     workspace,
+    notification,
   )
   // Let the constructor's priming poll complete (baseline, no notification).
   await flush()
@@ -132,6 +144,7 @@ async function setup(opts: SetupOpts = {}) {
   return {
     instance,
     notify,
+    inAppNotify,
     executeCommand,
     setDashboard: (needsAction: SwarmReviewDto[]) => {
       current = dashboard(needsAction)
@@ -262,5 +275,64 @@ describe('SwarmReviewNotificationContribution', () => {
       body: 'Review #1: fix login\nuniverse-editor',
     })
     t.instance.dispose()
+  })
+
+  // Repro for "自动通知没生效": the OS toast is gated main-side while the window is
+  // focused (hostMainService returns shown:false) — the exact state a user actively
+  // working in the editor is always in. The contribution must fall back to an
+  // in-app notification, otherwise the review's rising edge is consumed silently
+  // and it never notifies again.
+  describe('in-app fallback when the OS toast is suppressed (window focused)', () => {
+    it('raises an in-app notification with an open action for a single review', async () => {
+      const t = await setup({ shown: false })
+      t.setDashboard([review('42', { description: 'fix login' })])
+      await t.refresh()
+      await flush()
+      expect(t.notify).toHaveBeenCalledTimes(1)
+      expect(t.inAppNotify).toHaveBeenCalledTimes(1)
+      const opts = t.inAppNotify.mock.calls[0]![0] as {
+        message: string
+        actions?: Array<{ label: string; run: () => void }>
+      }
+      expect(opts.message).toContain('#42')
+      expect(opts.actions?.length).toBe(1)
+      opts.actions![0]!.run()
+      expect(t.executeCommand).toHaveBeenCalledWith('swarm.openReview', '42')
+      t.instance.dispose()
+    })
+
+    it('routes a multi-review fallback action to the Swarm Reviews view', async () => {
+      const t = await setup({ shown: false })
+      t.setDashboard([review('1'), review('2')])
+      await t.refresh()
+      await flush()
+      expect(t.inAppNotify).toHaveBeenCalledTimes(1)
+      const opts = t.inAppNotify.mock.calls[0]![0] as {
+        actions?: Array<{ label: string; run: () => void }>
+      }
+      opts.actions![0]!.run()
+      expect(t.executeCommand).toHaveBeenCalledWith('swarm.openReviews')
+      t.instance.dispose()
+    })
+
+    it('does not raise the in-app fallback when the OS toast was shown', async () => {
+      const t = await setup({ shown: true })
+      t.setDashboard([review('1')])
+      await t.refresh()
+      await flush()
+      expect(t.notify).toHaveBeenCalledTimes(1)
+      expect(t.inAppNotify).not.toHaveBeenCalled()
+      t.instance.dispose()
+    })
+
+    it('stays silent when notifications are disabled', async () => {
+      const t = await setup({ shown: false, enabled: false })
+      t.setDashboard([review('1')])
+      await t.refresh()
+      await flush()
+      expect(t.notify).not.toHaveBeenCalled()
+      expect(t.inAppNotify).not.toHaveBeenCalled()
+      t.instance.dispose()
+    })
   })
 })

@@ -87,7 +87,7 @@
 
 底部状态栏左侧有一个 **Pull Request 图标 + 数字**，表示「需要我处理」的审核数；点击聚焦 Swarm Reviews 视图。数字随轮询（`perforce.swarm.pollInterval` 设为秒数，最小 10 秒）刷新。
 
-**当有新的审核进入「需我处理」列表时，会弹出系统桌面通知**（仅在编辑器窗口未聚焦时弹出，点击通知直接打开该审核；多个新审核同时出现时合并为一次通知）。通知严格以侧栏列表**最终显示**的审核为准——已应用作者白名单 / 「仅可审批」/ 已忽略等过滤，已通知过的审核不会重复提醒。该通知可通过 `perforce.swarm.notifications.enabled`（默认开启）关闭。
+**当有新的审核进入「需我处理」列表时会自动通知**：编辑器窗口未聚焦时弹出系统桌面通知（点击直接打开该审核）；窗口聚焦时改为右下角应用内通知（带「打开审核」按钮）。多个新审核同时出现时合并为一次通知。通知严格以侧栏列表**最终显示**的审核为准——已应用作者白名单 / 「仅可审批」/ 已忽略等过滤，已通知过的审核不会重复提醒。该通知可通过 `perforce.swarm.notifications.enabled`（默认开启）关闭。
 
 ## 发起审核
 
@@ -180,7 +180,7 @@ universe-editor://swarm/review/1234
 | `perforce.swarm.needsActionAuthors`        | `[]`             | 「Needs My Action」只显示发起者在此集合中的审核；空集不过滤。由侧栏过滤菜单维护。 |
 | `perforce.swarm.needsActionApprovableOnly` | `false`          | 「Needs My Action」只显示当前用户可批准的审核。由侧栏过滤菜单维护。 |
 | `perforce.swarm.authoredHideApproved`      | `true`           | 「Authored by Me」隐藏已批准的审核。由侧栏图标开关维护。 |
-| `perforce.swarm.notifications.enabled`     | `true`           | 有新审核进入「Needs My Action」且窗口未聚焦时弹出系统桌面通知；点击打开该审核。 |
+| `perforce.swarm.notifications.enabled`     | `true`           | 有新审核进入「Needs My Action」时通知：窗口未聚焦弹系统桌面通知，聚焦时改为应用内通知。 |
 | `perforce.swarm.inlineComments.enabled`    | `false`          | 是否在审核 diff 上叠加 GitHub PR 式行内评论；关闭时 diff 只显示代码。改动即时生效。 |
 | `perforce.cache.enabled`      | `true`                       | 是否缓存 p4 与 Swarm 查询结果以减少服务器往返；Swarm 写操作和手动刷新会立即失效相关缓存。                         |
 

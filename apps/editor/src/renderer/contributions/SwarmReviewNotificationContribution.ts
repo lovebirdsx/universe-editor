@@ -3,7 +3,10 @@
  *  Raises an OS-level desktop notification when a new review appears in the Swarm
  *  "Needs My Action" list while the editor window is blurred. Mirrors
  *  AgentNotificationContribution: focus gating lives main-side, clicking jumps to
- *  the review (single) or the Swarm Reviews view (several).
+ *  the review (single) or the Swarm Reviews view (several). When the OS toast is
+ *  gated away (window focused / notifications unsupported) it falls back to an
+ *  in-app notification instead — the rising edge is consumed either way, so
+ *  dropping it silently would lose the review's one chance to notify.
  *
  *  The notification is driven by the list *as finally displayed* — the same
  *  author / approvable-only filters (swarmReviewFilter) and the client-side ignore
@@ -17,9 +20,11 @@ import {
   ICommandService,
   IConfigurationService,
   IHostService,
+  INotificationService,
   IStorageService,
   IWorkbenchContribution,
   IWorkspaceService,
+  Severity,
   localize,
 } from '@universe-editor/platform'
 import {
@@ -54,6 +59,7 @@ export class SwarmReviewNotificationContribution
     @IConfigurationService private readonly _config: IConfigurationService,
     @IStorageService storage: IStorageService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
+    @INotificationService private readonly _notification: INotificationService,
   ) {
     super()
     // The ignore set feeds the "final displayed" computation; attach is idempotent
@@ -173,12 +179,52 @@ export class SwarmReviewNotificationContribution
             0: String(fresh.length),
           })
     const res = await this._host.notify({ title, body })
-    if (!res.clicked) return
+    if (res.clicked) {
+      this._openTarget(fresh)
+      return
+    }
+    // Gated main-side (window focused) or OS notifications unsupported. This poll
+    // cycle is the review's only notification chance (the rising edge is already
+    // consumed), so surface it in-app instead of dropping it.
+    if (!res.shown) this._notifyInApp(fresh)
+  }
+
+  private _openTarget(fresh: readonly SwarmReviewDto[]): void {
     if (fresh.length === 1) {
-      void this._commands.executeCommand(OpenSwarmReviewAction.ID, first.id)
+      void this._commands.executeCommand(OpenSwarmReviewAction.ID, fresh[0]!.id)
     } else {
       void this._commands.executeCommand(OpenSwarmReviewsAction.ID)
     }
+  }
+
+  private _notifyInApp(fresh: readonly SwarmReviewDto[]): void {
+    const first = fresh[0]!
+    const desc = first.description.trim()
+    const message =
+      fresh.length > 1
+        ? localize('swarm.notify.needsAction.many', '{0} new reviews need your action', {
+            0: String(fresh.length),
+          })
+        : desc
+          ? localize(
+              'swarm.notify.needsAction.inAppOne',
+              'New Swarm review #{0} needs your action: {1}',
+              { 0: first.id, 1: desc },
+            )
+          : localize(
+              'swarm.notify.needsAction.inAppOneNoDesc',
+              'New Swarm review #{0} needs your action',
+              { 0: first.id },
+            )
+    const label =
+      fresh.length === 1
+        ? localize('swarm.notify.needsAction.open', 'Open Review')
+        : localize('swarm.notify.needsAction.openList', 'Open Swarm Reviews')
+    this._notification.notify({
+      severity: Severity.Info,
+      message,
+      actions: [{ label, run: () => this._openTarget(fresh) }],
+    })
   }
 
   /** One-line body for a single new review: "#id · description", plus workspace. */
