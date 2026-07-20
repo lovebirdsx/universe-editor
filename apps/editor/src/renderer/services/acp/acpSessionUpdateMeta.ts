@@ -11,7 +11,7 @@
 import type { SessionUpdate } from '@agentclientprotocol/sdk'
 import { parseMcpToolName } from './acpMcpServers.js'
 import type { DiffHunk } from './diff/reconstructBaseline.js'
-import type { AcpModelCost } from './acpSessionModel.js'
+import type { AcpModelCost, AcpSubagentStats } from './acpSessionModel.js'
 
 /**
  * Read the per-model cost breakdown our agent fork stamps onto `usage_update`
@@ -42,6 +42,32 @@ export function extractModelBreakdown(update: {
 
 function numberOr(v: unknown): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : 0
+}
+
+/**
+ * Read the per-sub-agent token/model tally our claude fork stamps onto a Task
+ * card's `tool_call_update` via `_meta._universe/subagentStats`. Values are the
+ * running total for that one sub-agent (all its assistant messages folded). The
+ * fork never reports a per-sub-agent cost, so `costUSD` is estimated downstream.
+ * Returns undefined when absent or malformed.
+ */
+export function readSubagentStats(update: {
+  _meta?: Record<string, unknown> | null | undefined
+}): AcpSubagentStats | undefined {
+  const raw = update._meta?.['_universe/subagentStats']
+  if (raw == null || typeof raw !== 'object') return undefined
+  const r = raw as Record<string, unknown>
+  const stats: AcpSubagentStats = {
+    inputTokens: numberOr(r['inputTokens']),
+    outputTokens: numberOr(r['outputTokens']),
+    cacheReadTokens: numberOr(r['cacheReadTokens']),
+    cacheCreateTokens: numberOr(r['cacheCreateTokens']),
+    ...(typeof r['model'] === 'string' && r['model'].length > 0 ? { model: r['model'] } : {}),
+    ...(typeof r['subagentType'] === 'string' && r['subagentType'].length > 0
+      ? { subagentType: r['subagentType'] }
+      : {}),
+  }
+  return stats
 }
 
 /**

@@ -259,4 +259,34 @@ describe('ToolCallCard', () => {
     expect(feedback.textContent).toContain('先不做了')
     expect(screen.getByLabelText('completed')).toBeTruthy()
   })
+
+  it('renders the sub-agent stats line (model + tokens + estimated cost)', () => {
+    renderCard(
+      makeCall({
+        kind: 'other',
+        title: 'Explore the codebase',
+        status: 'completed',
+        durationMs: 12_000,
+        subagentStats: {
+          model: 'claude-sonnet-5',
+          inputTokens: 12_000,
+          outputTokens: 3_000,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          costUSD: 0.081,
+        },
+      }),
+    )
+    const stats = screen.getByTestId('acp-subagent-stats')
+    expect(stats.textContent).toContain('sonnet-5')
+    // duration frozen at 12s, token summary, and an estimated (≈¥) cost.
+    expect(stats.textContent).toContain('12s')
+    expect(stats.textContent).toContain('↑')
+    expect(stats.textContent).toContain('≈¥')
+  })
+
+  it('omits the stats line entirely when there is nothing to show', () => {
+    renderCard(makeCall({ kind: 'other', title: 'plain tool' }))
+    expect(screen.queryByTestId('acp-subagent-stats')).toBeNull()
+  })
 })

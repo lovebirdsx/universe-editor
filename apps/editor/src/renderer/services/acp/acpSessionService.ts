@@ -109,6 +109,7 @@ export {
   type AskUserQuestionRequest,
   type AskUserQuestionResult,
   type AcpSessionStatus,
+  type AcpSubagentStats,
   type AcpUsage,
   type IAcpSession,
   type IAcpSessionInitState,

@@ -2677,6 +2677,25 @@
   font-weight: 600;
 }
 
+.subagentStats {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  font-weight: 400;
+  font-size: calc(var(--agent-font-size, 12px) * 0.85);
+  color: var(--color-message-role-fg, #888);
+  white-space: nowrap;
+}
+
+.subagentStatItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+
 /* Light theme ANSI palette: terminal background becomes light, so bright/light
    foreground colors must darken for readability (mirrors VSCode Light Modern). */
 :global(:root[data-theme='light']) .terminalOutput {

@@ -1234,4 +1234,83 @@ describe('AcpSession.timeline — batched/immediate atomicity', () => {
     // batch rather than tripping the immediate-set guard.
     await expect(s.cancelTurn()).resolves.toBeUndefined()
   })
+
+  it('merges sub-agent stats onto the parent Task card and prices Claude token tallies', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    // A Task tool call lands, then a bare `_meta`-only update carries the running
+    // sub-agent tally (as the claude fork forwards it per sub-agent message).
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'tool_call', toolCallId: 'task-1', title: 'Explore', kind: 'other' },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'task-1',
+        _meta: {
+          '_universe/subagentStats': {
+            model: 'claude-sonnet-5',
+            subagentType: 'general-purpose',
+            inputTokens: 1_000_000,
+            outputTokens: 1_000_000,
+            cacheReadTokens: 0,
+            cacheCreateTokens: 0,
+          },
+        },
+      },
+    })
+
+    const slot = s.timeline.get().find((it) => it.kind === 'toolCall' && it.id === 'task-1')
+    if (!slot || slot.kind !== 'toolCall') throw new Error('expected task card')
+    const stats = slot.call.subagentStats
+    expect(stats?.model).toBe('claude-sonnet-5')
+    expect(stats?.inputTokens).toBe(1_000_000)
+    // 1M input @ $3 + 1M output @ $15 = $18 (sonnet pricing).
+    expect(stats?.costUSD).toBeCloseTo(18, 5)
+    // The bare _meta update must not clobber the card's title/kind.
+    expect(slot.call.title).toBe('Explore')
+  })
+
+  it('carries the sub-agent tally forward across updates that omit it', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'tool_call', toolCallId: 'task-1', title: 'T', kind: 'other' },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'task-1',
+        _meta: {
+          '_universe/subagentStats': {
+            model: 'claude-opus-4-8',
+            inputTokens: 100,
+            outputTokens: 50,
+            cacheReadTokens: 0,
+            cacheCreateTokens: 0,
+          },
+        },
+      },
+    })
+    // A later status-only update (no _meta) must not drop the tally.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'tool_call_update', toolCallId: 'task-1', status: 'completed' },
+    })
+
+    const slot = s.timeline.get().find((it) => it.kind === 'toolCall' && it.id === 'task-1')
+    if (!slot || slot.kind !== 'toolCall') throw new Error('expected task card')
+    expect(slot.call.subagentStats?.model).toBe('claude-opus-4-8')
+    expect(slot.call.status).toBe('completed')
+    // A settled top-level card records a frozen duration.
+    expect(slot.call.durationMs).toBeGreaterThanOrEqual(0)
+  })
 })

@@ -87,6 +87,39 @@ export interface AcpToolCall {
    * `Create Session`). Absent for built-in tools.
    */
   readonly mcpTool?: string
+  /**
+   * Per-sub-agent token/model/cost tally for a sub-agent-spawning tool call
+   * (Task/Agent). Accumulated by the agent fork across the sub-agent's messages
+   * and forwarded on the parent card via `_meta._universe/subagentStats`; the
+   * renderer surfaces model + tokens + estimated cost on the card header. Absent
+   * for ordinary tools and for agents that report no per-sub-agent data (codex).
+   */
+  readonly subagentStats?: AcpSubagentStats
+  /**
+   * Wall-clock start (epoch ms) stamped when this sub-agent-spawning tool call
+   * first lands. Used to render a live/settled run duration on the card. Only set
+   * for live turns — history replay carries no wall-clock, so it stays absent.
+   */
+  readonly startedAt?: number
+  /** Elapsed ms at settle (`completed`/`failed`), computed from {@link startedAt}. */
+  readonly durationMs?: number
+}
+
+/**
+ * Running token/model tally for one sub-agent (Task/Agent tool). Token counts
+ * are the sub-agent's cumulative usage across all its messages. `costUSD` is
+ * estimated locally from the tokens (the agent reports no per-sub-agent cost),
+ * so it is always an estimate; `undefined` when no priced model is known.
+ */
+export interface AcpSubagentStats {
+  readonly model?: string
+  readonly subagentType?: string
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly cacheReadTokens: number
+  readonly cacheCreateTokens: number
+  /** Locally-estimated USD cost from the token tally. Absent when unpriced. */
+  readonly costUSD?: number
 }
 
 /**

@@ -40,6 +40,7 @@ import { composeContextBlocks, type SelectionContext } from './promptContext.js'
 import { composeImageBlocks, type PromptImage } from './promptImage.js'
 import { composePromptBlocksFromRefs, type PlacedRef } from './promptRef.js'
 import { extractCodexModelUsage, extractCodexTurnUsage } from '../../../shared/ai/codexPricing.js'
+import { estimateClaudeCostUSD } from '../../../shared/ai/claudePricing.js'
 import { estimateCodexCost } from './acpSessionCost.js'
 import {
   blocksToText,
@@ -54,6 +55,7 @@ import {
   readMcpTool,
   readMessageId,
   readParentToolUseId,
+  readSubagentStats,
   readTerminalOutput,
 } from './acpSessionUpdateMeta.js'
 import {
@@ -70,6 +72,7 @@ import {
   type AcpCompaction,
   type AcpCompactionPhase,
   type AcpSessionStatus,
+  type AcpSubagentStats,
   type AcpToolCall,
   type AcpToolCallStatus,
   type AcpUsage,
@@ -101,6 +104,7 @@ export type {
   AcpPlanEntry,
   AcpPlanEntryStatus,
   AcpSessionStatus,
+  AcpSubagentStats,
   AcpToolCall,
   AcpToolCallDiff,
   AcpToolCallStatus,
@@ -1056,6 +1060,11 @@ export class AcpSession extends Disposable implements IAcpSession {
         const mcpServer = readMcpServer(update)
         const mcpTool = readMcpTool(update)
         const terminalText = this._accumulateTerminalOutput(update.toolCallId, update)
+        // Stamp a wall-clock start on top-level cards so the UI can show a run
+        // duration (settled at completion). Child tool calls run inside a parent
+        // card and don't get their own timer.
+        const startedAt = effectiveParent == null ? Date.now() : undefined
+        const stats = readSubagentStats(update)
         this._upsertToolCall(
           {
             id: update.toolCallId,
@@ -1068,6 +1077,8 @@ export class AcpSession extends Disposable implements IAcpSession {
             ...(update.rawInput !== undefined ? { rawInput: update.rawInput } : {}),
             ...(mcpServer !== undefined ? { mcpServer } : {}),
             ...(mcpTool !== undefined ? { mcpTool } : {}),
+            ...(startedAt !== undefined ? { startedAt } : {}),
+            ...(stats !== undefined ? { subagentStats: this._priceSubagentStats(stats) } : {}),
           },
           effectiveParent,
         )
@@ -1090,17 +1101,36 @@ export class AcpSession extends Disposable implements IAcpSession {
         const mcpTool = readMcpTool(update) ?? existing?.mcpTool
         const terminalText = this._accumulateTerminalOutput(update.toolCallId, update)
         const rawInput = update.rawInput !== undefined ? update.rawInput : existing?.rawInput
+        // Sub-agent stats ride on late `_meta`-only updates; merge the fresh tally
+        // over the last one (carry it forward when this update omits it) so the
+        // running readout doesn't blink off between chunks.
+        const stats = readSubagentStats(update)
+        const subagentStats =
+          stats !== undefined ? this._priceSubagentStats(stats) : existing?.subagentStats
+        // Carry the start timestamp forward and settle a frozen duration at the
+        // terminal status. Only top-level cards carry a timer (see `tool_call`).
+        const startedAt = existing?.startedAt
+        const status =
+          (update.status as AcpToolCallStatus | undefined) ?? existing?.status ?? 'pending'
+        const settled = status === 'completed' || status === 'failed'
+        const durationMs =
+          settled && startedAt !== undefined
+            ? (existing?.durationMs ?? Math.max(0, Date.now() - startedAt))
+            : existing?.durationMs
         const next: AcpToolCall = {
           id: update.toolCallId,
           title: update.title != null ? update.title : (existing?.title ?? update.toolCallId),
           kind: update.kind != null ? update.kind : (existing?.kind ?? 'unknown'),
-          status: (update.status as AcpToolCallStatus | undefined) ?? existing?.status ?? 'pending',
+          status,
           blocks,
           diffs,
           text: terminalText ?? blocksToText(blocks),
           ...(rawInput !== undefined ? { rawInput } : {}),
           ...(mcpServer !== undefined ? { mcpServer } : {}),
           ...(mcpTool !== undefined ? { mcpTool } : {}),
+          ...(subagentStats !== undefined ? { subagentStats } : {}),
+          ...(startedAt !== undefined ? { startedAt } : {}),
+          ...(durationMs !== undefined ? { durationMs } : {}),
         }
         this._upsertToolCall(next, effectiveParent)
         if (update.status === 'failed') {
@@ -1285,6 +1315,23 @@ export class AcpSession extends Disposable implements IAcpSession {
     this.usage.set(next, tx)
     const sid = this.sessionIdOnAgent.get()
     if (sid !== undefined) this._history?.setHistoryUsage(sid, next)
+  }
+
+  /**
+   * Attach a locally-estimated USD cost to a sub-agent tally. The agent never
+   * reports a per-sub-agent cost, so we price the tokens against the model's
+   * published rates (Claude only — codex reports no per-sub-agent tokens). Leaves
+   * `costUSD` unset when no model is known, so the UI can hide the cost.
+   */
+  private _priceSubagentStats(stats: AcpSubagentStats): AcpSubagentStats {
+    if (stats.model === undefined) return stats
+    const costUSD = estimateClaudeCostUSD(stats.model, {
+      inputTokens: stats.inputTokens,
+      outputTokens: stats.outputTokens,
+      cacheReadTokens: stats.cacheReadTokens,
+      cacheCreateTokens: stats.cacheCreateTokens,
+    })
+    return { ...stats, costUSD }
   }
 
   private _appendChunk(

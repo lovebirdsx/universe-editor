@@ -24,6 +24,7 @@ import { InlineDiffPreview } from './InlineDiffPreview.js'
 import { CodeBlock } from './CodeBlock.js'
 import { MessageContent } from './MessageContent.js'
 import { TerminalOutput, ToolCallSection, ToolCallStatusIcon } from './ToolCallOutput.js'
+import { SubagentStatsBadge } from './SubagentStatsBadge.js'
 import {
   deriveToolCallDisplay,
   isKeepPlanning,
@@ -277,6 +278,7 @@ export const ToolCallCard = memo(function ToolCallCard({
           MCP · {call.mcpServer}
         </span>
       )}
+      <SubagentStatsBadge call={call} />
     </span>
   )
 
