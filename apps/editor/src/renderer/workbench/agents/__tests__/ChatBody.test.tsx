@@ -829,15 +829,17 @@ describe('ChatBody — inner content expansion persistence', () => {
     return btn
   }
 
-  // The first user message is lifted into the sticky bar (displayTimeline drops
-  // it), so keep two and assert on the second, which stays in the list.
+  // The sticky bar shows the section's user message (here the last one, 'c',
+  // since happy-dom has no layout so the viewport-top anchor is null). Keep the
+  // long message 'b' earlier so it stays uniquely in the scrolled list — the bar
+  // (which also carries data-timeline-key) would otherwise shadow the assertion.
   const items: readonly TimelineItem[] = [
-    { kind: 'message', id: 'a', message: makeUserMessage('a', 'first user message') },
     {
       kind: 'message',
       id: 'b',
       message: makeUserMessage('b', 'a very long pasted log '.repeat(50)),
     },
+    { kind: 'message', id: 'c', message: makeUserMessage('c', 'latest request') },
   ]
 
   it('persists a long user message expansion across an unmount → remount cycle', () => {
@@ -1006,6 +1008,55 @@ describe('ChatBody — outline controller active-slot sync', () => {
     // → the row's top lands just under the sticky header, accurate without a second click.
     expect(scroll.scrollTop).toBe(468)
     expect(controller.getActiveKey()).toBe('m:c')
+  })
+})
+
+describe('ChatBody — sticky user bar follows the viewport section', () => {
+  function makeUserMessage(id: string, text: string): AcpMessage {
+    return { id, role: 'user', text, blocks: [{ type: 'text', text }], streaming: false }
+  }
+
+  // Two request/answer sections: u1 → a1, u2 → a2.
+  const items: readonly TimelineItem[] = [
+    { kind: 'message', id: 'u1', message: makeUserMessage('u1', 'first request') },
+    { kind: 'message', id: 'a1', message: makeMessage('a1', 'first reply') },
+    { kind: 'message', id: 'u2', message: makeUserMessage('u2', 'second request') },
+    { kind: 'message', id: 'a2', message: makeMessage('a2', 'second reply') },
+  ]
+
+  function bar(container: HTMLElement): HTMLElement {
+    return container.querySelector<HTMLElement>('[data-testid="acp-user-bar"]')!
+  }
+
+  it('defaults to the last user message before any scroll (null anchor)', () => {
+    const { container } = renderChat(makeSession('s1', items))
+    // happy-dom reports zero rects → viewportTopKey is null → fall back to last.
+    expect(bar(container).textContent).toContain('second request')
+    expect(bar(container).textContent).not.toContain('first request')
+  })
+
+  it('switches to the first section when its rows sit at the viewport top', () => {
+    const { container } = renderChat(makeSession('s1', items))
+    const scroll = scrollEl(container)
+    ;(scroll as HTMLElement).getBoundingClientRect = (() => ({ top: 0 }) as DOMRect) as never
+    // Place the first reply (a1) at the viewport top and the rest below it, with
+    // everything above it scrolled off. viewportTopKey walks rows top-to-bottom
+    // and takes the first whose bottom is still > 0 → 'm:a1' → section u1.
+    const tops: Record<string, { top: number; bottom: number }> = {
+      'm:u1': { top: -100, bottom: -10 },
+      'm:a1': { top: 5, bottom: 80 },
+      'm:u2': { top: 90, bottom: 160 },
+      'm:a2': { top: 170, bottom: 240 },
+    }
+    for (const [key, rect] of Object.entries(tops)) {
+      const row = scroll.querySelector<HTMLElement>(`[data-timeline-key="${key}"]`)
+      if (row) (row as HTMLElement).getBoundingClientRect = (() => rect as DOMRect) as never
+    }
+    act(() => {
+      fireEvent.scroll(scroll)
+    })
+    expect(bar(container).textContent).toContain('first request')
+    expect(bar(container).textContent).not.toContain('second request')
   })
 })
 

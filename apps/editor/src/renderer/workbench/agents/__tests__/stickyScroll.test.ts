@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AcpToolCall, TimelineItem } from '../../../services/acp/acpSession.js'
 import {
+  activeUserSlotKey,
   buildStickyKey,
   computeStickyStack,
   findByStickyKey,
@@ -30,6 +31,14 @@ function msgItem(id: string): TimelineItem {
     kind: 'message',
     id,
     message: { id, role: 'agent', text: '', blocks: [], streaming: false },
+  }
+}
+
+function userItem(id: string): TimelineItem {
+  return {
+    kind: 'message',
+    id,
+    message: { id, role: 'user', text: `req ${id}`, blocks: [], streaming: false },
   }
 }
 
@@ -134,5 +143,45 @@ describe('computeStickyStack', () => {
     expect(computeStickyStack(rects, 100, 0, { maxTotalHeight: 50 }).map((e) => e.key)).toEqual([
       't:a',
     ])
+  })
+})
+
+describe('activeUserSlotKey', () => {
+  // u1 → a1 (reply) → u2 → a2 (reply): two request/answer sections.
+  const timeline: TimelineItem[] = [userItem('u1'), msgItem('a1'), userItem('u2'), msgItem('a2')]
+
+  it('walks up from the anchor to the nearest user message', () => {
+    // Anchored on the second reply → belongs to u2's section.
+    expect(activeUserSlotKey(timeline, 'm:a2')).toBe('m:u2')
+    // Anchored on the first reply → still u1's section.
+    expect(activeUserSlotKey(timeline, 'm:a1')).toBe('m:u1')
+  })
+
+  it('returns the anchor itself when it is a user message', () => {
+    expect(activeUserSlotKey(timeline, 'm:u2')).toBe('m:u2')
+    expect(activeUserSlotKey(timeline, 'm:u1')).toBe('m:u1')
+  })
+
+  it('falls back to the first user message below when nothing above is a user', () => {
+    // An agent turn-marker sits above the opening prompt.
+    const tl: TimelineItem[] = [msgItem('a0'), userItem('u1'), msgItem('a1')]
+    expect(activeUserSlotKey(tl, 'm:a0')).toBe('m:u1')
+  })
+
+  it('falls back to the last user message when there is no anchor', () => {
+    expect(activeUserSlotKey(timeline, null)).toBe('m:u2')
+  })
+
+  it('falls back to the last user message when the anchor is missing from the timeline', () => {
+    expect(activeUserSlotKey(timeline, 'm:gone')).toBe('m:u2')
+  })
+
+  it('resolves a nested anchor key via its top-level prefix', () => {
+    expect(activeUserSlotKey(timeline, 'm:a2/t:child')).toBe('m:u2')
+  })
+
+  it('returns undefined when the timeline has no user message', () => {
+    expect(activeUserSlotKey([msgItem('a1'), msgItem('a2')], 'm:a1')).toBeUndefined()
+    expect(activeUserSlotKey([msgItem('a1')], null)).toBeUndefined()
   })
 })

@@ -31,6 +31,50 @@ export function buildStickyKey(parentKey: string, child: AcpChildItem): string {
 }
 
 /**
+ * Resolve which user message belongs to the section currently in view, for the
+ * pinned StickyUserMessageBar. `anchorKey` is the slot key at the top of the
+ * viewport (from ChatScroll). We walk up from the anchor to the nearest user
+ * message — the request that opened the section being read. When nothing above
+ * the anchor is a user message (e.g. the very first agent reply sits above the
+ * opening prompt), fall back to the first user message below it; when there is
+ * no anchor at all (empty viewport / not yet measured), fall back to the last
+ * user message (the active request). Returns undefined only if the timeline has
+ * no user message.
+ */
+export function activeUserSlotKey(
+  timeline: readonly TimelineItem[],
+  anchorKey: string | null,
+): string | undefined {
+  const isUser = (it: TimelineItem | undefined): boolean =>
+    it?.kind === 'message' && it.message.role === 'user'
+
+  const lastUserKey = (): string | undefined => {
+    for (let i = timeline.length - 1; i >= 0; i--) {
+      const it = timeline[i]
+      if (isUser(it)) return itemSlotKey(it!)
+    }
+    return undefined
+  }
+
+  if (anchorKey === null) return lastUserKey()
+
+  // The anchor is a top-level slot key; nested keys share their top-level prefix.
+  const topAnchor = anchorKey.split('/')[0] ?? anchorKey
+  const anchorIdx = timeline.findIndex((it) => itemSlotKey(it) === topAnchor)
+  if (anchorIdx < 0) return lastUserKey()
+
+  for (let i = anchorIdx; i >= 0; i--) {
+    const it = timeline[i]
+    if (isUser(it)) return itemSlotKey(it!)
+  }
+  for (let i = anchorIdx + 1; i < timeline.length; i++) {
+    const it = timeline[i]
+    if (isUser(it)) return itemSlotKey(it!)
+  }
+  return undefined
+}
+
+/**
  * Resolve a (possibly composite, `/`-joined) sticky key back to its timeline
  * item by drilling down through `children`. Returns undefined if any segment is
  * missing — e.g. the card was removed or collapsed away mid-stream.

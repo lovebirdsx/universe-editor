@@ -35,6 +35,8 @@ import {
   ICommandService,
   IContextKeyService,
   localize,
+  observableValue,
+  type ISettableObservable,
 } from '@universe-editor/platform'
 import { useExecuteCommand, useObservable, useService } from '../useService.js'
 import {
@@ -70,7 +72,7 @@ import { roleIcon } from './timelineIcons.js'
 import { UserMessageItem } from './UserMessageItem.js'
 import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
 import { StickyScrollOverlay } from './StickyScrollOverlay.js'
-import { findByStickyKey, itemSlotKey } from './stickyScroll.js'
+import { activeUserSlotKey, findByStickyKey, itemSlotKey } from './stickyScroll.js'
 import {
   AcpSessionOutlineRegistry,
   type IAcpSessionOutlineController,
@@ -171,6 +173,17 @@ function ChatSessionBody({
   const handleRef = useRef<WidgetHandle>(NOOP_HANDLE)
   const widgetRef = useRef<AcpChatWidget | null>(null)
 
+  // The slot key of the user message whose section is currently in view. ChatScroll
+  // resolves it from the viewport-top anchor and writes it here; StickyUserMessageBar
+  // subscribes. An observable (not lifted state) keeps ChatScroll from re-rendering on
+  // every scroll frame — only the bar re-renders, and only when the section changes.
+  // Re-created per session so a switch starts from "not yet measured" (null).
+  const activeUserKey = useMemo(
+    () => observableValue<string | null>('acp.activeUserKey', null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [session.id],
+  )
+
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -263,6 +276,7 @@ function ChatSessionBody({
           <StickyUserMessageBar
             key={`user:${session.id}`}
             session={session}
+            activeUserKey={activeUserKey}
             onFocusSlot={(key) => handleRef.current.setFocusedKey(key)}
           />
           <StickyPlanBar key={`plan:${session.id}`} session={session} />
@@ -270,6 +284,7 @@ function ChatSessionBody({
             key={session.id}
             session={session}
             handleRef={handleRef}
+            activeUserKey={activeUserKey}
             onFindVisibleChange={handleFindVisibleChange}
             readOnly={readOnly ?? false}
           />
@@ -311,11 +326,13 @@ function ReadOnlyChatFooter({ session }: { session: IAcpSession }) {
 function ChatScroll({
   session,
   handleRef,
+  activeUserKey,
   onFindVisibleChange,
   readOnly,
 }: {
   session: IAcpSession
   handleRef: MutableRefObject<WidgetHandle>
+  activeUserKey: ISettableObservable<string | null>
   onFindVisibleChange: (open: boolean) => void
   readOnly: boolean
 }) {
@@ -418,21 +435,11 @@ function ChatScroll({
   const virtualizeRef = useRef(virtualize)
   virtualizeRef.current = virtualize
 
-  const firstUserIdx = timeline.findIndex(
-    (it) => it.kind === 'message' && it.message.role === 'user',
-  )
-  const displayTimeline =
-    firstUserIdx >= 0
-      ? [...timeline.slice(0, firstUserIdx), ...timeline.slice(firstUserIdx + 1)]
-      : timeline
-
   // Keep the timeline reachable from the keyboard handle without re-binding it on
   // every render (the ref read is cheap; capturing `timeline` would re-allocate
   // the closure each render).
   const timelineRef = useRef(timeline)
   timelineRef.current = timeline
-  const displayTimelineRef = useRef(displayTimeline)
-  displayTimelineRef.current = displayTimeline
 
   const hasTimelineContent = hasRenderableTimelineContent(timeline)
 
@@ -471,7 +478,7 @@ function ChatScroll({
   )
 
   const virtualizer = useVirtualizer<HTMLDivElement, Element>({
-    count: virtualize ? displayTimeline.length : 0,
+    count: virtualize ? timeline.length : 0,
     getScrollElement: () => containerRef.current,
     initialMeasurementsCache,
     initialOffset: saved && !saved.stuck ? saved.scrollTop : 0,
@@ -481,14 +488,14 @@ function ChatScroll({
     // position you've scrolled to — jitter. Same item → same height here; the
     // virtualizer overrides each row with its real measured size once mounted.
     estimateSize: (i) => {
-      const item = displayTimeline[i]
+      const item = timeline[i]
       return estimateRow(item, item ? resolveCollapsed(slotKey(item), item, collapse) : false)
     },
     // Stable per-row identity so measured heights are cached by slot key, not by
     // index — appending / re-slicing the tail during streaming no longer shifts
     // every cached measurement onto the wrong row.
     getItemKey: (i) => {
-      const item = displayTimeline[i]
+      const item = timeline[i]
       return item ? slotKey(item) : i
     },
     overscan: 8,
@@ -596,7 +603,20 @@ function ChatScroll({
     persist()
     // Let the Outline view retrack the active slot as the viewport moves.
     activeSlotRef.current?.fire()
+    reportActiveUser()
   }
+
+  // Publish which user message owns the section at the top of the viewport, so the
+  // pinned StickyUserMessageBar tracks the exchange being read (VSCode sticky-scroll
+  // style). Reads the live DOM top row and resolves up to the nearest user message.
+  // observableValue de-dupes, so this only re-renders the bar when the section flips.
+  const reportActiveUser = useCallback(() => {
+    const el = containerRef.current
+    activeUserKey.set(
+      activeUserSlotKey(timelineRef.current, el ? viewportTopKey(el) : null) ?? null,
+      undefined,
+    )
+  }, [activeUserKey])
 
   const handleClick = (e: ReactMouseEvent) => {
     const el = (e.target as HTMLElement).closest<HTMLElement>('[data-timeline-key]')
@@ -806,7 +826,7 @@ function ChatScroll({
         // (recomputes its range and mounts the row), so a later frame can take the
         // DOM path above. scrollToIndex is reliable here where a hand-set scrollTop
         // against the estimate coordinate system is not.
-        const index = displayTimelineRef.current.findIndex((it) => slotKey(it) === anchor.key)
+        const index = timelineRef.current.findIndex((it) => slotKey(it) === anchor.key)
         if (index >= 0) {
           vz.scrollToIndex(index, { align: 'start' })
           return
@@ -838,6 +858,14 @@ function ChatScroll({
     if (!stickRef.current) return
     scrollToBottomStable()
   }, [timeline.length, tailSignature, scrollToBottomStable])
+
+  // Report the active user section on mount and whenever the timeline changes
+  // (a new prompt/reply can shift which exchange sits at the viewport top, and
+  // the very first render has no scroll event to seed the bar). Cheap: reads the
+  // DOM top row and de-dupes through the observable.
+  useEffect(() => {
+    reportActiveUser()
+  }, [timeline, reportActiveUser])
 
   // Re-pin when chatBody clientHeight shrinks (e.g. PermissionCard / QuestionCard
   // appears, or the PromptInput textarea grows via field-sizing:content). The
@@ -933,7 +961,7 @@ function ChatScroll({
         }
         // Not mounted yet: bring the top-level row into the DOM via the virtualizer
         // so a later frame can take the rect-aligned path above.
-        const idx = displayTimelineRef.current.findIndex((it) => slotKey(it) === topKey)
+        const idx = timelineRef.current.findIndex((it) => slotKey(it) === topKey)
         if (idx >= 0) virtualizerRef.current?.scrollToIndex(idx, { align: 'start' })
       }
       runScrollConvergence(applyOnce)
@@ -980,7 +1008,7 @@ function ChatScroll({
   useEffect(() => {
     const handle = handleRef.current
     handle.move = (direction) => {
-      const list = displayTimelineRef.current
+      const list = timelineRef.current
       if (list.length === 0) return
       const keys = list.map(slotKey)
       const current = focusedKeyRef.current
@@ -1076,7 +1104,7 @@ function ChatScroll({
       persist()
     }
     handle.jumpToPlan = () => {
-      const list = displayTimelineRef.current
+      const list = timelineRef.current
       // The agent's plan reaches the timeline as an ExitPlanMode tool call
       // (kind 'switch_mode'). Jump to the most recent one — re-entering plan
       // mode appends a fresh card, and the latest is what the user means.
@@ -1177,11 +1205,11 @@ function ChatScroll({
         )}
         <StickyScrollOverlay
           containerRef={containerRef}
-          timeline={displayTimeline}
+          timeline={timeline}
           collapse={collapse}
           onToggleCollapse={handleToggleCollapse}
           onJumpTo={handleStickyJump}
-          revision={`${virtualize}:${displayTimeline.length}:${tailSignature}`}
+          revision={`${virtualize}:${timeline.length}:${tailSignature}`}
         />
         {!hasTimelineContent ? (
           <EmptySessionHint />
@@ -1192,7 +1220,7 @@ function ChatScroll({
             style={{ height: virtualizer.getTotalSize(), position: 'relative' }}
           >
             {virtualizer.getVirtualItems().map((vi) => {
-              const item = displayTimeline[vi.index]
+              const item = timeline[vi.index]
               if (item === undefined) return null
               const key = slotKey(item)
               const slotRunning = isRunning && item.kind === 'message' && item.message.streaming
@@ -1228,7 +1256,7 @@ function ChatScroll({
           </div>
         ) : (
           <ol className={styles['timeline']} data-testid="acp-timeline">
-            {displayTimeline.map((item) => {
+            {timeline.map((item) => {
               const key = slotKey(item)
               // Derive a per-slot running flag: only a streaming message's caret cares
               // about it, so settled slots get a constant `false` and a session
@@ -1496,6 +1524,22 @@ function captureAnchor(el: HTMLElement): AcpChatAnchor | undefined {
     return { key, offset: Math.max(0, -top) }
   }
   return undefined
+}
+
+// The top-level slot key of the first row still (partially) visible at the top of
+// the viewport, or null when nothing is measured yet. Queries `[data-timeline-key]`,
+// present only on top-level slots (nested sub-agent cards carry `data-sticky-key`
+// instead), so the result is always a top-level key — what activeUserSlotKey needs.
+// Same DOM-walk as captureAnchor; kept separate as it returns only the key.
+function viewportTopKey(el: HTMLElement): string | null {
+  const containerTop = el.getBoundingClientRect().top
+  const rows = el.querySelectorAll<HTMLElement>('[data-timeline-key]')
+  for (const row of rows) {
+    const key = row.getAttribute('data-timeline-key')
+    if (!key) continue
+    if (row.getBoundingClientRect().bottom - containerTop > 0) return key
+  }
+  return null
 }
 
 // First non-empty line of a message, trimmed and clamped, for the collapsed

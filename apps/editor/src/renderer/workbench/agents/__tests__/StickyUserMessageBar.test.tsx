@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Tests for StickyUserMessageBar — derives the first user message from the
- *  timeline, starts collapsed, expands on click, and pins the opening message.
+ *  Tests for StickyUserMessageBar — shows the user message for the section in
+ *  view (by the activeUserKey ChatScroll reports), falls back to the last user
+ *  message when the key is null/unresolved, starts expanded, collapses on click.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -12,6 +13,7 @@ import {
   InstantiationService,
   ServiceCollection,
   observableValue,
+  type IObservable,
 } from '@universe-editor/platform'
 import type { IAcpSession, TimelineItem } from '../../../services/acp/acpSessionService.js'
 import { IAcpChatWidgetService } from '../../../services/acp/acpChatWidgetService.js'
@@ -37,6 +39,10 @@ function makeSession(id: string, items: TimelineItem[]): IAcpSession {
   } as unknown as IAcpSession
 }
 
+function key(value: string | null): IObservable<string | null> {
+  return observableValue<string | null>('activeUserKey', value)
+}
+
 function renderWithServices(node: React.ReactNode) {
   const services = new ServiceCollection()
   services.set(ICommandService, {
@@ -57,14 +63,17 @@ function renderWithServices(node: React.ReactNode) {
 
 describe('StickyUserMessageBar', () => {
   it('renders nothing when there is no user message', () => {
-    renderWithServices(<StickyUserMessageBar session={makeSession('s-empty', [])} />)
+    renderWithServices(
+      <StickyUserMessageBar session={makeSession('s-empty', [])} activeUserKey={key(null)} />,
+    )
     expect(screen.queryByTestId('acp-user-bar')).toBeNull()
   })
 
-  it('starts collapsed showing the summary, then expands to the full content', () => {
+  it('starts expanded showing the full content, then collapses to a summary on click', () => {
     renderWithServices(
       <StickyUserMessageBar
         session={makeSession('s-one', [message('u1', 'user', 'Hello world')])}
+        activeUserKey={key(null)}
       />,
     )
     expect(screen.getByText('Hello world')).toBeTruthy()
@@ -76,7 +85,7 @@ describe('StickyUserMessageBar', () => {
     expect(screen.queryByTestId('acp-markdown')).toBeNull()
   })
 
-  it('shows the first user message when several exist', () => {
+  it('shows the user message for the section reported by activeUserKey', () => {
     renderWithServices(
       <StickyUserMessageBar
         session={makeSession('s-many', [
@@ -84,9 +93,25 @@ describe('StickyUserMessageBar', () => {
           message('a1', 'agent', 'some reply'),
           message('u2', 'user', 'second request'),
         ])}
+        activeUserKey={key('m:u1')}
       />,
     )
     expect(screen.getByText('first request')).toBeTruthy()
     expect(screen.queryByText('second request')).toBeNull()
+  })
+
+  it('falls back to the last user message when the key is null', () => {
+    renderWithServices(
+      <StickyUserMessageBar
+        session={makeSession('s-fallback', [
+          message('u1', 'user', 'first request'),
+          message('a1', 'agent', 'some reply'),
+          message('u2', 'user', 'second request'),
+        ])}
+        activeUserKey={key(null)}
+      />,
+    )
+    expect(screen.getByText('second request')).toBeTruthy()
+    expect(screen.queryByText('first request')).toBeNull()
   })
 })
