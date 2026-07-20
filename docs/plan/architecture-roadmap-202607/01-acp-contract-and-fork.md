@@ -44,7 +44,9 @@
 
 **验收**：claude fork 有 CLAUDE.md 且覆盖红线/清单/核对表/节奏四要素；本地两个 clone `git remote -v` 均含 upstream。
 
-## 任务 3：agents e2e 提级 @p0 ⬜（P1，第一批，预估 0.5 天）
+## 任务 3：agents e2e 提级 @p0 ✅（P1，第一批，预估 0.5 天）
+
+> 已完成（2026-07-20）：`smoke.agents.spec.ts` 的 `test.describe` tag `@p1` → `@p0`，文件头注释同步。本地跑该 spec 绿（3.8s，含 app 启动，增幅远低于 2 分钟量级验收线）。echo agent 全链路不依赖网络与真二进制。CI 连续稳定性待上 main 后观察，若出现 flaky 按 `fix-ci-e2e-flake` skill 排查。
 
 **步骤**：
 

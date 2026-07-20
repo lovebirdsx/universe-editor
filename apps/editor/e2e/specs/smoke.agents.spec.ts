@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  ACP agent smoke test (@p1).
+ *  ACP agent smoke test (@p0).
  *
  *  全链路烟雾：注入一个 stdio JSON-RPC echo agent，命令面板触发 newSession，
  *  发送 prompt，断言 messages 流式渲染 + 工具调用生命周期。
@@ -15,7 +15,7 @@ import { test, expect } from '../fixtures/sharedApp.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
 
-test.describe('@p1 agents', () => {
+test.describe('@p0 agents', () => {
   test('newSession + sendPrompt → messages stream and tool_call completes', async ({
     page,
     workbench,
