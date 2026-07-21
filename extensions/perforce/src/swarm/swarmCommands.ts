@@ -15,6 +15,7 @@ import { changelistIdFromGroupId } from '../changelist.js'
 import { SwarmClient, type SwarmReviewFilter } from './swarmClient.js'
 import { SwarmError, SwarmErrorCode } from './swarmApi.js'
 import { SwarmStatusBarController } from './swarmStatusBar.js'
+import { SwarmNotificationPoller } from './swarmNotificationPoller.js'
 import type { SwarmLogger } from './swarmLog.js'
 import { buildReviewPicks } from './swarmReviewPick.js'
 import { localize } from '../nls.js'
@@ -668,6 +669,17 @@ export function registerSwarmCommands(
     const pollInterval = (await cfg.get('swarm.pollInterval', 0)) as number
     statusBar.startPolling(pollInterval)
   })
+
+  // New-review desktop notifications are detected + raised in the renderer, but the
+  // poll timer must live here (extension host): Chromium background-throttles the
+  // renderer's own setInterval while the window sits in the background, which is why
+  // notifications never fired overnight. Each tick just pokes the renderer.
+  const notificationPoller = new SwarmNotificationPoller(
+    async () => (await readSwarmConfig()) !== undefined,
+    logger,
+  )
+  notificationPoller.start()
+  subs.push(notificationPoller)
 
   // A manual refresh command that re-polls the status bar (the renderer view has
   // its own refresh; this keeps the badge current after an action).

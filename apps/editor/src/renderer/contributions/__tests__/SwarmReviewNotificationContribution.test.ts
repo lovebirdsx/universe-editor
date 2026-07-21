@@ -66,7 +66,8 @@ async function freshModules() {
   const contrib = await import('../SwarmReviewNotificationContribution.js')
   const ignore = await import('../../services/swarm/swarmIgnoreStore.js')
   const viewState = await import('../../services/swarm/swarmViewState.js')
-  return { contrib, ignore, viewState }
+  const tick = await import('../../services/swarm/swarmNotificationTick.js')
+  return { contrib, ignore, viewState, tick }
 }
 
 interface SetupOpts {
@@ -84,7 +85,7 @@ interface SetupOpts {
 }
 
 async function setup(opts: SetupOpts = {}) {
-  const { contrib, ignore } = await freshModules()
+  const { contrib, ignore, tick } = await freshModules()
 
   const storage = fakeStorage(
     opts.ignoredIds?.length
@@ -146,6 +147,7 @@ async function setup(opts: SetupOpts = {}) {
     notify,
     inAppNotify,
     executeCommand,
+    tick,
     setDashboard: (needsAction: SwarmReviewDto[]) => {
       current = dashboard(needsAction)
     },
@@ -333,6 +335,33 @@ describe('SwarmReviewNotificationContribution', () => {
       expect(t.notify).not.toHaveBeenCalled()
       expect(t.inAppNotify).not.toHaveBeenCalled()
       t.instance.dispose()
+    })
+  })
+
+  // Repro for "后台自动通知从未触发": the renderer's own setInterval is
+  // background-throttled by Chromium while the window sits in the background, so the
+  // real poll driver is the perforce extension host's timer, which pokes the
+  // renderer via `_workbench.swarmPollTick`. That command routes to the live
+  // contribution's refresh() through the module-level tick seam. Driving that seam
+  // must detect a newly-actionable review exactly as a timer tick would.
+  describe('host-driven poll tick (_workbench.swarmPollTick seam)', () => {
+    it('detects and notifies for a new review when driven by the host tick', async () => {
+      const t = await setup()
+      t.setDashboard([review('7', { description: 'fix crash' })])
+      await t.tick.driveSwarmNotificationTick()
+      await flush()
+      expect(t.notify).toHaveBeenCalledTimes(1)
+      expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #7: fix crash' })
+      t.instance.dispose()
+    })
+
+    it('is a no-op after the contribution is disposed (handler unregistered)', async () => {
+      const t = await setup()
+      t.instance.dispose()
+      t.setDashboard([review('9')])
+      await t.tick.driveSwarmNotificationTick()
+      await flush()
+      expect(t.notify).not.toHaveBeenCalled()
     })
   })
 })
