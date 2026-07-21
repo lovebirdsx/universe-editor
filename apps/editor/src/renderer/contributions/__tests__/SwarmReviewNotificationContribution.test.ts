@@ -119,9 +119,10 @@ async function setup(opts: SetupOpts = {}) {
     dispose: () => {},
   }))
 
+  const dismiss = vi.fn((_id: string) => {})
   const commands = { executeCommand } as never
   const host = { notify } as never
-  const notification = { notify: inAppNotify } as never
+  const notification = { notify: inAppNotify, dismiss } as never
   const configValues: Record<string, unknown> = {
     'perforce.swarm.notifications.enabled': opts.enabled ?? true,
     ...opts.config,
@@ -146,6 +147,7 @@ async function setup(opts: SetupOpts = {}) {
     instance,
     notify,
     inAppNotify,
+    dismiss,
     executeCommand,
     tick,
     setDashboard: (needsAction: SwarmReviewDto[]) => {
@@ -294,12 +296,17 @@ describe('SwarmReviewNotificationContribution', () => {
       expect(t.inAppNotify).toHaveBeenCalledTimes(1)
       const opts = t.inAppNotify.mock.calls[0]![0] as {
         message: string
+        sticky?: boolean
         actions?: Array<{ label: string; run: () => void }>
       }
       expect(opts.message).toContain('#42')
+      // Sticky so the review can't slip past unnoticed while auto-dismissing.
+      expect(opts.sticky).toBe(true)
       expect(opts.actions?.length).toBe(1)
       opts.actions![0]!.run()
       expect(t.executeCommand).toHaveBeenCalledWith('swarm.openReview', '42')
+      // Clicking the action dismisses the sticky toast.
+      expect(t.dismiss).toHaveBeenCalledWith('n1')
       t.instance.dispose()
     })
 

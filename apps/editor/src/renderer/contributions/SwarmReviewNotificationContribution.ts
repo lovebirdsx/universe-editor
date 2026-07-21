@@ -236,10 +236,22 @@ export class SwarmReviewNotificationContribution
       fresh.length === 1
         ? localize('swarm.notify.needsAction.open', 'Open Review')
         : localize('swarm.notify.needsAction.openList', 'Open Swarm Reviews')
-    this._notification.notify({
+    // Sticky: a new review is easy to miss if the toast auto-dismisses after a few
+    // seconds. Keep it up until the user acts on it — clicking the action opens the
+    // review (and dismisses the toast), or the sticky × dismisses it explicitly.
+    const handle = this._notification.notify({
       severity: Severity.Info,
       message,
-      actions: [{ label, run: () => this._openTarget(fresh) }],
+      sticky: true,
+      actions: [
+        {
+          label,
+          run: () => {
+            this._openTarget(fresh)
+            this._notification.dismiss(handle.id)
+          },
+        },
+      ],
     })
   }
 
