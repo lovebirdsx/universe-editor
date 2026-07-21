@@ -64,6 +64,23 @@ describe('swarmParser.parseReview', () => {
     expect(review!.upVotes).toBe(0)
     expect(review!.downVotes).toBe(0)
   })
+
+  it('derives stream from the latest version, stripping the leading //', () => {
+    const review = parseReview({
+      id: '10',
+      versions: [
+        { rev: 1, change: '100', stream: '//aki/branch_2.1' },
+        { rev: 2, change: '105', stream: '//aki/branch_3.6' },
+      ],
+    })
+    expect(review!.stream).toBe('aki/branch_3.6')
+  })
+
+  it('omits stream when absent (list shape has no versions)', () => {
+    expect(parseReview({ id: '13' })!.stream).toBeUndefined()
+    expect(parseReview({ id: '14', versions: [] })!.stream).toBeUndefined()
+    expect(parseReview({ id: '15', versions: [{ rev: 1, change: '1' }] })!.stream).toBeUndefined()
+  })
 })
 
 describe('swarmParser.parseReviewList', () => {
@@ -113,6 +130,20 @@ describe('swarmParser.parseReviewDetail', () => {
       pending: false,
     })
     expect(detail!.participants[0]).toMatchObject({ user: 'bob', vote: 1 })
+  })
+
+  it('parses the version stream and uses the real Swarm rev/difference key', () => {
+    const detail = parseReviewDetail({
+      review: {
+        id: '2952448',
+        versions: [
+          { difference: 1, change: '2952454', stream: '//aki/branch_2.1', pending: true },
+          { difference: 2, change: '2952679', stream: '//aki/branch_2.1', pending: false },
+        ],
+      },
+    })
+    expect(detail!.versions[0]).toMatchObject({ version: 1, stream: '//aki/branch_2.1' })
+    expect(detail!.versions[1]!.version).toBe(2)
   })
 })
 

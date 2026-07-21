@@ -15,6 +15,7 @@ import {
   ChevronRight,
   Filter,
   FilterX,
+  GitBranch,
   ListFilter,
   MessageSquare,
   ListChecks,
@@ -191,6 +192,7 @@ export function SwarmReviewsView() {
       void commands
         .executeCommand<SwarmDashboardResult>(SwarmCommands.dashboard, {
           force,
+          withStream: true,
           ...(keywords ? { keywords } : {}),
         })
         .then((r) => {
@@ -690,6 +692,12 @@ function ReviewRow({
           {relativeTime(review.updated)}
         </span>
         <span className={styles['metaItem']}>{review.author}</span>
+        {review.stream && (
+          <span className={cx(styles['metaItem'], styles['metaStream'])} title={review.stream}>
+            <GitBranch size={11} />
+            <span className={styles['metaStreamText']}>{review.stream}</span>
+          </span>
+        )}
         {review.upVotes > 0 && <span className={styles['metaItem']}>↑{review.upVotes}</span>}
         {review.downVotes > 0 && <span className={styles['metaItem']}>↓{review.downVotes}</span>}
         {review.commentCount > 0 && (

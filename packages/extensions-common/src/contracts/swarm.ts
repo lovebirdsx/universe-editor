@@ -56,6 +56,9 @@ export interface SwarmReviewDto {
   testStatus: 'pass' | 'fail' | 'running' | 'none'
   /** Last-updated time, Unix ms. */
   updated: number
+  /** The p4 stream this review targets, without the leading `//`
+   *  (e.g. `aki/branch_3.6`). Absent when the review is not stream-based. */
+  stream?: string
 }
 
 /** One participant (reviewer) on a review. */
@@ -75,6 +78,9 @@ export interface SwarmVersionDto {
   change: string
   /** Swarm's immutable shelved snapshot for this version, when available. */
   archiveChange?: string
+  /** The p4 stream this version targets (e.g. `//aki/branch_3.6`), when the
+   *  version is stream-based. */
+  stream?: string
   /** Whether this version is committed (vs shelved). */
   pending: boolean
   /** Version creation time, Unix ms. */
@@ -112,6 +118,9 @@ export interface SwarmReviewDetailDto {
   commentCount: number
   openTaskCount: number
   testStatus: 'pass' | 'fail' | 'running' | 'none'
+  /** The p4 stream the latest version targets, without the leading `//`
+   *  (e.g. `aki/branch_3.6`). Absent when the review is not stream-based. */
+  stream?: string
 }
 
 /** A legal state transition the current user may apply. */
@@ -188,6 +197,11 @@ export interface SwarmDashboardRequest {
   /** Free-text keyword pushed down to the review-list query, so filtering happens
    *  server-side instead of fetching everything and filtering in the renderer. */
   keywords?: string
+  /** Enrich the sidebar-facing reviews (needsAction + authored) with each one's
+   *  p4 stream by fetching its detail — the list endpoint omits `versions`, so the
+   *  stream is otherwise unavailable. The status-bar / notification polls leave
+   *  this off (they only need the count), so they don't pay the extra requests. */
+  withStream?: boolean
 }
 
 /** The action-dashboard grouping the list view renders. */

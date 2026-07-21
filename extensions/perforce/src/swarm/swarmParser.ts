@@ -142,10 +142,12 @@ function parseVersions(raw: unknown): SwarmVersion[] {
   return raw.map((entry, i) => {
     const r = (entry ?? {}) as Record<string, unknown>
     const archiveChange = asString(r['archiveChange'])
+    const stream = asString(r['stream'])
     return {
-      version: asNumber(r['rev']) ?? i + 1,
-      change: asString(r['change']) ?? asString(r['stream']) ?? '',
+      version: asNumber(r['rev']) ?? asNumber(r['difference']) ?? i + 1,
+      change: asString(r['change']) ?? '',
       ...(archiveChange ? { archiveChange } : {}),
+      ...(stream ? { stream } : {}),
       pending: r['pending'] !== false,
       time: toMillis(r['time']),
     }
@@ -162,6 +164,30 @@ function parseCommentCounts(raw: unknown): [number, number] {
   return [n ?? 0, 0]
 }
 
+/**
+ * The p4 `stream` a review targets, normalized for display: strip the leading
+ * `//` so `//aki/branch_3.6` becomes `aki/branch_3.6`. Missing / empty → undefined.
+ */
+export function parseStream(raw: unknown): string | undefined {
+  const s = asString(raw)?.trim()
+  if (!s) return undefined
+  return s.replace(/^\/+/, '')
+}
+
+/** The stream of the latest version in a `versions` array (the list endpoint
+ *  omits `versions`, so this only fires for detail-shaped input). Normalized. */
+function streamFromVersions(raw: unknown): string | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined
+  for (let i = raw.length - 1; i >= 0; i--) {
+    const entry = raw[i]
+    if (entry && typeof entry === 'object') {
+      const s = parseStream((entry as Record<string, unknown>)['stream'])
+      if (s) return s
+    }
+  }
+  return undefined
+}
+
 /** Parse one review record (the `review` object, or a list element). */
 export function parseReview(raw: Record<string, unknown>): SwarmReview | undefined {
   const id = asString(raw['id'])
@@ -170,6 +196,8 @@ export function parseReview(raw: Record<string, unknown>): SwarmReview | undefin
   const participants = parseParticipants(raw['participants'], required)
   const description = asString(raw['description']) ?? ''
   const [commentCount, openTaskCount] = parseCommentCounts(raw['comments'])
+  // The list endpoint has no stream (nor versions); a detail-shaped record does.
+  const stream = parseStream(raw['stream']) ?? streamFromVersions(raw['versions'])
   return {
     id,
     state: coerceState(raw['state']),
@@ -182,6 +210,7 @@ export function parseReview(raw: Record<string, unknown>): SwarmReview | undefin
     openTaskCount,
     testStatus: coerceTestStatus(raw['testStatus']),
     updated: toMillis(raw['updated']),
+    ...(stream ? { stream } : {}),
   }
 }
 

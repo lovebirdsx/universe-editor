@@ -122,6 +122,20 @@
   flex-shrink: 0;
 }
 
+/* p4 stream label — may be long, so cap it and ellipsize instead of
+   pushing the vote / comment counts off the row. */
+.metaStream {
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.metaStreamText {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .metaTime {
   font-variant-numeric: tabular-nums;
 }

@@ -19,6 +19,7 @@ import {
   parseCreatedReviewId,
   parseReviewDetail,
   parseReviewList,
+  parseStream,
   parseTransitions,
   type SwarmComment,
   type SwarmReview,
@@ -166,6 +167,7 @@ export class SwarmClient {
       keywords?: string
       needsActionAuthors?: readonly string[]
       windowDays?: number
+      withStream?: boolean
     } = {},
   ): Promise<SwarmDashboard> {
     const me = this._config.user
@@ -174,10 +176,11 @@ export class SwarmClient {
     const force = opts.force ?? false
     const authors = opts.needsActionAuthors?.length ? opts.needsActionAuthors : undefined
     const windowDays = opts.windowDays && opts.windowDays > 0 ? opts.windowDays : undefined
-    const key = `${authors ? [...authors].sort().join(',') : ''}|${windowDays ?? 0}`
+    const withStream = opts.withStream ?? false
+    const key = `${authors ? [...authors].sort().join(',') : ''}|${windowDays ?? 0}|${withStream ? 's' : ''}`
     if (keywords !== undefined) {
       if (force) this._cache.invalidateNamespace(SwarmCacheNs.reviewList)
-      return this._loadDashboard(me, keywords, authors, windowDays)
+      return this._loadDashboard(me, keywords, authors, windowDays, withStream)
     }
     if (this._dashboardInFlight && this._dashboardInFlightKey === key) {
       if (!force || this._dashboardInFlightIsForce) return this._dashboardInFlight
@@ -188,6 +191,7 @@ export class SwarmClient {
             force: true,
             ...(authors ? { needsActionAuthors: authors } : {}),
             ...(windowDays ? { windowDays } : {}),
+            ...(withStream ? { withStream: true } : {}),
           }),
         )
         .finally(() => {
@@ -199,7 +203,7 @@ export class SwarmClient {
     if (force) this._cache.invalidateNamespace(SwarmCacheNs.reviewList)
     this._dashboardInFlightIsForce = force
     this._dashboardInFlightKey = key
-    const run = this._loadDashboard(me, undefined, authors, windowDays).finally(() => {
+    const run = this._loadDashboard(me, undefined, authors, windowDays, withStream).finally(() => {
       if (this._dashboardInFlight === run) {
         this._dashboardInFlight = undefined
         this._dashboardInFlightIsForce = false
@@ -215,6 +219,7 @@ export class SwarmClient {
     keywords?: string,
     needsActionAuthors?: readonly string[],
     windowDays?: number,
+    withStream?: boolean,
   ): Promise<SwarmDashboard> {
     // needsAction is derived locally from authored + participating + the
     // needsActionAuthors query (see deriveNeedsAction). We deliberately do NOT
@@ -245,11 +250,40 @@ export class SwarmClient {
     const authored = withinWindow(authoredRaw)
     const participating = withinWindow(participatingRaw)
     const byAuthor = withinWindow(byAuthorRaw)
-    return {
+    const dash: SwarmDashboard = {
       needsAction: deriveNeedsAction(me, authored, participating, byAuthor),
       authored,
       participating,
     }
+    // The list endpoint omits `versions`, so a review's p4 stream is only known
+    // from its detail. Enrich the reviews the sidebar renders (needsAction +
+    // authored) with it when asked; the status-bar / notification polls don't set
+    // `withStream`, so they skip these extra requests. Detail hits the 60s TTL
+    // cache, so repeated dashboards don't refetch.
+    if (withStream) await this._enrichStreams([...dash.needsAction, ...dash.authored])
+    return dash
+  }
+
+  /** Fill in each review's `stream` from its detail (latest version's stream).
+   *  Best-effort and de-duplicated by id: a failed detail leaves stream unset. */
+  private async _enrichStreams(reviews: SwarmReview[]): Promise<void> {
+    const byId = new Map<string, SwarmReview[]>()
+    for (const r of reviews) {
+      const list = byId.get(r.id)
+      if (list) list.push(r)
+      else byId.set(r.id, [r])
+    }
+    await Promise.all(
+      [...byId.entries()].map(async ([id, targets]) => {
+        try {
+          const detail = await this.getReview(id)
+          const stream = latestStream(detail?.versions)
+          if (stream) for (const t of targets) t.stream = stream
+        } catch {
+          // Best-effort: a review just renders without its stream label.
+        }
+      }),
+    )
   }
 
   /** Full detail of one review. */
@@ -455,4 +489,15 @@ function deriveNeedsAction(
     out.push(r)
   }
   return out
+}
+
+/** The stream of a review's latest stream-based version, normalized for display
+ *  (leading `//` stripped). Undefined when no version carries a stream. */
+function latestStream(versions: SwarmReviewDetail['versions'] | undefined): string | undefined {
+  if (!versions?.length) return undefined
+  for (let i = versions.length - 1; i >= 0; i--) {
+    const s = versions[i]?.stream
+    if (s) return parseStream(s)
+  }
+  return undefined
 }

@@ -308,12 +308,13 @@ export function registerSwarmCommands(
       guard(
         'dashboard',
         async (c) => {
-          const r = (arg ?? {}) as { force?: boolean; keywords?: string }
+          const r = (arg ?? {}) as { force?: boolean; keywords?: string; withStream?: boolean }
           const needsActionAuthors = await readNeedsActionAuthors()
           const windowDays = await readReviewWindowDays()
           return c.dashboard({
             ...(r.force ? { force: true } : {}),
             ...(r.keywords ? { keywords: r.keywords } : {}),
+            ...(r.withStream ? { withStream: true } : {}),
             ...(needsActionAuthors.length ? { needsActionAuthors } : {}),
             ...(windowDays > 0 ? { windowDays } : {}),
           })
