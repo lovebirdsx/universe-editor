@@ -129,6 +129,28 @@ describe('ConfigOptionStateMachine', () => {
     expect(sm.configOptions.get()[0]?.currentValue).toBe('b')
   })
 
+  it('ingestUpdate applies only the declared options when _meta carries changedConfigIds', () => {
+    const { conn } = makeFakeConn({})
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => conn,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
+    })
+    // Resumed session: the restored values are MODEL='a', MODE='b'.
+    sm.applyInitState([makeConfigOption('MODEL', 'a'), makeConfigOption('MODE', 'b')])
+    // The agent's resume-time model reconciliation corrected only MODEL but
+    // broadcasts the whole bag — where MODE is still the recreated session's
+    // seed. The declaration must scope the update to MODEL.
+    sm.ingestUpdate({
+      sessionUpdate: 'config_option_update',
+      configOptions: [makeConfigOption('MODEL', 'b'), makeConfigOption('MODE', 'a')],
+      _meta: { 'universe-editor/changedConfigIds': ['MODEL'] },
+    })
+    const cur = sm.configOptions.get()
+    expect(cur.find((o) => o.id === 'MODEL')?.currentValue).toBe('b')
+    expect(cur.find((o) => o.id === 'MODE')?.currentValue).toBe('b')
+  })
+
   it('ingestUpdate filters echoes for in-flight pushes', async () => {
     const fakeConn = makeFakeConn({})
     const sm = new ConfigOptionStateMachine({

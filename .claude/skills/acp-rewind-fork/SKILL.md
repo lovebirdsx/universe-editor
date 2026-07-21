@@ -85,7 +85,7 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 | `acpSession.ts` | `rewindTo(messageId,{dryRun?,rewindFiles?})`（reset+replay-gate+extMethod+tracker.clear 条件）；`forkSupported`（observable，从 `sessionCapabilities.fork` 设）+ `rewindSupported`（observable，从 initialize `_meta['universe-editor/capabilities'].rewind` 设）+ 私有 `_filesRolledBackByAgent`（同块设）；`_dispatchPrompt` 发 `_meta:{messageId}`；`applyUpdate` 的 `user_message_chunk` 传 `readMessageId(update)`；`_appendChunk` 加 `messageId?` 参 |
 | `acpSessionModel.ts` | `IAcpSession` 接口：`rewindTo` 签名 + `forkSupported`/`rewindSupported` + `RewindFilesResult` 类型；`REWIND_SESSION_METHOD` 常量（与 vendor 同步） |
 | `acpSessionService.ts` | facade `forkSession(sid,msgId?)`（temp lease → unstable_forkSession → resumeSession）+ `rewindSession(sid,msgId,{dryRun?,rewindFiles?})`（校 live+非 closed+rewindSupported 才委托）；`AcpForeignWorktreeError` 守卫 |
-| `acpSessionUpdateMeta.ts` | `readMessageId(update)` reader（从 update 读 vendor 盖的 messageId） |
+| `acpSessionUpdateMeta.ts` | `readMessageId(update)` reader（从 update 读 vendor 盖的 messageId）+ `readChangedConfigIds(update)`（读 `_meta["universe-editor/changedConfigIds"]` 声明，见已修 bug #6） |
 | `acpPromptReplaceInbox.ts` | edit-and-retry 回填收件箱：**替换语义**（map 存单值 last-wins，drain 返 string?）。区别于 `acpPromptContextInbox`（追加语义） |
 
 ### renderer 命令 + UI
@@ -99,12 +99,14 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 | `PromptInput.tsx` | drain `AcpPromptReplaceInbox`：`setText(replace)`+清 contexts/images+focus |
 | `workbench/agents/agents.module.css` | `.userMessageWrap`(relative)+`.userMessageActions`(hover 才 opacity:1) |
 
-## 三个已修 bug 的根因（复用时对照自查）
+## 已修 bug 的根因（复用时对照自查）
 
 1. **rewind 报 `Unknown messageId`**：SDK 1.1.0 zod strip 顶层 messageId。→ 走 `_meta.messageId`。
 2. **fork 无历史（显示空会话）**：旧实现用内存态 resumeSessionAt fork **不落盘**，session/load replay 读磁盘=空。→ 用 `sdkForkSession()` 写新文件。
 3. **fork 含被点消息本身 / rewind 消息列表不变 / rewind 关闭重开回弹**：三个都源于 **inclusive 语义 + 只改内存不改磁盘**。→ fork/rewind 都 key 在**前驱**；rewind 加 `replaySessionHistory({stopBeforeUuid})`（内存）**和** `truncateTranscriptBefore`（磁盘物理截断，持久化）。
-4. **rewind/fork 后运行期 model/effort 丢失回落默认**（claude 专属，codex 无因 thread 存活）：claude rewind teardown+`createSession` 重建 Query 时用的是**最初** `newSessionParams`，effort 又从 settings.json 重新 seed——运行期 `setConfigOption` 改的 model/effort/fast/agent 从未写回。→ vendor `rewindSession` teardown **前** `snapshotRuntimeConfig(session)`（从 live `configOptions` 读 model/effort/fast/agent，model 优先序），重建后 `reapplyRuntimeConfig` 按序走 `setSessionConfigOption`（复用 model→effort 级联），逐项 best-effort（失败只 log）。fork 侧不重建进程但**新 history 行没继承源配置**→ renderer `forkSession` 注册行时带 `snapshotConfigSelections(live.configOptions.get())` 的 `configOptions`/`configLabels`，resume 的 `setConfigDesired` 借现成 flush 机制 push 回 fork 线程（fork 侧零新增 push 逻辑）。
+4. **rewind/fork 后运行期 model/effort 丢失回落默认**（claude 专属，codex 无因 thread 存活）：claude rewind teardown+`createSession` 重建 Query 时用的是**最初** `newSessionParams`，effort 又从 settings.json 重新 seed——运行期 `setConfigOption` 改的 model/effort/fast/agent 从未写回。→ vendor `rewindSession` teardown **前** `snapshotRuntimeConfig(session)`（从 live `configOptions` 读 model/mode/effort/fast/agent，model 优先序），重建后 `reapplyRuntimeConfig` 按序走 `setSessionConfigOption`（复用 model→effort 级联），逐项 best-effort（失败只 log）。fork 侧不重建进程但**新 history 行没继承源配置**→ renderer `forkSession` 注册行时带 `snapshotConfigSelections(live.configOptions.get())` 的 `configOptions`/`configLabels`，resume 的 `setConfigDesired` 借现成 flush 机制 push 回 fork 线程（fork 侧零新增 push 逻辑）。
+5. **rewind 后权限模式真实回落 + UI 配置显示与 agent 脱节**（bug #4 机制的两个遗漏）：(a) `snapshotRuntimeConfig` 的 order 原本**缺 `MODE_CONFIG_ID`** → 重建 `createSession` 从 settings `permissions.defaultMode` 重新 seed，bypassPermissions 静默回落 default（transcript 里 rewind 后 prompt 的 `permissionMode:"default"` 可证）。修=order 加 MODE 且必须排在 MODEL **之后**——model 切换的 `applyConfigOptionValue` 会 clamp mode，先 push mode 会被随后的 model push 打回。(b) `reapplyRuntimeConfig` 走的 `setSessionConfigOption` 只把更新后的 bag 放在 RPC **响应**里，而 rewind 场景调用方是 vendor 自己 → client 永远收不到重放后的权威配置，UI 显示重建默认值（如 Sonnet/Manual）而 agent 实际跑快照配置（haiku）。修=reapply 末尾主动发一次 `config_option_update`（renderer `ingestUpdate` 无条件处理、replay 窗口不拦、`_pendingPushes` 此时为空不会误吞）。
+6. **正常 resume 后 mode/effort 被打回默认**（被误认为 #5 的修复所致，实为既有提交 `dd49937` 的行为被 `pnpm agent:build` 重建 dist 才激活——排查此类"我改完就坏"先做日志考古+核对 dist mtime，别只看自己的 diff）：`reconcileResumedSessionModel`（issue #845 的 perf 后台任务）在每次 session/load 后读 live model（`getContextUsage`，秒级），与 reported 不一致时经 `updateConfigOption` **广播整个 configOptions bag**——但 bag 里只有 model 是权威修正值，mode/effort 仍是重建 seed（default/xhigh）；renderer `ingestUpdate` 对 known 非 provisional option verbatim 应用（设计如此，agent 主动变更必须赢），无法区分"权威修正"与"陈旧 seed"，恢复的 mode/effort 被打回。修=**声明式部分更新**：vendor `updateConfigOption` 加 `opts.declareChanged`，对比 apply 前后 bag 把真实变化的 id（目标项+连带 clamp/rebuild）写进广播 `_meta["universe-editor/changedConfigIds"]`（仅 reconcile 调用点传入）；renderer `acpSessionUpdateMeta.readChangedConfigIds` 读声明，`ingestUpdate` 把 source 过滤成声明子集、且声明时不做全量替换只 merge。无 `_meta` 的广播保持全量语义（rewind #5(b)、plan 切换、setSessionMode 均不受影响）。
 
 ## 常见任务 → 改哪里
 
@@ -132,7 +134,7 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 ## 测试套路
 
 - **vendor**（`src/tests/acp-agent.test.ts`）：
-  - rewind describe：dryRun 预览 / canRewind:false 短路（都在 step2 前，可不 spawn 真 Query）/ rewindFiles:false（`vi.spyOn` 隔离 teardown/createSession/replay/truncateTranscriptBefore，验证跳过 rewindFiles 仍截断）。
+  - rewind describe：dryRun 预览 / canRewind:false 短路（都在 step2 前，可不 spawn 真 Query）/ rewindFiles:false（`vi.spyOn` 隔离 teardown/createSession/replay/truncateTranscriptBefore，验证跳过 rewindFiles 仍截断）/ 运行期配置 reapply（mock `createSession` 装一个 seed 成默认值的 recreated session，断言 setModel/setPermissionMode 被调 + 最终 configOptions）/ reapply 后 `config_option_update` 通知（client mock 的 `sessionUpdate` 用 `vi.fn` 捕获再过滤）。
   - fork describe：`vi.mock` 加 `forkSession`(vi.fn) + `getSessionMessages`（默认 `vi.fn(actual.getSessionMessages)` 保真实现，新测试 `mockResolvedValueOnce` 覆盖），验证 upToMessageId=前驱。
   - truncate describe：**真实 tmp 文件**建在 `CLAUDE_CONFIG_DIR/projects/__rewind_trunc_test_<uuid>/`，afterEach 清理；验证删锚点及之后/首行清空/锚点不存在原样/文件不存在 no-throw。`CLAUDE_CONFIG_DIR` 已 export。
   - **2 个既有 Windows 反斜杠路径失败**（`toDisplayPath`/`Read src\main.ts`）与本功能无关，CI 上绿。

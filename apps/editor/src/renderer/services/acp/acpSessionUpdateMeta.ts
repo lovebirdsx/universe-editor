@@ -93,6 +93,22 @@ export function readMessageId(update: SessionUpdate): string | undefined {
   return typeof id === 'string' && id.length > 0 ? id : undefined
 }
 
+/**
+ * Read the config ids our claude fork declares as actually changed on a
+ * `config_option_update` (`_meta['universe-editor/changedConfigIds']`). The
+ * resume-time model reconciliation broadcasts the whole bag after correcting
+ * only the model — the other entries are still the recreated session's seeds,
+ * and applying them verbatim would override the user's restored values.
+ * Returns undefined when absent, meaning the full bag is authoritative.
+ */
+export function readChangedConfigIds(update: {
+  _meta?: Record<string, unknown> | null | undefined
+}): readonly string[] | undefined {
+  const raw = update._meta?.['universe-editor/changedConfigIds']
+  if (!Array.isArray(raw)) return undefined
+  return raw.filter((v): v is string => typeof v === 'string')
+}
+
 function readMcpToolName(update: SessionUpdate): { server: string; tool: string } | undefined {
   const meta = (update as { _meta?: { claudeCode?: { toolName?: unknown } } | null })._meta
   const toolName = meta?.claudeCode?.toolName

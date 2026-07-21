@@ -31,6 +31,7 @@ import type { IAcpClientConnection } from './acpClientService.js'
 import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import type { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import { findConfigOptionLabel } from './configOptionLabel.js'
+import { readChangedConfigIds } from './acpSessionUpdateMeta.js'
 
 export interface ConfigOptionSessionInfo {
   /** Stable local id — used only to name the observable (survives the whole session). */
@@ -143,10 +144,17 @@ export class ConfigOptionStateMachine {
 
   /** Handle a `config_option_update` notification — filters out echoes for in-flight user pushes. */
   ingestUpdate(update: Extract<SessionUpdate, { sessionUpdate: 'config_option_update' }>): void {
-    const filtered =
-      this._pendingPushes.size === 0
+    // The agent may declare which ids actually changed (resume-time model
+    // reconciliation broadcasts the whole bag after correcting only the
+    // model — the rest are stale recreated-session seeds). Scope the update
+    // to the declared ids; an undeclared update keeps full-bag semantics.
+    const declared = readChangedConfigIds(update)
+    const source =
+      declared === undefined
         ? update.configOptions
-        : update.configOptions.filter((o) => !this._pendingPushes.has(o.id))
+        : update.configOptions.filter((o) => declared.includes(o.id))
+    const filtered =
+      this._pendingPushes.size === 0 ? source : source.filter((o) => !this._pendingPushes.has(o.id))
     if (filtered.length === 0) return
     // Only reconcile options NOT already present (or still provisional): an
     // agent-driven change to an established option must win (e.g. switching model
@@ -160,7 +168,7 @@ export class ConfigOptionStateMachine {
       (id) => !known.has(id) || this._provisional.has(id),
     )
     for (const f of filtered) this._provisional.delete(f.id)
-    if (reconciled.length === update.configOptions.length) {
+    if (declared === undefined && reconciled.length === update.configOptions.length) {
       this.configOptions.set(reconciled, undefined)
     } else {
       const cur = this.configOptions.get()
