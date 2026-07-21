@@ -101,6 +101,10 @@
   并让「转到定义 / 查看引用」等导航命令在服务启动期间显示进度、就绪后自动执行，而非
   静默阻塞。纯新增方法，不改既有签名。
 
+- `0.6.0` — 向后兼容的新增（minor）：`workspace.getConfiguration(section).update(key, value)`。
+  扩展可通过该方法写入用户级配置；宿主经内部命令 `_workbench.updateConfiguration`
+  转发到 renderer 的配置服务。纯新增方法，不改既有签名。
+
 ## 激活事件清单（activation events）
 
 扩展在 `package.json` 的 `activationEvents` 声明唤醒时机。手写字符串易拼错（拼错则

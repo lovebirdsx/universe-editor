@@ -1,0 +1,82 @@
+{
+  "name": "@universe-editor/universe-editor-mcp-bridge",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "files": ["dist", "resources", "icon.svg"],
+  "displayName": "Universe Editor MCP Bridge",
+  "description": "Registers the Universe Editor MCP bridge for Agent sessions.",
+  "icon": "icon.svg",
+  "main": "dist/extension.js",
+  "engines": {
+    "universe": ">=0.6.0 <1.0.0"
+  },
+  "activationEvents": ["onStartupFinished", "onCommand:universeEditorMcp.usePidOnce"],
+  "contributes": {
+    "commands": [
+      {
+        "command": "universeEditorMcp.reconnect",
+        "title": "Universe Editor MCP: Reconnect",
+        "category": "Universe Editor MCP",
+        "icon": "plug"
+      },
+      {
+        "command": "universeEditorMcp.usePidOnce",
+        "title": "Universe Editor MCP: Use PID Once",
+        "category": "Universe Editor MCP"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "universeEditorMcp.usePidOnce",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Universe Editor MCP",
+      "properties": {
+        "universeEditorMcp.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically register the Universe Editor MCP bridge in Agent MCP server settings when a UE4Editor.exe process is found."
+        },
+        "universeEditorMcp.timeoutMs": {
+          "type": "number",
+          "default": 60000,
+          "minimum": 1000,
+          "description": "How long the bridge waits for a tool response from Universe Editor before timing out, in milliseconds."
+        },
+        "universeEditorMcp.connectTimeoutMs": {
+          "type": "number",
+          "default": 15000,
+          "minimum": 1000,
+          "description": "How long the bridge waits to connect to the Universe Editor named pipe before timing out, in milliseconds."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src",
+    "lint:fix": "eslint --fix src",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true});require('node:fs').rmSync('resources',{recursive:true,force:true})\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "catalog:",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@universe-editor/config-ts": "workspace:*",
+    "@universe-editor/extension-api": "workspace:*",
+    "@types/node": "catalog:",
+    "esbuild": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <rect width="128" height="128" rx="24" fill="#f6f0e8"/>
+  <g fill="none" stroke="#e4522e" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14 64 H34"/>
+    <path d="M94 64 H114"/>
+  </g>
+  <path d="M34 54 L46 64 L34 74 Z" fill="#e4522e"/>
+  <path d="M94 54 L82 64 L94 74 Z" fill="#e4522e"/>
+  <circle cx="64" cy="64" r="42" fill="#e4522e"/>
+  <circle cx="64" cy="64" r="36" fill="#f05c33"/>
+  <text
+    x="64"
+    y="74"
+    fill="#ffffff"
+    font-family="Segoe UI, Arial, sans-serif"
+    font-size="27"
+    font-weight="800"
+    letter-spacing="-1"
+    text-anchor="middle"
+  >MCP</text>
+</svg>

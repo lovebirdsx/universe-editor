@@ -8,6 +8,7 @@
 
 import {
   Action2,
+  ConfigurationTarget,
   IConfigurationService,
   IEditorGroupsService,
   IInstantiationService,
@@ -38,6 +39,19 @@ export class GetConfigurationAction extends Action2 {
   override run(accessor: ServicesAccessor, key: string, defaultValue?: unknown): unknown {
     const value = accessor.get(IConfigurationService).get(key)
     return value === undefined ? defaultValue : value
+  }
+}
+
+/** Backs `workspace.getConfiguration(section).update(key, value)` for extensions. */
+export class UpdateConfigurationAction extends Action2 {
+  static readonly ID = '_workbench.updateConfiguration'
+
+  constructor() {
+    super({ id: UpdateConfigurationAction.ID, title: 'Update Configuration' })
+  }
+
+  override async run(accessor: ServicesAccessor, key: string, value: unknown): Promise<void> {
+    await accessor.get(IConfigurationService).update(key, value, ConfigurationTarget.User)
   }
 }
 

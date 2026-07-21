@@ -17,6 +17,7 @@ allowedDeprecatedVersions:
 catalog:
   # Core
   '@agentclientprotocol/sdk': 0.22.1
+  '@modelcontextprotocol/server': ^2.0.0-alpha.2
   zod: ^3.25.0
 
   # Release
