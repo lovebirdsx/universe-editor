@@ -71,6 +71,19 @@ test('metadataFromManifest 缺 publisher / engine 抛错', () => {
   )
 })
 
+test('metadataFromManifest engines.universe 空串 / engines 缺失均拒绝发布', () => {
+  // 开放市场后未声明兼容区间的扩展会在 API 演进时静默坏掉——发布侧闭环强制必填。
+  assert.throws(
+    () =>
+      metadataFromManifest({ publisher: 'p', name: 'x', version: '1.0.0', engines: { universe: '' } }),
+    /engines\.universe/,
+  )
+  assert.throws(
+    () => metadataFromManifest({ publisher: 'p', name: 'x', version: '1.0.0', engines: {} }),
+    /engines\.universe/,
+  )
+})
+
 test('upsertVersion 新增后按 semver 降序，最新在首位', () => {
   const reg = { extensions: [] }
   const meta = { publisher: 'p', name: 'x', displayName: 'X', shortDescription: '' }

@@ -31,6 +31,7 @@ import {
   IExtensionEnablementService,
   EnablementState,
 } from '../extensions/ExtensionEnablementService.js'
+import { IExtensionHostClientService } from '../extensions/ExtensionHostClientService.js'
 
 export { EnablementState }
 
@@ -62,6 +63,14 @@ export interface IExtensionEntry {
   /** Source references for actions (present when known). */
   readonly local?: ILocalExtension
   readonly gallery?: IGalleryExtension
+  /** Set when the extension's `activate` threw in the host (drives the error badge). */
+  readonly activationError?: IExtensionActivationError
+}
+
+/** A captured activation failure, shown as an error badge + detail on the row. */
+export interface IExtensionActivationError {
+  readonly message: string
+  readonly stack?: string
 }
 
 export interface IExtensionsWorkbenchService {
@@ -147,6 +156,8 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
   private _searchSeq = 0
   /** Resolved enablement state per id, refreshed alongside the installed set. */
   private _enablementStates = new Map<string, EnablementState>()
+  /** Activation failures keyed by extension id (cleared when the host relaunches). */
+  private readonly _activationErrors = new Map<string, IExtensionActivationError>()
 
   constructor(
     @IExtensionManagementService private readonly _management: IExtensionManagementService,
@@ -155,10 +166,23 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     @IStorageService private readonly _storage: IStorageService,
     @INotificationService private readonly _notification: INotificationService,
     @IExtensionEnablementService private readonly _enablement: IExtensionEnablementService,
+    @IExtensionHostClientService private readonly _hostClient: IExtensionHostClientService,
   ) {
     super()
     this._register(this._management.onDidChangeExtensions(() => void this.refreshInstalled()))
     this._register(this._enablement.onDidChangeEnablement(() => void this.refreshInstalled()))
+    this._register(
+      this._hostClient.onDidActivationError((error) => {
+        this._activationErrors.set(error.extensionId, {
+          message: error.message,
+          ...(error.stack !== undefined ? { stack: error.stack } : {}),
+        })
+        this._onDidChange.fire()
+      }),
+    )
+    // A host relaunch (workspace swap / crash recovery / enable-disable) re-runs
+    // activation from scratch, so stale failures shouldn't linger on the rows.
+    this._register(this._hostClient.onDidChangeContributions(() => this._activationErrors.clear()))
   }
 
   get searchText(): string {
@@ -375,6 +399,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
   private _entryFromLocal(local: ILocalExtension): IExtensionEntry {
     const m = local.manifest
     const state = this._stateOf(local.identifier)
+    const activationError = this._activationErrors.get(local.identifier)
     return {
       id: local.identifier,
       displayName: m.displayName ?? m.name,
@@ -388,6 +413,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
       enabled: this._isEnabledState(state),
       enablementState: state,
       local,
+      ...(activationError ? { activationError } : {}),
       ...(local.galleryMetadata?.publisherDisplayName
         ? { publisherDisplayName: local.galleryMetadata.publisherDisplayName }
         : {}),

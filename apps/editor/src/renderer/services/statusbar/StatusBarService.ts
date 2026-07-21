@@ -3,12 +3,12 @@
  *  IStatusBarService implementation for the renderer process.
  *--------------------------------------------------------------------------------------------*/
 
-import { observableValue } from '@universe-editor/platform'
-import type {
+import { InstantiationType, observableValue, registerSingleton } from '@universe-editor/platform'
+import {
   IStatusBarService,
-  IStatusBarEntry,
-  IStatusBarEntryAccessor,
-  IStoredStatusBarEntry,
+  type IStatusBarEntry,
+  type IStatusBarEntryAccessor,
+  type IStoredStatusBarEntry,
 } from '@universe-editor/platform'
 
 export class StatusBarService implements IStatusBarService {
@@ -42,3 +42,5 @@ export class StatusBarService implements IStatusBarService {
     }
   }
 }
+
+registerSingleton(IStatusBarService, StatusBarService, InstantiationType.Eager)

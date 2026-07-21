@@ -39,9 +39,8 @@ import { isAuthRequiredError } from './acpAuthError.js'
 import { composeContextBlocks, type SelectionContext } from './promptContext.js'
 import { composeImageBlocks, type PromptImage } from './promptImage.js'
 import { composePromptBlocksFromRefs, type PlacedRef } from './promptRef.js'
-import { extractCodexModelUsage, extractCodexTurnUsage } from '../../../shared/ai/codexPricing.js'
 import { estimateClaudeCostUSD } from '../../../shared/ai/claudePricing.js'
-import { estimateCodexCost } from './acpSessionCost.js'
+import { getAgentCostStrategy, type AcpAgentCostStrategy } from './acpAgentCostStrategy.js'
 import {
   blocksToText,
   isBlankContentBlock,
@@ -58,6 +57,7 @@ import {
   readSubagentStats,
   readTerminalOutput,
 } from './acpSessionUpdateMeta.js'
+import { ACP_CAPABILITIES_META_KEY, type AcpUniverseCapabilities } from './acpExtMethods.js'
 import {
   AcpAbortError,
   REWIND_SESSION_METHOD,
@@ -264,16 +264,30 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly forkSupported: ISettableObservable<boolean>
 
   /**
-   * Rewind (回退) is supported by agents whose vendor implements the
-   * `REWIND_SESSION_METHOD` ext-method: claude-code (SDK file-checkpointing +
-   * transcript truncation) and codex (app-server `thread/rollback`). codex only
-   * truncates history — the editor's change tracker handles file rollback — so
-   * the file-rollback path in {@link rewindTo} branches on the agent. Static;
-   * other agents hide the affordance.
+   * Whether the connected agent advertised rewind (回退) support via its
+   * `initialize` `_meta['universe-editor/capabilities'].rewind` block. Replaces
+   * the old hardcoded `agentId === 'claude-code'|'codex'` white-list: any agent
+   * (including user-defined) that declares the capability lights up the
+   * affordance. Observable because it arrives async after attach; `false` until
+   * known. See {@link _filesRolledBackByAgent} for the file-rollback semantics.
    */
-  get rewindSupported(): boolean {
-    return this.agentId === 'claude-code' || this.agentId === 'codex'
-  }
+  readonly rewindSupported: ISettableObservable<boolean>
+
+  /**
+   * Whether the agent rolls the working-tree edits back itself during a rewind
+   * (claude: SDK file-checkpointing) or only truncates history and leaves file
+   * rollback to the editor's change tracker (codex). Read from the same
+   * capability block as {@link rewindSupported}; defaults to `true`. Drives the
+   * file-rollback branch in {@link rewindTo}.
+   */
+  private readonly _filesRolledBackByAgent: ISettableObservable<boolean>
+
+  /**
+   * Local cost-estimation strategy for this agent, or `undefined` when the agent
+   * reports authoritative cost itself (Claude). Replaces the inline
+   * `agentId === 'codex'` cost branches — see acpAgentCostStrategy.ts.
+   */
+  private readonly _costStrategy: AcpAgentCostStrategy | undefined
 
   constructor(
     readonly id: string,
@@ -290,6 +304,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     private readonly _compactionStats?: IAcpCompactionStatsService,
   ) {
     super()
+    this._costStrategy = getAgentCostStrategy(agentId)
     this.sessionIdOnAgent = observableValue<string | undefined>(
       `acp.session.sessionIdOnAgent.${id}`,
       undefined,
@@ -331,6 +346,11 @@ export class AcpSession extends Disposable implements IAcpSession {
     )
     this.imageSupported = observableValue<boolean>(`acp.session.imageSupported.${id}`, false)
     this.forkSupported = observableValue<boolean>(`acp.session.forkSupported.${id}`, false)
+    this.rewindSupported = observableValue<boolean>(`acp.session.rewindSupported.${id}`, false)
+    this._filesRolledBackByAgent = observableValue<boolean>(
+      `acp.session.filesRolledBackByAgent.${id}`,
+      true,
+    )
     this._configOptions = new ConfigOptionStateMachine({
       getConn: () => this._conn,
       telemetry: _telemetry,
@@ -378,6 +398,20 @@ export class AcpSession extends Disposable implements IAcpSession {
         this._embeddedContextSupported = caps?.embeddedContext === true
         this.imageSupported.set(caps?.image === true, undefined)
         this.forkSupported.set(res.agentCapabilities?.sessionCapabilities?.fork != null, undefined)
+        // Rewind support + file-rollback semantics come from the fork's
+        // `_meta['universe-editor/capabilities']` block (see acpExtMethods.ts).
+        // Replaces the old agentId white-list so user-defined agents that declare
+        // the capability also light up the affordance.
+        const universeCaps = (
+          res.agentCapabilities?._meta as
+            | { [ACP_CAPABILITIES_META_KEY]?: AcpUniverseCapabilities }
+            | undefined
+        )?.[ACP_CAPABILITIES_META_KEY]
+        this.rewindSupported.set(universeCaps?.rewind != null, undefined)
+        this._filesRolledBackByAgent.set(
+          universeCaps?.rewind?.filesRolledBackByAgent !== false,
+          undefined,
+        )
       })
       .catch(() => {})
     this.sessionIdOnAgent.set(sessionIdOnAgent, undefined)
@@ -716,10 +750,11 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Keep the working-tree edits when the caller opted out of the file rollback
     // (保留修改并回退). Defaults to rolling files back.
     const keepFiles = options?.rewindFiles === false
-    // codex's `thread/rollback` only truncates history — it can't roll files back
-    // (the protocol makes that the client's job), so we revert files renderer-side
-    // via the change tracker. claude's ext-method does both itself. Branch here.
-    const filesAreClientSide = this.agentId === 'codex'
+    // When the agent doesn't roll files back itself (codex's `thread/rollback`
+    // only truncates history — the protocol makes file rollback the client's
+    // job), we revert files renderer-side via the change tracker. claude's
+    // ext-method does both itself. Sourced from the fork's advertised capability.
+    const filesAreClientSide = !this._filesRolledBackByAgent.get()
 
     // Snapshot the tool calls issued AFTER the rewind anchor *before* any reset
     // clears the timeline — those are the edits a codex file rollback un-applies.
@@ -1188,19 +1223,17 @@ export class AcpSession extends Disposable implements IAcpSession {
       case 'usage_update': {
         const tx = this._batchedTx()
         const prev = this.usage.get()
-        // Codex estimates cost locally from the session-cumulative per-model token
-        // counts it stamps on every usage_update (one per model call). Take the
-        // latest snapshot — it already folds in every call, so no accumulation.
-        const codexCost =
-          this.agentId === 'codex'
-            ? estimateCodexCost(extractCodexModelUsage((update as { _meta?: unknown })._meta))
-            : undefined
-        if (codexCost != null) {
+        // Agents that don't report authoritative cost (Codex) estimate it locally
+        // from the session-cumulative per-model token counts stamped on every
+        // usage_update. Take the latest snapshot — it already folds in every call,
+        // so no accumulation.
+        const localCost = this._costStrategy?.fromUsageUpdate((update as { _meta?: unknown })._meta)
+        if (localCost != null) {
           const next: AcpUsage = {
             used: update.used,
             size: update.size,
-            cost: codexCost.cost,
-            models: codexCost.models,
+            cost: localCost.cost,
+            models: localCost.models,
             costEstimated: true,
           }
           this.usage.set(next, tx)
@@ -1290,17 +1323,15 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   /**
-   * Finalize the locally-estimated Codex cost from the prompt response. Codex
-   * never reports an authoritative cost, so we estimate from the session-
+   * Finalize a locally-estimated cost from the prompt response, for agents that
+   * never report an authoritative cost (Codex). We estimate from the session-
    * cumulative per-model token counts the fork stamps on the response. This is a
    * safety net — `usage_update` already refreshes the estimate on every model
    * call (see the usage_update case); the response just confirms the final total.
-   * No-op for Claude, which reports real cost.
+   * No-op for agents that report real cost (Claude — no strategy registered).
    */
   private _ingestPromptResponse(response: PromptResponse): void {
-    if (this.agentId !== 'codex') return
-    const usages = extractCodexTurnUsage(response)
-    const estimate = estimateCodexCost(usages)
+    const estimate = this._costStrategy?.fromPromptResponse(response)
     if (estimate == null) return
 
     const tx = this._batchedTx()

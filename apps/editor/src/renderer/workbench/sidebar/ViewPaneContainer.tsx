@@ -10,6 +10,7 @@ import { Allotment, type AllotmentHandle } from 'allotment'
 import 'allotment/dist/style.css'
 import type { IViewDescriptor } from '@universe-editor/platform'
 import { ViewPane } from './ViewPane.js'
+import { ViewToolbarRegistry } from '../../services/views/ViewComponentRegistry.js'
 import { useViewDescriptors } from '../dnd/useViewDescriptors.js'
 import { dragContainsView, viewDragData, type ViewDragPayload } from '../dnd/viewDragData.js'
 import { applyViewDrop } from '../dnd/applyViewDrop.js'
@@ -24,7 +25,6 @@ interface Props {
   containerId: string
   views: readonly IViewDescriptor[]
   resolve: (componentKey: string) => ComponentType | undefined
-  toolbarMap?: ReadonlyMap<string, ComponentType>
   emptyMessage?: string
 }
 
@@ -45,7 +45,6 @@ export function ViewPaneContainer({
   containerId,
   views,
   resolve,
-  toolbarMap,
   emptyMessage = 'No views registered.',
 }: Props) {
   const viewDescriptors = useViewDescriptors()
@@ -191,7 +190,7 @@ export function ViewPaneContainer({
                 title={v.name}
                 open={!isCollapsed}
                 onToggle={() => toggle(v.id)}
-                toolbar={toolbarMap?.get(v.id)}
+                toolbar={ViewToolbarRegistry.get(v.id)}
                 draggable={v.canMoveView !== false}
                 onDropView={(sourceViewId, position) => moveHere(sourceViewId, v.id, position)}
               >

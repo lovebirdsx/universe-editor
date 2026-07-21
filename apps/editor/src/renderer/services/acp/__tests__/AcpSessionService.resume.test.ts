@@ -72,6 +72,8 @@ import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../acpPermissionHandler.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
+import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
+import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
@@ -411,7 +413,6 @@ function buildService(
     new FakeWorkspaceService(serviceCwd),
     config,
     notifications,
-    { executeCommand: async () => undefined } as never,
     telemetry,
     new StubPermissionHandler(),
     new StubLoggerService(),
@@ -419,13 +420,19 @@ function buildService(
     storage,
     agentDefaults,
     new StubConfigOptionsCache(),
-    new StubSessionChangeTracker(),
-    new StubSessionTitleService(),
     FAKE_URI_IDENTITY,
-    new AcpCompactionStatsService(
-      new FakeStorage(),
-      new NoopTelemetryService(),
-      new StubLoggerService(),
+    new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+    new AcpSessionFactory(
+      telemetry,
+      history,
+      agentDefaults,
+      new StubSessionChangeTracker(),
+      new StubSessionTitleService(),
+      new AcpCompactionStatsService(
+        new FakeStorage(),
+        new NoopTelemetryService(),
+        new StubLoggerService(),
+      ),
     ),
   )
   return { svc, client, history, agentDefaults, notifications, storage }
@@ -1000,32 +1007,38 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
       new StubLoggerService(),
       FAKE_URI_IDENTITY,
     )
+    const agentDefaults = new AcpAgentDefaultsService(
+      new FakeStorage(),
+      new FakeWorkspaceService(),
+      telemetry,
+      new StubLoggerService(),
+    )
     svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       config,
       notifications,
-      { executeCommand: async () => undefined } as never,
       telemetry,
       new StubPermissionHandler(),
       new StubLoggerService(),
       history,
       storage,
-      new AcpAgentDefaultsService(
-        new FakeStorage(),
-        new FakeWorkspaceService(),
-        telemetry,
-        new StubLoggerService(),
-      ),
+      agentDefaults,
       new StubConfigOptionsCache(),
-      new StubSessionChangeTracker(),
-      new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
-      new AcpCompactionStatsService(
-        new FakeStorage(),
-        new NoopTelemetryService(),
-        new StubLoggerService(),
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        new AcpCompactionStatsService(
+          new FakeStorage(),
+          new NoopTelemetryService(),
+          new StubLoggerService(),
+        ),
       ),
     )
     // Kick off history hydration but DO NOT await — race the resume call.
@@ -1118,32 +1131,38 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubLoggerService(),
       FAKE_URI_IDENTITY,
     )
+    const agentDefaults = new AcpAgentDefaultsService(
+      new FakeStorage(),
+      new FakeWorkspaceService(),
+      telemetry,
+      new StubLoggerService(),
+    )
     svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       config,
       notifications,
-      { executeCommand: async () => undefined } as never,
       telemetry,
       new StubPermissionHandler(),
       new StubLoggerService(),
       history,
       round1.storage,
-      new AcpAgentDefaultsService(
-        new FakeStorage(),
-        new FakeWorkspaceService(),
-        telemetry,
-        new StubLoggerService(),
-      ),
+      agentDefaults,
       new StubConfigOptionsCache(),
-      new StubSessionChangeTracker(),
-      new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
-      new AcpCompactionStatsService(
-        new FakeStorage(),
-        new NoopTelemetryService(),
-        new StubLoggerService(),
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        new AcpCompactionStatsService(
+          new FakeStorage(),
+          new NoopTelemetryService(),
+          new StubLoggerService(),
+        ),
       ),
     )
     expect(svc.activeSession.get()).toBeUndefined()
@@ -1174,32 +1193,39 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubLoggerService(),
       FAKE_URI_IDENTITY,
     )
+    const notification = new StubNotificationService()
+    const agentDefaults = new AcpAgentDefaultsService(
+      new FakeStorage(),
+      new FakeWorkspaceService(),
+      telemetry,
+      new StubLoggerService(),
+    )
     svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       config,
-      new StubNotificationService(),
-      { executeCommand: async () => undefined } as never,
+      notification,
       telemetry,
       new StubPermissionHandler(),
       new StubLoggerService(),
       history,
       storage,
-      new AcpAgentDefaultsService(
-        new FakeStorage(),
-        new FakeWorkspaceService(),
-        telemetry,
-        new StubLoggerService(),
-      ),
+      agentDefaults,
       new StubConfigOptionsCache(),
-      new StubSessionChangeTracker(),
-      new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
-      new AcpCompactionStatsService(
-        new FakeStorage(),
-        new NoopTelemetryService(),
-        new StubLoggerService(),
+      new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        new AcpCompactionStatsService(
+          new FakeStorage(),
+          new NoopTelemetryService(),
+          new StubLoggerService(),
+        ),
       ),
     )
     // Let _loadPendingRestore() resolve.
@@ -1225,32 +1251,38 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubLoggerService(),
       FAKE_URI_IDENTITY,
     )
+    const agentDefaults = new AcpAgentDefaultsService(
+      new FakeStorage(),
+      new FakeWorkspaceService(),
+      telemetry,
+      new StubLoggerService(),
+    )
     svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       config,
       notifications,
-      { executeCommand: async () => undefined } as never,
       telemetry,
       new StubPermissionHandler(),
       new StubLoggerService(),
       history,
       storage,
-      new AcpAgentDefaultsService(
-        new FakeStorage(),
-        new FakeWorkspaceService(),
-        telemetry,
-        new StubLoggerService(),
-      ),
+      agentDefaults,
       new StubConfigOptionsCache(),
-      new StubSessionChangeTracker(),
-      new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
-      new AcpCompactionStatsService(
-        new FakeStorage(),
-        new NoopTelemetryService(),
-        new StubLoggerService(),
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        new AcpCompactionStatsService(
+          new FakeStorage(),
+          new NoopTelemetryService(),
+          new StubLoggerService(),
+        ),
       ),
     )
     await Promise.resolve()
@@ -1281,32 +1313,39 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubLoggerService(),
       FAKE_URI_IDENTITY,
     )
+    const notification = new StubNotificationService()
+    const agentDefaults = new AcpAgentDefaultsService(
+      new FakeStorage(),
+      new FakeWorkspaceService(),
+      telemetry,
+      new StubLoggerService(),
+    )
     svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       config,
-      new StubNotificationService(),
-      { executeCommand: async () => undefined } as never,
+      notification,
       telemetry,
       new StubPermissionHandler(),
       new StubLoggerService(),
       history,
       storage,
-      new AcpAgentDefaultsService(
-        new FakeStorage(),
-        new FakeWorkspaceService(),
-        telemetry,
-        new StubLoggerService(),
-      ),
+      agentDefaults,
       new StubConfigOptionsCache(),
-      new StubSessionChangeTracker(),
-      new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
-      new AcpCompactionStatsService(
-        new FakeStorage(),
-        new NoopTelemetryService(),
-        new StubLoggerService(),
+      new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        new AcpCompactionStatsService(
+          new FakeStorage(),
+          new NoopTelemetryService(),
+          new StubLoggerService(),
+        ),
       ),
     )
     await Promise.resolve()

@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  AgentsViewToolbar — the title-bar actions for the AGENTS view, rendered in the
- *  view's ViewPane header via viewToolbarMap. The button set follows the chat
+ *  view's ViewPane header via the view toolbar registry. The button set follows the chat
  *  location: docked in the sidebar (ChatPanel) it offers the sessions popover,
  *  New and switch-to-editor; parked in the editor area (SessionListPanel) it
  *  offers New, choose-agent, refresh and switch-to-sidebar.

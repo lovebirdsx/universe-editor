@@ -10,6 +10,7 @@
  * shadowing guardrail in memory `renderer-action-shadowed-by-extension-command-decl`).
  */
 import { commands, window, workspace, type Disposable } from '@universe-editor/extension-api'
+import type { SwarmCommandId } from '@universe-editor/extensions-common'
 import type { ClientManager } from '../clientManager.js'
 import { changelistIdFromGroupId } from '../changelist.js'
 import { SwarmClient, type SwarmReviewFilter } from './swarmClient.js'
@@ -20,8 +21,14 @@ import type { SwarmLogger } from './swarmLog.js'
 import { buildReviewPicks } from './swarmReviewPick.js'
 import { localize } from '../nls.js'
 
-/** Command id constants (mirror of extensions-common `SwarmCommands`; kept local
- *  to avoid bundling that package into the extension). */
+/** Command ids. The wire-facing ids are declared canonically in extensions-common's
+ *  `SwarmCommands`; the literal is kept here (not imported) because that constant
+ *  lives in the barrel alongside platform-dependent modules and importing the
+ *  *value* would pull platform into this esbuild bundle. Drift is instead caught at
+ *  compile time by the type guard below — a wire-id rename in extensions-common
+ *  makes `Cmd` no longer cover `SwarmCommandId` and fails typecheck. `requestReview`
+ *  is extension-internal (SCM changelist group header, never called by the renderer
+ *  over the contributed-command boundary) so it is not part of the wire contract. */
 const Cmd = {
   ping: 'perforce.swarm.ping',
   requestReview: 'perforce.swarm.requestReview',
@@ -43,6 +50,12 @@ const Cmd = {
   getFileContentBytes: 'perforce.swarm.getFileContentBytes',
   describeVersion: 'perforce.swarm.describeVersion',
 } as const
+
+/** Compile-time drift guard (see {@link Cmd}): fails if the wire contract gains or
+ *  renames a command id the local literal no longer covers. Type-only — no runtime. */
+type _AssertCoversWireIds = SwarmCommandId extends (typeof Cmd)[keyof typeof Cmd] ? true : never
+const _swarmWireIdCoverage: _AssertCoversWireIds = true
+void _swarmWireIdCoverage
 
 export interface SwarmConfig {
   readonly url: string

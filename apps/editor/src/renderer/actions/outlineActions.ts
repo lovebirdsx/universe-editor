@@ -12,6 +12,7 @@
 
 import {
   Action2,
+  KeybindingWeight,
   localize2,
   type ILocalizedString,
   type ServicesAccessor,
@@ -21,8 +22,12 @@ import { OutlineNavigatorRegistry } from '../workbench/outline/outlineNavigatorR
 const CATEGORY = localize2('command.category.view', 'View')
 
 // Only when the Outline tree itself holds focus — so these Ctrl keys keep their
-// global meaning (quick open / new file / …) everywhere else.
+// global meaning (quick open / new file / …) everywhere else. The weight (above
+// the default WorkbenchContrib) makes the scoped binding authoritative over the
+// global Ctrl+P/N/B/F whenever OUTLINE_FOCUS_WHEN holds, independent of which
+// action registered last.
 const OUTLINE_FOCUS_WHEN = "focusedView == 'workbench.view.outline.main'"
+const OUTLINE_KEY_WEIGHT = KeybindingWeight.WorkbenchContrib + 50
 
 class OutlineNavigateAction extends Action2 {
   constructor(
@@ -35,7 +40,7 @@ class OutlineNavigateAction extends Action2 {
       id,
       title,
       category: CATEGORY,
-      keybinding: { primary: key, when: OUTLINE_FOCUS_WHEN },
+      keybinding: { primary: key, when: OUTLINE_FOCUS_WHEN, weight: OUTLINE_KEY_WEIGHT },
       precondition: OUTLINE_FOCUS_WHEN,
     })
   }

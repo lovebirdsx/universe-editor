@@ -64,9 +64,12 @@ import {
 import { AcpSessionService } from '../acpSessionService.js'
 import type { AskUserQuestionRequest } from '../acpSessionService.js'
 import { REWIND_SESSION_METHOD } from '../acpSession.js'
+import { ACP_CAPABILITIES_META_KEY } from '../acpExtMethods.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
+import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
+import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
@@ -245,6 +248,13 @@ interface StubAgentOptions {
   promptResponse?: PromptResponse
   /** When true, advertise sessionCapabilities.fork so forkSession can proceed. */
   forkCapable?: boolean
+  /**
+   * When true, advertise the universe rewind capability via initialize `_meta`
+   * so rewindSession is unlocked. `filesRolledBackByAgent` controls whether the
+   * agent rolls files back itself (Claude) or leaves it to the client (Codex).
+   */
+  rewindCapable?: boolean
+  filesRolledBackByAgent?: boolean
   /** sessionId returned from unstable_forkSession (the new forked session id). */
   forkedSessionId?: string
   /** Result returned from extMethod(REWIND_SESSION_METHOD). */
@@ -281,6 +291,17 @@ class StubAgent implements Agent {
         promptCapabilities: {},
         ...(this._opts.forkCapable ? { sessionCapabilities: { fork: {} } } : {}),
         ...(this._opts.mcpCapabilities ? { mcpCapabilities: this._opts.mcpCapabilities } : {}),
+        ...(this._opts.rewindCapable
+          ? {
+              _meta: {
+                [ACP_CAPABILITIES_META_KEY]: {
+                  rewind: {
+                    filesRolledBackByAgent: this._opts.filesRolledBackByAgent ?? true,
+                  },
+                },
+              },
+            }
+          : {}),
       },
       authMethods: [],
     } as unknown as InitializeResponse)
@@ -435,24 +456,34 @@ describe('AcpSessionService', () => {
     permission = new StubPermissionHandler()
     const config: IConfigurationService = new ConfigurationService()
     const telemetry: ITelemetryService = new NoopTelemetryService()
+    const history = makeHistory()
+    const agentDefaults = makeAgentDefaults()
+    const changeTracker = new StubSessionChangeTracker()
+    const titleService = new StubSessionTitleService()
+    const compactionStats = makeCompactionStats()
     svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       config,
       notifications,
-      { executeCommand: async () => undefined } as never,
       telemetry,
       permission,
       new StubLoggerService(),
-      makeHistory(),
+      history,
       new FakeStorage(),
-      makeAgentDefaults(),
+      agentDefaults,
       new StubConfigOptionsCache(),
-      new StubSessionChangeTracker(),
-      new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
-      makeCompactionStats(),
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        changeTracker,
+        titleService,
+        compactionStats,
+      ),
     )
   })
 
@@ -566,24 +597,31 @@ describe('AcpSessionService', () => {
     client = new FakeAcpClientService({
       stubOptions: { promptResponse: { stopReason: 'end_turn', userMessageId: 'agent-uuid-xyz' } },
     })
+    const history = makeHistory()
+    const agentDefaults = makeAgentDefaults()
     svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       new ConfigurationService(),
       notifications,
-      { executeCommand: async () => undefined } as never,
       new NoopTelemetryService(),
       permission,
       new StubLoggerService(),
-      makeHistory(),
+      history,
       new FakeStorage(),
-      makeAgentDefaults(),
+      agentDefaults,
       new StubConfigOptionsCache(),
-      new StubSessionChangeTracker(),
-      new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
-      makeCompactionStats(),
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        new NoopTelemetryService(),
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -776,24 +814,31 @@ describe('AcpSessionService', () => {
     client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
     const config: IConfigurationService = new ConfigurationService()
     const telemetry: ITelemetryService = new NoopTelemetryService()
+    const history = makeHistory()
+    const agentDefaults = makeAgentDefaults()
     svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       config,
       notifications,
-      { executeCommand: async () => undefined } as never,
       telemetry,
       permission,
       new StubLoggerService(),
-      makeHistory(),
+      history,
       new FakeStorage(),
-      makeAgentDefaults(),
+      agentDefaults,
       new StubConfigOptionsCache(),
-      new StubSessionChangeTracker(),
-      new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
-      makeCompactionStats(),
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -818,24 +863,33 @@ describe('AcpSessionService', () => {
     function rebuildControlled(): void {
       svc.dispose()
       client = new FakeAcpClientService({ stubOptions: { promptControl: true } })
+      const history = makeHistory()
+      const agentDefaults = makeAgentDefaults()
       svc = new AcpSessionService(
         client,
         new FakeAgentRegistry(),
         new FakeWorkspaceService(),
         new ConfigurationService(),
         notifications,
-        { executeCommand: async () => undefined } as never,
         new NoopTelemetryService(),
         permission,
         new StubLoggerService(),
-        makeHistory(),
+        history,
         new FakeStorage(),
-        makeAgentDefaults(),
+        agentDefaults,
         new StubConfigOptionsCache(),
-        new StubSessionChangeTracker(),
-        new StubSessionTitleService(),
         FAKE_URI_IDENTITY,
-        makeCompactionStats(),
+        new AcpAuthGuidanceService(notifications, {
+          executeCommand: async () => undefined,
+        } as never),
+        new AcpSessionFactory(
+          new NoopTelemetryService(),
+          history,
+          agentDefaults,
+          new StubSessionChangeTracker(),
+          new StubSessionTitleService(),
+          makeCompactionStats(),
+        ),
       )
     }
 
@@ -1074,31 +1128,41 @@ describe('AcpSessionService — rewind / fork', () => {
 
   function makeServiceWithHistory(client: FakeAcpClientService, tracker: StubSessionChangeTracker) {
     const history = makeHistory()
+    const notification = new StubNotificationService()
+    const agentDefaults = makeAgentDefaults()
+    const telemetry = new NoopTelemetryService()
     const svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       new ConfigurationService(),
-      new StubNotificationService(),
-      { executeCommand: async () => undefined } as never,
-      new NoopTelemetryService(),
+      notification,
+      telemetry,
       new StubPermissionHandler(),
       new StubLoggerService(),
       history,
       new FakeStorage(),
-      makeAgentDefaults(),
+      agentDefaults,
       new StubConfigOptionsCache(),
-      tracker,
-      new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
-      makeCompactionStats(),
+      new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        tracker,
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
     )
     return { svc, history }
   }
 
   it('rewindSession sends the rewind ext-method with the target messageId and clears tracked changes', async () => {
     const tracker = new StubSessionChangeTracker()
-    const client = new FakeAcpClientService({ stubOptions: { forkCapable: true } })
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, rewindCapable: true },
+    })
     const svc = makeService(client, tracker)
     try {
       const s = await svc.createSession('claude-code')
@@ -1125,6 +1189,7 @@ describe('AcpSessionService — rewind / fork', () => {
     const client = new FakeAcpClientService({
       stubOptions: {
         forkCapable: true,
+        rewindCapable: true,
         rewindResult: { canRewind: true, filesChanged: ['a.ts'], insertions: 3, deletions: 1 },
       },
     })
@@ -1151,7 +1216,9 @@ describe('AcpSessionService — rewind / fork', () => {
 
   it('rewindSession with rewindFiles:false truncates the conversation but keeps tracked changes', async () => {
     const tracker = new StubSessionChangeTracker()
-    const client = new FakeAcpClientService({ stubOptions: { forkCapable: true } })
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, rewindCapable: true },
+    })
     const svc = makeService(client, tracker)
     try {
       const s = await svc.createSession('claude-code')
@@ -1194,7 +1261,9 @@ describe('AcpSessionService — rewind / fork', () => {
 
   it('codex rewindSession rolls files back via the change tracker (not the ext-method)', async () => {
     const tracker = new StubSessionChangeTracker()
-    const client = new FakeAcpClientService({ stubOptions: {} })
+    const client = new FakeAcpClientService({
+      stubOptions: { rewindCapable: true, filesRolledBackByAgent: false },
+    })
     const svc = makeService(client, tracker)
     try {
       const s = await svc.createSession('codex')
@@ -1221,7 +1290,9 @@ describe('AcpSessionService — rewind / fork', () => {
 
   it('codex rewindSession with rewindFiles:false keeps files (no tracker restore)', async () => {
     const tracker = new StubSessionChangeTracker()
-    const client = new FakeAcpClientService({ stubOptions: {} })
+    const client = new FakeAcpClientService({
+      stubOptions: { rewindCapable: true, filesRolledBackByAgent: false },
+    })
     const svc = makeService(client, tracker)
     try {
       const s = await svc.createSession('codex')
@@ -1336,24 +1407,33 @@ describe('AcpSessionService — startup timeout', () => {
     const client = new FakeAcpClientService({ stubOptions: { initializeHangs: true } })
     const config = new ConfigurationService()
     await config.update('acp.startupTimeoutMs', 50)
+    const notification = new StubNotificationService()
+    const telemetry = new NoopTelemetryService()
+    const history = makeHistory()
+    const agentDefaults = makeAgentDefaults()
     const svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       config,
-      new StubNotificationService(),
-      { executeCommand: async () => undefined } as never,
-      new NoopTelemetryService(),
+      notification,
+      telemetry,
       new StubPermissionHandler(),
       new StubLoggerService(),
-      makeHistory(),
+      history,
       new FakeStorage(),
-      makeAgentDefaults(),
+      agentDefaults,
       new StubConfigOptionsCache(),
-      new StubSessionChangeTracker(),
-      new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
-      makeCompactionStats(),
+      new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
     )
     // createSession returns synchronously now; the handshake fails in the
     // background after the startup timeout fires, sealing the session via
@@ -1370,24 +1450,33 @@ describe('AcpSessionService — startup timeout', () => {
     const client = new FakeAcpClientService({ stubOptions: { initializeHangs: true } })
     const config = new ConfigurationService()
     await config.update('acp.startupTimeoutMs', 50)
+    const notification = new StubNotificationService()
+    const telemetry = new NoopTelemetryService()
+    const history = makeHistory()
+    const agentDefaults = makeAgentDefaults()
     const svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       config,
-      new StubNotificationService(),
-      { executeCommand: async () => undefined } as never,
-      new NoopTelemetryService(),
+      notification,
+      telemetry,
       new StubPermissionHandler(),
       new StubLoggerService(),
-      makeHistory(),
+      history,
       new FakeStorage(),
-      makeAgentDefaults(),
+      agentDefaults,
       new StubConfigOptionsCache(),
-      new StubSessionChangeTracker(),
-      new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
-      makeCompactionStats(),
+      new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
     )
     const s = await svc.createSession()
     // Submit a prompt while still connecting — it is buffered by the connection
@@ -1414,24 +1503,33 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     config: ConfigurationService,
     compactionStats: AcpCompactionStatsService = makeCompactionStats(),
   ) {
+    const notification = new StubNotificationService()
+    const telemetry = new NoopTelemetryService()
+    const history = makeHistory()
+    const agentDefaults = makeAgentDefaults()
     return new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       config,
-      new StubNotificationService(),
-      { executeCommand: async () => undefined } as never,
-      new NoopTelemetryService(),
+      notification,
+      telemetry,
       new StubPermissionHandler(),
       new StubLoggerService(),
-      makeHistory(),
+      history,
       new FakeStorage(),
-      makeAgentDefaults(),
+      agentDefaults,
       new StubConfigOptionsCache(),
-      new StubSessionChangeTracker(),
-      new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
-      compactionStats,
+      new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        compactionStats,
+      ),
     )
   }
 
@@ -1691,24 +1789,32 @@ describe('AcpSessionService — AI session title push-back', () => {
     title: IAcpSessionTitleService,
   ): { svc: AcpSessionService; history: AcpSessionHistoryService } {
     const history = makeHistory()
+    const notification = new StubNotificationService()
+    const telemetry = new NoopTelemetryService() as ITelemetryService
+    const agentDefaults = makeAgentDefaults()
     const svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       new ConfigurationService(),
-      new StubNotificationService(),
-      { executeCommand: async () => undefined } as never,
-      new NoopTelemetryService() as ITelemetryService,
+      notification,
+      telemetry,
       new StubPermissionHandler(),
       new StubLoggerService(),
       history,
       new FakeStorage(),
-      makeAgentDefaults(),
+      agentDefaults,
       new StubConfigOptionsCache(),
-      new StubSessionChangeTracker(),
-      title,
       FAKE_URI_IDENTITY,
-      makeCompactionStats(),
+      new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        title,
+        makeCompactionStats(),
+      ),
     )
     return { svc, history }
   }
@@ -1820,24 +1926,32 @@ describe('AcpSessionService — configOptions history snapshot', () => {
 
   function makeServiceWithHistory(client: FakeAcpClientService) {
     const history = makeHistory()
+    const notification = new StubNotificationService()
+    const telemetry = new NoopTelemetryService()
+    const agentDefaults = makeAgentDefaults()
     const svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       new ConfigurationService(),
-      new StubNotificationService(),
-      { executeCommand: async () => undefined } as never,
-      new NoopTelemetryService(),
+      notification,
+      telemetry,
       new StubPermissionHandler(),
       new StubLoggerService(),
       history,
       new FakeStorage(),
-      makeAgentDefaults(),
+      agentDefaults,
       new StubConfigOptionsCache(),
-      new StubSessionChangeTracker(),
-      new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
-      makeCompactionStats(),
+      new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
     )
     return { svc, history }
   }

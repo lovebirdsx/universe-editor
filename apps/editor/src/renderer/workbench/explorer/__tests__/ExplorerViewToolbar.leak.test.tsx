@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Regression test: ExplorerViewToolbar lives in the sidebar header (viewToolbarMap),
+ *  Regression test: ExplorerViewToolbar lives in the sidebar header (the view toolbar registry),
  *  kept mounted across container switches. On window reload the Offscreen reconnect
  *  cycle can leave the onDidChangeStructure effect cleanup unpaired, so the
  *  subscription must be marked as a singleton (mirrors ExplorerView's selection

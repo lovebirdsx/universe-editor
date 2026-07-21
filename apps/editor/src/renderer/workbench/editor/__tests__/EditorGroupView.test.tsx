@@ -104,7 +104,11 @@ describe('EditorGroupView — tab switching', () => {
 
     render(
       <ServicesContext.Provider value={makeFakeInstantiation()}>
-        <EditorGroupView group={group} groupsService={svc} componentMap={componentMap} />
+        <EditorGroupView
+          group={group}
+          groupsService={svc}
+          resolveComponent={(k) => componentMap.get(k)}
+        />
       </ServicesContext.Provider>,
     )
 
@@ -139,7 +143,11 @@ describe('EditorGroupView — tab switching', () => {
 
     render(
       <ServicesContext.Provider value={makeFakeInstantiation()}>
-        <EditorGroupView group={group} groupsService={svc} componentMap={componentMap} />
+        <EditorGroupView
+          group={group}
+          groupsService={svc}
+          resolveComponent={(k) => componentMap.get(k)}
+        />
       </ServicesContext.Provider>,
     )
 
@@ -171,7 +179,11 @@ describe('EditorGroupView — tab switching', () => {
 
     render(
       <ServicesContext.Provider value={makeFakeInstantiation()}>
-        <EditorGroupView group={group} groupsService={svc} componentMap={componentMap} />
+        <EditorGroupView
+          group={group}
+          groupsService={svc}
+          resolveComponent={(k) => componentMap.get(k)}
+        />
       </ServicesContext.Provider>,
     )
 
@@ -195,7 +207,11 @@ describe('EditorGroupView — tab switching', () => {
 
     render(
       <ServicesContext.Provider value={makeFakeInstantiation()}>
-        <EditorGroupView group={group} groupsService={svc} componentMap={componentMap} />
+        <EditorGroupView
+          group={group}
+          groupsService={svc}
+          resolveComponent={(k) => componentMap.get(k)}
+        />
       </ServicesContext.Provider>,
     )
 
@@ -216,7 +232,11 @@ describe('EditorGroupView — tab switching', () => {
 
     render(
       <ServicesContext.Provider value={makeFakeInstantiation()}>
-        <EditorGroupView group={group} groupsService={svc} componentMap={componentMap} />
+        <EditorGroupView
+          group={group}
+          groupsService={svc}
+          resolveComponent={(k) => componentMap.get(k)}
+        />
       </ServicesContext.Provider>,
     )
 

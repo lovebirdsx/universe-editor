@@ -94,8 +94,8 @@ interface TabMenuState {
 export interface EditorGroupViewProps {
   group: IEditorGroup
   groupsService: IEditorGroupsService
-  /** Map keyed by IEditorProvider.componentKey. */
-  componentMap: Map<string, ComponentType<{ input: IEditorInput }>>
+  /** Resolves a component by IEditorProvider.componentKey (renderer registry). */
+  resolveComponent: (componentKey: string) => ComponentType<{ input: IEditorInput }> | undefined
   /** Fallback shown when the group has no editors. */
   fallback?: React.ReactNode
 }
@@ -412,7 +412,7 @@ const EditorTab = memo(function EditorTab({
 export const EditorGroupView = memo(function EditorGroupView({
   group,
   groupsService,
-  componentMap,
+  resolveComponent,
   fallback,
 }: EditorGroupViewProps) {
   const groupVersion = useGroupVersion(group)
@@ -765,8 +765,17 @@ export const EditorGroupView = memo(function EditorGroupView({
     if (!provider) {
       return <div className={styles['welcome']}>No editor provider for "{active.typeId}"</div>
     }
-    const Component = componentMap.get(provider.componentKey)
+    const Component = resolveComponent(provider.componentKey)
     if (!Component) {
+      // Defensive: a provider registered without a matching component. With
+      // registerEditorWithComponent this can't happen for built-ins; it only
+      // surfaces if a caller used the low-level EditorRegistry directly and
+      // forgot the component binding.
+      if (import.meta.env.DEV) {
+        console.error(
+          `[EditorGroupView] no component registered for componentKey "${provider.componentKey}" (typeId "${active.typeId}")`,
+        )
+      }
       return <div className={styles['welcome']}>Component "{provider.componentKey}" missing</div>
     }
     // Most editors (FileEditor especially) are built to reuse one instance

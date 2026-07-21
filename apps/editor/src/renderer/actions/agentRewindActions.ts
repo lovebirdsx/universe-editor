@@ -73,7 +73,7 @@ export class RewindAgentSessionAction extends Action2 {
     const notification = accessor.get(INotificationService)
 
     const session = sessions.getById(target.sessionId)
-    if (!session || !session.rewindSupported) return
+    if (!session || !session.rewindSupported.get()) return
     // Capture the turn's text now, before the rewind clears the timeline, so we
     // can backfill it for edit-and-retry.
     const originalText = findMessageText(sessions, target.sessionId, target.messageId)

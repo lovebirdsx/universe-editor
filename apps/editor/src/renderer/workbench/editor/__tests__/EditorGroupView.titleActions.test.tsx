@@ -187,7 +187,7 @@ describe('EditorGroupView — EditorTitle nav icons for ACP session', () => {
       <EditorGroupView
         group={svc.activeGroup}
         groupsService={svc}
-        componentMap={componentMap as never}
+        resolveComponent={((k: string) => (componentMap as Map<string, unknown>).get(k)) as never}
       />,
     )
 
@@ -221,7 +221,7 @@ describe('EditorGroupView — EditorTitle nav icons for ACP session', () => {
       <EditorGroupView
         group={svc.activeGroup}
         groupsService={svc}
-        componentMap={componentMap as never}
+        resolveComponent={((k: string) => (componentMap as Map<string, unknown>).get(k)) as never}
       />,
     )
 
@@ -250,7 +250,7 @@ describe('EditorGroupView — EditorTitle nav icons for ACP session', () => {
       <EditorGroupView
         group={svc.activeGroup}
         groupsService={svc}
-        componentMap={componentMap as never}
+        resolveComponent={((k: string) => (componentMap as Map<string, unknown>).get(k)) as never}
       />,
       {
         configure: (services) => {
@@ -288,7 +288,7 @@ describe('EditorGroupView — EditorTitle nav icons for ACP session', () => {
       <EditorGroupView
         group={svc.activeGroup}
         groupsService={svc}
-        componentMap={componentMap as never}
+        resolveComponent={((k: string) => (componentMap as Map<string, unknown>).get(k)) as never}
       />,
       { strict: true },
     )

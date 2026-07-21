@@ -14,8 +14,10 @@ import {
   Disposable,
   IConfigurationService,
   IUriIdentityService,
+  InstantiationType,
   URI,
   createDecorator,
+  registerSingleton,
 } from '@universe-editor/platform'
 
 const CONFIG_COUNT = 'ai.nes.recentEditsCount'
@@ -122,3 +124,5 @@ export class RecentEditsTracker extends Disposable implements IRecentEditsTracke
     return typeof value === 'number' && value > 0 ? value : DEFAULT_COUNT
   }
 }
+
+registerSingleton(IRecentEditsTracker, RecentEditsTracker, InstantiationType.Eager)

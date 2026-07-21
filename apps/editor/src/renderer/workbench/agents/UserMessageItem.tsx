@@ -103,15 +103,16 @@ export const UserMessageItem = memo(function UserMessageItem({
 })
 
 // Hover-revealed Rewind / Fork affordances on a user turn. Each button is gated
-// on the source session's capability (rewind → claude-code only via
-// `rewindSupported`; fork → the agent advertising `sessionCapabilities.fork` via
-// the `forkSupported` observable); the whole row renders nothing when neither is
+// on the source session's capability (rewind → the agent advertising
+// `_meta['universe-editor/capabilities'].rewind` via the `rewindSupported`
+// observable; fork → the agent advertising `sessionCapabilities.fork` via the
+// `forkSupported` observable); the whole row renders nothing when neither is
 // available. Delegates to the Action2 commands so keybinding/telemetry/confirm
 // stay in one place.
 function UserMessageActions({ session, messageId }: { session: IAcpSession; messageId: string }) {
   const executeCommand = useExecuteCommand()
   const forkSupported = useObservable(session.forkSupported)
-  const rewindSupported = session.rewindSupported
+  const rewindSupported = useObservable(session.rewindSupported)
   if (!rewindSupported && !forkSupported) return null
 
   const arg = { sessionId: session.id, messageId }

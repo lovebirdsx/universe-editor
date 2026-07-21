@@ -50,3 +50,28 @@ export const ACP_META_KEYS = {
   /** tool_call_update _meta carrying per-sub-agent token tally. */
   subagentStats: '_universe/subagentStats',
 } as const
+
+/**
+ * Key under `initialize` → `agentCapabilities._meta` where a fork advertises which
+ * `universe-editor/*` ext-capabilities it implements. Replaces the old hardcoded
+ * `agentId === 'claude-code'|'codex'` white-list: any agent (including user-defined
+ * ones) that declares the capability lights up the affordance. The forks copy this
+ * literal verbatim; the contract test asserts both sides agree.
+ */
+export const ACP_CAPABILITIES_META_KEY = 'universe-editor/capabilities'
+
+/**
+ * Shape of `agentCapabilities._meta['universe-editor/capabilities']`. All fields
+ * optional — an agent that omits `rewind` simply doesn't support rewind.
+ */
+export interface AcpUniverseCapabilities {
+  /**
+   * The agent implements `universe-editor/rewind_session`. `filesRolledBackByAgent`
+   * says whether the agent rolls the working-tree edits back itself (claude:
+   * SDK file-checkpointing) or only truncates history and leaves file rollback to
+   * the client's change tracker (codex).
+   */
+  readonly rewind?: {
+    readonly filesRolledBackByAgent: boolean
+  }
+}

@@ -14,7 +14,7 @@ import {
   type AiResponseChunk,
 } from '@universe-editor/platform'
 import { IAiDebugService } from '../../../shared/ipc/aiDebugService.js'
-import { useService } from '../useService.js'
+import { useEventSubscription, useService } from '../useService.js'
 import { useScrollRestore } from '@universe-editor/workbench-ui'
 import styles from './AiDebugView.module.css'
 
@@ -35,16 +35,18 @@ export function AiDebugView() {
 
   useEffect(() => {
     refresh()
-    const subRecord = service.onDidRecordRequest(() => refresh())
-    const subClear = service.onDidClear(() => {
-      setSelectedId(undefined)
-      refresh()
-    })
-    return () => {
-      subRecord.dispose()
-      subClear.dispose()
-    }
-  }, [service, refresh])
+  }, [refresh])
+
+  useEventSubscription(
+    () => [
+      service.onDidRecordRequest(() => refresh()),
+      service.onDidClear(() => {
+        setSelectedId(undefined)
+        refresh()
+      }),
+    ],
+    [service, refresh],
+  )
 
   return (
     <div className={styles['view']} data-testid="ai-debug-view">
@@ -133,19 +135,18 @@ function RecordDetail({ id }: { id: string }) {
     }
   }, [service, id])
 
-  useEffect(() => {
-    const subChunk = service.onDidReplayChunk((e) => {
-      if (e.replayId !== replayIdRef.current) return
-      setReplayText((prev) => (prev ?? '') + chunkText(e.chunk))
-    })
-    const subEnd = service.onDidReplayEnd(() => {
-      // Keep the accumulated replay text; nothing else to do.
-    })
-    return () => {
-      subChunk.dispose()
-      subEnd.dispose()
-    }
-  }, [service])
+  useEventSubscription(
+    () => [
+      service.onDidReplayChunk((e) => {
+        if (e.replayId !== replayIdRef.current) return
+        setReplayText((prev) => (prev ?? '') + chunkText(e.chunk))
+      }),
+      service.onDidReplayEnd(() => {
+        // Keep the accumulated replay text; nothing else to do.
+      }),
+    ],
+    [service],
+  )
 
   const replay = useCallback(
     (realtime: boolean) => {

@@ -9,6 +9,7 @@
 import {
   Action2,
   IViewsService,
+  KeybindingWeight,
   MenuId,
   localize2,
   type ServicesAccessor,
@@ -16,6 +17,12 @@ import {
 import { IAcpChatWidgetService } from '../services/acp/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
 import { ACP_NAV_WHEN, CATEGORY, resolveNavWidget } from './_agentShared.js'
+
+// The prompt-suggestion popover and in-session find bind keys that would otherwise
+// hit Monaco / global bindings (down/up/tab/enter/escape/f3). Registering them above
+// the default WorkbenchContrib guarantees the scoped binding wins whenever its
+// ContextKey is set, independent of registration order.
+const ACP_SCOPED_KEY_WEIGHT = KeybindingWeight.WorkbenchContrib + 50
 
 // ---------------------------------------------------------------------------
 // Timeline keyboard navigation (Alt+J / Alt+K, vim-style)
@@ -350,9 +357,9 @@ export class SelectNextAcpPromptSuggestionAction extends Action2 {
       title: localize2('action.agent.prompt.selectNextSuggestion', 'Select Next Suggestion'),
       category: CATEGORY,
       keybinding: [
-        { primary: 'down', when: 'acpPromptPopupVisible' },
-        { primary: 'ctrl+n', when: 'acpPromptPopupVisible' },
-        { primary: 'ctrl+j', when: 'acpPromptPopupVisible' },
+        { primary: 'down', when: 'acpPromptPopupVisible', weight: ACP_SCOPED_KEY_WEIGHT },
+        { primary: 'ctrl+n', when: 'acpPromptPopupVisible', weight: ACP_SCOPED_KEY_WEIGHT },
+        { primary: 'ctrl+j', when: 'acpPromptPopupVisible', weight: ACP_SCOPED_KEY_WEIGHT },
       ],
     })
   }
@@ -372,8 +379,8 @@ export class SelectPreviousAcpPromptSuggestionAction extends Action2 {
       ),
       category: CATEGORY,
       keybinding: [
-        { primary: 'up', when: 'acpPromptPopupVisible' },
-        { primary: 'ctrl+p', when: 'acpPromptPopupVisible' },
+        { primary: 'up', when: 'acpPromptPopupVisible', weight: ACP_SCOPED_KEY_WEIGHT },
+        { primary: 'ctrl+p', when: 'acpPromptPopupVisible', weight: ACP_SCOPED_KEY_WEIGHT },
       ],
     })
   }
@@ -390,8 +397,8 @@ export class AcceptAcpPromptSuggestionAction extends Action2 {
       title: localize2('action.agent.prompt.acceptSuggestion', 'Accept Suggestion'),
       category: CATEGORY,
       keybinding: [
-        { primary: 'tab', when: 'acpPromptPopupVisible' },
-        { primary: 'enter', when: 'acpPromptPopupVisible' },
+        { primary: 'tab', when: 'acpPromptPopupVisible', weight: ACP_SCOPED_KEY_WEIGHT },
+        { primary: 'enter', when: 'acpPromptPopupVisible', weight: ACP_SCOPED_KEY_WEIGHT },
       ],
     })
   }
@@ -407,7 +414,9 @@ export class HideAcpPromptSuggestionAction extends Action2 {
       id: HideAcpPromptSuggestionAction.ID,
       title: localize2('action.agent.prompt.hideSuggestion', 'Hide Suggestions'),
       category: CATEGORY,
-      keybinding: [{ primary: 'escape', when: 'acpPromptPopupVisible' }],
+      keybinding: [
+        { primary: 'escape', when: 'acpPromptPopupVisible', weight: ACP_SCOPED_KEY_WEIGHT },
+      ],
     })
   }
   override run(accessor: ServicesAccessor): void {
@@ -431,7 +440,7 @@ export class ChatFindAction extends Action2 {
       title: localize2('action.agent.find', 'Find in Session'),
       category: CATEGORY,
       icon: 'search',
-      keybinding: { primary: 'ctrl+f', when: ACP_NAV_WHEN },
+      keybinding: { primary: 'ctrl+f', when: ACP_NAV_WHEN, weight: ACP_SCOPED_KEY_WEIGHT },
       menu: [
         {
           id: MenuId.EditorTitle,
@@ -455,7 +464,7 @@ export class ChatFindNextAction extends Action2 {
       id: ChatFindNextAction.ID,
       title: localize2('action.agent.findNext', 'Find Next'),
       category: CATEGORY,
-      keybinding: { primary: 'f3', when: 'acpChatFindVisible' },
+      keybinding: { primary: 'f3', when: 'acpChatFindVisible', weight: ACP_SCOPED_KEY_WEIGHT },
     })
   }
   override run(accessor: ServicesAccessor): void {
@@ -470,7 +479,11 @@ export class ChatFindPreviousAction extends Action2 {
       id: ChatFindPreviousAction.ID,
       title: localize2('action.agent.findPrevious', 'Find Previous'),
       category: CATEGORY,
-      keybinding: { primary: 'shift+f3', when: 'acpChatFindVisible' },
+      keybinding: {
+        primary: 'shift+f3',
+        when: 'acpChatFindVisible',
+        weight: ACP_SCOPED_KEY_WEIGHT,
+      },
     })
   }
   override run(accessor: ServicesAccessor): void {
@@ -485,7 +498,7 @@ export class ChatFindCloseAction extends Action2 {
       id: ChatFindCloseAction.ID,
       title: localize2('action.agent.findClose', 'Close Find'),
       category: CATEGORY,
-      keybinding: { primary: 'escape', when: 'acpChatFindVisible' },
+      keybinding: { primary: 'escape', when: 'acpChatFindVisible', weight: ACP_SCOPED_KEY_WEIGHT },
     })
   }
   override run(accessor: ServicesAccessor): void {

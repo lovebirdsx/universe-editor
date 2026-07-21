@@ -440,6 +440,9 @@ importers:
       '@universe-editor/extension-api':
         specifier: workspace:*
         version: link:../../packages/extension-api
+      '@universe-editor/extensions-common':
+        specifier: workspace:*
+        version: link:../../packages/extensions-common
       esbuild:
         specifier: 'catalog:'
         version: 0.25.12
@@ -548,6 +551,9 @@ importers:
       '@universe-editor/extension-api':
         specifier: workspace:*
         version: link:../../packages/extension-api
+      '@universe-editor/extensions-common':
+        specifier: workspace:*
+        version: link:../../packages/extensions-common
       cross-env:
         specifier: 'catalog:'
         version: 7.0.3
@@ -795,6 +801,9 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.17)(happy-dom@17.6.3)
 
   packages/platform:
     devDependencies:

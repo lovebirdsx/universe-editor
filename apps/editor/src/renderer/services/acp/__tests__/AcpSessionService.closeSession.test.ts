@@ -53,6 +53,8 @@ import { AcpSessionService } from '../acpSessionService.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
+import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
+import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
@@ -290,27 +292,36 @@ describe('AcpSessionService — onDidCloseSession', () => {
 
   beforeEach(() => {
     client = new FakeAcpClientService()
+    const notification = new StubNotificationService()
+    const telemetry = new NoopTelemetryService()
+    const history = makeHistory()
+    const agentDefaults = makeAgentDefaults()
     svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       new ConfigurationService(),
-      new StubNotificationService(),
-      { executeCommand: async () => undefined } as never,
-      new NoopTelemetryService(),
+      notification,
+      telemetry,
       new StubPermissionHandler(),
       new StubLoggerService(),
-      makeHistory(),
+      history,
       new FakeStorage(),
-      makeAgentDefaults(),
+      agentDefaults,
       new StubConfigOptionsCache(),
-      new StubSessionChangeTracker(),
-      new StubSessionTitleService(),
       FAKE_URI_IDENTITY,
-      new AcpCompactionStatsService(
-        new FakeStorage(),
-        new NoopTelemetryService(),
-        new StubLoggerService(),
+      new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        new AcpCompactionStatsService(
+          new FakeStorage(),
+          new NoopTelemetryService(),
+          new StubLoggerService(),
+        ),
       ),
     )
   })

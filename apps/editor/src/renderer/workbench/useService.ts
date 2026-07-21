@@ -13,7 +13,7 @@ import {
   useSyncExternalStore,
   type DependencyList,
 } from 'react'
-import type { IDisposable, IObservable } from '@universe-editor/platform'
+import type { Event, IDisposable, IObservable } from '@universe-editor/platform'
 import {
   autorun,
   ICommandService,
@@ -101,6 +101,71 @@ export function useObservable<T>(obs: IObservable<T>): T {
   const getSnapshot = useCallback(() => cacheRef.current!.value, [])
 
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+}
+
+/**
+ * Subscribe to an old-style {@link Event} service signal and derive a value from
+ * it. `getValue` is read once on mount (seeding the initial value) and again on
+ * every event fire; the component re-renders whenever a fire occurs.
+ *
+ * The equivalent of {@link useObservable} for services that expose a plain
+ * `onDid*` Event + imperative getters (the pre-observable pattern) rather than
+ * an IObservable. Use this instead of a hand-rolled `useEffect` + `useState` +
+ * `.dispose()` so the subscription is uniformly `markAsSingleton`-wrapped (the
+ * leak tracker ignores a still-mounted subscription; a real unmount disposes it)
+ * and the boilerplate lives in one place.
+ *
+ * The snapshot is cached in a ref and refreshed only from the subscription, so
+ * `getValue` may return a fresh array/object each call without violating
+ * useSyncExternalStore's stable-reference contract (same guard as
+ * {@link useObservable}). `getValue` should be stable (wrap in `useCallback`).
+ */
+export function useEventValue<T>(event: Event<unknown>, getValue: () => T): T {
+  const cacheRef = useRef<{ event: Event<unknown>; value: T } | null>(null)
+  if (cacheRef.current === null || cacheRef.current.event !== event) {
+    cacheRef.current = { event, value: getValue() }
+  }
+
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      const d = markAsSingleton(
+        event(() => {
+          cacheRef.current = { event, value: getValue() }
+          onStoreChange()
+        }),
+      )
+      return () => d.dispose()
+    },
+    [event, getValue],
+  )
+
+  const getSnapshot = useCallback(() => cacheRef.current!.value, [])
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+}
+
+/**
+ * Subscribe to one or more service {@link Event}s for their side effects (e.g.
+ * re-fetch async data, accumulate streamed chunks) without deriving a snapshot
+ * value. `subscribe` is invoked on mount and whenever `deps` change; it may
+ * return a single Disposable, an array of them, or nothing. The returned
+ * subscriptions are `markAsSingleton`-wrapped and disposed on unmount / deps
+ * change — the uniform replacement for a hand-rolled `useEffect` that opens
+ * `onDid*` subscriptions and tears them down in its cleanup.
+ */
+export function useEventSubscription(
+  subscribe: () => IDisposable | readonly IDisposable[] | void,
+  deps: DependencyList,
+): void {
+  useEffect(() => {
+    const result = subscribe()
+    if (!result) return
+    const subs = Array.isArray(result) ? result : [result as IDisposable]
+    for (const s of subs) markAsSingleton(s)
+    return () => {
+      for (const s of subs) s.dispose()
+    }
+  }, deps)
 }
 
 /**

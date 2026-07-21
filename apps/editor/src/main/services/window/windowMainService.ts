@@ -25,40 +25,17 @@ import {
 } from '@universe-editor/platform'
 import { E2E_PROBE_ARGV_FLAG } from '../../../shared/e2e/contract.js'
 import { PerfMarks } from '../../../shared/perf/marks.js'
-import { bootstrapWindowIpc } from '../../ipc/registerMainServices.js'
 import { APP_PROTOCOL_SCHEME, APP_SHELL_URL } from '../../ipc/resourceProtocol.js'
 import { type IRendererLifecycleService } from '../../../shared/ipc/lifecycleService.js'
-import { MainHostService } from '../host/hostMainService.js'
-import { MainWindowsService } from './windowsMainService.js'
-import { MainLogChannelService } from '../log/mainLogChannelService.js'
-import { LogFilesMainService } from '../log/logFilesMainService.js'
 import { type LogMainService } from '../log/logMainService.js'
-import { MainStorageService } from '../storage/storageMainService.js'
 import { WorkspaceMainService } from '../workspace/workspaceMainService.js'
-import { UserDataMainService } from '../userData/userDataMainService.js'
-import { TerminalMainService } from '../terminal/terminalMainService.js'
-import { FileWatcherMainService } from '../fileWatcher/fileWatcherMainService.js'
-import { ElectronFolderDialog } from '../workspace/electronFolderDialog.js'
-import {
-  applyWindowState,
-  captureWindowState,
-  trackWindowState,
-  type IWindowState,
-} from '../../windowState.js'
+import { applyWindowState, trackWindowState, type IWindowState } from '../../windowState.js'
 import { observeDevToolsState } from '../../devToolsState.js'
 import { getDefaultStorage, workspaceIdFromUri } from '../../storage.js'
-import {
-  serializeWindow,
-  loadWorkspaceGeometry,
-  saveWorkspaceGeometry,
-  WINDOWS_SESSION_STORAGE_KEY,
-  type IPersistedWindow,
-  type IRestoreWindow,
-} from '../../windowsSession.js'
-import type {
-  ApplicationServices,
-  WindowScopedServices,
-} from '../../window/scopedServicesFactory.js'
+import { loadWorkspaceGeometry, type IRestoreWindow } from '../../windowsSession.js'
+import { WindowSessionStore } from './windowSessionStore.js'
+import { createWindowScopedServices } from './windowScopeFactory.js'
+import type { ApplicationServices } from '../../window/scopedServicesFactory.js'
 
 export interface ICreateWindowOptions {
   /** Workspace to restore into this window (session restore). Undefined/null → empty window. */
@@ -113,8 +90,6 @@ export interface WindowMainServiceOptions {
   readonly getConfigDir: () => string
 }
 
-const SESSION_PERSIST_DEBOUNCE_MS = 300
-
 // Upper bound on the renderer's shutdown-veto round-trip. Long enough for a busy
 // but healthy renderer to answer a confirm dialog; short enough that a wedged one
 // can't stall quit indefinitely. On timeout the veto is released (app proceeds).
@@ -132,7 +107,7 @@ export class WindowMainService implements IWindowMainService {
   /** Window ids with a crash-recovery dialog currently showing, so a crash storm
    *  never stacks multiple prompts. Cleared when the dialog resolves. */
   private readonly _crashHandled = new Set<number>()
-  private _sessionPersistTimer: ReturnType<typeof setTimeout> | null = null
+  private readonly _sessionStore = new WindowSessionStore(() => this._windows.values())
   private _hasCreatedFirstWindow = false
 
   private readonly _onDidChangeWindows = new Emitter<void>()
@@ -269,66 +244,24 @@ export class WindowMainService implements IWindowMainService {
     // Per-window services — each window gets its own workspace stack so opening
     // a folder in one window does not affect the others. GLOBAL state (state.json,
     // recent list) stays shared via the app-singleton backends.
-    const disposables = new DisposableStore()
-    const windowStorage = disposables.add(new MainStorageService(getDefaultStorage()))
-    const folderDialog = new ElectronFolderDialog(win)
-    const workspace = disposables.add(
-      new WorkspaceMainService(
-        windowStorage,
-        appServices.recentWorkspaces,
-        folderDialog,
-        logService.createLogger({ id: 'workspace', name: 'Workspace' }),
-        (workspaceId) => this._focusWindowForWorkspace(workspaceId),
-      ),
-    )
-    // Restore the workspace before loadURL so the renderer's getCurrent() at
-    // startup already sees it (and the WORKSPACE scope is bound for editor restore).
-    if (opts?.workspace) {
-      await workspace.restoreCurrent(opts.workspace)
-    }
-    const userData = disposables.add(new UserDataMainService(workspace, this._opts.getConfigDir()))
-    // Hot-reload user settings/keybindings when the config directory changes.
-    disposables.add(
-      appServices.configLocation.onDidChangeConfigDir((dir) => userData.relocate(dir)),
-    )
-    const host = disposables.add(
-      new MainHostService(
+    const { disposables, workspace, windowStorage, rendererLifecycle } =
+      await createWindowScopedServices({
         win,
-        () => {
-          void this.createWindow({})
+        appServices,
+        logService,
+        configDir: this._opts.getConfigDir(),
+        isFirstWindow,
+        ...(opts?.workspace !== undefined ? { restoreWorkspace: opts.workspace } : {}),
+        windowsServiceHost: this,
+        callbacks: {
+          createEmptyWindow: () => {
+            void this.createWindow({})
+          },
+          getRendererLifecycle: (windowId) => this._windows.get(windowId)?.rendererLifecycle,
+          focusWindow: (windowId) => this.focusWindow(windowId),
+          focusWindowForWorkspace: (workspaceId) => this._focusWindowForWorkspace(workspaceId),
         },
-        logService.createLogger({ id: 'host', name: 'Host' }),
-        {
-          getRendererLifecycle: () => this._windows.get(win.id)?.rendererLifecycle,
-        },
-      ),
-    )
-    const logChannel = new MainLogChannelService(logService, win.id)
-    const logFiles = new LogFilesMainService(logService, win.id)
-    const terminal = disposables.add(new TerminalMainService(undefined, logService))
-    const fileWatcher = disposables.add(new FileWatcherMainService(logService))
-    const windowServices: WindowScopedServices = {
-      host,
-      logChannel,
-      logFiles,
-      storage: windowStorage,
-      workspace,
-      userData,
-      terminal,
-      fileWatcher,
-    }
-
-    const windowsService = disposables.add(new MainWindowsService(this, isFirstWindow))
-    const ipc = bootstrapWindowIpc(win, appServices, windowServices, windowsService)
-    disposables.add(ipc.disposable)
-
-    // Register this window with the cross-window session switcher so other
-    // windows' Alt+S can list/reveal its sessions. Unregistered on `closed`.
-    appServices.sessionSwitcher.registerWindow(win.id, {
-      rendererSessions: ipc.rendererSessions,
-      getWorkspaceName: () => workspace.current?.name ?? '',
-      focus: () => this.focusWindow(win.id),
-    })
+      })
 
     // Persist the session whenever this window's workspace or geometry changes.
     disposables.add(
@@ -344,7 +277,7 @@ export class WindowMainService implements IWindowMainService {
       win,
       workspace,
       disposables,
-      rendererLifecycle: ipc.rendererLifecycle,
+      rendererLifecycle,
     }
     this._windows.set(win.id, entry)
     logger.info(`createWindow created id=${win.id}`)
@@ -693,49 +626,17 @@ export class WindowMainService implements IWindowMainService {
 
   private _scheduleSessionPersist(): void {
     if (this._quitting) return
-    if (this._sessionPersistTimer !== null) clearTimeout(this._sessionPersistTimer)
-    this._sessionPersistTimer = setTimeout(() => {
-      this._sessionPersistTimer = null
-      void this._persistSessionNow()
-    }, SESSION_PERSIST_DEBOUNCE_MS)
+    this._sessionStore.schedule()
   }
 
-  private async _persistSessionNow(): Promise<void> {
-    if (this._sessionPersistTimer !== null) {
-      clearTimeout(this._sessionPersistTimer)
-      this._sessionPersistTimer = null
-    }
-    const list: IPersistedWindow[] = []
-    // Per-workspace geometry updates, keyed by workspaceId. Captured alongside
-    // the session list so that reopening a closed workspace (while the app keeps
-    // running) restores its last position/size — the session list only holds
-    // currently-open windows and forgets a closed one.
-    const geometryUpdates: Array<{ workspaceId: string; state: IWindowState }> = []
-    for (const { win, workspace } of this._windows.values()) {
-      if (win.isDestroyed()) continue
-      const state = captureWindowState(win)
-      list.push(serializeWindow(workspace.current, state, win.webContents.isDevToolsOpened()))
-      if (workspace.current) {
-        geometryUpdates.push({
-          workspaceId: workspaceIdFromUri(workspace.current.folder.toString()),
-          state,
-        })
-      }
-    }
-    const storage = getDefaultStorage()
-    await storage.set(WINDOWS_SESSION_STORAGE_KEY, list)
-    for (const { workspaceId, state } of geometryUpdates) {
-      await saveWorkspaceGeometry(storage, workspaceId, state)
-    }
+  private _persistSessionNow(): Promise<void> {
+    return this._sessionStore.persistNow()
   }
 
   dispose(): void {
     const logger = this._opts.logService.createLogger({ id: 'window', name: 'Window' })
     logger.info(`dispose windows=${this._windows.size}`)
-    if (this._sessionPersistTimer !== null) {
-      clearTimeout(this._sessionPersistTimer)
-      this._sessionPersistTimer = null
-    }
+    this._sessionStore.cancel()
     for (const { disposables } of this._windows.values()) {
       disposables.dispose()
     }

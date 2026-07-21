@@ -699,6 +699,7 @@
     "@universe-editor/config-ts": "workspace:*",
     "@universe-editor/e2e-harness": "workspace:*",
     "@universe-editor/extension-api": "workspace:*",
+    "@universe-editor/extensions-common": "workspace:*",
     "@types/node": "catalog:",
     "esbuild": "catalog:",
     "eslint": "catalog:",

@@ -81,8 +81,14 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
     EXPECTED_METHOD_NAMES.rewindSession,
     EXPECTED_METHOD_NAMES.compaction,
     EXPECTED_METHOD_NAMES.sdkMessage,
+    // Both forks advertise universe-editor/* capabilities under the same key.
+    'universe-editor/capabilities',
   ],
-  codex: [EXPECTED_METHOD_NAMES.setSessionTitle, EXPECTED_METHOD_NAMES.rewindSession],
+  codex: [
+    EXPECTED_METHOD_NAMES.setSessionTitle,
+    EXPECTED_METHOD_NAMES.rewindSession,
+    'universe-editor/capabilities',
+  ],
 }
 
 describe('fork dist declares the ext-method wire names the editor expects', () => {
@@ -142,6 +148,16 @@ function handshakeSuite(fork: ForkId) {
         list: {},
         fork: {},
       })
+      // universe-editor/* capability advertisement (replaces the editor's old
+      // agentId white-list). Both forks implement rewind; they differ on whether
+      // the agent rolls files back itself (claude) or leaves it to the client
+      // (codex). The editor reads this exact shape in acpSession.attachConnection.
+      const universeCaps = (
+        init.agentCapabilities?._meta as
+          | { 'universe-editor/capabilities'?: { rewind?: { filesRolledBackByAgent?: boolean } } }
+          | undefined
+      )?.['universe-editor/capabilities']
+      expect(universeCaps?.rewind?.filesRolledBackByAgent).toBe(fork === 'claude')
       expect(init.agentInfo?.name).toContain(fork === 'claude' ? 'claude-agent-acp' : 'codex')
     })
   })

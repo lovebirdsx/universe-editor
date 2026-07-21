@@ -10,6 +10,12 @@
  * spawns `git`. Everything is registered on `context.subscriptions`.
  */
 import { commands, workspace, window, type ExtensionContext } from '@universe-editor/extension-api'
+import type {
+  P4GraphChangeDto,
+  P4GraphLoadResult,
+  P4GraphChangeDetailsDto,
+  P4GraphFileChangeDto,
+} from '@universe-editor/extensions-common'
 import { basename } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { ConcurrencyGate } from './concurrency.js'
@@ -835,21 +841,24 @@ export async function activate(context: ExtensionContext): Promise<void> {
           if (!changes) return null
           const moreAvailable = changes.length > max
           const visible = changes.slice(0, max)
-          const dtos = visible.map((c, i) => ({
-            id: c.id,
-            parents: visible[i + 1] ? [visible[i + 1]!.id] : [],
-            author: c.author,
-            client: c.client,
-            date: c.date,
-            message: c.message,
-          }))
+          const dtos = visible.map(
+            (c, i) =>
+              ({
+                id: c.id,
+                parents: visible[i + 1] ? [visible[i + 1]!.id] : [],
+                author: c.author,
+                client: c.client,
+                date: c.date,
+                message: c.message,
+              }) satisfies P4GraphChangeDto,
+          )
           return {
             changes: dtos,
             head: visible[0]?.id ?? null,
             headClient: target.clientName,
             moreAvailable,
             pendingCount,
-          }
+          } satisfies P4GraphLoadResult
         }),
         commands.registerCommand('perforce-graph.getChangeDetails', async (...args: unknown[]) => {
           const id = args[0] as string
@@ -863,15 +872,18 @@ export async function activate(context: ExtensionContext): Promise<void> {
             client: detail.client,
             date: detail.date,
             body: detail.body,
-            files: detail.files.map((f) => ({
-              status: statusFromAction(f.action),
-              path: displayPath(f.depotFile),
-              oldPath: null,
-              depotFile: f.depotFile,
-              rev: f.rev,
-              localPath: detail.localPaths.get(f.depotFile) ?? null,
-            })),
-          }
+            files: detail.files.map(
+              (f) =>
+                ({
+                  status: statusFromAction(f.action),
+                  path: displayPath(f.depotFile),
+                  oldPath: null,
+                  depotFile: f.depotFile,
+                  rev: f.rev,
+                  localPath: detail.localPaths.get(f.depotFile) ?? null,
+                }) satisfies P4GraphFileChangeDto,
+            ),
+          } satisfies P4GraphChangeDetailsDto
         }),
         commands.registerCommand('perforce-graph.getPendingChanges', async () => {
           const target = graphClient()
@@ -886,7 +898,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
               depotFile: f.depotFile,
               rev: f.rev ?? '',
               localPath: f.localPath,
-            }
+            } satisfies P4GraphFileChangeDto
           })
         }),
         commands.registerCommand('perforce-graph.openFileDiff', async (...args: unknown[]) => {

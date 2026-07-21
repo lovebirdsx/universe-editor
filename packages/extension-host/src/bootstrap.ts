@@ -35,6 +35,7 @@ import {
   type IMainThreadWebviews,
   type IMainThreadWindow,
   type IMainThreadStorage,
+  type IMainThreadExtensions,
   type StdioTransport,
 } from '@universe-editor/extensions-common'
 import { scanExtensions } from './extensionScanner.js'
@@ -115,6 +116,9 @@ const mainThreadStorage = ProxyChannel.toService<IMainThreadStorage>(
 )
 const mainThreadWebviews = ProxyChannel.toService<IMainThreadWebviews>(
   client.getChannel(ExtHostChannels.mainThreadWebviews),
+)
+const mainThreadExtensions = ProxyChannel.toService<IMainThreadExtensions>(
+  client.getChannel(ExtHostChannels.mainThreadExtensions),
 )
 
 // Register channels synchronously so a renderer call that races the async scan
@@ -319,6 +323,7 @@ async function main(): Promise<void> {
       mainThreadStorage,
       mainThreadWebviews,
       globalStorageHome,
+      mainThreadExtensions,
     ),
   )
   console.error('[ext-host] ready')

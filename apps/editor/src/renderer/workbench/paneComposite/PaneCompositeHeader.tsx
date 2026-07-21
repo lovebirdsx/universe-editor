@@ -30,7 +30,7 @@ import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
 import { resolveContainerIconName } from '../icons/resolveContainerIcon.js'
 import { ViewTitleActions } from '../viewContainerHeader/ViewTitleActions.js'
 import { useViewScopedContextKey } from '../viewContainerHeader/useViewScopedContextKey.js'
-import { viewToolbarMap } from '../viewRegistry/viewToolbarMap.js'
+import { ViewToolbarRegistry } from '../../services/views/ViewComponentRegistry.js'
 import styles from './PaneComposite.module.css'
 
 interface Props {
@@ -47,7 +47,7 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
   const viewDescriptors = useViewDescriptors()
   const panelMaximized = useObservable(layoutService.panelMaximized)
   const ctx = useViewScopedContextKey(onlyView?.id)
-  const Custom = onlyView ? viewToolbarMap.get(onlyView.id) : undefined
+  const Custom = onlyView ? ViewToolbarRegistry.get(onlyView.id) : undefined
   const [dropTarget, setDropTarget] = useState<
     { id: string; edge: 'before' | 'after' | 'merge' } | undefined
   >(undefined)

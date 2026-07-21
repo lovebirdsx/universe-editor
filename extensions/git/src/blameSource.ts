@@ -2,10 +2,10 @@
  * Git blame data source. Runs `git blame --incremental` and assembles the JSON
  * the renderer's inline-blame annotations need. Read-only.
  *
- * The returned shape mirrors `BlameResultDto` in
- * `@universe-editor/extensions-common`; it's re-declared locally so this
- * esbuild-bundled extension doesn't pull that package (and its platform dep)
- * into its bundle.
+ * The single source of truth for the returned shape is `BlameResultDto` in
+ * `@universe-editor/extensions-common`; we alias its `BlameInfoDto`/`BlameResultDto`
+ * to the local names via `import type` so this esbuild-bundled extension doesn't
+ * pull that package (and its platform dep) into its bundle.
  *
  * `--incremental` streams one block per commit: a header line
  * `<40-hex-hash> <orig-line> <final-line> <num-lines>`, optional metadata lines
@@ -14,21 +14,11 @@
  * carry an all-zero hash.
  */
 import { relative } from 'node:path'
+import type { BlameInfoDto, BlameResultDto } from '@universe-editor/extensions-common'
 import { gitExec } from './gitService.js'
 
-export interface BlameInfo {
-  hash: string
-  authorName: string
-  authorEmail: string
-  authorDate: number
-  summary: string
-  ranges: { startLine: number; endLine: number }[]
-}
-
-export interface BlameResult {
-  commits: BlameInfo[]
-  uncommittedLines: number[]
-}
+export type BlameInfo = BlameInfoDto
+export type BlameResult = BlameResultDto
 
 type Log = ((msg: string) => void) | undefined
 

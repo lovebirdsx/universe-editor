@@ -123,7 +123,7 @@ describe('EditorGroupView — editor-title overflow menu', () => {
       <EditorGroupView
         group={svc.activeGroup}
         groupsService={svc}
-        componentMap={componentMap as never}
+        resolveComponent={((k: string) => (componentMap as Map<string, unknown>).get(k)) as never}
       />,
     )
     await screen.findByTestId('fake-editor')
@@ -145,7 +145,7 @@ describe('EditorGroupView — editor-title overflow menu', () => {
       <EditorGroupView
         group={svc.activeGroup}
         groupsService={svc}
-        componentMap={componentMap as never}
+        resolveComponent={((k: string) => (componentMap as Map<string, unknown>).get(k)) as never}
       />,
     )
     const overflow = await screen.findByTestId('editor-title-overflow')
@@ -175,7 +175,7 @@ describe('EditorGroupView — group lock indicator', () => {
       <EditorGroupView
         group={svc.activeGroup}
         groupsService={svc}
-        componentMap={componentMap as never}
+        resolveComponent={((k: string) => (componentMap as Map<string, unknown>).get(k)) as never}
       />,
     )
     await screen.findByTestId('fake-editor')
@@ -200,7 +200,7 @@ describe('EditorGroupView — group lock indicator', () => {
       <EditorGroupView
         group={svc.activeGroup}
         groupsService={svc}
-        componentMap={componentMap as never}
+        resolveComponent={((k: string) => (componentMap as Map<string, unknown>).get(k)) as never}
       />,
     )
     const indicator = await screen.findByTestId('editor-group-lock-indicator')

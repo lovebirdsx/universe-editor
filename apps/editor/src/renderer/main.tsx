@@ -17,7 +17,6 @@ import {
   IFileService,
   IFocusableRegistry,
   IFocusStackService,
-  IHistoryService,
   IStatusBarService,
   IViewsService,
   IViewDescriptorService,
@@ -80,7 +79,6 @@ import { RendererLoggerService } from './services/log/rendererLoggerService.js'
 import { CommandService } from './services/command/CommandService.js'
 import { EditorService } from './services/editor/EditorService.js'
 import { EditorGroupsService } from './services/editor/EditorGroupsService.js'
-import { StatusBarService } from './services/statusbar/StatusBarService.js'
 import { ViewsService } from './services/views/ViewsService.js'
 import { ViewDescriptorService } from './services/views/ViewDescriptorService.js'
 import { OutputService } from './services/output/OutputService.js'
@@ -98,7 +96,6 @@ import {
   ViewContainerMemoryService,
 } from './services/focus/ViewContainerMemoryService.js'
 import { FocusStackService } from './services/focus/FocusStackService.js'
-import { HistoryService } from './services/history/HistoryService.js'
 import { RendererWorkspaceService } from './services/workspace/RendererWorkspaceService.js'
 import {
   ExplorerTreeService,
@@ -108,7 +105,6 @@ import {
   ExplorerFileOperationService,
   IExplorerFileOperationService,
 } from './services/explorer/ExplorerFileOperationService.js'
-import { CompareService, ICompareService } from './services/explorer/CompareService.js'
 import { setMonacoLoaderLogger } from './workbench/editor/monaco/MonacoLoader.js'
 import { restoreWorkbenchFocus } from './services/focus/workbenchFocusRestorer.js'
 import {
@@ -125,15 +121,11 @@ import {
 } from './services/editor/ClosedEditorsService.js'
 import { EditorResolverService } from './services/editor/EditorResolverService.js'
 import { initDocRegistry } from './services/editor/docRegistry.js'
-import {
-  ILanguageFeaturesService,
-  LanguageFeaturesService,
-} from './services/languageFeatures/LanguageFeaturesService.js'
+import { ILanguageFeaturesService } from './services/languageFeatures/LanguageFeaturesService.js'
 import {
   IInlineCompletionService,
   InlineCompletionService,
 } from './services/ai/InlineCompletionService.js'
-import { IRecentEditsTracker, RecentEditsTracker } from './services/ai/RecentEditsTracker.js'
 import { IOutlineService, OutlineService } from './services/languageFeatures/OutlineService.js'
 import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
@@ -163,7 +155,6 @@ import {
   IExtensionsWorkbenchService,
 } from './services/extensionsWorkbench/ExtensionsWorkbenchService.js'
 import { IScmService, ScmService } from './services/extensions/ScmService.js'
-import { IWebviewService, WebviewService } from './services/extensions/WebviewService.js'
 import {
   IScmDecorationsService,
   ScmDecorationsService,
@@ -172,7 +163,6 @@ import {
   IDirtyDiffNavigationService,
   DirtyDiffNavigationService,
 } from './services/scm/DirtyDiffNavigationService.js'
-import { IActivityService, ActivityService } from './services/activity/ActivityService.js'
 import {
   IRendererDisposableLeakService,
   RendererDisposableLeakService,
@@ -402,9 +392,13 @@ async function bootstrapWorkbench(): Promise<void> {
     ),
   )
 
-  // Feed all declaratively-registered singletons into the collection. The
-  // `has` guard lets explicitly-set instances win, so this coexists with the
-  // remaining manual wiring during the incremental migration to registerSingleton.
+  // Feed all declaratively-registered singletons into the collection. This is
+  // the default registration path: a service ships a `registerSingleton(...)`
+  // call, gets aggregated by `./services/index.js`, and is resolved lazily here.
+  // The `has` guard lets the explicit `services.set(...)` bootstrap exemptions
+  // above win — those are services that must be constructed at a precise point
+  // in the assembly order (boot-time subscriptions, context-key seeding, polling,
+  // or a fixed dependency ordering the kernel's lazy graph can't express).
   for (const [id, descriptor] of getSingletonServiceDescriptors()) {
     if (!services.has(id)) services.set(id, descriptor)
   }
@@ -435,7 +429,6 @@ async function bootstrapWorkbench(): Promise<void> {
       loggerService.createLogger({ id: 'editor', name: 'Editor' }),
     ),
   )
-  const statusBarService = new StatusBarService()
   const outputService = workbenchStore.add(instantiation.createInstance(OutputService))
   const commandService = new CommandService(
     instantiation,
@@ -446,7 +439,6 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(ICommandService, commandService)
   services.set(IEditorGroupsService, editorGroupsService)
   services.set(IEditorService, editorService)
-  services.set(IStatusBarService, statusBarService)
   services.set(IOutputService, outputService)
 
   outputService.createChannel('All', 'aggregated')
@@ -461,11 +453,6 @@ async function bootstrapWorkbench(): Promise<void> {
   // IEditorGroupsService, all available now.
   const editorResolverService = instantiation.createInstance(EditorResolverService)
   services.set(IEditorResolverService, editorResolverService)
-
-  // Language features facade: mirrors providers (for the Outline view) while
-  // forwarding to Monaco (so built-in F12 / Shift+F12 peek works). No deps.
-  const languageFeaturesService = workbenchStore.add(new LanguageFeaturesService())
-  services.set(ILanguageFeaturesService, languageFeaturesService)
 
   // OutlineService: derives the active editor's symbol tree + cursor symbol from
   // the facade. Needs IEditorService + ILanguageFeaturesService, both set above.
@@ -487,12 +474,6 @@ async function bootstrapWorkbench(): Promise<void> {
   // updates ViewContainerMemory whenever a view-scoped focus is recorded.
   const focusStackService = workbenchStore.add(instantiation.createInstance(FocusStackService))
   services.set(IFocusStackService, focusStackService)
-
-  // HistoryService: bounded back/forward navigation across editors. Records
-  // are pushed by HistoryContribution from Monaco cursor changes; GoBack /
-  // GoForward actions pop entries and reopen + restore selection.
-  const historyService = workbenchStore.add(instantiation.createInstance(HistoryService))
-  services.set(IHistoryService, historyService)
 
   const recentFilesService = workbenchStore.add(instantiation.createInstance(RecentFilesService))
   services.set(IRecentFilesService, recentFilesService)
@@ -533,11 +514,6 @@ async function bootstrapWorkbench(): Promise<void> {
   const undoRedoService = instantiation.createInstance(UndoRedoService)
   services.set(IUndoRedoService, undoRedoService)
 
-  // Tracks the user's recent edits per file; the raw material for Next Edit
-  // Suggestions. Must exist before InlineCompletionService, which injects it.
-  const recentEditsTracker = workbenchStore.add(instantiation.createInstance(RecentEditsTracker))
-  services.set(IRecentEditsTracker, recentEditsTracker)
-
   // Inline (ghost-text) AI completions. Depends on IAiModelService + config/
   // logger from the container, plus INotificationService (registered above).
   const inlineCompletionService = workbenchStore.add(
@@ -555,10 +531,6 @@ async function bootstrapWorkbench(): Promise<void> {
   // the tree + IFileService + IUndoRedoService (all registered above).
   const explorerFileOperationService = instantiation.createInstance(ExplorerFileOperationService)
   services.set(IExplorerFileOperationService, explorerFileOperationService)
-
-  // Remembers the resource picked via "Select for Compare" for a later
-  // "Compare with Selected" (in-memory, mirrors VSCode).
-  services.set(ICompareService, workbenchStore.add(new CompareService()))
 
   // ACP (Agent Client Protocol) services. PathPolicy needs static platform/home
   // args; ClientService brings together host + permission + IFileService +
@@ -603,11 +575,6 @@ async function bootstrapWorkbench(): Promise<void> {
   const scmService = workbenchStore.add(new ScmService())
   services.set(IScmService, scmService)
 
-  // Custom-editor / webview model, shared across both extension host tiers. Set
-  // before ExtensionHostClientService is constructed so it can inject it.
-  const webviewService = workbenchStore.add(new WebviewService())
-  services.set(IWebviewService, webviewService)
-
   // Git status decorations derived from the SCM model; colours Explorer rows and
   // editor tabs by file change state.
   const scmDecorationsService = workbenchStore.add(new ScmDecorationsService(scmService))
@@ -620,11 +587,6 @@ async function bootstrapWorkbench(): Promise<void> {
     IDirtyDiffNavigationService,
     instantiation.createInstance(DirtyDiffNavigationService),
   )
-
-  // Activity Bar badges (unsaved files on Explorer, changed files on SCM).
-  // Pure renderer state, no deps; contributions push counts into it.
-  const activityService = workbenchStore.add(new ActivityService())
-  services.set(IActivityService, activityService)
 
   // Extension enablement (global + workspace scopes). Set before the host client
   // and workbench facade, both of which inject it.
@@ -706,7 +668,7 @@ async function bootstrapWorkbench(): Promise<void> {
     editorService,
     editorGroupsService,
     editorResolverService,
-    statusBarService,
+    statusBarService: instantiation.invokeFunction((a) => a.get(IStatusBarService)),
     workspaceService,
     windowsService: services.get(IWindowsService) as IWindowsService,
     layoutService,
@@ -718,7 +680,7 @@ async function bootstrapWorkbench(): Promise<void> {
     updateService: services.get(IUpdateService) as IUpdateService,
     terminalService: services.get(ITerminalService) as ITerminalService,
     scmService,
-    languageFeaturesService: services.get(ILanguageFeaturesService) as ILanguageFeaturesService,
+    languageFeaturesService: instantiation.invokeFunction((a) => a.get(ILanguageFeaturesService)),
     outlineService,
     aiDebugService: services.get(IAiDebugService) as IAiDebugService,
     timerService: instantiation.invokeFunction((a) => a.get(ITimerService)),

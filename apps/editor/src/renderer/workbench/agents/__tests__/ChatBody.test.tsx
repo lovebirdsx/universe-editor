@@ -126,7 +126,7 @@ function makeSession(
     runningStartedAt: observableValue<number | undefined>('t.rsa', undefined),
     imageSupported: observableValue<boolean>('t.imageSupported', false),
     forkSupported: observableValue<boolean>('t.forkSupported', false),
-    rewindSupported: false,
+    rewindSupported: observableValue<boolean>('t.rewindSupported', false),
     cycleCollapseMode: () => {
       const cur = collapseMode.get()
       const next = cur === 'default' ? 'collapsed' : cur === 'collapsed' ? 'expanded' : 'default'

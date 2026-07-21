@@ -77,6 +77,7 @@ import {
   type IMainThreadAi,
   type IMainThreadStorage,
   type IMainThreadWebviews,
+  type IMainThreadExtensions,
   type IWebviewDiffContextDto,
   type WillSaveReason,
 } from '@universe-editor/extensions-common'
@@ -167,6 +168,7 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _mainThreadStorage?: IMainThreadStorage,
     private readonly _mainThreadWebviews?: IMainThreadWebviews,
     private readonly _globalStorageHome?: string,
+    private readonly _mainThreadExtensions?: IMainThreadExtensions,
   ) {
     this._commands = new ExtensionCommandRegistry(_mainThreadCommands)
     this._languageRegistry = new LanguageProviderRegistry(() => this._languages(), this._documents)
@@ -175,6 +177,9 @@ export class ExtensionService implements IExtensionHostBridge {
       () => this._trusted,
       _mainThreadStorage,
       _globalStorageHome,
+      _mainThreadExtensions
+        ? (report) => _mainThreadExtensions.$onActivationError(report)
+        : undefined,
     )
     if (_mainThreadWebviews) this._webviews = new HostWebviewManager(_mainThreadWebviews)
     installApiBridge(this)

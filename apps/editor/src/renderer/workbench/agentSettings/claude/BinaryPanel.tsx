@@ -16,6 +16,7 @@ import {
   INotificationService,
   Severity,
   localize,
+  markAsSingleton,
 } from '@universe-editor/platform'
 import { Button, Input } from '@universe-editor/workbench-ui'
 import {
@@ -87,7 +88,12 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
       setDownloading(true)
       setDownloadProgress(null)
       progressSubRef.current?.dispose()
-      progressSubRef.current = claudeBinary.onDidChangeProgress((p) => setDownloadProgress(p))
+      // Scoped to this download (disposed in .finally), not the component's
+      // mount — markAsSingleton keeps a mid-download leak snapshot from flagging
+      // it while a real teardown still disposes it.
+      progressSubRef.current = markAsSingleton(
+        claudeBinary.onDidChangeProgress((p) => setDownloadProgress(p)),
+      )
 
       void claudeBinary
         .forceDownload(targetVersion)

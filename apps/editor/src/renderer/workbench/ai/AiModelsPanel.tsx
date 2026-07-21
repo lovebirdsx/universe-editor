@@ -45,7 +45,7 @@ import {
   type AiProviderGroup,
 } from '@universe-editor/platform'
 import { Badge, Button, Checkbox, IconButton, Input } from '@universe-editor/workbench-ui'
-import { useService } from '../useService.js'
+import { useEventSubscription, useService } from '../useService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../../services/editor/openInLockAwareGroup.js'
 import { AddProviderDialog } from './AddProviderDialog.js'
@@ -111,9 +111,9 @@ export function AiModelsPanel() {
 
   useEffect(() => {
     void reload()
-    const d = aiModel.onDidChangeModels(() => void reload())
-    return () => d.dispose()
-  }, [aiModel, reload])
+  }, [reload])
+
+  useEventSubscription(() => aiModel.onDidChangeModels(() => void reload()), [aiModel, reload])
 
   const writeGroups = useCallback(
     async (next: readonly AiProviderGroup[]) => {

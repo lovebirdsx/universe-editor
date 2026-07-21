@@ -14,7 +14,6 @@ import { useService, useObservable } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { useViewDescriptors } from '../dnd/useViewDescriptors.js'
 import { ViewPaneContainer } from '../sidebar/ViewPaneContainer.js'
-import { viewToolbarMap } from '../viewRegistry/viewToolbarMap.js'
 import { ViewComponentRegistry } from '../../services/views/ViewComponentRegistry.js'
 import { PaneCompositeHeader } from './PaneCompositeHeader.js'
 import { TiledViews } from './TiledViews.js'
@@ -72,7 +71,6 @@ export function PaneCompositePart({ part, config }: Props) {
         containerId={activeContainer.id}
         views={views}
         resolve={resolveViewComponent}
-        toolbarMap={viewToolbarMap}
         {...(config.emptyMessage ? { emptyMessage: config.emptyMessage } : {})}
       />
     </div>

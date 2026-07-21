@@ -22,7 +22,7 @@ import {
   dragContainsResources,
   useScrollRestore,
 } from '@universe-editor/workbench-ui'
-import { useService } from '../useService.js'
+import { useEventValue, useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import {
@@ -40,21 +40,23 @@ const SEARCH_DEBOUNCE_MS = 300
 /** The view id — must match the descriptor registered in ExtensionsViewContribution. */
 const VIEW_ID = 'workbench.view.extensions.main'
 
-/** Re-render whenever the workbench facade fires a change. */
-function useWorkbenchTick(service: IExtensionsWorkbenchService): number {
-  const [tick, setTick] = useState(0)
-  useEffect(() => {
-    const sub = service.onDidChange(() => setTick((t) => t + 1))
-    return () => sub.dispose()
-  }, [service])
-  return tick
-}
-
 export function ExtensionsView() {
   const service = useService(IExtensionsWorkbenchService)
   const editorService = useService(IEditorService)
   const notificationService = useService(INotificationService)
-  useWorkbenchTick(service)
+
+  // Re-read the facade's live snapshot whenever it fires onDidChange.
+  const { installed, searching, results } = useEventValue(
+    service.onDidChange,
+    useCallback(
+      () => ({
+        installed: service.getInstalled(),
+        searching: service.searching,
+        results: service.getSearchResults(),
+      }),
+      [service],
+    ),
+  )
 
   const [marketplaceEnabled, setMarketplaceEnabled] = useState(false)
   const [query, setQuery] = useState('')
@@ -149,10 +151,6 @@ export function ExtensionsView() {
     },
     [service, notificationService],
   )
-
-  const installed = service.getInstalled()
-  const searching = service.searching
-  const results = service.getSearchResults()
 
   return (
     <div
@@ -292,6 +290,15 @@ function ExtensionRow({
               {workspaceScoped
                 ? localize('extensions.disabledWorkspace', 'Disabled (Workspace)')
                 : localize('extensions.disabled', 'Disabled')}
+            </span>
+          )}
+          {entry.activationError && (
+            <span
+              className={cx(styles.badge, styles.errorBadge)}
+              title={entry.activationError.stack ?? entry.activationError.message}
+              data-testid="extension-activation-error"
+            >
+              {localize('extensions.activationFailed', 'Activation Failed')}
             </span>
           )}
         </div>

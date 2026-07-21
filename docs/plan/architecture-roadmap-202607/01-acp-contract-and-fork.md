@@ -67,7 +67,7 @@
 
 **验收**：聊天主链路回归能阻塞合并；@p0 套件时长增幅可接受（< 2 分钟量级）。
 
-## 任务 4：ext-method 纳入能力通告，删 agentId 白名单 ⬜（P2，第二批；**前置：任务 1**）
+## 任务 4：ext-method 纳入能力通告，删 agentId 白名单 ✅（P2，第二批；**前置：任务 1**）
 
 **背景**：rewind 支持用 `agentId` 白名单硬编码（`acpSession.ts:270`，注释自认 "Static"），codex "文件回滚在客户端做" 的语义差异编码为 `filesAreClientSide = this.agentId === 'codex'`（`acpSession.ts:716`）——用户自定义 agent 即使实现了 ext-method 也不亮 rewind 入口。
 
@@ -80,7 +80,9 @@
 
 **验收**：产品代码中 rewind 相关的 `=== 'claude-code'|'codex'` 分支清零；契约测试锁住能力通告形状。
 
-## 任务 5：per-agent quirks 表 ⬜（P2，第二批）
+> 已完成（2026-07-21）：新增单一定义 `acpExtMethods.ts` 的 `ACP_CAPABILITIES_META_KEY = 'universe-editor/capabilities'` + `AcpUniverseCapabilities`（`rewind.filesRolledBackByAgent`）。两个 fork 在 `agentCapabilities._meta` 通告该块（claude `filesRolledBackByAgent:true` / codex `false`），`pnpm agent:build` 重建 dist。editor 侧 `rewindSupported` 由静态 getter 改为 `IObservable<boolean>` + 私有 `_filesRolledBackByAgent`，均在 `attachConnection` 的 `initializeResult.then` 里从 `_meta` 解析并 set（与 `forkSupported`/`imageSupported` 同款已验证管线）；`rewindTo` 的 `filesAreClientSide` 改读 `!_filesRolledBackByAgent.get()`；消费端（`UserMessageItem.tsx`/`agentRewindActions.ts`/`acpSessionService.ts`）全改读 observable。契约测试 `acpForkContract.integration.test.ts` 补断言 `_meta['universe-editor/capabilities'].rewind.filesRolledBackByAgent`（claude=true/codex=false）+ dist-scan 加能力键字面量（16 例全绿）。`AcpSession.timeline.test.ts` 新增 4 例能力解析单测（自定义 agent 声明 rewind → `rewindSupported` 点亮 + 文件归属语义）。产品代码 rewind 相关 agentId 分支已清零（保留的 `codex` 分支仅剩成本估算，见任务 5）。
+
+## 任务 5：per-agent quirks 表 ✅（P2，第二批）
 
 **背景**：codex 成本估算是 vendor 逻辑但嵌在 AcpSession 核心（`acpSession.ts:1163,1269`）；`shared/ai/codexPricing.ts` 价格表手工硬编码。
 
@@ -91,6 +93,8 @@
 3. 顺手盘点全仓其余 `=== 'claude-code'|'codex'` 分支（约 8 处），能收进描述符的收进，边缘启动注入类（二进制路径、nodeEntry）保留并注释登记。
 
 **验收**：AcpSession/applyUpdate 主干无 vendor 条件分支；新增第三个 agent 时成本估算差异只需写描述符。
+
+> 已完成（2026-07-21）：新增 `acpAgentCostStrategy.ts`——`AcpAgentCostStrategy` 接口（`fromUsageUpdate` / `fromPromptResponse` 两个钩子）+ `getAgentCostStrategy(agentId)` 查表（当前仅 `codex` 注册，claude 无 strategy = 报告权威成本）。AcpSession 构造时缓存 `_costStrategy`，`usage_update` 与 `_ingestPromptResponse` 两处 `agentId === 'codex'` 分支收拢为 `this._costStrategy?.fromUsageUpdate(...)` / `?.fromPromptResponse(...)`——主干不再有 vendor 条件分支，新增 agent 只需在 strategy 表注册。保留分支及注释登记：`acpAgentRegistry.ts` 的 `nodeEntry`/`MANAGED_BINARY_AGENT_IDS`（边缘启动注入类，二进制路径 + Electron node 入口，非 AcpSession 主干逻辑）。全量 editor 测试 3922 绿。
 
 ---
 

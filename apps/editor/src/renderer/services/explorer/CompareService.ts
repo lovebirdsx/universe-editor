@@ -8,7 +8,9 @@
 import {
   Disposable,
   Emitter,
+  InstantiationType,
   createDecorator,
+  registerSingleton,
   type Event,
   type URI,
 } from '@universe-editor/platform'
@@ -47,3 +49,5 @@ export class CompareService extends Disposable implements ICompareService {
     this._onDidChange.fire()
   }
 }
+
+registerSingleton(ICompareService, CompareService, InstantiationType.Eager)

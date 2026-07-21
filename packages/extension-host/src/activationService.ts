@@ -24,6 +24,14 @@ interface ExtensionModule {
   deactivate?: () => unknown
 }
 
+/** Reported when an extension's `activate` throws, so the renderer can surface it. */
+export interface IActivationErrorReport {
+  readonly extensionId: string
+  readonly displayName?: string
+  readonly message: string
+  readonly stack?: string
+}
+
 export class ExtensionActivationService {
   private readonly _activated = new Map<string, ActivatedExtension>()
   private readonly _activating = new Map<string, Promise<void>>()
@@ -35,6 +43,7 @@ export class ExtensionActivationService {
     private readonly _isTrusted: () => boolean,
     private readonly _storage?: IExtensionStorage,
     private readonly _globalStorageHome?: string,
+    private readonly _onActivationError?: (report: IActivationErrorReport) => void,
   ) {}
 
   /** Activate every extension whose declared events match `event`. */
@@ -109,7 +118,16 @@ export class ExtensionActivationService {
       })
       console.error(`[ext-host] activated ${ext.id}`)
     } catch (err) {
-      console.error(`[ext-host] activate failed ${ext.id}: ${(err as Error).stack ?? String(err)}`)
+      const error = err as Error
+      console.error(`[ext-host] activate failed ${ext.id}: ${error.stack ?? String(err)}`)
+      this._onActivationError?.({
+        extensionId: ext.id,
+        ...(ext.manifest.displayName !== undefined
+          ? { displayName: ext.manifest.displayName }
+          : {}),
+        message: error.message || String(err),
+        ...(error.stack !== undefined ? { stack: error.stack } : {}),
+      })
     }
   }
 

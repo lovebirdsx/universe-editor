@@ -61,6 +61,8 @@ import { AcpSessionService } from '../acpSessionService.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
+import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
+import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
@@ -415,7 +417,6 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     new FakeWorkspaceService(),
     config,
     new StubNotificationService(),
-    { executeCommand: async () => undefined } as never,
     telemetry,
     new StubPermissionHandler(),
     new StubLoggerService(),
@@ -423,13 +424,21 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     new FakeStorage(false),
     agentDefaults,
     configOptionsCache,
-    new StubSessionChangeTracker(),
-    new StubSessionTitleService(),
     FAKE_URI_IDENTITY,
-    new AcpCompactionStatsService(
-      new FakeStorage(),
-      new NoopTelemetryService(),
-      new StubLoggerService(),
+    new AcpAuthGuidanceService(new StubNotificationService(), {
+      executeCommand: async () => undefined,
+    } as never),
+    new AcpSessionFactory(
+      telemetry,
+      history,
+      agentDefaults,
+      new StubSessionChangeTracker(),
+      new StubSessionTitleService(),
+      new AcpCompactionStatsService(
+        new FakeStorage(),
+        new NoopTelemetryService(),
+        new StubLoggerService(),
+      ),
     ),
   )
   return { svc, client, history, agentDefaults, configOptionsCache }

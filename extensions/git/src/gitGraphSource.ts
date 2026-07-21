@@ -3,12 +3,26 @@
  * assembles the JSON the renderer's Git Graph view needs. Read-only: no command
  * here mutates the repository.
  *
- * The returned shapes mirror the `GitGraph*Dto` types in
- * `@universe-editor/extensions-common`; they're re-declared locally so this
- * esbuild-bundled extension doesn't pull that package (and its platform dep)
- * into its bundle.
+ * The single source of truth for these shapes is `@universe-editor/extensions-common`.
+ * We alias its `GitGraph*Dto` types to the local (`Dto`-less) names this file has
+ * always used, importing them as `import type` so this esbuild-bundled extension
+ * doesn't pull that package (and its platform dep) into its bundle — a wire-field
+ * rename in extensions-common then breaks this extension's compile immediately.
  */
 import { basename, join } from 'node:path'
+import type {
+  GitGraphTagDto,
+  GitGraphRemoteDto,
+  GitGraphStashDto,
+  GitGraphWorktreeDto,
+  GitGraphRepoDto,
+  GitGraphCommitDto,
+  GitGraphLoadOptions as GitGraphLoadOptionsDto,
+  GitGraphLoadResult as GitGraphLoadResultDto,
+  GitGraphFileChangeDto,
+  GitGraphCommitDetailsDto,
+  GitGraphFileDiffRequest as GitGraphFileDiffRequestDto,
+} from '@universe-editor/extensions-common'
 import { gitExec } from './gitService.js'
 import { discoverRepos, type DiscoverOptions } from './repoDiscovery.js'
 import { parseWorktrees } from './worktreeParser.js'
@@ -17,93 +31,28 @@ import { norm } from './pathUtil.js'
 /** Field separator inside a record; record separator is NUL (`git -z`). */
 const FIELD = '\x1f'
 
-export interface GitGraphTag {
-  name: string
-  annotated: boolean
-}
+export type GitGraphTag = GitGraphTagDto
+export type GitGraphRemote = GitGraphRemoteDto
+export type GitGraphStash = GitGraphStashDto
+export type GitGraphWorktree = GitGraphWorktreeDto
+export type GitGraphRepo = GitGraphRepoDto
+export type GitGraphCommit = GitGraphCommitDto
 
-export interface GitGraphRemote {
-  name: string
-  remote: string | null
-}
-
-export interface GitGraphStash {
-  selector: string
-  baseHash: string
-}
-
-/** A linked working tree whose HEAD points at a commit. */
-export interface GitGraphWorktree {
-  path: string
-  name: string
-  branch: string | null
-  isCurrent: boolean
-  isMain: boolean
-}
-
-/** A repository the Git Graph view can target (main repo or a submodule). */
-export interface GitGraphRepo {
-  root: string
-  name: string
-}
-
-export interface GitGraphCommit {
-  hash: string
-  parents: string[]
-  author: string
-  email: string
-  date: number
-  message: string
-  heads: string[]
-  tags: GitGraphTag[]
-  remotes: GitGraphRemote[]
-  stash: GitGraphStash | null
-  worktrees: GitGraphWorktree[]
-}
-
-export interface GitGraphLoadOptions {
-  maxCommits?: number
-  order?: 'date' | 'author-date' | 'topo'
-  includeRemotes?: boolean
+/** The wire `GitGraphLoadOptions` plus a host-only field the extension threads
+ *  through to mark the current worktree; never crosses the command boundary. */
+export type GitGraphLoadOptions = GitGraphLoadOptionsDto & {
   /** Absolute path of the open workspace folder, used to mark the current worktree. */
   workspaceRoot?: string
 }
 
-export interface GitGraphLoadResult {
-  commits: GitGraphCommit[]
-  head: string | null
-  headName: string | null
-  moreAvailable: boolean
-  uncommittedChanges: number
-}
+export type GitGraphLoadResult = GitGraphLoadResultDto
+export type GitGraphFileChange = GitGraphFileChangeDto
+export type GitGraphCommitDetails = GitGraphCommitDetailsDto
+export type GitGraphFileDiffRequest = GitGraphFileDiffRequestDto
 
-export interface GitGraphFileChange {
-  status: string
-  path: string
-  oldPath: string | null
-}
-
-export interface GitGraphCommitDetails {
-  hash: string
-  parents: string[]
-  author: string
-  authorEmail: string
-  authorDate: number
-  committer: string
-  committerEmail: string
-  committerDate: number
-  body: string
-  files: GitGraphFileChange[]
-}
-
-export interface GitGraphFileDiffRequest {
-  fromHash: string
-  toHash: string
-  path: string
-  oldPath?: string
-  status: string
-}
-
+/** Git-only: the resolved diff payload the extension returns for a file diff
+ *  request. Not part of the shared wire contract (renderer opens a diff editor
+ *  from it locally), so it stays declared here. */
 export interface GitGraphFileDiffContent {
   title: string
   /** Absolute path on disk, used to derive the diff editor's URI and language. */

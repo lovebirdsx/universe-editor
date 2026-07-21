@@ -20,7 +20,9 @@ import {
   createDecorator,
   Disposable,
   Emitter,
+  InstantiationType,
   observableValue,
+  registerSingleton,
   URI,
   type Event,
   type IObservable,
@@ -262,3 +264,5 @@ export class WebviewService extends Disposable implements IWebviewService {
     super.dispose()
   }
 }
+
+registerSingleton(IWebviewService, WebviewService, InstantiationType.Eager)

@@ -33,7 +33,7 @@ function fakeSession(opts: { rewind?: boolean; fork?: boolean }): IAcpSession {
   return {
     id: 's1',
     agentId: opts.rewind ? 'claude-code' : 'fake',
-    rewindSupported: opts.rewind ?? false,
+    rewindSupported: observableValue<boolean>('t.rewind', opts.rewind ?? false),
     forkSupported: observableValue<boolean>('t.fork', opts.fork ?? false),
   } as unknown as IAcpSession
 }

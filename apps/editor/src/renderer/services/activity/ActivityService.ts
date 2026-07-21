@@ -13,7 +13,9 @@
 import {
   createDecorator,
   Disposable,
+  InstantiationType,
   observableValue,
+  registerSingleton,
   toDisposable,
   type IDisposable,
   type IObservable,
@@ -72,3 +74,5 @@ export class ActivityService extends Disposable implements IActivityService {
     return this._entry(containerId).observable
   }
 }
+
+registerSingleton(IActivityService, ActivityService, InstantiationType.Eager)

@@ -9,6 +9,7 @@
 import {
   Action2,
   IUndoRedoService,
+  KeybindingWeight,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -16,6 +17,10 @@ import { EXPLORER_UNDO_SOURCE } from '../services/explorer/ExplorerFileOperation
 
 const EXPLORER_UNDO_WHEN =
   "focusedView == 'workbench.view.explorer.tree' && !editorTextFocus && !terminalFocus && explorerEnableUndo"
+// Above the default WorkbenchContrib so the scoped Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z
+// beat Monaco's global undo/redo whenever the Explorer tree is focused,
+// regardless of registration order.
+const EXPLORER_UNDO_WEIGHT = KeybindingWeight.WorkbenchContrib + 50
 
 export class UndoExplorerFileOperationAction extends Action2 {
   static readonly ID = 'filesExplorer.undo'
@@ -24,7 +29,7 @@ export class UndoExplorerFileOperationAction extends Action2 {
       id: UndoExplorerFileOperationAction.ID,
       title: localize2('action.filesExplorer.undo', 'Undo'),
       category: localize2('command.category.file', 'File'),
-      keybinding: { primary: 'ctrl+z', when: EXPLORER_UNDO_WHEN },
+      keybinding: { primary: 'ctrl+z', when: EXPLORER_UNDO_WHEN, weight: EXPLORER_UNDO_WEIGHT },
       f1: false,
     })
   }
@@ -44,8 +49,8 @@ export class RedoExplorerFileOperationAction extends Action2 {
       title: localize2('action.filesExplorer.redo', 'Redo'),
       category: localize2('command.category.file', 'File'),
       keybinding: [
-        { primary: 'ctrl+y', when: EXPLORER_UNDO_WHEN },
-        { primary: 'ctrl+shift+z', when: EXPLORER_UNDO_WHEN },
+        { primary: 'ctrl+y', when: EXPLORER_UNDO_WHEN, weight: EXPLORER_UNDO_WEIGHT },
+        { primary: 'ctrl+shift+z', when: EXPLORER_UNDO_WHEN, weight: EXPLORER_UNDO_WEIGHT },
       ],
       f1: false,
     })

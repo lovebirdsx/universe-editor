@@ -34,7 +34,7 @@
   "scripts": {
     "build": "node esbuild.config.mjs",
     "dev": "node esbuild.config.mjs --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node ../../extensions/numbered-bookmarks/node_modules/typescript/bin/tsc --noEmit",
     "e2e": "node ../../scripts/e2e/run-external-e2e.mjs",
     "e2ea": "node ../../scripts/e2e/run-external-e2e.mjs --regression",
     "e2eg": "node ../../scripts/e2e/run-external-e2e.mjs --no-tag-filter --grep",

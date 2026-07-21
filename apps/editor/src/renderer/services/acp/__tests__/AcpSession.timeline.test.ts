@@ -57,6 +57,8 @@ import { AcpSessionService } from '../acpSessionService.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
+import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
+import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
@@ -189,6 +191,7 @@ function makeAgentDefaults(): AcpAgentDefaultsService {
 
 interface StubAgentOptions {
   promptHangs?: boolean
+  agentCapabilities?: Record<string, unknown>
 }
 
 class StubAgent implements Agent {
@@ -200,7 +203,10 @@ class StubAgent implements Agent {
   initialize(_p: InitializeRequest): Promise<InitializeResponse> {
     return Promise.resolve({
       protocolVersion: 1,
-      agentCapabilities: { loadSession: false, promptCapabilities: {} },
+      agentCapabilities: this._opts.agentCapabilities ?? {
+        loadSession: false,
+        promptCapabilities: {},
+      },
       authMethods: [],
     } as unknown as InitializeResponse)
   }
@@ -284,27 +290,36 @@ function makeService(
   config?: IConfigurationService,
   changeTracker: StubSessionChangeTracker = new StubSessionChangeTracker(),
 ): AcpSessionService {
+  const notification = new StubNotificationService()
+  const telemetry = new NoopTelemetryService() as ITelemetryService
+  const history = makeHistory()
+  const agentDefaults = makeAgentDefaults()
   return new AcpSessionService(
     client,
     new FakeAgentRegistry(),
     new FakeWorkspaceService(),
     config ?? new ConfigurationService(),
-    new StubNotificationService(),
-    { executeCommand: async () => undefined } as never,
-    new NoopTelemetryService() as ITelemetryService,
+    notification,
+    telemetry,
     new StubPermissionHandler(),
     new StubLoggerService(),
-    makeHistory(),
+    history,
     new FakeStorage(),
-    makeAgentDefaults(),
+    agentDefaults,
     new StubConfigOptionsCache(),
-    changeTracker,
-    new StubSessionTitleService(),
     FAKE_URI_IDENTITY,
-    new AcpCompactionStatsService(
-      new FakeStorage(),
-      new NoopTelemetryService(),
-      new StubLoggerService(),
+    new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+    new AcpSessionFactory(
+      telemetry,
+      history,
+      agentDefaults,
+      changeTracker,
+      new StubSessionTitleService(),
+      new AcpCompactionStatsService(
+        new FakeStorage(),
+        new NoopTelemetryService(),
+        new StubLoggerService(),
+      ),
     ),
   )
 }
@@ -1312,5 +1327,67 @@ describe('AcpSession.timeline — batched/immediate atomicity', () => {
     expect(slot.call.status).toBe('completed')
     // A settled top-level card records a frozen duration.
     expect(slot.call.durationMs).toBeGreaterThanOrEqual(0)
+  })
+})
+
+describe('AcpSession — universe capabilities from initialize _meta', () => {
+  let svc: AcpSessionService | undefined
+
+  afterEach(() => {
+    svc?.dispose()
+    svc = undefined
+  })
+
+  // The private file-rollback observable drives rewindTo's client-side restore
+  // branch; read it directly rather than widening the public surface for a test.
+  function filesRolledBackByAgent(s: object): boolean {
+    return (s as { _filesRolledBackByAgent: IObservable<boolean> })._filesRolledBackByAgent.get()
+  }
+
+  // The initialize round-trip over the in-memory wire settles a tick after
+  // whenConnected() (which resolves on newSession). Poll the derived observable
+  // rather than racing that microtask.
+  async function connectedSession(caps: Record<string, unknown>) {
+    const client = new FakeAcpClientService({ stubOptions: { agentCapabilities: caps } })
+    svc = makeService(client)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    await new Promise((r) => setTimeout(r, 50))
+    return s
+  }
+
+  it('lights up rewindSupported when the fork advertises a rewind block', async () => {
+    const s = await connectedSession({
+      loadSession: false,
+      promptCapabilities: {},
+      _meta: { 'universe-editor/capabilities': { rewind: { filesRolledBackByAgent: true } } },
+    })
+    expect(s.rewindSupported.get()).toBe(true)
+  })
+
+  it('leaves rewindSupported off when no capability block is present', async () => {
+    const s = await connectedSession({ loadSession: false, promptCapabilities: {} })
+    expect(s.rewindSupported.get()).toBe(false)
+  })
+
+  it('treats a fork that rolls files back itself as agent-side (no client-side rollback)', async () => {
+    const s = await connectedSession({
+      loadSession: false,
+      promptCapabilities: {},
+      _meta: { 'universe-editor/capabilities': { rewind: { filesRolledBackByAgent: true } } },
+    })
+    // rewindTo skips the client-side file restore when the agent owns rollback.
+    expect(s.rewindSupported.get()).toBe(true)
+    expect(filesRolledBackByAgent(s)).toBe(true)
+  })
+
+  it('treats a fork that leaves files untouched as client-side rollback', async () => {
+    const s = await connectedSession({
+      loadSession: false,
+      promptCapabilities: {},
+      _meta: { 'universe-editor/capabilities': { rewind: { filesRolledBackByAgent: false } } },
+    })
+    expect(s.rewindSupported.get()).toBe(true)
+    expect(filesRolledBackByAgent(s)).toBe(false)
   })
 })

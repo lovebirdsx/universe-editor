@@ -19,6 +19,11 @@ import {
   EnablementState,
   type IExtensionEnablementService,
 } from '../../extensions/ExtensionEnablementService.js'
+import { IExtensionHostClientService } from '../../extensions/ExtensionHostClientService.js'
+import type {
+  IExtensionActivationErrorDto,
+  IExtensionDescriptionDto,
+} from '@universe-editor/extensions-common'
 
 function localExtension(overrides: Partial<ILocalExtension> = {}): ILocalExtension {
   return {
@@ -89,6 +94,12 @@ function makeMocks() {
     setEnablement: vi.fn(async () => undefined),
     getEffectiveDisabledIds: vi.fn(async () => [] as string[]),
   } as unknown as IExtensionEnablementService
+  const onDidActivationError = new Emitter<IExtensionActivationErrorDto>()
+  const onDidChangeContributions = new Emitter<readonly IExtensionDescriptionDto[]>()
+  const hostClient = {
+    onDidActivationError: onDidActivationError.event,
+    onDidChangeContributions: onDidChangeContributions.event,
+  } as unknown as IExtensionHostClientService
   return {
     management,
     gallery,
@@ -96,8 +107,11 @@ function makeMocks() {
     storage,
     notification,
     enablement,
+    hostClient,
     onDidChangeExtensions,
     onDidChangeEnablement,
+    onDidActivationError,
+    onDidChangeContributions,
   }
 }
 
@@ -109,6 +123,7 @@ function makeService(mocks: ReturnType<typeof makeMocks>): ExtensionsWorkbenchSe
     mocks.storage,
     mocks.notification,
     mocks.enablement,
+    mocks.hostClient,
   )
 }
 
@@ -316,5 +331,43 @@ describe('ExtensionsWorkbenchService', () => {
       expect.objectContaining({ severity: Severity.Error }),
     )
     expect(mocks.management.getInstalled).toHaveBeenCalled()
+  })
+
+  it('attaches an activation error to the matching installed entry + fires change', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    let ticked = false
+    svc.onDidChange(() => (ticked = true))
+    mocks.onDidActivationError.fire({
+      extensionId: 'acme.installed',
+      displayName: 'Installed',
+      message: 'boom',
+      stack: 'Error: boom\n  at activate',
+    })
+
+    expect(ticked).toBe(true)
+    const entry = svc.getInstalled().find((e) => e.id === 'acme.installed')
+    expect(entry?.activationError).toEqual({
+      message: 'boom',
+      stack: 'Error: boom\n  at activate',
+    })
+  })
+
+  it('clears activation errors when the host relaunches (contributions change)', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    mocks.onDidActivationError.fire({ extensionId: 'acme.installed', message: 'boom' })
+    expect(svc.getInstalled().find((e) => e.id === 'acme.installed')?.activationError).toBeDefined()
+
+    mocks.onDidChangeContributions.fire([])
+    expect(
+      svc.getInstalled().find((e) => e.id === 'acme.installed')?.activationError,
+    ).toBeUndefined()
   })
 })

@@ -72,7 +72,11 @@ function renderTwoGroups(svc: EditorGroupsService) {
       <DragSessionProvider>
         {svc.groups.map((g) => (
           <div key={g.id} data-testid={`group-wrapper-${g.id}`}>
-            <EditorGroupView group={g} groupsService={svc} componentMap={componentMap} />
+            <EditorGroupView
+              group={g}
+              groupsService={svc}
+              resolveComponent={(k) => componentMap.get(k)}
+            />
           </div>
         ))}
       </DragSessionProvider>

@@ -42,6 +42,8 @@ export const ExtHostChannels = {
   extHostCommands: 'extHostCommands',
   /** Renderer → ext host: enumerate contributions, drive activation. */
   extHostExtensions: 'extHostExtensions',
+  /** Ext host → renderer: an extension's `activate` threw — surface it to the user. */
+  mainThreadExtensions: 'mainThreadExtensions',
   /** Ext host → renderer: register/unregister commands an extension created at runtime. */
   mainThreadCommands: 'mainThreadCommands',
   /** Ext host → renderer: `window.*` UI (messages, quick input, status bar). */
@@ -110,6 +112,29 @@ export interface IExtHostExtensions {
    * sent here — it restarts the whole host (activated extensions can't unload).
    */
   $onDidGrantWorkspaceTrust(): Promise<void>
+}
+
+/** An extension's `activate` threw. Reported host → renderer so the failure is
+ *  visible (notification + a per-extension error badge) instead of silent. */
+export interface IExtensionActivationErrorDto {
+  /** The failing extension's id (e.g. `acme.widgets`). */
+  readonly extensionId: string
+  /** The extension's display name if known, for a human-readable message. */
+  readonly displayName?: string
+  /** The error's `message`. */
+  readonly message: string
+  /** The error's `stack` if any (shown in the detail view). */
+  readonly stack?: string
+}
+
+/**
+ * Ext host → exposed to the renderer: activation lifecycle the renderer surfaces
+ * to the user. A failed `activate` is isolated (never tears down the host), but
+ * the user still needs to know their extension has no functionality.
+ */
+export interface IMainThreadExtensions {
+  /** An extension's `activate` threw. Provider → renderer push. */
+  $onActivationError(error: IExtensionActivationErrorDto): void
 }
 
 /**

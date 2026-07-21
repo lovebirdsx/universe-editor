@@ -126,12 +126,12 @@ describe('EditorGroupView — markdown preview EditorTitle buttons survive group
         <EditorGroupView
           group={leftGroup}
           groupsService={svc}
-          componentMap={componentMap as never}
+          resolveComponent={((k: string) => (componentMap as Map<string, unknown>).get(k)) as never}
         />
         <EditorGroupView
           group={rightGroup}
           groupsService={svc}
-          componentMap={componentMap as never}
+          resolveComponent={((k: string) => (componentMap as Map<string, unknown>).get(k)) as never}
         />
       </>,
     )

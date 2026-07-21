@@ -74,7 +74,7 @@ describe('EditorGroupView', () => {
       <EditorGroupView
         group={svc.activeGroup}
         groupsService={svc}
-        componentMap={map as never}
+        resolveComponent={((k: string) => (map as Map<string, unknown>).get(k)) as never}
         fallback={<span>welcome-fallback</span>}
       />,
     )
@@ -86,7 +86,11 @@ describe('EditorGroupView', () => {
     svc.activeGroup.openEditor(new FakeEditor('a'))
     svc.activeGroup.openEditor(new FakeEditor('b'))
     renderWithServices(
-      <EditorGroupView group={svc.activeGroup} groupsService={svc} componentMap={map as never} />,
+      <EditorGroupView
+        group={svc.activeGroup}
+        groupsService={svc}
+        resolveComponent={((k: string) => (map as Map<string, unknown>).get(k)) as never}
+      />,
     )
     expect(screen.getAllByRole('tab').length).toBe(2)
   })
@@ -98,7 +102,11 @@ describe('EditorGroupView', () => {
     svc.activeGroup.openEditor(a)
     svc.activeGroup.openEditor(b)
     renderWithServices(
-      <EditorGroupView group={svc.activeGroup} groupsService={svc} componentMap={map as never} />,
+      <EditorGroupView
+        group={svc.activeGroup}
+        groupsService={svc}
+        resolveComponent={((k: string) => (map as Map<string, unknown>).get(k)) as never}
+      />,
     )
     const tabs = screen.getAllByRole('tab')
     fireEvent.click(tabs[0]!)
@@ -112,7 +120,11 @@ describe('EditorGroupView', () => {
     const onChange = vi.fn()
     svc.onDidActiveGroupChange(onChange)
     const { container } = renderWithServices(
-      <EditorGroupView group={second} groupsService={svc} componentMap={map as never} />,
+      <EditorGroupView
+        group={second}
+        groupsService={svc}
+        resolveComponent={((k: string) => (map as Map<string, unknown>).get(k)) as never}
+      />,
     )
     fireEvent.mouseDown(container.firstElementChild!)
     expect(svc.activeGroup).toBe(second)
@@ -126,7 +138,11 @@ describe('EditorGroupView', () => {
     try {
       svc.activeGroup.openEditor(a)
       renderWithServices(
-        <EditorGroupView group={svc.activeGroup} groupsService={svc} componentMap={map as never} />,
+        <EditorGroupView
+          group={svc.activeGroup}
+          groupsService={svc}
+          resolveComponent={((k: string) => (map as Map<string, unknown>).get(k)) as never}
+        />,
       )
       expect(screen.getByTestId('fake-editor').textContent).toBe('a')
     } finally {

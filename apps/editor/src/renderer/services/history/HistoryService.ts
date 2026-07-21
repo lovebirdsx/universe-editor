@@ -16,9 +16,11 @@
 import {
   Disposable,
   Emitter,
+  IHistoryService,
   IUriIdentityService,
+  InstantiationType,
+  registerSingleton,
   type IHistoryEntry,
-  type IHistoryService,
   type IHistorySelection,
   URI,
 } from '@universe-editor/platform'
@@ -174,3 +176,5 @@ export class HistoryService extends Disposable implements IHistoryService {
 }
 
 export type { IHistorySelection }
+
+registerSingleton(IHistoryService, HistoryService, InstantiationType.Eager)

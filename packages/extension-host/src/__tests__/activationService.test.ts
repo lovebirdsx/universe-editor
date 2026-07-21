@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ExtensionActivationService } from '../activationService.js'
+import type { IActivationErrorReport } from '../activationService.js'
 import type { IScannedExtension } from '../extensionScanner.js'
 
 // An extension module that records its activation by writing to a global the test
@@ -94,6 +95,52 @@ describe('ExtensionActivationService', () => {
     }
     const svc = new ExtensionActivationService([ext], () => true)
     await expect(svc.activateByEvent('onStartupFinished')).resolves.toBeUndefined()
+  })
+
+  it('reports a throwing activate to the error sink', async () => {
+    const badMain = join(dir, 'bad2.mjs')
+    await writeFile(badMain, `export function activate() { throw new Error('boom') }`, 'utf8')
+    const ext: IScannedExtension = {
+      id: 'bad.ext',
+      extensionPath: dir,
+      builtin: false,
+      mainPath: badMain,
+      manifest: {
+        name: 'bad',
+        version: '0.0.0',
+        main: 'bad2.mjs',
+        displayName: 'Bad Extension',
+        engines: { universe: '^0.1.0' },
+        activationEvents: ['*'],
+      },
+    }
+    const reports: IActivationErrorReport[] = []
+    const svc = new ExtensionActivationService(
+      [ext],
+      () => true,
+      undefined,
+      undefined,
+      (r) => reports.push(r),
+    )
+    await svc.activateByEvent('onStartupFinished')
+    expect(reports).toHaveLength(1)
+    expect(reports[0]!.extensionId).toBe('bad.ext')
+    expect(reports[0]!.displayName).toBe('Bad Extension')
+    expect(reports[0]!.message).toBe('boom')
+    expect(reports[0]!.stack).toContain('boom')
+  })
+
+  it('does not report when activate succeeds', async () => {
+    const reports: IActivationErrorReport[] = []
+    const svc = new ExtensionActivationService(
+      [scanned(['*'])],
+      () => true,
+      undefined,
+      undefined,
+      (r) => reports.push(r),
+    )
+    await svc.activateByEvent('onStartupFinished')
+    expect(reports).toHaveLength(0)
   })
 
   it('does not activate a main extension in an untrusted workspace (default gate)', async () => {

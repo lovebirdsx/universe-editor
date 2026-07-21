@@ -17,6 +17,8 @@ import {
   createDecorator,
   Disposable,
   Emitter,
+  InstantiationType,
+  registerSingleton,
   toDisposable,
   type Event,
   type IDisposable,
@@ -490,3 +492,5 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
     })
   }
 }
+
+registerSingleton(ILanguageFeaturesService, LanguageFeaturesService, InstantiationType.Eager)

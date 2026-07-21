@@ -1,82 +1,44 @@
 /**
  * Pure Swarm JSON → domain-model parsers. No I/O — every function takes a raw
  * decoded JSON value and returns a plain object matching the wire DTO shapes in
- * `packages/extensions-common/src/swarm.ts` (the extension keeps local copies of
- * these shapes to avoid bundling that package). Tolerant of missing / differently-
- * shaped fields across Swarm API versions (v9 vs v11): unknown fields are ignored
- * and absent ones fall back to safe defaults, so a schema drift degrades to a
- * partial record rather than a throw. Unit-tested against fixtures.
+ * `@universe-editor/extensions-common` (`packages/extensions-common/src/swarm.ts`),
+ * the single source of truth. The `Dto`-less local names below are `import type`
+ * aliases of those DTOs, so a wire-field rename breaks this parser's compile
+ * immediately while keeping the package out of the esbuild bundle. Tolerant of
+ * missing / differently-shaped fields across Swarm API versions (v9 vs v11):
+ * unknown fields are ignored and absent ones fall back to safe defaults, so a
+ * schema drift degrades to a partial record rather than a throw. Unit-tested
+ * against fixtures.
  */
+import type {
+  SwarmReviewState as SwarmReviewStateDto,
+  SwarmTaskState as SwarmTaskStateDto,
+  SwarmReviewDto,
+  SwarmParticipantDto,
+  SwarmVersionDto,
+  SwarmReviewDetailDto,
+  SwarmTransitionDto,
+  SwarmCommentDto,
+} from '@universe-editor/extensions-common'
 
-export type SwarmReviewState =
-  | 'needsReview'
-  | 'needsRevision'
-  | 'approved'
-  | 'rejected'
-  | 'archived'
+export type SwarmReviewState = SwarmReviewStateDto
 
-export type SwarmTaskState = 'comment' | 'open' | 'addressed' | 'verified'
+export type SwarmTaskState = SwarmTaskStateDto
 
-export interface SwarmReview {
-  id: string
-  state: SwarmReviewState
-  stateLabel: string
-  author: string
-  description: string
-  upVotes: number
-  downVotes: number
-  commentCount: number
-  openTaskCount: number
-  testStatus: 'pass' | 'fail' | 'running' | 'none'
-  updated: number
-}
+export type SwarmReview = SwarmReviewDto
 
-export interface SwarmParticipant {
-  user: string
-  required: boolean
-  vote: number
-}
+export type SwarmParticipant = SwarmParticipantDto
 
-export interface SwarmVersion {
-  version: number
-  change: string
-  archiveChange?: string
-  pending: boolean
-  time: number
-}
+export type SwarmVersion = SwarmVersionDto
 
-export interface SwarmReviewDetail {
-  id: string
-  state: SwarmReviewState
-  stateLabel: string
-  author: string
-  description: string
-  updated: number
-  versions: SwarmVersion[]
-  participants: SwarmParticipant[]
-  commentCount: number
-  openTaskCount: number
-  testStatus: 'pass' | 'fail' | 'running' | 'none'
-}
+/** The parsed review detail *before* the client attaches the legal transitions
+ *  (fetched from a separate endpoint), hence the omit — {@link parseReviewDetail}
+ *  never produces `transitions` itself. */
+export type SwarmReviewDetail = Omit<SwarmReviewDetailDto, 'transitions'>
 
-export interface SwarmTransition {
-  state: string
-  label: string
-}
+export type SwarmTransition = SwarmTransitionDto
 
-export interface SwarmComment {
-  id: string
-  body: string
-  author: string
-  taskState: SwarmTaskState
-  updated: number
-  context?: {
-    file?: string
-    leftLine?: number
-    rightLine?: number
-    version?: number
-  }
-}
+export type SwarmComment = SwarmCommentDto
 
 const REVIEW_STATES: readonly SwarmReviewState[] = [
   'needsReview',

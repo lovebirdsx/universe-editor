@@ -444,12 +444,13 @@ export interface IAcpSession {
    */
   readonly forkSupported: IObservable<boolean>
   /**
-   * Whether this session supports rewind (回退). First release covers
-   * `claude-code` only (the file-checkpointing + `resumeSessionAt` machinery the
-   * `universe-editor/rewind_session` ext-method relies on); other agents degrade
-   * gracefully (the UI hides the affordance). Static per session.
+   * Whether this session supports rewind (回退), read from the agent's advertised
+   * `_meta['universe-editor/capabilities'].rewind` block on `initialize`. Any
+   * agent (including user-defined) that declares it lights up the affordance;
+   * others degrade gracefully (the UI hides it). Arrives async after the
+   * connection attaches; `false` until known.
    */
-  readonly rewindSupported: boolean
+  readonly rewindSupported: IObservable<boolean>
   /**
    * Fires when a prompt (or other agent call) fails because the agent has no
    * usable credentials. The session itself has no access to the notification /

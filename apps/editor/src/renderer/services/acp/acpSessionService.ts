@@ -21,7 +21,6 @@ import {
   Disposable,
   Emitter,
   generateUuid,
-  ICommandService,
   IConfigurationService,
   ILoggerService,
   INotificationService,
@@ -59,16 +58,15 @@ import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { ACP_EXT_METHODS } from './acpExtMethods.js'
 import { isAuthRequiredError } from './acpAuthError.js'
 import { IAcpPermissionHandler } from './acpPermissionHandler.js'
-import { IAcpCompactionStatsService } from './acpCompactionStats.js'
+import { IAcpAuthGuidanceService } from './acpAuthGuidanceService.js'
+import { IAcpSessionFactory } from './acpSessionFactory.js'
 import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
   type SessionHistoryScope,
 } from './acpSessionHistory.js'
-import { IAcpSessionTitleService } from './acpSessionTitleService.js'
 import { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import { IAcpConfigOptionsCacheService } from './acpConfigOptionsCache.js'
-import { ISessionChangeTrackerService } from './sessionChangeTracker.js'
 import { AcpChatViewStateCache } from './acpChatViewStateCache.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import { AcpPromptDraftCache } from './acpPromptDraftCache.js'
@@ -230,9 +228,6 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 60_000
 /** Configuration key controlling which sessions the history list surfaces. */
 const HISTORY_SCOPE_KEY = 'acp.sessions.historyScope'
 
-/** Min gap between auth-required toasts per session, collapsing prompt bursts. */
-const AUTH_NOTIFICATION_COOLDOWN_MS = 10_000
-
 /** ext-notification method the agent fork uses to forward raw Claude SDK messages. */
 const SDK_MESSAGE_EXT_METHOD = ACP_EXT_METHODS.sdkMessage
 
@@ -282,7 +277,6 @@ export class AcpSessionService
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IConfigurationService private readonly _config: IConfigurationService,
     @INotificationService private readonly _notification: INotificationService,
-    @ICommandService private readonly _commands: ICommandService,
     @ITelemetryService private readonly _telemetry: ITelemetryService,
     @IAcpPermissionHandler private readonly _permission: IAcpPermissionHandler,
     @ILoggerService loggerService: ILoggerService,
@@ -291,10 +285,9 @@ export class AcpSessionService
     @IAcpAgentDefaultsService private readonly _agentDefaults: IAcpAgentDefaultsService,
     @IAcpConfigOptionsCacheService
     private readonly _configOptionsCache: IAcpConfigOptionsCacheService,
-    @ISessionChangeTrackerService private readonly _changeTracker: ISessionChangeTrackerService,
-    @IAcpSessionTitleService private readonly _titleService: IAcpSessionTitleService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
-    @IAcpCompactionStatsService private readonly _compactionStats: IAcpCompactionStatsService,
+    @IAcpAuthGuidanceService private readonly _authGuidance: IAcpAuthGuidanceService,
+    @IAcpSessionFactory private readonly _sessionFactory: IAcpSessionFactory,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
@@ -424,20 +417,13 @@ export class AcpSessionService
     // ACP handshake + session/new run in the background; the user's prompts are
     // queued by AcpSession until attachConnection lands. This is what makes "new
     // session" feel instant instead of blocking for 1-5s on the handshake.
-    const session = new AcpSession(
-      generateUuid(),
-      resolvedAgentId,
+    const session = this._sessionFactory.create({
+      id: generateUuid(),
+      agentId: resolvedAgentId,
       title,
-      this._telemetry,
-      undefined,
-      initialCollapseMode,
-      this._history,
-      this._agentDefaults,
-      this._changeTracker,
-      this._titleService,
-      false,
-      this._compactionStats,
-    )
+      collapseMode: initialCollapseMode,
+      withTitleService: true,
+    })
     this._register(session)
     this._wireAuthGuidance(session)
     this._wireConfigOptionsCache(session)
@@ -535,21 +521,7 @@ export class AcpSessionService
       if (isAuthRequiredError(err)) {
         // No usable credentials yet — point the user straight at the
         // Authentication panel instead of a dead-end error toast.
-        this._notification.notify({
-          severity: Severity.Warning,
-          message: localize(
-            'acp.session.authRequired',
-            'This agent needs authentication before it can start.',
-          ),
-          actions: [
-            {
-              label: localize('acp.session.openAuth', 'Open Agent Settings'),
-              run: () => {
-                void this._commands.executeCommand('workbench.action.agent.openSettings')
-              },
-            },
-          ],
-        })
+        this._authGuidance.promptSessionStartAuth()
       } else {
         this._notification.notify({
           severity: Severity.Error,
@@ -700,27 +672,22 @@ export class AcpSessionService
       // session. Resumed sessions are keyed by the agent-issued id (id ===
       // sessionIdOnAgent) — they are durable and already known. attachConnection
       // (below) sets sessionIdOnAgent so routing works during the load replay.
-      session = new AcpSession(
-        entry.sessionIdOnAgent,
-        entry.agentId,
+      session = this._sessionFactory.create({
+        id: entry.sessionIdOnAgent,
+        agentId: entry.agentId,
         title,
-        this._telemetry,
-        {
+        initState: {
           ...(entry.usage ? { usage: entry.usage } : {}),
           ...(entry.accumulatedRunningMs
             ? { accumulatedRunningMs: entry.accumulatedRunningMs }
             : {}),
         },
-        entry.collapseMode ?? 'default',
-        this._history,
-        this._agentDefaults,
-        this._changeTracker,
+        collapseMode: entry.collapseMode ?? 'default',
         // No title service on resume: restored sessions already carry a durable
         // title, so we must not regenerate (and overwrite) it on the next turn.
-        undefined,
+        withTitleService: false,
         readOnly,
-        this._compactionStats,
-      )
+      })
       session.attachConnection(conn, entry.sessionIdOnAgent)
       this._register(session)
       this._wireAuthGuidance(session)
@@ -796,35 +763,11 @@ export class AcpSessionService
    * notification routing the user to the Authentication settings. The agent only
    * raises authRequired once the first prompt is sent (session creation itself
    * succeeds), so this is the path that catches an unconfigured agent in practice.
-   * A short cooldown collapses bursts (concurrent prompts) into one toast.
+   * The cooldown that collapses bursts lives in IAcpAuthGuidanceService.
    */
   private _wireAuthGuidance(session: IAcpSession): void {
-    let lastShownAt = 0
-    this._register(
-      session.onDidRequireAuth(() => {
-        const now = Date.now()
-        if (now - lastShownAt < AUTH_NOTIFICATION_COOLDOWN_MS) return
-        lastShownAt = now
-        this._notification.notify({
-          severity: Severity.Warning,
-          message: localize(
-            'acp.session.authRequired',
-            'This agent needs authentication before it can respond.',
-          ),
-          actions: [
-            {
-              label: localize('acp.session.openAuth', 'Open Agent Settings'),
-              run: () => {
-                void this._commands.executeCommand(
-                  'workbench.action.agent.openSettings',
-                  session.agentId,
-                )
-              },
-            },
-          ],
-        })
-      }),
-    )
+    const prompt = this._authGuidance.createSessionAuthPrompt(session.agentId)
+    this._register(session.onDidRequireAuth(prompt))
   }
 
   /**
@@ -1002,7 +945,7 @@ export class AcpSessionService
     options?: { dryRun?: boolean; rewindFiles?: boolean },
   ): Promise<RewindFilesResult | undefined> {
     const session = this._findSession(sessionId)
-    if (!session || session.status.get() === 'closed' || !session.rewindSupported) {
+    if (!session || session.status.get() === 'closed' || !session.rewindSupported.get()) {
       return Promise.resolve(undefined)
     }
     return session.rewindTo(messageId, options ?? {})

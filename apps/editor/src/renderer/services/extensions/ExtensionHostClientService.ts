@@ -33,6 +33,7 @@ import {
   IWorkspaceService,
   IWorkspaceTrustManagementService,
   Severity,
+  localize,
   type Event,
   type ILogger,
 } from '@universe-editor/platform'
@@ -42,6 +43,7 @@ import {
   type IExtHostDocuments,
   type IExtHostLanguages,
   type IExtensionDescriptionDto,
+  type IExtensionActivationErrorDto,
 } from '@universe-editor/extensions-common'
 import {
   IExtensionHostService,
@@ -70,6 +72,12 @@ export interface IExtensionHostClientService {
    * raced the initial boot's one-shot translation.
    */
   readonly onDidChangeContributions: Event<readonly IExtensionDescriptionDto[]>
+  /**
+   * Fires when an extension's `activate` throws in the host. The host isolates the
+   * failure (it never tears down), so this is the only signal the renderer gets to
+   * surface a silently non-functional extension.
+   */
+  readonly onDidActivationError: Event<IExtensionActivationErrorDto>
   /** Activate every extension whose activationEvents match `event`. */
   activateByEvent(event: string): Promise<void>
   /**
@@ -128,6 +136,10 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     new Emitter<readonly IExtensionDescriptionDto[]>(),
   )
   readonly onDidChangeContributions = this._onDidChangeContributions.event
+  private readonly _onDidActivationError = this._register(
+    new Emitter<IExtensionActivationErrorDto>(),
+  )
+  readonly onDidActivationError = this._onDidActivationError.event
   /** Handles we asked to stop (planned restarts) — their exit must not trigger crash handling. */
   private readonly _stopping = new Set<string>()
   private readonly _restartState: RestartState = { windowStart: 0, count: 0 }
@@ -259,6 +271,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
         claim: (id) => this._claimCommand(id),
         release: (id) => this._commandOwner.delete(id),
       },
+      onActivationError: (error) => this._onActivationErrorReported(error),
     }
 
     const connection = this._register(new HostConnection('local', handle, workspaceRoot, deps))
@@ -305,6 +318,25 @@ export class ExtensionHostClientService extends Disposable implements IExtension
 
   private _claimCommand(id: string): void {
     if (this._conn) this._commandOwner.set(id, this._conn)
+  }
+
+  /**
+   * An extension's `activate` threw in the host. Fire the event (Extensions view
+   * badges the offending row) and raise a notification so the failure is visible
+   * instead of the extension silently having no effect.
+   */
+  private _onActivationErrorReported(error: IExtensionActivationErrorDto): void {
+    this._logger.warn(`extension activation failed ${error.extensionId}: ${error.message}`)
+    this._onDidActivationError.fire(error)
+    const name = error.displayName ?? error.extensionId
+    this._notification.notify({
+      severity: Severity.Error,
+      message: localize(
+        'extensions.activation.failed',
+        'Extension "{name}" failed to activate: {error}',
+        { name, error: error.message },
+      ),
+    })
   }
 
   async getContributions(): Promise<IExtensionDescriptionDto[]> {

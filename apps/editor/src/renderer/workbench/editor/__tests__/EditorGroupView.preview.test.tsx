@@ -68,7 +68,11 @@ describe('EditorGroupView — preview tab', () => {
     const a = new FakeEditor('a')
     svc.activeGroup.openEditor(a, { pinned: false })
     renderWithServices(
-      <EditorGroupView group={svc.activeGroup} groupsService={svc} componentMap={map as never} />,
+      <EditorGroupView
+        group={svc.activeGroup}
+        groupsService={svc}
+        resolveComponent={((k: string) => (map as Map<string, unknown>).get(k)) as never}
+      />,
     )
     const tab = screen.getByRole('tab')
     expect(tab.className).toMatch(/preview/)
@@ -79,7 +83,11 @@ describe('EditorGroupView — preview tab', () => {
     const a = new FakeEditor('a')
     svc.activeGroup.openEditor(a, { pinned: false })
     renderWithServices(
-      <EditorGroupView group={svc.activeGroup} groupsService={svc} componentMap={map as never} />,
+      <EditorGroupView
+        group={svc.activeGroup}
+        groupsService={svc}
+        resolveComponent={((k: string) => (map as Map<string, unknown>).get(k)) as never}
+      />,
     )
     expect(svc.activeGroup.previewEditor).toBe(a)
     const tab = screen.getByRole('tab')
@@ -92,7 +100,11 @@ describe('EditorGroupView — preview tab', () => {
     const a = new FakeEditor('a')
     svc.activeGroup.openEditor(a, { pinned: false })
     renderWithServices(
-      <EditorGroupView group={svc.activeGroup} groupsService={svc} componentMap={map as never} />,
+      <EditorGroupView
+        group={svc.activeGroup}
+        groupsService={svc}
+        resolveComponent={((k: string) => (map as Map<string, unknown>).get(k)) as never}
+      />,
     )
     expect(svc.activeGroup.count).toBe(1)
     fireEvent.click(screen.getByLabelText('Close a'))
@@ -105,7 +117,11 @@ describe('EditorGroupView — preview tab', () => {
     const a = new FakeEditor('a')
     svc.activeGroup.openEditor(a, { pinned: true })
     renderWithServices(
-      <EditorGroupView group={svc.activeGroup} groupsService={svc} componentMap={map as never} />,
+      <EditorGroupView
+        group={svc.activeGroup}
+        groupsService={svc}
+        resolveComponent={((k: string) => (map as Map<string, unknown>).get(k)) as never}
+      />,
     )
     expect(svc.activeGroup.count).toBe(1)
     fireEvent(screen.getByRole('tab'), new MouseEvent('auxclick', { bubbles: true, button: 1 }))
@@ -117,7 +133,11 @@ describe('EditorGroupView — preview tab', () => {
     const a = new FakeEditor('a')
     svc.activeGroup.openEditor(a, { pinned: true })
     renderWithServices(
-      <EditorGroupView group={svc.activeGroup} groupsService={svc} componentMap={map as never} />,
+      <EditorGroupView
+        group={svc.activeGroup}
+        groupsService={svc}
+        resolveComponent={((k: string) => (map as Map<string, unknown>).get(k)) as never}
+      />,
     )
     fireEvent(screen.getByRole('tab'), new MouseEvent('auxclick', { bubbles: true, button: 2 }))
     expect(svc.activeGroup.count).toBe(1)

@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  SearchViewToolbar — the Search view's title-bar actions, rendered in the
- *  SideBar header (single-view container) via viewToolbarMap. Mirrors VSCode's
+ *  SideBar header (single-view container) via the view toolbar registry. Mirrors VSCode's
  *  search title actions: refresh, clear results, collapse all, and a list/tree
  *  view-mode toggle. State is shared with the view body through searchViewState.
  *--------------------------------------------------------------------------------------------*/

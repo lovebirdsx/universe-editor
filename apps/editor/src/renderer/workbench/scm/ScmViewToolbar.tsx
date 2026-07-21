@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  ScmViewToolbar — the Source Control view's title-bar actions, rendered in the
- *  SideBar header (single-view container) via viewToolbarMap. With more than one
+ *  SideBar header (single-view container) via the view toolbar registry. With more than one
  *  repo it leads with a compact repo selector (the view shows one repo at a
  *  time); the navigation icons and `…` overflow always target the selected repo.
  *--------------------------------------------------------------------------------------------*/

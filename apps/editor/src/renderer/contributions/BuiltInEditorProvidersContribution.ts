@@ -2,20 +2,20 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  BuiltInEditorProvidersContribution — BlockStartup phase.
  *
- *  Registers all built-in EditorInput providers with EditorRegistry synchronously,
- *  before WorkspaceRestoreContribution (BlockRestore) calls _restore().
+ *  Registers all built-in editors (provider descriptor + React component) with a
+ *  single `registerEditorWithComponent` call each, synchronously, before
+ *  WorkspaceRestoreContribution (BlockRestore) calls _restore().
  *
- *  Why this must be BlockStartup, not module-level in EditorArea.tsx:
- *    EditorArea.tsx is part of the Workbench dynamic chunk loaded via
- *    `await import('./workbench/Workbench.js')` in main.tsx, which happens
- *    AFTER lifecycle.setPhase(LifecyclePhase.Ready). The storage.get() IPC call
- *    in WorkspaceRestoreContribution._restore() resolves faster than the Workbench
- *    chunk loads, so any provider registered only in EditorArea.tsx arrives too
- *    late for deserialisation. BlockStartup contributions run synchronously as
- *    part of setPhase(Ready), before BlockRestore contributions are constructed.
+ *  Why BlockStartup: the storage.get() IPC in WorkspaceRestoreContribution
+ *  ._restore() resolves faster than a lazily-imported chunk would load, so a
+ *  provider registered later arrives too late for deserialisation. BlockStartup
+ *  contributions run synchronously as part of setPhase(Ready). React components
+ *  are imported eagerly here (as BuiltInViewsContribution already does for
+ *  views) — they land in the same bundle chunk, so there is no timing gap.
  *--------------------------------------------------------------------------------------------*/
 
-import { Disposable, EditorRegistry, type IWorkbenchContribution } from '@universe-editor/platform'
+import { Disposable, type IWorkbenchContribution } from '@universe-editor/platform'
+import { registerEditorWithComponent } from '../services/editor/EditorComponentRegistry.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { MergeEditorInput } from '../services/editor/MergeEditorInput.js'
 import { DocEditorInput } from '../services/editor/DocEditorInput.js'
@@ -38,6 +38,30 @@ import { GitGraphEditorInput } from '../services/editor/GitGraphEditorInput.js'
 import { PerforceGraphEditorInput } from '../services/editor/PerforceGraphEditorInput.js'
 import { SwarmReviewEditorInput } from '../services/editor/SwarmReviewEditorInput.js'
 import { SwarmDiffEditorInput } from '../services/editor/SwarmDiffEditorInput.js'
+import { type EditorComponent } from '../services/editor/EditorComponentRegistry.js'
+import { SettingsEditor } from '../workbench/preferences/SettingsEditor.js'
+import { AiSettingsEditor } from '../workbench/ai/AiSettingsEditor.js'
+import { KeybindingsEditor } from '../workbench/keybindings/KeybindingsEditor.js'
+import { WelcomeEditor } from '../workbench/editor/WelcomeEditor.js'
+import { FileEditor } from '../workbench/editor/FileEditor.js'
+import { DiffEditor } from '../workbench/editor/DiffEditor.js'
+import { MergeEditor } from '../workbench/editor/MergeEditor.js'
+import { MarkdownPreviewEditor } from '../workbench/editor/MarkdownPreviewEditor.js'
+import { ImageEditor } from '../workbench/editor/ImageEditor.js'
+import { ReleaseNotesEditor } from '../workbench/editor/ReleaseNotesEditor.js'
+import { StartupPerformanceEditor } from '../workbench/editor/StartupPerformanceEditor.js'
+import { DocEditor } from '../workbench/editor/DocEditor.js'
+import { TerminalEditorView } from '../workbench/editor/TerminalEditorView.js'
+import { GitGraphEditor } from '../workbench/gitGraph/GitGraphEditor.js'
+import { PerforceGraphEditor } from '../workbench/perforceGraph/PerforceGraphEditor.js'
+import { SwarmReviewEditor } from '../workbench/swarm/SwarmReviewEditor.js'
+import { SwarmDiffEditor } from '../workbench/swarm/SwarmDiffEditor.js'
+import { ExtensionEditor } from '../workbench/extensions/ExtensionEditor.js'
+import { CustomEditorHost } from '../workbench/editor/CustomEditorHost.js'
+
+/** Some editors typed with their own input carry a stricter prop than the
+ * registry's `{ input: IEditorInput }`; cast at the binding site. */
+const asEditor = (c: unknown): EditorComponent => c as EditorComponent
 
 export class BuiltInEditorProvidersContribution
   extends Disposable
@@ -46,159 +70,184 @@ export class BuiltInEditorProvidersContribution
   constructor() {
     super()
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: WelcomeEditorInput.TYPE_ID,
-        componentKey: 'welcome',
-        deserialize: () => WelcomeEditorInput.deserialize(),
-      }),
+      registerEditorWithComponent(
+        { typeId: WelcomeEditorInput.TYPE_ID, deserialize: () => WelcomeEditorInput.deserialize() },
+        WelcomeEditor,
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: SettingsEditorInput.TYPE_ID,
-        componentKey: 'settings',
-        deserialize: () => SettingsEditorInput.deserialize(),
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: SettingsEditorInput.TYPE_ID,
+          deserialize: () => SettingsEditorInput.deserialize(),
+        },
+        asEditor(SettingsEditor),
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: AiSettingsEditorInput.TYPE_ID,
-        componentKey: 'aiSettings',
-        deserialize: () => AiSettingsEditorInput.deserialize(),
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: AiSettingsEditorInput.TYPE_ID,
+          deserialize: () => AiSettingsEditorInput.deserialize(),
+        },
+        asEditor(AiSettingsEditor),
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: ExtensionEditorInput.TYPE_ID,
-        componentKey: 'extensionDetail',
-        deserialize: (data) => ExtensionEditorInput.deserialize(data as string),
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: ExtensionEditorInput.TYPE_ID,
+          deserialize: (data) => ExtensionEditorInput.deserialize(data as string),
+        },
+        ExtensionEditor,
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: CustomEditorInput.TYPE_ID,
-        componentKey: 'customEditor',
-        deserialize: (data) => CustomEditorInput.deserialize(data),
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: CustomEditorInput.TYPE_ID,
+          deserialize: (data) => CustomEditorInput.deserialize(data),
+        },
+        CustomEditorHost,
+      ),
     )
     // Transient like DiffEditorInput — holds the two sides' bytes in memory (a
     // Git HEAD blob / Perforce have-revision has no on-disk file), so no
-    // deserialize: a webview diff tab is dropped on window restore.
+    // deserialize: a webview diff tab is dropped on window restore. Shares the
+    // CustomEditorHost component with customEditor.
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: WebviewDiffInput.TYPE_ID,
-        componentKey: 'webviewDiff',
-      }),
+      registerEditorWithComponent(
+        { typeId: WebviewDiffInput.TYPE_ID, componentKey: 'customEditor' },
+        CustomEditorHost,
+      ),
     )
     // Transient read-only schema viewer — no deserialize: it carries in-memory
     // schema text that isn't persisted, so a restored window simply drops it.
+    // Rendered by the file editor.
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: SchemaViewerInput.TYPE_ID,
-        componentKey: 'file',
-      }),
+      registerEditorWithComponent(
+        { typeId: SchemaViewerInput.TYPE_ID, componentKey: 'file' },
+        FileEditor,
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: KeybindingsEditorInput.TYPE_ID,
-        componentKey: 'keybindings',
-        deserialize: () => KeybindingsEditorInput.deserialize(),
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: KeybindingsEditorInput.TYPE_ID,
+          deserialize: () => KeybindingsEditorInput.deserialize(),
+        },
+        asEditor(KeybindingsEditor),
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: FileEditorInput.TYPE_ID,
-        componentKey: 'file',
-        deserialize: (data, accessor) => FileEditorInput.deserialize(data, accessor),
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: FileEditorInput.TYPE_ID,
+          deserialize: (data, accessor) => FileEditorInput.deserialize(data, accessor),
+        },
+        FileEditor,
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: UntitledEditorInput.TYPE_ID,
-        componentKey: 'file',
-        deserialize: (data) => UntitledEditorInput.deserialize(data),
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: UntitledEditorInput.TYPE_ID,
+          componentKey: 'file',
+          deserialize: (data) => UntitledEditorInput.deserialize(data),
+        },
+        FileEditor,
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: DiffEditorInput.TYPE_ID,
-        componentKey: 'diff',
-        deserialize: (data) => DiffEditorInput.deserialize(data),
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: DiffEditorInput.TYPE_ID,
+          deserialize: (data) => DiffEditorInput.deserialize(data),
+        },
+        DiffEditor,
+      ),
+    )
+    this._register(registerEditorWithComponent({ typeId: MergeEditorInput.TYPE_ID }, MergeEditor))
+    this._register(
+      registerEditorWithComponent(
+        {
+          typeId: MarkdownPreviewInput.TYPE_ID,
+          deserialize: (data) => MarkdownPreviewInput.deserialize(data),
+        },
+        MarkdownPreviewEditor,
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: MergeEditorInput.TYPE_ID,
-        componentKey: 'merge',
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: ImageEditorInput.TYPE_ID,
+          deserialize: (data) => ImageEditorInput.deserialize(data),
+        },
+        ImageEditor,
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: MarkdownPreviewInput.TYPE_ID,
-        componentKey: 'markdown.preview',
-        deserialize: (data) => MarkdownPreviewInput.deserialize(data),
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: ReleaseNotesInput.TYPE_ID,
+          deserialize: (data) => ReleaseNotesInput.deserialize(data),
+        },
+        ReleaseNotesEditor,
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: ImageEditorInput.TYPE_ID,
-        componentKey: 'image',
-        deserialize: (data) => ImageEditorInput.deserialize(data),
-      }),
+      registerEditorWithComponent(
+        { typeId: DocEditorInput.TYPE_ID, deserialize: (data) => DocEditorInput.deserialize(data) },
+        DocEditor,
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: ReleaseNotesInput.TYPE_ID,
-        componentKey: 'releaseNotes',
-        deserialize: (data) => ReleaseNotesInput.deserialize(data),
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: StartupPerformanceInput.TYPE_ID,
+          deserialize: () => StartupPerformanceInput.deserialize(),
+        },
+        StartupPerformanceEditor,
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: DocEditorInput.TYPE_ID,
-        componentKey: 'doc',
-        deserialize: (data) => DocEditorInput.deserialize(data),
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: TerminalEditorInput.TYPE_ID,
+          deserialize: (data, accessor) => TerminalEditorInput.deserialize(data, accessor),
+        },
+        asEditor(TerminalEditorView),
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: StartupPerformanceInput.TYPE_ID,
-        componentKey: 'startupPerformance',
-        deserialize: () => StartupPerformanceInput.deserialize(),
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: GitGraphEditorInput.TYPE_ID,
+          deserialize: () => GitGraphEditorInput.deserialize(),
+        },
+        GitGraphEditor,
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: TerminalEditorInput.TYPE_ID,
-        componentKey: 'terminal.editor',
-        deserialize: (data, accessor) => TerminalEditorInput.deserialize(data, accessor),
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: PerforceGraphEditorInput.TYPE_ID,
+          deserialize: () => PerforceGraphEditorInput.deserialize(),
+        },
+        PerforceGraphEditor,
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: GitGraphEditorInput.TYPE_ID,
-        componentKey: 'gitGraph',
-        deserialize: () => GitGraphEditorInput.deserialize(),
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: SwarmReviewEditorInput.TYPE_ID,
+          deserialize: (data) => SwarmReviewEditorInput.deserialize(data),
+        },
+        SwarmReviewEditor,
+      ),
     )
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: PerforceGraphEditorInput.TYPE_ID,
-        componentKey: 'perforceGraph',
-        deserialize: () => PerforceGraphEditorInput.deserialize(),
-      }),
-    )
-    this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: SwarmReviewEditorInput.TYPE_ID,
-        componentKey: 'swarmReview',
-        deserialize: (data) => SwarmReviewEditorInput.deserialize(data),
-      }),
-    )
-    this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: SwarmDiffEditorInput.TYPE_ID,
-        componentKey: 'swarmDiff',
-      }),
+      registerEditorWithComponent({ typeId: SwarmDiffEditorInput.TYPE_ID }, SwarmDiffEditor),
     )
   }
 }

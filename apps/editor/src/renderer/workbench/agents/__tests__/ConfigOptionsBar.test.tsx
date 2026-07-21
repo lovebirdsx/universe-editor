@@ -99,7 +99,7 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
     runningStartedAt: observableValue<number | undefined>('rsa', undefined),
     imageSupported: observableValue<boolean>('imageSupported', false),
     forkSupported: observableValue<boolean>('forkSupported', false),
-    rewindSupported: false,
+    rewindSupported: observableValue<boolean>('rewindSupported', false),
     onDidRequireAuth: Event.None,
     presentPermission: () => {},
     presentQuestion: () => {},

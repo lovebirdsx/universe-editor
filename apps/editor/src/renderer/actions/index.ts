@@ -477,10 +477,7 @@ registerAction2(SwitchWindowAction)
 registerAction2(ExitAction)
 registerAction2(ToggleDevToolsAction)
 
-// Window — zoom (registered before the Agents chat font-size trio so that, when
-// the chat is focused, the chat-font commands — which carry an ACP_NAV_WHEN
-// when-clause and are registered later — win the newest-first tie-break; anywhere
-// else these global window-zoom bindings claim ctrl+= / ctrl+- / ctrl+0).
+// Window — zoom (ctrl+= / ctrl+- / ctrl+0)
 registerAction2(ZoomInAction)
 registerAction2(ZoomOutAction)
 registerAction2(ResetZoomAction)
@@ -507,8 +504,8 @@ registerAction2(FindReplaceInFileAction)
 registerAction2(FindNextAction)
 registerAction2(FindPreviousAction)
 
-// Quick Input (registered last so its `escape` binding wins over
-// FocusActiveEditorGroupAction whenever `quickInputVisible` is true).
+// Quick Input — `escape` binding gates on `quickInputVisible` and carries an
+// explicit higher weight, so it wins regardless of registration order.
 registerAction2(CloseQuickInputAction)
 
 // Notifications
@@ -650,40 +647,40 @@ registerAction2(CycleAcpTimelineCollapseAction)
 registerAction2(SwitchSessionAction)
 registerAction2(CopyFocusedAcpMessageAction)
 registerAction2(CopySelectedTextAction)
-// Prompt suggestion popover — registered last so its `escape` / `enter` / `tab`
-// / `ctrl+j` / `ctrl+n` / `ctrl+p` bindings win the newest-wins tie-break over
-// global shortcuts whenever `acpPromptPopupVisible` is set.
+// Prompt suggestion popover — its `escape` / `enter` / `tab` / `ctrl+j` /
+// `ctrl+n` / `ctrl+p` bindings carry an explicit higher weight so they win over
+// global shortcuts whenever `acpPromptPopupVisible` is set, regardless of order.
 registerAction2(SelectNextAcpPromptSuggestionAction)
 registerAction2(SelectPreviousAcpPromptSuggestionAction)
 registerAction2(AcceptAcpPromptSuggestionAction)
 registerAction2(HideAcpPromptSuggestionAction)
-// In-session find — registered last so its `f3` / `shift+f3` / `escape` bindings
-// win the newest-wins tie-break over global shortcuts whenever
-// `acpChatFindVisible` is set (`ctrl+f` to open gates on `acpChatFocused`).
+// In-session find — its `f3` / `shift+f3` / `escape` bindings carry an explicit
+// higher weight so they win over global shortcuts whenever `acpChatFindVisible`
+// is set (`ctrl+f` to open gates on ACP_NAV_WHEN).
 registerAction2(ChatFindAction)
 registerAction2(ChatFindNextAction)
 registerAction2(ChatFindPreviousAction)
 registerAction2(ChatFindCloseAction)
-// Session numbered bookmarks (0-9). The digit keybindings gate on ACP_NAV_WHEN,
-// so Ctrl+0..9 only bind while a session editor is focused (global Ctrl+0 =
-// Reset Zoom stays intact elsewhere via the newest-wins tie-break).
+// Session numbered bookmarks (0-9). The digit keybindings gate on ACP_NAV_WHEN
+// and carry an explicit higher weight, so Ctrl+0..9 only bind while a session
+// editor is focused (global Ctrl+0 = Reset Zoom stays intact elsewhere).
 for (const action of ToggleSessionBookmarkActions) registerAction2(action)
 for (const action of JumpToSessionBookmarkActions) registerAction2(action)
 registerAction2(ListSessionBookmarksAction)
 registerAction2(ClearSessionBookmarksAction)
 for (const action of agentContextActions) registerAction2(action)
 
-// Outline — emacs-style navigation (Ctrl+P/N/B/F). Registered last so the
-// newest-wins tie-break lets them beat the global Ctrl+P / Ctrl+N / Ctrl+B / …
-// bindings whenever `focusedView == 'workbench.view.outline.main'`.
+// Outline — emacs-style navigation (Ctrl+P/N/B/F). These carry an explicit
+// higher weight so they beat the global Ctrl+P / Ctrl+N / Ctrl+B bindings
+// whenever `focusedView == 'workbench.view.outline.main'`, regardless of order.
 registerAction2(OutlineNavigateUpAction)
 registerAction2(OutlineNavigateDownAction)
 registerAction2(OutlineNavigateLeftAction)
 registerAction2(OutlineNavigateRightAction)
 
-// Explorer undo/redo — registered last so the newest-wins tie-break lets Ctrl+Z /
-// Ctrl+Y / Ctrl+Shift+Z beat Monaco's global undo/redo whenever the Explorer tree
-// is focused (and explorer.enableUndo is on).
+// Explorer undo/redo — Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z carry an explicit higher
+// weight so they beat Monaco's global undo/redo whenever the Explorer tree is
+// focused (and explorer.enableUndo is on), regardless of registration order.
 registerAction2(UndoExplorerFileOperationAction)
 registerAction2(RedoExplorerFileOperationAction)
 registerAction2(InstallExtensionFromVsixAction)

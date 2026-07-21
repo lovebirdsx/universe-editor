@@ -492,6 +492,15 @@ jobs:
         if: matrix.suite.prep == 'xlsx'
         run: npm --prefix extensions-external/${{ matrix.suite.name }} ci
 
+      # Type-check the external extension before running it. esbuild (both the
+      # suite build and run-external-e2e.mjs) strips types without checking them,
+      # so a type error would otherwise sail through CI as long as the bundle
+      # emits. The typecheck script borrows tsc from a workspace package; the
+      # frozen-lockfile install above provides it. Excel's own types come from the
+      # `npm ci` prep step above.
+      - name: Typecheck external extension
+        run: npm --prefix extensions-external/${{ matrix.suite.name }} run typecheck
+
       - name: Run external extension E2E (xvfb)
         run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" npm --prefix extensions-external/${{ matrix.suite.name }} run e2e
 

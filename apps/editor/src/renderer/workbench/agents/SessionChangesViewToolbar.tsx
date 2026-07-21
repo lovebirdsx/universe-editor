@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  SessionChangesViewToolbar — the Session Changes view's title-bar actions,
- *  rendered via viewToolbarMap. A single list/tree toggle (icon flips with the
+ *  rendered via the view toolbar registry. A single list/tree toggle (icon flips with the
  *  current mode), mirroring the SCM CHANGES title toolbar. State is shared with
  *  the view body through sessionChangesViewState.
  *--------------------------------------------------------------------------------------------*/

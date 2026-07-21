@@ -1,15 +1,8 @@
-export * from './rpc.js'
-export * from './manifest.js'
-export * from './categories.js'
-export * from './activation.js'
-export * from './scmWire.js'
-export * from './aiWire.js'
-export * from './gitGraph.js'
-export * from './perforceGraph.js'
-export * from './swarm.js'
-export * from './blame.js'
-export * from './dirtyDiff.js'
-export * from './stdioProtocol.js'
-export * from './semver.js'
-export * from './bytes.js'
-export * from './webviewProtocol.js'
+// Package barrel. Grouped into two layers (see 04·任务2):
+//   protocol/  — extension-host RPC + manifest/semver/activation infrastructure
+//   contracts/ — domain wire DTOs crossing the renderer↔extension boundary
+// Consumers keep importing from the package root; the split is internal.
+//
+// `manifest-schema` stays off the barrel (zod isolation) — see protocol/index.ts.
+export * from './protocol/index.js'
+export * from './contracts/index.js'

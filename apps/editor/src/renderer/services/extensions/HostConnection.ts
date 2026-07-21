@@ -44,6 +44,7 @@ import {
   type IExtHostLanguages,
   type IExtHostScm,
   type IExtHostWebviews,
+  type IExtensionActivationErrorDto,
 } from '@universe-editor/extensions-common'
 import type {
   ExtHostKind,
@@ -53,6 +54,7 @@ import type { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 import { MainThreadCommands, type CommandOwnershipLedger } from './MainThreadCommands.js'
 import { MainThreadAi } from './MainThreadAi.js'
 import { MainThreadEditor } from './MainThreadEditor.js'
+import { MainThreadExtensions } from './MainThreadExtensions.js'
 import { MainThreadFs } from './MainThreadFs.js'
 import { MainThreadLanguages } from './MainThreadLanguages.js'
 import { MainThreadOutput } from './MainThreadOutput.js'
@@ -88,6 +90,8 @@ export interface HostConnectionDeps {
   readonly stderr: IOutputChannel
   readonly logger: ILogger
   readonly ledger: CommandOwnershipLedger
+  /** An extension's `activate` threw — surface it (notification + view badge). */
+  readonly onActivationError: (error: IExtensionActivationErrorDto) => void
 }
 
 export class HostConnection extends Disposable {
@@ -143,6 +147,12 @@ export class HostConnection extends Disposable {
     server.registerChannel(
       ExtHostChannels.mainThreadCommands,
       ProxyChannel.fromService(mainThreadCommands),
+    )
+
+    const mainThreadExtensions = new MainThreadExtensions(deps.onActivationError)
+    server.registerChannel(
+      ExtHostChannels.mainThreadExtensions,
+      ProxyChannel.fromService(mainThreadExtensions),
     )
 
     const mainThreadWindow = store.add(

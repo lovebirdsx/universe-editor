@@ -82,7 +82,7 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 
 | 文件 | 相关改动 |
 |---|---|
-| `acpSession.ts` | `rewindTo(messageId,{dryRun?,rewindFiles?})`（reset+replay-gate+extMethod+tracker.clear 条件）；`forkSupported`（observable，从 `sessionCapabilities.fork` 设）+ `rewindSupported`（getter，`agentId==='claude-code'`）；`_dispatchPrompt` 发 `_meta:{messageId}`；`applyUpdate` 的 `user_message_chunk` 传 `readMessageId(update)`；`_appendChunk` 加 `messageId?` 参 |
+| `acpSession.ts` | `rewindTo(messageId,{dryRun?,rewindFiles?})`（reset+replay-gate+extMethod+tracker.clear 条件）；`forkSupported`（observable，从 `sessionCapabilities.fork` 设）+ `rewindSupported`（observable，从 initialize `_meta['universe-editor/capabilities'].rewind` 设）+ 私有 `_filesRolledBackByAgent`（同块设）；`_dispatchPrompt` 发 `_meta:{messageId}`；`applyUpdate` 的 `user_message_chunk` 传 `readMessageId(update)`；`_appendChunk` 加 `messageId?` 参 |
 | `acpSessionModel.ts` | `IAcpSession` 接口：`rewindTo` 签名 + `forkSupported`/`rewindSupported` + `RewindFilesResult` 类型；`REWIND_SESSION_METHOD` 常量（与 vendor 同步） |
 | `acpSessionService.ts` | facade `forkSession(sid,msgId?)`（temp lease → unstable_forkSession → resumeSession）+ `rewindSession(sid,msgId,{dryRun?,rewindFiles?})`（校 live+非 closed+rewindSupported 才委托）；`AcpForeignWorktreeError` 守卫 |
 | `acpSessionUpdateMeta.ts` | `readMessageId(update)` reader（从 update 读 vendor 盖的 messageId） |
@@ -94,7 +94,7 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 |---|---|
 | `actions/agentRewindActions.ts` | `RewindAgentSessionAction`（dryRun 预览→三/单按钮确认→rewind→回填）+ `ForkAgentSessionAction`（fork→开 editor tab 或 setActive）。都 `f1:false`、arg=`{sessionId,messageId}` |
 | `actions/index.ts` | `registerAction2` 两个 action；`agentActions.ts` barrel re-export |
-| `workbench/agents/UserMessageItem.tsx` | hover 显 Rewind（`Undo2`）/Fork（`GitBranch`）按钮，`rewindSupported`+`useObservable(forkSupported)` 各自门控；抽 `UserMessageActions` 子组件避免条件 hooks |
+| `workbench/agents/UserMessageItem.tsx` | hover 显 Rewind（`Undo2`）/Fork（`GitBranch`）按钮，`useObservable(rewindSupported)`+`useObservable(forkSupported)` 各自门控；抽 `UserMessageActions` 子组件避免条件 hooks |
 | `workbench/agents/ChatBody.tsx` | `TimelineSlot` memo 加 `session` prop 透传给 UserMessageItem，带 `messageId` |
 | `PromptInput.tsx` | drain `AcpPromptReplaceInbox`：`setText(replace)`+清 contexts/images+focus |
 | `workbench/agents/agents.module.css` | `.userMessageWrap`(relative)+`.userMessageActions`(hover 才 opacity:1) |
@@ -177,9 +177,9 @@ claude 靠 SDK 拼凑；**codex 走 app-server v2 JSON-RPC，原生支持 `threa
 - vendor `resolveRollbackTurns(thread, messageId)`（已 export 供测）：找 `clientId||id===messageId` 的 turn 下标 i → `numTurns = turns.length - i`。
 - fork = **ACP 标准 `unstable_forkSession`**（`methods.agent.session.fork`）+ `initialize` 声明 `sessionCapabilities.fork:{}` → **renderer fork 侧零改**（facade 纯能力位驱动）。`CodexAppServerClient.threadFork/threadRollback` 封装 + `index.ts` 注册 handler。
 - rewind 复用**同名 ext-method** `universe-editor/rewind_session`（`AcpExtensions.ts` 加常量/类型/parser/注册；`CodexAcpServer.rewindSession`：dryRun 查锚点、非 dryRun rollback + `streamThreadHistory` 重放）。
-- **文件回滚在 renderer**：`acpSession.rewindTo` 按 `agentId==='codex'` 分派——先 `changeTracker.restore(sid, postAnchorToolCallIds)` 再 ext-method 截断；claude 仍走原一体路径。`_toolCallIdsAfterMessage`（**趁 reset 清 timeline 前**从有序 timeline 取锚点及之后的 `call.id`，即 `update.toolCallId`）。
+- **文件回滚在 renderer**：`acpSession.rewindTo` 按 `!_filesRolledBackByAgent.get()`（旧 `agentId==='codex'`）分派——先 `changeTracker.restore(sid, postAnchorToolCallIds)` 再 ext-method 截断；claude（agent 自己回滚文件）仍走原一体路径。`_toolCallIdsAfterMessage`（**趁 reset 清 timeline 前**从有序 timeline 取锚点及之后的 `call.id`，即 `update.toolCallId`）。
 - `SessionChangeTrackerService.restore/previewRestore(sid, toolCallIds)`：对指定 batch 逆向 `reconstructBaseline` 写回（restore 写盘+删 batch，preview 只算），返 `RewindFileImpact`。**精度=整文件快照式，只恢复本会话 agent 改过的文件**。
-- `rewindSupported` = `agentId==='claude-code' || 'codex'`。门控差异：codex 走 `restore`（**从不 clear tracker**），`rewindFiles:false` 跳过 restore。
+- `rewindSupported` = `IObservable<boolean>`，**从 initialize `_meta['universe-editor/capabilities'].rewind` 读**（旧白名单 `agentId==='claude-code'||'codex'` 已删；键定义在 `acpExtMethods.ts` 的 `ACP_CAPABILITIES_META_KEY`/`AcpUniverseCapabilities`，两个 fork 字面量通告）。`filesRolledBackByAgent` 同块读（claude=true / codex=false）→ 私有 `_filesRolledBackByAgent` observable 驱动上面的文件回滚分派。门控差异：codex 走 `restore`（**从不 clear tracker**），`rewindFiles:false` 跳过 restore。自定义 agent 声明该能力块即点亮入口。
 
 **codex 易踩坑**：
 - 改 codex vendor 后必 `cd vendor/codex-acp && node build.mjs`（**esbuild，非 tsc**；或 `pnpm agent:build` 建两个 vendor）。codex vendor 是 submodule 常在 detached HEAD（正常）。

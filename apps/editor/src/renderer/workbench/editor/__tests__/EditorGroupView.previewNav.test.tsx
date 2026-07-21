@@ -110,7 +110,11 @@ describe('EditorGroupView — markdown preview in-place navigation', () => {
     group.openEditor(a, { activate: true, pinned: true })
 
     renderWithServices(
-      <EditorGroupView group={group} groupsService={svc} componentMap={componentMap as never} />,
+      <EditorGroupView
+        group={group}
+        groupsService={svc}
+        resolveComponent={((k: string) => (componentMap as Map<string, unknown>).get(k)) as never}
+      />,
     )
     expect(mountsBySource.get('a.md')).toBe(1)
 

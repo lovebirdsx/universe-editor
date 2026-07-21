@@ -8,7 +8,6 @@
 import {
   ConfigurationRegistry,
   Disposable,
-  EditorRegistry,
   IEditorGroupsService,
   IEditorService,
   ILayoutService,
@@ -22,8 +21,11 @@ import {
   type IEditorGroup,
 } from '@universe-editor/platform'
 import { registerViewWithComponent } from '../services/views/ViewComponentRegistry.js'
+import { registerEditorWithComponent } from '../services/editor/EditorComponentRegistry.js'
 import { AgentsView } from '../workbench/agents/AgentsView.js'
+import { AgentsViewToolbar } from '../workbench/agents/AgentsViewToolbar.js'
 import { McpServersView } from '../workbench/agents/McpServersView.js'
+import { AcpSessionEditor } from '../workbench/agents/AcpSessionEditor.js'
 import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
 import { IAcpSessionService } from '../services/acp/acpSessionService.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
@@ -282,6 +284,7 @@ export class AgentsViewContainerContribution extends Disposable implements IWork
           order: 1,
         },
         AgentsView,
+        AgentsViewToolbar,
       ),
     )
 
@@ -303,12 +306,15 @@ export class AgentsEditorProviderContribution extends Disposable implements IWor
   constructor() {
     super()
     this._register(
-      EditorRegistry.registerEditorProvider({
-        typeId: AcpSessionEditorInput.TYPE_ID,
-        componentKey: 'agents.session',
-        deserialize: (data, accessor) =>
-          typeof data === 'string' ? AcpSessionEditorInput.deserialize(data, accessor) : null,
-      }),
+      registerEditorWithComponent(
+        {
+          typeId: AcpSessionEditorInput.TYPE_ID,
+          componentKey: 'agents.session',
+          deserialize: (data, accessor) =>
+            typeof data === 'string' ? AcpSessionEditorInput.deserialize(data, accessor) : null,
+        },
+        AcpSessionEditor,
+      ),
     )
   }
 }

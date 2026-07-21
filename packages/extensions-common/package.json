@@ -11,13 +11,14 @@
       "default": "./dist/index.js"
     },
     "./manifest-schema": {
-      "types": "./dist/manifest-schema.d.ts",
-      "default": "./dist/manifest-schema.js"
+      "types": "./dist/protocol/manifest-schema.d.ts",
+      "default": "./dist/protocol/manifest-schema.js"
     }
   },
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --build",
+    "test": "vitest run",
     "lint": "eslint src",
     "lint:fix": "eslint --fix src",
     "clean": "tsc --build --clean"
@@ -31,6 +32,7 @@
     "@universe-editor/config-ts": "workspace:*",
     "@types/node": "catalog:",
     "eslint": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

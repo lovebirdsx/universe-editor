@@ -10,12 +10,19 @@
 import { Disposable, IWorkbenchContribution, localize } from '@universe-editor/platform'
 import { registerViewWithComponent } from '../services/views/ViewComponentRegistry.js'
 import { ExplorerView } from '../workbench/explorer/ExplorerView.js'
+import { ExplorerViewToolbar } from '../workbench/explorer/ExplorerViewToolbar.js'
 import { OutlineView } from '../workbench/outline/OutlineView.js'
+import { OutlineViewToolbar } from '../workbench/outline/OutlineViewToolbar.js'
 import { SearchView } from '../workbench/search/SearchView.js'
+import { SearchViewToolbar } from '../workbench/search/SearchViewToolbar.js'
 import { ScmView } from '../workbench/scm/ScmView.js'
+import { ScmViewToolbar } from '../workbench/scm/ScmViewToolbar.js'
 import { SessionChangesView } from '../workbench/agents/SessionChangesView.js'
+import { SessionChangesViewToolbar } from '../workbench/agents/SessionChangesViewToolbar.js'
 import { OutputView } from '../workbench/panel/output/OutputView.js'
+import { OutputViewToolbar } from '../workbench/panel/output/OutputViewToolbar.js'
 import { TerminalView } from '../workbench/panel/terminal/TerminalView.js'
+import { TerminalViewToolbar } from '../workbench/panel/terminal/TerminalViewToolbar.js'
 import { AiDebugView } from '../workbench/aiDebug/AiDebugView.js'
 
 export class BuiltInViewsContribution extends Disposable implements IWorkbenchContribution {
@@ -32,6 +39,7 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
           order: 1,
         },
         ExplorerView,
+        ExplorerViewToolbar,
       ),
     )
 
@@ -45,6 +53,7 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
           order: 1,
         },
         SearchView,
+        SearchViewToolbar,
       ),
     )
 
@@ -58,6 +67,7 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
           order: 1,
         },
         ScmView,
+        ScmViewToolbar,
       ),
     )
 
@@ -71,6 +81,7 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
           order: 1,
         },
         SessionChangesView,
+        SessionChangesViewToolbar,
       ),
     )
 
@@ -97,6 +108,7 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
           order: 1,
         },
         OutlineView,
+        OutlineViewToolbar,
       ),
     )
 
@@ -110,6 +122,7 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
           order: 1,
         },
         OutputView,
+        OutputViewToolbar,
       ),
     )
 
@@ -123,6 +136,7 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
           order: 1,
         },
         TerminalView,
+        TerminalViewToolbar,
       ),
     )
   }

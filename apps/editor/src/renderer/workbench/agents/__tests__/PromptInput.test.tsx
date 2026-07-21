@@ -429,7 +429,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     runningStartedAt: observableValue<number | undefined>('test.rsa', undefined),
     imageSupported: observableValue<boolean>('test.imageSupported', opts.imageSupported ?? false),
     forkSupported: observableValue<boolean>('test.forkSupported', false),
-    rewindSupported: false,
+    rewindSupported: observableValue<boolean>('test.rewindSupported', false),
     onDidRequireAuth: Event.None,
     presentPermission: () => {},
     presentQuestion: () => {},

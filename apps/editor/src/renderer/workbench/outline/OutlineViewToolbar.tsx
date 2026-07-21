@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  OutlineViewToolbar — the Outline view's title-bar actions, rendered in the
- *  Secondary Side Bar header via viewToolbarMap. Mirrors VSCode's outline title
+ *  Secondary Side Bar header via the view toolbar registry. Mirrors VSCode's outline title
  *  actions: a single collapse-all / expand-all toggle (icon flips with the tree
  *  state) and a `…` overflow menu with Follow Cursor / Filter on Type toggles
  *  plus a Sort By radio group. State is shared with the view body through
