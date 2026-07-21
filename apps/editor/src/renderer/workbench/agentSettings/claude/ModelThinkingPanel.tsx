@@ -25,7 +25,7 @@ const EFFORT_LEVELS: readonly ClaudeEffortLevel[] = ['low', 'medium', 'high', 'x
 const CUSTOM_MODEL_KEY = 'ANTHROPIC_CUSTOM_MODEL_OPTION'
 const CUSTOM_MODEL_NAME_KEY = 'ANTHROPIC_CUSTOM_MODEL_OPTION_NAME'
 const CUSTOM_MODEL_DESC_KEY = 'ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION'
-const FABLE_MODEL_ID = 'claude-fable-5'
+const FABLE_MODEL_ID = 'claude-fable-5[1m]'
 const FABLE_MODEL_NAME = 'Fable 5'
 const FABLE_MODEL_DESC = 'Claude Fable 5'
 
