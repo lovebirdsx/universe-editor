@@ -4,12 +4,14 @@
  *  section currently in view: the request that opened whatever exchange the
  *  viewport is reading, mirroring VSCode's sticky scroll. ChatScroll reports the
  *  active user slot key (resolved from the viewport-top anchor) through the
- *  `activeUserKey` observable; this bar looks it up in the timeline. Before the
- *  first measurement (null key) it falls back to the last user message — the
- *  active request. The message stays in the timeline too; this bar is the
- *  always-visible copy so the section's prompt never scrolls out of view.
+ *  `activeUserKey` observable; this bar looks it up in the timeline. ChatScroll
+ *  reports null while the section's own prompt row is still visible in the
+ *  timeline (a short conversation, or the newest section at the bottom) — pinning
+ *  it then would show it twice — and this bar returns null in that case. The
+ *  message stays in the timeline too; this bar is the always-visible copy so the
+ *  section's prompt never scrolls out of view once it has left the viewport.
  *  Expanded (the default) it shows the full content; collapsed the first line.
- *  Returns null until a user message exists.
+ *  Returns null until a user message's section is pinned.
  *--------------------------------------------------------------------------------------------*/
 
 import { useState, type MouseEvent as ReactMouseEvent } from 'react'
@@ -40,26 +42,18 @@ function isUserItem(it: TimelineItem | undefined): it is UserMessageItem {
   return it?.kind === 'message' && it.message.role === 'user'
 }
 
-function lastUserItem(timeline: readonly TimelineItem[]): UserMessageItem | undefined {
-  for (let i = timeline.length - 1; i >= 0; i--) {
-    const it = timeline[i]
-    if (isUserItem(it)) return it
-  }
-  return undefined
-}
-
 // The section's user message, by the key ChatScroll resolved from the viewport.
-// Falls back to the last user message when the key is null (not yet measured) or
-// no longer resolves (the card scrolled/streamed away before the next report).
+// A null key means the section's prompt is still visible in the timeline (or no
+// section is pinned yet), so the bar hides rather than duplicating it. A non-null
+// key that no longer resolves (the card streamed away before the next report)
+// also hides.
 function activeUserItem(
   timeline: readonly TimelineItem[],
   activeKey: string | null,
 ): UserMessageItem | undefined {
-  if (activeKey !== null) {
-    const found = timeline.find((it) => itemSlotKey(it) === activeKey)
-    if (isUserItem(found)) return found
-  }
-  return lastUserItem(timeline)
+  if (activeKey === null) return undefined
+  const found = timeline.find((it) => itemSlotKey(it) === activeKey)
+  return isUserItem(found) ? found : undefined
 }
 
 export function StickyUserMessageBar({

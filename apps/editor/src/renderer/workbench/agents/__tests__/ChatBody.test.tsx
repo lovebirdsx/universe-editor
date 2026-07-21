@@ -829,10 +829,9 @@ describe('ChatBody — inner content expansion persistence', () => {
     return btn
   }
 
-  // The sticky bar shows the section's user message (here the last one, 'c',
-  // since happy-dom has no layout so the viewport-top anchor is null). Keep the
-  // long message 'b' earlier so it stays uniquely in the scrolled list — the bar
-  // (which also carries data-timeline-key) would otherwise shadow the assertion.
+  // happy-dom reports zero rects, so every prompt row's top sits at the viewport
+  // top (still visible) and the sticky user bar stays hidden — no duplicate
+  // data-timeline-key to shadow the m:b assertions below.
   const items: readonly TimelineItem[] = [
     {
       kind: 'message',
@@ -1024,15 +1023,16 @@ describe('ChatBody — sticky user bar follows the viewport section', () => {
     { kind: 'message', id: 'a2', message: makeMessage('a2', 'second reply') },
   ]
 
-  function bar(container: HTMLElement): HTMLElement {
-    return container.querySelector<HTMLElement>('[data-testid="acp-user-bar"]')!
+  function bar(container: HTMLElement): HTMLElement | null {
+    return container.querySelector<HTMLElement>('[data-testid="acp-user-bar"]')
   }
 
-  it('defaults to the last user message before any scroll (null anchor)', () => {
+  it('hides the bar before any scroll while the prompt row is still visible', () => {
     const { container } = renderChat(makeSession('s1', items))
-    // happy-dom reports zero rects → viewportTopKey is null → fall back to last.
-    expect(bar(container).textContent).toContain('second request')
-    expect(bar(container).textContent).not.toContain('first request')
+    // happy-dom reports zero rects → the last section's prompt row sits at the
+    // viewport top (top 0, still visible), so the timeline already shows it and
+    // the bar stays hidden rather than duplicating it.
+    expect(bar(container)).toBeNull()
   })
 
   it('switches to the first section when its rows sit at the viewport top', () => {
@@ -1041,7 +1041,8 @@ describe('ChatBody — sticky user bar follows the viewport section', () => {
     ;(scroll as HTMLElement).getBoundingClientRect = (() => ({ top: 0 }) as DOMRect) as never
     // Place the first reply (a1) at the viewport top and the rest below it, with
     // everything above it scrolled off. viewportTopKey walks rows top-to-bottom
-    // and takes the first whose bottom is still > 0 → 'm:a1' → section u1.
+    // and takes the first whose bottom is still > 0 → 'm:a1' → section u1. The u1
+    // prompt row has scrolled above the top (top -100 < 0), so the bar pins it.
     const tops: Record<string, { top: number; bottom: number }> = {
       'm:u1': { top: -100, bottom: -10 },
       'm:a1': { top: 5, bottom: 80 },
@@ -1055,8 +1056,30 @@ describe('ChatBody — sticky user bar follows the viewport section', () => {
     act(() => {
       fireEvent.scroll(scroll)
     })
-    expect(bar(container).textContent).toContain('first request')
-    expect(bar(container).textContent).not.toContain('second request')
+    expect(bar(container)?.textContent).toContain('first request')
+    expect(bar(container)?.textContent).not.toContain('second request')
+  })
+
+  it('hides the bar once the section prompt row scrolls back into view', () => {
+    const { container } = renderChat(makeSession('s1', items))
+    const scroll = scrollEl(container)
+    ;(scroll as HTMLElement).getBoundingClientRect = (() => ({ top: 0 }) as DOMRect) as never
+    // The u2 prompt row's top edge is still visible at the viewport top (top 0),
+    // so even though the section resolves to u2 the bar must not duplicate it.
+    const tops: Record<string, { top: number; bottom: number }> = {
+      'm:u1': { top: -300, bottom: -220 },
+      'm:a1': { top: -210, bottom: -110 },
+      'm:u2': { top: 0, bottom: 80 },
+      'm:a2': { top: 90, bottom: 160 },
+    }
+    for (const [key, rect] of Object.entries(tops)) {
+      const row = scroll.querySelector<HTMLElement>(`[data-timeline-key="${key}"]`)
+      if (row) (row as HTMLElement).getBoundingClientRect = (() => rect as DOMRect) as never
+    }
+    act(() => {
+      fireEvent.scroll(scroll)
+    })
+    expect(bar(container)).toBeNull()
   })
 })
 

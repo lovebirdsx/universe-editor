@@ -87,6 +87,11 @@ import styles from './agents.module.css'
 
 const STICK_THRESHOLD_PX = 32
 
+// Slack (px) for deciding a section's prompt row is still "at" the viewport top:
+// its top edge within a hair of the top counts as visible, so sub-pixel rounding
+// during scroll doesn't flicker the sticky user bar in and out on the boundary.
+const STICKY_USER_REVEAL_EPS = 1
+
 export interface WidgetHandle {
   move: (direction: AcpTimelineMoveDirection) => void
   scrollTimeline: (target: AcpTimelineScrollTarget) => void
@@ -610,12 +615,35 @@ function ChatScroll({
   // pinned StickyUserMessageBar tracks the exchange being read (VSCode sticky-scroll
   // style). Reads the live DOM top row and resolves up to the nearest user message.
   // observableValue de-dupes, so this only re-renders the bar when the section flips.
+  //
+  // Standard sticky-scroll: only pin the section's user message once its own row has
+  // scrolled above the viewport top. While that row's top is still visible (fully in
+  // view — the very first prompt on a short conversation, or the newest one at the
+  // bottom), the timeline already shows it, so pinning it would render it twice. Set
+  // null in that case → the bar hides.
   const reportActiveUser = useCallback(() => {
     const el = containerRef.current
-    activeUserKey.set(
-      activeUserSlotKey(timelineRef.current, el ? viewportTopKey(el) : null) ?? null,
-      undefined,
-    )
+    if (!el) {
+      activeUserKey.set(null, undefined)
+      return
+    }
+    const userKey = activeUserSlotKey(timelineRef.current, viewportTopKey(el)) ?? null
+    if (userKey === null) {
+      activeUserKey.set(null, undefined)
+      return
+    }
+    const row = el.querySelector<HTMLElement>(`[data-timeline-key="${cssEscape(userKey)}"]`)
+    if (row) {
+      const top = row.getBoundingClientRect().top - el.getBoundingClientRect().top
+      // Its own row's top edge is still at/below the viewport top → the timeline
+      // already shows this prompt, so pinning it would duplicate it. Only pin once
+      // the row's top has scrolled above the viewport (top < 0).
+      if (top >= -STICKY_USER_REVEAL_EPS) {
+        activeUserKey.set(null, undefined)
+        return
+      }
+    }
+    activeUserKey.set(userKey, undefined)
   }, [activeUserKey])
 
   const handleClick = (e: ReactMouseEvent) => {

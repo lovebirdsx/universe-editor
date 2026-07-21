@@ -63,19 +63,21 @@ test.describe('@p1 outline ↔ agent session selection sync', () => {
     // (so ACP_NAV_WHEN's `acpChatFocused` gate is satisfied), then press the nav
     // keys. runCommand bypasses that gate; the user's key does not.
     //
-    // Note the navigable rows are the *display* timeline — the first user message
-    // (`alpha`) is lifted out as the session title, so keyboard navigation runs
-    // over [echo: alpha, bravo, echo: bravo]. We drive with Alt+Home / Alt+End,
+    // Note the whole timeline is navigable — the opening user message (`alpha`) is
+    // shown in place now (the sticky user bar pins it only once it scrolls off the
+    // top), not lifted out — so keyboard navigation runs over the full
+    // [alpha, echo: alpha, bravo, echo: bravo]. We drive with Alt+Home / Alt+End,
     // the two nav chords Electron reliably delivers (the Alt+arrow / Alt+letter
     // aliases get eaten by the OS/browser in a real window), and toggle between
     // first and last so a *stuck* highlight can't pass — it has to move both ways.
     await page.locator('[data-testid="acp-timeline"]').click({ position: { x: 5, y: 5 } })
 
-    // Alt+Home → first navigable row; the outline highlight must follow.
+    // Alt+Home → first navigable row (the opening prompt); the outline highlight
+    // must follow.
     await page.keyboard.press('Alt+Home')
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getOutlineActiveSymbol()), { timeout: 5000 })
-      .toBe('echo: alpha')
+      .toBe('alpha')
 
     // Alt+End → last row; the highlight must move to it.
     await page.keyboard.press('Alt+End')
@@ -88,6 +90,6 @@ test.describe('@p1 outline ↔ agent session selection sync', () => {
     await page.keyboard.press('Alt+Home')
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getOutlineActiveSymbol()), { timeout: 5000 })
-      .toBe('echo: alpha')
+      .toBe('alpha')
   })
 })

@@ -1,8 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Tests for StickyUserMessageBar — shows the user message for the section in
- *  view (by the activeUserKey ChatScroll reports), falls back to the last user
- *  message when the key is null/unresolved, starts expanded, collapses on click.
+ *  view (by the activeUserKey ChatScroll reports), renders nothing when the key
+ *  is null (section prompt still visible) or no longer resolves, starts expanded,
+ *  collapses on click.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -73,7 +74,7 @@ describe('StickyUserMessageBar', () => {
     renderWithServices(
       <StickyUserMessageBar
         session={makeSession('s-one', [message('u1', 'user', 'Hello world')])}
-        activeUserKey={key(null)}
+        activeUserKey={key('m:u1')}
       />,
     )
     expect(screen.getByText('Hello world')).toBeTruthy()
@@ -100,7 +101,7 @@ describe('StickyUserMessageBar', () => {
     expect(screen.queryByText('second request')).toBeNull()
   })
 
-  it('falls back to the last user message when the key is null', () => {
+  it('renders nothing when the key is null (section prompt still visible)', () => {
     renderWithServices(
       <StickyUserMessageBar
         session={makeSession('s-fallback', [
@@ -111,7 +112,16 @@ describe('StickyUserMessageBar', () => {
         activeUserKey={key(null)}
       />,
     )
-    expect(screen.getByText('second request')).toBeTruthy()
-    expect(screen.queryByText('first request')).toBeNull()
+    expect(screen.queryByTestId('acp-user-bar')).toBeNull()
+  })
+
+  it('renders nothing when the key no longer resolves to a user message', () => {
+    renderWithServices(
+      <StickyUserMessageBar
+        session={makeSession('s-gone', [message('u1', 'user', 'first request')])}
+        activeUserKey={key('m:gone')}
+      />,
+    )
+    expect(screen.queryByTestId('acp-user-bar')).toBeNull()
   })
 })
