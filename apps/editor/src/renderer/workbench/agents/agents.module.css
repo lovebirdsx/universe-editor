@@ -419,6 +419,18 @@
   white-space: pre;
 }
 
+/* A file-path link inside a code block: use the same blue as prose links so
+   clickable paths read consistently everywhere. */
+.codeBlockLink {
+  color: var(--color-badge-progress, #4fa6e2);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.codeBlockLink:hover {
+  text-decoration: underline;
+}
+
 .resourceLink {
   display: inline-flex;
   align-items: center;

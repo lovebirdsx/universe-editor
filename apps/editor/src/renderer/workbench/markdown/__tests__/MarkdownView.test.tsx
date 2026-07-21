@@ -214,6 +214,29 @@ describe('MarkdownView', () => {
     expect(pre?.textContent).toContain('const x = 1')
   })
 
+  it('linkifies a bare file path inside a fenced code block and opens it on click', async () => {
+    const resolverOpen = vi.fn().mockResolvedValue(undefined)
+    const exists = vi.fn((resource: URI) => resource.path === '/repo/Content/Config/whiteList.txt')
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver(resolverOpen))
+    services.set(IConfigurationService, makeConfig())
+    services.set(IFileService, makeFileService(exists))
+    services.set(IEditorService, makeEditorService())
+    const inst = new InstantiationService(services)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <MarkdownView text={'```\nContent/Config/whiteList.txt\n```'} baseUri={URI.file('/repo')} />
+      </ServicesContext.Provider>,
+    )
+
+    const link = screen.getByTestId('md-codeblock-filepath')
+    expect(link.textContent).toBe('Content/Config/whiteList.txt')
+    link.click()
+    await waitFor(() => expect(resolverOpen).toHaveBeenCalledTimes(1))
+    expect(resolverOpen.mock.calls[0]?.[0]?.path).toBe('/repo/Content/Config/whiteList.txt')
+  })
+
   it('renders GFM tables', () => {
     const { container } = renderMarkdown('| a | b |\n| --- | --- |\n| 1 | 2 |')
     expect(container.querySelector('table')).toBeTruthy()

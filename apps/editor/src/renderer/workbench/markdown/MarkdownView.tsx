@@ -231,11 +231,7 @@ function Block({ node }: { node: MdNode }): ReactNode {
       return node.lang?.toLowerCase() === 'mermaid' ? (
         <MermaidBlock code={node.code} />
       ) : (
-        <CodeBlock
-          code={node.code}
-          lang={node.lang}
-          {...(node.line !== undefined ? { line: node.line } : {})}
-        />
+        <CodeFenceBlock node={node} />
       )
     case 'list':
       return node.ordered ? (
@@ -289,7 +285,22 @@ function Block({ node }: { node: MdNode }): ReactNode {
 }
 
 /**
- * Render a YAML frontmatter block. In `'table'` mode it shows a GitHub-style
+ * A non-mermaid code fence. Wraps {@link CodeBlock} so it can read the file-link
+ * opener from context and turn bare paths inside the block into clickable links.
+ */
+function CodeFenceBlock({ node }: { node: Extract<MdNode, { type: 'code_fence' }> }): ReactNode {
+  const openFileLink = useContext(FileLinkContext)
+  return (
+    <CodeBlock
+      code={node.code}
+      lang={node.lang}
+      onOpenFilePath={openFileLink}
+      {...(node.line !== undefined ? { line: node.line } : {})}
+    />
+  )
+}
+
+/**
  * key/value table; in `'hidden'` mode (or when no mode is provided) it renders
  * nothing. Values keep their raw text — no inline markdown parsing — since
  * frontmatter is data, not prose.
