@@ -8,6 +8,7 @@ import {
   type IEditorGroup,
   type IEditorGroupsService,
   type ILayoutService,
+  type IViewsService,
 } from '@universe-editor/platform'
 import {
   EXPLORER_TREE_VIEW_ID,
@@ -95,6 +96,12 @@ function makeLayoutService() {
   return { layout, explorer, focusView, focusPart }
 }
 
+function makeViewsService(activeSideBarContainer?: string): IViewsService {
+  return {
+    getActiveViewContainerId: () => activeSideBarContainer,
+  } as unknown as IViewsService
+}
+
 function focusTerminalHost(): HTMLElement {
   const panel = document.createElement('div')
   panel.setAttribute('data-testid', 'part-panel')
@@ -120,12 +127,32 @@ describe('restoreWorkbenchFocus', () => {
 
     expect(document.activeElement).toBe(terminal)
 
-    const result = await restoreWorkbenchFocus(makeGroupsService(makeGroup(1)), layout, context)
+    const result = await restoreWorkbenchFocus(
+      makeGroupsService(makeGroup(1)),
+      layout,
+      context,
+      makeViewsService('workbench.view.explorer'),
+    )
 
     expect(result).toEqual({ target: 'explorer', ok: true })
     expect(focusView).toHaveBeenCalledWith(EXPLORER_TREE_VIEW_ID, { source: 'restore' })
     expect(document.activeElement).toBe(explorer)
     expect(context.get('terminalFocus')).toBe(false)
+  })
+
+  it('keeps a non-Explorer side bar container the user already switched to', async () => {
+    const context = new ContextKeyService()
+    const { layout, focusView } = makeLayoutService()
+
+    const result = await restoreWorkbenchFocus(
+      makeGroupsService(makeGroup(1)),
+      layout,
+      context,
+      makeViewsService('workbench.view.search'),
+    )
+
+    expect(result).toEqual({ target: 'kept', ok: true })
+    expect(focusView).not.toHaveBeenCalled()
   })
 
   it('focuses the active editor instead of Explorer when one exists', async () => {
@@ -138,7 +165,12 @@ describe('restoreWorkbenchFocus', () => {
     const group = makeGroup(7, editor)
     const { layout, focusView } = makeLayoutService()
 
-    const result = await restoreWorkbenchFocus(makeGroupsService(group), layout, context)
+    const result = await restoreWorkbenchFocus(
+      makeGroupsService(group),
+      layout,
+      context,
+      makeViewsService('workbench.view.explorer'),
+    )
 
     expect(result).toEqual({
       target: 'editor',

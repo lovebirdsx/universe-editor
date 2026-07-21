@@ -4,6 +4,7 @@ import {
   IEditorGroupsService,
   ILoggerService,
   ILayoutService,
+  IViewsService,
   IWorkspaceService,
   NullLogger,
   autorun,
@@ -32,6 +33,7 @@ export class WorkspaceFocusRestoreContribution
     @IWorkspaceService workspaceService: IWorkspaceService,
     @IEditorGroupsService private readonly _editorGroupsService: IEditorGroupsService,
     @ILayoutService private readonly _layoutService: ILayoutService,
+    @IViewsService private readonly _viewsService: IViewsService,
     @IContextKeyService private readonly _contextKeyService: IContextKeyService,
     @ITerminalManagerService terminalManagerService: ITerminalManagerService,
     @ILoggerService loggerService: ILoggerServiceType,
@@ -113,6 +115,7 @@ export class WorkspaceFocusRestoreContribution
       this._editorGroupsService,
       this._layoutService,
       this._contextKeyService,
+      this._viewsService,
     )
     this._logger.debug(
       `restore focus reason=${reason} target=${result.target} ok=${result.ok}` +

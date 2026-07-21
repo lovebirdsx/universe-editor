@@ -793,7 +793,12 @@ async function bootstrapWorkbench(): Promise<void> {
     .then(() => {
       rootLogger.info('bootstrap workspace state reconciled')
       mark(PerfMarks.rendererDidReconcileWorkspaceState)
-      return restoreWorkbenchFocus(editorGroupsService, layoutService, contextKeyService)
+      return restoreWorkbenchFocus(
+        editorGroupsService,
+        layoutService,
+        contextKeyService,
+        viewsService,
+      )
     })
     .then((result) => {
       rootLogger.debug(`bootstrap focus restored target=${result.target} ok=${result.ok}`)

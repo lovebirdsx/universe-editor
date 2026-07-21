@@ -136,6 +136,23 @@ async function wipeWorkspacesDir(userDataDir: string): Promise<void> {
  * session's beforeunload persist does NOT clobber it (verified empirically).
  */
 async function resetWindow(page: Page, userDataDir: string): Promise<void> {
+  // Detach the main-process workspace BEFORE the reload. A window reload does
+  // not close the folder, and the WORKSPACE-scope storage backend lives in
+  // main-process memory — wiping workspaces/ on disk does not invalidate it.
+  // Reloading with the folder still attached lets the fresh renderer's views
+  // reconcile (ViewsService.reconcileFromStorage) read the previous test's
+  // persisted container selection (e.g. Search) out of that in-memory bucket
+  // whenever the post-reload closeWorkspace below loses the 500ms settle race.
+  // The spec's own activity-bar click then TOGGLES the already-active container
+  // closed instead of opening it. Closing the folder first flushes and releases
+  // the bucket, so the reload deterministically boots into the no-workspace
+  // scope. The old page may be wedged (e.g. native watcher crash) — tolerate
+  // failures, the reload below rebuilds the renderer either way.
+  try {
+    await page.evaluate(() => window.__E2E__!.closeWorkspace())
+  } catch {
+    // best-effort: reload rescues a wedged page
+  }
   seedBaselineUserData(userDataDir)
   await wipeWorkspacesDir(userDataDir)
   const loaded = page.waitForEvent('load')
@@ -148,13 +165,10 @@ async function resetWindow(page: Page, userDataDir: string): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       await page.evaluate(() => window.__E2E__!.whenRestored())
-      // A window reload does NOT tear down main-process workspace state, so a
-      // prior test that opened a folder leaves it open — the reload then restores
-      // that workspace's editor groups (a ghost pinned tab from e.g.
-      // smoke.editorTabDnD leaks into this test's active group). seedUserData's
-      // disk wipe of workspaces/ races the main-process debounced session write
-      // and cannot be relied on. Deterministically close the folder here: it
-      // swaps to the no-workspace scope and tears down the restored groups.
+      // Belt-and-braces: the folder was already closed before the reload above,
+      // so this is normally a no-op (closeFolder early-returns with no current
+      // workspace). It still covers the rare case where the pre-reload close
+      // failed on a wedged page.
       await page.evaluate(() => window.__E2E__!.closeWorkspace())
       // Navigation back/forward stack lives in the main-process HistoryService,
       // which a reload does NOT clear. Wipe it so a prior test's navigation

@@ -3,13 +3,16 @@ import {
   IEditorGroupsService,
   ILayoutService,
   PartId,
+  ViewContainerLocation,
   type IEditorGroup,
+  type IViewsService,
 } from '@universe-editor/platform'
 import { focusEditorInput, syncEditorFocusContext } from '../editor/editorFocus.js'
 
 export const EXPLORER_TREE_VIEW_ID = 'workbench.view.explorer.tree'
+const EXPLORER_CONTAINER_ID = 'workbench.view.explorer'
 
-export type RestoredWorkbenchFocusTarget = 'editor' | 'explorer'
+export type RestoredWorkbenchFocusTarget = 'editor' | 'explorer' | 'kept'
 
 export interface IRestoredWorkbenchFocusResult {
   readonly target: RestoredWorkbenchFocusTarget
@@ -22,6 +25,7 @@ export async function restoreWorkbenchFocus(
   editorGroupsService: IEditorGroupsService,
   layoutService: ILayoutService,
   contextKeyService: IContextKeyService,
+  viewsService: IViewsService,
 ): Promise<IRestoredWorkbenchFocusResult> {
   const group = resolveGroupWithEditor(editorGroupsService)
   const editor = group?.activeEditor
@@ -33,6 +37,16 @@ export async function restoreWorkbenchFocus(
     syncEditorFocusContext(contextKeyService)
     syncTerminalFocusContext(contextKeyService, layoutService)
     return { target: 'editor', ok, groupId: group.id, editorId: editor.id }
+  }
+
+  // Restoring focus must not steal the side bar from a container the user has
+  // already switched to (e.g. clicking Search right after opening a folder) —
+  // focusView() would flip the active container back to Explorer.
+  const active = viewsService.getActiveViewContainerId(ViewContainerLocation.SideBar)
+  if (active !== undefined && active !== EXPLORER_CONTAINER_ID) {
+    syncEditorFocusContext(contextKeyService)
+    syncTerminalFocusContext(contextKeyService, layoutService)
+    return { target: 'kept', ok: true }
   }
 
   const ok = await layoutService.focusView(EXPLORER_TREE_VIEW_ID, { source: 'restore' })
