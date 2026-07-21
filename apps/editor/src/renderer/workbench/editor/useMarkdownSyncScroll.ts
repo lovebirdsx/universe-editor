@@ -5,7 +5,9 @@
  *  preview's block elements) to/from pixel positions, interpolating between the
  *  nearest mapped blocks. A short suppression window after each programmatic
  *  scroll breaks the feedback loop. Only active while the source editor is
- *  mounted (preview-to-the-side); plain preview falls back to no sync.
+ *  mounted alongside the preview (preview-to-the-side); plain preview and the
+ *  in-place toggle (Ctrl+Shift+V, where the source tab is detached) fall back to
+ *  no sync — see the `enabled` gate below.
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, type RefObject } from 'react'
@@ -87,11 +89,17 @@ const SUPPRESS_MS = 100
 export function useMarkdownSyncScroll(
   previewRootRef: RefObject<HTMLElement | null>,
   sourceUri: URI,
+  enabled = true,
 ): void {
   const groupsService = useService(IEditorGroupsService)
   const uriIdentity = useService(IUriIdentityService)
 
   useEffect(() => {
+    // In-place toggle mode (Ctrl+Shift+V) detaches the source tab, so there is no
+    // co-mounted source editor to pair with. Without this gate, findEditor() would
+    // latch onto an *unrelated* split of the same file living in another group and
+    // drive its scroll from the preview's — visibly yanking that other editor.
+    if (!enabled) return
     const root = previewRootRef.current
     if (!root) return
 
@@ -149,5 +157,5 @@ export function useMarkdownSyncScroll(
       editorScrollSub?.dispose()
       regSub.dispose()
     }
-  }, [groupsService, sourceUri, previewRootRef, uriIdentity])
+  }, [groupsService, sourceUri, previewRootRef, uriIdentity, enabled])
 }

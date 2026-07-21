@@ -47,7 +47,13 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const activeGroup = groupsService.activeGroup
   const isActiveEditor = activeGroup === group && activeGroup.activeEditor === input
-  useMarkdownSyncScroll(rootRef, sourceUri)
+  // Two-way scroll sync only makes sense for preview-to-the-side, where the source
+  // editor is mounted next to the preview. The in-place toggle (Ctrl+Shift+V) holds
+  // the source input and detaches its tab, so there's no co-mounted editor to pair
+  // with; syncing would instead grab an unrelated split of the same file in another
+  // group and scroll it. Gate it off in toggle mode.
+  const syncEnabled = (input as MarkdownPreviewInput).sourceInput === undefined
+  useMarkdownSyncScroll(rootRef, sourceUri, syncEnabled)
   useMarkdownPreviewScrollRestore(rootRef, stateKey)
 
   useEffect(() => {
