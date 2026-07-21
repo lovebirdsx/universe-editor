@@ -213,6 +213,7 @@ import {
   OpenSwarmReviewByIdAction,
   WorkbenchOpenSwarmReviewAction,
   WorkbenchOpenSwarmReviewsAction,
+  WorkbenchSwarmPollTickAction,
   RefreshSwarmReviewsAction,
 } from './swarmActions.js'
 import {
@@ -550,6 +551,7 @@ registerAction2(OpenSwarmReviewAction)
 registerAction2(OpenSwarmReviewByIdAction)
 registerAction2(WorkbenchOpenSwarmReviewAction)
 registerAction2(WorkbenchOpenSwarmReviewsAction)
+registerAction2(WorkbenchSwarmPollTickAction)
 registerAction2(RefreshSwarmReviewsAction)
 
 // Git Blame

@@ -20,6 +20,7 @@ import {
 } from '@universe-editor/platform'
 import { SwarmReviewEditorInput } from '../services/editor/SwarmReviewEditorInput.js'
 import { requestSwarmReviewsRefresh } from '../services/swarm/swarmViewState.js'
+import { driveSwarmNotificationTick } from '../services/swarm/swarmNotificationTick.js'
 
 /** Focus (and reveal) the Swarm Reviews view container in the primary side bar. */
 function revealSwarmContainer(accessor: ServicesAccessor): void {
@@ -144,6 +145,27 @@ export class WorkbenchOpenSwarmReviewsAction extends Action2 {
 
   override async run(accessor: ServicesAccessor): Promise<void> {
     revealSwarmContainer(accessor)
+  }
+}
+
+/**
+ * Host-invokable poll tick for the new-review desktop notification. The poll timer
+ * lives in the perforce extension host (a Node child process Chromium never
+ * background-throttles) so notifications keep firing while the window sits in the
+ * background — the renderer's own setInterval freezes there, which is why
+ * notifications never fired overnight. Routes to the live contribution's refresh()
+ * via the module-level tick seam (this Action2 is stateless). Never appears in the
+ * extension's package.json `commands` — it is a host→renderer `_workbench.*` lane.
+ */
+export class WorkbenchSwarmPollTickAction extends Action2 {
+  static readonly ID = '_workbench.swarmPollTick'
+
+  constructor() {
+    super({ id: WorkbenchSwarmPollTickAction.ID, title: 'Swarm Poll Tick' })
+  }
+
+  override async run(): Promise<void> {
+    await driveSwarmNotificationTick()
   }
 }
 

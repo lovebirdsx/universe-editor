@@ -11,8 +11,12 @@
  *  The notification is driven by the list *as finally displayed* — the same
  *  author / approvable-only filters (swarmReviewFilter) and the client-side ignore
  *  set (swarmIgnoreStore) the sidebar view applies — minus the transient keyword
- *  box, which is a lookup, not a scope. It polls the dashboard on its own timer so
- *  new reviews are surfaced even when the (only-mounts-while-visible) view is closed.
+ *  box, which is a lookup, not a scope. Polling is driven primarily by the perforce
+ *  extension host's timer (via `_workbench.swarmPollTick`), which — unlike this
+ *  renderer's own setInterval — Chromium never background-throttles, so new reviews
+ *  surface even while the window sits in the background (and even when the
+ *  only-mounts-while-visible view is closed). The renderer timer remains as a
+ *  foreground-only backstop.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -37,6 +41,7 @@ import { swarmIgnoreStore, splitIgnored } from '../services/swarm/swarmIgnoreSto
 import { swarmReviewsViewState } from '../services/swarm/swarmViewState.js'
 import { filterNeedsAction, readSwarmFilterConfig } from '../services/swarm/swarmReviewFilter.js'
 import { swarmNotificationE2E } from '../services/swarm/swarmNotificationE2E.js'
+import { setSwarmNotificationTickHandler } from '../services/swarm/swarmNotificationTick.js'
 import { OpenSwarmReviewAction, OpenSwarmReviewsAction } from '../actions/swarmActions.js'
 import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 
@@ -66,6 +71,16 @@ export class SwarmReviewNotificationContribution
     // (the view / detail tab / view contribution may already have attached it).
     void swarmIgnoreStore.attach(storage)
 
+    // The primary poll driver is the perforce extension host's timer, which invokes
+    // `_workbench.swarmPollTick` → this handler. The host runs in a Node child
+    // process Chromium never background-throttles, so it keeps ticking while the
+    // window sits in the background — where the renderer's own setInterval below
+    // freezes (the reason notifications never fired overnight). The renderer timer
+    // stays as a foreground-only backstop (and covers windows whose perforce host
+    // isn't driving ticks); refresh() is serialized + de-duped so both driving it
+    // is harmless.
+    setSwarmNotificationTickHandler(() => this.refresh())
+
     this._timer = setInterval(() => void this.refresh(), POLL_INTERVAL_MS)
     this._register({ dispose: () => this._stop() })
     // E2E: let a spec drive one poll synchronously (the 60s timer is far too slow
@@ -79,6 +94,7 @@ export class SwarmReviewNotificationContribution
   }
 
   private _stop(): void {
+    setSwarmNotificationTickHandler(undefined)
     if (this._timer) {
       clearInterval(this._timer)
       this._timer = undefined
