@@ -407,17 +407,20 @@ export class AcpSessionRestoreCoordinator extends Disposable {
 /**
  * Map a protocol `SessionInfo` to the history layer's `BulkMergeSessionInfo`,
  * lifting the agent's `_meta.gitBranch` (our fork sets this from the SDK's
- * end-of-session git branch) into a first-class `branch` field.
+ * end-of-session git branch) and `_meta.transcriptPath` (the session's JSONL
+ * transcript file path) into first-class fields.
  */
 function toBulkMergeInfo(info: SessionInfo): BulkMergeSessionInfo {
-  const meta = info._meta as { gitBranch?: unknown } | null | undefined
+  const meta = info._meta as { gitBranch?: unknown; transcriptPath?: unknown } | null | undefined
   const branch = typeof meta?.gitBranch === 'string' ? meta.gitBranch : undefined
+  const transcriptPath = typeof meta?.transcriptPath === 'string' ? meta.transcriptPath : undefined
   return {
     sessionId: info.sessionId,
     cwd: info.cwd ?? null,
     title: info.title ?? null,
     updatedAt: info.updatedAt ?? null,
     ...(branch !== undefined ? { branch } : {}),
+    ...(transcriptPath !== undefined ? { transcriptPath } : {}),
   }
 }
 

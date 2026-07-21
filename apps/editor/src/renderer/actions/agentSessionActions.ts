@@ -10,6 +10,7 @@ import {
   IDialogService,
   IEditorGroupsService,
   IEditorService,
+  IHostService,
   IInstantiationService,
   INotificationService,
   IQuickInputService,
@@ -552,6 +553,53 @@ export class RenameAgentSessionAction extends Action2 {
     const trimmed = next.trim()
     if (trimmed.length === 0 || trimmed === current) return
     sessions.renameSession(sessionId, trimmed)
+  }
+}
+
+/**
+ * Reveal a session's transcript file in the OS file manager. Target resolution:
+ *  1. explicit `{ sessionId }` arg (session list context menu),
+ *  2. the active session (command palette / sidebar chat).
+ * No-op when the session has no transcript path (codex and other agents that
+ * keep no per-session JSONL file report none).
+ */
+export class RevealAgentSessionInOSAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.revealSessionInOS'
+  constructor() {
+    super({
+      id: RevealAgentSessionInOSAction.ID,
+      title: localize2(
+        'action.agent.revealSessionInOS',
+        'Reveal Session Transcript in File Manager',
+      ),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor, arg?: { sessionId?: unknown }): Promise<void> {
+    const sessions = accessor.get(IAcpSessionService)
+    const history = accessor.get(IAcpSessionHistoryService)
+    const host = accessor.get(IHostService)
+    const notifications = accessor.get(INotificationService)
+
+    const sessionId =
+      arg && typeof arg.sessionId === 'string' && arg.sessionId.length > 0
+        ? arg.sessionId
+        : sessions.activeSession.get()?.id
+    if (sessionId === undefined) return
+
+    const transcriptPath = history.get(sessionId)?.transcriptPath
+    if (transcriptPath === undefined || transcriptPath === null || transcriptPath.length === 0) {
+      notifications.notify({
+        severity: Severity.Info,
+        message: localize(
+          'agent.revealSession.noTranscript',
+          'This session has no transcript file to reveal.',
+        ),
+      })
+      return
+    }
+    await host.showItemInFolder(transcriptPath)
   }
 }
 

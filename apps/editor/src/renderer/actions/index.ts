@@ -276,6 +276,7 @@ import {
   RefreshAgentSessionsAction,
   RenameAgentSessionAction,
   ResumeAgentSessionAction,
+  RevealAgentSessionInOSAction,
   RewindAgentSessionAction,
   ScrollAcpTimelinePageDownAction,
   ScrollAcpTimelinePageUpAction,
@@ -640,6 +641,7 @@ registerAction2(ResumeAgentSessionAction)
 registerAction2(ClearAgentSessionHistoryAction)
 registerAction2(RefreshAgentSessionsAction)
 registerAction2(RenameAgentSessionAction)
+registerAction2(RevealAgentSessionInOSAction)
 registerAction2(RewindAgentSessionAction)
 registerAction2(ForkAgentSessionAction)
 registerAction2(FocusNextAcpTimelineItemAction)

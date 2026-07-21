@@ -27,6 +27,7 @@ import {
 } from '@universe-editor/platform'
 import {
   ResumeAgentSessionAction,
+  RevealAgentSessionInOSAction,
   ScrollAcpTimelinePageDownAction,
   ScrollAcpTimelinePageUpAction,
   FocusBottomAcpTimelineAction,
@@ -744,5 +745,87 @@ describe('ResumeAgentSessionAction', () => {
     await run(b)
     // The fix routes around resumeSession entirely, so the user gets a tab.
     expect(b.openEditor).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('RevealAgentSessionInOSAction', () => {
+  function makeEntry(over: Partial<AcpSessionHistoryEntry>): AcpSessionHistoryEntry {
+    return {
+      id: 'sess-1',
+      agentId: 'fake',
+      sessionIdOnAgent: 'sess-1',
+      title: 'Session 1',
+      createdAt: 0,
+      lastUsedAt: 0,
+      ...over,
+    }
+  }
+
+  function build(opts: { entries: readonly AcpSessionHistoryEntry[]; activeSessionId?: string }) {
+    const showItemInFolder = vi.fn(async () => {})
+    const notify = vi.fn()
+    const activeSession = opts.activeSessionId
+      ? ({ id: opts.activeSessionId } as IAcpSession)
+      : undefined
+
+    const sessions = {
+      _serviceBrand: undefined,
+      activeSession: observableValue<IAcpSession | undefined>('test.active', activeSession),
+    } as unknown as IAcpSessionService
+    const history = {
+      _serviceBrand: undefined,
+      get: (id: string) => opts.entries.find((e) => e.id === id),
+    } as unknown as IAcpSessionHistoryService
+    const host = {
+      _serviceBrand: undefined,
+      platform: 'linux',
+      showItemInFolder,
+    } as unknown as IHostService
+    const notification = { _serviceBrand: undefined, notify } as unknown as INotificationService
+
+    const services = new ServiceCollection()
+    services.set(IAcpSessionService, sessions)
+    services.set(IAcpSessionHistoryService, history)
+    services.set(IHostService, host)
+    services.set(INotificationService, notification)
+    const inst = new InstantiationService(services)
+    return { inst, showItemInFolder, notify }
+  }
+
+  async function run(
+    b: { inst: InstantiationService },
+    arg?: { sessionId?: unknown },
+  ): Promise<void> {
+    await b.inst.invokeFunction((accessor) => new RevealAgentSessionInOSAction().run(accessor, arg))
+  }
+
+  it('reveals the transcript file for the given session id', async () => {
+    const entry = makeEntry({ transcriptPath: '/home/u/.claude/projects/x/sess-1.jsonl' })
+    const b = build({ entries: [entry] })
+    await run(b, { sessionId: 'sess-1' })
+    expect(b.showItemInFolder).toHaveBeenCalledWith('/home/u/.claude/projects/x/sess-1.jsonl')
+    expect(b.notify).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the active session when no arg is given', async () => {
+    const entry = makeEntry({ transcriptPath: '/p/sess-1.jsonl' })
+    const b = build({ entries: [entry], activeSessionId: 'sess-1' })
+    await run(b)
+    expect(b.showItemInFolder).toHaveBeenCalledWith('/p/sess-1.jsonl')
+  })
+
+  it('notifies (and does not reveal) when the session has no transcript path', async () => {
+    const entry = makeEntry({})
+    const b = build({ entries: [entry] })
+    await run(b, { sessionId: 'sess-1' })
+    expect(b.showItemInFolder).not.toHaveBeenCalled()
+    expect(b.notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('is a no-op when no session id resolves', async () => {
+    const b = build({ entries: [] })
+    await run(b)
+    expect(b.showItemInFolder).not.toHaveBeenCalled()
+    expect(b.notify).not.toHaveBeenCalled()
   })
 })

@@ -16,6 +16,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from 'react'
 import {
   localize,
@@ -48,6 +49,11 @@ import { statusBucketFor } from '../../services/acp/acpSessionFilterService.js'
 import { computeSessionDisplayStatus } from '../../services/acp/acpSessionStatus.js'
 import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
 import { AgentIcon } from './agentIcon.js'
+import {
+  SessionRowContextMenu,
+  type SessionRowContextMenuState,
+  type SessionRowMenuItem,
+} from './SessionRowContextMenu.js'
 import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
 import { formatCny } from './SessionCostIndicator.js'
 import { findLabel } from './ConfigOptionsBar.js'
@@ -201,6 +207,7 @@ function SessionRow({
   onActivate,
   onRemove,
   onRename,
+  onContextMenu,
   rate,
   scope,
   isForeign,
@@ -212,6 +219,7 @@ function SessionRow({
   onActivate: () => void
   onRemove: () => void
   onRename: (() => void) | undefined
+  onContextMenu: (e: ReactMouseEvent) => void
   rate: number
   scope: SessionHistoryScope
   isForeign: boolean
@@ -250,6 +258,7 @@ function SessionRow({
       data-foreign={isForeign ? 'true' : 'false'}
       data-testid={`session-row-${entry.id}`}
       onClick={onActivate}
+      onContextMenu={onContextMenu}
     >
       <div className={styles['sessionRowTitle']}>
         <span className={styles['sessionRowLabelLine']}>
@@ -341,6 +350,8 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
   // Subscribe to sessions so the running indicator re-renders.
   useObservable(service.sessions)
   const activeId = useObservable(service.activeSessionId)
+
+  const [menu, setMenu] = useState<SessionRowContextMenuState | null>(null)
 
   const searchOpen = useObservable(filterService.searchOpen)
   const query = useObservable(filterService.query)
@@ -476,6 +487,71 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
               entry.cwd !== undefined &&
               currentCwd !== undefined &&
               !uriIdentity.arePathsEqual(entry.cwd, currentCwd)
+            const onRename = isForeign
+              ? undefined
+              : () => {
+                  void commandService.executeCommand('workbench.action.agent.renameSession', {
+                    sessionId: entry.id,
+                  })
+                }
+            const onReveal = () => {
+              void commandService.executeCommand('workbench.action.agent.revealSessionInOS', {
+                sessionId: entry.id,
+              })
+            }
+            const onRemove = () => {
+              void (async () => {
+                if (config.get<boolean>('acp.sessions.confirmDelete') !== false) {
+                  const result = await dialogService.confirm({
+                    message: localize('acp.sessions.removeConfirm', 'Delete this session?'),
+                    detail: localize(
+                      'acp.sessions.removeConfirmDetail',
+                      'This will delete the session and its history.',
+                    ),
+                    primaryButton: localize('acp.sessions.removeConfirmOk', 'Delete'),
+                    cancelButton: localize('acp.sessions.removeConfirmCancel', 'Cancel'),
+                    neverAskAgainLabel: localize('acp.sessions.removeNeverAsk', "Don't ask again"),
+                  })
+                  if (!result.confirmed) return
+                  if (result.neverAskAgain) {
+                    config.update('acp.sessions.confirmDelete', false, ConfigurationTarget.User)
+                  }
+                }
+                if (liveSession) await service.closeSession(liveSession.id)
+                await service.deleteOnAgent(entry.id)
+                history.remove(entry.id)
+              })()
+            }
+            const hasTranscript =
+              entry.transcriptPath !== undefined &&
+              entry.transcriptPath !== null &&
+              entry.transcriptPath.length > 0
+            const openContextMenu = (e: ReactMouseEvent) => {
+              e.preventDefault()
+              e.stopPropagation()
+              const items: SessionRowMenuItem[] = []
+              if (onRename) {
+                items.push({
+                  kind: 'item',
+                  label: localize('acp.sessions.renameMenu', 'Rename Session'),
+                  run: onRename,
+                })
+              }
+              items.push({
+                kind: 'item',
+                label: localize('acp.sessions.revealTranscript', 'Open Session Location'),
+                disabled: !hasTranscript,
+                run: onReveal,
+              })
+              items.push({ kind: 'separator' })
+              items.push({
+                kind: 'item',
+                label: localize('acp.sessions.removeMenu', 'Delete Session'),
+                danger: true,
+                run: onRemove,
+              })
+              setMenu({ x: e.clientX, y: e.clientY, sessionId: entry.id, items })
+            }
             return (
               <SessionRow
                 key={entry.id}
@@ -486,15 +562,8 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
                 scope={scope}
                 isForeign={isForeign}
                 foreignStat={foreignStats.get(entry.id)}
-                onRename={
-                  isForeign
-                    ? undefined
-                    : () => {
-                        void commandService.executeCommand('workbench.action.agent.renameSession', {
-                          sessionId: entry.id,
-                        })
-                      }
-                }
+                onRename={onRename}
+                onContextMenu={openContextMenu}
                 onActivate={() => {
                   const fresh = service.getById(entry.id)
                   // Exclude read-only previews: a live read-only session must not
@@ -527,37 +596,13 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
                   }
                   onPick?.(entry)
                 }}
-                onRemove={() => {
-                  void (async () => {
-                    if (config.get<boolean>('acp.sessions.confirmDelete') !== false) {
-                      const result = await dialogService.confirm({
-                        message: localize('acp.sessions.removeConfirm', 'Delete this session?'),
-                        detail: localize(
-                          'acp.sessions.removeConfirmDetail',
-                          'This will delete the session and its history.',
-                        ),
-                        primaryButton: localize('acp.sessions.removeConfirmOk', 'Delete'),
-                        cancelButton: localize('acp.sessions.removeConfirmCancel', 'Cancel'),
-                        neverAskAgainLabel: localize(
-                          'acp.sessions.removeNeverAsk',
-                          "Don't ask again",
-                        ),
-                      })
-                      if (!result.confirmed) return
-                      if (result.neverAskAgain) {
-                        config.update('acp.sessions.confirmDelete', false, ConfigurationTarget.User)
-                      }
-                    }
-                    if (liveSession) await service.closeSession(liveSession.id)
-                    await service.deleteOnAgent(entry.id)
-                    history.remove(entry.id)
-                  })()
-                }}
+                onRemove={onRemove}
               />
             )
           })}
         </ul>
       )}
+      {menu ? <SessionRowContextMenu state={menu} onClose={() => setMenu(null)} /> : null}
     </div>
   )
 }

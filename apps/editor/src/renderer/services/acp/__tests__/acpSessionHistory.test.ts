@@ -685,6 +685,51 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
     expect(list[0]?.cwd).toBe('/work')
   })
 
+  it('carries the transcriptPath from the protocol session onto the entry', async () => {
+    await svc.initialize()
+    svc.bulkMergeFromAgent(
+      'fake',
+      [
+        {
+          sessionId: 's-1',
+          cwd: '/work',
+          title: 'one',
+          updatedAt: null,
+          transcriptPath: '/home/u/.claude/projects/work/s-1.jsonl',
+        },
+      ],
+      '/work',
+      'workspace',
+    )
+    expect(svc.get('s-1')?.transcriptPath).toBe('/home/u/.claude/projects/work/s-1.jsonl')
+  })
+
+  it('preserves an existing transcriptPath when the protocol omits it', async () => {
+    await svc.initialize()
+    svc.bulkMergeFromAgent(
+      'fake',
+      [
+        {
+          sessionId: 's-1',
+          cwd: '/work',
+          title: 'one',
+          updatedAt: null,
+          transcriptPath: '/p/s-1.jsonl',
+        },
+      ],
+      '/work',
+      'workspace',
+    )
+    // A later hydrate that doesn't report the path must not wipe it.
+    svc.bulkMergeFromAgent(
+      'fake',
+      [{ sessionId: 's-1', cwd: '/work', title: 'renamed', updatedAt: '2024-03-01T00:00:00Z' }],
+      '/work',
+      'workspace',
+    )
+    expect(svc.get('s-1')?.transcriptPath).toBe('/p/s-1.jsonl')
+  })
+
   it('upserts existing rows by (agentId, sessionIdOnAgent) and keeps the local id/createdAt', async () => {
     await svc.initialize()
     const existing = svc.add({

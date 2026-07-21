@@ -62,6 +62,14 @@ export interface AcpSessionHistoryEntry {
    * all agents report it and non-git sessions have none.
    */
   readonly branch?: string
+  /**
+   * Absolute path to the session's transcript file (claude: the `.jsonl` under
+   * `~/.claude/projects/<encoded-cwd>/`), reported by the agent via
+   * `SessionInfo._meta.transcriptPath`. Optional — codex and other agents that
+   * have no per-session transcript file omit it. Used by the "Reveal Session
+   * Location" command to show the file in the OS file manager.
+   */
+  readonly transcriptPath?: string
   /** Unix epoch milliseconds. */
   readonly createdAt: number
   /** Unix epoch milliseconds — updated on resume + on outbound prompt. */
@@ -254,6 +262,8 @@ export interface BulkMergeSessionInfo {
   readonly updatedAt?: string | null
   /** Git branch reported via the agent's `SessionInfo._meta.gitBranch`, if any. */
   readonly branch?: string | null
+  /** Transcript file path reported via `SessionInfo._meta.transcriptPath`, if any. */
+  readonly transcriptPath?: string | null
 }
 
 export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryService>(
@@ -562,18 +572,24 @@ export class AcpSessionHistoryService
       const cwd = typeof info.cwd === 'string' && info.cwd.length > 0 ? info.cwd : existing?.cwd
       const branch =
         typeof info.branch === 'string' && info.branch.length > 0 ? info.branch : existing?.branch
+      const transcriptPath =
+        typeof info.transcriptPath === 'string' && info.transcriptPath.length > 0
+          ? info.transcriptPath
+          : existing?.transcriptPath
       if (existing) {
         const lastUsedAt = Math.max(existing.lastUsedAt, protocolTs ?? 0)
         const sameTitle = existing.title === title
         const sameCwd = existing.cwd === cwd || this._uriIdentity.arePathsEqual(existing.cwd, cwd)
         const sameBranch = existing.branch === branch
+        const sameTranscriptPath = existing.transcriptPath === transcriptPath
         const sameLastUsed = existing.lastUsedAt === lastUsedAt
-        if (sameTitle && sameCwd && sameBranch && sameLastUsed) continue
+        if (sameTitle && sameCwd && sameBranch && sameTranscriptPath && sameLastUsed) continue
         const next: AcpSessionHistoryEntry = {
           ...existing,
           title,
           ...(cwd !== undefined ? { cwd } : {}),
           ...(branch !== undefined ? { branch } : {}),
+          ...(transcriptPath !== undefined ? { transcriptPath } : {}),
           lastUsedAt,
         }
         byKey.set(key, next)
@@ -587,6 +603,7 @@ export class AcpSessionHistoryService
           title,
           ...(cwd !== undefined ? { cwd } : {}),
           ...(branch !== undefined ? { branch } : {}),
+          ...(transcriptPath !== undefined ? { transcriptPath } : {}),
           createdAt: created,
           lastUsedAt: created,
         }
