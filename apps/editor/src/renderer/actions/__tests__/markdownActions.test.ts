@@ -236,10 +236,13 @@ describe('OpenMarkdownSourceAction — carries preview scroll back to the source
   })
 })
 
-// Entering the preview must align it to the source file's cursor line, so it
-// opens where the user was editing rather than at the preview's own saved scroll.
-// OpenMarkdownPreviewAction stashes a one-shot reveal-line the preview consumes.
-describe('OpenMarkdownPreviewAction — aligns the preview to the source cursor', () => {
+// Entering the preview must align it to the source file's *viewport top* line, so
+// it opens where the user is looking rather than at the preview's own saved
+// scroll. Crucially it must NOT use the cursor line: mouse-wheel scrolling leaves
+// the cursor behind, so aligning to the cursor snaps the preview back to the
+// cursor's (stale) position — the very bug this covers. OpenMarkdownPreviewAction
+// stashes a one-shot reveal-line the preview consumes.
+describe('OpenMarkdownPreviewAction — aligns the preview to the source viewport top', () => {
   const disposables: IDisposable[] = []
 
   afterEach(() => {
@@ -248,21 +251,42 @@ describe('OpenMarkdownPreviewAction — aligns the preview to the source cursor'
     FileEditorRegistry._resetForTests()
   })
 
-  it('stashes the source cursor line as the preview reveal request', async () => {
+  it('stashes the source top-visible line (not the cursor) as the preview reveal request', async () => {
     const { groups, inst } = setup()
     const sourceUri = URI.file('/repo/doc.md')
 
     const source = inst.createInstance(FileEditorInput, sourceUri)
     groups.activeGroup.openEditor(source, { activate: true, pinned: true })
-    // Register a fake Monaco editor whose cursor sits on line 63.
+    // Register a fake Monaco editor scrolled to the bottom (viewport top = line 90)
+    // while the cursor is left behind on line 1 — exactly what mouse-wheel scrolling
+    // produces. The preview must follow the viewport, not the cursor.
     const fakeEditor = {
+      getVisibleRanges: () => [{ startLineNumber: 90 }],
+      getPosition: () => ({ lineNumber: 1, column: 1 }),
+    } as never
+    FileEditorRegistry.register(source, fakeEditor, groups.activeGroup.id)
+
+    await runCommand(inst, OpenMarkdownPreviewAction, disposables)
+
+    // The preview replaced the source tab and a reveal-to-line-90 request is queued.
+    expect(groups.activeGroup.activeEditor).toBeInstanceOf(MarkdownPreviewInput)
+    expect(MarkdownPreviewViewStateCache.peekRevealLine(sourceUri.toString())).toBe(90)
+  })
+
+  it('falls back to the cursor line when no visible range is available yet', async () => {
+    const { groups, inst } = setup()
+    const sourceUri = URI.file('/repo/doc.md')
+
+    const source = inst.createInstance(FileEditorInput, sourceUri)
+    groups.activeGroup.openEditor(source, { activate: true, pinned: true })
+    const fakeEditor = {
+      getVisibleRanges: () => [],
       getPosition: () => ({ lineNumber: 63, column: 1 }),
     } as never
     FileEditorRegistry.register(source, fakeEditor, groups.activeGroup.id)
 
     await runCommand(inst, OpenMarkdownPreviewAction, disposables)
 
-    // The preview replaced the source tab and a reveal-to-line-63 request is queued.
     expect(groups.activeGroup.activeEditor).toBeInstanceOf(MarkdownPreviewInput)
     expect(MarkdownPreviewViewStateCache.peekRevealLine(sourceUri.toString())).toBe(63)
   })

@@ -57,13 +57,21 @@ function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
   const active = source.activeEditor
   if (!(active instanceof FileEditorInput)) return
 
-  // Open the preview aligned to the source file's cursor line, so it lands where
-  // the user was editing rather than at the preview's own (possibly stale) saved
-  // scroll. Stash a one-shot reveal request the MarkdownPreviewEditor consumes on
-  // mount (it maps the source line to a pixel offset as the content lays out).
-  const cursorLine = FileEditorRegistry.get(active)?.getPosition()?.lineNumber
-  if (cursorLine !== undefined) {
-    MarkdownPreviewViewStateCache.saveRevealLine(active.resource.toString(), cursorLine)
+  // Open the preview aligned to the source editor's *viewport top*, so it lands
+  // where the user is looking rather than at the preview's own (possibly stale)
+  // saved scroll. Using the top visible line — not the cursor — matters because
+  // mouse-wheel scrolling leaves the cursor behind: aligning to the cursor would
+  // snap the preview back to the cursor's line (e.g. the top of the file after
+  // scrolling to the bottom with the wheel). Falls back to the cursor line only
+  // when the visible range isn't available yet. Symmetric with OpenMarkdownSource,
+  // which carries the preview's top-visible line back to the source. Stash a
+  // one-shot reveal request the MarkdownPreviewEditor consumes on mount (it maps
+  // the source line to a pixel offset as the content lays out).
+  const editor = FileEditorRegistry.get(active)
+  const revealLine =
+    editor?.getVisibleRanges()[0]?.startLineNumber ?? editor?.getPosition()?.lineNumber
+  if (revealLine !== undefined) {
+    MarkdownPreviewViewStateCache.saveRevealLine(active.resource.toString(), revealLine)
   }
 
   let target: IEditorGroup = source
