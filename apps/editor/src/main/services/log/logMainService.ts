@@ -94,6 +94,7 @@ class FileLogger extends AbstractLogger {
   ) => void
   private _writeQueue: Array<{ readonly level: LogLevel; readonly line: string }> = []
   private _pendingFlush: ReturnType<typeof setTimeout> | null = null
+  private _flushChain: Promise<void> = Promise.resolve()
   private _estimatedSize = 0
   private _timestampFormat: string = LOG_TIMESTAMP_FORMAT_DEFAULT
   // Rotate-burst circuit breaker. When rotations come faster than a real workload
@@ -152,7 +153,10 @@ class FileLogger extends AbstractLogger {
       this._writeQueue.push({ level: LogLevel.Warning, line: warnLine })
       this._estimatedSize += warnLine.length
     }
-    this._scheduleFlush()
+    // Error entries are the ones most likely to precede a crash — the debounce
+    // window would lose exactly the evidence we need. Flush them immediately.
+    if (level >= LogLevel.Error) this.flush()
+    else this._scheduleFlush()
   }
 
   private _scheduleFlush(): void {
@@ -171,7 +175,14 @@ class FileLogger extends AbstractLogger {
     void this._doFlush()
   }
 
-  private async _doFlush(): Promise<void> {
+  private _doFlush(): Promise<void> {
+    // Serialize appends: an immediate error flush racing a debounced flush must
+    // not land its chunk out of order.
+    this._flushChain = this._flushChain.then(() => this._flushNow())
+    return this._flushChain
+  }
+
+  private async _flushNow(): Promise<void> {
     if (this._writeQueue.length === 0) return
     const entries = this._writeQueue.splice(0)
     const content = entries.map((entry) => entry.line).join('')

@@ -255,6 +255,33 @@ describe('LogMainService', () => {
     await new Promise((r) => setTimeout(r, 200))
     expect(events).toHaveLength(0)
   })
+
+  it('error entries are written immediately, ahead of the flush debounce', async () => {
+    const svc = new LogMainService()
+    const logger = svc.createLogger({ id: 'immediate', name: 'Immediate' })
+    logger.error('boom')
+
+    // Well inside the 150ms debounce window: only an immediate flush can have
+    // written the file by now.
+    await new Promise((r) => setTimeout(r, 60))
+
+    const logFile = join(tmpDir, 'logs', svc.getSessionId(), 'immediate.log')
+    const content = await fs.readFile(logFile, 'utf8')
+    expect(content).toContain('[error] boom')
+  })
+
+  it('an immediate error flush does not reorder earlier debounced entries', async () => {
+    const svc = new LogMainService()
+    const logger = svc.createLogger({ id: 'ordered', name: 'Ordered' })
+    logger.info('first info')
+    logger.error('then error')
+    await new Promise((r) => setTimeout(r, 200))
+
+    const logFile = join(tmpDir, 'logs', svc.getSessionId(), 'ordered.log')
+    const content = await fs.readFile(logFile, 'utf8')
+    expect(content.indexOf('first info')).toBeGreaterThanOrEqual(0)
+    expect(content.indexOf('first info')).toBeLessThan(content.indexOf('then error'))
+  })
 })
 
 describe('MainLogChannelService', () => {

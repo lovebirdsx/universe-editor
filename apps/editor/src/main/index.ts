@@ -67,6 +67,12 @@ import { IDocsService } from '../shared/ipc/docsService.js'
 import { ISessionSwitcherService } from '../shared/ipc/sessionSwitcher.js'
 import { ITextSearchMainService } from '../shared/ipc/textSearchService.js'
 import { installMainErrorHandlers } from './errors.js'
+import { installCrashReporter, installChildProcessGoneLogging } from './crashMonitoring.js'
+import {
+  armSessionSentinel,
+  disarmSessionSentinel,
+  readAbnormalExitReport,
+} from './sessionSentinel.js'
 import { applyProductIdentity, resolveProductIdentity } from './productPaths.js'
 import {
   EnvironmentMainService,
@@ -180,6 +186,10 @@ if (environmentService.shouldPrintVersion) {
 // Must run before any `app.getPath('userData')` call (e.g. new LogMainService()).
 applyProductIdentity(app, productIdentity)
 
+// Native crashes bypass uncaughtException and the file logger entirely — local
+// minidumps are the only way to diagnose a silent quit after the fact.
+installCrashReporter()
+
 // Register as the OS handler for `universe-editor://` deep links. On Windows the
 // packaged exe path + args must be passed explicitly so a protocol launch
 // re-enters this binary; on macOS the association is declared in the plist and
@@ -228,6 +238,8 @@ installMainErrorHandlers(mainLogger)
 // Output panel) without requiring stdout/DevTools to be open.
 const consoleLogger = logMainService.createLogger({ id: 'console', name: 'Console' })
 const consoleInterceptor = installConsoleInterceptor({ logger: consoleLogger })
+
+installChildProcessGoneLogging(mainLogger)
 
 const e2eEnabled = environmentService.isE2E
 
@@ -462,6 +474,20 @@ void app.whenReady().then(async () => {
   mark(PerfMarks.mainAppReady)
   mainLogger.info(`app ready locale=${app.getLocale()} e2e=${e2eEnabled}`)
 
+  // A leftover sentinel means the previous session died without reaching
+  // will-quit (native crash / external kill). Say so up front, with any crash
+  // dumps written since — the difference tells "crashed" apart from "killed".
+  const abnormalExit = readAbnormalExitReport(app.getPath('userData'), app.getPath('crashDumps'))
+  if (abnormalExit) {
+    mainLogger.error(
+      `previous session ${abnormalExit.previousSessionId} terminated abnormally (no clean-shutdown record); ` +
+        (abnormalExit.crashDumps.length > 0
+          ? `crash dumps: ${abnormalExit.crashDumps.join(', ')}`
+          : 'no crash dump found — likely killed externally (AV / OOM / task kill)'),
+    )
+  }
+  armSessionSentinel(app.getPath('userData'), logMainService.getSessionId())
+
   // Drop Electron's built-in application menu on Windows/Linux. Those platforms
   // render a self-drawn title bar (frame:false), so the default menu is invisible
   // yet still registers accelerators — notably Ctrl+R / Ctrl+Shift+R / F5, which
@@ -558,6 +584,8 @@ app.on('before-quit', (e) => {
 app.on('will-quit', () => {
   mainLogger.info('will-quit')
   recordShutdownMark('willQuit.start')
+  // Reaching will-quit at all is what "clean shutdown" means to the sentinel.
+  disarmSessionSentinel(app.getPath('userData'))
   windowsJumpList?.dispose()
   windowMainService?.dispose()
   // Disposes every materialized application service (acpHost kills child
