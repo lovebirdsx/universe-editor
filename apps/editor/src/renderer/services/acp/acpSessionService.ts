@@ -97,6 +97,7 @@ export {
   type AcpMessageRole,
   type AcpToolCall,
   type AcpToolCallDiff,
+  type AcpToolCallLocation,
   type AcpToolCallStatus,
   type AcpChildItem,
   type AcpPlanEntry,

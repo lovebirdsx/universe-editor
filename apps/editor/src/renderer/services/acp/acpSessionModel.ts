@@ -46,6 +46,17 @@ export interface AcpToolCallDiff {
   readonly newText: string
 }
 
+/**
+ * A file the tool call touched, from the SDK's protocol-standard
+ * `ToolCall.locations` ("follow-along"). Both agent forks populate it for
+ * read/edit/write/search/memory tools. The renderer turns each into a clickable
+ * link that opens the file (at `line`, when present) via the shared file opener.
+ */
+export interface AcpToolCallLocation {
+  readonly path: string
+  readonly line?: number
+}
+
 export interface AcpToolCall {
   readonly id: string
   readonly title: string
@@ -69,6 +80,13 @@ export interface AcpToolCall {
   readonly blocks: readonly ContentBlock[]
   /** Structured diff entries extracted from ToolCallContent.diff. */
   readonly diffs: readonly AcpToolCallDiff[]
+  /**
+   * Files this tool call accessed or modified, from the SDK `ToolCall.locations`.
+   * Kept so the UI can render a clickable path (opening the file, at `line` when
+   * present) on cards that carry no diff of their own — e.g. read / search /
+   * memory. Absent when the agent reports none.
+   */
+  readonly locations?: readonly AcpToolCallLocation[]
   /**
    * Sub-agent timeline: message / tool_call updates the agent tagged with this
    * call's id via `_meta.claudeCode.parentToolUseId` (e.g. a Task tool spawning

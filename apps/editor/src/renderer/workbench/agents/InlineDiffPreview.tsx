@@ -19,6 +19,11 @@ interface InlineDiffPreviewProps {
   readonly oldText: string
   readonly newText: string
   readonly onOpen: () => void
+  /**
+   * Open the source file for this diff (as opposed to {@link onOpen}, which opens
+   * the diff view). Clicking the path invokes it; omitted → the path is static.
+   */
+  readonly onOpenPath?: () => void
 }
 
 /**
@@ -39,7 +44,13 @@ export function collapsedDiffWindow(
   return { start, count }
 }
 
-export function InlineDiffPreview({ path, oldText, newText, onOpen }: InlineDiffPreviewProps) {
+export function InlineDiffPreview({
+  path,
+  oldText,
+  newText,
+  onOpen,
+  onOpenPath,
+}: InlineDiffPreviewProps) {
   const lines = useMemo(() => computeLineDiff(oldText, newText), [oldText, newText])
   const [expanded, setExpanded] = useState(false)
   const firstChangeIndex = useMemo(() => {
@@ -53,9 +64,21 @@ export function InlineDiffPreview({ path, oldText, newText, onOpen }: InlineDiff
   return (
     <div className={styles['inlineDiff']} data-testid="acp-inline-diff">
       <div className={styles['inlineDiffHeader']}>
-        <span className={styles['inlineDiffPath']} title={path}>
-          📝 {path}
-        </span>
+        {onOpenPath ? (
+          <button
+            type="button"
+            className={styles['inlineDiffPathButton']}
+            title={path}
+            onClick={onOpenPath}
+            data-testid="acp-inline-diff-path"
+          >
+            📝 {path}
+          </button>
+        ) : (
+          <span className={styles['inlineDiffPath']} title={path}>
+            📝 {path}
+          </span>
+        )}
         <button
           type="button"
           className={styles['inlineDiffOpen']}

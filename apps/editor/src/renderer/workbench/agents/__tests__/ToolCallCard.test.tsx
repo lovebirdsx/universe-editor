@@ -289,4 +289,38 @@ describe('ToolCallCard', () => {
     renderCard(makeCall({ kind: 'other', title: 'plain tool' }))
     expect(screen.queryByTestId('acp-subagent-stats')).toBeNull()
   })
+
+  it('renders clickable location links on a read card and opens on click', () => {
+    renderCard(
+      makeCall({
+        kind: 'read',
+        title: 'Read foo.ts',
+        locations: [{ path: '/repo/src/foo.ts', line: 42 }],
+      }),
+    )
+    // read cards start collapsed → expand to reveal the body.
+    fireEvent.click(screen.getByTestId('acp-collapsible-toggle'))
+    const link = screen.getByTestId('acp-toolcall-location')
+    // Basename label + line suffix; full path lives in the tooltip.
+    expect(link.textContent).toContain('foo.ts')
+    expect(link.textContent).toContain(':42')
+    expect(link.getAttribute('title')).toBe('/repo/src/foo.ts:42')
+    // Clicking is wired to the file opener (a no-op without file services here,
+    // but must not throw).
+    fireEvent.click(link)
+  })
+
+  it('does not render a location row on a card with a diff (path shown in the diff header)', () => {
+    renderCard(
+      makeCall({
+        kind: 'edit',
+        title: 'Edit foo.ts',
+        locations: [{ path: '/repo/src/foo.ts' }],
+        diffs: [{ path: '/repo/src/foo.ts', oldText: 'a', newText: 'b' }],
+      }),
+    )
+    expect(screen.queryByTestId('acp-toolcall-locations')).toBeNull()
+    // The diff header path is itself clickable.
+    expect(screen.getByTestId('acp-inline-diff-path')).toBeTruthy()
+  })
 })

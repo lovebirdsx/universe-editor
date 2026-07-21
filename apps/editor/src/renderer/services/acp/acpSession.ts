@@ -45,6 +45,7 @@ import {
   blocksToText,
   isBlankContentBlock,
   mergeStreamingBlock,
+  readToolCallLocations,
   splitToolCallContent,
 } from './acpSessionContent.js'
 import {
@@ -107,6 +108,7 @@ export type {
   AcpSubagentStats,
   AcpToolCall,
   AcpToolCallDiff,
+  AcpToolCallLocation,
   AcpToolCallStatus,
   AcpUsage,
   AskUserQuestion,
@@ -1092,6 +1094,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         const effectiveParent = this._resolveParent(update.toolCallId, parentId)
         if (effectiveParent == null) this._sealStreamingMessages()
         const { blocks, diffs } = splitToolCallContent(update.content ?? [])
+        const locations = readToolCallLocations(update.locations)
         const mcpServer = readMcpServer(update)
         const mcpTool = readMcpTool(update)
         const terminalText = this._accumulateTerminalOutput(update.toolCallId, update)
@@ -1110,6 +1113,7 @@ export class AcpSession extends Disposable implements IAcpSession {
             diffs,
             text: terminalText ?? blocksToText(blocks),
             ...(update.rawInput !== undefined ? { rawInput: update.rawInput } : {}),
+            ...(locations !== undefined ? { locations } : {}),
             ...(mcpServer !== undefined ? { mcpServer } : {}),
             ...(mcpTool !== undefined ? { mcpTool } : {}),
             ...(startedAt !== undefined ? { startedAt } : {}),
@@ -1134,6 +1138,10 @@ export class AcpSession extends Disposable implements IAcpSession {
         const diffs = split?.diffs ?? existing?.diffs ?? []
         const mcpServer = readMcpServer(update) ?? existing?.mcpServer
         const mcpTool = readMcpTool(update) ?? existing?.mcpTool
+        // `locations` is a full replacement when present (SDK "replace the
+        // locations collection"); carry the last known set forward otherwise so
+        // a late `_meta`-only update doesn't drop the clickable path.
+        const locations = readToolCallLocations(update.locations) ?? existing?.locations
         const terminalText = this._accumulateTerminalOutput(update.toolCallId, update)
         const rawInput = update.rawInput !== undefined ? update.rawInput : existing?.rawInput
         // Sub-agent stats ride on late `_meta`-only updates; merge the fresh tally
@@ -1161,6 +1169,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           diffs,
           text: terminalText ?? blocksToText(blocks),
           ...(rawInput !== undefined ? { rawInput } : {}),
+          ...(locations !== undefined ? { locations } : {}),
           ...(mcpServer !== undefined ? { mcpServer } : {}),
           ...(mcpTool !== undefined ? { mcpTool } : {}),
           ...(subagentStats !== undefined ? { subagentStats } : {}),

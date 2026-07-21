@@ -825,6 +825,66 @@
   font-family: var(--font-mono, 'Fira Code', Consolas, monospace);
 }
 
+/* Clickable variant of .inlineDiffPath: opens the source file. Reset button
+   chrome and inherit the mono path styling so it reads as a link. */
+.inlineDiffPathButton {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font-family: var(--font-mono, 'Fira Code', Consolas, monospace);
+  font-size: inherit;
+}
+
+.inlineDiffPathButton:hover {
+  color: var(--color-badge-progress, #4fa6e2);
+  text-decoration: underline;
+}
+
+/* Affected-file links on a read/search/memory card (AcpToolCall.locations). */
+.toolCallLocations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 2px 0 4px;
+}
+
+.toolCallLocation {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  color: var(--color-badge-progress, #4fa6e2);
+  font-family: var(--font-mono, 'Fira Code', Consolas, monospace);
+  font-size: calc(var(--agent-font-size, 12px) * 0.917);
+}
+
+.toolCallLocation:hover .toolCallLocationLabel {
+  text-decoration: underline;
+}
+
+.toolCallLocationLabel {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolCallLocationLine {
+  opacity: 0.7;
+}
+
 .inlineDiffOpen {
   display: inline-flex;
   align-items: center;

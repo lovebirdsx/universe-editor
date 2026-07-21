@@ -10,17 +10,26 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { memo, useState, type ReactNode } from 'react'
-import { IConfigurationService, IEditorService, URI, localize } from '@universe-editor/platform'
-import { useObservable, useService } from '../useService.js'
+import {
+  IConfigurationService,
+  IEditorService,
+  IWorkspaceService,
+  URI,
+  localize,
+} from '@universe-editor/platform'
+import { useObservable, useOptionalService, useService } from '../useService.js'
 import type {
   AcpMessage,
   AcpToolCall,
   AcpToolCallDiff,
+  AcpToolCallLocation,
   IAcpSession,
 } from '../../services/acp/acpSessionService.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
+import { useMarkdownFileLink } from '../markdown/useMarkdownFileLink.js'
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { InlineDiffPreview } from './InlineDiffPreview.js'
+import { ToolCallLocations } from './ToolCallLocations.js'
 import { CodeBlock } from './CodeBlock.js'
 import { MessageContent } from './MessageContent.js'
 import { TerminalOutput, ToolCallSection, ToolCallStatusIcon } from './ToolCallOutput.js'
@@ -105,6 +114,11 @@ export const ToolCallCard = memo(function ToolCallCard({
 }) {
   const editorService = useService(IEditorService)
   const configService = useService(IConfigurationService)
+  const workspaceService = useOptionalService(IWorkspaceService)
+  // Reuse the same file opener the markdown renderer / code blocks use, so a path
+  // on a tool-call card resolves (absolute / relative to workspace) and reveals
+  // its line exactly like a path clicked anywhere else in the chat.
+  const openFilePath = useMarkdownFileLink(workspaceService?.current?.folder)
   const isMcp = call.mcpServer !== undefined
   // Controlled by the timeline (Alt+F / Ctrl+Alt+F); falls back to self-managed
   // state when used standalone (ToolCallList). read/search start collapsed, but
@@ -150,9 +164,21 @@ export const ToolCallCard = memo(function ToolCallCard({
           oldText={d.oldText}
           newText={d.newText}
           onOpen={() => openDiff(d)}
+          onOpenPath={() => openFilePath(d.path)}
         />
       ))}
     </div>
+  )
+
+  // Cards that touched files but carry no diff (read / search / memory) surface
+  // their affected paths as clickable links so the file opens just like a path
+  // clicked in prose. Diff cards already show the path in the diff header, so
+  // skip the row there to avoid duplicating it.
+  const locations = !hasDiffs && !isMcp && call.locations !== undefined && (
+    <ToolCallLocations
+      locations={call.locations}
+      onOpen={(loc: AcpToolCallLocation) => openFilePath(loc.path, loc.line)}
+    />
   )
 
   const commandDetail = display.subtitle !== undefined && (
@@ -218,6 +244,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   ) : (
     <>
       {diffs}
+      {locations}
       {commandDetail}
       {keepPlanning
         ? steerFeedback !== undefined && (

@@ -6,8 +6,14 @@
  *  there so existing import paths keep working.
  *--------------------------------------------------------------------------------------------*/
 
-import type { ContentBlock, ToolCallContent } from '@agentclientprotocol/sdk'
-import type { AcpToolCall, AcpToolCallDiff, AcpChildItem, TimelineItem } from './acpSessionModel.js'
+import type { ContentBlock, ToolCallContent, ToolCallLocation } from '@agentclientprotocol/sdk'
+import type {
+  AcpToolCall,
+  AcpToolCallDiff,
+  AcpToolCallLocation,
+  AcpChildItem,
+  TimelineItem,
+} from './acpSessionModel.js'
 
 /** A text block whose content is empty or only whitespace carries nothing. */
 export function isBlankContentBlock(block: ContentBlock): boolean {
@@ -115,6 +121,24 @@ export function splitToolCallContent(content: readonly ToolCallContent[]): {
     }
   }
   return { blocks, diffs }
+}
+
+/**
+ * Normalize the SDK's `ToolCall.locations` into the view-model shape, dropping
+ * entries without a usable path and coercing the nullable `line` to an optional.
+ * Returns undefined when there is nothing to show, so the caller can omit the
+ * field under `exactOptionalPropertyTypes`.
+ */
+export function readToolCallLocations(
+  locations: readonly ToolCallLocation[] | null | undefined,
+): readonly AcpToolCallLocation[] | undefined {
+  if (locations == null) return undefined
+  const out: AcpToolCallLocation[] = []
+  for (const loc of locations) {
+    if (typeof loc.path !== 'string' || loc.path.length === 0) continue
+    out.push(loc.line != null ? { path: loc.path, line: loc.line } : { path: loc.path })
+  }
+  return out.length > 0 ? out : undefined
 }
 
 /**
