@@ -12,6 +12,7 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import { sameUri } from '../services/explorer/explorerTreeUtils.js'
 import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
+import { resolveTargetEditor } from './editorActionHelpers.js'
 
 /**
  * Resolve every file the Copy Name/Path command should act on. From the Explorer
@@ -42,9 +43,6 @@ export class CopyFileNameAction extends Action2 {
       id: CopyFileNameAction.ID,
       title: localize2('action.copyName.title', 'Copy Name'),
       category: localize2('command.category.file', 'File'),
-      menu: [
-        { id: MenuId.EditorTabContext, group: '2_path', order: 1, when: 'resourceScheme == file' },
-      ],
       f1: true,
     })
   }
@@ -53,6 +51,30 @@ export class CopyFileNameAction extends Action2 {
     if (uris.length === 0) return
     const text = uris.map((uri) => uri.path.slice(uri.path.lastIndexOf('/') + 1)).join('\n')
     await navigator.clipboard.writeText(text)
+  }
+}
+
+/**
+ * Copy the *display name* of the clicked editor tab — for a file that is the
+ * basename, but this works for every tab type (diff / settings / agent session /
+ * welcome / image …) by copying the input's `getName()`, so the tab menu offers
+ * "Copy Name" universally rather than only for on-disk `file:` tabs.
+ */
+export class CopyEditorNameAction extends Action2 {
+  static readonly ID = 'workbench.action.copyEditorName'
+  constructor() {
+    super({
+      id: CopyEditorNameAction.ID,
+      title: localize2('action.copyName.title', 'Copy Name'),
+      category: localize2('command.category.file', 'File'),
+      menu: [{ id: MenuId.EditorTabContext, group: '2_path', order: 1 }],
+    })
+  }
+  override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
+    const target = resolveTargetEditor(accessor, args[0])
+    const name = target?.editor.getName()
+    if (!name) return
+    await navigator.clipboard.writeText(name)
   }
 }
 

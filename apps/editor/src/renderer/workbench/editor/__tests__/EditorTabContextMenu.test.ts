@@ -1,9 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Regression guard: the editor tab right-click menu must gate its entries on
- *  the *clicked* tab. File commands (Copy Name/Path, Reveal, Reopen With) only
- *  show for on-disk `file:` tabs; "Rename Agent Session…" only for acp.session
- *  tabs. A diff tab (virtual `diff:` scheme) shows none of them.
+ *  the *clicked* tab. Path commands (Copy Path/Relative Path, Reveal, Reopen
+ *  With) only show for on-disk `file:` tabs; "Copy Name" shows for *every* tab
+ *  (it copies the input's display name); "Rename Agent Session…" only for
+ *  acp.session tabs. A diff tab (virtual `diff:` scheme) shows only Copy Name.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -15,7 +16,7 @@ import {
   type IDisposable,
 } from '@universe-editor/platform'
 import {
-  CopyFileNameAction,
+  CopyEditorNameAction,
   CopyFilePathAction,
   CopyFileRelativePathAction,
 } from '../../../actions/fileCopyActions.js'
@@ -29,7 +30,7 @@ const disposables: IDisposable[] = []
 
 function register(): void {
   disposables.push(
-    registerAction2(CopyFileNameAction),
+    registerAction2(CopyEditorNameAction),
     registerAction2(CopyFilePathAction),
     registerAction2(CopyFileRelativePathAction),
     registerAction2(RevealInExplorerAction),
@@ -56,8 +57,8 @@ function menuCommandsFor(overrides: Record<string, unknown>): string[] {
     .map((e) => e.command)
 }
 
-const FILE_COMMANDS = [
-  CopyFileNameAction.ID,
+// Path commands that require an on-disk `file:` resource.
+const PATH_COMMANDS = [
   CopyFilePathAction.ID,
   CopyFileRelativePathAction.ID,
   RevealInExplorerAction.ID,
@@ -70,21 +71,23 @@ afterEach(() => {
 })
 
 describe('EditorTabContext menu — per-tab gating', () => {
-  it('a diff tab shows neither file commands nor Rename Agent Session', () => {
+  it('a diff tab shows Copy Name but no path commands nor Rename Agent Session', () => {
     register()
     const commands = menuCommandsFor({ resourceScheme: 'diff', activeEditorType: 'diff' })
-    for (const id of FILE_COMMANDS) expect(commands).not.toContain(id)
+    expect(commands).toContain(CopyEditorNameAction.ID)
+    for (const id of PATH_COMMANDS) expect(commands).not.toContain(id)
     expect(commands).not.toContain(RenameAgentSessionAction.ID)
   })
 
-  it('a file tab shows the file commands but not Rename Agent Session', () => {
+  it('a file tab shows Copy Name and the path commands but not Rename Agent Session', () => {
     register()
     const commands = menuCommandsFor({ resourceScheme: 'file', activeEditorType: 'file' })
-    for (const id of FILE_COMMANDS) expect(commands).toContain(id)
+    expect(commands).toContain(CopyEditorNameAction.ID)
+    for (const id of PATH_COMMANDS) expect(commands).toContain(id)
     expect(commands).not.toContain(RenameAgentSessionAction.ID)
   })
 
-  it('a markdown preview tab shows the file commands (resource mapped to the source .md)', () => {
+  it('a markdown preview tab shows the path commands (resource mapped to the source .md)', () => {
     // EditorGroupView maps a preview tab's virtual `markdown-preview:` URI to its
     // source `file:` URI, so the scoped `resourceScheme` is `file` even though the
     // editor type is markdown.preview. The file commands must appear.
@@ -93,17 +96,19 @@ describe('EditorTabContext menu — per-tab gating', () => {
       resourceScheme: 'file',
       activeEditorType: MarkdownPreviewInput.TYPE_ID,
     })
-    for (const id of FILE_COMMANDS) expect(commands).toContain(id)
+    expect(commands).toContain(CopyEditorNameAction.ID)
+    for (const id of PATH_COMMANDS) expect(commands).toContain(id)
     expect(commands).not.toContain(RenameAgentSessionAction.ID)
   })
 
-  it('an acp.session tab shows Rename Agent Session but no file commands', () => {
+  it('an acp.session tab shows Copy Name and Rename Agent Session but no path commands', () => {
     register()
     const commands = menuCommandsFor({
       resourceScheme: 'universe',
       activeEditorType: AcpSessionEditorInput.TYPE_ID,
     })
+    expect(commands).toContain(CopyEditorNameAction.ID)
     expect(commands).toContain(RenameAgentSessionAction.ID)
-    for (const id of FILE_COMMANDS) expect(commands).not.toContain(id)
+    for (const id of PATH_COMMANDS) expect(commands).not.toContain(id)
   })
 })

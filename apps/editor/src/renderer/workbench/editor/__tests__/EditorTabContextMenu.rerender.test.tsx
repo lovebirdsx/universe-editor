@@ -26,7 +26,7 @@ import {
 import { EditorTabContextMenu } from '../EditorTabContextMenu.js'
 import { ServicesContext } from '../../useService.js'
 import {
-  CopyFileNameAction,
+  CopyEditorNameAction,
   CopyFilePathAction,
   CopyFileRelativePathAction,
 } from '../../../actions/fileCopyActions.js'
@@ -48,7 +48,7 @@ afterEach(() => {
 
 function register(): void {
   disposables.push(
-    registerAction2(CopyFileNameAction),
+    registerAction2(CopyEditorNameAction),
     registerAction2(CopyFilePathAction),
     registerAction2(CopyFileRelativePathAction),
     registerAction2(RevealInExplorerAction),

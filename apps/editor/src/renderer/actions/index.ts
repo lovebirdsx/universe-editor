@@ -140,6 +140,7 @@ import {
   RevealInOSExplorerAction,
 } from './revealActions.js'
 import {
+  CopyEditorNameAction,
   CopyFileNameAction,
   CopyFilePathAction,
   CopyFileRelativePathAction,
@@ -461,6 +462,7 @@ registerAction2(RevealInExplorerAction)
 registerAction2(RevealActiveFileInExplorerAction)
 registerAction2(RevealInOSExplorerAction)
 registerAction2(CopyFileNameAction)
+registerAction2(CopyEditorNameAction)
 registerAction2(CopyFilePathAction)
 registerAction2(CopyFileRelativePathAction)
 registerAction2(SelectForCompareAction)
