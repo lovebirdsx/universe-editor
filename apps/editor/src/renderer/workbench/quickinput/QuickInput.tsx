@@ -8,7 +8,11 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { IQuickInputService, markAsSingleton } from '@universe-editor/platform'
-import { FocusScopeOverlay, QuickInputPanel } from '@universe-editor/workbench-ui'
+import {
+  FocusScopeOverlay,
+  QuickInputPanel,
+  useBackdropDismiss,
+} from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
 import { resolveSessionStatusIcon } from '../agents/sessionStatusIcon.js'
@@ -38,44 +42,48 @@ export function QuickInputPortal() {
     return () => d.dispose()
   }, [svc])
 
-  if (!panelState) return null
-
   const close = () => svc.hide()
+
+  // Dismiss on backdrop click, but survive a drag whose press starts inside the
+  // panel (e.g. selecting text in the path input) and releases over the backdrop.
+  // A plain onClick would close in that case since the click's target is the
+  // common ancestor of press/release — the backdrop.
+  const backdropHandlers = useBackdropDismiss(close)
+
+  if (!panelState) return null
 
   return createPortal(
     <FocusScopeOverlay visible onEscape={close}>
-      <div className={styles['overlay']} onClick={close} data-testid="quick-input-overlay">
-        <div onClick={(e) => e.stopPropagation()}>
-          <QuickInputPanel
-            state={panelState}
-            onClose={close}
-            renderIcon={(id, size, className) => {
-              const parsed = parseResourceIconId(id)
-              if (parsed) {
-                return (
-                  <FileIcon
-                    resource={parsed.resource}
-                    isDirectory={parsed.isDirectory}
-                    size={size}
-                    className={className}
-                  />
-                )
-              }
-              const symbolIcon = renderSymbolIconById(id, size)
-              if (symbolIcon) return symbolIcon
-              const Icon = resolveFallbackIcon(id)
-              return <Icon size={size} className={className} />
-            }}
-            renderStatusIcon={(id, size, className) => {
-              const Icon = resolveSessionStatusIcon(id)
-              return <Icon size={size} className={className} />
-            }}
-            renderTitleButton={(id, size, className) => {
-              const Icon = resolveFallbackIcon(id)
-              return <Icon size={size} className={className} />
-            }}
-          />
-        </div>
+      <div className={styles['overlay']} data-testid="quick-input-overlay" {...backdropHandlers}>
+        <QuickInputPanel
+          state={panelState}
+          onClose={close}
+          renderIcon={(id, size, className) => {
+            const parsed = parseResourceIconId(id)
+            if (parsed) {
+              return (
+                <FileIcon
+                  resource={parsed.resource}
+                  isDirectory={parsed.isDirectory}
+                  size={size}
+                  className={className}
+                />
+              )
+            }
+            const symbolIcon = renderSymbolIconById(id, size)
+            if (symbolIcon) return symbolIcon
+            const Icon = resolveFallbackIcon(id)
+            return <Icon size={size} className={className} />
+          }}
+          renderStatusIcon={(id, size, className) => {
+            const Icon = resolveSessionStatusIcon(id)
+            return <Icon size={size} className={className} />
+          }}
+          renderTitleButton={(id, size, className) => {
+            const Icon = resolveFallbackIcon(id)
+            return <Icon size={size} className={className} />
+          }}
+        />
       </div>
     </FocusScopeOverlay>,
     document.body,

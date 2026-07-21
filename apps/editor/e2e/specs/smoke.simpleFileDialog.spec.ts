@@ -130,4 +130,41 @@ test.describe('@p1 simple file dialog', () => {
       await workbench.quickInput.waitForHidden()
     },
   )
+
+  // Regression: pressing the mouse inside the path input (e.g. starting a text
+  // selection) and releasing it over the backdrop used to synthesize a click on
+  // the backdrop and dismiss the whole dialog. The dialog must survive it.
+  test(
+    'dragging a selection out of the input past the backdrop keeps the dialog open',
+    { tag: '@serial' },
+    async ({ page, workbench }) => {
+      const tmpDir = await makeTree()
+      await workbench.waitForRestored()
+      await workbench.openWorkspace(tmpDir)
+      await expect.poll(() => workbench.getCurrentWorkspacePath()).toContain('ue2-sfd-')
+
+      await page.evaluate(() => {
+        void window.__E2E__!.runCommand('workbench.action.files.openFile')
+      })
+      await workbench.quickInput.waitForVisible()
+
+      const inputBox = await workbench.quickInput.input.boundingBox()
+      const overlayBox = await workbench.quickInput.overlay.boundingBox()
+      if (!inputBox || !overlayBox) throw new Error('missing layout boxes')
+
+      // Press inside the input, drag up-left into the backdrop area (well above
+      // the dialog), release there.
+      await page.mouse.move(inputBox.x + 20, inputBox.y + inputBox.height / 2)
+      await page.mouse.down()
+      await page.mouse.move(overlayBox.x + 10, overlayBox.y + 10, { steps: 5 })
+      await page.mouse.up()
+
+      // Dialog stays open; not dismissed by the cross-boundary drag.
+      await expect(workbench.quickInput.dialog).toBeVisible()
+
+      // A genuine backdrop click (press + release both on the backdrop) still closes it.
+      await page.mouse.click(overlayBox.x + 10, overlayBox.y + 10)
+      await workbench.quickInput.waitForHidden()
+    },
+  )
 })
