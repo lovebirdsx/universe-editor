@@ -22,6 +22,7 @@ import { DocEditorInput } from '../services/editor/DocEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
+import { HtmlPreviewInput } from '../services/editor/HtmlPreviewInput.js'
 import { ImageEditorInput } from '../services/editor/ImageEditorInput.js'
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
 import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
@@ -47,6 +48,7 @@ import { FileEditor } from '../workbench/editor/FileEditor.js'
 import { DiffEditor } from '../workbench/editor/DiffEditor.js'
 import { MergeEditor } from '../workbench/editor/MergeEditor.js'
 import { MarkdownPreviewEditor } from '../workbench/editor/MarkdownPreviewEditor.js'
+import { HtmlPreviewEditor } from '../workbench/editor/HtmlPreviewEditor.js'
 import { ImageEditor } from '../workbench/editor/ImageEditor.js'
 import { ReleaseNotesEditor } from '../workbench/editor/ReleaseNotesEditor.js'
 import { StartupPerformanceEditor } from '../workbench/editor/StartupPerformanceEditor.js'
@@ -175,6 +177,15 @@ export class BuiltInEditorProvidersContribution
           deserialize: (data) => MarkdownPreviewInput.deserialize(data),
         },
         MarkdownPreviewEditor,
+      ),
+    )
+    this._register(
+      registerEditorWithComponent(
+        {
+          typeId: HtmlPreviewInput.TYPE_ID,
+          deserialize: (data) => HtmlPreviewInput.deserialize(data),
+        },
+        HtmlPreviewEditor,
       ),
     )
     this._register(

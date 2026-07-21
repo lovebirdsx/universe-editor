@@ -235,6 +235,11 @@ import {
   MarkdownPreviewLinkHintsToSideAction,
   MarkdownPreviewHelpAction,
 } from './markdownActions.js'
+import {
+  OpenHtmlPreviewAction,
+  OpenHtmlPreviewToSideAction,
+  OpenHtmlSourceAction,
+} from './htmlPreviewActions.js'
 import { FindMarkdownFileReferencesAction } from './markdownFileReferencesActions.js'
 import { ShowJsonSchemaAction } from './jsonSchemaActions.js'
 import {
@@ -570,6 +575,9 @@ registerAction2(MarkdownPreviewFindCloseAction)
 registerAction2(MarkdownPreviewLinkHintsAction)
 registerAction2(MarkdownPreviewLinkHintsToSideAction)
 registerAction2(MarkdownPreviewHelpAction)
+registerAction2(OpenHtmlPreviewAction)
+registerAction2(OpenHtmlPreviewToSideAction)
+registerAction2(OpenHtmlSourceAction)
 registerAction2(FindMarkdownFileReferencesAction)
 
 registerAction2(ShowJsonSchemaAction)

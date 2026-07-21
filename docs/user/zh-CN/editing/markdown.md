@@ -186,5 +186,6 @@ date: 2026-07-09
 
 ## 相关阅读
 
+- [HTML 预览](./html-preview.md)
 - [标签页与分屏](./tabs-and-split.md)
 - [大纲视图](./outline.md)

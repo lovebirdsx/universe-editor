@@ -1,0 +1,19 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  HtmlPreviewEditor styles — the iframe fills the editor area over an opaque
+ *  white base so pages without their own background render like a browser.
+ *--------------------------------------------------------------------------------------------*/
+
+.htmlPreviewRoot {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.htmlPreviewFrame {
+  height: 100%;
+  width: 100%;
+  border: none;
+  display: block;
+}

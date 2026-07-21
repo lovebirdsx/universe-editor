@@ -42,6 +42,7 @@
 - [资源管理器与文件操作](./editing/explorer-and-files.md)
 - [标签页与分屏](./editing/tabs-and-split.md)
 - [Markdown 编辑与预览](./editing/markdown.md)
+- [HTML 预览](./editing/html-preview.md)
 - [编号书签](./editing/bookmarks.md)
 - [大纲](./editing/outline.md)
 - [内联补全](./editing/inline-completion.md)

@@ -29,7 +29,7 @@ function isHttpOrData(src: string): boolean {
 }
 
 /** Percent-encode an absolute fs path into a `universe-app://root/_resource_/...` URL. */
-function toResourceUrl(fsPath: string): string {
+export function toResourceUrl(fsPath: string): string {
   const forward = fsPath.replace(/\\/g, '/')
   const encoded = forward
     .split('/')
