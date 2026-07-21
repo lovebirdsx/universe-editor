@@ -4,12 +4,24 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { LOG_LEVEL_RULES } from '../monacoLogLanguage.js'
+import { LOG_EXTRA_RULES, LOG_LEVEL_RULES } from '../monacoLogLanguage.js'
 
 function findRule(line: string): string | null {
   for (const [re, token] of LOG_LEVEL_RULES) {
     if (re.test(line)) {
       // Reset lastIndex for global flags (none here, but be safe)
+      re.lastIndex = 0
+      return token
+    }
+  }
+  return null
+}
+
+// Mirrors how the Monarch tokenizer resolves a token: level rules first, then
+// the extended VSCode-parity rules, first match wins.
+function findAnyRule(line: string): string | null {
+  for (const [re, token] of [...LOG_LEVEL_RULES, ...LOG_EXTRA_RULES]) {
+    if (re.test(line)) {
       re.lastIndex = 0
       return token
     }
@@ -103,5 +115,37 @@ describe('LOG_LEVEL_RULES', () => {
     it('[Log truncated …] system line is not mis-classified', () => {
       expect(findRule('[Log truncated to last 1 MB]')).toBeNull()
     })
+  })
+})
+
+describe('LOG_EXTRA_RULES (VSCode parity)', () => {
+  it.each([
+    ['ERROR: connection refused', 'log.error'],
+    ['error: connection refused', 'log.error'],
+    ['FATAL crash detected', 'log.error'],
+    ['WARNING low disk space', 'log.warning'],
+    ['warning: deprecated api', 'log.warning'],
+    ['INFO server started', 'log.info'],
+    ['DEBUG cache miss', 'log.debug'],
+    ['TRACE entering fn', 'log.trace'],
+  ])('bare-word level %s → %s', (line, token) => {
+    expect(findAnyRule(line)).toBe(token)
+  })
+
+  it('lower-case prose "error" without a colon is not painted', () => {
+    // no colon, no brackets → falls through the level rules
+    expect(findAnyRule('an unexpected error happened here')).not.toBe('log.error')
+  })
+
+  it.each([
+    ['java.lang.NullPointerException here', 'log.exceptiontype'],
+    ['    at com.example.Main.run(Main.java:42)', 'log.exception'],
+    ['request id "abc-123" received', 'log.string'],
+    ['flag is true', 'log.constant'],
+    ['took 1234 ms', 'log.constant'],
+    ['id 550e8400-e29b-41d4-a716-446655440000', 'log.constant'],
+    ['fetch https://example.com/api ok', 'log.constant'],
+  ])('classifies %s → %s', (line, token) => {
+    expect(findAnyRule(line)).toBe(token)
   })
 })

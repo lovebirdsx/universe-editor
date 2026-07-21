@@ -16,7 +16,8 @@ export interface LineHighlightOverrides {
   border?: string
 }
 
-// Exported for unit tests (regex-only, no Monaco runtime required)
+// Exported for unit tests (regex-only, no Monaco runtime required). Covers the
+// bracketed level tags and the ISO timestamp — the shape our own app logs emit.
 export const LOG_LEVEL_RULES: Array<[RegExp, string]> = [
   // error — highest priority
   [/\[(error|err|critical|fatal|alert|failure)\]/i, 'log.error'],
@@ -32,10 +33,50 @@ export const LOG_LEVEL_RULES: Array<[RegExp, string]> = [
   [/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/, 'log.date'],
 ]
 
+// Additional rules mirroring VSCode's extensions/log/syntaxes/log.tmLanguage.json
+// so log files (not just our own bracketed format) highlight like they do in
+// VSCode: bare-word levels, `level:` forms, standalone dates/times, quoted
+// strings, exceptions/stack frames and numeric/constant literals. Order matters —
+// dates and exception types come before the generic number/word rules so a
+// `2024` in a timestamp isn't eaten as a plain number.
+export const LOG_EXTRA_RULES: Array<[RegExp, string]> = [
+  // bare-word levels — VSCode matches upper-case and Title-case always, and the
+  // lower-case word only when followed by a colon (`error:`), to avoid painting
+  // every prose "error" in a message.
+  [/\b(ALERT|CRITICAL|EMERGENCY|ERROR|FAILURE|FAIL|Fatal|FATAL|Error|EE)\b/, 'log.error'],
+  [/\berror\b(?=\s*:)/i, 'log.error'],
+  [/\b(WARNING|WARN|Warn|WW)\b/, 'log.warning'],
+  [/\bwarning\b(?=\s*:)/i, 'log.warning'],
+  [/\b(HINT|INFO|INFORMATION|Info|NOTICE|II)\b/, 'log.info'],
+  [/\b(info|information)\b(?=\s*:)/i, 'log.info'],
+  [/\b(DEBUG|Debug)\b/, 'log.debug'],
+  [/\bdebug\b(?=\s*:)/i, 'log.debug'],
+  [/\b([Tt]race|TRACE)\b/, 'log.trace'],
+  [/\b(verbose|verb|vrb|vb|v)\b(?=\s*:)/i, 'log.trace'],
+  // dates / times not covered by the ISO rule above
+  [/\b\d{4}-\d{2}-\d{2}\b/, 'log.date'],
+  [/\b\d{2}[^\w\s]\d{2}[^\w\s]\d{4}\b/, 'log.date'],
+  [/T?\d{1,2}:\d{2}(:\d{2}([.,]\d+)?)?(Z| ?[+-]\d{1,2}:\d{2})?/, 'log.date'],
+  // exceptions: `SomeException` type names and `  at …` stack frames
+  [/\b[a-zA-Z.]*Exception\b/, 'log.exceptiontype'],
+  [/^[\t ]*at[\t ].*$/, 'log.exception'],
+  // quoted strings
+  [/"[^"]*"/, 'log.string'],
+  [/(?<![\w])'[^']*'/, 'log.string'],
+  // constants: GUIDs, URLs, hex, booleans/null, numbers
+  [/\b[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\b/, 'log.constant'],
+  [/\b[a-z]+:\/\/\S+/, 'log.constant'],
+  [/\b0x[a-fA-F0-9]+\b/, 'log.constant'],
+  [/\b(true|false|null)\b/, 'log.constant'],
+  [/\b\d+(\.\d+)?\b/, 'log.constant'],
+]
+
 const logMonarch: monaco.languages.IMonarchLanguage = {
+  defaultToken: '',
   tokenizer: {
     root: [
       ...LOG_LEVEL_RULES,
+      ...LOG_EXTRA_RULES,
       // anything else — advance by one character without a token so the
       // tokenizer doesn't stall on unrecognised input
       [/./, ''],
@@ -50,6 +91,9 @@ const LOG_COLORS_DARK = {
   warning: 'd7a751',
   error: 'f48771',
   date: '8a8a92',
+  constant: 'b5cea8',
+  string: 'ce9178',
+  exceptiontype: 'f48771',
 }
 
 const LOG_COLORS_LIGHT = {
@@ -59,6 +103,9 @@ const LOG_COLORS_LIGHT = {
   warning: 'b8860b',
   error: 'a31515',
   date: '6a6a7a',
+  constant: '098658',
+  string: 'a31515',
+  exceptiontype: 'a31515',
 }
 
 function buildRules(colors: typeof LOG_COLORS_DARK): monaco.editor.ITokenThemeRule[] {
@@ -69,6 +116,10 @@ function buildRules(colors: typeof LOG_COLORS_DARK): monaco.editor.ITokenThemeRu
     { token: 'log.debug', foreground: colors.debug },
     { token: 'log.trace', foreground: colors.trace },
     { token: 'log.date', foreground: colors.date },
+    { token: 'log.constant', foreground: colors.constant },
+    { token: 'log.string', foreground: colors.string },
+    { token: 'log.exceptiontype', foreground: colors.exceptiontype, fontStyle: 'italic' },
+    { token: 'log.exception', foreground: colors.error, fontStyle: 'italic' },
   ]
 }
 
@@ -173,7 +224,7 @@ export function defineOutputThemes(m: typeof monaco, overrides?: LineHighlightOv
 }
 
 export function registerLogLanguage(m: typeof monaco): void {
-  m.languages.register({ id: 'log' })
+  m.languages.register({ id: 'log', extensions: ['.log'], aliases: ['Log', 'log'] })
   m.languages.setMonarchTokensProvider('log', logMonarch)
 
   defineOutputThemes(m)

@@ -51,6 +51,11 @@ describe('languageForResource', () => {
     expect(lang('/proj/.editorconfig')).toBe('ini')
   })
 
+  it('maps .log files to the log language for level-aware highlighting', () => {
+    expect(lang('/proj/main.log')).toBe('log')
+    expect(lang('/proj/RENDERER.LOG')).toBe('log')
+  })
+
   it('keeps TOML as plaintext (Monaco has no TOML grammar)', () => {
     expect(lang('/proj/Cargo.toml')).toBe('plaintext')
   })

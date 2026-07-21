@@ -16,7 +16,7 @@ const LANG_BY_EXT: Record<string, string> = {
   '.mkd': 'markdown',
   '.mdx': 'mdx',
   '.txt': 'plaintext',
-  '.log': 'plaintext',
+  '.log': 'log',
   '.css': 'css',
   '.scss': 'scss',
   '.less': 'less',
