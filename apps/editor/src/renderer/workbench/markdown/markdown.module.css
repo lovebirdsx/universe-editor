@@ -193,7 +193,6 @@
    inherit the link colour + underline so it still reads as clickable. */
 .mdLink .inlineCode {
   color: var(--color-badge-progress, #4fa6e2);
-  text-decoration: underline;
 }
 
 .mermaidBlock {
