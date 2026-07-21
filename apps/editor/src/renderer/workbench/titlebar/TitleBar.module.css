@@ -3,11 +3,64 @@
   background: var(--color-titlebar, #0f0f11);
   display: flex;
   align-items: center;
+  justify-content: space-between;
   -webkit-app-region: drag;
   user-select: none;
   overflow: visible;
   position: relative;
   z-index: 100;
+}
+
+/* Full-width draggable layer; interactive children sit above it via z-index. */
+.drag-region {
+  position: absolute;
+  inset: 0;
+  -webkit-app-region: drag;
+  z-index: 0;
+}
+
+/*
+ * Three-region layout (VSCode-style): left and right carry equal weight so the
+ * center title lands on the window's true geometric center and never shifts when
+ * right-side tools (update indicator, layout controls) appear or resize.
+ */
+.left,
+.right,
+.center {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  position: relative;
+  z-index: 1;
+}
+
+.left {
+  width: 20%;
+  flex-grow: 2;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.center {
+  width: 60%;
+  max-width: fit-content;
+  min-width: 0;
+  margin: 0 10px;
+  justify-content: center;
+}
+
+.right {
+  width: 20%;
+  flex-grow: 2;
+  justify-content: flex-end;
+  min-width: min-content;
+}
+
+/* Narrow window: drop the center title, let the tool regions have the space. */
+@media (max-width: 500px) {
+  .center {
+    display: none;
+  }
 }
 
 .traffic-light-spacer {
@@ -158,8 +211,7 @@
 }
 
 .title {
-  flex: 1;
-  text-align: center;
+  flex: 0 1 auto;
   font-size: 12px;
   color: var(--color-foreground, #c8c8c8);
   overflow: hidden;
@@ -173,7 +225,6 @@
   align-items: stretch;
   -webkit-app-region: no-drag;
   height: 100%;
-  margin-left: auto;
 }
 
 .ctrl-btn {

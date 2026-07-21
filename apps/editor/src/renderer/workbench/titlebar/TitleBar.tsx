@@ -1,19 +1,47 @@
 import { useCallback, useState, useSyncExternalStore } from 'react'
 import {
-  combinedDisposable,
+  DisposableStore,
   IEditorGroupsService,
   IHostService,
   IWorkspaceService,
   markAsSingleton,
+  MutableDisposable,
+  combinedDisposable,
   type IEditorGroup,
+  type IWorkspace,
+  type EditorInput,
+  type URI,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
-import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { LayoutControls } from './LayoutControls.js'
 import { MenuBar } from './MenuBar.js'
 import { UpdateIndicator } from './UpdateIndicator.js'
 import { WindowControls } from './WindowControls.js'
 import styles from './TitleBar.module.css'
+
+const SEPARATOR = ' — '
+/** Leading dot marking unsaved changes, mirroring VSCode's `${dirty}`. */
+const DIRTY_INDICATOR = '● '
+
+/** Full directory path of a resource, or '' for virtual editors without one. */
+function directoryOf(resource: URI | undefined): string {
+  if (!resource) return ''
+  const fsPath = resource.fsPath
+  const sepIdx = Math.max(fsPath.lastIndexOf('/'), fsPath.lastIndexOf('\\'))
+  return sepIdx > 0 ? fsPath.slice(0, sepIdx) : fsPath
+}
+
+/**
+ * Window title: `${dirty}${activeEditorName}${sep}${directory}`, falling back to
+ * the workspace name when no editor is open. Empty segments collapse their
+ * separators (conditional separator).
+ */
+function computeTitle(editor: EditorInput | undefined, workspace: IWorkspace | null): string {
+  if (!editor) return workspace?.name ?? ''
+  const dirty = editor.isDirty ? DIRTY_INDICATOR : ''
+  const segments = [editor.getName(), directoryOf(editor.resource)].filter((s) => s.length > 0)
+  return dirty + segments.join(SEPARATOR)
+}
 
 const ICON_SRC = import.meta.env.DEV ? './icon-dev.ico' : './icon.ico'
 
@@ -48,66 +76,70 @@ export function TitleBar() {
   const groupsService = useService(IEditorGroupsService)
   const isMac = host.platform === 'darwin'
 
-  const current = useSyncExternalStore(
-    (onChange) => {
-      const d = markAsSingleton(workspace.onDidChangeWorkspace(() => onChange()))
-      return () => d.dispose()
-    },
-    () => workspace.current,
-  )
-
   const subscribe = useCallback(
     (onChange: () => void) => {
-      const subscribeGroup = (group: IEditorGroup) => {
-        const a = group.onDidChangeModel(() => onChange())
-        const b = group.onDidActiveEditorChange(() => onChange())
-        const combined = markAsSingleton(combinedDisposable(a, b))
-        return () => combined.dispose()
+      const store = markAsSingleton(new DisposableStore())
+      // Tracks the active editor's dirty/label listeners; swapped on editor change
+      // so the dirty dot (●) and name stay live without a stale subscription.
+      const activeEditorSub = store.add(new MutableDisposable())
+      const bindActiveEditor = (editor: EditorInput | undefined) => {
+        activeEditorSub.value = editor
+          ? combinedDisposable(
+              editor.onDidChangeDirty(() => onChange()),
+              editor.onDidChangeLabel(() => onChange()),
+            )
+          : undefined
       }
-      let unsubGroup = subscribeGroup(groupsService.activeGroup)
-      const d = markAsSingleton(
+
+      const groupSub = store.add(new MutableDisposable())
+      const bindGroup = (group: IEditorGroup) => {
+        bindActiveEditor(group.activeEditor)
+        groupSub.value = combinedDisposable(
+          group.onDidChangeModel(() => onChange()),
+          group.onDidActiveEditorChange(() => {
+            bindActiveEditor(group.activeEditor)
+            onChange()
+          }),
+        )
+      }
+
+      bindGroup(groupsService.activeGroup)
+      store.add(
         groupsService.onDidActiveGroupChange((newGroup) => {
-          unsubGroup()
-          unsubGroup = subscribeGroup(newGroup)
+          bindGroup(newGroup)
           onChange()
         }),
       )
-      return () => {
-        d.dispose()
-        unsubGroup()
-      }
+      store.add(workspace.onDidChangeWorkspace(() => onChange()))
+      return () => store.dispose()
     },
-    [groupsService],
+    [groupsService, workspace],
   )
 
-  const activeEditorInput = useSyncExternalStore(
-    subscribe,
-    () => groupsService.activeGroup.activeEditor,
+  const title = useSyncExternalStore(subscribe, () =>
+    computeTitle(groupsService.activeGroup.activeEditor, workspace.current),
   )
-
-  let title: string
-  if (activeEditorInput instanceof FileEditorInput) {
-    const fsPath = activeEditorInput.resource.fsPath
-    const sepIdx = Math.max(fsPath.lastIndexOf('/'), fsPath.lastIndexOf('\\'))
-    const dir = sepIdx > 0 ? fsPath.slice(0, sepIdx) : fsPath
-    title = `${activeEditorInput.getName()} — ${dir} — Universe Editor`
-  } else if (current) {
-    title = `${current.name} — Universe Editor`
-  } else {
-    title = 'Universe Editor'
-  }
 
   return (
     <header className={styles['titlebar']}>
-      {isMac && <div className={styles['traffic-light-spacer']} />}
-      <div className={styles['app-icon']} aria-hidden="true">
-        <AppIcon />
+      <div className={styles['drag-region']} aria-hidden="true" />
+      <div className={styles['left']}>
+        {isMac && <div className={styles['traffic-light-spacer']} />}
+        <div className={styles['app-icon']} aria-hidden="true">
+          <AppIcon />
+        </div>
+        <MenuBar />
       </div>
-      <MenuBar />
-      <UpdateIndicator />
-      <div className={styles['title']}>{title}</div>
-      <LayoutControls />
-      {!isMac && <WindowControls />}
+      <div className={styles['center']}>
+        <div className={styles['title']} data-testid="titlebar-title">
+          {title}
+        </div>
+      </div>
+      <div className={styles['right']}>
+        <UpdateIndicator />
+        <LayoutControls />
+        {!isMac && <WindowControls />}
+      </div>
     </header>
   )
 }

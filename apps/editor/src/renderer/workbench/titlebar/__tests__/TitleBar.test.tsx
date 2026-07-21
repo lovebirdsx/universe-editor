@@ -117,9 +117,7 @@ function makeContainer(
 }
 
 function titleText(): string {
-  // The title div is the only child of header that is not a nav/div[aria-hidden]
-  // Find by matching the "— Universe Editor" pattern.
-  return screen.getByText(/Universe Editor/).textContent ?? ''
+  return screen.getByTestId('titlebar-title').textContent ?? ''
 }
 
 // ── Setup / teardown ──────────────────────────────────────────────────────────
@@ -137,13 +135,13 @@ afterEach(() => {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('TitleBar — title text', () => {
-  it('shows "Universe Editor" when there is no workspace and no open file', () => {
+  it('shows an empty title when there is no workspace and no open file', () => {
     render(
       <ServicesContext.Provider value={makeContainer(svc)}>
         <TitleBar />
       </ServicesContext.Provider>,
     )
-    expect(titleText()).toBe('Universe Editor')
+    expect(titleText()).toBe('')
   })
 
   it('shows workspace name when a workspace is open but no file', () => {
@@ -153,10 +151,10 @@ describe('TitleBar — title text', () => {
         <TitleBar />
       </ServicesContext.Provider>,
     )
-    expect(titleText()).toBe('project — Universe Editor')
+    expect(titleText()).toBe('project')
   })
 
-  it('shows "filename — directory — Universe Editor" when a file is open', () => {
+  it('shows "filename — directory" when a file is open', () => {
     const inst = makeContainer(svc)
     const input = inst.createInstance(FileEditorInput, URI.file('/home/user/project/src/main.ts'))
     svc.activeGroup.openEditor(input)
@@ -167,7 +165,33 @@ describe('TitleBar — title text', () => {
       </ServicesContext.Provider>,
     )
 
-    expect(titleText()).toBe('main.ts — /home/user/project/src — Universe Editor')
+    expect(titleText()).toBe('main.ts — /home/user/project/src')
+  })
+
+  it('prefixes a dirty dot when the active editor has unsaved changes', () => {
+    const inst = makeContainer(svc)
+    const input = inst.createInstance(FileEditorInput, URI.file('/my/project/file.ts'))
+    svc.activeGroup.openEditor(input)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <TitleBar />
+      </ServicesContext.Provider>,
+    )
+
+    expect(titleText()).toBe('file.ts — /my/project')
+
+    act(() => {
+      input.setDirty(true)
+    })
+
+    expect(titleText()).toBe('● file.ts — /my/project')
+
+    act(() => {
+      input.setDirty(false)
+    })
+
+    expect(titleText()).toBe('file.ts — /my/project')
   })
 
   it('updates the title when the active editor changes', () => {
@@ -183,13 +207,13 @@ describe('TitleBar — title text', () => {
       </ServicesContext.Provider>,
     )
 
-    expect(titleText()).toBe('beta.ts — /project — Universe Editor')
+    expect(titleText()).toBe('beta.ts — /project')
 
     act(() => {
       svc.activeGroup.setActive(a)
     })
 
-    expect(titleText()).toBe('alpha.ts — /project — Universe Editor')
+    expect(titleText()).toBe('alpha.ts — /project')
   })
 
   it('falls back to workspace name when the last file is closed', () => {
@@ -204,12 +228,12 @@ describe('TitleBar — title text', () => {
       </ServicesContext.Provider>,
     )
 
-    expect(titleText()).toBe('file.ts — /my/project — Universe Editor')
+    expect(titleText()).toBe('file.ts — /my/project')
 
     act(() => {
       svc.activeGroup.closeEditor(input)
     })
 
-    expect(titleText()).toBe('project — Universe Editor')
+    expect(titleText()).toBe('project')
   })
 })
