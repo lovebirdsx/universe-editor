@@ -18,6 +18,17 @@ html, body, #root {
   font-family: var(--font-ui);
 }
 
+/* Unified keyboard-focus indication (mirrors VSCode's .monaco-workbench rules in
+   workbench/browser/media/style.css). Overlays (Quick Input, menus, dialogs) restore
+   focus to their trigger on Escape; without this rule the restored element renders the
+   browser's default white focus ring. `:where()` keeps zero specificity so any
+   component-level focus style wins over this fallback. `:focus-visible` (not `:focus`)
+   keeps mouse clicks ring-free while keyboard focus stays visible for a11y. */
+:where(button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 1px solid var(--color-focus-border, #0070e0);
+  outline-offset: -1px;
+}
+
 :root {
   /* Typography */
   --font-ui: 'Roboto', system-ui, -apple-system, 'Segoe UI', sans-serif;

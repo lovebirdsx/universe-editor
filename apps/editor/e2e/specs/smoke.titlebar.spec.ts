@@ -17,6 +17,14 @@ test.describe('@p1 titlebar', () => {
 
     await page.keyboard.press('Escape')
     await workbench.quickInput.waitForHidden()
+
+    // Escape restores focus to the trigger (keyboard focus ⇒ :focus-visible). The
+    // ring must be the themed focus border (VSCode-style), never the browser's
+    // default white focus ring (outline-style: auto).
+    const commandCenter = page.getByTestId('titlebar-command-center')
+    await expect(commandCenter).toBeFocused()
+    await expect(commandCenter).toHaveCSS('outline-style', 'solid')
+    await expect(commandCenter).toHaveCSS('outline-color', 'rgb(0, 112, 224)')
   })
 
   test('back/forward buttons follow navigation history', async ({ page, workbench }) => {
