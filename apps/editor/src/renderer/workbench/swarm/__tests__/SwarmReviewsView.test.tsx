@@ -14,10 +14,12 @@ import {
 import {
   SwarmCommands,
   type SwarmDashboardResult,
+  type SwarmReviewDetailDto,
   type SwarmReviewDto,
 } from '@universe-editor/extensions-common'
 import { ServicesContext } from '../../useService.js'
 import { swarmReviewsViewState } from '../../../services/swarm/swarmViewState.js'
+import { swarmIgnoreStore } from '../../../services/swarm/swarmIgnoreStore.js'
 import { buildSwarmReviewUrl } from '../../../services/swarm/swarmReviewUrl.js'
 import { canApproveReview, swarmReviewName, SwarmReviewsView } from '../SwarmReviewsView.js'
 
@@ -80,6 +82,7 @@ function createServices(executeCommand: ReturnType<typeof vi.fn>): Instantiation
 afterEach(() => {
   cleanup()
   swarmReviewsViewState.dashboard = null
+  for (const id of swarmIgnoreStore.list()) swarmIgnoreStore.unignore(id)
   vi.restoreAllMocks()
 })
 
@@ -128,5 +131,68 @@ describe('SwarmReviewsView', () => {
         state: 'approved',
       }),
     )
+  })
+
+  it('heals a stale ignore-snapshot (blank description) via a one-shot detail fetch', async () => {
+    // Regression: a review ignored before blank-first-line descriptions were
+    // parsed correctly has '' frozen as its snapshot description; the dashboard
+    // no longer returns it, so the IGNORED group rendered "(no description)".
+    swarmIgnoreStore.ignore({ ...review, id: '7769693', description: '' })
+    const detail: SwarmReviewDetailDto = {
+      id: '7769693',
+      state: 'needsReview',
+      stateLabel: 'Needs Review',
+      author: 'alice',
+      description: '\nHealed summary\nfull body',
+      updated: Date.now(),
+      versions: [],
+      participants: [],
+      transitions: [],
+      commentCount: 0,
+      openTaskCount: 0,
+      testStatus: 'none',
+    }
+    const executeCommand = vi.fn(async (command: string) => {
+      if (command === SwarmCommands.dashboard) {
+        return { needsAction: [], authored: [], participating: [] } satisfies SwarmDashboardResult
+      }
+      if (command === SwarmCommands.getReview) return detail
+      return undefined
+    })
+
+    render(
+      <ServicesContext.Provider value={createServices(executeCommand)}>
+        <SwarmReviewsView />
+      </ServicesContext.Provider>,
+    )
+
+    expect(await screen.findByText('Healed summary')).toBeTruthy()
+    await waitFor(() =>
+      expect(swarmIgnoreStore.getMeta('7769693')?.description).toBe('Healed summary'),
+    )
+  })
+
+  it('refreshes a stale ignore-snapshot from a live dashboard row', async () => {
+    swarmIgnoreStore.ignore({ ...review, id: '2002', description: '' })
+    const live: SwarmReviewDto = { ...review, id: '2002', description: 'Live title' }
+    const executeCommand = vi.fn(async (command: string) => {
+      if (command === SwarmCommands.dashboard) {
+        return {
+          needsAction: [live],
+          authored: [],
+          participating: [],
+        } satisfies SwarmDashboardResult
+      }
+      return undefined
+    })
+
+    render(
+      <ServicesContext.Provider value={createServices(executeCommand)}>
+        <SwarmReviewsView />
+      </ServicesContext.Provider>,
+    )
+
+    expect(await screen.findByText('Live title')).toBeTruthy()
+    await waitFor(() => expect(swarmIgnoreStore.getMeta('2002')?.description).toBe('Live title'))
   })
 })

@@ -65,6 +65,14 @@ describe('swarmParser.parseReview', () => {
     expect(review!.downVotes).toBe(0)
   })
 
+  it('uses the first non-empty line as the title when the description starts with blank lines', () => {
+    const review = parseReview({
+      id: '8185288',
+      description: '\n  \nReal summary line\nmore body',
+    })
+    expect(review!.description).toBe('Real summary line')
+  })
+
   it('derives stream from the latest version, stripping the leading //', () => {
     const review = parseReview({
       id: '10',

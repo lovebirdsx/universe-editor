@@ -14,6 +14,7 @@
  * so this stays unit-testable against fixtures.
  */
 import type { SwarmReview } from './swarmParser.js'
+import { descriptionFirstLine } from '../changelist.js'
 
 /** A QuickPick entry for one candidate review. `reviewId` is the payload the
  *  command handler reads back off the picked item (extra fields survive the
@@ -35,15 +36,10 @@ function isOpen(state: string): boolean {
   return state === 'needsReview' || state === 'needsRevision'
 }
 
-function firstLine(text: string): string {
-  const line = text.split('\n', 1)[0]?.trim() ?? ''
-  return line
-}
-
 /**
  * Rank + format the authored reviews into QuickPick items. Closed reviews are
- * dropped. `label` shows the review id + state, `description` the first line of
- * the review description, `detail` a compact vote/comment summary.
+ * dropped. `label` shows the review id + state, `description` the review's
+ * summary line, `detail` a compact vote/comment summary.
  */
 export function buildReviewPicks(reviews: readonly SwarmReview[]): ReviewPickItem[] {
   return reviews
@@ -57,7 +53,7 @@ export function buildReviewPicks(reviews: readonly SwarmReview[]): ReviewPickIte
     })
     .map((r) => ({
       label: `#${r.id} · ${r.stateLabel}`,
-      description: firstLine(r.description),
+      description: descriptionFirstLine(r.description),
       detail: `↑${r.upVotes} ↓${r.downVotes} · ${r.commentCount} comments`,
       reviewId: r.id,
     }))

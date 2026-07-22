@@ -19,10 +19,43 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter, StorageScope, type Event, type IStorageService } from '@universe-editor/platform'
-import type { SwarmReviewDto } from '@universe-editor/extensions-common'
+import type { SwarmReviewDetailDto, SwarmReviewDto } from '@universe-editor/extensions-common'
 
 const IGNORED_IDS_KEY = 'swarm.ignoredReviews'
 const IGNORED_META_KEY = 'swarm.ignoredReviewMeta'
+
+/** First non-empty line of `text`, trimmed — mirrors the extension-side parser's
+ *  description summary (a blank first line must not blank the title). */
+export function firstNonEmptyLine(text: string): string {
+  for (const line of text.split('\n')) {
+    const t = line.trim()
+    if (t) return t
+  }
+  return ''
+}
+
+/** Fold a freshly-fetched review detail into the list-shaped snapshot shape,
+ *  keeping the snapshot's id. Used to heal stale ignore-snapshots for reviews
+ *  the dashboard no longer returns. */
+export function reviewDtoFromDetail(
+  detail: SwarmReviewDetailDto,
+  prev: SwarmReviewDto,
+): SwarmReviewDto {
+  return {
+    ...prev,
+    state: detail.state,
+    stateLabel: detail.stateLabel,
+    author: detail.author,
+    description: firstNonEmptyLine(detail.description),
+    upVotes: detail.participants.filter((p) => p.vote > 0).length,
+    downVotes: detail.participants.filter((p) => p.vote < 0).length,
+    commentCount: detail.commentCount,
+    openTaskCount: detail.openTaskCount,
+    testStatus: detail.testStatus,
+    updated: detail.updated,
+    ...(detail.stream ? { stream: detail.stream } : {}),
+  }
+}
 
 class SwarmIgnoreStore {
   private _storage: IStorageService | undefined
@@ -93,6 +126,19 @@ class SwarmIgnoreStore {
   unignore(reviewId: string): void {
     if (!this._ids.delete(reviewId)) return
     this._meta.delete(reviewId)
+    this._persist()
+    this._onDidChange.fire()
+  }
+
+  /** Replace an ignored review's snapshot with fresher data (a live dashboard
+   *  row, or a detail fetch healing a snapshot frozen before a parser fix).
+   *  No-op for reviews that aren't ignored or when nothing changed — safe to
+   *  feed every live row through it. */
+  refreshMeta(review: SwarmReviewDto): void {
+    if (!this._ids.has(review.id)) return
+    const prev = this._meta.get(review.id)
+    if (prev && JSON.stringify(prev) === JSON.stringify(review)) return
+    this._meta.set(review.id, review)
     this._persist()
     this._onDidChange.fire()
   }

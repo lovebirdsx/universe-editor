@@ -42,6 +42,8 @@ import { IconButton, Input, Spinner, cx, useScrollRestore } from '@universe-edit
 import {
   SwarmCommands,
   type SwarmDashboardResult,
+  type SwarmGetReviewRequest,
+  type SwarmReviewDetailDto,
   type SwarmReviewDto,
   type SwarmTransitionDto,
   type SwarmTransitionRequest,
@@ -49,7 +51,11 @@ import {
 import { useService } from '../useService.js'
 import { SwarmReviewEditorInput } from '../../services/editor/SwarmReviewEditorInput.js'
 import { swarmReviewsViewState, swarmReviewEvents } from '../../services/swarm/swarmViewState.js'
-import { swarmIgnoreStore, splitIgnored } from '../../services/swarm/swarmIgnoreStore.js'
+import {
+  swarmIgnoreStore,
+  splitIgnored,
+  reviewDtoFromDetail,
+} from '../../services/swarm/swarmIgnoreStore.js'
 import { swarmReviewsUiStore } from '../../services/swarm/swarmReviewsUiStore.js'
 import { buildSwarmReviewUrl } from '../../services/swarm/swarmReviewUrl.js'
 import {
@@ -150,6 +156,9 @@ export function SwarmReviewsView() {
   // usually already true on mount.
   const [ignoreReady, setIgnoreReady] = useState(() => swarmIgnoreStore.isReady)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  // Ids whose stale ignore-snapshot already got a detail-fetch heal attempt this
+  // mount — keeps a genuinely blank description from re-fetching on every poll.
+  const healAttemptedRef = useRef<Set<string>>(new Set())
   const scrollRef = useRef<HTMLDivElement | null>(null)
   useScrollRestore(
     'swarmReviews',
@@ -205,6 +214,12 @@ export function SwarmReviewsView() {
           }
           setDashboard(r)
           swarmReviewsViewState.dashboard = r
+          // Refresh ignore-snapshots with live rows — a snapshot frozen before a
+          // parser fix (e.g. a blank-first-line description stored as '') would
+          // otherwise render stale in the IGNORED group.
+          for (const review of r.needsAction) {
+            if (swarmIgnoreStore.isIgnored(review.id)) swarmIgnoreStore.refreshMeta(review)
+          }
           // On a forced reload, re-fetch each verdict but keep the previous one
           // visible until it resolves (loadTransitions merges), so an active
           // approvable filter never briefly widens the list.
@@ -266,6 +281,29 @@ export function SwarmReviewsView() {
     })
     return () => sub.dispose()
   }, [storage])
+
+  // Heal ignore-snapshots the dashboard no longer returns: a blank snapshot
+  // description means it was frozen before blank-first-line descriptions were
+  // parsed correctly, so fetch the detail once (per mount) and rebuild the
+  // snapshot from it.
+  useEffect(() => {
+    if (!dashboard || !ignoreReady) return
+    const liveIds = new Set(dashboard.needsAction.map((r) => r.id))
+    for (const id of swarmIgnoreStore.list()) {
+      if (liveIds.has(id) || healAttemptedRef.current.has(id)) continue
+      const meta = swarmIgnoreStore.getMeta(id)
+      if (!meta || meta.description.trim()) continue
+      healAttemptedRef.current.add(id)
+      void commands
+        .executeCommand<SwarmReviewDetailDto | undefined>(SwarmCommands.getReview, {
+          reviewId: id,
+        } satisfies SwarmGetReviewRequest)
+        .then((detail) => {
+          if (detail) swarmIgnoreStore.refreshMeta(reviewDtoFromDetail(detail, meta))
+        })
+        .catch(() => {})
+    }
+  }, [dashboard, ignoreReady, commands])
 
   // Hydrate + track the persisted sidebar UI state (group collapse + keyword).
   // The contribution attaches it at app start; re-sync local state on hydrate so

@@ -20,6 +20,7 @@ import type {
   SwarmTransitionDto,
   SwarmCommentDto,
 } from '@universe-editor/extensions-common'
+import { descriptionFirstLine } from '../changelist.js'
 
 export type SwarmReviewState = SwarmReviewStateDto
 
@@ -58,11 +59,6 @@ function asNumber(v: unknown): number | undefined {
   if (typeof v === 'number' && Number.isFinite(v)) return v
   if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v)
   return undefined
-}
-
-function firstLine(text: string): string {
-  const idx = text.indexOf('\n')
-  return (idx === -1 ? text : text.slice(0, idx)).trim()
 }
 
 function coerceState(v: unknown): SwarmReviewState {
@@ -203,7 +199,7 @@ export function parseReview(raw: Record<string, unknown>): SwarmReview | undefin
     state: coerceState(raw['state']),
     stateLabel: asString(raw['stateLabel']) ?? asString(raw['state']) ?? '',
     author: asString(raw['author']) ?? '',
-    description: firstLine(description),
+    description: descriptionFirstLine(description),
     upVotes: participants.filter((p) => p.vote > 0).length,
     downVotes: participants.filter((p) => p.vote < 0).length,
     commentCount,

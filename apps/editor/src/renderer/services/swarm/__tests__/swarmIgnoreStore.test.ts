@@ -4,8 +4,8 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import { Emitter, StorageScope, type IStorageService } from '@universe-editor/platform'
-import type { SwarmReviewDto } from '@universe-editor/extensions-common'
-import { splitIgnored } from '../swarmIgnoreStore.js'
+import type { SwarmReviewDetailDto, SwarmReviewDto } from '@universe-editor/extensions-common'
+import { splitIgnored, reviewDtoFromDetail, firstNonEmptyLine } from '../swarmIgnoreStore.js'
 
 function review(id: string, overrides: Partial<SwarmReviewDto> = {}): SwarmReviewDto {
   return {
@@ -43,6 +43,46 @@ function fakeStorage(seed: Record<string, unknown> = {}): IStorageService & {
     onDidChangeWorkspaceScope: new Emitter<void>().event,
   }
 }
+
+describe('firstNonEmptyLine', () => {
+  it('skips leading blank lines and trims', () => {
+    expect(firstNonEmptyLine('\n  \nReal summary\nmore body')).toBe('Real summary')
+    expect(firstNonEmptyLine('only line')).toBe('only line')
+    expect(firstNonEmptyLine('\n\n')).toBe('')
+  })
+})
+
+describe('reviewDtoFromDetail', () => {
+  it('rebuilds the snapshot fields from the detail, summarizing the description', () => {
+    const prev = review('7769693', { description: '', upVotes: 5 })
+    const detail: SwarmReviewDetailDto = {
+      id: '7769693',
+      state: 'needsReview',
+      stateLabel: 'Needs Review',
+      author: 'bob',
+      description: '\nFix the widget\nlonger body',
+      updated: 1_700_000_000_000,
+      versions: [],
+      participants: [
+        { user: 'a', required: false, vote: 1 },
+        { user: 'b', required: false, vote: -1 },
+      ],
+      transitions: [],
+      commentCount: 3,
+      openTaskCount: 1,
+      testStatus: 'pass',
+      stream: 'aki/branch_3.6',
+    }
+    const dto = reviewDtoFromDetail(detail, prev)
+    expect(dto.id).toBe('7769693')
+    expect(dto.description).toBe('Fix the widget')
+    expect(dto.author).toBe('bob')
+    expect(dto.upVotes).toBe(1)
+    expect(dto.downVotes).toBe(1)
+    expect(dto.commentCount).toBe(3)
+    expect(dto.stream).toBe('aki/branch_3.6')
+  })
+})
 
 describe('splitIgnored', () => {
   it('partitions reviews by id membership in the ignored set', () => {
@@ -114,5 +154,32 @@ describe('swarmIgnoreStore', () => {
     expect(first).toBe(second)
     await first
     expect(store.list()).toEqual(['1'])
+  })
+
+  it('refreshMeta replaces the snapshot for an ignored review and persists it', async () => {
+    const store = await freshStore()
+    const storage = fakeStorage()
+    await store.attach(storage)
+
+    store.ignore(review('100', { description: '' }))
+    let changes = 0
+    store.onDidChange(() => changes++)
+
+    store.refreshMeta(review('100', { description: 'healed title' }))
+    expect(store.getMeta('100')?.description).toBe('healed title')
+    expect(changes).toBe(1)
+    const persisted = storage.data.get('swarm.ignoredReviewMeta') as Record<string, SwarmReviewDto>
+    expect(persisted['100']?.description).toBe('healed title')
+
+    // Unchanged data is a no-op (no persist, no event).
+    store.refreshMeta(review('100', { description: 'healed title' }))
+    expect(changes).toBe(1)
+  })
+
+  it('refreshMeta is a no-op for reviews that are not ignored', async () => {
+    const store = await freshStore()
+    await store.attach(fakeStorage())
+    store.refreshMeta(review('100'))
+    expect(store.getMeta('100')).toBeUndefined()
   })
 })
