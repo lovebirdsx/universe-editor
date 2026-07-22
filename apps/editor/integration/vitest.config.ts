@@ -6,6 +6,7 @@ const root = fileURLToPath(new URL('.', import.meta.url))
 export default defineConfig({
   test: {
     name: 'integration',
+    silent: 'passed-only',
     environment: 'node',
     root,
     include: ['scenarios/**/*.test.ts'],

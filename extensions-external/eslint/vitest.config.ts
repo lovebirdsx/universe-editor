@@ -10,6 +10,7 @@ const require = createRequire(resolve(borrowed, 'package.json'))
 
 export default defineConfig({
   test: {
+    silent: 'passed-only',
     environment: 'node',
   },
   resolve: {

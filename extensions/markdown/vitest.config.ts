@@ -35,6 +35,7 @@ export default defineConfig({
     },
   },
   test: {
+    silent: 'passed-only',
     environment: 'node',
     include: ['src/**/__tests__/**/*.test.ts'],
     // node_modules deps are externalized by default, which bypasses the alias
