@@ -160,6 +160,8 @@ jobs:
       # self-skips here (it needs a real Claude binary via CLAUDE_CODE_EXECUTABLE,
       # which CI has no reason to install); it runs in local dev instead.
       - name: Run ACP contract test
+        env:
+          UNIVERSE_FORK_CONTRACT: '1'
         run: pnpm --filter @universe-editor/editor test:integration acpForkContract
 
   # Decide which E2E suites to run. On a PR we scope to what the change touched

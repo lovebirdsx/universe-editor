@@ -20,8 +20,12 @@
  *      calls — an OFFLINE text scan that runs on CI (no binary), catching a
  *      fork-side rename the binary-gated routing leg would otherwise miss.
  *
- *  When `pnpm agent:build` hasn't run (no fork dist), the suite skips rather than
- *  fails — CI runs agent:build first (see ci.yml integration job).
+ *  The dist-dependent legs are OPT-IN via `UNIVERSE_FORK_CONTRACT=1` (set only by
+ *  CI's dedicated `acp-contract` job, which runs `pnpm agent:build` first). Without
+ *  the flag they skip — so a STALE local fork dist under `vendor/` (which `pnpm
+ *  check` would otherwise spawn and assert against a drifted fork, failing with
+ *  false negatives) never breaks a routine local run. The offline name-table check
+ *  below (pure editor self-consistency, reads no fork) always runs.
  *--------------------------------------------------------------------------------------------*/
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -44,6 +48,14 @@ import {
 // cold-start + SDK model list ~1.3s observed) so CI machines don't flake.
 const INIT_TIMEOUT_MS = 20_000
 const CALL_TIMEOUT_MS = 15_000
+
+// The dist-dependent legs spawn / text-scan the REAL built fork dist. They run
+// ONLY when explicitly opted in — CI's `acp-contract` job sets this after a fresh
+// `pnpm agent:build`. Locally (and in the plain `integration` job) the flag is
+// unset, so a stale fork dist under `vendor/` can't fail `pnpm check` with false
+// drift.
+const forkContractEnabled = process.env.UNIVERSE_FORK_CONTRACT === '1'
+const distReady = (fork: ForkId): boolean => forkContractEnabled && forkDistExists(fork)
 
 // The literal strings each fork's source declares. Duplicated here ON PURPOSE:
 // the editor side (ACP_EXT_METHODS) is asserted equal to these, so a drift on
@@ -93,8 +105,8 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
 
 describe('fork dist declares the ext-method wire names the editor expects', () => {
   for (const fork of ['claude', 'codex'] as const) {
-    describe.skipIf(!forkDistExists(fork))(fork, () => {
-      const dist = forkDistExists(fork) ? readForkDist(fork) : ''
+    describe.skipIf(!distReady(fork))(fork, () => {
+      const dist = distReady(fork) ? readForkDist(fork) : ''
       for (const method of EXPECTED_DIST_METHODS[fork]) {
         it(`declares ${method}`, () => {
           expect(dist).toContain(method)
@@ -109,9 +121,7 @@ describe('fork dist declares the ext-method wire names the editor expects', () =
 // ext-methods (rewind/title are Claude-only features — codex does file rollback
 // client-side), so those assertions are claude-scoped.
 function handshakeSuite(fork: ForkId) {
-  const distReady = forkDistExists(fork)
-
-  describe.skipIf(!distReady)(`${fork} fork contract (real dist)`, () => {
+  describe.skipIf(!distReady(fork))(`${fork} fork contract (real dist)`, () => {
     let cwd: string
     let connection: RealForkConnection
 
@@ -172,7 +182,7 @@ handshakeSuite('codex')
 // without a binary skips them while still enforcing the offline core above. We
 // drive them WITHOUT a real prompt and assert the fork routes the method and
 // parses its params into the documented error/response wire shape.
-const claudeExtReady = forkDistExists('claude') && claudeBinaryAvailable()
+const claudeExtReady = distReady('claude') && claudeBinaryAvailable()
 
 describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', () => {
   let cwd: string
