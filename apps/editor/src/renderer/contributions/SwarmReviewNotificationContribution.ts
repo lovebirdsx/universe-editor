@@ -38,7 +38,7 @@ import {
   type SwarmTransitionDto,
 } from '@universe-editor/extensions-common'
 import { swarmIgnoreStore, splitIgnored } from '../services/swarm/swarmIgnoreStore.js'
-import { swarmReviewsViewState } from '../services/swarm/swarmViewState.js'
+import { swarmNeedsActionCount, swarmReviewsViewState } from '../services/swarm/swarmViewState.js'
 import { filterNeedsAction, readSwarmFilterConfig } from '../services/swarm/swarmReviewFilter.js'
 import { swarmNotificationE2E } from '../services/swarm/swarmNotificationE2E.js'
 import { setSwarmNotificationTickHandler } from '../services/swarm/swarmNotificationTick.js'
@@ -122,7 +122,12 @@ export class SwarmReviewNotificationContribution
       // `undefined` = the perforce extension host hasn't registered the command yet
       // (activation race). Skip this tick without disturbing the primed baseline.
       if (dashboard === undefined) return
-      const actionable = await this._computeActionable(dashboard)
+      const displayed = await this._computeDisplayed(dashboard)
+      // The Activity Bar badge mirrors the sidebar's group scope, which — unlike
+      // the notification set below — includes open reviews authored by the user.
+      swarmNeedsActionCount.set(displayed.length)
+      const authoredIds = new Set(dashboard.authored.map((review) => review.id))
+      const actionable = displayed.filter((review) => !authoredIds.has(review.id))
       if (typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true) {
         swarmNotificationE2E.lastActionable = actionable.map((r) => r.id)
       }
@@ -134,17 +139,16 @@ export class SwarmReviewNotificationContribution
     }
   }
 
-  /** Reproduce the sidebar's "Needs My Action" list, sans the keyword box: exclude
-   *  reviews authored by the current user, apply author / approvable-only filters,
-   *  then drop the client-side ignored set. */
-  private async _computeActionable(dashboard: SwarmDashboardResult): Promise<SwarmReviewDto[]> {
-    const authoredIds = new Set(dashboard.authored.map((review) => review.id))
-    const needsAction = dashboard.needsAction.filter((review) => !authoredIds.has(review.id))
+  /** Reproduce the sidebar's "Needs My Action" group scope, sans the keyword box:
+   *  apply author / approvable-only filters, then drop the client-side ignored
+   *  set. Notifications additionally exclude reviews authored by the current user
+   *  (the caller does that); the badge count uses this list as-is. */
+  private async _computeDisplayed(dashboard: SwarmDashboardResult): Promise<SwarmReviewDto[]> {
     const config = readSwarmFilterConfig(this._config)
     const transitions = config.needsActionApprovableOnly
-      ? await this._loadTransitions(needsAction)
+      ? await this._loadTransitions(dashboard.needsAction)
       : {}
-    const filtered = filterNeedsAction(needsAction, config, transitions)
+    const filtered = filterNeedsAction(dashboard.needsAction, config, transitions)
     const ignoredIds = new Set(swarmIgnoreStore.list())
     return splitIgnored(filtered, ignoredIds).active
   }

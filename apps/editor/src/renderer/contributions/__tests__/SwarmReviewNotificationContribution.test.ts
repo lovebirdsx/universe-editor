@@ -88,7 +88,7 @@ interface SetupOpts {
 }
 
 async function setup(opts: SetupOpts = {}) {
-  const { contrib, ignore, tick } = await freshModules()
+  const { contrib, ignore, tick, viewState } = await freshModules()
 
   const storage = fakeStorage(
     opts.ignoredIds?.length
@@ -153,6 +153,7 @@ async function setup(opts: SetupOpts = {}) {
     dismiss,
     executeCommand,
     tick,
+    viewState,
     setDashboard: (needsAction: SwarmReviewDto[], authored: SwarmReviewDto[] = []) => {
       current = dashboard(needsAction, authored)
     },
@@ -239,6 +240,25 @@ describe('SwarmReviewNotificationContribution', () => {
     await t.refresh()
     expect(t.notify).toHaveBeenCalledTimes(1)
     expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #2: review 2' })
+    t.instance.dispose()
+  })
+
+  it('publishes the sidebar-scope needs-action count (own reviews included) for the badge', async () => {
+    // The badge mirrors the sidebar's "Needs My Action" group, which — unlike the
+    // notification set — keeps open reviews authored by the current user.
+    const t = await setup()
+    const ownReview = review('1', { author: 'alice' })
+    t.setDashboard([ownReview, review('2', { author: 'bob' })], [ownReview])
+    await t.refresh()
+    expect(t.viewState.swarmNeedsActionCount.observable.get()).toBe(2)
+    t.instance.dispose()
+  })
+
+  it('drops ignored reviews from the published badge count', async () => {
+    const t = await setup({ ignoredIds: ['2'] })
+    t.setDashboard([review('1'), review('2')])
+    await t.refresh()
+    expect(t.viewState.swarmNeedsActionCount.observable.get()).toBe(1)
     t.instance.dispose()
   })
 

@@ -51,6 +51,7 @@ import { PeekNavigationContribution } from '../PeekNavigationContribution.js'
 import {
   DirtyEditorsActivityContribution,
   ScmActivityContribution,
+  SwarmActivityContribution,
 } from '../ActivityBarBadgeContributions.js'
 import { ActiveRepoSyncContribution } from '../ActiveRepoSyncContribution.js'
 import { OutlineViewStateContribution } from '../OutlineViewStateContribution.js'
@@ -416,6 +417,13 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.scmActivity',
   ScmActivityContribution,
+  WorkbenchPhase.AfterRestore,
+)
+// Swarm "Needs My Action" count badge; the count itself is written by the view
+// (while open) and the background notification poll (otherwise).
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.swarmActivity',
+  SwarmActivityContribution,
   WorkbenchPhase.AfterRestore,
 )
 

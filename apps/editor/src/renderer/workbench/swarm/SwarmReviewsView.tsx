@@ -50,7 +50,11 @@ import {
 } from '@universe-editor/extensions-common'
 import { useService } from '../useService.js'
 import { SwarmReviewEditorInput } from '../../services/editor/SwarmReviewEditorInput.js'
-import { swarmReviewsViewState, swarmReviewEvents } from '../../services/swarm/swarmViewState.js'
+import {
+  swarmNeedsActionCount,
+  swarmReviewsViewState,
+  swarmReviewEvents,
+} from '../../services/swarm/swarmViewState.js'
 import {
   swarmIgnoreStore,
   splitIgnored,
@@ -546,6 +550,13 @@ export function SwarmReviewsView() {
     dashboard ? filterNeedsAction(dashboard.needsAction, filterConfig, transitions) : [],
     ignoredIds,
   )
+
+  // Publish the group-scope count (keyword excluded) for the Activity Bar badge;
+  // the background notification poll keeps it fresh while this view is closed.
+  const needsActionCount = needsActionActive.length
+  useEffect(() => {
+    swarmNeedsActionCount.set(dashboard ? needsActionCount : 0)
+  }, [dashboard, needsActionCount])
   const ignoredReviews: SwarmReviewDto[] = (() => {
     if (ignoredIds.size === 0) return []
     const byId = new Map<string, SwarmReviewDto>()

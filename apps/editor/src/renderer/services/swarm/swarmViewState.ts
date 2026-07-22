@@ -29,6 +29,23 @@ export const swarmReviewsViewState: SwarmReviewsViewState = {
   transitions: {},
 }
 
+const _needsActionCount = observableValue<number>('swarm.needsActionCount', 0)
+
+/**
+ * The "Needs My Action" count in the sidebar's group scope (author / approvable
+ * filters + client-side ignore applied; the transient keyword box excluded — a
+ * lookup, not a scope). Unlike notifications it includes open reviews authored
+ * by the current user, matching what the group header shows. Written by
+ * SwarmReviewsView while mounted and by SwarmReviewNotificationContribution's
+ * background poll otherwise; read by SwarmActivityContribution for the badge.
+ */
+export const swarmNeedsActionCount = {
+  observable: _needsActionCount as IObservable<number>,
+  set(count: number): void {
+    _needsActionCount.set(count, undefined)
+  },
+}
+
 /** Per-review detail cache, keyed by review id, so reopening a review tab is instant. */
 export const swarmReviewDetailCache = new Map<string, SwarmReviewDetailDto>()
 

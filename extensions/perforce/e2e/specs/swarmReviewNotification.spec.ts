@@ -48,4 +48,32 @@ test.describe('@p1 swarm review notification', () => {
       })
       .toEqual([['2001']])
   })
+
+  // The badge is driven by the same background poll as the notification, so it
+  // must reflect the Needs My Action count even with the Swarm view never opened.
+  test('activity bar badge mirrors the Needs My Action count', async ({ page, swarm }) => {
+    await page.evaluate(() => window.__E2E__!.whenRestored())
+    const badge = page.getByTestId('activitybar-badge-workbench.view.swarm')
+
+    // Prime the baseline exactly like the notification test: drive fast probes
+    // until one poll lands past the extension-host activation race. (Asserting
+    // the not-yet-rendered badge locator here would auto-wait and deadlock the
+    // poll loop against its own timeout.)
+    await expect
+      .poll(
+        async () => {
+          await page.evaluate(() => window.__E2E__!.driveSwarmNotificationPoll())
+          return page.evaluate(() => window.__E2E__!.getSwarmNotifyDiag().lastActionable.length)
+        },
+        { timeout: 20_000 },
+      )
+      .toBeGreaterThan(0)
+
+    // The five seeded reviews are all actionable → badge shows on the Swarm icon.
+    await expect(badge).toHaveText('5')
+
+    await swarm.addReview({ id: '2001', author: 'dave', description: 'Urgent hotfix' })
+    await page.evaluate(() => window.__E2E__!.driveSwarmNotificationPoll())
+    await expect(badge).toHaveText('6')
+  })
 })

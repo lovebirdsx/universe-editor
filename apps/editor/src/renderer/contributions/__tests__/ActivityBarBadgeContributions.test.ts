@@ -17,7 +17,11 @@ import {
 } from '@universe-editor/platform'
 import { ActivityService } from '../../services/activity/ActivityService.js'
 import type { IScmService, IScmSourceControlModel } from '../../services/extensions/ScmService.js'
-import { ScmActivityContribution } from '../ActivityBarBadgeContributions.js'
+import { swarmNeedsActionCount } from '../../services/swarm/swarmViewState.js'
+import {
+  ScmActivityContribution,
+  SwarmActivityContribution,
+} from '../ActivityBarBadgeContributions.js'
 
 function makeFakeScm(): { service: IScmService; setCount: (count: number | undefined) => void } {
   const count = observableValue<number | undefined>('count', undefined)
@@ -57,6 +61,47 @@ describe('ScmActivityContribution', () => {
     // The contribution is intentionally NOT disposed here. With the badge handle
     // parented into the contribution's tree, its root is the singleton store, so
     // it must not be reported as a leak.
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+  })
+})
+
+describe('SwarmActivityContribution', () => {
+  afterEach(() => {
+    // Module-level singleton shared across tests — reset so counts don't leak.
+    swarmNeedsActionCount.set(0)
+    setDisposableTracker(null)
+  })
+
+  it('mirrors the needs-action count onto the swarm container badge', () => {
+    // Dispose at the end: the count is a module-singleton observable, so a live
+    // contribution from this test would keep reacting (and creating badge handles)
+    // inside the leak-checking test below.
+    const store = new DisposableStore()
+    const activityService = store.add(new ActivityService())
+    store.add(new SwarmActivityContribution(activityService))
+
+    const badge = activityService.getBadge('workbench.view.swarm')
+    expect(badge.get()).toBeUndefined()
+
+    swarmNeedsActionCount.set(3)
+    expect(badge.get()?.count).toBe(3)
+
+    swarmNeedsActionCount.set(0)
+    expect(badge.get()).toBeUndefined()
+
+    store.dispose()
+  })
+
+  it('does not leak the badge handle while living under the singleton store', () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+
+    const workbenchStore = markAsSingleton(new DisposableStore())
+    const activityService = workbenchStore.add(new ActivityService())
+    workbenchStore.add(new SwarmActivityContribution(activityService))
+
+    swarmNeedsActionCount.set(5)
+    expect(activityService.getBadge('workbench.view.swarm').get()?.count).toBe(5)
     expect(tracker.computeLeakingDisposables()).toBeUndefined()
   })
 })

@@ -4,6 +4,7 @@
  *  Feeds the Activity Bar badges from live data sources:
  *  - DirtyEditorsActivityContribution → unsaved file count on the Explorer.
  *  - ScmActivityContribution → changed file count on Source Control.
+ *  - SwarmActivityContribution → "Needs My Action" review count on Swarm Reviews.
  *
  *  Both push into IActivityService; the ActivityBar subscribes per container id,
  *  so neither knows about the other or about the rendering layer.
@@ -22,9 +23,11 @@ import {
 } from '@universe-editor/platform'
 import { IScmService } from '../services/extensions/ScmService.js'
 import { IActivityService } from '../services/activity/ActivityService.js'
+import { swarmNeedsActionCount } from '../services/swarm/swarmViewState.js'
 
 const EXPLORER_CONTAINER_ID = 'workbench.view.explorer'
 const SCM_CONTAINER_ID = 'workbench.view.scm'
+const SWARM_CONTAINER_ID = 'workbench.view.swarm'
 
 export class DirtyEditorsActivityContribution extends Disposable implements IWorkbenchContribution {
   private readonly _dirtyListeners = this._register(new DisposableStore())
@@ -85,5 +88,23 @@ export class ScmActivityContribution extends Disposable implements IWorkbenchCon
   private _update(total: number): void {
     this._badge.value =
       total > 0 ? this._activityService.showActivity(SCM_CONTAINER_ID, { count: total }) : undefined
+  }
+}
+
+/** Mirrors the shared needs-action count (written by the Swarm view while open
+ *  and by the background notification poll otherwise) onto the Swarm container. */
+export class SwarmActivityContribution extends Disposable implements IWorkbenchContribution {
+  private readonly _badge = this._register(new MutableDisposable<IDisposable>())
+
+  constructor(@IActivityService private readonly _activityService: IActivityService) {
+    super()
+
+    this._register(
+      autorun((r) => {
+        const count = swarmNeedsActionCount.observable.read(r)
+        this._badge.value =
+          count > 0 ? this._activityService.showActivity(SWARM_CONTAINER_ID, { count }) : undefined
+      }),
+    )
   }
 }
