@@ -96,6 +96,24 @@ const STORAGE_KEY = 'acp.sessionChanges'
 const SCHEMA_VERSION = 2
 
 /**
+ * Hard caps on persisted hunk data. A real workspace once accumulated ~150MB of
+ * hunks in a single storage bucket (large generated/minified files diff as
+ * megabyte-scale lines); loading it then shuttled 100MB+ payloads across the
+ * IPC and log channels and rewrote the whole bucket on every edit, exhausting
+ * the main-process heap and aborting it (exit 134). Budgets keep the tracker
+ * bounded: per-session all-or-nothing (a partial batch history can't
+ * reconstruct an honest baseline), plus global LRU eviction.
+ */
+const MAX_TRACKED_SESSIONS = 20
+const MAX_SESSION_BYTES = 8 * 1024 * 1024
+const MAX_TOTAL_BYTES = 32 * 1024 * 1024
+
+/** Serialized size of a value in bytes (safe on undefined). */
+function jsonSize(value: unknown): number {
+  return JSON.stringify(value)?.length ?? 0
+}
+
+/**
  * Throttle window for `record`-driven recomputes. An agent can push hundreds of
  * edit tool-calls within a few seconds; without coalescing, each one would
  * re-read every tracked file (O(edits × files)) and exhaust file handles
@@ -161,12 +179,23 @@ export class SessionChangeTrackerService
     ISettableObservable<readonly SessionFileChange[]>
   >()
 
+  /** Approximate serialized size per session, kept in sync on record/load. */
+  private readonly _sessionBytes = new Map<string, number>()
+
+  /** Set by _deserialize when it pruned over-budget entries → persist the slimmed state. */
+  private _prunedOnLoad = false
+
   /** Sessions with a recompute pending inside the current throttle window. */
   private readonly _pendingRecompute = new Map<string, ReturnType<typeof setTimeout>>()
 
   /** Throttle window between a `record` and its recompute. Overridable in tests
    *  (set to 0 for a synchronous flush). */
   recomputeThrottleMs = RECOMPUTE_THROTTLE_MS
+
+  /** Size budgets — overridable in tests. */
+  maxTrackedSessions = MAX_TRACKED_SESSIONS
+  maxSessionBytes = MAX_SESSION_BYTES
+  maxTotalBytes = MAX_TOTAL_BYTES
 
   constructor(
     @IStorageService storage: IStorageService,
@@ -218,23 +247,64 @@ export class SessionChangeTrackerService
     ) {
       return undefined
     }
+    this._sessionBytes.clear()
     const state: TrackerState = new Map()
+    let total = 0
+    let pruned = false
     for (const s of shape.sessions) {
+      // Per-entry isolation: one malformed session must not nuke the rest.
+      if (!s || typeof s.sessionId !== 'string' || !Array.isArray(s.files)) {
+        pruned = true
+        continue
+      }
       const files = new Map<string, FileRecord>()
+      let bytes = 0
       for (const f of s.files) {
         const batches = Array.isArray(f.batches) ? [...f.batches] : []
         files.set(f.path, { batches })
+        for (const b of batches) bytes += jsonSize(b)
+      }
+      // All-or-nothing: a partial batch history would reconstruct a silently
+      // wrong baseline, so an over-budget session is dropped whole.
+      if (bytes > this.maxSessionBytes) {
+        this._logger.warn(
+          `pruning session ${s.sessionId} on load — ${(bytes / 1024 / 1024).toFixed(1)}MB of hunks exceeds the per-session budget`,
+        )
+        pruned = true
+        continue
       }
       state.set(s.sessionId, files)
+      this._sessionBytes.set(s.sessionId, bytes)
+      total += bytes
+    }
+    // Serialized order is append order (oldest first) — evict from the front.
+    while (state.size > this.maxTrackedSessions || total > this.maxTotalBytes) {
+      const oldest = state.keys().next().value
+      if (oldest === undefined) break
+      total -= this._sessionBytes.get(oldest) ?? 0
+      state.delete(oldest)
+      this._sessionBytes.delete(oldest)
+      pruned = true
+    }
+    if (pruned) {
+      this._prunedOnLoad = true
+      this._logger.warn(
+        `pruned ${STORAGE_KEY} to fit the size budgets; slimmed state will be persisted`,
+      )
     }
     return state
   }
 
   protected _onStateReplaced(state: TrackerState): void {
+    if (state.size === 0) this._sessionBytes.clear()
     // Recompute every session that already has a live observable. Sessions
     // observed later recompute lazily on first `changesFor`.
     for (const sessionId of this._observables.keys()) {
       void this._recompute(sessionId, state.get(sessionId))
+    }
+    if (this._prunedOnLoad) {
+      this._prunedOnLoad = false
+      this._scheduleWrite()
     }
   }
 
@@ -248,6 +318,16 @@ export class SessionChangeTrackerService
     created = false,
   ): void {
     if (hunks.length === 0 && !created) return
+    const batch: DiffBatch = created
+      ? { toolCallId, hunks: [...hunks], created: true }
+      : { toolCallId, hunks: [...hunks] }
+    const batchBytes = jsonSize(batch)
+    if (batchBytes > this.maxSessionBytes) {
+      this._logger.warn(
+        `dropping ${(batchBytes / 1024 / 1024).toFixed(1)}MB edit batch for session ${sessionId} — exceeds the per-session budget`,
+      )
+      return
+    }
     const p = normalizePath(path)
     let files = this._state.get(sessionId)
     if (!files) {
@@ -261,11 +341,29 @@ export class SessionChangeTrackerService
     }
     const batches = rec.batches
     const idx = batches.findIndex((b) => b.toolCallId === toolCallId)
-    const batch: DiffBatch = created
-      ? { toolCallId, hunks: [...hunks], created: true }
-      : { toolCallId, hunks: [...hunks] }
-    if (idx >= 0) batches[idx] = batch
-    else batches.push(batch)
+    let bytes = this._sessionBytes.get(sessionId) ?? 0
+    if (idx >= 0) {
+      bytes -= jsonSize(batches[idx])
+      batches[idx] = batch
+    } else {
+      batches.push(batch)
+    }
+    bytes += batchBytes
+
+    if (bytes > this.maxSessionBytes) {
+      // All-or-nothing: keeping only recent batches would reconstruct a
+      // silently wrong baseline, so the whole session's tracking is dropped.
+      this._logger.warn(
+        `dropping change tracking for session ${sessionId} — accumulated hunks exceed the ${(this.maxSessionBytes / 1024 / 1024).toFixed(0)}MB per-session budget`,
+      )
+      this.clear(sessionId)
+      return
+    }
+    this._sessionBytes.set(sessionId, bytes)
+    // Refresh LRU recency: the most-recently-recorded session sits at the end.
+    this._state.delete(sessionId)
+    this._state.set(sessionId, files)
+    this._evictOverflow(sessionId)
     this._scheduleWrite()
     this._scheduleRecompute(sessionId)
   }
@@ -282,6 +380,7 @@ export class SessionChangeTrackerService
 
   clear(sessionId: string): void {
     if (!this._state.delete(sessionId)) return
+    this._sessionBytes.delete(sessionId)
     this._scheduleWrite()
     this._observables.get(sessionId)?.set([], undefined)
   }
@@ -357,14 +456,37 @@ export class SessionChangeTrackerService
 
     if (mutated) {
       // Drop files whose batches were fully removed, then persist + refresh.
+      let bytes = 0
       for (const [path, rec] of [...files.entries()]) {
         if (rec.batches.length === 0) files.delete(path)
+        else for (const b of rec.batches) bytes += jsonSize(b)
       }
+      this._sessionBytes.set(sessionId, bytes)
       this._scheduleWrite()
       void this._recompute(sessionId, files)
     }
 
     return { filesChanged, insertions, deletions }
+  }
+
+  /** Evict least-recently-recorded sessions until the global budgets hold. */
+  private _evictOverflow(protectId: string): void {
+    let total = 0
+    for (const b of this._sessionBytes.values()) total += b
+    while (this._state.size > this.maxTrackedSessions || total > this.maxTotalBytes) {
+      let oldest: string | undefined
+      for (const id of this._state.keys()) {
+        if (id === protectId && this._state.size > 1) continue
+        oldest = id
+        break
+      }
+      if (oldest === undefined) break
+      this._logger.warn(`evicting change tracking for session ${oldest} — global budget exceeded`)
+      total -= this._sessionBytes.get(oldest) ?? 0
+      this._state.delete(oldest)
+      this._sessionBytes.delete(oldest)
+      this._observables.get(oldest)?.set([], undefined)
+    }
   }
 
   /**

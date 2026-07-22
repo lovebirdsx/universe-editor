@@ -122,6 +122,19 @@ describe('createStorage', () => {
     // The corrupt primary is preserved for diagnostics rather than discarded.
     await expect(fs.readFile(`${file}.corrupt`, 'utf8')).resolves.toBe('half-written-{')
   })
+
+  it('refuses to persist a value exceeding the size backstop', async () => {
+    const s = createStorage(file, { maxValueBytes: 1024 })
+    await s.set('small', 'ok')
+    await expect(s.set('huge', 'x'.repeat(2048))).rejects.toThrow(/refusing to persist "huge"/)
+    // The rejected write neither entered the cache nor clobbered existing content.
+    expect(await s.get('huge')).toBeUndefined()
+    expect(await s.get('small')).toBe('ok')
+    await s.flush()
+    const reader = createStorage(file)
+    expect(await reader.get('small')).toBe('ok')
+    expect(await reader.get('huge')).toBeUndefined()
+  })
 })
 
 describe('workspaceIdFromUri', () => {

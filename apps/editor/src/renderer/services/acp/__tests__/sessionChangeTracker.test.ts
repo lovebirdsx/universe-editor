@@ -277,6 +277,168 @@ describe('SessionChangeTrackerService — restore (codex rewind file rollback)',
   })
 })
 
+describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
+  // A workspace bucket once accumulated ~150MB of hunks; loading it shuttled
+  // 100MB+ payloads across IPC/log channels and aborted the main process.
+
+  class CapturingLoggerService implements ILoggerService {
+    declare readonly _serviceBrand: undefined
+    readonly infos: string[] = []
+    createLogger(): ILogger {
+      const infos = this.infos
+      return {
+        info: (msg: string) => {
+          infos.push(msg)
+        },
+      } as unknown as ILogger
+    }
+    setLevel(): void {}
+    getLevel(): LogLevel {
+      return LogLevel.Info
+    }
+  }
+
+  function makeBudgeted(overrides: {
+    maxTrackedSessions?: number
+    maxSessionBytes?: number
+    maxTotalBytes?: number
+    storage?: FakeStorage
+    loggerService?: ILoggerService
+  }): { svc: SessionChangeTrackerService; files: FakeFileService; storage: FakeStorage } {
+    const storage = overrides.storage ?? new FakeStorage()
+    const files = new FakeFileService()
+    const svc = new SessionChangeTrackerService(
+      storage,
+      new FakeWorkspaceService(),
+      new NoopTelemetryService(),
+      overrides.loggerService ?? new StubLoggerService(),
+      files,
+    )
+    svc.recomputeThrottleMs = 0
+    if (overrides.maxTrackedSessions !== undefined) {
+      svc.maxTrackedSessions = overrides.maxTrackedSessions
+    }
+    if (overrides.maxSessionBytes !== undefined) svc.maxSessionBytes = overrides.maxSessionBytes
+    if (overrides.maxTotalBytes !== undefined) svc.maxTotalBytes = overrides.maxTotalBytes
+    return { svc, files, storage }
+  }
+
+  function persistedSessionIds(storage: FakeStorage): string[] {
+    const raw = storage.buckets.get(StorageScope.WORKSPACE)?.get('acp.sessionChanges') as
+      | { sessions: { sessionId: string }[] }
+      | undefined
+    return (raw?.sessions ?? []).map((s) => s.sessionId)
+  }
+
+  /** ~100-byte batch, comfortably below the small budgets used here. */
+  function smallEdit(toolCallId: string): { toolCallId: string; hunks: DiffHunk[] } {
+    return {
+      toolCallId,
+      hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-a', '+b'] }],
+    }
+  }
+
+  it('skips a single batch that alone exceeds the per-session budget', async () => {
+    const { svc, files, storage } = makeBudgeted({ maxSessionBytes: 64 })
+    await svc.initialize()
+    files.set('/work/big.ts', 'x'.repeat(500))
+    const obs = svc.changesFor(SID)
+    svc.record(SID, '/work/big.ts', 'tc-big', [createHunk(['x'.repeat(500)])], true)
+    await flush()
+    expect(obs.get()).toHaveLength(0)
+    svc.dispose()
+    expect(storage.buckets.get(StorageScope.WORKSPACE)?.has('acp.sessionChanges')).toBe(false)
+  })
+
+  it('drops a session whole once accumulated hunks exceed the per-session budget', async () => {
+    const { svc, files } = makeBudgeted({ maxSessionBytes: 150 })
+    await svc.initialize()
+    files.set('/work/a.ts', 'b')
+    const obs = svc.changesFor(SID)
+    const first = smallEdit('tc-1')
+    svc.record(SID, '/work/a.ts', first.toolCallId, first.hunks)
+    await flush()
+    expect(obs.get()).toHaveLength(1)
+    // A second ~100-byte batch tips the session over 150 — tracking is dropped
+    // whole because a partial batch history reconstructs a wrong baseline.
+    const second = smallEdit('tc-2')
+    svc.record(SID, '/work/a.ts', second.toolCallId, second.hunks)
+    await flush()
+    expect(obs.get()).toHaveLength(0)
+    svc.dispose()
+  })
+
+  it('evicts the least-recently-recorded session beyond the count cap', async () => {
+    const { svc, files, storage } = makeBudgeted({ maxTrackedSessions: 3 })
+    await svc.initialize()
+    for (const s of ['s1', 's2', 's3', 's4']) {
+      files.set(`/work/${s}.ts`, 'v')
+      svc.record(s, `/work/${s}.ts`, 'tc-1', [createHunk(['v'])], true)
+    }
+    svc.dispose() // flush the debounced write
+    expect(persistedSessionIds(storage)).toEqual(['s2', 's3', 's4'])
+  })
+
+  it('prunes over-budget and malformed sessions on load, persisting the slimmed state', async () => {
+    const storage = new FakeStorage()
+    storage.buckets.get(StorageScope.WORKSPACE)?.set('acp.sessionChanges', {
+      schemaVersion: 2,
+      sessions: [
+        {
+          sessionId: 'huge',
+          files: [
+            {
+              path: '/work/h.ts',
+              batches: [
+                {
+                  toolCallId: 'tc-9',
+                  hunks: [
+                    {
+                      oldStart: 1,
+                      oldLines: 0,
+                      newStart: 1,
+                      newLines: 1,
+                      lines: [`+${'x'.repeat(1000)}`],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        { sessionId: 'small', files: [{ path: '/work/s.ts', batches: [smallEdit('tc-1')] }] },
+        { bogus: true },
+      ],
+    })
+    const { svc, files } = makeBudgeted({ maxSessionBytes: 512, storage })
+    await svc.initialize()
+    files.set('/work/s.ts', 'b')
+    const obs = svc.changesFor('small')
+    await flush()
+    expect(obs.get()).toHaveLength(1) // the healthy session survives pruning
+    svc.dispose() // flush the pruned-state write
+    expect(persistedSessionIds(storage)).toEqual(['small'])
+  })
+
+  it('logs a bounded summary instead of the full state on load', async () => {
+    const storage = new FakeStorage()
+    storage.buckets.get(StorageScope.WORKSPACE)?.set('acp.sessionChanges', {
+      schemaVersion: 2,
+      sessions: [
+        { sessionId: 's1', files: [{ path: '/work/a.ts', batches: [smallEdit('tc-1')] }] },
+      ],
+    })
+    const loggers = new CapturingLoggerService()
+    const { svc } = makeBudgeted({ storage, loggerService: loggers })
+    await svc.initialize()
+    const loadLine = loggers.infos.find((m) => m.includes('loaded from'))
+    expect(loadLine).toBeDefined()
+    expect(loadLine!.length).toBeLessThan(200)
+    expect(loadLine).toContain('1 entries')
+    svc.dispose()
+  })
+})
+
 describe('SessionChangeTrackerService — edit-storm resilience (EMFILE guard)', () => {
   /** Build a service with a real throttle so a burst of records coalesces. */
   function makeThrottled(throttleMs: number): {

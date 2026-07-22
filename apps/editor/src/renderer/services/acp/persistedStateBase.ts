@@ -99,6 +99,19 @@ export abstract class PersistedStateBase<TState> extends Disposable {
   protected abstract _deserialize(raw: unknown): TState | undefined
   /** Replace observable-side state. Called after every state change. */
   protected abstract _onStateReplaced(state: TState): void
+
+  /**
+   * Bounded one-line summary for the load log. Never serializes a large state
+   * wholesale: `JSON.stringify` of a hundred-MB state is itself an OOM hazard,
+   * and the log line would be relayed to the main process over IPC.
+   */
+  protected _describeState(): string {
+    const state: unknown = this._state
+    if (state instanceof Map) return `${state.size} entries`
+    if (Array.isArray(state)) return `${state.length} entries`
+    const json = JSON.stringify(state) ?? ''
+    return json.length <= 2048 ? json : `${json.slice(0, 2048)}…`
+  }
   /**
    * Merge freshly-loaded state with whatever the subclass accumulated
    * in-memory before load completed. Default: prefer loaded. Subclasses with
@@ -172,7 +185,7 @@ export abstract class PersistedStateBase<TState> extends Disposable {
         if (parsed !== undefined) {
           this._state = this._mergeOnLoad(parsed, this._state)
           this._logger.info(
-            `${this._storageKey} loaded from ${StorageScope[scope]} with ${JSON.stringify(this._state)}`,
+            `${this._storageKey} loaded from ${StorageScope[scope]}: ${this._describeState()}`,
           )
           this._onStateReplaced(this._state)
         } else {

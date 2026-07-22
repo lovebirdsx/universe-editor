@@ -23,7 +23,21 @@ export interface Storage {
 // main DI container so services like RecentWorkspaces can inject it.
 export const IMainStorageService = createDecorator<Storage>('mainStorageService')
 
-export function createStorage(filePath: string): Storage {
+export interface StorageOptions {
+  /**
+   * Backstop against persisting a single absurdly large value. Serializing and
+   * shuttling a >100MB value through JSON.stringify / IPC can exhaust the
+   * main-process heap and abort it (exit 134). Producers are expected to
+   * enforce their own tighter budgets; this is the last line of defense —
+   * the set() call rejects and the producer logs it instead of the process dying.
+   */
+  readonly maxValueBytes?: number
+}
+
+const DEFAULT_MAX_VALUE_BYTES = 64 * 1024 * 1024
+
+export function createStorage(filePath: string, options: StorageOptions = {}): Storage {
+  const maxValueBytes = options.maxValueBytes ?? DEFAULT_MAX_VALUE_BYTES
   const tmpPath = `${filePath}.tmp`
   const syncTmpPath = `${filePath}.synctmp`
   const bakPath = `${filePath}.bak`
@@ -103,6 +117,12 @@ export function createStorage(filePath: string): Storage {
       return all[key] as T | undefined
     },
     async set(key: string, value: unknown): Promise<void> {
+      const valueBytes = JSON.stringify(value)?.length ?? 0
+      if (valueBytes > maxValueBytes) {
+        throw new Error(
+          `refusing to persist "${key}": serialized value is ${(valueBytes / 1024 / 1024).toFixed(1)}MB (limit ${(maxValueBytes / 1024 / 1024).toFixed(0)}MB)`,
+        )
+      }
       const all = await readAll()
       all[key] = value
       const content = JSON.stringify(all, null, 2)
