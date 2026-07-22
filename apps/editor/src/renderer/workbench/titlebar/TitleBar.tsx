@@ -7,10 +7,11 @@ import {
   markAsSingleton,
   MutableDisposable,
   combinedDisposable,
+  relativePathUnder,
+  type HostPlatform,
   type IEditorGroup,
   type IWorkspace,
   type EditorInput,
-  type URI,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { LayoutControls } from './LayoutControls.js'
@@ -23,23 +24,39 @@ const SEPARATOR = ' — '
 /** Leading dot marking unsaved changes, mirroring VSCode's `${dirty}`. */
 const DIRTY_INDICATOR = '● '
 
-/** Full directory path of a resource, or '' for virtual editors without one. */
-function directoryOf(resource: URI | undefined): string {
-  if (!resource) return ''
+/**
+ * Left title segment: the file's workspace-relative path for in-workspace
+ * files, the full path for external files, or the editor name for non-file
+ * (virtual) editors.
+ */
+function leftSegment(
+  editor: EditorInput,
+  workspace: IWorkspace | null,
+  platform: HostPlatform,
+): string {
+  const resource = editor.resource
+  if (!resource || resource.scheme !== 'file') return editor.getName()
   const fsPath = resource.fsPath
-  const sepIdx = Math.max(fsPath.lastIndexOf('/'), fsPath.lastIndexOf('\\'))
-  return sepIdx > 0 ? fsPath.slice(0, sepIdx) : fsPath
+  const rel = workspace ? relativePathUnder(workspace.folder.fsPath, fsPath, platform) : null
+  return rel || fsPath
 }
 
 /**
- * Window title: `${dirty}${activeEditorName}${sep}${directory}`, falling back to
- * the workspace name when no editor is open. Empty segments collapse their
+ * Window title: `${dirty}${leftSegment}${sep}${workspacePath}` — the right
+ * segment is always the workspace path. Empty segments collapse their
  * separators (conditional separator).
  */
-function computeTitle(editor: EditorInput | undefined, workspace: IWorkspace | null): string {
+function computeTitle(
+  editor: EditorInput | undefined,
+  workspace: IWorkspace | null,
+  platform: HostPlatform,
+): string {
   if (!editor) return workspace?.name ?? ''
   const dirty = editor.isDirty ? DIRTY_INDICATOR : ''
-  const segments = [editor.getName(), directoryOf(editor.resource)].filter((s) => s.length > 0)
+  const segments = [
+    leftSegment(editor, workspace, platform),
+    workspace?.folder.fsPath ?? '',
+  ].filter((s) => s.length > 0)
   return dirty + segments.join(SEPARATOR)
 }
 
@@ -117,7 +134,7 @@ export function TitleBar() {
   )
 
   const title = useSyncExternalStore(subscribe, () =>
-    computeTitle(groupsService.activeGroup.activeEditor, workspace.current),
+    computeTitle(groupsService.activeGroup.activeEditor, workspace.current, host.platform),
   )
 
   return (

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
 import {
   ContextKeyService,
+  EditorInput,
   ICommandService,
   IContextKeyService,
   IEditorGroupsService,
@@ -120,6 +121,18 @@ function titleText(): string {
   return screen.getByTestId('titlebar-title').textContent ?? ''
 }
 
+class VirtualEditorInput extends EditorInput {
+  override get typeId(): string {
+    return 'virtual'
+  }
+  override get resource(): undefined {
+    return undefined
+  }
+  override getName(): string {
+    return 'Settings'
+  }
+}
+
 // ── Setup / teardown ──────────────────────────────────────────────────────────
 
 let svc: EditorGroupsService
@@ -154,7 +167,7 @@ describe('TitleBar — title text', () => {
     expect(titleText()).toBe('project')
   })
 
-  it('shows "filename — directory" when a file is open', () => {
+  it('shows the full path when a file is open without a workspace', () => {
     const inst = makeContainer(svc)
     const input = inst.createInstance(FileEditorInput, URI.file('/home/user/project/src/main.ts'))
     svc.activeGroup.openEditor(input)
@@ -165,11 +178,56 @@ describe('TitleBar — title text', () => {
       </ServicesContext.Provider>,
     )
 
-    expect(titleText()).toBe('main.ts — /home/user/project/src')
+    expect(titleText()).toBe('/home/user/project/src/main.ts')
+  })
+
+  it('shows the workspace-relative path and workspace path for an in-workspace file', () => {
+    const workspace: IWorkspace = { folder: URI.file('/my/project'), name: 'project' }
+    const inst = makeContainer(svc, { workspace })
+    const input = inst.createInstance(FileEditorInput, URI.file('/my/project/src/main.ts'))
+    svc.activeGroup.openEditor(input)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <TitleBar />
+      </ServicesContext.Provider>,
+    )
+
+    expect(titleText()).toBe('src/main.ts — /my/project')
+  })
+
+  it('shows the full path and workspace path for a file outside the workspace', () => {
+    const workspace: IWorkspace = { folder: URI.file('/my/project'), name: 'project' }
+    const inst = makeContainer(svc, { workspace })
+    const input = inst.createInstance(FileEditorInput, URI.file('/other/place/foo.txt'))
+    svc.activeGroup.openEditor(input)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <TitleBar />
+      </ServicesContext.Provider>,
+    )
+
+    expect(titleText()).toBe('/other/place/foo.txt — /my/project')
+  })
+
+  it('shows the editor name and workspace path for a non-file editor', () => {
+    const workspace: IWorkspace = { folder: URI.file('/my/project'), name: 'project' }
+    const inst = makeContainer(svc, { workspace })
+    svc.activeGroup.openEditor(new VirtualEditorInput())
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <TitleBar />
+      </ServicesContext.Provider>,
+    )
+
+    expect(titleText()).toBe('Settings — /my/project')
   })
 
   it('prefixes a dirty dot when the active editor has unsaved changes', () => {
-    const inst = makeContainer(svc)
+    const workspace: IWorkspace = { folder: URI.file('/my/project'), name: 'project' }
+    const inst = makeContainer(svc, { workspace })
     const input = inst.createInstance(FileEditorInput, URI.file('/my/project/file.ts'))
     svc.activeGroup.openEditor(input)
 
@@ -195,9 +253,10 @@ describe('TitleBar — title text', () => {
   })
 
   it('updates the title when the active editor changes', () => {
-    const inst = makeContainer(svc)
-    const a = inst.createInstance(FileEditorInput, URI.file('/project/alpha.ts'))
-    const b = inst.createInstance(FileEditorInput, URI.file('/project/beta.ts'))
+    const workspace: IWorkspace = { folder: URI.file('/my/project'), name: 'project' }
+    const inst = makeContainer(svc, { workspace })
+    const a = inst.createInstance(FileEditorInput, URI.file('/my/project/alpha.ts'))
+    const b = inst.createInstance(FileEditorInput, URI.file('/other/beta.ts'))
     svc.activeGroup.openEditor(a)
     svc.activeGroup.openEditor(b)
 
@@ -207,13 +266,13 @@ describe('TitleBar — title text', () => {
       </ServicesContext.Provider>,
     )
 
-    expect(titleText()).toBe('beta.ts — /project')
+    expect(titleText()).toBe('/other/beta.ts — /my/project')
 
     act(() => {
       svc.activeGroup.setActive(a)
     })
 
-    expect(titleText()).toBe('alpha.ts — /project')
+    expect(titleText()).toBe('alpha.ts — /my/project')
   })
 
   it('falls back to workspace name when the last file is closed', () => {
