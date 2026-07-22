@@ -17,6 +17,7 @@
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { AcpTimelinePO } from '@universe-editor/e2e-harness'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
@@ -30,23 +31,7 @@ test.describe('@p1 agents — virtualized timeline scroll restore', () => {
   }) => {
     await workbench.waitForRestored()
 
-    // 读取当前视口顶部锚定的 timeline slot 索引——复用产品 captureAnchor 的语义
-    // （第一条 bottom 仍在视口内的行），把 m:m<idx> 解析成数字。这是 restore 真正
-    // 保证的不变量（哪条消息钉在视口顶部），不受 max 随懒测量增长导致的 frac 漂移影响。
-    const readTopIndex = async (): Promise<number> =>
-      page.evaluate((sel) => {
-        const el = document.querySelector(sel)?.parentElement as HTMLElement | null
-        if (!el) return -1
-        const top = el.getBoundingClientRect().top
-        const rows = Array.from(el.querySelectorAll<HTMLElement>('[data-slot-key]'))
-        for (const row of rows) {
-          if (row.getBoundingClientRect().bottom - top > 0) {
-            const m = /(\d+)\s*$/.exec(row.getAttribute('data-slot-key') ?? '')
-            return m ? Number(m[1]) : -1
-          }
-        }
-        return -1
-      }, TIMELINE)
+    const timeline = new AcpTimelinePO(page)
 
     // 把虚拟化阈值压到 5，几条消息就走虚拟路径。
     await page.evaluate(() =>
@@ -157,43 +142,16 @@ test.describe('@p1 agents — virtualized timeline scroll restore', () => {
       .toBeLessThan(30)
 
     // —— 场景 2：滚到中间（非 stuck）→ 切走 → 切回，应锚回同一条消息 ——
-    // 用锚定消息索引而非 frac=scrollTop/max 作落点代理：像素中点
-    // scrollTop=(scrollHeight-clientHeight)/2 在虚拟模式下是双峰的——上方行按
-    // estimateRow 估算、真实高度更大时，同一像素中点会落到 m11(frac≈0.43) 或
-    // m22(frac≈0.92) 两个截然不同的消息（取决于滚动瞬间的懒测量状态，即案例 15 的
-    // estimate 坐标系伪影）。restore 每次都忠实地把切走前那条消息钉回视口顶部（11→11、
-    // 22→22 实测稳定），但当中点恰好落到 m22 时，忠实恢复给出 frac≈0.92，旧的
-    // finalFrac<0.85 绝对断言就会误判失败（received 0.97 即此形态）。改用相对不变量
-    // “恢复后顶部消息 == 切走前那条消息”，与中点落到 11 还是 22 无关，同时仍守护两类
-    // 回归：重置到顶(index→0/1) 与虚拟坐标系丢失跳到底(index→末尾)。对齐兄弟 spec
-    // smoke.agentsScrollRestore 的锚定索引方案。
-    const midTarget = await page.evaluate((sel) => {
-      const el = document.querySelector(sel)!.parentElement as HTMLElement
-      const t = Math.floor((el.scrollHeight - el.clientHeight) / 2)
-      el.scrollTop = t
-      el.dispatchEvent(new Event('scroll'))
-      return el.scrollTop
-    }, TIMELINE)
-    expect(midTarget).toBeGreaterThan(0)
-
-    // 等顶部锚定索引稳定下来再记（懒测量收敛前会抖一两条）：连续 4 帧同值即认定收敛。
-    const settleIndex = async (): Promise<number> => {
-      let last = -999
-      let streak = 0
-      for (let i = 0; i < 40; i++) {
-        const idx = await readTopIndex()
-        streak = idx === last ? streak + 1 : 0
-        last = idx
-        if (streak >= 4) return idx
-        await page.waitForTimeout(80)
-      }
-      return last
-    }
-    const anchorBefore = await settleIndex()
-    // 中部消息（索引 > 0，不是被切到顶；也不是末尾贴底）。timeline 共 24 条
-    // （12 user + 12 agent），末条约 m23/m24。
-    expect(anchorBefore).toBeGreaterThan(0)
-    expect(anchorBefore).toBeLessThan(23)
+    // 定位不能用像素中点一锤定音：虚拟模式下估计高度与真实高度偏离，像素中点
+    // (scrollHeight-clientHeight)/2 落到的消息不确定——实测可落 m11/m22（双峰，案例
+    // 34），CI 慢机上甚至落到末条 m24；此时距底 <32px(STICK_THRESHOLD_PX) 会被
+    // handleScroll 记成 stuck=true，场景 2 退化成场景 1 的假阳性，anchorBefore<23
+    // 前置守卫被击穿（本 spec 的 CI flake）。scrollToAnchorBand 按锚定索引割线逼近，
+    // 直到顶部锚落进中部带。timeline 共 24 条（12 user + 12 agent），[6,18] 离顶/底
+    // 都足够远：够低保证 stuck=false，够高保证没重置到顶。
+    const anchorBefore = await timeline.scrollToAnchorBand({ lo: 6, hi: 18 })
+    expect(anchorBefore).toBeGreaterThanOrEqual(6)
+    expect(anchorBefore).toBeLessThanOrEqual(18)
 
     // 两个 tab（untitled + acp.session）已存在，直接在两者间切换即可——再次
     // newUntitledFile 不会新建第二个 untitled，反而打乱 previous/next 的目标。
@@ -216,14 +174,14 @@ test.describe('@p1 agents — virtualized timeline scroll restore', () => {
     await expect
       .poll(
         async () => {
-          const idx = await readTopIndex()
+          const idx = await timeline.readTopIndex()
           streak = idx >= LO && idx <= HI ? streak + 1 : 0
           return streak
         },
         { timeout: 8000, intervals: [100] },
       )
       .toBeGreaterThanOrEqual(6)
-    const finalIndex = await readTopIndex()
+    const finalIndex = await timeline.readTopIndex()
     expect(finalIndex).toBeGreaterThanOrEqual(LO)
     expect(finalIndex).toBeLessThanOrEqual(HI)
   })

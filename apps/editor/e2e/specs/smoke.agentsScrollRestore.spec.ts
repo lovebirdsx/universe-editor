@@ -13,6 +13,7 @@
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { AcpTimelinePO } from '@universe-editor/e2e-harness'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
@@ -95,38 +96,19 @@ test.describe('@p1 agents — scroll position survives editor tab switch', () =>
       )
       .toBeGreaterThan(100)
 
-    // 读取当前视口顶部锚定的 timeline slot 的索引 —— 复用产品 captureAnchor 的语义
-    // （第一条 bottom 仍在视口内的行），并把 m:m<idx> 解析成数字。这是 restore 真正
-    // 保证的不变量（哪条消息钉在视口顶部），不受 max 随懒测量增长导致的 frac 漂移影响。
-    const readTopIndex = async (): Promise<number> =>
-      page.evaluate((sel) => {
-        const el = document.querySelector(sel)?.parentElement as HTMLElement | null
-        if (!el) return -1
-        const top = el.getBoundingClientRect().top
-        const rows = Array.from(el.querySelectorAll<HTMLElement>('[data-slot-key]'))
-        for (const row of rows) {
-          if (row.getBoundingClientRect().bottom - top > 0) {
-            const m = /(\d+)\s*$/.exec(row.getAttribute('data-slot-key') ?? '')
-            return m ? Number(m[1]) : -1
-          }
-        }
-        return -1
-      }, TIMELINE)
+    // timeline 共 16 条消息（8 user + 8 agent，首条 user 被切走），中点约 m8。
+    const MID_LO = 4
+    const MID_HI = 12
+    const timeline = new AcpTimelinePO(page)
 
-    // 滚到中间（非底部）并通知组件，让 handleScroll 记下 stuck=false + 锚点。
-    const targetFrac = await page.evaluate((sel) => {
-      const el = document.querySelector(sel)!.parentElement as HTMLElement
-      const max = el.scrollHeight - el.clientHeight
-      el.scrollTop = Math.floor(max / 2)
-      el.dispatchEvent(new Event('scroll'))
-      return max > 0 ? el.scrollTop / max : -1
-    }, TIMELINE)
-    expect(targetFrac).toBeGreaterThan(0.15)
-    // 此刻锚定的应是一条中部消息（索引 > 0，不是被切到顶）。注意此值仅作 sanity——
-    // 它在 frac=0.5 处采样、上方行尚未懒测量完，本身会在 8~11 间抖动，故下面的恢复
-    // 断言不与它做相对比较，改用绝对“中部带”。
-    const targetIndex = await readTopIndex()
-    expect(targetIndex).toBeGreaterThan(0)
+    // 滚到中间（非底部）并通知组件，让 handleScroll 记下 stuck=false + 锚点。定位按
+    // 锚定索引割线逼近中部带，不能用像素中点 max/2 一锤定音——虚拟估计坐标系下中点
+    // 落点不确定，CI 慢机可落到末条（兄弟 spec smoke.agentsVirtualScrollRestore 的
+    // 实测 flake）：距底 <32px 会被 handleScroll 记成 stuck=true，「中部恢复」退化成
+    // 「贴底恢复」的假阳性。
+    const anchorBefore = await timeline.scrollToAnchorBand({ lo: MID_LO, hi: MID_HI })
+    expect(anchorBefore).toBeGreaterThanOrEqual(MID_LO)
+    expect(anchorBefore).toBeLessThanOrEqual(MID_HI)
 
     // 切到另一个 editor（同组内新建 untitled）——会卸载 ChatScroll。
     await workbench.runCommand('workbench.action.files.newUntitledFile')
@@ -148,10 +130,8 @@ test.describe('@p1 agents — scroll position survives editor tab switch', () =>
       .toBe('acp.session')
 
     // 关键断言：恢复后顶部锚定的消息仍是中部消息，而不是被重置到顶（原 bug，
-    // index→0/1）或跳到底（虚拟坐标系丢失，index→末尾）。timeline 共 16 条消息
-    // （8 user + 8 agent，首条 user 被切走），中点约 m8；恢复落点稳定在 m9~m11。
-    // 用绝对“中部带 [4, 12]”而非相对 targetIndex：targetIndex 在 frac=0.5 处采样、
-    // 上方行尚未懒测量，本身在 8~11 抖动，做相对容差会把噪声引入断言。中部带两侧都
+    // index→0/1）或跳到底（虚拟坐标系丢失，index→末尾）。切走前锚已被
+    // scrollToAnchorBand 钉进 [4,12]，恢复落点实测稳定在 m9~m11，绝对“中部带”两侧
     // 留足余量，仍能抓住被守护的两类回归（重置到顶 / 跳到底）。
     //
     // 不用 frac 断言：restore 走 RAF + 600ms 窗口逐步逼近，收敛前有过冲/震荡（顶部行
@@ -160,20 +140,18 @@ test.describe('@p1 agents — scroll position survives editor tab switch', () =>
     // frac 也能从 0.4 漂到 0.11 或 0.7，两端都会误触发 0.15/0.85 边界（既往 flake 根因）。
     // 锚定消息索引收敛后稳定不漂，直接编码被守护的行为。poll 到“连续 ≥600ms 落在中部
     // 带内”等掉 RAF 过冲窗口——过冲帧落到首/末行会清零计数，只有收敛后才攒满。
-    const MID_LO = 4
-    const MID_HI = 12
     let streak = 0
     await expect
       .poll(
         async () => {
-          const idx = await readTopIndex()
+          const idx = await timeline.readTopIndex()
           streak = idx >= MID_LO && idx <= MID_HI ? streak + 1 : 0
           return streak
         },
         { timeout: 8000, intervals: [100] },
       )
       .toBeGreaterThanOrEqual(6)
-    const finalIndex = await readTopIndex()
+    const finalIndex = await timeline.readTopIndex()
     expect(finalIndex).toBeGreaterThanOrEqual(MID_LO)
     expect(finalIndex).toBeLessThanOrEqual(MID_HI)
   })

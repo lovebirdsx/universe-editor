@@ -31,6 +31,7 @@ export { StatusBarPO } from './pages/StatusBarPO.js'
 export { QuickInputPO } from './pages/QuickInputPO.js'
 export { EditorAreaPO } from './pages/EditorAreaPO.js'
 export { PanelPO } from './pages/PanelPO.js'
+export { AcpTimelinePO } from './pages/AcpTimelinePO.js'
 
 export { defineE2EConfig, type E2EConfigOptions } from './playwrightConfig.js'
 
