@@ -49,6 +49,7 @@
 - [StrictMode 空跑 dispose useRef 持有的 Emitter](strictmode-useref-emitter-dispose-dev-only.md) — session outline 高亮 dev-only 不跟随键盘移动；根因=effect cleanup 里 dispose useRef 持有的 Emitter，StrictMode 空跑把它 dispose 而 ref 不重建→.fire() 落死对象；修法惰性创建+不 dispose；教训:useRef 持有的 disposable 绝不在 cleanup dispose
 - [渲染崩溃→日志死循环→黑屏不自愈](renderer-crash-log-feedback-loop-blackscreen.md) — 长任务窗口变黑(可拖动)=渲染崩溃后主进程仍向死帧 send,Electron 33 不抛异常而内部 console.error→被拦截写日志→onDidAppendEntry 又推回死帧→无限循环写爆盘打满 CPU;修=ElectronProtocol 加 render-process-gone/reload 事件闸门(try/catch+isDestroyed 拦不住)+崩溃弹窗一键 reload+FileLogger rotate 突发熔断
 - [Peek 预览面板 blank](peek-preview-blank-embedded-automaticlayout.md) — 真根因=`.preview.inline`(inline-block 收缩到内容)与继承来的 automaticLayout ResizeObserver 互相观察成 5×5 死锁;首个引用跨文件(异步读盘)稳定复现;修=CSS 让 `.preview` 填满恒定的 split-view slot 断环(updateOptions 关 observer 无效,构造后才 fire 且从不 stopObserving)
+- [最大化重启二级侧栏宽度重置](secondary-sidebar-maximize-restart-width-reset.md) — LayoutPriority.High 只是半修;真根因=allotment 构造期捕获过期 onChange 闭包(init 目标把可见侧栏当隐藏)+瞬态帧被无条件持久化(挤到 minSize 170 写回);修=init 目标经 ref 现读+侧栏宽度只在 onDragEnd 持久化(VSCode 语义);教训:allotment 回调内读 props 一律走 ref
 
 ## 打包 / 构建
 

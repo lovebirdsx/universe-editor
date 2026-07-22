@@ -54,7 +54,7 @@ vi.mock('allotment', () => {
     preferredSize?: number | string
   }) => (visible === false ? null : React.createElement('div', null, children))
 
-  return { Allotment }
+  return { Allotment, LayoutPriority: { Normal: 'NORMAL', Low: 'LOW', High: 'HIGH' } }
 })
 
 afterEach(() => {

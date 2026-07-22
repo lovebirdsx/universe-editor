@@ -76,7 +76,7 @@ vi.mock('allotment', () => {
   ).Pane = ({ children, visible }) =>
     visible === false ? null : React.createElement('div', null, children)
 
-  return { Allotment }
+  return { Allotment, LayoutPriority: { Normal: 'NORMAL', Low: 'LOW', High: 'HIGH' } }
 })
 
 afterEach(() => {
