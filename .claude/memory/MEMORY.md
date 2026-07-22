@@ -35,6 +35,8 @@
 
 ## 性能 / 疑难根因
 
+- [sessionChanges 无界增长主进程 OOM exit 134](sessionchanges-unbounded-growth-main-oom-abort.md) — 工作区状态 200MB(sessionChanges 152MB)启动 8 秒闪退;根因=全量 IPC+全量 state 日志 stringify+整文件重写三管道叠加;修=tracker 预算(8MB/会话全有全无+32MB 全局+20 LRU+加载剪枝自愈)+_describeState 有界日志+storage 64MB 写入兜底
+
 > NSIS 安装器 / 自动更新（非静默进度弹窗守卫链、WM_SETTINGCHANGE 广播阻塞、Defender 排除、安装耗时测量方法学）全部收敛在 skill `nsis-installer-autoupdate`（按需加载，不占常驻索引）。
 
 - [computeLineDiff 须保持 Myers O(ND)](linediff-myers-perf.md) — dirty-diff 复用它对大文件切换做全文 diff，勿退回 O(m·n)
@@ -65,3 +67,4 @@
 ## e2e flaky / 排查
 
 > e2e 偶发失败（CI 挂/本地稳过）的排查流程、案例库、速记全部收敛在 skill `fix-ci-e2e-flake`（按需加载，不占常驻索引）；已知环境 flake 的一句话登记见 `apps/editor/e2e/RUNBOOK.md`。
+
