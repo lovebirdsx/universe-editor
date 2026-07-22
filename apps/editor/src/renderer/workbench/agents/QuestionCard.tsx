@@ -196,6 +196,7 @@ export function QuestionCard({ session }: { session: IAcpSession }) {
                 type="text"
                 className={styles['questionFreeform']}
                 value={d.otherText}
+                spellCheck={false}
                 placeholder={localize('acp.question.answer.placeholder', 'Type your answer')}
                 onChange={(e) => patch(qi, { otherText: e.target.value })}
                 data-testid={`acp-question-${qi}-other`}
@@ -204,6 +205,7 @@ export function QuestionCard({ session }: { session: IAcpSession }) {
             <textarea
               className={styles['questionNotes']}
               value={d.notes}
+              spellCheck={false}
               placeholder={localize('acp.question.notes.placeholder', 'Notes (optional)')}
               rows={1}
               onChange={(e) => patch(qi, { notes: e.target.value })}

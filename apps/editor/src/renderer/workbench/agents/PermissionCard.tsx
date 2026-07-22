@@ -86,6 +86,7 @@ export function PermissionCard({ session }: { session: IAcpSession }) {
           <textarea
             className={styles['questionFreeform']}
             value={steer}
+            spellCheck={false}
             rows={1}
             placeholder={localize(
               'acp.permission.steer.placeholder',

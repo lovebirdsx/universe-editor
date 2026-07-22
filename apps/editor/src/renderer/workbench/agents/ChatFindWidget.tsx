@@ -82,6 +82,7 @@ export function ChatFindWidget({
         type="text"
         className={styles['findInput']}
         value={query}
+        spellCheck={false}
         placeholder={localize('acp.find.placeholder', 'Find')}
         onChange={(e) => onQueryChange(e.target.value)}
         onKeyDown={onKeyDown}
