@@ -14,14 +14,15 @@ export interface CollapseState {
   readonly overrides: ReadonlyMap<string, boolean>
 }
 
-// Per-kind default under the `default` mode: thought messages and read/search /
-// sub-agent-parent tool calls start collapsed, the rest expanded.
+// Per-kind default under the `default` mode: read/search / sub-agent-parent
+// tool calls start collapsed, everything else (thought messages included)
+// starts expanded.
 export function defaultCollapsed(item: TimelineItem | AcpChildItem, mode: CollapseMode): boolean {
   if (mode === 'collapsed') return true
   if (mode === 'expanded') return false
   switch (item.kind) {
     case 'message':
-      return item.message.role === 'thought'
+      return false
     case 'toolCall':
       return item.call.kind !== 'edit' && item.call.kind !== 'switch_mode'
     case 'compaction':

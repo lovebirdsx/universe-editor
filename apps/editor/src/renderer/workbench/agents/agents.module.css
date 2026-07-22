@@ -377,6 +377,14 @@
   padding-left: 10px;
 }
 
+/* Reasoning text stays muted: markdown `**...**` spans (codex summary titles)
+   inherit the card's italic grey instead of the loud bright-bold emphasis. */
+.messageItem[data-role='thought'] strong,
+.subMessage[data-role='thought'] strong {
+  font-weight: inherit;
+  color: inherit;
+}
+
 .messageRole {
   font-size: calc(var(--agent-font-size, 12px) * 0.833);
   text-transform: uppercase;

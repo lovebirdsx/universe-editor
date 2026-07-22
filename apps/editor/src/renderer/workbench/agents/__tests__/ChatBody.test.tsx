@@ -719,7 +719,7 @@ describe('ChatBody — collapse', () => {
     return slotEl(container, key).querySelector('button')!.getAttribute('aria-expanded')
   }
 
-  it('agent messages start expanded; thought messages start collapsed', () => {
+  it('agent and thought messages both start expanded', () => {
     const thought: AcpMessage = {
       id: 'c',
       role: 'thought',
@@ -734,7 +734,7 @@ describe('ChatBody — collapse', () => {
       ]),
     )
     expect(ariaExpanded(container, 'm:a')).toBe('true')
-    expect(ariaExpanded(container, 'm:c')).toBe('false')
+    expect(ariaExpanded(container, 'm:c')).toBe('true')
   })
 
   it('toggleCollapse flips the focused item', () => {
