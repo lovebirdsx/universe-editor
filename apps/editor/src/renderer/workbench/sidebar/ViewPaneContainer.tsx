@@ -81,9 +81,13 @@ export function ViewPaneContainer({
   // After a collapse/expand toggle, hand collapsed panes their header height and
   // split the rest equally among the open panes — Allotment alone would leave the
   // freed space on the just-collapsed pane. Only run when the view *set* is
-  // unchanged: on add/remove/replace (e.g. a view dragged in or out) Allotment is
-  // mid-reconcile and its viewItems don't yet match `views`, so we let its own
-  // layout + onChange rebalance instead of resizing against a stale geometry.
+  // unchanged: on add/remove/replace (e.g. a view dragged in or out) the keyed
+  // Allotment remounts, and its new SplitView stays empty until the next
+  // ResizeObserver tick + reconcile — a window spanning several commits, so a
+  // later collapse (e.g. per-workspace state rehydrating right after a workspace
+  // switch) can still land inside it. Dropping the stale sizes forces the
+  // length guard below to keep skipping until the remounted instance reports
+  // its real geometry via onChange.
   const collapsedKey = views.map((v) => (collapsed(v.id) ? '1' : '0')).join('')
   const viewIdsKey = views.map((v) => v.id).join('\n')
   const prevViewIdsRef = useRef(viewIdsKey)
@@ -91,7 +95,10 @@ export function ViewPaneContainer({
     const handle = allotmentRef.current
     const sameViewSet = prevViewIdsRef.current === viewIdsKey
     prevViewIdsRef.current = viewIdsKey
-    if (!handle || !sameViewSet) return
+    if (!handle || !sameViewSet) {
+      sizesRef.current = []
+      return
+    }
     const sizes = sizesRef.current
     if (sizes.length !== views.length) return
     const total = sizes.reduce((sum, n) => sum + n, 0)

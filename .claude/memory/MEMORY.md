@@ -35,6 +35,7 @@
 
 ## 性能 / 疑难根因
 
+- [allotment 重挂载空 SplitView 窗口期](allotment-remount-empty-splitview-window.md) — key 重挂载后 viewItems 为空直到 ResizeObserver tick,窗口跨多次 commit;imperative resize 只能用当前实例 onChange 报告过的 sizes 守卫,重挂载即清缓存 sizes;切工作区 collapsed 水合落进窗口→minimumSize of undefined
 - [sessionChanges 无界增长主进程 OOM exit 134](sessionchanges-unbounded-growth-main-oom-abort.md) — 工作区状态 200MB(sessionChanges 152MB)启动 8 秒闪退;根因=全量 IPC+全量 state 日志 stringify+整文件重写三管道叠加;修=tracker 预算(8MB/会话全有全无+32MB 全局+20 LRU+加载剪枝自愈)+_describeState 有界日志+storage 64MB 写入兜底
 
 > NSIS 安装器 / 自动更新（非静默进度弹窗守卫链、WM_SETTINGCHANGE 广播阻塞、Defender 排除、安装耗时测量方法学）全部收敛在 skill `nsis-installer-autoupdate`（按需加载，不占常驻索引）。
