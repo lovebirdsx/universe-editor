@@ -26,8 +26,15 @@ export class SwarmNotificationPoller {
   constructor(
     private readonly _isConfigured: () => Promise<boolean>,
     private readonly _logger?: SwarmLogger,
-    private readonly _intervalMs: number = POLL_INTERVAL_MS,
+    private _intervalMs: number = POLL_INTERVAL_MS,
   ) {}
+
+  /** Override the tick interval (from `perforce.swarm.pollInterval`). Only
+   *  effective before start(); the caller configures then starts. */
+  setIntervalMs(ms: number): void {
+    if (this._timer || !Number.isFinite(ms) || ms <= 0) return
+    this._intervalMs = ms
+  }
 
   start(): void {
     if (this._disposed || this._timer) return

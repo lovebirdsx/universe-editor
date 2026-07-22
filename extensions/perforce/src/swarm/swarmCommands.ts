@@ -49,6 +49,7 @@ const Cmd = {
   getFileContent: 'perforce.swarm.getFileContent',
   getFileContentBytes: 'perforce.swarm.getFileContentBytes',
   describeVersion: 'perforce.swarm.describeVersion',
+  setStatusCount: 'perforce.swarm.setStatusCount',
 } as const
 
 /** Compile-time drift guard (see {@link Cmd}): fails if the wire contract gains or
@@ -670,33 +671,45 @@ export function registerSwarmCommands(
     }),
   ]
 
-  // Status bar: "N reviews need my attention", polled on an interval. Reuses the
-  // same lazily-built SwarmClient so it shares connection + credential resolution.
-  const statusBar = new SwarmStatusBarController(
-    swarm,
-    logger,
-    readNeedsActionAuthors,
-    readReviewWindowDays,
-  )
-  void readSwarmConfig().then(async () => {
-    const cfg = workspace.getConfiguration('perforce')
-    const pollInterval = (await cfg.get('swarm.pollInterval', 0)) as number
-    statusBar.startPolling(pollInterval)
-  })
+  // Status bar: "N reviews need my attention". The count is PUSHED by the
+  // renderer (sidebar group scope — author / approvable filters + ignore set,
+  // none of which the host can see); this controller only tracks availability
+  // for show/hide. Reuses the same lazily-built SwarmClient for the check.
+  const statusBar = new SwarmStatusBarController(swarm, logger)
 
   // New-review desktop notifications are detected + raised in the renderer, but the
   // poll timer must live here (extension host): Chromium background-throttles the
   // renderer's own setInterval while the window sits in the background, which is why
-  // notifications never fired overnight. Each tick just pokes the renderer.
+  // notifications never fired overnight. Each tick just pokes the renderer — whose
+  // refresh also pushes the status-bar count back — so this one pipeline keeps
+  // notifications, the Activity Bar badge and the status bar in the sidebar's
+  // scope. `perforce.swarm.pollInterval` (seconds, 0 = default 60s, floor 10s)
+  // overrides the tick interval.
   const notificationPoller = new SwarmNotificationPoller(
     async () => (await readSwarmConfig()) !== undefined,
     logger,
   )
-  notificationPoller.start()
   subs.push(notificationPoller)
+  void (async () => {
+    void statusBar.refresh()
+    const cfg = workspace.getConfiguration('perforce')
+    const pollInterval = (await cfg.get('swarm.pollInterval', 0)) as number
+    if (Number.isFinite(pollInterval) && pollInterval > 0) {
+      notificationPoller.setIntervalMs(Math.max(10, pollInterval) * 1000)
+    }
+    notificationPoller.start()
+  })()
 
-  // A manual refresh command that re-polls the status bar (the renderer view has
-  // its own refresh; this keeps the badge current after an action).
+  // The renderer pushes the sidebar group-scope needs-action count; the status
+  // bar displays it verbatim (deriving it host-side would drop the filters).
+  subs.push(
+    commands.registerCommand(Cmd.setStatusCount, (count: unknown) => {
+      statusBar.setCount(typeof count === 'number' ? count : 0)
+    }),
+  )
+
+  // A manual refresh command that re-checks status-bar availability (the
+  // renderer view has its own refresh that re-pushes the count).
   subs.push(commands.registerCommand('perforce.swarm.refreshStatus', () => statusBar.refresh()))
 
   return {

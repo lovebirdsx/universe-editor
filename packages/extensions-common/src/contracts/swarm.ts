@@ -359,6 +359,10 @@ export const SwarmCommands = {
    *  corrupt. Consumed by the spreadsheet webview diff. */
   getFileContentBytes: 'perforce.swarm.getFileContentBytes',
   describeVersion: 'perforce.swarm.describeVersion',
+  /** Renderer → host: push the sidebar group-scope "Needs My Action" count for
+   *  the status bar to display. The host cannot derive it itself — the author /
+   *  approvable filters and the client-side ignore set live renderer-side. */
+  setStatusCount: 'perforce.swarm.setStatusCount',
 } as const
 
 export type SwarmCommandId = (typeof SwarmCommands)[keyof typeof SwarmCommands]

@@ -22,16 +22,17 @@ disable-model-invocation: true
 
 `SwarmClient._loadDashboard` 本地推导 needsAction（**故意不调 `dashboards/action`**：v9-only、此部署会 504）。但 **Swarm 的 `reviews?participants=<me>` 过滤器只匹配 individual participant（被单独指派为 reviewer、或已投票/评论的人），绝不展开 group/project 成员**。于是纯通过 Swarm project（如 `swarm-project-typescriptreview`）或 group 关联、用户还没个人参与的 review，`participants=me` **永远查不到**（实测穷尽翻 600 条不出现），从不进 needsAction——投票后才变 individual participant，但那时往往已 approved 被状态过滤掉，表现为「从来不出现」。
 
-- **补法**：`perforce.swarm.needsActionAuthors`（发起者集合，持久化配置）非空时，`_loadDashboard` 并发多发一路 `listReviews({ author: [...authors], state: ['needsReview','needsRevision'] })`，其 open review 并入 needsAction（`deriveNeedsAction` 按 id 去重合并 authored+participating+byAuthor）。空集=仅 participants（旧行为）。dashboard command handler 与 `swarmStatusBar` 都从 `workspace.getConfiguration('perforce').get('swarm.needsActionAuthors')` 读配置传入；in-flight 合并 key 须纳入 authors 签名。
+- **补法**：`perforce.swarm.needsActionAuthors`（发起者集合，持久化配置）非空时，`_loadDashboard` 并发多发一路 `listReviews({ author: [...authors], state: ['needsReview','needsRevision'] })`，其 open review 并入 needsAction（`deriveNeedsAction` 按 id 去重合并 authored+participating+byAuthor）。空集=仅 participants（旧行为）。dashboard command handler 从 `workspace.getConfiguration('perforce').get('swarm.needsActionAuthors')` 读配置传入；in-flight 合并 key 须纳入 authors 签名。
 - **实测确认的过滤器语义**（v9，别再逐个试）：`author[]=a&author[]=b`、`state[]=needsReview&state[]=needsRevision` 都是**精确 OR**；`author=` 命中该作者全部 review。而 **`group=` 参数被服务端忽略**（不同 group 返回相同集合）；`project=<name>`（= `swarm-project-<name>` 去前缀）**真生效**但一个 project 就动辄 200+、全公司审核池并集 >500，直接并入会淹没列表——所以走 author 白名单而非 project/group 展开。
 
-## Activity Bar 角标（Needs My Action 计数）
+## Activity Bar 角标 + 状态栏计数（Needs My Action 计数）
 
-`swarmViewState.ts` 的 `swarmNeedsActionCount`（模块单例 observable）是唯一计数源，两个写入方、一个读取方：
+`swarmViewState.ts` 的 `swarmNeedsActionCount`（模块单例 observable）是唯一计数源，两个写入方、两个读取方：
 
 - **写入①`SwarmReviewNotificationContribution.refresh()`**（后台轮询，view 关闭也在跑）：`_computeDisplayed` 算出**侧栏分组口径**的列表（filterNeedsAction + ignore split，**不排除自己 authored 的、不含关键词**），`.set(displayed.length)`；通知集再从中排除 authored（两种口径一处算，别分叉）。
 - **写入②`SwarmReviewsView` 的 effect**（view 挂载期间）：`needsActionActive.length` 变更即写回（vote/ignore/过滤后即时更新）。
-- **读取`SwarmActivityContribution`**（`ActivityBarBadgeContributions.ts`，AfterRestore 注册）：autorun 读计数 → `IActivityService.showActivity('workbench.view.swarm', {count})`，0 时撤角标。ActivityBar 已按容器通用渲染 `activitybar-badge-<containerId>` testid，无需改渲染层。
+- **读取①`SwarmActivityContribution`**（`ActivityBarBadgeContributions.ts`，AfterRestore 注册）：autorun 读计数 → `IActivityService.showActivity('workbench.view.swarm', {count})`，0 时撤角标。ActivityBar 已按容器通用渲染 `activitybar-badge-<containerId>` testid，无需改渲染层。
+- **读取②底部状态栏**（`swarmStatusBar.ts`）：**被动显示 renderer 推送值**——同一 autorun 里 `executeCommand(SwarmCommands.setStatusCount, count)` 推给 host（先 `CommandsRegistry.getCommand` 判存在，perforce 缺席不刷 warn）。**host 绝不自己从 dashboard 推计数**：author 白名单/approvable/ignore 全在 renderer，host 自算必然分叉（真实 bug：侧栏 0、状态栏 30）。`SwarmStatusBarController` 只剩 `setCount` + `refresh()`（可用性 show/hide），不再有 startPolling；`perforce.swarm.pollInterval`（>0 秒，floor 10s）改作 `SwarmNotificationPoller` 的 tick 间隔，一条管线同时驱动通知/角标/状态栏。
 
 **泄漏测试坑**：该计数 observable 是模块单例，前一个测试未 dispose 的 contribution 会在后一个（装 DisposableTracker 的）测试里继续响应 `.set()` 产生无父链 badge handle → 误报泄漏。非泄漏断言的测试用完必须 `store.dispose()`。
 
@@ -62,7 +63,7 @@ disable-model-invocation: true
 | 解析 | `extensions/perforce/src/swarm/swarmParser.ts` | Swarm JSON → DTO 的**纯函数**（`parseReviewList`/`parseReviewDetail`/`parseTransitions`/`parseComments`…）。可对 fixture 单测 |
 | 客户端编排 | `extensions/perforce/src/swarm/swarmClient.ts` | `SwarmClient`：每个审核操作一个方法（`dashboard`/`listReviews`/`getReview`/`vote`/`transition`/`addComment`…）。组合 api + parser。持有 `SwarmClientConfig {baseUrl, apiVersion, user}` |
 | 命令注册 | `extensions/perforce/src/swarm/swarmCommands.ts` | 注册全部 `perforce.swarm.*` 命令（`commands.registerCommand`）；`guard()` 把「未配置/未授权」失败映射成安全回退值；`SwarmClient` 按 config+active-client 签名**懒重建** |
-| 状态栏 + 轮询 | `extensions/perforce/src/swarm/swarmStatusBar.ts` | 定时 poll dashboard，状态栏只管"需我处理"计数角标；**新审核通知不在这里**——由 renderer 的 `contributions/SwarmReviewNotificationContribution.ts` 自带 60s 轮询（首轮只 prime 基线不通知），以侧栏**最终显示**列表（作者/仅可审批/ignore 过滤后）为准发桌面通知；**窗口聚焦时 main 侧 `hostMainService.notify` 会门控掉 OS toast（`shown:false`），此时必须回退应用内 `INotificationService` toast（带打开动作）**——上升沿在发通知前已记入 `_known` 基线只消费一次，静默丢弃会导致该审核永远不再通知（曾是真 bug） |
+| 状态栏 + 轮询 | `extensions/perforce/src/swarm/swarmStatusBar.ts` + `swarmNotificationPoller.ts` | 状态栏**被动显示** renderer 推送的分组口径计数（见上「Activity Bar 角标 + 状态栏计数」），host 只管用性 show/hide；轮询定时器在 host（`SwarmNotificationPoller`，Chromium 不节流），每 tick poke renderer `_workbench.swarmPollTick`；**新审核通知不在这里**——由 renderer 的 `contributions/SwarmReviewNotificationContribution.ts` 自带 60s 轮询兜底（首轮只 prime 基线不通知），以侧栏**最终显示**列表（作者/仅可审批/ignore 过滤后）为准发桌面通知；**窗口聚焦时 main 侧 `hostMainService.notify` 会门控掉 OS toast（`shown:false`），此时必须回退应用内 `INotificationService` toast（带打开动作）**——上升沿在发通知前已记入 `_known` 基线只消费一次，静默丢弃会导致该审核永远不再通知（曾是真 bug） |
 | 审核列表侧栏 | `apps/editor/src/renderer/workbench/swarm/SwarmReviewsView.tsx` | Swarm Reviews viewlet：分组 + 关键词过滤 + 点开详情；`getTransitions` 驱动可审批图标与右键操作，菜单含打开/网页/复制/transition/obliterate |
 | 审核详情主编辑区 | `apps/editor/src/renderer/workbench/swarm/SwarmReviewEditor.tsx` | 头部（审核网页链接/状态/作者/参与者/vote/transition/Update/Obliterate）+ 描述 + 版本选择器 + 文件列表 + review 级评论面板 |
 | 文件 diff 编辑区 | `apps/editor/src/renderer/workbench/swarm/SwarmDiffEditor.tsx` + `SwarmInlineCommentController.ts` + `SwarmInlineThread.tsx` | Monaco diff + 行内评论（view-zone + overlay widget 托 React，对标 `InlineDirtyDiffController`） |
@@ -193,7 +194,7 @@ pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.con
 - `extensions/perforce/src/swarm/swarmParser.ts`（+ `__tests__/swarmParser.test.ts`）—— 纯解析
 - `extensions/perforce/src/swarm/swarmClient.ts` —— 审核操作编排（搜 `dashboard`）
 - `extensions/perforce/src/swarm/swarmCommands.ts` —— 命令注册（搜 `guard`）
-- `extensions/perforce/src/swarm/swarmStatusBar.ts` —— 轮询 + 计数角标（通知在 renderer `SwarmReviewNotificationContribution.ts`）
+- `extensions/perforce/src/swarm/swarmStatusBar.ts` —— 状态栏被动显示 renderer 推送计数（通知在 renderer `SwarmReviewNotificationContribution.ts`）
 - `extensions/perforce/package.json` —— 只有 `ping`/`requestReview` 进 commands（头号坑）
 - `apps/editor/src/renderer/workbench/swarm/` —— 全部 React UI（列表/详情/diff/行内评论）
 - `apps/editor/src/renderer/actions/swarmActions.ts` —— Action2（openReviews/openReview + `_workbench.*` 双胞胎）

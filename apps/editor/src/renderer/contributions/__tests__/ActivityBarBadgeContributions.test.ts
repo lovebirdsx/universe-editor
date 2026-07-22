@@ -6,15 +6,18 @@
  *  without a real parent link — is reported as a leak on unload.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  CommandsRegistry,
   DisposableStore,
   DisposableTracker,
   markAsSingleton,
   observableValue,
   setDisposableTracker,
+  type ICommandService,
   type IObservable,
 } from '@universe-editor/platform'
+import { SwarmCommands } from '@universe-editor/extensions-common'
 import { ActivityService } from '../../services/activity/ActivityService.js'
 import type { IScmService, IScmSourceControlModel } from '../../services/extensions/ScmService.js'
 import { swarmNeedsActionCount } from '../../services/swarm/swarmViewState.js'
@@ -72,13 +75,17 @@ describe('SwarmActivityContribution', () => {
     setDisposableTracker(null)
   })
 
+  function makeCommands(executeCommand = vi.fn(async () => undefined)): ICommandService {
+    return { _serviceBrand: undefined, executeCommand } as unknown as ICommandService
+  }
+
   it('mirrors the needs-action count onto the swarm container badge', () => {
     // Dispose at the end: the count is a module-singleton observable, so a live
     // contribution from this test would keep reacting (and creating badge handles)
     // inside the leak-checking test below.
     const store = new DisposableStore()
     const activityService = store.add(new ActivityService())
-    store.add(new SwarmActivityContribution(activityService))
+    store.add(new SwarmActivityContribution(activityService, makeCommands()))
 
     const badge = activityService.getBadge('workbench.view.swarm')
     expect(badge.get()).toBeUndefined()
@@ -92,13 +99,47 @@ describe('SwarmActivityContribution', () => {
     store.dispose()
   })
 
+  it('pushes the group-scope count to the host status bar command', () => {
+    const executeCommand = vi.fn(async () => undefined)
+    const store = new DisposableStore()
+    // The push is gated on the command being registered (perforce extension present).
+    store.add(CommandsRegistry.registerCommand(SwarmCommands.setStatusCount, () => undefined))
+    const activityService = store.add(new ActivityService())
+    store.add(new SwarmActivityContribution(activityService, makeCommands(executeCommand)))
+
+    // autorun fires immediately with the initial count.
+    expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.setStatusCount, 0)
+
+    swarmNeedsActionCount.set(3)
+    expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.setStatusCount, 3)
+
+    swarmNeedsActionCount.set(0)
+    expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.setStatusCount, 0)
+
+    store.dispose()
+  })
+
+  it('does not push while setStatusCount is unregistered (perforce extension absent)', () => {
+    const executeCommand = vi.fn(async () => undefined)
+    const store = new DisposableStore()
+    const activityService = store.add(new ActivityService())
+    store.add(new SwarmActivityContribution(activityService, makeCommands(executeCommand)))
+
+    // No throw, badge still mirrors, and no command-not-found warn spam.
+    swarmNeedsActionCount.set(2)
+    expect(activityService.getBadge('workbench.view.swarm').get()?.count).toBe(2)
+    expect(executeCommand).not.toHaveBeenCalled()
+
+    store.dispose()
+  })
+
   it('does not leak the badge handle while living under the singleton store', () => {
     const tracker = new DisposableTracker()
     setDisposableTracker(tracker)
 
     const workbenchStore = markAsSingleton(new DisposableStore())
     const activityService = workbenchStore.add(new ActivityService())
-    workbenchStore.add(new SwarmActivityContribution(activityService))
+    workbenchStore.add(new SwarmActivityContribution(activityService, makeCommands()))
 
     swarmNeedsActionCount.set(5)
     expect(activityService.getBadge('workbench.view.swarm').get()?.count).toBe(5)

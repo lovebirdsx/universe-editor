@@ -4,16 +4,19 @@
  *  Feeds the Activity Bar badges from live data sources:
  *  - DirtyEditorsActivityContribution → unsaved file count on the Explorer.
  *  - ScmActivityContribution → changed file count on Source Control.
- *  - SwarmActivityContribution → "Needs My Action" review count on Swarm Reviews.
+ *  - SwarmActivityContribution → "Needs My Action" review count on Swarm Reviews,
+ *    also pushed to the extension host's status bar (same group scope).
  *
  *  Both push into IActivityService; the ActivityBar subscribes per container id,
  *  so neither knows about the other or about the rendering layer.
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  CommandsRegistry,
   Disposable,
   DisposableStore,
   EditorInput,
+  ICommandService,
   IEditorService,
   IWorkbenchContribution,
   MutableDisposable,
@@ -21,6 +24,7 @@ import {
   type IDisposable,
   type IEditorInput,
 } from '@universe-editor/platform'
+import { SwarmCommands } from '@universe-editor/extensions-common'
 import { IScmService } from '../services/extensions/ScmService.js'
 import { IActivityService } from '../services/activity/ActivityService.js'
 import { swarmNeedsActionCount } from '../services/swarm/swarmViewState.js'
@@ -92,11 +96,17 @@ export class ScmActivityContribution extends Disposable implements IWorkbenchCon
 }
 
 /** Mirrors the shared needs-action count (written by the Swarm view while open
- *  and by the background notification poll otherwise) onto the Swarm container. */
+ *  and by the background notification poll otherwise) onto the Swarm container
+ *  badge, and pushes it to the extension host's status bar — the host cannot
+ *  derive the group scope itself (author / approvable filters and the ignore
+ *  set live here), so it displays this number verbatim. */
 export class SwarmActivityContribution extends Disposable implements IWorkbenchContribution {
   private readonly _badge = this._register(new MutableDisposable<IDisposable>())
 
-  constructor(@IActivityService private readonly _activityService: IActivityService) {
+  constructor(
+    @IActivityService private readonly _activityService: IActivityService,
+    @ICommandService private readonly _commands: ICommandService,
+  ) {
     super()
 
     this._register(
@@ -104,6 +114,11 @@ export class SwarmActivityContribution extends Disposable implements IWorkbenchC
         const count = swarmNeedsActionCount.observable.read(r)
         this._badge.value =
           count > 0 ? this._activityService.showActivity(SWARM_CONTAINER_ID, { count }) : undefined
+        // Unregistered = perforce extension absent/disabled; nothing to update.
+        // (Also skips the renderer's command-not-found warn on every poll.)
+        if (CommandsRegistry.getCommand(SwarmCommands.setStatusCount)) {
+          void this._commands.executeCommand(SwarmCommands.setStatusCount, count).catch(() => {})
+        }
       }),
     )
   }
