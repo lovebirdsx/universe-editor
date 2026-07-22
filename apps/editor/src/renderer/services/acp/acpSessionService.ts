@@ -847,7 +847,7 @@ export class AcpSessionService
     ) {
       return false
     }
-    this._history.updateInfo(entry.id, { title: trimmed })
+    this._history.updateInfo(entry.id, { title: trimmed }, { overwriteProtectedTitle: true })
     this._history.setHistoryManualTitle(entry.id)
     this._telemetry.publicLog('acp.session_renamed', { live: false })
     return true

@@ -1092,6 +1092,37 @@ describe('AcpSessionHistoryService — updateInfo', () => {
     expect(svc.get(e.id)?.title).toBe('keep')
   })
 
+  it('does not overwrite an AI-flagged title without the explicit override', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 'first prompt' })
+    svc.setHistoryAiTitle(e.id)
+    // The agent's session_info_update carries the SDK summary (first prompt);
+    // it must not clobber the AI title. Mirrors the hydrate/upsert guards.
+    svc.updateInfo(e.id, { title: 'first prompt summary' })
+    expect(svc.get(e.id)?.title).toBe('first prompt')
+    // …but updatedAt still applies — only the title is protected.
+    const future = e.lastUsedAt + 100_000
+    svc.updateInfo(e.id, { title: 'first prompt summary', updatedAt: future })
+    expect(svc.get(e.id)?.lastUsedAt).toBe(future)
+  })
+
+  it('does not overwrite a manually-renamed title without the explicit override', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 'first prompt' })
+    svc.setHistoryManualTitle(e.id)
+    svc.updateInfo(e.id, { title: 'agent summary' })
+    expect(svc.get(e.id)?.title).toBe('first prompt')
+  })
+
+  it('overwriteProtectedTitle replaces the title on a flagged row', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 'first prompt' })
+    svc.setHistoryAiTitle(e.id)
+    svc.updateInfo(e.id, { title: 'better title' }, { overwriteProtectedTitle: true })
+    expect(svc.get(e.id)?.title).toBe('better title')
+    expect(svc.get(e.id)?.aiTitle).toBe(true)
+  })
+
   it('resorts entries when a non-head row receives a fresher updatedAt', async () => {
     await svc.initialize()
     const first = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 'first' })

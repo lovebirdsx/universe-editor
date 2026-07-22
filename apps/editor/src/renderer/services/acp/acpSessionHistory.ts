@@ -246,8 +246,18 @@ export interface IAcpSessionHistoryService {
   /**
    * Patch metadata for one entry from a `session_info_update` notification.
    * No-op if id is unknown.
+   *
+   * Like the hydrate sweep and upsert, an `aiTitle`/`manualTitle` row keeps its
+   * title: the agent-reported summary reverts to the first prompt after
+   * `/compact` (or when the rename push never landed) and must not clobber it.
+   * Callers writing an authoritative title (AI-title application, manual
+   * rename) pass `overwriteProtectedTitle`.
    */
-  updateInfo(sessionId: string, patch: { title?: string; updatedAt?: number }): void
+  updateInfo(
+    sessionId: string,
+    patch: { title?: string; updatedAt?: number },
+    opts?: { overwriteProtectedTitle?: boolean },
+  ): void
 }
 
 /** Shape we accept from the protocol's `SessionInfo` — kept structural to avoid leaking SDK types into the history interface. */
@@ -637,11 +647,21 @@ export class AcpSessionHistoryService
     this._scheduleWrite()
   }
 
-  updateInfo(sessionId: string, patch: { title?: string; updatedAt?: number }): void {
+  updateInfo(
+    sessionId: string,
+    patch: { title?: string; updatedAt?: number },
+    opts?: { overwriteProtectedTitle?: boolean },
+  ): void {
     const idx = this._state.findIndex((e) => e.id === sessionId)
     if (idx === -1) return
     const cur = this._state[idx]!
-    const nextTitle = patch.title !== undefined && patch.title.length > 0 ? patch.title : cur.title
+    const titleProtected = cur.aiTitle === true || cur.manualTitle === true
+    const nextTitle =
+      patch.title !== undefined &&
+      patch.title.length > 0 &&
+      !(titleProtected && opts?.overwriteProtectedTitle !== true)
+        ? patch.title
+        : cur.title
     const nextLastUsedAt =
       patch.updatedAt !== undefined && Number.isFinite(patch.updatedAt)
         ? Math.max(cur.lastUsedAt, patch.updatedAt)

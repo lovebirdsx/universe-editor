@@ -93,7 +93,13 @@ export class AcpSessionTitleService implements IAcpSessionTitleService {
       )
       const raw = await getTextResponse(response)
       const title = sanitizeTitle(raw)
-      return title.length > 0 ? title : undefined
+      if (title.length === 0) {
+        this._logger.debug(
+          `session title generation returned an unusable response: ${raw.slice(0, 120)}`,
+        )
+        return undefined
+      }
+      return title
     } catch (err) {
       if (!cts.token.isCancellationRequested) {
         this._logger.warn(`session title generation failed: ${(err as Error).message}`)
@@ -107,9 +113,18 @@ export class AcpSessionTitleService implements IAcpSessionTitleService {
   /** Returns the configured session-title model id only if it is currently available. */
   private async _resolveModelId(): Promise<string | undefined> {
     const chosen = await this._aiModel.getSessionTitleModelId()
-    if (!chosen) return undefined
+    if (!chosen) {
+      this._logger.debug('no session-title model configured; skipping title generation')
+      return undefined
+    }
     const models = await this._aiModel.getModels()
-    return models.some((m) => m.id === chosen) ? chosen : undefined
+    if (!models.some((m) => m.id === chosen)) {
+      this._logger.debug(
+        `session-title model '${chosen}' not in the available model list; skipping`,
+      )
+      return undefined
+    }
+    return chosen
   }
 }
 

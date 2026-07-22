@@ -1901,6 +1901,84 @@ describe('AcpSessionService — AI session title push-back', () => {
       svc.dispose()
     }
   })
+
+  it('session_info_update does not clobber an AI-flagged title', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new FixedTitleService('Fix login bug'))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      await session.sendPrompt('how do I fix the broken login page?')
+      await new Promise((r) => setTimeout(r, 0))
+      const sid = session.sessionIdOnAgent.get()!
+      expect(history.get(sid)?.aiTitle).toBe(true)
+
+      // The agent reports its SDK summary (the raw first prompt) at turn end —
+      // e.g. after /compact reset it. The AI title must survive.
+      client.connected[0]!.sink.onSessionUpdate({
+        sessionId: sid,
+        update: {
+          sessionUpdate: 'session_info_update',
+          title: 'how do I fix the broken login page?',
+          updatedAt: new Date().toISOString(),
+        },
+      })
+      expect(history.get(sid)?.title).toBe('Fix login bug')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('does not spend title derivation/generation on a local built-in command prompt', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new FixedTitleService('Real Task Title'))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const sid = session.sessionIdOnAgent.get()!
+
+      // `/model opus` is handled locally by the agent — a throwaway turn. It
+      // must not become the title, nor consume the one-shot AI generation.
+      await session.sendPrompt('/model opus')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(history.get(sid)?.title).not.toBe('/model opus')
+      expect(history.get(sid)?.aiTitle).not.toBe(true)
+
+      // The first real prompt derives + generates as if it were the first.
+      await session.sendPrompt('fix the flaky scroll test')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(history.get(sid)?.title).toBe('Real Task Title')
+      expect(history.get(sid)?.aiTitle).toBe(true)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('retries AI title generation on the next prompt when the first attempt yields nothing', async () => {
+    const client = new FakeAcpClientService()
+    let calls = 0
+    const flaky: IAcpSessionTitleService = {
+      _serviceBrand: undefined,
+      generateTitle: () => Promise.resolve(++calls === 1 ? undefined : 'Retry Title'),
+    }
+    const { svc, history } = makeServiceWithTitle(client, flaky)
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const sid = session.sessionIdOnAgent.get()!
+
+      await session.sendPrompt('first prompt')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(history.get(sid)?.aiTitle).not.toBe(true)
+
+      await session.sendPrompt('second prompt')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(history.get(sid)?.title).toBe('Retry Title')
+      expect(history.get(sid)?.aiTitle).toBe(true)
+    } finally {
+      svc.dispose()
+    }
+  })
 })
 
 describe('AcpSessionService — configOptions history snapshot', () => {

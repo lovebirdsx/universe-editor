@@ -133,6 +133,30 @@ export {
 /** Provenance of a session title — see {@link AcpSession._pendingTitleKind}. */
 type TitleKind = 'ai' | 'manual' | undefined
 
+// Built-in slash commands the agent handles locally (mirrors
+// BUILT_IN_COMMANDS in vendor/claude-agent-acp/src/acp-agent.ts). Their args
+// are command parameters (`/model opus`), not user prose, so a prompt that is
+// one of these carries no title-worthy content. Custom skills like
+// `/fix-ci-e2e-flake <the real task>` are NOT in this set — their args are the
+// user's actual prompt and make perfectly good titles.
+const LOCAL_COMMAND_NAMES: ReadonlySet<string> = new Set([
+  '/model',
+  '/compact',
+  '/resume',
+  '/effort',
+  '/status',
+  '/clear',
+  '/context',
+  '/heapdump',
+  '/extra-usage',
+])
+
+/** True when the prompt is exactly an invocation of a locally-handled built-in command. */
+function isLocalCommandPrompt(text: string): boolean {
+  const m = /^\s*(\/\S+)/.exec(text)
+  return m !== null && LOCAL_COMMAND_NAMES.has(m[1]!)
+}
+
 export class AcpSession extends Disposable implements IAcpSession {
   readonly sessionIdOnAgent: ISettableObservable<string | undefined>
   readonly messages: ISettableObservable<readonly AcpMessage[]>
@@ -210,6 +234,9 @@ export class AcpSession extends Disposable implements IAcpSession {
    * choice on subsequent prompts.
    */
   private _titleLocked = false
+
+  /** Latched once a first-prompt-derived title has been written. */
+  private _titleDerived = false
 
   /**
    * Latest title derived/generated before the agent id existed. Re-applied to
@@ -592,7 +619,6 @@ export class AcpSession extends Disposable implements IAcpSession {
   ): Promise<void> {
     // Read-only preview session (foreign worktree): viewing only, no dispatch.
     if (this.readOnly) return
-    // 顺序敏感：派生 title 必须发生在 _appendMessage 之前——它依赖 _messages 仍为空来识别首条 prompt。
     this._maybeDeriveTitleFromPrompt(text)
     // Client-generated anchor for this user turn. Stamped on the local message
     // now (so rewind/fork can target it even before dispatch) and sent as
@@ -967,7 +993,12 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   /** Write the title to the history row and, for AI/manual titles, push it to the agent. */
   private _applyHistoryTitle(sessionIdOnAgent: string, title: string, kind: TitleKind): void {
-    this._history?.updateInfo(sessionIdOnAgent, { title })
+    // AI / manual titles are authoritative — they must land even on rows already
+    // flagged aiTitle/manualTitle (e.g. a rename after the AI title). The
+    // first-prompt-derived title (kind undefined) is not: it never overwrites a
+    // protected row.
+    const overwriteProtectedTitle = kind !== undefined
+    this._history?.updateInfo(sessionIdOnAgent, { title }, { overwriteProtectedTitle })
     if (kind === 'ai') {
       this._history?.setHistoryAiTitle(sessionIdOnAgent)
       this._pushTitleToAgent(sessionIdOnAgent, title)
@@ -997,26 +1028,41 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   private _maybeDeriveTitleFromPrompt(text: string): void {
-    if (!this._history) return
-    if (this._titleLocked) return
-    if (this._messages.length > 0) return
+    // Resumed sessions carry no title service (factory withTitleService: false)
+    // and already have a durable title — deriving from a post-resume prompt
+    // would clobber it.
+    if (!this._history || !this._titleService) return
+    if (this._titleLocked || this._titleDerived) return
+    // Local built-in commands (`/model opus`) are throwaway turns: deriving a
+    // title from one would pin the session name to a command artifact.
+    if (isLocalCommandPrompt(text)) return
     const derived = text.trim().replace(/\s+/g, ' ').slice(0, 30)
     if (derived.length === 0) return
+    this._titleDerived = true
     this._setHistoryTitle(derived, undefined)
   }
 
   /**
-   * Ask the session-title model for a friendly title as soon as the first user
-   * message is sent, and overwrite the first-prompt-derived one. Runs at most
-   * once per session and degrades silently. Fire-and-forget.
+   * Ask the session-title model for a friendly title from the first
+   * content-bearing prompt, and overwrite the first-prompt-derived one. Skips
+   * local built-in command prompts (their "args" are command parameters, not
+   * user prose) without consuming the attempt; a generation that yields nothing
+   * re-arms so the next prompt retries. Degrades silently.
    */
   private async _maybeGenerateTitle(userText: string): Promise<void> {
     if (this._titleGenerated) return
     if (!this._history || !this._titleService) return
+    if (isLocalCommandPrompt(userText)) return
     this._titleGenerated = true
     const agentText = this._messages.find((m) => m.role === 'agent')?.text ?? ''
     const title = await this._titleService.generateTitle(userText, agentText)
-    if (title === undefined || this.status.get() === 'closed') return
+    if (title === undefined) {
+      // No model configured / unavailable, or an unusable response — let the
+      // next prompt retry instead of permanently losing the AI title.
+      this._titleGenerated = false
+      return
+    }
+    if (this.status.get() === 'closed') return
     this._setHistoryTitle(title, 'ai')
   }
 
