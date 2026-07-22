@@ -9,6 +9,13 @@
 import { expect, test } from '../fixtures/sharedApp.js'
 
 test.describe('@p0 command palette', () => {
+  // Every test drives focus into Quick Input right after startup; the one-shot
+  // bootstrap focus restore (500ms empty-window fallback) would steal it back to
+  // the Explorer tree if it lands mid-test on a slow machine.
+  test.beforeEach(async ({ workbench }) => {
+    await workbench.waitForBootstrapFocusSettled()
+  })
+
   test('opens via command and closes via Escape', async ({ page, workbench }) => {
     // showCommands awaits the user picking an item, so the runCommand promise
     // would deadlock our waitForVisible. Fire-and-forget the trigger.

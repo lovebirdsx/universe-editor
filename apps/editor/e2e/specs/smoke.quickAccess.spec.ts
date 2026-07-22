@@ -14,6 +14,12 @@ async function placeholderOf(input: import('@playwright/test').Locator): Promise
 }
 
 test.describe('@p0 quick access', () => {
+  // Same bootstrap-focus-restore gate as smoke.commandPalette: typing/focus
+  // assertions below must not race the late Explorer focus steal.
+  test.beforeEach(async ({ workbench }) => {
+    await workbench.waitForBootstrapFocusSettled()
+  })
+
   test('quickOpen opens in file mode (empty value) and closes via Escape', async ({
     page,
     workbench,

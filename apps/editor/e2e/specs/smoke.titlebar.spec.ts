@@ -10,6 +10,10 @@ import { expect, test } from '../fixtures/sharedApp.js'
 
 test.describe('@p1 titlebar', () => {
   test('clicking the command center opens Quick Open', async ({ page, workbench }) => {
+    // Gate on the one-shot bootstrap focus restore: Escape restores focus to the
+    // command-center pill below, but a late bootstrap restore would steal it to the
+    // Explorer tree (slow CI settles the restore after the click).
+    await workbench.waitForBootstrapFocusSettled()
     await page.getByTestId('titlebar-command-center').click()
     await workbench.quickInput.waitForVisible()
     await expect(workbench.quickInput.input).toBeFocused()
