@@ -180,10 +180,25 @@ const server = createServer(async (req, res) => {
 
   // GET reviews (list / ping). Honours the `keywords` query so the extension can
   // push keyword filtering down to the server (matched against description /
-  // author / id, mirroring the renderer's client-side fallback).
+  // author / id, mirroring the renderer's client-side fallback). Also honours the
+  // `author[]` / `participants[]` / `state[]` filters the dashboard derivation
+  // relies on — without them `author=e2e` would return every seeded review,
+  // collapsing the authored / needs-my-action buckets into one.
   if (method === 'GET' && path === 'reviews') {
     const keywords = (url.searchParams.get('keywords') ?? '').trim().toLowerCase()
+    const authors = url.searchParams.getAll('author[]')
+    const participants = url.searchParams.getAll('participants[]')
+    const states = url.searchParams.getAll('state[]')
     let list = Object.values(reviews)
+    if (authors.length) {
+      list = list.filter((r) => authors.includes(r.author))
+    }
+    if (participants.length) {
+      list = list.filter((r) => participants.some((p) => p in r.participants))
+    }
+    if (states.length) {
+      list = list.filter((r) => states.includes(r.state))
+    }
     if (keywords) {
       list = list.filter(
         (r) =>
