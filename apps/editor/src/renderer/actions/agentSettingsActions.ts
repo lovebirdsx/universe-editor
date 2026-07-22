@@ -6,13 +6,17 @@
 import {
   Action2,
   ICommandService,
+  IEditorResolverService,
   IEditorService,
   IStorageService,
   MenuId,
   StorageScope,
+  URI,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { IClaudeConfigService } from '../../shared/ipc/claudeConfigService.js'
+import { ICodexConfigService } from '../../shared/ipc/codexConfigService.js'
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
 import { CATEGORY } from './_agentShared.js'
@@ -66,5 +70,47 @@ export class OpenAgentSettingsAction extends Action2 {
         : registry.defaultAgentId()
     await storage.set('settings.activeItem', `agent:${target}`, StorageScope.GLOBAL)
     await accessor.get(IEditorService).openEditor(new AiSettingsEditorInput(), { activate: true })
+  }
+}
+
+export class OpenCodexConfigAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.openCodexConfig'
+
+  constructor() {
+    super({
+      id: OpenCodexConfigAction.ID,
+      title: localize2('action.agent.openCodexConfig', 'Open Codex Configuration (TOML)'),
+      category: CATEGORY,
+      icon: 'settings-gear',
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const configService = accessor.get(ICodexConfigService)
+    const editorResolver = accessor.get(IEditorResolverService)
+    const path = await configService.configPath()
+    await editorResolver.openEditor(URI.file(path), { pinned: true })
+  }
+}
+
+export class OpenClaudeConfigAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.openClaudeConfig'
+
+  constructor() {
+    super({
+      id: OpenClaudeConfigAction.ID,
+      title: localize2('action.agent.openClaudeConfig', 'Open Claude Configuration (JSON)'),
+      category: CATEGORY,
+      icon: 'settings-gear',
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const configService = accessor.get(IClaudeConfigService)
+    const editorResolver = accessor.get(IEditorResolverService)
+    const path = await configService.configPath()
+    await editorResolver.openEditor(URI.file(path), { pinned: true })
   }
 }

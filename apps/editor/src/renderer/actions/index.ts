@@ -271,6 +271,8 @@ import {
   NewAgentSessionInCurrentEditorAction,
   OpenAcpMcpSettingsAction,
   OpenAgentSettingsAction,
+  OpenClaudeConfigAction,
+  OpenCodexConfigAction,
   OpenAgentInEditorAction,
   OpenAgentViewAction,
   RefreshAgentSessionsAction,
@@ -634,6 +636,8 @@ registerAction2(FocusAgentInputAction)
 registerAction2(SelectAgentAction)
 registerAction2(OpenAcpMcpSettingsAction)
 registerAction2(OpenAgentSettingsAction)
+registerAction2(OpenCodexConfigAction)
+registerAction2(OpenClaudeConfigAction)
 registerAction2(SelectAgentModelAction)
 registerAction2(SelectAgentModeAction)
 registerAction2(SelectAgentThoughtLevelAction)

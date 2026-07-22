@@ -81,6 +81,8 @@
 | 选择 Agent 模式… | 切换 Agent 行为模式 | 无 |
 | 选择 Agent 思考级别… | 调节推理深度 | 无 |
 | 显示会话更改 | 打开会话更改视图 | 无 |
+| 打开 Codex 配置（TOML） | 直接编辑 Codex 的 `.codex/config.toml` | 无 |
+| 打开 Claude 配置（JSON） | 直接编辑 Claude 的 `.claude/settings.json` | 无 |
 | 触发内联补全 | 主动求一条补全建议 | `Alt+\` |
 | 选择内联补全模型 | 为补全单独指定模型 | 无 |
 
