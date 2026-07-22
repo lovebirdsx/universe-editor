@@ -20,7 +20,6 @@ import {
 } from '@universe-editor/platform'
 import type {
   ClaudeAuthStatus,
-  ClaudeCredentialDraft,
   ClaudeCredentialProfile,
   ClaudeSettings,
   ClaudeSettingsPatch,
@@ -32,7 +31,6 @@ import { readAiSettingsAgentState, updateAiSettingsAgentState } from '../ai/aiSe
 interface ClaudeAgentSettingsState {
   authentication?: {
     profiles?: ClaudeCredentialProfile[]
-    draft?: ClaudeCredentialDraft
   }
 }
 
@@ -156,29 +154,6 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
     const path = this._profilesPath()
     await this._writeAtomicTo(path, { profiles })
     this._logger.info(`wrote ${profiles.length} credential profile(s) to ${path}`)
-  }
-
-  async readCredentialDraft(): Promise<ClaudeCredentialDraft | undefined> {
-    if (!this._configLocation) return undefined
-    const state = await readAiSettingsAgentState<ClaudeAgentSettingsState>(
-      this._configLocation,
-      'claude',
-    )
-    return state?.authentication?.draft
-  }
-
-  async writeCredentialDraft(draft: ClaudeCredentialDraft | undefined): Promise<void> {
-    if (!this._configLocation) return
-    await updateAiSettingsAgentState<ClaudeAgentSettingsState>(
-      this._configLocation,
-      'claude',
-      (current) => {
-        const authentication = { ...current?.authentication }
-        if (draft === undefined) delete authentication.draft
-        else authentication.draft = draft
-        return { ...current, authentication }
-      },
-    )
   }
 
   private async _readLegacyProfiles(): Promise<ClaudeCredentialProfile[]> {

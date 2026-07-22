@@ -28,7 +28,6 @@ import {
 } from '@universe-editor/platform'
 import type {
   CodexAuthStatus,
-  CodexCredentialDraft,
   CodexCredentialIntent,
   CodexCredentialProfile,
   CodexSettings,
@@ -41,7 +40,6 @@ import { readAiSettingsAgentState, updateAiSettingsAgentState } from '../ai/aiSe
 interface CodexAgentSettingsState {
   authentication?: {
     profiles?: CodexCredentialProfile[]
-    draft?: CodexCredentialDraft
   }
 }
 
@@ -245,29 +243,6 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     const path = this._profilesPath()
     await this._writeJsonAtomic(path, { profiles })
     this._logger.info(`wrote ${profiles.length} credential profile(s) to ${path}`)
-  }
-
-  async readCredentialDraft(): Promise<CodexCredentialDraft | undefined> {
-    if (!this._configLocation) return undefined
-    const state = await readAiSettingsAgentState<CodexAgentSettingsState>(
-      this._configLocation,
-      'codex',
-    )
-    return state?.authentication?.draft
-  }
-
-  async writeCredentialDraft(draft: CodexCredentialDraft | undefined): Promise<void> {
-    if (!this._configLocation) return
-    await updateAiSettingsAgentState<CodexAgentSettingsState>(
-      this._configLocation,
-      'codex',
-      (current) => {
-        const authentication = { ...current?.authentication }
-        if (draft === undefined) delete authentication.draft
-        else authentication.draft = draft
-        return { ...current, authentication }
-      },
-    )
   }
 
   private async _readLegacyProfiles(): Promise<CodexCredentialProfile[]> {

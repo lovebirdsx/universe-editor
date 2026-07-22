@@ -64,7 +64,8 @@ Codex 是接入统一 Settings editor「Agents」组的 acp agent 之一。它**
 |---|---|---|---|
 | `config.toml` | 编辑器 + CLI 共享 | agent/CLI | model / reasoning / approval / sandbox / 顶层 `model_provider` / `[model_providers.*]` 等。smol-toml 解析,**就地编辑保留未管理键** |
 | `auth.json` | `codex login`(ChatGPT) / 编辑器(API key) | agent/CLI | JSON。可**同时**含 `OPENAI_API_KEY` + `tokens`(ChatGPT OAuth 块)+ `auth_mode` 字段 |
-| `<configDir>/aiSettings.json` 的 `agentSettings.codex.authentication` | **仅编辑器** | 仅编辑器 | API key / gateway **档案库**(候选)+未保存表单草稿,不是生效配置 |
+| `<configDir>/aiSettings.json` 的 `agentSettings.codex.authentication` | **仅编辑器** | 仅编辑器 | API key / gateway **档案库**(候选),不是生效配置 |
+| renderer `IStorageService` 全局键 `agentSettings.codex.credentialDraft` | **仅编辑器** | 仅编辑器 | 认证面板未保存的表单草稿(UI 状态,不进配置文件) |
 
 - **三种登录方案落地到不同位置**(见下「三种登录方案」):ChatGPT/官方 API key → auth.json + 顶层 `model_provider` 留空;gateway → 自包含写进 `[model_providers.codex-gateway]` + 顶层 `model_provider='codex-gateway'`,**不碰 auth.json**。
 - **ChatGPT 登录不是 profile**:它是 `codex login` 管的单一共享登录,与档案库平行。

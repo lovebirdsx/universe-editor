@@ -120,8 +120,7 @@ function buildSchema(modelIds: readonly string[]): IJSONSchema {
       },
       agentSettings: {
         type: 'object',
-        description:
-          'Editor-managed settings for ACP agents, including saved credentials and unfinished authentication forms.',
+        description: 'Editor-managed settings for ACP agents, including saved credentials.',
         additionalProperties: true,
       },
     },

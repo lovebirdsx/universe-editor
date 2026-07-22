@@ -12,6 +12,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { IStorageService, StorageScope } from '@universe-editor/platform'
 import {
   ICodexConfigService,
   type CodexAuthStatus,
@@ -47,8 +48,13 @@ export interface UseCodexConfig {
 
 const LOGGED_OUT: CodexAuthStatus = { active: 'none', hasApiKey: false }
 
+// The unfinished Authentication form is UI state, not configuration — it lives
+// in global storage rather than aiSettings.json.
+const CREDENTIAL_DRAFT_KEY = 'agentSettings.codex.credentialDraft'
+
 export function useCodexConfig(): UseCodexConfig {
   const service = useService<ICodexConfigService>(ICodexConfigService)
+  const storage = useService(IStorageService)
   const [settings, setSettings] = useState<CodexSettings>({})
   const [loaded, setLoaded] = useState(false)
   const [configPath, setConfigPath] = useState('')
@@ -63,7 +69,7 @@ export function useCodexConfig(): UseCodexConfig {
       service.configPath(),
       service.readAuthStatus(),
       service.readProfiles(),
-      service.readCredentialDraft(),
+      storage.get<CodexCredentialDraft>(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL),
     ])
     setSettings(next)
     setConfigPath(path)
@@ -71,7 +77,7 @@ export function useCodexConfig(): UseCodexConfig {
     setProfiles(library)
     setCredentialDraft(draft)
     setLoaded(true)
-  }, [service])
+  }, [service, storage])
 
   const reload = useCallback(() => loadAll(), [loadAll])
 
@@ -89,7 +95,7 @@ export function useCodexConfig(): UseCodexConfig {
         service.configPath(),
         service.readAuthStatus(),
         service.readProfiles(),
-        service.readCredentialDraft(),
+        storage.get<CodexCredentialDraft>(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL),
       ])
       if (!active) return
       setSettings(next)
@@ -112,7 +118,7 @@ export function useCodexConfig(): UseCodexConfig {
       active = false
       sub.dispose()
     }
-  }, [service])
+  }, [service, storage])
 
   const patch = useCallback(
     async (p: CodexSettingsPatch) => {
@@ -149,11 +155,14 @@ export function useCodexConfig(): UseCodexConfig {
       setCredentialDraft(draft)
       const write = draftWrite.current
         .catch(() => undefined)
-        .then(() => service.writeCredentialDraft(draft))
+        .then(async () => {
+          if (draft === undefined) await storage.remove(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL)
+          else await storage.set(CREDENTIAL_DRAFT_KEY, draft, StorageScope.GLOBAL)
+        })
       draftWrite.current = write
       return write
     },
-    [service],
+    [storage],
   )
 
   const applyProfile = useCallback(

@@ -107,7 +107,10 @@ export interface CodexCredentialProfile {
   baseUrl?: string
 }
 
-/** An unfinished credential form, retained when the settings page is left. */
+/**
+ * An unfinished credential form, retained when the settings page is left.
+ * Persisted by the renderer in IStorageService (UI state, not configuration).
+ */
 export interface CodexCredentialDraft {
   editingProfileId?: string
   kind: CodexCredentialKind
@@ -174,10 +177,6 @@ export interface ICodexConfigService {
   readProfiles(): Promise<CodexCredentialProfile[]>
   /** Replace the saved credential library in aiSettings.json (atomic merge). */
   writeProfiles(profiles: CodexCredentialProfile[]): Promise<void>
-  /** Read the unfinished Authentication form, if any. */
-  readCredentialDraft(): Promise<CodexCredentialDraft | undefined>
-  /** Persist or clear the unfinished Authentication form. */
-  writeCredentialDraft(draft: CodexCredentialDraft | undefined): Promise<void>
 }
 
 export const ICodexConfigService = createDecorator<ICodexConfigService>('codexConfigService')

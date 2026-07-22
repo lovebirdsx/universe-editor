@@ -7,6 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { IStorageService, StorageScope } from '@universe-editor/platform'
 import {
   IClaudeConfigService,
   type ClaudeAuthStatus,
@@ -37,6 +38,10 @@ export interface UseClaudeConfig {
 
 const LOGGED_OUT: ClaudeAuthStatus = { loggedIn: false, expired: false }
 
+// The unfinished Authentication form is UI state, not configuration — it lives
+// in global storage rather than aiSettings.json.
+const CREDENTIAL_DRAFT_KEY = 'agentSettings.claude.credentialDraft'
+
 const API_KEY = 'ANTHROPIC_API_KEY'
 const AUTH_TOKEN = 'ANTHROPIC_AUTH_TOKEN'
 const BASE_URL = 'ANTHROPIC_BASE_URL'
@@ -44,6 +49,7 @@ const SMALL_FAST_MODEL = 'ANTHROPIC_SMALL_FAST_MODEL'
 
 export function useClaudeConfig(): UseClaudeConfig {
   const service = useService<IClaudeConfigService>(IClaudeConfigService)
+  const storage = useService(IStorageService)
   const [settings, setSettings] = useState<ClaudeSettings>({})
   const [loaded, setLoaded] = useState(false)
   const [configPath, setConfigPath] = useState('')
@@ -58,7 +64,7 @@ export function useClaudeConfig(): UseClaudeConfig {
       service.configPath(),
       service.readAuthStatus(),
       service.readProfiles(),
-      service.readCredentialDraft(),
+      storage.get<ClaudeCredentialDraft>(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL),
     ])
     setSettings(next)
     setConfigPath(path)
@@ -66,7 +72,7 @@ export function useClaudeConfig(): UseClaudeConfig {
     setProfiles(library)
     setCredentialDraft(draft)
     setLoaded(true)
-  }, [service])
+  }, [service, storage])
 
   const reloadAuthStatus = useCallback(async () => {
     const status = await service.readAuthStatus()
@@ -82,7 +88,7 @@ export function useClaudeConfig(): UseClaudeConfig {
         service.configPath(),
         service.readAuthStatus(),
         service.readProfiles(),
-        service.readCredentialDraft(),
+        storage.get<ClaudeCredentialDraft>(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL),
       ])
       if (!active) return
       setSettings(next)
@@ -95,7 +101,7 @@ export function useClaudeConfig(): UseClaudeConfig {
     return () => {
       active = false
     }
-  }, [service])
+  }, [service, storage])
 
   const patch = useCallback(
     async (p: ClaudeSettingsPatch) => {
@@ -133,11 +139,14 @@ export function useClaudeConfig(): UseClaudeConfig {
       setCredentialDraft(draft)
       const write = draftWrite.current
         .catch(() => undefined)
-        .then(() => service.writeCredentialDraft(draft))
+        .then(async () => {
+          if (draft === undefined) await storage.remove(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL)
+          else await storage.set(CREDENTIAL_DRAFT_KEY, draft, StorageScope.GLOBAL)
+        })
       draftWrite.current = write
       return write
     },
-    [service],
+    [storage],
   )
 
   const applyProfile = useCallback(

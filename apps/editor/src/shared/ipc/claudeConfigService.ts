@@ -97,7 +97,10 @@ export interface ClaudeCredentialProfile {
   smallFastModel?: string
 }
 
-/** An unfinished credential form, retained when the settings page is left. */
+/**
+ * An unfinished credential form, retained when the settings page is left.
+ * Persisted by the renderer in IStorageService (UI state, not configuration).
+ */
 export interface ClaudeCredentialDraft {
   editingProfileId?: string
   kind: ClaudeCredentialKind
@@ -133,10 +136,6 @@ export interface IClaudeConfigService {
   readProfiles(): Promise<ClaudeCredentialProfile[]>
   /** Replace the saved credential library in aiSettings.json (atomic merge). */
   writeProfiles(profiles: ClaudeCredentialProfile[]): Promise<void>
-  /** Read the unfinished Authentication form, if any. */
-  readCredentialDraft(): Promise<ClaudeCredentialDraft | undefined>
-  /** Persist or clear the unfinished Authentication form. */
-  writeCredentialDraft(draft: ClaudeCredentialDraft | undefined): Promise<void>
 }
 
 export const IClaudeConfigService = createDecorator<IClaudeConfigService>('claudeConfigService')

@@ -90,24 +90,16 @@ describe('CodexConfigMainService', () => {
     expect(entries).toEqual(['config.toml'])
   })
 
-  it('stores profiles and unfinished authentication drafts in aiSettings.json', async () => {
+  it('stores profiles in aiSettings.json', async () => {
     const configDir = join(dir, 'editor-settings')
     svc = new CodexConfigMainService(configPath, undefined, configLocation(configDir))
     await svc.writeProfiles([{ id: 'work', label: 'Work', kind: 'apiKey', apiKey: 'sk-work' }])
-    await svc.writeCredentialDraft({
-      kind: 'gateway',
-      label: 'Draft gateway',
-      apiKey: 'sk-draft',
-      baseUrl: 'https://gateway.example.com/v1',
-    })
 
     expect(await svc.readProfiles()).toEqual([
       { id: 'work', label: 'Work', kind: 'apiKey', apiKey: 'sk-work' },
     ])
-    expect(await svc.readCredentialDraft()).toMatchObject({ label: 'Draft gateway' })
     const stored = JSON.parse(await fs.readFile(join(configDir, 'aiSettings.json'), 'utf8'))
     expect(stored.agentSettings.codex.authentication.profiles).toHaveLength(1)
-    expect(stored.agentSettings.codex.authentication.draft.apiKey).toBe('sk-draft')
   })
 
   describe('applyCredential', () => {
