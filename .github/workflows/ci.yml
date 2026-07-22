@@ -459,6 +459,26 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Cache Excel npm downloads
+        if: matrix.suite.prep == 'xlsx'
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-excel-${{ runner.os }}-node22-${{ hashFiles('extensions-external/excel-diff/package-lock.json') }}
+          restore-keys: |
+            npm-excel-${{ runner.os }}-node22-
+
+      # The Excel extension bundles SheetJS from its own node_modules. Install its
+      # standalone npm dependencies early so transient failures do not waste a build.
+      - name: Install Excel extension deps
+        if: matrix.suite.prep == 'xlsx'
+        env:
+          NPM_CONFIG_FETCH_RETRIES: 4
+          NPM_CONFIG_FETCH_RETRY_FACTOR: 2
+          NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: 10000
+          NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: 60000
+        run: npm --prefix extensions-external/${{ matrix.suite.name }} ci --prefer-offline --no-audit --no-fund
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -485,19 +505,12 @@ jobs:
       - name: Build editor + extension host
         run: pnpm build --filter=@universe-editor/editor... --filter=@universe-editor/extension-host...
 
-      # The Excel extension bundles SheetJS from its own node_modules; install it
-      # before the suite's build step runs. pdf / eslint self-resolve their build
-      # deps from a workspace package (borrow), so they need no prep.
-      - name: Install Excel extension deps
-        if: matrix.suite.prep == 'xlsx'
-        run: npm --prefix extensions-external/${{ matrix.suite.name }} ci
-
       # Type-check the external extension before running it. esbuild (both the
       # suite build and run-external-e2e.mjs) strips types without checking them,
       # so a type error would otherwise sail through CI as long as the bundle
       # emits. The typecheck script borrows tsc from a workspace package; the
-      # frozen-lockfile install above provides it. Excel's own types come from the
-      # `npm ci` prep step above.
+      # frozen-lockfile install above provides it. Excel's own types come from its
+      # early standalone npm install.
       - name: Typecheck external extension
         run: npm --prefix extensions-external/${{ matrix.suite.name }} run typecheck
 
@@ -520,6 +533,15 @@ jobs:
           name: playwright-traces-external-${{ matrix.suite.name }}
           path: ${{ matrix.suite.dir }}/test-results
           retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload Excel npm logs
+        if: failure() && matrix.suite.prep == 'xlsx'
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-logs-${{ matrix.suite.name }}
+          path: ~/.npm/_logs/
+          retention-days: 7
           if-no-files-found: ignore
 
   bench:
