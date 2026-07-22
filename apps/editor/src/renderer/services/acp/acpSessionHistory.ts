@@ -64,10 +64,11 @@ export interface AcpSessionHistoryEntry {
   readonly branch?: string
   /**
    * Absolute path to the session's transcript file (claude: the `.jsonl` under
-   * `~/.claude/projects/<encoded-cwd>/`), reported by the agent via
-   * `SessionInfo._meta.transcriptPath`. Optional — codex and other agents that
-   * have no per-session transcript file omit it. Used by the "Reveal Session
-   * Location" command to show the file in the OS file manager.
+   * `~/.claude/projects/<encoded-cwd>/`; codex: the thread's rollout `.jsonl`),
+   * reported by the agent via `SessionInfo._meta.transcriptPath`. Optional —
+   * agents with no per-session transcript file (or ephemeral threads) omit it.
+   * Used by the "Reveal Session Location" command to show the file in the OS
+   * file manager.
    */
   readonly transcriptPath?: string
   /** Unix epoch milliseconds. */
