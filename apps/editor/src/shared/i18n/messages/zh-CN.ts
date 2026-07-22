@@ -92,9 +92,16 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'editorTabs.scrollRight': '向右滚动标签页',
 
   // --- Layout, status bar & window controls ---
+  'agentStatus.idleTooltip': '切换会话 (Alt+S)',
+  'agentStatus.runningTooltip': '{0} 个会话正在运行 — 切换会话 (Alt+S)',
+  'agentStatus.waitingTooltip': '{0} 个会话等待输入 — 切换会话 (Alt+S)',
+  'commandCenter.tooltip': '搜索 {name} (Ctrl+P) — {title}',
+  'layoutControls.configureLayout': '配置布局',
   'layoutControls.togglePanelWithKey': '切换底栏 (Ctrl+J)',
   'layoutControls.togglePrimarySideBarWithKey': '切换主侧边栏 (Ctrl+B)',
   'layoutControls.toggleSecondarySideBarWithKey': '切换辅助侧边栏 (Ctrl+Alt+B)',
+  'navigationControls.goBackWithKey': '后退 (Alt+←)',
+  'navigationControls.goForwardWithKey': '前进 (Alt+→)',
   'status.cursorPosition': '光标位置',
   'status.editorEncoding': '编辑器编码',
   'status.editorLanguage': '编辑器语言',

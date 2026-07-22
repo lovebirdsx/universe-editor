@@ -47,6 +47,136 @@
   min-width: 0;
   margin: 0 10px;
   justify-content: center;
+  gap: 6px;
+}
+
+/* Command-center pill (VSCode window.commandCenter): click opens Quick Open.
+ * Width depends only on the viewport, never on the title text, so the title
+ * bar does not reflow as the active editor changes. */
+.command-center {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  width: clamp(280px, 48vw, 640px);
+  flex-shrink: 0;
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  color: var(--color-foreground-muted, #8a8a92);
+  cursor: default;
+  -webkit-app-region: no-drag;
+}
+
+.command-center:hover {
+  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.1));
+  color: var(--color-foreground, #c8c8c8);
+}
+
+.navigation-controls {
+  display: flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+.layout-btn:disabled {
+  color: var(--color-foreground-muted, #8a8a92);
+  opacity: 0.4;
+}
+
+.layout-btn:disabled:hover {
+  background: transparent;
+  color: var(--color-foreground-muted, #8a8a92);
+}
+
+/* Running-agent pill next to the command center (VSCode agents control).
+ * Always rendered with a fixed minimum width — appearing/disappearing pills
+ * would shift the whole title bar. */
+.agent-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 22px;
+  min-width: 48px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-foreground, #c8c8c8);
+  font-size: 11px;
+  cursor: default;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+.agent-status:hover {
+  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.1));
+}
+
+.agent-status--idle {
+  color: var(--color-foreground-muted, #8a8a92);
+}
+
+.agent-status--idle .agent-status-count {
+  color: var(--color-foreground-muted, #8a8a92);
+}
+
+.agent-status--running {
+  color: var(--color-accent, #0070e0);
+  animation: agent-status-pulse 2s ease-in-out infinite;
+}
+
+.agent-status--ask {
+  color: #ffc043;
+}
+
+.agent-status-count {
+  line-height: 1;
+  color: var(--color-foreground, #c8c8c8);
+}
+
+/* AI quick-settings button, right of the agent pill. */
+.ai-button {
+  width: 28px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: default;
+  border-radius: 3px;
+  color: var(--color-foreground-muted, #8a8a92);
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+.ai-button:hover {
+  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
+  color: var(--color-foreground, #c8c8c8);
+}
+
+@keyframes agent-status-pulse {
+  0%   { box-shadow: 0 0 0 0   rgba(80, 160, 255, 0.55); }
+  65%  { box-shadow: 0 0 0 6px rgba(80, 160, 255, 0); }
+  100% { box-shadow: 0 0 0 0   rgba(80, 160, 255, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-status--running {
+    animation: none;
+  }
+}
+
+/* Right-anchored variant for menus that open from the right side of the bar. */
+.dropdown--right {
+  left: auto;
+  right: 0;
 }
 
 .right {

@@ -6,7 +6,7 @@
  *    - the contributed commands are registered (trigger / commit / toggle / pickModel)
  *    - `Alt+\` resolves to the trigger command via KeybindingsRegistry
  *    - ghost text appears and **Tab accepts it** (commits the suggestion)
- *    - the AI status bar entry is present
+ *    - the AI button is present in the title bar
  *    - the AI quick-settings popover reflects the inline-completion toggle state
  *
  *  The model-dependent ranking/streaming path is covered by unit tests on
@@ -17,7 +17,6 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
-import type { WorkbenchPO } from '../pages/WorkbenchPO.js'
 
 const TRIGGER = 'ai.inlineCompletion.trigger'
 const COMMIT = 'ai.inlineCompletion.commit'
@@ -29,11 +28,6 @@ function writeWorkspace(): { dir: string; filePath: string } {
   const filePath = join(dir, 'a.txt')
   writeFileSync(filePath, 'hello \n')
   return { dir: dir.replace(/\\/g, '/'), filePath: filePath.replace(/\\/g, '/') }
-}
-
-async function aiEntry(workbench: WorkbenchPO) {
-  const entries = await workbench.statusBar.entriesFromProbe()
-  return entries.find((e) => e.icon === 'sparkle' && e.alignment === 'right')
 }
 
 test.describe('@p1 inline completion', () => {
@@ -97,17 +91,15 @@ test.describe('@p1 inline completion', () => {
     expect(await workbench.getKeybindingCommandsForKey('alt+\\')).toContain(TRIGGER)
   })
 
-  test('shows the AI status bar entry', async ({ workbench }) => {
+  test('shows the AI button in the title bar', async ({ page, workbench }) => {
     await workbench.waitForRestored()
-    const entry = await aiEntry(workbench)
-    expect(entry).toBeDefined()
-    expect(entry!.alignment).toBe('right')
+    await expect(page.getByTestId('titlebar-ai-button')).toBeVisible()
   })
 
   test('quick-settings toggle reflects inline-completion state', async ({ page, workbench }) => {
     await workbench.waitForRestored()
 
-    const aiButton = page.getByTestId('statusbar-entry-ai')
+    const aiButton = page.getByTestId('titlebar-ai-button')
     await expect(aiButton).toBeVisible()
     await aiButton.click()
 

@@ -1,9 +1,12 @@
 import { useCallback, useState, useSyncExternalStore } from 'react'
+import { Search } from 'lucide-react'
 import {
   DisposableStore,
+  ICommandService,
   IEditorGroupsService,
   IHostService,
   IWorkspaceService,
+  localize,
   markAsSingleton,
   MutableDisposable,
   combinedDisposable,
@@ -14,8 +17,12 @@ import {
   type EditorInput,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
+import { GoToFileAction } from '../../actions/fileOpenActions.js'
+import { AgentStatusIndicator } from './AgentStatusIndicator.js'
+import { AiTitleBarButton } from './AiTitleBarButton.js'
 import { LayoutControls } from './LayoutControls.js'
 import { MenuBar } from './MenuBar.js'
+import { NavigationControls } from './NavigationControls.js'
 import { UpdateIndicator } from './UpdateIndicator.js'
 import { WindowControls } from './WindowControls.js'
 import styles from './TitleBar.module.css'
@@ -91,6 +98,7 @@ export function TitleBar() {
   const host = useService(IHostService)
   const workspace = useService(IWorkspaceService)
   const groupsService = useService(IEditorGroupsService)
+  const commandService = useService(ICommandService)
   const isMac = host.platform === 'darwin'
 
   const subscribe = useCallback(
@@ -148,9 +156,24 @@ export function TitleBar() {
         <MenuBar />
       </div>
       <div className={styles['center']}>
-        <div className={styles['title']} data-testid="titlebar-title">
-          {title}
-        </div>
+        <NavigationControls />
+        <button
+          type="button"
+          className={styles['command-center']}
+          onClick={() => void commandService.executeCommand(GoToFileAction.ID)}
+          title={localize('commandCenter.tooltip', 'Search {name} (Ctrl+P) — {title}', {
+            name: workspace.current?.name ?? '',
+            title,
+          })}
+          data-testid="titlebar-command-center"
+        >
+          <Search size={12} strokeWidth={1.75} aria-hidden="true" />
+          <span className={styles['title']} data-testid="titlebar-title">
+            {title}
+          </span>
+        </button>
+        <AgentStatusIndicator />
+        <AiTitleBarButton />
       </div>
       <div className={styles['right']}>
         <UpdateIndicator />

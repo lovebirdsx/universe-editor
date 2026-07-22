@@ -37,6 +37,8 @@ export const enum MenuId {
   MenubarEditMenu = 'menubar.edit',
   MenubarViewMenu = 'menubar.view',
   MenubarHelpMenu = 'menubar.help',
+  /** Title-bar right-side "Configure Layout" dropdown next to the layout toggles. */
+  LayoutControlMenu = 'layoutControl',
   // Dynamic submenus
   MenubarFileOpenRecentMenu = 'menubar.file.openRecent',
 }

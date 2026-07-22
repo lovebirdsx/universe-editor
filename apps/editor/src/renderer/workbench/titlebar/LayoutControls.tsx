@@ -1,5 +1,15 @@
-import { ILayoutService, PartId, localize } from '@universe-editor/platform'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ChevronDown } from 'lucide-react'
+import {
+  ICommandService,
+  ILayoutService,
+  MenuId,
+  PartId,
+  localize,
+} from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
+import { useMenuItems } from './useTitleBarMenus.js'
+import { DropdownContents } from './TitleBarDropdown.js'
 import styles from './TitleBar.module.css'
 
 function SideBarLeftIcon() {
@@ -59,6 +69,60 @@ function SideBarRightIcon() {
   )
 }
 
+function ConfigureLayoutDropdown() {
+  const sections = useMenuItems(MenuId.LayoutControlMenu)
+  const commandService = useService(ICommandService)
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handleMouseDown = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('mousedown', handleMouseDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('mousedown', handleMouseDown)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [open])
+
+  const handleExecute = useCallback(
+    (command: string) => {
+      setOpen(false)
+      void commandService.executeCommand(command)
+    },
+    [commandService],
+  )
+
+  return (
+    <div ref={containerRef} className={styles['menu-group']}>
+      <button
+        className={styles['layout-btn']}
+        onClick={() => setOpen((prev) => !prev)}
+        title={localize('layoutControls.configureLayout', 'Configure Layout')}
+        aria-label={localize('layoutControls.configureLayout', 'Configure Layout')}
+        aria-haspopup="true"
+        aria-expanded={open}
+        data-testid="titlebar-layout-menu"
+      >
+        <ChevronDown size={14} strokeWidth={1.75} />
+      </button>
+      {open && (
+        <div className={`${styles['dropdown']} ${styles['dropdown--right']}`} role="menu">
+          <DropdownContents sections={sections} onExecute={handleExecute} />
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function LayoutControls() {
   const layoutService = useService(ILayoutService)
   const visible = useObservable(layoutService.visible)
@@ -102,6 +166,7 @@ export function LayoutControls() {
       >
         <SideBarRightIcon />
       </button>
+      <ConfigureLayoutDropdown />
     </div>
   )
 }

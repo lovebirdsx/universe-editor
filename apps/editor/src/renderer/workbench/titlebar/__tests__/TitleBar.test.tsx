@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { render, screen, act } from '@testing-library/react'
+import { render, screen, act, fireEvent } from '@testing-library/react'
 import {
   ContextKeyService,
   EditorInput,
+  Emitter,
+  IAiModelService,
   ICommandService,
   IContextKeyService,
   IEditorGroupsService,
   IFileService,
+  IHistoryService,
   IHostService,
   ILayoutService,
   IWorkspaceService,
@@ -19,6 +22,7 @@ import {
 } from '@universe-editor/platform'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
+import { IInlineCompletionService } from '../../../services/ai/InlineCompletionService.js'
 import { IUpdateService } from '../../../../shared/ipc/updateService.js'
 import { ServicesContext } from '../../useService.js'
 import { TitleBar } from '../TitleBar.js'
@@ -91,9 +95,49 @@ function makeLayoutService(): ILayoutService {
   } as unknown as ILayoutService
 }
 
+function makeHistoryService(): IHistoryService {
+  return {
+    _serviceBrand: undefined,
+    onDidChange: new Emitter<void>().event,
+    canGoBack: () => false,
+    canGoForward: () => false,
+  } as unknown as IHistoryService
+}
+
+const noopEvent = () => ({ dispose: () => {} })
+
+function makeAiModelService(): IAiModelService {
+  return {
+    _serviceBrand: undefined,
+    onDidChangeModels: noopEvent,
+    onDidChangeActiveModel: noopEvent,
+    onDidChangeInlineCompletionModel: noopEvent,
+    onDidChangeCommitModel: noopEvent,
+    onDidChangeSessionTitleModel: noopEvent,
+    getModels: async () => [],
+    getActiveModelId: async () => undefined,
+    getInlineCompletionModelId: async () => undefined,
+    getCommitModelId: async () => undefined,
+    getSessionTitleModelId: async () => undefined,
+  } as unknown as IAiModelService
+}
+
+function makeInlineCompletionService(): IInlineCompletionService {
+  return {
+    _serviceBrand: undefined,
+    onDidChange: noopEvent,
+    enabled: false,
+    setEnabled: () => {},
+  } as unknown as IInlineCompletionService
+}
+
 function makeContainer(
   groupsService: EditorGroupsService,
-  opts: { platform?: 'win32' | 'darwin' | 'linux'; workspace?: IWorkspace | null } = {},
+  opts: {
+    platform?: 'win32' | 'darwin' | 'linux'
+    workspace?: IWorkspace | null
+    executeCommand?: (id: string) => void
+  } = {},
 ): InstantiationService {
   const sc = new ServiceCollection()
   sc.set(IHostService, makeHostService(opts.platform ?? 'win32'))
@@ -102,9 +146,15 @@ function makeContainer(
   sc.set(IFileService, makeFs())
   sc.set(IContextKeyService, new ContextKeyService())
   sc.set(ILayoutService, makeLayoutService())
+  sc.set(IHistoryService, makeHistoryService())
+  sc.set(IAiModelService, makeAiModelService())
+  sc.set(IInlineCompletionService, makeInlineCompletionService())
   sc.set(ICommandService, {
     _serviceBrand: undefined,
-    executeCommand: () => Promise.resolve(undefined),
+    executeCommand: (id: string) => {
+      opts.executeCommand?.(id)
+      return Promise.resolve(undefined)
+    },
   } as unknown as ICommandService)
   sc.set(IUpdateService, {
     _serviceBrand: undefined,
@@ -294,5 +344,41 @@ describe('TitleBar — title text', () => {
     })
 
     expect(titleText()).toBe('project')
+  })
+})
+
+describe('TitleBar — command center', () => {
+  it('opens Quick Open when the center pill is clicked', () => {
+    const executed: string[] = []
+    const workspace: IWorkspace = { folder: URI.file('/my/project'), name: 'project' }
+    const inst = makeContainer(svc, {
+      workspace,
+      executeCommand: (id) => executed.push(id),
+    })
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <TitleBar />
+      </ServicesContext.Provider>,
+    )
+
+    fireEvent.click(screen.getByTestId('titlebar-command-center'))
+    expect(executed).toEqual(['workbench.action.quickOpen'])
+  })
+
+  it('shows the full title in the command center tooltip', () => {
+    const workspace: IWorkspace = { folder: URI.file('/my/project'), name: 'project' }
+    const inst = makeContainer(svc, { workspace })
+    const input = inst.createInstance(FileEditorInput, URI.file('/my/project/src/main.ts'))
+    svc.activeGroup.openEditor(input)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <TitleBar />
+      </ServicesContext.Provider>,
+    )
+
+    const pill = screen.getByTestId('titlebar-command-center')
+    expect(pill.getAttribute('title')).toContain('src/main.ts — /my/project')
   })
 })

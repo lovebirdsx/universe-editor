@@ -1,17 +1,16 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AiStatusBarItem — the single AI status-bar entry. Renders a sparkle button and,
- *  on click, an upward-anchored quick-settings popover (inline-completion toggle,
- *  shortcuts to the Agents view / AI settings, and a per-feature model row). Each
- *  model row opens that slot's model picker command (a command-palette QuickPick),
- *  keeping model selection consistent with the rest of the app. Replaces the former
- *  AiModel / InlineCompletion / Agents status-bar entries.
+ *  AiTitleBarButton — the AI quick-settings entry, moved from the status bar to
+ *  the title bar (right of the running-session pill). Renders a sparkle button
+ *  and, on click, a downward-anchored quick-settings popover (inline-completion
+ *  toggle, shortcuts to the Agents view / AI settings, and per-feature model
+ *  rows). The tooltip carries the active session's MCP server summary.
  *
  *  The AI services are Promise+Event based (not observables), so we pull data in an
  *  effect and refresh on their change events rather than using useObservable.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   AiQuickSettingsPanel,
@@ -22,14 +21,16 @@ import {
 import {
   IAiModelService,
   ICommandService,
+  constObservable,
+  derived,
   localize,
   type AiModelMetadata,
 } from '@universe-editor/platform'
 import { Bot, Settings, Sparkles } from 'lucide-react'
-import { useService } from '../useService.js'
+import { useObservable, useOptionalService, useService } from '../useService.js'
 import { IInlineCompletionService } from '../../services/ai/InlineCompletionService.js'
-import type { StatusBarItemProps } from '../../services/statusbar/StatusBarComponentRegistry.js'
-import styles from './StatusBar.module.css'
+import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
+import styles from './TitleBar.module.css'
 
 const GAP = 6
 
@@ -49,6 +50,7 @@ interface AiSnapshot {
 }
 
 const EMPTY: AiSnapshot = { models: [] }
+const NO_SERVERS: readonly { status: string }[] = []
 
 function renderIcon(id: 'agents' | 'settings') {
   switch (id) {
@@ -59,10 +61,20 @@ function renderIcon(id: 'agents' | 'settings') {
   }
 }
 
-export function AiStatusBarItem({ entry }: StatusBarItemProps) {
+/** Single-line MCP status summary appended to the AI tooltip. */
+function mcpTooltip(base: string, servers: readonly { status: string }[]): string {
+  if (servers.length === 0) return base
+  const connected = servers.filter((s) => s.status === 'connected').length
+  const summary = `MCP ${connected}/${servers.length} connected`
+  const failed = servers.filter((s) => s.status !== 'connected' && s.status !== 'pending').length
+  return failed > 0 ? `${base} · ${summary}, ${failed} failed` : `${base} · ${summary}`
+}
+
+export function AiTitleBarButton() {
   const ai = useService(IAiModelService)
   const inline = useService(IInlineCompletionService)
   const commands = useService(ICommandService)
+  const sessionsService = useOptionalService(IAcpSessionService)
 
   const [open, setOpen] = useState(false)
   const [rect, setRect] = useState<DOMRect | null>(null)
@@ -105,6 +117,21 @@ export function AiStatusBarItem({ entry }: StatusBarItemProps) {
       for (const d of disposables) d.dispose()
     }
   }, [ai, inline, refresh])
+
+  const mcpServersObs = useMemo(
+    () =>
+      sessionsService
+        ? derived(
+            /**
+             * @description titlebar.aiButton.mcpServers
+             */
+            (r) => sessionsService.activeSession.read(r)?.mcpServers.read(r) ?? NO_SERVERS,
+          )
+        : constObservable<readonly { status: string }[]>(NO_SERVERS),
+    [sessionsService],
+  )
+  const mcpServers = useObservable(mcpServersObs)
+  const tooltip = mcpTooltip(localize('ai.statusbar.tooltip', 'AI'), mcpServers)
 
   // Close on click-outside (FocusScopeOverlay only handles Escape + focus trap).
   useEffect(() => {
@@ -164,7 +191,7 @@ export function AiStatusBarItem({ entry }: StatusBarItemProps) {
               ref={popRef}
               style={{
                 position: 'fixed',
-                bottom: Math.max(GAP, window.innerHeight - rect.top + GAP),
+                top: rect.bottom + GAP,
                 right: Math.max(GAP, window.innerWidth - rect.right),
                 zIndex: 1000,
               }}
@@ -199,13 +226,13 @@ export function AiStatusBarItem({ entry }: StatusBarItemProps) {
     <>
       <button
         ref={btnRef}
-        className={[styles['item'], styles['clickable']].filter(Boolean).join(' ')}
+        className={styles['ai-button']}
         onClick={toggleOpen}
-        title={entry.tooltip}
-        aria-label={entry.tooltip ?? 'AI'}
+        title={tooltip}
+        aria-label={tooltip}
         aria-expanded={open}
         aria-haspopup="dialog"
-        data-testid="statusbar-entry-ai"
+        data-testid="titlebar-ai-button"
       >
         <Sparkles size={14} strokeWidth={1.75} aria-hidden="true" />
       </button>

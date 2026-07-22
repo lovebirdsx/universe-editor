@@ -22,7 +22,6 @@ import { SettingsContribution } from '../SettingsContribution.js'
 import { ThemeContribution } from '../ThemeContribution.js'
 import { AiConfigurationContribution } from '../AiConfigurationContribution.js'
 import { UpdateConfigurationContribution } from '../UpdateConfigurationContribution.js'
-import { StatusBarComponentsContribution } from '../StatusBarComponentsContribution.js'
 import { WorkbenchFontContribution } from '../WorkbenchFontContribution.js'
 import { AgentFontContribution } from '../AgentFontContribution.js'
 import { JsonSchemaBridgeContribution } from '../JsonSchemaBridgeContribution.js'
@@ -180,14 +179,6 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.updateConfiguration',
   UpdateConfigurationContribution,
-  WorkbenchPhase.BlockStartup,
-)
-
-// Status-bar componentKey → React component bindings. BlockStartup so the mapping
-// exists before the status bar first paints.
-ContributionsRegistry.registerContribution(
-  'workbench.contrib.statusBarComponents',
-  StatusBarComponentsContribution,
   WorkbenchPhase.BlockStartup,
 )
 

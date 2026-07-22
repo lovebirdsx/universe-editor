@@ -6,7 +6,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ContributionsRegistry, WorkbenchPhase } from '@universe-editor/platform'
-import { AiStatusContribution } from '../AiStatusContribution.js'
 import { JsonSchemaContextContribution } from '../JsonSchemaContextContribution.js'
 import { JsonLanguageFeaturesContribution } from '../JsonLanguageFeaturesContribution.js'
 import { InlineCompletionContribution } from '../InlineCompletionContribution.js'
@@ -61,14 +60,6 @@ import { DeepLinkContribution } from '../DeepLinkContribution.js'
 import { StartupSessionContribution } from '../StartupSessionContribution.js'
 import { SessionChangesDiffSyncContribution } from '../SessionChangesDiffSyncContribution.js'
 import { DiffLiveContentSyncContribution } from '../DiffLiveContentSyncContribution.js'
-
-// The single AI status-bar entry (sparkle + quick-settings popover). AfterRestore
-// so the status bar exists when the entry is added.
-ContributionsRegistry.registerContribution(
-  'workbench.contrib.aiStatus',
-  AiStatusContribution,
-  WorkbenchPhase.AfterRestore,
-)
 
 // `activeEditorHasJsonSchema` context key — drives the editor-title "Show JSON
 // Schema" action. AfterRestore: the editor service + schema registry are live,

@@ -64,7 +64,10 @@ export class ToggleActivityBarVisibilityAction extends Action2 {
       id: ToggleActivityBarVisibilityAction.ID,
       title: localize2('action.toggleActivityBar.title', 'Toggle Activity Bar'),
       category: localize2('command.category.view', 'View'),
-      menu: { id: MenuId.MenubarViewMenu, group: '2_layout', order: 0 },
+      menu: [
+        { id: MenuId.MenubarViewMenu, group: '2_layout', order: 0 },
+        { id: MenuId.LayoutControlMenu, group: '0_visibility', order: 3 },
+      ],
       f1: true,
     })
   }
@@ -81,7 +84,10 @@ export class ToggleSidebarVisibilityAction extends Action2 {
       title: localize2('action.togglePrimarySideBar.title', 'Toggle Primary Side Bar'),
       category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+b' },
-      menu: { id: MenuId.MenubarViewMenu, group: '2_layout', order: 1 },
+      menu: [
+        { id: MenuId.MenubarViewMenu, group: '2_layout', order: 1 },
+        { id: MenuId.LayoutControlMenu, group: '0_visibility', order: 0 },
+      ],
       f1: true,
     })
   }
@@ -98,7 +104,10 @@ export class ToggleSecondarySidebarVisibilityAction extends Action2 {
       title: localize2('action.toggleSecondarySideBar.title', 'Toggle Secondary Side Bar'),
       category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+alt+b' },
-      menu: { id: MenuId.MenubarViewMenu, group: '2_layout', order: 2 },
+      menu: [
+        { id: MenuId.MenubarViewMenu, group: '2_layout', order: 2 },
+        { id: MenuId.LayoutControlMenu, group: '0_visibility', order: 2 },
+      ],
       f1: true,
     })
   }
@@ -139,7 +148,10 @@ export class TogglePanelAction extends Action2 {
       title: localize2('action.togglePanel.title', 'Toggle Panel'),
       category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+j' },
-      menu: { id: MenuId.MenubarViewMenu, group: '2_layout', order: 3 },
+      menu: [
+        { id: MenuId.MenubarViewMenu, group: '2_layout', order: 3 },
+        { id: MenuId.LayoutControlMenu, group: '0_visibility', order: 1 },
+      ],
       f1: true,
     })
   }
@@ -162,6 +174,7 @@ export class ToggleMaximizedPanelAction extends Action2 {
       title: localize2('action.toggleMaximizedPanel.title', 'Toggle Maximized Panel'),
       category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'alt+m' },
+      menu: [{ id: MenuId.LayoutControlMenu, group: '0_visibility', order: 4 }],
       f1: true,
     })
   }
