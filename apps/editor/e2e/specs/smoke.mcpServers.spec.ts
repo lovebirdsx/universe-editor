@@ -6,7 +6,7 @@
  *  并跑一个带 `_meta.claudeCode.toolName='mcp__fs__read_file'` 的 tool_call。断言：
  *    - 快照流到 session.mcpServers（真实连接状态 connected/failed）；
  *    - 工具调用被归因到来源 server（mcpServer==='fs'）；
- *    - Agents 状态栏不新增常驻视觉（text 仍为空），MCP 信息只进 tooltip；
+ *    - 标题栏 AI 按钮的 tooltip 汇总 MCP 连接状态；
  *    - 打开 Agents 容器后 MCP Servers view 渲染出每个 server 一行。
  *
  *  注意: mcpAgent.cjs 是源码（不经过构建），spec 直接拿源码绝对路径喂给探针。
@@ -67,13 +67,10 @@ test.describe('@p1 mcp servers', () => {
     const fsCall = toolCalls.find((t) => t.mcpServer === 'fs')
     expect(fsCall).toMatchObject({ title: 'read_file', status: 'completed' })
 
-    // 7. Agents 状态栏：不新增常驻视觉（text 仍为空），MCP 信息只进 tooltip。
-    const agentsEntry = await page.evaluate(() =>
-      window.__E2E__!.getStatusBarEntries().find((e) => e.icon === 'sparkle'),
-    )
-    expect(agentsEntry?.text).toBe('')
-    expect(agentsEntry?.tooltip).toContain('MCP 1/2 connected')
-    expect(agentsEntry?.tooltip).toContain('1 failed')
+    // 7. 标题栏 AI 按钮：MCP 信息只进 tooltip（状态栏 AI 入口已迁到标题栏）。
+    const aiTooltip = page.getByTestId('titlebar-ai-button')
+    await expect(aiTooltip).toHaveAttribute('title', /MCP 1\/2 connected/)
+    await expect(aiTooltip).toHaveAttribute('title', /1 failed/)
 
     // 8. 打开 Agents 容器后，MCP Servers view 每个 server 渲染一行。
     await page.evaluate(() => {
