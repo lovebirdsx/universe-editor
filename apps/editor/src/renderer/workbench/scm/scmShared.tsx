@@ -13,7 +13,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, Loader2 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import {
   CommandsRegistry,
@@ -84,18 +84,45 @@ export function menuActions(
   return out
 }
 
-/** Icon button that falls back to its title text when no icon is mapped. */
+/** Icon button that falls back to its title text when no icon is mapped. While
+ * `busy`, the button is disabled and its own icon spins (the git syncing idiom)
+ * so a long-running command (e.g. SCM refresh) can't be re-triggered mid-flight
+ * and the progress hint sits right where the user clicked. A command without an
+ * icon falls back to a generic spinner so some feedback remains. */
 export function ActionButton({
   action,
+  busy,
   onRun,
 }: {
   action: ActionItem
+  busy?: boolean
   onRun: (e: ReactMouseEvent) => void
 }) {
   const Icon = resolveHeaderIcon(action.icon)
+  const Glyph = busy === true ? (Icon ?? Loader2) : Icon
   return (
-    <button type="button" className={styles['actionButton']} title={action.title} onClick={onRun}>
-      {Icon ? <Icon size={16} strokeWidth={1.6} /> : <span>{action.title}</span>}
+    <button
+      type="button"
+      className={styles['actionButton']}
+      title={action.title}
+      disabled={busy === true}
+      onClick={onRun}
+      data-testid={`scm-title-action-${action.command}`}
+    >
+      {Glyph ? (
+        <Glyph
+          size={16}
+          strokeWidth={1.6}
+          {...(busy === true
+            ? {
+                className: styles['actionButtonSpin'],
+                'data-testid': 'scm-title-action-spin',
+              }
+            : {})}
+        />
+      ) : (
+        <span>{action.title}</span>
+      )}
     </button>
   )
 }

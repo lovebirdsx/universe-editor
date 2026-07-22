@@ -75,6 +75,7 @@ export class Repository {
   private readonly _changeListeners = new Set<() => void>()
   private _refreshing = false
   private _queued = false
+  private _inFlightRefresh: Promise<void> | undefined
   private _syncing = false
   private _fetching = false
   /** Count of in-flight progress operations; while > 0 the sync item shows a spinner. */
@@ -149,21 +150,38 @@ export class Repository {
   async refresh(opts?: RefreshOptions): Promise<void> {
     if (this._refreshing) {
       this._queued = true
+      // Resolve only once the in-flight pass (which observes the queued flag and
+      // runs another round) finishes, so a caller's promise means "the refresh I
+      // asked for has actually been served" — the SCM title Refresh button holds
+      // its disabled/spinner state for exactly this long.
+      await this._inFlightRefresh
       return
     }
     this._refreshing = true
     let shouldFetch = opts?.fetch === true
+    const run = (async () => {
+      try {
+        do {
+          this._queued = false
+          if (shouldFetch) {
+            shouldFetch = false
+            await this._fetchRemote(
+              opts?.silent !== undefined ? { silent: opts.silent } : undefined,
+            )
+          }
+          await this._doRefresh()
+        } while (this._queued && !this._disposed)
+      } finally {
+        this._refreshing = false
+      }
+    })()
+    this._inFlightRefresh = run
     try {
-      do {
-        this._queued = false
-        if (shouldFetch) {
-          shouldFetch = false
-          await this._fetchRemote(opts?.silent !== undefined ? { silent: opts.silent } : undefined)
-        }
-        await this._doRefresh()
-      } while (this._queued && !this._disposed)
+      await run
     } finally {
-      this._refreshing = false
+      // A new pass may have started (and overwritten the field) between this run
+      // settling and the finally running — only clear if it's still ours.
+      if (this._inFlightRefresh === run) this._inFlightRefresh = undefined
     }
   }
 

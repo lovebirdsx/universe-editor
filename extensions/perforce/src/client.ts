@@ -170,6 +170,7 @@ export class PerforceClient {
   private _connection: ConnectionState = 'connected'
   private _refreshing = false
   private _queued = false
+  private _inFlightRefresh: Promise<void> | undefined
   /** Serializes reconcile-group mutations against full refreshes. `refresh` and
    *  `refreshReconcilePaths` both read-modify-write the shared reconcile state
    *  (`_reconcileFiles` / `_openedPaths`); without ordering, a watcher-driven
@@ -319,10 +320,15 @@ export class PerforceClient {
     }
     if (this._refreshing) {
       this._queued = true
+      // Resolve only once the in-flight pass (which observes the queued flag and
+      // runs another round) finishes, so a caller's promise means "the refresh I
+      // asked for has actually been served" — the SCM title Refresh button holds
+      // its disabled/spinner state for exactly this long.
+      await this._inFlightRefresh
       return
     }
     this._refreshing = true
-    await this._runSerial(async () => {
+    const run = this._runSerial(async () => {
       try {
         do {
           this._queued = false
@@ -332,6 +338,14 @@ export class PerforceClient {
         this._refreshing = false
       }
     })
+    this._inFlightRefresh = run
+    try {
+      await run
+    } finally {
+      // A new pass may have started (and overwritten the field) between this run
+      // settling and the finally running — only clear if it's still ours.
+      if (this._inFlightRefresh === run) this._inFlightRefresh = undefined
+    }
   }
 
   /** Serialize a reconcile-state mutation behind any in-flight refresh / reconcile

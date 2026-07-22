@@ -6,7 +6,13 @@
  *  perforceGraphViewState (module-level singleton, matching the renderer registries).
  *--------------------------------------------------------------------------------------------*/
 
-import { Emitter, observableValue, type Event, type IObservable } from '@universe-editor/platform'
+import {
+  Emitter,
+  observableValue,
+  type IDisposable,
+  type Event,
+  type IObservable,
+} from '@universe-editor/platform'
 import type {
   SwarmDashboardResult,
   SwarmReviewDetailDto,
@@ -115,9 +121,43 @@ export function notifyReviewMutated(reviewId: string): void {
   _onDidMutateReview.fire(reviewId)
 }
 
-/** Signal a manual refresh request (from the view title bar). */
-export function requestSwarmReviewsRefresh(): void {
-  _onDidRequestRefresh.fire()
+/**
+ * Manual-refresh acknowledgements: the title-bar Refresh command awaits the
+ * returned promise for its disabled/spinning state, so a request only resolves
+ * once the view's reload has actually settled. Acks are flushed by the mounted
+ * view via {@link resolveSwarmReviewsRefresh}; when no view is consuming (it
+ * can't be clicked then, but a programmatic caller might race startup), the
+ * request resolves immediately rather than hang.
+ */
+const _pendingRefreshAcks: Array<() => void> = []
+let _refreshConsumers = 0
+
+/** The mounted reviews view registers itself as the refresh consumer for the
+ *  lifetime of its subscription. */
+export function trackSwarmRefreshConsumer(): IDisposable {
+  _refreshConsumers++
+  return {
+    dispose: () => {
+      _refreshConsumers--
+      // Don't strand a request fired just before the view unmounted.
+      resolveSwarmReviewsRefresh()
+    },
+  }
+}
+
+/** Signal a manual refresh request (from the view title bar). Resolves when the
+ *  view's triggered reload has settled. */
+export function requestSwarmReviewsRefresh(): Promise<void> {
+  if (_refreshConsumers === 0) return Promise.resolve()
+  return new Promise((resolve) => {
+    _pendingRefreshAcks.push(resolve)
+    _onDidRequestRefresh.fire()
+  })
+}
+
+/** Called by the mounted view once the reload it triggered has settled. */
+export function resolveSwarmReviewsRefresh(): void {
+  for (const ack of _pendingRefreshAcks.splice(0)) ack()
 }
 
 const _reviewFilesViewMode = observableValue<SwarmReviewFilesViewMode>(

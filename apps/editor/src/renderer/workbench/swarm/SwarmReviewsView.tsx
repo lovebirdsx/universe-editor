@@ -51,9 +51,11 @@ import {
 import { useService } from '../useService.js'
 import { SwarmReviewEditorInput } from '../../services/editor/SwarmReviewEditorInput.js'
 import {
+  resolveSwarmReviewsRefresh,
   swarmNeedsActionCount,
   swarmReviewsViewState,
   swarmReviewEvents,
+  trackSwarmRefreshConsumer,
 } from '../../services/swarm/swarmViewState.js'
 import {
   swarmIgnoreStore,
@@ -198,11 +200,11 @@ export function SwarmReviewsView() {
   )
 
   const load = useCallback(
-    (attempt = 0, force = false) => {
+    (attempt = 0, force = false): Promise<void> => {
       setLoading(true)
       setError(null)
       const keywords = keywordRef.current.trim()
-      void commands
+      return commands
         .executeCommand<SwarmDashboardResult>(SwarmCommands.dashboard, {
           force,
           withStream: true,
@@ -211,9 +213,14 @@ export function SwarmReviewsView() {
         .then((r) => {
           // `undefined` means the perforce extension host hasn't registered the
           // command yet (activation races the view's first mount). Retry with a
-          // short backoff instead of caching an empty dashboard forever.
+          // short backoff instead of caching an empty dashboard forever. Chained
+          // so the returned promise (and the loading flag) covers the retries.
           if (r === undefined) {
-            if (attempt < 20) setTimeout(() => load(attempt + 1, force), 250)
+            if (attempt < 20) {
+              return new Promise<void>((res) =>
+                setTimeout(() => res(load(attempt + 1, force)), 250),
+              )
+            }
             return
           }
           setDashboard(r)
@@ -254,7 +261,7 @@ export function SwarmReviewsView() {
     // this is effectively "refresh on open". Any cached dashboard still paints
     // instantly (stale-while-revalidate); a first load that raced the extension
     // host's activation (command returns undefined) retries until it resolves.
-    load()
+    void load()
   }, [load])
 
   // Force the extension host to bypass its short-lived review-list cache and
@@ -262,14 +269,20 @@ export function SwarmReviewsView() {
   // or the user hit manual refresh. Verdicts are refreshed in place (load →
   // loadTransitions with force), never wiped first, so an active approvable
   // filter keeps the list narrow instead of flashing the full list.
-  const reload = useCallback(() => {
-    load(0, true)
-  }, [load])
+  const reload = useCallback((): Promise<void> => load(0, true), [load])
 
   useEffect(() => {
-    const d1 = swarmReviewEvents.onDidMutateReview(() => reload())
-    const d2 = swarmReviewEvents.onDidRequestRefresh(() => reload())
+    // The title-bar Refresh command awaits its request promise for the button's
+    // disabled/spinning state — settle it only after this triggered reload.
+    const consumer = trackSwarmRefreshConsumer()
+    const d1 = swarmReviewEvents.onDidMutateReview(() => {
+      void reload()
+    })
+    const d2 = swarmReviewEvents.onDidRequestRefresh(() => {
+      void reload().finally(() => resolveSwarmReviewsRefresh())
+    })
     return () => {
+      consumer.dispose()
       d1.dispose()
       d2.dispose()
     }
@@ -322,7 +335,7 @@ export function SwarmReviewsView() {
         setKeyword(stored)
         // Keyword is pushed down to the server query; re-load so restored text
         // narrows the list server-side, not just via the client-side filter.
-        load()
+        void load()
       }
     })
     return () => sub.dispose()
@@ -349,7 +362,7 @@ export function SwarmReviewsView() {
       swarmReviewsUiStore.setKeyword(value)
       keywordRef.current = value
       if (debounceRef.current) clearTimeout(debounceRef.current)
-      debounceRef.current = setTimeout(() => load(), KEYWORD_DEBOUNCE_MS)
+      debounceRef.current = setTimeout(() => void load(), KEYWORD_DEBOUNCE_MS)
     },
     [load],
   )
@@ -403,7 +416,7 @@ export function SwarmReviewsView() {
       const request: SwarmTransitionRequest = { reviewId: review.id, state: transition.state }
       if (transition.state.includes('commit')) request.commit = true
       await commands.executeCommand(SwarmCommands.transition, request)
-      reload()
+      void reload()
     },
     [commands, dialog, reload],
   )
@@ -424,7 +437,7 @@ export function SwarmReviewsView() {
         reviewId: review.id,
       })
       if (!succeeded) return
-      reload()
+      void reload()
     },
     [commands, dialog, reload],
   )

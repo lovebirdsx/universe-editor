@@ -173,6 +173,8 @@ export class WorkbenchSwarmPollTickAction extends Action2 {
  * Manual refresh for the Swarm Reviews list, shown as an icon in the view title
  * bar. Fires the refresh bus the mounted view subscribes to (it owns the fetch +
  * transitions cache), so this action stays free of any HTTP or service lookups.
+ * The returned promise settles when the view's reload does — the title button
+ * holds its disabled/spinning state for exactly that long.
  */
 export class RefreshSwarmReviewsAction extends Action2 {
   static readonly ID = 'swarm.refreshReviews'
@@ -194,7 +196,7 @@ export class RefreshSwarmReviewsAction extends Action2 {
     })
   }
 
-  override run(): void {
-    requestSwarmReviewsRefresh()
+  override async run(): Promise<void> {
+    await requestSwarmReviewsRefresh()
   }
 }

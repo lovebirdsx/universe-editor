@@ -18,6 +18,21 @@
   color: var(--color-foreground, #c8c8c8);
 }
 
+.actionBtn:disabled {
+  cursor: default;
+  background: transparent;
+}
+
+.spin {
+  animation: view-title-action-spin 1s linear infinite;
+}
+
+@keyframes view-title-action-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .actionFallback {
   font-size: 10px;
   font-family: inherit;

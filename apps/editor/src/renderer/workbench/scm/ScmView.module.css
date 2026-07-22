@@ -511,6 +511,21 @@
   background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
 }
 
+.actionButton:disabled {
+  cursor: default;
+  background: transparent;
+}
+
+.actionButtonSpin {
+  animation: actionButtonSpin 1s linear infinite;
+}
+
+@keyframes actionButtonSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* --- Title overflow menu --- */
 
 .overflowMenu {

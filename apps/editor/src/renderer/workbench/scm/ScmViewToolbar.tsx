@@ -30,6 +30,12 @@ function repoShortName(sc: IScmSourceControlModel): string {
   return i === -1 ? p : p.slice(i + 1)
 }
 
+/** Pending-command key: scoped to the repo so one repo's long-running refresh
+ * doesn't lock another repo's button. */
+function pendingKey(command: string, rootUri: string | undefined): string {
+  return `${command}@${rootUri ?? ''}`
+}
+
 export function ScmViewToolbar() {
   const scm = useService(IScmService)
   const commandService = useService(ICommandService)
@@ -43,6 +49,10 @@ export function ScmViewToolbar() {
   const selected = sourceControls.find((sc) => sc.rootUri === selectedRootUri) ?? sourceControls[0]
   const multi = sourceControls.length > 1
 
+  /** Commands currently in flight (keyed by repo); driving the disabled +
+   * spinner state of the title buttons until the command settles. */
+  const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set())
+
   const navActions = useMemo(
     () =>
       selected ? menuActions(MenuId.ScmTitle, { scmProvider: selected.id }, 'navigation') : [],
@@ -55,10 +65,23 @@ export function ScmViewToolbar() {
 
   const runCommand = useCallback(
     (command: string): void => {
-      void commandService.executeCommand(
-        command,
-        selected ? { rootUri: selected.rootUri, sourceControlId: selected.id } : undefined,
-      )
+      const key = pendingKey(command, selected?.rootUri)
+      setPending((prev) => (prev.has(key) ? prev : new Set(prev).add(key)))
+      void commandService
+        .executeCommand(
+          command,
+          selected ? { rootUri: selected.rootUri, sourceControlId: selected.id } : undefined,
+        )
+        // CommandService already logs the failure; the button must recover either way.
+        .catch(() => undefined)
+        .finally(() =>
+          setPending((prev) => {
+            if (!prev.has(key)) return prev
+            const next = new Set(prev)
+            next.delete(key)
+            return next
+          }),
+        )
     },
     [commandService, selected],
   )
@@ -143,7 +166,12 @@ export function ScmViewToolbar() {
         </button>
       )}
       {navActions.map((a) => (
-        <ActionButton key={a.id} action={a} onRun={() => runCommand(a.command)} />
+        <ActionButton
+          key={a.id}
+          action={a}
+          busy={pending.has(pendingKey(a.command, selected?.rootUri))}
+          onRun={() => runCommand(a.command)}
+        />
       ))}
       <button
         type="button"
