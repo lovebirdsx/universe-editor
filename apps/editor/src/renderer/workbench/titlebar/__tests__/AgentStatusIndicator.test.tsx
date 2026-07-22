@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import {
+  Emitter,
   ICommandService,
   InstantiationService,
   ServiceCollection,
@@ -16,6 +17,10 @@ import {
 import { ServicesContext } from '../../useService.js'
 import { IAcpSessionService } from '../../../services/acp/acpSessionService.js'
 import type { AcpSessionStatus, IAcpSession } from '../../../services/acp/acpSession.js'
+import {
+  ISessionSwitcherService,
+  type SessionStatusCounts,
+} from '../../../../shared/ipc/sessionSwitcher.js'
 import { AgentStatusIndicator } from '../AgentStatusIndicator.js'
 
 function makeSession(id: string, status: AcpSessionStatus) {
@@ -35,7 +40,21 @@ interface Rendered {
   sessionsObs: ISettableObservable<readonly IAcpSession[]>
 }
 
-function renderIndicator(sessions: IAcpSession[] | undefined, executed: string[] = []): Rendered {
+interface SwitcherStub {
+  readonly emitter: Emitter<SessionStatusCounts>
+  counts: SessionStatusCounts
+}
+
+function makeSwitcher(initial: SessionStatusCounts): SwitcherStub {
+  const emitter = new Emitter<SessionStatusCounts>()
+  return { emitter, counts: initial }
+}
+
+function renderIndicator(
+  sessions: IAcpSession[] | undefined,
+  executed: string[] = [],
+  switcher?: SwitcherStub,
+): Rendered {
   const sc = new ServiceCollection()
   const sessionsObs = observableValue<readonly IAcpSession[]>('test.sessions', sessions ?? [])
   if (sessions) {
@@ -43,6 +62,13 @@ function renderIndicator(sessions: IAcpSession[] | undefined, executed: string[]
       _serviceBrand: undefined,
       sessions: sessionsObs,
     } as unknown as IAcpSessionService)
+  }
+  if (switcher) {
+    sc.set(ISessionSwitcherService, {
+      _serviceBrand: undefined,
+      onDidChangeCounts: switcher.emitter.event,
+      getSessionCounts: () => Promise.resolve(switcher.counts),
+    } as unknown as ISessionSwitcherService)
   }
   sc.set(ICommandService, {
     _serviceBrand: undefined,
@@ -104,5 +130,27 @@ describe('AgentStatusIndicator', () => {
     renderIndicator([makeSession('a', 'running').session], executed)
     fireEvent.click(screen.getByTestId('titlebar-agent-status'))
     expect(executed).toEqual(['workbench.action.agent.switchSession'])
+  })
+
+  it('shows the cross-window aggregate from the switcher service', async () => {
+    const switcher = makeSwitcher({ running: 4, ask: 0 })
+    renderIndicator([makeSession('a', 'running').session], [], switcher)
+
+    // Seeds from the local count until the first fetch lands.
+    expect(screen.getByTestId('titlebar-agent-status').textContent).toContain('1')
+    await act(async () => {})
+    expect(screen.getByTestId('titlebar-agent-status').textContent).toContain('4')
+  })
+
+  it('follows aggregate updates pushed by main', async () => {
+    const switcher = makeSwitcher({ running: 1, ask: 0 })
+    renderIndicator([makeSession('a', 'running').session], [], switcher)
+    await act(async () => {})
+    expect(screen.getByTestId('titlebar-agent-status').textContent).toContain('1')
+
+    act(() => switcher.emitter.fire({ running: 2, ask: 1 }))
+    const pill = screen.getByTestId('titlebar-agent-status')
+    expect(pill.textContent).toContain('3')
+    expect(pill.className).toContain('agent-status--ask')
   })
 })

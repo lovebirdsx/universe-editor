@@ -33,6 +33,7 @@ import {
   AgentsSessionRestoreContribution,
 } from '../AgentsContributions.js'
 import { AgentNotificationContribution } from '../AgentNotificationContribution.js'
+import { SessionStatusCountsContribution } from '../SessionStatusCountsContribution.js'
 import { SwarmReviewNotificationContribution } from '../SwarmReviewNotificationContribution.js'
 import { FirstRunAgentOnboardingContribution } from '../FirstRunAgentOnboardingContribution.js'
 import { SessionShutdownParticipant } from '../SessionShutdownParticipant.js'
@@ -264,6 +265,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.agentNotification',
   AgentNotificationContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Report this window's running/ask session counts to main for the cross-window
+// title-bar pill. AfterRestore so the session service + IPC proxy are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.sessionStatusCounts',
+  SessionStatusCountsContribution,
   WorkbenchPhase.AfterRestore,
 )
 

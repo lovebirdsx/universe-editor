@@ -16,6 +16,7 @@ import {
 import { ServiceChannels } from '../../shared/ipc/channelNames.js'
 import { type IRendererLifecycleService } from '../../shared/ipc/lifecycleService.js'
 import { type IRendererSessionsService } from '../../shared/ipc/sessionSwitcher.js'
+import { createWindowScopedSessionSwitcher } from '../services/sessionSwitcher/sessionSwitcherMainService.js'
 import { createMainProtocolForWindow } from './electronProtocol.js'
 import type { ApplicationServices, WindowScopedServices } from '../window/scopedServicesFactory.js'
 import { createWindowScopedUpdateService } from '../services/update/updateMainService.js'
@@ -103,7 +104,7 @@ export function bootstrapWindowIpc(
   )
   server.registerChannel(
     ServiceChannels.SessionSwitcher,
-    ProxyChannel.fromService(app.sessionSwitcher),
+    ProxyChannel.fromService(createWindowScopedSessionSwitcher(app.sessionSwitcher, win.id)),
   )
 
   const rendererLifecycle = ProxyChannel.toService<IRendererLifecycleService>(

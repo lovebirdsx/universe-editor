@@ -2,21 +2,28 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Title-bar pill mirroring VSCode's agents control: always visible so the title
  *  bar layout stays stable. The badge counts running sessions plus sessions
- *  waiting on a question/permission (amber when any waits); click opens the
- *  cross-window session switcher (Alt+S).
+ *  waiting on a question/permission across EVERY open window (aggregated in main
+ *  and pushed back over ISessionSwitcherService.onDidChangeCounts; amber when any
+ *  waits). Falls back to this window's own sessions when the switcher service is
+ *  unavailable. Click opens the cross-window session switcher (Alt+S).
  *--------------------------------------------------------------------------------------------*/
 
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Bot } from 'lucide-react'
 import { ICommandService, constObservable, derived, localize } from '@universe-editor/platform'
 import { useObservable, useOptionalService, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import { computeSessionDisplayStatus } from '../../services/acp/acpSessionStatus.js'
+import {
+  ISessionSwitcherService,
+  type SessionStatusCounts,
+} from '../../../shared/ipc/sessionSwitcher.js'
 import { SwitchSessionAction } from '../../actions/agentSessionActions.js'
 import styles from './TitleBar.module.css'
 
 export function AgentStatusIndicator() {
   const sessionsService = useOptionalService(IAcpSessionService)
+  const switcher = useOptionalService(ISessionSwitcherService)
   const commandService = useService(ICommandService)
 
   // Primitives keep the deriveds' default strictEquals from firing on every
@@ -52,8 +59,26 @@ export function AgentStatusIndicator() {
     [sessionsService],
   )
 
-  const runningCount = useObservable(runningCountObs)
-  const askCount = useObservable(askCountObs)
+  // Cross-window aggregate from main. Until the first fetch/event lands, the
+  // local counts below seed the pill so it never flashes 0 on startup.
+  const [globalCounts, setGlobalCounts] = useState<SessionStatusCounts>()
+  useEffect(() => {
+    if (!switcher) return
+    let alive = true
+    void switcher.getSessionCounts().then((counts) => {
+      if (alive) setGlobalCounts(counts)
+    })
+    const sub = switcher.onDidChangeCounts((counts) => setGlobalCounts(counts))
+    return () => {
+      alive = false
+      sub.dispose()
+    }
+  }, [switcher])
+
+  const localRunning = useObservable(runningCountObs)
+  const localAsk = useObservable(askCountObs)
+  const runningCount = globalCounts?.running ?? localRunning
+  const askCount = globalCounts?.ask ?? localAsk
 
   const total = runningCount + askCount
   const hasAsk = askCount > 0

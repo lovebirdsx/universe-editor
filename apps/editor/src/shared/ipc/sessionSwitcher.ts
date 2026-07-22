@@ -9,7 +9,7 @@
  *      window to list its live sessions and to reveal one locally.
  *--------------------------------------------------------------------------------------------*/
 
-import { createDecorator } from '@universe-editor/platform'
+import { createDecorator, type Event } from '@universe-editor/platform'
 
 /** A live session as reported by a renderer, before main tags window metadata. */
 export interface RendererSessionSummary {
@@ -27,6 +27,12 @@ export interface SessionSummary extends RendererSessionSummary {
   readonly workspaceName: string
 }
 
+/** Live running/ask session counts. */
+export interface SessionStatusCounts {
+  readonly running: number
+  readonly ask: number
+}
+
 /** Forward channel: implemented in main, called from the focused renderer. */
 export interface ISessionSwitcherService {
   readonly _serviceBrand: undefined
@@ -34,6 +40,15 @@ export interface ISessionSwitcherService {
   getAllSessions(): Promise<readonly SessionSummary[]>
   /** Focus the owning window and open the session in its editor area. */
   reveal(windowId: number, sessionId: string): Promise<void>
+  /** Aggregate running/ask counts across every open window. */
+  getSessionCounts(): Promise<SessionStatusCounts>
+  /**
+   * Report the calling window's live counts. The channel is window-scoped (main
+   * tags the windowId); main rebroadcasts the aggregate via onDidChangeCounts.
+   */
+  reportSessionCounts(counts: SessionStatusCounts): Promise<void>
+  /** Fires in every window when the aggregate counts change. */
+  readonly onDidChangeCounts: Event<SessionStatusCounts>
 }
 
 export const ISessionSwitcherService =
