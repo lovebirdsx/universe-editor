@@ -1,5 +1,40 @@
 [
   {
+    "version": "0.1.47",
+    "date": "2026-07-22",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "标题栏按钮执行期间显示禁用+旋转加载态",
+          "修复/命令开头的session，标题和首条消息处理不正确的bug",
+          "标题栏重构，加强可视化表达",
+          "Activity Bar Swarm角标联动needsAction计数",
+          "重构标题栏路径确保工作区路径一直显示",
+          "claude凭据库支持网关模型预设与快速模型配置，譬如kimi-k3",
+          "Agent 配置添加“打开 Codex/Claude 配置文件”命令",
+          "会话列表加入右键菜单支持",
+          "标题栏重构为三区布局并显示文件路径",
+          "标签页右键“复制名称”支持所有编辑器类型"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "codex ACP session上报transcriptPath支持在文件管理器中定位",
+          "禁止ACP聊天输入框的拼写检查",
+          "修复swarm review标题为 (no description) 的bug",
+          "默认展开agent的推理摘要消息",
+          "修复虚拟化滚动中部定位歧义导致的假阳性",
+          "swarm审核通知排除当前用户创建的review",
+          "修复最大化窗口后二级侧栏宽度被重置的问题"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.46",
     "date": "2026-07-21",
     "groups": [
