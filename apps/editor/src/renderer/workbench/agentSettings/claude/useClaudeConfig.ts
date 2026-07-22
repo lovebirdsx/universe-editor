@@ -37,6 +37,7 @@ const LOGGED_OUT: ClaudeAuthStatus = { loggedIn: false, expired: false }
 const API_KEY = 'ANTHROPIC_API_KEY'
 const AUTH_TOKEN = 'ANTHROPIC_AUTH_TOKEN'
 const BASE_URL = 'ANTHROPIC_BASE_URL'
+const SMALL_FAST_MODEL = 'ANTHROPIC_SMALL_FAST_MODEL'
 
 export function useClaudeConfig(): UseClaudeConfig {
   const service = useService<IClaudeConfigService>(IClaudeConfigService)
@@ -120,15 +121,29 @@ export function useClaudeConfig(): UseClaudeConfig {
 
   const applyProfile = useCallback(
     async (profile: ClaudeCredentialProfile) => {
-      const env: Record<string, string | null> =
-        profile.kind === 'apiKey'
-          ? { [API_KEY]: profile.apiKey ?? '', [AUTH_TOKEN]: null, [BASE_URL]: null }
-          : {
-              [AUTH_TOKEN]: profile.authToken ?? '',
-              [BASE_URL]: profile.baseUrl ?? '',
-              [API_KEY]: null,
-            }
-      await patch({ env })
+      if (profile.kind === 'apiKey') {
+        await patch({
+          env: {
+            [API_KEY]: profile.apiKey ?? '',
+            [AUTH_TOKEN]: null,
+            [BASE_URL]: null,
+            [SMALL_FAST_MODEL]: null,
+          },
+        })
+        return
+      }
+      // gateway: inject token + url, plus the bundled model preset when present.
+      // A blank model field means "don't touch the current model" (null skips it).
+      const model = profile.model?.trim() ? profile.model.trim() : undefined
+      await patch({
+        ...(model !== undefined ? { model } : {}),
+        env: {
+          [AUTH_TOKEN]: profile.authToken ?? '',
+          [BASE_URL]: profile.baseUrl ?? '',
+          [API_KEY]: null,
+          [SMALL_FAST_MODEL]: profile.smallFastModel?.trim() ? profile.smallFastModel.trim() : null,
+        },
+      })
     },
     [patch],
   )

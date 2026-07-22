@@ -33,13 +33,22 @@ import styles from '../AgentSettingsEditor.module.css'
 const API_KEY = 'ANTHROPIC_API_KEY'
 const AUTH_TOKEN = 'ANTHROPIC_AUTH_TOKEN'
 const BASE_URL = 'ANTHROPIC_BASE_URL'
+const SMALL_FAST_MODEL = 'ANTHROPIC_SMALL_FAST_MODEL'
 
 /** True when the profile's credentials exactly match the active settings.json env. */
-function isProfileActive(profile: ClaudeCredentialProfile, env: Record<string, string>): boolean {
+function isProfileActive(
+  profile: ClaudeCredentialProfile,
+  env: Record<string, string>,
+  model: string | undefined,
+): boolean {
   if (profile.kind === 'apiKey') {
     return !env[AUTH_TOKEN] && !env[BASE_URL] && !!env[API_KEY] && env[API_KEY] === profile.apiKey
   }
-  return env[AUTH_TOKEN] === profile.authToken && env[BASE_URL] === profile.baseUrl
+  if (env[AUTH_TOKEN] !== profile.authToken || env[BASE_URL] !== profile.baseUrl) return false
+  // A model preset is part of the gateway identity: if the profile pins a model,
+  // it is only "in use" when settings.model matches too.
+  const pinned = profile.model?.trim()
+  return !pinned || model === pinned
 }
 
 /** Whether the OAuth login is the credential the agent will currently use. */
@@ -65,7 +74,7 @@ export function AuthenticationPanel({ config }: { config: UseClaudeConfig }) {
 
   return (
     <div className={styles['panel']}>
-      <CredentialLibrary config={config} env={env} />
+      <CredentialLibrary config={config} env={env} model={settings.model} />
 
       <section className={styles['section']}>
         <h2 className={styles['sectionTitle']}>
@@ -93,9 +102,11 @@ export function AuthenticationPanel({ config }: { config: UseClaudeConfig }) {
 function CredentialLibrary({
   config,
   env,
+  model,
 }: {
   config: UseClaudeConfig
   env: Record<string, string>
+  model: string | undefined
 }) {
   const notification = useService(INotificationService)
   const { profiles, applyProfile, saveProfile, deleteProfile } = config
@@ -146,7 +157,7 @@ function CredentialLibrary({
             <ProfileRow
               key={profile.id}
               profile={profile}
-              active={isProfileActive(profile, env)}
+              active={isProfileActive(profile, env, model)}
               onUse={() => void apply(profile)}
               onEdit={() => setEditing(profile)}
               onDelete={() => void deleteProfile(profile.id)}
@@ -192,7 +203,7 @@ function ProfileRow({
   const detail =
     profile.kind === 'apiKey'
       ? mask(profile.apiKey)
-      : `${profile.baseUrl ?? ''} · ${mask(profile.authToken)}`
+      : [profile.baseUrl ?? '', profile.model, mask(profile.authToken)].filter((s) => s).join(' · ')
   return (
     <div className={styles['profileRow']}>
       <Icon size={16} strokeWidth={1.75} className={styles['navIcon']} />
@@ -238,6 +249,8 @@ function ProfileForm({
   const [apiKey, setApiKey] = useState(initial?.apiKey ?? '')
   const [authToken, setAuthToken] = useState(initial?.authToken ?? '')
   const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? '')
+  const [model, setModel] = useState(initial?.model ?? '')
+  const [smallFastModel, setSmallFastModel] = useState(initial?.smallFastModel ?? '')
 
   const valid =
     label.trim() !== '' &&
@@ -245,12 +258,16 @@ function ProfileForm({
 
   const save = useCallback(async () => {
     const base = { id: initial?.id ?? newId(), label: label.trim(), kind }
-    const profile: ClaudeCredentialProfile =
-      kind === 'apiKey'
-        ? { ...base, apiKey: apiKey.trim() }
-        : { ...base, authToken: authToken.trim(), baseUrl: baseUrl.trim() }
+    let profile: ClaudeCredentialProfile
+    if (kind === 'apiKey') {
+      profile = { ...base, apiKey: apiKey.trim() }
+    } else {
+      profile = { ...base, authToken: authToken.trim(), baseUrl: baseUrl.trim() }
+      if (model.trim()) profile.model = model.trim()
+      if (smallFastModel.trim()) profile.smallFastModel = smallFastModel.trim()
+    }
     await onSave(profile)
-  }, [initial?.id, label, kind, apiKey, authToken, baseUrl, onSave])
+  }, [initial?.id, label, kind, apiKey, authToken, baseUrl, model, smallFastModel, onSave])
 
   return (
     <div className={styles['profileForm']}>
@@ -316,6 +333,32 @@ function ProfileForm({
               value={authToken}
               placeholder="sk-…"
               onChange={(e) => setAuthToken(e.target.value)}
+            />
+          </div>
+          <div className={styles['field']}>
+            <label className={styles['label']}>
+              {localize('agentSettings.auth.form.model', 'Model')}
+            </label>
+            <div className={styles['desc']}>
+              {localize(
+                'agentSettings.auth.form.model.desc',
+                'Model to request from this gateway (e.g. kimi-k3). Applied to Settings.model when you use this credential. Leave empty to keep the current model.',
+              )}
+            </div>
+            <Input value={model} placeholder="kimi-k3" onChange={(e) => setModel(e.target.value)} />
+          </div>
+          <div className={styles['field']}>
+            <label className={styles['label']}>{`env.${SMALL_FAST_MODEL}`}</label>
+            <div className={styles['desc']}>
+              {localize(
+                'agentSettings.auth.form.smallFastModel.desc',
+                'Optional fast/background model this gateway serves. Leave empty to unset it.',
+              )}
+            </div>
+            <Input
+              value={smallFastModel}
+              placeholder="kimi-k3-mini"
+              onChange={(e) => setSmallFastModel(e.target.value)}
             />
           </div>
         </>

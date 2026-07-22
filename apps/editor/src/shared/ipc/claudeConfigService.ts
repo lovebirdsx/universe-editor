@@ -85,6 +85,16 @@ export interface ClaudeCredentialProfile {
   authToken?: string
   /** Present when `kind === 'gateway'`. */
   baseUrl?: string
+  /**
+   * Optional model preset bundled with a `gateway` profile. A custom gateway
+   * (Kimi's Anthropic-compatible endpoint, a LiteLLM proxy fronting GPT, …)
+   * serves a different model catalog than Anthropic, so the model to request is
+   * really part of the credential. When set, applying the profile also writes
+   * `settings.model`; clearing it leaves the current model untouched.
+   */
+  model?: string
+  /** Optional fast/background model for a `gateway` profile (`ANTHROPIC_SMALL_FAST_MODEL`). */
+  smallFastModel?: string
 }
 
 export interface IClaudeConfigService {

@@ -1310,6 +1310,11 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'agentSettings.auth.form.kind': '类型',
   'agentSettings.auth.form.label': '名称',
   'agentSettings.auth.form.label.ph': '例如 Personal、Work gateway',
+  'agentSettings.auth.form.model': '模型',
+  'agentSettings.auth.form.model.desc':
+    '向该网关请求的模型（例如 kimi-k3）。使用此凭据时会一并写入 Settings.model。留空则保持当前模型。',
+  'agentSettings.auth.form.smallFastModel.desc':
+    '该网关提供的可选快速 / 后台模型。留空则清除该项。',
   'agentSettings.auth.gateway': '自定义网关 / 认证 token',
   'agentSettings.auth.inUse': '使用中',
   'agentSettings.auth.library': '已保存凭据',
