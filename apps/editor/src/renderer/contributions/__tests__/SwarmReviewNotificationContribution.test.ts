@@ -37,8 +37,11 @@ function review(id: string, overrides: Partial<SwarmReviewDto> = {}): SwarmRevie
   }
 }
 
-function dashboard(needsAction: SwarmReviewDto[]): SwarmDashboardResult {
-  return { needsAction, authored: [], participating: [] }
+function dashboard(
+  needsAction: SwarmReviewDto[],
+  authored: SwarmReviewDto[] = [],
+): SwarmDashboardResult {
+  return { needsAction, authored, participating: [] }
 }
 
 function fakeStorage(seed: Record<string, unknown> = {}): IStorageService {
@@ -150,8 +153,8 @@ async function setup(opts: SetupOpts = {}) {
     dismiss,
     executeCommand,
     tick,
-    setDashboard: (needsAction: SwarmReviewDto[]) => {
-      current = dashboard(needsAction)
+    setDashboard: (needsAction: SwarmReviewDto[], authored: SwarmReviewDto[] = []) => {
+      current = dashboard(needsAction, authored)
     },
     refresh: () => instance.refresh(),
   }
@@ -226,6 +229,16 @@ describe('SwarmReviewNotificationContribution', () => {
     await t.refresh()
     expect(t.notify).toHaveBeenCalledTimes(1)
     expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #1: review 1' })
+    t.instance.dispose()
+  })
+
+  it('excludes reviews authored by the current user from the notification', async () => {
+    const t = await setup()
+    const ownReview = review('1', { author: 'alice' })
+    t.setDashboard([ownReview, review('2', { author: 'bob' })], [ownReview])
+    await t.refresh()
+    expect(t.notify).toHaveBeenCalledTimes(1)
+    expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #2: review 2' })
     t.instance.dispose()
   })
 

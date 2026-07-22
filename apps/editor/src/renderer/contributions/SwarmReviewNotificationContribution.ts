@@ -134,14 +134,17 @@ export class SwarmReviewNotificationContribution
     }
   }
 
-  /** Reproduce the sidebar's "Needs My Action" list, sans the keyword box: apply the
-   *  author / approvable-only filters, then drop the client-side ignored set. */
+  /** Reproduce the sidebar's "Needs My Action" list, sans the keyword box: exclude
+   *  reviews authored by the current user, apply author / approvable-only filters,
+   *  then drop the client-side ignored set. */
   private async _computeActionable(dashboard: SwarmDashboardResult): Promise<SwarmReviewDto[]> {
+    const authoredIds = new Set(dashboard.authored.map((review) => review.id))
+    const needsAction = dashboard.needsAction.filter((review) => !authoredIds.has(review.id))
     const config = readSwarmFilterConfig(this._config)
     const transitions = config.needsActionApprovableOnly
-      ? await this._loadTransitions(dashboard.needsAction)
+      ? await this._loadTransitions(needsAction)
       : {}
-    const filtered = filterNeedsAction(dashboard.needsAction, config, transitions)
+    const filtered = filterNeedsAction(needsAction, config, transitions)
     const ignoredIds = new Set(swarmIgnoreStore.list())
     return splitIgnored(filtered, ignoredIds).active
   }
