@@ -87,7 +87,7 @@ export type CodexSettingsPatch = {
 
 /**
  * A saved credential profile in the editor's own library
- * (`<codexHome>/.universe-editor/credential-profiles.json`). The user *applies* a
+ * (`aiSettings.json` under `agentSettings.codex`). The user *applies* a
  * profile to make it the active credential via `applyCredential`: an API-key
  * profile writes `OPENAI_API_KEY` into `auth.json`; a gateway profile writes a
  * self-contained `[model_providers.codex-gateway]` into `config.toml`.
@@ -105,6 +105,15 @@ export interface CodexCredentialProfile {
   apiKey?: string
   /** Present when `kind === 'gateway'` — the compatible endpoint base URL. */
   baseUrl?: string
+}
+
+/** An unfinished credential form, retained when the settings page is left. */
+export interface CodexCredentialDraft {
+  editingProfileId?: string
+  kind: CodexCredentialKind
+  label: string
+  apiKey: string
+  baseUrl: string
 }
 
 /**
@@ -159,12 +168,16 @@ export interface ICodexConfigService {
    */
   readAuthStatus(): Promise<CodexAuthStatus>
   /**
-   * Read the editor's saved credential library. Returns `[]` when the file is
-   * absent or malformed. This library is separate from auth.json / config.toml.
+   * Read the editor's saved credential library from aiSettings.json. Returns `[]`
+   * when absent or malformed. This library is separate from auth.json / config.toml.
    */
   readProfiles(): Promise<CodexCredentialProfile[]>
-  /** Replace the saved credential library on disk (atomic write). */
+  /** Replace the saved credential library in aiSettings.json (atomic merge). */
   writeProfiles(profiles: CodexCredentialProfile[]): Promise<void>
+  /** Read the unfinished Authentication form, if any. */
+  readCredentialDraft(): Promise<CodexCredentialDraft | undefined>
+  /** Persist or clear the unfinished Authentication form. */
+  writeCredentialDraft(draft: CodexCredentialDraft | undefined): Promise<void>
 }
 
 export const ICodexConfigService = createDecorator<ICodexConfigService>('codexConfigService')

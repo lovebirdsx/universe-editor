@@ -11,6 +11,13 @@ import { join } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CodexConfigMainService } from '../codexConfigMainService.js'
+import type { IConfigLocationService } from '../../../../shared/ipc/configLocationService.js'
+
+function configLocation(dir: string): IConfigLocationService {
+  return {
+    getInfo: () => Promise.resolve({ dir, origin: 'default', locked: false }),
+  } as IConfigLocationService
+}
 
 /** Build an unsigned JWT whose payload carries the given claims. */
 function makeJwt(claims: Record<string, unknown>): string {
@@ -81,6 +88,26 @@ describe('CodexConfigMainService', () => {
     await svc.patch({ model: 'gpt-5.5' })
     const entries = await fs.readdir(dir)
     expect(entries).toEqual(['config.toml'])
+  })
+
+  it('stores profiles and unfinished authentication drafts in aiSettings.json', async () => {
+    const configDir = join(dir, 'editor-settings')
+    svc = new CodexConfigMainService(configPath, undefined, configLocation(configDir))
+    await svc.writeProfiles([{ id: 'work', label: 'Work', kind: 'apiKey', apiKey: 'sk-work' }])
+    await svc.writeCredentialDraft({
+      kind: 'gateway',
+      label: 'Draft gateway',
+      apiKey: 'sk-draft',
+      baseUrl: 'https://gateway.example.com/v1',
+    })
+
+    expect(await svc.readProfiles()).toEqual([
+      { id: 'work', label: 'Work', kind: 'apiKey', apiKey: 'sk-work' },
+    ])
+    expect(await svc.readCredentialDraft()).toMatchObject({ label: 'Draft gateway' })
+    const stored = JSON.parse(await fs.readFile(join(configDir, 'aiSettings.json'), 'utf8'))
+    expect(stored.agentSettings.codex.authentication.profiles).toHaveLength(1)
+    expect(stored.agentSettings.codex.authentication.draft.apiKey).toBe('sk-draft')
   })
 
   describe('applyCredential', () => {

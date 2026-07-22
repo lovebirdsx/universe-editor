@@ -38,7 +38,6 @@ import {
   type AiRequestOptions,
   type AiResolvedGroup,
   type AiResponse,
-  type AiSettingsFile,
   type AiVendorDescriptor,
 } from '@universe-editor/platform'
 import { type ParseError, parse } from 'jsonc-parser'
@@ -347,10 +346,25 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     await mkdir(dir, { recursive: true })
     const path = join(dir, AI_SETTINGS_FILE)
     this._suppressUntil = Date.now() + 500
-    const file: AiSettingsFile = {
-      groups,
-      ...(hasAnyActive(activeModels) ? { activeModels } : {}),
+    // Credential libraries and unfinished agent-authentication forms share this
+    // file. Re-read it immediately before writing so model changes preserve state
+    // written by the agent settings services.
+    let existing: Record<string, unknown> = {}
+    try {
+      const raw = await readFile(path, 'utf8')
+      const parsed: unknown = parse(raw, [], { allowTrailingComma: true })
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        existing = parsed as Record<string, unknown>
+      }
+    } catch {
+      // The normal write below restores a missing or malformed file.
     }
+    const file: Record<string, unknown> = {
+      ...existing,
+      groups,
+    }
+    if (hasAnyActive(activeModels)) file.activeModels = activeModels
+    else delete file.activeModels
     const tmp = `${path}.${process.pid}.tmp`
     await writeFile(tmp, JSON.stringify(file, null, 2) + '\n', 'utf8')
     await rename(tmp, path)

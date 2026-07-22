@@ -11,10 +11,11 @@
  *  ChatGPT).
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ICodexConfigService,
   type CodexAuthStatus,
+  type CodexCredentialDraft,
   type CodexCredentialProfile,
   type CodexSettings,
   type CodexSettingsPatch,
@@ -27,12 +28,14 @@ export interface UseCodexConfig {
   readonly configPath: string
   readonly authStatus: CodexAuthStatus
   readonly profiles: readonly CodexCredentialProfile[]
+  readonly credentialDraft: CodexCredentialDraft | undefined
   patch(patch: CodexSettingsPatch): Promise<void>
   reload(): Promise<void>
   reloadAuthStatus(): Promise<CodexAuthStatus>
   /** Insert or update a profile by id, persisting the whole library. */
   saveProfile(profile: CodexCredentialProfile): Promise<void>
   deleteProfile(id: string): Promise<void>
+  saveCredentialDraft(draft: CodexCredentialDraft | undefined): Promise<void>
   /** Make a profile the active credential (atomic auth.json + config.toml). */
   applyProfile(profile: CodexCredentialProfile): Promise<void>
   /**
@@ -51,18 +54,22 @@ export function useCodexConfig(): UseCodexConfig {
   const [configPath, setConfigPath] = useState('')
   const [authStatus, setAuthStatus] = useState<CodexAuthStatus>(LOGGED_OUT)
   const [profiles, setProfiles] = useState<readonly CodexCredentialProfile[]>([])
+  const [credentialDraft, setCredentialDraft] = useState<CodexCredentialDraft | undefined>()
+  const draftWrite = useRef<Promise<void>>(Promise.resolve())
 
   const loadAll = useCallback(async () => {
-    const [next, path, status, library] = await Promise.all([
+    const [next, path, status, library, draft] = await Promise.all([
       service.read(),
       service.configPath(),
       service.readAuthStatus(),
       service.readProfiles(),
+      service.readCredentialDraft(),
     ])
     setSettings(next)
     setConfigPath(path)
     setAuthStatus(status)
     setProfiles(library)
+    setCredentialDraft(draft)
     setLoaded(true)
   }, [service])
 
@@ -77,17 +84,19 @@ export function useCodexConfig(): UseCodexConfig {
   useEffect(() => {
     let active = true
     void (async () => {
-      const [next, path, status, library] = await Promise.all([
+      const [next, path, status, library, draft] = await Promise.all([
         service.read(),
         service.configPath(),
         service.readAuthStatus(),
         service.readProfiles(),
+        service.readCredentialDraft(),
       ])
       if (!active) return
       setSettings(next)
       setConfigPath(path)
       setAuthStatus(status)
       setProfiles(library)
+      setCredentialDraft(draft)
       setLoaded(true)
     })()
     // Refresh login status live when auth.json changes on disk (e.g. once the
@@ -135,6 +144,18 @@ export function useCodexConfig(): UseCodexConfig {
     [service],
   )
 
+  const saveCredentialDraft = useCallback(
+    (draft: CodexCredentialDraft | undefined) => {
+      setCredentialDraft(draft)
+      const write = draftWrite.current
+        .catch(() => undefined)
+        .then(() => service.writeCredentialDraft(draft))
+      draftWrite.current = write
+      return write
+    },
+    [service],
+  )
+
   const applyProfile = useCallback(
     async (profile: CodexCredentialProfile) => {
       // One atomic main-process step keeps auth.json + config.toml consistent.
@@ -166,11 +187,13 @@ export function useCodexConfig(): UseCodexConfig {
     configPath,
     authStatus,
     profiles,
+    credentialDraft,
     patch,
     reload,
     reloadAuthStatus,
     saveProfile,
     deleteProfile,
+    saveCredentialDraft,
     applyProfile,
     switchToChatgptLogin,
   }

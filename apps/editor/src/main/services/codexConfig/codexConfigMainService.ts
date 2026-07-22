@@ -28,12 +28,22 @@ import {
 } from '@universe-editor/platform'
 import type {
   CodexAuthStatus,
+  CodexCredentialDraft,
   CodexCredentialIntent,
   CodexCredentialProfile,
   CodexSettings,
   CodexSettingsPatch,
   ICodexConfigService,
 } from '../../../shared/ipc/codexConfigService.js'
+import type { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
+import { readAiSettingsAgentState, updateAiSettingsAgentState } from '../ai/aiSettingsAgentState.js'
+
+interface CodexAgentSettingsState {
+  authentication?: {
+    profiles?: CodexCredentialProfile[]
+    draft?: CodexCredentialDraft
+  }
+}
 
 /** Mirrors Codex's own resolution of `$CODEX_HOME` (defaults to `~/.codex`). */
 function defaultConfigPath(): string {
@@ -79,6 +89,7 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
   constructor(
     private readonly _configPath: string = defaultConfigPath(),
     @ILoggerService loggerService?: ILoggerService,
+    private readonly _configLocation?: IConfigLocationService,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'codexConfig', name: 'Codex Config' })
@@ -204,6 +215,62 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
   }
 
   async readProfiles(): Promise<CodexCredentialProfile[]> {
+    if (this._configLocation) {
+      const state = await readAiSettingsAgentState<CodexAgentSettingsState>(
+        this._configLocation,
+        'codex',
+      )
+      const profiles = state?.authentication?.profiles
+      if (Array.isArray(profiles)) return profiles
+      const legacyProfiles = await this._readLegacyProfiles()
+      if (legacyProfiles.length > 0) await this.writeProfiles(legacyProfiles)
+      return legacyProfiles
+    }
+    return this._readLegacyProfiles()
+  }
+
+  async writeProfiles(profiles: CodexCredentialProfile[]): Promise<void> {
+    if (this._configLocation) {
+      await updateAiSettingsAgentState<CodexAgentSettingsState>(
+        this._configLocation,
+        'codex',
+        (current) => ({
+          ...current,
+          authentication: { ...current?.authentication, profiles },
+        }),
+      )
+      this._logger.info(`wrote ${profiles.length} Codex credential profile(s) to aiSettings.json`)
+      return
+    }
+    const path = this._profilesPath()
+    await this._writeJsonAtomic(path, { profiles })
+    this._logger.info(`wrote ${profiles.length} credential profile(s) to ${path}`)
+  }
+
+  async readCredentialDraft(): Promise<CodexCredentialDraft | undefined> {
+    if (!this._configLocation) return undefined
+    const state = await readAiSettingsAgentState<CodexAgentSettingsState>(
+      this._configLocation,
+      'codex',
+    )
+    return state?.authentication?.draft
+  }
+
+  async writeCredentialDraft(draft: CodexCredentialDraft | undefined): Promise<void> {
+    if (!this._configLocation) return
+    await updateAiSettingsAgentState<CodexAgentSettingsState>(
+      this._configLocation,
+      'codex',
+      (current) => {
+        const authentication = { ...current?.authentication }
+        if (draft === undefined) delete authentication.draft
+        else authentication.draft = draft
+        return { ...current, authentication }
+      },
+    )
+  }
+
+  private async _readLegacyProfiles(): Promise<CodexCredentialProfile[]> {
     const path = this._profilesPath()
     let raw: string
     try {
@@ -221,12 +288,6 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
       this._logger.warn(`credential-profiles.json is not valid JSON at ${path}`)
       return []
     }
-  }
-
-  async writeProfiles(profiles: CodexCredentialProfile[]): Promise<void> {
-    const path = this._profilesPath()
-    await this._writeJsonAtomic(path, { profiles })
-    this._logger.info(`wrote ${profiles.length} credential profile(s) to ${path}`)
   }
 
   /**

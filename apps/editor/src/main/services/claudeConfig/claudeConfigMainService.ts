@@ -20,11 +20,21 @@ import {
 } from '@universe-editor/platform'
 import type {
   ClaudeAuthStatus,
+  ClaudeCredentialDraft,
   ClaudeCredentialProfile,
   ClaudeSettings,
   ClaudeSettingsPatch,
   IClaudeConfigService,
 } from '../../../shared/ipc/claudeConfigService.js'
+import type { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
+import { readAiSettingsAgentState, updateAiSettingsAgentState } from '../ai/aiSettingsAgentState.js'
+
+interface ClaudeAgentSettingsState {
+  authentication?: {
+    profiles?: ClaudeCredentialProfile[]
+    draft?: ClaudeCredentialDraft
+  }
+}
 
 /** Mirrors the vendor agent's resolution (`acp-agent.ts` CLAUDE_CONFIG_DIR). */
 function defaultSettingsPath(): string {
@@ -40,6 +50,7 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
   constructor(
     private readonly _settingsPath: string = defaultSettingsPath(),
     @ILoggerService loggerService?: ILoggerService,
+    private readonly _configLocation?: IConfigLocationService,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'claudeConfig', name: 'Claude Config' })
@@ -115,6 +126,62 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
   }
 
   async readProfiles(): Promise<ClaudeCredentialProfile[]> {
+    if (this._configLocation) {
+      const state = await readAiSettingsAgentState<ClaudeAgentSettingsState>(
+        this._configLocation,
+        'claude',
+      )
+      const profiles = state?.authentication?.profiles
+      if (Array.isArray(profiles)) return profiles
+      const legacyProfiles = await this._readLegacyProfiles()
+      if (legacyProfiles.length > 0) await this.writeProfiles(legacyProfiles)
+      return legacyProfiles
+    }
+    return this._readLegacyProfiles()
+  }
+
+  async writeProfiles(profiles: ClaudeCredentialProfile[]): Promise<void> {
+    if (this._configLocation) {
+      await updateAiSettingsAgentState<ClaudeAgentSettingsState>(
+        this._configLocation,
+        'claude',
+        (current) => ({
+          ...current,
+          authentication: { ...current?.authentication, profiles },
+        }),
+      )
+      this._logger.info(`wrote ${profiles.length} Claude credential profile(s) to aiSettings.json`)
+      return
+    }
+    const path = this._profilesPath()
+    await this._writeAtomicTo(path, { profiles })
+    this._logger.info(`wrote ${profiles.length} credential profile(s) to ${path}`)
+  }
+
+  async readCredentialDraft(): Promise<ClaudeCredentialDraft | undefined> {
+    if (!this._configLocation) return undefined
+    const state = await readAiSettingsAgentState<ClaudeAgentSettingsState>(
+      this._configLocation,
+      'claude',
+    )
+    return state?.authentication?.draft
+  }
+
+  async writeCredentialDraft(draft: ClaudeCredentialDraft | undefined): Promise<void> {
+    if (!this._configLocation) return
+    await updateAiSettingsAgentState<ClaudeAgentSettingsState>(
+      this._configLocation,
+      'claude',
+      (current) => {
+        const authentication = { ...current?.authentication }
+        if (draft === undefined) delete authentication.draft
+        else authentication.draft = draft
+        return { ...current, authentication }
+      },
+    )
+  }
+
+  private async _readLegacyProfiles(): Promise<ClaudeCredentialProfile[]> {
     const path = this._profilesPath()
     let raw: string
     try {
@@ -132,12 +199,6 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
       this._logger.warn(`credential-profiles.json is not valid JSON at ${path}`)
       return []
     }
-  }
-
-  async writeProfiles(profiles: ClaudeCredentialProfile[]): Promise<void> {
-    const path = this._profilesPath()
-    await this._writeAtomicTo(path, { profiles })
-    this._logger.info(`wrote ${profiles.length} credential profile(s) to ${path}`)
   }
 
   private _profilesPath(): string {

@@ -9,6 +9,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ClaudeConfigMainService } from '../claudeConfigMainService.js'
+import type { IConfigLocationService } from '../../../../shared/ipc/configLocationService.js'
+
+function configLocation(dir: string): IConfigLocationService {
+  return {
+    getInfo: () => Promise.resolve({ dir, origin: 'default', locked: false }),
+  } as IConfigLocationService
+}
 
 describe('ClaudeConfigMainService', () => {
   let dir: string
@@ -89,6 +96,29 @@ describe('ClaudeConfigMainService', () => {
     await svc.patch({ model: 'opus' })
     const entries = await fs.readdir(dir)
     expect(entries).toEqual(['settings.json'])
+  })
+
+  it('stores profiles and unfinished authentication drafts in aiSettings.json', async () => {
+    const configDir = join(dir, 'editor-settings')
+    svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
+    await svc.writeProfiles([{ id: 'work', label: 'Work', kind: 'apiKey', apiKey: 'sk-ant-work' }])
+    await svc.writeCredentialDraft({
+      kind: 'gateway',
+      label: 'Draft gateway',
+      apiKey: '',
+      authToken: 'sk-draft',
+      baseUrl: 'https://gateway.example.com',
+      model: '',
+      smallFastModel: '',
+    })
+
+    expect(await svc.readProfiles()).toEqual([
+      { id: 'work', label: 'Work', kind: 'apiKey', apiKey: 'sk-ant-work' },
+    ])
+    expect(await svc.readCredentialDraft()).toMatchObject({ label: 'Draft gateway' })
+    const stored = JSON.parse(await fs.readFile(join(configDir, 'aiSettings.json'), 'utf8'))
+    expect(stored.agentSettings.claude.authentication.profiles).toHaveLength(1)
+    expect(stored.agentSettings.claude.authentication.draft.authToken).toBe('sk-draft')
   })
 
   describe('readAuthStatus', () => {

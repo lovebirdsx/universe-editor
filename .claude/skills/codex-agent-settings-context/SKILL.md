@@ -2,7 +2,7 @@
 name: codex-agent-settings-context
 description: >-
   当你要改动 Codex 凭据/登录/模型/审批/沙箱/高级配置,或读写 ~/.codex/config.toml /
-  auth.json / credential-profiles.json 时召回。覆盖:Codex 设置在统一 Settings editor
+  auth.json / aiSettings.json 时召回。覆盖:Codex 设置在统一 Settings editor
   「Agents」组里按 agent 贡献的渲染机制(registerAgentSettings 'codex')、Codex 专属面板
   (认证库 / ChatGPT 登录 / 模型推理 / 审批沙箱 / 高级)、codexConfig 跨进程服务三层
   (wire 契约 / main 实现 / renderer hook)、config.toml 与 auth.json 双文件语义、
@@ -64,7 +64,7 @@ Codex 是接入统一 Settings editor「Agents」组的 acp agent 之一。它**
 |---|---|---|---|
 | `config.toml` | 编辑器 + CLI 共享 | agent/CLI | model / reasoning / approval / sandbox / 顶层 `model_provider` / `[model_providers.*]` 等。smol-toml 解析,**就地编辑保留未管理键** |
 | `auth.json` | `codex login`(ChatGPT) / 编辑器(API key) | agent/CLI | JSON。可**同时**含 `OPENAI_API_KEY` + `tokens`(ChatGPT OAuth 块)+ `auth_mode` 字段 |
-| `.universe-editor/credential-profiles.json` | **仅编辑器** | 仅编辑器 | API key / gateway **档案库**(候选),不是生效配置 |
+| `<configDir>/aiSettings.json` 的 `agentSettings.codex.authentication` | **仅编辑器** | 仅编辑器 | API key / gateway **档案库**(候选)+未保存表单草稿,不是生效配置 |
 
 - **三种登录方案落地到不同位置**(见下「三种登录方案」):ChatGPT/官方 API key → auth.json + 顶层 `model_provider` 留空;gateway → 自包含写进 `[model_providers.codex-gateway]` + 顶层 `model_provider='codex-gateway'`,**不碰 auth.json**。
 - **ChatGPT 登录不是 profile**:它是 `codex login` 管的单一共享登录,与档案库平行。
@@ -144,7 +144,7 @@ interface CodexAuthStatus {
 
 ## 🔒 安全约束(刻意决策,勿擅改)
 
-1. **凭据明文落盘是用户明确选择**:apiKey/baseUrl 明文写进 `config.toml`/`auth.json`(与 CLI 共享)和 `credential-profiles.json`,**刻意**不用加密 SecretStorage。项目 CLAUDE.md「AI provider 密钥必须走 ISecretStorageService、绝不进 settings.json」那条**只针对 AI provider 特性,不适用本 Codex/Claude 配置共享特性**。
+1. **凭据明文落盘是用户明确选择**:apiKey/baseUrl 明文写进 `config.toml`/`auth.json`(与 CLI 共享)和 `aiSettings.json` 的 Codex 认证区,**刻意**不用加密 SecretStorage。项目 CLAUDE.md「AI provider 密钥必须走 ISecretStorageService、绝不进 settings.json」那条**只针对 AI provider 特性,不适用本 Codex/Claude 配置共享特性**。
 2. **`readAuthStatus()` 绝不回传 token / API key 值**:只回 `{active, chatgpt?:{expired,planType?,expiresAt?}, hasApiKey}`。有测试("never returns the credentials themselves")断言 token / key 不泄漏到序列化结果里,改 readAuthStatus 时务必保住该测试。
 
 ## 常见任务 → 改哪里

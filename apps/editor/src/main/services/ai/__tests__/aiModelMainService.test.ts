@@ -437,6 +437,37 @@ describe('AiModelMainService', () => {
     service.dispose()
   })
 
+  it('preserves agent authentication state when writing model settings', async () => {
+    const { service, dir } = makeServiceFromFile(
+      JSON.stringify({
+        groups: [{ vendor: 'openai', name: 'default' }],
+        agentSettings: {
+          claude: {
+            authentication: {
+              profiles: [
+                { id: 'claude-work', label: 'Work', kind: 'apiKey', apiKey: 'sk-ant-work' },
+              ],
+              draft: { kind: 'apiKey', label: 'Unfinished', apiKey: 'sk-ant-draft' },
+            },
+          },
+          codex: {
+            authentication: {
+              profiles: [{ id: 'codex-work', label: 'Work', kind: 'gateway', apiKey: 'sk-work' }],
+            },
+          },
+        },
+      }),
+    )
+
+    await service.setActiveModel('chat', 'openai/default/gpt-4o')
+
+    const onDisk = JSON.parse(readFileSync(join(dir, 'aiSettings.json'), 'utf8'))
+    expect(onDisk.agentSettings.claude.authentication.profiles[0].apiKey).toBe('sk-ant-work')
+    expect(onDisk.agentSettings.claude.authentication.draft.label).toBe('Unfinished')
+    expect(onDisk.agentSettings.codex.authentication.profiles[0].apiKey).toBe('sk-work')
+    service.dispose()
+  })
+
   it('cancels a metadata request whose provider never responds (no leak on a hung endpoint)', async () => {
     // Regression: getModels has no per-call deadline, so a provider whose fetch
     // never settles leaves its abort store + cancellation listener pending until

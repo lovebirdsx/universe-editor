@@ -153,7 +153,12 @@ registerSingleton(
 )
 registerSingletonFactory(
   IClaudeConfigService,
-  (acc) => new ClaudeConfigMainService(undefined, acc.get(ILoggerService)),
+  (acc) =>
+    new ClaudeConfigMainService(
+      undefined,
+      acc.get(ILoggerService),
+      acc.get(IConfigLocationService),
+    ),
 )
 registerSingleton(
   ICodexBinaryService,
@@ -161,7 +166,8 @@ registerSingleton(
 )
 registerSingletonFactory(
   ICodexConfigService,
-  (acc) => new CodexConfigMainService(undefined, acc.get(ILoggerService)),
+  (acc) =>
+    new CodexConfigMainService(undefined, acc.get(ILoggerService), acc.get(IConfigLocationService)),
 )
 registerSingleton(
   IDisposableLeakService,

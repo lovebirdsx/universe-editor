@@ -66,10 +66,12 @@ export interface AiActiveModels {
   readonly sessionTitle?: string
 }
 
-/** Top-level shape of aiSettings.json: provider groups plus active selections. */
+/** Top-level shape of aiSettings.json: provider groups, active selections, and agent UI state. */
 export interface AiSettingsFile {
   readonly groups: readonly AiProviderGroup[]
   readonly activeModels?: AiActiveModels
+  /** Per-agent editor state, including credential libraries and unfinished authentication forms. */
+  readonly agentSettings?: Readonly<Record<string, unknown>>
 }
 
 /** A selectable vendor in the "add provider" flow, with its endpoint defaults. */

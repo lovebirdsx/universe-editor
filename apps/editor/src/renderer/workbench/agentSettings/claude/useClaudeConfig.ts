@@ -6,10 +6,11 @@
  *  edits stay consistent with the on-disk file the agent + CLI also read.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   IClaudeConfigService,
   type ClaudeAuthStatus,
+  type ClaudeCredentialDraft,
   type ClaudeCredentialProfile,
   type ClaudeSettings,
   type ClaudeSettingsPatch,
@@ -22,12 +23,14 @@ export interface UseClaudeConfig {
   readonly configPath: string
   readonly authStatus: ClaudeAuthStatus
   readonly profiles: readonly ClaudeCredentialProfile[]
+  readonly credentialDraft: ClaudeCredentialDraft | undefined
   patch(patch: ClaudeSettingsPatch): Promise<void>
   reload(): Promise<void>
   reloadAuthStatus(): Promise<ClaudeAuthStatus>
   /** Insert or update a profile by id, persisting the whole library. */
   saveProfile(profile: ClaudeCredentialProfile): Promise<void>
   deleteProfile(id: string): Promise<void>
+  saveCredentialDraft(draft: ClaudeCredentialDraft | undefined): Promise<void>
   /** Write a profile's credentials into settings.json as the active auth. */
   applyProfile(profile: ClaudeCredentialProfile): Promise<void>
 }
@@ -46,18 +49,22 @@ export function useClaudeConfig(): UseClaudeConfig {
   const [configPath, setConfigPath] = useState('')
   const [authStatus, setAuthStatus] = useState<ClaudeAuthStatus>(LOGGED_OUT)
   const [profiles, setProfiles] = useState<readonly ClaudeCredentialProfile[]>([])
+  const [credentialDraft, setCredentialDraft] = useState<ClaudeCredentialDraft | undefined>()
+  const draftWrite = useRef<Promise<void>>(Promise.resolve())
 
   const reload = useCallback(async () => {
-    const [next, path, status, library] = await Promise.all([
+    const [next, path, status, library, draft] = await Promise.all([
       service.read(),
       service.configPath(),
       service.readAuthStatus(),
       service.readProfiles(),
+      service.readCredentialDraft(),
     ])
     setSettings(next)
     setConfigPath(path)
     setAuthStatus(status)
     setProfiles(library)
+    setCredentialDraft(draft)
     setLoaded(true)
   }, [service])
 
@@ -70,17 +77,19 @@ export function useClaudeConfig(): UseClaudeConfig {
   useEffect(() => {
     let active = true
     void (async () => {
-      const [next, path, status, library] = await Promise.all([
+      const [next, path, status, library, draft] = await Promise.all([
         service.read(),
         service.configPath(),
         service.readAuthStatus(),
         service.readProfiles(),
+        service.readCredentialDraft(),
       ])
       if (!active) return
       setSettings(next)
       setConfigPath(path)
       setAuthStatus(status)
       setProfiles(library)
+      setCredentialDraft(draft)
       setLoaded(true)
     })()
     return () => {
@@ -115,6 +124,18 @@ export function useClaudeConfig(): UseClaudeConfig {
       const next = current.filter((p) => p.id !== id)
       await service.writeProfiles(next)
       setProfiles(next)
+    },
+    [service],
+  )
+
+  const saveCredentialDraft = useCallback(
+    (draft: ClaudeCredentialDraft | undefined) => {
+      setCredentialDraft(draft)
+      const write = draftWrite.current
+        .catch(() => undefined)
+        .then(() => service.writeCredentialDraft(draft))
+      draftWrite.current = write
+      return write
     },
     [service],
   )
@@ -154,11 +175,13 @@ export function useClaudeConfig(): UseClaudeConfig {
     configPath,
     authStatus,
     profiles,
+    credentialDraft,
     patch,
     reload,
     reloadAuthStatus,
     saveProfile,
     deleteProfile,
+    saveCredentialDraft,
     applyProfile,
   }
 }

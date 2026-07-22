@@ -3,7 +3,7 @@
  *  AuthenticationPanel — the "Authentication" category. Two parts:
  *
  *   1. Saved credentials — a library of API-key / gateway profiles kept in the
- *      editor's own store (`.universe-editor/credential-profiles.json`). The user
+ *      editor's own store (`aiSettings.json`). The user
  *      *applies* a profile to inject it into `~/.claude/settings.json` (the file
  *      the CLI + agent read). Switching credentials no longer destroys the others
  *      — they stay in the library.
@@ -22,7 +22,7 @@ import { Button, IconButton, Input } from '@universe-editor/workbench-ui'
 import { useService } from '../../useService.js'
 import type {
   ClaudeAuthStatus,
-  ClaudeCredentialKind,
+  ClaudeCredentialDraft,
   ClaudeCredentialProfile,
 } from '../../../../shared/ipc/claudeConfigService.js'
 import type { UseClaudeConfig } from './useClaudeConfig.js'
@@ -109,9 +109,15 @@ function CredentialLibrary({
   model: string | undefined
 }) {
   const notification = useService(INotificationService)
-  const { profiles, applyProfile, saveProfile, deleteProfile } = config
-  const [editing, setEditing] = useState<ClaudeCredentialProfile | null>(null)
-  const [adding, setAdding] = useState(false)
+  const {
+    profiles,
+    credentialDraft,
+    applyProfile,
+    saveProfile,
+    deleteProfile,
+    saveCredentialDraft,
+  } = config
+  const adding = credentialDraft !== undefined && credentialDraft.editingProfileId === undefined
 
   const apply = useCallback(
     async (profile: ClaudeCredentialProfile) => {
@@ -143,15 +149,16 @@ function CredentialLibrary({
 
       <div className={styles['profileList']}>
         {profiles.map((profile) =>
-          editing?.id === profile.id ? (
+          credentialDraft?.editingProfileId === profile.id ? (
             <ProfileForm
               key={profile.id}
-              initial={profile}
+              draft={credentialDraft}
+              onChange={(draft) => void saveCredentialDraft(draft)}
               onSave={async (p) => {
                 await saveProfile(p)
-                setEditing(null)
+                await saveCredentialDraft(undefined)
               }}
-              onCancel={() => setEditing(null)}
+              onCancel={() => void saveCredentialDraft(undefined)}
             />
           ) : (
             <ProfileRow
@@ -159,7 +166,7 @@ function CredentialLibrary({
               profile={profile}
               active={isProfileActive(profile, env, model)}
               onUse={() => void apply(profile)}
-              onEdit={() => setEditing(profile)}
+              onEdit={() => void saveCredentialDraft(profileToDraft(profile))}
               onDelete={() => void deleteProfile(profile.id)}
             />
           ),
@@ -168,15 +175,17 @@ function CredentialLibrary({
 
       {adding ? (
         <ProfileForm
+          draft={credentialDraft!}
+          onChange={(draft) => void saveCredentialDraft(draft)}
           onSave={async (p) => {
             await saveProfile(p)
-            setAdding(false)
+            await saveCredentialDraft(undefined)
           }}
-          onCancel={() => setAdding(false)}
+          onCancel={() => void saveCredentialDraft(undefined)}
         />
       ) : (
         <div className={styles['toolbar']}>
-          <Button variant="ghost" onClick={() => setAdding(true)}>
+          <Button variant="ghost" onClick={() => void saveCredentialDraft(EMPTY_DRAFT)}>
             <Plus size={14} strokeWidth={2} />
             {localize('agentSettings.auth.library.add', 'Add credential')}
           </Button>
@@ -236,38 +245,38 @@ function ProfileRow({
 }
 
 function ProfileForm({
-  initial,
+  draft,
+  onChange,
   onSave,
   onCancel,
 }: {
-  initial?: ClaudeCredentialProfile
+  draft: ClaudeCredentialDraft
+  onChange: (draft: ClaudeCredentialDraft) => void
   onSave: (profile: ClaudeCredentialProfile) => Promise<void>
   onCancel: () => void
 }) {
-  const [kind, setKind] = useState<ClaudeCredentialKind>(initial?.kind ?? 'apiKey')
-  const [label, setLabel] = useState(initial?.label ?? '')
-  const [apiKey, setApiKey] = useState(initial?.apiKey ?? '')
-  const [authToken, setAuthToken] = useState(initial?.authToken ?? '')
-  const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? '')
-  const [model, setModel] = useState(initial?.model ?? '')
-  const [smallFastModel, setSmallFastModel] = useState(initial?.smallFastModel ?? '')
-
   const valid =
-    label.trim() !== '' &&
-    (kind === 'apiKey' ? apiKey.trim() !== '' : authToken.trim() !== '' && baseUrl.trim() !== '')
+    draft.label.trim() !== '' &&
+    (draft.kind === 'apiKey'
+      ? draft.apiKey.trim() !== ''
+      : draft.authToken.trim() !== '' && draft.baseUrl.trim() !== '')
 
   const save = useCallback(async () => {
-    const base = { id: initial?.id ?? newId(), label: label.trim(), kind }
+    const base = {
+      id: draft.editingProfileId ?? newId(),
+      label: draft.label.trim(),
+      kind: draft.kind,
+    }
     let profile: ClaudeCredentialProfile
-    if (kind === 'apiKey') {
-      profile = { ...base, apiKey: apiKey.trim() }
+    if (draft.kind === 'apiKey') {
+      profile = { ...base, apiKey: draft.apiKey.trim() }
     } else {
-      profile = { ...base, authToken: authToken.trim(), baseUrl: baseUrl.trim() }
-      if (model.trim()) profile.model = model.trim()
-      if (smallFastModel.trim()) profile.smallFastModel = smallFastModel.trim()
+      profile = { ...base, authToken: draft.authToken.trim(), baseUrl: draft.baseUrl.trim() }
+      if (draft.model.trim()) profile.model = draft.model.trim()
+      if (draft.smallFastModel.trim()) profile.smallFastModel = draft.smallFastModel.trim()
     }
     await onSave(profile)
-  }, [initial?.id, label, kind, apiKey, authToken, baseUrl, model, smallFastModel, onSave])
+  }, [draft, onSave])
 
   return (
     <div className={styles['profileForm']}>
@@ -278,16 +287,16 @@ function ProfileForm({
         <div className={styles['toolbar']}>
           <button
             type="button"
-            className={`${styles['choice']} ${kind === 'apiKey' ? styles['choiceActive'] : ''}`}
-            onClick={() => setKind('apiKey')}
+            className={`${styles['choice']} ${draft.kind === 'apiKey' ? styles['choiceActive'] : ''}`}
+            onClick={() => onChange({ ...draft, kind: 'apiKey' })}
           >
             <KeyRound size={14} strokeWidth={1.75} />
             {localize('agentSettings.auth.apiKey', 'Anthropic API key')}
           </button>
           <button
             type="button"
-            className={`${styles['choice']} ${kind === 'gateway' ? styles['choiceActive'] : ''}`}
-            onClick={() => setKind('gateway')}
+            className={`${styles['choice']} ${draft.kind === 'gateway' ? styles['choiceActive'] : ''}`}
+            onClick={() => onChange({ ...draft, kind: 'gateway' })}
           >
             <Network size={14} strokeWidth={1.75} />
             {localize('agentSettings.auth.gateway', 'Custom gateway / Auth token')}
@@ -300,20 +309,20 @@ function ProfileForm({
           {localize('agentSettings.auth.form.label', 'Name')}
         </label>
         <Input
-          value={label}
+          value={draft.label}
           placeholder={localize('agentSettings.auth.form.label.ph', 'e.g. Personal, Work gateway')}
-          onChange={(e) => setLabel(e.target.value)}
+          onChange={(e) => onChange({ ...draft, label: e.target.value })}
         />
       </div>
 
-      {kind === 'apiKey' ? (
+      {draft.kind === 'apiKey' ? (
         <div className={styles['field']}>
           <label className={styles['label']}>{`env.${API_KEY}`}</label>
           <Input
             type="password"
-            value={apiKey}
+            value={draft.apiKey}
             placeholder="sk-ant-…"
-            onChange={(e) => setApiKey(e.target.value)}
+            onChange={(e) => onChange({ ...draft, apiKey: e.target.value })}
           />
         </div>
       ) : (
@@ -321,18 +330,18 @@ function ProfileForm({
           <div className={styles['field']}>
             <label className={styles['label']}>{`env.${BASE_URL}`}</label>
             <Input
-              value={baseUrl}
+              value={draft.baseUrl}
               placeholder="https://your-gateway.example.com"
-              onChange={(e) => setBaseUrl(e.target.value)}
+              onChange={(e) => onChange({ ...draft, baseUrl: e.target.value })}
             />
           </div>
           <div className={styles['field']}>
             <label className={styles['label']}>{`env.${AUTH_TOKEN}`}</label>
             <Input
               type="password"
-              value={authToken}
+              value={draft.authToken}
               placeholder="sk-…"
-              onChange={(e) => setAuthToken(e.target.value)}
+              onChange={(e) => onChange({ ...draft, authToken: e.target.value })}
             />
           </div>
           <div className={styles['field']}>
@@ -345,7 +354,11 @@ function ProfileForm({
                 'Model to request from this gateway (e.g. kimi-k3). Applied to Settings.model when you use this credential. Leave empty to keep the current model.',
               )}
             </div>
-            <Input value={model} placeholder="kimi-k3" onChange={(e) => setModel(e.target.value)} />
+            <Input
+              value={draft.model}
+              placeholder="kimi-k3"
+              onChange={(e) => onChange({ ...draft, model: e.target.value })}
+            />
           </div>
           <div className={styles['field']}>
             <label className={styles['label']}>{`env.${SMALL_FAST_MODEL}`}</label>
@@ -356,9 +369,9 @@ function ProfileForm({
               )}
             </div>
             <Input
-              value={smallFastModel}
+              value={draft.smallFastModel}
               placeholder="kimi-k3-mini"
-              onChange={(e) => setSmallFastModel(e.target.value)}
+              onChange={(e) => onChange({ ...draft, smallFastModel: e.target.value })}
             />
           </div>
         </>
@@ -374,6 +387,29 @@ function ProfileForm({
       </div>
     </div>
   )
+}
+
+const EMPTY_DRAFT: ClaudeCredentialDraft = {
+  kind: 'apiKey',
+  label: '',
+  apiKey: '',
+  authToken: '',
+  baseUrl: '',
+  model: '',
+  smallFastModel: '',
+}
+
+function profileToDraft(profile: ClaudeCredentialProfile): ClaudeCredentialDraft {
+  return {
+    editingProfileId: profile.id,
+    kind: profile.kind,
+    label: profile.label,
+    apiKey: profile.apiKey ?? '',
+    authToken: profile.authToken ?? '',
+    baseUrl: profile.baseUrl ?? '',
+    model: profile.model ?? '',
+    smallFastModel: profile.smallFastModel ?? '',
+  }
 }
 
 function LoginForm({

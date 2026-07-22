@@ -65,7 +65,7 @@ export type ClaudeSettingsPatch = {
 
 /**
  * A saved credential profile in the editor's own library
- * (`<claudeConfigDir>/.universe-editor/credential-profiles.json`). This library
+ * (`aiSettings.json` under `agentSettings.claude`). This library
  * is the editor's "menu" of credentials; it is NOT read by the CLI/agent. The
  * user *applies* a profile to make it the active one in `settings.json`, which
  * is the file the CLI/agent actually read.
@@ -97,6 +97,18 @@ export interface ClaudeCredentialProfile {
   smallFastModel?: string
 }
 
+/** An unfinished credential form, retained when the settings page is left. */
+export interface ClaudeCredentialDraft {
+  editingProfileId?: string
+  kind: ClaudeCredentialKind
+  label: string
+  apiKey: string
+  authToken: string
+  baseUrl: string
+  model: string
+  smallFastModel: string
+}
+
 export interface IClaudeConfigService {
   readonly _serviceBrand: undefined
   /** Read the merged settings file. Returns `{}` when the file is absent. */
@@ -115,12 +127,16 @@ export interface IClaudeConfigService {
    */
   readAuthStatus(): Promise<ClaudeAuthStatus>
   /**
-   * Read the editor's saved credential library. Returns `[]` when the file is
-   * absent or malformed. This library is separate from `settings.json`.
+   * Read the editor's saved credential library from aiSettings.json. Returns `[]`
+   * when absent or malformed. This library is separate from `settings.json`.
    */
   readProfiles(): Promise<ClaudeCredentialProfile[]>
-  /** Replace the saved credential library on disk (atomic write). */
+  /** Replace the saved credential library in aiSettings.json (atomic merge). */
   writeProfiles(profiles: ClaudeCredentialProfile[]): Promise<void>
+  /** Read the unfinished Authentication form, if any. */
+  readCredentialDraft(): Promise<ClaudeCredentialDraft | undefined>
+  /** Persist or clear the unfinished Authentication form. */
+  writeCredentialDraft(draft: ClaudeCredentialDraft | undefined): Promise<void>
 }
 
 export const IClaudeConfigService = createDecorator<IClaudeConfigService>('claudeConfigService')
