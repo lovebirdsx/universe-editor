@@ -19,9 +19,12 @@
  *     持久化移到 onDragEnd（只有用户拖拽 sash 才写回，VSCode 语义），容器缩放 /
  *     启动沉降 / 程序性纠正的瞬态帧永远不会再进持久化。
  *
- *  真实机器上 OS 最大化会先在小尺寸布局、再撑大容器；headless 下分别用「稳定后
- *  live maximize」「isMaximized=true 重启」「maximize 后 unmaximize」三条时间线
- *  覆盖增长、启动竞态、收缩三条路径。
+ *  真实机器上 OS 最大化会先在小尺寸布局、再撑大容器。bug 的触发条件是「容器宽度
+ *  变化」本身，而 CI runner 的虚拟显示器既小（win ≈1024 / xvfb ≈1280）又可能没有
+ *  窗口管理器（xvfb 下 maximize() 是 no-op、isMaximized() 恒 false）——所以增长 /
+ *  收缩两条时间线用 setBounds 显式改窗口尺寸（任何环境确定生效），等待条件只用
+ *  相对阈值；启动竞态时间线仍 seed isMaximized=true 走 main 的真实 maximize 路径，
+ *  但不断言 OS 最大化状态。
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect, _electron as electron } from '@playwright/test'
@@ -160,6 +163,45 @@ async function expectSecondaryDomNearSaved(
   expect(domWidth!).toBeLessThan(SAVED_SECONDARY_PX + 20)
 }
 
+/**
+ * Grow the window via setBounds instead of BrowserWindow.maximize(): CI
+ * runners have tiny virtual displays (win ≈1024px, xvfb ≈1280px) and xvfb has
+ * no window manager at all, so maximize() may be a no-op there. The bug is
+ * triggered by the container width changing, not by the OS-maximize gesture,
+ * and setBounds deterministically changes the width in every environment.
+ * Growth is capped to the work area to stay honest on small displays; the
+ * wait uses a relative threshold, never an absolute width.
+ */
+async function growWindow(
+  app: Awaited<ReturnType<typeof launchWithState>>['app'],
+  page: Awaited<ReturnType<typeof launchWithState>>['page'],
+) {
+  const before = await page.evaluate(() => window.innerWidth)
+  await app.evaluate(({ BrowserWindow, screen }) => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (!win) return
+    const work = screen.getPrimaryDisplay().workAreaSize
+    const bounds = win.getBounds()
+    const width = Math.min(Math.max(work.width, bounds.width + 120), 1600)
+    win.setBounds({ x: 0, y: 0, width, height: bounds.height })
+  })
+  await page.waitForFunction((w) => window.innerWidth > w, before + 60, { timeout: 10_000 })
+}
+
+async function shrinkWindow(
+  app: Awaited<ReturnType<typeof launchWithState>>['app'],
+  page: Awaited<ReturnType<typeof launchWithState>>['page'],
+  targetWidth: number,
+) {
+  await app.evaluate(({ BrowserWindow }, w) => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (!win) return
+    const bounds = win.getBounds()
+    win.setBounds({ x: bounds.x, y: bounds.y, width: w, height: bounds.height })
+  }, targetWidth)
+  await page.waitForFunction((w) => window.innerWidth <= w, targetWidth, { timeout: 10_000 })
+}
+
 test.describe('@p1 maximized secondary sidebar restore', () => {
   test('secondary sidebar width survives maximizing a window with an open editor @regression', async () => {
     test.slow()
@@ -188,12 +230,9 @@ test.describe('@p1 maximized secondary sidebar restore', () => {
           )
           .toBe(SAVED_SECONDARY_PX)
 
-        // Maximize the live window — the container grows AFTER the initial layout
-        // settled, the real-world trigger. Wait until the growth reaches the DOM.
-        await app.evaluate(({ BrowserWindow }) => {
-          BrowserWindow.getAllWindows()[0]?.maximize()
-        })
-        await page.waitForFunction(() => window.innerWidth > 1500, undefined, { timeout: 5000 })
+        // Grow the container AFTER the initial layout settled — the
+        // real-world maximize trigger, made deterministic via setBounds.
+        await growWindow(app, page)
 
         // Service level: the persisted secondary width must NOT be inflated. Before
         // the fix the maximize growth is dumped onto the secondary pane (→ 1000).
@@ -231,11 +270,11 @@ test.describe('@p1 maximized secondary sidebar restore', () => {
             timeout: 15_000,
           })
           .toContain('hello.json')
-        await expect
-          .poll(() =>
-            app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isMaximized()),
-          )
-          .toBe(true)
+        // No isMaximized() assertion: xvfb has no window manager, so the
+        // ready-to-show maximize() may be a no-op there (the state is never
+        // acknowledged). The guarded property is the persisted width below —
+        // on platforms with a WM this run still exercises the full
+        // maximized-restart race.
 
         await expect
           .poll(
@@ -276,17 +315,11 @@ test.describe('@p1 maximized secondary sidebar restore', () => {
           )
           .toBe(SAVED_SECONDARY_PX)
 
-        await app.evaluate(({ BrowserWindow }) => {
-          BrowserWindow.getAllWindows()[0]?.maximize()
-        })
-        await page.waitForFunction(() => window.innerWidth > 1500, undefined, { timeout: 5000 })
+        await growWindow(app, page)
 
         // Shrink back — the delta must come out of the editor pane, and the
         // transient shrink frames must not be persisted.
-        await app.evaluate(({ BrowserWindow }) => {
-          BrowserWindow.getAllWindows()[0]?.unmaximize()
-        })
-        await page.waitForFunction(() => window.innerWidth < 1200, undefined, { timeout: 5000 })
+        await shrinkWindow(app, page, 900)
 
         await expect
           .poll(
