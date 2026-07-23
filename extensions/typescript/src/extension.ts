@@ -266,7 +266,9 @@ function registerStatusIndicator(context: ExtensionContext, client: LspClient): 
     languages.setLanguageServerStatus(LANGUAGE_SERVER_ID, state)
     switch (state) {
       case 'starting':
-        item.text = localize('ts.status.starting.text', 'TypeScript')
+        // VSCode parity: while initializing the status bar shows only a spinner
+        // (ProgressLocation.Window); the description lives in the tooltip.
+        item.text = ''
         item.tooltip = localize(
           'ts.status.starting.tooltip',
           'Starting TypeScript language service…',

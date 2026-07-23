@@ -3,7 +3,6 @@
  *  Mirrors the git extension's `nls.ts`. */
 
 const ZH_CN: Readonly<Record<string, string>> = {
-  'ts.status.starting.text': 'TypeScript',
   'ts.status.starting.tooltip': '正在启动 TypeScript 语言服务…',
   'ts.status.error.text': 'TypeScript',
   'ts.status.error.tooltip': 'TypeScript 语言服务启动失败',
