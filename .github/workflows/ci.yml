@@ -51,6 +51,12 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # tsServerPaths tests read the version from the vendored
+      # typescript-language-server's node_modules (outside the pnpm workspace,
+      # installed via npm). Same reason as the e2e job's vendor install below.
+      - name: Install vendored typescript-language-server (tsServerPaths tests)
+        run: npm --prefix vendor/typescript-language-server ci
+
       - name: Test
         run: pnpm test
 
