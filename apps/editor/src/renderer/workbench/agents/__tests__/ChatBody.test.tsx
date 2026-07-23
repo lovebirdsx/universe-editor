@@ -565,6 +565,61 @@ describe('ChatBody — timeline keyboard handle', () => {
     expect(barCard.className).not.toContain(focusedClass)
     expect(slotEl(container, 'm:a').className).toContain(focusedClass)
   })
+
+  // Regression: Alt+F (toggleCollapse) on the focused first-user bar was a no-op —
+  // the bar kept its own private collapse state, blind to ChatScroll's override
+  // store. It must fold/expand like any in-list slot, via Alt+F, the chevron,
+  // and Ctrl+Alt+F mode cycles alike.
+  it('toggleCollapse folds the focused first user message in the sticky bar', () => {
+    const userItems: readonly TimelineItem[] = [
+      {
+        kind: 'message',
+        id: 'u',
+        message: {
+          id: 'u',
+          role: 'user',
+          text: 'top question',
+          blocks: [{ type: 'text', text: 'top question' }],
+          streaming: false,
+        },
+      },
+      { kind: 'message', id: 'a', message: makeMessage('a', 'answer one') },
+    ]
+    const { container, widgetRef } = renderChatWithWidget(makeSession('s1', userItems))
+    const barExpanded = (): string | null =>
+      slotEl(container, 'm:u').querySelector('button')!.getAttribute('aria-expanded')
+
+    act(() => {
+      widgetRef.current!.moveTimeline('first')
+    })
+    expect(barExpanded()).toBe('true')
+    act(() => {
+      widgetRef.current!.toggleCollapse()
+    })
+    expect(barExpanded()).toBe('false')
+    // Folded through the shared store, so it persists like any in-list override.
+    expect(AcpChatViewStateCache.load('s1')?.collapse?.overrides).toContainEqual(['m:u', true])
+    act(() => {
+      widgetRef.current!.toggleCollapse()
+    })
+    expect(barExpanded()).toBe('true')
+
+    // The bar's chevron routes through the same shared store.
+    act(() => {
+      fireEvent.click(slotEl(container, 'm:u').querySelector('button')!)
+    })
+    expect(barExpanded()).toBe('false')
+    act(() => {
+      fireEvent.click(slotEl(container, 'm:u').querySelector('button')!)
+    })
+    expect(barExpanded()).toBe('true')
+
+    // A mode cycle (Ctrl+Alt+F) folds the bar together with everything else.
+    act(() => {
+      widgetRef.current!.cycleCollapseMode() // collapsed
+    })
+    expect(barExpanded()).toBe('false')
+  })
 })
 
 describe('ChatBody — empty session hint', () => {

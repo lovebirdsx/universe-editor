@@ -5,6 +5,12 @@
  *  history; this bar is the always-visible copy so the active request never
  *  scrolls out of view. Expanded (the default) it shows the full content;
  *  collapsed it shows the first line. Returns null until a user message exists.
+ *
+ *  Collapse is driven by ChatScroll's shared override store through the widget
+ *  handle (isSlotCollapsed / toggleSlotCollapse / onDidChangeCollapse), so the
+ *  chevron, Alt+F on the focused bar, and Ctrl+Alt+F mode cycles all agree and
+ *  persist via AcpChatViewStateCache. Without a handle (standalone tests) it
+ *  falls back to local state.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -26,9 +32,6 @@ import type { WidgetHandle } from './ChatBody.js'
 import styles from './agents.module.css'
 
 const SUMMARY_MAX = 80
-
-// Per-session collapse state, in-memory like StickyPlanBar's.
-const userBarCollapsedCache = new Map<string, boolean>()
 
 function clampLine(text: string): string {
   const firstLine = text.split('\n', 1)[0]?.trim() ?? ''
@@ -56,7 +59,6 @@ export function StickyUserMessageBar({
   onFocusSlot?: (key: string) => void
 }) {
   const timeline = useObservable(session.timeline)
-  const [collapsed, setCollapsed] = useState(() => userBarCollapsedCache.get(session.id) ?? false)
   const [menu, setMenu] = useState<AgentChatContextMenuState | null>(null)
   const commandService = useService(ICommandService)
   const contextKeyService = useService(IContextKeyService)
@@ -67,27 +69,37 @@ export function StickyUserMessageBar({
 
   // Keyboard focus (Alt+A/E/J/K) can land on this bar — it renders the first user
   // message, which is part of the navigation sequence but lives outside the scroll
-  // container, so it tracks the focused key through the widget handle.
+  // container, so it tracks the focused key through the widget handle. Collapse
+  // resolves through the same handle into ChatScroll's shared override store, so
+  // Alt+F and Ctrl+Alt+F fold this bar like any in-list slot.
   const [focused, setFocused] = useState(false)
+  const [sharedCollapsed, setSharedCollapsed] = useState<boolean | null>(null)
+  const [localCollapsed, setLocalCollapsed] = useState(false)
   useEffect(() => {
     const handle = handleRef?.current
     if (!handle || slotKey === null) return
-    const sync = (): void => setFocused(handle.getFocusedKey() === slotKey)
-    sync()
-    const sub = handle.onDidChangeFocusedKey(sync)
-    return () => sub.dispose()
+    const syncFocus = (): void => setFocused(handle.getFocusedKey() === slotKey)
+    const syncCollapse = (): void => setSharedCollapsed(handle.isSlotCollapsed(slotKey))
+    syncFocus()
+    syncCollapse()
+    const focusSub = handle.onDidChangeFocusedKey(syncFocus)
+    const collapseSub = handle.onDidChangeCollapse(syncCollapse)
+    return () => {
+      focusSub.dispose()
+      collapseSub.dispose()
+    }
   }, [handleRef, slotKey])
+  const collapsed = sharedCollapsed ?? localCollapsed
 
   if (!item) return null
 
   const message = item.message
 
-  const toggle = (): void =>
-    setCollapsed((v) => {
-      const next = !v
-      userBarCollapsedCache.set(session.id, next)
-      return next
-    })
+  const toggle = (): void => {
+    const handle = handleRef?.current
+    if (handle && slotKey !== null) handle.toggleSlotCollapse(slotKey)
+    else setLocalCollapsed((v) => !v)
+  }
 
   const handleContextMenu = (e: ReactMouseEvent): void => {
     e.preventDefault()

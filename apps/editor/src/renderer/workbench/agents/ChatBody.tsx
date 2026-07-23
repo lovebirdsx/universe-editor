@@ -102,6 +102,12 @@ export interface WidgetHandle {
    *  outside the scroll container (the sticky first-user-message bar) track focus. */
   getFocusedKey: () => string | null
   onDidChangeFocusedKey: Event<void>
+  /** Collapse state of an out-of-list slot, resolved through ChatScroll's shared
+   *  override store so Alt+F / chevron / Ctrl+Alt+F fold the sticky first-user
+   *  bar exactly like an in-list slot. */
+  isSlotCollapsed: (key: string) => boolean
+  onDidChangeCollapse: Event<void>
+  toggleSlotCollapse: (key: string) => void
   popoverSelectNext: () => void
   popoverSelectPrev: () => void
   popoverAccept: () => void
@@ -121,6 +127,16 @@ interface FocusedKeyBridge {
   emitter: Emitter<void>
 }
 
+/** Exposes ChatScroll's collapse store to slots rendered outside the scroll
+ *  container (StickyUserMessageBar). Owned next to FocusedKeyBridge for the same
+ *  reason: the bar's subscription effect runs before ChatScroll's handle-binding
+ *  effect, so the bridge must exist before either mounts. ChatScroll swaps in the
+ *  real `resolve` during render; events only fire after mount. */
+interface CollapseBridge {
+  resolve: (key: string) => boolean
+  emitter: Emitter<void>
+}
+
 const NOOP_HANDLE: WidgetHandle = {
   move: noop,
   scrollTimeline: noop,
@@ -132,6 +148,9 @@ const NOOP_HANDLE: WidgetHandle = {
   setFocusedKey: noop,
   getFocusedKey: () => null,
   onDidChangeFocusedKey: Event.None,
+  isSlotCollapsed: () => false,
+  onDidChangeCollapse: Event.None,
+  toggleSlotCollapse: noop,
   popoverSelectNext: noop,
   popoverSelectPrev: noop,
   popoverAccept: noop,
@@ -198,6 +217,16 @@ function ChatSessionBody({
   const focusBridge = focusBridgeRef.current
   handleRef.current.getFocusedKey = () => focusBridge.key
   handleRef.current.onDidChangeFocusedKey = focusBridge.emitter.event
+
+  // Same pattern as focusBridge: the bar resolves collapse through ChatScroll's
+  // shared override store, but subscribes before ChatScroll binds its handle.
+  const collapseBridgeRef = useRef<CollapseBridge | null>(null)
+  if (collapseBridgeRef.current === null) {
+    collapseBridgeRef.current = { resolve: () => false, emitter: new Emitter<void>() }
+  }
+  const collapseBridge = collapseBridgeRef.current
+  handleRef.current.isSlotCollapsed = (key) => collapseBridge.resolve(key)
+  handleRef.current.onDidChangeCollapse = collapseBridge.emitter.event
 
   useEffect(() => {
     const container = containerRef.current
@@ -300,6 +329,7 @@ function ChatSessionBody({
             session={session}
             handleRef={handleRef}
             focusBridge={focusBridge}
+            collapseBridge={collapseBridge}
             onFindVisibleChange={handleFindVisibleChange}
             readOnly={readOnly ?? false}
           />
@@ -343,12 +373,14 @@ function ChatScroll({
   session,
   handleRef,
   focusBridge,
+  collapseBridge,
   onFindVisibleChange,
   readOnly,
 }: {
   session: IAcpSession
   handleRef: MutableRefObject<WidgetHandle>
   focusBridge: FocusedKeyBridge
+  collapseBridge: CollapseBridge
   onFindVisibleChange: (open: boolean) => void
   readOnly: boolean
 }) {
@@ -466,6 +498,14 @@ function ChatScroll({
   timelineRef.current = timeline
   const displayTimelineRef = useRef(displayTimeline)
   displayTimelineRef.current = displayTimeline
+
+  // Render-phase hookup (like timelineRef above) so the sticky first-user bar —
+  // mounted before this component's effects — resolves collapse from the same
+  // override store that drives in-list slots.
+  collapseBridge.resolve = (key) => {
+    const item = findByStickyKey(timelineRef.current, key)
+    return item ? resolveCollapsed(key, item, collapseRef.current) : false
+  }
 
   const hasTimelineContent = hasRenderableTimelineContent(timeline)
 
@@ -1013,6 +1053,12 @@ function ChatScroll({
     activeSlotRef.current?.fire()
   }, [focusedKey, focusBridge])
 
+  // Notify out-of-list slots (the sticky first-user bar) when any collapse state
+  // changes — per-item override (Alt+F / chevron) or a mode cycle (Ctrl+Alt+F).
+  useEffect(() => {
+    collapseBridge.emitter.fire()
+  }, [collapse, collapseBridge])
+
   useEffect(() => {
     const handle = handleRef.current
     handle.move = (direction) => {
@@ -1103,6 +1149,7 @@ function ChatScroll({
       const key = focusedKeyRef.current
       if (key !== null) handleToggleCollapse(key)
     }
+    handle.toggleSlotCollapse = (key) => handleToggleCollapse(key)
     handle.cycleCollapseMode = () => {
       session.cycleCollapseMode()
     }
@@ -1153,6 +1200,7 @@ function ChatScroll({
       handle.scrollTimeline = noop
       handle.jumpToPlan = noop
       handle.toggleCollapse = noop
+      handle.toggleSlotCollapse = noop
       handle.cycleCollapseMode = noop
       handle.getFocusedText = () => undefined
       handle.setFocusedKey = noop
