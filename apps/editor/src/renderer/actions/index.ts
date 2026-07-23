@@ -185,7 +185,11 @@ import {
   ToggleNotificationsCenterAction,
 } from './notificationActions.js'
 import { ReopenWithAction } from './editorResolverActions.js'
-import { ResetViewLocationsAction } from './viewActions.js'
+import {
+  NextViewContainerAction,
+  PreviousViewContainerAction,
+  ResetViewLocationsAction,
+} from './viewActions.js'
 import {
   PickModelAction,
   ManageModelsAction,
@@ -528,6 +532,13 @@ registerAction2(ReopenWithAction)
 
 // Views — reset view locations (move is via drag & drop)
 registerAction2(ResetViewLocationsAction)
+// Views — ctrl+pageup/pagedown cycle the view containers of the focused
+// SideBar / SecondarySideBar / Panel. The explicit higher weight beats
+// nextEditor/previousEditor on the same keys whenever a view-container part
+// holds focus, regardless of registration order; with editor-area focus the
+// when-clause fails and editor cycling is unaffected.
+registerAction2(NextViewContainerAction)
+registerAction2(PreviousViewContainerAction)
 
 // AI
 registerAction2(PickModelAction)
