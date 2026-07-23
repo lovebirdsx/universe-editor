@@ -53,7 +53,13 @@
 - **判定标准**：仅 markdown 类 @p1 失败 → 本机环境噪声，不当回归。
 - memory：`e2e-markdown-exthost-fail-locally`、`e2e-disable-exthost-flake`。
 
-### 5. Ubuntu 多用例随机在 E2E probe 前纯黑（已修复）
+### 5. 机器锁屏时剪贴板用例必败（**不打 tag**）
+- **现象**：`smoke.acpPasteImage` 等依赖真实 OS 剪贴板的用例报 `clipboard.readImage().isEmpty()` 为 true（写入后回读为空）。
+- **根因**：Windows 锁屏时安全桌面（Winlogon desktop）持有剪贴板，所有进程的 `OpenClipboard` 返回 `ERROR_ACCESS_DENIED`（5）。此时 `Set-Clipboard`、`clip.exe`、Electron `clipboard.writeText` 全部失败，`GetOpenClipboardWindow` 返回 NULL；`LockApp.exe`/`LogonUI.exe` 在跑即锁屏铁证。**解锁屏幕后立即恢复**，与代码无关。
+- **workaround**：跑 e2e 前确认机器未锁屏。
+- **判定标准**：剪贴板用例失败 + `powershell -c "Get-Clipboard"` 同时报"拒绝访问" → 锁屏环境问题，不当回归。
+
+### 6. Ubuntu 多用例随机在 E2E probe 前纯黑（已修复）
 - **现象**：多个无关 spec 同轮随机卡在 fixture `waitForFunction(__E2E__)`；Electron/window 很快创建但页面纯黑，test body 未执行，retry 常恢复。
 - **根因**：`ElectronProtocol` 在主 frame 导航开始时关闭发送 gate；renderer 在 `dom-ready` 前发出的首个 bootstrap RPC 可到 main，但同步响应被 gate 丢弃，导致 probe/React 之前的 Promise 永久 pending。
 - **修复**：renderer 入站 IPC 先重开 frame gate，再分发给 `ChannelServer`；入站本身证明新 frame 已可执行 IPC。不要通过放宽 fixture timeout 掩盖永久死锁。
