@@ -499,6 +499,69 @@ describe('ChatBody — timeline keyboard handle', () => {
     expect(scroll.scrollTop).toBe(400)
     expect(slotEl(container, 'm:b').className).toContain(focusedClass)
   })
+
+  // The first user message is sliced out of displayTimeline (the sticky bar above
+  // the scroll container renders it), but it is part of the keyboard navigation
+  // sequence: Alt+Home / repeated Alt+K must reach it, with the bar highlighting.
+  it('reaches the first user message pinned in the sticky bar', () => {
+    const userItems: readonly TimelineItem[] = [
+      {
+        kind: 'message',
+        id: 'u',
+        message: {
+          id: 'u',
+          role: 'user',
+          text: 'top question',
+          blocks: [{ type: 'text', text: 'top question' }],
+          streaming: false,
+        },
+      },
+      { kind: 'message', id: 'a', message: makeMessage('a', 'answer one') },
+      { kind: 'message', id: 'b', message: makeMessage('b', 'answer two') },
+    ]
+    const { container, widgetRef } = renderChatWithWidget(makeSession('s1', userItems))
+    const bar = container.querySelector<HTMLElement>('[data-testid="acp-user-bar"]')!
+    expect(bar.getAttribute('data-timeline-key')).toBe('m:u')
+    // The focus ring lives on the card (inset from the chat edge), not the
+    // full-width bar, so the workbench boundary sash can't paint over it.
+    const barCard = container.querySelector<HTMLElement>('[data-testid="acp-user-bar-card"]')!
+
+    // Alt+K all the way up from the bottom stops at the sticky bar, not the row
+    // below it — and cannot step past it.
+    act(() => {
+      widgetRef.current!.moveTimeline('last')
+    })
+    act(() => {
+      widgetRef.current!.moveTimeline('prev')
+    })
+    act(() => {
+      widgetRef.current!.moveTimeline('prev')
+    })
+    expect(barCard.className).toContain(focusedClass)
+    expect(slotEl(container, 'm:a').className).not.toContain(focusedClass)
+    act(() => {
+      widgetRef.current!.moveTimeline('prev')
+    })
+    expect(barCard.className).toContain(focusedClass)
+
+    // Copy-focused-message resolves text through the full timeline too.
+    expect(widgetRef.current!.getFocusedText()).toBe('top question')
+
+    // Alt+Home lands on the bar directly; Alt+J hands focus back to the first
+    // in-list row.
+    act(() => {
+      widgetRef.current!.moveTimeline('last')
+    })
+    act(() => {
+      widgetRef.current!.moveTimeline('first')
+    })
+    expect(barCard.className).toContain(focusedClass)
+    act(() => {
+      widgetRef.current!.moveTimeline('next')
+    })
+    expect(barCard.className).not.toContain(focusedClass)
+    expect(slotEl(container, 'm:a').className).toContain(focusedClass)
+  })
 })
 
 describe('ChatBody — empty session hint', () => {

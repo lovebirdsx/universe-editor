@@ -7,7 +7,12 @@
  *  collapsed it shows the first line. Returns null until a user message exists.
  *--------------------------------------------------------------------------------------------*/
 
-import { useState, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  useEffect,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type MutableRefObject,
+} from 'react'
 import { ICommandService, IContextKeyService } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import type { IAcpSession, TimelineItem } from '../../services/acp/acpSessionService.js'
@@ -17,6 +22,7 @@ import { MessageContent } from './MessageContent.js'
 import { roleIcon } from './timelineIcons.js'
 import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
 import { itemSlotKey } from './stickyScroll.js'
+import type { WidgetHandle } from './ChatBody.js'
 import styles from './agents.module.css'
 
 const SUMMARY_MAX = 80
@@ -42,9 +48,11 @@ function firstUserItem(
 
 export function StickyUserMessageBar({
   session,
+  handleRef,
   onFocusSlot,
 }: {
   session: IAcpSession
+  handleRef?: MutableRefObject<WidgetHandle>
   onFocusSlot?: (key: string) => void
 }) {
   const timeline = useObservable(session.timeline)
@@ -55,10 +63,24 @@ export function StickyUserMessageBar({
   const widgetService = useService(IAcpChatWidgetService)
 
   const item = firstUserItem(timeline)
+  const slotKey = item ? itemSlotKey(item) : null
+
+  // Keyboard focus (Alt+A/E/J/K) can land on this bar — it renders the first user
+  // message, which is part of the navigation sequence but lives outside the scroll
+  // container, so it tracks the focused key through the widget handle.
+  const [focused, setFocused] = useState(false)
+  useEffect(() => {
+    const handle = handleRef?.current
+    if (!handle || slotKey === null) return
+    const sync = (): void => setFocused(handle.getFocusedKey() === slotKey)
+    sync()
+    const sub = handle.onDidChangeFocusedKey(sync)
+    return () => sub.dispose()
+  }, [handleRef, slotKey])
+
   if (!item) return null
 
   const message = item.message
-  const slotKey = itemSlotKey(item)
 
   const toggle = (): void =>
     setCollapsed((v) => {
@@ -69,7 +91,7 @@ export function StickyUserMessageBar({
 
   const handleContextMenu = (e: ReactMouseEvent): void => {
     e.preventDefault()
-    onFocusSlot?.(slotKey)
+    if (slotKey !== null) onFocusSlot?.(slotKey)
     widgetService.setHasSelection(!!window.getSelection()?.toString())
     setMenu({ x: e.clientX, y: e.clientY, args: [{ sessionId: session.id }] })
   }
@@ -78,7 +100,7 @@ export function StickyUserMessageBar({
     <ul
       className={styles['stickyUserBar']}
       data-testid="acp-user-bar"
-      data-timeline-key={slotKey}
+      data-timeline-key={slotKey ?? undefined}
       onContextMenu={handleContextMenu}
     >
       <CollapsibleSlot
@@ -88,7 +110,13 @@ export function StickyUserMessageBar({
         summary={clampLine(message.text)}
         collapsed={collapsed}
         onToggle={toggle}
-        rootProps={{ className: styles['planCard'] ?? '', 'data-testid': 'acp-user-bar-card' }}
+        rootProps={{
+          // The focus ring goes on the card (inset by the bar's 12px padding),
+          // not the full-width <ul> — a ring at the chat edge gets painted over
+          // by the workbench boundary sash. Matches in-list TimelineSlot focus.
+          className: `${styles['planCard'] ?? ''}${focused ? ` ${styles['timelineSlotFocused']}` : ''}`,
+          'data-testid': 'acp-user-bar-card',
+        }}
       >
         <MessageContent blocks={message.blocks} />
       </CollapsibleSlot>

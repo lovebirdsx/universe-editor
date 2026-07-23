@@ -323,6 +323,8 @@ function makeHandleRef(): { current: WidgetHandle } {
       cycleCollapseMode: () => {},
       getFocusedText: () => undefined,
       setFocusedKey: () => {},
+      getFocusedKey: () => null,
+      onDidChangeFocusedKey: () => ({ dispose: () => {} }),
       popoverSelectNext: () => {},
       popoverSelectPrev: () => {},
       popoverAccept: () => {},

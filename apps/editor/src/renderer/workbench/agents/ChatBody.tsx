@@ -31,6 +31,7 @@ import { useVirtualizer, type Virtualizer, type VirtualItem } from '@tanstack/re
 import { Bot, History, Loader2, Plus } from 'lucide-react'
 import {
   Emitter,
+  Event,
   IConfigurationService,
   ICommandService,
   IContextKeyService,
@@ -96,6 +97,10 @@ export interface WidgetHandle {
   cycleCollapseMode: () => void
   getFocusedText: () => string | undefined
   setFocusedKey: (key: string | null) => void
+  /** Current keyboard-focused slot key, plus a change signal — lets slots rendered
+   *  outside the scroll container (the sticky first-user-message bar) track focus. */
+  getFocusedKey: () => string | null
+  onDidChangeFocusedKey: Event<void>
   popoverSelectNext: () => void
   popoverSelectPrev: () => void
   popoverAccept: () => void
@@ -108,6 +113,13 @@ export interface WidgetHandle {
 
 const noop = (): void => {}
 
+/** Exposes ChatScroll's keyboard-focused slot key to slots rendered outside the
+ *  scroll container (StickyUserMessageBar). */
+interface FocusedKeyBridge {
+  key: string | null
+  emitter: Emitter<void>
+}
+
 const NOOP_HANDLE: WidgetHandle = {
   move: noop,
   scrollTimeline: noop,
@@ -117,6 +129,8 @@ const NOOP_HANDLE: WidgetHandle = {
   cycleCollapseMode: noop,
   getFocusedText: () => undefined,
   setFocusedKey: noop,
+  getFocusedKey: () => null,
+  onDidChangeFocusedKey: Event.None,
   popoverSelectNext: noop,
   popoverSelectPrev: noop,
   popoverAccept: noop,
@@ -170,6 +184,19 @@ function ChatSessionBody({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const handleRef = useRef<WidgetHandle>(NOOP_HANDLE)
   const widgetRef = useRef<AcpChatWidget | null>(null)
+
+  // Owned here rather than assigned by ChatScroll: StickyUserMessageBar mounts
+  // BEFORE ChatScroll, so a ChatScroll-assigned handle method would still be the
+  // NOOP default when the bar subscribes. The emitter follows the activeSlotRef
+  // pattern — never disposed (a StrictMode dry-run cleanup would kill it), GC
+  // reclaims it with the component.
+  const focusBridgeRef = useRef<FocusedKeyBridge | null>(null)
+  if (focusBridgeRef.current === null) {
+    focusBridgeRef.current = { key: null, emitter: new Emitter<void>() }
+  }
+  const focusBridge = focusBridgeRef.current
+  handleRef.current.getFocusedKey = () => focusBridge.key
+  handleRef.current.onDidChangeFocusedKey = focusBridge.emitter.event
 
   useEffect(() => {
     const container = containerRef.current
@@ -263,6 +290,7 @@ function ChatSessionBody({
           <StickyUserMessageBar
             key={`user:${session.id}`}
             session={session}
+            handleRef={handleRef}
             onFocusSlot={(key) => handleRef.current.setFocusedKey(key)}
           />
           <StickyPlanBar key={`plan:${session.id}`} session={session} />
@@ -270,6 +298,7 @@ function ChatSessionBody({
             key={session.id}
             session={session}
             handleRef={handleRef}
+            focusBridge={focusBridge}
             onFindVisibleChange={handleFindVisibleChange}
             readOnly={readOnly ?? false}
           />
@@ -311,11 +340,13 @@ function ReadOnlyChatFooter({ session }: { session: IAcpSession }) {
 function ChatScroll({
   session,
   handleRef,
+  focusBridge,
   onFindVisibleChange,
   readOnly,
 }: {
   session: IAcpSession
   handleRef: MutableRefObject<WidgetHandle>
+  focusBridge: FocusedKeyBridge
   onFindVisibleChange: (open: boolean) => void
   readOnly: boolean
 }) {
@@ -972,15 +1003,21 @@ function ChatScroll({
   }, [session.id, session.timeline, handleStickyJump, persist])
 
   // Retrack the outline's active symbol when the keyboard selection moves
-  // (Alt+Up/Down/Home/End), the other half of getActiveKey's signal.
+  // (Alt+Up/Down/Home/End), the other half of getActiveKey's signal. Also push
+  // the key through the bridge so the sticky first-user bar tracks focus.
   useEffect(() => {
+    focusBridge.key = focusedKey
+    focusBridge.emitter.fire()
     activeSlotRef.current?.fire()
-  }, [focusedKey])
+  }, [focusedKey, focusBridge])
 
   useEffect(() => {
     const handle = handleRef.current
     handle.move = (direction) => {
-      const list = displayTimelineRef.current
+      // Navigate over the FULL timeline, not displayTimeline: the first user
+      // message is sliced out of displayTimeline because the sticky bar above the
+      // scroll container renders it — but it must stay keyboard-reachable.
+      const list = timelineRef.current
       if (list.length === 0) return
       const keys = list.map(slotKey)
       const current = focusedKeyRef.current
@@ -1006,8 +1043,11 @@ function ChatScroll({
       stickRef.current = direction === 'last'
       setFocusedKey(nextKey)
       focusedKeyRef.current = nextKey
-      if (direction === 'first') {
-        const container = containerRef.current
+      const container = containerRef.current
+      const displayIndex = displayTimelineRef.current.findIndex((it) => slotKey(it) === nextKey)
+      // The first user message lives in the always-visible sticky bar above the
+      // container (displayIndex === -1); revealing it just means scrolling to top.
+      if (displayIndex === -1 || direction === 'first') {
         if (container) container.scrollTop = 0
         persist()
         return
@@ -1017,17 +1057,17 @@ function ChatScroll({
         persist()
         return
       }
-      const container = containerRef.current
       const el = container?.querySelector<HTMLElement>(
         `[data-timeline-key="${cssEscape(nextKey)}"]`,
       )
       // In virtual mode the target row may be unmounted (outside the overscan
       // window), so scrollIntoView finds nothing — fall back to the virtualizer,
-      // which scrolls and then mounts it. Mirrors ExplorerView's reveal.
+      // which scrolls and then mounts it. Mirrors ExplorerView's reveal. The
+      // virtualizer indexes displayTimeline, hence displayIndex (not nextIndex).
       if (el) {
         el.scrollIntoView({ block: 'nearest' })
       } else {
-        virtualizerRef.current?.scrollToIndex(nextIndex, { align: 'center' })
+        virtualizerRef.current?.scrollToIndex(displayIndex, { align: 'center' })
       }
       persist()
     }
