@@ -69,6 +69,7 @@ import type {
   WorkspaceSymbol,
 } from 'vscode-languageserver-types'
 import type { ExtHostDocuments } from './hostDocuments.js'
+import { CancellationTokenSource } from '@universe-editor/platform'
 
 /** Any of the language providers a plugin can register, keyed by its handle. */
 type AnyLanguageProvider =
@@ -135,6 +136,8 @@ export class LanguageProviderRegistry {
   private readonly _providers = new Map<number, RegisteredProvider>()
   private _languageHandle = 0
   private _diagnosticHandle = 0
+  /** In-flight workspace-symbol queries by provider handle (for cancellation). */
+  private readonly _workspaceSymbolRequests = new Map<number, CancellationTokenSource>()
 
   /**
    * `languages` is an accessor (not the value) so the "not available in this
@@ -448,9 +451,31 @@ export class LanguageProviderRegistry {
     handle: number,
     query: string,
   ): Promise<WorkspaceSymbol[] | SymbolInformation[] | null> {
+    // Latest-wins per handle: a new query supersedes the in-flight one (the
+    // picker debounces keystrokes), so cancel it before starting — the TS
+    // server serializes requests and a stale query would stall the fresh one.
+    this.cancelWorkspaceSymbols(handle)
     const provider = this._provider<WorkspaceSymbolProvider>(handle, 'workspaceSymbol')
     if (!provider) return null
-    return (await provider.provideWorkspaceSymbols(query)) ?? null
+    const cts = new CancellationTokenSource()
+    this._workspaceSymbolRequests.set(handle, cts)
+    try {
+      return (await provider.provideWorkspaceSymbols(query, cts.token)) ?? null
+    } finally {
+      if (this._workspaceSymbolRequests.get(handle) === cts) {
+        this._workspaceSymbolRequests.delete(handle)
+      }
+      cts.dispose()
+    }
+  }
+
+  /** Cancel the in-flight workspace-symbol query for `handle`, if any. */
+  cancelWorkspaceSymbols(handle: number): void {
+    const cts = this._workspaceSymbolRequests.get(handle)
+    if (!cts) return
+    this._workspaceSymbolRequests.delete(handle)
+    cts.cancel()
+    cts.dispose()
   }
 
   async provideFoldingRanges(handle: number, uri: UriComponents): Promise<FoldingRange[] | null> {

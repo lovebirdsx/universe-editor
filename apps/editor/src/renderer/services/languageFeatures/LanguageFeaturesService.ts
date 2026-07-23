@@ -20,6 +20,7 @@ import {
   InstantiationType,
   registerSingleton,
   toDisposable,
+  type CancellationToken,
   type Event,
   type IDisposable,
 } from '@universe-editor/platform'
@@ -37,7 +38,15 @@ export interface IDocumentSymbolProvidersChangeEvent {
  * picker enumerates them directly. Results stay LSP-shaped — the picker converts.
  */
 export interface IWorkspaceSymbolProvider {
-  provideWorkspaceSymbols(query: string): Promise<WorkspaceSymbol[] | SymbolInformation[] | null>
+  /**
+   * `token` cancels a superseded query (the picker debounces keystrokes and
+   * cancels the previous search) — implementations should forward it to the
+   * underlying request so a stale query doesn't keep the language server busy.
+   */
+  provideWorkspaceSymbols(
+    query: string,
+    token: CancellationToken,
+  ): Promise<WorkspaceSymbol[] | SymbolInformation[] | null>
 }
 
 export interface ILanguageFeaturesService {

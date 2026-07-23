@@ -13,7 +13,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { basename } from 'node:path'
 import { Writable } from 'node:stream'
-import { Emitter, type Event } from 'vscode-jsonrpc'
+import {
+  Emitter,
+  CancellationTokenSource as RpcCancellationTokenSource,
+  type Event,
+} from 'vscode-jsonrpc'
 import {
   createMessageConnection,
   StreamMessageReader,
@@ -21,6 +25,7 @@ import {
   type MessageConnection,
 } from 'vscode-jsonrpc/node.js'
 import { URI } from 'vscode-uri'
+import type { CancellationToken } from '@universe-editor/extension-api'
 import type {
   CodeLens,
   CompletionItem,
@@ -95,6 +100,10 @@ const READY_GRACE_MS = 2_000
  *  treat progress whose title starts with this as "loading a project"; other
  *  workDoneProgress (e.g. go-to-source-definition) must not gate readiness. */
 const PROJECT_LOADING_TITLE = 'Initializing'
+
+/** Workspace-symbol cap (VSCode's TS extension passes maxResultLimit 256 to
+ *  navto; TSLS doesn't, so we slice the relevance-sorted result ourselves). */
+const MAX_WORKSPACE_SYMBOLS = 256
 
 function sanitizeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {}
@@ -332,11 +341,31 @@ export class LspClient {
 
   async provideWorkspaceSymbols(
     query: string,
+    token?: CancellationToken,
   ): Promise<WorkspaceSymbol[] | SymbolInformation[] | null> {
+    // An empty query is a match-all: on a large project navto returns tens of
+    // thousands of symbols (TSLS passes no maxResultLimit, so tsserver doesn't
+    // cap either) and stalls the serialized request queue for seconds. VSCode's
+    // TS extension returns no results for it; callers must not send it.
+    if (!query) return []
     const conn = await this._ready()
+    // Bridge the API token to jsonrpc's so cancellation reaches the server
+    // ($/cancelRequest → TSLS cancellation pipe → tsserver aborts the navto).
+    const cts = new RpcCancellationTokenSource()
+    const sub = token?.onCancellationRequested(() => cts.cancel())
     try {
-      return await conn.sendRequest('workspace/symbol', { query })
+      const result = await conn.sendRequest<WorkspaceSymbol[] | SymbolInformation[] | null>(
+        'workspace/symbol',
+        { query },
+        cts.token,
+      )
+      // navto is unbounded; keep the relevance-sorted head (VSCode caps at 256)
+      // so a broad query can't move a huge payload across both IPC hops.
+      return Array.isArray(result) && result.length > MAX_WORKSPACE_SYMBOLS
+        ? result.slice(0, MAX_WORKSPACE_SYMBOLS)
+        : result
     } catch (err) {
+      if (cts.token.isCancellationRequested) return null
       const message = (err as Error).message
       // "No Project" is expected, not a failure: tsserver creates projects
       // lazily, so navto has nothing to search until a TS/JS file has been
@@ -346,6 +375,9 @@ export class LspClient {
         console.error(`[typescript] workspace/symbol failed: ${message}`)
       }
       return null
+    } finally {
+      sub?.dispose()
+      cts.dispose()
     }
   }
 

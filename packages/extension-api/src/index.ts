@@ -86,6 +86,13 @@ export interface Disposable {
 /** A subscribable signal: call with a listener, dispose to unsubscribe. */
 export type Event<T> = (listener: (e: T) => void) => Disposable
 
+/** Cooperative cancellation for long-running provider requests. */
+export interface CancellationToken {
+  readonly isCancellationRequested: boolean
+  /** Fires once when cancellation is requested. Fires immediately if already cancelled. */
+  onCancellationRequested(listener: () => void): Disposable
+}
+
 /** Per-extension key/value store handed to `activate` via ExtensionContext. */
 export interface Memento {
   get<T>(key: string): T | undefined
@@ -495,7 +502,15 @@ export interface RenameProvider {
 }
 
 export interface WorkspaceSymbolProvider {
-  provideWorkspaceSymbols(query: string): ProviderResult<WorkspaceSymbol[] | SymbolInformation[]>
+  /**
+   * `token` cancels a superseded query (the picker debounces keystrokes and
+   * cancels the previous search) — pass it through to the underlying request
+   * so a stale query doesn't keep the language server busy.
+   */
+  provideWorkspaceSymbols(
+    query: string,
+    token: CancellationToken,
+  ): ProviderResult<WorkspaceSymbol[] | SymbolInformation[]>
 }
 
 export interface FoldingRangeProvider {

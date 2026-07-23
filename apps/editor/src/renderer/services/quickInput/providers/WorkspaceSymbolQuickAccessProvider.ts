@@ -1,20 +1,28 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Workspace symbol quick access ('#'): aggregates workspace symbols from the
- *  registered language feature providers (TS/JS, markdown, …) with a debounced,
- *  out-of-order-guarded query. An empty query matches all and is cached for
- *  instant replay on the next open (stale-while-revalidate). Mirrors VSCode's
- *  workbench.action.showAllSymbols.
+ *  registered language feature providers (TS/JS, markdown, …). Mirrors VSCode's
+ *  workbench.action.showAllSymbols behavior:
+ *    - no input, no search — an empty query renders an empty list with no
+ *      spinner (a match-all query on a large project returns tens of thousands
+ *      of symbols and stalls the server's serialized request queue);
+ *    - the filter pre-fills with the selection / word under the cursor
+ *      (defaultFilterValue), so opening with a caret on a symbol searches it;
+ *    - keystrokes debounce, and each new query cancels the in-flight one — the
+ *      cancellation rides a token all the way into the language server.
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  CancellationTokenSource,
   IEditorGroupsService,
   IInstantiationService,
+  ILoggerService,
   IUriIdentityService,
   IWorkspaceService,
   URI,
   localize,
   toDisposable,
+  type ILogger,
   type IQuickAccessProvider,
   type IQuickAccessProviderRunOptions,
   type IQuickItemHighlight,
@@ -37,16 +45,8 @@ type MonacoNamespace = Awaited<ReturnType<typeof MonacoLoader.ensureInitialized>
 
 const MAX_RESULTS = 512
 const WORKSPACE_SYMBOL_DEBOUNCE_MS = 150
-
-/**
- * Last successful match-all (empty query) result, replayed instantly on the next
- * open so the picker is never blank while the fresh query is in flight
- * (stale-while-revalidate). Keyed by workspace root so one folder never shows
- * another's symbols.
- */
-let emptyQueryCache:
-  | { readonly rootKey: string; readonly entries: readonly WorkspaceSymbolEntry[] }
-  | undefined
+/** A longer selection makes a poor symbol filter (VSCode caps at 1024). */
+const MAX_FILTER_LENGTH = 1024
 
 function relativePath(root: URI | undefined, uri: URI, uriIdentity: IUriIdentityService): string {
   if (!root) return uri.fsPath
@@ -104,13 +104,41 @@ async function revealPosition(
 }
 
 export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider {
+  private readonly _logger: ILogger
+
   constructor(
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @ILanguageFeaturesService private readonly _langFeatures: ILanguageFeaturesService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
-  ) {}
+    @ILoggerService loggerService: ILoggerService,
+  ) {
+    this._logger = loggerService.createLogger({
+      id: 'workspaceSymbolQuickAccess',
+      name: 'Workspace Symbol Quick Access',
+    })
+  }
+
+  /**
+   * Prefill the filter with the selection / word under the cursor (VSCode's
+   * getSelectionSearchString): opening the picker on a symbol searches it
+   * immediately instead of presenting an empty list.
+   */
+  get defaultFilterValue(): string | undefined {
+    const input = this._groups.activeGroup?.activeEditor
+    if (!(input instanceof FileEditorInput)) return undefined
+    const editor = FileEditorRegistry.get(input)
+    const model = editor?.getModel()
+    const selection = editor?.getSelection()
+    if (!editor || !model || !selection) return undefined
+    if (!selection.isEmpty()) {
+      if (selection.startLineNumber !== selection.endLineNumber) return undefined
+      const text = model.getValueInRange(selection)
+      return text.length <= MAX_FILTER_LENGTH ? text : undefined
+    }
+    return model.getWordAtPosition(selection.getPosition())?.word
+  }
 
   provide(picker: IQuickPick<IQuickPickItem>, options: IQuickAccessProviderRunOptions): void {
     const { disposables, token, prefix } = options
@@ -121,46 +149,35 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
     )
 
     const root = this._workspace.current?.folder
-    const rootKey = root?.toString() ?? ''
     /** Pick id → symbol, so onDidAccept can recover the target location. */
     const byId = new Map<string, UnifiedWorkspaceSymbol>()
     let currentValue = picker.value.slice(prefix.length)
     let seq = 0
     let debounce: ReturnType<typeof setTimeout> | undefined
+    /** The in-flight query; cancelled by the next keystroke / empty query / hide. */
+    let queryCts: CancellationTokenSource | undefined
 
     const render = (entries: readonly WorkspaceSymbolEntry[], query: string): void => {
       byId.clear()
       const merged = entries.map((e) => tsEntryToUnified(e, root, this._uriIdentity))
-      // An empty (match-all) query has no relevance signal and concatenates
-      // multiple providers, so sort by name (then path) for a stable, predictable
-      // list — and so the leading MAX_RESULTS slice keeps an alphabetical head
-      // instead of an arbitrary, provider-ordered cut. A real query is fuzzy
-      // scored against the name and re-sorted by relevance (each server's own
-      // ranking mixes poorly across providers), with the matched ranges reused as
+      // Fuzzy-score against the name and re-sort by relevance (each server's own
+      // ranking mixes poorly across providers), reusing the matched ranges as
       // highlights. Mirrors VSCode's symbols quick access.
-      let ranked: { symbol: UnifiedWorkspaceSymbol; matches: readonly IQuickItemHighlight[] }[]
-      if (!query) {
-        merged.sort(
-          (a, b) => a.name.localeCompare(b.name) || a.description.localeCompare(b.description),
+      const ranked = merged
+        .map((symbol) => {
+          const res = fuzzyScore(symbol.name, query)
+          return res ? { symbol, score: res.score, matches: res.matches } : undefined
+        })
+        .filter(
+          (
+            x,
+          ): x is {
+            symbol: UnifiedWorkspaceSymbol
+            score: number
+            matches: readonly IQuickItemHighlight[]
+          } => x !== undefined,
         )
-        ranked = merged.map((symbol) => ({ symbol, matches: [] }))
-      } else {
-        ranked = merged
-          .map((symbol) => {
-            const res = fuzzyScore(symbol.name, query)
-            return res ? { symbol, score: res.score, matches: res.matches } : undefined
-          })
-          .filter(
-            (
-              x,
-            ): x is {
-              symbol: UnifiedWorkspaceSymbol
-              score: number
-              matches: readonly IQuickItemHighlight[]
-            } => x !== undefined,
-          )
-          .sort((a, b) => b.score - a.score)
-      }
+        .sort((a, b) => b.score - a.score)
       picker.items = ranked.slice(0, MAX_RESULTS).map((entry, i) => {
         const id = String(i)
         byId.set(id, entry.symbol)
@@ -179,31 +196,62 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
     // registered; each activates lazily on opening a file of its language.
     let wsProviders: ReturnType<ILanguageFeaturesService['getWorkspaceSymbolProviders']> = []
     let monacoNs: MonacoNamespace | undefined
+    let disposed = false
 
-    // An empty query means "show everything": the language servers' `navto`
-    // treats it as match-all, and (like VSCode's symbols quick access) we skip
-    // fuzzy scoring for it and render whatever the providers return.
+    const cancelInFlight = (): void => {
+      queryCts?.cancel()
+      queryCts?.dispose()
+      queryCts = undefined
+    }
+
     const refresh = (): void => {
-      if (!monacoNs) return
+      if (disposed || !monacoNs) return
       const ns = monacoNs
       const query = currentValue.trim()
+      cancelInFlight()
+      // No input, no search (VSCode parity): a match-all navto on a large
+      // project saturates the server for seconds and its payload blocks the
+      // renderer; an empty filter just shows an empty list.
+      if (!query) {
+        seq++
+        picker.busy = false
+        picker.items = []
+        byId.clear()
+        return
+      }
       const mySeq = ++seq
+      const startedAt = Date.now()
       picker.busy = true
+      const source = (queryCts = new CancellationTokenSource(token))
       void Promise.all(
         wsProviders.map((p) =>
           p
-            .provideWorkspaceSymbols(query)
+            .provideWorkspaceSymbols(query, source.token)
             .then((symbols) => workspaceSymbolsToEntries(symbols, ns))
             .catch(() => [] as WorkspaceSymbolEntry[]),
         ),
       ).then((perProvider) => {
-        if (token.isCancellationRequested || mySeq !== seq) return
+        const stale = source.token.isCancellationRequested || mySeq !== seq
+        // Settled queries no longer need cancellation; disposing here releases
+        // the parent-token subscription instead of waiting for the next
+        // keystroke / teardown (a short-lived session could otherwise outlive
+        // its last query's subscription).
+        if (queryCts === source) queryCts = undefined
+        source.dispose()
+        if (stale || disposed) return
         picker.busy = false
         const flat = perProvider.flat()
-        // Seed the next open with this match-all result.
-        if (!query) emptyQueryCache = { rootKey, entries: flat }
+        this._logger.debug(
+          `workspace symbol query "${query}" → ${flat.length} results in ${Date.now() - startedAt}ms`,
+        )
         render(flat, query)
       })
+    }
+
+    const scheduleRefresh = (): void => {
+      if (disposed) return
+      if (debounce) clearTimeout(debounce)
+      debounce = setTimeout(refresh, WORKSPACE_SYMBOL_DEBOUNCE_MS)
     }
 
     const openSymbol = (symbol: UnifiedWorkspaceSymbol): void => {
@@ -233,8 +281,7 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
     disposables.add(
       picker.onDidChangeValue((value) => {
         currentValue = value.slice(prefix.length)
-        if (debounce) clearTimeout(debounce)
-        debounce = setTimeout(refresh, WORKSPACE_SYMBOL_DEBOUNCE_MS)
+        scheduleRefresh()
       }),
     )
     disposables.add(
@@ -246,26 +293,24 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
     )
     disposables.add(
       toDisposable(() => {
+        disposed = true
         seq++
+        cancelInFlight()
         if (debounce) clearTimeout(debounce)
       }),
     )
 
     void MonacoLoader.ensureInitialized().then((ns) => {
-      if (token.isCancellationRequested) return
+      if (disposed || token.isCancellationRequested) return
       monacoNs = ns
       wsProviders = this._langFeatures.getWorkspaceSymbolProviders()
-      // Replay the previous match-all result instantly (stale-while-revalidate)
-      // so the picker shows content immediately instead of a blank list.
-      if (emptyQueryCache && emptyQueryCache.rootKey === rootKey) {
-        render(emptyQueryCache.entries, currentValue.trim())
-      }
-      // Populate/refresh on open (empty value → match-all). Route it through the
-      // same debounce so that if the user starts typing right away, this heavy
-      // match-all query is cancelled before it's ever sent — LSP requests are
-      // serialized, and an in-flight match-all would stall the real query.
-      if (debounce) clearTimeout(debounce)
-      debounce = setTimeout(refresh, WORKSPACE_SYMBOL_DEBOUNCE_MS)
+      // Programmatic value writes don't fire onDidChangeValue, so the '#' prefix
+      // prefill (controller-side) never reaches the listener above — re-read the
+      // live value now that an initial query can actually run.
+      currentValue = picker.value.slice(prefix.length)
+      // No match-all on open: only a prefilled filter (defaultFilterValue)
+      // kicks off an initial query; an empty input renders an empty list.
+      if (currentValue.trim()) scheduleRefresh()
     })
   }
 }

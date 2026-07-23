@@ -21,6 +21,13 @@ export interface IQuickAccessProviderRunOptions {
 
 export interface IQuickAccessProvider {
   /**
+   * Filter to prefill when the picker opens with just this provider's prefix
+   * (e.g. the word under the cursor for '#'). The appended text is selected so
+   * typing replaces it. VSCode parity (IQuickAccessProvider.defaultFilterValue).
+   * `| undefined`: implementors compute it and may legitimately have none.
+   */
+  readonly defaultFilterValue?: string | undefined
+  /**
    * Drive the shared picker for this provider's mode. Called once when this
    * provider becomes active; the provider subscribes to `picker.onDidChangeValue`
    * itself (hung on `options.disposables`) to react to subsequent edits. All

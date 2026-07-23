@@ -102,6 +102,18 @@ export class QuickAccessController extends Disposable implements IQuickAccessCon
           token: source.token,
           prefix: descriptor.prefix,
         })
+        // Prefill the provider's default filter (e.g. the word under the cursor
+        // for '#') when the user opened with just the prefix, selecting the
+        // appended text so typing replaces it (VSCode parity). Programmatic
+        // value writes don't fire onDidChangeValue — providers re-read
+        // picker.value when their async init settles to run the initial query.
+        if (current === descriptor.prefix) {
+          const defaultFilterValue = provider.defaultFilterValue
+          if (defaultFilterValue) {
+            picker.value = `${descriptor.prefix}${defaultFilterValue}`
+            picker.valueSelection = [descriptor.prefix.length, picker.value.length]
+          }
+        }
       }
 
       const finish = (): void => {

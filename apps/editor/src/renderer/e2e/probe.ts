@@ -113,6 +113,10 @@ const NONE_TOKEN = {
   onCancellationRequested: () => ({ dispose: () => {} }),
 } as import('../workbench/editor/monaco/MonacoLoader.js').monaco.CancellationToken
 
+/** Same none-token, widened for the platform-typed workspace symbol providers. */
+const NONE_PLATFORM_TOKEN =
+  NONE_TOKEN as unknown as import('@universe-editor/platform').CancellationToken
+
 class DummyEditorInput extends EditorInput {
   constructor(
     private readonly _uri: URI,
@@ -556,7 +560,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const providers = services.languageFeaturesService.getWorkspaceSymbolProviders()
       const names: string[] = []
       for (const provider of providers) {
-        const symbols = (await provider.provideWorkspaceSymbols(query)) ?? []
+        const symbols = (await provider.provideWorkspaceSymbols(query, NONE_PLATFORM_TOKEN)) ?? []
         for (const s of symbols) names.push(s.name)
       }
       return names

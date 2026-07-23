@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for the #-context data sources:
- *  - WorkspaceSymbolContextProvider: empty-query stale-while-revalidate caching,
- *    alphabetical vs fuzzy ranking, ContextSuggestionItem normalization.
+ *  - WorkspaceSymbolContextProvider: empty-query no-op, fuzzy ranking,
+ *    ContextSuggestionItem normalization.
  *  - ScmChangeContextProvider: multi-group dedup + status-letter normalization.
  *  - OpenEditorContextProvider: cross-group FileEditorInput enumeration + dedup.
  *  workspaceSymbolsToEntries has its own tests (lspMonacoConvert.test.ts), so it's
@@ -87,13 +87,12 @@ describe('WorkspaceSymbolContextProvider', () => {
     ])
   })
 
-  it('sorts an empty query alphabetically by name (no fuzzy scoring)', async () => {
-    const provider = makeProvider(async () => [
-      entry('zeta', 'file:///workspace/z.ts'),
-      entry('alpha', 'file:///workspace/a.ts'),
-    ])
-    const items = await provider.query('')
-    expect(items.map((i) => i.label)).toEqual(['alpha', 'zeta'])
+  it('returns nothing for an empty query without calling the providers', async () => {
+    const fetchSpy = vi.fn<(query: string) => Promise<WorkspaceSymbolEntry[]>>()
+    const provider = makeProvider(fetchSpy)
+    expect(await provider.query('')).toEqual([])
+    expect(await provider.query('   ')).toEqual([])
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 
   it('ranks a non-empty query by fuzzy score', async () => {
@@ -121,8 +120,8 @@ describe('WorkspaceSymbolContextProvider', () => {
       entryOfKind('field', 'file:///workspace/a.ts', 7), // Field → dropped
       entryOfKind('prop', 'file:///workspace/a.ts', 6), // Property → dropped
     ])
-    const items = await provider.query('')
-    expect(items.map((i) => i.label)).toEqual(['MyClass', 'myFn'])
+    const items = await provider.query('my')
+    expect(items.map((i) => i.label).sort()).toEqual(['MyClass', 'myFn'])
   })
 
   it('keeps short markdown headings but ignores overly long ones', async () => {
@@ -132,40 +131,8 @@ describe('WorkspaceSymbolContextProvider', () => {
       entryOfKind(longHeading, 'file:///workspace/guide.md', 14), // too long → dropped
       entryOfKind('someString', 'file:///workspace/a.ts', 14), // String in non-md → dropped
     ])
-    const items = await provider.query('')
+    const items = await provider.query('get')
     expect(items.map((i) => i.label)).toEqual(['Getting Started'])
-  })
-
-  it('serves the cached empty-query result instantly, then revalidates in the background', async () => {
-    let resolveRevalidation: ((entries: WorkspaceSymbolEntry[]) => void) | undefined
-    const revalidation = new Promise<WorkspaceSymbolEntry[]>((resolve) => {
-      resolveRevalidation = resolve
-    })
-    const fetchSpy = vi
-      .fn<(query: string) => Promise<WorkspaceSymbolEntry[]>>()
-      .mockResolvedValueOnce([entry('first', 'file:///workspace/a.ts')])
-      .mockReturnValueOnce(revalidation)
-      .mockResolvedValue([])
-
-    const provider = makeProvider(fetchSpy)
-
-    const initial = await provider.query('')
-    expect(initial.map((i) => i.label)).toEqual(['first'])
-
-    // Cache hit: returns the stale 'first' result instantly and kicks off a
-    // background revalidation fetch (left pending, not yet resolved).
-    const cached = await provider.query('')
-    expect(cached.map((i) => i.label)).toEqual(['first'])
-    expect(fetchSpy).toHaveBeenCalledTimes(2)
-
-    // Settle the background fetch and let its `.then` update the cache. A few
-    // microtask hops separate `revalidation` settling from the cache write
-    // (identity conversion → Promise.all → _fetchEntries → the .then itself).
-    resolveRevalidation!([entry('second', 'file:///workspace/b.ts')])
-    for (let i = 0; i < 10; i++) await Promise.resolve()
-
-    const revalidated = await provider.query('')
-    expect(revalidated.map((i) => i.label)).toEqual(['second'])
   })
 })
 

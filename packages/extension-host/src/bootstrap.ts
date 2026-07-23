@@ -201,6 +201,9 @@ const extHostLanguages: IExtHostLanguages = {
     (await serviceReady).provideRenameEdits(handle, uri, position, newName),
   $provideWorkspaceSymbols: async (handle, query) =>
     (await serviceReady).provideWorkspaceSymbols(handle, query),
+  $cancelWorkspaceSymbols: (handle) => {
+    void serviceReady.then((service) => service.cancelWorkspaceSymbols(handle))
+  },
   $provideFoldingRanges: async (handle, uri) =>
     (await serviceReady).provideFoldingRanges(handle, uri),
   $provideDocumentLinks: async (handle, uri) =>

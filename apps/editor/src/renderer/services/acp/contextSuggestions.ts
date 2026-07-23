@@ -7,6 +7,7 @@
 
 import type { ISourceControlResourceStateDto } from '@universe-editor/extensions-common'
 import {
+  CancellationToken,
   IEditorGroupsService,
   IUriIdentityService,
   IWorkspaceService,
@@ -97,16 +98,12 @@ function toItem(
 }
 
 /**
- * Workspace symbol source for the `#` panel's "符号" group. Mirrors
- * WorkspaceSymbolQuickAccessProvider's empty-query stale-while-revalidate cache
- * and fuzzy ranking, minus the quick-pick UI: callers own keystroke debounce.
+ * Workspace symbol source for the `#` panel's "符号" group. Fuzzy ranking
+ * mirrors the quick access provider, minus the quick-pick UI: callers own
+ * keystroke debounce. Empty queries are a no-op (same rule as the quick
+ * access: a match-all navto saturates the language server on large projects).
  */
 export class WorkspaceSymbolContextProvider {
-  private _seq = 0
-  private _emptyCache:
-    | { readonly rootKey: string; readonly entries: readonly WorkspaceSymbolEntry[] }
-    | undefined
-
   constructor(
     @ILanguageFeaturesService private readonly _langFeatures: ILanguageFeaturesService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
@@ -115,23 +112,9 @@ export class WorkspaceSymbolContextProvider {
 
   async query(query: string): Promise<readonly ContextSuggestionItem[]> {
     const root = this._workspace.current?.folder
-    const rootKey = root?.toString() ?? ''
     const trimmed = query.trim()
-    const mySeq = ++this._seq
-
-    if (!trimmed && this._emptyCache?.rootKey === rootKey) {
-      const cached = this._emptyCache.entries
-      // Stale-while-revalidate: serve the cached match-all list instantly, then
-      // refresh it in the background for the *next* empty-query call. Skip the
-      // write if a newer query() has since superseded this refresh.
-      void this._fetchEntries('').then((flat) => {
-        if (mySeq === this._seq) this._emptyCache = { rootKey, entries: flat }
-      })
-      return this._rank(cached, '', root)
-    }
-
+    if (!trimmed) return []
     const flat = await this._fetchEntries(trimmed)
-    if (!trimmed && mySeq === this._seq) this._emptyCache = { rootKey, entries: flat }
     return this._rank(flat, trimmed, root)
   }
 
@@ -141,7 +124,7 @@ export class WorkspaceSymbolContextProvider {
     const perProvider = await Promise.all(
       providers.map((p) =>
         p
-          .provideWorkspaceSymbols(query)
+          .provideWorkspaceSymbols(query, CancellationToken.None)
           .then((symbols) => workspaceSymbolsToEntries(symbols, ns))
           .catch(() => [] as WorkspaceSymbolEntry[]),
       ),
@@ -154,14 +137,8 @@ export class WorkspaceSymbolContextProvider {
     query: string,
     root: URI | undefined,
   ): readonly ContextSuggestionItem[] {
-    const navigable = entries.filter(isNavigableSymbol)
-    if (!query) {
-      const sorted = [...navigable].sort(
-        (a, b) => a.name.localeCompare(b.name) || a.uri.toString().localeCompare(b.uri.toString()),
-      )
-      return sorted.slice(0, MAX_RESULTS).map((e) => toItem(e, root, this._uriIdentity))
-    }
-    return navigable
+    return entries
+      .filter(isNavigableSymbol)
       .map((entry) => {
         const res = fuzzyScore(entry.name, query)
         return res ? { entry, score: res.score } : undefined

@@ -393,6 +393,14 @@ export interface IExtHostLanguages {
     handle: number,
     query: string,
   ): Promise<WorkspaceSymbol[] | SymbolInformation[] | null>
+  /**
+   * Cancel the in-flight workspace-symbol query for `handle` (latest-wins per
+   * handle: a new `$provideWorkspaceSymbols` already cancels the previous one;
+   * this covers picker-hide / keystroke-cancellation with no follow-up query).
+   * Fire-and-forget — the pending request resolves with whatever the provider
+   * returns for a cancelled token.
+   */
+  $cancelWorkspaceSymbols(handle: number): void
   $provideFoldingRanges(handle: number, uri: UriComponents): Promise<FoldingRange[] | null>
   $provideDocumentLinks(handle: number, uri: UriComponents): Promise<DocumentLink[] | null>
   $resolveDocumentLink(handle: number, link: DocumentLink): Promise<DocumentLink | null>

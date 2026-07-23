@@ -114,6 +114,13 @@ export class QuickInputService implements IQuickInputService {
         onAccept: (selected) => onDidAccept.fire(selected as T[]),
         onValueChange: (value) => {
           _value = value
+          // A user edit consumes any host-pushed valueSelection (e.g. the '#'
+          // prefill's select-all): without this, the next pushState (busy/items)
+          // would keep broadcasting the stale selection and the panel would
+          // re-apply it over the just-typed text. Providers that autocomplete
+          // on each keystroke (file dialog) re-set their selection right after,
+          // synchronously, so this never clobbers a fresh one.
+          _valueSelection = undefined
           onDidChangeValue.fire(value)
         },
         onActiveChange: (item) => onDidChangeActive.fire(item as T | undefined),

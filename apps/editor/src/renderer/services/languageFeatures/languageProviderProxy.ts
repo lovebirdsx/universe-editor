@@ -198,7 +198,14 @@ export function createWorkspaceSymbolProxy(
   extHost: IExtHostLanguages,
 ): IWorkspaceSymbolProvider {
   return {
-    provideWorkspaceSymbols: (query) => extHost.$provideWorkspaceSymbols(handle, query),
+    provideWorkspaceSymbols: (query, token) => {
+      // The RPC layer can't carry a CancellationToken, so cancellation rides a
+      // side channel: the host cancels the in-flight query for this handle.
+      const sub = token.onCancellationRequested(() => {
+        extHost.$cancelWorkspaceSymbols(handle)
+      })
+      return extHost.$provideWorkspaceSymbols(handle, query).finally(() => sub.dispose())
+    },
   }
 }
 

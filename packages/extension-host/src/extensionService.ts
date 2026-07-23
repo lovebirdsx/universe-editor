@@ -667,6 +667,10 @@ export class ExtensionService implements IExtensionHostBridge {
     return this._languageRegistry.provideWorkspaceSymbols(handle, query)
   }
 
+  cancelWorkspaceSymbols(handle: number): void {
+    this._languageRegistry.cancelWorkspaceSymbols(handle)
+  }
+
   provideFoldingRanges(handle: number, uri: UriComponents): Promise<FoldingRange[] | null> {
     return this._languageRegistry.provideFoldingRanges(handle, uri)
   }

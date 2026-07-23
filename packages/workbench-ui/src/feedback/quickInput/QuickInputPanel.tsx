@@ -384,15 +384,32 @@ export function QuickPickPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value])
 
-  // Controlled cursor / selection — applied after the value lands in the DOM so
-  // setSelectionRange isn't reset by React's value commit. Re-runs on `query` so
-  // a value change followed by the same selection still re-applies.
+  // Controlled cursor / selection — applied once per host-driven value/selection
+  // change, and only after the host value has landed in the local `query` (so
+  // setSelectionRange isn't reset by React's value commit). Must NOT re-fire on
+  // local typing: `query` changes on every keystroke, and re-applying a stale
+  // prefill selection (e.g. '#' + word-under-cursor) would select the just-typed
+  // text so the next keystroke replaces it instead of appending.
   const valueSelection = state.valueSelection
+  const stateValue = state.value
+  const lastAppliedSelectionRef = useRef<{ selection: unknown; value: unknown }>({
+    selection: undefined,
+    value: undefined,
+  })
   useLayoutEffect(() => {
     if (composingRef.current) return
-    if (!valueSelection) return
+    if (!valueSelection) {
+      lastAppliedSelectionRef.current = { selection: undefined, value: undefined }
+      return
+    }
+    // Host value hasn't reached the DOM yet (the sync effect above will land it
+    // and re-run this one); applying now would select within the stale text.
+    if (stateValue !== undefined && query !== stateValue) return
+    const last = lastAppliedSelectionRef.current
+    if (last.selection === valueSelection && last.value === stateValue) return
+    lastAppliedSelectionRef.current = { selection: valueSelection, value: stateValue }
     inputRef.current?.setSelectionRange(valueSelection[0], valueSelection[1])
-  }, [valueSelection, query])
+  }, [valueSelection, query, stateValue])
 
   const prefixActive = prefix.length > 0 && query.startsWith(prefix)
   const prefixMissing = prefix.length > 0 && !query.startsWith(prefix)

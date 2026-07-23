@@ -343,7 +343,7 @@ function registerProviders(context: ExtensionContext, client: LspClient): void {
         client.provideRenameEdits(uriString(doc.uri), position, newName),
     }),
     languages.registerWorkspaceSymbolProvider({
-      provideWorkspaceSymbols: (query) => client.provideWorkspaceSymbols(query),
+      provideWorkspaceSymbols: (query, token) => client.provideWorkspaceSymbols(query, token),
     }),
   )
 

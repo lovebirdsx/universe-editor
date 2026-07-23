@@ -752,6 +752,68 @@ describe('QuickPickPanel simple-file-dialog extras', () => {
     expect(input.selectionEnd).toBe(9)
   })
 
+  it('does not re-apply a stale valueSelection once the user edits the value', () => {
+    // Regression: a prefilled filter (e.g. '#' + word-under-cursor) selects the
+    // appended text via valueSelection. Typing replaces it — but the stale
+    // selection must not be re-applied after the edit, or it selects the
+    // just-typed char and every subsequent keystroke replaces instead of
+    // appending ('#Test' → 'i' → '#i' → 'n' → '#n' instead of '#in').
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: '#',
+          value: '#Test',
+          valueSelection: [1, 5],
+          filterExternally: true,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field') as HTMLInputElement
+    expect(input.value).toBe('#Test')
+    expect(input.selectionStart).toBe(1)
+    expect(input.selectionEnd).toBe(5)
+
+    // Type 'i' over the selected text: the browser replaces the selection and
+    // collapses the caret right after the inserted char.
+    input.setSelectionRange(2, 2)
+    fireEvent.change(input, { target: { value: '#i' } })
+    expect(input.value).toBe('#i')
+    expect(input.selectionStart).toBe(2)
+    expect(input.selectionEnd).toBe(2)
+
+    // The next keystroke appends rather than replacing (caret ends at 3).
+    input.setSelectionRange(3, 3)
+    fireEvent.change(input, { target: { value: '#in' } })
+    expect(input.value).toBe('#in')
+    expect(input.selectionStart).toBe(3)
+    expect(input.selectionEnd).toBe(3)
+  })
+
+  it('re-applies valueSelection when the host drives a new value (autocomplete)', () => {
+    // The file dialog's path autocomplete relies on this: each keystroke makes
+    // the host push a new value together with a selection to re-apply.
+    const state = makeState({
+      prefix: undefined,
+      value: '/foo',
+      valueSelection: [4, 4],
+      filterExternally: true,
+    })
+    const { rerender } = render(<QuickPickPanel state={state} onClose={() => undefined} />)
+    const input = screen.getByTestId('quick-input-field') as HTMLInputElement
+
+    const next = makeState({
+      prefix: undefined,
+      value: '/foo/apps',
+      valueSelection: [5, 9],
+      filterExternally: true,
+    })
+    rerender(<QuickPickPanel state={next} onClose={() => undefined} />)
+    expect(input.value).toBe('/foo/apps')
+    expect(input.selectionStart).toBe(5)
+    expect(input.selectionEnd).toBe(9)
+  })
+
   it('moves focus to the item named by state.activeItems', () => {
     const folders = [
       { id: 'a', label: 'apps' },
