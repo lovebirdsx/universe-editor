@@ -18,6 +18,8 @@ catalog:
   # Core
   '@agentclientprotocol/sdk': 0.22.1
   zod: ^3.25.0
+  # TypeScript native (Go port) LSP preview — opt-in via UNIVERSE_TS_SERVER=native
+  '@typescript/native-preview': 7.0.0-dev.20260707.2
 
   # Release
   '@changesets/cli': ^2.27.0

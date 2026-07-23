@@ -6,9 +6,11 @@
  *
  * Ported from the former main-process TypescriptLanguageClientService: same
  * spawn / env-sanitize / initialize-handshake / crash-restart skeleton, minus
- * the Electron/platform coupling. CLI + tsserver paths are injected by the main
- * process via UNIVERSE_TSLS_CLI / UNIVERSE_TSLS_TSSERVER (the only Electron-aware
- * resolution stays in main). Diagnostics are server PUSH, surfaced via onDiagnostics.
+ * the Electron/platform coupling. Which server to run (vendored TSLS or the Go
+ * native LSP) is decided by the main process and injected via env
+ * (UNIVERSE_TS_SERVER_KIND + UNIVERSE_TSLS_CLI/TSSERVER or UNIVERSE_TSGO_BIN);
+ * path resolution is the only Electron-aware piece and stays in main.
+ * Diagnostics are server PUSH, surfaced via onDiagnostics.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { basename } from 'node:path'
@@ -52,6 +54,17 @@ export interface PublishDiagnosticsEvent {
   readonly version?: number
   readonly diagnostics: readonly Diagnostic[]
 }
+
+/**
+ * Which language-server implementation to spawn. `tsls` = vendored
+ * typescript-language-server (a Node CLI run under ELECTRON_RUN_AS_NODE, which
+ * forks the JS tsserver); `native` = the Go port's own LSP binary
+ * (`tsgo --lsp --stdio`, a single self-contained process). The main process
+ * picks one and hands it over via env (UNIVERSE_TS_SERVER_KIND + paths).
+ */
+export type TsServerSpec =
+  | { kind: 'tsls'; cli: string; tsserver: string; version: string }
+  | { kind: 'native'; binary: string; version: string }
 
 /**
  * Lifecycle state of the language server, surfaced so the UI can tell the user
@@ -112,7 +125,8 @@ const MAX_WORKSPACE_SYMBOLS = 256
  *  (VSCode's `typescript.tsserver.maxTsServerMemory` default). Without it the
  *  server inherits Node's default heap and a multi-MB d.ts can OOM tsserver.
  *  Overridable via the setting of the same name — a huge generated d.ts plus a
- *  large project can legitimately need more than 3 GB (exit code 134). */
+ *  large project can legitimately need more than 3 GB (exit code 134). TSLS-only:
+ *  the native binary manages its own (Go) memory. */
 const MAX_TSSERVER_MEMORY_MB = 3072
 
 /** didOpen payloads above this get an info log — large-file forensics. */
@@ -120,6 +134,12 @@ const LARGE_DOC_LOG_CHARS = 1024 * 1024
 
 /** Recent tsserver stderr lines kept for the crash report in `_onProcGone`. */
 const STDERR_TAIL_LINES = 10
+
+/** Debounce between a document change and a pull-diagnostic request. Only used
+ *  when the server speaks LSP 3.17 pull diagnostics (diagnosticProvider) and
+ *  never pushes `publishDiagnostics` (e.g. tsgo). 400ms mirrors VSCode's
+ *  interactivity threshold for error markers. */
+const PULL_DIAGNOSTIC_DEBOUNCE_MS = 400
 
 function sanitizeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {}
@@ -189,6 +209,17 @@ export class LspClient {
    *  Undefined until the handshake completes (or if the server omits it). */
   private _semanticTokensLegend: SemanticTokensLegend | undefined
 
+  /** Pull-diagnostic mode, set from the initialize response when the server
+   *  advertises `diagnosticProvider` (LSP 3.17): such servers (tsgo) never push
+   *  real `publishDiagnostics`, so we poll `textDocument/diagnostic` per open
+   *  doc, debounced after each didOpen/didChange. */
+  private _pullDiagnostics = false
+  private readonly _pullTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly _inFlightPulls = new Set<string>()
+  /** Bumped on every connection teardown so late pull responses from a dead
+   *  server can't overwrite fresh diagnostics. */
+  private _connGeneration = 0
+
   private readonly _onDiagnostics: (e: PublishDiagnosticsEvent) => void
   /** Called when the server asks the client to refresh CodeLenses
    *  (`workspace/codeLens/refresh`), e.g. after project graph changes. */
@@ -225,11 +256,17 @@ export class LspClient {
   private _awaitingProjectLoad = false
 
   constructor(
-    private readonly _cli: string,
-    private readonly _tsserver: string,
+    private readonly _spec: TsServerSpec,
     private readonly _workspaceRoot: string | undefined,
     onDiagnostics: (e: PublishDiagnosticsEvent) => void,
+    /** Read on every (re)start so a raised cap applies on the next crash-restart
+     *  without reloading the window. TSLS-only (the native binary ignores it). */
     private readonly _getMaxTsServerMemoryMb?: () => Promise<number>,
+    /** Timer injection for tests (defaults to global set/clearTimeout). */
+    private readonly _timers: { set: typeof setTimeout; clear: typeof clearTimeout } = {
+      set: setTimeout,
+      clear: clearTimeout,
+    },
   ) {
     this._onDiagnostics = onDiagnostics
   }
@@ -248,6 +285,10 @@ export class LspClient {
   }
 
   /** The server's current lifecycle state. */
+  get spec(): TsServerSpec {
+    return this._spec
+  }
+
   get state(): LspServerState {
     return this._state
   }
@@ -338,6 +379,7 @@ export class LspClient {
     this._notify(conn, 'textDocument/didOpen', {
       textDocument: { uri, languageId: doc.languageId, version: doc.sentVersion, text: openText },
     })
+    this._schedulePull(uri)
   }
 
   async didChange(
@@ -358,6 +400,7 @@ export class LspClient {
       textDocument: { uri, version },
       contentChanges: contentChanges as TextDocumentContentChangeEvent[],
     })
+    this._schedulePull(uri)
   }
 
   async didClose(uri: string): Promise<void> {
@@ -365,8 +408,62 @@ export class LspClient {
     // drops a project the moment its last file closes), undoing the prewarm.
     if (this._pinnedUris.has(uri)) return
     this._open.delete(uri)
+    this._cancelPull(uri)
     const conn = await this._ready()
     this._notify(conn, 'textDocument/didClose', { textDocument: { uri } })
+  }
+
+  // --- pull diagnostics (LSP 3.17, e.g. tsgo) -------------------------------
+
+  private _schedulePull(uri: string): void {
+    if (!this._pullDiagnostics) return
+    const existing = this._pullTimers.get(uri)
+    if (existing !== undefined) this._timers.clear(existing)
+    this._pullTimers.set(
+      uri,
+      this._timers.set(() => {
+        this._pullTimers.delete(uri)
+        void this._pullNow(uri)
+      }, PULL_DIAGNOSTIC_DEBOUNCE_MS),
+    )
+  }
+
+  private _cancelPull(uri: string): void {
+    const timer = this._pullTimers.get(uri)
+    if (timer !== undefined) {
+      this._timers.clear(timer)
+      this._pullTimers.delete(uri)
+    }
+  }
+
+  /** One pull cycle: request `textDocument/diagnostic` and surface the report
+   *  through the same callback push diagnostics use. */
+  private async _pullNow(uri: string): Promise<void> {
+    const conn = this._conn
+    if (!conn || this._inFlightPulls.has(uri)) return
+    const generation = this._connGeneration
+    this._inFlightPulls.add(uri)
+    try {
+      const report = (await conn.sendRequest('textDocument/diagnostic', {
+        textDocument: { uri },
+      })) as FullDocumentDiagnosticReport | null
+      // A restart swapped the connection (stale report) or the doc closed
+      // meanwhile (markers already cleared by the caller) — drop either way.
+      if (generation !== this._connGeneration || !this._open.has(uri)) return
+      if (report?.kind !== 'full') return
+      const doc = this._open.get(uri)
+      this._onDiagnostics({
+        uri,
+        ...(doc ? { version: doc.version() } : {}),
+        diagnostics: report.items ?? [],
+      })
+    } catch (err) {
+      // Races with connection teardown are expected; the next didOpen/didChange
+      // (or the restart replay) schedules a fresh pull.
+      console.error(`[typescript] pull diagnostics failed: ${(err as Error).message}`)
+    } finally {
+      this._inFlightPulls.delete(uri)
+    }
   }
 
   // --- language requests ---------------------------------------------------
@@ -514,7 +611,42 @@ export class LspClient {
 
   async resolveCodeLens(lens: CodeLens): Promise<CodeLens | null> {
     const conn = await this._ready()
-    return conn.sendRequest('codeLens/resolve', lens)
+    const resolved = await conn.sendRequest<CodeLens | null>('codeLens/resolve', lens)
+    if (resolved?.command && !resolved.command.command) {
+      // tsgo resolves a references lens to a title with an empty command (no
+      // `editor.action.showReferences`). Synthesize it client-side — same wire
+      // shape TSLS produces — so downstream conversion needs no special case.
+      return this._synthesizeCodeLensCommand(conn, resolved)
+    }
+    return resolved
+  }
+
+  /** Fill an empty-command references lens by asking the server for references
+   *  at the lens position (lens.data carries `{kind,uri}` per tsgo's shape). */
+  private async _synthesizeCodeLensCommand(
+    conn: MessageConnection,
+    lens: CodeLens,
+  ): Promise<CodeLens | null> {
+    const uri = (lens.data as { uri?: unknown } | undefined)?.uri
+    if (typeof uri !== 'string' || !lens.command) return lens
+    try {
+      const locations = await conn.sendRequest('textDocument/references', {
+        textDocument: { uri },
+        position: lens.range.start,
+        context: { includeDeclaration: true },
+      })
+      return {
+        ...lens,
+        command: {
+          ...lens.command,
+          command: 'editor.action.showReferences',
+          arguments: [uri, lens.range.start, locations ?? []],
+        },
+      }
+    } catch (err) {
+      console.error(`[typescript] codeLens references fallback failed: ${(err as Error).message}`)
+      return lens
+    }
   }
 
   // --- lifecycle -----------------------------------------------------------
@@ -540,12 +672,17 @@ export class LspClient {
         // keep the previous/default cap
       }
     }
+    const spec = this._spec
     const env = sanitizeEnv(process.env)
-    env.ELECTRON_RUN_AS_NODE = '1'
+    // TSLS is a Node CLI, run under Electron's Node runtime; the native binary
+    // is self-contained and spawned directly (no ELECTRON_RUN_AS_NODE).
+    const command = spec.kind === 'native' ? spec.binary : process.execPath
+    const args = spec.kind === 'native' ? ['--lsp', '--stdio'] : [spec.cli, '--stdio']
+    if (spec.kind === 'tsls') env.ELECTRON_RUN_AS_NODE = '1'
 
     let proc: ChildProcessWithoutNullStreams
     try {
-      proc = spawn(process.execPath, [this._cli, '--stdio'], {
+      proc = spawn(command, args, {
         env,
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
@@ -554,7 +691,7 @@ export class LspClient {
     } catch (err) {
       this._starting = undefined
       this._setState('error')
-      console.error(`[typescript] spawn failed cli=${this._cli}: ${(err as Error).message}`)
+      console.error(`[typescript] spawn failed ${command}: ${(err as Error).message}`)
       throw err as Error
     }
 
@@ -608,6 +745,12 @@ export class LspClient {
         | InitializeResult
         | undefined
       this._semanticTokensLegend = result?.capabilities?.semanticTokensProvider?.legend
+      // LSP 3.17 pull diagnostics: servers advertising this (tsgo) don't push
+      // real publishDiagnostics, so didOpen/didChange schedule pulls instead.
+      this._pullDiagnostics = result?.capabilities?.diagnosticProvider !== undefined
+      if (this._pullDiagnostics) {
+        console.error('[typescript] server uses pull diagnostics (textDocument/diagnostic)')
+      }
       this._notify(conn, 'initialized', {})
       // Enable references CodeLens (off by default in tsserver). implementations
       // stays off to match VSCode's default and keep the gutter quiet.
@@ -647,7 +790,14 @@ export class LspClient {
   private _onProgress(params: ProgressParams): void {
     const value = params.value
     if (value.kind === 'begin') {
-      if (!value.title || !value.title.startsWith(PROJECT_LOADING_TITLE)) return
+      if (!value.title) return
+      if (!value.title.startsWith(PROJECT_LOADING_TITLE)) {
+        // Debug aid for server parity (e.g. the Go native LSP reports project
+        // loading under different titles): anything not matching our title
+        // must not gate readiness, but we want it visible in the logs.
+        console.error(`[typescript] progress begin (untracked) title=${value.title}`)
+        return
+      }
       this._clearReadyGrace()
       this._awaitingProjectLoad = false
       this._loadingTokens.add(params.token)
@@ -686,14 +836,19 @@ export class LspClient {
       processId: process.pid,
       rootUri,
       workspaceFolders: root ? [{ uri: rootUri as string, name: basename(root) }] : null,
-      initializationOptions: {
-        // Point the server at OUR bundled tsserver, never a project-local or
-        // global TypeScript. The vendor dir ships exactly the version we pinned.
-        tsserver: { path: this._tsserver },
-        // Forwarded as tsserver's --max-old-space-size (VSCode's default cap);
-        // without it Node's default heap makes a huge d.ts an OOM crash.
-        maxTsServerMemory: this._maxTsServerMemoryMb,
-      },
+      // Point the server at OUR bundled tsserver, never a project-local or
+      // global TypeScript. The vendor dir ships exactly the version we pinned.
+      // TSLS-only: the native binary has no tsserver to redirect. The memory cap
+      // is forwarded as tsserver's --max-old-space-size (VSCode's default cap);
+      // without it Node's default heap makes a huge d.ts an OOM crash.
+      ...(this._spec.kind === 'tsls'
+        ? {
+            initializationOptions: {
+              tsserver: { path: this._spec.tsserver },
+              maxTsServerMemory: this._maxTsServerMemoryMb,
+            },
+          }
+        : {}),
       capabilities: {
         textDocument: {
           synchronization: { dynamicRegistration: false },
@@ -720,6 +875,7 @@ export class LspClient {
           documentSymbol: { hierarchicalDocumentSymbolSupport: true },
           rename: { prepareSupport: true },
           publishDiagnostics: { relatedInformation: true, versionSupport: true },
+          diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false },
           codeLens: {},
           semanticTokens: {
             // We only use whole-document tokens; the server still advertises its
@@ -791,6 +947,10 @@ export class LspClient {
     this._conn = undefined
     this._proc = undefined
     this._starting = undefined
+    this._connGeneration++
+    this._pullDiagnostics = false
+    for (const timer of this._pullTimers.values()) this._timers.clear(timer)
+    this._pullTimers.clear()
     // Drop any project-load tracking: a restart re-primes from scratch, and a
     // stale token would wedge the state (its `end` will never arrive).
     this._clearReadyGrace()
@@ -823,17 +983,20 @@ export class LspClient {
   dispose(): void {
     this._disposed = true
     this._onDidChangeState.dispose()
+    for (const timer of this._pullTimers.values()) this._timers.clear(timer)
+    this._pullTimers.clear()
     const proc = this._proc
     if (proc) {
-      // The spawned CLI (`typescript-language-server`) forks tsserver as its own
-      // children (a syntax + a semantic server) and reaps them from its
-      // `process.on('exit')` hook. A hard kill (`taskkill /F` / TerminateProcess)
-      // skips that hook, orphaning the tsserver grandchildren — they survive app
-      // quit holding pipes open, blocking Playwright teardown and leaking stray
-      // electron.exe for real users. Closing the CLI's stdin lets it observe EOF
-      // and exit gracefully, running its hook so tsserver dies with it. The CLI
-      // exits on its own even after we return, so no wait is needed on the
-      // synchronous shutdown path.
+      // The TSLS CLI forks tsserver as its own children (a syntax + a semantic
+      // server) and reaps them from its `process.on('exit')` hook. A hard kill
+      // (`taskkill /F` / TerminateProcess) skips that hook, orphaning the
+      // tsserver grandchildren — they survive app quit holding pipes open,
+      // blocking Playwright teardown and leaking stray electron.exe for real
+      // users. Closing stdin lets the server observe EOF and exit gracefully,
+      // running its hook so tsserver dies with it. (The native binary is a
+      // single process with no grandchildren, but stdin EOF is likewise its
+      // graceful-shutdown signal.) The server exits on its own even after we
+      // return, so no wait is needed on the synchronous shutdown path.
       try {
         proc.stdin.end()
       } catch {
@@ -849,7 +1012,7 @@ interface InitializeParams {
   processId: number
   rootUri: string | null
   workspaceFolders: { uri: string; name: string }[] | null
-  initializationOptions: { tsserver: { path: string }; maxTsServerMemory: number }
+  initializationOptions?: { tsserver: { path: string }; maxTsServerMemory: number }
   capabilities: Record<string, unknown>
 }
 
@@ -882,5 +1045,15 @@ interface InitializeResult {
     semanticTokensProvider?: {
       legend?: SemanticTokensLegend
     }
+    /** LSP 3.17 pull-diagnostics advertisement; its presence switches the
+     *  client to polling `textDocument/diagnostic`. */
+    diagnosticProvider?: unknown
   }
+}
+
+/** LSP 3.17 `textDocument/diagnostic` result (`full` variant; `unchanged` is
+ *  only valid when a previousResultId was sent, which we never do). */
+interface FullDocumentDiagnosticReport {
+  kind: 'full'
+  items: Diagnostic[]
 }

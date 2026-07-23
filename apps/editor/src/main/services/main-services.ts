@@ -61,6 +61,7 @@ import {
 } from './workspace/recentWorkspacesMainService.js'
 import { AcpHostMainService } from './acpHost/acpHostMainService.js'
 import { ExtensionHostMainService } from './extensionHost/extensionHostMainService.js'
+import { createTsServerSpecResolver } from './extensionHost/tsServerPaths.js'
 import { ExtensionManagementMainService } from './extensionManagement/extensionManagementService.js'
 import { ExtensionGalleryMainService } from './extensionManagement/extensionGalleryService.js'
 import { AcpTerminalMainService } from './acpTerminal/acpTerminalMainService.js'
@@ -124,7 +125,7 @@ registerSingletonFactory(
       undefined,
       undefined,
       undefined,
-      undefined,
+      createTsServerSpecResolver(acc.get(IEnvironmentMainService).configDir),
       acc.get(ILoggerService),
     ),
 )

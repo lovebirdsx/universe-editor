@@ -29,6 +29,7 @@ import {
   runWhenIdle,
 } from '@universe-editor/platform'
 import { languageActivationEvent } from '@universe-editor/extensions-common'
+import { DEFAULT_TS_SERVER_IMPLEMENTATION } from '../../shared/tsServerImplementation.js'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 
 const DEFAULT_PREWARM_LANGUAGES = ['typescript', 'markdown']
@@ -74,8 +75,9 @@ export class LanguageServicePrewarmContribution
       }),
     )
 
-    // Owned here alongside the other typescript.* setting; the TS plugin reads it
-    // on every tsserver (re)start, so raising it applies on the next crash-restart.
+    // Owned here alongside the other typescript.* settings; the TS plugin reads
+    // them on every server (re)start, so raising them applies on the next
+    // crash-restart.
     this._register(
       ConfigurationRegistry.registerConfiguration({
         id: 'typescript.tsserver',
@@ -88,6 +90,27 @@ export class LanguageServicePrewarmContribution
             description: localize(
               'settings.typescript.tsserver.maxTsServerMemory',
               'The maximum amount of memory (in MB) the TypeScript server may use. Raise this if the TypeScript language server crashes with out-of-memory on large projects (a crash notification will point here). Applies when the server (re)starts.',
+            ),
+          },
+          'typescript.server.implementation': {
+            type: 'string',
+            enum: ['tsls', 'native'],
+            enumDescriptions: [
+              localize(
+                'settings.typescript.server.implementation.tsls',
+                'Vendored typescript-language-server driving the bundled JS tsserver.',
+              ),
+              localize(
+                'settings.typescript.server.implementation.native',
+                'The Go native port (tsgo, dev builds only — currently has no effect in packaged builds).',
+              ),
+            ],
+            // Shared with the main process's settings.json fallback — changing
+            // only this schema default does NOT reach main.
+            default: DEFAULT_TS_SERVER_IMPLEMENTATION,
+            description: localize(
+              'settings.typescript.server.implementation',
+              'Which TypeScript language server to run. Read by the main process when the extension host spawns, so changing it needs a window restart to take effect.',
             ),
           },
         },

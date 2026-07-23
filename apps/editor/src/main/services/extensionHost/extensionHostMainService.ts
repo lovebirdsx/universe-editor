@@ -37,7 +37,7 @@ import type {
   ExtHostStdioChunk,
   IExtensionHostService,
 } from '../../../shared/ipc/extensionHostService.js'
-import { resolveTsServerPaths } from './tsServerPaths.js'
+import { createTsServerSpecResolver, type TsServerSpec } from './tsServerPaths.js'
 import { resolveUserExtensionsDir } from './userExtensionsDir.js'
 import { resolveBuiltinExtensionsDir } from './builtinExtensionsDir.js'
 import { PerfMarks } from '../../../shared/perf/marks.js'
@@ -58,8 +58,16 @@ export type ExtHostEntryResolver = () => string
 /** Resolves the built-in extensions directory the host scans. Injectable for tests. */
 export type ExtHostExtensionsDirResolver = () => string
 
-/** Resolves the vendored TS language-server CLI + tsserver. Injectable for tests. */
-export type TsServerPathsResolver = () => { cli: string; tsserver: string }
+/** Resolves which TS language server the plugin spawns. Injectable for tests. */
+export type TsServerSpecResolver = () => TsServerSpec
+
+/** Default settings dir for the TS-server preference chain: the deployment
+ *  config location (<userData>). `--config-dir` relocations only kick in via
+ *  an explicit constructor override (the DI wiring below passes the resolved
+ *  configDir). */
+function defaultSettingsDir(): string {
+  return app.getPath('userData')
+}
 
 const defaultSpawner: ExtHostSpawner = (command, args, options) =>
   spawn(command, [...args], {
@@ -137,7 +145,9 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     private readonly _resolveEntry: ExtHostEntryResolver = defaultResolveEntry,
     private readonly _resolveExtensionsDir: ExtHostExtensionsDirResolver = defaultResolveExtensionsDir,
     private readonly _resolveUserExtensionsDir: ExtHostExtensionsDirResolver = defaultResolveUserExtensionsDir,
-    private readonly _resolveTsServerPaths: TsServerPathsResolver = resolveTsServerPaths,
+    private readonly _resolveTsServerSpec: TsServerSpecResolver = createTsServerSpecResolver(
+      defaultSettingsDir(),
+    ),
     @ILoggerService loggerService?: ILoggerService,
   ) {
     super()
@@ -160,10 +170,18 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     env.UNIVERSE_BUILTIN_EXTENSIONS_DIR = spec?.extensionsDir ?? this._resolveExtensionsDir()
     env.UNIVERSE_USER_EXTENSIONS_DIR = spec?.userExtensionsDir ?? this._resolveUserExtensionsDir()
     // The `typescript` built-in plugin spawns the LSP server itself; hand it the
-    // vendored CLI + tsserver paths (the only Electron-aware resolution).
-    const { cli, tsserver } = this._resolveTsServerPaths()
-    env.UNIVERSE_TSLS_CLI = cli
-    env.UNIVERSE_TSLS_TSSERVER = tsserver
+    // server spec (the only Electron-aware resolution). Default is the vendored
+    // TSLS; `typescript.server.implementation: "native"` in settings.json,
+    // UNIVERSE_TS_SERVER=native, or UNIVERSE_TSGO_BIN selects the Go port.
+    const tsSpec = this._resolveTsServerSpec()
+    env.UNIVERSE_TS_SERVER_KIND = tsSpec.kind
+    env.UNIVERSE_TS_SERVER_VERSION = tsSpec.version
+    if (tsSpec.kind === 'native') {
+      env.UNIVERSE_TSGO_BIN = tsSpec.binary
+    } else {
+      env.UNIVERSE_TSLS_CLI = tsSpec.cli
+      env.UNIVERSE_TSLS_TSSERVER = tsSpec.tsserver
+    }
     // Parent dir for extensions' persistent cross-session storage
     // (`context.globalStoragePath` = `<dir>/<extId>`).
     env.UNIVERSE_GLOBAL_STORAGE_DIR = path.join(app.getPath('userData'), 'extensionGlobalStorage')

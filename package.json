@@ -47,8 +47,9 @@
     "ext:release": "node scripts/ext-release/release.mjs"
   },
   "devDependencies": {
-    "@universe-editor/config-eslint": "workspace:*",
     "@changesets/cli": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "@universe-editor/config-eslint": "workspace:*",
     "eslint": "catalog:",
     "prettier": "catalog:",
     "turbo": "catalog:",

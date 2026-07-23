@@ -9,7 +9,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { LspClient, type LspServerState } from '../lspClient.js'
+import { LspClient, type LspServerState, type PublishDiagnosticsEvent } from '../lspClient.js'
 
 interface ProgressValue {
   kind: 'begin' | 'report' | 'end'
@@ -24,7 +24,11 @@ interface Internals {
 }
 
 function makeClient(): { client: LspClient; internals: Internals; states: LspServerState[] } {
-  const client = new LspClient('cli', 'tsserver', '/ws', () => {})
+  const client = new LspClient(
+    { kind: 'tsls', cli: 'cli', tsserver: 'tsserver', version: '5.0.0' },
+    '/ws',
+    () => {},
+  )
   const states: LspServerState[] = []
   client.onDidChangeState((s) => states.push(s))
   return { client, internals: client as unknown as Internals, states }
@@ -115,7 +119,11 @@ interface SyncInternals {
 }
 
 function makeSyncClient() {
-  const client = new LspClient('cli', 'tsserver', '/ws', () => {})
+  const client = new LspClient(
+    { kind: 'tsls', cli: 'cli', tsserver: 'tsserver', version: '5.0.0' },
+    '/ws',
+    () => {},
+  )
   const internals = client as unknown as SyncInternals
   const sent: Array<{ method: string; params: unknown }> = []
   internals._ready = async () => ({})
@@ -209,7 +217,11 @@ describe('LspClient OOM detection', () => {
   }
 
   function makeCrashedClient(stderrLines: string[]) {
-    const client = new LspClient('cli', 'tsserver', '/ws', () => {})
+    const client = new LspClient(
+      { kind: 'tsls', cli: 'cli', tsserver: 'tsserver', version: '5.0.0' },
+      '/ws',
+      () => {},
+    )
     const internals = client as unknown as OomInternals
     const proc = {}
     internals._proc = proc
@@ -240,5 +252,138 @@ describe('LspClient OOM detection', () => {
     const { internals, proc, oomEvents } = makeCrashedClient(['some unrelated stack line'])
     internals._onProcGone(proc, 'exit code=1 signal=null')
     expect(oomEvents).toEqual([])
+  })
+})
+
+/** Pull-diagnostics plumbing: the timers are constructor-injected, the
+ *  connection is stood up by hand (no real server needed). */
+interface PullInternals {
+  _pullDiagnostics: boolean
+  _conn: unknown
+  _connGeneration: number
+  _open: Map<
+    string,
+    { languageId: string; version: () => number; text: () => string; sentVersion: number }
+  >
+  _schedulePull(uri: string): void
+  _cancelPull(uri: string): void
+}
+
+function fakeTimers(): {
+  timers: { set: typeof setTimeout; clear: typeof clearTimeout }
+  pending: () => number
+  runAll: () => void
+} {
+  let next = 0
+  const pending = new Map<number, () => void>()
+  const set = ((fn: () => void) => {
+    const handle = ++next
+    pending.set(handle, fn)
+    return handle
+  }) as unknown as typeof setTimeout
+  const clear = ((handle: number) => {
+    pending.delete(handle)
+  }) as unknown as typeof clearTimeout
+  return {
+    timers: { set, clear },
+    pending: () => pending.size,
+    runAll: () => {
+      for (const fn of [...pending.values()]) fn()
+    },
+  }
+}
+
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+describe('LspClient pull diagnostics (LSP 3.17, e.g. tsgo)', () => {
+  const URI = 'file:///ws/a.ts'
+  const diagnostic = {
+    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
+    message: 'boom',
+    severity: 1,
+  }
+
+  function makePullClient(sendRequest: (method: string) => unknown): {
+    internals: PullInternals
+    events: PublishDiagnosticsEvent[]
+    timers: ReturnType<typeof fakeTimers>
+  } {
+    const events: PublishDiagnosticsEvent[] = []
+    const timers = fakeTimers()
+    const client = new LspClient(
+      { kind: 'native', binary: '/bin/tsgo', version: '7.0.0-dev' },
+      '/ws',
+      (e) => events.push(e),
+      undefined,
+      timers.timers,
+    )
+    const internals = client as unknown as PullInternals
+    internals._pullDiagnostics = true
+    internals._conn = { sendRequest }
+    internals._open.set(URI, {
+      languageId: 'typescript',
+      version: () => 3,
+      text: () => 'x',
+      sentVersion: 3,
+    })
+    return { internals, events, timers }
+  }
+
+  it('pulls after the debounce and reports through the push channel', async () => {
+    const sendRequest = vi.fn(async () => ({ kind: 'full', items: [diagnostic] }))
+    const { internals, events, timers } = makePullClient(sendRequest)
+    internals._schedulePull(URI)
+    expect(events).toEqual([]) // debounced, not immediate
+    timers.runAll()
+    await flush()
+    expect(sendRequest).toHaveBeenCalledWith('textDocument/diagnostic', {
+      textDocument: { uri: URI },
+    })
+    expect(events).toEqual([{ uri: URI, version: 3, diagnostics: [diagnostic] }])
+  })
+
+  it('coalesces rapid reschedules into one pull', async () => {
+    const sendRequest = vi.fn(async () => ({ kind: 'full', items: [] }))
+    const { internals, timers } = makePullClient(sendRequest)
+    internals._schedulePull(URI)
+    internals._schedulePull(URI)
+    internals._schedulePull(URI)
+    expect(timers.pending()).toBe(1)
+    timers.runAll()
+    await flush()
+    expect(sendRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops a report that lands after the connection was replaced (restart)', async () => {
+    let resolveRequest: ((v: unknown) => void) | undefined
+    const sendRequest = vi.fn(
+      () => new Promise((resolve) => (resolveRequest = resolve as (v: unknown) => void)),
+    )
+    const { internals, events, timers } = makePullClient(sendRequest)
+    internals._schedulePull(URI)
+    timers.runAll()
+    internals._connGeneration++ // what _clearConnection does on restart
+    resolveRequest?.({ kind: 'full', items: [diagnostic] })
+    await flush()
+    expect(events).toEqual([])
+  })
+
+  it('does not schedule while pull mode is off (push servers)', async () => {
+    const sendRequest = vi.fn(async () => ({ kind: 'full', items: [diagnostic] }))
+    const { internals, timers } = makePullClient(sendRequest)
+    internals._pullDiagnostics = false
+    internals._schedulePull(URI)
+    expect(timers.pending()).toBe(0)
+    timers.runAll()
+    await flush()
+    expect(sendRequest).not.toHaveBeenCalled()
+  })
+
+  it('cancelPull stops a pending pull (didClose)', async () => {
+    const sendRequest = vi.fn(async () => ({ kind: 'full', items: [diagnostic] }))
+    const { internals, timers } = makePullClient(sendRequest)
+    internals._schedulePull(URI)
+    internals._cancelPull(URI)
+    expect(timers.pending()).toBe(0)
   })
 })

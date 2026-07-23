@@ -4,8 +4,9 @@
  * language providers, a diagnostics collection, and document sync to it — the
  * VSCode-native shape, where TS is just another extension.
  *
- * CLI + tsserver paths come from the main process via env (UNIVERSE_TSLS_CLI /
- * UNIVERSE_TSLS_TSSERVER); the plugin itself touches no Electron API.
+ * Which server to run (vendored TSLS or the Go native LSP) comes from the main
+ * process via env (UNIVERSE_TS_SERVER_KIND + path envs); the plugin itself
+ * touches no Electron API.
  */
 import {
   languages,
@@ -21,8 +22,9 @@ import {
 } from '@universe-editor/extension-api'
 import { URI } from 'vscode-uri'
 import { Emitter } from 'vscode-jsonrpc'
-import { LspClient, type LspServerState } from './lspClient.js'
+import { LspClient, type LspServerState, type TsServerSpec } from './lspClient.js'
 import { localize } from './nls.js'
+import { statusBarContent } from './statusIndicator.js'
 
 const TS_JS_LANGUAGES = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact']
 
@@ -77,18 +79,31 @@ function uriComponents(uri: string): UriComponents {
   }
 }
 
-export function activate(context: ExtensionContext): void {
+/** Read which server the main process provisioned for us (see lspClient.ts). */
+function resolveServerSpec(): TsServerSpec | undefined {
+  const version = process.env.UNIVERSE_TS_SERVER_VERSION ?? 'unknown'
+  if (process.env.UNIVERSE_TS_SERVER_KIND === 'native') {
+    const binary = process.env.UNIVERSE_TSGO_BIN
+    if (binary) return { kind: 'native', binary, version }
+    console.error('[typescript] UNIVERSE_TS_SERVER_KIND=native but UNIVERSE_TSGO_BIN missing')
+    return undefined
+  }
   const cli = process.env.UNIVERSE_TSLS_CLI
   const tsserver = process.env.UNIVERSE_TSLS_TSSERVER
   if (!cli || !tsserver) {
     console.error('[typescript] missing UNIVERSE_TSLS_CLI / UNIVERSE_TSLS_TSSERVER; not activating')
-    return
+    return undefined
   }
+  return { kind: 'tsls', cli, tsserver, version }
+}
+
+export function activate(context: ExtensionContext): void {
+  const spec = resolveServerSpec()
+  if (!spec) return
 
   const diagnostics = languages.createDiagnosticCollection('typescript')
   const client = new LspClient(
-    cli,
-    tsserver,
+    spec,
     workspace.rootPath,
     (e) => {
       diagnostics.set(uriComponents(e.uri), e.diagnostics)
@@ -275,43 +290,25 @@ function extname(name: string): string {
 const LANGUAGE_SERVER_ID = 'typescript'
 
 /**
- * Bridge the LSP lifecycle state to two surfaces: (1) a status-bar item showing a
- * spinner while the server comes up (VSCode-style language status), and (2) a
- * renderer-side signal so navigation commands (Go to Definition / References) can
- * show progress instead of silently blocking until the handshake completes.
+ * Bridge the LSP lifecycle state to two surfaces: (1) a status-bar item — a
+ * spinner while the server comes up, then a persistent TypeScript entry whose
+ * tooltip reports the server implementation + version (VSCode-style language
+ * status), and (2) a renderer-side signal so navigation commands (Go to
+ * Definition / References) can show progress instead of silently blocking
+ * until the handshake completes.
  */
 function registerStatusIndicator(context: ExtensionContext, client: LspClient): void {
   const item = window.createStatusBarItem(StatusBarAlignment.Right, 100)
+  const spec = client.spec
 
   const apply = (state: LspServerState): void => {
     languages.setLanguageServerStatus(LANGUAGE_SERVER_ID, state)
-    switch (state) {
-      case 'starting':
-        // VSCode parity: while initializing the status bar shows only a spinner
-        // (ProgressLocation.Window); the description lives in the tooltip.
-        item.text = ''
-        item.tooltip = localize(
-          'ts.status.starting.tooltip',
-          'Starting TypeScript language service…',
-        )
-        item.showProgress = 'spinning'
-        item.show()
-        break
-      case 'ready':
-        // Converge to a quiet state once ready (matches VSCode hiding the spinner).
-        item.showProgress = false
-        item.hide()
-        break
-      case 'error':
-        item.text = localize('ts.status.error.text', 'TypeScript')
-        item.tooltip = localize(
-          'ts.status.error.tooltip',
-          'TypeScript language service failed to start',
-        )
-        item.showProgress = false
-        item.show()
-        break
-    }
+    const content = statusBarContent(spec, state)
+    item.text = content.text
+    item.tooltip = content.tooltip
+    item.showProgress = content.showProgress
+    if (content.visible) item.show()
+    else item.hide()
   }
 
   apply(client.state)
