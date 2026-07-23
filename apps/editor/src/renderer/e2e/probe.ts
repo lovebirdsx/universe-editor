@@ -269,6 +269,10 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const monaco = FileEditorRegistry.get(active)
       if (!monaco) return false
       monaco.setPosition({ lineNumber, column })
+      // Monaco 0.55's setPosition no longer reveals: a real user's "cursor on
+      // line N" implies line N is visible (keyboard nav / go-to-line scrolls).
+      // Mirror that so specs asserting viewport state see a truthful editor.
+      monaco.revealPosition({ lineNumber, column })
       monaco.focus()
       return true
     },
