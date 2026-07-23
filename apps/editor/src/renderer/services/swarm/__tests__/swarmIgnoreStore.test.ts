@@ -5,7 +5,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Emitter, StorageScope, type IStorageService } from '@universe-editor/platform'
 import type { SwarmReviewDetailDto, SwarmReviewDto } from '@universe-editor/extensions-common'
-import { splitIgnored, reviewDtoFromDetail, firstNonEmptyLine } from '../swarmIgnoreStore.js'
+import {
+  splitIgnored,
+  reviewDtoFromDetail,
+  firstNonEmptyLine,
+  expiredIgnoredIds,
+} from '../swarmIgnoreStore.js'
 
 function review(id: string, overrides: Partial<SwarmReviewDto> = {}): SwarmReviewDto {
   return {
@@ -100,6 +105,29 @@ describe('splitIgnored', () => {
   })
 })
 
+describe('expiredIgnoredIds', () => {
+  const DAY = 86_400_000
+  const now = 10 * DAY
+
+  it('expires snapshots older than the window, keeps the rest', () => {
+    const metas = new Map<string, SwarmReviewDto>([
+      ['old', review('old', { updated: now - 8 * DAY })],
+      ['edge-in', review('edge-in', { updated: now - 7 * DAY })],
+      ['fresh', review('fresh', { updated: now - DAY })],
+    ])
+    expect(expiredIgnoredIds(metas, 7, now)).toEqual(['old'])
+  })
+
+  it('never expires a snapshot with no updated time, and expires nothing when the window is disabled', () => {
+    const metas = new Map<string, SwarmReviewDto>([
+      ['no-time', review('no-time', { updated: 0 })],
+      ['old', review('old', { updated: 1 })],
+    ])
+    expect(expiredIgnoredIds(metas, 7, now)).toEqual(['old'])
+    expect(expiredIgnoredIds(metas, 0, now)).toEqual([])
+  })
+})
+
 describe('swarmIgnoreStore', () => {
   // The store is a module singleton; reset the module registry per test to isolate.
   async function freshStore() {
@@ -181,5 +209,37 @@ describe('swarmIgnoreStore', () => {
     await store.attach(fakeStorage())
     store.refreshMeta(review('100'))
     expect(store.getMeta('100')).toBeUndefined()
+  })
+
+  it('pruneExpired drops out-of-window ignored reviews, persists, and fires once', async () => {
+    const DAY = 86_400_000
+    const now = 10 * DAY
+    const store = await freshStore()
+    const storage = fakeStorage({
+      'swarm.ignoredReviews': ['1', '2', '3'],
+      'swarm.ignoredReviewMeta': {
+        '1': review('1', { updated: now - 8 * DAY }),
+        '2': review('2', { updated: now - DAY }),
+        '3': review('3', { updated: 0 }),
+      },
+    })
+    await store.attach(storage)
+
+    let changes = 0
+    store.onDidChange(() => changes++)
+
+    store.pruneExpired(7, now)
+    expect(store.list()).toEqual(['2', '3'])
+    expect(store.getMeta('1')).toBeUndefined()
+    expect(storage.data.get('swarm.ignoredReviews')).toEqual(['2', '3'])
+    expect(changes).toBe(1)
+
+    // Nothing left to prune: no persist, no event.
+    store.pruneExpired(7, now)
+    expect(changes).toBe(1)
+
+    // Disabled window keeps everything.
+    store.pruneExpired(0, now)
+    expect(store.list()).toEqual(['2', '3'])
   })
 })

@@ -24,6 +24,28 @@ import type { SwarmReviewDetailDto, SwarmReviewDto } from '@universe-editor/exte
 const IGNORED_IDS_KEY = 'swarm.ignoredReviews'
 const IGNORED_META_KEY = 'swarm.ignoredReviewMeta'
 
+const DAY_MS = 86_400_000
+
+/** Ids whose snapshot predates the review window (`perforce.swarm.reviewWindowDays`)
+ *  as of `now`: an ignored review older than the window would never reappear in the
+ *  windowed dashboard anyway, so it is dropped from the IGNORED list instead of
+ *  accumulating forever. A snapshot with no updated time (0) never expires — never
+ *  destroy on missing data, mirroring the dashboard window. `windowDays <= 0` (no
+ *  time limit) expires nothing. */
+export function expiredIgnoredIds(
+  metas: ReadonlyMap<string, SwarmReviewDto>,
+  windowDays: number,
+  now: number,
+): string[] {
+  if (windowDays <= 0) return []
+  const cutoff = now - windowDays * DAY_MS
+  const expired: string[] = []
+  for (const [id, meta] of metas) {
+    if (meta.updated > 0 && meta.updated < cutoff) expired.push(id)
+  }
+  return expired
+}
+
 /** First non-empty line of `text`, trimmed — mirrors the extension-side parser's
  *  description summary (a blank first line must not blank the title). */
 export function firstNonEmptyLine(text: string): string {
@@ -126,6 +148,21 @@ class SwarmIgnoreStore {
   unignore(reviewId: string): void {
     if (!this._ids.delete(reviewId)) return
     this._meta.delete(reviewId)
+    this._persist()
+    this._onDidChange.fire()
+  }
+
+  /** Drop ignored reviews whose snapshot fell out of the review window. Runs on
+   *  startup and whenever `perforce.swarm.reviewWindowDays` changes, so the IGNORED
+   *  list doesn't accumulate reviews the windowed dashboard will never return. */
+  pruneExpired(windowDays: number, now: number = Date.now()): void {
+    if (this._ids.size === 0) return
+    const expired = expiredIgnoredIds(this._meta, windowDays, now)
+    if (expired.length === 0) return
+    for (const id of expired) {
+      this._ids.delete(id)
+      this._meta.delete(id)
+    }
     this._persist()
     this._onDidChange.fire()
   }

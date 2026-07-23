@@ -7,6 +7,7 @@
 
 import {
   Disposable,
+  IConfigurationService,
   IStorageService,
   IWorkbenchContribution,
   ViewContainerLocation,
@@ -18,8 +19,13 @@ import { swarmIgnoreStore } from '../services/swarm/swarmIgnoreStore.js'
 import { swarmReviewsUiStore } from '../services/swarm/swarmReviewsUiStore.js'
 import { SwarmReviewsView } from '../workbench/swarm/SwarmReviewsView.js'
 
+const REVIEW_WINDOW_DAYS_KEY = 'perforce.swarm.reviewWindowDays'
+
 export class SwarmViewContribution extends Disposable implements IWorkbenchContribution {
-  constructor(@IStorageService storage: IStorageService) {
+  constructor(
+    @IStorageService storage: IStorageService,
+    @IConfigurationService configuration: IConfigurationService,
+  ) {
     super()
 
     // Hydrate the persisted client-side stores as early as possible (app start,
@@ -28,6 +34,17 @@ export class SwarmViewContribution extends Disposable implements IWorkbenchContr
     // in "Needs My Action" while hydration catches up.
     void swarmIgnoreStore.attach(storage)
     void swarmReviewsUiStore.attach(storage)
+
+    // Auto-remove ignored reviews that aged out of the review window — the windowed
+    // dashboard will never return them again, so they'd pile up in IGNORED forever.
+    const pruneExpired = () =>
+      swarmIgnoreStore.pruneExpired(configuration.get<number>(REVIEW_WINDOW_DAYS_KEY) ?? 0)
+    void swarmIgnoreStore.whenReady.then(pruneExpired)
+    this._register(
+      configuration.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration(REVIEW_WINDOW_DAYS_KEY)) pruneExpired()
+      }),
+    )
 
     this._register(
       ViewContainerRegistry.registerViewContainer({

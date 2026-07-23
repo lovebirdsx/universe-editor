@@ -54,7 +54,7 @@
   "perforce.config.swarm.url.description": "Swarm server URL. Credentials are never stored here — Swarm reuses the p4 login ticket.",
   "perforce.config.swarm.apiVersion.description": "Swarm REST API version segment (default v9 — its endpoint set is the most complete, including the action dashboard; use v11 only if your server requires it).",
   "perforce.config.swarm.pollInterval.description": "Seconds between background polls for review updates (drives new-review notifications, the Activity Bar badge and the status bar count). 0 uses the default 60s. Minimum 10s.",
-  "perforce.config.swarm.reviewWindowDays.description": "Only list reviews updated within this many days in the Swarm Reviews view. 0 shows all reviews with no time limit.",
+  "perforce.config.swarm.reviewWindowDays.description": "Only list reviews updated within this many days in the Swarm Reviews view; ignored reviews older than this are automatically removed from the Ignored list. 0 shows all reviews with no time limit.",
   "perforce.config.swarm.authMode.description": "How Swarm authenticates: 'ticket' reuses the p4 login ticket (default), 'token' uses an independent Swarm API token from secret storage.",
   "perforce.config.swarm.trace.description": "Log verbose Swarm diagnostics (request bodies, query params, retries, timings, error response bodies) to the Swarm output channel. Credentials are never logged. Use when troubleshooting."
 }

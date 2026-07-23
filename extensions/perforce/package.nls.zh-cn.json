@@ -54,7 +54,7 @@
   "perforce.config.swarm.url.description": "Swarm 服务器 URL。凭据绝不存于此——Swarm 复用 p4 登录 ticket。",
   "perforce.config.swarm.apiVersion.description": "Swarm REST API 版本段（默认 v9——其端点集最全，含 action 看板；仅当服务器要求时改用 v11）。",
   "perforce.config.swarm.pollInterval.description": "后台轮询审核更新的间隔秒数（驱动新审核通知、Activity Bar 角标与状态栏计数）。0 使用默认 60 秒。最小 10 秒。",
-  "perforce.config.swarm.reviewWindowDays.description": "Swarm 审核视图仅列出最近这么多天内有更新的审核。0 表示不限时间、显示全部。",
+  "perforce.config.swarm.reviewWindowDays.description": "Swarm 审核视图仅列出最近这么多天内有更新的审核；超过该时间的已忽略审核会自动从「Ignored」列表移除。0 表示不限时间、显示全部。",
   "perforce.config.swarm.authMode.description": "Swarm 认证方式：'ticket' 复用 p4 登录 ticket（默认），'token' 使用密钥存储中的独立 Swarm API token。",
   "perforce.config.swarm.trace.description": "将详细的 Swarm 诊断信息（请求体、查询参数、重试、耗时、错误响应体）记录到 Swarm 输出通道。凭据绝不记录。排查问题时启用。"
 }

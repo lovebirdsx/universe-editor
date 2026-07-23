@@ -62,6 +62,7 @@
 - **忽略**：在列表里**右键**某审核选「忽略审核」，或在审核详情页顶部点 **Ignore** 按钮。
 - **恢复**：在 **Ignored** 组里**右键**选「取消忽略」，或在详情页点 **Unignore** 按钮，审核即回到 **Needs My Action**。
 - 忽略状态**全局持久化**（跨工作区、跨窗口共享，重启保留），侧栏与详情页任一处操作都会**双向同步**。忽略是纯本地状态，不会改动 Swarm 服务器上的审核。
+- 被忽略的审核若超过 `perforce.swarm.reviewWindowDays` 配置的时间窗口没有更新，会**自动从 Ignored 列表移除**（该审核本就不会再出现在按时间窗过滤的看板里）；`0`（不限时间）时永不自动移除。
 
 ### 按 ID 打开审核
 
@@ -176,7 +177,7 @@ universe-editor://swarm/review/1234
 | `perforce.swarm.url`          | `http://swarm.aki.kuro.com/` | Swarm 服务器 URL。**凭据绝不进配置**。                                                                            |
 | `perforce.swarm.apiVersion`   | `v9`                         | Swarm REST API 版本。`v9` 端点覆盖最全（含 action 看板）；仅当服务器版本要求时改 `v11`。                          |
 | `perforce.swarm.pollInterval` | `0`                          | 后台轮询看板的秒数（驱动新审核通知、Activity Bar 角标与状态栏计数），`0` 用默认 60 秒，最小 10 秒。                     |
-| `perforce.swarm.reviewWindowDays` | `7`                      | Swarm 审核视图仅列出最近这么多天内有更新的审核；`0` 表示不限时间、显示全部。                                       |
+| `perforce.swarm.reviewWindowDays` | `7`                      | Swarm 审核视图仅列出最近这么多天内有更新的审核；超过该时间的已忽略审核会自动从「Ignored」列表移除。`0` 表示不限时间、显示全部。                 |
 | `perforce.swarm.authMode`     | `ticket`                     | 认证方式：`ticket`（复用 p4 登录态）。                                                                            |
 | `perforce.swarm.trace`        | `false`                      | 是否记录详细诊断（请求体、查询参数、重试、耗时、错误响应体）到 **Swarm** 输出通道。凭据绝不记录。排查问题时打开。 |
 | `perforce.swarm.needsActionAuthors`        | `[]`             | 「Needs My Action」只显示发起者在此集合中的审核；空集不过滤。由侧栏过滤菜单维护。 |

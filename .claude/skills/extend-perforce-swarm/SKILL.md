@@ -42,6 +42,7 @@ disable-model-invocation: true
 - **meta 快照是必需兜底**：被 ignore 的 review 若某次 dashboard 不再返回（作者移出 needsActionAuthors 白名单等），IGNORED 组靠 `getMeta(id)` 仍能渲染 + 提供 unignore。IGNORED 组空时不显示组头。
 - **侧栏 + 详情页双向同步**：都订阅 `swarmIgnoreStore.onDidChange`；侧栏右键菜单据 `isIgnored` 显示 Ignore/Unignore，详情页 header 同理。ignore 时详情页用 `detail`（DetailDto）拼一份精简 `SwarmReviewDto` 传入（DetailDto 无 upVotes/downVotes，从 participants 现算）。
 - **按 ID 打开**：`OpenSwarmReviewByIdAction`（`swarm.openReviewById`，renderer Action2）——`f1:true` + `MenuId.ViewTitle`(`when: view == workbench.view.swarm.reviews`, icon `go-to-file`)，`IQuickInputService.input({validateInput})` 取数字 id → `openEditor(new SwarmReviewEditorInput(id))`。命令 id **不进**扩展 package.json（renderer Action2 遮蔽护栏）。
+- **IGNORED 受 reviewWindowDays 约束自动清理**：`SwarmViewContribution` 在 store hydrate 后 + 配置变更时调 `swarmIgnoreStore.pruneExpired(windowDays)`，按 meta 快照的 `updated` 删过期项（`updated===0` 缺失永不删、`windowDays<=0` 不删，对齐 dashboard 窗口语义；判定纯函数 `expiredIgnoredIds`）。删除走 store 的 delete+persist+fire，所有消费方（侧栏/详情页/角标/通知）经 onDidChange 收敛。被清理的 review 理论上回到 Needs My Action，但 dashboard 同样按窗口过滤，故实际不可见。
 - **测试坑**：给 `SwarmReviewsView` 加了 `useService(IStorageService)`，其组件测试的 `createServices` 必须补注册 IStorageService（否则 useService 抛错，整个测试文件挂）。store 单测用 `vi.resetModules()` + 普通 `import` 隔离单例，**不能**用 `import(url?t=random)`（vitest 报 "Unknown variable dynamic import"）。
 
 ## UI 状态持久化（侧栏 + 详情页记忆，纯渲染层）
