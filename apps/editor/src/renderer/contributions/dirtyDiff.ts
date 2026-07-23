@@ -5,7 +5,7 @@
  *  added / removed lines, classified as added, modified, or deleted.
  *--------------------------------------------------------------------------------------------*/
 
-import { computeLineDiff } from '../workbench/agents/lineDiff.js'
+import { computeLineDiffFromLines } from '../workbench/agents/lineDiff.js'
 
 export type DirtyDiffKind = 'added' | 'modified' | 'deleted'
 
@@ -29,13 +29,43 @@ function normalizeEol(s: string): string {
 }
 
 /**
+ * Split text into the line shape both diff sides must share: EOL-normalized,
+ * with the phantom empty line a trailing newline produces dropped. HEAD content
+ * goes through this once when cached; the buffer side comes from Monaco's
+ * `getLinesContent` and must be aligned via {@link trimTrailingEmptyLine} so a
+ * trailing-newline-only difference never shows up as a change.
+ */
+export function toDiffLines(text: string): string[] {
+  if (text.length === 0) return []
+  const lines = normalizeEol(text).split('\n')
+  return trimTrailingEmptyLine(lines)
+}
+
+/** Drop the final empty element (in place) — see {@link toDiffLines}. */
+export function trimTrailingEmptyLine(lines: string[]): string[] {
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  return lines
+}
+
+/**
  * Group the head→current line diff into change hunks and map each to current-doc
  * line numbers. A hunk with both additions and removals is 'modified'; only
  * additions → 'added'; only removals → 'deleted' (anchored to the line preceding
  * the removed block, matching VSCode's deletion triangle).
  */
 export function computeDirtyDiffRegions(headText: string, currentText: string): DirtyDiffRegion[] {
-  const diff = computeLineDiff(normalizeEol(headText), normalizeEol(currentText))
+  return computeDirtyDiffRegionsFromLines(toDiffLines(headText), toDiffLines(currentText))
+}
+
+/**
+ * Lines-based entry point: the hot path re-diffs a document on every (throttled)
+ * content change, and a huge file must not pay a full-text copy + split per run.
+ */
+export function computeDirtyDiffRegionsFromLines(
+  headLines: readonly string[],
+  currentLines: readonly string[],
+): DirtyDiffRegion[] {
+  const diff = computeLineDiffFromLines(headLines, currentLines)
   const regions: DirtyDiffRegion[] = []
   let curLine = 0
   let origLine = 0

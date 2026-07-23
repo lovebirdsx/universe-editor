@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { URI } from '@universe-editor/platform'
+import type { TextEditor, UriComponents } from '@universe-editor/extension-api'
 import type {
+  IActiveTextEditorDto,
+  IMainThreadEditor,
   IMainThreadCommands,
   IMainThreadScm,
   IMainThreadWindow,
@@ -248,5 +252,80 @@ describe('ExtensionService', () => {
     const mt = recordingMainThread()
     const service = new ExtensionService([scanned(['*'])], mt.impl, noopWindow, noopScm)
     expect(service.getWorkspaceRoot()).toBeUndefined()
+  })
+})
+
+/**
+ * Active-editor mirror: the wire DTO carries no document text (a 15MB buffer
+ * re-crossing the wire per tab switch froze the renderer); the document must be
+ * resolved from the ExtHostDocuments mirror, deferring the event when the
+ * mirror's didOpen has not landed yet.
+ */
+describe('ExtensionService active editor mirror', () => {
+  const noopEditor: IMainThreadEditor = {
+    $getActiveTextEditor: () => Promise.resolve(null),
+    $applyEdits: () => Promise.resolve(true),
+    $setSelections: () => Promise.resolve(),
+    $createDecorationType: () => Promise.resolve(),
+    $disposeDecorationType: () => Promise.resolve(),
+    $setDecorations: () => Promise.resolve(),
+  }
+
+  function editorService(): ExtensionService {
+    const mt = recordingMainThread()
+    return new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      noopEditor,
+    )
+  }
+
+  const docUri = URI.file('/ws/big.d.ts')
+  const snapshot: IActiveTextEditorDto = {
+    uri: docUri.toJSON() as UriComponents,
+    languageId: 'typescript',
+    version: 3,
+    selections: [{ anchor: { line: 0, character: 0 }, active: { line: 0, character: 0 } }],
+  }
+
+  it('fires with the mirrored document when it is already open', () => {
+    const service = editorService()
+    service.acceptDocumentOpen(docUri, 'typescript', 3, 'declare const x: number')
+    const fired: (TextEditor | undefined)[] = []
+    service.onDidChangeActiveTextEditor((e) => fired.push(e))
+    service.acceptActiveEditorChange(snapshot)
+    expect(fired).toHaveLength(1)
+    expect(fired[0]?.document.getText()).toBe('declare const x: number')
+    // Live mirror, not a frozen copy — later deltas are visible to the editor handle.
+    expect(fired[0]?.document).toBe(service.getTextDocuments()[0])
+  })
+
+  it('defers the event until the document mirror opens', async () => {
+    const service = editorService()
+    const fired: (TextEditor | undefined)[] = []
+    service.onDidChangeActiveTextEditor((e) => fired.push(e))
+    service.acceptActiveEditorChange(snapshot)
+    expect(fired).toHaveLength(0)
+    service.acceptDocumentOpen(docUri, 'typescript', 3, 'late text')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fired).toHaveLength(1)
+    expect(fired[0]?.document.getText()).toBe('late text')
+  })
+
+  it('drops a deferred event superseded by a newer editor change', async () => {
+    const service = editorService()
+    const fired: (TextEditor | undefined)[] = []
+    service.onDidChangeActiveTextEditor((e) => fired.push(e))
+    service.acceptActiveEditorChange(snapshot)
+    service.acceptActiveEditorChange(null) // user moved on before the doc arrived
+    service.acceptDocumentOpen(docUri, 'typescript', 3, 'too late')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fired).toEqual([undefined])
   })
 })

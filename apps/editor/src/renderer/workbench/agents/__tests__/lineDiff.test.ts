@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { computeLineDiff } from '../lineDiff.js'
+import { computeLineDiff, computeLineDiffFromLines } from '../lineDiff.js'
 
 describe('computeLineDiff', () => {
   it('returns empty for two empty strings', () => {
@@ -111,5 +111,35 @@ describe('computeLineDiff', () => {
       { kind: 'add', text: 'BOTTOM EDIT' },
     ])
     expect(result).toHaveLength(20_002)
+  })
+
+  it('stays correct with many scattered edits on a huge file (V sized by edit distance)', () => {
+    // Regression: V/trace used to be sized by n+m, so every Myers round sliced a
+    // megabytes-wide array — a 340K-line file with a large diff spent seconds in
+    // pure memcpy (observed as dirtyDiff.compute 4s). Verify a wide-middle diff
+    // with a few hundred edits still reconstructs the new text exactly.
+    const lines = Array.from({ length: 50_000 }, (_, i) => `line ${i}`)
+    const changed = [...lines]
+    for (let i = 100; i < 50_000 - 100; i += 250) changed[i] = `EDIT ${i}`
+    changed[1] = 'NEAR TOP'
+    changed[49_998] = 'NEAR BOTTOM'
+    const result = computeLineDiff(lines.join('\n'), changed.join('\n'))
+    const reconstructed = result.filter((l) => l.kind !== 'del').map((l) => l.text)
+    expect(reconstructed).toEqual(changed)
+    const removed = result.filter((l) => l.kind !== 'add').map((l) => l.text)
+    expect(removed).toEqual(lines)
+  })
+
+  it('falls back to a coarse whole-block replace when the wall-time budget is exhausted', () => {
+    const lines = Array.from({ length: 5_000 }, (_, i) => `line ${i}`)
+    const changed = [...lines]
+    changed[1] = 'TOP'
+    changed[4_998] = 'BOTTOM'
+    const result = computeLineDiffFromLines(lines, changed, 0)
+    // Untrimmable middle + zero budget → everything between the shared prefix
+    // and suffix reads as del-all + add-all, but the output is still lossless.
+    expect(result.filter((l) => l.kind !== 'del').map((l) => l.text)).toEqual(changed)
+    expect(result.filter((l) => l.kind !== 'add').map((l) => l.text)).toEqual(lines)
+    expect(result.filter((l) => l.kind === 'del').length).toBeGreaterThan(4_000)
   })
 })

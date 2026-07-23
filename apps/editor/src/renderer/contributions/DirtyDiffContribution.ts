@@ -12,9 +12,12 @@
  *  that change's HEAD ↔ current line diff plus Revert / Stage / Open Changes /
  *  navigation actions, mirroring VSCode's QuickDiffWidget.
  *
- *  HEAD content is cached per path and only invalidated when the SCM model
- *  changes (commit / stage / discard); plain edits re-diff against the cached
- *  HEAD without hitting git.
+ *  HEAD content is cached per path (pre-split into diff lines) and only
+ *  invalidated when the SCM model changes (commit / stage / discard); plain
+ *  edits re-diff against the cached HEAD without hitting git. Re-diffs are
+ *  driven through a 200ms ThrottledDelayer and skipped entirely when either
+ *  side exceeds the 50MB model-sync limit — both VSCode parity (its
+ *  quickDiffModel throttles the same way and gates on isTooLargeForSyncing).
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -24,8 +27,11 @@ import {
   ICommandService,
   IContextKeyService,
   IEditorService,
+  ILoggerService,
+  ThrottledDelayer,
   autorun,
   type IContextKey,
+  type ILogger,
   type URI,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
@@ -36,15 +42,37 @@ import { IDirtyDiffNavigationService } from '../services/scm/DirtyDiffNavigation
 import { IScmDecorationsService } from '../services/scm/ScmDecorationsService.js'
 import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
+import { recordTabSwitchPhase } from '../services/performance/tabSwitchPerf.js'
 import { InlineDirtyDiffController } from '../workbench/scm/dirtyDiff/InlineDirtyDiffController.js'
 import {
   DirtyDiffPeekRegistry,
   type IDirtyDiffPeekHost,
 } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
-import { computeDirtyDiffRegions, type DirtyDiffRegion } from './dirtyDiff.js'
+import {
+  computeDirtyDiffRegionsFromLines,
+  toDiffLines,
+  trimTrailingEmptyLine,
+  type DirtyDiffRegion,
+} from './dirtyDiff.js'
 
 /** Context key VSCode names `dirtyDiffVisible`; gates the Esc close keybinding. */
 export const DIRTY_DIFF_PEEK_VISIBLE = 'dirtyDiffPeekVisible'
+
+/**
+ * VSCode parity: its dirty diff refuses models over TextModel._MODEL_SYNC_LIMIT
+ * (50 MB) on either side (`canComputeDirtyDiff` → `isTooLargeForSyncing`) and
+ * shows no marks. Value in UTF-16 code units, same as `getValueLength()`.
+ */
+const MODEL_SYNC_LIMIT = 50 * 1024 * 1024
+
+/** VSCode parity: DirtyDiffModel drives re-diffs through a 200ms ThrottledDelayer. */
+const DIFF_DELAY_MS = 200
+
+interface HeadContent {
+  readonly text: string
+  /** Pre-split diff shape, computed once per cache entry — the per-refresh hot path must not re-split a huge HEAD. */
+  readonly lines: readonly string[]
+}
 
 const COLORS = {
   added: '#2ea043',
@@ -69,10 +97,15 @@ export class DirtyDiffContribution
 
   private readonly _editorStore = this._register(new DisposableStore())
   private readonly _registryStore = this._register(new DisposableStore())
+  /** VSCode parity: coalesce per-keystroke refreshes; a running diff never overlaps the next. */
+  private readonly _diffDelayer = this._register(new ThrottledDelayer<void>(DIFF_DELAY_MS))
+  private readonly _logger: ILogger
+  /** Paths already reported as over the sync limit — log the skip once, not per keystroke. */
+  private readonly _tooLargeLogged = new Set<string>()
 
   /** HEAD content per absolute path; null = no HEAD revision (new file). */
-  private readonly _headCache = new Map<string, string | null>()
-  private readonly _inflight = new Map<string, Promise<string | null>>()
+  private readonly _headCache = new Map<string, HeadContent | null>()
+  private readonly _inflight = new Map<string, Promise<HeadContent | null>>()
 
   constructor(
     @IEditorService editorService: IEditorService,
@@ -81,9 +114,11 @@ export class DirtyDiffContribution
     @IDirtyDiffNavigationService private readonly _navigation: IDirtyDiffNavigationService,
     @IContextKeyService contextKeyService: IContextKeyService,
     @IScmService private readonly _scm: IScmService,
+    @ILoggerService loggerService: ILoggerService,
   ) {
     super()
 
+    this._logger = loggerService.createLogger({ id: 'dirtyDiff', name: 'Dirty Diff' })
     this._peekVisible = contextKeyService.createKey<boolean>(DIRTY_DIFF_PEEK_VISIBLE, false)
     DirtyDiffPeekRegistry.setHost(this)
     this._register({ dispose: () => DirtyDiffPeekRegistry.clearHost(this) })
@@ -106,7 +141,7 @@ export class DirtyDiffContribution
         this._headCache.clear()
         if (this._activePath) {
           this._headCache.delete(this._activePath)
-          this._refresh()
+          this._triggerRefresh()
         }
       }),
     )
@@ -139,11 +174,11 @@ export class DirtyDiffContribution
 
       const model = editor.getModel()
       if (model) {
-        this._editorStore.add(model.onDidChangeContent(() => this._refresh()))
+        this._editorStore.add(model.onDidChangeContent(() => this._triggerRefresh()))
       }
       this._editorStore.add(editor.onMouseDown((e) => this._onMouseDown(e)))
       this._editorStore.add(editor.onMouseUp((e) => this._onMouseUp(e)))
-      this._refresh()
+      this._triggerRefresh()
     }
 
     attach()
@@ -154,37 +189,79 @@ export class DirtyDiffContribution
     )
   }
 
-  private _refresh(): void {
+  /**
+   * Schedule a re-diff through the throttled delayer. A superseded trigger's
+   * promise rejects with CancellationError — expected, swallowed.
+   */
+  private _triggerRefresh(): void {
+    void this._diffDelayer.trigger(() => this._refreshNow()).catch(() => undefined)
+  }
+
+  private async _refreshNow(): Promise<void> {
     const editor = this._activeEditor
     const resource = this._activeResource
     const path = this._activePath
     if (!editor || !resource || !path) return
+    const model = editor.getModel()
+    if (!model) return
 
-    void this._getHead(path).then((head) => {
-      if (
-        this._activeEditor !== editor ||
-        this._activeResource !== resource ||
-        this._activePath !== path
-      )
-        return
-      const model = editor.getModel()
-      if (!model) return
-      // No HEAD revision means the file is outside the repo (not a workspace file)
-      // or untracked / brand new — VSCode shows no dirty-diff marks for either.
-      if (head === null) {
-        this._headText = ''
-        this._render(resource, head, [])
-        this.closePeek()
-        return
-      }
-      this._headText = head
-      const regions = computeDirtyDiffRegions(head, model.getValue())
-      this._render(resource, head, regions)
-      if (this._controller?.isOpen) this._controller.refresh(regions, head)
+    // VSCode parity: no dirty diff at all when either side exceeds the model
+    // sync limit — it never diffs what it wouldn't sync to a worker.
+    if (model.getValueLength() > MODEL_SYNC_LIMIT) {
+      this._skipTooLarge(resource, path, 'buffer')
+      return
+    }
+
+    const head = await this._getHead(path)
+    if (
+      this._activeEditor !== editor ||
+      this._activeResource !== resource ||
+      this._activePath !== path
+    )
+      return
+    const liveModel = editor.getModel()
+    if (!liveModel) return
+    // No HEAD revision means the file is outside the repo (not a workspace file)
+    // or untracked / brand new — VSCode shows no dirty-diff marks for either.
+    if (head === null) {
+      this._headText = ''
+      this._render(resource, null, [])
+      this.closePeek()
+      return
+    }
+    if (head.text.length > MODEL_SYNC_LIMIT) {
+      this._skipTooLarge(resource, path, 'HEAD')
+      return
+    }
+    this._headText = head.text
+    const startedAt = performance.now()
+    const { bufferLines, regions } = recordTabSwitchPhase('dirtyDiff.compute', () => {
+      const lines = trimTrailingEmptyLine(liveModel.getLinesContent())
+      return { bufferLines: lines, regions: computeDirtyDiffRegionsFromLines(head.lines, lines) }
     })
+    const elapsed = performance.now() - startedAt
+    if (elapsed > 50) {
+      this._logger.debug(
+        `dirty diff for ${path}: ${bufferLines.length} lines, ${regions.length} regions in ${Math.round(elapsed)}ms`,
+      )
+    }
+    this._render(resource, head.text, regions)
+    if (this._controller?.isOpen) this._controller.refresh(regions, head.text)
   }
 
-  private _getHead(path: string): Promise<string | null> {
+  private _skipTooLarge(resource: URI, path: string, side: 'buffer' | 'HEAD'): void {
+    if (!this._tooLargeLogged.has(path)) {
+      this._tooLargeLogged.add(path)
+      this._logger.info(
+        `dirty diff disabled for ${path}: ${side} exceeds the ${MODEL_SYNC_LIMIT / 1024 / 1024}MB sync limit (VSCode parity)`,
+      )
+    }
+    this._headText = ''
+    this._render(resource, null, [])
+    this.closePeek()
+  }
+
+  private _getHead(path: string): Promise<HeadContent | null> {
     if (this._headCache.has(path)) return Promise.resolve(this._headCache.get(path) ?? null)
     const existing = this._inflight.get(path)
     if (existing) return existing
@@ -203,8 +280,13 @@ export class DirtyDiffContribution
         // `undefined` = command not registered yet (extension host activating);
         // don't cache so a later edit retries. `null` = no HEAD revision; cache it.
         if (r === undefined) return null
-        this._headCache.set(path, r)
-        return r
+        if (r === null) {
+          this._headCache.set(path, null)
+          return null
+        }
+        const head: HeadContent = { text: r, lines: toDiffLines(r) }
+        this._headCache.set(path, head)
+        return head
       })
       .catch(() => {
         this._inflight.delete(path)
@@ -412,6 +494,7 @@ export class DirtyDiffContribution
   }
 
   private _clear(): void {
+    this._diffDelayer.cancel()
     this._navigation.setState({ resource: undefined, headContent: undefined, regions: [] })
     this._regions = []
     this._headText = ''

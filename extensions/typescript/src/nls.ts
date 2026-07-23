@@ -6,6 +6,8 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'ts.status.starting.tooltip': '正在启动 TypeScript 语言服务…',
   'ts.status.error.text': 'TypeScript',
   'ts.status.error.tooltip': 'TypeScript 语言服务启动失败',
+  'ts.oom.notification':
+    'TypeScript 语言服务内存不足（上限 {limitMb} MB）。请在设置中调大 "typescript.tsserver.maxTsServerMemory"。',
 }
 
 const useZhCn = (process.env.UNIVERSE_DISPLAY_LOCALE ?? '').toLowerCase().startsWith('zh')

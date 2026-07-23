@@ -67,6 +67,23 @@ describe('StdioFramingProtocol', () => {
     p.dispose()
   })
 
+  it('reassembles a frame spread across many chunks (large-payload path)', () => {
+    const t = new FakeTransport()
+    const p = new StdioFramingProtocol(t)
+    const got: string[] = []
+    p.onMessage((m) => got.push(dec(m)))
+
+    const big = 'x'.repeat(1024 * 1024)
+    const payload = big + '\ntrailer\npartial'
+    for (let i = 0; i < payload.length; i += 64 * 1024) {
+      t.feed(payload.slice(i, i + 64 * 1024))
+    }
+    expect(got).toEqual([big, 'trailer'])
+    t.feed(' done\n')
+    expect(got).toEqual([big, 'trailer', 'partial done'])
+    p.dispose()
+  })
+
   it('round-trips send → wire → ingest between two protocols', () => {
     // Peer A writes into a shared wire that peer B ingests, and vice versa.
     const wireA = new FakeTransport()

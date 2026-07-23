@@ -62,6 +62,7 @@ import { StartupSessionContribution } from '../StartupSessionContribution.js'
 import { SessionChangesDiffSyncContribution } from '../SessionChangesDiffSyncContribution.js'
 import { DiffLiveContentSyncContribution } from '../DiffLiveContentSyncContribution.js'
 import { LargeFileOptimizationsContribution } from '../LargeFileOptimizationsContribution.js'
+import { TabSwitchPerfContribution } from '../TabSwitchPerfContribution.js'
 
 // `activeEditorHasJsonSchema` context key — drives the editor-title "Show JSON
 // Schema" action. AfterRestore: the editor service + schema registry are live,
@@ -501,5 +502,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.largeFileOptimizations',
   LargeFileOptimizationsContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Watchdog for slow active-editor switches: warns with long-task + named-phase
+// attribution when a switch freezes the main thread past the threshold, so
+// intermittent jank on huge files leaves a diagnosable trace in the window log.
+// AfterRestore so the editor service is live; measurement only — no UI.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.tabSwitchPerf',
+  TabSwitchPerfContribution,
   WorkbenchPhase.AfterRestore,
 )

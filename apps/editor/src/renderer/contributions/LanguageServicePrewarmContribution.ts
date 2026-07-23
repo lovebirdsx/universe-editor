@@ -74,6 +74,26 @@ export class LanguageServicePrewarmContribution
       }),
     )
 
+    // Owned here alongside the other typescript.* setting; the TS plugin reads it
+    // on every tsserver (re)start, so raising it applies on the next crash-restart.
+    this._register(
+      ConfigurationRegistry.registerConfiguration({
+        id: 'typescript.tsserver',
+        title: localize('settings.typescript', 'TypeScript'),
+        properties: {
+          'typescript.tsserver.maxTsServerMemory': {
+            type: 'number',
+            default: 3072,
+            minimum: 128,
+            description: localize(
+              'settings.typescript.tsserver.maxTsServerMemory',
+              'The maximum amount of memory (in MB) the TypeScript server may use. Raise this if the TypeScript language server crashes with out-of-memory on large projects (a crash notification will point here). Applies when the server (re)starts.',
+            ),
+          },
+        },
+      }),
+    )
+
     void this._refreshTsProjectsSchema()
     this._register(this._workspace.onDidChangeWorkspace(() => void this._refreshTsProjectsSchema()))
 

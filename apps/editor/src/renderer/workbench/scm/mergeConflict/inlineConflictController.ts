@@ -11,15 +11,54 @@
  *  editable Result pane, so the resolution behaviour stays identical in both.
  *--------------------------------------------------------------------------------------------*/
 
-import { Disposable, DisposableStore, Emitter, localize } from '@universe-editor/platform'
+import {
+  Disposable,
+  DisposableStore,
+  Emitter,
+  ThrottledDelayer,
+  localize,
+} from '@universe-editor/platform'
 import { MonacoLoader, type monaco } from '../../editor/monaco/MonacoLoader.js'
-import { parseConflicts, type ConflictRegion } from './conflictParser.js'
+import { recordTabSwitchPhase } from '../../../services/performance/tabSwitchPerf.js'
+import { CONFLICT_START_MARKER, parseConflicts, type ConflictRegion } from './conflictParser.js'
 
 type Choice = 'current' | 'incoming' | 'both' | 'compare'
 
 /** Vertical band reserved above each conflict. Taller than the bar itself so the
  *  ABOVE-positioned content widget clears the previous line by a visible gap. */
 const ACTION_BAR_ZONE_HEIGHT = 30
+
+/** Coalesce per-keystroke re-scans (VSCode's merge-conflict tracker delays the same way). */
+const RESCAN_DELAY_MS = 200
+
+/** Scan result per model, keyed by version — a controller is rebuilt on every
+ *  tab switch, so without this even the cheap prefilter re-walks a multi-MB
+ *  buffer each time the user returns to an unedited file. */
+const scanCache = new WeakMap<
+  monaco.editor.ITextModel,
+  { versionId: number; conflicts: readonly ConflictRegion[] }
+>()
+
+function scanConflicts(model: monaco.editor.ITextModel): readonly ConflictRegion[] {
+  const cached = scanCache.get(model)
+  if (cached && cached.versionId === model.getVersionId()) return cached.conflicts
+  return recordTabSwitchPhase('mergeConflict.scan', () => {
+    // Cheap piece-tree prefilter before the full-text scan: getValue() on a
+    // multi-MB model per tab switch / keystroke stalls the renderer, and the
+    // overwhelmingly common case is "no conflict markers at all".
+    const marker = model.findNextMatch(
+      CONFLICT_START_MARKER,
+      { lineNumber: 1, column: 1 },
+      false,
+      true,
+      null,
+      false,
+    )
+    const conflicts = marker ? parseConflicts(model.getValue()) : []
+    scanCache.set(model, { versionId: model.getVersionId(), conflicts })
+    return conflicts
+  })
+}
 
 export interface InlineConflictOptions {
   /** When set, an extra "Compare Changes" action is shown and routed here. */
@@ -35,6 +74,7 @@ export class InlineConflictController extends Disposable {
   /** Fires with the number of remaining conflicts whenever it changes. */
   readonly onDidChangeCount = this._onDidChangeCount.event
   private readonly _modelStore = this._register(new DisposableStore())
+  private readonly _rescanDelayer = this._register(new ThrottledDelayer<void>(RESCAN_DELAY_MS))
 
   constructor(
     private readonly _editor: monaco.editor.IStandaloneCodeEditor,
@@ -44,9 +84,13 @@ export class InlineConflictController extends Disposable {
     this._decorations = _editor.createDecorationsCollection()
     this._bindModel()
     this._register(_editor.onDidChangeModel(() => this._bindModel()))
-    void MonacoLoader.ensureInitialized().then(() => {
-      if (!this._store.isDisposed) this.render()
-    })
+    // Only needed when Monaco is still loading at construction (render() above
+    // bailed); once loaded, _bindModel already rendered — don't scan twice.
+    if (!MonacoLoader.peek()) {
+      void MonacoLoader.ensureInitialized().then(() => {
+        if (!this._store.isDisposed) this.render()
+      })
+    }
     this._register({ dispose: () => this._clear() })
   }
 
@@ -57,7 +101,14 @@ export class InlineConflictController extends Disposable {
   private _bindModel(): void {
     this._modelStore.clear()
     const model = this._editor.getModel()
-    if (model) this._modelStore.add(model.onDidChangeContent(() => this.render()))
+    if (model) {
+      this._modelStore.add(
+        model.onDidChangeContent(() => {
+          // A superseded trigger's promise rejects with CancellationError — expected.
+          void this._rescanDelayer.trigger(async () => this.render()).catch(() => undefined)
+        }),
+      )
+    }
     this.render()
   }
 
@@ -65,7 +116,7 @@ export class InlineConflictController extends Disposable {
     const model = this._editor.getModel()
     if (!model || !MonacoLoader.peek()) return
 
-    const conflicts = parseConflicts(model.getValue())
+    const conflicts = scanConflicts(model)
     this._setCount(conflicts.length)
 
     if (conflicts.length === 0) {

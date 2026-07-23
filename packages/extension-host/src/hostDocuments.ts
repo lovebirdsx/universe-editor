@@ -1,19 +1,26 @@
 /**
  * Host-side mirror of the renderer's open text models, backing
  * `workspace.textDocuments` and the `onDidChangeTextDocument` family. The
- * renderer pushes full text on open/change over `extHostDocuments`; this keeps a
- * `TextDocument` per URI and fires the matching events to activated extensions.
+ * renderer pushes the full text once on open, then incremental deltas on change
+ * (VSCode parity — a multi-MB document must never re-cross the wire per edit);
+ * this keeps a mutable `TextDocument` per URI and fires the matching events to
+ * activated extensions.
  */
 import { Emitter, URI, type Event } from '@universe-editor/platform'
 import type {
   TextDocument,
   TextDocumentChangeEvent,
+  TextDocumentContentChangeEvent,
   TextDocumentSaveReason,
   UriComponents,
   WillSaveTextDocumentEvent,
 } from '@universe-editor/extension-api'
-import type { WillSaveReason } from '@universe-editor/extensions-common'
+import type {
+  TextDocumentContentChangeDto,
+  WillSaveReason,
+} from '@universe-editor/extensions-common'
 import type { TextEdit } from 'vscode-languageserver-types'
+import { TextDocument as FullTextDocument } from 'vscode-languageserver-textdocument'
 
 /** Per-listener budget for `onWillSaveTextDocument` participants. A slow or
  *  hung listener must not block the save indefinitely — its edits are dropped
@@ -21,20 +28,40 @@ import type { TextEdit } from 'vscode-languageserver-types'
 const WILL_SAVE_LISTENER_TIMEOUT_MS = 1_500
 
 export class HostTextDocument implements TextDocument {
+  /** Backing store: vscode-languageserver-textdocument applies incremental LSP
+   *  changes with cached line offsets, so an edit costs O(edit), not O(doc). */
+  private readonly _doc: FullTextDocument
+
   constructor(
     readonly uri: UriComponents,
     readonly languageId: string,
-    readonly version: number,
-    private readonly _text: string,
-  ) {}
+    version: number,
+    text: string,
+  ) {
+    this._doc = FullTextDocument.create(
+      URI.revive(uri)?.toString() ?? '',
+      languageId,
+      version,
+      text,
+    )
+  }
+
+  get version(): number {
+    return this._doc.version
+  }
 
   getText(): string {
-    return this._text
+    return this._doc.getText()
+  }
+
+  /** Apply incremental changes in array order (LSP semantics), in place. */
+  update(changes: readonly TextDocumentContentChangeDto[], version: number): void {
+    FullTextDocument.update(this._doc, [...changes], version)
   }
 }
 
 export class ExtHostDocuments {
-  private readonly _docs = new Map<string, TextDocument>()
+  private readonly _docs = new Map<string, HostTextDocument>()
 
   private readonly _onDidOpen = new Emitter<TextDocument>()
   private readonly _onDidChange = new Emitter<TextDocumentChangeEvent>()
@@ -54,6 +81,36 @@ export class ExtHostDocuments {
     return [...this._docs.values()]
   }
 
+  /** The mirrored document for `uri`, or undefined when not (yet) open. */
+  get(uri: UriComponents): TextDocument | undefined {
+    return this._docs.get(this._key(uri))
+  }
+
+  /**
+   * Resolve the mirrored document for `uri`, waiting for its `didOpen` when it
+   * has not arrived yet. The active-editor channel intentionally carries no
+   * text, and the renderer's document push (activation + full-text open) can
+   * land after the editor-change notification — this bridges that gap.
+   * Resolves undefined when nothing opens within `timeoutMs`.
+   */
+  whenOpen(uri: UriComponents, timeoutMs: number): Promise<TextDocument | undefined> {
+    const key = this._key(uri)
+    const existing = this._docs.get(key)
+    if (existing) return Promise.resolve(existing)
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        sub.dispose()
+        resolve(undefined)
+      }, timeoutMs)
+      const sub = this.onDidOpen((doc) => {
+        if (this._key(doc.uri) !== key) return
+        clearTimeout(timer)
+        sub.dispose()
+        resolve(doc)
+      })
+    })
+  }
+
   /** The mirrored document for `uri`, or a synthetic empty one (providers only
    *  need its URI to forward to the LSP server, which holds the real text). */
   getOrSynthesize(uri: UriComponents): TextDocument {
@@ -66,12 +123,20 @@ export class ExtHostDocuments {
     this._onDidOpen.fire(doc)
   }
 
-  acceptChange(uri: UriComponents, version: number, text: string): void {
-    const key = this._key(uri)
-    const languageId = this._docs.get(key)?.languageId ?? ''
-    const doc = new HostTextDocument(uri, languageId, version, text)
-    this._docs.set(key, doc)
-    this._onDidChange.fire({ document: doc })
+  acceptChange(
+    uri: UriComponents,
+    version: number,
+    changes: readonly TextDocumentContentChangeDto[],
+  ): void {
+    const doc = this._docs.get(this._key(uri))
+    // A delta without a prior open can't be applied — drop it (the renderer
+    // always opens before it pushes changes; this only guards a host relaunch race).
+    if (!doc) return
+    doc.update(changes, version)
+    this._onDidChange.fire({
+      document: doc,
+      contentChanges: changes as readonly TextDocumentContentChangeEvent[],
+    })
   }
 
   acceptClose(uri: UriComponents): void {

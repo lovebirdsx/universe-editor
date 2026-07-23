@@ -86,7 +86,9 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
     }
 
     const fileInput = this._revealExistingOrOpen(target)
-    const editor = await waitForFileEditor(fileInput)
+    // Owned wait: a target opened into a group that never mounts must not keep
+    // the registry/input subscriptions alive past this contribution's lifetime.
+    const editor = await waitForFileEditor(fileInput, this._store)
     if (!editor) return null
 
     applySelection(editor, input.options?.selection)

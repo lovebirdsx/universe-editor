@@ -8,6 +8,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 const CURRENT_MARKER = '<<<<<<<'
+/** The conflict-opening marker, exported for cheap "any conflict at all?"
+ *  prefilters (e.g. a Monaco findNextMatch before a full-text parse). */
+export const CONFLICT_START_MARKER = CURRENT_MARKER
 const BASE_MARKER = '|||||||'
 const SPLITTER_MARKER = '======='
 const INCOMING_MARKER = '>>>>>>>'

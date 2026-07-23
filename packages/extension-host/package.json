@@ -27,6 +27,7 @@
     "eslint": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
+    "vscode-languageserver-textdocument": "catalog:",
     "vscode-languageserver-types": "catalog:"
   }
 }

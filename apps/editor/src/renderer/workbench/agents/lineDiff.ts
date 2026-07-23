@@ -22,6 +22,12 @@ export interface DiffLine {
 // reach it, where coarse "delete all / add all" marks beat an unbounded search.
 const MAX_EDIT_DISTANCE = 2_000
 
+// Wall-clock ceiling for one Myers search. VSCode bounds its (worker-side) quick
+// diff the same way (DiffComputer maxComputationTime); ours runs on the renderer
+// main thread, so the budget stays well under the jank threshold. On timeout the
+// caller falls back to the coarse whole-block replace.
+const MAX_DIFF_BUDGET_MS = 100
+
 function splitLines(s: string): string[] {
   if (s.length === 0) return []
   const lines = s.split('\n')
@@ -31,22 +37,31 @@ function splitLines(s: string): string[] {
 
 /**
  * Myers diff of the changed middle. Returns the edit sequence, or `null` when the
- * edit distance exceeds {@link MAX_EDIT_DISTANCE} (caller falls back to a coarse
- * replace). `trace` only grows to the actual edit distance, so a small real diff
- * stays cheap even when the inputs themselves are large.
+ * edit distance exceeds {@link MAX_EDIT_DISTANCE} or the search overruns
+ * `deadline` (caller falls back to a coarse replace). `trace` only grows to the
+ * actual edit distance, so a small real diff stays cheap even when the inputs
+ * themselves are large.
  */
-function myersMiddle(a: readonly string[], b: readonly string[]): DiffLine[] | null {
+function myersMiddle(
+  a: readonly string[],
+  b: readonly string[],
+  deadline: number,
+): DiffLine[] | null {
   const n = a.length
   const m = b.length
   const max = n + m
   const maxD = Math.min(max, MAX_EDIT_DISTANCE)
-  const offset = max
-  // V is indexed by diagonal k ∈ [-max, max]; shift by `offset` into the array.
-  const v = new Int32Array(2 * max + 1)
+  // Diagonals only ever reach k ∈ [-maxD, maxD], so V is sized by the edit
+  // distance ceiling, NOT by n+m: a huge file with a large diff must not copy a
+  // megabytes-wide V into `trace` on every round (measured 4s per dirty-diff on
+  // a 340K-line file before this bound — pure memcpy + the GC it feeds).
+  const offset = maxD
+  const v = new Int32Array(2 * maxD + 1)
   const trace: Int32Array[] = []
 
   let foundD = -1
   for (let d = 0; d <= maxD; d++) {
+    if (performance.now() > deadline) return null
     trace.push(v.slice())
     for (let k = -d; k <= d; k += 2) {
       let x: number
@@ -134,7 +149,12 @@ function normalizeHunkOrder(lines: readonly DiffLine[]): DiffLine[] {
 }
 
 /** Diff of the already-trimmed changed region, appended onto `out`. */
-function appendMiddleDiff(out: DiffLine[], a: readonly string[], b: readonly string[]): void {
+function appendMiddleDiff(
+  out: DiffLine[],
+  a: readonly string[],
+  b: readonly string[],
+  deadline: number,
+): void {
   const m = a.length
   const n = b.length
   if (m === 0 && n === 0) return
@@ -146,9 +166,9 @@ function appendMiddleDiff(out: DiffLine[], a: readonly string[], b: readonly str
     for (const t of a) out.push({ kind: 'del', text: t })
     return
   }
-  const script = myersMiddle(a, b)
+  const script = myersMiddle(a, b, deadline)
   if (script === null) {
-    // Too divergent to diff cheaply — coarse whole-block replace.
+    // Too divergent (or over budget) to diff cheaply — coarse whole-block replace.
     for (const t of a) out.push({ kind: 'del', text: t })
     for (const t of b) out.push({ kind: 'add', text: t })
     return
@@ -157,8 +177,21 @@ function appendMiddleDiff(out: DiffLine[], a: readonly string[], b: readonly str
 }
 
 export function computeLineDiff(oldText: string, newText: string): readonly DiffLine[] {
-  const a = splitLines(oldText)
-  const b = splitLines(newText)
+  return computeLineDiffFromLines(splitLines(oldText), splitLines(newText))
+}
+
+/**
+ * Lines-based entry point for callers that already hold line arrays (dirty-diff
+ * feeds Monaco's `getLinesContent` plus a cached HEAD split here), skipping the
+ * full-text concat / EOL-normalize / split round-trip a huge document would
+ * otherwise pay on every recompute. `budgetMs` bounds the Myers search's wall
+ * time (tests pin it; production callers use the default).
+ */
+export function computeLineDiffFromLines(
+  a: readonly string[],
+  b: readonly string[],
+  budgetMs: number = MAX_DIFF_BUDGET_MS,
+): readonly DiffLine[] {
   const m = a.length
   const n = b.length
 
@@ -174,7 +207,12 @@ export function computeLineDiff(oldText: string, newText: string): readonly Diff
 
   const out: DiffLine[] = []
   for (let k = 0; k < prefix; k++) out.push({ kind: 'ctx', text: a[k]! })
-  appendMiddleDiff(out, a.slice(prefix, m - suffix), b.slice(prefix, n - suffix))
+  appendMiddleDiff(
+    out,
+    a.slice(prefix, m - suffix),
+    b.slice(prefix, n - suffix),
+    performance.now() + budgetMs,
+  )
   for (let k = m - suffix; k < m; k++) out.push({ kind: 'ctx', text: a[k]! })
   return out
 }

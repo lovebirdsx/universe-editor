@@ -291,6 +291,9 @@ importers:
       '@universe-editor/extension-gallery':
         specifier: workspace:*
         version: link:../../packages/extension-gallery
+      '@universe-editor/extension-host':
+        specifier: workspace:*
+        version: link:../../packages/extension-host
       '@universe-editor/extension-packaging':
         specifier: workspace:*
         version: link:../../packages/extension-packaging
@@ -745,6 +748,9 @@ importers:
       vitest:
         specifier: 'catalog:'
         version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.17)(happy-dom@17.6.3)
+      vscode-languageserver-textdocument:
+        specifier: 'catalog:'
+        version: 1.0.13
       vscode-languageserver-types:
         specifier: 'catalog:'
         version: 3.18.0

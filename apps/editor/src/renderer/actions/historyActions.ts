@@ -4,7 +4,7 @@
  *
  *  GoBack / GoForward consult IHistoryService for the previous / next entry,
  *  open the editor for that resource (reusing an existing tab if possible),
- *  and restore the cursor position via FileEditorRegistry's Monaco instance.
+ *  and restore the cursor position via the shared revealSelectionInInput helper.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -20,11 +20,11 @@ import {
 } from '@universe-editor/platform'
 import { DocEditorInput } from '../services/editor/DocEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { openDocInGroup } from '../services/editor/openDoc.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { openMarkdownPreviewInGroup } from '../services/editor/openMarkdownPreview.js'
+import { revealSelectionInInput } from '../services/editor/revealEditorPosition.js'
 
 async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Promise<void> {
   const groups = accessor.get(IEditorGroupsService)
@@ -72,23 +72,14 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Pro
   const selection = entry.selection
   if (!selection || !(opened instanceof FileEditorInput)) return
 
-  // Monaco may not be mounted yet (first open). Poll briefly until the
-  // registry has the editor instance, then set cursor + reveal.
-  const fileInput = opened
-  const restore = (): boolean => {
-    const monacoEditor = FileEditorRegistry.get(fileInput)
-    if (!monacoEditor) return false
-    monacoEditor.setPosition({ lineNumber: selection.startLine, column: selection.startColumn })
-    monacoEditor.revealLineInCenterIfOutsideViewport(selection.startLine)
-    monacoEditor.focus()
-    return true
-  }
-  if (restore()) return
-  // Best-effort retry — give Monaco one frame to mount.
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-  if (restore()) return
-  await new Promise<void>((resolve) => setTimeout(resolve, 50))
-  restore()
+  // Monaco may not be mounted yet (first open) — the shared helper waits for
+  // the registry to report the editor, however long the model takes to build.
+  // Fire-and-forget: the command completes on navigation; the cursor restore is
+  // a continuation of editor mount, not of the command.
+  void revealSelectionInInput(opened, {
+    startLineNumber: selection.startLine,
+    startColumn: selection.startColumn,
+  })
 }
 
 export class GoBackAction extends Action2 {

@@ -77,7 +77,7 @@ export { FoldingRangeKind } from 'vscode-languageserver-types'
 /** Semantic version of this API surface. The host checks `engines.universe`.
  *  Bumping this is governed by COMPATIBILITY.md — keep it in sync with the
  *  package.json version and the contract test's frozen snapshot. */
-export const version = '0.5.0'
+export const version = '0.6.0'
 
 export interface Disposable {
   dispose(): void
@@ -223,9 +223,20 @@ export interface TextDocument {
   getText(): string
 }
 
-/** Fired by `onDidChangeTextDocument`. Full-text sync, so only the document is carried. */
+/** One incremental edit within a {@link TextDocumentChangeEvent}. `range` is the
+ *  replaced span in the document state after the previous change in the same
+ *  event was applied (LSP semantics, 0-based); a change without `range` replaced
+ *  the whole document (model flush, e.g. file reload). */
+export interface TextDocumentContentChangeEvent {
+  readonly range?: Range
+  readonly text: string
+}
+
+/** Fired by `onDidChangeTextDocument`. `document` is the live (already updated)
+ *  document; `contentChanges` carries the incremental edits that produced it. */
 export interface TextDocumentChangeEvent {
   readonly document: TextDocument
+  readonly contentChanges: readonly TextDocumentContentChangeEvent[]
 }
 
 /** Why a document is being saved. Mirrors VSCode's `TextDocumentSaveReason`. */

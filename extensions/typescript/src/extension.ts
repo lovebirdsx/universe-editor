@@ -52,6 +52,10 @@ const COMPLETION_TRIGGER_CHARACTERS = ['.', '"', "'", '`', '/', '@', '<', '#', '
 const SIGNATURE_TRIGGER_CHARACTERS = ['(', ',', '<']
 const SIGNATURE_RETRIGGER_CHARACTERS = [')']
 
+/** VSCode's semanticTokens.ts CONTENT_LENGTH_LIMIT: documents above this many
+ *  characters get no semantic tokens (whole-file classification is too costly). */
+const SEMANTIC_TOKENS_CONTENT_LENGTH_LIMIT = 100_000
+
 function uriString(uri: UriComponents): string {
   return URI.from({
     scheme: uri.scheme,
@@ -82,8 +86,25 @@ export function activate(context: ExtensionContext): void {
   }
 
   const diagnostics = languages.createDiagnosticCollection('typescript')
-  const client = new LspClient(cli, tsserver, workspace.rootPath, (e) => {
-    diagnostics.set(uriComponents(e.uri), e.diagnostics)
+  const client = new LspClient(
+    cli,
+    tsserver,
+    workspace.rootPath,
+    (e) => {
+      diagnostics.set(uriComponents(e.uri), e.diagnostics)
+    },
+    // Read on every (re)start so a raised cap applies on the next crash-restart
+    // without reloading the window. 3072 matches VSCode's default.
+    () => workspace.getConfiguration('typescript').get<number>('tsserver.maxTsServerMemory', 3072),
+  )
+  client.onServerOOM((limitMb) => {
+    void window.showWarningMessage(
+      localize(
+        'ts.oom.notification',
+        'The TypeScript language server ran out of memory (limit {limitMb} MB). Raise "typescript.tsserver.maxTsServerMemory" in settings.',
+        { limitMb },
+      ),
+    )
   })
 
   context.subscriptions.push(diagnostics, { dispose: () => client.dispose() })
@@ -370,11 +391,24 @@ function registerProviders(context: ExtensionContext, client: LspClient): void {
   // arrives in the initialize response, hence the deferred registration.
   void client.getSemanticTokensLegend().then((legend) => {
     if (!legend) return
+    const tooLargeLogged = new Set<string>()
     context.subscriptions.push(
       languages.registerDocumentSemanticTokensProvider(TS_JS_LANGUAGES, {
         legend,
-        provideDocumentSemanticTokens: (doc) =>
-          client.provideDocumentSemanticTokens(uriString(doc.uri)),
+        provideDocumentSemanticTokens: (doc) => {
+          const uri = uriString(doc.uri)
+          // VSCode's TS extension bails above CONTENT_LENGTH_LIMIT: whole-file
+          // classification of a huge document stalls (or OOMs) tsserver for a
+          // purely cosmetic feature.
+          if (doc.getText().length > SEMANTIC_TOKENS_CONTENT_LENGTH_LIMIT) {
+            if (!tooLargeLogged.has(uri)) {
+              tooLargeLogged.add(uri)
+              console.error(`[typescript] semanticTokens skipped for ${uri} (too large)`)
+            }
+            return null
+          }
+          return client.provideDocumentSemanticTokens(uri)
+        },
       }),
     )
   })
@@ -384,7 +418,14 @@ function registerDocumentSync(context: ExtensionContext, client: LspClient): voi
   const isTsJs = (doc: TextDocument): boolean => TS_JS_LANGUAGES.includes(doc.languageId)
   const open = (doc: TextDocument): void => {
     if (isTsJs(doc)) {
-      void client.didOpen(uriString(doc.uri), doc.languageId, doc.version, doc.getText())
+      // Live views: the host mirror mutates in place, so a crash-restart replay
+      // re-primes tsserver with current text instead of a stale copy.
+      void client.didOpen(
+        uriString(doc.uri),
+        doc.languageId,
+        () => doc.version,
+        () => doc.getText(),
+      )
     }
   }
 
@@ -395,7 +436,7 @@ function registerDocumentSync(context: ExtensionContext, client: LspClient): voi
     workspace.onDidOpenTextDocument((doc) => open(doc)),
     workspace.onDidChangeTextDocument((e) => {
       if (isTsJs(e.document)) {
-        void client.didChange(uriString(e.document.uri), e.document.version, e.document.getText())
+        void client.didChange(uriString(e.document.uri), e.document.version, e.contentChanges)
       }
     }),
     workspace.onDidCloseTextDocument((doc) => {

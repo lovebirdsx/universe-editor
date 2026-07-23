@@ -434,11 +434,18 @@ export class OutlineService extends Disposable implements IOutlineService {
       return
     }
 
+    const pullStarted = performance.now()
     void this._pullWithTimeout(provider, model)
       .then((result) => {
         // Discard if the model was swapped or disposed while we awaited.
         if (this._currentModel !== model || model.isDisposed()) return
         const roots = result ?? []
+        const pullMs = performance.now() - pullStarted
+        if (pullMs > 500) {
+          this._logger.info(
+            `document-symbol pull ${model.uri.toString()} took ${pullMs.toFixed(0)}ms roots=${roots.length} lines=${model.getLineCount()}`,
+          )
+        }
         this._outline.set(
           { uri: model.uri.toString(), roots, languageId, version: ++this._version },
           undefined,

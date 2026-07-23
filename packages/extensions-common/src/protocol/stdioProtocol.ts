@@ -35,7 +35,11 @@ export class StdioFramingProtocol extends Disposable implements IMessagePassingP
 
   private readonly _encoder = new TextEncoder()
   private readonly _decoder = new TextDecoder()
-  private _buffer = ''
+  /** Partial-frame accumulator. Chunks are collected and joined only when the
+   *  frame's newline arrives — `buffer += chunk` with a from-zero indexOf would
+   *  re-copy and re-scan the whole prefix per chunk, turning one multi-MB frame
+   *  (e.g. a huge didOpen) into O(n²) work: 820ms → 6ms for 15MB in 64KB chunks. */
+  private _parts: string[] = []
 
   constructor(private readonly _transport: StdioTransport) {
     super()
@@ -47,15 +51,20 @@ export class StdioFramingProtocol extends Disposable implements IMessagePassingP
   }
 
   private _ingest(chunk: string): void {
-    this._buffer += chunk
-    let nl = this._buffer.indexOf('\n')
-    while (nl >= 0) {
-      const frame = this._buffer.slice(0, nl)
-      this._buffer = this._buffer.slice(nl + 1)
+    let rest = chunk
+    for (;;) {
+      const nl = rest.indexOf('\n')
+      if (nl < 0) {
+        if (rest.length > 0) this._parts.push(rest)
+        return
+      }
+      const head = rest.slice(0, nl)
+      rest = rest.slice(nl + 1)
+      const frame = this._parts.length > 0 ? this._parts.join('') + head : head
+      if (this._parts.length > 0) this._parts = []
       if (frame.length > 0) {
         this._onMessage.fire(this._encoder.encode(frame))
       }
-      nl = this._buffer.indexOf('\n')
     }
   }
 }

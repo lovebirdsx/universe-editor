@@ -25,7 +25,10 @@ import {
   type MessageConnection,
 } from 'vscode-jsonrpc/node.js'
 import { URI } from 'vscode-uri'
-import type { CancellationToken } from '@universe-editor/extension-api'
+import type {
+  CancellationToken,
+  TextDocumentContentChangeEvent,
+} from '@universe-editor/extension-api'
 import type {
   CodeLens,
   CompletionItem,
@@ -105,6 +108,19 @@ const PROJECT_LOADING_TITLE = 'Initializing'
  *  navto; TSLS doesn't, so we slice the relevance-sorted result ourselves). */
 const MAX_WORKSPACE_SYMBOLS = 256
 
+/** tsserver heap cap, forwarded as `--max-old-space-size` by the language server
+ *  (VSCode's `typescript.tsserver.maxTsServerMemory` default). Without it the
+ *  server inherits Node's default heap and a multi-MB d.ts can OOM tsserver.
+ *  Overridable via the setting of the same name — a huge generated d.ts plus a
+ *  large project can legitimately need more than 3 GB (exit code 134). */
+const MAX_TSSERVER_MEMORY_MB = 3072
+
+/** didOpen payloads above this get an info log — large-file forensics. */
+const LARGE_DOC_LOG_CHARS = 1024 * 1024
+
+/** Recent tsserver stderr lines kept for the crash report in `_onProcGone`. */
+const STDERR_TAIL_LINES = 10
+
 function sanitizeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(base)) {
@@ -133,8 +149,21 @@ function guardedWritable(stdin: Writable): Writable {
 
 interface OpenDoc {
   readonly languageId: string
-  version: number
-  text: string
+  /** Live views onto the host mirror, so a crash-restart replay re-primes the
+   *  server with the CURRENT text — the client never keeps its own copy.
+   *  Mutable: a prewarm pin starts with a static snapshot and gets upgraded to
+   *  live views when the user really opens the file. */
+  version: () => number
+  text: () => string
+  /** Highest version this connection has seen (didOpen replay reads the live
+   *  document, so an in-flight didChange for a version the replay already
+   *  covered must be dropped — with deltas a double-apply corrupts the text). */
+  sentVersion: number
+  /** Connection generation that received this doc's didOpen. Deduplicates the
+   *  full-text send — cold-start replay racing the originating didOpen call, a
+   *  duplicate open event, or a prewarm pin racing the real open would otherwise
+   *  push a multi-MB document through the pipe and tsserver's parser 2-3×. */
+  sentGeneration: number
 }
 
 export class LspClient {
@@ -147,6 +176,9 @@ export class LspClient {
   private readonly _restartTimestamps: number[] = []
   /** Open documents we've forwarded, replayed on crash restart. */
   private readonly _open = new Map<string, OpenDoc>()
+  /** Bumped once per successful connection start; `OpenDoc.sentGeneration`
+   *  matching this means the current server already holds the doc. */
+  private _generation = 0
   /** Seed documents pinned open to keep workspace projects loaded (prewarm).
    *  A monorepo needs one seed per tsconfig, since tsserver's navto only searches
    *  the project owning an open file. A user `didClose` of a pinned uri is ignored
@@ -161,6 +193,12 @@ export class LspClient {
   /** Called when the server asks the client to refresh CodeLenses
    *  (`workspace/codeLens/refresh`), e.g. after project graph changes. */
   private _onCodeLensRefresh: (() => void) | undefined
+  /** Called (at most once per client) when the server dies with an OOM signature. */
+  private _onServerOOM: ((limitMb: number) => void) | undefined
+  private _oomNotified = false
+  /** Heap cap actually applied to the running server; refreshed from the setting
+   *  on every (re)start, so raising it takes effect on the next crash-restart. */
+  private _maxTsServerMemoryMb = MAX_TSSERVER_MEMORY_MB
 
   /** Current lifecycle state, fed to `onDidChangeState`. Starts `starting` since
    *  construction is immediately followed by a prewarm/first request that spawns. */
@@ -168,6 +206,10 @@ export class LspClient {
   private readonly _onDidChangeState = new Emitter<LspServerState>()
   /** Fires whenever the server's lifecycle state changes (starting/ready/error). */
   readonly onDidChangeState: Event<LspServerState> = this._onDidChangeState.event
+
+  /** Rolling tail of tsserver stderr, attached to the crash report so OOM
+   *  evidence ("JavaScript heap out of memory") lands next to the exit code. */
+  private readonly _stderrTail: string[] = []
 
   /** In-flight project-load progress tokens (from `window/workDoneProgress`, title
    *  "Initializing JS/TS…"). Non-empty ⇒ tsserver is still building a program, so
@@ -187,8 +229,16 @@ export class LspClient {
     private readonly _tsserver: string,
     private readonly _workspaceRoot: string | undefined,
     onDiagnostics: (e: PublishDiagnosticsEvent) => void,
+    private readonly _getMaxTsServerMemoryMb?: () => Promise<number>,
   ) {
     this._onDiagnostics = onDiagnostics
+  }
+
+  /** Register the OOM listener: fires when the server died with the V8
+   *  out-of-memory signature, so the plugin can point the user at the
+   *  `typescript.tsserver.maxTsServerMemory` setting. */
+  onServerOOM(listener: (limitMb: number) => void): void {
+    this._onServerOOM = listener
   }
 
   /** Register the CodeLens refresh listener (the plugin bridges it to the
@@ -230,29 +280,83 @@ export class LspClient {
   async pinProject(uri: string, languageId: string, text: string): Promise<void> {
     if (this._pinnedUris.has(uri)) return
     this._pinnedUris.add(uri)
-    await this.didOpen(uri, languageId, 1, text)
+    if (this._open.has(uri)) return // already really open — project is loaded
+    await this.didOpen(
+      uri,
+      languageId,
+      () => 1,
+      () => text,
+    )
   }
 
   // --- document sync -------------------------------------------------------
 
-  async didOpen(uri: string, languageId: string, version: number, text: string): Promise<void> {
-    this._open.set(uri, { languageId, version, text })
+  async didOpen(
+    uri: string,
+    languageId: string,
+    version: () => number,
+    text: () => string,
+  ): Promise<void> {
+    const existing = this._open.get(uri)
+    let doc: OpenDoc
+    if (existing) {
+      // Upgrade to the freshest views (a prewarm pin holds a static snapshot).
+      existing.version = version
+      existing.text = text
+      doc = existing
+    } else {
+      doc = { languageId, version, text, sentVersion: version(), sentGeneration: -1 }
+      this._open.set(uri, doc)
+    }
     const conn = await this._ready()
+    if (doc.sentGeneration === this._generation) {
+      // This connection already has the doc (start replay raced us, a duplicate
+      // open event, or a prewarm pin). Reconcile only if the live document moved
+      // past what was sent — e.g. a pin snapshot older than a dirty-restored model.
+      const v = version()
+      if (v > doc.sentVersion) {
+        doc.sentVersion = v
+        this._notify(conn, 'textDocument/didChange', {
+          textDocument: { uri, version: v },
+          contentChanges: [{ text: text() }],
+        })
+      }
+      return
+    }
+    this._sendOpen(conn, uri, doc)
+  }
+
+  private _sendOpen(conn: MessageConnection, uri: string, doc: OpenDoc): void {
+    const openText = doc.text()
+    doc.sentVersion = doc.version()
+    doc.sentGeneration = this._generation
+    if (openText.length > LARGE_DOC_LOG_CHARS) {
+      console.error(
+        `[typescript][perf] didOpen ${uri} chars=${openText.length} gen=${this._generation}`,
+      )
+    }
     this._notify(conn, 'textDocument/didOpen', {
-      textDocument: { uri, languageId, version, text },
+      textDocument: { uri, languageId: doc.languageId, version: doc.sentVersion, text: openText },
     })
   }
 
-  async didChange(uri: string, version: number, text: string): Promise<void> {
+  async didChange(
+    uri: string,
+    version: number,
+    contentChanges: readonly TextDocumentContentChangeEvent[],
+  ): Promise<void> {
+    const conn = await this._ready()
+    // A crash-restart replay while we awaited the connection re-opened the doc
+    // with text that already contains this delta — applying it again corrupts
+    // the server's copy.
     const doc = this._open.get(uri)
     if (doc) {
-      doc.version = version
-      doc.text = text
+      if (version <= doc.sentVersion) return
+      doc.sentVersion = version
     }
-    const conn = await this._ready()
     this._notify(conn, 'textDocument/didChange', {
       textDocument: { uri, version },
-      contentChanges: [{ text }],
+      contentChanges: contentChanges as TextDocumentContentChangeEvent[],
     })
   }
 
@@ -428,6 +532,14 @@ export class LspClient {
 
   private async _start(): Promise<void> {
     this._setState('starting')
+    if (this._getMaxTsServerMemoryMb) {
+      try {
+        const mb = await this._getMaxTsServerMemoryMb()
+        if (Number.isFinite(mb) && mb >= 128) this._maxTsServerMemoryMb = Math.floor(mb)
+      } catch {
+        // keep the previous/default cap
+      }
+    }
     const env = sanitizeEnv(process.env)
     env.ELECTRON_RUN_AS_NODE = '1'
 
@@ -449,7 +561,14 @@ export class LspClient {
     this._proc = proc
 
     proc.stderr.on('data', (buf: Buffer) => {
-      console.error(`[typescript][server] ${buf.toString('utf8')}`)
+      const text = buf.toString('utf8')
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        this._stderrTail.push(trimmed.slice(0, 400))
+        if (this._stderrTail.length > STDERR_TAIL_LINES) this._stderrTail.shift()
+      }
+      console.error(`[typescript][server] ${text}`)
     })
     proc.on('error', (err) => this._onProcGone(proc, `error ${err.message}`))
     proc.on('exit', (code, signal) => this._onProcGone(proc, `exit code=${code} signal=${signal}`))
@@ -506,11 +625,13 @@ export class LspClient {
       throw err as Error
     }
 
-    // Replay open documents (first start: none; restart: re-prime the server).
+    // Replay open documents (first start: docs opened while the handshake was in
+    // flight; restart: re-prime the server with the CURRENT mirror text — the
+    // live views make this delta-safe). Bumping the generation first lets the
+    // in-flight didOpen calls detect their doc was already delivered here.
+    this._generation++
     for (const [uri, doc] of this._open) {
-      this._notify(conn, 'textDocument/didOpen', {
-        textDocument: { uri, languageId: doc.languageId, version: doc.version, text: doc.text },
-      })
+      this._sendOpen(conn, uri, doc)
     }
     // The handshake is near-instant, but semantic tokens / CodeLens only become
     // accurate once tsserver finishes loading the project — reported via
@@ -569,6 +690,9 @@ export class LspClient {
         // Point the server at OUR bundled tsserver, never a project-local or
         // global TypeScript. The vendor dir ships exactly the version we pinned.
         tsserver: { path: this._tsserver },
+        // Forwarded as tsserver's --max-old-space-size (VSCode's default cap);
+        // without it Node's default heap makes a huge d.ts an OOM crash.
+        maxTsServerMemory: this._maxTsServerMemoryMb,
       },
       capabilities: {
         textDocument: {
@@ -628,6 +752,24 @@ export class LspClient {
     if (this._proc !== proc) return // stale event from an already-replaced process
     this._clearConnection()
     if (this._disposed) return
+    // Forensics: which docs were open (and how big), plus the last stderr lines —
+    // enough to tell an OOM on a huge file from a plain tsserver bug.
+    const docs = [...this._open].map(([uri, doc]) => `${uri} chars=${doc.text().length}`).join(', ')
+    console.error(
+      `[typescript] server gone (${reason}); restarts in window=${this._restartTimestamps.length}; openDocs=[${docs}]; stderrTail=${JSON.stringify(this._stderrTail)}`,
+    )
+    // OOM signature: tsserver aborts with 134 (V8 heap limit) and the wrapper CLI
+    // reports it on stderr before exiting itself. Surface the actionable fix once.
+    const stderrText = this._stderrTail.join('\n')
+    if (/exit code: 134|out of memory|allocation failed/i.test(stderrText)) {
+      console.error(
+        `[typescript] tsserver ran out of memory (cap ${this._maxTsServerMemoryMb} MB) — raise "typescript.tsserver.maxTsServerMemory" in settings`,
+      )
+      if (!this._oomNotified) {
+        this._oomNotified = true
+        this._onServerOOM?.(this._maxTsServerMemoryMb)
+      }
+    }
     if (!this._registerRestartAttempt()) {
       this._setState('error')
       console.error(
@@ -707,7 +849,7 @@ interface InitializeParams {
   processId: number
   rootUri: string | null
   workspaceFolders: { uri: string; name: string }[] | null
-  initializationOptions: { tsserver: { path: string } }
+  initializationOptions: { tsserver: { path: string }; maxTsServerMemory: number }
   capabilities: Record<string, unknown>
 }
 

@@ -246,3 +246,157 @@ export class AsyncIterableSource<T> {
     return { next }
   }
 }
+
+/**
+ * A helper to prevent accumulation of sequential async tasks: while a task is
+ * running, incoming factories coalesce into a single queued run that starts
+ * when the active one settles (VSCode's Throttler).
+ */
+export class Throttler implements IDisposable {
+  private _activePromise: Promise<unknown> | undefined
+  private _queuedPromise: Promise<unknown> | undefined
+  private _queuedPromiseFactory: (() => Promise<unknown>) | undefined
+  private _isDisposed = false
+
+  queue<T>(promiseFactory: () => Promise<T>): Promise<T> {
+    if (this._isDisposed) {
+      return Promise.reject(new Error('Throttler is disposed'))
+    }
+
+    if (this._activePromise) {
+      this._queuedPromiseFactory = promiseFactory
+      if (!this._queuedPromise) {
+        const onComplete = (): Promise<unknown> | undefined => {
+          this._queuedPromise = undefined
+          if (this._isDisposed) return undefined
+          const factory = this._queuedPromiseFactory!
+          this._queuedPromiseFactory = undefined
+          return this.queue(factory)
+        }
+        this._queuedPromise = new Promise((resolve) => {
+          this._activePromise!.then(onComplete, onComplete).then(resolve)
+        })
+      }
+      return new Promise((resolve, reject) => {
+        this._queuedPromise!.then(resolve as (value: unknown) => void, reject)
+      })
+    }
+
+    this._activePromise = promiseFactory()
+    return new Promise((resolve, reject) => {
+      this._activePromise!.then(
+        (result) => {
+          this._activePromise = undefined
+          resolve(result as T)
+        },
+        (err: unknown) => {
+          this._activePromise = undefined
+          reject(err as Error)
+        },
+      )
+    })
+  }
+
+  dispose(): void {
+    this._isDisposed = true
+  }
+}
+
+/**
+ * Trailing-edge debounce for async tasks: each `trigger` postpones execution by
+ * `delay`; only the latest task runs once the timer fires (VSCode's Delayer).
+ * A superseded or cancelled trigger's promise rejects with CancellationError.
+ */
+export class Delayer<T> implements IDisposable {
+  private _timeout: ReturnType<typeof setTimeout> | undefined
+  private _completionPromise: Promise<T> | undefined
+  private _doResolve: (() => void) | undefined
+  private _doReject: ((err: unknown) => void) | undefined
+  private _task: (() => T | Promise<T>) | undefined
+
+  constructor(public defaultDelay: number) {}
+
+  trigger(task: () => T | Promise<T>, delay = this.defaultDelay): Promise<T> {
+    this._task = task
+    this._cancelTimeout()
+
+    if (!this._completionPromise) {
+      this._completionPromise = new Promise<void>((resolve, reject) => {
+        this._doResolve = resolve
+        this._doReject = reject
+      }).then(() => {
+        this._completionPromise = undefined
+        this._doResolve = undefined
+        const currentTask = this._task!
+        this._task = undefined
+        return currentTask()
+      })
+    }
+
+    this._timeout = setTimeout(() => {
+      this._timeout = undefined
+      this._doResolve?.()
+    }, delay)
+
+    return this._completionPromise
+  }
+
+  isTriggered(): boolean {
+    return this._timeout !== undefined
+  }
+
+  cancel(): void {
+    this._cancelTimeout()
+    if (this._completionPromise) {
+      this._doReject?.(new CancellationError())
+      this._completionPromise = undefined
+    }
+  }
+
+  private _cancelTimeout(): void {
+    if (this._timeout !== undefined) {
+      clearTimeout(this._timeout)
+      this._timeout = undefined
+    }
+  }
+
+  dispose(): void {
+    this.cancel()
+  }
+}
+
+/**
+ * Delayer + Throttler (VSCode's ThrottledDelayer): triggers debounce by
+ * `delay`, and a task that is still running when the next timer fires delays
+ * the queued run until it settles — long tasks never overlap and never pile up.
+ * VSCode's dirty-diff model drives its per-keystroke re-diff through exactly
+ * this (200ms).
+ */
+export class ThrottledDelayer<T> implements IDisposable {
+  private readonly _delayer: Delayer<Promise<T>>
+  private readonly _throttler = new Throttler()
+
+  constructor(defaultDelay: number) {
+    this._delayer = new Delayer(defaultDelay)
+  }
+
+  trigger(promiseFactory: () => Promise<T>, delay?: number): Promise<T> {
+    return this._delayer.trigger(
+      () => this._throttler.queue(promiseFactory),
+      delay,
+    ) as unknown as Promise<T>
+  }
+
+  isTriggered(): boolean {
+    return this._delayer.isTriggered()
+  }
+
+  cancel(): void {
+    this._delayer.cancel()
+  }
+
+  dispose(): void {
+    this._delayer.dispose()
+    this._throttler.dispose()
+  }
+}

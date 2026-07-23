@@ -71,6 +71,16 @@ Markdown 的工作区符号打开项目后立即可用。TypeScript 不一样—
 
 > 提示：这只影响"打开文件前"工作区符号是否就绪；无论是否预热，打开某个 `.ts` 文件后，它所属项目的符号都会正常可搜。
 
+**TypeScript 服务内存上限**：超大项目（例如包含几十 MB 生成的 `.d.ts`）在加载时可能超出 TypeScript 服务默认的 3072 MB 内存上限而崩溃重启——发生时会弹出通知提示。在[设置](../customization/settings.md)里调大 `typescript.tsserver.maxTsServerMemory`（单位 MB）即可：
+
+```json
+{
+  "typescript.tsserver.maxTsServerMemory": 8192
+}
+```
+
+修改后无需重启编辑器：TypeScript 服务下次（重）启动时自动生效。
+
 ## 转到定义、引用与速览
 
 在 TypeScript 文件里，可以从一处用法直接跳到它的定义，或查看它在哪些地方被引用。下面这组命令由编辑器提供，全部也能在命令面板里搜到运行：

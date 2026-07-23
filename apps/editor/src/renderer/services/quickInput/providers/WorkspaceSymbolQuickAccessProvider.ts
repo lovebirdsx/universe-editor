@@ -34,6 +34,7 @@ import {
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../../editor/openInLockAwareGroup.js'
 import { FileEditorRegistry } from '../../editor/FileEditorRegistry.js'
+import { revealSelectionInInput } from '../../editor/revealEditorPosition.js'
 import { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeaturesService.js'
 import {
   workspaceSymbolsToEntries,
@@ -93,27 +94,6 @@ let lastResults: { root: URI; entries: readonly WorkspaceSymbolEntry[] } | undef
 
 export function _resetLastResultsForTests(): void {
   lastResults = undefined
-}
-
-/** Monaco may not have mounted the editor yet; retry briefly (cf. historyActions). */
-async function revealPosition(
-  input: FileEditorInput,
-  lineNumber: number,
-  column: number,
-): Promise<void> {
-  const apply = (): boolean => {
-    const editor = FileEditorRegistry.get(input)
-    if (!editor) return false
-    editor.setPosition({ lineNumber, column })
-    editor.revealLineInCenterIfOutsideViewport(lineNumber)
-    editor.focus()
-    return true
-  }
-  if (apply()) return
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-  if (apply()) return
-  await new Promise<void>((resolve) => setTimeout(resolve, 50))
-  apply()
 }
 
 export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider {
@@ -297,7 +277,10 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
         input = this._instantiation.createInstance(FileEditorInput, uri)
         openInLockAwareGroup(this._groups, input, { activate: true, pinned: true })
       }
-      void revealPosition(input, symbol.lineNumber, symbol.column)
+      void revealSelectionInInput(input, {
+        startLineNumber: symbol.lineNumber,
+        startColumn: symbol.column,
+      })
     }
 
     disposables.add(

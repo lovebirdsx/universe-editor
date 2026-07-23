@@ -15,6 +15,7 @@ import {
   IConfigurationService,
   IEditorService,
   IFileService,
+  ILoggerService,
   IStatusBarService,
   InstantiationService,
   LogLevel,
@@ -137,6 +138,10 @@ function setup() {
   services.set(IStatusBarService, new StatusBarService())
   services.set(IConfigurationService, new ConfigurationService())
   services.set(ILanguageFeaturesService, languageFeatures)
+  services.set(ILoggerService, {
+    _serviceBrand: undefined,
+    createLogger: () => logger,
+  } as never)
   // A single `git` provider rooted at `/ws`, so files under it resolve to `git`.
   services.set(IScmService, {
     _serviceBrand: undefined,

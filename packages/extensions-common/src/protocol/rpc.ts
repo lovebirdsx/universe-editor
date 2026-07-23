@@ -431,10 +431,22 @@ export interface IExtHostLanguages {
 }
 
 /**
+ * One incremental document edit, LSP-shaped (0-based `range` against the state
+ * after the previous change in the same batch was applied). A change without a
+ * `range` replaces the whole document — used for model flushes (file reload,
+ * programmatic setValue) where no delta exists.
+ */
+export interface TextDocumentContentChangeDto {
+  readonly range?: Range
+  readonly text: string
+}
+
+/**
  * Renderer → exposed to the ext host: open/change/close of the renderer's text
  * models, mirrored into the host's TextDocument model so a plugin sees
- * `workspace.textDocuments` and the `onDidChangeTextDocument` family. Full text
- * each time (the framing carries no incremental edits).
+ * `workspace.textDocuments` and the `onDidChangeTextDocument` family. Open
+ * carries the full text once; changes are incremental deltas (VSCode parity —
+ * a multi-MB document must never re-cross the wire per keystroke).
  */
 export interface IExtHostDocuments {
   $acceptDocumentOpen(
@@ -443,7 +455,11 @@ export interface IExtHostDocuments {
     version: number,
     text: string,
   ): Promise<void>
-  $acceptDocumentChange(uri: UriComponents, version: number, text: string): Promise<void>
+  $acceptDocumentChange(
+    uri: UriComponents,
+    version: number,
+    changes: readonly TextDocumentContentChangeDto[],
+  ): Promise<void>
   $acceptDocumentClose(uri: UriComponents): Promise<void>
   /**
    * Renderer → host, WAITING round trip (unlike the fire-and-forget `$accept*`
@@ -533,13 +549,13 @@ export interface IDecorationRangeDto {
 }
 
 /** Snapshot of the active text editor returned by {@link IMainThreadEditor.$getActiveTextEditor}.
- *  Carries the live text so it stays consistent with `selections` — the debounced
- *  document mirror may lag the editor, so the host can't reuse its own model here. */
+ *  Deliberately carries NO document text (VSCode parity): the host resolves the
+ *  document from its ExtHostDocuments mirror by `uri` — re-shipping a multi-MB
+ *  buffer on every tab switch would stall the renderer main thread. */
 export interface IActiveTextEditorDto {
   readonly uri: UriComponents
   readonly languageId: string
   readonly version: number
-  readonly text: string
   readonly selections: readonly ISelectionDto[]
 }
 

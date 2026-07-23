@@ -20,8 +20,11 @@ import {
   ICommandService,
   IConfigurationService,
   IEditorService,
+  ILoggerService,
   IStatusBarService,
   StatusBarAlignment,
+  ThrottledDelayer,
+  type ILogger,
   type IStatusBarEntryAccessor,
   type IWorkbenchContribution,
   autorun,
@@ -36,6 +39,12 @@ import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoad
 const OPEN_COMMIT_COMMAND = 'gitblame.openCommit'
 const DEFAULT_TEMPLATE = '${subject}, ${authorName} (${authorDateAgo})'
 const DEFAULT_STATUSBAR_TEMPLATE = '${authorName} (${authorDateAgo})'
+/**
+ * Editing invalidates the blame cache, so an un-throttled refresh would rerun
+ * `git blame` on every keystroke (typing fires content + cursor events as a
+ * pair). Cache hits still render immediately; only a miss goes through this.
+ */
+const BLAME_DELAY_MS = 500
 
 interface ResolvedLineBlame {
   /** Rendered annotation text for the inline editor decoration. */
@@ -74,6 +83,8 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
   private _decorations: monaco.editor.IEditorDecorationsCollection | undefined
   private readonly _editorStore = this._register(new DisposableStore())
   private readonly _registryStore = this._register(new DisposableStore())
+  private readonly _blameDelayer = this._register(new ThrottledDelayer<void>(BLAME_DELAY_MS))
+  private readonly _logger: ILogger
 
   /** Blame result per absolute file path; cleared on content change. */
   private readonly _cache = new Map<string, BlameResultDto | null>()
@@ -89,8 +100,10 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
     @IConfigurationService private readonly _configurationService: IConfigurationService,
     @ILanguageFeaturesService languageFeatures: ILanguageFeaturesService,
     @IScmService private readonly _scm: IScmService,
+    @ILoggerService loggerService: ILoggerService,
   ) {
     super()
+    this._logger = loggerService.createLogger({ id: 'gitBlame', name: 'Git Blame' })
 
     this._register(
       CommandsRegistry.registerCommand(OPEN_COMMIT_COMMAND, () => {
@@ -161,13 +174,22 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
       this._decorations = editor?.createDecorationsCollection()
       if (!editor) return
 
-      this._editorStore.add(editor.onDidChangeCursorPosition(() => this._refresh()))
+      this._editorStore.add(
+        editor.onDidChangeCursorPosition(() => {
+          // Cached blame renders instantly; a miss (right after an edit cleared
+          // it) rides the delayer so the content+cursor event pair a keystroke
+          // fires never reruns git per key.
+          const path = this._activePath
+          if (path && this._cache.has(path)) this._refresh()
+          else this._scheduleRefresh()
+        }),
+      )
       const model = editor.getModel()
       if (model) {
         this._editorStore.add(
           model.onDidChangeContent(() => {
             this._cache.delete(this._activePath ?? '')
-            this._refresh()
+            this._scheduleRefresh()
           }),
         )
       }
@@ -180,6 +202,11 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
         if (changed === input) attach()
       }),
     )
+  }
+
+  /** Debounced refresh; a superseded trigger rejects with CancellationError — expected. */
+  private _scheduleRefresh(): void {
+    void this._blameDelayer.trigger(async () => this._refresh()).catch(() => undefined)
   }
 
   private _refresh(): void {
@@ -214,10 +241,17 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
     const existing = this._inflight.get(path)
     if (existing) return existing
 
+    const started = performance.now()
     const p = this._commandService
       .executeCommand<BlameResultDto | null>(commandId, path, this._ignoreWhitespace)
       .then((r) => {
         this._inflight.delete(path)
+        const blameMs = performance.now() - started
+        if (blameMs > 1000) {
+          this._logger.info(
+            `blame ${path} took ${blameMs.toFixed(0)}ms commits=${r?.commits.length ?? 0} uncommitted=${r?.uncommittedLines.length ?? 0}`,
+          )
+        }
         // `undefined` means the command isn't registered yet (extension host still
         // activating) — don't cache it so a later cursor move retries. `null` is a
         // real "no blame for this file" answer and is cached.
@@ -368,6 +402,7 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
   }
 
   private _clear(): void {
+    this._blameDelayer.cancel()
     this._editorStore.clear()
     this._registryStore.clear()
     this._decorations?.clear()

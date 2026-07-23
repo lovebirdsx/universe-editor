@@ -35,6 +35,7 @@ import { EditorGroupContext } from './EditorGroupContext.js'
 import { Breadcrumbs } from './Breadcrumbs.js'
 import { clampRevealScrollTop } from './previewScrollMap.js'
 import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
+import { recordTabSwitchPhase } from '../../services/performance/tabSwitchPerf.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { IRecentEditsTracker } from '../../services/ai/RecentEditsTracker.js'
@@ -392,76 +393,83 @@ export function FileEditor({ input }: { input: IEditorInput }) {
 
     const applyModel = (model: monaco.editor.ITextModel) => {
       if (cancelled) return
-      editorRef.current?.setModel(model)
+      recordTabSwitchPhase('fileEditor.setModel', () => editorRef.current?.setModel(model))
       // The editor instance is reused across tabs; keep readOnly in sync with
       // the current input (the create-effect only set it for the first input).
-      editorRef.current?.updateOptions({
-        readOnly: fileInput.isReadonly,
-        // Reset drop-into-editor to the OFF baseline on every model swap; the
-        // Shift-held dragover listener re-arms it per drag when appropriate.
-        dropIntoEditor: DROP_INTO_EDITOR_OFF,
-        ...getEditorTypographyOptions(configService, fileInput.language),
-      })
+      recordTabSwitchPhase('fileEditor.applyOptions', () =>
+        editorRef.current?.updateOptions({
+          readOnly: fileInput.isReadonly,
+          // Reset drop-into-editor to the OFF baseline on every model swap; the
+          // Shift-held dragover listener re-arms it per drag when appropriate.
+          dropIntoEditor: DROP_INTO_EDITOR_OFF,
+          ...getEditorTypographyOptions(configService, fileInput.language),
+        }),
+      )
 
       // Initialise dirty state: covers hot-exit restore (pending dirty content)
       // and shared models that are already dirty in another split.
-      fileInput.updateDirtyFromModel(model)
+      recordTabSwitchPhase('fileEditor.updateDirty', () => fileInput.updateDirtyFromModel(model))
 
       // Restore previously saved viewState (cursor, selection, scroll).
       if (groupId !== undefined && editorRef.current) {
         const ed = editorRef.current
-        const saved = EditorViewStateCache.load(groupId, resourceUri)
-        if (saved) {
-          ed.restoreViewState(saved as monaco.editor.ICodeEditorViewState)
-        }
-        // A one-shot reveal request (e.g. toggling back from a markdown preview
-        // that had been scrolled, or entering the preview aligned to the cursor)
-        // wins over the saved scroll: put that source line at the top, but clamp so
-        // a near-the-end line lands the last line flush at the viewport bottom
-        // instead of overshooting into scroll-beyond-last-line padding.
-        const revealLine = EditorViewStateCache.takeRevealLine(groupId, resourceUri)
-        if (revealLine !== undefined) {
-          const lineTop = ed.getTopForLineNumber(revealLine)
-          const lastLine = ed.getModel()?.getLineCount() ?? revealLine
-          const contentBottom = ed.getBottomForLineNumber(lastLine)
-          const viewportHeight = ed.getLayoutInfo().height
-          ed.setScrollTop(
-            clampRevealScrollTop({ lineTop, contentBottom, viewportHeight }),
-            1 /* ScrollType.Immediate */,
-          )
-        }
-        // A more recent cursor written by the diff editor for the same file wins
-        // over our own (possibly stale) viewState, so switching diff -> file
-        // lands on the position last seen in the diff's modified side.
-        const sharedCursor = EditorViewStateCache.loadCursor(groupId, resourceUri)
-        if (sharedCursor) {
-          const cur = ed.getPosition()
-          if (
-            !cur ||
-            cur.lineNumber !== sharedCursor.lineNumber ||
-            cur.column !== sharedCursor.column
-          ) {
-            ed.setPosition(sharedCursor)
-            ed.revealPositionInCenter(sharedCursor)
+        recordTabSwitchPhase('fileEditor.restoreViewState', () => {
+          const saved = EditorViewStateCache.load(groupId, resourceUri)
+          if (saved) {
+            ed.restoreViewState(saved as monaco.editor.ICodeEditorViewState)
           }
-        }
+          // A one-shot reveal request (e.g. toggling back from a markdown preview
+          // that had been scrolled, or entering the preview aligned to the cursor)
+          // wins over the saved scroll: put that source line at the top, but clamp so
+          // a near-the-end line lands the last line flush at the viewport bottom
+          // instead of overshooting into scroll-beyond-last-line padding.
+          const revealLine = EditorViewStateCache.takeRevealLine(groupId, resourceUri)
+          if (revealLine !== undefined) {
+            const lineTop = ed.getTopForLineNumber(revealLine)
+            const lastLine = ed.getModel()?.getLineCount() ?? revealLine
+            const contentBottom = ed.getBottomForLineNumber(lastLine)
+            const viewportHeight = ed.getLayoutInfo().height
+            ed.setScrollTop(
+              clampRevealScrollTop({ lineTop, contentBottom, viewportHeight }),
+              1 /* ScrollType.Immediate */,
+            )
+          }
+          // A more recent cursor written by the diff editor for the same file wins
+          // over our own (possibly stale) viewState, so switching diff -> file
+          // lands on the position last seen in the diff's modified side.
+          const sharedCursor = EditorViewStateCache.loadCursor(groupId, resourceUri)
+          if (sharedCursor) {
+            const cur = ed.getPosition()
+            if (
+              !cur ||
+              cur.lineNumber !== sharedCursor.lineNumber ||
+              cur.column !== sharedCursor.column
+            ) {
+              ed.setPosition(sharedCursor)
+              ed.revealPositionInCenter(sharedCursor)
+            }
+          }
+        })
       }
 
       if (editorRef.current) {
-        registeredEditor = editorRef.current
-        FileEditorRegistry.register(fileInput, registeredEditor, group?.id)
-        // Focus the editor once its model lands — unless the open asked to keep
-        // focus elsewhere (single-click preview from a list keeps focus in the
-        // originating tree so its selection highlight stays active).
-        if (
-          groupsService.activeGroup.activeEditor === fileInput &&
-          !groupsService.activeGroup.lastActivationPreservedFocus
-        ) {
-          focusStandaloneEditor(editorRef.current, contextKeyService)
-        }
-        // Keep cache live so toJSON() always captures the latest position.
-        cursorSub = editorRef.current.onDidChangeCursorPosition(flushViewState)
-        scrollSub = editorRef.current.onDidScrollChange(flushViewState)
+        const ed = editorRef.current
+        recordTabSwitchPhase('fileEditor.registerAndFocus', () => {
+          registeredEditor = ed
+          FileEditorRegistry.register(fileInput, registeredEditor, group?.id)
+          // Focus the editor once its model lands — unless the open asked to keep
+          // focus elsewhere (single-click preview from a list keeps focus in the
+          // originating tree so its selection highlight stays active).
+          if (
+            groupsService.activeGroup.activeEditor === fileInput &&
+            !groupsService.activeGroup.lastActivationPreservedFocus
+          ) {
+            focusStandaloneEditor(ed, contextKeyService)
+          }
+          // Keep cache live so toJSON() always captures the latest position.
+          cursorSub = ed.onDidChangeCursorPosition(flushViewState)
+          scrollSub = ed.onDidScrollChange(flushViewState)
+        })
       }
 
       contentSub = model.onDidChangeContent((e) => {

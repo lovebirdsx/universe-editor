@@ -7,7 +7,10 @@ import {
   AbstractIdleValue,
   AsyncIterableSource,
   DeferredPromise,
+  Delayer,
   GlobalIdleValue,
+  ThrottledDelayer,
+  Throttler,
   runWhenIdle,
 } from '../../base/async.js'
 import { CancellationError } from '../../base/errors.js'
@@ -211,5 +214,100 @@ describe('AsyncIterableSource', () => {
     src.resolve()
     void src.asyncIterable[Symbol.asyncIterator]()
     expect(() => src.asyncIterable[Symbol.asyncIterator]()).toThrow(/once/)
+  })
+})
+
+describe('Throttler', () => {
+  it('coalesces triggers that arrive while a task is running into one queued run', async () => {
+    const throttler = new Throttler()
+    let running: DeferredPromise<number> = new DeferredPromise()
+    const runs: number[] = []
+    const factory = (id: number) => (): Promise<number> => {
+      runs.push(id)
+      running = new DeferredPromise()
+      return running.p
+    }
+
+    const first = throttler.queue(factory(1))
+    const gate = running
+    // Both arrive while #1 runs — only the LAST factory runs afterwards.
+    const second = throttler.queue(factory(2))
+    const third = throttler.queue(factory(3))
+    gate.complete(10)
+    await expect(first).resolves.toBe(10)
+    running.complete(30)
+    await expect(second).resolves.toBe(30)
+    await expect(third).resolves.toBe(30)
+    expect(runs).toEqual([1, 3])
+  })
+})
+
+describe('Delayer', () => {
+  it('runs only the last task after the trailing delay', async () => {
+    vi.useFakeTimers()
+    try {
+      const delayer = new Delayer<number>(100)
+      const results: Array<Promise<number>> = []
+      results.push(delayer.trigger(() => 1))
+      results.push(delayer.trigger(() => 2))
+      results.push(delayer.trigger(() => 3))
+      expect(delayer.isTriggered()).toBe(true)
+      await vi.advanceTimersByTimeAsync(100)
+      for (const p of results) await expect(p).resolves.toBe(3)
+      expect(delayer.isTriggered()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancel rejects the pending trigger with CancellationError', async () => {
+    vi.useFakeTimers()
+    try {
+      const delayer = new Delayer<number>(100)
+      const p = delayer.trigger(() => 1)
+      const settled = p.catch((e: unknown) => e)
+      delayer.cancel()
+      await expect(settled).resolves.toBeInstanceOf(CancellationError)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('ThrottledDelayer', () => {
+  it('debounces triggers and serializes a long-running task with the next one', async () => {
+    vi.useFakeTimers()
+    try {
+      const delayer = new ThrottledDelayer<void>(100)
+      const events: string[] = []
+      let release!: () => void
+      const slow = (): Promise<void> => {
+        events.push('slow:start')
+        return new Promise<void>((resolve) => {
+          release = (): void => {
+            events.push('slow:end')
+            resolve()
+          }
+        })
+      }
+      void delayer.trigger(slow).catch(() => undefined)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(events).toEqual(['slow:start'])
+
+      // Re-trigger while the first task is still running: the queued run must
+      // wait for it to settle instead of overlapping.
+      const fast = (): Promise<void> => {
+        events.push('fast')
+        return Promise.resolve()
+      }
+      const second = delayer.trigger(fast).catch(() => undefined)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(events).toEqual(['slow:start'])
+      release()
+      await second
+      expect(events).toEqual(['slow:start', 'slow:end', 'fast'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

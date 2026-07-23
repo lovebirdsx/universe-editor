@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { computeDirtyDiffRegions } from '../dirtyDiff.js'
+import {
+  computeDirtyDiffRegions,
+  computeDirtyDiffRegionsFromLines,
+  toDiffLines,
+  trimTrailingEmptyLine,
+} from '../dirtyDiff.js'
 
 describe('computeDirtyDiffRegions', () => {
   it('reports no regions when the document matches HEAD', () => {
@@ -67,5 +72,50 @@ describe('computeDirtyDiffRegions', () => {
     const head = 'a\r\nb\r\nc\r\n'
     const current = 'a\nb\nc\n'
     expect(computeDirtyDiffRegions(head, current)).toEqual([])
+  })
+})
+
+/**
+ * The hot path (DirtyDiffContribution) feeds pre-split lines: a cached
+ * toDiffLines(HEAD) against Monaco's getLinesContent() run through
+ * trimTrailingEmptyLine. Both entry points must agree, and the trailing-newline
+ * phantom line Monaco reports must never show up as a change.
+ */
+describe('computeDirtyDiffRegionsFromLines', () => {
+  it('matches the string entry point for a mixed edit', () => {
+    const head = 'a\r\nb\r\nc\r\nd\r\n'
+    const current = 'a\nX\nc\nd\ne\n'
+    expect(computeDirtyDiffRegionsFromLines(toDiffLines(head), toDiffLines(current))).toEqual(
+      computeDirtyDiffRegions(head, current),
+    )
+  })
+
+  it('reports no change between a trailing-newline HEAD and Monaco-style lines', () => {
+    // Monaco's getLinesContent() for "a\nb\n" is ['a','b',''] — the phantom
+    // final line must be trimmed so it never diffs against HEAD's ['a','b'].
+    const headLines = toDiffLines('a\nb\n')
+    const monacoLines = trimTrailingEmptyLine(['a', 'b', ''])
+    expect(computeDirtyDiffRegionsFromLines(headLines, monacoLines)).toEqual([])
+  })
+})
+
+describe('toDiffLines', () => {
+  it('normalizes CRLF and drops the phantom trailing line', () => {
+    expect(toDiffLines('a\r\nb\r\n')).toEqual(['a', 'b'])
+    expect(toDiffLines('a\nb')).toEqual(['a', 'b'])
+    expect(toDiffLines('')).toEqual([])
+  })
+
+  it('keeps interior empty lines', () => {
+    expect(toDiffLines('a\n\nb\n')).toEqual(['a', '', 'b'])
+  })
+})
+
+describe('trimTrailingEmptyLine', () => {
+  it('drops exactly one trailing empty element', () => {
+    expect(trimTrailingEmptyLine(['a', 'b', ''])).toEqual(['a', 'b'])
+    expect(trimTrailingEmptyLine(['a', '', ''])).toEqual(['a', ''])
+    expect(trimTrailingEmptyLine([''])).toEqual([])
+    expect(trimTrailingEmptyLine([])).toEqual([])
   })
 })

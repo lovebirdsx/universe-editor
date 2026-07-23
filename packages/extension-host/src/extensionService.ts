@@ -80,6 +80,7 @@ import {
   type IMainThreadExtensions,
   type IWebviewDiffContextDto,
   type WillSaveReason,
+  type TextDocumentContentChangeDto,
 } from '@universe-editor/extensions-common'
 import type {
   CodeAction,
@@ -109,7 +110,7 @@ import { installApiBridge, type IExtensionHostBridge } from './apiFactory.js'
 import { HostSourceControl } from './hostScm.js'
 import { HostWebviewManager } from './hostWebviews.js'
 import { HostAi } from './hostAi.js'
-import { ExtHostDocuments, HostTextDocument } from './hostDocuments.js'
+import { ExtHostDocuments } from './hostDocuments.js'
 import {
   HostOutputChannel,
   HostStatusBarItem,
@@ -129,6 +130,11 @@ function toFileStat(dto: IExtHostFileStatDto): FileStat {
   return { type: toFileType(dto.type), size: dto.size, mtime: dto.mtime }
 }
 
+/** How long an active-editor change may wait for its document's didOpen to land
+ *  (first activation pushes the full text after plugin activation — seconds for
+ *  a huge file). Past this, the change is dropped rather than fired docless. */
+const ACTIVE_EDITOR_DOC_WAIT_MS = 15_000
+
 export class ExtensionService implements IExtensionHostBridge {
   private readonly _commands: ExtensionCommandRegistry
   private readonly _languageRegistry: LanguageProviderRegistry
@@ -140,6 +146,9 @@ export class ExtensionService implements IExtensionHostBridge {
   private _scmHandle = 0
   private _outputHandle = 0
   private _decorationTypeHandle = 0
+  /** Bumped per active-editor change; a held-back (doc-pending) change only
+   *  fires if no newer change arrived while it waited. */
+  private _activeEditorGeneration = 0
 
   private readonly _onDidChangeActiveTextEditor = new Emitter<TextEditor | undefined>()
   readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined> =
@@ -392,16 +401,12 @@ export class ExtensionService implements IExtensionHostBridge {
 
   async getActiveTextEditor(): Promise<TextEditor | undefined> {
     const snapshot = await this._editor().$getActiveTextEditor()
-    return snapshot ? this._editorFromSnapshot(snapshot) : undefined
+    if (!snapshot) return undefined
+    const document = await this._documents.whenOpen(snapshot.uri, ACTIVE_EDITOR_DOC_WAIT_MS)
+    return document ? this._editorFromSnapshot(snapshot, document) : undefined
   }
 
-  private _editorFromSnapshot(snapshot: IActiveTextEditorDto): TextEditor {
-    const document = new HostTextDocument(
-      snapshot.uri,
-      snapshot.languageId,
-      snapshot.version,
-      snapshot.text,
-    )
+  private _editorFromSnapshot(snapshot: IActiveTextEditorDto, document: TextDocument): TextEditor {
     const selections = snapshot.selections.map((s) => ({ anchor: s.anchor, active: s.active }))
     return new HostTextEditor(document, selections, snapshot.version, this._editor())
   }
@@ -412,11 +417,26 @@ export class ExtensionService implements IExtensionHostBridge {
     return new HostTextEditorDecorationType(handle, this._editor())
   }
 
-  /** IExtHostEditor.$acceptActiveEditorChange — renderer mirrors editor focus changes. */
+  /** IExtHostEditor.$acceptActiveEditorChange — renderer mirrors editor focus changes.
+   *  The DTO carries no text; the document comes from the ExtHostDocuments mirror.
+   *  When the mirror's didOpen is still in flight (first activation of a file),
+   *  the event is held back until the document lands — unless a newer editor
+   *  change supersedes it meanwhile. */
   acceptActiveEditorChange(snapshot: IActiveTextEditorDto | null): void {
-    this._onDidChangeActiveTextEditor.fire(
-      snapshot ? this._editorFromSnapshot(snapshot) : undefined,
-    )
+    const generation = ++this._activeEditorGeneration
+    if (!snapshot) {
+      this._onDidChangeActiveTextEditor.fire(undefined)
+      return
+    }
+    const document = this._documents.get(snapshot.uri)
+    if (document) {
+      this._onDidChangeActiveTextEditor.fire(this._editorFromSnapshot(snapshot, document))
+      return
+    }
+    void this._documents.whenOpen(snapshot.uri, ACTIVE_EDITOR_DOC_WAIT_MS).then((lateDoc) => {
+      if (generation !== this._activeEditorGeneration || !lateDoc) return
+      this._onDidChangeActiveTextEditor.fire(this._editorFromSnapshot(snapshot, lateDoc))
+    })
   }
 
   // --- IExtensionHostBridge: languages ---
@@ -569,8 +589,12 @@ export class ExtensionService implements IExtensionHostBridge {
   }
 
   /** IExtHostDocuments.$acceptDocumentChange */
-  acceptDocumentChange(uri: UriComponents, version: number, text: string): void {
-    this._documents.acceptChange(uri, version, text)
+  acceptDocumentChange(
+    uri: UriComponents,
+    version: number,
+    changes: readonly TextDocumentContentChangeDto[],
+  ): void {
+    this._documents.acceptChange(uri, version, changes)
   }
 
   /** IExtHostDocuments.$acceptDocumentClose */

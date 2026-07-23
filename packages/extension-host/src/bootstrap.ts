@@ -227,8 +227,8 @@ const extHostDocuments: IExtHostDocuments = {
   $acceptDocumentOpen: async (uri, languageId, version, text) => {
     ;(await serviceReady).acceptDocumentOpen(uri, languageId, version, text)
   },
-  $acceptDocumentChange: async (uri, version, text) => {
-    ;(await serviceReady).acceptDocumentChange(uri, version, text)
+  $acceptDocumentChange: async (uri, version, changes) => {
+    ;(await serviceReady).acceptDocumentChange(uri, version, changes)
   },
   $acceptDocumentClose: async (uri) => {
     ;(await serviceReady).acceptDocumentClose(uri)
