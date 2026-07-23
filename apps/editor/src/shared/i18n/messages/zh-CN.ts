@@ -506,6 +506,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.editor.lineHighlightBorder.description':
     '当前行高亮的边框色。留空则使用主题默认值（透明，即无边框）。',
   'settings.editor.minimap.description': '控制是否显示小地图。',
+  'settings.editor.largeFileOptimizations.description':
+    '针对大文件的特殊处理：关闭部分高内存占用的功能。需要重新打开文件才能生效。',
   'settings.editor.occurrencesHighlight.description':
     '控制是否自动高亮光标下单词的出现位置（无需选区）。"off" 会禁用。',
   'settings.editor.renderLineHighlight.description':
@@ -888,6 +890,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'keybindings.schema.key.description': '按键绑定序列，例如 "ctrl+shift+p" 或 "ctrl+k ctrl+s"。',
   'keybindings.schema.removeBinding.desc': '移除默认绑定（{desc}）',
   'keybindings.schema.when.description': '控制此绑定生效的上下文键表达式。',
+  'largeFileOptimizations.warning':
+    '{file}：为了减少内存占用并避免卡顿或崩溃，已为此大文件关闭语法着色、自动换行、折叠、CodeLens、单词高亮和粘性滚动。',
+  'largeFileOptimizations.forceEnable': '强制启用功能',
+  'largeFileOptimizations.reopenPrompt': '请重新打开文件以使该设置生效。',
   'keybindings.search.placeholder': '搜索键盘快捷方式（{count}）',
   'keybindings.source.default': '默认',
   'keybindings.source.user': '用户',

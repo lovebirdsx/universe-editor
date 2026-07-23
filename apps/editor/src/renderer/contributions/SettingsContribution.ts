@@ -254,6 +254,14 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Controls how lines should wrap.',
             ),
           },
+          'editor.largeFileOptimizations': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.editor.largeFileOptimizations.description',
+              'Special handling for large files to disable certain memory intensive features. Requires reopening the file to take effect.',
+            ),
+          },
           'editor.minimap.enabled': {
             type: 'boolean',
             default: true,

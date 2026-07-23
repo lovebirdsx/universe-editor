@@ -61,6 +61,7 @@ import { DeepLinkContribution } from '../DeepLinkContribution.js'
 import { StartupSessionContribution } from '../StartupSessionContribution.js'
 import { SessionChangesDiffSyncContribution } from '../SessionChangesDiffSyncContribution.js'
 import { DiffLiveContentSyncContribution } from '../DiffLiveContentSyncContribution.js'
+import { LargeFileOptimizationsContribution } from '../LargeFileOptimizationsContribution.js'
 
 // `activeEditorHasJsonSchema` context key — drives the editor-title "Show JSON
 // Schema" action. AfterRestore: the editor service + schema registry are live,
@@ -489,5 +490,16 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.diffLiveContentSync',
   DiffLiveContentSyncContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Warn when a model opens with Monaco's large-file optimizations active
+// (tokenization / wrapping / folding / codelens / word highlight / sticky
+// scroll off — the shut-off itself is Monaco core) and offer the force-enable
+// escape hatch. AfterRestore so the notification service is live; the registry
+// subscription costs nothing until the first model appears.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.largeFileOptimizations',
+  LargeFileOptimizationsContribution,
   WorkbenchPhase.AfterRestore,
 )

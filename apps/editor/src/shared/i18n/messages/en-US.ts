@@ -208,12 +208,18 @@ export const EN_US_MESSAGES: MessageMap = {
   'keybindings.schema.key.description': 'Keybinding chord, e.g. "ctrl+shift+p" or "ctrl+k ctrl+s".',
   'keybindings.schema.removeBinding.desc': 'Remove default binding ({desc})',
   'keybindings.schema.when.description': 'Context-key expression that gates this binding.',
+  'largeFileOptimizations.warning':
+    '{file}: tokenization, wrapping, folding, codelens, word highlighting and sticky scroll have been turned off for this large file in order to reduce memory usage and avoid freezing or crashing.',
+  'largeFileOptimizations.forceEnable': 'Forcefully Enable Features',
+  'largeFileOptimizations.reopenPrompt': 'Please reopen the file for this setting to take effect.',
   'settings.editor.detectIndentation.description':
     'Controls whether `editor.tabSize` and `editor.insertSpaces` are automatically detected when a file is opened based on the file contents.',
   'settings.editor.fontSize.description': 'Controls the editor font size in pixels.',
   'settings.editor.insertSpaces.description':
     'Insert spaces when pressing Tab. This setting is overridden based on the file contents when `editor.detectIndentation` is on.',
   'settings.editor.minimap.description': 'Controls whether the minimap is shown.',
+  'settings.editor.largeFileOptimizations.description':
+    'Special handling for large files to disable certain memory intensive features. Requires reopening the file to take effect.',
   'settings.editor.tabSize.description':
     'The number of spaces a tab is equal to. This setting is overridden based on the file contents when `editor.detectIndentation` is on.',
   'settings.editor.wordWrap.bounded':
