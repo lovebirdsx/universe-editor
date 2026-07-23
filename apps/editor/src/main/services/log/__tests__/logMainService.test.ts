@@ -25,6 +25,25 @@ const { MainLogChannelService } = await import('../mainLogChannelService.js')
 
 const SESSION_DIR_RE = /^\d{8}T\d{6}$/
 
+// flush() is fire-and-forget (serialized through an async promise chain), so a
+// fixed sleep after it is racy under load. Poll for the observable effect
+// instead — once the last line is on disk, every prior flush's event has fired.
+async function waitForFileContains(file: string, text: string): Promise<string> {
+  let content = ''
+  await vi.waitFor(
+    async () => {
+      content = await fs.readFile(file, 'utf8')
+      expect(content).toContain(text)
+    },
+    { timeout: 5000, interval: 20 },
+  )
+  return content
+}
+
+async function waitForEvents(events: readonly unknown[], count: number): Promise<void> {
+  await vi.waitFor(() => expect(events).toHaveLength(count), { timeout: 5000, interval: 20 })
+}
+
 describe('LogMainService', () => {
   let tmpDir: string
 
@@ -44,13 +63,10 @@ describe('LogMainService', () => {
     logger.info('hello from test')
     logger.flush()
 
-    await new Promise((r) => setTimeout(r, 200))
-
     const sessionId = svc.getSessionId()
     expect(SESSION_DIR_RE.test(sessionId)).toBe(true)
     const logFile = join(tmpDir, 'logs', sessionId, 'test.log')
-    const content = await fs.readFile(logFile, 'utf8')
-    expect(content).toContain('hello from test')
+    const content = await waitForFileContains(logFile, 'hello from test')
     expect(content).toContain('[info]')
   })
 
@@ -168,12 +184,13 @@ describe('LogMainService', () => {
     ;(logger as unknown as { _estimatedSize: number })._estimatedSize = 11 * 1024 * 1024
     logger.info('after-rotate line')
     logger.flush()
-    await new Promise((r) => setTimeout(r, 200))
+    // Rotation precedes the append within the same flush, so once the new line
+    // is on disk the rotated/ entry is guaranteed to exist.
+    const current = await waitForFileContains(logPath, 'after-rotate line')
 
     const rotatedDir = join(sessionDir, 'rotated')
     const rotatedEntries = await fs.readdir(rotatedDir)
     expect(rotatedEntries.some((name) => name.startsWith('rotate-target.'))).toBe(true)
-    const current = await fs.readFile(logPath, 'utf8')
     expect(current).toContain('after-rotate line')
   })
 
@@ -184,29 +201,29 @@ describe('LogMainService', () => {
 
     const logger = svc.createLogger({ id: 'burst', name: 'Burst' })
     const inner = logger as unknown as { _estimatedSize: number }
+    const logFile = join(tmpDir, 'logs', svc.getSessionId(), 'burst.log')
 
     // Force enough back-to-back rotations to exceed the burst threshold. Each
     // flush is pushed over the size cap so _rotate() runs and records a rotation.
+    // Wait for each line to land before enqueueing the next — otherwise all
+    // lines coalesce into a single flush and only one rotation is recorded.
     for (let i = 0; i < 4; i++) {
       inner._estimatedSize = 11 * 1024 * 1024
       logger.info(`line ${i}`)
       logger.flush()
-      await new Promise((r) => setTimeout(r, 30))
+      await waitForFileContains(logFile, `line ${i}`)
     }
-
     const countAfterBurst = events.length
+    expect(countAfterBurst).toBeGreaterThan(0)
 
     // A subsequent normal write must NOT fan out while suppression is active,
     // even though the file itself keeps recording.
     inner._estimatedSize = 0
     logger.info('post-burst line')
     logger.flush()
-    await new Promise((r) => setTimeout(r, 50))
 
+    const current = await waitForFileContains(logFile, 'post-burst line')
     expect(events.length).toBe(countAfterBurst)
-
-    const sessionDir = join(tmpDir, 'logs', svc.getSessionId())
-    const current = await fs.readFile(join(sessionDir, 'burst.log'), 'utf8')
     expect(current).toContain('post-burst line')
   })
 
@@ -218,9 +235,7 @@ describe('LogMainService', () => {
     const logger = svc.createLogger({ id: 'tail', name: 'Tail' })
     logger.info('first entry')
     logger.flush()
-    await new Promise((r) => setTimeout(r, 200))
-
-    expect(events).toHaveLength(1)
+    await waitForEvents(events, 1)
     expect(events[0]?.channelId).toBe('tail')
     expect(events[0]?.chunk).toContain('first entry')
     expect(events[0]?.chunk).toContain('[info]')
@@ -237,9 +252,7 @@ describe('LogMainService', () => {
     logger.warn('warning entry')
     logger.error('error entry')
     logger.flush()
-    await new Promise((r) => setTimeout(r, 200))
-
-    expect(events).toHaveLength(1)
+    await waitForEvents(events, 1)
     expect(events[0]?.channelId).toBe('levels')
     expect(events[0]?.chunk).toContain('[warn] warning entry')
     expect(events[0]?.chunk).toContain('[error] error entry')
@@ -275,10 +288,9 @@ describe('LogMainService', () => {
     const logger = svc.createLogger({ id: 'ordered', name: 'Ordered' })
     logger.info('first info')
     logger.error('then error')
-    await new Promise((r) => setTimeout(r, 200))
 
     const logFile = join(tmpDir, 'logs', svc.getSessionId(), 'ordered.log')
-    const content = await fs.readFile(logFile, 'utf8')
+    const content = await waitForFileContains(logFile, 'then error')
     expect(content.indexOf('first info')).toBeGreaterThanOrEqual(0)
     expect(content.indexOf('first info')).toBeLessThan(content.indexOf('then error'))
   })
@@ -304,12 +316,8 @@ describe('MainLogChannelService', () => {
     const fireTime = Date.now()
     await channelSvc.append('editor', LogLevel.Info, 'renderer log entry', fireTime)
 
-    await new Promise((r) => setTimeout(r, 200))
-    logSvc.createLogger({ id: 'editor', name: 'Editor' }).flush()
-    await new Promise((r) => setTimeout(r, 200))
-
     const logFile = join(tmpDir, 'logs', logSvc.getSessionId(), 'window-42', 'editor.log')
-    const content = await fs.readFile(logFile, 'utf8')
+    const content = await waitForFileContains(logFile, 'renderer log entry')
     expect(content).toContain('[renderer:42] renderer log entry')
     expect(content).toContain(formatLogTimestamp(new Date(fireTime), LOG_TIMESTAMP_FORMAT_DEFAULT))
   })
@@ -324,15 +332,10 @@ describe('MainLogChannelService', () => {
       { channel: 'workspace', level: LogLevel.Warning, message: 'two', timestamp: ts },
     ])
 
-    await new Promise((r) => setTimeout(r, 200))
-    logSvc.createLogger({ id: 'editor', name: 'Editor' }).flush()
-    logSvc.createLogger({ id: 'workspace', name: 'Workspace' }).flush()
-    await new Promise((r) => setTimeout(r, 200))
-
     const sessionId = logSvc.getSessionId()
     const windowDir = join(tmpDir, 'logs', sessionId, 'window-7')
-    const editorContent = await fs.readFile(join(windowDir, 'editor.log'), 'utf8')
-    const workspaceContent = await fs.readFile(join(windowDir, 'workspace.log'), 'utf8')
+    const editorContent = await waitForFileContains(join(windowDir, 'editor.log'), 'one')
+    const workspaceContent = await waitForFileContains(join(windowDir, 'workspace.log'), 'two')
     expect(editorContent).toContain('[renderer:7] one')
     expect(workspaceContent).toContain('[renderer:7] two')
   })
