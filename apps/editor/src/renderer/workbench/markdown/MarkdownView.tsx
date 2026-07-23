@@ -251,7 +251,13 @@ function Block({ node }: { node: MdNode }): ReactNode {
         </ul>
       )
     case 'blockquote':
-      return <blockquote {...lineAttr}>{renderInline(node.children)}</blockquote>
+      return (
+        <blockquote {...lineAttr}>
+          {node.children.map((child, i) => (
+            <Block key={i} node={child} />
+          ))}
+        </blockquote>
+      )
     case 'table':
       return (
         <table {...lineAttr}>

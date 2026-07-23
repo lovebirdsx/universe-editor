@@ -223,7 +223,64 @@ describe('parseMarkdown — block layer', () => {
     expect(parseMarkdown('> quoted\n> more')).toEqual<readonly MdNode[]>([
       {
         type: 'blockquote',
-        children: [text('quoted'), { type: 'softbreak' }, text('more')],
+        children: [
+          {
+            type: 'paragraph',
+            children: [text('quoted'), { type: 'softbreak' }, text('more')],
+            line: 0,
+          },
+        ],
+        line: 0,
+      },
+    ])
+  })
+
+  it('splits blockquote content into separate blocks at `>` blank lines', () => {
+    expect(parseMarkdown('> para one\n>\n> para two')).toEqual<readonly MdNode[]>([
+      {
+        type: 'blockquote',
+        children: [
+          { type: 'paragraph', children: [text('para one')], line: 0 },
+          { type: 'paragraph', children: [text('para two')], line: 2 },
+        ],
+        line: 0,
+      },
+    ])
+  })
+
+  it('parses block-level structures (lists) inside blockquotes', () => {
+    expect(parseMarkdown('> intro\n>\n> - item A\n> - item B')).toEqual<readonly MdNode[]>([
+      {
+        type: 'blockquote',
+        children: [
+          { type: 'paragraph', children: [text('intro')], line: 0 },
+          {
+            type: 'list',
+            ordered: false,
+            items: [
+              { inline: [text('item A')], checked: null },
+              { inline: [text('item B')], checked: null },
+            ],
+            line: 2,
+          },
+        ],
+        line: 0,
+      },
+    ])
+  })
+
+  it('parses nested blockquotes recursively', () => {
+    expect(parseMarkdown('> outer\n> > inner')).toEqual<readonly MdNode[]>([
+      {
+        type: 'blockquote',
+        children: [
+          { type: 'paragraph', children: [text('outer')], line: 0 },
+          {
+            type: 'blockquote',
+            children: [{ type: 'paragraph', children: [text('inner')], line: 0 }],
+            line: 1,
+          },
+        ],
         line: 0,
       },
     ])

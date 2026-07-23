@@ -70,7 +70,10 @@ workbench/editor/MarkdownPreviewEditor.tsx  组件：源文件 open 时跟 Monac
 workbench/editor/useMarkdownSyncScroll.ts   预览↔源编辑器 同步滚动
 workbench/markdown/MarkdownView.tsx  渲染核心：parseMarkdown AST → React 元素，
                                      **不输出 raw HTML**（React 转义，SafeLink 防护），代码块走 CodeBlock（Monaco 着色）
-services/acp/markdownRenderer.ts     parseMarkdown / MdInline / MdNode —— 与 ACP 聊天共享的 markdown AST
+services/acp/markdownRenderer.ts     parseMarkdown / MdInline / MdNode —— 与 ACP 聊天共享的 markdown AST；
+                                     blockquote 是容器块（children 递归 MdNode，剥一层 > 前缀后递归 parseMarkdown，
+                                     子节点 line 为相对行号，与列表 children 一致）；增量切分安全依赖
+                                     「blockquote 内每行都以 > 开头、无真空行」这一不变量
 ```
 
 input→组件 两处注册（套路见 apps/editor/CLAUDE.md 编辑器输入）：

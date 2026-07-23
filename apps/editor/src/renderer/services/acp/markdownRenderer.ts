@@ -48,7 +48,7 @@ export type MdNode =
       readonly items: readonly MdListItem[]
       readonly line?: number
     }
-  | { readonly type: 'blockquote'; readonly children: readonly MdInline[]; readonly line?: number }
+  | { readonly type: 'blockquote'; readonly children: readonly MdNode[]; readonly line?: number }
   | {
       readonly type: 'frontmatter'
       readonly entries: readonly (readonly [key: string, value: string])[]
@@ -183,14 +183,17 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
       continue
     }
 
-    // Blockquote — collect consecutive `> ` lines into one block.
+    // Blockquote — a container block: collect consecutive `> ` lines, strip the
+    // marker, and parse the body recursively so `>` blank lines split paragraphs
+    // and `> - ` opens a list (CommonMark §5.1). Nested quotes re-match here on
+    // the next recursion level.
     if (/^\s*>/.test(line)) {
       const buf: string[] = []
       while (i < lines.length && /^\s*>/.test(lines[i] ?? '')) {
         buf.push((lines[i] ?? '').replace(/^\s*>\s?/, ''))
         i++
       }
-      out.push({ type: 'blockquote', children: parseInline(buf.join('\n')), line: blockStart })
+      out.push({ type: 'blockquote', children: parseMarkdown(buf.join('\n')), line: blockStart })
       continue
     }
 

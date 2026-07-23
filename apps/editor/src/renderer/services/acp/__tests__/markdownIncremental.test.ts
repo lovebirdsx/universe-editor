@@ -38,6 +38,7 @@ describe('parseMarkdownStreaming — equivalence with parseMarkdown', () => {
     'second paragraph in item': '- p1\n\n  p2\n- next',
     table: '| a | b |\n| --- | --- |\n| 1 | 2 |\n\ntrailing',
     blockquote: '> quoted\n> more\n\nplain',
+    'blockquote with sections': '> intro\n>\n> - a\n> - b\n\ntrailing',
     'mixed blocks': '# H1\n\npara one\n\n```js\nx()\n```\n\n- a\n- b\n\n> note\n\nfinal para',
     'trailing blanks': 'para\n\n\n',
     'leading blanks': '\n\npara',
