@@ -3,9 +3,11 @@
  *  Workspace symbol quick access ('#'): aggregates workspace symbols from the
  *  registered language feature providers (TS/JS, markdown, …). Mirrors VSCode's
  *  workbench.action.showAllSymbols behavior:
- *    - no input, no search — an empty query renders an empty list with no
- *      spinner (a match-all query on a large project returns tens of thousands
- *      of symbols and stalls the server's serialized request queue);
+ *    - no live search on an empty query — a match-all query on a large project
+ *      returns tens of thousands of symbols and stalls the server's serialized
+ *      request queue; instead the empty query shows the previous search's
+ *      cached results (VSCode parity: the first open shows nothing, reopening
+ *      after a search shows its results);
  *    - the filter pre-fills with the selection / word under the cursor
  *      (defaultFilterValue), so opening with a caret on a symbol searches it;
  *    - keystrokes debounce, and each new query cancels the in-flight one — the
@@ -80,6 +82,17 @@ function tsEntryToUnified(
     column: entry.range.startColumn,
     description: relativePath(root, uri, uriIdentity),
   }
+}
+
+/**
+ * Results of the last settled query, reused for the empty query (VSCode
+ * parity). Module-scoped because the controller instantiates the provider
+ * per open, and the reuse must span picker sessions.
+ */
+let lastResults: { root: URI; entries: readonly WorkspaceSymbolEntry[] } | undefined
+
+export function _resetLastResultsForTests(): void {
+  lastResults = undefined
 }
 
 /** Monaco may not have mounted the editor yet; retry briefly (cf. historyActions). */
@@ -204,19 +217,26 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
       queryCts = undefined
     }
 
+    // No live match-all on an empty query (VSCode parity): show the previous
+    // search's cached results for this workspace instead — the first open
+    // (nothing cached) renders an empty list.
+    const showCachedResults = (): void => {
+      seq++
+      picker.busy = false
+      const cached =
+        lastResults && root && this._uriIdentity.isEqual(lastResults.root, root)
+          ? lastResults.entries
+          : []
+      render(cached, '')
+    }
+
     const refresh = (): void => {
       if (disposed || !monacoNs) return
       const ns = monacoNs
       const query = currentValue.trim()
       cancelInFlight()
-      // No input, no search (VSCode parity): a match-all navto on a large
-      // project saturates the server for seconds and its payload blocks the
-      // renderer; an empty filter just shows an empty list.
       if (!query) {
-        seq++
-        picker.busy = false
-        picker.items = []
-        byId.clear()
+        showCachedResults()
         return
       }
       const mySeq = ++seq
@@ -244,6 +264,8 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
         this._logger.debug(
           `workspace symbol query "${query}" → ${flat.length} results in ${Date.now() - startedAt}ms`,
         )
+        // Cache the raw results so a later empty query can reuse them.
+        if (root) lastResults = { root, entries: flat }
         render(flat, query)
       })
     }
@@ -308,9 +330,10 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
       // prefill (controller-side) never reaches the listener above — re-read the
       // live value now that an initial query can actually run.
       currentValue = picker.value.slice(prefix.length)
-      // No match-all on open: only a prefilled filter (defaultFilterValue)
-      // kicks off an initial query; an empty input renders an empty list.
+      // No match-all on open: a prefilled filter (defaultFilterValue) kicks off
+      // an initial query; an empty input reuses the previous search's results.
       if (currentValue.trim()) scheduleRefresh()
+      else showCachedResults()
     })
   }
 }

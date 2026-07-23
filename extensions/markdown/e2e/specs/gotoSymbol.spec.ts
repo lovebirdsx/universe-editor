@@ -107,7 +107,10 @@ test.describe('@p1 go to symbol', () => {
       .toMatch(/^(symbol-kind-|symbol-heading$)/)
   })
 
-  test('Go to Symbol in Workspace lists symbols with no query typed', async ({
+  // VSCode parity: no live match-all on an empty query. The first open shows
+  // nothing; once a search has run, reopening (or clearing the filter) reuses
+  // the last search's results.
+  test('Go to Symbol in Workspace lists symbols with no query typed only after a search ran', async ({
     page,
     workbench,
   }) => {
@@ -121,7 +124,7 @@ test.describe('@p1 go to symbol', () => {
       .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 10000 })
       .toBe('markdown')
 
-    // Warm the server so the empty (match-all) query has symbols to return.
+    // Warm the server so a later search has symbols to return.
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.queryMarkdownWorkspaceSymbols('Alpha')), {
         timeout: 10000,
@@ -131,7 +134,23 @@ test.describe('@p1 go to symbol', () => {
     await page.evaluate(() => void window.__E2E__!.runCommand('workbench.action.showAllSymbols'))
     await workbench.quickInput.waitForVisible()
 
-    // Nothing typed: the picker should still populate (VSCode-style match-all).
+    // First open, nothing searched yet: no match-all, the list stays empty.
+    await workbench.quickInput.input.fill('#')
+    await page.waitForTimeout(500) // past the provider debounce (150ms)
+    expect(await page.getByTestId('quick-input-item-icon-slot').count()).toBe(0)
+
+    // Search once so the results get cached.
+    await workbench.quickInput.input.fill('#Alpha')
+    await expect
+      .poll(() => page.getByTestId('quick-input-item-icon-slot').count(), { timeout: 10000 })
+      .toBeGreaterThan(0)
+    await workbench.quickInput.input.press('Escape')
+    await workbench.quickInput.waitForHidden()
+
+    // Reopen with nothing typed: the previous search's results show up.
+    await page.evaluate(() => void window.__E2E__!.runCommand('workbench.action.showAllSymbols'))
+    await workbench.quickInput.waitForVisible()
+    await workbench.quickInput.input.fill('#')
     await expect
       .poll(() => page.getByTestId('quick-input-item-icon-slot').count(), { timeout: 10000 })
       .toBeGreaterThan(0)

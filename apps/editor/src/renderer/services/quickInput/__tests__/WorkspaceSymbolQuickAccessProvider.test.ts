@@ -1,9 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Tests for WorkspaceSymbolQuickAccessProvider: no search on an empty query
- *  (no provider call, no busy spinner, list cleared), debounced queries whose
- *  cancellation token reaches the language provider, superseded-query and
- *  hide cancellation, and the word-under-cursor default filter prefill.
+ *  Tests for WorkspaceSymbolQuickAccessProvider: no live search on an empty
+ *  query (no provider call, no busy spinner), VSCode-parity reuse of the last
+ *  search's results on an empty query (in-session and across picker sessions),
+ *  debounced queries whose cancellation token reaches the language provider,
+ *  superseded-query and hide cancellation, and the word-under-cursor default
+ *  filter prefill.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -41,7 +43,7 @@ vi.mock('../../languageFeatures/typescript/lspMonacoConvert.js', () => ({
   workspaceSymbolsToEntries: (symbols: readonly WorkspaceSymbolEntry[] | null) => symbols ?? [],
 }))
 
-const { WorkspaceSymbolQuickAccessProvider } =
+const { WorkspaceSymbolQuickAccessProvider, _resetLastResultsForTests } =
   await import('../providers/WorkspaceSymbolQuickAccessProvider.js')
 
 class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
@@ -123,7 +125,7 @@ interface QueryCall {
 
 function setup(
   symbols: readonly WorkspaceSymbolEntry[] = [entry('foo')],
-  options?: { pending?: boolean },
+  options?: { pending?: boolean; rootPath?: string },
 ) {
   const calls: QueryCall[] = []
   const langFeatures = {
@@ -142,7 +144,7 @@ function setup(
   }
   const services = new ServiceCollection()
   services.set(IWorkspaceService, {
-    current: { folder: URI.file('/ws'), name: 'ws' } as IWorkspace,
+    current: { folder: URI.file(options?.rootPath ?? '/ws'), name: 'ws' } as IWorkspace,
   } as never)
   services.set(IEditorGroupsService, { groups: [] } as never)
   services.set(ILanguageFeaturesService, langFeatures as never)
@@ -184,6 +186,7 @@ const DEBOUNCE_MS = 160
 describe('WorkspaceSymbolQuickAccessProvider', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    _resetLastResultsForTests()
   })
   afterEach(() => {
     vi.useRealTimers()
@@ -198,6 +201,75 @@ describe('WorkspaceSymbolQuickAccessProvider', () => {
     expect(calls).toEqual([])
     expect(picker.busy).toBe(false)
     expect(picker.items).toEqual([])
+  })
+
+  it('clearing the filter after a settled search shows its cached results (VSCode parity)', async () => {
+    const { provider, calls } = setup([entry('foo'), entry('bar')])
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    picker.value = '#'
+    run(provider, picker)
+    await vi.advanceTimersByTimeAsync(0)
+
+    picker.fireValue('#foo')
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS)
+    expect(calls).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(0)
+    // Only 'foo' survives the filter; 'bar' is in the raw cache though.
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['foo'])
+
+    picker.fireValue('#')
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS * 2)
+    // No new search: the cached raw results reappear in original order.
+    expect(calls).toHaveLength(1)
+    expect(picker.busy).toBe(false)
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['foo', 'bar'])
+  })
+
+  it('shows the last search results when reopened with an empty query (VSCode parity)', async () => {
+    const first = setup([entry('foo'), entry('bar')])
+    const picker1 = new FakeQuickPick<IQuickPickItem>()
+    picker1.value = '#'
+    const session1 = run(first.provider, picker1)
+    await vi.advanceTimersByTimeAsync(0)
+
+    picker1.fireValue('#foo')
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(first.calls).toHaveLength(1)
+    session1.dispose()
+
+    // Reopen: a fresh provider instance (as the controller creates per open)
+    // reuses the cached results without a new provider call.
+    const second = setup()
+    const picker2 = new FakeQuickPick<IQuickPickItem>()
+    picker2.value = '#'
+    run(second.provider, picker2)
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS * 3)
+
+    expect(second.calls).toEqual([])
+    expect(picker2.busy).toBe(false)
+    expect(picker2.items.map((i) => (i as IQuickPickItem).label)).toEqual(['foo', 'bar'])
+  })
+
+  it('does not reuse results cached under a different workspace root', async () => {
+    const first = setup([entry('foo')])
+    const picker1 = new FakeQuickPick<IQuickPickItem>()
+    picker1.value = '#'
+    run(first.provider, picker1)
+    await vi.advanceTimersByTimeAsync(0)
+
+    picker1.fireValue('#foo')
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(first.calls).toHaveLength(1)
+
+    const second = setup([entry('foo')], { rootPath: '/other' })
+    const picker2 = new FakeQuickPick<IQuickPickItem>()
+    picker2.value = '#'
+    run(second.provider, picker2)
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS * 3)
+    expect(second.calls).toEqual([])
+    expect(picker2.items).toEqual([])
   })
 
   it('queries the providers after the debounce once the filter is non-empty', async () => {
