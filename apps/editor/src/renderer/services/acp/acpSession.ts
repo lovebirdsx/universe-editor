@@ -36,6 +36,13 @@ import type { CollapseMode } from './acpChatViewStateCache.js'
 import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
 import { AcpSessionConnection, type QueuedPrompt } from './acpSessionConnection.js'
 import { isAuthRequiredError } from './acpAuthError.js'
+import { classifyAcpError } from './acpErrorClassify.js'
+import {
+  MAX_RECOVERY_ATTEMPTS,
+  SessionRecovery,
+  recoveryBackoffMs,
+  type AcpRecoveryState,
+} from './acpSessionRecovery.js'
 import { composeContextBlocks, type SelectionContext } from './promptContext.js'
 import { composeImageBlocks, type PromptImage } from './promptImage.js'
 import { composePromptBlocksFromRefs, type PlacedRef } from './promptRef.js'
@@ -120,6 +127,7 @@ export type {
   RewindFilesResult,
   TimelineItem,
 } from './acpSessionModel.js'
+export type { AcpRecoveryPhase, AcpRecoveryState } from './acpSessionRecovery.js'
 export {
   blocksToText,
   hasVisibleMessageContent,
@@ -132,6 +140,30 @@ export {
 
 /** Provenance of a session title — see {@link AcpSession._pendingTitleKind}. */
 type TitleKind = 'ai' | 'manual' | undefined
+
+/**
+ * Continuation prompt sent automatically after a hot-reconnect (or a retried
+ * turn) when the interrupted turn had already produced output, so resending
+ * the original prompt would duplicate the turn in the agent transcript.
+ */
+export const CONTINUE_PROMPT_TEXT = '继续'
+
+/** Why the session's connection was lost — drives the service's recovery path. */
+export interface AcpConnectionLostEvent {
+  /** `crash`: process exited. `stalled`: alive but silent past the watchdog threshold. */
+  readonly reason: 'crash' | 'stalled'
+}
+
+/** Snapshot of one dispatched prompt, kept so a failed/interrupted turn can be re-sent. */
+interface PromptSnapshot {
+  readonly text: string
+  readonly refs: readonly PlacedRef[]
+  readonly contexts: readonly SelectionContext[]
+  readonly images: readonly PromptImage[]
+  readonly messageId: string
+  /** `_applyUpdateCount` when the prompt was first dispatched — zero-output detection. */
+  readonly baseline: number
+}
 
 // Built-in slash commands the agent handles locally (mirrors
 // BUILT_IN_COMMANDS in vendor/claude-agent-acp/src/acp-agent.ts). Their args
@@ -268,6 +300,40 @@ export class AcpSession extends Disposable implements IAcpSession {
    * dispatched exactly once on connect, or rejected on failure — never lost).
    */
   private readonly _connection = new AcpSessionConnection()
+
+  /** Auto-recovery state (retry / reconnect progress) surfaced to the UI. Owned
+   * by this session; the service drives the reconnect tier through it. */
+  readonly recovery = new SessionRecovery()
+
+  /**
+   * Monotonic counter bumped on every inbound `session/update`. Compared
+   * against a prompt's dispatch-time baseline to tell "the turn produced no
+   * output" (safe to auto-resend) from "partial output exists" (continue
+   * instead, or the transcript duplicates the turn).
+   */
+  private _applyUpdateCount = 0
+
+  /** Wall-clock of the last inbound update — read by the service's stall watchdog. */
+  private _lastActivityAt = Date.now()
+
+  /** True while a hot-reconnect is in progress (connection lost → reattached). */
+  private _reconnecting = false
+
+  /** Set when the connection died mid-turn; consumed by {@link continueInterruptedTurn}. */
+  private _turnInterrupted = false
+
+  /** Last dispatched prompt + its output baseline, for zero-output resend after reconnect. */
+  private _lastDispatch: PromptSnapshot | undefined
+
+  /** Prompt whose automatic retries ran out — kept so the UI can offer a manual retry. */
+  private _failedPrompt: PromptSnapshot | undefined
+
+  private readonly _onDidLoseConnection = this._register(new Emitter<AcpConnectionLostEvent>())
+  /**
+   * Fired when the agent connection died unexpectedly (crash / watchdog stall)
+   * and the session entered hot-reconnect. The service listens and re-handshakes.
+   */
+  readonly onDidLoseConnection: Event<AcpConnectionLostEvent> = this._onDidLoseConnection.event
 
   /**
    * Whether the connected agent advertised `promptCapabilities.embeddedContext`.
@@ -419,6 +485,9 @@ export class AcpSession extends Disposable implements IAcpSession {
   attachConnection(conn: IAcpClientConnection, sessionIdOnAgent: string): void {
     const drained = this._connection.open(conn)
     if (this._connection.phase !== 'connected') return
+    // A successful (re)attach ends any hot-reconnect episode — including the
+    // first attach, where the flag was never set.
+    this._reconnecting = false
     // Cache the embeddedContext capability so _dispatchPrompt can shape attached
     // selection contexts without awaiting the initialize response per prompt.
     conn.initializeResult
@@ -444,8 +513,21 @@ export class AcpSession extends Disposable implements IAcpSession {
       })
       .catch(() => {})
     this.sessionIdOnAgent.set(sessionIdOnAgent, undefined)
-    // Connection close → seal the session.
+    // Connection close → seal the session, unless it was unexpected: then the
+    // hot-reconnect path takes over instead (see {@link _handleConnectionLost}).
     const onClose = (): void => {
+      if (this._reconnecting) return // stale listener from the superseded connection
+      // User-initiated close() seals the status before the lease disposal can
+      // abort the connection, so a late abort landing here must not resurrect
+      // the session into recovery.
+      if (this.status.get() === 'closed') return
+      // Only a connection lost mid-turn interrupts the user's work; an idle
+      // session has nothing in flight, so seal it and let the next prompt
+      // re-handshake on demand rather than churning a background reconnect.
+      if (this._connection.phase === 'connected' && !this.readOnly && this._inFlight.size > 0) {
+        this._handleConnectionLost('crash')
+        return
+      }
       this._commitBatchedTx()
       this._finalizeRunningSegment()
       this.status.set('closed', undefined)
@@ -453,6 +535,8 @@ export class AcpSession extends Disposable implements IAcpSession {
       this._abortAllInFlight()
     }
     if (conn.conn.signal.aborted) {
+      // The pooled connection is already dead at attach time. With a live phase
+      // still 'connecting' this is a startup failure — seal, no recovery.
       onClose()
       return
     }
@@ -493,6 +577,156 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   whenConnected(): Promise<void> {
     return this._connection.whenSettled()
+  }
+
+  /** Auto-recovery state (retry / reconnect progress) for the UI; undefined when healthy. */
+  get recoveryState(): IObservable<AcpRecoveryState | undefined> {
+    return this.recovery.state
+  }
+
+  /** True while a hot-reconnect is in progress — the service's recovery loop gates on this. */
+  get isReconnecting(): boolean {
+    return this._reconnecting
+  }
+
+  /** Wall-clock of the last inbound session/update — read by the stall watchdog. */
+  get lastActivityAt(): number {
+    return this._lastActivityAt
+  }
+
+  /**
+   * The agent process died (or was declared stalled) while this session was
+   * live. Instead of sealing, park the session back in `connecting`: the
+   * timeline is kept, in-flight prompts are aborted, new prompts queue, and
+   * the service is notified to re-handshake in place.
+   */
+  private _handleConnectionLost(reason: 'crash' | 'stalled'): void {
+    if (this._reconnecting) return
+    this._reconnecting = true
+    const deadLease = this._conn
+    this._commitBatchedTx()
+    this._finalizeRunningSegment()
+    this._cancelPending()
+    this._turnInterrupted = this._inFlight.size > 0
+    this._abortAllInFlight()
+    this._sawError = false
+    this._connection.beginReconnect()
+    // Return the dead lease to the pool. The pool entry is already evicted on
+    // crash; on stall the service kills it explicitly before reconnecting.
+    deadLease?.dispose()
+    this.status.set('connecting', undefined)
+    this.recovery.set({
+      phase: 'reconnecting',
+      attempt: 1,
+      maxAttempts: MAX_RECOVERY_ATTEMPTS,
+      reason,
+    })
+    this._telemetry.publicLog('acp.session_connection_lost', {
+      agentId: this.agentId,
+      reason,
+      interrupted: this._turnInterrupted,
+    })
+    this._onDidLoseConnection.fire({ reason })
+  }
+
+  /** Watchdog entry point: the turn went silent past the stall threshold. */
+  handleStall(): void {
+    if (this.status.get() === 'closed' || this.readOnly || this._reconnecting) return
+    this._handleConnectionLost('stalled')
+  }
+
+  /**
+   * Service-driven: bind the fresh connection after a successful hot-reconnect
+   * (`session/resume` against the same durable id — no history replay, the
+   * timeline is already complete locally).
+   */
+  reattachConnection(conn: IAcpClientConnection): void {
+    const sid = this.sessionIdOnAgent.get()
+    if (sid === undefined || this.status.get() === 'closed') {
+      conn.dispose()
+      return
+    }
+    this.attachConnection(conn, sid)
+  }
+
+  /**
+   * Service-driven, after a successful reattach: resume the turn that was
+   * in-flight when the connection died. Zero-output turns resend the original
+   * prompt verbatim (nothing reached the agent's transcript, or the model
+   * never saw it); turns with partial output get a continuation prompt so the
+   * agent transcript isn't polluted with a duplicate user message.
+   */
+  async continueInterruptedTurn(): Promise<void> {
+    if (!this._turnInterrupted) return
+    this._turnInterrupted = false
+    if (this.status.get() === 'closed') return
+    const last = this._lastDispatch
+    if (last !== undefined && this._applyUpdateCount === last.baseline) {
+      await this._dispatchPrompt(last.text, last.refs, last.contexts, last.images, last.messageId)
+      return
+    }
+    const messageId = generateUuid()
+    this._appendMessage('user', CONTINUE_PROMPT_TEXT, [], messageId)
+    await this._dispatchPrompt(CONTINUE_PROMPT_TEXT, [], [], [], messageId)
+  }
+
+  /**
+   * Service-driven: automatic reconnect attempts ran out. Seal the (dead)
+   * connection so queued prompts reject, surface the error, and park in
+   * `errored` — the UI offers a manual reconnect via {@link retryRecovery}.
+   */
+  sealRecoveryFailure(message: string): void {
+    this._reconnecting = false
+    this._turnInterrupted = false
+    this.recovery.set({
+      phase: 'exhausted',
+      attempt: MAX_RECOVERY_ATTEMPTS,
+      maxAttempts: MAX_RECOVERY_ATTEMPTS,
+      reason: 'reconnect',
+    })
+    this._connection.fail(message)
+    this._appendMessage('agent', `[error] ${message}`)
+    if (this.status.get() !== 'closed') this.status.set('errored', undefined)
+  }
+
+  /**
+   * User cancelled the pending automatic attempt (RecoveryBar 取消). Wakes the
+   * sleeping retry loop, which settles the turn as cancelled. When reconnecting,
+   * seals the dead connection so the session settles to `errored` instead of
+   * hanging in `connecting` forever.
+   */
+  cancelRecovery(): void {
+    this.recovery.cancelPending()
+    this.recovery.clear()
+    if (this._reconnecting) {
+      this._reconnecting = false
+      this._turnInterrupted = false
+      this._connection.fail('reconnect cancelled')
+      if (this.status.get() !== 'closed') this.status.set('errored', undefined)
+    }
+  }
+
+  /**
+   * Manual retry from the `exhausted` state: re-dispatch the failed prompt when
+   * the connection is alive, or re-run the reconnect when it is dead.
+   */
+  async retryRecovery(): Promise<void> {
+    if (this.recovery.state.get()?.phase !== 'exhausted') return
+    if (this._failedPrompt !== undefined) {
+      const failed = this._failedPrompt
+      this._failedPrompt = undefined
+      this.recovery.clear()
+      await this._dispatchPrompt(
+        failed.text,
+        failed.refs,
+        failed.contexts,
+        failed.images,
+        failed.messageId,
+      )
+      return
+    }
+    this.recovery.clear()
+    this._handleConnectionLost('crash')
   }
 
   beginHistoryReplay(): void {
@@ -619,6 +853,12 @@ export class AcpSession extends Disposable implements IAcpSession {
   ): Promise<void> {
     // Read-only preview session (foreign worktree): viewing only, no dispatch.
     if (this.readOnly) return
+    // A fresh user prompt supersedes an exhausted recovery episode (its manual
+    // retry is no longer relevant) — but never an in-flight retry/reconnect.
+    if (this.recovery.state.get()?.phase === 'exhausted') {
+      this._failedPrompt = undefined
+      this.recovery.clear()
+    }
     this._maybeDeriveTitleFromPrompt(text)
     // Client-generated anchor for this user turn. Stamped on the local message
     // now (so rewind/fork can target it even before dispatch) and sent as
@@ -703,29 +943,17 @@ export class AcpSession extends Disposable implements IAcpSession {
     // so N concurrent steering prompts stay 'running' until the last settles.
     this._recomputeStatus()
     this._telemetry.publicLog('acp.prompt_sent', { sessionId: sid })
-    const abortPromise = new Promise<never>((_, reject) => {
-      const onAbort = (): void => reject(new AcpAbortError())
-      if (abort.signal.aborted) onAbort()
-      else abort.signal.addEventListener('abort', onAbort, { once: true })
-    })
+    const snapshot: PromptSnapshot = {
+      text,
+      refs,
+      contexts,
+      images,
+      messageId,
+      baseline: this._applyUpdateCount,
+    }
+    this._lastDispatch = snapshot
     try {
-      const response = await Promise.race([conn.conn.prompt(params), abortPromise])
-      this._reconcileUserMessageId(messageId, response)
-      this._ingestPromptResponse(response)
-    } catch (err) {
-      if (err instanceof AcpAbortError) {
-        // '[cancelled]' is appended once by cancelTurn — appending here would
-        // duplicate it when several concurrent prompts abort together.
-        this._telemetry.publicLog('acp.prompt_cancelled', { sessionId: sid })
-      } else {
-        this._sawError = true
-        this._appendMessage('agent', `[error] ${(err as Error).message}`)
-        this._telemetry.publicLogError('acp.prompt_failed', {
-          sessionId: sid,
-          error: (err as Error).message,
-        })
-        if (isAuthRequiredError(err)) this._onDidRequireAuth.fire()
-      }
+      await this._sendWithRecovery(conn, params, abort, snapshot)
     } finally {
       this._inFlight.delete(abort)
       // Only flush once the last in-flight prompt settles — flushing mid-turn
@@ -733,6 +961,123 @@ export class AcpSession extends Disposable implements IAcpSession {
       // chunks, splitting its output into a fresh card.
       if (this._inFlight.size === 0) this._flushStream()
       this._recomputeStatus()
+    }
+  }
+
+  /**
+   * Send one wire prompt with automatic retry on transient failures (429 /
+   * overloaded / 5xx / dropped stream — see classifyAcpError). Between attempts
+   * the prompt stays in-flight (status keeps `running`) and the recovery state
+   * counts down for the UI. A turn that produced partial output is continued
+   * (`继续`) rather than resent, so the agent transcript never duplicates the
+   * user turn; a zero-output turn is resent verbatim with the same messageId.
+   * Non-transient errors and exhausted retries fall back to the classic
+   * `[error]` timeline message (+ `errored` status), keeping the prompt
+   * snapshot for the UI's manual-retry affordance.
+   */
+  private async _sendWithRecovery(
+    conn: IAcpClientConnection,
+    params: PromptRequest,
+    abort: AbortController,
+    snapshot: PromptSnapshot,
+  ): Promise<void> {
+    const sid = params.sessionId
+    const abortPromise = new Promise<never>((_, reject) => {
+      const onAbort = (): void => reject(new AcpAbortError())
+      if (abort.signal.aborted) onAbort()
+      else abort.signal.addEventListener('abort', onAbort, { once: true })
+    })
+    let attempt = 1
+    let continued = false
+    let currentMessageId = snapshot.messageId
+    for (;;) {
+      let failure: Error | undefined
+      try {
+        const response = await Promise.race([conn.conn.prompt(params), abortPromise])
+        this._reconcileUserMessageId(currentMessageId, response)
+        this._ingestPromptResponse(response)
+        // A success after automatic retries ends the recovery episode.
+        if (this.recovery.state.get()?.phase === 'retrying') this.recovery.clear()
+        return
+      } catch (err) {
+        if (err instanceof AcpAbortError) {
+          // '[cancelled]' is appended once by cancelTurn — appending here would
+          // duplicate it when several concurrent prompts abort together.
+          this._telemetry.publicLog('acp.prompt_cancelled', { sessionId: sid })
+          return
+        }
+        failure = err as Error
+      }
+      const verdict = classifyAcpError(failure)
+      const retryable =
+        verdict.cls === 'transient' &&
+        attempt < MAX_RECOVERY_ATTEMPTS &&
+        // The connection must be the one this dispatch started on: a crash
+        // mid-backoff swaps `_conn`, and the reconnect path owns continuation.
+        this._conn === conn &&
+        !this._reconnecting
+      if (retryable) {
+        attempt++
+        if (!continued && this._applyUpdateCount !== snapshot.baseline) {
+          continued = true
+          const continueId = generateUuid()
+          currentMessageId = continueId
+          this._appendMessage('user', CONTINUE_PROMPT_TEXT, [], continueId)
+          params = {
+            sessionId: sid,
+            messageId: continueId,
+            _meta: { messageId: continueId },
+            prompt: [{ type: 'text', text: CONTINUE_PROMPT_TEXT }],
+          }
+        }
+        const delay = recoveryBackoffMs(attempt)
+        this.recovery.set({
+          phase: 'retrying',
+          attempt,
+          maxAttempts: MAX_RECOVERY_ATTEMPTS,
+          reason: verdict.kind ?? 'transient',
+          nextAttemptAt: Date.now() + delay,
+        })
+        this._telemetry.publicLog('acp.prompt_retry', {
+          sessionId: sid,
+          attempt,
+          kind: verdict.kind ?? 'transient',
+        })
+        try {
+          // Aborts (Stop / cancelTurn) and recovery cancels both wake the sleep.
+          await Promise.race([this.recovery.sleep(delay), abortPromise])
+        } catch {
+          this._telemetry.publicLog('acp.prompt_cancelled', { sessionId: sid })
+          return
+        }
+        continue
+      }
+      this._sawError = true
+      this._appendMessage('agent', `[error] ${failure.message}`)
+      if (verdict.cls === 'transient') {
+        // Retries exhausted — keep the (possibly continuation-switched) prompt
+        // so the UI can offer a manual retry from the recovery bar.
+        this._failedPrompt = {
+          text: continued ? CONTINUE_PROMPT_TEXT : snapshot.text,
+          refs: continued ? [] : snapshot.refs,
+          contexts: continued ? [] : snapshot.contexts,
+          images: continued ? [] : snapshot.images,
+          messageId: currentMessageId,
+          baseline: this._applyUpdateCount,
+        }
+        this.recovery.set({
+          phase: 'exhausted',
+          attempt,
+          maxAttempts: MAX_RECOVERY_ATTEMPTS,
+          reason: verdict.kind ?? 'transient',
+        })
+      }
+      this._telemetry.publicLogError('acp.prompt_failed', {
+        sessionId: sid,
+        error: failure.message,
+      })
+      if (isAuthRequiredError(failure)) this._onDidRequireAuth.fire()
+      return
     }
   }
 
@@ -929,6 +1274,9 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   private _recomputeStatus(): void {
     if (this.status.get() === 'closed') return // closed is terminal
+    // Mid hot-reconnect the status is pinned to 'connecting' by the recovery
+    // path; aborted in-flight prompts settling must not flip it to idle.
+    if (this._reconnecting) return
     const prev = this.status.get()
     if (this._inFlight.size > 0) {
       if (prev !== 'running') this.runningStartedAt.set(Date.now(), undefined)
@@ -1070,6 +1418,11 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._commitBatchedTx()
     this._finalizeRunningSegment()
     this.status.set('closed', undefined)
+    // Cancel any pending recovery attempt so a service-side reconnect loop
+    // observing this session bails instead of reattaching a closed session.
+    this._reconnecting = false
+    this._turnInterrupted = false
+    this.recovery.dispose()
     // Unblock anyone awaiting the handshake and reject any still-queued prompts
     // — a session closed mid-connect never reaches attach/fail, so settle the
     // connection here to avoid a hang.
@@ -1107,6 +1460,10 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   applyUpdate(update: SessionUpdate): void {
     const sid = this.sessionIdOnAgent.get()
+    // Liveness bookkeeping: the counter backs zero-output detection for prompt
+    // retry, the timestamp backs the service's stall watchdog.
+    this._applyUpdateCount++
+    this._lastActivityAt = Date.now()
     const parentId = readParentToolUseId(update)
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
       for (const change of readFileChanges(update)) {

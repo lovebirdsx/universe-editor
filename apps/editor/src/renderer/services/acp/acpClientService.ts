@@ -158,6 +158,13 @@ export interface IAcpClientService {
   ): Promise<IAcpClientConnection>
   /** Synchronously stop every pooled process and clear the pool. */
   drainAll(): void
+  /**
+   * Forcibly stop the pooled process for one (agentId, cwd) and drop its entry,
+   * so the next `connect()` spawns a fresh process. Used by stall recovery: the
+   * process is alive but its turn is wedged, and reusing it via the pool would
+   * reconnect to the same wedged state. No live entry → no-op.
+   */
+  killConnectionFor(agentId: string, cwd: string | undefined): void
 }
 
 export const IAcpClientService = createDecorator<IAcpClientService>('acpClientService')
@@ -361,6 +368,16 @@ export class AcpClientService extends Disposable implements IAcpClientService {
         },
       )
     }
+  }
+
+  killConnectionFor(agentId: string, cwd: string | undefined): void {
+    const entryPromise = this._pool.get(this._poolKey(agentId, cwd ?? ''))
+    entryPromise?.then(
+      (entry) => this._evictNow(entry),
+      () => {
+        // Spawn failed — already self-evicted via the catch in connect().
+      },
+    )
   }
 
   // -- internals -----------------------------------------------------------

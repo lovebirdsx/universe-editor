@@ -8,11 +8,18 @@
  *
  *  Phases (one-way, terminal-absorbing):
  *
- *      connecting ──open()──► connected
- *          │
- *          ├──fail()────────► failed
- *          │
- *          └──close()───────► closed   (also reachable from connected)
+ *      connecting ──open()──► connected ──beginReconnect()──► connecting (re-armed)
+ *          │                        │
+ *          ├──fail()────────► failed│
+ *          │                        │
+ *          └──close()───────► closed◄┘   (also reachable from connected)
+ *
+ *  `beginReconnect` is the hot-reconnect escape hatch: when the agent process
+ *  dies unexpectedly the session unbinds the dead connection and returns to
+ *  `connecting` (re-arming the settled gate) instead of sealing, so a
+ *  service-driven re-handshake can `open()` a fresh connection in place while
+ *  prompts typed in the meantime queue exactly like they did during the first
+ *  connect. User-initiated closes still go straight to terminal `closed`.
  *
  *  Invariants the previous flag soup did NOT guarantee, now enforced here:
  *  - `connecting → failed` REJECTS every queued prompt with a clear error
@@ -60,9 +67,13 @@ export class AcpSessionConnection {
   private readonly _queued: QueuedPrompt[] = []
 
   private _resolveSettled!: () => void
-  private readonly _whenSettled = new Promise<void>((resolve) => {
-    this._resolveSettled = resolve
-  })
+  private _whenSettled = this._newSettledGate()
+
+  private _newSettledGate(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this._resolveSettled = resolve
+    })
+  }
 
   get phase(): AcpConnectionPhase {
     return this._phase
@@ -113,6 +124,20 @@ export class AcpSessionConnection {
     this._conn = conn
     this._resolveSettled()
     return this._queued.splice(0, this._queued.length)
+  }
+
+  /**
+   * `connected | failed → connecting`. Unbinds the (dead) connection and
+   * re-arms the settled gate so a service-driven re-handshake can `open()` a
+   * fresh connection in place. Prompts submitted from now on queue exactly
+   * like pre-attach ones. `failed` is re-armable so a manual retry after
+   * recovery exhaustion works; `closed` stays terminal.
+   */
+  beginReconnect(): void {
+    if (this._phase !== 'connected' && this._phase !== 'failed') return
+    this._phase = 'connecting'
+    this._conn = undefined
+    this._whenSettled = this._newSettledGate()
   }
 
   /**

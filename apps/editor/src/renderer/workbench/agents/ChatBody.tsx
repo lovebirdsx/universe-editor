@@ -61,6 +61,7 @@ import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
 import { PermissionCard } from './PermissionCard.js'
 import { QuestionCard } from './QuestionCard.js'
+import { RecoveryBar } from './RecoveryBar.js'
 import { StickyPlanBar } from './StickyPlanBar.js'
 import { StickyUserMessageBar } from './StickyUserMessageBar.js'
 import { PromptInput } from './PromptInput.js'
@@ -308,6 +309,7 @@ function ChatSessionBody({
             <>
               <PermissionCard session={session} />
               <QuestionCard key={`question:${session.id}`} session={session} />
+              <RecoveryBar key={`recovery:${session.id}`} session={session} />
               <PromptInput
                 key={`prompt:${session.id}`}
                 session={session}

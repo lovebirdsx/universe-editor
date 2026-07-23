@@ -443,6 +443,9 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     rewindTo: () => Promise.resolve(undefined),
     cycleCollapseMode: () => {},
     whenConnected: () => Promise.resolve(),
+    recoveryState: observableValue('test.recovery', undefined),
+    cancelRecovery: () => {},
+    retryRecovery: () => Promise.resolve(),
     statusObs,
     commandsObs,
   } satisfies FakeSession

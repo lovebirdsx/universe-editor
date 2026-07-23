@@ -111,6 +111,9 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
     rewindTo: vi.fn().mockResolvedValue(undefined) as never,
     cycleCollapseMode: () => {},
     whenConnected: () => Promise.resolve(),
+    recoveryState: observableValue('recovery', undefined),
+    cancelRecovery: () => {},
+    retryRecovery: () => Promise.resolve(),
     configObs,
   } satisfies FakeSession
 }

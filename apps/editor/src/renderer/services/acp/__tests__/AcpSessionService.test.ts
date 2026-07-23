@@ -403,6 +403,8 @@ class FakeAcpClientService implements IAcpClientService {
     // best-effort close of in-flight streams in tests
   }
 
+  killConnectionFor(): void {}
+
   async connect(_agentId: string): Promise<IAcpClientConnection> {
     const sink = this._sink
     if (!sink) throw new Error('FakeAcpClientService.connect: sink not installed')

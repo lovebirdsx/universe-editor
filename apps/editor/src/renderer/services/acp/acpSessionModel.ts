@@ -12,6 +12,7 @@ import type { Event, IObservable } from '@universe-editor/platform'
 import { ACP_EXT_METHODS } from './acpExtMethods.js'
 import type { McpTransport } from './acpMcpServers.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
+import type { AcpRecoveryState } from './acpSessionRecovery.js'
 import type { SelectionContext } from './promptContext.js'
 import type { PromptImage } from './promptImage.js'
 import type { PlacedRef } from './promptRef.js'
@@ -475,6 +476,26 @@ export interface IAcpSession {
    * command services, so AcpSessionService owns the user-facing guidance.
    */
   readonly onDidRequireAuth: Event<void>
+  /**
+   * Auto-recovery progress (prompt retry after a transient failure, or a
+   * hot-reconnect after the agent process died / stalled); `undefined` when
+   * healthy. The chat UI renders a non-intrusive bar from this: countdown to
+   * the next automatic attempt, a cancel button while attempts are pending,
+   * and a manual-retry button once they ran out (`exhausted`).
+   */
+  readonly recoveryState: IObservable<AcpRecoveryState | undefined>
+  /**
+   * Cancel the pending automatic recovery attempt (UI 取消 button). A pending
+   * prompt retry settles the turn as cancelled; a pending reconnect seals the
+   * session to `errored`. No-op when no attempt is pending.
+   */
+  cancelRecovery(): void
+  /**
+   * Manual retry from the `exhausted` state (UI 重试 button): re-dispatches the
+   * failed prompt when the connection is alive, or re-runs the reconnect when
+   * it is dead. No-op outside `exhausted`.
+   */
+  retryRecovery(): Promise<void>
   /**
    * Resolves once the connecting phase settles — i.e. {@link attachConnection}
    * or {@link failConnection} has run. Lets callers that genuinely need the live

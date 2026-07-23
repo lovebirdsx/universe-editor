@@ -298,6 +298,7 @@ class FakeAcpClientService implements IAcpClientService {
   }
 
   drainAll(): void {}
+  killConnectionFor(): void {}
 
   async connect(
     agentId: string,

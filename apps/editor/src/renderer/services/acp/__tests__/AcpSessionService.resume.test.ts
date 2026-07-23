@@ -311,6 +311,7 @@ class FakeAcpClientService implements IAcpClientService {
   }
 
   drainAll(): void {}
+  killConnectionFor(): void {}
 
   /**
    * Simulate "connection closed without going through session.close()" —

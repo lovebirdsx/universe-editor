@@ -128,6 +128,14 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'How long to wait (milliseconds) for an agent to answer `initialize` + `session/new` before giving up. Lower this only if you trust your agent to start quickly.',
             ),
           },
+          'acp.turnStallTimeoutMs': {
+            type: 'number',
+            default: 600000,
+            description: localize(
+              'settings.acp.turnStallTimeoutMs',
+              'A running turn that produces no output for this long (milliseconds) is declared wedged: the agent process is killed and the session hot-reconnects, resuming the interrupted turn. Set 0 to disable the watchdog.',
+            ),
+          },
           'acp.mcpServers': {
             type: 'object',
             default: {},

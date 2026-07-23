@@ -224,6 +224,7 @@ class FakeAcpClientService implements IAcpClientService {
   }
 
   drainAll(): void {}
+  killConnectionFor(): void {}
 
   async connect(_agentId: string): Promise<IAcpClientConnection> {
     const sink = this._sink

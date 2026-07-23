@@ -2087,6 +2087,63 @@
   cursor: not-allowed;
 }
 
+.recoveryBar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--color-border, #333);
+  background: var(--color-message-bg, #2a2a2a);
+  padding: 5px 12px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+}
+
+.recoveryBar[data-phase='exhausted'] {
+  background: var(--color-warning-bg, #3a2f1a);
+}
+
+.recoveryMessage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  color: var(--color-message-role-fg, #aaa);
+}
+
+.recoveryActions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.recoveryRetry {
+  padding: 3px 10px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+  font-family: var(--agent-font-family, var(--font-ui));
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  color: #fff;
+  background: var(--color-button-bg, #0e639c);
+}
+
+.recoveryCancel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--color-message-role-fg, #aaa);
+}
+
+.recoveryCancel:hover {
+  background: var(--color-badge-bg, #333);
+  color: var(--color-fg, #ddd);
+}
+
 .questionCard {
   flex-shrink: 0;
   border-top: 1px solid var(--color-border, #333);

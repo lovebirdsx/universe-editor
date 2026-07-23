@@ -74,6 +74,7 @@ import { AcpQuestionDraftCache } from './acpQuestionDraftCache.js'
 import {
   AcpSession,
   COMPACTION_METHOD,
+  type AcpConnectionLostEvent,
   type AcpPendingPermission,
   type AcpPendingQuestion,
   type AskUserQuestionRequest,
@@ -82,6 +83,7 @@ import {
   type IAcpSessionInitState,
   type RewindFilesResult,
 } from './acpSession.js'
+import { MAX_RECOVERY_ATTEMPTS, recoveryBackoffMs } from './acpSessionRecovery.js'
 import {
   ACP_ACTIVE_SESSION_STORAGE_KEY,
   AcpSessionRestoreCoordinator,
@@ -108,6 +110,7 @@ export {
   type AskUserQuestionOption,
   type AskUserQuestionRequest,
   type AskUserQuestionResult,
+  type AcpRecoveryState,
   type AcpSessionStatus,
   type AcpSubagentStats,
   type AcpUsage,
@@ -226,6 +229,12 @@ export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessio
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 60_000
 
+/** Watchdog tick for stalled-turn detection. */
+const STALL_WATCHDOG_TICK_MS = 60_000
+
+/** Default silence after which a running turn is declared wedged (10 minutes). */
+const DEFAULT_STALL_TIMEOUT_MS = 10 * 60_000
+
 /** Configuration key controlling which sessions the history list surfaces. */
 const HISTORY_SCOPE_KEY = 'acp.sessions.historyScope'
 
@@ -271,6 +280,12 @@ export class AcpSessionService
 
   /** While true, the activeSessionId autorun skips writing to storage. */
   private _suspendActivePersist = false
+
+  /**
+   * Sessions with a hot-reconnect loop currently running, keyed by local id.
+   * Guards against overlapping loops (auto crash event + manual retry).
+   */
+  private readonly _reconnectingSessions = new Set<string>()
 
   constructor(
     @IAcpClientService private readonly _client: IAcpClientService,
@@ -319,6 +334,7 @@ export class AcpSessionService
       ),
     )
     this._coordinator.start()
+    this._startStallWatchdog()
 
     // Persist the active session's agent-issued id so we can restore it on the
     // next editor launch. We persist the durable `sessionIdOnAgent`, not the
@@ -427,6 +443,7 @@ export class AcpSessionService
     })
     this._register(session)
     this._wireAuthGuidance(session)
+    this._wireRecovery(session)
     this._wireConfigOptionsCache(session)
     // Optimistic config bar: seed the last-known option bag for this agent
     // (currentValue overridden by the user's saved per-agent defaults) so the
@@ -692,6 +709,7 @@ export class AcpSessionService
       session.attachConnection(conn, entry.sessionIdOnAgent)
       this._register(session)
       this._wireAuthGuidance(session)
+      this._wireRecovery(session)
       this._wireConfigOptionsCache(session)
       const captured = session
       // Read-only foreign previews register so getById/timeline work, but must
@@ -769,6 +787,163 @@ export class AcpSessionService
   private _wireAuthGuidance(session: IAcpSession): void {
     const prompt = this._authGuidance.createSessionAuthPrompt(session.agentId)
     this._register(session.onDidRequireAuth(prompt))
+  }
+
+  /**
+   * Hot-reconnect orchestration. When a live session's agent process dies
+   * (crash) or wedges (watchdog stall), the session parks itself in
+   * `connecting` and fires `onDidLoseConnection`; this loop re-handshakes in
+   * place — fresh spawn (the pool dropped the dead entry) + `session/resume`
+   * against the same durable id, which restores the agent-side context
+   * WITHOUT replaying history (the local timeline is already complete). On
+   * success the session reattaches and resumes its interrupted turn; on
+   * exhaustion it seals to `errored` with a manual-retry affordance.
+   */
+  private _wireRecovery(session: AcpSession): void {
+    this._register(session.onDidLoseConnection((e) => void this._reconnectSession(session, e)))
+  }
+
+  private async _reconnectSession(
+    session: AcpSession,
+    event: AcpConnectionLostEvent,
+  ): Promise<void> {
+    if (this._reconnectingSessions.has(session.id)) return
+    this._reconnectingSessions.add(session.id)
+    try {
+      const sid = session.sessionIdOnAgent.get()
+      if (sid === undefined) {
+        // Never attached — there is no durable session to resume against.
+        session.sealRecoveryFailure('connection lost before the session was established')
+        return
+      }
+      // A stalled process is alive but wedged: kill it so the reconnect below
+      // spawns fresh instead of reattaching to the same wedged turn. Other
+      // sessions sharing the pooled process crash out and recover on their own
+      // `onDidLoseConnection`.
+      if (event.reason === 'stalled') {
+        this._client.killConnectionFor(session.agentId, this._history.get(sid)?.cwd)
+      }
+      const timeoutMs =
+        this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
+      const agentName = this._registry.get(session.agentId).name
+      let lastError = 'unknown error'
+      for (let attempt = 1; attempt <= MAX_RECOVERY_ATTEMPTS; attempt++) {
+        if (session.status.get() === 'closed' || !session.isReconnecting) return
+        session.recovery.set({
+          phase: 'reconnecting',
+          attempt,
+          maxAttempts: MAX_RECOVERY_ATTEMPTS,
+          reason: event.reason,
+        })
+        try {
+          const entry = this._history.get(sid)
+          const cwd = entry?.cwd ?? this._workspace.current?.folder.fsPath
+          const conn = await this._client.connect(session.agentId, {
+            ...(cwd !== undefined ? { cwd } : {}),
+            leaseFor: sid,
+            silent: true,
+          })
+          try {
+            const initResult = await withTimeout(conn.initializeResult, timeoutMs, 'ACP initialize')
+            if (initResult.agentCapabilities?.loadSession !== true) {
+              throw new Error(`${agentName} does not support session/resume — cannot reconnect`)
+            }
+            const { kept, dropped } = filterMcpServersByCapabilities(
+              this._readMcpServers(),
+              initResult.agentCapabilities?.mcpCapabilities,
+            )
+            this._warnDroppedMcpServers(agentName, dropped)
+            await withTimeout(
+              conn.conn.resumeSession({
+                sessionId: sid,
+                cwd: cwd ?? '',
+                mcpServers: kept,
+                _meta: EMIT_INIT_SDK_MESSAGE_META,
+              }),
+              timeoutMs,
+              'ACP session/resume',
+            )
+            if (session.status.get() === 'closed' || !session.isReconnecting) {
+              conn.dispose()
+              return
+            }
+            conn.attachSession(sid)
+            session.reattachConnection(conn)
+          } catch (err) {
+            conn.dispose()
+            throw err
+          }
+          this._telemetry.publicLog('acp.session_recovered', {
+            agentId: session.agentId,
+            reason: event.reason,
+            attempts: attempt,
+          })
+          session.recovery.clear()
+          // Resume the turn that was in-flight when the connection died.
+          await session.continueInterruptedTurn()
+          return
+        } catch (err) {
+          lastError = (err as Error).message
+          this._logger.warn(
+            `reconnect attempt ${attempt}/${MAX_RECOVERY_ATTEMPTS} for ${sid} failed: ${lastError}`,
+          )
+          if (attempt < MAX_RECOVERY_ATTEMPTS) {
+            const delay = recoveryBackoffMs(attempt + 1)
+            session.recovery.set({
+              phase: 'reconnecting',
+              attempt: attempt + 1,
+              maxAttempts: MAX_RECOVERY_ATTEMPTS,
+              reason: event.reason,
+              nextAttemptAt: Date.now() + delay,
+            })
+            // Wakes early on cancelRecovery/close; the loop re-checks liveness.
+            await session.recovery.sleep(delay).catch(() => {})
+          }
+        }
+      }
+      this._logger.warn(`reconnect exhausted for ${sid}: ${lastError}`)
+      session.sealRecoveryFailure(
+        `Agent connection lost and automatic reconnect failed: ${lastError}`,
+      )
+      this._telemetry.publicLogError('acp.session_recovery_failed', {
+        agentId: session.agentId,
+        reason: event.reason,
+        error: lastError,
+      })
+    } finally {
+      this._reconnectingSessions.delete(session.id)
+    }
+  }
+
+  /**
+   * Stall watchdog: a session stuck in `running` with no inbound update for
+   * `acp.turnStallTimeoutMs` (default 10min, 0 disables) is treated like a
+   * crash — the agent process is alive but its turn is wedged (e.g. a hung
+   * subprocess the agent spawned), so it is killed and hot-reconnected.
+   * Sessions mid-recovery or in backoff are skipped: their wait is expected
+   * silence, not a wedge.
+   */
+  private _startStallWatchdog(): void {
+    const interval = setInterval(() => this._checkStalledSessions(), STALL_WATCHDOG_TICK_MS)
+    this._register({ dispose: () => clearInterval(interval) })
+  }
+
+  private _checkStalledSessions(): void {
+    const stallMs = this._config.get<number>('acp.turnStallTimeoutMs') ?? DEFAULT_STALL_TIMEOUT_MS
+    if (stallMs <= 0) return
+    const now = Date.now()
+    for (const session of this._sessionStore.sessions.get()) {
+      if (!(session instanceof AcpSession)) continue
+      if (session.readOnly || session.status.get() !== 'running') continue
+      if (session.recovery.state.get() !== undefined) continue
+      const silentMs = now - session.lastActivityAt
+      if (silentMs < stallMs) continue
+      this._logger.warn(
+        `session ${session.id} stalled (no updates for ${Math.round(silentMs / 1000)}s) — hot-reconnecting`,
+      )
+      this._telemetry.publicLog('acp.session_stall_detected', { agentId: session.agentId })
+      session.handleStall()
+    }
   }
 
   /**
