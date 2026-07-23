@@ -44,6 +44,11 @@ const CLI_VENDOR_REL =
 const CLI_PACKAGED_REL =
   'typescript-language-server/node_modules/typescript-language-server/lib/cli.mjs'
 
+/** tsgo exe relative to `process.resourcesPath` in a packaged build; staged
+ *  (with its sibling lib .d.ts files and package.json) by
+ *  scripts/release/runtime-resources.mjs. */
+const NATIVE_PACKAGED_REL = `tsgo/lib/${process.platform === 'win32' ? 'tsgo.exe' : 'tsgo'}`
+
 /** tsserver.js sits beside the CLI's node_modules (…/node_modules/typescript/lib/tsserver.js). */
 function tsserverFor(cli: string): string {
   return path.resolve(path.dirname(cli), '../../typescript/lib/tsserver.js')
@@ -88,8 +93,9 @@ export function resolveTsServerPaths(): { cli: string; tsserver: string } {
 /**
  * Resolve which server to run per the preference chain (see TsServerPreference).
  * The native binary comes from the dev dependency `@typescript/native-preview`
- * (its platform package ships the per-OS exe), so native mode is currently
- * dev-only — packaging it needs per-platform resources.
+ * in dev (its platform package ships the per-OS exe) or from the staged
+ * `tsgo/` tree under `process.resourcesPath` in packaged builds. When native
+ * is preferred but no binary is found, fall back to tsls.
  */
 export function resolveTsServerSpec(preference: TsServerPreference): TsServerSpec {
   const pref = preference()
@@ -101,7 +107,7 @@ export function resolveTsServerSpec(preference: TsServerPreference): TsServerSpe
       version: versionForBinary(pref.binary) ?? 'unknown',
     }
   }
-  if (wantNative && !app.isPackaged) {
+  if (wantNative) {
     const binary = resolveNativePreviewBinary()
     if (binary) return { kind: 'native', binary, version: versionForBinary(binary) ?? 'unknown' }
   }
@@ -169,9 +175,14 @@ function readServerImplementationSetting(settingsDir: string): string | undefine
   }
 }
 
-/** Resolve the `@typescript/native-preview-<platform>-<arch>` tsgo exe via the
- *  package's own resolver semantics (mirrors its lib/getExePath.js). */
+/** Packaged: the staged exe under resourcesPath. Dev: resolve the
+ *  `@typescript/native-preview-<platform>-<arch>` tsgo exe via the package's
+ *  own resolver semantics (mirrors its lib/getExePath.js). */
 function resolveNativePreviewBinary(): string | undefined {
+  if (app.isPackaged) {
+    const exe = path.join(process.resourcesPath, NATIVE_PACKAGED_REL)
+    return existsSync(exe) ? exe : undefined
+  }
   const platformPackage = `@typescript/native-preview-${process.platform}-${process.arch}`
   try {
     // pnpm doesn't hoist the platform package to the top-level node_modules;

@@ -2,11 +2,11 @@
  *  Tests for the TS-server preference chain (binary env > selection env >
  *  settings.json `typescript.server.implementation` > tsls default) and the
  *  native-binary resolver. Electron is mocked: resolveTsServerPaths walks up
- *  from app.getAppPath() and resolveNativePreviewBinary needs no Electron at
- *  all, but the module imports `app` at the top level.
+ *  from app.getAppPath() in dev; the packaged tests flip app.isPackaged and
+ *  point process.resourcesPath at a temp dir with a staged tsgo/ tree.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -21,6 +21,7 @@ vi.mock('electron', () => ({
   },
 }))
 
+const { app } = await import('electron')
 const { createTsServerSpecResolver } = await import('../tsServerPaths.js')
 const { DEFAULT_TS_SERVER_IMPLEMENTATION } =
   await import('../../../../shared/tsServerImplementation.js')
@@ -123,5 +124,62 @@ describe('tsServerPaths preference chain', () => {
     const spec = createTsServerSpecResolver(settingsDir)()
     expect(spec.kind).toBe('native')
     expect(spec.version).toContain('7.0.0-dev')
+  })
+})
+
+describe('packaged tsgo resolution', () => {
+  const mockedApp = app as { isPackaged: boolean }
+  const proc = process as NodeJS.Process & { resourcesPath?: string }
+  const tsgoExe = process.platform === 'win32' ? 'tsgo.exe' : 'tsgo'
+  let resourcesDir = ''
+
+  beforeEach(async () => {
+    settingsDir = await mkdtemp(path.join(tmpdir(), 'universe-editor-ts-server-pref-'))
+    resourcesDir = await mkdtemp(path.join(tmpdir(), 'universe-editor-resources-'))
+    mockedApp.isPackaged = true
+    proc.resourcesPath = resourcesDir
+  })
+
+  afterEach(async () => {
+    mockedApp.isPackaged = false
+    Reflect.deleteProperty(proc, 'resourcesPath')
+    await rm(settingsDir, { recursive: true, force: true })
+    await rm(resourcesDir, { recursive: true, force: true })
+  })
+
+  it('resolves the staged tsgo exe and reads its version', async () => {
+    await mkdir(path.join(resourcesDir, 'tsgo/lib'), { recursive: true })
+    await writeFile(path.join(resourcesDir, 'tsgo/lib', tsgoExe), '')
+    await writeFile(
+      path.join(resourcesDir, 'tsgo/package.json'),
+      JSON.stringify({ version: '7.0.0-dev.staged' }),
+    )
+    await writeFile(
+      path.join(settingsDir, 'settings.json'),
+      JSON.stringify({ 'typescript.server.implementation': 'native' }),
+    )
+    const spec = createTsServerSpecResolver(settingsDir)()
+    expect(spec.kind).toBe('native')
+    if (spec.kind === 'native') {
+      expect(spec.binary).toBe(path.join(resourcesDir, 'tsgo/lib', tsgoExe))
+      expect(spec.version).toBe('7.0.0-dev.staged')
+    }
+  })
+
+  it('falls back to tsls when the staged tsgo exe is missing', async () => {
+    await writeFile(
+      path.join(settingsDir, 'settings.json'),
+      JSON.stringify({ 'typescript.server.implementation': 'native' }),
+    )
+    const spec = createTsServerSpecResolver(settingsDir)()
+    expect(spec.kind).toBe('tsls')
+    if (spec.kind === 'tsls') {
+      expect(spec.cli).toBe(
+        path.join(
+          resourcesDir,
+          'typescript-language-server/node_modules/typescript-language-server/lib/cli.mjs',
+        ),
+      )
+    }
   })
 })

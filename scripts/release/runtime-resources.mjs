@@ -17,6 +17,7 @@ import {
   rmSync,
   statSync,
 } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -31,6 +32,20 @@ const releaseResourcesRoot = join(editorRoot, 'release/win-unpacked/resources')
 
 export const runtimeResourcesDir = join(editorRoot, '.runtime-resources')
 export const extensionsRoot = join(repoRoot, 'extensions')
+
+const TSGO_EXE = process.platform === 'win32' ? 'tsgo.exe' : 'tsgo'
+
+// The tsgo exe ships in @typescript/native-preview-<platform>-<arch>, an
+// optional sibling dependency of @typescript/native-preview — mirrors the dev
+// resolver in apps/editor/src/main/services/extensionHost/tsServerPaths.ts
+// (realpath first: pnpm's hoisted entry is a symlink).
+function resolveTsgoPlatformPackageDir() {
+  const previewPkg = realpathSync(
+    createRequire(join(repoRoot, 'package.json')).resolve('@typescript/native-preview/package.json'),
+  )
+  const platformPackage = `@typescript/native-preview-${process.platform}-${process.arch}`
+  return dirname(createRequire(previewPkg).resolve(`${platformPackage}/package.json`))
+}
 
 const REQUIRED_SOURCE_FILES = [
   {
@@ -70,6 +85,21 @@ const REQUIRED_SOURCE_FILES = [
     label: 'tsserver (typescript)',
     source: join(repoRoot, 'vendor/typescript-language-server/node_modules/typescript/lib/tsserver.js'),
     packaged: 'typescript-language-server/node_modules/typescript/lib/tsserver.js',
+  },
+  {
+    label: 'tsgo binary',
+    source: join(resolveTsgoPlatformPackageDir(), 'lib', TSGO_EXE),
+    packaged: `tsgo/lib/${TSGO_EXE}`,
+  },
+  {
+    label: 'tsgo lib .d.ts',
+    source: join(resolveTsgoPlatformPackageDir(), 'lib', 'lib.d.ts'),
+    packaged: 'tsgo/lib/lib.d.ts',
+  },
+  {
+    label: 'tsgo package.json',
+    source: join(resolveTsgoPlatformPackageDir(), 'package.json'),
+    packaged: 'tsgo/package.json',
   },
   {
     label: 'release notes',
@@ -175,6 +205,13 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
     join(repoRoot, 'vendor/typescript-language-server/node_modules'),
     join(stageDir, 'typescript-language-server/node_modules'),
   )
+  // tsgo (Go-native TS language server): a single self-contained exe, but it
+  // reads the bundled lib .d.ts files relative to itself — stage the whole
+  // lib/ dir. package.json sits one level up so the main process can report
+  // the version (same layout as the npm platform package).
+  const tsgoPkgDir = resolveTsgoPlatformPackageDir()
+  copyPath(join(tsgoPkgDir, 'lib'), join(stageDir, 'tsgo/lib'))
+  copyPath(join(tsgoPkgDir, 'package.json'), join(stageDir, 'tsgo/package.json'))
   copyPath(join(editorRoot, 'resources/release-notes.json'), join(stageDir, 'release-notes.json'))
   copyPath(join(editorRoot, 'build/product.json'), join(stageDir, 'product.json'))
 

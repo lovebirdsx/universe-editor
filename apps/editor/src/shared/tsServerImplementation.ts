@@ -4,7 +4,8 @@
  *  renderer (the ConfigurationRegistry schema default). Both sides must agree —
  *  the schema default alone does NOT reach main, which reads settings.json
  *  directly before any renderer ConfigurationService exists. 'native' is safe
- *  as the default: packaged builds fall back to tsls in resolveTsServerSpec.
+ *  as the default: resolveTsServerSpec falls back to tsls when no tsgo binary
+ *  is found (packaged builds ship a staged tsgo under resources/).
  *--------------------------------------------------------------------------------------------*/
 
 export type TsServerImplementationName = 'tsls' | 'native'
