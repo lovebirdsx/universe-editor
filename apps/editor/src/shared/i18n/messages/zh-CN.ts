@@ -894,6 +894,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '{file}：为了减少内存占用并避免卡顿或崩溃，已为此大文件关闭语法着色、自动换行、折叠、CodeLens、单词高亮和粘性滚动。',
   'largeFileOptimizations.forceEnable': '强制启用功能',
   'largeFileOptimizations.reopenPrompt': '请重新打开文件以使该设置生效。',
+  'notification.neverShowAgain': '不再显示',
   'keybindings.search.placeholder': '搜索键盘快捷方式（{count}）',
   'keybindings.source.default': '默认',
   'keybindings.source.user': '用户',

@@ -81,6 +81,8 @@ export class LargeFileOptimizationsContribution
           run: () => this._forceEnable(),
         },
       ],
+      // Same id as VSCode's LargeFileOptimizationsWarner.
+      { neverShowAgain: { id: 'editor.contrib.largeFileOptimizationsWarner' } },
     )
   }
 

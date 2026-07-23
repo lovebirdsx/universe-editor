@@ -8,7 +8,9 @@ import {
   Disposable,
   IStorageService,
   Severity,
+  StorageScope,
   derived,
+  localize,
   observableValue,
 } from '@universe-editor/platform'
 import type {
@@ -16,6 +18,7 @@ import type {
   INotificationHandle,
   INotificationProgress,
   INotificationProgressOptions,
+  INotificationPromptOptions,
   INotificationService,
   IPromptChoice,
 } from '@universe-editor/platform'
@@ -163,7 +166,31 @@ export class NotificationService extends Disposable implements INotificationServ
     }
   }
 
-  prompt(severity: Severity, message: string, choices: IPromptChoice[]): Promise<void> {
+  async prompt(
+    severity: Severity,
+    message: string,
+    choices: IPromptChoice[],
+    options?: INotificationPromptOptions,
+  ): Promise<void> {
+    const neverShowAgain = options?.neverShowAgain
+    if (neverShowAgain !== undefined) {
+      // The user previously opted out of this prompt — stay silent.
+      const suppressed = await this._storage.get<boolean>(neverShowAgain.id, StorageScope.GLOBAL)
+      if (suppressed === true) return
+
+      const action: IPromptChoice = {
+        label: localize('notification.neverShowAgain', "Don't Show Again"),
+        run: () => {
+          void this._storage.set(neverShowAgain.id, true, StorageScope.GLOBAL)
+        },
+        ...(neverShowAgain.isSecondary !== undefined
+          ? { isSecondary: neverShowAgain.isSecondary }
+          : {}),
+      }
+      // VSCode parity: default placement is first, secondary goes last.
+      choices = neverShowAgain.isSecondary === true ? [...choices, action] : [action, ...choices]
+    }
+
     return new Promise<void>((resolve) => {
       let settled = false
       const settle = () => {

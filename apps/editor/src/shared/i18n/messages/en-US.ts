@@ -212,6 +212,7 @@ export const EN_US_MESSAGES: MessageMap = {
     '{file}: tokenization, wrapping, folding, codelens, word highlighting and sticky scroll have been turned off for this large file in order to reduce memory usage and avoid freezing or crashing.',
   'largeFileOptimizations.forceEnable': 'Forcefully Enable Features',
   'largeFileOptimizations.reopenPrompt': 'Please reopen the file for this setting to take effect.',
+  'notification.neverShowAgain': "Don't Show Again",
   'settings.editor.detectIndentation.description':
     'Controls whether `editor.tabSize` and `editor.insertSpaces` are automatically detected when a file is opened based on the file contents.',
   'settings.editor.fontSize.description': 'Controls the editor font size in pixels.',

@@ -131,6 +131,49 @@ describe('NotificationService', () => {
     svc.dispose()
   })
 
+  it('prompt() with neverShowAgain prepends the opt-out action and remembers it', async () => {
+    const storage = new FakeStorage()
+    const svc = buildService(storage)
+    const p = svc.prompt(Severity.Info, 'Large file', [{ label: 'Enable', run: () => {} }], {
+      neverShowAgain: { id: 'test.neverShowAgain' },
+    })
+    // The storage check inside prompt() is async — flush before inspecting.
+    await Promise.resolve()
+
+    const actions = svc.notifications.get()[0]?.actions
+    expect(actions?.map((a) => a.label)).toEqual(["Don't Show Again", 'Enable'])
+
+    actions?.[0]?.run()
+    await p
+    expect(await storage.get('test.neverShowAgain')).toBe(true)
+    svc.dispose()
+  })
+
+  it('prompt() with neverShowAgain.isSecondary appends the opt-out action last', async () => {
+    const svc = buildService()
+    void svc.prompt(Severity.Info, 'Large file', [{ label: 'Enable', run: () => {} }], {
+      neverShowAgain: { id: 'test.neverShowAgain', isSecondary: true },
+    })
+    await Promise.resolve()
+
+    const actions = svc.notifications.get()[0]?.actions
+    expect(actions?.map((a) => a.label)).toEqual(['Enable', "Don't Show Again"])
+    expect(actions?.[1]?.isSecondary).toBe(true)
+    svc.dispose()
+  })
+
+  it('prompt() stays silent once the user opted out', async () => {
+    const storage = new FakeStorage()
+    await storage.set('test.neverShowAgain', true)
+    const svc = buildService(storage)
+
+    await svc.prompt(Severity.Info, 'Large file', [{ label: 'Enable', run: () => {} }], {
+      neverShowAgain: { id: 'test.neverShowAgain' },
+    })
+    expect(svc.notifications.get()).toHaveLength(0)
+    svc.dispose()
+  })
+
   it('progress lifecycle: report → done', () => {
     const svc = buildService()
     const handle = svc.notify({ severity: Severity.Info, message: 'working…' })

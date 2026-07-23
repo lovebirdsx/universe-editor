@@ -19,6 +19,22 @@ export interface IPromptChoice {
   readonly isSecondary?: boolean
 }
 
+/**
+ * Port of VSCode's INeverShowAgainOptions: the service injects a
+ * "Don't Show Again" action into the prompt and remembers the choice in
+ * global storage; subsequent prompts carrying the same id are suppressed.
+ */
+export interface INeverShowAgainOptions {
+  /** Storage key under which the user's choice is remembered (global scope). */
+  readonly id: string
+  /** Render the action last instead of first (VSCode default is first). */
+  readonly isSecondary?: boolean
+}
+
+export interface INotificationPromptOptions {
+  readonly neverShowAgain?: INeverShowAgainOptions
+}
+
 export interface INotificationProgress {
   /** Report current progress. Calling this implicitly starts the spinner. */
   report(state: { message?: string; increment?: number; total?: number }): void
@@ -82,9 +98,15 @@ export interface INotificationService {
 
   /**
    * Show a sticky prompt and resolve when any choice is picked or when the
-   * notification is dismissed without a choice.
+   * notification is dismissed without a choice. With `neverShowAgain` set and
+   * the user having previously opted out, resolves immediately without showing.
    */
-  prompt(severity: Severity, message: string, choices: IPromptChoice[]): Promise<void>
+  prompt(
+    severity: Severity,
+    message: string,
+    choices: IPromptChoice[],
+    options?: INotificationPromptOptions,
+  ): Promise<void>
 
   /** Shorthand for a non-blocking Info notification. */
   status(message: string, opts?: { sticky?: boolean }): INotificationHandle

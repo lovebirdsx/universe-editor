@@ -14,6 +14,7 @@ import {
   type IConfigurationService,
   type ILoggerService as ILoggerServiceType,
   type INotificationService,
+  type INotificationPromptOptions,
   type IPromptChoice,
 } from '@universe-editor/platform'
 
@@ -69,6 +70,7 @@ interface PromptCall {
   severity: Severity
   message: string
   choices: IPromptChoice[]
+  options: INotificationPromptOptions | undefined
 }
 
 function makeNotification(): INotificationService & {
@@ -80,8 +82,13 @@ function makeNotification(): INotificationService & {
   return {
     prompts,
     notified,
-    async prompt(severity: Severity, message: string, choices: IPromptChoice[]) {
-      prompts.push({ severity, message, choices })
+    async prompt(
+      severity: Severity,
+      message: string,
+      choices: IPromptChoice[],
+      options?: INotificationPromptOptions,
+    ) {
+      prompts.push({ severity, message, choices, options })
     },
     notify(opts: { severity: Severity; message: string }) {
       notified.push({ severity: opts.severity, message: opts.message })
@@ -154,6 +161,9 @@ describe('LargeFileOptimizationsContribution', () => {
     expect(prompt.message).toContain('huge.log')
     expect(prompt.message).toContain('tokenization')
     expect(prompt.choices.map((c) => c.label)).toEqual(['Forcefully Enable Features'])
+    expect(prompt.options?.neverShowAgain).toEqual({
+      id: 'editor.contrib.largeFileOptimizationsWarner',
+    })
   })
 
   it('stays quiet for regular-size models', () => {
