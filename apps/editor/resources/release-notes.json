@@ -1,5 +1,38 @@
 [
   {
+    "version": "0.1.48",
+    "date": "2026-07-23",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "支持turn卡死超时检测与自动热重连恢复",
+          "session中首条用户消息的键盘导航和焦点高亮",
+          "新增大文件优化警告及强制启用能力",
+          "工作区符号空输入复用上次搜索结果，修复e2e报错",
+          "优化工作区搜索符号的速度和体验",
+          "SessionSwitcher 支持跨窗口 Agent 计数聚合与推送",
+          "全局统一键盘焦点指示样式，由白色粗框改成蓝色细框",
+          "存储与变更追踪增加OOM防护预算检查"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "编辑恢复spec切工作区漏打@serial标导致CI偶发crash",
+          "修正codex恢复会话时丢shell调用的展示",
+          "TypeScript状态栏启动时仅显示加载动画",
+          "修复启动后Focus被bootstrap恢复抢导致的e2e flake",
+          "review需要审核的状态栏计数改为被动接收renderer推送",
+          "视图重排后重置sizes防止空SplitView误触resize",
+          "e2e报错修复，适配标题栏 AI 按钮，command-center 可收缩防止遮挡"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.47",
     "date": "2026-07-22",
     "groups": [
