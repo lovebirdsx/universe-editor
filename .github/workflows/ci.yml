@@ -411,8 +411,10 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # `e2ea` (not `e2e`) folds the @regression bug-guard specs back into the pass;
+      # extensions have no @serial/@flaky specs, so a single pass covers everything.
       - name: Run extension E2E (xvfb)
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter ${{ matrix.suite.name }} e2e
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter ${{ matrix.suite.name }} e2ea
 
       - name: Upload Playwright report
         if: always()
@@ -516,8 +518,9 @@ jobs:
       - name: Typecheck external extension
         run: npm --prefix extensions-external/${{ matrix.suite.name }} run typecheck
 
+      # `e2ea` folds the @regression bug-guard specs back in (see e2e-extensions).
       - name: Run external extension E2E (xvfb)
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" npm --prefix extensions-external/${{ matrix.suite.name }} run e2e
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" npm --prefix extensions-external/${{ matrix.suite.name }} run e2ea
 
       - name: Upload Playwright report
         if: always()
