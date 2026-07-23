@@ -139,7 +139,15 @@ test.describe('@p1 editor restore', () => {
     }
   })
 
-  test('switching workspaces does not leak editors across scopes', async () => {
+  // @serial: this case switches the workspace twice in one test (A→B→A),
+  // driving back-to-back parcel watcher subscribe/unsubscribe cycles on the
+  // main process. @parcel/watcher's windows backend has a cross-process native
+  // race — when several Electron instances (e2e workers) re-subscribe
+  // concurrently it can fault (0xC0000005) the main process, which surfaces
+  // here as "Target page has been closed" (same root cause as
+  // smoke.simpleFileDialog). Single-instance runs never trip it, so we pin this
+  // case to a single worker. See `pnpm e2e` (serial pass).
+  test('switching workspaces does not leak editors across scopes', { tag: '@serial' }, async () => {
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-editor-restore-iso-'))
     try {
       // Workspace A has an open editor; workspace B is empty.
