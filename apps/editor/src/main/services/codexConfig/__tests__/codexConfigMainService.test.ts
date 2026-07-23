@@ -37,6 +37,7 @@ describe('CodexConfigMainService', () => {
   })
 
   afterEach(async () => {
+    svc.dispose()
     await fs.rm(dir, { recursive: true, force: true })
   })
 

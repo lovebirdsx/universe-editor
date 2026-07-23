@@ -104,20 +104,31 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     const authFile = basename(this._authPath())
     try {
       // Ensure the dir exists so watch() doesn't throw on a fresh install.
-      void fs.mkdir(dir, { recursive: true }).then(() => {
-        try {
-          this._authWatcher = watch(dir, (_event, filename) => {
-            if (filename && basename(filename.toString()) !== authFile) return
-            if (this._authDebounce) clearTimeout(this._authDebounce)
-            this._authDebounce = setTimeout(() => {
-              this._logger.info('auth.json changed; notifying renderer')
-              this._onDidChangeAuth.fire()
-            }, 150)
-          })
-        } catch (err) {
-          this._logger.warn(`auth watch failed: ${(err as Error).message}`)
-        }
-      })
+      // The rejection must be handled: the dir can vanish between mkdir and
+      // watch (e.g. tests tearing down their temp dir), and an unhandled
+      // rejection here would poison the whole process.
+      void fs.mkdir(dir, { recursive: true }).then(
+        () => {
+          try {
+            this._authWatcher = watch(dir, (_event, filename) => {
+              if (filename && basename(filename.toString()) !== authFile) return
+              if (this._authDebounce) clearTimeout(this._authDebounce)
+              this._authDebounce = setTimeout(() => {
+                this._logger.info('auth.json changed; notifying renderer')
+                this._onDidChangeAuth.fire()
+              }, 150)
+            })
+            // FSWatcher is an EventEmitter; without an 'error' listener a
+            // watched-dir deletion would surface as an unhandled 'error' event.
+            this._authWatcher.on('error', (err) =>
+              this._logger.warn(`auth watcher error: ${err.message}`),
+            )
+          } catch (err) {
+            this._logger.warn(`auth watch failed: ${(err as Error).message}`)
+          }
+        },
+        (err) => this._logger.warn(`auth watch mkdir failed: ${(err as Error).message}`),
+      )
     } catch (err) {
       this._logger.warn(`auth watch setup failed: ${(err as Error).message}`)
     }
