@@ -1,5 +1,45 @@
 [
   {
+    "version": "0.1.49",
+    "date": "2026-07-24",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "添加打开安装目录的开发者命令",
+          "添加 Agent deep link 启动入口，新增内置扩展 universe editor mcp bridge",
+          "支持工作区分层配置 TS Server 偏好",
+          "session中移除思考消息的不透明度样式",
+          "将默认TS服务器实现从native切换为tsls",
+          "支持 packaged 构建解析 tsgo 二进制",
+          "使用ts-go来作为ts lsp",
+          "忽略的swarm审核超时间窗自动清理",
+          "支持Go原生LSP(tsgo)作为备选 TypeScript 语言服务",
+          "大文件切换效率优化，避免ts server 奔溃，优化line diff算法效率",
+          "聚焦侧栏/面板时用 ctrl+pageup/pagedown 循环切换 view container",
+          "大型文件提示支持\"不再显示\"选项"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复确认退出后延迟出现超时假告警",
+          "ext-release 安装扩展运行时依赖，避免 build 失败",
+          "阻断非 file 文档打入 LSP 服务",
+          "ScmView 中关闭输入框拼写检查",
+          "claude 修复恢复对话中丢失的 steering用户提示",
+          "修复飞请求传输订阅漏挂父链导致reload泄漏",
+          "watchAuthDir 处理 mkdir/watcher 异常避免进程崩溃",
+          "setActiveEditorCursor 探针补 revealPosition，修复 markdown preview 对齐回归",
+          "session中的首条用户消息可通过alt+f来折叠",
+          "md渲染支持 blockquote 内递归解析块元素"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.48",
     "date": "2026-07-23",
     "groups": [
