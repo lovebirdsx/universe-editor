@@ -10,7 +10,11 @@
         "!src/**/*.test.ts",
         "!src/**/*.test.tsx",
         "package.json",
-        "tsconfig*.json"
+        "tsconfig*.json",
+        "electron.vite.config.ts",
+        "build/**",
+        "esbuild.config.mjs",
+        "public/**"
       ],
       "outputs": ["dist/**", "out/**", "*.tsbuildinfo"]
     },

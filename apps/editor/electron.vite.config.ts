@@ -42,6 +42,14 @@ const decoratorTsconfigRaw = {
   },
 } as const
 
+// rolldown-vite drops the `external` arrays electron-vite injects via config-hook
+// plugins (the preset + externalizeDeps), so declare them literally: electron +
+// every package.json dependency (mirrors externalizeDeps semantics).
+const editorPkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf-8')) as {
+  dependencies?: Record<string, string>
+}
+const nodeExternal = ['electron', /^electron\/.+/, ...Object.keys(editorPkg.dependencies ?? {})]
+
 export default defineConfig({
   main: {
     plugins: [
@@ -72,6 +80,7 @@ export default defineConfig({
       },
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/main/index.ts') },
+        external: nodeExternal,
       },
     },
   },
@@ -79,6 +88,7 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/preload/index.ts') },
+        external: nodeExternal,
         output: {
           format: 'cjs',
           entryFileNames: '[name].cjs',

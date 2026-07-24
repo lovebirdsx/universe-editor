@@ -1,8 +1,7 @@
 import { app, BrowserWindow, Menu, protocol } from 'electron'
 import { promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
-import { fileURLToPath } from 'node:url'
-import { dirname, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   DisposableTracker,
   setDisposableTracker,
@@ -90,8 +89,6 @@ import {
 import type { ApplicationServices } from './window/scopedServicesFactory.js'
 // Side-effect: registers all application-singleton main services with registerSingleton.
 import './services/main-services.js'
-
-const __dirname = dirname(fileURLToPath(import.meta.url))
 
 // Stamp the OS process-creation time as the earliest mark (before mainDidStart)
 // so the pre-JS gap — spawn → first line here — shows up in the startup timeline.
@@ -389,7 +386,7 @@ let windowsJumpList: WindowsJumpList | null = null
 // 所以仅在 dev（运行的是通用 electron.exe）下显式设置，并使用专属的 dev 图标以区分发布版。
 const appIconPath =
   process.platform === 'win32' && !app.isPackaged
-    ? join(__dirname, '../../public/icon-dev.ico')
+    ? join(import.meta.dirname, '../../public/icon-dev.ico')
     : undefined
 
 function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainService } {
@@ -459,7 +456,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       e2eEnabled,
       rendererDebug: environmentService.rendererDebug,
       ...(appIconPath ? { appIconPath } : {}),
-      preloadPath: join(__dirname, '../preload/index.cjs'),
+      preloadPath: join(import.meta.dirname, '../preload/index.cjs'),
       rendererUrl: environmentService.rendererUrl,
       getConfigDir: () => applicationServices!.configLocation.currentDir,
     })
@@ -519,7 +516,7 @@ void app.whenReady().then(async () => {
 
   logShutdownTraceIfPresent((msg) => mainLogger.info(msg))
   installImageProtocol()
-  installAppProtocolHandler(join(__dirname, '../renderer'))
+  installAppProtocolHandler(join(import.meta.dirname, '../renderer'))
   initializeMainNls(await loadMainSettingsText(), app.getLocale())
   const { windows } = getOrCreateServices()
   mark(PerfMarks.mainDidCreateServices)
