@@ -112,6 +112,7 @@ import {
   ExitAction,
   NewWindowAction,
   OpenFolderInNewWindowAction,
+  OpenInstallFolderAction,
   OpenUserDataFolderAction,
   ReloadWindowAction,
   SwitchWindowAction,
@@ -501,6 +502,7 @@ registerAction2(OpenDocsAction)
 registerAction2(OpenEditorGuideAction)
 registerAction2(OpenAgentGuideAction)
 registerAction2(OpenUserDataFolderAction)
+registerAction2(OpenInstallFolderAction)
 registerAction2(ShowLogsAction)
 registerAction2(RefreshLogOutputAction)
 registerAction2(OpenActiveLogFileAction)

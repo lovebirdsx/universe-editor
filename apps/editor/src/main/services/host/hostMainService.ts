@@ -195,6 +195,13 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     if (error) throw new Error(error)
   }
 
+  openInstallFolder(): Promise<void> {
+    const exe = app.getPath('exe')
+    shell.showItemInFolder(exe)
+    this._logger.info(`openInstallFolder ${exe}`)
+    return Promise.resolve()
+  }
+
   openInVSCode(fsPath: string): Promise<string> {
     // `code` is a shell launcher (code.cmd on Windows), so go through the shell
     // to resolve it from PATH. Detach so VS Code outlives the spawning child.

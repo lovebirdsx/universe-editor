@@ -86,6 +86,12 @@ export interface IHostService {
   openUserDataFolder(): Promise<void>
 
   /**
+   * Open the directory containing the running executable in the OS file manager,
+   * with the executable selected.
+   */
+  openInstallFolder(): Promise<void>
+
+  /**
    * Launch VS Code (`code` on PATH) with `fsPath` as the folder/file to open.
    * Returns an error string on failure (e.g. `code` not found), or empty string
    * on success.

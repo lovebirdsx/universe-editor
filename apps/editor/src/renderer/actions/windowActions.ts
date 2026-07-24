@@ -213,6 +213,23 @@ export class OpenUserDataFolderAction extends Action2 {
   }
 }
 
+export class OpenInstallFolderAction extends Action2 {
+  static readonly ID = 'workbench.action.openInstallFolder'
+  constructor() {
+    super({
+      id: OpenInstallFolderAction.ID,
+      title: localize2('action.openInstallFolder.title', 'Developer: Open Install Folder'),
+      category: localize2('command.category.help', 'Help'),
+      menu: { id: MenuId.MenubarHelpMenu, group: '5_tools', order: 4 },
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    void accessor.get(IHostService).openInstallFolder()
+  }
+}
+
 export class AboutAction extends Action2 {
   static readonly ID = 'workbench.action.about'
   constructor() {

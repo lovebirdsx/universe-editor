@@ -331,6 +331,7 @@ class FakeHostService implements IHostServiceType {
     return ''
   }
   async openUserDataFolder() {}
+  async openInstallFolder() {}
   async openNewWindow() {}
   async openTerminal() {}
   async notify() {
