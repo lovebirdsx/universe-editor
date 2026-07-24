@@ -15,6 +15,7 @@ import {
   Emitter,
   generateUuid,
   reviveError,
+  toDisposable,
   type AiGroupVerifyInput,
   type AiGroupVerifyResult,
   type AiMessage,
@@ -163,7 +164,11 @@ export class AiModelClientService extends Disposable implements IAiModelService 
     const subCancel = token.onCancellationRequested(() => {
       void this._main.cancelRequest(requestId)
     })
-    reassembler.bindSubscriptions(combinedDisposable(subChunk, subEnd, subCancel))
+    // Root the per-request subs under this service so a window reload with a
+    // request still in flight is not flagged as a leak; on stream end the
+    // reassembler disposes this wrapper, which also drops the entry from _store.
+    const combined = this._register(combinedDisposable(subChunk, subEnd, subCancel))
+    reassembler.bindSubscriptions(toDisposable(() => this._store.delete(combined)))
 
     void this._main.startRequest(requestId, messages.map(toMessageDto), options).catch((err) => {
       reassembler.acceptEnd(err)

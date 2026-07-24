@@ -76,6 +76,7 @@ pnpm --filter @universe-editor/editor lint
 5. 只用**路径**判断改哪份 checkout；dev 栈的**行号是 transform 后的**（比源文件小），不能据此判定报告陈旧。
 6. 横向对比同类创建路径，漏 `_register` 的那条就是 bug。
 7. 用 tracker 写回归测试时，`computeLeakingDisposables()` 无泄漏返回 **`undefined`（非 `null`）**；contribution 回退 `new NullLogger()` 等桩对象自身会被算泄漏，给个返回 `markAsSingleton` logger 的 loggerService 桩绕开。
+8. **在飞请求的传输订阅（reload 时点）**：像 `AiModelClientService.sendRequest` 这类"每次调用创建一组事件订阅、只在流结束（`acceptEnd`）时 dispose"的代码，reload 时若请求仍在飞，订阅未挂父链必被报。修法：把 combined 挂到 owner 的 `_store`（根到单例即豁免），并让结束回调走 `this._store.delete(combined)`（移除+dispose，避免 store 累积已 dispose 对象）——例如 `reassembler.bindSubscriptions(toDisposable(() => this._store.delete(combined)))`。
 
 ## 其它
 - 后续用本 skill，发现新经验，需同步更新本文件

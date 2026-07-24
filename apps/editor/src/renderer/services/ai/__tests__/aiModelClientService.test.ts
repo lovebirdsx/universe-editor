@@ -15,6 +15,7 @@ import {
   type AiMessage,
   type AiModelConfiguration,
   type AiProviderGroup,
+  type IDisposable,
 } from '@universe-editor/platform'
 import { AiModelClientService } from '../aiModelClientService.js'
 import type {
@@ -32,8 +33,29 @@ class FakeMain implements IAiModelMainService {
   readonly onDidEndRequestEmitter = new Emitter<AiEndEvent>()
   readonly onDidChangeModelsEmitter = new Emitter<void>()
   readonly onDidChangeActiveModelEmitter = new Emitter<AiActiveModelChangeEvent>()
-  readonly onDidEmitChunk = this.onDidEmitChunkEmitter.event
-  readonly onDidEndRequest = this.onDidEndRequestEmitter.event
+
+  // Wrap the chunk/end events so tests can observe whether the transport
+  // subscriptions a request creates get disposed.
+  readonly transportSubs: { disposed: boolean }[] = []
+  private _wrapEvent<T>(event: (listener: (e: T) => void) => IDisposable) {
+    return (listener: (e: T) => void): IDisposable => {
+      const inner = event(listener)
+      const tracked = {
+        disposed: false,
+        dispose() {
+          if (!tracked.disposed) {
+            tracked.disposed = true
+            inner.dispose()
+          }
+        },
+      }
+      this.transportSubs.push(tracked)
+      return tracked
+    }
+  }
+  readonly onDidEmitChunk = this._wrapEvent(this.onDidEmitChunkEmitter.event)
+  readonly onDidEndRequest = this._wrapEvent(this.onDidEndRequestEmitter.event)
+
   readonly onDidChangeModels = this.onDidChangeModelsEmitter.event
   readonly onDidChangeActiveModel = this.onDidChangeActiveModelEmitter.event
 
@@ -210,6 +232,44 @@ describe('AiModelClientService', () => {
     })
 
     await expect(response.result).rejects.toThrow('upstream failed')
+    client.dispose()
+  })
+
+  // Regression: a window reload with a request still in flight reported the
+  // chunk/end/cancel subscriptions as leaked disposables — they must be rooted
+  // under the client so disposing it (or the singleton root) releases them.
+  it('releases transport subscriptions of an in-flight request on dispose', async () => {
+    const main = new FakeMain()
+    const client = new AiModelClientService(main)
+
+    const token = new CancellationTokenSource()
+    const response = client.sendRequest(userMsg, { modelId: 'm' }, token.token)
+    response.result.catch(() => undefined)
+    await flush()
+    expect(main.transportSubs.length).toBe(2)
+    expect(main.transportSubs.every((s) => !s.disposed)).toBe(true)
+
+    // No end event: the request is still in flight when the owner goes away.
+    client.dispose()
+    expect(main.transportSubs.every((s) => s.disposed)).toBe(true)
+  })
+
+  it('drops the request subscriptions from the client store once the stream ends', async () => {
+    const main = new FakeMain()
+    const client = new AiModelClientService(main)
+    const storeSize = () =>
+      (client as unknown as { _store: { _toDispose: Set<IDisposable> } })._store._toDispose.size
+    const before = storeSize()
+
+    const token = new CancellationTokenSource()
+    const response = client.sendRequest(userMsg, { modelId: 'm' }, token.token)
+    await flush()
+    expect(storeSize()).toBe(before + 1)
+
+    main.onDidEndRequestEmitter.fire({ requestId: main.startedRequestId! })
+    await getTextResponse(response)
+    expect(main.transportSubs.every((s) => s.disposed)).toBe(true)
+    expect(storeSize()).toBe(before)
     client.dispose()
   })
 })
