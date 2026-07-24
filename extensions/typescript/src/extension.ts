@@ -16,6 +16,7 @@ import {
   StatusBarAlignment,
   type CompletionContext,
   type ExtensionContext,
+  type ReferenceContext,
   type SignatureHelpContext,
   type TextDocument,
   type UriComponents,
@@ -57,6 +58,25 @@ const SIGNATURE_RETRIGGER_CHARACTERS = [')']
 /** VSCode's semanticTokens.ts CONTENT_LENGTH_LIMIT: documents above this many
  *  characters get no semantic tokens (whole-file classification is too costly). */
 const SEMANTIC_TOKENS_CONTENT_LENGTH_LIMIT = 100_000
+
+/**
+ * Only real files may reach the language server (VSCode parity: its TS plugin's
+ * documentSelector carries `scheme: 'file'`; ours is language-only, so we gate
+ * here). Diff/peek views edit synthetic models on other schemes (diff-original /
+ * diff-modified) whose URIs the server can never resolve to a project — tsgo
+ * answers "no project found for URI …" and the rejection surfaces as a renderer
+ * error. Gates both document sync and every provider call.
+ */
+export function isServerBackedDocument(doc: Pick<TextDocument, 'languageId' | 'uri'>): boolean {
+  return TS_JS_LANGUAGES.includes(doc.languageId) && doc.uri.scheme === 'file'
+}
+
+/** Drop a provider call when its document isn't server-backed (see above). */
+function forServerDocs<Args extends unknown[], R>(
+  run: (doc: TextDocument, ...args: Args) => R,
+): (doc: TextDocument, ...args: Args) => R | null {
+  return (doc, ...args) => (isServerBackedDocument(doc) ? run(doc, ...args) : null)
+}
 
 function uriString(uri: UriComponents): string {
   return URI.from({
@@ -318,28 +338,36 @@ function registerStatusIndicator(context: ExtensionContext, client: LspClient): 
 function registerProviders(context: ExtensionContext, client: LspClient): void {
   context.subscriptions.push(
     languages.registerDefinitionProvider(TS_JS_LANGUAGES, {
-      provideDefinition: (doc, position) => client.provideDefinition(uriString(doc.uri), position),
+      provideDefinition: forServerDocs((doc, position) =>
+        client.provideDefinition(uriString(doc.uri), position),
+      ),
     }),
     languages.registerReferenceProvider(TS_JS_LANGUAGES, {
-      provideReferences: (doc, position, ctx) =>
+      provideReferences: forServerDocs((doc, position, ctx: ReferenceContext) =>
         client.provideReferences(uriString(doc.uri), position, ctx.includeDeclaration),
+      ),
     }),
     languages.registerImplementationProvider(TS_JS_LANGUAGES, {
-      provideImplementation: (doc, position) =>
+      provideImplementation: forServerDocs((doc, position) =>
         client.provideImplementation(uriString(doc.uri), position),
+      ),
     }),
     languages.registerTypeDefinitionProvider(TS_JS_LANGUAGES, {
-      provideTypeDefinition: (doc, position) =>
+      provideTypeDefinition: forServerDocs((doc, position) =>
         client.provideTypeDefinition(uriString(doc.uri), position),
+      ),
     }),
     languages.registerHoverProvider(TS_JS_LANGUAGES, {
-      provideHover: (doc, position) => client.provideHover(uriString(doc.uri), position),
+      provideHover: forServerDocs((doc, position) =>
+        client.provideHover(uriString(doc.uri), position),
+      ),
     }),
     languages.registerCompletionItemProvider(
       TS_JS_LANGUAGES,
       {
-        provideCompletionItems: (doc, position, ctx: CompletionContext) =>
+        provideCompletionItems: forServerDocs((doc, position, ctx: CompletionContext) =>
           client.provideCompletion(uriString(doc.uri), position, ctx),
+        ),
         resolveCompletionItem: (item) => client.resolveCompletion(item),
       },
       ...COMPLETION_TRIGGER_CHARACTERS,
@@ -347,8 +375,9 @@ function registerProviders(context: ExtensionContext, client: LspClient): void {
     languages.registerSignatureHelpProvider(
       TS_JS_LANGUAGES,
       {
-        provideSignatureHelp: (doc, position, ctx: SignatureHelpContext) =>
+        provideSignatureHelp: forServerDocs((doc, position, ctx: SignatureHelpContext) =>
           client.provideSignatureHelp(uriString(doc.uri), position, ctx),
+        ),
       },
       {
         triggerCharacters: SIGNATURE_TRIGGER_CHARACTERS,
@@ -356,11 +385,14 @@ function registerProviders(context: ExtensionContext, client: LspClient): void {
       },
     ),
     languages.registerDocumentSymbolProvider(TS_JS_LANGUAGES, {
-      provideDocumentSymbols: (doc) => client.provideDocumentSymbols(uriString(doc.uri)),
+      provideDocumentSymbols: forServerDocs((doc) =>
+        client.provideDocumentSymbols(uriString(doc.uri)),
+      ),
     }),
     languages.registerRenameProvider(TS_JS_LANGUAGES, {
-      provideRenameEdits: (doc, position, newName) =>
+      provideRenameEdits: forServerDocs((doc, position, newName: string) =>
         client.provideRenameEdits(uriString(doc.uri), position, newName),
+      ),
     }),
     languages.registerWorkspaceSymbolProvider({
       provideWorkspaceSymbols: (query, token) => client.provideWorkspaceSymbols(query, token),
@@ -377,7 +409,7 @@ function registerProviders(context: ExtensionContext, client: LspClient): void {
     { dispose: () => codeLensChange.dispose() },
     languages.registerCodeLensProvider(TS_JS_LANGUAGES, {
       onDidChangeCodeLenses: codeLensChange.event,
-      provideCodeLenses: (doc) => client.provideCodeLenses(uriString(doc.uri)),
+      provideCodeLenses: forServerDocs((doc) => client.provideCodeLenses(uriString(doc.uri))),
       resolveCodeLens: (lens) => client.resolveCodeLens(lens),
     }),
   )
@@ -392,7 +424,7 @@ function registerProviders(context: ExtensionContext, client: LspClient): void {
     context.subscriptions.push(
       languages.registerDocumentSemanticTokensProvider(TS_JS_LANGUAGES, {
         legend,
-        provideDocumentSemanticTokens: (doc) => {
+        provideDocumentSemanticTokens: forServerDocs((doc) => {
           const uri = uriString(doc.uri)
           // VSCode's TS extension bails above CONTENT_LENGTH_LIMIT: whole-file
           // classification of a huge document stalls (or OOMs) tsserver for a
@@ -405,16 +437,15 @@ function registerProviders(context: ExtensionContext, client: LspClient): void {
             return null
           }
           return client.provideDocumentSemanticTokens(uri)
-        },
+        }),
       }),
     )
   })
 }
 
 function registerDocumentSync(context: ExtensionContext, client: LspClient): void {
-  const isTsJs = (doc: TextDocument): boolean => TS_JS_LANGUAGES.includes(doc.languageId)
   const open = (doc: TextDocument): void => {
-    if (isTsJs(doc)) {
+    if (isServerBackedDocument(doc)) {
       // Live views: the host mirror mutates in place, so a crash-restart replay
       // re-primes tsserver with current text instead of a stale copy.
       void client.didOpen(
@@ -432,12 +463,12 @@ function registerDocumentSync(context: ExtensionContext, client: LspClient): voi
   context.subscriptions.push(
     workspace.onDidOpenTextDocument((doc) => open(doc)),
     workspace.onDidChangeTextDocument((e) => {
-      if (isTsJs(e.document)) {
+      if (isServerBackedDocument(e.document)) {
         void client.didChange(uriString(e.document.uri), e.document.version, e.contentChanges)
       }
     }),
     workspace.onDidCloseTextDocument((doc) => {
-      if (isTsJs(doc)) void client.didClose(uriString(doc.uri))
+      if (isServerBackedDocument(doc)) void client.didClose(uriString(doc.uri))
     }),
   )
 }

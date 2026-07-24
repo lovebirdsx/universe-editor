@@ -130,6 +130,7 @@ pnpm e2e          # 改了交互链路时跑冒烟，仅截错误
 8. **`.tsx` languageId** → 给 tsserver 必须是 `typescriptreact`/`javascriptreact`（`TS_JS_LANGUAGES` 四个），别用 `typescript`。
 9. **激活时序**：插件激活晚于文档打开 → `activate` 时遍历 `workspace.textDocuments` 补 didOpen（已实现，新语言插件照抄）。
 10. **崩溃恢复**：lspClient 重启后必须重推所有 open doc，否则补全/诊断全空。
+11. **虚拟 scheme 文档会打到 LSP（diff/peek 视图）**：Monaco 语言请求**不区分 model scheme**，而 `DocumentSelector` 只有 languageId 无 scheme 过滤；diff 视图的 `diff-original:`/`diff-modified:` 模型（`diffModelUri.ts`，只换 scheme、languageId 仍是 typescript）的 hover/补全/语义 tokens 会一路到 LSP——host 的 `ExtHostDocuments.getOrSynthesize` 对未同步 URI 还合成空文档兜底，请求必发。tsgo 对无 project 的 URI 报 `no project found for URI <uri>`（该字符串在 tsgo.exe 里，tsls/tsserver 源码搜不到），沿 RPC 回传成 renderer error 日志。**修法**（新语言插件照抄）：插件内统一谓词 `isServerBackedDocument`（languageId ∈ 支持集合 && `uri.scheme === 'file'`，对齐 VSCode TS 插件 selector 的 `scheme: 'file'`），门控 ①documentSync 的 open/change/close ②每个 provider 回调（`forServerDocs` 高阶包装，非 file 返回 null）。参考 `extensions/typescript/src/extension.ts` + 复现测试 `src/__tests__/documentScope.test.ts`。
 
 ## 关键参考路径
 - `extensions/typescript/src/extension.ts` —— 插件入口：activate + 10 类 provider 注册 + 文档同步（**新语言插件模板**）
