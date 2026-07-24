@@ -147,8 +147,7 @@ describe('ExtensionManagementMainService', () => {
     await writeFile(path.join(extDir, '.obsolete'), JSON.stringify({ 'acme.sample-1.0.0': true }))
 
     const svc2 = new ExtensionManagementMainService(() => extDir, HOST_API)
-    // Give the fire-and-forget sweep in the ctor a tick to run.
-    await new Promise((r) => setTimeout(r, 50))
+    await svc2.whenStartupSweepSettled
     expect(await exists(stale)).toBe(false)
     expect(await exists(path.join(extDir, '.obsolete'))).toBe(false)
     svc2.dispose()

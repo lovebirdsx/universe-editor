@@ -112,6 +112,9 @@ export class ExtensionManagementMainService
   /** identifier → local icon data URL ('' when none); invalidated on install/uninstall. */
   private readonly _localIconCache = new Map<string, string>()
 
+  /** Resolves when the constructor's best-effort startup sweep finishes (tests await this). */
+  readonly whenStartupSweepSettled: Promise<void>
+
   constructor(
     private readonly _resolveDir: UserExtensionsDirResolver = resolveUserExtensionsDir,
     private readonly _hostApiVersion: string = HOST_API_VERSION,
@@ -125,7 +128,7 @@ export class ExtensionManagementMainService
       name: 'Extension Management',
     })
     // Best-effort obsolete sweep on startup (files are unlocked now).
-    void this._sweepObsolete()
+    this.whenStartupSweepSettled = this._sweepObsolete()
   }
 
   /** Run `fn` after any in-flight management op; errors don't break the chain. */
