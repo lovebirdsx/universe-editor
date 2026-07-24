@@ -9,8 +9,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { defineConfig, type PlaywrightTestConfig } from '@playwright/test'
+import { cpus } from 'node:os'
 
 const isCI = Boolean(process.env['CI'])
+
+// Local worker count scales with the machine: each worker drives its own
+// Electron instance (shared-app fixture), so oversubscribing cores only
+// thrashes cold starts. Measured on a 16-core box: the full core main pass
+// dropped 222s → 114s going 4 → 8 workers. Cap at 8 — beyond that, concurrent
+// Electron cold launches starve each other and timing-sensitive specs flake.
+const localWorkers = Math.max(4, Math.min(8, Math.floor(cpus().length / 2)))
 
 // Tag-filtering policy — the SINGLE SOURCE OF TRUTH shared by the core + every
 // extension config + CI, so filtering behaves identically everywhere. The whole
@@ -69,8 +77,10 @@ export interface E2EConfigOptions {
 /**
  * Build the Playwright config every e2e suite shares. CI vs local knobs:
  *   - expect timeout: 10s on CI (contended cold starts — Monaco/LSP warmup), 5s local
- *   - retries: 1 on CI, 0 local
- *   - workers: 2 on CI (2-core runners starve at 4), 4 local
+ *   - retries: 1 — CI covers runner contention; local covers the occasional
+ *     timing flake that higher worker counts surface (a rerun is far cheaper
+ *     than a human re-running the suite)
+ *   - workers: 2 on CI (2-core runners starve at 4), core-scaled locally (≤8)
  *   - reporter: github + html on CI, list locally
  * `fullyParallel: false` and retain-on-failure trace/video/screenshot are constant.
  *
@@ -92,8 +102,8 @@ export function defineE2EConfig(options: E2EConfigOptions = {}): PlaywrightTestC
         ? { toHaveScreenshot: { animations: 'disabled' as const } }
         : {}),
     },
-    retries: isCI ? 1 : 0,
-    workers: isCI ? 2 : 4,
+    retries: 1,
+    workers: isCI ? 2 : localWorkers,
     fullyParallel: false,
     reporter: isCI
       ? [['github'], ['html', { open: 'never', outputFolder: 'playwright-report' }]]

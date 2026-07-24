@@ -23,7 +23,7 @@ import { dirname, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')

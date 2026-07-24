@@ -11,7 +11,7 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 
 test.describe('@p1 workspace settings UX', () => {
   test('openWorkspaceSettings opens Settings editor', async ({ workbench }) => {

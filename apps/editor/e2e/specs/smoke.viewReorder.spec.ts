@@ -13,7 +13,7 @@
  *  再用真实 DOM 几何断言「被展开的 pane 明显高于折叠的 pane」。
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 
 const CONTAINER = 'workbench.view.agents'
 const AGENTS_VIEW = 'workbench.view.agents.main'

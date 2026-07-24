@@ -13,7 +13,7 @@
  *  Selected" opens A as a preview first, so it reliably triggered the bug.
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
