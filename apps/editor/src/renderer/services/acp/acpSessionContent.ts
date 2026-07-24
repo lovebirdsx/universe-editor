@@ -85,6 +85,10 @@ export function timelineItemToText(item: TimelineItem | AcpChildItem): string {
       return item.compaction.reason
         ? `Compaction ${item.compaction.phase}: ${item.compaction.reason}`
         : `Compaction ${item.compaction.phase}`
+    case 'resurrection':
+      return item.resurrection.reason
+        ? `Session resurrection ${item.resurrection.phase}: ${item.resurrection.reason}`
+        : `Session resurrection ${item.resurrection.phase}`
   }
 }
 

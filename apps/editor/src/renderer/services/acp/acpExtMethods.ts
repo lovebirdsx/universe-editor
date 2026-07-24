@@ -30,6 +30,8 @@ export const ACP_EXT_METHODS = {
   rewindSession: 'universe-editor/rewind_session',
   /** agent->client notification: context-compaction lifecycle (start/success/failed). */
   compaction: '_universe/compaction',
+  /** agent->client notification: wedged-session resurrection lifecycle (start/success/failed). */
+  sessionResurrection: '_universe/sessionResurrection',
   /** agent->client notification: raw Claude SDK message passthrough (init snapshot). */
   sdkMessage: '_claude/sdkMessage',
 } as const

@@ -68,6 +68,7 @@ import { PromptInput } from './PromptInput.js'
 import { ForeignSessionFooter } from './ForeignSessionPreview.js'
 import { ToolCallCard } from './ToolCallCard.js'
 import { CompactionCard } from './CompactionCard.js'
+import { ResurrectionCard } from './ResurrectionCard.js'
 import { roleIcon } from './timelineIcons.js'
 import { UserMessageItem } from './UserMessageItem.js'
 import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
@@ -1545,6 +1546,14 @@ const TimelineSlot = memo(function TimelineSlot({
       return (
         <CompactionCard compaction={item.compaction} dataTimelineKey={key} dataStickyKey={key} />
       )
+    case 'resurrection':
+      return (
+        <ResurrectionCard
+          resurrection={item.resurrection}
+          dataTimelineKey={key}
+          dataStickyKey={key}
+        />
+      )
   }
 })
 
@@ -1638,6 +1647,9 @@ function estimateRow(item: TimelineItem | undefined, collapsed: boolean): number
     case 'compaction':
       // A single-line status card — fixed, compact height.
       return 44
+    case 'resurrection':
+      // Same single-line status card shape as compaction.
+      return 44
   }
 }
 
@@ -1667,6 +1679,9 @@ export function tailContentSignature(timeline: readonly TimelineItem[]): number 
       // grows without a length change; fold phase (+ reason) into the signature so
       // the bottom-pin effect re-fires when the card settles.
       return last.compaction.phase.length + (last.compaction.reason?.length ?? 0)
+    case 'resurrection':
+      // Same settle-in-place semantics as compaction (see above).
+      return last.resurrection.phase.length + (last.resurrection.reason?.length ?? 0)
   }
 }
 
@@ -1674,6 +1689,7 @@ function hasRenderableTimelineContent(timeline: readonly TimelineItem[]): boolea
   return timeline.some((item) => {
     if (item.kind === 'toolCall') return true
     if (item.kind === 'compaction') return true
+    if (item.kind === 'resurrection') return true
     const message = item.message
     return message.streaming || message.role === 'user' || hasVisibleMessageContent(message.blocks)
   })

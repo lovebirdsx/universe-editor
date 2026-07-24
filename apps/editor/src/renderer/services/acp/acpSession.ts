@@ -79,6 +79,8 @@ import {
   type AcpPlanEntry,
   type AcpCompaction,
   type AcpCompactionPhase,
+  type AcpResurrection,
+  type AcpResurrectionPhase,
   type AcpSessionStatus,
   type AcpSubagentStats,
   type AcpToolCall,
@@ -96,6 +98,7 @@ export {
   AcpAbortError,
   ASK_USER_QUESTION_METHOD,
   COMPACTION_METHOD,
+  RESURRECTION_METHOD,
   REWIND_SESSION_METHOD,
   SET_SESSION_TITLE_METHOD,
 } from './acpSessionModel.js'
@@ -111,6 +114,8 @@ export type {
   AcpPendingQuestion,
   AcpPlanEntry,
   AcpPlanEntryStatus,
+  AcpResurrection,
+  AcpResurrectionPhase,
   AcpSessionStatus,
   AcpSubagentStats,
   AcpToolCall,
@@ -1967,6 +1972,48 @@ export class AcpSession extends Disposable implements IAcpSession {
       ...(expectedDurationMs !== undefined ? { expectedDurationMs } : {}),
     }
     const slot: TimelineItem = { kind: 'compaction', id: slotId, compaction }
+    if (idx === -1) {
+      this._timeline = [...this._timeline, slot]
+    } else {
+      this._timeline = [...this._timeline.slice(0, idx), slot, ...this._timeline.slice(idx + 1)]
+    }
+    const tx = this._batchedTx()
+    this.timeline.set(this._timeline, tx)
+    this._commitBatchedTx()
+  }
+
+  /**
+   * Surface a wedged-session resurrection lifecycle event on the timeline. The
+   * `running` slot is appended when the adapter starts the resume; the terminal
+   * `success`/`failed` event replaces it in place via the stable `id`, so a
+   * single resurrection shows as one card that settles. Unlike compaction there
+   * is no progress estimate — a resume is spawn-plus-load, typically seconds —
+   * so the card only renders a live stopwatch. Read-only preview sessions ignore
+   * these (they never run turns).
+   */
+  applyResurrection(
+    id: string,
+    phase: AcpResurrectionPhase,
+    opts: { replayCount?: number; reason?: string } = {},
+  ): void {
+    if (this.readOnly) return
+    const slotId = `resurrection:${id}`
+    const idx = this._timeline.findIndex((it) => it.kind === 'resurrection' && it.id === slotId)
+    const prev = idx === -1 ? undefined : this._timeline[idx]
+    const prevStartedAt = prev?.kind === 'resurrection' ? prev.resurrection.startedAt : undefined
+    const startedAt = phase === 'running' ? Date.now() : prevStartedAt
+    const durationMs =
+      phase !== 'running' && startedAt !== undefined
+        ? Math.max(0, Date.now() - startedAt)
+        : undefined
+    const resurrection: AcpResurrection = {
+      phase,
+      ...(opts.replayCount !== undefined ? { replayCount: opts.replayCount } : {}),
+      ...(opts.reason != null ? { reason: opts.reason } : {}),
+      ...(startedAt !== undefined ? { startedAt } : {}),
+      ...(durationMs !== undefined ? { durationMs } : {}),
+    }
+    const slot: TimelineItem = { kind: 'resurrection', id: slotId, resurrection }
     if (idx === -1) {
       this._timeline = [...this._timeline, slot]
     } else {

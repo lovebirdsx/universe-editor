@@ -1762,6 +1762,81 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     svc.dispose()
   })
 
+  it('routes _universe/sessionResurrection notifications to a timeline slot that settles in place', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, new ConfigurationService())
+    const session = await svc.createSession()
+    await session.whenConnected()
+
+    svc.onExtNotification('_universe/sessionResurrection', {
+      sessionId: session.id,
+      id: 'res-1',
+      phase: 'start',
+      replayCount: 2,
+    })
+    const running = session.timeline.get().filter((it) => it.kind === 'resurrection')
+    expect(running).toHaveLength(1)
+    expect(running[0]).toMatchObject({
+      kind: 'resurrection',
+      resurrection: { phase: 'running', replayCount: 2 },
+    })
+
+    // The terminal event shares the id, so it replaces the running slot in place
+    // rather than appending a second card.
+    svc.onExtNotification('_universe/sessionResurrection', {
+      sessionId: session.id,
+      id: 'res-1',
+      phase: 'success',
+      replayCount: 2,
+    })
+    const settled = session.timeline.get().filter((it) => it.kind === 'resurrection')
+    expect(settled).toHaveLength(1)
+    expect(settled[0]).toMatchObject({
+      kind: 'resurrection',
+      resurrection: { phase: 'success', replayCount: 2 },
+    })
+    svc.dispose()
+  })
+
+  it('carries the failure reason on a failed resurrection', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, new ConfigurationService())
+    const session = await svc.createSession()
+    await session.whenConnected()
+    svc.onExtNotification('_universe/sessionResurrection', {
+      sessionId: session.id,
+      id: 'res-2',
+      phase: 'failed',
+      reason: 'resume failed',
+    })
+    const slot = session.timeline.get().find((it) => it.kind === 'resurrection')
+    expect(slot).toMatchObject({
+      kind: 'resurrection',
+      resurrection: { phase: 'failed', reason: 'resume failed' },
+    })
+    svc.dispose()
+  })
+
+  it('ignores malformed _universe/sessionResurrection payloads', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, new ConfigurationService())
+    const session = await svc.createSession()
+    await session.whenConnected()
+    // Missing id.
+    svc.onExtNotification('_universe/sessionResurrection', {
+      sessionId: session.id,
+      phase: 'start',
+    })
+    // Unknown phase.
+    svc.onExtNotification('_universe/sessionResurrection', {
+      sessionId: session.id,
+      id: 'res-x',
+      phase: 'bogus',
+    })
+    expect(session.timeline.get().filter((it) => it.kind === 'resurrection')).toEqual([])
+    svc.dispose()
+  })
+
   it('attributes MCP tool calls to their server from _meta.claudeCode.toolName', async () => {
     const client = new FakeAcpClientService()
     const svc = makeService(client, new ConfigurationService())

@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import { CheckCircle2, CircleAlert, Loader2 } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import type { AcpCompaction } from '../../services/acp/acpSession.js'
+import { formatElapsed } from './elapsedTime.js'
 import styles from './agents.module.css'
 
 const ICON_SIZE = 14
@@ -110,13 +111,6 @@ function estimatePercent(ms: number, expectedDurationMs?: number): number {
       : PROGRESS_TAU_MS
   const p = (1 - Math.exp(-ms / tau)) * 100
   return Math.min(99, Math.round(p))
-}
-
-function formatElapsed(ms: number): string {
-  const s = Math.floor(ms / 1000)
-  const m = Math.floor(s / 60)
-  if (m > 0) return `${m}:${String(s % 60).padStart(2, '0')}`
-  return `${s}s`
 }
 
 function content(compaction: AcpCompaction): { icon: React.ReactNode; text: string } {

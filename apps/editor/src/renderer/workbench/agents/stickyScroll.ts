@@ -10,9 +10,9 @@
 
 import type { AcpChildItem, TimelineItem } from '../../services/acp/acpSession.js'
 
-/** Stable per-card identity, shared with ChatBody's timeline keys (`m:`/`t:`/`c:`). */
+/** Stable per-card identity, shared with ChatBody's timeline keys (`m:`/`t:`/`c:`/`r:`). */
 export function itemSlotKey(item: {
-  readonly kind: 'message' | 'toolCall' | 'compaction'
+  readonly kind: 'message' | 'toolCall' | 'compaction' | 'resurrection'
   readonly id: string
 }): string {
   switch (item.kind) {
@@ -22,6 +22,8 @@ export function itemSlotKey(item: {
       return `t:${item.id}`
     case 'compaction':
       return `c:${item.id}`
+    case 'resurrection':
+      return `r:${item.id}`
   }
 }
 

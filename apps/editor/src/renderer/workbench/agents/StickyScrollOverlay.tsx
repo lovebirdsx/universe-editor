@@ -208,10 +208,14 @@ function headerContent(item: TimelineItem | AcpChildItem): HeaderContent {
       label: item.message.role,
     }
   }
-  // A compaction slot never sticks (it has no collapsible header, so measure()
-  // skips it and it never enters the stack), but the union is exhaustive here.
+  // A compaction/resurrection slot never sticks (it has no collapsible header,
+  // so measure() skips it and it never enters the stack), but the union is
+  // exhaustive here.
   if (item.kind === 'compaction') {
     return { icon: null, text: item.compaction.phase, status: null, label: 'compaction' }
+  }
+  if (item.kind === 'resurrection') {
+    return { icon: null, text: item.resurrection.phase, status: null, label: 'resurrection' }
   }
   return {
     icon: toolKindIcon(item.call.kind),

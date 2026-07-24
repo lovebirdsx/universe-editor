@@ -75,6 +75,7 @@ import { AcpQuestionDraftCache } from './acpQuestionDraftCache.js'
 import {
   AcpSession,
   COMPACTION_METHOD,
+  RESURRECTION_METHOD,
   type AcpConnectionLostEvent,
   type AcpPendingPermission,
   type AcpPendingQuestion,
@@ -1216,6 +1217,10 @@ export class AcpSessionService
       this._handleCompactionNotification(params)
       return
     }
+    if (method === RESURRECTION_METHOD) {
+      this._handleResurrectionNotification(params)
+      return
+    }
     if (method !== SDK_MESSAGE_EXT_METHOD) return
     const sessionId = params['sessionId']
     const message = params['message']
@@ -1244,6 +1249,23 @@ export class AcpSessionService
     if (!session) return
     const reason = typeof params['reason'] === 'string' ? params['reason'] : undefined
     session.applyCompaction(id, phase === 'start' ? 'running' : phase, reason)
+  }
+
+  private _handleResurrectionNotification(params: Record<string, unknown>): void {
+    const sessionId = params['sessionId']
+    const id = params['id']
+    const phase = params['phase']
+    if (typeof sessionId !== 'string' || typeof id !== 'string') return
+    if (phase !== 'start' && phase !== 'success' && phase !== 'failed') return
+    const session = this._findSession(sessionId)
+    if (!session) return
+    const replayCount =
+      typeof params['replayCount'] === 'number' ? params['replayCount'] : undefined
+    const reason = typeof params['reason'] === 'string' ? params['reason'] : undefined
+    session.applyResurrection(id, phase === 'start' ? 'running' : phase, {
+      ...(replayCount !== undefined ? { replayCount } : {}),
+      ...(reason !== undefined ? { reason } : {}),
+    })
   }
 
   async onRequestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {

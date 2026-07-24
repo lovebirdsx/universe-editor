@@ -8,13 +8,13 @@
  *  so it is always prefixed with ≈ and converted to CNY via the daily rate.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useState } from 'react'
 import { Bot, Clock, Coins } from 'lucide-react'
 import type {
   AcpSubagentStats,
   AcpToolCall,
   AcpToolCallStatus,
 } from '../../services/acp/acpSessionService.js'
+import { useElapsedTime } from './elapsedTime.js'
 import { useUsdToCnyRate } from './useExchangeRate.js'
 import { formatCny, formatTokens } from './SessionCostIndicator.js'
 import styles from './agents.module.css'
@@ -70,16 +70,7 @@ function useRunDuration(
   startedAt: number | undefined,
   durationMs: number | undefined,
 ): string | null {
-  const running = status === 'pending' || status === 'in_progress'
-  const [, setTick] = useState(0)
-  useEffect(() => {
-    if (!running || startedAt === undefined) return
-    const id = setInterval(() => setTick((n) => n + 1), 1000)
-    return () => clearInterval(id)
-  }, [running, startedAt])
-  if (durationMs !== undefined) return formatElapsed(durationMs)
-  if (running && startedAt !== undefined) return formatElapsed(Math.max(0, Date.now() - startedAt))
-  return null
+  return useElapsedTime(status === 'pending' || status === 'in_progress', startedAt, durationMs)
 }
 
 function tokenSummary(stats: AcpSubagentStats): string | undefined {
@@ -87,13 +78,6 @@ function tokenSummary(stats: AcpSubagentStats): string | undefined {
   const output = stats.outputTokens
   if (input + output === 0) return undefined
   return `↑${formatTokens(input)} ↓${formatTokens(output)}`
-}
-
-function formatElapsed(ms: number): string {
-  const s = Math.floor(ms / 1000)
-  const m = Math.floor(s / 60)
-  if (m > 0) return `${m}:${String(s % 60).padStart(2, '0')}`
-  return `${s}s`
 }
 
 /** Trim a provider model id to its recognizable family. */

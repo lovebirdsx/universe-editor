@@ -190,6 +190,31 @@ export type TimelineItem =
   | { readonly kind: 'message'; readonly id: string; readonly message: AcpMessage }
   | { readonly kind: 'toolCall'; readonly id: string; readonly call: AcpToolCall }
   | { readonly kind: 'compaction'; readonly id: string; readonly compaction: AcpCompaction }
+  | { readonly kind: 'resurrection'; readonly id: string; readonly resurrection: AcpResurrection }
+
+/** Lifecycle phase of a wedged-session resurrection surfaced on the timeline. */
+export type AcpResurrectionPhase = 'running' | 'success' | 'failed'
+
+/**
+ * A wedged-session resurrection marker on the timeline. When a cancelled turn
+ * leaves the agent genuinely unresponsive (the force-cancel floor elapsed
+ * without the SDK yielding), the adapter kills the wedged subprocess and
+ * resumes the session from its on-disk transcript; this slot renders a status
+ * card (spinner while `running`, a settled marker on `success`/`failed`) so
+ * the user understands why a follow-up message takes seconds to answer. The
+ * `running` slot is replaced in place with its outcome via the stable `id`.
+ */
+export interface AcpResurrection {
+  readonly phase: AcpResurrectionPhase
+  /** How many queued prompts are being replayed onto the fresh query. */
+  readonly replayCount?: number
+  /** Failure detail on `phase: 'failed'`, if the agent reported one. */
+  readonly reason?: string
+  /** Wall-clock start (ms, `Date.now()`) stamped when `running` begins; the card renders a live stopwatch from this. */
+  readonly startedAt?: number
+  /** Elapsed ms at settle, computed on `success`/`failed` from `startedAt`. */
+  readonly durationMs?: number
+}
 
 /** Lifecycle phase of a context-compaction event surfaced on the timeline. */
 export type AcpCompactionPhase = 'running' | 'success' | 'failed'
@@ -280,6 +305,18 @@ export const REWIND_SESSION_METHOD = ACP_EXT_METHODS.rewindSession
  * compaction so the in-progress card is replaced in place with its outcome.
  */
 export const COMPACTION_METHOD = ACP_EXT_METHODS.compaction
+
+/**
+ * Custom ACP extension notification the agent fork sends around a wedged-session
+ * resurrection (`start` / `success` / `failed`) — a cancelled turn that left the
+ * SDK genuinely unresponsive forces the adapter to kill the query and resume the
+ * session from its transcript; the editor renders a timeline card so the user
+ * understands why the follow-up answer takes seconds. Shared verbatim with the
+ * agent fork's `acp-agent.ts` (`RESURRECTION_METHOD`) — keep both in sync.
+ * Params: `{ sessionId, id, phase, replayCount?, reason? }` where `id` is unique
+ * per resurrection so the in-progress card is replaced in place with its outcome.
+ */
+export const RESURRECTION_METHOD = ACP_EXT_METHODS.sessionResurrection
 
 /** Result the agent returns from {@link REWIND_SESSION_METHOD} (mirrors the SDK's RewindFilesResult). */
 export interface RewindFilesResult {

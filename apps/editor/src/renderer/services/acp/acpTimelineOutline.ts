@@ -102,6 +102,9 @@ function itemLabel(item: TimelineItem | AcpChildItem): string {
   if (item.kind === 'compaction') {
     return `Compaction (${item.compaction.phase})`
   }
+  if (item.kind === 'resurrection') {
+    return `Session resurrection (${item.resurrection.phase})`
+  }
   const title = deriveToolCallDisplay(item.call).title
   return title.length > 0 ? title : item.call.kind
 }
@@ -109,6 +112,7 @@ function itemLabel(item: TimelineItem | AcpChildItem): string {
 function itemKind(item: TimelineItem | AcpChildItem): number {
   if (item.kind === 'message') return encodeMessageKind(item.message.role)
   if (item.kind === 'compaction') return encodeToolKind('other')
+  if (item.kind === 'resurrection') return encodeToolKind('other')
   return encodeToolKind(item.call.kind)
 }
 
