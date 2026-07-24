@@ -25,7 +25,7 @@ import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readRegistry } from '../gallery/lib.mjs'
-import { discoverExtensions, filterIncremental, selectExtensions } from './lib.mjs'
+import { discoverExtensions, depsInstallPlan, filterIncremental, selectExtensions } from './lib.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '..', '..')
@@ -122,6 +122,11 @@ console.log(`\n待发布 (${toPublish.length}): ${toPublish.map((e) => `${e.id}@
 const vsixPaths = []
 for (const ext of toPublish) {
   console.log(`\n── ${ext.id}@${ext.version} ──`)
+  const install = depsInstallPlan(ext)
+  if (install) {
+    info('  检测到未安装的运行时依赖，先装依赖')
+    run(install.cmd, install.args, ext.extDir)
+  }
   run('npm', ['run', 'build'], ext.extDir)
   run('npm', ['run', 'package'], ext.extDir)
   const vsixPath = join(ext.extDir, `${ext.id}-${ext.version}.vsix`)

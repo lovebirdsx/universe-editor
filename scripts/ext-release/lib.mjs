@@ -61,7 +61,9 @@ export function selectExtensions(all, selectors) {
   for (const sel of selectors) {
     const match = all.find((e) => e.dir === sel || e.id === sel)
     if (!match) {
-      return { error: `未找到可发布扩展: ${sel}（可选: ${all.map((e) => e.dir).join(', ') || '无'}）` }
+      return {
+        error: `未找到可发布扩展: ${sel}（可选: ${all.map((e) => e.dir).join(', ') || '无'}）`,
+      }
     }
     selected.push(match)
   }
@@ -74,6 +76,19 @@ export function alreadyPublished(registry, ext) {
     (e) => e.publisher === ext.manifest.publisher && e.name === ext.manifest.name,
   )
   return !!found?.versions?.some((v) => v.version === ext.version)
+}
+
+/**
+ * build 前的依赖安装计划。这些扩展在 pnpm workspace 外、有自己的 node_modules
+ * （运行时 deps 会被 bundle 进产物），干净环境（CI / 重 clone）下没人替它装，
+ * 不装则 esbuild 解析不到依赖直接挂。node_modules 已存在则信任现状，返回 null。
+ */
+export function depsInstallPlan(ext) {
+  const deps = ext.manifest.dependencies
+  if (!deps || Object.keys(deps).length === 0) return null
+  if (existsSync(join(ext.extDir, 'node_modules'))) return null
+  const args = existsSync(join(ext.extDir, 'package-lock.json')) ? ['ci'] : ['install']
+  return { cmd: 'npm', args }
 }
 
 /** 应用增量判定，返回需要发布的扩展（force=true 则全部）。 */

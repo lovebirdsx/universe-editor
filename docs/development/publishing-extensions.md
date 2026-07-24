@@ -39,7 +39,7 @@ pnpm ext:release -- --dry-run
 
 1. **自动发现**：扫 `extensions-external/*`，只挑 manifest **合法**的目录（非 `private`，且有 `publisher`、`name`、`version`、`engines.universe`——这几项是市场防投毒校验的硬要求）。不合法的目录打印 `skip <名字> (原因)` 后忽略。
 2. **增量判定**：若某扩展的 `<publisher>.<name>@<version>` 已在 stage 的 `registry.json` 里，跳过它的 build/打包/发布（打印 `skip ...@... (registry 已有)`）。要重发同一版本用 `--force`。
-3. **build + 打包**：对每个待发布扩展，在其目录跑 `npm run build` 与 `npm run package`。`package` 调各扩展的 `scripts/pack.mjs`，后者是 `@universe-editor/extension-packaging` 的 `createVsix` 的薄封装——**打进 `.vsix` 的文件由该扩展 `package.json` 的 `files[]` 决定**（外加存在时的 `README.md`/`CHANGELOG.md`），与 app 内置扩展的打包逻辑同一套规则，不会漂移。
+3. **装依赖 → build + 打包**：对每个待发布扩展，若其 `package.json` 声明了运行时 `dependencies` 且本地还没装（这些扩展在 pnpm workspace 外、有自己的 `node_modules`，依赖会 bundle 进产物），先在其目录跑 `npm ci`（有 `package-lock.json`）或 `npm install`；然后跑 `npm run build` 与 `npm run package`。`package` 调各扩展的 `scripts/pack.mjs`，后者是 `@universe-editor/extension-packaging` 的 `createVsix` 的薄封装——**打进 `.vsix` 的文件由该扩展 `package.json` 的 `files[]` 决定**（外加存在时的 `README.md`/`CHANGELOG.md`），与 app 内置扩展的打包逻辑同一套规则，不会漂移。
 4. **发布进 stage**：调 `scripts/gallery/publish.mjs`，把 `.vsix` 落地到 `<stage>/gallery/assets/**` 并 upsert `registry.json`。
 5. **上传**（除非 `--no-upload`）：调 `scripts/gallery/upload.mjs`，把 stage 的市场内容 `scp` 到服务器市场根（先 assets、后 registry.json，避免半态）。
 

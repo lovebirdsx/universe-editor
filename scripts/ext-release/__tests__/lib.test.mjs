@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   alreadyPublished,
+  depsInstallPlan,
   discoverExtensions,
   filterIncremental,
   ineligibleReason,
@@ -93,6 +94,30 @@ test('alreadyPublished 命中 publisher.name@version', () => {
   assert.equal(alreadyPublished(registry, ext), true)
   assert.equal(alreadyPublished(registry, { manifest: validManifest, version: '1.0.1' }), false)
   assert.equal(alreadyPublished({ extensions: [] }, ext), false)
+})
+
+test('depsInstallPlan：无依赖或已装 → null；缺 node_modules → ci（有 lock）/ install（无 lock）', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ext-release-deps-'))
+  const extDir = join(root, 'ext')
+  mkdirSync(extDir, { recursive: true })
+
+  assert.equal(depsInstallPlan({ extDir, manifest: validManifest }), null)
+  assert.equal(depsInstallPlan({ extDir, manifest: { ...validManifest, dependencies: {} } }), null)
+
+  const withDeps = { ...validManifest, dependencies: { x: '1.0.0' } }
+  assert.deepEqual(depsInstallPlan({ extDir, manifest: withDeps }), {
+    cmd: 'npm',
+    args: ['install'],
+  })
+
+  writeFileSync(join(extDir, 'package-lock.json'), '{}')
+  assert.deepEqual(depsInstallPlan({ extDir, manifest: withDeps }), {
+    cmd: 'npm',
+    args: ['ci'],
+  })
+
+  mkdirSync(join(extDir, 'node_modules'))
+  assert.equal(depsInstallPlan({ extDir, manifest: withDeps }), null)
 })
 
 test('filterIncremental 跳过已发布，force 全量', () => {
