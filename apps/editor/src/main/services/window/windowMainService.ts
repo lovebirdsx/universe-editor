@@ -533,16 +533,21 @@ export class WindowMainService implements IWindowMainService {
             `confirmQuit requester=${requestingWindowId} runningSessions=${runningSessionCount}`,
           )
         if (
-          !(await this._canProceed(requestingWindow.rendererLifecycle, ShutdownReason.Quit, {
-            runningSessionCount,
-          }))
+          !(await this._canProceed(
+            requestingWindowId,
+            requestingWindow.rendererLifecycle,
+            ShutdownReason.Quit,
+            {
+              runningSessionCount,
+            },
+          ))
         ) {
           return false
         }
         for (const [windowId, { win, rendererLifecycle }] of this._windows) {
           if (windowId === requestingWindowId || win.isDestroyed()) continue
           if (
-            !(await this._canProceed(rendererLifecycle, ShutdownReason.Quit, {
+            !(await this._canProceed(windowId, rendererLifecycle, ShutdownReason.Quit, {
               skipRunningSessionPrompt: true,
             }))
           ) {
@@ -556,7 +561,7 @@ export class WindowMainService implements IWindowMainService {
 
     for (const { win, rendererLifecycle } of this._windows.values()) {
       if (win.isDestroyed()) continue
-      if (!(await this._canProceed(rendererLifecycle, ShutdownReason.Quit))) return false
+      if (!(await this._canProceed(win.id, rendererLifecycle, ShutdownReason.Quit))) return false
     }
     this.markQuitConfirmed()
     return true
@@ -575,7 +580,11 @@ export class WindowMainService implements IWindowMainService {
 
   /** Run the renderer veto round-trip for a single window close, then close. */
   private async _confirmAndClose(entry: WindowEntry): Promise<void> {
-    const proceed = await this._canProceed(entry.rendererLifecycle, ShutdownReason.CloseWindow)
+    const proceed = await this._canProceed(
+      entry.win.id,
+      entry.rendererLifecycle,
+      ShutdownReason.CloseWindow,
+    )
     if (!proceed) return
     this._allowClose.add(entry.win.id)
     if (!entry.win.isDestroyed()) entry.win.close()
@@ -583,29 +592,43 @@ export class WindowMainService implements IWindowMainService {
 
   /** Ask the renderer; treat an unreachable renderer / error / timeout as "proceed". */
   private async _canProceed(
+    windowId: number,
     rendererLifecycle: IRendererLifecycleService,
     reason: ShutdownReason,
     context?: ShutdownConfirmationContext,
   ): Promise<boolean> {
+    // A wedged renderer (e.g. a hung JS main thread) may never answer the veto
+    // round-trip. The IPC channel only rejects on window teardown, so without a
+    // timeout here the quit/close flow would hang silently forever. Bound the
+    // wait and treat a non-answer as "release the veto" — an unresponsive
+    // renderer must not be able to block the app from quitting.
+    const confirm = rendererLifecycle.confirmShutdown(reason, context)
+    // If the timeout wins the race, a late rejection from the renderer (e.g. the
+    // channel disposed during window teardown) would surface as an unhandled
+    // rejection — the race no longer observes it.
+    void confirm.catch(() => undefined)
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      // A wedged renderer (e.g. a hung JS main thread) may never answer the veto
-      // round-trip. The IPC channel only rejects on window teardown, so without a
-      // timeout here the quit/close flow would hang silently forever. Bound the
-      // wait and treat a non-answer as "release the veto" — an unresponsive
-      // renderer must not be able to block the app from quitting.
       return await Promise.race([
-        rendererLifecycle.confirmShutdown(reason, context),
-        new Promise<boolean>((resolve) =>
-          setTimeout(() => {
+        confirm,
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => {
             this._opts.logService
               .createLogger({ id: 'window', name: 'Window' })
-              .warn(`confirmShutdown timed out after ${CONFIRM_SHUTDOWN_TIMEOUT_MS}ms; proceeding`)
+              .warn(
+                `confirmShutdown timed out after ${CONFIRM_SHUTDOWN_TIMEOUT_MS}ms id=${windowId} reason=${reason}; proceeding`,
+              )
             resolve(true)
-          }, CONFIRM_SHUTDOWN_TIMEOUT_MS),
-        ),
+          }, CONFIRM_SHUTDOWN_TIMEOUT_MS)
+        }),
       ])
     } catch {
       return true
+    } finally {
+      // The renderer answered (or the channel rejected) before the deadline:
+      // cancel the timer so it cannot fire later and log a phantom timeout for
+      // a round-trip that actually succeeded.
+      clearTimeout(timer)
     }
   }
 

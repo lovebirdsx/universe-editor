@@ -297,6 +297,38 @@ describe('WindowMainService', () => {
     expect(userData.dispose).toHaveBeenCalled()
   })
 
+  it('does not warn about a timeout when confirmShutdown answers promptly', async () => {
+    // Regression: _canProceed raced the renderer round-trip against an untracked
+    // setTimeout. A prompt answer won the race, but the timer was never cleared —
+    // 10s later it still fired and logged "confirmShutdown timed out … proceeding",
+    // a phantom warning for a confirmation that actually succeeded (seen in the
+    // wild as a lone warn exactly 10s after a window closed cleanly).
+    const opts = makeOpts()
+    const warn = vi.fn()
+    vi.spyOn(opts.logService, 'createLogger').mockReturnValue({
+      level: 0,
+      trace: vi.fn(),
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn,
+      error: vi.fn(),
+      flush: vi.fn(),
+      dispose: vi.fn(),
+    } as never)
+    const svc = new WindowMainService(opts)
+    await svc.createWindow()
+
+    vi.useFakeTimers()
+    try {
+      // The default bootstrapWindowIpc mock answers confirmShutdown immediately.
+      await expect(svc.confirmQuit()).resolves.toBe(true)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('proceeds with quit when a wedged renderer never answers confirmShutdown', async () => {
     // A renderer whose main thread is stuck never resolves the veto round-trip.
     // Without the timeout in _canProceed this would hang confirmQuit forever;
