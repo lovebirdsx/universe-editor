@@ -17,7 +17,9 @@
 
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
-import { statSync } from 'node:fs'
+import { statSync, promises as fsp } from 'node:fs'
+import { release as osRelease } from 'node:os'
+import { execFile as execFileCb, spawn } from 'node:child_process'
 import {
   createNamedLogger,
   Disposable,
@@ -28,10 +30,13 @@ import {
 } from '@universe-editor/platform'
 import type { IPty } from '@lydell/node-pty'
 import { buildChildEnv } from '../process/env.js'
+import { detectAvailableProfiles, type ITerminalProfilesDeps } from './terminalProfiles.js'
 import type {
   ITerminalCreatedInfo,
   ITerminalDataEvent,
   ITerminalExitEvent,
+  ITerminalProfile,
+  ITerminalProfilesRequest,
   ITerminalService,
   ITerminalSpawnSpec,
   ITerminalTitleEvent,
@@ -68,6 +73,83 @@ const DEFAULT_ROWS = 24
 function defaultShell(): string {
   if (process.platform === 'win32') return process.env['COMSPEC'] ?? 'cmd.exe'
   return process.env['SHELL'] ?? '/bin/bash'
+}
+
+/**
+ * Spawn a detection probe (wsl.exe) with a hard kill guarantee. Node's
+ * execFile timeout sends SIGTERM — which a wsl.exe stuck in an unresponsive
+ * wslservice RPC survives (observed: orphans living 8+ minutes until
+ * `taskkill /F`). Orphaned probes hold inherited handles that wedge
+ * Playwright's pipe close in e2e and leak in production. So we own the child:
+ * stdin ignored (wsl.exe blocks on an open stdin pipe), stdout collected,
+ * and on timeout a `taskkill /T /F` that empirically always reaps.
+ */
+function runDetectionProbe(
+  file: string,
+  args: readonly string[],
+  options: { encoding: BufferEncoding; timeout: number; env: NodeJS.ProcessEnv },
+): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn(file, [...args], {
+      env: options.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding(options.encoding)
+    child.stderr.setEncoding(options.encoding)
+    child.stdout.on('data', (chunk: string) => (stdout += chunk))
+    child.stderr.on('data', (chunk: string) => (stderr += chunk))
+    const timer = setTimeout(() => {
+      if (process.platform === 'win32' && child.pid !== undefined) {
+        execFileCb('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => undefined)
+      } else {
+        child.kill('SIGKILL')
+      }
+    }, options.timeout)
+    child.once('error', (err) => {
+      clearTimeout(timer)
+      reject(err)
+    })
+    child.once('close', (code) => {
+      clearTimeout(timer)
+      if (code === 0) resolve(stdout)
+      else reject(new Error(`Command failed: ${file} ${args.join(' ')}\n${stderr}`))
+    })
+  })
+}
+
+function windowsBuildNumber(platform: NodeJS.Platform): number {
+  if (platform !== 'win32') return 0
+  // os.release() looks like "10.0.19045" on Windows 10/11
+  const build = parseInt(osRelease().split('.')[2] ?? '', 10)
+  return Number.isNaN(build) ? 0 : build
+}
+
+function defaultProfileDeps(
+  platform: NodeJS.Platform,
+  log: (message: string) => void,
+): ITerminalProfilesDeps {
+  const statKind = (p: string): Promise<'file' | 'dir' | 'missing'> =>
+    fsp.stat(p).then(
+      (s) => (s.isDirectory() ? 'dir' : 'file'),
+      () => 'missing',
+    )
+  return {
+    fs: {
+      existsFile: async (p) => (await statKind(p)) === 'file',
+      readFile: (p) => fsp.readFile(p),
+      existsDirectory: async (p) => (await statKind(p)) === 'dir',
+      readdir: (p) => fsp.readdir(p),
+    },
+    execFile: runDetectionProbe,
+    env: process.env,
+    platform,
+    windowsBuildNumber: windowsBuildNumber(platform),
+    processArch: process.arch,
+    log,
+  }
 }
 
 function basename(p: string): string {
@@ -128,6 +210,7 @@ export class TerminalMainService extends Disposable implements ITerminalService 
     loggerService?: { createLogger(channel: ILogChannel): ILogger },
     private readonly _cwdStat: CwdStat = statSync,
     private readonly _platform: NodeJS.Platform = process.platform,
+    private readonly _profileDeps?: ITerminalProfilesDeps,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'terminal', name: 'Terminal' })
@@ -179,6 +262,12 @@ export class TerminalMainService extends Disposable implements ITerminalService 
 
     this._logger.info(`create id=${id} pid=${pty.pid} shell=${shell} cwd=${cwd ?? ''}`)
     return Promise.resolve(info)
+  }
+
+  getProfiles(request: ITerminalProfilesRequest): Promise<readonly ITerminalProfile[]> {
+    const deps =
+      this._profileDeps ?? defaultProfileDeps(this._platform, (m) => this._logger.warn(m))
+    return detectAvailableProfiles(request, deps)
   }
 
   input(id: string, data: string): Promise<void> {

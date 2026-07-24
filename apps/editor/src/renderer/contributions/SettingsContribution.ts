@@ -413,21 +413,105 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Which terminal to launch on Windows when running "Open in External Terminal".',
             ),
           },
-          'terminal.integrated.shell': {
+          'terminal.integrated.profiles.windows': {
+            type: 'object',
+            default: {},
+            additionalProperties: {
+              anyOf: [
+                { type: 'null' },
+                {
+                  type: 'object',
+                  properties: {
+                    path: {
+                      anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+                    },
+                    args: { type: 'array', items: { type: 'string' } },
+                    env: { type: 'object' },
+                  },
+                },
+              ],
+            },
+            description: localize(
+              'settings.terminal.integrated.profiles.windows.description',
+              'Terminal profiles on Windows, e.g. { "Git Bash": null, "My Shell": { "path": "C:\\\\bin\\\\sh.exe", "args": ["-l"] } }. A profile set to null removes the auto-detected one of the same name; an object overrides only the fields it declares.',
+            ),
+          },
+          'terminal.integrated.profiles.osx': {
+            type: 'object',
+            default: {},
+            additionalProperties: {
+              anyOf: [
+                { type: 'null' },
+                {
+                  type: 'object',
+                  properties: {
+                    path: {
+                      anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+                    },
+                    args: { type: 'array', items: { type: 'string' } },
+                    env: { type: 'object' },
+                  },
+                },
+              ],
+            },
+            description: localize(
+              'settings.terminal.integrated.profiles.osx.description',
+              'Terminal profiles on macOS. A profile set to null removes the auto-detected one of the same name; an object overrides only the fields it declares.',
+            ),
+          },
+          'terminal.integrated.profiles.linux': {
+            type: 'object',
+            default: {},
+            additionalProperties: {
+              anyOf: [
+                { type: 'null' },
+                {
+                  type: 'object',
+                  properties: {
+                    path: {
+                      anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+                    },
+                    args: { type: 'array', items: { type: 'string' } },
+                    env: { type: 'object' },
+                  },
+                },
+              ],
+            },
+            description: localize(
+              'settings.terminal.integrated.profiles.linux.description',
+              'Terminal profiles on Linux. A profile set to null removes the auto-detected one of the same name; an object overrides only the fields it declares.',
+            ),
+          },
+          'terminal.integrated.defaultProfile.windows': {
             type: 'string',
             default: '',
             description: localize(
-              'settings.terminal.integrated.shell.description',
-              'The default shell for new integrated terminals. Leave empty to use the system default.',
+              'settings.terminal.integrated.defaultProfile.windows.description',
+              'The default terminal profile name on Windows (from the profiles list). Leave empty to use PowerShell.',
             ),
           },
-          'terminal.integrated.shellArgs': {
-            type: 'array',
-            items: { type: 'string' },
-            default: [],
+          'terminal.integrated.defaultProfile.osx': {
+            type: 'string',
+            default: '',
             description: localize(
-              'settings.terminal.integrated.shellArgs.description',
-              'Arguments to pass to the default integrated terminal shell.',
+              'settings.terminal.integrated.defaultProfile.osx.description',
+              'The default terminal profile name on macOS (from the profiles list). Leave empty to use the login shell.',
+            ),
+          },
+          'terminal.integrated.defaultProfile.linux': {
+            type: 'string',
+            default: '',
+            description: localize(
+              'settings.terminal.integrated.defaultProfile.linux.description',
+              'The default terminal profile name on Linux (from the profiles list). Leave empty to use the login shell.',
+            ),
+          },
+          'terminal.integrated.useWslProfiles': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.terminal.integrated.useWslProfiles.description',
+              'Controls whether or not WSL distros are shown in the terminal profile list (Windows only).',
             ),
           },
           'terminal.integrated.cwd': {

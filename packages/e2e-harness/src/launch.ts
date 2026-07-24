@@ -181,7 +181,15 @@ export async function closeApp(app: ElectronApplication): Promise<void> {
 
 /** userData files every fixture seeds a fresh instance with. */
 export const INITIAL_SETTINGS = JSON.stringify(
-  { 'workbench.language': 'en-US', 'update.mode': 'manual' },
+  {
+    'workbench.language': 'en-US',
+    'update.mode': 'manual',
+    // wsl.exe probes hang when wslservice is contended by parallel workers,
+    // and a stuck wsl.exe survives Node's SIGTERM — orphaning a process that
+    // wedges app.close(). WSL profile detection is covered by unit tests;
+    // e2e doesn't need the machine-dependent probe.
+    'terminal.integrated.useWslProfiles': false,
+  },
   null,
   2,
 )

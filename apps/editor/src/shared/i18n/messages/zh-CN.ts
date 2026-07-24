@@ -597,9 +597,20 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.terminal.integrated.fontSize.description': '控制终端字体大小（像素）。',
   'settings.terminal.integrated.scrollback.description':
     '终端滚动缓冲（历史）中保留的最大行数。切回终端编辑器时会恢复。设为 0 表示无限制。',
-  'settings.terminal.integrated.shell.description':
-    '新建集成终端使用的默认 shell。留空则使用系统默认值。',
-  'settings.terminal.integrated.shellArgs.description': '传给默认集成终端 shell 的参数。',
+  'settings.terminal.integrated.profiles.windows.description':
+    'Windows 上的终端 profile，例如 { "Git Bash": null, "My Shell": { "path": "C:\\\\bin\\\\sh.exe", "args": ["-l"] } }。值为 null 表示删除同名自动检测 profile；对象只覆盖其声明的字段。',
+  'settings.terminal.integrated.profiles.osx.description':
+    'macOS 上的终端 profile。值为 null 表示删除同名自动检测 profile；对象只覆盖其声明的字段。',
+  'settings.terminal.integrated.profiles.linux.description':
+    'Linux 上的终端 profile。值为 null 表示删除同名自动检测 profile；对象只覆盖其声明的字段。',
+  'settings.terminal.integrated.defaultProfile.windows.description':
+    'Windows 上默认终端 profile 的名称（来自 profile 列表）。留空则使用 PowerShell。',
+  'settings.terminal.integrated.defaultProfile.osx.description':
+    'macOS 上默认终端 profile 的名称（来自 profile 列表）。留空则使用登录 shell。',
+  'settings.terminal.integrated.defaultProfile.linux.description':
+    'Linux 上默认终端 profile 的名称（来自 profile 列表）。留空则使用登录 shell。',
+  'settings.terminal.integrated.useWslProfiles.description':
+    '控制是否在终端 profile 列表中显示 WSL 发行版（仅 Windows）。',
   'settings.title': '设置',
   'settings.title.workbench': '工作台',
   'settings.update': '更新',
@@ -866,6 +877,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'terminal.close': '关闭终端',
   'terminal.empty': '没有终端。',
   'terminal.noTerminals': '没有终端',
+  'terminal.profiles.default': '（默认）',
+  'terminal.profiles.empty': '未检测到可用的 shell profile',
+  'terminal.profiles.loading': '正在检测 shell…',
   'terminal.selectInstance': '选择终端实例',
   'terminal.selectShell': '选择 Shell',
   'terminal.splitWithKey': '拆分终端 (Ctrl+Shift+5)',

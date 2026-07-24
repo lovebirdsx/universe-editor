@@ -236,4 +236,29 @@ describe('TerminalMainService', () => {
     await expect(service.input('nope', 'x')).rejects.toThrow(/unknown terminal/)
     await expect(service.resize('nope', 1, 1)).rejects.toThrow(/unknown terminal/)
   })
+
+  it('getProfiles delegates to detection with the injected deps', async () => {
+    const spawner: PtySpawner = () => new FakePty(1)
+    const service = new TerminalMainService(spawner, undefined, statSyncLike, 'linux', {
+      fs: {
+        existsFile: async (p) => p === '/etc/shells' || p === '/bin/bash',
+        readFile: async () => Buffer.from('/bin/bash\n'),
+        existsDirectory: async () => false,
+        readdir: async () => [],
+      },
+      execFile: () => Promise.reject(new Error('no execFile')),
+      env: {},
+      platform: 'linux',
+      windowsBuildNumber: 0,
+      processArch: 'x64',
+    })
+
+    const profiles = await service.getProfiles({})
+
+    expect(profiles).toEqual([
+      { profileName: 'bash', path: '/bin/bash', isDefault: false, isAutoDetected: true },
+    ])
+  })
 })
+
+const statSyncLike = () => ({ isDirectory: () => true })

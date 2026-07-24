@@ -418,6 +418,11 @@ export interface E2EProbe {
   /** All output observed for a terminal id since creation. */
   terminalReadBuffer(id: string): string
   /**
+   * Names of the detected terminal profiles (drives detection if needed).
+   * Empty when no usable shell was found on this machine.
+   */
+  terminalProfiles(): Promise<readonly string[]>
+  /**
    * Read the Disposable leak report stored in sessionStorage by the previous
    * session's beforeunload handler. Returns null if no leaks were detected
    * (or if the tracker was not installed, e.g. in production builds).

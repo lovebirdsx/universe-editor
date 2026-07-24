@@ -66,6 +66,12 @@
 - **修复**：renderer 入站 IPC 先重开 frame gate，再分发给 `ChannelServer`；入站本身证明新 frame 已可执行 IPC。不要通过放宽 fixture timeout 掩盖永久死锁。
 - **判定标准**：trace 中 launch/firstWindow 很快，probe 恒无且截图纯黑；失败在业务无关 spec 间漂移。锚：`src/main/ipc/electronProtocol.ts`；skill 案例 33。
 
+### 7. Worker teardown timeout（30s）与 wsl.exe 挂起孤儿（已根治）
+- **现象**：全量 e2e 测试全过但报 `Worker teardown timeout of 30000ms exceeded.`（无 fixture 名变体），超时 worker 的 spec 组合每次不同、大多无子进程活动；总时长 = 基线 + 30s×N。
+- **根因**：terminal profile 检测 spawn 的 `wsl.exe -l -q` 在 wslservice 被 8 个并发 worker 竞争时挂起，**Node execFile 的 timeout SIGTERM 杀不死它**（实测挂 8 分钟，`taskkill /F` 才秒杀）；孤儿持有继承句柄使 Playwright 的 pipe 连接在 `app.close()` 后不 EOF。调用频率放大器：ViewPane 的 toolbar 无条件挂载 → TerminalViewToolbar prefetch → 每次窗口 reload 都重新检测。
+- **修复**：①main 端 detection probe 改自管理 spawn（stdin ignore + windowsHide），超时后 `taskkill /pid /T /F`（实证必杀）——真实用户环境同样受益；②e2e seed pin `terminal.integrated.useWslProfiles: false`（WSL 检测已由 main 端单测覆盖，e2e 不需要机器相关探针）。
+- **判定标准**：遇到 worker teardown 超时，先数系统残留孤儿（`Get-CimInstance Win32_Process` 找父已死的 wsl/pwsh/conhost）；有孤儿 = 子进程泄漏类问题，无孤儿才考虑 quit 链/harness。排查方法详见 memory `e2e-worker-teardown-wsl-orphans`。
+
 ---
 
 ## 诊断前必做

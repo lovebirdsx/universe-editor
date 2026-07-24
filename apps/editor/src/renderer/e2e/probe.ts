@@ -38,6 +38,7 @@ import {
 import type { IAcpSessionService } from '../services/acp/acpSessionService.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
+import type { ITerminalManagerService } from '../services/terminal/TerminalManagerService.js'
 import type { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
 import type { IOutlineService } from '../services/languageFeatures/OutlineService.js'
 import type { ITimerService } from '../services/performance/TimerService.js'
@@ -89,6 +90,7 @@ export interface E2EProbeServices {
   readonly outputService: IOutputService
   readonly updateService: IUpdateService
   readonly terminalService: ITerminalService
+  readonly terminalManagerService: ITerminalManagerService
   readonly scmService: IScmService
   readonly languageFeaturesService: ILanguageFeaturesService
   readonly outlineService: IOutlineService
@@ -478,6 +480,10 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     terminalInput: (id: string, data: string): Promise<void> =>
       services.terminalService.input(id, data),
     terminalReadBuffer: (id: string): string => terminalBuffers.get(id) ?? '',
+    terminalProfiles: async (): Promise<readonly string[]> => {
+      await services.terminalManagerService.refreshProfiles()
+      return services.terminalManagerService.profiles.get()?.map((p) => p.profileName) ?? []
+    },
     getStoredLeakReport: (): E2EDisposableLeakReport | null => {
       const raw = sessionStorage.getItem(DISPOSABLE_LEAK_REPORT_KEY)
       if (!raw) return null

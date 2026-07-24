@@ -12,24 +12,23 @@ import { ITerminalManagerService } from '../../../services/terminal/TerminalMana
 import { useService, useObservable } from '../../useService.js'
 import styles from './TerminalViewToolbar.module.css'
 
-function shellsForPlatform(): readonly string[] {
-  if (navigator.platform.toLowerCase().startsWith('win')) {
-    return ['cmd.exe', 'powershell.exe', 'pwsh.exe']
-  }
-  return ['bash', 'zsh', 'fish']
-}
-
 export function TerminalViewToolbar() {
   const manager = useService(ITerminalManagerService)
   const commandService = useService(ICommandService)
   const terminals = useObservable(manager.panelTerminals)
   const activeId = useObservable(manager.activeTerminalId)
+  const profiles = useObservable(manager.profiles)
   const [showShellMenu, setShowShellMenu] = useState(false)
   const [showInstanceMenu, setShowInstanceMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const chevronRef = useRef<HTMLButtonElement>(null)
   const instanceRef = useRef<HTMLDivElement>(null)
   const instanceBtnRef = useRef<HTMLButtonElement>(null)
+
+  // Prefetch profile detection so the first menu open usually hits a warm cache.
+  useEffect(() => {
+    void manager.refreshProfiles()
+  }, [manager])
 
   useEffect(() => {
     if (!showShellMenu) return
@@ -65,9 +64,9 @@ export function TerminalViewToolbar() {
 
   const handleNewDefault = () => void manager.newTerminal({ target: 'panel' })
 
-  const handleNewShell = (shell: string) => {
+  const handleNewProfile = (profileName: string) => {
     setShowShellMenu(false)
-    void manager.newTerminal({ shell, target: 'panel' })
+    void manager.newTerminal({ profile: profileName, target: 'panel' })
   }
 
   const handleClose = () => {
@@ -84,7 +83,7 @@ export function TerminalViewToolbar() {
     manager.setActiveTerminal(id)
   }
 
-  const shells = shellsForPlatform()
+  const shells = profiles
   const activeTerminal = terminals.find((t) => t.id === activeId)
   const activeLabel = activeTerminal?.name ?? localize('terminal.noTerminals', 'No terminals')
 
@@ -174,7 +173,11 @@ export function TerminalViewToolbar() {
           type="button"
           className={`${styles['chevronBtn']} ${showShellMenu ? styles['active'] : ''}`}
           title={localize('terminal.selectShell', 'Select Shell')}
-          onClick={() => setShowShellMenu((v) => !v)}
+          onClick={() => {
+            if (!showShellMenu) void manager.refreshProfiles()
+            setShowShellMenu((v) => !v)
+          }}
+          data-testid="terminal-profile-menu-toggle"
         >
           <ChevronDown size={10} />
         </button>
@@ -182,17 +185,30 @@ export function TerminalViewToolbar() {
 
       {showShellMenu && (
         <div ref={menuRef} className={styles['shellMenu']}>
-          {shells.map((shell) => (
-            <button
-              key={shell}
-              type="button"
-              className={styles['shellItem']}
-              title={shell}
-              onClick={() => handleNewShell(shell)}
-            >
-              {shell}
+          {shells === null ? (
+            <button type="button" className={styles['shellItem']} disabled>
+              {localize('terminal.profiles.loading', 'Detecting shells…')}
             </button>
-          ))}
+          ) : shells.length === 0 ? (
+            <button type="button" className={styles['shellItem']} disabled>
+              {localize('terminal.profiles.empty', 'No profiles detected')}
+            </button>
+          ) : (
+            shells.map((profile) => (
+              <button
+                key={profile.profileName}
+                type="button"
+                className={styles['shellItem']}
+                title={profile.path}
+                onClick={() => handleNewProfile(profile.profileName)}
+                data-testid={`terminal-profile-item-${profile.profileName}`}
+              >
+                {profile.isDefault
+                  ? `${profile.profileName} ${localize('terminal.profiles.default', '(Default)')}`
+                  : profile.profileName}
+              </button>
+            ))
+          )}
         </div>
       )}
     </div>

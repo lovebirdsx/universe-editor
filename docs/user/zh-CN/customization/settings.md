@@ -111,6 +111,31 @@
 
 > 提示：变量对大小写和平台是敏感的——`${env:PATH}` 在 Windows 上不区分环境变量名大小写，路径分隔符也会按当前系统给出。拿不准时，新建一个终端看看它实际落在哪个目录即可。
 
+## 自定义终端 shell（Profiles）
+
+新建集成终端时，编辑器会**自动检测**系统里可用的 shell，列在终端面板「+」旁的下拉菜单里。Windows 上会检测 PowerShell（pwsh 各渠道安装）、Windows PowerShell、Git Bash、命令提示符、Cygwin、MSYS2、Cmder 以及 WSL 发行版；macOS / Linux 则读取 `/etc/shells`。
+
+想增删改这些条目，按平台编辑对应的 profiles 设置（`windows` / `osx` / `linux` 三选一）：
+
+```json
+{
+  "terminal.integrated.profiles.windows": {
+    // 把某个自动检测到的 profile 从菜单里删掉
+    "Git Bash": null,
+    // 只改某个 profile 的参数（路径沿用检测结果）
+    "PowerShell": { "args": ["-NoProfile"] },
+    // 新增自己的 shell
+    "My Shell": { "path": "C:\\tools\\nushell\\nu.exe", "args": ["-l"] }
+  },
+  // 默认用哪个 profile 新建终端（留空时 Windows 用 PowerShell，macOS/Linux 用登录 shell）
+  "terminal.integrated.defaultProfile.windows": "My Shell"
+}
+```
+
+- `path` 可以写成数组——作为回退链，第一个真实存在的路径生效；也可以只写 shell 名（如 `"pwsh"`），编辑器会在 `PATH` 里查找。
+- 每个 profile 还支持 `args`（启动参数数组）与 `env`（附加环境变量）。
+- Windows 上不想让 WSL 发行版出现在菜单里，把 `terminal.integrated.useWslProfiles` 设为 `false`。
+
 ## 从 VSCode 沿用设置
 
 如果你以前用过 VSCode，可以直接读取它的设置文件：

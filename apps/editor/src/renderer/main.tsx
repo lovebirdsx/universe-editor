@@ -661,6 +661,7 @@ async function bootstrapWorkbench(): Promise<void> {
   const bootstrapFocusSettled = new Promise<void>((resolve) => {
     resolveBootstrapFocusSettled = resolve
   })
+  const terminalManagerService = instantiation.invokeFunction((a) => a.get(ITerminalManagerService))
   const d = installE2EProbeIfEnabled({
     commandService,
     contextKeyService,
@@ -679,6 +680,7 @@ async function bootstrapWorkbench(): Promise<void> {
     outputService,
     updateService: services.get(IUpdateService) as IUpdateService,
     terminalService: services.get(ITerminalService) as ITerminalService,
+    terminalManagerService,
     scmService,
     languageFeaturesService: instantiation.invokeFunction((a) => a.get(ILanguageFeaturesService)),
     outlineService,
@@ -701,7 +703,6 @@ async function bootstrapWorkbench(): Promise<void> {
   // reconcile below; the observables driving the React tree update in place
   // (and WorkbenchLayout re-`resize()`s the Allotment when `sizes` changes), so
   // there is no first-paint barrier waiting on a heavy git workspace.
-  const terminalManagerService = instantiation.invokeFunction((a) => a.get(ITerminalManagerService))
   mark(PerfMarks.rendererWillLoadServices)
   layoutService.loadDefaults()
   viewDescriptorService.loadDefaults()

@@ -39,15 +39,27 @@ import {
   type ISettableObservable,
   type IWorkspaceFolderData,
 } from '@universe-editor/platform'
-import { ITerminalService, type ITerminalCreatedInfo } from '../../../shared/ipc/terminalService.js'
+import {
+  ITerminalService,
+  type ITerminalCreatedInfo,
+  type ITerminalProfile,
+  type ITerminalProfileConfigValue,
+} from '../../../shared/ipc/terminalService.js'
 import { IConfigurationResolverServiceRenderer } from '../configurationResolver/ConfigurationResolverService.js'
 import { IEnvironmentSnapshotService } from '../../../shared/ipc/environmentSnapshotService.js'
 
 export type TerminalTarget = 'panel' | 'editor'
 
 export interface ITerminalNewSpec {
+  /** Explicit shell executable; wins over `profile` and the default profile. */
   readonly shell?: string
   readonly shellArgs?: readonly string[]
+  /** Profile name from the detected list (e.g. "Git Bash"); wins over the default profile. */
+  readonly profile?: string
+  /** Display name override (defaults to the profile name / shell basename). */
+  readonly name?: string
+  /** Extra environment variables merged over the sanitized child env. */
+  readonly env?: Record<string, string>
   readonly cwd?: string
   readonly target?: TerminalTarget
 }
@@ -78,6 +90,14 @@ export interface ITerminalManagerService {
   readonly terminalGroups: IObservable<readonly ITerminalGroup[]>
   readonly activeGroupId: IObservable<string | null>
   readonly activeTerminalId: IObservable<string | null>
+  /**
+   * Detected + config-merged shell profiles for this platform. `null` means
+   * the detection hasn't completed (or failed) yet; an empty array means no
+   * usable profile was found.
+   */
+  readonly profiles: IObservable<readonly ITerminalProfile[] | null>
+  /** (Re)run profile detection; concurrent calls share one in-flight request. */
+  refreshProfiles(): Promise<void>
   /** Fires when the active panel terminal's xterm should receive focus. */
   readonly onFocusRequest: Event<void>
   /** Fires when any terminal process exits, before the entry is removed. */
@@ -124,12 +144,16 @@ interface TermSpec {
   shell: string
   cwd?: string
   args?: readonly string[]
+  name?: string
+  env?: Record<string, string>
 }
 
 interface IPersistedTerminalEntry {
   shell: string
   cwd?: string
   args?: readonly string[]
+  name?: string
+  env?: Record<string, string>
 }
 
 interface IPersistedTerminalState {
@@ -181,6 +205,35 @@ export function computeTerminalCwd(
   return cwd
 }
 
+type ProfilesOs = 'windows' | 'osx' | 'linux'
+
+function profilesOsOf(platform: HostPlatform): ProfilesOs {
+  if (platform === 'win32') return 'windows'
+  if (platform === 'darwin') return 'osx'
+  return 'linux'
+}
+
+/**
+ * Pick the profile a plain "New Terminal" should use (VSCode behavior):
+ * the configured default profile wins; otherwise Windows prefers the
+ * auto-detected "PowerShell" (pwsh-first candidate chain), then the first
+ * detected profile. Unix returns undefined so main falls back to $SHELL.
+ */
+export function resolveDefaultProfile(
+  profiles: readonly ITerminalProfile[],
+  configuredName: string | undefined,
+  platform: HostPlatform,
+): ITerminalProfile | undefined {
+  if (configuredName) {
+    const hit = profiles.find((p) => p.profileName === configuredName)
+    if (hit) return hit
+  }
+  if (platform === 'win32') {
+    return profiles.find((p) => p.profileName === 'PowerShell') ?? profiles[0]
+  }
+  return undefined
+}
+
 export class TerminalManagerService extends Disposable implements ITerminalManagerService {
   declare readonly _serviceBrand: undefined
 
@@ -197,12 +250,15 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   private readonly _activeTerminalId: ISettableObservable<string | null> = observableValue<
     string | null
   >('terminal.activeId', null)
+  private readonly _profiles: ISettableObservable<readonly ITerminalProfile[] | null> =
+    observableValue<readonly ITerminalProfile[] | null>('terminal.profiles', null)
 
   readonly terminals: IObservable<readonly ITerminalCreatedInfo[]> = this._terminals
   readonly panelTerminals: IObservable<readonly ITerminalCreatedInfo[]> = this._panelTerminals
   readonly terminalGroups: IObservable<readonly ITerminalGroup[]> = this._groups
   readonly activeGroupId: IObservable<string | null> = this._activeGroupId
   readonly activeTerminalId: IObservable<string | null> = this._activeTerminalId
+  readonly profiles: IObservable<readonly ITerminalProfile[] | null> = this._profiles
 
   private readonly _onFocusRequest = this._register(new Emitter<void>())
   readonly onFocusRequest: Event<void> = this._onFocusRequest.event
@@ -251,6 +307,49 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
         void this._reload()
       }),
     )
+    this._register(
+      this._config.onDidChangeConfiguration((e) => {
+        const os = profilesOsOf(this._host.platform)
+        if (
+          e.affectsConfiguration(`terminal.integrated.profiles.${os}`) ||
+          e.affectsConfiguration(`terminal.integrated.defaultProfile.${os}`) ||
+          e.affectsConfiguration('terminal.integrated.useWslProfiles')
+        ) {
+          this._profilesPromise = null
+          void this.refreshProfiles()
+        }
+      }),
+    )
+  }
+
+  private _profilesPromise: Promise<readonly ITerminalProfile[]> | null = null
+
+  refreshProfiles(): Promise<void> {
+    if (!this._profilesPromise) {
+      const os = profilesOsOf(this._host.platform)
+      const configProfiles =
+        this._config.get<Record<string, ITerminalProfileConfigValue>>(
+          `terminal.integrated.profiles.${os}`,
+        ) ?? undefined
+      const defaultProfileName =
+        this._config.get<string>(`terminal.integrated.defaultProfile.${os}`) || undefined
+      const useWslProfiles = this._config.get<boolean>('terminal.integrated.useWslProfiles')
+      this._profilesPromise = this._terminal.getProfiles({
+        ...(configProfiles ? { profiles: configProfiles } : {}),
+        ...(defaultProfileName ? { defaultProfileName } : {}),
+        ...(useWslProfiles !== undefined ? { useWslProfiles } : {}),
+      })
+    }
+    return this._profilesPromise.then(
+      (profiles) => {
+        this._profiles.set(profiles, undefined)
+      },
+      (err: unknown) => {
+        // Keep the previous list but clear the cache so the next attempt retries.
+        this._logger.warn(`profile detection failed: ${(err as Error).message}`)
+        this._profilesPromise = null
+      },
+    )
   }
 
   async newTerminal(spec?: ITerminalNewSpec): Promise<string | null> {
@@ -297,16 +396,45 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   private async _spawn(spec?: ITerminalNewSpec): Promise<string | null> {
     const target: TerminalTarget = spec?.target ?? 'panel'
 
-    const shell = spec?.shell || this._config.get<string>('terminal.integrated.shell') || undefined
-    const args =
-      spec?.shellArgs ??
-      (this._config.get<readonly string[]>('terminal.integrated.shellArgs') || undefined) ??
-      undefined
+    let shell = spec?.shell || undefined
+    let args = spec?.shellArgs && spec.shellArgs.length > 0 ? spec.shellArgs : undefined
+    let env = spec?.env
+    let name = spec?.name
+
+    if (!shell) {
+      // Resolve via profiles: an explicit profile name, else the configured /
+      // platform default profile. Unix may legitimately resolve to nothing —
+      // main then falls back to $SHELL.
+      await this.refreshProfiles()
+      const profiles = this._profiles.get() ?? []
+      let profile: ITerminalProfile | undefined
+      if (spec?.profile) {
+        profile = profiles.find((p) => p.profileName === spec.profile)
+        if (!profile) {
+          this._logger.warn(`unknown terminal profile "${spec.profile}", falling back to default`)
+        }
+      }
+      if (!profile) {
+        const os = profilesOsOf(this._host.platform)
+        const configured =
+          this._config.get<string>(`terminal.integrated.defaultProfile.${os}`) || undefined
+        profile = resolveDefaultProfile(profiles, configured, this._host.platform)
+      }
+      if (profile) {
+        shell = profile.path
+        args = args ?? (profile.args && profile.args.length > 0 ? profile.args : undefined)
+        env = env ?? profile.env
+        name = name ?? profile.profileName
+      }
+    }
+
     const cwd = await this._resolveCwd(spec?.cwd)
 
     const ipcSpec = {
       ...(shell ? { shell } : {}),
       ...(args && args.length > 0 ? { args } : {}),
+      ...(env ? { env } : {}),
+      ...(name ? { name } : {}),
       ...(cwd ? { cwd } : {}),
     }
 
@@ -317,6 +445,8 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
         shell: info.shell,
         ...(cwd !== undefined ? { cwd } : {}),
         ...(args !== undefined && args.length > 0 ? { args } : {}),
+        ...(name !== undefined ? { name } : {}),
+        ...(env !== undefined ? { env } : {}),
       })
       this._setAllTerminals([...this._terminals.get(), info])
       return info.id
@@ -470,6 +600,8 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
             ...(entry.shell ? { shell: entry.shell } : {}),
             ...(entry.cwd ? { cwd: entry.cwd } : {}),
             ...(entry.args && entry.args.length > 0 ? { shellArgs: entry.args } : {}),
+            ...(entry.name ? { name: entry.name } : {}),
+            ...(entry.env ? { env: entry.env } : {}),
             target: 'panel',
           }
           const id =
@@ -494,6 +626,8 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
         shell: spec.shell,
         ...(spec.cwd ? { cwd: spec.cwd } : {}),
         ...(spec.args && spec.args.length > 0 ? { args: spec.args } : {}),
+        ...(spec.name ? { name: spec.name } : {}),
+        ...(spec.env ? { env: spec.env } : {}),
       }
     }
     const groups = this._groupOrder
