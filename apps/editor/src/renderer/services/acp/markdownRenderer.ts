@@ -709,6 +709,29 @@ export function isAnchorHref(href: string): boolean {
   return href.length > 1 && href.startsWith('#')
 }
 
+/** Flatten inline nodes to their visible text (e.g. for a heading's slug or name). */
+export function inlineToText(nodes: readonly MdInline[]): string {
+  let out = ''
+  for (const n of nodes) {
+    switch (n.type) {
+      case 'text':
+      case 'code':
+        out += n.text
+        break
+      case 'bold':
+      case 'italic':
+      case 'strike':
+      case 'link':
+        out += inlineToText(n.children)
+        break
+      case 'filepath':
+        out += n.path
+        break
+    }
+  }
+  return out
+}
+
 /**
  * Slugify heading text into a GitHub-style fragment id: lowercased, spaces to
  * hyphens, punctuation stripped, non-ASCII (incl. CJK) kept verbatim. This must

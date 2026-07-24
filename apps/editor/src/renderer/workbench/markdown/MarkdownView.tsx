@@ -19,6 +19,7 @@ import {
 import { IEditorResolverService, IWorkspaceService, URI } from '@universe-editor/platform'
 import { IResourceAccessService } from '../../../shared/ipc/resourceAccessService.js'
 import {
+  inlineToText,
   isAnchorHref,
   parseMarkdown,
   parseInline,
@@ -359,29 +360,6 @@ function ListItem({ item }: { item: MdListItem }): ReactNode {
 
 function renderInline(nodes: readonly MdInline[]): ReactNode {
   return nodes.map((n, i) => <InlineNode key={i} node={n} />)
-}
-
-/** Flatten inline nodes to their visible text, for computing a heading's slug. */
-function inlineToText(nodes: readonly MdInline[]): string {
-  let out = ''
-  for (const n of nodes) {
-    switch (n.type) {
-      case 'text':
-      case 'code':
-        out += n.text
-        break
-      case 'bold':
-      case 'italic':
-      case 'strike':
-      case 'link':
-        out += inlineToText(n.children)
-        break
-      case 'filepath':
-        out += n.path
-        break
-    }
-  }
-  return out
 }
 
 function InlineNode({ node }: { node: MdInline }): ReactNode {

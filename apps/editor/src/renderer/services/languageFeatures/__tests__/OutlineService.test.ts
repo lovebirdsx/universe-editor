@@ -17,6 +17,8 @@ import type { monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../editor/FileEditorRegistry.js'
 import { MarkdownPreviewInput } from '../../editor/MarkdownPreviewInput.js'
+import { DocEditorInput } from '../../editor/DocEditorInput.js'
+import { initDocRegistry } from '../../editor/docRegistry.js'
 import {
   MarkdownPreviewRegistry,
   type IMarkdownPreviewController,
@@ -188,6 +190,7 @@ describe('OutlineService', () => {
     FileEditorRegistry._resetForTests()
     MarkdownPreviewRegistry._resetForTests()
     AcpSessionOutlineRegistry._resetForTests()
+    initDocRegistry({})
     previewModels.clear()
     markerListeners.length = 0
     modelAddListeners.length = 0
@@ -1038,6 +1041,143 @@ describe('OutlineService', () => {
     expect(svc.outline.get()).toBeDefined()
     activeEditor.set(undefined, undefined)
     expect(svc.outline.get()).toBeUndefined()
+    svc.dispose()
+  })
+
+  // ---- built-in doc ---------------------------------------------------------
+
+  // Repro: Help: Documentation opens a DocEditorInput (virtual `universe:///doc/…`
+  // input whose markdown lives in the docRegistry cache, not in a Monaco model).
+  // The outline must show the document's heading tree; before the fix the service
+  // didn't recognise the input at all and published `undefined` ("No symbols found.").
+  const DOC_MARKDOWN = [
+    '# Guide', // line 1
+    '',
+    'intro text',
+    '',
+    '## Install', // line 5
+    '',
+    'setup text',
+    '',
+    '## Usage', // line 9
+    '',
+    '### Advanced', // line 11
+    '',
+    'deep text',
+  ].join('\n')
+
+  function setupDoc() {
+    initDocRegistry({ 'en-US': { index: DOC_MARKDOWN } })
+    const activeEditor = observableValue<DocEditorInput | undefined>('t', undefined)
+    const editorService = { activeEditor } as unknown as IEditorService
+    const facade = {
+      onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+      getDocumentSymbolProviders: () => [],
+    } as unknown as ILanguageFeaturesService
+    const svc = new OutlineService(editorService, facade, undefined as never)
+    const doc = new DocEditorInput('index')
+    return { svc, doc, activeEditor }
+  }
+
+  it('publishes the heading tree for an active built-in doc', async () => {
+    const { svc, doc, activeEditor } = setupDoc()
+    activeEditor.set(doc, undefined)
+    await flush()
+    const outline = svc.outline.get()
+    expect(outline?.languageId).toBe('markdown')
+    expect(outline?.uri).toBe(doc.resource.toString())
+    const roots = outline?.roots ?? []
+    expect(roots.map((r) => r.name)).toEqual(['# Guide'])
+    const guide = roots[0]!
+    expect((guide.children ?? []).map((c) => c.name)).toEqual(['## Install', '## Usage'])
+    const usage = (guide.children ?? [])[1]!
+    expect((usage.children ?? []).map((c) => c.name)).toEqual(['### Advanced'])
+    // Ranges span each section (heading line → before the next same-or-higher
+    // heading), so the active-heading highlight tracks scrolled body text.
+    expect(guide.range).toMatchObject({ startLineNumber: 1, endLineNumber: 13 })
+    expect(usage.range).toMatchObject({ startLineNumber: 9, endLineNumber: 13 })
+    expect(usage.selectionRange.startLineNumber).toBe(9)
+    expect((guide.children ?? [])[0]!.range).toMatchObject({
+      startLineNumber: 5,
+      endLineNumber: 8,
+    })
+    expect(svc.sourceKind.get()).toBe('doc')
+    svc.dispose()
+  })
+
+  it('revealSymbol scrolls the doc reader to the heading line and refocuses it', async () => {
+    const { svc, doc, activeEditor } = setupDoc()
+    const { controller, scrolled, focusCount } = makeController()
+    MarkdownPreviewRegistry.register(doc.resource, controller)
+    activeEditor.set(doc, undefined)
+    await flush()
+    const usage = svc.outline.get()!.roots[0]!.children![1]!
+    svc.revealSymbol(usage)
+    expect(scrolled).toEqual([9])
+    expect(focusCount()).toBe(1)
+    svc.dispose()
+  })
+
+  it('tracks the active heading from the doc reader top visible line on scroll', async () => {
+    const { svc, doc, activeEditor } = setupDoc()
+    let topLine = 1
+    const { controller, onDidScroll } = makeController({ getTopVisibleLine: () => topLine })
+    MarkdownPreviewRegistry.register(doc.resource, controller)
+    activeEditor.set(doc, undefined)
+    await flush()
+    expect(svc.activeSymbol.get()?.name).toBe('# Guide')
+    topLine = 10
+    onDidScroll.fire()
+    expect(svc.activeSymbol.get()?.name).toBe('## Usage')
+    svc.dispose()
+  })
+
+  it('subscribes to the doc reader controller when it registers after activation', async () => {
+    const { svc, doc, activeEditor } = setupDoc()
+    // Doc active before the DocEditor component mounts (the real mount order):
+    // symbols are available immediately (content is cached), scroll tracking must
+    // attach once the reader controller registers.
+    activeEditor.set(doc, undefined)
+    await flush()
+    expect(svc.outline.get()?.roots).toHaveLength(1)
+    expect(svc.activeSymbol.get()).toBeUndefined()
+
+    let topLine = 6
+    const { controller, onDidScroll } = makeController({ getTopVisibleLine: () => topLine })
+    MarkdownPreviewRegistry.register(doc.resource, controller)
+    await flush()
+    expect(svc.activeSymbol.get()?.name).toBe('## Install')
+    topLine = 11
+    onDidScroll.fire()
+    expect(svc.activeSymbol.get()?.name).toBe('### Advanced')
+    svc.dispose()
+  })
+
+  it('re-parses when navigating to another doc in the same tab slot', async () => {
+    initDocRegistry({
+      'en-US': { index: DOC_MARKDOWN, other: '# Other\n\nbody\n\n## Sub\n\nx' },
+    })
+    const activeEditor = observableValue<DocEditorInput | undefined>('t', undefined)
+    const editorService = { activeEditor } as unknown as IEditorService
+    const facade = {
+      onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+      getDocumentSymbolProviders: () => [],
+    } as unknown as ILanguageFeaturesService
+    const svc = new OutlineService(editorService, facade, undefined as never)
+
+    activeEditor.set(new DocEditorInput('index'), undefined)
+    await flush()
+    expect(svc.outline.get()?.roots.map((r) => r.name)).toEqual(['# Guide'])
+
+    // In-place doc navigation swaps the input (openDocInGroup): the outline must
+    // follow the new document rather than keeping the old doc's headings.
+    const other = new DocEditorInput('other')
+    activeEditor.set(other, undefined)
+    await flush()
+    const roots = svc.outline.get()?.roots ?? []
+    expect(roots.map((r) => r.name)).toEqual(['# Other'])
+    expect((roots[0]!.children ?? []).map((c) => c.name)).toEqual(['## Sub'])
+    expect(svc.outline.get()?.uri).toBe(other.resource.toString())
     svc.dispose()
   })
 })

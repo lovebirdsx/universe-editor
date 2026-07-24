@@ -26,6 +26,9 @@ import { FileEditorInput } from '../editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../editor/FileEditorRegistry.js'
 import { MarkdownPreviewInput } from '../editor/MarkdownPreviewInput.js'
 import { MarkdownPreviewRegistry } from '../editor/MarkdownPreviewRegistry.js'
+import { DocEditorInput } from '../editor/DocEditorInput.js'
+import { docSymbolsFromMarkdown } from '../editor/docOutline.js'
+import { getDocContent } from '../editor/docRegistry.js'
 import { AcpSessionEditorInput } from '../acp/acpSessionEditorInput.js'
 import { AcpSessionOutlineRegistry } from '../acp/acpSessionOutlineRegistry.js'
 import {
@@ -53,7 +56,7 @@ export interface OutlineViewState {
 }
 
 /** Which kind of editor the current outline is derived from (undefined when none). */
-export type OutlineSourceKind = 'file' | 'preview' | 'session'
+export type OutlineSourceKind = 'file' | 'preview' | 'doc' | 'session'
 
 export interface IOutlineService {
   readonly _serviceBrand: undefined
@@ -134,6 +137,8 @@ export class OutlineService extends Disposable implements IOutlineService {
   private _currentInput: FileEditorInput | undefined
   /** Set instead of `_currentInput` when the active editor is a markdown preview. */
   private _currentPreview: MarkdownPreviewInput | undefined
+  /** Set instead of `_currentInput` when the active editor is a built-in guide doc. */
+  private _currentDoc: DocEditorInput | undefined
   /** Set instead of `_currentInput` when the active editor is an agent session. */
   private _currentSession: AcpSessionEditorInput | undefined
   /** Key↔pseudo-line maps for the current session outline, bridging slot keys to lines. */
@@ -175,10 +180,16 @@ export class OutlineService extends Disposable implements IOutlineService {
     )
 
     // The preview component mounts asynchronously too; its controller registers
-    // once the DOM is ready, so re-attach to pull symbols when it appears.
+    // once the DOM is ready, so re-attach to pull symbols when it appears. The
+    // built-in doc reader registers its controller in the same registry (keyed
+    // on the doc resource), so re-attach then as well to pick up scroll tracking.
     this._register(
       MarkdownPreviewRegistry.onDidChange((uri) => {
         if (this._currentPreview && uri.toString() === this._currentPreview.sourceUri.toString()) {
+          this._attachActiveEditor()
+          return
+        }
+        if (this._currentDoc && uri.toString() === this._currentDoc.resource.toString()) {
           this._attachActiveEditor()
         }
       }),
@@ -224,6 +235,7 @@ export class OutlineService extends Disposable implements IOutlineService {
     const input = this._editorService.activeEditor.get()
     const fileInput = input instanceof FileEditorInput ? input : undefined
     const previewInput = input instanceof MarkdownPreviewInput ? input : undefined
+    const docInput = input instanceof DocEditorInput ? input : undefined
     const sessionInput = input instanceof AcpSessionEditorInput ? input : undefined
     const sameInput = fileInput !== undefined && fileInput === this._currentInput
 
@@ -240,17 +252,22 @@ export class OutlineService extends Disposable implements IOutlineService {
       previewInput !== undefined &&
       this._currentPreview !== undefined &&
       previewInput.sourceUri.toString() === this._currentPreview.sourceUri.toString()
+    const sameDoc =
+      docInput !== undefined &&
+      this._currentDoc !== undefined &&
+      docInput.docId === this._currentDoc.docId
     const sameSession =
       sessionInput !== undefined &&
       this._currentSession !== undefined &&
       sessionInput.sessionId === this._currentSession.sessionId
-    if (!sameInput && !samePreview && !sameSession) {
+    if (!sameInput && !samePreview && !sameDoc && !sameSession) {
       this._clearRetry()
       this._attachGeneration++
     }
     const generation = this._attachGeneration
     this._currentInput = fileInput
     this._currentPreview = previewInput
+    this._currentDoc = docInput
     this._currentSession = sessionInput
     if (!sessionInput) this._sessionOutline = undefined
 
@@ -263,6 +280,12 @@ export class OutlineService extends Disposable implements IOutlineService {
     if (previewInput) {
       this._sourceKind.set('preview', undefined)
       this._attachPreview(previewInput, samePreview, generation)
+      return
+    }
+
+    if (docInput) {
+      this._sourceKind.set('doc', undefined)
+      this._attachDoc(docInput)
       return
     }
 
@@ -362,6 +385,31 @@ export class OutlineService extends Disposable implements IOutlineService {
     if (!samePreview || (!haveSymbols && this._retryTimer === undefined)) {
       this._recomputeSymbols({ generation, delay: INITIAL_PULL_RETRY_MS, elapsed: 0 })
     }
+  }
+
+  /**
+   * Attach to a built-in guide doc: the markdown is a static string in the
+   * docRegistry cache (no Monaco model, no language server), so the heading tree
+   * is parsed synchronously — no pull, no retry chain. Scroll tracking and
+   * reveal go through the reader controller the DocEditor registers in
+   * MarkdownPreviewRegistry (keyed on the doc resource), same as the preview.
+   */
+  private _attachDoc(doc: DocEditorInput): void {
+    this._currentModel = undefined
+    this._clearRetry()
+
+    const content = getDocContent(doc.docId)
+    const roots = content !== undefined ? docSymbolsFromMarkdown(content) : []
+    this._outline.set(
+      { uri: doc.resource.toString(), roots, languageId: 'markdown', version: ++this._version },
+      undefined,
+    )
+
+    const controller = MarkdownPreviewRegistry.get(doc.resource)
+    if (controller) {
+      this._attachListeners.add(controller.onDidScroll(() => this._recomputeActiveSymbol()))
+    }
+    this._recomputeActiveSymbol()
   }
 
   /**
@@ -552,17 +600,23 @@ export class OutlineService extends Disposable implements IOutlineService {
     }
 
     const model = this._currentModel
-    if (!model || !roots) {
+    if (!roots) {
       this._activeSymbol.set(undefined, undefined)
       return
     }
 
-    // In a preview the "cursor" is the top of the viewport; otherwise it's the
-    // Monaco editor's cursor line.
+    // In a preview or doc reader the "cursor" is the top of the viewport (a doc
+    // has no Monaco model, hence no model guard on that path); otherwise it's
+    // the Monaco editor's cursor line.
     let line: number | undefined
-    if (this._currentPreview) {
-      line = MarkdownPreviewRegistry.get(this._currentPreview.sourceUri)?.getTopVisibleLine()
+    const readerUri = this._currentPreview?.sourceUri ?? this._currentDoc?.resource
+    if (readerUri !== undefined) {
+      line = MarkdownPreviewRegistry.get(readerUri)?.getTopVisibleLine()
     } else {
+      if (!model) {
+        this._activeSymbol.set(undefined, undefined)
+        return
+      }
       const editor = this._currentInput ? FileEditorRegistry.get(this._currentInput) : undefined
       line = editor?.getPosition()?.lineNumber
     }
@@ -596,8 +650,9 @@ export class OutlineService extends Disposable implements IOutlineService {
       controller?.focus()
       return
     }
-    if (this._currentPreview) {
-      const controller = MarkdownPreviewRegistry.get(this._currentPreview.sourceUri)
+    const readerUri = this._currentPreview?.sourceUri ?? this._currentDoc?.resource
+    if (readerUri !== undefined) {
+      const controller = MarkdownPreviewRegistry.get(readerUri)
       controller?.scrollToLine(symbol.selectionRange.startLineNumber)
       controller?.focus()
       return
