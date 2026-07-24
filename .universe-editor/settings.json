@@ -3,5 +3,6 @@
 {
     "typescript.prewarm.projects": [
         "apps/editor/tsconfig.json"
-    ]
+    ],
+    "typescript.server.implementation": "native"
 }
