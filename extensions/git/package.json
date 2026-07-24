@@ -277,7 +277,7 @@
     "dev": "node esbuild.config.mjs --watch",
     "typecheck": "tsgo --noEmit",
     "test": "vitest run",
-    "lint": "eslint src",
+    "lint": "eslint src --cache --cache-strategy content",
     "lint:fix": "eslint --fix src",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   },

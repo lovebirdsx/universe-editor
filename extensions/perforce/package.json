@@ -686,7 +686,7 @@
     "dev": "node esbuild.config.mjs --watch",
     "typecheck": "tsgo --noEmit && tsgo --project e2e/tsconfig.json",
     "test": "vitest run",
-    "lint": "eslint src",
+    "lint": "eslint src --cache --cache-strategy content",
     "lint:fix": "eslint --fix src",
     "e2e": "node ../../scripts/e2e/ensure-e2e-build.mjs @universe-editor/perforce && playwright test -c e2e/playwright.config.ts",
     "e2ea": "node ../../scripts/e2e/ensure-e2e-build.mjs @universe-editor/perforce && cross-env UNIVERSE_E2E_INCLUDE_REGRESSION=1 playwright test -c e2e/playwright.config.ts",

@@ -25,7 +25,7 @@
     "build": "node esbuild.config.mjs",
     "dev": "node esbuild.config.mjs --watch",
     "typecheck": "tsgo --noEmit && tsgo --project e2e/tsconfig.json",
-    "lint": "eslint src",
+    "lint": "eslint src --cache --cache-strategy content",
     "lint:fix": "eslint --fix src",
     "test": "vitest run",
     "e2e": "node ../../scripts/e2e/ensure-e2e-build.mjs @universe-editor/typescript && playwright test -c e2e/playwright.config.ts",

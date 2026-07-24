@@ -26,6 +26,23 @@
       "dependsOn": ["^build"],
       "outputs": []
     },
+    // editor 的 test = unit(vitest projects over src) + integration(integration/)。
+    // 默认 inputs 是整个包的 git 跟踪文件，改 e2e specs / bench 也会重跑 ~90s 单测。
+    // !integration/node_modules/**：vitest 的 transform 缓存(results.json)每次运行都写，
+    // 显式 inputs glob 会匹配未跟踪文件，不排除则 hash 永远漂移、缓存永不命中。
+    "@universe-editor/editor#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "src/**",
+        "integration/**",
+        "!integration/node_modules/**",
+        "test-stubs/**",
+        "vitest*.ts",
+        "package.json",
+        "tsconfig*.json"
+      ],
+      "outputs": []
+    },
     "e2e": {
       "dependsOn": ["^build", "build", "@universe-editor/editor#build"],
       "outputs": ["e2e/playwright-report/**", "e2e/test-results/**"],
@@ -37,7 +54,7 @@
       "env": ["CI", "UNIVERSE_E2E", "UNIVERSE_E2E_INCLUDE_REGRESSION", "UNIVERSE_E2E_ONLY_TAG"]
     },
     "lint": {
-      "outputs": []
+      "outputs": [".eslintcache"]
     },
     "lint:fix": {
       "cache": false

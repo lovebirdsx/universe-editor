@@ -15,7 +15,7 @@
     "build": "tsgo --build",
     "typecheck": "tsgo --build",
     "test": "vitest run",
-    "lint": "eslint src",
+    "lint": "eslint src --cache --cache-strategy content",
     "lint:fix": "eslint --fix src",
     "clean": "tsgo --build --clean"
   },

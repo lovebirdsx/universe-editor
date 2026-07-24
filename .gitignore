@@ -2,6 +2,7 @@ node_modules/
 dist/
 out/
 release/
+.eslintcache
 market-stage/
 apps/editor/.runtime-resources/
 !scripts/release/

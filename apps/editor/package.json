@@ -25,7 +25,7 @@
     "e2e:headed": "node ../../scripts/e2e/ensure-e2e-build.mjs @universe-editor/editor && playwright test -c e2e/playwright.config.ts --headed",
     "e2e:ui": "node ../../scripts/e2e/ensure-e2e-build.mjs @universe-editor/editor && playwright test -c e2e/playwright.config.ts --ui",
     "e2e:install": "playwright install-deps",
-    "lint": "eslint src bench integration e2e",
+    "lint": "eslint src bench integration e2e --cache --cache-strategy content",
     "lint:fix": "eslint --fix src bench integration e2e",
     "clean": "tsgo --build --clean",
     "package": "pnpm run package:win",
