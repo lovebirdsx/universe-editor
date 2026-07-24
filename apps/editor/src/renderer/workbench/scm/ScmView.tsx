@@ -1126,6 +1126,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
           value={inputValue}
           placeholder={placeholder}
           rows={1}
+          spellCheck={false}
           onChange={(e) => scm.changeInputBoxValue(model.handle, e.target.value)}
           onKeyDown={(e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && acceptCommand) {
