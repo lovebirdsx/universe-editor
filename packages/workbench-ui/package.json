@@ -14,13 +14,13 @@
     "./tokens.css": "./dist/theme/tokens.css"
   },
   "scripts": {
-    "build": "tsc --build && node scripts/copy-css.mjs",
-    "typecheck": "tsc --build",
+    "build": "tsgo --build && node scripts/copy-css.mjs",
+    "typecheck": "tsgo --build",
     "lint": "eslint src",
     "lint:fix": "eslint --fix src",
     "test": "vitest run",
-    "dev": "tsc --build --watch",
-    "clean": "tsc --build --clean"
+    "dev": "tsgo --build --watch",
+    "clean": "tsgo --build --clean"
   },
   "dependencies": {
     "@floating-ui/react": "catalog:",

@@ -684,7 +684,7 @@
   "scripts": {
     "build": "node esbuild.config.mjs",
     "dev": "node esbuild.config.mjs --watch",
-    "typecheck": "tsc --noEmit && tsc --project e2e/tsconfig.json",
+    "typecheck": "tsgo --noEmit && tsgo --project e2e/tsconfig.json",
     "test": "vitest run",
     "lint": "eslint src",
     "lint:fix": "eslint --fix src",

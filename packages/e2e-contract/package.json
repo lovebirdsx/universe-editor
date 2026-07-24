@@ -13,12 +13,12 @@
     }
   },
   "scripts": {
-    "build": "tsc --build",
-    "typecheck": "tsc --build",
+    "build": "tsgo --build",
+    "typecheck": "tsgo --build",
     "lint": "eslint src",
     "lint:fix": "eslint --fix src",
-    "dev": "tsc --build --watch",
-    "clean": "tsc --build --clean"
+    "dev": "tsgo --build --watch",
+    "clean": "tsgo --build --clean"
   },
   "devDependencies": {
     "@universe-editor/config-eslint": "workspace:*",

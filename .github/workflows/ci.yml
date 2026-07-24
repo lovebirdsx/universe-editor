@@ -518,9 +518,9 @@ jobs:
       # Type-check the external extension before running it. esbuild (both the
       # suite build and run-external-e2e.mjs) strips types without checking them,
       # so a type error would otherwise sail through CI as long as the bundle
-      # emits. The typecheck script borrows tsc from a workspace package; the
-      # frozen-lockfile install above provides it. Excel's own types come from its
-      # early standalone npm install.
+      # emits. The typecheck script borrows tsgo (@typescript/native-preview)
+      # from the workspace root; the frozen-lockfile install above provides it.
+      # Excel's own types come from its early standalone npm install.
       - name: Typecheck external extension
         run: npm --prefix extensions-external/${{ matrix.suite.name }} run typecheck
 

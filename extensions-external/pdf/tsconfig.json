@@ -5,7 +5,6 @@
     "noEmit": true,
     "types": ["node"],
     "typeRoots": ["../../extensions/numbered-bookmarks/node_modules/@types"],
-    "baseUrl": ".",
     "paths": {
       "@universe-editor/extension-api": ["../../packages/extension-api/dist/index.d.ts"]
     }

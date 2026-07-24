@@ -12,12 +12,12 @@
     }
   },
   "scripts": {
-    "build": "tsc --build",
-    "typecheck": "tsc --build",
+    "build": "tsgo --build",
+    "typecheck": "tsgo --build",
     "test": "vitest run",
     "lint": "eslint src",
     "lint:fix": "eslint --fix src",
-    "clean": "tsc --build --clean"
+    "clean": "tsgo --build --clean"
   },
   "dependencies": {
     "@universe-editor/extensions-common": "workspace:*"
