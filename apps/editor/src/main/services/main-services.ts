@@ -18,7 +18,7 @@ import {
   registerSingletonFactory,
   SyncDescriptor,
 } from '@universe-editor/platform'
-import { ILoggerService } from '@universe-editor/platform'
+import { ILoggerService, createNamedLogger } from '@universe-editor/platform'
 import { IFileService } from '@universe-editor/platform'
 import { IFileSearchService } from '@universe-editor/platform'
 import { ISecretStorageService } from '@universe-editor/platform'
@@ -125,7 +125,12 @@ registerSingletonFactory(
       undefined,
       undefined,
       undefined,
-      createTsServerSpecResolver(acc.get(IEnvironmentMainService).configDir),
+      createTsServerSpecResolver(
+        acc.get(IEnvironmentMainService).configDir,
+        // Same channel as ExtensionHostMainService's logger — the per-spawn
+        // tsServer line lands in the "Extension Host" output channel.
+        createNamedLogger(acc.get(ILoggerService), { id: 'extensionHost', name: 'Extension Host' }),
+      ),
       acc.get(ILoggerService),
     ),
 )

@@ -12,6 +12,7 @@ import { createRequire } from 'node:module'
 import * as path from 'node:path'
 import { app } from 'electron'
 import { parse, type ParseError } from 'jsonc-parser'
+import type { ILogger } from '@universe-editor/platform'
 import {
   DEFAULT_TS_SERVER_IMPLEMENTATION,
   type TsServerImplementationName,
@@ -190,16 +191,17 @@ export function defaultTsServerPreference(settingsDir: string): TsServerPreferen
 /** Lazily resolve the spec on every call — all settings layers are re-read per
  *  host spawn, so editing `typescript.server.implementation` + restarting the
  *  window (which relaunches the host) picks the new server, and each window's
- *  workspace gets its own layering. Logs one line per spawn with the winning
- *  source (debugging "the setting didn't take"). */
+ *  workspace gets its own layering. When a logger is given, logs one line per
+ *  spawn with the winning source (debugging "the setting didn't take"). */
 export function createTsServerSpecResolver(
   settingsDir: string,
+  logger?: ILogger,
 ): (workspaceRoot?: string) => TsServerSpec {
   const preference = defaultTsServerPreference(settingsDir)
   return (workspaceRoot) => {
     const { value, source } = preference(workspaceRoot)
     const spec = specForPreferenceValue(value)
-    console.log(
+    logger?.info(
       `[tsServer] kind=${spec.kind} version=${spec.version} source=${source} ` +
         `workspace=${workspaceRoot ?? '(none)'} settingsDir=${settingsDir}`,
     )
