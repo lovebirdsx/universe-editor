@@ -370,15 +370,14 @@
 }
 
 .messageItem[data-role='thought'] {
-  opacity: 0.7;
   font-style: italic;
   background: var(--color-message-thought-bg, #2a2a35);
   border-left: 2px solid var(--color-message-thought-accent, #7a7aa3);
   padding-left: 10px;
 }
 
-/* Reasoning text stays muted: markdown `**...**` spans (codex summary titles)
-   inherit the card's italic grey instead of the loud bright-bold emphasis. */
+/* Reasoning `**...**` spans (codex summary titles) inherit the card's italic
+   instead of the loud bright-bold emphasis. */
 .messageItem[data-role='thought'] strong,
 .subMessage[data-role='thought'] strong {
   font-weight: inherit;
