@@ -2430,6 +2430,96 @@
   text-overflow: ellipsis;
 }
 
+/* MCP picker (session-level server toggles in the prompt action row). */
+.configTrigger[data-custom='true'] {
+  color: var(--color-badge-progress, #4fa6e2);
+}
+
+.mcpPickHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px 6px;
+  color: var(--color-message-role-fg, #888);
+  border-bottom: 1px solid var(--color-border, #555);
+  margin-bottom: 2px;
+}
+
+.mcpPickHeader button {
+  background: transparent;
+  border: none;
+  color: var(--color-badge-progress, #4fa6e2);
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
+}
+
+.mcpPickHeader button:hover {
+  text-decoration: underline;
+}
+
+.mcpPickRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.mcpPickRow:hover {
+  background: var(--color-list-hover-bg, #2a2d2e);
+}
+
+.mcpPickRow input[type='checkbox'] {
+  margin: 0;
+  accent-color: var(--color-badge-progress, #4fa6e2);
+}
+
+.mcpPickName {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mcpPickMeta {
+  color: var(--color-message-role-fg, #888);
+  font-size: calc(var(--agent-font-size, 12px) * 0.78);
+  white-space: nowrap;
+}
+
+.mcpPickFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px 4px;
+  border-top: 1px solid var(--color-border, #555);
+  margin-top: 2px;
+}
+
+.mcpPickFooter button {
+  background: transparent;
+  border: none;
+  color: var(--color-badge-progress, #4fa6e2);
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.mcpPickFooter button:hover {
+  text-decoration: underline;
+}
+
+.mcpPickHint {
+  padding: 0 10px 6px;
+  color: var(--color-message-role-fg, #888);
+  font-size: calc(var(--agent-font-size, 12px) * 0.78);
+  line-height: 1.4;
+}
+
 .promptComposer {
   position: relative;
 }
@@ -2745,21 +2835,27 @@
   background: var(--color-message-role-fg, #888);
 }
 
-.mcpRow[data-status='connected'] .mcpStatusDot {
+.mcpRow[data-status='connected'] .mcpStatusDot,
+.mcpPickRow[data-status='connected'] .mcpStatusDot {
   background: var(--color-badge-success, #2c7d32);
 }
 
-.mcpRow[data-status='pending'] .mcpStatusDot {
+.mcpRow[data-status='pending'] .mcpStatusDot,
+.mcpPickRow[data-status='pending'] .mcpStatusDot {
   background: var(--color-badge-progress, #4fa6e2);
 }
 
 .mcpRow[data-status='failed'] .mcpStatusDot,
-.mcpRow[data-status='error'] .mcpStatusDot {
+.mcpRow[data-status='error'] .mcpStatusDot,
+.mcpPickRow[data-status='failed'] .mcpStatusDot,
+.mcpPickRow[data-status='error'] .mcpStatusDot {
   background: var(--color-badge-error, #f14c4c);
 }
 
 .mcpRow[data-status='needs-auth'] .mcpStatusDot,
-.mcpRow[data-status='needs_auth'] .mcpStatusDot {
+.mcpRow[data-status='needs_auth'] .mcpStatusDot,
+.mcpPickRow[data-status='needs-auth'] .mcpStatusDot,
+.mcpPickRow[data-status='needs_auth'] .mcpStatusDot {
   background: var(--color-badge-warning, #d7ba7d);
 }
 

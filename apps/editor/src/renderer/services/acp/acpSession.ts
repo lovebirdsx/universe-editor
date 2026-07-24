@@ -207,6 +207,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly pendingQuestion: ISettableObservable<AcpPendingQuestion | undefined>
   readonly availableCommands: ISettableObservable<readonly AvailableCommand[]>
   readonly mcpServers: ISettableObservable<readonly AcpMcpServerStatus[]>
+  readonly mcpServerSelection: ISettableObservable<readonly string[] | null>
   readonly collapseMode: ISettableObservable<CollapseMode>
   readonly accumulatedRunningMs: ISettableObservable<number>
   readonly runningStartedAt: ISettableObservable<number | undefined>
@@ -434,6 +435,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     this.mcpServers = observableValue<readonly AcpMcpServerStatus[]>(
       `acp.session.mcpServers.${id}`,
       [],
+    )
+    this.mcpServerSelection = observableValue<readonly string[] | null>(
+      `acp.session.mcpServerSelection.${id}`,
+      null,
     )
     this.collapseMode = observableValue<CollapseMode>(
       `acp.session.collapseMode.${id}`,
@@ -797,6 +802,13 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
     if (state.accumulatedRunningMs !== undefined && this.accumulatedRunningMs.get() === 0) {
       this.accumulatedRunningMs.set(state.accumulatedRunningMs, undefined)
+    }
+    // Editor-local state (restored whitelist), not a protocol echo — always apply.
+    if (state.mcpServerSelection !== undefined) {
+      this.mcpServerSelection.set(
+        state.mcpServerSelection === null ? null : [...state.mcpServerSelection],
+        undefined,
+      )
     }
   }
 

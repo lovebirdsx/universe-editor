@@ -170,6 +170,93 @@ describe('AcpAgentDefaultsService — get / set', () => {
   })
 })
 
+describe('AcpAgentDefaultsService — MCP server defaults', () => {
+  let svc: AcpAgentDefaultsService
+  let storage: FakeStorage
+  beforeEach(() => {
+    const made = makeService()
+    svc = made.svc
+    storage = made.storage
+  })
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('returns null for agents without a saved whitelist', async () => {
+    await svc.initialize()
+    expect(svc.getMcpServerNames('nope')).toBeNull()
+  })
+
+  it('stores a whitelist per agent, isolated from siblings', async () => {
+    await svc.initialize()
+    svc.setMcpServerNames('claude-code', ['fs', 'docs'])
+    svc.setMcpServerNames('codex', ['fs'])
+    expect(svc.getMcpServerNames('claude-code')).toEqual(['fs', 'docs'])
+    expect(svc.getMcpServerNames('codex')).toEqual(['fs'])
+    expect(svc.getMcpServerNames('other')).toBeNull()
+  })
+
+  it('clearing with null removes the entry', async () => {
+    await svc.initialize()
+    svc.setMcpServerNames('claude-code', ['fs'])
+    svc.setMcpServerNames('claude-code', null)
+    expect(svc.getMcpServerNames('claude-code')).toBeNull()
+  })
+
+  it('skips the write when the value is unchanged', async () => {
+    await svc.initialize()
+    svc.setMcpServerNames('claude-code', ['fs'])
+    await flushWrite()
+    const before = storage.setCalls.length
+    svc.setMcpServerNames('claude-code', ['fs'])
+    svc.setMcpServerNames('claude-code', null)
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(before + 1)
+  })
+
+  it('round-trips the whitelist through persistence', async () => {
+    await svc.initialize()
+    svc.setMcpServerNames('claude-code', ['fs', 'docs'])
+    await flushWrite()
+    const reloaded = makeService({ storage }).svc
+    await reloaded.initialize()
+    expect(reloaded.getMcpServerNames('claude-code')).toEqual(['fs', 'docs'])
+    reloaded.dispose()
+  })
+
+  it('keeps configOption defaults intact alongside MCP ones', async () => {
+    await svc.initialize()
+    svc.setDefault('claude-code', 'model', 'A')
+    svc.setMcpServerNames('claude-code', ['fs'])
+    await flushWrite()
+    const reloaded = makeService({ storage }).svc
+    await reloaded.initialize()
+    expect(reloaded.getDefaults('claude-code')).toEqual({ model: 'A' })
+    expect(reloaded.getMcpServerNames('claude-code')).toEqual(['fs'])
+    reloaded.dispose()
+  })
+
+  it('loads v1 rows (no mcpDefaults) with an empty MCP map', async () => {
+    storage.store.set('acp.agentDefaults', {
+      schemaVersion: 1,
+      defaults: { 'claude-code': { model: 'A' } },
+    })
+    await svc.initialize()
+    expect(svc.getDefaults('claude-code')).toEqual({ model: 'A' })
+    expect(svc.getMcpServerNames('claude-code')).toBeNull()
+  })
+
+  it('fails closed on malformed mcpDefaults', async () => {
+    storage.store.set('acp.agentDefaults', {
+      schemaVersion: 2,
+      defaults: { 'claude-code': { model: 'A' } },
+      mcpDefaults: { 'claude-code': 'fs' },
+    })
+    await svc.initialize()
+    expect(svc.getDefaults('claude-code')).toEqual({})
+  })
+})
+
 describe('AcpAgentDefaultsService — persistence', () => {
   let svc: AcpAgentDefaultsService
   let storage: FakeStorage
@@ -192,7 +279,7 @@ describe('AcpAgentDefaultsService — persistence', () => {
     expect(call.key).toBe('acp.agentDefaults')
     expect(call.scope).toBe(StorageScope.WORKSPACE)
     const persisted = call.value as { schemaVersion: number; defaults: unknown }
-    expect(persisted.schemaVersion).toBe(1)
+    expect(persisted.schemaVersion).toBe(2)
     expect(persisted.defaults).toEqual({ 'claude-code': { model: 'A' } })
   })
 

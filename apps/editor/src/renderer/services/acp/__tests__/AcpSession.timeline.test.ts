@@ -61,6 +61,7 @@ import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
+import { StubFileService } from './stubFileService.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import {
   IAcpClientService,
@@ -322,6 +323,7 @@ function makeService(
         new StubLoggerService(),
       ),
     ),
+    new StubFileService(),
   )
 }
 

@@ -5,9 +5,15 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   filterMcpServersByCapabilities,
+  filterWireByNames,
   mcpServerTransport,
+  mergeMcpServerDefinitions,
+  mergeWireMcpServers,
   normalizeMcpServers,
+  parseMcpJson,
   parseMcpToolName,
+  readMcpServerDefinitions,
+  resolveMcpServerSelection,
   withMcpServerEnv,
 } from '../acpMcpServers.js'
 
@@ -252,5 +258,136 @@ describe('withMcpServerEnv', () => {
     const result = withMcpServerEnv([http], { docs: { X: '1' } }, onWarn)
     expect(result).toEqual([http])
     expect(onWarn).toHaveBeenCalledOnce()
+  })
+})
+
+describe('readMcpServerDefinitions', () => {
+  it('annotates entries with transport / disabled / source', () => {
+    const defs = readMcpServerDefinitions(
+      {
+        fs: { command: 'node', args: [] },
+        docs: { type: 'http', url: 'https://x', disabled: true },
+      },
+      'global',
+    )
+    expect(defs).toEqual([
+      {
+        name: 'fs',
+        transport: 'stdio',
+        disabled: false,
+        source: 'global',
+      },
+      {
+        name: 'docs',
+        transport: 'http',
+        disabled: true,
+        source: 'global',
+      },
+    ])
+  })
+
+  it('only treats disabled === true as disabled', () => {
+    const defs = readMcpServerDefinitions(
+      { fs: { command: 'node', disabled: 1 as unknown as boolean } },
+      'project',
+    )
+    expect(defs[0]!.disabled).toBe(false)
+    expect(defs[0]!.source).toBe('project')
+  })
+
+  it('skips invalid entries with a warning, like normalizeMcpServers', () => {
+    const onWarn = vi.fn()
+    const defs = readMcpServerDefinitions({ bad: { url: 5 } }, 'global', onWarn)
+    expect(defs).toEqual([])
+    expect(onWarn).toHaveBeenCalledOnce()
+  })
+})
+
+describe('parseMcpJson', () => {
+  it('accepts the { mcpServers: {...} } envelope', () => {
+    const raw = parseMcpJson('{"mcpServers":{"fs":{"command":"node"}}}')
+    expect(raw).toEqual({ fs: { command: 'node' } })
+  })
+
+  it('accepts a bare server record', () => {
+    const raw = parseMcpJson('{"fs":{"command":"node"}}')
+    expect(raw).toEqual({ fs: { command: 'node' } })
+  })
+
+  it('returns {} and warns on broken JSON', () => {
+    const onWarn = vi.fn()
+    expect(parseMcpJson('{nope', onWarn)).toEqual({})
+    expect(onWarn).toHaveBeenCalledOnce()
+  })
+
+  it('returns {} for non-record payloads', () => {
+    expect(parseMcpJson('[]')).toEqual({})
+    expect(parseMcpJson('"str"')).toEqual({})
+  })
+})
+
+describe('mergeMcpServerDefinitions', () => {
+  it('lets project entries override global ones by name', () => {
+    const merged = mergeMcpServerDefinitions(
+      [
+        { name: 'fs', transport: 'stdio', disabled: false, source: 'global' as const },
+        { name: 'docs', transport: 'http', disabled: false, source: 'global' as const },
+      ],
+      [{ name: 'fs', transport: 'stdio', disabled: true, source: 'project' as const }],
+    )
+    expect(merged).toEqual([
+      { name: 'fs', transport: 'stdio', disabled: true, source: 'project' },
+      { name: 'docs', transport: 'http', disabled: false, source: 'global' },
+    ])
+  })
+})
+
+describe('mergeWireMcpServers', () => {
+  it('lets project wire entries replace global ones by name', () => {
+    const globalFs = { name: 'fs', command: 'node', args: ['global'], env: [] }
+    const projectFs = { name: 'fs', command: 'bun', args: ['project'], env: [] }
+    const docs = { type: 'http' as const, name: 'docs', url: 'https://x', headers: [] }
+    const merged = mergeWireMcpServers([globalFs, docs], [projectFs])
+    expect(merged).toEqual([projectFs, docs])
+  })
+})
+
+describe('resolveMcpServerSelection', () => {
+  const pool = [
+    { name: 'a', transport: 'stdio' as const, disabled: false, source: 'global' as const },
+    { name: 'b', transport: 'stdio' as const, disabled: true, source: 'global' as const },
+    { name: 'c', transport: 'http' as const, disabled: false, source: 'project' as const },
+  ]
+
+  it('null inherits every non-disabled pool entry', () => {
+    const { enabledNames, staleNames } = resolveMcpServerSelection(pool, null)
+    expect(enabledNames).toEqual(['a', 'c'])
+    expect(staleNames).toEqual([])
+  })
+
+  it('an explicit list intersects the pool and may enable disabled entries', () => {
+    const { enabledNames, staleNames } = resolveMcpServerSelection(pool, ['b', 'c'])
+    expect(enabledNames).toEqual(['b', 'c'])
+    expect(staleNames).toEqual([])
+  })
+
+  it('reports whitelisted names missing from the pool as stale', () => {
+    const { enabledNames, staleNames } = resolveMcpServerSelection(pool, ['a', 'gone'])
+    expect(enabledNames).toEqual(['a'])
+    expect(staleNames).toEqual(['gone'])
+  })
+
+  it('an empty list disables everything', () => {
+    const { enabledNames } = resolveMcpServerSelection(pool, [])
+    expect(enabledNames).toEqual([])
+  })
+})
+
+describe('filterWireByNames', () => {
+  it('keeps only the named wire servers, preserving order', () => {
+    const fs = { name: 'fs', command: 'node', args: [], env: [] }
+    const docs = { type: 'http' as const, name: 'docs', url: 'https://x', headers: [] }
+    const out = filterWireByNames([fs, docs], new Set(['docs']))
+    expect(out).toEqual([docs])
   })
 })

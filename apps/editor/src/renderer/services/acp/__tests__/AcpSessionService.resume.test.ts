@@ -76,6 +76,7 @@ import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
+import { StubFileService } from './stubFileService.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import { createInMemoryAcpPair } from '../testing/inMemoryAcpPair.js'
 
@@ -435,6 +436,7 @@ function buildService(
         new StubLoggerService(),
       ),
     ),
+    new StubFileService(),
   )
   return { svc, client, history, agentDefaults, notifications, storage }
 }
@@ -1041,6 +1043,7 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
           new StubLoggerService(),
         ),
       ),
+      new StubFileService(),
     )
     // Kick off history hydration but DO NOT await — race the resume call.
     void history.initialize()
@@ -1165,6 +1168,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
           new StubLoggerService(),
         ),
       ),
+      new StubFileService(),
     )
     expect(svc.activeSession.get()).toBeUndefined()
     await svc.tryRestoreActiveSession()
@@ -1228,11 +1232,16 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
           new StubLoggerService(),
         ),
       ),
+      new StubFileService(),
     )
     // Let _loadPendingRestore() resolve.
     await Promise.resolve()
     // Pre-empt the pending restore by creating a fresh session ourselves.
-    await svc.createSession()
+    // Wait for the background handshake: MCP server resolution awaits before
+    // client.connect, so `connected` is still empty right after createSession
+    // returns.
+    const fresh = await svc.createSession()
+    await fresh.whenConnected()
     const preCount = client.connected.length
     await svc.tryRestoreActiveSession()
     expect(client.connected.length).toBe(preCount)
@@ -1285,6 +1294,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
           new StubLoggerService(),
         ),
       ),
+      new StubFileService(),
     )
     await Promise.resolve()
     await svc.tryRestoreActiveSession()
@@ -1348,6 +1358,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
           new StubLoggerService(),
         ),
       ),
+      new StubFileService(),
     )
     await Promise.resolve()
     await Promise.all([svc.tryRestoreActiveSession(), svc.tryRestoreActiveSession()])

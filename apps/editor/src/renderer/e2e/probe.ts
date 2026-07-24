@@ -438,6 +438,12 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         ...(m.transport !== undefined && { transport: m.transport }),
       }))
     },
+    setAcpSessionMcpServers: (names) => {
+      const s = services.acpSessionService.activeSession.get()
+      if (!s) throw new Error('[E2E] no active ACP session')
+      services.acpSessionService.setSessionMcpServers(s.id, names)
+    },
+    getAcpSessionStatus: () => services.acpSessionService.activeSession.get()?.status.get(),
     getAcpPendingQuestion: () => {
       const s = services.acpSessionService.activeSession.get()
       const q = s?.pendingQuestion.get()

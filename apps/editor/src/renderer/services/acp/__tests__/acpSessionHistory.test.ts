@@ -267,7 +267,7 @@ describe('AcpSessionHistoryService — persistence', () => {
     expect(call.key).toBe('acp.sessionHistory')
     expect(call.scope).toBe(StorageScope.WORKSPACE)
     const persisted = call.value as { schemaVersion: number; entries: unknown[] }
-    expect(persisted.schemaVersion).toBe(1)
+    expect(persisted.schemaVersion).toBe(2)
     expect(persisted.entries).toHaveLength(1)
   })
 
@@ -538,6 +538,101 @@ describe('AcpSessionHistoryService — setHistoryConfigOption', () => {
     svc.setHistoryConfigOption(first.id, 'reasoning_effort', 'high', 'high')
     const second = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't2' })
     expect(second.configLabels).toEqual({ reasoning_effort: 'high' })
+  })
+})
+
+describe('AcpSessionHistoryService — setHistoryMcpServerNames', () => {
+  let svc: AcpSessionHistoryService
+  let storage: FakeStorage
+  beforeEach(() => {
+    const made = makeService()
+    svc = made.svc
+    storage = made.storage
+  })
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('pins a whitelist on an entry with none', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    svc.setHistoryMcpServerNames(e.id, ['fs', 'docs'])
+    expect(svc.get(e.id)?.mcpServerNames).toEqual(['fs', 'docs'])
+  })
+
+  it('clearing with null removes the key entirely (back to inherit)', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    svc.setHistoryMcpServerNames(e.id, ['fs'])
+    svc.setHistoryMcpServerNames(e.id, null)
+    const entry = svc.get(e.id)!
+    expect(entry.mcpServerNames).toBeUndefined()
+    expect('mcpServerNames' in entry).toBe(false)
+  })
+
+  it('is a no-op for unknown ids and unchanged values', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    svc.setHistoryMcpServerNames('nope', ['fs'])
+    expect(svc.get(e.id)?.mcpServerNames).toBeUndefined()
+    await flushWrite()
+    const before = storage.setCalls.length
+    svc.setHistoryMcpServerNames(e.id, ['fs'])
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(before + 1)
+    svc.setHistoryMcpServerNames(e.id, ['fs'])
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(before + 1)
+  })
+
+  it('round-trips the pin through persistence', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    svc.setHistoryMcpServerNames(e.id, ['fs'])
+    await flushWrite()
+    const reloaded = makeService({ storage }).svc
+    await reloaded.initialize()
+    expect(reloaded.get(e.id)?.mcpServerNames).toEqual(['fs'])
+    reloaded.dispose()
+  })
+
+  it('rejects a malformed mcpServerNames on load (entry dropped, not a crash)', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    await flushWrite()
+    storage.store.set('acp.sessionHistory', {
+      schemaVersion: 2,
+      entries: [{ ...svc.get(e.id)!, mcpServerNames: 'fs' }],
+    })
+    const reloaded = makeService({ storage }).svc
+    await reloaded.initialize()
+    expect(reloaded.get(e.id)).toBeUndefined()
+    reloaded.dispose()
+  })
+
+  it('loads v1 rows (no mcpServerNames key) as inherit', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    await flushWrite()
+    const row = svc.get(e.id)! as unknown as Record<string, unknown>
+    storage.store.set('acp.sessionHistory', {
+      schemaVersion: 1,
+      entries: [row],
+    })
+    const reloaded = makeService({ storage }).svc
+    await reloaded.initialize()
+    const loaded = reloaded.get(e.id)
+    expect(loaded).toBeDefined()
+    expect(loaded!.mcpServerNames).toBeUndefined()
+    reloaded.dispose()
+  })
+
+  it('preserves mcpServerNames across an add() re-insert', async () => {
+    await svc.initialize()
+    const first = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't1' })
+    svc.setHistoryMcpServerNames(first.id, ['fs'])
+    const second = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't2' })
+    expect(second.mcpServerNames).toEqual(['fs'])
   })
 })
 

@@ -121,6 +121,7 @@ function makeSession(
     configOptions: observableValue<readonly SessionConfigOption[]>('t.cfg', []),
     availableCommands: observableValue('t.cmds', []),
     mcpServers: observableValue('t.mcp', []),
+    mcpServerSelection: observableValue<readonly string[] | null>('t.mcpSel', null),
     collapseMode,
     accumulatedRunningMs: observableValue('t.arm', 0),
     runningStartedAt: observableValue<number | undefined>('t.rsa', undefined),
@@ -181,6 +182,7 @@ function makeInstantiation(
   services.set(IAcpSessionService, {
     _serviceBrand: undefined,
     activeSession: observableValue<IAcpSession | undefined>('t.active', undefined),
+    mcpServerDefinitions: observableValue('t.mcpDefs', []),
   } as unknown as IAcpSessionService)
   services.set(IAcpAgentRegistry, {
     _serviceBrand: undefined,

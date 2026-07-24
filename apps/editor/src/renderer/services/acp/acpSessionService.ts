@@ -22,6 +22,7 @@ import {
   Emitter,
   generateUuid,
   IConfigurationService,
+  IFileService,
   ILoggerService,
   INotificationService,
   IStorageService,
@@ -31,8 +32,11 @@ import {
   Severity,
   StorageScope,
   localize,
+  observableValue,
+  URI,
   type ILogger,
   type IObservable,
+  type ISettableObservable,
   type Event,
 } from '@universe-editor/platform'
 import {
@@ -46,9 +50,16 @@ import {
 } from '@agentclientprotocol/sdk'
 import {
   filterMcpServersByCapabilities,
+  filterWireByNames,
   mcpServerTransport,
+  mergeMcpServerDefinitions,
+  mergeWireMcpServers,
   normalizeMcpServers,
+  parseMcpJson,
+  readMcpServerDefinitions,
+  resolveMcpServerSelection,
   withMcpServerEnv,
+  type McpServerDefinition,
 } from './acpMcpServers.js'
 import {
   IAcpClientService,
@@ -130,6 +141,7 @@ import { snapshotConfigSelections } from './configOptionLabel.js'
  * cross-worktree activation flow catches this by type.
  */
 export { AcpForeignWorktreeError }
+export type { McpServerDefinition } from './acpMcpServers.js'
 
 export interface IAcpCreateSessionOptions {
   /**
@@ -145,6 +157,20 @@ export interface IAcpCreateSessionOptions {
    * runs in the directory the link named, not merely the window's workspace.
    */
   readonly cwd?: string
+  /**
+   * Title override (defaults to `agentName HH:MM`). Used by the empty-session
+   * MCP reload so the replacement session keeps the old title seamlessly; a
+   * caller-protected (manual) title must additionally be re-locked via
+   * `renameTitle` on the new session.
+   */
+  readonly title?: string
+  /**
+   * Per-session MCP server whitelist to pin (`null` = inherit the defaults).
+   * Applied synchronously before the background connect so the very first
+   * session/new already carries it — used by the empty-session MCP reload,
+   * which replaces the session instead of resuming it.
+   */
+  readonly mcpServerNames?: readonly string[] | null
 }
 
 export interface IAcpSessionService {
@@ -241,6 +267,27 @@ export interface IAcpSessionService {
     messageId: string,
     options?: { dryRun?: boolean; rewindFiles?: boolean },
   ): Promise<RewindFilesResult | undefined>
+  /**
+   * The MCP definition pool the session picker shows: `acp.mcpServers` merged
+   * with the project `.mcp.json` (project wins by name), annotated with
+   * transport / disabled / source. Updated on config changes and by
+   * {@link refreshMcpServerDefinitions} (the picker calls it on open so a
+   * `.mcp.json` edited on disk is picked up without a file watcher).
+   */
+  readonly mcpServerDefinitions: IObservable<readonly McpServerDefinition[]>
+  /** Re-read the pool (global config + project `.mcp.json`). Fire-and-forget safe. */
+  refreshMcpServerDefinitions(): Promise<void>
+  /**
+   * Change the session's MCP whitelist (`null` = inherit the defaults).
+   * Persists the pin to the history row (once the durable id exists), then
+   * converges the live connection: a connected session whose effective server
+   * set changed is seamlessly reloaded (`session/load` — the agent keeps the
+   * conversation, MCP processes restart with the new list). The selection is
+   * sticky: it also becomes the per-agent default the next new session
+   * inherits (`null` clears it → back to "all non-disabled pool entries").
+   * No-op for read-only previews.
+   */
+  setSessionMcpServers(sessionId: string, names: readonly string[] | null): void
 }
 
 export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessionService')
@@ -286,6 +333,25 @@ export class AcpSessionService
   private readonly _onDidCloseSession = this._register(new Emitter<string>())
   readonly onDidCloseSession = this._onDidCloseSession.event
 
+  /**
+   * MCP definition pool mirror (global config + project `.mcp.json`). Seeded
+   * synchronously from the global config; the project file joins on the first
+   * {@link refreshMcpServerDefinitions} / session creation.
+   */
+  readonly mcpServerDefinitions: ISettableObservable<readonly McpServerDefinition[]>
+
+  /**
+   * The effective MCP whitelist snapshotted when each session's connection
+   * attached, keyed by local session id. The drift autorun compares the
+   * session's *current* selection against this to decide whether a reload is
+   * needed — comparing against the wire seed would false-positive on servers
+   * dropped by capability gating.
+   */
+  private readonly _mcpSelectionAtAttach = new Map<string, readonly string[] | null>()
+
+  /** Session ids (agent-issued) with an MCP reload currently in flight. */
+  private readonly _mcpReloadingSessions = new Set<string>()
+
   private readonly _logger: ILogger
   private readonly _coordinator: AcpSessionRestoreCoordinator
 
@@ -322,9 +388,14 @@ export class AcpSessionService
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IAcpAuthGuidanceService private readonly _authGuidance: IAcpAuthGuidanceService,
     @IAcpSessionFactory private readonly _sessionFactory: IAcpSessionFactory,
+    @IFileService private readonly _fileService: IFileService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
+    this.mcpServerDefinitions = observableValue<readonly McpServerDefinition[]>(
+      'acp.mcpServerDefinitions',
+      this._readGlobalMcpDefinitions(),
+    )
     // Install the notification sink on the (singleton) client service. The
     // pool fans out session/update + session/request_permission via this sink,
     // routing by params.sessionId, so a single sink supports the shared
@@ -383,6 +454,17 @@ export class AcpSessionService
           void this.refreshSessions().catch(() => {
             // refresh failures are non-fatal and already logged by the coordinator.
           })
+        }
+      }),
+    )
+    // Global MCP config edited: keep the definition pool mirror fresh. Inheriting
+    // sessions pick the change up on their next (re)connect — we intentionally
+    // do NOT reload live sessions for a config edit; only an explicit picker
+    // toggle reloads.
+    this._register(
+      this._config.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration('acp.mcpServers')) {
+          void this.refreshMcpServerDefinitions()
         }
       }),
     )
@@ -445,7 +527,7 @@ export class AcpSessionService
     const now = new Date()
     const hh = String(now.getHours()).padStart(2, '0')
     const mm = String(now.getMinutes()).padStart(2, '0')
-    const title = `${agentName} ${hh}:${mm}`
+    const title = options?.title ?? `${agentName} ${hh}:${mm}`
 
     // Build + publish the session synchronously with a stable local id so the
     // chat UI renders (and accepts input) immediately. The agent process spawn +
@@ -463,6 +545,7 @@ export class AcpSessionService
     this._wireAuthGuidance(session)
     this._wireRecovery(session)
     this._wireConfigOptionsCache(session)
+    this._wireMcpDrift(session)
     // Optimistic config bar: seed the last-known option bag for this agent
     // (currentValue overridden by the user's saved per-agent defaults) so the
     // config switches render the instant the session appears, instead of
@@ -472,6 +555,12 @@ export class AcpSessionService
     if (seededOptions.length > 0) {
       session.setConfigDesired(this._agentDefaults.getDefaults(resolvedAgentId))
       session.seedConfigOptions(seededOptions)
+    }
+    // A caller-supplied pin must land before _connectSession snapshots the
+    // selection for session/new. The drift autorun is inert here (no
+    // sessionIdOnAgent yet), so this cannot trigger a spurious reload.
+    if (options?.mcpServerNames !== undefined) {
+      session.mcpServerSelection.set(options.mcpServerNames, undefined)
     }
     this._sessionStore.add(session, { activate: true })
     this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
@@ -497,7 +586,14 @@ export class AcpSessionService
   ): Promise<void> {
     const agentName = this._registry.get(resolvedAgentId).name
     const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
-    let mcpServers = this._readMcpServers()
+    // The pin is read at the moment session/new is issued so a toggle made
+    // while connecting still lands; a later toggle is caught by the drift
+    // autorun once the session attaches. The attach snapshot stores the pin
+    // itself (not the resolved value) so inheriting sessions never drift
+    // against their own defaults.
+    const pin = session.mcpServerSelection.get()
+    const selection = pin ?? this._defaultMcpSelection(resolvedAgentId)
+    let mcpServers = await this._resolveSessionWireMcpServers(resolvedAgentId, selection, true)
     if (options?.mcpServerEnv) {
       mcpServers = withMcpServerEnv(mcpServers, options.mcpServerEnv, (m) =>
         this._logger.warn(`mcpServers: ${m}`),
@@ -535,13 +631,18 @@ export class AcpSessionService
         ...(mcpSeed.length > 0 ? { mcpServers: mcpSeed } : {}),
       }
       // Record the session in persistent history now that we have the agent id.
+      // A toggled-while-connecting selection is pinned onto the row here; an
+      // untouched session stores nothing (inherit semantics live on read).
+      const liveSelection = session.mcpServerSelection.get()
       this._history.add({
         agentId: resolvedAgentId,
         sessionIdOnAgent: result.sessionId,
         title: session.title,
         ...(cwd !== undefined ? { cwd } : {}),
         hasMessages: false,
+        ...(liveSelection !== null ? { mcpServerNames: [...liveSelection] } : {}),
       })
+      this._mcpSelectionAtAttach.set(session.id, pin)
       // Seed the saved per-agent defaults BEFORE applying the bag so the state
       // machine reconciles it flicker-free (server default → saved value, with
       // no intermediate frame) and queues the real RPC for the agent to adopt.
@@ -700,7 +801,13 @@ export class AcpSessionService
       this._onResumeFailure(entry, err, readOnly)
     }
     const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
-    const mcpServers = this._readMcpServers()
+    // MCP waterfall: session pin (history row) → per-agent saved default →
+    // inherit-all. Resolved once here and applied identically to the session
+    // view-model, the attach snapshot, and the wire list.
+    const mcpSelection =
+      entry.mcpServerNames !== undefined
+        ? entry.mcpServerNames
+        : this._defaultMcpSelection(entry.agentId)
     let session: AcpSession | undefined
     let registered = false
     try {
@@ -723,6 +830,7 @@ export class AcpSessionService
           ...(entry.accumulatedRunningMs
             ? { accumulatedRunningMs: entry.accumulatedRunningMs }
             : {}),
+          mcpServerSelection: mcpSelection === null ? null : [...mcpSelection],
         },
         collapseMode: entry.collapseMode ?? 'default',
         // No title service on resume: restored sessions already carry a durable
@@ -735,6 +843,8 @@ export class AcpSessionService
       this._wireAuthGuidance(session)
       this._wireRecovery(session)
       this._wireConfigOptionsCache(session)
+      this._wireMcpDrift(session)
+      this._mcpSelectionAtAttach.set(session.id, session.mcpServerSelection.get())
       const captured = session
       // Read-only foreign previews register so getById/timeline work, but must
       // not become the active session — that belongs to the current worktree.
@@ -748,6 +858,7 @@ export class AcpSessionService
       // showing a loading placeholder instead of flashing the empty-session hint.
       session.beginHistoryReplay()
 
+      const mcpServers = await this._resolveSessionWireMcpServers(entry.agentId, mcpSelection, true)
       const { kept, dropped } = filterMcpServersByCapabilities(
         mcpServers,
         initResult.agentCapabilities?.mcpCapabilities,
@@ -873,7 +984,11 @@ export class AcpSessionService
               throw new Error(`${agentName} does not support session/resume — cannot reconnect`)
             }
             const { kept, dropped } = filterMcpServersByCapabilities(
-              this._readMcpServers(),
+              await this._resolveSessionWireMcpServers(
+                session.agentId,
+                session.mcpServerSelection.get(),
+                attempt === 1,
+              ),
               initResult.agentCapabilities?.mcpCapabilities,
             )
             this._warnDroppedMcpServers(agentName, dropped)
@@ -906,6 +1021,7 @@ export class AcpSessionService
             }
             conn.attachSession(sid)
             session.reattachConnection(conn)
+            this._mcpSelectionAtAttach.set(session.id, session.mcpServerSelection.get())
           } catch (err) {
             conn.dispose()
             throw err
@@ -1025,6 +1141,7 @@ export class AcpSessionService
     const localId = session.id
     await session.close()
     this._sessionStore.remove(localId)
+    this._mcpSelectionAtAttach.delete(localId)
     AcpChatViewStateCache.clear(localId)
     AcpPromptDraftCache.clear(localId)
     AcpQuestionDraftCache.clearSession(localId)
@@ -1094,13 +1211,26 @@ export class AcpSessionService
     const conn = await this._client.connect(entry.agentId, {
       ...(cwd !== undefined ? { cwd } : {}),
     })
+    // The fork inherits the SOURCE session's MCP whitelist (live selection wins
+    // over the persisted row), so a session the user trimmed servers off of
+    // forks trimmed as well instead of silently reverting to the defaults.
+    const forkMcpSelection =
+      live && !live.readOnly
+        ? live.mcpServerSelection.get()
+        : entry.mcpServerNames !== undefined
+          ? entry.mcpServerNames
+          : this._defaultMcpSelection(entry.agentId)
     let newSessionId: string
     try {
       const initResult = await withTimeout(conn.initializeResult, timeoutMs, 'ACP initialize')
       if (initResult.agentCapabilities?.sessionCapabilities?.fork == null) {
         throw new Error('Agent does not advertise sessionCapabilities.fork — cannot fork')
       }
-      const mcpServers = this._readMcpServers()
+      const mcpServers = await this._resolveSessionWireMcpServers(
+        entry.agentId,
+        forkMcpSelection,
+        true,
+      )
       const { kept } = filterMcpServersByCapabilities(
         mcpServers,
         initResult.agentCapabilities?.mcpCapabilities,
@@ -1144,6 +1274,7 @@ export class AcpSessionService
       title: forkTitle,
       ...(cwd !== undefined ? { cwd } : {}),
       hasMessages: true,
+      ...(forkMcpSelection !== null ? { mcpServerNames: [...forkMcpSelection] } : {}),
       ...(Object.keys(forkConfig.values).length > 0
         ? { configOptions: forkConfig.values, configLabels: forkConfig.labels }
         : {}),
@@ -1364,6 +1495,197 @@ export class AcpSessionService
     )
   }
 
+  // -- MCP definition pool & session selection ---------------------------
+
+  private _readGlobalMcpDefinitions(): readonly McpServerDefinition[] {
+    return readMcpServerDefinitions(this._config.get<unknown>('acp.mcpServers'), 'global', (m) =>
+      this._logger.warn(`mcpServers: ${m}`),
+    )
+  }
+
+  /**
+   * Read + parse the project `.mcp.json` at the workspace root. Returns an
+   * empty record when there is no workspace, no file, or the file is broken —
+   * the project layer is purely additive and must never break session flows.
+   */
+  private async _readProjectMcpJson(): Promise<Record<string, unknown>> {
+    const folder = this._workspace.current?.folder
+    if (!folder) return {}
+    try {
+      const bytes = await this._fileService.readFile(URI.joinPath(folder, '.mcp.json'))
+      return parseMcpJson(new TextDecoder().decode(bytes), (m) => this._logger.warn(m))
+    } catch {
+      return {}
+    }
+  }
+
+  async refreshMcpServerDefinitions(): Promise<void> {
+    const globalDefs = this._readGlobalMcpDefinitions()
+    const projectRaw = await this._readProjectMcpJson()
+    const projectDefs = readMcpServerDefinitions(projectRaw, 'project', (m) =>
+      this._logger.warn(`mcpServers(.mcp.json): ${m}`),
+    )
+    this.mcpServerDefinitions.set(mergeMcpServerDefinitions(globalDefs, projectDefs), undefined)
+  }
+
+  /**
+   * Effective whitelist for a session: the explicit pin when given, else the
+   * per-agent saved default, else `null` (all non-disabled pool entries).
+   */
+  private _defaultMcpSelection(agentId: string): readonly string[] | null {
+    return this._agentDefaults.getMcpServerNames(agentId)
+  }
+
+  /**
+   * Resolve a session's effective MCP wire list: merged pool (global config +
+   * project `.mcp.json`) → whitelist filter → warning for whitelisted names
+   * that no longer exist in the pool.
+   */
+  private async _resolveSessionWireMcpServers(
+    agentId: string,
+    selection: readonly string[] | null,
+    warnStale: boolean,
+  ): Promise<McpServer[]> {
+    const projectRaw = await this._readProjectMcpJson()
+    const projectWire = normalizeMcpServers(projectRaw, (m) =>
+      this._logger.warn(`mcpServers(.mcp.json): ${m}`),
+    )
+    const mergedWire = mergeWireMcpServers(this._readMcpServers(), projectWire)
+    const pool = this.mcpServerDefinitions.get()
+    const { enabledNames, staleNames } = resolveMcpServerSelection(pool, selection)
+    if (warnStale && staleNames.length > 0) {
+      this._logger.warn(
+        `mcpServers: session whitelist names not in the definition pool, skipped: ${staleNames.join(', ')}`,
+      )
+    }
+    return filterWireByNames(mergedWire, new Set(enabledNames))
+  }
+
+  setSessionMcpServers(sessionId: string, names: readonly string[] | null): void {
+    const session = this._findSession(sessionId)
+    if (!session || session.readOnly || session.status.get() === 'closed') return
+    const next = names === null ? null : [...names]
+    if (selectionEquals(session.mcpServerSelection.get(), next)) return
+    session.mcpServerSelection.set(next, undefined)
+    // Sticky selection: the latest explicit choice becomes the per-agent
+    // default, so the next new session inherits it without the user having to
+    // redo the picker. Reset (null) clears the default alongside the pin.
+    this._agentDefaults.setMcpServerNames(session.agentId, next)
+    this._telemetry.publicLog('acp.session_mcp_selection_changed', {
+      agentId: session.agentId,
+      inherit: next === null,
+      count: next?.length ?? 0,
+    })
+    const sid = session.sessionIdOnAgent.get()
+    if (sid !== undefined) this._history.setHistoryMcpServerNames(sid, next)
+    this._convergeMcpDrift(session)
+  }
+
+  /**
+   * Subscribe a session for MCP drift: when the current selection diverges
+   * from what the connection attached with (and the turn is not mid-flight),
+   * seamlessly reload the session so the agent process restarts its MCP
+   * servers with the new list. A drift surfacing while `running` simply waits
+   * — the autorun re-fires when the status flips back to idle.
+   */
+  private _wireMcpDrift(session: AcpSession): void {
+    this._register(
+      autorun((r) => {
+        const selection = session.mcpServerSelection.read(r)
+        const status = session.status.read(r)
+        const sid = session.sessionIdOnAgent.read(r)
+        const replaying = session.isReplayingHistory.read(r)
+        if (sid === undefined || status === 'closed') return
+        if (session.readOnly) return
+        // Mid-replay the session is attached but its history is still loading;
+        // reloading now would race the replay. The autorun re-fires when
+        // endHistoryReplay flips this back.
+        if (replaying) return
+        if (status !== 'idle') return
+        const attached = this._mcpSelectionAtAttach.get(session.id)
+        if (selectionEquals(attached ?? null, selection)) return
+        this._convergeMcpDrift(session)
+      }),
+    )
+  }
+
+  private _convergeMcpDrift(session: IAcpSession): void {
+    const sid = session.sessionIdOnAgent.get()
+    if (sid === undefined) {
+      // Still connecting: `_connectSession` snapshots the pin at the moment
+      // session/new is issued; a change made afterwards is caught by the
+      // drift autorun once the session attaches. Nothing to do here.
+      return
+    }
+    if (session.status.get() !== 'idle' || session.isReplayingHistory.get()) return
+    const attached = this._mcpSelectionAtAttach.get(session.id)
+    const selection = session.mcpServerSelection.get()
+    // Both callers re-check the snapshot: the drift autorun fires on the
+    // explicit change itself (attached still holds the pre-change pin), and a
+    // 'drift' converge unconditionally reloading alongside the 'explicit' one
+    // double-reloads the session — the close+resume pair races itself.
+    if (!selectionEquals(attached ?? null, selection)) {
+      void this._reloadSessionForMcpChange(session)
+    }
+  }
+
+  /**
+   * Seamless MCP reload: close the live session and immediately resume it via
+   * `session/load`. The agent forks detect the changed `mcpServers` fingerprint
+   * and recreate the underlying session process with the new MCP set, replaying
+   * the conversation — the user keeps the timeline, the MCP servers restart.
+   * We warn up front because the restart invalidates the model's prompt cache,
+   * making the next turn slower (and, on metered plans, pricier).
+   */
+  private async _reloadSessionForMcpChange(session: IAcpSession): Promise<void> {
+    const sid = session.sessionIdOnAgent.get()
+    if (sid === undefined || this._mcpReloadingSessions.has(sid)) return
+    this._mcpReloadingSessions.add(sid)
+    try {
+      this._notification.notify({
+        severity: Severity.Info,
+        message: localize(
+          'acp.mcp.reloading',
+          'MCP servers changed — restarting the session to apply. This invalidates the model prompt cache, so the next turn may be slower.',
+        ),
+      })
+      this._telemetry.publicLog('acp.session_mcp_reload', { agentId: session.agentId })
+      this._logger.info(`reloading session ${sid} to apply MCP server changes`)
+      // An empty session (created but never messaged) was never persisted by
+      // the agent, so session/load cannot revive it — replace it with a fresh
+      // session pinned to the new selection instead of resuming the old one.
+      const entry = this._history.get(sid)
+      if (entry?.hasMessages === false) {
+        const pin = session.mcpServerSelection.get()
+        const title = session.title
+        await this.closeSession(sid)
+        this._history.remove(entry.id)
+        const fresh = await this.createSession(session.agentId, {
+          title,
+          ...(pin !== null ? { mcpServerNames: pin } : {}),
+        })
+        // The title override is unlocked, so a user-chosen (manual) title must
+        // be re-locked to keep its protection against auto titles.
+        if (entry.manualTitle === true) fresh.renameTitle(title)
+        this.setActive(fresh.id)
+        return
+      }
+      await this.closeSession(sid)
+      const resumed = await this.resumeSession(sid)
+      this.setActive(resumed.id)
+    } catch (err) {
+      this._logger.warn(`MCP session reload failed: ${(err as Error).message}`)
+      this._notification.notify({
+        severity: Severity.Error,
+        message: localize('acp.mcp.reloadFailed', 'Failed to restart the session: {message}', {
+          message: (err as Error).message,
+        }),
+      })
+    } finally {
+      this._mcpReloadingSessions.delete(sid)
+    }
+  }
+
   private _warnDroppedMcpServers(
     agentName: string,
     dropped: ReadonlyArray<{ name: string; transport: 'http' | 'sse' }>,
@@ -1390,6 +1712,14 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([p, timeout]).finally(() => {
     if (timer) clearTimeout(timer)
   })
+}
+
+/** Order-sensitive equality for two selection values (`null` = inherit). */
+function selectionEquals(a: readonly string[] | null, b: readonly string[] | null): boolean {
+  if (a === b) return true
+  if (a === null || b === null) return false
+  if (a.length !== b.length) return false
+  return a.every((x, i) => x === b[i])
 }
 
 /**

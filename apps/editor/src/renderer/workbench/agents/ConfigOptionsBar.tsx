@@ -6,7 +6,7 @@
  *  for choosing a value.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { Bot, ChevronDown, Settings2, Sliders, Sparkles } from 'lucide-react'
 import { useObservable } from '../useService.js'
 import type { IAcpSession } from '../../services/acp/acpSessionService.js'
@@ -17,9 +17,14 @@ import type {
   SessionConfigSelectOption,
 } from '@agentclientprotocol/sdk'
 import { findConfigOptionLabel } from '../../services/acp/configOptionLabel.js'
+import { McpServerPicker } from './McpServerPicker.js'
+import { usePopoverDismiss } from './usePopoverDismiss.js'
 import styles from './agents.module.css'
 
 export { findConfigOptionLabel as findLabel }
+
+/** Reserved `openId` for the MCP picker so it excludes the option popovers. */
+const MCP_OPEN_ID = '__mcp__'
 
 const CATEGORY_ORDER: SessionConfigOptionCategory[] = ['model', 'mode', 'thought_level']
 
@@ -34,7 +39,20 @@ export function compareByCategory(a: SessionConfigOption, b: SessionConfigOption
 export function ConfigOptionsBar({ session }: { session: IAcpSession }) {
   const options = useObservable(session.configOptions)
   const [openId, setOpenId] = useState<string | null>(null)
-  if (options.length === 0) return null
+  const mcpPicker = (
+    <McpServerPicker
+      session={session}
+      open={openId === MCP_OPEN_ID}
+      onOpen={() => setOpenId(MCP_OPEN_ID)}
+      onClose={() => setOpenId(null)}
+    />
+  )
+  // No agent-advertised options: the bar collapses to the MCP picker alone
+  // (kept inside the flex container so it still owns the left-hand slot). The
+  // picker self-hides for read-only sessions / an empty definition pool.
+  if (options.length === 0) {
+    return <div className={styles['configBar']}>{mcpPicker}</div>
+  }
   const ordered = [...options].sort(compareByCategory)
   return (
     <div className={styles['configBar']} data-testid="acp-config-options">
@@ -48,6 +66,7 @@ export function ConfigOptionsBar({ session }: { session: IAcpSession }) {
           onClose={() => setOpenId(null)}
         />
       ))}
+      {mcpPicker}
     </div>
   )
 }
@@ -127,26 +146,7 @@ function ConfigOptionPopover({
   testKey: string
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    const handlePointer = (ev: MouseEvent) => {
-      const el = containerRef.current
-      if (!el) return
-      if (ev.target instanceof Node && el.contains(ev.target)) return
-      onDismiss()
-    }
-    const handleKey = (ev: KeyboardEvent) => {
-      if (ev.key === 'Escape') onDismiss()
-    }
-    const raf = requestAnimationFrame(() => {
-      document.addEventListener('mousedown', handlePointer)
-      document.addEventListener('keydown', handleKey)
-    })
-    return () => {
-      cancelAnimationFrame(raf)
-      document.removeEventListener('mousedown', handlePointer)
-      document.removeEventListener('keydown', handleKey)
-    }
-  }, [onDismiss])
+  usePopoverDismiss(containerRef, onDismiss)
   return (
     <div
       ref={containerRef}

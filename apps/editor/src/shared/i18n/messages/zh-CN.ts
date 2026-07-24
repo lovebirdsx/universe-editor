@@ -457,7 +457,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.acp.fontSize':
     '控制 Agent 聊天面板的基础字体大小（像素）。代码块和其他内容会相对缩放。',
   'settings.acp.mcpServers':
-    '转发给 Agent session/new 的 MCP 服务器，以服务器名为键。stdio：`{ "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "env": {} } }`。http/sse：`{ "docs": { "type": "http", "url": "https://…", "headers": {} } }`。Agent 不支持的传输（http/sse）会跳过并发出警告；env/header 值会以明文存储 - 请将密钥保存在真实环境变量中。',
+    '转发给 Agent session/new 的 MCP 服务器，以服务器名为键。stdio：`{ "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "env": {} } }`。http/sse：`{ "docs": { "type": "http", "url": "https://…", "headers": {} } }`。加 `"disabled": true` 可保留定义但不随新会话启用（会话内的 MCP 选择器仍可单独开启）；工作区根目录的 `.mcp.json` 会按同名条目覆盖此处的定义。Agent 不支持的传输（http/sse）会跳过并发出警告；env/header 值会以明文存储 - 请将密钥保存在真实环境变量中。',
   'settings.acp.notifications.enabled':
     '当编辑器窗口未聚焦且 Agent 需要注意（权限请求、问题、任务完成或错误）时，显示系统桌面通知。点击通知会聚焦窗口并跳转到该会话。',
   'settings.acp.permissions': '无需提示即可自动批准的工具调用类型（例如 "fs.read"）。',

@@ -141,7 +141,7 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
             default: {},
             description: localize(
               'settings.acp.mcpServers',
-              'MCP servers forwarded to the agent on session/new, keyed by server name. stdio: `{ "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "env": {} } }`. http/sse: `{ "docs": { "type": "http", "url": "https://…", "headers": {} } }`. Transports the agent does not support (http/sse) are skipped with a warning; env/header values are stored in plain text — keep secrets in real environment variables.',
+              'MCP servers forwarded to the agent on session/new, keyed by server name. stdio: `{ "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "env": {} } }`. http/sse: `{ "docs": { "type": "http", "url": "https://…", "headers": {} } }`. Add `"disabled": true` to keep a definition but leave it out of new sessions (the per-session MCP picker can still enable it); a `.mcp.json` in the workspace root overrides same-named entries for that project. Transports the agent does not support (http/sse) are skipped with a warning; env/header values are stored in plain text — keep secrets in real environment variables.',
             ),
           },
           'acp.deepLink.allowAutoSubmit': {

@@ -134,6 +134,14 @@ export interface AcpSessionHistoryEntry {
    * regenerating an AI title so a user-chosen name is never overwritten.
    */
   readonly manualTitle?: boolean
+  /**
+   * Per-session MCP whitelist: the server names (from the `acp.mcpServers` +
+   * project `.mcp.json` pool) this session runs with. Absent = inherit the
+   * current defaults (per-agent saved default, else every non-disabled pool
+   * entry). A pinned list is frozen — servers added to the pool later do NOT
+   * flow into this session until the user re-enables inheritance.
+   */
+  readonly mcpServerNames?: readonly string[]
 }
 
 export interface IAcpSessionHistoryService {
@@ -195,6 +203,12 @@ export interface IAcpSessionHistoryService {
    * an AI title.
    */
   setHistoryManualTitle(sessionId: string): void
+  /**
+   * Persist the session's MCP whitelist ({@link AcpSessionHistoryEntry.mcpServerNames}).
+   * `null` clears the pin (back to inheriting the defaults). No-op if the id is
+   * unknown or the value is unchanged.
+   */
+  setHistoryMcpServerNames(sessionId: string, names: readonly string[] | null): void
   /**
    * Bulk-merge protocol-reported sessions for one agent. Used by the hydrate
    * sweep that polls each agent's `session/list`. Rows are upserted by
@@ -282,7 +296,7 @@ export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryServi
 )
 
 const STORAGE_KEY = 'acp.sessionHistory'
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 const MAX_ENTRIES = 100
 
 interface PersistedShape {
@@ -364,6 +378,11 @@ export class AcpSessionHistoryService
       existingManualTitle === true || existingAiTitle === true
         ? this._state[existingIdx]!.title
         : entry.title
+    // Same carry-over for the MCP whitelist: re-adding the session (e.g. on a
+    // post-pick reload) must keep the user's pinned selection.
+    const carriedMcpServerNames =
+      entry.mcpServerNames ??
+      (existingIdx >= 0 ? this._state[existingIdx]!.mcpServerNames : undefined)
     const next: AcpSessionHistoryEntry = {
       id,
       agentId: entry.agentId,
@@ -376,6 +395,7 @@ export class AcpSessionHistoryService
       ...(carriedConfigOptions !== undefined ? { configOptions: carriedConfigOptions } : {}),
       ...(carriedConfigLabels !== undefined ? { configLabels: carriedConfigLabels } : {}),
       ...(carriedUsage !== undefined ? { usage: carriedUsage } : {}),
+      ...(carriedMcpServerNames !== undefined ? { mcpServerNames: carriedMcpServerNames } : {}),
       ...(existingIdx >= 0 && this._state[existingIdx]!.collapseMode !== undefined
         ? { collapseMode: this._state[existingIdx]!.collapseMode }
         : {}),
@@ -504,6 +524,22 @@ export class AcpSessionHistoryService
     const cur = this._state[idx]!
     if (cur.manualTitle === true) return
     const next: AcpSessionHistoryEntry = { ...cur, manualTitle: true }
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  setHistoryMcpServerNames(sessionId: string, names: readonly string[] | null): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    const nextNames = names === null ? undefined : [...names]
+    if (sameStringArray(cur.mcpServerNames, nextNames)) return
+    // exactOptionalPropertyTypes: present-with-undefined is not assignable, so
+    // clearing the pin must rebuild the entry without the key.
+    const { mcpServerNames: _drop, ...base } = cur
+    const next: AcpSessionHistoryEntry =
+      nextNames === undefined ? base : { ...base, mcpServerNames: nextNames }
     this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()
@@ -692,10 +728,12 @@ export class AcpSessionHistoryService
     if (typeof raw !== 'object' || raw === null) return undefined
     const o = raw as PersistedShape
     if (!Array.isArray(o.entries)) return undefined
-    if (o.schemaVersion !== SCHEMA_VERSION) {
+    if (o.schemaVersion !== SCHEMA_VERSION && o.schemaVersion !== 1) {
       this._logger.warn(`ignoring acp.sessionHistory with schemaVersion=${o.schemaVersion}`)
       return undefined
     }
+    // v1 → v2: `mcpServerNames` is optional, old rows simply inherit the
+    // defaults on next resume — no data migration needed.
     // schema 约定 id === sessionIdOnAgent；老版本曾用自增 id，这里在反序列化时无损归一化，
     // 否则 history.get(sessionIdOnAgent) 永远 miss。
     return o.entries
@@ -753,8 +791,23 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     (o['usage'] === undefined || isValidUsage(o['usage'])) &&
     (o['hasMessages'] === undefined || typeof o['hasMessages'] === 'boolean') &&
     (o['aiTitle'] === undefined || typeof o['aiTitle'] === 'boolean') &&
-    (o['manualTitle'] === undefined || typeof o['manualTitle'] === 'boolean')
+    (o['manualTitle'] === undefined || typeof o['manualTitle'] === 'boolean') &&
+    (o['mcpServerNames'] === undefined || isStringArray(o['mcpServerNames']))
   )
+}
+
+function isStringArray(v: unknown): v is readonly string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === 'string')
+}
+
+function sameStringArray(
+  a: readonly string[] | undefined,
+  b: readonly string[] | undefined,
+): boolean {
+  if (a === b) return true
+  if (a === undefined || b === undefined) return false
+  if (a.length !== b.length) return false
+  return a.every((x, i) => x === b[i])
 }
 
 function isValidUsage(v: unknown): v is NonNullable<AcpSessionHistoryEntry['usage']> {

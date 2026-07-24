@@ -171,6 +171,160 @@ export function mcpServerTransport(server: McpServer): McpTransport {
   return server.type === 'http' ? 'http' : server.type === 'sse' ? 'sse' : 'stdio'
 }
 
+// ---------------------------------------------------------------------------
+// Definition pool (UI-facing) — where servers come from and whether they are
+// enabled by default. The wire `McpServer[]` must never carry these editor-side
+// annotations (`disabled` / `source`), so the pool is tracked separately and
+// joined back by server name.
+// ---------------------------------------------------------------------------
+
+/** Where an MCP server definition came from. `project` rows override `global` ones with the same name. */
+export type McpServerSource = 'global' | 'project'
+
+/**
+ * One entry of the MCP definition pool shown in the session picker. `disabled`
+ * is the global default switch (`acp.mcpServers` entry flag): a disabled server
+ * is not forwarded on session/new unless a session-level whitelist explicitly
+ * re-enables it.
+ */
+export interface McpServerDefinition {
+  readonly name: string
+  readonly transport: McpTransport
+  readonly disabled: boolean
+  readonly source: McpServerSource
+}
+
+/**
+ * Read the user-facing pool (name / transport / disabled) from a raw config
+ * value. Shares `buildServer` with `normalizeMcpServers` so an entry that would
+ * be skipped on the wire is also hidden from the picker — never offer a toggle
+ * for a server the agent would silently drop.
+ */
+export function readMcpServerDefinitions(
+  raw: unknown,
+  source: McpServerSource,
+  onWarn?: WarnFn,
+): McpServerDefinition[] {
+  const out: McpServerDefinition[] = []
+  const seen = new Set<string>()
+  const push = (name: string, cfg: unknown): void => {
+    const server = buildServer(name, cfg, onWarn)
+    if (!server || seen.has(server.name)) return
+    seen.add(server.name)
+    const disabled =
+      cfg != null && typeof cfg === 'object' && (cfg as Record<string, unknown>).disabled === true
+    out.push({ name: server.name, transport: mcpServerTransport(server), disabled, source })
+  }
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (item == null || typeof item !== 'object') continue
+      const name = (item as { name?: unknown }).name
+      if (typeof name === 'string') push(name, item)
+    }
+    return out
+  }
+  if (raw != null && typeof raw === 'object') {
+    for (const [name, cfg] of Object.entries(raw as Record<string, unknown>)) push(name, cfg)
+  }
+  return out
+}
+
+/**
+ * Parse `.mcp.json` text into the Record form consumable by
+ * `normalizeMcpServers` / `readMcpServerDefinitions`. Accepts both the
+ * Claude-Code envelope (`{ "mcpServers": { … } }`) and a bare top-level record.
+ * Unparseable / wrong-shaped input degrades to an empty record with a warning.
+ */
+export function parseMcpJson(text: string, onWarn?: WarnFn): Record<string, unknown> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch (err) {
+    onWarn?.(`.mcp.json: invalid JSON (${(err as Error).message}), ignored`)
+    return {}
+  }
+  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    onWarn?.('.mcp.json: top level must be an object, ignored')
+    return {}
+  }
+  const inner = (parsed as Record<string, unknown>)['mcpServers']
+  if (inner != null && typeof inner === 'object' && !Array.isArray(inner)) {
+    return inner as Record<string, unknown>
+  }
+  return parsed as Record<string, unknown>
+}
+
+/** Merge two pools; `project` rows override `global` rows with the same name. */
+export function mergeMcpServerDefinitions(
+  globalDefs: readonly McpServerDefinition[],
+  projectDefs: readonly McpServerDefinition[],
+): McpServerDefinition[] {
+  const byName = new Map<string, McpServerDefinition>()
+  for (const d of globalDefs) byName.set(d.name, d)
+  for (const d of projectDefs) byName.set(d.name, d)
+  return [...byName.values()]
+}
+
+/** Merge two wire arrays the same way (`project` wins by name). */
+export function mergeWireMcpServers(
+  globalServers: readonly McpServer[],
+  projectServers: readonly McpServer[],
+): McpServer[] {
+  const byName = new Map<string, McpServer>()
+  for (const s of globalServers) byName.set(s.name, s)
+  for (const s of projectServers) byName.set(s.name, s)
+  return [...byName.values()]
+}
+
+/** Result of resolving a session-level whitelist against the definition pool. */
+export interface McpServerSelectionResolution {
+  /** Enabled server names, in pool order. Feed to {@link filterWireByNames}. */
+  readonly enabledNames: readonly string[]
+  /**
+   * Whitelist entries that no longer exist in the pool (server removed from
+   * config after the session pinned it). Callers should surface these once —
+   * a name silently going missing is confusing when the user explicitly
+   * enabled it.
+   */
+  readonly staleNames: readonly string[]
+}
+
+/**
+ * Resolve which servers a session should run with.
+ *  - `selection === null` (inherit): every pool entry that is not `disabled`.
+ *  - `selection` whitelist: exactly those names, intersected with the pool;
+ *    a whitelisted `disabled` server IS enabled (that is the on-demand path —
+ *    globally off by default, explicitly on for this session).
+ */
+export function resolveMcpServerSelection(
+  pool: readonly McpServerDefinition[],
+  selection: readonly string[] | null,
+): McpServerSelectionResolution {
+  if (selection === null) {
+    return { enabledNames: pool.filter((d) => !d.disabled).map((d) => d.name), staleNames: [] }
+  }
+  const wanted = new Set(selection)
+  const enabledNames = pool.filter((d) => wanted.has(d.name)).map((d) => d.name)
+  const inPool = new Set(pool.map((d) => d.name))
+  const staleNames = selection.filter((n) => !inPool.has(n))
+  return { enabledNames, staleNames }
+}
+
+/** Keep only wire servers whose name is in `names`. */
+export function filterWireByNames(
+  servers: readonly McpServer[],
+  names: ReadonlySet<string>,
+): McpServer[] {
+  return servers.filter((s) => names.has(s.name))
+}
+
+/** Structural set equality over string arrays (order-insensitive). */
+export function sameNameSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  const set = new Set(a)
+  return b.every((n) => set.has(n))
+}
+
 /**
  * Parse a Claude SDK tool name of the form `mcp__<server>__<tool>` into its
  * parts. Returns `undefined` for non-MCP tools or malformed names so callers

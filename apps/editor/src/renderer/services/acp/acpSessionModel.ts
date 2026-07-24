@@ -414,6 +414,11 @@ export interface IAcpSessionInitState {
    * transport from config.
    */
   readonly mcpServers?: ReadonlyArray<{ readonly name: string; readonly transport: McpTransport }>
+  /**
+   * Session-level MCP whitelist restored from the history row on resume
+   * (`null`/absent = inherit the defaults). Seeded into {@link IAcpSession.mcpServerSelection}.
+   */
+  readonly mcpServerSelection?: readonly string[] | null
   /** Cumulative running duration in ms, restored from history on resume. */
   readonly accumulatedRunningMs?: number
 }
@@ -481,6 +486,14 @@ export interface IAcpSession {
    * system-init snapshot. Empty when no MCP servers are involved.
    */
   readonly mcpServers: IObservable<readonly AcpMcpServerStatus[]>
+  /**
+   * Session-level MCP whitelist (`null` = inherit the defaults: the per-agent
+   * saved default, else every non-disabled pool entry). A pinned list is
+   * frozen — pool additions afterwards do not flow in. Mutated via
+   * {@link IAcpSessionService.setSessionMcpServers}, which also persists it
+   * and converges the live connection (reload on drift).
+   */
+  readonly mcpServerSelection: IObservable<readonly string[] | null>
   /** Current timeline collapse mode for this session. */
   readonly collapseMode: IObservable<CollapseMode>
   /** Cumulative milliseconds in 'running' status — does not include the current segment if still running. */

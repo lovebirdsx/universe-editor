@@ -8,6 +8,10 @@
  *  Supported requests from the editor:
  *    - initialize                        → responds with protocolVersion 1
  *    - session/new                       → responds with a fresh sessionId
+ *    - session/load (ECHO_AGENT_LOAD_SESSION=1)
+ *                                      → succeeds only for sessions that ran a
+ *                                        prompt; empty sessions fail like they
+ *                                        do on real agents (never persisted)
  *    - session/prompt                    → emits two session/update chunks and
  *                                          a tool_call cycle, then resolves
  *                                          with stopReason='end_turn'
@@ -28,6 +32,11 @@ let nextExecId = 1
 const activeTurns = new Map() // sessionId -> { cancelled: boolean }
 const sessionMcpServers = new Map() // sessionId -> mcpServers array from session/new
 const sessionCwds = new Map() // sessionId -> cwd from session/new
+// sessionIds that have run at least one prompt. With ECHO_AGENT_LOAD_SESSION=1
+// the fixture mirrors real agents: an empty session is never persisted, so
+// session/load only succeeds for messaged sessions.
+const messagedSessions = new Set()
+const loadSessionEnabled = process.env.ECHO_AGENT_LOAD_SESSION === '1'
 
 function send(msg) {
   process.stdout.write(JSON.stringify(msg) + '\n')
@@ -51,6 +60,7 @@ async function delay(ms) {
 
 async function runPrompt(id, params) {
   const sessionId = params.sessionId
+  messagedSessions.add(sessionId)
   const userText = (params.prompt || [])
     .filter((b) => b && b.type === 'text')
     .map((b) => b.text)
@@ -218,13 +228,32 @@ function handle(msg) {
       // Opt-in image capability via env so image-paste/drop E2E can exercise the
       // gated path; default stays capability-free for the other smoke specs.
       const promptCapabilities = process.env.ECHO_AGENT_IMAGE === '1' ? { image: true } : {}
-      return reply(msg.id, { protocolVersion: 1, agentCapabilities: { promptCapabilities } })
+      return reply(msg.id, {
+        protocolVersion: 1,
+        agentCapabilities: {
+          promptCapabilities,
+          ...(loadSessionEnabled ? { loadSession: true } : {}),
+        },
+      })
     }
     case 'session/new': {
       const sessionId = 'echo-' + nextSessionId++
       sessionMcpServers.set(sessionId, msg.params?.mcpServers ?? [])
       sessionCwds.set(sessionId, msg.params?.cwd ?? '')
       return reply(msg.id, { sessionId })
+    }
+    case 'session/load': {
+      if (!loadSessionEnabled) {
+        return fail(msg.id, -32601, 'Method not found: ' + msg.method)
+      }
+      const sessionId = msg.params?.sessionId
+      // Real agents only persist a session once it has messages; loading an
+      // empty session fails. The editor relies on this to discard ghost rows.
+      if (!messagedSessions.has(sessionId)) {
+        return fail(msg.id, -32602, 'session not found: ' + sessionId)
+      }
+      sessionMcpServers.set(sessionId, msg.params?.mcpServers ?? [])
+      return reply(msg.id, {})
     }
     case 'session/prompt':
       return void runPrompt(msg.id, msg.params || {})

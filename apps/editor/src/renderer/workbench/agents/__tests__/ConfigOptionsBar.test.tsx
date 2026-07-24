@@ -94,6 +94,7 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
     configOptions: configObs,
     availableCommands: observableValue<readonly AvailableCommand[]>('c', []),
     mcpServers: observableValue('mcp', []),
+    mcpServerSelection: observableValue<readonly string[] | null>('mcpSel', null),
     collapseMode: observableValue('cm', 'default' as const),
     accumulatedRunningMs: observableValue('arm', 0),
     runningStartedAt: observableValue<number | undefined>('rsa', undefined),

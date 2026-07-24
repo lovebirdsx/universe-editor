@@ -103,6 +103,9 @@ function makeService(
     },
     forkSession: (() => Promise.reject(new Error('not implemented'))) as never,
     rewindSession: (() => Promise.resolve(undefined)) as never,
+    mcpServerDefinitions: observableValue('test.mcpDefs', []),
+    async refreshMcpServerDefinitions(): Promise<void> {},
+    setSessionMcpServers(): void {},
   } satisfies FakeAcpSessionService
 }
 

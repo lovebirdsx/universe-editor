@@ -429,6 +429,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     configOptions,
     availableCommands: commandsObs,
     mcpServers: observableValue('test.mcpServers', []),
+    mcpServerSelection: observableValue<readonly string[] | null>('test.mcpSel', null),
     collapseMode: observableValue('test.collapseMode', 'default' as const),
     accumulatedRunningMs: observableValue('test.arm', 0),
     runningStartedAt: observableValue<number | undefined>('test.rsa', undefined),

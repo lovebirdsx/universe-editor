@@ -374,6 +374,14 @@ export interface E2EProbe {
    */
   getAcpMcpServers(): ReadonlyArray<{ name: string; status: string; transport?: string }>
   /**
+   * Pin the active session's MCP whitelist (`null` resets to inherit), exactly
+   * like toggling checkboxes in the session MCP picker. May trigger a seamless
+   * session reload in the background.
+   */
+  setAcpSessionMcpServers(names: readonly string[] | null): void
+  /** Status of the active ACP session ('connecting' | 'idle' | 'running' | 'closed'), if any. */
+  getAcpSessionStatus(): string | undefined
+  /**
    * Snapshot of the active session's pending `AskUserQuestion` carousel, or
    * undefined when none is awaiting an answer.
    */

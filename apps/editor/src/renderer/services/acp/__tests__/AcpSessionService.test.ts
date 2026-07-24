@@ -7,7 +7,7 @@
  *  without going through the SDK wire.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   autorun,
   ConfigurationService,
@@ -72,6 +72,7 @@ import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
+import { StubFileService } from './stubFileService.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import type { IAcpSessionTitleService } from '../acpSessionTitleService.js'
 import {
@@ -486,6 +487,7 @@ describe('AcpSessionService', () => {
         titleService,
         compactionStats,
       ),
+      new StubFileService(),
     )
   })
 
@@ -630,6 +632,7 @@ describe('AcpSessionService', () => {
         new StubSessionTitleService(),
         makeCompactionStats(),
       ),
+      new StubFileService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -847,6 +850,7 @@ describe('AcpSessionService', () => {
         new StubSessionTitleService(),
         makeCompactionStats(),
       ),
+      new StubFileService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -898,6 +902,7 @@ describe('AcpSessionService', () => {
           new StubSessionTitleService(),
           makeCompactionStats(),
         ),
+        new StubFileService(),
       )
     }
 
@@ -1162,6 +1167,7 @@ describe('AcpSessionService — rewind / fork', () => {
         new StubSessionTitleService(),
         makeCompactionStats(),
       ),
+      new StubFileService(),
     )
     return { svc, history }
   }
@@ -1442,6 +1448,7 @@ describe('AcpSessionService — startup timeout', () => {
         new StubSessionTitleService(),
         makeCompactionStats(),
       ),
+      new StubFileService(),
     )
     // createSession returns synchronously now; the handshake fails in the
     // background after the startup timeout fires, sealing the session via
@@ -1485,6 +1492,7 @@ describe('AcpSessionService — startup timeout', () => {
         new StubSessionTitleService(),
         makeCompactionStats(),
       ),
+      new StubFileService(),
     )
     const s = await svc.createSession()
     // Submit a prompt while still connecting — it is buffered by the connection
@@ -1538,6 +1546,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
         new StubSessionTitleService(),
         compactionStats,
       ),
+      new StubFileService(),
     )
   }
 
@@ -1858,6 +1867,297 @@ describe('AcpSessionService — mcpServers capability gating', () => {
   })
 })
 
+describe('AcpSessionService — session MCP selection', () => {
+  function makeService(client: FakeAcpClientService, config: ConfigurationService) {
+    const notification = new StubNotificationService()
+    const telemetry = new NoopTelemetryService()
+    const history = makeHistory()
+    const agentDefaults = makeAgentDefaults()
+    const svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      notification,
+      telemetry,
+      new StubPermissionHandler(),
+      new StubLoggerService(),
+      history,
+      new FakeStorage(),
+      agentDefaults,
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+    )
+    return { svc, history, agentDefaults }
+  }
+
+  it('sends all non-disabled pool servers when the session inherits', async () => {
+    const client = new FakeAcpClientService()
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: ['fs.js'] },
+      web: { command: 'node', args: ['web.js'], disabled: true },
+    })
+    const { svc } = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const params = client.connected[0]!.agent.newSessionCalls[0]!
+    expect(params.mcpServers.map((m) => m.name)).toEqual(['fs'])
+    expect(s.mcpServerSelection.get()).toBeNull()
+    svc.dispose()
+  })
+
+  it('narrows the wire list to the saved per-agent default', async () => {
+    const client = new FakeAcpClientService()
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
+    const { svc, agentDefaults } = makeService(client, config)
+    agentDefaults.setMcpServerNames('fake', ['fs'])
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const params = client.connected[0]!.agent.newSessionCalls[0]!
+    expect(params.mcpServers.map((m) => m.name)).toEqual(['fs'])
+    svc.dispose()
+  })
+
+  it('seamlessly reloads on an explicit pin and updates the history row', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
+    const { svc, history } = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    // Give the session real content: an empty session is replaced instead of
+    // resumed (see the empty-session case below).
+    await s.sendPrompt('first turn')
+    const sid = s.sessionIdOnAgent.get()!
+
+    svc.setSessionMcpServers(s.id, ['fs'])
+
+    // Reload is fire-and-forget: close + resume via session/load on a new
+    // connection, with the narrowed wire list.
+    await vi.waitFor(() => {
+      expect(client.connected).toHaveLength(2)
+      expect(client.connected[1]!.agent.loadSessionCalls).toHaveLength(1)
+    })
+    const loadParams = client.connected[1]!.agent.loadSessionCalls[0]!
+    expect(loadParams.sessionId).toBe(sid)
+    expect(loadParams.mcpServers.map((m) => m.name)).toEqual(['fs'])
+    expect(history.get(sid)?.mcpServerNames).toEqual(['fs'])
+    const resumed = svc.getById(sid)
+    expect(resumed?.mcpServerSelection.get()).toEqual(['fs'])
+    expect(svc.activeSession.get()?.id).toBe(sid)
+    svc.dispose()
+  })
+
+  it('replaces an empty session instead of resuming it on an explicit pin', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
+    const { svc, history } = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const sid = s.sessionIdOnAgent.get()!
+    const title = s.title
+
+    // Never messaged: the agent has nothing to session/load, so the reload
+    // swaps in a fresh session pinned to the new selection.
+    svc.setSessionMcpServers(s.id, ['fs'])
+
+    await vi.waitFor(() => {
+      expect(client.connected).toHaveLength(2)
+      const active = svc.activeSession.get()
+      expect(active).toBeDefined()
+      expect(active!.status.get()).toBe('idle')
+    })
+    // No session/load anywhere; the replacement went through session/new with
+    // the narrowed wire list.
+    expect(client.connected.flatMap((c) => c.agent.loadSessionCalls)).toHaveLength(0)
+    expect(client.connected[0]!.agent.newSessionCalls).toHaveLength(1)
+    expect(client.connected[1]!.agent.newSessionCalls).toHaveLength(1)
+    const newParams = client.connected[1]!.agent.newSessionCalls[0]!
+    expect(newParams.mcpServers.map((m) => m.name)).toEqual(['fs'])
+    // The replacement is active, keeps the old title, and the history row was
+    // swapped (old row removed, new row pinned).
+    const active = svc.activeSession.get()!
+    expect(active.id).not.toBe(s.id)
+    expect(active.title).toBe(title)
+    expect(history.get(sid)).toBeUndefined()
+    const newSid = active.sessionIdOnAgent.get()!
+    expect(newSid).not.toBe(sid)
+    expect(history.get(newSid)?.mcpServerNames).toEqual(['fs'])
+    svc.dispose()
+  })
+
+  it('resetting to inherit reloads back to the full wire list and clears the pin', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
+    const { svc, history } = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    await s.sendPrompt('first turn')
+    const sid = s.sessionIdOnAgent.get()!
+
+    // Narrow first so the reset back to inherit is itself a divergence.
+    svc.setSessionMcpServers(s.id, ['fs'])
+    await vi.waitFor(() => {
+      expect(client.connected).toHaveLength(2)
+      expect(client.connected[1]!.agent.loadSessionCalls).toHaveLength(1)
+    })
+    expect(client.connected[1]!.agent.loadSessionCalls[0]!.mcpServers.map((m) => m.name)).toEqual([
+      'fs',
+    ])
+
+    svc.setSessionMcpServers(sid, null)
+
+    await vi.waitFor(() => {
+      expect(client.connected).toHaveLength(3)
+      expect(client.connected[2]!.agent.loadSessionCalls).toHaveLength(1)
+    })
+    const loadParams = client.connected[2]!.agent.loadSessionCalls[0]!
+    expect(loadParams.mcpServers.map((m) => m.name)).toEqual(['fs', 'docs'])
+    expect(history.get(sid)?.mcpServerNames).toBeUndefined()
+    expect(svc.getById(sid)?.mcpServerSelection.get()).toBeNull()
+    svc.dispose()
+  })
+
+  it('applies the history pin to session/load on resume', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
+    const { svc, history } = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const sid = s.sessionIdOnAgent.get()!
+    history.setHistoryMcpServerNames(sid, ['fs'])
+    await svc.closeSession(sid)
+
+    const resumed = await svc.resumeSession(sid)
+    expect(resumed.mcpServerSelection.get()).toEqual(['fs'])
+    const loadParams = client.connected[1]!.agent.loadSessionCalls[0]!
+    expect(loadParams.mcpServers.map((m) => m.name)).toEqual(['fs'])
+    svc.dispose()
+  })
+
+  it('does not reload when the selection still matches the attach snapshot', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
+    const { svc } = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    await s.sendPrompt('first turn')
+    const sid = s.sessionIdOnAgent.get()!
+
+    // Narrow to ['fs']: one reload, after which the attach snapshot IS ['fs'].
+    svc.setSessionMcpServers(s.id, ['fs'])
+    await vi.waitFor(() => {
+      expect(client.connected).toHaveLength(2)
+      expect(client.connected[1]!.agent.loadSessionCalls).toHaveLength(1)
+    })
+    expect(svc.getById(sid)?.status.get()).toBe('idle')
+
+    // Re-assert the same pin: it already matches the attach snapshot, so no
+    // second reload may be scheduled.
+    svc.setSessionMcpServers(sid, ['fs'])
+    await new Promise((r) => setTimeout(r, 0))
+    expect(client.connected).toHaveLength(2)
+    expect(svc.getById(sid)?.status.get()).toBe('idle')
+    svc.dispose()
+  })
+
+  it('pins the selection as the per-agent default so the next new session inherits it', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
+    const { svc, agentDefaults } = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    svc.setSessionMcpServers(s.id, ['fs'])
+    await vi.waitFor(() => {
+      expect(client.connected).toHaveLength(2)
+    })
+
+    // The toggle is sticky: saved as the per-agent default…
+    expect(agentDefaults.getMcpServerNames('fake')).toEqual(['fs'])
+
+    // …so the next new session starts with it — no manual reconfiguration.
+    const s2 = await svc.createSession()
+    await s2.whenConnected()
+    const params = client.connected[2]!.agent.newSessionCalls[0]!
+    expect(params.mcpServers.map((m) => m.name)).toEqual(['fs'])
+    svc.dispose()
+  })
+
+  it('resetting to inherit also clears the saved default', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
+    const { svc, agentDefaults } = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    await s.sendPrompt('first turn')
+    const sid = s.sessionIdOnAgent.get()!
+
+    svc.setSessionMcpServers(s.id, ['fs'])
+    await vi.waitFor(() => {
+      expect(client.connected).toHaveLength(2)
+    })
+    expect(agentDefaults.getMcpServerNames('fake')).toEqual(['fs'])
+
+    // The resume swapped the session object — address it by the durable id.
+    svc.setSessionMcpServers(sid, null)
+    await vi.waitFor(() => {
+      expect(client.connected).toHaveLength(3)
+    })
+    expect(agentDefaults.getMcpServerNames('fake')).toBeNull()
+
+    // Back to inheriting the pool: the next new session gets every
+    // non-disabled entry again.
+    const s2 = await svc.createSession()
+    await s2.whenConnected()
+    const params = client.connected[3]!.agent.newSessionCalls[0]!
+    expect(params.mcpServers.map((m) => m.name)).toEqual(['fs', 'docs'])
+    svc.dispose()
+  })
+})
+
 class FixedTitleService implements IAcpSessionTitleService {
   declare readonly _serviceBrand: undefined
   constructor(private readonly _title: string) {}
@@ -1898,6 +2198,7 @@ describe('AcpSessionService — AI session title push-back', () => {
         title,
         makeCompactionStats(),
       ),
+      new StubFileService(),
     )
     return { svc, history }
   }
@@ -2113,6 +2414,7 @@ describe('AcpSessionService — configOptions history snapshot', () => {
         new StubSessionTitleService(),
         makeCompactionStats(),
       ),
+      new StubFileService(),
     )
     return { svc, history }
   }
