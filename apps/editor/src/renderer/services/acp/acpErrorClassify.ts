@@ -18,6 +18,9 @@
  *    - claude fork: `RequestError.data.errorKind` — the Claude SDK's
  *      categorical SDKAssistantMessageError ('rate_limit' | 'overloaded' |
  *      'server_error' | 'authentication_failed' | 'billing_error' | …).
+ *      'unknown' means the CLI itself could not categorise the failure (an
+ *      unrecognised proxy/gateway response, say), so it falls through to the
+ *      text fallback rather than forcing `fatal`.
  *    - codex fork: `RequestError.data.codexErrorInfo` — 'usageLimitExceeded',
  *      'unauthorized', or { responseStreamDisconnected | httpConnectionFailed |
  *      responseTooManyFailedAttempts: { httpStatusCode } }.
@@ -49,7 +52,7 @@ const CLAUDE_AUTH_KINDS: ReadonlySet<string> = new Set([
 
 /** Text fallback for agents that report no structured error data. */
 const TRANSIENT_TEXT =
-  /\b429\b|rate.?limit|overloaded|too many requests|temporarily unavailable|service unavailable|\b5\d\d\b|timed? ?out|econnreset|etimedout|epipe|socket hang up|network error/i
+  /\b429\b|rate.?limit|overloaded|too many requests|temporarily unavailable|service unavailable|\b5\d\d\b|timed? ?out|econnreset|etimedout|epipe|socket hang up|network error|empty or malformed/i
 const QUOTA_TEXT = /quota exceeded|usage limit|billing|insufficient.?quota|credits/i
 
 function readData(err: unknown): Record<string, unknown> | undefined {
@@ -97,6 +100,10 @@ function classifyClaudeKind(kind: unknown): AcpErrorVerdict | undefined {
   if (CLAUDE_TRANSIENT_KINDS.has(kind)) return { cls: 'transient', kind }
   if (CLAUDE_QUOTA_KINDS.has(kind)) return { cls: 'quota', kind }
   if (CLAUDE_AUTH_KINDS.has(kind)) return { cls: 'auth', kind }
+  // 'unknown' carries no information — the CLI itself could not categorise the
+  // failure (e.g. an empty/malformed HTTP 200 body from a proxy), so fall
+  // through to the message-text fallback instead of forcing fatal.
+  if (kind === 'unknown') return undefined
   return { cls: 'fatal', kind }
 }
 

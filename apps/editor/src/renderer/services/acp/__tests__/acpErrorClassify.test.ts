@@ -16,6 +16,24 @@ describe('classifyAcpError', () => {
     expect(classifyAcpError({ data: { errorKind: 'invalid_request' } }).cls).toBe('fatal')
   })
 
+  it('lets claude errorKind unknown fall through to the text fallback', () => {
+    // Real-world shape from the claude fork when a proxy/gateway mangles the
+    // API response: the CLI cannot categorise it, only the message tells.
+    expect(
+      classifyAcpError({
+        code: -32603,
+        message:
+          'Internal error: API Error: API returned an empty or malformed response (HTTP 200) — check for a proxy or gateway intercepting the request',
+        data: { errorKind: 'unknown' },
+      }).cls,
+    ).toBe('transient')
+    // …but an unknown kind with no recognisable text stays conservatively fatal.
+    expect(
+      classifyAcpError({ message: 'Internal error: something odd', data: { errorKind: 'unknown' } })
+        .cls,
+    ).toBe('fatal')
+  })
+
   it('classifies codex fork codexErrorInfo', () => {
     expect(classifyAcpError({ data: { codexErrorInfo: 'usageLimitExceeded' } }).cls).toBe('quota')
     expect(classifyAcpError({ data: { codexErrorInfo: 'unauthorized' } }).cls).toBe('auth')
@@ -55,6 +73,9 @@ describe('classifyAcpError', () => {
     expect(classifyAcpError(new Error('HTTP 429 Too Many Requests')).cls).toBe('transient')
     expect(classifyAcpError(new Error('service temporarily unavailable')).cls).toBe('transient')
     expect(classifyAcpError(new Error('socket hang up')).cls).toBe('transient')
+    expect(
+      classifyAcpError(new Error('API returned an empty or malformed response (HTTP 200)')).cls,
+    ).toBe('transient')
     expect(classifyAcpError(new Error('usage limit reached')).cls).toBe('quota')
     expect(classifyAcpError(new Error('some random failure')).cls).toBe('fatal')
   })

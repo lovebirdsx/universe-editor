@@ -368,6 +368,35 @@ describe('AcpSession auto-recovery', () => {
     expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(false)
   })
 
+  it('retries an unknown-kind turn failure whose message text is transient', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        // The proxy/gateway-mangled response the claude fork reports with
+        // errorKind 'unknown' — only the message text marks it transient.
+        () =>
+          Promise.reject(
+            Object.assign(
+              new Error(
+                'Internal error: API Error: API returned an empty or malformed response (HTTP 200) — check for a proxy or gateway intercepting the request',
+              ),
+              { code: -32603, data: { errorKind: 'unknown' } },
+            ),
+          ),
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    await s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    expect(client.connections[0]!.promptCalls.length).toBe(2)
+    expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(false)
+  })
+
   it('surfaces exhausted state after retries run out, keeping a manual retry', async () => {
     client = new ScriptedClient({
       loadSession: true,
