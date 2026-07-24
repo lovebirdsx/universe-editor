@@ -26,6 +26,8 @@ let buffer = ''
 let nextSessionId = 1
 let nextExecId = 1
 const activeTurns = new Map() // sessionId -> { cancelled: boolean }
+const sessionMcpServers = new Map() // sessionId -> mcpServers array from session/new
+const sessionCwds = new Map() // sessionId -> cwd from session/new
 
 function send(msg) {
   process.stdout.write(JSON.stringify(msg) + '\n')
@@ -119,6 +121,36 @@ async function runPrompt(id, params) {
     return reply(id, { stopReason: 'end_turn' })
   }
 
+  // Test directive: "report-mcp-servers" echoes back the mcpServers array this
+  // session was created with, so E2E can assert what the editor forwarded on
+  // session/new (e.g. one-shot env injections that never touch the persisted
+  // acp.mcpServers setting).
+  if (userText === 'report-mcp-servers') {
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: JSON.stringify(sessionMcpServers.get(sessionId) ?? []) },
+      },
+    })
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
+  // Test directive: "report-cwd" echoes back the cwd this session was created
+  // with, so E2E can assert deep-link working-directory routing end to end.
+  if (userText === 'report-cwd') {
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: sessionCwds.get(sessionId) ?? '' },
+      },
+    })
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
   // Emit two streaming chunks.
   notify('session/update', {
     sessionId,
@@ -188,8 +220,12 @@ function handle(msg) {
       const promptCapabilities = process.env.ECHO_AGENT_IMAGE === '1' ? { image: true } : {}
       return reply(msg.id, { protocolVersion: 1, agentCapabilities: { promptCapabilities } })
     }
-    case 'session/new':
-      return reply(msg.id, { sessionId: 'echo-' + nextSessionId++ })
+    case 'session/new': {
+      const sessionId = 'echo-' + nextSessionId++
+      sessionMcpServers.set(sessionId, msg.params?.mcpServers ?? [])
+      sessionCwds.set(sessionId, msg.params?.cwd ?? '')
+      return reply(msg.id, { sessionId })
+    }
     case 'session/prompt':
       return void runPrompt(msg.id, msg.params || {})
     default:

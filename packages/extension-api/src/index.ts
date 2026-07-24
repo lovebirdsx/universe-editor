@@ -405,9 +405,10 @@ export interface FileSystemApi {
   delete(path: string, options?: { recursive?: boolean }): Promise<void>
 }
 
-/** Read-only view over a configuration section (async — values live in the renderer). */
+/** View over a configuration section (async — values live in the renderer). */
 export interface WorkspaceConfiguration {
   get<T>(key: string, defaultValue: T): Promise<T>
+  update(key: string, value: unknown): Promise<void>
 }
 
 /** Structural URI matching the editor's `UriComponents`; JSON-serializable so it
@@ -799,6 +800,7 @@ interface IExtensionHostBridge {
     key: string,
     defaultValue: unknown,
   ): Promise<unknown>
+  updateConfiguration(section: string | undefined, key: string, value: unknown): Promise<void>
   createOutputChannel(name: string): OutputChannel
   readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined>
   createTextEditorDecorationType(options: DecorationRenderOptions): TextEditorDecorationType
@@ -982,5 +984,7 @@ export const workspace: WorkspaceApi = {
   getConfiguration: (section) => ({
     get: <T>(key: string, defaultValue: T): Promise<T> =>
       bridge().getConfiguration(section, key, defaultValue) as Promise<T>,
+    update: (key: string, value: unknown): Promise<void> =>
+      bridge().updateConfiguration(section, key, value),
   }),
 }

@@ -4,10 +4,17 @@
  *  shared: the main process uses it to route a link to the right window, the
  *  renderer uses it to turn the link into an IOpenerService target.
  *
- *  Two shapes, mirroring VSCode's `vscode://file/…` / `vscode://command/…`:
+ *  Three shapes, mirroring VSCode's `vscode://file/…` / `vscode://command/…`:
  *    universe-editor://file/<abs-path>[:line[:col]]   open a file, optional position
  *    universe-editor://command/<commandId>[?<args>]   run a whitelisted command
+ *    universe-editor://agent/new?prompt=<text>[&cwd=<dir>]  create an agent session
  *    universe-editor://swarm/review/<id>              open a Swarm review tab
+ *
+ *  Agent links always carry an explicit working directory for the session:
+ *  `cwd` absent/blank means the user's home directory (see
+ *  {@link resolveAgentDeepLinkCwd}). The main process routes the link to the
+ *  window whose workspace IS that directory, opening it as a new workspace
+ *  window first when no window matches.
  *
  *  Command deep-links are the highest-risk surface — anyone can craft one and
  *  hand it to the OS. Only ids in {@link DEEP_LINK_ALLOWED_COMMANDS} may run;
@@ -39,6 +46,21 @@ export const DEEP_LINK_ALLOWED_COMMANDS: readonly string[] = [
 export type DeepLinkTarget =
   | { readonly kind: 'file'; readonly path: string; readonly line?: number; readonly col?: number }
   | { readonly kind: 'command'; readonly id: string; readonly query: string }
+  | DeepLinkAgentPromptTarget
+
+export interface DeepLinkAgentPromptTarget {
+  readonly kind: 'agentPrompt'
+  /** 提示词 */
+  readonly prompt: string
+  /** 是否自动提交 */
+  readonly autoSubmit: boolean
+  /** 指定的 agent id，若未指定则使用默认 agent */
+  readonly agent?: string
+  /** 会话的工作目录；缺省时语义为用户目录（见 resolveAgentDeepLinkCwd） */
+  readonly cwd?: string
+  /** 拉起本次会话的进程 PID */
+  readonly pid?: number
+}
 
 /** True when {@link url} uses the app's deep-link protocol. */
 export function isDeepLink(url: string): boolean {
@@ -62,6 +84,33 @@ export function parseDeepLink(url: string): DeepLinkTarget | undefined {
     const id = trimLeadingSlash(uri.path)
     if (!id) return undefined
     return { kind: 'command', id, query: uri.query }
+  }
+
+  // universe-editor://agent/new?prompt=<text>
+  if (uri.authority === 'agent') {
+    const action = trimLeadingSlash(uri.path)
+    if (action !== 'new') {
+      return undefined
+    }
+
+    const params = new URLSearchParams(uri.query)
+    const prompt = params.get('prompt')
+    if (!prompt || prompt.trim().length === 0) {
+      return undefined
+    }
+
+    const agent = params.get('agent') ?? undefined
+    const cwd = params.get('cwd')?.trim() || undefined
+    const pid = parsePidParam(params.get('pid'))
+    if (params.has('pid') && pid === undefined) return undefined
+    return {
+      kind: 'agentPrompt',
+      prompt,
+      autoSubmit: parseAgentAutoSubmit(params),
+      ...(agent ? { agent } : {}),
+      ...(cwd ? { cwd } : {}),
+      ...(pid !== undefined ? { pid } : {}),
+    }
   }
 
   // universe-editor://swarm/review/<id> → swarm.openReview command with the id.
@@ -108,11 +157,53 @@ export function deepLinkToOpenerTarget(target: DeepLinkTarget): string {
   if (target.kind === 'command') {
     return target.query ? `command:${target.id}?${target.query}` : `command:${target.id}`
   }
+  if (target.kind === 'agentPrompt') {
+    const params = new URLSearchParams()
+    params.set('prompt', target.prompt)
+    if (!target.autoSubmit) params.set('autoSubmit', 'false')
+    if (target.agent) params.set('agent', target.agent)
+    if (target.cwd) params.set('cwd', target.cwd)
+    if (target.pid !== undefined) params.set('pid', String(target.pid))
+    return `agent:new?${params.toString()}`
+  }
   const loc =
     target.line !== undefined
       ? `:${target.line}${target.col !== undefined ? `:${target.col}` : ''}`
       : ''
   return `${target.path}${loc}`
+}
+
+/** Parse the renderer-facing opener target produced for an agent deep-link. */
+export function parseAgentPromptOpenerTarget(
+  target: string,
+): DeepLinkAgentPromptTarget | undefined {
+  const prefix = 'agent:new?'
+  if (!target.startsWith(prefix)) return undefined
+  const params = new URLSearchParams(target.slice(prefix.length))
+  const prompt = params.get('prompt')
+  if (!prompt || prompt.trim().length === 0) return undefined
+  const agent = params.get('agent') ?? undefined
+  const cwd = params.get('cwd')?.trim() || undefined
+  const pid = parsePidParam(params.get('pid'))
+  if (params.has('pid') && pid === undefined) return undefined
+  return {
+    kind: 'agentPrompt',
+    prompt,
+    autoSubmit: parseAgentAutoSubmit(params),
+    ...(agent ? { agent } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(pid !== undefined ? { pid } : {}),
+  }
+}
+
+/**
+ * Resolve the session working directory for an agent deep-link: absent/blank
+ * `cwd` means the user's home directory. The main process passes `os.homedir()`
+ * as `homeDir` so this stays pure and unit-testable.
+ */
+export function resolveAgentDeepLinkCwd(cwd: string | undefined, homeDir: string): string {
+  const trimmed = cwd?.trim()
+  return trimmed ? trimmed : homeDir
 }
 
 /** Strip the leading `/` that URI.parse leaves in front of a Windows drive path. */
@@ -134,5 +225,36 @@ function splitLocation(raw: string): { path: string; line?: number; col?: number
     path: m[1],
     line: parseInt(m[2]!, 10),
     ...(m[3] ? { col: parseInt(m[3], 10) } : {}),
+  }
+}
+
+function parseAgentAutoSubmit(params: URLSearchParams): boolean {
+  const explicit = parseBooleanParam(params.get('autoSubmit'))
+  return explicit ?? true
+}
+
+function parsePidParam(raw: string | null): number | undefined {
+  if (raw === null) return undefined
+  const trimmed = raw.trim()
+  if (!/^\d+$/.test(trimmed)) return undefined
+  const pid = Number(trimmed)
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined
+}
+
+function parseBooleanParam(raw: string | null): boolean | undefined {
+  if (raw === null) return undefined
+  switch (raw.trim().toLowerCase()) {
+    case '1':
+    case 'true':
+    case 'yes':
+    case 'on':
+      return true
+    case '0':
+    case 'false':
+    case 'no':
+    case 'off':
+      return false
+    default:
+      return undefined
   }
 }

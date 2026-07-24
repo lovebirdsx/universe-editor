@@ -30,6 +30,7 @@ import {
   OpenFileAtAction,
   OpenFolderFromExtensionAction,
   OpenFolderInNewWindowFromExtensionAction,
+  UpdateConfigurationAction,
 } from './extensionApiActions.js'
 import {
   ShowCommandsAction,
@@ -621,6 +622,7 @@ registerAction2(OpenFileAtAction)
 registerAction2(OpenFolderFromExtensionAction)
 registerAction2(OpenFolderInNewWindowFromExtensionAction)
 registerAction2(GetConfigurationAction)
+registerAction2(UpdateConfigurationAction)
 
 // Update
 registerAction2(CheckForUpdatesAction)

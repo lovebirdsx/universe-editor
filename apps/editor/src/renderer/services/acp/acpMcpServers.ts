@@ -127,6 +127,42 @@ export function normalizeMcpServers(raw: unknown, onWarn?: WarnFn): McpServer[] 
   return []
 }
 
+/**
+ * Merge extra env vars into the named stdio servers, returning a new array.
+ * Used for one-shot, in-memory-only injections (e.g. a deep link pinning the
+ * target editor pid for the session it creates) that must NOT be persisted
+ * into `acp.mcpServers`. Servers that are missing or non-stdio are reported
+ * and left untouched.
+ */
+export function withMcpServerEnv(
+  servers: readonly McpServer[],
+  envByServer: Readonly<Record<string, Record<string, string>>>,
+  onWarn?: WarnFn,
+): McpServer[] {
+  const result = servers.slice()
+  for (const [name, extraEnv] of Object.entries(envByServer)) {
+    const entries = Object.entries(extraEnv)
+    if (entries.length === 0) continue
+    const index = result.findIndex((s) => s.name === name)
+    const server = index >= 0 ? result[index] : undefined
+    if (!server) {
+      onWarn?.(`mcp server "${name}": not configured, env injection skipped`)
+      continue
+    }
+    if ('type' in server) {
+      onWarn?.(`mcp server "${name}": not a stdio server, env injection skipped`)
+      continue
+    }
+    const merged = new Map(server.env.map((e) => [e.name, e.value]))
+    for (const [key, value] of entries) merged.set(key, value)
+    result[index] = {
+      ...server,
+      env: [...merged.entries()].map(([envName, value]) => ({ name: envName, value })),
+    }
+  }
+  return result
+}
+
 export type McpTransport = 'stdio' | 'http' | 'sse'
 
 /** Transport of a wire `McpServer` (stdio entries carry no `type` field). */

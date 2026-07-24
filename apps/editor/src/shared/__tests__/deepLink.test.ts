@@ -3,7 +3,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { deepLinkFilePath, deepLinkToOpenerTarget, isDeepLink, parseDeepLink } from '../deepLink.js'
+import {
+  deepLinkFilePath,
+  deepLinkToOpenerTarget,
+  isDeepLink,
+  parseAgentPromptOpenerTarget,
+  parseDeepLink,
+  resolveAgentDeepLinkCwd,
+} from '../deepLink.js'
 
 describe('isDeepLink', () => {
   it('matches the app protocol case-insensitively', () => {
@@ -68,6 +75,68 @@ describe('parseDeepLink — command links', () => {
   })
 })
 
+describe('parseDeepLink — agent links', () => {
+  it('parses an agent prompt link with auto-submit enabled by default', () => {
+    expect(
+      parseDeepLink('universe-editor://agent/new?prompt=Fix%20the%20selected%20quest'),
+    ).toEqual({
+      kind: 'agentPrompt',
+      prompt: 'Fix the selected quest',
+      autoSubmit: true,
+    })
+  })
+
+  it('allows disabling auto-submit and selecting an agent', () => {
+    expect(
+      parseDeepLink(
+        'universe-editor://agent/new?prompt=Review%20this&autoSubmit=false&agent=codex',
+      ),
+    ).toEqual({
+      kind: 'agentPrompt',
+      prompt: 'Review this',
+      autoSubmit: false,
+      agent: 'codex',
+    })
+  })
+
+  it('parses an optional UE process pid', () => {
+    expect(parseDeepLink('universe-editor://agent/new?prompt=Review%20this&pid=52352')).toEqual({
+      kind: 'agentPrompt',
+      prompt: 'Review this',
+      autoSubmit: true,
+      pid: 52352,
+    })
+  })
+
+  it('parses an explicit session working directory', () => {
+    expect(
+      parseDeepLink(
+        'universe-editor://agent/new?prompt=Review%20this&cwd=D%3A%2Frepo%2Fquest%20zone',
+      ),
+    ).toEqual({
+      kind: 'agentPrompt',
+      prompt: 'Review this',
+      autoSubmit: true,
+      cwd: 'D:/repo/quest zone',
+    })
+  })
+
+  it('drops a blank cwd (treated as absent)', () => {
+    expect(parseDeepLink('universe-editor://agent/new?prompt=Review%20this&cwd=%20%20')).toEqual({
+      kind: 'agentPrompt',
+      prompt: 'Review this',
+      autoSubmit: true,
+    })
+  })
+
+  it('rejects malformed agent links', () => {
+    expect(parseDeepLink('universe-editor://agent/run?prompt=hi')).toBeUndefined()
+    expect(parseDeepLink('universe-editor://agent/new')).toBeUndefined()
+    expect(parseDeepLink('universe-editor://agent/new?prompt=%20%20')).toBeUndefined()
+    expect(parseDeepLink('universe-editor://agent/new?prompt=hi&pid=abc')).toBeUndefined()
+  })
+})
+
 describe('parseDeepLink — swarm links', () => {
   it('maps a swarm review link to the swarm.openReview command', () => {
     const target = parseDeepLink('universe-editor://swarm/review/1234')
@@ -96,6 +165,12 @@ describe('deepLinkFilePath', () => {
   it('returns undefined for a command link', () => {
     expect(deepLinkFilePath({ kind: 'command', id: 'x', query: '' })).toBeUndefined()
   })
+
+  it('returns undefined for an agent link', () => {
+    expect(
+      deepLinkFilePath({ kind: 'agentPrompt', prompt: 'hello', autoSubmit: true }),
+    ).toBeUndefined()
+  })
 })
 
 describe('deepLinkToOpenerTarget', () => {
@@ -118,5 +193,81 @@ describe('deepLinkToOpenerTarget', () => {
       'command:foo?%5B1%5D',
     )
     expect(deepLinkToOpenerTarget({ kind: 'command', id: 'foo', query: '' })).toBe('command:foo')
+  })
+
+  it('renders an agent prompt target', () => {
+    expect(
+      deepLinkToOpenerTarget({
+        kind: 'agentPrompt',
+        prompt: 'Review this',
+        autoSubmit: false,
+        agent: 'codex',
+        pid: 52352,
+      }),
+    ).toBe('agent:new?prompt=Review+this&autoSubmit=false&agent=codex&pid=52352')
+  })
+
+  it('round-trips an agent prompt target with a cwd', () => {
+    const rendered = deepLinkToOpenerTarget({
+      kind: 'agentPrompt',
+      prompt: 'Review this',
+      autoSubmit: true,
+      cwd: 'D:/repo/quest zone',
+    })
+    expect(rendered).toBe(
+      `agent:new?prompt=Review+this&cwd=${encodeURIComponent('D:/repo/quest zone').replace(/%20/g, '+')}`,
+    )
+    expect(parseAgentPromptOpenerTarget(rendered)).toEqual({
+      kind: 'agentPrompt',
+      prompt: 'Review this',
+      autoSubmit: true,
+      cwd: 'D:/repo/quest zone',
+    })
+  })
+})
+
+describe('parseAgentPromptOpenerTarget', () => {
+  it('parses the renderer-facing agent opener target', () => {
+    expect(parseAgentPromptOpenerTarget('agent:new?prompt=Review+this&agent=codex')).toEqual({
+      kind: 'agentPrompt',
+      prompt: 'Review this',
+      autoSubmit: true,
+      agent: 'codex',
+    })
+  })
+
+  it('allows disabling auto-submit in the renderer-facing target', () => {
+    expect(parseAgentPromptOpenerTarget('agent:new?prompt=Review+this&autoSubmit=false')).toEqual({
+      kind: 'agentPrompt',
+      prompt: 'Review this',
+      autoSubmit: false,
+    })
+  })
+
+  it('parses a renderer-facing pid', () => {
+    expect(parseAgentPromptOpenerTarget('agent:new?prompt=Review+this&pid=52352')).toEqual({
+      kind: 'agentPrompt',
+      prompt: 'Review this',
+      autoSubmit: true,
+      pid: 52352,
+    })
+  })
+
+  it('rejects non-agent or malformed opener targets', () => {
+    expect(parseAgentPromptOpenerTarget('command:foo')).toBeUndefined()
+    expect(parseAgentPromptOpenerTarget('agent:new')).toBeUndefined()
+    expect(parseAgentPromptOpenerTarget('agent:new?prompt=%20')).toBeUndefined()
+    expect(parseAgentPromptOpenerTarget('agent:new?prompt=hi&pid=abc')).toBeUndefined()
+  })
+})
+
+describe('resolveAgentDeepLinkCwd', () => {
+  it('falls back to the home directory when cwd is absent or blank', () => {
+    expect(resolveAgentDeepLinkCwd(undefined, '/home/u')).toBe('/home/u')
+    expect(resolveAgentDeepLinkCwd('   ', '/home/u')).toBe('/home/u')
+  })
+
+  it('keeps an explicit cwd verbatim', () => {
+    expect(resolveAgentDeepLinkCwd('D:/repo/quest zone', '/home/u')).toBe('D:/repo/quest zone')
   })
 })

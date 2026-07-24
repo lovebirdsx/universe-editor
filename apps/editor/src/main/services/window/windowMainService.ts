@@ -60,7 +60,7 @@ export interface IWindowMainService {
   getWindowById(id: number): BrowserWindow | undefined
   getWindows(): ReadonlyArray<BrowserWindow>
   getOpenWindowInfos(): IOpenWindowInfo[]
-  openWindowForFolder(folder?: URI, sessionToOpen?: string): Promise<void>
+  openWindowForFolder(folder?: URI, sessionToOpen?: string, deepLink?: string): Promise<void>
   captureSessionForQuit(): Promise<void>
   confirmQuit(requestingWindowId?: number): Promise<boolean>
   isQuitConfirmed(): boolean
@@ -454,8 +454,17 @@ export class WindowMainService implements IWindowMainService {
    * `sessionToOpen` (optional) is an ACP session id the window should resume once
    * it is up: passed via argv to a freshly created window, or pushed over the
    * `ue:open-session` IPC channel when an existing window is focused instead.
+   *
+   * `deepLink` (optional) is an opener-target string the window should open once
+   * it is up: passed via argv to a freshly created window, or pushed over the
+   * `ue:open-uri` IPC channel when an existing window is focused instead. Used by
+   * agent deep links, which must land in the workspace matching their `cwd`.
    */
-  async openWindowForFolder(folder?: URI, sessionToOpen?: string): Promise<void> {
+  async openWindowForFolder(
+    folder?: URI,
+    sessionToOpen?: string,
+    deepLink?: string,
+  ): Promise<void> {
     let resolved = folder ?? null
     if (!resolved) {
       const parent = BrowserWindow.getFocusedWindow()
@@ -477,6 +486,7 @@ export class WindowMainService implements IWindowMainService {
         if (existing.win.isMinimized()) existing.win.restore()
         existing.win.focus()
         if (sessionToOpen) existing.win.webContents.send('ue:open-session', sessionToOpen)
+        if (deepLink) existing.win.webContents.send('ue:open-uri', deepLink)
         await this._opts.appServices.recentWorkspaces.add(workspace)
       }
       return
@@ -490,6 +500,7 @@ export class WindowMainService implements IWindowMainService {
       workspace,
       ...(uiState ? { uiState } : {}),
       ...(sessionToOpen ? { sessionToOpen } : {}),
+      ...(deepLink ? { deepLink } : {}),
     })
   }
 

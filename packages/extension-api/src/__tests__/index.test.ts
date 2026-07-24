@@ -129,6 +129,14 @@ describe('workspace.fs', () => {
   })
 })
 
+describe('workspace.getConfiguration', () => {
+  it('returns an object with get and update functions', () => {
+    const config = api.workspace.getConfiguration('test') as unknown as Record<string, unknown>
+    expect(typeof config.get).toBe('function')
+    expect(typeof config.update).toBe('function')
+  })
+})
+
 describe('enums hold their wire values', () => {
   it('StatusBarAlignment', () => {
     expect({ ...api.StatusBarAlignment }).toEqual({

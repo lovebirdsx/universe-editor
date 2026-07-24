@@ -8,6 +8,7 @@ import {
   mcpServerTransport,
   normalizeMcpServers,
   parseMcpToolName,
+  withMcpServerEnv,
 } from '../acpMcpServers.js'
 
 describe('parseMcpToolName', () => {
@@ -208,5 +209,48 @@ describe('filterMcpServersByCapabilities', () => {
     })
     expect(kept).toEqual([stdio, http, sse])
     expect(dropped).toEqual([])
+  })
+})
+
+describe('withMcpServerEnv', () => {
+  const stdio = {
+    name: 'universe-editor',
+    command: 'node',
+    args: ['bridge.mjs'],
+    env: [{ name: 'EXISTING', value: '1' }],
+  }
+
+  it('merges env into the named stdio server without mutating the input', () => {
+    const result = withMcpServerEnv([stdio], {
+      'universe-editor': { UNIVERSE_EDITOR_MCP_PID: '1234' },
+    })
+    expect(result[0]).toEqual({
+      ...stdio,
+      env: [
+        { name: 'EXISTING', value: '1' },
+        { name: 'UNIVERSE_EDITOR_MCP_PID', value: '1234' },
+      ],
+    })
+    expect(stdio.env).toEqual([{ name: 'EXISTING', value: '1' }])
+  })
+
+  it('overrides an existing env var of the same name', () => {
+    const result = withMcpServerEnv([stdio], { 'universe-editor': { EXISTING: '2' } })
+    expect(result[0]).toEqual({ ...stdio, env: [{ name: 'EXISTING', value: '2' }] })
+  })
+
+  it('warns and skips servers that are not configured', () => {
+    const onWarn = vi.fn()
+    const result = withMcpServerEnv([stdio], { missing: { X: '1' } }, onWarn)
+    expect(result).toEqual([stdio])
+    expect(onWarn).toHaveBeenCalledOnce()
+  })
+
+  it('warns and skips non-stdio servers', () => {
+    const http = { type: 'http' as const, name: 'docs', url: 'https://x', headers: [] }
+    const onWarn = vi.fn()
+    const result = withMcpServerEnv([http], { docs: { X: '1' } }, onWarn)
+    expect(result).toEqual([http])
+    expect(onWarn).toHaveBeenCalledOnce()
   })
 })

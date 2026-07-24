@@ -144,6 +144,14 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'MCP servers forwarded to the agent on session/new, keyed by server name. stdio: `{ "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "env": {} } }`. http/sse: `{ "docs": { "type": "http", "url": "https://…", "headers": {} } }`. Transports the agent does not support (http/sse) are skipped with a warning; env/header values are stored in plain text — keep secrets in real environment variables.',
             ),
           },
+          'acp.deepLink.allowAutoSubmit': {
+            type: 'boolean',
+            default: false,
+            description: localize(
+              'settings.acp.deepLink.allowAutoSubmit',
+              'Allow `universe-editor://agent/new?prompt=…` deep links to send the prompt automatically. Disabled by default: a link only fills the input box and you review before sending. Enable only if you trust the tools that launch these links — anyone can craft one.',
+            ),
+          },
           'acp.notifications.enabled': {
             type: 'boolean',
             default: true,

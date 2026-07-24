@@ -367,11 +367,19 @@ export function PromptInput({
     if (autoFocus) editorHandleRef.current?.focus()
   }, [autoFocus])
 
+  // Set once Monaco is actually up (see onEditorReady). Gates the inbox drains
+  // below: on a cold mount Monaco loads asynchronously, and an imperative
+  // setText/insertRef before the model exists is silently dropped while the
+  // inbox is already consumed — losing the deposit (deep link / "Send to Agent
+  // Chat" into a session whose input never mounted).
+  const [editorReady, setEditorReady] = useState(false)
+
   // Drain any SelectionContexts the "Add Selection to Agent Chat" command
   // deposited for this session before its ChatBody mounted, and keep draining
   // while mounted (the command deposits then fires onDidDeposit). Keyed on the
   // local session id — same key the command deposits under.
   useEffect(() => {
+    if (!editorReady) return
     const pull = (): void => {
       const incoming = AcpPromptContextInbox.drain(session.id)
       if (incoming.length === 0) return
@@ -383,12 +391,13 @@ export function PromptInput({
       if (id === session.id) pull()
     })
     return () => sub.dispose()
-  }, [session.id])
+  }, [session.id, editorReady])
 
   // Drain any plain-text snippets a command (e.g. Git Graph's "Send to Agent
   // Chat") deposited for this session, appending them to the textarea and moving
   // the caret to the end. Mirrors the SelectionContext drain above.
   useEffect(() => {
+    if (!editorReady) return
     const pull = (): void => {
       const incoming = AcpPromptTextInbox.drain(session.id)
       if (incoming.length === 0) return
@@ -404,7 +413,7 @@ export function PromptInput({
       if (id === session.id) pull()
     })
     return () => sub.dispose()
-  }, [session.id])
+  }, [session.id, editorReady])
 
   // Drain any replacement text the Rewind command deposited (edit-and-retry):
   // unlike the append inbox above this OVERWRITES the draft, since the turn it
@@ -412,6 +421,7 @@ export function PromptInput({
   // Clears any leftover contexts/images so the input reflects only the rewound
   // prompt. Mirrors the drain-on-mount + onDidDeposit pattern.
   useEffect(() => {
+    if (!editorReady) return
     const pull = (): void => {
       const incoming = AcpPromptReplaceInbox.drain(session.id)
       if (incoming === undefined) return
@@ -426,7 +436,7 @@ export function PromptInput({
       if (id === session.id) pull()
     })
     return () => sub.dispose()
-  }, [session.id])
+  }, [session.id, editorReady])
 
   // On mount, restore the saved caret position into the textarea DOM so the
   // cursor lands at the right spot when the user refocuses after switching
@@ -977,8 +987,11 @@ export function PromptInput({
 
   // The editor mounted: rebuild any restored draft's reference pills over the
   // already-seeded display text (initialText carried the raw text; the pills need
-  // the tracker, which only exists once Monaco is up).
+  // the tracker, which only exists once Monaco is up). Also flips `editorReady`
+  // so the inbox drains above can finally consume deposits queued while Monaco
+  // was still loading.
   const onEditorReady = (): void => {
+    setEditorReady(true)
     const refs = initialDraftRef.current.refs
     if (refs.length > 0) editorHandleRef.current?.restoreRefs(refs)
   }

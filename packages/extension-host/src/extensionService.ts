@@ -386,6 +386,15 @@ export class ExtensionService implements IExtensionHostBridge {
     return this.executeCommand('_workbench.getConfiguration', [fullKey, defaultValue])
   }
 
+  async updateConfiguration(
+    section: string | undefined,
+    key: string,
+    value: unknown,
+  ): Promise<void> {
+    const fullKey = section ? `${section}.${key}` : key
+    await this.executeCommand('_workbench.updateConfiguration', [fullKey, value])
+  }
+
   getTextDocuments(): readonly TextDocument[] {
     return this._documents.all()
   }

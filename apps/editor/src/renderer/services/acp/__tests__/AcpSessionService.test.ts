@@ -502,6 +502,12 @@ describe('AcpSessionService', () => {
     expect(svc.activeSessionId.get()).toBe(session.id)
   })
 
+  it('createSession passes options.cwd to session/new instead of the workspace folder', async () => {
+    const session = await svc.createSession(undefined, { cwd: '/tmp/deep-link-cwd' })
+    await session.whenConnected()
+    expect(client.connected[0]!.agent.newSessionCalls[0]!.cwd).toBe('/tmp/deep-link-cwd')
+  })
+
   it('registers createSession sessions so they dispose with the service (no leak)', async () => {
     const s = await svc.createSession()
     await s.whenConnected()

@@ -19,6 +19,22 @@ const OPEN_URI_FLAG = '--ue-open-uri='
 const openUriArg = process.argv.find((a) => a.startsWith(OPEN_URI_FLAG))
 const openUriTarget = openUriArg ? openUriArg.slice(OPEN_URI_FLAG.length) : undefined
 
+/** 存储在监听器没有就绪时收到的 deep link，等待监听器添加后进行处理 */
+const pendingOpenUriTargets: string[] = []
+
+type OpenUriListener = (target: string) => void
+const openUriListeners = new Set<OpenUriListener>()
+
+/** 监听主进程发送的 deep link，传递给已注册的监听器，如果没有监听器则存储在 pendingOpenUriTargets 中 */
+ipcRenderer.on('ue:open-uri', (_event: IpcRendererEvent, target: unknown) => {
+  if (typeof target !== 'string') return
+  if (openUriListeners.size === 0) {
+    pendingOpenUriTargets.push(target)
+    return
+  }
+  for (const listener of openUriListeners) listener(target)
+})
+
 const bridge = {
   send(data: Uint8Array): void {
     ipcRenderer.send(IPC_PROTOCOL_CHANNEL, Buffer.from(data))
@@ -66,11 +82,16 @@ const bridge = {
   openUriTarget,
   /** Listen for a deep-link opener target pushed by the main process to a live window. */
   onOpenUri(cb: (target: string) => void): () => void {
-    const listener = (_event: IpcRendererEvent, target: unknown): void => {
-      if (typeof target === 'string') cb(target)
+    openUriListeners.add(cb)
+
+    // 处理在监听器注册之前收到的 deep link
+    while (pendingOpenUriTargets.length > 0) {
+      cb(pendingOpenUriTargets.shift()!)
     }
-    ipcRenderer.on('ue:open-uri', listener)
-    return () => ipcRenderer.removeListener('ue:open-uri', listener)
+
+    return () => {
+      openUriListeners.delete(cb)
+    }
   },
 }
 

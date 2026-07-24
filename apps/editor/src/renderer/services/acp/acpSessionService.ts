@@ -48,6 +48,7 @@ import {
   filterMcpServersByCapabilities,
   mcpServerTransport,
   normalizeMcpServers,
+  withMcpServerEnv,
 } from './acpMcpServers.js'
 import {
   IAcpClientService,
@@ -129,6 +130,22 @@ import { snapshotConfigSelections } from './configOptionLabel.js'
  */
 export { AcpForeignWorktreeError }
 
+export interface IAcpCreateSessionOptions {
+  /**
+   * One-shot env vars merged into the named stdio MCP servers for THIS
+   * session's `session/new` only — never persisted into `acp.mcpServers`.
+   * Used by the agent deep link to pin the bridge to the editor process that
+   * launched it.
+   */
+  readonly mcpServerEnv?: Readonly<Record<string, Record<string, string>>>
+  /**
+   * Session working directory override. Defaults to the current workspace
+   * folder. The agent deep link passes its resolved `cwd` here so the session
+   * runs in the directory the link named, not merely the window's workspace.
+   */
+  readonly cwd?: string
+}
+
 export interface IAcpSessionService {
   readonly _serviceBrand: undefined
   readonly sessions: IObservable<readonly IAcpSession[]>
@@ -136,7 +153,7 @@ export interface IAcpSessionService {
   readonly activeSession: IObservable<IAcpSession | undefined>
   /** Fired after a session is removed from `sessions`. Carries the closed session id. */
   readonly onDidCloseSession: Event<string>
-  createSession(agentId?: string): Promise<IAcpSession>
+  createSession(agentId?: string, options?: IAcpCreateSessionOptions): Promise<IAcpSession>
   /**
    * Resume a previously-persisted session by its (agent-issued) sessionId.
    * Spawns a fresh agent process, validates `agentCapabilities.loadSession`,
@@ -417,13 +434,13 @@ export class AcpSessionService
     return this._coordinator.refresh()
   }
 
-  async createSession(agentId?: string): Promise<IAcpSession> {
+  async createSession(agentId?: string, options?: IAcpCreateSessionOptions): Promise<IAcpSession> {
     const resolvedAgentId = agentId ?? this._registry.defaultAgentId()
     const agentName = this._registry.get(resolvedAgentId).name
     const collapseModes = this._config.get<Record<string, string>>('acp.defaultCollapseModes') ?? {}
     const initialCollapseMode: CollapseMode =
       (collapseModes[resolvedAgentId] as CollapseMode | undefined) ?? 'default'
-    const cwd = this._workspace.current?.folder.fsPath
+    const cwd = options?.cwd ?? this._workspace.current?.folder.fsPath
     const now = new Date()
     const hh = String(now.getHours()).padStart(2, '0')
     const mm = String(now.getMinutes()).padStart(2, '0')
@@ -459,7 +476,7 @@ export class AcpSessionService
     this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
     this._onDidCreate.fire(session)
 
-    void this._connectSession(session, resolvedAgentId, cwd)
+    void this._connectSession(session, resolvedAgentId, cwd, options)
     return session
   }
 
@@ -475,10 +492,16 @@ export class AcpSessionService
     session: AcpSession,
     resolvedAgentId: string,
     cwd: string | undefined,
+    options?: IAcpCreateSessionOptions,
   ): Promise<void> {
     const agentName = this._registry.get(resolvedAgentId).name
     const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
-    const mcpServers = this._readMcpServers()
+    let mcpServers = this._readMcpServers()
+    if (options?.mcpServerEnv) {
+      mcpServers = withMcpServerEnv(mcpServers, options.mcpServerEnv, (m) =>
+        this._logger.warn(`mcpServers: ${m}`),
+      )
+    }
     let conn: IAcpClientConnection | undefined
     try {
       conn = await this._client.connect(resolvedAgentId, cwd !== undefined ? { cwd } : {})

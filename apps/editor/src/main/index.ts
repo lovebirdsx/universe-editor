@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, protocol } from 'electron'
 import { promises as fs } from 'node:fs'
+import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import {
@@ -26,6 +27,7 @@ import {
   deepLinkToOpenerTarget,
   isDeepLink,
   parseDeepLink,
+  resolveAgentDeepLinkCwd,
   type DeepLinkTarget,
 } from '../shared/deepLink.js'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
@@ -332,9 +334,26 @@ app.on('open-url', (event, url) => {
  * which turns it back into an IOpenerService.open call. A file link prefers the
  * window whose workspace contains the file; a command link goes to the focused
  * (or first) window. With no window open yet, one is created.
+ *
+ * An agent link is different: its session must run in the workspace rooted at
+ * the link's `cwd` (absent → the user's home directory), so it goes to the
+ * window whose workspace IS that directory — opening one first when none
+ * matches. `openWindowForFolder` owns that match-or-open logic and forwards the
+ * link to whichever window it resolves.
  */
 function routeDeepLink(target: DeepLinkTarget): void {
   const services = getOrCreateServices()
+
+  if (target.kind === 'agentPrompt') {
+    const cwd = resolveAgentDeepLinkCwd(target.cwd, homedir())
+    void services.windows.openWindowForFolder(
+      URI.file(cwd),
+      undefined,
+      deepLinkToOpenerTarget({ ...target, cwd }),
+    )
+    return
+  }
+
   const filePath = deepLinkFilePath(target)
 
   let targetWin: BrowserWindow | undefined
