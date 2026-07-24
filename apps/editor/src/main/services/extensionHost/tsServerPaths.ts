@@ -11,6 +11,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import * as path from 'node:path'
 import { app } from 'electron'
+import { parse, type ParseError } from 'jsonc-parser'
 import {
   DEFAULT_TS_SERVER_IMPLEMENTATION,
   type TsServerImplementationName,
@@ -28,14 +29,33 @@ export type TsServerSpec =
 
 export type TsServerImplementation = TsServerImplementationName
 
+/** Where the winning preference value came from — surfaced in the per-spawn
+ *  startup log to debug "the setting didn't take". */
+export type TsServerPreferenceSource =
+  | 'binary-env'
+  | 'env'
+  | 'workspace'
+  | 'vscode-workspace'
+  | 'user'
+  | 'default'
+
+export interface TsServerPreferenceResult {
+  readonly value: TsServerImplementation | { binary: string }
+  readonly source: TsServerPreferenceSource
+}
+
 /**
  * Preferred server implementation, in priority order: explicit binary
- * (`UNIVERSE_TSGO_BIN`) > env (`UNIVERSE_TS_SERVER`) > user settings.json
- * (`typescript.server.implementation`, read directly from `settingsDir` — the
- * extension host starts before any renderer-side ConfigurationService exists,
- * and this key is only consumed in main) > default 'tsls'.
+ * (`UNIVERSE_TSGO_BIN`) > env (`UNIVERSE_TS_SERVER`) > workspace project
+ * settings (`<workspaceRoot>/.universe-editor/settings.json`) > workspace
+ * VSCode-compat settings (`<workspaceRoot>/.vscode/settings.json`) > user
+ * settings.json (`typescript.server.implementation`, read directly from
+ * `settingsDir` — the extension host starts before any renderer-side
+ * ConfigurationService exists, and this key is only consumed in main) >
+ * default. The workspace layering mirrors the renderer's ConfigurationTarget
+ * order (Project > VSCodeWorkspace > User).
  */
-export type TsServerPreference = () => TsServerImplementation | { binary: string }
+export type TsServerPreference = (workspaceRoot?: string) => TsServerPreferenceResult
 
 /** CLI under the vendor dir, found by walking up from getAppPath in dev. */
 const CLI_VENDOR_REL =
@@ -97,8 +117,14 @@ export function resolveTsServerPaths(): { cli: string; tsserver: string } {
  * `tsgo/` tree under `process.resourcesPath` in packaged builds. When native
  * is preferred but no binary is found, fall back to tsls.
  */
-export function resolveTsServerSpec(preference: TsServerPreference): TsServerSpec {
-  const pref = preference()
+export function resolveTsServerSpec(
+  preference: TsServerPreference,
+  workspaceRoot?: string,
+): TsServerSpec {
+  return specForPreferenceValue(preference(workspaceRoot).value)
+}
+
+function specForPreferenceValue(pref: TsServerImplementation | { binary: string }): TsServerSpec {
   const wantNative = typeof pref === 'object' || pref === 'native'
   if (typeof pref === 'object') {
     return {
@@ -125,49 +151,75 @@ function versionForBinary(binary: string): string | undefined {
   return readPackageVersion(path.resolve(path.dirname(binary), '../package.json'))
 }
 
-/** Default preference chain: explicit binary env > selection env > settings.json
- *  > the shared default (kept in sync with the ConfigurationRegistry schema). */
+/** Workspace config dirs consulted for `typescript.server.implementation`,
+ *  highest precedence first — mirrors the renderer's Project and
+ *  VSCodeWorkspace layers (`.universe-editor` is read-write, `.vscode` the
+ *  read-only VSCode-compat layer). */
+const WORKSPACE_SETTINGS_DIRS = ['.universe-editor', '.vscode'] as const
+
+/** Default preference chain: explicit binary env > selection env > workspace
+ *  project settings > workspace .vscode settings > user settings.json > the
+ *  shared default (kept in sync with the ConfigurationRegistry schema). */
 export function defaultTsServerPreference(settingsDir: string): TsServerPreference {
-  return () => {
+  return (workspaceRoot) => {
     const binaryOverride = process.env.UNIVERSE_TSGO_BIN
-    if (binaryOverride) return { binary: binaryOverride }
+    if (binaryOverride) return { value: { binary: binaryOverride }, source: 'binary-env' }
     const envChoice = process.env.UNIVERSE_TS_SERVER
-    if (envChoice === 'native' || envChoice === 'tsls') return envChoice
-    const configured = readServerImplementationSetting(settingsDir)
-    return configured === 'native' || configured === 'tsls'
-      ? configured
-      : DEFAULT_TS_SERVER_IMPLEMENTATION
+    if (envChoice === 'native' || envChoice === 'tsls') {
+      return { value: envChoice, source: 'env' }
+    }
+    if (workspaceRoot !== undefined) {
+      for (const dir of WORKSPACE_SETTINGS_DIRS) {
+        const configured = readServerImplementationSetting(
+          path.join(workspaceRoot, dir, 'settings.json'),
+        )
+        if (configured !== undefined) {
+          return {
+            value: configured,
+            source: dir === '.universe-editor' ? 'workspace' : 'vscode-workspace',
+          }
+        }
+      }
+    }
+    const fromUser = readServerImplementationSetting(path.join(settingsDir, 'settings.json'))
+    if (fromUser !== undefined) return { value: fromUser, source: 'user' }
+    return { value: DEFAULT_TS_SERVER_IMPLEMENTATION, source: 'default' }
   }
 }
 
-/** Lazily resolve the spec on every call — settings.json is re-read per host
- *  spawn, so editing `typescript.server.implementation` + restarting the
- *  window (which relaunches the host) picks the new server. Logs the decision
- *  once per main process (debugging "the setting didn't take" — this reads the
- *  user-data settings.json, NOT a workspace/.vscode one). */
-let _didLogTsServerSpec = false
-
-export function createTsServerSpecResolver(settingsDir: string): () => TsServerSpec {
+/** Lazily resolve the spec on every call — all settings layers are re-read per
+ *  host spawn, so editing `typescript.server.implementation` + restarting the
+ *  window (which relaunches the host) picks the new server, and each window's
+ *  workspace gets its own layering. Logs one line per spawn with the winning
+ *  source (debugging "the setting didn't take"). */
+export function createTsServerSpecResolver(
+  settingsDir: string,
+): (workspaceRoot?: string) => TsServerSpec {
   const preference = defaultTsServerPreference(settingsDir)
-  return () => {
-    const spec = resolveTsServerSpec(preference)
-    if (!_didLogTsServerSpec) {
-      _didLogTsServerSpec = true
-      console.log(
-        `[tsServer] kind=${spec.kind} version=${spec.version} (settingsDir=${settingsDir})`,
-      )
-    }
+  return (workspaceRoot) => {
+    const { value, source } = preference(workspaceRoot)
+    const spec = specForPreferenceValue(value)
+    console.log(
+      `[tsServer] kind=${spec.kind} version=${spec.version} source=${source} ` +
+        `workspace=${workspaceRoot ?? '(none)'} settingsDir=${settingsDir}`,
+    )
     return spec
   }
 }
 
-/** `typescript.server.implementation` from <settingsDir>/settings.json, or
- *  undefined when absent/unreadable/not a known value. */
-function readServerImplementationSetting(settingsDir: string): string | undefined {
+/** `typescript.server.implementation` from a settings.json file, or undefined
+ *  when absent/unreadable/invalid/not a known value. Parsed as JSONC (comments
+ *  + trailing commas) like every other config read in main — the migrated user
+ *  settings.json carries a header comment that plain JSON.parse would choke on. */
+function readServerImplementationSetting(settingsPath: string): TsServerImplementation | undefined {
   try {
-    const raw = readFileSync(path.join(settingsDir, 'settings.json'), 'utf8')
-    const data: unknown = JSON.parse(raw)
-    if (data === null || typeof data !== 'object') return undefined
+    const errors: ParseError[] = []
+    const data: unknown = parse(readFileSync(settingsPath, 'utf8'), errors, {
+      allowTrailingComma: true,
+    })
+    if (errors.length > 0 || data === null || typeof data !== 'object' || Array.isArray(data)) {
+      return undefined
+    }
     const value = (data as Record<string, unknown>)['typescript.server.implementation']
     return value === 'native' || value === 'tsls' ? value : undefined
   } catch {

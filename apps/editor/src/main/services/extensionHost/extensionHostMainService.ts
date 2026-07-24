@@ -58,8 +58,10 @@ export type ExtHostEntryResolver = () => string
 /** Resolves the built-in extensions directory the host scans. Injectable for tests. */
 export type ExtHostExtensionsDirResolver = () => string
 
-/** Resolves which TS language server the plugin spawns. Injectable for tests. */
-export type TsServerSpecResolver = () => TsServerSpec
+/** Resolves which TS language server the plugin spawns. Injectable for tests.
+ *  Receives the window's workspace root so workspace-level settings layering
+ *  applies (see tsServerPaths). */
+export type TsServerSpecResolver = (workspaceRoot?: string) => TsServerSpec
 
 /** Default settings dir for the TS-server preference chain: the deployment
  *  config location (<userData>). `--config-dir` relocations only kick in via
@@ -171,9 +173,10 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     env.UNIVERSE_USER_EXTENSIONS_DIR = spec?.userExtensionsDir ?? this._resolveUserExtensionsDir()
     // The `typescript` built-in plugin spawns the LSP server itself; hand it the
     // server spec (the only Electron-aware resolution). Default is the vendored
-    // TSLS; `typescript.server.implementation: "native"` in settings.json,
-    // UNIVERSE_TS_SERVER=native, or UNIVERSE_TSGO_BIN selects the Go port.
-    const tsSpec = this._resolveTsServerSpec()
+    // TSLS; `typescript.server.implementation` in workspace (.universe-editor >
+    // .vscode) or user settings.json, UNIVERSE_TS_SERVER=native, or
+    // UNIVERSE_TSGO_BIN selects the Go port.
+    const tsSpec = this._resolveTsServerSpec(spec?.workspaceRoot)
     env.UNIVERSE_TS_SERVER_KIND = tsSpec.kind
     env.UNIVERSE_TS_SERVER_VERSION = tsSpec.version
     if (tsSpec.kind === 'native') {

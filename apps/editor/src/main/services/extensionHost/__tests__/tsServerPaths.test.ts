@@ -1,6 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for the TS-server preference chain (binary env > selection env >
- *  settings.json `typescript.server.implementation` > tsls default) and the
+ *  workspace .universe-editor settings > workspace .vscode settings > user
+ *  settings.json `typescript.server.implementation` > shared default) and the
  *  native-binary resolver. Electron is mocked: resolveTsServerPaths walks up
  *  from app.getAppPath() in dev; the packaged tests flip app.isPackaged and
  *  point process.resourcesPath at a temp dir with a staged tsgo/ tree.
@@ -22,7 +23,8 @@ vi.mock('electron', () => ({
 }))
 
 const { app } = await import('electron')
-const { createTsServerSpecResolver } = await import('../tsServerPaths.js')
+const { createTsServerSpecResolver, defaultTsServerPreference } =
+  await import('../tsServerPaths.js')
 const { DEFAULT_TS_SERVER_IMPLEMENTATION } =
   await import('../../../../shared/tsServerImplementation.js')
 
@@ -124,6 +126,108 @@ describe('tsServerPaths preference chain', () => {
     const spec = createTsServerSpecResolver(settingsDir)()
     expect(spec.kind).toBe('native')
     expect(spec.version).toContain('7.0.0-dev')
+  })
+})
+
+describe('workspace settings layering', () => {
+  let workspaceDir = ''
+
+  beforeEach(async () => {
+    settingsDir = await mkdtemp(path.join(tmpdir(), 'universe-editor-ts-server-pref-'))
+    workspaceDir = await mkdtemp(path.join(tmpdir(), 'universe-editor-ts-server-ws-'))
+    vi.stubEnv('UNIVERSE_TS_SERVER', '')
+    vi.stubEnv('UNIVERSE_TSGO_BIN', '')
+  })
+
+  afterEach(async () => {
+    vi.unstubAllEnvs()
+    await rm(settingsDir, { recursive: true, force: true })
+    await rm(workspaceDir, { recursive: true, force: true })
+  })
+
+  function layerBody(value: unknown): string {
+    return JSON.stringify({ 'typescript.server.implementation': value })
+  }
+
+  async function writeLayer(dir: '.universe-editor' | '.vscode', body: string): Promise<void> {
+    await mkdir(path.join(workspaceDir, dir), { recursive: true })
+    await writeFile(path.join(workspaceDir, dir, 'settings.json'), body)
+  }
+
+  async function writeUserSettings(body: string): Promise<void> {
+    await writeFile(path.join(settingsDir, 'settings.json'), body)
+  }
+
+  it('workspace .universe-editor selects native', async () => {
+    await writeLayer('.universe-editor', layerBody('native'))
+    const spec = createTsServerSpecResolver(settingsDir)(workspaceDir)
+    expect(spec.kind).toBe('native')
+  })
+
+  it('workspace overrides user, in both directions', async () => {
+    await writeUserSettings(layerBody('tsls'))
+    await writeLayer('.universe-editor', layerBody('native'))
+    expect(createTsServerSpecResolver(settingsDir)(workspaceDir).kind).toBe('native')
+
+    await writeUserSettings(layerBody('native'))
+    await writeLayer('.universe-editor', layerBody('tsls'))
+    expect(createTsServerSpecResolver(settingsDir)(workspaceDir).kind).toBe('tsls')
+  })
+
+  it('.vscode settings apply when no .universe-editor layer exists', async () => {
+    await writeLayer('.vscode', layerBody('native'))
+    expect(defaultTsServerPreference(settingsDir)(workspaceDir)).toEqual({
+      value: 'native',
+      source: 'vscode-workspace',
+    })
+  })
+
+  it('.universe-editor overrides .vscode', async () => {
+    await writeLayer('.vscode', layerBody('native'))
+    await writeLayer('.universe-editor', layerBody('tsls'))
+    expect(createTsServerSpecResolver(settingsDir)(workspaceDir).kind).toBe('tsls')
+  })
+
+  it('UNIVERSE_TS_SERVER still beats workspace settings', async () => {
+    await writeLayer('.universe-editor', layerBody('native'))
+    vi.stubEnv('UNIVERSE_TS_SERVER', 'tsls')
+    expect(createTsServerSpecResolver(settingsDir)(workspaceDir).kind).toBe('tsls')
+  })
+
+  it('an invalid workspace value falls through to the user layer', async () => {
+    await writeLayer('.universe-editor', layerBody('v8-something'))
+    await writeUserSettings(layerBody('tsls'))
+    expect(defaultTsServerPreference(settingsDir)(workspaceDir)).toEqual({
+      value: 'tsls',
+      source: 'user',
+    })
+  })
+
+  it('workspace settings tolerate JSONC comments and trailing commas', async () => {
+    await writeLayer(
+      '.universe-editor',
+      '{\n  // pick the Go native LSP\n  "typescript.server.implementation": "native",\n}\n',
+    )
+    expect(createTsServerSpecResolver(settingsDir)(workspaceDir).kind).toBe('native')
+  })
+
+  it('user settings.json tolerates JSONC comments (the migrated file carries one)', async () => {
+    await writeUserSettings(
+      '// User settings — migrated from previous storage on first launch.\n' + layerBody('native'),
+    )
+    expect(createTsServerSpecResolver(settingsDir)().kind).toBe('native')
+  })
+
+  it('reports the winning source for each layer', async () => {
+    expect(defaultTsServerPreference(settingsDir)(workspaceDir).source).toBe('default')
+    await writeUserSettings(layerBody('tsls'))
+    expect(defaultTsServerPreference(settingsDir)(workspaceDir).source).toBe('user')
+    await writeLayer('.universe-editor', layerBody('tsls'))
+    expect(defaultTsServerPreference(settingsDir)(workspaceDir).source).toBe('workspace')
+    vi.stubEnv('UNIVERSE_TS_SERVER', 'tsls')
+    expect(defaultTsServerPreference(settingsDir)(workspaceDir).source).toBe('env')
+    vi.stubEnv('UNIVERSE_TSGO_BIN', '/custom/tsgo')
+    expect(defaultTsServerPreference(settingsDir)(workspaceDir).source).toBe('binary-env')
   })
 })
 
