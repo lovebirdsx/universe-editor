@@ -650,6 +650,17 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   /**
+   * Resolves once every queued configOption push-back has landed on the agent.
+   * The hot-reconnect path awaits this before resuming the interrupted turn:
+   * the rebuilt agent session starts from settings.json defaults, so the
+   * re-asserted mode/model must be in effect before the continuation prompt
+   * dispatches, or the turn runs under the reset config.
+   */
+  async whenConfigOptionsSettled(): Promise<void> {
+    await this._configOptions.flushPendingPushes()
+  }
+
+  /**
    * Service-driven, after a successful reattach: resume the turn that was
    * in-flight when the connection died. Zero-output turns resend the original
    * prompt verbatim (nothing reached the agent's transcript, or the model

@@ -876,7 +876,7 @@ export class AcpSessionService
               initResult.agentCapabilities?.mcpCapabilities,
             )
             this._warnDroppedMcpServers(agentName, dropped)
-            await withTimeout(
+            const resumeResult = await withTimeout(
               conn.conn.resumeSession({
                 sessionId: sid,
                 cwd: cwd ?? '',
@@ -890,6 +890,19 @@ export class AcpSessionService
               conn.dispose()
               return
             }
+            // The rebuilt agent session re-seeds its config from settings.json
+            // (runtime mode/effort/etc. are lost; only the model survives via
+            // SDK live state). Re-seed the state machine with the session's
+            // saved selections exactly like the startup-resume path does, so
+            // the reconciled bag keeps showing the user's values and queues the
+            // push-back RPCs the attach below flushes onto the agent.
+            session.setConfigDesired({
+              ...this._agentDefaults.getDefaults(session.agentId),
+              ...(entry?.configOptions ?? {}),
+            })
+            if (resumeResult.configOptions) {
+              session.applyInitState({ configOptions: resumeResult.configOptions })
+            }
             conn.attachSession(sid)
             session.reattachConnection(conn)
           } catch (err) {
@@ -902,6 +915,11 @@ export class AcpSessionService
             attempts: attempt,
           })
           session.recovery.clear()
+          // The re-asserted config (mode/model) must land on the rebuilt agent
+          // before the interrupted turn resumes — otherwise the continuation
+          // prompt races ahead of the push-back and runs under the reset
+          // defaults (e.g. asking for permission again after bypass was on).
+          await session.whenConfigOptionsSettled()
           // Resume the turn that was in-flight when the connection died.
           await session.continueInterruptedTurn()
           return

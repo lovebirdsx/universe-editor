@@ -34,6 +34,8 @@ import type {
   PromptRequest,
   PromptResponse,
   RequestPermissionResponse,
+  SessionConfigOption,
+  SetSessionConfigOptionRequest,
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
@@ -163,6 +165,11 @@ interface Script {
   promptResults: Array<(req: PromptRequest) => Promise<PromptResponse>>
   /** capabilities advertised by initialize (loadSession gates reconnect). */
   loadSession: boolean
+  /**
+   * configOptions bag the agent reports from newSession/resumeSession. Omit to
+   * report no bag (agent without config options).
+   */
+  configOptions?: SessionConfigOption[]
 }
 
 class ScriptedClient implements IAcpClientService {
@@ -173,6 +180,9 @@ class ScriptedClient implements IAcpClientService {
     agentSessionId: string
     controller: AbortController
     promptCalls: PromptRequest[]
+    configCalls: SetSessionConfigOptionRequest[]
+    /** Ordered RPC log ('prompt' / `config:<id>`) for cross-RPC ordering assertions. */
+    events: string[]
   }> = []
 
   constructor(private readonly _script: Script) {}
@@ -199,21 +209,39 @@ class ScriptedClient implements IAcpClientService {
     const agentSessionId = 'agent-durable' // stable durable id across reconnects
     const controller = new AbortController()
     const promptCalls: PromptRequest[] = []
-    this.connections.push({ agentSessionId, controller, promptCalls })
+    const configCalls: SetSessionConfigOptionRequest[] = []
+    const events: string[] = []
+    this.connections.push({ agentSessionId, controller, promptCalls, configCalls, events })
     const isFirst = this._seq === 0
     this._seq++
+    const bag = this._script.configOptions
+    const sessionResponse = {
+      sessionId: agentSessionId,
+      ...(bag ? { configOptions: bag } : {}),
+    }
     const conn = {
       signal: controller.signal,
       prompt: (req: PromptRequest): Promise<PromptResponse> => {
         promptCalls.push(req)
+        events.push('prompt')
         const next = this._script.promptResults.shift()
         if (!next) return Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)
         return next(req)
       },
       cancel: () => Promise.resolve(),
-      newSession: () => Promise.resolve({ sessionId: agentSessionId }),
+      newSession: () => Promise.resolve(sessionResponse),
       loadSession: () => Promise.resolve({}),
-      resumeSession: () => Promise.resolve({}),
+      resumeSession: () => Promise.resolve(sessionResponse),
+      // Apply the pushed value into the returned bag, like a real agent whose
+      // session adopted the selection.
+      setSessionConfigOption: (req: SetSessionConfigOptionRequest) => {
+        configCalls.push(req)
+        events.push(`config:${req.configId}`)
+        const updated = (bag ?? []).map((o) =>
+          o.id === req.configId && o.type === 'select' ? { ...o, currentValue: req.value } : o,
+        )
+        return Promise.resolve({ configOptions: updated })
+      },
     }
     const initializeResult = Promise.resolve({
       protocolVersion: 1,
@@ -391,6 +419,65 @@ describe('AcpSession auto-recovery', () => {
     await waitFor(s.status, (v) => v === 'running')
     expect(client.connections[1]!.promptCalls.length).toBe(1)
     resolveFirst?.()
+    await waitFor(s.status, (v) => v === 'idle')
+  })
+
+  it('re-asserts the session config (bypass mode) on the rebuilt agent after hot-reconnect', async () => {
+    // The agent rebuilds its session from settings.json on session/resume, so
+    // the bag it reports after a hot-reconnect has the mode back at its server
+    // default even though the user switched to bypass mid-session.
+    const modeOption: SessionConfigOption = {
+      id: 'mode',
+      name: 'Mode',
+      type: 'select',
+      currentValue: 'default',
+      options: [
+        { value: 'default', name: 'Always Ask' },
+        { value: 'bypassPermissions', name: 'Bypass Permissions' },
+      ],
+    } as SessionConfigOption
+    client = new ScriptedClient({
+      loadSession: true,
+      configOptions: [modeOption],
+      promptResults: [
+        // First turn hangs until the connection is killed (never resolves).
+        () => new Promise<PromptResponse>(() => {}),
+        // The continuation turn after reconnect succeeds.
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    // The user switches to bypass at runtime; the selection lands in history.
+    await s.setConfigOption('mode', 'bypassPermissions')
+
+    void s.sendPrompt('run something')
+    await waitFor(s.status, (v) => v === 'running')
+
+    // Process dies mid-turn; the service hot-reconnects on a fresh connection.
+    client.killConnection(0)
+    await waitFor(s.recoveryState, (v) => v?.phase === 'reconnecting')
+    await waitFor(s.recoveryState, (v) => v === undefined)
+    expect(client.connections.length).toBe(2)
+
+    // The rebuilt agent must be told the session's saved mode — otherwise it
+    // runs the resumed turn under the reset default and starts asking for
+    // permission again.
+    expect(client.connections[1]!.configCalls.map((c) => `${c.configId}=${c.value}`)).toContain(
+      'mode=bypassPermissions',
+    )
+    // The UI keeps showing the user's selection, not the rebuilt bag's default.
+    const mode = s.configOptions.get().find((o) => o.id === 'mode')
+    expect(mode?.type === 'select' && mode.currentValue).toBe('bypassPermissions')
+    // The re-asserted mode must land BEFORE the resumed turn dispatches, or the
+    // continuation prompt runs under the reset default config.
+    await waitFor({ get: () => client.connections[1]!.promptCalls.length }, (n) => n === 1)
+    const events = client.connections[1]!.events
+    expect(events.indexOf('config:mode')).toBeGreaterThanOrEqual(0)
+    expect(events.indexOf('prompt')).toBeGreaterThan(events.indexOf('config:mode'))
     await waitFor(s.status, (v) => v === 'idle')
   })
 })
