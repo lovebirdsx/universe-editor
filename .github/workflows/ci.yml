@@ -663,3 +663,38 @@ jobs:
           path: apps/editor/release
           retention-days: 14
           if-no-files-found: error
+
+  # Aggregated gate: GitHub required status checks match by check name, but the
+  # real job names above are dynamic (affected matrix, OS×shard) so none can be
+  # registered directly. This fixed-name job waits for ALL of them and fails if
+  # any failed or was cancelled — it is the single required check registered in
+  # the main-branch ruleset. `if: always()` is essential: without it a failing
+  # need would SKIP this job, and a skipped required check counts as passed.
+  ci-gate:
+    name: CI Gate
+    if: always()
+    needs:
+      - ci
+      - integration
+      - detect-affected
+      - acp-contract
+      - e2e
+      - e2e-extensions
+      - e2e-external
+      - bench
+      - package-windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail if any required job failed or was cancelled
+        env:
+          NEEDS: ${{ toJson(needs) }}
+        run: |
+          echo "$NEEDS" | node -e '
+            const n = JSON.parse(require("fs").readFileSync(0, "utf8"))
+            const bad = Object.entries(n).filter(([, v]) => !["success", "skipped"].includes(v.result))
+            if (bad.length) {
+              console.error("Failing jobs: " + bad.map(([k, v]) => k + "=" + v.result).join(", "))
+              process.exit(1)
+            }
+          '
