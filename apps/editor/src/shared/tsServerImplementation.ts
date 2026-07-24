@@ -10,4 +10,4 @@
 
 export type TsServerImplementationName = 'tsls' | 'native'
 
-export const DEFAULT_TS_SERVER_IMPLEMENTATION: TsServerImplementationName = 'native'
+export const DEFAULT_TS_SERVER_IMPLEMENTATION: TsServerImplementationName = 'tsls'
