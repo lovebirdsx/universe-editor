@@ -20,6 +20,7 @@
 | 视觉回归 | `@visual` | 默认排除 | 否 |
 
 - 并行趟统一 `--grep-invert "@visual|@serial|@flaky|@perf|@regression"`，把视觉/串行/不稳定/性能/回归守护用例从主门禁里剥离。
+- 本地 `pnpm e2e` / `pnpm e2ea`（根或 apps/editor 内，入口 `scripts/e2e/run-e2e.mjs`）：当未提交改动**仅**含 `apps/editor/e2e/specs/*.spec.ts` 时，自动只对改动文件跑「主趟 + `@serial` 趟」（`e2ea` 主趟照常含 `@regression`），绕过 turbo（故部分运行的成功不会污染 turbo 缓存）；其余情况（含 fixtures/pages/harness/src 改动、工作区干净、CI、turbo 任务内）一律全量。强制全量设 `UNIVERSE_E2E_FULL=1`；`--dry-run` 可看判定结果。
 - `@flaky` 趟保留覆盖（仍然跑、仍上传 trace），但不让环境抖动卡住 PR。修好根因后应摘掉 `@flaky` 让它回归门禁。
 - `@regression` 是**单用例级** tag（打在 `test('... @regression')` 标题末尾，而非 `describe`）：一个 spec 文件里核心主路径冒烟留主趟，只为守护某个已修复 bug 的用例打 `@regression`。目的是让本地 `pnpm e2e` 只跑核心冒烟保持轻快，CI 仍全量覆盖回归。何时打：**该用例只为守护已修复 bug、不是命令主路径/协议/导航入口的冒烟**（先例见 `smoke.markdownPreview.spec.ts`）。本地手动全跑回归：`pnpm --filter @universe-editor/editor e2e:regression`。
 

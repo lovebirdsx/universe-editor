@@ -66,7 +66,7 @@ tag 打在**用例级**标题末尾（`@regression` 尤其是单用例级）。*
 ### 命令
 
 ```bash
-# 全量 E2E（core + 所有扩展），走 turbo 缓存、串行执行
+# E2E 入口（core + 所有扩展）；本地未提交改动仅含 core spec 时自动只跑改动文件（见下节）
 pnpm e2e                    # 默认：排除 @regression/@serial/@flaky/@perf/@visual；core 额外跑 @serial 趟
 pnpm e2ea                   # 含 @regression 的全量（turbo `e2ea` task，独立缓存条目）
 pnpm e2e:force              # 忽略 turbo 缓存强制真跑 e2e（复跑 flaky 用），build 仍走缓存不重复
@@ -82,11 +82,20 @@ pnpm e2e:ext @universe-editor/ai
 pnpm e2e:ext @universe-editor/perforce
 ```
 
-> **`pnpm e2e` 走 turbo 缓存**：core（`@universe-editor/editor`）与全部扩展（`./extensions/*` glob，无 `e2e` script 的包自动跳过，加扩展零同步）的 e2e 都是 turbo task，输入未变则**命中缓存直接返回上次结果、不重跑**。缓存 key 已含依赖任务 `editor#build` 的 output hash——改宿主（editor/platform 等上游）会自动令下游所有 e2e 缓存失效重跑，改单个扩展只失效该扩展。`--concurrency=1` 让各 suite **串行**（每个 suite 冷启独立 Electron，并行易触发跨进程资源争抢 flake）；前置 build 命中缓存瞬时跳过，不占串行时间。
+> **全量 `pnpm e2e` 走 turbo 缓存**：core（`@universe-editor/editor`）与全部扩展（`./extensions/*` glob，无 `e2e` script 的包自动跳过，加扩展零同步）的 e2e 都是 turbo task，输入未变则**命中缓存直接返回上次结果、不重跑**。缓存 key 已含依赖任务 `editor#build` 的 output hash——改宿主（editor/platform 等上游）会自动令下游所有 e2e 缓存失效重跑，改单个扩展只失效该扩展。`--concurrency=1` 让各 suite **串行**（每个 suite 冷启独立 Electron，并行易触发跨进程资源争抢 flake）；前置 build 命中缓存瞬时跳过，不占串行时间。
 
 > **想无视缓存强制真跑 → `pnpm e2e:force` / `pnpm e2ea:force`**（例如复跑 flaky、或怀疑缓存掩盖问题；`e2ea:force` 含 @regression）。它分两步：先 `turbo run build`（**走缓存**，命中即秒过），再 `turbo run e2e … --force --only`——`--force` 忽略 e2e 缓存强制重跑，`--only` 只执行 e2e task 不执行父 build（否则 `--force` 会把 `editor#build` 也一起重建，造成 build 重复跑）。
 
 > **子包裸跑 e2e 也会自动 build 了**：`pnpm --filter <ext> e2e`（及 `e2ea`/`e2eg`/core 的 `e2e:regression`/`e2e:headed`/`e2e:ui`）的脚本前置了 `scripts/e2e/ensure-e2e-build.mjs`——裸跑时先 `turbo run build --filter=editor... --filter=<self>...` 把宿主 + 被测扩展 + 上游全刷新到最新（命中缓存则秒过），再启动 Playwright，杜绝「跑旧产物假绿/假红」。已在 turbo task 上下文里（根 `pnpm e2e`/`e2e:ext`，探测 `TURBO_HASH`）则跳过，不嵌套第二个 turbo。**与 `pnpm e2e:ext <包>` 的差别**：`e2e:ext` 走 turbo 的 `e2e` task、连 e2e **结果**都进缓存（输入未变直接返回上次结果）；子包裸跑只保证 **build** 新鲜、e2e 每次真跑（适合诊断单 spec、反复调）。core 套件的 `core*App` fixture 激活 git/typescript/markdown，这三个是 editor 的 devDependencies，`--filter=editor...` 的 `...` 已自动带上。
+
+### 本地只跑改动的 spec
+
+`pnpm e2e` / `pnpm e2ea`（根或 apps/editor 内）的入口是 `scripts/e2e/run-e2e.mjs`：当**未提交改动**（staged + unstaged + untracked）全部落在 `apps/editor/e2e/specs/*.spec.ts` 时，自动只对改动文件跑「主趟 + `@serial` 趟」（`e2ea` 主趟照常含 `@regression`），几秒到十几秒即可验证；其余情况——fixtures/pages/harness/src 等任何非 core-spec 改动、工作区干净、CI、turbo 任务内——一律回退原全量命令。
+
+- 部分运行**绕过 turbo** 直接 spawn Playwright：turbo 缓存的 e2e 成功永远是全量成功，语义不被部分运行污染。
+- 强制全量：设 `UNIVERSE_E2E_FULL=1`；查看判定结果：`node scripts/e2e/run-e2e.mjs --dry-run`。
+- 判定只看未提交改动——已提交（含未推送）的 e2e 改动走全量，turbo 缓存照常生效。
+- 与 CI 的关系：本地是**文件级**缩小，CI 是 **suite 级** affected（见下「CI affected 选择性执行」），互不干扰。
 
 ### 外部（marketplace）扩展 E2E
 

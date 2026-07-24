@@ -36,7 +36,7 @@ packages/
 ```bash
 pnpm check        # 快速校验：lint + typecheck + test（纯测试文件变更时 targeted 跑变更测试，否则 turbo 全量）
 pnpm test:changed # 只跑 git 变更涉及的测试（全是 *.test.* 才 targeted，混入源码则该域全量；--base main 看分支整体差异）
-pnpm e2e          # 端到端测试
+pnpm e2e          # 端到端测试（本地未提交改动仅含 e2e spec 时自动只跑改动文件；UNIVERSE_E2E_FULL=1 强制全量）
 ```
 
 ## 跨包共同约定
