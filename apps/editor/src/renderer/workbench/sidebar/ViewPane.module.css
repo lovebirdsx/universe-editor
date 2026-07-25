@@ -13,7 +13,7 @@
 .header {
   display: flex;
   align-items: center;
-  padding: 0 4px 0 8px;
+  padding: 0 4px 0 4px;
   height: 28px;
   user-select: none;
   background: var(--color-sidebar-section-header-bg, #2d2d2d);
@@ -50,7 +50,7 @@
 
 .chevron {
   flex-shrink: 0;
-  margin-right: 4px;
+  margin-right: 2px;
   opacity: 0.7;
 }
 
