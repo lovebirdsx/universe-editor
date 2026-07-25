@@ -1,7 +1,6 @@
 ---
 name: add-json-schema-association
-description: 为特定 JSON 文件（按文件名/glob 匹配）接上 schema 智能提示——补全、校验、hover 文档。当用户说「打开某类 JSON 文件时给出该文件专属的提示」「像 VSCode 给 settings.json 那样为 *.xxx.json 配 schema」「给游戏内容/配置 JSON 加校验和补全」「让某个 JSON 文件类型有智能提示」，或要新增一种 JSON 文件类型的 schema 关联时使用。聚焦「选对三条来源路径中的哪条 → 内联 schema 喂给 Monaco → 注册到统一注册表」的通用流程；具体是哪种文件、什么 schema 由 agent 当场判断。
-disable-model-invocation: true
+description: 为特定 JSON 文件（按文件名/glob 匹配）接 schema 智能提示（补全/校验/hover）。当用户说打开某类 JSON 给专属提示、像 settings.json 那样为 *.xxx.json 配 schema、给配置 JSON 加校验和补全，或要新增一种 JSON 文件类型的 schema 关联时使用。
 ---
 
 # 为特定 JSON 文件接上 schema 智能提示
@@ -62,7 +61,7 @@ disable-model-invocation: true
 > 端到端实例 `extensions/claude-helper`：declaration-only + 远程 http schema，把 `**/.claude/settings.json` / `**/.claude/settings.local.json` 关联到官方 `https://json.schemastore.org/claude-code-settings.json`。无 `main`、无 `files`、无 build。
 
 > 机制链路（已实现，**给已支持的扩展加 jsonValidation 条目无需动**；只有要扩展该贡献点本身的字段时才碰）：
-> - 类型：`packages/extensions-common/src/manifest.ts`（`IJsonValidationContribution` manifest 形态 / `IResolvedJsonValidation` host 已解析形态：本地→`schema` 内联、http→`url` 透传 / `IExtensionContributionsDto`）
+> - 类型：`packages/extensions-common/src/protocol/manifest.ts`（`IJsonValidationContribution` manifest 形态 / `IResolvedJsonValidation` host 已解析形态：本地→`schema` 内联、http→`url` 透传 / `IExtensionContributionsDto`）
 > - zod 校验：`packages/extension-host/src/manifest.ts`（`jsonValidationSchema`）
 > - host 解析：`packages/extension-host/src/extensionScanner.ts`（`resolveJsonValidation`：本地 url `path.resolve` → `readFile` → `JSON.parse` 内联成 `{fileMatch, schema}`，单条失败跳过并记日志；**http(s) url 透传成 `{fileMatch, url}` 不读盘**）+ `extensionService.ts` 的 `getContributions()` 注入 DTO
 > - renderer 翻译进注册表：`apps/editor/src/renderer/services/extensions/ExtensionPointTranslator.ts` 的 `_registerJsonValidation()`（`uri: extension://<extId>/jsonvalidation/<index>`）；本地 `schema` 同步注册，http `url` 经注入的 `resolveRemoteSchema` 异步下载后注册（含 dispose 守卫）。`ExtensionsContribution.ts` 注入服务并构造 `resolveRemoteSchema`。
@@ -141,7 +140,7 @@ pnpm check                     # lint + typecheck + test，仅看错误输出（
 - `apps/editor/src/renderer/services/extensions/ExtensionPointTranslator.ts` —— 路径 A 的 `_registerJsonValidation`（本地 schema 同步 / http url 异步解析）
 - `apps/editor/src/renderer/contributions/ExtensionsContribution.ts` —— 注入服务、构造 `resolveRemoteSchema` 传给 translator
 - `packages/extension-host/src/extensionScanner.ts` —— 路径 A 的 host 端解析（`resolveJsonValidation`：本地内联 / http 透传）
-- `packages/extensions-common/src/manifest.ts` —— jsonValidation 贡献点类型（manifest / resolved / DTO）
+- `packages/extensions-common/src/protocol/manifest.ts` —— jsonValidation 贡献点类型（manifest / resolved / DTO）
 - `apps/editor/src/main/services/remoteSchema/remoteSchemaMainService.ts` —— 远程 schema 下载器（缓存 / ETag / 离线回退）
 - `apps/editor/src/renderer/services/preferences/schemaUrlResolver.ts` —— 本地/远程 url 统一解析 + 信任策略（路径 A/B 复用）
 - `extensions/claude-helper/` —— 路径 A 端到端示范（declaration-only + 远程 http schema）

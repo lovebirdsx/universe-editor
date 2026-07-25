@@ -1,6 +1,6 @@
 ---
 name: nsis-installer-autoupdate
-description: Windows 安装器（electron-builder NSIS）与自动更新（electron-updater）相关功能的领域知识与套路。当任务涉及 installer.nsh、NSIS 钩子宏、安装/卸载流程、自动更新（quitAndInstall / --updated / 静默或非静默安装）、更新安装慢、Defender 排除、PATH 写入与 WM_SETTINGCHANGE 广播、右键菜单注册表、安装耗时测量、打包安装器验证时使用。含 electron-builder 模板机制速查、零点击更新守卫链、广播阻塞根因与修复边界、测量方法学与端到端验证命令。
+description: Windows 安装器（electron-builder NSIS）与自动更新（electron-updater）的领域知识与套路。当任务涉及 installer.nsh / NSIS 钩子宏、安装卸载流程、quitAndInstall / --updated / 静默或非静默安装、更新安装慢、Defender 排除、PATH 写入与 WM_SETTINGCHANGE 广播、右键菜单注册表、或安装耗时测量时使用。
 disable-model-invocation: true
 ---
 

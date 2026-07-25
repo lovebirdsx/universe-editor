@@ -107,7 +107,7 @@ pnpm e2ea:external   # 同上，含 @regression
 npm --prefix extensions-external/<ext> run e2e   # 单个外部 suite（runner 会自动先建 editor+host）
 ```
 
-> 外部扩展 bare-import 解析不到 workspace 里的 harness / `@playwright/test`，故其 `playwright.config.ts` 用**相对 import** 拉 harness dist，且 runner（`scripts/e2e/run-external-e2e.mjs`）从 harness 包解析出**唯一一份** playwright CLI 来 spawn。tag 分流仍复用 `UNIVERSE_E2E_*` env（单一事实源 `grepOptions`）。runner 会先刷新 editor + extension-host 的 build（`turbo`，命中缓存则秒过）再 build 该扩展 `dist/`，故单包裸跑也不会测到旧宿主；根 `e2e:external` 已一次性建好时用 `UNIVERSE_E2E_EDITOR_PREBUILT` 跳过重复。套路详见 skill `e2e-architecture` 的「外部扩展 e2e 套路」。
+> 外部扩展 bare-import 解析不到 workspace 里的 harness / `@playwright/test`，故其 `playwright.config.ts` 用**相对 import** 拉 harness dist，且 runner（`scripts/e2e/run-external-e2e.mjs`）从 harness 包解析出**唯一一份** playwright CLI 来 spawn。tag 分流仍复用 `UNIVERSE_E2E_*` env（单一事实源 `grepOptions`）。runner 会先刷新 editor + extension-host 的 build（`turbo`，命中缓存则秒过）再 build 该扩展 `dist/`，故单包裸跑也不会测到旧宿主；根 `e2e:external` 已一次性建好时用 `UNIVERSE_E2E_EDITOR_PREBUILT` 跳过重复。套路详见 `apps/editor/e2e/CLAUDE.md` 的「外部（marketplace）扩展 e2e 套路」。
 
 
 ## CI affected 选择性执行

@@ -1,7 +1,6 @@
 ---
 name: fix-keybinding-not-firing
-description: 排查「快捷键不生效」——按键后命令没执行，或快捷键编辑器/日志显示 NO MATCH / no binding registered。当用户说 “某快捷键按了没反应 / VSCode keybindings.json 里配的 key 不工作 / 日志报 NO MATCH no binding registered / 我改了键但还是触发旧的 / 同一个命令配了两个键只有一个生效 / when 子句明明满足却不执行” 时使用。聚焦“读诊断行 → 判别是没注册进 registry 还是注册了但运行期被拦 → 沿决策树定位到具体一层 → 先写复现测试再修”的通用流程；具体哪个键/命令由 agent 当场判断。区别于 register-monaco-command（那个是“把命令接进来”，本 skill 是“键已配但不触发”的诊断）。
-disable-model-invocation: true
+description: 排查「快捷键不生效」：按键后命令没执行，或日志报 NO MATCH / no binding registered。当用户说快捷键按了没反应、keybindings.json 配的键不工作、改键仍触发旧的、when 子句满足却不执行时使用。区别于 register-monaco-command（那个是把命令接进来，本 skill 是键已配但不触发的诊断）。
 ---
 
 # 排查快捷键不生效（NO MATCH / 按了没反应 / 改键无效）

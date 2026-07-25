@@ -1,7 +1,6 @@
 ---
 name: analyze-startup-performance
-description: 诊断并定位本仓库（VSCode 范式 Electron 编辑器）的启动/恢复耗时问题——「A 目录启动比 B 目录慢 X 秒」「启动变慢了 / 启动性能回归 / Startup Performance 某阶段耗时飙升 / 某工作区打开特别慢」。给出如何读 Developer: Startup Performance 报告（Phases vs Marks 的区别、并行 load 不能相邻相减）、如何按套路 G 补细粒度 perf mark 把黑盒阶段拆开、跨进程 mark 的注册与聚合机制、以及区分「代码回归 vs 工作区状态/规模差异」的隔离实验法。聚焦通用定位流程；具体是哪个 service/contribution 慢由 agent 当场插桩测量判断。
-disable-model-invocation: true
+description: 诊断启动/恢复耗时问题——「A 目录启动比 B 慢」「启动性能回归」「Startup Performance 某阶段飙升」。当任务是读 Startup Performance 报告、按套路 G 补 perf mark 拆开黑盒阶段、或区分代码回归 vs 工作区状态/规模差异时使用。
 ---
 
 # 分析启动 / 恢复性能

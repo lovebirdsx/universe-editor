@@ -1,23 +1,26 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
- *  Keeps each Claude skill's Codex-side invocation policy in sync.
+ *  Ensures every skill carries a Codex-side invocation policy file.
  *
  *  Skills live in `.claude/skills/<name>/SKILL.md` and are shared by both built-in
  *  agents (the codex-acp adapter exposes `.claude/skills` to Codex; see
- *  `vendor/codex-acp/src/CodexAcpClient.ts` `refreshSkills`). Claude reads the
- *  `disable-model-invocation` frontmatter to keep a skill manual-only; Codex reads
- *  `policy.allow_implicit_invocation` from a per-skill `agents/openai.yaml` instead.
+ *  `vendor/codex-acp/src/CodexAcpClient.ts` `refreshSkills`). Each side reads its
+ *  own native knob — there is no bridging frontmatter:
+ *    Claude: `disable-model-invocation` frontmatter (harness reads it directly)
+ *    Codex:  `policy.allow_implicit_invocation` in per-skill `agents/openai.yaml`
+ *            (the Codex binary scans skill dirs and reads this file itself)
  *
- *  This script mirrors the former into the latter: every skill whose SKILL.md has
- *  `disable-model-invocation: true` gets an `agents/openai.yaml` with
- *  `policy.allow_implicit_invocation: false`, so it is manual-only (`$skill`) on
- *  Codex too — matching Claude's `/skill`. Idempotent: safe to re-run after adding
- *  a new skill. Claude ignores the `agents/` subdir, so this is a no-op for Claude.
+ *  `agents/openai.yaml` is the single source of truth for the Codex side. This
+ *  script does NOT derive it from anything: it only writes the default
+ *  `allow_implicit_invocation: false` (manual-only in product-side Codex sessions)
+ *  when the file is missing, and validates existing files. To open one skill to
+ *  implicit invocation on Codex, hand-edit its openai.yaml to `true` — the script
+ *  respects handwritten values. Claude ignores the `agents/` subdir entirely.
  *
  *  Usage:
- *    node scripts/sync-codex-skill-policy.mjs           # write/refresh openai.yaml
- *    node scripts/sync-codex-skill-policy.mjs --check    # CI: fail if any out of sync
+ *    node scripts/sync-codex-skill-policy.mjs           # fill in missing openai.yaml
+ *    node scripts/sync-codex-skill-policy.mjs --check    # CI: fail on missing/invalid
  *--------------------------------------------------------------------------------------------*/
 
 import { dirname, join, resolve } from 'path'
@@ -30,24 +33,23 @@ const SKILLS_DIR = join(REPO_ROOT, '.claude', 'skills')
 
 const CHECK_ONLY = process.argv.slice(2).includes('--check')
 
-// Codex's manual-only policy file. Mirrors Claude's `disable-model-invocation: true`:
-// the skill is not injected into the model context by default, but stays invocable
-// explicitly via `$skill`. See codex docs (policy.allow_implicit_invocation).
-const OPENAI_YAML = ['policy:', '  allow_implicit_invocation: false', ''].join('\n')
+const VALID = new Set(['true', 'false'])
 
 function fmt(p) {
   return p.replace(/\\/g, '/')
 }
 
-/** A skill is manual-only when its SKILL.md frontmatter disables model invocation. */
-function isManualOnly(skillMdPath) {
-  let text
-  try {
-    text = readFileSync(skillMdPath, 'utf8')
-  } catch {
-    return false
-  }
-  return /^\s*disable-model-invocation:\s*true\s*$/m.test(text)
+function openaiYaml(allowImplicit) {
+  return ['policy:', `  allow_implicit_invocation: ${allowImplicit}`, ''].join('\n')
+}
+
+/** Returns 'true' | 'false' when the file carries a valid policy, null otherwise. */
+function readPolicy(yamlPath) {
+  if (!existsSync(yamlPath)) return null
+  const m = /^policy:\s*\r?\n\s+allow_implicit_invocation:\s*(true|false)\s*$/m.exec(
+    readFileSync(yamlPath, 'utf8'),
+  )
+  return m && VALID.has(m[1]) ? m[1] : null
 }
 
 function main() {
@@ -64,54 +66,50 @@ function main() {
     }
   })
 
-  const outOfSync = []
+  const invalid = []
   let written = 0
-  let skipped = 0
+  let kept = 0
 
   for (const name of entries.sort()) {
     const skillDir = join(SKILLS_DIR, name)
-    const skillMd = join(skillDir, 'SKILL.md')
-    if (!existsSync(skillMd)) continue
+    if (!existsSync(join(skillDir, 'SKILL.md'))) continue
 
-    // Only manual-only skills get the manual-only Codex policy. A skill that
-    // intentionally allows auto-invocation should not be forced off here.
-    if (!isManualOnly(skillMd)) {
-      skipped++
+    const yamlPath = join(skillDir, 'agents', 'openai.yaml')
+    const policy = readPolicy(yamlPath)
+
+    if (policy !== null) {
+      kept++
       continue
     }
 
-    const yamlPath = join(skillDir, 'agents', 'openai.yaml')
-    const current = existsSync(yamlPath) ? readFileSync(yamlPath, 'utf8') : null
-    const inSync = current !== null && current.replace(/\r\n/g, '\n') === OPENAI_YAML
-
-    if (inSync) {
-      skipped++
+    if (existsSync(yamlPath)) {
+      invalid.push(name)
       continue
     }
 
     if (CHECK_ONLY) {
-      outOfSync.push(name)
+      invalid.push(name)
       continue
     }
 
     mkdirSync(dirname(yamlPath), { recursive: true })
-    writeFileSync(yamlPath, OPENAI_YAML, 'utf8')
-    console.log(`[skill-policy] 写入 ${fmt(join(name, 'agents', 'openai.yaml'))}`)
+    writeFileSync(yamlPath, openaiYaml('false'), 'utf8')
+    console.log(`[skill-policy] 写入 ${fmt(join(name, 'agents', 'openai.yaml'))}（默认 false）`)
     written++
   }
 
-  if (CHECK_ONLY) {
-    if (outOfSync.length > 0) {
-      console.error('[skill-policy] 以下 skill 的 Codex 策略文件缺失或过期:')
-      outOfSync.forEach((n) => console.error(`  - ${n}`))
-      console.error('[skill-policy] 运行 `pnpm skills:policy` 修复。')
-      process.exit(1)
-    }
-    console.log('[skill-policy] 所有手动 skill 的 Codex 策略已同步 ✓')
-    return
+  if (invalid.length > 0) {
+    console.error('[skill-policy] 以下 skill 缺 agents/openai.yaml 或内容非法:')
+    invalid.forEach((n) => console.error(`  - ${n}`))
+    console.error('[skill-policy] 运行 `pnpm skills:policy` 补齐（默认 false），或手写合法 policy。')
+    process.exit(1)
   }
 
-  console.log(`[skill-policy] 完成 ✓ 写入 ${written} 个, 跳过 ${skipped} 个`)
+  if (CHECK_ONLY) {
+    console.log(`[skill-policy] 所有 skill 的 Codex 策略文件齐备（${kept} 个）✓`)
+    return
+  }
+  console.log(`[skill-policy] 完成 ✓ 写入 ${written} 个, 已有 ${kept} 个`)
 }
 
 main()

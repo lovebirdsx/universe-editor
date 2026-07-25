@@ -1,6 +1,6 @@
 ---
 name: update-claude-agent-acp
-description: 更新内置 ACP agent fork（vendor/claude-agent-acp，我们自维护的 git submodule），把上游 agentclientprotocol/claude-agent-acp 的新提交合并进来并重建发布产物。当用户说“更新 claude-agent-acp / 合并上游修改 / 同步 acp agent / 升级内置 agent / 升级 claude-agent-sdk（经由该 fork）”时使用。聚焦“rebase fork 自定义提交到上游 → 解决已知冲突套路 → 构建测试 → push fork → 主仓库提交 submodule 指针”的可复用流程；具体冲突由 agent 当场判断。
+description: 更新内置 ACP agent fork（vendor/claude-agent-acp，自维护 git submodule），合并上游 agentclientprotocol/claude-agent-acp 新提交并重建发布产物。当用户说更新 claude-agent-acp / 合并上游修改 / 同步 acp agent / 升级内置 agent / 升级 claude-agent-sdk 时使用。
 disable-model-invocation: true
 ---
 

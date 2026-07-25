@@ -1,7 +1,6 @@
 ---
 name: extend-language-plugin
-description: 在内置语言插件体系（extensions/typescript 这类「选项 B 真 VSCode 形态」插件）里开发语言特性时使用。当用户说「给 TS/语言插件加一类 provider（code action / inlay hint / formatting / folding / semantic tokens / document highlight 等）」「改 typescript-language-server 的 LSP 客户端 / initialize 参数 / spawn 方式」「诊断/补全/hover 不生效或要调」「按 extensions/typescript 的样子迁一个新语言成内置插件」「tsserver 路径找不到 / env 注入有问题」时使用。聚焦理解四条数据流 + 句柄路由 + KEEP IN SYNC 三处 + wire 类型约定的通用套路；具体改哪个特性由 agent 当场判断。
-disable-model-invocation: true
+description: 在内置语言插件（extensions/typescript 这类插件内自 spawn LSP server 的形态）里开发语言特性时使用。当任务是加/改 provider（code action / inlay hint / formatting / folding / semantic tokens 等）、调 LSP 客户端 / initialize 参数 / spawn 方式、诊断补全 hover 不生效、或照 typescript 的样子迁一个新语言成内置插件时使用。
 ---
 
 # 在内置语言插件体系里开发语言特性
@@ -18,7 +17,7 @@ renderer (Monaco UI)  ──MainThread* / extHost* RPC──  main (字节管道
 ```
 - `extHost*` 通道 = renderer → host（如 `extHostLanguages.$provideXxx`）。
 - `mainThread*` 通道 = host → renderer（如 `mainThreadLanguages.$registerProvider` / `$publishDiagnostics`）。
-- 通道定义全在 `packages/extensions-common/src/rpc.ts`（`ExtHostChannels` + `IExtHostLanguages` / `IExtHostDocuments` / `IMainThreadLanguages` 接口）。
+- 通道定义全在 `packages/extensions-common/src/protocol/rpc.ts`（`ExtHostChannels` + `IExtHostLanguages` / `IExtHostDocuments` / `IMainThreadLanguages` 接口）。
 - 语言插件**只能跑 trusted host**（要 spawn 子进程）；restricted host 不能 spawn。
 
 ## 四条数据流（改之前先认领你属于哪条）
@@ -135,7 +134,7 @@ pnpm e2e          # 改了交互链路时跑冒烟，仅截错误
 ## 关键参考路径
 - `extensions/typescript/src/extension.ts` —— 插件入口：activate + 10 类 provider 注册 + 文档同步（**新语言插件模板**）
 - `extensions/typescript/src/lspClient.ts` —— 插件内 LSP 客户端：spawn / initialize / sendRequest / 诊断 / 崩溃重启
-- `packages/extensions-common/src/rpc.ts` —— 三向通道契约 + `LanguageProviderType` 枚举（加 provider 第一站）
+- `packages/extensions-common/src/protocol/rpc.ts` —— 三向通道契约 + `LanguageProviderType` 枚举（加 provider 第一站）
 - `packages/extension-api/src/index.ts` —— `languages`/`workspace` 对外 API + `IExtensionHostBridge`（KEEP IN SYNC 之一）
 - `packages/extension-host/src/apiFactory.ts` —— `IExtensionHostBridge`（KEEP IN SYNC 之二）
 - `packages/extension-host/src/extensionService.ts` —— provider 句柄路由 + diagnostics collection 实现（KEEP IN SYNC 之三）

@@ -1,7 +1,6 @@
 ---
 name: register-monaco-command
-description: 把一个 Monaco 编辑器命令接进项目的命令面板 + Keyboard Shortcuts 编辑器 + 可配快捷键。当用户说 “某 Monaco 命令（Go to/Peek Definition、format、rename、引用、自定义 action 等）在命令面板搜不到 / 在快捷键编辑器里列不出 / 右键菜单能用但配不了 key / 想给它配快捷键”，或要新增一个包装 Monaco 内置命令的 Action2 时使用。聚焦“判定命令属于哪套注册机制 → 选对集成路径 → 防默认键双触发”的通用流程；具体哪个命令由 agent 当场判断。
-disable-model-invocation: true
+description: 把 Monaco 编辑器命令接进命令面板 + Keyboard Shortcuts 编辑器 + 可配快捷键。当用户说某 Monaco 命令在命令面板搜不到 / 快捷键编辑器列不出 / 右键能用但配不了键 / 想给它配快捷键，或要新增包装 Monaco 内置命令的 Action2 时使用。
 ---
 
 # 把 Monaco 命令接进项目命令面板 + 可配快捷键

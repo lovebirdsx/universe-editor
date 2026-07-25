@@ -1,7 +1,6 @@
 ---
 name: fix-disposable-leak
-description: 诊断并修复本仓库（VSCode 范式内核）的 Disposable 内存泄漏。当用户提到“内存泄漏 / memory leak / 未释放的 Disposable / Disposable leak(s) detected / DisposableTracker 报告了泄漏”，或贴出带 `trackDisposable` / `lifecycle.ts` / `computeLeakingDisposables` 的泄漏堆栈时使用。聚焦通用排查与修复流程；具体哪个类泄漏由 agent 当场判断。
-disable-model-invocation: true
+description: 诊断并修复 Disposable 内存泄漏。当用户提到内存泄漏 / memory leak / 未释放的 Disposable / Disposable leak(s) detected，或贴出带 trackDisposable / lifecycle.ts / computeLeakingDisposables 的泄漏堆栈时使用。
 ---
 
 # 修复 Disposable 内存泄漏

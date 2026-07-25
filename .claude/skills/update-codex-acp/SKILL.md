@@ -1,6 +1,6 @@
 ---
 name: update-codex-acp
-description: 更新内置 Codex ACP agent fork（vendor/codex-acp，我们自维护的 git submodule），把上游 agentclientprotocol/codex-acp 的新提交合并进来并重建发布产物。当用户说“更新 codex-acp / 合并上游修改 / 同步 codex agent / 升级内置 codex agent / rebase codex-acp 到上游”时使用。聚焦“确认真上游 → rebase fork 自定义提交到上游 → 解决已知冲突套路 → 构建测试 → push fork → 主仓库提交 submodule 指针”的可复用流程；具体冲突由 agent 当场判断。
+description: 更新内置 Codex ACP agent fork（vendor/codex-acp，自维护 git submodule），合并上游 agentclientprotocol/codex-acp 新提交并重建发布产物。当用户说更新 codex-acp / 合并上游修改 / 同步 codex agent / 升级内置 codex agent 时使用。注意真上游是 agentclientprotocol，zed-industries 已废弃。
 disable-model-invocation: true
 ---
 

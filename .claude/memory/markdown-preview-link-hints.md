@@ -24,4 +24,4 @@ markdown 预览(`MarkdownPreviewEditor`)加了 vimium 风格键盘导航,属 mar
 
 **e2e**:`smoke.markdownPreview.spec.ts`,用真实键盘(非 runCommand),helper 先 bringToFront + 仅在未生效时重按。hint 标签 DOM 带 `data-testid=md-link-hint` + `data-link-label`。
 
-**How to apply**:扩展键盘导航(滚动 j/k/gg/G、前进后退 H/L 等)继续走线②,复用 controller+contextKey+Action2 对称结构。详见 skill markdown-subsystem-context(线②)。
+**How to apply**:扩展键盘导航(滚动 j/k/gg/G、前进后退 H/L 等)继续走线②,复用 controller+contextKey+Action2 对称结构。详见 `apps/editor/src/renderer/workbench/markdown/CLAUDE.md`(线②)。

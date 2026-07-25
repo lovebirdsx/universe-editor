@@ -2,7 +2,9 @@
 
 Playwright + `_electron` 冒烟栈。跑的是 `out/` 打包产物，通过 `window.__E2E__` 探针驱动服务，**不戳 DOM 内部**。
 
-> 「怎么新建一个 spec / 定位优先级 / 扩探针」见 `apps/editor/CLAUDE.md` 的**套路 F**——不在此重复。本文件讲**本目录独有的东西**：选哪套 fixture、PO 分层、tag 体系、脚本矩阵、踩坑。
+> 「怎么新建一个 spec / 定位优先级 / 扩探针」见 `apps/editor/CLAUDE.md` 的**套路 F**——不在此重复。本文件讲**本目录独有的东西**：选哪套 fixture、PO 分层、tag 体系、脚本矩阵、新增/外部扩展 suite、踩坑。
+
+> ⚠️ 第一原则：动 e2e 前先分清你改的是哪一层——**探针契约**（`packages/e2e-contract`）、**共享 driver**（`packages/e2e-harness`）、**归属某扩展的 spec**（`extensions/<ext>/e2e`）、还是**内核 spec**（本目录）。改错层会引入跨包耦合或缓存/归属漂移。
 
 ## 目录结构
 
@@ -18,11 +20,13 @@ RUNBOOK.md    已知 flaky 登记:根因 + workaround + 判定标准
 
 > **基座已抽包**:通用 driver(两套 fixture 工厂 + 6 个 PO + `expectNoLeaks`/`evaluateWhenRestored` + 启动契约)住在 `packages/e2e-harness`;探针类型契约(`E2EProbe` + `window.__E2E__` 全局 + 运行时 key 常量)住在零依赖包 `packages/e2e-contract`(app 与 harness 共享,单一事实源)。本目录的 `fixtures/electronApp.ts`、`fixtures/sharedApp.ts`、`pages/WorkbenchPO.ts` 都只是把 harness 工厂**绑定到本 app 的 `out/` 产物路径**的薄 shim,spec import 路径不变。改通用 driver → 改 `packages/e2e-harness`;改探针接口 → 改 `packages/e2e-contract`(app 的 `src/shared/e2e/contract.ts` 是它的 re-export barrel)。
 
-> **本目录只放核心 spec**:扩展专属的 e2e 已物理迁到各扩展目录 `extensions/<ext>/e2e/`(perforce/markdown/typescript/ai),各自带 `playwright.config.ts` + `e2e` script + scoped fixture(传自己的 `extensions: [...]` allowlist)。删扩展即删其测试。新增扩展 e2e 照抄 `extensions/markdown/e2e/` 结构。
+> **本目录只放核心 spec**：扩展专属的 e2e 已物理迁到各扩展目录 `extensions/<ext>/e2e/`(perforce/markdown/typescript/ai),各自带 `playwright.config.ts` + `e2e` script + scoped fixture(传自己的 `extensions: [...]` allowlist)。删扩展即删其测试。新增扩展 e2e 见下文「新增扩展 e2e suite 的套路」。**归属判据:这个测试断言的行为,随该扩展一起删掉就消失吗?是 → 归扩展。**
 
 ## 最小扩展集启动（P2 基线）
 
-harness 的启动 fixture 接收 `extensions: string[]`(扩展 id allowlist),拼进 launch env `UNIVERSE_ENABLED_EXTENSIONS`,bootstrap 只激活列表内扩展 + 核心 built-in。**本目录 core fixture 基线是 `extensions: []`**——核心 spec 默认不启任何扩展,冷启动不 spawn tsserver / markdown-LSP,消除大半 LSP-warmup flake。
+harness 的启动 fixture 接收 `extensions: string[]`(扩展 id allowlist),拼进 launch env `UNIVERSE_ENABLED_EXTENSIONS`,bootstrap 的纯函数 `computeActiveExtensions`(`packages/extension-host` 的 `extensionActivationFilter.ts`,带单测)据此过滤:`undefined` → 激活全部扫描到的扩展(老行为);`[]` → 只核心;`['@universe-editor/x']` → 只该扩展 + 核心。**本目录 core fixture 基线是 `extensions: []`**——核心 spec 默认不启任何扩展,冷启动不 spawn tsserver / markdown-LSP,消除大半 LSP-warmup flake。
+
+> **allowlist 只门控 built-in**:用户运行时装的 vsix(如装 vsix 的核心 spec)**始终激活**,不受 allowlist 拦截——最小集是为了不启内置 LSP/SCM host,不是拦安装。
 
 少数核心 spec 需要某扩展来**搭建**其(核心 UI 的)测试场景,走 scoped fixture(基线 `[]` 之上只加所需扩展):
 
@@ -64,9 +68,9 @@ harness 的启动 fixture 接收 `extensions: string[]`(扩展 id allowlist),拼
 
 ## tag 体系与脚本
 
-tag 打在**用例级** `test('... @p0')` 标题末尾（`@regression` 尤其是单用例级，不打在 `describe` 上）。**过滤策略集中在共享 config**（`packages/e2e-harness/src/playwrightConfig.ts` 的 `grepOptions`），core 与**每个扩展**同一套——script/CI **不传 `--grep`**，只翻两个 env：`UNIVERSE_E2E_INCLUDE_REGRESSION=1`（把 @regression 并回主趟，即 `e2ea`）、`UNIVERSE_E2E_ONLY_TAG=<tag>`（只跑某 tag，用于 serial/regression/flaky/perf/visual 独立趟）。加/改 tag 分流只改这一处。
+tag 打在**用例级** `test('... @p0')` 标题末尾（`@regression` 尤其是单用例级，不打在 `describe` 上）。**过滤策略集中在共享 config**（`packages/e2e-harness/src/playwrightConfig.ts` 的 `grepOptions`），core 与**每个扩展**同一套——script/CI **不传 `--grep`**，只翻两个 env：`UNIVERSE_E2E_INCLUDE_REGRESSION=1`（把 @regression 并回主趟，即 `e2ea`）、`UNIVERSE_E2E_ONLY_TAG=<tag>`（只跑某 tag，用于 serial/regression/flaky/perf/visual 独立趟）。加/改 tag 分流只改这一处。**加新 tag 记得同步 `turbo.json` 的 e2e/e2ea task `env` 声明**（否则 turbo strict 模式不透传、不入缓存 key）。
 
-> **坑：裸 `playwright test --grep "<标题>"` 想跑某个用例却报 `No tests found`。** 因为 config 默认设了 `grepInvert`（排除 @visual/@flaky/@perf/@serial/@regression），你的 `--grep` 与它**取交集**——若目标用例带这些 tag（如 `@regression`）就被过滤空。要跑：① 调试用 `pnpm e2eg "<标题>"`（设 `UNIVERSE_E2E_NO_TAG_FILTER=1` 关掉默认排除，能选中任意 tag）；② 或前缀 `UNIVERSE_E2E_ONLY_TAG=@regression` 再 `--grep`。
+> **坑：裸 `playwright test --grep "<标题>"` 想跑某个用例却报 `No tests found`。** 因为 config 默认设了 `grepInvert`（排除 @visual/@flaky/@perf/@serial/@regression），你的 `--grep` 与它**取交集**——若目标用例带这些 tag（如 `@regression`）就被过滤空。要跑：① 调试用 `pnpm e2eg "<标题>"`（设 `UNIVERSE_E2E_NO_TAG_FILTER=1` 关掉默认排除，能选中任意 tag）；② 或前缀 `UNIVERSE_E2E_ONLY_TAG=@regression` 再 `--grep`。**`e2eg` 直接跟标题，别加 `--`**（`pnpm e2eg -- "x"` 会把 `--` 当 grep 值）。
 
 | tag | 含义 | 默认 `pnpm e2e` | CI |
 |---|---|---|---|
@@ -106,6 +110,36 @@ turbo run e2e --filter '*markdown'
 ```
 core 套件（`@universe-editor/editor#e2e`）走通用 `e2e` task 规则即可：它的 `core*App` scoped fixture 激活 git/typescript/markdown、从其 `dist` 读产物，而这三个扩展是 `@universe-editor/editor` 的 devDependencies（既让 turbo affected 在它们变更时重跑 core，也让 `^build` 自动把它们 build 到最新——见 `scripts/e2e/affected-e2e-matrix.mjs`），无需在 turbo 里为它们单列 `#build`。
 
+**CI affected**：PR 用 turbo affected（`--filter=...[origin/main]`）只跑受影响 suite；改 `platform`/`e2e-harness`（上游）→ 依赖传递触发全量兜底；main/nightly 无条件全量。CI 的 core e2e job **直接 `pnpm exec playwright test`**（不走根脚本），tag 分流靠 env 前缀；它前面有独立 `pnpm build` step，故裸跑也不会测旧产物（对应下文踩坑第 1 条）。
+
+## 新增扩展 e2e suite 的套路
+
+1. 建 `extensions/<ext>/e2e/`：`specs/*.spec.ts` + `playwright.config.ts`（`export default defineE2EConfig()`）+ scoped fixture（`extensions: ['@universe-editor/<ext>']`）+ `e2e/tsconfig.json`（纳入 typecheck）。结构照抄 `extensions/markdown/e2e/`。
+2. `package.json`：加 `"e2e"`/`"e2ea"`/`"e2eg"` script（照抄现有扩展，`e2eg` 带 `UNIVERSE_E2E_NO_TAG_FILTER=1` 供自由 grep 任意 tag，标题直接跟在后面别加 `--`）+ `@playwright/test`/`@universe-editor/e2e-harness`/`cross-env` devDep。
+3. 无需改根 `e2e`/`e2ea`（`./extensions/*` glob 自动纳入，无 e2e script 的包 turbo 自动跳过）。
+4. 若该 suite 需额外 CI 准备（tsserver / excel-diff vsix），在 `scripts/e2e/affected-e2e-matrix.mjs` 的 `EXTENSION_SUITES` 登记 `prep`，并在 ci.yml 加条件化步骤。
+
+## 外部（marketplace）扩展 e2e 套路
+
+`extensions-external/*`（eslint / pdf / excel-diff）是**独立发布的 marketplace 扩展，不在 pnpm/turbo workspace 内**——不能 `workspace:*` 引用 harness，turbo 也看不见它们。对齐 VSCode `--extensionDevelopmentPath`：**从磁盘目录直接加载 unpacked 扩展跑 e2e，绝不打 vsix、不重启 host**。
+
+**加载机制**：内核认 `UNIVERSE_USER_EXTENSIONS_DIR` env（`apps/editor/src/main/services/extensionHost/userExtensionsDir.ts`）。fixture 建隔离临时目录，把扩展根 junction 进去，启动时经 `scanExtensions` 直接读 `package.json`+`dist/` 激活。用户扩展（`builtin:false`）**不受 allowlist 门控**，始终激活。
+
+- **Windows junction 是 symlink 不是 directory**：`scanExtensions` / `hasUserExtensions` 必须 `stat` 跟随 symlink dir（`entry.isSymbolicLink() && isDir(...)`），否则跳过 junction 进来的扩展——这是内核真修复，也惠及真·dev-link 扩展。
+- **解析难题**：外部扩展 bare-import 解析不到 harness / `@playwright/test`（不在 workspace）。解法（`scripts/e2e/run-external-e2e.mjs`）：① config **相对 import** `../../../packages/e2e-harness/dist/index.js`；② 从 `packages/e2e-harness/package.json` 解析出**唯一一份** `@playwright/test/cli` 物理路径来 spawn（两份 playwright 会崩）。
+- **tag env seam 复用**：runner 把 `--regression`/`--no-tag-filter` 映射到 `UNIVERSE_E2E_*` 环境变量（同 core，单一事实源仍是 `grepOptions()`）。
+- **诊断探针**：`getMarkers(uri, owner)`（读 Monaco marker，eslint owner=`'eslint'`）、`getOutputChannelContent(name)`（读 OutputChannel，诊断扩展内部报错的利器）。
+- **flat config 坑**（eslint suite）：ESLint 9 flat config 用 `export default` 须 `eslint.config.mjs`（或 `"type":"module"`）；fixture 源文件若用 ESM `export` 须在 config 给 `languageOptions.sourceType`，否则纯脚本语法即可。
+
+```bash
+pnpm e2e:external    # 建 editor 一次 + 串行跑 eslint/pdf/excel-diff（run-external-e2e-all.mjs）
+pnpm e2ea:external   # 同上，含 @regression
+npm --prefix extensions-external/<ext> run e2e   # 单个外部 suite
+```
+
+- **CI affected 靠 git path diff**（turbo 看不见外部扩展）：`affected-e2e-matrix.mjs` 的 `computeExternalMatrix`——改某 suite 目录只跑它；改共享基建（editor / e2e-harness / e2e-contract / extension-host / extension-api / scripts/e2e）扇出全部。输出 `external` / `has-external`，喂 `e2e-external` matrix job。
+- Windows spawn `.cmd` 需 `shell: true`（CVE-2024-27980 后 Node 拒绝裸 spawn `npm.cmd`）——见 `run-external-e2e-all.mjs` 的 `runNpm`。
+
 ## 踩坑（本目录高频）
 
 > 排查「CI 偶发挂、本地稳过」的 flaky（区分真回归 vs 环境噪音、读 call log 失败形态、鲁棒化断言）有专门的 skill **`fix-ci-e2e-flake`**——它的案例库 + 速记是 flaky 知识的单一事实源（parcel watcher 多 worker 崩溃、异步 ACP prompt、裸 launch "Process failed to launch"、scroll 恢复过冲…都在里面)。遇到 flaky 先查它。
@@ -116,4 +150,5 @@ core 套件（`@universe-editor/editor#e2e`）走通用 `e2e` task 规则即可�
 - **长任务命令 fire-and-forget**：`showCommands` 之类内部 await 用户输入的命令必须 `void window.__E2E__!.runCommand(id)`，否则死锁。
 - **URI fsPath 用正斜杠**：本代码库 `URI.fsPath` 返回正斜杠，比对临时目录路径先 `.replace(/\\/g, '/')`。
 - **真回归 vs 环境噪声**：失败先查 `RUNBOOK.md`——本机 Windows 裸二次启动的 `Process failed to launch!`、markdown/TS LSP 本机未就绪、parcel watcher 多 worker 崩溃都是**已登记的环境 flake**，别当回归改产品代码。深度排查流程与案例走 skill `fix-ci-e2e-flake`。新发现一类 flaky → 在 `RUNBOOK.md` 登记一行 + 往 skill `fix-ci-e2e-flake` 追加案例。
+- **在 script 里设 env 要跨平台**：用 `cross-env`（catalog 已加，editor + 各扩展 devDeps 引入）——裸 `FOO=1 cmd` 在 Windows 非 bash 下不生效。
 - **禁止**在 spec 里 mock main/renderer 服务；**禁止**断言 Monaco 内部 DOM（拿状态走 `getActiveEditorUri()` 等探针）。

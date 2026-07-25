@@ -1,7 +1,6 @@
 ---
 name: create-extension
-description: 从零创建一个新插件（extension）时召回——本仓库对等 VSCode 的扩展模型，一个插件 = 一个 manifest（package.json 的 contributes/activationEvents/engines）+ 可选运行时代码（src/extension.ts 的 activate/deactivate，经 @universe-editor/extension-api 门面注册命令/菜单/键位/配置/provider）。当任务是「新建一个内置插件」「给编辑器加一块贡献点功能并想做成插件」「照 numbered-bookmarks/ai/git 的样子起一个新扩展」「加 commands/menus/keybindings/configuration 贡献点」「插件的 activate 里注册命令/状态栏/装饰/SCM」「插件不激活/不加载/被扫描器跳过」「插件要本地化 manifest 文案（package.nls）」时使用。给出两种插件形态（纯声明 vs 有代码）的完整文件清单、manifest 各贡献点写法、activate/context 约定、esbuild+vitest 构建测试套路、scanner 加载链路、以及 engines.universe 与自研 semver 的兼容红线。区别于：extend-language-plugin（语言 provider 的四条数据流）、webview-custom-editor（webview/自定义编辑器基建）、add-json-schema-association（jsonValidation 单贡献点）、extension-marketplace-management（安装/更新/卸载分发链路）——本 skill 是「起一个新扩展骨架 + 接贡献点 + 让它被正确加载」。
-disable-model-invocation: true
+description: 从零创建一个新插件（extension）时使用。当任务是新建内置插件、照 numbered-bookmarks/ai/git 的样子起新扩展、加 commands/menus/keybindings/configuration 贡献点、activate 里注册命令/状态栏/装饰/SCM、插件不激活/被扫描器跳过、或 manifest 文案本地化（package.nls）时使用。
 ---
 
 # 从零创建一个新插件（extension）
@@ -19,7 +18,7 @@ disable-model-invocation: true
 | 只贡献静态声明：jsonValidation、给已有命令配键位、挂菜单项 | **纯声明** | 仅 `package.json` | `extensions/claude-helper/` |
 | 激活时要跑代码：注册命令处理器 / 状态栏 / 装饰 / SCM / provider | **有代码** | manifest + esbuild + `src/extension.ts` + 测试 | `extensions/ai/`（最简）、`numbered-bookmarks/`（完整）、`git/`（全贡献点） |
 
-> 若要做的是**语言能力 provider**（definition/hover/completion/诊断…）→ 用 skill `extend-language-plugin`；**webview/自定义编辑器预览** → 用 skill `webview-custom-editor`；**只接 JSON schema** → 用 skill `add-json-schema-association`。这些是本套路的特化场景，已有专门 skill。
+> 若要做的是**语言能力 provider**（definition/hover/completion/诊断…）→ 用 skill `extend-language-plugin`；**webview/自定义编辑器预览** → 见 `apps/editor/src/renderer/workbench/webview/CLAUDE.md`（新预览扩展范例照抄 `extensions-external/pdf/CLAUDE.md`）；**只接 JSON schema** → 用 skill `add-json-schema-association`。这些是本套路的特化场景，已有专门文档。
 
 ## 纯声明型：只需一个 package.json
 
@@ -107,7 +106,7 @@ export function deactivate(): void {} // 通常空实现——subscriptions 已�
 
 门面被 esbuild **内联进每个插件**，运行时委托给 host 装在 `globalThis` 的 bridge 越进程 RPC。所以 `@universe-editor/extension-api` 只需列 devDependency。
 
-## contributes 贡献点写法（全量 schema 见 `packages/extensions-common/src/manifest-schema.ts`）
+## contributes 贡献点写法（全量 schema 见 `packages/extensions-common/src/protocol/manifest-schema.ts`）
 
 - **commands**：`{ command, title, category?, icon? }`（`icon` 用 codicon 名如 `"bookmark"`）
 - **keybindings**：`{ command, key: "ctrl+shift+0", mac?, when?: "editorTextFocus" }`
@@ -136,7 +135,7 @@ export function deactivate(): void {} // 通常空实现——subscriptions 已�
 
 ## engines 兼容红线（本 skill 的头号坑，务必看）
 
-`satisfies` 是**自研极简 semver**（`packages/extensions-common/src/semver.ts`），**不是 npm 的 semver**：
+`satisfies` 是**自研极简 semver**（`packages/extensions-common/src/protocol/semver.ts`），**不是 npm 的 semver**：
 
 - 支持：exact / `*` / `x` / partial(`1`,`1.2`) / `^` / `~` / 比较符 / **空格连接的 AND**（`>=0.1.0 <1.0.0`）。
 - **不支持**：`||`（OR）、hyphen range（`1.0.0 - 2.0.0`）——一律 **fail-closed 直接拒绝加载**。
@@ -185,9 +184,9 @@ pnpm check       # lint + typecheck + test，仅看错误输出（被测错误�
 - `extensions/git/` —— 全贡献点样板（submenus / 嵌套 menus / when 上下文键 / manifest NLS + 运行时 NLS）
 - `packages/extension-api/src/index.ts` —— 门面 namespace + `version` 常量（= host API 版本）+ `ExtensionContext`/`Memento` 类型
 - `packages/extension-api/COMPATIBILITY.md` —— API 版本承诺 + 破坏性变更流程（bump version 必同步内置插件 engines）
-- `packages/extensions-common/src/manifest-schema.ts` —— contributes 全量 zod schema
-- `packages/extensions-common/src/activation.ts` —— 合法 activationEvents + 构造器
-- `packages/extensions-common/src/semver.ts` —— 自研 `satisfies`（engines 检查用；不支持 `||`/hyphen）
+- `packages/extensions-common/src/protocol/manifest-schema.ts` —— contributes 全量 zod schema
+- `packages/extensions-common/src/protocol/activation.ts` —— 合法 activationEvents + 构造器
+- `packages/extensions-common/src/protocol/semver.ts` —— 自研 `satisfies`（engines 检查用；不支持 `||`/hyphen）
 - `packages/extension-host/src/extensionScanner.ts` —— scanOne 校验顺序 + engines satisfies 检查（`:88`）
 - `packages/extension-host/src/bootstrap.ts` —— HOST_API_VERSION 来源 + scanExtensions 调用
 - `packages/extension-host/src/nls.ts` —— manifest `%key%` 本地化实现
