@@ -1,6 +1,6 @@
 # apps/editor/src/renderer/services/acp/CLAUDE.md
 
-Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v0.22.1（ESM-only，zod schema 校验）。
+Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v1.2.x（ESM-only，zod schema 校验）。
 
 **关键事实**：
 - 协议层完全在 renderer 端，main 端只搬字节（`IAcpHostService` / `IAcpTerminalService`）
@@ -20,6 +20,8 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 | `acpPathPolicy.ts` | 沙盒纯函数：cwd 相对性 + 敏感前缀拒绝（`.ssh` / `.aws` / `.env`） |
 | `acpMcpServers.ts` | 纯函数：`acp.mcpServers` 配置（Record/旧数组）→ ACP wire `McpServer[]` 规范化 + 按 agent `mcpCapabilities` 门控 http/sse |
 | `acpPermissionHandler.ts` | `acp.permissions.autoApprove` 自动批准 + Memory 层持久化 |
+| `acpElicitationForm.ts` | 纯函数：elicitation JSON Schema → 表单字段模型规范化 + 提交前校验（localize 错误文案） |
+| `acpElicitationDraftCache.ts` | ElicitationCard 未提交输入的内存草稿（sessionId + toolCallId/消息 hash 键） |
 | `persistedStateBase.ts` | 双桶持久化基类（WORKSPACE + GLOBAL fallback），共享 `_reload` / `_writeNow` / debounce 框架 |
 | `acpSessionHistory.ts` | 会话元数据落盘（继承 `PersistedStateBase`，`MAX_ENTRIES=100`） |
 | `acpAgentDefaultsService.ts` | 每 agent configOption 默认值（继承 `PersistedStateBase`） |
@@ -65,6 +67,10 @@ IAcpHostService.onStdout(chunk: string)
   → ndJsonStream 解析 → ClientSideConnection 回调 clientImpl
     ├─ sessionUpdate(SessionNotification)        → AcpSessionService.onSessionUpdate → AcpSession.applyUpdate
     ├─ requestPermission(RequestPermissionRequest) → tryAutoApprove or PermissionCard
+    ├─ unstable_createElicitation(CreateElicitationRequest) → pendingElicitation + ElicitationCard
+    │   （与 pendingPermission 同构的 Promise+settle 模式；form 渲染字段卡，
+    │   url 渲染 consent 卡 → 用户确认才 IOpenerService.open → accept → waiting）
+    ├─ unstable_completeElicitation(通知) → 按 elicitationId 把 waiting 的 url 卡翻为 done
     ├─ readTextFile / writeTextFile               → AcpPathPolicy 检查 → IFileService
     └─ createTerminal / terminalOutput /
        waitForTerminalExit / killTerminal /

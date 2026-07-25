@@ -17,6 +17,16 @@
  *                                          with stopReason='end_turn'
  *    - session/cancel (notification)     → resolves any in-flight prompt early
  *
+ *  Prompt text directives:
+ *    - emit-image:<count>x<kb>           → streams image chunks
+ *    - emit-exec:<lines>                 → execute tool_call with <lines> output
+ *    - report-mcp-servers / report-cwd   → echoes session/new params
+ *    - elicit-form                       → sends elicitation/create (form mode),
+ *                                          echoes the user's response
+ *    - elicit-url                        → sends elicitation/create (url mode),
+ *                                          echoes the response, then emits
+ *                                          elicitation/complete after accept
+ *
  *  Unsupported methods return -32601 Method not found.
  *
  *  This file is committed as plain JS so vitest / integration tests can spawn
@@ -29,7 +39,9 @@
 let buffer = ''
 let nextSessionId = 1
 let nextExecId = 1
+let nextClientRequestId = 1
 const activeTurns = new Map() // sessionId -> { cancelled: boolean }
+const pendingClientRequests = new Map() // id -> { resolve, reject } (agent->client requests)
 const sessionMcpServers = new Map() // sessionId -> mcpServers array from session/new
 const sessionCwds = new Map() // sessionId -> cwd from session/new
 // sessionIds that have run at least one prompt. With ECHO_AGENT_LOAD_SESSION=1
@@ -52,6 +64,15 @@ function fail(id, code, message) {
 
 function notify(method, params) {
   send({ jsonrpc: '2.0', method, params })
+}
+
+/** Agent->client request (e.g. elicitation/create): resolves with the client's result. */
+function requestFromClient(method, params) {
+  const id = 'agent-req-' + nextClientRequestId++
+  return new Promise((resolve, reject) => {
+    pendingClientRequests.set(id, { resolve, reject })
+    send({ jsonrpc: '2.0', id, method, params })
+  })
 }
 
 async function delay(ms) {
@@ -161,6 +182,71 @@ async function runPrompt(id, params) {
     return reply(id, { stopReason: 'end_turn' })
   }
 
+  // Test directive: "elicit-form" asks the client a fixed form elicitation and
+  // echoes the user's response (accept+content / decline / cancel).
+  if (userText === 'elicit-form') {
+    const echoText = (text) =>
+      notify('session/update', {
+        sessionId,
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } },
+      })
+    try {
+      const result = await requestFromClient('elicitation/create', {
+        sessionId,
+        mode: 'form',
+        message: 'Pick your settings',
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', title: 'Name' },
+            color: {
+              type: 'string',
+              title: 'Color',
+              oneOf: [
+                { const: 'red', title: 'Red' },
+                { const: 'blue', title: 'Blue' },
+              ],
+            },
+          },
+          required: ['name'],
+        },
+      })
+      echoText('elicit-form result: ' + JSON.stringify(result))
+    } catch (err) {
+      echoText('elicit-form error: ' + err.message)
+    }
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
+  // Test directive: "elicit-url" sends a url elicitation; after the user
+  // accepts, the agent signals elicitation/complete like a real OAuth flow.
+  if (userText === 'elicit-url') {
+    const elicitationId = 'echo-elicit-' + nextExecId++
+    const echoText = (text) =>
+      notify('session/update', {
+        sessionId,
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } },
+      })
+    try {
+      const result = await requestFromClient('elicitation/create', {
+        sessionId,
+        mode: 'url',
+        message: 'Authorize the echo agent',
+        url: 'https://auth.example.test/flow?token=abc',
+        elicitationId,
+      })
+      echoText('elicit-url result: ' + JSON.stringify(result))
+      if (result && result.action === 'accept') {
+        notify('elicitation/complete', { elicitationId })
+      }
+    } catch (err) {
+      echoText('elicit-url error: ' + err.message)
+    }
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
   // Emit two streaming chunks.
   notify('session/update', {
     sessionId,
@@ -214,6 +300,16 @@ async function runPrompt(id, params) {
 }
 
 function handle(msg) {
+  // Response to an agent-initiated request (no method)?
+  if (msg.method === undefined) {
+    const p = pendingClientRequests.get(msg.id)
+    if (p) {
+      pendingClientRequests.delete(msg.id)
+      if (msg.error) p.reject(new Error(msg.error.message))
+      else p.resolve(msg.result)
+    }
+    return
+  }
   // Notification?
   if (msg.id === undefined || msg.id === null) {
     if (msg.method === 'session/cancel') {
