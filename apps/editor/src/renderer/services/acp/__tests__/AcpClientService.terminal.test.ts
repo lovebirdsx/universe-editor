@@ -274,6 +274,7 @@ function makeService(opts: { autoInitialize?: boolean; startupTimeoutMs?: number
     onSessionUpdate: vi.fn(),
     onRequestPermission: vi.fn(),
     onAskUserQuestion: vi.fn(),
+    onCreateElicitation: vi.fn(),
   }
   const svc = new AcpClientService(
     transport.host,

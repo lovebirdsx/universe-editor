@@ -18,6 +18,7 @@ import type { AvailableCommand } from '@agentclientprotocol/sdk'
 import type {
   AcpMessage,
   AcpPendingPermission,
+  AcpPendingElicitation,
   AcpPendingQuestion,
   AcpPlanEntry,
   AcpSessionStatus,
@@ -58,6 +59,7 @@ function makeSession(selection: readonly string[] | null = null, readOnly = fals
     usage: observableValue<AcpUsage | undefined>('u', undefined),
     pendingPermission: observableValue<AcpPendingPermission | undefined>('pp', undefined),
     pendingQuestion: observableValue<AcpPendingQuestion | undefined>('pq', undefined),
+    pendingElicitation: observableValue<AcpPendingElicitation | undefined>('pe', undefined),
     configOptions: observableValue('cfg', []),
     availableCommands: observableValue<readonly AvailableCommand[]>('c', []),
     mcpServers: observableValue('mcp', []),
@@ -71,6 +73,7 @@ function makeSession(selection: readonly string[] | null = null, readOnly = fals
     onDidRequireAuth: Event.None,
     presentPermission: () => {},
     presentQuestion: () => {},
+    presentElicitation: () => {},
     sendPrompt: vi.fn().mockResolvedValue(undefined) as never,
     cancelTurn: vi.fn().mockResolvedValue(undefined) as never,
     close: () => Promise.resolve(),

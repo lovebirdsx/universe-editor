@@ -253,11 +253,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
       )
       await withTimeout(conn.initializeResult, HYDRATE_TIMEOUT_MS, 'ACP delete initialize')
       const params: DeleteSessionRequest = { sessionId: entry.sessionIdOnAgent }
-      await withTimeout(
-        conn.conn.unstable_deleteSession(params),
-        HYDRATE_TIMEOUT_MS,
-        'ACP session/delete',
-      )
+      await withTimeout(conn.conn.deleteSession(params), HYDRATE_TIMEOUT_MS, 'ACP session/delete')
       this._telemetry.publicLog('acp.session_delete_ok', { agentId: entry.agentId })
       return 'ok'
     } catch (err) {

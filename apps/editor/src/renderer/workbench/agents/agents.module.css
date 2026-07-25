@@ -2155,6 +2155,88 @@
   overflow-y: auto;
 }
 
+.elicitationCard {
+  flex-shrink: 0;
+  border-top: 1px solid var(--color-border, #333);
+  background: var(--color-message-bg, #2a2a2a);
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.elicitationHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.elicitationMessage {
+  font-weight: 600;
+  white-space: pre-wrap;
+}
+
+.elicitationField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.elicitationLabel {
+  font-weight: 500;
+}
+
+.elicitationRequired {
+  color: var(--color-error-fg, #f48771);
+  margin-left: 2px;
+}
+
+.elicitationDescription {
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+  color: var(--color-message-role-fg, #aaa);
+  white-space: pre-wrap;
+}
+
+.elicitationError {
+  color: var(--color-error-fg, #f48771);
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+}
+
+.elicitationOption {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.elicitationOptionDescription {
+  font-size: calc(var(--agent-font-size, 12px) * 0.786);
+  color: var(--color-message-role-fg, #aaa);
+  white-space: normal;
+}
+
+.elicitationPreview {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 4px;
+  background: var(--color-bg, #1e1e1e);
+  font-family: var(--font-monospace, monospace);
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.elicitationCheckGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .questionBlock {
   display: flex;
   flex-direction: column;

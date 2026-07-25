@@ -7,8 +7,8 @@ settings:
 catalogs:
   default:
     '@agentclientprotocol/sdk':
-      specifier: 0.22.1
-      version: 0.22.1
+      specifier: 1.2.1
+      version: 1.2.1
     '@changesets/cli':
       specifier: ^2.27.0
       version: 2.30.0
@@ -245,7 +245,7 @@ importers:
     devDependencies:
       '@agentclientprotocol/sdk':
         specifier: 'catalog:'
-        version: 0.22.1(zod@3.25.76)
+        version: 1.2.1(zod@3.25.76)
       '@fontsource/roboto':
         specifier: 'catalog:'
         version: 5.2.10
@@ -883,8 +883,8 @@ packages:
   7zip-bin@5.2.0:
     resolution: {integrity: sha512-ukTPVhqG4jNzMro2qA9HSCSSVJN3aN7tlb+hfqYCt3ER0yWroeA2VR38MNrOHLQ/cVj+DaIMad0kFCtWWowh/A==}
 
-  '@agentclientprotocol/sdk@0.22.1':
-    resolution: {integrity: sha512-DfqXtl/8gO9NImq094MTaCXEU2vkhh6v7q/kT+9UjZxUqj8hYaya2OjLVIqn16MzNHcXEpShTR2RIauLSYeDQQ==}
+  '@agentclientprotocol/sdk@1.2.1':
+    resolution: {integrity: sha512-jwYUdOQR7tc+Zfch53VL4JJyUNK/46q03uUTYb+PjECsmnNl94XFXOfYLJ8RBpMNidXd1rpOAVgb0vqD98xImA==}
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
@@ -5001,7 +5001,7 @@ snapshots:
 
   7zip-bin@5.2.0: {}
 
-  '@agentclientprotocol/sdk@0.22.1(zod@3.25.76)':
+  '@agentclientprotocol/sdk@1.2.1(zod@3.25.76)':
     dependencies:
       zod: 3.25.76
 

@@ -361,8 +361,8 @@ describe('AcpSession auto-recovery', () => {
     await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
     expect(client.connections[0]!.promptCalls.length).toBe(2)
     // No duplicate user message: both attempts reuse the same messageId (zero output).
-    expect(client.connections[0]!.promptCalls[0]!.messageId).toBe(
-      client.connections[0]!.promptCalls[1]!.messageId,
+    expect(client.connections[0]!.promptCalls[0]!._meta?.messageId).toBe(
+      client.connections[0]!.promptCalls[1]!._meta?.messageId,
     )
     // No [error] on the timeline for a recovered turn.
     expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(false)

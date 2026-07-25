@@ -75,6 +75,7 @@ import {
   type AcpMessage,
   type AcpMessageRole,
   type AcpPendingPermission,
+  type AcpPendingElicitation,
   type AcpPendingQuestion,
   type AcpPlanEntry,
   type AcpCompaction,
@@ -111,6 +112,7 @@ export type {
   AcpMessageRole,
   AcpModelCost,
   AcpPendingPermission,
+  AcpPendingElicitation,
   AcpPendingQuestion,
   AcpPlanEntry,
   AcpPlanEntryStatus,
@@ -205,6 +207,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly usage: ISettableObservable<AcpUsage | undefined>
   readonly pendingPermission: ISettableObservable<AcpPendingPermission | undefined>
   readonly pendingQuestion: ISettableObservable<AcpPendingQuestion | undefined>
+  readonly pendingElicitation: ISettableObservable<AcpPendingElicitation | undefined>
   readonly availableCommands: ISettableObservable<readonly AvailableCommand[]>
   readonly mcpServers: ISettableObservable<readonly AcpMcpServerStatus[]>
   readonly mcpServerSelection: ISettableObservable<readonly string[] | null>
@@ -426,6 +429,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     )
     this.pendingQuestion = observableValue<AcpPendingQuestion | undefined>(
       `acp.session.pendingQuestion.${id}`,
+      undefined,
+    )
+    this.pendingElicitation = observableValue<AcpPendingElicitation | undefined>(
+      `acp.session.pendingElicitation.${id}`,
       undefined,
     )
     this.availableCommands = observableValue<readonly AvailableCommand[]>(
@@ -852,6 +859,12 @@ export class AcpSession extends Disposable implements IAcpSession {
     this.pendingQuestion.set(q, undefined)
   }
 
+  presentElicitation(e: AcpPendingElicitation): void {
+    // Replace any prior pending elicitation — only one card at a time.
+    this._cancelPendingElicitation()
+    this.pendingElicitation.set(e, undefined)
+  }
+
   private _cancelPendingPermission(): void {
     const cur = this.pendingPermission.get()
     if (cur) {
@@ -868,9 +881,18 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
   }
 
+  private _cancelPendingElicitation(): void {
+    const cur = this.pendingElicitation.get()
+    if (cur) {
+      this.pendingElicitation.set(undefined, undefined)
+      cur.cancel()
+    }
+  }
+
   private _cancelPending(): void {
     this._cancelPendingPermission()
     this._cancelPendingQuestion()
+    this._cancelPendingElicitation()
   }
 
   async sendPrompt(
@@ -890,7 +912,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._maybeDeriveTitleFromPrompt(text)
     // Client-generated anchor for this user turn. Stamped on the local message
     // now (so rewind/fork can target it even before dispatch) and sent as
-    // PromptRequest.messageId; the agent echoes it back as userMessageId.
+    // `_meta.messageId`; the agent echoes it back as `_meta.userMessageId`.
     const messageId = generateUuid()
     // Always surface the user's message immediately, even while connecting, so
     // typing feels instant. The wire dispatch is deferred until the connection
@@ -946,12 +968,9 @@ export class AcpSession extends Disposable implements IAcpSession {
     const params: PromptRequest = {
       sessionId: sid,
       // The client-generated anchor for this user turn so rewind/fork can later
-      // target this exact turn. Sent BOTH as the standard top-level `messageId`
-      // (for spec-compliant agents) and inside `_meta` — the built-in claude fork
-      // runs an older ACP schema that strips unknown top-level fields in zod
-      // validation, but passes `_meta` through untouched, so `_meta.messageId` is
-      // what actually reaches it.
-      messageId,
+      // target this exact turn. Travels only in `_meta` — SDK 1.x dropped the
+      // unstable top-level `messageId` from `PromptRequest`, and both built-in
+      // forks read it from `_meta.messageId`.
       _meta: { messageId },
       // Fall back to a single text block for empty/no-mention prompts so we
       // keep the wire shape stable even for trivial cases.
@@ -1053,7 +1072,6 @@ export class AcpSession extends Disposable implements IAcpSession {
           this._appendMessage('user', CONTINUE_PROMPT_TEXT, [], continueId)
           params = {
             sessionId: sid,
-            messageId: continueId,
             _meta: { messageId: continueId },
             prompt: [{ type: 'text', text: CONTINUE_PROMPT_TEXT }],
           }
@@ -1747,8 +1765,10 @@ export class AcpSession extends Disposable implements IAcpSession {
    * echoes the same id (the common case) or reports none.
    */
   private _reconcileUserMessageId(sentId: string, response: PromptResponse): void {
-    const echoed = (response as { userMessageId?: string | null }).userMessageId
-    if (echoed == null || echoed === sentId) return
+    // SDK 1.x dropped the unstable top-level `userMessageId`; agents that echo
+    // pass it through `_meta` (which the schema preserves untouched).
+    const echoed = (response._meta as { userMessageId?: unknown } | null | undefined)?.userMessageId
+    if (typeof echoed !== 'string' || echoed === sentId) return
     const idx = this._messages.findIndex((m) => m.role === 'user' && m.messageId === sentId)
     if (idx === -1) return
     const prev = this._messages[idx]

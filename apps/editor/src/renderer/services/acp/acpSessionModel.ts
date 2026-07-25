@@ -7,7 +7,13 @@
  *  acpSession.ts re-exports all of these so existing import paths keep working.
  *--------------------------------------------------------------------------------------------*/
 
-import type { AvailableCommand, ContentBlock, SessionConfigOption } from '@agentclientprotocol/sdk'
+import type {
+  AvailableCommand,
+  ContentBlock,
+  CreateElicitationRequest,
+  CreateElicitationResponse,
+  SessionConfigOption,
+} from '@agentclientprotocol/sdk'
 import type { Event, IObservable } from '@universe-editor/platform'
 import { ACP_EXT_METHODS } from './acpExtMethods.js'
 import type { McpTransport } from './acpMcpServers.js'
@@ -30,7 +36,8 @@ export interface AcpMessage {
   readonly streaming: boolean
   /**
    * Agent-side stable id for this message (a client-generated uuid sent as
-   * `PromptRequest.messageId` and echoed back as `PromptResponse.userMessageId`).
+   * `PromptRequest._meta.messageId` and echoed back as
+   * `PromptResponse._meta.userMessageId`).
    * Only user messages carry it; it is the anchor rewind/fork use to locate the
    * turn on the agent. `undefined` for agent/thought messages and for user
    * messages sent before this field existed.
@@ -369,6 +376,18 @@ export interface AcpPendingQuestion {
   cancel(): void
 }
 
+/**
+ * A pending elicitation (ACP `elicitation/create`) awaiting the user's response.
+ * `resolve` carries the three-state result (`accept` + content / `decline` /
+ * `cancel`); `cancel()` is the no-answer path (session closed, superseded by a
+ * newer elicitation) and settles as `{ action: 'cancel' }`.
+ */
+export interface AcpPendingElicitation {
+  readonly request: CreateElicitationRequest
+  resolve(result: CreateElicitationResponse): void
+  cancel(): void
+}
+
 export type AcpSessionStatus = 'idle' | 'connecting' | 'running' | 'errored' | 'closed'
 
 /** Per-model cost/token breakdown for a session, reported by the agent. */
@@ -476,6 +495,8 @@ export interface IAcpSession {
   readonly pendingPermission: IObservable<AcpPendingPermission | undefined>
   /** Active `AskUserQuestion` carousel awaiting the user's answers, if any. */
   readonly pendingQuestion: IObservable<AcpPendingQuestion | undefined>
+  /** Active elicitation (form card / URL consent) awaiting the user's response, if any. */
+  readonly pendingElicitation: IObservable<AcpPendingElicitation | undefined>
   /** Configuration options the agent has advertised for this session. */
   readonly configOptions: IObservable<readonly SessionConfigOption[]>
   /** Latest agent-advertised slash commands (may be empty). */
@@ -568,6 +589,8 @@ export interface IAcpSession {
   presentPermission(p: AcpPendingPermission): void
   /** Internal — call site is the AskUserQuestion sink. */
   presentQuestion(q: AcpPendingQuestion): void
+  /** Internal — call site is the elicitation sink. */
+  presentElicitation(e: AcpPendingElicitation): void
   /**
    * Send a prompt. `refs` are the range-tracked `@`/`#` references embedded in
    * `text` (from the prompt editor's PromptRefTracker); each is serialized to its

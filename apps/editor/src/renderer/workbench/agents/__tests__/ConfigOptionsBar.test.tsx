@@ -27,6 +27,7 @@ import type {
 import type {
   AcpMessage,
   AcpPendingPermission,
+  AcpPendingElicitation,
   AcpPendingQuestion,
   AcpPlanEntry,
   AcpSessionStatus,
@@ -91,6 +92,7 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
     usage: observableValue<AcpUsage | undefined>('u', undefined),
     pendingPermission: observableValue<AcpPendingPermission | undefined>('pp', undefined),
     pendingQuestion: observableValue<AcpPendingQuestion | undefined>('pq', undefined),
+    pendingElicitation: observableValue<AcpPendingElicitation | undefined>('pe', undefined),
     configOptions: configObs,
     availableCommands: observableValue<readonly AvailableCommand[]>('c', []),
     mcpServers: observableValue('mcp', []),
@@ -104,6 +106,7 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
     onDidRequireAuth: Event.None,
     presentPermission: () => {},
     presentQuestion: () => {},
+    presentElicitation: () => {},
     sendPrompt: vi.fn().mockResolvedValue(undefined) as never,
     cancelTurn: vi.fn().mockResolvedValue(undefined) as never,
     close: () => Promise.resolve(),

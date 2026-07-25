@@ -66,6 +66,7 @@ import type { IScmService as IScmServiceType } from '../../../services/extension
 import type {
   AcpMessage,
   AcpPendingPermission,
+  AcpPendingElicitation,
   AcpPendingQuestion,
   AcpPlanEntry,
   AcpSessionStatus,
@@ -426,6 +427,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     usage: observableValue<AcpUsage | undefined>('test.usage', opts.usage),
     pendingPermission: permission,
     pendingQuestion: observableValue<AcpPendingQuestion | undefined>('test.question', undefined),
+    pendingElicitation: observableValue<AcpPendingElicitation | undefined>('pe', undefined),
     configOptions,
     availableCommands: commandsObs,
     mcpServers: observableValue('test.mcpServers', []),
@@ -439,6 +441,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     onDidRequireAuth: Event.None,
     presentPermission: () => {},
     presentQuestion: () => {},
+    presentElicitation: () => {},
     sendPrompt: sendPrompt as never,
     cancelTurn: cancelTurn as never,
     close: () => Promise.resolve(),

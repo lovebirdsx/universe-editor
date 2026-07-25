@@ -40,6 +40,9 @@ import {
   type Event,
 } from '@universe-editor/platform'
 import {
+  type CompleteElicitationNotification,
+  type CreateElicitationRequest,
+  type CreateElicitationResponse,
   type LoadSessionRequest,
   type McpServer,
   type NewSessionRequest,
@@ -88,6 +91,7 @@ import {
   COMPACTION_METHOD,
   RESURRECTION_METHOD,
   type AcpConnectionLostEvent,
+  type AcpPendingElicitation,
   type AcpPendingPermission,
   type AcpPendingQuestion,
   type AskUserQuestionRequest,
@@ -118,6 +122,7 @@ export {
   type AcpPlanEntry,
   type AcpPlanEntryStatus,
   type AcpPendingPermission,
+  type AcpPendingElicitation,
   type AcpPendingQuestion,
   type AskUserQuestion,
   type AskUserQuestionOption,
@@ -1487,6 +1492,50 @@ export class AcpSessionService
       }
       session.presentQuestion(pending)
     })
+  }
+
+  async onCreateElicitation(params: CreateElicitationRequest): Promise<CreateElicitationResponse> {
+    // Session-scoped elicitations route by sessionId; request-scoped ones
+    // (auth/config phases before any session exists) have no card host, so
+    // they settle as cancel — the agent falls back to a non-interactive path.
+    // (The custom-mode variant's index signature types `sessionId` as unknown
+    // — guard it back to a string before use.)
+    const rawSessionId = 'sessionId' in params ? params.sessionId : undefined
+    const sessionId = typeof rawSessionId === 'string' ? rawSessionId : undefined
+    const session = sessionId !== undefined ? this._findSession(sessionId) : undefined
+    if (!session) {
+      this._logger.warn(`elicitation/create for unknown session ${sessionId ?? '(request-scoped)'}`)
+      return { action: 'cancel' }
+    }
+    this._telemetry.publicLog('acp.elicitation_shown', {
+      sessionId,
+      mode: params.mode,
+    })
+    return await new Promise<CreateElicitationResponse>((resolve) => {
+      const settle = (result: CreateElicitationResponse): void => {
+        if (session.pendingElicitation.get() === pending) {
+          session.pendingElicitation.set(undefined, undefined)
+        }
+        this._telemetry.publicLog('acp.elicitation_resolved', {
+          sessionId,
+          mode: params.mode,
+          action: typeof result.action === 'string' ? result.action : 'unknown',
+        })
+        resolve(result)
+      }
+      const pending: AcpPendingElicitation = {
+        request: params,
+        resolve: (result) => settle(result),
+        cancel: () => settle({ action: 'cancel' }),
+      }
+      session.presentElicitation(pending)
+    })
+  }
+
+  onCompleteElicitation(params: CompleteElicitationNotification): void {
+    // url mode is not advertised yet — log and ignore (per spec, unknown
+    // elicitation ids must be silently ignored anyway).
+    this._logger.info(`elicitation/complete received (url mode unwired): ${params.elicitationId}`)
   }
 
   private _readMcpServers(): McpServer[] {

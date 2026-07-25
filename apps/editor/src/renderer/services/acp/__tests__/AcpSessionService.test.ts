@@ -587,7 +587,7 @@ describe('AcpSessionService', () => {
     expect(msgsMid[0]?.role).toBe('agent')
   })
 
-  it('stamps a client-generated messageId on the user message and sends it as PromptRequest.messageId', async () => {
+  it('stamps a client-generated messageId on the user message and sends it as _meta.messageId', async () => {
     const s = await svc.createSession()
     await s.whenConnected()
     const conn = client.connected[0]!
@@ -598,14 +598,16 @@ describe('AcpSessionService', () => {
     expect(user?.messageId).toBeTruthy()
     expect(conn.agent.promptCalls).toHaveLength(1)
     // The id sent on the wire matches the one stamped on the local message.
-    expect(conn.agent.promptCalls[0]?.messageId).toBe(user?.messageId)
+    expect(conn.agent.promptCalls[0]?._meta?.messageId).toBe(user?.messageId)
   })
 
   it('adopts the agent-echoed userMessageId when it differs from the sent id', async () => {
     // Build a service whose stub echoes a different userMessageId on the response.
     svc.dispose()
     client = new FakeAcpClientService({
-      stubOptions: { promptResponse: { stopReason: 'end_turn', userMessageId: 'agent-uuid-xyz' } },
+      stubOptions: {
+        promptResponse: { stopReason: 'end_turn', _meta: { userMessageId: 'agent-uuid-xyz' } },
+      },
     })
     const history = makeHistory()
     const agentDefaults = makeAgentDefaults()

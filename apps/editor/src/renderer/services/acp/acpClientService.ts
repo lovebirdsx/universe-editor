@@ -42,6 +42,9 @@ import {
   PROTOCOL_VERSION,
   RequestError,
   type Client,
+  type CompleteElicitationNotification,
+  type CreateElicitationRequest,
+  type CreateElicitationResponse,
   type CreateTerminalRequest,
   type CreateTerminalResponse,
   type InitializeRequest,
@@ -100,6 +103,17 @@ export interface IAcpClientNotificationSink {
    * (or `{ cancelled: true }`).
    */
   onAskUserQuestion(params: AskUserQuestionRequest): Promise<AskUserQuestionResult>
+  /**
+   * Peer-initiated `elicitation/create` (UNSTABLE). The sink presents the form
+   * card (or URL consent) inline in the session and resolves with the user's
+   * three-state response (`accept` + content / `decline` / `cancel`).
+   */
+  onCreateElicitation(params: CreateElicitationRequest): Promise<CreateElicitationResponse>
+  /**
+   * Peer-initiated `elicitation/complete` notification (UNSTABLE, url mode) —
+   * the server-side flow finished. Optional until url mode is wired up.
+   */
+  onCompleteElicitation?(params: CompleteElicitationNotification): void
   /**
    * Peer-initiated `extNotification` — an out-of-spec one-way notification. The
    * built-in agent uses `_claude/sdkMessage` to forward raw Claude SDK messages
@@ -197,8 +211,16 @@ const DEFAULT_INIT_PARAMS: InitializeRequest = {
     // methods in its InitializeResponse. The editor runs the login flow in its
     // integrated terminal (see Agent Settings → Authentication).
     auth: { terminal: true, _meta: { 'terminal-auth': true } },
+    // UNSTABLE elicitation: form mode only — url mode stays undeclared until
+    // the consent-card flow (open-in-browser + elicitation/complete) is wired.
+    elicitation: { form: {} },
     _meta: { 'universe-editor/ask_user_question': true },
   },
+}
+
+/** Exported for tests — verifies the capability surface we put on the wire. */
+export function getDefaultInitParamsForTests(): InitializeRequest {
+  return DEFAULT_INIT_PARAMS
 }
 
 interface PoolEntry {
@@ -565,6 +587,10 @@ export class AcpClientService extends Disposable implements IAcpClientService {
 
     const clientImpl: Client = {
       requestPermission: (params) => sink.onRequestPermission(params),
+      unstable_createElicitation: (params) => sink.onCreateElicitation(params),
+      unstable_completeElicitation: async (params) => {
+        sink.onCompleteElicitation?.(params)
+      },
       extMethod: async (
         method: string,
         params: Record<string, unknown>,

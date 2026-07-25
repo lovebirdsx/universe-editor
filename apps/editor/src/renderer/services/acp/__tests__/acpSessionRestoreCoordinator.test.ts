@@ -208,7 +208,7 @@ interface StubAgentOptions {
   readonly listError?: { code: number; message: string }
   /** Throw an error from initialize. */
   readonly initializeError?: { code: number; message: string }
-  /** Throw an error from unstable_deleteSession. */
+  /** Throw an error from deleteSession. */
   readonly deleteError?: { code: number; message: string }
 }
 
@@ -248,7 +248,7 @@ class StubAgent implements Agent {
     } as unknown as ListSessionsResponse
   }
 
-  async unstable_deleteSession(params: DeleteSessionRequest): Promise<void> {
+  async deleteSession(params: DeleteSessionRequest): Promise<void> {
     this.deleteCalls.push(params)
     if (this._opts.deleteError) {
       throw new RequestError(this._opts.deleteError.code, this._opts.deleteError.message)
@@ -308,6 +308,7 @@ class FakeAcpClientService implements IAcpClientService {
       onSessionUpdate: () => {},
       onRequestPermission: async () => ({ outcome: { outcome: 'cancelled' } }) as never,
       onAskUserQuestion: async () => ({ cancelled: true }),
+      onCreateElicitation: async () => ({ action: 'cancel' }) as never,
     }
     this.connectCalls.push({ agentId, cwd: options?.cwd, silent: options?.silent })
     if (this.rejectAgents.has(agentId)) {
@@ -895,7 +896,7 @@ describe('AcpSessionRestoreCoordinator — deleteOnAgent', () => {
     expect(built.client.disposed.every((d) => d)).toBe(true)
   })
 
-  it('returns error when the agent rejects unstable_deleteSession', async () => {
+  it('returns error when the agent rejects deleteSession', async () => {
     const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
     coordinator = built.coordinator
     await built.history.initialize()

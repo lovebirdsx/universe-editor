@@ -118,6 +118,7 @@ function makeSession(
     usage: observableValue<AcpUsage | undefined>('t.usage', undefined),
     pendingPermission: observableValue<AcpPendingPermission | undefined>('t.perm', undefined),
     pendingQuestion: observableValue('t.question', undefined),
+    pendingElicitation: observableValue('t.elicitation', undefined),
     configOptions: observableValue<readonly SessionConfigOption[]>('t.cfg', []),
     availableCommands: observableValue('t.cmds', []),
     mcpServers: observableValue('t.mcp', []),
