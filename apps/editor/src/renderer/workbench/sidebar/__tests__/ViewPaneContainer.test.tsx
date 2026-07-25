@@ -122,15 +122,29 @@ describe('ViewPaneContainer', () => {
     while (disposables.length) disposables.pop()?.dispose()
   })
 
-  it('resizes open panes around a collapsed one after the split view has laid out', () => {
+  it('collapses to the header and hands freed space to the open pane, keeping the collapsed pane’s stored size', () => {
     const { viewDescriptorService } = renderSideBar()
     act(() => fireLastResizeObserver(800, 600))
     expect(viewDescriptorService.getViewState('test.view.a').size).toBe(300)
 
     act(() => viewDescriptorService.setViewCollapsed('test.view.a', true))
 
-    expect(viewDescriptorService.getViewState('test.view.a').size).toBe(28)
+    // The collapsed pane keeps its remembered expanded size (not the 28px
+    // header); the open pane absorbs the freed space.
+    expect(viewDescriptorService.getViewState('test.view.a').size).toBe(300)
     expect(viewDescriptorService.getViewState('test.view.b').size).toBe(572)
+  })
+
+  it('expanding a collapsed pane restores its remembered size', () => {
+    const { viewDescriptorService } = renderSideBar()
+    act(() => fireLastResizeObserver(800, 600))
+    act(() => viewDescriptorService.setViewCollapsed('test.view.a', true))
+    expect(viewDescriptorService.getViewState('test.view.b').size).toBe(572)
+
+    act(() => viewDescriptorService.setViewCollapsed('test.view.a', false))
+
+    expect(viewDescriptorService.getViewState('test.view.a').size).toBe(300)
+    expect(viewDescriptorService.getViewState('test.view.b').size).toBe(300)
   })
 
   it('does not resize against a remounted Allotment whose panes are not reconciled yet', () => {

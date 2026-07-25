@@ -135,6 +135,17 @@ HTML5 DnD 在 **dragover 阶段读不到 `dataTransfer` 的 payload**（只在 d
 - **加新 View/Container（让它出现在系统里）**：套路 B 三件套，**不是**这个 service 的事。
 - **生成容器图标不对**：`workbench/activitybar/icon-map.ts`（`window: AppWindow`）/ `viewContainerHeader/icon-map.ts`。
 
+## 尺寸持久化与折叠语义（对标 VSCode SplitView）
+
+多 view 容器（`ViewPaneContainer.tsx` 的 Allotment）尺寸机制，纯函数收口在 `services/views/viewPaneLayout.ts`（常量 `VIEW_HEADER_SIZE=28` / `VIEW_OPEN_MIN=88` + `computeToggleSizes` + `initialPaneSize`）：
+
+- **挂载恢复**：每个 `Allotment.Pane` 传 `preferredSize`——折叠→28，展开→持久化的 `size`（clamp ≥ OPEN_MIN），无存储→不传（Allotment 等分）。重挂载（重排/移入移出/切容器）同样走这条路恢复。
+- **折叠**：pane 收缩到 header（min=max=28），让出的空间**全归最底部展开 pane**（SplitView greedy，maxSize=Infinity 吸收全部）。
+- **展开**：恢复记住的展开尺寸，空间从其它展开 pane **自底向上扣**（各扣到 OPEN_MIN 为止，不够则压展开目标）。
+- **折叠 pane 不持久化尺寸**：`onChange` 里折叠 pane 上报的是 28px header，必须过滤掉，否则把记住的展开尺寸覆盖成 28。
+- **expandedSizesRef 快照**：React 子组件 effect 先于父组件跑——Allotment 在自己的 layout effect 里 reconcile min/max 并 fire `onChange`（展开时把 pane clamp 到 minSize），会**抢在我们的 effect 读持久化尺寸之前把它覆盖**。所以折叠那一刻先把展开尺寸快照进组件 ref，展开时优先用 ref。
+- 容器总高变化走 Allotment `proportionalLayout`（默认 true）等比缩放，与 VSCode 一致。
+
 ## 易踩坑速记
 
 1. **改了 platform 接口忘 rebuild**：apps 吃 `dist/`，`viewDescriptorService.ts` 改完要 `pnpm --filter @universe-editor/platform build` + 在 `packages/platform/src/index.ts` re-export，否则 apps 看不到新 API（编译报「不存在」）。
@@ -144,6 +155,8 @@ HTML5 DnD 在 **dragover 阶段读不到 `dataTransfer` 的 payload**（只在 d
 5. **eager seeding 改变了空状态语义**：构造即自动选中首个容器，断言「无内容」要用「该 location 无任何容器」而非「无激活容器」（见 `Panel.test.tsx`）。
 6. **dragover 读不到 payload**：别在 `onDragOver` 里 `dataTransfer.getData()`，那是空的；用 `viewDragData.get()` + `dragContainsView()`。
 7. **exactOptionalPropertyTypes**：QuickPick/描述符的可选字段用条件展开，不要 `x: T | undefined`。
+8. **折叠 pane 的尺寸别上报**:`ViewPaneContainer` 的 `onChange` 必须过滤折叠 pane（它报的是 28px header)，否则持久化的展开尺寸被覆盖、重启后无法恢复。
+9. **Allotment 子 effect 先跑会污染尺寸**：展开时 Allotment 自己的 layout effect 先把 pane clamp 到 minSize 并 fire onChange，父 effect 再读持久化尺寸已是脏值——恢复值要取自折叠时快照的 `expandedSizesRef`。
 
 ## 验证
 
@@ -158,8 +171,8 @@ cd apps/editor && pnpm exec playwright test specs/smoke.viewMove.spec.ts   # @p0
 ```
 
 **e2e 探针**（`contract.ts` + `renderer/e2e/probe.ts`，委托 `viewDescriptorService`）：
-`getViewContainerByViewId` / `getViewIdsByContainer` / `getViewContainerIdsByLocation` / `moveViewsToContainer` / `moveViewToLocation` / `moveViewContainerToLocation` / `getViewCollapsed` / `setViewCollapsed` / `flushViewCustomizationsSave` / `resetViewLocations`。
-探针**绕开 DnD 鼠标几何**直接驱动 service，专测「数据模型 + 持久化」主链路；`smoke.viewMove.spec.ts` 用冷启动 + workspace 作用域 seed + 重载窗口验证往返。
+`getViewContainerByViewId` / `getViewIdsByContainer` / `getViewContainerIdsByLocation` / `moveViewsToContainer` / `moveViewToLocation` / `moveViewContainerToLocation` / `getViewCollapsed` / `setViewCollapsed` / `getViewSize` / `flushViewCustomizationsSave` / `resetViewLocations`。
+探针**绕开 DnD 鼠标几何**直接驱动 service，专测「数据模型 + 持久化」主链路；`smoke.viewMove.spec.ts` 用冷启动 + workspace 作用域 seed + 重载窗口验证往返；`smoke.viewSizes.spec.ts` 验证折叠/展开尺寸恢复 + sash 拖拽尺寸重载持久化（默认 explorer 容器自带 tree + timeline 两个 view，直接可用）。
 
 > ⚠️ 本地 Windows e2e 启动可能失败（`--remote-debugging-port=0` 被拒），最终 e2e 验证以 CI 为准（见 memory `e2e-local-windows-launch-fails`）。
 
@@ -168,13 +181,14 @@ cd apps/editor && pnpm exec playwright test specs/smoke.viewMove.spec.ts   # @p0
 - `packages/platform/src/workbench/viewDescriptorService.ts` —— 运行时重映射接口（IViewDescriptorService / IViewState）
 - `packages/platform/src/workbench/viewRegistry.ts` —— 静态注册表 + 描述符字段（canMoveView / order / generated）
 - `apps/editor/src/renderer/services/views/ViewDescriptorService.ts` —— 实现（持久化/生成容器/回收/workspace reload）
+- `apps/editor/src/renderer/services/views/viewPaneLayout.ts` —— 尺寸/折叠纯函数（computeToggleSizes / initialPaneSize / 常量），renderer-node 可测
 - `apps/editor/src/renderer/services/views/ViewsService.ts` —— 消费 version 决定每个 location 的激活容器
 - `apps/editor/src/renderer/workbench/dnd/{useViewDescriptors.ts,viewDragData.ts}` —— UI 订阅入口 + DnD 载荷
 - `apps/editor/src/renderer/workbench/{activitybar/ActivityBar,paneComposite/PaneCompositePart,paneComposite/PaneCompositeHeader,sidebar/ViewPaneContainer,sidebar/ViewPane}.tsx` —— UI 五件套
 - `apps/editor/src/renderer/workbench/viewContainerHeader/ViewTitleActions.tsx` —— 标题栏 action 经 context key 传 viewId
 - `apps/editor/src/renderer/actions/viewActions.ts` —— MoveViewAction / ResetViewLocationsAction
 - `apps/editor/src/renderer/main.tsx` —— DI 注册（createInstance + services.set）
-- 测试：`…/services/views/__tests__/{ViewDescriptorService,ViewsService}.test.ts`、`…/workbench/panel/__tests__/Panel.test.tsx`、`apps/editor/e2e/specs/smoke.viewMove.spec.ts`
+- 测试：`…/services/views/__tests__/{ViewDescriptorService,ViewsService,viewPaneLayout}.test.ts`、`…/workbench/sidebar/__tests__/ViewPaneContainer.test.tsx`、`…/workbench/panel/__tests__/Panel.test.tsx`、`apps/editor/e2e/specs/{smoke.viewMove,smoke.viewSizes}.spec.ts`
 - 加新 View/Container 的三件套：`apps/editor/CLAUDE.md` 套路 B
 
 ## 其它

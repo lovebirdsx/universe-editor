@@ -11,15 +11,17 @@ import 'allotment/dist/style.css'
 import type { IViewDescriptor } from '@universe-editor/platform'
 import { ViewPane } from './ViewPane.js'
 import { ViewToolbarRegistry } from '../../services/views/ViewComponentRegistry.js'
+import {
+  computeToggleSizes,
+  initialPaneSize,
+  VIEW_HEADER_SIZE as HEADER_H,
+  VIEW_OPEN_MIN as OPEN_MIN,
+} from '../../services/views/viewPaneLayout.js'
 import { useViewDescriptors } from '../dnd/useViewDescriptors.js'
 import { dragContainsView, viewDragData, type ViewDragPayload } from '../dnd/viewDragData.js'
 import { applyViewDrop } from '../dnd/applyViewDrop.js'
 import '../layout/allotment-theme.css'
 import styles from '../paneComposite/PaneComposite.module.css'
-
-const HEADER_H = 28
-const MIN_BODY = 60
-const OPEN_MIN = HEADER_H + MIN_BODY
 
 interface Props {
   containerId: string
@@ -78,12 +80,13 @@ export function ViewPaneContainer({
     viewDescriptors.moveViewInContainer(containerId, sourceViewId, anchor)
   }
 
-  // After a collapse/expand toggle, hand collapsed panes their header height and
-  // split the rest equally among the open panes — Allotment alone would leave the
-  // freed space on the just-collapsed pane. Only run when the view *set* is
-  // unchanged: on add/remove/replace (e.g. a view dragged in or out) the keyed
-  // Allotment remounts, and its new SplitView stays empty until the next
-  // ResizeObserver tick + reconcile — a window spanning several commits, so a
+  // After a collapse/expand toggle, re-distribute sizes VSCode-style: a collapsed
+  // pane shrinks to its header and hands the freed space to the bottom-most open
+  // pane; an expanded pane restores its persisted size, taken back from the other
+  // open panes bottom-up (see services/views/viewPaneLayout.ts). Only run when
+  // the view *set* is unchanged: on add/remove/replace (e.g. a view dragged in or
+  // out) the keyed Allotment remounts, and its new SplitView stays empty until the
+  // next ResizeObserver tick + reconcile — a window spanning several commits, so a
   // later collapse (e.g. per-workspace state rehydrating right after a workspace
   // switch) can still land inside it. Dropping the stale sizes forces the
   // length guard below to keep skipping until the remounted instance reports
@@ -91,22 +94,47 @@ export function ViewPaneContainer({
   const collapsedKey = views.map((v) => (collapsed(v.id) ? '1' : '0')).join('')
   const viewIdsKey = views.map((v) => v.id).join('\n')
   const prevViewIdsRef = useRef(viewIdsKey)
+  const prevCollapsedKeyRef = useRef(collapsedKey)
+  // Expanded size remembered at collapse time. Allotment reconciles prop changes
+  // in its own (child) layout effect before ours runs and fires onChange with the
+  // pane clamped to its min — on expand that clobbers the persisted size before we
+  // can read it. The snapshot taken at collapse time is safe because collapsed
+  // panes are never written to the persisted state (see onChange below).
+  const expandedSizesRef = useRef(new Map<string, number>())
   useLayoutEffect(() => {
     const handle = allotmentRef.current
     const sameViewSet = prevViewIdsRef.current === viewIdsKey
+    const prevCollapsedKey = prevCollapsedKeyRef.current
     prevViewIdsRef.current = viewIdsKey
+    prevCollapsedKeyRef.current = collapsedKey
     if (!handle || !sameViewSet) {
       sizesRef.current = []
       return
     }
     const sizes = sizesRef.current
     if (sizes.length !== views.length) return
-    const total = sizes.reduce((sum, n) => sum + n, 0)
-    if (total <= 0) return
-    const openCount = views.reduce((n, v) => (collapsed(v.id) ? n : n + 1), 0)
-    if (openCount === 0) return
-    const each = (total - HEADER_H * (views.length - openCount)) / openCount
-    handle.resize(views.map((v) => (collapsed(v.id) ? HEADER_H : each)))
+    const collapsedFlags = views.map((v) => collapsed(v.id))
+    let working = [...sizes]
+    for (let i = 0; i < collapsedKey.length; i++) {
+      if (collapsedKey[i] === prevCollapsedKey[i]) continue
+      const viewId = views[i]!.id
+      let restoreSize: number | undefined
+      if (collapsedFlags[i]) {
+        const remembered = viewDescriptors.getViewState(viewId).size ?? working[i]
+        if (remembered !== undefined) expandedSizesRef.current.set(viewId, remembered)
+      } else {
+        restoreSize =
+          expandedSizesRef.current.get(viewId) ?? viewDescriptors.getViewState(viewId).size
+      }
+      const next = computeToggleSizes({
+        sizes: working,
+        collapsed: collapsedFlags,
+        toggledIndex: i,
+        ...(restoreSize !== undefined ? { restoreSize } : {}),
+      })
+      if (next) working = next
+    }
+    handle.resize(working)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collapsedKey, viewIdsKey])
 
@@ -180,17 +208,27 @@ export function ViewPaneContainer({
         vertical
         onChange={(s) => {
           sizesRef.current = s
-          viewDescriptors.setViewSizes(views.map((v, i) => ({ id: v.id, size: s[i] ?? 0 })))
+          // Collapsed panes report their header height here; persist only the
+          // expanded panes' sizes so a collapsed pane keeps its remembered
+          // expanded size for later restore (across reloads too).
+          viewDescriptors.setViewSizes(
+            views.flatMap((v, i) => (collapsed(v.id) ? [] : [{ id: v.id, size: s[i] ?? 0 }])),
+          )
         }}
       >
         {views.map((v) => {
           const isCollapsed = collapsed(v.id)
+          const preferredSize = initialPaneSize(
+            isCollapsed,
+            viewDescriptors.getViewState(v.id).size,
+          )
           const Component = resolve(v.componentKey)
           return (
             <Allotment.Pane
               key={v.id}
               minSize={isCollapsed ? HEADER_H : OPEN_MIN}
               maxSize={isCollapsed ? HEADER_H : Infinity}
+              {...(preferredSize !== undefined ? { preferredSize } : {})}
             >
               <ViewPane
                 viewId={v.id}

@@ -1187,6 +1187,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       services.viewDescriptorService.getViewState(viewId).collapsed === true,
     setViewCollapsed: (viewId: string, collapsed: boolean) =>
       services.viewDescriptorService.setViewCollapsed(viewId, collapsed),
+    getViewSize: (viewId: string) => services.viewDescriptorService.getViewState(viewId).size,
     flushViewCustomizationsSave: () => services.viewDescriptorService.save(),
     resetViewLocations: () => services.viewDescriptorService.reset(),
     installFakeInlineCompletion: (text: string): boolean => {

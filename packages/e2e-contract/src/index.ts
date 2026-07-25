@@ -676,6 +676,8 @@ export interface E2EProbe {
   getViewCollapsed(viewId: string): boolean
   /** Set a view's collapsed flag (persisted). */
   setViewCollapsed(viewId: string, collapsed: boolean): void
+  /** A view's last persisted expanded size in px (undefined when never recorded). */
+  getViewSize(viewId: string): number | undefined
   /** Force-flush any pending view-customization save. Resolves when on disk. */
   flushViewCustomizationsSave(): Promise<void>
   /** Reset all view-container customizations to defaults. */
