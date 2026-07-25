@@ -273,7 +273,6 @@ function makeService(opts: { autoInitialize?: boolean; startupTimeoutMs?: number
   const sink: IAcpClientNotificationSink = {
     onSessionUpdate: vi.fn(),
     onRequestPermission: vi.fn(),
-    onAskUserQuestion: vi.fn(),
     onCreateElicitation: vi.fn(),
   }
   const svc = new AcpClientService(

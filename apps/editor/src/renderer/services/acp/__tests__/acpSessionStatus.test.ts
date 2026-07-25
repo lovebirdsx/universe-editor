@@ -6,30 +6,29 @@ import { describe, it, expect } from 'vitest'
 import { observableValue } from '@universe-editor/platform'
 import { computeSessionDisplayStatus } from '../acpSessionStatus.js'
 import type {
+  AcpPendingElicitation,
   AcpPendingPermission,
-  AcpPendingQuestion,
   AcpSessionStatus,
   IAcpSession,
 } from '../acpSession.js'
 
 function fakeSession(opts: {
   status: AcpSessionStatus
-  question?: AcpPendingQuestion
+  elicitation?: AcpPendingElicitation
   permission?: AcpPendingPermission
 }): IAcpSession {
   return {
     status: observableValue<AcpSessionStatus>('s', opts.status),
-    pendingQuestion: observableValue<AcpPendingQuestion | undefined>('q', opts.question),
+    pendingElicitation: observableValue<AcpPendingElicitation | undefined>('e', opts.elicitation),
     pendingPermission: observableValue<AcpPendingPermission | undefined>('p', opts.permission),
   } as unknown as IAcpSession
 }
 
-const QUESTION = {
-  toolCallId: 't',
-  questions: [],
+const ELICITATION = {
+  request: {},
   resolve: () => {},
   cancel: () => {},
-} as unknown as AcpPendingQuestion
+} as unknown as AcpPendingElicitation
 const PERMISSION = {
   toolCallId: 't',
   title: 'x',
@@ -45,10 +44,10 @@ describe('computeSessionDisplayStatus', () => {
     expect(computeSessionDisplayStatus(fakeSession({ status: 'errored' }))).toBe('errored')
   })
 
-  it("derives 'ask' when a question is pending", () => {
-    expect(computeSessionDisplayStatus(fakeSession({ status: 'idle', question: QUESTION }))).toBe(
-      'ask',
-    )
+  it("derives 'ask' when an elicitation is pending", () => {
+    expect(
+      computeSessionDisplayStatus(fakeSession({ status: 'idle', elicitation: ELICITATION })),
+    ).toBe('ask')
   })
 
   it("derives 'ask' when a permission is pending", () => {
@@ -58,8 +57,8 @@ describe('computeSessionDisplayStatus', () => {
   })
 
   it('never overrides closed with ask', () => {
-    expect(computeSessionDisplayStatus(fakeSession({ status: 'closed', question: QUESTION }))).toBe(
-      'closed',
-    )
+    expect(
+      computeSessionDisplayStatus(fakeSession({ status: 'closed', elicitation: ELICITATION })),
+    ).toBe('closed')
   })
 })

@@ -52,17 +52,17 @@ function makeWorkspaceStub(initial: IWorkspace | null = null): IWorkspaceService
 
 function makeSessionStub(id: string, title: string, status: AcpSessionStatus = 'idle') {
   const statusObs = observableValue<AcpSessionStatus>('test.status', status)
-  const pendingQuestion = observableValue<unknown>('test.question', undefined)
+  const pendingElicitation = observableValue<unknown>('test.elicitation', undefined)
   const pendingPermission = observableValue<unknown>('test.permission', undefined)
   const session = {
     id,
     title,
     status: statusObs,
-    pendingQuestion,
+    pendingElicitation,
     pendingPermission,
     sessionIdOnAgent: observableValue<string | undefined>('test.sid', id),
   } as unknown as IAcpSession
-  return { session, statusObs, pendingQuestion, pendingPermission }
+  return { session, statusObs, pendingElicitation, pendingPermission }
 }
 
 function makeAcpStubs() {
@@ -157,13 +157,13 @@ describe('WindowTitleContribution', () => {
   it('shows the ask symbol when the session is waiting on the user', () => {
     const ws = makeWorkspaceStub({ folder: URI.file('/tmp/myProject'), name: 'myProject' })
     const { contribution, acp } = makeContribution(ws)
-    const { session, pendingQuestion } = makeSessionStub('s1', '修复登录Bug', 'running')
+    const { session, pendingElicitation } = makeSessionStub('s1', '修复登录Bug', 'running')
 
     acp.activeSession.set(session, undefined)
-    pendingQuestion.set({ toolCallId: 't' }, undefined)
+    pendingElicitation.set({ request: {} }, undefined)
     expect(document.title).toBe('myProject — ◆ 修复登录Bug')
 
-    pendingQuestion.set(undefined, undefined)
+    pendingElicitation.set(undefined, undefined)
     expect(document.title).toBe('myProject — ● 修复登录Bug')
 
     contribution.dispose()

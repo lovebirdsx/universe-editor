@@ -60,7 +60,6 @@ import {
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
 import { PermissionCard } from './PermissionCard.js'
-import { QuestionCard } from './QuestionCard.js'
 import { ElicitationCard } from './ElicitationCard.js'
 import { RecoveryBar } from './RecoveryBar.js'
 import { StickyPlanBar } from './StickyPlanBar.js'
@@ -340,7 +339,6 @@ function ChatSessionBody({
           ) : (
             <>
               <PermissionCard session={session} />
-              <QuestionCard key={`question:${session.id}`} session={session} />
               <ElicitationCard key={`elicitation:${session.id}`} session={session} />
               <RecoveryBar key={`recovery:${session.id}`} session={session} />
               <PromptInput
@@ -915,8 +913,9 @@ function ChatScroll({
     scrollToBottomStable()
   }, [timeline.length, tailSignature, scrollToBottomStable])
 
-  // Re-pin when chatBody clientHeight shrinks (e.g. PermissionCard / QuestionCard
-  // appears, or the PromptInput textarea grows via field-sizing:content). The
+  // Re-pin when chatBody clientHeight shrinks (e.g. PermissionCard /
+  // ElicitationCard appears, or the PromptInput textarea grows via
+  // field-sizing:content). The
   // timeline-length effect above only fires on new messages; it cannot see the
   // chatBody losing height to sibling flex items. Without this, the last messages
   // scroll out of view behind the newly-tall siblings whenever stuck === true.

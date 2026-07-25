@@ -2,10 +2,10 @@
  *  AcpElicitationDraftCache — in-memory store for the unsubmitted
  *  ElicitationCard input values, keyed by (sessionId, requestKey) where the
  *  requestKey is the elicitation's toolCallId when present, else a hash of the
- *  request message. Mirrors AcpQuestionDraftCache so switching editor tabs or
- *  sessions and coming back restores the in-progress form instead of clearing
- *  it. Esc / 关闭 does NOT clear the draft — closing is not answering, and the
- *  user may reopen the same elicitation by switching back.
+ *  request message. Switching editor tabs or sessions and coming back restores
+ *  the in-progress form instead of clearing it. Esc / 关闭 does NOT clear the
+ *  draft — closing is not answering, and the user may reopen the same
+ *  elicitation by switching back.
  *--------------------------------------------------------------------------------------------*/
 
 /** In-progress card input — numbers stay raw strings until submit conversion. */

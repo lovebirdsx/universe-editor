@@ -16,7 +16,7 @@ import type {
   AcpSessionStatus,
   AcpPlanEntry,
   AcpPendingPermission,
-  AcpPendingQuestion,
+  AcpPendingElicitation,
 } from '../../services/acp/acpSession.js'
 
 interface FakeSession {
@@ -24,7 +24,7 @@ interface FakeSession {
   title: string
   status: ISettableObservable<AcpSessionStatus>
   pendingPermission: ISettableObservable<AcpPendingPermission | undefined>
-  pendingQuestion: ISettableObservable<AcpPendingQuestion | undefined>
+  pendingElicitation: ISettableObservable<AcpPendingElicitation | undefined>
   plan: ISettableObservable<readonly AcpPlanEntry[]>
 }
 
@@ -34,7 +34,7 @@ function makeSession(id: string, title = id): FakeSession {
     title,
     status: observableValue<AcpSessionStatus>(`status.${id}`, 'idle'),
     pendingPermission: observableValue<AcpPendingPermission | undefined>(`perm.${id}`, undefined),
-    pendingQuestion: observableValue<AcpPendingQuestion | undefined>(`q.${id}`, undefined),
+    pendingElicitation: observableValue<AcpPendingElicitation | undefined>(`eli.${id}`, undefined),
     plan: observableValue<readonly AcpPlanEntry[]>(`plan.${id}`, []),
   }
 }
@@ -130,11 +130,11 @@ describe('AgentNotificationContribution', () => {
     expect(t.notify).toHaveBeenCalledTimes(1)
   })
 
-  it('fires once on question rising edge', () => {
+  it('fires once on elicitation rising edge', () => {
     const t = setup()
     const s = makeSession('a')
     t.addSession(s)
-    s.pendingQuestion.set({ questions: [] } as never, undefined)
+    s.pendingElicitation.set({ request: {} } as never, undefined)
     expect(t.notify).toHaveBeenCalledTimes(1)
   })
 

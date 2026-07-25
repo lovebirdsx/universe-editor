@@ -86,23 +86,23 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
 
     let prevStatus = session.status.get()
     let permissionLatched = session.pendingPermission.get() !== undefined
-    let questionLatched = session.pendingQuestion.get() !== undefined
+    let elicitationLatched = session.pendingElicitation.get() !== undefined
     let completionAnnounced = false
     let planWasComplete = isPlanComplete(session.plan.get())
 
     return autorun((r) => {
       const status = session.status.read(r)
       const permission = session.pendingPermission.read(r)
-      const question = session.pendingQuestion.read(r)
+      const elicitation = session.pendingElicitation.read(r)
       const planComplete = isPlanComplete(session.plan.read(r))
 
       // Permission request — rising edge only.
       if (permission !== undefined && !permissionLatched) this._fire('permission', session)
       permissionLatched = permission !== undefined
 
-      // Agent question — rising edge only.
-      if (question !== undefined && !questionLatched) this._fire('question', session)
-      questionLatched = question !== undefined
+      // Agent elicitation — rising edge only.
+      if (elicitation !== undefined && !elicitationLatched) this._fire('question', session)
+      elicitationLatched = elicitation !== undefined
 
       // A new turn opens: reset the per-turn completion latch and re-baseline the
       // plan so a stale all-complete plan from the previous turn doesn't re-fire.

@@ -62,7 +62,6 @@ import {
   type SetSessionConfigOptionResponse,
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
-import type { AskUserQuestionRequest } from '../acpSessionService.js'
 import { REWIND_SESSION_METHOD } from '../acpSession.js'
 import { ACP_CAPABILITIES_META_KEY } from '../acpExtMethods.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
@@ -1069,70 +1068,6 @@ describe('AcpSessionService', () => {
       options: [{ optionId: 'once', name: 'Allow', kind: 'allow_once' }],
     } as RequestPermissionRequest)
     expect(result).toEqual({ outcome: { outcome: 'cancelled' } })
-  })
-
-  it('routes an AskUserQuestion to the matching session and resolves with answers', async () => {
-    const a = await svc.createSession()
-    const b = await svc.createSession()
-    await a.whenConnected()
-    await b.whenConnected()
-    void a
-    const promise = svc.onAskUserQuestion({
-      sessionId: 'agent-2',
-      toolCallId: 'q1',
-      questions: [
-        {
-          question: 'Pick a color?',
-          header: 'Color',
-          options: [{ label: 'Red' }, { label: 'Blue' }],
-          multiSelect: false,
-        },
-      ],
-    } satisfies AskUserQuestionRequest)
-    await new Promise((r) => setTimeout(r, 0))
-    expect(a.pendingQuestion.get()).toBeUndefined()
-    const pending = b.pendingQuestion.get()
-    expect(pending?.toolCallId).toBe('q1')
-    expect(pending?.questions[0]?.question).toBe('Pick a color?')
-    pending!.resolve({ answers: { 'Pick a color?': 'Blue' } })
-    await expect(promise).resolves.toEqual({ answers: { 'Pick a color?': 'Blue' } })
-    expect(b.pendingQuestion.get()).toBeUndefined()
-  })
-
-  it('returns cancelled when the AskUserQuestion card is dismissed', async () => {
-    const b = await svc.createSession()
-    await b.whenConnected()
-    const promise = svc.onAskUserQuestion({
-      sessionId: 'agent-1',
-      toolCallId: 'q2',
-      questions: [{ question: 'Q?', header: 'Q', options: [{ label: 'A' }] }],
-    } satisfies AskUserQuestionRequest)
-    await new Promise((r) => setTimeout(r, 0))
-    b.pendingQuestion.get()!.cancel()
-    await expect(promise).resolves.toEqual({ cancelled: true })
-  })
-
-  it('cancels a pending AskUserQuestion when the session closes', async () => {
-    const b = await svc.createSession()
-    await b.whenConnected()
-    const promise = svc.onAskUserQuestion({
-      sessionId: 'agent-1',
-      toolCallId: 'q3',
-      questions: [{ question: 'Q?', header: 'Q', options: [{ label: 'A' }] }],
-    } satisfies AskUserQuestionRequest)
-    await new Promise((r) => setTimeout(r, 0))
-    expect(b.pendingQuestion.get()).toBeDefined()
-    await svc.closeSession(b.id)
-    await expect(promise).resolves.toEqual({ cancelled: true })
-  })
-
-  it('returns cancelled when the AskUserQuestion targets an unknown session', async () => {
-    const result = await svc.onAskUserQuestion({
-      sessionId: 'agent-nope',
-      toolCallId: 'q4',
-      questions: [{ question: 'Q?', header: 'Q', options: [{ label: 'A' }] }],
-    } satisfies AskUserQuestionRequest)
-    expect(result).toEqual({ cancelled: true })
   })
 })
 

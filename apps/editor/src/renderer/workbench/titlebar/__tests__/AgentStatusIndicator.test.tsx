@@ -25,15 +25,15 @@ import { AgentStatusIndicator } from '../AgentStatusIndicator.js'
 
 function makeSession(id: string, status: AcpSessionStatus) {
   const statusObs = observableValue<AcpSessionStatus>(`test.status.${id}`, status)
-  const pendingQuestion = observableValue<unknown>(`test.question.${id}`, undefined)
+  const pendingElicitation = observableValue<unknown>(`test.elicitation.${id}`, undefined)
   const session = {
     id,
     title: id,
     status: statusObs,
-    pendingQuestion,
+    pendingElicitation,
     pendingPermission: observableValue<unknown>(`test.permission.${id}`, undefined),
   } as unknown as IAcpSession
-  return { session, statusObs, pendingQuestion }
+  return { session, statusObs, pendingElicitation }
 }
 
 interface Rendered {
@@ -119,8 +119,8 @@ describe('AgentStatusIndicator', () => {
   })
 
   it('flags sessions waiting for input with the ask styling', () => {
-    const { session, pendingQuestion } = makeSession('a', 'running')
-    pendingQuestion.set({}, undefined)
+    const { session, pendingElicitation } = makeSession('a', 'running')
+    pendingElicitation.set({}, undefined)
     renderIndicator([session])
     expect(screen.getByTestId('titlebar-agent-status').className).toContain('agent-status--ask')
   })

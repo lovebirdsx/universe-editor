@@ -275,14 +275,6 @@ export interface AcpPendingPermission {
 }
 
 /**
- * ACP extension method carrying the `AskUserQuestion` round-trip. The built-in
- * agent (vendor/claude-agent-acp) sends questions over this method and expects
- * the user's answers back. The string is shared verbatim with the agent fork's
- * `interactive.ts` — keep both in sync.
- */
-export const ASK_USER_QUESTION_METHOD = ACP_EXT_METHODS.askUserQuestion
-
-/**
  * Custom ACP request that persists an AI-generated session title onto the
  * agent's durable store (the fork backs it with `renameSession`). Shared
  * verbatim with the agent fork's `acp-agent.ts` (`SET_SESSION_TITLE_METHOD`) —
@@ -332,48 +324,6 @@ export interface RewindFilesResult {
   readonly filesChanged?: readonly string[]
   readonly insertions?: number
   readonly deletions?: number
-}
-
-/** One selectable option of an {@link AskUserQuestion}. */
-export interface AskUserQuestionOption {
-  readonly label: string
-  readonly description?: string
-  /** Rich preview shown side-by-side when this option is focused. */
-  readonly preview?: string
-}
-
-/** A single question in an `AskUserQuestion` tool call. */
-export interface AskUserQuestion {
-  readonly question: string
-  readonly header: string
-  readonly options: readonly AskUserQuestionOption[]
-  readonly multiSelect?: boolean
-}
-
-/** Params the agent sends over {@link ASK_USER_QUESTION_METHOD}. */
-export interface AskUserQuestionRequest {
-  readonly sessionId: string
-  readonly toolCallId: string
-  readonly questions: readonly AskUserQuestion[]
-}
-
-/**
- * Response the client returns to the agent. `answers` is keyed by question
- * text with comma-joined selected labels (matching the SDK's AskUserQuestion
- * output contract); `cancelled` short-circuits to a tool denial.
- */
-export interface AskUserQuestionResult {
-  readonly cancelled?: boolean
-  readonly answers?: Record<string, string>
-  readonly annotations?: Record<string, { preview?: string; notes?: string }>
-}
-
-/** A pending question carousel awaiting the user's answers. */
-export interface AcpPendingQuestion {
-  readonly toolCallId: string
-  readonly questions: readonly AskUserQuestion[]
-  resolve(result: AskUserQuestionResult): void
-  cancel(): void
 }
 
 /**
@@ -493,8 +443,6 @@ export interface IAcpSession {
   /** Latest context-window usage reported by the agent, or undefined if never reported. */
   readonly usage: IObservable<AcpUsage | undefined>
   readonly pendingPermission: IObservable<AcpPendingPermission | undefined>
-  /** Active `AskUserQuestion` carousel awaiting the user's answers, if any. */
-  readonly pendingQuestion: IObservable<AcpPendingQuestion | undefined>
   /** Active elicitation (form card / URL consent) awaiting the user's response, if any. */
   readonly pendingElicitation: IObservable<AcpPendingElicitation | undefined>
   /** Configuration options the agent has advertised for this session. */
@@ -587,8 +535,6 @@ export interface IAcpSession {
   cycleCollapseMode(): void
   /** Internal — call site is the permission handler. */
   presentPermission(p: AcpPendingPermission): void
-  /** Internal — call site is the AskUserQuestion sink. */
-  presentQuestion(q: AcpPendingQuestion): void
   /** Internal — call site is the elicitation sink. */
   presentElicitation(e: AcpPendingElicitation): void
   /**

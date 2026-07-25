@@ -446,24 +446,31 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       services.acpSessionService.setSessionMcpServers(s.id, names)
     },
     getAcpSessionStatus: () => services.acpSessionService.activeSession.get()?.status.get(),
-    getAcpPendingQuestion: () => {
+    getAcpPendingElicitation: () => {
       const s = services.acpSessionService.activeSession.get()
-      const q = s?.pendingQuestion.get()
-      if (!q) return undefined
-      return {
-        toolCallId: q.toolCallId,
-        questions: q.questions.map((qq) => ({ question: qq.question, header: qq.header })),
-      }
+      const e = s?.pendingElicitation.get()
+      if (!e) return undefined
+      const req = e.request
+      // The custom-mode variant's index signature types these as unknown —
+      // guard before exposing them to the spec.
+      const mode = 'mode' in req && typeof req.mode === 'string' ? req.mode : 'form'
+      const message = 'message' in req && typeof req.message === 'string' ? req.message : ''
+      const schema = 'requestedSchema' in req ? req.requestedSchema : undefined
+      const props =
+        schema !== null && typeof schema === 'object'
+          ? (schema as { properties?: Record<string, unknown> }).properties
+          : undefined
+      return { mode, message, fields: props ? Object.keys(props) : [] }
     },
-    resolveAcpQuestion: (answers) => {
+    resolveAcpElicitation: (content) => {
       const s = services.acpSessionService.activeSession.get()
-      const q = s?.pendingQuestion.get()
-      if (!q) throw new Error('[E2E] no pending ACP question')
-      q.resolve({ answers })
+      const e = s?.pendingElicitation.get()
+      if (!e) throw new Error('[E2E] no pending ACP elicitation')
+      e.resolve({ action: 'accept', content })
     },
-    cancelAcpQuestion: () => {
+    cancelAcpElicitation: () => {
       const s = services.acpSessionService.activeSession.get()
-      s?.pendingQuestion.get()?.cancel()
+      s?.pendingElicitation.get()?.cancel()
     },
     getActiveOutputChannelName: () => services.outputService.activeChannelName.get(),
     getOutputChannelNames: () => services.outputService.channelNames.get(),

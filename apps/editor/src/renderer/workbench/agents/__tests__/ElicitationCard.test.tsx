@@ -1,8 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for ElicitationCard — field-type rendering, the three protocol exits
  *  (submit=accept / decline / close=cancel), pre-submit validation with inline
- *  errors, and draft persistence across session switches (mirrors the
- *  QuestionCard draft tests).
+ *  errors, and draft persistence across session switches.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'

@@ -117,7 +117,6 @@ function makeSession(
     isReplayingHistory: observableValue<boolean>('t.replay', opts.isReplayingHistory ?? false),
     usage: observableValue<AcpUsage | undefined>('t.usage', undefined),
     pendingPermission: observableValue<AcpPendingPermission | undefined>('t.perm', undefined),
-    pendingQuestion: observableValue('t.question', undefined),
     pendingElicitation: observableValue('t.elicitation', undefined),
     configOptions: observableValue<readonly SessionConfigOption[]>('t.cfg', []),
     availableCommands: observableValue('t.cmds', []),
@@ -135,7 +134,6 @@ function makeSession(
       collapseMode.set(next, undefined)
     },
     presentPermission: () => {},
-    presentQuestion: () => {},
     recoveryState: observableValue('t.recovery', undefined),
     cancelRecovery: () => {},
     retryRecovery: () => Promise.resolve(),

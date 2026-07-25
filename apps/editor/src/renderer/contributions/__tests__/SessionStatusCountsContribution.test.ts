@@ -15,14 +15,14 @@ import type {
 
 interface FakeSession {
   status: ISettableObservable<AcpSessionStatus>
-  pendingQuestion: ISettableObservable<unknown>
+  pendingElicitation: ISettableObservable<unknown>
   pendingPermission: ISettableObservable<unknown>
 }
 
 function makeSession(status: AcpSessionStatus): FakeSession {
   return {
     status: observableValue<AcpSessionStatus>('test.status', status),
-    pendingQuestion: observableValue<unknown>('test.question', undefined),
+    pendingElicitation: observableValue<unknown>('test.elicitation', undefined),
     pendingPermission: observableValue<unknown>('test.permission', undefined),
   }
 }
@@ -63,10 +63,10 @@ describe('SessionStatusCountsContribution', () => {
     setSessions([running, idle])
     expect(reports[reports.length - 1]).toEqual({ running: 1, ask: 0 })
 
-    running.pendingQuestion.set({}, undefined)
+    running.pendingElicitation.set({}, undefined)
     expect(reports[reports.length - 1]).toEqual({ running: 0, ask: 1 })
 
-    running.pendingQuestion.set(undefined, undefined)
+    running.pendingElicitation.set(undefined, undefined)
     running.status.set('idle', undefined)
     expect(reports[reports.length - 1]).toEqual({ running: 0, ask: 0 })
   })

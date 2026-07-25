@@ -85,7 +85,7 @@ import { IAcpConfigOptionsCacheService } from './acpConfigOptionsCache.js'
 import { AcpChatViewStateCache } from './acpChatViewStateCache.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import { AcpPromptDraftCache } from './acpPromptDraftCache.js'
-import { AcpQuestionDraftCache } from './acpQuestionDraftCache.js'
+import { AcpElicitationDraftCache } from './acpElicitationDraftCache.js'
 import {
   AcpSession,
   COMPACTION_METHOD,
@@ -93,9 +93,6 @@ import {
   type AcpConnectionLostEvent,
   type AcpPendingElicitation,
   type AcpPendingPermission,
-  type AcpPendingQuestion,
-  type AskUserQuestionRequest,
-  type AskUserQuestionResult,
   type IAcpSession,
   type IAcpSessionInitState,
   type RewindFilesResult,
@@ -123,11 +120,6 @@ export {
   type AcpPlanEntryStatus,
   type AcpPendingPermission,
   type AcpPendingElicitation,
-  type AcpPendingQuestion,
-  type AskUserQuestion,
-  type AskUserQuestionOption,
-  type AskUserQuestionRequest,
-  type AskUserQuestionResult,
   type AcpRecoveryState,
   type AcpSessionStatus,
   type AcpSubagentStats,
@@ -1149,7 +1141,7 @@ export class AcpSessionService
     this._mcpSelectionAtAttach.delete(localId)
     AcpChatViewStateCache.clear(localId)
     AcpPromptDraftCache.clear(localId)
-    AcpQuestionDraftCache.clearSession(localId)
+    AcpElicitationDraftCache.clearSession(localId)
     this._telemetry.publicLog('acp.session_closed', { sessionId: localId })
     this._onDidCloseSession.fire(localId)
   }
@@ -1456,41 +1448,6 @@ export class AcpSessionService
         },
       }
       session.presentPermission(pending)
-    })
-  }
-
-  async onAskUserQuestion(params: AskUserQuestionRequest): Promise<AskUserQuestionResult> {
-    const session = this._findSession(params.sessionId)
-    if (!session) {
-      this._logger.warn(`ask_user_question for unknown session ${params.sessionId}`)
-      return { cancelled: true }
-    }
-    this._telemetry.publicLog('acp.ask_user_question', {
-      sessionId: params.sessionId,
-      count: params.questions.length,
-    })
-    return await new Promise<AskUserQuestionResult>((resolve) => {
-      const settle = (result: AskUserQuestionResult): void => {
-        if (session.pendingQuestion.get() === pending) {
-          session.pendingQuestion.set(undefined, undefined)
-        }
-        resolve(result)
-      }
-      const pending: AcpPendingQuestion = {
-        toolCallId: params.toolCallId,
-        questions: params.questions,
-        resolve: (result) => {
-          this._telemetry.publicLog('acp.ask_user_question_resolved', {
-            answered: Object.keys(result.answers ?? {}).length,
-          })
-          settle(result)
-        },
-        cancel: () => {
-          this._telemetry.publicLog('acp.ask_user_question_cancelled', {})
-          settle({ cancelled: true })
-        },
-      }
-      session.presentQuestion(pending)
     })
   }
 

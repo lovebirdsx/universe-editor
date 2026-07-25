@@ -16,14 +16,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * The five custom ACP ext-methods / notifications shared with the agent forks.
+ * The custom ACP ext-methods / notifications shared with the agent forks.
  * Direction annotates who initiates the JSON-RPC call:
  *  - `client->agent`: the editor calls the fork (request/response).
  *  - `agent->client`: the fork calls the editor (surfaced on the client handler).
+ *
+ * (AskUserQuestion used to live here as `universe-editor/ask_user_question`;
+ * it moved to the standard UNSTABLE elicitation channel once the editor
+ * declared `elicitation.form`. The forks keep their ext-method fallback for
+ * other clients — the editor no longer does.)
  */
 export const ACP_EXT_METHODS = {
-  /** agent->client request: AskUserQuestion round-trip (fork interactive.ts). */
-  askUserQuestion: 'universe-editor/ask_user_question',
   /** client->agent request: persist an AI-generated session title (renameSession). */
   setSessionTitle: 'universe-editor/set_session_title',
   /** client->agent request: rewind a session to a user message (files + history). */
@@ -43,8 +46,6 @@ export type AcpExtMethodName = (typeof ACP_EXT_METHODS)[keyof typeof ACP_EXT_MET
  * that the forks read. The contract test asserts the forks still honour these.
  */
 export const ACP_META_KEYS = {
-  /** clientCapabilities._meta flag advertising AskUserQuestion support. */
-  askUserQuestionCapability: 'universe-editor/ask_user_question',
   /** session/new + session/load _meta asking the fork to emit raw SDK init message. */
   emitRawSdkMessages: 'claudeCode.emitRawSDKMessages',
   /** usage_update _meta carrying the per-model cost breakdown. */

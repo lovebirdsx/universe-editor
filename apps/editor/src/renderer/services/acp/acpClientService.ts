@@ -81,11 +81,6 @@ import {
 } from '../../../shared/ipc/codexBinaryService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPathPolicy } from './acpPathPolicy.js'
-import {
-  ASK_USER_QUESTION_METHOD,
-  type AskUserQuestionRequest,
-  type AskUserQuestionResult,
-} from './acpSession.js'
 import { createSdkHostStream, type SdkHostStream } from './sdkHostStream.js'
 import { AcpProtocolTracer } from './acpProtocolTracer.js'
 import { IOutputService } from '@universe-editor/platform'
@@ -97,12 +92,6 @@ export interface IAcpClientNotificationSink {
    * (inline-in-chat card today) and the autoApprove short-circuit.
    */
   onRequestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse>
-  /**
-   * Peer-initiated `AskUserQuestion` (carried over the ACP `extMethod` channel).
-   * The sink presents a question carousel and resolves with the user's answers
-   * (or `{ cancelled: true }`).
-   */
-  onAskUserQuestion(params: AskUserQuestionRequest): Promise<AskUserQuestionResult>
   /**
    * Peer-initiated `elicitation/create` (UNSTABLE). The sink presents the form
    * card (or URL consent) inline in the session and resolves with the user's
@@ -214,7 +203,6 @@ const DEFAULT_INIT_PARAMS: InitializeRequest = {
     // UNSTABLE elicitation: form mode only — url mode stays undeclared until
     // the consent-card flow (open-in-browser + elicitation/complete) is wired.
     elicitation: { form: {} },
-    _meta: { 'universe-editor/ask_user_question': true },
   },
 }
 
@@ -591,14 +579,9 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       unstable_completeElicitation: async (params) => {
         sink.onCompleteElicitation?.(params)
       },
-      extMethod: async (
-        method: string,
-        params: Record<string, unknown>,
-      ): Promise<Record<string, unknown>> => {
-        if (method === ASK_USER_QUESTION_METHOD) {
-          const result = await sink.onAskUserQuestion(params as unknown as AskUserQuestionRequest)
-          return result as unknown as Record<string, unknown>
-        }
+      extMethod: async (method: string): Promise<Record<string, unknown>> => {
+        // No client-side ext-methods remain (AskUserQuestion moved to the
+        // standard elicitation channel); anything else is out of spec.
         throw RequestError.methodNotFound(method)
       },
       extNotification: async (method: string, params: Record<string, unknown>): Promise<void> => {

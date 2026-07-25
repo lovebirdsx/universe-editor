@@ -61,7 +61,6 @@ const distReady = (fork: ForkId): boolean => forkContractEnabled && forkDistExis
 // the editor side (ACP_EXT_METHODS) is asserted equal to these, so a drift on
 // EITHER the editor or a fork surfaces as a failed assertion.
 const EXPECTED_METHOD_NAMES = {
-  askUserQuestion: 'universe-editor/ask_user_question',
   setSessionTitle: 'universe-editor/set_session_title',
   rewindSession: 'universe-editor/rewind_session',
   compaction: '_universe/compaction',
@@ -86,10 +85,11 @@ describe('editor ext-method name table is the single source of truth', () => {
 //
 // claude declares all five; codex only the two client->agent request methods it
 // implements (rewind/set_title — it does file rollback client-side and has no
-// compaction / sdkMessage / ask_user_question surface).
+// compaction / sdkMessage surface). The forks' ask_user_question ext-method is
+// their own fallback asset — the editor no longer calls it (AskUserQuestion now
+// flows over the standard elicitation channel), so it's not asserted here.
 const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
   claude: [
-    EXPECTED_METHOD_NAMES.askUserQuestion,
     EXPECTED_METHOD_NAMES.setSessionTitle,
     EXPECTED_METHOD_NAMES.rewindSession,
     EXPECTED_METHOD_NAMES.compaction,

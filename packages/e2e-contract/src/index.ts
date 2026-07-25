@@ -382,16 +382,17 @@ export interface E2EProbe {
   /** Status of the active ACP session ('connecting' | 'idle' | 'running' | 'closed'), if any. */
   getAcpSessionStatus(): string | undefined
   /**
-   * Snapshot of the active session's pending `AskUserQuestion` carousel, or
-   * undefined when none is awaiting an answer.
+   * Snapshot of the active session's pending elicitation (form mode), or
+   * undefined when none is awaiting an answer. `fields` lists the normalized
+   * field ids so specs can assert what the agent asked.
    */
-  getAcpPendingQuestion():
-    | { toolCallId: string; questions: ReadonlyArray<{ question: string; header: string }> }
+  getAcpPendingElicitation():
+    | { mode: string; message: string; fields: readonly string[] }
     | undefined
-  /** Answer the active session's pending AskUserQuestion (keyed by question text). */
-  resolveAcpQuestion(answers: Record<string, string>): void
-  /** Dismiss the active session's pending AskUserQuestion. */
-  cancelAcpQuestion(): void
+  /** Accept the active session's pending elicitation with the given content. */
+  resolveAcpElicitation(content: Record<string, unknown>): void
+  /** Dismiss the active session's pending elicitation (settles as cancel). */
+  cancelAcpElicitation(): void
   // -- Output probe --------------------------------------------------------
   /** Name of the currently active output channel, or undefined if none. */
   getActiveOutputChannelName(): string | undefined

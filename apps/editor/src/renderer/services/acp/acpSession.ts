@@ -76,7 +76,6 @@ import {
   type AcpMessageRole,
   type AcpPendingPermission,
   type AcpPendingElicitation,
-  type AcpPendingQuestion,
   type AcpPlanEntry,
   type AcpCompaction,
   type AcpCompactionPhase,
@@ -97,7 +96,6 @@ import {
 // many `from '.../acpSession.js'` import sites across the renderer keep working.
 export {
   AcpAbortError,
-  ASK_USER_QUESTION_METHOD,
   COMPACTION_METHOD,
   RESURRECTION_METHOD,
   REWIND_SESSION_METHOD,
@@ -113,7 +111,6 @@ export type {
   AcpModelCost,
   AcpPendingPermission,
   AcpPendingElicitation,
-  AcpPendingQuestion,
   AcpPlanEntry,
   AcpPlanEntryStatus,
   AcpResurrection,
@@ -125,10 +122,6 @@ export type {
   AcpToolCallLocation,
   AcpToolCallStatus,
   AcpUsage,
-  AskUserQuestion,
-  AskUserQuestionOption,
-  AskUserQuestionRequest,
-  AskUserQuestionResult,
   IAcpSession,
   IAcpSessionInitState,
   RewindFilesResult,
@@ -206,7 +199,6 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly isReplayingHistory: ISettableObservable<boolean>
   readonly usage: ISettableObservable<AcpUsage | undefined>
   readonly pendingPermission: ISettableObservable<AcpPendingPermission | undefined>
-  readonly pendingQuestion: ISettableObservable<AcpPendingQuestion | undefined>
   readonly pendingElicitation: ISettableObservable<AcpPendingElicitation | undefined>
   readonly availableCommands: ISettableObservable<readonly AvailableCommand[]>
   readonly mcpServers: ISettableObservable<readonly AcpMcpServerStatus[]>
@@ -425,10 +417,6 @@ export class AcpSession extends Disposable implements IAcpSession {
     this.usage = observableValue<AcpUsage | undefined>(`acp.session.usage.${id}`, undefined)
     this.pendingPermission = observableValue<AcpPendingPermission | undefined>(
       `acp.session.pendingPermission.${id}`,
-      undefined,
-    )
-    this.pendingQuestion = observableValue<AcpPendingQuestion | undefined>(
-      `acp.session.pendingQuestion.${id}`,
       undefined,
     )
     this.pendingElicitation = observableValue<AcpPendingElicitation | undefined>(
@@ -853,12 +841,6 @@ export class AcpSession extends Disposable implements IAcpSession {
     this.pendingPermission.set(p, undefined)
   }
 
-  presentQuestion(q: AcpPendingQuestion): void {
-    // Replace any prior pending question — only one carousel at a time.
-    this._cancelPendingQuestion()
-    this.pendingQuestion.set(q, undefined)
-  }
-
   presentElicitation(e: AcpPendingElicitation): void {
     // Replace any prior pending elicitation — only one card at a time.
     this._cancelPendingElicitation()
@@ -873,14 +855,6 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
   }
 
-  private _cancelPendingQuestion(): void {
-    const cur = this.pendingQuestion.get()
-    if (cur) {
-      this.pendingQuestion.set(undefined, undefined)
-      cur.cancel()
-    }
-  }
-
   private _cancelPendingElicitation(): void {
     const cur = this.pendingElicitation.get()
     if (cur) {
@@ -891,7 +865,6 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   private _cancelPending(): void {
     this._cancelPendingPermission()
-    this._cancelPendingQuestion()
     this._cancelPendingElicitation()
   }
 
