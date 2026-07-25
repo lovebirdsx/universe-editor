@@ -7,14 +7,18 @@
  *  Three shapes, mirroring VSCode's `vscode://file/…` / `vscode://command/…`:
  *    universe-editor://file/<abs-path>[:line[:col]]   open a file, optional position
  *    universe-editor://command/<commandId>[?<args>]   run a whitelisted command
- *    universe-editor://agent/new?prompt=<text>[&cwd=<dir>]  create an agent session
+ *    universe-editor://agent/new?prompt=<text>[&cwd=<dir>][&mcp=<names>]  create an agent session
  *    universe-editor://swarm/review/<id>              open a Swarm review tab
  *
  *  Agent links always carry an explicit working directory for the session:
  *  `cwd` absent/blank means the user's home directory (see
  *  {@link resolveAgentDeepLinkCwd}). The main process routes the link to the
  *  window whose workspace IS that directory, opening it as a new workspace
- *  window first when no window matches.
+ *  window first when no window matches. `mcp` is a comma-separated session
+ *  whitelist of MCP server names: the new session runs with exactly those
+ *  servers (a globally-`disabled` one IS enabled on demand); names missing
+ *  from the merged pool (`acp.mcpServers` + project `.mcp.json`) are skipped
+ *  and surfaced to the user.
  *
  *  Command deep-links are the highest-risk surface — anyone can craft one and
  *  hand it to the OS. Only ids in {@link DEEP_LINK_ALLOWED_COMMANDS} may run;
@@ -58,6 +62,8 @@ export interface DeepLinkAgentPromptTarget {
   readonly agent?: string
   /** 会话的工作目录；缺省时语义为用户目录（见 resolveAgentDeepLinkCwd） */
   readonly cwd?: string
+  /** 会话级 MCP 服务器白名单；缺省表示继承默认选择 */
+  readonly mcpServers?: readonly string[]
   /** 拉起本次会话的进程 PID */
   readonly pid?: number
 }
@@ -101,6 +107,7 @@ export function parseDeepLink(url: string): DeepLinkTarget | undefined {
 
     const agent = params.get('agent') ?? undefined
     const cwd = params.get('cwd')?.trim() || undefined
+    const mcpServers = parseMcpServersParam(params.get('mcp'))
     const pid = parsePidParam(params.get('pid'))
     if (params.has('pid') && pid === undefined) return undefined
     return {
@@ -109,6 +116,7 @@ export function parseDeepLink(url: string): DeepLinkTarget | undefined {
       autoSubmit: parseAgentAutoSubmit(params),
       ...(agent ? { agent } : {}),
       ...(cwd ? { cwd } : {}),
+      ...(mcpServers ? { mcpServers } : {}),
       ...(pid !== undefined ? { pid } : {}),
     }
   }
@@ -163,6 +171,9 @@ export function deepLinkToOpenerTarget(target: DeepLinkTarget): string {
     if (!target.autoSubmit) params.set('autoSubmit', 'false')
     if (target.agent) params.set('agent', target.agent)
     if (target.cwd) params.set('cwd', target.cwd)
+    if (target.mcpServers && target.mcpServers.length > 0) {
+      params.set('mcp', target.mcpServers.join(','))
+    }
     if (target.pid !== undefined) params.set('pid', String(target.pid))
     return `agent:new?${params.toString()}`
   }
@@ -184,6 +195,7 @@ export function parseAgentPromptOpenerTarget(
   if (!prompt || prompt.trim().length === 0) return undefined
   const agent = params.get('agent') ?? undefined
   const cwd = params.get('cwd')?.trim() || undefined
+  const mcpServers = parseMcpServersParam(params.get('mcp'))
   const pid = parsePidParam(params.get('pid'))
   if (params.has('pid') && pid === undefined) return undefined
   return {
@@ -192,6 +204,7 @@ export function parseAgentPromptOpenerTarget(
     autoSubmit: parseAgentAutoSubmit(params),
     ...(agent ? { agent } : {}),
     ...(cwd ? { cwd } : {}),
+    ...(mcpServers ? { mcpServers } : {}),
     ...(pid !== undefined ? { pid } : {}),
   }
 }
@@ -231,6 +244,20 @@ function splitLocation(raw: string): { path: string; line?: number; col?: number
 function parseAgentAutoSubmit(params: URLSearchParams): boolean {
   const explicit = parseBooleanParam(params.get('autoSubmit'))
   return explicit ?? true
+}
+
+/** Split a `mcp=a, b ,a` param into a deduped name list; absent/blank → undefined. */
+function parseMcpServersParam(raw: string | null): readonly string[] | undefined {
+  if (raw === null) return undefined
+  const names = [
+    ...new Set(
+      raw
+        .split(',')
+        .map((n) => n.trim())
+        .filter((n) => n.length > 0),
+    ),
+  ]
+  return names.length > 0 ? names : undefined
 }
 
 function parsePidParam(raw: string | null): number | undefined {

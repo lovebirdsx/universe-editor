@@ -135,6 +135,32 @@ describe('parseDeepLink — agent links', () => {
     expect(parseDeepLink('universe-editor://agent/new?prompt=%20%20')).toBeUndefined()
     expect(parseDeepLink('universe-editor://agent/new?prompt=hi&pid=abc')).toBeUndefined()
   })
+
+  it('parses an MCP server whitelist', () => {
+    expect(parseDeepLink('universe-editor://agent/new?prompt=hi&mcp=fs,docs')).toEqual({
+      kind: 'agentPrompt',
+      prompt: 'hi',
+      autoSubmit: true,
+      mcpServers: ['fs', 'docs'],
+    })
+  })
+
+  it('trims, dedupes and drops blank MCP server names', () => {
+    expect(parseDeepLink('universe-editor://agent/new?prompt=hi&mcp=%20fs%20,,%20fs%20')).toEqual({
+      kind: 'agentPrompt',
+      prompt: 'hi',
+      autoSubmit: true,
+      mcpServers: ['fs'],
+    })
+  })
+
+  it('treats a blank mcp param as absent', () => {
+    expect(parseDeepLink('universe-editor://agent/new?prompt=hi&mcp=%20,%20')).toEqual({
+      kind: 'agentPrompt',
+      prompt: 'hi',
+      autoSubmit: true,
+    })
+  })
 })
 
 describe('parseDeepLink — swarm links', () => {
@@ -224,6 +250,22 @@ describe('deepLinkToOpenerTarget', () => {
       cwd: 'D:/repo/quest zone',
     })
   })
+
+  it('round-trips an agent prompt target with an MCP whitelist', () => {
+    const rendered = deepLinkToOpenerTarget({
+      kind: 'agentPrompt',
+      prompt: 'Review this',
+      autoSubmit: true,
+      mcpServers: ['fs', 'docs'],
+    })
+    expect(rendered).toBe('agent:new?prompt=Review+this&mcp=fs%2Cdocs')
+    expect(parseAgentPromptOpenerTarget(rendered)).toEqual({
+      kind: 'agentPrompt',
+      prompt: 'Review this',
+      autoSubmit: true,
+      mcpServers: ['fs', 'docs'],
+    })
+  })
 })
 
 describe('parseAgentPromptOpenerTarget', () => {
@@ -258,6 +300,20 @@ describe('parseAgentPromptOpenerTarget', () => {
     expect(parseAgentPromptOpenerTarget('agent:new')).toBeUndefined()
     expect(parseAgentPromptOpenerTarget('agent:new?prompt=%20')).toBeUndefined()
     expect(parseAgentPromptOpenerTarget('agent:new?prompt=hi&pid=abc')).toBeUndefined()
+  })
+
+  it('parses an MCP whitelist in the renderer-facing target', () => {
+    expect(parseAgentPromptOpenerTarget('agent:new?prompt=hi&mcp=fs%2C%20docs')).toEqual({
+      kind: 'agentPrompt',
+      prompt: 'hi',
+      autoSubmit: true,
+      mcpServers: ['fs', 'docs'],
+    })
+    expect(parseAgentPromptOpenerTarget('agent:new?prompt=hi&mcp=%20')).toEqual({
+      kind: 'agentPrompt',
+      prompt: 'hi',
+      autoSubmit: true,
+    })
   })
 })
 

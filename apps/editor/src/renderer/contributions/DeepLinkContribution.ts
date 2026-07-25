@@ -11,7 +11,10 @@
  *  anyone can craft a deep link, so by default the prompt only lands in the
  *  input box for the user to review. A `pid` parameter is forwarded to the
  *  MCP bridge as a one-shot, in-memory env injection on the created session
- *  (never written into the persisted `acp.mcpServers`).
+ *  (never written into the persisted `acp.mcpServers`). A `mcp` parameter pins
+ *  the session to the named MCP server whitelist; names that don't exist in
+ *  the merged pool (`acp.mcpServers` + project `.mcp.json`) are reported to
+ *  the user and skipped — the session is still created without them.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -20,9 +23,12 @@ import {
   IEditorGroupsService,
   IInstantiationService,
   ILayoutService,
+  INotificationService,
   IOpenerService,
   IViewsService,
   PartId,
+  Severity,
+  localize,
 } from '@universe-editor/platform'
 import type { IWorkbenchContribution } from '@universe-editor/platform'
 import {
@@ -57,6 +63,7 @@ export class DeepLinkContribution extends Disposable implements IWorkbenchContri
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @ILayoutService private readonly _layout: ILayoutService,
     @IViewsService private readonly _views: IViewsService,
+    @INotificationService private readonly _notification: INotificationService,
   ) {
     super()
     const ipc = (window as { ipc?: IpcBridge }).ipc
@@ -94,8 +101,12 @@ export class DeepLinkContribution extends Disposable implements IWorkbenchContri
     console.log(
       `[DeepLinkContribution] opening agent deep link: agent=${agentId} autoSubmit=${autoSubmit} (requested=${target.autoSubmit})`,
     )
+    if (target.mcpServers !== undefined) {
+      await this._warnMissingMcpServers(target.mcpServers)
+    }
     const options: IAcpCreateSessionOptions = {
       ...(target.cwd !== undefined ? { cwd: target.cwd } : {}),
+      ...(target.mcpServers !== undefined ? { mcpServerNames: [...target.mcpServers] } : {}),
       ...(target.pid !== undefined
         ? {
             mcpServerEnv: {
@@ -114,6 +125,30 @@ export class DeepLinkContribution extends Disposable implements IWorkbenchContri
       AcpPromptTextInbox.deposit(session.id, target.prompt)
       this._widgets.focusSessionInput(session.id)
     }
+  }
+
+  /**
+   * Report the whitelist names that don't resolve to a configured MCP server.
+   * Refreshes the pool first so a `.mcp.json` just written by the tool that
+   * launched the link is honored; the session itself is still created (the
+   * wire resolver skips unknown names on its own).
+   */
+  private async _warnMissingMcpServers(names: readonly string[]): Promise<void> {
+    await this._sessions.refreshMcpServerDefinitions()
+    const pool = new Set(this._sessions.mcpServerDefinitions.get().map((d) => d.name))
+    const missing = names.filter((n) => !pool.has(n))
+    if (missing.length === 0) return
+    console.warn(
+      `[DeepLinkContribution] deep link MCP servers not configured: ${missing.join(', ')}`,
+    )
+    this._notification.notify({
+      severity: Severity.Warning,
+      message: localize(
+        'acp.deepLink.mcpMissing',
+        'The deep link requested MCP servers that are not configured: {names}. The session was created without them.',
+        { names: missing.join(', ') },
+      ),
+    })
   }
 
   private async _revealAgentSession(sessionId: string): Promise<void> {

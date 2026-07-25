@@ -1247,6 +1247,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.find.open': '在会话中查找 (Ctrl+F)',
   'acp.find.placeholder': '查找',
   'acp.find.previous': '上一个匹配项 (Shift+F3)',
+  'acp.deepLink.mcpMissing':
+    '深链接请求了未配置的 MCP 服务器：{names}。会话已在不包含这些服务器的情况下创建。',
   'acp.mcp.none': '此会话没有配置 MCP 服务器。',
   'acp.mcp.noSession': '没有活跃的 Agent 会话。',
   'acp.mcp.openSettings': '配置 MCP 服务器',
