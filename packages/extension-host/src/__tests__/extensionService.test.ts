@@ -9,6 +9,7 @@ import type {
   IMainThreadEditor,
   IMainThreadCommands,
   IMainThreadScm,
+  IMainThreadTimeline,
   IMainThreadWindow,
 } from '@universe-editor/extensions-common'
 import { ExtensionService } from '../extensionService.js'
@@ -88,6 +89,12 @@ const noopScm: IMainThreadScm = {
   $setInputBoxPlaceholder: () => Promise.resolve(),
 }
 
+const noopTimeline: IMainThreadTimeline = {
+  $registerTimelineProvider: () => Promise.resolve(),
+  $unregisterTimelineProvider: () => Promise.resolve(),
+  $emitTimelineChangeEvent: () => undefined,
+}
+
 function scanned(activationEvents: string[]): IScannedExtension {
   return {
     id: 'test.ext',
@@ -110,7 +117,13 @@ function scanned(activationEvents: string[]): IScannedExtension {
 describe('ExtensionService', () => {
   it('installs itself as the global API bridge', () => {
     const mt = recordingMainThread()
-    const service = new ExtensionService([scanned(['*'])], mt.impl, noopWindow, noopScm)
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+    )
     expect((globalThis as Record<string, unknown>).__universeExtensionHostBridge__).toBe(service)
   })
 
@@ -121,6 +134,7 @@ describe('ExtensionService', () => {
       mt.impl,
       noopWindow,
       noopScm,
+      noopTimeline,
     )
     const dtos = service.getContributions()
     expect(dtos).toHaveLength(1)
@@ -135,6 +149,7 @@ describe('ExtensionService', () => {
       mt.impl,
       noopWindow,
       noopScm,
+      noopTimeline,
     )
 
     await service.activateByEvent('onCommand:unrelated')
@@ -152,6 +167,7 @@ describe('ExtensionService', () => {
       mt.impl,
       noopWindow,
       noopScm,
+      noopTimeline,
     )
 
     await service.activateByEvent('onCommand:test.cmd')
@@ -167,6 +183,7 @@ describe('ExtensionService', () => {
       mt.impl,
       noopWindow,
       noopScm,
+      noopTimeline,
     )
 
     await service.activateByEvent('onCommand:test.cmd')
@@ -176,7 +193,13 @@ describe('ExtensionService', () => {
 
   it('a wildcard extension activates on any event', async () => {
     const mt = recordingMainThread()
-    const service = new ExtensionService([scanned(['*'])], mt.impl, noopWindow, noopScm)
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+    )
 
     await service.activateByEvent('onStartupFinished')
     expect(mt.registered).toEqual(['test.cmd'])
@@ -213,7 +236,7 @@ describe('ExtensionService', () => {
       },
     }
     const mt = recordingMainThread()
-    const service = new ExtensionService([ext], mt.impl, noopWindow, noopScm)
+    const service = new ExtensionService([ext], mt.impl, noopWindow, noopScm, noopTimeline)
     await service.activateByEvent('*')
 
     service.dispose()
@@ -229,7 +252,13 @@ describe('ExtensionService', () => {
 
   it('forwards an unknown command to the renderer', async () => {
     const mt = recordingMainThread()
-    const service = new ExtensionService([scanned(['*'])], mt.impl, noopWindow, noopScm)
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+    )
     await expect(service.executeCommand('_workbench.openDiff', [{ x: 1 }])).resolves.toBe(
       'forwarded:_workbench.openDiff',
     )
@@ -243,6 +272,7 @@ describe('ExtensionService', () => {
       mt.impl,
       noopWindow,
       noopScm,
+      noopTimeline,
       '/repo/root',
     )
     expect(service.getWorkspaceRoot()).toBe('/repo/root')
@@ -250,7 +280,13 @@ describe('ExtensionService', () => {
 
   it('reports no workspace root when none was provided', () => {
     const mt = recordingMainThread()
-    const service = new ExtensionService([scanned(['*'])], mt.impl, noopWindow, noopScm)
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+    )
     expect(service.getWorkspaceRoot()).toBeUndefined()
   })
 })
@@ -278,6 +314,7 @@ describe('ExtensionService active editor mirror', () => {
       mt.impl,
       noopWindow,
       noopScm,
+      noopTimeline,
       undefined,
       undefined,
       undefined,

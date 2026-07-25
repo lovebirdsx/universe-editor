@@ -55,6 +55,7 @@ import { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesSe
 import { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 import { getCurrentLocale } from '../../../shared/i18n/availableLocales.js'
 import { IScmService } from './ScmService.js'
+import { ITimelineService } from '../timeline/TimelineService.js'
 import { IWebviewService } from './WebviewService.js'
 import { IExtensionEnablementService } from './ExtensionEnablementService.js'
 import { HostConnection, type HostConnectionDeps } from './HostConnection.js'
@@ -155,6 +156,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @IStatusBarService private readonly _statusBar: IStatusBarService,
     @IDialogService private readonly _dialog: IDialogService,
     @IScmService private readonly _scm: IScmService,
+    @ITimelineService private readonly _timeline: ITimelineService,
     @IWebviewService private readonly _webview: IWebviewService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IFileService private readonly _files: IFileService,
@@ -258,6 +260,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       storage: this._storage,
       webview: this._webview,
       scm: this._scm,
+      timeline: this._timeline,
       languageFeatures: this._languageFeatures,
       editorService: this._editorService,
       uriIdentity: this._uriIdentity,
@@ -431,9 +434,10 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       this._starting = undefined
     }
     // Fire-and-forget $unregisterSourceControl messages from the dying host may
-    // be lost when the IPC channel closes. Reset SCM + webview state eagerly so
-    // the view doesn't show stale providers from the previous workspace.
+    // be lost when the IPC channel closes. Reset SCM + timeline + webview state
+    // eagerly so the views don't show stale providers from the previous workspace.
     this._scm.resetSourceControls()
+    this._timeline.reset()
     this._webview.reset(conn.kind)
     conn.dispose()
   }

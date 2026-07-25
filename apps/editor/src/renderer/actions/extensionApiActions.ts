@@ -28,8 +28,7 @@ import {
 } from '../services/editor/revealEditorPosition.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 
-/** Backs `workspace.getConfiguration(section).get(key, default)` for extensions. */
-export class GetConfigurationAction extends Action2 {
+/** Backs `workspace.getConfiguration(section).get(key, default)` for extensions. */ export class GetConfigurationAction extends Action2 {
   static readonly ID = '_workbench.getConfiguration'
 
   constructor() {
@@ -128,6 +127,24 @@ export class OpenFileAtAction extends Action2 {
     const uri = URI.file(fsPath)
     const input = revealExistingOrOpen(accessor, groups, uri)
     void revealSelectionInInput(input, { startLineNumber: line + 1, startColumn: column + 1 })
+  }
+}
+
+/**
+ * Writes text to the OS clipboard. Backs extension "copy" commands (e.g. the Git
+ * extension's timeline Copy Commit ID / Message) — the extension host has no
+ * clipboard API, so it routes through this renderer command.
+ */
+export class WriteClipboardAction extends Action2 {
+  static readonly ID = '_workbench.writeClipboard'
+
+  constructor() {
+    super({ id: WriteClipboardAction.ID, title: 'Write Clipboard' })
+  }
+
+  override async run(_accessor: ServicesAccessor, text: unknown): Promise<void> {
+    if (typeof text !== 'string' || text === '') return
+    await navigator.clipboard.writeText(text)
   }
 }
 

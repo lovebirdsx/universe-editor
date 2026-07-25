@@ -29,6 +29,7 @@ import {
 } from './gitGraphSource.js'
 import * as gga from './gitGraphActions.js'
 import { getBlame } from './blameSource.js'
+import { createGitTimelineCommands, GitTimelineProvider } from './timelineProvider.js'
 import { notifyGitFailure, setGitLogShower } from './gitError.js'
 import { localize } from './nls.js'
 import type { GitExecResult } from './gitService.js'
@@ -106,6 +107,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
   }
   statusBar.refresh()
   for (const repo of mgr.all) void repo.refresh({ fetch: true, silent: true })
+
+  // Timeline — file-history entries for the Explorer Timeline view. One provider
+  // serves every discovered repo; each repo refresh invalidates the view's pages.
+  const timelineProvider = new GitTimelineProvider(mgr, log)
+  for (const repo of mgr.all) context.subscriptions.push(timelineProvider.trackRepo(repo))
+  context.subscriptions.push(workspace.registerTimelineProvider(['file'], timelineProvider))
+  context.subscriptions.push(...createGitTimelineCommands(mgr, log))
 
   // The repository the Git Graph view currently targets. Defaults to the
   // status-bar repo; `git-graph.setRepo` switches it to another discovered repo.

@@ -12,16 +12,20 @@ import {
   IFileService,
   IHostService,
   IInstantiationService,
+  ILayoutService,
+  IViewsService,
   IWorkspaceService,
   MenuId,
   localize,
   localize2,
+  PartId,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IRecentFilesService } from '../services/recentFiles/recentFilesService.js'
 import { IQuickAccessController } from '../services/quickInput/QuickAccessController.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { ITimelineService } from '../services/timeline/TimelineService.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { confirmLargeFile } from '../services/editor/largeFileGuard.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
@@ -150,6 +154,34 @@ export function activeEditorSelectionText(editorService: IEditorService): string
   if (!selection || selection.isEmpty()) return undefined
   const text = model.getValueInRange(selection).split('\n', 1)[0]?.trim()
   return text ? text : undefined
+}
+
+/**
+ * Pin a file in the Timeline view (VSCode `files.openTimeline`): reveal the
+ * Explorer container in the Side Bar and point the timeline at the resource,
+ * stopping the view's follow-the-active-editor behaviour.
+ */
+export class OpenTimelineAction extends Action2 {
+  static readonly ID = 'files.openTimeline'
+  constructor() {
+    super({
+      id: OpenTimelineAction.ID,
+      title: localize2('action.openTimeline.title', 'Open Timeline'),
+      category: localize2('command.category.file', 'File'),
+      f1: false,
+    })
+  }
+  override run(accessor: ServicesAccessor, ...args: unknown[]): void {
+    const arg = args[0] as ITargetArg | undefined
+    const resource = reviveUri(arg?.resource ?? arg?.target ?? null)
+    if (!resource) return
+    const layout = accessor.get(ILayoutService)
+    const views = accessor.get(IViewsService)
+    const timeline = accessor.get(ITimelineService)
+    if (!layout.getVisible(PartId.SideBar)) layout.setVisible(PartId.SideBar, true)
+    views.openViewContainer('workbench.view.explorer')
+    timeline.pinUri(resource)
+  }
 }
 
 export class RefreshExplorerAction extends Action2 {

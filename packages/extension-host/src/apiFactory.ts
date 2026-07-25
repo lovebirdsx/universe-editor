@@ -46,6 +46,7 @@ import type {
   TextDocumentChangeEvent,
   TextEditor,
   TextEditorDecorationType,
+  TimelineProvider,
   TypeDefinitionProvider,
   WillSaveTextDocumentEvent,
   WorkspaceSymbolProvider,
@@ -79,6 +80,7 @@ export interface IExtensionHostBridge {
   showInputBox(options?: InputBoxOptions): Promise<string | undefined>
   createStatusBarItem(alignment: StatusBarAlignment, priority: number): StatusBarItem
   createSourceControl(id: string, label: string, rootUri?: string): SourceControl
+  registerTimelineProvider(scheme: string[], provider: TimelineProvider): Disposable
   getActiveTextEditor(): Promise<TextEditor | undefined>
   readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined>
   createTextEditorDecorationType(options: DecorationRenderOptions): TextEditorDecorationType

@@ -43,6 +43,7 @@ import {
   type IExtHostExtensions,
   type IExtHostLanguages,
   type IExtHostScm,
+  type IExtHostTimeline,
   type IExtHostWebviews,
   type IExtensionActivationErrorDto,
 } from '@universe-editor/extensions-common'
@@ -62,6 +63,7 @@ import { MainThreadStorage } from './MainThreadStorage.js'
 import { MainThreadWindow } from './MainThreadWindow.js'
 import type { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import type { IScmService } from './ScmService.js'
+import type { ITimelineService } from '../timeline/TimelineService.js'
 import type { IWebviewService } from './WebviewService.js'
 import type { IAiModelService } from '@universe-editor/platform'
 
@@ -75,6 +77,7 @@ export interface HostConnectionDeps {
   readonly pathPolicy: IAcpPathPolicy
   readonly commandService: ICommandService
   readonly scm: IScmService
+  readonly timeline: ITimelineService
   readonly languageFeatures: ILanguageFeaturesService
   readonly editorService: IEditorService
   /** Wired with editorService so MainThreadEditor can compare resources. */
@@ -167,6 +170,14 @@ export class HostConnection extends Disposable {
       ProxyChannel.toService<IExtHostScm>(client.getChannel(ExtHostChannels.extHostScm)),
     )
     server.registerChannel(ExtHostChannels.mainThreadScm, ProxyChannel.fromService(deps.scm))
+
+    deps.timeline.setExtHost(
+      ProxyChannel.toService<IExtHostTimeline>(client.getChannel(ExtHostChannels.extHostTimeline)),
+    )
+    server.registerChannel(
+      ExtHostChannels.mainThreadTimeline,
+      ProxyChannel.fromService(deps.timeline),
+    )
 
     this.languages = ProxyChannel.toService<IExtHostLanguages>(
       client.getChannel(ExtHostChannels.extHostLanguages),

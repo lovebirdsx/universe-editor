@@ -55,6 +55,7 @@ import {
 } from '../ActivityBarBadgeContributions.js'
 import { ActiveRepoSyncContribution } from '../ActiveRepoSyncContribution.js'
 import { OutlineViewStateContribution } from '../OutlineViewStateContribution.js'
+import { TimelineViewStateContribution } from '../TimelineViewStateContribution.js'
 import { HistoryContribution } from '../HistoryContribution.js'
 import { StartupFileContribution } from '../StartupFileContribution.js'
 import { DeepLinkContribution } from '../DeepLinkContribution.js'
@@ -445,6 +446,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.outlineViewState',
   OutlineViewStateContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Register the Timeline view's settings + hydrate/persist its Filter-by-Source
+// exclusion set (workspace storage). Same phase/shape as the outline state.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.timelineViewState',
+  TimelineViewStateContribution,
   WorkbenchPhase.AfterRestore,
 )
 

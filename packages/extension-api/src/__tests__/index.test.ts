@@ -93,6 +93,7 @@ const NAMESPACE_METHODS: Record<string, readonly string[]> = {
     'onDidChangeTextDocument',
     'onDidCloseTextDocument',
     'onWillSaveTextDocument',
+    'registerTimelineProvider',
   ],
 }
 

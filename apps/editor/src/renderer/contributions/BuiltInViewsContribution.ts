@@ -17,6 +17,8 @@ import { SearchView } from '../workbench/search/SearchView.js'
 import { SearchViewToolbar } from '../workbench/search/SearchViewToolbar.js'
 import { ScmView } from '../workbench/scm/ScmView.js'
 import { ScmViewToolbar } from '../workbench/scm/ScmViewToolbar.js'
+import { TimelineView } from '../workbench/timeline/TimelineView.js'
+import { TimelineViewToolbar } from '../workbench/timeline/TimelineViewToolbar.js'
 import { SessionChangesView } from '../workbench/agents/SessionChangesView.js'
 import { SessionChangesViewToolbar } from '../workbench/agents/SessionChangesViewToolbar.js'
 import { OutputView } from '../workbench/panel/output/OutputView.js'
@@ -40,6 +42,20 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
         },
         ExplorerView,
         ExplorerViewToolbar,
+      ),
+    )
+
+    this._register(
+      registerViewWithComponent(
+        {
+          id: 'workbench.view.timeline.main',
+          name: localize('view.timeline', 'Timeline'),
+          containerId: 'workbench.view.explorer',
+          icon: 'history',
+          order: 2,
+        },
+        TimelineView,
+        TimelineViewToolbar,
       ),
     )
 

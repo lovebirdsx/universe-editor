@@ -51,6 +51,7 @@ import {
   type TextDocument,
   type TextEditor,
   type TextEditorDecorationType,
+  type TimelineProvider,
   type TypeDefinitionProvider,
   type UriComponents,
   type WorkspaceSymbolProvider,
@@ -73,6 +74,9 @@ import {
   type IMainThreadLanguages,
   type IMainThreadOutput,
   type IMainThreadScm,
+  type IMainThreadTimeline,
+  type ITimelineDto,
+  type ITimelineOptionsDto,
   type IMainThreadWindow,
   type IMainThreadAi,
   type IMainThreadStorage,
@@ -108,6 +112,7 @@ import type {
 import type { IScannedExtension } from './extensionScanner.js'
 import { installApiBridge, type IExtensionHostBridge } from './apiFactory.js'
 import { HostSourceControl } from './hostScm.js'
+import { ExtHostTimelineRegistry } from './hostTimeline.js'
 import { HostWebviewManager } from './hostWebviews.js'
 import { HostAi } from './hostAi.js'
 import { ExtHostDocuments } from './hostDocuments.js'
@@ -141,6 +146,7 @@ export class ExtensionService implements IExtensionHostBridge {
   private readonly _activation: ExtensionActivationService
   private readonly _documents = new ExtHostDocuments()
   private readonly _sourceControls = new Map<number, HostSourceControl>()
+  private readonly _timelines: ExtHostTimelineRegistry
   private readonly _webviews?: HostWebviewManager
   private _statusBarHandle = 0
   private _scmHandle = 0
@@ -168,6 +174,7 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _mainThreadCommands: IMainThreadCommands,
     private readonly _mainThreadWindow: IMainThreadWindow,
     private readonly _mainThreadScm: IMainThreadScm,
+    private readonly _mainThreadTimeline: IMainThreadTimeline,
     private readonly _workspaceRoot?: string,
     private readonly _mainThreadFs?: IMainThreadFs,
     private readonly _mainThreadOutput?: IMainThreadOutput,
@@ -181,6 +188,7 @@ export class ExtensionService implements IExtensionHostBridge {
   ) {
     this._commands = new ExtensionCommandRegistry(_mainThreadCommands)
     this._languageRegistry = new LanguageProviderRegistry(() => this._languages(), this._documents)
+    this._timelines = new ExtHostTimelineRegistry(_mainThreadTimeline)
     this._activation = new ExtensionActivationService(
       _extensions,
       () => this._trusted,
@@ -308,6 +316,21 @@ export class ExtensionService implements IExtensionHostBridge {
     this._sourceControls.set(handle, sc)
     void this._mainThreadScm.$registerSourceControl(handle, id, label, rootUri)
     return sc
+  }
+
+  // --- IExtensionHostBridge: timeline ---
+
+  registerTimelineProvider(scheme: string[], provider: TimelineProvider): Disposable {
+    return this._timelines.registerTimelineProvider(scheme, provider)
+  }
+
+  /** IExtHostTimeline.$provideTimeline */
+  provideTimeline(
+    handle: number,
+    uri: string,
+    options: ITimelineOptionsDto,
+  ): Promise<ITimelineDto | undefined> {
+    return this._timelines.provideTimeline(handle, uri, options)
   }
 
   // --- IExtensionHostBridge: workspace ---
@@ -816,6 +839,7 @@ export class ExtensionService implements IExtensionHostBridge {
    */
   dispose(): void {
     this._webviews?.dispose()
+    this._timelines.dispose()
     this._activation.disposeAll()
   }
 }

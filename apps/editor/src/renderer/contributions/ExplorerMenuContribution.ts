@@ -109,6 +109,15 @@ export class ExplorerMenuContribution extends Disposable implements IWorkbenchCo
 
     this._register(
       MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+        command: 'files.openTimeline',
+        when: 'timelineHasProvider && !explorerResourceIsFolder',
+        group: '4_timeline',
+        order: 1,
+      }),
+    )
+
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
         command: 'workbench.files.action.copyName',
         group: '4_copy',
         order: 1,

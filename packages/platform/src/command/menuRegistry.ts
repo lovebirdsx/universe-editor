@@ -30,6 +30,8 @@ export const enum MenuId {
   ScmResourceFolderContext = 'scm/resourceFolder/context',
   /** Inline actions rendered next to the SCM commit input box. */
   ScmInputBox = 'scm/inputBox',
+  /** Timeline view item right-click menu; `when` gates on the `timelineItem` context key. */
+  TimelineItemContext = 'timeline/item/context',
   /** Per-view title-bar actions, resolved by a `view == <viewId>` clause. */
   ViewTitle = 'view/title',
   // Title-bar menubar dropdowns

@@ -24,6 +24,7 @@ import {
   type IExtHostExtensions,
   type IExtHostLanguages,
   type IExtHostScm,
+  type IExtHostTimeline,
   type IExtHostWebviews,
   type IMainThreadAi,
   type IMainThreadCommands,
@@ -32,6 +33,7 @@ import {
   type IMainThreadLanguages,
   type IMainThreadOutput,
   type IMainThreadScm,
+  type IMainThreadTimeline,
   type IMainThreadWebviews,
   type IMainThreadWindow,
   type IMainThreadStorage,
@@ -98,6 +100,9 @@ const mainThreadWindow = ProxyChannel.toService<IMainThreadWindow>(
 )
 const mainThreadScm = ProxyChannel.toService<IMainThreadScm>(
   client.getChannel(ExtHostChannels.mainThreadScm),
+)
+const mainThreadTimeline = ProxyChannel.toService<IMainThreadTimeline>(
+  client.getChannel(ExtHostChannels.mainThreadTimeline),
 )
 const mainThreadFs = ProxyChannel.toService<IMainThreadFs>(
   client.getChannel(ExtHostChannels.mainThreadFs),
@@ -252,6 +257,10 @@ const extHostWebviews: IExtHostWebviews = {
     ;(await serviceReady).disposeWebviewPanel(panelHandle)
   },
 }
+const extHostTimeline: IExtHostTimeline = {
+  $provideTimeline: async (handle, uri, options) =>
+    (await serviceReady).provideTimeline(handle, uri, options),
+}
 
 server.registerChannel(ExtHostChannels.extHostCommands, ProxyChannel.fromService(extHostCommands))
 server.registerChannel(
@@ -263,6 +272,7 @@ server.registerChannel(ExtHostChannels.extHostLanguages, ProxyChannel.fromServic
 server.registerChannel(ExtHostChannels.extHostDocuments, ProxyChannel.fromService(extHostDocuments))
 server.registerChannel(ExtHostChannels.extHostEditor, ProxyChannel.fromService(extHostEditor))
 server.registerChannel(ExtHostChannels.extHostWebviews, ProxyChannel.fromService(extHostWebviews))
+server.registerChannel(ExtHostChannels.extHostTimeline, ProxyChannel.fromService(extHostTimeline))
 
 async function main(): Promise<void> {
   const locale = process.env.UNIVERSE_DISPLAY_LOCALE || undefined
@@ -317,6 +327,7 @@ async function main(): Promise<void> {
       mainThreadCommands,
       mainThreadWindow,
       mainThreadScm,
+      mainThreadTimeline,
       workspaceRoot,
       mainThreadFs,
       mainThreadOutput,

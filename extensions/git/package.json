@@ -70,7 +70,10 @@
       { "command": "git.submoduleUpdateInit", "title": "%git.command.submoduleUpdateInit.title%", "category": "Git", "icon": "git-submodule" },
       { "command": "git.submoduleSync", "title": "%git.command.submoduleSync.title%", "category": "Git", "icon": "git-submodule" },
       { "command": "git.blame.toggleEditorDecoration", "title": "%git.command.blame.toggleEditorDecoration.title%", "category": "Git" },
-      { "command": "git.blame.toggleStatusBarItem", "title": "%git.command.blame.toggleStatusBarItem.title%", "category": "Git" }
+      { "command": "git.blame.toggleStatusBarItem", "title": "%git.command.blame.toggleStatusBarItem.title%", "category": "Git" },
+      { "command": "git.timeline.openDiff", "title": "%git.command.timeline.openDiff.title%", "category": "Git" },
+      { "command": "git.timeline.copyCommitId", "title": "%git.command.timeline.copyCommitId.title%", "category": "Git" },
+      { "command": "git.timeline.copyCommitMessage", "title": "%git.command.timeline.copyCommitMessage.title%", "category": "Git" }
     ],
     "submenus": [
       { "id": "git.commitMenu", "label": "%git.submenu.commit.label%", "icon": "git-commit" },
@@ -180,6 +183,11 @@
       ],
       "editor/title": [
         { "command": "git.openChange", "when": "resourceScmProvider =~ /\\|git\\|/ && scmActiveResourceHasChanges && !isInDiffEditor", "group": "navigation@2", "icon": "compare-changes" }
+      ],
+      "timeline/item/context": [
+        { "command": "git.timeline.openDiff", "when": "timelineItem == git:file:commit", "group": "1_diff@1" },
+        { "command": "git.timeline.copyCommitId", "when": "timelineItem == git:file:commit", "group": "2_copy@1" },
+        { "command": "git.timeline.copyCommitMessage", "when": "timelineItem == git:file:commit", "group": "2_copy@2" }
       ]
     },
     "keybindings": [
@@ -268,6 +276,11 @@
           "type": "boolean",
           "default": false,
           "description": "%git.config.blame.ignoreWhitespace.description%"
+        },
+        "git.timeline.showUncommitted": {
+          "type": "boolean",
+          "default": true,
+          "description": "%git.config.timeline.showUncommitted.description%"
         }
       }
     }

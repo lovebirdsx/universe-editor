@@ -105,6 +105,14 @@
   扩展可通过该方法写入用户级配置；宿主经内部命令 `_workbench.updateConfiguration`
   转发到 renderer 的配置服务。纯新增方法，不改既有签名。
 
+- `0.7.0` — 向后兼容的新增（minor）：timeline 表面（对等 VSCode proposed `timeline` API）：
+  `workspace.registerTimelineProvider(scheme, provider)` + `TimelineProvider` /
+  `TimelineItem` / `Timeline` / `TimelineOptions` / `TimelineChangeEvent`（`src/timeline.ts`）。
+  扩展为给定 URI scheme 注册文件历史 provider，工作台内置 Timeline 视图对活动文件
+  分页拉取条目并执行条目 `command`（通常打开 diff）；条目 `contextValue` 经
+  `timelineItem` context key 暴露给 `timeline/item/context` 菜单贡献点的 `when` 子句。
+  纯新增方法与类型，不改既有签名。
+
 ## 激活事件清单（activation events）
 
 扩展在 `package.json` 的 `activationEvents` 声明唤醒时机。手写字符串易拼错（拼错则

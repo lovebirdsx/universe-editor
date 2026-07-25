@@ -49,6 +49,9 @@
   "git.command.submoduleSync.title": "同步子模块 URL",
   "git.command.blame.toggleEditorDecoration.title": "切换 Git Blame 编辑器修饰",
   "git.command.blame.toggleStatusBarItem.title": "切换 Git Blame 状态栏项",
+  "git.command.timeline.openDiff.title": "打开比较",
+  "git.command.timeline.copyCommitId.title": "复制提交 ID",
+  "git.command.timeline.copyCommitMessage.title": "复制提交消息",
 
   "git.submenu.commit.label": "提交",
   "git.submenu.changes.label": "更改",
@@ -75,5 +78,6 @@
   "git.config.blame.editorDecoration.disableHover.description": "禁用指向内联 blame 注解时显示完整提交信息的悬停提示。",
   "git.config.blame.statusBarItem.enabled.description": "在状态栏中显示光标所在行的 blame 信息。",
   "git.config.blame.statusBarItem.template.description": "状态栏 blame 信息项的模板。可用标记：${hash}、${hashShort}、${subject}、${authorName}、${authorEmail}、${authorDate}、${authorDateAgo}。",
-  "git.config.blame.ignoreWhitespace.description": "计算 blame 信息时忽略空白字符更改。"
+  "git.config.blame.ignoreWhitespace.description": "计算 blame 信息时忽略空白字符更改。",
+  "git.config.timeline.showUncommitted.description": "在时间线视图中显示文件未提交的更改条目。"
 }

@@ -66,6 +66,7 @@ Git 集成：提交、分支、GitGraph、Blame、冲突解决。
 - [分支与合并](./git/branches-and-merge.md)
 - [GitGraph 可视化](./git/git-graph.md)
 - [Blame 与历史](./git/blame-and-history.md)
+- [时间线（单文件历史）](./git/timeline.md)
 - [会话更改](./git/session-changes.md)
 - [冲突解决](./git/conflicts.md)
 

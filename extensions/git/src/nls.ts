@@ -73,6 +73,17 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'git.progress.deinitializingSubmodules': '正在反初始化子模块…',
   'git.worktree.busy':
     '无法删除工作区"{0}"：其文件夹正在使用中。请关闭在 {1} 上打开的所有编辑器窗口或终端后重试。',
+  // timelineProvider.ts
+  'git.timeline.providerLabel': 'Git 历史',
+  'git.timeline.uncommittedChanges': '未提交的更改',
+  'git.timeline.openComparison': '打开比较',
+  'git.timeline.secondsAgo': '{0} 秒前',
+  'git.timeline.minutesAgo': '{0} 分钟前',
+  'git.timeline.hoursAgo': '{0} 小时前',
+  'git.timeline.daysAgo': '{0} 天前',
+  'git.timeline.weeksAgo': '{0} 周前',
+  'git.timeline.monthsAgo': '{0} 个月前',
+  'git.timeline.yearsAgo': '{0} 年前',
   // gitError.ts
   'git.btn.openGitLog': '打开 Git 日志',
   'git.error.notFullyMerged': '该分支有未合并的提交——使用强制删除可丢弃这些提交',

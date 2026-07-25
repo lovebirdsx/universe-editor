@@ -155,6 +155,7 @@ import {
   IExtensionsWorkbenchService,
 } from './services/extensionsWorkbench/ExtensionsWorkbenchService.js'
 import { IScmService, ScmService } from './services/extensions/ScmService.js'
+import { ITimelineService, TimelineService } from './services/timeline/TimelineService.js'
 import {
   IScmDecorationsService,
   ScmDecorationsService,
@@ -574,6 +575,10 @@ async function bootstrapWorkbench(): Promise<void> {
   // ExtensionsContribution can inject it; it starts the host on an idle phase.
   const scmService = workbenchStore.add(new ScmService())
   services.set(IScmService, scmService)
+
+  // Timeline model (file-history providers from extensions); the built-in
+  // TimelineView renders it. Needs IContextKeyService (timelineHasProvider).
+  services.set(ITimelineService, workbenchStore.add(instantiation.createInstance(TimelineService)))
 
   // Git status decorations derived from the SCM model; colours Explorer rows and
   // editor tabs by file change state.

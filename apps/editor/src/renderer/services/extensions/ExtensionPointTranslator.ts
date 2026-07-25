@@ -55,6 +55,7 @@ const MENU_ID_BY_KEY: Readonly<Record<string, MenuId>> = {
   'scm/resourceGroup/context': MenuId.ScmResourceGroupContext,
   'scm/resourceFolder/context': MenuId.ScmResourceFolderContext,
   'scm/inputBox': MenuId.ScmInputBox,
+  'timeline/item/context': MenuId.TimelineItemContext,
 }
 
 /** Splits a `group@order` string (VSCode convention) into its parts. */

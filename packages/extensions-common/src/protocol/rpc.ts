@@ -74,6 +74,10 @@ export const ExtHostChannels = {
   mainThreadWebviews: 'mainThreadWebviews',
   /** Renderer → ext host: custom-editor resolution + webview message/lifecycle callbacks. */
   extHostWebviews: 'extHostWebviews',
+  /** Ext host → renderer: timeline provider registrations + change events feeding the built-in timeline view. */
+  mainThreadTimeline: 'mainThreadTimeline',
+  /** Renderer → ext host: timeline page requests routed to a plugin's registered providers. */
+  extHostTimeline: 'extHostTimeline',
 } as const
 
 export type ExtHostChannelName = (typeof ExtHostChannels)[keyof typeof ExtHostChannels]

@@ -49,6 +49,9 @@
   "git.command.submoduleSync.title": "Sync Submodule URLs",
   "git.command.blame.toggleEditorDecoration.title": "Toggle Git Blame Editor Decoration",
   "git.command.blame.toggleStatusBarItem.title": "Toggle Git Blame Status Bar Item",
+  "git.command.timeline.openDiff.title": "Open Comparison",
+  "git.command.timeline.copyCommitId.title": "Copy Commit ID",
+  "git.command.timeline.copyCommitMessage.title": "Copy Commit Message",
 
   "git.submenu.commit.label": "Commit",
   "git.submenu.changes.label": "Changes",
@@ -75,5 +78,6 @@
   "git.config.blame.editorDecoration.disableHover.description": "Disable the hover that shows full commit info when pointing at the inline blame annotation.",
   "git.config.blame.statusBarItem.enabled.description": "Show the blame information for the line the cursor is on in the status bar.",
   "git.config.blame.statusBarItem.template.description": "Template for the blame information status bar item. Tokens: ${hash}, ${hashShort}, ${subject}, ${authorName}, ${authorEmail}, ${authorDate}, ${authorDateAgo}.",
-  "git.config.blame.ignoreWhitespace.description": "Ignore whitespace changes when computing blame information."
+  "git.config.blame.ignoreWhitespace.description": "Ignore whitespace changes when computing blame information.",
+  "git.config.timeline.showUncommitted.description": "Show an entry for the uncommitted changes of the file in the timeline view."
 }

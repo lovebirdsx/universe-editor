@@ -31,6 +31,7 @@ import {
   OpenFolderFromExtensionAction,
   OpenFolderInNewWindowFromExtensionAction,
   UpdateConfigurationAction,
+  WriteClipboardAction,
 } from './extensionApiActions.js'
 import {
   ShowCommandsAction,
@@ -133,6 +134,7 @@ import {
   ClearRecentFilesAction,
   GoToFileAction,
   OpenFileAction,
+  OpenTimelineAction,
   OpenWithDefaultAppAction,
   RefreshExplorerAction,
 } from './fileOpenActions.js'
@@ -466,6 +468,7 @@ registerAction2(NewFolderAction)
 registerAction2(RenameFileAction)
 registerAction2(DeleteFileAction)
 registerAction2(OpenWithDefaultAppAction)
+registerAction2(OpenTimelineAction)
 registerAction2(RefreshExplorerAction)
 registerAction2(RevealInExplorerAction)
 registerAction2(RevealActiveFileInExplorerAction)
@@ -625,6 +628,7 @@ registerAction2(OpenFolderFromExtensionAction)
 registerAction2(OpenFolderInNewWindowFromExtensionAction)
 registerAction2(GetConfigurationAction)
 registerAction2(UpdateConfigurationAction)
+registerAction2(WriteClipboardAction)
 
 // Update
 registerAction2(CheckForUpdatesAction)

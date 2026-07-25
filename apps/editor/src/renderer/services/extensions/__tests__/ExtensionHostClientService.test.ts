@@ -34,6 +34,7 @@ import type { IExtensionManagementService } from '../../../../shared/ipc/extensi
 import type { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeaturesService.js'
 import type { IAcpPathPolicy } from '../../acp/acpPathPolicy.js'
 import type { IScmService } from '../ScmService.js'
+import type { ITimelineService } from '../../timeline/TimelineService.js'
 import type { IWebviewService } from '../WebviewService.js'
 import type { IExtensionEnablementService } from '../ExtensionEnablementService.js'
 
@@ -118,6 +119,7 @@ function makeServiceWith(
     {} as IStatusBarService,
     {} as IDialogService,
     { resetSourceControls } as unknown as IScmService,
+    { reset: vi.fn() } as unknown as ITimelineService,
     {
       setExtHost: vi.fn(),
       createMainThread: vi.fn(),

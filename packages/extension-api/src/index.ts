@@ -10,6 +10,7 @@
  */
 
 import type { ScmApi, SourceControl } from './scm.js'
+import type { TimelineProvider } from './timeline.js'
 import type { CustomEditorOptions, CustomReadonlyEditorProvider } from './webview.js'
 import type {
   CompletionItem,
@@ -38,6 +39,7 @@ import type {
 } from 'vscode-languageserver-types'
 
 export * from './scm.js'
+export * from './timeline.js'
 export * from './webview.js'
 
 /** Re-exported LSP types that appear in language-provider signatures, so plugin
@@ -77,7 +79,7 @@ export { FoldingRangeKind } from 'vscode-languageserver-types'
 /** Semantic version of this API surface. The host checks `engines.universe`.
  *  Bumping this is governed by COMPATIBILITY.md — keep it in sync with the
  *  package.json version and the contract test's frozen snapshot. */
-export const version = '0.6.0'
+export const version = '0.7.0'
 
 export interface Disposable {
   dispose(): void
@@ -380,6 +382,16 @@ export interface WorkspaceApi {
    * so `getConfiguration('git').get('autofetch', true)` reads `git.autofetch`.
    */
   getConfiguration(section?: string): WorkspaceConfiguration
+  /**
+   * Register a timeline provider for the given URI scheme(s) (e.g. `['file']`).
+   * The editor's built-in Timeline view queries it for the active file's history;
+   * menu contributions under `timeline/item/context` gate on an item's
+   * `contextValue` via the `timelineItem` context key.
+   */
+  registerTimelineProvider(
+    scheme: string | readonly string[],
+    provider: TimelineProvider,
+  ): Disposable
 }
 
 /** Kind of a filesystem entry returned by {@link FileSystemApi}. */
@@ -785,6 +797,7 @@ interface IExtensionHostBridge {
   showInputBox(options?: InputBoxOptions): Promise<string | undefined>
   createStatusBarItem(alignment: StatusBarAlignment, priority: number): StatusBarItem
   createSourceControl(id: string, label: string, rootUri?: string): SourceControl
+  registerTimelineProvider(scheme: string[], provider: TimelineProvider): Disposable
   getActiveTextEditor(): Promise<TextEditor | undefined>
   getWorkspaceRoot(): string | undefined
   isWorkspaceTrusted(): boolean
@@ -987,4 +1000,6 @@ export const workspace: WorkspaceApi = {
     update: (key: string, value: unknown): Promise<void> =>
       bridge().updateConfiguration(section, key, value),
   }),
+  registerTimelineProvider: (scheme, provider) =>
+    bridge().registerTimelineProvider(Array.isArray(scheme) ? [...scheme] : [scheme], provider),
 }

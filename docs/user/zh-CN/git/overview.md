@@ -75,6 +75,7 @@
 | 开分支、合并、工作树 | [分支与合并](./branches-and-merge.md) |
 | 可视化浏览提交历史 | [提交历史图（Git 图谱）](./git-graph.md) |
 | 查某一行是谁改的 | [追溯每行的来历（Blame）](./blame-and-history.md) |
+| 看单个文件的版本历史 | [时间线视图（单文件历史）](./timeline.md) |
 | 看 AI Agent 这次改了哪些文件 | [会话更改](./session-changes.md) |
 | 拉取 / 推送 / 储藏 / 解决冲突 | [拉取、推送、储藏与冲突](./conflicts.md) |
 

@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type {
   IMainThreadCommands,
   IMainThreadScm,
+  IMainThreadTimeline,
   IMainThreadWindow,
 } from '@universe-editor/extensions-common'
 import { ExtensionService } from '../extensionService.js'
@@ -23,6 +24,11 @@ const noopWindow: IMainThreadWindow = {
   $showInputBox: () => Promise.resolve(undefined),
   $setStatusBarEntry: () => Promise.resolve(),
   $disposeStatusBarEntry: () => Promise.resolve(),
+}
+const noopTimeline: IMainThreadTimeline = {
+  $registerTimelineProvider: () => Promise.resolve(),
+  $unregisterTimelineProvider: () => Promise.resolve(),
+  $emitTimelineChangeEvent: () => undefined,
 }
 
 function recordingScm(): IMainThreadScm & {
@@ -58,7 +64,7 @@ function recordingScm(): IMainThreadScm & {
 describe('host SCM bridge', () => {
   it('registers a source control and its groups with unique handles', () => {
     const scm = recordingScm()
-    const service = new ExtensionService([], noopCommands, noopWindow, scm)
+    const service = new ExtensionService([], noopCommands, noopWindow, scm, noopTimeline)
 
     const sc = service.createSourceControl('git', 'Git', '/repo')
     expect(scm.registerSourceControl).toHaveBeenCalledWith(0, 'git', 'Git', '/repo')
@@ -70,7 +76,7 @@ describe('host SCM bridge', () => {
 
   it('serializes resource states (command + decorations) to DTOs', () => {
     const scm = recordingScm()
-    const service = new ExtensionService([], noopCommands, noopWindow, scm)
+    const service = new ExtensionService([], noopCommands, noopWindow, scm, noopTimeline)
     const group = service.createSourceControl('git', 'Git').createResourceGroup('wt', 'Changes')
 
     group.resourceStates = [
@@ -95,7 +101,7 @@ describe('host SCM bridge', () => {
 
   it('flows input-box value both ways', () => {
     const scm = recordingScm()
-    const service = new ExtensionService([], noopCommands, noopWindow, scm)
+    const service = new ExtensionService([], noopCommands, noopWindow, scm, noopTimeline)
     const sc = service.createSourceControl('git', 'Git')
 
     sc.inputBox.value = 'host set'
@@ -114,7 +120,7 @@ describe('host SCM bridge', () => {
     // reach the renderer. A spread that drops undefined keys leaves the renderer
     // holding the stale commit actions, so the button never becomes "Push".
     const scm = recordingScm()
-    const service = new ExtensionService([], noopCommands, noopWindow, scm)
+    const service = new ExtensionService([], noopCommands, noopWindow, scm, noopTimeline)
     const sc = service.createSourceControl('git', 'Git')
 
     sc.acceptInputActions = [
