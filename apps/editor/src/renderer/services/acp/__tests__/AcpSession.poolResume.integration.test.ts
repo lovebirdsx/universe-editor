@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   ConfigurationService,
   Emitter,
+  LifecycleService,
   LogLevel,
   NoopTelemetryService,
   NullLogger,
@@ -427,6 +428,7 @@ function build(storage: FakeStorage): Built {
     new StubProgressService(),
     new StubLoggerService(),
     FAKE_URI_IDENTITY,
+    new LifecycleService(),
   )
   const history = new AcpSessionHistoryService(
     storage,

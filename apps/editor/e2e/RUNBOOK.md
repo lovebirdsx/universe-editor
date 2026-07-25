@@ -72,6 +72,12 @@
 - **修复**：①main 端 detection probe 改自管理 spawn（stdin ignore + windowsHide），超时后 `taskkill /pid /T /F`（实证必杀）——真实用户环境同样受益；②e2e seed pin `terminal.integrated.useWslProfiles: false`（WSL 检测已由 main 端单测覆盖，e2e 不需要机器相关探针）。
 - **判定标准**：遇到 worker teardown 超时，先数系统残留孤儿（`Get-CimInstance Win32_Process` 找父已死的 wsl/pwsh/conhost）；有孤儿 = 子进程泄漏类问题，无孤儿才考虑 quit 链/harness。排查方法详见 memory `e2e-worker-teardown-wsl-orphans`。
 
+### 8. Ctrl+K chord 用例 defocusEditor 偶发超时（观察中）
+- **现象**：`smoke.editorGroupSwitch`「Ctrl+K Ctrl+Left/Right switch focus」首轮偶发卡在 `defocusEditor` 等 `editorFocus` 变 false（5s 超时），retry 秒过；2026-07 本机 Windows 观察到 1 次。
+- **根因**：未定位——点击空白区 defocus 与 Monaco focus tracker 的时序在重负载全量趟下偶发错位，未见产品代码回归迹象。
+- **workaround**：retry 即过，暂不打 tag；连续复现再升级。
+- **判定标准**：失败点在 `defocusEditor` 的 expect.poll 且 retry 稳过 → 环境时序噪声；若同一断言在多轮/多机器稳定失败才当真回归查。
+
 ---
 
 ## 诊断前必做

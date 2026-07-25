@@ -25,6 +25,7 @@ import {
   createDecorator,
   Disposable,
   DisposableStore,
+  ILifecycleService,
   ILoggerService,
   IConfigurationService,
   IFileService,
@@ -266,6 +267,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     @IProgressService private readonly _progress: IProgressService,
     @ILoggerService loggerService: ILoggerService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+    @ILifecycleService lifecycleService: ILifecycleService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpClient', name: 'ACP Client' })
@@ -292,6 +294,24 @@ export class AcpClientService extends Disposable implements IAcpClientService {
         dispose: () => window.removeEventListener('beforeunload', onBeforeUnload),
       })
     }
+
+    // Window close / app quit: stop every agent child via the will-shutdown
+    // join phase. This is the RELIABLE path — the window stays alive until all
+    // joins resolve, so the stop IPC actually lands (beforeunload above is
+    // fire-and-forget and its sends can be dropped mid-teardown). Without this
+    // a shell-wrapped agent (cmd.exe → node.exe) survives the window close with
+    // its cwd pinned to the workspace folder, making that folder undeletable
+    // on Windows until the whole app exits.
+    this._register(
+      lifecycleService.onWillShutdown((e) =>
+        e.join(
+          Promise.allSettled([...this._liveHandles].map((handle) => this._host.stop(handle))).then(
+            () => undefined,
+          ),
+          'acp.stopAgents',
+        ),
+      ),
+    )
   }
 
   override dispose(): void {

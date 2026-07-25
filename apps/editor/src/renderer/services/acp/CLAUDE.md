@@ -300,6 +300,7 @@ E2E 在 `apps/editor/e2e/`，目前 ACP 未在 `@p0` 冒烟里。
 - **timeline 单一真相 + 三 lane 副本**：UI 只读 timeline 保证顺序正确；lane observable 给需要按类型读的 selector。
 - **16ms 防抖事务**：流式 chunk 高频，逐条 set 会抖到没法看；合批是性能底线。
 - **连接池 refcount**：同 agentId+cwd 的多会话共享一个子进程（如同 cwd 两会话），省 spawn；池在 `acpClientService.ts`。
+- **关窗/退出时停 agent 走 willShutdown join，不靠 beforeunload**：agent 子进程 cwd=workspace（app 单例 acpHost spawn），beforeunload 的 fire-and-forget stop 在页面销毁时 IPC 会被丢弃——shell 包装的 agent（cmd.exe→node.exe）残留并把 cwd 钉在 workspace 上，Windows 下文件夹删不掉直到 app 退出。可靠路径：`RendererLifecycleService.confirmShutdown` 跑完整两阶段（veto + onWillShutdown join），`acpClientService` 在 join 里 `Promise.allSettled(liveHandles.map(stop))`，窗口活着时 IPC 通畅；beforeunload 仅作 reload/崩溃兜底。
 - **持久化只存字符串元数据**：无 ContentBlock/SessionUpdate 落盘；恢复时拿 `sessionIdOnAgent` 调 `loadSession` 让 agent 重放。双桶 scope（WORKSPACE + GLOBAL fallback）见上文「持久化」。
 
 ### 易踩坑速记

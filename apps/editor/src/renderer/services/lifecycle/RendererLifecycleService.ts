@@ -21,7 +21,12 @@ export class RendererLifecycleService implements IRendererLifecycleService {
     reason: ShutdownReason,
     context?: ShutdownConfirmationContext,
   ): Promise<boolean> {
-    const vetoed = await this._lifecycle.confirmBeforeShutdown(reason, context)
+    // Run the full shutdown sequence (veto + will-shutdown joins), not just the
+    // veto phase: the window stays alive for the whole round-trip, so join()
+    // participants get a reliable moment to clean up (e.g. stopping ACP agent
+    // processes) over still-working IPC — unlike beforeunload, whose async
+    // sends can be dropped while the page tears down.
+    const vetoed = await this._lifecycle.shutdown(reason, context)
     return !vetoed
   }
 }

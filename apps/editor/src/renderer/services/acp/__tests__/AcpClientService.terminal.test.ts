@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
+  LifecycleService,
   LogLevel,
   NoopTelemetryService,
   NullLogger,
@@ -301,6 +302,7 @@ function makeService(opts: { autoInitialize?: boolean; startupTimeoutMs?: number
     } as unknown as IProgressService,
     new StubLoggerService(),
     new UriIdentityService('linux'),
+    new LifecycleService(),
   )
   svc.setNotificationSink(sink)
   // Connect now awaits initializeResult — auto-respond to the SDK's
