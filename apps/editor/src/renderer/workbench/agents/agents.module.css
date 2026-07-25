@@ -2237,6 +2237,22 @@
   gap: 4px;
 }
 
+.elicitationUrl {
+  display: block;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 4px;
+  background: var(--color-bg, #1e1e1e);
+  font-family: var(--font-monospace, monospace);
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+  word-break: break-all;
+}
+
+.elicitationUrlDomain {
+  color: var(--color-warning-fg, #cca700);
+  font-weight: 600;
+}
+
 .questionBlock {
   display: flex;
   flex-direction: column;

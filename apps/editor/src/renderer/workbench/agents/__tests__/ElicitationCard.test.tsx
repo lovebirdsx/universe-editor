@@ -1,19 +1,31 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for ElicitationCard — field-type rendering, the three protocol exits
- *  (submit=accept / decline / close=cancel), pre-submit validation with inline
- *  errors, and draft persistence across session switches.
+ *  Tests for ElicitationCard — form mode (field-type rendering, the three
+ *  protocol exits submit=accept / decline / close=cancel, pre-submit validation
+ *  with inline errors, draft persistence across session switches) and url mode
+ *  (consent card → opener + accept → waiting → done, dismiss).
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { observableValue } from '@universe-editor/platform'
+import {
+  InstantiationService,
+  IOpenerService,
+  observableValue,
+  ServiceCollection,
+  type ISettableObservable,
+} from '@universe-editor/platform'
 import type { CreateElicitationRequest, CreateElicitationResponse } from '@agentclientprotocol/sdk'
-import type { AcpPendingElicitation, IAcpSession } from '../../../services/acp/acpSessionService.js'
+import type {
+  AcpPendingElicitation,
+  AcpUrlElicitationState,
+  IAcpSession,
+} from '../../../services/acp/acpSessionService.js'
 import {
   AcpElicitationDraftCache,
   elicitationDraftKey,
 } from '../../../services/acp/acpElicitationDraftCache.js'
 import { ElicitationCard } from '../ElicitationCard.js'
+import { ServicesContext } from '../../useService.js'
 
 afterEach(() => {
   cleanup()
@@ -241,5 +253,109 @@ describe('elicitationDraftKey', () => {
     expect(elicitationDraftKey('tc-1', 'hello')).toBe('tc-1')
     expect(elicitationDraftKey(undefined, 'hello')).toBe(elicitationDraftKey(null, 'hello'))
     expect(elicitationDraftKey(undefined, 'hello')).not.toBe(elicitationDraftKey(undefined, 'bye'))
+  })
+})
+
+describe('ElicitationCard — url mode', () => {
+  interface UrlHarness extends Harness {
+    opener: { open: ReturnType<typeof vi.fn> }
+    urlState: ISettableObservable<AcpUrlElicitationState>
+    dismissed: boolean
+  }
+
+  function makeUrlPending(): UrlHarness {
+    const harness = {
+      resolved: [] as CreateElicitationResponse[],
+      cancelled: false,
+      dismissed: false,
+      opener: { open: vi.fn().mockResolvedValue(true) },
+      urlState: observableValue<AcpUrlElicitationState>('test.urlState', 'consent'),
+    } as UrlHarness
+    harness.pending = {
+      request: {
+        sessionId: 'agent-1',
+        mode: 'url',
+        message: 'Authorize the thing',
+        url: 'https://auth.example.com/flow?token=abc',
+        elicitationId: 'el-1',
+      } as CreateElicitationRequest,
+      urlState: harness.urlState,
+      resolve: (result) => {
+        harness.resolved.push(result)
+        if (result.action === 'accept') harness.urlState.set('waiting', undefined)
+      },
+      cancel: () => {
+        harness.cancelled = true
+      },
+      dismiss: () => {
+        harness.dismissed = true
+      },
+    }
+    return harness
+  }
+
+  function renderUrlCard(session: IAcpSession, opener: UrlHarness['opener']) {
+    const services = new ServiceCollection()
+    services.set(IOpenerService, { _serviceBrand: undefined, open: opener.open } as never)
+    return (
+      <ServicesContext.Provider value={new InstantiationService(services)}>
+        <ElicitationCard key={`elicitation:${session.id}`} session={session} />
+      </ServicesContext.Provider>
+    )
+  }
+
+  it('renders the consent card with the full URL and a highlighted domain', () => {
+    const h = makeUrlPending()
+    render(renderUrlCard(makeSession('A', h.pending), h.opener))
+
+    const url = screen.getByTestId('acp-elicitation-url')
+    expect(url.textContent).toBe('https://auth.example.com/flow?token=abc')
+    expect(url.querySelector('strong')?.textContent).toBe('auth.example.com')
+    expect(h.opener.open).not.toHaveBeenCalled()
+  })
+
+  it('confirm opens the link via the opener and settles accept', () => {
+    const h = makeUrlPending()
+    render(renderUrlCard(makeSession('A', h.pending), h.opener))
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-url-open'))
+    expect(h.opener.open).toHaveBeenCalledWith('https://auth.example.com/flow?token=abc')
+    expect(h.resolved).toEqual([{ action: 'accept' }])
+    // accept → the card flips to the waiting state.
+    expect(screen.getByTestId('acp-elicitation-url-waiting')).toBeTruthy()
+  })
+
+  it('done state renders after the urlState flips', () => {
+    const h = makeUrlPending()
+    h.urlState.set('waiting', undefined)
+    const { rerender } = render(renderUrlCard(makeSession('A', h.pending), h.opener))
+    expect(screen.getByTestId('acp-elicitation-url-waiting')).toBeTruthy()
+
+    h.urlState.set('done', undefined)
+    rerender(renderUrlCard(makeSession('A', h.pending), h.opener))
+    expect(screen.getByTestId('acp-elicitation-url-done')).toBeTruthy()
+  })
+
+  it('decline settles decline; close in consent cancels; close while waiting dismisses', () => {
+    const h = makeUrlPending()
+    const { unmount } = render(renderUrlCard(makeSession('A', h.pending), h.opener))
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-decline'))
+    expect(h.resolved).toEqual([{ action: 'decline' }])
+    expect(h.opener.open).not.toHaveBeenCalled()
+    unmount()
+
+    const h2 = makeUrlPending()
+    const { unmount: unmount2 } = render(renderUrlCard(makeSession('A', h2.pending), h2.opener))
+    fireEvent.click(screen.getByTestId('acp-elicitation-close'))
+    expect(h2.cancelled).toBe(true)
+    unmount2()
+
+    const h3 = makeUrlPending()
+    h3.urlState.set('waiting', undefined)
+    render(renderUrlCard(makeSession('A', h3.pending), h3.opener))
+    fireEvent.click(screen.getByTestId('acp-elicitation-close'))
+    expect(h3.dismissed).toBe(true)
+    expect(h3.cancelled).toBe(false)
   })
 })

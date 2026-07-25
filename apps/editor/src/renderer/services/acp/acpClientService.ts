@@ -200,9 +200,9 @@ const DEFAULT_INIT_PARAMS: InitializeRequest = {
     // methods in its InitializeResponse. The editor runs the login flow in its
     // integrated terminal (see Agent Settings → Authentication).
     auth: { terminal: true, _meta: { 'terminal-auth': true } },
-    // UNSTABLE elicitation: form mode only — url mode stays undeclared until
-    // the consent-card flow (open-in-browser + elicitation/complete) is wired.
-    elicitation: { form: {} },
+    // UNSTABLE elicitation: form (rendered as a field card) + url (consent
+    // card → open-in-browser → elicitation/complete) are both wired.
+    elicitation: { form: {}, url: {} },
   },
 }
 

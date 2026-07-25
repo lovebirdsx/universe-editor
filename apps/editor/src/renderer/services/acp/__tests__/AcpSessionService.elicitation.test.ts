@@ -252,7 +252,7 @@ class FakeAcpClientService implements IAcpClientService {
       clientCapabilities: {
         fs: { readTextFile: true, writeTextFile: true },
         terminal: true,
-        elicitation: { form: {} },
+        elicitation: { form: {}, url: {} },
       },
     })
     initializeResult.catch(() => {})
@@ -345,10 +345,10 @@ describe('AcpSessionService — elicitation', () => {
     svc.dispose()
   })
 
-  it('advertises elicitation.form (and not url) in the default init params', () => {
+  it('advertises elicitation.form and elicitation.url in the default init params', () => {
     const caps = getDefaultInitParamsForTests().clientCapabilities
     expect(caps?.elicitation?.form).toEqual({})
-    expect(caps?.elicitation?.url ?? null).toBeNull()
+    expect(caps?.elicitation?.url).toEqual({})
   })
 
   it('presents elicitation/create on the matching session and round-trips accept+content', async () => {
@@ -424,7 +424,7 @@ describe('AcpSessionService — elicitation', () => {
     expect(s.pendingElicitation.get()).toBeUndefined()
   })
 
-  it('elicitation/complete is accepted and ignored (url mode unwired)', async () => {
+  it('elicitation/complete is accepted and ignored (unknown id)', async () => {
     const s = await svc.createSession()
     await s.whenConnected()
     const conn = client.connected[0]!
@@ -432,6 +432,93 @@ describe('AcpSessionService — elicitation', () => {
     await expect(
       conn.agentConn.unstable_completeElicitation({ elicitationId: 'el-1' }),
     ).resolves.toBeUndefined()
+  })
+
+  /** A url elicitation the stub agent sends for a given session. */
+  function urlRequest(sessionId: string, elicitationId: string) {
+    return {
+      sessionId,
+      mode: 'url' as const,
+      message: 'Authorize the thing',
+      url: 'https://auth.example.com/flow?token=abc',
+      elicitationId,
+    }
+  }
+
+  it('url accept keeps the card waiting; elicitation/complete flips it to done; dismiss tears down', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    const agentPromise = conn.agentConn.unstable_createElicitation(
+      urlRequest(AGENT_SESSION_ID, 'el-url-1') as never,
+    )
+    await waitFor(() => s.pendingElicitation.get() !== undefined)
+
+    const pending = s.pendingElicitation.get()!
+    expect(pending.urlState?.get()).toBe('consent')
+    pending.resolve({ action: 'accept' })
+
+    // accept settles the agent's promise but the card stays in waiting state.
+    await expect(agentPromise).resolves.toEqual({ action: 'accept' })
+    expect(s.pendingElicitation.get()).toBe(pending)
+    expect(pending.urlState?.get()).toBe('waiting')
+
+    // The agent signals completion → done; the card is still up for review.
+    // (elicitation/complete is a notification — the await only covers the
+    // stream write, so poll for the client-side processing.)
+    await conn.agentConn.unstable_completeElicitation({ elicitationId: 'el-url-1' })
+    await waitFor(() => pending.urlState?.get() === 'done')
+    expect(s.pendingElicitation.get()).toBe(pending)
+
+    // Dismiss is a local teardown — no further wire traffic to assert.
+    pending.dismiss!()
+    expect(s.pendingElicitation.get()).toBeUndefined()
+  })
+
+  it('url decline settles and tears the card down', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    const agentPromise = conn.agentConn.unstable_createElicitation(
+      urlRequest(AGENT_SESSION_ID, 'el-url-2') as never,
+    )
+    await waitFor(() => s.pendingElicitation.get() !== undefined)
+    s.pendingElicitation.get()!.resolve({ action: 'decline' })
+
+    await expect(agentPromise).resolves.toEqual({ action: 'decline' })
+    expect(s.pendingElicitation.get()).toBeUndefined()
+
+    // A late complete for the torn-down elicitation is silently ignored.
+    await expect(
+      conn.agentConn.unstable_completeElicitation({ elicitationId: 'el-url-2' }),
+    ).resolves.toBeUndefined()
+  })
+
+  it('closeSession on a waiting url card unregisters it (late complete is ignored)', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    const agentPromise = conn.agentConn.unstable_createElicitation(
+      urlRequest(AGENT_SESSION_ID, 'el-url-3') as never,
+    )
+    await waitFor(() => s.pendingElicitation.get() !== undefined)
+    const pending = s.pendingElicitation.get()!
+    pending.resolve({ action: 'accept' })
+    await expect(agentPromise).resolves.toEqual({ action: 'accept' })
+    expect(pending.urlState?.get()).toBe('waiting')
+
+    await svc.closeSession(s.id)
+    expect(s.pendingElicitation.get()).toBeUndefined()
+
+    // The elicitationId was unregistered on close — the agent's late complete
+    // must not resurrect state on a dead session. Give the notification a
+    // chance to be processed before asserting the negative.
+    await conn.agentConn.unstable_completeElicitation({ elicitationId: 'el-url-3' })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(pending.urlState?.get()).toBe('waiting')
   })
 })
 

@@ -14,7 +14,7 @@ import type {
   CreateElicitationResponse,
   SessionConfigOption,
 } from '@agentclientprotocol/sdk'
-import type { Event, IObservable } from '@universe-editor/platform'
+import type { Event, IObservable, ISettableObservable } from '@universe-editor/platform'
 import { ACP_EXT_METHODS } from './acpExtMethods.js'
 import type { McpTransport } from './acpMcpServers.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
@@ -327,6 +327,13 @@ export interface RewindFilesResult {
 }
 
 /**
+ * url-mode card lifecycle: `consent` (user hasn't decided) → `waiting` (user
+ * consented, the link was opened, awaiting the agent's `elicitation/complete`)
+ * → `done` (agent signalled completion; the card stays until dismissed).
+ */
+export type AcpUrlElicitationState = 'consent' | 'waiting' | 'done'
+
+/**
  * A pending elicitation (ACP `elicitation/create`) awaiting the user's response.
  * `resolve` carries the three-state result (`accept` + content / `decline` /
  * `cancel`); `cancel()` is the no-answer path (session closed, superseded by a
@@ -334,8 +341,15 @@ export interface RewindFilesResult {
  */
 export interface AcpPendingElicitation {
   readonly request: CreateElicitationRequest
+  /** url mode only — drives the consent → waiting → done card transition. */
+  readonly urlState?: ISettableObservable<AcpUrlElicitationState>
   resolve(result: CreateElicitationResponse): void
   cancel(): void
+  /**
+   * url mode only, after accept: tear the waiting/done card down locally. The
+   * protocol exchange is already settled, so this carries no wire effect.
+   */
+  dismiss?(): void
 }
 
 export type AcpSessionStatus = 'idle' | 'connecting' | 'running' | 'errored' | 'closed'

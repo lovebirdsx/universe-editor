@@ -8,14 +8,24 @@
  *  an alternative path), 关闭 (Esc / ×) = cancel (no answer given). In-progress
  *  input survives session switches via AcpElicitationDraftCache; only a real
  *  answer (submit / decline / close) clears it.
+ *
+ *  url mode renders a consent card instead: full URL + highlighted domain, and
+ *  the link is opened (via IOpenerService) ONLY after the user confirms — no
+ *  prefetch, no auto-open (MCP-spec mandatory). Confirm settles accept and the
+ *  card stays in a waiting state until the agent's `elicitation/complete`
+ *  flips it to done; both states dismiss locally.
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { localize } from '@universe-editor/platform'
+import { IOpenerService, localize, type ISettableObservable } from '@universe-editor/platform'
 import { Button, Checkbox, IconButton, Input, Select } from '@universe-editor/workbench-ui'
-import { X } from 'lucide-react'
-import { useObservable } from '../useService.js'
-import type { IAcpSession } from '../../services/acp/acpSessionService.js'
+import { ExternalLink, X } from 'lucide-react'
+import { useObservable, useService } from '../useService.js'
+import type {
+  AcpPendingElicitation,
+  AcpUrlElicitationState,
+  IAcpSession,
+} from '../../services/acp/acpSessionService.js'
 import type { ElicitationSchema } from '@agentclientprotocol/sdk'
 import {
   normalizeElicitationForm,
@@ -86,15 +96,146 @@ function buildContent(
 
 export function ElicitationCard({ session }: { session: IAcpSession }) {
   const pending = useObservable(session.pendingElicitation)
-  const request = pending?.request
-  const rawToolCallId = request != null && 'toolCallId' in request ? request.toolCallId : undefined
+  if (!pending) return null
+  if (pending.request.mode === 'url' && pending.urlState) {
+    return <UrlElicitationCard pending={pending} urlState={pending.urlState} />
+  }
+  return <FormElicitationCard session={session} pending={pending} />
+}
+
+/** Split a URL into (prefix, host, rest) so the domain can be highlighted. */
+function splitUrlForDisplay(url: string): { prefix: string; host: string; rest: string } | null {
+  try {
+    const u = new URL(url)
+    return { prefix: `${u.protocol}//`, host: u.host, rest: `${u.pathname}${u.search}${u.hash}` }
+  } catch {
+    return null
+  }
+}
+
+function UrlElicitationCard({
+  pending,
+  urlState,
+}: {
+  pending: AcpPendingElicitation
+  urlState: ISettableObservable<AcpUrlElicitationState>
+}) {
+  const opener = useService(IOpenerService)
+  const state = useObservable(urlState)
+  const request = pending.request
+  // The custom-mode variant's index signature types these as unknown.
+  const rawUrl = 'url' in request ? request.url : undefined
+  const url = typeof rawUrl === 'string' ? rawUrl : ''
+  const parts = useMemo(() => splitUrlForDisplay(url), [url])
+
+  const close = (): void => {
+    if (state === 'consent') {
+      pending.cancel()
+    } else {
+      // waiting / done: the protocol exchange already settled — local teardown.
+      pending.dismiss?.()
+    }
+  }
+  const confirm = (): void => {
+    // Consent-gated open: never prefetch, never auto-open (spec mandatory).
+    void opener.open(url)
+    pending.resolve({ action: 'accept' })
+  }
+  const decline = (): void => {
+    pending.resolve({ action: 'decline' })
+  }
+
+  return (
+    <section
+      className={styles['elicitationCard']}
+      data-testid="acp-elicitation-card"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') close()
+      }}
+    >
+      <header className={styles['elicitationHeader']}>
+        <span className={styles['elicitationMessage']}>{request.message}</span>
+        <IconButton
+          label={localize('acp.elicitation.close', 'Close (Esc)')}
+          onClick={close}
+          data-testid="acp-elicitation-close"
+        >
+          <X size={14} strokeWidth={1.75} />
+        </IconButton>
+      </header>
+      {state === 'consent' && (
+        <>
+          <div className={styles['elicitationDescription']}>
+            {localize(
+              'acp.elicitation.url.hint',
+              'The agent asks you to open this link in your browser. It will not be opened automatically — only continue if you trust it.',
+            )}
+          </div>
+          <code className={styles['elicitationUrl']} data-testid="acp-elicitation-url">
+            {parts ? (
+              <>
+                {parts.prefix}
+                <strong className={styles['elicitationUrlDomain']}>{parts.host}</strong>
+                {parts.rest}
+              </>
+            ) : (
+              url
+            )}
+          </code>
+          <div className={styles['questionActions']}>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={confirm}
+              data-testid="acp-elicitation-url-open"
+            >
+              <ExternalLink size={13} strokeWidth={1.75} />
+              {localize('acp.elicitation.url.open', 'Open link')}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={decline}
+              data-testid="acp-elicitation-decline"
+            >
+              {localize('acp.elicitation.decline', 'Decline')}
+            </Button>
+          </div>
+        </>
+      )}
+      {state === 'waiting' && (
+        <div className={styles['elicitationDescription']} data-testid="acp-elicitation-url-waiting">
+          {localize(
+            'acp.elicitation.url.waiting',
+            'Opened in your browser — waiting for the agent to finish…',
+          )}
+        </div>
+      )}
+      {state === 'done' && (
+        <div className={styles['elicitationDescription']} data-testid="acp-elicitation-url-done">
+          {localize('acp.elicitation.url.done', 'The agent has finished this flow.')}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function FormElicitationCard({
+  session,
+  pending,
+}: {
+  session: IAcpSession
+  pending: AcpPendingElicitation
+}) {
+  const request = pending.request
   // The custom-mode variant's index signature types `toolCallId` as unknown.
+  const rawToolCallId = 'toolCallId' in request ? request.toolCallId : undefined
   const toolCallId = typeof rawToolCallId === 'string' ? rawToolCallId : undefined
-  const draftKey = elicitationDraftKey(toolCallId, request?.message ?? '')
+  const draftKey = elicitationDraftKey(toolCallId, request.message ?? '')
 
   const fields = useMemo(
     () =>
-      request != null && request.mode === 'form' && 'requestedSchema' in request
+      request.mode === 'form' && 'requestedSchema' in request
         ? normalizeElicitationForm(request.requestedSchema as ElicitationSchema, (m) =>
             console.warn(`[elicitation] ${m}`),
           )
@@ -117,10 +258,8 @@ export function ElicitationCard({ session }: { session: IAcpSession }) {
   }
 
   useEffect(() => {
-    if (pending) AcpElicitationDraftCache.save(session.id, draftKey, values)
-  }, [values, session.id, draftKey, pending])
-
-  if (!pending || !request) return null
+    AcpElicitationDraftCache.save(session.id, draftKey, values)
+  }, [values, session.id, draftKey])
 
   const patch = (name: string, value: string | boolean | string[] | undefined): void => {
     setValues((prev) => ({ ...prev, [name]: value }))

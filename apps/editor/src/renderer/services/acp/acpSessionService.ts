@@ -93,6 +93,7 @@ import {
   type AcpConnectionLostEvent,
   type AcpPendingElicitation,
   type AcpPendingPermission,
+  type AcpUrlElicitationState,
   type IAcpSession,
   type IAcpSessionInitState,
   type RewindFilesResult,
@@ -120,6 +121,7 @@ export {
   type AcpPlanEntryStatus,
   type AcpPendingPermission,
   type AcpPendingElicitation,
+  type AcpUrlElicitationState,
   type AcpRecoveryState,
   type AcpSessionStatus,
   type AcpSubagentStats,
@@ -348,6 +350,16 @@ export class AcpSessionService
 
   /** Session ids (agent-issued) with an MCP reload currently in flight. */
   private readonly _mcpReloadingSessions = new Set<string>()
+
+  /**
+   * Consented url-mode elicitations awaiting the agent's `elicitation/complete`,
+   * keyed by the request's `elicitationId`. Entries are removed when the card
+   * is torn down (decline / cancel / dismiss / session close).
+   */
+  private readonly _pendingUrlElicitations = new Map<
+    string,
+    ISettableObservable<AcpUrlElicitationState>
+  >()
 
   private readonly _logger: ILogger
   private readonly _coordinator: AcpSessionRestoreCoordinator
@@ -1464,35 +1476,80 @@ export class AcpSessionService
       this._logger.warn(`elicitation/create for unknown session ${sessionId ?? '(request-scoped)'}`)
       return { action: 'cancel' }
     }
+    const isUrl = params.mode === 'url'
+    const rawElicitationId = 'elicitationId' in params ? params.elicitationId : undefined
+    const elicitationId = typeof rawElicitationId === 'string' ? rawElicitationId : undefined
     this._telemetry.publicLog('acp.elicitation_shown', {
       sessionId,
       mode: params.mode,
     })
     return await new Promise<CreateElicitationResponse>((resolve) => {
-      const settle = (result: CreateElicitationResponse): void => {
+      let settled = false
+      const urlState = isUrl
+        ? observableValue<AcpUrlElicitationState>(
+            `acp.elicitation.urlState.${session.id}`,
+            'consent',
+          )
+        : undefined
+      const teardown = (): void => {
         if (session.pendingElicitation.get() === pending) {
           session.pendingElicitation.set(undefined, undefined)
         }
+        if (elicitationId !== undefined) this._pendingUrlElicitations.delete(elicitationId)
+      }
+      const settle = (result: CreateElicitationResponse): void => {
+        if (settled) return
+        settled = true
         this._telemetry.publicLog('acp.elicitation_resolved', {
           sessionId,
           mode: params.mode,
           action: typeof result.action === 'string' ? result.action : 'unknown',
         })
+        // url accept keeps the card up in the waiting state until the agent's
+        // elicitation/complete arrives (or the user dismisses it); every other
+        // exit tears the card down immediately.
+        if (urlState && result.action === 'accept') {
+          urlState.set('waiting', undefined)
+        } else {
+          teardown()
+        }
         resolve(result)
       }
       const pending: AcpPendingElicitation = {
         request: params,
+        ...(urlState ? { urlState } : {}),
         resolve: (result) => settle(result),
-        cancel: () => settle({ action: 'cancel' }),
+        cancel: () => {
+          // Always tear the card down — after a url accept the promise is
+          // already settled (a late cancel is a wire no-op) but session close /
+          // supersede must still unregister the elicitationId and clear the card.
+          teardown()
+          settle({ action: 'cancel' })
+        },
+        ...(urlState ? { dismiss: () => teardown() } : {}),
+      }
+      if (urlState && elicitationId !== undefined) {
+        this._pendingUrlElicitations.set(elicitationId, urlState)
       }
       session.presentElicitation(pending)
     })
   }
 
   onCompleteElicitation(params: CompleteElicitationNotification): void {
-    // url mode is not advertised yet — log and ignore (per spec, unknown
-    // elicitation ids must be silently ignored anyway).
-    this._logger.info(`elicitation/complete received (url mode unwired): ${params.elicitationId}`)
+    const rawId = 'elicitationId' in params ? params.elicitationId : undefined
+    const elicitationId = typeof rawId === 'string' ? rawId : undefined
+    const urlState =
+      elicitationId !== undefined ? this._pendingUrlElicitations.get(elicitationId) : undefined
+    // Per spec, unknown elicitation ids must be silently ignored.
+    if (!urlState) {
+      this._logger.info(
+        `elicitation/complete for unknown elicitation ${elicitationId ?? '(no id)'}`,
+      )
+      return
+    }
+    // Only a consented card transitions; a complete racing the consent card is
+    // the agent's protocol violation — keep the consent UI decisive.
+    if (urlState.get() === 'waiting') urlState.set('done', undefined)
   }
 
   private _readMcpServers(): McpServer[] {

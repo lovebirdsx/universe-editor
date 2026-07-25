@@ -44,7 +44,7 @@ export const CLIENT_INIT_PARAMS = {
     fs: { readTextFile: true, writeTextFile: true },
     terminal: true,
     auth: { terminal: true, _meta: { 'terminal-auth': true } },
-    elicitation: { form: {} },
+    elicitation: { form: {}, url: {} },
   },
 } as const
 

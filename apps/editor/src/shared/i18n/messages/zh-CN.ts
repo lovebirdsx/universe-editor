@@ -1241,6 +1241,11 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.elicitation.close': '关闭 (Esc)',
   'acp.elicitation.selectPlaceholder': '请选择…',
   'acp.elicitation.unsupportedMode': '不支持的信息收集模式：{mode}',
+  'acp.elicitation.url.hint':
+    'Agent 请求你在浏览器中打开以下链接。链接不会自动打开——请确认你信任该地址后再继续。',
+  'acp.elicitation.url.open': '打开链接',
+  'acp.elicitation.url.waiting': '已在浏览器中打开，等待 Agent 完成…',
+  'acp.elicitation.url.done': 'Agent 已完成该流程。',
   'acp.empty': '没有活跃的 Agent 会话。',
   'acp.emptySession.chooseAgent': '选择 Agent',
   'acp.emptySession.collapse': '切换折叠状态',

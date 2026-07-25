@@ -111,6 +111,7 @@ export type {
   AcpModelCost,
   AcpPendingPermission,
   AcpPendingElicitation,
+  AcpUrlElicitationState,
   AcpPlanEntry,
   AcpPlanEntryStatus,
   AcpResurrection,
