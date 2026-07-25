@@ -1416,6 +1416,7 @@ function EmptySessionHint() {
         <div className={styles['emptyHintGrid']}>
           <HintItem keys={['/']} label={localize('acp.emptySession.commands', 'Commands')} />
           <HintItem keys={['@']} label={localize('acp.emptySession.mentions', 'Mention files')} />
+          <HintItem keys={['#']} label={localize('acp.emptySession.context', 'Add context')} />
           <HintItem
             keys={['Ctrl+Alt+I']}
             label={localize('acp.emptySession.focusInput', 'Focus input')}

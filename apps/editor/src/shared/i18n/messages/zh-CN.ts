@@ -1230,6 +1230,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.emptySession.chooseAgent': '选择 Agent',
   'acp.emptySession.collapse': '切换折叠状态',
   'acp.emptySession.commands': '命令',
+  'acp.emptySession.context': '添加上下文',
   'acp.emptySession.focusInput': '聚焦输入框',
   'acp.emptySession.keyboard': '键盘',
   'acp.emptySession.mentions': '提及文件',

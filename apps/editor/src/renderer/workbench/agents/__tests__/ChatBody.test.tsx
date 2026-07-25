@@ -638,6 +638,7 @@ describe('ChatBody — empty session hint', () => {
     expect(text).toContain('Choose agent')
     expect(text).toContain('Commands')
     expect(text).toContain('Mention files')
+    expect(text).toContain('Add context')
     expect(text).toContain('Ctrl+Alt+I')
     expect(text).toContain('Alt+Up/Down')
     expect(text).toContain('Alt+Home/End')
