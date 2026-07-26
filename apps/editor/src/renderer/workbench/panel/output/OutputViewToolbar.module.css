@@ -1,3 +1,23 @@
+.toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.filterInput {
+  width: 150px;
+  min-width: 0;
+  font-size: 12px;
+  height: 22px;
+  transition: width 0.15s ease-out;
+}
+
+/* VSCode-style: the filter input grows while focused. */
+.filterInput:focus {
+  width: 280px;
+}
+
 .channelSelect {
   appearance: none;
   -webkit-appearance: none;
@@ -20,4 +40,38 @@
 
 .channelSelect:focus {
   border-color: var(--color-focus-border, #0070e0);
+}
+
+.levelMenu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--color-dropdown-bg, #2f2f35);
+  border: 1px solid var(--color-dropdown-border, #0f0f11);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  color: var(--color-foreground, #c8c8c8);
+}
+
+.levelItem {
+  padding: 2px 0;
+}
+
+.clearFilters {
+  background: none;
+  border: none;
+  border-top: 1px solid var(--color-dropdown-border, #0f0f11);
+  color: var(--color-textlink, #4da3ff);
+  font-size: 12px;
+  cursor: pointer;
+  margin-top: 4px;
+  padding: 6px 0 0;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.clearFilters:hover {
+  text-decoration: underline;
 }

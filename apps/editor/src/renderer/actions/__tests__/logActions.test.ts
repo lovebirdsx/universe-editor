@@ -21,6 +21,10 @@ import {
   type IStorageService,
 } from '@universe-editor/platform'
 import { ILogFilesService, type LogFileDescriptor } from '../../../shared/ipc/services.js'
+import {
+  OutputModelService,
+  IOutputModelService,
+} from '../../services/output/OutputModelService.js'
 import { OutputService } from '../../services/output/OutputService.js'
 import {
   OpenLogsFolderAction,
@@ -28,6 +32,7 @@ import {
   SetLogLevelAction,
   ShowLogsAction,
   ShowOutputChannelAction,
+  ToggleOutputAutoScrollAction,
 } from '../logActions.js'
 
 const descriptor: LogFileDescriptor = {
@@ -116,7 +121,7 @@ describe('logActions', () => {
     expect(logFiles.listLogFiles).toHaveBeenCalledTimes(1)
     expect(logFiles.readLogFile).toHaveBeenCalledWith(descriptor.id, 1024 * 1024)
     expect(output.activeChannelName.get()).toBe('Main')
-    expect(output.activeChannelContent.get()).toBe('hello log')
+    expect(output.activeChannel?.getText()).toBe('hello log')
     expect(views.openViewContainer).toHaveBeenCalledWith('workbench.view.output')
     expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
   })
@@ -160,7 +165,7 @@ describe('logActions', () => {
 
     expect(pick).not.toHaveBeenCalled()
     expect(output.activeChannelName.get()).toBe('Logs')
-    expect(output.activeChannelContent.get()).toContain('No log files found.')
+    expect(output.activeChannel?.getText()).toContain('No log files found.')
     expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
   })
 
@@ -197,7 +202,7 @@ describe('logActions', () => {
 
     expect(logFiles.listLogFiles).toHaveBeenCalledTimes(1)
     expect(logFiles.readLogFile).toHaveBeenCalledWith(descriptor.id, 1024 * 1024)
-    expect(output.activeChannelContent.get()).toBe('hello log')
+    expect(output.activeChannel?.getText()).toBe('hello log')
   })
 
   it('RefreshLogOutputAction is a no-op when no Log channel is active', async () => {
@@ -299,5 +304,19 @@ describe('logActions', () => {
 
     expect(output.activeChannelName.get()).toBe(before)
     expect(layout.setVisible).not.toHaveBeenCalled()
+  })
+
+  it('ToggleOutputAutoScrollAction flips the shared autoScroll flag', async () => {
+    disposables.push(registerAction2(ToggleOutputAutoScrollAction))
+    const output = new OutputService(makeStorage())
+    const outputModels = new OutputModelService(output, makeStorage())
+    const services = new ServiceCollection()
+    services.set(IOutputModelService, outputModels)
+
+    expect(outputModels.autoScroll.get()).toBe(true)
+    await runCommand(ToggleOutputAutoScrollAction.ID, services)
+    expect(outputModels.autoScroll.get()).toBe(false)
+    await runCommand(ToggleOutputAutoScrollAction.ID, services)
+    expect(outputModels.autoScroll.get()).toBe(true)
   })
 })

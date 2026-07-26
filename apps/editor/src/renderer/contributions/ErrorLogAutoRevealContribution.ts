@@ -60,7 +60,7 @@ export class ErrorLogAutoRevealContribution extends Disposable implements IWorkb
       channel.clear()
       channel.append(content)
     } catch {
-      if (channel.content.get() === '') channel.append(event.chunk)
+      if (!channel.hasContent.get()) channel.append(event.chunk)
     }
 
     this._output.setActiveChannel(descriptor.name)

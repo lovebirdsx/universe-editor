@@ -10,9 +10,8 @@ import { LogOutputView } from './LogOutputView.js'
 import styles from './OutputView.module.css'
 
 export function OutputView() {
-  const outputService = useService(IOutputService)
   const configService = useService(IConfigurationService)
-  const content = useObservable(outputService.activeChannelContent)
+  const hasContent = useObservable(useService(IOutputService).activeChannelHasContent)
   const theme = configService.get<string>('workbench.colorTheme') === 'light' ? 'vs' : 'vs-dark'
 
   const [fontSize, setFontSize] = useState(
@@ -44,13 +43,8 @@ export function OutputView() {
   return (
     <div className={styles['outputView']}>
       <div className={styles['content']}>
-        {content ? (
-          <LogOutputView
-            content={content}
-            theme={theme}
-            fontSize={fontSize}
-            fontFamily={fontFamily}
-          />
+        {hasContent ? (
+          <LogOutputView theme={theme} fontSize={fontSize} fontFamily={fontFamily} />
         ) : (
           <div className={styles['empty']} style={{ fontSize: `${fontSize}px`, fontFamily }}>
             No output.

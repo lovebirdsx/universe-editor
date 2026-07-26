@@ -43,7 +43,7 @@ export class AggregatedLogChannelContribution extends Disposable implements IWor
     // otherwise the next chunk would be appended onto a stale half-line.
     this._register(
       autorun((r) => {
-        if (this._allChannel.content.read(r) === '') {
+        if (!this._allChannel.hasContent.read(r)) {
           this._tails.clear()
         }
       }),

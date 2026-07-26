@@ -164,7 +164,7 @@ describe('ErrorLogAutoRevealContribution', () => {
 
     expect(logFiles.readLogFile).toHaveBeenCalledWith(rendererDescriptor.id, 1024 * 1024)
     expect(output.activeChannelName.get()).toBe('Renderer')
-    expect(output.activeChannelContent.get()).toBe('[10:00:00] [error] boom\n')
+    expect(output.activeChannel?.getText()).toBe('[10:00:00] [error] boom\n')
     expect(views.openViewContainer).toHaveBeenCalledWith('workbench.view.output')
     expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
     expect(layout.focus).toHaveBeenCalledTimes(1)
@@ -213,7 +213,7 @@ describe('ErrorLogAutoRevealContribution', () => {
     await flush()
 
     expect(output.activeChannelName.get()).toBe('Renderer')
-    expect(output.activeChannelContent.get()).toBe('[10:00:00] [error] fallback\n')
+    expect(output.activeChannel?.getText()).toBe('[10:00:00] [error] fallback\n')
     expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
     contribution.dispose()
   })

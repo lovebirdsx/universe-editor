@@ -19,6 +19,10 @@ import {
   type IStorageService,
 } from '@universe-editor/platform'
 import { OutputService } from '../../../../services/output/OutputService.js'
+import {
+  OutputModelService,
+  IOutputModelService,
+} from '../../../../services/output/OutputModelService.js'
 import { ServicesContext } from '../../../useService.js'
 import { OutputView } from '../OutputView.js'
 
@@ -63,7 +67,9 @@ describe('OutputView config subscription', () => {
     setDisposableTracker(tracker)
 
     const services = new ServiceCollection()
-    services.set(IOutputService, new OutputService(makeStorage()))
+    const outputService = new OutputService(makeStorage())
+    services.set(IOutputService, outputService)
+    services.set(IOutputModelService, new OutputModelService(outputService, makeStorage()))
     services.set(IConfigurationService, config)
     const instantiation = new InstantiationService(services)
 

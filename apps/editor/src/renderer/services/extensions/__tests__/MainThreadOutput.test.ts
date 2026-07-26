@@ -95,4 +95,26 @@ describe('MainThreadOutput', () => {
     expect(views.openViewContainer).not.toHaveBeenCalled()
     expect(layout.setVisible).not.toHaveBeenCalled()
   })
+
+  it('$disposeOutputChannel removes the channel from a real OutputService', async () => {
+    const { OutputService } = await import('../../output/OutputService.js')
+    const storage = {
+      _serviceBrand: undefined,
+      get: vi.fn().mockResolvedValue(undefined),
+      set: vi.fn().mockResolvedValue(undefined),
+      remove: vi.fn().mockResolvedValue(undefined),
+      onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
+    }
+    const output = new OutputService(storage as never)
+    const layout = fakeLayoutService()
+    const views = fakeViewsService()
+    const mt = new MainThreadOutput(output, layout.service, views.service)
+
+    await mt.$registerOutputChannel(0, 'Git')
+    expect(output.getChannel('Git')).toBeDefined()
+
+    await mt.$disposeOutputChannel(0)
+    expect(output.getChannel('Git')).toBeUndefined()
+    expect(output.channelNames.get()).toEqual([])
+  })
 })

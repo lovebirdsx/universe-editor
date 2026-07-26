@@ -32,6 +32,7 @@ const rendererDomTests = [
   'src/renderer/services/sessionSwitcher/__tests__/RendererSessionsService.test.ts',
   'src/renderer/services/terminal/__tests__/TerminalXtermService.test.ts',
   'src/renderer/workbench/editor/__tests__/MonacoModelRegistry.test.ts',
+  'src/renderer/services/output/__tests__/OutputModelService.test.ts',
   'src/renderer/services/search/__tests__/saveReplacedFile.test.ts',
 ]
 

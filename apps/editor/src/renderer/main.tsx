@@ -82,6 +82,7 @@ import { EditorGroupsService } from './services/editor/EditorGroupsService.js'
 import { ViewsService } from './services/views/ViewsService.js'
 import { ViewDescriptorService } from './services/views/ViewDescriptorService.js'
 import { OutputService } from './services/output/OutputService.js'
+import { IOutputModelService, OutputModelService } from './services/output/OutputModelService.js'
 import {
   IKeyboardDebugService,
   KeyboardDebugService,
@@ -441,6 +442,10 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(IEditorGroupsService, editorGroupsService)
   services.set(IEditorService, editorService)
   services.set(IOutputService, outputService)
+  services.set(
+    IOutputModelService,
+    workbenchStore.add(instantiation.createInstance(OutputModelService)),
+  )
 
   outputService.createChannel('All', 'aggregated')
 

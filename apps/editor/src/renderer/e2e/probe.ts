@@ -478,7 +478,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       services.outputService.createChannel(name)
     },
     getOutputChannelContent: (name: string) =>
-      services.outputService.getChannel(name)?.content.get() ?? '',
+      services.outputService.getChannel(name)?.getText() ?? '',
     terminalCreate: async (): Promise<string> => {
       const info = await services.terminalService.create({})
       if (!terminalBuffers.has(info.id)) terminalBuffers.set(info.id, '')

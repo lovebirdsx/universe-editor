@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
+  Event,
   LifecycleService,
   LogLevel,
   NoopTelemetryService,
@@ -133,7 +134,12 @@ class FakeAgentRegistry implements IAcpAgentRegistry {
 
 class StubOutputChannel implements IOutputChannel {
   readonly name: string
-  readonly content: IObservable<string> = observableValue<string>('stub.output.content', '')
+  readonly hasContent: IObservable<boolean> = observableValue<boolean>(
+    'stub.output.hasContent',
+    false,
+  )
+  readonly onDidFlush = Event.None
+  readonly onDidClear = Event.None
   disposed = false
   constructor(name: string) {
     this.name = name
@@ -141,6 +147,9 @@ class StubOutputChannel implements IOutputChannel {
   append(_text: string): void {}
   appendLine(_text: string): void {}
   clear(): void {}
+  getText(): string {
+    return ''
+  }
   dispose(): void {
     this.disposed = true
   }
@@ -157,10 +166,11 @@ class StubOutputService implements IOutputService {
     'stub.activeChannelName',
     undefined,
   )
-  readonly activeChannelContent: IObservable<string> = observableValue<string>(
-    'stub.activeChannelContent',
-    '',
+  readonly activeChannelHasContent: IObservable<boolean> = observableValue<boolean>(
+    'stub.activeChannelHasContent',
+    false,
   )
+  readonly onDidRemoveChannel = Event.None
   activeChannel: IOutputChannel | undefined = undefined
   createChannel(name: string): IOutputChannel {
     const ch = new StubOutputChannel(name)

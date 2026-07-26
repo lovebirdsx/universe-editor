@@ -68,7 +68,7 @@ export class LogTailContribution extends Disposable implements IWorkbenchContrib
 
   private async _populateLogChannelIfEmpty(channelName: string): Promise<void> {
     const channel = this._output.getChannel(channelName)
-    if (!channel || channel.content.get() !== '') return
+    if (!channel || channel.hasContent.get()) return
     const name = channelName
     let descriptorId = this._nameToDescriptorId.get(name)
     if (descriptorId === undefined) {
@@ -83,7 +83,7 @@ export class LogTailContribution extends Disposable implements IWorkbenchContrib
       return
     }
     if (typeof content !== 'string') return
-    if (channel.content.get() !== '') return
+    if (channel.hasContent.get()) return
     channel.append(content)
   }
 

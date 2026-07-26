@@ -109,6 +109,7 @@ function makeModel(initial: string, language: string, uri: unknown) {
     getLanguageId: () => language,
     getLineCount: () => lines().length,
     getLineContent: (n: number) => lines()[n - 1] ?? '',
+    getLinesContent: () => lines(),
     getOffsetAt: (pos: Position) => positionToOffset(value, pos),
     getPositionAt: (offset: number) => offsetToPosition(value, offset),
     getFullModelRange: () => ({
@@ -330,9 +331,19 @@ function makePromptEditor(
   const getPosition = (): Position =>
     offsetToPosition(model.getValue(), ta.selectionStart ?? model.getValue().length)
 
+  // Output-view support: the editor starts on the bridge model but LogOutputView
+  // swaps per-channel models via setModel. The textarea stays bound to the
+  // bridge model — component tests assert on the service-layer models instead.
+  let current: ReturnType<typeof makeModel> | null = model
+
   return {
-    getModel: () => model,
-    setModel: () => {},
+    getModel: () => current,
+    setModel: (m: unknown) => {
+      current = (m ?? null) as ReturnType<typeof makeModel> | null
+    },
+    saveViewState: () => null,
+    restoreViewState: () => {},
+    onDidScrollChange: () => noopDisposable,
     getContainerDomNode: () => container,
     getValue: () => model.getValue(),
     focus: () => ta.focus(),

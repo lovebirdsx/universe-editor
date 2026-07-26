@@ -267,6 +267,7 @@ import {
   ShowLogsAction,
   ShowOutputChannelAction,
   ToggleOutputAction,
+  ToggleOutputAutoScrollAction,
 } from './logActions.js'
 import {
   CancelAgentTurnAction,
@@ -515,6 +516,7 @@ registerAction2(SetLogLevelAction)
 registerAction2(ShowOutputChannelAction)
 registerAction2(ClearOutputAction)
 registerAction2(ToggleOutputAction)
+registerAction2(ToggleOutputAutoScrollAction)
 
 // Search
 registerAction2(FindInFilesAction)

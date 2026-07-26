@@ -107,7 +107,7 @@ describe('LogTailContribution', () => {
     fireAppend(logFiles, 'main', 'hello\n')
     await Promise.resolve()
 
-    expect(channel.content.get()).toBe('hello\n')
+    expect(channel.getText()).toBe('hello\n')
     contribution.dispose()
   })
 
@@ -121,7 +121,7 @@ describe('LogTailContribution', () => {
     fireAppend(logFiles, 'main', 'ignored\n')
     await Promise.resolve()
 
-    expect(channel.content.get()).toBe('')
+    expect(channel.getText()).toBe('')
     contribution.dispose()
   })
 
@@ -135,7 +135,7 @@ describe('LogTailContribution', () => {
     fireAppend(logFiles, 'externalChange', 'other\n')
     await Promise.resolve()
 
-    expect(channel.content.get()).toBe('')
+    expect(channel.getText()).toBe('')
     contribution.dispose()
   })
 
@@ -174,7 +174,7 @@ describe('LogTailContribution', () => {
     // Second fire: cache should now contain Main → main
     fireAppend(logFiles, 'main', 'landed\n')
     await Promise.resolve()
-    expect(channel.content.get()).toBe('landed\n')
+    expect(channel.getText()).toBe('landed\n')
     contribution.dispose()
   })
 
@@ -187,6 +187,6 @@ describe('LogTailContribution', () => {
     contribution.dispose()
     fireAppend(logFiles, 'main', 'after-dispose\n')
     await Promise.resolve()
-    expect(channel.content.get()).toBe('')
+    expect(channel.getText()).toBe('')
   })
 })

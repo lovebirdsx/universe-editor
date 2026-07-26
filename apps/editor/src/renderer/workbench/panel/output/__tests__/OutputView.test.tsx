@@ -8,6 +8,10 @@ import {
   type IStorageService,
 } from '@universe-editor/platform'
 import { OutputService } from '../../../../services/output/OutputService.js'
+import {
+  OutputModelService,
+  IOutputModelService,
+} from '../../../../services/output/OutputModelService.js'
 import { ServicesContext } from '../../../useService.js'
 import { OutputView } from '../OutputView.js'
 
@@ -37,6 +41,7 @@ function makeStorage(): IStorageService {
 function renderOutputView(outputService = new OutputService(makeStorage())) {
   const services = new ServiceCollection()
   services.set(IOutputService, outputService)
+  services.set(IOutputModelService, new OutputModelService(outputService, makeStorage()))
   services.set(IConfigurationService, mockConfigService)
   const instantiation = new InstantiationService(services)
 

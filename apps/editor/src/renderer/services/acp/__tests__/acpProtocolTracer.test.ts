@@ -25,7 +25,7 @@ describe('AcpProtocolTracer', () => {
   let tracer: AcpProtocolTracer
 
   beforeEach(() => {
-    channel = new OutputChannel('acp/protocol')
+    channel = new OutputChannel('acp/protocol', 'default', () => {})
     logger = new CapturingLogger()
     tracer = new AcpProtocolTracer(channel, logger, 'zed#abc123')
   })
@@ -34,7 +34,7 @@ describe('AcpProtocolTracer', () => {
     tracer.traceOutboundChunk(
       enc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: 1 } }),
     )
-    const out = channel.content.get()
+    const out = channel.getText()
     expect(out).toMatch(
       /\[Trace - \d{2}:\d{2}:\d{2}\.\d{3}\] \[zed#abc123\] → Request 'initialize' \(1\)/,
     )
@@ -52,7 +52,7 @@ describe('AcpProtocolTracer', () => {
         params: { sessionId: 'sess_abcdef1234567890', update: { type: 'tick' } },
       }),
     )
-    const out = channel.content.get()
+    const out = channel.getText()
     expect(out).toContain("← Notification 'session/update' [session=sess_abcdef12]")
     expect(logger.infoLines).toHaveLength(1)
     expect(logger.infoLines[0]).toBe(
@@ -66,7 +66,7 @@ describe('AcpProtocolTracer', () => {
     tracer.traceOutboundChunk(enc({ jsonrpc: '2.0', id: 42, method: 'session/prompt', params: {} }))
     vi.advanceTimersByTime(1500)
     tracer.traceInboundChunk(enc({ jsonrpc: '2.0', id: 42, result: { stopReason: 'end_turn' } }))
-    const out = channel.content.get()
+    const out = channel.getText()
     expect(out).toContain("← Response 'session/prompt' (42) in 1500ms")
     expect(out).toContain('Result: {\n  "stopReason": "end_turn"\n}')
     expect(logger.infoLines[1]).toBe(
@@ -82,7 +82,7 @@ describe('AcpProtocolTracer', () => {
     tracer.traceInboundChunk(
       enc({ jsonrpc: '2.0', id: 7, error: { code: -32602, message: 'invalid params' } }),
     )
-    const out = channel.content.get()
+    const out = channel.getText()
     expect(out).toContain("← Response 'fs/read_text_file' (7) in")
     expect(out).toContain('ERROR')
     expect(out).toContain('Error: {\n  "code": -32602')
@@ -95,10 +95,10 @@ describe('AcpProtocolTracer', () => {
     const full = enc({ jsonrpc: '2.0', method: 'ping', params: { n: 1 } })
     const mid = Math.floor(full.length / 2)
     tracer.traceInboundChunk(full.slice(0, mid))
-    expect(channel.content.get()).toBe('')
+    expect(channel.getText()).toBe('')
     expect(logger.infoLines).toHaveLength(0)
     tracer.traceInboundChunk(full.slice(mid))
-    expect(channel.content.get()).toContain("← Notification 'ping'")
+    expect(channel.getText()).toContain("← Notification 'ping'")
     expect(logger.infoLines).toHaveLength(1)
   })
 
@@ -107,7 +107,7 @@ describe('AcpProtocolTracer', () => {
       enc({ jsonrpc: '2.0', method: 'a', params: null }) +
       enc({ jsonrpc: '2.0', method: 'b', params: null })
     tracer.traceInboundChunk(merged)
-    const out = channel.content.get()
+    const out = channel.getText()
     expect(out).toContain("Notification 'a'")
     expect(out).toContain("Notification 'b'")
     expect(logger.infoLines).toEqual([
@@ -128,7 +128,7 @@ describe('AcpProtocolTracer', () => {
     for (let i = 0; i < line.length; i += CHUNK) {
       tracer.traceInboundChunk(line.slice(i, i + CHUNK))
     }
-    const out = channel.content.get()
+    const out = channel.getText()
     expect(out).not.toContain(bigData)
     expect(out).toMatch(/← <large frame \d+ bytes elided>/)
     expect(out.length).toBeLessThan(2000)
@@ -145,18 +145,18 @@ describe('AcpProtocolTracer', () => {
       tracer.traceInboundChunk(partial.slice(i, i + CHUNK))
     }
     // No newline seen yet → nothing emitted, buffer was capped (dropped), not held.
-    expect(channel.content.get()).toBe('')
+    expect(channel.getText()).toBe('')
     // Close the oversized line, then send a normal one.
     tracer.traceInboundChunk('\n')
     tracer.traceInboundChunk(enc({ jsonrpc: '2.0', method: 'ping', params: { n: 1 } }))
-    const out = channel.content.get()
+    const out = channel.getText()
     expect(out).toMatch(/← <large frame \d+ bytes elided>/)
     expect(out).toContain("← Notification 'ping'")
   })
 
   it('falls back to <unparseable> on bad JSON without throwing', () => {
     expect(() => tracer.traceInboundChunk('not-json{garbage}\n')).not.toThrow()
-    expect(channel.content.get()).toContain('<unparseable>')
+    expect(channel.getText()).toContain('<unparseable>')
     expect(logger.infoLines).toHaveLength(1)
     expect(logger.infoLines[0]).toContain('<unparseable>')
   })
@@ -165,7 +165,7 @@ describe('AcpProtocolTracer', () => {
     const otherTracer = new AcpProtocolTracer(channel, logger, 'claude#xyz789')
     tracer.traceOutboundChunk(enc({ jsonrpc: '2.0', id: 1, method: 'a', params: {} }))
     otherTracer.traceInboundChunk(enc({ jsonrpc: '2.0', id: 1, result: {} }))
-    const out = channel.content.get()
+    const out = channel.getText()
     expect(out).toContain("← Response '?' (1)")
     expect(out).toContain('[claude#xyz789]')
     expect(logger.infoLines.some((l) => l.startsWith(`[claude#xyz789] ← Response '?' (1)`))).toBe(
@@ -188,7 +188,7 @@ describe('AcpProtocolTracer', () => {
         },
       }),
     )
-    const out = channel.content.get()
+    const out = channel.getText()
     expect(out).not.toContain(bigData)
     expect(out).toContain('<base64 500000 chars>')
     expect(out.length).toBeLessThan(2000)

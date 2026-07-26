@@ -28,6 +28,8 @@ import { ILogFilesService, type LogFileDescriptor } from '../../shared/ipc/servi
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { revealOutputPanel } from '../services/output/revealOutputPanel.js'
+import { sortOutputChannelNames } from '../services/output/outputChannelSort.js'
+import { IOutputModelService } from '../services/output/OutputModelService.js'
 
 const LOG_READ_MAX_BYTES = 1024 * 1024
 const EMPTY_LOG_CHANNEL = 'Logs'
@@ -186,11 +188,7 @@ export class ShowOutputChannelAction extends Action2 {
 
     // Pin "All" first so users land on the cross-channel view by default,
     // mirroring the OutputView dropdown sort order.
-    const sorted = [...names].sort((a, b) => {
-      if (a === 'All') return -1
-      if (b === 'All') return 1
-      return a.localeCompare(b)
-    })
+    const sorted = sortOutputChannelNames(names)
     const active = outputService.activeChannelName.get()
     const items: IQuickPickItem[] = sorted.map((name) => {
       const channel = outputService.getChannel(name)
@@ -361,6 +359,24 @@ export class ClearOutputAction extends Action2 {
     const channelName = outputService.activeChannelName.get()
     if (!channelName) return
     outputService.getChannel(channelName)?.clear()
+  }
+}
+
+export class ToggleOutputAutoScrollAction extends Action2 {
+  static readonly ID = 'workbench.action.toggleOutputAutoScroll'
+
+  constructor() {
+    super({
+      id: ToggleOutputAutoScrollAction.ID,
+      title: localize2('action.toggleOutputAutoScroll.title', 'Output: Toggle Auto Scrolling'),
+      category: localize2('command.category.view', 'View'),
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    const outputModels = accessor.get(IOutputModelService)
+    outputModels.setAutoScroll(!outputModels.autoScroll.get())
   }
 }
 

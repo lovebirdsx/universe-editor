@@ -132,7 +132,7 @@ describe('AggregatedLogChannelContribution', () => {
     fireAppend(logFiles, 'console', 'c1\n')
     fireAppend(logFiles, 'main', 'm2\n')
 
-    expect(all.content.get()).toBe('[Main] m1\n[Console] c1\n[Main] m2\n')
+    expect(all.getText()).toBe('[Main] m1\n[Console] c1\n[Main] m2\n')
     contribution.dispose()
   })
 
@@ -142,11 +142,11 @@ describe('AggregatedLogChannelContribution', () => {
 
     const all = output.getChannel(AGGREGATED_LOG_CHANNEL_NAME)!
     fireAppend(logFiles, 'main', 'part-')
-    expect(all.content.get()).toBe('')
+    expect(all.getText()).toBe('')
     expect(contribution._getTail('main')).toBe('part-')
 
     fireAppend(logFiles, 'main', 'rest\n')
-    expect(all.content.get()).toBe('[Main] part-rest\n')
+    expect(all.getText()).toBe('[Main] part-rest\n')
     expect(contribution._getTail('main')).toBe('')
 
     contribution.dispose()
@@ -158,11 +158,11 @@ describe('AggregatedLogChannelContribution', () => {
 
     const all = output.getChannel(AGGREGATED_LOG_CHANNEL_NAME)!
     fireAppend(logFiles, 'main', 'a\nb\nc')
-    expect(all.content.get()).toBe('[Main] a\n[Main] b\n')
+    expect(all.getText()).toBe('[Main] a\n[Main] b\n')
     expect(contribution._getTail('main')).toBe('c')
 
     fireAppend(logFiles, 'main', '\n')
-    expect(all.content.get()).toBe('[Main] a\n[Main] b\n[Main] c\n')
+    expect(all.getText()).toBe('[Main] a\n[Main] b\n[Main] c\n')
     contribution.dispose()
   })
 
@@ -181,7 +181,7 @@ describe('AggregatedLogChannelContribution', () => {
 
     // After clear, a fresh chunk should not be concatenated onto the dropped tail.
     fireAppend(logFiles, 'main', 'fresh\n')
-    expect(all.content.get()).toBe('[Main] fresh\n')
+    expect(all.getText()).toBe('[Main] fresh\n')
 
     contribution.dispose()
   })
@@ -198,10 +198,10 @@ describe('AggregatedLogChannelContribution', () => {
     // they resolve to 'Main' / 'Console' even without a descriptor.
     fireAppend(logFiles, 'main', 'first\n')
     fireAppend(logFiles, 'console', 'hello\n')
-    expect(all.content.get()).toBe('[Main] first\n[Console] hello\n')
+    expect(all.getText()).toBe('[Main] first\n[Console] hello\n')
 
     fireAppend(logFiles, 'main', 'second\n')
-    expect(all.content.get()).toBe('[Main] first\n[Console] hello\n[Main] second\n')
+    expect(all.getText()).toBe('[Main] first\n[Console] hello\n[Main] second\n')
     contribution.dispose()
   })
 
@@ -212,6 +212,6 @@ describe('AggregatedLogChannelContribution', () => {
     contribution.dispose()
 
     fireAppend(logFiles, 'main', 'after\n')
-    expect(all.content.get()).toBe('')
+    expect(all.getText()).toBe('')
   })
 })

@@ -77,7 +77,7 @@ describe('ClearOutputAction', () => {
     services.set(IOutputService, outputService)
     await runCommand(ClearOutputAction.ID, services)
 
-    expect(outputService.activeChannelContent.get()).toBe('')
+    expect(outputService.activeChannel?.getText() ?? '').toBe('')
   })
 
   it('is a no-op when no channel is active', async () => {
