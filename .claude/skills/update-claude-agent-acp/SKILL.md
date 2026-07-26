@@ -158,14 +158,30 @@ git push -u origin chore/update-claude-agent-acp
 - **rebase 注意**：下次合上游时,`getAvailableModels`(返回类型是 `{ state, resumeSync? }` 而非裸 state)、`reconcileResumedSessionModel`、`readResumedLiveModel` 周边极易与上游对 #848 的后续改动冲突。**原则:任何 CLI 控制请求(getContextUsage/setModel)都不得回到 session/load 关键路径**,上游若有新的 resume 期同步逻辑,一律并入 `reconcileResumedSessionModel` 后台任务。`[perf]` 计时日志(loadSession/createSession/readResumedLiveModel/setModel)是按仓库「关键逻辑加调试输出」规则永久保留的,别当临时插桩删掉。集成测试 `session-load.test.ts` 的 #845 用例断言时机是「load 返回后等 config_option_update」而非「load 响应里」,上游同名用例若冲突以我方为准。
 - **锚点**：`src/acp-agent.ts`(`getAvailableModels` 的 `isResumedSession` 早返回、`reconcileResumedSessionModel`、`createSession` 里 `resumeSync` 调度点)、`src/tests/resumed-model-sync.test.ts`(全部我方新增)、`src/tests/session-load.test.ts`(#845 用例)。
 
+### 案例 9（0.58.1→0.62.0 复盘）：上游 #894 把 contextWindow seeding 也做进 resume 关键路径，与案例 8 正面冲突；及五类新坑
+- **现象**：上游 #894（remove ~15s stall on session/new and model switch）建了 `contextWindowCache`/`immediateContextWindow` 同步 seeding 体系，同时把 `readResumedLiveModel` 扩成返回 `{model, contextWindow}`、`getAvailableModels` 返回 `{modelState, resumedContextWindow}`——**resume 的 getContextUsage 仍在 session/load 关键路径**（上游认为 resumed session 的 report pre-turn 可得，但我方实测大 transcript 要 6-7s，案例 8）。与我方 `dd49937`（案例 8）、`6b585e3`（maxTokens 有效窗口）、`2045546`（autoCompactWindow clamp）三个提交同时冲突。
+- **解法**（语义合并，案例 8 原则优先）：
+  1. `getAvailableModels` 保持我方 `{ state, resumeSync? }` 签名——resume 零往返，`resumedContextWindow` 概念整体删除（seededWindow 只走 cache/heuristic）。
+  2. `readResumedLiveModel` 吸收上游维度扩成 `{ model, contextWindow, used }`（contextWindow 用我方 `pickWindowSize(maxTokens) ?? pickWindowSize(rawMaxTokens)`，非上游的裸 rawMaxTokens），保留 `[perf]` 日志。
+  3. `reconcileResumedSessionModel` 后台应用窗口纠偏：`session.contextWindowSize = min(report, clamp)` + `contextWindowAuthoritative = true` + 发 `usage_update { used, size }` 推送客户端（report 的 totalTokens 是真实 used，一并发）。
+  4. `2045546` 的 clamp 叠加到上游每个 seed 点：session 创建（seededWindow）、model switch、message_start heuristic 升级、result 的 modelUsage fallback（cache 存物理窗口、clamp 在读取处应用）。
+  5. 上游新增测试 `session/load seeds the window from the resumed session's getContextUsage report` 断言同步 seed——**与我方语义直接冲突，按案例 8「以我方为准」改写**为「load 零往返 seed 200k → `vi.waitFor` 后台纠偏到报告值」。
+- **坑 1（最大的一波隐性失败）：dogfood 环境污染测试**。fork 自身功能（`CLAUDE_CODE_SUBAGENT_MODEL`、`CLAUDE_CODE_AUTO_COMPACT_WINDOW`）会被 fork 注入它 spawn 的 CLI 的 env——在 fork dogfood 的 shell（包括 Claude Code 会话本身）里跑 `npm test` 时，这些变量经 `...process.env` spread 和 `resolveAutoCompactWindow` 的 process.env 候选泄漏进几十个测试（context window 测试成片挂、subagent pin 测试挂）。**解法**：vitest `setupFiles`（`src/tests/setup.ts`）里**直接赋值** `process.env.X = ""` 清空——不要用 `vi.stubEnv`（测试的 `unstubAllEnvs` 会把 setup 的 stub 一并恢复出脏值；直接赋值后测试自己的 stub/unstub 往返恰好恢复到干净值）。
+- **坑 2：git 三方合并的对齐吞噬**。两侧在相同锚点各自追加内容时，相同的结尾行（`}`、`/**`）会被 git 对齐成公共行，手动拼接「HEAD 块 + theirs 块」容易丢 HEAD 函数的闭合 `}` 或 theirs 注释的开头 `/**`（本次 tools.ts、tools.test.ts 各一处，`typecheck` 的 TS1005 兜底）。拼接「各自追加」型冲突块后**必须立即 typecheck**，别等全部 rebase 完。
+- **坑 3：extNotification 旁路 sendUpdate 的语义丢失**。上游靠 `sendUpdate` 包装器给 agent_message_chunk 置 `session.emittedAssistantText = true`（delivered 标记，抑制 #453 result-text fallback）；我方 18f9c85 把 compacting 改成 extNotification 后旁路了该标记 → `/compact` turn 的 result text 被 fallback 误转发。**我方每处把 sendUpdate 换成 extNotification 的地方，都要核对上游挂在 sendUpdate 上的副作用**。解法：compacting 分支显式 `session.emittedAssistantText = true`。
+- **坑 4：autosquash 的时序陷阱**。fixup 到较早提交的 hunk，若其上下文由**更晚提交引入**（如 c0416bd 的内联测试 mock），autosquash 重排到目标时点无法应用，呈现「HEAD 空 vs base/theirs 有完整测试块」的 add/add 冲突。解法：取 HEAD 跳过、让后续提交正常引入；跳过前先确认那些 mock 的测试本不需要该补丁（本次两处都是预防性批量补丁的副产品，跳过无损）。**教训：批量 sed 补丁（如给 34 处 mock 补 extNotification）做的 fixup 归属，冲突面会放大——补丁越机械，越应按 describe 归属到引入对应测试的提交**。
+- **坑 5：rebase 中途的 git 操作禁忌**。为验证「某测试在旧版是否通过」误用 `git stash` + `git checkout <old> -- .` + `stash pop`（产生冲突、差点丢修复改动）——验证旧行为一律 `git clone -q --no-hardlinks . /tmp/xxx` 到临时目录做，恢复手段是 `git reset --hard <branch>` + `git stash pop`。
+- **案例 1 扩展**：上游 #867 新增的 4 个 streamed-input refine 测试同患 Windows 路径分隔符缺陷（`src\x` vs `src/x`），与原 2 个 toDisplayPath 失败同属上游 `path.relative` 平台分隔符问题，同样忽略——**当前已知 Windows flake 总数 6 个**。
+- **锚点**：`src/acp-agent.ts`（`seededWindow`/`immediateContextWindow`、model switch clamp、`reconcileResumedSessionModel` 的窗口/used 纠偏、compacting status 的 `emittedAssistantText`）、`src/tests/setup.ts`（环境污染清理）、`src/tests/create-session-options.test.ts`（resume seed 改写用例）、`src/tests/subagent-model.test.ts`（beforeEach stub）。
+
 1. 调查阶段全程只读（`git ls-remote` / `gh api`），别在 plan mode 改 submodule。
 2. submodule 是 detached HEAD；**本地 `main` 分支常已过时**，rebase 基线和工作分支都用 `origin/main`/当前 HEAD 的真实 sha，别信本地 main。
 3. rebase 里 `--ours` = 被 rebase 到的上游侧、`--theirs` = 正在重放的我方提交（与平时相反）。`package-lock.json` 取 `--ours` 后用 `npm install` 重生成。
 4. AskUserQuestion 是本 fork 的命脉：主仓库走 extMethod、不支持 elicitation。合并时**两路并存**，绝不让上游的 form-only 逻辑禁用它（案例 2）。
 5. package.json 解冲突当心**重复 key**（公共行别在 new_string 重写）；version/依赖取上游、build/esbuild 取我方。
 6. 后处理改动（重生成的 lock、适配的测试）用 `git commit --fixup=<sha>` + `GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash` 并入逻辑所属提交。
-7. fork 测试已知 2 个 Windows toDisplayPath 失败是上游缺陷（案例 1），别误判为回归；主仓库 `pnpm check` 的 FileWatcher/DiffEditor/`Channel closed`(IPC) 偶发失败是既有 flake，单独 `pnpm --filter @universe-editor/editor run test` 重跑即绿。
-8. `pnpm agent:build` 会 prune fork 到生产依赖；之后要再跑 fork 测试先 `npm install`。
+7. fork 测试已知 **6 个** Windows 路径分隔符失败是上游缺陷（案例 1 家族，2 个 toDisplayPath + 4 个 #867 refine 测试），别误判为回归；主仓库 `pnpm check` 的 FileWatcher/DiffEditor/`Channel closed`(IPC) 偶发失败是既有 flake，单独 `pnpm --filter @universe-editor/editor run test` 重跑即绿。
+8. `pnpm agent:build` 会 prune fork 到生产依赖；之后要再跑 fork 测试先 `npm install`。⚠️ 这次 `npm install` 可能把 `package-lock.json` 弄脏（本机 npmmirror registry 元数据更新后重解析 optional devDep，如 `@emnapi/wasi-threads` 小版本漂移 + 补上之前缺失的 `@emnapi/core` 条目）。**别急着丢弃**：npm 对 optional 依赖解析失败会静默省略 lock 条目，rebase 当天生成的 lock 可能因缓存元数据过期而缺条目，当天 `npm ci` 靠同样的缓存蒙混过关，隔天后 `npm ci` 就会报 `Invalid/Missing ... EUSAGE`（`agent:build`/打包必挂）。判别法：`npm ci --dry-run` 能过才算噪音可丢弃；报错就说明脏 lock 才是同步态，必须 commit（fixup 进 esbuild 提交 + autosquash，lock-only 重放无冲突）。
 9. 全流程末尾用 `git diff --submodule=log vendor/claude-agent-acp` 核对“我方提交在顶 + 上游新提交在下”，再提交主仓库指针。
 10. **rebase 零冲突 ≠ 语义正确**：上游做接口/抽象层重构时，我方挂在旧结构上的接口声明+实现可能被整体顶替而只留调用点（案例 5）；上游新增运行时校验时，我方旧测试的人为构造序列会失效（案例 6）。第 3 步 `npm run typecheck` **和** `npm test` 都是必跑安全网，别因 rebase 顺利就跳过。
 11. **合并方式固定 rebase，不用再问用户**；只需就“推送范围”征询。选“仅本地不推送”时到本地 `main` 指向合并结果 + 主仓库 `agent:build`/`pnpm check` 验证为止，不 push fork、不提交 submodule 指针。
