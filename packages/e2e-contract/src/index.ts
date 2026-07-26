@@ -401,11 +401,51 @@ export interface E2EProbe {
   /** Create a named output channel (for testing restore without ACP). */
   createOutputChannel(name: string): void
   /**
+   * Append to a named output channel, creating it if needed. Drives the panel
+   * the same way a logging subsystem does (batched flush → Monaco model edit)
+   * without waiting on the main-process log file round-trip.
+   */
+  appendToOutputChannel(name: string, text: string): void
+  /**
    * Retained content of a named output channel, or `''` if no such channel.
    * Lets extension suites assert what a plugin logged (e.g. an ESLint server's
    * resolution / lint trace).
    */
   getOutputChannelContent(name: string): string
+  /** Activate an output channel by name (as the toolbar dropdown would). */
+  setActiveOutputChannel(name: string): void
+  /**
+   * Set the Output panel's level filter: the listed `LogLevel` values are the
+   * ones hidden (mirrors unchecking them in the level dropdown).
+   */
+  setOutputHiddenLevels(levels: readonly number[]): void
+  /** `LogLevel` values currently hidden by the Output panel's level filter. */
+  getOutputHiddenLevels(): readonly number[]
+  /** Set the Output panel's free-form text filter (`foo, !bar` syntax). */
+  setOutputFilterText(text: string): void
+  /**
+   * Line ranges the filter *computes* as hidden for the active channel
+   * (1-based, `endLineExclusive`). Compare against getVisibleOutputLines to
+   * tell a wrong computation apart from one that never reached the editor.
+   */
+  getOutputHiddenRanges(): ReadonlyArray<{ startLine: number; endLineExclusive: number }>
+  /**
+   * Lines the Output panel actually renders: model lines minus the ones the
+   * editor collapsed via hidden areas. Reads the live Monaco editor, so a
+   * filter that was computed but never applied still shows up here.
+   */
+  getVisibleOutputLines(): readonly string[]
+  /**
+   * Log through the renderer's ILoggerService, so the entry travels the real
+   * path (IPC → main log file → onDidAppendEntry → the aggregated "All"
+   * channel). `channelId`/`channelName` name the source logger.
+   */
+  logToChannel(
+    channelId: string,
+    channelName: string,
+    level: 'trace' | 'debug' | 'info' | 'warn' | 'error',
+    message: string,
+  ): void
   // -- Terminal probe ------------------------------------------------------
   /**
    * Create an integrated terminal directly via ITerminalService and return its

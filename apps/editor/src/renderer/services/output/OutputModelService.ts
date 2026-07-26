@@ -92,6 +92,7 @@ export class OutputModelService extends Disposable implements IOutputModelServic
   private readonly _subscriptions = this._register(new DisposableMap<string>())
   private readonly _viewStates = new Map<string, monaco.editor.ICodeEditorViewState>()
   private readonly _filterDelayer = this._register(new ThrottledDelayer<void>(FILTER_DELAY_MS))
+  private _contentRefreshTimer: ReturnType<typeof setTimeout> | undefined
   private readonly _hiddenRangesAppliers = new Map<string, HiddenRangesApplier>()
 
   readonly autoScroll = observableValue<boolean>('OutputModelService.autoScroll', true)
@@ -154,6 +155,10 @@ export class OutputModelService extends Disposable implements IOutputModelServic
     const subscription = new DisposableStore()
     subscription.add(channel.onDidFlush((e) => this._applyFlush(channel.name, e)))
     subscription.add(channel.onDidClear(() => this._applyClear(channel.name)))
+    // Drain buffered appends now: getText() below already contains them, and no
+    // model is registered yet, so the drained event lands on nothing. Leaving
+    // them queued would append the same delta a second time.
+    channel.flushNow()
     const uri = m.Uri.parse(`output://channel/${encodeURIComponent(channel.name)}`)
     const found = m.editor.getModel(uri)
     let model: monaco.editor.ITextModel
@@ -249,10 +254,30 @@ export class OutputModelService extends Disposable implements IOutputModelServic
     }
   }
 
+  private _applyHiddenRanges(): void {
+    for (const apply of this._hiddenRangesAppliers.values()) apply()
+  }
+
+  /** Filter edits debounce: mid-typing terms would otherwise churn the view. */
   private _scheduleFilterRefresh(): void {
     void this._filterDelayer.trigger(async () => {
-      for (const apply of this._hiddenRangesAppliers.values()) apply()
+      this._applyHiddenRanges()
     })
+  }
+
+  /**
+   * Content refreshes throttle rather than debounce: a streaming channel flushes
+   * far faster than FILTER_DELAY_MS, and a debounce would keep pushing the
+   * refresh back for as long as the stream lasts — filtered-out lines stay
+   * visible until the log goes quiet. The first flush opens one refresh window
+   * that later flushes coalesce into without postponing it.
+   */
+  private _scheduleContentRefresh(): void {
+    if (this._contentRefreshTimer !== undefined) return
+    this._contentRefreshTimer = setTimeout(() => {
+      this._contentRefreshTimer = undefined
+      this._applyHiddenRanges()
+    }, FILTER_DELAY_MS)
   }
 
   private _applyFlush(channelName: string, e: IOutputChannelFlushEvent): void {
@@ -277,7 +302,7 @@ export class OutputModelService extends Disposable implements IOutputModelServic
       model.applyEdits([{ range: new m.Range(1, 1, end.lineNumber, end.column), text: '' }])
     }
     if (this.filterText.get().trim() !== '' || this.hiddenLevels.get().size > 0) {
-      this._scheduleFilterRefresh()
+      this._scheduleContentRefresh()
     }
   }
 
@@ -299,6 +324,10 @@ export class OutputModelService extends Disposable implements IOutputModelServic
   }
 
   override dispose(): void {
+    if (this._contentRefreshTimer !== undefined) {
+      clearTimeout(this._contentRefreshTimer)
+      this._contentRefreshTimer = undefined
+    }
     this._hiddenRangesAppliers.clear()
     for (const name of [...this._entries.keys()]) this._dropModel(name)
     super.dispose()

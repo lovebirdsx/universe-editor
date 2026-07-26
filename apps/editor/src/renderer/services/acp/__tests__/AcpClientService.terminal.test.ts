@@ -147,6 +147,7 @@ class StubOutputChannel implements IOutputChannel {
   append(_text: string): void {}
   appendLine(_text: string): void {}
   clear(): void {}
+  flushNow(): void {}
   getText(): string {
     return ''
   }

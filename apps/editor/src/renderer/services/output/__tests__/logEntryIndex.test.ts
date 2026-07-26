@@ -141,7 +141,9 @@ describe('computeHiddenRanges', () => {
 
   it('excludes terms remove entries even when an include matches', () => {
     const hidden = computeHiddenRanges(lines, new Set(), 'e1, !e1')
-    expect(hidden).toEqual([{ startLine: 1, endLineExclusive: 7 }])
+    // Everything is excluded, so the last line is spared — Monaco would reveal
+    // the whole buffer if asked to hide all of it.
+    expect(hidden).toEqual([{ startLine: 1, endLineExclusive: 6 }])
   })
 
   it('combines level and text filters', () => {
@@ -167,6 +169,27 @@ describe('computeHiddenRanges', () => {
     ]
     expect(computeHiddenRanges(ls, new Set([LogLevel.Info]), '')).toEqual([
       { startLine: 1, endLineExclusive: 2 },
+    ])
+  })
+
+  it('keeps the last line visible when the filter would hide every line', () => {
+    // Monaco reveals the whole buffer when asked to hide all of it, so a
+    // single-level channel must give up its trailing line instead.
+    const allInfo = ['[info] i1', '[info] i2', '[info] i3', '']
+    expect(computeHiddenRanges(allInfo, new Set([LogLevel.Info]), '')).toEqual([
+      { startLine: 1, endLineExclusive: 4 },
+    ])
+  })
+
+  it('hides nothing rather than everything for a single-line channel', () => {
+    expect(computeHiddenRanges(['[info] only'], new Set([LogLevel.Info]), '')).toEqual([])
+  })
+
+  it('still hides through the end when some line survives the filter', () => {
+    const ls = ['[info] i1', '[warning] w1', '[info] i2']
+    expect(computeHiddenRanges(ls, new Set([LogLevel.Info]), '')).toEqual([
+      { startLine: 1, endLineExclusive: 2 },
+      { startLine: 3, endLineExclusive: 4 },
     ])
   })
 })

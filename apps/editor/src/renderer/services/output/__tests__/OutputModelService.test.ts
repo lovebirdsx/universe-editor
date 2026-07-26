@@ -46,6 +46,28 @@ describe('OutputModelService', () => {
     expect(m2).toBe(m1)
   })
 
+  it('does not double the content when appends are still buffered at acquire time', async () => {
+    const { output, models } = makeServices()
+    const ch = output.createChannel('main')
+    // append() buffers and flushes on a microtask, so acquiring the model in the
+    // same task seeds text the pending flush is about to report again.
+    ch.append('a\nb\n')
+    const model = models.acquireModel(ch)
+    await flushMicrotasks()
+    expect(model.getValue()).toBe('a\nb\n')
+    expect(model.getValue()).toBe(ch.getText())
+  })
+
+  it('mirrors appends that arrive after a buffered acquire', async () => {
+    const { output, models } = makeServices()
+    const ch = output.createChannel('main')
+    ch.append('seed\n')
+    const model = models.acquireModel(ch)
+    ch.append('later\n')
+    await flushMicrotasks()
+    expect(model.getValue()).toBe('seed\nlater\n')
+  })
+
   it('mirrors flushed appends into the model tail', async () => {
     const { output, models } = makeServices()
     const ch = output.createChannel('main')
@@ -157,11 +179,9 @@ describe('OutputModelService', () => {
 
     ch.append('[info] alpha again\n')
     await flushMicrotasks()
-    // Line 3 matches again; the trailing empty line stays hidden on its own.
-    expect(models.getHiddenRanges('main')).toEqual([
-      { startLine: 2, endLineExclusive: 3 },
-      { startLine: 4, endLineExclusive: 5 },
-    ])
+    // Model is now alpha / beta / alpha again / '' — only the beta entry hides;
+    // the trailing empty line belongs to the matching "alpha again" entry.
+    expect(models.getHiddenRanges('main')).toEqual([{ startLine: 2, endLineExclusive: 3 }])
 
     models.setFilterText('')
     expect(models.getHiddenRanges('main')).toEqual([])
@@ -188,17 +208,41 @@ describe('OutputModelService', () => {
       startLineNumber: number
       endLineNumber: number
     }>
-    // The debug entry and the trailing empty line hide as two ranges.
-    expect(last.map((r) => [r.startLineNumber, r.endLineNumber])).toEqual([
-      [1, 1],
-      [3, 3],
-    ])
+    // Model is d1 / i1 / '' — only the debug entry hides.
+    expect(last.map((r) => [r.startLineNumber, r.endLineNumber])).toEqual([[1, 1]])
 
     d?.dispose()
     applied.length = 0
     models.setLevelHidden(LogLevel.Debug, false)
     await new Promise((r) => setTimeout(r, 200))
     expect(applied).toEqual([])
+  })
+
+  it('a continuous log stream does not postpone the hidden-areas refresh', async () => {
+    const { output, models } = makeServices()
+    const ch = output.createChannel('main')
+    ch.append('[info] i0\n')
+    models.acquireModel(ch)
+
+    const applied: unknown[][] = []
+    models.attachHiddenAreas('main', {
+      setHiddenAreas: (ranges: unknown[]) => applied.push(ranges),
+    } as never)
+    models.setLevelHidden(LogLevel.Info, true)
+    applied.length = 0
+
+    // Append faster than the 150ms filter window for ~500ms, as an ACP session
+    // does while streaming. A debounced refresh would never fire here.
+    const start = Date.now()
+    while (Date.now() - start < 500) {
+      ch.appendLine('[info] streaming')
+      await flushMicrotasks()
+      await new Promise((r) => setTimeout(r, 20))
+    }
+
+    expect(applied.length).toBeGreaterThan(0)
+    const last = applied[applied.length - 1] as Array<{ startLineNumber: number }>
+    expect(last.length).toBeGreaterThan(0)
   })
 
   it('attachHiddenAreas returns undefined when the editor lacks setHiddenAreas', () => {

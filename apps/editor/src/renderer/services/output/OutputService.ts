@@ -86,6 +86,11 @@ export class OutputChannel implements IOutputChannel {
     return this._chunks.join('') + this._pending.join('')
   }
 
+  flushNow(): void {
+    // Idempotent: the already-queued microtask finds _pending empty and returns.
+    this._flush()
+  }
+
   dispose(): void {
     if (this._disposed) return
     this._disposed = true

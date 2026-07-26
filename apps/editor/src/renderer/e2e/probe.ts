@@ -16,6 +16,7 @@ import {
   IDisposable,
   KeybindingsRegistry,
   LifecyclePhase,
+  LogLevel,
   StatusBarAlignment,
   URI,
   onUnexpectedError,
@@ -28,6 +29,7 @@ import {
   type IFileService,
   type ILayoutService,
   type ILifecycleService,
+  type ILoggerService,
   type IOutputService,
   type IStatusBarService,
   type IViewDescriptorService,
@@ -46,7 +48,8 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
-import { MonacoLoader } from '../workbench/editor/monaco/MonacoLoader.js'
+import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
+import type { IOutputModelService } from '../services/output/OutputModelService.js'
 import { DirtyDiffPeekRegistry } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
 import { AcpPromptDraftCache } from '../services/acp/acpPromptDraftCache.js'
 import { swarmNotificationE2E } from '../services/swarm/swarmNotificationE2E.js'
@@ -100,6 +103,8 @@ export interface E2EProbeServices {
   readonly fileService: IFileService
   readonly extensionManagementService: IExtensionManagementService
   readonly extensionEnablementService: IExtensionEnablementService
+  readonly outputModelService: IOutputModelService
+  readonly loggerService: ILoggerService
   /**
    * Resolves once the one-shot bootstrap focus restore has landed. That restore
    * is fire-and-forget and runs AFTER LifecyclePhase.Restored, so specs must
@@ -108,6 +113,46 @@ export interface E2EProbeServices {
   readonly bootstrapFocusSettled: Promise<void>
   /** Tears down React + snapshots the Disposable tracker; see E2EProbe. */
   readonly computeTeardownLeakReport: () => E2EDisposableLeakReport | null
+}
+
+const ALL_LOG_LEVELS: readonly LogLevel[] = [
+  LogLevel.Trace,
+  LogLevel.Debug,
+  LogLevel.Info,
+  LogLevel.Warning,
+  LogLevel.Error,
+]
+
+/** The Output panel's Monaco editor, identified by its `output://` model uri. */
+function findOutputEditor(): monaco.editor.ICodeEditor | undefined {
+  return MonacoLoader.get()
+    .editor.getEditors()
+    .find((ed) => ed.getModel()?.uri.scheme === 'output')
+}
+
+/**
+ * Reaches the view model's coordinates converter, the only thing that answers
+ * "is this model line collapsed by a hidden area?". getTopForLineNumber and
+ * friends map a hidden line onto its neighbouring visible line, so they report
+ * every line as rendered and cannot be used here.
+ */
+interface HiddenAreaAwareEditor {
+  readonly _modelData?: {
+    readonly viewModel?: {
+      readonly coordinatesConverter?: {
+        modelPositionIsVisible(position: { lineNumber: number; column: number }): boolean
+      }
+    }
+  }
+}
+
+function outputLineVisibility(): ((line: number) => boolean) | undefined {
+  const editor = findOutputEditor() as
+    | (monaco.editor.ICodeEditor & HiddenAreaAwareEditor)
+    | undefined
+  const converter = editor?._modelData?.viewModel?.coordinatesConverter
+  if (!converter) return undefined
+  return (line: number) => converter.modelPositionIsVisible({ lineNumber: line, column: 1 })
 }
 
 const NONE_TOKEN = {
@@ -477,8 +522,51 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     createOutputChannel: (name: string) => {
       services.outputService.createChannel(name)
     },
+    appendToOutputChannel: (name: string, text: string) => {
+      const channel =
+        services.outputService.getChannel(name) ?? services.outputService.createChannel(name)
+      channel.append(text)
+    },
     getOutputChannelContent: (name: string) =>
       services.outputService.getChannel(name)?.getText() ?? '',
+    setActiveOutputChannel: (name: string) => {
+      services.outputService.setActiveChannel(name)
+    },
+    setOutputHiddenLevels: (levels: readonly number[]) => {
+      const wanted = new Set<number>(levels)
+      for (const level of ALL_LOG_LEVELS) {
+        services.outputModelService.setLevelHidden(level, wanted.has(level))
+      }
+    },
+    getOutputHiddenLevels: () => [...services.outputModelService.hiddenLevels.get()],
+    setOutputFilterText: (text: string) => {
+      services.outputModelService.setFilterText(text)
+    },
+    getOutputHiddenRanges: () => {
+      const name = services.outputService.activeChannelName.get()
+      if (name === undefined) return []
+      return services.outputModelService
+        .getHiddenRanges(name)
+        .map((r) => ({ startLine: r.startLine, endLineExclusive: r.endLineExclusive }))
+    },
+    getVisibleOutputLines: (): readonly string[] => {
+      const model = findOutputEditor()?.getModel()
+      const isVisible = outputLineVisibility()
+      if (!model || !isVisible) return []
+      const visible: string[] = []
+      for (let line = 1; line <= model.getLineCount(); line++) {
+        if (isVisible(line)) visible.push(model.getLineContent(line))
+      }
+      return visible
+    },
+    logToChannel: (channelId, channelName, level, message) => {
+      const logger = services.loggerService.createLogger({ id: channelId, name: channelName })
+      if (level === 'trace') logger.trace(message)
+      else if (level === 'debug') logger.debug(message)
+      else if (level === 'info') logger.info(message)
+      else if (level === 'warn') logger.warn(message)
+      else logger.error(message)
+    },
     terminalCreate: async (): Promise<string> => {
       const info = await services.terminalService.create({})
       if (!terminalBuffers.has(info.id)) terminalBuffers.set(info.id, '')

@@ -702,6 +702,8 @@ async function bootstrapWorkbench(): Promise<void> {
       IExtensionManagementService,
     ) as IExtensionManagementService,
     extensionEnablementService,
+    outputModelService: instantiation.invokeFunction((a) => a.get(IOutputModelService)),
+    loggerService,
     bootstrapFocusSettled,
     computeTeardownLeakReport: snapshotLeaks,
   })

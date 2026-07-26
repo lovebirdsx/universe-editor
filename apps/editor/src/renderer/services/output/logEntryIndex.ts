@@ -231,5 +231,20 @@ export function computeHiddenRanges(
       merged.push(range)
     }
   }
-  return merged
+  return keepOneLineVisible(merged, lines.length)
+}
+
+/**
+ * Monaco refuses to hide every line — `ViewModelLines.setHiddenAreas` ends with
+ * "Cannot have everything be hidden => reveal everything!" and clears the areas,
+ * which silently turns the filter off and shows the whole buffer instead. A
+ * single-level channel (an ACP protocol trace is all `[info]`) hits this on
+ * every filter. Give up the last line so the rest stays hidden; it is the
+ * trailing empty line whenever the channel text ends in a newline.
+ */
+function keepOneLineVisible(merged: LogEntryRange[], lineCount: number): LogEntryRange[] {
+  const sole = merged.length === 1 ? merged[0] : undefined
+  if (!sole || sole.startLine > 1 || sole.endLineExclusive <= lineCount) return merged
+  if (lineCount <= 1) return []
+  return [{ startLine: 1, endLineExclusive: lineCount }]
 }

@@ -34,6 +34,13 @@ export interface IOutputChannel extends IDisposable {
   readonly onDidFlush: Event<IOutputChannelFlushEvent>
   /** Fires synchronously on clear(). */
   readonly onDidClear: Event<void>
+  /**
+   * Emit any buffered append immediately instead of on the next microtask. A
+   * consumer that seeds itself from getText() must drain first: getText()
+   * already includes the buffered delta, which the pending flush would then
+   * report a second time.
+   */
+  flushNow(): void
   /** True while the channel retains any text; updates synchronously on append/clear. */
   readonly hasContent: IObservable<boolean>
   /**
