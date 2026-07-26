@@ -263,6 +263,44 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     this._logger.info(`wrote ${profiles.length} credential profile(s) to ${path}`)
   }
 
+  async matchActiveProfile(): Promise<string | undefined> {
+    const profiles = await this.readProfiles()
+    if (profiles.length === 0) return undefined
+
+    // Gateway mode: the provider block carries both the URL and the key, so
+    // same-URL profiles are told apart by their bearer token.
+    const settings = await this.read()
+    if (settings['model_provider'] === GATEWAY_PROVIDER_ID) {
+      const providers = settings['model_providers']
+      const gw =
+        providers && typeof providers === 'object'
+          ? (providers as Record<string, unknown>)[GATEWAY_PROVIDER_ID]
+          : undefined
+      const baseUrl =
+        gw && typeof gw === 'object' ? (gw as Record<string, unknown>)['base_url'] : undefined
+      const token =
+        gw && typeof gw === 'object'
+          ? (gw as Record<string, unknown>)['experimental_bearer_token']
+          : undefined
+      if (typeof baseUrl !== 'string' || typeof token !== 'string' || token === '') {
+        return undefined
+      }
+      const match = profiles.find(
+        (p) => p.kind === 'gateway' && p.baseUrl === baseUrl && p.apiKey === token,
+      )
+      this._logger.info(`active profile match: ${match?.id ?? 'none'} (gateway ${baseUrl})`)
+      return match?.id
+    }
+
+    // Built-in openai provider: an API-key profile matches only when its key is
+    // the one in auth.json; a ChatGPT login matches no profile.
+    const auth = await this._readAuth()
+    if (!auth || this._resolveAuthMode(auth) !== 'apiKey') return undefined
+    const match = profiles.find((p) => p.kind === 'apiKey' && p.apiKey === auth['OPENAI_API_KEY'])
+    this._logger.info(`active profile match: ${match?.id ?? 'none'} (apiKey)`)
+    return match?.id
+  }
+
   private async _readLegacyProfiles(): Promise<CodexCredentialProfile[]> {
     const path = this._profilesPath()
     let raw: string

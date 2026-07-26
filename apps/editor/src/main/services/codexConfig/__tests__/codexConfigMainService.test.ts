@@ -421,6 +421,84 @@ describe('CodexConfigMainService', () => {
     })
   })
 
+  describe('matchActiveProfile', () => {
+    it('distinguishes same-URL gateway profiles by their bearer token', async () => {
+      // Regression: matching "In use" on base_url alone marked every profile
+      // sharing the URL. The key (which never crosses the IPC boundary) decides.
+      await svc.writeProfiles([
+        {
+          id: 'mine',
+          label: 'mine',
+          kind: 'gateway',
+          apiKey: 'kuro-b2',
+          baseUrl: 'http://gw:9080/',
+        },
+        {
+          id: 'mine-work',
+          label: 'mine-work',
+          kind: 'gateway',
+          apiKey: 'kuro-5a',
+          baseUrl: 'http://gw:9080/',
+        },
+      ])
+      await svc.applyCredential({ kind: 'gateway', baseUrl: 'http://gw:9080/', apiKey: 'kuro-5a' })
+      expect(await svc.matchActiveProfile()).toBe('mine-work')
+    })
+
+    it('follows the applied key when switching between same-URL profiles', async () => {
+      await svc.writeProfiles([
+        {
+          id: 'mine',
+          label: 'mine',
+          kind: 'gateway',
+          apiKey: 'kuro-b2',
+          baseUrl: 'http://gw:9080/',
+        },
+        {
+          id: 'mine-work',
+          label: 'mine-work',
+          kind: 'gateway',
+          apiKey: 'kuro-5a',
+          baseUrl: 'http://gw:9080/',
+        },
+      ])
+      await svc.applyCredential({ kind: 'gateway', baseUrl: 'http://gw:9080/', apiKey: 'kuro-5a' })
+      await svc.applyCredential({ kind: 'gateway', baseUrl: 'http://gw:9080/', apiKey: 'kuro-b2' })
+      expect(await svc.matchActiveProfile()).toBe('mine')
+    })
+
+    it('matches an apiKey profile only when its key is the one in auth.json', async () => {
+      await svc.writeProfiles([
+        { id: 'a', label: 'a', kind: 'apiKey', apiKey: 'sk-1' },
+        { id: 'b', label: 'b', kind: 'apiKey', apiKey: 'sk-2' },
+      ])
+      await svc.applyCredential({ kind: 'apiKey', apiKey: 'sk-2' })
+      expect(await svc.matchActiveProfile()).toBe('b')
+    })
+
+    it('returns undefined when the ChatGPT login is in effect', async () => {
+      const accessToken = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 })
+      await fs.writeFile(
+        join(dir, 'auth.json'),
+        JSON.stringify({ tokens: { access_token: accessToken, refresh_token: 'rt' } }),
+        'utf8',
+      )
+      await svc.writeProfiles([{ id: 'a', label: 'a', kind: 'apiKey', apiKey: 'sk-1' }])
+      expect(await svc.matchActiveProfile()).toBeUndefined()
+    })
+
+    it('returns undefined when no profile matches the active credential', async () => {
+      await svc.writeProfiles([{ id: 'a', label: 'a', kind: 'apiKey', apiKey: 'sk-1' }])
+      await svc.applyCredential({ kind: 'apiKey', apiKey: 'sk-unlisted' })
+      expect(await svc.matchActiveProfile()).toBeUndefined()
+    })
+
+    it('returns undefined when the library is empty', async () => {
+      await svc.applyCredential({ kind: 'apiKey', apiKey: 'sk-1' })
+      expect(await svc.matchActiveProfile()).toBeUndefined()
+    })
+  })
+
   describe('credential profiles', () => {
     const profilesPath = () => join(dir, '.universe-editor', 'credential-profiles.json')
 

@@ -178,6 +178,15 @@ export interface ICodexConfigService {
   /** Replace the saved credential library in aiSettings.json (atomic merge). */
   writeProfiles(profiles: CodexCredentialProfile[]): Promise<void>
   /**
+   * Which saved profile (by id) matches the credential currently in effect, or
+   * `undefined` when none does. Computed in the main process so the comparison
+   * can see the secrets that never cross the boundary: a gateway profile must
+   * match BOTH the active provider's `base_url` and its bearer token (same-URL
+   * profiles are distinguished by key), an API-key profile must match the
+   * `OPENAI_API_KEY` in auth.json. ChatGPT-login mode matches no profile.
+   */
+  matchActiveProfile(): Promise<string | undefined>
+  /**
    * Probe a gateway `baseUrl` over HTTP. Resolves `true` when the server answers
    * with any status (a 401/404 still proves reachability); `false` on network
    * errors / timeouts / malformed URLs. Powers the status dot in the UI.

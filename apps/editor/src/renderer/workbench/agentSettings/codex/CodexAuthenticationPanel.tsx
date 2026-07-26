@@ -43,13 +43,12 @@ function newId(): string {
 }
 
 export function CodexAuthenticationPanel({ config }: { config: UseCodexConfig }) {
-  const { authStatus, configPath } = config
-  const apiKeyActive = authStatus.active === 'apiKey'
+  const { configPath } = config
   const authPath = configPath ? getSiblingConfigPath(configPath, 'auth.json') : undefined
 
   return (
     <div className={styles['panel']}>
-      <CredentialLibrary config={config} apiKeyActive={apiKeyActive} />
+      <CredentialLibrary config={config} />
 
       <section className={styles['section']}>
         <h2 className={styles['sectionTitle']}>
@@ -70,51 +69,26 @@ export function CodexAuthenticationPanel({ config }: { config: UseCodexConfig })
   )
 }
 
-function CredentialLibrary({
-  config,
-  apiKeyActive,
-}: {
-  config: UseCodexConfig
-  apiKeyActive: boolean
-}) {
+function CredentialLibrary({ config }: { config: UseCodexConfig }) {
   const notification = useService(INotificationService)
   const {
     profiles,
+    activeProfileId,
     credentialDraft,
     applyProfile,
     saveProfile,
     deleteProfile,
     saveCredentialDraft,
-    settings,
   } = config
   const adding = credentialDraft !== undefined && credentialDraft.editingProfileId === undefined
 
-  // What codex *actually* uses is decided by config.toml's `model_provider`:
-  // - `codex-gateway` → our self-contained gateway provider is active.
-  // - empty/unset → the built-in `openai` provider runs on auth.json (ChatGPT
-  //   login or API key). So an API-key / ChatGPT login is only "in use" when no
-  //   custom provider overrides it.
-  const modelProvider = typeof settings.model_provider === 'string' ? settings.model_provider : ''
-  const gatewayActive = modelProvider === 'codex-gateway'
-  const builtinActive = modelProvider === ''
-  const gatewayBaseUrl = (() => {
-    const providers = settings.model_providers
-    if (!gatewayActive || !providers || typeof providers !== 'object') return ''
-    const gw = (providers as Record<string, unknown>)['codex-gateway']
-    if (!gw || typeof gw !== 'object') return ''
-    const url = (gw as Record<string, unknown>)['base_url']
-    return typeof url === 'string' ? url : ''
-  })()
-
+  // Which profile is "in use" is decided in the main process
+  // (ICodexConfigService.matchActiveProfile): it compares the secrets that never
+  // cross the IPC boundary, so two gateway profiles sharing one base URL are
+  // told apart by their keys — matching on the URL alone marked both.
   const isActive = useCallback(
-    (profile: CodexCredentialProfile): boolean => {
-      // The API key value never leaves the main process, so gateway profiles
-      // match on the active provider's base URL, API-key profiles on the mode.
-      if (profile.kind === 'gateway')
-        return gatewayActive && gatewayBaseUrl === (profile.baseUrl ?? '')
-      return apiKeyActive && builtinActive
-    },
-    [apiKeyActive, builtinActive, gatewayActive, gatewayBaseUrl],
+    (profile: CodexCredentialProfile): boolean => profile.id === activeProfileId,
+    [activeProfileId],
   )
 
   const apply = useCallback(

@@ -29,6 +29,8 @@ export interface UseCodexConfig {
   readonly configPath: string
   readonly authStatus: CodexAuthStatus
   readonly profiles: readonly CodexCredentialProfile[]
+  /** Id of the saved profile matching the credential currently in effect. */
+  readonly activeProfileId: string | undefined
   readonly credentialDraft: CodexCredentialDraft | undefined
   patch(patch: CodexSettingsPatch): Promise<void>
   reload(): Promise<void>
@@ -60,21 +62,24 @@ export function useCodexConfig(): UseCodexConfig {
   const [configPath, setConfigPath] = useState('')
   const [authStatus, setAuthStatus] = useState<CodexAuthStatus>(LOGGED_OUT)
   const [profiles, setProfiles] = useState<readonly CodexCredentialProfile[]>([])
+  const [activeProfileId, setActiveProfileId] = useState<string | undefined>()
   const [credentialDraft, setCredentialDraft] = useState<CodexCredentialDraft | undefined>()
   const draftWrite = useRef<Promise<void>>(Promise.resolve())
 
   const loadAll = useCallback(async () => {
-    const [next, path, status, library, draft] = await Promise.all([
+    const [next, path, status, library, activeId, draft] = await Promise.all([
       service.read(),
       service.configPath(),
       service.readAuthStatus(),
       service.readProfiles(),
+      service.matchActiveProfile(),
       storage.get<CodexCredentialDraft>(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL),
     ])
     setSettings(next)
     setConfigPath(path)
     setAuthStatus(status)
     setProfiles(library)
+    setActiveProfileId(activeId)
     setCredentialDraft(draft)
     setLoaded(true)
   }, [service, storage])
@@ -90,11 +95,12 @@ export function useCodexConfig(): UseCodexConfig {
   useEffect(() => {
     let active = true
     void (async () => {
-      const [next, path, status, library, draft] = await Promise.all([
+      const [next, path, status, library, activeId, draft] = await Promise.all([
         service.read(),
         service.configPath(),
         service.readAuthStatus(),
         service.readProfiles(),
+        service.matchActiveProfile(),
         storage.get<CodexCredentialDraft>(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL),
       ])
       if (!active) return
@@ -102,16 +108,22 @@ export function useCodexConfig(): UseCodexConfig {
       setConfigPath(path)
       setAuthStatus(status)
       setProfiles(library)
+      setActiveProfileId(activeId)
       setCredentialDraft(draft)
       setLoaded(true)
     })()
     // Refresh login status live when auth.json changes on disk (e.g. once the
     // browser OAuth flow from `codex login` completes), so no manual refresh is
-    // needed.
+    // needed. The active-profile match depends on auth.json too.
     const sub = service.onDidChangeAuth(() => {
       void (async () => {
-        const status = await service.readAuthStatus()
-        if (active) setAuthStatus(status)
+        const [status, activeId] = await Promise.all([
+          service.readAuthStatus(),
+          service.matchActiveProfile(),
+        ])
+        if (!active) return
+        setAuthStatus(status)
+        setActiveProfileId(activeId)
       })()
     })
     return () => {
@@ -136,6 +148,8 @@ export function useCodexConfig(): UseCodexConfig {
         idx >= 0 ? current.map((p) => (p.id === profile.id ? profile : p)) : [...current, profile]
       await service.writeProfiles(next)
       setProfiles(next)
+      // Editing the in-use profile (e.g. rotating its key) may break the match.
+      setActiveProfileId(await service.matchActiveProfile())
     },
     [service],
   )
@@ -146,6 +160,7 @@ export function useCodexConfig(): UseCodexConfig {
       const next = current.filter((p) => p.id !== id)
       await service.writeProfiles(next)
       setProfiles(next)
+      setActiveProfileId(await service.matchActiveProfile())
     },
     [service],
   )
@@ -179,6 +194,7 @@ export function useCodexConfig(): UseCodexConfig {
           : await service.applyCredential({ kind: 'apiKey', apiKey: profile.apiKey ?? '' })
       setSettings(await service.read())
       setAuthStatus(status)
+      setActiveProfileId(await service.matchActiveProfile())
     },
     [service],
   )
@@ -188,6 +204,7 @@ export function useCodexConfig(): UseCodexConfig {
     const status = await service.applyCredential({ kind: 'chatgpt' })
     setSettings(await service.read())
     setAuthStatus(status)
+    setActiveProfileId(await service.matchActiveProfile())
   }, [service])
 
   return {
@@ -196,6 +213,7 @@ export function useCodexConfig(): UseCodexConfig {
     configPath,
     authStatus,
     profiles,
+    activeProfileId,
     credentialDraft,
     patch,
     reload,
