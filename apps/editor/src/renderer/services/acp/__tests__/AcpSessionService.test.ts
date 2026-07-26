@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   autorun,
   ConfigurationService,
+  ConfigurationTarget,
   Emitter,
   Event,
   LogLevel,
@@ -1500,6 +1501,37 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     const params = client.connected[0]!.agent.newSessionCalls[0]!
     expect(params.mcpServers).toEqual([
       { name: 'fs', command: 'node', args: ['srv.js'], env: [{ name: 'TOKEN', value: 'x' }] },
+    ])
+    svc.dispose()
+  })
+
+  it('merges settings layers per server name: workspace overrides only the same-named user entry', async () => {
+    const client = new FakeAcpClientService()
+    const config = new ConfigurationService()
+    config.loadLayer(ConfigurationTarget.User, {
+      'acp.mcpServers': {
+        fs: { command: 'node', args: ['user.js'] },
+        docs: { command: 'npx', args: ['docs'] },
+      },
+    })
+    config.loadLayer(ConfigurationTarget.Project, {
+      'acp.mcpServers': {
+        fs: { command: 'node', args: ['workspace.js'] },
+      },
+    })
+    const svc = makeService(client, config)
+    // User-only entry survives alongside the workspace override; attribution
+    // follows the winning layer.
+    expect(svc.mcpServerDefinitions.get()).toEqual([
+      { name: 'fs', transport: 'stdio', disabled: false, source: 'project' },
+      { name: 'docs', transport: 'stdio', disabled: false, source: 'global' },
+    ])
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const params = client.connected[0]!.agent.newSessionCalls[0]!
+    expect(params.mcpServers).toEqual([
+      { name: 'fs', command: 'node', args: ['workspace.js'], env: [] },
+      { name: 'docs', command: 'npx', args: ['docs'], env: [] },
     ])
     svc.dispose()
   })

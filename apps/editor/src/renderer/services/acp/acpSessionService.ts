@@ -18,6 +18,7 @@
 import {
   autorun,
   createDecorator,
+  ConfigurationTarget,
   Disposable,
   Emitter,
   generateUuid,
@@ -56,13 +57,16 @@ import {
   filterWireByNames,
   mcpServerTransport,
   mergeMcpServerDefinitions,
+  mergeMcpServerRawLayers,
   mergeWireMcpServers,
   normalizeMcpServers,
   parseMcpJson,
   readMcpServerDefinitions,
+  readMcpServerDefinitionsLayered,
   resolveMcpServerSelection,
   withMcpServerEnv,
   type McpServerDefinition,
+  type McpServerRawLayer,
 } from './acpMcpServers.js'
 import {
   IAcpClientService,
@@ -276,6 +280,13 @@ export interface IAcpSessionService {
   readonly mcpServerDefinitions: IObservable<readonly McpServerDefinition[]>
   /** Re-read the pool (global config + project `.mcp.json`). Fire-and-forget safe. */
   refreshMcpServerDefinitions(): Promise<void>
+  /**
+   * Read + parse the project `.mcp.json` at the workspace root (both the
+   * Claude-Code envelope and the bare Record form). Returns `{}` when there is
+   * no workspace / no file / broken JSON. Exposed for the MCP settings panel,
+   * which renders this file as a read-only group.
+   */
+  readProjectMcpJson(): Promise<Record<string, unknown>>
   /**
    * Change the session's MCP whitelist (`null` = inherit the defaults).
    * Persists the pin to the history row (once the durable id exists), then
@@ -1552,8 +1563,26 @@ export class AcpSessionService
     if (urlState.get() === 'waiting') urlState.set('done', undefined)
   }
 
+  /**
+   * The `acp.mcpServers` raw values of every settings layer, lowest priority
+   * first (mirrors `IConfigurationService.get` precedence). Layers compose per
+   * server name — a workspace entry overrides only the same-named global one,
+   * never the whole map.
+   */
+  private _mcpSettingsLayers(): McpServerRawLayer[] {
+    const raw = (t: ConfigurationTarget): unknown =>
+      this._config.getLayerSnapshot(t)['acp.mcpServers']
+    return [
+      { source: 'global', raw: raw(ConfigurationTarget.VSCodeUser) },
+      { source: 'global', raw: raw(ConfigurationTarget.User) },
+      { source: 'project', raw: raw(ConfigurationTarget.VSCodeWorkspace) },
+      { source: 'project', raw: raw(ConfigurationTarget.Project) },
+      { source: 'global', raw: raw(ConfigurationTarget.Memory) },
+    ]
+  }
+
   private _readMcpServers(): McpServer[] {
-    return normalizeMcpServers(this._config.get<unknown>('acp.mcpServers'), (m) =>
+    return normalizeMcpServers(mergeMcpServerRawLayers(this._mcpSettingsLayers()), (m) =>
       this._logger.warn(`mcpServers: ${m}`),
     )
   }
@@ -1561,7 +1590,7 @@ export class AcpSessionService
   // -- MCP definition pool & session selection ---------------------------
 
   private _readGlobalMcpDefinitions(): readonly McpServerDefinition[] {
-    return readMcpServerDefinitions(this._config.get<unknown>('acp.mcpServers'), 'global', (m) =>
+    return readMcpServerDefinitionsLayered(this._mcpSettingsLayers(), (m) =>
       this._logger.warn(`mcpServers: ${m}`),
     )
   }
@@ -1571,7 +1600,7 @@ export class AcpSessionService
    * empty record when there is no workspace, no file, or the file is broken —
    * the project layer is purely additive and must never break session flows.
    */
-  private async _readProjectMcpJson(): Promise<Record<string, unknown>> {
+  async readProjectMcpJson(): Promise<Record<string, unknown>> {
     const folder = this._workspace.current?.folder
     if (!folder) return {}
     try {
@@ -1584,7 +1613,7 @@ export class AcpSessionService
 
   async refreshMcpServerDefinitions(): Promise<void> {
     const globalDefs = this._readGlobalMcpDefinitions()
-    const projectRaw = await this._readProjectMcpJson()
+    const projectRaw = await this.readProjectMcpJson()
     const projectDefs = readMcpServerDefinitions(projectRaw, 'project', (m) =>
       this._logger.warn(`mcpServers(.mcp.json): ${m}`),
     )
@@ -1609,7 +1638,7 @@ export class AcpSessionService
     selection: readonly string[] | null,
     warnStale: boolean,
   ): Promise<McpServer[]> {
-    const projectRaw = await this._readProjectMcpJson()
+    const projectRaw = await this.readProjectMcpJson()
     const projectWire = normalizeMcpServers(projectRaw, (m) =>
       this._logger.warn(`mcpServers(.mcp.json): ${m}`),
     )

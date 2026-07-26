@@ -43,3 +43,23 @@ export function aiFeatureModelsHelpText(): string {
     ].join('\n'),
   )
 }
+
+export function aiMcpServersHelpText(): string {
+  return localize(
+    'aiSettings.help.mcpServers',
+    [
+      '## MCP Servers',
+      '',
+      'MCP servers give agents extra tools. Configuration lives in `acp.mcpServers`, grouped here by scope:',
+      '',
+      '- **User (global)**: available in every workspace.',
+      '- **Workspace**: stored in `.universe-editor/settings.json`, only for this folder.',
+      '- **.mcp.json**: Claude-Code-compatible file at the workspace root (read-only here; edit the file directly).',
+      '',
+      'Scopes compose **per server name**: a workspace server only overrides the user server with the same name — shadowed rows say so inline. `.mcp.json` always wins.',
+      '',
+      'The checkbox is the default enable switch; a server disabled here stays out of new sessions unless you explicitly re-enable it for a session (the picker next to the prompt input). The dot shows the live connection status reported by the active session.',
+      'Changes apply to new sessions immediately; the active session reloads seamlessly when its server set changes.',
+    ].join('\n'),
+  )
+}

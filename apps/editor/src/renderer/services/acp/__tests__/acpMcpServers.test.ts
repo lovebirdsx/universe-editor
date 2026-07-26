@@ -6,15 +6,20 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   filterMcpServersByCapabilities,
   filterWireByNames,
+  mcpServerRawToRecord,
   mcpServerTransport,
   mergeMcpServerDefinitions,
+  mergeMcpServerRawLayers,
   mergeWireMcpServers,
   normalizeMcpServers,
   parseMcpJson,
   parseMcpToolName,
   readMcpServerDefinitions,
+  readMcpServerDefinitionsLayered,
   resolveMcpServerSelection,
+  validateMcpServerEntry,
   withMcpServerEnv,
+  writeMcpServerEntry,
 } from '../acpMcpServers.js'
 
 describe('parseMcpToolName', () => {
@@ -389,5 +394,93 @@ describe('filterWireByNames', () => {
     const docs = { type: 'http' as const, name: 'docs', url: 'https://x', headers: [] }
     const out = filterWireByNames([fs, docs], new Set(['docs']))
     expect(out).toEqual([docs])
+  })
+})
+
+describe('mcpServerRawToRecord', () => {
+  it('passes Record form through and converts the legacy array form', () => {
+    expect(mcpServerRawToRecord({ fs: { command: 'node' } })).toEqual({ fs: { command: 'node' } })
+    expect(mcpServerRawToRecord([{ name: 'fs', command: 'node' }, { command: 'x' }])).toEqual({
+      fs: { name: 'fs', command: 'node' },
+    })
+  })
+
+  it('degrades non-object input to an empty record', () => {
+    expect(mcpServerRawToRecord(undefined)).toEqual({})
+    expect(mcpServerRawToRecord('nope')).toEqual({})
+  })
+})
+
+describe('mergeMcpServerRawLayers / readMcpServerDefinitionsLayered', () => {
+  it('merges layers per server name, later layers winning same-named entries', () => {
+    const merged = mergeMcpServerRawLayers([
+      { source: 'global', raw: { fs: { command: 'user-fs' }, docs: { command: 'user-docs' } } },
+      { source: 'project', raw: { fs: { command: 'ws-fs' } } },
+    ])
+    expect(merged).toEqual({
+      fs: { command: 'ws-fs' },
+      docs: { command: 'user-docs' },
+    })
+  })
+
+  it('attributes each definition to the layer that won its name', () => {
+    const defs = readMcpServerDefinitionsLayered([
+      { source: 'global', raw: { fs: { command: 'user-fs' }, docs: { command: 'user-docs' } } },
+      { source: 'project', raw: { fs: { command: 'ws-fs', disabled: true } } },
+    ])
+    expect(defs).toEqual([
+      { name: 'fs', transport: 'stdio', disabled: true, source: 'project' },
+      { name: 'docs', transport: 'stdio', disabled: false, source: 'global' },
+    ])
+  })
+
+  it('a broken winning entry drops the name instead of falling back to the shadowed entry', () => {
+    const warns: string[] = []
+    const defs = readMcpServerDefinitionsLayered(
+      [
+        { source: 'global', raw: { fs: { command: 'user-fs' } } },
+        { source: 'project', raw: { fs: { url: 'http://x', type: 'weird' } } },
+      ],
+      (m) => warns.push(m),
+    )
+    expect(defs).toEqual([])
+    expect(warns.some((m) => m.includes('fs'))).toBe(true)
+  })
+})
+
+describe('validateMcpServerEntry', () => {
+  it('reports valid entries with their transport', () => {
+    expect(validateMcpServerEntry('fs', { command: 'node' })).toEqual({
+      valid: true,
+      transport: 'stdio',
+    })
+    expect(validateMcpServerEntry('d', { type: 'http', url: 'http://x' })).toEqual({
+      valid: true,
+      transport: 'http',
+    })
+  })
+
+  it('reports the skip reason for invalid entries', () => {
+    const out = validateMcpServerEntry('fs', { args: [] })
+    expect(out.valid).toBe(false)
+    if (!out.valid) expect(out.reason).toContain('command')
+  })
+})
+
+describe('writeMcpServerEntry', () => {
+  it('adds, replaces and removes entries without mutating the input', () => {
+    const original = { fs: { command: 'node' } }
+    const added = writeMcpServerEntry(original, 'docs', { type: 'http', url: 'http://x' })
+    expect(added).toEqual({
+      fs: { command: 'node' },
+      docs: { type: 'http', url: 'http://x' },
+    })
+    expect(original).toEqual({ fs: { command: 'node' } })
+    expect(writeMcpServerEntry(added, 'docs', undefined)).toEqual({ fs: { command: 'node' } })
+  })
+
+  it('normalizes the legacy array form to the Record form on write', () => {
+    const out = writeMcpServerEntry([{ name: 'fs', command: 'node' }], 'fs', undefined)
+    expect(out).toEqual({})
   })
 })

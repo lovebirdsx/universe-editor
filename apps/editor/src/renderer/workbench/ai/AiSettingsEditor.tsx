@@ -12,7 +12,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react'
-import { Boxes, SlidersHorizontal, type LucideIcon } from 'lucide-react'
+import { Boxes, Plug, SlidersHorizontal, type LucideIcon } from 'lucide-react'
 import { IStorageService, StorageScope, localize } from '@universe-editor/platform'
 import { cx } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
@@ -21,8 +21,13 @@ import { AgentIcon } from '../agents/agentIcon.js'
 import { getAgentSettingsComponent } from '../agentSettings/agentSettingsRegistry.js'
 import { AiModelsPanel } from './AiModelsPanel.js'
 import { AiFeatureModelsPanel } from './AiFeatureModelsPanel.js'
+import { AiMcpServersPanel } from './AiMcpServersPanel.js'
 import { AiSettingsHelpButton } from './AiSettingsHelpButton.js'
-import { aiFeatureModelsHelpText, aiModelsHelpText } from './aiSettingsHelpText.js'
+import {
+  aiFeatureModelsHelpText,
+  aiMcpServersHelpText,
+  aiModelsHelpText,
+} from './aiSettingsHelpText.js'
 import styles from './AiSettingsEditor.module.css'
 import '../agentSettings/builtinAgentSettings.js'
 
@@ -48,6 +53,13 @@ const AI_CATEGORIES: readonly AiCategoryDef[] = [
     label: localize('aiSettings.category.features', 'Feature Models'),
     panel: AiFeatureModelsPanel,
     help: aiFeatureModelsHelpText,
+  },
+  {
+    id: 'mcpServers',
+    icon: Plug,
+    label: localize('aiSettings.category.mcpServers', 'MCP Servers'),
+    panel: AiMcpServersPanel,
+    help: aiMcpServersHelpText,
   },
 ]
 

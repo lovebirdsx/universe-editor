@@ -5,7 +5,6 @@
 
 import {
   Action2,
-  ICommandService,
   IEditorResolverService,
   IEditorService,
   IStorageService,
@@ -41,9 +40,13 @@ export class OpenAcpMcpSettingsAction extends Action2 {
     })
   }
   override async run(accessor: ServicesAccessor): Promise<void> {
-    // Settings UI can't deep-link to a single key yet; opening the editor lands
-    // the user on the searchable settings list where `acp.mcpServers` lives.
-    await accessor.get(ICommandService).executeCommand('workbench.action.openSettings')
+    // MCP servers have a dedicated panel in the unified AI settings editor;
+    // land there by pre-selecting the category. Services must be grabbed
+    // before the first await — the accessor is invocation-scoped.
+    const storage = accessor.get(IStorageService)
+    const editorService = accessor.get(IEditorService)
+    await storage.set('settings.activeItem', 'ai:mcpServers', StorageScope.GLOBAL)
+    await editorService.openEditor(new AiSettingsEditorInput(), { activate: true })
   }
 }
 
@@ -64,12 +67,13 @@ export class OpenAgentSettingsAction extends Action2 {
     // session's agent); otherwise fall back to the default.
     const registry = accessor.get(IAcpAgentRegistry)
     const storage = accessor.get(IStorageService)
+    const editorService = accessor.get(IEditorService)
     const target =
       typeof agentId === 'string' && registry.allAgentIds().includes(agentId)
         ? agentId
         : registry.defaultAgentId()
     await storage.set('settings.activeItem', `agent:${target}`, StorageScope.GLOBAL)
-    await accessor.get(IEditorService).openEditor(new AiSettingsEditorInput(), { activate: true })
+    await editorService.openEditor(new AiSettingsEditorInput(), { activate: true })
   }
 }
 

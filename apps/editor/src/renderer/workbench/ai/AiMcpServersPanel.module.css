@@ -1,0 +1,205 @@
+/*---------------------------------------------------------------------------------------------
+ *  AI settings — MCP Servers panel. Scope-grouped server rows styled with
+ *  workbench tokens + --color-* theme variables (dark / light safe).
+ *--------------------------------------------------------------------------------------------*/
+
+.groupSection {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  padding: var(--spacing-4) var(--spacing-6);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.groupHeader:last-child {
+  border-bottom: none;
+}
+
+.groupTitle {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+}
+
+.groupPath {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-family-mono, monospace);
+  font-size: var(--font-size-xs);
+  color: var(--color-editor-fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groupNote {
+  font-size: var(--font-size-xs);
+  color: var(--color-editor-fg-muted);
+}
+
+.serverList {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.serverRow {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  padding: var(--spacing-3) var(--spacing-6);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.serverRow:first-child {
+  border-top: none;
+}
+
+.serverRow[data-disabled='true'] .serverName,
+.serverRow[data-disabled='true'] .serverSummary {
+  opacity: 0.55;
+}
+
+.statusDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-editor-fg-muted);
+}
+
+.statusDot[data-status='connected'] {
+  background: var(--color-badge-success, #2c7d32);
+}
+
+.statusDot[data-status='pending'] {
+  background: var(--color-badge-progress, #4fa6e2);
+}
+
+.statusDot[data-status='failed'],
+.statusDot[data-status='error'] {
+  background: var(--color-badge-error, #f14c4c);
+}
+
+.statusDot[data-status='needs-auth'],
+.statusDot[data-status='needs_auth'] {
+  background: var(--color-badge-warning, #d7ba7d);
+}
+
+.serverMain {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.serverNameRow {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.serverName {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+}
+
+.transportBadge {
+  flex: none;
+  padding: 0 var(--spacing-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  color: var(--color-editor-fg-muted);
+}
+
+.shadowNote {
+  font-size: var(--font-size-xs);
+  color: var(--color-badge-warning, #d7ba7d);
+}
+
+.invalidNote {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-error-fg, #f48771);
+}
+
+.serverSummary {
+  overflow: hidden;
+  font-family: var(--font-family-mono, monospace);
+  font-size: var(--font-size-xs);
+  color: var(--color-editor-fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowActions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex: 0 0 auto;
+}
+
+/* -- add / edit dialog --------------------------------------------------- */
+
+.kvList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.kvRow {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.kvRow > :first-child {
+  flex: 1 1 40%;
+}
+
+.kvRow > :nth-child(2) {
+  flex: 1 1 60%;
+}
+
+.argsArea {
+  width: 100%;
+  min-height: 64px;
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-input-bg);
+  color: var(--color-input-fg);
+  font-family: var(--font-family-mono, monospace);
+  font-size: var(--font-size-base);
+  resize: vertical;
+  outline: none;
+}
+
+.argsArea:focus {
+  border-color: var(--color-focus-border);
+}
+
+.scopeHint {
+  font-size: var(--font-size-xs);
+  color: var(--color-badge-warning, #d7ba7d);
+}
+
+.enabledRow {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  font-size: var(--font-size-base);
+}

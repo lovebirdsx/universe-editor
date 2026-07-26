@@ -21,7 +21,7 @@ import type { EnvVariable, HttpHeader, McpCapabilities, McpServer } from '@agent
 type WarnFn = (msg: string) => void
 
 /** A name+value pair shared by both `EnvVariable` and `HttpHeader`. */
-function toPairs(input: unknown): Array<{ name: string; value: string }> {
+export function mcpServerPairs(input: unknown): Array<{ name: string; value: string }> {
   if (Array.isArray(input)) {
     const out: Array<{ name: string; value: string }> = []
     for (const item of input) {
@@ -60,7 +60,7 @@ function buildServer(name: string, cfg: unknown, onWarn?: WarnFn): McpServer | u
       onWarn?.(`mcp server "${name}": ${type} transport requires "url", skipped`)
       return undefined
     }
-    const headers: HttpHeader[] = toPairs(o.headers)
+    const headers: HttpHeader[] = mcpServerPairs(o.headers)
     return { type, name, url: o.url, headers }
   }
 
@@ -77,7 +77,7 @@ function buildServer(name: string, cfg: unknown, onWarn?: WarnFn): McpServer | u
     const args = Array.isArray(o.args)
       ? o.args.filter((a): a is string => typeof a === 'string')
       : []
-    const env: EnvVariable[] = toPairs(o.env)
+    const env: EnvVariable[] = mcpServerPairs(o.env)
     // stdio entries MUST NOT carry a `type` field: the agent detects stdio via
     // `!('type' in server)` and would otherwise drop the server silently.
     return { name, command: o.command, args, env }
@@ -180,6 +180,64 @@ export function mcpServerTransport(server: McpServer): McpTransport {
 
 /** Where an MCP server definition came from. `project` rows override `global` ones with the same name. */
 export type McpServerSource = 'global' | 'project'
+
+/**
+ * One settings layer contributing to `acp.mcpServers`, lowest priority first.
+ * `source` is the pool attribution a server gets when THIS layer wins its name.
+ */
+export interface McpServerRawLayer {
+  readonly source: McpServerSource
+  readonly raw: unknown
+}
+
+/** Convert one raw layer value (Record or legacy array form) into a by-name record. */
+export function mcpServerRawToRecord(raw: unknown): Record<string, unknown> {
+  if (Array.isArray(raw)) {
+    const out: Record<string, unknown> = {}
+    for (const item of raw) {
+      if (item != null && typeof item === 'object') {
+        const name = (item as { name?: unknown }).name
+        if (typeof name === 'string' && name) out[name] = item
+      }
+    }
+    return out
+  }
+  if (raw != null && typeof raw === 'object') return raw as Record<string, unknown>
+  return {}
+}
+
+/**
+ * Merge raw `acp.mcpServers` layer values per server name (later layers win).
+ * Settings layers compose like VSCode's `files.exclude` — a workspace entry
+ * overrides only the global entry with the same name, never the whole map.
+ */
+export function mergeMcpServerRawLayers(
+  layers: readonly McpServerRawLayer[],
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const layer of layers) Object.assign(out, mcpServerRawToRecord(layer.raw))
+  return out
+}
+
+/**
+ * Layered variant of {@link readMcpServerDefinitions}: merges the raw layers
+ * per name and attributes each surviving definition to the layer that won it
+ * (transport / disabled are also read from the winning entry). An invalid
+ * winning entry drops the name entirely — a broken workspace override must not
+ * silently fall back to the global definition it shadows.
+ */
+export function readMcpServerDefinitionsLayered(
+  layers: readonly McpServerRawLayer[],
+  onWarn?: WarnFn,
+): McpServerDefinition[] {
+  const sourceByName = new Map<string, McpServerSource>()
+  for (const layer of layers) {
+    for (const name of Object.keys(mcpServerRawToRecord(layer.raw)))
+      sourceByName.set(name, layer.source)
+  }
+  const defs = readMcpServerDefinitions(mergeMcpServerRawLayers(layers), 'global', onWarn)
+  return defs.map((d) => ({ ...d, source: sourceByName.get(d.name) ?? d.source }))
+}
 
 /**
  * One entry of the MCP definition pool shown in the session picker. `disabled`
@@ -323,6 +381,42 @@ export function sameNameSet(a: readonly string[], b: readonly string[]): boolean
   if (a.length !== b.length) return false
   const set = new Set(a)
   return b.every((n) => set.has(n))
+}
+
+/** Outcome of validating one raw `acp.mcpServers` entry (settings UI surface). */
+export type McpServerEntryValidation =
+  | { readonly valid: true; readonly transport: McpTransport }
+  | { readonly valid: false; readonly reason: string }
+
+/**
+ * Validate a single raw entry the way the wire path would. Entries that fail
+ * are skipped silently at session creation — the settings panel uses this to
+ * surface them with the exact reason instead.
+ */
+export function validateMcpServerEntry(name: string, cfg: unknown): McpServerEntryValidation {
+  let reason: string | undefined
+  const server = buildServer(name, cfg, (m) => {
+    reason = m
+  })
+  if (!server) return { valid: false, reason: reason ?? 'invalid entry' }
+  return { valid: true, transport: mcpServerTransport(server) }
+}
+
+/**
+ * Return a new `acp.mcpServers` Record with one entry added / replaced /
+ * removed (`entry === undefined`). Legacy array-form input is normalized to
+ * the Record form on write. Pure — the caller writes the result back through
+ * `IConfigurationService.update`.
+ */
+export function writeMcpServerEntry(
+  raw: unknown,
+  name: string,
+  entry: unknown | undefined,
+): Record<string, unknown> {
+  const record = { ...mcpServerRawToRecord(raw) }
+  if (entry === undefined) delete record[name]
+  else record[name] = entry
+  return record
 }
 
 /**
