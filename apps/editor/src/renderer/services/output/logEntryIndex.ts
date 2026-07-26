@@ -43,11 +43,63 @@ const LEVEL_PATTERNS: Array<[LogLevel, RegExp[]]> = [
   ],
 ]
 
-/** First level marker wins; higher-severity levels are tried first. */
+/**
+ * A line's own level marker is its FIRST bracketed `[level]` token: headers
+ * (`[Acp Protocol] [21:10:42] [info] …`) always precede the payload, which may
+ * itself contain bracketed words like `"[error]"` and must not outrank them.
+ */
+const BRACKETED_LEVEL =
+  /\[(error|err|critical|fatal|alert|failure|warn(?:ing)?|ww|info(?:rmation)?|notice|ii|debug|dbug|dbg|de|d|trace|verbose|verb|vrb|vb|v)\]/i
+
+const BRACKET_TOKEN_LEVELS: Readonly<Record<string, LogLevel>> = {
+  error: LogLevel.Error,
+  err: LogLevel.Error,
+  critical: LogLevel.Error,
+  fatal: LogLevel.Error,
+  alert: LogLevel.Error,
+  failure: LogLevel.Error,
+  warn: LogLevel.Warning,
+  warning: LogLevel.Warning,
+  ww: LogLevel.Warning,
+  info: LogLevel.Info,
+  information: LogLevel.Info,
+  notice: LogLevel.Info,
+  ii: LogLevel.Info,
+  debug: LogLevel.Debug,
+  dbug: LogLevel.Debug,
+  dbg: LogLevel.Debug,
+  de: LogLevel.Debug,
+  d: LogLevel.Debug,
+  trace: LogLevel.Trace,
+  verbose: LogLevel.Trace,
+  verb: LogLevel.Trace,
+  vrb: LogLevel.Trace,
+  vb: LogLevel.Trace,
+  v: LogLevel.Trace,
+}
+
+/**
+ * Bare (unbracketed) level words are only scanned within this leading slice.
+ * Log headers put the level near the line start; payload text further out
+ * (JSON-RPC bodies, stack messages) legitimately contains words like WARN or
+ * ERROR that must not decide the entry's level. Sized to still cover the
+ * tracer's trailing ` ERROR` suffix on `[Trace - …] ← Response …` lines.
+ */
+const BARE_WORD_WINDOW = 128
+
+/**
+ * First the line's own `[level]` marker wins; absent that, bare level words in
+ * the header window decide, higher severity first.
+ */
 export function matchLogLevel(line: string): LogLevel | undefined {
+  const bracketed = BRACKETED_LEVEL.exec(line)
+  const token = bracketed?.[1]?.toLowerCase()
+  const bracketLevel = token === undefined ? undefined : BRACKET_TOKEN_LEVELS[token]
+  if (bracketLevel !== undefined) return bracketLevel
+  const head = line.length > BARE_WORD_WINDOW ? line.slice(0, BARE_WORD_WINDOW) : line
   for (const [level, patterns] of LEVEL_PATTERNS) {
     for (const pattern of patterns) {
-      if (pattern.test(line)) return level
+      if (pattern.test(head)) return level
     }
   }
   return undefined

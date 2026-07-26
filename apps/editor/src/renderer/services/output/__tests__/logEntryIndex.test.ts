@@ -24,8 +24,37 @@ describe('matchLogLevel', () => {
     expect(matchLogLevel('TRACE enter fn')).toBe(LogLevel.Trace)
   })
 
-  it('prefers error when several words appear', () => {
-    expect(matchLogLevel('[info] recovered from ERROR state')).toBe(LogLevel.Error)
+  it('prefers the highest-severity bare word when the line has no bracketed marker', () => {
+    expect(matchLogLevel('recovered from ERROR state, previously WARN')).toBe(LogLevel.Error)
+  })
+
+  it('lets the bracketed header marker win over level-looking payload words', () => {
+    expect(matchLogLevel('[info] recovered from ERROR state')).toBe(LogLevel.Info)
+    expect(matchLogLevel('[warn] payload mentions "[error]" text')).toBe(LogLevel.Warning)
+  })
+
+  it('classifies aggregated Acp Protocol lines by their [info] marker, not payload words', () => {
+    const head =
+      `[Acp Protocol] [21:10:42] [info] [renderer:3] [claude-code#a7626f] ← Notification ` +
+      `'session/update' [session=61fd44af-b69a] params={"sessionId":"61fd44af","update":` +
+      `{"content":{"type":"text","text":`
+    expect(matchLogLevel(`${head}"WARN"}}}`)).toBe(LogLevel.Info)
+    expect(matchLogLevel(`${head}"WW"}}}`)).toBe(LogLevel.Info)
+    expect(matchLogLevel(`${head}"Warn"}}}`)).toBe(LogLevel.Info)
+    expect(matchLogLevel(`${head}"Error"}}}`)).toBe(LogLevel.Info)
+  })
+
+  it('ignores bare level words past the header window of a tracer line', () => {
+    const line =
+      `[Trace - 21:10:42] [claude-code#a7626f] ← Notification 'session/update' ` +
+      `[session=61fd44af-b69a] params={"sessionId":"61fd44af","update":{"content":` +
+      `{"type":"text","text":"WARN"}}}`
+    expect(matchLogLevel(line)).toBe(LogLevel.Trace)
+  })
+
+  it('still detects the tracer ERROR suffix on response lines', () => {
+    const line = `[Trace - 21:10:42] [claude-code#a7626f] ← Response 'session/list' (1) in 847ms ERROR`
+    expect(matchLogLevel(line)).toBe(LogLevel.Error)
   })
 
   it('returns undefined for plain prose', () => {
@@ -127,6 +156,17 @@ describe('computeHiddenRanges', () => {
     const withPreamble = ['hello world', '[error] e1']
     expect(computeHiddenRanges(withPreamble, new Set([LogLevel.Error]), '')).toEqual([
       { startLine: 2, endLineExclusive: 3 },
+    ])
+  })
+
+  it('hides info entries whose payload merely contains WARN-like words', () => {
+    const ls = [
+      `[Acp Protocol] [21:10:42] [info] [renderer:3] [claude-code#a7626f] ← Notification ` +
+        `'session/update' params={"update":{"content":{"text":"WARN"}}}`,
+      '[warning] genuine warning',
+    ]
+    expect(computeHiddenRanges(ls, new Set([LogLevel.Info]), '')).toEqual([
+      { startLine: 1, endLineExclusive: 2 },
     ])
   })
 })
