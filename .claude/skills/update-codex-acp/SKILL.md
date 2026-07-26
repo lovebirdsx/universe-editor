@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # 更新 codex-acp（合并上游 + 重建产物）
 
-`vendor/codex-acp` 是我们自维护的 fork，**git submodule，不在 pnpm workspace 内，用自带 npm 工具链独立构建**（见根 CLAUDE.md）。上游是 `https://github.com/agentclientprotocol/codex-acp.git`（npm 包 `@agentclientprotocol/codex-acp`）。我们在某个上游 release 之上叠了若干自定义提交（费用计算、Claude 式 skills/memory、git 工作树会话匹配、跨平台路径比较、AI 会话标题持久化、ESM 标记、回放 shell 解析修复等，共约 8 个）。
+`vendor/codex-acp` 是我们自维护的 fork，**git submodule，不在 pnpm workspace 内，用自带 npm 工具链独立构建**（见根 CLAUDE.md）。上游是 `https://github.com/agentclientprotocol/codex-acp.git`（npm 包 `@agentclientprotocol/codex-acp`）。我们在某个上游 release 之上叠了若干自定义提交（费用计算、Claude 式 skills/memory、git 工作树会话匹配、跨平台路径比较、AI 会话标题持久化、ESM 标记、回放 shell 解析修复、rewind/fork、重连失败处理、transcriptPath 暴露等，共约 16 个）。
 
 > ⚠️ **真上游踩坑（务必先确认）**：Codex ACP 有**两个**同名仓库。老的 `zed-industries/codex-acp` **已废弃**（README 明确写着开发已迁移），且其 `main` 被回退重写到较旧点、**与我们 fork 无共同祖先**（`git merge-base` 返回空）。**真正的上游是 `agentclientprotocol/codex-acp`**（基于新 Codex App Server）。若误把 upstream 设成 zed-industries，会出现「merge-base 为空 / 代码大幅倒退」的假象。判据：正确上游下 `merge-base` 命中我们的基线、`compare` 显示 **N ahead / M behind** 与我方自定义提交数吻合。
 
@@ -131,6 +131,15 @@ git push -u origin chore/update-codex-acp
 - **根因/风险**：上游也在演进 skills（`support-skills-from-additionalRoots` 等分支/PR），两边都动 skills 发现逻辑，可能冲突或语义重叠。
 - **解法**：合并时保留我方的 `.claude/skills` + memory 注入（这是 fork 命脉，主仓库依赖，见记忆 `codex-claude-skills-memory-parity`），与上游的 `.agents/skills` 处理**并存**。注意：我方对 skill root 故意不做存在性检查（保持与上游 `.agents/skills` 对称、最小化 diff），这会在 Windows 假 cwd 测试下触发案例 1 的 AbsolutePathBuf——那是测试环境问题，不是这里的 bug。
 - **锚点**：`src/CodexAcpClient.ts`（`buildMemoryInstructions`、`refreshSkills` 的 `skillExtraRoots`）、`src/AcpExtensions.ts`（`SET_SESSION_TITLE_METHOD`）、记忆 `codex-claude-skills-memory-parity`。
+
+### 案例 5：「两者都要」式解冲突丢块 + 语义适配三类（v1.1.7 合并实战）
+- **现象**：rebase 到上游 v1.1.7（steering #309 / goal control #293 / 可配置 provider #272）时，冲突几乎全是「同一位置双方各加各的」（ext-method 类型 union、`isExtMethodRequest`、`EXTENSION_METHOD_REGISTRATIONS`、import 列表、方法块）。手工「两者都要」合并时**把上游 HEAD 侧的 `SessionSteerRequest`/`SessionSteeringResponse`/`SessionSteeringExtRequest` 三个类型定义整块丢了**（new_string 只保留了函数没保留类型），rebase 能完成但 `npx tsc --noEmit` 立刻报一串 TS2304。
+- **解法**：① 丢的块补回去，**fixup 进当时解冲突的那个提交**（保持每个提交自洽可编译）；② 解冲突时优先用「只删标记行」的小步 Edit，别整块重写——整块重写最容易丢内容。
+- **语义适配**（rebase 零冲突/标记解完 ≠ 完事，tsc + test 抓出来的三类）：
+  1. **上游给接口加必填字段**：`SessionMetadata` 新增必填 `collaborationMode`，我方 `forkSession` 的返回字面量缺它（TS2741）→ 照上游其他返回点补 `collaborationMode: this.getCollaborationMode(thread.id)`，fixup 进 rewind/fork 提交。
+  2. **上游改了测试 helper 签名**：`runPromptWithError` 返回值从 `unknown` 变 `{result, updates}`（上游要断言 session updates），我方新增测试 `fails the turn on a terminal stream disconnect` 还按旧签名用 → 调用处改 `const {result: error} = await ...`，fixup 进「重连失败当成错误」提交。
+  3. **上游注册方式演进撞我方表驱动**：上游把 steering/goal_control 两个新 ext-method 的 parser（`sessionSteerParamsParser`/`goalControlParamsParser`）定义在 `index.ts` 并手写 `.onRequest` 注册——按案例 2 套路搬进 `AcpExtensions.ts` 并加进 `EXTENSION_METHOD_REGISTRATIONS` 表，`index.ts` 里删掉（连带 `import {z} from "zod"` 变成多余）。
+- **锚点**：`src/AcpExtensions.ts`（类型 union / parser / 注册表）、`src/CodexAcpClient.ts`（`forkSession` 的 `collaborationMode`）、`src/__tests__/CodexACPAgent/auth-error-events.test.ts`（`{result: error}` 解构）。
 
 ## 检查清单要点
 1. 调查阶段全程只读（`git ls-remote` / `gh api` / 只读 git），别在 plan mode 改 submodule。
