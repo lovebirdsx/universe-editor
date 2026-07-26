@@ -94,6 +94,12 @@
   color: var(--color-input-placeholder-fg, #5a5a5e);
 }
 
+/* Beat the global `:focus-visible` fallback ring (equal specificity, order-dependent)
+   — quick pick highlights the container, not the input. */
+.input:focus-visible {
+  outline: none;
+}
+
 .inputButtons {
   display: flex;
   align-items: center;
