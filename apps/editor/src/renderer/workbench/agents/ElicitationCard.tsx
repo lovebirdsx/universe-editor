@@ -33,6 +33,7 @@ import {
   type ElicitationEnumMultiField,
   type ElicitationFormField,
   type ElicitationFormValues,
+  type ElicitationStringField,
 } from '../../services/acp/acpElicitationForm.js'
 import {
   AcpElicitationDraftCache,
@@ -92,6 +93,41 @@ function buildContent(
     }
   }
   return { content }
+}
+
+/**
+ * Sentinel for the folded-in "Other…" dropdown entry. The fork emits a
+ * per-question `<name>_custom` string field whose non-empty text wins over the
+ * enum selection (see elicitation.ts in the fork), so the card folds it into
+ * the enum's dropdown instead of rendering a separate full-width field.
+ */
+const OTHER_OPTION_VALUE = '__other__'
+
+interface DisplayField {
+  readonly field: ElicitationFormField
+  /** The `<field.name>_custom` free-text field folded into this enum's dropdown. */
+  readonly customField?: ElicitationStringField
+}
+
+function toDisplayFields(fields: readonly ElicitationFormField[]): DisplayField[] {
+  const stringFields = new Map(
+    fields.filter((f): f is ElicitationStringField => f.kind === 'string').map((f) => [f.name, f]),
+  )
+  const consumed = new Set<string>()
+  const display: DisplayField[] = []
+  for (const field of fields) {
+    if (consumed.has(field.name)) continue
+    if (field.kind === 'enum') {
+      const custom = stringFields.get(`${field.name}_custom`)
+      if (custom) {
+        consumed.add(custom.name)
+        display.push({ field, customField: custom })
+        continue
+      }
+    }
+    display.push({ field })
+  }
+  return display
 }
 
 export function ElicitationCard({ session }: { session: IAcpSession }) {
@@ -242,6 +278,7 @@ function FormElicitationCard({
         : [],
     [request],
   )
+  const displayFields = useMemo(() => toDisplayFields(fields), [fields])
 
   // Reset the input state whenever a new elicitation arrives (canonical
   // "reset state on prop change" — no effect needed). The first paint seeds
@@ -267,7 +304,21 @@ function FormElicitationCard({
   }
 
   const submit = (): void => {
-    const built = buildContent(fields, values)
+    // A folded "Other…" answer replaces the enum selection: non-empty custom
+    // text (or a bare sentinel pick) drops the enum value, so the content only
+    // carries the custom field — mirroring the fork's custom-wins rule.
+    const cleaned: CardValues = { ...values }
+    for (const { field, customField } of displayFields) {
+      if (!customField) continue
+      const custom = cleaned[customField.name]
+      if (
+        cleaned[field.name] === OTHER_OPTION_VALUE ||
+        (typeof custom === 'string' && custom.trim() !== '')
+      ) {
+        delete cleaned[field.name]
+      }
+    }
+    const built = buildContent(fields, cleaned)
     if ('errorField' in built) {
       setError(
         localize('acp.elicitation.notANumber', '"{field}" must be a number', {
@@ -320,12 +371,15 @@ function FormElicitationCard({
           })}
         </div>
       )}
-      {fields.map((field) => (
+      {displayFields.map(({ field, customField }) => (
         <ElicitationFieldRow
           key={field.name}
           field={field}
+          customField={customField}
           value={values[field.name]}
+          customValue={customField ? values[customField.name] : undefined}
           onChange={(v) => patch(field.name, v)}
+          onCustomChange={customField ? (v) => patch(customField.name, v) : undefined}
         />
       ))}
       {error && (
@@ -352,12 +406,18 @@ function FormElicitationCard({
 
 function ElicitationFieldRow({
   field,
+  customField,
   value,
+  customValue,
   onChange,
+  onCustomChange,
 }: {
   field: ElicitationFormField
+  customField?: ElicitationStringField | undefined
   value: string | boolean | string[] | undefined
+  customValue?: string | boolean | string[] | undefined
   onChange: (value: string | boolean | string[] | undefined) => void
+  onCustomChange?: ((value: string) => void) | undefined
 }) {
   return (
     <div className={styles['elicitationField']} data-testid={`acp-elicitation-field-${field.name}`}>
@@ -368,19 +428,32 @@ function ElicitationFieldRow({
       {field.description && (
         <span className={styles['elicitationDescription']}>{field.description}</span>
       )}
-      <FieldControl field={field} value={value} onChange={onChange} />
+      <FieldControl
+        field={field}
+        customField={customField}
+        value={value}
+        customValue={customValue}
+        onChange={onChange}
+        onCustomChange={onCustomChange}
+      />
     </div>
   )
 }
 
 function FieldControl({
   field,
+  customField,
   value,
+  customValue,
   onChange,
+  onCustomChange,
 }: {
   field: ElicitationFormField
+  customField?: ElicitationStringField | undefined
   value: string | boolean | string[] | undefined
+  customValue?: string | boolean | string[] | undefined
   onChange: (value: string | boolean | string[] | undefined) => void
+  onCustomChange?: ((value: string) => void) | undefined
 }) {
   switch (field.kind) {
     case 'string':
@@ -419,6 +492,9 @@ function FieldControl({
           field={field}
           value={typeof value === 'string' ? value : ''}
           onChange={onChange}
+          customField={customField}
+          customValue={typeof customValue === 'string' ? customValue : ''}
+          onCustomChange={onCustomChange}
           footer={
             selected && (selected.description || selected.preview) ? (
               <span className={styles['elicitationDescription']}>
@@ -453,12 +529,19 @@ function EnumSelect({
   value,
   onChange,
   footer,
+  customField,
+  customValue,
+  onCustomChange,
 }: {
   field: Extract<ElicitationFormField, { kind: 'enum' }>
   value: string
   onChange: (value: string) => void
   footer?: ReactNode
+  customField?: ElicitationStringField | undefined
+  customValue: string
+  onCustomChange?: ((value: string) => void) | undefined
 }) {
+  const otherTitle = customField?.title ?? 'Other'
   // Esc inside the self-drawn dropdown must close the dropdown only, not the
   // whole card — stop it from bubbling to the card's Escape handler (the
   // dropdown is a React descendant through the portal, so it would reach us).
@@ -475,6 +558,9 @@ function EnumSelect({
           ...field.options.map((o) => ({
             value: o.value,
             text: o.title,
+            // Trigger stays a compact one-liner; the description shows in the
+            // dropdown item and (once selected) in the footer below — nowhere else.
+            triggerLabel: o.title,
             label: (
               <span className={styles['elicitationOption']}>
                 <span>{o.title}</span>
@@ -484,11 +570,44 @@ function EnumSelect({
               </span>
             ),
           })),
+          ...(customField
+            ? [
+                {
+                  value: OTHER_OPTION_VALUE,
+                  text: otherTitle,
+                  triggerLabel:
+                    customValue.trim() !== '' ? `${otherTitle}: ${customValue.trim()}` : otherTitle,
+                  label: (
+                    <span className={styles['elicitationOption']}>
+                      <span>{otherTitle}</span>
+                      {customField.description && (
+                        <span className={styles['elicitationOptionDescription']}>
+                          {customField.description}
+                        </span>
+                      )}
+                    </span>
+                  ),
+                },
+              ]
+            : []),
         ]}
-        onChange={onChange}
+        onChange={(v) => {
+          onChange(v)
+          // Picking a concrete option abandons any typed custom answer.
+          if (v !== OTHER_OPTION_VALUE) onCustomChange?.('')
+        }}
         aria-label={field.title ?? field.name}
         data-testid={`acp-elicitation-input-${field.name}`}
       />
+      {customField && value === OTHER_OPTION_VALUE && (
+        <Input
+          value={customValue}
+          spellCheck={false}
+          placeholder={customField.description}
+          onChange={(e) => onCustomChange?.(e.target.value)}
+          data-testid={`acp-elicitation-input-${customField.name}`}
+        />
+      )}
       {footer}
     </div>
   )

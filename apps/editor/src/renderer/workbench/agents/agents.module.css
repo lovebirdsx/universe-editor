@@ -2162,8 +2162,8 @@
   padding: 8px 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  max-height: 50vh;
+  gap: 8px;
+  max-height: 40vh;
   overflow-y: auto;
 }
 
@@ -2227,7 +2227,7 @@
   font-family: var(--font-monospace, monospace);
   font-size: calc(var(--agent-font-size, 12px) * 0.857);
   white-space: pre-wrap;
-  max-height: 200px;
+  max-height: 120px;
   overflow-y: auto;
 }
 

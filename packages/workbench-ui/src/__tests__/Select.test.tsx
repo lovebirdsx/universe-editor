@@ -34,4 +34,25 @@ describe('Select', () => {
     render(<Select value="" options={OPTIONS} onChange={() => {}} data-testid="sel" invalid />)
     expect(screen.getByTestId('sel').getAttribute('aria-invalid')).toBe('true')
   })
+
+  it('shows triggerLabel on the trigger while the dropdown item keeps the full label', () => {
+    const options = [
+      {
+        value: 'a',
+        label: (
+          <span>
+            Title A<span>detail about A</span>
+          </span>
+        ),
+        triggerLabel: 'Title A',
+      },
+    ]
+    render(<Select value="a" options={options} onChange={() => {}} data-testid="sel" />)
+    const trigger = screen.getByTestId('sel')
+    expect(trigger.textContent).toContain('Title A')
+    expect(trigger.textContent).not.toContain('detail about A')
+
+    fireEvent.click(trigger)
+    expect(screen.getByRole('option').textContent).toContain('detail about A')
+  })
 })

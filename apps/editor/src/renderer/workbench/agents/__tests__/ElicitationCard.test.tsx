@@ -248,6 +248,112 @@ describe('ElicitationCard', () => {
   })
 })
 
+describe('ElicitationCard — AskUserQuestion folding', () => {
+  function askRequest(): CreateElicitationRequest {
+    return {
+      sessionId: 'agent-1',
+      mode: 'form',
+      message: 'Please answer the following questions.',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          question_0: {
+            type: 'string',
+            title: 'Pick one',
+            oneOf: [
+              { const: 'opt-a', title: 'Option A', description: 'detail A' },
+              { const: 'opt-b', title: 'Option B', description: 'detail B' },
+            ],
+          },
+          question_0_custom: {
+            type: 'string',
+            title: 'Other',
+            description: 'Type your own answer instead of choosing an option above (optional).',
+          },
+        },
+      },
+    } as CreateElicitationRequest
+  }
+
+  it('shows the selected option description only once — in the footer, not the trigger', () => {
+    const h = makePending(askRequest())
+    render(renderCard(makeSession('A', h.pending)))
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-input-question_0'))
+    fireEvent.click(screen.getByRole('option', { name: /Option A/ }))
+
+    const trigger = screen.getByTestId('acp-elicitation-input-question_0')
+    expect(trigger.textContent).toBe('Option A')
+    const card = screen.getByTestId('acp-elicitation-card')
+    expect(card.textContent?.match(/detail A/g)).toHaveLength(1)
+  })
+
+  it('folds the paired custom field into the dropdown instead of its own row', () => {
+    const h = makePending(askRequest())
+    render(renderCard(makeSession('A', h.pending)))
+
+    expect(screen.queryByTestId('acp-elicitation-field-question_0_custom')).toBeNull()
+    expect(screen.queryByTestId('acp-elicitation-input-question_0_custom')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-input-question_0'))
+    fireEvent.click(screen.getByRole('option', { name: /Other/ }))
+
+    const input = screen.getByTestId('acp-elicitation-input-question_0_custom')
+    expect(input.tagName).toBe('INPUT')
+    expect(screen.getByTestId('acp-elicitation-input-question_0').textContent).toBe('Other')
+  })
+
+  it('a typed Other answer replaces the enum selection in the submitted content', () => {
+    const h = makePending(askRequest())
+    render(renderCard(makeSession('A', h.pending)))
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-input-question_0'))
+    fireEvent.click(screen.getByRole('option', { name: /Other/ }))
+    fireEvent.change(screen.getByTestId('acp-elicitation-input-question_0_custom'), {
+      target: { value: 'my own answer' },
+    })
+
+    // The trigger reflects the typed text.
+    expect(screen.getByTestId('acp-elicitation-input-question_0').textContent).toBe(
+      'Other: my own answer',
+    )
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-submit'))
+    expect(h.resolved).toEqual([
+      { action: 'accept', content: { question_0_custom: 'my own answer' } },
+    ])
+  })
+
+  it('switching back to a concrete option clears the typed custom answer', () => {
+    const h = makePending(askRequest())
+    render(renderCard(makeSession('A', h.pending)))
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-input-question_0'))
+    fireEvent.click(screen.getByRole('option', { name: /Other/ }))
+    fireEvent.change(screen.getByTestId('acp-elicitation-input-question_0_custom'), {
+      target: { value: 'stale' },
+    })
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-input-question_0'))
+    fireEvent.click(screen.getByRole('option', { name: /Option B/ }))
+    expect(screen.queryByTestId('acp-elicitation-input-question_0_custom')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-submit'))
+    expect(h.resolved).toEqual([{ action: 'accept', content: { question_0: 'opt-b' } }])
+  })
+
+  it('picking Other… but leaving it empty submits neither value', () => {
+    const h = makePending(askRequest())
+    render(renderCard(makeSession('A', h.pending)))
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-input-question_0'))
+    fireEvent.click(screen.getByRole('option', { name: /Other/ }))
+    fireEvent.click(screen.getByTestId('acp-elicitation-submit'))
+
+    expect(h.resolved).toEqual([{ action: 'accept', content: {} }])
+  })
+})
+
 describe('elicitationDraftKey', () => {
   it('prefers the toolCallId, falls back to a message hash', () => {
     expect(elicitationDraftKey('tc-1', 'hello')).toBe('tc-1')

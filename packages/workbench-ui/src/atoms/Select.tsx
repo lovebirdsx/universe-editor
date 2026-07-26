@@ -28,6 +28,12 @@ import styles from './Select.module.css'
 export interface SelectOption<T extends string> {
   readonly value: T
   readonly label: ReactNode
+  /**
+   * What the trigger shows when this option is selected, if it should differ
+   * from the dropdown item `label` (e.g. a compact one-line title while the
+   * item carries a description). Falls back to `label`.
+   */
+  readonly triggerLabel?: ReactNode
   /** Text used for typeahead matching; falls back to `value`. */
   readonly text?: string
 }
@@ -127,7 +133,9 @@ export function Select<T extends string>({
         data-testid={testId}
         {...getReferenceProps()}
       >
-        <span className={styles['value']}>{selected ? selected.label : ' '}</span>
+        <span className={styles['value']}>
+          {selected ? (selected.triggerLabel ?? selected.label) : ' '}
+        </span>
         <svg
           className={styles['chevron']}
           width="12"
