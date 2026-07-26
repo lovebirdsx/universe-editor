@@ -52,6 +52,7 @@
 - [渲染崩溃→日志死循环黑屏](renderer-crash-log-feedback-loop-blackscreen.md) — ElectronProtocol 事件闸门+FileLogger 熔断
 - [Peek 预览面板 blank](peek-preview-blank-embedded-automaticlayout.md) — .preview.inline 与 automaticLayout 死锁；CSS 填满 slot 断环
 - [最大化重启二级侧栏宽度重置](secondary-sidebar-maximize-restart-width-reset.md) — allotment 回调读 props 走 ref；宽度只在 onDragEnd 持久化
+- [agent shell 的 ELECTRON_RUN_AS_NODE](agent-shell-electron-run-as-node.md) — 跑 electron/pnpm dev 前必须 unset，否则 ESM 主进程必崩
 
 ## 打包 / 构建
 
