@@ -67,4 +67,4 @@
 
 ## e2e flaky / 排查
 
-> e2e 偶发失败（CI 挂/本地稳过）的排查流程、案例库、速记全部收敛在 skill `fix-ci-e2e-flake`（按需加载，不占常驻索引）；已知环境 flake 的一句话登记见 `apps/editor/e2e/RUNBOOK.md`。
+> e2e 偶发失败（CI 挂/本地稳过）的排查流程与案例库（含已知环境 flake 登记）全部收敛在 skill `fix-ci-e2e-flake`（按需加载，不占常驻索引）。

@@ -99,11 +99,11 @@ export function planChangedSpecs(changedPaths) {
 
 /** Uncommitted changes (staged + unstaged + untracked), forward-slash paths. */
 function uncommittedPaths() {
-  const out = execFileSync(
-    'git',
-    ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
-    { cwd: repoRoot, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
-  )
+  const out = execFileSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    maxBuffer: 32 * 1024 * 1024,
+  })
   return parsePorcelainV1z(out)
 }
 
@@ -123,7 +123,10 @@ function run(command, args, { cwd = repoRoot, env } = {}) {
 }
 
 function ensureEditorBuild() {
-  run(process.execPath, [join(repoRoot, 'scripts/e2e/ensure-e2e-build.mjs'), '@universe-editor/editor'])
+  run(process.execPath, [
+    join(repoRoot, 'scripts/e2e/ensure-e2e-build.mjs'),
+    '@universe-editor/editor',
+  ])
 }
 
 const PW_CONFIG = ['test', '-c', 'e2e/playwright.config.ts']
@@ -149,7 +152,7 @@ function hintSkippedTags(specFiles, { regression = false } = {}) {
       ? []
       : [[/@regression/, 'pnpm e2ea（或 pnpm --filter @universe-editor/editor e2e:regression）']]),
     [/@visual/, 'pnpm --filter @universe-editor/editor test:visual'],
-    [/@flaky|@perf/, '各自的专门趟（见 apps/editor/e2e/RUNBOOK.md）'],
+    [/@flaky|@perf/, '各自的专门趟（见 apps/editor/e2e/CLAUDE.md）'],
   ]
   const seen = new Set()
   for (const file of specFiles) {
@@ -157,7 +160,9 @@ function hintSkippedTags(specFiles, { regression = false } = {}) {
     for (const [pattern, how] of hints) {
       if (pattern.test(content) && !seen.has(String(pattern))) {
         seen.add(String(pattern))
-        console.log(`run-e2e: 提示 — 选中文件含 ${String(pattern.source)} 用例，本次不会运行；请用 ${how}`)
+        console.log(
+          `run-e2e: 提示 — 选中文件含 ${String(pattern.source)} 用例，本次不会运行；请用 ${how}`,
+        )
       }
     }
   }
@@ -238,7 +243,9 @@ function main() {
 const invokedDirectly =
   process.argv[1] &&
   realpathSync(process.argv[1]).split(sep).join('/') ===
-    fileURLToPath(import.meta.url).split(sep).join('/')
+    fileURLToPath(import.meta.url)
+      .split(sep)
+      .join('/')
 if (invokedDirectly) {
   main()
 }

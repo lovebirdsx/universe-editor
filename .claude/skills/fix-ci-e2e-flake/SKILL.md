@@ -5,76 +5,52 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 
 # 修复 CI 偶发 e2e 失败（flake）
 
-本仓库 e2e 用 Playwright + `_electron` 启动真实 Electron，通过 `window.__E2E__` 探针调服务。CI 偶发、本地稳过的失败**绝大多数不是产品 bug，而是断言写法不够鲁棒，或 CI 环境噪音（extension host 崩溃、进程启动慢、定时器竞态）**。核心套路：**判定真回归 vs flake → 读 call log 的“失败形态” → 把断言收敛到“被测对象本身” → 本地验证 happy path 不破 → 经验追加到案例库/速记**。
+本仓库 e2e 用 Playwright + `_electron` 启动真实 Electron，通过 `window.__E2E__` 探针调服务。CI 偶发、本地稳过的失败**绝大多数不是产品 bug，而是断言写法不够鲁棒，或 CI 环境噪音（extension host 崩溃、进程启动慢、定时器竞态）**。核心套路：**判定真回归 vs flake → 读 call log 的“失败形态” → 把断言收敛到“被测对象本身” → 本地验证 happy path 不破 → 经验追加到案例库**。
 
 > ⚠️ 第一原则：**不要为了让 CI 变绿而削弱对被测行为的覆盖**。鲁棒化 = 排除背景噪音干扰，被测断言强度不变。只能靠放宽真正的被测断言才能过 → 它可能是真回归，别盖住。
 
 ## 判定流程
 
-1. **真回归 vs flake**：本地 `--repeat-each=5` 能否复现（本地稳过+CI 偶发→flake；本地也挂→回归）；同 commit 重跑能过=flake，每次必挂=回归/结构性缺口；`git log -p` 看失败 spec 是否刚改过；核对 CI 堆栈绝对路径（`D:\a\...` 是 runner 路径）语义对得上你改的目录。
-2. **读 call log 失败形态**：count **波动**=背景元素间歇出现（噪音污染全局 count）；count/received **稳定停错值**=被测对象自身没就位（真回归/定时器没触发/fire-once 空转）；`waiting for locator` 恒 0=渲染没发生/探针没触发/选择器错；timeout 且无元素=往前看前置步骤；**元素 visible 但 click 超时 + `... intercepts pointer events`=被兄弟元素遮挡**（hit-target 检查走 elementFromPoint，水平布局溢出时常见，见速记 49）。
+1. **真回归 vs flake**：本地 `--repeat-each=5` 能否复现（本地稳过+CI 偶发→flake；本地也挂→回归）；同 commit 重跑能过=flake，每次必挂=回归/结构性缺口；**retry 救得回=瞬时竞态（flake），救不回=结构性（test 超时击穿/真回归/产物缺口）**——分类第一信号；`git log -p` 看失败 spec 是否刚改过；怀疑回归时 `git stash` 纯净基线复跑（对比前两边都先 `pnpm build`）；核对 CI 堆栈绝对路径（`D:\a\...` 是 runner 路径）语义对得上你改的目录。
+2. **读 call log 失败形态**：count **波动**=背景元素间歇出现（噪音污染全局 count）；count/received **稳定停错值**=被测对象自身没就位（真回归/定时器没触发/fire-once 空转）；`waiting for locator` 恒 0=渲染没发生/探针没触发/选择器错；timeout 且无元素=往前看前置步骤；**元素 visible 但 click 超时 + `... intercepts pointer events`=被兄弟元素遮挡**（hit-target 检查走 elementFromPoint，水平布局溢出时常见，见案例 42）。
 3. **已知噪音源**：extension host 偶发崩溃（`ExtensionHostClientService._handleCrash` 发背景 toast + error 日志）；renderer 定时器竞态（auto-hide/auto-read 在 CI 晚几百 ms）。
-4. **最小且鲁棒的修复**（优先对齐同文件已鲁棒化的兄弟断言）：噪音污染**列表**→`.filter({hasText:'<被测唯一文案>'})` 收敛；噪音污染**全局单值/一次性状态**→从源头禁用无关子系统（先 grep 确认无 spec 依赖）；定时器/异步竞态→`expect.poll`/`toHaveCount({timeout})`，少用固定 `waitForTimeout`+硬断言；纯环境型→别强改产品，记录案例库。
-5. **验证**：`pnpm --filter @universe-editor/editor exec playwright test e2e/specs/<spec>.ts [--repeat-each=5]`；全量 `pnpm e2e`（输出多，只截错误）。本地无法复现 CI 噪音是常态——目标是“鲁棒化没破坏 happy path”。
-6. **沉淀**：把“失败形态→根因→修法”追加到案例库，并新增/更新一条速记（与案例号互相引用）。这是本 skill 长期价值所在。
+4. **最小且鲁棒的修复**（优先对齐同文件已鲁棒化的兄弟断言——同文件内有的步骤已加固、有的还裸，后者是遗留薄弱点）：噪音污染**列表**→`.filter({hasText:'<被测唯一文案>'})` 收敛；噪音污染**全局单值/一次性状态**→从源头禁用无关子系统（先 grep 确认无 spec 依赖）；定时器/异步竞态→`expect.poll`/`toHaveCount({timeout})`，少用固定 `waitForTimeout`+硬断言；纯环境型→别强改产品，记录案例库。
+5. **验证**：诊断前先确认产物链是新的（`pnpm build`；手跑单 LSP spec 还需 `pnpm ext:build`+`extension-host/dist`+`vendor/typescript-language-server`，缺→符号空/探针缺=产物问题非回归）。`pnpm --filter @universe-editor/editor exec playwright test e2e/specs/<spec>.ts [--repeat-each=5]`；全量 `pnpm e2e`（输出多，只截错误）。本地无法复现 CI 噪音是常态——目标是“鲁棒化没破坏 happy path”。
+6. **沉淀**：把“失败形态→根因→修法”追加到 `references/cases.md`（**信号行必填**），并在下方「案例索引」补一行。这是本 skill 长期价值所在。
 
-## 速记（判定信号速查，先扫这里再读对应案例）
+## 案例索引（按失败信号速查，命中后去 `references/cases.md` 读详情）
 
-1. call log count **波动**=背景噪音；count **卡死错值**=更像真回归。先分清。
-2. ext host CI 偶发崩溃，污染一切对通知做全局 count 的断言——按文案过滤。
-3. 鲁棒化 ≠ 放宽被测断言。别用“变绿”掩盖真回归。
-4. 异步/定时器用 `toHaveCount({timeout})`/`expect.poll`，少用固定 `waitForTimeout`+硬断言。
-5. 同文件内有的步骤已加固（按文案过滤/PO 封装）、有的还裸（全局 count/裸 evaluate），后者是遗留薄弱点，优先对齐复用兄弟方法。
-6. CI 堆栈路径是 runner 路径（`D:\a\...`），语义对齐即可，别因路径不同误判改错 checkout。
-7. 本地无法复现 CI 噪音是常态；本地验证目标是“没破坏 happy path”。
-8. 污染**列表**（可 filter）→改 spec 收敛；污染**全局单值/一次性状态**（bell badge、`_hasRevealed`）或**产品一次性动作**→spec 层无法隔离，从源头禁用噪音子系统/修产品（先 grep）。同一噪音源可同时打挂多个无关 spec。（案例 2/11）
-9. **retry 救得回=瞬时竞态（flake）；救不回=结构性（test 超时击穿/真回归/产物缺口）**。分类第一信号。
-10. spec poll/service retry 预算远大于全局 test `timeout`（30s）时，**test 超时才是真天花板**，宽 poll 是摆设。冷启动 spec 用 `test.slow()`；`workers/expect.timeout` 按 `process.env['CI']` 分档。（案例 3）
-11. 本地手跑单 LSP spec 前确保产物链齐：`pnpm ext:build`+`extension-host/dist`+`vendor/typescript-language-server`。缺→符号空/探针缺=产物问题非回归。正规跑法根 `pnpm e2e`。
-12. **本地稳过+CI 每次必挂+received 空+retry 救不回=伪 flake**（CI 漏装运行时产物，尤其**非 pnpm workspace 的 vendor**）。鉴别捷径：同类功能“A 能跑 B 不能”不对称（md LSP ✓/ts LSP ✗）。修 CI 只精准 `npm --prefix vendor/<x> ci`（e2e job 无 `submodules: recursive`）。（案例 4）
-13. `expect.poll` 里“盲按按键”（`keyboard.press`）危险：按键落**当前焦点**，UI 未就位时打进编辑器 TEXTAREA 污染被测对象自身，加宽窗口无效。正解：按键**门控在“目标已聚焦”前置**（探针读状态）。（案例 5）
-14. 报错 `Execution context was destroyed ...navigation`=harness 时序 flake 非断言失败。凡“fire 后页面 reload/导航再 `page.evaluate`”的 PO 步骤都要鲁棒（捕获→重等 `domcontentloaded`+`__E2E__`→重试）。见 `WorkbenchPO._evaluateWhenRestored`。（案例 6）
-15. config 已按 CI 分档 `expect.timeout` 时，spec 硬编码 `{timeout:5000}` 盖回本地值→分档失效；received 稳定空 `""`+等 Monaco 首帧→删局部 timeout 继承 config。**反向坑**：`openWorkspace`-then-`openFileUri` 的 spec 冷启动重，`activeEditorLanguageId` 首 poll 吃 CI 默认 10s 在 Windows 仍不够→显式提到 `{timeout:20000}`。只改触发 flake 的谓词。**此型反复复发**（gotoSymbol→markdownLsp→markdownEditing），命中信号=冷启动 spec 里首个 `activeEditorLanguageId` poll 无显式 timeout 而其后 `hasCommand` poll 已带 15000ms；修时**整文件扫同型兄弟一并加固**。（案例 7、25、31）
-16. 报错 `EBUSY/EPERM/ENOTEMPTY rmdir`、栈在 `finally`/teardown=Windows 文件锁清理竞态非断言失败。根因：`fs.rm` 时 Electron app 未关，句柄/watcher 占目录。修：`fs.rm` 加 `maxRetries:10,retryDelay:200`。**`ENOTEMPTY` 子型**（删的目录冒出 `<id>.json.tmp`）是主进程 storage debounced 原子写“持续写”竞态，`rmSync` 内建 maxRetries 救不回，须手写循环重试整个 `rmSync`（`for`+`await sleep`）。共享 fixture `sharedApp.seedUserData` 同吃。（案例 8、17）
-17. `runCommand(动作)`+`expect.poll(只读状态)` 分离范式，动作 fire-once 且依赖异步就位前置→received 卡死初值+加宽无效（命令在就位前 fire→静默 no-op，poll 不重 fire）。修：把动作放进 poll 谓词，抽 PO helper。（案例 9）
-18. 报错 `Test timeout of 30000ms exceeded`（非 poll message）+received 初值=test 级超时击穿：重 spec 前置开销大，poll 窗口 ≥ 全局 test timeout 则天花板先到，常因裁剪兄弟 spec 漏抄 `test.setTimeout`。**裸 `electron.launch` 的 restore/persistence spec 是重灾区**（命中信号=`launchWithState` 冷启动却既无 `test.slow()` 又有 poll 窗口逼近 30s）。修=补 `test.slow()`+poll 抬到 CI 分档以上；修时整体扫同目录裸 launch spec 有无同型漏保护。（案例 10、32）
-19. 同 flaky spec 二进宫、形态从 `Test timeout` 变 poll 窗口超时+received 恒初值=上轮只治天花板，真根因还在，八成产品 bug。查链路：“响应事件去操作异步启动的资源”时若资源 in-flight 启动 Promise 没被 await，启动期事件被静默丢弃。修：操作前 `await Promise.allSettled([...启动 Promise])`；修产品+回归单测。（案例 11）
-20. 报错 `Target page/context/browser has been closed`（区别速记 14）先验 main 是否真崩：Windows 退出码 `3221225477`=`0xC0000005` native 段错误。决定性三组对照：①`--workers=1` 重复 ②`--workers=6` 重复 ③多实例+禁用嫌疑子系统。单实例不崩、多实例才崩=并发放大的跨进程竞态（常第三方 native 库），进程内串行化无效。正解：触发用例 `@serial` 隔离到 `--workers=1`。整类扫别漏**裸 `electron.launch` 的 restore/persistence spec**——grep `launchWithState|electron.launch` 的文件逐个核对测试体内有无 `openWorkspace`（boot 时恢复进 workspace 的单次 subscribe 不算高危，测试中途切换/打开的 subscribe/unsubscribe churn 才是）。（案例 12、16、44）
-21. 报错「Worker teardown timeout」+所有测试 pass=关 app 链路卡死。①graceful close 挂：`app.close()`→`before-quit` veto 链某 participant 在 headless 弹无人应答 modal→永不 resolve；②强杀不彻底：超时只 SIGKILL main PID，Windows 杀父不杀子→子进程孤儿占句柄。修：Fix A quit-chain 上会弹 modal 的 participant 按 `isE2E` 短路放行；Fix B `closeApp` 超时改 `taskkill /pid <pid> /T /F`。孤儿子进程方向的完整排查法见速记 51。（案例 13、45）
-22. `page.evaluate` 里“滚动后等固定 N 帧 raf 再读布局量”危险：虚拟化列表经 `ResizeObserver` 异步测量，固定帧数不够→读到过渡瞬时值污染被测对象。鉴别：`--workers=1 --repeat-each=N` 全过、`--workers=4` 全挂（received 单调爬升=测量收敛被采样）=竞态 flake 非回归。注意 `--repeat-each` 默认吃 config workers（本仓库 4），必须显式 `--workers=1` 对照。修：改“等布局量连续 K 帧不变再采”的 `settle()`。（案例 14）
-23. 滚动恢复用 `frac=scrollTop/max` 当落点代理脆弱：①分母漂移（下方懒测量使 max 增大）；②RAF 过冲（restore 收敛前 frac 在顶/底震荡含 1，单边 `poll(...).toBeGreaterThan(0.15)` 被过冲帧立刻满足提前返回）；③**虚拟模式像素中点是双峰的**——`scrollTop=(H-h)/2` 因上方行 estimate 高度≠真实高度，同一像素落到两条截然不同消息(如 m11 frac≈0.43 或 m22 frac≈0.92)，忠实恢复到 m22 就 >0.85 误判。正解：断言锚定消息索引（复用 `captureAnchor` 语义解析 `m:m<idx>`）；**能定位到具体消息时优先相对不变量“恢复后顶部消息==切走前那条(settle 收敛后取值,±2 容差)”而非绝对带**——相对不变量对双峰中点免疫且仍守护重置到顶/跳到底两端。④像素中点甚至可落到**末条消息**→距底 <32px 被记 stuck=true，「中部恢复」退化成「贴底恢复」假阳性——定位本身也须按锚索引反馈迭代（速记 48）。（案例 15、34、41）
-24. 同类“滚动恢复”spec 有的加了 echo-settle/高度收敛门控、有的没加→没加的并发下偶发。虚拟模式贴底靠 `scrollToBottomStable` 10 帧 RAF 上限，echo 仍涌入/scrollHeight 还涨时上限耗尽停在离底几百 px。修：scroll 前 `poll(getAcpMessages().length).toBe(<full>)`+两帧 scrollHeight 相等门控；单次贴底改 `poll` 反复直到 distance<30。（案例 15）
-25. spec 用 `mkdtemp(tmpdir())` 造真 git 仓库、断言依赖“spec 路径 ⋈ git 内部路径精确匹配”→仅 CI Windows 确定性失败（received 恒定、retry 救不回=伪 flake=真 bug）。根因：CI Windows `os.tmpdir()` 是 8.3 短路径（`RUNNER~1`），`git rev-parse --show-toplevel` 总返回长路径→`relative(长,短)` 破碎→`git show` exit 128→`getHeadContent` 恒 null。修：`realpathSync.native(mkdtempSync(...))` 规范成长形（本地 no-op）。复现捷径：COM `GetFolder(dir).ShortPath` 取 8.3 名当 cwd。（案例 18）
-26. 诊断探针别污染被测断言——给“被多断言共用的既有探针”追加调试后缀会让每个用它的断言都失败、最早的先挂、误导定位。铁律：诊断只走新增独立探针方法或 `window.__X_DBG__` 数组+独立 probe 读回。`console.info` 太重会改时序（heisenbug），优先轻量内存数组累积事件序列由 probe 一次读回。（案例 19）
-27. e2e agent fixture（`test-fixtures/*.cjs`）写盘 `os.tmpdir()` 且文件名只含 agent 自颁发 sessionId（每进程都从 `sd-1` 起）→整机共享路径被并发 worker/孤儿 agent 互相覆写。修：写盘路径加进程唯一 token（`${process.pid}-${randomBytes(4)}`）。改 `.cjs` 无需 rebuild，产品 contribution 改动要 build。（案例 19）
-28. “迟到的 fs 事件把 diff modified 侧从磁盘刷回、覆盖未保存 live 编辑”是真产品竞态。凡“响应 fs 变更刷新可能有 live 编辑缓冲的视图”都要先查 live model：`MonacoModelRegistry.peek(uri)` 有值用 `model.getValue()`，无才读盘。别用 `isDirty` 判断（React effect 异步更新留竞态窗口）。同源 `ExternalChangeWatcher._refreshChangedDiffEditors`、`SessionChangesDiffSyncContribution._sync`。（案例 19）
-29. e2e 用 `dispatchEvent(new Event('scroll'))` 合成“用户滚动”危险：不带 wheel/pointerdown/keydown，凡产品靠这些事件区分“程序化 vs 用户接管”的逻辑都识别不到被吞。决定性鉴别：`--workers=1 --repeat-each=N` 确定性全挂（非并发放大）+`git stash`+build 回 HEAD 仍挂（既有脆弱点被某提交激活）。修：测试用真实 `WheelEvent`/`mouse.wheel`/键盘表达用户接管。别改产品用位置差异判接管（会把 scroll-anchoring 漂移误判）。（案例 20）
-30. `sharedApp`（worker 单实例、reload 复位）里 `window.reload()` 不拆主进程状态——上测试 `openWorkspace` 的文件夹被 session-restore 灌回本测试 active group（含 ghost tab），污染 tab 数类断言（形态因上个 spec 是谁而飘忽）。修：`resetWindow` 在 `whenRestored` 后确定性 `closeWorkspace()` 拆掉 ghost groups。（案例 21）
-31. “关闭编辑器后紧接着对同一文件做 model 操作”有 model-dispose 竞态：`closeAllEditors` 同步返回但 React 卸载→dispose 异步，返回后 `peek(uri)` 仍可能拿到即将 dispose 的孤儿 model→按 model 存活分“改内存 vs 落盘”的代码走 live 分支只改内存、孤儿 dispose 后丢失。修：对“静默文件级改写”从源头保证落盘（apply 加 `persistToDisk` 始终读写盘+`setValue` 同步残留 model）。（案例 22）
-32. 一次“启动/性能优化”重构改变就位时序会同时放大多个无关 spec 的“就位前”竞态；且该提交往往自补部分探针却漏改同类路径——漏改处即回归。多 spec 同提交后一起变红、形态各异，但 `git show <opt-commit>` 能读到“workbench mounts before Monaco”这类自述时序变更。判定：`git show --stat` 看波及面，逐个失败对照“同类路径它修了没”。（案例 23）
-33. provider 拉取 `.then(...)` 缺 `.catch()`→冷启动 reject 掐断 retry 链（保活 `_maybeRetry` 只在 `.then` 调），结果恒空且 retry 救不回=伪 flake=真 bug。修：`.then().catch()` 双分支都调 `_maybeRetry` 保活，catch 加 `_currentModel!==model` 早退。（案例 23）
-34. `.catch()` 接得住 reject，接不住“pull 永久 pending（既不 resolve 也不 reject）”——凡“从 then/catch 调度下一次重试”的结构，一次 hang 掐死全链，比速记 33 更隐蔽。底层 web-worker RPC/动态 import 冷启动永久排队时触发。不对称鉴别：Windows✓/Ubuntu headless✗。修：给单次 pull 加超时竞速（`Promise.race` timeout-reject）保证必 settle。（案例 24）
-35. 报 `Target page ... closed`（速记 20）的 spec **未必是肇事者**：`sharedApp` 是 worker 级共享 Electron，`resetWindow` 每 test 前 `closeWorkspace()`→若同 worker 前个 test 开过 workspace 则触发 parcel `unsubscribe`，多 worker 并发崩，报错落在恰好在 reset 的**下一个受害 spec**（纯 renderer 的 output 也会背锅，崩点飘忽）。要隔离**加害者=`sharedApp ∩ openWorkspace` 的 test**（全打 `@serial`），受害者不用改。判别：`for f in $(grep -l fixtures/sharedApp *.spec.ts);do grep -q openWorkspace $f&&echo $f;done`。（案例 26）
-36. 就位门控只 await `whenRestored`（=mount 时机）不够：renderer 有 mount 后 fire-and-forget 的 workspace-state reconcile（`main.tsx` `Promise.all([...reconcileFromStorage()])`，含 500ms fallback timer），以破坏性 `_seedDefaults()` 回默认值收尾。spec 若在落地前就 click 把状态切离默认（如 SideBar→Search）→迟到的 reconcile 覆盖回默认，received **恒卡默认值**（速记 1/17 变体）。断言**默认态本身**的 spec 免疫。修：动作前 `await workbench.waitForBootstrapFocusSettled()`（probe 在同一 reconcile 的 `.finally` resolve，保证已 settle）。（案例 27）
-37. **本机 Windows** 裸 `electron.launch`（自带 `launchWithState`，带 `--inspect=0 --remote-debugging-port=0` 二次启动 Electron）的 restore/persistence/relaunch 类 `@p1` 偶发/稳定报 `electron.launch: Process failed to launch!`（`<launched> pid=...` 后仍判失败、exitCode=9）=**本机环境对 Electron 二次启动+CDP 连接的限制,非回归**；走 fixture 的 `@p0` 不受影响。判别：`git stash` 清改动复跑仍挂=环境（失败集合 ⊆ 裸启动 `@p1` 且报此串→别当回归追,以 CI 为准）。**真 bug**：Claude Code shell 设 `ELECTRON_RUN_AS_NODE=1`→Electron 当纯 Node 跑、不认 `--remote-debugging-port`→所有子进程继承后报 `bad option`;凡新写自定义 `electron.launch`,`env` 里先解构去掉它：`const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env`。（案例 28）
-38. Windows CI 的 `%TEMP%` 可能含 DOS 8.3 段（如 `RUNNER~1`）：`pathToFileURL(path)` 将 `~` 编为 `%7E`，但产品 `URI.file(path).toString()` 保持 `~`。若 E2E 探针返回平台 URI 字符串、预期却用 Node URL，received 稳定仅差 `%7E`/`~`、retry 救不回，是**断言表示域不一致**，不是时序或产品回归。修：预期也用 `URI.file(path).toString()`；先审计 `pathToFileURL` 的其它用法，只有比较 URI 字符串的断言须改。（案例 29）
-39. `@regression`+本机 `--workers=1 --repeat-each=N` **确定性**失败（非并发放大）+received 恒初值+retry 救不回=伪 flake=真 bug/fixture 失真，别当环境噪音。**复合根因要层层剥**：一次修复只让通过率 0→部分，说明还有第二、三层，继续加诊断别收手。复合常含：fixture 保真度不足（大小写敏感匹配/状态文件写进被 watch 的 workspace）+真产品竞态（两条 pass 并发读改共享态，最后完成者 clobber→串行链 `_runSerial`）。诊断法：fake CLI 侧+产品侧各 append 时间戳日志到固定文件，看命令时序+谁最后 clobber（独立日志别污染既有探针，完事删净）。（案例 30）
-40. 多条**业务无关** spec 同轮随机挂在 fixture `waitForFunction(__E2E__)`，trace 显示 Electron/window 很快创建、页面纯黑、probe 30s 恒无，retry 又恢复——先查 **probe 前 bootstrap RPC 永久 pending**，别把它当慢启动加 timeout。本例 dead-frame gate 在 `did-start-navigation` 关闸，renderer 却能在 `dom-ready` 前发首个 NLS RPC；main 同步响应被 gate 丢弃，bootstrap 永久卡死。入站 IPC 本身就是新 frame 存活的强信号，必须先重开 gate 再分发请求，让同步响应可返回。（案例 33）
-41. 报错 `extension host may only execute _workbench.* commands ... not "<ext.cmd>"`=**扩展命令冷启动激活竞态**：spec 门控用的信号（如 SCM `getScmSourceControlCount()>0`）在扩展 `activate()` **早期**就绪，而 contributed 命令 handler 在**同一 `activate()` 后段**才注册；两者之间 fire 该命令→renderer 转发给 host→host 无 handler 转回 renderer→被 `MainThreadCommands.$executeCommand` 拒（只准 `_workbench.*`）。修：门控改**轮询任一只读 contributed 命令直到不再被拒**（handler 同步一次性注册，一个就绪则全就绪），抽 helper 放进 `expect.poll`（捕获→匹配该错串 return false 继续 poll，其它 throw）。命中信号=spec 只 poll 激活早期信号却紧接着裸 `runCommand('<ext>.<cmd>')`。修时整文件扫同型 test 一并加固。（案例 35）
-42. **拖拽 spec 只等 `data-testid` host 可见就 drop 属就位门控不足**：内嵌 Monaco 输入框的 host `div` 立即渲染，但 drop 处理里的 `insertRef()`/句柄方法在 Monaco 实例 mount 完成前**静默 no-op**（`if (!ed||!model||!tracker) return`）→drop 在就位前 fire，received 恒 0（速记 1/17：drop fire-once 不幂等，不能放进 poll 反复 fire）。**键盘型 spec 免疫**（poll `editorTextFocus` 契约键=Monaco `onDidFocusEditorText` 设，天然门控就位）；**drop 型绕过焦点**直接 dispatch 到 host div，故独有此薄弱点。修：门控加 `expect(host.locator('.monaco-editor').first()).toBeVisible()`（=编辑器 create 返回+句柄 refs 就位），固定 `waitForTimeout`+硬断言换 `expect.poll`。（案例 36）
-43. **命令在 workspace-swap 的异步 re-pin 窗口里 fire→打到仍钉旧（空）workspace 的 host→scan 空→received 恒初值**：ext host 在 launch 时把 `workspace.rootPath` 钉死，变更靠 `_onWorkspaceChanged` **异步** `_restart` 重钉；命令在“stop 旧 host→spawn 新 host”窗口 fire 会读到旧 host（`root` 仍 undefined→返回 `[]`→空 edit）。本地重连 <1 帧几乎测不到，Windows CI 的 Electron-as-node spawn 慢把窗口撑到秒级；**blind-retry 治标不治本**（重连比 retry 预算慢就仍挂）。真修=产品侧**同步 arm re-pin barrier**——`onDidChangeWorkspace` 回调**首个 await 前**同步记下 `_repinning` Promise，命令入口改 `await _whenReady()`（drain barrier 再 `start()`），命令必落在重钉后的 host。复现捷径=强制 `activateByEvent` 先连初始空 workspace+在 `_restart` 的 `host.stop` 后注入 `setTimeout` 撑宽窗口。（案例 37）
-44. **iframe/异步元素 `toBeVisible` 等满 timeout 恒 `element(s) not found` 且该 timeout == 产品自己的"放弃点"→不是慢竞态,是根本没就位(产品 bug)**：查产品对该链路的容忍上限（如 `CustomEditorHost` `setTimeout(...,15000)` 后 `setFailed` 放弃 provider）——spec 等待窗口 ≥ 该上限却仍恒失败=**等到产品自己都放弃了仍没注册**,绝非"再等会就好"。**反模式警示**："产品容忍 Ns、spec 只等 Ms<N,加到 N 对齐"的归因要先验证 N 是"缓冲"还是"放弃点",两者反义。真根因常是 provider 注册链断裂：host `_restart` 换新 conn，而 mount 时 fire-and-forget 的唯一一次 `activateByEvent` 落在旧 conn→provider 永不注册→重试挂的 `onDidChangeProviders` 永不 fire。修=产品侧 host **重启后重放 activate**（订阅 `onDidChangeContributions`，fire 时若尚未 open 则重新 `activateByEvent`）。命中信号=Ubuntu(非仅 Windows)也稳挂+等满时间恰等产品放弃点。（案例 38）
-45. **打开工作区后紧接 `click(侧栏图标)`→received 恒默认容器(explorer)=后台 workspace 事件监听者抢占用户刚 fire 的容器选择**（速记 36 同族——「fire-once 切离默认→迟到的异步逻辑覆盖回默认」，但触发源是**监听 `onDidChangeWorkspace` 的 contribution 无条件 `openViewContainer('explorer')`**）。事件**早到**（点击前）无害、**晚到**（点击后）reveal 覆盖掉刚点的 search→胜负取决于机器负载，故多 spec 轮流挂、单跑必过。诊断法：容器状态变更点加轻量独立 console 日志+error-context 的 DOM 快照读 `[pressed]` 定位真实 activeId；**别去 ViewsService 内部找**（`_reconcileActive`/`_loadFromStorage` 是幌子），顺「还有谁 `openViewContainer('explorer')`」grep 到真凶 contribution。修产品=reveal **条件化**（仅当无激活容器或仍在 explorer 时才切；已切非 explorer 则保留，对齐 VSCode）。第二触发源=焦点恢复，见速记 47。（案例 39）
-46. **`sharedApp` 的 window reload 不拆 main 进程内存里的 WORKSPACE-scope storage backend——wipe 磁盘 `workspaces/` 无效**：`MainStorageService._workspace` 只有 `switchWorkspace`（closeFolder/openFolder）才 flush+释放；`resetWindow` 只「wipe 磁盘+reload」时，新 renderer 的 reconcile 若赢得 500ms settle 竞速，会从**旧内存 bucket** 读回上个 spec 持久化的容器选择→本 spec 的 click 命中 **ActivityBar toggle 语义**关容器→active=undefined→晚到的 reveal 合法开回默认。修 fixture=`resetWindow` 在 **reload 之前**先 `closeWorkspace()`（拆内存 bucket）。命中信号=挂的 spec 前驱是「点过同一侧栏容器的 spec」+快照 `Explorer [pressed]`；复现=whenRestored 后临时 sleep 700ms 撑宽竞速窗口。（案例 40 第一层）
-47. **焦点恢复类后台逻辑是速记 45 的第二触发源，且掩盖机制反直觉——「加 sleep 变绿」不代表是 fixture 竞速**：`WorkspaceFocusRestoreContribution` 在 workspace 事件后开 **1500ms restore 窗口**（80ms debounce），无编辑器时 `restoreWorkbenchFocus` 走 `focusView(explorer.tree)`→**无条件** `openViewContainer(explorer)`——用户在窗口内点的 search 被 10ms 后 fire 的 debounce 盖回 explorer。与速记 45 同语义但独立代码路径（dump 里**没有** revealExplorer 日志即排除，顺 `LayoutService.focusView` 的 `openViewContainer` 反查调用方）；sleep 变绿=给了 debounce 提前 fire 的时间，不是修复。修产品=explorer 分支前读 `getActiveViewContainerId(SideBar)`，已切非 explorer→返回 `target:'kept'` 不抢。真实用户同样受害：打开文件夹后 1.5s 内点 Search 会被抢回 Explorer。（案例 40 第二层）
-48. **虚拟化 timeline 的「滚到中部」定位不能用像素中点一锤定音——中点可落到末条消息，场景退化成贴底假阳性**：速记 23③ 的双峰之外，CI 慢机上 `scrollTop=(H-h)/2` 甚至落到末条 m24（估计坐标系严重偏离真实）；此时距底 `<STICK_THRESHOLD_PX`(32px) 被记 `stuck=true`，「中部切回恢复」实际走了 bottom-pin 路径=贴底场景的假阳性，且 `anchorBefore<末条` 这类前置守卫被击穿（received=24）。正解：**定位本身按锚定索引反馈迭代**——设 frac → settle 读锚 → 按 锚≈k·frac 割线折算下一 frac，直到顶部锚落进中部带（离顶/底都远），2~3 次收敛。已抽共享 PO `AcpTimelinePO`（`readTopIndex`/`settleTopIndex`/`scrollToAnchorBand`）。修时整类扫：所有「虚拟化 timeline+像素中点+锚断言」spec 一并换（`agentsVirtualScrollRestore`/`agentsScrollRestore`；`agentsStickyScroll` 单张超高卡中点恒在卡内、sessionList/search/mermaid 非虚拟列表，均免疫）。（案例 41）
-49. **CI e2e 环境 = en-US locale + 1280×800 默认窗口，本地 zh-CN（+常最大化）会掩盖标题栏等水平紧凑布局的溢出**：locale 取 `app.getLocale()`（CI runner=en-US，英文文案更宽），e2e 窗口无持久化状态时默认 1280×800。遮挡失败特征=**元素 visible 但 click 超时** + call log 里 `... intercepts pointer events`（hit-target 检查用 `elementFromPoint`，溢出的 center 右缘滑到 DOM 序更后的兄弟区域底下即被挡）。本地 zh-CN 菜单更短可能仅剩几 px 间隙恰好不触发=本地全绿假象。改标题栏/工具栏等水平布局后，用 `--lang=en-US` + 1280 窗口验证遮挡（探针：`elementFromPoint(btn 中心) === btn`、`center.scrollWidth <= center.clientWidth`）；长条形容器要留一个可缩元素（`flex-shrink:1 + min-width`）吸收压力，勿全 `flex-shrink:0`。（案例 42）
-50. **`toBeFocused` 恒 inactive（稳定卡值）+ 无 workspace 冷启动 spec = bootstrap one-shot 焦点恢复抢焦**：速记 36 的 settle 竞态从「容器选择」扩展到「DOM 焦点」。空窗口 reload 后 `viewsService.reconcileFromStorage` 恒走 500ms fallback timer→settle 后 `restoreWorkbenchFocus` 无编辑器时 `focusView(explorer.tree)` 聚焦 Explorer 树——spec 在窗口内驱动的焦点（click 开的 overlay 触发器、Escape 后 react-aria FocusScope 恢复回的按钮、Monaco/输入框）被抢走且**永不归还**（one-shot）。仅 Ubuntu CI 挂=慢机 settle 落在测试中段，快机 settle 早于首个动作。与速记 45/47 的 workspace-change restore 不同族：本条是 reload 后 bootstrap 一次性 restore，无 kept 语义防护。修 spec=动作前 `await workbench.waitForBootstrapFocusSettled()`；多 test 同族用 describe 级 `beforeEach` 统一加。命中信号=sharedApp spec 不开 workspace 就驱动/断言焦点（`toBeFocused`/`keyboard.type` 落点敏感）。修时整类扫：`toBeFocused` grep 全 specs，凡无 workspace 缓冲的一并加固。（案例 43）
-51. **「Worker teardown timeout」无 fixture 名（卡在 `gracefullyCloseAll`）+测试全过、spec 组合随机=main 死后有东西握着 CDP pipe 不 EOF——优先查父 PID 已死的孤儿子进程**（wsl/pwsh/conhost/electron），孤儿命令行就是凶手。`taskkill /F` 能杀而 Node `kill` 不能=进程卡特殊状态（如 wsl.exe 卡 RPC，Node 的 timeout SIGTERM 对它无效）→产品 spawn 要自管理（`stdio:['ignore','pipe','pipe']`+`windowsHide:true`）+超时 `taskkill /pid /T /F` 兜底；机器相关探针（WSL 检测等）e2e 用 setting pin 掉（有单测兜着，对齐 e2e 确定性原则）。辅助定位：卡住 worker 的 tmp userData `logs/*/main.log` 尾行「before-quit confirm 后无 will-quit」=quit 链被 force-kill 打断。这类超时极易误判为环境 flake 而放过真 bug——**基线对照（stash）是定性关键**。（案例 45）
-
-## 案例库
-
-案例详述（现象+根因 → 修法+锚点，共 45 条）已拆到 `references/cases.md`；命中速记后按案例号去该文件查阅。
+- call log count **波动**=背景噪音 → 案例 1；全局单值/一次性状态同轮多挂=同一噪音源打一片 → 案例 2
+- `Test timeout of 30000ms exceeded`（非 poll message）=test 天花板击穿 → 案例 3/10/32
+- CI 每次必挂+本地稳过+received 恒空+retry 救不回=伪 flake（CI 缺产物）→ 案例 4
+- `expect.poll` 里 `keyboard.press` 后 received 稳定错值=盲按污染被测对象 → 案例 5
+- `Execution context was destroyed ... navigation`（fire 后页面 reload/导航再 evaluate）→ 案例 6
+- 冷启动首 poll 恒 `""`：局部硬编码 timeout 盖 CI 分档 / 首 poll 漏带大 timeout → 案例 7/25/31
+- `EBUSY/EPERM rmdir` 栈在 teardown=Windows 文件锁 → 案例 8；`ENOTEMPTY`+`.json.tmp`=storage 原子写竞态 → 案例 17
+- `runCommand`+`expect.poll` 分离、received 卡死初值=fire-once 在就位前空转 → 案例 9
+- click 把状态切离默认后 received 恒卡默认值=mount 后 fire-and-forget reconcile 迟到覆盖 → 案例 27
+- 上轮修完形态变了仍挂=只治了表象，复合根因继续剥 → 案例 11/30/40
+- `Target page ... has been closed`+退出码 0xC0000005：单实例过、多实例崩=parcel watcher → 案例 12/16/44；sharedApp 下崩点飘忽受害者无辜 → 案例 26
+- `Worker teardown timeout`+测试全过：有 fixture 名=quit 链 veto → 案例 13；无 fixture 名=孤儿子进程握 CDP pipe → 案例 45
+- 滚动采样 received 单调爬升、`--workers=1` 过 `--workers=4` 挂=测量瞬时值 → 案例 14
+- 滚动恢复断言 frac 异常（RAF 过冲/虚拟双峰/像素中点落末条）→ 案例 15/34/41
+- 仅 CI Windows 确定性挂+涉及 tmp 路径/git=8.3 短路径 → 案例 18；URI 字符串稳定差 `%7E`/`~` → 案例 29
+- 新 spec `--repeat-each` 批量挂、received 恒他人写入值=多层叠加 → 案例 19
+- `--workers=1` 确定性全挂+stash 回 HEAD 仍挂=既有脆弱点被激活，别当环境噪音 → 案例 20/30
+- sharedApp 多 ghost tab / 跨 spec 状态泄漏=reload 不拆 main 态 → 案例 21/40
+- 关闭编辑器后紧接 model 操作、修改静默丢失=dispose 竞态 → 案例 22
+- 某提交后多 spec 同红形态各异=`git show` 看时序变更波及面 → 案例 23；补了 `.catch` 仍挂=永久 pending → 案例 24
+- `extension host may only execute _workbench.* commands not "<ext.cmd>"`=激活竞态 → 案例 35
+- 拖拽 spec received 恒 0（稳定卡值）=drop 在 Monaco 就位前 fire → 案例 36
+- workspace 切换后紧接的命令 received 恒初值=host 异步 re-pin 窗口 → 案例 37
+- 等满 timeout 恒 not found 且该时长==产品放弃点=根本没就位（产品 bug）→ 案例 38
+- click 侧栏后 received 恒 explorer / 快照 `Explorer [pressed]`=后台逻辑抢容器 → 案例 39/40
+- 元素 visible 但 click 超时+`intercepts pointer events`、本地全绿=en-US+1280 窗口溢出遮挡 → 案例 42
+- `toBeFocused` 恒 inactive+无 workspace 冷启动=bootstrap 一次性焦点恢复抢焦 → 案例 43
+- 纯黑页+probe 恒无+业务无关 spec 同轮随机挂=bootstrap RPC 被 gate 丢弃 → 案例 33
+- 本机裸 `electron.launch` 报 `Process failed to launch!`（exitCode=9）、CI 正常=本机环境 → 案例 28
+- 失败仅集中 DnD 类且重跑能过=headless 手势时序 → 案例 46；锁屏时剪贴板用例必败 → 案例 47
+- chord 用例卡 `defocusEditor` 等 focus 变 false+retry 秒过=defocus 时序噪声（观察中）→ 案例 48
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级
@@ -83,5 +59,5 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - `apps/editor/src/renderer/services/extensions/ExtensionHostClientService.ts` —— ext host 崩溃→通知（CI 噪音主源）
 
 ## 其它
-- 后续用本 skill，发现新经验，需同步更新本文件
+- 后续用本 skill，发现新经验，按判定流程第 6 步同步更新案例库与索引
 - 修复了某个e2e本身测试稳固性的问题，那么需要整体评估一下所有e2e是否也存在同样的问题，并一并修复

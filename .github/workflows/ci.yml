@@ -275,7 +275,7 @@ jobs:
       # excluded from the local `pnpm e2e` main pass to keep the day-to-day loop
       # fast, but still block CI here — same parallel shard×2 mechanism as the main
       # pass. Tag filtering lives in the shared config (UNIVERSE_E2E_ONLY_TAG); no
-      # --grep flag. See apps/editor/e2e/RUNBOOK.md.
+      # --grep flag. See apps/editor/e2e/CLAUDE.md.
       - name: Run E2E regression (Linux, xvfb)
         if: runner.os == 'Linux'
         run: UNIVERSE_E2E_ONLY_TAG=@regression xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --shard=${{ matrix.shard }}/2
@@ -289,7 +289,7 @@ jobs:
 
       # @flaky cases (e.g. headless drag-and-drop) are environment-sensitive, not
       # regressions — run them separately, report-only, so they never block the
-      # @p0/@p1 gate. See apps/editor/e2e/RUNBOOK.md. Only on shard 1.
+      # @p0/@p1 gate. See apps/editor/e2e/CLAUDE.md. Only on shard 1.
       - name: Run E2E flaky (Linux, xvfb, non-blocking)
         if: runner.os == 'Linux' && matrix.shard == 1
         continue-on-error: true
@@ -297,7 +297,7 @@ jobs:
 
       # @perf records the startup timeline into a JSON artifact (observe-only, no
       # budget assertion). Single worker, Linux+shard 1 only. Non-blocking; the
-      # metrics are uploaded below for regression tracking. See e2e/RUNBOOK.md.
+      # metrics are uploaded below for regression tracking. See apps/editor/e2e/CLAUDE.md.
       - name: Run E2E startup perf (Linux, xvfb, observe-only)
         if: runner.os == 'Linux' && matrix.shard == 1
         continue-on-error: true
@@ -319,7 +319,7 @@ jobs:
 
       # @regression: bug-guard cases excluded from the local main pass; still block
       # CI here via the same parallel shard×2 mechanism. Tag filtering lives in the
-      # shared config (UNIVERSE_E2E_ONLY_TAG); no --grep flag. See e2e/RUNBOOK.md.
+      # shared config (UNIVERSE_E2E_ONLY_TAG); no --grep flag. See apps/editor/e2e/CLAUDE.md.
       - name: Run E2E regression (Windows)
         if: runner.os == 'Windows'
         shell: bash

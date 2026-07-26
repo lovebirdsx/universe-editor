@@ -129,7 +129,7 @@ node scripts/e2e/affected-e2e-matrix.mjs --all                # 全开（等价 
 
 ## flaky 排查
 
-「CI 偶发挂、本地稳过」的排查流程、案例库、速记收敛在 skill **`fix-ci-e2e-flake`**（按需加载）；已知环境 flake 的一句话登记见 [`apps/editor/e2e/RUNBOOK.md`](../../apps/editor/e2e/RUNBOOK.md)。遇 flaky 先查它，别当回归改产品代码。
+「CI 偶发挂、本地稳过」的排查流程、案例库（含已知环境 flake 登记）全部收敛在 skill **`fix-ci-e2e-flake`**（按需加载）。遇 flaky 先查它，别当回归改产品代码。
 
 ## 设计背景
 

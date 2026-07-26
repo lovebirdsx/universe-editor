@@ -11,7 +11,8 @@ test.describe('@p1 explorer drag-and-drop', () => {
   // @flaky: HTML5 drag-and-drop gesture delivery is timing-sensitive under
   // Playwright + Electron headless (no GPU, 2-core CI runners). The move itself
   // is sound; the synthesized dragTo occasionally lands before the tree row is
-  // droppable. Runs in a separate non-blocking CI pass — see e2e/RUNBOOK.md §2.
+  // droppable. Runs in a separate non-blocking CI pass — see skill
+  // fix-ci-e2e-flake 案例 46.
   test('drag file to subdirectory moves it', { tag: '@flaky' }, async ({ workbench }) => {
     // Create a temp workspace with one file and one subdirectory.
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-dnd-'))

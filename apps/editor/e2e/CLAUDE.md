@@ -15,7 +15,6 @@ specs/        smoke.*.spec.ts(+ 1 个 visual.*.spec.ts)
 baselines/    视觉回归基线截图(仅 Linux CI 生成,勿在本机更新)
 test-results/ 运行产物(trace/video/screenshot),勿提交
 playwright.config.ts  timeout/retries/workers(CI vs 本地分流)
-RUNBOOK.md    已知 flaky 登记:根因 + workaround + 判定标准
 ```
 
 > **基座已抽包**:通用 driver(两套 fixture 工厂 + 6 个 PO + `expectNoLeaks`/`evaluateWhenRestored` + 启动契约)住在 `packages/e2e-harness`;探针类型契约(`E2EProbe` + `window.__E2E__` 全局 + 运行时 key 常量)住在零依赖包 `packages/e2e-contract`(app 与 harness 共享,单一事实源)。本目录的 `fixtures/electronApp.ts`、`fixtures/sharedApp.ts`、`pages/WorkbenchPO.ts` 都只是把 harness 工厂**绑定到本 app 的 `out/` 产物路径**的薄 shim,spec import 路径不变。改通用 driver → 改 `packages/e2e-harness`;改探针接口 → 改 `packages/e2e-contract`(app 的 `src/shared/e2e/contract.ts` 是它的 re-export barrel)。
@@ -77,12 +76,12 @@ tag 打在**用例级** `test('... @p0')` 标题末尾（`@regression` 尤其是
 | `@p0` | 核心冒烟，失败**阻塞** CI | ✅ 跑 | 并行趟 shard×2 |
 | `@p1` | 一般冒烟，阻塞 | ✅ 跑 | 并行趟 shard×2 |
 | `@regression` | 守护已修复 bug（非主路径冒烟） | ❌ 排除（`e2ea` 并回） | 单独并行趟 |
-| `@serial` | 跨进程 native 竞态需隔离 | 单独 `--workers=1` 串行趟 | 单独串行趟 |
-| `@flaky` | headless 偶发（如 DnD） | 排除 | 单独趟 `continue-on-error`，不阻塞 |
-| `@perf` | 启动性能观测 | 排除 | 单独趟，写 metrics 工件 |
+| `@serial` | 跨进程 native 竞态需隔离 | 单独 `--workers=1` 串行趟 | 单独串行趟，仅 shard 1 |
+| `@flaky` | headless 偶发（如 DnD） | 排除 | 单独趟 `continue-on-error` 不阻塞（仍跑仍传 trace），仅 shard 1 |
+| `@perf` | 启动性能观测 | 排除 | 单独趟 `continue-on-error`，写 metrics 工件，仅 shard 1 |
 | `@visual` | 视觉回归 | 排除 | 默认排除，需显式跑 |
 
-**何时打 `@regression`**：该用例只为守护某个已修复 bug、不是命令主路径/协议/导航入口的冒烟。核心主路径留主趟。
+**何时打 `@regression`**：该用例只为守护某个已修复 bug、不是命令主路径/协议/导航入口的冒烟。核心主路径留主趟。`@flaky` 是过渡状态——修好根因后应摘掉让它回归门禁。
 
 脚本分两层——**根级 `pnpm e2e` 走 turbo 缓存跑全量（core + 所有扩展）**；子包级（前缀 `pnpm --filter @universe-editor/editor`）只跑 core，但也前置了 build 守卫（裸跑自动刷新 `out/`，不缓存 e2e 结果）：
 ```bash
@@ -142,13 +141,13 @@ npm --prefix extensions-external/<ext> run e2e   # 单个外部 suite
 
 ## 踩坑（本目录高频）
 
-> 排查「CI 偶发挂、本地稳过」的 flaky（区分真回归 vs 环境噪音、读 call log 失败形态、鲁棒化断言）有专门的 skill **`fix-ci-e2e-flake`**——它的案例库 + 速记是 flaky 知识的单一事实源（parcel watcher 多 worker 崩溃、异步 ACP prompt、裸 launch "Process failed to launch"、scroll 恢复过冲…都在里面)。遇到 flaky 先查它。
+> 排查「CI 偶发挂、本地稳过」的 flaky（区分真回归 vs 环境噪音、读 call log 失败形态、鲁棒化断言）有专门的 skill **`fix-ci-e2e-flake`**——它的案例库是 flaky 知识的单一事实源（parcel watcher 多 worker 崩溃、异步 ACP prompt、裸 launch "Process failed to launch"、scroll 恢复过冲…都在里面)。遇到 flaky 先查它。
 
 - **产物 build 已自动兜底**：`pnpm --filter <ext> e2e`（及 `e2ea`/`e2eg`/core 的 `e2e:regression`/`e2e:ui` 等）前置了 `scripts/e2e/ensure-e2e-build.mjs`，裸跑也会先 turbo build 宿主+扩展+上游再跑，`out/`/`dist/` 不会过期。外部扩展走 `run-external-e2e.mjs`，同样自动先建 editor+host。唯一仍需手动的场景：直接调 `npx playwright test`（绕开 npm 脚本）时守卫不生效——那时先 `pnpm build` 或改走 `pnpm e2e:ext`。
-- **异步 ACP 会话**：`sendAcpPrompt` 的 await **不等** echo 流式回复渲染完。依赖 timeline 高度/虚拟化/滚动的断言前，先 `expect.poll` 等消息数到位 + 高度收敛（详见 skill `fix-ci-e2e-flake` 速记 24 / 案例 15）。
+- **异步 ACP 会话**：`sendAcpPrompt` 的 await **不等** echo 流式回复渲染完。依赖 timeline 高度/虚拟化/滚动的断言前，先 `expect.poll` 等消息数到位 + 高度收敛（详见 skill `fix-ci-e2e-flake` 案例 15/34/41）。
 - **可见性别用 `toBeVisible()`**：Allotment.Pane 用 CSS visibility 隐藏后代，DOM 可见性会误判。走 ContextKey + `expect.poll`。
 - **长任务命令 fire-and-forget**：`showCommands` 之类内部 await 用户输入的命令必须 `void window.__E2E__!.runCommand(id)`，否则死锁。
 - **URI fsPath 用正斜杠**：本代码库 `URI.fsPath` 返回正斜杠，比对临时目录路径先 `.replace(/\\/g, '/')`。
-- **真回归 vs 环境噪声**：失败先查 `RUNBOOK.md`——本机 Windows 裸二次启动的 `Process failed to launch!`、markdown/TS LSP 本机未就绪、parcel watcher 多 worker 崩溃都是**已登记的环境 flake**，别当回归改产品代码。深度排查流程与案例走 skill `fix-ci-e2e-flake`。新发现一类 flaky → 在 `RUNBOOK.md` 登记一行 + 往 skill `fix-ci-e2e-flake` 追加案例。
+- **真回归 vs 环境噪声**：失败先按 skill `fix-ci-e2e-flake` 的判定流程定性（已知环境 flake 都登记在它的案例库），别当回归改产品代码；新发现一类 flaky → 往该 skill 追加案例。
 - **在 script 里设 env 要跨平台**：用 `cross-env`（catalog 已加，editor + 各扩展 devDeps 引入）——裸 `FOO=1 cmd` 在 Windows 非 bash 下不生效。
 - **禁止**在 spec 里 mock main/renderer 服务；**禁止**断言 Monaco 内部 DOM（拿状态走 `getActiveEditorUri()` 等探针）。

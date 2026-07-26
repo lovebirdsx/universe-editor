@@ -16,7 +16,7 @@
  *    node scripts/check-knowledge-links.mjs --check    # CI: exit 1 on broken refs
  *--------------------------------------------------------------------------------------------*/
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -25,7 +25,15 @@ const SKILLS_DIR = join(REPO_ROOT, '.claude', 'skills')
 
 const CHECK_ONLY = process.argv.slice(2).includes('--check')
 
-const ROOT_PREFIXES = ['apps/', 'packages/', 'extensions/', 'vendor/', 'scripts/', 'docs/', '.claude/']
+const ROOT_PREFIXES = [
+  'apps/',
+  'packages/',
+  'extensions/',
+  'vendor/',
+  'scripts/',
+  'docs/',
+  '.claude/',
+]
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out', '.turbo', 'vendor'])
 
 // 文档示例/格式说明中的示意路径，非仓库真实引用
@@ -34,6 +42,7 @@ const IGNORE = new Set([
   'docs/a.md',
   'scripts/pack.mjs',
   'apps/editor/e2e/specs/smoke.myThing.spec.ts', // 套路 F 的占位示例文件名
+  'apps/editor/release/', // electron-builder 打包产物目录，与 out/ dist/ 同类，构建前不存在
   'vendor/group/model', // AI 模型标识符三段格式说明，非路径
 ])
 
@@ -85,7 +94,9 @@ function pathExists(candidate, baseDir) {
   const cleaned = candidate.replace(/[:#].*$/, '').replace(/\/+$/, '')
   if (!cleaned) return true
   if (/(^|\/)(out|dist|node_modules)(\/|$)/.test(cleaned)) return true
-  const full = candidate.startsWith('references/') ? join(baseDir, cleaned) : join(REPO_ROOT, cleaned)
+  const full = candidate.startsWith('references/')
+    ? join(baseDir, cleaned)
+    : join(REPO_ROOT, cleaned)
   if (existsSync(full)) return true
   if (cleaned.endsWith('.js')) {
     const stem = full.slice(0, -3)

@@ -8,7 +8,7 @@
  *  job; a future change can diff it against a baseline once we have signal.
  *
  *  Tagged @perf so it runs in its own non-blocking CI pass, separate from the
- *  @p0/@p1 functional gate. See apps/editor/e2e/RUNBOOK.md.
+ *  @p0/@p1 functional gate. See apps/editor/e2e/CLAUDE.md.
  *--------------------------------------------------------------------------------------------*/
 
 import { mkdirSync, writeFileSync } from 'node:fs'
