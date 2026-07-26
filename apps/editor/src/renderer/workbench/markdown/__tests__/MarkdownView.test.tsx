@@ -237,6 +237,25 @@ describe('MarkdownView', () => {
     expect(resolverOpen.mock.calls[0]?.[0]?.path).toBe('/repo/Content/Config/whiteList.txt')
   })
 
+  it('demotes a file-path label inside a link to plain text (no nested <a>)', () => {
+    const { container } = renderMarkdown(
+      '[packages/workbench-ui/package.json:18](D:/git_project/repo/packages/workbench-ui/package.json:18)',
+    )
+    const links = container.querySelectorAll('a')
+    expect(links).toHaveLength(1)
+    expect(links[0]?.querySelector('a')).toBeNull()
+    expect(links[0]?.textContent).toBe('packages/workbench-ui/package.json:18')
+  })
+
+  it('keeps inline-code file paths as plain code inside a link', () => {
+    const { container } = renderMarkdown(
+      '[`packages/workbench-ui/package.json`](https://example.com)',
+    )
+    const links = container.querySelectorAll('a')
+    expect(links).toHaveLength(1)
+    expect(links[0]?.querySelector('code')?.textContent).toBe('packages/workbench-ui/package.json')
+  })
+
   it('renders GFM tables', () => {
     const { container } = renderMarkdown('| a | b |\n| --- | --- |\n| 1 | 2 |')
     expect(container.querySelector('table')).toBeTruthy()

@@ -199,6 +199,11 @@ const AnchorScrollContext = createContext<(id: string) => void>(() => {})
 
 const InlineCodeMarkdownLinkContext = createContext(false)
 
+// True while rendering the children of an anchor (SafeLink). Nested interactive
+// inline renderers (FilePathLink, inline-code links) must demote to plain
+// output — a nested <a> is invalid HTML and React logs a hydration error.
+const InsideLinkContext = createContext(false)
+
 // How the preview should render a frontmatter node ('table' | 'hidden'). Only
 // set by the doc preview; undefined elsewhere (no frontmatter node is produced).
 const FrontmatterModeContext = createContext<'table' | 'hidden' | undefined>(undefined)
@@ -407,12 +412,13 @@ function InlineImage({ src, alt }: { src: string; alt: string }) {
 // `<code>` so prose and snippets are unaffected.
 function InlineCode({ text }: { text: string }) {
   const openFileLink = useContext(FileLinkContext)
+  const insideLink = useContext(InsideLinkContext)
   const renderMarkdownLink = useContext(InlineCodeMarkdownLinkContext)
-  const link = renderMarkdownLink ? parseInlineCodeMarkdownLink(text) : undefined
+  const link = renderMarkdownLink && !insideLink ? parseInlineCodeMarkdownLink(text) : undefined
   if (link) return <SafeLink href={link.href}>{renderInline(link.children)}</SafeLink>
 
   const match = matchFullFilePath(text)
-  if (!match) return <code className={styles['inlineCode']}>{text}</code>
+  if (!match || insideLink) return <code className={styles['inlineCode']}>{text}</code>
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
     openFileLink(match.path, match.line, match.col, { toSide: e.ctrlKey || e.metaKey })
@@ -493,14 +499,18 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
       rel="noopener noreferrer"
       className={styles['mdLink']}
     >
-      {children}
+      <InsideLinkContext.Provider value={true}>{children}</InsideLinkContext.Provider>
     </a>
   )
 }
 
 function FilePathLink({ path, line, col }: { path: string; line?: number; col?: number }) {
   const openFileLink = useContext(FileLinkContext)
+  const insideLink = useContext(InsideLinkContext)
   const label = line !== undefined ? `${path}:${line}${col !== undefined ? `:${col}` : ''}` : path
+  // Inside another anchor the outer link already owns the click; a nested <a>
+  // would be invalid HTML, so render as plain text.
+  if (insideLink) return <Fragment>{label}</Fragment>
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
     openFileLink(path, line, col, { toSide: e.ctrlKey || e.metaKey })
