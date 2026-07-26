@@ -1,0 +1,5 @@
+{
+  "ts.command.restartTsServer.title": "Restart TS Server",
+  "ts.command.openTsServerLog.title": "Open TS Server Log",
+  "ts.config.tsserver.log.description": "Logging level of the TypeScript language server, written to the 'TypeScript' output channel. 'verbose' additionally logs server stderr and per-request timings. Applies on window reload."
+}

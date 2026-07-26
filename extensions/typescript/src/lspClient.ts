@@ -13,11 +13,12 @@
  * Diagnostics are server PUSH, surfaced via onDiagnostics.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { basename } from 'node:path'
+import { basename, dirname, normalize, sep } from 'node:path'
 import { Writable } from 'node:stream'
 import {
   Emitter,
   CancellationTokenSource as RpcCancellationTokenSource,
+  type CancellationToken as RpcCancellationToken,
   type Event,
 } from 'vscode-jsonrpc'
 import {
@@ -31,6 +32,7 @@ import type {
   CancellationToken,
   TextDocumentContentChangeEvent,
 } from '@universe-editor/extension-api'
+import { consoleTsLogger, type TsLogger } from './logger.js'
 import type {
   CodeLens,
   CompletionItem,
@@ -186,6 +188,18 @@ interface OpenDoc {
   sentGeneration: number
 }
 
+/** Optional knobs for {@link LspClient}. */
+export interface LspClientOptions {
+  /** Read on every (re)start so a raised cap applies on the next crash-restart
+   *  without reloading the window. TSLS-only (the native binary ignores it). */
+  readonly getMaxTsServerMemoryMb?: () => Promise<number>
+  /** Timer injection for tests (defaults to global set/clearTimeout). */
+  readonly timers?: { set: typeof setTimeout; clear: typeof clearTimeout }
+  /** Diagnostic output; defaults to the console fallback (tests/probes). The
+   *  plugin passes its "TypeScript" output-channel logger. */
+  readonly logger?: TsLogger
+}
+
 export class LspClient {
   private _proc: ChildProcessWithoutNullStreams | undefined
   private _conn: MessageConnection | undefined
@@ -204,6 +218,19 @@ export class LspClient {
    *  the project owning an open file. A user `didClose` of a pinned uri is ignored
    *  so its project stays resident. */
   private readonly _pinnedUris = new Set<string>()
+
+  /** Configured projects the plugin knows about (tsconfig absolute paths plus
+   *  their match-normalized directory, longest first), used to attribute open
+   *  files to a project in logs and for the keep-alive pin. Heuristic only —
+   *  tsserver's real assignment (include/exclude, references) may differ, which
+   *  is why logs say `project≈`. */
+  private _projects: ReadonlyArray<{ readonly tsconfig: string; readonly dir: string }> = []
+  /** Open, non-pinned doc count per project tsconfig — the keep-alive pin arms
+   *  when it drops to one remaining file. */
+  private readonly _projectOpen = new Map<string, number>()
+  /** Pinned doc count per project tsconfig: one pin already keeps the project
+   *  resident, so a project that has one needs no further keep-alive pins. */
+  private readonly _projectPinned = new Map<string, number>()
 
   /** Semantic-tokens legend the server announces in its `initialize` response.
    *  Undefined until the handshake completes (or if the server omits it). */
@@ -230,6 +257,9 @@ export class LspClient {
   /** Heap cap actually applied to the running server; refreshed from the setting
    *  on every (re)start, so raising it takes effect on the next crash-restart. */
   private _maxTsServerMemoryMb = MAX_TSSERVER_MEMORY_MB
+  private readonly _getMaxTsServerMemoryMb: (() => Promise<number>) | undefined
+  private readonly _timers: { set: typeof setTimeout; clear: typeof clearTimeout }
+  private readonly _log: TsLogger
 
   /** Current lifecycle state, fed to `onDidChangeState`. Starts `starting` since
    *  construction is immediately followed by a prewarm/first request that spawns. */
@@ -259,16 +289,12 @@ export class LspClient {
     private readonly _spec: TsServerSpec,
     private readonly _workspaceRoot: string | undefined,
     onDiagnostics: (e: PublishDiagnosticsEvent) => void,
-    /** Read on every (re)start so a raised cap applies on the next crash-restart
-     *  without reloading the window. TSLS-only (the native binary ignores it). */
-    private readonly _getMaxTsServerMemoryMb?: () => Promise<number>,
-    /** Timer injection for tests (defaults to global set/clearTimeout). */
-    private readonly _timers: { set: typeof setTimeout; clear: typeof clearTimeout } = {
-      set: setTimeout,
-      clear: clearTimeout,
-    },
+    options: LspClientOptions = {},
   ) {
     this._onDiagnostics = onDiagnostics
+    this._getMaxTsServerMemoryMb = options.getMaxTsServerMemoryMb
+    this._timers = options.timers ?? { set: setTimeout, clear: clearTimeout }
+    this._log = options.logger ?? consoleTsLogger
   }
 
   /** Register the OOM listener: fires when the server died with the V8
@@ -301,6 +327,52 @@ export class LspClient {
 
   // --- prewarm -------------------------------------------------------------
 
+  /**
+   * Hand the client the workspace's tsconfig inventory (absolute paths) so it
+   *  can attribute open files to their configured project in logs and pin the
+   *  last open file of a project instead of closing it (see `didClose`).
+   *  Best-effort: a tsconfig created after this call just isn't tracked.
+   */
+  setProjects(tsconfigs: readonly string[]): void {
+    this._projects = tsconfigs
+      .map((tsconfig) => ({ tsconfig, dir: `${this._matchKey(dirname(tsconfig))}${sep}` }))
+      .sort((a, b) => b.dir.length - a.dir.length)
+    this._log.info(`project attribution: tracking ${tsconfigs.length} tsconfig project(s)`)
+  }
+
+  /** Normalize a filesystem path for prefix matching (case-folded on Windows). */
+  private _matchKey(fsPath: string): string {
+    const normalized = normalize(fsPath)
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+  }
+
+  /** The configured project a document likely belongs to (longest directory
+   *  prefix wins), or undefined for inferred-project / outside-workspace files. */
+  private _attributeProject(
+    uri: string,
+  ): { readonly tsconfig: string; readonly dir: string } | undefined {
+    if (this._projects.length === 0) return undefined
+    const filePath = this._matchKey(URI.parse(uri).fsPath)
+    return this._projects.find((p) => filePath.startsWith(p.dir))
+  }
+
+  /** A tsconfig path shortened relative to the workspace root for log lines. */
+  private _displayProject(tsconfig: string): string {
+    const root = this._workspaceRoot
+    if (root) {
+      const prefix = `${normalize(root)}${sep}`
+      const normalized = normalize(tsconfig)
+      if (normalized.startsWith(prefix)) return normalized.slice(prefix.length)
+    }
+    return tsconfig
+  }
+
+  private _bumpCount(map: Map<string, number>, key: string, delta: number): void {
+    const next = (map.get(key) ?? 0) + delta
+    if (next <= 0) map.delete(key)
+    else map.set(key, next)
+  }
+
   /** Spawn tsserver and complete the `initialize` handshake ahead of the first
    *  language request. Idempotent (shares `_ready`), so a later real request
    *  reuses the already-warm connection instead of paying the cold start. */
@@ -321,6 +393,8 @@ export class LspClient {
   async pinProject(uri: string, languageId: string, text: string): Promise<void> {
     if (this._pinnedUris.has(uri)) return
     this._pinnedUris.add(uri)
+    const project = this._attributeProject(uri)
+    if (project) this._bumpCount(this._projectPinned, project.tsconfig, 1)
     if (this._open.has(uri)) return // already really open — project is loaded
     await this.didOpen(
       uri,
@@ -338,6 +412,7 @@ export class LspClient {
     version: () => number,
     text: () => string,
   ): Promise<void> {
+    const project = this._attributeProject(uri)
     const existing = this._open.get(uri)
     let doc: OpenDoc
     if (existing) {
@@ -348,7 +423,13 @@ export class LspClient {
     } else {
       doc = { languageId, version, text, sentVersion: version(), sentGeneration: -1 }
       this._open.set(uri, doc)
+      if (project && !this._pinnedUris.has(uri)) {
+        this._bumpCount(this._projectOpen, project.tsconfig, 1)
+      }
     }
+    this._log.info(
+      `didOpen ${uri} (project≈${project ? this._displayProject(project.tsconfig) : 'inferred'}, openDocs=${this._open.size})`,
+    )
     const conn = await this._ready()
     if (doc.sentGeneration === this._generation) {
       // This connection already has the doc (start replay raced us, a duplicate
@@ -372,9 +453,7 @@ export class LspClient {
     doc.sentVersion = doc.version()
     doc.sentGeneration = this._generation
     if (openText.length > LARGE_DOC_LOG_CHARS) {
-      console.error(
-        `[typescript][perf] didOpen ${uri} chars=${openText.length} gen=${this._generation}`,
-      )
+      this._log.info(`[perf] didOpen ${uri} chars=${openText.length} gen=${this._generation}`)
     }
     this._notify(conn, 'textDocument/didOpen', {
       textDocument: { uri, languageId: doc.languageId, version: doc.sentVersion, text: openText },
@@ -406,11 +485,47 @@ export class LspClient {
   async didClose(uri: string): Promise<void> {
     // Keep the prewarm pins open: closing one would unload its project (tsserver
     // drops a project the moment its last file closes), undoing the prewarm.
-    if (this._pinnedUris.has(uri)) return
-    this._open.delete(uri)
+    if (this._pinnedUris.has(uri)) {
+      this._log.verbose(`didClose ignored (prewarm pin stays open): ${uri}`)
+      return
+    }
+    const project = this._attributeProject(uri)
+    if (project) {
+      // Keep-alive pin: a crash restart replays only `_open`, so closing a
+      // project's last open file would orphan the project until the user
+      // reopens one of its files (paying a full reload). Pin the file instead
+      // of closing it — reopening upgrades the pin's snapshot to live views
+      // (see `didOpen`). Skipped when the project already has a pin: one
+      // resident doc is enough, and pinning every file the user closes would
+      // grow the server copy without bound.
+      const lastOpen = (this._projectOpen.get(project.tsconfig) ?? 0) <= 1
+      const hasPin = (this._projectPinned.get(project.tsconfig) ?? 0) > 0
+      if (lastOpen && !hasPin) {
+        this._pinnedUris.add(uri)
+        this._bumpCount(this._projectOpen, project.tsconfig, -1)
+        this._bumpCount(this._projectPinned, project.tsconfig, 1)
+        this._log.info(
+          `didClose ${uri} (project≈${this._displayProject(project.tsconfig)}); last open file of the project — pinning it to keep the project loaded across crash restarts`,
+        )
+        return
+      }
+    }
+    const wasOpen = this._open.delete(uri)
     this._cancelPull(uri)
     const conn = await this._ready()
     this._notify(conn, 'textDocument/didClose', { textDocument: { uri } })
+    if (!wasOpen) return
+    if (project) this._bumpCount(this._projectOpen, project.tsconfig, -1)
+    // tsserver keeps an idle configured project loaded (verified on 5.9.3: no
+    // `remove Project` after the last file closes), so the next didOpen of one
+    // of its files is cheap. What we can't observe over LSP is which project a
+    // file belonged to — hence the attribution logs here and in `didOpen`.
+    this._log.info(
+      `didClose ${uri} (project≈${project ? this._displayProject(project.tsconfig) : 'inferred'}, openDocs=${this._open.size})`,
+    )
+    if (this._open.size === 0) {
+      this._log.info('all TS documents closed')
+    }
   }
 
   // --- pull diagnostics (LSP 3.17, e.g. tsgo) -------------------------------
@@ -444,9 +559,11 @@ export class LspClient {
     const generation = this._connGeneration
     this._inFlightPulls.add(uri)
     try {
-      const report = (await conn.sendRequest('textDocument/diagnostic', {
-        textDocument: { uri },
-      })) as FullDocumentDiagnosticReport | null
+      const report = await this._request<FullDocumentDiagnosticReport | null>(
+        conn,
+        'textDocument/diagnostic',
+        { textDocument: { uri } },
+      )
       // A restart swapped the connection (stale report) or the doc closed
       // meanwhile (markers already cleared by the caller) — drop either way.
       if (generation !== this._connGeneration || !this._open.has(uri)) return
@@ -460,7 +577,7 @@ export class LspClient {
     } catch (err) {
       // Races with connection teardown are expected; the next didOpen/didChange
       // (or the restart replay) schedules a fresh pull.
-      console.error(`[typescript] pull diagnostics failed: ${(err as Error).message}`)
+      this._log.error(`pull diagnostics failed: ${(err as Error).message}`)
     } finally {
       this._inFlightPulls.delete(uri)
     }
@@ -468,12 +585,31 @@ export class LspClient {
 
   // --- language requests ---------------------------------------------------
 
+  /** Send an LSP request with verbose tracing (method + wall time). tsserver
+   *  serves requests serially, so one slow request stalls everything queued
+   *  behind it — the timings are the first thing to check for a frozen server. */
+  private async _request<T>(
+    conn: MessageConnection,
+    method: string,
+    params: unknown,
+    token?: RpcCancellationToken,
+  ): Promise<T> {
+    const start = Date.now()
+    try {
+      return token
+        ? await conn.sendRequest(method, params, token)
+        : await conn.sendRequest(method, params)
+    } finally {
+      this._log.verbose(`${method} ${Date.now() - start}ms`)
+    }
+  }
+
   async provideDefinition(
     uri: string,
     position: Position,
   ): Promise<Definition | DefinitionLink[] | null> {
     const conn = await this._ready()
-    return conn.sendRequest('textDocument/definition', { ...this._doc(uri), position })
+    return this._request(conn, 'textDocument/definition', { ...this._doc(uri), position })
   }
 
   async provideReferences(
@@ -482,7 +618,7 @@ export class LspClient {
     includeDeclaration: boolean,
   ): Promise<Location[] | null> {
     const conn = await this._ready()
-    return conn.sendRequest('textDocument/references', {
+    return this._request(conn, 'textDocument/references', {
       ...this._doc(uri),
       position,
       context: { includeDeclaration },
@@ -494,7 +630,7 @@ export class LspClient {
     position: Position,
   ): Promise<Definition | DefinitionLink[] | null> {
     const conn = await this._ready()
-    return conn.sendRequest('textDocument/implementation', { ...this._doc(uri), position })
+    return this._request(conn, 'textDocument/implementation', { ...this._doc(uri), position })
   }
 
   async provideTypeDefinition(
@@ -502,12 +638,12 @@ export class LspClient {
     position: Position,
   ): Promise<Definition | DefinitionLink[] | null> {
     const conn = await this._ready()
-    return conn.sendRequest('textDocument/typeDefinition', { ...this._doc(uri), position })
+    return this._request(conn, 'textDocument/typeDefinition', { ...this._doc(uri), position })
   }
 
   async provideHover(uri: string, position: Position): Promise<Hover | null> {
     const conn = await this._ready()
-    return conn.sendRequest('textDocument/hover', { ...this._doc(uri), position })
+    return this._request(conn, 'textDocument/hover', { ...this._doc(uri), position })
   }
 
   async provideCompletion(
@@ -516,12 +652,16 @@ export class LspClient {
     context: CompletionContext,
   ): Promise<CompletionItem[] | CompletionList | null> {
     const conn = await this._ready()
-    return conn.sendRequest('textDocument/completion', { ...this._doc(uri), position, context })
+    return this._request(conn, 'textDocument/completion', {
+      ...this._doc(uri),
+      position,
+      context,
+    })
   }
 
   async resolveCompletion(item: CompletionItem): Promise<CompletionItem> {
     const conn = await this._ready()
-    return conn.sendRequest('completionItem/resolve', item)
+    return this._request(conn, 'completionItem/resolve', item)
   }
 
   async provideSignatureHelp(
@@ -530,14 +670,18 @@ export class LspClient {
     context: SignatureHelpContext,
   ): Promise<SignatureHelp | null> {
     const conn = await this._ready()
-    return conn.sendRequest('textDocument/signatureHelp', { ...this._doc(uri), position, context })
+    return this._request(conn, 'textDocument/signatureHelp', {
+      ...this._doc(uri),
+      position,
+      context,
+    })
   }
 
   async provideDocumentSymbols(
     uri: string,
   ): Promise<DocumentSymbol[] | SymbolInformation[] | null> {
     const conn = await this._ready()
-    return conn.sendRequest('textDocument/documentSymbol', this._doc(uri))
+    return this._request(conn, 'textDocument/documentSymbol', this._doc(uri))
   }
 
   async provideWorkspaceSymbols(
@@ -555,7 +699,8 @@ export class LspClient {
     const cts = new RpcCancellationTokenSource()
     const sub = token?.onCancellationRequested(() => cts.cancel())
     try {
-      const result = await conn.sendRequest<WorkspaceSymbol[] | SymbolInformation[] | null>(
+      const result = await this._request<WorkspaceSymbol[] | SymbolInformation[] | null>(
+        conn,
         'workspace/symbol',
         { query },
         cts.token,
@@ -573,7 +718,7 @@ export class LspClient {
       // opened (or a tsconfig/jsconfig exists). Degrade silently to no results;
       // only surface genuinely unexpected failures.
       if (!/No Project/i.test(message)) {
-        console.error(`[typescript] workspace/symbol failed: ${message}`)
+        this._log.error(`workspace/symbol failed: ${message}`)
       }
       return null
     } finally {
@@ -588,7 +733,7 @@ export class LspClient {
     newName: string,
   ): Promise<WorkspaceEdit | null> {
     const conn = await this._ready()
-    return conn.sendRequest('textDocument/rename', { ...this._doc(uri), position, newName })
+    return this._request(conn, 'textDocument/rename', { ...this._doc(uri), position, newName })
   }
 
   /** The server's semantic-tokens legend, captured from the `initialize` response.
@@ -601,17 +746,17 @@ export class LspClient {
 
   async provideDocumentSemanticTokens(uri: string): Promise<SemanticTokens | null> {
     const conn = await this._ready()
-    return conn.sendRequest('textDocument/semanticTokens/full', this._doc(uri))
+    return this._request(conn, 'textDocument/semanticTokens/full', this._doc(uri))
   }
 
   async provideCodeLenses(uri: string): Promise<CodeLens[] | null> {
     const conn = await this._ready()
-    return conn.sendRequest('textDocument/codeLens', this._doc(uri))
+    return this._request(conn, 'textDocument/codeLens', this._doc(uri))
   }
 
   async resolveCodeLens(lens: CodeLens): Promise<CodeLens | null> {
     const conn = await this._ready()
-    const resolved = await conn.sendRequest<CodeLens | null>('codeLens/resolve', lens)
+    const resolved = await this._request<CodeLens | null>(conn, 'codeLens/resolve', lens)
     if (resolved?.command && !resolved.command.command) {
       // tsgo resolves a references lens to a title with an empty command (no
       // `editor.action.showReferences`). Synthesize it client-side — same wire
@@ -630,7 +775,7 @@ export class LspClient {
     const uri = (lens.data as { uri?: unknown } | undefined)?.uri
     if (typeof uri !== 'string' || !lens.command) return lens
     try {
-      const locations = await conn.sendRequest('textDocument/references', {
+      const locations = await this._request(conn, 'textDocument/references', {
         textDocument: { uri },
         position: lens.range.start,
         context: { includeDeclaration: true },
@@ -644,12 +789,47 @@ export class LspClient {
         },
       }
     } catch (err) {
-      console.error(`[typescript] codeLens references fallback failed: ${(err as Error).message}`)
+      this._log.error(`codeLens references fallback failed: ${(err as Error).message}`)
       return lens
     }
   }
 
   // --- lifecycle -----------------------------------------------------------
+
+  /**
+   * User-initiated restart (the `typescript.restartTsServer` command): tear down
+   * the current server and respawn, replaying open documents from `_open`. Unlike
+   * the crash path this bypasses the restart budget — the user asked explicitly.
+   */
+  async restart(): Promise<void> {
+    if (this._disposed) return
+    this._log.info('restart requested')
+    // Wait out an in-flight start so two spawns don't race; a failed start is
+    // fine — it gets replaced below either way.
+    if (this._starting) {
+      try {
+        await this._starting
+      } catch {
+        // start failed; restarting anyway
+      }
+    }
+    const proc = this._proc
+    this._clearConnection()
+    if (proc) {
+      // Graceful stop (stdin EOF) so the TSLS CLI reaps its tsserver children —
+      // same rationale as `dispose`. The old proc's exit event is ignored by
+      // `_onProcGone` since `_clearConnection` already dropped the reference.
+      try {
+        proc.stdin.end()
+      } catch {
+        // already gone
+      }
+    }
+    // A fresh server gets a fresh OOM notification.
+    this._oomNotified = false
+    this._starting = this._start()
+    await this._starting
+  }
 
   private _doc(uri: string): { textDocument: { uri: string } } {
     return { textDocument: { uri } }
@@ -682,6 +862,7 @@ export class LspClient {
 
     let proc: ChildProcessWithoutNullStreams
     try {
+      this._log.info(`spawning server kind=${spec.kind} command=${command}`)
       proc = spawn(command, args, {
         env,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -691,7 +872,7 @@ export class LspClient {
     } catch (err) {
       this._starting = undefined
       this._setState('error')
-      console.error(`[typescript] spawn failed ${command}: ${(err as Error).message}`)
+      this._log.error(`spawn failed ${command}: ${(err as Error).message}`)
       throw err as Error
     }
 
@@ -704,8 +885,8 @@ export class LspClient {
         if (!trimmed) continue
         this._stderrTail.push(trimmed.slice(0, 400))
         if (this._stderrTail.length > STDERR_TAIL_LINES) this._stderrTail.shift()
+        this._log.verbose(`server stderr: ${trimmed}`)
       }
-      console.error(`[typescript][server] ${text}`)
     })
     proc.on('error', (err) => this._onProcGone(proc, `error ${err.message}`))
     proc.on('exit', (code, signal) => this._onProcGone(proc, `exit code=${code} signal=${signal}`))
@@ -749,7 +930,7 @@ export class LspClient {
       // real publishDiagnostics, so didOpen/didChange schedule pulls instead.
       this._pullDiagnostics = result?.capabilities?.diagnosticProvider !== undefined
       if (this._pullDiagnostics) {
-        console.error('[typescript] server uses pull diagnostics (textDocument/diagnostic)')
+        this._log.info('server uses pull diagnostics (textDocument/diagnostic)')
       }
       this._notify(conn, 'initialized', {})
       // Enable references CodeLens (off by default in tsserver). implementations
@@ -763,7 +944,7 @@ export class LspClient {
     } catch (err) {
       if (this._proc !== proc) return // superseded by a concurrent restart
       this._setState('error')
-      console.error(`[typescript] initialize failed: ${(err as Error).message}`)
+      this._log.error(`initialize failed: ${(err as Error).message}`)
       this._clearConnection()
       throw err as Error
     }
@@ -773,6 +954,24 @@ export class LspClient {
     // live views make this delta-safe). Bumping the generation first lets the
     // in-flight didOpen calls detect their doc was already delivered here.
     this._generation++
+    if (this._open.size > 0) {
+      // Crash-restart forensics: which docs (and which projects, via the pins)
+      // the fresh server gets back. Pinned docs are the keep-alive anchors that
+      // let an idle project survive the restart.
+      const docs = [...this._open.keys()]
+        .map((uri) => {
+          const project = this._attributeProject(uri)
+          const tags = [
+            this._pinnedUris.has(uri) ? 'pinned' : undefined,
+            project ? `project≈${this._displayProject(project.tsconfig)}` : undefined,
+          ]
+            .filter(Boolean)
+            .join(', ')
+          return tags ? `${uri} (${tags})` : uri
+        })
+        .join(', ')
+      this._log.info(`replaying ${this._open.size} open doc(s) on the fresh server: [${docs}]`)
+    }
     for (const [uri, doc] of this._open) {
       this._sendOpen(conn, uri, doc)
     }
@@ -783,7 +982,9 @@ export class LspClient {
     // settle to `ready` anyway.
     this._awaitingProjectLoad = true
     this._armReadyGrace()
-    console.error(`[typescript] server started root=${this._workspaceRoot ?? '(none)'}`)
+    this._log.info(
+      `server started kind=${spec.kind} version=${spec.version} pid=${proc.pid ?? '?'} root=${this._workspaceRoot ?? '(none)'}`,
+    )
   }
 
   /** Handle `$/progress`: track project-load progress to drive the ready state. */
@@ -795,15 +996,17 @@ export class LspClient {
         // Debug aid for server parity (e.g. the Go native LSP reports project
         // loading under different titles): anything not matching our title
         // must not gate readiness, but we want it visible in the logs.
-        console.error(`[typescript] progress begin (untracked) title=${value.title}`)
+        this._log.verbose(`progress begin (untracked) title=${value.title}`)
         return
       }
       this._clearReadyGrace()
       this._awaitingProjectLoad = false
       this._loadingTokens.add(params.token)
+      this._log.info(`project load begin (pending=${this._loadingTokens.size})`)
       this._setState('starting')
     } else if (value.kind === 'end') {
       if (!this._loadingTokens.delete(params.token)) return
+      this._log.info(`project load end (pending=${this._loadingTokens.size})`)
       if (this._loadingTokens.size === 0) this._setState('ready')
     }
   }
@@ -844,7 +1047,21 @@ export class LspClient {
       ...(this._spec.kind === 'tsls'
         ? {
             initializationOptions: {
-              tsserver: { path: this._spec.tsserver },
+              tsserver: {
+                // normalize() to the platform separator: TLS validates the path by
+                // splitting on path.sep, so a forward-slashed Windows path fails
+                // its isValid check and TLS SILENTLY falls back to the workspace's
+                // own node_modules/typescript instead of our pinned one.
+                path: normalize(this._spec.tsserver),
+                // Dev forensics: with UNIVERSE_TS_LOG_LEVEL=verbose, also turn on
+                // tsserver's own file logging — TLS writes one
+                // <workspace>/.log/tsserver-log-*/tsserver.log per spawned server,
+                // the only artifact that records WHICH project loads and why
+                // (the $/progress begin we surface drops projectName/reason).
+                ...(process.env.UNIVERSE_TS_LOG_LEVEL === 'verbose'
+                  ? { logVerbosity: 'verbose' }
+                  : {}),
+              },
               maxTsServerMemory: this._maxTsServerMemoryMb,
             },
           }
@@ -908,18 +1125,30 @@ export class LspClient {
     if (this._proc !== proc) return // stale event from an already-replaced process
     this._clearConnection()
     if (this._disposed) return
-    // Forensics: which docs were open (and how big), plus the last stderr lines —
-    // enough to tell an OOM on a huge file from a plain tsserver bug.
-    const docs = [...this._open].map(([uri, doc]) => `${uri} chars=${doc.text().length}`).join(', ')
-    console.error(
-      `[typescript] server gone (${reason}); restarts in window=${this._restartTimestamps.length}; openDocs=[${docs}]; stderrTail=${JSON.stringify(this._stderrTail)}`,
+    // Forensics: which docs were open (and how big), which projects they anchor,
+    // plus the last stderr lines — enough to tell an OOM on a huge file from a
+    // plain tsserver bug, and which projects the restart replay will re-prime.
+    const docs = [...this._open]
+      .map(([uri, doc]) => {
+        const project = this._attributeProject(uri)
+        const tags = [
+          this._pinnedUris.has(uri) ? 'pinned' : undefined,
+          project ? `project≈${this._displayProject(project.tsconfig)}` : undefined,
+        ]
+          .filter(Boolean)
+          .join(', ')
+        return `${uri}${tags ? ` (${tags})` : ''} chars=${doc.text().length}`
+      })
+      .join(', ')
+    this._log.error(
+      `server gone (${reason}); restarts in window=${this._restartTimestamps.length}; openDocs=[${docs}]; stderrTail=${JSON.stringify(this._stderrTail)}`,
     )
     // OOM signature: tsserver aborts with 134 (V8 heap limit) and the wrapper CLI
     // reports it on stderr before exiting itself. Surface the actionable fix once.
     const stderrText = this._stderrTail.join('\n')
     if (/exit code: 134|out of memory|allocation failed/i.test(stderrText)) {
-      console.error(
-        `[typescript] tsserver ran out of memory (cap ${this._maxTsServerMemoryMb} MB) — raise "typescript.tsserver.maxTsServerMemory" in settings`,
+      this._log.error(
+        `tsserver ran out of memory (cap ${this._maxTsServerMemoryMb} MB) — raise "typescript.tsserver.maxTsServerMemory" in settings`,
       )
       if (!this._oomNotified) {
         this._oomNotified = true
@@ -928,12 +1157,10 @@ export class LspClient {
     }
     if (!this._registerRestartAttempt()) {
       this._setState('error')
-      console.error(
-        `[typescript] server gone (${reason}); too many restarts, will retry on next request`,
-      )
+      this._log.error(`server gone (${reason}); too many restarts, will retry on next request`)
       return
     }
-    console.error(`[typescript] server gone (${reason}); restarting`)
+    this._log.info(`server gone (${reason}); restarting`)
     this._starting = this._start()
     void this._starting.catch(() => undefined)
   }

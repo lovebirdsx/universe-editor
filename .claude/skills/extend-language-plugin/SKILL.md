@@ -107,7 +107,7 @@ LSP 类型是 plain-JSON，跨 `ProxyChannel` verbatim，两端共享单一定�
 > markdown 目前仍是旧的独立 LSP 同步路径（`services/languageFeatures/markdown/`），未迁入插件——若要迁，它就是下一个样板对象。
 
 ### 任务 6：tsserver 路径找不到 / dev vs 打包不一致
-`tsServerPaths.ts`：dev walk-up 容忍 `electron .`（appPath=apps/editor）和 e2e `electron out/main/index.js` 两种布局；packaged 走 `process.resourcesPath`。`typescript-language-server` 的 node_modules 由 `vendor/` + `scripts/release/runtime-resources.mjs` 带入打包产物。插件激活时若 env 缺失会 `console.error('[typescript] missing UNIVERSE_TSLS_CLI…')` 并直接不激活——这是排查第一站。
+`tsServerPaths.ts`：dev walk-up 容忍 `electron .`（appPath=apps/editor）和 e2e `electron out/main/index.js` 两种布局；packaged 走 `process.resourcesPath`。`typescript-language-server` 的 node_modules 由 `vendor/` + `scripts/release/runtime-resources.mjs` 带入打包产物。插件激活时若 env 缺失会把原因写进「TypeScript」输出通道并直接不激活——排查第一站（也可用命令 `typescript.openTsServerLog` 打开）。
 
 ## 验证
 ```bash
@@ -116,7 +116,7 @@ pnpm e2e          # 改了交互链路时跑冒烟，仅截错误
 ```
 - 逐包 typecheck 顺序：`extensions-common` → `extension-api` → `extension-host` → `editor` → `pnpm ext:build`（出 `extensions/typescript/dist/extension.js`）。
 - 加了转换函数务必补 `lspMonacoConvert.test.ts` 单测（renderer 项目，happy-dom）。
-- **手测**（无法自动化）：`pnpm dev` → Output 面板「Extension Host」打印插件 + tsserver 启动 → 打开 .ts → F12/Shift+F12/hover/补全/签名/重命名/Outline 全可用 → 改代码出红波浪线（诊断）。
+- **手测**（无法自动化）：`pnpm dev` → Output 面板「TypeScript」通道打印插件 + tsserver 启动（插件日志的归属地；「Extension Host」只剩 host 框架日志）→ 打开 .ts → F12/Shift+F12/hover/补全/签名/重命名/Outline 全可用 → 改代码出红波浪线（诊断）。
 
 ## 易踩坑速记
 1. **加 provider 编译过但运行时不触发** → 多半漏了某环节：检查数据流 A+D 七步是否齐（尤其 rpc 枚举 + MainThreadLanguages 的 type→工厂分支）。
@@ -130,6 +130,7 @@ pnpm e2e          # 改了交互链路时跑冒烟，仅截错误
 9. **激活时序**：插件激活晚于文档打开 → `activate` 时遍历 `workspace.textDocuments` 补 didOpen（已实现，新语言插件照抄）。
 10. **崩溃恢复**：lspClient 重启后必须重推所有 open doc，否则补全/诊断全空。
 11. **虚拟 scheme 文档会打到 LSP（diff/peek 视图）**：Monaco 语言请求**不区分 model scheme**，而 `DocumentSelector` 只有 languageId 无 scheme 过滤；diff 视图的 `diff-original:`/`diff-modified:` 模型（`diffModelUri.ts`，只换 scheme、languageId 仍是 typescript）的 hover/补全/语义 tokens 会一路到 LSP——host 的 `ExtHostDocuments.getOrSynthesize` 对未同步 URI 还合成空文档兜底，请求必发。tsgo 对无 project 的 URI 报 `no project found for URI <uri>`（该字符串在 tsgo.exe 里，tsls/tsserver 源码搜不到），沿 RPC 回传成 renderer error 日志。**修法**（新语言插件照抄）：插件内统一谓词 `isServerBackedDocument`（languageId ∈ 支持集合 && `uri.scheme === 'file'`，对齐 VSCode TS 插件 selector 的 `scheme: 'file'`），门控 ①documentSync 的 open/change/close ②每个 provider 回调（`forServerDocs` 高阶包装，非 file 返回 null）。参考 `extensions/typescript/src/extension.ts` + 复现测试 `src/__tests__/documentScope.test.ts`。
+12. **插件诊断日志走专属输出通道，禁止 console.error**：console.* 全混进共享的「Extension Host」通道，排查时要在噪音里捞针。TS 插件的样板：`src/logger.ts`（off/error/info/verbose 分级，`OutputChannelLogger` 写「TypeScript」通道，级别 = `UNIVERSE_TS_LOG_LEVEL` env > `typescript.tsserver.log` 设置，verbose 记 server stderr + 每请求耗时）+ 调试命令 `typescript.openTsServerLog` / `typescript.restartTsServer`（onCommand 激活 + contributes.commands 走 nls）。新语言插件照抄这套。
 
 ## 关键参考路径
 - `extensions/typescript/src/extension.ts` —— 插件入口：activate + 10 类 provider 注册 + 文档同步（**新语言插件模板**）

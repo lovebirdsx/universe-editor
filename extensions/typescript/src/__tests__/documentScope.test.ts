@@ -131,6 +131,9 @@ vi.mock('@universe-editor/extension-api', async (importOriginal) => {
     }
   return {
     ...actual,
+    commands: {
+      registerCommand: () => ({ dispose() {} }),
+    },
     languages: {
       createDiagnosticCollection: () => ({ set() {}, delete() {}, clear() {}, dispose() {} }),
       setLanguageServerStatus: () => {},
@@ -159,7 +162,16 @@ vi.mock('@universe-editor/extension-api', async (importOriginal) => {
         hide() {},
         dispose() {},
       }),
+      createOutputChannel: (name: string) => ({
+        name,
+        append() {},
+        appendLine() {},
+        clear() {},
+        show() {},
+        dispose() {},
+      }),
       showWarningMessage: () => Promise.resolve(undefined),
+      showErrorMessage: () => Promise.resolve(undefined),
     },
     workspace: {
       rootPath: undefined, // prewarm bails out before touching the fs
@@ -178,7 +190,9 @@ vi.mock('@universe-editor/extension-api', async (importOriginal) => {
         h.closeListeners.push(l)
         return { dispose() {} }
       },
-      getConfiguration: () => ({ get: (_key: string, fallback: unknown) => fallback }),
+      getConfiguration: () => ({
+        get: (_key: string, fallback: unknown) => Promise.resolve(fallback),
+      }),
       fs: {
         readDirectory: () => Promise.resolve([]),
         readFile: () => Promise.resolve(new Uint8Array()),

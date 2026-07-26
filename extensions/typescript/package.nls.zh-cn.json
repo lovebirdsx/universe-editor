@@ -1,0 +1,5 @@
+{
+  "ts.command.restartTsServer.title": "重启 TS 服务器",
+  "ts.command.openTsServerLog.title": "打开 TS 服务器日志",
+  "ts.config.tsserver.log.description": "TypeScript 语言服务的日志级别，写入「TypeScript」输出通道。verbose 额外记录服务器 stderr 与每个请求的耗时。重载窗口后生效。"
+}

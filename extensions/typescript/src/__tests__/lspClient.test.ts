@@ -314,8 +314,7 @@ describe('LspClient pull diagnostics (LSP 3.17, e.g. tsgo)', () => {
       { kind: 'native', binary: '/bin/tsgo', version: '7.0.0-dev' },
       '/ws',
       (e) => events.push(e),
-      undefined,
-      timers.timers,
+      { timers: timers.timers },
     )
     const internals = client as unknown as PullInternals
     internals._pullDiagnostics = true
@@ -385,5 +384,152 @@ describe('LspClient pull diagnostics (LSP 3.17, e.g. tsgo)', () => {
     internals._schedulePull(URI)
     internals._cancelPull(URI)
     expect(timers.pending()).toBe(0)
+  })
+})
+
+/** Project attribution + the keep-alive pin: `setProjects` feeds a longest-
+ *  directory-prefix heuristic that logs which tsconfig a file belongs to, and
+ *  `didClose` of a project's last open file pins it (instead of closing) so a
+ *  crash restart replays the project back to life. */
+interface AttrInternals {
+  _ready(): Promise<unknown>
+  _notify(conn: unknown, method: string, params: unknown): void
+  _generation: number
+  _open: Map<string, unknown>
+  _pinnedUris: Set<string>
+  _proc: unknown
+  _restartTimestamps: number[]
+  _onProcGone(proc: unknown, reason: string): void
+}
+
+describe('LspClient project attribution & keep-alive pin', () => {
+  interface LogLine {
+    level: 'error' | 'info' | 'verbose'
+    message: string
+  }
+
+  function makeAttrClient() {
+    const logs: LogLine[] = []
+    const client = new LspClient(
+      { kind: 'tsls', cli: 'cli', tsserver: 'tsserver', version: '5.0.0' },
+      '/ws',
+      () => {},
+      {
+        logger: {
+          error: (message) => logs.push({ level: 'error', message }),
+          info: (message) => logs.push({ level: 'info', message }),
+          verbose: (message) => logs.push({ level: 'verbose', message }),
+        },
+      },
+    )
+    const internals = client as unknown as AttrInternals
+    const sent: Array<{ method: string; params: unknown }> = []
+    internals._ready = async () => ({})
+    internals._notify = (_conn, method, params) => sent.push({ method, params })
+    internals._generation = 1
+    return { client, internals, sent, logs }
+  }
+
+  const open = (client: LspClient, uri: string) =>
+    client.didOpen(
+      uri,
+      'typescript',
+      () => 1,
+      () => 'text',
+    )
+  const closes = (sent: Array<{ method: string }>) =>
+    sent.filter((s) => s.method === 'textDocument/didClose')
+
+  it('attributes didOpen to the owning tsconfig (longest directory prefix wins)', async () => {
+    const { client, logs } = makeAttrClient()
+    client.setProjects(['/ws/tsconfig.json', '/ws/sub/tsconfig.json'])
+    await open(client, 'file:///ws/sub/a.ts')
+    const line = logs.find((l) => l.message.startsWith('didOpen file:///ws/sub/a.ts'))
+    expect(line?.message).toMatch(/project≈sub[\\/]tsconfig\.json/)
+    expect(line?.message).toContain('openDocs=1')
+  })
+
+  it('marks files outside every tsconfig as inferred', async () => {
+    const { client, logs } = makeAttrClient()
+    client.setProjects(['/ws/tsconfig.json'])
+    await open(client, 'file:///elsewhere/c.ts')
+    const line = logs.find((l) => l.message.startsWith('didOpen file:///elsewhere/c.ts'))
+    expect(line?.message).toContain('project≈inferred')
+  })
+
+  it('pins the last open file of a project instead of sending didClose', async () => {
+    const { client, internals, sent, logs } = makeAttrClient()
+    client.setProjects(['/ws/tsconfig.json'])
+    await open(client, 'file:///ws/a.ts')
+    await open(client, 'file:///ws/b.ts')
+
+    // First close: the project still has b.ts open — a plain didClose.
+    await client.didClose('file:///ws/a.ts')
+    expect(closes(sent)).toHaveLength(1)
+    expect(internals._pinnedUris.has('file:///ws/a.ts')).toBe(false)
+    expect(internals._open.has('file:///ws/a.ts')).toBe(false)
+
+    // Last close: no didClose on the wire, the doc stays open as a pin.
+    await client.didClose('file:///ws/b.ts')
+    expect(closes(sent)).toHaveLength(1)
+    expect(internals._pinnedUris.has('file:///ws/b.ts')).toBe(true)
+    expect(internals._open.has('file:///ws/b.ts')).toBe(true)
+    expect(logs.some((l) => l.message.includes('pinning it to keep the project loaded'))).toBe(true)
+  })
+
+  it('does not stack a keep-alive pin when the project already has one (prewarm seed)', async () => {
+    const { client, internals, sent } = makeAttrClient()
+    client.setProjects(['/ws/tsconfig.json'])
+    await client.pinProject('file:///ws/seed.ts', 'typescript', 'seed')
+    await open(client, 'file:///ws/a.ts')
+    await client.didClose('file:///ws/a.ts')
+    // The seed already keeps the project resident — a.ts closes normally.
+    expect(closes(sent)).toHaveLength(1)
+    expect(internals._pinnedUris.has('file:///ws/a.ts')).toBe(false)
+    expect(internals._open.has('file:///ws/a.ts')).toBe(false)
+  })
+
+  it('reopening a keep-alive-pinned file upgrades it, and closing it again stays pinned', async () => {
+    const { client, internals, sent, logs } = makeAttrClient()
+    client.setProjects(['/ws/tsconfig.json'])
+    await open(client, 'file:///ws/b.ts')
+    await client.didClose('file:///ws/b.ts') // → pinned
+    expect(internals._pinnedUris.has('file:///ws/b.ts')).toBe(true)
+
+    await open(client, 'file:///ws/b.ts') // real open upgrades the pin snapshot
+    await client.didClose('file:///ws/b.ts') // still pinned — ignored, no wire traffic
+    expect(closes(sent)).toHaveLength(0)
+    expect(internals._open.has('file:///ws/b.ts')).toBe(true)
+    expect(logs.some((l) => l.level === 'verbose' && l.message.includes('didClose ignored'))).toBe(
+      true,
+    )
+  })
+
+  it('closes a file that belongs to no tracked project normally', async () => {
+    const { client, internals, sent, logs } = makeAttrClient()
+    client.setProjects(['/ws/tsconfig.json'])
+    await open(client, 'file:///elsewhere/c.ts')
+    await client.didClose('file:///elsewhere/c.ts')
+    expect(closes(sent)).toHaveLength(1)
+    expect(internals._open.has('file:///elsewhere/c.ts')).toBe(false)
+    const line = logs.find((l) => l.message.startsWith('didClose file:///elsewhere/c.ts'))
+    expect(line?.message).toContain('project≈inferred')
+  })
+
+  it('marks pinned docs and their projects in the crash report', async () => {
+    const { client, internals, logs } = makeAttrClient()
+    client.setProjects(['/ws/tsconfig.json'])
+    await open(client, 'file:///ws/a.ts')
+    await client.pinProject('file:///ws/seed.ts', 'typescript', 'seed')
+    const proc = {}
+    internals._proc = proc
+    // Saturate the restart window so the crash settles to error instead of
+    // spawning a real process from the unit test.
+    internals._restartTimestamps.push(Date.now(), Date.now(), Date.now(), Date.now(), Date.now())
+    internals._onProcGone(proc, 'exit code=1 signal=null')
+    const crash = logs.find((l) => l.level === 'error' && l.message.includes('server gone'))
+    expect(crash?.message).toContain('pinned')
+    expect(crash?.message).toMatch(/project≈tsconfig\.json/)
+    expect(crash?.message).toContain('file:///ws/a.ts')
   })
 })

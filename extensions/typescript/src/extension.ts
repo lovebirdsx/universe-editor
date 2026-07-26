@@ -9,6 +9,7 @@
  * touches no Electron API.
  */
 import {
+  commands,
   languages,
   window,
   workspace,
@@ -24,6 +25,7 @@ import {
 import { URI } from 'vscode-uri'
 import { Emitter } from 'vscode-jsonrpc'
 import { LspClient, type LspServerState, type TsServerSpec } from './lspClient.js'
+import { OutputChannelLogger, parseTsLogLevel, type TsLogger } from './logger.js'
 import { localize } from './nls.js'
 import { statusBarContent } from './statusIndicator.js'
 
@@ -58,6 +60,14 @@ const SIGNATURE_RETRIGGER_CHARACTERS = [')']
 /** VSCode's semanticTokens.ts CONTENT_LENGTH_LIMIT: documents above this many
  *  characters get no semantic tokens (whole-file classification is too costly). */
 const SEMANTIC_TOKENS_CONTENT_LENGTH_LIMIT = 100_000
+
+/** Above this many characters, documentSymbol (navtree) is skipped: on a
+ *  pathological generated file (e.g. a 15MB / 340K-line .d.ts) tsserver's
+ *  navtree never returns (>8min measured), and because tsserver serves requests
+ *  serially the whole language service freezes behind it — search, hover,
+ *  completion all stall. Outline is cosmetic; it must never take the server
+ *  hostage. 2MB stays well above hand-written sources. */
+const DOCUMENT_SYMBOL_CONTENT_LENGTH_LIMIT = 2_000_000
 
 /**
  * Only real files may reach the language server (VSCode parity: its TS plugin's
@@ -100,25 +110,51 @@ function uriComponents(uri: string): UriComponents {
 }
 
 /** Read which server the main process provisioned for us (see lspClient.ts). */
-function resolveServerSpec(): TsServerSpec | undefined {
+function resolveServerSpec(log: TsLogger): TsServerSpec | undefined {
   const version = process.env.UNIVERSE_TS_SERVER_VERSION ?? 'unknown'
   if (process.env.UNIVERSE_TS_SERVER_KIND === 'native') {
     const binary = process.env.UNIVERSE_TSGO_BIN
     if (binary) return { kind: 'native', binary, version }
-    console.error('[typescript] UNIVERSE_TS_SERVER_KIND=native but UNIVERSE_TSGO_BIN missing')
+    log.error('UNIVERSE_TS_SERVER_KIND=native but UNIVERSE_TSGO_BIN missing')
     return undefined
   }
   const cli = process.env.UNIVERSE_TSLS_CLI
   const tsserver = process.env.UNIVERSE_TSLS_TSSERVER
   if (!cli || !tsserver) {
-    console.error('[typescript] missing UNIVERSE_TSLS_CLI / UNIVERSE_TSLS_TSSERVER; not activating')
+    log.error('missing UNIVERSE_TSLS_CLI / UNIVERSE_TSLS_TSSERVER; not activating')
     return undefined
   }
   return { kind: 'tsls', cli, tsserver, version }
 }
 
+/** Resolve the log level once at activation: the `typescript.tsserver.log`
+ *  setting (VSCode parity), with an env override for dev/e2e sessions where
+ *  editing settings isn't practical. */
+function applyLogLevel(logger: OutputChannelLogger): void {
+  const envLevel = parseTsLogLevel(process.env.UNIVERSE_TS_LOG_LEVEL)
+  if (envLevel) {
+    logger.setLevel(envLevel)
+    return
+  }
+  void workspace
+    .getConfiguration('typescript')
+    .get<string>('tsserver.log', 'info')
+    .then((v) => logger.setLevel(parseTsLogLevel(v) ?? 'info'))
+}
+
 export function activate(context: ExtensionContext): void {
-  const spec = resolveServerSpec()
+  // The output channel comes first: even when activation fails (missing server
+  // env) the reason lands here, and typescript.openTsServerLog stays usable.
+  const channel = window.createOutputChannel('TypeScript')
+  const logger = new OutputChannelLogger(channel)
+  applyLogLevel(logger)
+
+  context.subscriptions.push(
+    channel,
+    commands.registerCommand('typescript.openTsServerLog', () => channel.show()),
+  )
+
+  const spec = resolveServerSpec(logger)
   if (!spec) return
 
   const diagnostics = languages.createDiagnosticCollection('typescript')
@@ -128,24 +164,51 @@ export function activate(context: ExtensionContext): void {
     (e) => {
       diagnostics.set(uriComponents(e.uri), e.diagnostics)
     },
-    // Read on every (re)start so a raised cap applies on the next crash-restart
-    // without reloading the window. 3072 matches VSCode's default.
-    () => workspace.getConfiguration('typescript').get<number>('tsserver.maxTsServerMemory', 3072),
+    {
+      // Read on every (re)start so a raised cap applies on the next crash-restart
+      // without reloading the window. 3072 matches VSCode's default.
+      getMaxTsServerMemoryMb: () =>
+        workspace.getConfiguration('typescript').get<number>('tsserver.maxTsServerMemory', 3072),
+      logger,
+    },
   )
+  const openLog = localize('ts.btn.openLog', 'Open TypeScript Log')
   client.onServerOOM((limitMb) => {
-    void window.showWarningMessage(
-      localize(
-        'ts.oom.notification',
-        'The TypeScript language server ran out of memory (limit {limitMb} MB). Raise "typescript.tsserver.maxTsServerMemory" in settings.',
-        { limitMb },
-      ),
-    )
+    void window
+      .showWarningMessage(
+        localize(
+          'ts.oom.notification',
+          'The TypeScript language server ran out of memory (limit {limitMb} MB). Raise "typescript.tsserver.maxTsServerMemory" in settings.',
+          { limitMb },
+        ),
+        openLog,
+      )
+      .then((picked) => {
+        if (picked === openLog) channel.show()
+      })
   })
 
-  context.subscriptions.push(diagnostics, { dispose: () => client.dispose() })
+  context.subscriptions.push(
+    diagnostics,
+    { dispose: () => client.dispose() },
+    commands.registerCommand('typescript.restartTsServer', async () => {
+      try {
+        await client.restart()
+      } catch (err) {
+        logger.error(`restart failed: ${(err as Error).message}`)
+        void window.showErrorMessage(
+          localize(
+            'ts.restart.failed',
+            'Failed to restart the TypeScript language server: {message}',
+            { message: (err as Error).message },
+          ),
+        )
+      }
+    }),
+  )
 
   registerStatusIndicator(context, client)
-  registerProviders(context, client)
+  registerProviders(context, client, logger)
   registerDocumentSync(context, client)
 
   // Prewarm: spawn tsserver now (every provider needs it) and pin one seed file
@@ -153,8 +216,23 @@ export function activate(context: ExtensionContext): void {
   // open TS/JS file tsserver has no project and workspace/symbol throws "No
   // Project", and navto only searches the project owning an open file. This makes
   // symbols searchable before the user opens any editor. Which tsconfigs to warm
-  // is driven by `typescript.prewarm.projects` (see resolvePrewarmTargets).
-  void prewarm(client)
+  // is driven by `typescript.prewarm.projects` (see resolvePrewarmTargets). The
+  // same tsconfig inventory feeds the client's project attribution (logs and the
+  // last-file keep-alive pin).
+  void (async () => {
+    const root = workspace.rootPath
+    if (!root) return
+    const readDir: ReadDir = async (dir) => {
+      try {
+        return await workspace.fs.readDirectory(dir)
+      } catch {
+        return []
+      }
+    }
+    const allTsconfigs = await enumerateTsconfigs(root, readDir)
+    client.setProjects(allTsconfigs.map((rel) => `${root}/${rel}`))
+    await prewarm(client, logger, allTsconfigs, readDir)
+  })()
 }
 
 /** A directory-reading dependency, so the prewarm search is unit-testable. */
@@ -164,21 +242,19 @@ type ReadDir = (dir: string) => Promise<Array<[string, FileType]>>
  * Eager-start tsserver and pin a seed file for each targeted tsconfig so its
  * project loads. Best-effort: any failure leaves the plugin working lazily (the
  * first real request still spawns the server and loads the file's project).
+ * `allTsconfigs` / `readDir` come from the caller so the tsconfig tree is
+ * walked once and shared with the client's project attribution.
  */
-async function prewarm(client: LspClient): Promise<void> {
+async function prewarm(
+  client: LspClient,
+  log: TsLogger,
+  allTsconfigs: readonly string[],
+  readDir: ReadDir,
+): Promise<void> {
   await client.ensureReady()
   const root = workspace.rootPath
   if (!root) return
 
-  const readDir: ReadDir = async (dir) => {
-    try {
-      return await workspace.fs.readDirectory(dir)
-    } catch {
-      return []
-    }
-  }
-
-  const allTsconfigs = await enumerateTsconfigs(root, readDir)
   const configured = await workspace
     .getConfiguration('typescript')
     .get<string[]>('prewarm.projects', [])
@@ -193,7 +269,7 @@ async function prewarm(client: LspClient): Promise<void> {
       const text = new TextDecoder().decode(bytes)
       await client.pinProject(URI.file(seed.path).toString(), seed.languageId, text)
     } catch (err) {
-      console.error(`[typescript] prewarm pin failed: ${(err as Error).message}`)
+      log.error(`prewarm pin failed: ${(err as Error).message}`)
     }
   }
 }
@@ -335,7 +411,8 @@ function registerStatusIndicator(context: ExtensionContext, client: LspClient): 
   context.subscriptions.push(item, client.onDidChangeState(apply))
 }
 
-function registerProviders(context: ExtensionContext, client: LspClient): void {
+function registerProviders(context: ExtensionContext, client: LspClient, log: TsLogger): void {
+  const docSymTooLargeLogged = new Set<string>()
   context.subscriptions.push(
     languages.registerDefinitionProvider(TS_JS_LANGUAGES, {
       provideDefinition: forServerDocs((doc, position) =>
@@ -385,9 +462,17 @@ function registerProviders(context: ExtensionContext, client: LspClient): void {
       },
     ),
     languages.registerDocumentSymbolProvider(TS_JS_LANGUAGES, {
-      provideDocumentSymbols: forServerDocs((doc) =>
-        client.provideDocumentSymbols(uriString(doc.uri)),
-      ),
+      provideDocumentSymbols: forServerDocs((doc) => {
+        const uri = uriString(doc.uri)
+        if (doc.getText().length > DOCUMENT_SYMBOL_CONTENT_LENGTH_LIMIT) {
+          if (!docSymTooLargeLogged.has(uri)) {
+            docSymTooLargeLogged.add(uri)
+            log.info(`documentSymbol skipped for ${uri} (too large)`)
+          }
+          return null
+        }
+        return client.provideDocumentSymbols(uri)
+      }),
     }),
     languages.registerRenameProvider(TS_JS_LANGUAGES, {
       provideRenameEdits: forServerDocs((doc, position, newName: string) =>
@@ -432,7 +517,7 @@ function registerProviders(context: ExtensionContext, client: LspClient): void {
           if (doc.getText().length > SEMANTIC_TOKENS_CONTENT_LENGTH_LIMIT) {
             if (!tooLargeLogged.has(uri)) {
               tooLargeLogged.add(uri)
-              console.error(`[typescript] semanticTokens skipped for ${uri} (too large)`)
+              log.info(`semanticTokens skipped for ${uri} (too large)`)
             }
             return null
           }

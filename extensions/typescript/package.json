@@ -5,7 +5,9 @@
   "type": "module",
   "files": [
     "dist",
-    "icon.svg"
+    "icon.svg",
+    "package.nls.json",
+    "package.nls.zh-cn.json"
   ],
   "displayName": "TypeScript Language Features",
   "icon": "icon.svg",
@@ -18,9 +20,35 @@
     "onLanguage:typescript",
     "onLanguage:javascript",
     "onLanguage:typescriptreact",
-    "onLanguage:javascriptreact"
+    "onLanguage:javascriptreact",
+    "onCommand:typescript.restartTsServer",
+    "onCommand:typescript.openTsServerLog"
   ],
-  "contributes": {},
+  "contributes": {
+    "commands": [
+      {
+        "command": "typescript.restartTsServer",
+        "title": "%ts.command.restartTsServer.title%",
+        "category": "TypeScript"
+      },
+      {
+        "command": "typescript.openTsServerLog",
+        "title": "%ts.command.openTsServerLog.title%",
+        "category": "TypeScript"
+      }
+    ],
+    "configuration": {
+      "title": "TypeScript",
+      "properties": {
+        "typescript.tsserver.log": {
+          "type": "string",
+          "enum": ["off", "error", "info", "verbose"],
+          "default": "info",
+          "description": "%ts.config.tsserver.log.description%"
+        }
+      }
+    }
+  },
   "scripts": {
     "build": "node esbuild.config.mjs",
     "dev": "node esbuild.config.mjs --watch",
