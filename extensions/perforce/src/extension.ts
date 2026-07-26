@@ -165,14 +165,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
     )
   } catch (err) {
     if (isMissingCli(err)) {
-      console.error('[perforce] p4 CLI not found; perforce source control disabled')
+      console.info('[perforce] p4 CLI not found; perforce source control disabled')
     } else {
       console.error('[perforce] client discovery failed', err)
     }
     return
   }
   if (!client) {
-    console.error(`[perforce] no Perforce workspace for ${root}; source control disabled`)
+    console.info(`[perforce] no Perforce workspace for ${root}; source control disabled`)
     return
   }
 

@@ -129,7 +129,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     const key = uriToKey(editor.document.uri)
     const line = editor.selection.active.line
     const result = store.toggle(slot, key, line)
-    console.error(
+    console.info(
       `[numbered-bookmarks] toggle #${slot} @ line ${line} → ${
         result ? `set ${result.line}` : 'cleared'
       } (${key})`,
@@ -150,10 +150,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const jump = async (slot: number): Promise<void> => {
     const bookmark = store.get(slot)
     if (!bookmark) {
-      console.error(`[numbered-bookmarks] jump #${slot}: no bookmark set`)
+      console.info(`[numbered-bookmarks] jump #${slot}: no bookmark set`)
       return
     }
-    console.error(`[numbered-bookmarks] jump #${slot} → ${bookmark.path}:${bookmark.line + 1}`)
+    console.info(`[numbered-bookmarks] jump #${slot} → ${bookmark.path}:${bookmark.line + 1}`)
     await jumpTo(bookmark)
   }
 
@@ -176,7 +176,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // The active editor may already be open when we activate (onStartupFinished).
   await decorateActive()
 
-  console.error('[numbered-bookmarks] activated')
+  console.info('[numbered-bookmarks] activated')
 }
 
 interface BookmarkPickItem extends QuickPickItem {

@@ -9,7 +9,10 @@
  * extensions directory and drives lazy activation.
  *
  * IMPORTANT: stdout carries the RPC wire — nothing else may be written there.
- * All diagnostics go to stderr (console.error), which main forwards as onStderr.
+ * All diagnostics go to stderr, which main forwards as onStderr and routes to
+ * log levels via the `[info]`/`[warn]`/`[error]` tags the protected console
+ * prepends (see stdoutProtection.ts) — use the console method matching the
+ * message's severity.
  * To keep that invariant against stray library logging (e.g. a debug
  * `console.log` inside a language-service dependency), we capture the real
  * stdout for framing and then point every stdout-bound `console.*` at stderr.
@@ -148,7 +151,7 @@ let didShutdown = false
 function shutdown(reason: string): void {
   if (didShutdown) return
   didShutdown = true
-  console.error(`[ext-host] shutdown (${reason})`)
+  console.info(`[ext-host] shutdown (${reason})`)
   try {
     // Dispose only if the service is already up; never block shutdown on an
     // in-flight scan (the parent is leaving now).
@@ -295,9 +298,9 @@ async function main(): Promise<void> {
     ...(allowlist !== undefined ? { allowlist } : {}),
   })
   if (dirs.length === 0) {
-    console.error('[ext-host] no extensions directory configured')
+    console.warn('[ext-host] no extensions directory configured')
   } else {
-    console.error(
+    console.info(
       `[ext-host] scanned ${extensions.length} extension(s) from [${dirs
         .map((d) => d.dir)
         .join(', ')}]` +
@@ -312,7 +315,7 @@ async function main(): Promise<void> {
   }
 
   const workspaceRoot = process.env.UNIVERSE_WORKSPACE_ROOT || undefined
-  console.error(`[ext-host] workspace root: ${workspaceRoot ?? '(none)'}`)
+  console.info(`[ext-host] workspace root: ${workspaceRoot ?? '(none)'}`)
 
   // Parent dir for per-extension persistent storage (`<home>/<extId>`).
   const globalStorageHome = process.env.UNIVERSE_GLOBAL_STORAGE_DIR || undefined
@@ -340,7 +343,7 @@ async function main(): Promise<void> {
       mainThreadExtensions,
     ),
   )
-  console.error('[ext-host] ready')
+  console.info('[ext-host] ready')
 }
 
 void main().catch((err: unknown) => {

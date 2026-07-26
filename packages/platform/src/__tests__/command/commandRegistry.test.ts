@@ -249,6 +249,48 @@ describe('MenuRegistry', () => {
     d2.dispose()
     warn.mockRestore()
   })
+
+  it('same command/group/order with mutually exclusive when-clauses is not a duplicate', () => {
+    // The Lock/Unlock Editor Group pattern: one slot, two entries gated on
+    // opposite context keys.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const d1 = MenuRegistry.addMenuItem(MenuId.EditorTitle, {
+      command: 'menu.lockedPair',
+      group: '9_lock',
+      order: 10,
+      when: '!activeEditorGroupLocked',
+    })
+    const d2 = MenuRegistry.addMenuItem(MenuId.EditorTitle, {
+      command: 'menu.lockedPair',
+      group: '9_lock',
+      order: 10,
+      when: 'activeEditorGroupLocked',
+    })
+    expect(warn).not.toHaveBeenCalled()
+    d1.dispose()
+    d2.dispose()
+    warn.mockRestore()
+  })
+
+  it('same command/group/order with the same when-clause is a duplicate', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const d1 = MenuRegistry.addMenuItem(MenuId.EditorTitle, {
+      command: 'menu.sameWhen',
+      group: 'g',
+      order: 1,
+      when: 'hasActiveEditor',
+    })
+    const d2 = MenuRegistry.addMenuItem(MenuId.EditorTitle, {
+      command: 'menu.sameWhen',
+      group: 'g',
+      order: 1,
+      when: 'hasActiveEditor',
+    })
+    expect(warn).toHaveBeenCalledOnce()
+    d1.dispose()
+    d2.dispose()
+    warn.mockRestore()
+  })
 })
 
 describe('KeybindingsRegistry', () => {

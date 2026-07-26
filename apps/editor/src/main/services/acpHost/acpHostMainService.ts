@@ -239,7 +239,9 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
           this._onExit.fire({ handle, code: null, signal: null, error: exit.error })
         } else {
           const msg = `exit handle=${handle} code=${exit.code} signal=${exit.signal}`
-          if (exit.code === 0 || exit.code === null) {
+          // A forced kill (stop()/kill() escalation) is a planned shutdown; on
+          // Windows taskkill can still report a non-zero code, so don't warn.
+          if (exit.code === 0 || exit.code === null || exit.forced) {
             this._logger.info(msg)
           } else {
             this._logger.warn(msg)

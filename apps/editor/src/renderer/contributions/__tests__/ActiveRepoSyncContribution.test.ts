@@ -8,6 +8,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  CommandsRegistry,
   DisposableStore,
   observableValue,
   type ICommandService,
@@ -57,6 +58,7 @@ describe('ActiveRepoSyncContribution', () => {
 
   it('pushes the first repo when no selection is set', () => {
     const store = new DisposableStore()
+    store.add(CommandsRegistry.registerCommand('git.setActiveRepo', () => undefined))
     const scm = makeFakeScm([sc('/a'), sc('/b')])
     const cmd = makeFakeCommands()
     store.add(new ActiveRepoSyncContribution(scm.service, cmd.service))
@@ -67,6 +69,7 @@ describe('ActiveRepoSyncContribution', () => {
 
   it('pushes the selected repo and updates on selection change', () => {
     const store = new DisposableStore()
+    store.add(CommandsRegistry.registerCommand('git.setActiveRepo', () => undefined))
     const scm = makeFakeScm([sc('/a'), sc('/b')])
     const cmd = makeFakeCommands()
     store.add(new ActiveRepoSyncContribution(scm.service, cmd.service))
@@ -78,6 +81,7 @@ describe('ActiveRepoSyncContribution', () => {
 
   it('does not re-push the same repo', () => {
     const store = new DisposableStore()
+    store.add(CommandsRegistry.registerCommand('git.setActiveRepo', () => undefined))
     const scm = makeFakeScm([sc('/a'), sc('/b')])
     const cmd = makeFakeCommands()
     store.add(new ActiveRepoSyncContribution(scm.service, cmd.service))
@@ -91,6 +95,7 @@ describe('ActiveRepoSyncContribution', () => {
 
   it('falls back to the first repo when the selection is no longer present', () => {
     const store = new DisposableStore()
+    store.add(CommandsRegistry.registerCommand('git.setActiveRepo', () => undefined))
     const scm = makeFakeScm([sc('/a'), sc('/b')])
     const cmd = makeFakeCommands()
     store.add(new ActiveRepoSyncContribution(scm.service, cmd.service))
@@ -104,11 +109,41 @@ describe('ActiveRepoSyncContribution', () => {
 
   it('derives the command id from the selected provider (not hardcoded git)', () => {
     const store = new DisposableStore()
+    store.add(CommandsRegistry.registerCommand('perforce.setActiveRepo', () => undefined))
     const scm = makeFakeScm([sc('/depot', 'perforce')])
     const cmd = makeFakeCommands()
     store.add(new ActiveRepoSyncContribution(scm.service, cmd.service))
 
     expect(cmd.calls).toEqual([['perforce.setActiveRepo', ['/depot']]])
+    store.dispose()
+  })
+
+  // Repro for "command not found: git.setActiveRepo" at startup: the SCM provider
+  // registers with the view before its host registers `setActiveRepo` (activation
+  // is async), so the first push raced the command registration.
+  it('defers the push until the provider registers its setActiveRepo command', () => {
+    const store = new DisposableStore()
+    const scm = makeFakeScm([sc('/a')])
+    const cmd = makeFakeCommands()
+    store.add(new ActiveRepoSyncContribution(scm.service, cmd.service))
+
+    // Command not registered yet: nothing pushed, no "command not found" call.
+    expect(cmd.calls).toEqual([])
+
+    store.add(CommandsRegistry.registerCommand('git.setActiveRepo', () => undefined))
+    expect(cmd.calls).toEqual([['git.setActiveRepo', ['/a']]])
+    store.dispose()
+  })
+
+  it('stays silent for a provider that never registers setActiveRepo', () => {
+    const store = new DisposableStore()
+    const scm = makeFakeScm([sc('/a')])
+    const cmd = makeFakeCommands()
+    store.add(new ActiveRepoSyncContribution(scm.service, cmd.service))
+
+    // An unrelated command registration must not trigger a bogus push.
+    store.add(CommandsRegistry.registerCommand('unrelated.command', () => undefined))
+    expect(cmd.calls).toEqual([])
     store.dispose()
   })
 })

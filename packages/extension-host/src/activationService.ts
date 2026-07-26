@@ -85,7 +85,7 @@ export class ExtensionActivationService {
         : {}),
     })
     if (support === false) {
-      console.error(`[ext-host] ${ext.id} not activated: requires a trusted workspace`)
+      console.info(`[ext-host] ${ext.id} not activated: requires a trusted workspace`)
       return false
     }
     return true
@@ -116,7 +116,7 @@ export class ExtensionActivationService {
         context,
         ...(deactivate !== undefined ? { deactivate } : {}),
       })
-      console.error(`[ext-host] activated ${ext.id}`)
+      console.info(`[ext-host] activated ${ext.id}`)
     } catch (err) {
       const error = err as Error
       console.error(`[ext-host] activate failed ${ext.id}: ${error.stack ?? String(err)}`)

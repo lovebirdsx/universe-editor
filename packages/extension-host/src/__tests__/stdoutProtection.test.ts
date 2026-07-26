@@ -43,6 +43,22 @@ describe('protectStdout', () => {
     expect(stderrWrites.join('')).toContain('provideCompletionItems')
   })
 
+  it('prefixes each console method with its level tag for main-side routing', () => {
+    const { target, stderrWrites } = makeTarget()
+    protectStdout(target)
+    target.console.log('l')
+    target.console.info('i')
+    target.console.debug('d')
+    target.console.warn('w')
+    target.console.error('e')
+    const out = stderrWrites.join('')
+    expect(out).toContain('[info] l')
+    expect(out).toContain('[info] i')
+    expect(out).toContain('[debug] d')
+    expect(out).toContain('[warn] w')
+    expect(out).toContain('[error] e')
+  })
+
   it('routes console.info / debug / dir to stderr too', () => {
     const { target, stdoutWrites, stderrWrites } = makeTarget()
     protectStdout(target)

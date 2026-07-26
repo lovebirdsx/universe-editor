@@ -20,6 +20,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  CommandsRegistry,
   Disposable,
   ICommandService,
   IConfigurationService,
@@ -109,6 +110,9 @@ export class SwarmReviewNotificationContribution
    *  can drive it deterministically. Serialized: overlapping timer ticks are dropped. */
   async refresh(): Promise<void> {
     if (this._running) return
+    // On a workspace without Perforce the command never registers; polling it
+    // would only spam "command not found" every interval.
+    if (!CommandsRegistry.getCommand(SwarmCommands.dashboard)) return
     this._running = true
     try {
       // `force: true` bypasses the dashboard's 60s TTL cache: this poll is the

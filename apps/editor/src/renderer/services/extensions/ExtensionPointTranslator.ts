@@ -122,6 +122,11 @@ export class ExtensionPointTranslator extends Disposable {
   }
 
   private _registerCommand(command: ICommandContribution, hasExplicitPaletteEntry: boolean): void {
+    // A command id the core already registered (a built-in Action2, e.g. the git
+    // blame toggles) stays core-owned: installing a bootstrap proxy on top would
+    // shadow the real handler and route execution to a host that doesn't implement
+    // it. Mirrors the same guard in MainThreadCommands.$registerCommand.
+    if (CommandsRegistry.getCommand(command.command)) return
     const metadata: ICommandMetadata = {
       description: command.title,
       ...(command.category !== undefined ? { category: command.category } : {}),

@@ -132,8 +132,10 @@ function resolveWhen(when: IMenuItem['when']): ContextKeyExpression | undefined 
 
 /**
  * The same command may legitimately appear in a menu under different group/order
- * slots, so we only flag an *exact* duplicate (same kind + target + group + order),
- * which almost always means a contribution was registered twice.
+ * slots, or twice in the same slot with mutually exclusive when-clauses (e.g. a
+ * Lock/Unlock pair), so we only flag an *exact* duplicate (same kind + target +
+ * group + order + when), which almost always means a contribution was registered
+ * twice.
  */
 function warnOnDuplicateEntry(
   menuId: MenuId,
@@ -144,7 +146,9 @@ function warnOnDuplicateEntry(
   const dup = existing.some((it) => {
     if (it.kind !== next.kind) return false
     const itTarget = it.kind === 'item' ? it.command : it.submenu
-    return itTarget === target && it.group === next.group && it.order === next.order
+    if (itTarget !== target || it.group !== next.group || it.order !== next.order) return false
+    if (it.when === undefined || next.when === undefined) return it.when === next.when
+    return it.when.equals(next.when)
   })
   if (dup) {
     console.warn(

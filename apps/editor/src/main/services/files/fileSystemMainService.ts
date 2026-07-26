@@ -58,6 +58,14 @@ export class FileSystemMainService implements IFileService {
     this._logger = createNamedLogger(loggerService, { id: 'fileSystem', name: 'File System' })
   }
 
+  /** ENOENT is a normal "not there" answer callers handle (e.g. probing an
+   *  optional file like `.mcp.json`); anything else is a genuine failure. */
+  private _logReadFailure(op: string, uri: URI, mapped: FileSystemError): void {
+    const msg = `${op} failed ${uri.fsPath} code=${mapped.code}`
+    if (mapped.code === 'ENOENT') this._logger.debug(msg, mapped.message)
+    else this._logger.warn(msg, mapped.message)
+  }
+
   async readFile(resource: RawUri): Promise<Uint8Array> {
     const uri = ensureFile(reviveUri(resource))
     try {
@@ -66,7 +74,7 @@ export class FileSystemMainService implements IFileService {
       return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
     } catch (err) {
       const mapped = mapError(err, 'readFile failed')
-      this._logger.warn(`readFile failed ${uri.fsPath} code=${mapped.code}`, mapped.message)
+      this._logReadFailure('readFile', uri, mapped)
       throw mapped
     }
   }
@@ -79,7 +87,7 @@ export class FileSystemMainService implements IFileService {
       return text
     } catch (err) {
       const mapped = mapError(err, 'readFileText failed')
-      this._logger.warn(`readFileText failed ${uri.fsPath} code=${mapped.code}`, mapped.message)
+      this._logReadFailure('readFileText', uri, mapped)
       throw mapped
     }
   }
@@ -133,7 +141,7 @@ export class FileSystemMainService implements IFileService {
       }
     } catch (err) {
       const mapped = mapError(err, 'stat failed')
-      this._logger.warn(`stat failed ${uri.fsPath} code=${mapped.code}`, mapped.message)
+      this._logReadFailure('stat', uri, mapped)
       throw mapped
     }
   }
@@ -215,7 +223,7 @@ export class FileSystemMainService implements IFileService {
       return entries
     } catch (err) {
       const mapped = mapError(err, 'list failed')
-      this._logger.warn(`list failed ${uri.fsPath} code=${mapped.code}`, mapped.message)
+      this._logReadFailure('list', uri, mapped)
       throw mapped
     }
   }

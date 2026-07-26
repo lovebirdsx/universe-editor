@@ -82,6 +82,29 @@ describe('ExtensionPointTranslator', () => {
     expect(CommandsRegistry.getCommand('test.cmd')).toBeUndefined()
   })
 
+  it('does not shadow a command id the core already registered (built-in Action2)', () => {
+    // The git extension declares git.blame.toggle* in its manifest for palette
+    // parity, but the implementation is a renderer Action2. A bootstrap proxy on
+    // top would shadow the real handler and route execution to a host that
+    // doesn't implement it.
+    const core = CommandsRegistry.registerCommand({
+      id: 'test.cmd',
+      handler: () => 'from-core',
+      metadata: { description: 'Core Title' },
+    })
+    disposables.push(core)
+    const activate = vi.fn()
+    const execute = vi.fn()
+    const t = new ExtensionPointTranslator(activate, execute)
+    disposables.push(t)
+    t.translate([dto()])
+
+    expect(CommandsRegistry.getCommand('test.cmd')?.metadata?.description).toBe('Core Title')
+    expect(run('test.cmd')).toBe('from-core')
+    expect(activate).not.toHaveBeenCalled()
+    expect(execute).not.toHaveBeenCalled()
+  })
+
   it('translates menu contributions into the MenuRegistry, parsing group@order', () => {
     const t = new ExtensionPointTranslator(vi.fn(), vi.fn())
     disposables.push(t)

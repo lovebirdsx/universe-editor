@@ -28,6 +28,7 @@ import {
 import { type IEditorInput } from '@universe-editor/platform'
 import {
   autorun,
+  CommandsRegistry,
   ICommandService,
   IDialogService,
   IEditorResolverService,
@@ -52,7 +53,7 @@ import {
   type GitGraphWorktreeDto,
   type GitGraphWorktreeSyncResult,
 } from '@universe-editor/extensions-common'
-import { useService, useObservable } from '../useService.js'
+import { useService, useObservable, useCommandRegistered } from '../useService.js'
 import { IScmService } from '../../services/extensions/ScmService.js'
 import { computeGraphLayout, type GraphGrid } from '../../services/gitGraph/graphLayout.js'
 import { buildFileTree, type FileTreeNode } from '../../services/gitGraph/fileTree.js'
@@ -608,6 +609,10 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   // immutable anyway.
   const revalidate = useCallback(
     (forceDetailRefetch = false) => {
+      // The auto-refresh autorun (below) reacts to the SCM provider appearing,
+      // which the git extension does BEFORE registering the git-graph commands —
+      // querying here would warn "command not found" and drop the refresh.
+      if (!CommandsRegistry.getCommand(GitGraphCommands.getCommits)) return
       void commands
         .executeCommand<GitGraphLoadResult>(GitGraphCommands.getCommits, queryRef.current)
         .then((r) => {
@@ -631,11 +636,19 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     [commands],
   )
 
+  // The git extension registers the git-graph commands only after it activates,
+  // which races a startup-restored tab: executing earlier warns "command not
+  // found" and resolves undefined, which `load` would misread as "unavailable".
+  // Gate the initial queries on registration; the loading state simply persists
+  // until the extension is up.
+  const graphCommandsReady = useCommandRegistered(GitGraphCommands.getCommits)
+
   // Initial load only when nothing is cached; a cached tab revalidates in the
   // background so re-activating it shows fresh data without a flash. If a
   // non-default repo was selected previously, re-assert it on the extension side
   // first (its active-repo state may have reset across an app restart).
   useEffect(() => {
+    if (!graphCommandsReady) return
     const start = (): (() => void) | undefined => {
       if (gitGraphViewState.result) {
         revalidate()
@@ -649,17 +662,18 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       return
     }
     return start()
-  }, [commands, load, revalidate])
+  }, [commands, load, revalidate, graphCommandsReady])
 
   // Discover the repositories the view can switch between (main repo + submodules).
   useEffect(() => {
+    if (!graphCommandsReady) return
     void commands.executeCommand<GitGraphRepoDto[]>(GitGraphCommands.getRepos).then((r) => {
       if (r) {
         setRepos(r)
         gitGraphViewState.repos = r
       }
     })
-  }, [commands])
+  }, [commands, graphCommandsReady])
 
   // Refetch when a query-affecting option changes (order / remotes / paging
   // limit). First-parent only affects layout, so it is deliberately excluded.

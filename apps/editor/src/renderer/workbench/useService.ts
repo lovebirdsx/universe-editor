@@ -16,6 +16,7 @@ import {
 import type { Event, IDisposable, IObservable } from '@universe-editor/platform'
 import {
   autorun,
+  CommandsRegistry,
   ICommandService,
   markAsSingleton,
   type InstantiationService,
@@ -166,6 +167,20 @@ export function useEventSubscription(
       for (const s of subs) s.dispose()
     }
   }, deps)
+}
+
+/**
+ * Reactive view of whether a command id is currently registered. Extension-host
+ * commands appear only after the extension activates, so startup-registered views
+ * (e.g. the Git Graph tab) must wait for this before executing them — otherwise
+ * CommandService warns "command not found" and resolves undefined.
+ */
+export function useCommandRegistered(commandId: string): boolean {
+  const getValue = useCallback(
+    () => CommandsRegistry.getCommand(commandId) !== undefined,
+    [commandId],
+  )
+  return useEventValue(CommandsRegistry.onDidChangeCommands, getValue)
 }
 
 /**

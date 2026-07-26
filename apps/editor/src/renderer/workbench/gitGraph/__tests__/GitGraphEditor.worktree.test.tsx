@@ -5,15 +5,17 @@
  *  a badge opens a menu whose items depend on whether it is the current / main tree.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import {
+  CommandsRegistry,
   ICommandService,
   IDialogService,
   IStorageService,
   InstantiationService,
   ServiceCollection,
   observableValue,
+  type IDisposable,
 } from '@universe-editor/platform'
 import {
   GitGraphCommands,
@@ -136,7 +138,15 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 8; i++) await Promise.resolve()
 }
 
+// The editor gates its initial queries on the git-graph commands being
+// registered (they arrive asynchronously from the extension host at runtime).
+let graphCommandStub: IDisposable
+beforeEach(() => {
+  graphCommandStub = CommandsRegistry.registerCommand(GitGraphCommands.getCommits, () => undefined)
+})
+
 afterEach(() => {
+  graphCommandStub.dispose()
   gitGraphViewState.result = null
   gitGraphViewState.selection = []
   gitGraphViewState.repos = []

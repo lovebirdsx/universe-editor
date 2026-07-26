@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import {
+  CommandsRegistry,
   Event,
   ICommandService,
   IDialogService,
@@ -22,6 +23,7 @@ import {
   observableValue,
   type IEditorResolverService as IEditorResolverServiceType,
   type IFileService as IFileServiceType,
+  type IDisposable,
   type INotificationService as INotificationServiceType,
 } from '@universe-editor/platform'
 import {
@@ -216,7 +218,11 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 8; i++) await Promise.resolve()
 }
 
+// The editor gates its initial queries on the git-graph commands being
+// registered (they arrive asynchronously from the extension host at runtime).
+let graphCommandStub: IDisposable
 beforeEach(() => {
+  graphCommandStub = CommandsRegistry.registerCommand(GitGraphCommands.getCommits, () => undefined)
   gitGraphViewState.result = makeResult()
   gitGraphViewState.selection = [HASH]
   gitGraphViewState.details = makeDetails()
@@ -226,6 +232,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  graphCommandStub.dispose()
   gitGraphViewState.result = null
   gitGraphViewState.selection = []
   gitGraphViewState.details = null

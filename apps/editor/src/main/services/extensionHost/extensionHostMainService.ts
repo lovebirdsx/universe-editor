@@ -120,8 +120,15 @@ interface ProcEntry {
   readonly stdoutDecoder: StringDecoder
   /** Carry-over of a partial (newline-less) stderr chunk, flushed line by line. */
   stderrLineBuffer: string
+  /** Level of the last tagged stderr line; indented continuations (stack frames) follow it. */
+  stderrLevel: StderrLevel
   exited: boolean
 }
+
+/** Levels the host tags its console output with (see stdoutProtection.ts). */
+type StderrLevel = 'debug' | 'info' | 'warn' | 'error'
+
+const STDERR_LEVEL_TAG = /^\[(debug|info|warn|error)\] /
 
 export class ExtensionHostMainService extends Disposable implements IExtensionHostService {
   declare readonly _serviceBrand: undefined
@@ -231,6 +238,7 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
       store,
       stdoutDecoder: new StringDecoder('utf8'),
       stderrLineBuffer: '',
+      stderrLevel: 'warn',
       exited: false,
     }
     this._procs.set(handle, procEntry)
@@ -293,15 +301,33 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     const complete = buf.slice(0, lastNl)
     entry.stderrLineBuffer = buf.slice(lastNl + 1)
     for (const line of complete.split('\n')) {
-      if (line.length > 0) this._logger.warn(`[stderr ${handle}] ${line}`)
+      if (line.length > 0) this._logStderrLine(handle, entry, line)
     }
+  }
+
+  /**
+   * Route one stderr line by its level tag: the host tags every console call
+   * (stdoutProtection), so `[info]`-style prefixes map to the matching level.
+   * Indented lines (stack frames) continue the previous line's level; anything
+   * else untagged — a hard crash's stack, a dependency's raw write — stays a
+   * warning, preserving crash visibility.
+   */
+  private _logStderrLine(handle: string, entry: ProcEntry, line: string): void {
+    const tagged = STDERR_LEVEL_TAG.exec(line)
+    if (tagged) {
+      entry.stderrLevel = tagged[1] as StderrLevel
+      this._logger[entry.stderrLevel](`[stderr ${handle}] ${line.slice(tagged[0].length)}`)
+      return
+    }
+    if (!/^\s/.test(line)) entry.stderrLevel = 'warn'
+    this._logger[entry.stderrLevel](`[stderr ${handle}] ${line}`)
   }
 
   /** Flush any buffered partial stderr line (e.g. a crash's final stack frame). */
   private _flushStderr(handle: string, entry: ProcEntry): void {
     const rest = entry.stderrLineBuffer.trimEnd()
     entry.stderrLineBuffer = ''
-    if (rest.length > 0) this._logger.warn(`[stderr ${handle}] ${rest}`)
+    if (rest.length > 0) this._logStderrLine(handle, entry, rest)
   }
 
   writeStdin(handle: string, data: string): Promise<void> {

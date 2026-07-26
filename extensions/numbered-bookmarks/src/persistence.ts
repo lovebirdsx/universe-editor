@@ -15,7 +15,7 @@ export function load(state: Memento, store: BookmarkStore): void {
   const data = state.get<Slots>(KEY)
   if (data === undefined) return
   store.load(data)
-  console.error(`[numbered-bookmarks] loaded ${store.all().length} bookmark(s) from workspaceState`)
+  console.info(`[numbered-bookmarks] loaded ${store.all().length} bookmark(s) from workspaceState`)
 }
 
 export async function save(state: Memento, store: BookmarkStore): Promise<void> {

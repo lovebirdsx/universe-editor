@@ -6,15 +6,17 @@
  *  reset the cached selection / scroll / details. See commit 65dd7e9.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/react'
 import {
+  CommandsRegistry,
   ICommandService,
   IDialogService,
   IStorageService,
   InstantiationService,
   ServiceCollection,
   observableValue,
+  type IDisposable,
 } from '@universe-editor/platform'
 import {
   GitGraphCommands,
@@ -131,7 +133,15 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 8; i++) await Promise.resolve()
 }
 
+// The editor gates its initial queries on the git-graph commands being
+// registered (they arrive asynchronously from the extension host at runtime).
+let graphCommandStub: IDisposable
+beforeEach(() => {
+  graphCommandStub = CommandsRegistry.registerCommand(GitGraphCommands.getCommits, () => undefined)
+})
+
 afterEach(() => {
+  graphCommandStub.dispose()
   gitGraphViewState.result = null
   gitGraphViewState.selection = []
   gitGraphViewState.details = null

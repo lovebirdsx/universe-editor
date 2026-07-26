@@ -177,7 +177,9 @@ export class ExtensionGalleryMainService extends Disposable implements IExtensio
       this._controlCache = { manifest, fetchedAt: Date.now() }
       return manifest
     } catch (err) {
-      this._logger.warn(`control manifest fetch failed: ${(err as Error).message}`)
+      // An unreachable marketplace is a designed-in degrade (fail-open to the
+      // cached/empty manifest), not a malfunction — info, not warn.
+      this._logger.info(`control manifest fetch failed: ${(err as Error).message}`)
       return this._controlCache?.manifest ?? EMPTY_CONTROL
     }
   }

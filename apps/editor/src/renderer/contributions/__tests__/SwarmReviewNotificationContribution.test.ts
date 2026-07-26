@@ -66,11 +66,16 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 async function freshModules() {
   vi.resetModules()
+  // After resetModules the contribution imports a FRESH platform instance whose
+  // CommandsRegistry is not the one this file's top-level import sees. Re-import
+  // platform from the same fresh module graph so command stubs land where the
+  // contribution looks.
+  const platform = await import('@universe-editor/platform')
   const contrib = await import('../SwarmReviewNotificationContribution.js')
   const ignore = await import('../../services/swarm/swarmIgnoreStore.js')
   const viewState = await import('../../services/swarm/swarmViewState.js')
   const tick = await import('../../services/swarm/swarmNotificationTick.js')
-  return { contrib, ignore, viewState, tick }
+  return { contrib, ignore, viewState, tick, platform }
 }
 
 interface SetupOpts {
@@ -88,7 +93,14 @@ interface SetupOpts {
 }
 
 async function setup(opts: SetupOpts = {}) {
-  const { contrib, ignore, tick, viewState } = await freshModules()
+  const { contrib, ignore, tick, viewState, platform } = await freshModules()
+
+  // The contribution skips its poll when the dashboard command isn't registered
+  // (non-Perforce workspace); stand in for the perforce extension's registration.
+  const dashboardCommand = platform.CommandsRegistry.registerCommand(
+    'perforce.swarm.dashboard',
+    () => undefined,
+  )
 
   const storage = fakeStorage(
     opts.ignoredIds?.length
@@ -154,6 +166,10 @@ async function setup(opts: SetupOpts = {}) {
     executeCommand,
     tick,
     viewState,
+    dispose: () => {
+      instance.dispose()
+      dashboardCommand.dispose()
+    },
     setDashboard: (needsAction: SwarmReviewDto[], authored: SwarmReviewDto[] = []) => {
       current = dashboard(needsAction, authored)
     },
@@ -164,13 +180,31 @@ async function setup(opts: SetupOpts = {}) {
 describe('SwarmReviewNotificationContribution', () => {
   beforeEach(() => vi.clearAllMocks())
 
+  it('skips the poll silently when the dashboard command is not registered', async () => {
+    const { contrib, platform } = await freshModules()
+    expect(platform.CommandsRegistry.getCommand('perforce.swarm.dashboard')).toBeUndefined()
+    const executeCommand = vi.fn(async (): Promise<unknown> => undefined)
+    const instance = new contrib.SwarmReviewNotificationContribution(
+      { executeCommand } as never,
+      { notify: vi.fn() } as never,
+      { get: () => true } as never,
+      fakeStorage(),
+      { current: null } as never,
+      { notify: vi.fn(), dismiss: vi.fn() } as never,
+    )
+    await flush()
+    await instance.refresh()
+    expect(executeCommand).not.toHaveBeenCalled()
+    instance.dispose()
+  })
+
   it('does not notify for reviews already present at launch (priming poll)', async () => {
     // Review '1' is actionable when the contribution is constructed, so the priming
     // poll records it as baseline. A later poll with the same list must stay silent.
     const t = await setup({ initialNeedsAction: [review('1')] })
     await t.refresh()
     expect(t.notify).not.toHaveBeenCalled()
-    t.instance.dispose()
+    t.dispose()
   })
 
   it('notifies once when a new review enters the list', async () => {
@@ -179,7 +213,7 @@ describe('SwarmReviewNotificationContribution', () => {
     await t.refresh()
     expect(t.notify).toHaveBeenCalledTimes(1)
     expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #1: fix login' })
-    t.instance.dispose()
+    t.dispose()
   })
 
   it('forces a cache-bypassing dashboard fetch on every poll', async () => {
@@ -195,7 +229,7 @@ describe('SwarmReviewNotificationContribution', () => {
       }
     }
     expect(t.executeCommand.mock.calls.some((c) => c[0] === 'perforce.swarm.dashboard')).toBe(true)
-    t.instance.dispose()
+    t.dispose()
   })
 
   it('does not re-notify an already-notified review', async () => {
@@ -204,7 +238,7 @@ describe('SwarmReviewNotificationContribution', () => {
     await t.refresh()
     await t.refresh()
     expect(t.notify).toHaveBeenCalledTimes(1)
-    t.instance.dispose()
+    t.dispose()
   })
 
   it('merges several new reviews into a single notification', async () => {
@@ -213,7 +247,7 @@ describe('SwarmReviewNotificationContribution', () => {
     await t.refresh()
     expect(t.notify).toHaveBeenCalledTimes(1)
     expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: '3 new reviews need your action' })
-    t.instance.dispose()
+    t.dispose()
   })
 
   it('does not notify when perforce.swarm.notifications.enabled is false', async () => {
@@ -221,7 +255,7 @@ describe('SwarmReviewNotificationContribution', () => {
     t.setDashboard([review('1')])
     await t.refresh()
     expect(t.notify).not.toHaveBeenCalled()
-    t.instance.dispose()
+    t.dispose()
   })
 
   it('excludes ignored reviews from the notification', async () => {
@@ -230,7 +264,7 @@ describe('SwarmReviewNotificationContribution', () => {
     await t.refresh()
     expect(t.notify).toHaveBeenCalledTimes(1)
     expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #1: review 1' })
-    t.instance.dispose()
+    t.dispose()
   })
 
   it('excludes reviews authored by the current user from the notification', async () => {
@@ -240,7 +274,7 @@ describe('SwarmReviewNotificationContribution', () => {
     await t.refresh()
     expect(t.notify).toHaveBeenCalledTimes(1)
     expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #2: review 2' })
-    t.instance.dispose()
+    t.dispose()
   })
 
   it('publishes the sidebar-scope needs-action count (own reviews included) for the badge', async () => {
@@ -251,7 +285,7 @@ describe('SwarmReviewNotificationContribution', () => {
     t.setDashboard([ownReview, review('2', { author: 'bob' })], [ownReview])
     await t.refresh()
     expect(t.viewState.swarmNeedsActionCount.observable.get()).toBe(2)
-    t.instance.dispose()
+    t.dispose()
   })
 
   it('drops ignored reviews from the published badge count', async () => {
@@ -259,7 +293,7 @@ describe('SwarmReviewNotificationContribution', () => {
     t.setDashboard([review('1'), review('2')])
     await t.refresh()
     expect(t.viewState.swarmNeedsActionCount.observable.get()).toBe(1)
-    t.instance.dispose()
+    t.dispose()
   })
 
   it('applies the author filter (only configured authors notify)', async () => {
@@ -268,7 +302,7 @@ describe('SwarmReviewNotificationContribution', () => {
     await t.refresh()
     expect(t.notify).toHaveBeenCalledTimes(1)
     expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #2: review 2' })
-    t.instance.dispose()
+    t.dispose()
   })
 
   it('applies the approvable-only filter using loaded transitions', async () => {
@@ -283,7 +317,7 @@ describe('SwarmReviewNotificationContribution', () => {
     await t.refresh()
     expect(t.notify).toHaveBeenCalledTimes(1)
     expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #1: review 1' })
-    t.instance.dispose()
+    t.dispose()
   })
 
   it('on click of a single-review notification opens that review', async () => {
@@ -292,7 +326,7 @@ describe('SwarmReviewNotificationContribution', () => {
     await t.refresh()
     await flush()
     expect(t.executeCommand).toHaveBeenCalledWith('swarm.openReview', '42')
-    t.instance.dispose()
+    t.dispose()
   })
 
   it('on click of a multi-review notification focuses the Swarm view', async () => {
@@ -301,7 +335,7 @@ describe('SwarmReviewNotificationContribution', () => {
     await t.refresh()
     await flush()
     expect(t.executeCommand).toHaveBeenCalledWith('swarm.openReviews')
-    t.instance.dispose()
+    t.dispose()
   })
 
   it('appends the workspace folder name on a second body line', async () => {
@@ -311,7 +345,7 @@ describe('SwarmReviewNotificationContribution', () => {
     expect(t.notify.mock.calls[0]![0]).toMatchObject({
       body: 'Review #1: fix login\nuniverse-editor',
     })
-    t.instance.dispose()
+    t.dispose()
   })
 
   // Repro for "自动通知没生效": the OS toast is gated main-side while the window is
@@ -340,7 +374,7 @@ describe('SwarmReviewNotificationContribution', () => {
       expect(t.executeCommand).toHaveBeenCalledWith('swarm.openReview', '42')
       // Clicking the action dismisses the sticky toast.
       expect(t.dismiss).toHaveBeenCalledWith('n1')
-      t.instance.dispose()
+      t.dispose()
     })
 
     it('routes a multi-review fallback action to the Swarm Reviews view', async () => {
@@ -354,7 +388,7 @@ describe('SwarmReviewNotificationContribution', () => {
       }
       opts.actions![0]!.run()
       expect(t.executeCommand).toHaveBeenCalledWith('swarm.openReviews')
-      t.instance.dispose()
+      t.dispose()
     })
 
     it('does not raise the in-app fallback when the OS toast was shown', async () => {
@@ -364,7 +398,7 @@ describe('SwarmReviewNotificationContribution', () => {
       await flush()
       expect(t.notify).toHaveBeenCalledTimes(1)
       expect(t.inAppNotify).not.toHaveBeenCalled()
-      t.instance.dispose()
+      t.dispose()
     })
 
     it('stays silent when notifications are disabled', async () => {
@@ -374,7 +408,7 @@ describe('SwarmReviewNotificationContribution', () => {
       await flush()
       expect(t.notify).not.toHaveBeenCalled()
       expect(t.inAppNotify).not.toHaveBeenCalled()
-      t.instance.dispose()
+      t.dispose()
     })
   })
 
@@ -392,12 +426,12 @@ describe('SwarmReviewNotificationContribution', () => {
       await flush()
       expect(t.notify).toHaveBeenCalledTimes(1)
       expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #7: fix crash' })
-      t.instance.dispose()
+      t.dispose()
     })
 
     it('is a no-op after the contribution is disposed (handler unregistered)', async () => {
       const t = await setup()
-      t.instance.dispose()
+      t.dispose()
       t.setDashboard([review('9')])
       await t.tick.driveSwarmNotificationTick()
       await flush()

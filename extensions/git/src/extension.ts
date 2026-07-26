@@ -63,10 +63,22 @@ export function pickStatusBarRoot(repos: readonly DiscoveredRepo[]): string {
   return [...repos].sort((a, b) => norm(a.root).localeCompare(norm(b.root)))[0]!.root
 }
 
+// With no git repo the real commands never register, but a restored Git Graph
+// tab still queries them. Stubs answer "no repos / unavailable" so the view
+// settles instead of spinning on unregistered commands.
+function registerGitGraphStubs(context: ExtensionContext): void {
+  context.subscriptions.push(
+    commands.registerCommand('git-graph.getRepos', () => []),
+    commands.registerCommand('git-graph.getCommits', () => null),
+    commands.registerCommand('git-graph.setRepo', () => undefined),
+  )
+}
+
 export async function activate(context: ExtensionContext): Promise<void> {
   const root = workspace.rootPath
   if (!root) {
-    console.error('[git] no workspace folder open; git source control disabled')
+    console.info('[git] no workspace folder open; git source control disabled')
+    registerGitGraphStubs(context)
     return
   }
 
@@ -83,7 +95,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // on every file switch. Files outside a git repo have no HEAD content → null.
     context.subscriptions.push(commands.registerCommand('git.getHeadContent', () => null))
 
-    console.error(`[git] no git repository found under ${root}; source control disabled`)
+    registerGitGraphStubs(context)
+    console.info(`[git] no git repository found under ${root}; source control disabled`)
     return
   }
 
