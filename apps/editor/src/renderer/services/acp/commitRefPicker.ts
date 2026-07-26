@@ -20,6 +20,7 @@ import {
   URI,
 } from '@universe-editor/platform'
 import { scmViewState } from '../../workbench/scm/scmViewState.js'
+import { relativeTime } from '../../relativeTime.js'
 import { IScmService } from '../extensions/ScmService.js'
 import type { PromptRef } from './promptRef.js'
 
@@ -50,7 +51,7 @@ function toQuickPickItem(commit: GitGraphCommitDto): CommitQuickPickItem {
   return {
     id: commit.hash,
     label: `${shortHash} ${commit.message}`,
-    description: commit.author,
+    description: `${commit.author} · ${relativeTime(commit.date * 1000)}`,
     detail: formatCommitDate(commit.date),
     commit,
   }
@@ -100,6 +101,11 @@ export class CommitRefPicker {
     })
     qp.matchOnDescription = true
     qp.matchOnDetail = true
+    // Rows carry a trailing `author · time` column: widen the panel and keep
+    // the column intact (long subjects truncate with an ellipsis instead of
+    // squeezing the metadata away).
+    qp.width = 760
+    qp.preserveDescription = true
     qp.busy = true
     qp.show()
 

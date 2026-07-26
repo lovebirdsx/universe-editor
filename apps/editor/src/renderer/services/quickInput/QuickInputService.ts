@@ -80,6 +80,8 @@ export class QuickInputService implements IQuickInputService {
     let _matchOnDescription = false
     let _matchOnDetail = false
     let _presentation: QuickPickPresentation = 'default'
+    let _width: number | undefined
+    let _preserveDescription = false
     let _valueSelection: [number, number] | undefined
     let _activeItems: readonly T[] = []
     let _title: string | undefined
@@ -104,6 +106,8 @@ export class QuickInputService implements IQuickInputService {
         matchOnDescription: _matchOnDescription,
         matchOnDetail: _matchOnDetail,
         presentation: _presentation,
+        width: _width,
+        preserveDescription: _preserveDescription,
         valueSelection: _valueSelection,
         activeItems: _activeItems,
         title: _title,
@@ -199,6 +203,20 @@ export class QuickInputService implements IQuickInputService {
       },
       set presentation(v) {
         _presentation = v
+        pushState()
+      },
+      get width() {
+        return _width
+      },
+      set width(v) {
+        _width = v
+        pushState()
+      },
+      get preserveDescription() {
+        return _preserveDescription
+      },
+      set preserveDescription(v) {
+        _preserveDescription = v
         pushState()
       },
       get busy() {

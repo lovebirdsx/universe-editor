@@ -22,6 +22,7 @@ import {
   type QuickPickPresentation,
 } from '@universe-editor/platform'
 import { afterEach, describe, expect, it } from 'vitest'
+import { relativeTime } from '../../../relativeTime.js'
 import { scmViewState } from '../../../workbench/scm/scmViewState.js'
 import { CommitRefPicker } from '../commitRefPicker.js'
 
@@ -303,11 +304,14 @@ describe('CommitRefPicker', () => {
       { maxCommits: 200, order: 'date', includeRemotes: true },
     ])
     expect(quickInput.picker?.busy).toBe(false)
+    // Wide panel + preserved description keep the trailing `author · time`
+    // column from being squeezed by long subjects.
+    expect(quickInput.picker).toMatchObject({ width: 760, preserveDescription: true })
     expect(quickInput.picker?.items).toHaveLength(1)
     expect(quickInput.picker?.items[0]).toMatchObject({
       id: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
       label: 'a1b2c3d fix login bug',
-      description: 'Alice',
+      description: `Alice · ${relativeTime(1700000000 * 1000)}`,
     })
 
     quickInput.picker?.accept(quickInput.picker.items[0] as IQuickPickItem)

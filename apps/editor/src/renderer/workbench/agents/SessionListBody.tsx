@@ -38,6 +38,7 @@ import {
   useScrollRestore,
 } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
+import { relativeTime } from '../../relativeTime.js'
 import { IAcpSessionService, type IAcpSession } from '../../services/acp/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
@@ -78,22 +79,6 @@ function filterSessions(
     .filter((s) => s.score >= 0)
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .map((s) => s.entry)
-}
-
-function relativeTime(timestamp: number): string {
-  const diff = Date.now() - timestamp
-  if (diff < 60_000) return localize('agent.history.justNow', 'just now')
-  if (diff < 3_600_000)
-    return localize('agent.history.minutesAgo', '{count}m ago', {
-      count: Math.floor(diff / 60_000),
-    })
-  if (diff < 86_400_000)
-    return localize('agent.history.hoursAgo', '{count}h ago', {
-      count: Math.floor(diff / 3_600_000),
-    })
-  return localize('agent.history.daysAgo', '{count}d ago', {
-    count: Math.floor(diff / 86_400_000),
-  })
 }
 
 const FALLBACK_RATE = 7.2

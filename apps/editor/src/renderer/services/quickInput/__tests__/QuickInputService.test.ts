@@ -193,4 +193,20 @@ describe('QuickInputService — onDidChangeState', () => {
 
     qp.dispose()
   })
+
+  it('width / preserveDescription flow into the pushed pick state', () => {
+    const { svc } = createService()
+    const qp = svc.createQuickPick()
+    qp.show()
+
+    expect(svc.currentState?.width).toBeUndefined()
+    expect(svc.currentState?.preserveDescription).toBe(false)
+
+    qp.width = 760
+    qp.preserveDescription = true
+    expect(svc.currentState?.width).toBe(760)
+    expect(svc.currentState?.preserveDescription).toBe(true)
+
+    qp.dispose()
+  })
 })

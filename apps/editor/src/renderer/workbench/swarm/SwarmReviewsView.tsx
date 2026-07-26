@@ -49,6 +49,7 @@ import {
   type SwarmTransitionRequest,
 } from '@universe-editor/extensions-common'
 import { useService } from '../useService.js'
+import { relativeTime } from '../../relativeTime.js'
 import { SwarmReviewEditorInput } from '../../services/editor/SwarmReviewEditorInput.js'
 import {
   resolveSwarmReviewsRefresh,
@@ -99,23 +100,6 @@ const STATE_ICON: Record<string, { icon: LucideIcon; className: string | undefin
   approved: { icon: CircleCheck, className: styles['stateApproved'] },
   rejected: { icon: CircleX, className: styles['stateRejected'] },
   archived: { icon: Archive, className: styles['stateArchived'] },
-}
-
-/** Relative last-updated label, matching the agent session history wording. */
-function relativeTime(timestamp: number): string {
-  const diff = Date.now() - timestamp
-  if (diff < 60_000) return localize('agent.history.justNow', 'just now')
-  if (diff < 3_600_000)
-    return localize('agent.history.minutesAgo', '{count}m ago', {
-      count: Math.floor(diff / 60_000),
-    })
-  if (diff < 86_400_000)
-    return localize('agent.history.hoursAgo', '{count}h ago', {
-      count: Math.floor(diff / 3_600_000),
-    })
-  return localize('agent.history.daysAgo', '{count}d ago', {
-    count: Math.floor(diff / 86_400_000),
-  })
 }
 
 type GroupKey = 'needsAction' | 'ignored' | 'authored'

@@ -24,6 +24,10 @@ export interface QuickPickState {
   matchOnDetail?: boolean | undefined
   filterMode?: QuickPickFilterMode | undefined
   presentation?: QuickPickPresentation | undefined
+  /** Container width in px, overriding the CSS default. */
+  width?: number | undefined
+  /** When true, row descriptions keep their content width and the label truncates first. */
+  preserveDescription?: boolean | undefined
   filterExternally?: boolean | undefined
   quickNavigate?: { modifier: 'ctrl'; initialSelectionIndex?: number } | undefined
   /** Show an indeterminate progress bar at the top of the panel. */

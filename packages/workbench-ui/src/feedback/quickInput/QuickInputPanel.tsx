@@ -330,6 +330,7 @@ export function QuickPickPanel({
   const filterExternally = state.filterExternally === true
   const autoFocusFirstItem = state.autoFocusFirstItem !== false
   const compact = state.presentation === 'compact'
+  const preserveDescription = state.preserveDescription === true
   const hasIconColumn = useMemo(
     () => (state.items ?? []).some((item) => !isSeparator(item) && item.iconId !== undefined),
     [state.items],
@@ -368,6 +369,10 @@ export function QuickPickPanel({
     const max = (typeof window !== 'undefined' ? window.innerWidth : 1000) * 0.9
     return Math.round(Math.max(MIN_CONTAINER_WIDTH, Math.min(total, max)))
   }, [hasStatusColumn, hasIconColumn, state.items, state.placeholder])
+
+  // An explicit host width (e.g. the commit picker's trailing author/time
+  // column) wins over the measured shrink-to-fit width.
+  const containerWidth = state.width ?? contentWidth
 
   useLayoutEffect(() => {
     inputRef.current?.focus()
@@ -666,7 +671,7 @@ export function QuickPickPanel({
       role="dialog"
       aria-modal
       data-testid="quick-input"
-      {...(contentWidth !== undefined ? { style: { width: contentWidth } } : {})}
+      {...(containerWidth !== undefined ? { style: { width: containerWidth } } : {})}
     >
       {state.title !== undefined && state.title !== '' && (
         <div className={styles['titleBar']} data-testid="quick-input-title">
@@ -809,7 +814,9 @@ export function QuickPickPanel({
                         {renderHighlightedText(item.label, item.highlights?.label)}
                       </span>
                       {item.description && (
-                        <span className={styles['itemDesc']}>
+                        <span
+                          className={`${styles['itemDesc']} ${preserveDescription ? styles['itemDescKeep'] : ''}`}
+                        >
                           {renderHighlightedText(item.description, item.highlights?.description)}
                         </span>
                       )}

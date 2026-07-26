@@ -176,6 +176,18 @@ export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
   matchOnDetail: boolean
   presentation: QuickPickPresentation
   /**
+   * Container width in px, overriding the CSS default. Used by pickers whose
+   * rows carry wide trailing metadata (e.g. the `#` commit picker). Defaults
+   * to undefined (CSS default).
+   */
+  width?: number | undefined
+  /**
+   * When true, each row's description keeps its content width (capped at 45%
+   * of the row) and the label truncates first. Defaults to false — the
+   * description collapses first, tuned for file-picker paths.
+   */
+  preserveDescription?: boolean
+  /**
    * When true, the picker UI shows an indeterminate progress bar at the top.
    * Used while resolving items asynchronously (search results, dynamic completion, ...).
    */

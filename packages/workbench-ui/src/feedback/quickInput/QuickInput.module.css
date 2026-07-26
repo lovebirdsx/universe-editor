@@ -241,6 +241,15 @@
   width: 8px;
 }
 
+/* Opt-in (preserveDescription): the trailing metadata column keeps its content
+   width and the label truncates first, instead of the description collapsing
+   (the default above, tuned for file-picker paths). Capped so a very long
+   description can never swallow the row. Must follow .itemDesc to win. */
+.itemDescKeep {
+  flex: 0 0 auto;
+  max-width: 45%;
+}
+
 .separator {
   box-sizing: border-box;
   height: 30px;
