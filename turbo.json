@@ -1,6 +1,6 @@
 {
   "$schema": "https://v2-10-3.turborepo.dev/schema.json",
-  "//": "typecheck dependsOn ^build (not ^typecheck): extensions typecheck with `tsgo --noEmit` and resolve upstream package types from dist/*.d.ts, which only `build` produces. typecheck.outputs is [] (never caches dist), so depending on ^build means a typecheck cache hit still restores upstream dist (build.outputs) to disk first — otherwise a clean CI checkout sees missing .d.ts and fails TS2307. --- e2e: every e2e task drives the PACKAGED editor (apps/editor/out) + reads built-in extensions from their repo `extensions/<ext>/dist`; an extension does NOT depend on @universe-editor/editor (dep runs the other way), so the global e2e task depends on `@universe-editor/editor#build` to keep the host fresh. The editor's own e2e suite activates git/typescript/markdown via its scoped core*App fixtures; those are declared devDependencies of @universe-editor/editor (so turbo affected re-runs core when they change — see scripts/e2e/affected-e2e-matrix.mjs), which also means the editor#e2e `^build` builds them automatically — no per-extension #build override needed. Net: `turbo run e2e --filter=<anything>` always builds a fresh host + the exact extensions the suite exercises.",
+  "//": "typecheck dependsOn build + ^build (not ^typecheck): extensions typecheck with `tsgo --noEmit` and resolve upstream package types from dist/*.d.ts, which only `build` produces; ^build means a typecheck cache hit still restores upstream dist (build.outputs) to disk first — otherwise a clean CI checkout sees missing .d.ts and fails TS2307. The own-package `build` dep exists because library packages' typecheck script is `tsgo --build`, which EMITS into dist/ — without the edge, `turbo run typecheck` schedules e.g. workbench-ui#typecheck concurrently with workbench-ui#build (pulled in as a downstream ^build dep), two tsgo processes rewrite the same dist/, and turbo tars build.outputs while the other writer is mid-write: the cached artifact then contains truncated/empty .js files and every later run that restores it fails with undefined imports (CI-only, unreproducible locally). Ordering typecheck after build makes its tsgo a no-op. @universe-editor/editor#typecheck keeps plain ^build: all its tsconfigs are noEmit (no dist collision) and its build is the heavy electron-vite bundle that typecheck shouldn't drag in. --- e2e: every e2e task drives the PACKAGED editor (apps/editor/out) + reads built-in extensions from their repo `extensions/<ext>/dist`; an extension does NOT depend on @universe-editor/editor (dep runs the other way), so the global e2e task depends on `@universe-editor/editor#build` to keep the host fresh. The editor's own e2e suite activates git/typescript/markdown via its scoped core*App fixtures; those are declared devDependencies of @universe-editor/editor (so turbo affected re-runs core when they change — see scripts/e2e/affected-e2e-matrix.mjs), which also means the editor#e2e `^build` builds them automatically — no per-extension #build override needed. Net: `turbo run e2e --filter=<anything>` always builds a fresh host + the exact extensions the suite exercises.",
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -19,6 +19,10 @@
       "outputs": ["dist/**", "out/**", "*.tsbuildinfo"]
     },
     "typecheck": {
+      "dependsOn": ["build", "^build"],
+      "outputs": []
+    },
+    "@universe-editor/editor#typecheck": {
       "dependsOn": ["^build"],
       "outputs": []
     },
