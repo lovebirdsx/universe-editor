@@ -117,7 +117,6 @@ export class ShowLogsAction extends Action2 {
       id: ShowLogsAction.ID,
       title: localize2('action.showLogs.title', 'Developer: Show Logs...'),
       category: localize2('command.category.help', 'Help'),
-      keybinding: { primary: 'ctrl+shift+u' },
       f1: true,
     })
   }
@@ -173,6 +172,7 @@ export class ShowOutputChannelAction extends Action2 {
     super({
       id: ShowOutputChannelAction.ID,
       title: localize2('action.showOutputChannel.title', 'Output: Show Output Channels...'),
+      keybinding: { primary: 'ctrl+shift+u' },
       category: localize2('command.category.view', 'View'),
       f1: true,
     })
