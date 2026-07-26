@@ -35,13 +35,6 @@ function jsToTsResolvePlugin(): Plugin {
   }
 }
 
-const decoratorTsconfigRaw = {
-  compilerOptions: {
-    experimentalDecorators: true,
-    useDefineForClassFields: false,
-  },
-} as const
-
 // rolldown-vite drops the `external` arrays electron-vite injects via config-hook
 // plugins (the preset + externalizeDeps), so declare them literally: electron +
 // every package.json dependency (mirrors externalizeDeps semantics).
@@ -61,9 +54,6 @@ export default defineConfig({
       alias: {
         '@universe-editor/platform': platformSrc,
       },
-    },
-    esbuild: {
-      tsconfigRaw: decoratorTsconfigRaw,
     },
     build: {
       // Dev only: the main sourcemap (~1.2MB) is dead weight inside the asar in
@@ -126,23 +116,20 @@ export default defineConfig({
         'react-dom',
         'react-dom/client',
       ],
-      esbuildOptions: {
-        tsconfigRaw: decoratorTsconfigRaw,
+      rolldownOptions: {
         plugins: [
           {
             name: 'universe-editor:monaco-nls',
-            setup(build) {
-              build.onLoad({ filter: /nls\.js$/ }, (args) => {
-                if (!args.path.replace(/\\/g, '/').endsWith(NLS_FILE_SUFFIX)) return undefined
-                return { contents: patchNlsSource(readFileSync(args.path, 'utf-8')), loader: 'js' }
-              })
+            load: {
+              filter: { id: /nls\.js$/ },
+              handler(id) {
+                if (!id.replace(/\\/g, '/').endsWith(NLS_FILE_SUFFIX)) return null
+                return patchNlsSource(readFileSync(id, 'utf-8'))
+              },
             },
           },
         ],
       },
-    },
-    esbuild: {
-      tsconfigRaw: decoratorTsconfigRaw,
     },
     server: {
       warmup: {
