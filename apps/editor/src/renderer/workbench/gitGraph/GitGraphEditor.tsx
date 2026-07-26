@@ -1527,9 +1527,10 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     return idx
   }, [selection, filteredCommits])
 
+  const isFiltering = deferredQuery.trim() !== ''
+
   const layout = useMemo(() => {
     if (!result) return null
-    const isFiltering = deferredQuery.trim() !== ''
     const filteredHashSet = isFiltering ? new Set(filteredCommits.map((c) => c.hash)) : null
     const commits = filteredCommits.map((c) => ({
       hash: c.hash,
@@ -1542,10 +1543,13 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       onlyFollowFirstParent: settings.onlyFollowFirstParent,
       ...(anchorIndex >= 0 ? { expand: { afterIndex: anchorIndex, height: DETAIL_HEIGHT } } : {}),
     })
-  }, [result, filteredCommits, anchorIndex, settings.onlyFollowFirstParent, deferredQuery])
+  }, [result, filteredCommits, anchorIndex, settings.onlyFollowFirstParent, isFiltering])
 
   const graphWidth = layout?.width ?? GRID.offsetX * 2
-  const isCompact = (layout?.laneCount ?? 0) > 6
+  // Lane collapse only applies while searching; the normal view always renders
+  // the full swim-lane graph no matter how many lanes it needs.
+  const isCompact = isFiltering && (layout?.laneCount ?? 0) > 6
+  const effectiveGraphWidth = isCompact ? GRID.offsetX * 2 : graphWidth
   const selected = useMemo(() => new Set(selection), [selection])
   const detailTree = useMemo(() => (details ? buildFileTree(details.files) : []), [details])
   const compareTree = useMemo(
@@ -1801,7 +1805,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           }}
         >
           <div className={styles['header']}>
-            <span className={styles['graphSpacer']} style={{ width: graphWidth }} />
+            <span className={styles['graphSpacer']} style={{ width: effectiveGraphWidth }} />
             <span className={styles['headerDescription']}>
               {localize('gitGraph.header.description', 'Description')}
             </span>
@@ -1820,7 +1824,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           <div className={styles['canvas']} style={{ height: layout.height }}>
             <svg
               className={styles['graphSvg']}
-              width={isCompact ? GRID.offsetX * 2 : graphWidth}
+              width={effectiveGraphWidth}
               height={layout.height}
               aria-hidden="true"
             >
@@ -1880,7 +1884,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
               className={styles['rows']}
               style={
                 {
-                  '--graph-width': `${isCompact ? GRID.offsetX * 2 : graphWidth}px`,
+                  '--graph-width': `${effectiveGraphWidth}px`,
                   '--col-author': `${columnWidths.author}px`,
                   '--col-date': `${columnWidths.date}px`,
                 } as CSSProperties
