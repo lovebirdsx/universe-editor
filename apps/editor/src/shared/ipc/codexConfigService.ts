@@ -177,6 +177,12 @@ export interface ICodexConfigService {
   readProfiles(): Promise<CodexCredentialProfile[]>
   /** Replace the saved credential library in aiSettings.json (atomic merge). */
   writeProfiles(profiles: CodexCredentialProfile[]): Promise<void>
+  /**
+   * Probe a gateway `baseUrl` over HTTP. Resolves `true` when the server answers
+   * with any status (a 401/404 still proves reachability); `false` on network
+   * errors / timeouts / malformed URLs. Powers the status dot in the UI.
+   */
+  checkGatewayConnectivity(baseUrl: string): Promise<boolean>
 }
 
 export const ICodexConfigService = createDecorator<ICodexConfigService>('codexConfigService')

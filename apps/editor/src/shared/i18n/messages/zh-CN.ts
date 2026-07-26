@@ -1383,6 +1383,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '该网关提供的可选快速 / 后台模型。留空则清除该项。',
   'agentSettings.auth.gateway': '自定义网关 / 认证 token',
   'agentSettings.auth.inUse': '使用中',
+  'agentSettings.connectivity.checking': '正在检测连通性…',
+  'agentSettings.connectivity.fail': '网关不可达',
+  'agentSettings.connectivity.ok': '网关可连通',
   'agentSettings.auth.library': '已保存凭据',
   'agentSettings.auth.library.add': '添加凭据',
   'agentSettings.auth.library.empty':

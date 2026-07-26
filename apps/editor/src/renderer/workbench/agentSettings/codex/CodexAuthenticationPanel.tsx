@@ -19,13 +19,15 @@ import { CheckCircle2, CircleAlert, KeyRound, Network, Pencil, Plus, Trash2 } fr
 import { localize, INotificationService, Severity } from '@universe-editor/platform'
 import { Button, IconButton, Input } from '@universe-editor/workbench-ui'
 import { useService } from '../../useService.js'
-import type {
-  CodexCredentialDraft,
-  CodexCredentialProfile,
+import {
+  ICodexConfigService,
+  type CodexCredentialDraft,
+  type CodexCredentialProfile,
 } from '../../../../shared/ipc/codexConfigService.js'
 import type { UseCodexConfig } from './useCodexConfig.js'
 import { runCodexLogin } from './codexLogin.js'
 import { ConfigFileLink, getSiblingConfigPath } from '../ConfigFileLink.js'
+import { ConnectivityDot } from '../ConnectivityDot.js'
 import styles from '../AgentSettingsEditor.module.css'
 
 /** Show only a hint of a secret: first 4 + last 2 characters. */
@@ -205,12 +207,21 @@ function ProfileRow({
   onDelete: () => void
 }) {
   const Icon = profile.kind === 'apiKey' ? KeyRound : Network
+  const configService = useService<ICodexConfigService>(ICodexConfigService)
+  const probe = useCallback(
+    (url: string) => configService.checkGatewayConnectivity(url),
+    [configService],
+  )
   const detail =
     profile.kind === 'apiKey'
       ? mask(profile.apiKey)
       : `${profile.baseUrl ?? ''} · ${mask(profile.apiKey)}`
   return (
     <div className={styles['profileRow']}>
+      <ConnectivityDot
+        baseUrl={profile.kind === 'gateway' ? profile.baseUrl : undefined}
+        probe={probe}
+      />
       <Icon size={16} strokeWidth={1.75} className={styles['navIcon']} />
       <div className={styles['profileBody']}>
         <div className={styles['radioTitleRow']}>

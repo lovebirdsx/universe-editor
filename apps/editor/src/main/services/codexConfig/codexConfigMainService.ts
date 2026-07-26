@@ -36,6 +36,7 @@ import type {
 } from '../../../shared/ipc/codexConfigService.js'
 import type { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
 import { readAiSettingsAgentState, updateAiSettingsAgentState } from '../ai/aiSettingsAgentState.js'
+import { probeGatewayConnectivity } from '../agentSettings/gatewayConnectivity.js'
 
 interface CodexAgentSettingsState {
   authentication?: {
@@ -221,6 +222,12 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
       `auth status: active=${active} hasApiKey=${hasApiKey} chatgptExpired=${status.chatgpt?.expired ?? 'n/a'}`,
     )
     return status
+  }
+
+  async checkGatewayConnectivity(baseUrl: string): Promise<boolean> {
+    const reachable = await probeGatewayConnectivity(baseUrl)
+    this._logger.info(`gateway probe ${baseUrl} -> ${reachable ? 'reachable' : 'unreachable'}`)
+    return reachable
   }
 
   async readProfiles(): Promise<CodexCredentialProfile[]> {

@@ -20,14 +20,16 @@ import { CheckCircle2, CircleAlert, KeyRound, Network, Pencil, Plus, Trash2 } fr
 import { localize, INotificationService, Severity } from '@universe-editor/platform'
 import { Button, IconButton, Input } from '@universe-editor/workbench-ui'
 import { useService } from '../../useService.js'
-import type {
-  ClaudeAuthStatus,
-  ClaudeCredentialDraft,
-  ClaudeCredentialProfile,
+import {
+  IClaudeConfigService,
+  type ClaudeAuthStatus,
+  type ClaudeCredentialDraft,
+  type ClaudeCredentialProfile,
 } from '../../../../shared/ipc/claudeConfigService.js'
 import type { UseClaudeConfig } from './useClaudeConfig.js'
 import { runClaudeLogin } from './claudeLogin.js'
 import { ConfigFileLink } from '../ConfigFileLink.js'
+import { ConnectivityDot } from '../ConnectivityDot.js'
 import styles from '../AgentSettingsEditor.module.css'
 
 const API_KEY = 'ANTHROPIC_API_KEY'
@@ -209,12 +211,21 @@ function ProfileRow({
   onDelete: () => void
 }) {
   const Icon = profile.kind === 'apiKey' ? KeyRound : Network
+  const configService = useService<IClaudeConfigService>(IClaudeConfigService)
+  const probe = useCallback(
+    (url: string) => configService.checkGatewayConnectivity(url),
+    [configService],
+  )
   const detail =
     profile.kind === 'apiKey'
       ? mask(profile.apiKey)
       : [profile.baseUrl ?? '', profile.model, mask(profile.authToken)].filter((s) => s).join(' · ')
   return (
     <div className={styles['profileRow']}>
+      <ConnectivityDot
+        baseUrl={profile.kind === 'gateway' ? profile.baseUrl : undefined}
+        probe={probe}
+      />
       <Icon size={16} strokeWidth={1.75} className={styles['navIcon']} />
       <div className={styles['profileBody']}>
         <div className={styles['radioTitleRow']}>

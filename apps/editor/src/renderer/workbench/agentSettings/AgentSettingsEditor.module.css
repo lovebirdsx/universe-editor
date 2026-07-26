@@ -283,6 +283,39 @@
   flex: 0 0 auto;
 }
 
+.connDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--ue-descriptionForeground, #888);
+  opacity: 0.45;
+}
+
+.connDotOk {
+  background: var(--ue-charts-green, #3fb950);
+  opacity: 1;
+}
+
+.connDotChecking {
+  animation: connDotPulse 1.2s ease-in-out infinite;
+}
+
+.connDotPlaceholder {
+  width: 8px;
+  flex: 0 0 auto;
+}
+
+@keyframes connDotPulse {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
 .profileForm {
   display: flex;
   flex-direction: column;

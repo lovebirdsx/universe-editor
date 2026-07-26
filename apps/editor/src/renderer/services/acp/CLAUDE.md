@@ -365,7 +365,7 @@ agent 设置是**多 agent 的可扩展子系统**：统一 Settings editor 的�
 - `claude/claudeLogin.ts` — `runClaudeLogin()` 开终端跑 `claude auth login --claudeai|--console`。
 
 #### 跨进程服务三层
-- `shared/ipc/claudeConfigService.ts` — **wire 契约**。`IClaudeConfigService` 装饰器 + 所有类型（`ClaudeSettings`、`ClaudeSettingsPatch`、`ClaudeAuthStatus`、`ClaudeCredentialKind`、`ClaudeCredentialProfile`）。方法：`read`/`patch`/`configPath`/`readAuthStatus`/`readProfiles`/`writeProfiles`。
+- `shared/ipc/claudeConfigService.ts` — **wire 契约**。`IClaudeConfigService` 装饰器 + 所有类型（`ClaudeSettings`、`ClaudeSettingsPatch`、`ClaudeAuthStatus`、`ClaudeCredentialKind`、`ClaudeCredentialProfile`）。方法：`read`/`patch`/`configPath`/`readAuthStatus`/`readProfiles`/`writeProfiles`/`checkGatewayConnectivity`。
 - `main/services/claudeConfig/claudeConfigMainService.ts` — **main 实现**。原子写（mkdir -p + temp + rename），读容错（缺失/损坏返回空）。
 - `main/services/claudeConfig/__tests__/claudeConfigMainService.test.ts` — readAuthStatus（6 例）+ credential profiles（5 例）。
 
@@ -468,7 +468,7 @@ Codex 是接入统一 Settings editor「Agents」组的 acp agent 之一。它**
 - `codex/codexLogin.ts` — `runCodexLogin()` 开集成终端跑 **`codex login`**(系统 PATH 的官方 codex CLI)。**注意:不是 codex-acp**——我们为 agent 下载的 `codex-acp` adapter 没有 `login` 子命令,OAuth 归官方 `codex` CLI。
 
 #### 跨进程服务三层
-- `shared/ipc/codexConfigService.ts` — **wire 契约**。`ICodexConfigService` 装饰器 + 全部类型(`CodexSettings`(含 `model_provider` / `model_providers?: Record<string,unknown>`)/`CodexSettingsPatch`/`CodexAuthStatus`/`CodexCredentialKind`/`CodexCredentialProfile`/**`CodexCredentialIntent`** + 枚举 `CodexReasoningEffort`/`CodexApprovalPolicy`/`CodexSandboxMode`/`CodexCredentialStore`)。方法:`read`/`patch`/`configPath`/`readAuthStatus`/**`applyCredential(intent)`**/`readProfiles`/`writeProfiles` + 事件 `onDidChangeAuth`。`CodexCredentialIntent` 是判别联合:`{kind:'gateway',baseUrl,apiKey,providerName?}` | `{kind:'apiKey',apiKey}` | `{kind:'chatgpt'}`。
+- `shared/ipc/codexConfigService.ts` — **wire 契约**。`ICodexConfigService` 装饰器 + 全部类型(`CodexSettings`(含 `model_provider` / `model_providers?: Record<string,unknown>`)/`CodexSettingsPatch`/`CodexAuthStatus`/`CodexCredentialKind`/`CodexCredentialProfile`/**`CodexCredentialIntent`** + 枚举 `CodexReasoningEffort`/`CodexApprovalPolicy`/`CodexSandboxMode`/`CodexCredentialStore`)。方法:`read`/`patch`/`configPath`/`readAuthStatus`/**`applyCredential(intent)`**/`readProfiles`/`writeProfiles`/`checkGatewayConnectivity` + 事件 `onDidChangeAuth`。`CodexCredentialIntent` 是判别联合:`{kind:'gateway',baseUrl,apiKey,providerName?}` | `{kind:'apiKey',apiKey}` | `{kind:'chatgpt'}`。
 - `main/services/codexConfig/codexConfigMainService.ts` — **main 实现**。`extends Disposable`。原子写(mkdir -p + temp + rename),读容错(缺失/损坏返回空)。核心是 `applyCredential` + 内部纯函数 `reconcileGatewayProvider(current, intent)`(见下「三种登录方案」)。构造里 `_startAuthWatch()`,`override dispose()` 关 watcher。
 - `main/services/codexConfig/__tests__/codexConfigMainService.test.ts` — readAuthStatus(含共存 + 优先级用例)+ `applyCredential`(gateway 自包含 provider 写入 / chatgpt-token 保留 / 残留 base_url 清理 / 保留用户手写 provider 如 `[model_providers.kuro]`)+ profiles + `onDidChangeAuth` 事件。共 31 个用例。
 

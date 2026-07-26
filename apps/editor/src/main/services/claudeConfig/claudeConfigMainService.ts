@@ -27,6 +27,7 @@ import type {
 } from '../../../shared/ipc/claudeConfigService.js'
 import type { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
 import { readAiSettingsAgentState, updateAiSettingsAgentState } from '../ai/aiSettingsAgentState.js'
+import { probeGatewayConnectivity } from '../agentSettings/gatewayConnectivity.js'
 
 interface ClaudeAgentSettingsState {
   authentication?: {
@@ -121,6 +122,12 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
       this._logger.warn(`.credentials.json is not valid JSON at ${path}`)
       return { loggedIn: false, expired: false }
     }
+  }
+
+  async checkGatewayConnectivity(baseUrl: string): Promise<boolean> {
+    const reachable = await probeGatewayConnectivity(baseUrl)
+    this._logger.info(`gateway probe ${baseUrl} -> ${reachable ? 'reachable' : 'unreachable'}`)
+    return reachable
   }
 
   async readProfiles(): Promise<ClaudeCredentialProfile[]> {
