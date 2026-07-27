@@ -56,6 +56,14 @@ function fireLastResizeObserver(width: number, height: number) {
   callback([{ contentRect: { width, height } }])
 }
 
+/** Rendered pane height (allotment's internal split-view-view wrapper), in px. */
+function paneHeightPx(viewTitle: string): number {
+  const pane = screen.getByTestId(`view-pane-${viewTitle}`)
+  const wrapper = pane.closest<HTMLElement>('[data-testid="split-view-view"]')
+  if (!wrapper) throw new Error(`no split-view-view wrapper for ${viewTitle}`)
+  return Number.parseFloat(wrapper.style.height)
+}
+
 function makeStorage(): IStorageService {
   return {
     _serviceBrand: undefined,
@@ -70,9 +78,10 @@ const stubWorkspace = { current: {} } as unknown as IWorkspaceService
 
 const CONTAINER_ID = 'test.container'
 
-function renderSideBar() {
+function renderSideBar(
+  viewDescriptorService = new ViewDescriptorService(makeStorage(), stubWorkspace),
+) {
   const services = new ServiceCollection()
-  const viewDescriptorService = new ViewDescriptorService(makeStorage(), stubWorkspace)
   services.set(IViewDescriptorService, viewDescriptorService)
   const viewsService = new ViewsService(makeStorage(), stubWorkspace, viewDescriptorService)
   viewsService.openViewContainer(CONTAINER_ID)
@@ -159,5 +168,45 @@ describe('ViewPaneContainer', () => {
     act(() => viewDescriptorService.setViewCollapsed('test.view.a', true))
 
     expect(screen.getByTestId('view-pane-test.view.a')).toBeTruthy()
+  })
+
+  it('corrects pane sizes when the persisted-size reconcile lands after the first layout pass', async () => {
+    // main.tsx defers reconcileFromStorage() off the first-paint path, so a
+    // slow WORKSPACE-storage read can resolve AFTER Allotment's ResizeObserver
+    // already committed to a pre-reconcile equal split (300/300 here).
+    let resolveGet: (value: unknown) => void = () => {}
+    const deferredStorage = {
+      _serviceBrand: undefined,
+      get: vi.fn(() => new Promise((resolve) => (resolveGet = resolve))),
+      set: vi.fn().mockResolvedValue(undefined),
+      remove: vi.fn().mockResolvedValue(undefined),
+      onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
+    } as unknown as IStorageService
+
+    const viewDescriptorService = new ViewDescriptorService(deferredStorage, stubWorkspace)
+    renderSideBar(viewDescriptorService)
+
+    act(() => fireLastResizeObserver(800, 600))
+    expect(viewDescriptorService.getViewState('test.view.a').size).toBe(300)
+    expect(viewDescriptorService.getViewState('test.view.b').size).toBe(300)
+    expect(paneHeightPx('test.view.a')).toBe(300)
+    expect(paneHeightPx('test.view.b')).toBe(300)
+
+    const reconcile = viewDescriptorService.reconcileFromStorage()
+    await act(async () => {
+      resolveGet({
+        viewStates: {
+          'test.view.a': { size: 200 },
+          'test.view.b': { size: 400 },
+        },
+      })
+      await reconcile
+    })
+
+    // Allotment ignores a mounted pane's preferredSize prop change — the
+    // reconciled sizes must be applied imperatively via resize(), reflected
+    // in the actual rendered pane heights, not just the service's bookkeeping.
+    expect(paneHeightPx('test.view.a')).toBe(200)
+    expect(paneHeightPx('test.view.b')).toBe(400)
   })
 })

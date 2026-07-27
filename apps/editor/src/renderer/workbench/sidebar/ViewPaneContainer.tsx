@@ -138,6 +138,33 @@ export function ViewPaneContainer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collapsedKey, viewIdsKey])
 
+  // Persisted per-view sizes can be reconciled from WORKSPACE storage AFTER
+  // Allotment's first real layout — main.tsx defers that reconcile off the
+  // first-paint path, while Allotment's ResizeObserver fires independently as
+  // soon as the container has a size (same race WorkbenchLayout corrects for
+  // the top-level sidebar/panel/secondary sizes). Changing a mounted
+  // Allotment.Pane's preferredSize prop afterwards is a no-op — it only updates
+  // the pane's internal bookkeeping for a future add/remove — so a reconcile
+  // landing after the pre-reconcile equal split must be applied imperatively.
+  const storedSizesKey = views
+    .map((v) => (collapsed(v.id) ? '' : String(viewDescriptors.getViewState(v.id).size ?? '')))
+    .join('|')
+  const prevStoredSizesKeyRef = useRef(storedSizesKey)
+  useLayoutEffect(() => {
+    const prevKey = prevStoredSizesKeyRef.current
+    prevStoredSizesKeyRef.current = storedSizesKey
+    const handle = allotmentRef.current
+    const sizes = sizesRef.current
+    if (!handle || prevKey === storedSizesKey || sizes.length !== views.length) return
+    const target = views.map((v, i) =>
+      collapsed(v.id)
+        ? (sizes[i] ?? HEADER_H)
+        : Math.max(OPEN_MIN, viewDescriptors.getViewState(v.id).size ?? sizes[i] ?? OPEN_MIN),
+    )
+    if (target.some((size, i) => Math.abs(size - (sizes[i] ?? 0)) > 1)) handle.resize(target)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storedSizesKey])
+
   // A drag that this container would *merge* in: another container's icon/tab, or
   // a view from another container. A multi-view container leaves single-view
   // placement to its ViewPanes' before/after lines, so it ignores view payloads
