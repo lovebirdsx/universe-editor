@@ -1310,6 +1310,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.elicitation.decline': '拒绝',
   'acp.elicitation.close': '关闭 (Esc)',
   'acp.elicitation.selectPlaceholder': '请选择…',
+  'acp.elicitation.otherPlaceholder': '其他：输入自定义回答…',
   'acp.elicitation.unsupportedMode': '不支持的信息收集模式：{mode}',
   'acp.elicitation.url.hint':
     'Agent 请求你在浏览器中打开以下链接。链接不会自动打开——请确认你信任该地址后再继续。',

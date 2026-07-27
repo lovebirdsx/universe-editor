@@ -2244,6 +2244,17 @@
   gap: 4px;
 }
 
+.elicitationEnumRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.elicitationEnumRow > * {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 .elicitationUrl {
   display: block;
   padding: 6px 8px;

@@ -288,35 +288,28 @@ describe('ElicitationCard — AskUserQuestion folding', () => {
     expect(card.textContent?.match(/detail A/g)).toHaveLength(1)
   })
 
-  it('folds the paired custom field into the dropdown instead of its own row', () => {
+  it('renders the paired custom field as an inline input beside the select, not its own row', () => {
     const h = makePending(askRequest())
     render(renderCard(makeSession('A', h.pending)))
 
+    // No standalone field row for the custom answer…
     expect(screen.queryByTestId('acp-elicitation-field-question_0_custom')).toBeNull()
-    expect(screen.queryByTestId('acp-elicitation-input-question_0_custom')).toBeNull()
-
-    fireEvent.click(screen.getByTestId('acp-elicitation-input-question_0'))
-    fireEvent.click(screen.getByRole('option', { name: /Other/ }))
-
+    // …but its input is always visible next to the select, no "Other" pick needed.
     const input = screen.getByTestId('acp-elicitation-input-question_0_custom')
     expect(input.tagName).toBe('INPUT')
-    expect(screen.getByTestId('acp-elicitation-input-question_0').textContent).toBe('Other')
   })
 
-  it('a typed Other answer replaces the enum selection in the submitted content', () => {
+  it('a typed Other answer clears the enum selection and wins in the submitted content', () => {
     const h = makePending(askRequest())
     render(renderCard(makeSession('A', h.pending)))
 
+    // Select an option first, then type a custom answer — the select resets.
     fireEvent.click(screen.getByTestId('acp-elicitation-input-question_0'))
-    fireEvent.click(screen.getByRole('option', { name: /Other/ }))
+    fireEvent.click(screen.getByRole('option', { name: /Option A/ }))
     fireEvent.change(screen.getByTestId('acp-elicitation-input-question_0_custom'), {
       target: { value: 'my own answer' },
     })
-
-    // The trigger reflects the typed text.
-    expect(screen.getByTestId('acp-elicitation-input-question_0').textContent).toBe(
-      'Other: my own answer',
-    )
+    expect(screen.getByTestId('acp-elicitation-input-question_0').textContent).toBe('Select…')
 
     fireEvent.click(screen.getByTestId('acp-elicitation-submit'))
     expect(h.resolved).toEqual([
@@ -324,32 +317,28 @@ describe('ElicitationCard — AskUserQuestion folding', () => {
     ])
   })
 
-  it('switching back to a concrete option clears the typed custom answer', () => {
+  it('picking a concrete option clears the typed custom answer', () => {
     const h = makePending(askRequest())
     render(renderCard(makeSession('A', h.pending)))
 
-    fireEvent.click(screen.getByTestId('acp-elicitation-input-question_0'))
-    fireEvent.click(screen.getByRole('option', { name: /Other/ }))
     fireEvent.change(screen.getByTestId('acp-elicitation-input-question_0_custom'), {
       target: { value: 'stale' },
     })
-
     fireEvent.click(screen.getByTestId('acp-elicitation-input-question_0'))
     fireEvent.click(screen.getByRole('option', { name: /Option B/ }))
-    expect(screen.queryByTestId('acp-elicitation-input-question_0_custom')).toBeNull()
+    expect(
+      (screen.getByTestId('acp-elicitation-input-question_0_custom') as HTMLInputElement).value,
+    ).toBe('')
 
     fireEvent.click(screen.getByTestId('acp-elicitation-submit'))
     expect(h.resolved).toEqual([{ action: 'accept', content: { question_0: 'opt-b' } }])
   })
 
-  it('picking Other… but leaving it empty submits neither value', () => {
+  it('leaving both the select and the Other input empty submits neither value', () => {
     const h = makePending(askRequest())
     render(renderCard(makeSession('A', h.pending)))
 
-    fireEvent.click(screen.getByTestId('acp-elicitation-input-question_0'))
-    fireEvent.click(screen.getByRole('option', { name: /Other/ }))
     fireEvent.click(screen.getByTestId('acp-elicitation-submit'))
-
     expect(h.resolved).toEqual([{ action: 'accept', content: {} }])
   })
 })
