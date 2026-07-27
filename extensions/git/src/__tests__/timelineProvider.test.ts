@@ -141,15 +141,22 @@ describe('GitTimelineProvider', () => {
     ])
   })
 
-  it('prepends an Uncommitted Changes entry when the working tree differs from HEAD', async () => {
-    const repo = fakeRepo({ getHeadContent: vi.fn(() => Promise.resolve('old')) })
-    const provider = new GitTimelineProvider(fakeManager(repo))
-    mocks.readFile.mockResolvedValue('new')
+  it('prepends an Uncommitted Changes entry when git reports the working tree differs from HEAD', async () => {
+    const provider = new GitTimelineProvider(fakeManager(fakeRepo()))
+    mocks.gitExec.mockImplementation((args: string[]) =>
+      Promise.resolve(
+        args[0] === 'diff' ? { stdout: '', stderr: '', exitCode: 1 } : gitOk(record('c1', 300)),
+      ),
+    )
     mocks.stat.mockResolvedValue({ mtimeMs: 1700000000000 })
-    mocks.gitExec.mockResolvedValue(gitOk(record('c1', 300)))
 
     const page = await provider.provideTimeline(FILE_URI, { limit: 50 }, NO_TOKEN)
 
+    expect(mocks.gitExec).toHaveBeenCalledWith(
+      ['diff', '--quiet', 'HEAD', '--', REL],
+      ROOT,
+      undefined,
+    )
     const first = page?.items[0]
     expect(first?.label).toBe('Uncommitted Changes')
     expect(first?.contextValue).toBe('git:file:working')
@@ -160,10 +167,10 @@ describe('GitTimelineProvider', () => {
   })
 
   it('omits the uncommitted entry for a clean file or when the setting is off', async () => {
-    const repo = fakeRepo({ getHeadContent: vi.fn(() => Promise.resolve('same')) })
-    const provider = new GitTimelineProvider(fakeManager(repo))
-    mocks.readFile.mockResolvedValue('same')
-    mocks.gitExec.mockResolvedValue(gitOk(record('c1', 300)))
+    const provider = new GitTimelineProvider(fakeManager(fakeRepo()))
+    mocks.gitExec.mockImplementation((args: string[]) =>
+      Promise.resolve(args[0] === 'diff' ? gitOk('') : gitOk(record('c1', 300))),
+    )
 
     const clean = await provider.provideTimeline(FILE_URI, { limit: 50 }, NO_TOKEN)
     expect(clean?.items.every((i) => i.contextValue === 'git:file:commit')).toBe(true)
@@ -171,24 +178,32 @@ describe('GitTimelineProvider', () => {
     mocks.getConfig.mockImplementation((key: string, def: unknown) =>
       Promise.resolve(key === 'timeline.showUncommitted' ? false : def),
     )
-    const repo2 = fakeRepo({ getHeadContent: vi.fn(() => Promise.resolve('old')) })
-    const provider2 = new GitTimelineProvider(fakeManager(repo2))
-    mocks.readFile.mockResolvedValue('new')
+    const provider2 = new GitTimelineProvider(fakeManager(fakeRepo()))
+    mocks.gitExec.mockImplementation((args: string[]) =>
+      Promise.resolve(
+        args[0] === 'diff' ? { stdout: '', stderr: '', exitCode: 1 } : gitOk(record('c1', 300)),
+      ),
+    )
     const off = await provider2.provideTimeline(FILE_URI, { limit: 50 }, NO_TOKEN)
     expect(off?.items.every((i) => i.contextValue === 'git:file:commit')).toBe(true)
   })
 
-  it('survives git log failures (unborn branch) with just the working-tree entry', async () => {
-    const repo = fakeRepo({ getHeadContent: vi.fn(() => Promise.resolve(null)) })
-    const provider = new GitTimelineProvider(fakeManager(repo))
-    mocks.readFile.mockResolvedValue('brand new file')
-    mocks.gitExec.mockResolvedValue(gitFail())
+  it('omits the uncommitted entry for an untracked file (git diff is empty)', async () => {
+    const provider = new GitTimelineProvider(fakeManager(fakeRepo()))
+    mocks.gitExec.mockResolvedValue(gitOk(''))
 
     const page = await provider.provideTimeline(FILE_URI, { limit: 50 }, NO_TOKEN)
 
+    expect(page?.items).toHaveLength(0)
+  })
+
+  it('survives git failures (unborn branch) with no items', async () => {
+    const provider = new GitTimelineProvider(fakeManager(fakeRepo()))
+    // beforeEach: every gitExec call fails (diff cannot resolve HEAD, log fails too).
+    const page = await provider.provideTimeline(FILE_URI, { limit: 50 }, NO_TOKEN)
+
     expect(page?.cursor).toBeUndefined()
-    expect(page?.items).toHaveLength(1)
-    expect(page?.items[0]?.contextValue).toBe('git:file:working')
+    expect(page?.items).toHaveLength(0)
   })
 
   it('fires a provider-wide reset when a tracked repo changes', () => {

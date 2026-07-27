@@ -8,8 +8,12 @@
  * Paging: each request fetches `limit + 1` commits; the extra record both
  * proves another page exists and becomes the cursor — the next page's
  * `git log <cursor>` starts at that commit, so pages chain without overlap.
- * The first page is headed by an "Uncommitted Changes" entry when the working
- * tree differs from HEAD (toggleable via `git.timeline.showUncommitted`).
+ * The first page is headed by an "Uncommitted Changes" entry when the file's
+ * working tree differs from HEAD (toggleable via
+ * `git.timeline.showUncommitted`). The difference is judged by
+ * `git diff --quiet HEAD` itself: a content compare would false-positive on
+ * CRLF working trees, and untracked paths yield an empty diff so they get no
+ * entry — matching VSCode's working-tree-group check.
  *
  * Also owns the feature's commands: `git.timeline.openDiff` (item click → diff
  * against the previous version) and the Copy Commit ID / Message context-menu
@@ -158,7 +162,7 @@ export class GitTimelineProvider implements TimelineProvider {
     return { items, ...(probe !== undefined ? { cursor: probe.hash } : {}) }
   }
 
-  /** The "Uncommitted Changes" entry, when the working tree differs from HEAD. */
+  /** The "Uncommitted Changes" entry, when a tracked file's working tree differs from HEAD. */
   private async _uncommittedItem(
     repo: Repository,
     absPath: string,
@@ -166,15 +170,14 @@ export class GitTimelineProvider implements TimelineProvider {
     const cfg = workspace.getConfiguration('git')
     if ((await cfg.get('timeline.showUncommitted', true)) === false) return undefined
 
-    const head = await repo.getHeadContent(absPath)
-    let working: string | null
-    try {
-      working = await readFile(absPath, 'utf8')
-    } catch {
-      working = null
-    }
-    // Equal (incl. both missing) → nothing uncommitted to show.
-    if (head === working) return undefined
+    // Let git judge the difference. A blob-vs-file content compare
+    // false-positives on CRLF working trees (autocrlf normalizes them for
+    // real diffs); untracked paths yield an empty diff, so they get no entry
+    // either — matching VSCode's working-tree-group check. Exit 1 = differs;
+    // 0 = clean; anything else (e.g. unborn HEAD) is treated as no entry.
+    const rel = relative(repo.root, absPath).replace(/\\/g, '/')
+    const diff = await gitExec(['diff', '--quiet', 'HEAD', '--', rel], repo.root, this._log)
+    if (diff.exitCode !== 1) return undefined
 
     const st = await stat(absPath).catch(() => undefined)
     const timestamp = st?.mtimeMs ?? Date.now()
