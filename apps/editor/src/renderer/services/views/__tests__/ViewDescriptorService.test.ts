@@ -149,6 +149,28 @@ describe('ViewDescriptorService', () => {
     svc2.dispose()
   })
 
+  it('setViewSizes persists only when asked (layout bookkeeping stays in memory)', async () => {
+    const { service, store } = makeStorage()
+    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+
+    // Default: bookkeeping only — no debounced persist even if the value
+    // changed (first-layout even split, container resizes, corrections).
+    svc.setViewSizes([{ id: 'test.v1', size: 200 }])
+    expect(svc.getViewState('test.v1').size).toBe(200)
+    await new Promise((r) => setTimeout(r, 250))
+    expect(store.has('workbench.viewCustomizations')).toBe(false)
+
+    // persist: true marks a user action and flushes even when the in-memory
+    // value already matches (disk may hold nothing or an older value).
+    svc.setViewSizes([{ id: 'test.v1', size: 200 }], { persist: true })
+    await new Promise((r) => setTimeout(r, 250))
+    const persisted = store.get('workbench.viewCustomizations') as {
+      viewStates: Record<string, { size?: number }>
+    }
+    expect(persisted.viewStates['test.v1']?.size).toBe(200)
+    svc.dispose()
+  })
+
   it('re-registers generated containers on load', async () => {
     const { service } = makeStorage()
     const svc = new ViewDescriptorService(service, hydratedWorkspace)

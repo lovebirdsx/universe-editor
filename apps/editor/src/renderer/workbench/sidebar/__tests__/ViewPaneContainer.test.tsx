@@ -64,14 +64,14 @@ function paneHeightPx(viewTitle: string): number {
   return Number.parseFloat(wrapper.style.height)
 }
 
-function makeStorage(): IStorageService {
+function makeStorage(): IStorageService & { set: ReturnType<typeof vi.fn> } {
   return {
     _serviceBrand: undefined,
     get: vi.fn().mockResolvedValue(undefined),
     set: vi.fn().mockResolvedValue(undefined),
     remove: vi.fn().mockResolvedValue(undefined),
     onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
-  } as unknown as IStorageService
+  } as unknown as IStorageService & { set: ReturnType<typeof vi.fn> }
 }
 
 const stubWorkspace = { current: {} } as unknown as IWorkspaceService
@@ -156,6 +156,37 @@ describe('ViewPaneContainer', () => {
     expect(viewDescriptorService.getViewState('test.view.b').size).toBe(300)
   })
 
+  it('collapsing persists the remembered expanded size', async () => {
+    // With onChange bookkeeping no longer persisted, the collapse action is
+    // the only path that lands the remembered expanded size on disk — assert
+    // the debounced save actually fires (a bare save() would flush the
+    // in-memory bookkeeping regardless, making the assertion tautological).
+    vi.useFakeTimers()
+    try {
+      const storage = makeStorage()
+      const viewDescriptorService = new ViewDescriptorService(storage, stubWorkspace)
+      renderSideBar(viewDescriptorService)
+      act(() => fireLastResizeObserver(800, 600))
+
+      act(() => viewDescriptorService.setViewCollapsed('test.view.a', true))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250)
+      })
+
+      expect(storage.set).toHaveBeenCalledWith(
+        'workbench.viewCustomizations',
+        expect.objectContaining({
+          viewStates: expect.objectContaining({
+            'test.view.a': expect.objectContaining({ size: 300 }),
+          }),
+        }),
+        expect.anything(),
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does not resize against a remounted Allotment whose panes are not reconciled yet', () => {
     const { viewDescriptorService } = renderSideBar()
     act(() => fireLastResizeObserver(800, 600))
@@ -203,10 +234,34 @@ describe('ViewPaneContainer', () => {
       await reconcile
     })
 
-    // Allotment ignores a mounted pane's preferredSize prop change — the
-    // reconciled sizes must be applied imperatively via resize(), reflected
-    // in the actual rendered pane heights, not just the service's bookkeeping.
+    // Allotment freezes each pane's layoutStrategy at construction — a late
+    // reconcile must be applied imperatively via resize(), reflected in the
+    // actual rendered pane heights, not just the service's bookkeeping.
     expect(paneHeightPx('test.view.a')).toBe(200)
     expect(paneHeightPx('test.view.b')).toBe(400)
+  })
+
+  it('never persists the pre-reconcile first-layout split (reload race regression)', async () => {
+    // Regression for the CI flake where a reload landing within the save
+    // debounce window persisted the pre-reconcile equal split over the dragged
+    // sizes: the first onChange report must stay in-memory only, so the
+    // debounced save never fires on its own.
+    vi.useFakeTimers()
+    try {
+      const storage = makeStorage()
+      const viewDescriptorService = new ViewDescriptorService(storage, stubWorkspace)
+      renderSideBar(viewDescriptorService)
+      act(() => fireLastResizeObserver(800, 600))
+      expect(viewDescriptorService.getViewState('test.view.a').size).toBe(300)
+
+      // Past the 200ms save debounce and the 600ms first-layout correction
+      // window: no automatic persist must have happened.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000)
+      })
+      expect(storage.set).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

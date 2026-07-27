@@ -125,8 +125,11 @@ const ALL_LOG_LEVELS: readonly LogLevel[] = [
 
 /** The Output panel's Monaco editor, identified by its `output://` model uri. */
 function findOutputEditor(): monaco.editor.ICodeEditor | undefined {
-  return MonacoLoader.get()
-    .editor.getEditors()
+  // peek(), not get(): specs poll the output probes while Monaco is still
+  // dynamically importing, and a thrown "not initialized" would fail the poll
+  // instead of retrying until the editor mounts.
+  return MonacoLoader.peek()
+    ?.editor.getEditors()
     .find((ed) => ed.getModel()?.uri.scheme === 'output')
 }
 

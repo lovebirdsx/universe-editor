@@ -52,9 +52,9 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 失败仅集中 DnD 类且重跑能过=headless 手势时序 → 案例 46；锁屏时剪贴板用例必败 → 案例 47
 - chord 用例卡 `defocusEditor` 等 focus 变 false+retry 秒过=defocus 时序噪声（观察中）→ 案例 48
 - 列表相等断言 received 是 expected 前缀子集+采样点为固定 sleep=增量渲染截半，poll 到收敛 → 案例 49
-- sash 拖拽/尺寸持久化 spec，reload 后目标 pane 高度稳定卡等分值=异步 reconcile 落后于 Allotment 首次布局、preferredSize 挂载后是 no-op → 案例 50
+- sash 拖拽/尺寸持久化 spec，reload 后目标 pane 高度稳定卡等分值=异步 reconcile 落后于 Allotment 首次布局、preferredSize 挂载后是 no-op → 案例 50；**修完同断言再挂**=等分值经 onChange→debounce 落盘污染磁盘，恢复路径修得再好读的也是脏值，须收窄落盘权到用户动作 → 案例 50b
 - ACP 配置写入后立即建 session、echo agent received 恒 `"[]"`=异步镜像池 stale 滤空 wire 列表 → 案例 51
-- `[MonacoLoader] not initialized` 栈过同步探针=poll 回调抛异常击穿等待 → 案例 52
+- `[MonacoLoader] not initialized` 栈过同步探针=poll 回调抛异常击穿等待 → 案例 52（**已修又再发**时先核对 main 上修复真实存在：`git log -S`）
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

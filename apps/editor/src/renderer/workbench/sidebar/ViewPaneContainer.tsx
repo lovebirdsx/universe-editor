@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -29,6 +30,15 @@ interface Props {
   resolve: (componentKey: string) => ComponentType | undefined
   emptyMessage?: string
 }
+
+/**
+ * Grace window for applying reconciled WORKSPACE sizes after the first real
+ * layout: main.tsx's reconcileFromStorage() gives up waiting for workspace
+ * hydration after this many ms (INITIAL_LOAD_TIMEOUT_MS in
+ * ViewDescriptorService), so beyond it a first-layout correction would fight
+ * the default equal split the user may already be watching.
+ */
+const RECONCILE_GRACE_MS = 500 + 100
 
 /**
  * Stacks a container's views as collapsible, resizable panes (VSCode PaneView):
@@ -121,7 +131,12 @@ export function ViewPaneContainer({
       let restoreSize: number | undefined
       if (collapsedFlags[i]) {
         const remembered = viewDescriptors.getViewState(viewId).size ?? working[i]
-        if (remembered !== undefined) expandedSizesRef.current.set(viewId, remembered)
+        if (remembered !== undefined) {
+          expandedSizesRef.current.set(viewId, remembered)
+          // Collapsing is a user action: keep the expanded size on disk (the
+          // header height the collapsed pane reports must never be persisted).
+          viewDescriptors.setViewSizes([{ id: viewId, size: remembered }], { persist: true })
+        }
       } else {
         restoreSize =
           expandedSizesRef.current.get(viewId) ?? viewDescriptors.getViewState(viewId).size
@@ -142,26 +157,48 @@ export function ViewPaneContainer({
   // Allotment's first real layout — main.tsx defers that reconcile off the
   // first-paint path, while Allotment's ResizeObserver fires independently as
   // soon as the container has a size (same race WorkbenchLayout corrects for
-  // the top-level sidebar/panel/secondary sizes). Changing a mounted
-  // Allotment.Pane's preferredSize prop afterwards is a no-op — it only updates
-  // the pane's internal bookkeeping for a future add/remove — so a reconcile
-  // landing after the pre-reconcile equal split must be applied imperatively.
+  // the top-level sidebar/panel/secondary sizes). A mounted pane's
+  // preferredSize prop change is bookkeeping-only (allotment freezes each
+  // pane's layoutStrategy at construction), so a late reconcile must be
+  // applied imperatively. Because there is no persisted-state version marker,
+  // the correction runs on the first real onChange report instead of a key
+  // change; the settle timer keeps it pending until the reconcile has landed,
+  // and a user sash drag before that cancels it.
+  const isLayoutSettledRef = useRef(false)
+  const userDraggedRef = useRef(false)
+  const layoutSettleTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => {
+    layoutSettleTimerRef.current = setTimeout(() => {
+      isLayoutSettledRef.current = true
+    }, RECONCILE_GRACE_MS)
+    return () => clearTimeout(layoutSettleTimerRef.current)
+  }, [])
+  const correctToStoredSizes = (sizes: readonly number[]) => {
+    if (sizes.length !== views.length) return
+    const target = views.map((v, i) =>
+      collapsed(v.id)
+        ? (sizes[i] ?? HEADER_H)
+        : Math.max(OPEN_MIN, viewDescriptors.getViewState(v.id).size ?? sizes[i] ?? OPEN_MIN),
+    )
+    if (target.some((size, i) => Math.abs(size - (sizes[i] ?? 0)) > 1)) {
+      allotmentRef.current?.resize(target)
+    }
+  }
+  // A reconcile landing AFTER the first layout surfaces as a stored-sizes key
+  // change (reconcileFromStorage bumps the version): correct the split. The
+  // key is consumed only once the mounted Allotment has reported real geometry
+  // — before that the first-onChange correction above owns the window.
   const storedSizesKey = views
     .map((v) => (collapsed(v.id) ? '' : String(viewDescriptors.getViewState(v.id).size ?? '')))
     .join('|')
   const prevStoredSizesKeyRef = useRef(storedSizesKey)
   useLayoutEffect(() => {
     const prevKey = prevStoredSizesKeyRef.current
-    prevStoredSizesKeyRef.current = storedSizesKey
     const handle = allotmentRef.current
     const sizes = sizesRef.current
     if (!handle || prevKey === storedSizesKey || sizes.length !== views.length) return
-    const target = views.map((v, i) =>
-      collapsed(v.id)
-        ? (sizes[i] ?? HEADER_H)
-        : Math.max(OPEN_MIN, viewDescriptors.getViewState(v.id).size ?? sizes[i] ?? OPEN_MIN),
-    )
-    if (target.some((size, i) => Math.abs(size - (sizes[i] ?? 0)) > 1)) handle.resize(target)
+    prevStoredSizesKeyRef.current = storedSizesKey
+    correctToStoredSizes(sizes)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storedSizesKey])
 
@@ -235,11 +272,34 @@ export function ViewPaneContainer({
         vertical
         onChange={(s) => {
           sizesRef.current = s
+          if (!isLayoutSettledRef.current) {
+            isLayoutSettledRef.current = true
+            clearTimeout(layoutSettleTimerRef.current)
+            // First real geometry: reconcileFromStorage() may have landed after
+            // the panes were constructed (their layoutStrategy frozen without
+            // the persisted sizes), so correct the pre-reconcile split once.
+            // A user drag that already happened takes precedence.
+            if (!userDraggedRef.current) correctToStoredSizes(s)
+          }
+          // In-memory bookkeeping only (drives collapse/expand restore math
+          // and the collapse-time remembered-size snapshot). Persisting here
+          // would let layout noise — notably the pre-reconcile equal split —
+          // clobber the user's dragged sizes on disk within the save debounce
+          // window; user changes persist via onDragEnd below (VSCode
+          // semantics: container resizes and programmatic corrections never
+          // overwrite the user's chosen sizes).
+          viewDescriptors.setViewSizes(
+            views.flatMap((v, i) => (collapsed(v.id) ? [] : [{ id: v.id, size: s[i] ?? 0 }])),
+          )
+        }}
+        onDragEnd={(s) => {
+          userDraggedRef.current = true
           // Collapsed panes report their header height here; persist only the
           // expanded panes' sizes so a collapsed pane keeps its remembered
           // expanded size for later restore (across reloads too).
           viewDescriptors.setViewSizes(
             views.flatMap((v, i) => (collapsed(v.id) ? [] : [{ id: v.id, size: s[i] ?? 0 }])),
+            { persist: true },
           )
         }}
       >

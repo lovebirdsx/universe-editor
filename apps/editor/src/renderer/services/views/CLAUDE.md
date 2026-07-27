@@ -84,7 +84,7 @@ export function useViewDescriptors(): IViewDescriptorService {
 | `ActivityBar.tsx` | `workbench/activitybar/` | SideBar 区容器图标。点选激活；图标拖拽重排（`moveContainerInLocation`，before/after 边缘命中）；接收 view 投放（`moveViewsToContainer`）。状态 `draggingId` / `dropTarget:{id,edge}` |
 | `PaneCompositePart.tsx` | `workbench/paneComposite/` | 某 location 活跃容器的内容宿主。`content==='stack'` → `ViewPaneContainer`；否则 `TiledViews`。null-guard `activeContainer` |
 | `PaneCompositeHeader.tsx` | `workbench/paneComposite/` | SecondarySideBar/Panel 区的容器标签条（`getViewContainersByLocation(location)`） |
-| `ViewPaneContainer.tsx` | `workbench/sidebar/` | 一个容器内多 view 的纵向 `Allotment`。折叠读写 `getViewState/setViewCollapsed`；尺寸在 `onChange` → `setViewSizes`；`moveHere` 处理跨容器+容器内重排；**整个容器是「合并」放置区**（`data-container-drop`）：拖入他容器的 view（仅单/空容器场景）或 container 图标/标签 → `applyViewDrop`，叠加 `.mergeOverlay` 高亮；多 view 容器把单 view 精细插入留给各 ViewPane 的 before/after 线；每个 ViewPane `draggable={v.canMoveView !== false}` |
+| `ViewPaneContainer.tsx` | `workbench/sidebar/` | 一个容器内多 view 的纵向 `Allotment`。折叠读写 `getViewState/setViewCollapsed`；尺寸 `onChange` → `setViewSizes`（内存记账）+ `onDragEnd` → `setViewSizes(..., {persist:true})`（落盘）；`moveHere` 处理跨容器+容器内重排；**整个容器是「合并」放置区**（`data-container-drop`）：拖入他容器的 view（仅单/空容器场景）或 container 图标/标签 → `applyViewDrop`，叠加 `.mergeOverlay` 高亮；多 view 容器把单 view 精细插入留给各 ViewPane 的 before/after 线；每个 ViewPane `draggable={v.canMoveView !== false}` |
 | `ViewPane.tsx` | `workbench/sidebar/` | 单 view 面板。拖源（`onDragStart` 写 `viewDragData` + `dataTransfer.setData(VIEW_DRAG_MIME, viewId)`）；放置目标（hit-test `clientY` vs 中点得 `dropEdge` 'before'/'after'，叠加 overlay） |
 
 CSS 状态类：`ViewPane.module.css`(`.dragging` / `.dropTop::before` / `.dropBottom::after`)、`PaneComposite.module.css`(`.paneContainer` / `.mergeOverlay` 容器级合并高亮 / `.emptyDrop`)、`ActivityBar.module.css`(`.dragging` / `.dropBefore::after` / `.dropAfter::after` / `.dropMerge`)。
@@ -139,10 +139,12 @@ HTML5 DnD 在 **dragover 阶段读不到 `dataTransfer` 的 payload**（只在 d
 
 多 view 容器（`ViewPaneContainer.tsx` 的 Allotment）尺寸机制，纯函数收口在 `services/views/viewPaneLayout.ts`（常量 `VIEW_HEADER_SIZE=28` / `VIEW_OPEN_MIN=88` + `computeToggleSizes` + `initialPaneSize`）：
 
+- **落盘权收窄到用户动作（VSCode 语义）**：`setViewSizes(sizes, {persist?})` 默认**只更新内存**（layout 记账），`persist:true` 才调度落盘。`onChange` 全部走记账（首布局等分/容器 resize/程序化纠正永不落盘——否则 reload 后首布局等分值经 200ms debounce 抢在 reconcile 读盘前写盘，污染拖拽尺寸，见案例 50b）；`onDragEnd`（sash 拖拽）与 collapse 时的 remembered size 走 `persist:true`（`persist:true` 无条件调度，不等 changed——内存可能已同值而磁盘是旧值）。
+- **reconcile 迟到的双路校正**（Allotment 挂载后 `preferredSize` 是 no-op，pane 构造时冻结 layoutStrategy）：① 首个 onChange 一次性 `correctToStoredSizes`（覆盖 reconcile 早于 PaneView 构造，用户拖拽先发生则取消）；② `storedSizesKey` effect（覆盖 reconcile 晚于首布局，prevKey 在长度守卫**之后**才消费）。两路幂等（diff>1px 才 resize）。
 - **挂载恢复**：每个 `Allotment.Pane` 传 `preferredSize`——折叠→28，展开→持久化的 `size`（clamp ≥ OPEN_MIN），无存储→不传（Allotment 等分）。重挂载（重排/移入移出/切容器）同样走这条路恢复。
 - **折叠**：pane 收缩到 header（min=max=28），让出的空间**全归最底部展开 pane**（SplitView greedy，maxSize=Infinity 吸收全部）。
 - **展开**：恢复记住的展开尺寸，空间从其它展开 pane **自底向上扣**（各扣到 OPEN_MIN 为止，不够则压展开目标）。
-- **折叠 pane 不持久化尺寸**：`onChange` 里折叠 pane 上报的是 28px header，必须过滤掉，否则把记住的展开尺寸覆盖成 28。
+- **折叠 pane 不持久化尺寸**：`onChange`/`onDragEnd` 里折叠 pane 上报的是 28px header，必须过滤掉，否则把记住的展开尺寸覆盖成 28。
 - **expandedSizesRef 快照**：React 子组件 effect 先于父组件跑——Allotment 在自己的 layout effect 里 reconcile min/max 并 fire `onChange`（展开时把 pane clamp 到 minSize），会**抢在我们的 effect 读持久化尺寸之前把它覆盖**。所以折叠那一刻先把展开尺寸快照进组件 ref，展开时优先用 ref。
 - 容器总高变化走 Allotment `proportionalLayout`（默认 true）等比缩放，与 VSCode 一致。
 
@@ -155,8 +157,10 @@ HTML5 DnD 在 **dragover 阶段读不到 `dataTransfer` 的 payload**（只在 d
 5. **eager seeding 改变了空状态语义**：构造即自动选中首个容器，断言「无内容」要用「该 location 无任何容器」而非「无激活容器」（见 `Panel.test.tsx`）。
 6. **dragover 读不到 payload**：别在 `onDragOver` 里 `dataTransfer.getData()`，那是空的；用 `viewDragData.get()` + `dragContainsView()`。
 7. **exactOptionalPropertyTypes**：QuickPick/描述符的可选字段用条件展开，不要 `x: T | undefined`。
-8. **折叠 pane 的尺寸别上报**:`ViewPaneContainer` 的 `onChange` 必须过滤折叠 pane（它报的是 28px header)，否则持久化的展开尺寸被覆盖、重启后无法恢复。
+8. **折叠 pane 的尺寸别上报**:`ViewPaneContainer` 的 `onChange`/`onDragEnd` 必须过滤折叠 pane（它报的是 28px header)，否则持久化的展开尺寸被覆盖、重启后无法恢复。
 9. **Allotment 子 effect 先跑会污染尺寸**：展开时 Allotment 自己的 layout effect 先把 pane clamp 到 minSize 并 fire onChange，父 effect 再读持久化尺寸已是脏值——恢复值要取自折叠时快照的 `expandedSizesRef`。
+10. **layout 尺寸落盘必须走 `persist:true`**：`setViewSizes` 默认只记内存；在 `onChange` 里带 persist 会让首布局等分值经 debounce 抢在 reconcile 读盘前写盘（案例 50b 的 CI flake 根因）。新增尺寸写入点先想「这是用户动作还是 layout 噪声」。
+11. **探针/断言「不落盘」别用 `save()` 验证**：`save()` 无条件把内存写盘，断言恒 tautological；守护点是 debounce **自动**落盘不发生（fake timers 越过 200ms）。
 
 ## 验证
 

@@ -60,7 +60,17 @@ export interface IViewDescriptorService {
   // -- per-view state -------------------------------------------------------
   getViewState(viewId: string): IViewState
   setViewCollapsed(viewId: string, collapsed: boolean): void
-  setViewSizes(sizes: ReadonlyArray<{ id: string; size: number }>): void
+  /**
+   * Record live pane sizes. With `persist: true` (user-driven changes only —
+   * sash drag-end, collapse bookkeeping) the sizes are also scheduled for
+   * WORKSPACE storage; the default only updates the in-memory state so layout
+   * noise (container resizes, startup settling, programmatic corrections) can
+   * never clobber the persisted user-chosen sizes.
+   */
+  setViewSizes(
+    sizes: ReadonlyArray<{ id: string; size: number }>,
+    options?: { persist?: boolean },
+  ): void
 
   /** Reset all customizations back to registry defaults. */
   reset(): void

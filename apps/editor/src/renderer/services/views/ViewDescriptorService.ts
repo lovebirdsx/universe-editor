@@ -242,14 +242,23 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
     this._bumpAndPersist()
   }
 
-  setViewSizes(sizes: ReadonlyArray<{ id: string; size: number }>): void {
-    let changed = false
+  setViewSizes(
+    sizes: ReadonlyArray<{ id: string; size: number }>,
+    options?: { persist?: boolean },
+  ): void {
     for (const { id, size } of sizes) {
       if (this.getViewState(id).size === size) continue
       this._setViewState(id, { size })
-      changed = true
     }
-    if (changed) this._schedulePersist()
+    // Layout noise (first paint, container resizes, programmatic corrections)
+    // flows through here too; persisting it would clobber the user's chosen
+    // sizes on disk — notably the first-layout even split landing within the
+    // debounce window of a reload would overwrite the dragged sizes before
+    // reconcileFromStorage() can read them back. A persist request marks a
+    // user action (sash drag-end, collapse bookkeeping) and always schedules
+    // the flush, even when the in-memory value already matches (the disk may
+    // still hold nothing or an older value).
+    if (options?.persist && sizes.length > 0) this._schedulePersist()
   }
 
   reset(): void {
