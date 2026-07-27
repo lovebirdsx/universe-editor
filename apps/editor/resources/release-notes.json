@@ -1,5 +1,66 @@
 [
   {
+    "version": "0.1.50",
+    "date": "2026-07-27",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "claude acp v0.58.1→v0.62.0",
+          "将 codex-acp 合并到上游 v1.1.7",
+          "MCP 服务器设置的可视化支持",
+          "凭据列表增加网关连通性状态指示",
+          "提交选择器显示相对时间并优化布局",
+          "优化大型ts项目的语言特性支持，大文件，符号跳转等",
+          "重构output面板，体验对标vscode",
+          "AskUserQuestion 提问卡片（ElicitationCard）紧凑化优化",
+          "视图面板支持折叠/展开尺寸持久化",
+          "新增Timeline支持",
+          "ACP elicitation e2e 冒烟与用户文档",
+          "ACP elicitation 支持 url mode（consent 卡 + elicitation/complete）",
+          "AskUserQuestion 切至标准 elicitation 通道，下线旧 ext-method 路径",
+          "ACP 支持 elicitation form mode（SDK 升级 1.2.1 + 表单卡片）",
+          "空会话提示新增#键添加上下文入口",
+          "deep-link 支持配置需要的 mcp",
+          "终端支持 profile 检测与自动发现",
+          "MCP 支持项目级 .mcp.json 及 disabled 选项",
+          "为pnpm check新增test-changed脚本，按git变更选择性运行vitest",
+          "在时间线中增加会话复活生命周期卡牌"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "增强输出面板E2E探测和过滤功能",
+          "claude-agent-acp lock 补齐 @emnapi peer 依赖以修复 CI 的 npm ci",
+          "优化日志级别匹配以区分header和payload",
+          "清理output面板的warning",
+          "修复链接嵌套问题以消除 React 水合错误",
+          "git graph泳道折叠仅在搜索模式生效",
+          "相同网关凭据区分\"使用中\"状态时仅匹配 URL 导致误显",
+          "typecheck 依赖 build 防止并发写入 dist 损坏缓存",
+          "去掉 QuickInput 焦点蓝色轮廓",
+          "快捷键 ctrl+shift+u 移至 Output Channel 命令",
+          "窗口关闭时可靠停止 ACP agent 子进程，避免占用文件夹，导致无法删除",
+          "识别claude unknown错误类型并标记为transient",
+          "claude配置kimi时，子agent也默认用kimi，但可以通过CLAUDE_CODE_SUBAGENT_MODEL来设定",
+          "热重连后未恢复session的运行时配置",
+          "tsServer 日志从console移到output channel",
+          "outline没有显示帮助文档的内容"
+        ]
+      },
+      {
+        "type": "perf",
+        "title": "性能优化",
+        "items": [
+          "为eslint添加缓存加速lint，并优化测试缓存，加快pnpm check的速度"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.49",
     "date": "2026-07-24",
     "groups": [
