@@ -7,9 +7,9 @@
  *  the deep-link command whitelist; agent prompt links are handled explicitly so
  *  the command whitelist never becomes a generic agent-launch surface.
  *
- *  Agent links never auto-submit unless `acp.deepLink.allowAutoSubmit` is on —
- *  anyone can craft a deep link, so by default the prompt only lands in the
- *  input box for the user to review. A `pid` parameter is forwarded to the
+ *  Agent links auto-submit when `acp.deepLink.allowAutoSubmit` is on (the
+ *  default); a `autoSubmit=false` link parameter forces fill-only for review.
+ *  A `pid` parameter is forwarded to the
  *  MCP bridge as a one-shot, in-memory env injection on the created session
  *  (never written into the persisted `acp.mcpServers`). A `mcp` parameter pins
  *  the session to the named MCP server whitelist; names that don't exist in

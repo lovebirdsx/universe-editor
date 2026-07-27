@@ -35,9 +35,10 @@ test.describe('@p1 deep link — agent workspace routing', () => {
       const rootBFs = rootB.replace(/\\/g, '/')
       await workbench.openWorkspace(rootA)
 
-      // Window B does not exist yet, so its echo-agent + autoSubmit config must
-      // come from the shared USER settings (Memory scope is per-window) — written
-      // before the link is sent, read by window B at startup.
+      // Window B does not exist yet, so its echo-agent config must come from the
+      // shared USER settings (Memory scope is per-window) — written before the
+      // link is sent, read by window B at startup. (acp.deepLink.allowAutoSubmit
+      // already defaults to on, no need to write it.)
       await page.evaluate(
         ([agentPath]) =>
           window.__E2E__!.runCommand('_workbench.updateConfiguration', 'acp.agents', [
@@ -47,13 +48,6 @@ test.describe('@p1 deep link — agent workspace routing', () => {
       )
       await page.evaluate(() =>
         window.__E2E__!.runCommand('_workbench.updateConfiguration', 'acp.defaultAgentId', 'echo'),
-      )
-      await page.evaluate(() =>
-        window.__E2E__!.runCommand(
-          '_workbench.updateConfiguration',
-          'acp.deepLink.allowAutoSubmit',
-          true,
-        ),
       )
 
       const newWindow = electronApp.waitForEvent('window')

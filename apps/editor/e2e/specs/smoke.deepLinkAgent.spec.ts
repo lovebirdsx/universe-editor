@@ -6,12 +6,13 @@
  *  preload listener → DeepLinkContribution), same as a live-window OS protocol
  *  launch:
  *
- *    1. default (acp.deepLink.allowAutoSubmit off): the prompt only lands in the
- *       input box — a crafted link must never send anything by itself;
- *    2. allowAutoSubmit on: the prompt is sent end-to-end (echo agent replies),
- *       and the session runs in the link's `cwd` (echo agent `report-cwd`);
- *    3. allowAutoSubmit on + link-level autoSubmit=false: the link opt-out still
- *       wins over the setting;
+ *    1. acp.deepLink.allowAutoSubmit off: the prompt only lands in the input
+ *       box for review, nothing is sent;
+ *    2. default (allowAutoSubmit on): the prompt is sent end-to-end (echo agent
+ *       replies), and the session runs in the link's `cwd` (echo agent
+ *       `report-cwd`);
+ *    3. default (allowAutoSubmit on) + link-level autoSubmit=false: the link
+ *       opt-out still wins over the setting;
  *    4. pid: injected as a one-shot env into the `universe-editor` MCP server of
  *       the created session — asserted on what the agent actually received on
  *       session/new (echo agent `report-mcp-servers`), proving nothing was
@@ -68,10 +69,14 @@ test.describe('@p1 deep link — agent', () => {
     await installEchoAgent(page)
   })
 
-  test('default: prompt only fills the input box, nothing is sent', async ({
+  test('allowAutoSubmit off: prompt only fills the input box, nothing is sent', async ({
     page,
     electronApp,
   }) => {
+    await page.evaluate(() =>
+      window.__E2E__!.updateConfigValue('acp.deepLink.allowAutoSubmit', false),
+    )
+
     await sendAgentDeepLink(
       electronApp,
       `agent:new?prompt=review%20the%20quest&cwd=${encodeURIComponent(wsFs)}`,
@@ -86,14 +91,12 @@ test.describe('@p1 deep link — agent', () => {
     expect(await page.evaluate(() => window.__E2E__!.getAcpMessages())).toEqual([])
   })
 
-  test('allowAutoSubmit on: prompt is sent end-to-end in the link cwd', async ({
+  test('default (allowAutoSubmit on): prompt is sent end-to-end in the link cwd', async ({
     page,
     electronApp,
   }) => {
-    await page.evaluate(() =>
-      window.__E2E__!.updateConfigValue('acp.deepLink.allowAutoSubmit', true),
-    )
-
+    // Default is allowAutoSubmit=on — no config write here, this test guards the
+    // out-of-the-box behavior.
     // The echo agent reports the cwd it received on session/new, so this one
     // reply proves both the send and the working-directory plumbing.
     await sendAgentDeepLink(
@@ -113,14 +116,10 @@ test.describe('@p1 deep link — agent', () => {
       .toBe(wsFs)
   })
 
-  test('allowAutoSubmit on + link autoSubmit=false: the link opt-out wins', async ({
+  test('link autoSubmit=false: the link opt-out wins over the default on', async ({
     page,
     electronApp,
   }) => {
-    await page.evaluate(() =>
-      window.__E2E__!.updateConfigValue('acp.deepLink.allowAutoSubmit', true),
-    )
-
     await sendAgentDeepLink(
       electronApp,
       `agent:new?prompt=review%20the%20quest&autoSubmit=false&cwd=${encodeURIComponent(wsFs)}`,
@@ -138,7 +137,6 @@ test.describe('@p1 deep link — agent', () => {
     electronApp,
   }) => {
     await page.evaluate(() => {
-      window.__E2E__!.updateConfigValue('acp.deepLink.allowAutoSubmit', true)
       window.__E2E__!.updateConfigValue('acp.mcpServers', {
         'universe-editor': { command: 'node', args: ['noop.cjs'] },
       })

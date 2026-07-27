@@ -146,10 +146,10 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
           },
           'acp.deepLink.allowAutoSubmit': {
             type: 'boolean',
-            default: false,
+            default: true,
             description: localize(
               'settings.acp.deepLink.allowAutoSubmit',
-              'Allow `universe-editor://agent/new?prompt=…` deep links to send the prompt automatically. Disabled by default: a link only fills the input box and you review before sending. Enable only if you trust the tools that launch these links — anyone can craft one.',
+              'Allow `universe-editor://agent/new?prompt=…` deep links to send the prompt automatically. Enabled by default; disable to have links only fill the input box so you review before sending. A link can force fill-only with `autoSubmit=false`.',
             ),
           },
           'acp.notifications.enabled': {
