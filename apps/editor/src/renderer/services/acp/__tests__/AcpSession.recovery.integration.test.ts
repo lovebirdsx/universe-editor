@@ -418,6 +418,49 @@ describe('AcpSession auto-recovery', () => {
     expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(true)
   })
 
+  it('hot-reconnects after an agent-internal crash error and resumes the turn', async () => {
+    // The ACP SDK wraps a bare exception thrown inside the agent process as
+    // internalError({ details }) — the connection stays alive, so neither the
+    // close listener nor the stall watchdog ever fires. The prompt failure
+    // itself must start the reconnect tier.
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () =>
+          Promise.reject(
+            Object.assign(
+              new Error("Internal error: undefined is not an object (evaluating 'e.includes')"),
+              {
+                code: -32603,
+                data: { details: "undefined is not an object (evaluating 'e.includes')" },
+              },
+            ),
+          ),
+        // After reconnect, the resumed turn succeeds.
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    await s.sendPrompt('do it')
+    // The crash diverts to the reconnect tier: a fresh spawn + session/resume,
+    // then the zero-output turn is resent verbatim on the new connection.
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    expect(client.connections.length).toBe(2)
+    expect(client.connections[0]!.promptCalls.length).toBe(1)
+    expect(client.connections[1]!.promptCalls.length).toBe(1)
+    expect(client.connections[1]!.promptCalls[0]!._meta?.messageId).toBe(
+      client.connections[0]!.promptCalls[0]!._meta?.messageId,
+    )
+    // The crash message stays on the timeline for context, but the session
+    // recovered instead of sealing to `errored`.
+    expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(true)
+    expect(s.status.get()).toBe('idle')
+  })
+
   it('hot-reconnects after the process dies and resumes a zero-output turn', async () => {
     let resolveFirst: (() => void) | undefined
     client = new ScriptedClient({

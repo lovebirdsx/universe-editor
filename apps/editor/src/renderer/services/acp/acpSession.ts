@@ -601,10 +601,11 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   /**
-   * The agent process died (or was declared stalled) while this session was
-   * live. Instead of sealing, park the session back in `connecting`: the
-   * timeline is kept, in-flight prompts are aborted, new prompts queue, and
-   * the service is notified to re-handshake in place.
+   * The agent process died (or was declared stalled, or threw internally
+   * mid-turn) while this session was live. Instead of sealing, park the
+   * session back in `connecting`: the timeline is kept, in-flight prompts are
+   * aborted, new prompts queue, and the service is notified to re-handshake
+   * in place.
    */
   private _handleConnectionLost(reason: 'crash' | 'stalled'): void {
     if (this._reconnecting) return
@@ -992,6 +993,8 @@ export class AcpSession extends Disposable implements IAcpSession {
    * counts down for the UI. A turn that produced partial output is continued
    * (`继续`) rather than resent, so the agent transcript never duplicates the
    * user turn; a zero-output turn is resent verbatim with the same messageId.
+   * An agent-internal crash (`agent_crash`) cannot be retried in place — it
+   * diverts to the hot-reconnect path, which resumes this turn after reattach.
    * Non-transient errors and exhausted retries fall back to the classic
    * `[error]` timeline message (+ `errored` status), keeping the prompt
    * snapshot for the UI's manual-retry affordance.
@@ -1071,6 +1074,26 @@ export class AcpSession extends Disposable implements IAcpSession {
           return
         }
         continue
+      }
+      if (
+        verdict.cls === 'agent_crash' &&
+        this._conn === conn &&
+        !this._reconnecting &&
+        this.status.get() !== 'closed'
+      ) {
+        // The agent threw internally (SDK-wrapped bare exception) but the
+        // connection survived — the close listener therefore never fires, and
+        // `_abortAllInFlight` below has already settled this prompt, so nothing
+        // else would ever start recovery. A crashed agent's session state is
+        // untrustworthy: hot-reconnect (fresh spawn + session/resume) like a
+        // process death, then continueInterruptedTurn resumes this turn.
+        this._appendMessage('agent', `[error] ${failure.message}`)
+        this._telemetry.publicLogError('acp.prompt_agent_crash', {
+          sessionId: sid,
+          error: failure.message,
+        })
+        this._handleConnectionLost('crash')
+        return
       }
       this._sawError = true
       this._appendMessage('agent', `[error] ${failure.message}`)

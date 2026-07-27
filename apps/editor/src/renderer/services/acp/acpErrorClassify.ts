@@ -12,6 +12,9 @@
  *                     time; surface and stop.
  *    - `auth`       — credentials missing/revoked. Never retried (the auth
  *                     guidance flow owns these).
+ *    - `agent_crash`— the agent process threw internally (SDK-wrapped bare
+ *                     exception). Not retryable in place; the session layer
+ *                     hot-reconnects instead (fresh spawn + session/resume).
  *    - `fatal`      — everything else. No retry.
  *
  *  Structured sources honoured (both maintained forks already emit them):
@@ -24,9 +27,14 @@
  *    - codex fork: `RequestError.data.codexErrorInfo` — 'usageLimitExceeded',
  *      'unauthorized', or { responseStreamDisconnected | httpConnectionFailed |
  *      responseTooManyFailedAttempts: { httpStatusCode } }.
+ *    - ACP SDK catch-all: a non-RequestError thrown inside the agent process
+ *      is wrapped as `data.details` = the original message. When the message
+ *      reads like a JS-engine runtime error (see RUNTIME_ERROR_TEXT) it marks
+ *      an agent-internal crash — read BEFORE the -32603 fallback below so the
+ *      wrapper's 'Internal error' code is never mistaken for `authRequired`.
  *--------------------------------------------------------------------------------------------*/
 
-export type AcpErrorClass = 'transient' | 'quota' | 'auth' | 'fatal'
+export type AcpErrorClass = 'transient' | 'quota' | 'auth' | 'fatal' | 'agent_crash'
 
 export interface AcpErrorVerdict {
   readonly cls: AcpErrorClass
@@ -54,6 +62,18 @@ const CLAUDE_AUTH_KINDS: ReadonlySet<string> = new Set([
 const TRANSIENT_TEXT =
   /\b429\b|rate.?limit|overloaded|too many requests|temporarily unavailable|service unavailable|\b5\d\d\b|timed? ?out|econnreset|etimedout|epipe|socket hang up|network error|empty or malformed/i
 const QUOTA_TEXT = /quota exceeded|usage limit|billing|insufficient.?quota|credits/i
+
+/**
+ * Bare runtime-error phrasings of the major JS engines. A match marks the
+ * ACP SDK's catch-all `data.details` (a non-RequestError thrown inside the
+ * agent process) as an agent-internal crash rather than a request-level
+ * failure: V8 ("Cannot read properties of undefined (reading 'x')" /
+ * "x is not a function"), JavaScriptCore ("undefined is not an object
+ * (evaluating 'x')" — the phrasing Bun emits), Hermes ("undefined is not
+ * a function"), SpiderMonkey ("x is undefined").
+ */
+const RUNTIME_ERROR_TEXT =
+  /cannot read propert|cannot read private member|is not a function|is not a constructor|is not iterable|is not an object|is not defined|\bis undefined\b|\(intermediate value\)|cannot destructure|cannot set propert|right-hand side of 'in'|invalid assignment|assignment to undeclared|too much recursion|maximum call stack|out of memory/i
 
 function readData(err: unknown): Record<string, unknown> | undefined {
   if (!err || typeof err !== 'object') return undefined
@@ -118,6 +138,17 @@ export function classifyAcpError(err: unknown): AcpErrorVerdict {
     if (fromClaude) return fromClaude
     const fromCodex = classifyCodexInfo(data['codexErrorInfo'])
     if (fromCodex) return fromCodex
+    // The ACP SDK wraps any non-RequestError thrown inside the agent process
+    // as `internalError({ details })` — but that bag holds ANY plain-Error
+    // message, so gate on a JS-engine runtime-error phrasing: a TypeError
+    // deep in the agent's own code is an agent-internal crash, NOT an auth
+    // failure (and not retryable in place — the session layer hot-reconnects
+    // instead). Other `details` content falls through to the text fallback,
+    // where an unrecognised message stays conservatively fatal.
+    const details = data['details']
+    if (typeof details === 'string' && RUNTIME_ERROR_TEXT.test(details)) {
+      return { cls: 'agent_crash', kind: 'internal' }
+    }
   }
   const code = (err as { code?: unknown } | undefined)?.code
   if (typeof code === 'number' && code === -32000) return { cls: 'auth' }

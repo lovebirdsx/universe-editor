@@ -69,6 +69,42 @@ describe('classifyAcpError', () => {
     expect(classifyAcpError({ code: -32000, message: 'Authentication required' }).cls).toBe('auth')
   })
 
+  it('classifies the SDK catch-all wrapper (data.details) as agent_crash, not auth', () => {
+    // A bare TypeError thrown inside the agent process is wrapped by the ACP
+    // SDK's errorToResult as internalError({ details }) — code -32603. The
+    // 'Internal error' code/message must NOT be mistaken for authRequired, and
+    // the bare exception marks an agent-internal crash (hot-reconnect tier).
+    const screenshot = classifyAcpError({
+      code: -32603,
+      message: "Internal error: undefined is not an object (evaluating 'e.includes')",
+      data: { details: "undefined is not an object (evaluating 'e.includes')" },
+    })
+    expect(screenshot.cls).toBe('agent_crash')
+    expect(screenshot.kind).toBe('internal')
+    // Other engine phrasings of a bare runtime error classify the same way.
+    for (const details of [
+      "Cannot read properties of undefined (reading 'includes')",
+      'x is not a function',
+      'undefined is not a function',
+      'foo is undefined',
+      'Maximum call stack size exceeded',
+    ]) {
+      expect(classifyAcpError({ code: -32603, data: { details } }).cls).toBe('agent_crash')
+    }
+    // Structured fork data still wins over the wrapper shape.
+    expect(classifyAcpError({ code: -32603, data: { errorKind: 'overloaded' } }).cls).toBe(
+      'transient',
+    )
+    // A `details` that does NOT read like a runtime error falls through —
+    // agents also wrap plain Errors (e.g. their own "Session not found"), and
+    // those must not trigger a hot-reconnect.
+    expect(classifyAcpError({ code: -32603, data: { details: 'Session not found' } }).cls).toBe(
+      'fatal',
+    )
+    // A -32603 WITHOUT the details payload keeps its old behaviour (text fallback).
+    expect(classifyAcpError({ code: -32603, message: 'Internal error' }).cls).toBe('fatal')
+  })
+
   it('falls back to message text when no structured data', () => {
     expect(classifyAcpError(new Error('HTTP 429 Too Many Requests')).cls).toBe('transient')
     expect(classifyAcpError(new Error('service temporarily unavailable')).cls).toBe('transient')
