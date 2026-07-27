@@ -240,6 +240,9 @@ export const P4CacheNs = {
    *  In-memory only: the file list embeds depot→local paths (`p4 where`) which
    *  depend on the client view, so it isn't persisted across sessions. */
   archiveDescribe: 'archiveDescribe',
+  /** `filelog -m N <depot>[#rev]` — one file's revision history (the Timeline
+   *  view's page source). Grows on submit/sync, so TTL like the graph list. */
+  filelog: 'filelog',
 } as const
 
 export type P4CacheNamespace = (typeof P4CacheNs)[keyof typeof P4CacheNs]
@@ -255,6 +258,10 @@ export function registerP4CacheNamespaces(cache: P4Cache, workspaceTtlMs: number
   cache.register(P4CacheNs.shelvedDescribe, { kind: 'ttl', ttlMs: workspaceTtlMs })
   cache.register(P4CacheNs.archiveDescribe, { kind: 'immutable', persist: false })
   cache.register(P4CacheNs.changesSubmitted, {
+    kind: 'ttl',
+    ttlMs: Math.max(workspaceTtlMs, 20_000),
+  })
+  cache.register(P4CacheNs.filelog, {
     kind: 'ttl',
     ttlMs: Math.max(workspaceTtlMs, 20_000),
   })

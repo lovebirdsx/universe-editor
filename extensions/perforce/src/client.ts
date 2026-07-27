@@ -42,6 +42,8 @@ import {
   toReconcileResourceStates,
 } from './p4Decoration.js'
 import { parseShelved, type ShelvedFile } from './shelveParser.js'
+import { parseFstat, type FstatInfo } from './fstatParser.js'
+import { parseFilelog, type FilelogRevision } from './filelogParser.js'
 import {
   parseReconcile,
   mergeReconcile,
@@ -1505,6 +1507,48 @@ export class PerforceClient {
   /** Count files currently open in the workspace (the synthetic pending node). */
   async getPendingCount(): Promise<number> {
     return (await this._openedFiles()).length
+  }
+
+  /**
+   * `p4 fstat` for one local file: depot path, have/head revisions, and the open
+   * action (undefined when not open). Returns undefined when the file is not
+   * under depot control (or the query fails) — the Timeline provider treats that
+   * as "not ours" and stays silent for the file.
+   */
+  async fstat(localPath: string): Promise<FstatInfo | undefined> {
+    const res = await this._p4.execRecords(['fstat', localPath])
+    if (res.result.exitCode !== 0) return undefined
+    return parseFstat(res.records)[0]
+  }
+
+  /**
+   * One page of a file's revision history (`p4 filelog -m <max> <depotFile>`,
+   * newest-first). `fromRev` bounds the page from above (`<depotFile>#<fromRev>`),
+   * which is how the Timeline view pages backwards without re-resolving the
+   * depot path. Empty array on failure (e.g. an open-for-add file with no depot
+   * history yet). Cached with the workspace TTL — the Timeline view re-pulls the
+   * first page on every active-editor switch, and history only grows on
+   * submit/sync (which `_mutate` invalidates).
+   */
+  async getFilelog(depotFile: string, max: number, fromRev?: number): Promise<FilelogRevision[]> {
+    const spec = fromRev !== undefined ? `${depotFile}#${fromRev}` : depotFile
+    const json = await this._cache.wrap(P4CacheNs.filelog, `${spec}:${max}`, async () => {
+      const res = await this._p4.execRecords(['filelog', '-m', String(max), spec])
+      if (res.result.exitCode !== 0) return undefined
+      return JSON.stringify(parseFilelog(res.records))
+    })
+    return json === undefined ? [] : (JSON.parse(json) as FilelogRevision[])
+  }
+
+  /**
+   * True when the working-tree content of an UNOPENED file differs from its have
+   * revision (`p4 diff -se`) — the reconcile-drift case the Timeline "pending"
+   * entry mirrors from git's uncommitted row. Opened files don't need this (their
+   * fstat action already says so); an unopened clean file prints nothing.
+   */
+  async differsFromHave(localPath: string): Promise<boolean> {
+    const res = await this._p4.exec(['diff', '-se', localPath])
+    return res.exitCode === 0 && res.stdout.trim().length > 0
   }
 
   /**

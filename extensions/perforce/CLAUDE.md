@@ -16,7 +16,7 @@
 |---|---|---|
 | CLI 封装 | `p4Service.ts` | `spawn('p4', argv)`（**数组、`shell:false`**，绝不拼 shell 串）；`exec`/`execJson`(`-Mj`)/`execTagged`(`-ztag`)；连接全局选项 `-p/-u/-c`；**env 净化**（剥离 `ELECTRON_*`/`NODE_OPTIONS` 防被劫持）；经 `ConcurrencyGate` 限并发。**非零退出不 reject**，只有 spawn 失败（p4 缺失 ENOENT）才 reject |
 | 输出解析 | `p4Output.ts` | 纯函数：`parseMarshalJson`（`-Mj` 每行一 JSON）、`parseZtag`（`... key value`，空行分记录）、`collapseNumberedKeys`（`depotFile0/1/…` 并行键折叠成数组）。**全部纯、可对 fixture 单测** |
-| 领域解析 | `openedParser.ts` `fstatParser.ts` `shelveParser.ts` `blameSource.ts` `changeSpec.ts` `changelist.ts` | 把 p4 记录 → 领域模型 / 分组。**纯，无 p4 I/O**，各带 `__tests__` |
+| 领域解析 | `openedParser.ts` `fstatParser.ts` `shelveParser.ts` `blameSource.ts` `changeSpec.ts` `changelist.ts` `filelogParser.ts` | 把 p4 记录 → 领域模型 / 分组。**纯，无 p4 I/O**，各带 `__tests__` |
 | 连接发现 | `clientDiscovery.ts` | 无连接 `p4 -ztag info` 解析 client/root/user（**不取 port**，见下节红线）；`perforce.port/user/client` 兜底；folder 不在 p4 workspace 内 → 返回 undefined（禁用 provider） |
 | client 编排 | `client.ts` `clientManager.ts` `baselineProvider.ts` | `PerforceClient` = 一个 client 一个 `SourceControl` + 动态 changelist 分组 + refresh 编排 + 所有 p4 操作方法；`ClientManager` 按 root 路由；`BaselineProvider` = `#have` 内容缓存（`depotFile#rev` 键） |
 | 入口 & UI 挂钩 | `extension.ts` `p4StatusBar.ts` `autoEdit.ts` `p4Decoration.ts` `p4Error.ts` `nls.ts` | `activate` 发现 client → 注册全部命令；状态栏、autoEdit、行装饰、错误分类/toast、本地化 |
@@ -156,7 +156,21 @@ dirty-diff gutter 与 inline blame 原本硬编码 `git.*` 命令；已抽象为
 
 ## 解析器测试套路（纯函数，node 环境）
 
-领域/输出解析全部纯函数 + `src/__tests__/*.test.ts`，对 fixture 断言（`openedParser`/`reconcileParser`/`changeSpec`/`changelist`/`shelveParser`/`blameSource`/`pathUtil`/`p4Output`）。**新增任何解析逻辑先写纯函数 + 单测**，client 只做编排。mock extension-api 套路见 create-extension（`vi.mock('@universe-editor/extension-api', …)`）。带 I/O 的 `p4Service` 用 `vi.mock('node:child_process')` 注入假子进程测（见上节崩溃防护）。当前 perforce 包 13 个测试文件。
+领域/输出解析全部纯函数 + `src/__tests__/*.test.ts`，对 fixture 断言（`openedParser`/`reconcileParser`/`changeSpec`/`changelist`/`shelveParser`/`blameSource`/`pathUtil`/`p4Output`）。**新增任何解析逻辑先写纯函数 + 单测**，client 只做编排。mock extension-api 套路见 create-extension（`vi.mock('@universe-editor/extension-api', …)`）。带 I/O 的 `p4Service` 用 `vi.mock('node:child_process')` 注入假子进程测（见上节崩溃防护）。当前 perforce 包 15 个测试文件。
+
+## Timeline（单文件历史，`p4 filelog`）
+
+`timelineProvider.ts` 是对等 git timeline 的单文件历史：Explorer 侧栏 Timeline 视图列出当前文件的修订历史（`PerforceTimelineProvider`，id `perforce-history`），点击行打开与上一修订的 diff。renderer 的 Timeline 视图零改动——按 scheme 聚合所有 provider、多来源按 timestamp 归并，git/p4 条目自然并排。
+
+- **数据源**：`client.getFilelog(depotFile, max, fromRev?)` → `p4 filelog -m <max> <depot>[#rev]`，走 `execRecords`（`-Mj` 塌陷自动回退 `-ztag`），解析在 `filelogParser.ts`（纯函数：numbered 并行键主路径 + 单值键防御路径，rev strip `#` 前缀）。结果走 `P4CacheNs.filelog`（TTL，对齐 `changesSubmitted`；`_mutate` 的 `invalidateWorkspace` 自动失效）。
+- **分页**：git 同款 limit+1 探针。cursor = `${depotFile}#${probe.rev}`（opaque，翻页 `lastIndexOf('#')` 解析，**不再 fstat**）；`p4 filelog file#N` 从 #N 往回列（含 #N），probe 在下一页复现为第一条，与 `git log <cursor>` 语义一致。
+- **Pending 项（对齐 git 的 Uncommitted Changes）**：首页顶部，双判定——fstat 有 `action`（已签出）直接成立；未签出时跑 `p4 diff -se <file>`（exit 0 且非空 = 磁盘偏离 have，即 reconcile-drift 情形）。`perforce.timeline.showPending`（默认开）可关。点击 = have 版本 vs 工作区 diff（右侧 `liveModified` 跟随实时编辑；open-for-add 无 have 则左侧为空）。`p4 filelog` 对 open-for-add 报错 → 只返回 pending 项（对齐 git unborn branch）。
+- **client 解析必须走 `ClientManager.resolveContaining`**（严格最长前缀，**无 active fallback**）——`resolveClient` 的 active fallback 是命令路由语义（无参命令打向当前选中 repo），timeline 是数据查询语义，fallback 会把 root 外的文件错误归到 active client。openDiff 命令 handler 同样用 `resolveContaining`。
+- **`trackClient` 防抖 200ms**：client 的 `onDidChange` 在 `_withBusy` push/pop 时也 fire，不防抖会让一次 mutate 触发视图反复重载。
+- **历史项 diff 两侧**：复用图谱的 `statusFromAction` + `fileDiffRevs`（add→左空、delete→右空、edit→`#rev-1`/`#rev`）+ `client.printRevision`（带 immutable 缓存）。
+- **右键菜单**：`timeline/item/context`，when `timelineItem == perforce:file:rev`（pending 项 `perforce:file:working` 不配菜单，对齐 git）。
+- **不做**：`-i` follow integrates（输出含来源行、解析复杂，第一版只显示当前 depot 路径历史）。中文 depot 路径走 argv 乱码是已知未修复问题（见上节），filelog/print 同样受限，修复时应统一在 `P4Service` 层做（`-x` argfile）。
+- 测试：`__tests__/timelineProvider.test.ts`（仿 git 测试 mock 套路 + 真 `ClientManager` 测 `resolveContaining`）+ `__tests__/filelogParser.test.ts`。
 
 ## 密钥 / env 安全红线（重申）
 
@@ -166,7 +180,7 @@ dirty-diff gutter 与 inline blame 原本硬编码 `git.*` 命令；已抽象为
 
 ## 配置项（`perforce.*`）
 
-`enabled`(默认 true)、`port`/`user`/`client`（连接兜底，优先 `p4 set`/P4CONFIG）、`maxConcurrent`(4)、`refreshInterval`(0=关，最小 10s)、`autoEdit`(false)、`autoReconcile`(false，每次 refresh 带 reconcile 发现)、`autoRefresh`(true，文件监视触发带 reconcile 发现的自动刷新)、`cache.*`。加新配置：`package.json` `contributes.configuration` + nls description key，读用 `workspace.getConfiguration('perforce').get(key, default)`。
+`enabled`(默认 true)、`port`/`user`/`client`（连接兜底，优先 `p4 set`/P4CONFIG）、`maxConcurrent`(4)、`refreshInterval`(0=关，最小 10s)、`autoEdit`(false)、`autoReconcile`(false，每次 refresh 带 reconcile 发现)、`autoRefresh`(true，文件监视触发带 reconcile 发现的自动刷新)、`timeline.showPending`(true，Timeline 顶部待定更改条目)、`cache.*`。加新配置：`package.json` `contributes.configuration` + nls description key，读用 `workspace.getConfiguration('perforce').get(key, default)`。
 
 ## 验证
 
@@ -199,7 +213,8 @@ pnpm check                                       # lint+typecheck+全测+docs:ch
 - `extensions/perforce/src/reconcileParser.ts` —— `reconcile -n` 输出解析（纯 + 单测），待收集分组数据源
 - `extensions/perforce/src/clientManager.ts` / `clientDiscovery.ts` —— 路由 / `p4 info` 发现
 - `extensions/perforce/src/changelist.ts` / `p4Output.ts` —— 分组纯逻辑 / 输出解析（numbered 并行键）
-- `extensions/perforce/src/{openedParser,fstatParser,shelveParser,blameSource,changeSpec}.ts` —— 领域解析（各带 __tests__）
+- `extensions/perforce/src/{openedParser,fstatParser,shelveParser,blameSource,changeSpec,filelogParser}.ts` —— 领域解析（各带 __tests__；filelogParser 是 Timeline 单文件历史的数据源）
+- `extensions/perforce/src/timelineProvider.ts` —— Timeline provider（单文件历史 + 待定更改项 + openDiff/copyChangelistNumber 命令；含 resolveContaining/debounce 注释）
 - `extensions/perforce/src/{baselineProvider,p4Decoration,p4Error,autoEdit,p4StatusBar,concurrency,pathUtil,nls}.ts`
 - `packages/extensions-common/src/contracts/{dirtyDiff,blame}.ts` —— provider capability 契约（宿主泛化）
 - `apps/editor/src/renderer/services/extensions/ScmService.ts` —— `resolveScmProviderId`（单个最具体 owner，dirty-diff/blame 路由）/ `resolveScmProviderIds`（全部 owner，菜单门控）/ `encodeScmProviderIds`（`|a|b|` 成员编码）/ `scmProviderPathKey`

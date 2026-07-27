@@ -57,6 +57,17 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.status.offline': '离线',
   'perforce.status.notLoggedIn': '未登录',
   'perforce.status.tooltip': 'Perforce：{0} · {1} 个已打开，{2} 个待收集',
+  // timeline (file history)
+  'perforce.timeline.providerLabel': 'Perforce 历史',
+  'perforce.timeline.pendingChanges': '待定更改',
+  'perforce.timeline.openComparison': '打开比较',
+  'perforce.timeline.secondsAgo': '{0} 秒前',
+  'perforce.timeline.minutesAgo': '{0} 分钟前',
+  'perforce.timeline.hoursAgo': '{0} 小时前',
+  'perforce.timeline.daysAgo': '{0} 天前',
+  'perforce.timeline.weeksAgo': '{0} 周前',
+  'perforce.timeline.monthsAgo': '{0} 个月前',
+  'perforce.timeline.yearsAgo': '{0} 年前',
   // swarm (P4 Code Review)
   'perforce.swarm.notConfigured':
     '尚未配置 Swarm。请设置 perforce.swarm.enabled 与 perforce.swarm.url。',

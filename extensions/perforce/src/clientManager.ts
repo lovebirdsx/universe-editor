@@ -51,19 +51,31 @@ export class ClientManager {
       if (hit) return hit
     }
     if (a?.resourceUri) {
-      const p = norm(a.resourceUri)
-      let best: PerforceClient | undefined
-      let bestLen = -1
-      for (const client of this._clients.values()) {
-        const r = norm(client.root)
-        if ((p === r || p.startsWith(`${r}/`)) && r.length > bestLen) {
-          best = client
-          bestLen = r.length
-        }
-      }
-      if (best) return best
+      const hit = this.resolveContaining(a.resourceUri)
+      if (hit) return hit
     }
     return this.active
+  }
+
+  /**
+   * The client whose root contains `resourceUri`, longest prefix wins — with NO
+   * active-client fallback. Command routing ({@link resolveClient}) falls back
+   * to the active client for argument-less invocations; data queries (timeline)
+   * must not, or a file outside every client root would silently read history
+   * from the wrong workspace.
+   */
+  resolveContaining(resourceUri: string): PerforceClient | undefined {
+    const p = norm(resourceUri)
+    let best: PerforceClient | undefined
+    let bestLen = -1
+    for (const client of this._clients.values()) {
+      const r = norm(client.root)
+      if ((p === r || p.startsWith(`${r}/`)) && r.length > bestLen) {
+        best = client
+        bestLen = r.length
+      }
+    }
+    return best
   }
 
   dispose(): void {

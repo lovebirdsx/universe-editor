@@ -235,6 +235,16 @@
         "title": "%perforce.command.swarm.updateReviewFromChangelist.title%",
         "category": "Perforce",
         "icon": "sync"
+      },
+      {
+        "command": "perforce.timeline.openDiff",
+        "title": "%perforce.command.timeline.openDiff.title%",
+        "category": "Perforce"
+      },
+      {
+        "command": "perforce.timeline.copyChangelistNumber",
+        "title": "%perforce.command.timeline.copyChangelistNumber.title%",
+        "category": "Perforce"
       }
     ],
     "submenus": [
@@ -568,6 +578,18 @@
           "group": "navigation@3",
           "icon": "compare-changes"
         }
+      ],
+      "timeline/item/context": [
+        {
+          "command": "perforce.timeline.openDiff",
+          "when": "timelineItem == perforce:file:rev",
+          "group": "1_diff@1"
+        },
+        {
+          "command": "perforce.timeline.copyChangelistNumber",
+          "when": "timelineItem == perforce:file:rev",
+          "group": "2_copy@1"
+        }
       ]
     },
     "configuration": {
@@ -619,6 +641,11 @@
           "type": "boolean",
           "default": true,
           "description": "%perforce.config.autoRefresh.description%"
+        },
+        "perforce.timeline.showPending": {
+          "type": "boolean",
+          "default": true,
+          "description": "%perforce.config.timeline.showPending.description%"
         },
         "perforce.cache.enabled": {
           "type": "boolean",

@@ -37,6 +37,7 @@ import { statusFromAction, fileDiffRevs, displayPath } from './p4GraphParser.js'
 import { uriToFsPath, norm } from './pathUtil.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
 import { createSwarmLogger } from './swarm/swarmLog.js'
+import { createPerforceTimelineCommands, PerforceTimelineProvider } from './timelineProvider.js'
 import { localize } from './nls.js'
 
 function resourcePath(arg: unknown): string | undefined {
@@ -179,6 +180,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const mgr = new ClientManager()
   context.subscriptions.push(mgr)
   mgr.add(client)
+
+  // Timeline — per-file revision history (p4 filelog) for the Explorer Timeline
+  // view, the Perforce counterpart of the git extension's provider.
+  const timelineProvider = new PerforceTimelineProvider(mgr, log)
+  context.subscriptions.push(timelineProvider.trackClient(client))
+  context.subscriptions.push(workspace.registerTimelineProvider(['file'], timelineProvider))
+  context.subscriptions.push(...createPerforceTimelineCommands(mgr, log))
 
   const statusBar = new P4StatusBarController(mgr)
   context.subscriptions.push(statusBar)
