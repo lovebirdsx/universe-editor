@@ -73,16 +73,16 @@ import type {
   AcpUsage,
   IAcpSession,
   TimelineItem,
-} from '../../../services/acp/acpSessionService.js'
+} from '../../../services/acp/session/acpSessionService.js'
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk'
 import { invalidateMentionFileCache } from '../../../services/acp/mentionFileSearch.js'
-import { AcpPromptDraftCache } from '../../../services/acp/acpPromptDraftCache.js'
+import { AcpPromptDraftCache } from '../../../services/acp/session/acpPromptDraftCache.js'
 import { PromptInput, extractSlashQuery } from '../PromptInput.js'
 import type { WidgetHandle } from '../ChatBody.js'
 import { ServicesContext } from '../../useService.js'
 import { IExcludeService } from '../../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../../services/exclude/testing/fakeExcludeService.js'
-import { IAcpPromptHistoryService } from '../../../services/acp/acpPromptHistoryService.js'
+import { IAcpPromptHistoryService } from '../../../services/acp/session/acpPromptHistoryService.js'
 import { MonacoLoader } from '../../editor/monaco/MonacoLoader.js'
 import styles from '../agents.module.css'
 

@@ -34,7 +34,7 @@ import type {
   AcpUsage,
   IAcpSession,
   TimelineItem,
-} from '../../../services/acp/acpSessionService.js'
+} from '../../../services/acp/session/acpSessionService.js'
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk'
 import { ConfigOptionsBar } from '../ConfigOptionsBar.js'
 import { ServicesContext } from '../../useService.js'

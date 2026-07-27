@@ -14,8 +14,8 @@ import {
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { IAcpChatWidgetService } from '../services/acp/acpChatWidgetService.js'
-import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
+import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
+import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { ACP_NAV_WHEN, CATEGORY, resolveNavWidget } from './_agentShared.js'
 
 // The prompt-suggestion popover and in-session find bind keys that would otherwise

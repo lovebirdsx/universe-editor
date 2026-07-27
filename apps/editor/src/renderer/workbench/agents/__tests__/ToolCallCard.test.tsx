@@ -20,7 +20,7 @@ import type {
   AcpMessage,
   AcpToolCall,
   AcpToolCallStatus,
-} from '../../../services/acp/acpSessionService.js'
+} from '../../../services/acp/session/acpSessionService.js'
 import { ToolCallCard } from '../ToolCallCard.js'
 import { ServicesContext } from '../../useService.js'
 

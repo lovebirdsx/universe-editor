@@ -27,25 +27,25 @@ import {
   IEditorService,
   type IEditorService as IEditorServiceType,
 } from '@universe-editor/platform'
-import { AcpSessionEditorInput } from '../../../services/acp/acpSessionEditorInput.js'
+import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
 import {
   IAcpSessionService,
   type IAcpSessionService as IAcpSessionServiceType,
-} from '../../../services/acp/acpSessionService.js'
+} from '../../../services/acp/session/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
   type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
-} from '../../../services/acp/acpSessionHistory.js'
+} from '../../../services/acp/session/acpSessionHistory.js'
 import {
   IAcpChatWidgetService,
   type IAcpChatWidgetService as IAcpChatWidgetServiceType,
-} from '../../../services/acp/acpChatWidgetService.js'
+} from '../../../services/acp/session/acpChatWidgetService.js'
 import {
   AcpSessionOutlineRegistry,
   type IAcpSessionOutlineController,
-} from '../../../services/acp/acpSessionOutlineRegistry.js'
+} from '../../../services/acp/session/acpSessionOutlineRegistry.js'
 import type { ILanguageFeaturesService } from '../../../services/languageFeatures/LanguageFeaturesService.js'
-import type { TimelineItem } from '../../../services/acp/acpSessionModel.js'
+import type { TimelineItem } from '../../../services/acp/session/acpSessionModel.js'
 import { ServicesContext } from '../../useService.js'
 import { OutlineView } from '../OutlineView.js'
 import { outlineViewState } from '../outlineViewState.js'

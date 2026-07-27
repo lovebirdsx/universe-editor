@@ -39,16 +39,19 @@ import {
 } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { relativeTime } from '../../relativeTime.js'
-import { IAcpSessionService, type IAcpSession } from '../../services/acp/acpSessionService.js'
+import {
+  IAcpSessionService,
+  type IAcpSession,
+} from '../../services/acp/session/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
   type SessionHistoryScope,
-} from '../../services/acp/acpSessionHistory.js'
-import { IAcpSessionFilterService } from '../../services/acp/acpSessionFilterService.js'
-import { statusBucketFor } from '../../services/acp/acpSessionFilterService.js'
-import { computeSessionDisplayStatus } from '../../services/acp/acpSessionStatus.js'
-import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
+} from '../../services/acp/session/acpSessionHistory.js'
+import { IAcpSessionFilterService } from '../../services/acp/session/acpSessionFilterService.js'
+import { statusBucketFor } from '../../services/acp/session/acpSessionFilterService.js'
+import { computeSessionDisplayStatus } from '../../services/acp/session/acpSessionStatus.js'
+import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { AgentIcon } from './agentIcon.js'
 import {
   SessionRowContextMenu,

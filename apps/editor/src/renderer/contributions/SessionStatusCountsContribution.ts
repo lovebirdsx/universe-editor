@@ -12,8 +12,8 @@ import {
   autorun,
   type ILogger,
 } from '@universe-editor/platform'
-import { IAcpSessionService } from '../services/acp/acpSessionService.js'
-import { computeSessionDisplayStatus } from '../services/acp/acpSessionStatus.js'
+import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
+import { computeSessionDisplayStatus } from '../services/acp/session/acpSessionStatus.js'
 import { ISessionSwitcherService } from '../../shared/ipc/sessionSwitcher.js'
 
 export class SessionStatusCountsContribution extends Disposable implements IWorkbenchContribution {

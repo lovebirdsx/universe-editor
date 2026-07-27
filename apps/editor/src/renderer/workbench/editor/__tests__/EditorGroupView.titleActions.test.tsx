@@ -31,7 +31,7 @@ import {
 import { EditorGroupView } from '../EditorGroupView.js'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import { ServicesContext } from '../../useService.js'
-import { AcpSessionEditorInput } from '../../../services/acp/acpSessionEditorInput.js'
+import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
 import {
   ChatFindAction,
   FocusBottomAcpTimelineAction,

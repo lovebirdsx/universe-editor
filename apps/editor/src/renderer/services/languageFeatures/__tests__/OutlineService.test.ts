@@ -23,25 +23,25 @@ import {
   MarkdownPreviewRegistry,
   type IMarkdownPreviewController,
 } from '../../editor/MarkdownPreviewRegistry.js'
-import { AcpSessionEditorInput } from '../../acp/acpSessionEditorInput.js'
+import { AcpSessionEditorInput } from '../../acp/session/acpSessionEditorInput.js'
 import {
   IAcpSessionService,
   type IAcpSessionService as IAcpSessionServiceType,
-} from '../../acp/acpSessionService.js'
+} from '../../acp/session/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
   type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
-} from '../../acp/acpSessionHistory.js'
+} from '../../acp/session/acpSessionHistory.js'
 import {
   IAcpChatWidgetService,
   type IAcpChatWidgetService as IAcpChatWidgetServiceType,
-} from '../../acp/acpChatWidgetService.js'
+} from '../../acp/session/acpChatWidgetService.js'
 import {
   AcpSessionOutlineRegistry,
   type IAcpSessionOutlineController,
-} from '../../acp/acpSessionOutlineRegistry.js'
-import { ACP_OUTLINE_LANGUAGE_ID } from '../../acp/acpTimelineOutline.js'
-import type { TimelineItem } from '../../acp/acpSessionModel.js'
+} from '../../acp/session/acpSessionOutlineRegistry.js'
+import { ACP_OUTLINE_LANGUAGE_ID } from '../../acp/session/acpTimelineOutline.js'
+import type { TimelineItem } from '../../acp/session/acpSessionModel.js'
 import type { ILanguageFeaturesService } from '../LanguageFeaturesService.js'
 import { OutlineService } from '../OutlineService.js'
 

@@ -32,10 +32,10 @@ import {
   AcpForeignWorktreeError,
   IAcpSessionService,
   type RewindFilesResult,
-} from '../services/acp/acpSessionService.js'
-import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
-import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
-import { AcpPromptReplaceInbox } from '../services/acp/acpPromptReplaceInbox.js'
+} from '../services/acp/session/acpSessionService.js'
+import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
+import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
+import { AcpPromptReplaceInbox } from '../services/acp/session/acpPromptReplaceInbox.js'
 import { CATEGORY } from './_agentShared.js'
 
 interface RewindForkArg {

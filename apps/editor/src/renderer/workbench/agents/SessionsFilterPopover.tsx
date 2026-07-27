@@ -17,7 +17,7 @@ import {
   SESSION_STATUS_BUCKETS,
   type SessionSortMode,
   type SessionStatusBucket,
-} from '../../services/acp/acpSessionFilterService.js'
+} from '../../services/acp/session/acpSessionFilterService.js'
 import styles from './agents.module.css'
 
 export interface SessionsFilterPopoverProps {

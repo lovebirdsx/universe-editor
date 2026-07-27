@@ -10,7 +10,7 @@
 import { AlertTriangle } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import { useObservable } from '../useService.js'
-import type { IAcpSession } from '../../services/acp/acpSession.js'
+import type { IAcpSession } from '../../services/acp/session/acpSession.js'
 import styles from './agents.module.css'
 
 const WARN_THRESHOLD = 0.8

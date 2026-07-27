@@ -23,7 +23,7 @@ const rendererDomTests = [
   'src/renderer/contributions/__tests__/ThemeContribution.test.ts',
   'src/renderer/contributions/__tests__/WindowTitleContribution.test.ts',
   'src/renderer/contributions/__tests__/WorkbenchFontContribution.test.ts',
-  'src/renderer/services/acp/__tests__/acpChatWidgetService.test.ts',
+  'src/renderer/services/acp/session/__tests__/acpChatWidgetService.test.ts',
   'src/renderer/services/editor/__tests__/FileEditorInput.externalChange.test.ts',
   'src/renderer/services/editor/__tests__/FileEditorInput.test.ts',
   'src/renderer/services/editor/__tests__/editorFocus.test.ts',

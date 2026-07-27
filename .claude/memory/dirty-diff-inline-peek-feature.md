@@ -21,7 +21,7 @@ metadata:
 
 Stage 后端（git 扩展）：
 - `extensions/git/src/hunkPatch.ts` `selectHunkPatch` — `git diff -U0` 每个 hunk 1:1 对应一个 region，按行范围选 hunk 拼 header+hunk。
-- `repository.ts` `stageChange` — diff -U0 → selectHunkPatch → `git apply --cached --unidiff-zero --whitespace=nowarn -`(stdin)。`gitService.ts` `gitExec` 的 `options.input` 走 stdin。命令常量 `packages/extensions-common/src/dirtyDiff.ts` `DirtyDiffCommands.stageChange`。
+- `repository.ts` `stageChange` — diff -U0 → selectHunkPatch → `git apply --cached --unidiff-zero --whitespace=nowarn -`(stdin)。`gitService.ts` `gitExec` 的 `options.input` 走 stdin。命令常量 `packages/extensions-common/src/contracts/dirtyDiff.ts` `DirtyDiffCommands.stageChange`。
 - 改 git 扩展后必须 `pnpm --filter @universe-editor/git build`（产物 dist/extension.js），否则运行时用旧 bundle。
 
 样式 `workbench.css` `.inline-dirty-diff*`（overlay `position:absolute;z-index:10`，header 满宽、body 占满、底部 `.inline-dirty-diff-resize` ns-resize 手柄）。codicon 图标直接可用（monaco editor.main.js 自带 codicon.css+ttf）。

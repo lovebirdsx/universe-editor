@@ -39,21 +39,21 @@ import type {
   AcpUsage,
   IAcpSession,
   TimelineItem,
-} from '../../../services/acp/acpSessionService.js'
-import { IAcpSessionService } from '../../../services/acp/acpSessionService.js'
+} from '../../../services/acp/session/acpSessionService.js'
+import { IAcpSessionService } from '../../../services/acp/session/acpSessionService.js'
 import { IAcpAgentRegistry } from '../../../services/acp/acpAgentRegistry.js'
 import {
   IAcpChatWidgetService,
   type AcpChatWidget,
-} from '../../../services/acp/acpChatWidgetService.js'
-import { AcpChatViewStateCache } from '../../../services/acp/acpChatViewStateCache.js'
-import { AcpSessionOutlineRegistry } from '../../../services/acp/acpSessionOutlineRegistry.js'
+} from '../../../services/acp/session/acpChatWidgetService.js'
+import { AcpChatViewStateCache } from '../../../services/acp/session/acpChatViewStateCache.js'
+import { AcpSessionOutlineRegistry } from '../../../services/acp/session/acpSessionOutlineRegistry.js'
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 import { ChatBody } from '../ChatBody.js'
 import { ServicesContext } from '../../useService.js'
 import styles from '../agents.module.css'
-import { IAcpPromptHistoryService } from '../../../services/acp/acpPromptHistoryService.js'
-import { ISessionBookmarkService } from '../../../services/acp/sessionBookmarkService.js'
+import { IAcpPromptHistoryService } from '../../../services/acp/session/acpPromptHistoryService.js'
+import { ISessionBookmarkService } from '../../../services/acp/session/sessionBookmarkService.js'
 
 // All cases here stay below the virtualization threshold, so the virtualizer's
 // return value is never used. The real @tanstack/react-virtual, however, attaches

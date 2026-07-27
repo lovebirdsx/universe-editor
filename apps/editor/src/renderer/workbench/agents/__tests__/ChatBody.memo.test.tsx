@@ -35,15 +35,15 @@ import type {
   AcpUsage,
   IAcpSession,
   TimelineItem,
-} from '../../../services/acp/acpSessionService.js'
-import { IAcpSessionService } from '../../../services/acp/acpSessionService.js'
+} from '../../../services/acp/session/acpSessionService.js'
+import { IAcpSessionService } from '../../../services/acp/session/acpSessionService.js'
 import { IAcpAgentRegistry } from '../../../services/acp/acpAgentRegistry.js'
-import { IAcpChatWidgetService } from '../../../services/acp/acpChatWidgetService.js'
-import { AcpChatViewStateCache } from '../../../services/acp/acpChatViewStateCache.js'
+import { IAcpChatWidgetService } from '../../../services/acp/session/acpChatWidgetService.js'
+import { AcpChatViewStateCache } from '../../../services/acp/session/acpChatViewStateCache.js'
 import type { SessionConfigOption, ContentBlock } from '@agentclientprotocol/sdk'
 import { ServicesContext } from '../../useService.js'
-import { IAcpPromptHistoryService } from '../../../services/acp/acpPromptHistoryService.js'
-import { ISessionBookmarkService } from '../../../services/acp/sessionBookmarkService.js'
+import { IAcpPromptHistoryService } from '../../../services/acp/session/acpPromptHistoryService.js'
+import { ISessionBookmarkService } from '../../../services/acp/session/sessionBookmarkService.js'
 
 // Replace MessageContent with a counter keyed by its first text block so we can
 // detect exactly which slots re-rendered.

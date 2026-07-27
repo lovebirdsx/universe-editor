@@ -16,7 +16,7 @@ import {
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { IAcpSessionService, type IAcpSession } from '../services/acp/acpSessionService.js'
+import { IAcpSessionService, type IAcpSession } from '../services/acp/session/acpSessionService.js'
 import type {
   SessionConfigOptionCategory,
   SessionConfigSelectGroup,

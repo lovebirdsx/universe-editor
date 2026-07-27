@@ -19,7 +19,7 @@ import {
 } from '@universe-editor/platform'
 import { ServicesContext } from '../../useService.js'
 import { useForeignSessionStats } from '../useForeignSessionStats.js'
-import type { AcpSessionHistoryEntry } from '../../../services/acp/acpSessionHistory.js'
+import type { AcpSessionHistoryEntry } from '../../../services/acp/session/acpSessionHistory.js'
 
 afterEach(() => cleanup())
 

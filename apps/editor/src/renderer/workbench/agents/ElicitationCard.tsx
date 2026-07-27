@@ -25,7 +25,7 @@ import type {
   AcpPendingElicitation,
   AcpUrlElicitationState,
   IAcpSession,
-} from '../../services/acp/acpSessionService.js'
+} from '../../services/acp/session/acpSessionService.js'
 import type { ElicitationSchema } from '@agentclientprotocol/sdk'
 import {
   normalizeElicitationForm,
@@ -39,7 +39,7 @@ import {
   AcpElicitationDraftCache,
   elicitationDraftKey,
   type ElicitationDraftValues,
-} from '../../services/acp/acpElicitationDraftCache.js'
+} from '../../services/acp/session/acpElicitationDraftCache.js'
 import styles from './agents.module.css'
 
 /** Editable input state — numbers stay raw strings until submit conversion. */

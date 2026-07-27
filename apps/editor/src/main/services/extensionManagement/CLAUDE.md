@@ -4,11 +4,11 @@
 
 ## 插件市场与扩展管理（分发链路）
 
-核心判断（调研 VSCode 源码 + 本仓库已确立）：**运行时早已就绪**（extension host 子进程、双信任层、`<userData>/extensions` 已被 restricted host 扫描），本层补的是**分发链路**——用户"获取、安装、更新、卸载、治理"扩展的整条路。
+核心判断（调研 VSCode 源码 + 本仓库已确立）：**运行时早已就绪**（extension host 子进程单 host + Workspace Trust、`<userData>/extensions` 与内置目录被同一 host 合并扫描），本层补的是**分发链路**——用户"获取、安装、更新、卸载、治理"扩展的整条路。
 
 > ⚠️ 第一原则：**先分清你的改动落在哪一层**。四层职责不交叉：① 纯逻辑包（`extension-packaging` 读 VSIX / `extension-gallery` 编解码市场协议，零 IO、零 DI）② main 服务（真正落盘、下载、网络）③ shared IPC 契约（`createDecorator` + wire DTO）④ renderer（门面 `ExtensionsWorkbenchService` + 视图/详情页 UI + 命令）。改错层要么编译过运行不生效，要么把网络/文件 IO 泄进了本该纯的逻辑包。
 >
-> ⚠️ 第二原则：**分发 ≠ 运行时**。"装好的扩展怎么 spawn、怎么注册 provider/命令/SCM、怎么崩溃重启"是运行时（另一套，见 memory [[extension-system-progress]] 与 `packages/extension-host/CLAUDE.md`）。本文档到"落盘 + 触发 restricted host 重扫"为止；重扫之后的加载是运行时的事。两端别混。
+> ⚠️ 第二原则：**分发 ≠ 运行时**。"装好的扩展怎么 spawn、怎么注册 provider/命令/SCM、怎么崩溃重启"是运行时（另一套，见 memory [[extension-system-progress]] 与 `packages/extension-host/CLAUDE.md`）。本文档到"落盘 + 触发 host 重启重扫"为止；重扫之后的加载是运行时的事。两端别混。
 
 ## 架构总览（四层）
 
@@ -68,7 +68,7 @@
 
 ### 启用禁用 → 生效链路（host 过滤）
 
-禁用不是运行时卸载，是**扫描时过滤**：`getDisabledIds` → renderer 传进 restricted host 启动 spec 的 `disabledIds` → main 写 env `UNIVERSE_DISABLED_EXTENSIONS` → `packages/extension-host/src/bootstrap.ts` 扫描时按 `e.id` 过滤掉。改启用禁用生效方式就顺这条链找。
+禁用不是运行时卸载，是**扫描时过滤**：`getDisabledIds` → renderer 传进 host 启动 spec 的 `disabledIds` → main 写 env `UNIVERSE_DISABLED_EXTENSIONS` → `packages/extension-host/src/bootstrap.ts` 扫描时按 `e.id` 过滤掉。改启用禁用生效方式就顺这条链找。
 
 ## ③ shared IPC 契约
 
@@ -87,7 +87,7 @@
 2. **发布者信任**：首次安装某发布者弹确认（`_ensurePublisherTrusted`），记住集存 `IStorageService` GLOBAL scope（key `extensions.trustedPublishers`）。诚实告知"接近编辑器本身的权限"。
 3. **恶意隔离**：control manifest 标记的恶意扩展——安装时拒绝（`_assertNotMalicious`，fetch 失败 fail-open、命中 fail-closed），已装的在启动时 `quarantineMalicious` 自动禁用 + 通知（`ExtensionsContribution._boot` 末尾）。
 
-**贯穿红线（全项目级）**：密钥只走 main `ISecretStorageService`(safeStorage)，绝不进 renderer/settings.json/任何 wire DTO；扩展无读密钥接口；AI 能力只给 trusted(内置)扩展；**UI/文档不得宣称扩展已沙箱**（外部扩展近乎原生 Node 权限，`docs/user/zh-CN/customization/extensions.md` 已如实写"接近编辑器本身的权限"）。
+**贯穿红线（全项目级）**：密钥只走 main `ISecretStorageService`(safeStorage)，绝不进 renderer/settings.json/任何 wire DTO；扩展无读密钥接口；**UI/文档不得宣称扩展已沙箱**（外部扩展近乎原生 Node 权限，`docs/user/zh-CN/customization/extensions.md` 已如实写"接近编辑器本身的权限"）。
 
 ## 关键决策（已拍板，见计划 README §5/§6）
 
@@ -109,7 +109,7 @@
 - **改信任提示文案/记住策略**：门面 `ExtensionsWorkbenchService._ensurePublisherTrusted`（storage key `extensions.trustedPublishers`）。
 - **改扩展视图/详情页 UI**：`workbench/extensions/{ExtensionsView,ExtensionEditor}.tsx`。
 - **加扩展相关命令**：`actions/extensionsActions.ts` + `actions/index.ts`（套路 A）。
-- **扩展装好后怎么加载/激活/注册命令**：**不在本文档**，是运行时（memory [[extension-system-progress]]、`packages/extension-host/CLAUDE.md`）。本文档到 fire `onDidChangeExtensions` → `ExtensionsContribution` 触发 `refreshExtensions`（restricted host 重扫）为止。
+- **扩展装好后怎么加载/激活/注册命令**：**不在本文档**，是运行时（memory [[extension-system-progress]]、`packages/extension-host/CLAUDE.md`）。本文档到 fire `onDidChangeExtensions` → `ExtensionsContribution` 触发 `refreshExtensions`（重启 host 重扫）为止。
 
 ## 易踩坑速记
 

@@ -130,19 +130,22 @@ import {
 import { IOutlineService, OutlineService } from './services/languageFeatures/OutlineService.js'
 import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
-import { AcpSessionService, IAcpSessionService } from './services/acp/acpSessionService.js'
+import { AcpSessionService, IAcpSessionService } from './services/acp/session/acpSessionService.js'
 import {
   AcpPromptHistoryService,
   IAcpPromptHistoryService,
-} from './services/acp/acpPromptHistoryService.js'
+} from './services/acp/session/acpPromptHistoryService.js'
 // Side-effect import: registers IAcpSessionFilterService before the
 // getSingletonServiceDescriptors() snapshot below picks it up.
-import './services/acp/acpSessionFilterService.js'
+import './services/acp/session/acpSessionFilterService.js'
 // Side-effect import: registers IQuickAccessController for the same snapshot.
 import './services/quickInput/QuickAccessController.js'
 // Side-effect import: registers IOpenerService for the same snapshot.
 import './services/opener/OpenerService.js'
-import { AcpChatWidgetService, IAcpChatWidgetService } from './services/acp/acpChatWidgetService.js'
+import {
+  AcpChatWidgetService,
+  IAcpChatWidgetService,
+} from './services/acp/session/acpChatWidgetService.js'
 import {
   ExtensionHostClientService,
   IExtensionHostClientService,

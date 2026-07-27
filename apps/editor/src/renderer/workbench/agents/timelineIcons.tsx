@@ -25,7 +25,10 @@ import {
   User,
   Wrench,
 } from 'lucide-react'
-import type { AcpMessageRole, AcpPlanEntryStatus } from '../../services/acp/acpSessionService.js'
+import type {
+  AcpMessageRole,
+  AcpPlanEntryStatus,
+} from '../../services/acp/session/acpSessionService.js'
 
 const ICON_SIZE = 14
 

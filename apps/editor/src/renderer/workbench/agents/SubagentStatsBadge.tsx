@@ -13,7 +13,7 @@ import type {
   AcpSubagentStats,
   AcpToolCall,
   AcpToolCallStatus,
-} from '../../services/acp/acpSessionService.js'
+} from '../../services/acp/session/acpSessionService.js'
 import { useElapsedTime } from './elapsedTime.js'
 import { useUsdToCnyRate } from './useExchangeRate.js'
 import { formatCny, formatTokens } from './SessionCostIndicator.js'

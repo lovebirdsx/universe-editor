@@ -12,14 +12,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable, type IWorkbenchContribution } from '@universe-editor/platform'
-import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
-import { IAcpAgentDefaultsService } from '../services/acp/acpAgentDefaultsService.js'
-import { IAcpConfigOptionsCacheService } from '../services/acp/acpConfigOptionsCache.js'
-import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
-import { IAcpCompactionStatsService } from '../services/acp/acpCompactionStats.js'
-import { ISessionChangeTrackerService } from '../services/acp/sessionChangeTracker.js'
-import { IAcpSessionFilterService } from '../services/acp/acpSessionFilterService.js'
-import { ISessionBookmarkService } from '../services/acp/sessionBookmarkService.js'
+import { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
+import { IAcpAgentDefaultsService } from '../services/acp/session/acpAgentDefaultsService.js'
+import { IAcpConfigOptionsCacheService } from '../services/acp/session/acpConfigOptionsCache.js'
+import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
+import { IAcpCompactionStatsService } from '../services/acp/session/acpCompactionStats.js'
+import { ISessionChangeTrackerService } from '../services/acp/session/sessionChangeTracker.js'
+import { IAcpSessionFilterService } from '../services/acp/session/acpSessionFilterService.js'
+import { ISessionBookmarkService } from '../services/acp/session/sessionBookmarkService.js'
 
 export class AcpInitContribution extends Disposable implements IWorkbenchContribution {
   constructor(

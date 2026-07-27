@@ -13,8 +13,8 @@ import { useEffect, useState } from 'react'
 import { Loader2, RotateCw, X } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import { useObservable } from '../useService.js'
-import type { IAcpSession } from '../../services/acp/acpSessionService.js'
-import type { AcpRecoveryState } from '../../services/acp/acpSessionRecovery.js'
+import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
+import type { AcpRecoveryState } from '../../services/acp/session/acpSessionRecovery.js'
 import styles from './agents.module.css'
 
 export function RecoveryBar({ session }: { session: IAcpSession }) {

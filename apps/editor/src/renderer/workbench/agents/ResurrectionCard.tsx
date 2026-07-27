@@ -10,7 +10,7 @@
 
 import { CheckCircle2, CircleAlert, Loader2 } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
-import type { AcpResurrection } from '../../services/acp/acpSession.js'
+import type { AcpResurrection } from '../../services/acp/session/acpSession.js'
 import { useElapsedTime } from './elapsedTime.js'
 import styles from './agents.module.css'
 

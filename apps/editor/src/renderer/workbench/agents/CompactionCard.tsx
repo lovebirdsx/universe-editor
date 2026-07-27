@@ -9,7 +9,7 @@
 import { useEffect, useState } from 'react'
 import { CheckCircle2, CircleAlert, Loader2 } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
-import type { AcpCompaction } from '../../services/acp/acpSession.js'
+import type { AcpCompaction } from '../../services/acp/session/acpSession.js'
 import { formatElapsed } from './elapsedTime.js'
 import styles from './agents.module.css'
 

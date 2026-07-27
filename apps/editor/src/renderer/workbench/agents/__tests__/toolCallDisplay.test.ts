@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import type { AcpToolCall } from '../../../services/acp/acpSessionService.js'
+import type { AcpToolCall } from '../../../services/acp/session/acpSessionService.js'
 import {
   DEFAULT_KEEP_PLANNING_MESSAGE,
   deriveToolCallDisplay,

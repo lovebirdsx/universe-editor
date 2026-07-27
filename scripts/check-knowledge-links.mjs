@@ -2,14 +2,16 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
  *  check-knowledge-links.mjs — verify that repo paths referenced from knowledge
- *  docs (skills + CLAUDE.md files) still exist, so context maps don't silently
- *  drift from the code they describe.
+ *  docs (skills + CLAUDE.md files + memory) still exist, so context maps don't
+ *  silently drift from the code they describe.
  *
- *  Scans `.claude/skills/<name>/SKILL.md` and every CLAUDE.md in the repo for inline
- *  code spans (`...`) that look like repo-root-anchored paths (apps/ packages/
- *  extensions/ vendor/ scripts/ docs/ .claude/) or skill-relative `references/`
- *  paths. Templates containing < > * { } … are ignored, as are build artifacts
- *  (out/ dist/ node_modules/). `.js` suffixes also match `.ts`/`.tsx` sources.
+ *  Scans `.claude/skills/<name>/SKILL.md`, `.claude/memory/*.md`, every CLAUDE.md
+ *  in the repo, and `vendor/<name>/CLAUDE.md` (one level only — fork internals
+ *  are exempt) for inline code spans (`...`) that look like repo-root-anchored
+ *  paths (apps/ packages/ extensions/ vendor/ scripts/ docs/ .claude/) or
+ *  skill-relative `references/` paths. Templates containing < > * { } … or ...
+ *  are ignored, as are build artifacts (out/ dist/ node_modules/). `.js`
+ *  suffixes also match `.ts`/`.tsx` sources.
  *
  *  Usage:
  *    node scripts/check-knowledge-links.mjs           # report only, exit 0
@@ -22,6 +24,7 @@ import { fileURLToPath } from 'node:url'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const SKILLS_DIR = join(REPO_ROOT, '.claude', 'skills')
+const MEMORY_DIR = join(REPO_ROOT, '.claude', 'memory')
 
 const CHECK_ONLY = process.argv.slice(2).includes('--check')
 
@@ -44,6 +47,7 @@ const IGNORE = new Set([
   'apps/editor/e2e/specs/smoke.myThing.spec.ts', // 套路 F 的占位示例文件名
   'apps/editor/release/', // electron-builder 打包产物目录，与 out/ dist/ 同类，构建前不存在
   'vendor/group/model', // AI 模型标识符三段格式说明，非路径
+  '.claude/settings.local.json', // 本机私有配置（gitignore），vendor fork 文档提及
 ])
 
 function fmt(p) {
@@ -53,7 +57,20 @@ function fmt(p) {
 function collectFiles(dir, files = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name)) collectFiles(join(dir, entry.name), files)
+      if (SKIP_DIRS.has(entry.name)) {
+        // vendor：不递归整棵 fork，但下沉一层收 fork 根部的 CLAUDE.md
+        if (entry.name === 'vendor') {
+          const vendorDir = join(dir, entry.name)
+          if (!existsSync(vendorDir)) continue
+          for (const sub of readdirSync(vendorDir, { withFileTypes: true })) {
+            if (!sub.isDirectory()) continue
+            const p = join(vendorDir, sub.name, 'CLAUDE.md')
+            if (existsSync(p)) files.push(p)
+          }
+        }
+        continue
+      }
+      collectFiles(join(dir, entry.name), files)
     } else if (entry.isFile() && entry.name === 'CLAUDE.md') {
       files.push(join(dir, entry.name))
     }
@@ -71,6 +88,13 @@ function collectSkillDocs() {
   return files
 }
 
+function collectMemoryDocs() {
+  if (!existsSync(MEMORY_DIR)) return []
+  return readdirSync(MEMORY_DIR)
+    .filter((n) => n.endsWith('.md'))
+    .map((n) => join(MEMORY_DIR, n))
+}
+
 /** Extract path candidates from inline code spans. */
 function extractCandidates(source) {
   const candidates = []
@@ -78,7 +102,7 @@ function extractCandidates(source) {
   let m
   while ((m = spanRe.exec(source)) !== null) {
     const raw = m[1].trim()
-    if (/[<>*{}…$|]/.test(raw)) continue
+    if (/[<>*{}…$|]/.test(raw) || raw.includes('...')) continue
     if (raw.includes(' ')) continue
     const isRooted = ROOT_PREFIXES.some((p) => raw.startsWith(p))
     const isSkillRelative = raw.startsWith('references/')
@@ -106,7 +130,7 @@ function pathExists(candidate, baseDir) {
 }
 
 function main() {
-  const docs = [...collectFiles(REPO_ROOT), ...collectSkillDocs()]
+  const docs = [...collectFiles(REPO_ROOT), ...collectSkillDocs(), ...collectMemoryDocs()]
   const broken = []
 
   for (const doc of docs) {

@@ -15,8 +15,8 @@ import {
   type ISettableObservable,
 } from '@universe-editor/platform'
 import { ServicesContext } from '../../useService.js'
-import { IAcpSessionService } from '../../../services/acp/acpSessionService.js'
-import type { AcpSessionStatus, IAcpSession } from '../../../services/acp/acpSession.js'
+import { IAcpSessionService } from '../../../services/acp/session/acpSessionService.js'
+import type { AcpSessionStatus, IAcpSession } from '../../../services/acp/session/acpSession.js'
 import {
   ISessionSwitcherService,
   type SessionStatusCounts,

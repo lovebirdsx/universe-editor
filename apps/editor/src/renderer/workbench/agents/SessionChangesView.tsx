@@ -23,11 +23,11 @@ import {
 } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import { resourceDragProps, useScrollRestore } from '@universe-editor/workbench-ui'
-import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
+import { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
 import {
   ISessionChangeTrackerService,
   type SessionFileChange,
-} from '../../services/acp/sessionChangeTracker.js'
+} from '../../services/acp/session/sessionChangeTracker.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
 import { openMarkdownPreviewInGroup } from '../../services/editor/openMarkdownPreview.js'

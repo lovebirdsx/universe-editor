@@ -17,7 +17,7 @@ import {
 import { Check, ChevronDown, ChevronRight, ChevronUp, CircleX, Loader2 } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import { parseAnsi, type AnsiSegment } from '../../services/acp/ansi.js'
-import type { AcpToolCallStatus } from '../../services/acp/acpSessionService.js'
+import type { AcpToolCallStatus } from '../../services/acp/session/acpSessionService.js'
 import { useContentExpansion } from './chatContentExpansion.js'
 import styles from './agents.module.css'
 

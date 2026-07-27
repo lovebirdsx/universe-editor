@@ -20,17 +20,17 @@ import {
   type IReader,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
-import { IAcpSessionService } from '../services/acp/acpSessionService.js'
-import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
+import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
+import { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
 import {
   computeSessionDisplayStatus,
   type AcpSessionDisplayStatus,
-} from '../services/acp/acpSessionStatus.js'
+} from '../services/acp/session/acpSessionStatus.js'
 import {
   formatWindowTitle,
   resolveLiveSessionTitle,
   truncateSessionTitle,
-} from '../services/acp/acpSessionTitle.js'
+} from '../services/acp/session/acpSessionTitle.js'
 
 const STATUS_SYMBOL: Record<AcpSessionDisplayStatus, string> = {
   running: '●',

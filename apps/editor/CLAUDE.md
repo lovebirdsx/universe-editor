@@ -55,6 +55,33 @@ CLI 参数 / 环境变量 / 部署配置文件的读取统一收口到 `Environm
 
 新增通用控件时优先在 workbench-ui 沉淀，不要在 feature 目录里再写一份 `<button>`+`.module.css`。设计 token（间距/圆角/字号/阴影）来自 `@universe-editor/workbench-ui/tokens.css`（已在 `main.tsx` 入口引入）。**渐进迁移项**（尚未收编、属技术债）：Diff/Terminal/SCM/Config/Search 的 `.iconBtn` 等局部按钮、SessionsPopover/ConfigOptionsBar 等交互模型不同的弹窗、未触及旧 css 的 token 化——动到相关文件时顺手迁移即可。
 
+## 嵌套知识地图
+
+`src/` 下各子系统的 CLAUDE.md 是「处理该域任务前通读」的上下文地图。本表只做索引，定位语照抄各文件头部：
+
+| 子域文档 | 定位 |
+|---|---|
+| [services/acp/CLAUDE.md](src/renderer/services/acp/CLAUDE.md) | ACP 协议客户端层 + 输入框药丸引用案例 |
+| [services/acp/session/CLAUDE.md](src/renderer/services/acp/session/CLAUDE.md) | ACP 会话子系统（生命周期/历史/恢复/书签）+ rewind 案例 |
+| [workbench/agentSettings/claude/CLAUDE.md](src/renderer/workbench/agentSettings/claude/CLAUDE.md) | Claude agent 设置面板内容本体 |
+| [workbench/agentSettings/codex/CLAUDE.md](src/renderer/workbench/agentSettings/codex/CLAUDE.md) | Codex agent 设置面板（凭据模型与 Claude 不同） |
+| [services/ai/CLAUDE.md](src/renderer/services/ai/CLAUDE.md) | 内联补全 + NES 生成层 + AI 模型门面客户端 |
+| [workbench/ai/CLAUDE.md](src/renderer/workbench/ai/CLAUDE.md) | AI 设置页面壳（AI/Agents 双组导航） |
+| [main/services/ai/CLAUDE.md](src/main/services/ai/CLAUDE.md) | AI Debug 调用记录 + 离线回放 |
+| [main/services/extensionManagement/CLAUDE.md](src/main/services/extensionManagement/CLAUDE.md) | 插件市场与扩展管理分发链路（不碰加载运行时） |
+| [services/explorer/CLAUDE.md](src/renderer/services/explorer/CLAUDE.md) | explorer 状态源 + 文件操作撤销编排 |
+| [services/opener/CLAUDE.md](src/renderer/services/opener/CLAUDE.md) | IOpenerService 三档 + 深链接案例 |
+| [services/views/CLAUDE.md](src/renderer/services/views/CLAUDE.md) | View/ViewContainer 系统运行时核心 |
+| [services/configurationResolver/CLAUDE.md](src/renderer/services/configurationResolver/CLAUDE.md) | `${...}` 配置变量替换 + 终端 cwd 回退 |
+| [services/dialogs/CLAUDE.md](src/renderer/services/dialogs/CLAUDE.md) | SimpleFileDialog 纯键盘文件选择对话框 |
+| [services/dnd/CLAUDE.md](src/renderer/services/dnd/CLAUDE.md) | 资源拖放读取/落点（抽象在 workbench-ui） |
+| [workbench/files/CLAUDE.md](src/renderer/workbench/files/CLAUDE.md) | 文件图标系统 + 语言解析 |
+| [workbench/markdown/CLAUDE.md](src/renderer/workbench/markdown/CLAUDE.md) | markdown 渲染/语言特性/预览增强 |
+| [workbench/outline/CLAUDE.md](src/renderer/workbench/outline/CLAUDE.md) | outline 视图层（服务主干在 languageFeatures） |
+| [workbench/scm/CLAUDE.md](src/renderer/workbench/scm/CLAUDE.md) | SCM 视图 + dirty-diff 内联 peek 案例 |
+| [workbench/webview/CLAUDE.md](src/renderer/workbench/webview/CLAUDE.md) | webview 基建五层架构 + 已知坑 |
+| [e2e/CLAUDE.md](e2e/CLAUDE.md) | Playwright 冒烟栈 + `__E2E__` 探针约定 |
+
 ## bootstrap 链路（renderer 端）
 
 `src/renderer/main.tsx` 顺序：

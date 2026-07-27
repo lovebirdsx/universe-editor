@@ -26,11 +26,11 @@ import type {
   IAcpSession,
   IAcpSessionService,
   TimelineItem,
-} from '../../../services/acp/acpSessionService.js'
-import { IAcpSessionService as IAcpSessionServiceId } from '../../../services/acp/acpSessionService.js'
+} from '../../../services/acp/session/acpSessionService.js'
+import { IAcpSessionService as IAcpSessionServiceId } from '../../../services/acp/session/acpSessionService.js'
 import type { McpServerDefinition } from '../../../services/acp/acpMcpServers.js'
-import { IAcpAgentDefaultsService as IAcpAgentDefaultsServiceId } from '../../../services/acp/acpAgentDefaultsService.js'
-import type { IAcpAgentDefaultsService } from '../../../services/acp/acpAgentDefaultsService.js'
+import { IAcpAgentDefaultsService as IAcpAgentDefaultsServiceId } from '../../../services/acp/session/acpAgentDefaultsService.js'
+import type { IAcpAgentDefaultsService } from '../../../services/acp/session/acpAgentDefaultsService.js'
 import { McpServerPicker } from '../McpServerPicker.js'
 import { ServicesContext } from '../../useService.js'
 

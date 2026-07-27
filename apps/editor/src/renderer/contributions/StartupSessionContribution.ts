@@ -9,7 +9,7 @@
 
 import { Disposable } from '@universe-editor/platform'
 import type { IWorkbenchContribution } from '@universe-editor/platform'
-import { IAcpSessionService } from '../services/acp/acpSessionService.js'
+import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import type { IpcBridge } from '../../preload/index.js'
 
 export class StartupSessionContribution extends Disposable implements IWorkbenchContribution {

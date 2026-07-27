@@ -18,18 +18,21 @@ import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
   type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
-} from '../../acp/acpSessionHistory.js'
-import { IAcpChatLocationService, type AcpChatLocation } from '../../acp/acpChatLocationService.js'
-import { AcpSessionEditorInput } from '../../acp/acpSessionEditorInput.js'
+} from '../../acp/session/acpSessionHistory.js'
+import {
+  IAcpChatLocationService,
+  type AcpChatLocation,
+} from '../../acp/session/acpChatLocationService.js'
+import { AcpSessionEditorInput } from '../../acp/session/acpSessionEditorInput.js'
 import {
   IAcpSessionService,
   type IAcpSession,
   type IAcpSessionService as IAcpSessionServiceType,
-} from '../../acp/acpSessionService.js'
+} from '../../acp/session/acpSessionService.js'
 import {
   IAcpChatWidgetService,
   type IAcpChatWidgetService as IAcpChatWidgetServiceType,
-} from '../../acp/acpChatWidgetService.js'
+} from '../../acp/session/acpChatWidgetService.js'
 
 class FakeSessionService {
   declare readonly _serviceBrand: undefined

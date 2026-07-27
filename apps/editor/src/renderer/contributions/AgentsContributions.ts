@@ -26,9 +26,9 @@ import { AgentsView } from '../workbench/agents/AgentsView.js'
 import { AgentsViewToolbar } from '../workbench/agents/AgentsViewToolbar.js'
 import { McpServersView } from '../workbench/agents/McpServersView.js'
 import { AcpSessionEditor } from '../workbench/agents/AcpSessionEditor.js'
-import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
-import { IAcpSessionService } from '../services/acp/acpSessionService.js'
-import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
+import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
+import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
+import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
 import { AGENT_FONT_SIZE_DEFAULT } from '../services/configuration/fontDefaults.js'
 
 export class AgentsConfigurationContribution extends Disposable implements IWorkbenchContribution {

@@ -19,11 +19,11 @@ import {
   autorun,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
-import { IAcpSessionService } from '../services/acp/acpSessionService.js'
+import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import {
   ISessionChangeTrackerService,
   type SessionFileChange,
-} from '../services/acp/sessionChangeTracker.js'
+} from '../services/acp/session/sessionChangeTracker.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
 

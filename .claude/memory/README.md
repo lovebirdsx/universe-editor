@@ -15,6 +15,9 @@ clone、以及不同机器,memory 互不可见。
 
 - 每条 memory 一个 `*.md` 文件(含 frontmatter),`MEMORY.md` 是索引。
 - 这套结构与 Claude 原生 memory 完全一致,Claude 直接读写,无需适配。
+- 单条 memory 目标 **≤20 行**(不含 frontmatter):只留「一句话现状 + 非显然教训 hook +
+  指向 CLAUDE.md/skill」。超过即视为「该沉淀到 CLAUDE.md / skill 了」的信号,
+  由季度审视(skill `audit-knowledge-base`)兜底回位。
 
 ## 新机器 / 新 clone 接入
 

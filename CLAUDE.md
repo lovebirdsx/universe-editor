@@ -30,6 +30,11 @@ packages/
 | 加 platform 内核 API（DI/Event/Command） | `packages/platform/src/` | `packages/platform/CLAUDE.md` | **必须**在 `packages/platform/src/index.ts` re-export |
 | 调整 tsconfig 预设 | `packages/config-ts/` | `packages/config-ts/CLAUDE.md` | strict 三件套不可在子包覆盖关掉 |
 | 调整 ESLint 规则 | `packages/config-eslint/` | `packages/config-eslint/CLAUDE.md` | flat config；base + react 两套 |
+| 加扩展 API / 改插件运行时 | `packages/extension-host/` | `packages/extension-host/CLAUDE.md` | 单 host + Workspace Trust；RPC 对端是 renderer 不是 main |
+| 加通用 UI 控件 | `packages/workbench-ui/` | `packages/workbench-ui/CLAUDE.md` | 纯组件无 DI；editor 侧只留薄 wrapper |
+| 写内置扩展（typescript/perforce/markdown） | `extensions/<name>/` | 各扩展目录 CLAUDE.md | 走 skill `create-extension` 脚手架 |
+| 写预览类扩展范例 | `extensions-external/pdf/` | `extensions-external/pdf/CLAUDE.md` | pdf 是最小可照抄范例 |
+| 改 vendor fork（claude-agent-acp / codex-acp） | `vendor/<fork>/` | 根 CLAUDE.md「内置 ACP agent」节 | 红线=diff 最小；改完 `pnpm agent:build` |
 
 ## 常用命令
 

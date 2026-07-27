@@ -8,7 +8,7 @@
  *  testable without a DOM.
  *--------------------------------------------------------------------------------------------*/
 
-import type { AcpChildItem, TimelineItem } from '../../services/acp/acpSession.js'
+import type { AcpChildItem, TimelineItem } from '../../services/acp/session/acpSession.js'
 
 /** Stable per-card identity, shared with ChatBody's timeline keys (`m:`/`t:`/`c:`/`r:`). */
 export function itemSlotKey(item: {

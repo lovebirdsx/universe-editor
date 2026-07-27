@@ -20,13 +20,13 @@ import {
   toDisposable,
   type IDisposable,
 } from '@universe-editor/platform'
-import { IAcpSessionService, type IAcpSession } from '../services/acp/acpSessionService.js'
-import { truncateTitle } from '../services/acp/sessionTitleFormat.js'
+import { IAcpSessionService, type IAcpSession } from '../services/acp/session/acpSessionService.js'
+import { truncateTitle } from '../services/acp/session/sessionTitleFormat.js'
 import {
   getAgentNotificationIcon,
   primeAgentNotificationIcon,
 } from '../services/acp/agentNotificationIcon.js'
-import type { AcpPlanEntry } from '../services/acp/acpSession.js'
+import type { AcpPlanEntry } from '../services/acp/session/acpSession.js'
 
 const AGENTS_CONTAINER_ID = 'workbench.view.agents'
 const AGENTS_VIEW_ID = 'workbench.view.agents.main'

@@ -11,8 +11,8 @@ import {
   observableValue,
 } from '@universe-editor/platform'
 import { SessionShutdownParticipant } from '../SessionShutdownParticipant.js'
-import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
-import type { AcpSessionStatus, IAcpSession } from '../../services/acp/acpSession.js'
+import { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
+import type { AcpSessionStatus, IAcpSession } from '../../services/acp/session/acpSession.js'
 
 function sessionWithStatus(status: AcpSessionStatus): IAcpSession {
   return { status: observableValue('status', status) } as unknown as IAcpSession

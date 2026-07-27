@@ -17,8 +17,8 @@ import {
   IAcpSessionService,
   type IAcpSession,
   type IAcpSessionService as IAcpSessionServiceType,
-} from '../../services/acp/acpSessionService.js'
-import { IAcpAgentDefaultsService } from '../../services/acp/acpAgentDefaultsService.js'
+} from '../../services/acp/session/acpSessionService.js'
+import { IAcpAgentDefaultsService } from '../../services/acp/session/acpAgentDefaultsService.js'
 import {
   resolveMcpServerSelection,
   type McpServerDefinition,

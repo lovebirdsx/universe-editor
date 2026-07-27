@@ -11,13 +11,16 @@ import {
   type ISystemNotificationResult,
 } from '@universe-editor/platform'
 import { AgentNotificationContribution } from '../AgentNotificationContribution.js'
-import type { IAcpSessionService, IAcpSession } from '../../services/acp/acpSessionService.js'
+import type {
+  IAcpSessionService,
+  IAcpSession,
+} from '../../services/acp/session/acpSessionService.js'
 import type {
   AcpSessionStatus,
   AcpPlanEntry,
   AcpPendingPermission,
   AcpPendingElicitation,
-} from '../../services/acp/acpSession.js'
+} from '../../services/acp/session/acpSession.js'
 
 interface FakeSession {
   id: string

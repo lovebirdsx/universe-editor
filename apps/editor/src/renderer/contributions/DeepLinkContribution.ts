@@ -36,14 +36,14 @@ import {
 } from '../../shared/deepLink.js'
 import type { IpcBridge } from '../../preload/index.js'
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
-import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
-import { IAcpChatWidgetService } from '../services/acp/acpChatWidgetService.js'
-import { AcpPromptTextInbox } from '../services/acp/acpPromptTextInbox.js'
-import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
+import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
+import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
+import { AcpPromptTextInbox } from '../services/acp/session/acpPromptTextInbox.js'
+import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import {
   IAcpSessionService,
   type IAcpCreateSessionOptions,
-} from '../services/acp/acpSessionService.js'
+} from '../services/acp/session/acpSessionService.js'
 
 export class DeepLinkContribution extends Disposable implements IWorkbenchContribution {
   constructor(

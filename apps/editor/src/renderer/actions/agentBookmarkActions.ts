@@ -20,8 +20,8 @@ import {
 import {
   ISessionBookmarkService,
   type SessionBookmarkListItem,
-} from '../services/acp/sessionBookmarkService.js'
-import { SLOT_COUNT } from '../services/acp/sessionBookmarks.js'
+} from '../services/acp/session/sessionBookmarkService.js'
+import { SLOT_COUNT } from '../services/acp/session/sessionBookmarks.js'
 import { CATEGORY, ACP_NAV_WHEN } from './_agentShared.js'
 
 const DIGITS = Array.from({ length: SLOT_COUNT }, (_, n) => n)

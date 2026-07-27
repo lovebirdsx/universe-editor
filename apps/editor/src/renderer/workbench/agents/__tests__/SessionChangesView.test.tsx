@@ -23,11 +23,11 @@ import {
   type IWorkspace,
 } from '@universe-editor/platform'
 import { SessionChangesView } from '../SessionChangesView.js'
-import { IAcpSessionService } from '../../../services/acp/acpSessionService.js'
+import { IAcpSessionService } from '../../../services/acp/session/acpSessionService.js'
 import {
   ISessionChangeTrackerService,
   type SessionFileChange,
-} from '../../../services/acp/sessionChangeTracker.js'
+} from '../../../services/acp/session/sessionChangeTracker.js'
 import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
 import { sessionChangesViewState } from '../sessionChangesViewState.js'
 import { ServicesContext } from '../../useService.js'

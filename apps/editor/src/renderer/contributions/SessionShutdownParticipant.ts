@@ -14,7 +14,7 @@ import {
   ShutdownReason,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
-import { IAcpSessionService } from '../services/acp/acpSessionService.js'
+import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 
 export class SessionShutdownParticipant extends Disposable implements IWorkbenchContribution {

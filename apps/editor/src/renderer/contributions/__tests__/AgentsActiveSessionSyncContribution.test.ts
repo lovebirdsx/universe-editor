@@ -15,17 +15,17 @@ import {
   type ISettableObservable,
 } from '@universe-editor/platform'
 import { AgentsActiveSessionSyncContribution } from '../AgentsContributions.js'
-import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
+import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import {
   IAcpSessionService,
   type IAcpSession,
   type IAcpSessionService as IAcpSessionServiceType,
-} from '../../services/acp/acpSessionService.js'
+} from '../../services/acp/session/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
   type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
-} from '../../services/acp/acpSessionHistory.js'
+} from '../../services/acp/session/acpSessionHistory.js'
 
 class FakeEditorService {
   declare readonly _serviceBrand: undefined

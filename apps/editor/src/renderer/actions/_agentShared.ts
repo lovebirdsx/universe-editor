@@ -7,8 +7,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IEditorService, localize2, type ServicesAccessor } from '@universe-editor/platform'
-import { IAcpChatWidgetService, type AcpChatWidget } from '../services/acp/acpChatWidgetService.js'
-import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
+import {
+  IAcpChatWidgetService,
+  type AcpChatWidget,
+} from '../services/acp/session/acpChatWidgetService.js'
+import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 
 export const CATEGORY = localize2('command.category.agents', 'Agents')
 

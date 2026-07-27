@@ -11,13 +11,13 @@ import type {
   RendererSessionSummary,
 } from '../../../shared/ipc/sessionSwitcher.js'
 import { IEditorService, IInstantiationService } from '@universe-editor/platform'
-import { IAcpSessionService } from '../acp/acpSessionService.js'
-import { IAcpSessionHistoryService } from '../acp/acpSessionHistory.js'
-import { IAcpChatLocationService } from '../acp/acpChatLocationService.js'
-import { IAcpChatWidgetService } from '../acp/acpChatWidgetService.js'
-import { AcpSessionEditorInput } from '../acp/acpSessionEditorInput.js'
-import { computeSessionDisplayStatus } from '../acp/acpSessionStatus.js'
-import { resolveLiveSessionTitle } from '../acp/acpSessionTitle.js'
+import { IAcpSessionService } from '../acp/session/acpSessionService.js'
+import { IAcpSessionHistoryService } from '../acp/session/acpSessionHistory.js'
+import { IAcpChatLocationService } from '../acp/session/acpChatLocationService.js'
+import { IAcpChatWidgetService } from '../acp/session/acpChatWidgetService.js'
+import { AcpSessionEditorInput } from '../acp/session/acpSessionEditorInput.js'
+import { computeSessionDisplayStatus } from '../acp/session/acpSessionStatus.js'
+import { resolveLiveSessionTitle } from '../acp/session/acpSessionTitle.js'
 
 export class RendererSessionsService implements IRendererSessionsService {
   declare readonly _serviceBrand: undefined

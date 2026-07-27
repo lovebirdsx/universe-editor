@@ -24,8 +24,11 @@ import {
   observableValue,
   type IConfigurationChangeEvent,
 } from '@universe-editor/platform'
-import type { IAcpSession, IAcpSessionService } from '../../../services/acp/acpSessionService.js'
-import { IAcpSessionService as IAcpSessionServiceId } from '../../../services/acp/acpSessionService.js'
+import type {
+  IAcpSession,
+  IAcpSessionService,
+} from '../../../services/acp/session/acpSessionService.js'
+import { IAcpSessionService as IAcpSessionServiceId } from '../../../services/acp/session/acpSessionService.js'
 import { AiMcpServersPanel } from '../AiMcpServersPanel.js'
 import { ServicesContext } from '../../useService.js'
 

@@ -19,10 +19,10 @@ import {
   IAcpSessionService,
   type IAcpSession,
   type RewindFilesResult,
-} from '../../services/acp/acpSessionService.js'
-import { IAcpChatLocationService } from '../../services/acp/acpChatLocationService.js'
-import { IAcpSessionHistoryService } from '../../services/acp/acpSessionHistory.js'
-import { AcpPromptReplaceInbox } from '../../services/acp/acpPromptReplaceInbox.js'
+} from '../../services/acp/session/acpSessionService.js'
+import { IAcpChatLocationService } from '../../services/acp/session/acpChatLocationService.js'
+import { IAcpSessionHistoryService } from '../../services/acp/session/acpSessionHistory.js'
+import { AcpPromptReplaceInbox } from '../../services/acp/session/acpPromptReplaceInbox.js'
 
 interface FakeSessionOpts {
   readonly rewindSupported?: boolean

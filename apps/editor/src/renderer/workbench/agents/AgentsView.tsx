@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useObservable, useService } from '../useService.js'
-import { IAcpChatLocationService } from '../../services/acp/acpChatLocationService.js'
+import { IAcpChatLocationService } from '../../services/acp/session/acpChatLocationService.js'
 import { ChatPanel } from './ChatPanel.js'
 import { SessionListPanel } from './SessionListPanel.js'
 

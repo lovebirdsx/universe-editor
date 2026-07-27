@@ -16,9 +16,9 @@ import {
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import { WindowTitleContribution } from '../WindowTitleContribution.js'
-import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
-import { IAcpSessionHistoryService } from '../../services/acp/acpSessionHistory.js'
-import type { AcpSessionStatus, IAcpSession } from '../../services/acp/acpSession.js'
+import { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
+import { IAcpSessionHistoryService } from '../../services/acp/session/acpSessionHistory.js'
+import type { AcpSessionStatus, IAcpSession } from '../../services/acp/session/acpSession.js'
 
 function makeWorkspaceStub(initial: IWorkspace | null = null): IWorkspaceServiceType & {
   fireWorkspaceChange(workspace: IWorkspace | null): void

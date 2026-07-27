@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useObservable } from '../useService.js'
-import type { IAcpSession } from '../../services/acp/acpSessionService.js'
+import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
 
 export function useSessionTimer(session: IAcpSession): number {
   const accumulated = useObservable(session.accumulatedRunningMs)

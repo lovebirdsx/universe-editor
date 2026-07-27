@@ -12,8 +12,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Bot } from 'lucide-react'
 import { ICommandService, constObservable, derived, localize } from '@universe-editor/platform'
 import { useObservable, useOptionalService, useService } from '../useService.js'
-import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
-import { computeSessionDisplayStatus } from '../../services/acp/acpSessionStatus.js'
+import { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
+import { computeSessionDisplayStatus } from '../../services/acp/session/acpSessionStatus.js'
 import {
   ISessionSwitcherService,
   type SessionStatusCounts,

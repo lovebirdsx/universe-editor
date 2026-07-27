@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { tailContentSignature } from '../ChatBody.js'
-import type { AcpToolCall, TimelineItem } from '../../../services/acp/acpSessionService.js'
+import type { AcpToolCall, TimelineItem } from '../../../services/acp/session/acpSessionService.js'
 
 function editSlot(diffs: AcpToolCall['diffs']): TimelineItem {
   const call: AcpToolCall = {

@@ -19,21 +19,21 @@ import {
   type IObservable,
 } from '@universe-editor/platform'
 import { AgentsSessionEditorLifecycleContribution } from '../AgentsContributions.js'
-import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
+import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import type {
   IAcpChatLocationService,
   AcpChatLocation,
-} from '../../services/acp/acpChatLocationService.js'
+} from '../../services/acp/session/acpChatLocationService.js'
 import {
   IAcpSessionService,
   type IAcpSession,
   type IAcpSessionService as IAcpSessionServiceType,
-} from '../../services/acp/acpSessionService.js'
+} from '../../services/acp/session/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
   type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
-} from '../../services/acp/acpSessionHistory.js'
+} from '../../services/acp/session/acpSessionHistory.js'
 
 class FakeGroup {
   readonly id = 0

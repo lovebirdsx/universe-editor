@@ -17,7 +17,7 @@ import {
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { UserMessageItem } from '../UserMessageItem.js'
 import { ServicesContext } from '../../useService.js'
-import type { IAcpSession } from '../../../services/acp/acpSessionService.js'
+import type { IAcpSession } from '../../../services/acp/session/acpSessionService.js'
 import {
   RewindAgentSessionAction,
   ForkAgentSessionAction,

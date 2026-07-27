@@ -19,11 +19,11 @@ import type {
   AcpPendingElicitation,
   AcpUrlElicitationState,
   IAcpSession,
-} from '../../../services/acp/acpSessionService.js'
+} from '../../../services/acp/session/acpSessionService.js'
 import {
   AcpElicitationDraftCache,
   elicitationDraftKey,
-} from '../../../services/acp/acpElicitationDraftCache.js'
+} from '../../../services/acp/session/acpElicitationDraftCache.js'
 import { ElicitationCard } from '../ElicitationCard.js'
 import { ServicesContext } from '../../useService.js'
 

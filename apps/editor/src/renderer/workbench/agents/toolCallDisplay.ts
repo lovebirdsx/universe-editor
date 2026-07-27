@@ -12,7 +12,7 @@
  *  Pure function over {@link AcpToolCall} so it can be unit-tested without React.
  *--------------------------------------------------------------------------------------------*/
 
-import type { AcpToolCall } from '../../services/acp/acpSessionService.js'
+import type { AcpToolCall } from '../../services/acp/session/acpSessionService.js'
 import { localize } from '@universe-editor/platform'
 
 export interface ToolCallDisplay {

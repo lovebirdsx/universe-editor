@@ -26,13 +26,13 @@ import {
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { IAcpChatWidgetService } from '../services/acp/acpChatWidgetService.js'
-import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
-import { IAcpSessionService } from '../services/acp/acpSessionService.js'
+import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
+import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
+import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
-import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
-import { AcpPromptContextInbox } from '../services/acp/acpPromptContextInbox.js'
-import { AcpPromptTextInbox } from '../services/acp/acpPromptTextInbox.js'
+import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
+import { AcpPromptContextInbox } from '../services/acp/session/acpPromptContextInbox.js'
+import { AcpPromptTextInbox } from '../services/acp/session/acpPromptTextInbox.js'
 import { collectActiveSelectionContexts } from '../services/acp/promptContext.js'
 import { CATEGORY } from './_agentShared.js'
 

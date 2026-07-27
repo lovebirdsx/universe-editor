@@ -9,7 +9,10 @@
 
 import { ICommandService, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
-import { IAcpSessionService, type IAcpSession } from '../../services/acp/acpSessionService.js'
+import {
+  IAcpSessionService,
+  type IAcpSession,
+} from '../../services/acp/session/acpSessionService.js'
 import styles from './agents.module.css'
 
 export function McpServersView() {

@@ -42,21 +42,24 @@ import {
   IAcpSessionService,
   type IAcpSession,
   type TimelineItem,
-} from '../../services/acp/acpSessionService.js'
-import { hasVisibleMessageContent, timelineItemToText } from '../../services/acp/acpSession.js'
+} from '../../services/acp/session/acpSessionService.js'
+import {
+  hasVisibleMessageContent,
+  timelineItemToText,
+} from '../../services/acp/session/acpSession.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
-import { IAcpSessionHistoryService } from '../../services/acp/acpSessionHistory.js'
+import { IAcpSessionHistoryService } from '../../services/acp/session/acpSessionHistory.js'
 import {
   IAcpChatWidgetService,
   type AcpChatWidget,
   type AcpTimelineMoveDirection,
   type AcpTimelineScrollTarget,
-} from '../../services/acp/acpChatWidgetService.js'
+} from '../../services/acp/session/acpChatWidgetService.js'
 import {
   AcpChatViewStateCache,
   type AcpChatAnchor,
   type AcpChatViewState,
-} from '../../services/acp/acpChatViewStateCache.js'
+} from '../../services/acp/session/acpChatViewStateCache.js'
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
 import { PermissionCard } from './PermissionCard.js'
@@ -77,8 +80,8 @@ import { findByStickyKey, itemSlotKey } from './stickyScroll.js'
 import {
   AcpSessionOutlineRegistry,
   type IAcpSessionOutlineController,
-} from '../../services/acp/acpSessionOutlineRegistry.js'
-import { ISessionBookmarkService } from '../../services/acp/sessionBookmarkService.js'
+} from '../../services/acp/session/acpSessionOutlineRegistry.js'
+import { ISessionBookmarkService } from '../../services/acp/session/sessionBookmarkService.js'
 import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
 import { ContentExpansionProvider, type ContentExpansionStore } from './chatContentExpansion.js'
 import { shouldAdjustTimelineScrollOnSizeChange } from './timelineVirtualScroll.js'

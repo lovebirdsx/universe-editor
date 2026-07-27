@@ -42,18 +42,18 @@ import {
 import {
   IAcpChatWidgetService,
   type AcpChatWidget,
-} from '../../services/acp/acpChatWidgetService.js'
+} from '../../services/acp/session/acpChatWidgetService.js'
 import {
   AcpForeignWorktreeError,
   IAcpSessionService,
   type IAcpSession,
-} from '../../services/acp/acpSessionService.js'
+} from '../../services/acp/session/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
-} from '../../services/acp/acpSessionHistory.js'
-import { IAcpChatLocationService } from '../../services/acp/acpChatLocationService.js'
-import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
+} from '../../services/acp/session/acpSessionHistory.js'
+import { IAcpChatLocationService } from '../../services/acp/session/acpChatLocationService.js'
+import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { EditorService } from '../../services/editor/EditorService.js'

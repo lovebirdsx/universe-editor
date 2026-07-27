@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
-import type { SelectionContext } from '../../../services/acp/acpSessionService.js'
+import type { SelectionContext } from '../../../services/acp/session/acpSessionService.js'
 import { SelectionContextChips } from '../SelectionContextChips.js'
 
 afterEach(() => cleanup())

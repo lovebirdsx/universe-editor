@@ -29,7 +29,7 @@ import {
 import {
   ACP_OUTLINE_LANGUAGE_ID,
   decodeAcpOutlineKind,
-} from '../../services/acp/acpTimelineOutline.js'
+} from '../../services/acp/session/acpTimelineOutline.js'
 
 const CALLABLE = 'var(--color-symbol-callable)'
 const VARIABLE = 'var(--color-symbol-variable)'

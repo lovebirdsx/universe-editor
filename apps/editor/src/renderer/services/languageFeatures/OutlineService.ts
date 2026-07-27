@@ -29,13 +29,13 @@ import { MarkdownPreviewRegistry } from '../editor/MarkdownPreviewRegistry.js'
 import { DocEditorInput } from '../editor/DocEditorInput.js'
 import { docSymbolsFromMarkdown } from '../editor/docOutline.js'
 import { getDocContent } from '../editor/docRegistry.js'
-import { AcpSessionEditorInput } from '../acp/acpSessionEditorInput.js'
-import { AcpSessionOutlineRegistry } from '../acp/acpSessionOutlineRegistry.js'
+import { AcpSessionEditorInput } from '../acp/session/acpSessionEditorInput.js'
+import { AcpSessionOutlineRegistry } from '../acp/session/acpSessionOutlineRegistry.js'
 import {
   ACP_OUTLINE_LANGUAGE_ID,
   timelineToOutline,
   type TimelineOutline,
-} from '../acp/acpTimelineOutline.js'
+} from '../acp/session/acpTimelineOutline.js'
 import { ILanguageFeaturesService } from './LanguageFeaturesService.js'
 import { findSymbolAtLine } from './symbolTree.js'
 

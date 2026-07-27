@@ -6,7 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useObservable } from '../useService.js'
-import type { IAcpSession } from '../../services/acp/acpSessionService.js'
+import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
 import { MessageContent } from './MessageContent.js'
 import styles from './agents.module.css'
 

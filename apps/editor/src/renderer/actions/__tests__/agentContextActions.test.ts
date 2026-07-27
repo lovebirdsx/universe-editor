@@ -12,12 +12,15 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { SendCommitToAgentChatAction } from '../agentContextActions.js'
-import { IAcpSessionService, type IAcpSession } from '../../services/acp/acpSessionService.js'
+import {
+  IAcpSessionService,
+  type IAcpSession,
+} from '../../services/acp/session/acpSessionService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
-import { IAcpChatLocationService } from '../../services/acp/acpChatLocationService.js'
-import { IAcpChatWidgetService } from '../../services/acp/acpChatWidgetService.js'
-import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
-import { AcpPromptTextInbox } from '../../services/acp/acpPromptTextInbox.js'
+import { IAcpChatLocationService } from '../../services/acp/session/acpChatLocationService.js'
+import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
+import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
+import { AcpPromptTextInbox } from '../../services/acp/session/acpPromptTextInbox.js'
 
 describe('SendCommitToAgentChatAction', () => {
   const disposables: IDisposable[] = []

@@ -7,8 +7,8 @@ import { render } from '@testing-library/react'
 import {
   timelineToOutline,
   ACP_OUTLINE_LANGUAGE_ID,
-} from '../../../services/acp/acpTimelineOutline.js'
-import type { TimelineItem } from '../../../services/acp/acpSessionModel.js'
+} from '../../../services/acp/session/acpTimelineOutline.js'
+import type { TimelineItem } from '../../../services/acp/session/acpSessionModel.js'
 import {
   SYMBOL_HEADING_ICON_ID,
   SymbolIcon,

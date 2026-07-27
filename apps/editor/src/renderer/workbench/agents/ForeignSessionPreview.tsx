@@ -20,7 +20,7 @@ import {
 } from '@universe-editor/platform'
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 import { useService } from '../useService.js'
-import type { AcpSessionHistoryEntry } from '../../services/acp/acpSessionHistory.js'
+import type { AcpSessionHistoryEntry } from '../../services/acp/session/acpSessionHistory.js'
 import { findLabel, compareByCategory } from './ConfigOptionsBar.js'
 import { activateForeignSession } from './activateForeignSession.js'
 import { AgentIcon } from './agentIcon.js'

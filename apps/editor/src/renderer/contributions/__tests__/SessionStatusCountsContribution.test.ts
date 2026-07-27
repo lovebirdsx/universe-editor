@@ -6,8 +6,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { observableValue, type ISettableObservable } from '@universe-editor/platform'
 import { SessionStatusCountsContribution } from '../SessionStatusCountsContribution.js'
-import type { IAcpSessionService, IAcpSession } from '../../services/acp/acpSessionService.js'
-import type { AcpSessionStatus } from '../../services/acp/acpSession.js'
+import type {
+  IAcpSessionService,
+  IAcpSession,
+} from '../../services/acp/session/acpSessionService.js'
+import type { AcpSessionStatus } from '../../services/acp/session/acpSession.js'
 import type {
   ISessionSwitcherService,
   SessionStatusCounts,

@@ -5,7 +5,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, waitFor } from '@testing-library/react'
 import { createRef } from 'react'
-import type { AcpToolCall, TimelineItem } from '../../../services/acp/acpSession.js'
+import type { AcpToolCall, TimelineItem } from '../../../services/acp/session/acpSession.js'
 import { StickyScrollOverlay } from '../StickyScrollOverlay.js'
 import type { CollapseState } from '../timelineCollapse.js'
 

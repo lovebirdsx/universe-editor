@@ -37,7 +37,7 @@ import {
   type IWindowsService,
   type IWorkspaceService,
 } from '@universe-editor/platform'
-import type { IAcpSessionService } from '../services/acp/acpSessionService.js'
+import type { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import type { ITerminalManagerService } from '../services/terminal/TerminalManagerService.js'
@@ -51,7 +51,7 @@ import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
 import type { IOutputModelService } from '../services/output/OutputModelService.js'
 import { DirtyDiffPeekRegistry } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
-import { AcpPromptDraftCache } from '../services/acp/acpPromptDraftCache.js'
+import { AcpPromptDraftCache } from '../services/acp/session/acpPromptDraftCache.js'
 import { swarmNotificationE2E } from '../services/swarm/swarmNotificationE2E.js'
 import { applyViewDrop } from '../workbench/dnd/applyViewDrop.js'
 import {

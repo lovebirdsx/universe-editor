@@ -24,7 +24,7 @@ import type {
   AcpToolCallDiff,
   AcpToolCallLocation,
   IAcpSession,
-} from '../../services/acp/acpSessionService.js'
+} from '../../services/acp/session/acpSessionService.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { useMarkdownFileLink } from '../markdown/useMarkdownFileLink.js'
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'

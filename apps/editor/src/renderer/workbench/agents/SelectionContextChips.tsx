@@ -8,7 +8,7 @@
 
 import { FileCode, X } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
-import type { SelectionContext } from '../../services/acp/acpSessionService.js'
+import type { SelectionContext } from '../../services/acp/session/acpSessionService.js'
 import { formatSelectionLabel } from '../../services/acp/promptContext.js'
 import styles from './agents.module.css'
 

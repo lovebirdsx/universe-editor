@@ -6,8 +6,8 @@
  *  Alt+F, the sticky-scroll overlay, and persistence.
  *--------------------------------------------------------------------------------------------*/
 
-import type { CollapseMode } from '../../services/acp/acpChatViewStateCache.js'
-import type { AcpChildItem, TimelineItem } from '../../services/acp/acpSession.js'
+import type { CollapseMode } from '../../services/acp/session/acpChatViewStateCache.js'
+import type { AcpChildItem, TimelineItem } from '../../services/acp/session/acpSession.js'
 
 export interface CollapseState {
   readonly mode: CollapseMode

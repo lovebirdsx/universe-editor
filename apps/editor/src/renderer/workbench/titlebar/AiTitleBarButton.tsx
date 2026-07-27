@@ -29,7 +29,7 @@ import {
 import { Bot, Settings, Sparkles } from 'lucide-react'
 import { useObservable, useOptionalService, useService } from '../useService.js'
 import { IInlineCompletionService } from '../../services/ai/InlineCompletionService.js'
-import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
+import { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
 import styles from './TitleBar.module.css'
 
 const GAP = 6

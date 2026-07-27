@@ -13,8 +13,8 @@ import {
   ServiceCollection,
   observableValue,
 } from '@universe-editor/platform'
-import type { IAcpSession, TimelineItem } from '../../../services/acp/acpSessionService.js'
-import { IAcpChatWidgetService } from '../../../services/acp/acpChatWidgetService.js'
+import type { IAcpSession, TimelineItem } from '../../../services/acp/session/acpSessionService.js'
+import { IAcpChatWidgetService } from '../../../services/acp/session/acpChatWidgetService.js'
 import { StickyUserMessageBar } from '../StickyUserMessageBar.js'
 import { ServicesContext } from '../../useService.js'
 

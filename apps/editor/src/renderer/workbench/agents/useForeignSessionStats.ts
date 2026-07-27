@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { IStorageService, IUriIdentityService } from '@universe-editor/platform'
 import { useService } from '../useService.js'
-import type { AcpSessionHistoryEntry } from '../../services/acp/acpSessionHistory.js'
+import type { AcpSessionHistoryEntry } from '../../services/acp/session/acpSessionHistory.js'
 
 const HISTORY_KEY = 'acp.sessionHistory'
 const SCHEMA_VERSION = 1

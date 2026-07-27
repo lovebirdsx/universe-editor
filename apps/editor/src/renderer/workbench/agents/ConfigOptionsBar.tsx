@@ -9,7 +9,7 @@
 import { useRef, useState } from 'react'
 import { Bot, ChevronDown, Settings2, Sliders, Sparkles } from 'lucide-react'
 import { useObservable } from '../useService.js'
-import type { IAcpSession } from '../../services/acp/acpSessionService.js'
+import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
 import type {
   SessionConfigOption,
   SessionConfigOptionCategory,

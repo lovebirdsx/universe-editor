@@ -27,12 +27,12 @@ import {
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { IAcpSessionService } from '../services/acp/acpSessionService.js'
+import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import { IAcpAgentRegistry, agentIconId } from '../services/acp/acpAgentRegistry.js'
-import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
-import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
-import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
-import { resolveLiveSessionTitle } from '../services/acp/acpSessionTitle.js'
+import { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
+import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
+import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
+import { resolveLiveSessionTitle } from '../services/acp/session/acpSessionTitle.js'
 import { ISessionSwitcherService, type SessionSummary } from '../../shared/ipc/sessionSwitcher.js'
 import { basenameOfPath } from '../workbench/files/resourceInfo.js'
 import { CATEGORY, resolveNavWidget } from './_agentShared.js'

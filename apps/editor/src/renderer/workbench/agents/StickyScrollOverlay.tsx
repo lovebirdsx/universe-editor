@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react'
 import { localize } from '@universe-editor/platform'
 import { ChevronDown, ChevronRight } from 'lucide-react'
-import type { AcpChildItem, TimelineItem } from '../../services/acp/acpSession.js'
+import type { AcpChildItem, TimelineItem } from '../../services/acp/session/acpSession.js'
 import { ToolCallStatusIcon } from './ToolCallOutput.js'
 import { roleIcon, toolKindIcon } from './timelineIcons.js'
 import { deriveToolCallDisplay } from './toolCallDisplay.js'

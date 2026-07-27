@@ -10,7 +10,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { observableValue } from '@universe-editor/platform'
-import type { AcpPendingPermission, IAcpSession } from '../../../services/acp/acpSessionService.js'
+import type {
+  AcpPendingPermission,
+  IAcpSession,
+} from '../../../services/acp/session/acpSessionService.js'
 import { PermissionCard } from '../PermissionCard.js'
 
 afterEach(() => {

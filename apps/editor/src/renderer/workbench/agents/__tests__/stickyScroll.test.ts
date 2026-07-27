@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import type { AcpToolCall, TimelineItem } from '../../../services/acp/acpSession.js'
+import type { AcpToolCall, TimelineItem } from '../../../services/acp/session/acpSession.js'
 import {
   buildStickyKey,
   computeStickyStack,

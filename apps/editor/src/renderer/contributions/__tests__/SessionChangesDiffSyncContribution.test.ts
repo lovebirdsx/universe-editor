@@ -20,9 +20,9 @@ import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import {
   type ISessionChangeTrackerService,
   type SessionFileChange,
-} from '../../services/acp/sessionChangeTracker.js'
-import { type IAcpSessionService } from '../../services/acp/acpSessionService.js'
-import { type IAcpSession } from '../../services/acp/acpSessionModel.js'
+} from '../../services/acp/session/sessionChangeTracker.js'
+import { type IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
+import { type IAcpSession } from '../../services/acp/session/acpSessionModel.js'
 
 function makeGroups(editors: EditorInput[]): IEditorGroupsServiceType {
   const modelEmitter = new Emitter<IEditorGroupModelChangeEvent>()

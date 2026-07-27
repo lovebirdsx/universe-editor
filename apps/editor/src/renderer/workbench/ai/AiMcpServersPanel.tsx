@@ -39,7 +39,7 @@ import {
   IAcpSessionService,
   type IAcpSession,
   type IAcpSessionService as IAcpSessionServiceType,
-} from '../../services/acp/acpSessionService.js'
+} from '../../services/acp/session/acpSessionService.js'
 import {
   mcpServerRawToRecord,
   validateMcpServerEntry,

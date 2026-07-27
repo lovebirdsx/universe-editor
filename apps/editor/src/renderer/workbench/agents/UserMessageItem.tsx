@@ -12,7 +12,7 @@ import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { MessageContent } from './MessageContent.js'
 import { useContentExpansion } from './chatContentExpansion.js'
 import { useExecuteCommand, useObservable } from '../useService.js'
-import type { IAcpSession } from '../../services/acp/acpSessionService.js'
+import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
 import {
   RewindAgentSessionAction,
   ForkAgentSessionAction,

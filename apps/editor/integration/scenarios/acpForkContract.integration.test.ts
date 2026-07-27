@@ -32,7 +32,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ACP_EXT_METHODS } from '../../src/renderer/services/acp/acpExtMethods.js'
+import { ACP_EXT_METHODS } from '../../src/renderer/services/acp/session/acpExtMethods.js'
 import {
   CLIENT_INIT_PARAMS,
   claudeBinaryAvailable,

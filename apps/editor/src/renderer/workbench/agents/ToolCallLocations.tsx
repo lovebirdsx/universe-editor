@@ -7,7 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { FileText } from 'lucide-react'
-import type { AcpToolCallLocation } from '../../services/acp/acpSessionService.js'
+import type { AcpToolCallLocation } from '../../services/acp/session/acpSessionService.js'
 import styles from './agents.module.css'
 
 /** Basename for the link label; the full path stays in the tooltip. */

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { observableValue } from '@universe-editor/platform'
 import type { ISettableObservable } from '@universe-editor/platform'
-import type { AcpUsage, IAcpSession } from '../../../services/acp/acpSessionService.js'
+import type { AcpUsage, IAcpSession } from '../../../services/acp/session/acpSessionService.js'
 import { SendButton } from '../SendButton.js'
 import styles from '../agents.module.css'
 

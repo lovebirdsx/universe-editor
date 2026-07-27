@@ -32,13 +32,13 @@ import {
   IAcpSessionService,
   type IAcpSession,
   type IAcpSessionService as IAcpSessionServiceType,
-} from '../../../services/acp/acpSessionService.js'
+} from '../../../services/acp/session/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
   type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
-} from '../../../services/acp/acpSessionHistory.js'
-import { AcpSessionEditorInput } from '../../../services/acp/acpSessionEditorInput.js'
+} from '../../../services/acp/session/acpSessionHistory.js'
+import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
 import { AcpSessionEditor } from '../AcpSessionEditor.js'
 import { ServicesContext } from '../../useService.js'
 

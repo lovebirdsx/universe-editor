@@ -23,7 +23,7 @@ import {
 import { RevealInExplorerAction, RevealInOSExplorerAction } from '../../../actions/revealActions.js'
 import { ReopenWithAction } from '../../../actions/editorResolverActions.js'
 import { RenameAgentSessionAction } from '../../../actions/agentSessionActions.js'
-import { AcpSessionEditorInput } from '../../../services/acp/acpSessionEditorInput.js'
+import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
 import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
 
 const disposables: IDisposable[] = []
