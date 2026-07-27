@@ -155,6 +155,33 @@ describe('restoreWorkbenchFocus', () => {
     expect(focusView).not.toHaveBeenCalled()
   })
 
+  it('keeps focus the user already placed inside the editor area (e.g. a find input)', async () => {
+    const context = new ContextKeyService()
+    const editorArea = document.createElement('div')
+    editorArea.setAttribute('data-testid', 'part-editorArea')
+    const findInput = document.createElement('input')
+    editorArea.appendChild(findInput)
+    document.body.appendChild(editorArea)
+    findInput.focus()
+
+    const editorTarget = document.createElement('button')
+    document.body.appendChild(editorTarget)
+    const editor = new SelfFocusingInput(editorTarget)
+    const group = makeGroup(7, editor)
+    const { layout, focusView } = makeLayoutService()
+
+    const result = await restoreWorkbenchFocus(
+      makeGroupsService(group),
+      layout,
+      context,
+      makeViewsService('workbench.view.explorer'),
+    )
+
+    expect(result).toEqual({ target: 'kept', ok: true })
+    expect(document.activeElement).toBe(findInput)
+    expect(focusView).not.toHaveBeenCalled()
+  })
+
   it('focuses the active editor instead of Explorer when one exists', async () => {
     const context = new ContextKeyService()
     context.set('terminalFocus', true)

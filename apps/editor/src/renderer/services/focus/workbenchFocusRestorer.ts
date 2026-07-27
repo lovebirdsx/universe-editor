@@ -27,6 +27,19 @@ export async function restoreWorkbenchFocus(
   contextKeyService: IContextKeyService,
   viewsService: IViewsService,
 ): Promise<IRestoredWorkbenchFocusResult> {
+  // Restoring focus must not steal it from an element the user already reached
+  // inside the editor area (e.g. Ctrl+F's find input opened right after a
+  // workspace switch) — the editor branch's goal is already met.
+  const activeElement = globalThis.document?.activeElement
+  if (
+    activeElement instanceof HTMLElement &&
+    activeElement.closest('[data-testid="part-editorArea"]') !== null
+  ) {
+    syncEditorFocusContext(contextKeyService)
+    syncTerminalFocusContext(contextKeyService, layoutService)
+    return { target: 'kept', ok: true }
+  }
+
   const group = resolveGroupWithEditor(editorGroupsService)
   const editor = group?.activeEditor
 
