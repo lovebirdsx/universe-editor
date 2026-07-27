@@ -64,8 +64,6 @@ export interface DeepLinkAgentPromptTarget {
   readonly cwd?: string
   /** 会话级 MCP 服务器白名单；缺省表示继承默认选择 */
   readonly mcpServers?: readonly string[]
-  /** 拉起本次会话的进程 PID */
-  readonly pid?: number
 }
 
 /** True when {@link url} uses the app's deep-link protocol. */
@@ -108,8 +106,6 @@ export function parseDeepLink(url: string): DeepLinkTarget | undefined {
     const agent = params.get('agent') ?? undefined
     const cwd = params.get('cwd')?.trim() || undefined
     const mcpServers = parseMcpServersParam(params.get('mcp'))
-    const pid = parsePidParam(params.get('pid'))
-    if (params.has('pid') && pid === undefined) return undefined
     return {
       kind: 'agentPrompt',
       prompt,
@@ -117,7 +113,6 @@ export function parseDeepLink(url: string): DeepLinkTarget | undefined {
       ...(agent ? { agent } : {}),
       ...(cwd ? { cwd } : {}),
       ...(mcpServers ? { mcpServers } : {}),
-      ...(pid !== undefined ? { pid } : {}),
     }
   }
 
@@ -174,7 +169,6 @@ export function deepLinkToOpenerTarget(target: DeepLinkTarget): string {
     if (target.mcpServers && target.mcpServers.length > 0) {
       params.set('mcp', target.mcpServers.join(','))
     }
-    if (target.pid !== undefined) params.set('pid', String(target.pid))
     return `agent:new?${params.toString()}`
   }
   const loc =
@@ -196,8 +190,6 @@ export function parseAgentPromptOpenerTarget(
   const agent = params.get('agent') ?? undefined
   const cwd = params.get('cwd')?.trim() || undefined
   const mcpServers = parseMcpServersParam(params.get('mcp'))
-  const pid = parsePidParam(params.get('pid'))
-  if (params.has('pid') && pid === undefined) return undefined
   return {
     kind: 'agentPrompt',
     prompt,
@@ -205,7 +197,6 @@ export function parseAgentPromptOpenerTarget(
     ...(agent ? { agent } : {}),
     ...(cwd ? { cwd } : {}),
     ...(mcpServers ? { mcpServers } : {}),
-    ...(pid !== undefined ? { pid } : {}),
   }
 }
 
@@ -258,14 +249,6 @@ function parseMcpServersParam(raw: string | null): readonly string[] | undefined
     ),
   ]
   return names.length > 0 ? names : undefined
-}
-
-function parsePidParam(raw: string | null): number | undefined {
-  if (raw === null) return undefined
-  const trimmed = raw.trim()
-  if (!/^\d+$/.test(trimmed)) return undefined
-  const pid = Number(trimmed)
-  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined
 }
 
 function parseBooleanParam(raw: string | null): boolean | undefined {

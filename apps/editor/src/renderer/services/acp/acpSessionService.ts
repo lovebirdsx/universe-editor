@@ -64,7 +64,6 @@ import {
   readMcpServerDefinitions,
   readMcpServerDefinitionsLayered,
   resolveMcpServerSelection,
-  withMcpServerEnv,
   type McpServerDefinition,
   type McpServerRawLayer,
 } from './acpMcpServers.js'
@@ -147,13 +146,6 @@ export { AcpForeignWorktreeError }
 export type { McpServerDefinition } from './acpMcpServers.js'
 
 export interface IAcpCreateSessionOptions {
-  /**
-   * One-shot env vars merged into the named stdio MCP servers for THIS
-   * session's `session/new` only — never persisted into `acp.mcpServers`.
-   * Used by the agent deep link to pin the bridge to the editor process that
-   * launched it.
-   */
-  readonly mcpServerEnv?: Readonly<Record<string, Record<string, string>>>
   /**
    * Session working directory override. Defaults to the current workspace
    * folder. The agent deep link passes its resolved `cwd` here so the session
@@ -586,7 +578,7 @@ export class AcpSessionService
     this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
     this._onDidCreate.fire(session)
 
-    void this._connectSession(session, resolvedAgentId, cwd, options)
+    void this._connectSession(session, resolvedAgentId, cwd)
     return session
   }
 
@@ -602,7 +594,6 @@ export class AcpSessionService
     session: AcpSession,
     resolvedAgentId: string,
     cwd: string | undefined,
-    options?: IAcpCreateSessionOptions,
   ): Promise<void> {
     const agentName = this._registry.get(resolvedAgentId).name
     const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
@@ -613,12 +604,7 @@ export class AcpSessionService
     // against their own defaults.
     const pin = session.mcpServerSelection.get()
     const selection = pin ?? this._defaultMcpSelection(resolvedAgentId)
-    let mcpServers = await this._resolveSessionWireMcpServers(resolvedAgentId, selection, true)
-    if (options?.mcpServerEnv) {
-      mcpServers = withMcpServerEnv(mcpServers, options.mcpServerEnv, (m) =>
-        this._logger.warn(`mcpServers: ${m}`),
-      )
-    }
+    const mcpServers = await this._resolveSessionWireMcpServers(resolvedAgentId, selection, true)
     let conn: IAcpClientConnection | undefined
     try {
       conn = await this._client.connect(resolvedAgentId, cwd !== undefined ? { cwd } : {})

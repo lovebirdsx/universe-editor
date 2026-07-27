@@ -99,15 +99,6 @@ describe('parseDeepLink — agent links', () => {
     })
   })
 
-  it('parses an optional UE process pid', () => {
-    expect(parseDeepLink('universe-editor://agent/new?prompt=Review%20this&pid=52352')).toEqual({
-      kind: 'agentPrompt',
-      prompt: 'Review this',
-      autoSubmit: true,
-      pid: 52352,
-    })
-  })
-
   it('parses an explicit session working directory', () => {
     expect(
       parseDeepLink(
@@ -133,7 +124,6 @@ describe('parseDeepLink — agent links', () => {
     expect(parseDeepLink('universe-editor://agent/run?prompt=hi')).toBeUndefined()
     expect(parseDeepLink('universe-editor://agent/new')).toBeUndefined()
     expect(parseDeepLink('universe-editor://agent/new?prompt=%20%20')).toBeUndefined()
-    expect(parseDeepLink('universe-editor://agent/new?prompt=hi&pid=abc')).toBeUndefined()
   })
 
   it('parses an MCP server whitelist', () => {
@@ -228,9 +218,8 @@ describe('deepLinkToOpenerTarget', () => {
         prompt: 'Review this',
         autoSubmit: false,
         agent: 'codex',
-        pid: 52352,
       }),
-    ).toBe('agent:new?prompt=Review+this&autoSubmit=false&agent=codex&pid=52352')
+    ).toBe('agent:new?prompt=Review+this&autoSubmit=false&agent=codex')
   })
 
   it('round-trips an agent prompt target with a cwd', () => {
@@ -286,20 +275,10 @@ describe('parseAgentPromptOpenerTarget', () => {
     })
   })
 
-  it('parses a renderer-facing pid', () => {
-    expect(parseAgentPromptOpenerTarget('agent:new?prompt=Review+this&pid=52352')).toEqual({
-      kind: 'agentPrompt',
-      prompt: 'Review this',
-      autoSubmit: true,
-      pid: 52352,
-    })
-  })
-
   it('rejects non-agent or malformed opener targets', () => {
     expect(parseAgentPromptOpenerTarget('command:foo')).toBeUndefined()
     expect(parseAgentPromptOpenerTarget('agent:new')).toBeUndefined()
     expect(parseAgentPromptOpenerTarget('agent:new?prompt=%20')).toBeUndefined()
-    expect(parseAgentPromptOpenerTarget('agent:new?prompt=hi&pid=abc')).toBeUndefined()
   })
 
   it('parses an MCP whitelist in the renderer-facing target', () => {

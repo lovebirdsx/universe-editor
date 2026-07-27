@@ -1,1 +1,0 @@
-export const EDITOR_PID_ENV = 'UNIVERSE_EDITOR_MCP_PID'

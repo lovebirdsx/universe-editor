@@ -11,7 +11,6 @@ export interface EditorProcessInfo {
 }
 
 export interface ResolveEditorPidOptions {
-  readonly explicitPid?: number
   readonly onLog?: (message: string) => void
 }
 
@@ -49,19 +48,9 @@ export async function enumerateEditors(): Promise<readonly EditorProcessInfo[]> 
 }
 
 export async function resolveEditorPid(options: ResolveEditorPidOptions = {}): Promise<number> {
-  const { explicitPid, onLog } = options
+  const { onLog } = options
 
   const editors = await enumerateEditors()
-  if (explicitPid !== undefined) {
-    if (editors.some((editor) => editor.pid === explicitPid)) {
-      onLog?.(`using explicit editor pid=${explicitPid}`)
-      return explicitPid
-    }
-    throw new Error(
-      `指定的 ${EDITOR_PROCESS_NAME} PID ${explicitPid} 不存在，请从 Unreal 重新拉起 Agent。`,
-    )
-  }
-
   const first = editors[0]
   if (!first) {
     throw new Error(`未发现正在运行的 ${EDITOR_PROCESS_NAME}，请先启动 Universe Editor。`)
@@ -73,6 +62,6 @@ export async function resolveEditorPid(options: ResolveEditorPidOptions = {}): P
   }
 
   throw new Error(
-    `检测到 ${editors.length} 个 ${EDITOR_PROCESS_NAME} 进程，但没有指定目标 PID。请从 Unreal 拉起 Agent。`,
+    `检测到 ${editors.length} 个 ${EDITOR_PROCESS_NAME} 进程，请只保留一个目标实例后重试。`,
   )
 }

@@ -35,10 +35,7 @@ async function main(): Promise<void> {
     if (state.connecting) return state.connecting
 
     state.connecting = (async () => {
-      const editorPid = await resolveEditorPid({
-        ...(config.editorPid !== undefined ? { explicitPid: config.editorPid } : {}),
-        onLog: log,
-      })
+      const editorPid = await resolveEditorPid({ onLog: log })
       const bridge = new EditorCommandBridge({
         editorPid,
         timeoutMs: config.timeoutMs,

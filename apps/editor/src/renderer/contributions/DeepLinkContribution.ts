@@ -9,9 +9,7 @@
  *
  *  Agent links auto-submit when `acp.deepLink.allowAutoSubmit` is on (the
  *  default); a `autoSubmit=false` link parameter forces fill-only for review.
- *  A `pid` parameter is forwarded to the
- *  MCP bridge as a one-shot, in-memory env injection on the created session
- *  (never written into the persisted `acp.mcpServers`). A `mcp` parameter pins
+ *  A `mcp` parameter pins
  *  the session to the named MCP server whitelist; names that don't exist in
  *  the merged pool (`acp.mcpServers` + project `.mcp.json`) are reported to
  *  the user and skipped — the session is still created without them.
@@ -36,10 +34,6 @@ import {
   parseAgentPromptOpenerTarget,
   type DeepLinkAgentPromptTarget,
 } from '../../shared/deepLink.js'
-import {
-  UNIVERSE_EDITOR_MCP_PID_ENV,
-  UNIVERSE_EDITOR_MCP_SERVER_NAME,
-} from '../../shared/universeEditorMcp.js'
 import type { IpcBridge } from '../../preload/index.js'
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
@@ -107,15 +101,6 @@ export class DeepLinkContribution extends Disposable implements IWorkbenchContri
     const options: IAcpCreateSessionOptions = {
       ...(target.cwd !== undefined ? { cwd: target.cwd } : {}),
       ...(target.mcpServers !== undefined ? { mcpServerNames: [...target.mcpServers] } : {}),
-      ...(target.pid !== undefined
-        ? {
-            mcpServerEnv: {
-              [UNIVERSE_EDITOR_MCP_SERVER_NAME]: {
-                [UNIVERSE_EDITOR_MCP_PID_ENV]: String(target.pid),
-              },
-            },
-          }
-        : {}),
     }
     const session = await this._sessions.createSession(agentId, options)
     await this._revealAgentSession(session.id)

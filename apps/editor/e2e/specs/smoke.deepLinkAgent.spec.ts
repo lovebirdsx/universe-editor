@@ -13,10 +13,6 @@
  *       `report-cwd`);
  *    3. default (allowAutoSubmit on) + link-level autoSubmit=false: the link
  *       opt-out still wins over the setting;
- *    4. pid: injected as a one-shot env into the `universe-editor` MCP server of
- *       the created session — asserted on what the agent actually received on
- *       session/new (echo agent `report-mcp-servers`), proving nothing was
- *       persisted into `acp.mcpServers`.
  *
  *  Every link carries `cwd` = the window's workspace, so main-process routing
  *  (`routeDeepLink` → openWindowForFolder) resolves back to this same window;
@@ -130,40 +126,5 @@ test.describe('@p1 deep link — agent', () => {
       .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()), { timeout: 10000 })
       .toBe('review the quest')
     expect(await page.evaluate(() => window.__E2E__!.getAcpMessages())).toEqual([])
-  })
-
-  test('pid is injected into the universe-editor MCP server env for that session only', async ({
-    page,
-    electronApp,
-  }) => {
-    await page.evaluate(() => {
-      window.__E2E__!.updateConfigValue('acp.mcpServers', {
-        'universe-editor': { command: 'node', args: ['noop.cjs'] },
-      })
-    })
-
-    await sendAgentDeepLink(
-      electronApp,
-      `agent:new?prompt=report-mcp-servers&pid=52352&cwd=${encodeURIComponent(wsFs)}`,
-    )
-    await waitForSession(page)
-
-    // The echo agent reports back the exact mcpServers it received on
-    // session/new — the injected env must be there…
-    await expect
-      .poll(
-        async () => {
-          const messages = await page.evaluate(() => window.__E2E__!.getAcpMessages())
-          return messages.find((m) => m.role === 'agent')?.text ?? ''
-        },
-        { timeout: 10000 },
-      )
-      .toContain('"name":"UNIVERSE_EDITOR_MCP_PID","value":"52352"')
-    // …while the persisted setting stays clean (one-shot, in-memory only).
-    expect(
-      await page.evaluate(() =>
-        window.__E2E__!.runCommand('_workbench.getConfiguration', 'acp.mcpServers', {}),
-      ),
-    ).toEqual({ 'universe-editor': { command: 'node', args: ['noop.cjs'] } })
   })
 })
