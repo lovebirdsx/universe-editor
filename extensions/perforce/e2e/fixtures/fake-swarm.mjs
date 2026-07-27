@@ -97,6 +97,27 @@ const reviews = {
     openTaskCount: 0,
     testStatus: 'pass',
   },
+  1006: {
+    id: '1006',
+    state: 'needsReview',
+    stateLabel: 'Needs Review',
+    author: 'frank',
+    description: 'Multi-version shelf\n\nRe-shelved twice before approval.',
+    updated: 1_700_000_500,
+    // Three PENDING versions that all report rev 1 — Swarm's behaviour for
+    // re-shelves of a not-yet-approved review (the rev increments only on approve).
+    // Identity must come from the version's position/change, not the rev number:
+    // keying on `version` would collapse all three into one.
+    versions: [
+      { rev: 1, change: '910', pending: true, time: 1_700_000_500 },
+      { rev: 1, change: '911', pending: true, time: 1_700_000_510 },
+      { rev: 1, change: '912', pending: true, time: 1_700_000_520 },
+    ],
+    participants: { e2e: { vote: { value: 0 }, required: true } },
+    commentCount: 0,
+    openTaskCount: 0,
+    testStatus: 'pass',
+  },
 }
 const comments = {}
 let nextReviewId = 1005

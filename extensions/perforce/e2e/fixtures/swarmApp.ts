@@ -184,6 +184,29 @@ export const test = base.extend<SwarmFixtures>({
               contentBase64: xlsxShelf.toString('base64'),
             },
           },
+          // Review #1006's three pending versions — each re-shelf carries distinct
+          // content so the e2e can tell which version's diff is actually shown.
+          '910': {
+            '//depot/src/editor/e.ts': {
+              action: 'add',
+              rev: 1,
+              content: 'export const e = 1\n',
+            },
+          },
+          '911': {
+            '//depot/src/editor/e.ts': {
+              action: 'add',
+              rev: 1,
+              content: 'export const e = 2\n',
+            },
+          },
+          '912': {
+            '//depot/src/editor/e.ts': {
+              action: 'add',
+              rev: 1,
+              content: 'export const e = 3\n',
+            },
+          },
         },
       }),
       'utf8',

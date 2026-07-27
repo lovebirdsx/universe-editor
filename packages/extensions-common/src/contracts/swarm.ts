@@ -72,7 +72,9 @@ export interface SwarmParticipantDto {
 
 /** One version of a review — a shelved (or committed) change snapshot. */
 export interface SwarmVersionDto {
-  /** 1-based version number. */
+  /** 1-based version number (Swarm's `rev`). NOT unique: re-shelves of an
+   *  unapproved review all report the same rev (it only increments on approve),
+   *  so consumers must key version identity on the array position / `change`. */
   version: number
   /** The p4 change backing this version. */
   change: string

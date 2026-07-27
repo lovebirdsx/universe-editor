@@ -106,12 +106,17 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [files, setFiles] = useState<SwarmReviewFileDto[] | null>(null)
-  const [selectedVersion, setSelectedVersion] = useState<number | null>(
-    savedState?.selectedVersion ?? detail?.versions[detail.versions.length - 1]?.version ?? null,
+  // Version identity is the INDEX into detail.versions, never the rev number:
+  // re-shelving an unapproved review appends entries that all report the same
+  // rev (it only increments on approve), so keying on `version` collapses
+  // distinct versions into the first entry (select stuck on the oldest shelf).
+  const [selectedVersionIdx, setSelectedVersionIdx] = useState<number | null>(
+    savedState?.selectedVersionIdx ??
+      (detail && detail.versions.length > 0 ? detail.versions.length - 1 : null),
   )
-  /** The base version to compare against (left side); null = the version before it. */
-  const [compareVersion, setCompareVersion] = useState<number | null>(
-    savedState?.compareVersion ?? null,
+  /** The base version INDEX to compare against (left side); null = the version before it. */
+  const [compareVersionIdx, setCompareVersionIdx] = useState<number | null>(
+    savedState?.compareVersionIdx ?? null,
   )
   const [comments, setComments] = useState<SwarmCommentDto[] | null>(null)
   const [commentDraft, setCommentDraft] = useState(savedState?.commentDraft ?? '')
@@ -141,13 +146,13 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   // happens whenever this tab is deactivated (in-memory, keyed by review id).
   useEffect(() => {
     if (!reviewId) return
-    updateSwarmReviewEditorState(reviewId, { selectedVersion })
-  }, [reviewId, selectedVersion])
+    updateSwarmReviewEditorState(reviewId, { selectedVersionIdx })
+  }, [reviewId, selectedVersionIdx])
 
   useEffect(() => {
     if (!reviewId) return
-    updateSwarmReviewEditorState(reviewId, { compareVersion })
-  }, [reviewId, compareVersion])
+    updateSwarmReviewEditorState(reviewId, { compareVersionIdx })
+  }, [reviewId, compareVersionIdx])
 
   useEffect(() => {
     if (!reviewId) return
@@ -192,15 +197,13 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
         detailRef.current = r
         setDetail(r)
         swarmReviewDetailCache.set(reviewId, r)
-        const latest = r.versions[r.versions.length - 1]?.version ?? null
-        setSelectedVersion((current) => {
-          if (current === null) return latest
-          return r.versions.some((version) => version.version === current) ? current : latest
+        const latestIdx = r.versions.length > 0 ? r.versions.length - 1 : null
+        setSelectedVersionIdx((current) => {
+          if (current === null) return latestIdx
+          return current < r.versions.length ? current : latestIdx
         })
-        setCompareVersion((current) =>
-          current === null || r.versions.some((version) => version.version === current)
-            ? current
-            : null,
+        setCompareVersionIdx((current) =>
+          current === null || current < r.versions.length ? current : null,
         )
       })()
         .catch((e: unknown) => {
@@ -220,7 +223,9 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       if (!reviewId || busy) return
       setBusy(true)
       const req: SwarmVoteRequest = { reviewId, vote: value }
-      if (selectedVersion !== null) req.version = selectedVersion
+      const selectedEntry =
+        selectedVersionIdx === null ? null : detail?.versions[selectedVersionIdx]
+      if (selectedEntry) req.version = selectedEntry.version
       void commands
         .executeCommand(SwarmCommands.vote, req)
         .then(() => {
@@ -230,7 +235,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
         .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setBusy(false))
     },
-    [commands, reviewId, selectedVersion, busy, load],
+    [commands, reviewId, detail, selectedVersionIdx, busy, load],
   )
 
   const transition = useCallback(
@@ -345,13 +350,11 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     return () => sub.dispose()
   }, [storage, reviewId])
   const changeForVersion = useCallback(
-    (version: number | null): string | null =>
-      version === null
-        ? null
-        : (() => {
-            const entry = detail?.versions.find((v) => v.version === version)
-            return entry?.archiveChange ?? entry?.change ?? null
-          })(),
+    (versionIdx: number | null): string | null => {
+      if (versionIdx === null) return null
+      const entry = detail?.versions[versionIdx]
+      return entry?.archiveChange ?? entry?.change ?? null
+    },
     [detail],
   )
 
@@ -361,24 +364,27 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   const openFileDiff = useCallback(
     async (file: SwarmReviewFileDto) => {
       if (!detail) return
-      const rightChange = changeForVersion(selectedVersion)
+      const rightChange = changeForVersion(selectedVersionIdx)
       // Left defaults to the depot base (0), matching the file list — which is
       // computed as "shelf vs depot base". Comparing against the previous version
       // instead would show an empty diff for files unchanged between versions but
       // still listed (they differ from base, not from the prior version). The
       // Compare dropdown lets the user pick an earlier version for a version diff.
-      const leftVersion = compareVersion ?? 0
-      const leftChange = leftVersion === 0 ? null : changeForVersion(leftVersion)
+      // The diff input's left/right versions are REV numbers for display +
+      // comment anchoring (0 = depot base); identity flows through the changes.
+      const rightRev =
+        selectedVersionIdx === null ? null : (detail.versions[selectedVersionIdx]?.version ?? null)
+      const leftVersion =
+        compareVersionIdx === null ? 0 : (detail.versions[compareVersionIdx]?.version ?? 0)
+      const leftChange = compareVersionIdx === null ? null : changeForVersion(compareVersionIdx)
       const added = file.status.charAt(0) === 'A'
       const deleted = file.status.charAt(0) === 'D'
       const originalRevision =
-        leftVersion === 0
+        leftChange === null
           ? file.baseRevision
             ? `#${file.baseRevision}`
             : null
-          : leftChange
-            ? `@=${leftChange}`
-            : null
+          : `@=${leftChange}`
       const modifiedRevision = rightChange ? `@=${rightChange}` : null
 
       // Spreadsheets can't be shown in a Monaco text diff — utf8-decoding the zip
@@ -404,20 +410,22 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
             getBytes(added ? null : originalRevision),
             getBytes(deleted ? null : modifiedRevision),
           ])
-          // Distinct left/right URIs carrying the version pair keep the diff tab's
-          // identity unique per comparison (WebviewDiffInput ids by both URIs), and
-          // the .xlsx path drives the tab icon. See memory editor-input-identity-isolation.
-          const sideUri = (side: 'l' | 'r', version: number | null): string =>
+          // Distinct left/right URIs carrying the backing-change pair keep the
+          // diff tab's identity unique per comparison (WebviewDiffInput ids by
+          // both URIs) — pending versions share a rev, so only the change
+          // distinguishes them. The .xlsx path drives the tab icon. See memory
+          // editor-input-identity-isolation.
+          const sideUri = (side: 'l' | 'r', change: string | null): string =>
             URI.from({
               scheme: 'swarm',
               path: `/${detail.id}/${file.path}`,
-              query: `${side}=${version ?? ''}`,
+              query: `${side}=${change ?? ''}`,
             }).toString()
           await commands.executeCommand('_workbench.openWebviewDiff', {
             viewType: SPREADSHEET_VIEW_TYPE,
             title: `${file.path.split('/').pop() ?? file.path} (Swarm)`,
-            leftUri: sideUri('l', added ? null : leftVersion),
-            rightUri: sideUri('r', deleted ? null : selectedVersion),
+            leftUri: sideUri('l', added ? null : leftChange),
+            rightUri: sideUri('r', deleted ? null : rightChange),
             leftBase64,
             rightBase64,
             pinned: false,
@@ -451,7 +459,9 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
               displayPath: file.path,
               localPath: file.localPath,
               leftVersion: added ? null : leftVersion,
-              rightVersion: deleted ? null : selectedVersion,
+              rightVersion: deleted ? null : rightRev,
+              leftChange: added ? null : leftChange,
+              rightChange: deleted ? null : rightChange,
             },
             original ?? '',
             modified ?? '',
@@ -461,7 +471,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
         setError(e instanceof Error ? e.message : String(e))
       }
     },
-    [commands, editorService, detail, selectedVersion, compareVersion, changeForVersion],
+    [commands, editorService, detail, selectedVersionIdx, compareVersionIdx, changeForVersion],
   )
 
   const loadComments = useCallback(
@@ -559,8 +569,8 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   // re-shelved / emptied after the version was recorded, which would make the
   // file list drift or come back empty (see the diff data-source rule).
   const selectedChange = useMemo(
-    () => changeForVersion(selectedVersion),
-    [changeForVersion, selectedVersion],
+    () => changeForVersion(selectedVersionIdx),
+    [changeForVersion, selectedVersionIdx],
   )
   // An archive shelf is a permanent snapshot: describe it once, cache forever,
   // and never force-refresh it. Only a version that falls back to the author's
@@ -568,10 +578,10 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   // minute-interval refresh would re-run `p4 describe -S -s` every tick and churn
   // the file list even though the archived snapshot can't have changed.
   const selectedChangeImmutable = useMemo(() => {
-    if (selectedVersion === null) return false
-    const entry = detail?.versions.find((v) => v.version === selectedVersion)
+    if (selectedVersionIdx === null) return false
+    const entry = detail?.versions[selectedVersionIdx]
     return entry?.archiveChange !== undefined
-  }, [detail, selectedVersion])
+  }, [detail, selectedVersionIdx])
   useEffect(() => {
     if (!selectedChange) {
       setFiles(null)
@@ -741,24 +751,24 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
           <span>{localize('swarm.compare', 'Compare')}</span>
           <select
             className={styles['select']}
-            value={compareVersion ?? ''}
-            onChange={(e) => setCompareVersion(e.target.value ? Number(e.target.value) : null)}
+            value={compareVersionIdx ?? ''}
+            onChange={(e) => setCompareVersionIdx(e.target.value ? Number(e.target.value) : null)}
           >
             <option value="">{localize('swarm.baseVersion', '(base)')}</option>
-            {detail.versions.map((v) => (
-              <option key={v.version} value={v.version}>
-                v{v.version}
+            {detail.versions.map((v, idx) => (
+              <option key={idx} value={idx}>
+                v{v.version} ({v.change}){v.pending ? '' : ' ✓'}
               </option>
             ))}
           </select>
           <span>⇄</span>
           <select
             className={styles['select']}
-            value={selectedVersion ?? ''}
-            onChange={(e) => setSelectedVersion(Number(e.target.value))}
+            value={selectedVersionIdx ?? ''}
+            onChange={(e) => setSelectedVersionIdx(Number(e.target.value))}
           >
-            {detail.versions.map((v) => (
-              <option key={v.version} value={v.version}>
+            {detail.versions.map((v, idx) => (
+              <option key={idx} value={idx}>
                 v{v.version} ({v.change}){v.pending ? '' : ' ✓'}
               </option>
             ))}

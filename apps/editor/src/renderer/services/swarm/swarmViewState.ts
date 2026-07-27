@@ -64,10 +64,13 @@ export const swarmReviewDetailCache = new Map<string, SwarmReviewDetailDto>()
  * only (mirrors swarmReviewDetailCache) — not persisted across restarts.
  */
 export interface SwarmReviewEditorState {
-  /** Right-hand (selected) version, or null before the detail loads. */
-  selectedVersion: number | null
-  /** Left-hand (compare) version; null = the depot base. */
-  compareVersion: number | null
+  /** Right-hand (selected) version INDEX into the detail's versions array, or
+   *  null before the detail loads. An index, not the rev number: pending
+   *  re-shelves of an unapproved review all report the same rev, so only the
+   *  array position (equivalently the backing change) identifies a version. */
+  selectedVersionIdx: number | null
+  /** Left-hand (compare) version index; null = the depot base. */
+  compareVersionIdx: number | null
   /** Unsent review-level comment draft. */
   commentDraft: string
   /** Vertical scroll offset of the changed-file list. */
@@ -86,8 +89,8 @@ export function updateSwarmReviewEditorState(
 ): void {
   if (!reviewId) return
   const prev = _reviewEditorStates.get(reviewId) ?? {
-    selectedVersion: null,
-    compareVersion: null,
+    selectedVersionIdx: null,
+    compareVersionIdx: null,
     commentDraft: '',
     filesScrollTop: 0,
   }

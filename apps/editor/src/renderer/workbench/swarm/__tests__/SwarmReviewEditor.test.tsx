@@ -257,7 +257,7 @@ describe('SwarmReviewEditor restore', () => {
       expect(diffInput.modifiedContent).toBe('export const a = 2\n')
       expect(diffInput.context.leftVersion).toBe(0)
       expect(diffInput.context.rightVersion).toBe(1)
-      expect(diffInput.getName()).toBe('a.ts (base ↔ v1)')
+      expect(diffInput.getName()).toBe('a.ts (base ↔ v1 (2001))')
     } finally {
       getFileContent.dispose()
       describeVersion.dispose()
@@ -533,14 +533,58 @@ describe('SwarmReviewEditor restore', () => {
     renderReview()
     try {
       await act(async () => Promise.resolve())
+      // Selector values are version INDEXES, not rev numbers (pending re-shelves
+      // of an unapproved review share one rev, so only the index is unique).
       const versionSelect = screen.getAllByRole('combobox')[1] as HTMLSelectElement
-      expect(versionSelect.value).toBe('1')
+      expect(versionSelect.value).toBe('0')
 
       fireEvent.click(screen.getByRole('button', { name: 'Refresh review' }))
       await act(async () => Promise.resolve())
 
+      expect(versionSelect.value).toBe('0')
+      // The compare (left) and selected (right) selectors both list it.
+      expect(screen.getAllByRole('option', { name: 'v2 (2002)' })).toHaveLength(2)
+    } finally {
+      describeVersion.dispose()
+      listComments.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('defaults to the newest pending version and switches between same-rev versions', async () => {
+    // Regression: three pending versions all reporting rev 1 (Swarm only bumps
+    // the rev on approve). Keying on `version` collapses them into the first
+    // entry — the selector showed v1 (910) forever and switching was a no-op.
+    const multiDetail: SwarmReviewDetailDto = {
+      ...DETAIL,
+      versions: [
+        { version: 1, change: '910', pending: true, time: 1 },
+        { version: 1, change: '911', pending: true, time: 2 },
+        { version: 1, change: '912', pending: true, time: 3 },
+      ],
+    }
+    const getReview = registerCommand(SwarmCommands.getReview, () => multiDetail)
+    const listComments = registerCommand(SwarmCommands.listComments, () => [])
+    const described: string[] = []
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, (_a, req: unknown) => {
+      described.push((req as { change: string }).change)
+      return FILES
+    })
+    renderReview()
+    try {
+      await act(async () => Promise.resolve())
+
+      // Newest pending shelf (912) is the default, not the first-recorded one.
+      const versionSelect = screen.getAllByRole('combobox')[1] as HTMLSelectElement
+      expect(versionSelect.value).toBe('2')
+      expect((versionSelect.selectedOptions[0] as HTMLOptionElement).text).toBe('v1 (912)')
+      expect(described).toEqual(['912'])
+
+      // Switching the selector actually re-resolves the file list's change.
+      fireEvent.change(versionSelect, { target: { value: '1' } })
+      await act(async () => Promise.resolve())
       expect(versionSelect.value).toBe('1')
-      expect(screen.getByRole('option', { name: 'v2 (2002)' })).toBeTruthy()
+      expect(described).toEqual(['912', '911'])
     } finally {
       describeVersion.dispose()
       listComments.dispose()

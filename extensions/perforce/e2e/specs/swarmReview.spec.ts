@@ -310,6 +310,62 @@ test.describe('@p1 swarm reviews', () => {
     })
   })
 
+  test('multi-version pending review: defaults to the newest version and the selector actually switches', async ({
+    page,
+    swarm,
+  }) => {
+    test.setTimeout(90_000)
+    const view = await openSwarmView(page, swarm)
+    const editor = page.locator('[data-testid="swarm-review-editor"]')
+    const diff = page.locator('[data-testid="swarm-diff-editor"]')
+
+    await test.step('opens on the newest pending version, not the first-recorded one', async () => {
+      await view
+        .locator('[data-testid="swarm-review-row"]', { hasText: 'Multi-version shelf' })
+        .first()
+        .click()
+      await expect(editor.getByText('Review #1006')).toBeVisible()
+
+      // All three pending versions report rev 1 (Swarm only bumps the rev on
+      // approve), so the selector distinguishes them by backing change and must
+      // default to the NEWEST shelf (912). A version-number-keyed lookup silently
+      // resolves to the first entry (910) instead.
+      const versionSelect = editor.locator('select').nth(1)
+      await expect(versionSelect.locator('option:checked')).toHaveText('v1 (912)')
+
+      await expect(editor.getByText('e.ts')).toBeVisible()
+      await editor.getByText('e.ts').click()
+      await expect(diff).toBeVisible()
+      await expect
+        .poll(async () => {
+          const content = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
+          return content?.modified
+        })
+        .toContain('export const e = 3')
+    })
+
+    await test.step('switching the version selector re-resolves the file list and diff', async () => {
+      // The diff opened in step 1 deactivated the review tab (only the active
+      // editor renders) — switch back to it before touching the selector.
+      await page
+        .locator('[data-testid="editor-group-tabbar"]')
+        .getByText('Review #1006')
+        .first()
+        .click()
+      const versionSelect = editor.locator('select').nth(1)
+      await versionSelect.selectOption({ label: 'v1 (911)' })
+      await expect(versionSelect.locator('option:checked')).toHaveText('v1 (911)')
+
+      await editor.getByText('e.ts').click()
+      await expect
+        .poll(async () => {
+          const content = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
+          return content?.modified
+        })
+        .toContain('export const e = 2')
+    })
+  })
+
   test('restores an open review and switches its changed files between list and tree', async ({
     page,
     swarm,

@@ -18,10 +18,17 @@ export interface SwarmDiffContext {
   readonly displayPath: string
   /** Current client workspace path, or null when the depot file is not mapped. */
   readonly localPath: string | null
-  /** Left side: 0 = review base, 1+ = review version, null = file absent. */
+  /** Left side REV number (display + comment anchoring): 0 = review base,
+   *  1+ = review version, null = file absent. */
   readonly leftVersion: number | null
-  /** Right (target) side version number, or null for a deleted file. */
+  /** Right (target) side rev number, or null for a deleted file. */
   readonly rightVersion: number | null
+  /** Left side's backing p4 change (shelf snapshot), null for the depot base or
+   *  an absent file. Pending versions of an unapproved review share one rev
+   *  number, so the change — not the rev — is what makes two diffs distinct. */
+  readonly leftChange?: string | null
+  /** Right side's backing p4 change, or null for a deleted file. */
+  readonly rightChange?: string | null
 }
 
 function swarmFileUri(context: SwarmDiffContext): URI {
@@ -62,23 +69,25 @@ export class SwarmDiffEditorInput extends DiffEditorInput {
     return URI.from({
       scheme: 'swarm-diff',
       path: `/${this._context.reviewId}/${this._context.displayPath}`,
-      query: `l=${this._context.leftVersion ?? ''}&r=${this._context.rightVersion ?? ''}`,
+      query: `l=${this._context.leftChange ?? this._context.leftVersion ?? ''}&r=${this._context.rightChange ?? this._context.rightVersion ?? ''}`,
     })
   }
 
   override get id(): string {
-    return `swarmDiff:${this._context.reviewId}:${this._context.depotFile}:${this._context.leftVersion ?? ''}-${this._context.rightVersion ?? ''}`
+    return `swarmDiff:${this._context.reviewId}:${this._context.depotFile}:${this._context.leftChange ?? this._context.leftVersion ?? ''}-${this._context.rightChange ?? this._context.rightVersion ?? ''}`
   }
 
   override getName(): string {
     const base = this._context.displayPath.split('/').pop() ?? this._context.displayPath
-    const l =
-      this._context.leftVersion === 0
-        ? 'base'
-        : this._context.leftVersion !== null
-          ? `v${this._context.leftVersion}`
-          : '∅'
-    const r = this._context.rightVersion !== null ? `v${this._context.rightVersion}` : '∅'
+    const sideLabel = (version: number | null, change: string | null | undefined): string => {
+      if (version === null) return '∅'
+      if (version === 0) return 'base'
+      // Pending versions share a rev, so include the backing change when known —
+      // otherwise two same-rev shelves produce indistinguishable tab names.
+      return change ? `v${version} (${change})` : `v${version}`
+    }
+    const l = sideLabel(this._context.leftVersion, this._context.leftChange)
+    const r = sideLabel(this._context.rightVersion, this._context.rightChange)
     return `${base} (${l} ↔ ${r})`
   }
 }
