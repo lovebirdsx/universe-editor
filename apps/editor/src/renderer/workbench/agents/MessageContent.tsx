@@ -36,25 +36,45 @@ interface MessageContentProps {
 }
 
 type NonTextBlock = Exclude<ContentBlock, { type: 'text' }>
+type ImageContentBlock = Extract<ContentBlock, { type: 'image' }>
 type BlockGroup =
   | { readonly type: 'text-run'; readonly text: string }
+  | { readonly type: 'image-row'; readonly images: readonly ImageContentBlock[] }
   | { readonly type: 'other'; readonly block: NonTextBlock }
 
+// Consecutive image blocks are merged into one row group so multiple attached
+// pictures lay out horizontally (wrapping) instead of stacking vertically.
 function groupBlocks(blocks: readonly ContentBlock[]): readonly BlockGroup[] {
   const groups: BlockGroup[] = []
   let buffer = ''
+  let images: ImageContentBlock[] = []
+  const flushText = (): void => {
+    if (buffer.length > 0) {
+      groups.push({ type: 'text-run', text: buffer })
+      buffer = ''
+    }
+  }
+  const flushImages = (): void => {
+    if (images.length > 0) {
+      groups.push({ type: 'image-row', images })
+      images = []
+    }
+  }
   for (const b of blocks) {
     if (b.type === 'text') {
+      flushImages()
       buffer += b.text
+    } else if (b.type === 'image') {
+      flushText()
+      images.push(b)
     } else {
-      if (buffer.length > 0) {
-        groups.push({ type: 'text-run', text: buffer })
-        buffer = ''
-      }
+      flushText()
+      flushImages()
       groups.push({ type: 'other', block: b })
     }
   }
-  if (buffer.length > 0) groups.push({ type: 'text-run', text: buffer })
+  flushText()
+  flushImages()
   return groups
 }
 
@@ -68,6 +88,8 @@ export const MessageContent = memo(function MessageContent({
       {groups.map((g, i) =>
         g.type === 'text-run' ? (
           <TextRunSegments key={i} text={g.text} streaming={streaming ?? false} />
+        ) : g.type === 'image-row' ? (
+          <ImageRow key={i} images={g.images} />
         ) : (
           <BlockNode key={i} block={g.block} />
         ),
@@ -189,4 +211,14 @@ function ResourceLink({
 function ImageBlock({ mimeType, data }: { readonly mimeType: string; readonly data: string }) {
   const src = `data:${mimeType};base64,${data}`
   return <ChatImage src={src} alt="" testId="acp-image-block" mimeType={mimeType} />
+}
+
+function ImageRow({ images }: { readonly images: readonly ImageContentBlock[] }) {
+  return (
+    <div className={styles['chatImageRow']} data-testid="acp-image-row">
+      {images.map((img, i) => (
+        <ImageBlock key={i} mimeType={img.mimeType} data={img.data} />
+      ))}
+    </div>
+  )
 }

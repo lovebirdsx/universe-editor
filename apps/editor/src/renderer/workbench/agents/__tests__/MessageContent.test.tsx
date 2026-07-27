@@ -125,6 +125,19 @@ describe('MessageContent', () => {
     expect(screen.queryByText(/\[@image\]/)).toBeNull()
   })
 
+  it('groups consecutive image blocks into a single horizontal row', () => {
+    renderContent([
+      { type: 'image', mimeType: 'image/png', data: 'YWJjZA==' },
+      { type: 'image', mimeType: 'image/png', data: 'ZWZnaA==' },
+      { type: 'text', text: 'between' },
+      { type: 'image', mimeType: 'image/png', data: 'aWprbA==' },
+    ])
+    const rows = screen.getAllByTestId('acp-image-row')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]?.querySelectorAll('[data-testid="acp-image-block"]')).toHaveLength(2)
+    expect(rows[1]?.querySelectorAll('[data-testid="acp-image-block"]')).toHaveLength(1)
+  })
+
   it('renders an audio placeholder', () => {
     renderContent([{ type: 'audio', mimeType: 'audio/wav', data: 'd2F2' }])
     const node = screen.getByTestId('acp-audio-block')

@@ -484,6 +484,13 @@
   flex-shrink: 0;
 }
 
+/* Consecutive image blocks in a message lay out horizontally and wrap. */
+.chatImageRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 /* Shared thumbnail used by both the message body and the prompt attachment
    chips. 88×88 display range, aspect ratio preserved, click opens the preview
    popover (positioned relative to this wrapper). */
