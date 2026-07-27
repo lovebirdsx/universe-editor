@@ -823,6 +823,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'gitGraph.worktree.sync.selectAll': '全选',
   'gitGraph.worktree.sync.confirm': '同步（{count}）',
   'gitGraph.worktree.forceSync.confirm': '强制同步（{count}）',
+  'gitGraph.worktree.sync.progress': '正在将 {count} 个工作树同步到 {branch}…',
   'gitGraph.worktree.sync.summaryTitle': '工作树同步到 {branch}',
   'gitGraph.worktree.sync.summarySynced': '已同步：{names}',
   'gitGraph.worktree.sync.summarySkipped': '已跳过（有未提交更改）：{names}',

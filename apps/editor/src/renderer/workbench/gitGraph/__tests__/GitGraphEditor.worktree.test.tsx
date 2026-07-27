@@ -11,11 +11,14 @@ import {
   CommandsRegistry,
   ICommandService,
   IDialogService,
+  IProgressService,
   IStorageService,
   InstantiationService,
+  ProgressLocation,
   ServiceCollection,
   observableValue,
   type IDisposable,
+  type IProgressOptions,
 } from '@universe-editor/platform'
 import {
   GitGraphCommands,
@@ -112,10 +115,19 @@ function makeDialog(confirmed: boolean): IDialogService {
 
 function renderEditor(confirmed = true) {
   const { service: commandService, executeCommand } = makeCommandService()
+  // Runs the task straight through while recording the options — lets tests
+  // assert the sync is wrapped in a progress notification.
+  const withProgress = vi.fn(async (_options: IProgressOptions, task: () => Promise<unknown>) =>
+    task(),
+  )
   const services = new ServiceCollection()
   services.set(ICommandService, commandService)
   services.set(IScmService, makeScmService())
   services.set(IDialogService, makeDialog(confirmed))
+  services.set(IProgressService, {
+    _serviceBrand: undefined,
+    withProgress,
+  } as unknown as IProgressService)
   services.set(IStorageService, {
     _serviceBrand: undefined,
     get: vi.fn().mockResolvedValue(undefined),
@@ -129,7 +141,7 @@ function renderEditor(confirmed = true) {
       <GitGraphEditor input={{} as never} />
     </ServicesContext.Provider>,
   )
-  return { executeCommand, ...utils }
+  return { executeCommand, withProgress, ...utils }
 }
 
 async function flush(): Promise<void> {
@@ -272,6 +284,29 @@ describe('GitGraphEditor worktree sync', () => {
     fireEvent.click(within(dialog).getByText(/^Sync \(/))
     await flush()
 
+    expect(executeCommand).toHaveBeenCalledWith(
+      GitGraphCommands.syncWorktrees,
+      'main',
+      [{ path: featureWt.path, name: featureWt.name }],
+      false,
+    )
+  })
+
+  it('shows a progress notification while the sync command runs', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    const { executeCommand, withProgress } = renderEditor()
+    await flush()
+
+    fireEvent.contextMenu(screen.getByText('✓ repo'))
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
+    fireEvent.click(within(screen.getByRole('dialog')).getByText(/^Sync \(/))
+    await flush()
+
+    expect(withProgress).toHaveBeenCalledTimes(1)
+    const options = withProgress.mock.calls[0]?.[0] as IProgressOptions
+    expect(options.location).toBe(ProgressLocation.Notification)
+    expect(options.title).toContain('main')
+    // The task passed to withProgress is what actually executes the command.
     expect(executeCommand).toHaveBeenCalledWith(
       GitGraphCommands.syncWorktrees,
       'main',

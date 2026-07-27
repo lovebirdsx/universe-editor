@@ -34,7 +34,9 @@ import {
   IEditorResolverService,
   IFileService,
   INotificationService,
+  IProgressService,
   IStorageService,
+  ProgressLocation,
   Severity,
   StorageScope,
   URI,
@@ -53,7 +55,12 @@ import {
   type GitGraphWorktreeDto,
   type GitGraphWorktreeSyncResult,
 } from '@universe-editor/extensions-common'
-import { useService, useObservable, useCommandRegistered } from '../useService.js'
+import {
+  useService,
+  useObservable,
+  useCommandRegistered,
+  useOptionalService,
+} from '../useService.js'
 import { IScmService } from '../../services/extensions/ScmService.js'
 import { computeGraphLayout, type GraphGrid } from '../../services/gitGraph/graphLayout.js'
 import { buildFileTree, type FileTreeNode } from '../../services/gitGraph/fileTree.js'
@@ -439,6 +446,8 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   const editorResolverService = useService(IEditorResolverService)
   const fileService = useService(IFileService)
   const notification = useService(INotificationService)
+  // Optional so unit tests without a progress binding still render the editor.
+  const progressService = useOptionalService(IProgressService)
   const scm = useService(IScmService)
   const storage = useService(IStorageService)
   const [result, setResult] = useState<GitGraphLoadResult | null>(() => gitGraphViewState.result)
@@ -1321,17 +1330,34 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
 
   // Reset the picked worktrees' branches to the target, then report a summary and
   // reload the graph. Dirty worktrees are always skipped by the extension side.
+  // The extension syncs the worktrees concurrently in one command call, so while
+  // it runs we surface a sticky spinner notification instead of staying silent.
   const runWorktreeSync = useCallback(
     async (targetBranch: string, selectedPaths: string[], force: boolean) => {
       setWorktreePicker(null)
       const selected = allWorktrees.filter((wt) => selectedPaths.includes(wt.path))
       const refs = selected.map((wt) => ({ path: wt.path, name: wt.name }))
-      const summary = await commands.executeCommand<GitGraphWorktreeSyncResult>(
-        GitGraphCommands.syncWorktrees,
-        targetBranch,
-        refs,
-        force,
-      )
+      const execute = () =>
+        commands.executeCommand<GitGraphWorktreeSyncResult>(
+          GitGraphCommands.syncWorktrees,
+          targetBranch,
+          refs,
+          force,
+        )
+      const summary = progressService
+        ? await progressService.withProgress(
+            {
+              location: ProgressLocation.Notification,
+              title: localize(
+                'gitGraph.worktree.sync.progress',
+                'Syncing {count} worktree(s) to {branch}…',
+                { count: refs.length, branch: targetBranch },
+              ),
+              source: 'git-graph',
+            },
+            execute,
+          )
+        : await execute()
       revalidate()
       if (!summary) return
       const lines: string[] = []
@@ -1376,7 +1402,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         primaryButton: localize('common.ok', 'OK'),
       })
     },
-    [allWorktrees, commands, dialog, revalidate],
+    [allWorktrees, commands, dialog, progressService, revalidate],
   )
 
   const openWorktreeMenu = useCallback(

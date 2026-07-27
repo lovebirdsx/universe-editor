@@ -205,6 +205,37 @@ export interface WorktreeSyncResult {
   failed: { name: string; error: string }[]
 }
 
+type SyncOutcome =
+  | { kind: 'synced' | 'skippedDirty' | 'skippedUnmerged'; name: string }
+  | { kind: 'failed'; name: string; error: string }
+
+const syncOneWorktree = async (
+  targetBranch: string,
+  wt: SyncWorktreeRef,
+  log: Log,
+  force: boolean,
+): Promise<SyncOutcome> => {
+  const status = await gitExec(['status', '--porcelain'], wt.path, log)
+  if (status.exitCode !== 0) return { kind: 'failed', name: wt.name, error: gitErrorText(status) }
+  if (status.stdout.trim()) return { kind: 'skippedDirty', name: wt.name }
+  // In normal mode, only reset when the worktree's commits are already in the
+  // target — otherwise reset --hard would silently drop them. `git cherry
+  // <target> HEAD` lists commits relative to the target: a `+` prefix marks a
+  // change not yet present by patch-id. Force mode deliberately skips this check.
+  if (!force) {
+    const cherry = await gitExec(['cherry', targetBranch, 'HEAD'], wt.path, log)
+    if (cherry.exitCode !== 0) return { kind: 'failed', name: wt.name, error: gitErrorText(cherry) }
+    const hasUnmerged = cherry.stdout.split('\n').some((line) => line.startsWith('+'))
+    if (hasUnmerged) return { kind: 'skippedUnmerged', name: wt.name }
+  }
+  const reset = await gitExec(['reset', '--hard', targetBranch], wt.path, log)
+  if (reset.exitCode !== 0) return { kind: 'failed', name: wt.name, error: gitErrorText(reset) }
+  const subUpdate = await gitExec(['submodule', 'update', '--init', '--recursive'], wt.path, log)
+  if (subUpdate.exitCode !== 0)
+    return { kind: 'failed', name: wt.name, error: gitErrorText(subUpdate) }
+  return { kind: 'synced', name: wt.name }
+}
+
 /**
  * Force every given worktree's branch to `targetBranch` via `git reset --hard`,
  * each command run inside that worktree's own directory. To avoid losing work, a
@@ -218,6 +249,10 @@ export interface WorktreeSyncResult {
  * committed work that is not contained in `targetBranch`. `targetBranch` is a ref
  * name (e.g. `main`), so each reset worktree's branch ends up exactly at the
  * target commit.
+ *
+ * Worktrees are synced concurrently: each has its own working directory, index
+ * and branch ref, so their pipelines don't contend (git takes per-ref locks).
+ * Result buckets keep the input order regardless of completion order.
  */
 export const syncWorktreesToBranch = async (
   targetBranch: string,
@@ -225,46 +260,18 @@ export const syncWorktreesToBranch = async (
   log: Log,
   force = false,
 ): Promise<WorktreeSyncResult> => {
+  const outcomes = await Promise.all(
+    worktrees.map((wt) => syncOneWorktree(targetBranch, wt, log, force)),
+  )
   const result: WorktreeSyncResult = {
     synced: [],
     skippedDirty: [],
     skippedUnmerged: [],
     failed: [],
   }
-  for (const wt of worktrees) {
-    const status = await gitExec(['status', '--porcelain'], wt.path, log)
-    if (status.exitCode !== 0) {
-      result.failed.push({ name: wt.name, error: gitErrorText(status) })
-      continue
-    }
-    if (status.stdout.trim()) {
-      result.skippedDirty.push(wt.name)
-      continue
-    }
-    // In normal mode, only reset when the worktree's commits are already in the
-    // target — otherwise reset --hard would silently drop them. `git cherry
-    // <target> HEAD` lists commits relative to the target: a `+` prefix marks a
-    // change not yet present by patch-id. Force mode deliberately skips this check.
-    if (!force) {
-      const cherry = await gitExec(['cherry', targetBranch, 'HEAD'], wt.path, log)
-      if (cherry.exitCode !== 0) {
-        result.failed.push({ name: wt.name, error: gitErrorText(cherry) })
-        continue
-      }
-      const hasUnmerged = cherry.stdout.split('\n').some((line) => line.startsWith('+'))
-      if (hasUnmerged) {
-        result.skippedUnmerged.push(wt.name)
-        continue
-      }
-    }
-    const reset = await gitExec(['reset', '--hard', targetBranch], wt.path, log)
-    if (reset.exitCode !== 0) {
-      result.failed.push({ name: wt.name, error: gitErrorText(reset) })
-      continue
-    }
-    const subUpdate = await gitExec(['submodule', 'update', '--init', '--recursive'], wt.path, log)
-    if (subUpdate.exitCode === 0) result.synced.push(wt.name)
-    else result.failed.push({ name: wt.name, error: gitErrorText(subUpdate) })
+  for (const outcome of outcomes) {
+    if (outcome.kind === 'failed') result.failed.push({ name: outcome.name, error: outcome.error })
+    else result[outcome.kind].push(outcome.name)
   }
   return result
 }

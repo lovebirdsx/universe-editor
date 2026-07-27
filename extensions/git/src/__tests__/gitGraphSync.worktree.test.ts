@@ -150,6 +150,36 @@ describe('syncWorktreesToBranch', () => {
     expect(calls.some((c) => c.args[0] === 'reset')).toBe(false)
   })
 
+  it('syncs worktrees concurrently and keeps buckets in input order', async () => {
+    // Worktree a's `status` resolves only after worktree b's `reset` has been
+    // issued: a serial implementation would never reach b and deadlock here,
+    // so completing at all proves the pipelines overlap.
+    let releaseA: ((r: GitExecResult) => void) | undefined
+    const gate = new Promise<GitExecResult>((resolve) => {
+      releaseA = resolve
+    })
+    execMock.mockImplementation((args: readonly string[], cwd: string): Promise<GitExecResult> => {
+      if (args[0] === 'status' && cwd === '/repo.wt/a') return gate
+      if (args[0] === 'reset' && cwd === '/repo.wt/b') {
+        releaseA?.(ok())
+        return Promise.resolve(ok())
+      }
+      return Promise.resolve(ok())
+    })
+
+    const res = await syncWorktreesToBranch(
+      'main',
+      [
+        { path: '/repo.wt/a', name: 'a' },
+        { path: '/repo.wt/b', name: 'b' },
+      ],
+      undefined,
+    )
+
+    // b finished first, but the summary still lists a before b (input order).
+    expect(res.synced).toEqual(['a', 'b'])
+  }, 5000)
+
   it('records a reset failure with the git error text', async () => {
     setup({ reset: { '/repo.wt/a': fail('fatal: ambiguous argument') } })
     const res = await syncWorktreesToBranch('main', [{ path: '/repo.wt/a', name: 'a' }], undefined)
