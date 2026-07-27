@@ -88,6 +88,7 @@ import { IAcpConfigOptionsCacheService } from './acpConfigOptionsCache.js'
 import { AcpChatViewStateCache } from './acpChatViewStateCache.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import { AcpPromptDraftCache } from './acpPromptDraftCache.js'
+import type { AcpPromptDraft } from './acpPromptDraftCache.js'
 import { AcpElicitationDraftCache } from './acpElicitationDraftCache.js'
 import {
   AcpSession,
@@ -166,6 +167,14 @@ export interface IAcpCreateSessionOptions {
    * which replaces the session instead of resuming it.
    */
   readonly mcpServerNames?: readonly string[] | null
+  /**
+   * Unsent prompt draft to seed into AcpPromptDraftCache under the new
+   * session's id BEFORE the session is registered/activated — the prompt input
+   * reads the cache once at mount, so seeding after activation would be too
+   * late. Used by the empty-session MCP reload to carry the user's half-typed
+   * input over the transparent session swap.
+   */
+  readonly promptDraft?: AcpPromptDraft
 }
 
 export interface IAcpSessionService {
@@ -573,6 +582,12 @@ export class AcpSessionService
     // sessionIdOnAgent yet), so this cannot trigger a spurious reload.
     if (options?.mcpServerNames !== undefined) {
       session.mcpServerSelection.set(options.mcpServerNames, undefined)
+    }
+    // Seed the rescued draft before activation: the prompt input reads the
+    // draft cache once at mount, and registering the session (next line) is
+    // what triggers that mount.
+    if (options?.promptDraft !== undefined) {
+      AcpPromptDraftCache.save(session.id, options.promptDraft)
     }
     this._sessionStore.add(session, { activate: true })
     this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
@@ -1735,6 +1750,10 @@ export class AcpSessionService
       })
       this._telemetry.publicLog('acp.session_mcp_reload', { agentId: session.agentId })
       this._logger.info(`reloading session ${sid} to apply MCP server changes`)
+      // The reload swaps the session object (and, for a non-empty session, its
+      // local id). Rescue the unsent prompt draft before closeSession wipes it
+      // so the remounted input restores what the user had typed.
+      const draft = AcpPromptDraftCache.load(session.id)
       // An empty session (created but never messaged) was never persisted by
       // the agent, so session/load cannot revive it — replace it with a fresh
       // session pinned to the new selection instead of resuming the old one.
@@ -1747,6 +1766,10 @@ export class AcpSessionService
         const fresh = await this.createSession(session.agentId, {
           title,
           ...(pin !== null ? { mcpServerNames: pin } : {}),
+          // createSession seeds this under the new id BEFORE activation — the
+          // prompt input reads the draft cache once at mount, so handing it
+          // over afterwards would be too late.
+          ...(draft !== undefined ? { promptDraft: draft } : {}),
         })
         // The title override is unlocked, so a user-chosen (manual) title must
         // be re-locked to keep its protection against auto titles.
@@ -1755,6 +1778,10 @@ export class AcpSessionService
         return
       }
       await this.closeSession(sid)
+      // A resumed session is keyed by the agent id (id === sid), so the draft
+      // can be re-seeded up front — before resumeSession registers (and
+      // activates) the session, which is what mounts the prompt input.
+      if (draft !== undefined) AcpPromptDraftCache.save(sid, draft)
       const resumed = await this.resumeSession(sid)
       this.setActive(resumed.id)
     } catch (err) {

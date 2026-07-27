@@ -170,6 +170,14 @@ export interface E2EProbe {
    * Used by the shared-app fixture reset to purge a prior test's ghost editors.
    */
   closeWorkspace(): Promise<void>
+  /**
+   * Flush GLOBAL-scope storage writes and drop the main-process backend's
+   * in-memory cache so the next read re-loads from disk. The shared-app
+   * fixture reset re-seeds state.json between tests, but a window reload does
+   * NOT rebuild that backend — call this after re-seeding and before reloading
+   * so the new renderer cannot read the previous test's in-memory state.
+   */
+  reloadStorageFromDisk(): Promise<void>
   /** Returns the current workspace folder's fsPath, or undefined if none is open. */
   getCurrentWorkspacePath(): string | undefined
   /**
@@ -357,6 +365,14 @@ export interface E2EProbe {
    * `locator.inputValue()`.
    */
   getAcpPromptText(): string
+  /**
+   * The text actually rendered in the active session's prompt editor, read from
+   * the visible Monaco view DOM (`.view-lines`). `getAcpPromptText` reads the
+   * draft cache, which can diverge from what the user sees for one frame after a
+   * remount — use this to assert the restored draft is genuinely on screen.
+   * Multi-line content loses its line breaks (view lines concatenate).
+   */
+  getAcpVisiblePromptText(): string
   /** Snapshot of the active session's messages (role + text). */
   getAcpMessages(): ReadonlyArray<{ role: string; text: string }>
   /** Snapshot of the active session's tool calls (id, title, status, text). */

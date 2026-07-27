@@ -129,6 +129,10 @@ export class MainStorageService implements IStorageService {
     if (this._workspace) await this._workspace.flush()
   }
 
+  async reloadFromDisk(): Promise<void> {
+    await this._global.reloadFromDisk?.()
+  }
+
   private _purgeLegacyWorkspaceKeys(): Promise<void> {
     const existing = purgePromises.get(this._global)
     if (existing) return existing

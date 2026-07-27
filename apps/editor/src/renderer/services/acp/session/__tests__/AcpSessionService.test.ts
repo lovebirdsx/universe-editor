@@ -70,6 +70,7 @@ import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
+import { AcpPromptDraftCache } from '../acpPromptDraftCache.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubFileService } from './stubFileService.js'
@@ -1856,6 +1857,8 @@ describe('AcpSessionService — mcpServers capability gating', () => {
 })
 
 describe('AcpSessionService — session MCP selection', () => {
+  afterEach(() => AcpPromptDraftCache._resetForTests())
+
   function makeService(client: FakeAcpClientService, config: ConfigurationService) {
     const notification = new StubNotificationService()
     const telemetry = new NoopTelemetryService()
@@ -2142,6 +2145,61 @@ describe('AcpSessionService — session MCP selection', () => {
     await s2.whenConnected()
     const params = client.connected[3]!.agent.newSessionCalls[0]!
     expect(params.mcpServers.map((m) => m.name)).toEqual(['fs', 'docs'])
+    svc.dispose()
+  })
+
+  it('carries the unsent prompt draft over the seamless reload', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
+    const { svc } = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    await s.sendPrompt('first turn')
+    const sid = s.sessionIdOnAgent.get()!
+    AcpPromptDraftCache.save(s.id, { text: 'half-typed follow-up', caret: 19 })
+
+    svc.setSessionMcpServers(s.id, ['fs'])
+
+    await vi.waitFor(() => {
+      expect(client.connected).toHaveLength(2)
+      expect(client.connected[1]!.agent.loadSessionCalls).toHaveLength(1)
+    })
+    // The reload swapped the session object; the draft must be reachable under
+    // the resumed session's id so the remounted prompt input restores it.
+    const resumed = svc.getById(sid)!
+    expect(AcpPromptDraftCache.load(resumed.id)?.text).toBe('half-typed follow-up')
+    expect(AcpPromptDraftCache.load(s.id)).toBeUndefined()
+    svc.dispose()
+  })
+
+  it('carries the unsent prompt draft to the replacement of an empty session', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
+    const { svc } = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    AcpPromptDraftCache.save(s.id, { text: 'half-typed first message' })
+
+    svc.setSessionMcpServers(s.id, ['fs'])
+
+    await vi.waitFor(() => {
+      expect(client.connected).toHaveLength(2)
+      const active = svc.activeSession.get()
+      expect(active).toBeDefined()
+      expect(active!.status.get()).toBe('idle')
+    })
+    const active = svc.activeSession.get()!
+    expect(active.id).not.toBe(s.id)
+    expect(AcpPromptDraftCache.load(active.id)?.text).toBe('half-typed first message')
+    expect(AcpPromptDraftCache.load(s.id)).toBeUndefined()
     svc.dispose()
   })
 })

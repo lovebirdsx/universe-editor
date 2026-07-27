@@ -17,6 +17,14 @@ export interface Storage {
    * nothing has been read or written yet.
    */
   flushSync(): void
+  /**
+   * Test-only: flush pending writes, then drop the in-memory cache so the next
+   * read re-loads from disk. The e2e shared-app reset re-seeds state.json
+   * between tests but a window reload does NOT rebuild this backend — without
+   * dropping the cache the new renderer keeps reading the previous test's
+   * in-memory state.
+   */
+  reloadFromDisk?(): Promise<void>
 }
 
 // Application-singleton state.json backend, registered as a preset instance in the
@@ -139,6 +147,10 @@ export function createStorage(filePath: string, options: StorageOptions = {}): S
     },
     flush(): Promise<void> {
       return writeChain
+    },
+    async reloadFromDisk(): Promise<void> {
+      await writeChain.catch(() => {})
+      cache = null
     },
     flushSync(): void {
       if (cache === null) return

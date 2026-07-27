@@ -155,6 +155,16 @@ async function resetWindow(page: Page, userDataDir: string): Promise<void> {
   }
   seedBaselineUserData(userDataDir)
   await wipeWorkspacesDir(userDataDir)
+  // The GLOBAL-scope storage backend (state.json) is a main-process object with
+  // an in-memory cache, and the window reload below does NOT rebuild it —
+  // without dropping that cache the fresh renderer would keep reading the
+  // previous test's state (e.g. the ACP session-history entries it persisted),
+  // and any renderer write afterwards would resurrect the stale keys on disk.
+  try {
+    await page.evaluate(() => window.__E2E__!.reloadStorageFromDisk())
+  } catch {
+    // best-effort: a wedged page is rescued by the reload below
+  }
   const loaded = page.waitForEvent('load')
   void page
     .evaluate(() => void window.__E2E__!.runCommand('workbench.action.reloadWindow'))
@@ -164,6 +174,12 @@ async function resetWindow(page: Page, userDataDir: string): Promise<void> {
   // Tolerate a mid-evaluate context teardown on slow reloads (mirrors WorkbenchPO).
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
+      // Re-assert the pristine storage state post-reload: a debounced renderer
+      // write from the previous test may have slipped into the main-process
+      // cache in the gap between the pre-reload reset and the reload itself.
+      // Flush it out, drop the cache again, and put the pristine disk back.
+      await page.evaluate(() => window.__E2E__!.reloadStorageFromDisk())
+      seedBaselineUserData(userDataDir)
       await page.evaluate(() => window.__E2E__!.whenRestored())
       // Belt-and-braces: the folder was already closed before the reload above,
       // so this is normally a no-op (closeFolder early-returns with no current

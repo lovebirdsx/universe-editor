@@ -32,6 +32,7 @@ import {
   type ILoggerService,
   type IOutputService,
   type IStatusBarService,
+  type IStorageService,
   type IViewDescriptorService,
   type IViewsService,
   type IWindowsService,
@@ -89,6 +90,7 @@ export interface E2EProbeServices {
   readonly viewsService: IViewsService
   readonly viewDescriptorService: IViewDescriptorService
   readonly configurationService: IConfigurationService
+  readonly storageService: IStorageService
   readonly acpSessionService: IAcpSessionService
   readonly outputService: IOutputService
   readonly updateService: IUpdateService
@@ -273,6 +275,9 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     },
     openWorkspace: (fsPath) => services.workspaceService.openFolder(URI.file(fsPath)),
     closeWorkspace: () => services.workspaceService.closeFolder(),
+    reloadStorageFromDisk: async () => {
+      await services.storageService.reloadFromDisk?.()
+    },
     getCurrentWorkspacePath: () => services.workspaceService.current?.folder.fsPath,
     getOpenWindows: async () =>
       (await services.windowsService.getWindows()).map((w) => {
@@ -462,6 +467,12 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const id = services.acpSessionService.activeSessionId.get()
       if (!id) return ''
       return AcpPromptDraftCache.load(id)?.text ?? ''
+    },
+    getAcpVisiblePromptText: () => {
+      const host = document.querySelector('[data-testid="acp-prompt-drop-host"]')
+      // Monaco renders whitespace as &nbsp; in the view DOM — normalize back.
+      const visible = host?.querySelector('.view-lines')?.textContent ?? ''
+      return visible.replace(/\u00a0/g, ' ')
     },
     getAcpMessages: () => {
       const s = services.acpSessionService.activeSession.get()

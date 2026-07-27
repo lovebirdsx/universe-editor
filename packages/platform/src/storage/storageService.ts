@@ -33,6 +33,16 @@ export interface IStorageService {
    * Callers must feature-detect and fall back to the current bucket if absent.
    */
   getForWorkspaceCwd?<T = unknown>(key: string, cwd: string): Promise<T | undefined>
+  /**
+   * Test-only: flush pending GLOBAL-scope writes and drop the backend's
+   * in-memory cache so the next read re-loads from disk. The e2e shared-app
+   * reset re-seeds the on-disk state between tests, but a window reload does
+   * not rebuild the main-process backend — without this the new renderer keeps
+   * reading the previous test's in-memory state.
+   *
+   * Optional capability: only the real cross-process backend implements it.
+   */
+  reloadFromDisk?(): Promise<void>
   /** Fires after the WORKSPACE-scope backend has switched (workspace open/close/change). */
   readonly onDidChangeWorkspaceScope: Event<void>
 }
