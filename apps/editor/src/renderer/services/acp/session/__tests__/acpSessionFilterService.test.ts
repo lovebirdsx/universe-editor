@@ -105,6 +105,24 @@ describe('AcpSessionFilterService', () => {
     expect(service.excludedStatuses.get().has('failed')).toBe(false)
   })
 
+  it('toggleArchived flips showArchived and the default flag', () => {
+    expect(service.showArchived.get()).toBe(false)
+    service.toggleArchived()
+    expect(service.showArchived.get()).toBe(true)
+    expect(service.isFilterDefault.get()).toBe(false)
+    service.toggleArchived()
+    expect(service.showArchived.get()).toBe(false)
+    expect(service.isFilterDefault.get()).toBe(true)
+  })
+
+  it('resetFilters also hides archived sessions again', () => {
+    service.toggleArchived()
+    expect(service.isFilterDefault.get()).toBe(false)
+    service.resetFilters()
+    expect(service.showArchived.get()).toBe(false)
+    expect(service.isFilterDefault.get()).toBe(true)
+  })
+
   it('resetFilters restores defaults', () => {
     service.setSortMode('created')
     service.toggleAgent('claude-code')
@@ -133,6 +151,7 @@ describe('AcpSessionFilterService', () => {
     a.setSortMode('created')
     a.toggleAgent('codex')
     a.toggleStatus('failed')
+    a.toggleArchived()
     await flush() // let the 100ms debounced write fire
     await new Promise((r) => setTimeout(r, 150))
 
@@ -141,7 +160,22 @@ describe('AcpSessionFilterService', () => {
     expect(b.sortMode.get()).toBe('created')
     expect(b.excludedAgentIds.get().has('codex')).toBe(true)
     expect(b.excludedStatuses.get().has('failed')).toBe(true)
+    expect(b.showArchived.get()).toBe(true)
     expect(b.isFilterDefault.get()).toBe(false)
+  })
+
+  it('defaults showArchived to false for payloads that predate the field', async () => {
+    const storage = new FakeStorage()
+    await storage.set('acp.sessionFilter', {
+      schemaVersion: 1,
+      sortMode: 'created',
+      excludedAgentIds: [],
+      excludedStatuses: [],
+    })
+    const b = make(storage).service
+    await b.initialize()
+    expect(b.showArchived.get()).toBe(false)
+    expect(b.sortMode.get()).toBe('created')
   })
 
   it('ignores persisted state with a mismatched schema version', async () => {

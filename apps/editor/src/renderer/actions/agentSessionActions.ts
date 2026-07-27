@@ -603,6 +603,86 @@ export class RevealAgentSessionInOSAction extends Action2 {
   }
 }
 
+/**
+ * Shared base for the session-list flag actions (archive / pin). Target
+ * resolution: explicit `{ sessionId }` arg (list row button / context menu /
+ * Del key), else the active session (command palette). The flag write is a
+ * pure history-layer marker — it never touches the live session.
+ */
+abstract class BaseSessionFlagAction extends Action2 {
+  override run(accessor: ServicesAccessor, arg?: { sessionId?: unknown }): void {
+    const sessions = accessor.get(IAcpSessionService)
+    const history = accessor.get(IAcpSessionHistoryService)
+    const sessionId =
+      arg && typeof arg.sessionId === 'string' && arg.sessionId.length > 0
+        ? arg.sessionId
+        : sessions.activeSession.get()?.id
+    if (sessionId === undefined) return
+    this.applyFlag(history, sessionId)
+  }
+  protected abstract applyFlag(history: IAcpSessionHistoryService, sessionId: string): void
+}
+
+export class ArchiveAgentSessionAction extends BaseSessionFlagAction {
+  static readonly ID = 'workbench.action.agent.archiveSession'
+  constructor() {
+    super({
+      id: ArchiveAgentSessionAction.ID,
+      title: localize2('action.agent.archiveSession', 'Archive Agent Session'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  protected override applyFlag(history: IAcpSessionHistoryService, sessionId: string): void {
+    history.setHistoryArchived(sessionId, true)
+  }
+}
+
+export class UnarchiveAgentSessionAction extends BaseSessionFlagAction {
+  static readonly ID = 'workbench.action.agent.unarchiveSession'
+  constructor() {
+    super({
+      id: UnarchiveAgentSessionAction.ID,
+      title: localize2('action.agent.unarchiveSession', 'Unarchive Agent Session'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  protected override applyFlag(history: IAcpSessionHistoryService, sessionId: string): void {
+    history.setHistoryArchived(sessionId, false)
+  }
+}
+
+export class PinAgentSessionAction extends BaseSessionFlagAction {
+  static readonly ID = 'workbench.action.agent.pinSession'
+  constructor() {
+    super({
+      id: PinAgentSessionAction.ID,
+      title: localize2('action.agent.pinSession', 'Pin Agent Session'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  protected override applyFlag(history: IAcpSessionHistoryService, sessionId: string): void {
+    history.setHistoryPinned(sessionId, true)
+  }
+}
+
+export class UnpinAgentSessionAction extends BaseSessionFlagAction {
+  static readonly ID = 'workbench.action.agent.unpinSession'
+  constructor() {
+    super({
+      id: UnpinAgentSessionAction.ID,
+      title: localize2('action.agent.unpinSession', 'Unpin Agent Session'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  protected override applyFlag(history: IAcpSessionHistoryService, sessionId: string): void {
+    history.setHistoryPinned(sessionId, false)
+  }
+}
+
 /** Extract the session id from an AcpSessionEditorInput resource: `universe:/acp/session/<id>`. */
 function sessionIdFromResource(resource: unknown): string | undefined {
   const path =

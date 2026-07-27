@@ -1432,3 +1432,247 @@ describe('AcpSessionHistoryService — setHistoryAiTitle', () => {
     expect(svc.get('s1')?.title).toBe('AI Title')
   })
 })
+
+describe('AcpSessionHistoryService — archive / pin', () => {
+  let svc: AcpSessionHistoryService
+  let storage: FakeStorage
+
+  beforeEach(() => {
+    const made = makeService()
+    svc = made.svc
+    storage = made.storage
+  })
+
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('setHistoryArchived sets the flag, and clearing removes the key entirely', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })
+    svc.setHistoryArchived(e.id, true)
+    expect(svc.get(e.id)?.archived).toBe(true)
+    svc.setHistoryArchived(e.id, false)
+    const entry = svc.get(e.id)!
+    expect(entry.archived).toBeUndefined()
+    // exactOptionalPropertyTypes: clearing must drop the key, not assign undefined.
+    expect('archived' in entry).toBe(false)
+  })
+
+  it('setHistoryPinned sets the flag, and clearing removes the key entirely', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })
+    svc.setHistoryPinned(e.id, true)
+    expect(svc.get(e.id)?.pinned).toBe(true)
+    svc.setHistoryPinned(e.id, false)
+    const entry = svc.get(e.id)!
+    expect(entry.pinned).toBeUndefined()
+    expect('pinned' in entry).toBe(false)
+  })
+
+  it('is a no-op for unknown ids and unchanged values', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })
+    svc.setHistoryArchived('nope', true)
+    svc.setHistoryPinned('nope', true)
+    expect(svc.get(e.id)?.archived).toBeUndefined()
+    await flushWrite()
+    const before = storage.setCalls.length
+    svc.setHistoryArchived(e.id, true)
+    svc.setHistoryPinned(e.id, true)
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(before + 1)
+    // Same values again — no new write.
+    svc.setHistoryArchived(e.id, true)
+    svc.setHistoryPinned(e.id, true)
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(before + 1)
+  })
+
+  it('re-add (resume) carries over archived and pinned', async () => {
+    await svc.initialize()
+    const first = svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't1' })
+    svc.setHistoryArchived(first.id, true)
+    svc.setHistoryPinned(first.id, true)
+    const second = svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't2' })
+    expect(second.archived).toBe(true)
+    expect(second.pinned).toBe(true)
+  })
+
+  it('bulkMergeFromAgent preserves archived/pinned on existing rows', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'fake', sessionIdOnAgent: 's-1', title: 't', cwd: '/work' })
+    svc.setHistoryArchived(e.id, true)
+    svc.setHistoryPinned(e.id, true)
+    svc.bulkMergeFromAgent(
+      'fake',
+      [{ sessionId: 's-1', cwd: '/work', title: 'renamed', updatedAt: '2024-03-01T00:00:00Z' }],
+      '/work',
+      'workspace',
+    )
+    const got = svc.get(e.id)
+    expect(got?.archived).toBe(true)
+    expect(got?.pinned).toBe(true)
+  })
+
+  it('updateInfo and touch preserve archived/pinned', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })
+    svc.setHistoryArchived(e.id, true)
+    svc.setHistoryPinned(e.id, true)
+    svc.updateInfo(e.id, { title: 'new title' })
+    svc.touch(e.id)
+    const got = svc.get(e.id)
+    expect(got?.archived).toBe(true)
+    expect(got?.pinned).toBe(true)
+  })
+
+  it('round-trips archived/pinned through persistence', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })
+    svc.setHistoryArchived(e.id, true)
+    svc.setHistoryPinned(e.id, true)
+    await flushWrite()
+    const reloaded = makeService({ storage }).svc
+    await reloaded.initialize()
+    expect(reloaded.get(e.id)?.archived).toBe(true)
+    expect(reloaded.get(e.id)?.pinned).toBe(true)
+    reloaded.dispose()
+  })
+
+  it('hydrates v1/v2 rows without the flags as neither archived nor pinned', async () => {
+    storage.store.set('acp.sessionHistory', {
+      schemaVersion: 2,
+      entries: [
+        {
+          id: 'old',
+          agentId: 'a',
+          sessionIdOnAgent: 'old',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 1,
+        },
+      ],
+    })
+    await svc.initialize()
+    expect(svc.get('old')?.archived).toBeUndefined()
+    expect(svc.get('old')?.pinned).toBeUndefined()
+  })
+
+  it('drops entries with non-boolean archived/pinned during hydration', async () => {
+    storage.store.set('acp.sessionHistory', {
+      schemaVersion: 2,
+      entries: [
+        {
+          id: 'bad',
+          agentId: 'a',
+          sessionIdOnAgent: 'bad',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 1,
+          archived: 'yes',
+        },
+        {
+          id: 'bad2',
+          agentId: 'a',
+          sessionIdOnAgent: 'bad2',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 2,
+          pinned: 1,
+        },
+        {
+          id: 'good',
+          agentId: 'a',
+          sessionIdOnAgent: 'good',
+          title: 't2',
+          createdAt: 1,
+          lastUsedAt: 3,
+        },
+      ],
+    })
+    await svc.initialize()
+    expect(svc.list().map((e) => e.id)).toEqual(['good'])
+  })
+})
+
+describe('AcpSessionHistoryService — pinned eviction', () => {
+  let svc: AcpSessionHistoryService
+  let storage: FakeStorage
+
+  beforeEach(() => {
+    const made = makeService()
+    svc = made.svc
+    storage = made.storage
+  })
+
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('pinned entries survive MAX_ENTRIES eviction (oldest unpinned go first)', async () => {
+    await svc.initialize()
+    for (let i = 0; i < 100; i++) {
+      svc.add({ agentId: 'a', sessionIdOnAgent: `s${i}`, title: `t${i}` })
+    }
+    // Pin the oldest row, then overflow the cap by five.
+    svc.setHistoryPinned('s0', true)
+    for (let i = 100; i < 105; i++) {
+      svc.add({ agentId: 'a', sessionIdOnAgent: `s${i}`, title: `t${i}` })
+    }
+    expect(svc.list()).toHaveLength(100)
+    expect(svc.get('s0')?.pinned).toBe(true)
+    // The five oldest unpinned rows were evicted instead.
+    expect(svc.get('s1')).toBeUndefined()
+    expect(svc.get('s5')).toBeUndefined()
+    expect(svc.get('s6')).toBeDefined()
+    expect(svc.get('s104')).toBeDefined()
+  })
+
+  it('caps even the pinned set at MAX_ENTRIES on load-merge', async () => {
+    const entries = []
+    for (let i = 0; i < 105; i++) {
+      entries.push({
+        id: `s${i}`,
+        agentId: 'a',
+        sessionIdOnAgent: `s${i}`,
+        title: `t${i}`,
+        createdAt: i + 1,
+        lastUsedAt: i + 1,
+        pinned: true,
+      })
+    }
+    storage.store.set('acp.sessionHistory', { schemaVersion: 2, entries })
+    await svc.initialize()
+    expect(svc.list()).toHaveLength(100)
+    // Sorted lastUsedAt desc — the newest 100 pinned rows survive.
+    expect(svc.get('s104')).toBeDefined()
+    expect(svc.get('s5')).toBeDefined()
+    expect(svc.get('s4')).toBeUndefined()
+    expect(svc.get('s0')).toBeUndefined()
+  })
+
+  it('load-merge exempts pinned rows added before initialize() finishes', async () => {
+    const entries = []
+    for (let i = 0; i < 100; i++) {
+      entries.push({
+        id: `p${i}`,
+        agentId: 'a',
+        sessionIdOnAgent: `p${i}`,
+        title: `t${i}`,
+        createdAt: i + 1,
+        lastUsedAt: i + 1,
+      })
+    }
+    storage.store.set('acp.sessionHistory', { schemaVersion: 2, entries })
+    const early = svc.add({ agentId: 'a', sessionIdOnAgent: 'early', title: 'early' })
+    svc.setHistoryPinned(early.id, true)
+    await svc.initialize()
+    // 101 merged → 100 kept; the pinned early row survives, the oldest
+    // unpinned persisted row (p0, smallest lastUsedAt) is evicted.
+    expect(svc.list()).toHaveLength(100)
+    expect(svc.get('early')?.pinned).toBe(true)
+    expect(svc.get('p0')).toBeUndefined()
+    expect(svc.get('p1')).toBeDefined()
+  })
+})

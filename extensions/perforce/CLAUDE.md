@@ -207,7 +207,7 @@ pnpm check                                       # lint+typecheck+全测+docs:ch
 - `extensions/git/` —— 对照样板（Repository/RepositoryManager/gitError/nls 都是 p4 的镜像来源）
 - 相关 skill：`create-extension`（插件通用套路）；dirty-diff 内联 peek UI 见 `apps/editor/src/renderer/workbench/scm/CLAUDE.md`
 - 相关 memory：`extension-system-progress` / `eslint-path-identity-guardrails` / `dirty-diff-inline-peek-feature` / `path-comparison-convergence` / `perforce-collect-changes-ux`
-- 相关分析（外链）：`.claude/memory/swarm-chinese-path-print-empty-analysis.md` —— 中文路径 `p4 print` 空 diff 的完整实测对比（`-x` argfile / `P4COMMANDCHARSET` / `P4CHARSET` 各方案数据）
+- 相关分析（memory `swarm-chinese-path-print-empty-analysis`）：中文路径 `p4 print` 空 diff 的完整实测对比（`-x` argfile / `P4COMMANDCHARSET` / `P4CHARSET` 各方案数据）
 
 ## 其它
 

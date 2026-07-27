@@ -75,6 +75,7 @@ export function SessionsFilterPopover({ onDismiss }: SessionsFilterPopoverProps)
   const sortMode = useObservable(filterService.sortMode)
   const excludedAgents = useObservable(filterService.excludedAgentIds)
   const excludedStatuses = useObservable(filterService.excludedStatuses)
+  const showArchived = useObservable(filterService.showArchived)
   const isDefault = useObservable(filterService.isFilterDefault)
 
   const agents = registry.list()
@@ -139,6 +140,13 @@ export function SessionsFilterPopover({ onDismiss }: SessionsFilterPopoverProps)
             onClick={() => filterService.toggleStatus(bucket)}
           />
         ))}
+      </ul>
+      <ul className={styles['filterGroup']}>
+        <FilterRow
+          label={localize('acp.filter.archived', 'Archived')}
+          checked={showArchived}
+          onClick={() => filterService.toggleArchived()}
+        />
       </ul>
       <ul className={styles['filterGroup']}>
         <li

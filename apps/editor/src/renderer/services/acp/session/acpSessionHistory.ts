@@ -135,6 +135,20 @@ export interface AcpSessionHistoryEntry {
    */
   readonly manualTitle?: boolean
   /**
+   * True once the user archived this session. Archived rows are hidden from the
+   * session list by default (the filter popover's "Archived" toggle reveals
+   * them, sunk to the bottom and dimmed). Purely a local UX flag — the agent
+   * side is never notified, and archiving a live session neither closes nor
+   * cancels it.
+   */
+  readonly archived?: boolean
+  /**
+   * True once the user pinned this session. Pinned rows sort first in the
+   * session list and are exempt from the MAX_ENTRIES eviction (see
+   * {@link AcpSessionHistoryService._evictOverflow}).
+   */
+  readonly pinned?: boolean
+  /**
    * Per-session MCP whitelist: the server names (from the `acp.mcpServers` +
    * project `.mcp.json` pool) this session runs with. Absent = inherit the
    * current defaults (per-agent saved default, else every non-disabled pool
@@ -203,6 +217,17 @@ export interface IAcpSessionHistoryService {
    * an AI title.
    */
   setHistoryManualTitle(sessionId: string): void
+  /**
+   * Set (or clear, with `false`) the archived flag. Idempotent; no-op if the
+   * id is unknown or the value is unchanged. Never touches the live session —
+   * archiving is a list-level marker only.
+   */
+  setHistoryArchived(sessionId: string, archived: boolean): void
+  /**
+   * Set (or clear, with `false`) the pinned flag. Idempotent; no-op if the id
+   * is unknown or the value is unchanged.
+   */
+  setHistoryPinned(sessionId: string, pinned: boolean): void
   /**
    * Persist the session's MCP whitelist ({@link AcpSessionHistoryEntry.mcpServerNames}).
    * `null` clears the pin (back to inheriting the defaults). No-op if the id is
@@ -402,6 +427,12 @@ export class AcpSessionHistoryService
       ...(carriedHasMessages !== undefined ? { hasMessages: carriedHasMessages } : {}),
       ...(existingAiTitle === true ? { aiTitle: true } : {}),
       ...(existingManualTitle === true ? { manualTitle: true } : {}),
+      // Same carry-over for the archive/pin flags: re-adding the same session
+      // (e.g. on resume) must not drop the user's list-level markers.
+      ...(existingIdx >= 0 && this._state[existingIdx]!.archived === true
+        ? { archived: true }
+        : {}),
+      ...(existingIdx >= 0 && this._state[existingIdx]!.pinned === true ? { pinned: true } : {}),
     }
     if (existingIdx >= 0) {
       this._state = [next, ...this._state.filter((_, i) => i !== existingIdx)]
@@ -524,6 +555,32 @@ export class AcpSessionHistoryService
     const cur = this._state[idx]!
     if (cur.manualTitle === true) return
     const next: AcpSessionHistoryEntry = { ...cur, manualTitle: true }
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  setHistoryArchived(sessionId: string, archived: boolean): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if ((cur.archived === true) === archived) return
+    // exactOptionalPropertyTypes: clearing must rebuild the entry without the
+    // key — `{...cur, archived: undefined}` is not assignable.
+    const { archived: _drop, ...base } = cur
+    const next: AcpSessionHistoryEntry = archived ? { ...base, archived: true } : base
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  setHistoryPinned(sessionId: string, pinned: boolean): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if ((cur.pinned === true) === pinned) return
+    const { pinned: _drop, ...base } = cur
+    const next: AcpSessionHistoryEntry = pinned ? { ...base, pinned: true } : base
     this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()
@@ -753,8 +810,7 @@ export class AcpSessionHistoryService
       if (!seen.has(e.id)) merged.push(e)
     }
     merged.sort((a, b) => b.lastUsedAt - a.lastUsedAt)
-    if (merged.length > MAX_ENTRIES) merged.length = MAX_ENTRIES
-    return merged
+    return this._evictOverflow(merged)
   }
 
   protected override _onStateReplaced(state: AcpSessionHistoryEntry[]): void {
@@ -764,9 +820,26 @@ export class AcpSessionHistoryService
   // -- private helpers -------------------------------------------------
 
   private _truncate(): void {
-    if (this._state.length > MAX_ENTRIES) {
-      this._state = this._state.slice(0, MAX_ENTRIES)
-    }
+    this._state = this._evictOverflow(this._state)
+  }
+
+  /**
+   * Bound the state to MAX_ENTRIES, evicting oldest-first but exempting pinned
+   * entries — pinning is the user's explicit "do not lose this" marker. If the
+   * pinned set alone exceeds MAX_ENTRIES the oldest pinned rows are evicted
+   * too (the cap is not grown). Input is expected lastUsedAt-desc; the result
+   * keeps that order.
+   */
+  private _evictOverflow(entries: AcpSessionHistoryEntry[]): AcpSessionHistoryEntry[] {
+    if (entries.length <= MAX_ENTRIES) return entries
+    const pinned = entries.filter((e) => e.pinned === true)
+    const unpinned = entries.filter((e) => e.pinned !== true)
+    const kept = [
+      ...pinned.slice(0, MAX_ENTRIES),
+      ...unpinned.slice(0, Math.max(0, MAX_ENTRIES - pinned.length)),
+    ]
+    kept.sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+    return kept
   }
 
   private _publish(): void {
@@ -792,6 +865,8 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     (o['hasMessages'] === undefined || typeof o['hasMessages'] === 'boolean') &&
     (o['aiTitle'] === undefined || typeof o['aiTitle'] === 'boolean') &&
     (o['manualTitle'] === undefined || typeof o['manualTitle'] === 'boolean') &&
+    (o['archived'] === undefined || typeof o['archived'] === 'boolean') &&
+    (o['pinned'] === undefined || typeof o['pinned'] === 'boolean') &&
     (o['mcpServerNames'] === undefined || isStringArray(o['mcpServerNames']))
   )
 }

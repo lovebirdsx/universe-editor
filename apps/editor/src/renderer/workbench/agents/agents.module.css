@@ -1564,7 +1564,7 @@
   position: absolute;
   top: 6px;
   right: 4px;
-  width: 44px;
+  width: 92px;
   height: 18px;
   border-radius: 3px;
   background: transparent;
@@ -1688,20 +1688,42 @@
   right: 28px;
 }
 
+.sessionPin {
+  composes: sessionDelete;
+  right: 50px;
+}
+
+.sessionArchive {
+  composes: sessionDelete;
+  right: 72px;
+}
+
 .sessionRow:hover .sessionDelete,
 .sessionRow[data-active='true'] .sessionDelete,
+.sessionRow:focus-visible .sessionDelete,
 .sessionRow:hover .sessionRename,
-.sessionRow[data-active='true'] .sessionRename {
+.sessionRow[data-active='true'] .sessionRename,
+.sessionRow:focus-visible .sessionRename,
+.sessionRow:hover .sessionPin,
+.sessionRow[data-active='true'] .sessionPin,
+.sessionRow:focus-visible .sessionPin,
+.sessionRow:hover .sessionArchive,
+.sessionRow[data-active='true'] .sessionArchive,
+.sessionRow:focus-visible .sessionArchive {
   visibility: visible;
 }
 
 .sessionRow:hover .sessionDelete,
-.sessionRow:hover .sessionRename {
+.sessionRow:hover .sessionRename,
+.sessionRow:hover .sessionPin,
+.sessionRow:hover .sessionArchive {
   background: var(--color-list-hover-bg, #2a2d2e);
 }
 
 .sessionRow[data-active='true'] .sessionDelete,
-.sessionRow[data-active='true'] .sessionRename {
+.sessionRow[data-active='true'] .sessionRename,
+.sessionRow[data-active='true'] .sessionPin,
+.sessionRow[data-active='true'] .sessionArchive {
   background: var(--color-list-active-bg, #094771);
 }
 
@@ -1711,6 +1733,35 @@
 
 .sessionRename:hover {
   color: var(--color-fg-accent, #4493f8);
+}
+
+.sessionPin:hover {
+  color: var(--color-fg-accent, #4493f8);
+}
+
+.sessionArchive:hover {
+  color: var(--color-fg-accent, #4493f8);
+}
+
+.sessionRowPin {
+  flex-shrink: 0;
+  color: var(--color-message-role-fg, #888);
+}
+
+/* The pin indicator swaps for the inline pin button on hover / keyboard focus,
+   mirroring VSCode's agentSessions viewer. */
+.sessionRow:hover .sessionRowPin,
+.sessionRow:focus-visible .sessionRowPin {
+  visibility: hidden;
+}
+
+.sessionRow[data-archived='true'] .sessionRowLabel {
+  color: var(--color-message-role-fg, #888);
+}
+
+.sessionRow:focus-visible {
+  outline: 1px solid var(--color-fg-accent, #4493f8);
+  outline-offset: -1px;
 }
 
 .empty,

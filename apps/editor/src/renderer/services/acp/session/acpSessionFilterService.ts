@@ -72,6 +72,8 @@ export interface IAcpSessionFilterService {
   readonly excludedAgentIds: IObservable<ReadonlySet<string>>
   /** Status buckets the user has toggled OFF (hidden). Empty = show all statuses. */
   readonly excludedStatuses: IObservable<ReadonlySet<SessionStatusBucket>>
+  /** True when archived sessions are shown (default false = hidden). */
+  readonly showArchived: IObservable<boolean>
   /** True when sort + excludes are all at their defaults (used to dim the funnel). */
   readonly isFilterDefault: IObservable<boolean>
 
@@ -83,6 +85,7 @@ export interface IAcpSessionFilterService {
   setSortMode(mode: SessionSortMode): void
   toggleAgent(agentId: string): void
   toggleStatus(bucket: SessionStatusBucket): void
+  toggleArchived(): void
   /** Restore sort + excludes to defaults. Does not touch the search box. */
   resetFilters(): void
   /** Idempotent async load of the persisted filter state. */
@@ -101,6 +104,8 @@ interface PersistedShape {
   readonly sortMode: SessionSortMode
   readonly excludedAgentIds: readonly string[]
   readonly excludedStatuses: readonly SessionStatusBucket[]
+  /** Added after v1 shipped — absent in older payloads; read leniently. */
+  readonly showArchived?: boolean
 }
 
 export class AcpSessionFilterService extends Disposable implements IAcpSessionFilterService {
@@ -124,6 +129,10 @@ export class AcpSessionFilterService extends Disposable implements IAcpSessionFi
   )
   private readonly _excludedStatuses: ISettableObservable<ReadonlySet<SessionStatusBucket>> =
     observableValue('acp.sessionExcludedStatuses', new Set<SessionStatusBucket>())
+  private readonly _showArchived: ISettableObservable<boolean> = observableValue(
+    'acp.sessionShowArchived',
+    false,
+  )
   private readonly _isFilterDefault: ISettableObservable<boolean> = observableValue(
     'acp.sessionFilterDefault',
     true,
@@ -134,6 +143,7 @@ export class AcpSessionFilterService extends Disposable implements IAcpSessionFi
   readonly sortMode: IObservable<SessionSortMode> = this._sortMode
   readonly excludedAgentIds: IObservable<ReadonlySet<string>> = this._excludedAgentIds
   readonly excludedStatuses: IObservable<ReadonlySet<SessionStatusBucket>> = this._excludedStatuses
+  readonly showArchived: IObservable<boolean> = this._showArchived
   readonly isFilterDefault: IObservable<boolean> = this._isFilterDefault
 
   private readonly _logger: ILogger
@@ -201,11 +211,18 @@ export class AcpSessionFilterService extends Disposable implements IAcpSessionFi
     this._scheduleWrite()
   }
 
+  toggleArchived(): void {
+    this._showArchived.set(!this._showArchived.get(), undefined)
+    this._refreshDefault()
+    this._scheduleWrite()
+  }
+
   resetFilters(): void {
     if (this.isFilterDefault.get()) return
     this._sortMode.set(DEFAULT_SORT, undefined)
     this._excludedAgentIds.set(new Set<string>(), undefined)
     this._excludedStatuses.set(new Set<SessionStatusBucket>(), undefined)
+    this._showArchived.set(false, undefined)
     this._refreshDefault()
     this._scheduleWrite()
   }
@@ -225,7 +242,8 @@ export class AcpSessionFilterService extends Disposable implements IAcpSessionFi
     const isDefault =
       this._sortMode.get() === DEFAULT_SORT &&
       this._excludedAgentIds.get().size === 0 &&
-      this._excludedStatuses.get().size === 0
+      this._excludedStatuses.get().size === 0 &&
+      this._showArchived.get() === false
     this._isFilterDefault.set(isDefault, undefined)
   }
 
@@ -244,6 +262,9 @@ export class AcpSessionFilterService extends Disposable implements IAcpSessionFi
             SESSION_STATUS_BUCKETS.includes(s),
           )
           this._excludedStatuses.set(new Set(valid), undefined)
+        }
+        if (typeof raw.showArchived === 'boolean') {
+          this._showArchived.set(raw.showArchived, undefined)
         }
         this._refreshDefault()
       } else if (raw !== undefined) {
@@ -273,6 +294,7 @@ export class AcpSessionFilterService extends Disposable implements IAcpSessionFi
         sortMode: this._sortMode.get(),
         excludedAgentIds: [...this._excludedAgentIds.get()],
         excludedStatuses: [...this._excludedStatuses.get()],
+        showArchived: this._showArchived.get(),
       }
       await this._storage.set(STORAGE_KEY, payload, StorageScope.GLOBAL)
     } catch (err) {

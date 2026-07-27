@@ -289,6 +289,10 @@ import {
   ResumeAgentSessionAction,
   RevealAgentSessionInOSAction,
   RewindAgentSessionAction,
+  ArchiveAgentSessionAction,
+  UnarchiveAgentSessionAction,
+  PinAgentSessionAction,
+  UnpinAgentSessionAction,
   ScrollAcpTimelinePageDownAction,
   ScrollAcpTimelinePageUpAction,
   FocusBottomAcpTimelineAction,
@@ -667,6 +671,10 @@ registerAction2(ClearAgentSessionHistoryAction)
 registerAction2(RefreshAgentSessionsAction)
 registerAction2(RenameAgentSessionAction)
 registerAction2(RevealAgentSessionInOSAction)
+registerAction2(ArchiveAgentSessionAction)
+registerAction2(UnarchiveAgentSessionAction)
+registerAction2(PinAgentSessionAction)
+registerAction2(UnpinAgentSessionAction)
 registerAction2(RewindAgentSessionAction)
 registerAction2(ForkAgentSessionAction)
 registerAction2(FocusNextAcpTimelineItemAction)

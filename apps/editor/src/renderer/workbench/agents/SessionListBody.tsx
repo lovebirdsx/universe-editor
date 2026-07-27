@@ -29,7 +29,7 @@ import {
   IUriIdentityService,
   ICommandService,
 } from '@universe-editor/platform'
-import { X, Trash2, GitBranch, Pencil } from 'lucide-react'
+import { X, Trash2, GitBranch, Pencil, Archive, ArchiveRestore, Pin, PinOff } from 'lucide-react'
 import {
   IconButton,
   Input,
@@ -195,6 +195,8 @@ function SessionRow({
   onActivate,
   onRemove,
   onRename,
+  onToggleArchive,
+  onTogglePin,
   onContextMenu,
   rate,
   scope,
@@ -207,6 +209,8 @@ function SessionRow({
   onActivate: () => void
   onRemove: () => void
   onRename: (() => void) | undefined
+  onToggleArchive: () => void
+  onTogglePin: () => void
   onContextMenu: (e: ReactMouseEvent) => void
   rate: number
   scope: SessionHistoryScope
@@ -238,20 +242,48 @@ function SessionRow({
     historyConfigOptions?.['reasoning_effort'] ??
     historyConfigOptions?.['effort']
   const chip = scopeChip(entry, scope)
+  const isArchived = entry.archived === true
+  const isPinned = entry.pinned === true
+  const archiveLabel = isArchived
+    ? localize('acp.sessions.unarchive', 'Unarchive session (Shift+Del)')
+    : localize('acp.sessions.archive', 'Archive session (Del)')
+  const pinLabel = isPinned
+    ? localize('acp.sessions.unpin', 'Unpin session')
+    : localize('acp.sessions.pin', 'Pin session')
   return (
     <li
       className={styles['sessionRow']}
       data-active={isActive ? 'true' : 'false'}
       data-running={isRunning ? 'true' : 'false'}
       data-foreign={isForeign ? 'true' : 'false'}
+      data-archived={isArchived ? 'true' : 'false'}
       data-testid={`session-row-${entry.id}`}
+      tabIndex={0}
       onClick={onActivate}
       onContextMenu={onContextMenu}
+      onKeyDown={(e) => {
+        // Del archives an unarchived row; Shift+Del restores an archived one
+        // (mirrors VSCode's agentSessions viewer keys). Other combinations are
+        // no-ops so a stray Shift+Del can't archive and vice versa.
+        if (e.key === 'Delete' && e.shiftKey === isArchived) {
+          e.preventDefault()
+          e.stopPropagation()
+          onToggleArchive()
+        }
+      }}
     >
       <div className={styles['sessionRowTitle']}>
         <span className={styles['sessionRowLabelLine']}>
           <AgentIcon agentId={entry.agentId} size={14} className={styles['sessionRowAgentIcon']} />
           <span className={styles['sessionRowLabel']}>{foreignStat?.title ?? entry.title}</span>
+          {isPinned ? (
+            <Pin
+              size={12}
+              strokeWidth={1.75}
+              className={styles['sessionRowPin']}
+              aria-label={localize('acp.sessions.pinned', 'Pinned')}
+            />
+          ) : null}
         </span>
         <span className={styles['sessionRowMeta']}>
           {relativeTime(entry.lastUsedAt)}
@@ -295,6 +327,34 @@ function SessionRow({
           ) : null}
         </span>
       </div>
+      <button
+        type="button"
+        className={styles['sessionArchive']}
+        onClick={(e) => {
+          e.stopPropagation()
+          onToggleArchive()
+        }}
+        aria-label={archiveLabel}
+        title={archiveLabel}
+      >
+        {isArchived ? (
+          <ArchiveRestore size={13} strokeWidth={1.75} />
+        ) : (
+          <Archive size={13} strokeWidth={1.75} />
+        )}
+      </button>
+      <button
+        type="button"
+        className={styles['sessionPin']}
+        onClick={(e) => {
+          e.stopPropagation()
+          onTogglePin()
+        }}
+        aria-label={pinLabel}
+        title={pinLabel}
+      >
+        {isPinned ? <PinOff size={13} strokeWidth={1.75} /> : <Pin size={13} strokeWidth={1.75} />}
+      </button>
       {onRename ? (
         <button
           type="button"
@@ -346,6 +406,7 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
   const sortMode = useObservable(filterService.sortMode)
   const excludedAgents = useObservable(filterService.excludedAgentIds)
   const excludedStatuses = useObservable(filterService.excludedStatuses)
+  const showArchived = useObservable(filterService.showArchived)
 
   // The config service exposes an Event, not an observable — mirror the scope
   // into local state so the list re-renders (and re-filters) when it changes.
@@ -377,12 +438,17 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
 
   const filtered = useMemo(() => filterSessions(scoped, query), [scoped, query])
 
-  // Apply the funnel-menu filters (agent + status) and the chosen sort. Status
-  // is derived from the live session when one exists; a non-live history row has
-  // no live status and counts as `completed`. When a search query is active the
-  // fuzzy-score order from `filterSessions` wins over the sort mode.
+  // Apply the archived-visibility gate, the funnel-menu filters (agent +
+  // status) and the chosen sort. Status is derived from the live session when
+  // one exists; a non-live history row has no live status and counts as
+  // `completed`. Archived rows are hidden unless the filter popover's
+  // "Archived" toggle is on. When a search query is active the fuzzy-score
+  // order from `filterSessions` wins over everything — pinned rows must not
+  // outrank a better match. Otherwise rows sort into three bands: pinned
+  // first, plain rows next, archived last; each band keeps the sortMode order.
   const visible = useMemo(() => {
-    const kept = filtered.filter((entry) => {
+    const archKept = showArchived ? filtered : filtered.filter((e) => e.archived !== true)
+    const kept = archKept.filter((entry) => {
       if (excludedAgents.has(entry.agentId)) return false
       if (excludedStatuses.size > 0) {
         const live = service.getById(entry.id)
@@ -393,12 +459,16 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
       return true
     })
     if (query.trim().length > 0) return kept
+    const rank = (e: AcpSessionHistoryEntry) =>
+      e.archived === true ? 2 : e.pinned === true ? 0 : 1
     const sorted = [...kept]
-    sorted.sort((a, b) =>
-      sortMode === 'created' ? b.createdAt - a.createdAt : b.lastUsedAt - a.lastUsedAt,
-    )
+    sorted.sort((a, b) => {
+      const band = rank(a) - rank(b)
+      if (band !== 0) return band
+      return sortMode === 'created' ? b.createdAt - a.createdAt : b.lastUsedAt - a.lastUsedAt
+    })
     return sorted
-  }, [filtered, excludedAgents, excludedStatuses, sortMode, query, service])
+  }, [filtered, showArchived, excludedAgents, excludedStatuses, sortMode, query, service])
 
   const exchangeRate = useUsdToCnyRate()
   const rate = exchangeRate?.rate ?? FALLBACK_RATE
@@ -487,6 +557,22 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
                 sessionId: entry.id,
               })
             }
+            const onToggleArchive = () => {
+              void commandService.executeCommand(
+                entry.archived === true
+                  ? 'workbench.action.agent.unarchiveSession'
+                  : 'workbench.action.agent.archiveSession',
+                { sessionId: entry.id },
+              )
+            }
+            const onTogglePin = () => {
+              void commandService.executeCommand(
+                entry.pinned === true
+                  ? 'workbench.action.agent.unpinSession'
+                  : 'workbench.action.agent.pinSession',
+                { sessionId: entry.id },
+              )
+            }
             const onRemove = () => {
               void (async () => {
                 if (config.get<boolean>('acp.sessions.confirmDelete') !== false) {
@@ -518,6 +604,22 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
               e.preventDefault()
               e.stopPropagation()
               const items: SessionRowMenuItem[] = []
+              items.push({
+                kind: 'item',
+                label:
+                  entry.pinned === true
+                    ? localize('acp.sessions.unpinMenu', 'Unpin Session')
+                    : localize('acp.sessions.pinMenu', 'Pin Session'),
+                run: onTogglePin,
+              })
+              items.push({
+                kind: 'item',
+                label:
+                  entry.archived === true
+                    ? localize('acp.sessions.unarchiveMenu', 'Unarchive Session')
+                    : localize('acp.sessions.archiveMenu', 'Archive Session'),
+                run: onToggleArchive,
+              })
               if (onRename) {
                 items.push({
                   kind: 'item',
@@ -551,6 +653,8 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
                 isForeign={isForeign}
                 foreignStat={foreignStats.get(entry.id)}
                 onRename={onRename}
+                onToggleArchive={onToggleArchive}
+                onTogglePin={onTogglePin}
                 onContextMenu={openContextMenu}
                 onActivate={() => {
                   const fresh = service.getById(entry.id)
