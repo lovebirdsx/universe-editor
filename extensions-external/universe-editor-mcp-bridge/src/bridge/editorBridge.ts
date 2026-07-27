@@ -4,6 +4,8 @@ import { connect, type Socket } from 'node:net'
 import { encodeFrame, FrameDecoder, FrameProtocolError } from './framing.js'
 import {
   EDITOR_MCP_PROTOCOL_VERSION,
+  EditorMcpClientKind,
+  EditorMcpEnvelopeType,
   type EditorMcpMethod,
   type EditorMcpResponseEnvelope,
   parseEditorMcpEnvelope,
@@ -65,7 +67,7 @@ export class EditorCommandBridge {
     const socket = await this.ensureConnected()
     const requestId = randomUUID()
     const request = {
-      Type: 'Request' as const,
+      Type: EditorMcpEnvelopeType.Request,
       RequestId: requestId,
       Method: method,
       ...(params ? { Params: params } : {}),
@@ -159,7 +161,7 @@ export class EditorCommandBridge {
     const responsePromise = new Promise<EditorMcpResponseEnvelope>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingRequests.delete(requestId)
-        reject(new Error('UniverseEditor v2 handshake timeout'))
+        reject(new Error('UniverseEditor handshake timeout'))
       }, this.options.connectTimeoutMs)
       this.pendingRequests.set(requestId, { resolve, reject, timer })
     })
@@ -167,24 +169,23 @@ export class EditorCommandBridge {
     this.writeFrame(
       socket,
       serializeEditorMcpEnvelope({
-        Type: 'Handshake',
+        Type: EditorMcpEnvelopeType.Handshake,
         RequestId: requestId,
         ProtocolVersion: EDITOR_MCP_PROTOCOL_VERSION,
-        ClientKind: 'mcp-tool',
+        ClientKind: EditorMcpClientKind.McpTool,
         ClientName: 'universe-editor-mcp-bridge',
-        Capabilities: [],
       }),
     )
 
     const response = await responsePromise
     if (!response.Success) {
       throw new Error(
-        `UniverseEditor v2 handshake failed: ${response.Error?.Code}: ${response.Error?.Message}`,
+        `UniverseEditor handshake failed: ${response.Error?.Code}: ${response.Error?.Message}`,
       )
     }
     const result = response.Result as { ProtocolVersion?: unknown } | undefined
     if (result?.ProtocolVersion !== EDITOR_MCP_PROTOCOL_VERSION) {
-      throw new Error('UniverseEditor v2 handshake returned an invalid protocol version')
+      throw new Error('UniverseEditor handshake returned an invalid protocol version')
     }
   }
 
@@ -212,13 +213,7 @@ export class EditorCommandBridge {
       this.socket?.destroy(new Error(`${parsed.error.Code}: ${parsed.error.Message}`))
       return
     }
-    if (parsed.value.Type === 'Notification') {
-      this.options.onLog?.(
-        `notification event=${parsed.value.Event} sequence=${parsed.value.Sequence}`,
-      )
-      return
-    }
-    if (parsed.value.Type !== 'Response') {
+    if (parsed.value.Type !== EditorMcpEnvelopeType.Response) {
       this.socket?.destroy(
         new Error(`Unexpected ${parsed.value.Type} envelope from UniverseEditor`),
       )
