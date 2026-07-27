@@ -43,7 +43,7 @@ async function installMcpServer(context: ExtensionContext, interactive: boolean)
   if (interactive) {
     await window.showInformationMessage('Universe Editor MCP 已重新注册。')
   }
-  console.error('[universe-editor-mcp-bridge] registered MCP server')
+  console.info('[universe-editor-mcp-bridge] registered MCP server')
 }
 
 export async function activate(context: ExtensionContext): Promise<void> {
@@ -52,7 +52,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   )
 
   await installMcpServer(context, false)
-  console.error('[universe-editor-mcp-bridge] activated')
+  console.info('[universe-editor-mcp-bridge] activated')
 }
 
 export function deactivate(): void {

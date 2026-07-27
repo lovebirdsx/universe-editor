@@ -22,6 +22,7 @@ import {
   type ILogger,
   ILoggerService,
   ISecretStorageService,
+  isCancellationError,
   transformErrorForSerialization,
   type AiActiveModelKind,
   type AiActiveModels,
@@ -431,7 +432,12 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
 
   private _endRequestWithError(requestId: string, error: unknown): void {
     const message = error instanceof Error ? error.message : String(error)
-    this._logger.warn(`request ${requestId} failed: ${message}`)
+    // 用户主动取消（停止生成/切换模型）是正常路径，不算失败，降为 info。
+    if (isCancellationError(error)) {
+      this._logger.info(`request ${requestId} canceled`)
+    } else {
+      this._logger.warn(`request ${requestId} failed: ${message}`)
+    }
     const serialized = transformErrorForSerialization(error)
     this._recorder?.finish(requestId, serialized)
     this._onDidEndRequest.fire({ requestId, error: serialized })

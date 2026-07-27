@@ -11,10 +11,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  AbstractLogger,
   AiErrorCode,
   AsyncIterableSource,
+  CancellationError,
   DeferredPromise,
   Emitter,
+  LogLevel,
   type AiModelMetadata,
   type AiProviderGroup,
   type AiRequestOptions,
@@ -190,6 +193,43 @@ describe('AiModelMainService', () => {
     expect(end.requestId).toBe('r2')
     expect(end.error?.$isError).toBe(true)
     expect(end.error?.message).toBe('boom')
+    service.dispose()
+  })
+
+  it('logs a canceled request at info level, not warn', async () => {
+    const entries: { level: LogLevel; message: string }[] = []
+    class SpyLogger extends AbstractLogger {
+      protected override _log(level: LogLevel, message: string): void {
+        entries.push({ level, message })
+      }
+    }
+    const spyLogger = new SpyLogger()
+    const dir = mkdtempSync(join(tmpdir(), 'ai-settings-test-'))
+    writeFileSync(join(dir, 'aiSettings.json'), JSON.stringify({ groups: [FAKE_GROUP] }), 'utf8')
+    const service = new AiModelMainService(secretsStub, makeConfigLocation(dir), {
+      _serviceBrand: undefined,
+      createLogger: () => spyLogger,
+      setLevel: (level: LogLevel) => spyLogger.setLevel(level),
+      getLevel: () => spyLogger.level,
+    })
+    addProvider(
+      service,
+      'fake',
+      fakeStreamingProvider([model('fake/default/m')], (source, result) => {
+        const err = new CancellationError()
+        source.reject(err)
+        result.error(err)
+      }).provider,
+    )
+    const ended = collectEnd(service)
+
+    await service.startRequest('r2c', userMsg, { modelId: 'fake/default/m' })
+    await ended
+
+    const entriesForRequest = entries.filter((e) => e.message.includes('r2c'))
+    expect(entriesForRequest).toHaveLength(1)
+    expect(entriesForRequest[0]!.level).toBe(LogLevel.Info)
+    expect(entriesForRequest[0]!.message).toContain('canceled')
     service.dispose()
   })
 
