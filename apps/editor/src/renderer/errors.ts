@@ -3,7 +3,7 @@
  *  Renderer-process global error handlers. Install once at bootstrap top.
  *--------------------------------------------------------------------------------------------*/
 
-import { onUnexpectedError } from '@universe-editor/platform'
+import { IpcChannelDisposedError, onUnexpectedError } from '@universe-editor/platform'
 
 /**
  * Benign errors that surface through the global error paths during normal
@@ -23,6 +23,19 @@ export function isBenignError(error: unknown): boolean {
   // actionable meaning (no data loss, nothing to retry), so treat it as benign
   // lifecycle noise rather than logging it / toasting it on every diff-view switch.
   if (errorStr.includes('no diff result available')) {
+    return true
+  }
+
+  // A request still in flight when its IPC channel is torn down (extension-host
+  // restart on workspace swap / trust flip / crash recovery) rejects with
+  // IpcChannelDisposedError — the channel being gone is the whole message, and
+  // the consumer's state has already been reset by the teardown. The name check
+  // covers a duplicate platform module instance (dev-server graph split), where
+  // instanceof would miss.
+  if (
+    error instanceof IpcChannelDisposedError ||
+    (error instanceof Error && error.name === 'IpcChannelDisposedError')
+  ) {
     return true
   }
 

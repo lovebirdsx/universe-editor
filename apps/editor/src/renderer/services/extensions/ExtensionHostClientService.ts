@@ -146,6 +146,14 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   private readonly _restartState: RestartState = { windowStart: 0, count: 0 }
   /** Signature of the disabled set the host was last launched with, to skip no-op restarts. */
   private _launchedDisabledIds = ''
+  /**
+   * Serializes host restarts. A workspace swap, the trust flip and the enablement
+   * change that accompany it often fire on the same turn; without a queue each
+   * enters the restart independently and the later one tears down the connection
+   * the earlier one just spawned — rejecting its in-flight `$activateByEvent`
+   * with IpcChannelDisposedError, which escaped as an unhandled rejection.
+   */
+  private _restartQueue: Promise<void> = Promise.resolve()
 
   constructor(
     @IExtensionHostService private readonly _host: IExtensionHostService,
@@ -178,8 +186,20 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     this._logger = loggerService.createLogger({ id: 'extHostClient', name: 'Extension Host' })
     this._register(this._host.onExit((evt) => this._onHostExit(evt)))
     this._register(this._workspace.onDidChangeWorkspace(() => this._onWorkspaceChanged()))
-    this._register(this._enablement.onDidChangeEnablement(() => void this._onEnablementChanged()))
-    this._register(this._workspaceTrust.onDidChangeTrust((t) => void this._onTrustChanged(t)))
+    this._register(
+      this._enablement.onDidChangeEnablement(() => {
+        void this._onEnablementChanged().catch((err: unknown) => {
+          this._logger.warn(`enablement change handling failed: ${(err as Error).message}`)
+        })
+      }),
+    )
+    this._register(
+      this._workspaceTrust.onDidChangeTrust((t) => {
+        void this._onTrustChanged(t).catch((err: unknown) => {
+          this._logger.warn(`workspace trust change handling failed: ${(err as Error).message}`)
+        })
+      }),
+    )
 
     // A window reload destroys this renderer without disposing its services, so
     // the async dispose() path never runs on reload. Synchronously stop every
@@ -300,7 +320,13 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       if (!conn || conn.dead) return
       // The host replays every activation event it has seen, so gated-off
       // extensions activate for already-open documents too — no renderer replay.
-      await conn.extensions.$onDidGrantWorkspaceTrust()
+      try {
+        await conn.extensions.$onDidGrantWorkspaceTrust()
+      } catch (err) {
+        // A queued restart stopped this connection while the grant was in flight.
+        if (conn.dead) return
+        throw err
+      }
       this._logger.info('workspace trust granted; host replayed activation')
     } else {
       this._logger.info('workspace trust revoked; restarting extension host')
@@ -522,7 +548,17 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   }
 
   /** Stop (if alive) and relaunch the host, then re-index and re-run startup activation. */
-  private async _restart(reason: 'crash' | 'workspace' = 'crash'): Promise<void> {
+  private _restart(reason: 'crash' | 'workspace' = 'crash'): Promise<void> {
+    const run = this._restartQueue.then(() =>
+      this._doRestart(reason).catch((err: unknown) => {
+        this._logger.warn(`extension host restart (${reason}) failed: ${(err as Error).message}`)
+      }),
+    )
+    this._restartQueue = run
+    return run
+  }
+
+  private async _doRestart(reason: 'crash' | 'workspace'): Promise<void> {
     const current = this._conn
     if (current && reason === 'workspace') {
       this._stopping.add(current.handle)
@@ -543,14 +579,24 @@ export class ExtensionHostClientService extends Disposable implements IExtension
 
     const conn = this._conn
     if (!conn) return
-    await this._fetchAndIndex(conn)
-    // Re-translate before activation: the new host's commands must be back in the
-    // core registries before any onCommand proxy can be hit. This also recovers
-    // the case where a workspace swap raced — and aborted — the initial boot's
-    // one-shot translation, leaving contributed commands unregistered.
-    this._onDidChangeContributions.fire(this._mergedContributions())
-    await conn.extensions.$activateByEvent(STARTUP_ACTIVATION)
-    await conn.extensions.$activateByEvent(STARTUP_FINISHED_ACTIVATION)
+    try {
+      await this._fetchAndIndex(conn)
+      // Re-translate before activation: the new host's commands must be back in the
+      // core registries before any onCommand proxy can be hit. This also recovers
+      // the case where a workspace swap raced — and aborted — the initial boot's
+      // one-shot translation, leaving contributed commands unregistered.
+      this._onDidChangeContributions.fire(this._mergedContributions())
+      await conn.extensions.$activateByEvent(STARTUP_ACTIVATION)
+      await conn.extensions.$activateByEvent(STARTUP_FINISHED_ACTIVATION)
+    } catch (err) {
+      // Torn down mid-activation — the host died on its own (the exit handler
+      // already queued a recovery restart) or a stop raced us. Nothing to retry.
+      if (conn.dead) {
+        this._logger.info(`extension host restart (${reason}) superseded by a teardown`)
+        return
+      }
+      throw err
+    }
     this._logger.info(`extension host restarted (${reason})`)
   }
 }

@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   Event,
+  IpcChannelDisposedError,
   type IAiModelService,
   type ICommandService,
   type IDialogService,
@@ -51,6 +52,18 @@ const CONTRIBUTIONS: IExtensionDescriptionDto[] = [
 // Replace HostConnection with a minimal tracked fake so we can assert disposal +
 // drive the restart path without prototype-chain spying on inherited Disposable.dispose.
 const disposed: string[] = []
+const activationCalls: string[] = []
+/** Handle whose first `$activateByEvent` stays pending until released (or disposed). */
+let holdActivationFor: string | undefined
+const activatedOnce = new Set<string>()
+const pendingActivations = new Map<string, { resolve: () => void; reject: (e: Error) => void }>()
+
+function releaseActivation(handle: string): void {
+  const pending = pendingActivations.get(handle)
+  pendingActivations.delete(handle)
+  pending?.resolve()
+}
+
 vi.mock('../HostConnection.js', () => {
   class FakeHostConnection {
     readonly kind: string
@@ -61,7 +74,16 @@ vi.mock('../HostConnection.js', () => {
     }
     extensions = {
       $getContributions: vi.fn().mockResolvedValue(CONTRIBUTIONS),
-      $activateByEvent: vi.fn().mockResolvedValue(undefined),
+      $activateByEvent: vi.fn().mockImplementation(() => {
+        activationCalls.push(this.handle)
+        if (this.handle === holdActivationFor && !activatedOnce.has(this.handle)) {
+          activatedOnce.add(this.handle)
+          return new Promise<void>((resolve, reject) => {
+            pendingActivations.set(this.handle, { resolve, reject })
+          })
+        }
+        return Promise.resolve()
+      }),
       $initializeWorkspaceTrust: vi.fn().mockResolvedValue(undefined),
       $onDidGrantWorkspaceTrust: vi.fn().mockResolvedValue(undefined),
     }
@@ -74,6 +96,12 @@ vi.mock('../HostConnection.js', () => {
     }
     dispose(): void {
       disposed.push(this.handle)
+      // Mirror ChannelClient.dispose: in-flight requests reject with IpcChannelDisposedError.
+      const pending = pendingActivations.get(this.handle)
+      if (pending) {
+        pendingActivations.delete(this.handle)
+        pending.reject(new IpcChannelDisposedError())
+      }
     }
   }
   return { HostConnection: FakeHostConnection }
@@ -102,6 +130,7 @@ function makeServiceWith(
   host: IExtensionHostService,
   resetSourceControls: () => void,
   workspaceChange = Event.None,
+  trustChange: Event<boolean> = Event.None,
 ) {
   const nullLogger = {
     info: vi.fn(),
@@ -150,7 +179,7 @@ function makeServiceWith(
       getEffectiveDisabledIds: vi.fn().mockResolvedValue([]),
     } as unknown as IExtensionEnablementService,
     {
-      onDidChangeTrust: Event.None,
+      onDidChangeTrust: trustChange,
       workspaceTrustInitialized: Promise.resolve(),
       isWorkspaceTrusted: () => true,
     } as unknown as IWorkspaceTrustManagementService,
@@ -277,5 +306,58 @@ describe('ExtensionHostClientService', () => {
     await expect(commandResult).resolves.toBe('h2')
 
     svc.dispose()
+  })
+
+  it('does not surface an unhandled rejection when a trust flip races a workspace-swap restart', async () => {
+    // Regression: the swap's restart was mid-`$activateByEvent` (in-flight RPC on
+    // the freshly spawned h2) when the trust flip entered its own restart — it
+    // only awaited the memoized `_starting`, which had already resolved. The
+    // second restart tore h2 down, ChannelClient.dispose rejected the pending
+    // activation with IpcChannelDisposedError, and the first restart's rejection
+    // escaped through `_repin`'s fire-and-forget chain as an unhandled rejection:
+    // "IPC channel disposed before response".
+    disposed.length = 0
+    activationCalls.length = 0
+    activatedOnce.clear()
+    pendingActivations.clear()
+    holdActivationFor = undefined
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const host = fakeHost()
+      const workspaceChange = new Emitter<void>()
+      const trustChange = new Emitter<boolean>()
+      const svc = makeServiceWith(host, vi.fn(), workspaceChange.event, trustChange.event)
+
+      await svc.start()
+      expect(host.start).toHaveBeenCalledTimes(1)
+
+      // Restart#1 (workspace swap) hangs inside its first startup-activation RPC on h2.
+      holdActivationFor = 'h2'
+      workspaceChange.fire()
+      await vi.waitFor(() => expect(activationCalls).toContain('h2'))
+
+      // Restart#2 (trust revoked) arrives while h2's activation is still in flight.
+      trustChange.fire(false)
+      await new Promise((r) => setTimeout(r, 0))
+
+      // Unblock h2's activation; both restarts can now run to completion.
+      releaseActivation('h2')
+      await vi.waitFor(() => expect(host.start).toHaveBeenCalledTimes(3))
+
+      // Flush the microtask queue so any escaped rejection would have been reported.
+      await new Promise((r) => setTimeout(r, 10))
+      expect(unhandled).toEqual([])
+      expect(disposed).toContain('h1')
+      expect(disposed).toContain('h2')
+
+      svc.dispose()
+    } finally {
+      holdActivationFor = undefined
+      process.off('unhandledRejection', onUnhandled)
+    }
   })
 })
