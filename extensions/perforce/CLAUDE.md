@@ -62,6 +62,14 @@
 - **诊断法**：崩溃看 `<userData>/logs/<session>/extensionHost.log`（dev = `AppData/Roaming/Universe Editor - Dev/logs`），`uncaughtException` 堆栈直指 `extension.js` 行；`Buffer.toString` + `Cannot create a string longer than` 就是这个坑。测试见 `p4Service.test.ts`（`vi.mock('node:child_process')` 注入假子进程，`exec` 经并发门须 `await flush()` 再 emit）。
 
 
+## ⚠️ 中文/非 ASCII 路径经 argv 传给 p4 会乱码（诊断过，**修复未落地**）
+
+**现象**：unicode-enabled 服务器 + `P4CHARSET=utf8` 环境下，对含中文的 depotFile 跑 `p4 print`（Swarm review diff、图谱文件 diff 都走它）报 `Perforce client warning: No Translation for parameter ...` exit 1 → `printRevision` 静默 `return ''` → **diff 两侧全空**（纯 ASCII 路径正常，极具迷惑性）。
+
+- **根因**：Windows 上 Node `spawn('p4', argv)` 用 `CreateProcessW` 传 UTF-16 argv；p4.exe 的 CRT `main` 按**系统 ANSI 代码页（cp936/GBK）**转回字节。而 `P4CHARSET=utf8` 让 p4 期望 argv 是 UTF-8 → GBK 字节里的中文无法翻译。
+- **已实测的死路**：env 注入 `P4COMMANDCHARSET=winansi`（CP1252 ≠ 系统 ANSI）；`=cp936`（机器相关，不可作通用修复）；清空 `P4CHARSET`（改变用户既有配置语义，副作用大）。
+- **修复方向（未实现）**：p4 全局选项 **`-x <argfile>`**——把含非 ASCII 的文件参数写进临时 UTF-8 文件，p4 从文件按 UTF-8 读参数，完全绕开 ANSI argv 转换（已实测 exit 0 正常输出）。应在 `P4Service._spawn` 层对所有带文件参数的命令统一处理，而不是只修 `print`。
+
 ## SCM 分组模型（与 git 根本不同）
 
 git 是「staged / working 两个固定组」；p4 是「一个文件属于**恰好一个 pending changelist**」→ 视图是**动态分组**：默认 changelist（组 id `default`，永远显示）+ 每个编号 changelist（组 id `cl:<n>`）+ 每个 CL 的搁置文件（组 id `shelved:<n>`）。
@@ -199,6 +207,7 @@ pnpm check                                       # lint+typecheck+全测+docs:ch
 - `extensions/git/` —— 对照样板（Repository/RepositoryManager/gitError/nls 都是 p4 的镜像来源）
 - 相关 skill：`create-extension`（插件通用套路）；dirty-diff 内联 peek UI 见 `apps/editor/src/renderer/workbench/scm/CLAUDE.md`
 - 相关 memory：`extension-system-progress` / `eslint-path-identity-guardrails` / `dirty-diff-inline-peek-feature` / `path-comparison-convergence` / `perforce-collect-changes-ux`
+- 相关分析（外链）：`.claude/memory/swarm-chinese-path-print-empty-analysis.md` —— 中文路径 `p4 print` 空 diff 的完整实测对比（`-x` argfile / `P4COMMANDCHARSET` / `P4CHARSET` 各方案数据）
 
 ## 其它
 
