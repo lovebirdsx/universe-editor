@@ -20,6 +20,12 @@ import { writeFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { test, expect, MAIN_ENTRY } from '../fixtures/electronApp.js'
 
+// Opt out of fullyParallel: both tests share the beforeAll-owned feed server on
+// a fixed port and the dev-app-update.yml written next to the app entry —
+// splitting them across workers would run beforeAll twice (EADDRINUSE + file
+// races on the shared out/ dir).
+test.describe.configure({ mode: 'default' })
+
 const FEED_PORT = 8788
 const FUTURE_VERSION = '99.0.0'
 const ASSET = `Universe Editor-${FUTURE_VERSION}-win-x64.exe`

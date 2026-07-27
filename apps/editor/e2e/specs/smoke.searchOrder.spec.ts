@@ -66,8 +66,22 @@ test.describe('@p1 search order', () => {
       await expect(searchView.getByTestId('search-summary')).toContainText('匹配', {
         timeout: 20000,
       })
-      await page.waitForTimeout(800)
-      return fileOrder(page)
+      // The tree renders incrementally after the summary appears; under load a
+      // fixed sleep samples a half-rendered list, so poll until the row list
+      // stops growing (two consecutive identical samples) instead.
+      let prev: string[] = []
+      await expect
+        .poll(
+          async () => {
+            const rows = await fileOrder(page)
+            const settled = rows.length > 0 && rows.length === prev.length
+            prev = rows
+            return settled
+          },
+          { timeout: 20000 },
+        )
+        .toBe(true)
+      return prev
     }
 
     const first = await runOnce()

@@ -73,12 +73,14 @@ function expectEdit(workbench: WorkbenchPO, c: EditCase) {
 }
 
 test.describe('@p1 markdown editing commands', () => {
-  test('covers inline emphasis, headings, tasks, smart lists, renumber, and tables', async ({
+  test('covers emphasis, headings, tasks, smart lists, renumber, tables, and keybindings', async ({
     page,
     workbench,
   }) => {
-    // Spawns a real extension-host subprocess; cold start is slow on CI.
-    test.slow()
+    // Spawns a real extension-host subprocess; cold start is slow on CI, and the
+    // journey walks the whole editing-command battery (merged from what used to
+    // be four cold launches — each test here boots its own Electron).
+    test.setTimeout(120_000)
     await workbench.waitForRestored()
 
     const { dir, mdPath } = writeWorkspace()
@@ -242,6 +244,56 @@ test.describe('@p1 markdown editing commands', () => {
         { timeout: 15000 },
       )
       .toEqual({ lineNumber: 3, column: 7 })
+
+    await test.step('formats every table when nothing is selected', async () => {
+      // Two tables; an empty cursor sits in the prose between them. Format-table
+      // with no selection must align BOTH tables, not just the one under the cursor.
+      const doc = '| a | bb |\n| - | - |\n| ccc | d |\n\nmid\n\n| x | y |\n| - | - |\n| zzzz | w |'
+      const expected =
+        '| a   | bb  |\n| --- | --- |\n| ccc | d   |\n\nmid\n\n| x    | y   |\n| ---- | --- |\n| zzzz | w   |'
+      await expectEdit(workbench, {
+        text: doc,
+        selection: [5, 1, 5, 1], // empty cursor on the "mid" prose line
+        command: 'markdown.editing.formatTable',
+      }).toBe(expected)
+    })
+
+    await test.step('in-table Tab to the first cell lands on its content', async () => {
+      // Cursor in the 2nd cell of "| foo | bar |"; Shift+Tab → first cell. The
+      // caret must land on 'foo' (column 3, 1-based), not before the leading pipe.
+      const seed = '| foo | bar |\n| --- | --- |\n| 1 | 2 |'
+      await expect
+        .poll(
+          async () => {
+            await workbench.setActiveEditorText(seed)
+            await workbench.setActiveEditorCursor(1, 9) // inside "bar"
+            await workbench.runCommand('markdown.editing.onShiftTab')
+            return page.evaluate(() => window.__E2E__!.getActiveEditorCursor())
+          },
+          { timeout: 15000 },
+        )
+        .toEqual({ lineNumber: 1, column: 3 })
+    })
+
+    await test.step('registers contributed keybindings with markdown-focus precedence', async () => {
+      // Ctrl+B is bound to BOTH the sidebar toggle (workbench) and bold (plugin) —
+      // the plugin wins under `editorTextFocus && editorLangId == markdown`, the
+      // workbench command wins elsewhere. Both must be present in the registry.
+      const ctrlB = await workbench.getKeybindingCommandsForKey('ctrl+b')
+      expect(ctrlB).toContain('workbench.action.toggleSidebarVisibility')
+      expect(ctrlB).toContain('markdown.editing.toggleBold')
+
+      expect(await workbench.getKeybindingCommandsForKey('ctrl+i')).toContain(
+        'markdown.editing.toggleItalic',
+      )
+      expect(await workbench.getKeybindingCommandsForKey('alt+c')).toContain(
+        'markdown.editing.toggleTask',
+      )
+      expect(await workbench.getKeybindingCommandsForKey('enter')).toContain(
+        'markdown.editing.onEnter',
+      )
+      expect(await workbench.getKeybindingCommandsForKey('tab')).toContain('markdown.editing.onTab')
+    })
   })
 
   test('operates on non-final lines and CRLF documents (regression) @regression', async ({
@@ -312,104 +364,5 @@ test.describe('@p1 markdown editing commands', () => {
       selection: [1, 1, 1, 1],
       command: 'markdown.editing.headingDown',
     }).toBe('# title\n\nbody')
-  })
-
-  test('formats every table when nothing is selected', async ({ page, workbench }) => {
-    test.slow()
-    await workbench.waitForRestored()
-
-    const { dir, mdPath } = writeWorkspace()
-    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
-    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdPath)
-
-    await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })
-      .toBe('markdown')
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.hasCommand('markdown.editing.formatTable')), {
-        timeout: 15000,
-      })
-      .toBe(true)
-
-    await workbench.focusActiveEditorGroup()
-
-    // Two tables; an empty cursor sits in the prose between them. Format-table
-    // with no selection must align BOTH tables, not just the one under the cursor.
-    const doc = '| a | bb |\n| - | - |\n| ccc | d |\n\nmid\n\n| x | y |\n| - | - |\n| zzzz | w |'
-    const expected =
-      '| a   | bb  |\n| --- | --- |\n| ccc | d   |\n\nmid\n\n| x    | y   |\n| ---- | --- |\n| zzzz | w   |'
-    await expectEdit(workbench, {
-      text: doc,
-      selection: [5, 1, 5, 1], // empty cursor on the "mid" prose line
-      command: 'markdown.editing.formatTable',
-    }).toBe(expected)
-  })
-
-  test('in-table Tab to the first cell lands on its content', async ({ page, workbench }) => {
-    test.slow()
-    await workbench.waitForRestored()
-
-    const { dir, mdPath } = writeWorkspace()
-    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
-    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdPath)
-
-    await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })
-      .toBe('markdown')
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.hasCommand('markdown.editing.onShiftTab')), {
-        timeout: 15000,
-      })
-      .toBe(true)
-
-    await workbench.focusActiveEditorGroup()
-
-    // Cursor in the 2nd cell of "| foo | bar |"; Shift+Tab → first cell. The
-    // caret must land on 'foo' (column 3, 1-based), not before the leading pipe.
-    const seed = '| foo | bar |\n| --- | --- |\n| 1 | 2 |'
-    await expect
-      .poll(
-        async () => {
-          await workbench.setActiveEditorText(seed)
-          await workbench.setActiveEditorCursor(1, 9) // inside "bar"
-          await workbench.runCommand('markdown.editing.onShiftTab')
-          return page.evaluate(() => window.__E2E__!.getActiveEditorCursor())
-        },
-        { timeout: 15000 },
-      )
-      .toEqual({ lineNumber: 1, column: 3 })
-  })
-
-  test('registers contributed keybindings with markdown-focus precedence', async ({
-    page,
-    workbench,
-  }) => {
-    test.slow()
-    await workbench.waitForRestored()
-
-    // Wait for the extension host to boot so contributed keybindings are loaded.
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.hasCommand('markdown.editing.toggleBold')), {
-        timeout: 15000,
-      })
-      .toBe(true)
-
-    // Ctrl+B is bound to BOTH the sidebar toggle (workbench) and bold (plugin) —
-    // the plugin wins under `editorTextFocus && editorLangId == markdown`, the
-    // workbench command wins elsewhere. Both must be present in the registry.
-    const ctrlB = await workbench.getKeybindingCommandsForKey('ctrl+b')
-    expect(ctrlB).toContain('workbench.action.toggleSidebarVisibility')
-    expect(ctrlB).toContain('markdown.editing.toggleBold')
-
-    expect(await workbench.getKeybindingCommandsForKey('ctrl+i')).toContain(
-      'markdown.editing.toggleItalic',
-    )
-    expect(await workbench.getKeybindingCommandsForKey('alt+c')).toContain(
-      'markdown.editing.toggleTask',
-    )
-    expect(await workbench.getKeybindingCommandsForKey('enter')).toContain(
-      'markdown.editing.onEnter',
-    )
-    expect(await workbench.getKeybindingCommandsForKey('tab')).toContain('markdown.editing.onTab')
   })
 })

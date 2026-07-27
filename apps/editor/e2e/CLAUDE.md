@@ -143,6 +143,8 @@ npm --prefix extensions-external/<ext> run e2e   # 单个外部 suite
 
 > 排查「CI 偶发挂、本地稳过」的 flaky（区分真回归 vs 环境噪音、读 call log 失败形态、鲁棒化断言）有专门的 skill **`fix-ci-e2e-flake`**——它的案例库是 flaky 知识的单一事实源（parcel watcher 多 worker 崩溃、异步 ACP prompt、裸 launch "Process failed to launch"、scroll 恢复过冲…都在里面)。遇到 flaky 先查它。
 
+- **core suite 是用例级并行（`fullyParallel`）**：同一个 spec 文件里的用例可能被拆到不同 worker 同时跑，**文件内用例不得共享可变资源**（module 级固定端口/固定路径/beforeAll 起的服务）——确需共享的文件加 `test.describe.configure({ mode: 'default' })` 退回文件内串行（先例 `smoke.update.spec.ts`：固定 feed 端口 + 共享 dev-app-update.yml）。扩展 suite 仍是文件级调度（每用例冷启一个 Electron，用例级并行会叠加并发冷启把扩展宿主拖垮，实测 perforce swarm 挂），机制与取舍见 `packages/e2e-harness/src/playwrightConfig.ts` 的 `fullyParallel` 选项注释。
+
 - **产物 build 已自动兜底**：`pnpm --filter <ext> e2e`（及 `e2ea`/`e2eg`/core 的 `e2e:regression`/`e2e:ui` 等）前置了 `scripts/e2e/ensure-e2e-build.mjs`，裸跑也会先 turbo build 宿主+扩展+上游再跑，`out/`/`dist/` 不会过期。外部扩展走 `run-external-e2e.mjs`，同样自动先建 editor+host。唯一仍需手动的场景：直接调 `npx playwright test`（绕开 npm 脚本）时守卫不生效——那时先 `pnpm build` 或改走 `pnpm e2e:ext`。
 - **异步 ACP 会话**：`sendAcpPrompt` 的 await **不等** echo 流式回复渲染完。依赖 timeline 高度/虚拟化/滚动的断言前，先 `expect.poll` 等消息数到位 + 高度收敛（详见 skill `fix-ci-e2e-flake` 案例 15/34/41）。
 - **可见性别用 `toBeVisible()`**：Allotment.Pane 用 CSS visibility 隐藏后代，DOM 可见性会误判。走 ContextKey + `expect.poll`。

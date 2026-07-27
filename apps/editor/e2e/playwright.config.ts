@@ -9,4 +9,9 @@ import { defineE2EConfig } from '@universe-editor/e2e-harness'
 export default defineE2EConfig({
   snapshotDir: './baselines',
   disableScreenshotAnimations: true,
+  // Test-level scheduling: the shared-app fixture keeps one Electron per worker,
+  // so spreading a file's tests across workers is cheap and removes the
+  // end-of-pass tail (one worker alone on the last big spec files). Extension
+  // suites cold-launch per test and stay file-level — see the harness option doc.
+  fullyParallel: true,
 })

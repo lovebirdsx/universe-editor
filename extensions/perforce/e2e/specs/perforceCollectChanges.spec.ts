@@ -9,6 +9,12 @@
  *  Backed by the fake p4 (fixtures/fake-p4.mjs): a real on-disk depot model whose
  *  `reconcile -n` diffs the workspace against have-revision content, so the whole
  *  flow is exercised without a live p4d. See fixtures/perforceApp.ts.
+ *
+ *  The default-seed scenarios (watcher discovery → row diff → close/reopen
+ *  rehydrate) share one cold launch as sequential test.steps — each test here
+ *  costs a full Electron + extension-host cold start, and the flows chain
+ *  naturally on the same edited file. The nested-subdir and many-rows scenarios
+ *  need their own `test.use` seeds, so they stay separate tests.
  *--------------------------------------------------------------------------------------------*/
 
 import { writeFileSync } from 'node:fs'
@@ -18,7 +24,7 @@ import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 const tracked = DEFAULT_SEEDS[0]!.relPath
 
 test.describe('@p1 perforce collect changes', () => {
-  test('an edited-but-unopened file appears in Changes to Reconcile @regression', async ({
+  test('watcher surfaces a disk edit, its row opens a real diff, and a reopened diff rehydrates @regression', async ({
     page,
     workbench,
     perforce,
@@ -40,139 +46,105 @@ test.describe('@p1 perforce collect changes', () => {
     // Reveal the SCM view.
     await workbench.runCommand('workbench.view.scm')
 
-    // Edit a tracked file on disk out-of-band (mimics an external tool / a save).
-    // The workspace watcher must run reconcile discovery and surface it in the
-    // "Changes to Reconcile" group without any manual refresh.
-    writeFileSync(perforce.file(tracked), 'edited on disk\n', 'utf8')
-
-    const group = page.locator('[role="treeitem"]', { hasText: 'Changes to Reconcile' })
-    await expect(group).toBeVisible({ timeout: 30_000 })
-
     const row = page.locator('[role="treeitem"]', { hasText: tracked })
-    await expect(row).toBeVisible({ timeout: 30_000 })
-
-    // Revert the edit back to the have-revision content. The incremental watcher
-    // re-reconciles just this path and, finding it clean, drops it from the group.
-    writeFileSync(perforce.file(tracked), DEFAULT_SEEDS[0]!.content, 'utf8')
-    await expect(row).toBeHidden({ timeout: 30_000 })
-  })
-
-  // Repro for "clicking a CHANGELIST/reconcile diff shows the edit as a full delete,
-  // and opening the source in the diff editor throws a `//` URI error". Root cause:
-  // `p4 opened`/`reconcile -n` report `clientFile` in CLIENT SYNTAX (`//client/rel`),
-  // not a local path — so readFile('//client/…') failed (empty modified side = looks
-  // deleted) and the `//` path broke the file: URI. The fake p4 now emits client
-  // syntax too, so this guards the client→local translation end-to-end.
-  test('clicking a reconcile row opens a real diff, not a phantom delete @regression', async ({
-    page,
-    workbench,
-    perforce,
-  }) => {
-    test.setTimeout(120_000)
-    await evaluateWhenRestored(page)
-
-    await workbench.openWorkspace(perforce.openDir)
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
-        timeout: 60_000,
-        message: 'perforce extension should register a source control for the workspace',
-      })
-      .toBeGreaterThan(0)
-
-    await workbench.runCommand('workbench.view.scm')
-
     const editedContent = 'line one\nEDITED line two\nline three\n'
-    writeFileSync(perforce.file(tracked), editedContent, 'utf8')
 
-    const row = page.locator('[role="treeitem"]', { hasText: tracked })
-    await expect(row).toBeVisible({ timeout: 30_000 })
+    await test.step('an edited-but-unopened file appears in Changes to Reconcile', async () => {
+      // Edit a tracked file on disk out-of-band (mimics an external tool / a save).
+      // The workspace watcher must run reconcile discovery and surface it in the
+      // "Changes to Reconcile" group without any manual refresh.
+      writeFileSync(perforce.file(tracked), 'edited on disk\n', 'utf8')
 
-    // Click the row → the extension's perforce.openChange opens a diff of the file's
-    // have-revision (left) against the working-tree content (right).
-    await row.click()
+      const group = page.locator('[role="treeitem"]', { hasText: 'Changes to Reconcile' })
+      await expect(group).toBeVisible({ timeout: 30_000 })
+      await expect(row).toBeVisible({ timeout: 30_000 })
 
-    // The diff's modified side must be the real on-disk edit — NOT empty (which is
-    // what a client-syntax readFile failure produced, rendering as a full delete).
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getActiveDiffContent()?.modified), {
-        timeout: 30_000,
-        message: 'diff modified side should hold the working-tree content',
-      })
-      .toBe(editedContent)
+      // Revert the edit back to the have-revision content. The incremental watcher
+      // re-reconciles just this path and, finding it clean, drops it from the group.
+      writeFileSync(perforce.file(tracked), DEFAULT_SEEDS[0]!.content, 'utf8')
+      await expect(row).toBeHidden({ timeout: 30_000 })
+    })
 
-    const diff = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
-    // Left = have revision (the seeded content), right = the edit. If clientFile were
-    // still client syntax, modified would be '' and this would look like a delete.
-    expect(diff?.original).toBe(DEFAULT_SEEDS[0]!.content)
-    expect(diff?.modified).toBe(editedContent)
-  })
+    // Repro for "clicking a CHANGELIST/reconcile diff shows the edit as a full delete,
+    // and opening the source in the diff editor throws a `//` URI error". Root cause:
+    // `p4 opened`/`reconcile -n` report `clientFile` in CLIENT SYNTAX (`//client/rel`),
+    // not a local path — so readFile('//client/…') failed (empty modified side = looks
+    // deleted) and the `//` path broke the file: URI. The fake p4 now emits client
+    // syntax too, so this guards the client→local translation end-to-end.
+    await test.step('clicking a reconcile row opens a real diff, not a phantom delete', async () => {
+      writeFileSync(perforce.file(tracked), editedContent, 'utf8')
+      await expect(row).toBeVisible({ timeout: 30_000 })
 
-  // Repro for "reopen a closed p4 diff (Ctrl+Shift+T) and both sides show the same
-  // content — no diff". A DiffEditorInput persists only its URIs; on reopen the two
-  // sides are rebuilt (baseline via `perforce.getHeadContent`, modified from disk).
-  // The bug: the rebuilt baseline came back equal to the modified side (or empty),
-  // so the diff rendered two identical panes. Guard the full close→reopen→rehydrate
-  // path end-to-end against the fake depot.
-  test('reopening a closed diff rebuilds distinct baseline/working sides @regression', async ({
-    page,
-    workbench,
-    perforce,
-  }) => {
-    test.setTimeout(120_000)
-    await evaluateWhenRestored(page)
+      // Click the row → the extension's perforce.openChange opens a diff of the file's
+      // have-revision (left) against the working-tree content (right).
+      await row.click()
 
-    await workbench.openWorkspace(perforce.openDir)
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
-        timeout: 60_000,
-        message: 'perforce extension should register a source control for the workspace',
-      })
-      .toBeGreaterThan(0)
+      // The diff's modified side must be the real on-disk edit — NOT empty (which is
+      // what a client-syntax readFile failure produced, rendering as a full delete).
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveDiffContent()?.modified), {
+          timeout: 30_000,
+          message: 'diff modified side should hold the working-tree content',
+        })
+        .toBe(editedContent)
 
-    await workbench.runCommand('workbench.view.scm')
+      const diff = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
+      // Left = have revision (the seeded content), right = the edit. If clientFile were
+      // still client syntax, modified would be '' and this would look like a delete.
+      expect(diff?.original).toBe(DEFAULT_SEEDS[0]!.content)
+      expect(diff?.modified).toBe(editedContent)
+    })
 
-    const editedContent = 'line one\nEDITED line two\nline three\n'
-    writeFileSync(perforce.file(tracked), editedContent, 'utf8')
+    // Repro for "reopen a closed p4 diff (Ctrl+Shift+T) and both sides show the same
+    // content — no diff". A DiffEditorInput persists only its URIs; on reopen the two
+    // sides are rebuilt (baseline via `perforce.getHeadContent`, modified from disk).
+    // The bug: the rebuilt baseline came back equal to the modified side (or empty),
+    // so the diff rendered two identical panes. Guard the full close→reopen→rehydrate
+    // path end-to-end against the fake depot.
+    await test.step('reopening a closed diff rebuilds distinct baseline/working sides', async () => {
+      // Double-click the row to open a PINNED (permanent) diff — the reopen stack only
+      // restores real, non-preview tabs, and this exercises the serialize/rehydrate path.
+      await row.dblclick()
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), {
+          timeout: 30_000,
+        })
+        .toBe('diff')
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveDiffContent()?.modified), {
+          timeout: 30_000,
+        })
+        .toBe(editedContent)
 
-    const row = page.locator('[role="treeitem"]', { hasText: tracked })
-    await expect(row).toBeVisible({ timeout: 30_000 })
+      // Close it, then reopen via Ctrl+Shift+T. The restored input starts empty and
+      // rehydrates asynchronously (baseline from perforce.getHeadContent, modified from disk).
+      await workbench.runCommand('workbench.action.closeActiveEditor')
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), {
+          timeout: 30_000,
+        })
+        .not.toBe('diff')
 
-    // Double-click the row to open a PINNED (permanent) diff — the reopen stack only
-    // restores real, non-preview tabs, and this exercises the serialize/rehydrate path.
-    await row.dblclick()
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 30_000 })
-      .toBe('diff')
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getActiveDiffContent()?.modified), {
-        timeout: 30_000,
-      })
-      .toBe(editedContent)
+      await workbench.runCommand('workbench.action.reopenClosedEditor')
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), {
+          timeout: 30_000,
+        })
+        .toBe('diff')
 
-    // Close it, then reopen via Ctrl+Shift+T. The restored input starts empty and
-    // rehydrates asynchronously (baseline from perforce.getHeadContent, modified from disk).
-    await workbench.runCommand('workbench.action.closeActiveEditor')
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 30_000 })
-      .not.toBe('diff')
-
-    await workbench.runCommand('workbench.action.reopenClosedEditor')
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 30_000 })
-      .toBe('diff')
-
-    // The rehydrated diff must show the SAME two sides as the original open: the
-    // depot baseline on the left and the working-tree edit on the right — NOT two
-    // identical panes.
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getActiveDiffContent()?.original), {
-        timeout: 30_000,
-        message: 'reopened diff baseline should be the depot have-revision',
-      })
-      .toBe(DEFAULT_SEEDS[0]!.content)
-    const reopened = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
-    expect(reopened?.modified).toBe(editedContent)
-    expect(reopened?.original).not.toBe(reopened?.modified)
+      // The rehydrated diff must show the SAME two sides as the original open: the
+      // depot baseline on the left and the working-tree edit on the right — NOT two
+      // identical panes.
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveDiffContent()?.original), {
+          timeout: 30_000,
+          message: 'reopened diff baseline should be the depot have-revision',
+        })
+        .toBe(DEFAULT_SEEDS[0]!.content)
+      const reopened = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
+      expect(reopened?.modified).toBe(editedContent)
+      expect(reopened?.original).not.toBe(reopened?.modified)
+    })
   })
 
   // Reproduces the reported bug: opening a DEEP subdirectory of a large p4 client

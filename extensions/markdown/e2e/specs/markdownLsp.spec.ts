@@ -15,6 +15,10 @@
  *
  *  Spawns a real subprocess, so each assertion polls — the server starts lazily
  *  on first markdown open and diagnostics arrive after a debounce.
+ *
+ *  One journey over one cold launch (a cold Electron + LSP boot per test is the
+ *  dominant cost here); the frontmatter scenario rides the same workspace as a
+ *  trailing step.
  *--------------------------------------------------------------------------------------------*/
 
 import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
@@ -47,15 +51,16 @@ function writeWorkspace(): { dir: string; aPath: string; cPath: string; fmPath: 
 }
 
 test.describe('@p1 markdown language server', () => {
-  test('provides symbols, workspace search, cross-file definition, and diagnostics', async ({
+  test('provides symbols, search, definition, diagnostics, media edits, and frontmatter handling', async ({
     page,
     workbench,
   }) => {
-    // Spawns a real LSP subprocess; cold start is slow on contended CI runners.
-    test.slow()
+    // Spawns a real LSP subprocess; cold start is slow on contended CI runners,
+    // and the journey walks the full provider battery.
+    test.setTimeout(120_000)
     await workbench.waitForRestored()
 
-    const { dir, aPath, cPath } = writeWorkspace()
+    const { dir, aPath, cPath, fmPath } = writeWorkspace()
     await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), aPath)
 
@@ -234,42 +239,35 @@ test.describe('@p1 markdown language server', () => {
     )
     expect(imageDrop?.text).toMatch(/^!\[alt text\]\(assets\/image-[\d-]+\.png\)$/)
     expect(imageDrop?.selected).toBe('alt text')
-  })
 
-  test('highlights YAML frontmatter keys and suppresses in-frontmatter link diagnostics', async ({
-    page,
-    workbench,
-  }) => {
-    test.slow()
-    await workbench.waitForRestored()
+    // 11. YAML frontmatter: keys must highlight distinctly and the bracketed
+    // value must NOT be flagged as a broken markdown reference link.
+    await test.step('highlights YAML frontmatter keys and suppresses in-frontmatter link diagnostics', async () => {
+      await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), fmPath)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorUri()), { timeout: 10000 })
+        .toEqual(expect.stringContaining('fm.md'))
+      const fmUri = (await page.evaluate(() => window.__E2E__!.getActiveEditorUri())) as string
 
-    const { dir, fmPath } = writeWorkspace()
-    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
-    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), fmPath)
-    await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })
-      .toBe('markdown')
-    const mdUri = (await page.evaluate(() => window.__E2E__!.getActiveEditorUri())) as string
-    expect(mdUri).toBeTruthy()
+      // Source highlighting: line 2 `name: test` — the key tokenizes as `type.md`
+      // and the value as `string.md` (frontmatter-aware grammar, not plain markdown).
+      await expect
+        .poll(() => page.evaluate((u) => window.__E2E__!.getMarkdownLineTokens(u, 2), fmUri), {
+          timeout: 10000,
+        })
+        .toEqual(expect.arrayContaining([expect.arrayContaining([1, 'type.md'])]))
 
-    // Source highlighting: line 2 `name: test` — the key tokenizes as `type.md`
-    // and the value as `string.md` (frontmatter-aware grammar, not plain markdown).
-    await expect
-      .poll(() => page.evaluate((u) => window.__E2E__!.getMarkdownLineTokens(u, 2), mdUri), {
-        timeout: 10000,
-      })
-      .toEqual(expect.arrayContaining([expect.arrayContaining([1, 'type.md'])]))
-
-    // Diagnostics: the `[hello, how are you]` inside the frontmatter must NOT be
-    // flagged (it's YAML, not a broken reference link). No markers on lines 1–4.
-    await expect
-      .poll(
-        async () => {
-          const markers = await page.evaluate((u) => window.__E2E__!.getMarkdownMarkers(u), mdUri)
-          return markers.filter((m) => m.startLineNumber <= 4).length
-        },
-        { timeout: 10000 },
-      )
-      .toBe(0)
+      // Diagnostics: the `[hello, how are you]` inside the frontmatter must NOT be
+      // flagged (it's YAML, not a broken reference link). No markers on lines 1–4.
+      await expect
+        .poll(
+          async () => {
+            const markers = await page.evaluate((u) => window.__E2E__!.getMarkdownMarkers(u), fmUri)
+            return markers.filter((m) => m.startLineNumber <= 4).length
+          },
+          { timeout: 10000 },
+        )
+        .toBe(0)
+    })
   })
 })

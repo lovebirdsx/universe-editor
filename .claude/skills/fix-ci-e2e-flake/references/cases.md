@@ -196,6 +196,10 @@ Windows 锁屏时安全桌面（Winlogon desktop）持有剪贴板，所有进�
 信号：失败点在 `defocusEditor` 的 `expect.poll`（等 `editorFocus` 变 false，5s 超时）+ retry 秒过=点击空白 defocus 与 Monaco focus tracker 在重负载全量趟下偶发时序错位，环境噪声非回归。
 `smoke.editorGroupSwitch`「Ctrl+K Ctrl+Left/Right switch focus」首轮偶发卡在 `defocusEditor`（2026-07 本机 Windows 观察到 1 次），根因未定位，retry 即过故暂不打 tag。判定：retry 稳过→时序噪声；同一断言在多轮/多机器稳定失败才当真回归查。
 
+**案例 49 — 固定 sleep 后做全列表相等断言：增量渲染被截半（fullyParallel 暴露）**
+信号：列表相等断言（`toEqual` 数组）diff 显示 **received 是 expected 的前缀/子集**（缺尾部条目而非乱序）+ 采样点是「summary/完成信号出现后 `waitForTimeout(N)` 再读 DOM」+ 单独重跑秒过=固定 sleep 采到半渲染列表，负载敏感非回归。
+`smoke.searchOrder`「two consecutive searches produce the same file order」在 core 开启 `fullyParallel`（用例级调度，2026-07）后 e2ea 全量趟首挂+retry 也挂：run 2 的行列表缺了几十个文件——search-summary 出现只代表搜索完成，虚拟化树仍在增量渲染，800ms 固定 sleep 在并行组合改变（同机混跑更多冷启动重用例）后不够。与案例 14（滚动采样瞬时值）同族：**测量瞬时值必须 poll 到收敛**。修：去掉 `waitForTimeout(800)`，`expect.poll` 采样行列表至「两次连续采样长度相等」再比较顺序。判定钥匙：received 是前缀子集=渲染未完，真乱序回归的 diff 是同长度但次序不同。锚：`smoke.searchOrder.spec.ts` `runOnce`。
+
 ---
 
 ## 根治 TODO

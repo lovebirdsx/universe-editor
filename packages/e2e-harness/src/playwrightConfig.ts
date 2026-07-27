@@ -72,6 +72,17 @@ export interface E2EConfigOptions {
    * so extension configs don't carry a screenshot option they never use.
    */
   readonly disableScreenshotAnimations?: boolean
+  /**
+   * Test-level (instead of file-level) scheduling. Off by default: the extension
+   * suites cold-launch one Electron per TEST, so spreading a file's tests across
+   * all workers stacks concurrent cold starts and starves extension-host
+   * activation (measured: perforce swarm specs, 12 tests × 8 workers, dashboard
+   * loads blowing the expect timeout). The core suite opts in — its shared-app
+   * fixture keeps one Electron per WORKER, so within-file parallelism is cheap
+   * and removes the end-of-pass tail where one worker grinds through the last
+   * big spec file alone.
+   */
+  readonly fullyParallel?: boolean
 }
 
 /**
@@ -82,7 +93,9 @@ export interface E2EConfigOptions {
  *     than a human re-running the suite)
  *   - workers: 2 on CI (2-core runners starve at 4), core-scaled locally (≤8)
  *   - reporter: github + html on CI, list locally
- * `fullyParallel: false` and retain-on-failure trace/video/screenshot are constant.
+ * Retain-on-failure trace/video/screenshot are constant; `fullyParallel` is an
+ * opt-in (see E2EConfigOptions.fullyParallel for the shared-app vs cold-launch
+ * rationale).
  *
  * Tag filtering (grep/grepInvert) is derived from UNIVERSE_E2E_INCLUDE_REGRESSION
  * and UNIVERSE_E2E_SERIAL_ONLY — see grepOptions(). Scripts set those envs and pass
@@ -104,7 +117,12 @@ export function defineE2EConfig(options: E2EConfigOptions = {}): PlaywrightTestC
     },
     retries: 1,
     workers: isCI ? 2 : localWorkers,
-    fullyParallel: false,
+    // A fullyParallel suite must keep its specs order-independent (per-test
+    // mkdtemp workspaces, fixtures reload/reset between tests); a file that DOES
+    // share module-level resources across its tests opts out via
+    // test.describe.configure({mode:'default'}) (see smoke.update.spec.ts —
+    // fixed feed port + shared dev-app-update.yml).
+    fullyParallel: options.fullyParallel ?? false,
     reporter: isCI
       ? [['github'], ['html', { open: 'never', outputFolder: 'playwright-report' }]]
       : [['list']],
