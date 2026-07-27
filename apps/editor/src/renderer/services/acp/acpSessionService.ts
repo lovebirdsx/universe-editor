@@ -1643,7 +1643,13 @@ export class AcpSessionService
       this._logger.warn(`mcpServers(.mcp.json): ${m}`),
     )
     const mergedWire = mergeWireMcpServers(this._readMcpServers(), projectWire)
-    const pool = this.mcpServerDefinitions.get()
+    // Recompute the pool from the same snapshot instead of reading the async
+    // mirror: the mirror's refresh (config-change → fs read) races session
+    // creation, and a stale mirror silently filters the wire list down to [].
+    const projectDefs = readMcpServerDefinitions(projectRaw, 'project', (m) =>
+      this._logger.warn(`mcpServers(.mcp.json): ${m}`),
+    )
+    const pool = mergeMcpServerDefinitions(this._readGlobalMcpDefinitions(), projectDefs)
     const { enabledNames, staleNames } = resolveMcpServerSelection(pool, selection)
     if (warnStale && staleNames.length > 0) {
       this._logger.warn(

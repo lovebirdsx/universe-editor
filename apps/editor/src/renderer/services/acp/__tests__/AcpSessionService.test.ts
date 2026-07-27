@@ -1505,6 +1505,25 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     svc.dispose()
   })
 
+  it('a session created right after an acp.mcpServers edit is not filtered by the stale mirror pool', async () => {
+    const client = new FakeAcpClientService()
+    const config = new ConfigurationService()
+    const svc = makeService(client, config)
+    await config.update('acp.mcpServers', {
+      'universe-editor': { command: 'node', args: ['noop.cjs'] },
+    })
+    // Let the config-change mirror refresh land first, then force the mirror
+    // back to its pre-edit value — simulating the fs race where session/new
+    // resolves its wire list before the refresh completes.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    svc.mcpServerDefinitions.set([], undefined)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const params = client.connected[0]!.agent.newSessionCalls[0]!
+    expect(params.mcpServers.map((m) => m.name)).toEqual(['universe-editor'])
+    svc.dispose()
+  })
+
   it('merges settings layers per server name: workspace overrides only the same-named user entry', async () => {
     const client = new FakeAcpClientService()
     const config = new ConfigurationService()
