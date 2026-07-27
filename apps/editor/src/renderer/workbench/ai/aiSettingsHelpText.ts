@@ -58,7 +58,7 @@ export function aiMcpServersHelpText(): string {
       '',
       'Scopes compose **per server name**: a workspace server only overrides the user server with the same name — shadowed rows say so inline. `.mcp.json` always wins.',
       '',
-      'The checkbox is the default enable switch; a server disabled here stays out of new sessions unless you explicitly re-enable it for a session (the picker next to the prompt input). The dot shows the live connection status reported by the active session.',
+      'The checkbox is the default enable switch: it decides which servers NEW sessions start with. The picker next to the prompt input can still enable or trim servers for that one session only — it never changes this default. The dot shows the live connection status reported by the active session.',
       'Changes apply to new sessions immediately; the active session reloads seamlessly when its server set changes.',
     ].join('\n'),
   )

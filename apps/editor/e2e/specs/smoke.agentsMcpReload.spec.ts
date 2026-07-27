@@ -109,45 +109,4 @@ test.describe('@p1 agents session MCP reload', () => {
       )
       .toContain('"name":"web"')
   })
-
-  test('a session MCP selection carries over to the next new session @regression', async ({
-    page,
-    workbench,
-  }) => {
-    await workbench.waitForRestored()
-    await setupEchoSession(page)
-
-    // Pin 'web' on the first session (empty → the reload swaps in a pinned
-    // replacement, and the selection sticks as the per-agent default).
-    await page.evaluate(() => window.__E2E__!.setAcpSessionMcpServers(['web']))
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionStatus()), { timeout: 15000 })
-      .toBe('idle')
-
-    // A brand-new session must inherit the selection with no manual redo.
-    await page.evaluate(() => {
-      void window.__E2E__!.runCommand('workbench.action.agent.newSession')
-    })
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10000 })
-      .toBe(2)
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionStatus()), { timeout: 10000 })
-      .toBe('idle')
-
-    // The picker trigger reflects the inherited default, not the raw pool.
-    await expect(page.getByTestId('acp-mcp-picker-trigger')).toContainText('1/1')
-
-    // The new active session's session/new already carried 'web'.
-    await page.evaluate(() => window.__E2E__!.sendAcpPrompt('report-mcp-servers'))
-    await expect
-      .poll(
-        async () => {
-          const messages = await page.evaluate(() => window.__E2E__!.getAcpMessages())
-          return messages.find((m) => m.role === 'agent')?.text ?? ''
-        },
-        { timeout: 5000 },
-      )
-      .toContain('"name":"web"')
-  })
 })

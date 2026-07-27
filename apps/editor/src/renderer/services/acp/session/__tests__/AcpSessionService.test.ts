@@ -1908,22 +1908,6 @@ describe('AcpSessionService — session MCP selection', () => {
     svc.dispose()
   })
 
-  it('narrows the wire list to the saved per-agent default', async () => {
-    const client = new FakeAcpClientService()
-    const config = new ConfigurationService()
-    await config.update('acp.mcpServers', {
-      fs: { command: 'node', args: [] },
-      docs: { command: 'node', args: [] },
-    })
-    const { svc, agentDefaults } = makeService(client, config)
-    agentDefaults.setMcpServerNames('fake', ['fs'])
-    const s = await svc.createSession()
-    await s.whenConnected()
-    const params = client.connected[0]!.agent.newSessionCalls[0]!
-    expect(params.mcpServers.map((m) => m.name)).toEqual(['fs'])
-    svc.dispose()
-  })
-
   it('seamlessly reloads on an explicit pin and updates the history row', async () => {
     const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
     const config = new ConfigurationService()
@@ -2086,65 +2070,82 @@ describe('AcpSessionService — session MCP selection', () => {
     svc.dispose()
   })
 
-  it('pins the selection as the per-agent default so the next new session inherits it', async () => {
+  it('a session pin does not leak into the next new session', async () => {
     const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
     const config = new ConfigurationService()
     await config.update('acp.mcpServers', {
       fs: { command: 'node', args: [] },
       docs: { command: 'node', args: [] },
     })
-    const { svc, agentDefaults } = makeService(client, config)
+    const { svc } = makeService(client, config)
     const s = await svc.createSession()
     await s.whenConnected()
 
+    // Narrow this session to ['fs'] — the pin is session-scoped only…
     svc.setSessionMcpServers(s.id, ['fs'])
     await vi.waitFor(() => {
       expect(client.connected).toHaveLength(2)
     })
 
-    // The toggle is sticky: saved as the per-agent default…
-    expect(agentDefaults.getMcpServerNames('fake')).toEqual(['fs'])
-
-    // …so the next new session starts with it — no manual reconfiguration.
+    // …so the next new session still starts with the full non-disabled pool.
     const s2 = await svc.createSession()
     await s2.whenConnected()
     const params = client.connected[2]!.agent.newSessionCalls[0]!
-    expect(params.mcpServers.map((m) => m.name)).toEqual(['fs'])
+    expect(params.mcpServers.map((m) => m.name)).toEqual(['fs', 'docs'])
     svc.dispose()
   })
 
-  it('resetting to inherit also clears the saved default', async () => {
-    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+  it('setMcpServerDefaultEnabled writes the disabled flag at the winning layer', async () => {
+    const client = new FakeAcpClientService()
+    const config = new ConfigurationService()
+    await config.update(
+      'acp.mcpServers',
+      {
+        fs: { command: 'node', args: [] },
+        web: { command: 'node', args: [], disabled: true },
+      },
+      ConfigurationTarget.User,
+    )
+    const { svc } = makeService(client, config)
+
+    expect(svc.setMcpServerDefaultEnabled('fs', false)).toBe(true)
+    expect(
+      (
+        config.getLayerSnapshot(ConfigurationTarget.User)['acp.mcpServers'] as Record<
+          string,
+          { disabled?: boolean }
+        >
+      )['fs']?.disabled,
+    ).toBe(true)
+
+    expect(svc.setMcpServerDefaultEnabled('web', true)).toBe(true)
+    expect(
+      (
+        config.getLayerSnapshot(ConfigurationTarget.User)['acp.mcpServers'] as Record<
+          string,
+          { disabled?: boolean }
+        >
+      )['web']?.disabled,
+    ).toBeUndefined()
+
+    expect(svc.setMcpServerDefaultEnabled('nope', false)).toBe(false)
+    svc.dispose()
+  })
+
+  it('setMcpServerDefaultEnabled narrows the pool a new session starts with', async () => {
+    const client = new FakeAcpClientService()
     const config = new ConfigurationService()
     await config.update('acp.mcpServers', {
       fs: { command: 'node', args: [] },
       docs: { command: 'node', args: [] },
     })
-    const { svc, agentDefaults } = makeService(client, config)
+    const { svc } = makeService(client, config)
+
+    svc.setMcpServerDefaultEnabled('docs', false)
     const s = await svc.createSession()
     await s.whenConnected()
-    await s.sendPrompt('first turn')
-    const sid = s.sessionIdOnAgent.get()!
-
-    svc.setSessionMcpServers(s.id, ['fs'])
-    await vi.waitFor(() => {
-      expect(client.connected).toHaveLength(2)
-    })
-    expect(agentDefaults.getMcpServerNames('fake')).toEqual(['fs'])
-
-    // The resume swapped the session object — address it by the durable id.
-    svc.setSessionMcpServers(sid, null)
-    await vi.waitFor(() => {
-      expect(client.connected).toHaveLength(3)
-    })
-    expect(agentDefaults.getMcpServerNames('fake')).toBeNull()
-
-    // Back to inheriting the pool: the next new session gets every
-    // non-disabled entry again.
-    const s2 = await svc.createSession()
-    await s2.whenConnected()
-    const params = client.connected[3]!.agent.newSessionCalls[0]!
-    expect(params.mcpServers.map((m) => m.name)).toEqual(['fs', 'docs'])
+    const params = client.connected[0]!.agent.newSessionCalls[0]!
+    expect(params.mcpServers.map((m) => m.name)).toEqual(['fs'])
     svc.dispose()
   })
 

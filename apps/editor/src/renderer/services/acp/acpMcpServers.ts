@@ -214,6 +214,13 @@ export interface McpServerDefinition {
   readonly transport: McpTransport
   readonly disabled: boolean
   readonly source: McpServerSource
+  /**
+   * True when the winning definition lives in the workspace `.mcp.json` file
+   * (set by the session service when it merges the pool). Such entries shadow
+   * every settings layer, so their default switch is not editable through the
+   * configuration service — the file must be edited.
+   */
+  readonly fromMcpJson?: boolean
 }
 
 /**

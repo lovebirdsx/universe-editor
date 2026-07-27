@@ -1174,7 +1174,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '',
     '各作用域**按服务器名**合并：工作区服务器只覆盖同名的用户服务器——被覆盖的行会内联标注。`.mcp.json` 优先级最高。',
     '',
-    '复选框是默认启用开关；在此禁用的服务器不会进入新会话，除非你在会话级选择器（输入框旁）里显式重新启用。圆点显示活跃会话上报的实时连接状态。',
+    '复选框是默认启用开关：它决定新会话启用哪些服务器。输入框旁的会话级选择器仍可临时为当前会话启用或裁减服务器，但不会改动这里的默认。圆点显示活跃会话上报的实时连接状态。',
     '修改对新会话立即生效；活跃会话的服务器集合变化时会无缝重载。',
   ].join('\n'),
 
@@ -1219,6 +1219,12 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'aiMcp.dialog.kvValue': '值',
   'aiMcp.dialog.kvRemove': '删除',
   'aiMcp.dialog.kvAdd': '添加',
+
+  // --- ACP: MCP server picker (prompt input) ---
+  'acp.mcp.picker.default': '默认',
+  'acp.mcp.picker.defaultTitle': '新会话默认启用',
+  'acp.mcp.picker.defaultLocked': '在 .mcp.json 中定义——请编辑该文件修改默认值',
+  'acp.mcp.picker.defaultHint': '左侧复选框只作用于当前会话；「默认」开关决定新会话启用哪些。',
 
   // --- AI: debug ---
   'aiDebug.clear': '清空',

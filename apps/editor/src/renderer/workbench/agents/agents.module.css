@@ -2580,7 +2580,6 @@
   align-items: center;
   gap: 6px;
   padding: 3px 10px;
-  cursor: pointer;
 }
 
 .mcpPickRow:hover {
@@ -2590,6 +2589,15 @@
 .mcpPickRow input[type='checkbox'] {
   margin: 0;
   accent-color: var(--color-badge-progress, #4fa6e2);
+}
+
+.mcpPickSession {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  cursor: pointer;
 }
 
 .mcpPickName {
@@ -2603,6 +2611,21 @@
   color: var(--color-message-role-fg, #888);
   font-size: calc(var(--agent-font-size, 12px) * 0.78);
   white-space: nowrap;
+}
+
+.mcpPickDefault {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--color-message-role-fg, #888);
+  font-size: calc(var(--agent-font-size, 12px) * 0.78);
+  white-space: nowrap;
+}
+
+.mcpPickDefault:has(input:disabled) {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .mcpPickFooter {

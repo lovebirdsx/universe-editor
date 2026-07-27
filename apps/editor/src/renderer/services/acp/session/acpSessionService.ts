@@ -55,6 +55,7 @@ import {
 import {
   filterMcpServersByCapabilities,
   filterWireByNames,
+  mcpServerRawToRecord,
   mcpServerTransport,
   mergeMcpServerDefinitions,
   mergeMcpServerRawLayers,
@@ -64,6 +65,7 @@ import {
   readMcpServerDefinitions,
   readMcpServerDefinitionsLayered,
   resolveMcpServerSelection,
+  writeMcpServerEntry,
   type McpServerDefinition,
   type McpServerRawLayer,
 } from '../acpMcpServers.js'
@@ -293,12 +295,20 @@ export interface IAcpSessionService {
    * Persists the pin to the history row (once the durable id exists), then
    * converges the live connection: a connected session whose effective server
    * set changed is seamlessly reloaded (`session/load` — the agent keeps the
-   * conversation, MCP processes restart with the new list). The selection is
-   * sticky: it also becomes the per-agent default the next new session
-   * inherits (`null` clears it → back to "all non-disabled pool entries").
+   * conversation, MCP processes restart with the new list). The pin is
+   * session-scoped only — it never changes what new sessions start with.
    * No-op for read-only previews.
    */
   setSessionMcpServers(sessionId: string, names: readonly string[] | null): void
+  /**
+   * Flip the default-enable switch (`disabled` flag) of one pool entry — the
+   * manually configured set every NEW session starts with. The write lands at
+   * the layer that wins the name (read-only compat layers are overridden in
+   * the matching writable layer instead). Returns `false` when the name is
+   * not configurable here (unknown, or defined by the workspace `.mcp.json`,
+   * which must be edited as a file).
+   */
+  setMcpServerDefaultEnabled(name: string, enabled: boolean): boolean
 }
 
 export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessionService')
@@ -362,6 +372,13 @@ export class AcpSessionService
 
   /** Session ids (agent-issued) with an MCP reload currently in flight. */
   private readonly _mcpReloadingSessions = new Set<string>()
+
+  /**
+   * Names the last pool refresh read from the workspace `.mcp.json`. That file
+   * outranks every settings layer, so a name present here is not toggleable
+   * through {@link setMcpServerDefaultEnabled} — the file must be edited.
+   */
+  private _mcpJsonNames: ReadonlySet<string> = new Set()
 
   /**
    * Consented url-mode elicitations awaiting the agent's `elicitation/complete`,
@@ -616,9 +633,8 @@ export class AcpSessionService
     // while connecting still lands; a later toggle is caught by the drift
     // autorun once the session attaches. The attach snapshot stores the pin
     // itself (not the resolved value) so inheriting sessions never drift
-    // against their own defaults.
-    const pin = session.mcpServerSelection.get()
-    const selection = pin ?? this._defaultMcpSelection(resolvedAgentId)
+    // against the defaults.
+    const selection = session.mcpServerSelection.get()
     const mcpServers = await this._resolveSessionWireMcpServers(resolvedAgentId, selection, true)
     let conn: IAcpClientConnection | undefined
     try {
@@ -663,7 +679,7 @@ export class AcpSessionService
         hasMessages: false,
         ...(liveSelection !== null ? { mcpServerNames: [...liveSelection] } : {}),
       })
-      this._mcpSelectionAtAttach.set(session.id, pin)
+      this._mcpSelectionAtAttach.set(session.id, selection)
       // Seed the saved per-agent defaults BEFORE applying the bag so the state
       // machine reconciles it flicker-free (server default → saved value, with
       // no intermediate frame) and queues the real RPC for the agent to adopt.
@@ -822,13 +838,10 @@ export class AcpSessionService
       this._onResumeFailure(entry, err, readOnly)
     }
     const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
-    // MCP waterfall: session pin (history row) → per-agent saved default →
-    // inherit-all. Resolved once here and applied identically to the session
+    // MCP waterfall: session pin (history row) → inherit the non-disabled
+    // pool. Resolved once here and applied identically to the session
     // view-model, the attach snapshot, and the wire list.
-    const mcpSelection =
-      entry.mcpServerNames !== undefined
-        ? entry.mcpServerNames
-        : this._defaultMcpSelection(entry.agentId)
+    const mcpSelection = entry.mcpServerNames !== undefined ? entry.mcpServerNames : null
     let session: AcpSession | undefined
     let registered = false
     try {
@@ -1240,7 +1253,7 @@ export class AcpSessionService
         ? live.mcpServerSelection.get()
         : entry.mcpServerNames !== undefined
           ? entry.mcpServerNames
-          : this._defaultMcpSelection(entry.agentId)
+          : null
     let newSessionId: string
     try {
       const initResult = await withTimeout(conn.initializeResult, timeoutMs, 'ACP initialize')
@@ -1617,22 +1630,16 @@ export class AcpSessionService
     const projectRaw = await this.readProjectMcpJson()
     const projectDefs = readMcpServerDefinitions(projectRaw, 'project', (m) =>
       this._logger.warn(`mcpServers(.mcp.json): ${m}`),
-    )
+    ).map((d) => ({ ...d, fromMcpJson: true }))
+    this._mcpJsonNames = new Set(Object.keys(mcpServerRawToRecord(projectRaw)))
     this.mcpServerDefinitions.set(mergeMcpServerDefinitions(globalDefs, projectDefs), undefined)
   }
 
   /**
-   * Effective whitelist for a session: the explicit pin when given, else the
-   * per-agent saved default, else `null` (all non-disabled pool entries).
-   */
-  private _defaultMcpSelection(agentId: string): readonly string[] | null {
-    return this._agentDefaults.getMcpServerNames(agentId)
-  }
-
-  /**
    * Resolve a session's effective MCP wire list: merged pool (global config +
-   * project `.mcp.json`) → whitelist filter → warning for whitelisted names
-   * that no longer exist in the pool.
+   * project `.mcp.json`) → whitelist filter (`null` selection = every
+   * non-`disabled` pool entry) → warning for whitelisted names that no longer
+   * exist in the pool.
    */
   private async _resolveSessionWireMcpServers(
     agentId: string,
@@ -1665,11 +1672,10 @@ export class AcpSessionService
     if (!session || session.readOnly || session.status.get() === 'closed') return
     const next = names === null ? null : [...names]
     if (selectionEquals(session.mcpServerSelection.get(), next)) return
+    // Session-scoped pin only: the default set for new sessions is governed
+    // exclusively by each entry's `disabled` flag (see
+    // setMcpServerDefaultEnabled), never by the latest picker choice.
     session.mcpServerSelection.set(next, undefined)
-    // Sticky selection: the latest explicit choice becomes the per-agent
-    // default, so the next new session inherits it without the user having to
-    // redo the picker. Reset (null) clears the default alongside the pin.
-    this._agentDefaults.setMcpServerNames(session.agentId, next)
     this._telemetry.publicLog('acp.session_mcp_selection_changed', {
       agentId: session.agentId,
       inherit: next === null,
@@ -1678,6 +1684,47 @@ export class AcpSessionService
     const sid = session.sessionIdOnAgent.get()
     if (sid !== undefined) this._history.setHistoryMcpServerNames(sid, next)
     this._convergeMcpDrift(session)
+  }
+
+  setMcpServerDefaultEnabled(name: string, enabled: boolean): boolean {
+    if (this._mcpJsonNames.has(name)) return false
+    // Highest priority first, mirroring _mcpSettingsLayers. A name resolves at
+    // the first layer defining it; read-only compat layers are not written
+    // directly — an override entry lands in the matching writable layer
+    // instead (which outranks the compat layer by construction).
+    const layers: ReadonlyArray<{
+      readonly target: ConfigurationTarget
+      readonly writeTarget: ConfigurationTarget
+    }> = [
+      { target: ConfigurationTarget.Memory, writeTarget: ConfigurationTarget.Memory },
+      { target: ConfigurationTarget.Project, writeTarget: ConfigurationTarget.Project },
+      {
+        target: ConfigurationTarget.VSCodeWorkspace,
+        writeTarget: ConfigurationTarget.Project,
+      },
+      { target: ConfigurationTarget.User, writeTarget: ConfigurationTarget.User },
+      { target: ConfigurationTarget.VSCodeUser, writeTarget: ConfigurationTarget.User },
+    ]
+    for (const layer of layers) {
+      const raw = this._config.getLayerSnapshot(layer.target)['acp.mcpServers']
+      const record = mcpServerRawToRecord(raw)
+      const entry = record[name]
+      if (entry == null || typeof entry !== 'object' || Array.isArray(entry)) continue
+      const nextEntry: Record<string, unknown> = { ...(entry as Record<string, unknown>) }
+      if (enabled) delete nextEntry.disabled
+      else nextEntry.disabled = true
+      const writeRaw =
+        layer.writeTarget === layer.target
+          ? raw
+          : this._config.getLayerSnapshot(layer.writeTarget)['acp.mcpServers']
+      this._config.update(
+        'acp.mcpServers',
+        writeMcpServerEntry(writeRaw, name, nextEntry),
+        layer.writeTarget,
+      )
+      return true
+    }
+    return false
   }
 
   /**

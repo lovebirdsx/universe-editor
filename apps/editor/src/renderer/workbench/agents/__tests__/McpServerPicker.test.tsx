@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  McpServerPicker tests — covers the trigger count, popover interactions
- *  (toggle / reset / save-as-default / open-settings), the custom-selection
+ *  (toggle / reset / default switch / open-settings), the custom-selection
  *  marker, and the absence cases (read-only session, empty pool, no service).
  *--------------------------------------------------------------------------------------------*/
 
@@ -29,8 +29,6 @@ import type {
 } from '../../../services/acp/session/acpSessionService.js'
 import { IAcpSessionService as IAcpSessionServiceId } from '../../../services/acp/session/acpSessionService.js'
 import type { McpServerDefinition } from '../../../services/acp/acpMcpServers.js'
-import { IAcpAgentDefaultsService as IAcpAgentDefaultsServiceId } from '../../../services/acp/session/acpAgentDefaultsService.js'
-import type { IAcpAgentDefaultsService } from '../../../services/acp/session/acpAgentDefaultsService.js'
 import { McpServerPicker } from '../McpServerPicker.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -89,6 +87,7 @@ interface FakeService {
   readonly mcpServerDefinitions: ISettableObservable<readonly McpServerDefinition[]>
   readonly refreshMcpServerDefinitions: ReturnType<typeof vi.fn>
   readonly setSessionMcpServers: ReturnType<typeof vi.fn>
+  readonly setMcpServerDefaultEnabled: ReturnType<typeof vi.fn>
 }
 
 function makeService(pool: readonly McpServerDefinition[]): FakeService {
@@ -96,6 +95,7 @@ function makeService(pool: readonly McpServerDefinition[]): FakeService {
     mcpServerDefinitions: observableValue<readonly McpServerDefinition[]>('defs', pool),
     refreshMcpServerDefinitions: vi.fn().mockResolvedValue(undefined),
     setSessionMcpServers: vi.fn(),
+    setMcpServerDefaultEnabled: vi.fn().mockReturnValue(true),
   }
 }
 
@@ -110,22 +110,15 @@ function renderPicker({
   service,
   open = false,
   withService = true,
-  agentMcpDefault,
 }: {
   session?: FakeSession
   service: FakeService
   open?: boolean
   withService?: boolean
-  agentMcpDefault?: readonly string[] | null
 }) {
   const services = new ServiceCollection()
   if (withService) {
     services.set(IAcpSessionServiceId, service as unknown as IAcpSessionService)
-  }
-  if (agentMcpDefault !== undefined) {
-    services.set(IAcpAgentDefaultsServiceId, {
-      getMcpServerNames: () => agentMcpDefault,
-    } as unknown as IAcpAgentDefaultsService)
   }
   const inst = new InstantiationService(services)
   const onOpen = vi.fn()
@@ -150,7 +143,15 @@ function rowOf(name: string): HTMLElement {
 }
 
 function checkboxOf(name: string): HTMLInputElement {
+  // The session checkbox is the first input in the row (the default toggle
+  // carries a data-testid).
   const input = rowOf(name).querySelector('input[type="checkbox"]')
+  expect(input).toBeTruthy()
+  return input as HTMLInputElement
+}
+
+function defaultToggleOf(name: string): HTMLInputElement {
+  const input = rowOf(name).querySelector('input[data-testid="acp-mcp-picker-default-toggle"]')
   expect(input).toBeTruthy()
   return input as HTMLInputElement
 }
@@ -183,17 +184,16 @@ describe('McpServerPicker', () => {
     expect(onOpen).toHaveBeenCalled()
   })
 
-  it('trigger resolves inherit through the per-agent default (disabled entries enabled on demand)', () => {
+  it('an inheriting session follows the pool defaults, never a previous picker choice', () => {
     const service = makeService(POOL)
-    // The previous session pinned ['web'], which stuck as the per-agent
-    // default; a new inheriting session must count it, not the non-disabled
-    // pool (which would be 2/3).
-    renderPicker({ service, open: true, agentMcpDefault: ['web'] })
+    // Inherit resolves to every non-disabled pool entry — there is no sticky
+    // per-agent default anymore.
+    renderPicker({ service, open: true })
     const trigger = screen.getByTestId('acp-mcp-picker-trigger')
-    expect(trigger.textContent).toContain('1/3')
+    expect(trigger.textContent).toContain('2/3')
     expect(trigger.getAttribute('data-custom')).toBe('false')
-    expect(checkboxOf('web').checked).toBe(true)
-    expect(checkboxOf('fs').checked).toBe(false)
+    expect(checkboxOf('web').checked).toBe(false)
+    expect(checkboxOf('fs').checked).toBe(true)
   })
 
   it('toggling an inheriting session pins the remaining enabled servers', () => {
@@ -242,11 +242,37 @@ describe('McpServerPicker', () => {
     expect(screen.getByTestId('acp-mcp-picker-trigger').textContent).toContain('1/3')
   })
 
-  it('renders source and disabled metadata per row', () => {
+  it('renders source metadata per row', () => {
     renderPicker({ service: makeService(POOL), open: true })
     expect(rowOf('fs').textContent).toContain('global')
     expect(rowOf('docs').textContent).toContain('project')
-    expect(rowOf('web').textContent).toContain('disabled')
+  })
+
+  it('the default toggle mirrors the pool entry disabled flag', () => {
+    renderPicker({ service: makeService(POOL), open: true })
+    expect(defaultToggleOf('fs').checked).toBe(true)
+    expect(defaultToggleOf('docs').checked).toBe(true)
+    expect(defaultToggleOf('web').checked).toBe(false)
+  })
+
+  it('toggling the default switch writes through setMcpServerDefaultEnabled', () => {
+    const service = makeService(POOL)
+    renderPicker({ service, open: true })
+    fireEvent.click(defaultToggleOf('web'))
+    expect(service.setMcpServerDefaultEnabled).toHaveBeenCalledWith('web', true)
+    fireEvent.click(defaultToggleOf('fs'))
+    expect(service.setMcpServerDefaultEnabled).toHaveBeenCalledWith('fs', false)
+    // The session pin is untouched.
+    expect(service.setSessionMcpServers).not.toHaveBeenCalled()
+  })
+
+  it('the default toggle is disabled for .mcp.json entries', () => {
+    const pool: readonly McpServerDefinition[] = [
+      { name: 'local', transport: 'stdio', disabled: false, source: 'project', fromMcpJson: true },
+    ]
+    renderPicker({ service: makeService(pool), open: true })
+    expect(rowOf('local').textContent).toContain('.mcp.json')
+    expect(defaultToggleOf('local').disabled).toBe(true)
   })
 
   it('shows the prompt-cache hint in the popover footer', () => {

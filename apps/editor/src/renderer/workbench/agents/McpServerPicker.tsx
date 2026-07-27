@@ -5,8 +5,10 @@
  *  "enabled / pool" count; the popover lists every definition from the merged
  *  pool (global `acp.mcpServers` + project `.mcp.json`) with a checkbox, the
  *  live connection status dot, and its source. Toggling converges the session
- *  via IAcpSessionService.setSessionMcpServers (seamless reload) and sticks as
- *  the per-agent default the next new session inherits.
+ *  via IAcpSessionService.setSessionMcpServers (seamless reload) and affects
+ *  only this session — the default set new sessions start with is governed by
+ *  each entry's per-server default switch (`disabled` flag), editable inline
+ *  via the "default" toggle and in AI Settings.
  *--------------------------------------------------------------------------------------------*/
 
 import { useRef } from 'react'
@@ -18,7 +20,6 @@ import {
   type IAcpSession,
   type IAcpSessionService as IAcpSessionServiceType,
 } from '../../services/acp/session/acpSessionService.js'
-import { IAcpAgentDefaultsService } from '../../services/acp/session/acpAgentDefaultsService.js'
 import {
   resolveMcpServerSelection,
   type McpServerDefinition,
@@ -65,16 +66,13 @@ function McpServerPickerInner({
   onOpen: () => void
   onClose: () => void
 }) {
-  const agentDefaults = useOptionalService(IAcpAgentDefaultsService)
   const pool = useObservable(service.mcpServerDefinitions)
   const selection = useObservable(session.mcpServerSelection)
   const liveServers = useObservable(session.mcpServers)
   if (session.readOnly || pool.length === 0) return null
-  // Inherit resolves through the same chain the session wire uses: the
-  // per-agent saved default (a previous session's sticky selection) first,
-  // then every non-disabled pool entry.
-  const effectiveSelection = selection ?? agentDefaults?.getMcpServerNames(session.agentId) ?? null
-  const { enabledNames } = resolveMcpServerSelection(pool, effectiveSelection)
+  // `null` (inherit) resolves to every non-disabled pool entry — the same
+  // default set a brand-new session starts with.
+  const { enabledNames } = resolveMcpServerSelection(pool, selection)
   const enabledSet = new Set(enabledNames)
   const custom = selection !== null
   const liveStatus = new Map(liveServers.map((s) => [s.name, s.status]))
@@ -172,29 +170,52 @@ function McpPickerPopover({
         ) : null}
       </div>
       {pool.map((def) => (
-        <label
+        <div
           key={def.name}
           className={styles['mcpPickRow']}
           data-status={liveStatus.get(def.name)}
           data-testid="acp-mcp-picker-row"
           data-name={def.name}
         >
-          <input
-            type="checkbox"
-            checked={enabledSet.has(def.name)}
-            onChange={() => onToggle(def.name)}
-          />
-          {liveStatus.has(def.name) ? (
-            <span className={styles['mcpStatusDot']} aria-hidden="true" />
-          ) : null}
-          <span className={styles['mcpPickName']}>{def.name}</span>
-          <span className={styles['mcpPickMeta']}>
-            {def.source === 'project'
-              ? localize('acp.mcp.picker.sourceProject', 'project')
-              : localize('acp.mcp.picker.sourceGlobal', 'global')}
-            {def.disabled ? ` · ${localize('acp.mcp.picker.disabled', 'disabled')}` : ''}
-          </span>
-        </label>
+          <label className={styles['mcpPickSession']}>
+            <input
+              type="checkbox"
+              checked={enabledSet.has(def.name)}
+              onChange={() => onToggle(def.name)}
+            />
+            {liveStatus.has(def.name) ? (
+              <span className={styles['mcpStatusDot']} aria-hidden="true" />
+            ) : null}
+            <span className={styles['mcpPickName']}>{def.name}</span>
+            <span className={styles['mcpPickMeta']}>
+              {def.fromMcpJson
+                ? '.mcp.json'
+                : def.source === 'project'
+                  ? localize('acp.mcp.picker.sourceProject', 'project')
+                  : localize('acp.mcp.picker.sourceGlobal', 'global')}
+            </span>
+          </label>
+          <label
+            className={styles['mcpPickDefault']}
+            title={
+              def.fromMcpJson
+                ? localize(
+                    'acp.mcp.picker.defaultLocked',
+                    'Defined in .mcp.json — edit the file to change its default',
+                  )
+                : localize('acp.mcp.picker.defaultTitle', 'Enabled by default for new sessions')
+            }
+          >
+            <input
+              type="checkbox"
+              data-testid="acp-mcp-picker-default-toggle"
+              checked={!def.disabled}
+              disabled={def.fromMcpJson === true}
+              onChange={(e) => service.setMcpServerDefaultEnabled(def.name, e.target.checked)}
+            />
+            <span>{localize('acp.mcp.picker.default', 'default')}</span>
+          </label>
+        </div>
       ))}
       <div className={styles['mcpPickFooter']}>
         <button
@@ -212,6 +233,10 @@ function McpPickerPopover({
         {localize(
           'acp.mcp.picker.cacheHint',
           'Changing servers restarts the session and invalidates the model prompt cache.',
+        )}{' '}
+        {localize(
+          'acp.mcp.picker.defaultHint',
+          'Checkboxes on the left apply to this session only; the "default" toggle decides what new sessions start with.',
         )}
       </div>
     </div>

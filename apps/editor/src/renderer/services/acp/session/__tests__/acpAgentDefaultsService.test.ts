@@ -170,7 +170,7 @@ describe('AcpAgentDefaultsService — get / set', () => {
   })
 })
 
-describe('AcpAgentDefaultsService — MCP server defaults', () => {
+describe('AcpAgentDefaultsService — legacy MCP whitelist rows', () => {
   let svc: AcpAgentDefaultsService
   let storage: FakeStorage
   beforeEach(() => {
@@ -182,78 +182,39 @@ describe('AcpAgentDefaultsService — MCP server defaults', () => {
     svc.dispose()
   })
 
-  it('returns null for agents without a saved whitelist', async () => {
+  it('loads v2 rows carrying a legacy mcpDefaults field, ignoring it', async () => {
+    storage.store.set('acp.agentDefaults', {
+      schemaVersion: 2,
+      defaults: { 'claude-code': { model: 'A' } },
+      mcpDefaults: { 'claude-code': ['fs'] },
+    })
     await svc.initialize()
-    expect(svc.getMcpServerNames('nope')).toBeNull()
+    expect(svc.getDefaults('claude-code')).toEqual({ model: 'A' })
   })
 
-  it('stores a whitelist per agent, isolated from siblings', async () => {
+  it('purges the legacy mcpDefaults field on the next write', async () => {
+    storage.store.set('acp.agentDefaults', {
+      schemaVersion: 2,
+      defaults: { 'claude-code': { model: 'A' } },
+      mcpDefaults: { 'claude-code': ['fs'] },
+    })
     await svc.initialize()
-    svc.setMcpServerNames('claude-code', ['fs', 'docs'])
-    svc.setMcpServerNames('codex', ['fs'])
-    expect(svc.getMcpServerNames('claude-code')).toEqual(['fs', 'docs'])
-    expect(svc.getMcpServerNames('codex')).toEqual(['fs'])
-    expect(svc.getMcpServerNames('other')).toBeNull()
-  })
-
-  it('clearing with null removes the entry', async () => {
-    await svc.initialize()
-    svc.setMcpServerNames('claude-code', ['fs'])
-    svc.setMcpServerNames('claude-code', null)
-    expect(svc.getMcpServerNames('claude-code')).toBeNull()
-  })
-
-  it('skips the write when the value is unchanged', async () => {
-    await svc.initialize()
-    svc.setMcpServerNames('claude-code', ['fs'])
+    svc.setDefault('claude-code', 'thought_level', 'high')
     await flushWrite()
-    const before = storage.setCalls.length
-    svc.setMcpServerNames('claude-code', ['fs'])
-    svc.setMcpServerNames('claude-code', null)
-    await flushWrite()
-    expect(storage.setCalls.length).toBe(before + 1)
+    const persisted = storage.setCalls.at(-1)?.value as Record<string, unknown>
+    expect('mcpDefaults' in persisted).toBe(false)
+    expect(persisted['defaults']).toEqual({
+      'claude-code': { model: 'A', thought_level: 'high' },
+    })
   })
 
-  it('round-trips the whitelist through persistence', async () => {
-    await svc.initialize()
-    svc.setMcpServerNames('claude-code', ['fs', 'docs'])
-    await flushWrite()
-    const reloaded = makeService({ storage }).svc
-    await reloaded.initialize()
-    expect(reloaded.getMcpServerNames('claude-code')).toEqual(['fs', 'docs'])
-    reloaded.dispose()
-  })
-
-  it('keeps configOption defaults intact alongside MCP ones', async () => {
-    await svc.initialize()
-    svc.setDefault('claude-code', 'model', 'A')
-    svc.setMcpServerNames('claude-code', ['fs'])
-    await flushWrite()
-    const reloaded = makeService({ storage }).svc
-    await reloaded.initialize()
-    expect(reloaded.getDefaults('claude-code')).toEqual({ model: 'A' })
-    expect(reloaded.getMcpServerNames('claude-code')).toEqual(['fs'])
-    reloaded.dispose()
-  })
-
-  it('loads v1 rows (no mcpDefaults) with an empty MCP map', async () => {
+  it('loads v1 rows (no mcpDefaults)', async () => {
     storage.store.set('acp.agentDefaults', {
       schemaVersion: 1,
       defaults: { 'claude-code': { model: 'A' } },
     })
     await svc.initialize()
     expect(svc.getDefaults('claude-code')).toEqual({ model: 'A' })
-    expect(svc.getMcpServerNames('claude-code')).toBeNull()
-  })
-
-  it('fails closed on malformed mcpDefaults', async () => {
-    storage.store.set('acp.agentDefaults', {
-      schemaVersion: 2,
-      defaults: { 'claude-code': { model: 'A' } },
-      mcpDefaults: { 'claude-code': 'fs' },
-    })
-    await svc.initialize()
-    expect(svc.getDefaults('claude-code')).toEqual({})
   })
 })
 

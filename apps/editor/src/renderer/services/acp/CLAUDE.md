@@ -121,6 +121,12 @@ IAcpHostService.onStdout(chunk: string)
 
 agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组 `Object.fromEntries` 还原成 Record 再喂给 Claude Agent SDK——MCP 连接/工具发现全由 SDK 管，client 只做"配置→wire→门控"。命令入口：`Agents: Open MCP Settings`（`agentActions.ts` 的 `OpenAcpMcpSettingsAction`）。
 
+**默认启用集语义（去 sticky 后）**：
+- 定义池 = `acp.mcpServers` settings 层按 server 名逐条覆盖（低→高：VSCodeUser → User → VSCodeWorkspace → Project → Memory）+ 工作区根 `.mcp.json`（最高优先、只读）。`refreshMcpServerDefinitions` 把合并结果镜像到 `mcpServerDefinitions` observable（`.mcp.json` 来源的 entry 带 `fromMcpJson: true`）。
+- **新会话的默认启用集 = 池中全部非 `disabled` 条目**（`resolveMcpServerSelection(pool, null)`）。`disabled` 标志是**唯一**的默认开关，两个入口同源：AI 设置"MCP 服务器"面板的 checkbox + 会话 picker 弹窗行内的「默认」开关（`setMcpServerDefaultEnabled` 按 winning 层写回 settings；VSCode 兼容层只读则写对应可写高层覆盖；`.mcp.json` 来源返回 `false`，UI 禁用控件）。
+- **picker 左侧勾选只是会话级 pin**（`setSessionMcpServers` → `session.mcpServerSelection`），只影响当前会话（pin 与 attach 快照偏离时无缝 reload），**绝不写回默认**——sticky 机制已删，`acpAgentDefaultsService` 不再存 MCP 白名单（旧数据的 `mcpDefaults` 字段反序列化时忽略、下次写入自动 purge）。
+- resume/fork 的选择瀑布：history 行 `mcpServerNames`（含 undefined=跟随默认）→ 否则 `null`（= 非 disabled 全集）。
+
 **未做（按需扩展）**：读项目根 `.mcp.json`、实验性 `type:'acp'` transport、MCP 状态/工具可观测 UI（ACP 无标准状态推送，MCP 工具以普通 `tool_call` 出现）。
 
 ## 测试模式
