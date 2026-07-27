@@ -5,11 +5,16 @@
  *  exist. Once mounted, closing the last terminal must NOT auto-respawn one —
  *  the prior bug respawned a terminal whenever the list dropped to empty after a
  *  restored session, because didInit was only set in the create branch.
+ *
+ *  The empty-check is gated on the manager's initial load: React mounts before
+ *  the fire-and-forget reconcileFromStorage() settles, so a restored session
+ *  briefly shows an empty list. Deciding then spawned an extra terminal next to
+ *  the restored ones whenever the panel + terminal view were active at shutdown.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
-import { ILayoutService, PartId, observableValue } from '@universe-editor/platform'
+import { ILayoutService, PartId, autorun, observableValue } from '@universe-editor/platform'
 import { IWorkspaceService } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../../services/terminal/TerminalManagerService.js'
 import { ServicesContext } from '../../../useService.js'
@@ -26,7 +31,8 @@ vi.mock('../useTerminalOpenFile.js', () => ({
   useOpenTerminalFile: () => () => {},
 }))
 
-function makeManager(initial: readonly string[]) {
+function makeManager(initial: readonly string[], opts?: { initialLoadDone?: boolean }) {
+  const loadDone = observableValue('test.loadDone', opts?.initialLoadDone ?? true)
   const panel = observableValue<readonly { id: string }[]>(
     'test.panel',
     initial.map((id) => ({ id })),
@@ -52,6 +58,19 @@ function makeManager(initial: readonly string[]) {
     terminalGroups: groups,
     activeGroupId,
     activeTerminalId: activeId,
+    initialLoadDone: loadDone,
+    waitForInitialLoad: () =>
+      loadDone.get()
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            let sub: { dispose(): void } | undefined
+            sub = autorun((r) => {
+              if (!loadDone.read(r)) return
+              sub?.dispose()
+              sub = undefined
+              resolve()
+            })
+          }),
     newTerminal,
   }
 
@@ -64,7 +83,7 @@ function makeManager(initial: readonly string[]) {
     if (!ids.includes(activeId.get() ?? '')) activeId.set(ids[0] ?? null, undefined)
   }
 
-  return { manager, newTerminal, setPanel }
+  return { manager, newTerminal, setPanel, loadDone }
 }
 
 function renderView(manager: unknown) {
@@ -123,6 +142,47 @@ describe('TerminalView auto-spawn', () => {
     // User closes the last terminal — list drops to empty.
     await act(async () => {
       h.setPanel([])
+    })
+    expect(h.newTerminal).not.toHaveBeenCalled()
+  })
+
+  it('defers the empty-check until the initial load finishes, then spawns for a fresh workspace', async () => {
+    const h = makeManager([], { initialLoadDone: false })
+    await act(async () => {
+      renderView(h.manager)
+    })
+    // Reconcile still in flight — the empty list is not yet meaningful.
+    expect(h.newTerminal).not.toHaveBeenCalled()
+
+    await act(async () => {
+      h.loadDone.set(true, undefined)
+    })
+    expect(h.newTerminal).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT spawn when restored terminals arrive before the initial load finishes', async () => {
+    const h = makeManager([], { initialLoadDone: false })
+    await act(async () => {
+      renderView(h.manager)
+    })
+    // Restore path lands while the view is already mounted, then the load
+    // completes — the view must see the restored terminal and stay put.
+    await act(async () => {
+      h.setPanel(['t-restored'])
+      h.loadDone.set(true, undefined)
+    })
+    expect(h.newTerminal).not.toHaveBeenCalled()
+  })
+
+  it('does NOT spawn when unmounted before the initial load finishes', async () => {
+    const h = makeManager([], { initialLoadDone: false })
+    let unmount!: () => void
+    await act(async () => {
+      unmount = renderView(h.manager).unmount
+    })
+    unmount()
+    await act(async () => {
+      h.loadDone.set(true, undefined)
     })
     expect(h.newTerminal).not.toHaveBeenCalled()
   })

@@ -26,6 +26,7 @@ import {
   IWorkspaceService,
   joinPath,
   observableValue,
+  autorun,
   registerSingleton,
   StorageScope,
   toDisposable,
@@ -126,6 +127,14 @@ export interface ITerminalManagerService {
   reconcileFromStorage(): Promise<void>
   /** loadDefaults() + reconcileFromStorage(); kept for tests / direct callers. */
   load(): Promise<void>
+  /**
+   * Whether the initial workspace load (persisted-terminal restore included)
+   * has finished. React mounts before the fire-and-forget reconcile settles,
+   * so views must gate "empty list" decisions on this — see TerminalView.
+   */
+  readonly initialLoadDone: IObservable<boolean>
+  /** Resolves once the initial workspace load has finished (immediately if so). */
+  waitForInitialLoad(): Promise<void>
 }
 
 export const ITerminalManagerService =
@@ -252,6 +261,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   >('terminal.activeId', null)
   private readonly _profiles: ISettableObservable<readonly ITerminalProfile[] | null> =
     observableValue<readonly ITerminalProfile[] | null>('terminal.profiles', null)
+  private readonly _initialLoadDone = observableValue('terminal.initialLoadDone', false)
 
   readonly terminals: IObservable<readonly ITerminalCreatedInfo[]> = this._terminals
   readonly panelTerminals: IObservable<readonly ITerminalCreatedInfo[]> = this._panelTerminals
@@ -259,6 +269,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   readonly activeGroupId: IObservable<string | null> = this._activeGroupId
   readonly activeTerminalId: IObservable<string | null> = this._activeTerminalId
   readonly profiles: IObservable<readonly ITerminalProfile[] | null> = this._profiles
+  readonly initialLoadDone: IObservable<boolean> = this._initialLoadDone
 
   private readonly _onFocusRequest = this._register(new Emitter<void>())
   readonly onFocusRequest: Event<void> = this._onFocusRequest.event
@@ -282,7 +293,6 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
 
   private _suspendPersist = false
   private _saveTimer: ReturnType<typeof setTimeout> | undefined
-  private _initialLoadDone = false
 
   constructor(
     @ITerminalService private readonly _terminal: ITerminalService,
@@ -303,7 +313,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     // only genuine runtime workspace switches (after initial load) reload here.
     this._register(
       this._storage.onDidChangeWorkspaceScope(() => {
-        if (!this._initialLoadDone) return
+        if (!this._initialLoadDone.get()) return
         void this._reload()
       }),
     )
@@ -579,7 +589,20 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
       })
     }
     await this._loadFromStorage()
-    this._initialLoadDone = true
+    this._initialLoadDone.set(true, undefined)
+  }
+
+  waitForInitialLoad(): Promise<void> {
+    if (this._initialLoadDone.get()) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      let sub: IDisposable | undefined
+      sub = autorun((r) => {
+        if (!this._initialLoadDone.read(r)) return
+        sub?.dispose()
+        sub = undefined
+        resolve()
+      })
+    })
   }
 
   private async _loadFromStorage(): Promise<void> {
@@ -758,6 +781,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
       clearTimeout(this._saveTimer)
       this._saveTimer = undefined
     }
+    this._initialLoadDone.set(false, undefined)
     this._suspendPersist = true
     try {
       // Close all panel terminals (editor terminals are managed by WorkspaceRestoreContribution)
@@ -771,7 +795,12 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     } finally {
       this._suspendPersist = false
     }
-    await this._loadFromStorage()
+    try {
+      await this._loadFromStorage()
+    } finally {
+      // Always flip back — a stuck `false` would mute the workspace-scope gate.
+      this._initialLoadDone.set(true, undefined)
+    }
   }
 }
 

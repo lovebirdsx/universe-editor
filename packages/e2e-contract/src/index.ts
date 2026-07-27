@@ -463,6 +463,14 @@ export interface E2EProbe {
    * Empty when no usable shell was found on this machine.
    */
   terminalProfiles(): Promise<readonly string[]>
+  /** Number of live panel terminals held by the renderer's terminal manager. */
+  getPanelTerminalCount(): number
+  /**
+   * Display names of the live panel terminals, in creation order. Lets a spec
+   * tell restored terminals (persisted name) apart from auto-spawned ones
+   * (profile name) when asserting restore counts.
+   */
+  getPanelTerminalNames(): readonly string[]
   /**
    * Read the Disposable leak report stored in sessionStorage by the previous
    * session's beforeunload handler. Returns null if no leaks were detected

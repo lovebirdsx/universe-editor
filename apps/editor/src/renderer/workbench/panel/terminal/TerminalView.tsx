@@ -21,15 +21,25 @@ export function TerminalView() {
 
   // Spawn an initial terminal only on the very first mount with none open.
   // We mark didInit on the first frame regardless of outcome: once the view has
-  // mounted, closing the last terminal must NOT auto-respawn one. (Restored
-  // terminals already exist on first frame, so we don't create — and later
-  // closing them all leaves the empty state, as expected.)
+  // mounted, closing the last terminal must NOT auto-respawn one.
+  // The empty check must wait for the initial workspace load: React mounts
+  // before the fire-and-forget reconcileFromStorage() settles (main.tsx), so a
+  // restored session briefly shows an empty list — deciding then would spawn an
+  // extra terminal alongside the restored ones.
   const didInit = useRef(false)
   useEffect(() => {
     if (didInit.current) return
     didInit.current = true
-    if (terminals.length === 0) {
-      void manager.newTerminal({ target: 'panel' })
+    let cancelled = false
+    void (async () => {
+      await manager.waitForInitialLoad()
+      if (cancelled) return
+      if (manager.panelTerminals.get().length === 0) {
+        void manager.newTerminal({ target: 'panel' })
+      }
+    })()
+    return () => {
+      cancelled = true
     }
   }, [terminals, manager])
 

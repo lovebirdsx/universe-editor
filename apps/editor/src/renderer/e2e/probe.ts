@@ -582,6 +582,10 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       await services.terminalManagerService.refreshProfiles()
       return services.terminalManagerService.profiles.get()?.map((p) => p.profileName) ?? []
     },
+    getPanelTerminalCount: (): number =>
+      services.terminalManagerService.panelTerminals.get().length,
+    getPanelTerminalNames: (): readonly string[] =>
+      services.terminalManagerService.panelTerminals.get().map((t) => t.name),
     getStoredLeakReport: (): E2EDisposableLeakReport | null => {
       const raw = sessionStorage.getItem(DISPOSABLE_LEAK_REPORT_KEY)
       if (!raw) return null
