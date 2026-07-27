@@ -7,6 +7,7 @@ import type { ICommandService, ILogger, ITelemetryService } from '@universe-edit
 import { CommandsRegistry } from '@universe-editor/platform'
 import type { InstantiationService } from '@universe-editor/platform'
 import { NullLogger } from '@universe-editor/platform'
+import { isBenignError } from '../../errors.js'
 
 export class CommandService implements ICommandService {
   declare readonly _serviceBrand: undefined
@@ -34,13 +35,27 @@ export class CommandService implements ICommandService {
           return value
         },
         (err: unknown) => {
-          this._logger.error(`command failed id=${id}`, err)
+          this._logFailure(id, err)
           return Promise.reject(err)
         },
       )
     } catch (err) {
-      this._logger.error(`command failed id=${id}`, err)
+      this._logFailure(id, err)
       return Promise.reject(err)
     }
+  }
+
+  /**
+   * A rejection the workbench already accounts for — e.g. an in-flight request
+   * whose IPC channel was torn down by an extension-host restart — is lifecycle
+   * noise the caller handles by keeping stale state; it must not surface as an
+   * error-level log on every restart. Genuine handler failures stay errors.
+   */
+  private _logFailure(id: string, err: unknown): void {
+    if (isBenignError(err)) {
+      this._logger.warn(`command interrupted id=${id}`, err)
+      return
+    }
+    this._logger.error(`command failed id=${id}`, err)
   }
 }

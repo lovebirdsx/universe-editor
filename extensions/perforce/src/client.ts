@@ -1280,6 +1280,7 @@ export class PerforceClient {
       pinned,
       preserveFocus,
       openableUri: pathToFileURL(localPath).href,
+      liveModified: true,
     })
   }
 

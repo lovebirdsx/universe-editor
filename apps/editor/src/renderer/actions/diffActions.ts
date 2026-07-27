@@ -38,6 +38,13 @@ export interface OpenDiffPayload {
    * blobs, cross-file compare) — the button is then hidden.
    */
   readonly openableUri?: string
+  /**
+   * True when the modified side IS the live working tree: it then tracks the
+   * file's editor buffer and external disk changes. Omit (or false) for
+   * snapshot diffs — commit-to-commit, depot revisions, merge-conflict sides —
+   * whose right side must stay frozen at the passed content.
+   */
+  readonly liveModified?: boolean
 }
 
 export class OpenDiffAction extends Action2 {
@@ -59,7 +66,7 @@ export class OpenDiffAction extends Action2 {
     // and re-activate, instead of opening a duplicate.
     const existing = group.editors.find((e) => e.id === id)
     if (existing instanceof DiffEditorInput) {
-      existing.update(payload.original, payload.modified)
+      existing.update(payload.original, payload.modified, payload.liveModified ?? false)
       // Double-click (pinned=true) promotes a preview tab to permanent.
       group.openEditor(existing, { activate: true, pinned, preserveFocus })
       return
@@ -71,6 +78,7 @@ export class OpenDiffAction extends Action2 {
       payload.modified,
       undefined,
       payload.openableUri ? URI.parse(payload.openableUri) : undefined,
+      payload.liveModified ?? false,
     )
     // Single-click uses the preview slot; double-click opens a permanent tab.
     group.openEditor(input, { activate: true, pinned, preserveFocus })

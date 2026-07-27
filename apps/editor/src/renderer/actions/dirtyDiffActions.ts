@@ -123,6 +123,7 @@ export class OpenActiveFileChangesAction extends Action2 {
       original: head ?? '',
       modified,
       openableUri: active.resource.toString(),
+      liveModified: true,
     })
   }
 }

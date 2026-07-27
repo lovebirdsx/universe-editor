@@ -348,7 +348,9 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     const byUri = new Map<string, DiffEditorInput[]>()
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
-        if (!(editor instanceof DiffEditorInput)) continue
+        // Snapshot diffs (commit-to-commit, depot revisions) are frozen — a
+        // working-tree change must not rewrite their right side.
+        if (!(editor instanceof DiffEditorInput) || !editor.liveModified) continue
         const key = this._uriIdentity.getComparisonKey(editor.originalUri)
         if (!changedKeys.has(key)) continue
         const list = byUri.get(key) ?? []

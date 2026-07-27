@@ -24,6 +24,7 @@ interface ISerializedDiffEditor {
   readonly modifiedContent: string
   readonly modifiedUri?: UriComponents
   readonly openableResource?: UriComponents
+  readonly liveModified?: boolean
 }
 
 export class DiffEditorInput extends EditorInput {
@@ -39,6 +40,7 @@ export class DiffEditorInput extends EditorInput {
     private _modifiedContent: string,
     private readonly _modifiedUri?: URI,
     private readonly _openableResource?: URI,
+    private _liveModified = false,
   ) {
     super()
   }
@@ -109,6 +111,18 @@ export class DiffEditorInput extends EditorInput {
     return this._openableResource
   }
 
+  /**
+   * True when the modified side represents the live working tree: the file's
+   * shared Monaco model (and external disk changes) are mirrored into it by the
+   * live-content sync contributions. False for snapshot diffs — a git-commit,
+   * depot-revision, or merge-conflict comparison — whose right side is a frozen
+   * blob that must never be clobbered with the working-tree text just because
+   * the file happens to be open elsewhere.
+   */
+  get liveModified(): boolean {
+    return this._liveModified
+  }
+
   get originalContent(): string {
     return this._originalContent
   }
@@ -118,12 +132,18 @@ export class DiffEditorInput extends EditorInput {
   }
 
   /** Refresh both sides in place and notify the mounted DiffEditor to re-render. */
-  update(originalContent: string, modifiedContent: string): void {
-    if (this._originalContent === originalContent && this._modifiedContent === modifiedContent) {
+  update(originalContent: string, modifiedContent: string, liveModified?: boolean): void {
+    const nextLive = liveModified ?? this._liveModified
+    if (
+      this._originalContent === originalContent &&
+      this._modifiedContent === modifiedContent &&
+      this._liveModified === nextLive
+    ) {
       return
     }
     this._originalContent = originalContent
     this._modifiedContent = modifiedContent
+    this._liveModified = nextLive
     this._onDidChangeContent.fire()
   }
 
@@ -131,7 +151,7 @@ export class DiffEditorInput extends EditorInput {
    *  diff of the same file (the file changed again while the tab was open). */
   override updateFrom(other: EditorInput): void {
     if (other instanceof DiffEditorInput) {
-      this.update(other._originalContent, other._modifiedContent)
+      this.update(other._originalContent, other._modifiedContent, other._liveModified)
     }
   }
 
@@ -148,6 +168,7 @@ export class DiffEditorInput extends EditorInput {
       modifiedContent: this._modifiedContent,
       ...(this._isCrossFile && { modifiedUri: this._modifiedUri!.toJSON() }),
       ...(this._openableResource && { openableResource: this._openableResource.toJSON() }),
+      ...(this._liveModified && { liveModified: true }),
     }
   }
 
@@ -171,6 +192,7 @@ export class DiffEditorInput extends EditorInput {
       d.modifiedContent ?? '',
       modifiedUri,
       openableResource,
+      d.liveModified === true,
     )
   }
 }

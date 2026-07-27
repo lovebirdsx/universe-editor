@@ -257,6 +257,9 @@ export function createGitTimelineCommands(
         pinned: false,
         preserveFocus: false,
         openableUri: fileUrl,
+        // Empty currentHash means the working tree — its side tracks live edits;
+        // a committed hash is a frozen blob and must not be live-synced.
+        ...(currentHash === '' && { liveModified: true }),
       })
     }),
 

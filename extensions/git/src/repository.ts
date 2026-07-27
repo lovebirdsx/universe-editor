@@ -802,6 +802,7 @@ export class Repository {
       pinned,
       preserveFocus,
       openableUri: pathToFileURL(absPath).href,
+      liveModified: true,
     })
   }
 

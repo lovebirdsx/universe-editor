@@ -1,9 +1,29 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Renderer-process global error handlers. Install once at bootstrap top.
+ *  Renderer-process error classification + global handlers. `isBenignError` is
+ *  environment-agnostic (imported by CommandService too); the window-global
+ *  installer stays DOM-only and is declared locally so the file typechecks in
+ *  every consumer's lib set.
  *--------------------------------------------------------------------------------------------*/
 
 import { IpcChannelDisposedError, onUnexpectedError } from '@universe-editor/platform'
+
+declare const window: {
+  addEventListener(
+    type: 'error',
+    listener: (e: { message: string; stopImmediatePropagation(): void }) => void,
+  ): void
+  onerror:
+    | ((
+        message: unknown,
+        source: unknown,
+        lineno: unknown,
+        colno: unknown,
+        error: unknown,
+      ) => boolean | void)
+    | null
+  onunhandledrejection: ((event: { reason: unknown; preventDefault(): void }) => void) | null
+}
 
 /**
  * Benign errors that surface through the global error paths during normal

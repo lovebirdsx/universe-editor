@@ -7,6 +7,7 @@ import {
   CommandsRegistry,
   Event,
   InstantiationService,
+  IpcChannelDisposedError,
   LogLevel,
   ServiceCollection,
   type ILogger,
@@ -77,6 +78,44 @@ describe('CommandService telemetry', () => {
     try {
       await expect(svc.executeCommand('test.throwing.command')).rejects.toThrow('boom')
       expect(logger.error).toHaveBeenCalledWith('command failed id=test.throwing.command', err)
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  // Regression: an extension-host restart (workspace swap / trust flip) tears
+  // down the IPC channel while a contributed command (e.g. git-graph.getCommits)
+  // is still in flight. The rejection is benign lifecycle noise the caller
+  // already handles — it must not be logged at error level on every restart.
+  it('logs a warning (not an error) when the IPC channel is disposed mid-flight', async () => {
+    const instantiation = new InstantiationService(new ServiceCollection())
+    const logger = makeLogger()
+    const svc = new CommandService(instantiation, undefined, logger)
+    const err = new IpcChannelDisposedError()
+    const disposable = CommandsRegistry.registerCommand('test.disposed.command', () =>
+      Promise.reject(err),
+    )
+    try {
+      await expect(svc.executeCommand('test.disposed.command')).rejects.toBe(err)
+      expect(logger.error).not.toHaveBeenCalled()
+      expect(logger.warn).toHaveBeenCalledWith('command interrupted id=test.disposed.command', err)
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  it('also treats a synchronously thrown benign error as a warning', async () => {
+    const instantiation = new InstantiationService(new ServiceCollection())
+    const logger = makeLogger()
+    const svc = new CommandService(instantiation, undefined, logger)
+    const err = new IpcChannelDisposedError()
+    const disposable = CommandsRegistry.registerCommand('test.disposed.sync', () => {
+      throw err
+    })
+    try {
+      await expect(svc.executeCommand('test.disposed.sync')).rejects.toBe(err)
+      expect(logger.error).not.toHaveBeenCalled()
+      expect(logger.warn).toHaveBeenCalledWith('command interrupted id=test.disposed.sync', err)
     } finally {
       disposable.dispose()
     }

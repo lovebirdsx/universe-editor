@@ -406,7 +406,7 @@ describe('ExternalChangeWatcher', () => {
 
   it('refreshes the working-tree side of an open diff editor on change', async () => {
     const uri = URI.file('/ws/a.txt')
-    const diff = new DiffEditorInput(uri, 'head', 'old-working')
+    const diff = new DiffEditorInput(uri, 'head', 'old-working', undefined, undefined, true)
     const groups = makeGroups([diff])
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
@@ -431,7 +431,7 @@ describe('ExternalChangeWatcher', () => {
     // A stale/late fs event must not overwrite the diff's modified side from disk
     // — the live buffer, mirrored by DiffLiveContentSyncContribution, is truth.
     const uri = URI.file('/ws/a.txt')
-    const diff = new DiffEditorInput(uri, 'head', 'live-edit')
+    const diff = new DiffEditorInput(uri, 'head', 'live-edit', undefined, undefined, true)
     const groups = makeGroups([diff])
     liveModels.set(uri.toString(), { getValue: () => 'live-edit', isDisposed: () => false })
     const watcher = new FakeWatcher()
@@ -449,6 +449,30 @@ describe('ExternalChangeWatcher', () => {
     await flush()
     expect(diff.modifiedContent).toBe('live-edit')
     liveModels.delete(uri.toString())
+  })
+
+  // Regression (git graph): a snapshot diff (commit-to-commit) is a frozen
+  // comparison — a working-tree change must NOT rewrite its right side, or the
+  // commit diff silently morphs into "latest file vs parent commit".
+  it('does not refresh a snapshot diff (liveModified=false) on change', async () => {
+    const uri = URI.file('/ws/a.txt')
+    const diff = new DiffEditorInput(uri, 'parent-blob', 'commit-blob')
+    const groups = makeGroups([diff])
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      makeFileService({ existing: [uri], contents: [[uri, 'disk-new']] }),
+      makeLoggerService(),
+      new FakeUserData(),
+      makeUriIdentity(),
+    )
+
+    watcher.fire([{ type: 'modified', resource: uri }])
+    await flush()
+    expect(diff.modifiedContent).toBe('commit-blob')
+    expect(diff.originalContent).toBe('parent-blob')
   })
 
   it('reloads an open editor when its user-data file changes', async () => {

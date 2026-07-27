@@ -94,6 +94,16 @@ describe('DiffEditorInput', () => {
       expect(restored!.modifiedContent).toBe('B')
     })
 
+    it('round-trips the liveModified flag', () => {
+      const uri = URI.file('/ws/a.ts')
+      const live = new DiffEditorInput(uri, 'base', 'current', undefined, undefined, true)
+      const snapshot = new DiffEditorInput(uri, 'base', 'current')
+      expect(live.liveModified).toBe(true)
+      expect(snapshot.liveModified).toBe(false)
+      expect(DiffEditorInput.deserialize(live.serialize())!.liveModified).toBe(true)
+      expect(DiffEditorInput.deserialize(snapshot.serialize())!.liveModified).toBe(false)
+    })
+
     it('rejects malformed payloads', () => {
       expect(DiffEditorInput.deserialize(null)).toBeNull()
       expect(DiffEditorInput.deserialize({})).toBeNull()
