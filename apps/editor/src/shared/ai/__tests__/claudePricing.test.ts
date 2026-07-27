@@ -19,6 +19,18 @@ describe('claudeModelFamily', () => {
     expect(claudeModelFamily('claude-sonnet-5[1m]')).toBe('claude-sonnet')
   })
 
+  it('matches kimi gateway ids on their generation token', () => {
+    expect(claudeModelFamily('kimi-k3')).toBe('kimi-k3')
+    expect(claudeModelFamily('kimi-k2.6')).toBe('kimi-k2')
+    expect(claudeModelFamily('kimi-k2-6')).toBe('kimi-k2')
+    expect(claudeModelFamily('kimi-k2.7-code')).toBe('kimi-k2')
+    expect(claudeModelFamily('Kimi-K2.6')).toBe('kimi-k2')
+  })
+
+  it('resolves unknown kimi ids to the current kimi flagship', () => {
+    expect(claudeModelFamily('kimi-k9')).toBe('kimi-k3')
+  })
+
   it('falls back to the default family for unknown ids', () => {
     expect(claudeModelFamily('some-future-model')).toBe('claude-sonnet')
   })
@@ -29,6 +41,20 @@ describe('claudeModelPricing', () => {
     expect(claudeModelPricing('claude-opus-4-8').output).toBe(25)
     expect(claudeModelPricing('claude-fable-5').output).toBe(50)
     expect(claudeModelPricing('claude-haiku-4-5').input).toBe(1)
+  })
+
+  it('converts kimi CNY list prices to USD at 7.2', () => {
+    const k2 = claudeModelPricing('kimi-k2.7-code')
+    expect(k2.input).toBeCloseTo(6.5 / 7.2, 9)
+    expect(k2.cacheWrite).toBe(k2.input)
+    expect(k2.cacheRead).toBeCloseTo(1.3 / 7.2, 9)
+    expect(k2.output).toBeCloseTo(27 / 7.2, 9)
+
+    const k3 = claudeModelPricing('kimi-k3')
+    expect(k3.input).toBeCloseTo(20 / 7.2, 9)
+    expect(k3.cacheWrite).toBe(k3.input)
+    expect(k3.cacheRead).toBeCloseTo(2 / 7.2, 9)
+    expect(k3.output).toBeCloseTo(100 / 7.2, 9)
   })
 })
 
@@ -64,5 +90,16 @@ describe('estimateClaudeCostUSD', () => {
         outputTokens: 0,
       }),
     ).toBe(0)
+  })
+
+  it('prices kimi tokens against the converted CNY rates', () => {
+    // kimi-k3: 1M input @20 + 1M cacheRead @2 + 1M output @100 CNY
+    const cost = estimateClaudeCostUSD('kimi-k3', {
+      inputTokens: 1_000_000,
+      cacheCreateTokens: 0,
+      cacheReadTokens: 1_000_000,
+      outputTokens: 1_000_000,
+    })
+    expect(cost).toBeCloseTo((20 + 2 + 100) / 7.2, 5)
   })
 })
