@@ -56,6 +56,13 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
   private readonly _containerOrders = new Map<string, number>()
   /** viewId → collapse / size / order state. */
   private readonly _viewStates = new Map<string, IViewState>()
+  /**
+   * Sizes as persisted (or about to be persisted) on disk — the authoritative
+   * restore target. Written only by _loadFromStorage and persist:true
+   * setViewSizes; the live bookkeeping in _viewStates can be overwritten by
+   * layout onChange noise at any time, so restore paths must read this map.
+   */
+  private readonly _persistedSizes = new Map<string, number>()
   /** Generated containers we own, so we can re-register them on load. */
   private readonly _generated = new Map<string, { location: number; order: number }>()
 
@@ -236,6 +243,10 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
     return this._viewStates.get(viewId) ?? {}
   }
 
+  getPersistedViewSize(viewId: string): number | undefined {
+    return this._persistedSizes.get(viewId)
+  }
+
   setViewCollapsed(viewId: string, collapsed: boolean): void {
     if (this.getViewState(viewId).collapsed === collapsed) return
     this._setViewState(viewId, { collapsed })
@@ -258,7 +269,12 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
     // user action (sash drag-end, collapse bookkeeping) and always schedules
     // the flush, even when the in-memory value already matches (the disk may
     // still hold nothing or an older value).
-    if (options?.persist && sizes.length > 0) this._schedulePersist()
+    if (options?.persist && sizes.length > 0) {
+      for (const { id, size } of sizes) {
+        this._persistedSizes.set(id, size)
+      }
+      this._schedulePersist()
+    }
   }
 
   reset(): void {
@@ -269,6 +285,7 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
     this._containerLocations.clear()
     this._containerOrders.clear()
     this._viewStates.clear()
+    this._persistedSizes.clear()
     this._generated.clear()
     this._bumpAndPersist()
   }
@@ -408,6 +425,7 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
       }
       for (const [viewId, state] of Object.entries(data.viewStates ?? {})) {
         this._viewStates.set(viewId, state)
+        if (state.size !== undefined) this._persistedSizes.set(viewId, state.size)
       }
     } finally {
       this._suspendPersist = false
@@ -431,7 +449,20 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
       viewLocations: Object.fromEntries(this._viewLocations),
       containerLocations: Object.fromEntries(this._containerLocations),
       containerOrders: Object.fromEntries(this._containerOrders),
-      viewStates: Object.fromEntries(this._viewStates),
+      // The size field comes from the authoritative persisted map, never from
+      // live layout bookkeeping — otherwise an unrelated persist (move /
+      // reorder / collapse) would serialize whatever layout noise last
+      // overwrote _viewStates with (e.g. the greedy first-layout split).
+      viewStates: Object.fromEntries(
+        [...this._viewStates.entries()].map(([id, state]) => {
+          const size = this._persistedSizes.get(id)
+          if (size === undefined) {
+            const { size: _drop, ...rest } = state
+            return [id, rest]
+          }
+          return [id, { ...state, size }]
+        }),
+      ),
       generatedContainers: [...this._generated.entries()].map(([id, g]) => ({
         id,
         location: g.location,
@@ -459,6 +490,7 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
       this._containerLocations.clear()
       this._containerOrders.clear()
       this._viewStates.clear()
+      this._persistedSizes.clear()
       this._generated.clear()
     } finally {
       this._suspendPersist = false

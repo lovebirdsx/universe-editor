@@ -264,4 +264,99 @@ describe('ViewPaneContainer', () => {
       vi.useRealTimers()
     }
   })
+
+  it('a later render cannot lock in layout noise over the reconciled sizes', async () => {
+    // Regression for the CI flake where the restored pane drifted to the
+    // greedy first-layout split (second pane pinned to its 88px min): the
+    // reconcile lands BEFORE Allotment's first layout, the first onChange
+    // corrects the split visually, but its raw report still overwrites the
+    // live bookkeeping. A later unrelated version bump re-renders the
+    // container and must still target the persisted sizes — never the
+    // polluted live ones.
+    const storage = makeStorage()
+    storage.get = vi.fn().mockResolvedValue({
+      viewStates: {
+        'test.view.a': { size: 200 },
+        'test.view.b': { size: 400 },
+      },
+    })
+    const viewDescriptorService = new ViewDescriptorService(storage, stubWorkspace)
+    renderSideBar(viewDescriptorService)
+
+    // Fast storage: reconcile lands before the first layout pass.
+    await act(async () => {
+      await viewDescriptorService.reconcileFromStorage()
+    })
+    expect(viewDescriptorService.getPersistedViewSize('test.view.a')).toBe(200)
+
+    // First layout reports the pre-reconcile split (300/300): the one-shot
+    // correction restores the persisted split visually. In a real browser the
+    // correction's resize() fires its onChange synchronously, so the outer
+    // onChange's bookkeeping afterwards overwrites the live state with the
+    // pre-reconcile split (the pollution vector) — happy-dom delivers that
+    // nested onChange asynchronously, so inject the equivalent noise write
+    // directly.
+    act(() => fireLastResizeObserver(800, 600))
+    expect(paneHeightPx('test.view.a')).toBe(200)
+    expect(paneHeightPx('test.view.b')).toBe(400)
+    act(() =>
+      viewDescriptorService.setViewSizes([
+        { id: 'test.view.a', size: 300 },
+        { id: 'test.view.b', size: 300 },
+      ]),
+    )
+    expect(viewDescriptorService.getViewState('test.view.a').size).toBe(300)
+
+    // A later unrelated registry bump re-renders the container.
+    act(() => {
+      disposables.push(
+        ViewRegistry.registerView({
+          id: 'test.view.unrelated',
+          name: 'test.view.unrelated',
+          containerId: 'test.other.container',
+          componentKey: 'test.component.unrelated',
+          order: 1,
+        }),
+      )
+    })
+
+    // The rendered split must still be the persisted one.
+    expect(paneHeightPx('test.view.a')).toBe(200)
+    expect(paneHeightPx('test.view.b')).toBe(400)
+  })
+
+  it('keeps correcting startup geometry redistribution within the settle window', async () => {
+    // Regression for the residual CI flake: the first-layout correction ran,
+    // then the window's own startup geometry settle re-sized the container and
+    // Allotment redistributed the panes again (no further stored-sizes key
+    // change to retrigger the effect). Reports inside the settle window must
+    // keep correcting toward the persisted sizes.
+    const storage = makeStorage()
+    storage.get = vi.fn().mockResolvedValue({
+      viewStates: {
+        'test.view.a': { size: 200 },
+        'test.view.b': { size: 400 },
+      },
+    })
+    const viewDescriptorService = new ViewDescriptorService(storage, stubWorkspace)
+    renderSideBar(viewDescriptorService)
+    await act(async () => {
+      await viewDescriptorService.reconcileFromStorage()
+    })
+
+    // First layout: corrected to the persisted split.
+    act(() => fireLastResizeObserver(800, 600))
+    expect(paneHeightPx('test.view.a')).toBe(200)
+    expect(paneHeightPx('test.view.b')).toBe(400)
+
+    // The container's startup geometry settles through a smaller intermediate
+    // height, redistributing the panes away from the persisted split...
+    act(() => fireLastResizeObserver(800, 300))
+    // ...and lands at its final height. Without continuous in-window
+    // correction the panes stay at whatever the redistribution produced.
+    act(() => fireLastResizeObserver(800, 600))
+
+    expect(paneHeightPx('test.view.a')).toBe(200)
+    expect(paneHeightPx('test.view.b')).toBe(400)
+  })
 })

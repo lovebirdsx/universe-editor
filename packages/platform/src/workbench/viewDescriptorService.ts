@@ -61,6 +61,14 @@ export interface IViewDescriptorService {
   getViewState(viewId: string): IViewState
   setViewCollapsed(viewId: string, collapsed: boolean): void
   /**
+   * The size that would be written to disk for this view — set only by
+   * reconciliation from storage and by `persist: true` writes. Unlike
+   * `getViewState(viewId).size` (which live layout bookkeeping overwrites on
+   * every Allotment onChange), this value is immune to layout noise, so UI
+   * restoring persisted sizes must target it instead of the live state.
+   */
+  getPersistedViewSize(viewId: string): number | undefined
+  /**
    * Record live pane sizes. With `persist: true` (user-driven changes only —
    * sash drag-end, collapse bookkeeping) the sizes are also scheduled for
    * WORKSPACE storage; the default only updates the in-memory state so layout

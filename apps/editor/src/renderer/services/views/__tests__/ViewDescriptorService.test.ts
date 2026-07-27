@@ -171,6 +171,59 @@ describe('ViewDescriptorService', () => {
     svc.dispose()
   })
 
+  it('getPersistedViewSize is immune to layout bookkeeping overwrites', async () => {
+    const { service, store } = makeStorage()
+    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+
+    // User sash drag-end persists the dragged sizes.
+    svc.setViewSizes(
+      [
+        { id: 'test.v1', size: 420 },
+        { id: 'test.v2', size: 300 },
+      ],
+      { persist: true },
+    )
+    expect(svc.getPersistedViewSize('test.v1')).toBe(420)
+
+    // Layout noise (e.g. Allotment's greedy first-layout split) overwrites the
+    // live bookkeeping, but never the authoritative persisted map.
+    svc.setViewSizes([
+      { id: 'test.v1', size: 632 },
+      { id: 'test.v2', size: 88 },
+    ])
+    expect(svc.getViewState('test.v1').size).toBe(632)
+    expect(svc.getPersistedViewSize('test.v1')).toBe(420)
+    expect(svc.getPersistedViewSize('test.v2')).toBe(300)
+
+    // An unrelated persist (collapse bumps and schedules a save) must
+    // serialize the authoritative sizes, not the layout noise.
+    svc.setViewCollapsed('test.v3', true)
+    await new Promise((r) => setTimeout(r, 250))
+    const persisted = store.get('workbench.viewCustomizations') as {
+      viewStates: Record<string, { size?: number }>
+    }
+    expect(persisted.viewStates['test.v1']?.size).toBe(420)
+    expect(persisted.viewStates['test.v2']?.size).toBe(300)
+    svc.dispose()
+  })
+
+  it('reconcile rebuilds persisted sizes from storage', async () => {
+    const { service, store } = makeStorage()
+    store.set('workbench.viewCustomizations', {
+      viewStates: { 'test.v1': { size: 420 }, 'test.v2': { size: 300, collapsed: true } },
+    })
+    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+    await svc.load()
+    expect(svc.getPersistedViewSize('test.v1')).toBe(420)
+    expect(svc.getPersistedViewSize('test.v2')).toBe(300)
+
+    // Live bookkeeping may move on; the persisted value stays authoritative.
+    svc.setViewSizes([{ id: 'test.v1', size: 632 }])
+    expect(svc.getViewState('test.v1').size).toBe(632)
+    expect(svc.getPersistedViewSize('test.v1')).toBe(420)
+    svc.dispose()
+  })
+
   it('re-registers generated containers on load', async () => {
     const { service } = makeStorage()
     const svc = new ViewDescriptorService(service, hydratedWorkspace)

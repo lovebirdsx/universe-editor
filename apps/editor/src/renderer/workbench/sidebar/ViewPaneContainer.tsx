@@ -130,7 +130,13 @@ export function ViewPaneContainer({
       const viewId = views[i]!.id
       let restoreSize: number | undefined
       if (collapsedFlags[i]) {
-        const remembered = viewDescriptors.getViewState(viewId).size ?? working[i]
+        // Remember the expanded size: prefer the authoritative persisted value
+        // — the live view state may hold layout noise (greedy first-layout
+        // split) even though the visible panes were already corrected back.
+        const remembered =
+          viewDescriptors.getPersistedViewSize(viewId) ??
+          viewDescriptors.getViewState(viewId).size ??
+          working[i]
         if (remembered !== undefined) {
           expandedSizesRef.current.set(viewId, remembered)
           // Collapsing is a user action: keep the expanded size on disk (the
@@ -139,7 +145,9 @@ export function ViewPaneContainer({
         }
       } else {
         restoreSize =
-          expandedSizesRef.current.get(viewId) ?? viewDescriptors.getViewState(viewId).size
+          expandedSizesRef.current.get(viewId) ??
+          viewDescriptors.getPersistedViewSize(viewId) ??
+          viewDescriptors.getViewState(viewId).size
       }
       const next = computeToggleSizes({
         sizes: working,
@@ -160,12 +168,18 @@ export function ViewPaneContainer({
   // the top-level sidebar/panel/secondary sizes). A mounted pane's
   // preferredSize prop change is bookkeeping-only (allotment freezes each
   // pane's layoutStrategy at construction), so a late reconcile must be
-  // applied imperatively. Because there is no persisted-state version marker,
-  // the correction runs on the first real onChange report instead of a key
-  // change; the settle timer keeps it pending until the reconcile has landed,
-  // and a user sash drag before that cancels it.
+  // applied imperatively. Corrections run on every onChange report inside the
+  // startup settle window (a single one-shot correction loses to a later
+  // greedy redistribution — Allotment's initial distributeEmptySpace can pin
+  // a pane to its min when the window's own geometry settle re-layouts the
+  // container) and on the stored-sizes key change below; a user sash drag
+  // cancels them.
   const isLayoutSettledRef = useRef(false)
   const userDraggedRef = useRef(false)
+  // Set on drag *start* (not only drag-end): an in-flight sash gesture blocks
+  // every persisted-size correction — applying one mid-drag fights the live
+  // drag stream and can leave the panes frozen at the pre-drag split.
+  const sashDraggingRef = useRef(false)
   const layoutSettleTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => {
     layoutSettleTimerRef.current = setTimeout(() => {
@@ -173,15 +187,49 @@ export function ViewPaneContainer({
     }, RECONCILE_GRACE_MS)
     return () => clearTimeout(layoutSettleTimerRef.current)
   }, [])
+  // The restore target is the *persisted* size map, not the live view state:
+  // Allotment's greedy first layout can report a degenerate split (one pane
+  // pinned to its min — see WorkbenchLayout's note on distributeEmptySpace),
+  // and the onChange bookkeeping below would then overwrite the live state
+  // with it. A later unrelated render would read that polluted value back as
+  // the "stored" size and resize the panes to the degenerate split for good.
+  // Reentrancy guard: a corrective resize() fires onChange synchronously, and
+  // re-entering the correction from that nested report could recurse (or ping
+  // -pong when the container is smaller than the persisted total).
+  const correctingRef = useRef(false)
   const correctToStoredSizes = (sizes: readonly number[]) => {
+    if (sashDraggingRef.current || correctingRef.current) return
     if (sizes.length !== views.length) return
-    const target = views.map((v, i) =>
-      collapsed(v.id)
-        ? (sizes[i] ?? HEADER_H)
-        : Math.max(OPEN_MIN, viewDescriptors.getViewState(v.id).size ?? sizes[i] ?? OPEN_MIN),
+    // With a collapsed pane the split is owned by the toggle effect above
+    // (collapsed pane pinned to its header, the open panes absorb the rest) —
+    // a persisted-size correction would fight that distribution.
+    if (views.some((v) => collapsed(v.id))) return
+    // Keep the container's current total: only re-distribute it among the
+    // panes (VSCode sash semantics — a sash move never changes the container
+    // size). Scaling a persisted total down into a smaller container gets
+    // clamped by Allotment and the correction would chase its own clamp
+    // forever; growing to a stale larger total would fight the container.
+    const total = sizes.reduce((sum, size) => sum + (size ?? 0), 0)
+    const bases = views.map((v, i) =>
+      Math.max(OPEN_MIN, viewDescriptors.getPersistedViewSize(v.id) ?? sizes[i] ?? OPEN_MIN),
     )
+    const baseSum = bases.reduce((sum, size) => sum + size, 0)
+    const deficit = total - baseSum
+    // Container smaller than the persisted total: stay out — Allotment's own
+    // clamped distribution is the reasonable one, and chasing absolute sizes
+    // into it would loop resize→clamp→report→resize. When the container grows
+    // to fit (startup geometry settle), the next report corrects the split.
+    if (deficit < 0) return
+    // Hand any extra room (container taller than the persisted total) to the
+    // bottom-most pane, mirroring the greedy SplitView distribution.
+    const target = bases.map((size, i) => (i === bases.length - 1 ? size + deficit : size))
     if (target.some((size, i) => Math.abs(size - (sizes[i] ?? 0)) > 1)) {
-      allotmentRef.current?.resize(target)
+      correctingRef.current = true
+      try {
+        allotmentRef.current?.resize(target)
+      } finally {
+        correctingRef.current = false
+      }
     }
   }
   // A reconcile landing AFTER the first layout surfaces as a stored-sizes key
@@ -189,7 +237,7 @@ export function ViewPaneContainer({
   // key is consumed only once the mounted Allotment has reported real geometry
   // — before that the first-onChange correction above owns the window.
   const storedSizesKey = views
-    .map((v) => (collapsed(v.id) ? '' : String(viewDescriptors.getViewState(v.id).size ?? '')))
+    .map((v) => (collapsed(v.id) ? '' : String(viewDescriptors.getPersistedViewSize(v.id) ?? '')))
     .join('|')
   const prevStoredSizesKeyRef = useRef(storedSizesKey)
   useLayoutEffect(() => {
@@ -272,15 +320,15 @@ export function ViewPaneContainer({
         vertical
         onChange={(s) => {
           sizesRef.current = s
-          if (!isLayoutSettledRef.current) {
-            isLayoutSettledRef.current = true
-            clearTimeout(layoutSettleTimerRef.current)
-            // First real geometry: reconcileFromStorage() may have landed after
-            // the panes were constructed (their layoutStrategy frozen without
-            // the persisted sizes), so correct the pre-reconcile split once.
-            // A user drag that already happened takes precedence.
-            if (!userDraggedRef.current) correctToStoredSizes(s)
-          }
+          // Correct toward the persisted sizes on EVERY report inside the
+          // startup settle window, not just the first: Allotment's greedy
+          // first-layout distribution (a pane pinned to its min, see
+          // WorkbenchLayout's distributeEmptySpace note) can also land AFTER
+          // an earlier correction — e.g. the window's own startup geometry
+          // settle re-layouts the container a second time — with no further
+          // stored-sizes key change to retrigger the effect above. A user
+          // sash drag takes precedence (sashDraggingRef / userDraggedRef).
+          if (!isLayoutSettledRef.current && !userDraggedRef.current) correctToStoredSizes(s)
           // In-memory bookkeeping only (drives collapse/expand restore math
           // and the collapse-time remembered-size snapshot). Persisting here
           // would let layout noise — notably the pre-reconcile equal split —
@@ -292,7 +340,11 @@ export function ViewPaneContainer({
             views.flatMap((v, i) => (collapsed(v.id) ? [] : [{ id: v.id, size: s[i] ?? 0 }])),
           )
         }}
+        onDragStart={() => {
+          sashDraggingRef.current = true
+        }}
         onDragEnd={(s) => {
+          sashDraggingRef.current = false
           userDraggedRef.current = true
           // Collapsed panes report their header height here; persist only the
           // expanded panes' sizes so a collapsed pane keeps its remembered
@@ -307,7 +359,7 @@ export function ViewPaneContainer({
           const isCollapsed = collapsed(v.id)
           const preferredSize = initialPaneSize(
             isCollapsed,
-            viewDescriptors.getViewState(v.id).size,
+            viewDescriptors.getPersistedViewSize(v.id) ?? viewDescriptors.getViewState(v.id).size,
           )
           const Component = resolve(v.componentKey)
           return (

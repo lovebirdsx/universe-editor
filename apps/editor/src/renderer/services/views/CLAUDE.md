@@ -140,7 +140,8 @@ HTML5 DnD 在 **dragover 阶段读不到 `dataTransfer` 的 payload**（只在 d
 多 view 容器（`ViewPaneContainer.tsx` 的 Allotment）尺寸机制，纯函数收口在 `services/views/viewPaneLayout.ts`（常量 `VIEW_HEADER_SIZE=28` / `VIEW_OPEN_MIN=88` + `computeToggleSizes` + `initialPaneSize`）：
 
 - **落盘权收窄到用户动作（VSCode 语义）**：`setViewSizes(sizes, {persist?})` 默认**只更新内存**（layout 记账），`persist:true` 才调度落盘。`onChange` 全部走记账（首布局等分/容器 resize/程序化纠正永不落盘——否则 reload 后首布局等分值经 200ms debounce 抢在 reconcile 读盘前写盘，污染拖拽尺寸，见案例 50b）；`onDragEnd`（sash 拖拽）与 collapse 时的 remembered size 走 `persist:true`（`persist:true` 无条件调度，不等 changed——内存可能已同值而磁盘是旧值）。
-- **reconcile 迟到的双路校正**（Allotment 挂载后 `preferredSize` 是 no-op，pane 构造时冻结 layoutStrategy）：① 首个 onChange 一次性 `correctToStoredSizes`（覆盖 reconcile 早于 PaneView 构造，用户拖拽先发生则取消）；② `storedSizesKey` effect（覆盖 reconcile 晚于首布局，prevKey 在长度守卫**之后**才消费）。两路幂等（diff>1px 才 resize）。
+- **persisted/mem 双轨制**：`_viewStates.size` 是**布局记账**（每次 onChange 无差别覆盖，随时可能是贪心分配等噪声），`_persistedSizes` 才是**权威源**（只被 reconcile/persist:true 写）。**所有「恢复目标」读 `getPersistedViewSize()`**（correctToStoredSizes/storedSizesKey/collapse remembered/expand restore/mount preferredSize），**`save()` 序列化的 size 也走 persisted map**——否则无关 persist（move/reorder/collapse）会把 mem 里的布局噪声写进磁盘。读脏 mem 的恢复逻辑会在某一帧把噪声当真值锁死（案例 50c）。
+- **reconcile 迟到的校正**（Allotment 挂载后 `preferredSize` 是 no-op，pane 构造时冻结 layoutStrategy）：`RECONCILE_GRACE_MS`(600ms) settle 窗口内**每次** onChange 都 `correctToStoredSizes`（非一次性——贪心重分配可在纠正后再次落进来），窗口外靠 `storedSizesKey` effect（prevKey 在长度守卫**之后**才消费）。守卫组合防自激：`sashDraggingRef`（拖拽中暂停）/ collapsed 跳过 / `correctingRef` 重入 / `deficit<0` 跳过（容器装不下 persisted 时追逐会无限同步递归，等容器长大的下次报告）。
 - **挂载恢复**：每个 `Allotment.Pane` 传 `preferredSize`——折叠→28，展开→持久化的 `size`（clamp ≥ OPEN_MIN），无存储→不传（Allotment 等分）。重挂载（重排/移入移出/切容器）同样走这条路恢复。
 - **折叠**：pane 收缩到 header（min=max=28），让出的空间**全归最底部展开 pane**（SplitView greedy，maxSize=Infinity 吸收全部）。
 - **展开**：恢复记住的展开尺寸，空间从其它展开 pane **自底向上扣**（各扣到 OPEN_MIN 为止，不够则压展开目标）。
