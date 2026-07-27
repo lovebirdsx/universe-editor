@@ -1,5 +1,42 @@
 [
   {
+    "version": "0.1.51",
+    "date": "2026-07-27",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "deep link allowAutoSubmit 默认改为 true",
+          "支持 Kimi 模型费用估算",
+          "同步工作树时显示进度通知并改为并发执行"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "去掉deeplink中pid注入相关功能",
+          "修正git graph中打开diff时，总是和文件最新版进行比较的bug",
+          "终端面板启动时会自动增多一个实例的bug",
+          "swarm review 通知测试 badge 计数从 5 改为 6",
+          "修复扩展宿主重启竞态导致未处理的 Promise 拒绝",
+          "AskUserQuestion 结果渲染缺少结构化展示",
+          "swarm review用索引代替版本号标识审核版本避免漂移",
+          "timeline避免显示多余的Uncommitted Changes",
+          "session的提问选项旁可以输入额外文本",
+          "修复探针 findOutputEditor 仍用 get() 导致 poll 被击穿",
+          "修复 agent 内部异常退出时无重连的问题",
+          "取消请求时日志级别降为 info 避免误报",
+          "session修复连续图片竖向堆叠改为横向换行布局",
+          "restore 窗口抢焦导致 e2e 偶发失败",
+          "修复session创建的竞态导致的空MCP列表",
+          "修复 Allotment 持久化尺寸滞后于首次布局导致 pane 高度不等的偶发 Flake"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.50",
     "date": "2026-07-27",
     "groups": [
