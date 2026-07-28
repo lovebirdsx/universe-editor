@@ -438,4 +438,34 @@ describe('SwarmReviewNotificationContribution', () => {
       expect(t.notify).not.toHaveBeenCalled()
     })
   })
+
+  // Repro for "后台时新 review 零通知" (second half of the latch): when the dashboard
+  // call rejects — e.g. an expired Swarm ticket making the extension host throw
+  // Unauthorized — refresh() must still release its serialized `_running` latch in
+  // `finally`. If it didn't, every subsequent host tick would be dropped at
+  // `if (this._running) return` and no review would ever notify again.
+  describe('rejected dashboard call releases the poll latch', () => {
+    it('a rejected poll keeps the latch free so the next tick runs and notifies', async () => {
+      const t = await setup()
+      // Make the next dashboard call reject (simulates the 401 the extension host
+      // propagates back over RPC), then restore a healthy dashboard.
+      const original = t.executeCommand.getMockImplementation()!
+      t.executeCommand.mockImplementation(async (id: string): Promise<unknown> => {
+        if (id === 'perforce.swarm.dashboard') throw new Error('Swarm unauthorized (401)')
+        return original(id)
+      })
+      await t.refresh()
+      expect(t.notify).not.toHaveBeenCalled()
+
+      // The latch must be free: a later tick reaches the dashboard again and the
+      // newly-actionable review notifies — this is the regression assertion.
+      t.executeCommand.mockImplementation(original)
+      t.setDashboard([review('5', { description: 'recovered' })])
+      await t.tick.driveSwarmNotificationTick()
+      await flush()
+      expect(t.notify).toHaveBeenCalledTimes(1)
+      expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #5: recovered' })
+      t.dispose()
+    })
+  })
 })

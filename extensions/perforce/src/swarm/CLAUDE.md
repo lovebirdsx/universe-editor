@@ -79,6 +79,15 @@
 - **只有 `perforce.swarm.ping` / `perforce.swarm.requestReview` / `perforce.swarm.updateReviewFromChangelist` 进 package.json**（`ping` 是命令面板自检；后两者贡献到 SCM changelist 组头右键菜单 `3_swarm@1/@2`，都是**扩展宿主有真 handler** 的命令）。
 - **`updateReview`（详情页 Update Review 按钮驱动，请求已带 reviewId）与 `updateReviewFromChangelist`（从 changelist 组头出发、先 QuickPick 选一个 review 再重新 shelve 关联新版本）是两条路径，别混**。候选排序是纯函数 `swarm/swarmReviewPick.ts`（`buildReviewPicks`：过滤已关闭、needsRevision 置顶、newest 次序），带单测。
 
+### ⚠️ 轮询驱动的调用绝不能 await 模态对话框（`guard()` 的 `promptOnAuth`）
+
+`guard()` 的 401 分支默认 `await window.showErrorMessage(..., 'Login')`——这是**带 item 的模态确认**（`MainThreadWindow.$showMessage` 有 items 时走 `IDialogService.confirm`，promise 入队等用户点击才 settle）。**窗口在后台时无人可点 → 永不 settle**。
+
+- **真实 bug（通宵零通知）**：`SwarmNotificationPoller` 每 tick 驱动 `dashboard`；Swarm ticket 过期后某次 tick 命中 401 → guard 在后台窗口弹出看不见的模态 → renderer `SwarmReviewNotificationContribution.refresh()` 的 `_running` 闩锁永久 true → 之后每个 tick 都在 `if (this._running) return` 处丢弃。19:49 最后一次通知后，新 review 到达 3.8 小时零通知；切回窗口手动刷新才恢复（手动路径不经过被卡的 poll）。
+- **修复**：`guard(label, op, fallback, { promptOnAuth: false })`——poll 驱动的 `dashboard` 传 false，401 只记日志 + 返回 fallback、**立即 settle**，闩锁在 `finally` 正常释放。交互命令（vote/transition/createReview 等用户当场能点确认的）保持默认 true 弹 Login。
+- **判别准则**：凡是「定时器 / 后台 tick / 无用户在场」驱动的 Swarm 调用，401 一律不弹模态；只有用户主动点按钮触发的才弹。给新的 poll/后台数据命令接线时照此传 `promptOnAuth: false`。
+- 回归单测：`__tests__/swarmCommands.test.ts`（dashboard 401 不调 showErrorMessage、返回 fallback、立即 settle）；renderer 侧 `SwarmReviewNotificationContribution.test.ts`（dashboard reject 后 `_running` 闩锁释放、下一 tick 照常通知）。
+
 ### ⚠️ 头号坑：renderer Action2 命令绝不能进扩展 `commands` 数组
 
 打开审核列表 / 打开某审核的命令（`swarm.openReviews` / `swarm.openReview`）**handler 在 renderer 的 Action2**（`swarmActions.ts`）。它们**绝不能**写进 `extensions/perforce/package.json` 的 `contributes.commands` 数组。

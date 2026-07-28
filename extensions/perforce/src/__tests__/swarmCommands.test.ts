@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   getTransitions: vi.fn(),
   obliterateReview: vi.fn(),
   printRevisionBytes: vi.fn(),
+  dashboard: vi.fn(),
+  showErrorMessage: vi.fn(),
 }))
 
 vi.mock('@universe-editor/extension-api', () => ({
@@ -22,7 +24,7 @@ vi.mock('@universe-editor/extension-api', () => ({
       hide: vi.fn(),
       dispose: vi.fn(),
     })),
-    showErrorMessage: vi.fn(),
+    showErrorMessage: mocks.showErrorMessage,
     showInformationMessage: vi.fn(),
     showWarningMessage: vi.fn(),
   },
@@ -37,10 +39,12 @@ vi.mock('../swarm/swarmClient.js', () => ({
   SwarmClient: class {
     getTransitions = mocks.getTransitions
     obliterateReview = mocks.obliterateReview
+    dashboard = mocks.dashboard
   },
 }))
 
 const { registerSwarmCommands } = await import('../swarm/swarmCommands.js')
+const { SwarmError, SwarmErrorCode } = await import('../swarm/swarmApi.js')
 
 const logger = {
   debug: vi.fn(),
@@ -56,6 +60,8 @@ describe('registerSwarmCommands review operations', () => {
     mocks.getTransitions.mockReset()
     mocks.obliterateReview.mockReset()
     mocks.printRevisionBytes.mockReset()
+    mocks.dashboard.mockReset()
+    mocks.showErrorMessage.mockReset()
     logger.debug.mockClear()
     logger.info.mockClear()
     logger.warn.mockClear()
@@ -123,5 +129,48 @@ describe('registerSwarmCommands review operations', () => {
       expect(result).toBe('')
     }
     expect(mocks.printRevisionBytes).not.toHaveBeenCalled()
+  })
+})
+
+// Repro for "后台时新 review 零通知": the notification poller drives `dashboard`
+// on a timer. When the Swarm ticket expires the client throws Unauthorized, and
+// the old guard() awaited a MODAL "Login?" confirm — which only settles on a user
+// click, impossible while the window sits in the background. The renderer's
+// serialized refresh() latch (`_running`) stayed true forever, so every later
+// poll tick was dropped and no review ever notified again. dashboard must skip
+// the auth prompt: log + return the fallback, settling immediately.
+describe('registerSwarmCommands dashboard 401 (poll-driven)', () => {
+  beforeEach(() => {
+    mocks.handlers.clear()
+    mocks.dashboard.mockReset()
+    mocks.showErrorMessage.mockReset()
+    logger.warn.mockClear()
+
+    registerSwarmCommands(
+      {
+        active: { user: 'songxiao', p4Service: {} },
+      } as never,
+      logger,
+    )
+  })
+
+  it('settles with the fallback and never opens the modal auth prompt on 401', async () => {
+    mocks.dashboard.mockRejectedValue(
+      new SwarmError(SwarmErrorCode.Unauthorized, 'Swarm unauthorized (401)', 401),
+    )
+
+    // Race against a timeout so the pre-fix behavior (awaiting the modal forever)
+    // fails deterministically instead of hanging the test run.
+    const result = await Promise.race([
+      mocks.handlers.get('perforce.swarm.dashboard')?.({ force: true }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('hung on modal')), 2000)),
+    ])
+
+    expect(result).toEqual({ needsAction: [], authored: [], participating: [] })
+    expect(mocks.showErrorMessage).not.toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalledWith(
+      'cmd',
+      'dashboard: unauthorized → skipping (poll-driven, no auth prompt)',
+    )
   })
 })

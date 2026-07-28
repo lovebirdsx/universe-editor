@@ -53,6 +53,10 @@ export interface SwarmHarness {
 }
 
 export type SwarmFixtures = {
+  /** Extra settings merged into the seeded settings.json before launch (option). */
+  swarmExtraSettings: Record<string, unknown>
+  /** Extra env vars for the launched Electron process (option). */
+  swarmExtraEnv: Record<string, string>
   swarmBackend: {
     readonly clientRoot: string
     readonly workspaceDir: string
@@ -84,12 +88,14 @@ async function waitForPortfile(portfile: string, timeoutMs = 10_000): Promise<st
 }
 
 export const test = base.extend<SwarmFixtures>({
+  swarmExtraSettings: [{}, { option: true }],
+  swarmExtraEnv: [{}, { option: true }],
   // Seed the fake p4 depot + workspace, start the fake Swarm server, and seed the
   // matching userData. Exposed as a first-class fixture so both electronApp (launch
   // wiring) and the `swarm` harness (request log / control endpoint) read it from
   // here — nothing is smuggled onto the ElectronApplication handle. The fake Swarm
   // server is torn down in this fixture's own teardown.
-  swarmBackend: async ({}, use) => {
+  swarmBackend: async ({ swarmExtraSettings }, use) => {
     // Temp dirs: user data, workspace, swarm portfile + request log.
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-swarm-'))
     const workspaceDir = mkdtempSync(join(tmpdir(), 'ue2-swarm-ws-'))
@@ -236,6 +242,7 @@ export const test = base.extend<SwarmFixtures>({
           // The seeded reviews use fixed 2023 timestamps; disable the time window
           // so the default 7-day limit doesn't filter them all out.
           'perforce.swarm.reviewWindowDays': 0,
+          ...swarmExtraSettings,
         },
         null,
         2,
@@ -261,7 +268,7 @@ export const test = base.extend<SwarmFixtures>({
       swarmProc.kill()
     }
   },
-  electronApp: async ({ swarmBackend }, use) => {
+  electronApp: async ({ swarmBackend, swarmExtraEnv }, use) => {
     const app = await launchApp({
       appRoot: APP_ROOT,
       mainEntry: MAIN_ENTRY,
@@ -272,6 +279,7 @@ export const test = base.extend<SwarmFixtures>({
         UNIVERSE_P4_PATH: FAKE_P4,
         UNIVERSE_P4_FAKE_STATE: swarmBackend.stateFile,
         UNIVERSE_SWARM_BASE_URL: swarmBackend.baseUrl,
+        ...swarmExtraEnv,
       },
     })
     await use(app)

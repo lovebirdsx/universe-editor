@@ -140,11 +140,18 @@ export function registerSwarmCommands(
 
   /** Run a Swarm operation, mapping a missing-config / unauthorized failure to a
    *  friendly toast and returning a fallback. Auth failures trigger a p4 login.
-   *  `label` names the operation so the panel reads as an action trace. */
+   *  `label` names the operation so the panel reads as an action trace.
+   *
+   *  `promptOnAuth` (default true): on 401, pop a modal "Login?" confirm. Callers
+   *  driven by a poll tick (the notification poller's dashboard) must pass false —
+   *  that confirm only settles on a user click, so a 401 hitting while the window
+   *  sits in the background would hang the renderer's serialized refresh() latch
+   *  forever and no further tick would ever run (the overnight-notification bug). */
   const guard = async <T>(
     label: string,
     op: (c: SwarmClient) => Promise<T>,
     fallback: T,
+    opts?: { promptOnAuth?: boolean },
   ): Promise<T> => {
     const c = await swarm()
     if (!c) {
@@ -162,6 +169,10 @@ export function registerSwarmCommands(
       return result
     } catch (err) {
       if (err instanceof SwarmError && err.code === SwarmErrorCode.Unauthorized) {
+        if (opts?.promptOnAuth === false) {
+          logger.warn('cmd', `${label}: unauthorized → skipping (poll-driven, no auth prompt)`)
+          return fallback
+        }
         logger.warn('cmd', `${label}: unauthorized → prompting p4 login`)
         const picked = await window.showErrorMessage(
           localize(
@@ -325,6 +336,10 @@ export function registerSwarmCommands(
           authored: [],
           participating: [],
         },
+        // Poll-driven (the notification poller pokes this on a timer): a 401 must
+        // never await the modal Login confirm — it can't be answered while the
+        // window is in the background and would wedge the renderer's poll latch.
+        { promptOnAuth: false },
       ),
     ),
 

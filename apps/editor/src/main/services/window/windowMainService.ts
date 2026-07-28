@@ -158,7 +158,12 @@ export class WindowMainService implements IWindowMainService {
         // Prod serves the shell on universe-app:// itself, so images are
         // same-origin and this stays on.
         ...(rendererUrl ? { webSecurity: false } : {}),
-        ...(e2eEnabled ? { backgroundThrottling: false } : {}),
+        // E2E opt-out: UNIVERSE_E2E_THROTTLE=1 keeps Chromium background throttling
+        // enabled (production behavior) so specs can exercise hidden/minimized
+        // windows — the default off would mask background-only bugs.
+        ...(e2eEnabled && !process.env['UNIVERSE_E2E_THROTTLE']
+          ? { backgroundThrottling: false }
+          : {}),
         additionalArguments: [
           `--ue-home-dir=${homedir()}`,
           ...(opts?.fileToOpen ? [`--ue-open-file=${opts.fileToOpen}`] : []),
