@@ -71,4 +71,20 @@ describe('SwarmNotificationPoller', () => {
     expect(mocks.executeCommand).toHaveBeenCalledTimes(2)
     poller.dispose()
   })
+
+  it('setEnabled(false) stops the driver; setEnabled(true) restarts it', async () => {
+    const poller = new SwarmNotificationPoller(async () => true, logger, 1000)
+    poller.setEnabled(true)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(mocks.executeCommand).toHaveBeenCalledTimes(1)
+
+    poller.setEnabled(false)
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(mocks.executeCommand).toHaveBeenCalledTimes(1)
+
+    poller.setEnabled(true)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(mocks.executeCommand).toHaveBeenCalledTimes(2)
+    poller.dispose()
+  })
 })

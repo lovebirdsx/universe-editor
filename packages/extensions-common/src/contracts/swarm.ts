@@ -365,6 +365,11 @@ export const SwarmCommands = {
    *  the status bar to display. The host cannot derive it itself — the author /
    *  approvable filters and the client-side ignore set live renderer-side. */
   setStatusCount: 'perforce.swarm.setStatusCount',
+  /** Renderer → host: push the `perforce.swarm.backgroundPoll.enabled` switch so
+   *  the host-side poll driver (SwarmNotificationPoller) starts/stops with it.
+   *  The host reads the setting once at activation; this keeps it in sync when
+   *  the user toggles mid-session (the host has no config-change event). */
+  setBackgroundPoll: 'perforce.swarm.setBackgroundPoll',
 } as const
 
 export type SwarmCommandId = (typeof SwarmCommands)[keyof typeof SwarmCommands]

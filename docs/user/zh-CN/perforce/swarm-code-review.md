@@ -39,7 +39,7 @@
 
 日常主入口是活动栏里的 **Swarm Reviews** 视图（图标为 Pull Request）。也可用命令面板运行 **"Show Swarm Reviews"** 打开。
 
-活动栏图标上会显示一个**数字角标**，即「Needs My Action」分组当前的审核数量（含自己发起但仍待处理的审核，不含已忽略的；不受关键词过滤框影响）。侧栏关闭时该数字也会由后台轮询持续刷新。
+活动栏图标上会显示一个**数字角标**，即「Needs My Action」分组当前的审核数量（含自己发起但仍待处理的审核，不含已忽略的；不受关键词过滤框影响）。开启后台轮询（`perforce.swarm.backgroundPoll.enabled`，**默认关闭**）后，侧栏关闭时该数字也会持续刷新；未开启时仅在打开视图或手动刷新时更新。
 
 视图按「行动看板」智能分组：
 
@@ -88,9 +88,9 @@
 
 ## 状态栏与通知
 
-底部状态栏左侧有一个 **Pull Request 图标 + 数字**，表示「需要我处理」的审核数；点击聚焦 Swarm Reviews 视图。数字与侧栏「Needs My Action」分组**严格同口径**（已应用发起者集合 / 「仅可审批」/ 已忽略过滤），随后台轮询刷新（默认 60 秒；`perforce.swarm.pollInterval` 设为秒数可改，最小 10 秒）。
+底部状态栏左侧有一个 **Pull Request 图标 + 数字**，表示「需要我处理」的审核数；点击聚焦 Swarm Reviews 视图。数字与侧栏「Needs My Action」分组**严格同口径**（已应用发起者集合 / 「仅可审批」/ 已忽略过滤），随后台轮询刷新（需开启 `perforce.swarm.backgroundPoll.enabled`，默认关闭；轮询间隔默认 60 秒，`perforce.swarm.pollInterval` 设为秒数可改，最小 10 秒）。
 
-**当有新的审核进入「需我处理」列表时会自动通知**：编辑器窗口未聚焦时弹出系统桌面通知（点击直接打开该审核）；窗口聚焦时改为右下角应用内通知（带「打开审核」按钮）。**应用内通知会一直保留，直到你点击「打开审核」或手动关闭（×）为止，不会几秒后自动消失**，避免被忽略。多个新审核同时出现时合并为一次通知。通知严格以侧栏列表**最终显示**的审核为准——已应用作者白名单 / 「仅可审批」/ 已忽略等过滤，已通知过的审核不会重复提醒。该通知可通过 `perforce.swarm.notifications.enabled`（默认开启）关闭。
+**当有新的审核进入「需我处理」列表时会自动通知**：编辑器窗口未聚焦时弹出系统桌面通知（点击直接打开该审核）；窗口聚焦时改为右下角应用内通知（带「打开审核」按钮）。**应用内通知会一直保留，直到你点击「打开审核」或手动关闭（×）为止，不会几秒后自动消失**，避免被忽略。多个新审核同时出现时合并为一次通知。通知严格以侧栏列表**最终显示**的审核为准——已应用作者白名单 / 「仅可审批」/ 已忽略等过滤，已通知过的审核不会重复提醒。通知由后台轮询驱动，需先把 `perforce.swarm.backgroundPoll.enabled`（默认关闭）打开；通知本身还可通过 `perforce.swarm.notifications.enabled`（默认开启）单独关闭。
 
 ## 发起审核
 
@@ -128,7 +128,7 @@
 
 审核详情标签页顶部是头部区（审核号、状态徽章、作者、参与者与投票），下面依次是操作按钮、版本选择、文件列表与评论面板。审核号 **Review #编号** 本身是网页链接，点击会用系统浏览器打开对应的 Swarm 页面。文件区右上角可以在**列表**和**目录树**两种形式间切换：列表会在文件名后显示目录，目录树会按路径分组并支持折叠；显示形式会全局记忆，重启编辑器后继续沿用。此外，该标签页当前的**版本选择（对比版本 / 目标版本）、文件列表滚动位置与未提交的评论草稿**会在切换到其它标签再切回时保留，避免每次回到审核都从头开始（这部分记忆仅在本次会话内有效，重启后重新加载）。
 
-打开的审核详情会每 **1 分钟**在后台刷新一次详情、评论和当前版本文件列表。需要立即获取服务器最新数据时，点击标题栏右侧的**刷新**图标；手动刷新会绕过短期缓存。刷新期间会保留当前选择的历史版本，不会强制跳回最新版本。
+打开的审核详情会每 **1 分钟**在后台刷新一次详情、评论和当前版本文件列表（可在设置里把 `perforce.swarm.autoRefresh.enabled` 设为 `false` 关闭，改动即时生效）。需要立即获取服务器最新数据时，点击标题栏右侧的**刷新**图标；手动刷新不受该开关影响，且会绕过短期缓存。刷新期间会保留当前选择的历史版本，不会强制跳回最新版本。
 
 - **投票**：`Vote Up` / `Vote Down` / `Clear Vote`，绑定当前所选版本，提交后刷新。
 - **改状态**：编辑器**只显示服务器允许的合法迁移**（自动处理「作者不能自批」「moderator 才能 approve」等权限，无需你判断）。点对应按钮即迁移状态。
@@ -176,14 +176,16 @@ universe-editor://swarm/review/1234
 | `perforce.swarm.enabled`      | `true`                       | 是否开启 Swarm 集成。                                                                                             |
 | `perforce.swarm.url`          | `http://swarm.aki.kuro.com/` | Swarm 服务器 URL。**凭据绝不进配置**。                                                                            |
 | `perforce.swarm.apiVersion`   | `v9`                         | Swarm REST API 版本。`v9` 端点覆盖最全（含 action 看板）；仅当服务器版本要求时改 `v11`。                          |
-| `perforce.swarm.pollInterval` | `0`                          | 后台轮询看板的秒数（驱动新审核通知、Activity Bar 角标与状态栏计数），`0` 用默认 60 秒，最小 10 秒。                     |
+| `perforce.swarm.backgroundPoll.enabled` | `false`        | 是否在后台定时轮询 Swarm 看板（驱动新审核通知、Activity Bar 角标与状态栏计数）。默认关闭——审核列表在打开视图或手动刷新时仍会更新。改动即时生效。 |
+| `perforce.swarm.pollInterval` | `0`                          | 后台轮询看板的秒数（仅在 `perforce.swarm.backgroundPoll.enabled` 开启时生效），`0` 用默认 60 秒，最小 10 秒。                     |
 | `perforce.swarm.reviewWindowDays` | `7`                      | Swarm 审核视图仅列出最近这么多天内有更新的审核；超过该时间的已忽略审核会自动从「Ignored」列表移除。`0` 表示不限时间、显示全部。                 |
 | `perforce.swarm.authMode`     | `ticket`                     | 认证方式：`ticket`（复用 p4 登录态）。                                                                            |
 | `perforce.swarm.trace`        | `false`                      | 是否记录详细诊断（请求体、查询参数、重试、耗时、错误响应体）到 **Swarm** 输出通道。凭据绝不记录。排查问题时打开。 |
 | `perforce.swarm.needsActionAuthors`        | `[]`             | 「Needs My Action」只显示发起者在此集合中的审核；空集不过滤。由侧栏过滤菜单维护。 |
 | `perforce.swarm.needsActionApprovableOnly` | `false`          | 「Needs My Action」只显示当前用户可批准的审核。由侧栏过滤菜单维护。 |
 | `perforce.swarm.authoredHideApproved`      | `true`           | 「Authored by Me」隐藏已批准的审核。由侧栏图标开关维护。 |
-| `perforce.swarm.notifications.enabled`     | `true`           | 有新审核进入「Needs My Action」时通知：窗口未聚焦弹系统桌面通知，聚焦时改为应用内通知。 |
+| `perforce.swarm.notifications.enabled`     | `true`           | 有新审核进入「Needs My Action」时通知：窗口未聚焦弹系统桌面通知，聚焦时改为应用内通知。需先开启 `perforce.swarm.backgroundPoll.enabled`。 |
+| `perforce.swarm.autoRefresh.enabled`       | `true`           | 打开的审核详情页是否每 1 分钟自动刷新详情、评论与文件列表；关闭后仍可用标题栏刷新按钮手动刷新。改动即时生效。 |
 | `perforce.swarm.inlineComments.enabled`    | `false`          | 是否在审核 diff 上叠加 GitHub PR 式行内评论；关闭时 diff 只显示代码。改动即时生效。 |
 | `perforce.cache.enabled`      | `true`                       | 是否缓存 p4 与 Swarm 查询结果以减少服务器往返；Swarm 写操作和手动刷新会立即失效相关缓存。                         |
 

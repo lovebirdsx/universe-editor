@@ -16,6 +16,10 @@
 import { expect, test } from '../fixtures/swarmApp.js'
 
 test.describe('@p1 swarm review notification', () => {
+  // The background poll is opt-in (`perforce.swarm.backgroundPoll.enabled`,
+  // default off) — enable it for this journey.
+  test.use({ swarmExtraSettings: { 'perforce.swarm.backgroundPoll.enabled': true } })
+
   test('background poll notifies about a new Needs My Action review and drives the badge', async ({
     page,
     swarm,

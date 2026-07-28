@@ -55,6 +55,14 @@ export class SwarmConfigurationContribution extends Disposable implements IWorkb
               'Show an OS desktop notification when a new review enters "Needs My Action" while the editor window is not focused. Clicking the notification opens the review.',
             ),
           },
+          'perforce.swarm.autoRefresh.enabled': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.swarm.autoRefresh.enabled',
+              'Automatically refresh an open Swarm review (details, comments, file list) every minute. Manual refresh via the title-bar button always works.',
+            ),
+          },
           'perforce.swarm.inlineComments.enabled': {
             type: 'boolean',
             default: false,

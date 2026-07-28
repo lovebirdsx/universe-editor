@@ -50,6 +50,7 @@ const Cmd = {
   getFileContentBytes: 'perforce.swarm.getFileContentBytes',
   describeVersion: 'perforce.swarm.describeVersion',
   setStatusCount: 'perforce.swarm.setStatusCount',
+  setBackgroundPoll: 'perforce.swarm.setBackgroundPoll',
 } as const
 
 /** Compile-time drift guard (see {@link Cmd}): fails if the wire contract gains or
@@ -698,8 +699,9 @@ export function registerSwarmCommands(
   // notifications never fired overnight. Each tick just pokes the renderer — whose
   // refresh also pushes the status-bar count back — so this one pipeline keeps
   // notifications, the Activity Bar badge and the status bar in the sidebar's
-  // scope. `perforce.swarm.pollInterval` (seconds, 0 = default 60s, floor 10s)
-  // overrides the tick interval.
+  // scope. The whole driver is gated on `perforce.swarm.backgroundPoll.enabled`
+  // (default off); `perforce.swarm.pollInterval` (seconds, 0 = default 60s,
+  // floor 10s) overrides the tick interval.
   const notificationPoller = new SwarmNotificationPoller(
     async () => (await readSwarmConfig()) !== undefined,
     logger,
@@ -712,8 +714,18 @@ export function registerSwarmCommands(
     if (Number.isFinite(pollInterval) && pollInterval > 0) {
       notificationPoller.setIntervalMs(Math.max(10, pollInterval) * 1000)
     }
-    notificationPoller.start()
+    if ((await cfg.get('swarm.backgroundPoll.enabled', false)) as boolean) {
+      notificationPoller.start()
+    }
   })()
+
+  // The renderer owns the switch's live state (the host has no config-change
+  // event): it pushes the current value on startup and on every toggle.
+  subs.push(
+    commands.registerCommand(Cmd.setBackgroundPoll, (enabled: unknown) => {
+      notificationPoller.setEnabled(enabled === true)
+    }),
+  )
 
   // The renderer pushes the sidebar group-scope needs-action count; the status
   // bar displays it verbatim (deriving it host-side would drop the filters).

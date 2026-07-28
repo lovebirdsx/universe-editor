@@ -32,6 +32,8 @@
 - **读取①`SwarmActivityContribution`**（`ActivityBarBadgeContributions.ts`，AfterRestore 注册）：autorun 读计数 → `IActivityService.showActivity('workbench.view.swarm', {count})`，0 时撤角标。ActivityBar 已按容器通用渲染 `activitybar-badge-<containerId>` testid，无需改渲染层。
 - **读取②底部状态栏**（`swarmStatusBar.ts`）：**被动显示 renderer 推送值**——同一 autorun 里 `executeCommand(SwarmCommands.setStatusCount, count)` 推给 host（先 `CommandsRegistry.getCommand` 判存在，perforce 缺席不刷 warn）。**host 绝不自己从 dashboard 推计数**：author 白名单/approvable/ignore 全在 renderer，host 自算必然分叉（真实 bug：侧栏 0、状态栏 30）。`SwarmStatusBarController` 只剩 `setCount` + `refresh()`（可用性 show/hide），不再有 startPolling；`perforce.swarm.pollInterval`（>0 秒，floor 10s）改作 `SwarmNotificationPoller` 的 tick 间隔，一条管线同时驱动通知/角标/状态栏。
 
+**后台轮询总开关 `perforce.swarm.backgroundPoll.enabled`（默认关）**：整条轮询管线（host `SwarmNotificationPoller` tick + renderer `SwarmReviewNotificationContribution` 的 60s backstop/初始 prime）都受它门控。renderer 侧 `_syncPolling()` 读配置即时启停并订阅变更；host 无 config-change 事件，故 renderer 在启动与每次变更时经 `SwarmCommands.setBackgroundPoll` 把开关推给 host（host 激活时也自读一次配置兜底）。关闭瞬间 `swarmNeedsActionCount.set(0)` 清掉残留角标。两个相关 e2e spec（swarmReviewNotification*/）必须用 `swarmExtraSettings` 显式开启。
+
 **泄漏测试坑**：该计数 observable 是模块单例，前一个测试未 dispose 的 contribution 会在后一个（装 DisposableTracker 的）测试里继续响应 `.set()` 产生无父链 badge handle → 误报泄漏。非泄漏断言的测试用完必须 `store.dispose()`。
 
 ### Ignore / Unignore + 按 ID 打开（纯渲染层，不碰 host/API）

@@ -7,6 +7,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
+  Emitter,
   ICommandService,
   IConfigurationService,
   IDialogService,
@@ -17,6 +18,7 @@ import {
   ServiceCollection,
   URI,
   type ICommand,
+  type IConfigurationChangeEvent,
 } from '@universe-editor/platform'
 import {
   SwarmCommands,
@@ -113,14 +115,16 @@ function registerCommand(id: string, handler: ICommand['handler']) {
   return CommandsRegistry.registerCommand({ id, handler })
 }
 
-function renderReview() {
+function renderReview(configValues: Record<string, unknown> = {}) {
   const services = new ServiceCollection()
   const commands = new RegistryCommandService()
   services.set(ICommandService, commands as unknown as ICommandService)
+  const configChange = new Emitter<IConfigurationChangeEvent>()
   services.set(IConfigurationService, {
     _serviceBrand: undefined,
     get: (key: string) =>
-      key === 'perforce.swarm.url' ? 'https://swarm.example.com///' : undefined,
+      key === 'perforce.swarm.url' ? 'https://swarm.example.com///' : configValues[key],
+    onDidChangeConfiguration: configChange.event,
   } as unknown as IConfigurationService)
   const dialog = {
     _serviceBrand: undefined,
@@ -146,7 +150,7 @@ function renderReview() {
       <SwarmReviewEditor input={input} />
     </ServicesContext.Provider>,
   )
-  return { ...result, commands, dialog, editorService, input, opener }
+  return { ...result, commands, dialog, editorService, input, opener, configChange }
 }
 
 beforeEach(() => {
@@ -514,6 +518,71 @@ describe('SwarmReviewEditor restore', () => {
       commands.executeCommand.mockClear()
       await act(async () => {
         await vi.advanceTimersByTimeAsync(60_000)
+      })
+      expect(commands.executeCommand).not.toHaveBeenCalled()
+    } finally {
+      describeVersion.dispose()
+      listComments.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('does not auto-refresh when perforce.swarm.autoRefresh.enabled is false', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const listComments = registerCommand(SwarmCommands.listComments, () => [])
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const { commands } = renderReview({ 'perforce.swarm.autoRefresh.enabled': false })
+    try {
+      await act(async () => Promise.resolve())
+      commands.executeCommand.mockClear()
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3 * 60_000)
+      })
+      expect(commands.executeCommand).not.toHaveBeenCalled()
+
+      // Manual refresh is unaffected by the switch.
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh review' }))
+      await act(async () => Promise.resolve())
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getReview, {
+        reviewId: '1001',
+        force: true,
+      })
+    } finally {
+      describeVersion.dispose()
+      listComments.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('stops auto-refreshing when the switch is turned off mid-session', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const listComments = registerCommand(SwarmCommands.listComments, () => [])
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const configValues: Record<string, unknown> = {}
+    const { commands, configChange } = renderReview(configValues)
+    try {
+      await act(async () => Promise.resolve())
+      commands.executeCommand.mockClear()
+
+      // Enabled by default: the minute tick refreshes.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000)
+      })
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getReview, {
+        reviewId: '1001',
+        force: true,
+      })
+
+      configValues['perforce.swarm.autoRefresh.enabled'] = false
+      await act(async () => {
+        configChange.fire({
+          affectsConfiguration: (k) => k === 'perforce.swarm.autoRefresh.enabled',
+        })
+      })
+      commands.executeCommand.mockClear()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3 * 60_000)
       })
       expect(commands.executeCommand).not.toHaveBeenCalled()
     } finally {

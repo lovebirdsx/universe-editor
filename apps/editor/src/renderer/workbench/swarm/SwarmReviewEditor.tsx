@@ -59,6 +59,10 @@ import styles from './SwarmReviewEditor.module.css'
 const FILES_VIEW_MODE_STORAGE_KEY = 'swarm.reviewFiles.viewMode'
 const REVIEW_REFRESH_INTERVAL_MS = 60_000
 
+/** When off, the open review no longer re-fetches on the minute timer; the
+ *  title-bar manual refresh button is unaffected. */
+const AUTO_REFRESH_CONFIG_KEY = 'perforce.swarm.autoRefresh.enabled'
+
 /** Custom-editor viewType of the bundled Excel viewer/diff (mirrors the local
  *  Perforce spreadsheet diff in the perforce extension's `client.ts`). */
 const SPREADSHEET_VIEW_TYPE = 'universe.excel'
@@ -131,6 +135,18 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   const filesViewModeRestoredRef = useRef(false)
   const [filesRefreshGeneration, setFilesRefreshGeneration] = useState(0)
   const [ignored, setIgnored] = useState(() => swarmIgnoreStore.isIgnored(reviewId))
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(
+    () => configuration.get<boolean>(AUTO_REFRESH_CONFIG_KEY) ?? true,
+  )
+
+  useEffect(() => {
+    const sub = configuration.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration(AUTO_REFRESH_CONFIG_KEY)) {
+        setAutoRefreshEnabled(configuration.get<boolean>(AUTO_REFRESH_CONFIG_KEY) ?? true)
+      }
+    })
+    return () => sub.dispose()
+  }, [configuration])
 
   const reviewUrl = buildSwarmReviewUrl(configuration.get<string>('perforce.swarm.url'), reviewId)
 
@@ -541,9 +557,10 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   }, [load, loadComments])
 
   useEffect(() => {
+    if (!autoRefreshEnabled) return
     const timer = setInterval(refresh, REVIEW_REFRESH_INTERVAL_MS)
     return () => clearInterval(timer)
-  }, [refresh])
+  }, [refresh, autoRefreshEnabled])
 
   useEffect(() => {
     let active = true

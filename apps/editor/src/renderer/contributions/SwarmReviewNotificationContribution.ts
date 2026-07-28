@@ -48,6 +48,11 @@ import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 
 const POLL_INTERVAL_MS = 60_000
 
+/** Master switch for the whole background poll (badge + notifications + status
+ *  bar count). Off by default: the reviews list still refreshes on open and via
+ *  its manual Refresh button, but nothing polls while the view sits closed. */
+const BACKGROUND_POLL_CONFIG_KEY = 'perforce.swarm.backgroundPoll.enabled'
+
 export class SwarmReviewNotificationContribution
   extends Disposable
   implements IWorkbenchContribution
@@ -82,16 +87,38 @@ export class SwarmReviewNotificationContribution
     // is harmless.
     setSwarmNotificationTickHandler(() => this.refresh())
 
-    this._timer = setInterval(() => void this.refresh(), POLL_INTERVAL_MS)
     this._register({ dispose: () => this._stop() })
+    this._register(
+      this._config.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration(BACKGROUND_POLL_CONFIG_KEY)) this._syncPolling()
+      }),
+    )
     // E2E: let a spec drive one poll synchronously (the 60s timer is far too slow
     // for a test, and the window is focused so the OS toast is gated away anyway).
     if (typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true) {
       swarmNotificationE2E.driveRefresh = () => this.refresh()
     }
-    // Prime + start immediately so a review that appeared before launch doesn't
-    // notify on first paint, but a genuinely new one during this session does.
-    void this.refresh()
+    this._syncPolling()
+  }
+
+  /** Start/stop the renderer backstop timer + prime, and push the switch to the
+   *  host-side poll driver (which has no config-change event of its own). */
+  private _syncPolling(): void {
+    const enabled = this._pollEnabled()
+    if (enabled && !this._timer) {
+      this._timer = setInterval(() => void this.refresh(), POLL_INTERVAL_MS)
+      // Prime + start immediately so a review that appeared before launch doesn't
+      // notify on first paint, but a genuinely new one during this session does.
+      void this.refresh()
+    } else if (!enabled && this._timer) {
+      clearInterval(this._timer)
+      this._timer = undefined
+      // Nothing will refresh the badge while polling is off — clear the stale count.
+      swarmNeedsActionCount.set(0)
+    }
+    if (CommandsRegistry.getCommand(SwarmCommands.setBackgroundPoll)) {
+      void this._commands.executeCommand(SwarmCommands.setBackgroundPoll, enabled).catch(() => {})
+    }
   }
 
   private _stop(): void {
@@ -106,10 +133,15 @@ export class SwarmReviewNotificationContribution
     return this._config.get<boolean>('perforce.swarm.notifications.enabled') ?? true
   }
 
+  private _pollEnabled(): boolean {
+    return this._config.get<boolean>(BACKGROUND_POLL_CONFIG_KEY) ?? false
+  }
+
   /** Re-poll the dashboard and notify on newly-actionable reviews. Public so a test
    *  can drive it deterministically. Serialized: overlapping timer ticks are dropped. */
   async refresh(): Promise<void> {
     if (this._running) return
+    if (!this._pollEnabled()) return
     // On a workspace without Perforce the command never registers; polling it
     // would only spam "command not found" every interval.
     if (!CommandsRegistry.getCommand(SwarmCommands.dashboard)) return

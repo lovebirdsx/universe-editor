@@ -685,6 +685,11 @@
           "minimum": 0,
           "description": "%perforce.config.swarm.pollInterval.description%"
         },
+        "perforce.swarm.backgroundPoll.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "%perforce.config.swarm.backgroundPoll.enabled.description%"
+        },
         "perforce.swarm.reviewWindowDays": {
           "type": "number",
           "default": 7,

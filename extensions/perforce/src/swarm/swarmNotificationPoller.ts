@@ -42,6 +42,18 @@ export class SwarmNotificationPoller {
     this._logger?.info('status', `poll driver every ${Math.round(this._intervalMs / 1000)}s`)
   }
 
+  /** Mirror of the `perforce.swarm.backgroundPoll.enabled` switch (default off):
+   *  starts the driver when turned on, stops it when turned off. Idempotent. */
+  setEnabled(enabled: boolean): void {
+    if (enabled) {
+      this.start()
+    } else if (this._timer) {
+      clearInterval(this._timer)
+      this._timer = undefined
+      this._logger?.info('status', 'poll driver stopped (backgroundPoll disabled)')
+    }
+  }
+
   private async _tick(): Promise<void> {
     if (this._disposed) return
     try {

@@ -15,8 +15,14 @@
 import { expect, test } from '../fixtures/swarmApp.js'
 
 test.describe('@p1 swarm host-driven poll tick', () => {
-  // 10s = the setting's floor; the renderer backstop stays at 60s.
-  test.use({ swarmExtraSettings: { 'perforce.swarm.pollInterval': 10 } })
+  // 10s = the setting's floor; the renderer backstop stays at 60s. The background
+  // poll itself is opt-in (default off), so enable it here.
+  test.use({
+    swarmExtraSettings: {
+      'perforce.swarm.pollInterval': 10,
+      'perforce.swarm.backgroundPoll.enabled': true,
+    },
+  })
 
   test('host poll tick primes the baseline and notifies about a new review, with no probe-driven polls', async ({
     page,

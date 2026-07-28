@@ -80,6 +80,10 @@ async function freshModules() {
 
 interface SetupOpts {
   enabled?: boolean
+  /** `perforce.swarm.backgroundPoll.enabled` — the master poll switch. Defaults to
+   *  true here so the pre-switch tests keep exercising the poll; the real default
+   *  (unset key) is covered by dedicated tests below. */
+  pollEnabled?: boolean
   clicked?: boolean
   /** Whether the OS toast was actually displayed (false = gated: window focused
    *  or notifications unsupported). Defaults to true. */
@@ -140,9 +144,14 @@ async function setup(opts: SetupOpts = {}) {
   const notification = { notify: inAppNotify, dismiss } as never
   const configValues: Record<string, unknown> = {
     'perforce.swarm.notifications.enabled': opts.enabled ?? true,
+    'perforce.swarm.backgroundPoll.enabled': opts.pollEnabled ?? true,
     ...opts.config,
   }
-  const config = { get: (key: string) => configValues[key] } as never
+  const configChange = new Emitter<{ affectsConfiguration(key: string): boolean }>()
+  const config = {
+    get: (key: string) => configValues[key],
+    onDidChangeConfiguration: configChange.event,
+  } as never
   const workspace = {
     current: opts.workspaceName !== undefined ? { name: opts.workspaceName } : null,
   } as never
@@ -166,6 +175,8 @@ async function setup(opts: SetupOpts = {}) {
     executeCommand,
     tick,
     viewState,
+    configValues,
+    configChange,
     dispose: () => {
       instance.dispose()
       dashboardCommand.dispose()
@@ -187,7 +198,7 @@ describe('SwarmReviewNotificationContribution', () => {
     const instance = new contrib.SwarmReviewNotificationContribution(
       { executeCommand } as never,
       { notify: vi.fn() } as never,
-      { get: () => true } as never,
+      { get: () => true, onDidChangeConfiguration: new Emitter<void>().event } as never,
       fakeStorage(),
       { current: null } as never,
       { notify: vi.fn(), dismiss: vi.fn() } as never,
@@ -196,6 +207,83 @@ describe('SwarmReviewNotificationContribution', () => {
     await instance.refresh()
     expect(executeCommand).not.toHaveBeenCalled()
     instance.dispose()
+  })
+
+  it('does not poll at all while perforce.swarm.backgroundPoll.enabled is off (the default)', async () => {
+    const t = await setup({ pollEnabled: false, initialNeedsAction: [review('1')] })
+    // Neither the constructor's prime nor an explicit refresh touches the dashboard.
+    await t.refresh()
+    expect(t.executeCommand.mock.calls.some((c) => c[0] === 'perforce.swarm.dashboard')).toBe(false)
+    expect(t.viewState.swarmNeedsActionCount.observable.get()).toBe(0)
+    t.dispose()
+  })
+
+  it('starts polling when the background-poll switch is turned on mid-session', async () => {
+    const t = await setup({ pollEnabled: false, initialNeedsAction: [review('1')] })
+    expect(t.executeCommand.mock.calls.some((c) => c[0] === 'perforce.swarm.dashboard')).toBe(false)
+
+    t.configValues['perforce.swarm.backgroundPoll.enabled'] = true
+    t.configChange.fire({
+      affectsConfiguration: (k) => k === 'perforce.swarm.backgroundPoll.enabled',
+    })
+    await flush()
+
+    expect(t.executeCommand.mock.calls.some((c) => c[0] === 'perforce.swarm.dashboard')).toBe(true)
+    // Priming baseline only — the seeded review must not notify.
+    expect(t.notify).not.toHaveBeenCalled()
+    expect(t.viewState.swarmNeedsActionCount.observable.get()).toBe(1)
+    t.dispose()
+  })
+
+  it('stops polling and clears the badge when the switch is turned off mid-session', async () => {
+    const t = await setup({ initialNeedsAction: [review('1')] })
+    expect(t.viewState.swarmNeedsActionCount.observable.get()).toBe(1)
+
+    t.configValues['perforce.swarm.backgroundPoll.enabled'] = false
+    t.configChange.fire({
+      affectsConfiguration: (k) => k === 'perforce.swarm.backgroundPoll.enabled',
+    })
+    await flush()
+
+    // Stale badge cleared; further refreshes (timer / host tick) are inert.
+    expect(t.viewState.swarmNeedsActionCount.observable.get()).toBe(0)
+    t.executeCommand.mockClear()
+    await t.refresh()
+    expect(t.executeCommand).not.toHaveBeenCalled()
+    t.dispose()
+  })
+
+  it('pushes the switch to the host poll driver when setBackgroundPoll is registered', async () => {
+    const { contrib, platform } = await freshModules()
+    const setBackgroundPoll = vi.fn()
+    const dashboardCmd = platform.CommandsRegistry.registerCommand(
+      'perforce.swarm.dashboard',
+      () => undefined,
+    )
+    const pushCmd = platform.CommandsRegistry.registerCommand(
+      'perforce.swarm.setBackgroundPoll',
+      setBackgroundPoll,
+    )
+    const executeCommand = vi.fn(async (id: string, ...args: unknown[]): Promise<unknown> => {
+      if (id === 'perforce.swarm.setBackgroundPoll') return setBackgroundPoll(...args)
+      return undefined
+    })
+    const instance = new contrib.SwarmReviewNotificationContribution(
+      { executeCommand } as never,
+      { notify: vi.fn() } as never,
+      {
+        get: (key: string) => (key === 'perforce.swarm.backgroundPoll.enabled' ? true : undefined),
+        onDidChangeConfiguration: new Emitter<void>().event,
+      } as never,
+      fakeStorage(),
+      { current: null } as never,
+      { notify: vi.fn(), dismiss: vi.fn() } as never,
+    )
+    await flush()
+    expect(setBackgroundPoll).toHaveBeenCalledWith(true)
+    instance.dispose()
+    dashboardCmd.dispose()
+    pushCmd.dispose()
   })
 
   it('does not notify for reviews already present at launch (priming poll)', async () => {
