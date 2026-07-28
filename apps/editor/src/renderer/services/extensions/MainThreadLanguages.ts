@@ -70,6 +70,19 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
     selector: DocumentSelector,
     metadata?: ILanguageProviderMetadata,
   ): Promise<void> {
+    // A dying host's in-flight frames can dispatch AFTER this connection was
+    // torn down (stop() is fire-and-forget, so a frame already read off the
+    // channel lands here post-dispose). Drop it instead of building a dozen
+    // Monaco registrations for a dead host; the DisposableMap guard in
+    // lifecycle.ts is only the last-resort backstop.
+    if (this._store.isDisposed) {
+      console.warn(
+        new Error(
+          `[MainThreadLanguages] $registerProvider(${type}) arrived after dispose — dropped`,
+        ).stack,
+      )
+      return Promise.resolve()
+    }
     this._providers.set(handle, this._createProvider(handle, type, selector, metadata))
     return Promise.resolve()
   }

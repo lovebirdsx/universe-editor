@@ -487,6 +487,23 @@ export class DisposableMap<K, V extends IDisposable = IDisposable> implements ID
 
   /** Store `value` under `key`, disposing any value previously held at `key`. */
   set(key: K, value: V): void {
+    if (this._isDisposed) {
+      // A late write can race teardown — e.g. a dying extension host's in-flight
+      // $registerProvider frame dispatching after the connection's map was
+      // disposed. Parenting to a dead map would sever the tracker's root chain
+      // and report a leak (which the e2e leak gate turns into a failure), so
+      // dispose the value instead; disposables here are idempotent, and a value
+      // that never got registered is safe to dispose.
+      if (!DisposableStore.DISABLE_DISPOSED_WARNING) {
+        console.warn(
+          new Error(
+            'Trying to set a disposable on a DisposableMap that has already been disposed of. Disposing the value instead.',
+          ).stack,
+        )
+      }
+      value.dispose()
+      return
+    }
     this._store.get(key)?.dispose()
     setParentOfDisposable(value, this)
     this._store.set(key, value)

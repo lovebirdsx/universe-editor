@@ -544,7 +544,13 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     // registers its SCM provider. Wait for any in-flight start to settle first so the
     // relaunch sees the freshly-connected host.
     await Promise.allSettled([this._starting])
-    if (this._conn) await this._restart('workspace')
+    // Skip the restart when the live host is already pinned to the current
+    // workspace — e.g. the app was launched with the folder as a positional arg,
+    // so the first host spawned with it and the boot-time workspace event is a
+    // no-op. Restarting anyway would needlessly kill + respawn tsserver.
+    if (this._conn && this._conn.workspaceRoot !== this._workspace.current?.folder.fsPath) {
+      await this._restart('workspace')
+    }
   }
 
   /** Stop (if alive) and relaunch the host, then re-index and re-run startup activation. */

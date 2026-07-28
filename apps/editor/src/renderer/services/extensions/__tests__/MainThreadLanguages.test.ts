@@ -3,7 +3,7 @@
  *  ILanguageFeaturesService and tearing them down on dispose.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DisposableStore,
   DisposableTracker,
@@ -40,6 +40,14 @@ function fakeLanguageFeatures(): {
     registerDocumentSymbolProvider: register,
     registerRenameProvider: register,
     registerWorkspaceSymbolProvider: register,
+    registerFoldingRangeProvider: register,
+    registerDocumentLinkProvider: register,
+    registerDocumentHighlightProvider: register,
+    registerSelectionRangeProvider: register,
+    registerCodeActionProvider: register,
+    registerDocumentFormattingEditProvider: register,
+    registerDocumentSemanticTokensProvider: register,
+    registerCodeLensProvider: register,
   } as unknown as ILanguageFeaturesService
   return { service, disposed: () => disposedCount, live: () => created - disposedCount }
 }
@@ -83,6 +91,26 @@ describe('MainThreadLanguages', () => {
 
     mt.dispose()
   })
+
+  it('drops a late $registerProvider arriving after dispose (dying-host race)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const lf = fakeLanguageFeatures()
+    const mt = new MainThreadLanguages({} as IExtHostLanguages, lf.service)
+
+    void mt.$registerProvider(1, 'definition', ['typescript'])
+    expect(lf.live()).toBe(1)
+
+    mt.dispose()
+    expect(lf.live()).toBe(0)
+
+    // The dying host's in-flight frame lands post-dispose: no new Monaco
+    // registrations are created, nothing is resurrected.
+    void mt.$registerProvider(2, 'references', ['typescript'])
+    expect(lf.live()).toBe(0)
+    expect(lf.disposed()).toBe(1)
+    expect(warn).toHaveBeenCalledOnce()
+    warn.mockRestore()
+  })
 })
 
 /**
@@ -118,5 +146,19 @@ describe('MainThreadLanguages — leak tracking', () => {
     // singleton-rooted services: nothing should be reported as leaking.
     const report = tracker.computeLeakingDisposables()
     expect(report).toBeUndefined()
+  })
+
+  it('a late $registerProvider after dispose leaves no leak', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const root = markAsSingleton(new DisposableStore())
+    const lf = fakeLanguageFeatures()
+    const mt = root.add(new MainThreadLanguages({} as IExtHostLanguages, lf.service))
+
+    void mt.$registerProvider(1, 'definition', ['typescript'])
+    mt.dispose()
+    void mt.$registerProvider(2, 'codeLens', ['typescript'])
+
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+    vi.mocked(console.warn).mockRestore()
   })
 })

@@ -107,7 +107,8 @@ export class HostConnection extends Disposable {
   constructor(
     readonly kind: ExtHostKind,
     readonly handle: string,
-    workspaceRoot: string | undefined,
+    /** Workspace folder this host was pinned to at spawn (fsPath), if any. */
+    readonly workspaceRoot: string | undefined,
     deps: HostConnectionDeps,
   ) {
     super()

@@ -53,6 +53,8 @@ harness 的启动 fixture 接收 `extensions: string[]`(扩展 id allowlist),拼
 
 两套 fixture 都统一：pin `workbench.language=en-US`（断言确定性）、`update.mode=manual`（更新状态机默认 idle）、标记 `welcome.agentOnboarding.seen=true`（默认布局确定）。要覆盖首启引导，自启动一个未 seed 的实例（见 `smoke.agentOnboarding.spec.ts`）。
 
+**spec 需要 workspace 文件时，用 `workspaceSeeder` 在 launch 时 pin workspace，不要 boot 后 `openWorkspace`**：冷启 fixture 支持 option fixture `test.use({ workspaceSeeder: { seed(dir) { writeFileSync(join(dir, 'a.md'), ...) } } })`，fixture 在 per-test tmp 目录跑完 seed 后把目录作为位置参数随 app 一起启动（`openWindowForFolder`），测试体从 `launchWorkspace.file('a.md')` 取路径。启动即 pin 让 extension host 保持单代——boot 后 `openWorkspace` 会同回合触发 workspace re-pin + trust-flip revoke **两次 host 重启**，2 workers 争抢时慢重启正是 LSP provider poll 超时与 dying-host Disposable 泄漏的竞态窗口（案例见 skill `fix-ci-e2e-flake`）。注意 seeder 必须包成 `{ seed(dir) {...} }` 对象——Playwright 会把 `test.use` 里的裸函数当 fixture override 调用（类型层 `TestFixtureValue` 直接 `Exclude<R, Function>`），与 p4Seeds 的裸数组坑同类。仅冷启 fixture 支持（每 test 一个 app 才能各带各的目录）；shared fixture 传 seeder 会直接抛错。
+
 ## PO 分层
 
 `WorkbenchPO`（`pages/WorkbenchPO.js`）是入口，聚合 `activityBar / sideBar / statusBar / quickInput / editor / panel` 六个子 PO，外加一批**直通探针的快捷方法**：`runCommand` / `getContextKey` / `lifecyclePhase` / `openWorkspace` / `getActiveEditorUri` / `getEditorGroupCount` / `waitForRestored` …。

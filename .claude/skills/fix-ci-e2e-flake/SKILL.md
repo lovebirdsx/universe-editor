@@ -42,7 +42,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 某提交后多 spec 同红形态各异=`git show` 看时序变更波及面 → 案例 23；补了 `.catch` 仍挂=永久 pending → 案例 24
 - `extension host may only execute _workbench.* commands not "<ext.cmd>"`=激活竞态 → 案例 35
 - 拖拽 spec received 恒 0（稳定卡值）=drop 在 Monaco 就位前 fire → 案例 36
-- workspace 切换后紧接的命令 received 恒初值=host 异步 re-pin 窗口 → 案例 37
+- workspace 切换后紧接的命令 received 恒初值=host 异步 re-pin 窗口 → 案例 37；boot 后 `openWorkspace` 的 LSP spec provider poll 恒 0 / teardown 报 Disposable 泄漏（栈在 `_createProvider`）=双重启竞态，用 `workspaceSeeder` launch pin workspace → 案例 54
 - 等满 timeout 恒 not found 且该时长==产品放弃点=根本没就位（产品 bug）→ 案例 38
 - click 侧栏后 received 恒 explorer / 快照 `Explorer [pressed]`=后台逻辑抢容器 → 案例 39/40
 - 元素 visible 但 click 超时+`intercepts pointer events`、本地全绿=en-US+1280 窗口溢出遮挡 → 案例 42；点击超高 Monaco `.view-lines` 容器中心、CI relayout 后中心滑出可见区被 Welcome/标签栏挡 → 案例 54

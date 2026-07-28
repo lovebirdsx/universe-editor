@@ -14,8 +14,7 @@
  *  the grammar's type-colored guess.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/typescriptApp.js'
 
@@ -35,34 +34,37 @@ const SOURCE = [
   '',
 ].join('\n')
 
-function writeWorkspace(): { dir: string; filePath: string; tsconfig: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-tssem-'))
-  const filePath = join(dir, 'config.ts')
-  writeFileSync(filePath, SOURCE)
-  const tsconfig = join(dir, 'tsconfig.json')
-  writeFileSync(
-    tsconfig,
-    JSON.stringify({ compilerOptions: { strict: true }, include: ['*.ts'] }, null, 2),
-  )
-  return {
-    dir: dir.replace(/\\/g, '/'),
-    filePath: filePath.replace(/\\/g, '/'),
-    tsconfig: tsconfig.replace(/\\/g, '/'),
-  }
-}
-
 test.describe('@p1 typescript semantic highlighting', () => {
+  // Launch with the workspace pinned (positional argv) instead of a post-boot
+  // openWorkspace: that swap restarts the extension host twice (workspace re-pin
+  // + trust-flip revoke), and the slow respawn on contended CI runners raced the
+  // provider-registration poll below into a timeout.
+  test.use({
+    workspaceSeeder: {
+      seed(dir) {
+        writeFileSync(join(dir, 'config.ts'), SOURCE)
+        writeFileSync(
+          join(dir, 'tsconfig.json'),
+          JSON.stringify({ compilerOptions: { strict: true }, include: ['*.ts'] }, null, 2),
+        )
+      },
+    },
+  })
+
   test('recolors uppercase interface fields as properties, not types @p1', async ({
     page,
     workbench,
+    launchWorkspace,
   }) => {
     // Spawns a real tsserver; cold start is slow on contended CI runners.
     test.slow()
+    if (!launchWorkspace) throw new Error('workspaceSeeder must provide launchWorkspace')
     await workbench.waitForRestored()
 
-    const { dir, filePath } = writeWorkspace()
-    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
-    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), filePath)
+    await page.evaluate(
+      (fsPath) => window.__E2E__!.openFileUri(fsPath),
+      launchWorkspace.file('config.ts'),
+    )
 
     await expect
       .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })

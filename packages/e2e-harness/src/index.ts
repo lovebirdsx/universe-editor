@@ -6,8 +6,10 @@ export {
   type AppFixtureConfig,
   type E2EFixtures,
   type E2ETest,
+  type LaunchWorkspace,
   type SharedE2EFixtures,
   type SharedE2ETest,
+  type WorkspaceSeeder,
 } from './fixtures.js'
 
 export {

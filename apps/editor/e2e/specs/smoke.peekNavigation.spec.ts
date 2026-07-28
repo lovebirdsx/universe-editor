@@ -11,32 +11,39 @@
  *  goes through a different code path and is exercised manually.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/coreMarkdownApp.js'
 
-function writeWorkspace(): { dir: string; aPath: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-peeknav-'))
-  const aPath = join(dir, 'a.md')
-  // The link target on line 5 resolves cross-file to other.md (heading gamma).
-  writeFileSync(aPath, '# Alpha\n\n## Beta\n\n[cross](other.md#gamma)\n\nbody\n')
-  writeFileSync(join(dir, 'other.md'), '# Gamma\n\nbody\n')
-  return { dir: dir.replace(/\\/g, '/'), aPath: aPath.replace(/\\/g, '/') }
-}
-
 test.describe('@p1 peek keyboard navigation', () => {
+  // Launch with the workspace pinned (positional argv) instead of a post-boot
+  // openWorkspace: that swap restarts the extension host twice (workspace re-pin
+  // + trust-flip revoke), and the slow respawn on contended CI runners raced the
+  // definition-resolution poll below into a timeout.
+  test.use({
+    workspaceSeeder: {
+      seed(dir) {
+        // The link target on line 5 resolves cross-file to other.md (heading gamma).
+        writeFileSync(join(dir, 'a.md'), '# Alpha\n\n## Beta\n\n[cross](other.md#gamma)\n\nbody\n')
+        writeFileSync(join(dir, 'other.md'), '# Gamma\n\nbody\n')
+      },
+    },
+  })
+
   test('Enter in the definition peek follows the reference to the target file', async ({
     page,
     workbench,
+    launchWorkspace,
   }) => {
     // Out-of-process LSP warmup is slow on CI; give the cold start headroom.
     test.slow()
+    if (!launchWorkspace) throw new Error('workspaceSeeder must provide launchWorkspace')
     await workbench.waitForRestored()
 
-    const { dir, aPath } = writeWorkspace()
-    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
-    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), aPath)
+    await page.evaluate(
+      (fsPath) => window.__E2E__!.openFileUri(fsPath),
+      launchWorkspace.file('a.md'),
+    )
 
     await expect
       .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))

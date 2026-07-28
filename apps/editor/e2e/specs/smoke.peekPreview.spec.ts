@@ -16,8 +16,7 @@
  *  editor fills its slot in BOTH dimensions.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/coreTypescriptApp.js'
 
@@ -43,31 +42,39 @@ const MAIN = [
   '',
 ].join('\n')
 
-function writeWorkspace(): { dir: string; libPath: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-peekprev-'))
-  const libPath = join(dir, 'lib.ts')
-  writeFileSync(libPath, LIB)
-  writeFileSync(join(dir, 'main.ts'), MAIN)
-  writeFileSync(
-    join(dir, 'tsconfig.json'),
-    JSON.stringify({ compilerOptions: { strict: true }, include: ['*.ts'] }, null, 2),
-  )
-  return { dir: dir.replace(/\\/g, '/'), libPath: libPath.replace(/\\/g, '/') }
-}
-
 test.describe('@p1 references peek preview', () => {
+  // Launch with the workspace pinned (positional argv) instead of a post-boot
+  // openWorkspace: that swap restarts the extension host twice (workspace re-pin
+  // + trust-flip revoke), and the slow respawn on contended CI runners raced the
+  // CodeLens poll below into a timeout.
+  test.use({
+    workspaceSeeder: {
+      seed(dir) {
+        writeFileSync(join(dir, 'lib.ts'), LIB)
+        writeFileSync(join(dir, 'main.ts'), MAIN)
+        writeFileSync(
+          join(dir, 'tsconfig.json'),
+          JSON.stringify({ compilerOptions: { strict: true }, include: ['*.ts'] }, null, 2),
+        )
+      },
+    },
+  })
+
   test('preview editor fills its slot in both dimensions @regression', async ({
     page,
     workbench,
+    launchWorkspace,
   }) => {
     // Spawns a real tsserver; cold start is slow on contended CI runners.
     test.slow()
+    if (!launchWorkspace) throw new Error('workspaceSeeder must provide launchWorkspace')
     await workbench.waitForRestored()
     await page.evaluate(() => window.__E2E__!.updateConfigValue('editor.codeLens', true))
 
-    const { dir, libPath } = writeWorkspace()
-    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
-    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), libPath)
+    await page.evaluate(
+      (fsPath) => window.__E2E__!.openFileUri(fsPath),
+      launchWorkspace.file('lib.ts'),
+    )
 
     await expect
       .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })

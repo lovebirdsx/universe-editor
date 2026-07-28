@@ -27,7 +27,7 @@ import {
   type PlaywrightWorkerOptions,
 } from '@playwright/test'
 import { join } from 'node:path'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { WorkbenchPO, expectNoLeaks } from './pages/WorkbenchPO.js'
 import { closeApp, launchApp, seedBaselineUserData } from './launch.js'
@@ -49,6 +49,34 @@ export interface E2EFixtures {
   electronApp: ElectronApplication
   page: Page
   workbench: WorkbenchPO
+  /**
+   * Option: seed content into a per-test workspace folder that the app is
+   * launched WITH (positional argv → openWindowForFolder). Pinning the folder
+   * at launch keeps the extension host single-generation: it skips both the
+   * workspace re-pin restart and the trust-flip revoke restart that a post-boot
+   * `openWorkspace` triggers — the race window behind flaky LSP-provider polls
+   * and dying-host Disposable leaks. Default undefined → launch with an empty
+   * window (unchanged).
+   *
+   * Playwright treats a bare function passed via `test.use` as a fixture
+   * override (its `TestFixtureValue` type even `Exclude`s `Function`), so the
+   * callback is wrapped in an object — same pitfall as p4Seeds' bare array.
+   */
+  workspaceSeeder: WorkspaceSeeder | undefined
+  /** The launched workspace, or undefined when no workspaceSeeder is set. */
+  launchWorkspace: LaunchWorkspace | undefined
+}
+
+export interface WorkspaceSeeder {
+  /** Populate the per-test workspace folder before the app launches. */
+  seed(dir: string): void
+}
+
+export interface LaunchWorkspace {
+  /** Launched workspace folder (absolute, forward-slashed, realpath-normalized). */
+  readonly dir: string
+  /** Absolute forward-slashed path of a file inside the workspace. */
+  file(relPath: string): string
 }
 
 export type E2ETest = TestType<
@@ -68,7 +96,20 @@ export async function waitForProbe(page: Page): Promise<void> {
  */
 export function createColdAppTest(config: AppFixtureConfig): E2ETest {
   return base.extend<E2EFixtures>({
-    electronApp: async ({}, use) => {
+    workspaceSeeder: [undefined, { option: true }],
+    launchWorkspace: async ({ workspaceSeeder }, use) => {
+      if (!workspaceSeeder) {
+        await use(undefined)
+        return
+      }
+      // realpathSync.native: CI Windows tmpdir can be an 8.3 short path; normalize
+      // to the long form so path comparisons inside the app agree.
+      const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ws-')))
+      workspaceSeeder.seed(dir)
+      const posix = dir.replace(/\\/g, '/')
+      await use({ dir: posix, file: (rel) => `${posix}/${rel}` })
+    },
+    electronApp: async ({ launchWorkspace }, use) => {
       const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-'))
       seedBaselineUserData(userDataDir)
       const app = await launchApp({
@@ -77,6 +118,9 @@ export function createColdAppTest(config: AppFixtureConfig): E2ETest {
         userDataDir,
         ...(config.extensions !== undefined ? { extensions: config.extensions } : {}),
         ...(config.env !== undefined ? { env: config.env } : {}),
+        // Positional folder arg → main's parseFileToOpen → openWindowForFolder:
+        // the app boots with this workspace already attached.
+        ...(launchWorkspace ? { extraArgs: [launchWorkspace.dir] } : {}),
       })
       await use(app)
       await closeApp(app)
@@ -254,6 +298,16 @@ export function createSharedAppTest(config: AppFixtureConfig): SharedE2ETest {
     },
     workbench: async ({ sharedApp }, use) => {
       await use(new WorkbenchPO(sharedApp.page))
+    },
+    workspaceSeeder: [undefined, { option: true }],
+    launchWorkspace: async ({ workspaceSeeder }, use) => {
+      // A shared worker-scoped app launches once, before any test — a per-test
+      // launch folder is structurally impossible here. Fail loud instead of
+      // silently ignoring the seeder.
+      if (workspaceSeeder) {
+        throw new Error('workspaceSeeder requires a cold-launch fixture (createColdAppTest)')
+      }
+      await use(undefined)
     },
     _leakGate: [
       async ({ sharedApp }, use) => {

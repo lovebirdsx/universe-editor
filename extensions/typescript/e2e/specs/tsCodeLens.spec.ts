@@ -18,8 +18,7 @@
  *  asserts against `getRenderedCodeLenses`, the controller's real output.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/typescriptApp.js'
 
@@ -36,27 +35,31 @@ const SOURCE = [
   '',
 ].join('\n')
 
-function writeWorkspace(): { dir: string; filePath: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-tscl-'))
-  const filePath = join(dir, 'lib.ts')
-  writeFileSync(filePath, SOURCE)
-  writeFileSync(
-    join(dir, 'tsconfig.json'),
-    JSON.stringify({ compilerOptions: { strict: true }, include: ['*.ts'] }, null, 2),
-  )
-  return {
-    dir: dir.replace(/\\/g, '/'),
-    filePath: filePath.replace(/\\/g, '/'),
-  }
-}
-
 test.describe('@p1 typescript codelens', () => {
+  // Launch with the workspace pinned (positional argv) instead of a post-boot
+  // openWorkspace: that swap restarts the extension host twice (workspace re-pin
+  // + trust-flip revoke), and the slow respawn on contended CI runners raced the
+  // provider-registration poll below into a timeout.
+  test.use({
+    workspaceSeeder: {
+      seed(dir) {
+        writeFileSync(join(dir, 'lib.ts'), SOURCE)
+        writeFileSync(
+          join(dir, 'tsconfig.json'),
+          JSON.stringify({ compilerOptions: { strict: true }, include: ['*.ts'] }, null, 2),
+        )
+      },
+    },
+  })
+
   test('renders a references CodeLens resolving to showReferences @p1', async ({
     page,
     workbench,
+    launchWorkspace,
   }) => {
     // Spawns a real tsserver; cold start is slow on contended CI runners.
     test.slow()
+    if (!launchWorkspace) throw new Error('workspaceSeeder must provide launchWorkspace')
     await workbench.waitForRestored()
 
     // The CodeLens controller only renders when `editor.codeLens` is on. Force it
@@ -65,9 +68,10 @@ test.describe('@p1 typescript codelens', () => {
     // would otherwise silence every lens even though the provider works.
     await page.evaluate(() => window.__E2E__!.updateConfigValue('editor.codeLens', true))
 
-    const { dir, filePath } = writeWorkspace()
-    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
-    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), filePath)
+    await page.evaluate(
+      (fsPath) => window.__E2E__!.openFileUri(fsPath),
+      launchWorkspace.file('lib.ts'),
+    )
 
     await expect
       .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })

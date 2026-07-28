@@ -246,6 +246,58 @@ describe('DisposableMap', () => {
     // extension-host scenario. A plain Map would orphan these values and report them.
     expect(tracker.computeLeakingDisposables()).toBeUndefined()
   })
+
+  it('set on a disposed map disposes the incoming value and does not store it', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const fn = vi.fn()
+    const map = new DisposableMap<string>()
+    map.dispose()
+    map.set('a', toDisposable(fn))
+    expect(fn).toHaveBeenCalledOnce()
+    expect(map.has('a')).toBe(false)
+    expect(map.size).toBe(0)
+    warn.mockRestore()
+  })
+
+  it('set on a disposed map warns; DISABLE_DISPOSED_WARNING silences it', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const map = new DisposableMap<string>()
+      map.dispose()
+      map.set(
+        'a',
+        toDisposable(() => {}),
+      )
+      expect(warn).toHaveBeenCalledOnce()
+
+      warn.mockClear()
+      DisposableStore.DISABLE_DISPOSED_WARNING = true
+      const map2 = new DisposableMap<string>()
+      map2.dispose()
+      map2.set(
+        'a',
+        toDisposable(() => {}),
+      )
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      DisposableStore.DISABLE_DISPOSED_WARNING = false
+      warn.mockRestore()
+    }
+  })
+
+  it('set on a disposed map leaves no tracker leak (dying-host late-frame race)', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    const map = new DisposableMap<string>()
+    map.dispose()
+    map.set(
+      'a',
+      toDisposable(() => {}),
+    )
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+    vi.mocked(console.warn).mockRestore()
+  })
 })
 
 describe('DisposableTracker', () => {

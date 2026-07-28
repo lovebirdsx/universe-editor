@@ -68,6 +68,7 @@ vi.mock('../HostConnection.js', () => {
   class FakeHostConnection {
     readonly kind: string
     readonly handle: string
+    readonly workspaceRoot: string | undefined
     dead = false
     commands = {
       $executeContributedCommand: vi.fn().mockImplementation(() => Promise.resolve(this.handle)),
@@ -87,9 +88,10 @@ vi.mock('../HostConnection.js', () => {
       $initializeWorkspaceTrust: vi.fn().mockResolvedValue(undefined),
       $onDidGrantWorkspaceTrust: vi.fn().mockResolvedValue(undefined),
     }
-    constructor(kind: string, handle: string) {
+    constructor(kind: string, handle: string, workspaceRoot?: string) {
       this.kind = kind
       this.handle = handle
+      this.workspaceRoot = workspaceRoot
     }
     markDead(): void {
       this.dead = true
@@ -126,11 +128,17 @@ function makeService(host: IExtensionHostService, workspaceChange = Event.None) 
   return makeServiceWith(host, vi.fn(), workspaceChange)
 }
 
+/** Mutable workspace state a test flips before firing the change event. */
+interface WorkspaceState {
+  current: { folder: { fsPath: string } } | undefined
+}
+
 function makeServiceWith(
   host: IExtensionHostService,
   resetSourceControls: () => void,
   workspaceChange = Event.None,
   trustChange: Event<boolean> = Event.None,
+  workspaceState: WorkspaceState = { current: undefined },
 ) {
   const nullLogger = {
     info: vi.fn(),
@@ -157,7 +165,9 @@ function makeServiceWith(
     {
       onDidChangeWorkspace: workspaceChange,
       whenReady: Promise.resolve(),
-      current: undefined,
+      get current() {
+        return workspaceState.current
+      },
     } as unknown as IWorkspaceService,
     {} as IFileService,
     {} as IAcpPathPolicy,
@@ -204,12 +214,14 @@ describe('ExtensionHostClientService', () => {
     disposed.length = 0
     const host = fakeHost()
     const workspaceChange = new Emitter<void>()
-    const svc = makeService(host, workspaceChange.event)
+    const ws: WorkspaceState = { current: undefined }
+    const svc = makeServiceWith(host, vi.fn(), workspaceChange.event, Event.None, ws)
 
     await svc.start()
     const seen: (readonly IExtensionDescriptionDto[])[] = []
     svc.onDidChangeContributions((c) => seen.push(c))
 
+    ws.current = { folder: { fsPath: '/new-ws' } }
     workspaceChange.fire()
     // Let the async restart chain (stop → relaunch → fetch → emit) settle.
     await vi.waitFor(() => expect(seen).toHaveLength(1))
@@ -248,11 +260,17 @@ describe('ExtensionHostClientService', () => {
       stop: vi.fn().mockResolvedValue(undefined),
     } as unknown as IExtensionHostService
     const workspaceChange = new Emitter<void>()
-    const svc = makeService(host, workspaceChange.event)
+    const ws: WorkspaceState = { current: undefined }
+    const svc = makeServiceWith(host, vi.fn(), workspaceChange.event, Event.None, ws)
 
     const starting = svc.start()
-    // Swap arrives before the first spawn resolves: `this._trusted` is unset.
+    // Let `_connect` pass its workspaceRoot read first so the in-flight spawn is
+    // pinned to the launch-time (empty) workspace — the swap below must land as
+    // "spec already settled", otherwise the new same-source skip would (rightly)
+    // see the host pinned to the NEW workspace and there'd be nothing to relaunch.
+    await Promise.resolve()
     workspaceChange.fire()
+    ws.current = { folder: { fsPath: '/new-ws' } }
     releaseFirstStart()
     await starting
 
@@ -286,12 +304,14 @@ describe('ExtensionHostClientService', () => {
       stop: vi.fn().mockImplementation(() => stopped),
     } as unknown as IExtensionHostService
     const workspaceChange = new Emitter<void>()
-    const svc = makeService(host, workspaceChange.event)
+    const ws: WorkspaceState = { current: undefined }
+    const svc = makeServiceWith(host, vi.fn(), workspaceChange.event, Event.None, ws)
 
     await svc.start()
     expect(host.start).toHaveBeenCalledTimes(1)
 
     // Swap fires (arms the barrier synchronously); the command races in immediately.
+    ws.current = { folder: { fsPath: '/new-ws' } }
     workspaceChange.fire()
     const commandResult = svc.executeContributedCommand('ai.generateCommitMessage', [])
 
@@ -330,13 +350,15 @@ describe('ExtensionHostClientService', () => {
       const host = fakeHost()
       const workspaceChange = new Emitter<void>()
       const trustChange = new Emitter<boolean>()
-      const svc = makeServiceWith(host, vi.fn(), workspaceChange.event, trustChange.event)
+      const ws: WorkspaceState = { current: undefined }
+      const svc = makeServiceWith(host, vi.fn(), workspaceChange.event, trustChange.event, ws)
 
       await svc.start()
       expect(host.start).toHaveBeenCalledTimes(1)
 
       // Restart#1 (workspace swap) hangs inside its first startup-activation RPC on h2.
       holdActivationFor = 'h2'
+      ws.current = { folder: { fsPath: '/new-ws' } }
       workspaceChange.fire()
       await vi.waitFor(() => expect(activationCalls).toContain('h2'))
 
@@ -359,5 +381,29 @@ describe('ExtensionHostClientService', () => {
       holdActivationFor = undefined
       process.off('unhandledRejection', onUnhandled)
     }
+  })
+
+  it('skips the re-pin restart when the live host is already pinned to the current workspace', async () => {
+    // The app was launched with the folder as a positional arg, so the first host
+    // spawned already pinned to it; the boot-time workspace event (hydrate
+    // null → folder) must NOT kill + respawn the host — that restart is the race
+    // window behind flaky LSP-provider polls and dying-host Disposable leaks in
+    // e2e.
+    disposed.length = 0
+    const host = fakeHost()
+    const workspaceChange = new Emitter<void>()
+    const ws: WorkspaceState = { current: { folder: { fsPath: '/ws' } } }
+    const svc = makeServiceWith(host, vi.fn(), workspaceChange.event, Event.None, ws)
+
+    await svc.start()
+    expect(host.start).toHaveBeenCalledOnce()
+
+    workspaceChange.fire()
+    await new Promise((r) => setTimeout(r, 10))
+    expect(host.start).toHaveBeenCalledOnce()
+    expect(host.stop).not.toHaveBeenCalled()
+    expect(disposed).toHaveLength(0)
+
+    svc.dispose()
   })
 })
