@@ -100,7 +100,9 @@ function buildContent(
  * question so the two render side by side on one row: the select plus an
  * always-visible "Other" input. The fork emits the custom field per question
  * and its non-empty text wins over the enum selection (see elicitation.ts in
- * the fork), so typing in the input clears the select and vice versa.
+ * the fork). The two controls keep their values independently — clearing
+ * either on the other's edit would silently destroy user input; the
+ * custom-wins rule is applied at submit instead (see submit's `cleaned` pass).
  */
 interface DisplayField {
   readonly field: ElicitationFormField
@@ -567,11 +569,7 @@ function EnumSelect({
               ),
             })),
           ]}
-          onChange={(v) => {
-            onChange(v)
-            // Picking a concrete option abandons any typed custom answer.
-            if (v !== '') onCustomChange?.('')
-          }}
+          onChange={onChange}
           aria-label={field.title ?? field.name}
           data-testid={`acp-elicitation-input-${field.name}`}
         />
@@ -581,12 +579,7 @@ function EnumSelect({
             spellCheck={false}
             placeholder={localize('acp.elicitation.otherPlaceholder', 'Other…')}
             aria-label={customField.title ?? 'Other'}
-            onChange={(e) => {
-              onCustomChange?.(e.target.value)
-              // Typing a custom answer abandons the enum selection (custom wins
-              // on submit), so the two controls never carry competing answers.
-              if (e.target.value !== '') onChange('')
-            }}
+            onChange={(e) => onCustomChange?.(e.target.value)}
             data-testid={`acp-elicitation-input-${customField.name}`}
           />
         )}

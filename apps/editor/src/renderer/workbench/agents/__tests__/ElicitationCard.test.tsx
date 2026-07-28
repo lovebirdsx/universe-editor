@@ -299,17 +299,17 @@ describe('ElicitationCard — AskUserQuestion folding', () => {
     expect(input.tagName).toBe('INPUT')
   })
 
-  it('a typed Other answer clears the enum selection and wins in the submitted content', () => {
+  it('a typed Other answer keeps the enum selection and wins in the submitted content', () => {
     const h = makePending(askRequest())
     render(renderCard(makeSession('A', h.pending)))
 
-    // Select an option first, then type a custom answer — the select resets.
+    // Select an option first, then type a custom answer — the select is kept.
     fireEvent.click(screen.getByTestId('acp-elicitation-input-question_0'))
     fireEvent.click(screen.getByRole('option', { name: /Option A/ }))
     fireEvent.change(screen.getByTestId('acp-elicitation-input-question_0_custom'), {
       target: { value: 'my own answer' },
     })
-    expect(screen.getByTestId('acp-elicitation-input-question_0').textContent).toBe('Select…')
+    expect(screen.getByTestId('acp-elicitation-input-question_0').textContent).toBe('Option A')
 
     fireEvent.click(screen.getByTestId('acp-elicitation-submit'))
     expect(h.resolved).toEqual([
@@ -317,7 +317,7 @@ describe('ElicitationCard — AskUserQuestion folding', () => {
     ])
   })
 
-  it('picking a concrete option clears the typed custom answer', () => {
+  it('picking a concrete option keeps the typed custom answer; clearing the input lets the enum win', () => {
     const h = makePending(askRequest())
     render(renderCard(makeSession('A', h.pending)))
 
@@ -328,7 +328,25 @@ describe('ElicitationCard — AskUserQuestion folding', () => {
     fireEvent.click(screen.getByRole('option', { name: /Option B/ }))
     expect(
       (screen.getByTestId('acp-elicitation-input-question_0_custom') as HTMLInputElement).value,
-    ).toBe('')
+    ).toBe('stale')
+
+    // Non-empty custom text still wins on submit…
+    fireEvent.click(screen.getByTestId('acp-elicitation-submit'))
+    expect(h.resolved).toEqual([{ action: 'accept', content: { question_0_custom: 'stale' } }])
+  })
+
+  it('clearing the Other input lets the picked option through on submit', () => {
+    const h = makePending(askRequest())
+    render(renderCard(makeSession('A', h.pending)))
+
+    fireEvent.change(screen.getByTestId('acp-elicitation-input-question_0_custom'), {
+      target: { value: 'stale' },
+    })
+    fireEvent.click(screen.getByTestId('acp-elicitation-input-question_0'))
+    fireEvent.click(screen.getByRole('option', { name: /Option B/ }))
+    fireEvent.change(screen.getByTestId('acp-elicitation-input-question_0_custom'), {
+      target: { value: '' },
+    })
 
     fireEvent.click(screen.getByTestId('acp-elicitation-submit'))
     expect(h.resolved).toEqual([{ action: 'accept', content: { question_0: 'opt-b' } }])
