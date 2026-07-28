@@ -8,7 +8,14 @@
  *  component owns no HTTP. Mirrors ExtensionsView / PerforceGraphEditor patterns.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import type { LucideIcon } from 'lucide-react'
 import {
   ChevronDown,
@@ -36,8 +43,11 @@ import {
   IQuickInputService,
   IStorageService,
   ConfigurationTarget,
+  derivedOpts,
   localize,
 } from '@universe-editor/platform'
+import { IScmService } from '../../services/extensions/ScmService.js'
+import { useObservable, useService } from '../useService.js'
 import { IconButton, Input, Spinner, cx, useScrollRestore } from '@universe-editor/workbench-ui'
 import {
   SwarmCommands,
@@ -48,7 +58,6 @@ import {
   type SwarmTransitionDto,
   type SwarmTransitionRequest,
 } from '@universe-editor/extensions-common'
-import { useService } from '../useService.js'
 import { relativeTime } from '../../relativeTime.js'
 import { SwarmReviewEditorInput } from '../../services/editor/SwarmReviewEditorInput.js'
 import {
@@ -112,6 +121,14 @@ const GROUP_LABELS: Record<GroupKey, string> = {
 
 const GROUP_KEYS: GroupKey[] = ['needsAction', 'ignored', 'authored']
 
+/** Mirrors the host guard's defaults (perforce package.json): swarm is enabled
+ * unless explicitly turned off; the bundled default URL counts as configured. */
+function readSwarmConfigured(configuration: IConfigurationService): boolean {
+  const enabled = configuration.get<boolean>('perforce.swarm.enabled') ?? true
+  const url = (configuration.get<string>('perforce.swarm.url') ?? '').trim()
+  return enabled && url.length > 0
+}
+
 export function SwarmReviewsView() {
   const commands = useService(ICommandService)
   const configuration = useService(IConfigurationService)
@@ -119,6 +136,7 @@ export function SwarmReviewsView() {
   const editorService = useService(IEditorService)
   const opener = useService(IOpenerService)
   const quickInput = useService(IQuickInputService)
+  const scmService = useService(IScmService)
   const storage = useService(IStorageService)
 
   const [dashboard, setDashboard] = useState<SwarmDashboardResult | null>(
@@ -137,6 +155,27 @@ export function SwarmReviewsView() {
     readSwarmFilterConfig(configuration),
   )
   const [menu, setMenu] = useState<SwarmReviewContextMenuState | null>(null)
+  // Swarm turned off / URL cleared: the view stays registered (a Perforce
+  // workspace is open) but every command would fall back to an empty dashboard,
+  // so show a real "not configured" state instead of a misleading empty list.
+  const [swarmConfigured, setSwarmConfigured] = useState(() => readSwarmConfigured(configuration))
+  const swarmConfiguredRef = useRef(swarmConfigured)
+  // Perforce workspace check — when no perforce source control exists the whole
+  // view is already deregistered by SwarmViewContribution, but if it is open as
+  // the active container the renderer may not tear the pane down immediately;
+  // degrade to an explicit unavailable state instead of a misleading view.
+  const perforceAvailableRef = useRef(false)
+  const perforceAvailable = useObservable(
+    useMemo(
+      () =>
+        derivedOpts({}, (r) =>
+          scmService.sourceControls.read(r).some((sc) => sc.id === 'perforce'),
+        ),
+      [scmService],
+    ),
+  )
+  perforceAvailableRef.current = perforceAvailable
+  const swarmReady = swarmConfigured && perforceAvailable
   // Bumped whenever the ignore store changes, so grouping recomputes. The store is
   // a module singleton (shared with the review editor); we read it live below.
   const [, setIgnoreVersion] = useState(0)
@@ -185,6 +224,11 @@ export function SwarmReviewsView() {
 
   const load = useCallback(
     (attempt = 0, force = false): Promise<void> => {
+      // Not configured or no Perforce workspace: the host would only answer
+      // with an empty fallback (or the command is absent entirely).
+      if (!swarmConfiguredRef.current || !perforceAvailableRef.current) {
+        return Promise.resolve()
+      }
       setLoading(true)
       setError(null)
       const keywords = keywordRef.current.trim()
@@ -247,6 +291,12 @@ export function SwarmReviewsView() {
     // host's activation (command returns undefined) retries until it resolves.
     void load()
   }, [load])
+
+  // `load` no-ops until a perforce source control exists, so kick it again when
+  // the provider appears (extension activation races this view's first mount).
+  useEffect(() => {
+    if (perforceAvailable) void load()
+  }, [perforceAvailable, load])
 
   // Force the extension host to bypass its short-lived review-list cache and
   // re-derive the approvable icons. Used when a review mutated (in a detail tab)
@@ -339,6 +389,24 @@ export function SwarmReviewsView() {
     })
     return () => sub.dispose()
   }, [configuration])
+
+  // Track `perforce.swarm.enabled/url` edits: unconfigured shows an explicit
+  // placeholder; configuring it kicks off the first real load.
+  useEffect(() => {
+    const sub = configuration.onDidChangeConfiguration((e) => {
+      if (
+        !e.affectsConfiguration('perforce.swarm.enabled') &&
+        !e.affectsConfiguration('perforce.swarm.url')
+      ) {
+        return
+      }
+      const configured = readSwarmConfigured(configuration)
+      swarmConfiguredRef.current = configured
+      setSwarmConfigured(configured)
+      if (configured) void load()
+    })
+    return () => sub.dispose()
+  }, [configuration, load])
 
   const onKeywordChange = useCallback(
     (value: string) => {
@@ -590,47 +658,52 @@ export function SwarmReviewsView() {
 
   return (
     <div className={styles['container']} data-testid="swarm-reviews-view">
-      <div className={styles['filterRow']}>
-        <Input
-          className={styles['filterInput']}
-          value={keyword}
-          onChange={(e) => onKeywordChange(e.target.value)}
-          placeholder={localize('swarm.filter.placeholder', 'Filter reviews…')}
-        />
-        {loading && <Spinner />}
-        <IconButton
-          active={needsActionFilterActive}
-          label={localize('swarm.filter.needsAction.tooltip', 'Filter "Needs My Action"')}
-          onClick={openNeedsActionFilter}
-          data-testid="swarm-needs-action-filter"
-        >
-          <ListFilter size={14} strokeWidth={1.75} />
-        </IconButton>
-        <IconButton
-          active={filterConfig.authoredHideApproved}
-          label={
-            filterConfig.authoredHideApproved
-              ? localize('swarm.filter.authored.showApproved', 'Show approved authored reviews')
-              : localize('swarm.filter.authored.hideApproved', 'Hide approved authored reviews')
-          }
-          onClick={toggleAuthoredHideApproved}
-          data-testid="swarm-authored-hide-approved"
-        >
-          {filterConfig.authoredHideApproved ? (
-            <FilterX size={14} strokeWidth={1.75} />
-          ) : (
-            <Filter size={14} strokeWidth={1.75} />
-          )}
-        </IconButton>
-      </div>
+      {swarmReady && (
+        <div className={styles['filterRow']}>
+          <Input
+            className={styles['filterInput']}
+            value={keyword}
+            onChange={(e) => onKeywordChange(e.target.value)}
+            placeholder={localize('swarm.filter.placeholder', 'Filter reviews…')}
+          />
+          {loading && <Spinner />}
+          <IconButton
+            active={needsActionFilterActive}
+            label={localize('swarm.filter.needsAction.tooltip', 'Filter "Needs My Action"')}
+            onClick={openNeedsActionFilter}
+            data-testid="swarm-needs-action-filter"
+          >
+            <ListFilter size={14} strokeWidth={1.75} />
+          </IconButton>
+          <IconButton
+            active={filterConfig.authoredHideApproved}
+            label={
+              filterConfig.authoredHideApproved
+                ? localize('swarm.filter.authored.showApproved', 'Show approved authored reviews')
+                : localize('swarm.filter.authored.hideApproved', 'Hide approved authored reviews')
+            }
+            onClick={toggleAuthoredHideApproved}
+            data-testid="swarm-authored-hide-approved"
+          >
+            {filterConfig.authoredHideApproved ? (
+              <FilterX size={14} strokeWidth={1.75} />
+            ) : (
+              <Filter size={14} strokeWidth={1.75} />
+            )}
+          </IconButton>
+        </div>
+      )}
       <div className={styles['scroll']} ref={scrollRef}>
         {error && <div className={styles['error']}>{error}</div>}
-        {!error && dashboard === null && !loading && (
+        {!swarmReady && (
           <div className={styles['message']}>
-            {localize('swarm.notConfigured', 'Swarm is not configured. Set perforce.swarm.url.')}
+            {!perforceAvailable
+              ? localize('swarm.workspaceNotPerforce', 'Not a Perforce workspace.')
+              : localize('swarm.notConfigured', 'Swarm is not configured. Set perforce.swarm.url.')}
           </div>
         )}
-        {(dashboard || groupedReviews.ignored.length > 0) &&
+        {swarmReady &&
+          (dashboard || groupedReviews.ignored.length > 0) &&
           ignoreReady &&
           GROUP_KEYS.filter((key) => key !== 'ignored' || groupedReviews.ignored.length > 0).map(
             (key) => (
@@ -646,7 +719,8 @@ export function SwarmReviewsView() {
               />
             ),
           )}
-        {dashboard &&
+        {swarmReady &&
+          dashboard &&
           !loading &&
           dashboard.needsAction.length === 0 &&
           dashboard.authored.length === 0 && (

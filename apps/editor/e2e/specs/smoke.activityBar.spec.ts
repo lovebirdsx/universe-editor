@@ -37,4 +37,11 @@ test.describe('@p0 activitybar', () => {
     await activityBar.click(EXPLORER)
     await expect(sideBar.root).not.toHaveAttribute('data-active-view-container', EXPLORER)
   })
+
+  // The core fixture runs with `extensions: []`, so the perforce extension
+  // never activates and no perforce source control exists — the Swarm Reviews
+  // container must stay out of the Activity Bar entirely.
+  test('hides the Swarm Reviews container outside a Perforce workspace', async ({ workbench }) => {
+    await expect(workbench.activityBar.item('workbench.view.swarm')).toHaveCount(0)
+  })
 })

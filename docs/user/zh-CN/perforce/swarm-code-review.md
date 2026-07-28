@@ -37,7 +37,7 @@
 
 ## Swarm Reviews 侧栏
 
-日常主入口是活动栏里的 **Swarm Reviews** 视图（图标为 Pull Request）。也可用命令面板运行 **"Show Swarm Reviews"** 打开。
+日常主入口是活动栏里的 **Swarm Reviews** 视图（图标为 Pull Request）。也可用命令面板运行 **"Show Swarm Reviews"** 打开。该入口只在 Perforce 工作区出现——打开的目录不是 Perforce 工作区时，整个视图会从活动栏隐藏。已开启但视图内提示「Swarm is not configured」时，说明 `perforce.swarm.url` 未配置（或 `perforce.swarm.enabled` 被关闭），在设置里补齐即可。
 
 活动栏图标上会显示一个**数字角标**，即「Needs My Action」分组当前的审核数量（含自己发起但仍待处理的审核，不含已忽略的；不受关键词过滤框影响）。开启后台轮询（`perforce.swarm.backgroundPoll.enabled`，**默认关闭**）后，侧栏关闭时该数字也会持续刷新；未开启时仅在打开视图或手动刷新时更新。
 

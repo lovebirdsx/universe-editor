@@ -9,7 +9,9 @@ import {
   IQuickInputService,
   IStorageService,
   InstantiationService,
+  observableValue,
   ServiceCollection,
+  type IObservable,
 } from '@universe-editor/platform'
 import {
   SwarmCommands,
@@ -18,6 +20,10 @@ import {
   type SwarmReviewDto,
 } from '@universe-editor/extensions-common'
 import { ServicesContext } from '../../useService.js'
+import {
+  IScmService,
+  type IScmSourceControlModel,
+} from '../../../services/extensions/ScmService.js'
 import { swarmReviewsViewState } from '../../../services/swarm/swarmViewState.js'
 import { swarmIgnoreStore } from '../../../services/swarm/swarmIgnoreStore.js'
 import { buildSwarmReviewUrl } from '../../../services/swarm/swarmReviewUrl.js'
@@ -43,13 +49,24 @@ const dashboard: SwarmDashboardResult = {
   participating: [],
 }
 
-function createServices(executeCommand: ReturnType<typeof vi.fn>): InstantiationService {
+interface FakeServicesOptions {
+  configValues?: Record<string, unknown>
+  sourceControls?: readonly IScmSourceControlModel[]
+}
+
+function createServices(
+  executeCommand: ReturnType<typeof vi.fn>,
+  options: FakeServicesOptions = {},
+): InstantiationService {
+  const {
+    configValues = { 'perforce.swarm.url': 'https://swarm.example.test/' },
+    sourceControls = [{ id: 'perforce' } as unknown as IScmSourceControlModel],
+  } = options
   const services = new ServiceCollection()
   services.set(ICommandService, { _serviceBrand: undefined, executeCommand } as never)
   services.set(IConfigurationService, {
     _serviceBrand: undefined,
-    get: (key: string) =>
-      key === 'perforce.swarm.url' ? 'https://swarm.example.test/' : undefined,
+    get: (key: string) => configValues[key],
     onDidChangeConfiguration: () => ({ dispose: () => {} }),
   } as never)
   services.set(IDialogService, {
@@ -75,6 +92,17 @@ function createServices(executeCommand: ReturnType<typeof vi.fn>): Instantiation
     set: vi.fn().mockResolvedValue(undefined),
     remove: vi.fn().mockResolvedValue(undefined),
     onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
+  } as never)
+  const sourceControlsObs: IObservable<readonly IScmSourceControlModel[]> = observableValue(
+    'sourceControls',
+    sourceControls,
+  )
+  services.set(IScmService, {
+    _serviceBrand: undefined,
+    sourceControls: sourceControlsObs,
+    changeInputBoxValue() {},
+    setExtHost() {},
+    resetSourceControls() {},
   } as never)
   return new InstantiationService(services)
 }
@@ -194,5 +222,38 @@ describe('SwarmReviewsView', () => {
 
     expect(await screen.findByText('Live title')).toBeTruthy()
     await waitFor(() => expect(swarmIgnoreStore.getMeta('2002')?.description).toBe('Live title'))
+  })
+
+  it('shows the not-configured state and skips the dashboard load when the swarm URL is empty', async () => {
+    const executeCommand = vi.fn(async () => dashboard)
+
+    render(
+      <ServicesContext.Provider
+        value={createServices(executeCommand, { configValues: { 'perforce.swarm.url': '' } })}
+      >
+        <SwarmReviewsView />
+      </ServicesContext.Provider>,
+    )
+
+    expect(await screen.findByText('Swarm is not configured. Set perforce.swarm.url.')).toBeTruthy()
+    // Give a potential (misguided) load a chance to fire.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(executeCommand).not.toHaveBeenCalledWith(SwarmCommands.dashboard, expect.anything())
+    expect(screen.queryByTestId('swarm-needs-action-filter')).toBeNull()
+  })
+
+  it('shows the unavailable state and skips the dashboard load without a perforce workspace', async () => {
+    const executeCommand = vi.fn(async () => dashboard)
+
+    render(
+      <ServicesContext.Provider value={createServices(executeCommand, { sourceControls: [] })}>
+        <SwarmReviewsView />
+      </ServicesContext.Provider>,
+    )
+
+    expect(await screen.findByText('Not a Perforce workspace.')).toBeTruthy()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(executeCommand).not.toHaveBeenCalledWith(SwarmCommands.dashboard, expect.anything())
+    expect(screen.queryByTestId('swarm-needs-action-filter')).toBeNull()
   })
 })

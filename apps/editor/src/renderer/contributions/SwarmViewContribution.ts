@@ -6,14 +6,18 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  autorun,
+  combinedDisposable,
   Disposable,
   IConfigurationService,
   IStorageService,
   IWorkbenchContribution,
+  localize,
+  MutableDisposable,
   ViewContainerLocation,
   ViewContainerRegistry,
-  localize,
 } from '@universe-editor/platform'
+import { IScmService } from '../services/extensions/ScmService.js'
 import { registerViewWithComponent } from '../services/views/ViewComponentRegistry.js'
 import { swarmIgnoreStore } from '../services/swarm/swarmIgnoreStore.js'
 import { swarmReviewsUiStore } from '../services/swarm/swarmReviewsUiStore.js'
@@ -25,6 +29,7 @@ export class SwarmViewContribution extends Disposable implements IWorkbenchContr
   constructor(
     @IStorageService storage: IStorageService,
     @IConfigurationService configuration: IConfigurationService,
+    @IScmService scmService: IScmService,
   ) {
     super()
 
@@ -46,28 +51,41 @@ export class SwarmViewContribution extends Disposable implements IWorkbenchContr
       }),
     )
 
+    // Register the container only while a perforce source control exists (the
+    // extension activated for this workspace). Swarm reviews are meaningless
+    // outside a Perforce workspace, so the whole entry point disappears from
+    // the Activity Bar instead of rendering an unusable view. The holder is
+    // registered on this contribution so the leak tracker roots the dynamic
+    // registrations through it (a plain closure variable would be reported).
+    const registrations = this._register(new MutableDisposable())
     this._register(
-      ViewContainerRegistry.registerViewContainer({
-        id: 'workbench.view.swarm',
-        label: localize('viewContainer.swarm', 'Swarm Reviews'),
-        icon: 'git-pull-request',
-        // Directly after SCM (order 3), before Session Changes (order 4).
-        order: 3.5,
-        location: ViewContainerLocation.SideBar,
+      autorun((r) => {
+        const hasPerforce = scmService.sourceControls.read(r).some((sc) => sc.id === 'perforce')
+        if (hasPerforce && !registrations.value) {
+          registrations.value = combinedDisposable(
+            ViewContainerRegistry.registerViewContainer({
+              id: 'workbench.view.swarm',
+              label: localize('viewContainer.swarm', 'Swarm Reviews'),
+              icon: 'git-pull-request',
+              // Directly after SCM (order 3), before Session Changes (order 4).
+              order: 3.5,
+              location: ViewContainerLocation.SideBar,
+            }),
+            registerViewWithComponent(
+              {
+                id: 'workbench.view.swarm.reviews',
+                name: localize('view.swarm.reviews', 'Reviews'),
+                containerId: 'workbench.view.swarm',
+                icon: 'git-pull-request',
+                order: 1,
+              },
+              SwarmReviewsView,
+            ),
+          )
+        } else if (!hasPerforce) {
+          registrations.clear()
+        }
       }),
-    )
-
-    this._register(
-      registerViewWithComponent(
-        {
-          id: 'workbench.view.swarm.reviews',
-          name: localize('view.swarm.reviews', 'Reviews'),
-          containerId: 'workbench.view.swarm',
-          icon: 'git-pull-request',
-          order: 1,
-        },
-        SwarmReviewsView,
-      ),
     )
   }
 }
