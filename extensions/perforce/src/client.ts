@@ -1060,6 +1060,64 @@ export class PerforceClient {
     return this._mutate('unshelve', ['unshelve', '-s', changelist, '-f'])
   }
 
+  /**
+   * Restore a SUBSET of a shelved change's files into the default changelist
+   * (`p4 unshelve -s <change> -f <depotFile...>`), overwriting local copies.
+   * Not a `_mutate`: partial failure is the norm here (p4 refuses files already
+   * open for edit, or whose base revision is stale), and the caller needs the
+   * structured applied/skipped split rather than a toast + boolean. Falls back
+   * to per-file retries when the batch fails so one refused file doesn't take
+   * down the rest. Refreshes once at the end when anything applied.
+   */
+  async unshelveFiles(
+    change: string,
+    depotFiles: readonly string[],
+  ): Promise<{ applied: string[]; skipped: { depotFile: string; reason: string }[] }> {
+    const empty: { applied: string[]; skipped: { depotFile: string; reason: string }[] } = {
+      applied: [],
+      skipped: [],
+    }
+    if (!change || change === 'default' || depotFiles.length === 0) return empty
+    return this._withBusy(this._busyLabel('unshelve'), async () => {
+      const batch = await this._p4.exec(['unshelve', '-s', change, '-f', ...depotFiles])
+      const result =
+        batch.exitCode === 0
+          ? { applied: [...depotFiles], skipped: empty.skipped }
+          : await this._unshelveFilesIndividually(change, depotFiles)
+      if (result.applied.length > 0) {
+        this._cache.invalidateWorkspace()
+        await this.refresh()
+      }
+      return result
+    })
+  }
+
+  /** Per-file unshelve retry after a batch failure. A single-file unshelve is
+   *  idempotent (`-f` overwrites), so files the batch already restored report
+   *  success again; only genuinely refused files land in `skipped`, with the
+   *  first non-empty stderr line as the reason. */
+  private async _unshelveFilesIndividually(
+    change: string,
+    depotFiles: readonly string[],
+  ): Promise<{ applied: string[]; skipped: { depotFile: string; reason: string }[] }> {
+    const applied: string[] = []
+    const skipped: { depotFile: string; reason: string }[] = []
+    for (const depotFile of depotFiles) {
+      const res = await this._p4.exec(['unshelve', '-s', change, '-f', depotFile])
+      if (res.exitCode === 0) {
+        applied.push(depotFile)
+      } else {
+        const reason =
+          res.stderr
+            .split('\n')
+            .map((line) => line.trim())
+            .find((line) => line.length > 0) ?? `p4 unshelve failed (exit ${res.exitCode})`
+        skipped.push({ depotFile, reason })
+      }
+    }
+    return { applied, skipped }
+  }
+
   /** Delete a changelist's shelved files from the server (`p4 shelve -d`). */
   async deleteShelved(changelist: string): Promise<boolean> {
     if (changelist === 'default') return false

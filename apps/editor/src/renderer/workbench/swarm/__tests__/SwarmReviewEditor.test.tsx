@@ -12,13 +12,19 @@ import {
   IConfigurationService,
   IDialogService,
   IEditorService,
+  INotificationService,
   IOpenerService,
   IStorageService,
+  IUriIdentityService,
+  IWorkspaceService,
   InstantiationService,
   ServiceCollection,
+  UriIdentityService,
   URI,
   type ICommand,
   type IConfigurationChangeEvent,
+  type IConfirmOptions,
+  type IConfirmResult,
 } from '@universe-editor/platform'
 import {
   SwarmCommands,
@@ -33,6 +39,7 @@ import {
   swarmReviewDetailCache,
   clearSwarmReviewEditorStates,
 } from '../../../services/swarm/swarmViewState.js'
+import { swarmApplyStore } from '../../../services/swarm/swarmApplyStore.js'
 import { SwarmReviewEditor } from '../SwarmReviewEditor.js'
 import { SwarmReviewFiles } from '../SwarmReviewFiles.js'
 
@@ -75,6 +82,17 @@ const FILES_WITH_SPREADSHEET: SwarmReviewFileDto[] = [
     depotFile: '//depot/tables/buff.xlsx',
     baseRevision: '3',
     localPath: 'C:/workspace/tables/buff.xlsx',
+  },
+]
+
+const FILES_WITH_OUTSIDE: SwarmReviewFileDto[] = [
+  ...FILES,
+  {
+    status: 'M',
+    path: 'external/c.ts',
+    depotFile: '//other/external/c.ts',
+    baseRevision: '2',
+    localPath: 'D:/outside/external/c.ts',
   },
 ]
 
@@ -128,7 +146,12 @@ function renderReview(configValues: Record<string, unknown> = {}) {
   } as unknown as IConfigurationService)
   const dialog = {
     _serviceBrand: undefined,
-    confirm: vi.fn(async () => ({ confirmed: false })),
+    confirm: vi.fn(
+      async (_opts: IConfirmOptions): Promise<IConfirmResult> => ({
+        confirmed: false,
+        choice: 'cancel' as const,
+      }),
+    ),
   }
   services.set(IDialogService, dialog as unknown as IDialogService)
   const editorService = {
@@ -137,12 +160,23 @@ function renderReview(configValues: Record<string, unknown> = {}) {
     closeEditor: vi.fn(),
   }
   services.set(IEditorService, editorService as unknown as IEditorService)
+  const notifications = {
+    _serviceBrand: undefined,
+    notify: vi.fn(),
+  }
+  services.set(INotificationService, notifications as unknown as INotificationService)
   const opener = {
     _serviceBrand: undefined,
     open: vi.fn(async () => true),
   }
   services.set(IOpenerService, opener as unknown as IOpenerService)
-  services.set(IStorageService, new FakeStorage() as unknown as IStorageService)
+  const storage = new FakeStorage()
+  services.set(IStorageService, storage as unknown as IStorageService)
+  services.set(IUriIdentityService, new UriIdentityService('win32'))
+  services.set(IWorkspaceService, {
+    _serviceBrand: undefined,
+    current: { folder: URI.file('C:/workspace') },
+  } as unknown as IWorkspaceService)
   const instantiation = new InstantiationService(services)
   const input = new SwarmReviewEditorInput('1001')
   const result = render(
@@ -150,7 +184,7 @@ function renderReview(configValues: Record<string, unknown> = {}) {
       <SwarmReviewEditor input={input} />
     </ServicesContext.Provider>,
   )
-  return { ...result, commands, dialog, editorService, input, opener, configChange }
+  return { ...result, commands, dialog, editorService, input, notifications, opener, configChange }
 }
 
 beforeEach(() => {
@@ -164,6 +198,9 @@ afterEach(() => {
   vi.useRealTimers()
   swarmReviewDetailCache.clear()
   clearSwarmReviewEditorStates()
+  // Module singleton: restore the OFF default for the next test (attach in the
+  // apply flow is idempotent, only the value can leak).
+  swarmApplyStore.setIncludeOutside(false)
 })
 
 describe('SwarmReviewEditor restore', () => {
@@ -207,7 +244,7 @@ describe('SwarmReviewEditor restore', () => {
     const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
     const obliterate = registerCommand(SwarmCommands.obliterateReview, () => true)
     const { commands, dialog, editorService, input } = renderReview()
-    dialog.confirm.mockResolvedValueOnce({ confirmed: true })
+    dialog.confirm.mockResolvedValueOnce({ confirmed: true, choice: 'primary' as const })
     try {
       await act(async () => Promise.resolve())
       expect(swarmReviewDetailCache.has('1001')).toBe(true)
@@ -682,6 +719,212 @@ describe('SwarmReviewEditor restore', () => {
     } finally {
       describeVersion.dispose()
       listComments.dispose()
+      getReview.dispose()
+    }
+  })
+})
+
+describe('SwarmReviewEditor apply to local', () => {
+  it('asks with a checkbox, then unshelves only the in-workspace files', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES_WITH_OUTSIDE)
+    const applyToLocal = registerCommand(SwarmCommands.applyToLocal, () => ({
+      applied: ['//depot/src/editor/a.ts', '//depot/src/runtime/b.ts'],
+      skipped: [],
+    }))
+    const { commands, dialog, notifications } = renderReview()
+    dialog.confirm.mockResolvedValueOnce({
+      confirmed: true,
+      choice: 'primary' as const,
+      checkboxChecked: false,
+    })
+    try {
+      await act(async () => Promise.resolve())
+      expect(screen.getByText('a.ts')).toBeTruthy()
+
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Apply to Local' })))
+
+      // The dialog warns about the replacing semantics and offers the toggle.
+      const confirmOpts = dialog.confirm.mock.calls[0]?.[0]
+      expect(confirmOpts?.type).toBe('warning')
+      expect(confirmOpts?.message).toBe('Apply review #1001 to local files?')
+      expect(confirmOpts?.checkbox?.label).toBe('Also replace files outside the workspace')
+      expect(confirmOpts?.checkbox?.initiallyChecked).toBe(false)
+      expect(confirmOpts?.detail).toContain('external/c.ts')
+
+      // Toggle off → the outside file stays out of the unshelve request, and
+      // the archive/immutable change is used (versions[0].change here).
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.applyToLocal, {
+        change: '2001',
+        depotFiles: ['//depot/src/editor/a.ts', '//depot/src/runtime/b.ts'],
+      })
+      expect(swarmApplyStore.includeOutside).toBe(false)
+      expect(notifications.notify).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Applied 2 file(s) to the workspace.' }),
+      )
+    } finally {
+      applyToLocal.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('includes outside files when the checkbox is checked and persists the toggle', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES_WITH_OUTSIDE)
+    const applyToLocal = registerCommand(SwarmCommands.applyToLocal, () => ({
+      applied: ['//depot/src/editor/a.ts', '//depot/src/runtime/b.ts', '//other/external/c.ts'],
+      skipped: [],
+    }))
+    const { commands, dialog } = renderReview()
+    dialog.confirm.mockResolvedValueOnce({
+      confirmed: true,
+      choice: 'primary' as const,
+      checkboxChecked: true,
+    })
+    try {
+      await act(async () => Promise.resolve())
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Apply to Local' })))
+
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.applyToLocal, {
+        change: '2001',
+        depotFiles: [
+          '//depot/src/editor/a.ts',
+          '//depot/src/runtime/b.ts',
+          '//other/external/c.ts',
+        ],
+      })
+      expect(swarmApplyStore.includeOutside).toBe(true)
+    } finally {
+      applyToLocal.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('warns with the skipped files the host reports', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const applyToLocal = registerCommand(SwarmCommands.applyToLocal, () => ({
+      applied: ['//depot/src/editor/a.ts'],
+      skipped: [{ depotFile: '//depot/src/runtime/b.ts', reason: 'already opened for edit' }],
+    }))
+    const { dialog, notifications } = renderReview()
+    dialog.confirm.mockResolvedValueOnce({
+      confirmed: true,
+      choice: 'primary' as const,
+      checkboxChecked: false,
+    })
+    try {
+      await act(async () => Promise.resolve())
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Apply to Local' })))
+
+      expect(notifications.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          severity: 1,
+          message: expect.stringContaining('//depot/src/runtime/b.ts — already opened for edit'),
+        }),
+      )
+    } finally {
+      applyToLocal.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('notifies and skips the command when no mapped file is in the workspace', async () => {
+    const unmapped: SwarmReviewFileDto[] = [
+      {
+        status: 'M',
+        path: 'src/x.ts',
+        depotFile: '//other/src/x.ts',
+        baseRevision: '1',
+        localPath: null,
+      },
+    ]
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => unmapped)
+    const applyToLocal = registerCommand(SwarmCommands.applyToLocal, () => ({
+      applied: [],
+      skipped: [],
+    }))
+    const { commands, dialog, notifications } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Apply to Local' })))
+
+      expect(commands.executeCommand).not.toHaveBeenCalledWith(
+        SwarmCommands.applyToLocal,
+        expect.anything(),
+      )
+      expect(dialog.confirm).not.toHaveBeenCalled()
+      expect(notifications.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('different stream/branch'),
+        }),
+      )
+    } finally {
+      applyToLocal.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('does not list the unmapped paths in the mismatch notice', async () => {
+    const foreign: SwarmReviewFileDto[] = [
+      {
+        status: 'M',
+        path: 'aki/branch_3.7/PosTransfer.ts',
+        depotFile: '//aki/branch_3.7/Source/Client/TypeScript/PosTransfer.ts',
+        baseRevision: '1',
+        localPath: null,
+      },
+    ]
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => foreign)
+    const applyToLocal = registerCommand(SwarmCommands.applyToLocal, () => ({
+      applied: [],
+      skipped: [],
+    }))
+    const { commands, dialog, notifications } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Apply to Local' })))
+
+      expect(commands.executeCommand).not.toHaveBeenCalledWith(
+        SwarmCommands.applyToLocal,
+        expect.anything(),
+      )
+      expect(dialog.confirm).not.toHaveBeenCalled()
+      const message = notifications.notify.mock.calls[0]?.[0]?.message as string
+      expect(message).toContain('different stream/branch')
+      expect(message).not.toContain('PosTransfer')
+    } finally {
+      applyToLocal.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('does nothing when the confirmation is cancelled', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const applyToLocal = registerCommand(SwarmCommands.applyToLocal, () => ({
+      applied: [],
+      skipped: [],
+    }))
+    const { commands } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Apply to Local' })))
+
+      expect(commands.executeCommand).not.toHaveBeenCalledWith(
+        SwarmCommands.applyToLocal,
+        expect.anything(),
+      )
+    } finally {
+      applyToLocal.dispose()
+      describeVersion.dispose()
       getReview.dispose()
     }
   })

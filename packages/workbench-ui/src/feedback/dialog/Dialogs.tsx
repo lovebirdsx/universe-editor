@@ -26,10 +26,12 @@ export function ConfirmDialog({
   const cancel = opts.cancelButton ?? localize('dialog.default.cancel', 'Cancel')
   const secondary = opts.secondaryButton
   const [neverAskAgain, setNeverAskAgain] = useState(false)
+  const [checkboxChecked, setCheckboxChecked] = useState(opts.checkbox?.initiallyChecked ?? false)
   const cancelResult: IConfirmResult = {
     confirmed: false,
     choice: 'cancel',
     neverAskAgain: false,
+    ...(opts.checkbox ? { checkboxChecked } : {}),
   }
   return (
     <FocusScopeOverlay visible onEscape={() => onResolve(cancelResult)}>
@@ -41,7 +43,12 @@ export function ConfirmDialog({
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
             e.preventDefault()
-            onResolve({ confirmed: true, choice: 'primary', neverAskAgain })
+            onResolve({
+              confirmed: true,
+              choice: 'primary',
+              neverAskAgain,
+              ...(opts.checkbox ? { checkboxChecked } : {}),
+            })
           }
         }}
       >
@@ -58,12 +65,29 @@ export function ConfirmDialog({
               {opts.neverAskAgainLabel}
             </label>
           ) : null}
+          {opts.checkbox ? (
+            <label className={styles['checkboxRow']}>
+              <input
+                type="checkbox"
+                checked={checkboxChecked}
+                onChange={(e) => setCheckboxChecked(e.target.checked)}
+              />
+              {opts.checkbox.label}
+            </label>
+          ) : null}
           <div className={styles['buttons']}>
             <button
               type="button"
               className={styles['btnPrimary']}
               autoFocus
-              onClick={() => onResolve({ confirmed: true, choice: 'primary', neverAskAgain })}
+              onClick={() =>
+                onResolve({
+                  confirmed: true,
+                  choice: 'primary',
+                  neverAskAgain,
+                  ...(opts.checkbox ? { checkboxChecked } : {}),
+                })
+              }
             >
               {primary}
             </button>
@@ -81,7 +105,12 @@ export function ConfirmDialog({
                 type="button"
                 className={styles['btn']}
                 onClick={() =>
-                  onResolve({ confirmed: false, choice: 'secondary', neverAskAgain: false })
+                  onResolve({
+                    confirmed: false,
+                    choice: 'secondary',
+                    neverAskAgain: false,
+                    ...(opts.checkbox ? { checkboxChecked } : {}),
+                  })
                 }
               >
                 {secondary}

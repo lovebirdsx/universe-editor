@@ -20,6 +20,7 @@ import {
 import { IScmService } from '../services/extensions/ScmService.js'
 import { registerViewWithComponent } from '../services/views/ViewComponentRegistry.js'
 import { swarmIgnoreStore } from '../services/swarm/swarmIgnoreStore.js'
+import { swarmApplyStore } from '../services/swarm/swarmApplyStore.js'
 import { swarmReviewsUiStore } from '../services/swarm/swarmReviewsUiStore.js'
 import { SwarmReviewsView } from '../workbench/swarm/SwarmReviewsView.js'
 
@@ -39,6 +40,7 @@ export class SwarmViewContribution extends Disposable implements IWorkbenchContr
     // in "Needs My Action" while hydration catches up.
     void swarmIgnoreStore.attach(storage)
     void swarmReviewsUiStore.attach(storage)
+    void swarmApplyStore.attach(storage)
 
     // Auto-remove ignored reviews that aged out of the review window — the windowed
     // dashboard will never return them again, so they'd pile up in IGNORED forever.

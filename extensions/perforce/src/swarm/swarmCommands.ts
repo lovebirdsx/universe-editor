@@ -49,6 +49,7 @@ const Cmd = {
   getFileContent: 'perforce.swarm.getFileContent',
   getFileContentBytes: 'perforce.swarm.getFileContentBytes',
   describeVersion: 'perforce.swarm.describeVersion',
+  applyToLocal: 'perforce.swarm.applyToLocal',
   setStatusCount: 'perforce.swarm.setStatusCount',
   setBackgroundPoll: 'perforce.swarm.setBackgroundPoll',
 } as const
@@ -676,6 +677,35 @@ export function registerSwarmCommands(
       if (!active || !request.change) return []
       logger.debug('cmd', `describeVersion change=${request.change} (p4 describe)`)
       return active.describeChangeFiles(request.change, request.force, request.immutable)
+    }),
+
+    // Restore a review version's files into the workspace (`p4 unshelve -s
+    // <change> -f <depotFile...>`), overwriting local copies. NOT wrapped in
+    // guard(): it builds a SwarmClient and its failure UX (401 → p4 login
+    // prompt, "Swarm request failed" toast) is REST-API semantics — this is a
+    // pure p4 data command like describeVersion/getFileContent above. p4's
+    // partial refusal (already-opened / stale-base files) is reported in-band
+    // via the result's `skipped`, and the renderer owns the user-facing toast.
+    commands.registerCommand(Cmd.applyToLocal, async (req: unknown) => {
+      const r = req as { change?: unknown; depotFiles?: unknown }
+      const empty: { applied: string[]; skipped: { depotFile: string; reason: string }[] } = {
+        applied: [],
+        skipped: [],
+      }
+      const active = mgr.active
+      if (!active || typeof r?.change !== 'string' || !Array.isArray(r?.depotFiles)) return empty
+      const depotFiles = r.depotFiles.filter((f): f is string => typeof f === 'string')
+      logger.info('cmd', `applyToLocal change=${r.change} files=${depotFiles.length} (p4 unshelve)`)
+      const result = await active.unshelveFiles(r.change, depotFiles)
+      if (result.skipped.length > 0) {
+        logger.warn(
+          'cmd',
+          `applyToLocal skipped ${result.skipped.length}/${depotFiles.length}: ${result.skipped
+            .map((s) => `${s.depotFile} (${s.reason})`)
+            .join('; ')}`,
+        )
+      }
+      return result
     }),
 
     // Print a depot file at either its review-base revision (`#<rev>`) or an

@@ -72,10 +72,11 @@
 
 ### 命令清单（`SwarmCommands`，全 `perforce.swarm.*`）
 
-`ping` / `requestReview` / `updateReviewFromChangelist` / `listReviews` / `dashboard` / `getReview` / `getTransitions` / `createReview` / `vote` / `transition` / `obliterateReview` / `addChange` / `updateReview` / `listComments` / `addComment` / `setTaskState` / `getFileContent` / `describeVersion`。
+`ping` / `requestReview` / `updateReviewFromChangelist` / `listReviews` / `dashboard` / `getReview` / `getTransitions` / `createReview` / `vote` / `transition` / `obliterateReview` / `addChange` / `updateReview` / `listComments` / `addComment` / `setTaskState` / `getFileContent` / `describeVersion` / `applyToLocal`。
 
 - `getTransitions` 是列表与详情共用的服务器权威能力查询；列表里的“可 Approve”蓝色勾和右键状态操作都只能由它驱动。
 - `obliterateReview` 走 `POST reviews/{id}/obliterate`，与 archived transition 不同，会永久删除审核。renderer 必须先做不可逆确认，服务端仍负责最终权限校验。
+- `applyToLocal`（详情页 Apply to Local 按钮）是**纯 p4 数据命令**（`p4 unshelve -s <change> -f <筛选后的 depot 文件>`），**不走 `guard()`**——guard 构造 SwarmClient、401→login、失败 toast 全是 Swarm REST 语义。入参 change 同样走 `archiveChange ?? change` 不可变快照铁律（renderer 传的是 `selectedChange`，别重新推导）。整批失败时逐文件重试，p4 拒绝的（已打开/基线过期）进 `skipped[]` 报告；renderer 侧弹确认框（含「工作区外文件」持久化开关，store 在 `services/swarm/swarmApplyStore.ts`），分类纯函数 `swarmApplyPlan.ts` 带单测。
 
 - **数据命令全走 `commands.registerCommand`（host 侧），renderer 用 `commands.executeCommand(SwarmCommands.xxx, arg)` 跨 JSON 边界调**。这些命令 **`requestReview`/`updateReviewFromChangelist`/`ping` 之外都不进 package.json `commands` 数组**——它们是纯数据 RPC，renderer 直接按 id 执行即可，无需声明（且声明会触发头号坑，见下）。
 - **只有 `perforce.swarm.ping` / `perforce.swarm.requestReview` / `perforce.swarm.updateReviewFromChangelist` 进 package.json**（`ping` 是命令面板自检；后两者贡献到 SCM changelist 组头右键菜单 `3_swarm@1/@2`，都是**扩展宿主有真 handler** 的命令）。

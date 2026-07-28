@@ -14,8 +14,12 @@ import {
   IConfigurationService,
   IDialogService,
   IEditorService,
+  INotificationService,
   IOpenerService,
   IStorageService,
+  IUriIdentityService,
+  IWorkspaceService,
+  Severity,
   StorageScope,
   URI,
   type IEditorInput,
@@ -25,6 +29,8 @@ import { Button, IconButton, Spinner, cx } from '@universe-editor/workbench-ui'
 import {
   SwarmCommands,
   type SwarmAddCommentRequest,
+  type SwarmApplyToLocalRequest,
+  type SwarmApplyToLocalResult,
   type SwarmCommentDto,
   type SwarmDescribeVersionRequest,
   type SwarmFileContentRequest,
@@ -53,6 +59,8 @@ import {
   type SwarmReviewFilesViewMode,
 } from '../../services/swarm/swarmViewState.js'
 import { swarmIgnoreStore } from '../../services/swarm/swarmIgnoreStore.js'
+import { swarmApplyStore } from '../../services/swarm/swarmApplyStore.js'
+import { planApplyToLocal } from '../../services/swarm/swarmApplyPlan.js'
 import { SwarmReviewFiles } from './SwarmReviewFiles.js'
 import styles from './SwarmReviewEditor.module.css'
 
@@ -87,13 +95,22 @@ function isCommitTransition(state: string): boolean {
   return state.includes('commit')
 }
 
+/** Join the first few skipped/unmapped paths for dialog/notification wording. */
+function formatPathList(paths: readonly string[], max = 3): string {
+  const head = paths.slice(0, max).join(', ')
+  return paths.length > max ? `${head} and ${paths.length - max} more` : head
+}
+
 export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   const commands = useService(ICommandService)
   const configuration = useService(IConfigurationService)
   const dialog = useService(IDialogService)
   const editorService = useService(IEditorService)
+  const notifications = useService(INotificationService)
   const opener = useService(IOpenerService)
   const storage = useService(IStorageService)
+  const uriIdentity = useService(IUriIdentityService)
+  const workspaceService = useService(IWorkspaceService)
   const reviewId = input instanceof SwarmReviewEditorInput ? input.reviewId : ''
   const filesViewMode = useObservable(swarmReviewFilesViewState.viewMode)
 
@@ -333,6 +350,12 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     }
   }, [busy, commands, dialog, editorService, input.id, reviewId])
 
+  useEffect(() => {
+    void swarmIgnoreStore.attach(storage)
+    const sub = swarmIgnoreStore.onDidChange(() => setIgnored(swarmIgnoreStore.isIgnored(reviewId)))
+    return () => sub.dispose()
+  }, [storage, reviewId])
+
   // Ignore / unignore this review — moves it out of "Needs My Action" into the
   // Ignored group in the sidebar. Pure client state (swarmIgnoreStore, shared
   // with the list view); the snapshot lets the Ignored group render even if the
@@ -360,11 +383,6 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     swarmIgnoreStore.ignore(snapshot)
   }, [reviewId])
 
-  useEffect(() => {
-    void swarmIgnoreStore.attach(storage)
-    const sub = swarmIgnoreStore.onDidChange(() => setIgnored(swarmIgnoreStore.isIgnored(reviewId)))
-    return () => sub.dispose()
-  }, [storage, reviewId])
   const changeForVersion = useCallback(
     (versionIdx: number | null): string | null => {
       if (versionIdx === null) return null
@@ -373,6 +391,172 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     },
     [detail],
   )
+
+  // Load the selected version's files. Use the immutable archive shelf (via
+  // changeForVersion), not the author's raw changelist: the latter can be
+  // re-shelved / emptied after the version was recorded, which would make the
+  // file list drift or come back empty (see the diff data-source rule).
+  const selectedChange = useMemo(
+    () => changeForVersion(selectedVersionIdx),
+    [changeForVersion, selectedVersionIdx],
+  )
+
+  // Apply the selected version's files to the workspace via `p4 unshelve -f`
+  // (host-side command). The immutable archive snapshot (selectedChange) is the
+  // source, so a re-shelved author changelist can't drift what gets applied.
+  // `-f` overwrites local copies — including unopened hand-edited files (the
+  // point of the feature); files p4 refuses (already open, stale base) come
+  // back in `skipped`.
+  const applyToLocal = useCallback(async () => {
+    const change = selectedChange
+    const versionFiles = files
+    if (!reviewId || busy || !change || !versionFiles?.length) return
+    await swarmApplyStore.attach(storage)
+    const includeOutside = swarmApplyStore.includeOutside
+    const folder = workspaceService.current?.folder
+    const plan = planApplyToLocal(
+      versionFiles,
+      includeOutside,
+      (fsPath) => folder !== undefined && uriIdentity.isEqualOrParent(URI.file(fsPath), folder),
+    )
+    if (plan.depotFiles.length === 0) {
+      // Nothing p4 could restore: every file is unmapped (not in the client
+      // view — the review targets another stream/branch) or mapped outside the
+      // workspace with the toggle off. The unmapped case gets its own wording
+      // since no checkbox can fix it.
+      const unmappedOnly = plan.unmappedPaths.length > 0 && plan.outsidePaths.length === 0
+      const message = unmappedOnly
+        ? localize(
+            'swarm.apply.nothing.mismatch',
+            'Cannot apply this review: its files belong to a different stream/branch than the current workspace.',
+          )
+        : localize(
+            'swarm.apply.nothing',
+            'Nothing to apply: no mapped file of this version is inside the workspace.',
+          )
+      notifications.notify({ severity: Severity.Info, message, sticky: true })
+      return
+    }
+    const detailParts: string[] = [
+      localize(
+        'swarm.apply.detail',
+        'This replaces the local content of {0} file(s) with the review version.',
+        { 0: String(plan.depotFiles.length) },
+      ),
+    ]
+    if (plan.outsidePaths.length > 0) {
+      detailParts.push(
+        localize(
+          'swarm.apply.detail.outside',
+          '{0} file(s) outside the workspace will be skipped: {1}',
+          {
+            0: String(plan.outsidePaths.length),
+            1: formatPathList(plan.outsidePaths),
+          },
+        ),
+      )
+    }
+    if (plan.unmappedPaths.length > 0) {
+      detailParts.push(
+        localize(
+          'swarm.apply.detail.unmapped',
+          '{0} file(s) belong to a different stream/branch and cannot be applied.',
+          { 0: String(plan.unmappedPaths.length) },
+        ),
+      )
+    }
+    detailParts.push(
+      localize(
+        'swarm.apply.detail.skippedNote',
+        'Files already open or out of date will be skipped and reported.',
+      ),
+    )
+    const res = await dialog.confirm({
+      type: 'warning',
+      message: localize('swarm.apply.confirm', 'Apply review #{0} to local files?', {
+        0: reviewId,
+      }),
+      detail: detailParts.join('\n'),
+      primaryButton: localize('swarm.applyToLocal', 'Apply to Local'),
+      checkbox: {
+        label: localize('swarm.apply.checkbox', 'Also replace files outside the workspace'),
+        initiallyChecked: includeOutside,
+      },
+    })
+    if (!res.confirmed) return
+    // The checkbox can change which files are in scope — re-plan with it before
+    // persisting/sending.
+    const finalPlan = planApplyToLocal(
+      versionFiles,
+      res.checkboxChecked ?? includeOutside,
+      (fsPath) => folder !== undefined && uriIdentity.isEqualOrParent(URI.file(fsPath), folder),
+    )
+    swarmApplyStore.setIncludeOutside(res.checkboxChecked ?? includeOutside)
+    if (finalPlan.depotFiles.length === 0) {
+      notifications.notify({
+        severity: Severity.Info,
+        message: localize('swarm.apply.nothingApplied', 'No files were applied.'),
+      })
+      return
+    }
+    setBusy(true)
+    try {
+      const result = await commands.executeCommand<SwarmApplyToLocalResult>(
+        SwarmCommands.applyToLocal,
+        { change, depotFiles: finalPlan.depotFiles } satisfies SwarmApplyToLocalRequest,
+      )
+      const applied = result?.applied.length ?? 0
+      const skipped = result?.skipped ?? []
+      if (applied === 0 && skipped.length === 0) {
+        notifications.notify({
+          severity: Severity.Info,
+          message: localize('swarm.apply.nothingApplied', 'No files were applied.'),
+        })
+      } else if (skipped.length === 0) {
+        notifications.notify({
+          severity: Severity.Info,
+          message: localize('swarm.apply.done', 'Applied {0} file(s) to the workspace.', {
+            0: String(applied),
+          }),
+        })
+      } else {
+        // INotification has no detail field — the first few skipped entries go
+        // into the message; the host-side logger.warn carries the full list.
+        const preview = skipped
+          .slice(0, 3)
+          .map((s) => `${s.depotFile} — ${s.reason}`)
+          .join('\n')
+        notifications.notify({
+          severity: Severity.Warning,
+          message: localize(
+            'swarm.apply.doneWithSkipped',
+            'Applied {0} file(s); {1} skipped:\n{2}{3}',
+            {
+              0: String(applied),
+              1: String(skipped.length),
+              2: preview,
+              3: skipped.length > 3 ? `\n…and ${skipped.length - 3} more` : '',
+            },
+          ),
+        })
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }, [
+    busy,
+    commands,
+    dialog,
+    files,
+    notifications,
+    reviewId,
+    selectedChange,
+    storage,
+    uriIdentity,
+    workspaceService,
+  ])
 
   // Open a file's diff between the compare (left) and selected (right) versions.
   // Both sides are p4 snapshots at their version's backing change, so line numbers
@@ -581,14 +765,6 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     void storage.set(FILES_VIEW_MODE_STORAGE_KEY, filesViewMode, StorageScope.GLOBAL)
   }, [filesViewMode, storage])
 
-  // Load the selected version's files. Use the immutable archive shelf (via
-  // changeForVersion), not the author's raw changelist: the latter can be
-  // re-shelved / emptied after the version was recorded, which would make the
-  // file list drift or come back empty (see the diff data-source rule).
-  const selectedChange = useMemo(
-    () => changeForVersion(selectedVersionIdx),
-    [changeForVersion, selectedVersionIdx],
-  )
   // An archive shelf is a permanent snapshot: describe it once, cache forever,
   // and never force-refresh it. Only a version that falls back to the author's
   // (re-shelvable) changelist stays on the short-TTL + force path — otherwise the
@@ -713,6 +889,15 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
               {localize('swarm.updateReview', 'Update Review')}
             </Button>
           )}
+          <Button
+            size="sm"
+            variant="secondary"
+            busy={busy}
+            onClick={() => void applyToLocal()}
+            data-testid="swarm-review-apply"
+          >
+            {localize('swarm.applyToLocal', 'Apply to Local')}
+          </Button>
           {detail.transitions.map((t) => (
             <Button
               key={t.state}

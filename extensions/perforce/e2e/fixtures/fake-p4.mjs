@@ -42,6 +42,7 @@ if (!STATE_PATH) {
  *   opened: Record<string, OpenedEntry>,
  *   changelists?: Record<string, { description: string }>,
  *   shelved?: Record<string, Record<string, { action: string, rev: number, content?: string }>>,
+ *   unshelveRefuse?: string[],
  *   nextChange?: number,
  * }} State
  */
@@ -631,11 +632,56 @@ function main() {
     }
 
     case 'unshelve': {
-      // Restore a shelf (`unshelve -s <src> [-c <dst>] [-f] [file...]`). The fake
-      // just needs to succeed so the extension's refresh + toasts flow; it doesn't
-      // rewrite disk content.
+      // Restore a shelf (`unshelve -s <src> [-f] [file...]`): real p4 copies the
+      // shelved revisions over the local files and opens them in the default
+      // changelist. With trailing file args it only unshelves those files.
+      // Fault injection: state.unshelveRefuse lists depotFiles p4 must refuse
+      // (already open / stale base) — each is rejected with a stderr reason and
+      // exit 1, which is exactly how the extension's per-file retry decides what
+      // lands in `skipped`.
       const src = argAfter(rest, '-s')
       if (!src) return 1
+      const shelf = state.shelved[src]
+      if (!shelf) {
+        process.stderr.write(`Change ${src} - no shelved files.\n`)
+        return 1
+      }
+      const refuse = new Set(state.unshelveRefuse ?? [])
+      // Trailing file args (no leading '-'), excluding the `-s` value.
+      const files = rest.filter((a) => !a.startsWith('-') && a !== src)
+      const entries =
+        files.length > 0
+          ? files.map((f) => toDepotFile(state, f)).filter((f) => shelf[f])
+          : Object.keys(shelf)
+      if (entries.length === 0) {
+        process.stderr.write(`Change ${src} - no such file(s).\n`)
+        return 1
+      }
+      const refused = entries.filter((f) => refuse.has(f))
+      if (refused.length > 0) {
+        for (const f of refused) {
+          process.stderr.write(`${f} - already opened on this client; unshelve refused.\n`)
+        }
+        return 1
+      }
+      const records = []
+      for (const depotFile of entries) {
+        const s = shelf[depotFile]
+        if (s.content !== undefined) {
+          const abs = clientOf(state, depotFile)
+          mkdirSync(dirname(abs), { recursive: true })
+          writeFileSync(abs, s.content)
+        }
+        state.opened[depotFile] = { action: s.action, change: 'default', rev: s.rev }
+        records.push({
+          depotFile,
+          clientFile: clientSyntaxOf(state, depotFile),
+          action: s.action,
+          change: 'default',
+        })
+      }
+      saveState(state)
+      emit(records)
       return 0
     }
 

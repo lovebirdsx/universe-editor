@@ -318,6 +318,25 @@ export interface SwarmDescribeVersionRequest {
   immutable?: boolean
 }
 
+/** Argument for `perforce.swarm.applyToLocal` — restore a review version's files
+ *  into the workspace via `p4 unshelve -f`. */
+export interface SwarmApplyToLocalRequest {
+  /** Immutable snapshot change of the selected version (archiveChange ?? change). */
+  change: string
+  /** Depot files to restore; files outside the client view are refused by p4 and
+   *  come back in {@link SwarmApplyToLocalResult.skipped}. */
+  depotFiles: string[]
+}
+
+/** Result of `perforce.swarm.applyToLocal`. */
+export interface SwarmApplyToLocalResult {
+  /** Depot files successfully restored into the default changelist. */
+  applied: string[]
+  /** Files p4 refused (already opened / out-of-date base / not in client view),
+   *  with the p4 error line as the reason. */
+  skipped: { depotFile: string; reason: string }[]
+}
+
 /** Argument for `perforce.swarm.getFileDiff` — the two version snapshots to compare. */
 export interface SwarmFileDiffRequest {
   reviewId: string
@@ -361,6 +380,10 @@ export const SwarmCommands = {
    *  corrupt. Consumed by the spreadsheet webview diff. */
   getFileContentBytes: 'perforce.swarm.getFileContentBytes',
   describeVersion: 'perforce.swarm.describeVersion',
+  /** Restore a review version's files into the workspace, overwriting local
+   *  copies (`p4 unshelve -s <change> -f <depotFile...>`). p4-refused files
+   *  (already opened / out-of-date base) come back in `skipped`. */
+  applyToLocal: 'perforce.swarm.applyToLocal',
   /** Renderer → host: push the sidebar group-scope "Needs My Action" count for
    *  the status bar to display. The host cannot derive it itself — the author /
    *  approvable filters and the client-side ignore set live renderer-side. */

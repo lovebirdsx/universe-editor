@@ -78,6 +78,71 @@ describe('ConfirmDialog', () => {
     )
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Create' }))
   })
+
+  it('does not render a checkbox row without opts.checkbox, and omits checkboxChecked', () => {
+    const onResolve = vi.fn()
+    render(<ConfirmDialog opts={{ message: 'Sure?' }} onResolve={onResolve} />)
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    expect(onResolve).toHaveBeenCalledWith({
+      confirmed: true,
+      choice: 'primary',
+      neverAskAgain: false,
+    })
+  })
+
+  it('renders the generic checkbox with its initial state and echoes the toggled value', () => {
+    const onResolve = vi.fn()
+    render(
+      <ConfirmDialog
+        opts={{ message: 'Apply?', checkbox: { label: 'Include outside', initiallyChecked: true } }}
+        onResolve={onResolve}
+      />,
+    )
+    const checkbox = screen.getByRole('checkbox', { name: 'Include outside' })
+    expect((checkbox as HTMLInputElement).checked).toBe(true)
+    fireEvent.click(checkbox)
+    fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    expect(onResolve).toHaveBeenCalledWith({
+      confirmed: true,
+      choice: 'primary',
+      neverAskAgain: false,
+      checkboxChecked: false,
+    })
+  })
+
+  it('echoes the checkbox state on cancel too', () => {
+    const onResolve = vi.fn()
+    render(
+      <ConfirmDialog
+        opts={{ message: 'Apply?', checkbox: { label: 'Include outside' } }}
+        onResolve={onResolve}
+      />,
+    )
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Include outside' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(onResolve).toHaveBeenCalledWith({
+      confirmed: false,
+      choice: 'cancel',
+      neverAskAgain: false,
+      checkboxChecked: true,
+    })
+  })
+
+  it('coexists with the never-ask-again row as a second checkbox', () => {
+    render(
+      <ConfirmDialog
+        opts={{
+          message: 'Sure?',
+          neverAskAgainLabel: "Don't ask again",
+          checkbox: { label: 'Include outside' },
+        }}
+        onResolve={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('checkbox', { name: "Don't ask again" })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: 'Include outside' })).toBeTruthy()
+  })
 })
 
 describe('PromptDialog', () => {

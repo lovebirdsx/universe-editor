@@ -5,6 +5,11 @@
 
 import { createDecorator } from '../di/instantiation.js'
 
+export interface IConfirmCheckbox {
+  readonly label: string
+  readonly initiallyChecked?: boolean
+}
+
 export interface IConfirmOptions {
   readonly message: string
   readonly detail?: string
@@ -17,6 +22,10 @@ export interface IConfirmOptions {
   readonly type?: 'info' | 'warning' | 'error'
   /** When set, renders a "don't ask again" checkbox at the bottom of the dialog. */
   readonly neverAskAgainLabel?: string
+  /** When set, renders a generic checkbox row (e.g. an action toggle); its final
+   *  state is echoed in {@link IConfirmResult.checkboxChecked}. Independent of
+   *  `neverAskAgainLabel` — both rows may coexist. */
+  readonly checkbox?: IConfirmCheckbox
 }
 
 export interface IConfirmResult {
@@ -25,6 +34,8 @@ export interface IConfirmResult {
   readonly choice: 'primary' | 'secondary' | 'cancel'
   /** True when the user checked the "don't ask again" checkbox. */
   readonly neverAskAgain?: boolean
+  /** Final state of {@link IConfirmOptions.checkbox}, echoed on every exit path. */
+  readonly checkboxChecked?: boolean
 }
 
 export interface IPromptOptions {
