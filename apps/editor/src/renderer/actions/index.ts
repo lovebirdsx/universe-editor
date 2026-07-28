@@ -276,6 +276,7 @@ import {
   ToggleOutputAutoScrollAction,
 } from './logActions.js'
 import {
+  AskInSideChatAction,
   CancelAgentTurnAction,
   ClearAgentSessionHistoryAction,
   FocusAgentInputAction,
@@ -688,6 +689,7 @@ registerAction2(PinAgentSessionAction)
 registerAction2(UnpinAgentSessionAction)
 registerAction2(RewindAgentSessionAction)
 registerAction2(ForkAgentSessionAction)
+registerAction2(AskInSideChatAction)
 registerAction2(FocusNextAcpTimelineItemAction)
 registerAction2(FocusPreviousAcpTimelineItemAction)
 registerAction2(FocusTopAcpTimelineAction)

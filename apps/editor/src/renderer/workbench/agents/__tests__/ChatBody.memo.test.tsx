@@ -13,6 +13,7 @@ import {
   IConfigurationService,
   IContextKeyService,
   ContextKeyService,
+  IEditorGroupsService,
   IFileSearchService,
   IFileService,
   InstantiationService,
@@ -37,9 +38,14 @@ import type {
   TimelineItem,
 } from '../../../services/acp/session/acpSessionService.js'
 import { IAcpSessionService } from '../../../services/acp/session/acpSessionService.js'
+import {
+  IAcpSessionHistoryService,
+  type AcpSessionHistoryEntry,
+} from '../../../services/acp/session/acpSessionHistory.js'
 import { IAcpAgentRegistry } from '../../../services/acp/acpAgentRegistry.js'
 import { IAcpChatWidgetService } from '../../../services/acp/session/acpChatWidgetService.js'
 import { AcpChatViewStateCache } from '../../../services/acp/session/acpChatViewStateCache.js'
+import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import type { SessionConfigOption, ContentBlock } from '@agentclientprotocol/sdk'
 import { ServicesContext } from '../../useService.js'
 import { IAcpPromptHistoryService } from '../../../services/acp/session/acpPromptHistoryService.js'
@@ -90,6 +96,7 @@ function makeSession(
     agentId: 'fake',
     title: 'Fake',
     messages: observableValue<readonly AcpMessage[]>('t.messages', []),
+    sessionIdOnAgent: observableValue<string | undefined>('t.sidOnAgent', id),
     toolCalls: observableValue<readonly AcpToolCall[]>('t.toolCalls', []),
     plan: observableValue<readonly AcpPlanEntry[]>('t.plan', []),
     timeline,
@@ -154,7 +161,14 @@ function makeInstantiation(threshold?: number) {
     _serviceBrand: undefined,
     activeSession: observableValue<IAcpSession | undefined>('t.active', undefined),
     mcpServerDefinitions: observableValue('t.mcpDefs', []),
+    getById: () => undefined,
   } as unknown as IAcpSessionService)
+  services.set(IAcpSessionHistoryService, {
+    _serviceBrand: undefined,
+    entries: observableValue<readonly AcpSessionHistoryEntry[]>('t.sessionHistory', []),
+    get: () => undefined,
+  } as unknown as IAcpSessionHistoryService)
+  services.set(IEditorGroupsService, new EditorGroupsService())
   services.set(IAcpAgentRegistry, {
     _serviceBrand: undefined,
     defaultAgentId: () => 'fake',

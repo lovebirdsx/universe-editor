@@ -45,6 +45,7 @@ import {
   type AuthenticateResponse,
   type CancelNotification,
   type Client,
+  type ContentBlock,
   type ForkSessionRequest,
   type ForkSessionResponse,
   type InitializeRequest,
@@ -196,6 +197,13 @@ class FakeStorage implements IStorageService {
   }
 }
 
+/** Extract the text of every `text` block, in order. */
+function textBlocksOf(blocks: readonly ContentBlock[]): string[] {
+  return blocks
+    .filter((b): b is ContentBlock & { type: 'text' } => b.type === 'text')
+    .map((b) => b.text)
+}
+
 function makeHistory(): AcpSessionHistoryService {
   return new AcpSessionHistoryService(
     new FakeStorage(),
@@ -244,6 +252,8 @@ interface StubAgentOptions {
   mcpCapabilities?: McpCapabilities
   /** When true, advertise loadSession so resumeSession can proceed. */
   loadSession?: boolean
+  /** When true, loadSession() never resolves — used to inject updates mid-replay. */
+  loadSessionHangs?: boolean
   /** configOptions the agent returns from newSession (and loadSession). */
   newSessionConfigOptions?: readonly SessionConfigOption[]
   /** Fixed PromptResponse to return (e.g. to echo a specific userMessageId). */
@@ -289,7 +299,7 @@ class StubAgent implements Agent {
     return Promise.resolve({
       protocolVersion: 1,
       agentCapabilities: {
-        loadSession: this._opts.loadSession ?? false,
+        loadSession: (this._opts.loadSession ?? false) || (this._opts.loadSessionHangs ?? false),
         promptCapabilities: {},
         ...(this._opts.forkCapable ? { sessionCapabilities: { fork: {} } } : {}),
         ...(this._opts.mcpCapabilities ? { mcpCapabilities: this._opts.mcpCapabilities } : {}),
@@ -349,6 +359,7 @@ class StubAgent implements Agent {
 
   loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
     this.loadSessionCalls.push(params)
+    if (this._opts.loadSessionHangs) return new Promise<never>(() => {})
     return Promise.resolve({} as unknown as LoadSessionResponse)
   }
 
@@ -1349,6 +1360,414 @@ describe('AcpSessionService — rewind / fork', () => {
       await s.sendPrompt('first turn')
 
       await expect(svc.forkSession(s.id)).rejects.toThrow(/fork/)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSideTask registers a child row with the quote and the read-only mode override', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-side-1' },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      const side = await svc.forkSideTask(s.id, { text: 'quoted text', label: 'quote summary' })
+
+      expect(side.id).toBe('agent-side-1')
+      const entry = history.get('agent-side-1')
+      expect(entry?.sideTaskOf).toBe('agent-1')
+      expect(entry?.sideTaskQuote).toBe('quoted text')
+      expect(entry?.title).toBe('quote summary')
+      expect(entry?.configOptions?.['mode']).toBe('dontAsk')
+      expect(entry?.configLabels?.['mode']).toBe('dontAsk')
+      // Side chats never steal the active session.
+      expect(svc.activeSession.get()?.id).toBe(s.id)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSideTask overrides an explicitly-selected mode with the read-only value', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const modeConfig: readonly SessionConfigOption[] = [
+      {
+        id: 'mode',
+        name: 'Mode',
+        category: 'mode',
+        type: 'select',
+        currentValue: 'default',
+        options: [
+          { value: 'default', name: 'Default' },
+          { value: 'plan', name: 'Plan' },
+        ],
+      } as unknown as SessionConfigOption,
+    ]
+    const client = new FakeAcpClientService({
+      stubOptions: {
+        forkCapable: true,
+        loadSession: true,
+        forkedSessionId: 'agent-side-2',
+        newSessionConfigOptions: modeConfig,
+      },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
+
+      expect(history.get('agent-side-2')?.configOptions?.['mode']).toBe('dontAsk')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSideTask uses the codex read-only mode value for non-claude agents', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-side-3' },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('codex')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
+
+      expect(history.get('agent-side-3')?.configOptions?.['mode']).toBe('read-only')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSideTask suppresses the baseline replay on the child timeline', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: {
+        forkCapable: true,
+        loadSession: true,
+        loadSessionHangs: true,
+        forkedSessionId: 'agent-side-4',
+      },
+    })
+    const svc = makeService(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      // The child's session/load never settles, so forkSideTask stays pending
+      // with the suppression window open — the agent replays the inherited
+      // baseline mid-replay, exactly as a real loadSession would stream it.
+      void svc.forkSideTask(s.id, { text: 'q', label: 'l' }).catch(() => {})
+      await vi.waitFor(() => {
+        expect(svc.getById('agent-side-4')).toBeDefined()
+      })
+      const side = svc.getById('agent-side-4')!
+      const forkConn = client.connected.find((c) => c.agent.forkCalls.length > 0)!
+      forkConn.sink.onSessionUpdate({
+        sessionId: 'agent-side-4',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'baseline replay' },
+        },
+      })
+
+      expect(side.timeline.get()).toEqual([])
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('resuming a side-task row suppresses the baseline replay (re-open path)', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { loadSession: true, loadSessionHangs: true },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      // Simulate a re-open after restart: the row already carries the side-task
+      // flag, and the plain resumeSession path (no fork caller) must suppress
+      // the replayed baseline exactly like the fork-time resume does.
+      history.add({
+        agentId: 'claude-code',
+        sessionIdOnAgent: 'agent-side-reopen',
+        title: 'side chat',
+        sideTaskOf: 'agent-parent',
+        sideTaskQuote: 'quoted text',
+      })
+
+      // session/load never settles, so resumeSession stays pending with the
+      // suppression window open while the agent streams the baseline.
+      void svc.resumeSession('agent-side-reopen').catch(() => {})
+      await vi.waitFor(() => {
+        expect(svc.getById('agent-side-reopen')).toBeDefined()
+      })
+      const side = svc.getById('agent-side-reopen')!
+      client.connected[0]!.sink.onSessionUpdate({
+        sessionId: 'agent-side-reopen',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'baseline replay' },
+        },
+      })
+
+      expect(side.timeline.get()).toEqual([])
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('resuming a side-task row keeps the side task’s own turns after the anchor', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { loadSession: true, loadSessionHangs: true },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      // Re-open after restart: the row carries the side-task flag AND the anchor
+      // recorded when the side task sent its first prompt.
+      history.add({
+        agentId: 'claude-code',
+        sessionIdOnAgent: 'agent-side-anchor',
+        title: 'side chat',
+        sideTaskOf: 'agent-parent',
+        sideTaskQuote: 'quoted text',
+        sideTaskAnchorMessageId: 'anchor-msg',
+      })
+
+      void svc.resumeSession('agent-side-anchor').catch(() => {})
+      await vi.waitFor(() => {
+        expect(svc.getById('agent-side-anchor')).toBeDefined()
+      })
+      const side = svc.getById('agent-side-anchor')!
+      const sink = client.connected[0]!.sink
+
+      // Baseline traffic before the anchor is suppressed…
+      sink.onSessionUpdate({
+        sessionId: 'agent-side-anchor',
+        update: {
+          sessionUpdate: 'user_message_chunk',
+          content: { type: 'text', text: 'baseline user' },
+          messageId: 'baseline-msg',
+        } as never,
+      })
+      sink.onSessionUpdate({
+        sessionId: 'agent-side-anchor',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'baseline agent' },
+        },
+      })
+      expect(side.timeline.get()).toEqual([])
+
+      // …but the anchor message and the side task's own turn after it survive.
+      sink.onSessionUpdate({
+        sessionId: 'agent-side-anchor',
+        update: {
+          sessionUpdate: 'user_message_chunk',
+          content: { type: 'text', text: 'side-task first prompt' },
+          messageId: 'anchor-msg',
+        } as never,
+      })
+      sink.onSessionUpdate({
+        sessionId: 'agent-side-anchor',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'side-task answer' },
+        },
+      })
+
+      const texts = side.timeline
+        .get()
+        .filter((it) => it.kind === 'message')
+        .map((it) => (it.kind === 'message' ? `${it.message.role}:${it.message.text}` : ''))
+      expect(texts).toEqual(['user:side-task first prompt', 'agent:side-task answer'])
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('sendPrompt pins the anchor messageId on a side-task row (write-once)', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { loadSession: true, loadSessionHangs: true },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      history.add({
+        agentId: 'claude-code',
+        sessionIdOnAgent: 'agent-side-pin',
+        title: 'side chat',
+        sideTaskOf: 'agent-parent',
+        sideTaskQuote: 'quoted text',
+      })
+
+      void svc.resumeSession('agent-side-pin').catch(() => {})
+      await vi.waitFor(() => {
+        expect(svc.getById('agent-side-pin')).toBeDefined()
+      })
+      const side = svc.getById('agent-side-pin')!
+
+      await side.sendPrompt('first side prompt')
+      const afterFirst = history.get('agent-side-pin')
+      expect(afterFirst?.sideTaskAnchorMessageId).toBeDefined()
+      const anchor = afterFirst!.sideTaskAnchorMessageId!
+
+      // A later prompt must not move the anchor.
+      await side.sendPrompt('second side prompt')
+      expect(history.get('agent-side-pin')?.sideTaskAnchorMessageId).toBe(anchor)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('slips the hidden role prompt into a side task’s first turn only, never into the UI', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { loadSession: true, loadSessionHangs: true },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      history.add({
+        agentId: 'claude-code',
+        sessionIdOnAgent: 'agent-side-role',
+        title: 'side chat',
+        sideTaskOf: 'agent-parent',
+        sideTaskQuote: 'quoted text',
+      })
+
+      void svc.resumeSession('agent-side-role').catch(() => {})
+      await vi.waitFor(() => {
+        expect(svc.getById('agent-side-role')).toBeDefined()
+      })
+      const side = svc.getById('agent-side-role')!
+      const agent = client.connected[0]!.agent
+
+      await side.sendPrompt('explain this excerpt')
+      const first = agent.promptCalls[0]!
+      const firstBlock = first.prompt[0]!
+      // First wire block is the hidden role instruction (a text block the model
+      // reads before the user's own text).
+      expect(firstBlock.type).toBe('text')
+      if (firstBlock.type !== 'text') throw new Error('expected text block')
+      expect(firstBlock.text).toContain('side-chat assistant')
+      // The user's own text follows as a later block.
+      const texts = textBlocksOf(first.prompt)
+      expect(texts[texts.length - 1]).toBe('explain this excerpt')
+      // …but the role prompt never lands on the UI timeline.
+      const uiTexts = side.messages.get().map((m) => m.text)
+      expect(uiTexts.some((t) => t.includes('side-chat assistant'))).toBe(false)
+      expect(uiTexts).toContain('explain this excerpt')
+
+      // Second turn: no re-injection.
+      await side.sendPrompt('and another question')
+      const second = agent.promptCalls[1]!
+      const secondTexts = textBlocksOf(second.prompt)
+      expect(secondTexts.some((t) => t.includes('side-chat assistant'))).toBe(false)
+      expect(secondTexts).toContain('and another question')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('does not inject the role prompt into a normal (non-side-task) session', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const svc = makeService(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('hello there')
+      const agent = client.connected[0]!.agent
+      const first = agent.promptCalls[0]!
+      const texts = textBlocksOf(first.prompt)
+      expect(texts.some((t) => t.includes('side-chat assistant'))).toBe(false)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSideTask rejects when the agent does not advertise fork capability', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const svc = makeService(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      await expect(svc.forkSideTask(s.id, { text: 'q', label: 'l' })).rejects.toThrow(/fork/)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSideTask rejects read-only (foreign) sessions', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true },
+    })
+    const svc = makeService(client, tracker)
+    try {
+      await expect(svc.forkSideTask('no-such-session', { text: 'q', label: 'l' })).rejects.toThrow(
+        /side task/,
+      )
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSideTask derives the child title from the question after the quote prefill', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-side-5' },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      const side = await svc.forkSideTask(s.id, { text: 'quoted text', label: 'quote summary' })
+      // The prefilled prompt leads with the quote block; the derived title must
+      // come from the user's own question, not the quote (the stub title
+      // service never generates, so the derived title is what lands).
+      await side.sendPrompt('> quoted text\n>\n> more quote\n\nexplain this function')
+      await new Promise((r) => setTimeout(r, 0))
+
+      expect(history.get('agent-side-5')?.title).toBe('explain this function')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSideTask keeps the quote-label title when the first prompt is only the quote', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-side-6' },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      const side = await svc.forkSideTask(s.id, { text: 'quoted text', label: 'quote summary' })
+      // Sending the prefill untouched carries no user prose — neither derive
+      // nor AI generation may consume their one-shot attempt on it.
+      await side.sendPrompt('> quoted text\n> nothing else')
+      await new Promise((r) => setTimeout(r, 0))
+
+      expect(history.get('agent-side-6')?.title).toBe('quote summary')
     } finally {
       svc.dispose()
     }
@@ -2406,6 +2825,31 @@ describe('AcpSessionService — AI session title push-back', () => {
       await new Promise((r) => setTimeout(r, 0))
       expect(history.get(sid)?.title).toBe('Retry Title')
       expect(history.get(sid)?.aiTitle).toBe(true)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSideTask resumes the child with the title service and AI-generates its title', async () => {
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-side-ai' },
+    })
+    const { svc, history } = makeServiceWithTitle(client, new FixedTitleService('Scroll Logic Q&A'))
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      const side = await svc.forkSideTask(s.id, { text: 'quoted text', label: 'quote summary' })
+      // The quote-label placeholder must be replaced by the AI title once the
+      // first real turn lands — and the generation reads the question, not the
+      // leading quote block.
+      await side.sendPrompt('> quoted text\n\nhow does the scroll compensation work?')
+      await new Promise((r) => setTimeout(r, 0))
+
+      const entry = history.get('agent-side-ai')
+      expect(entry?.title).toBe('Scroll Logic Q&A')
+      expect(entry?.aiTitle).toBe(true)
     } finally {
       svc.dispose()
     }

@@ -12,6 +12,7 @@ import {
   IContextKeyService,
   IDialogService,
   InstantiationService,
+  observableValue,
   ServiceCollection,
   URI,
   type ICommandService as ICommandServiceType,
@@ -21,6 +22,20 @@ import {
 import { EditorGroupView } from '../EditorGroupView.js'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import { ServicesContext } from '../../useService.js'
+import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
+import {
+  IAcpSessionService,
+  type IAcpSessionService as IAcpSessionServiceType,
+} from '../../../services/acp/session/acpSessionService.js'
+import {
+  IAcpSessionHistoryService,
+  type AcpSessionHistoryEntry,
+  type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
+} from '../../../services/acp/session/acpSessionHistory.js'
+import {
+  IAcpChatWidgetService,
+  type IAcpChatWidgetService as IAcpChatWidgetServiceType,
+} from '../../../services/acp/session/acpChatWidgetService.js'
 
 const stubDialog: IDialogServiceType = {
   _serviceBrand: undefined,
@@ -148,5 +163,64 @@ describe('EditorGroupView', () => {
     } finally {
       reg.dispose()
     }
+  })
+
+  it('renders the branch badge only on side-task session tabs', () => {
+    const rows: AcpSessionHistoryEntry[] = [
+      {
+        id: 'side-1',
+        agentId: 'fake',
+        sessionIdOnAgent: 'side-1',
+        title: 'side chat',
+        createdAt: 1,
+        lastUsedAt: 1,
+        sideTaskOf: 'parent-1',
+      },
+      {
+        id: 'plain-1',
+        agentId: 'fake',
+        sessionIdOnAgent: 'plain-1',
+        title: 'plain chat',
+        createdAt: 2,
+        lastUsedAt: 2,
+      },
+    ]
+    const services = new ServiceCollection()
+    services.set(IDialogService, stubDialog)
+    services.set(ICommandService, stubCommand)
+    services.set(IContextKeyService, new ContextKeyService())
+    services.set(IAcpSessionService, {
+      _serviceBrand: undefined,
+      getById: () => undefined,
+    } as unknown as IAcpSessionServiceType)
+    services.set(IAcpSessionHistoryService, {
+      _serviceBrand: undefined,
+      entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.history', rows),
+      get: (id: string) => rows.find((e) => e.sessionIdOnAgent === id),
+    } as unknown as IAcpSessionHistoryServiceType)
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      focusSessionInput: () => false,
+    } as unknown as IAcpChatWidgetServiceType)
+    const inst = new InstantiationService(services)
+
+    const svc = new EditorGroupsService()
+    svc.activeGroup.openEditor(inst.createInstance(AcpSessionEditorInput, 'side-1', 'fake', 'side'))
+    svc.activeGroup.openEditor(
+      inst.createInstance(AcpSessionEditorInput, 'plain-1', 'fake', 'plain'),
+    )
+    render(
+      <ServicesContext.Provider value={inst}>
+        <EditorGroupView
+          group={svc.activeGroup}
+          groupsService={svc}
+          resolveComponent={((k: string) => (map as Map<string, unknown>).get(k)) as never}
+        />
+      </ServicesContext.Provider>,
+    )
+
+    const badges = screen.getAllByTestId('editor-tab-side-task-badge')
+    expect(badges.length).toBe(1)
+    expect(badges[0]!.closest('[role="tab"]')?.textContent).toContain('side chat')
   })
 })

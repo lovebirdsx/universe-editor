@@ -53,6 +53,7 @@ function makeSession(selection: readonly string[] | null = null, readOnly = fals
     isReplayingHistory: observableValue<boolean>('replay', false),
     beginHistoryReplay: () => {},
     endHistoryReplay: () => {},
+    suppressReplayToTimeline: () => {},
     usage: observableValue<AcpUsage | undefined>('u', undefined),
     pendingPermission: observableValue<AcpPendingPermission | undefined>('pp', undefined),
     pendingElicitation: observableValue<AcpPendingElicitation | undefined>('pe', undefined),

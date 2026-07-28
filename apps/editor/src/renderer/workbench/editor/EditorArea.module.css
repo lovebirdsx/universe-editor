@@ -166,6 +166,13 @@
   flex-shrink: 0;
 }
 
+/* Inline side-task marker: [agent icon][branch icon][title] on session tabs. */
+.tabSideTaskIcon {
+  flex-shrink: 0;
+  align-self: center;
+  color: var(--color-badge-progress, #4fa6e2);
+}
+
 .tabLabel {
   flex: 1;
   overflow: hidden;

@@ -67,6 +67,7 @@ import { ElicitationCard } from './ElicitationCard.js'
 import { RecoveryBar } from './RecoveryBar.js'
 import { StickyPlanBar } from './StickyPlanBar.js'
 import { StickyUserMessageBar } from './StickyUserMessageBar.js'
+import { SideTasksBar, SideTaskQuoteBar } from './SideTasksBar.js'
 import { PromptInput } from './PromptInput.js'
 import { ForeignSessionFooter } from './ForeignSessionPreview.js'
 import { ToolCallCard } from './ToolCallCard.js'
@@ -202,12 +203,19 @@ function ChatSessionBody({
   readOnly?: boolean
 }) {
   const widgetService = useService(IAcpChatWidgetService)
+  const history = useService(IAcpSessionHistoryService)
   const timeline = useObservable(session.timeline)
   const isReplayingHistory = useObservable(session.isReplayingHistory)
   const hasTimelineContent = hasRenderableTimelineContent(timeline)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const handleRef = useRef<WidgetHandle>(NOOP_HANDLE)
   const widgetRef = useRef<AcpChatWidget | null>(null)
+  // One-shot plain lookup, deliberately NOT an entries subscription: a session's
+  // sideTaskOf flag is fixed at fork time and the row precedes the resume, so it
+  // never flips while this chat is mounted — subscribing would re-render the
+  // whole chat on every history touch.
+  const chatSid = useObservable(session.sessionIdOnAgent) ?? session.id
+  const isSideTask = history.get(chatSid)?.sideTaskOf !== undefined
 
   // Owned here rather than assigned by ChatScroll: StickyUserMessageBar mounts
   // BEFORE ChatScroll, so a ChatScroll-assigned handle method would still be the
@@ -309,6 +317,7 @@ function ChatSessionBody({
       className={chatClassName}
       data-testid="acp-chat"
       data-readonly={readOnly ? 'true' : 'false'}
+      data-side-task={isSideTask ? 'true' : undefined}
     >
       {replaying ? (
         <div className={styles['sessionLoading']} data-testid="acp-session-replaying">
@@ -327,6 +336,8 @@ function ChatSessionBody({
             handleRef={handleRef}
             onFocusSlot={(key) => handleRef.current.setFocusedKey(key)}
           />
+          <SideTaskQuoteBar key={`quote:${session.id}`} session={session} />
+          <SideTasksBar key={`sideTasks:${session.id}`} session={session} />
           <StickyPlanBar key={`plan:${session.id}`} session={session} />
           <ChatScroll
             key={session.id}
@@ -336,6 +347,7 @@ function ChatSessionBody({
             collapseBridge={collapseBridge}
             onFindVisibleChange={handleFindVisibleChange}
             readOnly={readOnly ?? false}
+            isSideTask={isSideTask}
           />
           {readOnly ? (
             <ReadOnlyChatFooter session={session} />
@@ -347,6 +359,7 @@ function ChatSessionBody({
               <PromptInput
                 key={`prompt:${session.id}`}
                 session={session}
+                isSideTask={isSideTask}
                 handleRef={handleRef}
                 onPopoverOpenChange={handlePopoverOpenChange}
                 {...(autoFocus !== undefined ? { autoFocus } : {})}
@@ -380,6 +393,7 @@ function ChatScroll({
   collapseBridge,
   onFindVisibleChange,
   readOnly,
+  isSideTask,
 }: {
   session: IAcpSession
   handleRef: MutableRefObject<WidgetHandle>
@@ -387,6 +401,7 @@ function ChatScroll({
   collapseBridge: CollapseBridge
   onFindVisibleChange: (open: boolean) => void
   readOnly: boolean
+  isSideTask: boolean
 }) {
   const timeline = useObservable(session.timeline)
   const status = useObservable(session.status)
@@ -700,6 +715,9 @@ function ChatScroll({
     if (key) focusSlot(key)
     e.preventDefault()
     widgetService.setHasSelection(!!window.getSelection()?.toString())
+    // Gates the "Ask in Side Chat" menu item: read-only foreign previews and
+    // agents without fork support must not offer it.
+    widgetService.setForkSupported(!readOnly && session.forkSupported.get())
     setMenu({ x: e.clientX, y: e.clientY, args: [{ sessionId: session.id }] })
   }
 
@@ -1279,7 +1297,13 @@ function ChatScroll({
           revision={`${virtualize}:${displayTimeline.length}:${tailSignature}`}
         />
         {!hasTimelineContent ? (
-          <EmptySessionHint />
+          // Side-task chats start blank on purpose (the fork baseline stays
+          // agent-side context) — the generic empty-session onboarding panel
+          // (new/resume/choose-agent, keyboard cheatsheet) would be noise
+          // there, so the child stays a clean canvas with just the quote chip.
+          isSideTask ? null : (
+            <EmptySessionHint />
+          )
         ) : virtualize ? (
           <div
             className={styles['timelineVirtual']}
@@ -1354,6 +1378,7 @@ function ChatScroll({
             onClose={() => {
               setMenu(null)
               widgetService.setHasSelection(false)
+              widgetService.setForkSupported(false)
             }}
           />
         )}

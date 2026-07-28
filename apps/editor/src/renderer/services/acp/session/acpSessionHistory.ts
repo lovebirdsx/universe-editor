@@ -156,6 +156,25 @@ export interface AcpSessionHistoryEntry {
    * flow into this session until the user re-enables inheritance.
    */
   readonly mcpServerNames?: readonly string[]
+  /**
+   * Parent session id (`sessionIdOnAgent`) when this row is a **side task**
+   * forked from another session ("ask in side chat"). Side tasks are hidden
+   * from the session list and surfaced through the parent chat's SideTasksBar
+   * popover instead. Unset for regular sessions.
+   */
+  readonly sideTaskOf?: string
+  /**
+   * The text selection the side task was created from, kept so the side chat's
+   * quote bar can re-render the chip/preview after a restart.
+   */
+  readonly sideTaskQuote?: string
+  /**
+   * The client-generated messageId of the side task's first own user prompt —
+   * the boundary between the forked baseline and the side task's own turns. On
+   * a re-open the replay suppresses everything up to this message, then keeps
+   * the side task's own turns from here on. Unset until the first turn is sent.
+   */
+  readonly sideTaskAnchorMessageId?: string
 }
 
 export interface IAcpSessionHistoryService {
@@ -203,6 +222,13 @@ export interface IAcpSessionHistoryService {
    * never used (the agent does not persist those across restarts).
    */
   setHistoryHasMessages(sessionId: string): void
+  /**
+   * Records the side task's anchor messageId (its first own user prompt).
+   * Write-once: ignored when the row already has an anchor or the id is
+   * unknown. Called by `AcpSession.sendPrompt` so a re-open can tell the
+   * forked baseline apart from the side task's own turns.
+   */
+  setSideTaskAnchorMessageId(sessionId: string, messageId: string): void
   /**
    * Mark a session's title as AI-generated. Idempotent; no-op if the id is
    * unknown. Called by `AcpSession` when it sets a title from the session-title
@@ -408,6 +434,17 @@ export class AcpSessionHistoryService
     const carriedMcpServerNames =
       entry.mcpServerNames ??
       (existingIdx >= 0 ? this._state[existingIdx]!.mcpServerNames : undefined)
+    // Side-task parentage/quote: forked once at creation, carried across re-adds.
+    const carriedSideTaskOf =
+      entry.sideTaskOf ?? (existingIdx >= 0 ? this._state[existingIdx]!.sideTaskOf : undefined)
+    const carriedSideTaskQuote =
+      entry.sideTaskQuote ??
+      (existingIdx >= 0 ? this._state[existingIdx]!.sideTaskQuote : undefined)
+    // The anchor is recorded once by setSideTaskAnchorMessageId — carried so a
+    // re-add (e.g. on resume) doesn't lose the replay boundary.
+    const carriedSideTaskAnchorMessageId =
+      entry.sideTaskAnchorMessageId ??
+      (existingIdx >= 0 ? this._state[existingIdx]!.sideTaskAnchorMessageId : undefined)
     const next: AcpSessionHistoryEntry = {
       id,
       agentId: entry.agentId,
@@ -421,6 +458,11 @@ export class AcpSessionHistoryService
       ...(carriedConfigLabels !== undefined ? { configLabels: carriedConfigLabels } : {}),
       ...(carriedUsage !== undefined ? { usage: carriedUsage } : {}),
       ...(carriedMcpServerNames !== undefined ? { mcpServerNames: carriedMcpServerNames } : {}),
+      ...(carriedSideTaskOf !== undefined ? { sideTaskOf: carriedSideTaskOf } : {}),
+      ...(carriedSideTaskQuote !== undefined ? { sideTaskQuote: carriedSideTaskQuote } : {}),
+      ...(carriedSideTaskAnchorMessageId !== undefined
+        ? { sideTaskAnchorMessageId: carriedSideTaskAnchorMessageId }
+        : {}),
       ...(existingIdx >= 0 && this._state[existingIdx]!.collapseMode !== undefined
         ? { collapseMode: this._state[existingIdx]!.collapseMode }
         : {}),
@@ -533,6 +575,17 @@ export class AcpSessionHistoryService
     const cur = this._state[idx]!
     if (cur.hasMessages === true) return
     const next: AcpSessionHistoryEntry = { ...cur, hasMessages: true }
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  setSideTaskAnchorMessageId(sessionId: string, messageId: string): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if (cur.sideTaskAnchorMessageId !== undefined) return
+    const next: AcpSessionHistoryEntry = { ...cur, sideTaskAnchorMessageId: messageId }
     this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()
@@ -867,7 +920,10 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     (o['manualTitle'] === undefined || typeof o['manualTitle'] === 'boolean') &&
     (o['archived'] === undefined || typeof o['archived'] === 'boolean') &&
     (o['pinned'] === undefined || typeof o['pinned'] === 'boolean') &&
-    (o['mcpServerNames'] === undefined || isStringArray(o['mcpServerNames']))
+    (o['mcpServerNames'] === undefined || isStringArray(o['mcpServerNames'])) &&
+    (o['sideTaskOf'] === undefined || typeof o['sideTaskOf'] === 'string') &&
+    (o['sideTaskQuote'] === undefined || typeof o['sideTaskQuote'] === 'string') &&
+    (o['sideTaskAnchorMessageId'] === undefined || typeof o['sideTaskAnchorMessageId'] === 'string')
   )
 }
 

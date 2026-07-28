@@ -8,6 +8,7 @@ import {
   IHostService,
   IInstantiationService,
   ILayoutService,
+  ILoggerService,
   MenuId,
   MenuRegistry,
   INotificationService,
@@ -17,6 +18,7 @@ import {
   IWorkspaceService,
   InstantiationService,
   KeybindingsRegistry,
+  NullLogger,
   ServiceCollection,
   UriIdentityService,
   GroupDirection,
@@ -39,6 +41,8 @@ import {
   HideAcpPromptSuggestionAction,
   NewAgentSessionInCurrentEditorAction,
 } from '../agentActions.js'
+import { AskInSideChatAction } from '../agentSessionActions.js'
+import { AcpPromptReplaceInbox } from '../../services/acp/session/acpPromptReplaceInbox.js'
 import {
   IAcpChatWidgetService,
   type AcpChatWidget,
@@ -827,5 +831,162 @@ describe('RevealAgentSessionInOSAction', () => {
     await run(b)
     expect(b.showItemInFolder).not.toHaveBeenCalled()
     expect(b.notify).not.toHaveBeenCalled()
+  })
+})
+
+describe('AskInSideChatAction', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+    AcpPromptReplaceInbox._resetForTests()
+    vi.restoreAllMocks()
+  })
+
+  function sideSession(id: string, agentId: string): IAcpSession {
+    return { id, agentId } as unknown as IAcpSession
+  }
+
+  function makeHarness(opts: { forkImpl?: (sid: string) => Promise<IAcpSession> } = {}) {
+    const groups = new EditorGroupsService()
+    const notify = vi.fn()
+    const forkSideTask = vi.fn(async (sid: string, _quote: { text: string; label: string }) =>
+      opts.forkImpl ? opts.forkImpl(sid) : sideSession('side-1', 'claude-code'),
+    )
+    const services = new ServiceCollection()
+    services.set(IAcpSessionService, {
+      _serviceBrand: undefined,
+      forkSideTask,
+      getById: () => undefined,
+    } as unknown as IAcpSessionService)
+    services.set(IAcpSessionHistoryService, {
+      _serviceBrand: undefined,
+      entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.entries', []),
+      get: () => undefined,
+    } as unknown as IAcpSessionHistoryService)
+    services.set(IEditorGroupsService, groups)
+    services.set(INotificationService, {
+      _serviceBrand: undefined,
+      notify,
+    } as unknown as INotificationService)
+    services.set(ILoggerService, {
+      _serviceBrand: undefined,
+      createLogger: () => new NullLogger(),
+    } as unknown as ILoggerService)
+    const inst = new InstantiationService(services)
+    services.set(IInstantiationService, inst)
+    return { groups, notify, forkSideTask, inst }
+  }
+
+  function stubSelection(text: string | undefined): void {
+    vi.spyOn(window, 'getSelection').mockReturnValue(
+      text === undefined ? null : ({ toString: () => text } as Selection),
+    )
+  }
+
+  async function run(inst: InstantiationService, arg?: { sessionId?: string }): Promise<void> {
+    await inst.invokeFunction((accessor) => new AskInSideChatAction().run(accessor, arg))
+  }
+
+  it('appears in the chat context menu only with a selection on a fork-capable chat', () => {
+    disposables.push(registerAction2(AskInSideChatAction))
+    const has = (ctx: ContextKeyService) =>
+      MenuRegistry.getMenuItems(MenuId.AcpChatContext, ctx).some(
+        (item) => 'command' in item && item.command === AskInSideChatAction.ID,
+      )
+    const both = new ContextKeyService()
+    both.createKey<boolean>('acpChatHasSelection', true)
+    both.createKey<boolean>('acpChatForkSupported', true)
+    expect(has(both)).toBe(true)
+
+    const noSelection = new ContextKeyService()
+    noSelection.createKey<boolean>('acpChatHasSelection', false)
+    noSelection.createKey<boolean>('acpChatForkSupported', true)
+    expect(has(noSelection)).toBe(false)
+
+    const noFork = new ContextKeyService()
+    noFork.createKey<boolean>('acpChatHasSelection', true)
+    noFork.createKey<boolean>('acpChatForkSupported', false)
+    expect(has(noFork)).toBe(false)
+  })
+
+  it('is a no-op without a sessionId arg or an empty selection', async () => {
+    const h = makeHarness()
+    stubSelection('some text')
+    await run(h.inst)
+    expect(h.forkSideTask).not.toHaveBeenCalled()
+
+    stubSelection('   ')
+    await run(h.inst, { sessionId: 's1' })
+    expect(h.forkSideTask).not.toHaveBeenCalled()
+  })
+
+  it('forks into a new right group, opens the tab there, and deposits the blockquote', async () => {
+    const h = makeHarness()
+    stubSelection('line one\n\nline two')
+    expect(h.groups.groups).toHaveLength(1)
+
+    await run(h.inst, { sessionId: 'parent-1' })
+
+    expect(h.forkSideTask).toHaveBeenCalledWith('parent-1', {
+      text: 'line one\n\nline two',
+      label: 'line one line two',
+    })
+    // A right group was created, activated, and holds the side chat tab.
+    expect(h.groups.groups).toHaveLength(2)
+    const right = h.groups.groups[1]!
+    expect(h.groups.activeGroup).toBe(right)
+    const tab = right.activeEditor
+    expect(tab).toBeInstanceOf(AcpSessionEditorInput)
+    expect((tab as AcpSessionEditorInput).sessionId).toBe('side-1')
+    // The prefill is a markdown blockquote; blank lines become bare '>'.
+    expect(AcpPromptReplaceInbox.drain('side-1')).toBe('> line one\n>\n> line two\n\n')
+  })
+
+  it('reuses an existing right group instead of splitting again', async () => {
+    const h = makeHarness()
+    h.groups.addGroup(h.groups.activeGroup, GroupDirection.Right)
+    stubSelection('quote')
+
+    await run(h.inst, { sessionId: 'parent-1' })
+
+    expect(h.groups.groups).toHaveLength(2)
+    expect(AcpPromptReplaceInbox.drain('side-1')).toBe('> quote\n\n')
+  })
+
+  it('truncates quotes past the hard cap and still deposits', async () => {
+    const h = makeHarness()
+    stubSelection('x'.repeat(8100))
+
+    await run(h.inst, { sessionId: 'parent-1' })
+
+    const quote = h.forkSideTask.mock.calls[0]![1].text as string
+    expect(quote.length).toBe(8001)
+    expect(quote.endsWith('…')).toBe(true)
+  })
+
+  it('notifies an error when forking fails', async () => {
+    const h = makeHarness({
+      forkImpl: () => Promise.reject(new Error('agent does not support fork')),
+    })
+    stubSelection('quote')
+
+    await run(h.inst, { sessionId: 'parent-1' })
+
+    expect(h.notify).toHaveBeenCalledTimes(1)
+    expect(h.notify.mock.calls[0]![0].message).toContain('agent does not support fork')
+    expect(h.groups.groups).toHaveLength(1)
+  })
+
+  it('uses the dedicated message for foreign-worktree rejections', async () => {
+    const h = makeHarness({
+      forkImpl: () => Promise.reject(new AcpForeignWorktreeError('s1', '/a', '/b')),
+    })
+    stubSelection('quote')
+
+    await run(h.inst, { sessionId: 'parent-1' })
+
+    expect(h.notify).toHaveBeenCalledTimes(1)
+    expect(h.notify.mock.calls[0]![0].message).toContain('own worktree')
   })
 })

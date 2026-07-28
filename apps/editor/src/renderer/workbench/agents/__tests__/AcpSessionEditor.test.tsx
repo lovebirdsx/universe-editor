@@ -102,6 +102,7 @@ function makeService(
       return false
     },
     forkSession: (() => Promise.reject(new Error('not implemented'))) as never,
+    forkSideTask: (() => Promise.reject(new Error('not implemented'))) as never,
     rewindSession: (() => Promise.resolve(undefined)) as never,
     mcpServerDefinitions: observableValue('test.mcpDefs', []),
     async refreshMcpServerDefinitions(): Promise<void> {},

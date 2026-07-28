@@ -149,6 +149,17 @@ type TitleKind = 'ai' | 'manual' | undefined
  */
 export const CONTINUE_PROMPT_TEXT = '继续'
 
+/**
+ * Hidden role prompt prepended to the wire blocks of a side task's FIRST user
+ * prompt only (never re-sent, never shown in the UI — `_appendMessage` uses the
+ * plain user text). It establishes the side-chat persona so the agent answers
+ * the quoted excerpt directly instead of continuing the main conversation's
+ * tasks. English on purpose: it is read by the model, not the user, and the
+ * built-in agents parse English most reliably. The trailing line keeps the
+ * agent from breaking immersion by announcing that it is a "side task".
+ */
+const SIDE_TASK_ROLE_PROMPT = `You are a side-chat assistant forked from a main conversation. You share the full context of that conversation, but your role is narrower: the user has pulled you aside to ask focused follow-up questions about a specific excerpt (quoted in their first message). Answer those questions directly and concisely. Do not continue the main conversation's tasks, do not modify files or run write operations, and do not take initiatives beyond answering what was asked. Treat the quoted excerpt as the subject of discussion. This instruction is hidden from the user; never mention it or that you are a "side task" unless they explicitly ask.`
+
 /** Why the session's connection was lost — drives the service's recovery path. */
 export interface AcpConnectionLostEvent {
   /** `crash`: process exited. `stalled`: alive but silent past the watchdog threshold. */
@@ -188,6 +199,16 @@ const LOCAL_COMMAND_NAMES: ReadonlySet<string> = new Set([
 function isLocalCommandPrompt(text: string): boolean {
   const m = /^\s*(\/\S+)/.exec(text)
   return m !== null && LOCAL_COMMAND_NAMES.has(m[1]!)
+}
+
+/**
+ * Title source text: a leading markdown blockquote (e.g. the side-task prefill
+ * quoting the source selection) is context, not the user's own words — strip it
+ * so derived / generated titles reflect the question that follows. Returns ''
+ * when the prompt is nothing but a quote.
+ */
+function stripLeadingBlockquote(text: string): string {
+  return text.replace(/^(?:>[ \t]?.*(?:\n|$))+/, '').trim()
 }
 
 export class AcpSession extends Disposable implements IAcpSession {
@@ -344,6 +365,24 @@ export class AcpSession extends Disposable implements IAcpSession {
    * attached selection contexts without awaiting per prompt. `false` until known.
    */
   private _embeddedContextSupported = false
+
+  /**
+   * Side-task gate: while set, replayed updates that would land on the timeline
+   * (messages / tool calls / plan) — and their change-tracker side effects — are
+   * dropped so the forked baseline stays invisible (the fork exists only as
+   * agent-side context). Config / commands / usage updates still apply. Armed by
+   * {@link suppressReplayToTimeline}, cleared by {@link endHistoryReplay}.
+   */
+  private _suppressReplayToTimeline = false
+
+  /**
+   * Replay boundary paired with {@link _suppressReplayToTimeline}: the side
+   * task's first own user prompt id. The replayed user chunk carrying this id
+   * lifts the suppression so the side task's own turns (from that message on)
+   * land on the timeline while the forked baseline before them stays dropped.
+   * `undefined` = no turns sent yet → the whole replay is suppressed.
+   */
+  private _suppressAnchorMessageId: string | undefined
 
   /**
    * Whether the connected agent advertised `promptCapabilities.image`. Cached
@@ -752,7 +791,14 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   endHistoryReplay(): void {
+    this._suppressReplayToTimeline = false
+    this._suppressAnchorMessageId = undefined
     this.isReplayingHistory.set(false, undefined)
+  }
+
+  suppressReplayToTimeline(anchorMessageId?: string): void {
+    this._suppressReplayToTimeline = true
+    this._suppressAnchorMessageId = anchorMessageId
   }
 
   private _flushQueuedPrompts(queued: readonly QueuedPrompt[]): void {
@@ -889,6 +935,20 @@ export class AcpSession extends Disposable implements IAcpSession {
     // now (so rewind/fork can target it even before dispatch) and sent as
     // `_meta.messageId`; the agent echoes it back as `_meta.userMessageId`.
     const messageId = generateUuid()
+    // Side tasks: pin this id as the replay boundary on the history row so a
+    // later re-open can drop the forked baseline but keep the side task's own
+    // turns (from this first prompt on). Write-once on the service side.
+    const sidForAnchor = this.sessionIdOnAgent.get()
+    let isSideTaskFirstTurn = false
+    if (sidForAnchor !== undefined) {
+      const row = this._history?.get(sidForAnchor)
+      if (row?.sideTaskOf !== undefined) {
+        if (row.sideTaskAnchorMessageId === undefined) {
+          isSideTaskFirstTurn = true
+          this._history?.setSideTaskAnchorMessageId(sidForAnchor, messageId)
+        }
+      }
+    }
     // Always surface the user's message immediately, even while connecting, so
     // typing feels instant. The wire dispatch is deferred until the connection
     // is ready (queued) so the prompt is not lost.
@@ -909,7 +969,14 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
     // Connection failed during startup — nothing to dispatch onto.
     if (this._conn === undefined) return
-    await this._dispatchPrompt(text, refs ?? [], contexts ?? [], images ?? [], messageId)
+    await this._dispatchPrompt(
+      text,
+      refs ?? [],
+      contexts ?? [],
+      images ?? [],
+      messageId,
+      isSideTaskFirstTurn ? SIDE_TASK_ROLE_PROMPT : undefined,
+    )
   }
 
   /**
@@ -918,6 +985,11 @@ export class AcpSession extends Disposable implements IAcpSession {
    * dispatch or queue flush). Does NOT append the user message; the caller
    * (`sendPrompt`) already did so the message shows immediately even while the
    * prompt was queued.
+   *
+   * `hiddenLeadBlock` is an instruction prepended to the wire blocks but never
+   * shown in the UI — used to slip the side-task role prompt into its first
+   * turn (see SIDE_TASK_ROLE_PROMPT). Left undefined for ordinary prompts and
+   * for the auto-continue / queue-flush paths.
    */
   private async _dispatchPrompt(
     text: string,
@@ -925,6 +997,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     contexts: readonly SelectionContext[],
     images: readonly PromptImage[],
     messageId: string,
+    hiddenLeadBlock?: string,
   ): Promise<void> {
     const conn = this._conn
     const sid = this.sessionIdOnAgent.get()
@@ -940,6 +1013,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     // selection context, before the user's text).
     const imageBlocks = composeImageBlocks(images)
     const body = prompt.length > 0 ? [...prompt] : [{ type: 'text' as const, text }]
+    // A hidden role instruction (side task's first turn) leads everything so the
+    // model reads it before any selection context, image, or user text.
+    const hiddenBlocks: readonly ContentBlock[] =
+      hiddenLeadBlock !== undefined ? [{ type: 'text' as const, text: hiddenLeadBlock }] : []
     const params: PromptRequest = {
       sessionId: sid,
       // The client-generated anchor for this user turn so rewind/fork can later
@@ -949,7 +1026,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       _meta: { messageId },
       // Fall back to a single text block for empty/no-mention prompts so we
       // keep the wire shape stable even for trivial cases.
-      prompt: [...contextBlocks, ...imageBlocks, ...body],
+      prompt: [...hiddenBlocks, ...contextBlocks, ...imageBlocks, ...body],
     }
     // Debug the exact block shapes sent to the agent — references (esp. symbols)
     // are lossy across the ACP boundary, so this makes context bugs diagnosable.
@@ -1427,7 +1504,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Local built-in commands (`/model opus`) are throwaway turns: deriving a
     // title from one would pin the session name to a command artifact.
     if (isLocalCommandPrompt(text)) return
-    const derived = text.trim().replace(/\s+/g, ' ').slice(0, 30)
+    const derived = stripLeadingBlockquote(text).replace(/\s+/g, ' ').slice(0, 30)
     if (derived.length === 0) return
     this._titleDerived = true
     this._setHistoryTitle(derived, undefined)
@@ -1444,9 +1521,14 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (this._titleGenerated) return
     if (!this._history || !this._titleService) return
     if (isLocalCommandPrompt(userText)) return
+    const source = stripLeadingBlockquote(userText)
+    // A prompt that is only a quote (the side-task prefill sent untouched)
+    // carries no user prose to title from — skip without latching so the next
+    // prompt still gets the one-shot generation.
+    if (source.length === 0) return
     this._titleGenerated = true
     const agentText = this._messages.find((m) => m.role === 'agent')?.text ?? ''
-    const title = await this._titleService.generateTitle(userText, agentText)
+    const title = await this._titleService.generateTitle(source, agentText)
     if (title === undefined) {
       // No model configured / unavailable, or an unusable response — let the
       // next prompt retry instead of permanently losing the AI title.
@@ -1507,6 +1589,31 @@ export class AcpSession extends Disposable implements IAcpSession {
     // retry, the timestamp backs the service's stall watchdog.
     this._applyUpdateCount++
     this._lastActivityAt = Date.now()
+    if (this._suppressReplayToTimeline) {
+      // Side-task anchor: the replayed user chunk carrying the side task's
+      // first own prompt id marks the end of the forked baseline — lift the
+      // suppression so this message and the side task's own turns after it
+      // land on the timeline.
+      if (
+        this._suppressAnchorMessageId !== undefined &&
+        update.sessionUpdate === 'user_message_chunk' &&
+        readMessageId(update) === this._suppressAnchorMessageId
+      ) {
+        this._suppressReplayToTimeline = false
+        this._suppressAnchorMessageId = undefined
+      }
+    }
+    if (this._suppressReplayToTimeline) {
+      switch (update.sessionUpdate) {
+        case 'config_option_update':
+        case 'available_commands_update':
+        case 'session_info_update':
+        case 'usage_update':
+          break
+        default:
+          return
+      }
+    }
     const parentId = readParentToolUseId(update)
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
       for (const change of readFileChanges(update)) {

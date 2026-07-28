@@ -26,6 +26,7 @@ export class AcpSessionEditorInput extends EditorInput {
 
   private readonly _resource: URI
   private _lastTitle: string
+  private _isSideTask = false
   private _titleSub: IDisposable | undefined
 
   /**
@@ -56,10 +57,20 @@ export class AcpSessionEditorInput extends EditorInput {
       // history.title 优先于 live.title——后者是构造时锁定的死字符串，rename 后并不会更新。
       // 没拿到 title 时不要回落到 sessionId 覆盖构造期写入的 initialTitle / _computeTitle 结果。
       const title = resolveLiveSessionTitle(this._history, this._sessions, this.sessionId)
-      if (title === undefined) return
+      const sideTask = this._history.get(this.sessionId)?.sideTaskOf !== undefined
+      const dirty = sideTask !== this._isSideTask
+      this._isSideTask = sideTask
+      if (title === undefined) {
+        if (dirty) this._onDidChangeLabel.fire()
+        return
+      }
       const truncated = truncateSessionTitle(title)
       if (truncated !== this._lastTitle) {
         this._lastTitle = truncated
+        this._onDidChangeLabel.fire()
+      } else if (dirty) {
+        // Side-task flag flipped without a title change (history hydrated after
+        // construction) — the tab badge depends on it, so still re-render.
         this._onDidChangeLabel.fire()
       }
     })
@@ -80,6 +91,11 @@ export class AcpSessionEditorInput extends EditorInput {
 
   override getIconId(): string {
     return agentIconId(this.agentId)
+  }
+
+  /** True when this session was forked off a parent chat as a side task. */
+  get isSideTask(): boolean {
+    return this._isSideTask
   }
 
   override focus(): boolean {

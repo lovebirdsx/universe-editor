@@ -14,6 +14,8 @@ import {
   ICommandService,
   IContextKeyService,
   ContextKeyService,
+  IEditorGroupsService,
+  type IEditorGroupsService as IEditorGroupsServiceType,
   IFileSearchService,
   IFileService,
   InstantiationService,
@@ -41,16 +43,24 @@ import type {
   TimelineItem,
 } from '../../../services/acp/session/acpSessionService.js'
 import { IAcpSessionService } from '../../../services/acp/session/acpSessionService.js'
+import {
+  IAcpSessionHistoryService,
+  type AcpSessionHistoryEntry,
+  type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
+} from '../../../services/acp/session/acpSessionHistory.js'
 import { IAcpAgentRegistry } from '../../../services/acp/acpAgentRegistry.js'
 import {
   IAcpChatWidgetService,
   type AcpChatWidget,
+  type IAcpChatWidgetService as IAcpChatWidgetServiceType,
 } from '../../../services/acp/session/acpChatWidgetService.js'
 import { AcpChatViewStateCache } from '../../../services/acp/session/acpChatViewStateCache.js'
 import { AcpSessionOutlineRegistry } from '../../../services/acp/session/acpSessionOutlineRegistry.js'
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 import { ChatBody } from '../ChatBody.js'
+import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
 import { ServicesContext } from '../../useService.js'
+import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import styles from '../agents.module.css'
 import { IAcpPromptHistoryService } from '../../../services/acp/session/acpPromptHistoryService.js'
 import { ISessionBookmarkService } from '../../../services/acp/session/sessionBookmarkService.js'
@@ -99,7 +109,7 @@ function makeMessage(id: string, text: string): AcpMessage {
 function makeSession(
   id: string,
   items: readonly TimelineItem[],
-  opts: { isReplayingHistory?: boolean } = {},
+  opts: { isReplayingHistory?: boolean; forkSupported?: boolean } = {},
 ): IAcpSession {
   const collapseMode = observableValue<'default' | 'collapsed' | 'expanded'>(
     't.collapse',
@@ -109,6 +119,7 @@ function makeSession(
     id,
     agentId: 'fake',
     title: 'Fake',
+    sessionIdOnAgent: observableValue<string | undefined>('t.sidOnAgent', id),
     messages: observableValue<readonly AcpMessage[]>('t.messages', []),
     toolCalls: observableValue<readonly AcpToolCall[]>('t.toolCalls', []),
     plan: observableValue<readonly AcpPlanEntry[]>('t.plan', []),
@@ -126,7 +137,7 @@ function makeSession(
     accumulatedRunningMs: observableValue('t.arm', 0),
     runningStartedAt: observableValue<number | undefined>('t.rsa', undefined),
     imageSupported: observableValue<boolean>('t.imageSupported', false),
-    forkSupported: observableValue<boolean>('t.forkSupported', false),
+    forkSupported: observableValue<boolean>('t.forkSupported', opts.forkSupported ?? false),
     rewindSupported: observableValue<boolean>('t.rewindSupported', false),
     cycleCollapseMode: () => {
       const cur = collapseMode.get()
@@ -172,9 +183,16 @@ const stubWorkspaceService = {
   onDidChangeRecent: Event.None,
 } as unknown as IWorkspaceServiceType
 
+interface InstantiationOverrides {
+  widget?: Partial<IAcpChatWidgetServiceType>
+  history?: Partial<IAcpSessionHistoryServiceType>
+  groups?: IEditorGroupsServiceType
+}
+
 function makeInstantiation(
   onRegister?: (w: AcpChatWidget) => void,
   onCommand?: (id: string, ...args: unknown[]) => void,
+  overrides: InstantiationOverrides = {},
 ) {
   const services = new ServiceCollection()
   services.set(IContextKeyService, new ContextKeyService())
@@ -182,7 +200,15 @@ function makeInstantiation(
     _serviceBrand: undefined,
     activeSession: observableValue<IAcpSession | undefined>('t.active', undefined),
     mcpServerDefinitions: observableValue('t.mcpDefs', []),
+    getById: () => undefined,
   } as unknown as IAcpSessionService)
+  services.set(IAcpSessionHistoryService, {
+    _serviceBrand: undefined,
+    entries: observableValue<readonly AcpSessionHistoryEntry[]>('t.sessionHistory', []),
+    get: () => undefined,
+    ...overrides.history,
+  } as unknown as IAcpSessionHistoryService)
+  services.set(IEditorGroupsService, overrides.groups ?? new EditorGroupsService())
   services.set(IAcpAgentRegistry, {
     _serviceBrand: undefined,
     defaultAgentId: () => 'fake',
@@ -196,8 +222,10 @@ function makeInstantiation(
     },
     focusSessionInput: () => false,
     setHasSelection: () => {},
+    setForkSupported: () => {},
     setPopoverOpen: () => {},
     setFindVisible: () => {},
+    ...overrides.widget,
   } as unknown as IAcpChatWidgetService)
   services.set(IFileService, stubFileService)
   services.set(IFileSearchService, stubFileSearch)
@@ -1184,5 +1212,186 @@ describe('ChatBody — compaction slot', () => {
     const settledTimer = c2.querySelector<HTMLElement>('[data-testid="acp-compaction-timer"]')
     expect(settledTimer?.textContent).toBe('1:12')
     expect(c2.querySelector('[role="progressbar"]')).toBeNull()
+  })
+})
+
+describe('ChatBody — side task affordances', () => {
+  const items: readonly TimelineItem[] = [
+    { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
+  ]
+
+  function makeSideTaskRow(
+    sessionIdOnAgent: string,
+    sideTaskOf: string,
+    lastUsedAt: number,
+  ): AcpSessionHistoryEntry {
+    return {
+      id: sessionIdOnAgent,
+      agentId: 'fake',
+      sessionIdOnAgent,
+      title: `side ${sessionIdOnAgent}`,
+      createdAt: lastUsedAt,
+      lastUsedAt,
+      sideTaskOf,
+      sideTaskQuote: `quote ${sessionIdOnAgent}`,
+    }
+  }
+
+  function makeHistory(entries: AcpSessionHistoryEntry[]): Partial<IAcpSessionHistoryServiceType> {
+    return {
+      entries: observableValue<readonly AcpSessionHistoryEntry[]>('t.sessionHistory', entries),
+      get: (id: string) => entries.find((e) => e.sessionIdOnAgent === id),
+    }
+  }
+
+  describe('context menu fork gating', () => {
+    it('reports fork support when the agent supports fork and the chat is writable', () => {
+      const setForkSupported = vi.fn()
+      const inst = makeInstantiation(undefined, undefined, {
+        widget: { setForkSupported },
+      })
+      const { container } = render(
+        <ServicesContext.Provider value={inst}>
+          <ChatBody session={makeSession('s1', items, { forkSupported: true })} />
+        </ServicesContext.Provider>,
+      )
+
+      fireEvent.contextMenu(slotEl(container, 'm:a'))
+      expect(setForkSupported).toHaveBeenCalledWith(true)
+    })
+
+    it('reports no fork support in read-only (foreign) previews even when the agent forks', () => {
+      const setForkSupported = vi.fn()
+      const inst = makeInstantiation(undefined, undefined, {
+        widget: { setForkSupported },
+      })
+      const { container } = render(
+        <ServicesContext.Provider value={inst}>
+          <ChatBody session={makeSession('s1', items, { forkSupported: true })} readOnly />
+        </ServicesContext.Provider>,
+      )
+
+      fireEvent.contextMenu(slotEl(container, 'm:a'))
+      expect(setForkSupported).toHaveBeenCalledWith(false)
+    })
+  })
+
+  describe('SideTasksBar', () => {
+    it('is hidden for a session without side tasks', () => {
+      const inst = makeInstantiation(undefined, undefined, { history: makeHistory([]) })
+      const { container } = render(
+        <ServicesContext.Provider value={inst}>
+          <ChatBody session={makeSession('s1', items)} />
+        </ServicesContext.Provider>,
+      )
+      expect(container.querySelector('[data-testid="acp-side-tasks-trigger"]')).toBeNull()
+    })
+
+    it('is hidden on a side-task chat itself (its quote chip renders instead)', () => {
+      const rows = [
+        makeSideTaskRow('side-1', 's1', 1000),
+        makeSideTaskRow('side-2', 's1', 2000),
+        makeSideTaskRow('grand-1', 'side-1', 3000),
+      ]
+      const inst = makeInstantiation(undefined, undefined, { history: makeHistory(rows) })
+      const { container } = render(
+        <ServicesContext.Provider value={inst}>
+          <ChatBody session={makeSession('side-1', items)} />
+        </ServicesContext.Provider>,
+      )
+      expect(container.querySelector('[data-testid="acp-side-tasks-trigger"]')).toBeNull()
+      const chip = container.querySelector('[data-testid="acp-side-task-quote"]')
+      expect(chip).not.toBeNull()
+      expect(chip?.getAttribute('title')).toBe('quote side-1')
+    })
+
+    it('opens the picked side task in a right-split editor tab', () => {
+      const rows = [makeSideTaskRow('side-1', 's1', 1000), makeSideTaskRow('side-2', 's1', 2000)]
+      const groups = new EditorGroupsService()
+      const inst = makeInstantiation(undefined, undefined, {
+        history: makeHistory(rows),
+        groups,
+      })
+      const { container } = render(
+        <ServicesContext.Provider value={inst}>
+          <ChatBody session={makeSession('s1', items)} />
+        </ServicesContext.Provider>,
+      )
+
+      const trigger = container.querySelector<HTMLElement>(
+        '[data-testid="acp-side-tasks-trigger"]',
+      )!
+      expect(trigger.textContent).toContain('(2)')
+
+      fireEvent.click(trigger)
+      const popover = container.querySelector('[data-testid="acp-side-tasks-popover"]')
+      expect(popover).not.toBeNull()
+
+      // Rows sort by lastUsedAt desc → side-2 first.
+      const rowEls = [...container.querySelectorAll('[data-testid="acp-side-task-row"]')]
+      expect(rowEls[0]?.textContent).toContain('side side-2')
+
+      fireEvent.click(rowEls[0]!)
+
+      // Popover closes, a right-split group is created and the tab for the
+      // picked side task becomes its active editor.
+      expect(container.querySelector('[data-testid="acp-side-tasks-popover"]')).toBeNull()
+      expect(groups.groups.length).toBe(2)
+      const active = groups.activeGroup.activeEditor
+      expect(active).toBeInstanceOf(AcpSessionEditorInput)
+      expect((active as AcpSessionEditorInput).sessionId).toBe('side-2')
+    })
+  })
+
+  describe('side-task visual distinction', () => {
+    it('marks the chat container of a side-task session with data-side-task', () => {
+      const rows = [makeSideTaskRow('side-1', 's1', 1000)]
+      const inst = makeInstantiation(undefined, undefined, { history: makeHistory(rows) })
+      const { container } = render(
+        <ServicesContext.Provider value={inst}>
+          <ChatBody session={makeSession('side-1', items)} />
+        </ServicesContext.Provider>,
+      )
+      expect(
+        container.querySelector('[data-testid="acp-chat"]')?.getAttribute('data-side-task'),
+      ).toBe('true')
+    })
+
+    it('leaves a regular session chat unmarked', () => {
+      const rows = [makeSideTaskRow('side-1', 's1', 1000)]
+      const inst = makeInstantiation(undefined, undefined, { history: makeHistory(rows) })
+      const { container } = render(
+        <ServicesContext.Provider value={inst}>
+          <ChatBody session={makeSession('s1', items)} />
+        </ServicesContext.Provider>,
+      )
+      expect(
+        container.querySelector('[data-testid="acp-chat"]')?.getAttribute('data-side-task'),
+      ).toBeNull()
+    })
+
+    it('renders no empty-session hint for a blank side-task chat', () => {
+      const rows = [makeSideTaskRow('side-1', 's1', 1000)]
+      const inst = makeInstantiation(undefined, undefined, { history: makeHistory(rows) })
+      const { container } = render(
+        <ServicesContext.Provider value={inst}>
+          <ChatBody session={makeSession('side-1', [])} />
+        </ServicesContext.Provider>,
+      )
+      expect(container.querySelector('[data-testid="acp-empty-session-hint"]')).toBeNull()
+      // The quote chip stays — it is the only top marker a fresh side task shows.
+      expect(container.querySelector('[data-testid="acp-side-task-quote"]')).not.toBeNull()
+    })
+
+    it('keeps the empty-session hint for a blank regular chat', () => {
+      const rows = [makeSideTaskRow('side-1', 's1', 1000)]
+      const inst = makeInstantiation(undefined, undefined, { history: makeHistory(rows) })
+      const { container } = render(
+        <ServicesContext.Provider value={inst}>
+          <ChatBody session={makeSession('s1', [])} />
+        </ServicesContext.Provider>,
+      )
+      expect(container.querySelector('[data-testid="acp-empty-session-hint"]')).not.toBeNull()
+    })
   })
 })

@@ -72,7 +72,8 @@ import { tabContextMenuResource } from './tabContextMenuResource.js'
 import { ToggleEditorGroupLockAction } from '../../actions/editorActions.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
-import { ChevronLeft, ChevronRight, Lock } from 'lucide-react'
+import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
+import { ChevronLeft, ChevronRight, GitBranch, Lock } from 'lucide-react'
 import styles from './EditorArea.module.css'
 
 const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
@@ -175,6 +176,9 @@ function getEditorTabStatusLabels(
   }
   if (isReadonlyEditor(input)) {
     statuses.push(localize('editorTab.tooltip.readonly', 'Read-only'))
+  }
+  if (input instanceof AcpSessionEditorInput && input.isSideTask) {
+    statuses.push(localize('acp.sideTask.badge', 'Side Task'))
   }
   if (scmTooltip) statuses.push(scmTooltip)
   return statuses
@@ -363,7 +367,23 @@ const EditorTab = memo(function EditorTab({
       {iconId
         ? (() => {
             const Icon = resolveAgentIcon(iconId)
-            return <Icon size={14} className={styles['tabIcon']} />
+            // Side-task tabs read [agent icon][branch icon][title]: the branch
+            // glyph sits inline after the vendor icon instead of overlapping it
+            // as a corner badge.
+            return (
+              <>
+                <Icon size={14} className={styles['tabIcon']} />
+                {input instanceof AcpSessionEditorInput && input.isSideTask && (
+                  <GitBranch
+                    size={11}
+                    strokeWidth={2}
+                    className={styles['tabSideTaskIcon']}
+                    data-testid="editor-tab-side-task-badge"
+                    aria-hidden="true"
+                  />
+                )}
+              </>
+            )
           })()
         : showsFileIcon &&
           resource && (

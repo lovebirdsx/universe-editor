@@ -1,4 +1,5 @@
 .chat {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -16,6 +17,13 @@
   padding: 8px 0;
   overflow-y: auto;
   box-sizing: border-box;
+}
+
+/* Keep the centered empty-session hint clear of the floating side-tasks chip
+   (parent chat) / quote chip (side-task chat). */
+.chatEmptySession:has(> .sideTasksBar),
+.chatEmptySession:has(> .sideTaskQuoteBar) {
+  padding-top: 40px;
 }
 
 .chatPanel {
@@ -1955,6 +1963,124 @@
   margin: 0;
   padding: 0px 12px;
   border-bottom: 1px solid var(--color-border, #333);
+}
+
+/* Floating chip pinned to the chat's top-right corner — stays above the sticky
+   overlays (z-index 5) without taking any layout space. The right offset clears
+   the collapse toggle pinned at the top row's right edge (bar padding 12px +
+   header padding + the toggle's own width). */
+.sideTasksBar {
+  position: absolute;
+  top: 6px;
+  right: 46px;
+  z-index: 20;
+}
+
+.sideTasksTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 10px;
+  background: var(--color-message-bg, #2a2a2a);
+  color: var(--color-description, #999);
+  font-size: calc(var(--agent-font-size, 12px) - 1px);
+  cursor: pointer;
+  box-shadow: 0 1px 4px var(--color-shadow-popover, rgba(0, 0, 0, 0.4));
+}
+
+.sideTasksTrigger:hover {
+  background: var(--color-list-hover-bg, #2a2d2e);
+  color: inherit;
+}
+
+.sideTasksPopover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 240px;
+  max-width: 360px;
+  z-index: 20;
+  background: var(--color-message-bg, #2a2a2a);
+  border: 1px solid var(--color-border, #555);
+  border-radius: 4px;
+  max-height: 40vh;
+  overflow: hidden;
+  box-shadow: 0 4px 12px var(--color-shadow-popover, rgba(0, 0, 0, 0.5));
+}
+
+.sideTasksList {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  max-height: 40vh;
+}
+
+.sideTasksRow {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: none;
+  border: 0;
+  border-radius: 3px;
+  color: inherit;
+  font-size: var(--agent-font-size, 12px);
+  cursor: pointer;
+  text-align: left;
+}
+
+.sideTasksRow:hover {
+  background: var(--color-list-hover-bg, #2a2d2e);
+}
+
+.sideTasksRowTitle {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sideTasksRowMeta {
+  flex-shrink: 0;
+  color: var(--color-description, #999);
+  font-size: calc(var(--agent-font-size, 12px) - 1px);
+}
+
+/* Floating quote chip in the side-task chat — same top-right slot the parent's
+   SideTasksBar occupies (the two never co-render: a chat is either the parent
+   or the side task), marking the child as a side task without layout cost. */
+.sideTaskQuoteBar {
+  position: absolute;
+  top: 6px;
+  right: 46px;
+  z-index: 20;
+}
+
+.sideTaskQuoteChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--color-badge-progress, #4fa6e2);
+  border-radius: 10px;
+  background: var(--color-message-bg, #2a2a2a);
+  color: var(--color-description, #999);
+  font-size: calc(var(--agent-font-size, 12px) - 1px);
+  cursor: default;
+  box-shadow: 0 1px 4px var(--color-shadow-popover, rgba(0, 0, 0, 0.4));
+}
+
+/* Side-task chats tint the prompt border so the child reads differently from a
+   regular session at a glance (covers both the Monaco host and the textarea
+   fallback). */
+.chat[data-side-task='true'] .promptEditorHost,
+.chat[data-side-task='true'] .promptTextarea {
+  border-color: var(--color-badge-progress, #4fa6e2);
 }
 
 .planCard {

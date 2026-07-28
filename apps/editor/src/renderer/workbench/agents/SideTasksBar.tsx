@@ -1,0 +1,142 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  SideTasksBar — the parent chat's affordance for its side tasks (侧边任务):
+ *  a small trigger ("Side Tasks (N)") pinned above the chat scroll that opens a
+ *  popover listing every history row forked from this session
+ *  (`sideTaskOf === this session`). Picking a row opens (or focuses) that side
+ *  task in a right-split editor tab; a not-yet-live row auto-resumes through
+ *  AcpSessionEditor's resumer. Renders nothing for side tasks themselves (the
+ *  quote chip is SideTaskQuoteBar's job) or when there are no children.
+ *
+ *  SideTaskQuoteBar — the chip a side-task chat shows at its top, replaying the
+ *  text selection it was created from (`sideTaskQuote` on its history row).
+ *--------------------------------------------------------------------------------------------*/
+
+import { useEffect, useRef, useState } from 'react'
+import { IEditorGroupsService, IInstantiationService, localize } from '@universe-editor/platform'
+import { GitBranch, TextQuote } from 'lucide-react'
+import { useObservable, useService } from '../useService.js'
+import {
+  IAcpSessionService,
+  type IAcpSession,
+} from '../../services/acp/session/acpSessionService.js'
+import { IAcpSessionHistoryService } from '../../services/acp/session/acpSessionHistory.js'
+import { openSessionInRightSplit } from '../../actions/agentSessionActions.js'
+import { relativeTime } from '../../relativeTime.js'
+import styles from './agents.module.css'
+
+export function SideTasksBar({ session }: { session: IAcpSession }) {
+  const history = useService(IAcpSessionHistoryService)
+  const sessions = useService(IAcpSessionService)
+  const groups = useService(IEditorGroupsService)
+  const inst = useService(IInstantiationService)
+  const entries = useObservable(history.entries)
+  const sid = useObservable(session.sessionIdOnAgent) ?? session.id
+  const [open, setOpen] = useState(false)
+  const popoverRef = useRef<HTMLDivElement | null>(null)
+
+  const entry = history.get(sid)
+  const sideTasks = entries
+    .filter((e) => e.sideTaskOf !== undefined && e.sideTaskOf === sid)
+    .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+
+  useEffect(() => {
+    if (!open) return
+    const handlePointer = (ev: MouseEvent) => {
+      const el = popoverRef.current
+      if (!el) return
+      if (ev.target instanceof Node && el.contains(ev.target)) return
+      setOpen(false)
+    }
+    const handleKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setOpen(false)
+    }
+    // Defer one tick so the click that opened the popover doesn't immediately
+    // close it (the open click bubbles into document before our handler attaches).
+    const raf = requestAnimationFrame(() => {
+      document.addEventListener('mousedown', handlePointer)
+      document.addEventListener('keydown', handleKey)
+    })
+    return () => {
+      cancelAnimationFrame(raf)
+      document.removeEventListener('mousedown', handlePointer)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [open])
+
+  if (entry?.sideTaskOf !== undefined || sideTasks.length === 0) return null
+
+  const openSideTask = (sessionId: string): void => {
+    setOpen(false)
+    const row = history.get(sessionId)
+    if (!row) return
+    // Live when resident; otherwise a stand-in — the editor tab's resumer picks
+    // the id up from history and auto-resumes the side task.
+    const live = sessions.getById(sessionId)
+    const target = live ?? { id: sessionId, agentId: row.agentId }
+    openSessionInRightSplit(groups, inst, target)
+  }
+
+  return (
+    <div className={styles['sideTasksBar']}>
+      <button
+        type="button"
+        className={styles['sideTasksTrigger']}
+        data-testid="acp-side-tasks-trigger"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <GitBranch size={13} strokeWidth={1.75} aria-hidden="true" />
+        {localize('acp.sideTask.bar', 'Side Tasks')} ({sideTasks.length})
+      </button>
+      {open && (
+        <div
+          ref={popoverRef}
+          className={styles['sideTasksPopover']}
+          data-testid="acp-side-tasks-popover"
+          role="menu"
+          aria-label={localize('acp.sideTask.bar', 'Side Tasks')}
+        >
+          <ul className={styles['sideTasksList']}>
+            {sideTasks.map((task) => (
+              <li key={task.sessionIdOnAgent}>
+                <button
+                  type="button"
+                  className={styles['sideTasksRow']}
+                  data-testid="acp-side-task-row"
+                  onClick={() => openSideTask(task.sessionIdOnAgent)}
+                >
+                  <span className={styles['sideTasksRowTitle']}>{task.title}</span>
+                  <span className={styles['sideTasksRowMeta']}>
+                    {relativeTime(task.lastUsedAt)}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function SideTaskQuoteBar({ session }: { session: IAcpSession }) {
+  const history = useService(IAcpSessionHistoryService)
+  useObservable(history.entries)
+  const sid = useObservable(session.sessionIdOnAgent) ?? session.id
+  const entry = history.get(sid)
+  if (entry?.sideTaskOf === undefined || entry.sideTaskQuote === undefined) return null
+  return (
+    <div className={styles['sideTaskQuoteBar']}>
+      <span
+        className={styles['sideTaskQuoteChip']}
+        data-testid="acp-side-task-quote"
+        title={entry.sideTaskQuote}
+      >
+        <TextQuote size={12} strokeWidth={1.75} aria-hidden="true" />
+        {localize('acp.sideTask.quoteChip', '{count} selected text fragment(s)', { count: 1 })}
+      </span>
+    </div>
+  )
+}

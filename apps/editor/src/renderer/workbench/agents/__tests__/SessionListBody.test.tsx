@@ -116,6 +116,7 @@ function makeSessionService(): IAcpSessionServiceType {
       return false
     },
     forkSession: (() => Promise.reject(new Error('not implemented'))) as never,
+    forkSideTask: (() => Promise.reject(new Error('not implemented'))) as never,
     rewindSession: (() => Promise.resolve(undefined)) as never,
     mcpServerDefinitions: observableValue('test.mcpDefs', []),
     async refreshMcpServerDefinitions(): Promise<void> {},
@@ -211,6 +212,7 @@ function addEntry(
   lastUsedAt: number,
   agentId = 'fake',
   cwd: string | undefined = '/work',
+  extra: Partial<Pick<AcpSessionHistoryEntry, 'sideTaskOf' | 'sideTaskQuote'>> = {},
 ): AcpSessionHistoryEntry {
   let entry!: AcpSessionHistoryEntry
   // Flush the entries-observable update synchronously so the row exists by the
@@ -221,6 +223,7 @@ function addEntry(
       sessionIdOnAgent: sessionId,
       title,
       ...(cwd !== undefined ? { cwd } : {}),
+      ...extra,
     })
     history.updateInfo(added.id, { updatedAt: lastUsedAt })
     entry = history.get(added.id)!
@@ -381,5 +384,20 @@ describe('SessionListBody — archive / pin', () => {
     expect(screen.getByRole('button', { name: 'Archive session (Del)' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Pin session' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Rename session' })).toBeNull()
+  })
+
+  it('never lists side-task rows, not even under the Archived toggle', async () => {
+    const { history, filterService } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    // Side tasks belong to their parent session and are reached through the
+    // parent chat's side-tasks popover, so the list must hide them outright.
+    addEntry(history, 'side-1', 'side one', 2000, 'fake', '/work', { sideTaskOf: 'a' })
+    addEntry(history, 'side-2', 'side two', 3000, 'fake', '/work', { sideTaskOf: 'a' })
+    expect(rowOrder()).toEqual(['a'])
+
+    await act(async () => {
+      filterService.toggleArchived()
+    })
+    expect(rowOrder()).toEqual(['a'])
   })
 })

@@ -105,6 +105,8 @@ export function StickyUserMessageBar({
     e.preventDefault()
     if (slotKey !== null) onFocusSlot?.(slotKey)
     widgetService.setHasSelection(!!window.getSelection()?.toString())
+    // Mirrors ChatBody's context menu: gates "Ask in Side Chat".
+    widgetService.setForkSupported(!session.readOnly && session.forkSupported.get())
     setMenu({ x: e.clientX, y: e.clientY, args: [{ sessionId: session.id }] })
   }
 
@@ -140,6 +142,7 @@ export function StickyUserMessageBar({
           onClose={() => {
             setMenu(null)
             widgetService.setHasSelection(false)
+            widgetService.setForkSupported(false)
           }}
         />
       )}

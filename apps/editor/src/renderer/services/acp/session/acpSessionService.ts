@@ -261,6 +261,23 @@ export interface IAcpSessionService {
    */
   forkSession(sessionId: string, messageId?: string): Promise<IAcpSession>
   /**
+   * Fork a LIVE session into a **side task** (侧边任务): a read-only-mode child
+   * chat that inherits the parent's full conversation as agent-side context but
+   * presents as a fresh, empty chat (the forked baseline replay is suppressed
+   * from the timeline). The child row is linked to the parent via
+   * `sideTaskOf`/`sideTaskQuote`, hidden from the session list, and surfaced
+   * through the parent chat's side-tasks popover instead.
+   *
+   * Unlike {@link forkSession} the child is NOT made active — the caller opens
+   * it in a right-split editor tab. Requires the parent to be live (resident
+   * and non-read-only) so its current config / MCP selection can be inherited;
+   * the same fork capability gate applies. Returns the new session.
+   */
+  forkSideTask(
+    parentSessionId: string,
+    quote: { text: string; label: string },
+  ): Promise<IAcpSession>
+  /**
    * Rewind a live session to an earlier user message (回退) — delegates to the
    * view-model's {@link IAcpSession.rewindTo}. `dryRun` previews the file impact
    * without mutating anything. `rewindFiles` (default true) rolls back the
@@ -786,7 +803,11 @@ export class AcpSessionService
 
   private async _resumeSessionInner(
     sessionId: string,
-    options: { readOnly: boolean },
+    options: {
+      readOnly: boolean
+      activate?: boolean
+      withTitleService?: boolean
+    },
   ): Promise<IAcpSession> {
     const { readOnly } = options
     // History hydration is fire-and-forget at bootstrap; on editor restart the
@@ -869,7 +890,9 @@ export class AcpSessionService
         collapseMode: entry.collapseMode ?? 'default',
         // No title service on resume: restored sessions already carry a durable
         // title, so we must not regenerate (and overwrite) it on the next turn.
-        withTitleService: false,
+        // Side tasks are the exception — their row title is only the quote-label
+        // placeholder, so the first turn should derive/generate the real one.
+        withTitleService: options.withTitleService === true,
         readOnly,
       })
       session.attachConnection(conn, entry.sessionIdOnAgent)
@@ -882,7 +905,11 @@ export class AcpSessionService
       const captured = session
       // Read-only foreign previews register so getById/timeline work, but must
       // not become the active session — that belongs to the current worktree.
-      const prior = this._sessionStore.replace(captured, { activate: !readOnly })
+      // Side tasks likewise stay inactive: the caller opens them in a
+      // right-split tab without stealing the parent chat's active slot.
+      const prior = this._sessionStore.replace(captured, {
+        activate: options.activate !== false && !readOnly,
+      })
       registered = true
       prior?.dispose()
 
@@ -891,6 +918,16 @@ export class AcpSessionService
       // until session/load replays it below. Mark the replay so ChatBody keeps
       // showing a loading placeholder instead of flashing the empty-session hint.
       session.beginHistoryReplay()
+      // Side tasks: the fork exists only as agent-side context — drop the
+      // baseline replay from the timeline so the child looks like a fresh chat.
+      // The flag lives on the history row (not a resume option) so it also
+      // covers later reopens — restarts and closed-tab resumes, where no fork
+      // caller is around to pass the option. The anchor (the side task's first
+      // own prompt id, recorded by sendPrompt) lifts the suppression at the
+      // replay boundary so the side task's own turns still land.
+      if (entry.sideTaskOf !== undefined) {
+        session.suppressReplayToTimeline(entry.sideTaskAnchorMessageId)
+      }
 
       const mcpServers = await this._resolveSessionWireMcpServers(entry.agentId, mcpSelection, true)
       const { kept, dropped } = filterMcpServersByCapabilities(
@@ -1228,65 +1265,14 @@ export class AcpSessionService
     const sourceAgentSessionId = live?.sessionIdOnAgent.get() ?? sessionId
     const entry = this._history.get(sourceAgentSessionId)
     if (!entry) throw new Error(`Unknown session to fork: ${sessionId}`)
-    // Fork spawns / resumes the agent against the source's cwd. Refuse a
-    // cross-worktree fork for the same reason resume does — it would run the
-    // agent against a directory this window isn't rooted in.
-    const cwd = entry.cwd
-    const currentCwd = this._workspace.current?.folder.fsPath
-    if (
-      cwd !== undefined &&
-      currentCwd !== undefined &&
-      !this._uriIdentity.arePathsEqual(cwd, currentCwd)
-    ) {
-      throw new AcpForeignWorktreeError(sourceAgentSessionId, cwd, currentCwd)
-    }
 
-    const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
-    const conn = await this._client.connect(entry.agentId, {
-      ...(cwd !== undefined ? { cwd } : {}),
-    })
-    // The fork inherits the SOURCE session's MCP whitelist (live selection wins
-    // over the persisted row), so a session the user trimmed servers off of
-    // forks trimmed as well instead of silently reverting to the defaults.
-    const forkMcpSelection =
-      live && !live.readOnly
-        ? live.mcpServerSelection.get()
-        : entry.mcpServerNames !== undefined
-          ? entry.mcpServerNames
-          : null
-    let newSessionId: string
-    try {
-      const initResult = await withTimeout(conn.initializeResult, timeoutMs, 'ACP initialize')
-      if (initResult.agentCapabilities?.sessionCapabilities?.fork == null) {
-        throw new Error('Agent does not advertise sessionCapabilities.fork — cannot fork')
-      }
-      const mcpServers = await this._resolveSessionWireMcpServers(
-        entry.agentId,
-        forkMcpSelection,
-        true,
-      )
-      const { kept } = filterMcpServersByCapabilities(
-        mcpServers,
-        initResult.agentCapabilities?.mcpCapabilities,
-      )
-      const result = await withTimeout(
-        conn.conn.unstable_forkSession({
-          sessionId: sourceAgentSessionId,
-          cwd: cwd ?? '',
-          mcpServers: kept,
-          // Ask the fork to truncate at this user turn (回退 point) instead of the
-          // session tip. Unknown/absent id → the agent forks from the tip.
-          ...(messageId !== undefined ? { _meta: { rewindTo: messageId } } : {}),
-        }),
-        timeoutMs,
-        'ACP session/fork',
-      )
-      newSessionId = result.sessionId
-    } finally {
-      // Drop the temp lease used only for the fork RPC; resumeSession below opens
-      // its own lease (reusing the same pooled process) to load + replay.
-      conn.dispose()
-    }
+    const forkMcpSelection = this._forkMcpSelection(live, entry)
+    const newSessionId = await this._forkOnAgent(
+      sourceAgentSessionId,
+      entry,
+      forkMcpSelection,
+      messageId,
+    )
 
     // Register the fork as a durable history row so resumeSession can load it.
     const forkTitle = localize('acp.session.forkTitle', '{title} (fork)', { title: entry.title })
@@ -1306,7 +1292,7 @@ export class AcpSessionService
       agentId: entry.agentId,
       sessionIdOnAgent: newSessionId,
       title: forkTitle,
-      ...(cwd !== undefined ? { cwd } : {}),
+      ...(entry.cwd !== undefined ? { cwd: entry.cwd } : {}),
       hasMessages: true,
       ...(forkMcpSelection !== null ? { mcpServerNames: [...forkMcpSelection] } : {}),
       ...(Object.keys(forkConfig.values).length > 0
@@ -1320,6 +1306,138 @@ export class AcpSessionService
     // Load + replay the fork's (truncated) history into a fresh live session and
     // make it active — resumeSession handles the session/load replay.
     return this.resumeSession(newSessionId)
+  }
+
+  async forkSideTask(
+    parentSessionId: string,
+    quote: { text: string; label: string },
+  ): Promise<IAcpSession> {
+    // Side tasks fork the parent's CURRENT tip, so the parent must be resident
+    // (a history-only row would fork a stale tip) and writable (a read-only
+    // foreign preview must not spawn side effects in another worktree).
+    const live = this._findSession(parentSessionId)
+    if (!live || live.status.get() === 'closed' || live.readOnly) {
+      throw new Error(`Cannot fork a side task from session: ${parentSessionId}`)
+    }
+    const sourceAgentSessionId = live.sessionIdOnAgent.get() ?? parentSessionId
+    const entry = this._history.get(sourceAgentSessionId)
+    if (!entry) throw new Error(`Unknown session to fork: ${parentSessionId}`)
+
+    const forkMcpSelection = this._forkMcpSelection(live, entry)
+    const newSessionId = await this._forkOnAgent(sourceAgentSessionId, entry, forkMcpSelection)
+
+    // The child inherits the parent's config but is pinned to the agent's
+    // read-only mode so the side chat can explain and query without touching
+    // source / files / git. claude uses `dontAsk` (deny-not-pre-approved →
+    // write tools refuse) rather than `plan`, which would run the plan/exit-plan
+    // flow and drop a plan onto the side chat's timeline. codex keeps its
+    // `read-only` sandbox mode. The user can still switch modes explicitly
+    // afterwards. Agents whose mode list lacks the value simply ignore the push
+    // (the config state machine skips unknown values).
+    const readOnlyMode = entry.agentId === 'claude-code' ? 'dontAsk' : 'read-only'
+    const forkConfig = snapshotConfigSelections(live.configOptions.get())
+    const configOptions = { ...forkConfig.values, mode: readOnlyMode }
+    const configLabels = { ...forkConfig.labels, mode: readOnlyMode }
+    this._history.add({
+      agentId: entry.agentId,
+      sessionIdOnAgent: newSessionId,
+      title: quote.label,
+      ...(entry.cwd !== undefined ? { cwd: entry.cwd } : {}),
+      hasMessages: false,
+      sideTaskOf: sourceAgentSessionId,
+      sideTaskQuote: quote.text,
+      ...(forkMcpSelection !== null ? { mcpServerNames: [...forkMcpSelection] } : {}),
+      configOptions,
+      configLabels,
+    })
+    this._telemetry.publicLog('acp.side_task_forked', { agentId: entry.agentId })
+    // The replay suppression is derived from the history row's sideTaskOf flag
+    // inside _resumeSessionInner. The child is not made active — the caller
+    // opens it in a right-split editor tab. The title service rides along so
+    // the first turn replaces the quote-label placeholder with a derived +
+    // AI-generated title.
+    return this._resumeSessionInner(newSessionId, {
+      readOnly: false,
+      activate: false,
+      withTitleService: true,
+    })
+  }
+
+  /**
+   * The MCP whitelist a fork inherits from its source: the live session's
+   * current selection wins over the persisted row, so a session the user
+   * trimmed servers off of forks trimmed as well instead of silently reverting
+   * to the defaults.
+   */
+  private _forkMcpSelection(
+    live: IAcpSession | undefined,
+    entry: AcpSessionHistoryEntry,
+  ): readonly string[] | null {
+    return live && !live.readOnly
+      ? live.mcpServerSelection.get()
+      : entry.mcpServerNames !== undefined
+        ? entry.mcpServerNames
+        : null
+  }
+
+  /**
+   * Shared fork RPC for {@link forkSession} / {@link forkSideTask}: guards the
+   * cross-worktree split-brain case, leases a temp connection, validates the
+   * agent's fork capability, and issues `session/fork`. Returns the new
+   * agent-issued session id. The caller owns history-row registration and the
+   * resume that turns the fork into a live session.
+   */
+  private async _forkOnAgent(
+    sourceAgentSessionId: string,
+    entry: AcpSessionHistoryEntry,
+    mcpSelection: readonly string[] | null,
+    messageId?: string,
+  ): Promise<string> {
+    // Fork spawns / resumes the agent against the source's cwd. Refuse a
+    // cross-worktree fork for the same reason resume does — it would run the
+    // agent against a directory this window isn't rooted in.
+    const cwd = entry.cwd
+    const currentCwd = this._workspace.current?.folder.fsPath
+    if (
+      cwd !== undefined &&
+      currentCwd !== undefined &&
+      !this._uriIdentity.arePathsEqual(cwd, currentCwd)
+    ) {
+      throw new AcpForeignWorktreeError(sourceAgentSessionId, cwd, currentCwd)
+    }
+
+    const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
+    const conn = await this._client.connect(entry.agentId, {
+      ...(cwd !== undefined ? { cwd } : {}),
+    })
+    try {
+      const initResult = await withTimeout(conn.initializeResult, timeoutMs, 'ACP initialize')
+      if (initResult.agentCapabilities?.sessionCapabilities?.fork == null) {
+        throw new Error('Agent does not advertise sessionCapabilities.fork — cannot fork')
+      }
+      const mcpServers = await this._resolveSessionWireMcpServers(entry.agentId, mcpSelection, true)
+      const { kept } = filterMcpServersByCapabilities(
+        mcpServers,
+        initResult.agentCapabilities?.mcpCapabilities,
+      )
+      const result = await withTimeout(
+        conn.conn.unstable_forkSession({
+          sessionId: sourceAgentSessionId,
+          cwd: cwd ?? '',
+          mcpServers: kept,
+          // Ask the fork to truncate at this user turn (回退 point) instead of the
+          // session tip. Unknown/absent id → the agent forks from the tip.
+          ...(messageId !== undefined ? { _meta: { rewindTo: messageId } } : {}),
+        }),
+        timeoutMs,
+        'ACP session/fork',
+      )
+      return result.sessionId
+    } finally {
+      // Drop the temp lease used only for the fork RPC; the resume below opens
+      // its own lease (reusing the same pooled process) to load + replay.
+      conn.dispose()
+    }
   }
 
   rewindSession(

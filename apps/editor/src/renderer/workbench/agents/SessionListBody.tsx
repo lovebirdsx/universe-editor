@@ -449,6 +449,10 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
   const visible = useMemo(() => {
     const archKept = showArchived ? filtered : filtered.filter((e) => e.archived !== true)
     const kept = archKept.filter((entry) => {
+      // Side tasks belong to their parent session (child rows) and are reached
+      // through the parent chat's side-tasks popover — never listed here, not
+      // even under the Archived toggle.
+      if (entry.sideTaskOf !== undefined) return false
       if (excludedAgents.has(entry.agentId)) return false
       if (excludedStatuses.size > 0) {
         const live = service.getById(entry.id)

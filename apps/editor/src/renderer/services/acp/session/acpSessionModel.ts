@@ -545,6 +545,21 @@ export interface IAcpSession {
   beginHistoryReplay(): void
   /** Mark the replay finished — see {@link beginHistoryReplay}. */
   endHistoryReplay(): void
+  /**
+   * Side-task sessions: suppress the forked baseline replay so nothing lands on
+   * the timeline (the fork exists only as agent-side context; the UI must look
+   * like a fresh chat). Timeline-bound updates (messages / tool calls / plan)
+   * are dropped while armed; config / commands / usage updates still apply.
+   *
+   * `anchorMessageId` (the side task's first own user prompt, recorded by
+   * sendPrompt) marks the replay boundary: the user chunk carrying that id
+   * lifts the suppression, so the side task's own turns survive a re-open while
+   * the baseline before them stays hidden. Without an anchor (nothing sent
+   * yet) the whole replay is dropped.
+   *
+   * One-shot — cleared by {@link endHistoryReplay}.
+   */
+  suppressReplayToTimeline(anchorMessageId?: string): void
   /** Cycle the timeline collapse mode: default → collapsed → expanded → default. */
   cycleCollapseMode(): void
   /** Internal — call site is the permission handler. */

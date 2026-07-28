@@ -86,6 +86,12 @@ export interface IAcpChatWidgetService {
   setFindVisible(widget: AcpChatWidget, open: boolean): void
   /** Set `acpChatHasSelection` — true when text is selected at context-menu time. */
   setHasSelection(hasSelection: boolean): void
+  /**
+   * Set `acpChatForkSupported` — true at context-menu time when the menu's
+   * session is writable (not a read-only foreign preview) and its agent
+   * advertises fork support. Gates the "Ask in Side Chat" menu item.
+   */
+  setForkSupported(forkSupported: boolean): void
 }
 
 export const IAcpChatWidgetService = createDecorator<IAcpChatWidgetService>('acpChatWidgetService')
@@ -108,6 +114,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   private readonly _popupKey: IContextKey<boolean>
   private readonly _findKey: IContextKey<boolean>
   private readonly _selectionKey: IContextKey<boolean>
+  private readonly _forkSupportedKey: IContextKey<boolean>
 
   // Roots every registration's cleanup under this (singleton-rooted) service so
   // the leak detector doesn't report a still-mounted ChatBody's registration
@@ -120,6 +127,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     this._popupKey = contextKeyService.createKey<boolean>('acpPromptPopupVisible', false)
     this._findKey = contextKeyService.createKey<boolean>('acpChatFindVisible', false)
     this._selectionKey = contextKeyService.createKey<boolean>('acpChatHasSelection', false)
+    this._forkSupportedKey = contextKeyService.createKey<boolean>('acpChatForkSupported', false)
   }
 
   get lastFocusedWidget(): AcpChatWidget | undefined {
@@ -201,6 +209,10 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
 
   setHasSelection(hasSelection: boolean): void {
     this._selectionKey.set(hasSelection)
+  }
+
+  setForkSupported(forkSupported: boolean): void {
+    this._forkSupportedKey.set(forkSupported)
   }
 
   private _unregister(widget: AcpChatWidget): void {

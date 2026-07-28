@@ -351,14 +351,16 @@ function renderWithServices(
     contextKeyService?: IContextKeyService
     commands?: ICommandServiceType
     quickInput?: IQuickInputServiceType
+    config?: IConfigurationServiceType
+    dialog?: IDialogServiceType
   } = {},
 ) {
   const services = new ServiceCollection()
   services.set(IFileSearchService, opts.fileSearch ?? stubFileSearch)
   services.set(IWorkspaceService, opts.workspace ?? stubWorkspaceService)
   services.set(IExcludeService, new FakeExcludeService())
-  services.set(IConfigurationService, stubConfigurationService)
-  services.set(IDialogService, stubDialogService)
+  services.set(IConfigurationService, opts.config ?? stubConfigurationService)
+  services.set(IDialogService, opts.dialog ?? stubDialogService)
   services.set(IAcpPromptHistoryService, stubHistoryService)
   services.set(INotificationService, stubNotificationService)
   services.set(IFileService, stubFileService)
@@ -423,6 +425,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     isReplayingHistory: observableValue<boolean>('test.replay', false),
     beginHistoryReplay: () => {},
     endHistoryReplay: () => {},
+    suppressReplayToTimeline: () => {},
     usage: observableValue<AcpUsage | undefined>('test.usage', opts.usage),
     pendingPermission: permission,
     pendingElicitation: observableValue<AcpPendingElicitation | undefined>('pe', undefined),
@@ -725,6 +728,45 @@ describe('PromptInput — submit and cancel', () => {
       session.commandsObs.set(COMMANDS, undefined)
     })
     expect(screen.getByTestId('acp-slash-popover')).toBeTruthy()
+  })
+})
+
+describe('PromptInput — short first message confirm', () => {
+  const confirmConfig = {
+    ...stubConfigurationService,
+    get: ((key: string) => {
+      if (key === 'acp.prompt.confirmShortFirstMessageLength') return 20
+      if (key === 'acp.prompt.image.maxSizeMB') return 5
+      if (key === 'acp.prompt.image.maxCount') return 5
+      return 0
+    }) as never,
+  } as unknown as IConfigurationServiceType
+
+  it('skips the confirm dialog for side-task sessions', async () => {
+    const confirmSpy = vi.fn(() => Promise.resolve({ confirmed: false }))
+    const dialog = { ...stubDialogService, confirm: confirmSpy } as unknown as IDialogServiceType
+    const session = makeSession()
+    renderWithServices(<PromptInput session={session} isSideTask />, {
+      config: confirmConfig,
+      dialog,
+    })
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'hi' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    await waitFor(() => expect(session.sendPrompt).toHaveBeenCalledWith('hi', [], [], []))
+    expect(confirmSpy).not.toHaveBeenCalled()
+  })
+
+  it('still confirms for regular sessions and aborts when cancelled', async () => {
+    const confirmSpy = vi.fn(() => Promise.resolve({ confirmed: false }))
+    const dialog = { ...stubDialogService, confirm: confirmSpy } as unknown as IDialogServiceType
+    const session = makeSession()
+    renderWithServices(<PromptInput session={session} />, { config: confirmConfig, dialog })
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'hi' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(1))
+    expect(session.sendPrompt).not.toHaveBeenCalled()
   })
 })
 

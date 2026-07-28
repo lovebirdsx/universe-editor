@@ -143,11 +143,13 @@ interface PopoverHandleState {
 
 export function PromptInput({
   session,
+  isSideTask = false,
   autoFocus = false,
   handleRef,
   onPopoverOpenChange,
 }: {
   session: IAcpSession
+  isSideTask?: boolean
   autoFocus?: boolean
   handleRef?: MutableRefObject<WidgetHandle>
   onPopoverOpenChange?: (open: boolean) => void
@@ -867,7 +869,13 @@ export function PromptInput({
     if (!text.trim() && images.length === 0) return
 
     const minLen = config.get<number>('acp.prompt.confirmShortFirstMessageLength') ?? 0
-    if (minLen > 0 && !hasUserMessages && text.trim().length < minLen && images.length === 0) {
+    if (
+      minLen > 0 &&
+      !isSideTask &&
+      !hasUserMessages &&
+      text.trim().length < minLen &&
+      images.length === 0
+    ) {
       const { confirmed } = await dialogService.confirm({
         message: localize('acp.prompt.confirmShort.message', 'Send this short message?'),
         detail: localize(

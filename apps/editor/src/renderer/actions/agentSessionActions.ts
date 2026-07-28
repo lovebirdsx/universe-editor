@@ -7,11 +7,13 @@
 
 import {
   Action2,
+  GroupDirection,
   IDialogService,
   IEditorGroupsService,
   IEditorService,
   IHostService,
   IInstantiationService,
+  ILoggerService,
   INotificationService,
   IQuickInputService,
   IUriIdentityService,
@@ -27,11 +29,16 @@ import {
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
+import {
+  IAcpSessionService,
+  AcpForeignWorktreeError,
+} from '../services/acp/session/acpSessionService.js'
+import type { IAcpSession } from '../services/acp/session/acpSessionModel.js'
 import { IAcpAgentRegistry, agentIconId } from '../services/acp/acpAgentRegistry.js'
 import { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
+import { AcpPromptReplaceInbox } from '../services/acp/session/acpPromptReplaceInbox.js'
 import { resolveLiveSessionTitle } from '../services/acp/session/acpSessionTitle.js'
 import { ISessionSwitcherService, type SessionSummary } from '../../shared/ipc/sessionSwitcher.js'
 import { basenameOfPath } from '../workbench/files/resourceInfo.js'
@@ -789,5 +796,106 @@ function closeDuplicateSessionEditors(
         group.closeEditor(editor)
       }
     }
+  }
+}
+
+/**
+ * Open (or focus) a session chat in the editor group to the RIGHT of the active
+ * one, creating the split when none exists. Shared by the side-task flows (the
+ * ask-in-side-chat command and the parent chat's side-tasks popover).
+ */
+export function openSessionInRightSplit(
+  groups: IEditorGroupsService,
+  inst: IInstantiationService,
+  session: { id: string; agentId: string | undefined },
+): void {
+  const source = groups.activeGroup
+  let target = groups.findGroup({ direction: GroupDirection.Right }, source) ?? source
+  if (target === source) target = groups.addGroup(source, GroupDirection.Right)
+  groups.activateGroup(target)
+  const input = inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined)
+  openSessionEditorInGroup(target, input, undefined)
+  closeDuplicateSessionEditors(groups, target, session.id)
+}
+
+/** Hard cap for a captured selection; longer quotes are truncated (logged). */
+const SIDE_TASK_QUOTE_MAX_CHARS = 8000
+
+/**
+ * Ask in Side Chat (在侧边聊天中提问): fork the current session into a
+ * read-only-mode side task seeded with the text selection, open it in a
+ * right-split editor tab, and prefill its prompt with the quoted text. The
+ * menu entry only appears over an actual selection on a fork-capable,
+ * non-read-only session (`acpChatHasSelection && acpChatForkSupported`).
+ */
+export class AskInSideChatAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.askInSideChat'
+  constructor() {
+    super({
+      id: AskInSideChatAction.ID,
+      title: localize2('acp.sideTask.ask', 'Ask in Side Chat'),
+      category: CATEGORY,
+      menu: [
+        {
+          id: MenuId.AcpChatContext,
+          group: '1_copy',
+          order: 2,
+          when: 'acpChatHasSelection && acpChatForkSupported',
+        },
+      ],
+      f1: false,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor, arg?: { sessionId?: unknown }): Promise<void> {
+    // Snapshot every service synchronously — the accessor dies past the first await.
+    const sessions = accessor.get(IAcpSessionService)
+    const groups = accessor.get(IEditorGroupsService)
+    const inst = accessor.get(IInstantiationService)
+    const notification = accessor.get(INotificationService)
+    const logger = accessor
+      .get(ILoggerService)
+      .createLogger({ id: 'acp.sideTask', name: 'ACP Side Task' })
+
+    const sessionId = typeof arg?.sessionId === 'string' ? arg.sessionId : undefined
+    if (sessionId === undefined) return
+    // Same pattern as CopySelectedTextAction: the selection is still readable
+    // when the menu item's run executes.
+    const raw = window.getSelection()?.toString() ?? ''
+    const text = raw.trim()
+    if (text.length === 0) return
+    let quote = text
+    if (quote.length > SIDE_TASK_QUOTE_MAX_CHARS) {
+      logger.info(`[acp] side-task quote truncated: ${quote.length} chars`)
+      quote = `${quote.slice(0, SIDE_TASK_QUOTE_MAX_CHARS)}…`
+    }
+    const label =
+      quote.replace(/\s+/g, ' ').slice(0, 60) || localize('acp.sideTask.bar', 'Side Tasks')
+
+    let side: IAcpSession
+    try {
+      side = await sessions.forkSideTask(sessionId, { text: quote, label })
+    } catch (err) {
+      const message =
+        err instanceof AcpForeignWorktreeError
+          ? localize(
+              'agent.fork.foreign',
+              'Open the session in its own worktree before forking it.',
+            )
+          : localize('acp.sideTask.forkFailed', 'Could not create the side chat: {message}', {
+              message: (err as Error).message,
+            })
+      notification.notify({ severity: Severity.Error, message })
+      return
+    }
+
+    openSessionInRightSplit(groups, inst, side)
+    // Prefill (not auto-send) the side chat with the quote as a markdown
+    // blockquote — the user edits and sends manually, mirroring Codex.
+    const quoted = quote
+      .split('\n')
+      .map((line) => (line.trim().length === 0 ? '>' : `> ${line}`))
+      .join('\n')
+    AcpPromptReplaceInbox.deposit(side.id, `${quoted}\n\n`)
   }
 }

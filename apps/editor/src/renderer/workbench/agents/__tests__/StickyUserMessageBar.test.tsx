@@ -47,6 +47,7 @@ function renderWithServices(node: React.ReactNode) {
   } as unknown as IContextKeyService)
   services.set(IAcpChatWidgetService, {
     setHasSelection: () => {},
+    setForkSupported: () => {},
   } as unknown as IAcpChatWidgetService)
   const inst = new InstantiationService(services)
   const Wrapper = ({ children }: { children: React.ReactNode }) => (

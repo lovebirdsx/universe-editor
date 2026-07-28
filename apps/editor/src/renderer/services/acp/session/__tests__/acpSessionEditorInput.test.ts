@@ -22,7 +22,7 @@ import {
   type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
 } from '../acpSessionHistory.js'
 
-function makeAccessor(): {
+function makeAccessor(rows: AcpSessionHistoryEntry[] = []): {
   accessor: ServicesAccessor
   inst: IInstantiationService
 } {
@@ -49,8 +49,8 @@ function makeAccessor(): {
   } as unknown as IAcpSessionServiceType
   const history = {
     _serviceBrand: undefined,
-    entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.history', []),
-    get: () => undefined,
+    entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.history', rows),
+    get: (id: string) => rows.find((e) => e.sessionIdOnAgent === id),
     list: () => [],
     async initialize() {},
   } as unknown as IAcpSessionHistoryServiceType
@@ -139,5 +139,25 @@ describe('AcpSessionEditorInput', () => {
   it('resource path encodes the sessionId', () => {
     const input = makeInput('sess-10')
     expect(input.resource.path).toBe('/acp/session/sess-10')
+  })
+
+  it('isSideTask is true only when the history row carries a sideTaskOf flag', () => {
+    const sideRow: AcpSessionHistoryEntry = {
+      id: 'side-1',
+      agentId: 'fake',
+      sessionIdOnAgent: 'side-1',
+      title: 'side chat',
+      createdAt: 1,
+      lastUsedAt: 1,
+      sideTaskOf: 'parent-1',
+      sideTaskQuote: 'quoted',
+    }
+    const { inst } = makeAccessor([sideRow])
+    expect(inst.createInstance(AcpSessionEditorInput, 'side-1', 'fake', undefined).isSideTask).toBe(
+      true,
+    )
+    expect(inst.createInstance(AcpSessionEditorInput, 'sess-x', 'fake', undefined).isSideTask).toBe(
+      false,
+    )
   })
 })

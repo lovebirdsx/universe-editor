@@ -194,6 +194,59 @@ describe('AcpSessionHistoryService — add / list', () => {
     svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
     expect(svc.entries.get()).toHaveLength(1)
   })
+
+  it('add stores sideTaskOf / sideTaskQuote verbatim', async () => {
+    await svc.initialize()
+    const entry = svc.add({
+      agentId: 'a',
+      sessionIdOnAgent: 'child-1',
+      title: 'quote summary',
+      sideTaskOf: 'parent-1',
+      sideTaskQuote: 'some selected text',
+    })
+    expect(entry.sideTaskOf).toBe('parent-1')
+    expect(entry.sideTaskQuote).toBe('some selected text')
+    expect(svc.get('child-1')?.sideTaskOf).toBe('parent-1')
+  })
+
+  it('re-adding the same key carries over sideTaskOf / sideTaskQuote', async () => {
+    await svc.initialize()
+    svc.add({
+      agentId: 'a',
+      sessionIdOnAgent: 'child-1',
+      title: 'quote summary',
+      sideTaskOf: 'parent-1',
+      sideTaskQuote: 'some selected text',
+    })
+    const readded = svc.add({ agentId: 'a', sessionIdOnAgent: 'child-1', title: 'new title' })
+    expect(readded.title).toBe('new title')
+    expect(readded.sideTaskOf).toBe('parent-1')
+    expect(readded.sideTaskQuote).toBe('some selected text')
+  })
+
+  it('setSideTaskAnchorMessageId is write-once and survives re-add', async () => {
+    await svc.initialize()
+    svc.add({
+      agentId: 'a',
+      sessionIdOnAgent: 'child-1',
+      title: 'quote summary',
+      sideTaskOf: 'parent-1',
+    })
+    svc.setSideTaskAnchorMessageId('child-1', 'anchor-1')
+    expect(svc.get('child-1')?.sideTaskAnchorMessageId).toBe('anchor-1')
+
+    // Write-once: a later id is ignored.
+    svc.setSideTaskAnchorMessageId('child-1', 'anchor-2')
+    expect(svc.get('child-1')?.sideTaskAnchorMessageId).toBe('anchor-1')
+
+    // Unknown id is a no-op.
+    svc.setSideTaskAnchorMessageId('nope', 'anchor-3')
+    expect(svc.get('nope')).toBeUndefined()
+
+    // Carried across re-add.
+    const readded = svc.add({ agentId: 'a', sessionIdOnAgent: 'child-1', title: 'new title' })
+    expect(readded.sideTaskAnchorMessageId).toBe('anchor-1')
+  })
 })
 
 describe('AcpSessionHistoryService — touch / remove / clear', () => {
@@ -324,6 +377,66 @@ describe('AcpSessionHistoryService — persistence', () => {
         { id: 'ok', agentId: 'a', sessionIdOnAgent: 'ok', title: 't', createdAt: 1, lastUsedAt: 2 },
         { id: 1 }, // garbage
         null,
+      ],
+    })
+    await svc.initialize()
+    expect(svc.list().map((e) => e.id)).toEqual(['ok'])
+  })
+
+  it('hydrates entries that lack side-task fields (no migration needed)', async () => {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 1,
+      entries: [
+        {
+          id: 'plain',
+          agentId: 'a',
+          sessionIdOnAgent: 'plain',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 2,
+        },
+        {
+          id: 'child',
+          agentId: 'a',
+          sessionIdOnAgent: 'child',
+          title: 'q',
+          createdAt: 1,
+          lastUsedAt: 2,
+          sideTaskOf: 'plain',
+          sideTaskQuote: 'quoted',
+        },
+      ],
+    })
+    await svc.initialize()
+    const plain = svc.get('plain')
+    expect(plain?.sideTaskOf).toBeUndefined()
+    expect(plain?.sideTaskQuote).toBeUndefined()
+    expect(svc.get('child')?.sideTaskOf).toBe('plain')
+  })
+
+  it('drops entries whose side-task fields have non-string values', async () => {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 1,
+      entries: [
+        { id: 'ok', agentId: 'a', sessionIdOnAgent: 'ok', title: 't', createdAt: 1, lastUsedAt: 2 },
+        {
+          id: 'bad',
+          agentId: 'a',
+          sessionIdOnAgent: 'bad',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 2,
+          sideTaskOf: 42,
+        },
+        {
+          id: 'bad-anchor',
+          agentId: 'a',
+          sessionIdOnAgent: 'bad-anchor',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 2,
+          sideTaskAnchorMessageId: 42,
+        },
       ],
     })
     await svc.initialize()

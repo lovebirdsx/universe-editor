@@ -1183,6 +1183,146 @@ describe('AcpSession.timeline', () => {
       },
     ])
   })
+
+  it('suppressReplayToTimeline drops replay updates until endHistoryReplay resets it', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+    s.suppressReplayToTimeline()
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'baseline message' },
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tcBaseline',
+        title: 'Baseline',
+        kind: 'read',
+        status: 'completed',
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'plan',
+        entries: [{ content: 'baseline plan', priority: 'high', status: 'pending' }],
+      },
+    })
+
+    // Nothing replayed lands on the timeline / plan / toolCalls.
+    expect(s.timeline.get()).toEqual([])
+    expect(s.plan.get()).toEqual([])
+    expect(s.toolCalls.get()).toEqual([])
+
+    s.endHistoryReplay()
+
+    // Post-replay traffic flows again.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'fresh message' },
+      },
+    })
+    expect(s.timeline.get().map((it) => it.kind)).toEqual(['message'])
+    const item = s.timeline.get()[0]!
+    if (item.kind !== 'message') throw new Error('expected message')
+    expect(item.message.text).toBe('fresh message')
+  })
+
+  it('anchor lifts suppression at the boundary user chunk, keeping the side task’s own turns', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+    s.suppressReplayToTimeline('anchor-msg')
+
+    // Baseline: a user message + agent reply + tool call, all before the anchor.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'baseline user' },
+        messageId: 'baseline-msg',
+      } as never,
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'baseline agent' },
+      },
+    })
+
+    // Boundary: the side task's first own prompt — lifts the suppression.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'side-task first prompt' },
+        messageId: 'anchor-msg',
+      } as never,
+    })
+    // The side task's own turn after the anchor must land.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'side-task answer' },
+      },
+    })
+
+    const texts = s.timeline
+      .get()
+      .filter((it) => it.kind === 'message')
+      .map((it) => (it.kind === 'message' ? `${it.message.role}:${it.message.text}` : ''))
+    expect(texts).toEqual(['user:side-task first prompt', 'agent:side-task answer'])
+
+    s.endHistoryReplay()
+  })
+
+  it('config_option_update still applies while replay is suppressed', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+    s.suppressReplayToTimeline()
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'config_option_update',
+        configOptions: [
+          {
+            id: 'mode',
+            name: 'Mode',
+            category: 'mode',
+            type: 'select',
+            currentValue: 'plan',
+            options: [
+              { value: 'plan', name: 'Plan' },
+              { value: 'default', name: 'Default' },
+            ],
+          },
+        ],
+      } as never,
+    })
+
+    const mode = s.configOptions.get().find((o) => o.id === 'mode')
+    expect(mode?.currentValue).toBe('plan')
+
+    s.endHistoryReplay()
+  })
 })
 
 describe('AcpSession.timeline — batched/immediate atomicity', () => {
