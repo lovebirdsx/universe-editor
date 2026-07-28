@@ -5,7 +5,7 @@
  *  content exceeds the limit a chevron toggle reveals / hides the rest.
  *--------------------------------------------------------------------------------------------*/
 
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, GitBranch, Undo2 } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
@@ -17,9 +17,13 @@ import {
   RewindAgentSessionAction,
   ForkAgentSessionAction,
 } from '../../actions/agentRewindActions.js'
+import {
+  USER_MESSAGE_COLLAPSED_MAX_PX,
+  estimateUserMessageOverflow,
+  initialOverflow,
+  rememberMeasuredOverflow,
+} from './contentOverflow.js'
 import styles from './agents.module.css'
-
-const COLLAPSED_MAX_PX = 160
 
 export const UserMessageItem = memo(function UserMessageItem({
   blocks,
@@ -33,7 +37,15 @@ export const UserMessageItem = memo(function UserMessageItem({
   messageId?: string
 }) {
   const innerRef = useRef<HTMLDivElement | null>(null)
-  const [overflows, setOverflows] = useState(false)
+  // Seed from the last measured state / a synchronous estimate (never a bare
+  // `false`) so the FIRST paint already clamps a long prompt. In the virtualized
+  // timeline a row remounts every time it scrolls back into overscan; mounting
+  // tall and clamping short afterwards changes the measured row height per
+  // (re)mount and drives the endless scroll-correction loop (the reported
+  // flicker-and-drift after an outline jump). See contentOverflow.ts.
+  const [overflows, setOverflows] = useState(() =>
+    initialOverflow(contentKey, () => estimateUserMessageOverflow(blocks)),
+  )
   // Persist the expanded state (via the timeline's content-expansion store) so
   // it survives an unmount → remount cycle (session / tab switch, virtualization
   // scroll-off). Falls back to local state when used without a store or key.
@@ -46,15 +58,23 @@ export const UserMessageItem = memo(function UserMessageItem({
     else setLocalExpanded((v) => !v)
   }
 
-  useEffect(() => {
+  // Refine the estimate against the real rendered height and keep tracking async
+  // growth (image decode, font load). useLayoutEffect (not useEffect) so the
+  // correction lands before the browser paints; the measured truth is remembered
+  // per contentKey so the next remount seeds from it directly.
+  useLayoutEffect(() => {
     const el = innerRef.current
     if (!el) return
-    const measure = () => setOverflows(el.scrollHeight > COLLAPSED_MAX_PX + 1)
+    const measure = () => {
+      const next = el.scrollHeight > USER_MESSAGE_COLLAPSED_MAX_PX + 1
+      rememberMeasuredOverflow(contentKey, next)
+      setOverflows((prev) => (prev === next ? prev : next))
+    }
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+  }, [contentKey])
 
   const collapsed = overflows && !expanded
   const showToggle = overflows

@@ -1,12 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Tests for UserMessageItem's Rewind / Fork hover affordances: they appear only
- *  when the source session advertises the capability and a messageId is present,
- *  and clicking each delegates to the matching Action2 command with the
- *  { sessionId, messageId } argument.
+ *  Tests for UserMessageItem's Rewind / Fork hover affordances (capability
+ *  gating + command delegation) and its overflow-clamp stability: the measured
+ *  overflow state must be remembered per contentKey so a virtualization remount
+ *  seeds at the same height it settled at (the scroll-jitter fix).
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render } from '@testing-library/react'
 import {
   ICommandService,
@@ -22,6 +22,11 @@ import {
   RewindAgentSessionAction,
   ForkAgentSessionAction,
 } from '../../../actions/agentRewindActions.js'
+import {
+  _resetMeasuredOverflowForTests,
+  initialOverflow,
+  recallMeasuredOverflow,
+} from '../contentOverflow.js'
 
 vi.mock('../../editor/monaco/MonacoLoader.js', () => ({
   MonacoLoader: { ensureInitialized: () => new Promise(() => {}) },
@@ -93,5 +98,73 @@ describe('UserMessageItem — rewind / fork actions', () => {
   it('renders no actions when the message has no messageId', () => {
     const { container } = renderItem(fakeSession({ rewind: true, fork: true }), undefined)
     expect(container.querySelector('[data-testid="acp-user-message-actions"]')).toBeNull()
+  })
+})
+
+describe('UserMessageItem — overflow clamp stability', () => {
+  beforeEach(() => _resetMeasuredOverflowForTests())
+
+  const renderWithKey = (contentKey: string) => {
+    const services = new ServiceCollection()
+    const inst = new InstantiationService(services)
+    const blocks: readonly ContentBlock[] = [{ type: 'text', text: '正文' }]
+    return render(
+      <ServicesContext.Provider value={inst}>
+        <UserMessageItem blocks={blocks} contentKey={contentKey} />
+      </ServicesContext.Provider>,
+    )
+  }
+
+  // happy-dom has no layout, so scrollHeight is stubbed to simulate a body
+  // taller than the 160px clamp.
+  const stubScrollHeight = (px: number) => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get: () => px,
+    })
+    return () => {
+      delete (HTMLElement.prototype as unknown as Record<string, unknown>)['scrollHeight']
+    }
+  }
+
+  it('remembers the measured overflow per contentKey so a remount seeds from it', () => {
+    const restore = stubScrollHeight(500)
+    try {
+      const { container, unmount } = renderWithKey('msg:m:1')
+      const body = container.querySelector('[data-testid="acp-user-message-body"]')
+      expect(body?.getAttribute('data-overflow')).toBe('true')
+      expect(body?.getAttribute('data-collapsed')).toBe('true')
+      // The measured truth is cached — a virtualization remount must mount
+      // already clamped instead of flashing tall then clamping (the height
+      // flip that feeds the scroll-correction loop).
+      expect(recallMeasuredOverflow('msg:m:1')).toBe(true)
+      unmount()
+      expect(initialOverflow('msg:m:1', () => false)).toBe(true)
+    } finally {
+      restore()
+    }
+  })
+
+  it('records non-overflowing bodies too, and expands via the toggle', () => {
+    const restore = stubScrollHeight(500)
+    try {
+      const { container } = renderWithKey('msg:m:2')
+      const toggle = container.querySelector('[data-testid="acp-user-message-toggle"]')
+      expect(toggle).not.toBeNull()
+      fireEvent.click(toggle!)
+      const body = container.querySelector('[data-testid="acp-user-message-body"]')
+      expect(body?.getAttribute('data-collapsed')).toBe('false')
+    } finally {
+      restore()
+    }
+    const restoreShort = stubScrollHeight(40)
+    try {
+      const { container } = renderWithKey('msg:m:3')
+      const body = container.querySelector('[data-testid="acp-user-message-body"]')
+      expect(body?.getAttribute('data-overflow')).toBe('false')
+      expect(recallMeasuredOverflow('msg:m:3')).toBe(false)
+    } finally {
+      restoreShort()
+    }
   })
 })

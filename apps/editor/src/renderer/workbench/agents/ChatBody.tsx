@@ -85,6 +85,7 @@ import {
 import { ISessionBookmarkService } from '../../services/acp/session/sessionBookmarkService.js'
 import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
 import { ContentExpansionProvider, type ContentExpansionStore } from './chatContentExpansion.js'
+import { estimateWrappedLinesUpTo } from './contentOverflow.js'
 import { shouldAdjustTimelineScrollOnSizeChange } from './timelineVirtualScroll.js'
 import { ChatFindWidget } from './ChatFindWidget.js'
 import { useChatFind } from './useChatFind.js'
@@ -1649,13 +1650,16 @@ function firstLineSummary(text: string): string {
 const ESTIMATE_WRAP_COLS = 90
 const ESTIMATE_COLLAPSED = 190
 const ESTIMATE_USER_MAX = 224
+// Row estimates are height-capped (user 224 / toolCall 3000 / message 4000), so
+// line counting can stop well past the tallest cap instead of scanning huge
+// bodies to the end.
+const ESTIMATE_MAX_LINES = 200
 
 function estimateLineCount(text: string): number {
-  let lines = 0
-  for (const seg of text.split('\n')) {
-    lines += Math.max(1, Math.ceil(seg.length / ESTIMATE_WRAP_COLS))
-  }
-  return Math.max(1, lines)
+  // CJK-aware wrap estimate: wide characters count two columns, matching how
+  // they render — raw char counts halve the line count for CJK-heavy sessions,
+  // understating every unmeasured row and inflating scroll corrections.
+  return estimateWrappedLinesUpTo(text, ESTIMATE_WRAP_COLS, ESTIMATE_MAX_LINES)
 }
 
 function estimateRow(item: TimelineItem | undefined, collapsed: boolean): number {
