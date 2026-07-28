@@ -34,11 +34,11 @@ function startCollecting(svc: FileWatcherMainService): {
   return { events, stop: () => sub.dispose() }
 }
 
-const WAIT = { timeout: 5000, interval: 50 } as const
-// The native (parcel) watcher's delivery latency spikes under parallel CI load.
-// WAIT.timeout equals vitest's default 5s testTimeout, so a slow batch can trip
-// the overall test timeout before vi.waitFor gets to report. Give watcher-backed
-// tests headroom beyond WAIT so a real miss surfaces as the waitFor assertion.
+// The native (parcel) watcher's delivery latency spikes under parallel CI load
+// (vitest runs many main-project files concurrently; the native→JS callback can
+// be queued for seconds). Keep headroom below WATCHER_TEST_TIMEOUT so a real
+// miss surfaces as the waitFor assertion instead of the overall test timeout.
+const WAIT = { timeout: 10000, interval: 50 } as const
 const WATCHER_TEST_TIMEOUT = 15000
 // Fixed window for "no event should arrive": an ignored change never fires, so
 // waiting longer can't make it appear — this stays deterministic under load.
