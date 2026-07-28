@@ -66,7 +66,7 @@ function formatCandidate(c: IKeybindingTraceCandidate): string {
   const keys = c.chords.join(' ')
   const when = c.when !== undefined ? ` when=${JSON.stringify(c.when)}` : ''
   const reason = c.selected ? '' : ` → ${c.outcomeReason}${formatWhenKeys(c.whenKeys)}`
-  return `      ${marker} ${c.command} [${keys}]${when}${reason}`
+  return `      ${marker} [${c.weight}] ${c.command} [${keys}]${when}${reason}`
 }
 
 function formatCandidates(candidates: readonly IKeybindingTraceCandidate[]): string[] {

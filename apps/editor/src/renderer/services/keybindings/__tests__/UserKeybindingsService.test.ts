@@ -38,8 +38,11 @@ class FakeUserData implements IUserDataFilesService {
   readonly files = new Map<UserDataFile, string>()
   private readonly _emitter = new Emitter<IUserDataFileChange>()
   readonly onDidChangeFile = this._emitter.event
+  /** When set, each read() awaits this gate — lets a test hold the reload mid-flight. */
+  readGate: (() => Promise<void>) | undefined
 
   async read(file: UserDataFile): Promise<string> {
+    await this.readGate?.()
     return this.files.get(file) ?? ''
   }
 
@@ -220,6 +223,58 @@ describe('UserKeybindingsService', () => {
       (kb) => kb.command === lazyCommand && !kb.isNegated,
     )
     expect(bound).toHaveLength(1)
+  })
+
+  it('keeps the user binding resolvable throughout a reload (no transient gap)', async () => {
+    // Regression for the Ctrl+R race: _reloadVSCodeAndUser() used to clear the
+    // user store, THEN await both file reads, THEN re-register — leaving a
+    // window where the user entry was absent and a lower-weight binding
+    // (openRecent) or a when-gated VSCode shadow won instead.
+    const cmd = 'workbench.action.quickOpen'
+    disposables.push(CommandsRegistry.registerCommand({ id: cmd, handler: () => {} }))
+
+    const files = new FakeUserData()
+    files.files.set(UserDataFile.Keybindings, JSON.stringify([{ key: 'ctrl+r', command: cmd }]))
+    const service = new UserKeybindingsService(new FakeStorage(), files)
+    disposables.push(service)
+    await service.initialize()
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+r')).toMatchObject({
+      kind: 'execute',
+      command: cmd,
+    })
+
+    // Hold the reload mid-flight: every file read parks until we release them all.
+    // Both layers read CONCURRENTLY (Promise.all) before any store is cleared, so
+    // a single-shot gate would only free one read and hang the other — collect
+    // the pending resolvers and flush them together.
+    const pendingReads: Array<() => void> = []
+    files.readGate = () =>
+      new Promise<void>((resolve) => {
+        pendingReads.push(resolve)
+      })
+    const reloading = service.reload()
+    // Spin until at least one read has parked — don't count microtasks.
+    for (let i = 0; i < 50 && pendingReads.length === 0; i++) await Promise.resolve()
+    expect(pendingReads.length).toBeGreaterThan(0)
+
+    // The reload is now parked inside its awaited file read(s). A key event arriving
+    // here must STILL resolve to the user's binding — the registry must not have
+    // been torn down yet. (With the old clear-then-await order this was openRecent.)
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+r')).toMatchObject({
+      kind: 'execute',
+      command: cmd,
+    })
+
+    for (const release of pendingReads.splice(0)) release()
+    await reloading
+    // After the reload completes the binding is still intact, exactly once.
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+r')).toMatchObject({
+      kind: 'execute',
+      command: cmd,
+    })
+    expect(
+      KeybindingsRegistry.getAllKeybindings().filter((kb) => kb.command === cmd && !kb.isNegated),
+    ).toHaveLength(1)
   })
 
   it('preserves the key on a `-command` removal so only that key is freed', async () => {

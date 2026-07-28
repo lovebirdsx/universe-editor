@@ -361,7 +361,10 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
 
   private async _reloadVSCodeFile(): Promise<void> {
     const text = await this._files.read(UserDataFile.VSCodeKeybindings)
-    const entries = parseKeybindingsFile(text)
+    this._applyVSCodeEntries(parseKeybindingsFile(text))
+  }
+
+  private _applyVSCodeEntries(entries: IUserKeybindingEntry[]): void {
     this._vscodeRegistrationStore.clear()
     this._vscodeDisabled.length = 0
     let registered = 0
@@ -378,17 +381,31 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     this._diagnostics.vscodeRegisteredCount = registered
   }
 
+  // Parse both layers and apply them to the registry. All file reads happen
+  // BEFORE any store is cleared, so the registry moves from old state to new
+  // state in one synchronous block — a key event can never observe the
+  // half-reloaded state where user entries are already disposed but not yet
+  // re-registered (the Ctrl+R transient: user binding absent → VSCode's
+  // editorTextFocus-gated shadow skipped → openRecent won instead).
   private async _reloadVSCodeAndUser(): Promise<void> {
-    // Clear user entries first so they can be re-registered after VSCode entries (LIFO order).
-    this._registrationStore.clear()
-    await this._reloadVSCodeFile()
-    await this._reloadFromFile()
+    // Read + parse both files first (the only async part), THEN swap the
+    // registry atomically. VSCode entries go in before user entries so the
+    // user's own keybindings.json keeps LIFO priority within the same weight.
+    const [vscodeText, userText] = await Promise.all([
+      this._files.read(UserDataFile.VSCodeKeybindings),
+      this._suspendWriteBack ? Promise.resolve(null) : this._files.read(UserDataFile.Keybindings),
+    ])
+    this._applyVSCodeEntries(parseKeybindingsFile(vscodeText))
+    if (userText !== null) this._applyUserEntries(parseKeybindingsFile(userText))
   }
 
   private async _reloadFromFile(): Promise<void> {
     if (this._suspendWriteBack) return
     const text = await this._files.read(UserDataFile.Keybindings)
-    const entries = parseKeybindingsFile(text)
+    this._applyUserEntries(parseKeybindingsFile(text))
+  }
+
+  private _applyUserEntries(entries: IUserKeybindingEntry[]): void {
     this._suspendWriteBack = true
     try {
       this._userEntries.length = 0

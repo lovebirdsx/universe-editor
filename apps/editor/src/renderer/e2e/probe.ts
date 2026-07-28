@@ -71,10 +71,9 @@ import type { IScmService } from '../services/extensions/ScmService.js'
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { ExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import type { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
-import {
-  type IExtensionEnablementService,
-  EnablementState,
-} from '../services/extensions/ExtensionEnablementService.js'
+import type { IExtensionEnablementService } from '../services/extensions/ExtensionEnablementService.js'
+import { EnablementState } from '../services/extensions/ExtensionEnablementService.js'
+import type { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
 
 export interface E2EProbeServices {
   readonly commandService: ICommandService
@@ -107,6 +106,7 @@ export interface E2EProbeServices {
   readonly extensionEnablementService: IExtensionEnablementService
   readonly outputModelService: IOutputModelService
   readonly loggerService: ILoggerService
+  readonly userKeybindingsService: IUserKeybindingsService
   /**
    * Resolves once the one-shot bootstrap focus restore has landed. That restore
    * is fire-and-forget and runs AFTER LifecyclePhase.Restored, so specs must
@@ -1254,6 +1254,15 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         })
         .map((kb) => kb.command)
     },
+    getUserKeybindingDebug: () => ({
+      userEntries: services.userKeybindingsService.userEntries.map((e) => ({
+        key: e.key,
+        command: e.command,
+        ...(e.when !== undefined ? { when: e.when } : {}),
+      })),
+      vscodeParsedCount: services.userKeybindingsService.diagnostics.vscodeParsedCount,
+      vscodeRegisteredCount: services.userKeybindingsService.diagnostics.vscodeRegisteredCount,
+    }),
     updateConfigValue: (key: string, value: unknown): void =>
       services.configurationService.update(key, value, ConfigurationTarget.Memory),
     renameExplorerResource: async (fsPath: string, newName: string): Promise<string> => {

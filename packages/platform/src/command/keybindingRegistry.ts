@@ -112,6 +112,8 @@ export interface IKeybindingTraceCandidate {
   readonly chords: readonly string[]
   readonly command: string
   readonly isNegated: boolean
+  /** Binding weight — higher wins when several bindings match the keystroke. */
+  readonly weight: number
   /** Serialized when-clause, or undefined when the binding has none. */
   readonly when: string | undefined
   /** Current value of every context key the when-clause references. */
@@ -409,6 +411,7 @@ class KeybindingsRegistryImpl {
         chords: binding.chords,
         command: binding.command,
         isNegated: binding.isNegated,
+        weight: binding.weight,
         when: whenSerialized,
         whenKeys,
         whenMatched: reason !== 'when-failed',

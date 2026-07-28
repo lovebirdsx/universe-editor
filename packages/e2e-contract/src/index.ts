@@ -703,6 +703,18 @@ export interface E2EProbe {
    */
   getKeybindingCommandsForKey(key: string): string[]
   /**
+   * Snapshot of the user keybindings layer state for the "user binding missing"
+   * race: the parsed user entries (what keybindings.json yielded) plus the
+   * VSCode-layer diagnostics (parsed vs registered counts). When a ctrl+r user
+   * binding silently loses to the VSCode-compat entry, this tells whether the
+   * user layer was empty (file misread) or present-but-outranked (LIFO race).
+   */
+  getUserKeybindingDebug(): {
+    userEntries: ReadonlyArray<{ key: string | null; command: string; when?: string }>
+    vscodeParsedCount: number
+    vscodeRegisteredCount: number
+  }
+  /**
    * Write a configuration value at Memory scope, bypassing settings.json. Lets
    * specs flip runtime knobs (e.g. lowering
    * `workbench.chat.virtualizationThreshold` so a short timeline still exercises

@@ -67,6 +67,7 @@ describe('formatKeystrokeTrace', () => {
           chords: ['ctrl+s'],
           command: 'save',
           isNegated: false,
+          weight: 200,
           when: undefined,
           whenKeys: [],
           whenMatched: true,
@@ -77,7 +78,7 @@ describe('formatKeystrokeTrace', () => {
     }
     const out = formatKeystrokeTrace(diag(), trace)
     expect(out).toContain('EXECUTE save')
-    expect(out).toContain('✓ save [ctrl+s]')
+    expect(out).toContain('✓ [200] save [ctrl+s]')
   })
 
   it('no-match with when-failed: shows the when-clause and key snapshot', () => {
@@ -90,6 +91,7 @@ describe('formatKeystrokeTrace', () => {
           chords: ['ctrl+s'],
           command: 'save',
           isNegated: false,
+          weight: 100,
           when: 'editorFocus',
           whenKeys: [{ key: 'editorFocus', value: false }],
           whenMatched: false,
@@ -100,7 +102,9 @@ describe('formatKeystrokeTrace', () => {
     }
     const out = formatKeystrokeTrace(diag(), trace)
     expect(out).toContain('NO MATCH')
-    expect(out).toContain('✗ save [ctrl+s] when="editorFocus" → when-failed {editorFocus=false}')
+    expect(out).toContain(
+      '✗ [100] save [ctrl+s] when="editorFocus" → when-failed {editorFocus=false}',
+    )
   })
 
   it('no-match with no candidates: explains the key is unbound', () => {
@@ -126,6 +130,7 @@ describe('formatKeystrokeTrace', () => {
           chords: ['ctrl+k', 'ctrl+s'],
           command: 'openKb',
           isNegated: false,
+          weight: 200,
           when: undefined,
           whenKeys: [],
           whenMatched: true,
@@ -136,7 +141,7 @@ describe('formatKeystrokeTrace', () => {
     }
     const out = formatKeystrokeTrace(diag({ builtKey: 'ctrl+k' }), trace)
     expect(out).toContain('ENTER CHORD')
-    expect(out).toContain('✓ openKb [ctrl+k ctrl+s]')
+    expect(out).toContain('✓ [200] openKb [ctrl+k ctrl+s]')
   })
 
   it('is-negated candidate renders its reason', () => {
@@ -149,6 +154,7 @@ describe('formatKeystrokeTrace', () => {
           chords: ['ctrl+s'],
           command: 'save',
           isNegated: true,
+          weight: 100,
           when: undefined,
           whenKeys: [],
           whenMatched: true,

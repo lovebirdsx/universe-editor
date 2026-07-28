@@ -84,6 +84,7 @@ import { ViewsService } from './services/views/ViewsService.js'
 import { ViewDescriptorService } from './services/views/ViewDescriptorService.js'
 import { OutputService } from './services/output/OutputService.js'
 import { IOutputModelService, OutputModelService } from './services/output/OutputModelService.js'
+import { IUserKeybindingsService } from './services/keybindings/UserKeybindingsService.js'
 import {
   IKeyboardDebugService,
   KeyboardDebugService,
@@ -709,6 +710,7 @@ async function bootstrapWorkbench(): Promise<void> {
     extensionEnablementService,
     outputModelService: instantiation.invokeFunction((a) => a.get(IOutputModelService)),
     loggerService,
+    userKeybindingsService: instantiation.invokeFunction((a) => a.get(IUserKeybindingsService)),
     bootstrapFocusSettled,
     computeTeardownLeakReport: snapshotLeaks,
   })
