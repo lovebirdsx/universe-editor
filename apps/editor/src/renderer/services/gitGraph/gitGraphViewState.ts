@@ -39,6 +39,8 @@ export interface GitGraphViewState {
   focusSearch: (() => void) | null
   /** Callback registered by the mounted editor to toggle remote-branch visibility. */
   toggleRemoteBranches: (() => void) | null
+  /** Callback registered by the mounted editor to reload the graph (toolbar ↺). */
+  refresh: (() => void) | null
   /** Last loaded commit list, or null if never loaded. */
   result: GitGraphLoadResult | null
   /** Selected commit hash(es): one to expand details, two to compare. */
@@ -73,6 +75,7 @@ export const GIT_GRAPH_PAGE_SIZE = 500
 export const gitGraphViewState: GitGraphViewState = {
   focusSearch: null,
   toggleRemoteBranches: null,
+  refresh: null,
   result: null,
   selection: [],
   details: null,

@@ -30,6 +30,13 @@ import styles from './ScmView.module.css'
 
 export type ViewMode = 'list' | 'tree'
 
+/** The repo's folder name (main → project dir, submodule → submodule dir). */
+export function repoShortName(sc: { label: string; rootUri: string | undefined }): string {
+  const p = (sc.rootUri ?? sc.label).replace(/[\\/]+$/, '')
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+  return i === -1 ? p : p.slice(i + 1)
+}
+
 export interface ActionItem {
   readonly id: string
   readonly title: string

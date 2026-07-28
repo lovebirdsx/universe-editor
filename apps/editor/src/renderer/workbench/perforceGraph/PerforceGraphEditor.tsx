@@ -383,6 +383,13 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     }
   }, [commands])
 
+  useEffect(() => {
+    perforceGraphViewState.refresh = () => load()
+    return () => {
+      perforceGraphViewState.refresh = null
+    }
+  }, [load])
+
   // Background reload: refresh data in place without the loading flicker, keeping
   // the current selection when its change still exists.
   const revalidate = useCallback(

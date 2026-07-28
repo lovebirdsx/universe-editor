@@ -213,9 +213,15 @@ import { PickSessionTitleModelAction } from './sessionTitleActions.js'
 import {
   ViewGitGraphAction,
   GitGraphFocusSearchAction,
+  GitGraphRefreshAction,
   GitGraphToggleRemoteBranchesAction,
 } from './gitGraphActions.js'
-import { ViewPerforceGraphAction, PerforceGraphFocusSearchAction } from './perforceGraphActions.js'
+import {
+  ViewPerforceGraphAction,
+  PerforceGraphFocusSearchAction,
+  PerforceGraphRefreshAction,
+} from './perforceGraphActions.js'
+import { SwitchScmRepoAction } from './scmActions.js'
 import {
   OpenSwarmReviewsAction,
   OpenSwarmReviewAction,
@@ -569,11 +575,16 @@ registerAction2(PickSessionTitleModelAction)
 // Git Graph
 registerAction2(ViewGitGraphAction)
 registerAction2(GitGraphFocusSearchAction)
+registerAction2(GitGraphRefreshAction)
 registerAction2(GitGraphToggleRemoteBranchesAction)
 
 // Perforce Graph
 registerAction2(ViewPerforceGraphAction)
 registerAction2(PerforceGraphFocusSearchAction)
+registerAction2(PerforceGraphRefreshAction)
+
+// Source Control
+registerAction2(SwitchScmRepoAction)
 
 // Swarm Reviews
 registerAction2(OpenSwarmReviewsAction)

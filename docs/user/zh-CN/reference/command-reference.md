@@ -100,12 +100,14 @@
 | Generate Commit Message（英文） | 生成提交信息；命令面板显示英文，中文释义"生成提交信息" | 无 |
 | View Git Graph（英文） | 查看 Git 图谱；命令面板显示英文，中文释义"查看 Git 图谱" | 无 |
 | Focus Search（英文） | 聚焦 Git 图谱搜索框；仅图谱激活时生效，中文释义"聚焦搜索" | 图谱内 `Ctrl+F` |
+| Refresh（英文） | 刷新 Git 图谱；仅图谱激活时生效，中文释义"刷新" | 图谱内 `Ctrl+R` |
 | Toggle Remote Branches（英文） | 在图谱里开关远程分支显示；中文释义"切换远程分支" | 无 |
 | 刷新 | 刷新源代码管理状态 | `Ctrl+Alt+G` |
+| 源代码管理：切换仓库… | 在多个仓库之间切换源代码管理视图（Git 图谱会跟随） | `Ctrl+Shift+Alt+G` |
 
-> Git 图谱相关的 View Git Graph / Focus Search / Toggle Remote Branches 以及 AI 的 Generate Commit Message 目前均只显示英文，用英文关键词搜索。更多见 [提交你的改动](../git/commit.md) 与 [提交历史图（Git 图谱）](../git/git-graph.md)。
+> Git 图谱相关的 View Git Graph / Focus Search / Refresh / Toggle Remote Branches 以及 AI 的 Generate Commit Message 目前均只显示英文，用英文关键词搜索。更多见 [提交你的改动](../git/commit.md) 与 [提交历史图（Git 图谱）](../git/git-graph.md)。
 
-> Perforce 侧的等价功能为 **View Perforce Graph**（查看 Perforce Graph）与图谱内 `Ctrl+F` 的 **Focus Search**，同样只显示英文。更多见 [提交历史图（Perforce 图谱）](../perforce/perforce-graph.md)。
+> Perforce 侧的等价功能为 **View Perforce Graph**（查看 Perforce Graph）、图谱内 `Ctrl+F` 的 **Focus Search** 与图谱内 `Ctrl+R` 的 **Refresh**，同样只显示英文。更多见 [提交历史图（Perforce 图谱）](../perforce/perforce-graph.md)。
 
 ## Markdown
 

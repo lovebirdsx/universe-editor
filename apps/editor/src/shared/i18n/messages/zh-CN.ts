@@ -43,6 +43,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'command.category.mergeConflict': '合并冲突',
   'command.category.preferences': '首选项',
   'command.category.search': '搜索',
+  'command.category.scm': '源代码管理',
   'command.category.terminal': '终端',
   'command.category.view': '视图',
 
@@ -337,6 +338,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.revealDefinitionAside.title': '在侧边打开定义',
   'action.save.title': '保存',
   'action.saveAs.title': '另存为…',
+  'action.scm.switchRepo.placeholder': '选择仓库',
+  'action.scm.switchRepo.title': '源代码管理：切换仓库…',
   'action.selectAll.title': '全选',
   'action.selectTheme.title': '颜色主题',
   'action.setConfigLocation.title': '设置配置目录…',

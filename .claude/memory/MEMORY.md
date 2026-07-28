@@ -62,6 +62,7 @@
 
 - [ESLint 路径身份护栏](eslint-path-identity-guardrails.md) — 禁手写 fsPath 折叠/路径身份键；flat config 替换非合并
 - [Action2 async accessor 失效](action2-async-accessor-invalidation.md) — await 前同步取完所有 service；持久 accessor 测试假绿
+- [when 不提权，weight 定胜负](keybinding-when-not-priority-weight-wins.md) — scoped 快捷键压全局同键必须显式加 weight
 - [spawn CLI 挂起 / 选错命令](cli-stdin-hang-on-prompt.md) — 交互 CLI 换只读命令；p4 查 ticket 用 `p4 tickets`/`login -s`
 - [renderer Action2 被扩展命令遮蔽](renderer-action-shadowed-by-extension-command-decl.md) — renderer handler 命令只写 menus 别写扩展 commands
 

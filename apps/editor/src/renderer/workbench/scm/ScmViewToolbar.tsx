@@ -11,24 +11,18 @@ import { ChevronDown } from 'lucide-react'
 import { ICommandService, MenuId, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
-import { IScmService, type IScmSourceControlModel } from '../../services/extensions/ScmService.js'
+import { IScmService } from '../../services/extensions/ScmService.js'
 import {
   ActionButton,
   TitleOverflowMenu,
   menuActions,
   menuToRows,
+  repoShortName,
   useMenuRevision,
   type OverflowRow,
 } from './scmShared.js'
 import { scmViewState } from './scmViewState.js'
 import styles from './ScmView.module.css'
-
-/** The repo's folder name (main → project dir, submodule → submodule dir). */
-function repoShortName(sc: IScmSourceControlModel): string {
-  const p = (sc.rootUri ?? sc.label).replace(/[\\/]+$/, '')
-  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
-  return i === -1 ? p : p.slice(i + 1)
-}
 
 /** Pending-command key: scoped to the repo so one repo's long-running refresh
  * doesn't lock another repo's button. */

@@ -607,6 +607,13 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     }
   }, [commands])
 
+  useEffect(() => {
+    gitGraphViewState.refresh = () => load()
+    return () => {
+      gitGraphViewState.refresh = null
+    }
+  }, [load])
+
   // Background reload: refresh data in place without the loading flicker, keeping
   // the current selection when its commit still exists. Used by auto-refresh and
   // when re-activating a cached tab (stale-while-revalidate).

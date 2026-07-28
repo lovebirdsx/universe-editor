@@ -3,7 +3,12 @@
  *  Perforce Graph actions.
  *--------------------------------------------------------------------------------------------*/
 
-import { Action2, IEditorService, type ServicesAccessor } from '@universe-editor/platform'
+import {
+  Action2,
+  IEditorService,
+  KeybindingWeight,
+  type ServicesAccessor,
+} from '@universe-editor/platform'
 import { PerforceGraphEditorInput } from '../services/editor/PerforceGraphEditorInput.js'
 import { perforceGraphViewState } from '../services/perforceGraph/perforceGraphViewState.js'
 
@@ -40,5 +45,30 @@ export class PerforceGraphFocusSearchAction extends Action2 {
 
   override run(): void {
     perforceGraphViewState.focusSearch?.()
+  }
+}
+
+export class PerforceGraphRefreshAction extends Action2 {
+  static readonly ID = 'perforce-graph.refresh'
+
+  constructor() {
+    super({
+      id: PerforceGraphRefreshAction.ID,
+      title: 'Refresh',
+      category: 'Perforce Graph',
+      // Outranks the unscoped Open Recent (ctrl+r) binding — resolution is
+      // weight-first, when-clauses only filter, they don't boost priority.
+      keybinding: {
+        primary: 'ctrl+r',
+        when: "activeEditorId == 'universe:/perforceGraph'",
+        weight: KeybindingWeight.WorkbenchContrib + 50,
+      },
+      precondition: "activeEditorId == 'universe:/perforceGraph'",
+      f1: true,
+    })
+  }
+
+  override run(): void {
+    perforceGraphViewState.refresh?.()
   }
 }
