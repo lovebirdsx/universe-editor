@@ -50,6 +50,9 @@ export interface SwarmHarness {
   /** Inject a brand-new review into the fake server (test-only control endpoint),
    *  so a subsequent dashboard poll surfaces it as newly needing the user's action. */
   addReview(opts: { id?: string; author?: string; description?: string }): Promise<void>
+  /** Test-only fault switch: while enabled, the fake server never responds to
+   *  GET /reviews (a hung gateway), so specs can exercise request timeouts. */
+  setHang(enabled: boolean): Promise<void>
 }
 
 export type SwarmFixtures = {
@@ -328,6 +331,14 @@ export const test = base.extend<SwarmFixtures>({
           body: JSON.stringify(opts),
         })
         if (!res.ok) throw new Error(`add-review failed: ${res.status}`)
+      },
+      setHang: async (enabled) => {
+        const res = await fetch(`${baseUrl}/__control__/set-hang`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        })
+        if (!res.ok) throw new Error(`set-hang failed: ${res.status}`)
       },
     })
   },

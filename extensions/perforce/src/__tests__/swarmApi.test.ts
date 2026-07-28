@@ -5,6 +5,7 @@ import {
   SwarmErrorCode,
   mapHttpError,
   buildQuery,
+  resolveSwarmRequestTimeoutMs,
 } from '../swarm/swarmApi.js'
 
 describe('swarmApi.mapHttpError', () => {
@@ -104,5 +105,91 @@ describe('SwarmApi request', () => {
   it('surfaces a network rejection as a SwarmError', async () => {
     fetchMock.mockRejectedValue(new Error('ECONNREFUSED'))
     await expect(api().get('reviews')).rejects.toBeInstanceOf(SwarmError)
+  })
+})
+
+describe('resolveSwarmRequestTimeoutMs', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+  it('defaults to 30s', () => {
+    expect(resolveSwarmRequestTimeoutMs(undefined)).toBe(30_000)
+  })
+  it('honours the explicit option first', () => {
+    vi.stubEnv('UNIVERSE_SWARM_REQUEST_TIMEOUT_MS', '1234')
+    expect(resolveSwarmRequestTimeoutMs(500)).toBe(500)
+  })
+  it('honours the env override when no option is given', () => {
+    vi.stubEnv('UNIVERSE_SWARM_REQUEST_TIMEOUT_MS', '1234')
+    expect(resolveSwarmRequestTimeoutMs(undefined)).toBe(1234)
+  })
+  it('falls back to the default for junk values', () => {
+    expect(resolveSwarmRequestTimeoutMs(0)).toBe(30_000)
+    expect(resolveSwarmRequestTimeoutMs(-5)).toBe(30_000)
+    vi.stubEnv('UNIVERSE_SWARM_REQUEST_TIMEOUT_MS', 'nope')
+    expect(resolveSwarmRequestTimeoutMs(undefined)).toBe(30_000)
+  })
+})
+
+describe('SwarmApi request timeout', () => {
+  const fetchMock = vi.fn()
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockReset()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function api(timeoutMs = 50) {
+    return new SwarmApi({
+      baseUrl: 'https://swarm.example.com/',
+      apiVersion: 'v11',
+      getAuth: async () => 'Basic X',
+      timeoutMs,
+    })
+  }
+
+  /** Mock fetch that behaves like a real hung request: never resolves, rejects
+   *  with the signal's reason once the client aborts (what undici does for
+   *  AbortSignal.timeout). The reason is a DOMException, not an Error. */
+  function hangUntilAborted() {
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => {
+      const signal = init.signal
+      if (signal?.aborted) return Promise.reject(signal.reason)
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(signal.reason))
+      })
+    })
+  }
+
+  it('rejects a stalled fetch as a Network error (no retry — the next poll tick recovers)', async () => {
+    hangUntilAborted()
+    const err = await api()
+      .get('reviews')
+      .catch((e: unknown) => e)
+    expect(err).toMatchObject({ code: SwarmErrorCode.Network })
+    expect((err as Error).message).toContain('timed out after 50ms')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('recovers on the next request once the gateway answers again', async () => {
+    hangUntilAborted()
+    await expect(api().get('reviews')).rejects.toMatchObject({
+      code: SwarmErrorCode.Network,
+    })
+    fetchMock.mockReset()
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    const res = await api().get<{ ok: boolean }>('reviews')
+    expect(res).toEqual({ ok: true })
+  })
+
+  it('does not retry a caller-initiated abort', async () => {
+    hangUntilAborted()
+    const controller = new AbortController()
+    const pending = api(60_000).get('reviews', { signal: controller.signal })
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ code: SwarmErrorCode.Network })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

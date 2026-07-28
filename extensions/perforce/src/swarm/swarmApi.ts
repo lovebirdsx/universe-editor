@@ -38,6 +38,13 @@ export interface SwarmApiOptions {
   /** Resolve the current Basic auth header value (lazy so a fresh ticket is used).
    *  Returns undefined when no credential is available (not logged in). */
   readonly getAuth: () => Promise<string | undefined>
+  /** Per-request timeout (ms). fetch() has NO usable default timeout (undici's
+   *  headersTimeout is ~300s), so a gateway that accepts the connection but
+   *  stalls would wedge a notification poll's dashboard fetch for minutes —
+   *  and with it the renderer's serialized refresh() latch, silently killing
+   *  all later ticks (the "no notifications, foreground included" bug).
+   *  `UNIVERSE_SWARM_REQUEST_TIMEOUT_MS` overrides (e2e); default 30s. */
+  readonly timeoutMs?: number
   /** Optional structured logger. Receives redacted request lines only (method /
    *  path / status / timing) at info, and full query/body/response at debug. */
   readonly logger?: SwarmLogger
@@ -55,6 +62,16 @@ interface RequestOptions {
 const MAX_ATTEMPTS = 3
 const BASE_DELAY_MS = 300
 const MAX_DELAY_MS = 5_000
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+
+/** Per-request timeout for Swarm HTTP calls: explicit option wins, then the
+ *  `UNIVERSE_SWARM_REQUEST_TIMEOUT_MS` env override (e2e), then the default. */
+export function resolveSwarmRequestTimeoutMs(option: number | undefined): number {
+  if (option !== undefined && Number.isFinite(option) && option > 0) return Math.floor(option)
+  const env = Number(process.env['UNIVERSE_SWARM_REQUEST_TIMEOUT_MS'])
+  if (Number.isFinite(env) && env > 0) return Math.floor(env)
+  return DEFAULT_REQUEST_TIMEOUT_MS
+}
 
 /** Map an HTTP status + detail to a structured SwarmError. */
 export function mapHttpError(status: number, detail: string): SwarmError {
@@ -121,7 +138,11 @@ export function buildQuery(
 }
 
 export class SwarmApi {
-  constructor(private readonly _opts: SwarmApiOptions) {}
+  private readonly _timeoutMs: number
+
+  constructor(private readonly _opts: SwarmApiOptions) {
+    this._timeoutMs = resolveSwarmRequestTimeoutMs(_opts.timeoutMs)
+  }
 
   /** GET a path, returning the decoded JSON. */
   get<T = unknown>(path: string, options?: Omit<RequestOptions, 'method' | 'body'>): Promise<T> {
@@ -211,16 +232,32 @@ export class SwarmApi {
     }
     const startedAt = Date.now()
     let res: Response
+    // Compose the caller's cancellation with a per-request timeout: fetch() alone
+    // can stall for minutes on a hung gateway (undici's ~300s headersTimeout),
+    // which wedges the notification poll's serialized refresh() latch. A caller
+    // abort stays non-retryable; a timeout is transient and retried above.
+    const timeoutSignal = AbortSignal.timeout(this._timeoutMs)
+    const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal
     try {
       res = await fetch(url, {
         method,
         headers,
         ...(body !== undefined ? { body } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
+        signal,
       })
     } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') {
+      // fetch rejects with the signal's reason: a DOMException (not reliably
+      // `instanceof Error`) named 'AbortError' for a caller abort or
+      // 'TimeoutError' for AbortSignal.timeout — match on the name.
+      const name = errorName(err)
+      if (name === 'AbortError') {
         throw new SwarmError(SwarmErrorCode.Network, 'aborted')
+      }
+      if (name === 'TimeoutError') {
+        throw new SwarmError(
+          SwarmErrorCode.Network,
+          `timed out after ${this._timeoutMs}ms: ${method} ${redacted}`,
+        )
       }
       throw new SwarmError(SwarmErrorCode.Network, err instanceof Error ? err.message : String(err))
     }
@@ -251,6 +288,14 @@ function describeBody(body: unknown): string {
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+/** DOMException (the fetch abort/timeout reason) is not reliably `instanceof
+ *  Error`, so read the name structurally. */
+function errorName(err: unknown): string {
+  if (typeof err !== 'object' || err === null) return ''
+  const name = (err as { name?: unknown }).name
+  return typeof name === 'string' ? name : ''
 }
 
 /** Strip the origin so logs carry only the API path, not a host that could hint

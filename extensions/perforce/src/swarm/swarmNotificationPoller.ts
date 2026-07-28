@@ -57,7 +57,13 @@ export class SwarmNotificationPoller {
   private async _tick(): Promise<void> {
     if (this._disposed) return
     try {
-      if (!(await this._isConfigured())) return
+      if (!(await this._isConfigured())) {
+        this._logger?.debug('status', 'poll tick skipped: Swarm not configured')
+        return
+      }
+      // Trace-level heartbeat: with `perforce.swarm.trace` on, a missing tick line
+      // in the panel answers "is the host driver even alive?" without a debugger.
+      this._logger?.debug('status', 'poll tick → renderer')
       await commands.executeCommand(TICK_COMMAND)
     } catch (err) {
       this._logger?.warn('status', `poll tick failed: ${err instanceof Error ? err.message : err}`)

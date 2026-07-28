@@ -133,13 +133,15 @@ describe('registerSwarmCommands review operations', () => {
 })
 
 // Repro for "后台时新 review 零通知": the notification poller drives `dashboard`
-// on a timer. When the Swarm ticket expires the client throws Unauthorized, and
-// the old guard() awaited a MODAL "Login?" confirm — which only settles on a user
-// click, impossible while the window sits in the background. The renderer's
-// serialized refresh() latch (`_running`) stayed true forever, so every later
-// poll tick was dropped and no review ever notified again. dashboard must skip
-// the auth prompt: log + return the fallback, settling immediately.
-describe('registerSwarmCommands dashboard 401 (poll-driven)', () => {
+// on a timer. Poll-driven failures must settle IMMEDIATELY and silently:
+// - a MODAL "Login?" confirm (the old 401 path) only settles on a user click,
+//   impossible in the background — the renderer's serialized refresh() latch
+//   stayed true forever and no later tick ever ran;
+// - an error toast per failed tick is pure noise for a background poller;
+// - a swallowed EMPTY dashboard fallback reads as "zero reviews", wiping the
+//   renderer's notified baseline so the next healthy tick re-fires every review
+//   as "new". dashboard therefore rethrows: the renderer's poll catch is quiet.
+describe('registerSwarmCommands dashboard failures (poll-driven, silent)', () => {
   beforeEach(() => {
     mocks.handlers.clear()
     mocks.dashboard.mockReset()
@@ -154,23 +156,41 @@ describe('registerSwarmCommands dashboard 401 (poll-driven)', () => {
     )
   })
 
-  it('settles with the fallback and never opens the modal auth prompt on 401', async () => {
+  it('rethrows a 401 without ever opening the modal auth prompt', async () => {
     mocks.dashboard.mockRejectedValue(
       new SwarmError(SwarmErrorCode.Unauthorized, 'Swarm unauthorized (401)', 401),
     )
 
     // Race against a timeout so the pre-fix behavior (awaiting the modal forever)
     // fails deterministically instead of hanging the test run.
-    const result = await Promise.race([
-      mocks.handlers.get('perforce.swarm.dashboard')?.({ force: true }),
+    const dashboardPromise = mocks.handlers.get('perforce.swarm.dashboard')?.({
+      force: true,
+    }) as Promise<unknown>
+    const result = (await Promise.race([
+      dashboardPromise.then(
+        () => 'resolved',
+        (e: unknown) => e,
+      ),
       new Promise((_, reject) => setTimeout(() => reject(new Error('hung on modal')), 2000)),
-    ])
+    ])) as unknown
 
-    expect(result).toEqual({ needsAction: [], authored: [], participating: [] })
+    expect(result).toBeInstanceOf(SwarmError)
+    expect((result as { code: unknown }).code).toBe(SwarmErrorCode.Unauthorized)
     expect(mocks.showErrorMessage).not.toHaveBeenCalled()
     expect(logger.warn).toHaveBeenCalledWith(
       'cmd',
-      'dashboard: unauthorized → skipping (poll-driven, no auth prompt)',
+      'dashboard: unauthorized → skipping (poll-driven, silent)',
     )
+  })
+
+  it('rethrows a network/timeout failure without an error toast or empty fallback', async () => {
+    mocks.dashboard.mockRejectedValue(
+      new SwarmError(SwarmErrorCode.Network, 'timed out after 30000ms: GET /reviews'),
+    )
+
+    await expect(
+      mocks.handlers.get('perforce.swarm.dashboard')?.({ force: true }),
+    ).rejects.toMatchObject({ code: SwarmErrorCode.Network })
+    expect(mocks.showErrorMessage).not.toHaveBeenCalled()
   })
 })

@@ -25,12 +25,14 @@ import {
   ICommandService,
   IConfigurationService,
   IHostService,
+  ILoggerService,
   INotificationService,
   IStorageService,
   IWorkbenchContribution,
   IWorkspaceService,
   Severity,
   localize,
+  type ILogger,
 } from '@universe-editor/platform'
 import {
   SwarmCommands,
@@ -63,6 +65,7 @@ export class SwarmReviewNotificationContribution
   private _known = new Set<string>()
   /** First poll only primes the baseline (avoids a startup burst of notifications). */
   private _primed = false
+  private readonly _logger: ILogger
 
   constructor(
     @ICommandService private readonly _commands: ICommandService,
@@ -71,8 +74,10 @@ export class SwarmReviewNotificationContribution
     @IStorageService storage: IStorageService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @INotificationService private readonly _notification: INotificationService,
+    @ILoggerService loggerService: ILoggerService,
   ) {
     super()
+    this._logger = loggerService.createLogger({ id: 'swarmNotify', name: 'Swarm Notifications' })
     // The ignore set feeds the "final displayed" computation; attach is idempotent
     // (the view / detail tab / view contribution may already have attached it).
     void swarmIgnoreStore.attach(storage)
@@ -106,6 +111,7 @@ export class SwarmReviewNotificationContribution
   private _syncPolling(): void {
     const enabled = this._pollEnabled()
     if (enabled && !this._timer) {
+      this._logger.info('background poll enabled: backstop timer started, priming baseline')
       this._timer = setInterval(() => void this.refresh(), POLL_INTERVAL_MS)
       // Prime + start immediately so a review that appeared before launch doesn't
       // notify on first paint, but a genuinely new one during this session does.
@@ -115,6 +121,7 @@ export class SwarmReviewNotificationContribution
       this._timer = undefined
       // Nothing will refresh the badge while polling is off — clear the stale count.
       swarmNeedsActionCount.set(0)
+      this._logger.info('background poll disabled: backstop timer stopped')
     }
     if (CommandsRegistry.getCommand(SwarmCommands.setBackgroundPoll)) {
       void this._commands.executeCommand(SwarmCommands.setBackgroundPoll, enabled).catch(() => {})
@@ -140,12 +147,18 @@ export class SwarmReviewNotificationContribution
   /** Re-poll the dashboard and notify on newly-actionable reviews. Public so a test
    *  can drive it deterministically. Serialized: overlapping timer ticks are dropped. */
   async refresh(): Promise<void> {
-    if (this._running) return
+    // Dropped ticks are the FIRST symptom of a wedged poll (a hung dashboard fetch
+    // holds `_running` and every later tick lands here) — always visible in the log.
+    if (this._running) {
+      this._logger.info('poll tick dropped: previous refresh still running')
+      return
+    }
     if (!this._pollEnabled()) return
     // On a workspace without Perforce the command never registers; polling it
     // would only spam "command not found" every interval.
     if (!CommandsRegistry.getCommand(SwarmCommands.dashboard)) return
     this._running = true
+    const startedAt = Date.now()
     try {
       // `force: true` bypasses the dashboard's 60s TTL cache: this poll is the
       // only thing driving new-review detection, so a stale cached list would
@@ -167,9 +180,15 @@ export class SwarmReviewNotificationContribution
       if (typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true) {
         swarmNotificationE2E.lastActionable = actionable.map((r) => r.id)
       }
+      this._logger.debug(`poll ok in ${Date.now() - startedAt}ms: ${actionable.length} actionable`)
       this._notifyNew(actionable)
-    } catch {
-      // Swarm unconfigured / offline — stay quiet, retry next tick.
+    } catch (err) {
+      // Swarm unconfigured / offline / timed out — stay quiet on the UI, but NOT
+      // in the log: a failing poll that swallows its error is invisible (the
+      // "zero notifications, no diagnostics" bug class).
+      this._logger.warn(
+        `poll failed after ${Date.now() - startedAt}ms: ${err instanceof Error ? err.message : String(err)}`,
+      )
     } finally {
       this._running = false
     }
@@ -216,12 +235,18 @@ export class SwarmReviewNotificationContribution
     if (!this._primed) {
       this._known = current
       this._primed = true
+      this._logger.info(`baseline primed: ${current.size} actionable review(s)`)
       return
     }
     const fresh = reviews.filter((r) => !this._known.has(r.id))
     this._known = current
     if (fresh.length === 0) return
-    if (!this._enabled()) return
+    if (!this._enabled()) {
+      this._logger.info(
+        `${fresh.length} new review(s) but notifications disabled: ${fresh.map((r) => `#${r.id}`).join(', ')}`,
+      )
+      return
+    }
     if (typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true) {
       swarmNotificationE2E.notified.push(fresh.map((r) => r.id))
     }
@@ -237,6 +262,9 @@ export class SwarmReviewNotificationContribution
         : localize('swarm.notify.needsAction.many', '{0} new reviews need your action', {
             0: String(fresh.length),
           })
+    this._logger.info(
+      `notifying ${fresh.length} new review(s): ${fresh.map((r) => `#${r.id}`).join(', ')}`,
+    )
     const res = await this._host.notify({ title, body })
     if (res.clicked) {
       this._openTarget(fresh)
@@ -245,7 +273,10 @@ export class SwarmReviewNotificationContribution
     // Gated main-side (window focused) or OS notifications unsupported. This poll
     // cycle is the review's only notification chance (the rising edge is already
     // consumed), so surface it in-app instead of dropping it.
-    if (!res.shown) this._notifyInApp(fresh)
+    if (!res.shown) {
+      this._logger.info('OS toast gated (window focused or unsupported) → in-app fallback')
+      this._notifyInApp(fresh)
+    }
   }
 
   private _openTarget(fresh: readonly SwarmReviewDto[]): void {

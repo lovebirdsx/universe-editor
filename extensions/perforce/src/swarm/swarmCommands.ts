@@ -143,16 +143,22 @@ export function registerSwarmCommands(
    *  friendly toast and returning a fallback. Auth failures trigger a p4 login.
    *  `label` names the operation so the panel reads as an action trace.
    *
-   *  `promptOnAuth` (default true): on 401, pop a modal "Login?" confirm. Callers
-   *  driven by a poll tick (the notification poller's dashboard) must pass false —
-   *  that confirm only settles on a user click, so a 401 hitting while the window
-   *  sits in the background would hang the renderer's serialized refresh() latch
-   *  forever and no further tick would ever run (the overnight-notification bug). */
+   *  `silent` (default false): the caller is poll/background-driven (the notification
+   *  poller's dashboard). Failures only hit the log and RETHROW — never a UI prompt,
+   *  never a swallowed fallback:
+   *  - A modal "Login?" confirm only settles on a user click, impossible while the
+   *    window sits in the background; awaiting it would hang the renderer's
+   *    serialized refresh() latch forever and no further tick would ever run (the
+   *    overnight-notification bug).
+   *  - An error toast per failed poll tick is pure noise for a background poller.
+   *  - A swallowed EMPTY dashboard reads as "zero reviews" to the renderer, wiping
+   *    its notified baseline — the next healthy tick would re-fire every review as
+   *    "new". The renderer's poll catch already swallows rethrown errors quietly. */
   const guard = async <T>(
     label: string,
     op: (c: SwarmClient) => Promise<T>,
     fallback: T,
-    opts?: { promptOnAuth?: boolean },
+    opts?: { silent?: boolean },
   ): Promise<T> => {
     const c = await swarm()
     if (!c) {
@@ -170,9 +176,9 @@ export function registerSwarmCommands(
       return result
     } catch (err) {
       if (err instanceof SwarmError && err.code === SwarmErrorCode.Unauthorized) {
-        if (opts?.promptOnAuth === false) {
-          logger.warn('cmd', `${label}: unauthorized → skipping (poll-driven, no auth prompt)`)
-          return fallback
+        if (opts?.silent) {
+          logger.warn('cmd', `${label}: unauthorized → skipping (poll-driven, silent)`)
+          throw err
         }
         logger.warn('cmd', `${label}: unauthorized → prompting p4 login`)
         const picked = await window.showErrorMessage(
@@ -186,7 +192,13 @@ export function registerSwarmCommands(
         return fallback
       }
       const message = err instanceof Error ? err.message : String(err)
-      logger.error('cmd', `${label}: failed in ${Date.now() - startedAt}ms: ${message}`)
+      // Tag silent (poll-driven) failures so a background-tick failure is visibly
+      // distinct from a user-triggered one in the panel.
+      logger.error(
+        'cmd',
+        `${label}: failed in ${Date.now() - startedAt}ms${opts?.silent ? ' (silent)' : ''}: ${message}`,
+      )
+      if (opts?.silent) throw err
       await window.showErrorMessage(
         localize('perforce.swarm.error.generic', 'Swarm request failed: {0}', { 0: message }),
       )
@@ -337,10 +349,11 @@ export function registerSwarmCommands(
           authored: [],
           participating: [],
         },
-        // Poll-driven (the notification poller pokes this on a timer): a 401 must
-        // never await the modal Login confirm — it can't be answered while the
-        // window is in the background and would wedge the renderer's poll latch.
-        { promptOnAuth: false },
+        // Poll-driven (the notification poller pokes this on a timer): failures
+        // rethrow silently — a modal/toast can't be answered from the background,
+        // and a swallowed empty dashboard would wipe the renderer's notified
+        // baseline (every review re-firing as "new" on the next healthy tick).
+        { silent: true },
       ),
     ),
 

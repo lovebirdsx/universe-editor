@@ -64,6 +64,23 @@ function fakeStorage(seed: Record<string, unknown> = {}): IStorageService {
 /** Flush pending microtasks + the async command fakes. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
+/** Fake ILoggerService → a single vi.fn()-backed logger, returned for assertions. */
+function fakeLoggerService() {
+  const logger = {
+    level: 0,
+    onDidChangeLogLevel: new Emitter<never>().event,
+    setLevel: vi.fn(),
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    flush: vi.fn(),
+    dispose: vi.fn(),
+  }
+  return { service: { createLogger: vi.fn(() => logger) } as never, logger }
+}
+
 async function freshModules() {
   vi.resetModules()
   // After resetModules the contribution imports a FRESH platform instance whose
@@ -156,6 +173,7 @@ async function setup(opts: SetupOpts = {}) {
     current: opts.workspaceName !== undefined ? { name: opts.workspaceName } : null,
   } as never
 
+  const { service: loggerService, logger } = fakeLoggerService()
   const instance = new contrib.SwarmReviewNotificationContribution(
     commands,
     host,
@@ -163,6 +181,7 @@ async function setup(opts: SetupOpts = {}) {
     storage,
     workspace,
     notification,
+    loggerService,
   )
   // Let the constructor's priming poll complete (baseline, no notification).
   await flush()
@@ -177,6 +196,7 @@ async function setup(opts: SetupOpts = {}) {
     viewState,
     configValues,
     configChange,
+    logger,
     dispose: () => {
       instance.dispose()
       dashboardCommand.dispose()
@@ -202,6 +222,7 @@ describe('SwarmReviewNotificationContribution', () => {
       fakeStorage(),
       { current: null } as never,
       { notify: vi.fn(), dismiss: vi.fn() } as never,
+      fakeLoggerService().service,
     )
     await flush()
     await instance.refresh()
@@ -278,6 +299,7 @@ describe('SwarmReviewNotificationContribution', () => {
       fakeStorage(),
       { current: null } as never,
       { notify: vi.fn(), dismiss: vi.fn() } as never,
+      fakeLoggerService().service,
     )
     await flush()
     expect(setBackgroundPoll).toHaveBeenCalledWith(true)
@@ -544,6 +566,9 @@ describe('SwarmReviewNotificationContribution', () => {
       })
       await t.refresh()
       expect(t.notify).not.toHaveBeenCalled()
+      // The failure must be VISIBLE in the log — a poll that swallows its error
+      // silently is undiagnosable (the "zero notifications, no diagnostics" bug).
+      expect(t.logger.warn).toHaveBeenCalledWith(expect.stringContaining('poll failed after'))
 
       // The latch must be free: a later tick reaches the dashboard again and the
       // newly-actionable review notifies — this is the regression assertion.
@@ -553,6 +578,31 @@ describe('SwarmReviewNotificationContribution', () => {
       await flush()
       expect(t.notify).toHaveBeenCalledTimes(1)
       expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #5: recovered' })
+      t.dispose()
+    })
+
+    // Companion to the above: a rejected poll must NOT touch the primed baseline.
+    // The old guard() swallowed the failure into an EMPTY dashboard fallback, which
+    // `_notifyNew` then treated as "zero reviews" — wiping `_known`, so the next
+    // healthy tick re-fired every already-known review as "new" (a phantom burst).
+    it('a rejected poll preserves the notified baseline — no phantom burst on recovery', async () => {
+      const t = await setup({ initialNeedsAction: [review('5')] })
+      await flush()
+      // Baseline is primed with #5 (prime never notifies).
+      expect(t.notify).not.toHaveBeenCalled()
+
+      // One failing tick (expired ticket / hung-gateway timeout on the host).
+      const original = t.executeCommand.getMockImplementation()!
+      t.executeCommand.mockImplementation(async (id: string): Promise<unknown> => {
+        if (id === 'perforce.swarm.dashboard') throw new Error('timed out after 30000ms')
+        return original(id)
+      })
+      await t.refresh()
+
+      // Recovery with the SAME dashboard contents: nothing new → no notification.
+      t.executeCommand.mockImplementation(original)
+      await t.refresh()
+      expect(t.notify).not.toHaveBeenCalled()
       t.dispose()
     })
   })

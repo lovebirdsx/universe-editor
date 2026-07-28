@@ -122,6 +122,9 @@ const reviews = {
 const comments = {}
 let nextReviewId = 1005
 let nextCommentId = 1
+/** Test-only fault switch: while true, GET /reviews never responds (a hung
+ *  gateway), so specs can exercise the extension's request-timeout handling. */
+let hangReviews = false
 
 function logRequest(entry) {
   if (!LOG) return
@@ -199,6 +202,14 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  // Test-only fault switch: hang every subsequent GET /reviews (never respond),
+  // simulating a gateway that accepts the connection but stalls forever.
+  if (method === 'POST' && url.pathname === '/__control__/set-hang') {
+    hangReviews = body.enabled === true
+    send(res, 200, { hangReviews })
+    return
+  }
+
   // GET reviews (list / ping). Honours the `keywords` query so the extension can
   // push keyword filtering down to the server (matched against description /
   // author / id, mirroring the renderer's client-side fallback). Also honours the
@@ -206,6 +217,7 @@ const server = createServer(async (req, res) => {
   // relies on — without them `author=e2e` would return every seeded review,
   // collapsing the authored / needs-my-action buckets into one.
   if (method === 'GET' && path === 'reviews') {
+    if (hangReviews) return // stall: never respond (the client must time out)
     const keywords = (url.searchParams.get('keywords') ?? '').trim().toLowerCase()
     const authors = url.searchParams.getAll('author[]')
     const participants = url.searchParams.getAll('participants[]')

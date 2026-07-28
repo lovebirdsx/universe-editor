@@ -81,14 +81,30 @@
 - **只有 `perforce.swarm.ping` / `perforce.swarm.requestReview` / `perforce.swarm.updateReviewFromChangelist` 进 package.json**（`ping` 是命令面板自检；后两者贡献到 SCM changelist 组头右键菜单 `3_swarm@1/@2`，都是**扩展宿主有真 handler** 的命令）。
 - **`updateReview`（详情页 Update Review 按钮驱动，请求已带 reviewId）与 `updateReviewFromChangelist`（从 changelist 组头出发、先 QuickPick 选一个 review 再重新 shelve 关联新版本）是两条路径，别混**。候选排序是纯函数 `swarm/swarmReviewPick.ts`（`buildReviewPicks`：过滤已关闭、needsRevision 置顶、newest 次序），带单测。
 
-### ⚠️ 轮询驱动的调用绝不能 await 模态对话框（`guard()` 的 `promptOnAuth`）
+### ⚠️ SwarmApi 的 fetch 必须有 per-request 超时（网关挂起卡死 poll 闩锁）
 
-`guard()` 的 401 分支默认 `await window.showErrorMessage(..., 'Login')`——这是**带 item 的模态确认**（`MainThreadWindow.$showMessage` 有 items 时走 `IDialogService.confirm`，promise 入队等用户点击才 settle）。**窗口在后台时无人可点 → 永不 settle**。
+**真实 bug（前台也零通知）**：`fetch()` 自身**没有可用的默认超时**（undici 的 `headersTimeout` ≈300s）。部署里 Swarm 前面挡着一个会 504 慢端点的网关，它**接受连接但永不回包** → `SwarmApi` 的 dashboard fetch 挂起数分钟 → renderer `SwarmReviewNotificationContribution.refresh()` 的串行 `_running` 闩锁一直被占 → 之后每个 poll tick 都在 `if (this._running) return` 处丢弃 → **前台后台全静默**（侧栏不受影响：它的 dashboard 走不同 in-flight key）。
 
-- **真实 bug（通宵零通知）**：`SwarmNotificationPoller` 每 tick 驱动 `dashboard`；Swarm ticket 过期后某次 tick 命中 401 → guard 在后台窗口弹出看不见的模态 → renderer `SwarmReviewNotificationContribution.refresh()` 的 `_running` 闩锁永久 true → 之后每个 tick 都在 `if (this._running) return` 处丢弃。19:49 最后一次通知后，新 review 到达 3.8 小时零通知；切回窗口手动刷新才恢复（手动路径不经过被卡的 poll）。
-- **修复**：`guard(label, op, fallback, { promptOnAuth: false })`——poll 驱动的 `dashboard` 传 false，401 只记日志 + 返回 fallback、**立即 settle**，闩锁在 `finally` 正常释放。交互命令（vote/transition/createReview 等用户当场能点确认的）保持默认 true 弹 Login。
-- **判别准则**：凡是「定时器 / 后台 tick / 无用户在场」驱动的 Swarm 调用，401 一律不弹模态；只有用户主动点按钮触发的才弹。给新的 poll/后台数据命令接线时照此传 `promptOnAuth: false`。
-- 回归单测：`__tests__/swarmCommands.test.ts`（dashboard 401 不调 showErrorMessage、返回 fallback、立即 settle）；renderer 侧 `SwarmReviewNotificationContribution.test.ts`（dashboard reject 后 `_running` 闩锁释放、下一 tick 照常通知）。
+- **修复**：`SwarmApiOptions.timeoutMs`（默认 30s，`resolveSwarmRequestTimeoutMs`：显式 option > `UNIVERSE_SWARM_REQUEST_TIMEOUT_MS` env（e2e 用）> 默认）。`_once` 里 `AbortSignal.timeout(this._timeoutMs)` 与调用方 signal 经 `AbortSignal.any` 组合后**无条件**传给 fetch。
+- **失败分类靠 `errorName()` 结构读 name，别用 `instanceof Error`**：fetch abort/timeout 的 reject reason 是 DOMException（不保证 `instanceof Error`）。`AbortError`（调用方主动取消）与 `TimeoutError`（超时）都包装成 `SwarmError(Network)`——**不重试**（`isTransient` 不含 Network；超时请求可能已被服务端处理，POST 重试有重复应用风险），由下一个 poll tick 自然恢复。
+- **e2e 回归**：`swarmReviewNotificationHung.spec.ts`——fake server `setHang(true)` 挂起 GET /reviews 两个 poll 周期，解除后新 review 必须仍通知（修复前闩锁卡死、恒不通知）。fake-swarm.mjs 的 `/__control__/set-hang` 端点即为此加。
+- 单测：`swarmApi.test.ts` 的 `SwarmApi request timeout`（挂起 mock 监听 `init.signal` abort 后 reject `signal.reason`，忠实模拟 undici）。
+
+### ⚠️ 轮询驱动的调用用 `guard()` 的 `silent`（静默 + rethrow，绝不弹 UI 也绝不吞 fallback）
+
+`guard()` 默认在失败时弹 UI 并返回 fallback：401 分支 `await window.showErrorMessage(..., 'Login')`（**带 item 的模态确认**，promise 等用户点击才 settle），generic 分支弹错误 toast。**窗口在后台时模态无人可点 → 永不 settle**；后台 poll 每次失败弹 toast 是纯噪音。
+
+- **真实 bug（通宵零通知）**：`SwarmNotificationPoller` 每 tick 驱动 `dashboard`；Swarm ticket 过期后某次 tick 命中 401 → guard 在后台窗口弹出看不见的模态 → renderer 的 `_running` 闩锁永久 true → 之后每个 tick 都被丢弃。19:49 最后一次通知后 3.8 小时零通知；切回窗口手动刷新才恢复。
+- **次生 bug（失败 fallback 吞错）**：guard 失败时返回**空 dashboard** fallback，renderer `_notifyNew([])` 把它当「零 review」→ `_known` 基线被清空 → 恢复后下一个健康 tick 把**所有**已知 review 当新的重发一遍（幻影爆发）。
+- **修复**：`guard(label, op, fallback, { silent: true })`——poll 驱动的 `dashboard` 传 true，**任何**失败只记日志并 **rethrow**（renderer poll 的 catch 本就静默吞掉，`_known` 不动；侧栏 `load()` 的 catch 显示错误状态，比假空列表更真实）。交互命令（vote/transition/createReview 等用户当场能点确认的）保持默认弹 UI + 返回 fallback。
+- **判别准则**：凡是「定时器 / 后台 tick / 无用户在场」驱动的 Swarm 调用都传 `silent: true`；只有用户主动点按钮触发的才走默认。给新的 poll/后台数据命令接线时照此办。
+- 回归单测：`__tests__/swarmCommands.test.ts`（401/Network 失败 rethrow、不弹任何 UI、立即 settle）；renderer 侧 `SwarmReviewNotificationContribution.test.ts`（dashboard reject 后 `_running` 闩锁释放、`_known` 基线保留、下一 tick 照常通知且无幻影爆发）。
+
+### 🔍 通知链路的日志观测点（排查「收不到通知」先看这两处）
+
+- **host 侧（Swarm 输出频道）**：poller 启停（info）/ tick 节奏（debug）/ tick 失败（warn）；guard 的 `cmd` scope 有每次 dashboard 的 start/ok/failed（poll 静默失败带 `(silent)` 标签）；`api` scope 有每个 HTTP 请求的状态 + 耗时 + 重试。默认安静，开 `perforce.swarm.trace` 后 debug 全量（tick 心跳、请求/响应细节）。
+- **renderer 侧（`swarmNotify` logger，窗口私有日志 `window-<id>/`）**：poll 启停 / 基线 prime / **闩锁丢弃（`poll tick dropped: previous refresh still running`——闩锁卡死的第一信号，连续出现即 bug）** / poll 失败 warn（catch 不再静默）/ 通知决策（`notifying N new review(s): #ids`）/ OS toast 被门控走应用内 fallback。常规节奏是 debug 级，关键事件 info/warn 默认可见。
+- 判读套路：先看 renderer 有没有 tick 进来（无 → host poller / RPC 问题）；有 tick 但全是 dropped（→ 上一次 refresh 卡住，看 host `api` scope 是否有挂起/超时请求）；有 poll ok 但无 notifying（→ 过滤口径问题：authors 白名单 / approvable / ignore）。
 
 ### ⚠️ 头号坑：renderer Action2 命令绝不能进扩展 `commands` 数组
 
