@@ -83,7 +83,24 @@ test.describe('@p1 output context menu', () => {
     //    relayouts after the last editor tab closes; give the output editor a
     //    beat to settle before dispatching the click.
     await page.waitForTimeout(1000)
-    await outputLines.click({ button: 'right' })
+    // `.view-lines` is taller than the visible output editor (the editor clips
+    // it to the scrollable viewport), and on slow CI machines the panel is
+    // still short right after the diff editor closes — clicking the container's
+    // geometric center can then land on the Welcome fallback / panel tab strip
+    // and time out on the hit-target check. Clamp the click to the middle of
+    // the editor's VISIBLE region (the scrollable element), which always maps
+    // to real output text.
+    const position = await outputLines.evaluate((el) => {
+      const scrollable = el.closest('.monaco-scrollable-element') ?? el
+      const r = scrollable.getBoundingClientRect()
+      const er = el.getBoundingClientRect()
+      return {
+        x: Math.max(8, Math.min(er.width / 2, r.width / 2)),
+        // midpoint of the visible viewport, relative to the oversized view-lines
+        y: Math.max(4, r.top - er.top + r.height / 2),
+      }
+    })
+    await outputLines.click({ button: 'right', position })
     await expect(page.locator('.context-view .monaco-menu')).toBeVisible({ timeout: 10_000 })
     expect(disposedErrors).toEqual([])
 
