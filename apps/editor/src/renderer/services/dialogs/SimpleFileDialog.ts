@@ -8,18 +8,23 @@
 import {
   Disposable,
   DisposableStore,
+  IConfigurationService,
   IDialogService,
   IFileService,
   IFileDialogService,
+  IHostService,
+  ILoggerService,
   IQuickInputService,
   IStorageService,
   IWorkspaceService,
   InstantiationType,
   MutableDisposable,
   URI,
+  createNamedLogger,
   localize,
   registerSingleton,
   type IFileDialogOptions,
+  type ILogger,
   type IQuickPickItem,
 } from '@universe-editor/platform'
 import { resourceIconId } from '../quickInput/quickPickResourceIcon.js'
@@ -41,12 +46,14 @@ interface ResolvedEntry {
 
 const PARENT_ID = '..'
 const STORAGE_KEY_SHOW_DOT_FILES = 'fileDialog.showHiddenFiles'
+const NATIVE_DIALOG_SETTING = 'files.nativeDialog.enable'
 
 export class SimpleFileDialog extends Disposable implements IFileDialogService {
   declare readonly _serviceBrand: undefined
 
   private readonly _sep: string
   private readonly _home: string
+  private readonly _logger: ILogger
 
   // Anchors the current dialog session to this singleton service. Cleanup
   // normally fires on onDidHide; rooting here means an E2E teardown that tears
@@ -59,19 +66,58 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IDialogService private readonly _dialog: IDialogService,
     @IStorageService private readonly _storage: IStorageService,
+    @IConfigurationService private readonly _config: IConfigurationService,
+    @IHostService private readonly _host: IHostService,
+    @ILoggerService loggerService: ILoggerService,
   ) {
     super()
     const ipc = typeof window !== 'undefined' ? window.ipc : undefined
     this._sep = ipc?.platform === 'win32' ? '\\' : '/'
     this._home = typeof ipc?.home === 'string' ? ipc.home : ''
+    this._logger = createNamedLogger(loggerService, { id: 'fileDialog', name: 'File Dialog' })
   }
 
   showOpenDialog(opts: IFileDialogOptions): Promise<URI | undefined> {
+    if (this._useNativeDialog()) {
+      return this._showNative(opts, 'open')
+    }
     return this._show(opts, 'open')
   }
 
   showSaveDialog(opts: IFileDialogOptions): Promise<URI | undefined> {
+    if (this._useNativeDialog()) {
+      return this._showNative(opts, 'save')
+    }
     return this._show(opts, 'save')
+  }
+
+  private _useNativeDialog(): boolean {
+    return this._config.get<boolean>(NATIVE_DIALOG_SETTING) === true
+  }
+
+  private async _showNative(opts: IFileDialogOptions, mode: DialogMode): Promise<URI | undefined> {
+    this._logger.debug(`native ${mode} dialog title=${opts.title}`)
+    const picked =
+      mode === 'open'
+        ? await this._host.showOpenFileDialog({
+            title: opts.title,
+            ...(opts.defaultUri !== undefined ? { defaultPath: opts.defaultUri.fsPath } : {}),
+            canSelectFiles: opts.canSelectFiles,
+            canSelectFolders: opts.canSelectFolders,
+            ...(opts.openLabel !== undefined ? { buttonLabel: opts.openLabel } : {}),
+          })
+        : await this._host.showSaveFileDialog({
+            title: opts.title,
+            ...(opts.defaultUri !== undefined ? { defaultPath: opts.defaultUri.fsPath } : {}),
+            ...(opts.openLabel !== undefined ? { buttonLabel: opts.openLabel } : {}),
+          })
+    if (!picked) {
+      this._logger.debug(`native ${mode} dialog cancelled`)
+      return undefined
+    }
+    const uri = picked instanceof URI ? picked : URI.from(picked)
+    this._logger.debug(`native ${mode} dialog picked ${uri.fsPath}`)
+    return uri
   }
 
   private async _show(opts: IFileDialogOptions, mode: DialogMode): Promise<URI | undefined> {

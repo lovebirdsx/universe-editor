@@ -302,6 +302,14 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Auto save delay in milliseconds (when autoSave=afterDelay).',
             ),
           },
+          'files.nativeDialog.enable': {
+            type: 'boolean',
+            default: false,
+            description: localize(
+              'settings.files.nativeDialog.enable.description',
+              'Use the operating system file dialog for opening files/folders and saving, instead of the built-in dialog.',
+            ),
+          },
           'files.exclude': {
             type: 'object',
             default: {},

@@ -7,7 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { URI } from '@universe-editor/platform'
+import { NullLogger, URI } from '@universe-editor/platform'
 import type {
   IDialogService,
   IDirectoryEntry,
@@ -171,6 +171,9 @@ function createDialog(): { dialog: SimpleFileDialog; quickInput: FakeQuickInputS
     fakeWorkspace,
     fakeDialog,
     fakeStorage as never,
+    { get: () => undefined } as never,
+    { showOpenFileDialog: async () => null, showSaveFileDialog: async () => null } as never,
+    { createLogger: () => new NullLogger() } as never,
   )
   return { dialog, quickInput }
 }

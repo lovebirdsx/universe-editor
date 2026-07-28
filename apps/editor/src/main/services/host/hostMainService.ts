@@ -150,10 +150,15 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   }
 
   async showOpenFileDialog(opts?: IShowOpenFileOptions): Promise<UriComponents | null> {
+    const properties: Array<'openFile' | 'openDirectory'> = []
+    if (opts?.canSelectFiles !== false) properties.push('openFile')
+    if (opts?.canSelectFolders === true) properties.push('openDirectory')
+    if (properties.length === 0) properties.push('openFile')
     const result = await dialog.showOpenDialog(this._win, {
-      properties: ['openFile'],
+      properties,
       ...(opts?.title !== undefined ? { title: opts.title } : {}),
       ...(opts?.defaultPath !== undefined ? { defaultPath: path.normalize(opts.defaultPath) } : {}),
+      ...(opts?.buttonLabel !== undefined ? { buttonLabel: opts.buttonLabel } : {}),
     })
     if (result.canceled || result.filePaths.length === 0) {
       this._logger.info(`showOpenFileDialog cancelled id=${this._win.id}`)
@@ -169,6 +174,7 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     const result = await dialog.showSaveDialog(this._win, {
       ...(opts?.title !== undefined ? { title: opts.title } : {}),
       ...(opts?.defaultPath !== undefined ? { defaultPath: path.normalize(opts.defaultPath) } : {}),
+      ...(opts?.buttonLabel !== undefined ? { buttonLabel: opts.buttonLabel } : {}),
     })
     if (result.canceled || !result.filePath) {
       this._logger.info(`showSaveFileDialog cancelled id=${this._win.id}`)

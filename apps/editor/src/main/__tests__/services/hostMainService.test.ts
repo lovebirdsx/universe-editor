@@ -303,6 +303,38 @@ describe('MainHostService', () => {
     service.dispose()
   })
 
+  it('showOpenFileDialog maps canSelectFolders/canSelectFiles to properties', async () => {
+    showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
+    const win = makeFakeWin()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = new MainHostService(win as any)
+    await service.showOpenFileDialog({ canSelectFiles: false, canSelectFolders: true })
+    let [, opts] = showOpenDialog.mock.calls[0] as [unknown, { properties: string[] }]
+    expect(opts.properties).toEqual(['openDirectory'])
+    await service.showOpenFileDialog({ canSelectFiles: true, canSelectFolders: true })
+    ;[, opts] = showOpenDialog.mock.calls[1] as [unknown, { properties: string[] }]
+    expect(opts.properties).toEqual(['openFile', 'openDirectory'])
+    await service.showOpenFileDialog({})
+    ;[, opts] = showOpenDialog.mock.calls[2] as [unknown, { properties: string[] }]
+    expect(opts.properties).toEqual(['openFile'])
+    service.dispose()
+  })
+
+  it('showOpenFileDialog / showSaveFileDialog pass through buttonLabel', async () => {
+    showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
+    showSaveDialog.mockResolvedValue({ canceled: true, filePath: undefined })
+    const win = makeFakeWin()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = new MainHostService(win as any)
+    await service.showOpenFileDialog({ buttonLabel: 'Choose' })
+    const [, openOpts] = showOpenDialog.mock.calls[0] as [unknown, { buttonLabel?: string }]
+    expect(openOpts.buttonLabel).toBe('Choose')
+    await service.showSaveFileDialog({ buttonLabel: 'Save' })
+    const [, saveOpts] = showSaveDialog.mock.calls[0] as [unknown, { buttonLabel?: string }]
+    expect(saveOpts.buttonLabel).toBe('Save')
+    service.dispose()
+  })
+
   describe('notify', () => {
     it('is suppressed while the window is focused (default gating)', async () => {
       const win = makeFakeWin()

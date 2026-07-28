@@ -5,14 +5,20 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { URI } from '@universe-editor/platform'
+import { NullLogger, URI } from '@universe-editor/platform'
 import type {
+  IConfigurationService,
   IDialogService,
   IDirectoryEntry,
   IFileService,
   IFileStat,
+  IHostService,
+  ILoggerService,
   IQuickPickItem,
+  IShowOpenFileOptions,
+  IShowSaveFileOptions,
   IWorkspaceService,
+  UriComponents,
 } from '@universe-editor/platform'
 import { SimpleFileDialog } from '../SimpleFileDialog.js'
 
@@ -205,14 +211,45 @@ class FakeStorageService {
 
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
+const fakeLoggerService = {
+  createLogger: () => new NullLogger(),
+} as unknown as ILoggerService
+
+class FakeConfigService {
+  constructor(public nativeDialogEnabled = false) {}
+  get<T>(key: string): T | undefined {
+    if (key === 'files.nativeDialog.enable') return this.nativeDialogEnabled as T
+    return undefined
+  }
+}
+
+class FakeHostService {
+  openCalls: IShowOpenFileOptions[] = []
+  saveCalls: IShowSaveFileOptions[] = []
+  openResult: UriComponents | null = null
+  saveResult: UriComponents | null = null
+
+  async showOpenFileDialog(opts?: IShowOpenFileOptions) {
+    this.openCalls.push(opts ?? {})
+    return this.openResult
+  }
+  async showSaveFileDialog(opts?: IShowSaveFileOptions) {
+    this.saveCalls.push(opts ?? {})
+    return this.saveResult
+  }
+}
+
 function createDialog(
   storage: FakeStorageService = new FakeStorageService(),
   dialogService: IDialogService = fakeDialog,
+  config: FakeConfigService = new FakeConfigService(),
+  host: FakeHostService = new FakeHostService(),
 ): {
   dialog: SimpleFileDialog
   quickInput: FakeQuickInputService
   storage: FakeStorageService
   fileService: FakeFileService
+  host: FakeHostService
 } {
   const quickInput = new FakeQuickInputService()
   const fileService = new FakeFileService()
@@ -222,8 +259,11 @@ function createDialog(
     fakeWorkspace,
     dialogService,
     storage as never,
+    config as unknown as IConfigurationService,
+    host as unknown as IHostService,
+    fakeLoggerService,
   )
-  return { dialog, quickInput, storage, fileService }
+  return { dialog, quickInput, storage, fileService, host }
 }
 
 const labels = (qp: FakeQuickPick): string[] => qp.items.map((it) => it.label)
@@ -579,6 +619,83 @@ describe('SimpleFileDialog interaction', () => {
   })
 })
 
+describe('SimpleFileDialog native dialog branch', () => {
+  const nativeConfig = (): FakeConfigService => new FakeConfigService(true)
+
+  it('delegates open to the native host dialog when files.nativeDialog.enable=true', async () => {
+    const host = new FakeHostService()
+    host.openResult = URI.file('/a/src').toJSON()
+    const { dialog, quickInput } = createDialog(
+      new FakeStorageService(),
+      fakeDialog,
+      nativeConfig(),
+      host,
+    )
+    const picked = await dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+      defaultUri: URI.file('/a'),
+      openLabel: 'Choose',
+    })
+    expect(quickInput.lastPick).toBeUndefined()
+    expect(host.openCalls).toEqual([
+      {
+        title: 'Open Folder',
+        defaultPath: '/a',
+        canSelectFiles: false,
+        canSelectFolders: true,
+        buttonLabel: 'Choose',
+      },
+    ])
+    expect(picked?.fsPath).toBe('/a/src')
+  })
+
+  it('delegates save to the native host dialog when files.nativeDialog.enable=true', async () => {
+    const host = new FakeHostService()
+    host.saveResult = URI.file('/a/out.txt').toJSON()
+    const { dialog } = createDialog(new FakeStorageService(), fakeDialog, nativeConfig(), host)
+    const picked = await dialog.showSaveDialog({
+      title: 'Save As',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      defaultUri: URI.file('/a/out.txt'),
+    })
+    expect(host.saveCalls).toEqual([{ title: 'Save As', defaultPath: '/a/out.txt' }])
+    expect(picked?.fsPath).toBe('/a/out.txt')
+  })
+
+  it('resolves undefined when the native dialog is cancelled', async () => {
+    const host = new FakeHostService()
+    const { dialog } = createDialog(new FakeStorageService(), fakeDialog, nativeConfig(), host)
+    const picked = await dialog.showOpenDialog({
+      title: 'Open File',
+      canSelectFiles: true,
+      canSelectFolders: false,
+    })
+    expect(picked).toBeUndefined()
+  })
+
+  it('keeps the QuickInput dialog when the setting is off', async () => {
+    const host = new FakeHostService()
+    const { dialog, quickInput } = createDialog(
+      new FakeStorageService(),
+      fakeDialog,
+      new FakeConfigService(false),
+      host,
+    )
+    void dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    expect(host.openCalls).toEqual([])
+    expect(quickInput.lastPick).toBeDefined()
+  })
+})
+
 describe('SimpleFileDialog Windows drives', () => {
   const createWinDialog = (): { dialog: SimpleFileDialog; quickInput: FakeQuickInputService } => {
     const quickInput = new FakeQuickInputService()
@@ -588,6 +705,9 @@ describe('SimpleFileDialog Windows drives', () => {
       fakeWorkspace,
       fakeDialog,
       new FakeStorageService() as never,
+      new FakeConfigService() as unknown as IConfigurationService,
+      new FakeHostService() as unknown as IHostService,
+      fakeLoggerService,
     )
     return { dialog, quickInput }
   }

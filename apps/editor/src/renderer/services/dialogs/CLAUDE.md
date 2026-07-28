@@ -1,8 +1,8 @@
 # apps/editor/src/renderer/services/dialogs/CLAUDE.md
 
-本目录是应用内文件/文件夹选择对话框的家：`SimpleFileDialog` 是 renderer 端基于 QuickInput 的纯键盘优先路径浏览器（对标 VSCode `files.simpleDialog.enable`），替换了所有原生 OS 对话框，注册为 `IFileDialogService` 单例。本文是 SimpleFileDialog 子系统的上下文地图（处理相关任务前通读）。
+本目录是应用内文件/文件夹选择对话框的家：`SimpleFileDialog` 是 renderer 端基于 QuickInput 的纯键盘优先路径浏览器（对标 VSCode `files.simpleDialog.enable`），默认承担所有文件对话框请求，注册为 `IFileDialogService` 单例。设置 `files.nativeDialog.enable=true` 时同一实现内部切换为系统原生对话框（经 `IHostService` IPC 到 main 的 `dialog.showOpenDialog/showSaveDialog`，对标 VSCode 桌面端 `FileDialogService` 的 native 分支）。本文是 SimpleFileDialog 子系统的上下文地图（处理相关任务前通读）。
 
-`SimpleFileDialog` 是一个 **renderer 端、纯键盘优先** 的文件/文件夹/保存浏览器，注册为 `IFileDialogService` 的单例实现，**替换了全部原生 OS 对话框**（对标 VSCode `files.simpleDialog.enable`）。它复用通用 QuickInput 浮层做 UI，文件系统访问经 `IFileService` 走 IPC 到 main。
+`SimpleFileDialog` 是一个 **renderer 端、纯键盘优先** 的文件/文件夹/保存浏览器，注册为 `IFileDialogService` 的单例实现，**默认替换全部原生 OS 对话框**（对标 VSCode `files.simpleDialog.enable`）。它复用通用 QuickInput 浮层做 UI，文件系统访问经 `IFileService` 走 IPC 到 main。开关 `files.nativeDialog.enable`（默认 false）开启时，`showOpenDialog`/`showSaveDialog` 入口分流到 `_showNative` → `IHostService.showOpenFileDialog/showSaveFileDialog`（main 端 `MainHostService` 调 Electron 原生对话框；open 的 `canSelectFiles/canSelectFolders` 映射到 `openFile/openDirectory` properties），所有调用点零改动。
 
 > ⚠️ 第一原则：这是个 **值驱动（value-driven）** 的对话框 —— **输入框里的路径字符串是唯一事实来源**，列表只是它的投影。改交互前先想清楚你动的是「输入值 → 列表」（onValueChange）还是「列表/高亮 → 输入值」（onActiveChange）这两条方向中的哪一条，别让它俩打架成回环。
 

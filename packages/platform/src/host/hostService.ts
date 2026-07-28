@@ -177,11 +177,19 @@ export interface ISystemNotificationResult {
 export interface IShowOpenFileOptions {
   readonly defaultPath?: string
   readonly title?: string
+  /** Allow picking files (default true). */
+  readonly canSelectFiles?: boolean
+  /** Allow picking folders (default false). May combine with canSelectFiles. */
+  readonly canSelectFolders?: boolean
+  /** Confirm button label (e.g. "Open Folder"). */
+  readonly buttonLabel?: string
 }
 
 export interface IShowSaveFileOptions {
   readonly defaultPath?: string
   readonly title?: string
+  /** Confirm button label (e.g. "Save As"). */
+  readonly buttonLabel?: string
 }
 
 export const IHostService = createDecorator<IHostService>('hostService')
