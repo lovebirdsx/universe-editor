@@ -1,5 +1,32 @@
 [
   {
+    "version": "0.1.52",
+    "date": "2026-07-28",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "Git/Perforce 时间线视图支持刷新与仓库切换",
+          "Swarm 后台轮询与自动刷新增加独立开关配置",
+          "Perforce 文件时间线视图（Timeline）",
+          "session列表支持归档与置顶操作",
+          "mcp的启用状态采用显示配置方式"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修正工作区在后台时，swarm的review审核通知不会发送的bug",
+          "Timeline diff时保持文件跟踪不丢失",
+          "e2e 案例50c：persisted/mem 双轨制根治布局噪声锁死恢复目标",
+          "mcp配置改变，不会丢失新session的输入内容"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.51",
     "date": "2026-07-27",
     "groups": [
