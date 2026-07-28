@@ -77,6 +77,13 @@ export function LogOutputView({
           glyphMargin: false,
           folding: false,
           renderLineHighlight: 'none',
+          // Logs routinely contain CJK / full-width punctuation; never flag
+          // them as ambiguous or pop the "ambiguous unicode characters" banner.
+          unicodeHighlight: {
+            ambiguousCharacters: false,
+            invisibleCharacters: false,
+            nonBasicASCII: false,
+          },
           fontSize: latestFontSizeRef.current,
           fontFamily: latestFontFamilyRef.current,
         },
