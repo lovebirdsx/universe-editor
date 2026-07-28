@@ -109,12 +109,14 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       },
     })
     diffEditorRef.current = ed
+    const hoverGuard = MonacoLoader.trackEditorDispose(ed)
     return () => {
       // Flush the current view state while the editor is still live (persist
       // scroll/cursor), then dispose. The set-model effect's cleanup runs after
       // this one on unmount and would otherwise flush against a dead editor.
       viewStateRef.current?.dispose()
       viewStateRef.current = null
+      hoverGuard.dispose()
       ed.dispose()
       diffEditorRef.current = null
     }

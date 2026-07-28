@@ -345,6 +345,7 @@ export function PromptMonacoEditor({
         MonacoLoader.getOverrideServices(),
       )
       editorRef.current = ed
+      disposables.push(MonacoLoader.trackEditorDispose(ed))
       const tracker = new PromptRefTracker(model, m, PILL_CLASS_NAME)
       trackerRef.current = tracker
 

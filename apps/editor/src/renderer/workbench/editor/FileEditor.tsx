@@ -284,9 +284,11 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       })
     }
     dropContainer.addEventListener('dragover', armDropIntoEditorOnShift, true)
+    const hoverGuard = MonacoLoader.trackEditorDispose(ed)
     editorRef.current = ed
     return () => {
       dropContainer.removeEventListener('dragover', armDropIntoEditorOnShift, true)
+      hoverGuard.dispose()
       focusSub.dispose()
       blurSub.dispose()
       textFocusSub.dispose()

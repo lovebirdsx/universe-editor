@@ -60,6 +60,7 @@ export function LogOutputView({
   // Create the Monaco editor once
   useEffect(() => {
     let disposed = false
+    let hoverGuard: IDisposable | undefined
     void MonacoLoader.ensureInitialized().then((m) => {
       if (disposed || !containerRef.current) return
       const ed = m.editor.create(
@@ -90,10 +91,12 @@ export function LogOutputView({
         MonacoLoader.getOverrideServices(),
       )
       editorRef.current = ed
+      hoverGuard = MonacoLoader.trackEditorDispose(ed)
       setEditorReady(true)
     })
     return () => {
       disposed = true
+      hoverGuard?.dispose()
       hiddenAreasDisposableRef.current?.dispose()
       hiddenAreasDisposableRef.current = null
       editorRef.current?.dispose()

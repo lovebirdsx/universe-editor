@@ -16,6 +16,11 @@ import {
 } from '@universe-editor/platform'
 import { getCurrentLocale } from '../../../../shared/i18n/availableLocales.js'
 import { bridgeAllMonacoActions } from './monacoActionsBridge.js'
+import {
+  initHoverDelegateGuard,
+  trackEditorDisposeForHoverGuard,
+  type IMonacoInstantiationServiceLike,
+} from './monacoHoverDelegateGuard.js'
 import { applyMonacoNls } from './monacoNlsBootstrap.js'
 import { registerLogLanguage } from '../../panel/output/monacoLogLanguage.js'
 import { registerMarkdownFrontmatterHighlight } from './monacoMarkdownFrontmatter.js'
@@ -221,6 +226,16 @@ async function loadMonaco(): Promise<typeof monaco> {
       const { StandaloneServices } =
         await import('monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js')
       StandaloneServices.initialize(_overrideServices)
+      // Diff editors install the global hover-delegate factory with a closure
+      // over their per-widget child IInstantiationService; once the widget is
+      // disposed the factory dangles and every later context menu crashes (see
+      // monacoHoverDelegateGuard). Capture the never-disposed root here so a
+      // tracked editor's dispose can reseat the factory onto it.
+      const { IInstantiationService } =
+        await import('monaco-editor/esm/vs/platform/instantiation/common/instantiation.js')
+      await initHoverDelegateGuard(
+        StandaloneServices.get<IMonacoInstantiationServiceLike>(IInstantiationService),
+      )
       _monaco = monacoMod
       registerLogLanguage(monacoMod)
       // colorize() (markdown code blocks) and any render before the first
@@ -321,6 +336,19 @@ export const MonacoLoader = {
   /** The shared override-services object threaded into all `editor.create` calls. */
   getOverrideServices(): monaco.editor.IEditorOverrideServices {
     return _overrideServices
+  },
+
+  /**
+   * Track an editor so its dispose reseats monaco's global hover-delegate
+   * factory onto the never-disposed root IInstantiationService (diff editors
+   * otherwise leave it dangling on a disposed child — right-clicking any
+   * editor afterwards throws "InstantiationService has been disposed"; see
+   * monacoHoverDelegateGuard). Wire every `editor.create` / `createDiffEditor`
+   * result through this; keep the returned disposable with the editor's
+   * teardown.
+   */
+  trackEditorDispose(editor: { onDidDispose(cb: () => void): IDisposable }): IDisposable {
+    return trackEditorDisposeForHoverGuard(editor)
   },
 
   /**

@@ -71,3 +71,20 @@ declare module 'monaco-editor/esm/vs/platform/configuration/common/configuration
 declare module 'monaco-editor/esm/vs/editor/standalone/common/standaloneTheme.js' {
   export const IStandaloneThemeService: unknown
 }
+
+// IInstantiationService decorator, used as the lookup key for
+// StandaloneServices.get so MonacoLoader can capture the process-level root
+// instantiation service (see monacoHoverDelegateGuard).
+declare module 'monaco-editor/esm/vs/platform/instantiation/common/instantiation.js' {
+  export const IInstantiationService: unknown
+}
+
+// Global hover-delegate factory (module-level singleton in monaco). The hover
+// guard reseats it onto a root-captured closure after diff editors leave it
+// dangling on a disposed child IInstantiationService. Typed structurally in
+// monacoHoverDelegateGuard.ts; no shipped .d.ts.
+declare module 'monaco-editor/esm/vs/base/browser/ui/hover/hoverDelegateFactory.js'
+
+// WorkbenchHoverDelegate ctor consumed by the hover guard (typed structurally
+// there); no shipped .d.ts.
+declare module 'monaco-editor/esm/vs/platform/hover/browser/hover.js'

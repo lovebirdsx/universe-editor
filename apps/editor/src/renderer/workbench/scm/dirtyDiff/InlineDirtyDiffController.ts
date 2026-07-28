@@ -228,6 +228,7 @@ export class InlineDirtyDiffController extends Disposable {
       },
     })
     this._diffEditor = diffEditor
+    this._sessionStore.add(MonacoLoader.trackEditorDispose(diffEditor))
     diffEditor.setModel({ original, modified })
     this._layoutDiff(panelHeight)
 

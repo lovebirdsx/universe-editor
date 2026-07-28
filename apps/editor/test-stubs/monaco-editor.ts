@@ -376,6 +376,7 @@ function makePromptEditor(
     onDidFocusEditorWidget: () => noopDisposable,
     onDidBlurEditorWidget: () => noopDisposable,
     onDidContentSizeChange: () => noopDisposable,
+    onDidDispose: () => noopDisposable,
     onKeyDown: () => noopDisposable,
     updateOptions: () => {},
     revealLine: () => {},

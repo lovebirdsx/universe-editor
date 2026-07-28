@@ -93,6 +93,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
       ensureInitialized: () => Promise.resolve(monacoStub),
       get: () => monacoStub,
       getOverrideServices: () => ({}),
+      trackEditorDispose: () => ({ dispose: () => {} }),
     },
   }
 })

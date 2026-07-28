@@ -142,6 +142,7 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
       scrollBeyondLastLine: false,
     })
     diffEditorRef.current = ed
+    const hoverGuard = MonacoLoader.trackEditorDispose(ed)
 
     const language = languageForResource(diffInput.fileUri)
     const original = monacoNs.editor.createModel(
@@ -192,6 +193,7 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
       ed.setModel(null)
       original.dispose()
       modified.dispose()
+      hoverGuard.dispose()
       ed.dispose()
       diffEditorRef.current = null
     }

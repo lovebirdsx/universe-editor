@@ -124,6 +124,11 @@ export function MergeEditor({ input }: { input: IEditorInput }) {
     const contentSub = resultModel.onDidChangeContent(() => {
       mergeInput.setResult(resultModel.getValue())
     })
+    const hoverGuards = [
+      MonacoLoader.trackEditorDispose(currentDiff),
+      MonacoLoader.trackEditorDispose(incomingDiff),
+      MonacoLoader.trackEditorDispose(resultEditor),
+    ]
 
     // Bridge the editable Result pane's text focus → global `editorTextFocus`,
     // like FileEditor. With editContext: true (Monaco 0.55 default) the focus
@@ -152,6 +157,7 @@ export function MergeEditor({ input }: { input: IEditorInput }) {
       textBlurSub.dispose()
       controller.dispose()
       MergeEditorRegistry.unregister(mergeInput, resultEditor)
+      for (const g of hoverGuards) g.dispose()
       currentDiff.dispose()
       incomingDiff.dispose()
       resultEditor.dispose()

@@ -75,6 +75,9 @@ vi.mock('monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js', 
       rec.order.push('initialize')
       rec.state.initOverrides = overrides
     },
+    // The hover guard resolves the root IInstantiationService right after
+    // initialize; a no-op createInstance keeps this ordering test focused.
+    get: () => ({ createInstance: () => ({ dispose: () => {} }) }),
   },
 }))
 

@@ -7,6 +7,13 @@ const workerStub = fileURLToPath(new URL('./test-stubs/monaco-worker.ts', import
 const standaloneServicesStub = fileURLToPath(
   new URL('./test-stubs/monaco-standalone-services.ts', import.meta.url),
 )
+const instantiationStub = fileURLToPath(
+  new URL('./test-stubs/monaco-instantiation.ts', import.meta.url),
+)
+const hoverDelegateFactoryStub = fileURLToPath(
+  new URL('./test-stubs/monaco-hover-delegate-factory.ts', import.meta.url),
+)
+const hoverStub = fileURLToPath(new URL('./test-stubs/monaco-hover.ts', import.meta.url))
 
 // renderer 测试中真正依赖 DOM/Monaco 的 .test.ts。其余 .test.ts 跑在更快的
 // renderer-node（纯 node、无 react 插件、无 Monaco 预热）。新增同类文件若漏加，
@@ -43,6 +50,18 @@ const monacoAlias = {
       {
         find: 'monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js',
         replacement: standaloneServicesStub,
+      },
+      {
+        find: 'monaco-editor/esm/vs/platform/instantiation/common/instantiation.js',
+        replacement: instantiationStub,
+      },
+      {
+        find: 'monaco-editor/esm/vs/base/browser/ui/hover/hoverDelegateFactory.js',
+        replacement: hoverDelegateFactoryStub,
+      },
+      {
+        find: 'monaco-editor/esm/vs/platform/hover/browser/hover.js',
+        replacement: hoverStub,
       },
       { find: /^monaco-editor$/, replacement: monacoStub },
     ],
