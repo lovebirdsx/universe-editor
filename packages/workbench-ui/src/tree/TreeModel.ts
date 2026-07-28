@@ -224,6 +224,20 @@ export class TreeModel<T> extends Disposable {
     return this._state.has(id)
   }
 
+  /**
+   * Ids explicitly collapsed — the diff from a view whose default is expanded
+   * (e.g. Scm's `defaultExpanded: kind !== 'file'`). Persist this list and feed
+   * it back through `setExpansion` on the next mount to restore the user's
+   * folding across unmounts.
+   */
+  getCollapsedIds(): string[] {
+    const out: string[] = []
+    for (const [id, state] of this._state) {
+      if (!state.expanded) out.push(id)
+    }
+    return out
+  }
+
   /** Invalidate the visible-rows cache after the underlying data changed. */
   refresh(): void {
     this._emitStructure()

@@ -33,6 +33,7 @@ import {
   IStorageService,
   autorun,
   CommandsRegistry,
+  markAsSingleton,
   MenuId,
   StorageScope,
   URI,
@@ -50,6 +51,7 @@ import {
   selectionDragUris,
   useDropTarget,
   dragContainsResources,
+  type IScrollStatePersister,
   type ITreeDataSource,
   type ITreeRowRenderContext,
 } from '@universe-editor/workbench-ui'
@@ -78,6 +80,13 @@ import {
   type ViewMode,
 } from './scmShared.js'
 import { scmViewState } from './scmViewState.js'
+import {
+  peekCollapsedIds,
+  peekScrollTop,
+  persistCollapsedIds,
+  persistScrollTop,
+  prefetchScmTreeState,
+} from './scmTreeState.js'
 import styles from './ScmView.module.css'
 
 const VIEW_MODE_STORAGE_KEY = 'scm.viewMode'
@@ -849,6 +858,9 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
     parentMap: new Map(),
     collapsibleIds: [],
   })
+  // Key the persisted tree state by repository — rootUri is stable across
+  // reconnects; fall back to the provider id when there is no workspace root.
+  const repoKey = model.rootUri ?? model.id
   const treeModel = useOwnedTreeModel<ScmNode>(() => {
     const dataSource: ITreeDataSource<ScmNode> = {
       getId: (n) => n.id,
@@ -859,8 +871,40 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
     }
     // Groups and folders default to expanded so the first render shows content
     // without depending on a post-mount event reaching the <Tree> subscription.
-    return new TreeModel<ScmNode>({ dataSource, defaultExpanded: (n) => n.kind !== 'file' })
+    const created = new TreeModel<ScmNode>({
+      dataSource,
+      defaultExpanded: (n) => n.kind !== 'file',
+    })
+    // Seed the persisted folding before the first paint: the parent only mounts
+    // this view after prefetchScmTreeState has populated the cache, so the
+    // restore is synchronous and the default-expanded state never flashes.
+    const collapsed = peekCollapsedIds(repoKey)
+    if (collapsed && collapsed.length > 0) {
+      created.setExpansion(collapsed.map((id) => [id, false] as const))
+    }
+    return created
   })
+
+  // Mirror folding changes into storage. refresh() fires this event without
+  // touching expansion state, but persistCollapsedIds dedupes identical lists.
+  useEffect(() => {
+    const d = markAsSingleton(
+      treeModel.onDidChangeStructure(() => {
+        persistCollapsedIds(storage, repoKey, treeModel.getCollapsedIds())
+      }),
+    )
+    return () => d.dispose()
+  }, [treeModel, storage, repoKey])
+
+  // Scroll restore with a durable backend: the unmount save lands in WORKSPACE
+  // storage, so the position survives a window reload too.
+  const scrollPersister = useMemo<IScrollStatePersister>(
+    () => ({
+      load: () => peekScrollTop(repoKey),
+      save: (_key, top) => persistScrollTop(storage, repoKey, top),
+    }),
+    [storage, repoKey],
+  )
 
   // Bump when any group's resources / label / visibility change.
   const [dataRevision, setDataRevision] = useState(0)
@@ -1201,6 +1245,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
         virtualListClassName={styles['virtualList'] ?? ''}
         rootRef={treeRef}
         scrollStateKey={`scm:${model.id}`}
+        scrollStatePersister={scrollPersister}
         indentBase={0}
         renderRow={renderRow}
         onActivate={(node, opts) => {
@@ -1290,12 +1335,35 @@ export function ScmView() {
 
   const selected = sourceControls.find((sc) => sc.rootUri === selectedRootUri) ?? sourceControls[0]
 
+  // Gate the provider view on its persisted tree state having been prefetched:
+  // the TreeModel seeds folding synchronously in its create callback, so the
+  // restored state must already be in the module cache — otherwise the first
+  // paint flashes default-expanded before a late restore collapses rows again.
+  // The tick only re-renders once the async prefetch lands; the readiness check
+  // itself reads the cache synchronously during render.
+  const selectedRepoKey = selected ? (selected.rootUri ?? selected.id) : undefined
+  const [, setPrefetchTick] = useState(0)
+  useEffect(() => {
+    if (selectedRepoKey === undefined || peekCollapsedIds(selectedRepoKey) !== undefined) return
+    let active = true
+    void prefetchScmTreeState(storage, selectedRepoKey).then(() => {
+      if (active) setPrefetchTick((v) => v + 1)
+    })
+    return () => {
+      active = false
+    }
+  }, [storage, selectedRepoKey])
+  const treeStateReady =
+    selectedRepoKey !== undefined && peekCollapsedIds(selectedRepoKey) !== undefined
+
   return (
     <div className={styles['scmView']} tabIndex={-1}>
       {!selected ? (
         <div className={styles['empty']}>
           {localize('scm.empty', 'No source control providers registered.')}
         </div>
+      ) : !treeStateReady ? (
+        <div className={styles['empty']} />
       ) : (
         <ScmProviderView key={selected.handle} model={selected} revision={revision} />
       )}

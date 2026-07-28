@@ -25,7 +25,7 @@ import {
   type Ref,
 } from 'react'
 import { VirtualList, type VirtualListHandle } from '../list/VirtualList.js'
-import { useScrollRestore } from '../list/useScrollRestore.js'
+import { useScrollRestore, type IScrollStatePersister } from '../list/useScrollRestore.js'
 import { markAsSingleton } from '@universe-editor/platform'
 import { type IVisibleNode, type TreeModel } from './TreeModel.js'
 import { useTreeModel } from './useTreeModel.js'
@@ -91,6 +91,12 @@ export interface ITreeProps<T> {
    * ScrollStateCache (survives container switches, not a window reload).
    */
   readonly scrollStateKey?: string
+  /**
+   * Custom scroll-position backing store (e.g. one that also mirrors to durable
+   * storage so the position survives a window reload). Defaults to the
+   * in-memory ScrollStateCache. Must be a stable object across renders.
+   */
+  readonly scrollStatePersister?: IScrollStatePersister
 }
 
 export function Tree<T>(props: ITreeProps<T>) {
@@ -112,6 +118,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     onFocus,
     activateNonLeafOnEnter = false,
     scrollStateKey,
+    scrollStatePersister,
   } = props
 
   const { selectionVersion, visibleNodes } = useTreeModel(model)
@@ -139,7 +146,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     (): HTMLElement | null => virtualRef.current?.getScrollElement() ?? containerRef.current,
     [],
   )
-  useScrollRestore(scrollStateKey, getScrollElement)
+  useScrollRestore(scrollStateKey, getScrollElement, scrollStatePersister)
 
   // Reveal: defer scroll to after commit. Prefer scrollIntoView on the row
   // element (works virtual + non-virtual); fall back to scrollToIndex when the

@@ -205,4 +205,47 @@ describe('TreeModel', () => {
       expect(model.selection).toEqual([])
     })
   })
+
+  describe('getCollapsedIds', () => {
+    const foldingModel = () => {
+      const roots: N[] = [
+        { id: 'a', children: [{ id: 'a1' }] },
+        { id: 'b', children: [{ id: 'b1' }] },
+      ]
+      return {
+        roots,
+        model: new TreeModel({ dataSource: eagerSource(roots), defaultExpanded: () => true }),
+      }
+    }
+
+    it('starts empty: default-expanded nodes are not a diff', () => {
+      const { model } = foldingModel()
+      model.getVisibleNodes() // materialise default-expanded states
+      expect(model.getCollapsedIds()).toEqual([])
+    })
+
+    it('lists user-collapsed nodes and drops them again on re-expand', async () => {
+      const { model, roots } = foldingModel()
+      model.getVisibleNodes()
+      model.collapse(roots[0]!)
+      expect(model.getCollapsedIds()).toEqual(['a'])
+      await model.expand(roots[0]!)
+      expect(model.getCollapsedIds()).toEqual([])
+    })
+
+    it('round-trips through setExpansion on a fresh model', () => {
+      const { model: first, roots } = foldingModel()
+      first.getVisibleNodes()
+      first.collapse(roots[0]!)
+      first.collapse(roots[1]!)
+      const persisted = first.getCollapsedIds()
+      expect([...persisted].sort()).toEqual(['a', 'b'])
+
+      const { model: second } = foldingModel()
+      second.setExpansion(persisted.map((id) => [id, false] as const))
+      expect(second.isExpanded('a')).toBe(false)
+      expect(second.isExpanded('b')).toBe(false)
+      expect(ids(second)).toEqual(['a', 'b']) // collapsed — children stay hidden
+    })
+  })
 })

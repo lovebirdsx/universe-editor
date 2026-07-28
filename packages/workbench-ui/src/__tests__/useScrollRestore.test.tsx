@@ -1,14 +1,21 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act } from '@testing-library/react'
 import { useRef, useCallback, useState } from 'react'
-import { useScrollRestore } from '../list/useScrollRestore.js'
+import { useScrollRestore, type IScrollStatePersister } from '../list/useScrollRestore.js'
 import { ScrollStateCache } from '../list/scrollStateCache.js'
 
-function Scroller({ scrollKey }: { scrollKey: string | undefined }) {
+function Scroller({
+  scrollKey,
+  persister,
+}: {
+  scrollKey: string | undefined
+  persister?: IScrollStatePersister
+}) {
   const ref = useRef<HTMLDivElement | null>(null)
   useScrollRestore(
     scrollKey,
     useCallback(() => ref.current, []),
+    persister,
   )
   return <div ref={ref} data-testid="scroller" />
 }
@@ -117,5 +124,25 @@ describe('useScrollRestore', () => {
     // Now a mount with a normal (happy-dom) scroller where scrollTop sticks.
     const real = render(<Scroller scrollKey="agentsSessionList" />)
     expect(el(real).scrollTop).toBe(1300)
+  })
+
+  it('routes load/save through a custom persister instead of ScrollStateCache', () => {
+    // Mirrors scmTreeState: a synchronous in-memory front over durable storage.
+    const durable = new Map<string, number>()
+    const persister: IScrollStatePersister = {
+      load: (key) => durable.get(key),
+      save: (key, top) => void durable.set(key, top),
+    }
+
+    const first = render(<Scroller scrollKey="scm:git" persister={persister} />)
+    el(first).scrollTop = 42
+    first.unmount()
+
+    expect(durable.get('scm:git')).toBe(42)
+    // The default cache stays out of the loop entirely.
+    expect(ScrollStateCache.load('scm:git')).toBeUndefined()
+
+    const second = render(<Scroller scrollKey="scm:git" persister={persister} />)
+    expect(el(second).scrollTop).toBe(42)
   })
 })

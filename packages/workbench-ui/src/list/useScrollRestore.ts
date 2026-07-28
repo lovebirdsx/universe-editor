@@ -35,13 +35,28 @@ import { ScrollStateCache } from './scrollStateCache.js'
 // never fights a user who starts scrolling right after the view reappears.
 const RESTORE_WINDOW_MS = 1000
 
+/**
+ * Backing store for a scroll position. The default is the in-memory
+ * ScrollStateCache (survives container switches, not a window reload); a view
+ * that needs the position to survive a reload supplies its own persister that
+ * also mirrors to durable storage. `load` must be synchronous — prefetch any
+ * async source before the view mounts.
+ */
+export interface IScrollStatePersister {
+  load(key: string): number | undefined
+  save(key: string, scrollTop: number): void
+}
+
+const defaultPersister: IScrollStatePersister = ScrollStateCache
+
 export function useScrollRestore(
   key: string | undefined,
   getScrollElement: () => HTMLElement | null,
+  persister: IScrollStatePersister = defaultPersister,
 ): void {
   useLayoutEffect(() => {
     if (key === undefined) return
-    const saved = ScrollStateCache.load(key)
+    const saved = persister.load(key)
     const hasTarget = saved !== undefined && saved > 0
 
     let rafId = 0
@@ -81,9 +96,11 @@ export function useScrollRestore(
       // swapped (e.g. crossing the virtualization threshold) during the view's
       // lifetime, so read the current scroller's position at unmount time.
       const current = getScrollElement()
-      if (current && restored) ScrollStateCache.save(key, current.scrollTop)
+      if (current && restored) persister.save(key, current.scrollTop)
     }
     // getScrollElement is expected to be stable (reads from a ref); keyed only on
-    // `key` so a key change saves the old view and restores the new one.
-  }, [key])
+    // `key` so a key change saves the old view and restores the new one. The
+    // persister is likewise expected to be stable (a module-level or memoized
+    // object) — a new identity per render would re-run restore.
+  }, [key, persister])
 }
