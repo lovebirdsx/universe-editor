@@ -621,6 +621,12 @@
           "minimum": 1,
           "description": "%perforce.config.maxConcurrent.description%"
         },
+        "perforce.commandTimeout": {
+          "type": "number",
+          "default": 600,
+          "minimum": 0,
+          "description": "%perforce.config.commandTimeout.description%"
+        },
         "perforce.refreshInterval": {
           "type": "number",
           "default": 0,

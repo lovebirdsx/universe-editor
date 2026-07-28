@@ -50,6 +50,47 @@ import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 
 const POLL_INTERVAL_MS = 60_000
 
+/** Ceiling for one dashboard RPC before the poll declares it wedged. The host's
+ *  own worst case is ~2 credential probes (15s each) plus one fetch (30s), so
+ *  120s only fires when something below the RPC never settles at all — the
+ *  44-minute wedge, where a hung p4 spawn held the whole chain before any HTTP
+ *  happened and every later tick was dropped on the `_running` latch. */
+const DASHBOARD_DEADLINE_MS = 120_000
+/** Same defense for each per-review transitions lookup. */
+const TRANSITIONS_DEADLINE_MS = 60_000
+
+/** Phase-timing elevation threshold. A healthy poll's dashboard phase settles in
+ *  seconds (host fetch timeout is 30s); anything past this points at the same
+ *  hung-host class the deadlines guard against, so the phase line is raised to
+ *  info (visible at the default log level) instead of debug. */
+const SLOW_PHASE_MS = 30_000
+
+/** Marker error so callers can tell a deadline rejection apart from an RPC failure. */
+class DeadlineError extends Error {}
+
+/** Race a promise against a wall-clock deadline. The renderer↔host RPC has no
+ *  global timeout (and a hung host handler neither resolves nor rejects), so
+ *  without this a single wedged call holds its caller — here the poll latch —
+ *  forever. The loser keeps running in the background; its settlement is still
+ *  observed (and ignored) by the handlers below, so no unhandled rejection. */
+function withDeadline<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new DeadlineError(`${label} did not settle within ${ms}ms`))
+    }, ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (err: unknown) => {
+        clearTimeout(timer)
+        reject(err instanceof Error ? err : new Error(String(err)))
+      },
+    )
+  })
+}
+
 /** Master switch for the whole background poll (badge + notifications + status
  *  bar count). Off by default: the reviews list still refreshes on open and via
  *  its manual Refresh button, but nothing polls while the view sits closed. */
@@ -159,19 +200,28 @@ export class SwarmReviewNotificationContribution
     if (!CommandsRegistry.getCommand(SwarmCommands.dashboard)) return
     this._running = true
     const startedAt = Date.now()
+    let dashboardMs = 0
+    let transitionsMs = 0
     try {
       // `force: true` bypasses the dashboard's 60s TTL cache: this poll is the
       // only thing driving new-review detection, so a stale cached list would
       // never surface a review that appeared within the window and we'd never
       // notify. (Mirrors the old status-bar poll, which also forced.)
-      const dashboard = await this._commands.executeCommand<SwarmDashboardResult>(
-        SwarmCommands.dashboard,
-        { force: true },
+      const dashboardStartedAt = Date.now()
+      const dashboard = await withDeadline(
+        this._commands.executeCommand<SwarmDashboardResult>(SwarmCommands.dashboard, {
+          force: true,
+        }),
+        DASHBOARD_DEADLINE_MS,
+        'dashboard RPC',
       )
+      dashboardMs = Date.now() - dashboardStartedAt
       // `undefined` = the perforce extension host hasn't registered the command yet
       // (activation race). Skip this tick without disturbing the primed baseline.
       if (dashboard === undefined) return
+      const transitionsStartedAt = Date.now()
       const displayed = await this._computeDisplayed(dashboard)
+      transitionsMs = Date.now() - transitionsStartedAt
       // The Activity Bar badge mirrors the sidebar's group scope, which — unlike
       // the notification set below — includes open reviews authored by the user.
       swarmNeedsActionCount.set(displayed.length)
@@ -180,14 +230,27 @@ export class SwarmReviewNotificationContribution
       if (typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true) {
         swarmNotificationE2E.lastActionable = actionable.map((r) => r.id)
       }
-      this._logger.debug(`poll ok in ${Date.now() - startedAt}ms: ${actionable.length} actionable`)
+      // Per-phase timing is what the 44-minute wedge lacked: a poll stuck in the
+      // dashboard phase points at the host-side p4 credential probes; stuck in
+      // the transitions phase points at per-review getTransitions. Slow phases
+      // are raised to info so they show at the default log level.
+      const okMessage =
+        `poll ok in ${Date.now() - startedAt}ms ` +
+        `(dashboard ${dashboardMs}ms, transitions ${transitionsMs}ms): ${actionable.length} actionable`
+      if (dashboardMs > SLOW_PHASE_MS || transitionsMs > SLOW_PHASE_MS) {
+        this._logger.info(`slow phase — ${okMessage}`)
+      } else {
+        this._logger.debug(okMessage)
+      }
       this._notifyNew(actionable)
     } catch (err) {
       // Swarm unconfigured / offline / timed out — stay quiet on the UI, but NOT
       // in the log: a failing poll that swallows its error is invisible (the
       // "zero notifications, no diagnostics" bug class).
       this._logger.warn(
-        `poll failed after ${Date.now() - startedAt}ms: ${err instanceof Error ? err.message : String(err)}`,
+        `poll failed after ${Date.now() - startedAt}ms ` +
+          `(dashboard ${dashboardMs}ms, transitions ${transitionsMs}ms): ` +
+          `${err instanceof Error ? err.message : String(err)}`,
       )
     } finally {
       this._running = false
@@ -218,11 +281,25 @@ export class SwarmReviewNotificationContribution
     await Promise.all(
       reviews.map(async (review) => {
         if (cache[review.id]) return
-        const result =
-          (await this._commands
-            .executeCommand<SwarmTransitionDto[]>(SwarmCommands.getTransitions, review.id)
-            .catch(() => undefined)) ?? []
-        cache[review.id] = result
+        const result = await withDeadline(
+          this._commands.executeCommand<SwarmTransitionDto[]>(
+            SwarmCommands.getTransitions,
+            review.id,
+          ),
+          TRANSITIONS_DEADLINE_MS,
+          `getTransitions RPC (review #${review.id})`,
+        ).catch((err: unknown) => {
+          // A wedged transitions lookup must not wedge the poll: skip the
+          // review's transitions and log it — the same hung-host class as the
+          // dashboard deadline, one level down.
+          if (err instanceof DeadlineError) this._logger.warn(err.message)
+          return undefined
+        })
+        // On failure leave the entry ABSENT, not empty: filterNeedsAction keeps
+        // a review whose transitions haven't loaded (optimistic) but drops one
+        // whose loaded transitions lack Approve — caching `[]` here would
+        // silently hide the review (and poison the sidebar's shared cache).
+        if (result !== undefined) cache[review.id] = result
       }),
     )
     swarmReviewsViewState.transitions = cache

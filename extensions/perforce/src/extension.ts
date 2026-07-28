@@ -19,7 +19,7 @@ import type {
 import { basename } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { ConcurrencyGate } from './concurrency.js'
-import { type P4Connection } from './p4Service.js'
+import { setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
 import {
   PerforceClient,
   type P4CacheOptions,
@@ -133,6 +133,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
   const maxConcurrent = await cfg.get('maxConcurrent', 4)
   const gate = new ConcurrencyGate(maxConcurrent)
+  // Bounds "hung forever", not "slow": a p4 stuck on a frozen network drive /
+  // half-open gateway TCP holds its gate slot until killed (the poll wedge).
+  setP4CommandTimeoutSeconds(await cfg.get('commandTimeout', 600))
   const fallback = await readFallbackConnection()
 
   // Result caching (server round-trips are expensive). Immutable data (submitted

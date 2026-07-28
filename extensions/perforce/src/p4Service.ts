@@ -42,6 +42,14 @@ export interface P4ExecOptions {
   readonly noClient?: boolean
   /** Override the stdout byte cap ({@link DEFAULT_MAX_OUTPUT_BYTES}). */
   readonly maxOutputBytes?: number
+  /**
+   * Kill the child when it hasn't exited within this many ms, resolving a
+   * failure result. Without it a hung p4 (frozen network-drive cwd, half-open
+   * TCP to a P4P gateway) holds its ConcurrencyGate slot forever — and with it
+   * every later command, including the Swarm credential lookups that gate all
+   * Swarm HTTP (the 44-minute poll wedge). Overrides the service default.
+   */
+  readonly timeoutMs?: number
 }
 
 /**
@@ -53,6 +61,65 @@ export interface P4ExecOptions {
  * gracefully instead. No real p4 read the editor consumes approaches this.
  */
 export const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024 * 1024
+
+/**
+ * Default lifetime of a single p4 process before it is killed. Bounds "hung
+ * forever", not "slow": legit heavy commands (reconcile over a big folder on a
+ * network drive, large submits) can take minutes, so the default stays generous
+ * and is configurable via `perforce.commandTimeout` (seconds, 0 = no timeout).
+ * Tiny read-only commands pass a much tighter per-call `timeoutMs`.
+ */
+export const DEFAULT_P4_COMMAND_TIMEOUT_MS = 600_000
+
+/** Module-level default applied to every new P4Service (set once at activate
+ *  from `perforce.commandTimeout`; tests omit it and get the constant). */
+let moduleDefaultTimeoutMs = DEFAULT_P4_COMMAND_TIMEOUT_MS
+
+/** Apply the `perforce.commandTimeout` setting (seconds; 0 disables timeouts). */
+export function setP4CommandTimeoutSeconds(seconds: number): void {
+  moduleDefaultTimeoutMs =
+    Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds * 1000) : Infinity
+}
+
+/**
+ * Shared spawn-timeout handling for {@link P4Service}: arms a timer that kills
+ * the child on expiry and reports whether the close/error path should resolve a
+ * timeout failure. `Infinity` (timeout disabled) arms nothing.
+ */
+class SpawnWatchdog {
+  private _timedOut = false
+  private readonly _timer: ReturnType<typeof setTimeout> | undefined
+
+  constructor(
+    proc: { kill: () => unknown },
+    private readonly _timeoutMs: number,
+    private readonly _label: string,
+    private readonly _log?: (msg: string) => void,
+  ) {
+    if (Number.isFinite(_timeoutMs) && _timeoutMs > 0) {
+      this._timer = setTimeout(() => {
+        this._timedOut = true
+        this._log?.(`  ${this._label} timed out after ${this._timeoutMs}ms; killing`)
+        proc.kill()
+      }, _timeoutMs)
+      // Never let a watchdog hold the host process open on its own.
+      this._timer.unref?.()
+    }
+  }
+
+  get timedOut(): boolean {
+    return this._timedOut
+  }
+
+  /** Failure message once timed out (call from the close handler). */
+  get message(): string {
+    return `${this._label} timed out after ${this._timeoutMs}ms and was killed`
+  }
+
+  dispose(): void {
+    if (this._timer) clearTimeout(this._timer)
+  }
+}
 
 /**
  * Budget (in characters) for the variable path list of a single p4 command.
@@ -162,6 +229,7 @@ export class P4Service {
     private readonly _gate: ConcurrencyGate,
     private _connection: P4Connection | undefined,
     private readonly _log?: (msg: string) => void,
+    private readonly _defaultTimeoutMs: number = moduleDefaultTimeoutMs,
   ) {}
 
   setConnection(conn: P4Connection | undefined): void {
@@ -246,12 +314,26 @@ export class P4Service {
             windowsHide: true,
             shell: false,
           })
+          const watchdog = new SpawnWatchdog(
+            proc,
+            options?.timeoutMs ?? this._defaultTimeoutMs,
+            `p4 ${args[0] ?? ''}`,
+            this._log,
+          )
           const stdout: Buffer[] = []
           const stderr: Buffer[] = []
           proc.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
           proc.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
-          proc.on('error', reject)
+          proc.on('error', (err) => {
+            watchdog.dispose()
+            reject(err)
+          })
           proc.on('close', (code) => {
+            watchdog.dispose()
+            if (watchdog.timedOut) {
+              resolve({ stdout: Buffer.alloc(0), stderr: watchdog.message, exitCode: code ?? 1 })
+              return
+            }
             resolve({
               stdout: Buffer.concat(stdout),
               stderr: Buffer.concat(stderr).toString('utf8'),
@@ -280,6 +362,12 @@ export class P4Service {
         shell: false,
       })
       const maxBytes = options?.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
+      const watchdog = new SpawnWatchdog(
+        proc,
+        options?.timeoutMs ?? this._defaultTimeoutMs,
+        `p4 ${args[0] ?? ''}`,
+        this._log,
+      )
       const stdout: Buffer[] = []
       const stderr: Buffer[] = []
       let stdoutBytes = 0
@@ -298,8 +386,18 @@ export class P4Service {
         stdout.push(chunk)
       })
       proc.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
-      proc.on('error', reject)
+      proc.on('error', (err) => {
+        watchdog.dispose()
+        reject(err)
+      })
       proc.on('close', (code) => {
+        watchdog.dispose()
+        if (watchdog.timedOut) {
+          // The watchdog already logged the kill; resolve a failure result so a
+          // hung command fails loudly instead of wedging its gate slot forever.
+          resolve({ stdout: '', stderr: watchdog.message, exitCode: code ?? 1 })
+          return
+        }
         if (overflowed) {
           const mb = Math.round(maxBytes / (1024 * 1024))
           const msg = `p4 ${args[0] ?? ''} output exceeded ${mb}MB and was aborted`

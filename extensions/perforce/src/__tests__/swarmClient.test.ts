@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { SwarmClient } from '../swarm/swarmClient.js'
+import { SwarmErrorCode } from '../swarm/swarmApi.js'
 import type { P4Service } from '../p4Service.js'
 
 /**
@@ -458,5 +459,129 @@ describe('SwarmClient cache', () => {
     await forced
 
     expect(fetchMock).toHaveBeenCalledTimes(4)
+  })
+})
+
+/**
+ * Credential resolution runs TWO p4 spawns (`login -s` + `tickets`). Without a
+ * cache every single HTTP request paid that — one poll round was 2·(3+N) spawns
+ * competing for the 4-slot ConcurrencyGate, amplifying any p4-side wedge. The
+ * cache (5 min TTL + in-flight coalescing + 401 invalidation) keeps the wire
+ * behavior identical while cutting the spawn storm to a trickle.
+ */
+describe('SwarmClient credential cache', () => {
+  const fetchMock = vi.fn()
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockReset()
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ reviews: [] }), { status: 200 }))
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function p4WithSpy(user: string): { p4: P4Service; exec: ReturnType<typeof vi.fn> } {
+    const exec = vi.fn(async (args: readonly string[]) => {
+      if (args[0] === 'login' && args[1] === '-s') return { exitCode: 0, stdout: '', stderr: '' }
+      if (args[0] === 'tickets') {
+        return { exitCode: 0, stdout: `server:1666 (${user}) ABC123TICKET\n`, stderr: '' }
+      }
+      return { exitCode: 1, stdout: '', stderr: '' }
+    })
+    return { p4: { exec } as unknown as P4Service, exec }
+  }
+
+  function clientWith(p4: P4Service, now?: () => number) {
+    return new SwarmClient(
+      p4,
+      { baseUrl: 'https://swarm.example.com/', apiVersion: 'v9', user: 'songxiao' },
+      undefined,
+      now ? { now } : {},
+    )
+  }
+
+  it('resolves the credential once across many requests (TTL hit)', async () => {
+    const { p4, exec } = p4WithSpy('songxiao')
+    const c = clientWith(p4)
+
+    await c.ping()
+    await c.ping()
+    await c.ping()
+
+    // login -s + tickets exactly once — not once per request.
+    expect(exec).toHaveBeenCalledTimes(2)
+    // The cached Basic header still authenticates every request.
+    for (const [, init] of fetchMock.mock.calls) {
+      expect((init as RequestInit).headers).toMatchObject({
+        authorization: expect.stringMatching(/^Basic /),
+      })
+    }
+  })
+
+  it('coalesces concurrent requests onto one in-flight credential probe', async () => {
+    let releaseProbe: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => (releaseProbe = resolve))
+    const exec = vi.fn(async (args: readonly string[]) => {
+      await gate // hold every spawn so all three requests overlap
+      if (args[0] === 'login' && args[1] === '-s') return { exitCode: 0, stdout: '', stderr: '' }
+      if (args[0] === 'tickets')
+        return { exitCode: 0, stdout: 'server:1666 (songxiao) ABC123TICKET\n', stderr: '' }
+      return { exitCode: 1, stdout: '', stderr: '' }
+    })
+    const c = clientWith({ exec } as unknown as P4Service)
+
+    const a = c.ping()
+    const b = c.ping()
+    const d = c.ping()
+    releaseProbe?.()
+    await Promise.all([a, b, d])
+
+    expect(exec).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-resolves after the TTL expires', async () => {
+    let nowMs = 1_000_000
+    const { p4, exec } = p4WithSpy('songxiao')
+    const c = clientWith(p4, () => nowMs)
+
+    await c.ping()
+    expect(exec).toHaveBeenCalledTimes(2)
+
+    nowMs += 301_000 // past the 5-minute credential TTL
+    await c.ping()
+    expect(exec).toHaveBeenCalledTimes(4)
+  })
+
+  it('invalidateCredential() forces a fresh probe on the next request', async () => {
+    const { p4, exec } = p4WithSpy('songxiao')
+    const c = clientWith(p4)
+
+    await c.ping()
+    expect(exec).toHaveBeenCalledTimes(2)
+
+    c.invalidateCredential()
+    await c.ping()
+    expect(exec).toHaveBeenCalledTimes(4)
+  })
+
+  it('caches a failed probe briefly, then retries (no spawn storm on 401 loops)', async () => {
+    let nowMs = 1_000_000
+    // Not logged in: login -s fails → no credential.
+    const exec = vi.fn(async (_args: readonly string[]) => ({
+      exitCode: 1,
+      stdout: '',
+      stderr: '',
+    }))
+    const c = clientWith({ exec } as unknown as P4Service, () => nowMs)
+
+    // No credential → the request fails as Unauthorized before any HTTP happens.
+    await expect(c.ping()).rejects.toMatchObject({ code: SwarmErrorCode.Unauthorized })
+    await expect(c.ping()).rejects.toMatchObject({ code: SwarmErrorCode.Unauthorized })
+    // One probe covers both requests within the short failure TTL.
+    expect(exec).toHaveBeenCalledTimes(1)
+
+    nowMs += 31_000 // past the 30s failure TTL
+    await expect(c.ping()).rejects.toMatchObject({ code: SwarmErrorCode.Unauthorized })
+    expect(exec).toHaveBeenCalledTimes(2)
   })
 })

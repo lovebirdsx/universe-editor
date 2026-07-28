@@ -39,6 +39,7 @@
   "perforce.config.user.description": "Fallback P4USER used when no environment variable or P4CONFIG provides one.",
   "perforce.config.client.description": "Fallback P4CLIENT (workspace) used when no environment variable or P4CONFIG provides one.",
   "perforce.config.maxConcurrent.description": "Maximum number of concurrent p4 processes. Each p4 command is a process spawn plus a server round-trip, so a low cap protects the server and this machine.",
+  "perforce.config.commandTimeout.description": "Maximum lifetime of a single p4 process in seconds before it is killed; 0 disables the timeout. Bounds 'hung forever', not 'slow': a p4 stuck on a frozen network drive or a half-open gateway connection otherwise holds its concurrency slot indefinitely.",
   "perforce.config.refreshInterval.description": "Seconds between background refreshes of the pending changelists. 0 disables polling (recommended for large depots); use explicit Refresh instead.",
   "perforce.config.autoEdit.description": "Automatically open a file for edit (p4 edit) on its first local modification. Off by default — opening files for edit is a server operation.",
   "perforce.config.autoReconcile.description": "Automatically scan the working tree for uncollected changes (files edited, created, or deleted on disk but not opened) on every refresh, populating the \"Changes to Reconcile\" group. Off by default — the scan (p4 reconcile -n) can be slow on large workspaces; use Refresh (Clean) or Collect Changes to run it on demand.",

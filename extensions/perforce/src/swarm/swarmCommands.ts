@@ -176,6 +176,9 @@ export function registerSwarmCommands(
       return result
     } catch (err) {
       if (err instanceof SwarmError && err.code === SwarmErrorCode.Unauthorized) {
+        // The cached ticket died mid-TTL (expired / revoked) — drop it so the next
+        // request re-probes p4 for a renewed one instead of replaying the corpse.
+        c.invalidateCredential()
         if (opts?.silent) {
           logger.warn('cmd', `${label}: unauthorized → skipping (poll-driven, silent)`)
           throw err

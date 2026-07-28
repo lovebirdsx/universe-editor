@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   printRevisionBytes: vi.fn(),
   dashboard: vi.fn(),
   showErrorMessage: vi.fn(),
+  invalidateCredential: vi.fn(),
 }))
 
 vi.mock('@universe-editor/extension-api', () => ({
@@ -40,6 +41,7 @@ vi.mock('../swarm/swarmClient.js', () => ({
     getTransitions = mocks.getTransitions
     obliterateReview = mocks.obliterateReview
     dashboard = mocks.dashboard
+    invalidateCredential = mocks.invalidateCredential
   },
 }))
 
@@ -177,6 +179,9 @@ describe('registerSwarmCommands dashboard failures (poll-driven, silent)', () =>
     expect(result).toBeInstanceOf(SwarmError)
     expect((result as { code: unknown }).code).toBe(SwarmErrorCode.Unauthorized)
     expect(mocks.showErrorMessage).not.toHaveBeenCalled()
+    // A 401 means the cached ticket died mid-TTL — the client must drop it so
+    // the next request re-probes p4 instead of replaying the corpse.
+    expect(mocks.invalidateCredential).toHaveBeenCalledTimes(1)
     expect(logger.warn).toHaveBeenCalledWith(
       'cmd',
       'dashboard: unauthorized → skipping (poll-driven, silent)',

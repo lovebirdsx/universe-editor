@@ -57,6 +57,18 @@ export interface SwarmCacheOptions {
 
 const DEFAULT_SWARM_CACHE_TTL_MS = 60_000
 
+/** How long a resolved Swarm credential stays cached. Resolving one costs TWO
+ *  p4 spawns (`login -s` + `tickets`), and without a cache EVERY HTTP request
+ *  paid that — one poll round was 2·(3+N) spawns hammering the 4-slot
+ *  ConcurrencyGate, the amplifier behind the poll wedge. Five minutes is far
+ *  below any realistic ticket lifetime; a genuinely expired ticket surfaces as
+ *  a 401, which invalidates the cache immediately. */
+const CREDENTIAL_TTL_MS = 300_000
+/** A FAILED resolution (not logged in / no ticket) is cached much shorter: the
+ *  user may log in at any moment and the next request should pick it up, while
+ *  a 401 loop still can't storm the gate. */
+const CREDENTIAL_FAILURE_TTL_MS = 30_000
+
 const SwarmCacheNs = {
   reviewList: 'swarm.reviewList',
   reviewDetail: 'swarm.reviewDetail',
@@ -74,6 +86,8 @@ export class SwarmClient {
   private _dashboardInFlightIsForce = false
   private _dashboardInFlightKey = ''
   private _dashboardQueuedForce: Promise<SwarmDashboard> | undefined
+  private _credCached: { basic: string | undefined; expiresAt: number } | undefined
+  private _credInFlight: Promise<string | undefined> | undefined
 
   constructor(
     private readonly _p4: P4Service,
@@ -101,6 +115,19 @@ export class SwarmClient {
   }
 
   private async _auth(): Promise<string | undefined> {
+    const now = this._now()
+    const cached = this._credCached
+    if (cached && now < cached.expiresAt) return cached.basic
+    // Coalesce concurrent requests onto one credential probe: a dashboard poll
+    // fires 3+ HTTP calls in parallel, and without this each would race its own
+    // `login -s` + `tickets` pair through the ConcurrencyGate.
+    this._credInFlight ??= this._resolveCredential().finally(() => {
+      this._credInFlight = undefined
+    })
+    return this._credInFlight
+  }
+
+  private async _resolveCredential(): Promise<string | undefined> {
     const cred = await resolveSwarmCredential(this._p4, this._config.user)
     if (!cred) {
       this._logger?.warn(
@@ -109,7 +136,20 @@ export class SwarmClient {
           'not logged in or no cached p4 ticket',
       )
     }
+    this._credCached = {
+      basic: cred?.basic,
+      expiresAt: this._now() + (cred ? CREDENTIAL_TTL_MS : CREDENTIAL_FAILURE_TTL_MS),
+    }
     return cred?.basic
+  }
+
+  /** Drop the cached credential so the next request re-probes p4. Called when a
+   *  request comes back 401 (ticket expired / revoked mid-TTL) — the fresh probe
+   *  either finds a renewed ticket or fails the request loudly, instead of
+   *  replaying a dead credential for the rest of the TTL. */
+  invalidateCredential(): void {
+    this._credCached = undefined
+    this._logger?.debug('auth', 'credential cache invalidated')
   }
 
   /** Connectivity self-check: fetch one review to confirm URL + auth work. */

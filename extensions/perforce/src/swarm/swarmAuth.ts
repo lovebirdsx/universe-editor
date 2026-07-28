@@ -23,6 +23,14 @@ export interface SwarmCredential {
   readonly basic: string
 }
 
+/**
+ * Tight spawn timeout for the credential probes. These run once per Swarm HTTP
+ * request (unless cached), are tiny read-only commands, and a hang here is
+ * exactly what wedged the notification poll in the field (the p4 process sat
+ * on a half-open connection for 44 minutes). 15s is already generous.
+ */
+const CREDENTIAL_PROBE_TIMEOUT_MS = 15_000
+
 /** Build a Basic auth header value from a user + secret (ticket/password). Pure
  *  so it can be unit-tested without a p4 round-trip. */
 export function buildBasicAuth(user: string, secret: string): string {
@@ -36,7 +44,7 @@ export function buildBasicAuth(user: string, secret: string): string {
  * non-zero = not logged in / session expired.
  */
 export async function isLoggedIn(p4: P4Service): Promise<boolean> {
-  const res = await p4.exec(['login', '-s'])
+  const res = await p4.exec(['login', '-s'], { timeoutMs: CREDENTIAL_PROBE_TIMEOUT_MS })
   return res.exitCode === 0
 }
 
@@ -74,7 +82,7 @@ export function pickTicketForUser(stdout: string, user: string): string | undefi
  */
 export async function resolveTicket(p4: P4Service, user: string): Promise<string | undefined> {
   if (!(await isLoggedIn(p4))) return undefined
-  const res = await p4.exec(['tickets'])
+  const res = await p4.exec(['tickets'], { timeoutMs: CREDENTIAL_PROBE_TIMEOUT_MS })
   if (res.exitCode !== 0) return undefined
   return pickTicketForUser(res.stdout, user)
 }

@@ -6,7 +6,7 @@
  *  a burst into one notification, respects the enable flag, and jumps on click.
  *--------------------------------------------------------------------------------------------*/
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Emitter, StorageScope, type IStorageService } from '@universe-editor/platform'
 import type {
   SwarmDashboardResult,
@@ -603,6 +603,69 @@ describe('SwarmReviewNotificationContribution', () => {
       t.executeCommand.mockImplementation(original)
       await t.refresh()
       expect(t.notify).not.toHaveBeenCalled()
+      t.dispose()
+    })
+  })
+
+  // Repro for the 44-minute poll wedge: the host-side dashboard handler never
+  // settled at all (its p4 credential probe hung before any HTTP happened — the
+  // fetch timeout added earlier only covers the HTTP layer). A renderer-side
+  // deadline must abort the wait as a failed tick, release the `_running` latch,
+  // and let the next tick recover — no matter what hangs behind the RPC.
+  describe('a dashboard RPC that never settles (poll latch deadline)', () => {
+    afterEach(() => vi.useRealTimers())
+
+    it('aborts the wedged poll at the deadline and the next tick notifies again', async () => {
+      const t = await setup()
+      const original = t.executeCommand.getMockImplementation()!
+      // Dashboard RPC never settles (hung host handler); other commands behave.
+      t.executeCommand.mockImplementation((id: string, arg?: unknown): Promise<unknown> => {
+        if (id === 'perforce.swarm.dashboard') return new Promise(() => {})
+        return original(id, arg)
+      })
+
+      // Fake timers only AFTER setup: flush() and the priming poll need real ones.
+      vi.useFakeTimers()
+      const wedged = t.refresh()
+      // Past the dashboard deadline the poll must fail loudly and settle…
+      await vi.advanceTimersByTimeAsync(121_000)
+      await wedged
+      expect(t.logger.warn).toHaveBeenCalledWith(expect.stringContaining('dashboard RPC'))
+      vi.useRealTimers()
+
+      // …and the latch is free: with the host healthy again, the next tick
+      // reaches the dashboard and the newly-actionable review notifies.
+      t.executeCommand.mockImplementation(original)
+      t.setDashboard([review('8', { description: 'after the wedge' })])
+      await t.refresh()
+      expect(t.notify).toHaveBeenCalledTimes(1)
+      expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #8: after the wedge' })
+      t.dispose()
+    })
+
+    it('a hung per-review transitions RPC is skipped, not wedged', async () => {
+      const t = await setup({
+        config: { 'perforce.swarm.needsActionApprovableOnly': true },
+        transitions: { '2': [{ state: 'approved', label: 'Approve' }] },
+      })
+      const original = t.executeCommand.getMockImplementation()!
+      t.executeCommand.mockImplementation((id: string, arg?: unknown): Promise<unknown> => {
+        if (id === 'perforce.swarm.getTransitions' && String(arg) === '1')
+          return new Promise(() => {})
+        return original(id, arg)
+      })
+
+      vi.useFakeTimers()
+      t.setDashboard([review('1'), review('2')])
+      const poll = t.refresh()
+      await vi.advanceTimersByTimeAsync(61_000)
+      await poll
+      vi.useRealTimers()
+
+      // The hung review's transitions resolve to none → optimistic keep, so #1
+      // still notifies alongside #2 (whose transitions loaded fine).
+      expect(t.notify).toHaveBeenCalledTimes(1)
+      expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: '2 new reviews need your action' })
       t.dispose()
     })
   })

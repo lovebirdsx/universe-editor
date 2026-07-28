@@ -90,6 +90,16 @@
 - **e2e 回归**：`swarmReviewNotificationHung.spec.ts`——fake server `setHang(true)` 挂起 GET /reviews 两个 poll 周期，解除后新 review 必须仍通知（修复前闩锁卡死、恒不通知）。fake-swarm.mjs 的 `/__control__/set-hang` 端点即为此加。
 - 单测：`swarmApi.test.ts` 的 `SwarmApi request timeout`（挂起 mock 监听 `init.signal` abort 后 reject `signal.reason`，忠实模拟 undici）。
 
+### ⚠️ fetch 超时不覆盖 fetch 之前：p4 凭据探针是第二卡点（44 分钟闩锁卡死）
+
+上一节的 fetch 超时只覆盖 HTTP 层。**真实 bug（44 分钟零通知）**：挂死的 p4 进程（冻结的网络盘 / P4P 网关半开 TCP）让 `SwarmClient._auth()` 的 `login -s` + `tickets` 两个 spawn 永不返回——fetch 根本没发出，AbortSignal.timeout 从未启动。日志铁证：poll 挂 44 分钟后「**成功**」完成（无 warn、无超时）⟹ 卡点在 fetch 之前。放大器：每次 HTTP 请求都重跑 2 个 p4 spawn（无凭据缓存），一轮 poll = 2·(3+N) 次 spawn 挤 4 槽 ConcurrencyGate。修复是三层纵深：
+
+1. **根因——`P4Service._spawn` 加超时**（`perforce.commandTimeout`，默认 600s，`0` 不限）：`SpawnWatchdog` 到点 `kill()`，close 时 resolve 成失败结果（**绝不从异步回调 throw**，见主 CLAUDE.md 的宿主崩溃红线）。凭据探针单独用 15s 紧超时（`swarmAuth.ts` 的 `CREDENTIAL_PROBE_TIMEOUT_MS`）——它们小、只读、每轮 poll 都跑，挂 10 分钟才杀毫无意义。
+2. **放大器——`SwarmClient` 凭据短缓存**：`_auth()` 结果缓存 5 分钟（`CREDENTIAL_TTL_MS`）+ in-flight 合并（dashboard 并行 3 路请求共享一次探针）；失败（未登录）只缓存 30s（`CREDENTIAL_FAILURE_TTL_MS`）让重新登录快速恢复。ticket 中途失效由 **401 → `invalidateCredential()`** 兜底（guard 的 401 分支调用），缓存永不过期错认。
+3. **兜底——renderer poll 闩锁加 deadline**：`SwarmReviewNotificationContribution.refresh()` 的 dashboard RPC 用 `withDeadline`（120s）、每个 `getTransitions`（60s）——RPC 层没有全局超时，任何一层再失守闩锁也会在 2 分钟内自愈（warn 日志 + 当失败 tick 处理）。**transitions 失败不得缓存 `[]`**：`filterNeedsAction` 对「未加载」乐观保留、对「已加载但无 Approve」过滤——失败时留 `undefined`（下轮重试），缓存 `[]` 会把该 review 静默移出通知范围并污染侧栏共享的 transitions 缓存。
+
+- 单测：`swarmClient.test.ts` 的 `SwarmClient credential cache`（TTL 命中 / in-flight 合并 / 过期重探 / invalidate / 失败短缓存）、`swarmCommands.test.ts`（401 调 invalidateCredential）、renderer `SwarmReviewNotificationContribution.test.ts` 的 `a dashboard RPC that never settles`（fake timers 推过 deadline → 闩锁释放、下 tick 恢复通知；transitions 挂起 → 该 review 乐观保留仍通知）。
+
 ### ⚠️ 轮询驱动的调用用 `guard()` 的 `silent`（静默 + rethrow，绝不弹 UI 也绝不吞 fallback）
 
 `guard()` 默认在失败时弹 UI 并返回 fallback：401 分支 `await window.showErrorMessage(..., 'Login')`（**带 item 的模态确认**，promise 等用户点击才 settle），generic 分支弹错误 toast。**窗口在后台时模态无人可点 → 永不 settle**；后台 poll 每次失败弹 toast 是纯噪音。
@@ -102,9 +112,9 @@
 
 ### 🔍 通知链路的日志观测点（排查「收不到通知」先看这两处）
 
-- **host 侧（Swarm 输出频道）**：poller 启停（info）/ tick 节奏（debug）/ tick 失败（warn）；guard 的 `cmd` scope 有每次 dashboard 的 start/ok/failed（poll 静默失败带 `(silent)` 标签）；`api` scope 有每个 HTTP 请求的状态 + 耗时 + 重试。默认安静，开 `perforce.swarm.trace` 后 debug 全量（tick 心跳、请求/响应细节）。
-- **renderer 侧（`swarmNotify` logger，窗口私有日志 `window-<id>/`）**：poll 启停 / 基线 prime / **闩锁丢弃（`poll tick dropped: previous refresh still running`——闩锁卡死的第一信号，连续出现即 bug）** / poll 失败 warn（catch 不再静默）/ 通知决策（`notifying N new review(s): #ids`）/ OS toast 被门控走应用内 fallback。常规节奏是 debug 级，关键事件 info/warn 默认可见。
-- 判读套路：先看 renderer 有没有 tick 进来（无 → host poller / RPC 问题）；有 tick 但全是 dropped（→ 上一次 refresh 卡住，看 host `api` scope 是否有挂起/超时请求）；有 poll ok 但无 notifying（→ 过滤口径问题：authors 白名单 / approvable / ignore）。
+- **host 侧（Swarm 输出频道）**：poller 启停（info）/ tick 节奏（debug）/ tick 失败（warn）；guard 的 `cmd` scope 有每次 dashboard 的 start/ok/failed（poll 静默失败带 `(silent)` 标签）；`api` scope 有每个 HTTP 请求的状态 + 耗时 + 重试；`auth` scope 有凭据解析失败与 invalidate。默认安静，开 `perforce.swarm.trace` 后 debug 全量（tick 心跳、请求/响应细节）。
+- **renderer 侧（`swarmNotify` logger，窗口私有日志 `window-<id>/`）**：poll 启停 / 基线 prime / **闩锁丢弃（`poll tick dropped: previous refresh still running`——闩锁卡死的第一信号，连续出现即 bug）** / poll 失败 warn（catch 不再静默）/ **分相位计时（`poll ok in Xms (dashboard Yms, transitions Zms)`——卡 dashboard 相位指向 host 侧 p4 凭据探针，卡 transitions 相位指向逐 review 的 getTransitions；相位 >30s 升级为 `slow phase —` info）** / deadline 触发的 `did not settle within` warn / 通知决策（`notifying N new review(s): #ids`）/ OS toast 被门控走应用内 fallback。常规节奏是 debug 级，关键事件 info/warn 默认可见。
+- 判读套路：先看 renderer 有没有 tick 进来（无 → host poller / RPC 问题）；有 tick 但全是 dropped（→ 上一次 refresh 卡住，看相位计时卡在哪个阶段 + host `api`/`auth` scope 是否有挂起/超时请求）；有 poll ok 但无 notifying（→ 过滤口径问题：authors 白名单 / approvable / ignore）。
 
 ### ⚠️ 头号坑：renderer Action2 命令绝不能进扩展 `commands` 数组
 

@@ -61,6 +61,15 @@
 - **红线**：`_spawn` 的 `close`/`data` 回调是**异步**的，里面任何 throw 都无处可接 → **必须 resolve 成失败结果，绝不让异常逃逸**。加任何新的流式/缓冲逻辑（大输出命令）都守住这条：p4 命令失败是一等公民（非零退出本就不 reject），宿主崩溃不是。
 - **诊断法**：崩溃看 `<userData>/logs/<session>/extensionHost.log`（dev = `AppData/Roaming/Universe Editor - Dev/logs`），`uncaughtException` 堆栈直指 `extension.js` 行；`Buffer.toString` + `Cannot create a string longer than` 就是这个坑。测试见 `p4Service.test.ts`（`vi.mock('node:child_process')` 注入假子进程，`exec` 经并发门须 `await flush()` 再 emit）。
 
+## ⚠️ p4 子进程永不退出 → 宿主无限挂起（44 分钟闩锁卡死）
+
+`_spawn` 原本没有任何超时：一条 p4 命令 spawn 后若**永不退出**（凭据提示等待、服务器无响应、网络断在半开连接），`close` 事件永不来，promise 永不 settle。由于 renderer↔host RPC 也无全局超时，上游一层层等死——44 分钟后那条命令「成功」完成（子进程退出码 0），期间所有重试被 renderer 闩锁静默丢弃，零告警。这是「后台新 review 零通知」的头号根因（完整链路分析见 `src/swarm/CLAUDE.md`）。
+
+- **SpawnWatchdog**（`p4Service.ts`）：每条命令带 deadline 定时器，到点 `proc.kill()`，`close` 时 resolve 失败结果（`stderr` 带 `timed out after Ns and was killed`，exitCode 1）。复用「巨量 stdout」同款防护通道与红线：**watchdog 回调是异步的，绝不 throw，只 resolve 失败**；onTimeout 先把 stderr 文案拼好，防止 kill 后 close 再覆盖。测试见 `p4Service.test.ts` 的 watchdog suite（假子进程 + fake timers）。
+- **`perforce.commandTimeout`**（默认 600s，`0`=不限）：约束「永久挂死」而非「执行慢」——大 depot 的慢命令不受影响，只有真卡死才被强杀。经 `setP4CommandTimeoutSeconds` 在 `extension.ts` activate 时接线（含配置变更热更）。
+- **凭据探针特例**：`swarmAuth.ts` 的 `p4 tickets` / `p4 login -s` 探针用 `CREDENTIAL_PROBE_TIMEOUT_MS`（15s）紧超时——ticket 探针本该毫秒级返回，15s 不返回就是挂死，不能让一次探针吃掉整条 600s 预算。
+- **P4ExecOptions.timeoutMs** 可按命令覆写（测试用小值复现挂死）。
+
 
 ## ⚠️ 中文/非 ASCII 路径经 argv 传给 p4 会乱码（诊断过，**修复未落地**）
 
@@ -180,7 +189,7 @@ dirty-diff gutter 与 inline blame 原本硬编码 `git.*` 命令；已抽象为
 
 ## 配置项（`perforce.*`）
 
-`enabled`(默认 true)、`port`/`user`/`client`（连接兜底，优先 `p4 set`/P4CONFIG）、`maxConcurrent`(4)、`refreshInterval`(0=关，最小 10s)、`autoEdit`(false)、`autoReconcile`(false，每次 refresh 带 reconcile 发现)、`autoRefresh`(true，文件监视触发带 reconcile 发现的自动刷新)、`timeline.showPending`(true，Timeline 顶部待定更改条目)、`cache.*`。加新配置：`package.json` `contributes.configuration` + nls description key，读用 `workspace.getConfiguration('perforce').get(key, default)`。
+`enabled`(默认 true)、`port`/`user`/`client`（连接兜底，优先 `p4 set`/P4CONFIG）、`maxConcurrent`(4)、`commandTimeout`(600s，单个 p4 进程最长存活秒数，超时强杀；0=不限——约束「永久挂死」而非「执行慢」，见上节 SpawnWatchdog)、`refreshInterval`(0=关，最小 10s)、`autoEdit`(false)、`autoReconcile`(false，每次 refresh 带 reconcile 发现)、`autoRefresh`(true，文件监视触发带 reconcile 发现的自动刷新)、`timeline.showPending`(true，Timeline 顶部待定更改条目)、`cache.*`。加新配置：`package.json` `contributes.configuration` + nls description key，读用 `workspace.getConfiguration('perforce').get(key, default)`。
 
 ## 验证
 

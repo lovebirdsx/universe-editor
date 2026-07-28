@@ -110,3 +110,79 @@ describe('P4Service._spawn output cap', () => {
     await expect(p).rejects.toThrow('p4 not found')
   })
 })
+
+// Repro for the Swarm poll wedge: a p4 process that hangs (frozen network drive,
+// half-open TCP to a P4P gateway) never emits `close`. Without a spawn timeout it
+// holds its ConcurrencyGate slot forever — every later command queues behind it,
+// including the Swarm credential lookups (`p4 login -s` / `p4 tickets`) that gate
+// every Swarm HTTP request, so the notification poll's latch stayed wedged for
+// 44 minutes in the field. A per-command timeout must kill the child and resolve
+// a failure result (never reject — the async close handler has no catcher).
+describe('P4Service._spawn command timeout', () => {
+  let child: FakeChildProcess
+  beforeEach(() => {
+    child = new FakeChildProcess()
+    spawnMock.mockReturnValue(child)
+  })
+  afterEach(() => {
+    spawnMock.mockReset()
+  })
+
+  it('kills a hung child and resolves a failure result after timeoutMs', async () => {
+    const svc = makeService()
+    const p = svc.exec(['login', '-s'], { timeoutMs: 50 })
+    await flush()
+    // Never emit close — the child is hung. The timeout must kill it…
+    await new Promise((r) => setTimeout(r, 80))
+    expect(child.killed).toBe(true)
+    // …and the resulting close resolves a failure instead of hanging forever.
+    child.emit('close', null)
+    const result = await p
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toMatch(/timed out after 50ms/)
+  })
+
+  it('a fast command is unaffected by the timeout', async () => {
+    const svc = makeService()
+    const p = svc.exec(['tickets'], { timeoutMs: 1000 })
+    await flush()
+    child.stdout.emit('data', Buffer.from('p4:1666 (user) ABC123'))
+    child.emit('close', 0)
+    const result = await p
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('ABC123')
+    expect(child.killed).toBe(false)
+  })
+
+  it('applies the default timeout when no per-call override is given', async () => {
+    const svc = new P4Service('/repo', new ConcurrencyGate(4), undefined, undefined, 50)
+    const p = svc.exec(['info'])
+    await flush()
+    await new Promise((r) => setTimeout(r, 80))
+    expect(child.killed).toBe(true)
+    child.emit('close', null)
+    const result = await p
+    expect(result.stderr).toMatch(/timed out after 50ms/)
+  })
+
+  it('a killed slot frees the concurrency gate for queued commands', async () => {
+    const gate = new ConcurrencyGate(1)
+    const svc = new P4Service('/repo', gate, undefined)
+    const hung = svc.exec(['opened'], { timeoutMs: 50 })
+    await flush()
+    // Second command queues behind the hung one (gate of 1).
+    const queuedChild = new FakeChildProcess()
+    spawnMock.mockReturnValue(queuedChild)
+    const queued = svc.exec(['tickets'], { timeoutMs: 1000 })
+    await new Promise((r) => setTimeout(r, 80))
+    expect(child.killed).toBe(true)
+    child.emit('close', null)
+    await hung
+    // The queued command gets its own child and completes normally.
+    await flush()
+    queuedChild.stdout.emit('data', Buffer.from('ok'))
+    queuedChild.emit('close', 0)
+    const result = await queued
+    expect(result.stdout).toBe('ok')
+  })
+})
