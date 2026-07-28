@@ -101,15 +101,20 @@ function provideFileSymbols(
     )
   }
 
-  // Keep the list in sync with the outline (symbols may arrive after open, e.g.
-  // a just-opened file). The editor isn't edited while focused here, so this
-  // effectively runs once.
+  // Freeze after the first non-empty population: live-updating while the
+  // picker is open (e.g. a running session's timeline outline) makes the list
+  // jump under the user. An empty list stays subscribed so late-arriving
+  // symbols (e.g. a just-opened file) still populate once.
+  let frozen = false
   disposables.add(
     autorun((r) => {
+      if (frozen) return
       const model = outline.outline.read(r)
       const flat = model ? flattenOutline(model.roots) : []
       byId.clear()
-      picker.items = buildItems(flat, model?.languageId, byId)
+      const items = buildItems(flat, model?.languageId, byId)
+      picker.items = items
+      if (items.length > 0) frozen = true
     }),
   )
 
