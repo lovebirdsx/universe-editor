@@ -1262,7 +1262,40 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
               title: localize('gitGraph.localBranchName', 'Local branch name'),
               initialValue: suggested,
             })
-            if (local?.trim()) runOp(GitGraphCommands.checkoutRemote, name, local.trim())
+            const localName = local?.trim()
+            if (!localName) return
+            const branches = await commands.executeCommand<string[]>(GitGraphCommands.getBranches)
+            if (!branches?.includes(localName)) {
+              runOp(GitGraphCommands.checkoutRemote, name, localName)
+              return
+            }
+            const offer = await dialog.confirm({
+              message: localize(
+                'gitGraph.checkoutRemote.exists',
+                "Branch '{name}' already exists locally.",
+                { name: localName },
+              ),
+              detail: localize(
+                'gitGraph.checkoutRemote.offerReset',
+                "You can reset it to the latest commit of '{remote}' instead.",
+                { remote: name },
+              ),
+              primaryButton: localize('gitGraph.checkoutRemote.resetToRemote', 'Reset to Remote…'),
+            })
+            if (!offer.confirmed) return
+            const sure = await dialog.confirm({
+              message: localize('gitGraph.resetToRemote.confirm', "Reset '{name}' to '{remote}'?", {
+                name: localName,
+                remote: name,
+              }),
+              detail: localize(
+                'gitGraph.resetToRemote.detail',
+                'Local commits that are not on the remote will be discarded.',
+              ),
+              primaryButton: localize('gitGraph.resetToRemote.button', 'Reset'),
+              type: 'warning',
+            })
+            if (sure.confirmed) runOp(GitGraphCommands.resetBranchToRemote, name, localName)
           },
         },
         {
@@ -1295,7 +1328,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       ]
       setMenu({ x: e.clientX, y: e.clientY, items })
     },
-    [dialog, runOp],
+    [commands, dialog, runOp],
   )
 
   const openTagMenu = useCallback(

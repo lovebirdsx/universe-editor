@@ -147,6 +147,48 @@ export const checkoutRemote = (
   log: Log,
 ): Promise<GitExecResult> => gitExec(['checkout', '-b', localName, '--track', remoteRef], root, log)
 
+/**
+ * Reset an existing local branch to a remote-tracking ref's tip — the recovery
+ * path for "checkout as local branch" when the name is already taken. When the
+ * branch isn't checked out anywhere it is force-moved, then checked out here so
+ * the outcome matches the original checkout intent. When a worktree holds the
+ * branch, git refuses `branch -f`, so that worktree's HEAD is reset in place
+ * instead — a dirty holding tree is refused, as `reset --hard` would discard
+ * its uncommitted changes. Upstream is (re)pointed at the remote ref either way.
+ */
+export const resetBranchToRemote = async (
+  root: string,
+  remoteRef: string,
+  localName: string,
+  log: Log,
+): Promise<GitExecResult> => {
+  const wtRes = await gitExec(['worktree', 'list', '--porcelain'], root, log)
+  const worktrees = wtRes.exitCode === 0 ? parseWorktrees(wtRes.stdout) : []
+  const holder = worktrees.find((wt) => wt.branch === localName)
+
+  if (holder) {
+    const isCurrent = norm(holder.path) === norm(root)
+    const status = await gitExec(['status', '--porcelain'], holder.path, log)
+    if (status.exitCode !== 0) return status
+    if (status.stdout.trim()) {
+      return failure(
+        isCurrent
+          ? `The working tree has uncommitted changes; commit or stash them before resetting '${localName}'.`
+          : `Worktree at '${holder.path}' has '${localName}' checked out with uncommitted changes; commit or stash them there before resetting.`,
+      )
+    }
+    const res = await gitExec(['reset', '--hard', remoteRef], holder.path, log)
+    if (res.exitCode !== 0) return res
+    await gitExec(['branch', '--set-upstream-to', remoteRef, localName], root, log)
+    return res
+  }
+
+  const res = await gitExec(['branch', '-f', localName, remoteRef], root, log)
+  if (res.exitCode !== 0) return res
+  await gitExec(['branch', '--set-upstream-to', remoteRef, localName], root, log)
+  return gitExec(['checkout', localName], root, log)
+}
+
 export const deleteRemoteBranch = async (
   root: string,
   remote: string,
