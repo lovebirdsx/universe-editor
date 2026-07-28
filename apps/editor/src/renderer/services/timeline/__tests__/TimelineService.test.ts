@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ContextKeyService, URI } from '@universe-editor/platform'
+import { ContextKeyService, URI, UriIdentityService } from '@universe-editor/platform'
 import type { IExtHostTimeline } from '@universe-editor/extensions-common'
 import { TimelineService } from '../TimelineService.js'
 
@@ -8,7 +8,7 @@ const UNTITLED = URI.parse('untitled:Untitled-1')
 
 function makeService() {
   const contextKeys = new ContextKeyService()
-  const service = new TimelineService(contextKeys)
+  const service = new TimelineService(contextKeys, new UriIdentityService('linux'))
   return { contextKeys, service }
 }
 
@@ -85,6 +85,18 @@ describe('TimelineService', () => {
     service.followUri(fileB)
     expect(service.uri.get()?.toString()).toBe(fileB.toString())
     expect(service.pinnedUri.get()).toBeUndefined()
+  })
+
+  it('followUri keeps the current value when the same file arrives as a fresh instance', () => {
+    const { service } = makeService()
+    service.followUri(FILE_A)
+    const before = service.uri.get()
+
+    service.followUri(URI.parse('file:///repo/a.ts'))
+    expect(service.uri.get()).toBe(before)
+
+    service.followUri(undefined)
+    expect(service.uri.get()).toBeUndefined()
   })
 
   it('reset drops providers, the ext host proxy and the follow state', async () => {

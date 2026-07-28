@@ -16,6 +16,7 @@ import {
   Disposable,
   Emitter,
   IContextKeyService,
+  IUriIdentityService,
   observableValue,
   type Event,
   type IObservable,
@@ -96,7 +97,10 @@ export class TimelineService extends Disposable implements ITimelineService, IMa
 
   private _extHost: IExtHostTimeline | undefined
 
-  constructor(@IContextKeyService contextKeyService: IContextKeyService) {
+  constructor(
+    @IContextKeyService contextKeyService: IContextKeyService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+  ) {
     super()
     this._providersObservable = observableValue('timelineProviders', [])
     this.providers = this._providersObservable
@@ -154,6 +158,9 @@ export class TimelineService extends Disposable implements ITimelineService, IMa
   /** Follow-target updates from the view (active editor changed). Pinned wins. */
   followUri(uri: URI | undefined): void {
     if (this._pinnedUri.get() !== undefined) return
+    // Same file, fresh URI instance (e.g. file editor → its diff): keep the
+    // current value so the view doesn't needlessly reload and flicker.
+    if (this._uriIdentity.isEqual(uri, this._uri.get())) return
     this._uri.set(uri, undefined)
   }
 

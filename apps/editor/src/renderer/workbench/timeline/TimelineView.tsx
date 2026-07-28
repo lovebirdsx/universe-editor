@@ -37,7 +37,7 @@ import {
 } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
-import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { getOriginalResource } from '../../services/editor/editorResourceAccessor.js'
 import {
   ITimelineService,
   type ITimelineProviderModel,
@@ -100,11 +100,12 @@ export function TimelineView() {
   const loadGenerationRef = useRef(0)
 
   // Follow the active editor unless pinned. Depending on pinnedUri re-points the
-  // view at the active editor right after an unpin.
+  // view at the active editor right after an unpin. getOriginalResource keeps the
+  // target on the file when a diff/merge of it becomes active (VSCode parity),
+  // so opening a timeline entry's diff doesn't blank the view.
   useEffect(() => {
     if (pinnedUri !== undefined) return
-    const resource = activeEditor instanceof FileEditorInput ? activeEditor.resource : undefined
-    timelineService.followUri(resource)
+    timelineService.followUri(getOriginalResource(activeEditor))
   }, [activeEditor, pinnedUri, timelineService])
 
   const activeProviders = useMemo<readonly ITimelineProviderModel[]>(() => {
