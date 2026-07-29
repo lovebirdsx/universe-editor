@@ -160,6 +160,8 @@ contributions/MarkdownDropContribution.ts   注册 documentDropEditProvider（dr
 
 15. **`.mdAnchor` 的 `vertical-align` 决定锚点跳转落点**（已修，勿回退）：`.mdAnchor` 是零占位 inline-block（`overflow:hidden` + `height:0`），按 CSS 规范其基线是 **bottom margin edge**——`vertical-align: baseline` 会让元素上边恰好落在所在行的**文字基线**上，`scrollIntoView({block:'start'})`（`MarkdownView.scrollToAnchor` / `useMarkdownReaderNav.revealAnchor`）对齐元素上边即对齐基线，基线以上的字形被裁到视口上方（"跳转落点偏下一行"）。必须用 `vertical-align: top`（对齐行盒顶部，连 half-leading 也覆盖）。几何不可在 happy-dom 测，回归用例是 e2e `smoke.markdownAnchorScroll.spec.ts`。
 
+16. **跨文件锚点的挂载期落点由 scroll-restore 统一决策**（已修，勿回退）：预览重挂载时 `useMarkdownPreviewScrollRestore` 会恢复 saved scrollTop，且在 600ms 窗口内经 ResizeObserver 反复 re-apply（programmatic 滚动不触发 wheel/pointerdown，不会提前停）——任何绕开它的挂载期滚动都会被拉回 saved 位置。旧实现在 `MarkdownPreviewRegistry.register` 时消费 pendingAnchor 直接 scrollIntoView，症状=跨文件锚点跳转→回退→再点其它锚点链接，落点永远是上一次的位置。修法：预览未挂载时 `revealAnchor` 把 fragment 存成 `MarkdownPreviewViewStateCache.saveRevealAnchor` one-shot（与 revealLine 同一 peek/clear 契约、二者互斥），restore effect 按 **anchor > revealLine > saved scrollTop** 决策，应用后把落点写回 saved 并清 one-shot；laid-out 后仍找不到的锚点视为失效、回落 saved。已挂载的预览仍走 `controller.scrollToAnchor` 同步平滑滚动。**给预览新增任何挂载期滚动意图都必须并入这个 one-shot 通道，不要旁路**。回归：`useMarkdownPreviewScrollRestore.test.tsx` + e2e `smoke.markdownAnchorScroll.spec.ts`。
+
 ### 验证
 
 ```bash

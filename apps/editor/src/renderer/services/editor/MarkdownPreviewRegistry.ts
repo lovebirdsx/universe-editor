@@ -12,6 +12,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter, type URI } from '@universe-editor/platform'
+import { MarkdownPreviewViewStateCache } from './MarkdownPreviewViewStateCache.js'
 
 export interface IMarkdownPreviewController {
   /** Scroll the preview so the block at `line` (1-based source line) is at the top. */
@@ -52,7 +53,6 @@ export interface IMarkdownPreviewController {
 
 class MarkdownPreviewRegistryImpl {
   private readonly _map = new Map<string, IMarkdownPreviewController[]>()
-  private readonly _pendingAnchors = new Map<string, string>()
   private readonly _onDidChange = new Emitter<URI>()
   readonly onDidChange = this._onDidChange.event
 
@@ -66,11 +66,6 @@ class MarkdownPreviewRegistryImpl {
     list.push(controller)
     this._map.set(key, list)
     this._onDidChange.fire(sourceUri)
-    const pendingAnchor = this._pendingAnchors.get(key)
-    if (pendingAnchor !== undefined) {
-      this._pendingAnchors.delete(key)
-      controller.scrollToAnchor(pendingAnchor)
-    }
   }
 
   unregister(sourceUri: URI, controller: IMarkdownPreviewController): void {
@@ -90,6 +85,14 @@ class MarkdownPreviewRegistryImpl {
     return list[list.length - 1]
   }
 
+  /**
+   * Scroll the preview for `sourceUri` to a heading/anchor fragment. A live
+   * (mounted) preview scrolls right away; otherwise the anchor is stashed as a
+   * one-shot in MarkdownPreviewViewStateCache, where the scroll-restore effect
+   * of the next mount applies it *instead of* the saved scrollTop — routing it
+   * through the same owner as the reveal-line request keeps the two from
+   * fighting over the landing position.
+   */
   revealAnchor(sourceUri: URI, anchor: string): void {
     if (!anchor) return
     const controller = this.get(sourceUri)
@@ -97,7 +100,7 @@ class MarkdownPreviewRegistryImpl {
       controller.scrollToAnchor(anchor)
       return
     }
-    this._pendingAnchors.set(sourceUri.toString(), anchor)
+    MarkdownPreviewViewStateCache.saveRevealAnchor(sourceUri.toString(), anchor)
   }
 
   setActive(controller: IMarkdownPreviewController): void {
@@ -114,7 +117,6 @@ class MarkdownPreviewRegistryImpl {
 
   _resetForTests(): void {
     this._map.clear()
-    this._pendingAnchors.clear()
     this._activeController = undefined
   }
 }

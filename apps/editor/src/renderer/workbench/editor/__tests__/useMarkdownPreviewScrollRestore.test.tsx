@@ -19,7 +19,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { StrictMode, useEffect, useRef, useState } from 'react'
 import { act, cleanup, render } from '@testing-library/react'
+import { URI } from '@universe-editor/platform'
 import { MarkdownPreviewViewStateCache } from '../../../services/editor/MarkdownPreviewViewStateCache.js'
+import { MarkdownPreviewRegistry } from '../../../services/editor/MarkdownPreviewRegistry.js'
 import { useMarkdownPreviewScrollRestore } from '../useMarkdownPreviewScrollRestore.js'
 
 // Capture every live ResizeObserver so a test can fire its callback on demand,
@@ -44,7 +46,8 @@ function fireResizeObservers(): void {
 
 // happy-dom leaves getBoundingClientRect at zeros and doesn't lay content out.
 // Stub the geometry collectEntries reads: root at top 0, and each `data-line`
-// block spaced 20px apart so line N maps to a distinct scrollTop.
+// block spaced 20px apart so line N maps to a distinct scrollTop. Block tops
+// track root.scrollTop like a real layout would, so re-applies stay stable.
 function stubGeometry(root: HTMLElement): void {
   root.getBoundingClientRect = (() =>
     ({
@@ -63,7 +66,7 @@ function stubGeometry(root: HTMLElement): void {
     const b = blocks[i]!
     b.getBoundingClientRect = (() =>
       ({
-        top: i * 20,
+        top: i * 20 - root.scrollTop,
         left: 0,
         right: 0,
         bottom: 0,
@@ -78,8 +81,10 @@ function stubGeometry(root: HTMLElement): void {
 
 // Stand-in for MarkdownPreviewEditor's structure: a scroll container whose
 // markdown blocks appear *after* mount (async), each carrying a data-line —
-// mirroring the real component reading its model in a useEffect.
-function Host({ stateKey }: { stateKey: string }) {
+// mirroring the real component reading its model in a useEffect. When
+// `anchorId` is set, block 5 renders as a heading carrying that data-anchor
+// (top = 5 * 20 = 100 under stubGeometry).
+function Host({ stateKey, anchorId }: { stateKey: string; anchorId?: string }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [ready, setReady] = useState(false)
   useMarkdownPreviewScrollRestore(rootRef, stateKey)
@@ -96,11 +101,17 @@ function Host({ stateKey }: { stateKey: string }) {
     <div ref={rootRef} data-testid="preview">
       {ready && (
         <div>
-          {Array.from({ length: 20 }, (_, i) => (
-            <p key={i} data-line={i}>
-              paragraph {i}
-            </p>
-          ))}
+          {Array.from({ length: 20 }, (_, i) =>
+            i === 5 && anchorId !== undefined ? (
+              <h2 key={i} data-line={i} data-anchor={anchorId}>
+                anchor heading
+              </h2>
+            ) : (
+              <p key={i} data-line={i}>
+                paragraph {i}
+              </p>
+            ),
+          )}
         </div>
       )}
     </div>
@@ -119,6 +130,7 @@ afterEach(() => {
   cleanup()
   observers.length = 0
   MarkdownPreviewViewStateCache._resetForTests()
+  MarkdownPreviewRegistry._resetForTests()
   if (RealResizeObserver) globalThis.ResizeObserver = RealResizeObserver
 })
 
@@ -167,5 +179,107 @@ describe('useMarkdownPreviewScrollRestore — reveal survives StrictMode + async
 
     expect(root.scrollTop).toBe(0)
     expect(MarkdownPreviewViewStateCache.peekRevealLine(KEY)).toBe(11)
+  })
+})
+
+describe('useMarkdownPreviewScrollRestore — cross-file anchor vs saved scrollTop', () => {
+  // Regression: clicking a `b.md#h6` link in a.md's preview, navigating back,
+  // then clicking a `b.md#h2` link landed on h6 again — the restore effect
+  // re-applied b.md's saved scrollTop (kept alive for 600ms by the
+  // ResizeObserver) on top of the freshly requested anchor.
+  it('a pending cross-file anchor wins over the saved scrollTop', () => {
+    // b.md was left scrolled at 240 by the first anchor jump…
+    MarkdownPreviewViewStateCache.save(KEY, { scrollTop: 240 })
+    // …then a link carrying a *different* fragment opened it while unmounted.
+    MarkdownPreviewRegistry.revealAnchor(URI.parse(KEY), 'jump-target')
+
+    const { container } = render(
+      <StrictMode>
+        <Host stateKey={KEY} anchorId="jump-target" />
+      </StrictMode>,
+    )
+    const root = container.querySelector<HTMLElement>('[data-testid="preview"]')!
+
+    act(() => {
+      fireResizeObservers()
+    })
+
+    // Anchor block sits at 5 * 20 = 100 — the saved 240 must not win.
+    expect(root.scrollTop).toBe(100)
+    // The landing becomes the new saved position, so a plain tab switch back
+    // returns here instead of the pre-jump offset.
+    expect(MarkdownPreviewViewStateCache.load(KEY)?.scrollTop).toBe(100)
+  })
+
+  it('re-applies the anchor position while late content keeps growing', () => {
+    MarkdownPreviewViewStateCache.save(KEY, { scrollTop: 240 })
+    MarkdownPreviewRegistry.revealAnchor(URI.parse(KEY), 'jump-target')
+
+    const { container } = render(
+      <StrictMode>
+        <Host stateKey={KEY} anchorId="jump-target" />
+      </StrictMode>,
+    )
+    const root = container.querySelector<HTMLElement>('[data-testid="preview"]')!
+
+    act(() => {
+      fireResizeObservers()
+    })
+    // Simulate a user-less nudge (late mermaid/code layout shifting scrollTop):
+    // the restore window must pin the anchor position again, not the saved one.
+    root.scrollTop = 0
+    act(() => {
+      fireResizeObservers()
+    })
+
+    expect(root.scrollTop).toBe(100)
+  })
+
+  it('an anchor that does not exist in the laid-out content falls back to the saved scrollTop', () => {
+    MarkdownPreviewViewStateCache.save(KEY, { scrollTop: 240 })
+    MarkdownPreviewRegistry.revealAnchor(URI.parse(KEY), 'no-such-anchor')
+
+    const { container } = render(
+      <StrictMode>
+        <Host stateKey={KEY} />
+      </StrictMode>,
+    )
+    const root = container.querySelector<HTMLElement>('[data-testid="preview"]')!
+
+    act(() => {
+      fireResizeObservers()
+    })
+
+    expect(root.scrollTop).toBe(240)
+  })
+
+  it('keeps the anchor request pending while content has not laid out', () => {
+    MarkdownPreviewRegistry.revealAnchor(URI.parse(KEY), 'jump-target')
+
+    const { container } = render(
+      <StrictMode>
+        <Host stateKey={KEY} anchorId="jump-target" />
+      </StrictMode>,
+    )
+    const root = container.querySelector<HTMLElement>('[data-testid="preview"]')!
+    // Strip the blocks back out before firing the observer, so every apply sees
+    // empty content — the one-shot must survive for the next (real) mount.
+    root.replaceChildren()
+
+    act(() => {
+      fireResizeObservers()
+    })
+
+    expect(root.scrollTop).toBe(0)
+    const remount = render(
+      <StrictMode>
+        <Host stateKey={KEY} anchorId="jump-target" />
+      </StrictMode>,
+    )
+    const root2 = remount.container.querySelector<HTMLElement>('[data-testid="preview"]')!
+    act(() => {
+      fireResizeObservers()
+    })
+    expect(root2.scrollTop).toBe(100)
   })
 })

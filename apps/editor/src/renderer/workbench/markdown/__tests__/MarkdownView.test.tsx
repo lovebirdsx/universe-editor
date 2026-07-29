@@ -33,6 +33,7 @@ import {
   MarkdownPreviewRegistry,
   type IMarkdownPreviewController,
 } from '../../../services/editor/MarkdownPreviewRegistry.js'
+import { MarkdownPreviewViewStateCache } from '../../../services/editor/MarkdownPreviewViewStateCache.js'
 
 // Monaco won't load under happy-dom; stub so CodeBlock falls back to plain text.
 vi.mock('../../editor/monaco/MonacoLoader.js', () => ({
@@ -53,6 +54,7 @@ vi.mock('../mermaidLoader.js', () => ({
 afterEach(() => {
   cleanup()
   MarkdownPreviewRegistry._resetForTests()
+  MarkdownPreviewViewStateCache._resetForTests()
   vi.restoreAllMocks()
   renderMock.mockReset()
 })
@@ -376,12 +378,16 @@ describe('MarkdownView', () => {
     expect(preview).toBeInstanceOf(MarkdownPreviewInput)
     expect((preview as MarkdownPreviewInput).sourceUri.path).toBe('/repo/docs/foo.md')
 
+    // The preview isn't mounted yet, so the fragment is stashed as a one-shot
+    // for its mount-time scroll restore (which applies it over any saved scroll).
+    const sourceUri = (preview as MarkdownPreviewInput).sourceUri
+    expect(MarkdownPreviewViewStateCache.peekRevealAnchor(sourceUri.toString())).toBe('hello')
+
+    // A live (already mounted) preview scrolls synchronously instead.
     const scrollToAnchor = vi.fn()
-    MarkdownPreviewRegistry.register(
-      (preview as MarkdownPreviewInput).sourceUri,
-      makePreviewController({ scrollToAnchor }),
-    )
-    expect(scrollToAnchor).toHaveBeenCalledWith('hello')
+    MarkdownPreviewRegistry.register(sourceUri, makePreviewController({ scrollToAnchor }))
+    screen.getByRole('link', { name: 'foo' }).click()
+    await waitFor(() => expect(scrollToAnchor).toHaveBeenCalledWith('hello'))
   })
 
   it('renders inline-code markdown links as clickable preview links in preview mode', async () => {
@@ -419,12 +425,8 @@ describe('MarkdownView', () => {
     expect(preview).toBeInstanceOf(MarkdownPreviewInput)
     expect((preview as MarkdownPreviewInput).sourceUri.path).toBe('/repo/docs/test2.md')
 
-    const scrollToAnchor = vi.fn()
-    MarkdownPreviewRegistry.register(
-      (preview as MarkdownPreviewInput).sourceUri,
-      makePreviewController({ scrollToAnchor }),
-    )
-    expect(scrollToAnchor).toHaveBeenCalledWith('春晓')
+    const key = (preview as MarkdownPreviewInput).sourceUri.toString()
+    expect(MarkdownPreviewViewStateCache.peekRevealAnchor(key)).toBe('春晓')
   })
 
   it('renders an empty <a id> as a zero-footprint anchor span without disturbing the layout', () => {
@@ -514,9 +516,9 @@ describe('MarkdownView', () => {
     await waitFor(() => expect(opened).toHaveLength(1))
     const preview = opened[0]!.editor as MarkdownPreviewInput
 
-    const scrollToAnchor = vi.fn()
-    MarkdownPreviewRegistry.register(preview.sourceUri, makePreviewController({ scrollToAnchor }))
-    expect(scrollToAnchor).toHaveBeenCalledWith('tbl-Abc_1')
+    expect(MarkdownPreviewViewStateCache.peekRevealAnchor(preview.sourceUri.toString())).toBe(
+      'tbl-Abc_1',
+    )
   })
 
   it('strips @ from explicit file links before resolving them', async () => {

@@ -14,6 +14,7 @@ export interface MarkdownPreviewViewState {
 class MarkdownPreviewViewStateCacheImpl {
   private readonly _map = new Map<string, MarkdownPreviewViewState>()
   private readonly _revealLines = new Map<string, number>()
+  private readonly _revealAnchors = new Map<string, string>()
 
   save(key: string, state: MarkdownPreviewViewState): void {
     this._map.set(key, state)
@@ -39,6 +40,7 @@ class MarkdownPreviewViewStateCacheImpl {
    */
   saveRevealLine(key: string, line: number): void {
     this._revealLines.set(key, line)
+    this._revealAnchors.delete(key)
   }
 
   peekRevealLine(key: string): number | undefined {
@@ -49,14 +51,36 @@ class MarkdownPreviewViewStateCacheImpl {
     this._revealLines.delete(key)
   }
 
+  /**
+   * A one-shot request to scroll the preview to a heading/anchor fragment on its
+   * next mount, set when a cross-file link (`foo.md#section`) opens a preview
+   * that isn't mounted yet. Same peek/clear contract as the reveal line — and
+   * mutually exclusive with it, since both name "the" scroll target of the next
+   * mount: the later request wins.
+   */
+  saveRevealAnchor(key: string, anchor: string): void {
+    this._revealAnchors.set(key, anchor)
+    this._revealLines.delete(key)
+  }
+
+  peekRevealAnchor(key: string): string | undefined {
+    return this._revealAnchors.get(key)
+  }
+
+  clearRevealAnchor(key: string): void {
+    this._revealAnchors.delete(key)
+  }
+
   clear(key: string): void {
     this._map.delete(key)
     this._revealLines.delete(key)
+    this._revealAnchors.delete(key)
   }
 
   _resetForTests(): void {
     this._map.clear()
     this._revealLines.clear()
+    this._revealAnchors.clear()
   }
 }
 
