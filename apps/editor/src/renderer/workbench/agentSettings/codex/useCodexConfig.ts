@@ -140,18 +140,47 @@ export function useCodexConfig(): UseCodexConfig {
     [service],
   )
 
+  const applyProfile = useCallback(
+    async (profile: CodexCredentialProfile) => {
+      // One atomic main-process step keeps auth.json + config.toml consistent.
+      const status =
+        profile.kind === 'gateway'
+          ? await service.applyCredential({
+              kind: 'gateway',
+              baseUrl: profile.baseUrl ?? '',
+              apiKey: profile.apiKey ?? '',
+              providerName: profile.label,
+            })
+          : await service.applyCredential({ kind: 'apiKey', apiKey: profile.apiKey ?? '' })
+      setSettings(await service.read())
+      setAuthStatus(status)
+      setActiveProfileId(await service.matchActiveProfile())
+    },
+    [service],
+  )
+
   const saveProfile = useCallback(
     async (profile: CodexCredentialProfile) => {
       const current = await service.readProfiles()
       const idx = current.findIndex((p) => p.id === profile.id)
       const next =
         idx >= 0 ? current.map((p) => (p.id === profile.id ? profile : p)) : [...current, profile]
+      // Read the active match before writing the edit: afterwards the edited
+      // profile no longer matches the on-disk credential until it is re-applied.
+      const wasActive = (await service.matchActiveProfile()) === profile.id
       await service.writeProfiles(next)
       setProfiles(next)
-      // Editing the in-use profile (e.g. rotating its key) may break the match.
+      // Editing the in-use profile (e.g. rotating its key) must push the new
+      // key into auth.json / config.toml too, or the agent keeps using the old
+      // credential until the profile is switched away and back.
+      if (wasActive) {
+        await applyProfile(profile)
+        return
+      }
+      // Editing a profile may make another one stop / start matching.
       setActiveProfileId(await service.matchActiveProfile())
     },
-    [service],
+    [service, applyProfile],
   )
 
   const deleteProfile = useCallback(
@@ -178,25 +207,6 @@ export function useCodexConfig(): UseCodexConfig {
       return write
     },
     [storage],
-  )
-
-  const applyProfile = useCallback(
-    async (profile: CodexCredentialProfile) => {
-      // One atomic main-process step keeps auth.json + config.toml consistent.
-      const status =
-        profile.kind === 'gateway'
-          ? await service.applyCredential({
-              kind: 'gateway',
-              baseUrl: profile.baseUrl ?? '',
-              apiKey: profile.apiKey ?? '',
-              providerName: profile.label,
-            })
-          : await service.applyCredential({ kind: 'apiKey', apiKey: profile.apiKey ?? '' })
-      setSettings(await service.read())
-      setAuthStatus(status)
-      setActiveProfileId(await service.matchActiveProfile())
-    },
-    [service],
   )
 
   const switchToChatgptLogin = useCallback(async () => {

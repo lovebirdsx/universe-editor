@@ -17,6 +17,7 @@ import {
   type ClaudeSettingsPatch,
 } from '../../../../shared/ipc/claudeConfigService.js'
 import { useService } from '../../useService.js'
+import { isProfileActive } from './credentialMatch.js'
 
 export interface UseClaudeConfig {
   readonly settings: ClaudeSettings
@@ -112,43 +113,6 @@ export function useClaudeConfig(): UseClaudeConfig {
     [service],
   )
 
-  const saveProfile = useCallback(
-    async (profile: ClaudeCredentialProfile) => {
-      const current = await service.readProfiles()
-      const idx = current.findIndex((p) => p.id === profile.id)
-      const next =
-        idx >= 0 ? current.map((p) => (p.id === profile.id ? profile : p)) : [...current, profile]
-      await service.writeProfiles(next)
-      setProfiles(next)
-    },
-    [service],
-  )
-
-  const deleteProfile = useCallback(
-    async (id: string) => {
-      const current = await service.readProfiles()
-      const next = current.filter((p) => p.id !== id)
-      await service.writeProfiles(next)
-      setProfiles(next)
-    },
-    [service],
-  )
-
-  const saveCredentialDraft = useCallback(
-    (draft: ClaudeCredentialDraft | undefined) => {
-      setCredentialDraft(draft)
-      const write = draftWrite.current
-        .catch(() => undefined)
-        .then(async () => {
-          if (draft === undefined) await storage.remove(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL)
-          else await storage.set(CREDENTIAL_DRAFT_KEY, draft, StorageScope.GLOBAL)
-        })
-      draftWrite.current = write
-      return write
-    },
-    [storage],
-  )
-
   const applyProfile = useCallback(
     async (profile: ClaudeCredentialProfile) => {
       if (profile.kind === 'apiKey') {
@@ -176,6 +140,53 @@ export function useClaudeConfig(): UseClaudeConfig {
       })
     },
     [patch],
+  )
+
+  const saveProfile = useCallback(
+    async (profile: ClaudeCredentialProfile) => {
+      const current = await service.readProfiles()
+      const previous = current.find((p) => p.id === profile.id)
+      const next =
+        previous !== undefined
+          ? current.map((p) => (p.id === profile.id ? profile : p))
+          : [...current, profile]
+      // Editing the in-use credential (e.g. rotating its key) must push the new
+      // values into settings.json too, or the agent keeps using the old key
+      // until the profile is switched away and back.
+      const currentSettings = await service.read()
+      const wasActive =
+        previous !== undefined &&
+        isProfileActive(previous, currentSettings.env ?? {}, currentSettings.model)
+      await service.writeProfiles(next)
+      setProfiles(next)
+      if (wasActive) await applyProfile(profile)
+    },
+    [service, applyProfile],
+  )
+
+  const deleteProfile = useCallback(
+    async (id: string) => {
+      const current = await service.readProfiles()
+      const next = current.filter((p) => p.id !== id)
+      await service.writeProfiles(next)
+      setProfiles(next)
+    },
+    [service],
+  )
+
+  const saveCredentialDraft = useCallback(
+    (draft: ClaudeCredentialDraft | undefined) => {
+      setCredentialDraft(draft)
+      const write = draftWrite.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (draft === undefined) await storage.remove(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL)
+          else await storage.set(CREDENTIAL_DRAFT_KEY, draft, StorageScope.GLOBAL)
+        })
+      draftWrite.current = write
+      return write
+    },
+    [storage],
   )
 
   return {

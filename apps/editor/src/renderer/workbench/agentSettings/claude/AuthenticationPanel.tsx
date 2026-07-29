@@ -27,6 +27,7 @@ import {
   type ClaudeCredentialProfile,
 } from '../../../../shared/ipc/claudeConfigService.js'
 import type { UseClaudeConfig } from './useClaudeConfig.js'
+import { isProfileActive } from './credentialMatch.js'
 import { runClaudeLogin } from './claudeLogin.js'
 import { ConfigFileLink } from '../ConfigFileLink.js'
 import { ConnectivityDot } from '../ConnectivityDot.js'
@@ -36,22 +37,6 @@ const API_KEY = 'ANTHROPIC_API_KEY'
 const AUTH_TOKEN = 'ANTHROPIC_AUTH_TOKEN'
 const BASE_URL = 'ANTHROPIC_BASE_URL'
 const SMALL_FAST_MODEL = 'ANTHROPIC_SMALL_FAST_MODEL'
-
-/** True when the profile's credentials exactly match the active settings.json env. */
-function isProfileActive(
-  profile: ClaudeCredentialProfile,
-  env: Record<string, string>,
-  model: string | undefined,
-): boolean {
-  if (profile.kind === 'apiKey') {
-    return !env[AUTH_TOKEN] && !env[BASE_URL] && !!env[API_KEY] && env[API_KEY] === profile.apiKey
-  }
-  if (env[AUTH_TOKEN] !== profile.authToken || env[BASE_URL] !== profile.baseUrl) return false
-  // A model preset is part of the gateway identity: if the profile pins a model,
-  // it is only "in use" when settings.model matches too.
-  const pinned = profile.model?.trim()
-  return !pinned || model === pinned
-}
 
 /** Whether the OAuth login is the credential the agent will currently use. */
 function isLoginActive(env: Record<string, string>, auth: ClaudeAuthStatus): boolean {
