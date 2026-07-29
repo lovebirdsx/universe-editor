@@ -113,7 +113,9 @@ function isSeparator(item: QuickPickInput<IQuickPickItem>): item is IQuickPickSe
  * (the leading section and every separator-led one) is filtered and sorted by
  * score independently, empty sections drop out, and matched ranges are attached
  * as highlights. An empty query keeps the original order (all scores tie and the
- * sort is stable), preserving e.g. document order for the symbol picker.
+ * sort is stable), preserving e.g. document order for the symbol picker. With
+ * `keepOrder` the score/MRU sort is skipped entirely — sections stay in provider
+ * order (e.g. a date-ordered commit list where recency must win over relevance).
  */
 function fuzzyFilterAndSort(
   items: readonly QuickPickInput<IQuickPickItem>[],
@@ -121,6 +123,7 @@ function fuzzyFilterAndSort(
   matchOnDescription: boolean,
   matchOnDetail: boolean,
   mruIds: readonly string[],
+  keepOrder: boolean,
 ): QuickPickInput<IQuickPickItem>[] {
   const result: QuickPickInput<IQuickPickItem>[] = []
   let pendingSeparator: IQuickPickSeparator | undefined
@@ -130,7 +133,7 @@ function fuzzyFilterAndSort(
     if (section.length === 0) return
     // Score-descending; ties (notably an empty query, where all score 0) fall
     // back to MRU so a "recently used" head is preserved.
-    section.sort((a, b) => b.score - a.score || compareMru(a.item, b.item, mruIds))
+    if (!keepOrder) section.sort((a, b) => b.score - a.score || compareMru(a.item, b.item, mruIds))
     if (pendingSeparator) result.push(pendingSeparator)
     for (const { item } of section) result.push(item)
     pendingSeparator = undefined
@@ -444,6 +447,7 @@ export function QuickPickPanel({
       matchOnDescription,
       matchOnDetail,
       mruIds,
+      filterMode === 'fuzzyKeepOrder',
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -459,10 +463,11 @@ export function QuickPickPanel({
 
   const sortedFiltered = useMemo(
     () => {
-      // Fuzzy mode is already relevance-sorted (with separator grouping) by
-      // fuzzyFilterAndSort. External filtering and word mode keep provider order,
-      // applying only MRU and, for word mode, an alphabetical tiebreak.
-      if (filterExternally || filterMode === 'fuzzy' || filtered.some(isSeparator)) return filtered
+      // Fuzzy modes are already relevance-sorted (with separator grouping) by
+      // fuzzyFilterAndSort — 'fuzzyKeepOrder' deliberately keeps provider order.
+      // External filtering and word mode keep provider order, applying only MRU
+      // and, for word mode, an alphabetical tiebreak.
+      if (filterExternally || filterMode !== 'word' || filtered.some(isSeparator)) return filtered
       return [...filtered].sort((a, b) => {
         if (isSeparator(a) || isSeparator(b)) return 0
         const mruCompare = compareMru(a, b, mruIds)

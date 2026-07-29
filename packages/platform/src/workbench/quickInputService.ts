@@ -71,7 +71,13 @@ export interface IQuickPickItemHighlights {
 
 export type QuickPickInput<T extends IQuickPickItem = IQuickPickItem> = T | IQuickPickSeparator
 
-export type QuickPickFilterMode = 'fuzzy' | 'word'
+/**
+ * - `'fuzzy'`: fuzzy match + relevance sort (MRU tiebreak).
+ * - `'word'`: substring match, sorted by MRU then label.
+ * - `'fuzzyKeepOrder'`: fuzzy match (with highlights) but no re-sorting — the
+ *   provider's item order is preserved (e.g. a date-ordered commit list).
+ */
+export type QuickPickFilterMode = 'fuzzy' | 'word' | 'fuzzyKeepOrder'
 export type QuickPickPresentation = 'default' | 'compact'
 
 /**

@@ -101,6 +101,9 @@ export class CommitRefPicker {
     })
     qp.matchOnDescription = true
     qp.matchOnDetail = true
+    // Keep the date order from getCommits (most recent first) even while
+    // filtering — a relevance or MRU re-sort would scatter matching commits.
+    qp.filterMode = 'fuzzyKeepOrder'
     // Rows carry a trailing `author · time` column: widen the panel and keep
     // the column intact (long subjects truncate with an ellipsis instead of
     // squeezing the metadata away).

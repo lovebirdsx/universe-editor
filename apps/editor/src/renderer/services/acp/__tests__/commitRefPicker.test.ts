@@ -18,6 +18,7 @@ import {
   type IQuickInputService,
   type IQuickPick,
   type IQuickPickItem,
+  type QuickPickFilterMode,
   type QuickPickInput,
   type QuickPickPresentation,
 } from '@universe-editor/platform'
@@ -53,7 +54,7 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   prefix = ''
   mruIds: readonly string[] = []
   filterExternally = false
-  filterMode: 'fuzzy' | 'word' = 'fuzzy'
+  filterMode: QuickPickFilterMode = 'fuzzy'
   matchOnDescription = false
   matchOnDetail = false
   presentation: QuickPickPresentation = 'default'
@@ -304,6 +305,9 @@ describe('CommitRefPicker', () => {
       { maxCommits: 200, order: 'date', includeRemotes: true },
     ])
     expect(quickInput.picker?.busy).toBe(false)
+    // Date order must survive filtering — the panel must not re-sort by
+    // relevance or MRU.
+    expect(quickInput.picker?.filterMode).toBe('fuzzyKeepOrder')
     // Wide panel + preserved description keep the trailing `author · time`
     // column from being squeezed by long subjects.
     expect(quickInput.picker).toMatchObject({ width: 760, preserveDescription: true })

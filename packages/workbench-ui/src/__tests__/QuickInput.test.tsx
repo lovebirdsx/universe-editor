@@ -217,6 +217,33 @@ describe('QuickPickPanel prefix mode', () => {
     expect(screen.queryByText('Select AI Model')).toBeNull()
   })
 
+  it('fuzzyKeepOrder filters with fuzzy matching but preserves provider order', () => {
+    render(
+      <QuickPickPanel
+        state={makeState({
+          items: [
+            { id: 'recent', label: 'a x b x c' },
+            { id: 'older', label: 'abc' },
+            { id: 'unrelated', label: 'zzz' },
+          ],
+          prefix: undefined,
+          filterMode: 'fuzzyKeepOrder',
+          mruIds: ['older'],
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'abc' } })
+
+    const options = screen.getAllByRole('option').map((option) => option.textContent)
+    // 'abc' is the stronger fuzzy hit and the MRU item, yet neither may re-sort
+    // the list — the provider's date order (most recent first) wins.
+    expect(options).toHaveLength(2)
+    expect(options[0]).toContain('a x b x c')
+    expect(options[1]).toContain('abc')
+  })
+
   it('does not match description or detail unless enabled', () => {
     render(
       <QuickPickPanel
