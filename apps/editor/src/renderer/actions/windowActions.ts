@@ -248,9 +248,10 @@ export class AboutAction extends Action2 {
     const info = await hostService.getVersionInfo()
     const detail = localize(
       'about.detail',
-      'Version: {version}\nElectron: {electron}\nChromium: {chromium}\nNode: {node}\nV8: {v8}',
+      'Version: {version}\nExtension API: {extensionApi}\nElectron: {electron}\nChromium: {chromium}\nNode: {node}\nV8: {v8}',
       {
         version: info.version,
+        extensionApi: info.extensionApi,
         electron: info.electron,
         chromium: info.chromium,
         node: info.node,

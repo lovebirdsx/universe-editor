@@ -10,10 +10,10 @@
  *  --dir 是服务器上的**市场根**，与 server 的 --gallery-root 一致：
  *    - 合并部署（市场是更新目录子树）：--dir /srv/universe-editor/gallery
  *    - 独立部署（市场单独一处）：      --dir /srv/extensions
- *  本脚本把 registry.json / control.json / assets/** 直接同步到该根下，不再硬拼 gallery/ 子段。
+ *  本脚本把 registry.json / control.json / assets/** / sdk/** 直接同步到该根下，不再硬拼 gallery/ 子段。
  *
  *  底层用系统自带 ssh / scp（无第三方依赖）。
- *  顺序红线：先传 assets/**（VSIX 落地），最后覆盖 registry.json；否则客户端会读到
+ *  顺序红线：先传 assets/** 与 sdk/**（静态文件落地），最后覆盖 registry.json；否则客户端会读到
  *  「清单说有、包还没到」的半态。control.json 若存在一并同步。
  *--------------------------------------------------------------------------------------------*/
 
@@ -96,8 +96,12 @@ function walk(dir, acc) {
   return acc
 }
 
-const assetsDir = join(galleryDir, 'assets')
-const assetFiles = existsSync(assetsDir) ? walk(assetsDir, []) : []
+// assets/** = VSIX 与图标；sdk/** = SDK npm tarball（publish-sdk.mjs 产出，
+// 内网 npm i <base>gallery/sdk/<pkg>.tgz 安装）。两者同为静态文件，都在 registry 之前落地。
+const assetFiles = ['assets', 'sdk'].flatMap((sub) => {
+  const dir = join(galleryDir, sub)
+  return existsSync(dir) ? walk(dir, []) : []
+})
 const controlFile = join(galleryDir, 'control.json')
 
 // --dir 就是市场根，直接拼接（不再插入 gallery/ 子段）。
@@ -136,7 +140,7 @@ function mkdirRemote(remoteDir) {
 
 console.log(`\n📦 市场内容 → ${remote}:${config.dir}`)
 console.log(
-  `   assets: ${assetFiles.length} 个文件${existsSync(controlFile) ? ' + control.json' : ''} + registry.json`,
+  `   assets/sdk: ${assetFiles.length} 个文件${existsSync(controlFile) ? ' + control.json' : ''} + registry.json`,
 )
 if (config.dryRun) console.log('   (dry-run，不实际上传)\n')
 else console.log('')

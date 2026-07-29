@@ -7,7 +7,7 @@ export const EN_US_MESSAGES: MessageMap = {
   'app.name': 'Universe Editor',
   'app.description': 'A VSCode-paradigm game content editor.',
   'about.detail':
-    'Version: {version}\nElectron: {electron}\nChromium: {chromium}\nNode: {node}\nV8: {v8}',
+    'Version: {version}\nExtension API: {extensionApi}\nElectron: {electron}\nChromium: {chromium}\nNode: {node}\nV8: {v8}',
   'command.category.editor': 'Editor',
   'command.category.file': 'File',
   'command.category.help': 'Help',

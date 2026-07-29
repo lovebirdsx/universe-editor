@@ -9,6 +9,7 @@
 ## 构建与发布
 
 - [发布外部扩展](publishing-extensions.md) — `pnpm ext:release` 把 `extensions-external/*` 自动打包成 `.vsix` 并发布进市场（自动发现、增量跳过）。
+- [发布扩展 SDK（npm）](publishing-sdk.md) — `@universe-editor/extension-api` 等三件套发公开 npm 的手动流程 + 内网 tarball 托管 fallback。
 - [配置扩展市场服务器](marketplace-server.md) — 自建市场后端：`/extensionquery` 协议、registry 格式、部署与联调。
 
 App 本体的发布（版本 bump、打包、上传）见 [`scripts/release/README.md`](../../scripts/release/README.md)；市场运维脚本细节见 [`scripts/gallery/README.md`](../../scripts/gallery/README.md)。

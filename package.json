@@ -46,6 +46,7 @@
     "server:serve": "node scripts/server/server.mjs --root apps/editor/release --gallery-root market-stage/gallery --port 8788 --base /",
     "gallery:serve": "node scripts/server/server.mjs --root market-stage --gallery-root market-stage/gallery --port 8788 --base /",
     "gallery:publish": "node scripts/gallery/publish.mjs",
+    "gallery:publish-sdk": "node scripts/gallery/publish-sdk.mjs",
     "gallery:unpublish": "node scripts/gallery/unpublish.mjs",
     "gallery:upload": "node scripts/gallery/upload.mjs",
     "ext:release": "node scripts/ext-release/release.mjs"

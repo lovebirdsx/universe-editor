@@ -106,7 +106,7 @@ export function deactivate(): void {} // 通常空实现——subscriptions 已�
 
 门面被 esbuild **内联进每个插件**，运行时委托给 host 装在 `globalThis` 的 bridge 越进程 RPC。所以 `@universe-editor/extension-api` 只需列 devDependency。
 
-## contributes 贡献点写法（全量 schema 见 `packages/extensions-common/src/protocol/manifest-schema.ts`）
+## contributes 贡献点写法（全量 schema 见 `packages/extension-manifest/src/manifest-schema.ts`）
 
 - **commands**：`{ command, title, category?, icon? }`（`icon` 用 codicon 名如 `"bookmark"`）
 - **keybindings**：`{ command, key: "ctrl+shift+0", mac?, when?: "editorTextFocus" }`
@@ -116,7 +116,7 @@ export function deactivate(): void {} // 通常空实现——subscriptions 已�
 - **jsonValidation** / **customEditors**：见各自专门 skill
 - 未知贡献点 / 未知字段被 zod `.passthrough()` 容忍（前向兼容）；但 `activationEvents`、`engines`、命令/菜单结构是**强校验**，不合法整插件被跳过
 
-**activationEvents** 合法值（`extensions-common/src/activation.ts`）：`"*"`（eager，慎用）、`"onStartupFinished"`、`"onCommand:<id>"`、`"onLanguage:<id>"`、`"onView:<id>"`、`"onCustomEditor:<viewType>"`。懒激活优先（如命令型插件用 `onCommand:`），全局常驻才用 `onStartupFinished`。
+**activationEvents** 合法值（`extension-manifest/src/activation.ts`）：`"*"`（eager，慎用）、`"onStartupFinished"`、`"onCommand:<id>"`、`"onLanguage:<id>"`、`"onView:<id>"`、`"onCustomEditor:<viewType>"`。懒激活优先（如命令型插件用 `onCommand:`），全局常驻才用 `onStartupFinished`。
 
 ## NLS 本地化 manifest 文案（可选，机制见 `packages/extension-host/src/nls.ts`）
 
@@ -135,7 +135,7 @@ export function deactivate(): void {} // 通常空实现——subscriptions 已�
 
 ## engines 兼容红线（本 skill 的头号坑，务必看）
 
-`satisfies` 是**自研极简 semver**（`packages/extensions-common/src/protocol/semver.ts`），**不是 npm 的 semver**：
+`satisfies` 是**自研极简 semver**（`packages/extension-manifest/src/semver.ts`），**不是 npm 的 semver**：
 
 - 支持：exact / `*` / `x` / partial(`1`,`1.2`) / `^` / `~` / 比较符 / **空格连接的 AND**（`>=0.1.0 <1.0.0`）。
 - **不支持**：`||`（OR）、hyphen range（`1.0.0 - 2.0.0`）——一律 **fail-closed 直接拒绝加载**。
@@ -165,8 +165,8 @@ const { generateCommitMessage } = await import('../commitMessage.js') // mock �
 ## 验证
 
 ```bash
-# 改了 platform/extensions-common/extension-host 后先重建 dist，apps/host 才看得到（pnpm dev 下 watcher 自动重建）
-pnpm --filter @universe-editor/extensions-common --filter @universe-editor/extension-host build
+# 改了 platform/extension-manifest/extensions-common/extension-host 后先重建 dist，apps/host 才看得到（pnpm dev 下 watcher 自动重建）
+pnpm --filter @universe-editor/extension-manifest --filter @universe-editor/extensions-common --filter @universe-editor/extension-host build
 
 pnpm ext:build   # 重建 extensions/*（turbo，declaration-only 插件无 build 会被跳过，无妨）
 pnpm check       # lint + typecheck + test，仅看错误输出（被测错误路径的 stderr 噪音非失败）
@@ -184,9 +184,9 @@ pnpm check       # lint + typecheck + test，仅看错误输出（被测错误�
 - `extensions/git/` —— 全贡献点样板（submenus / 嵌套 menus / when 上下文键 / manifest NLS + 运行时 NLS）
 - `packages/extension-api/src/index.ts` —— 门面 namespace + `version` 常量（= host API 版本）+ `ExtensionContext`/`Memento` 类型
 - `packages/extension-api/COMPATIBILITY.md` —— API 版本承诺 + 破坏性变更流程（bump version 必同步内置插件 engines）
-- `packages/extensions-common/src/protocol/manifest-schema.ts` —— contributes 全量 zod schema
-- `packages/extensions-common/src/protocol/activation.ts` —— 合法 activationEvents + 构造器
-- `packages/extensions-common/src/protocol/semver.ts` —— 自研 `satisfies`（engines 检查用；不支持 `||`/hyphen）
+- `packages/extension-manifest/src/manifest-schema.ts` —— contributes 全量 zod schema
+- `packages/extension-manifest/src/activation.ts` —— 合法 activationEvents + 构造器
+- `packages/extension-manifest/src/semver.ts` —— 自研 `satisfies`（engines 检查用；不支持 `||`/hyphen）
 - `packages/extension-host/src/extensionScanner.ts` —— scanOne 校验顺序 + engines satisfies 检查（`:88`）
 - `packages/extension-host/src/bootstrap.ts` —— HOST_API_VERSION 来源 + scanExtensions 调用
 - `packages/extension-host/src/nls.ts` —— manifest `%key%` 本地化实现

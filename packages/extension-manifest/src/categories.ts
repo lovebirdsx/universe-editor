@@ -2,7 +2,7 @@
  * Extension category set — shared by manifest validation, marketplace filtering,
  * and the extensions UI. VSCode uses a fixed enum tuned for a code editor; ours
  * is tuned for a game-content editor. `Other` is the fallback for anything that
- * doesn't fit. Kept in `extensions-common` so client + (future) backend agree.
+ * doesn't fit. Kept in `extension-manifest` so client + (future) backend agree.
  */
 export const EXTENSION_CATEGORIES = [
   'Language Features',

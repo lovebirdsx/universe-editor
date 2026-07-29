@@ -18,6 +18,7 @@ import {
   normalizePlatform,
   URI,
 } from '@universe-editor/platform'
+import { version as EXTENSION_API_VERSION } from '@universe-editor/extension-api'
 import { initializeMainNls } from '../shared/i18n/bootstrap.js'
 import { PerfMarks } from '../shared/perf/marks.js'
 import {
@@ -169,6 +170,7 @@ if (environmentService.shouldPrintVersion) {
   if (process.platform === 'win32' && process.stdout.isTTY) process.stdout.write('\x1b[1A\x1b[2K')
   process.stdout.write(
     environmentService.formatVersion(productIdentity.productName, app.getVersion(), [
+      `Extension API ${EXTENSION_API_VERSION}`,
       `Electron ${process.versions.electron}`,
       `Node ${process.versions.node}`,
     ]) + '\n',

@@ -66,7 +66,7 @@ docs/extension-dev/zh-CN/
 新增 job `external-consumer-smoke`（承接 03 §5 的模板防腐，合并为一个）：
 
 ```
-① pnpm --filter extension-api --filter extensions-common --filter extension-packaging
+① pnpm --filter extension-api --filter extension-manifest --filter extension-packaging
        --filter uex --filter create-extension exec pnpm pack     # 本地 tgz，不依赖已发布
 ② 临时目录：create-extension 模板生成 + samples/hello-world 各一份
 ③ npm i <tgz...>（消费本地包，其余依赖走真实 registry）

@@ -152,6 +152,8 @@ export interface IClipboardImage {
 export interface IVersionInfo {
   readonly productName: string
   readonly version: string
+  /** Extension API version (= `@universe-editor/extension-api` package version). */
+  readonly extensionApi: string
   readonly electron: string
   readonly node: string
   readonly chromium: string

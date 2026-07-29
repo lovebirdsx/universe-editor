@@ -9,7 +9,7 @@
  * either the manifest's `files[]` (normalized) or a `dist` default when the
  * extension has a `main`. Entries are validated to stay inside the extension.
  */
-import type { IExtensionManifest } from '@universe-editor/extensions-common'
+import type { IExtensionManifest } from '@universe-editor/extension-manifest'
 
 /** Manifest shape we read here — a permissive subset of the full manifest. */
 export interface IPackageFilesManifest {

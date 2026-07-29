@@ -66,6 +66,7 @@ class FakeHost implements IHostServiceWire {
   getVersionInfo(): Promise<{
     productName: string
     version: string
+    extensionApi: string
     electron: string
     node: string
     chromium: string
@@ -74,6 +75,7 @@ class FakeHost implements IHostServiceWire {
     return Promise.resolve({
       productName: 'Universe Editor',
       version: '1.2.3',
+      extensionApi: '0.7.0',
       electron: '33.0.0',
       node: '20.0.0',
       chromium: '128.0.0',

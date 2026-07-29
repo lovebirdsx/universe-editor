@@ -33,6 +33,7 @@ import {
   type IVersionInfo,
   type UriComponents,
 } from '@universe-editor/platform'
+import { version as EXTENSION_API_VERSION } from '@universe-editor/extension-api'
 import { type IRendererLifecycleService } from '../../../shared/ipc/lifecycleService.js'
 
 /** Hooks letting restart consult the renderer veto chain. */
@@ -411,6 +412,7 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     return Promise.resolve({
       productName: app.getName(),
       version: app.getVersion(),
+      extensionApi: EXTENSION_API_VERSION,
       electron: process.versions.electron,
       node: process.versions.node,
       chromium: process.versions.chrome,

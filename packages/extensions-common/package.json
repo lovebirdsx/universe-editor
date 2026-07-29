@@ -24,9 +24,9 @@
     "clean": "tsgo --build --clean"
   },
   "dependencies": {
+    "@universe-editor/extension-manifest": "workspace:*",
     "@universe-editor/platform": "workspace:*",
-    "vscode-languageserver-types": "catalog:",
-    "zod": "catalog:"
+    "vscode-languageserver-types": "catalog:"
   },
   "devDependencies": {
     "@universe-editor/config-ts": "workspace:*",

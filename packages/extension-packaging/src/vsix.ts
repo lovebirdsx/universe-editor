@@ -11,8 +11,8 @@ import { existsSync, statSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import AdmZip from 'adm-zip'
-import { parseManifest } from '@universe-editor/extensions-common/manifest-schema'
-import type { IExtensionManifest } from '@universe-editor/extensions-common'
+import { parseManifest } from '@universe-editor/extension-manifest/manifest-schema'
+import type { IExtensionManifest } from '@universe-editor/extension-manifest'
 import { extensionPackageFiles } from './packageFiles.js'
 
 /** Prefix (posix) every extension file lives under inside a VSIX. */

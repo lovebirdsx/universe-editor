@@ -1,20 +1,20 @@
 {
-  "name": "@universe-editor/extension-api",
-  "version": "0.7.1",
-  "description": "Extension API surface for Universe Editor (the Universe equivalent of vscode.d.ts). The package version IS the extension API version; extensions declare a compatible range via engines.universe.",
+  "name": "@universe-editor/extension-manifest",
+  "version": "0.1.0",
+  "description": "Universe Editor extension manifest protocol: typed manifest shapes, zod validation, activation event builders, engines.universe semver negotiation, category set.",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lovebirdsx/universe-editor.git",
-    "directory": "packages/extension-api"
+    "directory": "packages/extension-manifest"
   },
   "homepage": "https://github.com/lovebirdsx/universe-editor#readme",
   "keywords": [
     "universe-editor",
     "extension",
-    "api",
-    "plugin"
+    "manifest",
+    "activation-events"
   ],
   "files": [
     "dist",
@@ -24,6 +24,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./manifest-schema": {
+      "types": "./dist/manifest-schema.d.ts",
+      "default": "./dist/manifest-schema.js"
     }
   },
   "publishConfig": {
@@ -41,10 +45,11 @@
     "clean": "tsgo --build --clean"
   },
   "dependencies": {
-    "vscode-languageserver-types": "catalog:"
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@universe-editor/config-ts": "workspace:*",
+    "@types/node": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

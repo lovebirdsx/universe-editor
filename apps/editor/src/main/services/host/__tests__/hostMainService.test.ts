@@ -148,6 +148,7 @@ describe('MainHostService', () => {
     const info = await svc.getVersionInfo()
     expect(info.productName).toBe('Test')
     expect(info.version).toBe('1.0.0')
+    expect(info.extensionApi).toMatch(/^\d+\.\d+\.\d+$/)
     expect(info.node).toBe(process.versions.node)
     svc.dispose()
   })

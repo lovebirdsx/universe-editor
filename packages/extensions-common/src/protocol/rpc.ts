@@ -35,7 +35,7 @@ import type {
   WorkspaceEdit,
   WorkspaceSymbol,
 } from 'vscode-languageserver-types'
-import type { IExtensionDescriptionDto } from './manifest.js'
+import type { IExtensionDescriptionDto } from '@universe-editor/extension-manifest'
 
 export const ExtHostChannels = {
   /** Renderer → ext host: execute a contributed command. */

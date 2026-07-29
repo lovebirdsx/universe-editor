@@ -1,15 +1,36 @@
 {
   "name": "@universe-editor/extension-packaging",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "VSIX packaging for Universe Editor extensions: createVsix / readVsixManifest with manifest validation and zip-slip protection.",
   "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lovebirdsx/universe-editor.git",
+    "directory": "packages/extension-packaging"
+  },
+  "homepage": "https://github.com/lovebirdsx/universe-editor#readme",
+  "keywords": [
+    "universe-editor",
+    "extension",
+    "vsix",
+    "packaging"
+  ],
   "files": [
-    "dist"
+    "dist",
+    "!dist/__tests__"
   ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsgo --build",
@@ -20,7 +41,7 @@
     "clean": "tsgo --build --clean"
   },
   "dependencies": {
-    "@universe-editor/extensions-common": "workspace:*",
+    "@universe-editor/extension-manifest": "workspace:*",
     "adm-zip": "catalog:"
   },
   "devDependencies": {

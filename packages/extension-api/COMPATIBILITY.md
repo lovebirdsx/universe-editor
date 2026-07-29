@@ -113,12 +113,14 @@
   `timelineItem` context key 暴露给 `timeline/item/context` 菜单贡献点的 `when` 子句。
   纯新增方法与类型，不改既有签名。
 
+- `0.7.1` — patch：无 API 表面改动（仅注释/内部实现修正），契约测试快照不变。
+
 ## 激活事件清单（activation events）
 
 扩展在 `package.json` 的 `activationEvents` 声明唤醒时机。手写字符串易拼错（拼错则
 永不激活），故：
 
-- **优先用构造器**：`@universe-editor/extensions-common` 的 `ActivationEvents` /
+- **优先用构造器**：`@universe-editor/extension-manifest` 的 `ActivationEvents` /
   `commandActivationEvent` / `languageActivationEvent` / `viewActivationEvent`。
 - **manifest 校验兜底**：宿主扫描时用 `isValidActivationEvent` 校验，未知事件直接
   报 `invalid manifest` 跳过该扩展（而非静默不激活）。
@@ -134,5 +136,14 @@
 | `onView:<viewId>` | 贡献的视图首次显示 | `ActivationEvents.onView(viewId)` |
 | `onCustomEditor:<viewType>` | 该 viewType 的自定义编辑器首次打开 | `ActivationEvents.onCustomEditor(viewType)` |
 
-新增事件类型时：在 `extensions-common/src/activation.ts` 加构造器 + 把前缀加入
+新增事件类型时：在 `extension-manifest/src/activation.ts` 加构造器 + 把前缀加入
 `PARAMETERIZED_PREFIXES`，并更新本清单。
+
+## API 设计规则
+
+随 npm 对外发布，下列原仓库约定升级为 API 设计的硬规则（违反即破坏第三方扩展，
+评审时按破坏性变更对待）：
+
+- **`enum` 一律用普通 enum，禁止 const enum**：本包在 `isolatedModules` 消费场景
+  （esbuild bundle 扩展）下 const enum 会触发 TS2748「无法访问 ambient const enum」。
+  新增枚举类型时照此办理，不得引入 const enum。

@@ -42,7 +42,7 @@
 
 | 开发者旅程 | VSCode 生态 | 本方案 | 现状 |
 |---|---|---|---|
-| 拿到 API 类型 | `@types/vscode`（npm） | `@universe-editor/extension-api`（npm 公开发布） | 包已存在，未发布 |
+| 拿到 API 类型 | `@types/vscode`（npm） | `@universe-editor/extension-api`（npm 公开发布） | ✅ 发布就绪（手册 + tarball 验证通过，待 org 注册后 publish） |
 | 起项目 | `yo code` / `generator-code` | `npm create @universe-editor/extension` | 无（仓库内 skill 不对外） |
 | 开发调试 | F5 → Extension Development Host + 断点 | `--extension-development-path` + `--inspect-extensions` + launch.json 模板 | 无（仅 e2e env hack） |
 | 快速迭代 | Reload Window / restartExtensionHost | `workbench.action.restartExtensionHost` 命令 + 可选 watch 自动重载 | host 重启机制已有，无命令入口 |
@@ -78,7 +78,7 @@
 | 资产 | 位置 | 复用方式 |
 |---|---|---|
 | API 包 + 兼容治理 | `packages/extension-api`（0.7.0，`COMPATIBILITY.md` + 契约测试冻结快照） | 发 npm 即可对外；治理机制原样延用 |
-| 版本协商 | `packages/extensions-common/src/semver.ts`：`satisfies(hostApiVersion, engines.universe)` fail-closed | 已在安装与激活两处生效，对外只差把语义**写成文档** |
+| 版本协商 | `packages/extension-manifest/src/semver.ts`：`satisfies(hostApiVersion, engines.universe)` fail-closed | 已在安装与激活两处生效，对外只差把语义**写成文档** |
 | VSIX 打包逻辑 | `packages/extension-packaging` 的 `createVsix`（各扩展 `scripts/pack.mjs` 都是其薄封装） | `uex package` 直接复用，把"借 workspace 依赖"的调用方式换成正常 npm 依赖 |
 | 从目录加载未打包扩展 | `UNIVERSE_USER_EXTENSIONS_DIR` env（e2e hack，整体替换用户扩展目录）；scanner 已支持 symlink/junction 目录 | 证明"目录直载"运行时无障碍；正式 `--extension-development-path` 改为**附加**语义（见 [02](./02-dev-experience.md)） |
 | host 重启机制 | `ExtensionHostClientService._restart`（崩溃/信任撤销/enablement 变更共用，签名化防无谓重启） | 重启 host 命令 = 给现成机制加一个 Action2 入口 |
@@ -91,7 +91,7 @@
 
 | 缺口 | 对标物 | 落点 | 文档 |
 |---|---|---|---|
-| API 包对外分发 | `@types/vscode` | extension-api 发 npm：deps 修正（`vscode-languageserver-types` 须进 `dependencies`，见 01 §2）、LICENSE/README、发布流程 | [01](./01-sdk-and-api.md) |
+| API 包对外分发 ✅ | `@types/vscode` | extension-api 发 npm：deps 修正（`vscode-languageserver-types` 须进 `dependencies`，见 01 §2）、LICENSE/README、发布流程 | [01](./01-sdk-and-api.md) |
 | 扩展开发模式 | `--extensionDevelopmentPath` | 新 CLI 参数（附加语义 + id 冲突 dev 胜）、单实例锁豁免、窗口标识、trust 豁免 | [02](./02-dev-experience.md) |
 | host 断点调试 | `--inspect-extensions` | spawn 时注入 `--inspect=<port>`、sourcemap 约定、launch.json attach 模板 | [02](./02-dev-experience.md) |
 | 重启 host 命令 | `workbench.action.restartExtensionHost` | Action2 包一层现成 `_restart`；可选 dev path watch 自动重载 | [02](./02-dev-experience.md) |
@@ -110,9 +110,11 @@
 
 ```
 packages/
-  extension-api/              【改】发 npm：deps 修正 + LICENSE/README + 发布脚本（01）
+  extension-api/              【改】发 npm：deps 修正 + LICENSE/README + 发布脚本（01）✅
+  extension-manifest/  🆕✅    作者面小包（activation/manifest/manifest-schema/semver/categories，
+                               从 extensions-common 迁入；01 §1 决策点记录了换包缘由）
   extension-packaging/        【改】发 npm（uex 依赖它做 package）；createVsix 面向外部调用方硬化（03）
-  extensions-common/          （不动；semver/manifest 校验被上面两者带出去时注意跟随发布，见 01 §2）
+  extensions-common/          （不发布：RPC 基建依赖 platform；作者面已迁入 extension-manifest 并 re-export）
   create-extension/  🆕       npm create 脚手架：模板 + 交互问询（03）
   uex/               🆕       对外 CLI：package / dev / login / publish（03）
 
@@ -172,14 +174,15 @@ samples/hello-world/           🆕       外部形态样例（不进 workspace�
 
 按"每阶段独立可验证、尽早暴露对外接口的设计错误"排序。A 与 B 无依赖可并行；C 依赖 A（模板引用 npm 包）与 B（launch.json 用 dev 模式）；D 依赖 C（uex 是发布客户端）；E 收口。
 
-### Phase A — SDK 对外化（[01](./01-sdk-and-api.md)）
+### Phase A — SDK 对外化（[01](./01-sdk-and-api.md)）✅ 已完成（2026-07-29）
 > 目标：仓库外 `npm install @universe-editor/extension-api` 能编译出一个扩展。
 
 - extension-api 发布准备：`vscode-languageserver-types` 移入 `dependencies`（它含运行时值且 d.ts re-export 需要消费者可解析）、LICENSE/README/repository/publishConfig
-- extension-packaging 同批发布（uex 的依赖）；梳理其对 `extensions-common` 的依赖是否需要内联或一并发布
-- npm org 注册（运营事项）+ 发布流程文档化（先手动 `pnpm publish`，CI 自动化后置）
-- `engines.universe` 版本协商语义 + 0.x 破坏性变更政策写成对外文档草稿（正式落位在 Phase E）
-- **验证**：仓库外空目录 `npm i @universe-editor/extension-api` + `tsc` 编译一个 hello 扩展通过；`FoldingRangeKind` 等运行时值可导入
+- extension-packaging 同批发布（uex 的依赖）；其对 `extensions-common` 的依赖经新包 `@universe-editor/extension-manifest` 解决（extensions-common 运行时依赖 platform 不可发布，见 01 §1 决策点）
+- npm org 注册（运营事项）+ 发布流程文档化（先手动 `pnpm publish`，CI 自动化后置）→ [`docs/development/publishing-sdk.md`](../../development/publishing-sdk.md)
+- `engines.universe` 版本协商语义 + 0.x 破坏性变更政策 → 草稿 [`docs/extension-dev/zh-CN/versioning.md`](../../extension-dev/zh-CN/versioning.md)（正式落位在 Phase E）
+- 宿主 API 版本可查询：`--version` 输出与 About 对话框均带 `Extension API` 行
+- **验证**：仓库外空目录 `npm i @universe-editor/extension-api` + `tsc` 编译一个 hello 扩展通过；`FoldingRangeKind` 等运行时值可导入（实施以 pnpm pack tarball 等价验证，待 org 注册后按手册发布）
 
 ### Phase B — 扩展开发模式（[02](./02-dev-experience.md)）
 > 目标：从开发目录直接加载扩展，断点可命中，改代码一条命令重载。

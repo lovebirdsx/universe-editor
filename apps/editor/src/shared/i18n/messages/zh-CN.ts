@@ -3,7 +3,7 @@ import type { MessageMap } from '@universe-editor/platform'
 export const ZH_CN_MESSAGES: MessageMap = {
   // --- App ---
   'about.detail':
-    '版本: {version}\nElectron: {electron}\nChromium: {chromium}\nNode: {node}\nV8: {v8}',
+    '版本: {version}\nExtension API: {extensionApi}\nElectron: {electron}\nChromium: {chromium}\nNode: {node}\nV8: {v8}',
   'app.description': '一个遵循 VSCode 范式的游戏内容编辑器。',
   'app.name': 'Universe Editor',
 

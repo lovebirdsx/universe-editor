@@ -14,7 +14,7 @@ packages/uex/                 @universe-editor/uex（bin: uex）
 ```
 
 - 两包都是**正常 workspace 成员**（进 `pnpm-workspace.yaml` globs，正常 lint/typecheck/test），只是同时发 npm——与 extension-api 同一种双态。
-- `uex` 依赖 `@universe-editor/extension-packaging`（createVsix/readVsixManifest）+ `@universe-editor/extensions-common`（manifest zod 校验、semver）——**CLI 与宿主共享同一份校验真相**，杜绝"CLI 打包通过、宿主拒载"的漂移（01 §1 的决策在这兑现）。
+- `uex` 依赖 `@universe-editor/extension-packaging`（createVsix/readVsixManifest）+ `@universe-editor/extension-manifest`（manifest zod 校验、semver）——**CLI 与宿主共享同一份校验真相**，杜绝"CLI 打包通过、宿主拒载"的漂移（01 §1 的决策在这兑现）。
 - **CLI 解析用 `node:util` 的 `parseArgs`，零框架依赖**；交互问询用 `@clack/prompts`（create 包专用，uex 保持非交互友好——CI 里跑 `uex publish` 不能有 TTY 依赖）。
 
 ## 2. create-extension 脚手架
