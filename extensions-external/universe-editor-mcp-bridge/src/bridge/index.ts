@@ -1,15 +1,35 @@
-import { McpServer } from '@modelcontextprotocol/server'
+import { inputRequired, inputResponse, McpServer } from '@modelcontextprotocol/server'
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio'
 import { z } from 'zod'
 
 import { readConfig } from './config.js'
 import { EditorCommandBridge } from './editorBridge.js'
 import { resolveEditorPid } from './editorDiscovery.js'
+import { EditorMcpMethod } from './protocol.js'
 
 interface UniverseEditorMcpResponsePayload {
   readonly IsError?: boolean
   readonly StructuredContent: unknown
 }
+
+const askUserInputSchema = z.object({
+  Message: z.string().min(1),
+  Title: z.string().min(1).optional(),
+  Options: z
+    .array(
+      z.object({
+        Label: z.string().min(1),
+        Description: z.string().optional(),
+      }),
+    )
+    .min(1),
+  Input: z
+    .object({
+      Label: z.string().min(1),
+      Placeholder: z.string().optional(),
+    })
+    .optional(),
+})
 
 function createTextContent(
   payload: UniverseEditorMcpResponsePayload,
@@ -21,7 +41,7 @@ async function main(): Promise<void> {
   const config = readConfig()
   const server = new McpServer({
     name: 'universe-editor-mcp-bridge',
-    version: '0.1.0',
+    version: '0.1.1',
   })
 
   const log = (message: string): void => {
@@ -58,6 +78,60 @@ async function main(): Promise<void> {
   }
 
   server.registerTool(
+    'ue_ask_user',
+    {
+      description:
+        'Ask the user a question in the chat UI. Use this when a Universe Editor operation needs the user to choose among explicit options or provide optional free-form input.',
+      inputSchema: askUserInputSchema,
+    },
+    async ({ Input, Message, Options, Title }: z.infer<typeof askUserInputSchema>, context) => {
+      const response = inputResponse(context.mcpReq.inputResponses, 'userResponse')
+      if (response.kind === 'missing') {
+        return inputRequired({
+          inputRequests: {
+            userResponse: inputRequired.elicit({
+              message: Message,
+              requestedSchema: {
+                type: 'object',
+                properties: {
+                  option: {
+                    type: 'string',
+                    title: Title ?? '选择',
+                    oneOf: Options.map((option: { Label: string; Description?: string }) => ({
+                      const: option.Label,
+                      title: option.Description
+                        ? `${option.Label} - ${option.Description}`
+                        : option.Label,
+                    })),
+                  },
+                  ...(Input
+                    ? {
+                        input: {
+                          type: 'string' as const,
+                          title: Input.Label,
+                          ...(Input.Placeholder ? { description: Input.Placeholder } : {}),
+                        },
+                      }
+                    : {}),
+                },
+                required: ['option'],
+              },
+            }),
+          },
+        })
+      }
+
+      const result =
+        response.kind === 'elicit'
+          ? { action: response.action, ...(response.content ? { content: response.content } : {}) }
+          : { action: 'cancel' }
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(result) }],
+      }
+    },
+  )
+
+  server.registerTool(
     'ue_list_tools',
     {
       description:
@@ -68,7 +142,7 @@ async function main(): Promise<void> {
     },
     async () => {
       const bridge = await requireBridge()
-      const response = await bridge.sendRequest('ListTools')
+      const response = await bridge.sendRequest(EditorMcpMethod.ListTools)
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(response.Result ?? {}) }],
         isError: !response.Success,
@@ -88,7 +162,7 @@ async function main(): Promise<void> {
     },
     async ({ Parameters, ToolName }) => {
       const bridge = await requireBridge()
-      const response = await bridge.sendRequest('CallTool', {
+      const response = await bridge.sendRequest(EditorMcpMethod.CallTool, {
         ToolName,
         Parameters: Parameters ?? {},
       })

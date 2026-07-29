@@ -2,7 +2,7 @@
   "name": "universe-editor-mcp-bridge",
   "displayName": "Universe Editor MCP Bridge",
   "description": "Registers the Universe Editor MCP bridge for Agent sessions.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "universe",
   "license": "Apache-2.0",
   "type": "module",
