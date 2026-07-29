@@ -158,6 +158,8 @@ contributions/MarkdownDropContribution.ts   注册 documentDropEditProvider（dr
 
 14. **拖拽/粘贴成链曾相对工作区根算路径**（已修，勿回退）：`markdownLinksFromUriList` 早期用 `workspaceFolderFsPath`（工作区根）算 `relativePathUnder`，只要目标 Markdown 文件不在工作区根目录（如 `docs/sub/target.md`），生成的链接就照抄"相对根"的相对路径（`docs/a.md`）而非"相对文档自身目录"（`../a.md`），打开必 404。**图片二进制落盘分支从没这个问题**——`saveDroppedImageAsset` 一直用 `dirOf(mdFileUri)`（文档自身目录）算 `assets/` 路径，只有 uri-list→链接这条分支漏了。修法：`computeMarkdownLinkInsert` 里用 `dirname(mdUri.fsPath)` 算出目标文档目录，传给 `markdownLinksFromUriList`；后者改用 `relativePath`（platform `base/path.ts`，允许 `../` 向上爬）取代 `relativePathUnder`（只能处理"在根目录之下"，爬不出去返回 `null`）。`workspaceFolderFsPath` 现在只在 `mdUri` 解析失败时兜底。测试见 `markdownLinkProviderShared.test.ts`（跨目录/多级 `../` 用例）+ `markdownPasteLinks.test.ts`。
 
+15. **`.mdAnchor` 的 `vertical-align` 决定锚点跳转落点**（已修，勿回退）：`.mdAnchor` 是零占位 inline-block（`overflow:hidden` + `height:0`），按 CSS 规范其基线是 **bottom margin edge**——`vertical-align: baseline` 会让元素上边恰好落在所在行的**文字基线**上，`scrollIntoView({block:'start'})`（`MarkdownView.scrollToAnchor` / `useMarkdownReaderNav.revealAnchor`）对齐元素上边即对齐基线，基线以上的字形被裁到视口上方（"跳转落点偏下一行"）。必须用 `vertical-align: top`（对齐行盒顶部，连 half-leading 也覆盖）。几何不可在 happy-dom 测，回归用例是 e2e `smoke.markdownAnchorScroll.spec.ts`。
+
 ### 验证
 
 ```bash

@@ -12,13 +12,18 @@
 
 /* Empty in-document anchor target (`<a id="x"></a>`). Zero footprint so it
    never disturbs the surrounding line — e.g. at the end of a bold run right
-   before a GFM table. */
+   before a GFM table. `text-top` (not `baseline`): an overflow-hidden inline-
+   block's baseline is its bottom margin edge, so baseline alignment would put
+   this zero-height box's top edge ON the text baseline — and
+   scrollIntoView({block:'start'}) would then clip the glyphs above it.
+   `top` (not `text-top`) also covers the line box's half-leading, so the
+   anchor's whole line lands flush at the scrollport top. */
 .mdAnchor {
   display: inline-block;
   width: 0;
   height: 0;
   overflow: hidden;
-  vertical-align: baseline;
+  vertical-align: top;
 }
 
 .markdown p {
