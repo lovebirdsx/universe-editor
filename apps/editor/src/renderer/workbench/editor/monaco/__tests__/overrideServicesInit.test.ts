@@ -117,5 +117,11 @@ describe('MonacoLoader override-services initialization', () => {
     // decorators were created with.
     expect(rec.state.initOverrides?.['textModelService']).toBe(text)
     expect(rec.state.initOverrides?.['IWorkspaceEditService']).toBe(bulk)
+
+    // The ILayoutService override ships built-in (see monacoWorkbenchLayoutService):
+    // without it standalone monaco mounts hovers inside the active editor's
+    // overflow:hidden container and find-widget tooltips get clipped.
+    const { monacoWorkbenchLayoutService } = await import('../monacoWorkbenchLayoutService.js')
+    expect(rec.state.initOverrides?.['layoutService']).toBe(monacoWorkbenchLayoutService)
   })
 })

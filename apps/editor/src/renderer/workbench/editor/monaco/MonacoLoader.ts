@@ -21,6 +21,10 @@ import {
   trackEditorDisposeForHoverGuard,
   type IMonacoInstantiationServiceLike,
 } from './monacoHoverDelegateGuard.js'
+import {
+  MONACO_LAYOUT_SERVICE_ID,
+  monacoWorkbenchLayoutService,
+} from './monacoWorkbenchLayoutService.js'
 import { applyMonacoNls } from './monacoNlsBootstrap.js'
 import { initMonacoErrorRouting } from './monacoErrorRouting.js'
 import { registerLogLanguage } from '../../panel/output/monacoLogLanguage.js'
@@ -92,7 +96,14 @@ let _extraSchemas: JsonSchemas = []
 // ITextModelService = createDecorator('textModelService').
 const BULK_EDIT_SERVICE_ID = 'IWorkspaceEditService'
 const TEXT_MODEL_SERVICE_ID = 'textModelService'
-let _overrideServices: monaco.editor.IEditorOverrideServices = {}
+let _overrideServices: monaco.editor.IEditorOverrideServices = {
+  // Standalone's ILayoutService mounts hovers / context views inside the
+  // active editor's overflow:hidden container (clipping find-widget tooltips
+  // at the editor edge); vscode mounts them on the workbench container. Point
+  // monaco at our window-sized root the same way (see
+  // monacoWorkbenchLayoutService).
+  [MONACO_LAYOUT_SERVICE_ID]: monacoWorkbenchLayoutService,
+}
 
 const BASE_JSON_DIAGNOSTICS: Omit<monaco.json.DiagnosticsOptions, 'schemas'> = {
   validate: true,
