@@ -187,6 +187,10 @@ function ExplorerTreeNodeImpl({
         }
       : undefined
 
+  // Hover tooltip: full path first (VSCode parity), git decoration tooltip appended.
+  const fullPathTooltip = (uri: URI): string =>
+    decoTooltip ? `${uri.fsPath} • ${decoTooltip}` : uri.fsPath
+
   return (
     <div
       data-row-key={key}
@@ -200,6 +204,7 @@ function ExplorerTreeNodeImpl({
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={(e) => handleContextMenu(e, { resource, isDirectory })}
+      title={fullPathTooltip(resource)}
       {...dragHandleProps}
       {...(isDirectory ? dropTargetProps : {})}
     >
@@ -225,7 +230,7 @@ function ExplorerTreeNodeImpl({
         />
       </span>
       {segments ? (
-        <span className={styles['label']} style={labelStyle} title={decoTooltip}>
+        <span className={styles['label']} style={labelStyle}>
           {segments.map((s, i) => (
             <Fragment key={i}>
               {i > 0 && (
@@ -239,6 +244,7 @@ function ExplorerTreeNodeImpl({
                   .join(' ')}
                 data-segment-uri={s.uri.toString()}
                 {...(activeSeg === i ? { 'data-segment-active': 'true' } : {})}
+                title={fullPathTooltip(s.uri)}
                 onMouseEnter={() => setActiveSeg(i)}
                 onMouseLeave={() => setActiveSeg((cur) => (cur === i ? null : cur))}
                 onContextMenu={(e) => {
@@ -261,7 +267,7 @@ function ExplorerTreeNodeImpl({
           ))}
         </span>
       ) : (
-        <span className={styles['label']} style={labelStyle} title={decoTooltip}>
+        <span className={styles['label']} style={labelStyle} title={fullPathTooltip(resource)}>
           {name}
         </span>
       )}

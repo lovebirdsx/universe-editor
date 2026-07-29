@@ -207,6 +207,20 @@ describe('ExplorerView', () => {
     expect(screen.getByText('src')).toBeTruthy()
   })
 
+  it('shows the full path as the hover tooltip', async () => {
+    const root = URI.file('/ws')
+    const fs = makeFs({
+      [root.toString()]: [{ name: 'README.md', isFile: true, isDirectory: false }],
+    })
+    renderView({ folder: root, fs })
+
+    const label = await screen.findByText('README.md')
+    const row = label.closest('[role="treeitem"]')
+    const expected = URI.file('/ws/README.md').fsPath
+    expect(row?.getAttribute('title')).toBe(expected)
+    expect(label.getAttribute('title')).toBe(expected)
+  })
+
   it('renders themed file icons instead of emoji fallbacks', async () => {
     const root = URI.file('/ws')
     const fs = makeFs({
