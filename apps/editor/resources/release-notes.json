@@ -1,5 +1,40 @@
 [
   {
+    "version": "0.1.54",
+    "date": "2026-07-29",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "支持markdown <a id=\"\">空锚点解析与#跳转",
+          "session输入#触发的git 提交选择，按照时间来排序",
+          "修复长中文用户消息滚动抖动",
+          "添加外部claude session导入skill",
+          "Swarm Review支持Apply to Local功能",
+          "非Perforce工作区不显示Swarm Reviews容器",
+          "支持通过配置切换系统原生文件对话框",
+          "git graph检出远程分支时支持重置已存在的同名本地分支"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "watcher 订阅窗口内写文件丢事件，ack 后补读",
+          "重构文件监听测试，统一使用 in-memory transport",
+          "修复swarm通知在锁屏后因窗口\"聚焦\"而吞toast",
+          "e2e 新增 workspaceSeeder 规避双重启竞态与泄漏",
+          "CI偶发右键点击output菜单被遮挡超时",
+          "修复diff编辑器关闭后在output面板右键菜单必报错",
+          "修复会话查找框和结果重叠的bug",
+          "为 Swarm 轮询 RPC 添加超时防止永久阻塞",
+          "日志输出视图禁用 unicode 高亮提示"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.53",
     "date": "2026-07-28",
     "groups": [
