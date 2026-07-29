@@ -41,6 +41,7 @@ const rendererDomTests = [
   'src/renderer/workbench/editor/__tests__/MonacoModelRegistry.test.ts',
   'src/renderer/services/output/__tests__/OutputModelService.test.ts',
   'src/renderer/services/search/__tests__/saveReplacedFile.test.ts',
+  'src/renderer/workbench/markdown/__tests__/markdownAnchors.test.ts',
 ]
 
 const monacoAlias = {

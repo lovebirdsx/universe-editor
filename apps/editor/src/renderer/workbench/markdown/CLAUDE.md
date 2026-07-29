@@ -80,6 +80,8 @@ input→组件 两处注册（套路见 apps/editor/CLAUDE.md 编辑器输入）
 
 > MarkdownView 是**共享渲染器**（ACP 聊天 + 文档预览都用它）。改它要同时顾及两个消费方；样式靠容器继承字号/色，组件本身不写死。
 
+**页内锚点**（线②独有）：标题自动 slug（`slugifyHeading`，CJK 保留）挂 `data-anchor`；正文里的空 HTML 锚点 `<a id="x"></a>` / `<a name="x"></a>` 也会被 parser 白名单识别（`EMPTY_ANCHOR_RE`，只认"空 a + 单个 id/name 属性"这一种形态，其余 HTML 仍是字面文本），渲染为零占位 `<span data-anchor>`（`.mdAnchor` CSS，行尾不占位不影响相邻表格排版）。`#frag` 点击 / 跨文件 `foo.md#frag` 统一收口到 `markdownAnchors.ts` 的 `findMarkdownAnchor`：**先精确匹配 id（大小写敏感），未命中再 slugify 回退**（对齐浏览器原生 hash 行为；html 锚点 id 绝不预 slugify）。已知限制：LSP 侧（vscode-markdown-languageservice）的 fragment 坏链诊断只收集 `id=` 条目、不认 `name=`——文档锚点统一用 `<a id="..."></a>` 写法，用 `name=` 会被报 "No header found" warning。
+
 ### 线 ③：粘贴/拖拽成链（renderer 编辑增强，不经插件/LSP）
 
 **按住 `Shift` 拖进**（VSCode 同款门控，见下文冲突小节）或**粘贴进**（粘贴不需 Shift）markdown 编辑器时自动生成链接：文件→`[${1:text}](相对路径)`、图片→`![${1:alt text}](相对路径)`、URL→`[选中文本](url)`；**无磁盘路径的二进制图片**（截图工具/网页拖来）→落盘到当前 md 同目录 `assets/`（时间戳命名）再 `![${1:alt text}](assets/…)`。**产出的是 snippet**（链接文字是选中占位符 `${n:…}`，多文件序号递增；对齐 VSCode `copyFiles/shared.ts`），落地后方括号内文字自动选中可直接改名。这是 **Monaco 内置 `documentPasteEditProvider` / `documentDropEditProvider`** 两个对称 registry 的能力，VSCode 同款，**与 LSP/插件完全无关**，纯 renderer：

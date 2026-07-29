@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  inlineToText,
   isAnchorHref,
   isImageDataUrl,
   isImageSrc,
@@ -606,6 +607,56 @@ describe('parseInline — inline layer', () => {
       { type: 'softbreak' },
       text('b'),
     ])
+  })
+})
+
+describe('parseInline — empty html anchors', () => {
+  it('parses an empty <a id="..."></a> as an anchor inline node', () => {
+    expect(parseInline('pre <a id="tbl-foo"></a> post')).toEqual<readonly MdInline[]>([
+      text('pre '),
+      { type: 'anchor', id: 'tbl-foo' },
+      text(' post'),
+    ])
+  })
+
+  it('parses <a name="..."></a> the same way', () => {
+    expect(parseInline('x <a name="legacy-y"></a>')).toEqual<readonly MdInline[]>([
+      text('x '),
+      { type: 'anchor', id: 'legacy-y' },
+    ])
+  })
+
+  it('keeps non-whitelisted html from producing anchors', () => {
+    const cases = [
+      '<a href="https://x">y</a>', // has href + content
+      '<a id="x">文字</a>', // non-empty content
+      '<div id="x"></div>', // not an <a>
+      "<a id='x'></a>", // single quotes
+      '<a id="x" onclick="e()"></a>', // extra attribute
+      '<a id=""></a>', // empty id
+    ]
+    for (const c of cases) {
+      expect(parseInline(c).some((n) => n.type === 'anchor')).toBe(false)
+    }
+  })
+
+  it('passes the id through verbatim (no slugify / lowercasing)', () => {
+    expect(parseInline('<a id="tbl-TUnlockSystemOption_CookSystem"></a>')).toEqual<
+      readonly MdInline[]
+    >([{ type: 'anchor', id: 'tbl-TUnlockSystemOption_CookSystem' }])
+  })
+
+  it('contributes nothing to inlineToText so heading slugs stay clean', () => {
+    expect(inlineToText(parseInline('**Cook** <a id="t"></a>'))).toBe('Cook ')
+  })
+
+  it('recognizes anchors inside a heading without polluting its slug', () => {
+    const nodes = parseMarkdown('## CookSystem <a id="tbl-x"></a>')
+    const heading = nodes[0]
+    expect(heading?.type).toBe('heading')
+    if (heading?.type === 'heading') {
+      expect(slugifyHeading(inlineToText(heading.children))).toBe('cooksystem')
+    }
   })
 })
 

@@ -43,6 +43,8 @@ describe('parseMarkdownStreaming — equivalence with parseMarkdown', () => {
     'trailing blanks': 'para\n\n\n',
     'leading blanks': '\n\npara',
     'unterminated fence': 'text\n\n```ts\nconst a = 1',
+    'empty html anchor':
+      'bold **CookSystem** fields <a id="tbl-cook"></a>\n\n| a |\n| --- |\n| 1 |',
   }
 
   for (const [name, input] of Object.entries(cases)) {

@@ -427,6 +427,98 @@ describe('MarkdownView', () => {
     expect(scrollToAnchor).toHaveBeenCalledWith('春晓')
   })
 
+  it('renders an empty <a id> as a zero-footprint anchor span without disturbing the layout', () => {
+    const { container } = renderMarkdown(
+      '**CookSystem** fields <a id="tbl-cook"></a>\n\n| a | b |\n| --- | --- |\n| 1 | 2 |',
+    )
+    const anchor = container.querySelector('[data-anchor="tbl-cook"]')
+    expect(anchor?.tagName).toBe('SPAN')
+    expect(anchor?.textContent).toBe('')
+    // The paragraph's visible text is unchanged and the table renders normally.
+    expect(anchor?.closest('p')?.textContent).toBe('CookSystem fields ')
+    expect(container.querySelector('table')).not.toBeNull()
+  })
+
+  it('clicking #xxx scrolls to the html anchor', () => {
+    const scrollSpy = vi.fn()
+    const proto = globalThis.HTMLElement.prototype as { scrollIntoView?: unknown }
+    const original = proto.scrollIntoView
+    proto.scrollIntoView = scrollSpy
+    try {
+      renderMarkdown('target <a id="tbl-cook"></a>\n\n见[CookSystem表](#tbl-cook)。')
+      screen.getByRole('link', { name: 'CookSystem表' }).click()
+      expect(scrollSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      if (original === undefined) delete proto.scrollIntoView
+      else proto.scrollIntoView = original
+    }
+  })
+
+  it('prefers an exact id match over slug normalization', () => {
+    const scrollSpy = vi.fn()
+    const proto = globalThis.HTMLElement.prototype as { scrollIntoView?: unknown }
+    const original = proto.scrollIntoView
+    proto.scrollIntoView = scrollSpy
+    try {
+      // `tbl-Foo_Bar` would be destroyed by slugifyHeading (→ `tbl-foobar`);
+      // the exact id must still resolve.
+      renderMarkdown('target <a id="tbl-Foo_Bar"></a>\n\n[go](#tbl-Foo_Bar)')
+      screen.getByRole('link', { name: 'go' }).click()
+      expect(scrollSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      if (original === undefined) delete proto.scrollIntoView
+      else proto.scrollIntoView = original
+    }
+  })
+
+  it('resolves <a name> anchors too', () => {
+    const scrollSpy = vi.fn()
+    const proto = globalThis.HTMLElement.prototype as { scrollIntoView?: unknown }
+    const original = proto.scrollIntoView
+    proto.scrollIntoView = scrollSpy
+    try {
+      renderMarkdown('target <a name="legacy-x"></a>\n\n[go](#legacy-x)')
+      screen.getByRole('link', { name: 'go' }).click()
+      expect(scrollSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      if (original === undefined) delete proto.scrollIntoView
+      else proto.scrollIntoView = original
+    }
+  })
+
+  it('passes cross-file fragments through verbatim (no slugify)', async () => {
+    const opened: { editor: EditorInput; options: unknown }[] = []
+    vi.spyOn(window, 'open').mockImplementation(() => null)
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver())
+    services.set(IConfigurationService, makeConfig())
+    services.set(
+      IFileService,
+      makeFileService((resource) => resource.path === '/repo/docs/foo.md'),
+    )
+    services.set(IEditorService, makeEditorService())
+    services.set(IEditorGroupsService, makeGroupsService(opened))
+    const inst = new InstantiationService(services)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <MarkdownView
+          text="* [foo](./foo.md#tbl-Abc_1)"
+          baseUri={URI.file('/repo/docs')}
+          previewLinks
+        />
+      </ServicesContext.Provider>,
+    )
+
+    screen.getByRole('link', { name: 'foo' }).click()
+    await waitFor(() => expect(opened).toHaveLength(1))
+    const preview = opened[0]!.editor as MarkdownPreviewInput
+
+    const scrollToAnchor = vi.fn()
+    MarkdownPreviewRegistry.register(preview.sourceUri, makePreviewController({ scrollToAnchor }))
+    expect(scrollToAnchor).toHaveBeenCalledWith('tbl-Abc_1')
+  })
+
   it('strips @ from explicit file links before resolving them', async () => {
     const resolverOpen = vi.fn().mockResolvedValue(undefined)
     const exists = vi.fn((resource: URI) => resource.path === '/repo/docs/path/to/file')

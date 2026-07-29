@@ -128,7 +128,7 @@ export function MarkdownView({
   useEffect(() => {
     const anchor = initialAnchorRef.current
     if (!anchor) return
-    const id = setTimeout(() => scrollToAnchor(slugifyHeading(anchor)), 50)
+    const id = setTimeout(() => scrollToAnchor(anchor), 50)
     return () => clearTimeout(id)
   }, [scrollToAnchor])
 
@@ -393,6 +393,12 @@ function InlineNode({ node }: { node: MdInline }): ReactNode {
       )
     case 'link':
       return <SafeLink href={node.href}>{renderInline(node.children)}</SafeLink>
+    case 'anchor':
+      // Zero-footprint in-document anchor target, addressed by #id links the same
+      // way as heading slugs (see findMarkdownAnchor). data-anchor is set verbatim
+      // (no slugify) so exact id matching works; the slug fallback lives in
+      // findMarkdownAnchor.
+      return <span data-anchor={node.id} className={styles['mdAnchor']} />
   }
 }
 

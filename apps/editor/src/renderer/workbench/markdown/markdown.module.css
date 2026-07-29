@@ -10,6 +10,17 @@
   gap: 4px;
 }
 
+/* Empty in-document anchor target (`<a id="x"></a>`). Zero footprint so it
+   never disturbs the surrounding line — e.g. at the end of a bold run right
+   before a GFM table. */
+.mdAnchor {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  vertical-align: baseline;
+}
+
 .markdown p {
   margin: 0;
   white-space: pre-wrap;

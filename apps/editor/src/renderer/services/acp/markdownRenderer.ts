@@ -22,6 +22,7 @@
  *    - [label](url)
  *    - ![alt](url)       (image — https/file only)
  *    - <url>           (autolink — http/https/file only)
+ *    - <a id="x"></a> / <a name="x"></a> (empty in-document anchor target)
  *    - bare http(s)://…
  *    - `\\` escapes the next punctuation char
  *--------------------------------------------------------------------------------------------*/
@@ -92,6 +93,7 @@ export type MdInline =
       readonly col?: number
     }
   | { readonly type: 'image'; readonly src: string; readonly alt: string }
+  | { readonly type: 'anchor'; readonly id: string }
   | { readonly type: 'softbreak' }
 
 /**
@@ -513,6 +515,15 @@ export function parseInline(text: string): readonly MdInline[] {
     // Autolink: <url> where url is http(s) or file; also accept explicit
     // angle-wrapped file paths so Windows install paths with spaces stay intact.
     if (ch === '<') {
+      // Empty HTML anchor: `<a id="x"></a>` / `<a name="x"></a>` — the only raw-HTML
+      // shape we recognize; everything else stays literal text (or an autolink below).
+      const anchor = EMPTY_ANCHOR_RE.exec(text.slice(i))
+      if (anchor) {
+        flush()
+        out.push({ type: 'anchor', id: anchor[1]! })
+        i += anchor[0].length
+        continue
+      }
       const close = text.indexOf('>', i + 1)
       if (close !== -1) {
         const candidate = text.slice(i + 1, close).trim()
@@ -727,6 +738,8 @@ export function inlineToText(nodes: readonly MdInline[]): string {
       case 'filepath':
         out += n.path
         break
+      case 'anchor':
+        break // zero-width: contributes nothing to the visible text of its line
     }
   }
   return out
@@ -809,6 +822,14 @@ function splitPipes(line: string): string[] {
   cells.push(buf)
   return cells
 }
+
+/**
+ * An empty HTML anchor tag: `<a id="x"></a>` or `<a name="x"></a>`.
+ * Whitelisted shape only — a single id/name attribute, no href, no content.
+ * Double quotes required; the id value may not contain `"` or `<`.
+ * Anything richer stays literal text (the renderer emits no raw HTML).
+ */
+const EMPTY_ANCHOR_RE = /^<a\s+(?:id|name)\s*=\s*"([^"<]+)"\s*><\/a\s*>/i
 
 const BARE_URL_RE = /^(https?:\/\/[^\s<>()]+[^\s<>().,;:!?])/i
 
