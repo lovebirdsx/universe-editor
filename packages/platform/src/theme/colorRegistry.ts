@@ -397,7 +397,13 @@ export function resolveColorValue(
     if (colorValue[0] === '#') {
       return Color.fromHex(colorValue)
     }
-    return theme.getColor(colorValue)
+    // A plain string is a reference to another color id; fall back to CSS
+    // literal parsing so rgba()/rgb()/named defaults are accepted too.
+    const byId = theme.getColor(colorValue)
+    if (byId) {
+      return byId
+    }
+    return Color.Format.CSS.parse(colorValue) ?? undefined
   } else if (colorValue instanceof Color) {
     return colorValue
   } else if (typeof colorValue === 'object') {

@@ -348,6 +348,8 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
     'Foreground color of breadcrumb items.',
     'color-breadcrumb-fg',
   ),
+  d('editor.lineHighlightBackground', null, null, 'Background color of the editor line highlight.'),
+  d('editor.lineHighlightBorder', null, null, 'Border color of the editor line highlight.'),
   d(
     'editor.findMatchHighlightBackground',
     'rgba(229, 192, 123, 0.35)',
