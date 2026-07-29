@@ -82,6 +82,8 @@ const { bootstrapWindowIpc } = await import('../../../ipc/registerMainServices.j
 const { LogMainService } = await import('../../log/logMainService.js')
 const { WorkspaceMainService } = await import('../../workspace/workspaceMainService.js')
 const { UserDataMainService } = await import('../../userData/userDataMainService.js')
+const { createStubWatcherProcessClient } =
+  await import('../../fileWatcher/testing/stubWatcherProcessClient.js')
 const { BrowserWindow } = await import('electron')
 
 function grabLastWindowCloseHandler(): (e: { preventDefault: () => void }) => void {
@@ -133,6 +135,7 @@ function makeOpts() {
       exchangeRate: {} as never,
       resourceAccess: {} as never,
       environmentSnapshot: {} as never,
+      watcherProcess: createStubWatcherProcessClient(),
     },
     logService,
     e2eEnabled: false,

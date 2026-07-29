@@ -9,6 +9,11 @@ import { LogFilesMainService } from '../../src/main/services/log/logFilesMainSer
 import { MainStorageService } from '../../src/main/services/storage/storageMainService.js'
 import { FileSystemMainService } from '../../src/main/services/files/fileSystemMainService.js'
 import { FileWatcherMainService } from '../../src/main/services/fileWatcher/fileWatcherMainService.js'
+import { WatcherProcessClient } from '../../src/main/services/fileWatcher/watcherProcessClient.js'
+import {
+  createInMemoryWatcherTransport,
+  type InMemoryWatcherTransport,
+} from '../../src/main/services/fileWatcher/testing/inMemoryWatcherTransport.js'
 import { WorkspaceMainService } from '../../src/main/services/workspace/workspaceMainService.js'
 import { RecentWorkspacesMainService } from '../../src/main/services/workspace/recentWorkspacesMainService.js'
 import { UserDataMainService } from '../../src/main/services/userData/userDataMainService.js'
@@ -54,7 +59,14 @@ export async function createTestWorkbench(): Promise<TestWorkbench> {
   const workspace = new WorkspaceMainService(storage, recentWorkspaces, noopDialog)
   const userData = new UserDataMainService(workspace)
   const fileSystem = new FileSystemMainService()
-  const fileWatcher = new FileWatcherMainService()
+  // Real parcel watcher behind the real protocol, minus the utility process.
+  const watcherTransports: InMemoryWatcherTransport[] = []
+  const watcherClient = new WatcherProcessClient(() => {
+    const t = createInMemoryWatcherTransport()
+    watcherTransports.push(t)
+    return t
+  })
+  const fileWatcher = new FileWatcherMainService(watcherClient)
 
   return {
     userDataDir,
@@ -70,6 +82,11 @@ export async function createTestWorkbench(): Promise<TestWorkbench> {
       userData.dispose()
       workspace.dispose()
       recentWorkspaces.dispose()
+      // Await the real parcel unsubscribe before removing the temp dir.
+      await fileWatcher.unwatch()
+      fileWatcher.dispose()
+      watcherClient.dispose()
+      await Promise.allSettled(watcherTransports.map((t) => t.host.dispose()))
       logService.dispose()
       // Drain any pending fire-and-forget writes before removing the temp dir,
       // otherwise serialized writes that haven't run yet will fail with ENOENT.

@@ -36,8 +36,9 @@ describe('ApplicationServices type', () => {
       exchangeRate: {} as ApplicationServices['exchangeRate'],
       resourceAccess: {} as ApplicationServices['resourceAccess'],
       environmentSnapshot: {} as ApplicationServices['environmentSnapshot'],
+      watcherProcess: {} as ApplicationServices['watcherProcess'],
     }
-    expect(Object.keys(svc)).toHaveLength(28)
+    expect(Object.keys(svc)).toHaveLength(29)
   })
 })
 

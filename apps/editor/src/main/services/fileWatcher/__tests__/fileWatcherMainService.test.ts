@@ -14,7 +14,7 @@ import { WatcherProcessClient } from '../watcherProcessClient.js'
 import {
   createInMemoryWatcherTransport,
   type InMemoryWatcherTransport,
-} from './inMemoryWatcherTransport.js'
+} from '../testing/inMemoryWatcherTransport.js'
 
 function reviveFsPath(c: {
   readonly resource: import('@universe-editor/platform').UriComponents

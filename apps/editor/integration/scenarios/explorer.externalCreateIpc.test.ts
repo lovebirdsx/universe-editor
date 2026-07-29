@@ -30,6 +30,11 @@ import { IExcludeService } from '../../src/renderer/services/exclude/ExcludeServ
 import { FakeExcludeService } from '../../src/renderer/services/exclude/testing/fakeExcludeService.js'
 import { FileSystemMainService } from '../../src/main/services/files/fileSystemMainService.js'
 import { FileWatcherMainService } from '../../src/main/services/fileWatcher/fileWatcherMainService.js'
+import { WatcherProcessClient } from '../../src/main/services/fileWatcher/watcherProcessClient.js'
+import {
+  createInMemoryWatcherTransport,
+  type InMemoryWatcherTransport,
+} from '../../src/main/services/fileWatcher/testing/inMemoryWatcherTransport.js'
 
 class FakeWorkspaceService implements IWorkspaceServiceType {
   declare readonly _serviceBrand: undefined
@@ -70,6 +75,8 @@ const WATCHER_CHANNEL = 'fileWatcher'
 
 describe('Explorer external file creation through IPC (integration)', () => {
   let rootDir: string
+  let watcherTransports: InMemoryWatcherTransport[]
+  let watcherClient: WatcherProcessClient
   let watcher: FileWatcherMainService
   let server: ChannelServer
   let client: ChannelClient
@@ -78,7 +85,13 @@ describe('Explorer external file creation through IPC (integration)', () => {
 
   beforeEach(async () => {
     rootDir = await fsp.mkdtemp(join(tmpdir(), 'universe-editor-explorer-ipc-'))
-    watcher = new FileWatcherMainService()
+    watcherTransports = []
+    watcherClient = new WatcherProcessClient(() => {
+      const t = createInMemoryWatcherTransport()
+      watcherTransports.push(t)
+      return t
+    })
+    watcher = new FileWatcherMainService(watcherClient)
 
     // --- main side: register the watcher as an IPC channel ---
     const [mainProto, rendererProto] = InMemoryMessagePassingProtocol.createPair()
@@ -115,7 +128,11 @@ describe('Explorer external file creation through IPC (integration)', () => {
     tree.dispose()
     client.dispose()
     server.dispose()
+    // Await the real parcel unsubscribe before removing the watched tree.
+    await watcher.unwatch()
     watcher.dispose()
+    watcherClient.dispose()
+    await Promise.allSettled(watcherTransports.map((t) => t.host.dispose()))
     await fsp.rm(rootDir, { recursive: true, force: true })
   })
 

@@ -26,6 +26,11 @@ import { IExcludeService } from '../../src/renderer/services/exclude/ExcludeServ
 import { FakeExcludeService } from '../../src/renderer/services/exclude/testing/fakeExcludeService.js'
 import { FileSystemMainService } from '../../src/main/services/files/fileSystemMainService.js'
 import { FileWatcherMainService } from '../../src/main/services/fileWatcher/fileWatcherMainService.js'
+import { WatcherProcessClient } from '../../src/main/services/fileWatcher/watcherProcessClient.js'
+import {
+  createInMemoryWatcherTransport,
+  type InMemoryWatcherTransport,
+} from '../../src/main/services/fileWatcher/testing/inMemoryWatcherTransport.js'
 
 class FakeWorkspaceService implements IWorkspaceServiceType {
   declare readonly _serviceBrand: undefined
@@ -68,6 +73,8 @@ function makeTree(watcher: IFileWatcherService, root: string): ExplorerTreeServi
 describe('FileWatcher is per-window across two windows', () => {
   let dirA: string
   let dirB: string
+  let watcherTransports: InMemoryWatcherTransport[]
+  let watcherClient: WatcherProcessClient
   let watcherA: FileWatcherMainService
   let watcherB: FileWatcherMainService
   let treeA: ExplorerTreeService
@@ -76,15 +83,28 @@ describe('FileWatcher is per-window across two windows', () => {
   beforeEach(async () => {
     dirA = await fsp.mkdtemp(join(tmpdir(), 'ue-win-a-'))
     dirB = await fsp.mkdtemp(join(tmpdir(), 'ue-win-b-'))
-    watcherA = new FileWatcherMainService()
-    watcherB = new FileWatcherMainService()
+    // One shared client owns the (in-memory) watcher host, mirroring the
+    // app-singleton WatcherProcessClient in production.
+    watcherTransports = []
+    watcherClient = new WatcherProcessClient(() => {
+      const t = createInMemoryWatcherTransport()
+      watcherTransports.push(t)
+      return t
+    })
+    watcherA = new FileWatcherMainService(watcherClient)
+    watcherB = new FileWatcherMainService(watcherClient)
   })
 
   afterEach(async () => {
     treeA?.dispose()
     treeB?.dispose()
+    // Await the real parcel unsubscribes before removing the watched trees.
+    await watcherA.unwatch()
+    await watcherB.unwatch()
     watcherA.dispose()
     watcherB.dispose()
+    watcherClient.dispose()
+    await Promise.allSettled(watcherTransports.map((t) => t.host.dispose()))
     await fsp.rm(dirA, { recursive: true, force: true })
     await fsp.rm(dirB, { recursive: true, force: true })
   })

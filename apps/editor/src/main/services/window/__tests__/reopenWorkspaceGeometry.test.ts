@@ -132,6 +132,8 @@ vi.mock('electron', () => ({
 
 const { WindowMainService } = await import('../windowMainService.js')
 const { LogMainService } = await import('../../log/logMainService.js')
+const { createStubWatcherProcessClient } =
+  await import('../../fileWatcher/testing/stubWatcherProcessClient.js')
 
 function makeOpts() {
   return {
@@ -139,6 +141,7 @@ function makeOpts() {
       recentWorkspaces: { add: vi.fn().mockResolvedValue(undefined) },
       sessionSwitcher: { registerWindow: () => {}, unregisterWindow: () => {} },
       configLocation: { onDidChangeConfigDir: () => ({ dispose: () => {} }), currentDir: '' },
+      watcherProcess: createStubWatcherProcessClient(),
     } as never,
     logService: new LogMainService(),
     e2eEnabled: false,
