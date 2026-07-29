@@ -69,6 +69,28 @@ describe('SearchResultsTree', () => {
     expect(screen.getByText('a.ts')).toBeTruthy()
   })
 
+  it('list mode shows the workspace-relative dir after the file name', () => {
+    const results: IFileMatch[] = [
+      makeMatch('/ws/src/deep/a.ts', 1, 'foo'),
+      makeMatch('/ws/b.ts', 1, 'foo'),
+    ]
+    render(
+      <SearchResultsTree results={results} rootUri={URI.file('/ws')} onActivateMatch={() => {}} />,
+    )
+    expect(screen.getByText('a.ts').parentElement?.textContent).toContain('src/deep')
+    // files at the workspace root show no path
+    expect(screen.getByText('b.ts').parentElement?.textContent).not.toContain('ws')
+  })
+
+  it('tree mode hides the dir path on file rows', () => {
+    searchViewState.setViewMode('tree')
+    const results: IFileMatch[] = [makeMatch('/ws/src/deep/a.ts', 1, 'foo')]
+    render(
+      <SearchResultsTree results={results} rootUri={URI.file('/ws')} onActivateMatch={() => {}} />,
+    )
+    expect(screen.getByText('a.ts').parentElement?.textContent).not.toContain('src/deep')
+  })
+
   it('collapse-all signal hides every match row', () => {
     const results: IFileMatch[] = [makeMatch('/ws/a.ts', 1, 'foo')]
     render(<SearchResultsTree results={results} onActivateMatch={() => {}} />)

@@ -383,7 +383,12 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
               className={styles['rowIcon']}
               size={14}
             />
-            <span className={styles['rowLabel']}>{n.name}</span>
+            <span className={styles['rowLabel']}>
+              {n.name}
+              {viewMode === 'list' && n.dirPath.length > 0 && (
+                <span className={styles['fileDir']}>{n.dirPath}</span>
+              )}
+            </span>
             <span
               className={styles['fileCount']}
               aria-label={localize('search.matchCount', '{count} matches', {

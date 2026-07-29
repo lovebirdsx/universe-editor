@@ -341,6 +341,16 @@
   white-space: nowrap;
 }
 
+/* Workspace-relative dir shown after the file name in list mode (VSCode
+   resource-label description). Lives INSIDE rowLabel so the file name keeps
+   its full width — ellipsis truncation clips the trailing description first;
+   the row title still carries the full relPath. */
+.fileDir {
+  margin-left: 8px;
+  opacity: 0.6;
+  font-size: 11px;
+}
+
 .fileCount {
   margin-left: auto;
   background: var(--color-badge-bg, rgba(255, 255, 255, 0.08));

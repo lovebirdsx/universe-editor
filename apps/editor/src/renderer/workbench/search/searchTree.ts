@@ -30,6 +30,8 @@ export type SearchNode =
       readonly fileMatch: IFileMatch
       readonly name: string
       readonly relPath: string
+      /** Workspace-relative directory of the file; '' when it sits at the root. */
+      readonly dirPath: string
       readonly matchCount: number
     }
   | {
@@ -164,6 +166,7 @@ export function buildSearchSnapshot(
       fileMatch: fm,
       name,
       relPath,
+      dirPath: dirs.join('/'),
       matchCount: countMatches(fm),
     }
     expandableIds.push(fileNode.id)

@@ -37,10 +37,12 @@ describe('buildSearchSnapshot', () => {
     expect(fileA.name).toBe('a.ts')
     expect(fileA.matchCount).toBe(2)
     expect(fileA.relPath).toBe('a.ts')
+    expect(fileA.dirPath).toBe('')
     expect(snap.childrenMap.get(fileA.id)).toHaveLength(2)
 
     const fileB = snap.roots[1] as Extract<SearchNode, { kind: 'file' }>
     expect(fileB.relPath).toBe('src/b.ts')
+    expect(fileB.dirPath).toBe('src')
   })
 
   it('tree mode: nests files under workspace-relative folders', () => {
