@@ -12,8 +12,8 @@
   width: 100vw;
   height: 100vh;
   overflow: hidden;
-  background: var(--color-background, #1e1e1e);
-  color: var(--color-foreground, #cccccc);
+  background: var(--vscode-workbench-background, #1e1e1e);
+  color: var(--vscode-foreground, #cccccc);
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 13px;
 }

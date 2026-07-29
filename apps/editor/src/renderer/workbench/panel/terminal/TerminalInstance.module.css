@@ -10,7 +10,7 @@
 }
 
 .instance.dropActive {
-  outline: 1px solid var(--color-list-active-bar, #007acc);
+  outline: 1px solid var(--vscode-list-activeSelectionBar, #007acc);
   outline-offset: -1px;
 }
 

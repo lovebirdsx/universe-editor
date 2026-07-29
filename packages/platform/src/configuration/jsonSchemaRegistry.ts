@@ -41,6 +41,8 @@ export interface IJSONSchema {
   $ref?: string
   format?: string
   pattern?: string
+  patternErrorMessage?: string
+  deprecationMessage?: string
 }
 
 export interface ISchemaContribution {

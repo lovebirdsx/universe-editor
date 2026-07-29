@@ -3,7 +3,7 @@
   flex-direction: column;
   gap: 6px;
   padding: 6px 8px;
-  color: var(--color-foreground, #c8c8c8);
+  color: var(--vscode-foreground, #c8c8c8);
   font-size: 12px;
   height: 100%;
   overflow: hidden;
@@ -48,16 +48,16 @@
   box-sizing: border-box;
   height: 24px;
   padding: 2px 60px 2px 6px;
-  background: var(--color-input-bg, #3c3c3c);
-  color: var(--color-input-fg, #d4d4d4);
-  border: 1px solid var(--color-input-border, #555);
+  background: var(--vscode-input-background, #3c3c3c);
+  color: var(--vscode-input-foreground, #d4d4d4);
+  border: 1px solid var(--vscode-input-border, #555);
   border-radius: 2px;
   outline: none;
   font: inherit;
 }
 
 .input:focus {
-  border-color: var(--color-focus-border, #0070e0);
+  border-color: var(--vscode-focusBorder, #0070e0);
 }
 
 .toggles {
@@ -71,7 +71,7 @@
 
 .toggle {
   background: transparent;
-  color: var(--color-foreground-muted, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   border: 1px solid transparent;
   border-radius: 2px;
   width: 18px;
@@ -83,13 +83,13 @@
 }
 
 .toggle:hover {
-  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.06));
 }
 
 .toggleActive {
-  color: var(--color-foreground, #c8c8c8);
-  background: var(--color-accent-soft-bg, rgba(0, 127, 212, 0.25));
-  border-color: var(--color-focus-border, #0070e0);
+  color: var(--vscode-foreground, #c8c8c8);
+  background: var(--vscode-workbench-accentSoftBackground, rgba(0, 127, 212, 0.25));
+  border-color: var(--vscode-focusBorder, #0070e0);
 }
 
 .filterToggle {
@@ -99,7 +99,7 @@
   justify-content: center;
   height: 24px;
   background: transparent;
-  color: var(--color-foreground-muted, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   border: 1px solid transparent;
   border-radius: 2px;
   cursor: pointer;
@@ -107,14 +107,14 @@
 }
 
 .filterToggle:hover {
-  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
-  color: var(--color-foreground, #c8c8c8);
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.06));
+  color: var(--vscode-foreground, #c8c8c8);
 }
 
 .filterToggleActive {
-  color: var(--color-foreground, #c8c8c8);
-  background: var(--color-accent-soft-bg, rgba(0, 127, 212, 0.25));
-  border-color: var(--color-focus-border, #0070e0);
+  color: var(--vscode-foreground, #c8c8c8);
+  background: var(--vscode-workbench-accentSoftBackground, rgba(0, 127, 212, 0.25));
+  border-color: var(--vscode-focusBorder, #0070e0);
 }
 
 .toolbarBtn {
@@ -126,15 +126,15 @@
   padding: 0;
   border: none;
   background: transparent;
-  color: var(--color-foreground-muted, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   border-radius: 3px;
   cursor: pointer;
   flex-shrink: 0;
 }
 
 .toolbarBtn:hover:not(:disabled) {
-  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
-  color: var(--color-foreground, #c8c8c8);
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.06));
+  color: var(--vscode-foreground, #c8c8c8);
 }
 
 .toolbarBtn:disabled {
@@ -153,7 +153,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  color: var(--color-foreground-muted, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   font-size: 11px;
 }
 
@@ -177,28 +177,28 @@
   border: none;
   border-radius: 3px;
   background: transparent;
-  color: var(--color-foreground-muted, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   cursor: pointer;
 }
 
 .excludeToggle:hover {
-  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
 }
 
 .excludeToggleActive {
-  background: var(--color-toggle-active-bg, rgba(14, 99, 156, 0.5));
-  color: var(--color-list-active-fg, #ffffff);
+  background: var(--vscode-inputOption-activeBackground, rgba(14, 99, 156, 0.5));
+  color: var(--vscode-list-activeSelectionForeground, #ffffff);
 }
 
 .error {
   margin: 0;
-  color: var(--color-error-fg, #f48771);
+  color: var(--vscode-errorForeground, #f48771);
   font-size: 11px;
 }
 
 .summary {
   margin: 0;
-  color: var(--color-foreground-muted, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   font-size: 11px;
 }
 
@@ -209,8 +209,8 @@
 }
 
 .replaceAllBtn {
-  background: var(--color-button-bg, #0e639c);
-  color: var(--color-button-fg, #ffffff);
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #ffffff);
   border: none;
   border-radius: 2px;
   padding: 2px 8px;
@@ -220,12 +220,12 @@
 }
 
 .replaceAllBtn:hover {
-  background: var(--color-button-hover-bg, #1177bb);
+  background: var(--vscode-button-hoverBackground, #1177bb);
 }
 
 .hint {
   margin: 0;
-  color: var(--color-foreground-muted, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   font-size: 11px;
 }
 
@@ -234,17 +234,17 @@
   align-items: center;
   gap: 8px;
   padding: 4px 6px;
-  background: var(--color-warning-bg, rgba(229, 192, 123, 0.12));
-  border: 1px solid var(--color-warning-border, rgba(229, 192, 123, 0.3));
+  background: var(--vscode-warning-background, rgba(229, 192, 123, 0.12));
+  border: 1px solid var(--vscode-warning-border, rgba(229, 192, 123, 0.3));
   border-radius: 2px;
   font-size: 11px;
-  color: var(--color-foreground, #c8c8c8);
+  color: var(--vscode-foreground, #c8c8c8);
 }
 
 .rerunBtn {
   background: transparent;
   color: inherit;
-  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.2));
+  border: 1px solid var(--vscode-workbench-border, rgba(255, 255, 255, 0.2));
   border-radius: 2px;
   padding: 1px 6px;
   font: inherit;
@@ -253,7 +253,7 @@
 }
 
 .rerunBtn:hover {
-  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.06));
 }
 
 .resultsTree {
@@ -292,21 +292,21 @@
 }
 
 .row:hover {
-  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.04));
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04));
 }
 
 .row.selected {
-  background: var(--color-list-active-bg, #094771);
-  color: var(--color-list-active-fg, #ffffff);
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+  color: var(--vscode-list-activeSelectionForeground, #ffffff);
 }
 
 .resultsTree[role='tree']:not([data-focused='true']) .row.selected {
-  background: var(--color-list-inactive-selection-bg, rgba(58, 61, 65, 0.6));
+  background: var(--vscode-list-inactiveSelectionBackground, rgba(58, 61, 65, 0.6));
   color: inherit;
 }
 
 .row.focused {
-  outline: 1px solid var(--color-list-focus-outline, #007fd4);
+  outline: 1px solid var(--vscode-list-focusOutline, #007fd4);
   outline-offset: -1px;
 }
 
@@ -353,7 +353,7 @@
 
 .fileCount {
   margin-left: auto;
-  background: var(--color-badge-bg, rgba(255, 255, 255, 0.08));
+  background: var(--vscode-badge-background, rgba(255, 255, 255, 0.08));
   border-radius: 8px;
   padding: 0 6px;
   font-size: 10px;
@@ -365,7 +365,7 @@
 .replaceBtn {
   background: transparent;
   border: none;
-  color: var(--color-foreground-muted, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   cursor: pointer;
   padding: 0 4px;
   font: inherit;
@@ -378,7 +378,7 @@
 }
 
 .lineNumber {
-  color: var(--color-foreground-muted, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   font-size: 11px;
   min-width: 20px;
   text-align: right;
@@ -393,7 +393,7 @@
 }
 
 .match {
-  background: var(--color-search-match-bg, rgba(229, 192, 123, 0.35));
+  background: var(--vscode-editor-findMatchHighlightBackground, rgba(229, 192, 123, 0.35));
   color: inherit;
   border-radius: 2px;
 }
@@ -403,12 +403,12 @@
 }
 
 .matchRemove {
-  background: var(--color-diff-removed-bg, rgba(229, 83, 75, 0.28));
+  background: var(--vscode-diffEditor-removedLineBackground, rgba(229, 83, 75, 0.28));
   text-decoration: line-through;
   border-radius: 2px 0 0 2px;
 }
 
 .matchInsert {
-  background: var(--color-diff-inserted-bg, rgba(70, 149, 74, 0.4));
+  background: var(--vscode-diffEditor-insertedLineBackground, rgba(70, 149, 74, 0.4));
   border-radius: 0 2px 2px 0;
 }

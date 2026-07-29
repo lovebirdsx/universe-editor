@@ -8,7 +8,7 @@
   height: 100%;
   overflow: auto;
   outline: none;
-  background-color: var(--color-editor-bg, #1e1e1e);
+  background-color: var(--vscode-editor-background, #1e1e1e);
   /* Checkerboard so transparent regions read as transparent, not black. */
   background-image:
     linear-gradient(45deg, rgba(128, 128, 128, 0.18) 25%, transparent 25%),
@@ -52,7 +52,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--color-editor-fg, #d4d4d4);
+  color: var(--vscode-editor-foreground, #d4d4d4);
   opacity: 0.7;
   font-size: 13px;
 }

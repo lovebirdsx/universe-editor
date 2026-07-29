@@ -6,9 +6,9 @@
 .groupSection {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--vscode-workbench-border);
   border-radius: var(--radius-md);
-  background: var(--color-surface);
+  background: var(--vscode-workbench-surface);
 }
 
 .groupHeader {
@@ -16,7 +16,7 @@
   align-items: center;
   gap: var(--spacing-4);
   padding: var(--spacing-4) var(--spacing-6);
-  border-bottom: 1px solid var(--color-border-subtle);
+  border-bottom: 1px solid var(--vscode-workbench-borderSubtle);
 }
 
 .groupHeader:last-child {
@@ -33,14 +33,14 @@
   overflow: hidden;
   font-family: var(--font-family-mono, monospace);
   font-size: var(--font-size-xs);
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .groupNote {
   font-size: var(--font-size-xs);
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .serverList {
@@ -56,7 +56,7 @@
   align-items: center;
   gap: var(--spacing-4);
   padding: var(--spacing-3) var(--spacing-6);
-  border-top: 1px solid var(--color-border-subtle);
+  border-top: 1px solid var(--vscode-workbench-borderSubtle);
 }
 
 .serverRow:first-child {
@@ -73,25 +73,25 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--color-editor-fg-muted);
+  background: var(--vscode-editor-mutedForeground);
 }
 
 .statusDot[data-status='connected'] {
-  background: var(--color-badge-success, #2c7d32);
+  background: var(--vscode-badge-successBackground, #2c7d32);
 }
 
 .statusDot[data-status='pending'] {
-  background: var(--color-badge-progress, #4fa6e2);
+  background: var(--vscode-badge-progressBackground, #4fa6e2);
 }
 
 .statusDot[data-status='failed'],
 .statusDot[data-status='error'] {
-  background: var(--color-badge-error, #f14c4c);
+  background: var(--vscode-badge-errorBackground, #f14c4c);
 }
 
 .statusDot[data-status='needs-auth'],
 .statusDot[data-status='needs_auth'] {
-  background: var(--color-badge-warning, #d7ba7d);
+  background: var(--vscode-badge-warningBackground, #d7ba7d);
 }
 
 .serverMain {
@@ -117,15 +117,15 @@
 .transportBadge {
   flex: none;
   padding: 0 var(--spacing-2);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--vscode-workbench-border);
   border-radius: var(--radius-sm);
   font-size: var(--font-size-xs);
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .shadowNote {
   font-size: var(--font-size-xs);
-  color: var(--color-badge-warning, #d7ba7d);
+  color: var(--vscode-badge-warningBackground, #d7ba7d);
 }
 
 .invalidNote {
@@ -133,14 +133,14 @@
   align-items: center;
   gap: var(--spacing-2);
   font-size: var(--font-size-xs);
-  color: var(--color-error-fg, #f48771);
+  color: var(--vscode-errorForeground, #f48771);
 }
 
 .serverSummary {
   overflow: hidden;
   font-family: var(--font-family-mono, monospace);
   font-size: var(--font-size-xs);
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -178,10 +178,10 @@
   width: 100%;
   min-height: 64px;
   padding: var(--spacing-2) var(--spacing-3);
-  border: 1px solid var(--color-input-border);
+  border: 1px solid var(--vscode-input-border);
   border-radius: var(--radius-sm);
-  background: var(--color-input-bg);
-  color: var(--color-input-fg);
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
   font-family: var(--font-family-mono, monospace);
   font-size: var(--font-size-base);
   resize: vertical;
@@ -189,12 +189,12 @@
 }
 
 .argsArea:focus {
-  border-color: var(--color-focus-border);
+  border-color: var(--vscode-focusBorder);
 }
 
 .scopeHint {
   font-size: var(--font-size-xs);
-  color: var(--color-badge-warning, #d7ba7d);
+  color: var(--vscode-badge-warningBackground, #d7ba7d);
 }
 
 .enabledRow {

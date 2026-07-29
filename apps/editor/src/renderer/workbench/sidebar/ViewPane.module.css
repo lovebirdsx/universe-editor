@@ -7,7 +7,7 @@
 }
 
 .viewPane + .viewPane {
-  border-top: 1px solid var(--color-border, #3c3c3c);
+  border-top: 1px solid var(--vscode-workbench-border, #3c3c3c);
 }
 
 .header {
@@ -16,7 +16,7 @@
   padding: 0 4px 0 4px;
   height: 28px;
   user-select: none;
-  background: var(--color-sidebar-section-header-bg, #2d2d2d);
+  background: var(--vscode-sideBarSectionHeader-background, #2d2d2d);
   flex-shrink: 0;
 }
 
@@ -27,7 +27,7 @@
   min-width: 0;
   height: 100%;
   cursor: pointer;
-  color: var(--color-sidebar-section-header-fg, #bbbbbb);
+  color: var(--vscode-sideBarSectionHeader-foreground, #bbbbbb);
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
@@ -38,7 +38,7 @@
 }
 
 .header:hover {
-  background: var(--color-sidebar-section-header-hover, #3a3a3a);
+  background: var(--vscode-sideBarSectionHeader-hoverBackground, #3a3a3a);
 }
 
 .headerActions {
@@ -74,7 +74,7 @@
   left: 0;
   right: 0;
   height: 2px;
-  background: var(--color-tab-active-border, #0070e0);
+  background: var(--vscode-tab-activeBorderTop, #0070e0);
   z-index: 10;
   pointer-events: none;
 }

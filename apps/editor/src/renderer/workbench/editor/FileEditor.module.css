@@ -12,7 +12,7 @@
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
-  background: var(--color-editor-bg, #1e1e1e);
+  background: var(--vscode-editor-background, #1e1e1e);
 }
 
 .fileEditorLoading {
@@ -21,6 +21,6 @@
   justify-content: center;
   width: 100%;
   height: 100%;
-  color: var(--color-fg-muted, #888);
+  color: var(--vscode-descriptionForeground, #888);
   font-size: 12px;
 }

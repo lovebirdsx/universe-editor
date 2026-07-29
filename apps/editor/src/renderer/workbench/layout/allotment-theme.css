@@ -18,7 +18,7 @@
 }
 
 .split-view-view {
-  color: var(--color-foreground, #c8c8c8);
+  color: var(--vscode-foreground, #c8c8c8);
   background: transparent;
 }
 

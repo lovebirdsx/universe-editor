@@ -6,7 +6,7 @@
   flex-direction: column;
   width: 100%;
   height: 100%;
-  background: var(--color-sidebar-bg, #252526);
+  background: var(--vscode-sideBar-background, #252526);
   overflow: hidden;
   outline: none;
 }
@@ -16,7 +16,7 @@
   flex-direction: column;
   width: 100%;
   height: 100%;
-  background: var(--color-panel-bg, #1a1a1c);
+  background: var(--vscode-panel-background, #1a1a1c);
   overflow: hidden;
 }
 
@@ -35,7 +35,7 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--color-sidebar-section-header-fg, #bbbbbb);
+  color: var(--vscode-sideBarSectionHeader-foreground, #bbbbbb);
   user-select: none;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -65,8 +65,8 @@
   display: flex;
   align-items: center;
   height: 28px;
-  background: var(--color-panel-tab-bar-bg, #0f0f11);
-  border-bottom: 1px solid var(--color-border, #0f0f11);
+  background: var(--vscode-panel-tabBarBackground, #0f0f11);
+  border-bottom: 1px solid var(--vscode-workbench-border, #0f0f11);
   flex-shrink: 0;
   user-select: none;
 }
@@ -87,19 +87,19 @@
   padding: 0;
   border: none;
   background: transparent;
-  color: var(--color-tab-inactive-fg, #8a8a92);
+  color: var(--vscode-tab-inactiveForeground, #8a8a92);
   cursor: pointer;
   position: relative;
   flex-shrink: 0;
 }
 
 .tab:hover:not(:disabled) {
-  color: var(--color-tab-inactive-fg-hover, #c8c8c8);
-  background: var(--color-tab-hover-bg, #1f1f22);
+  color: var(--vscode-tab-hoverForeground, #c8c8c8);
+  background: var(--vscode-tab-hoverBackground, #1f1f22);
 }
 
 .tab.active {
-  color: var(--color-tab-active-fg, #ffffff);
+  color: var(--vscode-tab-activeForeground, #ffffff);
   /* Lift the active tab above Allotment's pane separator (::before, z-index:5),
      which otherwise paints over the 1px focus line on the Panel's top edge —
      the SideBar/Secondary panes never hit this because their separator is a
@@ -114,7 +114,7 @@
   left: 0;
   right: 0;
   height: 1px;
-  background: var(--color-tab-active-border, #0070e0);
+  background: var(--vscode-tab-activeBorderTop, #0070e0);
 }
 
 .tab:disabled {
@@ -128,7 +128,7 @@
   top: 2px;
   bottom: 2px;
   width: 2px;
-  background: var(--color-tab-active-border, #0070e0);
+  background: var(--vscode-tab-activeBorderTop, #0070e0);
   pointer-events: none;
   z-index: 1;
 }
@@ -142,14 +142,14 @@
 }
 
 .tab.dropMerge {
-  background: var(--color-tab-hover-bg, #1f1f22);
-  box-shadow: inset 0 0 0 1px var(--color-tab-active-border, #0070e0);
+  background: var(--vscode-tab-hoverBackground, #1f1f22);
+  box-shadow: inset 0 0 0 1px var(--vscode-tab-activeBorderTop, #0070e0);
 }
 
 .tabsLocationDrop {
-  outline: 1px dashed var(--color-tab-active-border, #0070e0);
+  outline: 1px dashed var(--vscode-tab-activeBorderTop, #0070e0);
   outline-offset: -2px;
-  background: var(--color-tab-hover-bg, #1f1f22);
+  background: var(--vscode-tab-hoverBackground, #1f1f22);
 }
 
 .tabFallback {
@@ -178,14 +178,14 @@
   padding: 0;
   border: none;
   background: transparent;
-  color: var(--color-tab-inactive-fg, #8a8a92);
+  color: var(--vscode-tab-inactiveForeground, #8a8a92);
   cursor: pointer;
   flex-shrink: 0;
 }
 
 .closeBtn:hover {
-  color: var(--color-tab-inactive-fg-hover, #c8c8c8);
-  background: var(--color-tab-hover-bg, #1f1f22);
+  color: var(--vscode-tab-hoverForeground, #c8c8c8);
+  background: var(--vscode-tab-hoverBackground, #1f1f22);
 }
 
 /* ---- content areas ---- */
@@ -204,7 +204,7 @@
 
 .empty {
   padding: 16px 12px;
-  color: var(--color-sidebar-fg, #888888);
+  color: var(--vscode-sideBar-foreground, #888888);
   font-size: 12px;
 }
 

@@ -11,7 +11,7 @@
   gap: 8px;
   height: 28px;
   padding: 0 8px 0 12px;
-  border-bottom: 1px solid var(--color-sidebar-border, rgba(255, 255, 255, 0.08));
+  border-bottom: 1px solid var(--vscode-sideBar-border, rgba(255, 255, 255, 0.08));
   flex-shrink: 0;
 }
 
@@ -25,7 +25,7 @@
   appearance: none;
   border: none;
   background: transparent;
-  color: var(--color-sidebar-fg, #cccccc);
+  color: var(--vscode-sideBar-foreground, #cccccc);
   font-size: 12px;
   padding: 2px 8px;
   border-radius: 4px;
@@ -33,7 +33,7 @@
 }
 
 .toolButton:hover {
-  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.08));
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.08));
 }
 
 .body {
@@ -50,7 +50,7 @@
   overflow: auto;
   max-height: 45%;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--color-sidebar-border, rgba(255, 255, 255, 0.08));
+  border-bottom: 1px solid var(--vscode-sideBar-border, rgba(255, 255, 255, 0.08));
 }
 
 .empty {
@@ -69,15 +69,15 @@
   cursor: pointer;
   user-select: none;
   font-size: 12px;
-  color: var(--color-sidebar-fg, #cccccc);
+  color: var(--vscode-sideBar-foreground, #cccccc);
 }
 
 .row:hover {
-  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
 }
 
 .row[data-selected='true'] {
-  background: var(--color-list-active-bg, rgba(255, 255, 255, 0.1));
+  background: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.1));
 }
 
 .purpose {
@@ -85,8 +85,8 @@
   font-size: 11px;
   padding: 0 5px;
   border-radius: 3px;
-  background: var(--color-badge-bg, rgba(120, 160, 255, 0.18));
-  color: var(--color-badge-fg, #b8ccff);
+  background: var(--vscode-badge-background, rgba(120, 160, 255, 0.18));
+  color: var(--vscode-badge-foreground, #b8ccff);
 }
 
 .model {
@@ -119,11 +119,11 @@
 }
 
 .badge[data-status='error'] {
-  color: var(--color-error-fg, #f48771);
+  color: var(--vscode-errorForeground, #f48771);
 }
 
 .badge[data-status='ok'] {
-  color: var(--color-success-fg, #89d185);
+  color: var(--vscode-success-foreground, #89d185);
 }
 
 .badge[data-status='canceled'] {
@@ -178,7 +178,7 @@
   word-break: break-word;
   font-size: 12px;
   font-family: var(--font-mono, monospace);
-  background: var(--color-input-bg, rgba(255, 255, 255, 0.04));
+  background: var(--vscode-input-background, rgba(255, 255, 255, 0.04));
   border-radius: 4px;
 }
 
@@ -196,7 +196,7 @@
   white-space: pre-wrap;
   font-size: 12px;
   font-family: var(--font-mono, monospace);
-  color: var(--color-error-fg, #f48771);
-  background: var(--color-input-bg, rgba(255, 255, 255, 0.04));
+  color: var(--vscode-errorForeground, #f48771);
+  background: var(--vscode-input-background, rgba(255, 255, 255, 0.04));
   border-radius: 4px;
 }

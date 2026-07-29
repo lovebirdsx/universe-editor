@@ -6,9 +6,9 @@
 }
 
 .dropActive {
-  outline: 1px dashed var(--color-accent, #4daafc);
+  outline: 1px dashed var(--vscode-workbench-accent, #4daafc);
   outline-offset: -2px;
-  background: var(--color-list-drop-bg, rgba(77, 170, 252, 0.08));
+  background: var(--vscode-list-dropBackground, rgba(77, 170, 252, 0.08));
 }
 
 .searchRow {
@@ -34,7 +34,7 @@
   padding: 0 8px;
   border: none;
   background: transparent;
-  color: var(--color-sidebar-fg, #cccccc);
+  color: var(--vscode-sideBar-foreground, #cccccc);
   cursor: pointer;
   text-transform: uppercase;
   font-size: 11px;
@@ -57,11 +57,11 @@
   padding: 7px 14px;
   cursor: pointer;
   user-select: none;
-  color: var(--color-sidebar-fg, #cccccc);
+  color: var(--vscode-sideBar-foreground, #cccccc);
 }
 
 .row:hover {
-  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
 }
 
 .disabledRow .icon,
@@ -76,18 +76,18 @@
   text-transform: uppercase;
   padding: 0 4px;
   border-radius: 3px;
-  background: var(--color-badge-bg, rgba(255, 255, 255, 0.12));
-  color: var(--color-badge-fg, #cccccc);
+  background: var(--vscode-badge-background, rgba(255, 255, 255, 0.12));
+  color: var(--vscode-badge-foreground, #cccccc);
 }
 
 .disabledBadge {
-  background: var(--color-warning-bg, rgba(255, 190, 80, 0.18));
-  color: var(--color-warning-fg, #d9a441);
+  background: var(--vscode-warning-background, rgba(255, 190, 80, 0.18));
+  color: var(--vscode-warning-foreground, #d9a441);
 }
 
 .errorBadge {
-  background: var(--color-error-bg, rgba(240, 80, 80, 0.18));
-  color: var(--color-error-fg, #f14c4c);
+  background: var(--vscode-error-background, rgba(240, 80, 80, 0.18));
+  color: var(--vscode-errorForeground, #f14c4c);
   cursor: help;
 }
 
@@ -96,9 +96,9 @@
   margin: 0;
   padding: 4px 0;
   list-style: none;
-  background: var(--workbench-menu-bg, #252526);
-  color: var(--workbench-menu-fg, #cccccc);
-  border: 1px solid var(--workbench-menu-border, #454545);
+  background: var(--vscode-menu-background, #252526);
+  color: var(--vscode-menu-foreground, #cccccc);
+  border: 1px solid var(--vscode-menu-border, #454545);
   border-radius: 4px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   font-size: 13px;
@@ -111,24 +111,24 @@
   align-items: center;
   padding: 4px 16px;
   cursor: pointer;
-  color: var(--workbench-menu-fg, #cccccc);
+  color: var(--vscode-menu-foreground, #cccccc);
   white-space: nowrap;
   user-select: none;
 }
 
 .menuItem:hover {
-  background: var(--workbench-menu-hover-bg, #094771);
+  background: var(--vscode-menu-selectionBackground, #094771);
   outline: none;
 }
 
 .menuItemDanger {
-  color: var(--color-error-fg, #f48771);
+  color: var(--vscode-errorForeground, #f48771);
 }
 
 .menuSep {
   margin: 4px 0;
   border: none;
-  border-top: 1px solid var(--workbench-menu-separator, #3c3c3c);
+  border-top: 1px solid var(--vscode-menu-separatorBackground, #3c3c3c);
 }
 
 .icon {
@@ -202,7 +202,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--color-accent, #4daafc);
+  color: var(--vscode-workbench-accent, #4daafc);
   opacity: 0.85;
 }
 

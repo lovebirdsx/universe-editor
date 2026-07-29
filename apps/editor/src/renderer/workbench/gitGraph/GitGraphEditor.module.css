@@ -3,8 +3,8 @@
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  background: var(--color-editor-bg);
-  color: var(--color-editor-fg);
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
   font-size: 13px;
 }
 
@@ -13,7 +13,7 @@
   align-items: center;
   gap: 12px;
   padding: 6px 12px;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--vscode-workbench-border);
   flex: 0 0 auto;
   position: relative;
 }
@@ -23,7 +23,7 @@
 }
 
 .count {
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .toolbarSpacer {
@@ -33,40 +33,40 @@
 .repoSelect {
   max-width: 220px;
   padding: 1px 4px;
-  background: var(--color-input-bg, var(--color-editor-bg));
-  color: var(--color-editor-fg);
-  border: 1px solid var(--color-border);
+  background: var(--vscode-input-background, var(--vscode-editor-background));
+  color: var(--vscode-editor-foreground);
+  border: 1px solid var(--vscode-workbench-border);
   border-radius: 3px;
 }
 
 .repoSelect:focus {
   outline: none;
-  border-color: var(--color-focus-border, #0070e0);
+  border-color: var(--vscode-focusBorder, #0070e0);
 }
 
 .searchInput {
   width: 200px;
   padding: 2px 6px;
-  background: var(--color-input-bg, var(--color-editor-bg));
-  color: var(--color-editor-fg);
-  border: 1px solid var(--color-border);
+  background: var(--vscode-input-background, var(--vscode-editor-background));
+  color: var(--vscode-editor-foreground);
+  border: 1px solid var(--vscode-workbench-border);
   border-radius: 3px;
   font-size: 12px;
 }
 
 .searchInput::placeholder {
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .searchInput:focus {
   outline: none;
-  border-color: var(--color-focus-border, #0070e0);
+  border-color: var(--vscode-focusBorder, #0070e0);
 }
 
 .toolBtn {
   padding: 2px 8px;
   background: transparent;
-  color: var(--color-editor-fg);
+  color: var(--vscode-editor-foreground);
   border: 1px solid transparent;
   border-radius: 3px;
   cursor: pointer;
@@ -75,12 +75,12 @@
 }
 
 .toolBtn:hover {
-  background: var(--color-list-hover-bg);
+  background: var(--vscode-list-hoverBackground);
 }
 
 .toolBtnActive {
-  background: var(--color-list-hover-bg);
-  border-color: var(--color-border);
+  background: var(--vscode-list-hoverBackground);
+  border-color: var(--vscode-workbench-border);
 }
 
 .settingsBackdrop {
@@ -100,9 +100,9 @@
   min-width: 220px;
   margin-top: 4px;
   padding: 10px 12px;
-  background: var(--color-menu-bg, var(--color-editor-bg));
-  color: var(--color-menu-fg, var(--color-editor-fg));
-  border: 1px solid var(--color-border);
+  background: var(--vscode-menu-background, var(--vscode-editor-background));
+  color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
+  border: 1px solid var(--vscode-workbench-border);
   border-radius: 4px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
@@ -120,25 +120,25 @@
 
 .settingsRow select {
   flex: 0 0 auto;
-  background: var(--color-input-bg, var(--color-editor-bg));
-  color: var(--color-editor-fg);
-  border: 1px solid var(--color-border);
+  background: var(--vscode-input-background, var(--vscode-editor-background));
+  color: var(--vscode-editor-foreground);
+  border: 1px solid var(--vscode-workbench-border);
   border-radius: 3px;
 }
 
 .settingsRow select:focus {
   outline: none;
-  border-color: var(--color-focus-border, #0070e0);
+  border-color: var(--vscode-focusBorder, #0070e0);
 }
 
 .status,
 .error {
   padding: 12px;
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .error {
-  color: var(--color-editor-modified-border);
+  color: var(--vscode-tab-modifiedBorder);
 }
 
 .scrollBody {
@@ -154,9 +154,9 @@
   align-items: center;
   height: 24px;
   white-space: nowrap;
-  background: var(--color-editor-bg);
-  border-bottom: 1px solid var(--color-border);
-  color: var(--color-editor-fg-muted);
+  background: var(--vscode-editor-background);
+  border-bottom: 1px solid var(--vscode-workbench-border);
+  color: var(--vscode-editor-mutedForeground);
   font-weight: 600;
 }
 
@@ -188,7 +188,7 @@
 }
 
 .colResizer:hover {
-  background: var(--color-accent);
+  background: var(--vscode-workbench-accent);
   opacity: 0.5;
 }
 
@@ -200,15 +200,15 @@
 
 .loadMoreBtn {
   padding: 4px 16px;
-  background: var(--color-button-bg);
-  color: var(--color-button-fg);
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
   border: none;
   border-radius: 3px;
   cursor: pointer;
 }
 
 .loadMoreBtn:hover {
-  background: var(--color-button-hover-bg);
+  background: var(--vscode-button-hoverBackground);
 }
 
 .canvas {
@@ -224,11 +224,11 @@
 }
 
 .nodeCurrent {
-  fill: var(--color-editor-bg);
+  fill: var(--vscode-editor-background);
 }
 
 .stashInner {
-  fill: var(--color-editor-bg);
+  fill: var(--vscode-editor-background);
 }
 
 .rows {
@@ -245,13 +245,13 @@
 }
 
 .row:hover {
-  background: var(--color-list-hover-bg);
+  background: var(--vscode-list-hoverBackground);
 }
 
 .rowSelected,
 .rowSelected:hover {
-  background: var(--color-list-active-bg, var(--color-accent));
-  color: var(--color-list-active-fg, var(--color-button-fg));
+  background: var(--vscode-list-activeSelectionBackground, var(--vscode-workbench-accent));
+  color: var(--vscode-list-activeSelectionForeground, var(--vscode-button-foreground));
 }
 
 .graphSpacer {
@@ -281,7 +281,7 @@
 .hash {
   flex: 0 0 auto;
   padding: 0 10px;
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .author {
@@ -317,8 +317,8 @@
   border-radius: 8px;
   font-size: 11px;
   line-height: 16px;
-  background: var(--color-badge-bg);
-  color: var(--color-badge-fg);
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
 }
 
 .badgeRemote {
@@ -326,8 +326,8 @@
 }
 
 .badgeTag {
-  background: var(--color-accent);
-  color: var(--color-button-fg);
+  background: var(--vscode-workbench-accent);
+  color: var(--vscode-button-foreground);
 }
 
 .badgeStash {
@@ -337,8 +337,8 @@
   border-radius: 8px;
   font-size: 11px;
   line-height: 16px;
-  background: var(--color-editor-fg-muted);
-  color: var(--color-editor-bg);
+  background: var(--vscode-editor-mutedForeground);
+  color: var(--vscode-editor-background);
 }
 
 .badgeWorktree {
@@ -348,14 +348,14 @@
   border-radius: 8px;
   font-size: 11px;
   line-height: 14px;
-  border: 1px solid var(--color-accent);
-  color: var(--color-accent);
+  border: 1px solid var(--vscode-workbench-accent);
+  color: var(--vscode-workbench-accent);
   cursor: context-menu;
 }
 
 .badgeWorktreeCurrent {
-  background: var(--color-accent);
-  color: var(--color-button-fg);
+  background: var(--vscode-workbench-accent);
+  color: var(--vscode-button-foreground);
 }
 
 .badgeOverflow {
@@ -365,13 +365,13 @@
   flex: 0 0 auto;
   margin-right: 4px;
   padding: 0 6px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--vscode-workbench-border);
   border-radius: 8px;
   font-size: 11px;
   font-weight: 600;
   line-height: 14px;
-  background: var(--color-button-bg);
-  color: var(--color-button-fg);
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
   font-family: inherit;
   cursor: pointer;
 }
@@ -383,11 +383,11 @@
 }
 
 .badgeOverflow:hover {
-  background: var(--color-button-hover-bg);
+  background: var(--vscode-button-hoverBackground);
 }
 
 .badgeOverflow:focus-visible {
-  outline: 1px solid var(--color-focus-border);
+  outline: 1px solid var(--vscode-focusBorder);
   outline-offset: 1px;
 }
 
@@ -402,9 +402,9 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-top: 1px solid var(--color-border);
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-list-hover-bg);
+  border-top: 1px solid var(--vscode-workbench-border);
+  border-bottom: 1px solid var(--vscode-workbench-border);
+  background: var(--vscode-list-hoverBackground);
 }
 
 .detailHeader {
@@ -412,7 +412,7 @@
   align-items: center;
   gap: 8px;
   padding: 4px 12px;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--vscode-workbench-border);
   flex: 0 0 auto;
 }
 
@@ -432,13 +432,13 @@
   border: none;
   border-radius: 3px;
   background: transparent;
-  color: var(--color-editor-fg);
+  color: var(--vscode-editor-foreground);
   cursor: pointer;
   font-size: 16px;
 }
 
 .detailClose:hover {
-  background: var(--color-list-active-bg, var(--color-accent));
+  background: var(--vscode-list-activeSelectionBackground, var(--vscode-workbench-accent));
 }
 
 .detailBody {
@@ -449,12 +449,12 @@
 
 .detailEmpty {
   padding: 8px 12px;
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .detailMeta {
   padding: 0 12px;
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
   margin-bottom: 6px;
   font-family: var(--font-mono, monospace);
 }
@@ -473,7 +473,7 @@
   padding: 1px 8px;
   border: none;
   background: transparent;
-  color: var(--color-editor-fg);
+  color: var(--vscode-editor-foreground);
   cursor: pointer;
   text-align: left;
   width: 100%;
@@ -481,7 +481,7 @@
 }
 
 .treeRow:hover {
-  background: var(--color-list-hover-bg);
+  background: var(--vscode-list-hoverBackground);
 }
 
 .treeFileRow {
@@ -491,12 +491,12 @@
   width: 100%;
   padding: 1px 0;
   cursor: pointer;
-  color: var(--color-editor-fg);
+  color: var(--vscode-editor-foreground);
   line-height: 20px;
 }
 
 .treeFileRow:hover {
-  background: var(--color-list-hover-bg);
+  background: var(--vscode-list-hoverBackground);
 }
 
 .fileActionBtn {
@@ -510,7 +510,7 @@
   border: none;
   border-radius: 3px;
   background: transparent;
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
@@ -522,15 +522,15 @@
 }
 
 .fileActionBtn:hover {
-  background: var(--color-toolbar-btn-hover-bg, rgba(255, 255, 255, 0.1));
-  color: var(--color-editor-fg);
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1));
+  color: var(--vscode-editor-foreground);
 }
 
 .chevron {
   flex: 0 0 auto;
   width: 12px;
   font-size: 9px;
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .dirName {
@@ -544,7 +544,7 @@
   width: 14px;
   text-align: center;
   font-family: var(--font-mono, monospace);
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .statusAdded {
@@ -572,9 +572,9 @@
   margin: 0;
   padding: 4px 0;
   list-style: none;
-  background: var(--workbench-menu-bg, #252526);
-  color: var(--workbench-menu-fg, #cccccc);
-  border: 1px solid var(--workbench-menu-border, #454545);
+  background: var(--vscode-menu-background, #252526);
+  color: var(--vscode-menu-foreground, #cccccc);
+  border: 1px solid var(--vscode-menu-border, #454545);
   border-radius: 4px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   font-size: 13px;
@@ -587,29 +587,29 @@
   align-items: center;
   padding: 4px 16px;
   cursor: pointer;
-  color: var(--workbench-menu-fg, #cccccc);
+  color: var(--vscode-menu-foreground, #cccccc);
   white-space: nowrap;
   user-select: none;
 }
 
 .menuItem:hover {
-  background: var(--workbench-menu-hover-bg, #094771);
+  background: var(--vscode-menu-selectionBackground, #094771);
   outline: none;
 }
 
 .menuItemDanger {
-  color: var(--color-editor-modified-border, #c74e39);
+  color: var(--vscode-tab-modifiedBorder, #c74e39);
 }
 
 .menuItemDanger:hover {
-  background: var(--color-editor-modified-border, #c74e39);
+  background: var(--vscode-tab-modifiedBorder, #c74e39);
   color: #fff;
 }
 
 .menuSep {
   margin: 4px 0;
   border: none;
-  border-top: 1px solid var(--workbench-menu-separator, #3c3c3c);
+  border-top: 1px solid var(--vscode-menu-separatorBackground, #3c3c3c);
 }
 
 .pickerBackdrop {
@@ -632,9 +632,9 @@
   max-width: 90vw;
   max-height: 70vh;
   padding: 16px;
-  background: var(--color-menu-bg, var(--color-editor-bg));
-  color: var(--color-menu-fg, var(--color-editor-fg));
-  border: 1px solid var(--color-border);
+  background: var(--vscode-menu-background, var(--vscode-editor-background));
+  color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
+  border: 1px solid var(--vscode-workbench-border);
   border-radius: 6px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
 }
@@ -648,14 +648,14 @@
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .pickerList {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--vscode-workbench-border);
   border-radius: 4px;
 }
 
@@ -668,7 +668,7 @@
 }
 
 .pickerRow:hover {
-  background: var(--color-list-hover-bg);
+  background: var(--vscode-list-hoverBackground);
 }
 
 .pickerRowName {
@@ -680,7 +680,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
   font-size: 12px;
 }
 
@@ -692,25 +692,25 @@
 
 .pickerBtn {
   padding: 4px 14px;
-  background: var(--color-input-bg, var(--color-editor-bg));
-  color: var(--color-editor-fg);
-  border: 1px solid var(--color-border);
+  background: var(--vscode-input-background, var(--vscode-editor-background));
+  color: var(--vscode-editor-foreground);
+  border: 1px solid var(--vscode-workbench-border);
   border-radius: 3px;
   cursor: pointer;
 }
 
 .pickerBtn:hover {
-  background: var(--color-list-hover-bg);
+  background: var(--vscode-list-hoverBackground);
 }
 
 .pickerBtnPrimary {
-  background: var(--color-button-bg);
-  color: var(--color-button-fg);
-  border-color: var(--color-button-bg);
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-button-background);
 }
 
 .pickerBtnPrimary:hover {
-  background: var(--color-button-hover-bg);
+  background: var(--vscode-button-hoverBackground);
 }
 
 .pickerBtn:disabled {

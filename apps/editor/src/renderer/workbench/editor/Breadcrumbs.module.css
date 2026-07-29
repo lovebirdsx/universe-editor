@@ -8,9 +8,9 @@
   overflow: hidden;
   white-space: nowrap;
   font-size: 12px;
-  color: var(--color-breadcrumb-fg, #a0a0a0);
-  background: var(--color-editor-bg, #1e1e1e);
-  border-bottom: 1px solid var(--color-editor-border, #2b2b2b);
+  color: var(--vscode-breadcrumb-foreground, #a0a0a0);
+  background: var(--vscode-editor-background, #1e1e1e);
+  border-bottom: 1px solid var(--vscode-editorGroup-border, #2b2b2b);
 }
 
 .segment {
@@ -29,8 +29,8 @@
 }
 
 button.segment:hover {
-  background: var(--color-list-hover-bg, #2a2d2e);
-  color: var(--color-sidebar-fg, #cccccc);
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+  color: var(--vscode-sideBar-foreground, #cccccc);
 }
 
 .segmentIcon {
@@ -42,5 +42,5 @@ button.segment:hover {
 .separator {
   display: inline-flex;
   align-items: center;
-  color: var(--color-sidebar-fg-dim, #707070);
+  color: var(--vscode-descriptionForeground, #707070);
 }

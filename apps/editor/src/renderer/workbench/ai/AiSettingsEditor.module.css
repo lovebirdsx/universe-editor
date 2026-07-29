@@ -7,8 +7,8 @@
   display: flex;
   height: 100%;
   overflow: hidden;
-  background: var(--color-editor-bg);
-  color: var(--color-editor-fg);
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
 }
 
 /* -- left category nav -------------------------------------------------- */
@@ -19,7 +19,7 @@
   flex-direction: column;
   gap: var(--spacing-1);
   padding: var(--spacing-5);
-  border-right: 1px solid var(--color-border);
+  border-right: 1px solid var(--vscode-workbench-border);
   overflow-y: auto;
 }
 
@@ -29,7 +29,7 @@
   font-weight: var(--font-weight-bold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .navGroupTitle {
@@ -38,7 +38,7 @@
   font-weight: var(--font-weight-medium);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
   opacity: 0.8;
 }
 
@@ -50,19 +50,19 @@
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--color-editor-fg);
+  color: var(--vscode-editor-foreground);
   font-size: var(--font-size-base);
   text-align: left;
   cursor: pointer;
 }
 
 .navItem:hover {
-  background: var(--color-list-hover-bg);
+  background: var(--vscode-list-hoverBackground);
 }
 
 .navItemActive {
-  background: var(--color-list-active-bg);
-  color: var(--color-list-active-fg);
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
 }
 
 .navIcon {
@@ -86,7 +86,7 @@
   justify-content: space-between;
   gap: var(--spacing-5);
   padding: var(--spacing-6) var(--spacing-7);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--vscode-workbench-border);
 }
 
 .contentTitle {
@@ -136,9 +136,9 @@
   max-height: 60vh;
   overflow-y: auto;
   padding: var(--spacing-5) var(--spacing-6);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--vscode-workbench-border);
   border-radius: var(--radius-md);
-  background: var(--color-surface);
+  background: var(--vscode-workbench-surface);
   box-shadow: var(--shadow-lg);
 }
 
@@ -169,9 +169,9 @@
   overflow-y: auto;
   padding: var(--spacing-7);
   transform: translate(-50%, -50%);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--vscode-workbench-border);
   border-radius: var(--radius-md);
-  background: var(--color-surface);
+  background: var(--vscode-workbench-surface);
   box-shadow: var(--shadow-lg);
 }
 
@@ -189,7 +189,7 @@
 
 .dialogFieldError {
   font-size: var(--font-size-sm);
-  color: var(--color-error-fg, #f48771);
+  color: var(--vscode-errorForeground, #f48771);
 }
 
 .verifyRow {
@@ -204,7 +204,7 @@
   align-items: center;
   gap: var(--spacing-2);
   font-size: var(--font-size-sm);
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .verifyOk {
@@ -212,7 +212,7 @@
   align-items: center;
   gap: var(--spacing-2);
   font-size: var(--font-size-sm);
-  color: var(--color-success-fg, #89d185);
+  color: var(--vscode-success-foreground, #89d185);
 }
 
 .verifyFail {
@@ -221,7 +221,7 @@
   gap: var(--spacing-2);
   min-width: 0;
   font-size: var(--font-size-sm);
-  color: var(--color-error-fg, #f48771);
+  color: var(--vscode-errorForeground, #f48771);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -242,7 +242,7 @@
   gap: var(--spacing-5);
   padding: var(--spacing-8) var(--spacing-6);
   text-align: center;
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .emptyIcon {
@@ -252,7 +252,7 @@
 .emptyTitle {
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-medium);
-  color: var(--color-editor-fg);
+  color: var(--vscode-editor-foreground);
 }
 
 .emptyDesc {
@@ -272,9 +272,9 @@
 .card {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--vscode-workbench-border);
   border-radius: var(--radius-md);
-  background: var(--color-surface);
+  background: var(--vscode-workbench-surface);
 }
 
 .cardHeader {
@@ -292,7 +292,7 @@
 }
 
 .cardHeader:hover {
-  background: var(--color-list-hover-bg);
+  background: var(--vscode-list-hoverBackground);
 }
 
 .cardHeaderAction {
@@ -302,13 +302,13 @@
   width: 22px;
   height: 22px;
   border-radius: var(--radius-sm);
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
   cursor: pointer;
 }
 
 .cardHeaderAction:hover {
-  background: var(--color-toolbar-hover-bg);
-  color: var(--color-editor-fg);
+  background: var(--vscode-toolbar-hoverBackground);
+  color: var(--vscode-editor-foreground);
 }
 
 .cardBody {
@@ -329,7 +329,7 @@
 
 .declaredIcon {
   flex: 0 0 auto;
-  color: var(--color-badge-warning, #d7ba7d);
+  color: var(--vscode-badge-warningBackground, #d7ba7d);
 }
 
 .cardIcon {
@@ -365,7 +365,7 @@
 
 .label {
   font-size: var(--font-size-sm);
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .apiKeyRow {
@@ -396,7 +396,7 @@
 
 .modelRow {
   padding: var(--spacing-3) 0;
-  border-top: 1px solid var(--color-border-subtle);
+  border-top: 1px solid var(--vscode-workbench-borderSubtle);
 }
 
 .modelMain {
@@ -411,12 +411,12 @@
 
 .modelFamily {
   font-size: var(--font-size-sm);
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .noModels {
   font-size: var(--font-size-base);
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 /* -- per-model configuration form --------------------------------------- */
@@ -428,7 +428,7 @@
   margin-top: var(--spacing-4);
   padding: var(--spacing-4) var(--spacing-5);
   border-radius: var(--radius-sm);
-  background: var(--color-input-bg);
+  background: var(--vscode-input-background);
 }
 
 .configRow {
@@ -449,7 +449,7 @@
 
 .configDesc {
   font-size: var(--font-size-xs);
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .configControl {
@@ -460,16 +460,16 @@
   width: 100%;
   height: 26px;
   padding: 0 var(--spacing-4);
-  border: 1px solid var(--color-input-border);
+  border: 1px solid var(--vscode-input-border);
   border-radius: var(--radius-sm);
-  background: var(--color-input-bg);
-  color: var(--color-input-fg);
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
   font-size: var(--font-size-base);
   outline: none;
 }
 
 .control:focus {
-  border-color: var(--color-focus-border);
+  border-color: var(--vscode-focusBorder);
 }
 
 .configActions {
@@ -495,17 +495,17 @@
   gap: var(--spacing-5);
   width: 100%;
   padding: var(--spacing-5) var(--spacing-6);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--vscode-workbench-border);
   border-radius: var(--radius-md);
-  background: var(--color-surface);
+  background: var(--vscode-workbench-surface);
   color: inherit;
   text-align: left;
   cursor: pointer;
 }
 
 .featureRow:hover {
-  background: var(--color-list-hover-bg);
-  border-color: var(--color-focus-border);
+  background: var(--vscode-list-hoverBackground);
+  border-color: var(--vscode-focusBorder);
 }
 
 .featureIcon {
@@ -528,7 +528,7 @@
 
 .featureDesc {
   font-size: var(--font-size-sm);
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 .featureValue {
@@ -546,5 +546,5 @@
 .featureUnset {
   font-size: var(--font-size-base);
   font-style: italic;
-  color: var(--color-editor-fg-muted);
+  color: var(--vscode-editor-mutedForeground);
 }

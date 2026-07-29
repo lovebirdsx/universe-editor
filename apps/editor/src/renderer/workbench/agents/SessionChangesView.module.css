@@ -21,11 +21,11 @@
   cursor: pointer;
   user-select: none;
   font-size: 13px;
-  color: var(--color-sidebar-fg, #cccccc);
+  color: var(--vscode-sideBar-foreground, #cccccc);
 }
 
 .row:hover {
-  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
 }
 
 .folderRow {
@@ -37,11 +37,11 @@
   cursor: pointer;
   user-select: none;
   font-size: 13px;
-  color: var(--color-sidebar-fg, #cccccc);
+  color: var(--vscode-sideBar-foreground, #cccccc);
 }
 
 .folderRow:hover {
-  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
 }
 
 .chevron {
@@ -84,7 +84,7 @@
   text-align: center;
   font-weight: 700;
   font-size: 12px;
-  color: var(--color-scm-modified, #e2c08d);
+  color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
 }
 
 /* With a dir label the row already grows to fill; keep the badge flush right. */
@@ -93,25 +93,25 @@
 }
 
 .badge[data-status='added'] {
-  color: var(--color-scm-added, #73c991);
+  color: var(--vscode-gitDecoration-addedResourceForeground, #73c991);
 }
 
 .badge[data-status='degraded'] {
-  color: var(--color-scm-conflict, #e2c08d);
+  color: var(--vscode-gitDecoration-conflictingResourceForeground, #e2c08d);
 }
 
 /* Mirror the SCM resource row: tint the filename by status and strike through
    deletions. Colors come from the same --color-scm-* tokens as the badge. */
 .row[data-status='added'] .name {
-  color: var(--color-scm-added, #73c991);
+  color: var(--vscode-gitDecoration-addedResourceForeground, #73c991);
 }
 
 .row[data-status='modified'] .name {
-  color: var(--color-scm-modified, #e2c08d);
+  color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
 }
 
 .row[data-status='degraded'] .name {
-  color: var(--color-scm-conflict, #e2c08d);
+  color: var(--vscode-gitDecoration-conflictingResourceForeground, #e2c08d);
 }
 
 /* Floating row actions — overlaid on the right edge, revealed on hover, mirroring
@@ -132,7 +132,7 @@
 }
 
 .row:hover .actions {
-  background: var(--color-list-hover-bg, #2a2d2e);
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
 }
 
 .actionButton {
@@ -141,14 +141,14 @@
   justify-content: center;
   border: none;
   background: transparent;
-  color: var(--color-foreground-muted, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   cursor: pointer;
   padding: 2px;
   border-radius: 3px;
 }
 
 .actionButton:hover {
-  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.06));
 }
 
 .empty {
@@ -158,6 +158,6 @@
   height: 100%;
   padding: 16px;
   text-align: center;
-  color: var(--color-foreground-muted, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   font-size: 13px;
 }

@@ -1,6 +1,6 @@
 .thread {
-  background: var(--color-editor-widget-bg, #252526);
-  border: 1px solid var(--color-editor-border, rgba(255, 255, 255, 0.15));
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-editorGroup-border, rgba(255, 255, 255, 0.15));
   border-radius: 4px;
   padding: 8px 10px;
   font-size: 12px;
@@ -47,7 +47,7 @@
 .taskAction {
   font-size: 11px;
   background: transparent;
-  border: 1px solid var(--color-input-border, rgba(255, 255, 255, 0.15));
+  border: 1px solid var(--vscode-input-border, rgba(255, 255, 255, 0.15));
   color: inherit;
   border-radius: 3px;
   padding: 1px 6px;
@@ -55,7 +55,7 @@
 }
 
 .taskAction:hover {
-  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.08));
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.08));
 }
 
 .body {
@@ -72,9 +72,9 @@
 .input {
   resize: vertical;
   min-height: 48px;
-  background: var(--color-input-bg, #3c3c3c);
+  background: var(--vscode-input-background, #3c3c3c);
   color: inherit;
-  border: 1px solid var(--color-input-border, rgba(255, 255, 255, 0.15));
+  border: 1px solid var(--vscode-input-border, rgba(255, 255, 255, 0.15));
   border-radius: 3px;
   padding: 6px 8px;
   font-family: inherit;

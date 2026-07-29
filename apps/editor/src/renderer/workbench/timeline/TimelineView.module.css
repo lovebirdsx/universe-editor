@@ -14,7 +14,7 @@
   min-height: 0;
   overflow-y: auto;
   font-size: 13px;
-  color: var(--color-sidebar-fg, #cccccc);
+  color: var(--vscode-sideBar-foreground, #cccccc);
   user-select: none;
   outline: none;
 }
@@ -32,21 +32,21 @@
 }
 
 .row:hover {
-  background: var(--color-list-hover-bg, #2a2d2e);
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
 }
 
 .row.selected {
-  background: var(--color-list-active-bg, #094771);
-  color: var(--color-list-active-fg, #ffffff);
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+  color: var(--vscode-list-activeSelectionForeground, #ffffff);
 }
 
 .view:not([data-focused='true']) .row.selected {
-  background: var(--color-list-inactive-selection-bg, rgba(58, 61, 65, 0.6));
+  background: var(--vscode-list-inactiveSelectionBackground, rgba(58, 61, 65, 0.6));
   color: inherit;
 }
 
 .row.focused {
-  outline: 1px solid var(--color-list-focus-outline, #007fd4);
+  outline: 1px solid var(--vscode-list-focusOutline, #007fd4);
   outline-offset: -1px;
 }
 
@@ -60,7 +60,7 @@
   justify-content: center;
   width: 22px;
   flex-shrink: 0;
-  color: var(--color-sidebar-fg-dim, #888888);
+  color: var(--vscode-descriptionForeground, #888888);
 }
 
 .label {
@@ -85,7 +85,7 @@
 .empty {
   padding: 12px;
   font-size: 12px;
-  color: var(--color-sidebar-fg, #888888);
+  color: var(--vscode-sideBar-foreground, #888888);
 }
 
 .virtualList {

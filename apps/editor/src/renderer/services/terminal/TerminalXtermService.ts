@@ -80,9 +80,9 @@ function isDarkTheme(config: IConfigurationService): boolean {
 }
 
 // xterm 需要具体 hex 值（不能用 CSS var()），所以 ANSI 16 色在此硬编码一份。
-// 这两套调色板与 agents.module.css 的 `--acp-ansi-*`（agent 输出，对标 VSCode
-// Dark/Light Modern）保持同步——介质不同（xterm 吃 hex、agent 输出吃 CSS 变量），
-// 无法共享同一份定义，改其一时请同步另一处。
+// 这两套调色板即 universeColorIds.ts 里 terminal.ansi* 的 dark/light 槽默认值
+// （agent 输出的 --acp-ansi-* 经 var(--vscode-terminal-ansi*) 消费同一份注册表），
+// 改其一时请同步另一处。
 const DARK_THEME: ITheme = {
   background: '#1a1a1c',
   foreground: '#cccccc',

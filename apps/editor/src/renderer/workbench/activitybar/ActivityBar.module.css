@@ -4,7 +4,7 @@
   align-items: center;
   width: 100%;
   height: 100%;
-  background: var(--color-activitybar-bg, #333333);
+  background: var(--vscode-activityBar-background, #333333);
   padding: 4px 0;
   gap: 2px;
 }
@@ -35,7 +35,7 @@
   border-radius: 3px;
   border: none;
   background: transparent;
-  color: var(--color-activitybar-fg, #8a8a92);
+  color: var(--vscode-activityBar-inactiveForeground, #8a8a92);
   cursor: pointer;
   font-size: 16px;
   transition: background 0.1s, color 0.1s;
@@ -43,12 +43,12 @@
 }
 
 .item:hover {
-  color: var(--color-activitybar-fg-hover, #c8c8c8);
-  background: var(--color-activitybar-item-hover, rgba(255, 255, 255, 0.06));
+  color: var(--vscode-activityBar-hoverForeground, #c8c8c8);
+  background: var(--vscode-activityBar-hoverBackground, rgba(255, 255, 255, 0.06));
 }
 
 .item.active {
-  color: var(--color-activitybar-fg-active, #ffffff);
+  color: var(--vscode-activityBar-foreground, #ffffff);
 }
 
 .item.active::before {
@@ -59,7 +59,7 @@
   transform: translateY(-50%);
   width: 2px;
   height: 20px;
-  background: var(--color-activitybar-active-border, #0070e0);
+  background: var(--vscode-activityBar-activeBorder, #0070e0);
   border-radius: 0 2px 2px 0;
 }
 
@@ -68,9 +68,9 @@
 }
 
 .locationDrop {
-  outline: 1px dashed var(--color-activitybar-active-border, #0070e0);
+  outline: 1px dashed var(--vscode-activityBar-activeBorder, #0070e0);
   outline-offset: -2px;
-  background: var(--color-activitybar-item-hover, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-activityBar-hoverBackground, rgba(255, 255, 255, 0.06));
 }
 
 .dropBefore::after,
@@ -80,7 +80,7 @@
   left: 4px;
   right: 4px;
   height: 2px;
-  background: var(--color-activitybar-active-border, #0070e0);
+  background: var(--vscode-activityBar-activeBorder, #0070e0);
   pointer-events: none;
 }
 
@@ -93,8 +93,8 @@
 }
 
 .dropMerge {
-  background: var(--color-activitybar-item-hover, rgba(255, 255, 255, 0.06));
-  box-shadow: inset 0 0 0 1px var(--color-activitybar-active-border, #0070e0);
+  background: var(--vscode-activityBar-hoverBackground, rgba(255, 255, 255, 0.06));
+  box-shadow: inset 0 0 0 1px var(--vscode-activityBar-activeBorder, #0070e0);
   border-radius: 3px;
 }
 
@@ -122,13 +122,13 @@
   margin-left: 8px;
   top: 50%;
   transform: translateY(-50%);
-  background: var(--color-tooltip-bg, #2f2f35);
-  color: var(--color-tooltip-fg, #c8c8c8);
+  background: var(--vscode-tooltip-background, #2f2f35);
+  color: var(--vscode-tooltip-foreground, #c8c8c8);
   padding: 4px 8px;
   border-radius: 3px;
   white-space: nowrap;
   font-size: 12px;
   pointer-events: none;
   z-index: 100;
-  border: 1px solid var(--color-border, #0f0f11);
+  border: 1px solid var(--vscode-workbench-border, #0f0f11);
 }

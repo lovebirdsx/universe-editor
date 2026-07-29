@@ -15,9 +15,9 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background-color: var(--color-dropdown-bg, #2f2f35);
-  color: var(--color-foreground, #c8c8c8);
-  border: 1px solid var(--color-dropdown-border, #0f0f11);
+  background-color: var(--vscode-dropdown-background, #2f2f35);
+  color: var(--vscode-foreground, #c8c8c8);
+  border: 1px solid var(--vscode-dropdown-border, #0f0f11);
   border-radius: 3px;
   padding: 2px 6px;
   font-size: 12px;
@@ -30,7 +30,7 @@
 }
 
 .instanceBtn:focus-visible {
-  border-color: var(--color-focus-border, #0070e0);
+  border-color: var(--vscode-focusBorder, #0070e0);
 }
 
 .instanceBtn:disabled {
@@ -40,7 +40,7 @@
 
 .instanceIcon {
   flex: 0 0 auto;
-  color: var(--color-fg-muted, #999);
+  color: var(--vscode-descriptionForeground, #999);
 }
 
 .instanceLabel {
@@ -56,8 +56,8 @@
   top: calc(100% + 2px);
   left: 0;
   z-index: 100;
-  background: var(--color-dropdown-bg, #2f2f35);
-  border: 1px solid var(--color-dropdown-border, #0f0f11);
+  background: var(--vscode-dropdown-background, #2f2f35);
+  border: 1px solid var(--vscode-dropdown-border, #0f0f11);
   border-radius: 4px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   min-width: 160px;
@@ -76,7 +76,7 @@
   text-align: left;
   font-size: 12px;
   font-family: inherit;
-  color: var(--color-foreground, #c8c8c8);
+  color: var(--vscode-foreground, #c8c8c8);
   background: transparent;
   border: none;
   border-radius: 3px;
@@ -84,15 +84,15 @@
 }
 
 .instanceItem:hover {
-  background: color-mix(in srgb, var(--color-foreground, #c8c8c8) 12%, transparent);
+  background: color-mix(in srgb, var(--vscode-foreground, #c8c8c8) 12%, transparent);
 }
 
 .instanceItemActive {
-  background: var(--color-list-active-bg, rgba(255, 255, 255, 0.12));
+  background: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.12));
 }
 
 .instanceItemActive:hover {
-  background: var(--color-list-active-bg, rgba(255, 255, 255, 0.16));
+  background: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.16));
 }
 
 .iconBtn {
@@ -102,7 +102,7 @@
   width: 22px;
   height: 22px;
   padding: 0;
-  color: var(--color-fg-muted, #999);
+  color: var(--vscode-descriptionForeground, #999);
   background: transparent;
   border: none;
   border-radius: 3px;
@@ -110,8 +110,8 @@
 }
 
 .iconBtn:hover:not(:disabled) {
-  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.06));
-  color: var(--color-foreground, #c8c8c8);
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+  color: var(--vscode-foreground, #c8c8c8);
 }
 
 .iconBtn:disabled {
@@ -131,7 +131,7 @@
   width: 22px;
   height: 22px;
   padding: 0;
-  color: var(--color-fg-muted, #999);
+  color: var(--vscode-descriptionForeground, #999);
   background: transparent;
   border: none;
   border-radius: 3px 0 0 3px;
@@ -139,8 +139,8 @@
 }
 
 .newBtn:hover {
-  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.06));
-  color: var(--color-foreground, #c8c8c8);
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+  color: var(--vscode-foreground, #c8c8c8);
 }
 
 .chevronBtn {
@@ -150,7 +150,7 @@
   width: 14px;
   height: 22px;
   padding: 0;
-  color: var(--color-fg-muted, #999);
+  color: var(--vscode-descriptionForeground, #999);
   background: transparent;
   border: none;
   border-radius: 0 3px 3px 0;
@@ -159,8 +159,8 @@
 
 .chevronBtn:hover,
 .chevronBtn.active {
-  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.06));
-  color: var(--color-foreground, #c8c8c8);
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+  color: var(--vscode-foreground, #c8c8c8);
 }
 
 .shellMenu {
@@ -168,8 +168,8 @@
   top: calc(100% + 2px);
   right: 0;
   z-index: 100;
-  background: var(--color-dropdown-bg, #2f2f35);
-  border: 1px solid var(--color-dropdown-border, #0f0f11);
+  background: var(--vscode-dropdown-background, #2f2f35);
+  border: 1px solid var(--vscode-dropdown-border, #0f0f11);
   border-radius: 4px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   min-width: 120px;
@@ -183,12 +183,12 @@
   text-align: left;
   font-size: 12px;
   font-family: inherit;
-  color: var(--color-foreground, #c8c8c8);
+  color: var(--vscode-foreground, #c8c8c8);
   background: transparent;
   border: none;
   cursor: pointer;
 }
 
 .shellItem:hover {
-  background: color-mix(in srgb, var(--color-foreground, #c8c8c8) 12%, transparent);
+  background: color-mix(in srgb, var(--vscode-foreground, #c8c8c8) 12%, transparent);
 }

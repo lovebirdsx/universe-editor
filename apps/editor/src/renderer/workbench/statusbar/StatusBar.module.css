@@ -3,8 +3,8 @@
   align-items: center;
   width: 100%;
   height: 100%;
-  background: var(--color-statusbar-bg, #0f0f11);
-  color: var(--color-statusbar-fg, #c8c8c8);
+  background: var(--vscode-statusBar-background, #0f0f11);
+  color: var(--vscode-statusBar-foreground, #c8c8c8);
   font-size: 12px;
   overflow: hidden;
   user-select: none;
@@ -41,11 +41,11 @@
 }
 
 .item.clickable:hover {
-  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.06));
 }
 
 .item.kind-prominent {
-  color: var(--color-statusbar-prominent-fg, #5fa8ff);
+  color: var(--vscode-statusBarItem-prominentForeground, #5fa8ff);
 }
 
 /* Inline `$(codicon)` glyph rendered within an entry's text. */

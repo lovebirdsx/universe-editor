@@ -7,15 +7,15 @@
   padding: 0;
   border: none;
   background: transparent;
-  color: var(--color-foreground-muted, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   border-radius: 3px;
   cursor: pointer;
   flex-shrink: 0;
 }
 
 .toolbarBtn:hover:not(:disabled) {
-  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
-  color: var(--color-foreground, #c8c8c8);
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.06));
+  color: var(--vscode-foreground, #c8c8c8);
 }
 
 .toolbarBtn:disabled {
@@ -30,11 +30,11 @@
   margin: 0;
   padding: 4px 0;
   list-style: none;
-  background: var(--color-dropdown-bg, #2f2f35);
-  color: var(--color-foreground, #c8c8c8);
-  border: 1px solid var(--color-border, #454545);
+  background: var(--vscode-dropdown-background, #2f2f35);
+  color: var(--vscode-foreground, #c8c8c8);
+  border: 1px solid var(--vscode-workbench-border, #454545);
   border-radius: 4px;
-  box-shadow: 0 2px 8px var(--color-shadow-popover, rgba(0, 0, 0, 0.5));
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.5));
 }
 
 .overflowLabel {
@@ -56,8 +56,8 @@
 }
 
 .overflowItem:hover {
-  background: var(--color-list-active-bg, #04395e);
-  color: var(--color-list-active-fg, #ffffff);
+  background: var(--vscode-list-activeSelectionBackground, #04395e);
+  color: var(--vscode-list-activeSelectionForeground, #ffffff);
 }
 
 .overflowCheck {

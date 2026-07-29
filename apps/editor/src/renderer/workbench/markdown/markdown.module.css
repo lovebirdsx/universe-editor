@@ -41,20 +41,20 @@
   margin: 0.4em 0 0.2em;
   font-weight: 600;
   line-height: 1.3;
-  color: var(--color-foreground-bright, var(--color-editor-fg, currentColor));
+  color: var(--vscode-workbench-foregroundBright, var(--vscode-editor-foreground, currentColor));
 }
 
 .markdown h1 {
   font-size: 1.6em;
   margin: 0.2em 0 0.4em;
   padding-bottom: 0.25em;
-  border-bottom: 1px solid var(--color-border, #333);
+  border-bottom: 1px solid var(--vscode-workbench-border, #333);
 }
 .markdown h2 {
   font-size: 1.35em;
   margin-top: 0.6em;
   padding-bottom: 0.2em;
-  border-bottom: 1px solid var(--color-border-subtle, rgba(127, 127, 127, 0.2));
+  border-bottom: 1px solid var(--vscode-workbench-borderSubtle, rgba(127, 127, 127, 0.2));
 }
 .markdown h3 {
   font-size: 1.2em;
@@ -67,24 +67,24 @@
 }
 .markdown h6 {
   font-size: 0.85em;
-  color: var(--color-editor-fg-muted, var(--color-foreground-muted, #8a8a92));
+  color: var(--vscode-editor-mutedForeground, var(--vscode-descriptionForeground, #8a8a92));
 }
 
 .markdown strong {
   font-weight: 700;
-  color: var(--color-foreground-bright, #ffffff);
+  color: var(--vscode-workbench-foregroundBright, #ffffff);
 }
 
 .markdown em {
   font-style: italic;
-  color: var(--color-foreground-muted, #b0b0bc);
+  color: var(--vscode-descriptionForeground, #b0b0bc);
 }
 
 .markdown strong em,
 .markdown em strong {
   font-weight: 700;
   font-style: italic;
-  color: var(--color-foreground-bright, #ffffff);
+  color: var(--vscode-workbench-foregroundBright, #ffffff);
 }
 
 .markdown ul,
@@ -98,7 +98,7 @@
 }
 
 .markdown ol > li::marker {
-  color: var(--color-badge-progress, #4fa6e2);
+  color: var(--vscode-badge-progressBackground, #4fa6e2);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -131,10 +131,10 @@
 .markdown blockquote {
   margin: 0.2em 0;
   padding: 0.3em 0.8em;
-  border-left: 2px solid var(--color-message-thought-accent, #7a7aa3);
+  border-left: 2px solid var(--vscode-agent-thoughtAccent, #7a7aa3);
   background: rgba(122, 122, 163, 0.06);
   border-radius: 0 3px 3px 0;
-  color: var(--color-message-role-fg, #aaa);
+  color: var(--vscode-agent-messageRoleForeground, #aaa);
 }
 
 /* Blocks inside a quote (paragraphs, lists …) get the same small gap as the
@@ -146,7 +146,7 @@
 .markdown hr {
   margin: 0.6em 0;
   border: 0;
-  border-top: 1px solid var(--color-border, #333);
+  border-top: 1px solid var(--vscode-workbench-border, #333);
 }
 
 .markdown table {
@@ -158,14 +158,14 @@
 
 .markdown th,
 .markdown td {
-  border: 1px solid var(--color-border, #333);
+  border: 1px solid var(--vscode-workbench-border, #333);
   padding: 0.2em 0.7em;
   text-align: left;
 }
 
 .markdown th {
   font-weight: 600;
-  background: var(--color-input-bg, #2d2d2d);
+  background: var(--vscode-input-background, #2d2d2d);
 }
 
 .markdown tbody tr:nth-child(even) {
@@ -194,16 +194,16 @@
   font-family: var(--font-mono);
   font-size: 0.9em;
   padding: 1px 4px;
-  color: var(--color-inline-code-fg, #e0a878);
-  background: var(--color-inline-code-bg, #2a2a2e);
-  border: 1px solid var(--color-border-subtle, rgba(127, 127, 127, 0.2));
+  color: var(--vscode-textInlineCode-foreground, #e0a878);
+  background: var(--vscode-textInlineCode-background, #2a2a2e);
+  border: 1px solid var(--vscode-workbench-borderSubtle, rgba(127, 127, 127, 0.2));
   border-radius: 3px;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .mdLink {
-  color: var(--color-badge-progress, #4fa6e2);
+  color: var(--vscode-badge-progressBackground, #4fa6e2);
   text-decoration: none;
 }
 
@@ -214,7 +214,7 @@
 /* Inline code used as a link's text (e.g. [`foo`](foo.md)): keep the pill but
    inherit the link colour + underline so it still reads as clickable. */
 .mdLink .inlineCode {
-  color: var(--color-badge-progress, #4fa6e2);
+  color: var(--vscode-badge-progressBackground, #4fa6e2);
 }
 
 .mermaidBlock {
@@ -232,7 +232,7 @@
 
 .markdown del {
   text-decoration: line-through;
-  color: var(--color-foreground-muted, #b0b0bc);
+  color: var(--vscode-descriptionForeground, #b0b0bc);
 }
 
 .taskList {

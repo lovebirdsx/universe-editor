@@ -1,8 +1,8 @@
 .menu {
   min-width: 180px;
   padding: 4px 0;
-  background: var(--workbench-menu-bg, #252526);
-  border: 1px solid var(--workbench-menu-border, #454545);
+  background: var(--vscode-menu-background, #252526);
+  border: 1px solid var(--vscode-menu-border, #454545);
   border-radius: 4px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   list-style: none;
@@ -18,14 +18,14 @@
   gap: 8px;
   padding: 4px 16px;
   cursor: pointer;
-  color: var(--workbench-menu-fg, #cccccc);
+  color: var(--vscode-menu-foreground, #cccccc);
   white-space: nowrap;
   user-select: none;
 }
 
 .item:hover,
 .item:focus {
-  background: var(--workbench-menu-hover-bg, #094771);
+  background: var(--vscode-menu-selectionBackground, #094771);
   outline: none;
 }
 
@@ -56,5 +56,5 @@
 .separator {
   height: 1px;
   margin: 4px 8px;
-  background: var(--workbench-menu-border, #454545);
+  background: var(--vscode-menu-border, #454545);
 }

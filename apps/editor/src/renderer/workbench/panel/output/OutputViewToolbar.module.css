@@ -21,12 +21,12 @@
 .channelSelect {
   appearance: none;
   -webkit-appearance: none;
-  background-color: var(--color-dropdown-bg, #2f2f35);
+  background-color: var(--vscode-dropdown-background, #2f2f35);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238a8a92'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 6px center;
-  color: var(--color-foreground, #c8c8c8);
-  border: 1px solid var(--color-dropdown-border, #0f0f11);
+  color: var(--vscode-foreground, #c8c8c8);
+  border: 1px solid var(--vscode-dropdown-border, #0f0f11);
   border-radius: 3px;
   padding: 2px 22px 2px 6px;
   font-size: 12px;
@@ -39,7 +39,7 @@
 }
 
 .channelSelect:focus {
-  border-color: var(--color-focus-border, #0070e0);
+  border-color: var(--vscode-focusBorder, #0070e0);
 }
 
 .levelMenu {
@@ -47,12 +47,12 @@
   flex-direction: column;
   gap: 2px;
   padding: 6px 8px;
-  background: var(--color-dropdown-bg, #2f2f35);
-  border: 1px solid var(--color-dropdown-border, #0f0f11);
+  background: var(--vscode-dropdown-background, #2f2f35);
+  border: 1px solid var(--vscode-dropdown-border, #0f0f11);
   border-radius: 4px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
   font-size: 12px;
-  color: var(--color-foreground, #c8c8c8);
+  color: var(--vscode-foreground, #c8c8c8);
 }
 
 .levelItem {
@@ -62,8 +62,8 @@
 .clearFilters {
   background: none;
   border: none;
-  border-top: 1px solid var(--color-dropdown-border, #0f0f11);
-  color: var(--color-textlink, #4da3ff);
+  border-top: 1px solid var(--vscode-dropdown-border, #0f0f11);
+  color: var(--vscode-textLink-foreground, #4da3ff);
   font-size: 12px;
   cursor: pointer;
   margin-top: 4px;

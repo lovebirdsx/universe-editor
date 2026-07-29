@@ -5,7 +5,7 @@
   height: 100%;
   overflow-y: auto;
   font-size: 13px;
-  color: var(--color-sidebar-fg, #cccccc);
+  color: var(--vscode-sideBar-foreground, #cccccc);
   user-select: none;
   outline: none;
 }
@@ -16,22 +16,22 @@
   gap: 8px;
   padding: 12px;
   font-size: 12px;
-  color: var(--color-sidebar-fg, #888888);
+  color: var(--vscode-sideBar-foreground, #888888);
 }
 
 .openBtn {
   align-self: flex-start;
   padding: 4px 12px;
-  background: var(--color-button-bg, #0e639c);
-  color: var(--color-button-fg, #ffffff);
-  border: 1px solid var(--color-button-bg, #0e639c);
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #ffffff);
+  border: 1px solid var(--vscode-button-background, #0e639c);
   border-radius: 2px;
   font-size: 12px;
   cursor: pointer;
 }
 
 .openBtn:hover {
-  background: var(--color-button-hover-bg, #1177bb);
+  background: var(--vscode-button-hoverBackground, #1177bb);
 }
 
 .row {
@@ -47,14 +47,14 @@
 }
 
 .row:hover {
-  background: var(--color-list-hover-bg, #2a2d2e);
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
 }
 
 /* Active editor: the file currently open in the focused editor tab.
    Rendered as a thin accent bar on the left + subtle background tint so it
    reads independently from the user's tree selection. */
 .row.active {
-  background: var(--color-list-inactive-selection-bg, rgba(58, 61, 65, 0.6));
+  background: var(--vscode-list-inactiveSelectionBackground, rgba(58, 61, 65, 0.6));
 }
 
 .row.active::before {
@@ -64,7 +64,7 @@
   top: 0;
   bottom: 0;
   width: 2px;
-  background: var(--color-list-active-bar, #007acc);
+  background: var(--vscode-list-activeSelectionBar, #007acc);
 }
 
 /* Selection: rows that are operation targets (single click, Ctrl/Shift-click multi-select).
@@ -72,12 +72,12 @@
    (same as .row.active) so the selection stays visible but doesn't compete with
    whatever window/panel is now focused. */
 .row.selected {
-  background: var(--color-list-active-bg, #094771);
-  color: var(--color-list-active-fg, #ffffff);
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+  color: var(--vscode-list-activeSelectionForeground, #ffffff);
 }
 
 .view:not([data-focused='true']) .row.selected {
-  background: var(--color-list-inactive-selection-bg, rgba(58, 61, 65, 0.6));
+  background: var(--vscode-list-inactiveSelectionBackground, rgba(58, 61, 65, 0.6));
   color: inherit;
 }
 
@@ -87,7 +87,7 @@
 
 /* Focus: the single keyboard-cursor row. Coexists with .selected/.active via outline. */
 .row.focused {
-  outline: 1px solid var(--color-list-focus-outline, #007fd4);
+  outline: 1px solid var(--vscode-list-focusOutline, #007fd4);
   outline-offset: -1px;
 }
 
@@ -143,11 +143,11 @@
 }
 
 .segmentActive {
-  background: var(--color-list-focus-bg, rgba(0, 127, 212, 0.28));
+  background: var(--vscode-list-focusBackground, rgba(0, 127, 212, 0.28));
 }
 
 .segmentSep {
-  color: var(--color-sidebar-fg-dim, #888888);
+  color: var(--vscode-descriptionForeground, #888888);
 }
 
 .menu {
@@ -156,9 +156,9 @@
   padding: 4px 0;
   list-style: none;
   min-width: 180px;
-  background: var(--color-menu-bg, #252526);
-  color: var(--color-menu-fg, #cccccc);
-  border: 1px solid var(--color-menu-border, #454545);
+  background: var(--vscode-menu-background, #252526);
+  color: var(--vscode-menu-foreground, #cccccc);
+  border: 1px solid var(--vscode-menu-border, #454545);
   border-radius: 3px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   font-size: 13px;
@@ -171,14 +171,14 @@
 }
 
 .menuItem:hover {
-  background: var(--color-menu-selection-bg, #094771);
-  color: var(--color-menu-selection-fg, #ffffff);
+  background: var(--vscode-menu-selectionBackground, #094771);
+  color: var(--vscode-menu-selectionForeground, #ffffff);
 }
 
 .menuSeparator {
   height: 1px;
   margin: 4px 0;
-  background: var(--color-menu-border, #454545);
+  background: var(--vscode-menu-border, #454545);
 }
 
 .virtualList {
