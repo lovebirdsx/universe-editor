@@ -98,6 +98,7 @@ function makeNoopWatcher(): IFileWatcherServiceType {
   return {
     _serviceBrand: undefined,
     onDidChangeFiles: new Emitter<readonly never[]>().event,
+    onDidRestart: new Emitter<void>().event,
     async watch() {},
     async unwatch() {},
   } as unknown as IFileWatcherServiceType

@@ -1,27 +1,26 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Main-process implementation of IFileWatcherService backed by `@parcel/watcher`
- *  (native, prebuilt N-API binding). The renderer drives a single recursive
- *  subscription on the active workspace root.
+ *  Per-window implementation of IFileWatcherService. The renderer drives a
+ *  single recursive subscription on the active workspace root.
  *
- *  Excludes (`files.watcherExclude`) are pushed down as parcel's `ignore` option,
- *  so excluded directories (node_modules, .git, …) are pruned at the watcher level
- *  — their children never generate events. This mirrors VSCode and avoids the OS
- *  recursive-watch + per-event JS cost of watching huge trees and filtering after.
+ *  The native recursive watcher (@parcel/watcher) does NOT run here: it lives
+ *  in a dedicated utility process owned by the app-singleton
+ *  WatcherProcessClient (see watcherHost.ts for why — native win32 crashes).
+ *  This service keeps the per-window orchestration: root/exclude dedupe,
+ *  event debounce, and the out-of-workspace extra watches (plain node:fs
+ *  non-recursive watches — no native addon, safe in-process).
  *
- *  The native backend is pinned per platform (see PARCEL_BACKEND). Parcel's
- *  "default" backend on Windows first probes for watchman — shelling out to a
- *  `watchman` subprocess on every (re)subscribe and printing "'watchman' is not
- *  recognized" — before falling back to the windows backend. Naming the backend
- *  skips that probe entirely.
+ *  Excludes (`files.watcherExclude`) are pushed down as parcel's `ignore`
+ *  option, so excluded directories (node_modules, .git, …) are pruned at the
+ *  watcher level — their children never generate events. This mirrors VSCode
+ *  and avoids the OS recursive-watch + per-event JS cost of watching huge
+ *  trees and filtering after.
  *--------------------------------------------------------------------------------------------*/
 
 import { platform } from 'node:process'
 import { watch as fsWatch } from 'node:fs'
 import { dirname } from 'node:path'
 import type { FSWatcher } from 'node:fs'
-import watcher from '@parcel/watcher'
-import type { AsyncSubscription, BackendType, Event as ParcelEvent } from '@parcel/watcher'
 import {
   createNamedLogger,
   Emitter,
@@ -39,19 +38,10 @@ import {
   type UriComponents,
 } from '@universe-editor/platform'
 import { PerfMarks } from '../../../shared/perf/marks.js'
+import type { WatcherProcessClient } from './watcherProcessClient.js'
+import type { WatcherRawEventType } from './watcherProtocol.js'
 
 const DEBOUNCE_MS = 50
-
-// Pin the parcel backend per platform; see the file header for why "default" is
-// avoided. undefined on unknown platforms falls back to parcel's own default.
-const PARCEL_BACKEND: BackendType | undefined =
-  platform === 'win32'
-    ? 'windows'
-    : platform === 'darwin'
-      ? 'fs-events'
-      : platform === 'linux'
-        ? 'inotify'
-        : undefined
 
 // Fallback ignore globs, used only when watch() is called without explicit
 // excludes (the renderer normally seeds `files.watcherExclude` from the start).
@@ -65,7 +55,7 @@ const DEFAULT_IGNORE: readonly string[] = [
   '**/.turbo/**',
 ]
 
-const PARCEL_EVENT_TYPE: Record<ParcelEvent['type'], FileChangeType> = {
+const PARCEL_EVENT_TYPE: Record<WatcherRawEventType, FileChangeType> = {
   create: 'added',
   update: 'modified',
   delete: 'deleted',
@@ -106,15 +96,39 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   declare readonly _serviceBrand: undefined
 
   private readonly _logger: ILogger
+  private readonly _watchId: number
+  private readonly _clientListeners: IDisposable[]
 
-  constructor(@ILoggerService loggerService?: ILoggerService) {
+  constructor(
+    private readonly _host: WatcherProcessClient,
+    @ILoggerService loggerService?: ILoggerService,
+  ) {
     this._logger = createNamedLogger(loggerService, { id: 'fileWatcher', name: 'File Watcher' })
+    this._watchId = _host.allocateId()
+    this._clientListeners = [
+      _host.onFileEvents((msg) => {
+        if (msg.id !== this._watchId) return
+        for (const ev of msg.events) {
+          this._enqueue(ev.path, PARCEL_EVENT_TYPE[ev.type])
+        }
+      }),
+      _host.onWatchError((msg) => {
+        if (msg.id !== this._watchId) return
+        this._logger.warn('watcher error', msg.error)
+      }),
+    ]
   }
 
   private readonly _onDidChangeFiles = new Emitter<readonly IFileChangeEvent[]>()
   readonly onDidChangeFiles: Event<readonly IFileChangeEvent[]> = this._onDidChangeFiles.event
 
-  private _subscription: AsyncSubscription | null = null
+  /** Relayed from the shared watcher process: it crashed and was re-armed, so
+   *  events during the gap are lost — consumers should rescan. */
+  get onDidRestart(): Event<void> {
+    return this._host.onDidRestart
+  }
+
+  private _watching = false
   private _rootFsPath: string | null = null
   private _currentIgnore: string[] = []
   private _pending = new Map<string, FileChangeType>()
@@ -133,7 +147,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     }
     const target = uri.fsPath
     const ignore = toIgnore(options?.excludes ?? DEFAULT_IGNORE)
-    if (this._rootFsPath === target && this._subscription && sameSet(ignore, this._currentIgnore)) {
+    if (this._rootFsPath === target && this._watching && sameSet(ignore, this._currentIgnore)) {
       return
     }
     await this._subscribe(target, ignore)
@@ -217,6 +231,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   dispose(): void {
     void this._teardown()
     this._teardownExtraWatchers()
+    for (const d of this._clientListeners) d.dispose()
     this._onDidChangeFiles.dispose()
   }
 
@@ -230,23 +245,24 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   }
 
   private async _subscribe(target: string, ignore: string[]): Promise<void> {
-    await this._teardown()
+    this._resetPending()
     const isFirstWatch = !this._didMarkFirstWatch
     if (isFirstWatch) {
       this._didMarkFirstWatch = true
       mark(PerfMarks.mainWillWatchWorkspace)
     }
     try {
-      const opts = PARCEL_BACKEND ? { ignore, backend: PARCEL_BACKEND } : { ignore }
-      const sub = await watcher.subscribe(target, this._onParcel, opts)
-      this._subscription = sub
+      // Same-id subscribe replaces the previous subscription inside the watcher
+      // process, so the old root is torn down there without a separate round trip.
+      await this._host.watch(this._watchId, target, ignore)
+      this._watching = true
       this._rootFsPath = target
       this._currentIgnore = ignore
       this._logger.info(`watch ${target}`)
     } catch (err) {
       // Watcher failures are non-fatal: the tree still works, just no auto-refresh.
+      this._watching = false
       this._rootFsPath = null
-      this._subscription = null
       this._logger.warn(
         `watch failed ${target}`,
         err instanceof Error ? (err.stack ?? err.message) : String(err),
@@ -257,24 +273,28 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   }
 
   private async _teardown(): Promise<void> {
+    this._resetPending()
+    this._watching = false
+    const root = this._rootFsPath
+    this._rootFsPath = null
+    this._currentIgnore = []
+    // Unconditionally clear this id on the client: even after a failed watch
+    // (where _watching stayed false) the desired entry must go away, or a
+    // crash-restart would replay a subscription this window no longer wants.
+    try {
+      await this._host.unwatch(this._watchId)
+    } catch {
+      // ignore
+    }
+    if (root) this._logger.info(`unwatch ${root}`)
+  }
+
+  private _resetPending(): void {
     if (this._flushTimer) {
       clearTimeout(this._flushTimer)
       this._flushTimer = null
     }
     this._pending.clear()
-    const sub = this._subscription
-    this._subscription = null
-    const root = this._rootFsPath
-    this._rootFsPath = null
-    this._currentIgnore = []
-    if (sub) {
-      try {
-        await sub.unsubscribe()
-      } catch {
-        // ignore
-      }
-      if (root) this._logger.info(`unwatch ${root}`)
-    }
   }
 
   private _teardownExtraWatchers(): void {
@@ -286,16 +306,6 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
       }
     }
     this._extraDirWatchers.clear()
-  }
-
-  private readonly _onParcel = (err: Error | null, events: ParcelEvent[]): void => {
-    if (err) {
-      this._logger.warn('watcher error', err instanceof Error ? err.message : String(err))
-      return
-    }
-    for (const ev of events) {
-      this._enqueue(ev.path, PARCEL_EVENT_TYPE[ev.type])
-    }
   }
 
   private _enqueue(absPath: string, type: FileChangeType): void {

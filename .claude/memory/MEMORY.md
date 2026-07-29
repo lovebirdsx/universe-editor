@@ -37,6 +37,7 @@
 - [allotment 重挂载空窗口期](allotment-remount-empty-splitview-window.md) — 重挂载 viewItems 空至 RO tick；sizes 守卫只用当前实例报告值
 - [sessionChanges 无界增长 OOM](sessionchanges-unbounded-growth-main-oom-abort.md) — tracker 预算+有界日志+64MB 写入兜底
 - [swarm 通知焦点门控吞 toast](swarm-notify-focus-gate-user-away.md) — Windows 锁屏/人离开 isFocused 恒 true；门控须叠 powerMonitor idle/locked；e2e 冻结 present
+- [openFolder 切工作区主进程闪退](parcel-watcher-win32-unsubscribe-uaf-crash.md) — parcel win32 unsubscribe UAF；已修=升2.6.0+watcher入UtilityProcess自愈重启；含 minidump 解析法
 
 > NSIS 安装器 / 自动更新（守卫链、WM_SETTINGCHANGE 阻塞、Defender 排除、耗时方法学）收敛在 skill `nsis-installer-autoupdate`（按需加载，不占常驻索引）。
 

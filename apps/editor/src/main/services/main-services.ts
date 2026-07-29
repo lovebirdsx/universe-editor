@@ -18,6 +18,7 @@ import {
   registerSingletonFactory,
   SyncDescriptor,
 } from '@universe-editor/platform'
+import { fileURLToPath } from 'node:url'
 import { ILoggerService, createNamedLogger } from '@universe-editor/platform'
 import { IFileService } from '@universe-editor/platform'
 import { IFileSearchService } from '@universe-editor/platform'
@@ -85,6 +86,8 @@ import { RemoteSchemaMainService } from './remoteSchema/remoteSchemaMainService.
 import { ExchangeRateMainService } from './exchangeRate/exchangeRateMainService.js'
 import { ResourceAccessMainService } from './resourceAccess/resourceAccessMainService.js'
 import { EnvironmentSnapshotMainService } from './environmentSnapshot/environmentSnapshotMainService.js'
+import { IWatcherProcessService, WatcherProcessClient } from './fileWatcher/watcherProcessClient.js'
+import { createWatcherUtilityTransportFactory } from './fileWatcher/watcherUtilityTransport.js'
 
 // Services whose constructors mix @-injected services with non-branded static
 // params (spawner stubs, Storage, filePath) are registered via
@@ -234,3 +237,13 @@ registerSingleton(
   IEnvironmentSnapshotService,
   new SyncDescriptor<IEnvironmentSnapshotService>(EnvironmentSnapshotMainService, [], false),
 )
+registerSingletonFactory(IWatcherProcessService, (acc) => {
+  const loggerService = acc.get(ILoggerService)
+  const logger = createNamedLogger(loggerService, { id: 'fileWatcher', name: 'File Watcher' })
+  // watcherHost.js is its own electron-vite main input, emitted next to index.js.
+  const entryPath = fileURLToPath(new URL('./watcherHost.js', import.meta.url))
+  return new WatcherProcessClient(
+    createWatcherUtilityTransportFactory(entryPath, logger),
+    loggerService,
+  )
+})

@@ -69,7 +69,12 @@ export default defineConfig({
         ],
       },
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/main/index.ts') },
+        input: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          // Watcher utility process entry — forked by watcherUtilityTransport;
+          // must stay a separate chunk so utilityProcess.fork gets a real file.
+          watcherHost: resolve(__dirname, 'src/main/services/fileWatcher/watcherHostMain.ts'),
+        },
         external: nodeExternal,
       },
     },

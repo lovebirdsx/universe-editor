@@ -193,6 +193,9 @@ export class ExplorerTreeService extends Disposable {
       this._coldStartSettled = true
     })
     this._register(this._watcher.onDidChangeFiles((events) => this._onWatcherEvents(events)))
+    // Watcher process crash-restart: events during the gap are lost, so
+    // re-read everything already loaded to resync the tree.
+    this._register(this._watcher.onDidRestart(() => this._refreshLoadedNodes()))
     this._register(this._exclude.onDidChange(() => this._onExcludeChange()))
   }
 

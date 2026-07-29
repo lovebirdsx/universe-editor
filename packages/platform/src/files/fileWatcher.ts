@@ -52,6 +52,14 @@ export interface IFileWatcherService {
    * batches as best-effort.
    */
   readonly onDidChangeFiles: Event<readonly IFileChangeEvent[]>
+
+  /**
+   * Fires after the underlying watcher process crashed and was restarted with
+   * the subscription re-armed. Filesystem events during the gap are lost —
+   * consumers holding a materialized view (e.g. an explorer tree) should
+   * rescan on this signal.
+   */
+  readonly onDidRestart: Event<void>
 }
 
 export const IFileWatcherService = createDecorator<IFileWatcherService>('fileWatcherService')

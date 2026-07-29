@@ -213,6 +213,7 @@ class FakeWatcher implements IFileWatcherServiceType {
   declare readonly _serviceBrand: undefined
   private readonly _emitter = new Emitter<readonly never[]>()
   readonly onDidChangeFiles = this._emitter.event
+  readonly onDidRestart = Event.None
   async watch() {}
   async setExcludes() {}
   async unwatch() {}

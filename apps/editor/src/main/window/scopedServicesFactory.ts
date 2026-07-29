@@ -46,6 +46,7 @@ import type { IHostServiceWire } from '@universe-editor/platform'
 import type { RecentWorkspacesMainService } from '../services/workspace/recentWorkspacesMainService.js'
 import type { SessionSwitcherMainService } from '../services/sessionSwitcher/sessionSwitcherMainService.js'
 import type { ConfigLocationMainService } from '../services/configLocation/configLocationMainService.js'
+import type { WatcherProcessClient } from '../services/fileWatcher/watcherProcessClient.js'
 
 /** Services shared across all windows. Instantiated once at app startup. */
 export interface ApplicationServices {
@@ -85,6 +86,12 @@ export interface ApplicationServices {
    * window's UserDataMainService, and subscribes to onDidChangeConfigDir.
    */
   readonly configLocation: ConfigLocationMainService
+  /**
+   * Concrete type (main-internal, never on the wire): per-window
+   * FileWatcherMainService instances register their subscription on this
+   * shared utility-process owner.
+   */
+  readonly watcherProcess: WatcherProcessClient
 }
 
 /**

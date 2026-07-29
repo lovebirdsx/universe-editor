@@ -1,6 +1,7 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for FileWatcherMainService — verifies @parcel/watcher wiring, ignore
- *  globs, debounce, and create/update/delete classification.
+ *  Tests for FileWatcherMainService — verifies the client → protocol → host →
+ *  @parcel/watcher chain (via the in-memory transport), ignore globs, debounce,
+ *  create/update/delete classification, and crash-restart replay.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -9,6 +10,11 @@ import { tmpdir } from 'node:os'
 import { join, sep as pathSep } from 'node:path'
 import { URI, type IFileChangeEvent } from '@universe-editor/platform'
 import { FileWatcherMainService } from '../fileWatcherMainService.js'
+import { WatcherProcessClient } from '../watcherProcessClient.js'
+import {
+  createInMemoryWatcherTransport,
+  type InMemoryWatcherTransport,
+} from './inMemoryWatcherTransport.js'
 
 function reviveFsPath(c: {
   readonly resource: import('@universe-editor/platform').UriComponents
@@ -46,15 +52,27 @@ const NO_EVENT_WINDOW_MS = 800
 
 describe('FileWatcherMainService', () => {
   let root: string
+  let transports: InMemoryWatcherTransport[]
+  let client: WatcherProcessClient
   let svc: FileWatcherMainService
 
   beforeEach(async () => {
     root = await fs.mkdtemp(join(tmpdir(), 'universe-editor-fw-'))
-    svc = new FileWatcherMainService()
+    transports = []
+    client = new WatcherProcessClient(() => {
+      const t = createInMemoryWatcherTransport()
+      transports.push(t)
+      return t
+    })
+    svc = new FileWatcherMainService(client)
   })
 
   afterEach(async () => {
+    // Await the real parcel unsubscribe before deleting the watched tree.
+    await svc.unwatch()
     svc.dispose()
+    client.dispose()
+    await Promise.allSettled(transports.map((t) => t.host.dispose()))
     await fs.rm(root, { recursive: true, force: true })
   })
 
@@ -209,6 +227,36 @@ describe('FileWatcherMainService', () => {
         expect(matched).toBeDefined()
       }, WAIT)
       c.stop()
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
+
+  it(
+    'survives a watcher host crash: restarts, replays the watch, keeps delivering events',
+    async () => {
+      await svc.watch(URI.file(root))
+      expect(transports.length).toBe(1)
+
+      let restarted = false
+      const sub = svc.onDidRestart(() => {
+        restarted = true
+      })
+      transports[0]!.simulateCrash()
+
+      await vi.waitFor(() => expect(restarted).toBe(true), WAIT)
+      expect(transports.length).toBe(2)
+
+      // The replayed subscription on the fresh host still delivers events.
+      const target = join(root, 'after-crash.txt')
+      const c = startCollecting(svc)
+      await fs.writeFile(target, 'x')
+      await vi.waitFor(() => {
+        svc._flushForTests()
+        const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(target))
+        expect(matched).toBeDefined()
+      }, WAIT)
+      c.stop()
+      sub.dispose()
     },
     WATCHER_TEST_TIMEOUT,
   )

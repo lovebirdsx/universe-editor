@@ -50,6 +50,7 @@ class FakeWatcher implements IFileWatcherServiceType {
   declare readonly _serviceBrand: undefined
   private readonly _emitter = new Emitter<readonly IFileChangeEvent[]>()
   readonly onDidChangeFiles = this._emitter.event
+  readonly onDidRestart = new Emitter<void>().event
   readonly outOfWorkspaceCalls: UriComponents[][] = []
   async watch(_folder: UriComponents): Promise<void> {}
   async setExcludes(): Promise<void> {}

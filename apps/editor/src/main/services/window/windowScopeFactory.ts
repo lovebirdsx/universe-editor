@@ -115,7 +115,9 @@ export async function createWindowScopedServices(opts: {
   const logChannel = new MainLogChannelService(logService, win.id)
   const logFiles = new LogFilesMainService(logService, win.id)
   const terminal = disposables.add(new TerminalMainService(undefined, logService))
-  const fileWatcher = disposables.add(new FileWatcherMainService(logService))
+  const fileWatcher = disposables.add(
+    new FileWatcherMainService(appServices.watcherProcess, logService),
+  )
   const windowServices: WindowScopedServices = {
     host,
     logChannel,

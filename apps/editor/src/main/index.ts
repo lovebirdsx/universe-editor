@@ -46,6 +46,7 @@ import { IRemoteSchemaService } from '../shared/ipc/remoteSchemaService.js'
 import { IResourceAccessService } from '../shared/ipc/resourceAccessService.js'
 import { IEnvironmentSnapshotService } from '../shared/ipc/environmentSnapshotService.js'
 import { IRecentWorkspacesService } from './services/workspace/recentWorkspacesMainService.js'
+import { IWatcherProcessService } from './services/fileWatcher/watcherProcessClient.js'
 import {
   IDisposableLeakService,
   IExchangeRateService,
@@ -447,6 +448,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       environmentSnapshot: accessor.get(IEnvironmentSnapshotService),
       sessionSwitcher: accessor.get(ISessionSwitcherService) as SessionSwitcherMainService,
       configLocation: accessor.get(IConfigLocationService) as ConfigLocationMainService,
+      watcherProcess: accessor.get(IWatcherProcessService),
     }))
   }
   if (!windowMainService) {
