@@ -243,6 +243,12 @@ typescript 套件 `tsCodeLens`/`tsSemanticTokens` CI 2 workers 偶发——spec 
 
 ---
 
+**案例 56 — extension host activate 赢了 Monaco dynamic import：$registerProvider 在 Monaco 就绪前到达，半建 provider store 孤儿泄漏 + provider 批静默丢失（产品竞态）**
+信号：teardown 泄漏门禁报 N 个 Disposable 泄漏、堆栈 = `MainThreadLanguages._createProvider → new DisposableStore`（与案例 54 第二症状同栈），但**测试断言全过、只挂在泄漏**；某与 LSP 无关的提交（bundle/时序扰动）后 CI 恒定失败（ubuntu 恒定、windows 大概率）、本地稳过、retry 救不回；N = 扩展 activate 同步注册的 provider 批大小（typescript=11）。**与 54 的区分**：54 是 dying-host 迟到帧打在 **disposed** 的 MainThreadLanguages（入口早退守卫已挡）；本条帧打在**活着的** MainThreadLanguages，但 **Monaco 尚未 ensureInitialized**。
+`smoke.outline`/`smoke.tsStatusBar`（coreTypescriptSharedApp，@serial 趟 `--workers=1`）在 22fc46a4（Monaco ILayoutService 重写——改动本身无错，纯 bundle 变化移动时序）后 ubuntu 4/4 恒挂。根因链：sharedApp reload 后 Monaco 的 dynamic import（几 MB chunk）与「openFileUri → onLanguage:typescript → host activate → 11 帧 `$registerProvider`」竞速；CI 慢机上帧先到 → `_createProvider` 先 `new DisposableStore()`（已入 tracker）再 `lf.registerXxx`，而 `LanguageFeaturesService` 所有注册路径同步 `MonacoLoader.get()` → 抛 `[MonacoLoader] not initialized` → store 永远进不了 `_providers`，成无 parent 孤儿 → 泄漏门禁 11 连报；同时该批 provider **静默丢失**（host 不重试）。断言仍过是因为 openWorkspace 双重启（案例 54）的后代 host 在 Monaco ready 后重新注册成功——泄漏是第一代的尸体。对真实用户同样成立（冷窗口立即打开 .ts → 语言特性静默失效）= 真产品竞态，修产品不动 spec。三处修（`MainThreadLanguages.ts`）：① `$registerProvider`/`$unregisterProvider` 改 async，先 `await MonacoLoader.ensureInitialized()`（二者 await 同一 promise，相对顺序保持），await 后**重查** `_store.isDisposed`（等待期间 host 可能被重启——dying-host 守卫的 async 版）；② `_createProvider` 包 try/catch，注册中途抛则 `store.dispose()` 再 rethrow，孤儿结构性不可能；③ `$publishDiagnostics`/`$clearDiagnostics` 改 `MonacoLoader.peek()` 早退（Monaco 没加载就没有 model，语义等价，不再向 host 抛 RPC error）。回归单测 3 个（waits for Monaco / host died while waiting / throws mid-build does not leak，mock MonacoLoader + 可控 gate）。整类扫：host RPC 触达 Monaco 的入口**仅 MainThreadLanguages**——`languageProviderProxy` 的 `get()` 全在 provider 回调内（Monaco 调用时必已就绪），contributions 按套路 H 已等 `ensureInitialized()`。锚：`MainThreadLanguages.ts`（await 门 + try/catch 兜底）；`LanguageFeaturesService.ts`（同步 `MonacoLoader.get()` 的来源）；`MonacoLoader.ts`（`ensureInitialized`/`peek`）。
+
+---
+
 ## 根治 TODO
 
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。

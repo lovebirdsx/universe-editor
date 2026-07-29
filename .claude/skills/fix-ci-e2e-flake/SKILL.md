@@ -56,6 +56,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - ACP 配置写入后立即建 session、echo agent received 恒 `"[]"`=异步镜像池 stale 滤空 wire 列表 → 案例 51
 - `[MonacoLoader] not initialized` 栈过同步探针=poll 回调抛异常击穿等待 → 案例 52（**已修又再发**时先核对 main 上修复真实存在：`git log -S`）
 - openWorkspace 后立即外部写文件、等 watcher surface 的 treeitem 等满 timeout 恒不出现=watcher 跨进程 arm（spawn utility process+subscribe）窗口吞事件，seed 可见≠订阅生效 → 案例 55
+- teardown 泄漏栈 `MainThreadLanguages._createProvider` 但**断言全过**、bundle 变更提交后 CI 恒定挂、泄漏数=activate 注册批大小=host activate 赢了 Monaco dynamic import，注册抛 not-initialized 半建 store 成孤儿+provider 批静默丢失 → 案例 56（区分 54：那是 dying-host 帧打 **disposed** 对象）
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

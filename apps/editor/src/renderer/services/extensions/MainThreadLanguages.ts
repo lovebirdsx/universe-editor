@@ -64,7 +64,7 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
     super()
   }
 
-  $registerProvider(
+  async $registerProvider(
     handle: number,
     type: LanguageProviderType,
     selector: DocumentSelector,
@@ -75,21 +75,30 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
     // channel lands here post-dispose). Drop it instead of building a dozen
     // Monaco registrations for a dead host; the DisposableMap guard in
     // lifecycle.ts is only the last-resort backstop.
-    if (this._store.isDisposed) {
-      console.warn(
-        new Error(
-          `[MainThreadLanguages] $registerProvider(${type}) arrived after dispose — dropped`,
-        ).stack,
-      )
-      return Promise.resolve()
-    }
+    if (this._dropIfDisposed(type)) return
+    // The host's activate races Monaco's dynamic import: on a cold window the
+    // extension can win and its provider batch arrives before Monaco exists.
+    // Registering then would throw ([MonacoLoader] not initialized) — silently
+    // dropping the whole batch AND leaking the half-built provider store. Wait
+    // for Monaco instead; both $register and $unregister await the same promise,
+    // so their relative order is preserved.
+    await MonacoLoader.ensureInitialized()
+    if (this._dropIfDisposed(type)) return
     this._providers.set(handle, this._createProvider(handle, type, selector, metadata))
-    return Promise.resolve()
   }
 
-  $unregisterProvider(handle: number): Promise<void> {
+  async $unregisterProvider(handle: number): Promise<void> {
+    await MonacoLoader.ensureInitialized()
     this._providers.deleteAndDispose(handle)
-    return Promise.resolve()
+  }
+
+  private _dropIfDisposed(type: LanguageProviderType): boolean {
+    if (!this._store.isDisposed) return false
+    console.warn(
+      new Error(`[MainThreadLanguages] $registerProvider(${type}) arrived after dispose — dropped`)
+        .stack,
+    )
+    return true
   }
 
   $publishDiagnostics(
@@ -103,7 +112,7 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
 
   $clearDiagnostics(owner: string, uri?: UriComponents): Promise<void> {
     if (uri) this._setMarkers(owner, uri, [])
-    else MonacoLoader.get().editor.removeAllMarkers(owner)
+    else MonacoLoader.peek()?.editor.removeAllMarkers(owner)
     return Promise.resolve()
   }
 
@@ -125,6 +134,27 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
     const ext = this._extHost
     const store = new DisposableStore()
 
+    try {
+      this._fillProviderStore(store, handle, type, selector, metadata, lf, ext)
+    } catch (err) {
+      // A half-built store that never reaches this._providers would be an
+      // orphan the leak tracker reports at teardown — release it before
+      // propagating the failure to the host.
+      store.dispose()
+      throw err
+    }
+    return store
+  }
+
+  private _fillProviderStore(
+    store: DisposableStore,
+    handle: number,
+    type: LanguageProviderType,
+    selector: DocumentSelector,
+    metadata: ILanguageProviderMetadata | undefined,
+    lf: ILanguageFeaturesService,
+    ext: IExtHostLanguages,
+  ): void {
     switch (type) {
       case 'definition': {
         const p = createDefinitionProxy(handle, ext)
@@ -232,13 +262,15 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
         break
       }
     }
-    return store
   }
 
   private _setMarkers(owner: string, uri: UriComponents, diagnostics: readonly Diagnostic[]): void {
     const resource = URI.revive(uri)
     if (!resource) return
-    const monacoNs = MonacoLoader.get()
+    // Diagnostics racing Monaco's dynamic import target a model that cannot
+    // exist yet — dropping them mirrors the !model early-return below.
+    const monacoNs = MonacoLoader.peek()
+    if (!monacoNs) return
     // Resolve through Monaco's own registry: it canonicalizes the Windows drive
     // letter (lowercases it), so a platform URI carrying an uppercase drive still
     // matches the model created from the lowercased Monaco uri.
