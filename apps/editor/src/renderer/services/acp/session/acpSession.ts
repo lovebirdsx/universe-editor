@@ -293,11 +293,20 @@ export class AcpSession extends Disposable implements IAcpSession {
   /** Latched once a first-prompt-derived title has been written. */
   private _titleDerived = false
 
+  /** Latched once the full first prompt has been mirrored onto the history row. */
+  private _firstPromptRecorded = false
+
   /**
    * Latest title derived/generated before the agent id existed. Re-applied to
    * the history row from {@link attachConnection} once the row is in place.
    */
   private _pendingTitle: string | undefined
+
+  /**
+   * Full first prompt recorded before the agent id existed (same pre-attach
+   * gap as {@link _pendingTitle}). Re-applied from {@link attachConnection}.
+   */
+  private _pendingFirstPrompt: string | undefined
 
   /**
    * Provenance of {@link _pendingTitle}: `'ai'` (session-title model),
@@ -595,6 +604,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Re-apply any title derived while connecting now that the history row exists.
     if (this._pendingTitle !== undefined) {
       this._applyHistoryTitle(sessionIdOnAgent, this._pendingTitle, this._pendingTitleKind)
+    }
+    // Same pre-attach gap for the recorded first prompt.
+    if (this._pendingFirstPrompt !== undefined) {
+      this._applyHistoryFirstPrompt(sessionIdOnAgent, this._pendingFirstPrompt)
     }
     // Push any configOption values overridden for display but not yet adopted by
     // the agent (notably a `plan` mode picked while connecting) BEFORE dispatching
@@ -931,6 +944,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       this.recovery.clear()
     }
     this._maybeDeriveTitleFromPrompt(text)
+    this._maybeRecordFirstPrompt(text)
     // Client-generated anchor for this user turn. Stamped on the local message
     // now (so rewind/fork can target it even before dispatch) and sent as
     // `_meta.messageId`; the agent echoes it back as `_meta.userMessageId`.
@@ -1508,6 +1522,28 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (derived.length === 0) return
     this._titleDerived = true
     this._setHistoryTitle(derived, undefined)
+  }
+
+  /**
+   * Mirror the first content-bearing prompt onto the history row in full so the
+   * session list's hover tooltip can show it even after the title has been
+   * replaced by an AI/manual one. Same gating as the title derivation (no
+   * local-command prompts, no quote-only prefills); write-once per session.
+   */
+  private _maybeRecordFirstPrompt(text: string): void {
+    if (!this._history || !this._titleService) return
+    if (this._firstPromptRecorded) return
+    if (isLocalCommandPrompt(text)) return
+    const source = stripLeadingBlockquote(text)
+    if (source.length === 0) return
+    this._firstPromptRecorded = true
+    this._pendingFirstPrompt = source
+    const sid = this.sessionIdOnAgent.get()
+    if (sid !== undefined) this._applyHistoryFirstPrompt(sid, source)
+  }
+
+  private _applyHistoryFirstPrompt(sessionIdOnAgent: string, text: string): void {
+    this._history?.setHistoryFirstPrompt(sessionIdOnAgent, text)
   }
 
   /**

@@ -244,6 +244,11 @@ function SessionRow({
   const chip = scopeChip(entry, scope)
   const isArchived = entry.archived === true
   const isPinned = entry.pinned === true
+  // Hover tooltip: the full first user prompt when it was recorded (new rows),
+  // otherwise the row's display title. The recorded firstPrompt survives an
+  // AI/manual rename, which is exactly when the tooltip is most useful.
+  const rowTooltip =
+    entry.firstPrompt ?? foreignStat?.firstPrompt ?? foreignStat?.title ?? entry.title
   const archiveLabel = isArchived
     ? localize('acp.sessions.unarchive', 'Unarchive session (Shift+Del)')
     : localize('acp.sessions.archive', 'Archive session (Del)')
@@ -258,6 +263,7 @@ function SessionRow({
       data-foreign={isForeign ? 'true' : 'false'}
       data-archived={isArchived ? 'true' : 'false'}
       data-testid={`session-row-${entry.id}`}
+      title={rowTooltip}
       tabIndex={0}
       onClick={onActivate}
       onContextMenu={onContextMenu}

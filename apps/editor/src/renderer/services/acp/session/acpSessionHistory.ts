@@ -114,6 +114,15 @@ export interface AcpSessionHistoryEntry {
   /** Cumulative milliseconds the session spent in 'running' status. Updated each time a run segment ends. */
   readonly accumulatedRunningMs?: number
   /**
+   * Full text of the session's first content-bearing user prompt (local
+   * built-in commands like `/model` and quote-only prefills excluded), capped
+   * at {@link FIRST_PROMPT_MAX_LENGTH}. Write-once — never rewritten by later
+   * prompts and never clobbered by an AI/manual title. Powers the session
+   * list's hover tooltip, where the (possibly AI-renamed) title no longer
+   * tells the user what the session started with.
+   */
+  readonly firstPrompt?: string
+  /**
    * True once the user has sent at least one message in this session. Unset
    * (or explicitly `false`) for sessions that were created but never used.
    * Used by the restore coordinator to skip sessions the agent never persisted.
@@ -222,6 +231,12 @@ export interface IAcpSessionHistoryService {
    * never used (the agent does not persist those across restarts).
    */
   setHistoryHasMessages(sessionId: string): void
+  /**
+   * Record the session's first content-bearing user prompt in full (see
+   * {@link AcpSessionHistoryEntry.firstPrompt}). Write-once: ignored when the
+   * row already has one or the id is unknown.
+   */
+  setHistoryFirstPrompt(sessionId: string, text: string): void
   /**
    * Records the side task's anchor messageId (its first own user prompt).
    * Write-once: ignored when the row already has an anchor or the id is
@@ -350,6 +365,14 @@ const STORAGE_KEY = 'acp.sessionHistory'
 const SCHEMA_VERSION = 2
 const MAX_ENTRIES = 100
 
+/**
+ * Cap on the persisted first-prompt text. A bound is needed because the field
+ * rides the whole-file history serialization on every write; 4000 chars is far
+ * beyond any realistic first prompt yet keeps pathological pastes from
+ * inflating the storage blob.
+ */
+export const FIRST_PROMPT_MAX_LENGTH = 4000
+
 interface PersistedShape {
   readonly schemaVersion: number
   readonly entries: readonly AcpSessionHistoryEntry[]
@@ -445,6 +468,9 @@ export class AcpSessionHistoryService
     const carriedSideTaskAnchorMessageId =
       entry.sideTaskAnchorMessageId ??
       (existingIdx >= 0 ? this._state[existingIdx]!.sideTaskAnchorMessageId : undefined)
+    // First prompt is write-once; a re-add (e.g. on resume) must not drop it.
+    const carriedFirstPrompt =
+      entry.firstPrompt ?? (existingIdx >= 0 ? this._state[existingIdx]!.firstPrompt : undefined)
     const next: AcpSessionHistoryEntry = {
       id,
       agentId: entry.agentId,
@@ -467,6 +493,7 @@ export class AcpSessionHistoryService
         ? { collapseMode: this._state[existingIdx]!.collapseMode }
         : {}),
       ...(carriedHasMessages !== undefined ? { hasMessages: carriedHasMessages } : {}),
+      ...(carriedFirstPrompt !== undefined ? { firstPrompt: carriedFirstPrompt } : {}),
       ...(existingAiTitle === true ? { aiTitle: true } : {}),
       ...(existingManualTitle === true ? { manualTitle: true } : {}),
       // Same carry-over for the archive/pin flags: re-adding the same session
@@ -575,6 +602,25 @@ export class AcpSessionHistoryService
     const cur = this._state[idx]!
     if (cur.hasMessages === true) return
     const next: AcpSessionHistoryEntry = { ...cur, hasMessages: true }
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  setHistoryFirstPrompt(sessionId: string, text: string): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if (cur.firstPrompt !== undefined) return
+    const trimmed = text.trim()
+    if (trimmed.length === 0) return
+    const next: AcpSessionHistoryEntry = {
+      ...cur,
+      firstPrompt:
+        trimmed.length > FIRST_PROMPT_MAX_LENGTH
+          ? trimmed.slice(0, FIRST_PROMPT_MAX_LENGTH)
+          : trimmed,
+    }
     this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()
@@ -916,6 +962,7 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     (o['configLabels'] === undefined || isStringRecord(o['configLabels'])) &&
     (o['usage'] === undefined || isValidUsage(o['usage'])) &&
     (o['hasMessages'] === undefined || typeof o['hasMessages'] === 'boolean') &&
+    (o['firstPrompt'] === undefined || typeof o['firstPrompt'] === 'string') &&
     (o['aiTitle'] === undefined || typeof o['aiTitle'] === 'boolean') &&
     (o['manualTitle'] === undefined || typeof o['manualTitle'] === 'boolean') &&
     (o['archived'] === undefined || typeof o['archived'] === 'boolean') &&

@@ -2856,6 +2856,104 @@ describe('AcpSessionService — AI session title push-back', () => {
   })
 })
 
+describe('AcpSessionService — first prompt history mirror', () => {
+  function makeServiceWithTitle(
+    client: FakeAcpClientService,
+    title: IAcpSessionTitleService,
+  ): { svc: AcpSessionService; history: AcpSessionHistoryService } {
+    const history = makeHistory()
+    const notification = new StubNotificationService()
+    const telemetry = new NoopTelemetryService() as ITelemetryService
+    const agentDefaults = makeAgentDefaults()
+    const svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      new ConfigurationService(),
+      notification,
+      telemetry,
+      new StubPermissionHandler(),
+      new StubLoggerService(),
+      history,
+      new FakeStorage(),
+      agentDefaults,
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        title,
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+    )
+    return { svc, history }
+  }
+
+  it('records the full first prompt and keeps it across later prompts and an AI title', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new FixedTitleService('AI Title'))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const sid = session.sessionIdOnAgent.get()!
+
+      await session.sendPrompt('multi-line first prompt\nsecond line of it')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(history.get(sid)?.firstPrompt).toBe('multi-line first prompt\nsecond line of it')
+      // The AI title replaced the derived one — the firstPrompt mirror must stand.
+      expect(history.get(sid)?.title).toBe('AI Title')
+
+      await session.sendPrompt('a later prompt')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(history.get(sid)?.firstPrompt).toBe('multi-line first prompt\nsecond line of it')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('records a first prompt sent while the session is still connecting', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new StubSessionTitleService())
+    try {
+      const session = await svc.createSession()
+      // Sent before attach: the history row does not exist yet, so the record
+      // must be buffered and re-applied once the connection lands.
+      await session.sendPrompt('queued while connecting')
+      await session.whenConnected()
+      await new Promise((r) => setTimeout(r, 0))
+
+      const sid = session.sessionIdOnAgent.get()!
+      expect(history.get(sid)?.firstPrompt).toBe('queued while connecting')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('skips local built-in command prompts when recording the first prompt', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new StubSessionTitleService())
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const sid = session.sessionIdOnAgent.get()!
+
+      await session.sendPrompt('/model opus')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(history.get(sid)?.firstPrompt).toBeUndefined()
+
+      await session.sendPrompt('the real first prompt')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(history.get(sid)?.firstPrompt).toBe('the real first prompt')
+    } finally {
+      svc.dispose()
+    }
+  })
+})
+
 describe('AcpSessionService — configOptions history snapshot', () => {
   // Codex's protocol ids: `model` + `reasoning_effort` (see vendor/codex-acp).
   const CODEX_CONFIG: readonly SessionConfigOption[] = [

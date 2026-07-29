@@ -37,6 +37,12 @@ export interface ForeignSessionStat {
    * owning entry has no AI title (nothing authoritative to prefer).
    */
   readonly title?: string
+  /**
+   * Full first prompt read from the owning worktree's bucket. Foreign rows are
+   * rebuilt by the hydrate sweep without it, so the row tooltip backfills from
+   * here (same pattern as duration/cost).
+   */
+  readonly firstPrompt?: string
 }
 
 interface PersistedHistoryShape {
@@ -100,13 +106,15 @@ export function useForeignSessionStats(
               // Only an AI-generated title in the owning bucket is authoritative
               // enough to override the current bucket's hydrate cache.
               ...(e.aiTitle === true && e.title.length > 0 ? { title: e.title } : {}),
+              ...(e.firstPrompt !== undefined ? { firstPrompt: e.firstPrompt } : {}),
             }
             if (
               stat.accumulatedRunningMs !== undefined ||
               stat.usage !== undefined ||
               stat.configOptions !== undefined ||
               stat.configLabels !== undefined ||
-              stat.title !== undefined
+              stat.title !== undefined ||
+              stat.firstPrompt !== undefined
             ) {
               next.set(e.id, stat)
             }

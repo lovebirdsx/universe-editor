@@ -19,7 +19,7 @@ import {
   type IWorkspace,
   type IWorkspaceService,
 } from '@universe-editor/platform'
-import { AcpSessionHistoryService } from '../acpSessionHistory.js'
+import { AcpSessionHistoryService, FIRST_PROMPT_MAX_LENGTH } from '../acpSessionHistory.js'
 
 class FakeStorage implements IStorageService {
   declare readonly _serviceBrand: undefined
@@ -1511,6 +1511,57 @@ describe('AcpSessionHistoryService — setHistoryHasMessages', () => {
     } finally {
       svc2.dispose()
     }
+  })
+})
+
+describe('AcpSessionHistoryService — setHistoryFirstPrompt', () => {
+  let svc: AcpSessionHistoryService
+
+  beforeEach(async () => {
+    svc = makeService().svc
+    await svc.initialize()
+  })
+
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('records the full first prompt on a known session', () => {
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })
+    svc.setHistoryFirstPrompt('s1', 'line one\nline two of a long prompt')
+    expect(svc.get('s1')?.firstPrompt).toBe('line one\nline two of a long prompt')
+  })
+
+  it('is write-once — a later prompt does not overwrite the first', () => {
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })
+    svc.setHistoryFirstPrompt('s1', 'first')
+    svc.setHistoryFirstPrompt('s1', 'second')
+    expect(svc.get('s1')?.firstPrompt).toBe('first')
+  })
+
+  it('trims surrounding whitespace and ignores blank text', () => {
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })
+    svc.setHistoryFirstPrompt('s1', '   ')
+    expect(svc.get('s1')?.firstPrompt).toBeUndefined()
+    svc.setHistoryFirstPrompt('s1', '  real prompt  ')
+    expect(svc.get('s1')?.firstPrompt).toBe('real prompt')
+  })
+
+  it('caps the persisted text at FIRST_PROMPT_MAX_LENGTH', () => {
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })
+    svc.setHistoryFirstPrompt('s1', 'x'.repeat(FIRST_PROMPT_MAX_LENGTH + 500))
+    expect(svc.get('s1')?.firstPrompt).toHaveLength(FIRST_PROMPT_MAX_LENGTH)
+  })
+
+  it('is a no-op for an unknown session id', () => {
+    expect(() => svc.setHistoryFirstPrompt('nonexistent', 'hi')).not.toThrow()
+  })
+
+  it('add() carries firstPrompt across a re-add', () => {
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })
+    svc.setHistoryFirstPrompt('s1', 'first prompt')
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't2' })
+    expect(svc.get('s1')?.firstPrompt).toBe('first prompt')
   })
 })
 
