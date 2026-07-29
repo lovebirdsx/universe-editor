@@ -12,6 +12,7 @@
 - [编辑器身份隔离约定](editor-input-identity-isolation.md) — 多视图 EditorInput 必须覆写 id 否则 tab 去重；matches 只比 id；打开文件走 resolver
 - [AI 基础服务层](ai-service-foundation-progress.md) — platform 契约+main 实现+renderer 门面；密钥 safeStorage 红线；加 vendor 见套路 I
 - [插件系统](extension-system-progress.md) — 外部插件 Phase 0–6；2026-07 单 host+Workspace Trust（激活门控，built-in 豁免）
+- [第三方插件生态计划](third-party-extension-ecosystem-plan.md) — 计划已立未实施；四决策已拍板（先内后公/token 自助发布/完整 DX/不做 vscode shim）
 - [插件 manifest NLS](extension-manifest-nls.md) — %key%+package.nls.json；nls 文件须列 files 数组否则打包丢失
 - [TypeScript 内置插件](typescript-builtin-plugin.md) — 插件自 spawn tsserver+10 类 provider；地图见 extensions/typescript/CLAUDE.md
 - [通用 UI 抽取 workbench-ui](workbench-ui-consolidation.md) — 通用件沉淀 workbench-ui，editor 留薄 wrapper；展示组件纯数据+回调
