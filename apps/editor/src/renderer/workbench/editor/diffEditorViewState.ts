@@ -54,11 +54,21 @@ export function wireDiffEditorViewState(
     }
   }
 
-  // Apply a cursor written by another editor (the plain file editor) for the
-  // same file to the modified side. Returns whether it moved the cursor.
+  // Snapshot the shared cursor up front, for the same reason as the view state
+  // below: the flush listeners fire while this editor initialises — most
+  // reliably from the restoreViewState() call inside onDidUpdateDiff, which
+  // synchronously moves the cursor to the diff's own restored position — and
+  // would overwrite the fresher position the file editor left in the cache
+  // before applySharedCursor gets to read it (re-opening an existing diff tab
+  // then no longer follows the file editor's cursor).
+  const sharedCursor =
+    groupId !== undefined && sharedCursorUri !== undefined
+      ? EditorViewStateCache.loadCursor(groupId, sharedCursorUri)
+      : undefined
+
+  // Apply the cursor another editor (the plain file editor) left for the same
+  // file to the modified side. Returns whether it moved the cursor.
   const applySharedCursor = (): boolean => {
-    if (groupId === undefined || sharedCursorUri === undefined) return false
-    const sharedCursor = EditorViewStateCache.loadCursor(groupId, sharedCursorUri)
     if (!sharedCursor) return false
     const modified = ed.getModifiedEditor()
     const cur = modified.getPosition()
