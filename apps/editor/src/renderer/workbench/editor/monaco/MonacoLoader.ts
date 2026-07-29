@@ -22,6 +22,7 @@ import {
   type IMonacoInstantiationServiceLike,
 } from './monacoHoverDelegateGuard.js'
 import { applyMonacoNls } from './monacoNlsBootstrap.js'
+import { initMonacoErrorRouting } from './monacoErrorRouting.js'
 import { registerLogLanguage } from '../../panel/output/monacoLogLanguage.js'
 import { registerMarkdownFrontmatterHighlight } from './monacoMarkdownFrontmatter.js'
 import { PerfMarks } from '../../../../shared/perf/marks.js'
@@ -223,6 +224,13 @@ async function loadMonaco(): Promise<typeof monaco> {
       // this `await import` + initialize + publish sequence, with no consumer-
       // reachable API touched in between, is the tightest correct ordering.
       // editor.create()'s own initialize(overrides) is then a no-op.
+      // Route monaco's swallowed errors (provider rejections etc.) into the
+      // workbench's onUnexpectedError before anything can hit its default
+      // handler — that default rethrows a synthetic copy whose name is plain
+      // 'Error', defeating the global benign-error filtering (e.g.
+      // IpcChannelDisposedError during an extension-host relaunch).
+      await initMonacoErrorRouting()
+      _logger.debug('monaco unexpected-error handler routed to workbench')
       const { StandaloneServices } =
         await import('monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js')
       StandaloneServices.initialize(_overrideServices)

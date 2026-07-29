@@ -88,3 +88,11 @@ declare module 'monaco-editor/esm/vs/base/browser/ui/hover/hoverDelegateFactory.
 // WorkbenchHoverDelegate ctor consumed by the hover guard (typed structurally
 // there); no shipped .d.ts.
 declare module 'monaco-editor/esm/vs/platform/hover/browser/hover.js'
+
+// Monaco's error-handler singleton (module-level in vs/base/common/errors). The
+// esm build drops ErrorHandler.setUnexpectedErrorHandler, so the workbench
+// reassigns the `unexpectedErrorHandler` instance field directly to route
+// Monaco-swallowed errors into onUnexpectedError (see monacoErrorRouting).
+declare module 'monaco-editor/esm/vs/base/common/errors.js' {
+  export const errorHandler: { unexpectedErrorHandler: (e: unknown) => void }
+}
