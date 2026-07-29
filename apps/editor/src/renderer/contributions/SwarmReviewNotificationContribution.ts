@@ -347,11 +347,13 @@ export class SwarmReviewNotificationContribution
       this._openTarget(fresh)
       return
     }
-    // Gated main-side (window focused) or OS notifications unsupported. This poll
-    // cycle is the review's only notification chance (the rising edge is already
-    // consumed), so surface it in-app instead of dropping it.
+    // Gated main-side (window focused with the user present) or OS notifications
+    // unsupported. This poll cycle is the review's only notification chance (the
+    // rising edge is already consumed), so surface it in-app instead of dropping it.
     if (!res.shown) {
-      this._logger.info('OS toast gated (window focused or unsupported) → in-app fallback')
+      this._logger.info(
+        'OS toast gated (window focused+user present, or unsupported) → in-app fallback',
+      )
       this._notifyInApp(fresh)
     }
   }

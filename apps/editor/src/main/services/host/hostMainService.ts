@@ -12,6 +12,7 @@ import {
   shell,
   nativeImage,
   Notification,
+  powerMonitor,
   type BrowserWindow,
 } from 'electron'
 import {
@@ -44,6 +45,13 @@ export interface RestartHooks {
 const ZOOM_STEP = 1
 const ZOOM_MIN = -8
 const ZOOM_MAX = 9
+
+/** No system input for this long ⇒ the user isn't looking at the focused window,
+ *  so the focus gate in notify() stops applying. Two minutes: long enough that
+ *  reading code without touching the keyboard rarely trips it, short enough that
+ *  stepping away doesn't swallow the next poll's toast (each new review only
+ *  ever gets one notification chance — the rising edge is consumed either way). */
+const USER_AWAY_IDLE_SECONDS = 120
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
@@ -283,12 +291,15 @@ export class MainHostService implements IHostServiceWire, IDisposable {
 
   notify(opts: ISystemNotificationOptions): Promise<ISystemNotificationResult> {
     const gated = opts.onlyWhenBlurred !== false
-    if (gated && !this._win.isDestroyed() && this._win.isFocused()) {
-      this._logger.debug(`notify skipped (window focused) title=${opts.title}`)
+    if (gated && !this._win.isDestroyed() && this._win.isFocused() && !this._isUserAway()) {
+      // info, not debug: this branch swallowing a toast is exactly what field
+      // diagnosis needs to see in host.log (the overnight bug was proven by the
+      // ABSENCE of "notify shown" lines — make the decision explicit instead).
+      this._logger.info(`notify skipped (window focused, user present) title=${opts.title}`)
       return Promise.resolve({ shown: false, clicked: false })
     }
     if (!Notification.isSupported()) {
-      this._logger.debug('notify skipped (notifications unsupported)')
+      this._logger.info('notify skipped (notifications unsupported)')
       return Promise.resolve({ shown: false, clicked: false })
     }
 
@@ -323,6 +334,24 @@ export class MainHostService implements IHostServiceWire, IDisposable {
       })
       notification.show()
     })
+  }
+
+  /** Focus alone cannot gate the toast: Windows keeps the last foreground window
+   *  "focused" after the user locks the screen or walks away, which silently
+   *  swallowed every overnight Swarm-review notification (the toast was gated at
+   *  00:07 with nobody at the machine). locked / idle-past-threshold ⇒ away;
+   *  'unknown' (or a platform without the API) conservatively counts as present. */
+  private _isUserAway(): boolean {
+    // E2E must stay deterministic: an unattended CI runner is always idle, which
+    // would flip every focused-window notification spec onto the OS-toast path.
+    // Freeze to "present" there; UNIVERSE_E2E_REAL_IDLE=1 opts back into the probe.
+    if (process.env['UNIVERSE_E2E'] === '1' && !process.env['UNIVERSE_E2E_REAL_IDLE']) return false
+    try {
+      const state = powerMonitor.getSystemIdleState(USER_AWAY_IDLE_SECONDS)
+      return state === 'locked' || state === 'idle'
+    } catch {
+      return false
+    }
   }
 
   focusWindow(): Promise<void> {

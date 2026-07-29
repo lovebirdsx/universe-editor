@@ -4,20 +4,24 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { relaunch, quit, showSaveDialog, showOpenDialog, notificationState } = vi.hoisted(() => ({
-  relaunch: vi.fn(),
-  quit: vi.fn(),
-  showSaveDialog: vi.fn(),
-  showOpenDialog: vi.fn(),
-  notificationState: {
-    supported: true,
-    instances: [] as Array<{
-      opts: { title: string; body: string }
-      emit(event: 'click' | 'close' | 'failed'): void
-      shown: boolean
-    }>,
-  },
-}))
+const { relaunch, quit, showSaveDialog, showOpenDialog, notificationState, powerState } =
+  vi.hoisted(() => ({
+    relaunch: vi.fn(),
+    quit: vi.fn(),
+    showSaveDialog: vi.fn(),
+    showOpenDialog: vi.fn(),
+    notificationState: {
+      supported: true,
+      instances: [] as Array<{
+        opts: { title: string; body: string }
+        emit(event: 'click' | 'close' | 'failed'): void
+        shown: boolean
+      }>,
+    },
+    powerState: {
+      idleState: 'active' as 'active' | 'idle' | 'locked' | 'unknown',
+    },
+  }))
 
 vi.mock('electron', async () => {
   const actual = await vi.importActual<typeof import('electron')>('electron')
@@ -52,6 +56,9 @@ vi.mock('electron', async () => {
       showOpenDialog,
     },
     Notification: NotificationMock,
+    powerMonitor: {
+      getSystemIdleState: (_threshold: number) => powerState.idleState,
+    },
   }
 })
 
@@ -187,6 +194,7 @@ describe('MainHostService', () => {
     showOpenDialog.mockReset()
     notificationState.supported = true
     notificationState.instances.length = 0
+    powerState.idleState = 'active'
     vi.unstubAllEnvs()
   })
 
@@ -394,6 +402,65 @@ describe('MainHostService', () => {
       expect(result).toEqual({ shown: false, clicked: false })
       expect(notificationState.instances).toHaveLength(0)
       service.dispose()
+    })
+
+    // Repro for "整夜后台零 OS 通知" (third latch in the chain, after the modal-401
+    // and the hung-RPC ones): Windows keeps the last foreground window "focused"
+    // after the user locks the screen or walks away, so a gate reading only
+    // isFocused() swallowed every overnight toast — the renderer dutifully logged
+    // "OS toast gated (window focused)" at 00:07 with nobody at the machine. When
+    // the system reports the user away (locked / idle), focus must not gate.
+    describe('focused window with the user away', () => {
+      it('shows despite focus while the screen is locked', async () => {
+        powerState.idleState = 'locked'
+        const win = makeFakeWin()
+        win.__setFocused(true)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const service = new MainHostService(win as any)
+        const pending = service.notify({ title: 'Review', body: 'needs action' })
+        expect(notificationState.instances).toHaveLength(1)
+        notificationState.instances[0]!.emit('close')
+        await expect(pending).resolves.toEqual({ shown: true, clicked: false })
+        service.dispose()
+      })
+
+      it('shows despite focus once the system has been idle past the threshold', async () => {
+        powerState.idleState = 'idle'
+        const win = makeFakeWin()
+        win.__setFocused(true)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const service = new MainHostService(win as any)
+        const pending = service.notify({ title: 'Review', body: 'needs action' })
+        expect(notificationState.instances).toHaveLength(1)
+        notificationState.instances[0]!.emit('close')
+        await expect(pending).resolves.toEqual({ shown: true, clicked: false })
+        service.dispose()
+      })
+
+      it('stays suppressed when the idle state is unknown (conservative: treat as present)', async () => {
+        powerState.idleState = 'unknown'
+        const win = makeFakeWin()
+        win.__setFocused(true)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const service = new MainHostService(win as any)
+        const result = await service.notify({ title: 'Review', body: 'needs action' })
+        expect(result).toEqual({ shown: false, clicked: false })
+        expect(notificationState.instances).toHaveLength(0)
+        service.dispose()
+      })
+
+      it('E2E freezes the probe to "present" so unattended CI runners stay deterministic', async () => {
+        vi.stubEnv('UNIVERSE_E2E', '1')
+        powerState.idleState = 'locked'
+        const win = makeFakeWin()
+        win.__setFocused(true)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const service = new MainHostService(win as any)
+        const result = await service.notify({ title: 'Review', body: 'needs action' })
+        expect(result).toEqual({ shown: false, clicked: false })
+        expect(notificationState.instances).toHaveLength(0)
+        service.dispose()
+      })
     })
   })
 

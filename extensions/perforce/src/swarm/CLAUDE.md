@@ -111,11 +111,20 @@
 - **判别准则**：凡是「定时器 / 后台 tick / 无用户在场」驱动的 Swarm 调用都传 `silent: true`；只有用户主动点按钮触发的才走默认。给新的 poll/后台数据命令接线时照此办。
 - 回归单测：`__tests__/swarmCommands.test.ts`（401/Network 失败 rethrow、不弹任何 UI、立即 settle）；renderer 侧 `SwarmReviewNotificationContribution.test.ts`（dashboard reject 后 `_running` 闩锁释放、`_known` 基线保留、下一 tick 照常通知且无幻影爆发）。
 
-### 🔍 通知链路的日志观测点（排查「收不到通知」先看这两处）
+### ⚠️ OS toast 的焦点门控必须考虑「人不在场」（整夜聚焦窗口零 OS 通知）
 
+检测链路（poller → dashboard → renderer 决策）全部健康也可能颗粒无收：**真实 bug（第三环）**——renderer 日志三次 `notifying N new review(s)` 全部跟着 `OS toast gated (window focused...) → in-app fallback`，其中一次在深夜 00:07。根因在 main 侧 `MainHostService.notify()` 的门控只看 `win.isFocused()`：**Windows 在用户锁屏 / 离开后仍保持最后前台窗口的 focused 状态**，于是「焦点停在 G 盘工作区窗口 + 人走了」= 每条新 review 的 OS toast 都被吞，只剩后台窗口里没人看的 in-app toast。多窗口更放大：只有 swarm 工作区那个窗口的焦点状态说了算。
+
+- **修复（main 侧 `hostMainService.ts`）**：gate 条件 = `isFocused() && !_isUserAway()`；`_isUserAway()` 用 `powerMonitor.getSystemIdleState(120)` —— `locked` / `idle`（≥2 分钟无键鼠输入）视为不在场，照发 OS toast（进系统通知中心 + flashFrame）；`active` / `unknown` 保守视为在场维持原门控。所有 `IHostService.notify` 调用方（swarm + agent 通知）同时受益。**E2E 下探针冻结为「在场」**（无人值守 CI 恒 idle，会把聚焦窗口的 in-app fallback spec 全翻到 OS toast 路径）；`UNIVERSE_E2E_REAL_IDLE=1` 可 opt-in 真实探测。
+- **诊断铁证是「缺失的日志行」**：host.log 只有 agent 的 `notify shown`、没有同时段 swarm 的 —— skipped 分支当时是 debug 级不落盘，只能反证。已把两个 skipped 分支（focused / unsupported）升为 **info**：`notify skipped (window focused, user present)`，之后排查直接看 host.log 的明示决策。
+- 回归单测：`apps/editor/src/main/__tests__/services/hostMainService.test.ts` 的 `focused window with the user away`（locked / idle → shown；unknown → 保守 gate）。
+
+### 🔍 通知链路的日志观测点（排查「收不到通知」先看这三处）
+
+- **main 侧（`host.log`，会话根目录）**：每次 OS toast 的**最终决策**——`notify shown title=...`（弹了）/ `notify skipped (window focused, user present)`（焦点门控吞掉）/ `notify skipped (notifications unsupported)`，全部 info 默认可见。renderer 说 `notifying` 但系统没弹，第一站看这里。
 - **host 侧（Swarm 输出频道）**：poller 启停（info）/ tick 节奏（debug）/ tick 失败（warn）；guard 的 `cmd` scope 有每次 dashboard 的 start/ok/failed（poll 静默失败带 `(silent)` 标签）；`api` scope 有每个 HTTP 请求的状态 + 耗时 + 重试；`auth` scope 有凭据解析失败与 invalidate。默认安静，开 `perforce.swarm.trace` 后 debug 全量（tick 心跳、请求/响应细节）。
 - **renderer 侧（`swarmNotify` logger，窗口私有日志 `window-<id>/`）**：poll 启停 / 基线 prime / **闩锁丢弃（`poll tick dropped: previous refresh still running`——闩锁卡死的第一信号，连续出现即 bug）** / poll 失败 warn（catch 不再静默）/ **分相位计时（`poll ok in Xms (dashboard Yms, transitions Zms)`——卡 dashboard 相位指向 host 侧 p4 凭据探针，卡 transitions 相位指向逐 review 的 getTransitions；相位 >30s 升级为 `slow phase —` info）** / deadline 触发的 `did not settle within` warn / 通知决策（`notifying N new review(s): #ids`）/ OS toast 被门控走应用内 fallback。常规节奏是 debug 级，关键事件 info/warn 默认可见。
-- 判读套路：先看 renderer 有没有 tick 进来（无 → host poller / RPC 问题）；有 tick 但全是 dropped（→ 上一次 refresh 卡住，看相位计时卡在哪个阶段 + host `api`/`auth` scope 是否有挂起/超时请求）；有 poll ok 但无 notifying（→ 过滤口径问题：authors 白名单 / approvable / ignore）。
+- 判读套路：先看 renderer 有没有 tick 进来（无 → host poller / RPC 问题）；有 tick 但全是 dropped（→ 上一次 refresh 卡住，看相位计时卡在哪个阶段 + host `api`/`auth` scope 是否有挂起/超时请求）；有 poll ok 但无 notifying（→ 过滤口径问题：authors 白名单 / approvable / ignore）；有 notifying 但系统没弹（→ main 侧 host.log 看 shown/skipped 决策，focused+present 被吞属焦点门控语义，见上节）。
 
 ### ⚠️ 头号坑：renderer Action2 命令绝不能进扩展 `commands` 数组
 
