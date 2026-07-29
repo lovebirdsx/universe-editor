@@ -61,17 +61,15 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Controls the display language. Changes require a restart.',
             ),
           },
-          'workbench.colorTheme': {
-            type: 'string',
-            default: 'dark',
-            enum: ['dark', 'light'],
-            enumItemLabels: {
-              dark: localize('settings.enum.dark', 'Dark'),
-              light: localize('settings.enum.light', 'Light'),
-            },
+          // `workbench.colorTheme` itself is owned by ThemesContribution: it
+          // re-registers the node with the live theme enum on every registry
+          // change (VSCode's updateColorThemeConfigurationSchemas equivalent).
+          'workbench.colorCustomizations': {
+            type: 'object',
+            default: {},
             description: localize(
-              'settings.workbench.colorTheme.description',
-              'Workbench color theme.',
+              'settings.workbench.colorCustomizations.description',
+              'Overrides colors from the active color theme. Keys are color ids (e.g. "editor.background"), values are color strings or "default" to restore the theme value. Nest under "[Theme Name]" to scope overrides to one theme.',
             ),
           },
           'workbench.fontFamily': {

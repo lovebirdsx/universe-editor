@@ -128,10 +128,6 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
   useEffect(() => {
     if (!monacoNs || !containerRef.current) return
     const ed = monacoNs.editor.createDiffEditor(containerRef.current, {
-      theme:
-        configService.get<string>('workbench.colorTheme') === 'light'
-          ? 'output-light'
-          : 'output-dark',
       automaticLayout: true,
       editContext: true,
       ...buildBridgedEditorOptions(configService),

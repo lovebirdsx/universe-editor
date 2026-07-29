@@ -6,6 +6,7 @@
 import {
   Action2,
   ConfigurationTarget,
+  DisposableStore,
   IConfigurationService,
   IDialogService,
   IEditorGroupsService,
@@ -13,6 +14,7 @@ import {
   IInstantiationService,
   INotificationService,
   IQuickInputService,
+  IThemeService,
   IUriIdentityService,
   IUserDataFilesService,
   MenuId,
@@ -28,6 +30,8 @@ import {
   type DisplayLanguageSetting,
   type ILocaleOption,
 } from '../../shared/i18n/availableLocales.js'
+import type { ColorThemeData } from '../services/themes/colorThemeData.js'
+import type { WorkbenchThemeService } from '../services/themes/workbenchThemeService.js'
 import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -438,13 +442,14 @@ export class OpenWorkspaceSettingsJsonAction extends Action2 {
   }
 }
 
-const COLOR_THEME_SETTING_KEY = 'workbench.colorTheme'
-type WorkbenchColorTheme = 'dark' | 'light'
-
 interface ColorThemePickItem extends IQuickPickItem {
-  readonly value: WorkbenchColorTheme
+  readonly theme: ColorThemeData
 }
 
+/**
+ * VSCode 同款主题选择器：高亮即预览（不写配置），Enter 接受（持久化
+ * settingsId），Escape 关闭未接受则回滚到进入时的主题。
+ */
 export class SelectColorThemeAction extends Action2 {
   static readonly ID = 'workbench.action.selectTheme'
   constructor() {
@@ -452,38 +457,77 @@ export class SelectColorThemeAction extends Action2 {
       id: SelectColorThemeAction.ID,
       title: localize2('action.selectTheme.title', 'Color Theme'),
       category: localize2('command.category.preferences', 'Preferences'),
+      keybinding: { primary: 'ctrl+k ctrl+t' },
       f1: true,
     })
   }
 
-  override async run(accessor: ServicesAccessor): Promise<void> {
+  override run(accessor: ServicesAccessor): void {
     const quickInput = accessor.get(IQuickInputService)
-    const configuration = accessor.get(IConfigurationService)
+    const themeService = accessor.get(IThemeService) as WorkbenchThemeService
 
-    const current = configuration.get<WorkbenchColorTheme>(COLOR_THEME_SETTING_KEY) ?? 'dark'
+    const openPicker = (): void => {
+      const originalTheme = themeService.getColorThemeData()
+      const currentLabel = localize('colorTheme.current', '(current)')
+      const items: ColorThemePickItem[] = themeService.getColorThemes().map((theme) => ({
+        id: theme.settingsId,
+        label: theme.label,
+        ...(theme.settingsId === originalTheme.settingsId && { description: currentLabel }),
+        theme,
+      }))
 
-    const currentLabel = localize('colorTheme.current', '(current)')
-    const items: ColorThemePickItem[] = [
-      {
-        id: 'dark',
-        label: localize('colorTheme.dark', 'Dark'),
-        ...(current === 'dark' && { description: currentLabel }),
-        value: 'dark',
-      },
-      {
-        id: 'light',
-        label: localize('colorTheme.light', 'Light'),
-        ...(current === 'light' && { description: currentLabel }),
-        value: 'light',
-      },
-    ]
+      const pick = quickInput.createQuickPick<ColorThemePickItem>()
+      const disposables = new DisposableStore()
+      disposables.add(pick)
+      pick.items = items
+      pick.placeholder = localize('quickInput.colorTheme.placeholder', 'Select Color Theme')
+      pick.activeItems = items.filter((i) => i.theme.settingsId === originalTheme.settingsId)
 
-    const selected = await quickInput.pick(items, {
-      id: 'workbench.colorTheme',
-      placeholder: localize('quickInput.colorTheme.placeholder', 'Select Color Theme'),
+      let accepted = false
+      disposables.add(
+        pick.onDidChangeActive((item) => {
+          if (item && item.theme.settingsId !== themeService.getColorThemeData().settingsId) {
+            // Preview only — never persisted (VSCode: settingsTarget undefined).
+            void themeService.setColorTheme(item.theme.settingsId)
+          }
+        }),
+      )
+      disposables.add(
+        pick.onDidAccept((selected) => {
+          accepted = true
+          const item = selected[0] ?? pick.activeItems[0]
+          if (item) {
+            void themeService.setColorTheme(item.theme.settingsId, { writeConfiguration: true })
+          }
+        }),
+      )
+      disposables.add(
+        pick.onDidHide(() => {
+          // onDidAccept and onDidHide can race; defer the rollback decision a
+          // tick so an accept that fired in the same turn wins.
+          setTimeout(() => {
+            if (!accepted) {
+              void themeService.setColorTheme(originalTheme.settingsId)
+            }
+            disposables.dispose()
+          }, 0)
+        }),
+      )
+      pick.show()
+    }
+
+    // Extension translation lands in the Eventually phase, so a very early
+    // Ctrl+K Ctrl+T can arrive before any theme has registered — wait for the
+    // first batch instead of opening an empty picker.
+    if (themeService.getColorThemes().length > 0) {
+      openPicker()
+      return
+    }
+    const registrationWait = themeService.onDidChangeColorThemes(() => {
+      if (themeService.getColorThemes().length > 0) {
+        registrationWait.dispose()
+        openPicker()
+      }
     })
-    if (!selected) return
-
-    configuration.update(COLOR_THEME_SETTING_KEY, selected.value, ConfigurationTarget.User)
   }
 }

@@ -83,11 +83,13 @@ function emptyThemeDocument(): IRawThemeDocument {
 /**
  * 加载并解析一个主题 JSON 文件，`include` 递归合并（后加载者覆盖先加载者；
  * `colors` 中值为 `"default"` 的键从合并结果删除，对齐 VSCode 语义）。
+ * `visited` 给定的话收集整条 include 链访问过的文件（主题 watcher 用）。
  */
 export async function loadThemeDocument(
   readText: (uri: URI) => Promise<string>,
   location: URI,
   seen: Set<string> = new Set(),
+  visited?: URI[],
 ): Promise<IRawThemeDocument> {
   const key = location.toString()
   if (seen.has(key)) {
@@ -98,6 +100,7 @@ export async function loadThemeDocument(
     )
   }
   seen.add(key)
+  visited?.push(location)
 
   if (!location.path.endsWith('.json')) {
     // tmTheme (plist) files are not supported; built-in themes must use the JSON form.
@@ -129,7 +132,7 @@ export async function loadThemeDocument(
   let base = emptyThemeDocument()
   if (typeof value.include === 'string') {
     const includeLocation = URI.joinPath(location, '..', value.include)
-    base = await loadThemeDocument(readText, includeLocation, seen)
+    base = await loadThemeDocument(readText, includeLocation, seen, visited)
   }
   return mergeThemeDocuments(base, parseThemeDocumentOverlay(value as Record<string, unknown>))
 }
@@ -264,6 +267,8 @@ export class ColorThemeData implements IColorTheme {
   location?: URI
   watch = false
   extensionData?: IThemeExtensionData
+  /** 整条 include 链访问过的文件（reload 后刷新；主题 watcher 订阅这些路径）。 */
+  loadedFiles: readonly URI[] = []
 
   private readonly _type: ColorScheme
   private themeTokenColors: ITokenColorRule[] = []
@@ -437,7 +442,9 @@ export class ColorThemeData implements IColorTheme {
     if (!this.location) {
       return
     }
-    const doc = await loadThemeDocument(readText, this.location)
+    const visited: URI[] = []
+    const doc = await loadThemeDocument(readText, this.location, new Set(), visited)
+    this.loadedFiles = visited
     this.isLoaded = true
     this.colorMap = {}
     for (const [colorId, colorValue] of Object.entries(doc.colors)) {

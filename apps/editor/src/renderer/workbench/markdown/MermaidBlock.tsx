@@ -8,26 +8,22 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useState } from 'react'
-import { IConfigurationService } from '@universe-editor/platform'
+import { IThemeService, isDark as isDarkScheme } from '@universe-editor/platform'
 import { CodeBlock } from '../agents/CodeBlock.js'
 import { useService } from '../useService.js'
 import { MermaidLoader } from './mermaidLoader.js'
 import styles from './markdown.module.css'
 
 function useIsDarkTheme(): boolean {
-  const configuration = useService(IConfigurationService)
-  const [isDark, setIsDark] = useState(
-    () => configuration.get<string>('workbench.colorTheme') !== 'light',
-  )
+  const themeService = useService(IThemeService)
+  const [dark, setDark] = useState(() => isDarkScheme(themeService.getColorTheme().type))
   useEffect(() => {
-    const sub = configuration.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('workbench.colorTheme')) {
-        setIsDark(configuration.get<string>('workbench.colorTheme') !== 'light')
-      }
+    const sub = themeService.onDidColorThemeChange((theme) => {
+      setDark(isDarkScheme(theme.type))
     })
     return () => sub.dispose()
-  }, [configuration])
-  return isDark
+  }, [themeService])
+  return dark
 }
 
 export function MermaidBlock({ code }: { readonly code: string }) {

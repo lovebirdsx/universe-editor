@@ -295,17 +295,12 @@ export function PromptMonacoEditor({
       monacoRef.current = m
       const model = m.editor.createModel(initialText ?? '', 'plaintext')
       modelRef.current = model
-      const theme =
-        configService.get<string>('workbench.colorTheme') === 'light'
-          ? 'output-light'
-          : 'output-dark'
       const fontSize = configService.get<number>('editor.fontSize') ?? 13
       const ed = m.editor.create(
         containerRef.current,
         {
           model,
           editContext: true,
-          theme,
           automaticLayout: true,
           fontSize,
           lineNumbers: 'off',

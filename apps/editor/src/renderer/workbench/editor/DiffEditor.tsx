@@ -52,12 +52,6 @@ function getEditorFontOptions(
   return resolveLanguageFonts(globalFamily, globalSize, map, languageId)
 }
 
-function getEditorTheme(configService: IConfigurationService): 'output-light' | 'output-dark' {
-  return configService.get<string>('workbench.colorTheme') === 'light'
-    ? 'output-light'
-    : 'output-dark'
-}
-
 export function DiffEditor({ input }: { input: IEditorInput }) {
   const diffInput = input as DiffEditorInput
   const configService = useService(IConfigurationService)
@@ -92,7 +86,6 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
   useEffect(() => {
     if (!monacoNs || !containerRef.current) return
     const ed = monacoNs.editor.createDiffEditor(containerRef.current, {
-      theme: getEditorTheme(configService),
       automaticLayout: true,
       editContext: true,
       // All user-configured editor.* options (incl. wordWrap). Spread first so

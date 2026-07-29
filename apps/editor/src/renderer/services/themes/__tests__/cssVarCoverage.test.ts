@@ -9,9 +9,10 @@
  *    to a color id registered in `universeColorIds.ts` (typo / stale-id guard).
  * 2. No legacy `--color-*` / `--workbench-menu-*` / `--git-blame-decoration-fg`
  *    occurrences may survive the codemod.
- * 3. The static `:root` blocks in `workbench.css` (the pre-Phase-3 fallback
- *    source) must stay in sync with the registry — regenerate them with
- *    `node scripts/emit-theme-blocks.mjs` after editing universeColorIds.
+ * 3. No css file may DEFINE `--vscode-*` variables statically: colors come from
+ *    the contributed theme at runtime (`style.contributedColorTheme`), and a
+ *    static definition would out-specify the injected `:root` block and shadow
+ *    every theme switch / color customization.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -82,21 +83,28 @@ describe('css variable coverage', () => {
     expect(leftovers).toEqual([])
   })
 
-  it('workbench.css :root blocks define exactly the registered variables', () => {
-    const workbenchCss = maskedContents.find(({ file }) => file.endsWith('workbench.css'))
-    expect(workbenchCss).toBeDefined()
-    const definitionPattern = /^\s*(--vscode-[A-Za-z0-9-]+)\s*:/gm
-    const defined = new Set<string>()
-    for (const match of workbenchCss!.text.matchAll(definitionPattern)) {
-      defined.add(match[1]!)
+  it('no css file defines --vscode-* variables on global selectors', () => {
+    // Colors come from the contributed theme at runtime (style.contributedColorTheme
+    // on :root). A static definition on :root/html/body would out-specify the
+    // injected block and shadow every theme switch / color customization.
+    // Scoped overrides on component selectors (e.g. making an embedded Monaco
+    // transparent inside .promptEditorInner) remain a legitimate technique.
+    const rulePattern = /(^|\})\s*([^{}@][^{}]*)\{([^{}]*)\}/g
+    const globalSelector = /^(:root\b|html\b|body\b)/i
+    const violations: string[] = []
+    for (const { file, text } of maskedContents) {
+      for (const match of text.matchAll(rulePattern)) {
+        const selector = match[2]!.trim()
+        const body = match[3]!
+        if (!globalSelector.test(selector)) {
+          continue
+        }
+        for (const def of body.matchAll(/(--vscode-[A-Za-z0-9-]+)\s*:/g)) {
+          violations.push(`${file}: ${selector} defines ${def[1]}`)
+        }
+      }
     }
-    const expected = new Set(
-      UNIVERSE_COLOR_DEFINITIONS.filter((def) => def.dark !== null).map((def) =>
-        toCssVariableName(def.id),
-      ),
-    )
-    expect([...defined].filter((name) => !expected.has(name))).toEqual([])
-    expect([...expected].filter((name) => !defined.has(name))).toEqual([])
+    expect(violations).toEqual([])
   })
 
   it('legacy mapping covers every pre-migration variable name', () => {

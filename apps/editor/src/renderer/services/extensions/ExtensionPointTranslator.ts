@@ -41,6 +41,7 @@ import {
   type IMenuContribution,
   type IResolvedJsonValidation,
   type ISubmenuContribution,
+  type IThemeContribution,
 } from '@universe-editor/extensions-common'
 
 /** Maps VSCode-style manifest menu keys to our internal MenuId. */
@@ -68,6 +69,13 @@ function parseGroup(group: string | undefined): { group?: string; order?: number
   return { group: name, ...(Number.isFinite(order) ? { order } : {}) }
 }
 
+/** Context the translator passes to the theme-registration callback. */
+export interface IThemeRegistrationContext {
+  readonly extensionId: string
+  readonly extensionLocation: string
+  readonly extensionIsBuiltin: boolean
+}
+
 export class ExtensionPointTranslator extends Disposable {
   constructor(
     private readonly _activateByEvent: (event: string) => Promise<void>,
@@ -81,6 +89,14 @@ export class ExtensionPointTranslator extends Disposable {
      * returns a Disposable the translator tracks. Absent in unit tests.
      */
     private readonly _registerCustomEditor?: (editor: ICustomEditorContribution) => IDisposable,
+    /**
+     * Register a batch of `contributes.themes` entries into the color theme
+     * registry. Supplied by ExtensionsContribution; absent in unit tests.
+     */
+    private readonly _registerThemes?: (
+      themes: readonly IThemeContribution[],
+      context: IThemeRegistrationContext,
+    ) => IDisposable,
   ) {
     super()
   }
@@ -109,6 +125,16 @@ export class ExtensionPointTranslator extends Disposable {
       this._registerJsonValidation(ext.id, contributes.jsonValidation ?? [])
       for (const editor of contributes.customEditors ?? []) {
         this._registerCustomEditorBinding(editor)
+      }
+      if (contributes.themes !== undefined && contributes.themes.length > 0) {
+        const handle = this._registerThemes?.(contributes.themes, {
+          extensionId: ext.id,
+          extensionLocation: ext.extensionLocation,
+          extensionIsBuiltin: ext.extensionIsBuiltin,
+        })
+        if (handle !== undefined) {
+          this._register(handle)
+        }
       }
     }
   }

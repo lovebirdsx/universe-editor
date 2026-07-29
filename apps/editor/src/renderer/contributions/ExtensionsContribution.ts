@@ -16,6 +16,7 @@ import {
   IInstantiationService,
   ILoggerService,
   INotificationService,
+  IThemeService,
   MutableDisposable,
   NullLogger,
   Severity,
@@ -33,6 +34,7 @@ import {
 } from '@universe-editor/extensions-common'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 import { ExtensionPointTranslator } from '../services/extensions/ExtensionPointTranslator.js'
+import type { WorkbenchThemeService } from '../services/themes/workbenchThemeService.js'
 import { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
 import { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
 import { IRemoteSchemaService } from '../../shared/ipc/remoteSchemaService.js'
@@ -53,6 +55,7 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
     @INotificationService private readonly _notification: INotificationService,
     @IEditorResolverService private readonly _editorResolver: IEditorResolverService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
+    @IThemeService private readonly _themeService: WorkbenchThemeService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -168,6 +171,7 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
         ),
       this._logger,
       (editor) => this._registerCustomEditor(editor),
+      (themes, context) => this._themeService.registerColorThemes(themes, context),
     )
     translator.translate(contributions)
     this._translator.value = translator

@@ -12,11 +12,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StrictMode } from 'react'
 import { cleanup, render, waitFor } from '@testing-library/react'
 import {
-  IConfigurationService,
+  ColorScheme,
+  IThemeService,
   InstantiationService,
   ServiceCollection,
 } from '@universe-editor/platform'
-import type { IConfigurationService as IConfigurationServiceType } from '@universe-editor/platform'
+import type { IThemeService as IThemeServiceType } from '@universe-editor/platform'
 import { MermaidBlock } from '../MermaidBlock.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -39,11 +40,11 @@ afterEach(() => {
 
 function renderBlock(code: string) {
   const services = new ServiceCollection()
-  services.set(IConfigurationService, {
+  services.set(IThemeService, {
     _serviceBrand: undefined,
-    get: () => 'dark',
-    onDidChangeConfiguration: () => ({ dispose: () => {} }),
-  } as unknown as IConfigurationServiceType)
+    getColorTheme: () => ({ type: ColorScheme.DARK }),
+    onDidColorThemeChange: () => ({ dispose: () => {} }),
+  } as unknown as IThemeServiceType)
   const inst = new InstantiationService(services)
   return render(
     <StrictMode>

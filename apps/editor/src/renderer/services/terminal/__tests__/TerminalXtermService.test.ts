@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Emitter, type IConfigurationService } from '@universe-editor/platform'
+import { Emitter, type IConfigurationService, type IThemeService } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../TerminalManagerService.js'
 
 vi.mock('@xterm/xterm/css/xterm.css', () => ({}))
@@ -104,6 +104,14 @@ function makeConfig(): IConfigurationService {
   } as unknown as IConfigurationService
 }
 
+function makeThemeService(): IThemeService {
+  return {
+    _serviceBrand: undefined,
+    getColorTheme: () => ({ getColor: () => undefined }),
+    onDidColorThemeChange: new Emitter<never>().event,
+  } as unknown as IThemeService
+}
+
 function sizeWrapper(wrapper: HTMLElement, w: number, hgt: number): void {
   Object.defineProperty(wrapper, 'clientWidth', { value: w, configurable: true })
   Object.defineProperty(wrapper, 'clientHeight', { value: hgt, configurable: true })
@@ -111,7 +119,7 @@ function sizeWrapper(wrapper: HTMLElement, w: number, hgt: number): void {
 
 async function makeService(h: Harness) {
   const { TerminalXtermService } = await import('../TerminalXtermService.js')
-  return new TerminalXtermService(makeManager(h), makeConfig())
+  return new TerminalXtermService(makeManager(h), makeConfig(), makeThemeService())
 }
 
 function makeHarness(): Harness {

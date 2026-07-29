@@ -1,0 +1,30 @@
+{
+  "name": "@universe-editor/theme-defaults",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "themes"
+  ],
+  "displayName": "Universe Themes",
+  "description": "Built-in default color themes (Universe Dark / Universe Light).",
+  "engines": {
+    "universe": ">=0.1.0 <1.0.0"
+  },
+  "contributes": {
+    "themes": [
+      {
+        "id": "Universe Dark",
+        "label": "Universe Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/universe-dark.json"
+      },
+      {
+        "id": "Universe Light",
+        "label": "Universe Light",
+        "uiTheme": "vs",
+        "path": "./themes/universe-light.json"
+      }
+    ]
+  }
+}

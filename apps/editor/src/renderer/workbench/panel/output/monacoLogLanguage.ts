@@ -1,20 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Registers the 'log' language in Monaco with a Monarch tokenizer that mirrors
- *  the token scopes from VSCode's extensions/log/syntaxes/log.tmLanguage.json,
- *  and defines output-dark / output-light themes with matching log-level colors.
+ *  the token scopes from VSCode's extensions/log/syntaxes/log.tmLanguage.json.
+ *  Token color rules (log levels, markdown, semantic tokens) are exported via
+ *  getBuiltinTokenRules and merged into the active workbench theme by the Monaco
+ *  theme bridge — there are no separate output-* themes anymore.
  *--------------------------------------------------------------------------------------------*/
 
 import type * as monaco from 'monaco-editor'
-import {
-  OUTPUT_LINE_HIGHLIGHT_DARK,
-  OUTPUT_LINE_HIGHLIGHT_LIGHT,
-} from '../../../services/configuration/fontDefaults.js'
-
-export interface LineHighlightOverrides {
-  background?: string
-  border?: string
-}
 
 // Exported for unit tests (regex-only, no Monaco runtime required). Covers the
 // bracketed level tags and the ISO timestamp — the shape our own app logs emit.
@@ -186,46 +179,17 @@ const SEMANTIC_TOKEN_RULES_LIGHT: monaco.editor.ITokenThemeRule[] = [
   { token: 'function', foreground: '795e26' },
 ]
 
-function buildOutputThemeColors(
-  variant: 'dark' | 'light',
-  overrides?: LineHighlightOverrides,
-): Record<string, string> {
-  const base = variant === 'light' ? OUTPUT_LINE_HIGHLIGHT_LIGHT : OUTPUT_LINE_HIGHLIGHT_DARK
-  const background =
-    overrides?.background !== undefined && overrides.background.length > 0
-      ? overrides.background
-      : base.background
-  const border =
-    overrides?.border !== undefined && overrides.border.length > 0 ? overrides.border : base.border
-  return {
-    'editor.lineHighlightBackground': background,
-    'editor.lineHighlightBorder': border,
-  }
-}
-
-export function defineOutputThemes(m: typeof monaco, overrides?: LineHighlightOverrides): void {
-  m.editor.defineTheme('output-dark', {
-    base: 'vs-dark',
-    inherit: true,
-    rules: [...buildRules(LOG_COLORS_DARK), ...MD_TOKEN_RULES_DARK, ...SEMANTIC_TOKEN_RULES_DARK],
-    colors: buildOutputThemeColors('dark', overrides),
-  })
-
-  m.editor.defineTheme('output-light', {
-    base: 'vs',
-    inherit: true,
-    rules: [
-      ...buildRules(LOG_COLORS_LIGHT),
-      ...MD_TOKEN_RULES_LIGHT,
-      ...SEMANTIC_TOKEN_RULES_LIGHT,
-    ],
-    colors: buildOutputThemeColors('light', overrides),
-  })
+/**
+ * Built-in token rules (log levels, markdown, semantic tokens) for the given
+ * scheme, merged into the active workbench theme by the Monaco theme bridge.
+ */
+export function getBuiltinTokenRules(isDark: boolean): monaco.editor.ITokenThemeRule[] {
+  return isDark
+    ? [...buildRules(LOG_COLORS_DARK), ...MD_TOKEN_RULES_DARK, ...SEMANTIC_TOKEN_RULES_DARK]
+    : [...buildRules(LOG_COLORS_LIGHT), ...MD_TOKEN_RULES_LIGHT, ...SEMANTIC_TOKEN_RULES_LIGHT]
 }
 
 export function registerLogLanguage(m: typeof monaco): void {
   m.languages.register({ id: 'log', extensions: ['.log'], aliases: ['Log', 'log'] })
   m.languages.setMonarchTokensProvider('log', logMonarch)
-
-  defineOutputThemes(m)
 }

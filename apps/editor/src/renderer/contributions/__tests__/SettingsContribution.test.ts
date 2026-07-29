@@ -32,7 +32,9 @@ describe('SettingsContribution', () => {
     expect(ConfigurationRegistry.getDefaultValue('editor.tabSize')).toBe(4)
     expect(ConfigurationRegistry.getDefaultValue('editor.wordWrap')).toBe('off')
     expect(ConfigurationRegistry.getDefaultValue('editor.minimap.enabled')).toBe(true)
-    expect(ConfigurationRegistry.getDefaultValue('workbench.colorTheme')).toBe('dark')
+    // workbench.colorTheme's node (default 'Universe Dark') is owned by
+    // ThemesContribution — it re-registers with the live theme enum.
+    expect(ConfigurationRegistry.getDefaultValue('workbench.colorCustomizations')).toEqual({})
     expect(ConfigurationRegistry.getDefaultValue('workbench.fontFamily')).toBe(
       "'Roboto', system-ui, -apple-system, 'Segoe UI', sans-serif",
     )

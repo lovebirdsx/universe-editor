@@ -25,15 +25,7 @@ export function isScrolledToBottom(editor: monaco.editor.IStandaloneCodeEditor):
   return scrollTop + visibleHeight >= scrollHeight - BOTTOM_THRESHOLD_PX
 }
 
-export function LogOutputView({
-  theme,
-  fontSize,
-  fontFamily,
-}: {
-  theme: 'vs' | 'vs-dark'
-  fontSize: number
-  fontFamily: string
-}) {
+export function LogOutputView({ fontSize, fontFamily }: { fontSize: number; fontFamily: string }) {
   const outputService = useService(IOutputService)
   const outputModels = useService(IOutputModelService)
   const activeChannelName = useObservable(outputService.activeChannelName)
@@ -50,8 +42,6 @@ export function LogOutputView({
   const hiddenAreasDisposableRef = useRef<IDisposable | null>(null)
 
   // Keep a live ref so the async init closure reads the latest value
-  const latestThemeRef = useRef(theme)
-  latestThemeRef.current = theme
   const latestFontSizeRef = useRef(fontSize)
   latestFontSizeRef.current = fontSize
   const latestFontFamilyRef = useRef(fontFamily)
@@ -69,7 +59,6 @@ export function LogOutputView({
           model: null,
           readOnly: true,
           editContext: true,
-          theme: latestThemeRef.current === 'vs' ? 'output-light' : 'output-dark',
           automaticLayout: true,
           scrollBeyondLastLine: false,
           lineNumbers: 'off',

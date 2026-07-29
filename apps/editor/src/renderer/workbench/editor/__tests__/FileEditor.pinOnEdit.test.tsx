@@ -404,7 +404,6 @@ describe('FileEditor — auto-pin on first edit', () => {
       fontSize: 20,
       fontFamily: "'Fira Code', monospace",
       wordWrap: 'on',
-      theme: 'output-light',
     })
     schemaReg.dispose()
   })

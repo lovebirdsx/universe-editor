@@ -21,6 +21,7 @@ import {
   Emitter,
   IConfigurationService,
   InstantiationType,
+  IThemeService,
   registerSingleton,
   type Event,
   type URI,
@@ -75,62 +76,65 @@ export const ITerminalXtermService = createDecorator<ITerminalXtermService>('ter
 
 // ---------------------------------------------------------------------------
 
-function isDarkTheme(config: IConfigurationService): boolean {
-  return config.get<string>('workbench.colorTheme') !== 'light'
-}
-
-// xterm 需要具体 hex 值（不能用 CSS var()），所以 ANSI 16 色在此硬编码一份。
-// 这两套调色板即 universeColorIds.ts 里 terminal.ansi* 的 dark/light 槽默认值
-// （agent 输出的 --acp-ansi-* 经 var(--vscode-terminal-ansi*) 消费同一份注册表），
-// 改其一时请同步另一处。
-const DARK_THEME: ITheme = {
-  background: '#1a1a1c',
-  foreground: '#cccccc',
-  cursor: '#cccccc',
-  selectionBackground: 'rgba(255,255,255,0.18)',
-  black: '#3b3b3b',
-  red: '#cd3131',
-  green: '#0dbc79',
-  yellow: '#e5e510',
-  blue: '#2472c8',
-  magenta: '#bc3fbc',
-  cyan: '#11a8cd',
-  white: '#e5e5e5',
-  brightBlack: '#666666',
-  brightRed: '#f14c4c',
-  brightGreen: '#23d18b',
-  brightYellow: '#f5f543',
-  brightBlue: '#3b8eea',
-  brightMagenta: '#d670d6',
-  brightCyan: '#29b8db',
-  brightWhite: '#ffffff',
-}
-
-const LIGHT_THEME: ITheme = {
-  background: '#ffffff',
-  foreground: '#333333',
-  cursor: '#333333',
-  selectionBackground: '#add6ff',
-  black: '#1e1e1e',
-  red: '#cd3131',
-  green: '#14792f',
-  yellow: '#b08500',
-  blue: '#0451a5',
-  magenta: '#bc05bc',
-  cyan: '#0598bc',
-  white: '#555555',
-  brightBlack: '#767676',
-  brightRed: '#cd3131',
-  brightGreen: '#14792f',
-  brightYellow: '#b08500',
-  brightBlue: '#0451a5',
-  brightMagenta: '#bc05bc',
-  brightCyan: '#0598bc',
-  brightWhite: '#1e1e1e',
-}
-
-function themeFor(isDark: boolean): ITheme {
-  return isDark ? DARK_THEME : LIGHT_THEME
+// xterm 需要具体颜色值（不能用 CSS var()），调色板从主题服务读取
+// （universeColorIds.ts 注册的 terminal.* / terminalCursor.* / terminal.ansi*，
+// 主题 JSON / colorCustomizations 可覆盖；agent 输出的 --acp-ansi-* 经
+// var(--vscode-terminal-ansi*) 消费同一份注册表）。
+function buildTerminalTheme(themeService: IThemeService): ITheme {
+  const color = (id: string): string | undefined =>
+    themeService.getColorTheme().getColor(id)?.toString()
+  const theme: ITheme = {}
+  const background = color('terminal.background')
+  if (background !== undefined) theme.background = background
+  const foreground = color('terminal.foreground')
+  if (foreground !== undefined) theme.foreground = foreground
+  const cursor = color('terminalCursor.foreground')
+  if (cursor !== undefined) theme.cursor = cursor
+  const selection = color('terminal.selectionBackground')
+  if (selection !== undefined) theme.selectionBackground = selection
+  const ansiSlots = [
+    'black',
+    'red',
+    'green',
+    'yellow',
+    'blue',
+    'magenta',
+    'cyan',
+    'white',
+    'brightBlack',
+    'brightRed',
+    'brightGreen',
+    'brightYellow',
+    'brightBlue',
+    'brightMagenta',
+    'brightCyan',
+    'brightWhite',
+  ] as const
+  const ansiIds = [
+    'terminal.ansiBlack',
+    'terminal.ansiRed',
+    'terminal.ansiGreen',
+    'terminal.ansiYellow',
+    'terminal.ansiBlue',
+    'terminal.ansiMagenta',
+    'terminal.ansiCyan',
+    'terminal.ansiWhite',
+    'terminal.ansiBrightBlack',
+    'terminal.ansiBrightRed',
+    'terminal.ansiBrightGreen',
+    'terminal.ansiBrightYellow',
+    'terminal.ansiBrightBlue',
+    'terminal.ansiBrightMagenta',
+    'terminal.ansiBrightCyan',
+    'terminal.ansiBrightWhite',
+  ] as const
+  for (let i = 0; i < ansiSlots.length; i++) {
+    const value = color(ansiIds[i]!)
+    if (value !== undefined) {
+      theme[ansiSlots[i]!] = value
+    }
+  }
+  return theme
 }
 
 const noopHandlers: ITerminalLinkHandlers = {
@@ -158,6 +162,7 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
     id: string,
     manager: ITerminalManagerService,
     private readonly _config: IConfigurationService,
+    private readonly _themeService: IThemeService,
   ) {
     super()
     this._id = id
@@ -182,7 +187,7 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
         this._config.get<number>('terminal.integrated.fontSize') ?? TERMINAL_FONT_SIZE_DEFAULT,
       cursorBlink: true,
       scrollback: this._config.get<number>('terminal.integrated.scrollback') ?? DEFAULT_SCROLLBACK,
-      theme: themeFor(isDarkTheme(this._config)),
+      theme: buildTerminalTheme(this._themeService),
     })
     this._fit = new FitAddon()
     this.term.loadAddon(this._fit)
@@ -204,10 +209,12 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
       }),
     )
     store.add(
+      this._themeService.onDidColorThemeChange(() => {
+        this.term.options.theme = buildTerminalTheme(this._themeService)
+      }),
+    )
+    store.add(
       this._config.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration('workbench.colorTheme')) {
-          this.term.options.theme = themeFor(isDarkTheme(this._config))
-        }
         if (e.affectsConfiguration('terminal.integrated.scrollback')) {
           this.term.options.scrollback =
             this._config.get<number>('terminal.integrated.scrollback') ?? DEFAULT_SCROLLBACK
@@ -314,6 +321,7 @@ export class TerminalXtermService extends Disposable implements ITerminalXtermSe
   constructor(
     @ITerminalManagerService private readonly _manager: ITerminalManagerService,
     @IConfigurationService private readonly _config: IConfigurationService,
+    @IThemeService private readonly _themeService: IThemeService,
   ) {
     super()
     this._register(this._manager.onDidRemoveTerminal(({ id }) => this.release(id)))
@@ -322,7 +330,9 @@ export class TerminalXtermService extends Disposable implements ITerminalXtermSe
   acquire(id: string): ITerminalXtermHolder {
     let holder = this._holders.get(id)
     if (!holder) {
-      holder = this._register(new TerminalXtermHolder(id, this._manager, this._config))
+      holder = this._register(
+        new TerminalXtermHolder(id, this._manager, this._config, this._themeService),
+      )
       this._holders.set(id, holder)
     }
     return holder

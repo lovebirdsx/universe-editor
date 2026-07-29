@@ -29,10 +29,6 @@ import { syncEditorFocusContext } from '../../services/editor/editorFocus.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import styles from './MergeEditor.module.css'
 
-function editorTheme(config: IConfigurationService): 'output-light' | 'output-dark' {
-  return config.get<string>('workbench.colorTheme') === 'light' ? 'output-light' : 'output-dark'
-}
-
 function fontSize(config: IConfigurationService): number {
   const raw = config.get<number>('editor.fontSize')
   return typeof raw === 'number' ? raw : 14
@@ -65,7 +61,6 @@ export function MergeEditor({ input }: { input: IEditorInput }) {
     if (!monacoNs) return
     const c = mergeInput.contents
     const language = languageForResource(mergeInput.fileUri)
-    const theme = editorTheme(configService)
     const size = fontSize(configService)
     const models: monaco.editor.ITextModel[] = []
 
@@ -84,7 +79,6 @@ export function MergeEditor({ input }: { input: IEditorInput }) {
     const baseModel2 = makeModel(c.base, 'merge-base2')
 
     const currentDiff = monacoNs.editor.createDiffEditor(currentRef.current!, {
-      theme,
       fontSize: size,
       automaticLayout: true,
       readOnly: true,
@@ -95,7 +89,6 @@ export function MergeEditor({ input }: { input: IEditorInput }) {
     currentDiff.setModel({ original: baseModel, modified: makeModel(c.current, 'merge-current') })
 
     const incomingDiff = monacoNs.editor.createDiffEditor(incomingRef.current!, {
-      theme,
       fontSize: size,
       automaticLayout: true,
       readOnly: true,
@@ -112,7 +105,6 @@ export function MergeEditor({ input }: { input: IEditorInput }) {
     const resultModel = makeModel(c.merged, 'merge-result')
     const resultEditor = monacoNs.editor.create(resultRef.current!, {
       model: resultModel,
-      theme,
       fontSize: size,
       automaticLayout: true,
       scrollBeyondLastLine: false,

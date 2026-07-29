@@ -34,6 +34,8 @@ function dto(overrides: Partial<IExtensionDescriptionDto> = {}): IExtensionDescr
     activationEvents: ['onCommand:test.cmd'],
     contributes: { commands: [{ command: 'test.cmd', title: 'Test Command', category: 'Test' }] },
     hasMain: true,
+    extensionLocation: '/extensions/ext',
+    extensionIsBuiltin: false,
     ...overrides,
   }
 }

@@ -19,6 +19,7 @@ import {
   IFocusStackService,
   IStatusBarService,
   IStorageService,
+  IThemeService,
   IViewsService,
   IViewDescriptorService,
   IOutputService,
@@ -90,6 +91,7 @@ import {
   KeyboardDebugService,
 } from './services/keybinding/keyboardDebugService.js'
 import { LayoutService } from './services/layout/LayoutService.js'
+import { WorkbenchThemeService } from './services/themes/workbenchThemeService.js'
 import { RendererDialogService } from './services/dialog/RendererDialogService.js'
 import { NotificationService } from './services/notification/NotificationService.js'
 import { RendererFocusTrackerService } from './services/focus/RendererFocusTrackerService.js'
@@ -414,6 +416,14 @@ async function bootstrapWorkbench(): Promise<void> {
   // workbenchStore so the container — and every service it materializes — is
   // disposed on unload (the kernel marks materialized services as singletons).
   const instantiation = workbenchStore.add(new InstantiationService(services))
+
+  // Theme service: created right after the DI container so the CSS snapshot can
+  // be restored BEFORE any contribution or React mount — the very first paint
+  // already uses the previous session's colors (no flash). ThemesContribution
+  // (BlockStartup) drives initialize() once the extension themes land.
+  const themeService = workbenchStore.add(instantiation.createInstance(WorkbenchThemeService))
+  services.set(IThemeService, themeService)
+  themeService.restoreSnapshot()
 
   // Workspace Trust: the runtime authority for whether extensions may activate
   // in the current folder. Depends on IStorageService (app-scope trusted-folder

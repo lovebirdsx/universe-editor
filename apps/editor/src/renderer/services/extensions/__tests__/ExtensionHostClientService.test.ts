@@ -46,6 +46,8 @@ const CONTRIBUTIONS: IExtensionDescriptionDto[] = [
     activationEvents: ['onCommand:ai.generateCommitMessage'],
     contributes: { commands: [{ command: 'ai.generateCommitMessage', title: 'Generate' }] },
     hasMain: true,
+    extensionLocation: '/extensions/ai',
+    extensionIsBuiltin: true,
   },
 ]
 

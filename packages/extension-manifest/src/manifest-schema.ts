@@ -76,6 +76,26 @@ const customEditorSchema = z.object({
   supportsDiff: z.boolean().optional(),
 })
 
+const themeSchema = z.object({
+  id: z.string().min(1).optional(),
+  label: z.string().optional(),
+  description: z.string().optional(),
+  uiTheme: z.enum(['vs', 'vs-dark', 'hc-black', 'hc-light']),
+  path: z.string().min(1),
+})
+
+const iconThemeSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().optional(),
+  path: z.string().min(1),
+})
+
+const productIconThemeSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().optional(),
+  path: z.string().min(1),
+})
+
 const contributesSchema = z
   .object({
     commands: z.array(commandContributionSchema).optional(),
@@ -85,6 +105,9 @@ const contributesSchema = z
     configuration: z.union([configurationSchema, z.array(configurationSchema)]).optional(),
     jsonValidation: z.array(jsonValidationSchema).optional(),
     customEditors: z.array(customEditorSchema).optional(),
+    themes: z.array(themeSchema).optional(),
+    iconThemes: z.array(iconThemeSchema).optional(),
+    productIconThemes: z.array(productIconThemeSchema).optional(),
   })
   // Tolerate contribution points we don't understand yet (forward-compat).
   .passthrough()

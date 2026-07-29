@@ -14,15 +14,17 @@
 
 编辑器目前提供深色和浅色两套配色，随光线和喜好切换：
 
-1. 按 `Ctrl+Shift+P` 打开[命令面板](../reference/glossary.md#命令面板)，输入「颜色主题」。
-2. 在弹出的「选择颜色主题」列表里，用上下键预览、回车确认。
+1. 按 `Ctrl+K Ctrl+T`（或按 `Ctrl+Shift+P` 打开[命令面板](../reference/glossary.md#命令面板)，输入「颜色主题」）。
+2. 在弹出的「选择颜色主题」列表里，用上下键预览、回车确认；按 `Esc` 取消并回到原来的主题。
 3. 当前正在使用的主题旁会标「（当前）」。
 
-可选项是「深色」和「浅色」。**主题立即生效，无需重启。** 你选的结果会保存在用户设置里（对应键名 `workbench.colorTheme`），下次打开自动沿用。
+可选项是「Universe Dark」和「Universe Light」。**主题立即生效，无需重启。** 你选的结果会保存在用户设置里（对应键名 `workbench.colorTheme`），下次打开自动沿用。
+
+主题由内置的「Universe Themes」扩展提供，与 VSCode 的主题格式兼容——第三方 VSCode 主题扩展装上后也会出现在这个列表里。
 
 <!-- 截图：颜色主题快速选择列表，深色选中状态 -->
 
-> 提示：颜色主题命令默认没有绑定快捷键。如果你经常切换，可以到[键盘快捷方式](./keybindings.md)里给它绑一个顺手的按键。
+> 提示：想微调个别颜色（比如侧边栏背景），可以在设置里用 `workbench.colorCustomizations` 覆盖，改动即时生效；把某个颜色设为 `"default"` 可以恢复该颜色的默认值。
 
 ## 切换界面语言
 
@@ -54,5 +56,5 @@
 
 | 命令名（中文） | 命令 ID | 快捷键 |
 | --- | --- | --- |
-| 颜色主题 | `workbench.action.selectTheme` | 无（可自定义） |
+| 颜色主题 | `workbench.action.selectTheme` | `Ctrl+K Ctrl+T` |
 | 配置显示语言 | `workbench.action.configureDisplayLanguage` | 无 |

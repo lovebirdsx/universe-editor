@@ -28,20 +28,44 @@ export class ExtensionThemeRegistry<T extends ThemeData> {
   ) {}
 
   registerTheme(theme: T): void {
-    const existing = this.findThemeById(theme.id)
-    if (existing) {
-      this.onDuplicate?.(theme)
-      this.themes.splice(this.themes.indexOf(existing), 1, theme)
-    } else {
-      this.themes.push(theme)
+    this.registerThemes([theme])
+  }
+
+  /**
+   * Register a batch atomically: consumers watching onDidChangeThemes (theme
+   * picker waiting for the first registration, schema enum refresh) see the
+   * whole batch at once instead of each intermediate prefix.
+   */
+  registerThemes(themes: readonly T[]): void {
+    if (themes.length === 0) {
+      return
+    }
+    for (const theme of themes) {
+      const existing = this.findThemeById(theme.id)
+      if (existing) {
+        this.onDuplicate?.(theme)
+        this.themes.splice(this.themes.indexOf(existing), 1, theme)
+      } else {
+        this.themes.push(theme)
+      }
     }
     this._onDidChangeThemes.fire()
   }
 
   deregisterTheme(theme: T): void {
-    const index = this.themes.indexOf(theme)
-    if (index !== -1) {
-      this.themes.splice(index, 1)
+    this.deregisterThemes([theme])
+  }
+
+  deregisterThemes(themes: readonly T[]): void {
+    let changed = false
+    for (const theme of themes) {
+      const index = this.themes.indexOf(theme)
+      if (index !== -1) {
+        this.themes.splice(index, 1)
+        changed = true
+      }
+    }
+    if (changed) {
       this._onDidChangeThemes.fire()
     }
   }

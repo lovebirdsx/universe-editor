@@ -6,12 +6,13 @@ import {
 } from '../extensionActivationFilter.js'
 import type { IScannedExtension } from '../extensionScanner.js'
 
-function ext(id: string, builtin = true): IScannedExtension {
+function ext(id: string, builtin = true, withMain = true): IScannedExtension {
   return {
     id,
     builtin,
     manifest: { name: id } as IScannedExtension['manifest'],
     extensionPath: `/ext/${id}`,
+    ...(withMain ? { mainPath: `/ext/${id}/dist/index.js` } : {}),
   }
 }
 
@@ -42,7 +43,17 @@ describe('computeActiveExtensions', () => {
     expect(active.map((e) => e.id)).toEqual(['b'])
   })
 
-  it('an empty allowlist activates no built-ins (core-only e2e)', () => {
+  it('the allowlist never gates declaration-only built-ins (no host cost)', () => {
+    // theme-defaults-style pure `contributes` extensions must stay active under
+    // the minimal e2e set — the seam exists to skip bundled hosts, and a
+    // declaration-only extension boots no host.
+    const filter: ActivationFilter = { allowlist: new Set() }
+    const scanned = [ext('host.lsp', true), ext('theme-defaults', true, false)]
+    const { active } = computeActiveExtensions(scanned, filter)
+    expect(active.map((e) => e.id)).toEqual(['theme-defaults'])
+  })
+
+  it('an empty allowlist activates no built-ins with a main module (core-only e2e)', () => {
     const filter: ActivationFilter = { allowlist: new Set() }
     const { active } = computeActiveExtensions([ext('a'), ext('b')], filter)
     expect(active).toEqual([])

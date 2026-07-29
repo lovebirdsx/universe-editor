@@ -7,12 +7,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import {
+  ColorScheme,
   Emitter,
   IConfigurationService,
   IEditorGroupsService,
   IEditorService,
   IEditorResolverService,
   IFileService,
+  IThemeService,
   InstantiationService,
   ServiceCollection,
   URI,
@@ -25,6 +27,7 @@ import type {
   IEditorService as IEditorServiceType,
   IEditorResolverService as IEditorResolverServiceType,
   IFileService as IFileServiceType,
+  IThemeService as IThemeServiceType,
 } from '@universe-editor/platform'
 import { MarkdownView, DocLinkContext } from '../MarkdownView.js'
 import { ServicesContext } from '../../useService.js'
@@ -76,6 +79,14 @@ function makeConfig(): IConfigurationServiceType {
     get: () => 'dark',
     onDidChangeConfiguration: () => ({ dispose: () => {} }),
   } as unknown as IConfigurationServiceType
+}
+
+function makeThemeService(): IThemeServiceType {
+  return {
+    _serviceBrand: undefined,
+    getColorTheme: () => ({ type: ColorScheme.DARK }),
+    onDidColorThemeChange: () => ({ dispose: () => {} }),
+  } as unknown as IThemeServiceType
 }
 
 function makeFileService(exists: (resource: URI) => boolean | Promise<boolean>): IFileServiceType {
@@ -168,6 +179,7 @@ function renderMarkdown(text: string, testId?: string) {
   const services = new ServiceCollection()
   services.set(IEditorResolverService, makeResolver())
   services.set(IConfigurationService, makeConfig())
+  services.set(IThemeService, makeThemeService())
   const inst = new InstantiationService(services)
   return render(
     <ServicesContext.Provider value={inst}>

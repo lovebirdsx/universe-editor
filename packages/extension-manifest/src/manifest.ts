@@ -127,6 +127,36 @@ export interface IResolvedJsonValidation {
   url?: string
 }
 
+/**
+ * A single `contributes.themes[]` entry (VSCode color theme point). `path` is
+ * relative to the extension root (e.g. `./themes/dark.json`); the renderer
+ * resolves it against {@link IExtensionDescriptionDto.extensionLocation}.
+ * `uiTheme` is the VSCode base-theme selector the workbench chrome derives
+ * from (`vs` light / `vs-dark` dark / `hc-black` / `hc-light`).
+ */
+export interface IThemeContribution {
+  /** Optional stable id; defaults to `label`. */
+  id?: string
+  label?: string
+  description?: string
+  uiTheme: 'vs' | 'vs-dark' | 'hc-black' | 'hc-light'
+  path: string
+}
+
+/** A single `contributes.iconThemes[]` entry (VSCode file icon theme point). */
+export interface IIconThemeContribution {
+  id: string
+  label?: string
+  path: string
+}
+
+/** A single `contributes.productIconThemes[]` entry (VSCode product icon point). */
+export interface IProductIconThemeContribution {
+  id: string
+  label?: string
+  path: string
+}
+
 /** The `contributes` block as declared in a manifest. Grows phase by phase. */
 export interface IExtensionContributions {
   commands?: ICommandContribution[]
@@ -139,6 +169,9 @@ export interface IExtensionContributions {
   jsonValidation?: IJsonValidationContribution[]
   /** Webview-backed editors registered for matching files. */
   customEditors?: ICustomEditorContribution[]
+  themes?: IThemeContribution[]
+  iconThemes?: IIconThemeContribution[]
+  productIconThemes?: IProductIconThemeContribution[]
 }
 
 /**
@@ -233,6 +266,13 @@ export interface IExtensionDescriptionDto {
   readonly hasMain: boolean
   /** Declared untrusted-workspace support, verbatim from the manifest. */
   readonly untrustedWorkspaces?: ExtensionUntrustedWorkspaceSupport
+  /**
+   * Absolute path to the extension's root folder. Contribution `path`s (themes,
+   * icon themes, …) are relative to this; the renderer joins the two.
+   */
+  readonly extensionLocation: string
+  /** True for extensions shipped with the app (built-in dir). */
+  readonly extensionIsBuiltin: boolean
 }
 
 /**

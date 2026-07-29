@@ -12,7 +12,6 @@ import styles from './OutputView.module.css'
 export function OutputView() {
   const configService = useService(IConfigurationService)
   const hasContent = useObservable(useService(IOutputService).activeChannelHasContent)
-  const theme = configService.get<string>('workbench.colorTheme') === 'light' ? 'vs' : 'vs-dark'
 
   const [fontSize, setFontSize] = useState(
     () => configService.get<number>('output.fontSize') ?? OUTPUT_FONT_SIZE_DEFAULT,
@@ -44,7 +43,7 @@ export function OutputView() {
     <div className={styles['outputView']}>
       <div className={styles['content']}>
         {hasContent ? (
-          <LogOutputView theme={theme} fontSize={fontSize} fontFamily={fontFamily} />
+          <LogOutputView fontSize={fontSize} fontFamily={fontFamily} />
         ) : (
           <div className={styles['empty']} style={{ fontSize: `${fontSize}px`, fontFamily }}>
             No output.

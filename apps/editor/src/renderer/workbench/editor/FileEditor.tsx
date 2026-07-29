@@ -102,12 +102,6 @@ function getEditorTypographyOptions(
   }
 }
 
-function getEditorTheme(configService: IConfigurationService): 'output-light' | 'output-dark' {
-  return configService.get<string>('workbench.colorTheme') === 'light'
-    ? 'output-light'
-    : 'output-dark'
-}
-
 // Monaco's built-in drop-into-editor stays OFF at rest for every language: a
 // plain drag keeps the original behaviour (the editor-area body opens the
 // dropped file). It is armed on the fly — only while the user holds Shift over a
@@ -159,7 +153,6 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     const ed = monacoNs.editor.create(
       containerRef.current,
       {
-        theme: getEditorTheme(configService),
         automaticLayout: true,
         editContext: true,
         // Semantic highlighting re-colors TextMate's guesses with real type info

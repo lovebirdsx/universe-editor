@@ -9,6 +9,7 @@ import {
   Emitter,
   type EditorInput,
   type IDialogService,
+  type IDisposable,
   type IEditorGroup,
   type IEditorGroupModelChangeEvent,
   type IEditorGroupsService as IEditorGroupsServiceType,
@@ -25,6 +26,7 @@ import {
   type UriComponents,
   type UserDataFile,
 } from '@universe-editor/platform'
+import type { IOutOfWorkspaceWatchService } from '../../services/files/outOfWorkspaceWatchService.js'
 
 // Stub the model registry so a test can inject a live editor buffer for a URI.
 // Default: no live model (peek → undefined), so diff refresh reads disk as before.
@@ -61,6 +63,17 @@ class FakeWatcher implements IFileWatcherServiceType {
   fire(events: readonly IFileChangeEvent[]): void {
     this._emitter.fire(events)
   }
+}
+
+/** Routes the aggregating watch service back to FakeWatcher for assertions. */
+function makeOutOfWorkspaceWatch(watcher: FakeWatcher): IOutOfWorkspaceWatchService {
+  return {
+    _serviceBrand: undefined,
+    watch(uris: readonly URI[]): IDisposable {
+      void watcher.watchOutOfWorkspace(uris as unknown as UriComponents[])
+      return { dispose() {} }
+    },
+  } as IOutOfWorkspaceWatchService
 }
 
 /**
@@ -220,6 +233,7 @@ describe('ExternalChangeWatcher', () => {
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService(),
@@ -260,6 +274,7 @@ describe('ExternalChangeWatcher', () => {
     } as unknown as IFileServiceType
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       fileService,
@@ -300,6 +315,7 @@ describe('ExternalChangeWatcher', () => {
     } as unknown as IFileServiceType
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       fileService,
@@ -326,6 +342,7 @@ describe('ExternalChangeWatcher', () => {
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService(),
@@ -346,6 +363,7 @@ describe('ExternalChangeWatcher', () => {
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService(),
@@ -368,6 +386,7 @@ describe('ExternalChangeWatcher', () => {
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService({ existing: [uri] }),
@@ -391,6 +410,7 @@ describe('ExternalChangeWatcher', () => {
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService(),
@@ -412,6 +432,7 @@ describe('ExternalChangeWatcher', () => {
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService({ existing: [uri], contents: [[uri, 'head']] }),
@@ -438,6 +459,7 @@ describe('ExternalChangeWatcher', () => {
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService({ existing: [uri], contents: [[uri, 'disk-stale']] }),
@@ -462,6 +484,7 @@ describe('ExternalChangeWatcher', () => {
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService({ existing: [uri], contents: [[uri, 'disk-new']] }),
@@ -486,8 +509,10 @@ describe('ExternalChangeWatcher', () => {
     const otherInput = makeFileInput(other) as FileEditorInput & { checks: number[] }
     const groups = makeGroups([input, otherInput])
     const userData = new FakeUserData([[aiSettings, uri]])
+    const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
-      new FakeWatcher(),
+      watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService({ existing: [uri] }),
@@ -508,8 +533,10 @@ describe('ExternalChangeWatcher', () => {
     const input = makeFileInput(uri) as FileEditorInput & { checks: number[] }
     const groups = makeGroups([input])
     const userData = new FakeUserData([[settings, uri]])
+    const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
-      new FakeWatcher(),
+      watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService({ existing: [uri] }),
@@ -530,6 +557,7 @@ describe('ExternalChangeWatcher', () => {
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService(),
@@ -552,6 +580,7 @@ describe('ExternalChangeWatcher', () => {
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService(),
@@ -579,6 +608,7 @@ describe('ExternalChangeWatcher', () => {
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService(),
@@ -609,6 +639,7 @@ describe('ExternalChangeWatcher', () => {
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService(),
@@ -642,6 +673,7 @@ describe('ExternalChangeWatcher', () => {
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService({ existing: [sourceUri], contents: [[sourceUri, '# new']] }),
@@ -667,6 +699,7 @@ describe('ExternalChangeWatcher', () => {
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService({ existing: [sourceUri], contents: [[sourceUri, '# new']] }),
@@ -689,6 +722,7 @@ describe('ExternalChangeWatcher', () => {
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
       watcher,
+      makeOutOfWorkspaceWatch(watcher),
       groups,
       makeDialog(),
       makeFileService(),

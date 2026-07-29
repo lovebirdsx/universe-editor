@@ -32,14 +32,18 @@ import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
 import { applyMinimalTextEdit } from '../services/editor/minimalModelEdit.js'
 import { isDescendant } from '../services/explorer/explorerTreeUtils.js'
+import { IOutOfWorkspaceWatchService } from '../services/files/outOfWorkspaceWatchService.js'
 
 export class ExternalChangeWatcher extends Disposable implements IWorkbenchContribution {
   private readonly _logger: ILogger
   private readonly _groupDisposables = new Map<number, IDisposable>()
   private _watchUpdatePending = false
+  private _watchHandle: IDisposable | undefined
 
   constructor(
     @IFileWatcherService private readonly _watcher: IFileWatcherService,
+    @IOutOfWorkspaceWatchService
+    private readonly _outOfWorkspaceWatch: IOutOfWorkspaceWatchService,
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IDialogService private readonly _dialog: IDialogService,
     @IFileService private readonly _fileService: IFileService,
@@ -83,10 +87,11 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
         this._scheduleWatchUpdate()
       }),
     )
-    void this._updateExtraWatches()
+    this._updateExtraWatches()
   }
 
   override dispose(): void {
+    this._watchHandle?.dispose()
     this._groupDisposables.clear()
     super.dispose()
   }
@@ -117,11 +122,11 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     this._watchUpdatePending = true
     setTimeout(() => {
       this._watchUpdatePending = false
-      void this._updateExtraWatches()
+      this._updateExtraWatches()
     }, 0)
   }
 
-  private async _updateExtraWatches(): Promise<void> {
+  private _updateExtraWatches(): void {
     const uris: URI[] = []
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
@@ -135,7 +140,8 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
         }
       }
     }
-    await this._watcher.watchOutOfWorkspace(uris)
+    this._watchHandle?.dispose()
+    this._watchHandle = this._outOfWorkspaceWatch.watch(uris)
   }
 
   private async _handleUserDataChange(file: UserDataFile): Promise<void> {

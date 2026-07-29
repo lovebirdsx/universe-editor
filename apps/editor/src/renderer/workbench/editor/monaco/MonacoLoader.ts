@@ -257,14 +257,10 @@ async function loadMonaco(): Promise<typeof monaco> {
       )
       _monaco = monacoMod
       registerLogLanguage(monacoMod)
-      // colorize() (markdown code blocks) and any render before the first
-      // FileEditor rely on Monaco's global active theme. Align it with the
-      // workbench theme the moment Monaco loads — ThemeContribution's startup
-      // setTheme runs before Monaco exists, so without this the global theme
-      // stays at standalone's default `vs` (light) until a FileEditor is opened.
-      const workbenchTheme =
-        document.documentElement.dataset.theme === 'light' ? 'output-light' : 'output-dark'
-      _monaco.editor.setTheme(workbenchTheme)
+      // The global active theme is owned by the Monaco theme bridge
+      // (services/themes/monacoThemeBridge.ts): it defineTheme+setThemes the
+      // workbench ColorThemeData as soon as Monaco resolves, and re-applies on
+      // every theme change. Nothing here touches setTheme anymore.
       disableLanguageDiagnostics()
       // JSON 是唯一没有 basic-languages Monarch 语法的常见语言：它的着色 tokenizer 只在
       // onLanguage('json')（创建 json model 时）通过 setupMode 注册，而 Markdown 内嵌代码块

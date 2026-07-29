@@ -2,10 +2,10 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Regression: Monaco's StandaloneServices apply override services only on first
  *  init, and the first StandaloneServices.get() silently inits with an empty
- *  override set. loadMonaco() calls setTheme/createModel (both resolve standalone
- *  services) during boot, so unless we explicitly initialize with our overrides
- *  FIRST, the references peek tree falls back to the default ITextModelService
- *  and throws "Model not found" for files the user hasn't opened.
+ *  override set. loadMonaco() calls createModel (resolves standalone services)
+ *  during boot, so unless we explicitly initialize with our overrides FIRST, the
+ *  references peek tree falls back to the default ITextModelService and throws
+ *  "Model not found" for files the user hasn't opened.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -105,12 +105,11 @@ describe('MonacoLoader override-services initialization', () => {
 
     await MonacoLoader.ensureInitialized()
 
-    // initialize must run, and run before the first setTheme / createModel which
-    // would otherwise silently init with an empty override set.
+    // initialize must run, and run before the first createModel which would
+    // otherwise silently init with an empty override set. (setTheme no longer
+    // runs here — the global theme is owned by the Monaco theme bridge.)
     expect(rec.order[0]).toBe('initialize')
-    expect(rec.order).toContain('setTheme')
     expect(rec.order).toContain('createModel')
-    expect(rec.order.indexOf('initialize')).toBeLessThan(rec.order.indexOf('setTheme'))
     expect(rec.order.indexOf('initialize')).toBeLessThan(rec.order.indexOf('createModel'))
 
     // and it must carry our overrides, keyed by the service-id strings Monaco's

@@ -41,7 +41,7 @@ export { WorkspaceExplorerRevealContribution } from './WorkspaceExplorerRevealCo
 export { ExplorerAutoRevealContribution } from './ExplorerAutoRevealContribution.js'
 export { RecentFilesContribution } from './RecentFilesContribution.js'
 export { JsonSchemaBridgeContribution } from './JsonSchemaBridgeContribution.js'
-export { ThemeContribution } from './ThemeContribution.js'
+export { ThemesContribution } from './ThemesContribution.js'
 export { WorkbenchFontContribution } from './WorkbenchFontContribution.js'
 export { NotificationStatusContribution } from './NotificationStatusContribution.js'
 export { WorkspaceTrustContribution } from './WorkspaceTrustContribution.js'

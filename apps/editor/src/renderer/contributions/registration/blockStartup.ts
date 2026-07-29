@@ -19,7 +19,7 @@ import { ExtensionsViewContribution } from '../ExtensionsViewContribution.js'
 import { SwarmViewContribution } from '../SwarmViewContribution.js'
 import { SwarmConfigurationContribution } from '../SwarmConfigurationContribution.js'
 import { SettingsContribution } from '../SettingsContribution.js'
-import { ThemeContribution } from '../ThemeContribution.js'
+import { ThemesContribution } from '../ThemesContribution.js'
 import { AiConfigurationContribution } from '../AiConfigurationContribution.js'
 import { UpdateConfigurationContribution } from '../UpdateConfigurationContribution.js'
 import { WorkbenchFontContribution } from '../WorkbenchFontContribution.js'
@@ -160,7 +160,7 @@ ContributionsRegistry.registerContribution(
 
 ContributionsRegistry.registerContribution(
   'workbench.contrib.theme',
-  ThemeContribution,
+  ThemesContribution,
   WorkbenchPhase.BlockStartup,
 )
 

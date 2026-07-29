@@ -22,7 +22,9 @@ import { execFileSync } from 'node:child_process'
 
 // Env var the app's extension-host bootstrap reads as an allowlist (P2). When
 // unset the host activates every scanned extension; when set (even to empty) it
-// activates only the listed ids plus core built-ins.
+// gates built-ins WITH an entry module down to the listed ids — declaration-only
+// built-ins (pure contributes, e.g. theme-defaults) and user-installed
+// extensions always activate, since they cost no host process.
 export const ENABLED_EXTENSIONS_ENV = 'UNIVERSE_ENABLED_EXTENSIONS'
 
 export interface EditorBuild {

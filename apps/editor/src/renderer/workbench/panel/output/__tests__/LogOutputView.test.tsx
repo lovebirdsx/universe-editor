@@ -39,7 +39,7 @@ function setup() {
   const instantiation = new InstantiationService(services)
   render(
     <ServicesContext.Provider value={instantiation}>
-      <LogOutputView theme="vs-dark" fontSize={13} fontFamily="monospace" />
+      <LogOutputView fontSize={13} fontFamily="monospace" />
     </ServicesContext.Provider>,
   )
   return { output, models }
