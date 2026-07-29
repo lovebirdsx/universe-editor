@@ -557,6 +557,34 @@ describe('ExplorerTreeService', () => {
     expect(watcher.watched.map((u) => URI.revive(u)?.toString())).toContain(other.toString())
   })
 
+  it('re-reads the root once the watch ack resolves, catching files created before the subscription went live', async () => {
+    // Simulate the real watcher latency: watch() acks only after the utility
+    // process armed the subscription. A file written during that window fires
+    // no event, so the tree must re-read on ack or it never appears.
+    let resolveWatch!: () => void
+    watcher.watch = (folder: UriComponents) => {
+      watcher.watched.push(folder)
+      return new Promise<void>((r) => {
+        resolveWatch = r
+      })
+    }
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    tree.startWatching()
+    expect(watcher.watched.map((u) => URI.revive(u)?.toString())).toContain(root.toString())
+
+    // External creation inside the request→ack window: no watcher event.
+    fs.dirs.set(root.toString(), [
+      ...(fs.dirs.get(root.toString()) ?? []),
+      { name: 'early.txt', isFile: true, isDirectory: false },
+    ])
+    fs.calls.list.length = 0
+    resolveWatch()
+    await flush()
+    expect(fs.calls.list).toContain(root.toString())
+    expect(tree.getChildren(root)?.some((c) => c.name === 'early.txt')).toBe(true)
+  })
+
   it('reveal on a direct child of the root selects it', async () => {
     const tree = inst.createInstance(ExplorerTreeService)
     await flush()

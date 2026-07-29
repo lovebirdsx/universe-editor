@@ -683,9 +683,22 @@ export class ExplorerTreeService extends Disposable {
   /** (Re-)arm or tear down the recursive file watcher for `root`. Idempotent — the main-process watcher dedupes same-root re-subscribes. */
   private _syncWatch(root: URI | null): void {
     if (root) {
-      void this._watcher.watch(root, { excludes: this._exclude.currentWatcherGlobs }).catch(() => {
-        this._logger.warn(`watch failed ${root.toString()}`)
-      })
+      void this._watcher
+        .watch(root, { excludes: this._exclude.currentWatcherGlobs })
+        .then(() => {
+          // parcel only reports changes after the subscription is live; the
+          // ack resolves once the watcher process has armed. Anything created
+          // externally in the request→ack window (cross-process spawn +
+          // subscribe on Windows can take hundreds of ms) fired no event, so
+          // re-read the root once. Refreshing only the root (not every loaded
+          // node like startWatching's catch-up) keeps the common case cheap —
+          // the window is short, and deeper edits almost always race with a
+          // root-level create the OS reports alongside.
+          if (this._root && sameUri(this._root, root)) void this.refresh(root)
+        })
+        .catch(() => {
+          this._logger.warn(`watch failed ${root.toString()}`)
+        })
     } else {
       void this._watcher.unwatch().catch(() => {})
     }

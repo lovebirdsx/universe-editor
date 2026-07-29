@@ -55,6 +55,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - sash 拖拽/尺寸持久化 spec，reload 后目标 pane 高度稳定卡等分值=异步 reconcile 落后于 Allotment 首次布局、preferredSize 挂载后是 no-op → 案例 50；**修完同断言再挂**=等分值经 onChange→debounce 落盘污染磁盘，恢复路径修得再好读的也是脏值，须收窄落盘权到用户动作 → 案例 50b；**再挂且诊断现场 mem==DOM==贪心值**（磁盘干净）=mem 记账被 onChange 覆盖、storedSizesKey/target 读脏 mem 锁死，恢复目标必须读独立的 persisted 权威源（save 序列化也走它）+settle 窗口内持续校验 → 案例 50c
 - ACP 配置写入后立即建 session、echo agent received 恒 `"[]"`=异步镜像池 stale 滤空 wire 列表 → 案例 51
 - `[MonacoLoader] not initialized` 栈过同步探针=poll 回调抛异常击穿等待 → 案例 52（**已修又再发**时先核对 main 上修复真实存在：`git log -S`）
+- openWorkspace 后立即外部写文件、等 watcher surface 的 treeitem 等满 timeout 恒不出现=watcher 跨进程 arm（spawn utility process+subscribe）窗口吞事件，seed 可见≠订阅生效 → 案例 55
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

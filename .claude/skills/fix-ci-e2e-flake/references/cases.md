@@ -237,6 +237,12 @@ typescript 套件 `tsCodeLens`/`tsSemanticTokens` CI 2 workers 偶发——spec 
 
 ---
 
+**案例 55 — openWorkspace 后立即外部写文件：watcher 跨进程 arm 窗口吞事件，treeitem 等满 timeout 恒不出现（产品竞态）**
+信号：`waiting for locator('[role="treeitem"]')` 恒 0 / `toBeVisible` 等满 timeout 元素**从未出现**（不是值错，是事件永远没来）+ spec 时序是 `openWorkspace → 等 seed 文件可见 → fs.writeFile → 等 watcher surface 新文件`；retry（重跑重写文件）救得回；`--repeat-each` 概率挂（4 跑 2 挂）。
+`smoke.explorerExternalWatch`「a file created externally appears in the tree automatically」本地 `--repeat-each=4` 必现 flaky——根因=产品 fire-and-forget：`ExplorerTreeService._setRoot → _syncWatch` 是 `void watcher.watch(...)` 不等 ack，而 watch 真正生效要跨三段异步：renderer→main IPC → `WatcherProcessClient` 首启**惰性 spawn utility process**（Windows 下数百 ms 起）→ host 内 `parcel.subscribe()`（`watcherHost.ts` 在 subscribe 完成后才回 ack，语义可靠但慢）。spec 的 seed 文件可见只证明 tree readdir 完成（`_setRoot` 已发生、watch 请求已**发出**），不代表订阅生效；`openWorkspace` 的 await 也只等 workspace 切换不等 watch arm。测试在 request→ack 窗口内 writeFile → **parcel 只报订阅时刻之后的事件**（`startWatching()` 注释明说的语义）→ 事件永久丢失，元素永不出现。修产品（与 `startWatching()` 的 catch-up 补读同思路）：`_syncWatch` 的 `.then(ack)` 里补一次幂等 `refresh(root)`——ack 到达即订阅已 live，窗口期内的外部创建由这次重读兜底；`sameUri(this._root, root)` 守卫防 workspace 快速连切时旧 ack 刷新新根。只刷 root 而非 `_refreshLoadedNodes` 全量：窗口短、深层编辑几乎总伴随 root 级事件，常见路径保持便宜。回归单测「re-reads the root once the watch ack resolves…」：mock `watch()` 挂起，窗口内写文件，ack 后断言 root 被重读且新文件出现。整类扫：全 specs grep「openWorkspace 后 writeFile 并依赖 watcher 事件驱动 UI」**仅本 spec 两个用例**（其余都是 openWorkspace **前**写 seed 文件，首屏 readdir 自然覆盖）；`ExternalChangeWatcher`（编辑器外部变更 reload）消费同一事件流但其场景是文件已打开后（watcher 早已 armed），无 spec 暴露、未动。修复后两例 `--repeat-each=8` 16/16 全绿。锚：`ExplorerTreeService.ts`（`_syncWatch` ack 后补读）；`watcherHost.ts`（ack 时序）；`fileWatcherMainService.ts` / `watcherProcessClient.ts`（跨进程链路）。
+
+---
+
 ## 根治 TODO
 
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
