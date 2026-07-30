@@ -37,6 +37,7 @@ import {
   type IConfigurationContribution,
   type ICustomEditorContribution,
   type IExtensionDescriptionDto,
+  type IGrammarContribution,
   type IIconThemeContribution,
   type IKeybindingContribution,
   type IMenuContribution,
@@ -116,6 +117,15 @@ export class ExtensionPointTranslator extends Disposable {
       themes: readonly IProductIconThemeContribution[],
       context: IThemeRegistrationContext,
     ) => IDisposable,
+    /**
+     * Register a batch of `contributes.grammars` entries into the grammar
+     * registry (TextMate tokenization). Supplied by ExtensionsContribution;
+     * absent in unit tests.
+     */
+    private readonly _registerGrammars?: (
+      grammars: readonly IGrammarContribution[],
+      context: IThemeRegistrationContext,
+    ) => IDisposable,
   ) {
     super()
   }
@@ -167,6 +177,16 @@ export class ExtensionPointTranslator extends Disposable {
       }
       if (contributes.productIconThemes !== undefined && contributes.productIconThemes.length > 0) {
         const handle = this._registerProductIconThemes?.(contributes.productIconThemes, {
+          extensionId: ext.id,
+          extensionLocation: ext.extensionLocation,
+          extensionIsBuiltin: ext.extensionIsBuiltin,
+        })
+        if (handle !== undefined) {
+          this._register(handle)
+        }
+      }
+      if (contributes.grammars !== undefined && contributes.grammars.length > 0) {
+        const handle = this._registerGrammars?.(contributes.grammars, {
           extensionId: ext.id,
           extensionLocation: ext.extensionLocation,
           extensionIsBuiltin: ext.extensionIsBuiltin,

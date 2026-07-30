@@ -157,6 +157,25 @@ export interface IProductIconThemeContribution {
   path: string
 }
 
+/**
+ * A single `contributes.grammars[]` entry (VSCode TextMate grammar point).
+ * `path` is relative to the extension root (e.g. `./syntaxes/ts.tmLanguage.json`);
+ * the renderer resolves it against {@link IExtensionDescriptionDto.extensionLocation}.
+ * Entries without `language` exist only to be injected into / included by other
+ * grammars. `embeddedLanguages` maps a scope to a **language id** (the renderer
+ * re-encodes it to the numeric encoded id before handing it to vscode-textmate).
+ */
+export interface IGrammarContribution {
+  language?: string
+  scopeName: string
+  path: string
+  embeddedLanguages?: Record<string, string>
+  tokenTypes?: Record<string, 'comment' | 'string' | 'regex' | 'other'>
+  injectTo?: string[]
+  balancedBracketScopes?: string[]
+  unbalancedBracketScopes?: string[]
+}
+
 /** The `contributes` block as declared in a manifest. Grows phase by phase. */
 export interface IExtensionContributions {
   commands?: ICommandContribution[]
@@ -172,6 +191,7 @@ export interface IExtensionContributions {
   themes?: IThemeContribution[]
   iconThemes?: IIconThemeContribution[]
   productIconThemes?: IProductIconThemeContribution[]
+  grammars?: IGrammarContribution[]
 }
 
 /**

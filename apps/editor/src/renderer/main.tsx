@@ -92,6 +92,7 @@ import {
 } from './services/keybinding/keyboardDebugService.js'
 import { LayoutService } from './services/layout/LayoutService.js'
 import { WorkbenchThemeService } from './services/themes/workbenchThemeService.js'
+import { ITextMateService, TextMateService } from './services/textmate/textMateService.js'
 import { RendererDialogService } from './services/dialog/RendererDialogService.js'
 import { NotificationService } from './services/notification/NotificationService.js'
 import { RendererFocusTrackerService } from './services/focus/RendererFocusTrackerService.js'
@@ -424,6 +425,11 @@ async function bootstrapWorkbench(): Promise<void> {
   const themeService = workbenchStore.add(instantiation.createInstance(WorkbenchThemeService))
   services.set(IThemeService, themeService)
   themeService.restoreSnapshot()
+
+  // TextMate service: owns the grammar registry fed by extension translation
+  // (ExtensionsContribution injects it into the ExtensionPointTranslator).
+  const textMateService = workbenchStore.add(instantiation.createInstance(TextMateService))
+  services.set(ITextMateService, textMateService)
 
   // Workspace Trust: the runtime authority for whether extensions may activate
   // in the current folder. Depends on IStorageService (app-scope trusted-folder

@@ -177,6 +177,12 @@ catalogs:
     vscode-markdown-languageservice:
       specifier: 0.5.0-alpha.13
       version: 0.5.0-alpha.13
+    vscode-oniguruma:
+      specifier: ^2.0.1
+      version: 2.0.1
+    vscode-textmate:
+      specifier: ^9.3.2
+      version: 9.3.2
     vscode-uri:
       specifier: ^3.0.8
       version: 3.1.0
@@ -396,6 +402,12 @@ importers:
       vscode-languageserver-types:
         specifier: 'catalog:'
         version: 3.18.0
+      vscode-oniguruma:
+        specifier: 'catalog:'
+        version: 2.0.1
+      vscode-textmate:
+        specifier: 'catalog:'
+        version: 9.3.2
       zod:
         specifier: 'catalog:'
         version: 3.25.76
@@ -575,6 +587,8 @@ importers:
       vitest:
         specifier: 'catalog:'
         version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.17)(happy-dom@17.6.3)(lightningcss@1.33.0)
+
+  extensions/textmate-grammars: {}
 
   extensions/theme-defaults: {}
 
@@ -1972,6 +1986,7 @@ packages:
 
   '@swc/helpers@0.5.22':
     resolution: {integrity: sha512-/e2Ly3Docn9kYByap6TV4oquJ3wQuz3c+kC74riqtkwU9CwTMeuj6t2rW+bRr4pyOx/CYQM4wr0RgaKQwGEz0A==}
+    deprecated: This version contains a decorator helper regression from swc-project/swc#11847. Please upgrade to @swc/helpers@0.5.23 or newer.
 
   '@szmarczak/http-timer@4.0.6':
     resolution: {integrity: sha512-4BAffykYOgO+5nzBWYwE3W90sBgLJoUPRWWcL8wlyiM8IB8ipJz3UMJ9KXQd1RKQXpKp8Tutn80HZtWsu2u76w==}
@@ -4933,6 +4948,12 @@ packages:
   vscode-markdown-languageservice@0.5.0-alpha.13:
     resolution: {integrity: sha512-uxEdsSXdh5Bi/q1kymcqv0JziAN4gi02YPOXhqlEahsgiVGd/5cWGSJIL6hIaRtql3wBgRDNqI7CrOsODh0Yqg==}
     engines: {node: '>=18'}
+
+  vscode-oniguruma@2.0.1:
+    resolution: {integrity: sha512-poJU8iHIWnC3vgphJnrLZyI3YdqRlR27xzqDmpPXYzA93R4Gk8z7T6oqDzDoHjoikA2aS82crdXFkjELCdJsjQ==}
+
+  vscode-textmate@9.3.2:
+    resolution: {integrity: sha512-n2uGbUcrjhUEBH16uGA0TvUfhWwliFZ1e3+pTjrkim1Mt7ydB41lV08aUvsi70OlzDWp6X7Bx3w/x3fAXIsN0Q==}
 
   vscode-uri@3.1.0:
     resolution: {integrity: sha512-/BpdSx+yCQGnCvecbyXdxHDkuk55/G3xwnC0GqY4gmQ3j+A+g8kzzgB4Nk/SINjqn6+waqw3EgbVF2QKExkRxQ==}
@@ -9180,6 +9201,10 @@ snapshots:
       vscode-languageserver-protocol: 3.18.0
       vscode-languageserver-textdocument: 1.0.13
       vscode-uri: 3.1.0
+
+  vscode-oniguruma@2.0.1: {}
+
+  vscode-textmate@9.3.2: {}
 
   vscode-uri@3.1.0: {}
 

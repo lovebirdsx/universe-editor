@@ -57,6 +57,8 @@
     "lucide-react": "catalog:",
     "mermaid": "catalog:",
     "monaco-editor": "catalog:",
+    "vscode-oniguruma": "catalog:",
+    "vscode-textmate": "catalog:",
     "vscode-jsonrpc": "catalog:",
     "vscode-languageserver-protocol": "catalog:",
     "vscode-languageserver-types": "catalog:",

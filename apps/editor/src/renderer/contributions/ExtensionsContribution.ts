@@ -34,6 +34,7 @@ import {
 } from '@universe-editor/extensions-common'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 import { ExtensionPointTranslator } from '../services/extensions/ExtensionPointTranslator.js'
+import { ITextMateService } from '../services/textmate/textMateService.js'
 import type { WorkbenchThemeService } from '../services/themes/workbenchThemeService.js'
 import { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
 import { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
@@ -56,6 +57,7 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
     @IEditorResolverService private readonly _editorResolver: IEditorResolverService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @IThemeService private readonly _themeService: WorkbenchThemeService,
+    @ITextMateService private readonly _textMateService: ITextMateService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -175,6 +177,7 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
       (iconThemes, context) => this._themeService.registerFileIconThemes(iconThemes, context),
       (productIconThemes, context) =>
         this._themeService.registerProductIconThemes(productIconThemes, context),
+      (grammars, context) => this._textMateService.registerGrammars(grammars, context),
     )
     translator.translate(contributions)
     this._translator.value = translator

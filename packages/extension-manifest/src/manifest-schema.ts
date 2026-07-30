@@ -96,6 +96,19 @@ const productIconThemeSchema = z.object({
   path: z.string().min(1),
 })
 
+const grammarTokenTypeSchema = z.enum(['comment', 'string', 'regex', 'other'])
+
+const grammarSchema = z.object({
+  language: z.string().min(1).optional(),
+  scopeName: z.string().min(1),
+  path: z.string().min(1),
+  embeddedLanguages: z.record(z.string().min(1)).optional(),
+  tokenTypes: z.record(grammarTokenTypeSchema).optional(),
+  injectTo: z.array(z.string().min(1)).optional(),
+  balancedBracketScopes: z.array(z.string().min(1)).optional(),
+  unbalancedBracketScopes: z.array(z.string().min(1)).optional(),
+})
+
 const contributesSchema = z
   .object({
     commands: z.array(commandContributionSchema).optional(),
@@ -108,6 +121,7 @@ const contributesSchema = z
     themes: z.array(themeSchema).optional(),
     iconThemes: z.array(iconThemeSchema).optional(),
     productIconThemes: z.array(productIconThemeSchema).optional(),
+    grammars: z.array(grammarSchema).optional(),
   })
   // Tolerate contribution points we don't understand yet (forward-compat).
   .passthrough()
