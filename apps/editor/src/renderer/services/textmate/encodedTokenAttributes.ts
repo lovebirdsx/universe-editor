@@ -48,7 +48,9 @@ export const FontStyle = {
   Underline: 4,
   Strikethrough: 8,
 } as const
-export type FontStyle = (typeof FontStyle)[keyof typeof FontStyle]
+// Bit flags — combinations (e.g. Italic|Bold) are the norm, so unlike the
+// single-value enums below this must stay a plain number.
+export type FontStyle = number
 
 export const ColorId = {
   None: 0,

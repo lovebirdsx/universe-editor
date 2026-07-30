@@ -65,6 +65,7 @@ import { SessionChangesDiffSyncContribution } from '../SessionChangesDiffSyncCon
 import { DiffLiveContentSyncContribution } from '../DiffLiveContentSyncContribution.js'
 import { LargeFileOptimizationsContribution } from '../LargeFileOptimizationsContribution.js'
 import { TabSwitchPerfContribution } from '../TabSwitchPerfContribution.js'
+import { TextMateContribution } from '../TextMateContribution.js'
 
 // `activeEditorHasJsonSchema` context key — drives the editor-title "Show JSON
 // Schema" action. AfterRestore: the editor service + schema registry are live,
@@ -533,5 +534,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.tabSwitchPerf',
   TabSwitchPerfContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// TextMate tokenization: binds contributed grammars into monaco's
+// TokenizationRegistry once monaco signals "loaded" (models opened earlier
+// transparently swap from Monarch to TextMate when the factories land).
+// AfterRestore so the DI container + extension translation pipeline are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.textMate',
+  TextMateContribution,
   WorkbenchPhase.AfterRestore,
 )
