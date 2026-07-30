@@ -5,6 +5,7 @@
 ## 目录
 
 - [切换颜色主题](#切换颜色主题)
+- [跟随系统外观](#跟随系统外观)
 - [切换文件图标主题](#切换文件图标主题)
 - [切换产品图标主题](#切换产品图标主题)
 - [切换界面语言](#切换界面语言)
@@ -27,6 +28,26 @@
 <!-- 截图：颜色主题快速选择列表，深色选中状态 -->
 
 > 提示：想微调个别颜色（比如侧边栏背景），可以在设置里用 `workbench.colorCustomizations` 覆盖，改动即时生效；把某个颜色设为 `"default"` 可以恢复该颜色的默认值。
+
+## 跟随系统外观
+
+想让编辑器跟着操作系统的深色 / 浅色模式自动换主题，在设置（JSON）里打开 `window.autoDetectColorScheme`：
+
+```json
+{
+  "window.autoDetectColorScheme": true,
+  "workbench.preferredDarkColorTheme": "Universe Dark",
+  "workbench.preferredLightColorTheme": "Universe Light"
+}
+```
+
+开启后：
+
+- 系统处于**深色**模式时，使用 `workbench.preferredDarkColorTheme` 指定的主题；**浅色**模式时用 `workbench.preferredLightColorTheme`。
+- 系统外观切换时**立即自动切换**，无需重启。
+- 此时用「颜色主题」命令（`Ctrl+K Ctrl+T`）选的主题，会写进**当前系统外观对应**的那个 preferred 设置（而不是 `workbench.colorTheme`）——也就是说你可以分别为深色、浅色各挑一套。
+
+> 提示：两个 preferred 设置若填了与当前系统外观不符的主题（比如在深色 preferred 里填了一套浅色主题），编辑器会忽略它并回退到对应的内置默认主题，避免外观错乱。
 
 ## 切换文件图标主题
 

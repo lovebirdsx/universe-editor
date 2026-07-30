@@ -75,6 +75,7 @@ CLI 参数 / 环境变量 / 部署配置文件的读取统一收口到 `Environm
 | [services/configurationResolver/CLAUDE.md](src/renderer/services/configurationResolver/CLAUDE.md) | `${...}` 配置变量替换 + 终端 cwd 回退 |
 | [services/dialogs/CLAUDE.md](src/renderer/services/dialogs/CLAUDE.md) | SimpleFileDialog 纯键盘文件选择对话框 |
 | [services/dnd/CLAUDE.md](src/renderer/services/dnd/CLAUDE.md) | 资源拖放读取/落点（抽象在 workbench-ui） |
+| [services/themes/CLAUDE.md](src/renderer/services/themes/CLAUDE.md) | 颜色/图标主题系统（扩展点/注册表/CSS 变量/Monaco/TextMate 桥/系统暗色联动） |
 | [workbench/files/CLAUDE.md](src/renderer/workbench/files/CLAUDE.md) | 文件图标系统 + 语言解析 |
 | [workbench/markdown/CLAUDE.md](src/renderer/workbench/markdown/CLAUDE.md) | markdown 渲染/语言特性/预览增强 |
 | [workbench/outline/CLAUDE.md](src/renderer/workbench/outline/CLAUDE.md) | outline 视图层（服务主干在 languageFeatures） |
