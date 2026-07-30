@@ -128,6 +128,7 @@ vi.mock('electron', () => ({
     ],
     getDisplayNearestPoint: () => ({ id: 1, bounds: { x: 0, y: 0, width: 3000, height: 2000 } }),
   },
+  nativeTheme: { shouldUseDarkColors: true, on: () => {}, removeListener: () => {} },
 }))
 
 const { WindowMainService } = await import('../windowMainService.js')

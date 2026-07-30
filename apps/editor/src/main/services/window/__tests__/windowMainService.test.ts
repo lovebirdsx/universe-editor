@@ -74,6 +74,7 @@ vi.mock('electron', () => ({
     getAllDisplays: vi.fn().mockReturnValue([]),
     getDisplayNearestPoint: vi.fn().mockReturnValue({ id: 1 }),
   },
+  nativeTheme: { shouldUseDarkColors: true, on: () => {}, removeListener: () => {} },
 }))
 
 // Import after mocks

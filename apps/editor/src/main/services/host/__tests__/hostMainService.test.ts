@@ -14,6 +14,7 @@ vi.mock('electron', () => ({
   dialog: {},
   shell: {},
   nativeImage: {},
+  nativeTheme: { shouldUseDarkColors: true, on: () => {}, removeListener: () => {} },
   Notification: { isSupported: () => false },
 }))
 

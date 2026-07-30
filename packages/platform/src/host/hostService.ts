@@ -37,6 +37,16 @@ export interface IHostService {
   /** Fires when the host window's maximized state changes. */
   readonly onDidChangeMaximized: Event<boolean>
 
+  /**
+   * Fires when the OS-level color scheme flips between dark and light
+   * (Electron `nativeTheme.shouldUseDarkColors`, VSCode IHostColorSchemeService
+   * 的对等物）。payload 为新的暗色态。
+   */
+  readonly onDidChangeColorScheme: Event<boolean>
+
+  /** Whether the OS is currently in a dark color scheme. */
+  isDarkColorScheme(): Promise<boolean>
+
   isMaximized(): Promise<boolean>
   minimizeWindow(): Promise<void>
   toggleMaximizeWindow(): Promise<void>

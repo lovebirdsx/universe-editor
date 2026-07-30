@@ -36,6 +36,7 @@ import { initMonacoSemanticThemeBridge } from '../services/themes/monacoSemantic
 import {
   DEFAULT_DARK_COLOR_THEME_ID,
   DEFAULT_FILE_ICON_THEME_ID,
+  DEFAULT_LIGHT_COLOR_THEME_ID,
   ThemeSettings,
 } from '../services/themes/themeConfiguration.js'
 import { ThemeFileWatcher } from '../services/themes/themeFileWatcher.js'
@@ -131,6 +132,34 @@ export class ThemesContribution extends Disposable implements IWorkbenchContribu
             description: localize(
               'settings.workbench.colorTheme.description',
               'Workbench color theme.',
+            ),
+          },
+          [ThemeSettings.PREFERRED_DARK_THEME]: {
+            type: 'string',
+            default: DEFAULT_DARK_COLOR_THEME_ID,
+            enum: themes.map((t) => t.settingsId),
+            enumItemLabels: Object.fromEntries(themes.map((t) => [t.settingsId, t.label])),
+            description: localize(
+              'settings.workbench.preferredDarkColorTheme.description',
+              'Specifies the color theme when system color mode is dark and "window.autoDetectColorScheme" is enabled.',
+            ),
+          },
+          [ThemeSettings.PREFERRED_LIGHT_THEME]: {
+            type: 'string',
+            default: DEFAULT_LIGHT_COLOR_THEME_ID,
+            enum: themes.map((t) => t.settingsId),
+            enumItemLabels: Object.fromEntries(themes.map((t) => [t.settingsId, t.label])),
+            description: localize(
+              'settings.workbench.preferredLightColorTheme.description',
+              'Specifies the color theme when system color mode is light and "window.autoDetectColorScheme" is enabled.',
+            ),
+          },
+          [ThemeSettings.DETECT_COLOR_SCHEME]: {
+            type: 'boolean',
+            default: false,
+            description: localize(
+              'settings.window.autoDetectColorScheme.description',
+              'If enabled, will automatically select a color theme based on the system color mode. If the system color mode is dark, "workbench.preferredDarkColorTheme" is used, else "workbench.preferredLightColorTheme".',
             ),
           },
         },

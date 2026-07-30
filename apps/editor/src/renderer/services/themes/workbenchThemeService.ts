@@ -26,6 +26,7 @@ import {
   Emitter,
   IConfigurationService,
   IFileService,
+  IHostService,
   ILoggerService,
   isDark,
   NullLogger,
@@ -38,6 +39,7 @@ import {
   type IFileIconTheme,
   type ILogger,
   type IProductIconTheme,
+  type ISetColorThemeOptions,
   type IThemeService,
 } from '@universe-editor/platform'
 import type {
@@ -56,6 +58,7 @@ import {
   DEFAULT_LIGHT_COLOR_THEME_ID,
   ThemeConfiguration,
   ThemeSettings,
+  type IHostColorScheme,
 } from './themeConfiguration.js'
 
 const SNAPSHOT_STORAGE_KEY = 'universe.theme.cssSnapshot'
@@ -76,11 +79,6 @@ export interface IColorThemeRegistrationContext {
 
 /** 图标主题的注册上下文与颜色主题共用（同一扩展点调用形态）。 */
 export type IIconThemeRegistrationContext = IColorThemeRegistrationContext
-
-export interface ISetColorThemeOptions {
-  /** Persist the choice to `workbench.colorTheme` (settingsId form). */
-  readonly writeConfiguration?: boolean
-}
 
 /** 图标主题 URL 转换器：把扩展内的绝对资源 URI 转成 renderer 可加载的 URL
  * （universe-app 资源 URL）。由 ThemesContribution 接线时注入。 */
@@ -109,6 +107,8 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
   private readonly _themeConfiguration: ThemeConfiguration
   private readonly _logger: ILogger
   private _iconResourceUrlResolver: IconResourceUrlResolver | undefined
+  private readonly _hostColorScheme: IHostColorScheme
+  private readonly _hostColorSchemeEmitter: Emitter<boolean>
 
   private readonly _onDidColorThemeChange = this._register(new Emitter<IColorTheme>())
   readonly onDidColorThemeChange: Event<IColorTheme> = this._onDidColorThemeChange.event
@@ -124,10 +124,32 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
     @IConfigurationService private readonly _configurationService: IConfigurationService,
     @IFileService private readonly _fileService: IFileService,
     @ILoggerService loggerService: ILoggerService,
+    @IHostService private readonly _hostService: IHostService,
   ) {
     super()
     this._logger = loggerService?.createLogger({ id: 'theme', name: 'Theme' }) ?? new NullLogger()
-    this._themeConfiguration = new ThemeConfiguration(_configurationService)
+    // 系统配色缓存：IPC 事件推进，初值异步拉取（拉到前按暗色处理——内置默认即
+    // 暗色主题）。VSCode IHostColorSchemeService 的对等物，无高对比度维度。
+    const hostEmitter = this._register(new Emitter<boolean>())
+    this._hostColorSchemeEmitter = hostEmitter
+    this._hostColorScheme = { dark: true, onDidChange: hostEmitter.event }
+    void this._hostService.isDarkColorScheme().then((dark) => {
+      if (dark !== this._hostColorScheme.dark) {
+        this._hostColorScheme.dark = dark
+        this._hostColorSchemeEmitter.fire(dark)
+      }
+    })
+    this._register(
+      this._hostService.onDidChangeColorScheme((dark) => {
+        this._hostColorScheme.dark = dark
+        this._hostColorSchemeEmitter.fire(dark)
+      }),
+    )
+    this._themeConfiguration = new ThemeConfiguration(
+      _configurationService,
+      this._hostColorScheme,
+      (settingsId) => this._colorThemeRegistry.findThemeBySettingsId(settingsId),
+    )
     this._colorThemeRegistry = new ExtensionThemeRegistry<ColorThemeData>(undefined, (theme) =>
       this._logger.warn(`duplicate theme id replaced: ${theme.id}`),
     )
@@ -375,7 +397,15 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
     this._initialized = true
     this._register(
       this._configurationService.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration(ThemeSettings.COLOR_THEME)) {
+        if (
+          e.affectsConfiguration(ThemeSettings.COLOR_THEME) ||
+          e.affectsConfiguration(ThemeSettings.PREFERRED_DARK_THEME) ||
+          e.affectsConfiguration(ThemeSettings.PREFERRED_LIGHT_THEME) ||
+          e.affectsConfiguration(ThemeSettings.DETECT_COLOR_SCHEME)
+        ) {
+          // COLOR_THEME 之外的三键都在系统跟随链路上（VSCode restoreColorTheme
+          // 的对等处理）：preferred 值变化且当前 scheme 命中、或跟随开关翻转，
+          // 都要按「当前活动设置键」重取主题。
           void this.setColorTheme(this._themeConfiguration.colorTheme)
         } else if (e.affectsConfiguration(ThemeSettings.COLOR_CUSTOMIZATIONS)) {
           void this._enqueue(async () => {
@@ -386,6 +416,20 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
           void this.setFileIconTheme(this._themeConfiguration.fileIconTheme)
         } else if (e.affectsConfiguration(ThemeSettings.PRODUCT_ICON_THEME)) {
           void this.setProductIconTheme(this._themeConfiguration.productIconTheme)
+        }
+      }),
+    )
+    // 系统暗/亮切换：仅跟随开启时重取（VSCode installPreferredSchemeListener）。
+    let previousDark = this._hostColorScheme.dark
+    this._register(
+      this._hostColorScheme.onDidChange(() => {
+        const darkChanged = previousDark !== this._hostColorScheme.dark
+        previousDark = this._hostColorScheme.dark
+        if (darkChanged && this._themeConfiguration.isDetectingColorScheme()) {
+          this._logger.info(
+            `system color scheme changed to ${this._hostColorScheme.dark ? 'dark' : 'light'}; re-applying preferred theme`,
+          )
+          void this.setColorTheme(this._themeConfiguration.colorTheme)
         }
       }),
     )
@@ -510,14 +554,19 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
       this._applyCustomizationsToCurrentTheme()
       this._applyCurrentTheme()
       if (options.writeConfiguration === true) {
+        // VSCode 同款：跟随系统时写到当前 scheme 的 preferred 设置键。
         this._configurationService.update(
-          ThemeSettings.COLOR_THEME,
+          this._themeConfiguration.getColorThemeSettingId(),
           theme.settingsId,
           ConfigurationTarget.User,
         )
       }
       return theme
     })
+  }
+
+  getPreferredColorScheme(): ColorScheme | undefined {
+    return this._themeConfiguration.getPreferredColorScheme()
   }
 
   /**

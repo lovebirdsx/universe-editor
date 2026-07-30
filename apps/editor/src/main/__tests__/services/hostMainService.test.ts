@@ -56,6 +56,7 @@ vi.mock('electron', async () => {
       showOpenDialog,
     },
     Notification: NotificationMock,
+    nativeTheme: { shouldUseDarkColors: true, on: () => {}, removeListener: () => {} },
     powerMonitor: {
       getSystemIdleState: (_threshold: number) => powerState.idleState,
     },

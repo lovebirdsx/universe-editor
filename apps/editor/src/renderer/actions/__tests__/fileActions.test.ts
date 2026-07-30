@@ -286,6 +286,7 @@ class FakeHostService implements IHostServiceType {
   declare readonly _serviceBrand: undefined
   readonly platform = 'win32' as const
   readonly onDidChangeMaximized = new Emitter<boolean>().event
+  readonly onDidChangeColorScheme = new Emitter<boolean>().event
   openResult: URI | UriComponents | null = null
   saveResult: URI | UriComponents | null = null
   readonly openCalls: IShowOpenFileOptions[] = []
@@ -293,6 +294,9 @@ class FakeHostService implements IHostServiceType {
 
   async isMaximized() {
     return false
+  }
+  async isDarkColorScheme() {
+    return true
   }
   async minimizeWindow() {}
   async toggleMaximizeWindow() {}

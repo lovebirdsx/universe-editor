@@ -26,7 +26,10 @@ class FakeHost implements IHostServiceWire {
   declare readonly _serviceBrand: undefined
   private readonly _emitter = new Emitter<boolean>()
   readonly onDidChangeMaximized = this._emitter.event
+  private readonly _colorSchemeEmitter = new Emitter<boolean>()
+  readonly onDidChangeColorScheme = this._colorSchemeEmitter.event
   isMaximizedValue = false
+  isDarkColorSchemeValue = true
   readonly minimize = vi.fn().mockResolvedValue(undefined)
   readonly toggleMaximize = vi.fn().mockResolvedValue(undefined)
   readonly close = vi.fn().mockResolvedValue(undefined)
@@ -38,6 +41,9 @@ class FakeHost implements IHostServiceWire {
 
   isMaximized(): Promise<boolean> {
     return Promise.resolve(this.isMaximizedValue)
+  }
+  isDarkColorScheme(): Promise<boolean> {
+    return Promise.resolve(this.isDarkColorSchemeValue)
   }
   minimizeWindow(): Promise<void> {
     return this.minimize()

@@ -11,6 +11,7 @@ import {
   dialog,
   shell,
   nativeImage,
+  nativeTheme,
   Notification,
   powerMonitor,
   type BrowserWindow,
@@ -67,6 +68,14 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   private readonly _onMaximize = (): void => this._onDidChangeMaximized.fire(true)
   private readonly _onUnmaximize = (): void => this._onDidChangeMaximized.fire(false)
 
+  private readonly _onDidChangeColorScheme = new Emitter<boolean>()
+  readonly onDidChangeColorScheme: Event<boolean> = this._onDidChangeColorScheme.event
+
+  // nativeTheme is process-global: every window's host service mirrors the same
+  // OS scheme flips to its renderer (VSCode IHostColorSchemeService 的对等物）。
+  private readonly _onNativeThemeUpdated = (): void =>
+    this._onDidChangeColorScheme.fire(nativeTheme.shouldUseDarkColors)
+
   constructor(
     private readonly _win: BrowserWindow,
     private readonly _createNewWindow: () => void = () => {},
@@ -75,6 +84,11 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   ) {
     _win.on('maximize', this._onMaximize)
     _win.on('unmaximize', this._onUnmaximize)
+    nativeTheme.on('updated', this._onNativeThemeUpdated)
+  }
+
+  isDarkColorScheme(): Promise<boolean> {
+    return Promise.resolve(nativeTheme.shouldUseDarkColors)
   }
 
   isMaximized(): Promise<boolean> {
@@ -441,6 +455,8 @@ export class MainHostService implements IHostServiceWire, IDisposable {
       this._win.removeListener('maximize', this._onMaximize)
       this._win.removeListener('unmaximize', this._onUnmaximize)
     }
+    nativeTheme.removeListener('updated', this._onNativeThemeUpdated)
     this._onDidChangeMaximized.dispose()
+    this._onDidChangeColorScheme.dispose()
   }
 }

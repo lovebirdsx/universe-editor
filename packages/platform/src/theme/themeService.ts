@@ -18,6 +18,14 @@ export function themeColorFromId(id: ColorIdentifier) {
   return { id }
 }
 
+export interface ISetColorThemeOptions {
+  /**
+   * Persist the choice to the color theme setting (`workbench.colorTheme`, or
+   * the preferred scheme's setting when auto-detection is active).
+   */
+  readonly writeConfiguration?: boolean
+}
+
 export interface ITokenStyle {
   readonly foreground: number | undefined
   readonly bold: boolean | undefined
@@ -92,6 +100,25 @@ export interface IThemeService {
   getColorTheme(): IColorTheme
 
   readonly onDidColorThemeChange: Event<IColorTheme>
+
+  /**
+   * Apply a color theme by settingsId (e.g. `Universe Dark`) or full theme id.
+   * Serialized through the implementation's promise chain; a stale application
+   * is discarded. Does not persist configuration unless
+   * `options.writeConfiguration` is set.
+   */
+  setColorTheme(
+    themeIdOrSettingsId: string | undefined,
+    options?: ISetColorThemeOptions,
+  ): Promise<IColorTheme | undefined>
+
+  /**
+   * The system color scheme the workbench should follow when
+   * `window.autoDetectColorScheme` is enabled (VSCode
+   * `settings.getPreferredColorScheme()` 的对等物）。Returns `undefined` when
+   * auto-detection is off.
+   */
+  getPreferredColorScheme(): ColorScheme | undefined
 
   getFileIconTheme(): IFileIconTheme
 

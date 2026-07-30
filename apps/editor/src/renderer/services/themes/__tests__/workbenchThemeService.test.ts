@@ -6,8 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ConfigurationService,
   ConfigurationTarget,
+  Event,
   URI,
   type IFileService,
+  type IHostService,
 } from '@universe-editor/platform'
 import { registerUniverseColorIds } from '../universeColorIds.js'
 import { WorkbenchThemeService } from '../workbenchThemeService.js'
@@ -45,6 +47,16 @@ function makeFileService(files: Record<string, string>): IFileService {
       return text
     },
   } as unknown as IFileService
+}
+
+function makeHostService(): IHostService {
+  return {
+    _serviceBrand: undefined,
+    onDidChangeColorScheme: Event.None,
+    async isDarkColorScheme() {
+      return true
+    },
+  } as unknown as IHostService
 }
 
 function registerBuiltInThemes(service: WorkbenchThemeService): void {
@@ -104,7 +116,12 @@ describe('WorkbenchThemeService', () => {
     registerUniverseColorIds()
     config = new ConfigurationService()
     files = makeFiles()
-    service = new WorkbenchThemeService(config, makeFileService(files), undefined as never)
+    service = new WorkbenchThemeService(
+      config,
+      makeFileService(files),
+      undefined as never,
+      makeHostService(),
+    )
   })
 
   afterEach(() => {
@@ -133,7 +150,12 @@ describe('WorkbenchThemeService', () => {
     await service.setColorTheme('Universe Light')
     service.dispose()
 
-    const fresh = new WorkbenchThemeService(config, makeFileService(files), undefined as never)
+    const fresh = new WorkbenchThemeService(
+      config,
+      makeFileService(files),
+      undefined as never,
+      makeHostService(),
+    )
     fresh.restoreSnapshot()
     const css = styleElement()?.textContent ?? ''
     expect(css).toContain('--vscode-editor-background: #fafafa')
