@@ -465,6 +465,13 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.acp.notifications.enabled':
     '当编辑器窗口未聚焦且 Agent 需要注意（权限请求、问题、任务完成或错误）时，显示系统桌面通知。点击通知会聚焦窗口并跳转到该会话。',
   'settings.acp.permissions': '无需提示即可自动批准的工具调用类型（例如 "fs.read"）。',
+  'settings.acp.plan.autoExecute':
+    '计划模式的会话完成计划（"Ready to code?"）后，经确认卡片上的短暂倒计时自动以所选模式继续——悬停或与卡片交互即可接管。"off" 表示始终等待手动选择。计划确认卡片上的复选框会把此设置切换为 "bypassPermissions"。',
+  'settings.acp.plan.autoExecute.off': '关闭',
+  'settings.acp.plan.autoExecute.bypassPermissions': 'Bypass 权限',
+  'settings.acp.plan.autoExecute.auto': '自动',
+  'settings.acp.plan.autoExecute.acceptEdits': '接受编辑',
+  'settings.acp.plan.autoExecute.default': '手动批准编辑',
   'settings.acp.prefetchBinaries':
     '在编辑器空闲时后台下载最新 Claude / codex-acp 二进制文件（仅下载模式），这样升级可立即完成。关闭可节省带宽。',
   'settings.acp.startupTimeoutMs':
@@ -1228,6 +1235,12 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.mcp.picker.defaultTitle': '新会话默认启用',
   'acp.mcp.picker.defaultLocked': '在 .mcp.json 中定义——请编辑该文件修改默认值',
   'acp.mcp.picker.defaultHint': '左侧复选框只作用于当前会话；「默认」开关决定新会话启用哪些。',
+
+  // --- ACP: permission card (plan review) ---
+  'acp.permission.autoExecute': '此后自动执行计划',
+  'acp.permission.autoExecute.tooltip':
+    '计划完成后经短暂倒计时自动继续。可在设置 acp.plan.autoExecute 中调整模式。',
+  'acp.permission.autoExecute.countdown': '{secs} 秒后自动执行',
 
   // --- AI: debug ---
   'aiDebug.clear': '清空',

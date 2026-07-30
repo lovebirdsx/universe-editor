@@ -95,6 +95,7 @@ import { AcpElicitationDraftCache } from './acpElicitationDraftCache.js'
 import {
   AcpSession,
   COMPACTION_METHOD,
+  PLAN_AUTO_EXECUTE_DELAY_MS,
   RESURRECTION_METHOD,
   type AcpConnectionLostEvent,
   type AcpPendingElicitation,
@@ -1552,8 +1553,10 @@ export class AcpSessionService
   }
 
   async onRequestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+    // switch_mode（ExitPlanMode）永不走静默自动批准：它的自动化由
+    // `acp.plan.autoExecute` 显式驱动，落到下方卡片上可见、可打断的倒计时路径。
     const auto = this._permission.tryAutoApprove(params)
-    if (auto) {
+    if (auto && params.toolCall.kind !== 'switch_mode') {
       this._telemetry.publicLog('acp.permission_auto_approved', {
         kind: params.toolCall.kind ?? 'unknown',
       })
@@ -1565,6 +1568,9 @@ export class AcpSessionService
       return { outcome: { outcome: 'cancelled' } }
     }
     const allowAlways = params.options.find((o) => o.kind === 'allow_always')
+    // plan 审查的自动执行：设置非 off 且目标选项确实在本次 options 里才附加
+    // （例如 ALLOW_BYPASS 关闭时 bypassPermissions 缺席，降级为普通弹卡）。
+    const autoResolve = this._planAutoResolve(params)
     return await new Promise<RequestPermissionResponse>((resolve) => {
       const settle = (result: RequestPermissionResponse): void => {
         if (session.pendingPermission.get() === pending) {
@@ -1581,8 +1587,14 @@ export class AcpSessionService
           name: o.name,
           ...(o.kind !== undefined ? { kind: o.kind } : {}),
         })),
+        ...(autoResolve ? { autoResolve } : {}),
         resolve: (optionId, feedback) => {
-          if (allowAlways && optionId === allowAlways.optionId && params.toolCall.kind) {
+          if (
+            allowAlways &&
+            optionId === allowAlways.optionId &&
+            params.toolCall.kind &&
+            params.toolCall.kind !== 'switch_mode'
+          ) {
             this._permission.persistAllow(params.toolCall.kind)
           }
           this._telemetry.publicLog('acp.permission_resolved', { optionId })
@@ -1604,6 +1616,20 @@ export class AcpSessionService
       }
       session.presentPermission(pending)
     })
+  }
+
+  /**
+   * ExitPlanMode（kind 'switch_mode'）的自动执行判定。返回 undefined 表示走普通人工弹卡：
+   * 设置 off / 非 plan 请求 / 设置值对应的选项不在本次 options 里。
+   */
+  private _planAutoResolve(
+    params: RequestPermissionRequest,
+  ): { optionId: string; delayMs: number } | undefined {
+    if (params.toolCall.kind !== 'switch_mode') return undefined
+    const mode = this._config.get<string>('acp.plan.autoExecute')
+    if (!mode || mode === 'off') return undefined
+    if (!params.options.some((o) => o.optionId === mode)) return undefined
+    return { optionId: mode, delayMs: PLAN_AUTO_EXECUTE_DELAY_MS }
   }
 
   async onCreateElicitation(params: CreateElicitationRequest): Promise<CreateElicitationResponse> {

@@ -40,6 +40,7 @@ import {
   elicitationDraftKey,
   type ElicitationDraftValues,
 } from '../../services/acp/session/acpElicitationDraftCache.js'
+import { PlanAutoExecuteToggle } from './PlanAutoExecuteToggle.js'
 import styles from './agents.module.css'
 
 /** Editable input state — numbers stay raw strings until submit conversion. */
@@ -344,6 +345,12 @@ function FormElicitationCard({
     pending.cancel()
   }
 
+  // Plan 会话中的提问（AskUserQuestion 通常出现在 plan 制定过程中）是预设
+  // 「计划完成后自动执行」的天然触点：此处勾选后，随后的 ExitPlanMode 卡片
+  // 就会走倒计时自动执行，无需再手动点选。非 plan 会话不提供该开关。
+  const configOptions = useObservable(session.configOptions)
+  const isPlanMode = configOptions.some((o) => o.category === 'mode' && o.currentValue === 'plan')
+
   return (
     <section
       className={styles['elicitationCard']}
@@ -398,6 +405,11 @@ function FormElicitationCard({
           {localize('acp.elicitation.decline', 'Decline')}
         </Button>
       </div>
+      {isPlanMode && (
+        <div className={styles['permissionAuto']}>
+          <PlanAutoExecuteToggle testId="acp-elicitation-auto-execute" />
+        </div>
+      )}
     </section>
   )
 }

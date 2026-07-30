@@ -8,13 +8,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
+  Emitter,
+  IConfigurationService,
   InstantiationService,
   IOpenerService,
   observableValue,
   ServiceCollection,
+  type IConfigurationChangeEvent,
   type ISettableObservable,
 } from '@universe-editor/platform'
-import type { CreateElicitationRequest, CreateElicitationResponse } from '@agentclientprotocol/sdk'
+import type {
+  CreateElicitationRequest,
+  CreateElicitationResponse,
+  SessionConfigOption,
+} from '@agentclientprotocol/sdk'
 import type {
   AcpPendingElicitation,
   AcpUrlElicitationState,
@@ -94,15 +101,55 @@ function makePending(request: CreateElicitationRequest): Harness {
   return harness
 }
 
-function makeSession(id: string, pending: AcpPendingElicitation | undefined): IAcpSession {
+function makeSession(
+  id: string,
+  pending: AcpPendingElicitation | undefined,
+  configOptions: readonly SessionConfigOption[] = [],
+): IAcpSession {
   return {
     id,
     pendingElicitation: observableValue<AcpPendingElicitation | undefined>(`pe:${id}`, pending),
+    configOptions: observableValue<readonly SessionConfigOption[]>(`co:${id}`, configOptions),
   } as unknown as IAcpSession
 }
 
-function renderCard(session: IAcpSession) {
-  return <ElicitationCard key={`elicitation:${session.id}`} session={session} />
+function makeConfig(initial?: Record<string, unknown>): {
+  config: IConfigurationService
+  store: Map<string, unknown>
+} {
+  const store = new Map<string, unknown>(Object.entries(initial ?? {}))
+  const emitter = new Emitter<IConfigurationChangeEvent>()
+  const config = {
+    _serviceBrand: undefined,
+    get: (key: string) => store.get(key),
+    update: (key: string, value: unknown) => {
+      store.set(key, value)
+      emitter.fire({ affectsConfiguration: (k: string) => k === key })
+    },
+    onDidChangeConfiguration: emitter.event,
+  } as unknown as IConfigurationService
+  return { config, store }
+}
+
+function modeOption(currentValue: string): SessionConfigOption {
+  return {
+    id: 'mode',
+    name: 'Mode',
+    category: 'mode',
+    type: 'select',
+    currentValue,
+    options: [],
+  } as unknown as SessionConfigOption
+}
+
+function renderCard(session: IAcpSession, initialConfig?: Record<string, unknown>) {
+  const services = new ServiceCollection()
+  services.set(IConfigurationService, makeConfig(initialConfig).config)
+  return (
+    <ServicesContext.Provider value={new InstantiationService(services)}>
+      <ElicitationCard key={`elicitation:${session.id}`} session={session} />
+    </ServicesContext.Provider>
+  )
 }
 
 describe('ElicitationCard', () => {
@@ -470,5 +517,55 @@ describe('ElicitationCard — url mode', () => {
     fireEvent.click(screen.getByTestId('acp-elicitation-close'))
     expect(h3.dismissed).toBe(true)
     expect(h3.cancelled).toBe(false)
+  })
+})
+
+describe('ElicitationCard plan auto-execute toggle', () => {
+  function renderFormCard(
+    configOptions: readonly SessionConfigOption[],
+    initialConfig?: Record<string, unknown>,
+  ): { store: Map<string, unknown> } {
+    const { config, store } = makeConfig(initialConfig)
+    const services = new ServiceCollection()
+    services.set(IConfigurationService, config)
+    const h = makePending(formRequest())
+    render(
+      <ServicesContext.Provider value={new InstantiationService(services)}>
+        <ElicitationCard session={makeSession('A', h.pending, configOptions)} />
+      </ServicesContext.Provider>,
+    )
+    return { store }
+  }
+
+  it('renders the toggle in a plan-mode session', () => {
+    renderFormCard([modeOption('plan')])
+    expect(screen.getByTestId('acp-elicitation-auto-execute')).toBeTruthy()
+  })
+
+  it('checking the toggle writes bypassPermissions to the setting', () => {
+    const { store } = renderFormCard([modeOption('plan')])
+    const toggle = screen.getByTestId('acp-elicitation-auto-execute') as HTMLInputElement
+    expect(toggle.checked).toBe(false)
+
+    fireEvent.click(toggle)
+    expect(store.get('acp.plan.autoExecute')).toBe('bypassPermissions')
+    expect(toggle.checked).toBe(true)
+  })
+
+  it('reflects any non-off setting value as checked', () => {
+    renderFormCard([modeOption('plan')], { 'acp.plan.autoExecute': 'acceptEdits' })
+    expect((screen.getByTestId('acp-elicitation-auto-execute') as HTMLInputElement).checked).toBe(
+      true,
+    )
+  })
+
+  it('does not render the toggle when the mode is not plan', () => {
+    renderFormCard([modeOption('default')])
+    expect(screen.queryByTestId('acp-elicitation-auto-execute')).toBeNull()
+  })
+
+  it('does not render the toggle when the agent advertises no mode option', () => {
+    renderFormCard([])
+    expect(screen.queryByTestId('acp-elicitation-auto-execute')).toBeNull()
   })
 })

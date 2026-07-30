@@ -102,6 +102,8 @@ IAcpHostService.onStdout(chunk: string)
 
 `acpPermissionHandler.ts`：`tryAutoApprove(params)` 决策、`persistAllow(kind)` 写回 `acp.permissions.autoApprove`（`ConfigurationTarget.Memory`）。UI 端 `PermissionCard` 不动——它只展示 SDK 给的 `options[]`。`kind` 是不透明字符串，没有枚举校验，但**新代码必须用 SDK `ToolKind` 的 10 个值**（见易踩坑 #2）。
 
+**例外：`switch_mode`（ExitPlanMode）永不走静默自动批准、也不被 `persistAllow` 记住**（守卫在 `acpSessionService.onRequestPermission`，不在 handler）。它的自动化由 `acp.plan.autoExecute`（enum：off/bypassPermissions/auto/acceptEdits/default）显式驱动：service 判定设置值在本次 options 里才给 pending 附 `autoResolve`，卡片（`PermissionCard`）在「此后自动执行计划」checkbox 行内显示可打断倒计时（hover/聚焦暂停、取消勾选作废本次），到点视同点选。改这块时注意：静默短路会让倒计时卡永不出现，两者只能留一个。
+
 ## 套路 ACP-E：扩展会话历史持久化字段
 
 `session/acpSessionHistory.ts` 继承 `PersistedStateBase`：

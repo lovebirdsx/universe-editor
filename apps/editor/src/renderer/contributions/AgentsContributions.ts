@@ -121,6 +121,25 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Tool-call kinds that are auto-approved without prompting (e.g. "fs.read").',
             ),
           },
+          'acp.plan.autoExecute': {
+            type: 'string',
+            enum: ['off', 'bypassPermissions', 'auto', 'acceptEdits', 'default'],
+            default: 'off',
+            enumItemLabels: {
+              off: localize('settings.acp.plan.autoExecute.off', 'Off'),
+              bypassPermissions: localize(
+                'settings.acp.plan.autoExecute.bypassPermissions',
+                'Bypass permissions',
+              ),
+              auto: localize('settings.acp.plan.autoExecute.auto', 'Auto'),
+              acceptEdits: localize('settings.acp.plan.autoExecute.acceptEdits', 'Accept edits'),
+              default: localize('settings.acp.plan.autoExecute.default', 'Manually approve edits'),
+            },
+            description: localize(
+              'settings.acp.plan.autoExecute',
+              'When a plan-mode session finishes its plan ("Ready to code?"), automatically continue in the selected mode after a short countdown shown on the confirmation card — hover or interact with the card to take over instead. "off" always waits for a manual choice. The plan review card also offers a checkbox that toggles this setting to "bypassPermissions".',
+            ),
+          },
           'acp.startupTimeoutMs': {
             type: 'number',
             description: localize(

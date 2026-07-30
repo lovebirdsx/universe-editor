@@ -272,7 +272,19 @@ export interface AcpPendingPermission {
    */
   resolve(optionId: string, feedback?: string): void
   cancel(): void
+  /**
+   * ExitPlanMode 的自动执行（`acp.plan.autoExecute` 非 off 时由 service 附加）：
+   * 卡片在该 option 对应的按钮上显示可打断倒计时，到点视同用户点了它。
+   * 设置值不在本次 options 里时不附加（正常弹卡）。
+   */
+  readonly autoResolve?: {
+    readonly optionId: string
+    readonly delayMs: number
+  }
 }
+
+/** plan 审查卡自动执行前的可打断倒计时时长。 */
+export const PLAN_AUTO_EXECUTE_DELAY_MS = 3000
 
 /**
  * Custom ACP request that persists an AI-generated session title onto the

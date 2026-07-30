@@ -64,7 +64,7 @@ import {
   type SetSessionConfigOptionResponse,
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
-import { REWIND_SESSION_METHOD } from '../acpSession.js'
+import { PLAN_AUTO_EXECUTE_DELAY_MS, REWIND_SESSION_METHOD } from '../acpSession.js'
 import { ACP_CAPABILITIES_META_KEY } from '../acpExtMethods.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
@@ -465,11 +465,12 @@ describe('AcpSessionService', () => {
   let client: FakeAcpClientService
   let notifications: StubNotificationService
   let permission: StubPermissionHandler
+  let config: IConfigurationService
   beforeEach(() => {
     client = new FakeAcpClientService()
     notifications = new StubNotificationService()
     permission = new StubPermissionHandler()
-    const config: IConfigurationService = new ConfigurationService()
+    config = new ConfigurationService()
     const telemetry: ITelemetryService = new NoopTelemetryService()
     const history = makeHistory()
     const agentDefaults = makeAgentDefaults()
@@ -1081,6 +1082,83 @@ describe('AcpSessionService', () => {
       options: [{ optionId: 'once', name: 'Allow', kind: 'allow_once' }],
     } as RequestPermissionRequest)
     expect(result).toEqual({ outcome: { outcome: 'cancelled' } })
+  })
+
+  describe('plan review auto-execute (acp.plan.autoExecute)', () => {
+    const planOptions = [
+      { optionId: 'bypassPermissions', name: 'Yes, and bypass permissions', kind: 'allow_always' },
+      { optionId: 'default', name: 'Yes, and manually approve edits', kind: 'allow_once' },
+      { optionId: 'plan', name: 'No, keep planning', kind: 'reject_once' },
+    ]
+
+    function requestPlanReview(sessionId: string): Promise<RequestPermissionResponse> {
+      return svc.onRequestPermission({
+        sessionId,
+        toolCall: { toolCallId: 'tcp1', title: 'Ready to code?', kind: 'switch_mode' },
+        options: planOptions,
+      } as RequestPermissionRequest)
+    }
+
+    it('attaches autoResolve when the setting names a present option', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      config.update('acp.plan.autoExecute', 'bypassPermissions', ConfigurationTarget.Memory)
+      const promise = requestPlanReview('agent-1')
+      await new Promise((r) => setTimeout(r, 0))
+      const pending = s.pendingPermission.get()
+      expect(pending?.autoResolve).toEqual({
+        optionId: 'bypassPermissions',
+        delayMs: PLAN_AUTO_EXECUTE_DELAY_MS,
+      })
+      pending!.cancel()
+      await promise
+    })
+
+    it('omits autoResolve when the setting is off or unset', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      const promise = requestPlanReview('agent-1')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(s.pendingPermission.get()?.autoResolve).toBeUndefined()
+      s.pendingPermission.get()!.cancel()
+      await promise
+    })
+
+    it('omits autoResolve when the configured option is absent from the request options', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      config.update('acp.plan.autoExecute', 'acceptEdits', ConfigurationTarget.Memory)
+      const promise = requestPlanReview('agent-1')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(s.pendingPermission.get()?.autoResolve).toBeUndefined()
+      s.pendingPermission.get()!.cancel()
+      await promise
+    })
+
+    it('never silently auto-approves switch_mode even when the handler matches', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      permission.autoApproveResult = {
+        outcome: { outcome: 'selected', optionId: 'bypassPermissions' },
+      }
+      const promise = requestPlanReview('agent-1')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(s.pendingPermission.get()).toBeDefined()
+      s.pendingPermission.get()!.cancel()
+      await expect(promise).resolves.toEqual({ outcome: { outcome: 'cancelled' } })
+    })
+
+    it('does not persist switch_mode into the autoApprove list when bypass is chosen', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      const promise = requestPlanReview('agent-1')
+      await new Promise((r) => setTimeout(r, 0))
+      s.pendingPermission.get()!.resolve('bypassPermissions')
+      await expect(promise).resolves.toEqual({
+        outcome: { outcome: 'selected', optionId: 'bypassPermissions' },
+      })
+      expect(permission.persisted).toEqual([])
+    })
   })
 })
 

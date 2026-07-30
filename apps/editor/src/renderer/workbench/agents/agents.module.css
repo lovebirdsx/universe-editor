@@ -2267,6 +2267,42 @@
   cursor: not-allowed;
 }
 
+.permissionAuto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+  color: var(--color-message-role-fg, #aaa);
+}
+
+.permissionAutoToggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.permissionAutoCountdown {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.permissionAutoProgress {
+  flex: 0 0 48px;
+  height: 2px;
+  background: var(--color-border, #333);
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+.permissionAutoProgress > div {
+  height: 100%;
+  background: var(--color-button-bg, #0e639c);
+  transition: width 0.2s linear;
+}
+
 .recoveryBar {
   flex-shrink: 0;
   display: flex;
