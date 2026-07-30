@@ -19,6 +19,54 @@ import {
   type ITokenStyle,
 } from '@universe-editor/platform'
 import { parse, printParseErrorCode, type ParseError } from 'jsonc-parser'
+import {
+  parseClassifierString,
+  parseSemanticTokenStyle,
+  parseTokenSelector,
+  resolveScopeToStyle,
+  SEMANTIC_TOKEN_DEFAULT_RULES,
+  type ISemanticTokenStyle,
+  type ITokenSelector,
+} from './semanticSelector.js'
+
+interface ISemanticTokenRule {
+  readonly selector: ITokenSelector
+  readonly style: ISemanticTokenStyle
+}
+
+/**
+ * semanticTokenColors 记录 → 带打分闭包的规则表（对齐 VSCode readSemanticTokenRule）。
+ * 值为 `false` 或不含任何已知属性的对象时不产规则——`false` 的 reset 语义发生在
+ * JSON merge 层（overlay 的 false 顶掉 include 链/base 的同 key 值）。
+ */
+function buildSemanticTokenRules(
+  colors: Record<string, SemanticTokenColorValue>,
+): ISemanticTokenRule[] {
+  const rules: ISemanticTokenRule[] = []
+  for (const [selectorString, value] of Object.entries(colors)) {
+    if (value === false) {
+      continue
+    }
+    const settings: ISemanticTokenColorSettings =
+      typeof value === 'string' ? { foreground: value } : value
+    if (
+      typeof settings.foreground !== 'string' &&
+      typeof settings.fontStyle !== 'string' &&
+      typeof settings.bold !== 'boolean' &&
+      typeof settings.italic !== 'boolean' &&
+      typeof settings.underline !== 'boolean' &&
+      typeof settings.strikethrough !== 'boolean'
+    ) {
+      continue
+    }
+    const selector = parseTokenSelector(selectorString)
+    if (selector.id === '$invalid') {
+      continue
+    }
+    rules.push({ selector, style: parseSemanticTokenStyle(settings) })
+  }
+  return rules
+}
 
 // ---------------------------------------------------------------------------
 // Theme file shapes
@@ -404,6 +452,18 @@ export class ColorThemeData implements IColorTheme {
           this.getTokenColorIndexId(rule.settings.background)
         }
       }
+      // 对齐 VSCode getTokenColorIndex：semantic 规则的前景色也进 colorMap，
+      // 否则 getTokenStyleMetadata 返回的索引在 map 里查不到色值。
+      for (const rule of this.getSemanticTokenRules()) {
+        if (rule.style.foreground) {
+          this.getTokenColorIndexId(rule.style.foreground)
+        }
+      }
+      for (const rule of this.getCustomSemanticTokenRules()) {
+        if (rule.style.foreground) {
+          this.getTokenColorIndexId(rule.style.foreground)
+        }
+      }
     }
     // Index 0 is the ColorId.None slot and must never hold a real color:
     // vscode-textmate's frozen ColorMap treats id 0 as "missing". The empty
@@ -425,13 +485,142 @@ export class ColorThemeData implements IColorTheme {
     return index
   }
 
+  /**
+   * Semantic-token 样式解析（移植 VSCode ColorThemeData.getTokenStyle）：
+   * theme rules 后 custom rules 逐属性（foreground/bold/italic/underline/
+   * strikethrough）取 max-score（同分后者胜）；未命中的属性钉到 MAX_VALUE 后
+   * 跑 scopesToProbe 默认 rules（resolveScopeToStyle 回退到 tokenColors 取色）。
+   * 返回的 foreground 是归一化大写 hex；需要 colorMap 索引时走 getTokenStyleMetadata。
+   */
+  getSemanticTokenStyle(
+    type: string,
+    modifiers: string[],
+    language: string,
+  ): ISemanticTokenStyle | undefined {
+    const result: {
+      foreground: string | undefined
+      bold: boolean | undefined
+      underline: boolean | undefined
+      strikethrough: boolean | undefined
+      italic: boolean | undefined
+    } = {
+      foreground: undefined,
+      bold: undefined,
+      underline: undefined,
+      strikethrough: undefined,
+      italic: undefined,
+    }
+    const score = {
+      foreground: -1,
+      bold: -1,
+      underline: -1,
+      strikethrough: -1,
+      italic: -1,
+    }
+
+    const processStyle = (matchScore: number, style: ISemanticTokenStyle) => {
+      if (style.foreground !== undefined && score.foreground <= matchScore) {
+        score.foreground = matchScore
+        result.foreground = style.foreground
+      }
+      for (const p of ['bold', 'underline', 'strikethrough', 'italic'] as const) {
+        const value = style[p]
+        if (value !== undefined && score[p] <= matchScore) {
+          score[p] = matchScore
+          result[p] = value
+        }
+      }
+    }
+    const processRule = (rule: ISemanticTokenRule) => {
+      const matchScore = rule.selector.match(type, modifiers, language)
+      if (matchScore >= 0) {
+        processStyle(matchScore, rule.style)
+      }
+    }
+
+    this.getSemanticTokenRules().forEach(processRule)
+    this.getCustomSemanticTokenRules().forEach(processRule)
+
+    let hasUndefinedStyleProperty = false
+    for (const k of Object.keys(score) as Array<keyof typeof score>) {
+      if (score[k] === -1) {
+        hasUndefinedStyleProperty = true
+      } else {
+        // 已被 theme/custom 规则覆盖的属性不再被默认 rules 顶掉
+        score[k] = Number.MAX_VALUE
+      }
+    }
+    if (hasUndefinedStyleProperty) {
+      for (const rule of SEMANTIC_TOKEN_DEFAULT_RULES) {
+        const matchScore = rule.selector.match(type, modifiers, language)
+        if (matchScore >= 0) {
+          const style = resolveScopeToStyle(
+            rule.scopesToProbe,
+            this.themeTokenColors,
+            this.customTokenColors,
+          )
+          if (style) {
+            processStyle(matchScore, style)
+          }
+        }
+      }
+    }
+
+    if (
+      result.foreground === undefined &&
+      result.bold === undefined &&
+      result.underline === undefined &&
+      result.strikethrough === undefined &&
+      result.italic === undefined
+    ) {
+      return undefined
+    }
+    return result
+  }
+
+  /**
+   * 语义规则缓存（theme/custom 分开；`false` 值在 theme 块尾展开为空规则，
+   * 语义 reset——对齐 VSCode 对 semanticTokenColors false 的处理）。
+   */
+  private semanticTokenRules: ISemanticTokenRule[] | undefined
+  private customSemanticTokenRules: ISemanticTokenRule[] | undefined
+
+  private getSemanticTokenRules(): ISemanticTokenRule[] {
+    if (!this.semanticTokenRules) {
+      this.semanticTokenRules = buildSemanticTokenRules(this.themeSemanticTokenColors)
+    }
+    return this.semanticTokenRules
+  }
+
+  private getCustomSemanticTokenRules(): ISemanticTokenRule[] {
+    if (!this.customSemanticTokenRules) {
+      this.customSemanticTokenRules = buildSemanticTokenRules(this.customSemanticTokenColors)
+    }
+    return this.customSemanticTokenRules
+  }
+
   getTokenStyleMetadata(
-    _type: string,
-    _modifiers: string[],
-    _modelLanguage: string,
+    type: string,
+    modifiers: string[],
+    modelLanguage: string,
   ): ITokenStyle | undefined {
-    // Phase 6: semantic token selector scoring lands here.
-    return undefined
+    const classifier = parseClassifierString(type, modelLanguage)
+    const style = this.getSemanticTokenStyle(
+      classifier.type,
+      modifiers,
+      classifier.language ?? modelLanguage,
+    )
+    if (!style) {
+      return undefined
+    }
+    return {
+      foreground:
+        style.foreground !== undefined ? this.getTokenColorIndexId(style.foreground) : undefined,
+      bold: style.bold,
+      underline: style.underline,
+      strikethrough: style.strikethrough,
+      italic: style.italic,
+    }
   }
 
   // ------------------------------------------------------------------ loading
@@ -524,6 +713,8 @@ export class ColorThemeData implements IColorTheme {
   private clearCaches(): void {
     this.textMateThemingRules = undefined
     this.tokenColorIndex = undefined
+    this.semanticTokenRules = undefined
+    this.customSemanticTokenRules = undefined
   }
 
   // ------------------------------------------------------------------ storage snapshot

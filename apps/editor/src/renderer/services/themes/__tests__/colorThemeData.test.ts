@@ -174,9 +174,20 @@ describe('ColorThemeData', () => {
       "colors": { "editor.background": "#101010", "editor.foreground": "#d0d0d0" },
       "tokenColors": [
         { "scope": "comment", "settings": { "foreground": "#608060" } },
-        { "scope": ["string", "markup.inline"], "settings": { "foreground": "#a05050", "fontStyle": "italic" } }
+        { "scope": ["string", "markup.inline"], "settings": { "foreground": "#a05050", "fontStyle": "italic" } },
+        { "scope": "variable.other.constant", "settings": { "foreground": "#4FC1FF", "fontStyle": "bold" } },
+        { "scope": "support.type", "settings": { "foreground": "#4EC9B0" } }
       ],
-      "semanticHighlighting": true
+      "semanticHighlighting": true,
+      "semanticTokenColors": {
+        "newOperator": "#C586C0",
+        "*.declaration": { "bold": true },
+        "variable.readonly:typescript": { "foreground": "#FF0000" },
+        "class.defaultLibrary": { "italic": true },
+        "type.defaultLibrary": { "italic": true },
+        "unsupportedProperty": { "unknownThing": 1 },
+        "resetMe": false
+      }
     }`,
   }
 
@@ -287,6 +298,70 @@ describe('ColorThemeData', () => {
     expect(theme.isLoaded).toBe(true)
     expect(theme.getColor('editor.background')?.toString()).toBe('#0f0f0f')
     expect(theme.getColor('sideBar.background')?.toString()).toBe('#242427')
+  })
+
+  it('getSemanticTokenStyle resolves theme rules by selector scoring', async () => {
+    const theme = await loadTestTheme()
+    // exact string rule
+    expect(theme.getSemanticTokenStyle('newOperator', [], 'typescript')).toEqual({
+      foreground: '#C586C0',
+      bold: undefined,
+      underline: undefined,
+      strikethrough: undefined,
+      italic: undefined,
+    })
+    // wildcard + modifier subset
+    expect(
+      theme.getSemanticTokenStyle('variable', ['declaration', 'readonly'], 'typescript')?.bold,
+    ).toBe(true)
+    // language-scoped rule wins foreground over plain rules at same type
+    expect(theme.getSemanticTokenStyle('variable', ['readonly'], 'typescript')?.foreground).toBe(
+      '#FF0000',
+    )
+    // language mismatch falls through to default rules (variable.readonly -> variable.other.constant)
+    const fallback = theme.getSemanticTokenStyle('variable', ['readonly'], 'javascript')
+    expect(fallback?.foreground).toBe('#4FC1FF')
+    expect(fallback?.bold).toBe(true)
+  })
+
+  it('getSemanticTokenStyle per-property merge keeps higher scores, fills misses from default rules', async () => {
+    const theme = await loadTestTheme()
+    // type.defaultLibrary sets italic; foreground is not set by any matching semantic rule,
+    // so the default rule (type.defaultLibrary -> support.type) supplies it.
+    const style = theme.getSemanticTokenStyle('type', ['defaultLibrary'], 'typescript')
+    expect(style?.italic).toBe(true)
+    expect(style?.foreground).toBe('#4EC9B0')
+  })
+
+  it('getSemanticTokenStyle returns undefined when nothing matches and no default rule applies', async () => {
+    const theme = await loadTestTheme()
+    expect(theme.getSemanticTokenStyle('keyword', [], 'typescript')).toBeUndefined()
+  })
+
+  it('skips rules with unknown properties, false values and invalid selectors', async () => {
+    const theme = await loadTestTheme()
+    // `unsupportedProperty` has no known style attribute -> no rule -> undefined.
+    expect(theme.getSemanticTokenStyle('unsupportedProperty', [], 'typescript')).toBeUndefined()
+    // `resetMe: false` produces no rule.
+    expect(theme.getSemanticTokenStyle('resetMe', [], 'typescript')).toBeUndefined()
+  })
+
+  it('custom semantic rules override theme rules at equal score', async () => {
+    const theme = await loadTestTheme()
+    theme.setCustomSemanticTokenColors({ newOperator: '#00FF00' })
+    expect(theme.getSemanticTokenStyle('newOperator', [], 'typescript')?.foreground).toBe('#00FF00')
+  })
+
+  it('getTokenStyleMetadata encodes foreground as a colorMap index', async () => {
+    const theme = await loadTestTheme()
+    const meta = theme.getTokenStyleMetadata('newOperator', [], 'typescript')
+    expect(meta).toBeDefined()
+    expect(meta!.foreground).toBeGreaterThanOrEqual(1)
+    expect(theme.tokenColorMap[meta!.foreground!]).toBe('#C586C0')
+    expect(meta!.bold).toBeUndefined()
+    // modifiers must be passed separately; the wildcard declaration rule applies
+    const decl = theme.getTokenStyleMetadata('variable', ['declaration'], 'typescript')
+    expect(decl?.bold).toBe(true)
   })
 })
 

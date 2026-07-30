@@ -63,6 +63,7 @@ import {
   type E2ELifecyclePhase,
   type E2EProbe,
   type E2ESemanticTokenDebug,
+  type E2ESemanticTokenStyleDebug,
   type E2EStatusBarEntry,
   type E2EUpdateState,
   type E2EAiDebugRecord,
@@ -916,6 +917,55 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         grammarClassName,
         languageId: model.getLanguageId(),
       }
+    },
+    getSemanticTokenStyleDebug: async (
+      type: string,
+      modifiers: string[],
+      language: string,
+    ): Promise<E2ESemanticTokenStyleDebug> => {
+      const colorTheme = services.themeService.getColorThemeData()
+      const metadata = colorTheme.getTokenStyleMetadata(type, modifiers, language)
+      let style: E2ESemanticTokenStyleDebug['style']
+      if (metadata) {
+        style = {
+          ...(metadata.foreground !== undefined
+            ? { foreground: colorTheme.tokenColorMap[metadata.foreground] }
+            : {}),
+          ...(metadata.bold !== undefined ? { bold: metadata.bold } : {}),
+          ...(metadata.italic !== undefined ? { italic: metadata.italic } : {}),
+          ...(metadata.underline !== undefined ? { underline: metadata.underline } : {}),
+          ...(metadata.strikethrough !== undefined
+            ? { strikethrough: metadata.strikethrough }
+            : {}),
+        }
+      }
+
+      // The flag Monaco's SemanticTokensProviderStyling actually reads — resolved
+      // by the semantic theme bridge from editor.semanticHighlighting.enabled.
+      // Returns null until the semantic clone is the active theme (the bridge
+      // injects it into _knownThemes[name]; getColorTheme() === that entry is
+      // the check), which is exactly what the themes spec polls for.
+      let semanticHighlighting: boolean | null = null
+      try {
+        const { StandaloneServices } =
+          await import('monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js')
+        const { IStandaloneThemeService } =
+          await import('monaco-editor/esm/vs/editor/standalone/common/standaloneTheme.js')
+        const { toMonacoThemeName } = await import('../services/themes/monacoThemeAdapter.js')
+        const themeService = StandaloneServices.get<{
+          _knownThemes: Map<string, { semanticHighlighting?: unknown }>
+          getColorTheme: () => { semanticHighlighting?: unknown }
+        }>(IStandaloneThemeService)
+        const injected = themeService._knownThemes.get(toMonacoThemeName(colorTheme.settingsId))
+        if (injected && themeService.getColorTheme() === injected) {
+          const flag = injected.semanticHighlighting
+          semanticHighlighting = typeof flag === 'boolean' ? flag : null
+        }
+      } catch {
+        semanticHighlighting = null
+      }
+
+      return { ...(style ? { style } : {}), semanticHighlighting }
     },
     getCodeLensDebug: async (uri: string, lineNumber: number) => {
       const monacoNs = await MonacoLoader.ensureInitialized()

@@ -268,6 +268,37 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Controls whether the minimap is shown.',
             ),
           },
+          'editor.semanticHighlighting.enabled': {
+            type: ['boolean', 'string'],
+            default: 'configuredByTheme',
+            enum: [true, false, 'configuredByTheme'],
+            enumItemLabels: {
+              true: localize('settings.semanticHighlighting.true', 'Enabled'),
+              false: localize('settings.semanticHighlighting.false', 'Disabled'),
+              configuredByTheme: localize(
+                'settings.semanticHighlighting.configuredByTheme',
+                'Configured By Theme',
+              ),
+            },
+            enumDescriptions: [
+              localize(
+                'settings.semanticHighlighting.true.description',
+                'Semantic highlighting enabled for all color themes.',
+              ),
+              localize(
+                'settings.semanticHighlighting.false.description',
+                'Semantic highlighting disabled for all color themes.',
+              ),
+              localize(
+                'settings.semanticHighlighting.configuredByTheme.description',
+                "Semantic highlighting is configured by the current color theme's `semanticHighlighting` setting.",
+              ),
+            ],
+            description: localize(
+              'settings.editor.semanticHighlighting.description',
+              'Controls whether the semanticHighlighting is shown for the languages that support it.',
+            ),
+          },
         },
       }),
     )

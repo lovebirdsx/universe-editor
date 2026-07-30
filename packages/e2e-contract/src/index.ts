@@ -100,6 +100,26 @@ export interface E2ESemanticTokenDebug {
 }
 
 /**
+ * Style resolution of the active color theme's semanticTokenColors chain (see
+ * E2EProbe.getSemanticTokenStyleDebug). `style` is what
+ * ColorThemeData.getTokenStyleMetadata returns for the given classifier (hex
+ * foreground, four booleans) — undefined when no rule matches at all.
+ * `semanticHighlighting` mirrors the semantic clone's flag inside Monaco
+ * (resolved from `editor.semanticHighlighting.enabled` by the semantic theme
+ * bridge; null until the bridge has injected its clone).
+ */
+export interface E2ESemanticTokenStyleDebug {
+  style?: {
+    foreground?: string
+    bold?: boolean
+    italic?: boolean
+    underline?: boolean
+    strikethrough?: boolean
+  }
+  semanticHighlighting: boolean | null
+}
+
+/**
  * Runtime state of the TS CodeLens chain at a probed position (see
  * E2EProbe.getCodeLensDebug). All fields optional so early returns can carry
  * just `error`.
@@ -599,6 +619,21 @@ export interface E2EProbe {
     lineNumber: number,
     column: number,
   ): Promise<E2ESemanticTokenDebug>
+  /**
+   * Pure style resolution of the ACTIVE color theme's semanticTokenColors chain —
+   * no editor or LSP needed. `type`/`modifiers`/`language` go straight into
+   * ColorThemeData.getTokenStyleMetadata (e.g. ('newOperator', [], 'typescript'));
+   * the returned foreground is hex (the internal colorMap index is decoded
+   * against the theme's tokenColorMap). `semanticHighlighting` is the flag the
+   * semantic theme bridge injected into Monaco's active theme clone (null when
+   * the bridge hasn't run yet). Used by the themes spec to assert built-in
+   * semanticTokenColors resolve and the enabled:false kill-switch takes effect.
+   */
+  getSemanticTokenStyleDebug(
+    type: string,
+    modifiers: string[],
+    language: string,
+  ): Promise<E2ESemanticTokenStyleDebug>
   /**
    * Runtime state of the TS CodeLens chain: provider registered, lenses returned
    * by a direct provideCodeLenses call, and the command filled in by

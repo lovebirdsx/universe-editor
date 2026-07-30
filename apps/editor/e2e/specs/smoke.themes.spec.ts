@@ -112,4 +112,51 @@ test.describe('@p0 themes', () => {
     })
     await expect.poll(() => sidebarBackground(page), { timeout: 15000 }).toBe(DARK_SIDEBAR)
   })
+
+  test('built-in theme semanticTokenColors resolve through the active theme', async ({ page }) => {
+    const readStyle = () =>
+      page.evaluate(() =>
+        window.__E2E__!.getSemanticTokenStyleDebug('newOperator', [], 'typescript'),
+      )
+
+    // Universe Dark ships dark_plus.json whose semanticTokenColors map
+    // newOperator → #C586C0 (uppercased by the resolver).
+    await expect
+      .poll(async () => (await readStyle()).style?.foreground, { timeout: 15000 })
+      .toBe('#C586C0')
+
+    await page.evaluate(() => {
+      window.__E2E__!.updateConfigValue('workbench.colorTheme', 'Universe Light')
+    })
+    // light_plus.json maps newOperator → #AF00DB.
+    await expect
+      .poll(async () => (await readStyle()).style?.foreground, { timeout: 15000 })
+      .toBe('#AF00DB')
+  })
+
+  test('editor.semanticHighlighting.enabled toggles the injected theme clone', async ({ page }) => {
+    const readFlag = async () =>
+      (await page.evaluate(() =>
+        window.__E2E__!.getSemanticTokenStyleDebug('newOperator', [], 'typescript'),
+      )) satisfies { semanticHighlighting: boolean | null }
+
+    // Default 'configuredByTheme' + dark_vs.json semanticHighlighting:true → on.
+    await expect
+      .poll(async () => (await readFlag()).semanticHighlighting, { timeout: 15000 })
+      .toBe(true)
+
+    await page.evaluate(() => {
+      window.__E2E__!.updateConfigValue('editor.semanticHighlighting.enabled', false)
+    })
+    await expect
+      .poll(async () => (await readFlag()).semanticHighlighting, { timeout: 15000 })
+      .toBe(false)
+
+    await page.evaluate(() => {
+      window.__E2E__!.updateConfigValue('editor.semanticHighlighting.enabled', 'configuredByTheme')
+    })
+    await expect
+      .poll(async () => (await readFlag()).semanticHighlighting, { timeout: 15000 })
+      .toBe(true)
+  })
 })

@@ -32,6 +32,7 @@ import { IOutOfWorkspaceWatchService } from '../services/files/outOfWorkspaceWat
 import { IResourceAccessService } from '../../shared/ipc/resourceAccessService.js'
 import { toResourceUrl } from '../workbench/markdown/resourceUri.js'
 import { initMonacoThemeBridge } from '../services/themes/monacoThemeBridge.js'
+import { initMonacoSemanticThemeBridge } from '../services/themes/monacoSemanticThemeBridge.js'
 import {
   DEFAULT_DARK_COLOR_THEME_ID,
   DEFAULT_FILE_ICON_THEME_ID,
@@ -63,6 +64,9 @@ export class ThemesContribution extends Disposable implements IWorkbenchContribu
     registerCodicons()
     this._logger = loggerService?.createLogger({ id: 'theme', name: 'Theme' }) ?? new NullLogger()
     this._register(initMonacoThemeBridge(_themeService, _configurationService, this._logger))
+    this._register(
+      initMonacoSemanticThemeBridge(_themeService, _configurationService, this._logger),
+    )
     this._register(
       new ThemeFileWatcher(_themeService, fileWatcherService, outOfWorkspaceWatch, this._logger),
     )

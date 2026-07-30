@@ -156,10 +156,10 @@ export function FileEditor({ input }: { input: IEditorInput }) {
         automaticLayout: true,
         editContext: true,
         // Semantic highlighting re-colors TextMate's guesses with real type info
-        // from the TS language server (e.g. an uppercase property no longer looks
-        // like a type). Standalone themes hardcode semanticHighlighting=false, so
-        // enable it explicitly here — this editor option overrides the theme flag.
-        'semanticHighlighting.enabled': true,
+        // from the TS language server. It is governed by the
+        // `editor.semanticHighlighting.enabled` setting + the active theme's
+        // `semanticHighlighting` flag, resolved by the monaco semantic theme bridge
+        // (services/themes/monacoSemanticThemeBridge.ts) — no per-editor override.
         // 拖放默认交由编辑区 body 处理(分屏 / 打开外部文件),各语言一律保持关闭。
         // 仅当用户按住 Shift 拖到 markdown 文本区时,由下方 capture 阶段的 dragover
         // 监听临时打开,让拖入的文件/图片成为链接(见 MarkdownDropContribution)。

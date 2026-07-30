@@ -72,6 +72,48 @@ declare module 'monaco-editor/esm/vs/editor/standalone/common/standaloneTheme.js
   export const IStandaloneThemeService: unknown
 }
 
+// StandaloneThemeService concrete class + the (unexported) StandaloneTheme shape.
+// The semantic-theme bridge resolves the live service via
+// StandaloneServices.get(IStandaloneThemeService), reads its `_knownThemes` map,
+// and clones active themes via `Object.create` onto a subclass of the StandaloneTheme
+// prototype (the class itself is not exported, so `extends` is impossible).
+// No shipped .d.ts.
+declare module 'monaco-editor/esm/vs/editor/standalone/browser/standaloneThemeService.js' {
+  export const VS_LIGHT_THEME_NAME: string
+  export const VS_DARK_THEME_NAME: string
+  export const HC_BLACK_THEME_NAME: string
+  export const HC_LIGHT_THEME_NAME: string
+
+  export interface ITokenStyleMetadataResult {
+    foreground: number | undefined
+    italic: boolean | undefined
+    bold: boolean | undefined
+    underline: boolean | undefined
+    strikethrough: boolean | undefined
+  }
+
+  /** Structural shape of the unexported StandaloneTheme instances. */
+  export interface IStandaloneThemeLike {
+    semanticHighlighting: boolean
+    readonly themeData: unknown
+    readonly tokenTheme: { getColorMap(): Array<{ toString(): string }> }
+    notifyBaseUpdated(): void
+    getTokenStyleMetadata(
+      type: string,
+      modifiers: string[],
+      modelLanguage: string,
+    ): ITokenStyleMetadataResult | undefined
+  }
+
+  export class StandaloneThemeService {
+    readonly _knownThemes: Map<string, IStandaloneThemeLike>
+    _theme: IStandaloneThemeLike
+    setTheme(themeName: string): void
+    getColorTheme(): IStandaloneThemeLike
+  }
+}
+
+
 // IInstantiationService decorator, used as the lookup key for
 // StandaloneServices.get so MonacoLoader can capture the process-level root
 // instantiation service (see monacoHoverDelegateGuard).

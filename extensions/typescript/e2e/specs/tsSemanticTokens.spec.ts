@@ -89,11 +89,12 @@ test.describe('@p1 typescript semantic highlighting', () => {
     const debug = await page.evaluate((u) => window.__E2E__!.getSemanticTokenDebug(u, 6, 3), uri)
     // The server must return tokens.
     expect(debug.directTokenCount).toBeGreaterThan(0)
-    // The config gate must be enabled — the value is `{ enabled: true }`, and
-    // `isSemanticColoringEnabled` reads `.enabled` off it. Without the
-    // `semanticHighlighting.enabled: true` editor option this resolves to
-    // `configuredByTheme`, and standalone themes hardcode it off → no recolor.
-    expect(debug.semanticHighlightingSetting).toMatchObject({ enabled: true })
+    // The config gate resolves to 'configuredByTheme' (monaco's default — FileEditor
+    // no longer hardcodes `semanticHighlighting.enabled: true`). Coloring is on
+    // because `isSemanticColoringEnabled` then reads `theme.semanticHighlighting`,
+    // and the semantic theme bridge injects a clone resolving it from the
+    // workbench setting + the theme's own flag (dark_vs.json: true).
+    expect(debug.semanticHighlightingSetting).toMatchObject({ enabled: 'configuredByTheme' })
 
     // The decisive check: `Target` (property, line 6 col 3) must NOT share the
     // foreground color of `INpcLookAtConfig` (interface/type name, line 5 col 18).

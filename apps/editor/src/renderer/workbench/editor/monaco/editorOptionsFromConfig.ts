@@ -34,6 +34,11 @@ const BESPOKE_KEYS = new Set<string>([
   'editor.lineHighlightBackground',
   'editor.lineHighlightBorder',
   'editor.languageFonts',
+  // Semantic highlighting is governed by the monaco semantic theme bridge (which
+  // resolves the three-state setting into StandaloneTheme.semanticHighlighting).
+  // Passing it through as an editor option would shadow that resolution inside
+  // monaco's isSemanticColoringEnabled, so keep it out of the bridge.
+  'editor.semanticHighlighting.enabled',
 ])
 
 // Prefixes whose whole subtree is owned elsewhere. `unicodeHighlight` is forced
