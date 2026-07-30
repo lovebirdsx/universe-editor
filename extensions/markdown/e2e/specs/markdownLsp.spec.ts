@@ -249,13 +249,14 @@ test.describe('@p1 markdown language server', () => {
         .toEqual(expect.stringContaining('fm.md'))
       const fmUri = (await page.evaluate(() => window.__E2E__!.getActiveEditorUri())) as string
 
-      // Source highlighting: line 2 `name: test` — the key tokenizes as `type.md`
-      // and the value as `string.md` (frontmatter-aware grammar, not plain markdown).
+      // Source highlighting: line 2 `name: test` — TextMate tokenizes the key as
+      // `meta.frontmatter.yaml entity.name.tag.yaml` (mtk6 under Universe Dark),
+      // proving the frontmatter-aware grammar (not plain markdown) is active.
       await expect
         .poll(() => page.evaluate((u) => window.__E2E__!.getMarkdownLineTokens(u, 2), fmUri), {
           timeout: 10000,
         })
-        .toEqual(expect.arrayContaining([expect.arrayContaining([1, 'type.md'])]))
+        .toEqual(expect.arrayContaining([expect.arrayContaining([1, 'mtk6'])]))
 
       // Diagnostics: the `[hello, how are you]` inside the frontmatter must NOT be
       // flagged (it's YAML, not a broken reference link). No markers on lines 1–4.

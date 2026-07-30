@@ -766,13 +766,37 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const monacoNs = await MonacoLoader.ensureInitialized()
       const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
       if (!model) return []
-      // colorize forces the lazy tokens-provider factory to resolve; then
-      // tokenize the whole document so multi-line frontmatter state carries into
-      // the requested line. `editor.tokenize` returns per-line token arrays.
+      // colorize forces the lazy tokens-provider factory to resolve. We can't use
+      // `editor.tokenize`: it calls the legacy `support.tokenize`, which the
+      // TextMate support (encoded-only, like VSCode's) does not implement — and
+      // VSCode's own standalone API has the same gap. Drive `tokenizeEncoded`
+      // over the whole document so multi-line frontmatter state carries into the
+      // requested line, then decode the standard token types.
       await monacoNs.editor.colorize('', 'markdown', {})
-      const perLine = monacoNs.editor.tokenize(model.getValue(), 'markdown')
-      const line = perLine[lineNumber - 1] ?? []
-      return line.map((t) => [t.offset + 1, t.type] as const)
+      const [{ TokenizationRegistry }, { TokenMetadata }] = await Promise.all([
+        import('monaco-editor/esm/vs/editor/common/languages.js'),
+        import('monaco-editor/esm/vs/editor/common/encodedTokenAttributes.js'),
+      ])
+      const support = await TokenizationRegistry.getOrCreate('markdown')
+      if (!support) return []
+      let state = support.getInitialState()
+      for (let lineNo = 1; lineNo <= model.getLineCount(); lineNo++) {
+        const result = support.tokenizeEncoded(model.getLineContent(lineNo), true, state)
+        state = result.endState
+        if (lineNo === lineNumber) {
+          const tokens: Array<readonly [number, string]> = []
+          const entries = result.tokens
+          for (let i = 0, len = entries.length >>> 1; i < len; i++) {
+            const metadata = entries[(i << 1) + 1]!
+            tokens.push([
+              entries[i << 1]! + 1,
+              TokenMetadata.getClassNameFromMetadata(metadata),
+            ] as const)
+          }
+          return tokens
+        }
+      }
+      return []
     },
     getSemanticTokenDebug: async (
       uri: string,
