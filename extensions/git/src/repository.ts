@@ -197,7 +197,9 @@ export class Repository {
       return
     }
     const status = parseStatus(res.stdout)
-    const mergeEditor = await workspace.getConfiguration('git').get('mergeEditor', true)
+    // scm.mergeEditor lives in the provider-neutral scm.* namespace (the core
+    // registers it; extensions only read it).
+    const mergeEditor = await workspace.getConfiguration('scm').get('mergeEditor', true)
     const staged = stagedStates(this.root, status.files, mergeEditor)
     const working = workingStates(this.root, status.files, mergeEditor)
     this._staged.resourceStates = staged

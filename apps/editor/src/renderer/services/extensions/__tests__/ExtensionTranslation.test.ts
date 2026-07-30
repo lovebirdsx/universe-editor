@@ -83,8 +83,8 @@ describe('ExtensionPointTranslator', () => {
   })
 
   it('does not shadow a command id the core already registered (built-in Action2)', () => {
-    // The git extension declares git.blame.toggle* in its manifest for palette
-    // parity, but the implementation is a renderer Action2. A bootstrap proxy on
+    // An extension may declare in its manifest a command id the core already
+    // implements as a renderer Action2 (palette parity). A bootstrap proxy on
     // top would shadow the real handler and route execution to a host that
     // doesn't implement it.
     const core = CommandsRegistry.registerCommand({

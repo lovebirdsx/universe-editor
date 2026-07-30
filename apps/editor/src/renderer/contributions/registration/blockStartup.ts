@@ -28,6 +28,7 @@ import { JsonSchemaBridgeContribution } from '../JsonSchemaBridgeContribution.js
 import { JsonSchemaAssociationsContribution } from '../JsonSchemaAssociationsContribution.js'
 import { InlineCompletionConfigurationContribution } from '../InlineCompletionConfigurationContribution.js'
 import { MarkdownConfigurationContribution } from '../MarkdownConfigurationContribution.js'
+import { ScmConfigurationContribution } from '../ScmConfigurationContribution.js'
 import { BuiltInEditorBindingsContribution } from '../BuiltInEditorBindingsContribution.js'
 import { ExplorerClipboardContextContribution } from '../ExplorerClipboardContextContribution.js'
 import { CompareContextContribution } from '../CompareContextContribution.js'
@@ -228,6 +229,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.markdownConfiguration',
   MarkdownConfigurationContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Provider-neutral scm.* settings (blame rendering + merge editor). BlockStartup
+// so the Settings editor sees the schema before the SCM contributions read it.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.scmConfiguration',
+  ScmConfigurationContribution,
   WorkbenchPhase.BlockStartup,
 )
 

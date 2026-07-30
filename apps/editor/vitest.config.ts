@@ -26,7 +26,7 @@ const rendererDomTests = [
   'src/renderer/actions/__tests__/historyActions.test.ts',
   'src/renderer/actions/__tests__/preferencesActions.test.ts',
   'src/renderer/contributions/__tests__/AgentFontContribution.test.ts',
-  'src/renderer/contributions/__tests__/GitBlameContribution.test.ts',
+  'src/renderer/contributions/__tests__/ScmBlameContribution.test.ts',
   'src/renderer/contributions/__tests__/ThemeContribution.test.ts',
   'src/renderer/contributions/__tests__/WindowTitleContribution.test.ts',
   'src/renderer/contributions/__tests__/WorkbenchFontContribution.test.ts',

@@ -1,10 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
- *  GitMergeConflictContribution — VSCode-style inline merge-conflict resolution
- *  for the active plain file editor. Delegates the actual rendering / resolution
- *  to the shared InlineConflictController; this class only tracks which editor is
- *  active and wires the "Compare Changes" action to the diff editor.
+ *  MergeConflictContribution — VSCode-style inline merge-conflict resolution
+ *  for the active plain file editor. Provider-neutral: the parser recognizes
+ *  both git and Perforce conflict markers. Delegates the actual rendering /
+ *  resolution to the shared InlineConflictController; this class only tracks
+ *  which editor is active and wires the "Compare Changes" action to the diff
+ *  editor. (Formerly GitMergeConflictContribution.)
  *
  *  VSCode's merge-conflict extension drives the action bar through a
  *  CodeLensProvider; this kernel's extension API has no CodeLens surface, so the
@@ -25,7 +27,7 @@ import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { InlineConflictController } from '../workbench/scm/mergeConflict/inlineConflictController.js'
 import type { ConflictRegion } from '../workbench/scm/mergeConflict/conflictParser.js'
 
-export class GitMergeConflictContribution extends Disposable implements IWorkbenchContribution {
+export class MergeConflictContribution extends Disposable implements IWorkbenchContribution {
   private _activeInput: FileEditorInput | undefined
   private readonly _editorStore = this._register(new DisposableStore())
   private readonly _registryStore = this._register(new DisposableStore())

@@ -23,6 +23,7 @@ import {
 } from '../services/scm/DirtyDiffNavigationService.js'
 import { IScmDecorationsService } from '../services/scm/ScmDecorationsService.js'
 import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
+import { scmViewState } from '../workbench/scm/scmViewState.js'
 import { DirtyDiffPeekRegistry } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
 
 const WHEN = "editorTextFocus && !isInDiffEditor && quickDiffDecorationCount != '0'"
@@ -86,12 +87,15 @@ export class GoToPreviousChangeAction extends Action2 {
 }
 
 export class OpenActiveFileChangesAction extends Action2 {
-  static readonly ID = '_workbench.openActiveFileChanges'
+  static readonly ID = 'workbench.action.editor.openActiveFileChanges'
 
   constructor() {
     super({
       id: OpenActiveFileChangesAction.ID,
-      title: 'Open Active File Changes',
+      title: localize2('action.editor.openActiveFileChanges.title', 'Open Active File Changes'),
+      category: localize2('command.category.scm', 'Source Control'),
+      keybinding: { primary: 'shift+alt+y', when: '!isInDiffEditor' },
+      f1: true,
     })
   }
 
@@ -104,7 +108,11 @@ export class OpenActiveFileChangesAction extends Action2 {
     const scmDecorations = accessor.get(IScmDecorationsService)
     const scm = accessor.get(IScmService)
     const hasScmChanges = scmDecorations.getFile(active.resource) !== undefined
-    const providerId = resolveScmProviderId(scm.sourceControls.get(), active.resource.fsPath)
+    const providerId = resolveScmProviderId(
+      scm.sourceControls.get(),
+      active.resource.fsPath,
+      scmViewState.selectedRepo.get(),
+    )
     const head = providerId
       ? await commandService.executeCommand<string | null>(
           dirtyDiffCommandId(providerId, 'getHeadContent'),

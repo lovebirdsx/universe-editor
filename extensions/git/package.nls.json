@@ -47,8 +47,6 @@
   "git.command.deleteTag.title": "Delete Tag...",
   "git.command.submoduleUpdateInit.title": "Update Submodules",
   "git.command.submoduleSync.title": "Sync Submodule URLs",
-  "git.command.blame.toggleEditorDecoration.title": "Toggle Git Blame Editor Decoration",
-  "git.command.blame.toggleStatusBarItem.title": "Toggle Git Blame Status Bar Item",
   "git.command.timeline.openDiff.title": "Open Comparison",
   "git.command.timeline.copyCommitId.title": "Copy Commit ID",
   "git.command.timeline.copyCommitMessage.title": "Copy Commit Message",
@@ -66,18 +64,11 @@
   "git.submenu.submodule.label": "Submodules",
 
   "git.config.enabled.description": "Whether git source control is enabled.",
-  "git.config.mergeEditor.description": "Open conflicted files in the 3-way merge editor. When false, conflicts open as a working-tree diff and are resolved inline via conflict markers.",
   "git.config.autoRepositoryDetection.description": "Scan workspace subfolders for nested git repositories. When false, only the workspace root is used.",
   "git.config.repositoryScanMaxDepth.description": "Maximum subfolder depth to scan for nested git repositories. -1 means unlimited.",
   "git.config.repositoryScanIgnoredFolders.description": "Folder names skipped while scanning for nested git repositories.",
   "git.config.pullSubmoduleUpdate.description": "After a successful pull, automatically run `git submodule update --init --recursive` when the repository contains submodules.",
   "git.config.autofetch.description": "Periodically fetch from the remote so the status bar shows incoming/outgoing commits.",
   "git.config.autofetchPeriod.description": "Interval (in seconds) between automatic fetches when git.autofetch is enabled.",
-  "git.config.blame.editorDecoration.enabled.description": "Show the blame information for the line the cursor is on at the end of the line.",
-  "git.config.blame.editorDecoration.template.description": "Template for the inline blame annotation. Tokens: ${hash}, ${hashShort}, ${subject}, ${authorName}, ${authorEmail}, ${authorDate}, ${authorDateAgo}.",
-  "git.config.blame.editorDecoration.disableHover.description": "Disable the hover that shows full commit info when pointing at the inline blame annotation.",
-  "git.config.blame.statusBarItem.enabled.description": "Show the blame information for the line the cursor is on in the status bar.",
-  "git.config.blame.statusBarItem.template.description": "Template for the blame information status bar item. Tokens: ${hash}, ${hashShort}, ${subject}, ${authorName}, ${authorEmail}, ${authorDate}, ${authorDateAgo}.",
-  "git.config.blame.ignoreWhitespace.description": "Ignore whitespace changes when computing blame information.",
   "git.config.timeline.showUncommitted.description": "Show an entry for the uncommitted changes of the file in the timeline view."
 }

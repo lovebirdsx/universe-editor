@@ -41,6 +41,8 @@ if (!STATE_PATH) {
  *   files: Record<string, DepotFile>,
  *   opened: Record<string, OpenedEntry>,
  *   changelists?: Record<string, { description: string }>,
+ *   changeMeta?: Record<string, { user: string, time: string, desc: string }>,
+ *   annotateCl?: string,
  *   shelved?: Record<string, Record<string, { action: string, rev: number, content?: string }>>,
  *   unshelveRefuse?: string[],
  *   nextChange?: number,
@@ -291,6 +293,29 @@ function main() {
     }
 
     case 'changes': {
+      // Blame metadata pass (`changes -l <file>`): the file's submitted history,
+      // sourced from the seeded changeMeta. A trailing file argument (not a flag
+      // value) distinguishes this from the SCM view's pending-changelist query
+      // (`changes -s pending`).
+      const file = rest.filter((a, idx) => {
+        if (a.startsWith('-')) return false
+        const prev = rest[idx - 1]
+        return prev !== '-s' && prev !== '-c' && prev !== '-m'
+      })[0]
+      if (file) {
+        emit(
+          Object.entries(state.changeMeta ?? {}).map(([id, m]) => ({
+            change: id,
+            time: m.time,
+            user: m.user,
+            client: state.client,
+            status: 'submitted',
+            changeType: 'public',
+            desc: m.desc,
+          })),
+        )
+        return 0
+      }
       // Pending changelists this client owns. The default changelist is never
       // listed by p4; report each numbered changelist we've created.
       emit(
@@ -325,6 +350,29 @@ function main() {
         record[`action${idx}`] = s.action
       })
       emit([record])
+      return 0
+    }
+
+    case 'annotate': {
+      // `annotate -c -q <file>` (ztag): one record per source line of the
+      // have-revision content, tagged with the changelist that last touched it
+      // (`lower`). The cl comes from `state.annotateCl`, falling back to the
+      // first seeded `changeMeta` id; without either the records carry no
+      // `lower`, which is how unannotated (locally new) lines surface.
+      const file = rest.filter((a) => !a.startsWith('-'))[0]
+      if (!file) return 1
+      const depotFile = toDepotFile(state, file)
+      const known = state.files[depotFile]
+      if (!known) {
+        process.stderr.write(`${file} - no such file(s).\n`)
+        return 1
+      }
+      const cl = state.annotateCl ?? Object.keys(state.changeMeta ?? {})[0]
+      const records = known.content.split('\n').map((data) => ({
+        data,
+        ...(cl !== undefined ? { lower: cl } : {}),
+      }))
+      emit(records)
       return 0
     }
 

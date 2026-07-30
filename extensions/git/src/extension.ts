@@ -468,7 +468,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
       // Invoked without a SCM resource (keybinding / toolbar): fall back to the
       // renderer so unsaved editor-buffer changes are included in the diff.
       if (!path) {
-        return commands.executeCommand('_workbench.openActiveFileChanges')
+        return commands.executeCommand('workbench.action.editor.openActiveFileChanges')
       }
       return path
         ? mgr

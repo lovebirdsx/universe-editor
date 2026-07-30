@@ -14,6 +14,11 @@ const _viewMode = observableValue<ViewMode>('scm.viewMode', 'list')
 const _collapseAll = observableValue<number>('scm.collapseAll', 0)
 const _selectedRepo = observableValue<string | undefined>('scm.selectedRepo', undefined)
 
+/** Workspace-storage key for the selected repo rootUri. Persistence lives in
+ *  ScmSelectedRepoContribution (workbench level, not the view component), so
+ *  the selection is restored even when the SCM panel never mounts. */
+export const SELECTED_REPO_STORAGE_KEY = 'scm.selectedRepo'
+
 /** A request to reveal a file row in the changes list; `fsPath` null means "no
  *  matching file — just focus the view". `tick` lets the same path re-trigger. */
 export interface IScmRevealRequest {

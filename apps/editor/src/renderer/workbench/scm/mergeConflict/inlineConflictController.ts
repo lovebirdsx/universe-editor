@@ -2,12 +2,13 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
  *  InlineConflictController — attaches to a single Monaco code editor and renders
- *  git merge-conflict markers inline: whole-line tints for the current / incoming
- *  / base regions plus a CodeLens-style action bar (Accept Current / Accept
- *  Incoming / Accept Both, optionally Compare) on its own view-zone line above
- *  each conflict. Resolving is a plain, undoable model edit — no git CLI needed.
+ *  SCM merge-conflict markers (git and Perforce formats) inline: whole-line tints
+ *  for the current / incoming / base regions plus a CodeLens-style action bar
+ *  (Accept Current / Accept Incoming / Accept Both, optionally Compare) on its
+ *  own view-zone line above each conflict. Resolving is a plain, undoable model
+ *  edit — no SCM CLI needed.
  *
- *  Shared by GitMergeConflictContribution (plain file editors) and MergeEditor's
+ *  Shared by MergeConflictContribution (plain file editors) and MergeEditor's
  *  editable Result pane, so the resolution behaviour stays identical in both.
  *--------------------------------------------------------------------------------------------*/
 
@@ -20,7 +21,7 @@ import {
 } from '@universe-editor/platform'
 import { MonacoLoader, type monaco } from '../../editor/monaco/MonacoLoader.js'
 import { recordTabSwitchPhase } from '../../../services/performance/tabSwitchPerf.js'
-import { CONFLICT_START_MARKER, parseConflicts, type ConflictRegion } from './conflictParser.js'
+import { CONFLICT_START_MARKERS, parseConflicts, type ConflictRegion } from './conflictParser.js'
 
 type Choice = 'current' | 'incoming' | 'both' | 'compare'
 
@@ -46,13 +47,8 @@ function scanConflicts(model: monaco.editor.ITextModel): readonly ConflictRegion
     // Cheap piece-tree prefilter before the full-text scan: getValue() on a
     // multi-MB model per tab switch / keystroke stalls the renderer, and the
     // overwhelmingly common case is "no conflict markers at all".
-    const marker = model.findNextMatch(
-      CONFLICT_START_MARKER,
-      { lineNumber: 1, column: 1 },
-      false,
-      true,
-      null,
-      false,
+    const marker = CONFLICT_START_MARKERS.some((m) =>
+      model.findNextMatch(m, { lineNumber: 1, column: 1 }, false, true, null, false),
     )
     const conflicts = marker ? parseConflicts(model.getValue()) : []
     scanCache.set(model, { versionId: model.getVersionId(), conflicts })

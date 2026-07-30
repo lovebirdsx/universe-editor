@@ -23,7 +23,7 @@ Blame 让你看清某一行内容**是谁、在哪次[提交](../reference/gloss
 
 编辑器底部的状态栏也会显示当前行的 Blame（默认格式是"作者 (多久以前)"）。
 
-**点击这个状态栏项，会直接打开 [Git 图谱](./git-graph.md)** 并定位到对应的那次提交，方便你顺藤摸瓜看这次改动的来龙去脉。
+**点击这个状态栏项，会直接打开当前仓库的历史图谱**（Git 仓库打开 [Git 图谱](./git-graph.md)，Perforce 仓库打开 Perforce 图谱）并定位到对应的那次提交 / changelist，方便你顺藤摸瓜看这次改动的来龙去脉。
 
 <!-- 截图：状态栏 blame 项 -->
 
@@ -37,17 +37,17 @@ Blame 让你看清某一行内容**是谁、在哪次[提交](../reference/gloss
 
 Blame 的两块显示可以分别开关，命令都能从命令面板搜到：
 
-- **切换 Git Blame 编辑器修饰**：开关编辑器里的行尾注解。
-- **切换 Git Blame 状态栏项**：开关底部状态栏的 Blame。
+- **切换 Blame 编辑器修饰**：开关编辑器里的行尾注解。
+- **切换 Blame 状态栏项**：开关底部状态栏的 Blame。
 
 ## 自定义显示
 
-想调整显示格式，在设置里搜 `git.blame`。常用项：
+想调整显示格式，在设置里搜 `scm.blame`。这些设置对 Git 和 Perforce 文件同样生效——它们控制的是**界面呈现**，与后端是哪种版本控制无关。常用项：
 
-- `git.blame.editorDecoration.enabled` / `git.blame.statusBarItem.enabled`：分别是行尾注解、状态栏项的开关。
-- `git.blame.editorDecoration.template` / `git.blame.statusBarItem.template`：显示模板。可用的占位标记有 `${hash}`、`${hashShort}`、`${subject}`、`${authorName}`、`${authorEmail}`、`${authorDate}`、`${authorDateAgo}`。
-- `git.blame.editorDecoration.disableHover`：关掉行尾注解的悬停卡片。
-- `git.blame.ignoreWhitespace`：计算 Blame 时忽略只改了空白的改动（避免因为缩进调整就把整行算到你头上）。
+- `scm.blame.editorDecoration.enabled` / `scm.blame.statusBarItem.enabled`：分别是行尾注解、状态栏项的开关。
+- `scm.blame.editorDecoration.template` / `scm.blame.statusBarItem.template`：显示模板。可用的占位标记有 `${hash}`、`${hashShort}`、`${subject}`、`${authorName}`、`${authorEmail}`、`${authorDate}`、`${authorDateAgo}`。
+- `scm.blame.editorDecoration.disableHover`：关掉行尾注解的悬停卡片。
+- `scm.blame.ignoreWhitespace`：计算 Blame 时忽略只改了空白的改动（避免因为缩进调整就把整行算到你头上）。
 
 ## 查一个文件的完整历史
 

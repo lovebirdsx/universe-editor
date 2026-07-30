@@ -7,9 +7,12 @@
  *     file-header noise. Tagged (not `-Mj`) output is required: some servers
  *     collapse `-Mj annotate` into a single opaque `data` blob without the
  *     structured fields.
- *  2. `p4 -ztag describe -s <cl>` per unique changelist — for the description's
- *     first line (the blame "summary") plus the author (`user`) and commit
- *     `time` (Unix seconds); the annotate pass carries neither cleanly.
+ *  2. `p4 -ztag changes -l <file>` once — the file's own changelist history
+ *     carries each change's `user`, `time` (Unix seconds) and `desc` first
+ *     line (the blame "summary"); the annotate pass carries neither cleanly.
+ *     (`p4 describe -s <cl>` would also work per changelist, but it lists
+ *     every file in the change — on a giant branch changelist that output is
+ *     gigabytes and the command never returns.)
  *
  * Perforce has no per-line email, so `authorEmail` is left blank and `hash`
  * carries the changelist number (the renderer only uses it as an opaque commit

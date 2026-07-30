@@ -35,8 +35,12 @@
 
 `-Mj`（marshalled JSON）并非对所有命令都吐结构化字段。**观察到 P4D 2024.2 上 `annotate` / `describe` 的 `-Mj` 把每行/整块塞进单个 `{"data":"..."}`**，丢掉 `lower`/`upper`/`user`/`time`/`desc` 等字段；只有 `-ztag` 才带这些。`fstat`/`opened`/`changes` 的 `-Mj` 正常。
 
-- blame（`getBlame`）因此改用 `execTagged`（`-ztag`）跑 `annotate -c -q` + `describe -s`。**加任何"报表型/多字段"命令前，先在真服务器上 `p4 -Mj <cmd>` 验证它是否吐结构化键**；不确定就用 `-ztag`（`execTagged`）更稳。
-- 另一坑：`-ztag annotate -u` 的 `time` 是**显示日期串**（`2026/04/30 05:56:38`）而非 unix 秒 → 别 `Number()*1000`。author/time 从 `describe`（`time` 是干净 unix 秒）取，annotate 只取 `lower` 拿 changelist。
+- blame（`getBlame`）因此改用 `execTagged`（`-ztag`）跑 `annotate -c -q` + `changes -l`。**加任何"报表型/多字段"命令前，先在真服务器上 `p4 -Mj <cmd>` 验证它是否吐结构化键**；不确定就用 `-ztag`（`execTagged`）更稳。
+- 另一坑：`-ztag annotate -u` 的 `time` 是**显示日期串**（`2026/04/30 05:56:38`）而非 unix 秒 → 别 `Number()*1000`。author/time 从 `changes -l`（`time` 是干净 unix 秒）取，annotate 只取 `lower` 拿 changelist。
+
+## ⚠️ blame 元数据绝不走 `describe -s`（巨型 CL 挂死，踩过）
+
+`describe -s <cl>` 即使不带 diff 也列出该 CL 的**全部文件**（`depotFile0..N`）。对巨型 branch CL（initial branch，几十万文件）输出是 GB 级、命令永不返回（实测 >3min）——`getBlame` 曾按 unique CL 串行 `describe -s` 补 summary，blame 因此永远不显示。修法：元数据（user/time/desc 第一行）改从**一次** `p4 -ztag changes -l <file>` 取（单文件历史，亚秒级），解析复用图谱的 `parseChangesList`，缓存走 `P4CacheNs.changesSubmitted`（key `blame:<file>`）。回归护栏 `clientBlame.test.ts`（describe 挂起时 getBlame 仍须返回 + 断言零 describe 调用）。同理，任何新功能需要"CL 的元数据"时都用 `changes`/`change -o`，**不要** `describe`。
 
 
 ## ⚠️ `opened`/`reconcile -n` 的 `clientFile` 是 client 语法，不是本地路径（踩过）
@@ -137,11 +141,13 @@ server 端状态、**无 FS watcher**。`ConnectionState` = `connected|offline|n
 dirty-diff gutter 与 inline blame 原本硬编码 `git.*` 命令；已抽象为「**provider 上报的 capability**」，host 零 SCM 知识：
 
 - 契约在 `packages/extensions-common/src/contracts/dirtyDiff.ts`（`DirtyDiffCapabilities` + `dirtyDiffCommandId(providerId, cap)`）和 `blame.ts`（`BlameCapabilities` + `blameCommandId`）。命令 id = `<providerId>.<capability>`（`git.getHeadContent` / `perforce.getBlame`）。
-- 渲染侧 `DirtyDiffContribution.ts` / `GitBlameContribution.ts` / `dirtyDiffActions.ts` 注入 `IScmService`，用 `resolveScmProviderId(sourceControls, fsPath)`（`ScmService.ts`，root 最长前缀，键走 `scmProviderPathKey`）解析归属 provider → 派生命令 id 调用。
+- 渲染侧 `DirtyDiffContribution.ts` / `ScmBlameContribution.ts` / `dirtyDiffActions.ts` 注入 `IScmService`，用 `resolveScmProviderId(sourceControls, fsPath, selectedRootUri?)`（`ScmService.ts`，键走 `scmProviderPathKey`）解析归属 provider → 派生命令 id 调用。**第三参 `selectedRootUri` 是 SCM 面板当前选择的 repo**：命中的归属者优先，未命中回退最长前缀——同一文件同时归属 git+p4 时按用户选择路由（git 嵌套在 p4 workspace 里的场景）。消费方从 `scmViewState.selectedRepo` 取并挂 autorun 重触发；两个 contribution 的缓存按 `providerId + '\n' + path` **分槽**，切 repo 不清缓存零串扰。
 - **能力探测靠 `CommandsRegistry.getCommand(id)`**：贡献命令会真的注册进 CommandsRegistry。p4 无暂存区 → **不注册** `perforce.stageChange` → host 的 `_activeProviderSupportsStage()` 返回 false → Stage 按钮自动隐藏（`canStage` 回调）。**给 p4 加/减能力就是加/减对应 `commands.registerCommand`**。
-- p4 侧实现：`getHeadContent`（`#have` 内容或 null）、`getBlame`（`annotate -u -c -q` + 批量 `describe -s` 补 summary，返回 == `BlameResultDto` 的 `P4BlameResult`）、`openChange`（have vs 本地 diff）。这些是**运行时命令**（`commands.registerCommand`，不进 package.json），对齐 git。
+- p4 侧实现：`getHeadContent`（`#have` 内容或 null）、`getBlame`（`annotate -c -q` + 一次 `changes -l <file>` 补 summary/author/time，返回 == `BlameResultDto` 的 `P4BlameResult`）、`openChange`（have vs 本地 diff）。这些是**运行时命令**（`commands.registerCommand`，不进 package.json），对齐 git。
+- **shift+alt+y 不在扩展里**：`workbench.action.editor.openActiveFileChanges` 是 renderer Action2（buffer-aware），git/p4 的 `*.openChange` 无参时 fallback 到它。blame 配置在 `scm.blame.*`（renderer `ScmConfigurationContribution` 注册），blame 状态栏点击走 `scm.blame.openCommit` → 约定命令 `<providerId>-graph.view`。p4 冲突标记（`>>>> ORIGINAL`/`==== THEIRS`/`==== YOURS`/`<<<<`）由 renderer `conflictParser` 双格式状态机统一识别，UI 与 git 共用（`MergeConflictContribution`）。
+- **e2e 覆盖**：`e2e/specs/perforceDirtyDiffBlame.spec.ts` 五步链（gutter → shift+alt+y → peek → blame 状态栏点击进图谱 → p4 冲突 Accept）。fake-p4 的 `annotate` case + `changes -l` 的 `state.changeMeta` 种子（`P4SeedConfig.annotate`）专为 blame e2e 服务。
 
-> 改宿主泛化时：`packages/extensions-common` 与渲染 contribution 两侧都要动；改完先 `pnpm --filter @universe-editor/extensions-common build` 再让 apps 看到。测试见 `dirtyDiffActions.test.ts` / `GitBlameContribution.test.ts`（都注入了带 `{id,rootUri}` 的 IScmService fake）。
+> 改宿主泛化时：`packages/extensions-common` 与渲染 contribution 两侧都要动；改完先 `pnpm --filter @universe-editor/extensions-common build` 再让 apps 看到。测试见 `dirtyDiffActions.test.ts` / `ScmBlameContribution.test.ts`（都注入了带 `{id,rootUri}` 的 IScmService fake）。
 
 ## 菜单 & when 子句（`package.json`）
 
@@ -227,7 +233,7 @@ pnpm check                                       # lint+typecheck+全测+docs:ch
 - `extensions/perforce/src/{baselineProvider,p4Decoration,p4Error,autoEdit,p4StatusBar,concurrency,pathUtil,nls}.ts`
 - `packages/extensions-common/src/contracts/{dirtyDiff,blame}.ts` —— provider capability 契约（宿主泛化）
 - `apps/editor/src/renderer/services/extensions/ScmService.ts` —— `resolveScmProviderId`（单个最具体 owner，dirty-diff/blame 路由）/ `resolveScmProviderIds`（全部 owner，菜单门控）/ `encodeScmProviderIds`（`|a|b|` 成员编码）/ `scmProviderPathKey`
-- `apps/editor/src/renderer/contributions/{DirtyDiffContribution,GitBlameContribution}.ts` —— 渲染侧消费 capability + `CommandsRegistry.getCommand` 能力探测
+- `apps/editor/src/renderer/contributions/{DirtyDiffContribution,ScmBlameContribution,MergeConflictContribution}.ts` —— 渲染侧消费 capability + `CommandsRegistry.getCommand` 能力探测
 - `extensions/git/` —— 对照样板（Repository/RepositoryManager/gitError/nls 都是 p4 的镜像来源）
 - 相关 skill：`create-extension`（插件通用套路）；dirty-diff 内联 peek UI 见 `apps/editor/src/renderer/workbench/scm/CLAUDE.md`
 - 相关 memory：`extension-system-progress` / `eslint-path-identity-guardrails` / `dirty-diff-inline-peek-feature` / `path-comparison-convergence` / `perforce-collect-changes-ux`

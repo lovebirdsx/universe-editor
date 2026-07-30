@@ -15,14 +15,16 @@
 当仓库里有了比你 have 版本更新的改动，提交或[取出搁置](./changelists-and-shelving.md#取出搁置unshelve)时可能需要 **resolve**：
 
 - 在文件或 changelist 组上选**解决冲突**，集成运行 Perforce 的自动合并（`p4 resolve -am`）。
-- 能自动合并的文件会被合并；无法自动合并的会保留标记，供你手动处理后再提交。
+- 能自动合并的文件会被合并；无法自动合并的会保留标记（`>>>> ORIGINAL VERSION`、`==== THEIRS`、`==== YOURS`、`<<<<`），供你手动处理后再提交。
+
+和 Git 冲突一样，打开含这些标记的文件时，每处冲突上方会浮现一行操作按钮：**Accept Current Change**（保留 YOURS，即你的工作区版本）、**Accept Incoming Change**（采纳 THEIRS，即仓库版本）、**Accept Both Changes**、**Compare Changes**（并排对比两侧）。点选后标记自动清除。
 
 ## Blame：这行是谁改的
 
 Perforce 文件同样支持行内 **Blame（溯源）**，与 Git 共用同一界面：底层用 `p4 annotate` 得到每行归属的 changelist，再取该 changelist 的描述与作者。
 
 - 打开 Blame 的方式、行内提示的显示偏好，都沿用 [Git 的 Blame 说明](../git/blame-and-history.md)。
-- 显示相关的 `git.blame.*` 偏好设置对 Perforce 文件同样生效——它们控制的是**界面呈现**，与后端是 Git 还是 Perforce 无关。
+- 显示相关的 `scm.blame.*` 偏好设置对 Perforce 文件同样生效——它们控制的是**界面呈现**，与后端是 Git 还是 Perforce 无关。
 
 ## 设置一览
 

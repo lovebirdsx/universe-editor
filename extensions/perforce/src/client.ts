@@ -53,12 +53,7 @@ import {
 } from './reconcileParser.js'
 import { norm } from './pathUtil.js'
 import { buildNewChangeSpec, replaceDescription, parseDescription } from './changeSpec.js'
-import {
-  parseAnnotate,
-  annotatedChangelists,
-  buildBlameResult,
-  type P4BlameResult,
-} from './blameSource.js'
+import { parseAnnotate, buildBlameResult, type P4BlameResult } from './blameSource.js'
 import {
   parseChangesList,
   parseChangeDescribe,
@@ -1390,14 +1385,19 @@ export class PerforceClient {
   /**
    * Blame for `localPath` in the {@link P4BlameResult} shape (== BlameResultDto),
    * or null when annotate fails (unsubmitted / non-depot file). Runs
-   * `p4 annotate -c -q`, then batches `describe` for each changelist's summary.
+   * `p4 annotate -c -q`, then resolves author/summary/time for the referenced
+   * changelists from one `p4 changes -l <file>` (the file's own history).
    * Contributed to the host as `perforce.getBlame`.
    *
-   * Both use `-ztag`, not `-Mj`: on some servers (observed on P4D 2024.2) the
-   * JSON output collapses every line into a single `data` blob and drops the
-   * structured fields (`lower`/`upper`/`user`/`time`/`desc`) the parsers need —
-   * only tagged output carries them. `-u` is omitted because its per-line `time`
-   * is a display date, not Unix seconds; author/time come from `describe` instead.
+   * `-ztag`, not `-Mj`: on some servers (observed on P4D 2024.2) the JSON output
+   * of `annotate` collapses every line into a single `data` blob and drops the
+   * structured `lower`/`upper` fields — only tagged output carries them.
+   *
+   * Metadata deliberately does NOT come from `p4 describe -s <cl>`: a describe
+   * lists every file in the changelist, and on a giant branch changelist
+   * (hundreds of thousands of files) that output is gigabytes and the command
+   * never returns (observed >3min on a real server) — blame stayed blank.
+   * `changes -l <file>` is bounded by the file's own history and sub-second.
    */
   async getBlame(localPath: string): Promise<P4BlameResult | null> {
     const annotate = await this._p4.execTagged(['annotate', '-c', '-q', localPath])
@@ -1406,28 +1406,23 @@ export class PerforceClient {
     if (lines.length === 0) return null
 
     const summaries = new Map<string, { summary: string; user?: string; time?: number }>()
-    for (const cl of annotatedChangelists(lines)) {
-      const json = await this._cache.wrap(P4CacheNs.describe, `summary:${cl}`, async () => {
-        const desc = await this._p4.execTagged(['describe', '-s', cl])
-        if (desc.result.exitCode !== 0) return undefined
-        const record = desc.records[0]
-        if (!record) return undefined
-        const raw = typeof record['desc'] === 'string' ? record['desc'] : ''
-        const user = typeof record['user'] === 'string' ? record['user'] : undefined
-        const timeSec = typeof record['time'] === 'string' ? record['time'] : undefined
-        return JSON.stringify({
-          summary: descriptionFirstLine(raw),
-          ...(user ? { user } : {}),
-          ...(timeSec ? { time: Number(timeSec) * 1000 } : {}),
+    const json = await this._cache.wrap(
+      P4CacheNs.changesSubmitted,
+      `blame:${localPath}`,
+      async () => {
+        const changes = await this._p4.execTagged(['changes', '-l', localPath])
+        if (changes.result.exitCode !== 0) return undefined
+        return JSON.stringify(parseChangesList(changes.records))
+      },
+    )
+    if (json) {
+      for (const meta of JSON.parse(json) as GraphChangeMeta[]) {
+        summaries.set(meta.id, {
+          summary: meta.message,
+          ...(meta.author ? { user: meta.author } : {}),
+          ...(meta.date ? { time: meta.date * 1000 } : {}),
         })
-      })
-      if (json === undefined) continue
-      summaries.set(
-        cl,
-        json
-          ? (JSON.parse(json) as { summary: string; user?: string; time?: number })
-          : { summary: '' },
-      )
+      }
     }
 
     return buildBlameResult(lines, summaries)

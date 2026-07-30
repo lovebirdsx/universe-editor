@@ -2,6 +2,19 @@
 
 本目录是 SCM 域 workbench 侧的家：SCM 视图（`ScmView.tsx`）、mergeConflict、以及 dirty-diff 的视图代码（`dirtyDiff/`，含 gutter 色条与内联 peek）；dirty-diff 的服务端在 `apps/editor/src/renderer/services/scm/`。本文收录案例「dirty-diff 内联 peek」（处理相关任务前通读）。
 
+## 多 provider 仲裁与双格式冲突标记（SCM 可视化泛化）
+
+gutter / peek / blame / open-changes 对 git 与 perforce 共用同一套 renderer 代码，provider 只在**数据路由层**出现：
+
+- **仲裁**：`resolveScmProviderId(sourceControls, fsPath, selectedRootUri?)`（`services/extensions/ScmService.ts`）——selectedRootUri 命中的归属者优先（SCM 面板当前选择的 repo），未命中回退最长前缀；同 root 多 provider 首个命中者赢。消费方从 `workbench/scm/scmViewState.ts` 的 `scmViewState.selectedRepo` 取当前选择，并挂 autorun 在切换时重触发刷新。**还要挂 `sourceControls` 的 autorun**：启动竞态——selectedRepo 从 storage 恢复时目标 provider 的 source control 可能还没注册（扩展逐个激活），仲裁回退到最长前缀归属者；provider 后注册时必须重仲裁，否则回退结果一直粘住（踩过：恢复选择 p4 时先显示 git blame，要手动切 repo 才纠正）。blame 侧另配 `_refreshSeq` 代次守卫：回退 provider 的慢 fetch 后完成时不得覆盖新仲裁结果。
+- **selectedRepo 的持久化在 workbench 层**（`ScmSelectedRepoContribution`，仿 `OutlineViewStateContribution`）：恢复+写回都不依赖 ScmView 挂载——曾放在 ScmView 的 React effect 里，SCM 面板不打开就不恢复，blame/dirty-diff 仲裁一直停在最长前缀回退（git blame 粘住直到面板获得焦点，第二次踩过）。hydrate 只在当前无内存值时应用存储值（竞态窗口内的显式选择优先），写回 autorun 无 first-pass skip（竞态胜出的选择也能落盘）。ScmView 只消费 `scmViewState.selectedRepo`。
+- **缓存分槽防串扰**：`DirtyDiffContribution` / `ScmBlameContribution` 的缓存 key = `providerId + '\n' + path`。旧 provider 的在飞 Promise 落旧槽，零串扰；切 repo 时**不清缓存**，旧槽保留供切回秒显。
+- **blame 状态栏点击**走内部命令 `scm.blame.openCommit` → 派生命令约定 `` `${providerId}-graph.view` ``（`git-graph.view` / `perforce-graph.view` 均为 renderer Action2）；该命令未注册时状态栏项不带 command（不可点）。
+- **配置在 `scm.*` 命名空间**（`ScmConfigurationContribution` 注册）：`scm.blame.*`（6 项）+ `scm.mergeEditor`。扩展只读不写；git 扩展的 `git.blame.*` / `git.mergeEditor` 已删。
+- **shift+alt+y 是 renderer Action2**：`workbench.action.editor.openActiveFileChanges`（`actions/dirtyDiffActions.ts`），buffer-aware（吃到未保存编辑）；git/perforce 扩展的 `*.openChange` 无参时 fallback 到它。
+- **mergeConflict/conflictParser.ts 单状态机识别两种标记格式**：git 七字符（`<<<<<<<`/`|||||||`/`=======`/`>>>>>>>`）与 p4 四字符（`>>>> ORIGINAL`→base、`==== THEIRS`→incoming、`==== YOURS`→current、`<<<<`→结束；YOURS 可省略 = 空 current 侧）。安全依据：生成者互斥、开始标记互不前缀、块内转移只认当前格式标记、残缺块在下一个开始标记处整体丢弃。`CONFLICT_START_MARKERS` 数组供 `inlineConflictController` 预筛。
+- 验证单测：`services/extensions/__tests__/ScmService.test.ts`（仲裁）、`workbench/scm/mergeConflict/__tests__/conflictParser.test.ts`（双格式）、`contributions/__tests__/ScmBlameContribution.test.ts`（含 provider 后注册重仲裁 + 乱序守卫用例）；e2e 走 `extensions/perforce/e2e/specs/perforceDirtyDiffBlame.spec.ts`（fake p4 的 annotate/changes changeMeta 种子）。
+
 ## 案例：dirty-diff 内联 peek
 
 在某行下方弹一个浮层，里面是一个**真 Monaco diff editor**。这是 VSCode `QuickDiffWidget`（基于 `PeekViewWidget`/`ZoneWidget` + `EmbeddedDiffEditorWidget`）的功能；我们是 **standalone monaco**，VSCode 那些私有 PeekView/embedded-diff 模块被 tree-shake 掉了，但 **`monaco.editor.createDiffEditor` 在 standalone 完全可用**（`DiffEditor.tsx` 已证），所以直接内嵌一个 diff editor，**双侧行号 / 语法高亮 / 内部滚动 / reveal 全部白拿**。区别于 [register-monaco-command]（接命令）/ [fix-keybinding-not-firing]（键不触发诊断）：本案例是"造一个内嵌 diff 浮层并把交互接齐"。

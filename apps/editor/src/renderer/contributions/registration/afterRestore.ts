@@ -10,8 +10,9 @@ import { JsonSchemaContextContribution } from '../JsonSchemaContextContribution.
 import { JsonLanguageFeaturesContribution } from '../JsonLanguageFeaturesContribution.js'
 import { InlineCompletionContribution } from '../InlineCompletionContribution.js'
 import { FileEditorStatusContribution } from '../FileEditorStatusContribution.js'
-import { GitBlameContribution } from '../GitBlameContribution.js'
-import { GitMergeConflictContribution } from '../GitMergeConflictContribution.js'
+import { ScmBlameContribution } from '../ScmBlameContribution.js'
+import { ScmSelectedRepoContribution } from '../ScmSelectedRepoContribution.js'
+import { MergeConflictContribution } from '../MergeConflictContribution.js'
 import { DirtyDiffContribution } from '../DirtyDiffContribution.js'
 import { ExternalChangeWatcher } from '../ExternalChangeWatcher.js'
 import { GlobalDragAndDropContribution } from '../GlobalDragAndDropContribution.js'
@@ -98,21 +99,32 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.AfterRestore,
 )
 
-// Inline git blame on the cursor line + status-bar entry + hover. AfterRestore so
-// the editor area, status bar and Monaco are live; blame data is fetched lazily
-// from the `git` extension's contributed command once it activates.
+// Hydrate + persist the SCM view's selected repo at the workbench level (not in
+// the view component), so dirty-diff/blame arbitration sees the restored
+// selection even when the SCM panel never mounts. Registered before the
+// arbitration consumers so the restore is already in flight when they start.
 ContributionsRegistry.registerContribution(
-  'workbench.contrib.gitBlame',
-  GitBlameContribution,
+  'workbench.contrib.scmSelectedRepo',
+  ScmSelectedRepoContribution,
   WorkbenchPhase.AfterRestore,
 )
 
-// Inline merge-conflict resolution: scans the active file editor for git conflict
-// markers, tints the regions, and floats Accept Current/Incoming/Both + Compare
-// actions on each conflict. AfterRestore so the editor area + Monaco are live.
+// Inline blame on the cursor line + status-bar entry + hover. AfterRestore so
+// the editor area, status bar and Monaco are live; blame data is fetched lazily
+// from the owning SCM provider's contributed command once it activates.
 ContributionsRegistry.registerContribution(
-  'workbench.contrib.gitMergeConflict',
-  GitMergeConflictContribution,
+  'workbench.contrib.scmBlame',
+  ScmBlameContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Inline merge-conflict resolution: scans the active file editor for conflict
+// markers (git and Perforce formats), tints the regions, and floats Accept
+// Current/Incoming/Both + Compare actions on each conflict. AfterRestore so
+// the editor area + Monaco are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.mergeConflict',
+  MergeConflictContribution,
   WorkbenchPhase.AfterRestore,
 )
 

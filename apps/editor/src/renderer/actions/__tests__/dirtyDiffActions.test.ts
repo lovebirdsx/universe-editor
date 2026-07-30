@@ -12,6 +12,7 @@ import { OpenActiveFileChangesAction } from '../dirtyDiffActions.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
+import { scmViewState } from '../../workbench/scm/scmViewState.js'
 import {
   IScmDecorationsService,
   type IScmDecorationsService as IScmDecorationsServiceType,
@@ -56,9 +57,20 @@ async function runActionWithServices(services: ServiceCollection): Promise<void>
 
 afterEach(() => {
   FileEditorRegistry._resetForTests()
+  scmViewState.setSelectedRepo(undefined)
 })
 
 describe('OpenActiveFileChangesAction', () => {
+  it('registers the public command id with the shift+alt+y keybinding', () => {
+    const action = new OpenActiveFileChangesAction()
+    expect(OpenActiveFileChangesAction.ID).toBe('workbench.action.editor.openActiveFileChanges')
+    expect(action.desc).toMatchObject({
+      id: 'workbench.action.editor.openActiveFileChanges',
+      keybinding: { primary: 'shift+alt+y', when: '!isInDiffEditor' },
+      f1: true,
+    })
+  })
+
   it('opens a diff using the active Monaco model content', async () => {
     const groups = new EditorGroupsService()
     const input = new FileEditorInput(URI.file('D:/repo/file.ts'), {} as never)
@@ -122,5 +134,54 @@ describe('OpenActiveFileChangesAction', () => {
     )
 
     expect(commandService.executeCommand).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes getHeadContent to the provider the SCM view has selected', async () => {
+    const groups = new EditorGroupsService()
+    const input = new FileEditorInput(URI.file('D:/repo/git/file.ts'), {} as never)
+    groups.activeGroup.openEditor(input)
+
+    const scm = {
+      _serviceBrand: undefined,
+      sourceControls: {
+        get: () => [
+          { id: 'perforce', rootUri: 'D:/repo' },
+          { id: 'git', rootUri: 'D:/repo/git' },
+        ],
+        read: () => [
+          { id: 'perforce', rootUri: 'D:/repo' },
+          { id: 'git', rootUri: 'D:/repo/git' },
+        ],
+      },
+    } as never
+
+    const commandService: ICommandServiceType = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async () => null) as ICommandServiceType['executeCommand'],
+    }
+
+    const services = () =>
+      new ServiceCollection(
+        [IEditorGroupsService, groups],
+        [ICommandService, commandService],
+        [IScmDecorationsService, scmDecorations(false)],
+        [IScmService, scm],
+      )
+
+    // No selection → longest prefix wins (the nested git repo).
+    scmViewState.setSelectedRepo(undefined)
+    await runActionWithServices(services())
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      dirtyDiffCommandId('git', 'getHeadContent'),
+      input.resource.fsPath,
+    )
+
+    // Outer p4 workspace selected → the selection wins over the prefix heuristic.
+    scmViewState.setSelectedRepo('D:/repo')
+    await runActionWithServices(services())
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      dirtyDiffCommandId('perforce', 'getHeadContent'),
+      input.resource.fsPath,
+    )
   })
 })

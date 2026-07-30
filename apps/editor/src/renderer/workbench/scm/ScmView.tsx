@@ -91,7 +91,6 @@ import styles from './ScmView.module.css'
 
 const VIEW_MODE_STORAGE_KEY = 'scm.viewMode'
 const COMMIT_ACTION_STORAGE_KEY = 'scm.commitAction'
-const SELECTED_REPO_STORAGE_KEY = 'scm.selectedRepo'
 
 interface PrimaryCommitAction {
   readonly label: string
@@ -1314,24 +1313,10 @@ export function ScmView() {
     void storage.set(VIEW_MODE_STORAGE_KEY, viewMode, StorageScope.GLOBAL)
   }, [viewMode, storage])
 
-  // Restore / persist the selected repo per workspace (repo sets differ per
-  // workspace). Guarded so the default value doesn't overwrite storage on mount.
+  // The selected repo is consumed here but hydrated + persisted at the
+  // workbench level (ScmSelectedRepoContribution) so arbitration works even
+  // when this view never mounts.
   const selectedRootUri = useObservable(scmViewState.selectedRepo)
-  const restoredRepoRef = useRef(false)
-  useEffect(() => {
-    let active = true
-    void storage.get<string>(SELECTED_REPO_STORAGE_KEY, StorageScope.WORKSPACE).then((stored) => {
-      if (active && stored) scmViewState.setSelectedRepo(stored)
-      if (active) restoredRepoRef.current = true
-    })
-    return () => {
-      active = false
-    }
-  }, [storage])
-  useEffect(() => {
-    if (!restoredRepoRef.current || selectedRootUri === undefined) return
-    void storage.set(SELECTED_REPO_STORAGE_KEY, selectedRootUri, StorageScope.WORKSPACE)
-  }, [selectedRootUri, storage])
 
   const selected = sourceControls.find((sc) => sc.rootUri === selectedRootUri) ?? sourceControls[0]
 

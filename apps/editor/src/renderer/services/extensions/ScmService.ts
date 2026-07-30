@@ -69,6 +69,11 @@ export const IScmService = createDecorator<IScmService>('scmService')
  * owning provider's contributed commands as `<providerId>.<capability>` instead
  * of hardcoding one SCM. Returns undefined when no provider contains the path.
  *
+ * When several providers own the path (e.g. a git repo nested inside a Perforce
+ * workspace), the owner whose root equals `selectedRootUri` wins over the
+ * longest-prefix heuristic; falls back to the longest prefix when the selection
+ * matches none of the owners (or is absent).
+ *
  * Keying goes through {@link scmProviderPathKey} (separator-agnostic, lower-cased)
  * — a self-contained SCM-domain key, deliberately not routed through
  * IUriIdentityService (mirrors ScmDecorationsService's scmPathKey rationale).
@@ -76,19 +81,32 @@ export const IScmService = createDecorator<IScmService>('scmService')
 export function resolveScmProviderId(
   sourceControls: readonly IScmSourceControlModel[],
   fsPath: string,
+  selectedRootUri?: string,
 ): string | undefined {
   const target = scmProviderPathKey(fsPath)
+  const selectedKey =
+    selectedRootUri !== undefined ? scmProviderPathKey(selectedRootUri) : undefined
   let bestId: string | undefined
   let bestLen = -1
+  let selectedId: string | undefined
   for (const sc of sourceControls) {
     if (sc.rootUri === undefined) continue
     const root = scmProviderPathKey(sc.rootUri)
-    if ((target === root || target.startsWith(`${root}/`)) && root.length > bestLen) {
+    if (target !== root && !target.startsWith(`${root}/`)) continue
+    if (root.length > bestLen) {
       bestId = sc.id
       bestLen = root.length
     }
+    // Among the owners, the one whose root the SCM view has selected wins over
+    // the longest-prefix heuristic (e.g. a git repo nested inside a Perforce
+    // workspace, where the user picked the outer repo in the view). First hit
+    // sticks when several providers share the same root (mirrors the
+    // registration-order tie-break of the heuristic above).
+    if (selectedId === undefined && selectedKey !== undefined && root === selectedKey) {
+      selectedId = sc.id
+    }
   }
-  return bestId
+  return selectedId ?? bestId
 }
 
 /**

@@ -315,12 +315,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
         ({ pinned?: boolean; preserveFocus?: boolean } | undefined)?,
       ]
       // From an SCM row: `{ resourceUri }`. From the dirty-diff host / editor
-      // title: a bare path string, or undefined → fall back to the active editor.
-      const path =
-        resourcePath(arg) ??
-        (typeof arg === 'string' ? arg : undefined) ??
-        (await commands.executeCommand<string | undefined>('_workbench.getActiveEditorFile'))
-      if (!path) return
+      // title: a bare path string.
+      const path = resourcePath(arg) ?? (typeof arg === 'string' ? arg : undefined)
+      // Invoked without a resource (keybinding / toolbar): fall back to the
+      // renderer so unsaved editor-buffer changes are included in the diff
+      // (mirrors git.openChange).
+      if (!path) {
+        return commands.executeCommand('workbench.action.editor.openActiveFileChanges')
+      }
       // Double-click on an SCM row asks to pin (promote out of the preview slot);
       // Space-preview asks to preserve focus. Mirrors git.openChange.
       await mgr

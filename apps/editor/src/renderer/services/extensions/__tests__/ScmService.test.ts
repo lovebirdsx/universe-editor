@@ -111,6 +111,49 @@ describe('resolveScmProviderId(s)', () => {
     expect(resolveScmProviderId(controls, '/elsewhere/x.ts')).toBeUndefined()
   })
 
+  it('selectedRootUri wins over the longest prefix among the owners', () => {
+    const controls = [model('perforce', '/depot/Client'), model('git', '/depot/Client/Src/Ue')]
+    // Both own the file; the SCM view has the outer p4 workspace selected.
+    expect(resolveScmProviderId(controls, '/depot/Client/Src/Ue/main.ts', '/depot/Client')).toBe(
+      'perforce',
+    )
+    expect(
+      resolveScmProviderId(controls, '/depot/Client/Src/Ue/main.ts', '/depot/Client/Src/Ue'),
+    ).toBe('git')
+  })
+
+  it('falls back to the longest prefix when the selection owns nothing here', () => {
+    const controls = [
+      model('perforce', '/depot/Client'),
+      model('git', '/depot/Client/Src/Ue'),
+      model('git', '/other/Repo'),
+    ]
+    // Selected repo does not contain the file → heuristic unchanged.
+    expect(resolveScmProviderId(controls, '/depot/Client/Src/Ue/main.ts', '/other/Repo')).toBe(
+      'git',
+    )
+    // Selected repo not registered at all (stale persisted value) → heuristic unchanged.
+    expect(resolveScmProviderId(controls, '/depot/Client/Src/Ue/main.ts', '/gone/Repo')).toBe('git')
+  })
+
+  it('single ownership ignores the selection even when it points elsewhere', () => {
+    const controls = [model('perforce', '/depot/Client'), model('git', '/other/Repo')]
+    expect(resolveScmProviderId(controls, '/depot/Client/x.ts', '/other/Repo')).toBe('perforce')
+  })
+
+  it('selection disambiguates two providers sharing the same root', () => {
+    const controls = [model('perforce', '/ws'), model('git', '/ws')]
+    expect(resolveScmProviderId(controls, '/ws/x.ts', '/ws')).toBe('perforce')
+  })
+
+  it('selectedRootUri comparison is separator- and case-insensitive', () => {
+    const controls = [model('perforce', '/depot/Client'), model('git', '/depot/Client/Src/Ue')]
+    // Persisted rootUri with backslashes, trailing slash and different casing still matches.
+    expect(
+      resolveScmProviderId(controls, '/depot/Client/Src/Ue/main.ts', '\\DEPOT\\Client\\'),
+    ).toBe('perforce')
+  })
+
   it('resolveScmProviderIds returns every owner (nested git inside a p4 workspace)', () => {
     const controls = [model('perforce', '/depot/Client'), model('git', '/depot/Client/Src/Ue')]
     // The reported bug: a file under the nested git repo is owned by BOTH.

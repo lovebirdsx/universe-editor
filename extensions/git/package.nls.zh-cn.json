@@ -47,8 +47,6 @@
   "git.command.deleteTag.title": "删除标签…",
   "git.command.submoduleUpdateInit.title": "更新子模块",
   "git.command.submoduleSync.title": "同步子模块 URL",
-  "git.command.blame.toggleEditorDecoration.title": "切换 Git Blame 编辑器修饰",
-  "git.command.blame.toggleStatusBarItem.title": "切换 Git Blame 状态栏项",
   "git.command.timeline.openDiff.title": "打开比较",
   "git.command.timeline.copyCommitId.title": "复制提交 ID",
   "git.command.timeline.copyCommitMessage.title": "复制提交消息",
@@ -66,18 +64,11 @@
   "git.submenu.submodule.label": "子模块",
 
   "git.config.enabled.description": "是否启用 git 源代码管理。",
-  "git.config.mergeEditor.description": "在三向合并编辑器中打开冲突文件。为 false 时，冲突以工作区差异形式打开，并通过冲突标记内联解决。",
   "git.config.autoRepositoryDetection.description": "扫描工作区子文件夹以查找嵌套的 git 仓库。为 false 时仅使用工作区根目录。",
   "git.config.repositoryScanMaxDepth.description": "扫描嵌套 git 仓库的最大子文件夹深度。-1 表示不限制。",
   "git.config.repositoryScanIgnoredFolders.description": "扫描嵌套 git 仓库时跳过的文件夹名称。",
   "git.config.pullSubmoduleUpdate.description": "拉取成功后，当仓库包含子模块时自动运行 `git submodule update --init --recursive`。",
   "git.config.autofetch.description": "定期从远程获取，使状态栏显示传入/传出的提交。",
   "git.config.autofetchPeriod.description": "启用 git.autofetch 时自动获取之间的间隔（秒）。",
-  "git.config.blame.editorDecoration.enabled.description": "在光标所在行的行尾显示该行的 blame 信息。",
-  "git.config.blame.editorDecoration.template.description": "内联 blame 注解的模板。可用标记：${hash}、${hashShort}、${subject}、${authorName}、${authorEmail}、${authorDate}、${authorDateAgo}。",
-  "git.config.blame.editorDecoration.disableHover.description": "禁用指向内联 blame 注解时显示完整提交信息的悬停提示。",
-  "git.config.blame.statusBarItem.enabled.description": "在状态栏中显示光标所在行的 blame 信息。",
-  "git.config.blame.statusBarItem.template.description": "状态栏 blame 信息项的模板。可用标记：${hash}、${hashShort}、${subject}、${authorName}、${authorEmail}、${authorDate}、${authorDateAgo}。",
-  "git.config.blame.ignoreWhitespace.description": "计算 blame 信息时忽略空白字符更改。",
   "git.config.timeline.showUncommitted.description": "在时间线视图中显示文件未提交的更改条目。"
 }

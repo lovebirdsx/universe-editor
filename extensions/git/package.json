@@ -69,8 +69,6 @@
       { "command": "git.deleteTag", "title": "%git.command.deleteTag.title%", "category": "Git", "icon": "tag" },
       { "command": "git.submoduleUpdateInit", "title": "%git.command.submoduleUpdateInit.title%", "category": "Git", "icon": "git-submodule" },
       { "command": "git.submoduleSync", "title": "%git.command.submoduleSync.title%", "category": "Git", "icon": "git-submodule" },
-      { "command": "git.blame.toggleEditorDecoration", "title": "%git.command.blame.toggleEditorDecoration.title%", "category": "Git" },
-      { "command": "git.blame.toggleStatusBarItem", "title": "%git.command.blame.toggleStatusBarItem.title%", "category": "Git" },
       { "command": "git.timeline.openDiff", "title": "%git.command.timeline.openDiff.title%", "category": "Git" },
       { "command": "git.timeline.copyCommitId", "title": "%git.command.timeline.copyCommitId.title%", "category": "Git" },
       { "command": "git.timeline.copyCommitMessage", "title": "%git.command.timeline.copyCommitMessage.title%", "category": "Git" }
@@ -194,11 +192,6 @@
       {
         "command": "git.refresh",
         "key": "ctrl+alt+g"
-      },
-      {
-        "command": "git.openChange",
-        "key": "shift+alt+y",
-        "when": "!isInDiffEditor"
       }
     ],
     "configuration": {
@@ -208,11 +201,6 @@
           "type": "boolean",
           "default": true,
           "description": "%git.config.enabled.description%"
-        },
-        "git.mergeEditor": {
-          "type": "boolean",
-          "default": true,
-          "description": "%git.config.mergeEditor.description%"
         },
         "git.autoRepositoryDetection": {
           "type": "boolean",
@@ -246,36 +234,6 @@
           "default": 180,
           "minimum": 30,
           "description": "%git.config.autofetchPeriod.description%"
-        },
-        "git.blame.editorDecoration.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "%git.config.blame.editorDecoration.enabled.description%"
-        },
-        "git.blame.editorDecoration.template": {
-          "type": "string",
-          "default": "${subject}, ${authorName} (${authorDateAgo})",
-          "description": "%git.config.blame.editorDecoration.template.description%"
-        },
-        "git.blame.editorDecoration.disableHover": {
-          "type": "boolean",
-          "default": false,
-          "description": "%git.config.blame.editorDecoration.disableHover.description%"
-        },
-        "git.blame.statusBarItem.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "%git.config.blame.statusBarItem.enabled.description%"
-        },
-        "git.blame.statusBarItem.template": {
-          "type": "string",
-          "default": "${authorName} (${authorDateAgo})",
-          "description": "%git.config.blame.statusBarItem.template.description%"
-        },
-        "git.blame.ignoreWhitespace": {
-          "type": "boolean",
-          "default": false,
-          "description": "%git.config.blame.ignoreWhitespace.description%"
         },
         "git.timeline.showUncommitted": {
           "type": "boolean",

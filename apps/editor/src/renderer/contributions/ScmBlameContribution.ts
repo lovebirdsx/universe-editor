@@ -1,16 +1,18 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
- *  GitBlameContribution — VSCode-style inline git blame. For the active file
+ *  ScmBlameContribution — VSCode-style inline blame. For the active file
  *  editor it shows, at the end of the cursor's line, a dimmed annotation
  *  "${subject}, ${author} (${time ago})", mirrors it in the status bar, and
- *  serves a hover with the full commit info. Blame data comes from the `git`
- *  extension's `git.getBlame` contributed command; all rendering happens here
- *  because the extension API has no editor-decoration surface.
+ *  serves a hover with the full commit info. Blame data comes from the owning
+ *  SCM provider's `<providerId>.getBlame` contributed command (git / perforce);
+ *  all rendering happens here because the extension API has no editor-decoration
+ *  surface. (Formerly GitBlameContribution — the .git-blame-* CSS hooks keep
+ *  their historical names.)
  *
  *  Only the line(s) under a cursor are annotated (matching VSCode's built-in
- *  blame), so we never blame the whole file. Data is cached per file path and
- *  invalidated when the model content changes.
+ *  blame), so we never blame the whole file. Data is cached per provider+path
+ *  slot and invalidated when the model content changes.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -35,8 +37,9 @@ import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
 import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
+import { scmViewState } from '../workbench/scm/scmViewState.js'
 
-const OPEN_COMMIT_COMMAND = 'gitblame.openCommit'
+const OPEN_COMMIT_COMMAND = 'scm.blame.openCommit'
 const DEFAULT_TEMPLATE = '${subject}, ${authorName} (${authorDateAgo})'
 const DEFAULT_STATUSBAR_TEMPLATE = '${authorName} (${authorDateAgo})'
 /**
@@ -78,7 +81,13 @@ function applyTemplate(template: string, tokens: Record<string, string>): string
   )
 }
 
-export class GitBlameContribution extends Disposable implements IWorkbenchContribution {
+/** Cache key for blame results: provider-slotted so switching the SCM view's
+ *  selected repo never serves the other provider's blame for the same path. */
+function blameCacheKey(providerId: string | undefined, path: string): string {
+  return `${providerId ?? ''}\n${path}`
+}
+
+export class ScmBlameContribution extends Disposable implements IWorkbenchContribution {
   private _entry: IStatusBarEntryAccessor | undefined
   private _decorations: monaco.editor.IEditorDecorationsCollection | undefined
   private readonly _editorStore = this._register(new DisposableStore())
@@ -86,12 +95,16 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
   private readonly _blameDelayer = this._register(new ThrottledDelayer<void>(BLAME_DELAY_MS))
   private readonly _logger: ILogger
 
-  /** Blame result per absolute file path; cleared on content change. */
+  /** Blame result per provider+path slot; cleared on content change. */
   private readonly _cache = new Map<string, BlameResultDto | null>()
   private readonly _inflight = new Map<string, Promise<BlameResultDto | null>>()
 
   private _activePath: string | undefined
   private _currentHash: string | undefined
+  /** Provider the current status-bar entry was rendered from (drives its click target). */
+  private _activeProviderId: string | undefined
+  /** Generation of the latest `_refresh` call; stale in-flight fetches compare and drop. */
+  private _refreshSeq = 0
 
   constructor(
     @IEditorService editorService: IEditorService,
@@ -103,11 +116,16 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
-    this._logger = loggerService.createLogger({ id: 'gitBlame', name: 'Git Blame' })
+    this._logger = loggerService.createLogger({ id: 'scmBlame', name: 'SCM Blame' })
 
     this._register(
       CommandsRegistry.registerCommand(OPEN_COMMIT_COMMAND, () => {
-        if (this._currentHash) void this._commandService.executeCommand('git-graph.view')
+        // `<providerId>-graph.view` is the naming convention both the git and
+        // perforce graph actions follow (git-graph.view / perforce-graph.view).
+        const providerId = this._activeProviderId
+        if (this._currentHash && providerId) {
+          void this._commandService.executeCommand(`${providerId}-graph.view`)
+        }
       }),
     )
 
@@ -125,7 +143,29 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
     this._register(
       this._configurationService.onDidChangeConfiguration((e) => {
         // The whitespace setting changes the blame result itself, so drop the cache.
-        if (e.affectsConfiguration('git.blame.ignoreWhitespace')) this._cache.clear()
+        if (e.affectsConfiguration('scm.blame.ignoreWhitespace')) this._cache.clear()
+        if (this._activeEditor) this._refresh()
+      }),
+    )
+
+    // Switching the SCM view's selected repo re-arbitrates which provider's
+    // blame shows for the active file; the old annotation stays until the new
+    // provider's data resolves, and its cache slot survives for switching back.
+    this._register(
+      autorun((r) => {
+        scmViewState.selectedRepo.read(r)
+        if (this._activeEditor) this._refresh()
+      }),
+    )
+
+    // Provider registration also re-arbitrates: at startup the restored
+    // selectedRepo can point at a provider whose source control doesn't exist
+    // yet (extensions activate one by one), so arbitration falls back to the
+    // longest-prefix owner. Without this trigger the fallback blame would stick
+    // until the user touched the caret or re-picked the repo.
+    this._register(
+      autorun((r) => {
+        this._scm.sourceControls.read(r)
         if (this._activeEditor) this._refresh()
       }),
     )
@@ -145,21 +185,21 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
   private _activeEditor: monaco.editor.IStandaloneCodeEditor | undefined
 
   private get _decorationsEnabled(): boolean {
-    return this._configurationService.get('git.blame.editorDecoration.enabled', true) ?? true
+    return this._configurationService.get('scm.blame.editorDecoration.enabled', true) ?? true
   }
 
   private get _statusBarEnabled(): boolean {
-    return this._configurationService.get('git.blame.statusBarItem.enabled', true) ?? true
+    return this._configurationService.get('scm.blame.statusBarItem.enabled', true) ?? true
   }
 
   private get _hoverEnabled(): boolean {
     return !(
-      this._configurationService.get('git.blame.editorDecoration.disableHover', false) ?? false
+      this._configurationService.get('scm.blame.editorDecoration.disableHover', false) ?? false
     )
   }
 
   private get _ignoreWhitespace(): boolean {
-    return this._configurationService.get('git.blame.ignoreWhitespace', false) ?? false
+    return this._configurationService.get('scm.blame.ignoreWhitespace', false) ?? false
   }
 
   private _bind(input: FileEditorInput): void {
@@ -178,9 +218,22 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
         editor.onDidChangeCursorPosition(() => {
           // Cached blame renders instantly; a miss (right after an edit cleared
           // it) rides the delayer so the content+cursor event pair a keystroke
-          // fires never reruns git per key.
+          // fires never reruns the provider per key.
           const path = this._activePath
-          if (path && this._cache.has(path)) this._refresh()
+          if (
+            path &&
+            this._cache.has(
+              blameCacheKey(
+                resolveScmProviderId(
+                  this._scm.sourceControls.get(),
+                  path,
+                  scmViewState.selectedRepo.get(),
+                ),
+                path,
+              ),
+            )
+          )
+            this._refresh()
           else this._scheduleRefresh()
         }),
       )
@@ -188,7 +241,10 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
       if (model) {
         this._editorStore.add(
           model.onDidChangeContent(() => {
-            this._cache.delete(this._activePath ?? '')
+            // Edits invalidate every provider slot for this path.
+            for (const key of [...this._cache.keys()]) {
+              if (key.endsWith(`\n${this._activePath ?? ''}`)) this._cache.delete(key)
+            }
             this._scheduleRefresh()
           }),
         )
@@ -220,32 +276,49 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
       return
     }
     const line = position.lineNumber
+    // Snapshot alongside the fetch: the status-bar entry's click target must
+    // name the provider that produced the blame being shown.
+    const providerId = resolveScmProviderId(
+      this._scm.sourceControls.get(),
+      path,
+      scmViewState.selectedRepo.get(),
+    )
 
+    const seq = ++this._refreshSeq
     void this._getBlame(path).then((result) => {
-      // Bail if the editor/cursor moved on while we were fetching.
+      // Bail if a newer refresh superseded this one (its fetch may resolve out
+      // of order — e.g. the fallback provider's slow blame landing after the
+      // restored selection's provider answered) or the editor/cursor moved on.
+      if (seq !== this._refreshSeq) return
       if (this._activeEditor !== editor || editor.getPosition()?.lineNumber !== line) return
+      this._activeProviderId = providerId
       this._render(result ? this._resolveLine(result, line) : undefined)
     })
   }
 
   private _getBlame(path: string): Promise<BlameResultDto | null> {
-    if (this._cache.has(path)) return Promise.resolve(this._cache.get(path) ?? null)
     // Resolve which SCM provider owns this file and address its blame command.
     // A provider registers `<id>.getBlame` only after it activates (and never in a
     // non-SCM workspace), so probe the registry first — a miss isn't cached, so a
     // later activation still retries.
-    const providerId = resolveScmProviderId(this._scm.sourceControls.get(), path)
+    const providerId = resolveScmProviderId(
+      this._scm.sourceControls.get(),
+      path,
+      scmViewState.selectedRepo.get(),
+    )
+    const key = blameCacheKey(providerId, path)
+    if (this._cache.has(key)) return Promise.resolve(this._cache.get(key) ?? null)
     if (!providerId) return Promise.resolve(null)
     const commandId = blameCommandId(providerId)
     if (!CommandsRegistry.getCommand(commandId)) return Promise.resolve(null)
-    const existing = this._inflight.get(path)
+    const existing = this._inflight.get(key)
     if (existing) return existing
 
     const started = performance.now()
     const p = this._commandService
       .executeCommand<BlameResultDto | null>(commandId, path, this._ignoreWhitespace)
       .then((r) => {
-        this._inflight.delete(path)
+        this._inflight.delete(key)
         const blameMs = performance.now() - started
         if (blameMs > 1000) {
           this._logger.info(
@@ -256,14 +329,14 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
         // activating) — don't cache it so a later cursor move retries. `null` is a
         // real "no blame for this file" answer and is cached.
         if (r === undefined) return null
-        this._cache.set(path, r)
+        this._cache.set(key, r)
         return r
       })
       .catch(() => {
-        this._inflight.delete(path)
+        this._inflight.delete(key)
         return null
       })
-    this._inflight.set(path, p)
+    this._inflight.set(key, p)
     return p
   }
 
@@ -287,11 +360,11 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
       authorDateAgo: ago,
     }
     const decorationTemplate =
-      this._configurationService.get('git.blame.editorDecoration.template', DEFAULT_TEMPLATE) ??
+      this._configurationService.get('scm.blame.editorDecoration.template', DEFAULT_TEMPLATE) ??
       DEFAULT_TEMPLATE
     const statusBarTemplate =
       this._configurationService.get(
-        'git.blame.statusBarItem.template',
+        'scm.blame.statusBarItem.template',
         DEFAULT_STATUSBAR_TEMPLATE,
       ) ?? DEFAULT_STATUSBAR_TEMPLATE
     const hover = [
@@ -368,12 +441,18 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
       this._entry = undefined
       return
     }
+    // Only wire the click-through when this provider actually contributes a
+    // history graph (a future provider without one still gets blame text).
+    const providerId = this._activeProviderId
+    const hasGraph =
+      providerId !== undefined &&
+      CommandsRegistry.getCommand(`${providerId}-graph.view`) !== undefined
     const entry = {
       text: blame.statusBarText,
-      tooltip: 'Git Blame',
+      tooltip: 'Blame',
       alignment: StatusBarAlignment.Right,
       priority: 95,
-      ...(blame.hash ? { command: OPEN_COMMIT_COMMAND } : {}),
+      ...(blame.hash && hasGraph ? { command: OPEN_COMMIT_COMMAND } : {}),
     }
     if (this._entry) {
       this._entry.update(entry)
@@ -394,7 +473,13 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
     if (position.column < model.getLineMaxColumn(position.lineNumber)) return null
 
     const path = this._activePath
-    const cached = path ? this._cache.get(path) : null
+    if (!path) return null
+    const cached = this._cache.get(
+      blameCacheKey(
+        resolveScmProviderId(this._scm.sourceControls.get(), path, scmViewState.selectedRepo.get()),
+        path,
+      ),
+    )
     if (!cached) return null
     const resolved = this._resolveLine(cached, position.lineNumber)
     if (!resolved?.hover) return null
@@ -413,5 +498,6 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
     this._activeEditor = undefined
     this._activePath = undefined
     this._currentHash = undefined
+    this._activeProviderId = undefined
   }
 }

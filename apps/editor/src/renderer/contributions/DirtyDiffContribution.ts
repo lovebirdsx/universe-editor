@@ -2,11 +2,13 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
  *  DirtyDiffContribution — VSCode-style "dirty diff" decorations. For the active
- *  file editor it diffs the current document against its git HEAD revision and
+ *  file editor it diffs the current document against its HEAD revision and
  *  paints the change regions: coloured bars in the left gutter (green = added,
  *  blue = modified, red triangle = deleted) and matching marks in the right
- *  overview ruler. HEAD content comes from the `git` extension's
- *  `git.getHeadContent` contributed command; the diff itself runs in-renderer.
+ *  overview ruler. HEAD content comes from the owning SCM provider's
+ *  `<providerId>.getHeadContent` contributed command (git / perforce); the diff
+ *  itself runs in-renderer. When several providers own the file, the one the SCM
+ *  view has selected wins (see resolveScmProviderId).
  *
  *  Clicking a gutter bar opens an inline peek (InlineDirtyDiffController) showing
  *  that change's HEAD ↔ current line diff plus Revert / Stage / Open Changes /
@@ -41,6 +43,7 @@ import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IDirtyDiffNavigationService } from '../services/scm/DirtyDiffNavigationService.js'
 import { IScmDecorationsService } from '../services/scm/ScmDecorationsService.js'
 import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
+import { scmViewState } from '../workbench/scm/scmViewState.js'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
 import { recordTabSwitchPhase } from '../services/performance/tabSwitchPerf.js'
 import { InlineDirtyDiffController } from '../workbench/scm/dirtyDiff/InlineDirtyDiffController.js'
@@ -74,6 +77,12 @@ interface HeadContent {
   readonly lines: readonly string[]
 }
 
+/** Cache key for HEAD content: provider-slotted so a mid-flight fetch from the
+ *  previously-selected provider lands in its own slot and never cross-talks. */
+function headCacheKey(providerId: string | undefined, path: string): string {
+  return `${providerId ?? ''}\n${path}`
+}
+
 const COLORS = {
   added: '#2ea043',
   modified: '#0c7d9d',
@@ -103,7 +112,7 @@ export class DirtyDiffContribution
   /** Paths already reported as over the sync limit — log the skip once, not per keystroke. */
   private readonly _tooLargeLogged = new Set<string>()
 
-  /** HEAD content per absolute path; null = no HEAD revision (new file). */
+  /** HEAD content per provider+path slot; null = no HEAD revision (new file). */
   private readonly _headCache = new Map<string, HeadContent | null>()
   private readonly _inflight = new Map<string, Promise<HeadContent | null>>()
 
@@ -139,10 +148,30 @@ export class DirtyDiffContribution
       autorun((r) => {
         scmDecorationsService.decorations.read(r)
         this._headCache.clear()
-        if (this._activePath) {
-          this._headCache.delete(this._activePath)
-          this._triggerRefresh()
-        }
+        if (this._activePath) this._triggerRefresh()
+      }),
+    )
+
+    // Switching the SCM view's selected repo re-arbitrates which provider owns
+    // the active file; old decorations stay until the new provider's HEAD is in,
+    // so the gutter never flashes empty. The per-provider cache slots survive,
+    // so switching back doesn't re-hit the extension host.
+    this._register(
+      autorun((r) => {
+        scmViewState.selectedRepo.read(r)
+        if (this._activePath) this._triggerRefresh()
+      }),
+    )
+
+    // Provider registration also re-arbitrates: at startup the restored
+    // selectedRepo can point at a provider whose source control doesn't exist
+    // yet (extensions activate one by one), so arbitration falls back to the
+    // longest-prefix owner until it registers. (Same trigger as blame; the
+    // decorations observer above only fires once the provider has resources.)
+    this._register(
+      autorun((r) => {
+        this._scm.sourceControls.read(r)
+        if (this._activePath) this._triggerRefresh()
       }),
     )
 
@@ -261,38 +290,47 @@ export class DirtyDiffContribution
     this.closePeek()
   }
 
+  private _resolveProviderId(path: string): string | undefined {
+    return resolveScmProviderId(
+      this._scm.sourceControls.get(),
+      path,
+      scmViewState.selectedRepo.get(),
+    )
+  }
+
   private _getHead(path: string): Promise<HeadContent | null> {
-    if (this._headCache.has(path)) return Promise.resolve(this._headCache.get(path) ?? null)
-    const existing = this._inflight.get(path)
+    const providerId = this._resolveProviderId(path)
+    const key = headCacheKey(providerId, path)
+    if (this._headCache.has(key)) return Promise.resolve(this._headCache.get(key) ?? null)
+    const existing = this._inflight.get(key)
     if (existing) return existing
 
-    const providerId = resolveScmProviderId(this._scm.sourceControls.get(), path)
     if (!providerId) {
       // No SCM provider owns this path — no baseline, no dirty-diff.
-      this._headCache.set(path, null)
+      this._headCache.set(key, null)
       return Promise.resolve(null)
     }
 
     const p = this._commandService
       .executeCommand<string | null>(dirtyDiffCommandId(providerId, 'getHeadContent'), path)
       .then((r) => {
-        this._inflight.delete(path)
+        this._inflight.delete(key)
         // `undefined` = command not registered yet (extension host activating);
         // don't cache so a later edit retries. `null` = no HEAD revision; cache it.
         if (r === undefined) return null
         if (r === null) {
-          this._headCache.set(path, null)
+          this._headCache.set(key, null)
           return null
         }
         const head: HeadContent = { text: r, lines: toDiffLines(r) }
-        this._headCache.set(path, head)
+        this._headCache.set(key, head)
         return head
       })
       .catch(() => {
-        this._inflight.delete(path)
+        this._inflight.delete(key)
         return null
       })
-    this._inflight.set(path, p)
+    this._inflight.set(key, p)
     return p
   }
 
@@ -457,7 +495,7 @@ export class DirtyDiffContribution
   private async _stage(region: DirtyDiffRegion): Promise<void> {
     const path = this._activePath
     if (!path) return
-    const providerId = resolveScmProviderId(this._scm.sourceControls.get(), path)
+    const providerId = this._resolveProviderId(path)
     if (!providerId) return
     // Persist edits to disk first: stage-hunk diffs the index against the
     // working-tree FILE, so unsaved buffer changes would be invisible to git.
@@ -475,7 +513,7 @@ export class DirtyDiffContribution
 
   private async _openChanges(): Promise<void> {
     const path = this._activePath
-    const providerId = path ? resolveScmProviderId(this._scm.sourceControls.get(), path) : undefined
+    const providerId = path ? this._resolveProviderId(path) : undefined
     if (!providerId) return
     await this._commandService
       .executeCommand(dirtyDiffCommandId(providerId, 'openChange'), undefined, { pinned: true })
@@ -488,7 +526,7 @@ export class DirtyDiffContribution
   private _activeProviderSupportsStage(): boolean {
     const path = this._activePath
     if (!path) return false
-    const providerId = resolveScmProviderId(this._scm.sourceControls.get(), path)
+    const providerId = this._resolveProviderId(path)
     if (!providerId) return false
     return CommandsRegistry.getCommand(dirtyDiffCommandId(providerId, 'stageChange')) !== undefined
   }

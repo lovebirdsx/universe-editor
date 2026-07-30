@@ -234,7 +234,7 @@ import {
 import {
   ToggleBlameEditorDecorationAction,
   ToggleBlameStatusBarItemAction,
-} from './gitBlameActions.js'
+} from './scmBlameActions.js'
 import { ShowStartupPerformanceAction } from './performanceActions.js'
 import { ToggleKeybindingsTroubleshootingAction } from './developerActions.js'
 import { OpenDocsAction, OpenEditorGuideAction, OpenAgentGuideAction } from './helpActions.js'

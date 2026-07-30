@@ -62,6 +62,8 @@ interface FakeState {
   files: Record<string, { rev: number; content: string }>
   opened: Record<string, unknown>
   changelists?: Record<string, { description: string }>
+  changeMeta?: Record<string, { user: string; time: string; desc: string }>
+  annotateCl?: string
 }
 
 const toPosix = (p: string): string => p.split('\\').join('/')
@@ -69,6 +71,7 @@ const toPosix = (p: string): string => p.split('\\').join('/')
 function seedWorkspace(
   seeds: readonly SeedFile[],
   changelists: Readonly<Record<string, string>> = {},
+  annotate?: P4AnnotateSeed,
 ): {
   workspaceDir: string
   stateFile: string
@@ -98,6 +101,18 @@ function seedWorkspace(
           ),
         }
       : {}),
+    ...(annotate
+      ? {
+          annotateCl: annotate.changelist,
+          changeMeta: {
+            [annotate.changelist]: {
+              user: annotate.user,
+              time: annotate.time,
+              desc: annotate.description,
+            },
+          },
+        }
+      : {}),
   }
   writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf8')
   return { workspaceDir, stateFile }
@@ -124,6 +139,19 @@ export interface P4SeedConfig {
   /** Pending numbered changelists to pre-create, keyed by id → description. Used to
    *  assert that an (empty) numbered changelist stays visible in the SCM view. */
   readonly changelists?: Readonly<Record<string, string>>
+  /** Submitted-changelist blame seed: annotate tags every line with this cl and
+   *  `changes -l` resolves its author/summary, so the inline blame + status bar
+   *  show `user`. */
+  readonly annotate?: P4AnnotateSeed
+}
+
+/** Blame seed: the changelist annotate reports + the metadata `changes -l` returns. */
+export interface P4AnnotateSeed {
+  readonly changelist: string
+  readonly user: string
+  /** Unix seconds (string), matching `p4 -ztag changes` output. */
+  readonly time: string
+  readonly description: string
 }
 
 export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; openSubdir: string }>({
@@ -135,7 +163,11 @@ export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; open
   // launches the app against its state file) and the `perforce` harness read it
   // from here, so nothing has to be smuggled onto the ElectronApplication handle.
   p4Workspace: async ({ p4Seeds, openSubdir }, use) => {
-    const { workspaceDir, stateFile } = seedWorkspace(p4Seeds.files, p4Seeds.changelists)
+    const { workspaceDir, stateFile } = seedWorkspace(
+      p4Seeds.files,
+      p4Seeds.changelists,
+      p4Seeds.annotate,
+    )
     const openDir = openSubdir ? join(workspaceDir, openSubdir) : workspaceDir
     await use({
       clientRoot: workspaceDir,
