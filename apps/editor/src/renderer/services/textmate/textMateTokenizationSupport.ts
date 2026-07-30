@@ -85,6 +85,9 @@ export class TokenizationSupportWithLineLimit extends Disposable implements ITok
     private readonly _maxTokenizationLineLength: number,
   ) {
     super()
+    // monaco disposes us via the factory registration; the inner support
+    // follows (VSCode passes a DisposableStore for the same effect).
+    this._register(this._actual)
   }
 
   getInitialState(): IState {

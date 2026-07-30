@@ -11,6 +11,7 @@ import {
   NullLogger,
   URI,
   createDecorator,
+  markAsSingleton,
   type Event,
   type IDisposable,
   type ILogger,
@@ -47,6 +48,7 @@ export interface ITextMateService {
    */
   initialize(monaco: {
     languages: { getEncodedLanguageId(languageId: string): number }
+    editor: { getModels(): readonly { getLanguageId(): string }[] }
   }): Promise<void>
 
   /** Forward a color theme's token rules into the textmate registry, the
@@ -63,6 +65,9 @@ interface IMonacoTokenizationBindings {
     registerFactory(languageId: string, factory: LazyTokenizationSupportClass): { dispose(): void }
     getOrCreate(languageId: string): Promise<ITokenizationSupport | null>
     setColorMap(colorMap: Color[]): void
+    onDidChange(
+      listener: (e: { changedLanguages: readonly string[]; changedColorMap: boolean }) => void,
+    ): IDisposable
   }
   readonly LazyTokenizationSupport: new (
     createSupport: () => Promise<(ITokenizationSupport & IDisposable) | null>,
@@ -96,6 +101,9 @@ export class TextMateService extends Disposable implements ITextMateService {
   private _grammarFactory: TMGrammarFactory | undefined
   private _styleElement: HTMLStyleElement | undefined
   private _pendingTheme: { theme: IRawTheme; colorMap: string[] } | undefined
+  /** Languages whose support we must re-warm after the next rebuild. */
+  private readonly _languagesToWarm = new Set<string>()
+  private _hasResolvedSupportOnce = false
 
   constructor(
     @IFileService private readonly _fileService: IFileService,
@@ -120,6 +128,7 @@ export class TextMateService extends Disposable implements ITextMateService {
 
   async initialize(monaco: {
     languages: { getEncodedLanguageId(languageId: string): number }
+    editor: { getModels(): readonly { getLanguageId(): string }[] }
   }): Promise<void> {
     if (this._monaco !== undefined) {
       return
@@ -137,6 +146,19 @@ export class TextMateService extends Disposable implements ITextMateService {
     }
     this._encodeLanguageId = (languageId) => monaco.languages.getEncodedLanguageId(languageId)
     this._register(this.grammarRegistry.onDidChangeGrammars(() => this._rebuildRegistrations()))
+    this._register(
+      languages.TokenizationRegistry.onDidChange((e) => {
+        if (!e.changedColorMap) {
+          this._hasResolvedSupportOnce = true
+        }
+      }),
+    )
+    // Models created before this initialize resolved their Monarch support
+    // through TextModel's creation-time warm-up; registering our factories
+    // disposes those supports, so they must resolve again through ours.
+    for (const model of monaco.editor.getModels()) {
+      this._languagesToWarm.add(model.getLanguageId())
+    }
     this._rebuildRegistrations()
     if (this._pendingTheme !== undefined) {
       this.setTheme(this._pendingTheme.theme, this._pendingTheme.colorMap)
@@ -149,6 +171,12 @@ export class TextMateService extends Disposable implements ITextMateService {
    * grammar set (VSCode `_handleGrammarsExtPoint`). Disposing a factory
    * unregisters its resolved support and fires the registry change that makes
    * open models re-tokenize with the new factory.
+   *
+   * The TMGrammarFactory itself is created once and reused (like VSCode's
+   * `_getOrCreateGrammarFactory`): its vscode-textmate Registry holds the
+   * applied theme and the grammar cache, and `loadGrammar` resolves against
+   * the live GrammarRegistry, so newly registered grammars load without
+   * rebuilding it.
    */
   private _rebuildRegistrations(): void {
     const monaco = this._monaco
@@ -157,15 +185,16 @@ export class TextMateService extends Disposable implements ITextMateService {
     }
     this._registrations?.dispose()
     this._registrations = undefined
-    this._grammarFactory?.dispose()
-    this._grammarFactory = new TMGrammarFactory(
-      {
-        logger: this._logger,
-        readFile: (fsPath) => this._fileService.readFileText(URI.file(fsPath)),
-      },
-      this.grammarRegistry,
-      getOnigLib(),
-      this._encodeLanguageId,
+    this._grammarFactory ??= this._register(
+      new TMGrammarFactory(
+        {
+          logger: this._logger,
+          readFile: (fsPath) => this._fileService.readFileText(URI.file(fsPath)),
+        },
+        this.grammarRegistry,
+        getOnigLib(),
+        this._encodeLanguageId,
+      ),
     )
 
     const registrations = new DisposableStore()
@@ -194,6 +223,24 @@ export class TextMateService extends Disposable implements ITextMateService {
     this._logger.trace(
       `registered ${seenLanguages.size} TextMate grammar factories: ${[...seenLanguages].join(', ')}`,
     )
+
+    // VSCode _handleGrammarsExtPoint warms up `createdModes`: a fresh factory
+    // only resolves when someone calls getOrCreate. TextModel does that once
+    // at creation time, so models opened before this rebuild — and any model
+    // whose support we just unregistered — would otherwise stay untokenized.
+    for (const languageId of this._languagesToWarm) {
+      if (seenLanguages.has(languageId)) {
+        void monaco.TokenizationRegistry.getOrCreate(languageId)
+      }
+    }
+    this._languagesToWarm.clear()
+    if (this._hasResolvedSupportOnce) {
+      // Some language had a resolved support before this rebuild: the rebuild
+      // unregistered it, and its model never re-resolves on its own.
+      for (const languageId of seenLanguages) {
+        void monaco.TokenizationRegistry.getOrCreate(languageId)
+      }
+    }
   }
 
   private async _createTokenizationSupport(
@@ -214,10 +261,17 @@ export class TextMateService extends Disposable implements ITextMateService {
         result.initialState,
         result.containsEmbeddedLanguages,
       )
-      return new TokenizationSupportWithLineLimit(
-        encodeLanguageId(monacoLanguageId),
-        support,
-        MAX_TOKENIZATION_LINE_LENGTH,
+      // A resolved support means a live model uses this language: after every
+      // later rebuild the new factory must resolve again for it.
+      this._languagesToWarm.add(monacoLanguageId)
+      // Owned by monaco's TokenizationRegistry through the factory registration:
+      // alive as long as the app, disposed only when the factory is re-registered.
+      return markAsSingleton(
+        new TokenizationSupportWithLineLimit(
+          encodeLanguageId(monacoLanguageId),
+          support,
+          MAX_TOKENIZATION_LINE_LENGTH,
+        ),
       )
     } catch (e) {
       this._logger.warn(
@@ -232,6 +286,7 @@ export class TextMateService extends Disposable implements ITextMateService {
       this._pendingTheme = { theme, colorMap }
       return
     }
+
     this._grammarFactory?.setTheme(theme, colorMap)
     const effectiveColorMap = this._grammarFactory?.getColorMap() ?? colorMap
     const colors = toColorMap(effectiveColorMap, this._monaco.Color)

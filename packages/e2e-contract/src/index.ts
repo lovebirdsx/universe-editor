@@ -240,6 +240,13 @@ export interface E2EProbe {
    * file for resolver testing.
    */
   openFileUri(fsPath: string, options?: { pinned?: boolean }): Promise<void>
+  /**
+   * Resolve the tokenization support registered for a language through monaco's
+   * TokenizationRegistry and report which engine backs it (constructor name).
+   * Used by TextMate specs to prove the grammar-based factory took over from
+   * the Monarch fallback. Returns null when the language has no support at all.
+   */
+  getTokenizationSupportInfo(languageId: string): Promise<{ constructorName: string } | null>
   /** Returns the number of editor groups currently open. */
   getEditorGroupCount(): number
   /** Number of editors in the active group. */

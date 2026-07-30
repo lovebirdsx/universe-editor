@@ -158,6 +158,12 @@ declare module 'monaco-editor/esm/vs/editor/common/languages.js' {
     get(languageId: string): ITokenizationSupport | null
     setColorMap(colorMap: Color[]): void
     getColorMap(): Color[] | null
+    onDidChange(
+      listener: (e: {
+        changedLanguages: readonly string[]
+        changedColorMap: boolean
+      }) => void,
+    ): { dispose(): void }
   }
 }
 

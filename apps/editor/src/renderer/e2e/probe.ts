@@ -317,6 +317,12 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     openFileUri: (fsPath: string, options?: { pinned?: boolean }) => {
       return services.editorResolverService.openEditor(URI.file(fsPath), options)
     },
+    getTokenizationSupportInfo: async (languageId: string) => {
+      const { TokenizationRegistry } =
+        await import('monaco-editor/esm/vs/editor/common/languages.js')
+      const support = await TokenizationRegistry.getOrCreate(languageId)
+      return support === null ? null : { constructorName: support.constructor.name }
+    },
     getEditorGroupCount: () => services.editorGroupsService.count,
     getActiveGroupEditorCount: () => services.editorGroupsService.activeGroup?.editors.length ?? 0,
     getActiveGroupEditorUris: () =>
