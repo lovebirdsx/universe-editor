@@ -1582,11 +1582,6 @@
   background: var(--color-list-hover-bg, #2a2d2e);
 }
 
-.sessionRow[data-active='true']::after {
-  visibility: visible;
-  background: var(--color-list-active-bg, #094771);
-}
-
 .sessionRowTitle {
   flex: 1;
   display: flex;
@@ -1704,16 +1699,12 @@
 }
 
 .sessionRow:hover .sessionDelete,
-.sessionRow[data-active='true'] .sessionDelete,
 .sessionRow:focus-visible .sessionDelete,
 .sessionRow:hover .sessionRename,
-.sessionRow[data-active='true'] .sessionRename,
 .sessionRow:focus-visible .sessionRename,
 .sessionRow:hover .sessionPin,
-.sessionRow[data-active='true'] .sessionPin,
 .sessionRow:focus-visible .sessionPin,
 .sessionRow:hover .sessionArchive,
-.sessionRow[data-active='true'] .sessionArchive,
 .sessionRow:focus-visible .sessionArchive {
   visibility: visible;
 }
@@ -1723,13 +1714,6 @@
 .sessionRow:hover .sessionPin,
 .sessionRow:hover .sessionArchive {
   background: var(--color-list-hover-bg, #2a2d2e);
-}
-
-.sessionRow[data-active='true'] .sessionDelete,
-.sessionRow[data-active='true'] .sessionRename,
-.sessionRow[data-active='true'] .sessionPin,
-.sessionRow[data-active='true'] .sessionArchive {
-  background: var(--color-list-active-bg, #094771);
 }
 
 .sessionDelete:hover {
