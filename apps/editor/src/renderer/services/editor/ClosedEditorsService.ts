@@ -23,11 +23,18 @@ export interface ClosedEditorEntry {
   readonly typeId: string
   readonly groupId: number
   readonly serializedData: unknown
+  readonly label: string
 }
 
 export interface IClosedEditorsService {
   readonly _serviceBrand: undefined
   popMostRecent(): ClosedEditorEntry | undefined
+  /** Newest-first read-only snapshot, skipping entries whose (typeId, resource)
+   *  is currently open somewhere. */
+  getClosedEditors(): readonly ClosedEditorEntry[]
+  /** Remove and return the newest entry for `resource` whose (typeId, resource)
+   *  is not currently open; undefined when none matches. */
+  takeMostRecentMatching(resource: URI): ClosedEditorEntry | undefined
 }
 
 export const IClosedEditorsService = createDecorator<IClosedEditorsService>('closedEditorsService')
@@ -68,18 +75,40 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
   popMostRecent(): ClosedEditorEntry | undefined {
     while (this._stack.length > 0) {
       const entry = this._stack.pop()!
-      // Skip entries whose editor is already open somewhere (e.g. after
-      // detach/move). Match on typeId too: an image preview and a text view can
-      // share one file's resource, so reopening the closed image tab must not be
-      // suppressed just because the file's text tab is still open.
-      const alreadyOpen = this._groups.groups.some((g) =>
-        g.editors.some(
-          (e) => e.typeId === entry.typeId && this._uriIdentity.isEqual(e.resource, entry.resource),
-        ),
-      )
-      if (!alreadyOpen) return entry
+      if (!this._isOpen(entry)) return entry
     }
     return undefined
+  }
+
+  getClosedEditors(): readonly ClosedEditorEntry[] {
+    const out: ClosedEditorEntry[] = []
+    for (let i = this._stack.length - 1; i >= 0; i--) {
+      const entry = this._stack[i]!
+      if (!this._isOpen(entry)) out.push(entry)
+    }
+    return out
+  }
+
+  takeMostRecentMatching(resource: URI): ClosedEditorEntry | undefined {
+    for (let i = this._stack.length - 1; i >= 0; i--) {
+      const entry = this._stack[i]!
+      if (!this._uriIdentity.isEqual(entry.resource, resource)) continue
+      if (this._isOpen(entry)) continue
+      this._stack.splice(i, 1)
+      return entry
+    }
+    return undefined
+  }
+
+  // Match on typeId too: an image preview and a text view can share one file's
+  // resource, so reopening the closed image tab must not be suppressed just
+  // because the file's text tab is still open.
+  private _isOpen(entry: ClosedEditorEntry): boolean {
+    return this._groups.groups.some((g) =>
+      g.editors.some(
+        (e) => e.typeId === entry.typeId && this._uriIdentity.isEqual(e.resource, entry.resource),
+      ),
+    )
   }
 
   private _watchGroup(group: IEditorGroup): void {
@@ -104,6 +133,7 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
       typeId: editor.typeId,
       groupId,
       serializedData: editor.serialize?.() ?? null,
+      label: editor.getName(),
     })
     if (this._stack.length > MAX_ENTRIES) this._stack.shift()
   }

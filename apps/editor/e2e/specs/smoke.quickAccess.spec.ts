@@ -192,6 +192,130 @@ test.describe('@p0 quick access', () => {
     }
   })
 
+  test('reopening a just-closed file restores the exact editor type @regression', async ({
+    page,
+    workbench,
+  }) => {
+    // Regression: closing a non-default editor type and reopening the file via
+    // quick open re-guessed the type through the resolver (priority 100 dummy
+    // editor wins back) instead of restoring the "Reopen With" choice.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-quickrestore-'))
+    await fs.writeFile(path.join(tmpDir, 'chart.dummy'), '')
+    try {
+      await workbench.waitForRestored()
+      await workbench.openWorkspace(tmpDir)
+      await page.evaluate(() => {
+        window.__E2E__!.registerDummyEditor('**/*.dummy', 'dummyEditor')
+      })
+      const dummyFsPath = path.join(tmpDir, 'chart.dummy').replace(/\\/g, '/')
+      await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), dummyFsPath)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), {
+          timeout: 5000,
+        })
+        .toBe('dummyEditor')
+
+      // "Reopen With..." → switch to the plain file editor (explicit choice).
+      // The resource must be canonical UriComponents (URI.toJSON): a hand-built
+      // `{ path: 'C:/...' }` without the leading slash stringifies to the
+      // parse-unstable `file://C:/...`, which breaks resource identity downstream.
+      await page.evaluate((fsPath) => {
+        const path = '/' + fsPath.replace(/\\/g, '/')
+        const uri = { scheme: 'file', path, authority: '', query: '', fragment: '' }
+        void window.__E2E__!.runCommand('workbench.action.reopenWith', { resource: uri })
+      }, dummyFsPath)
+      await workbench.quickInput.waitForVisible()
+      await page.keyboard.type('File')
+      const fileOption = page.getByRole('option', { name: 'File Editor' })
+      await expect(fileOption).toBeVisible()
+      await page.keyboard.press('Enter')
+      await workbench.quickInput.waitForHidden()
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), {
+          timeout: 5000,
+        })
+        .toBe('file')
+
+      // Close the tab, then reopen through quick open.
+      await workbench.runCommand('workbench.action.closeActiveEditor')
+      await page.evaluate(() => {
+        void window.__E2E__!.runCommand('workbench.action.quickOpen')
+      })
+      await workbench.quickInput.waitForVisible()
+      await workbench.quickInput.input.fill('chart.dummy')
+      // The just-closed file entry and its closed-editor entry share one
+      // resource, so two same-named picks can appear; accepting the first
+      // restores the exact closed type ('file'), not re-resolve to dummyEditor.
+      const chartOption = workbench.quickInput.dialog
+        .getByRole('option', { name: /chart\.dummy/ })
+        .first()
+      await expect(chartOption).toBeVisible()
+      await page.keyboard.press('Enter')
+      await workbench.quickInput.waitForHidden()
+
+      // Must restore the exact closed type ('file'), not re-resolve to dummyEditor.
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), {
+          timeout: 5000,
+        })
+        .toBe('file')
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+    }
+  })
+
+  test('a closed markdown preview stays listed in quick open and restores on accept @regression', async ({
+    page,
+    workbench,
+  }) => {
+    // Regression: closing a virtual-scheme editor (markdown-preview:) removed it
+    // from quick open entirely; reopening the .md file went through the resolver
+    // and could never bring the preview back.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-quickclosed-'))
+    await fs.writeFile(path.join(tmpDir, 'a.md'), '# Hello\n')
+    try {
+      await workbench.waitForRestored()
+      await workbench.openWorkspace(tmpDir)
+      await page.evaluate(
+        ([fsPath]) => window.__E2E__!.openFileUri(fsPath!, { pinned: true }),
+        [path.join(tmpDir, 'a.md')],
+      )
+      await workbench.runCommand('workbench.action.markdown.openPreviewToSide')
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), {
+          timeout: 5000,
+        })
+        .toBe('markdown.preview')
+
+      // Close the preview tab — the source .md tab stays open.
+      await workbench.runCommand('workbench.action.closeActiveEditor')
+
+      await page.evaluate(() => {
+        void window.__E2E__!.runCommand('workbench.action.quickOpen')
+      })
+      await workbench.quickInput.waitForVisible()
+      await workbench.quickInput.input.fill('预览')
+      const previewOption = workbench.quickInput.dialog.getByRole('option', { name: /预览 a\.md/ })
+      await expect(previewOption).toBeVisible()
+      // Closed virtual-scheme entries carry the same resource icon as the open
+      // editor pick (regression: the icon slot used to render empty).
+      await expect(previewOption.getByTestId('quick-input-item-icon-slot')).toHaveAttribute(
+        'data-icon-id',
+        /^resource:markdown-preview:/,
+      )
+      await page.keyboard.press('Enter')
+      await workbench.quickInput.waitForHidden()
+
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), {
+          timeout: 5000,
+        })
+        .toBe('markdown.preview')
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+    }
+  })
+
   test('restores editor focus after closing with Escape', async ({ page, workbench }) => {
     await workbench.runCommand('workbench.action.files.newUntitledFile')
     await expect(workbench.editor.monacoEditor).toBeVisible()

@@ -324,6 +324,138 @@ describe('ClosedEditorsService — stack behavior', () => {
 })
 
 // ---------------------------------------------------------------------------
+// ClosedEditorsService — takeMostRecentMatching (quick-open restore)
+// ---------------------------------------------------------------------------
+
+describe('ClosedEditorsService — takeMostRecentMatching', () => {
+  it('returns undefined when nothing was closed', () => {
+    const groups = new EditorGroupsService()
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    expect(svc.takeMostRecentMatching(URI.file('/w/a.png'))).toBeUndefined()
+    svc.dispose()
+    groups.dispose()
+  })
+
+  it('returns the newest entry matching the resource and removes only it', () => {
+    const groups = new EditorGroupsService()
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const uri = URI.file('/w/pic.png')
+    const other = new FakeVirtualInput('other')
+    const first = new FakeImageInput(uri)
+    const second = new FakeImageInput(uri)
+    groups.activeGroup.openEditor(other)
+    groups.activeGroup.openEditor(first)
+    groups.activeGroup.closeEditor(first)
+    groups.activeGroup.openEditor(second)
+    groups.activeGroup.closeEditor(second)
+    groups.activeGroup.closeEditor(other)
+
+    const entry = svc.takeMostRecentMatching(uri)
+    expect(entry).toBeDefined()
+    expect(entry!.typeId).toBe(FakeImageInput.TYPE_ID)
+    expect(entry!.serializedData).toEqual(second.serialize())
+
+    // The older same-resource entry and the other-resource entry stay in the stack.
+    const next = svc.popMostRecent()
+    expect(next!.resource.toString()).toBe(other.resource.toString())
+    const oldest = svc.popMostRecent()
+    expect(oldest!.serializedData).toEqual(first.serialize())
+    svc.dispose()
+    groups.dispose()
+  })
+
+  it('skips a matching entry whose (typeId, resource) is currently open', () => {
+    const groups = new EditorGroupsService()
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const uri = URI.file('/w/pic.png')
+    const image = new FakeImageInput(uri)
+    groups.activeGroup.openEditor(image)
+    groups.activeGroup.closeEditor(image)
+    // Reopen the same image tab — the stack entry is now stale.
+    groups.activeGroup.openEditor(image)
+
+    expect(svc.takeMostRecentMatching(uri)).toBeUndefined()
+    svc.dispose()
+    groups.dispose()
+  })
+
+  it('does not skip when only a different-typed editor of the same file is open', () => {
+    const groups = new EditorGroupsService()
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const uri = URI.file('/w/pic.png')
+    const text = new FakeTextInput(uri)
+    const image = new FakeImageInput(uri)
+    groups.activeGroup.openEditor(image)
+    groups.activeGroup.closeEditor(image)
+    groups.activeGroup.openEditor(text)
+
+    const entry = svc.takeMostRecentMatching(uri)
+    expect(entry).toBeDefined()
+    expect(entry!.typeId).toBe(FakeImageInput.TYPE_ID)
+    svc.dispose()
+    groups.dispose()
+  })
+
+  it('returns undefined when no entry matches the resource', () => {
+    const groups = new EditorGroupsService()
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const input = new FakeVirtualInput('unrelated')
+    groups.activeGroup.openEditor(input)
+    groups.activeGroup.closeEditor(input)
+
+    expect(svc.takeMostRecentMatching(URI.file('/w/never-closed.png'))).toBeUndefined()
+    svc.dispose()
+    groups.dispose()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ClosedEditorsService — getClosedEditors (quick-open listing)
+// ---------------------------------------------------------------------------
+
+describe('ClosedEditorsService — getClosedEditors', () => {
+  it('returns entries newest-first and captures the editor label', () => {
+    const groups = new EditorGroupsService()
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const a = new FakeVirtualInput('list-a')
+    const b = new FakeVirtualInput('list-b')
+    groups.activeGroup.openEditor(a)
+    groups.activeGroup.openEditor(b)
+    groups.activeGroup.closeEditor(a)
+    groups.activeGroup.closeEditor(b)
+
+    const entries = svc.getClosedEditors()
+    expect(entries).toHaveLength(2)
+    expect(entries[0]!.resource.toString()).toBe(b.resource.toString())
+    expect(entries[0]!.label).toBe('FakeVirtual')
+    expect(entries[1]!.resource.toString()).toBe(a.resource.toString())
+    svc.dispose()
+    groups.dispose()
+  })
+
+  it('skips entries whose (typeId, resource) is currently open', () => {
+    const groups = new EditorGroupsService()
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const uri = URI.file('/w/pic.png')
+    const text = new FakeTextInput(uri)
+    const image = new FakeImageInput(uri)
+    groups.activeGroup.openEditor(image)
+    groups.activeGroup.closeEditor(image)
+    // The text view of the same file stays open — different typeId, so the
+    // closed image entry must still be listed.
+    groups.activeGroup.openEditor(text)
+
+    expect(svc.getClosedEditors()).toHaveLength(1)
+
+    // Reopen the image tab — now the entry is stale and must disappear.
+    groups.activeGroup.openEditor(image)
+    expect(svc.getClosedEditors()).toHaveLength(0)
+    svc.dispose()
+    groups.dispose()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // ReopenClosedEditorAction — uses EditorRegistry.deserialize, not FileEditorInput
 // ---------------------------------------------------------------------------
 

@@ -10,11 +10,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  EditorRegistry,
   GroupDirection,
   IEditorGroupsService,
   IEditorResolverService,
   IFileSearchService,
   IFileService,
+  IInstantiationService,
   IUriIdentityService,
   IWorkspaceService,
   URI,
@@ -24,6 +26,7 @@ import {
   type IQuickAccessProviderRunOptions,
   type IQuickPick,
   type IQuickPickItem,
+  type IEditorGroup,
 } from '@universe-editor/platform'
 import { compareByScoreThenPath, scoreFuzzyMatch } from '@universe-editor/workbench-ui'
 import { IRecentFilesService } from '../../recentFiles/recentFilesService.js'
@@ -34,6 +37,7 @@ import {
   encodeEditorPickId,
   IRecentEditorsService,
 } from '../../editor/RecentEditorsService.js'
+import { IClosedEditorsService } from '../../editor/ClosedEditorsService.js'
 import { resourceIconId } from '../quickPickResourceIcon.js'
 
 const GO_TO_FILE_MAX_RESULTS = 512
@@ -42,6 +46,14 @@ function workspaceRelativePath(root: URI, uri: URI): string {
   const rootPath = root.fsPath.replace(/\\/g, '/').replace(/\/$/, '')
   const norm = uri.fsPath.replace(/\\/g, '/')
   return norm.startsWith(rootPath + '/') ? norm.slice(rootPath.length + 1) : uri.fsPath
+}
+
+function editorPickDescription(root: URI | undefined, resource: URI): string | undefined {
+  return resource.scheme === 'file'
+    ? root
+      ? workspaceRelativePath(root, resource)
+      : resource.fsPath
+    : undefined
 }
 
 function createFilePick(root: URI, uri: URI, labelOverride?: string): IQuickPickItem {
@@ -111,6 +123,8 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     @IEditorResolverService private readonly _editorResolver: IEditorResolverService,
     @IFileService private readonly _fileService: IFileService,
     @IRecentEditorsService private readonly _recentEditors: IRecentEditorsService,
+    @IClosedEditorsService private readonly _closedEditors: IClosedEditorsService,
+    @IInstantiationService private readonly _inst: IInstantiationService,
   ) {}
 
   provide(picker: IQuickPick<IQuickPickItem>, options: IQuickAccessProviderRunOptions): void {
@@ -120,10 +134,12 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
   }
 
   /** Snapshot the currently open editors (all types, MRU order) as pick
-   *  candidates. Resource-backed editors reuse the resource URI as pick id so
-   *  they dedupe against file entries and activate through `_open`; purely
-   *  virtual editors (Settings, Welcome, terminals…) get an encoded
-   *  (groupId, editorId) id that `_acceptPick` resolves to a live activation. */
+   *  candidates, followed by recently closed editors that can be restored with
+   *  their exact type (same path as Reopen Closed Editor). Resource-backed
+   *  editors reuse the resource URI as pick id so they dedupe against file
+   *  entries and activate through `_open`; purely virtual editors (Settings,
+   *  Welcome, terminals…) get an encoded (groupId, editorId) id that
+   *  `_acceptPick` resolves to a live activation. */
   private _buildEditorCandidates(root: URI | undefined): EditorPickCandidate[] {
     const out: EditorPickCandidate[] = []
     const seen = new Set<string>()
@@ -133,12 +149,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       if (seen.has(id)) continue
       seen.add(id)
       const iconId = editor.getIconId?.() ?? (resource ? resourceIconId(resource) : undefined)
-      const description =
-        resource?.scheme === 'file'
-          ? root
-            ? workspaceRelativePath(root, resource)
-            : resource.fsPath
-          : undefined
+      const description = resource ? editorPickDescription(root, resource) : undefined
       out.push({
         pick: {
           id,
@@ -148,6 +159,30 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         },
         name: editor.label,
         path: description ?? editor.label,
+      })
+    }
+    // Recently closed editors stay listed so a closed custom/image/preview tab
+    // can be picked again; `_open` restores them with their exact typeId.
+    // Entries whose type has no deserialize hook (terminals…) are unrestorable
+    // and skipped. The pick id is the resource URI, so a closed entry sharing
+    // a resource with an open editor collapses into that editor's pick — the
+    // closed-first restore in `_open` still reopens the closed type.
+    for (const entry of this._closedEditors.getClosedEditors()) {
+      const id = entry.resource.toString()
+      if (seen.has(id)) continue
+      if (!EditorRegistry.getProvider(entry.typeId)?.deserialize) continue
+      seen.add(id)
+      const description = editorPickDescription(root, entry.resource)
+      const iconId = resourceIconId(entry.resource)
+      out.push({
+        pick: {
+          id,
+          label: entry.label,
+          ...(description ? { description } : {}),
+          ...(iconId ? { iconId } : {}),
+        },
+        name: entry.label,
+        path: description ?? entry.label,
       })
     }
     return out
@@ -177,9 +212,15 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
           return
         }
       }
+      if (this._restoreClosed(uri, side, true)) return
       void this._editorResolver.openEditor(uri, { pinned: true })
       return
     }
+    // Closed-first: a just-closed editor (custom/image/preview) is restored with
+    // its exact type even when another editor of the same file is still open —
+    // otherwise the surviving text tab would "intercept" the pick and the closed
+    // image/custom tab could never be brought back through quick open.
+    if (this._restoreClosed(uri, undefined, opts.pinned)) return
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
         if (editor.resource && this._uriIdentity.isEqual(editor.resource, uri)) {
@@ -190,6 +231,30 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       }
     }
     void this._editorResolver.openEditor(uri, { pinned: opts.pinned })
+  }
+
+  /** Restore a just-closed editor with its exact typeId via the closed-editors
+   *  stack (same deserialize path as Reopen Closed Editor) instead of
+   *  re-guessing the type through the resolver — the resolver can pick the
+   *  wrong type for equal-priority custom editors and cannot handle virtual
+   *  resources (markdown-preview:…) at all. Returns false when nothing
+   *  restorable matches, or when deserialize fails (the consumed entry is then
+   *  dropped, mirroring ReopenClosedEditorAction). */
+  private _restoreClosed(
+    uri: URI,
+    targetGroup: IEditorGroup | undefined,
+    pinned: boolean,
+  ): boolean {
+    const closed = this._closedEditors.takeMostRecentMatching(uri)
+    if (!closed) return false
+    const input = this._inst.invokeFunction((accessor) =>
+      EditorRegistry.deserialize(closed.typeId, closed.serializedData, accessor),
+    )
+    if (!input) return false
+    const group = targetGroup ?? this._groups.getGroup(closed.groupId) ?? this._groups.activeGroup
+    this._groups.activateGroup(group)
+    group.openEditor(input, { activate: true, pinned })
+    return true
   }
 
   private _acceptPick(

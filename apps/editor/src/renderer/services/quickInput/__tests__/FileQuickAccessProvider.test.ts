@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   EditorInput,
+  EditorRegistry,
   Emitter,
   IEditorGroupsService,
   IEditorResolverService,
@@ -43,7 +44,9 @@ import { IExcludeService } from '../../exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../exclude/testing/fakeExcludeService.js'
 import { IRecentFilesService, type IRecentFile } from '../../recentFiles/recentFilesService.js'
 import { IRecentEditorsService } from '../../editor/RecentEditorsService.js'
+import { IClosedEditorsService, type ClosedEditorEntry } from '../../editor/ClosedEditorsService.js'
 import { invalidateMentionFileCache } from '../../acp/mentionFileSearch.js'
+import { resourceIconId } from '../quickPickResourceIcon.js'
 
 class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   private readonly _onDidAccept = new Emitter<T[]>()
@@ -212,15 +215,21 @@ function makeFileService(existing: Iterable<string> = []): IFileServiceType {
 function makeGroups(openEditors: EditorInput[] = [], sideEditors: EditorInput[] = []) {
   const activatedGroupIds: number[] = []
   const setActiveLog: EditorInput[] = []
+  const openLog: Array<{ groupId: number; editor: EditorInput; options: unknown }> = []
   let nextId = 1
-  const makeGroup = (editors: EditorInput[]) => ({
-    id: nextId++,
-    editors,
-    openEditor() {},
-    setActive(editor: EditorInput) {
-      setActiveLog.push(editor)
-    },
-  })
+  const makeGroup = (editors: EditorInput[]) => {
+    const id = nextId++
+    return {
+      id,
+      editors,
+      openEditor(editor: EditorInput, options?: unknown) {
+        openLog.push({ groupId: id, editor, options })
+      },
+      setActive(editor: EditorInput) {
+        setActiveLog.push(editor)
+      },
+    }
+  }
   const group = makeGroup(openEditors)
   const all = sideEditors.length > 0 ? [group, makeGroup(sideEditors)] : [group]
   let active = group
@@ -251,7 +260,7 @@ function makeGroups(openEditors: EditorInput[] = [], sideEditors: EditorInput[] 
       return g
     },
   } as unknown as IEditorGroupsServiceType
-  return { groups, group, activatedGroupIds, setActiveLog, all }
+  return { groups, group, activatedGroupIds, setActiveLog, openLog, all }
 }
 
 class FakeEditorInput extends EditorInput {
@@ -278,6 +287,31 @@ class FakeRecentEditorsService implements IRecentEditorsService {
   constructor(private readonly _items: readonly { editor: EditorInput; group: IEditorGroup }[]) {}
   getRecentEditors() {
     return this._items
+  }
+}
+
+/** Takes entries from a fixed list: the newest resource match is removed and
+ *  returned, mirroring ClosedEditorsService.takeMostRecentMatching. */
+class FakeClosedEditorsService implements IClosedEditorsService {
+  declare readonly _serviceBrand: undefined
+  readonly takeCalls: URI[] = []
+  constructor(readonly entries: ClosedEditorEntry[] = []) {}
+  popMostRecent(): ClosedEditorEntry | undefined {
+    return undefined
+  }
+  getClosedEditors(): readonly ClosedEditorEntry[] {
+    return [...this.entries].reverse()
+  }
+  takeMostRecentMatching(resource: URI): ClosedEditorEntry | undefined {
+    this.takeCalls.push(resource)
+    for (let i = this.entries.length - 1; i >= 0; i--) {
+      const entry = this.entries[i]!
+      if (entry.resource.toString() === resource.toString()) {
+        this.entries.splice(i, 1)
+        return entry
+      }
+    }
+    return undefined
   }
 }
 
@@ -310,6 +344,7 @@ function setup(
     existingFiles?: Iterable<string>
     openEditors?: EditorInput[]
     sideEditors?: EditorInput[]
+    closedEntries?: ClosedEditorEntry[]
   } = {},
 ) {
   const root = opts.root === undefined ? URI.file('/ws') : opts.root
@@ -317,6 +352,7 @@ function setup(
   const fileSearch = makeFileSearch(root ?? URI.file('/ws'))
   const recent = new FakeRecentFilesService(opts.recent ?? [])
   const groupsFake = makeGroups(opts.openEditors ?? [], opts.sideEditors ?? [])
+  const closedEditors = new FakeClosedEditorsService([...(opts.closedEntries ?? [])])
   const recentEditors = new FakeRecentEditorsService([
     ...(opts.openEditors ?? []).map((editor) => ({
       editor,
@@ -333,6 +369,7 @@ function setup(
   services.set(IEditorGroupsService, groupsFake.groups)
   services.set(IRecentFilesService, recent)
   services.set(IRecentEditorsService, recentEditors)
+  services.set(IClosedEditorsService, closedEditors)
   services.set(IExcludeService, opts.exclude ?? new FakeExcludeService())
   services.set(IUriIdentityService, new UriIdentityService('linux'))
   services.set(IFileService, makeFileService(opts.existingFiles))
@@ -341,7 +378,7 @@ function setup(
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst as unknown as IInstantiationService)
   const provider = inst.createInstance(FileQuickAccessProvider)
-  return { provider, fileSearch, workspace, resolver, groupsFake }
+  return { provider, fileSearch, workspace, resolver, groupsFake, closedEditors }
 }
 
 function run(
@@ -637,6 +674,260 @@ describe('FileQuickAccessProvider', () => {
     expect(groupsFake.all).toHaveLength(2)
     expect(groupsFake.activatedGroupIds).toEqual([2])
     expect(groupsFake.setActiveLog).toEqual([sideEditor])
+    expect(resolver.opened).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Restoring just-closed editors with their exact type (mirrors Ctrl+Shift+T)
+// ---------------------------------------------------------------------------
+
+describe('FileQuickAccessProvider — closed editor restore', () => {
+  const FAKE_CUSTOM_TYPE = 'fake.custom.quickopen.test'
+  const registryDisposables: IDisposable[] = []
+
+  beforeEach(() => {
+    invalidateMentionFileCache()
+    registryDisposables.push(
+      EditorRegistry.registerEditorProvider({
+        typeId: FAKE_CUSTOM_TYPE,
+        componentKey: 'fake.custom',
+        deserialize: (data) => {
+          const d = data as { resource: string }
+          return new FakeEditorInput(FAKE_CUSTOM_TYPE, URI.parse(d.resource), 'restored.custom')
+        },
+      }),
+    )
+  })
+
+  afterEach(() => {
+    invalidateMentionFileCache()
+    while (registryDisposables.length > 0) registryDisposables.pop()?.dispose()
+  })
+
+  function closedEntry(resource: URI, groupId = 1, label = 'closed.editor'): ClosedEditorEntry {
+    return {
+      resource,
+      typeId: FAKE_CUSTOM_TYPE,
+      groupId,
+      serializedData: {
+        resource: resource.toString(),
+      },
+      label,
+    }
+  }
+
+  it('a just-closed non-text editor stays listed in the empty query and while typing', async () => {
+    const uri = URI.file('/ws/pic.png')
+    const { provider, fileSearch } = setup({
+      closedEntries: [closedEntry(uri, 1, 'pic.png')],
+    })
+    fileSearch.resultPaths = ['/ws/other.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    expect(picker.items[0]).toMatchObject({
+      id: uri.toString(),
+      label: 'pic.png',
+      description: 'pic.png',
+      iconId: resourceIconId(uri),
+    })
+
+    picker.fireValue('pic')
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toContain('pic.png')
+  })
+
+  it('a closed entry with a virtual-scheme resource is listed and restored, never resolved', async () => {
+    const uri = URI.parse('markdown-preview:/ws/doc.md')
+    const { provider, fileSearch, resolver, groupsFake } = setup({
+      closedEntries: [closedEntry(uri, 1, 'Preview doc.md')],
+    })
+    fileSearch.resultPaths = ['/ws/doc.md']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toContain('Preview doc.md')
+
+    picker.fireValue('preview')
+    const previewPick = picker.items.find(
+      (i) => (i as IQuickPickItem).label === 'Preview doc.md',
+    ) as IQuickPickItem
+    // Virtual-scheme closed entries get the same resource icon as when the
+    // editor is open (FileIcon resolves the basename's extension).
+    expect(previewPick.iconId).toBe(resourceIconId(uri))
+    picker.fireAccept([previewPick])
+
+    expect(groupsFake.openLog).toHaveLength(1)
+    expect(groupsFake.openLog[0]!.editor.typeId).toBe(FAKE_CUSTOM_TYPE)
+    expect(groupsFake.openLog[0]!.editor.resource?.toString()).toBe(uri.toString())
+    expect(resolver.opened).toHaveLength(0)
+  })
+
+  it('closed entries whose type has no deserialize hook are not listed (terminals…)', async () => {
+    const uri = URI.file('/ws/a.term')
+    const entry: ClosedEditorEntry = {
+      resource: uri,
+      typeId: 'fake.unregistered.quickopen.test',
+      groupId: 1,
+      serializedData: null,
+      label: 'a.term',
+    }
+    const { provider, fileSearch } = setup({ closedEntries: [entry] })
+    fileSearch.resultPaths = ['/ws/other.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).not.toContain('a.term')
+  })
+
+  it('only the newest of several closed entries for one resource is listed', async () => {
+    const uri = URI.file('/ws/pic.png')
+    // getClosedEditors() returns newest-first; both entries share the resource.
+    const { provider, fileSearch } = setup({
+      closedEntries: [closedEntry(uri, 1, 'pic-old'), closedEntry(uri, 1, 'pic-new')],
+    })
+    fileSearch.resultPaths = ['/ws/other.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toContain('pic-new')
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).not.toContain('pic-old')
+  })
+
+  it('reopening a just-closed file restores the exact editor type instead of re-resolving', async () => {
+    const uri = URI.file('/ws/doc.pdf')
+    const { provider, fileSearch, resolver, groupsFake, closedEditors } = setup({
+      closedEntries: [closedEntry(uri)],
+    })
+    fileSearch.resultPaths = ['/ws/doc.pdf']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('doc')
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+
+    expect(closedEditors.takeCalls.map((u) => u.toString())).toEqual([uri.toString()])
+    expect(groupsFake.openLog).toHaveLength(1)
+    expect(groupsFake.openLog[0]!.groupId).toBe(1)
+    expect(groupsFake.openLog[0]!.editor.typeId).toBe(FAKE_CUSTOM_TYPE)
+    expect(groupsFake.openLog[0]!.editor.resource?.toString()).toBe(uri.toString())
+    expect(groupsFake.openLog[0]!.options).toMatchObject({ activate: true, pinned: true })
+    expect(resolver.opened).toHaveLength(0)
+  })
+
+  it('restores the closed image type even while the same file stays open as text', async () => {
+    const uri = URI.file('/ws/pic.png')
+    const textEditor = new FakeEditorInput('file', uri, 'pic.png')
+    const { provider, resolver, groupsFake, closedEditors } = setup({
+      openEditors: [textEditor],
+      closedEntries: [closedEntry(uri, 1, 'pic.png')],
+    })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    // The pick id collides with the open text tab's — one row is listed, but
+    // accepting it restores the closed editor type (closed-first), it does not
+    // merely activate the surviving text tab.
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['pic.png'])
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+
+    expect(closedEditors.takeCalls).toHaveLength(1)
+    expect(groupsFake.openLog).toHaveLength(1)
+    expect(groupsFake.openLog[0]!.editor.typeId).toBe(FAKE_CUSTOM_TYPE)
+    expect(groupsFake.setActiveLog).toHaveLength(0)
+    expect(resolver.opened).toHaveLength(0)
+  })
+
+  it('falls back to the resolver when the closed entry cannot be deserialized', async () => {
+    const uri = URI.file('/ws/doc.pdf')
+    const entry: ClosedEditorEntry = {
+      resource: uri,
+      typeId: 'fake.unregistered.quickopen.test',
+      groupId: 1,
+      serializedData: null,
+      label: 'doc.pdf',
+    }
+    const { provider, fileSearch, resolver, groupsFake } = setup({ closedEntries: [entry] })
+    fileSearch.resultPaths = ['/ws/doc.pdf']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('doc')
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+
+    expect(groupsFake.openLog).toHaveLength(0)
+    expect(resolver.opened).toHaveLength(1)
+    expect(resolver.opened[0]!.uri.toString()).toBe(uri.toString())
+  })
+
+  it('restores into the active group when the entry group no longer exists', async () => {
+    const uri = URI.file('/ws/doc.pdf')
+    const { provider, fileSearch, groupsFake } = setup({
+      closedEntries: [closedEntry(uri, 999)],
+    })
+    fileSearch.resultPaths = ['/ws/doc.pdf']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('doc')
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+
+    expect(groupsFake.openLog).toHaveLength(1)
+    expect(groupsFake.openLog[0]!.groupId).toBe(1)
+    expect(groupsFake.activatedGroupIds).toEqual([1])
+  })
+
+  it('with no workspace, closed entries are listed and restore with pinned: false', async () => {
+    const uri = URI.file('/home/doc.pdf')
+    const { provider, groupsFake } = setup({
+      root: null,
+      closedEntries: [closedEntry(uri, 1, 'doc.pdf')],
+    })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toContain('doc.pdf')
+
+    const docPick = picker.items.find(
+      (i) => (i as IQuickPickItem).label === 'doc.pdf',
+    ) as IQuickPickItem
+    picker.fireAccept([docPick])
+
+    expect(groupsFake.openLog).toHaveLength(1)
+    expect(groupsFake.openLog[0]!.editor.typeId).toBe(FAKE_CUSTOM_TYPE)
+    expect(groupsFake.openLog[0]!.options).toMatchObject({ activate: true, pinned: false })
+  })
+
+  it('ctrl+accept restores the closed editor into the side group', async () => {
+    const uri = URI.file('/ws/doc.pdf')
+    const { provider, fileSearch, resolver, groupsFake, closedEditors } = setup({
+      closedEntries: [closedEntry(uri)],
+    })
+    fileSearch.resultPaths = ['/ws/doc.pdf']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    picker.keyMods = { ctrl: true, alt: false }
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('doc')
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+
+    // A new side group was created and received the restored editor.
+    expect(closedEditors.takeCalls).toHaveLength(1)
+    expect(groupsFake.all).toHaveLength(2)
+    expect(groupsFake.openLog).toHaveLength(1)
+    expect(groupsFake.openLog[0]!.groupId).toBe(2)
+    expect(groupsFake.openLog[0]!.editor.typeId).toBe(FAKE_CUSTOM_TYPE)
+    expect(groupsFake.openLog[0]!.options).toMatchObject({ activate: true, pinned: true })
     expect(resolver.opened).toHaveLength(0)
   })
 })
