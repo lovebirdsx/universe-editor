@@ -4,10 +4,11 @@
   "private": true,
   "type": "module",
   "files": [
-    "themes"
+    "themes",
+    "icons"
   ],
   "displayName": "Universe Themes",
-  "description": "Built-in default color themes (Universe Dark / Universe Light).",
+  "description": "Built-in default color themes (Universe Dark / Universe Light) and the default file icon theme.",
   "engines": {
     "universe": ">=0.1.0 <1.0.0"
   },
@@ -24,6 +25,13 @@
         "label": "Universe Light",
         "uiTheme": "vs",
         "path": "./themes/universe-light.json"
+      }
+    ],
+    "iconThemes": [
+      {
+        "id": "universe-material",
+        "label": "Universe Material",
+        "path": "./icons/universe-material-icon-theme.json"
       }
     ]
   }

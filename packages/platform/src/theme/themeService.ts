@@ -7,10 +7,10 @@
 
 import type { Color } from '../base/color.js'
 import type { Event } from '../base/event.js'
-import type { URI } from '../base/uri.js'
 import { createDecorator } from '../di/instantiation.js'
 import type { ColorIdentifier } from './colorRegistry.js'
 import type { ColorScheme } from './colorScheme.js'
+import type { IconContribution, IconDefinition } from './iconRegistry.js'
 
 export const IThemeService = createDecorator<IThemeService>('themeService')
 
@@ -74,28 +74,7 @@ export interface IFileIconTheme {
   readonly hidesExplorerArrows: boolean
 }
 
-export interface IconFontSource {
-  readonly location: URI
-  readonly format: string
-}
-
-export interface IconFontDefinition {
-  readonly src: IconFontSource[]
-  readonly weight?: string
-  readonly style?: string
-  readonly id: string
-}
-
-export interface IconDefinition {
-  readonly font?: IconFontDefinition
-  readonly fontCharacter: string
-}
-
-export interface IconContribution {
-  readonly id: string
-  readonly description: string | undefined
-  readonly default: IconDefinition
-}
+export type { IconContribution, IconDefinition } from './iconRegistry.js'
 
 export interface IProductIconTheme {
   readonly id: string
@@ -118,7 +97,25 @@ export interface IThemeService {
 
   readonly onDidFileIconThemeChange: Event<IFileIconTheme>
 
+  /**
+   * Apply a file icon theme by settingsId or full theme id. Pass `undefined` to
+   * select the built-in default; `null` is the explicit "None" choice (icons
+   * rendered programmatically by the embedding workbench). Serialized through
+   * the theme service's promise chain like color themes.
+   */
+  setFileIconTheme(
+    themeIdOrSettingsId: string | null | undefined,
+  ): Promise<IFileIconTheme | undefined>
+
   getProductIconTheme(): IProductIconTheme
 
   readonly onDidProductIconThemeChange: Event<IProductIconTheme>
+
+  /**
+   * Apply a product icon theme by settingsId or full theme id; `undefined` /
+   * unknown ids fall back to the default (built-in codicons).
+   */
+  setProductIconTheme(
+    themeIdOrSettingsId: string | undefined,
+  ): Promise<IProductIconTheme | undefined>
 }

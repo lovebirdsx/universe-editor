@@ -1,6 +1,12 @@
-import type { JSX } from 'react'
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  File type icon: dual rendering modes driven by the active file icon theme.
+ *--------------------------------------------------------------------------------------------*/
+
+import { type JSX, useEffect, useState } from 'react'
 import { CornerDownRight } from 'lucide-react'
-import type { URI } from '@universe-editor/platform'
+import { IThemeService, type URI } from '@universe-editor/platform'
+import { useOptionalService } from '../useService.js'
 import { basenameOfResource } from './resourceInfo.js'
 import { languageForResource } from './resourceLanguage.js'
 import {
@@ -11,12 +17,17 @@ import {
   materialFolderNames,
   materialFolderNamesExpanded,
 } from './materialIconMap.js'
+import { getFileIconClasses } from './fileIconClasses.js'
+import type { WorkbenchThemeService } from '../../services/themes/workbenchThemeService.js'
 import styles from './FileIcon.module.css'
 
 // Inline every generated Material SVG as raw markup. `eager` keeps them in the
 // main chunk (they're tiny and needed synchronously during tree rendering), and
 // `?raw` gives us the string we render via dangerouslySetInnerHTML — no <img>,
 // no custom scheme, and happy-dom tests can assert on the markup directly.
+// This is the BUILT-IN DEFAULT path (no icon theme configured); once an icon
+// theme activates, FileIcon switches to the stylesheet-driven protocol classes
+// and these inlined SVGs stop being used.
 const rawSvgs = import.meta.glob<string>('./icons/*.svg', {
   query: '?raw',
   import: 'default',
@@ -88,6 +99,26 @@ export function resolveFileIcon(
   return descriptor(materialIconDefaults.file)
 }
 
+/**
+ * Whether a stylesheet-driven file icon theme is active (any theme with an id
+ * selected, including after hot-switching). Subscribed via
+ * `onDidFileIconThemeChange` so a theme switch re-renders icons. Unit tests
+ * render FileIcon without a theme service in the container — the optional
+ * lookup keeps them on the built-in inline-SVG path.
+ */
+function useFileIconThemeActive(): boolean {
+  const themeService = useOptionalService(IThemeService) as WorkbenchThemeService | undefined
+  const [active, setActive] = useState(() => (themeService?.getFileIconTheme().id ?? '') !== '')
+  useEffect(() => {
+    if (!themeService) return
+    const update = (): void => setActive(themeService.getFileIconTheme().id !== '')
+    update()
+    const d = themeService.onDidFileIconThemeChange(update)
+    return () => d.dispose()
+  }, [themeService])
+  return active
+}
+
 export interface FileIconProps extends ResolveFileIconOptions {
   readonly resource: URI
   readonly className?: string | undefined
@@ -105,6 +136,37 @@ export function FileIcon({
   size = 16,
   symbolicLink,
 }: FileIconProps): JSX.Element {
+  const themeActive = useFileIconThemeActive()
+
+  if (themeActive) {
+    // Stylesheet mode: emit only the protocol classes; the contributed
+    // icon-theme CSS paints the glyph through `::before` background/content.
+    const classes = getFileIconClasses(resource, {
+      isDirectory,
+      ...(languageId !== undefined
+        ? { languageId }
+        : { languageId: languageForResource(resource) }),
+    })
+    const stateClass =
+      isDirectory && expanded === true
+        ? classes.map((c) => (c === 'folder-icon' ? 'folder-expanded-icon' : c))
+        : classes
+    return (
+      <span
+        className={[styles['fileIcon'], ...stateClass, className].filter(Boolean).join(' ')}
+        data-file-icon={isDirectory ? 'folder' : 'file'}
+        style={{ width: size, height: size }}
+        aria-hidden="true"
+      >
+        {symbolicLink && (
+          <span className={styles['symlinkBadge']} data-symlink-badge="true">
+            <CornerDownRight size={9} strokeWidth={2.5} />
+          </span>
+        )}
+      </span>
+    )
+  }
+
   const resolved = resolveFileIcon(resource, { isDirectory, expanded, languageId })
   const svg = svgByName[resolved.icon] ?? svgByName[materialIconDefaults.file]
 

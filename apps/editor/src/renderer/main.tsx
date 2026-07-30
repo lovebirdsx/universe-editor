@@ -721,6 +721,7 @@ async function bootstrapWorkbench(): Promise<void> {
     outputModelService: instantiation.invokeFunction((a) => a.get(IOutputModelService)),
     loggerService,
     userKeybindingsService: instantiation.invokeFunction((a) => a.get(IUserKeybindingsService)),
+    themeService,
     bootstrapFocusSettled,
     computeTeardownLeakReport: snapshotLeaks,
   })

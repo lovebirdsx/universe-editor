@@ -68,8 +68,8 @@
 
 ```json
 {
-  'workbench.colorTheme': 'dark',
-  'workbench.language': 'zh-CN'
+  "workbench.colorTheme": "Universe Dark",
+  "workbench.language": "zh-CN"
 }
 ```
 

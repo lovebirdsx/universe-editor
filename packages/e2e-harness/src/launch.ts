@@ -205,6 +205,11 @@ export const INITIAL_STATE = JSON.stringify({ 'welcome.agentOnboarding.seen': tr
 export function seedBaselineUserData(userDataDir: string): void {
   writeFileSync(join(userDataDir, 'settings.json'), INITIAL_SETTINGS, 'utf8')
   writeFileSync(join(userDataDir, 'state.json'), INITIAL_STATE, 'utf8')
+  // Isolate the read-only VSCode-compat layers from the host machine's real
+  // %APPDATA%/Code/User/*.json — otherwise a developer's own VSCode settings
+  // (e.g. workbench.iconTheme) leak into the run and flip assertions.
+  writeFileSync(join(userDataDir, 'vscode-user-settings.json'), '{}\n', 'utf8')
+  writeFileSync(join(userDataDir, 'vscode-user-keybindings.json'), '[]\n', 'utf8')
 }
 
 export interface LaunchAppOptions {
@@ -238,6 +243,17 @@ export async function launchApp(options: LaunchAppOptions): Promise<ElectronAppl
   if (options.extensions !== undefined) {
     extraEnv[ENABLED_EXTENSIONS_ENV] = options.extensions.join(',')
   }
+  // Route the read-only VSCode-compat layers at the isolated tmp files seeded by
+  // seedBaselineUserData (see there). Specs overriding these envs via options.env
+  // still win — extraEnv is spread after these defaults.
+  extraEnv['UNIVERSE_VSCODE_SETTINGS_PATH'] ??= join(
+    options.userDataDir,
+    'vscode-user-settings.json',
+  )
+  extraEnv['UNIVERSE_VSCODE_KEYBINDINGS_PATH'] ??= join(
+    options.userDataDir,
+    'vscode-user-keybindings.json',
+  )
   return electron.launch({
     args: [
       options.mainEntry,

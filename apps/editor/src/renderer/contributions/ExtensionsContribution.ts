@@ -172,6 +172,9 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
       this._logger,
       (editor) => this._registerCustomEditor(editor),
       (themes, context) => this._themeService.registerColorThemes(themes, context),
+      (iconThemes, context) => this._themeService.registerFileIconThemes(iconThemes, context),
+      (productIconThemes, context) =>
+        this._themeService.registerProductIconThemes(productIconThemes, context),
     )
     translator.translate(contributions)
     this._translator.value = translator

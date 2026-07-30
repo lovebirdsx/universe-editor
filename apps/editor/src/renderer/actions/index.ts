@@ -101,6 +101,8 @@ import {
   OpenWorkspaceSettingsAction,
   OpenWorkspaceSettingsJsonAction,
   SelectColorThemeAction,
+  SelectFileIconThemeAction,
+  SelectProductIconThemeAction,
 } from './preferencesActions.js'
 import {
   OpenConfigLocationFolderAction,
@@ -456,6 +458,8 @@ registerAction2(ConfigureDisplayLanguageAction)
 registerAction2(OpenWorkspaceSettingsAction)
 registerAction2(OpenWorkspaceSettingsJsonAction)
 registerAction2(SelectColorThemeAction)
+registerAction2(SelectFileIconThemeAction)
+registerAction2(SelectProductIconThemeAction)
 registerAction2(SetConfigLocationAction)
 registerAction2(OpenConfigLocationFolderAction)
 registerAction2(ResetConfigLocationAction)

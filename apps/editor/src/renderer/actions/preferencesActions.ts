@@ -31,6 +31,9 @@ import {
   type ILocaleOption,
 } from '../../shared/i18n/availableLocales.js'
 import type { ColorThemeData } from '../services/themes/colorThemeData.js'
+import { FileIconThemeData } from '../services/themes/fileIconThemeData.js'
+import { ProductIconThemeData } from '../services/themes/productIconThemeData.js'
+import { ThemeSettings } from '../services/themes/themeConfiguration.js'
 import type { WorkbenchThemeService } from '../services/themes/workbenchThemeService.js'
 import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
@@ -447,6 +450,89 @@ interface ColorThemePickItem extends IQuickPickItem {
 }
 
 /**
+ * 通用图标主题选择器：高亮即预览（不写配置），Enter 接受（持久化），Escape
+ * 未接受则回滚。扩展翻译在 Eventually 相位落地，极早调用可能先于注册 ——
+ * 等首批注册再打开（与 SelectColorThemeAction 同款防御）。
+ */
+function pickTheme<
+  TTheme extends { readonly settingsId: string | null; readonly label: string },
+>(options: {
+  readonly quickInput: IQuickInputService
+  readonly getThemes: () => readonly TTheme[]
+  readonly getCurrent: () => TTheme
+  readonly applyTheme: (theme: TTheme) => void
+  readonly persist: () => void
+  readonly placeholder: string
+  readonly onDidChangeThemes: (listener: () => void) => { dispose(): void }
+  readonly extraItems?: readonly TTheme[]
+}): void {
+  const openPicker = (): void => {
+    const originalTheme = options.getCurrent()
+    const currentLabel = localize('iconTheme.current', '(current)')
+    const themes = [...(options.extraItems ?? []), ...options.getThemes()]
+    const items: (IQuickPickItem & { theme: TTheme })[] = themes.map((theme) => ({
+      id: theme.settingsId ?? '',
+      label: theme.label,
+      ...(theme.settingsId === originalTheme.settingsId && { description: currentLabel }),
+      theme,
+    }))
+
+    const pick = options.quickInput.createQuickPick<IQuickPickItem & { theme: TTheme }>()
+    const disposables = new DisposableStore()
+    disposables.add(pick)
+    pick.items = items
+    pick.placeholder = options.placeholder
+    pick.activeItems = items.filter((i) => i.theme.settingsId === originalTheme.settingsId)
+
+    let accepted = false
+    disposables.add(
+      pick.onDidChangeActive((item) => {
+        if (item && item.theme.settingsId !== options.getCurrent().settingsId) {
+          options.applyTheme(item.theme)
+        }
+      }),
+    )
+    disposables.add(
+      pick.onDidAccept((selected) => {
+        accepted = true
+        const item = selected[0] ?? pick.activeItems[0]
+        if (item) {
+          options.applyTheme(item.theme)
+          options.persist()
+        }
+      }),
+    )
+    disposables.add(
+      pick.onDidHide(() => {
+        setTimeout(() => {
+          if (!accepted) {
+            options.applyTheme(originalTheme)
+          }
+          disposables.dispose()
+        }, 0)
+      }),
+    )
+    pick.show()
+  }
+
+  // extraItems (None / Default) are always available even with zero registered
+  // themes, so a non-empty extraItems list is enough to open the picker.
+  const canOpen = (): boolean =>
+    options.getThemes().length > 0 || (options.extraItems?.length ?? 0) > 0
+
+  if (canOpen()) {
+    openPicker()
+    return
+  }
+  const registrationWait = options.onDidChangeThemes(() => {
+    if (canOpen()) {
+      registrationWait.dispose()
+      openPicker()
+    }
+  })
+}
+
+/**
  * VSCode 同款主题选择器：高亮即预览（不写配置），Enter 接受（持久化
  * settingsId），Escape 关闭未接受则回滚到进入时的主题。
  */
@@ -528,6 +614,84 @@ export class SelectColorThemeAction extends Action2 {
         registrationWait.dispose()
         openPicker()
       }
+    })
+  }
+}
+
+/** VSCode `workbench.action.selectIconTheme`（无默认快捷键，对齐 VSCode）。 */
+export class SelectFileIconThemeAction extends Action2 {
+  static readonly ID = 'workbench.action.selectIconTheme'
+  constructor() {
+    super({
+      id: SelectFileIconThemeAction.ID,
+      title: localize2('action.selectIconTheme.title', 'File Icon Theme'),
+      category: localize2('command.category.preferences', 'Preferences'),
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    const quickInput = accessor.get(IQuickInputService)
+    const configuration = accessor.get(IConfigurationService)
+    const themeService = accessor.get(IThemeService) as WorkbenchThemeService
+
+    pickTheme({
+      quickInput,
+      getThemes: () => themeService.getFileIconThemes(),
+      getCurrent: () => themeService.getFileIconThemeData(),
+      applyTheme: (theme) => {
+        // settingsId null = the explicit "None" entry (noIconTheme) — pass it
+        // through so preview/rollback apply None instead of the default theme.
+        void themeService.setFileIconTheme(theme.settingsId)
+      },
+      persist: () => {
+        configuration.update(
+          ThemeSettings.FILE_ICON_THEME,
+          themeService.getFileIconThemeData().settingsId,
+          ConfigurationTarget.User,
+        )
+      },
+      placeholder: localize('quickInput.iconTheme.placeholder', 'Select File Icon Theme'),
+      onDidChangeThemes: (listener) => themeService.onDidChangeFileIconThemes(listener),
+      extraItems: [FileIconThemeData.noIconTheme],
+    })
+  }
+}
+
+/** VSCode `workbench.action.selectProductIconTheme`（无默认快捷键，对齐 VSCode）。 */
+export class SelectProductIconThemeAction extends Action2 {
+  static readonly ID = 'workbench.action.selectProductIconTheme'
+  constructor() {
+    super({
+      id: SelectProductIconThemeAction.ID,
+      title: localize2('action.selectProductIconTheme.title', 'Product Icon Theme'),
+      category: localize2('command.category.preferences', 'Preferences'),
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    const quickInput = accessor.get(IQuickInputService)
+    const configuration = accessor.get(IConfigurationService)
+    const themeService = accessor.get(IThemeService) as WorkbenchThemeService
+
+    pickTheme({
+      quickInput,
+      getThemes: () => themeService.getProductIconThemes(),
+      getCurrent: () => themeService.getProductIconThemeData(),
+      applyTheme: (theme) => {
+        void themeService.setProductIconTheme(theme.settingsId)
+      },
+      persist: () => {
+        configuration.update(
+          ThemeSettings.PRODUCT_ICON_THEME,
+          themeService.getProductIconThemeData().settingsId,
+          ConfigurationTarget.User,
+        )
+      },
+      placeholder: localize('quickInput.productIconTheme.placeholder', 'Select Product Icon Theme'),
+      onDidChangeThemes: (listener) => themeService.onDidChangeProductIconThemes(listener),
+      extraItems: [ProductIconThemeData.defaultTheme],
     })
   }
 }

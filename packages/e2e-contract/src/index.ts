@@ -197,6 +197,16 @@ export interface E2EProbe {
   removeRecentWorkspace(fsPath: string): Promise<void>
   /** Returns current layout sizes (sidebar/secondarySidebar/panel in px). */
   getLayoutSizes(): E2ELayoutSizes
+  /**
+   * Id of the active file icon theme ('' when None is selected — icons render
+   * programmatically with the built-in Material SVGs). Backs the icon-theme
+   * spec's switch assertions without peeking at private service state.
+   */
+  getFileIconThemeId(): string
+  /** Ids of all registered (available) file icon themes — registration diagnostics. */
+  getRegisteredFileIconThemeIds(): string[]
+  /** Id of the active product icon theme ('' = built-in default codicons). */
+  getProductIconThemeId(): string
   /** Programmatically set a layout size (triggers debounced persist). */
   setLayoutSize(key: 'sidebar' | 'secondarySidebar' | 'panel', value: number): void
   /** Force-flush any pending layout save. Resolves when data is on disk. */

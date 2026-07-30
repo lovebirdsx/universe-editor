@@ -37,8 +37,10 @@ import {
   type IConfigurationContribution,
   type ICustomEditorContribution,
   type IExtensionDescriptionDto,
+  type IIconThemeContribution,
   type IKeybindingContribution,
   type IMenuContribution,
+  type IProductIconThemeContribution,
   type IResolvedJsonValidation,
   type ISubmenuContribution,
   type IThemeContribution,
@@ -97,6 +99,23 @@ export class ExtensionPointTranslator extends Disposable {
       themes: readonly IThemeContribution[],
       context: IThemeRegistrationContext,
     ) => IDisposable,
+    /**
+     * Register a batch of `contributes.iconThemes` entries into the file icon
+     * theme registry. Supplied by ExtensionsContribution; absent in unit tests.
+     */
+    private readonly _registerIconThemes?: (
+      themes: readonly IIconThemeContribution[],
+      context: IThemeRegistrationContext,
+    ) => IDisposable,
+    /**
+     * Register a batch of `contributes.productIconThemes` entries into the
+     * product icon theme registry. Supplied by ExtensionsContribution; absent
+     * in unit tests.
+     */
+    private readonly _registerProductIconThemes?: (
+      themes: readonly IProductIconThemeContribution[],
+      context: IThemeRegistrationContext,
+    ) => IDisposable,
   ) {
     super()
   }
@@ -128,6 +147,26 @@ export class ExtensionPointTranslator extends Disposable {
       }
       if (contributes.themes !== undefined && contributes.themes.length > 0) {
         const handle = this._registerThemes?.(contributes.themes, {
+          extensionId: ext.id,
+          extensionLocation: ext.extensionLocation,
+          extensionIsBuiltin: ext.extensionIsBuiltin,
+        })
+        if (handle !== undefined) {
+          this._register(handle)
+        }
+      }
+      if (contributes.iconThemes !== undefined && contributes.iconThemes.length > 0) {
+        const handle = this._registerIconThemes?.(contributes.iconThemes, {
+          extensionId: ext.id,
+          extensionLocation: ext.extensionLocation,
+          extensionIsBuiltin: ext.extensionIsBuiltin,
+        })
+        if (handle !== undefined) {
+          this._register(handle)
+        }
+      }
+      if (contributes.productIconThemes !== undefined && contributes.productIconThemes.length > 0) {
+        const handle = this._registerProductIconThemes?.(contributes.productIconThemes, {
           extensionId: ext.id,
           extensionLocation: ext.extensionLocation,
           extensionIsBuiltin: ext.extensionIsBuiltin,

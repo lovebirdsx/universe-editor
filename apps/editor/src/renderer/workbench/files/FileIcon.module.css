@@ -6,6 +6,23 @@
   position: relative;
 }
 
+/* Icon-theme stylesheet mode: the contributed CSS paints the glyph through
+   ::before (background-image for SVG paths, content glyphs for font themes).
+   Sizing/positioning lives here so themes only supply the image. */
+.fileIcon.file-icon::before,
+.fileIcon.folder-icon::before,
+.fileIcon.rootfolder-icon::before,
+.fileIcon.folder-expanded-icon::before,
+.fileIcon.rootfolder-expanded-icon::before {
+  display: inline-block;
+  width: 100%;
+  height: 100%;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  text-align: center;
+}
+
 /* The inlined Material SVG carries its own colors; we only size it to fit. */
 .glyph {
   display: inline-flex;

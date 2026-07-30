@@ -1,3 +1,5 @@
 export * from './colorScheme.js'
 export * from './colorRegistry.js'
+export * from './iconRegistry.js'
+export * from './codicons.js'
 export * from './themeService.js'

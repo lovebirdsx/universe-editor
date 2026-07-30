@@ -341,6 +341,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.scm.switchRepo.placeholder': '选择仓库',
   'action.scm.switchRepo.title': '源代码管理：切换仓库…',
   'action.selectAll.title': '全选',
+  'action.selectIconTheme.title': '文件图标主题',
+  'action.selectProductIconTheme.title': '产品图标主题',
   'action.selectTheme.title': '颜色主题',
   'action.setConfigLocation.title': '设置配置目录…',
   'action.setLogLevel.title': '开发人员：设置日志级别...',
@@ -417,6 +419,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'quickAccess.workspaceSymbol.placeholder': '转到工作区中的符号…',
   'quickInput.colorTheme.placeholder': '选择颜色主题',
   'quickInput.commandPalette.placeholder': '输入命令名称…',
+  'quickInput.iconTheme.placeholder': '选择文件图标主题',
+  'quickInput.productIconTheme.placeholder': '选择产品图标主题',
   'quickInput.displayLanguage.auto.description': '使用操作系统的显示语言。',
   'quickInput.displayLanguage.en-US.description': '将编辑器界面显示为英文。',
   'quickInput.displayLanguage.placeholder': '选择显示语言',
@@ -993,6 +997,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'colorTheme.current': '（当前）',
   'colorTheme.dark': '深色',
   'colorTheme.light': '浅色',
+  'iconTheme.current': '（当前）',
 
   // --- Config location ---
   'configLocation.confirm.copy': '复制当前设置',

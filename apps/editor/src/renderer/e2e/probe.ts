@@ -74,6 +74,7 @@ import type { IExtensionManagementService } from '../../shared/ipc/extensionMana
 import type { IExtensionEnablementService } from '../services/extensions/ExtensionEnablementService.js'
 import { EnablementState } from '../services/extensions/ExtensionEnablementService.js'
 import type { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
+import type { WorkbenchThemeService } from '../services/themes/workbenchThemeService.js'
 
 export interface E2EProbeServices {
   readonly commandService: ICommandService
@@ -107,6 +108,7 @@ export interface E2EProbeServices {
   readonly outputModelService: IOutputModelService
   readonly loggerService: ILoggerService
   readonly userKeybindingsService: IUserKeybindingsService
+  readonly themeService: WorkbenchThemeService
   /**
    * Resolves once the one-shot bootstrap focus restore has landed. That restore
    * is fire-and-forget and runs AFTER LifecyclePhase.Restored, so specs must
@@ -288,6 +290,9 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getRecentWorkspacePaths: () => services.workspaceService.recent.map((r) => r.folder.fsPath),
     removeRecentWorkspace: (fsPath) => services.workspaceService.removeRecent(URI.file(fsPath)),
     getLayoutSizes: () => ({ ...services.layoutService.sizes.get() }),
+    getFileIconThemeId: () => services.themeService.getFileIconTheme().id,
+    getRegisteredFileIconThemeIds: () => services.themeService.getFileIconThemes().map((t) => t.id),
+    getProductIconThemeId: () => services.themeService.getProductIconTheme().id,
     setLayoutSize: (key, value) => services.layoutService.setSize(key, value),
     flushLayoutSave: () => services.layoutService.save(),
     triggerError: (message = 'E2E triggerError') => {

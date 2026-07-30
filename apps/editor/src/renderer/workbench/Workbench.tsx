@@ -2,6 +2,7 @@ import { useCallback, useEffect } from 'react'
 import {
   IDialogService,
   ILayoutService,
+  IThemeService,
   PartId,
   LifecyclePhase,
   mark,
@@ -33,8 +34,27 @@ interface WorkbenchProps {
   lifecycle: LifecycleService
 }
 
+/**
+ * Mirror VSCode's `file-icons-enabled` container gate: the icon-theme
+ * stylesheet only matches under `.show-file-icons`, toggled on `document.body`
+ * by the active file icon theme (any theme with an id enables icons; the "None"
+ * choice removes the gate and hides all file icons).
+ */
+function useFileIconsEnabledGate(): void {
+  const themeService = useService(IThemeService)
+  useEffect(() => {
+    const apply = (): void => {
+      document.body.classList.toggle('show-file-icons', themeService.getFileIconTheme().id !== '')
+    }
+    apply()
+    const d = themeService.onDidFileIconThemeChange(apply)
+    return () => d.dispose()
+  }, [themeService])
+}
+
 function WorkbenchShell() {
   useGlobalKeybindingHandler()
+  useFileIconsEnabledGate()
 
   const layoutService = useService(ILayoutService)
   const dialogService = useService(IDialogService) as RendererDialogService
