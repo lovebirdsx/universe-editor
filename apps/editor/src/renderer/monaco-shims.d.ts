@@ -89,6 +89,29 @@ declare module 'monaco-editor/esm/vs/base/browser/ui/hover/hoverDelegateFactory.
 // there); no shipped .d.ts.
 declare module 'monaco-editor/esm/vs/platform/hover/browser/hover.js'
 
+// TokenMetadata decode helpers (the bit-layout const enums are erased in the
+// esm build, so our own encodedTokenAttributes.ts carries runtime constants;
+// the roundtrip test pins our encoding against this decoder). No shipped .d.ts.
+declare module 'monaco-editor/esm/vs/editor/common/encodedTokenAttributes.js' {
+  export class TokenMetadata {
+    static getLanguageId(metadata: number): number
+    static getTokenType(metadata: number): number
+    static containsBalancedBrackets(metadata: number): boolean
+    static getFontStyle(metadata: number): number
+    static getForeground(metadata: number): number
+    static getBackground(metadata: number): number
+    static getClassNameFromMetadata(metadata: number): string
+    static getInlineStyleFromMetadata(metadata: number, colorMap: string[]): string
+    static getPresentationFromMetadata(metadata: number): {
+      foreground: number
+      italic: boolean
+      bold: boolean
+      underline: boolean
+      strikethrough: boolean
+    }
+  }
+}
+
 // Monaco's error-handler singleton (module-level in vs/base/common/errors). The
 // esm build drops ErrorHandler.setUnexpectedErrorHandler, so the workbench
 // reassigns the `unexpectedErrorHandler` instance field directly to route
@@ -96,3 +119,4 @@ declare module 'monaco-editor/esm/vs/platform/hover/browser/hover.js'
 declare module 'monaco-editor/esm/vs/base/common/errors.js' {
   export const errorHandler: { unexpectedErrorHandler: (e: unknown) => void }
 }
+
