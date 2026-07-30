@@ -405,17 +405,21 @@ export class ColorThemeData implements IColorTheme {
         }
       }
     }
-    return [...this.tokenColorIndex.keys()]
+    // Index 0 is the ColorId.None slot and must never hold a real color:
+    // vscode-textmate's frozen ColorMap treats id 0 as "missing". The empty
+    // string is an invalid color no rule can reference. (VSCode TokenColorIndex
+    // likewise starts assigning at 1.)
+    return ['', ...this.tokenColorIndex.keys()]
   }
 
   getTokenColorIndexId(color: string): number {
     if (!this.tokenColorIndex) {
       this.tokenColorIndex = new Map()
     }
-    const normalized = color.toLowerCase()
+    const normalized = color.toUpperCase()
     let index = this.tokenColorIndex.get(normalized)
     if (index === undefined) {
-      index = this.tokenColorIndex.size
+      index = this.tokenColorIndex.size + 1
       this.tokenColorIndex.set(normalized, index)
     }
     return index
@@ -583,7 +587,8 @@ function basenameOf(path: string): string {
   return name.endsWith('.json') ? name.slice(0, -'.json'.length) : name
 }
 
-/** 归一化为 #rrggbb / #rrggbbaa 形式（对齐 VSCode `normalizeColor`）。 */
+/** 归一化为大写 #RRGGBB / #RRGGBBAA 形式（对齐 VSCode `normalizeColor`）。
+ *  大写是硬约定：vscode-textmate 的 frozen ColorMap 按 toUpperCase 查找。 */
 export function normalizeColor(color: Color): string
 export function normalizeColor(color: Color | string | undefined | null): string | undefined
 export function normalizeColor(color: Color | string | undefined | null): string | undefined {
@@ -594,5 +599,5 @@ export function normalizeColor(color: Color | string | undefined | null): string
   if (!parsed) {
     return undefined
   }
-  return Color.Format.CSS.formatHexA(parsed, true)
+  return Color.Format.CSS.formatHexA(parsed, true).toUpperCase()
 }

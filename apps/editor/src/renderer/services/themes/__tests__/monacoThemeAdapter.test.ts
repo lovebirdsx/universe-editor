@@ -67,7 +67,9 @@ describe('toStandaloneThemeData', () => {
     expect(data.colors['diffEditor.insertedTextBackground']).toBe('rgba(46, 160, 67, 0.18)')
     expect(data.rules.length).toBeGreaterThan(0)
     expect(data.rules[0]?.token).toBe('')
-    expect(data.rules[0]?.foreground).toBe('c8c8c8')
+    // The default rule's foreground goes through normalizeColor (uppercase,
+    // like VSCode); monaco parses rule colors case-insensitively.
+    expect(data.rules[0]?.foreground).toBe('C8C8C8')
   })
 
   it('applies lineHighlight overrides', () => {

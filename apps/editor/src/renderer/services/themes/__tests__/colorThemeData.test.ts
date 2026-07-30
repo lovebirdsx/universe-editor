@@ -229,7 +229,7 @@ describe('ColorThemeData', () => {
     const theme = await loadTestTheme()
     const rules = theme.tokenColors
     expect(rules[0]?.scope).toBeUndefined()
-    expect(rules[0]?.settings.foreground).toBe('#d0d0d0')
+    expect(rules[0]?.settings.foreground).toBe('#d0d0d0'.toUpperCase())
     expect(rules[0]?.settings.background).toBe('#101010')
     expect(rules[1]?.scope).toBe('comment')
     expect(rules[2]?.scope).toEqual(['string', 'markup.inline'])
@@ -250,14 +250,17 @@ describe('ColorThemeData', () => {
     expect(scopes.indexOf('keyword')).toBeGreaterThan(scopes.indexOf('comment'))
   })
 
-  it('tokenColorMap assigns stable deduplicated indices', async () => {
+  it('tokenColorMap assigns stable deduplicated indices starting at 1', async () => {
     const theme = await loadTestTheme()
     const map = theme.tokenColorMap
     expect(map.length).toBeGreaterThan(2)
+    // Index 0 is the ColorId.None slot and never a real color.
+    expect(map[0]).toBe('')
     const first = theme.getTokenColorIndexId('#608060')
+    expect(first).toBeGreaterThanOrEqual(1)
     expect(theme.getTokenColorIndexId('#608060')).toBe(first)
     expect(theme.getTokenColorIndexId('#608060'.toUpperCase())).toBe(first)
-    expect(map[first]).toBe('#608060')
+    expect(map[first]).toBe('#608060'.toUpperCase())
   })
 
   it('storage snapshot round-trips colors, token colors and semantic state', async () => {
@@ -288,9 +291,9 @@ describe('ColorThemeData', () => {
 })
 
 describe('normalizeColor', () => {
-  it('normalizes hex strings to #rrggbb(aa)', () => {
-    expect(normalizeColor('#abc')).toBe('#aabbcc')
-    expect(normalizeColor('#aabbccdd')).toBe('#aabbccdd')
+  it('normalizes hex strings to uppercase #RRGGBB(AA) (vscode-textmate looks up colors uppercased)', () => {
+    expect(normalizeColor('#abc')).toBe('#AABBCC')
+    expect(normalizeColor('#aabbccdd')).toBe('#AABBCCDD')
     expect(normalizeColor('rgba(1, 2, 3, 0.5)')).toBe('#01020380')
     expect(normalizeColor(undefined)).toBeUndefined()
     expect(normalizeColor('garbage')).toBeUndefined()
