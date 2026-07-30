@@ -74,6 +74,7 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   buttons: readonly IQuickInputButton[] = []
   okLabel: string | undefined
   keepOpenOnAccept = false
+  keyMods = { ctrl: false, alt: false }
   placeholder: string | undefined
   items: readonly QuickPickInput<T>[] = []
   prefix = ''

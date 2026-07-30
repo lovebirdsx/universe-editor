@@ -10,6 +10,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  GroupDirection,
   IEditorGroupsService,
   IEditorResolverService,
   IFileSearchService,
@@ -154,9 +155,31 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
 
   /** Activate the editor if already open in any group, else open it via the
    *  editor resolver so contributed custom editors (e.g. the PDF viewer) win over
-   *  the plain text editor — mirroring how the Explorer opens files. */
-  private _open(uri: URI, label: string, opts: { addRecent: boolean; pinned: boolean }): void {
+   *  the plain text editor — mirroring how the Explorer opens files. With
+   *  `openToSide` (Ctrl/Alt+Enter), the target is the group to the right of the
+   *  active one (created when absent) and dedupe happens only within it, so a
+   *  file already open elsewhere gets a second copy — mirroring VSCode's
+   *  SIDE_GROUP quick open semantics. */
+  private _open(
+    uri: URI,
+    label: string,
+    opts: { addRecent: boolean; pinned: boolean; openToSide: boolean },
+  ): void {
     if (opts.addRecent) this._recentFiles.add(uri, label)
+    if (opts.openToSide) {
+      const active = this._groups.activeGroup
+      let side = this._groups.findGroup({ direction: GroupDirection.Right }, active, true)
+      if (!side || side === active) side = this._groups.addGroup(active, GroupDirection.Right)
+      this._groups.activateGroup(side)
+      for (const editor of side.editors) {
+        if (editor.resource && this._uriIdentity.isEqual(editor.resource, uri)) {
+          side.setActive(editor)
+          return
+        }
+      }
+      void this._editorResolver.openEditor(uri, { pinned: true })
+      return
+    }
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
         if (editor.resource && this._uriIdentity.isEqual(editor.resource, uri)) {
@@ -171,7 +194,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
 
   private _acceptPick(
     pick: IQuickPickItem | undefined,
-    opts: { addRecent: boolean; pinned: boolean },
+    opts: { addRecent: boolean; pinned: boolean; openToSide: boolean },
   ): void {
     if (!pick) return
     const decoded = decodeEditorPickId(pick.id)
@@ -292,8 +315,9 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     disposables.add(
       picker.onDidAccept((items) => {
         const pick = items[0]
+        const openToSide = picker.keyMods.ctrl || picker.keyMods.alt
         picker.hide()
-        this._acceptPick(pick, { addRecent: true, pinned: true })
+        this._acceptPick(pick, { addRecent: true, pinned: true, openToSide })
       }),
     )
     disposables.add(toDisposable(() => seq++))
@@ -338,8 +362,9 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     disposables.add(
       picker.onDidAccept((items) => {
         const pick = items[0]
+        const openToSide = picker.keyMods.ctrl || picker.keyMods.alt
         picker.hide()
-        this._acceptPick(pick, { addRecent: false, pinned: false })
+        this._acceptPick(pick, { addRecent: false, pinned: false, openToSide })
       }),
     )
 

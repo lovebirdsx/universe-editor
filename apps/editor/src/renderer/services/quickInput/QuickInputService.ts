@@ -17,6 +17,7 @@ import type {
   IQuickPick,
   IQuickPickItem,
   IQuickInputButton,
+  IKeyMods,
   IPickOptions,
   IInputOptions,
   QuickPickFilterMode,
@@ -89,6 +90,7 @@ export class QuickInputService implements IQuickInputService {
     let _okLabel: string | undefined
     let _keepOpenOnAccept = false
     let _autoFocusFirstItem = true
+    let _keyMods: IKeyMods = { ctrl: false, alt: false }
     let _visible = false
 
     const pushState = (): void => {
@@ -115,7 +117,10 @@ export class QuickInputService implements IQuickInputService {
         okLabel: _okLabel,
         keepOpenOnAccept: _keepOpenOnAccept,
         autoFocusFirstItem: _autoFocusFirstItem,
-        onAccept: (selected) => onDidAccept.fire(selected as T[]),
+        onAccept: (selected, mods) => {
+          if (mods) _keyMods = mods
+          onDidAccept.fire(selected as T[])
+        },
         onValueChange: (value) => {
           _value = value
           // A user edit consumes any host-pushed valueSelection (e.g. the '#'
@@ -274,6 +279,9 @@ export class QuickInputService implements IQuickInputService {
       set autoFocusFirstItem(v) {
         _autoFocusFirstItem = v ?? true
         pushState()
+      },
+      get keyMods() {
+        return _keyMods
       },
       onDidAccept: onDidAccept.event,
       onDidHide: onDidHide.event,

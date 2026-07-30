@@ -209,4 +209,21 @@ describe('QuickInputService — onDidChangeState', () => {
 
     qp.dispose()
   })
+
+  it('keyMods snapshots the modifiers of the most recent accept (createQuickPick path)', () => {
+    const { svc } = createService()
+    const qp = svc.createQuickPick<{ id: string; label: string }>()
+    qp.show()
+
+    expect(qp.keyMods).toEqual({ ctrl: false, alt: false })
+
+    let accepted: { id: string; label: string }[] | undefined
+    qp.onDidAccept((items) => (accepted = items))
+    svc.currentState?.onAccept?.([{ id: 'a', label: 'A' }], { ctrl: true, alt: false })
+
+    expect(accepted).toEqual([{ id: 'a', label: 'A' }])
+    expect(qp.keyMods).toEqual({ ctrl: true, alt: false })
+
+    qp.dispose()
+  })
 })

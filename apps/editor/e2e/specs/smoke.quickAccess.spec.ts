@@ -10,6 +10,7 @@
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { URI } from '@universe-editor/platform'
 import { expect, test } from '../fixtures/sharedApp.js'
 
 async function placeholderOf(input: import('@playwright/test').Locator): Promise<string | null> {
@@ -154,6 +155,41 @@ test.describe('@p0 quick access', () => {
     await page.keyboard.press('Escape')
     await workbench.quickInput.waitForHidden()
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  })
+
+  test('ctrl+enter opens the picked file to the side', async ({ page, workbench }) => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-quickside-'))
+    await fs.writeFile(path.join(tmpDir, 'a.ts'), 'export const a = 1\n')
+    await fs.writeFile(path.join(tmpDir, 'b.ts'), 'export const b = 2\n')
+    try {
+      await workbench.waitForRestored()
+      await workbench.openWorkspace(tmpDir)
+      await page.evaluate(
+        ([fsPath]) => window.__E2E__!.openFileUri(fsPath!, { pinned: true }),
+        [path.join(tmpDir, 'a.ts')],
+      )
+      await expect(workbench.editor.monacoEditor).toBeVisible()
+      await expect.poll(() => workbench.getEditorGroupCount()).toBe(1)
+
+      await page.evaluate(() => {
+        void window.__E2E__!.runCommand('workbench.action.quickOpen')
+      })
+      await workbench.quickInput.waitForVisible()
+      await workbench.quickInput.input.fill('b.ts')
+      const bOption = workbench.quickInput.dialog.getByRole('option', { name: /b\.ts/ })
+      await expect(bOption).toBeVisible()
+
+      await page.keyboard.press('Control+Enter')
+      await workbench.quickInput.waitForHidden()
+
+      // A second group opened to the side and became active, showing b.ts.
+      await expect.poll(() => workbench.getEditorGroupCount()).toBe(2)
+      await expect
+        .poll(() => workbench.getActiveEditorUri())
+        .toBe(URI.file(path.join(tmpDir, 'b.ts')).toString())
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+    }
   })
 
   test('restores editor focus after closing with Escape', async ({ page, workbench }) => {

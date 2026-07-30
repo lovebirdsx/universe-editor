@@ -235,6 +235,13 @@ export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
    */
   autoFocusFirstItem?: boolean
 
+  /**
+   * Modifier keys held at the most recent accept (Enter / click). Read inside an
+   * `onDidAccept` handler to branch on e.g. Ctrl+Enter. Mirrors VSCode's
+   * `picker.keyMods`. Defaults to `{ ctrl: false, alt: false }`.
+   */
+  readonly keyMods: IKeyMods
+
   readonly onDidAccept: Event<T[]>
   readonly onDidHide: Event<void>
   readonly onDidChangeValue: Event<string>

@@ -65,6 +65,7 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   buttons: readonly IQuickInputButton[] = []
   okLabel: string | undefined
   keepOpenOnAccept = false
+  keyMods = { ctrl: false, alt: false }
   placeholder: string | undefined
   items: readonly QuickPickInput<T>[] = []
   prefix = ''
@@ -208,28 +209,49 @@ function makeFileService(existing: Iterable<string> = []): IFileServiceType {
   } as unknown as IFileServiceType
 }
 
-function makeGroups(openEditors: EditorInput[] = []) {
+function makeGroups(openEditors: EditorInput[] = [], sideEditors: EditorInput[] = []) {
   const activatedGroupIds: number[] = []
   const setActiveLog: EditorInput[] = []
-  const group = {
-    id: 1,
-    editors: openEditors,
+  let nextId = 1
+  const makeGroup = (editors: EditorInput[]) => ({
+    id: nextId++,
+    editors,
     openEditor() {},
     setActive(editor: EditorInput) {
       setActiveLog.push(editor)
     },
-  }
+  })
+  const group = makeGroup(openEditors)
+  const all = sideEditors.length > 0 ? [group, makeGroup(sideEditors)] : [group]
+  let active = group
   const groups = {
-    activeGroup: group,
-    groups: [group],
+    get activeGroup() {
+      return active
+    },
+    get groups() {
+      return all
+    },
     activateGroup(g: { id: number }) {
       activatedGroupIds.push(g.id)
+      const found = all.find((x) => x.id === g.id)
+      if (found) active = found
     },
     getGroup(id: number) {
-      return id === group.id ? group : undefined
+      return all.find((x) => x.id === id)
+    },
+    findGroup(_scope: unknown, source?: { id: number }, wrap?: boolean) {
+      const idx = all.indexOf((source ?? active) as never)
+      const next = all[idx + 1]
+      if (next) return next
+      return wrap ? all[0] : undefined
+    },
+    addGroup() {
+      const g = makeGroup([])
+      all.push(g)
+      return g
     },
   } as unknown as IEditorGroupsServiceType
-  return { groups, group, activatedGroupIds, setActiveLog }
+  return { groups, group, activatedGroupIds, setActiveLog, all }
 }
 
 class FakeEditorInput extends EditorInput {
@@ -287,19 +309,24 @@ function setup(
     exclude?: IExcludeService
     existingFiles?: Iterable<string>
     openEditors?: EditorInput[]
+    sideEditors?: EditorInput[]
   } = {},
 ) {
   const root = opts.root === undefined ? URI.file('/ws') : opts.root
   const workspace = new FakeWorkspaceService(root)
   const fileSearch = makeFileSearch(root ?? URI.file('/ws'))
   const recent = new FakeRecentFilesService(opts.recent ?? [])
-  const groupsFake = makeGroups(opts.openEditors ?? [])
-  const recentEditors = new FakeRecentEditorsService(
-    (opts.openEditors ?? []).map((editor) => ({
+  const groupsFake = makeGroups(opts.openEditors ?? [], opts.sideEditors ?? [])
+  const recentEditors = new FakeRecentEditorsService([
+    ...(opts.openEditors ?? []).map((editor) => ({
       editor,
-      group: groupsFake.group as unknown as IEditorGroup,
+      group: groupsFake.all[0] as unknown as IEditorGroup,
     })),
-  )
+    ...(opts.sideEditors ?? []).map((editor) => ({
+      editor,
+      group: groupsFake.all[1] as unknown as IEditorGroup,
+    })),
+  ])
   const services = new ServiceCollection()
   services.set(IWorkspaceService, workspace)
   services.set(IFileSearchService, fileSearch)
@@ -573,5 +600,43 @@ describe('FileQuickAccessProvider', () => {
     await flushPromises()
 
     expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['Settings', 'a.ts'])
+  })
+
+  it('ctrl+accept opens to the side: a new group is created when there is only one', async () => {
+    const { provider, fileSearch, resolver, groupsFake } = setup()
+    fileSearch.resultPaths = ['/ws/src/b.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    picker.keyMods = { ctrl: true, alt: false }
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('b')
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+
+    // addGroup appended a second group and it became the active (side) target.
+    expect(groupsFake.all).toHaveLength(2)
+    expect(groupsFake.activatedGroupIds).toEqual([2])
+    expect(resolver.opened).toHaveLength(1)
+    expect(resolver.opened[0]!.uri.fsPath).toBe(URI.file('/ws/src/b.ts').fsPath)
+    expect(resolver.opened[0]!.pinned).toBe(true)
+  })
+
+  it('ctrl+accept reuses the existing side group and activates a match already open there', async () => {
+    const sideEditor = new FakeEditorInput('file', URI.file('/ws/src/b.ts'), 'b.ts')
+    const { provider, fileSearch, resolver, groupsFake } = setup({ sideEditors: [sideEditor] })
+    fileSearch.resultPaths = ['/ws/src/b.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    picker.keyMods = { ctrl: true, alt: false }
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('b')
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+
+    // Existing side group reused (no new group), matched editor activated in it.
+    expect(groupsFake.all).toHaveLength(2)
+    expect(groupsFake.activatedGroupIds).toEqual([2])
+    expect(groupsFake.setActiveLog).toEqual([sideEditor])
+    expect(resolver.opened).toHaveLength(0)
   })
 })
