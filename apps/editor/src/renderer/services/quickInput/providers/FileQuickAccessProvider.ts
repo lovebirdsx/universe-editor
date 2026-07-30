@@ -3,9 +3,10 @@
  *  Default quick access (no prefix): Go to File. With a workspace open it warms
  *  the full file list once when the picker opens (reusing the @-mention file
  *  cache) and then filters it in-memory on every keystroke — no per-keystroke
- *  disk walk. Recent files show for an empty query; with no workspace it falls
- *  back to the recent files list. Mirrors VSCode's file quick access, whose
- *  cached-listing fast path is what keeps typing responsive on large trees.
+ *  disk walk. Open editors (all types, MRU order) head the empty-query list and
+ *  join fuzzy matching while typing, followed by recent files; with no workspace
+ *  it falls back to the recent files list. Mirrors VSCode's file quick access,
+ *  whose cached-listing fast path is what keeps typing responsive on large trees.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -27,6 +28,11 @@ import { compareByScoreThenPath, scoreFuzzyMatch } from '@universe-editor/workbe
 import { IRecentFilesService } from '../../recentFiles/recentFilesService.js'
 import { IExcludeService } from '../../exclude/ExcludeService.js'
 import { loadWorkspaceFiles, type MentionFileEntry } from '../../acp/mentionFileSearch.js'
+import {
+  decodeEditorPickId,
+  encodeEditorPickId,
+  IRecentEditorsService,
+} from '../../editor/RecentEditorsService.js'
 import { resourceIconId } from '../quickPickResourceIcon.js'
 
 const GO_TO_FILE_MAX_RESULTS = 512
@@ -41,6 +47,14 @@ function createFilePick(root: URI, uri: URI, labelOverride?: string): IQuickPick
   const rel = workspaceRelativePath(root, uri)
   const label = labelOverride ?? rel.split(/[/\\]/).at(-1) ?? uri.fsPath
   return { id: uri.toString(), label, description: rel, iconId: resourceIconId(uri) }
+}
+
+/** An open editor as a pick candidate: the pick itself plus the strings the
+ *  fuzzy scorer matches against (label + path, mirroring file entries). */
+interface EditorPickCandidate {
+  readonly pick: IQuickPickItem
+  readonly name: string
+  readonly path: string
 }
 
 function hasPathSeparator(value: string): boolean {
@@ -95,12 +109,47 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IEditorResolverService private readonly _editorResolver: IEditorResolverService,
     @IFileService private readonly _fileService: IFileService,
+    @IRecentEditorsService private readonly _recentEditors: IRecentEditorsService,
   ) {}
 
   provide(picker: IQuickPick<IQuickPickItem>, options: IQuickAccessProviderRunOptions): void {
     const root = this._workspace.current?.folder
     if (root) this._provideWorkspace(picker, options, root)
     else this._provideRecentOnly(picker, options)
+  }
+
+  /** Snapshot the currently open editors (all types, MRU order) as pick
+   *  candidates. Resource-backed editors reuse the resource URI as pick id so
+   *  they dedupe against file entries and activate through `_open`; purely
+   *  virtual editors (Settings, Welcome, terminals…) get an encoded
+   *  (groupId, editorId) id that `_acceptPick` resolves to a live activation. */
+  private _buildEditorCandidates(root: URI | undefined): EditorPickCandidate[] {
+    const out: EditorPickCandidate[] = []
+    const seen = new Set<string>()
+    for (const { editor, group } of this._recentEditors.getRecentEditors()) {
+      const resource = editor.resource
+      const id = resource ? resource.toString() : encodeEditorPickId(group.id, editor.id)
+      if (seen.has(id)) continue
+      seen.add(id)
+      const iconId = editor.getIconId?.() ?? (resource ? resourceIconId(resource) : undefined)
+      const description =
+        resource?.scheme === 'file'
+          ? root
+            ? workspaceRelativePath(root, resource)
+            : resource.fsPath
+          : undefined
+      out.push({
+        pick: {
+          id,
+          label: editor.label,
+          ...(description ? { description } : {}),
+          ...(iconId ? { iconId } : {}),
+        },
+        name: editor.label,
+        path: description ?? editor.label,
+      })
+    }
+    return out
   }
 
   /** Activate the editor if already open in any group, else open it via the
@@ -120,6 +169,24 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     void this._editorResolver.openEditor(uri, { pinned: opts.pinned })
   }
 
+  private _acceptPick(
+    pick: IQuickPickItem | undefined,
+    opts: { addRecent: boolean; pinned: boolean },
+  ): void {
+    if (!pick) return
+    const decoded = decodeEditorPickId(pick.id)
+    if (decoded) {
+      const group = this._groups.getGroup(decoded.groupId)
+      const editor = group?.editors.find((e) => e.id === decoded.editorId)
+      if (group && editor) {
+        this._groups.activateGroup(group)
+        group.setActive(editor)
+      }
+      return
+    }
+    this._open(URI.parse(pick.id), pick.label, opts)
+  }
+
   private _provideWorkspace(
     picker: IQuickPick<IQuickPickItem>,
     options: IQuickAccessProviderRunOptions,
@@ -129,7 +196,20 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     picker.filterExternally = true
     picker.placeholder = localize('quickInput.goToFile.placeholder', 'Go to File…')
 
-    let recentItems: readonly IQuickPickItem[] = []
+    // Open editors (all types, MRU order) participate both as the head of the
+    // empty-query list and as fuzzy-match candidates while typing — mirroring
+    // VSCode, where Ctrl+P mixes open editors with recent files.
+    const editorCandidates = this._buildEditorCandidates(root)
+    const editorPicks = editorCandidates.map((c) => c.pick)
+
+    let recentFileItems: readonly IQuickPickItem[] = []
+    const emptyQueryItems = (): IQuickPickItem[] => {
+      const editorIds = new Set(editorPicks.map((p) => p.id))
+      return [...editorPicks, ...recentFileItems.filter((it) => !editorIds.has(it.id))].slice(
+        0,
+        GO_TO_FILE_MAX_RESULTS,
+      )
+    }
     // The cached full file listing (loaded once when the picker opens). Filtering
     // then runs in-memory on every keystroke — no per-keystroke disk walk.
     let allFiles: readonly MentionFileEntry[] | undefined
@@ -139,15 +219,32 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     // must all match; a basename hit outranks a path hit; results are capped at 512.
     const filterInMemory = (pattern: string): IQuickPickItem[] => {
       if (allFiles === undefined) return []
-      const scored: { entry: MentionFileEntry; score: number }[] = []
-      for (const entry of allFiles) {
-        const score = scoreFileMatch(entry.name, entry.relPath, pattern)
-        if (score >= 0) scored.push({ entry, score })
+      const editorHits: { pick: IQuickPickItem; score: number; path: string }[] = []
+      const editorIds = new Set<string>()
+      for (const cand of editorCandidates) {
+        const score = scoreFileMatch(cand.name, cand.path, pattern)
+        if (score >= 0) {
+          editorHits.push({ pick: cand.pick, score, path: cand.path })
+          editorIds.add(cand.pick.id)
+        }
       }
-      scored.sort((a, b) =>
-        compareByScoreThenPath(a.score, b.score, a.entry.relPath, b.entry.relPath),
-      )
-      return scored.slice(0, GO_TO_FILE_MAX_RESULTS).map((s) => entryToPick(s.entry))
+      const fileHits: { entry: MentionFileEntry; score: number }[] = []
+      for (const entry of allFiles) {
+        if (editorIds.has(entry.uri)) continue
+        const score = scoreFileMatch(entry.name, entry.relPath, pattern)
+        if (score >= 0) fileHits.push({ entry, score })
+      }
+      const merged: {
+        score: number
+        path: string
+        pick?: IQuickPickItem
+        entry?: MentionFileEntry
+      }[] = [
+        ...editorHits.map((h) => ({ score: h.score, path: h.path, pick: h.pick })),
+        ...fileHits.map((h) => ({ score: h.score, path: h.entry.relPath, entry: h.entry })),
+      ]
+      merged.sort((a, b) => compareByScoreThenPath(a.score, b.score, a.path, b.path))
+      return merged.slice(0, GO_TO_FILE_MAX_RESULTS).map((s) => s.pick ?? entryToPick(s.entry!))
     }
 
     // When the query looks like a path (contains a separator), probe the exact
@@ -176,7 +273,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       const pattern = value.trim()
       if (pattern.length === 0) {
         picker.busy = false
-        picker.items = recentItems
+        picker.items = emptyQueryItems()
         return
       }
       if (allFiles === undefined) {
@@ -196,10 +293,14 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       picker.onDidAccept((items) => {
         const pick = items[0]
         picker.hide()
-        if (pick) this._open(URI.parse(pick.id), pick.label, { addRecent: true, pinned: true })
+        this._acceptPick(pick, { addRecent: true, pinned: true })
       }),
     )
     disposables.add(toDisposable(() => seq++))
+
+    // Editor picks are available synchronously — seed them before the async
+    // recent-files list lands.
+    if (picker.value.trim().length === 0) picker.items = emptyQueryItems()
 
     // Warm the full listing once (cached with a short TTL, shared with @-mention).
     // While it loads, the input stays responsive; the current query re-runs when
@@ -218,9 +319,9 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       if (token.isCancellationRequested) return
       // Show all recent files (in-workspace shown by relative path, others by
       // full fsPath) so this picker fully subsumes "Open Recent File…".
-      recentItems = recent.map((f) => createFilePick(root, f.uri, f.name))
+      recentFileItems = recent.map((f) => createFilePick(root, f.uri, f.name))
       // Only seed the list if the user hasn't started typing a query yet.
-      if (picker.value.trim().length === 0) picker.items = recentItems
+      if (picker.value.trim().length === 0) picker.items = emptyQueryItems()
     })
   }
 
@@ -232,22 +333,30 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     picker.matchOnDescription = true
     picker.placeholder = localize('quickInput.openRecentFile.placeholder', 'Open Recent File…')
 
+    const editorPicks = this._buildEditorCandidates(undefined).map((c) => c.pick)
+
     disposables.add(
       picker.onDidAccept((items) => {
         const pick = items[0]
         picker.hide()
-        if (pick) this._open(URI.parse(pick.id), pick.label, { addRecent: false, pinned: false })
+        this._acceptPick(pick, { addRecent: false, pinned: false })
       }),
     )
 
     void this._recentFiles.getAll().then((all) => {
       if (token.isCancellationRequested) return
-      picker.items = all.map((f) => ({
-        id: f.uri.toString(),
-        label: f.name,
-        description: f.uri.fsPath,
-        iconId: resourceIconId(f.uri),
-      }))
+      const editorIds = new Set(editorPicks.map((p) => p.id))
+      picker.items = [
+        ...editorPicks,
+        ...all
+          .map((f) => ({
+            id: f.uri.toString(),
+            label: f.name,
+            description: f.uri.fsPath,
+            iconId: resourceIconId(f.uri),
+          }))
+          .filter((it) => !editorIds.has(it.id)),
+      ]
     })
   }
 }

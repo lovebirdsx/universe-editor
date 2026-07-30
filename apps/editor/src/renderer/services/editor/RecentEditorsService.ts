@@ -31,6 +31,28 @@ export interface IRecentEditorsService {
 
 export const IRecentEditorsService = createDecorator<IRecentEditorsService>('recentEditorsService')
 
+// Encodes (groupId, editorId) into a single quick-pick id so consumers can decode
+// it back without an out-of-band map. The `editor::` prefix keeps the id distinct
+// from resource-URI pick ids (e.g. in the Ctrl+P file picker). Editor ids are
+// opaque strings and never contain `::` in practice; we still join with a
+// delimiter unlikely to appear.
+const PICK_ID_PREFIX = 'editor::'
+const PICK_ID_DELIMITER = '::'
+
+export function encodeEditorPickId(groupId: number, editorId: string): string {
+  return `${PICK_ID_PREFIX}${groupId}${PICK_ID_DELIMITER}${editorId}`
+}
+
+export function decodeEditorPickId(id: string): { groupId: number; editorId: string } | undefined {
+  if (!id.startsWith(PICK_ID_PREFIX)) return undefined
+  const rest = id.slice(PICK_ID_PREFIX.length)
+  const sepIdx = rest.indexOf(PICK_ID_DELIMITER)
+  if (sepIdx === -1) return undefined
+  const groupId = Number(rest.slice(0, sepIdx))
+  if (!Number.isInteger(groupId)) return undefined
+  return { groupId, editorId: rest.slice(sepIdx + PICK_ID_DELIMITER.length) }
+}
+
 interface MruEntry {
   readonly groupId: number
   readonly editorId: string

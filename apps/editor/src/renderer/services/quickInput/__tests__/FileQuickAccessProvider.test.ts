@@ -3,11 +3,13 @@
  *  Tests for FileQuickAccessProvider: warms the full file listing once when the
  *  picker opens (reusing the @-mention cache) then filters it in-memory on every
  *  keystroke, the exact-path fast path, the 512 result cap, token cancellation,
+ *  open editors (all types) mixed into the empty-query list and fuzzy matching,
  *  and the no-workspace fallback to the recent files list.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  EditorInput,
   Emitter,
   IEditorGroupsService,
   IEditorResolverService,
@@ -21,6 +23,7 @@ import {
   UriIdentityService,
   IUriIdentityService,
   type CancellationToken,
+  type IEditorGroup,
   type IEditorResolverService as IEditorResolverServiceType,
   type IDisposable,
   type IEditorGroupsService as IEditorGroupsServiceType,
@@ -39,6 +42,7 @@ import { FileQuickAccessProvider } from '../providers/FileQuickAccessProvider.js
 import { IExcludeService } from '../../exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../exclude/testing/fakeExcludeService.js'
 import { IRecentFilesService, type IRecentFile } from '../../recentFiles/recentFilesService.js'
+import { IRecentEditorsService } from '../../editor/RecentEditorsService.js'
 import { invalidateMentionFileCache } from '../../acp/mentionFileSearch.js'
 
 class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
@@ -204,17 +208,55 @@ function makeFileService(existing: Iterable<string> = []): IFileServiceType {
   } as unknown as IFileServiceType
 }
 
-function makeGroups(): IEditorGroupsServiceType {
+function makeGroups(openEditors: EditorInput[] = []) {
+  const activatedGroupIds: number[] = []
+  const setActiveLog: EditorInput[] = []
   const group = {
-    editors: [],
+    id: 1,
+    editors: openEditors,
     openEditor() {},
-    setActive() {},
+    setActive(editor: EditorInput) {
+      setActiveLog.push(editor)
+    },
   }
-  return {
+  const groups = {
     activeGroup: group,
     groups: [group],
-    activateGroup() {},
+    activateGroup(g: { id: number }) {
+      activatedGroupIds.push(g.id)
+    },
+    getGroup(id: number) {
+      return id === group.id ? group : undefined
+    },
   } as unknown as IEditorGroupsServiceType
+  return { groups, group, activatedGroupIds, setActiveLog }
+}
+
+class FakeEditorInput extends EditorInput {
+  constructor(
+    private readonly _typeId: string,
+    private readonly _resource: URI | undefined,
+    private readonly _name: string,
+  ) {
+    super()
+  }
+  override get typeId(): string {
+    return this._typeId
+  }
+  override get resource(): URI | undefined {
+    return this._resource
+  }
+  override getName(): string {
+    return this._name
+  }
+}
+
+class FakeRecentEditorsService implements IRecentEditorsService {
+  declare readonly _serviceBrand: undefined
+  constructor(private readonly _items: readonly { editor: EditorInput; group: IEditorGroup }[]) {}
+  getRecentEditors() {
+    return this._items
+  }
 }
 
 /** Records openEditor calls so tests can assert the picker routes through the
@@ -244,17 +286,26 @@ function setup(
     recent?: readonly IRecentFile[]
     exclude?: IExcludeService
     existingFiles?: Iterable<string>
+    openEditors?: EditorInput[]
   } = {},
 ) {
   const root = opts.root === undefined ? URI.file('/ws') : opts.root
   const workspace = new FakeWorkspaceService(root)
   const fileSearch = makeFileSearch(root ?? URI.file('/ws'))
   const recent = new FakeRecentFilesService(opts.recent ?? [])
+  const groupsFake = makeGroups(opts.openEditors ?? [])
+  const recentEditors = new FakeRecentEditorsService(
+    (opts.openEditors ?? []).map((editor) => ({
+      editor,
+      group: groupsFake.group as unknown as IEditorGroup,
+    })),
+  )
   const services = new ServiceCollection()
   services.set(IWorkspaceService, workspace)
   services.set(IFileSearchService, fileSearch)
-  services.set(IEditorGroupsService, makeGroups())
+  services.set(IEditorGroupsService, groupsFake.groups)
   services.set(IRecentFilesService, recent)
+  services.set(IRecentEditorsService, recentEditors)
   services.set(IExcludeService, opts.exclude ?? new FakeExcludeService())
   services.set(IUriIdentityService, new UriIdentityService('linux'))
   services.set(IFileService, makeFileService(opts.existingFiles))
@@ -263,7 +314,7 @@ function setup(
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst as unknown as IInstantiationService)
   const provider = inst.createInstance(FileQuickAccessProvider)
-  return { provider, fileSearch, workspace, resolver }
+  return { provider, fileSearch, workspace, resolver, groupsFake }
 }
 
 function run(
@@ -441,5 +492,86 @@ describe('FileQuickAccessProvider', () => {
     expect(resolver.opened).toHaveLength(1)
     expect(resolver.opened[0]!.uri.fsPath).toBe(URI.file('/ws/doc.pdf').fsPath)
     expect(resolver.opened[0]!.pinned).toBe(true)
+  })
+
+  it('heads the empty query with all open editors, deduping recent files by resource', async () => {
+    const fileEditor = new FakeEditorInput('file', URI.file('/ws/src/a.ts'), 'a.ts')
+    const preview = new FakeEditorInput(
+      'markdown.preview',
+      URI.parse('markdown-preview:/ws/src/a.md'),
+      'Preview a.md',
+    )
+    const settings = new FakeEditorInput('settings', undefined, 'Settings')
+    const recent: IRecentFile[] = [
+      { uri: URI.file('/ws/src/a.ts'), name: 'a.ts', lastOpened: 2 },
+      { uri: URI.file('/ws/other.ts'), name: 'other.ts', lastOpened: 1 },
+    ]
+    const { provider } = setup({ recent, openEditors: [fileEditor, preview, settings] })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    // Open editors in MRU order, then recents with the already-open a.ts dropped.
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual([
+      'a.ts',
+      'Preview a.md',
+      'Settings',
+      'other.ts',
+    ])
+    expect(picker.items[0]).toMatchObject({
+      id: URI.file('/ws/src/a.ts').toString(),
+      description: 'src/a.ts',
+    })
+  })
+
+  it('matches open non-text editors while typing', async () => {
+    const settings = new FakeEditorInput('settings', undefined, 'Settings')
+    const { provider, fileSearch } = setup({ openEditors: [settings] })
+    fileSearch.resultPaths = ['/ws/src/a.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('sett')
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['Settings'])
+  })
+
+  it('accepting a virtual editor pick activates the live editor instead of resolving', async () => {
+    const settings = new FakeEditorInput('settings', undefined, 'Settings')
+    const { provider, resolver, groupsFake } = setup({ openEditors: [settings] })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    expect(picker.items[0]).toMatchObject({ label: 'Settings' })
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+
+    expect(groupsFake.activatedGroupIds).toEqual([1])
+    expect(groupsFake.setActiveLog).toEqual([settings])
+    expect(resolver.opened).toHaveLength(0)
+  })
+
+  it('accepting a resource-backed editor pick activates the open editor by URI', async () => {
+    const fileEditor = new FakeEditorInput('file', URI.file('/ws/src/a.ts'), 'a.ts')
+    const { provider, resolver, groupsFake } = setup({ openEditors: [fileEditor] })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+
+    expect(groupsFake.setActiveLog).toEqual([fileEditor])
+    expect(resolver.opened).toHaveLength(0)
+  })
+
+  it('with no workspace, lists open editors ahead of recent files', async () => {
+    const settings = new FakeEditorInput('settings', undefined, 'Settings')
+    const recent: IRecentFile[] = [{ uri: URI.file('/home/a.ts'), name: 'a.ts', lastOpened: 1 }]
+    const { provider } = setup({ root: null, recent, openEditors: [settings] })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['Settings', 'a.ts'])
   })
 })

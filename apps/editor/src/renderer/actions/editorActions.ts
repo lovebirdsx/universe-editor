@@ -31,7 +31,11 @@ import { focusEditorInput } from '../services/editor/editorFocus.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IClosedEditorsService } from '../services/editor/ClosedEditorsService.js'
-import { IRecentEditorsService } from '../services/editor/RecentEditorsService.js'
+import {
+  decodeEditorPickId,
+  encodeEditorPickId,
+  IRecentEditorsService,
+} from '../services/editor/RecentEditorsService.js'
 import { resourceIconId } from '../services/quickInput/quickPickResourceIcon.js'
 import { resolveTargetEditor } from './editorActionHelpers.js'
 
@@ -341,18 +345,13 @@ export class MoveEditorRightInGroupAction extends Action2 {
 // Quick-pick MRU editor switching (Ctrl+Tab / Ctrl+Shift+Tab)
 // ---------------------------------------------------------------------------
 
-// Encodes (groupId, editorId) into a single quick-pick id so we can decode it
-// back without an out-of-band map. Editor ids are opaque strings and never
-// contain `::` in practice; we still join with a delimiter unlikely to appear.
-const PICK_ID_DELIMITER = '::'
-
 function buildRecentEditorPickItems(recentService: IRecentEditorsService): IQuickPickItem[] {
   const items: IQuickPickItem[] = []
   for (const { editor, group } of recentService.getRecentEditors()) {
     const iconId =
       editor.getIconId?.() ?? (editor.resource ? resourceIconId(editor.resource) : undefined)
     items.push({
-      id: `${group.id}${PICK_ID_DELIMITER}${editor.id}`,
+      id: encodeEditorPickId(group.id, editor.id),
       label: editor.label,
       description: localize('quickOpenRecentEditor.group', 'Group {id}', { id: group.id }),
       ...(iconId ? { iconId } : {}),
@@ -365,13 +364,11 @@ function resolveRecentEditorPick(
   groups: IEditorGroupsService,
   id: string,
 ): { group: IEditorGroup; editor: EditorInput } | undefined {
-  const sepIdx = id.indexOf(PICK_ID_DELIMITER)
-  if (sepIdx === -1) return undefined
-  const groupId = Number(id.slice(0, sepIdx))
-  const editorId = id.slice(sepIdx + PICK_ID_DELIMITER.length)
-  const group = groups.getGroup(groupId)
+  const decoded = decodeEditorPickId(id)
+  if (!decoded) return undefined
+  const group = groups.getGroup(decoded.groupId)
   if (!group) return undefined
-  const editor = group.editors.find((e) => e.id === editorId)
+  const editor = group.editors.find((e) => e.id === decoded.editorId)
   if (!editor) return undefined
   return { group, editor }
 }

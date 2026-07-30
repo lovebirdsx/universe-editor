@@ -38,6 +38,30 @@ test.describe('@p0 quick access', () => {
     await workbench.quickInput.waitForHidden()
   })
 
+  test('lists open non-text editors and activates them on accept', async ({ page, workbench }) => {
+    // Settings is a virtual (non-text) editor; the untitled file opened second
+    // becomes active so accepting the Settings pick observably switches back.
+    await workbench.runCommand('workbench.action.openSettings')
+    await workbench.runCommand('workbench.action.files.newUntitledFile')
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.quickOpen')
+    })
+    await workbench.quickInput.waitForVisible()
+
+    // Empty query: open editors are listed, including non-text ones.
+    const settingsOption = workbench.quickInput.dialog.getByRole('option', { name: /Settings/ })
+    await expect(settingsOption).toBeVisible()
+
+    // Typing matches the open editor; Enter activates its tab.
+    await workbench.quickInput.input.fill('Settings')
+    await expect(settingsOption).toBeVisible()
+    await page.keyboard.press('Enter')
+    await workbench.quickInput.waitForHidden()
+    await expect.poll(() => workbench.getActiveEditorUri()).toBe('universe:/settings')
+  })
+
   test('switches placeholder as the leading prefix changes', async ({ page, workbench }) => {
     await page.evaluate(() => {
       void window.__E2E__!.runCommand('workbench.action.quickOpen')
