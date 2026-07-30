@@ -29,6 +29,7 @@ import {
   IHostService,
   ILoggerService,
   isDark,
+  mark,
   NullLogger,
   ThemeTypeSelector,
   URI,
@@ -47,6 +48,7 @@ import type {
   IProductIconThemeContribution as IManifestProductIconThemeContribution,
   IThemeContribution as IManifestThemeContribution,
 } from '@universe-editor/extensions-common'
+import { PerfMarks } from '../../../shared/perf/marks.js'
 import { ColorThemeData } from './colorThemeData.js'
 import { FileIconThemeData } from './fileIconThemeData.js'
 import { generateColorThemeCSS } from './generateColorThemeCss.js'
@@ -829,6 +831,7 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
     this._injectCss(css)
     this._updateDocumentThemeAttributes(theme.type)
     this._writeSnapshot(css, theme)
+    mark(PerfMarks.rendererDidApplyColorTheme)
     this._logger.info(`applied color theme: ${theme.settingsId} (${theme.type})`)
     this._onDidColorThemeChange.fire(theme)
   }

@@ -91,7 +91,7 @@ export function SendButton({
           cy={CENTER}
           r={RADIUS}
           fill="none"
-          stroke="var(--acp-send-track-color, var(--color-border, #555))"
+          stroke="var(--acp-send-track-color, var(--vscode-workbench-border, #555))"
           strokeWidth={STROKE}
         />
         {pct > 0 ? (
@@ -100,7 +100,11 @@ export function SendButton({
             cy={CENTER}
             r={RADIUS}
             fill="none"
-            stroke={near ? 'var(--color-badge-error, #a1260d)' : 'var(--acp-send-color, #4fa6e2)'}
+            stroke={
+              near
+                ? 'var(--vscode-badge-errorBackground, #a1260d)'
+                : 'var(--acp-send-color, #4fa6e2)'
+            }
             strokeWidth={STROKE}
             strokeLinecap="round"
             strokeDasharray={CIRCUMFERENCE}

@@ -31,14 +31,14 @@ import {
   decodeAcpOutlineKind,
 } from '../../services/acp/session/acpTimelineOutline.js'
 
-const CALLABLE = 'var(--color-symbol-callable)'
-const VARIABLE = 'var(--color-symbol-variable)'
-const TYPE = 'var(--color-symbol-type)'
-const DEFAULT = 'var(--color-symbol-default)'
+const CALLABLE = 'var(--vscode-symbolIcon-functionForeground)'
+const VARIABLE = 'var(--vscode-symbolIcon-variableForeground)'
+const TYPE = 'var(--vscode-symbolIcon-classForeground)'
+const DEFAULT = 'var(--vscode-symbolIcon-defaultForeground)'
 // Extra hues for agent-session rows, reusing existing dual-theme tokens so the
 // timeline glyphs stay legible in light and dark: destructive = red, run = green.
-const DANGER = 'var(--color-error-fg)'
-const SUCCESS = 'var(--color-badge-success)'
+const DANGER = 'var(--vscode-errorForeground)'
+const SUCCESS = 'var(--vscode-badge-successBackground)'
 
 interface SymbolIconSpec {
   readonly codicon: string

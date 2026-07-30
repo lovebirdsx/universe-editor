@@ -5,10 +5,11 @@
 /**
  * Guards the `--vscode-*` CSS variable system against drift:
  *
- * 1. Every `var(--vscode-X)` referenced from any renderer css file must resolve
- *    to a color id registered in `universeColorIds.ts` (typo / stale-id guard).
+ * 1. Every `var(--vscode-X)` referenced from any renderer css/ts/tsx file must
+ *    resolve to a color id registered in `universeColorIds.ts` (typo guard).
  * 2. No legacy `--color-*` / `--workbench-menu-*` / `--git-blame-decoration-fg`
- *    occurrences may survive the codemod.
+ *    occurrences may survive the codemod — in css OR in inline ts/tsx style
+ *    strings (e.g. an svg `stroke="var(--color-...)"`).
  * 3. No css file may DEFINE `--vscode-*` variables statically: colors come from
  *    the contributed theme at runtime (`style.contributedColorTheme`), and a
  *    static definition would out-specify the injected `:root` block and shadow
@@ -34,9 +35,27 @@ function* walk(dir: string): Generator<string> {
   }
 }
 
+// Style references also live inline in ts/tsx (svg stroke/fill, style props,
+// const color = 'var(--vscode-...)'). Scan those too for unknown / legacy vars,
+// but skip the __tests__ fixtures that legitimately mention the patterns.
+function* walkTs(dir: string): Generator<string> {
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name)
+    if (statSync(path).isDirectory()) {
+      if (name === '__tests__') continue
+      yield* walkTs(path)
+    } else if (name.endsWith('.ts') || name.endsWith('.tsx')) {
+      yield path
+    }
+  }
+}
+
 const commentPattern = /\/\*[\s\S]*?\*\//g
+const lineCommentPattern = /(^|[^:])\/\/[^\n]*/g
 function maskComments(text: string): string {
-  return text.replace(commentPattern, (comment) => comment.replace(/[^\n]/g, ' '))
+  return text
+    .replace(commentPattern, (comment) => comment.replace(/[^\n]/g, ' '))
+    .replace(lineCommentPattern, (m, prefix: string) => `${prefix} `)
 }
 
 function toCssVariableName(colorId: string): string {
@@ -53,6 +72,15 @@ const maskedContents = cssFiles.map((file) => ({
   text: maskComments(readFileSync(file, 'utf8')),
 }))
 
+// ts/tsx inline references: same unknown/legacy checks, but only inside
+// `var(--...)` calls (a plain `--color-x` substring in ts could be a test id or
+// unrelated token, so we require the var() wrapper there).
+const tsFiles = [...walkTs(rendererRoot)]
+const tsContents = tsFiles.map((file) => ({
+  file,
+  text: maskComments(readFileSync(file, 'utf8')),
+}))
+
 describe('css variable coverage', () => {
   it('found renderer css files to scan', () => {
     expect(cssFiles.length).toBeGreaterThan(40)
@@ -61,7 +89,7 @@ describe('css variable coverage', () => {
   it('every var(--vscode-X) reference resolves to a registered color id', () => {
     const unknown: string[] = []
     const referencePattern = /var\(\s*(--vscode-[A-Za-z0-9-]+)/g
-    for (const { file, text } of maskedContents) {
+    for (const { file, text } of [...maskedContents, ...tsContents]) {
       for (const match of text.matchAll(referencePattern)) {
         if (!registeredVariableNames.has(match[1]!)) {
           unknown.push(`${file}: ${match[1]}`)
@@ -72,11 +100,21 @@ describe('css variable coverage', () => {
   })
 
   it('no legacy --color-* / --workbench-menu-* / --git-blame-decoration-fg remains', () => {
-    const legacyPattern =
+    // css: any legacy token occurrence is a leftover. ts/tsx: only flag it when
+    // consumed as a CSS variable via var(...), to avoid matching unrelated
+    // identifiers that merely share the prefix.
+    const cssLegacyPattern =
       /--(color-[a-z0-9-]+|workbench-menu-[a-z-]+|git-blame-decoration-fg)(?![\w-])/
+    const tsLegacyPattern =
+      /var\(\s*--(color-[a-z0-9-]+|workbench-menu-[a-z-]+|git-blame-decoration-fg)(?![\w-])/
     const leftovers: string[] = []
     for (const { file, text } of maskedContents) {
-      if (legacyPattern.test(text)) {
+      if (cssLegacyPattern.test(text)) {
+        leftovers.push(file)
+      }
+    }
+    for (const { file, text } of tsContents) {
+      if (tsLegacyPattern.test(text)) {
         leftovers.push(file)
       }
     }

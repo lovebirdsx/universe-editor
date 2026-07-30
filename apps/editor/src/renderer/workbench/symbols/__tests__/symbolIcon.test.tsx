@@ -85,9 +85,9 @@ describe('SymbolIcon', () => {
     // would otherwise nest agent/tool rows under the user turn).
     const kindOf = (item: TimelineItem): number => timelineToOutline([item]).roots[0]!.kind
     // A lucide glyph (svg) tinted via the color prop, never a codicon span.
-    expect(strokeOf(kindOf(msg('m1', 'user')))).toBe('var(--color-symbol-variable)') // user
-    expect(strokeOf(kindOf(msg('m2', 'agent')))).toBe('var(--color-symbol-callable)') // agent
-    expect(strokeOf(kindOf(tool('t1', 'delete')))).toBe('var(--color-error-fg)') // delete
-    expect(strokeOf(kindOf(tool('t2', 'execute')))).toBe('var(--color-badge-success)') // execute
+    expect(strokeOf(kindOf(msg('m1', 'user')))).toBe('var(--vscode-symbolIcon-variableForeground)') // user
+    expect(strokeOf(kindOf(msg('m2', 'agent')))).toBe('var(--vscode-symbolIcon-functionForeground)') // agent
+    expect(strokeOf(kindOf(tool('t1', 'delete')))).toBe('var(--vscode-errorForeground)') // delete
+    expect(strokeOf(kindOf(tool('t2', 'execute')))).toBe('var(--vscode-badge-successBackground)') // execute
   })
 })

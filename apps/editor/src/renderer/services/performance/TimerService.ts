@@ -64,6 +64,7 @@ const MILESTONES: readonly IMilestone[] = [
   { mark: PerfMarks.rendererDidCreateIpc, label: 'IPC ready' },
   { mark: PerfMarks.rendererWillRestore, label: 'Ready phase' },
   { mark: PerfMarks.rendererDidBlockRestore, label: 'BlockRestore contributions' },
+  { mark: PerfMarks.rendererDidApplyColorTheme, label: 'Color theme applied' },
   { mark: PerfMarks.rendererWillLoadServices, label: 'State restore start' },
   { mark: PerfMarks.rendererDidRestoreServices, label: 'Services restored' },
   { mark: PerfMarks.rendererWillMountReact, label: 'Mounting workbench' },

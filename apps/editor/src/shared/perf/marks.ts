@@ -64,6 +64,12 @@ export const PerfMarks = {
    */
   rendererDidReconcileWorkspaceState: 'code/renderer/didReconcileWorkspaceState',
   rendererDidRestoreEditors: 'code/renderer/didRestoreEditors',
+  /**
+   * Renderer: WorkbenchThemeService applied the color theme (CSS injected,
+   * dataset updated). Fires on every theme switch; startup metrics take the
+   * earliest occurrence, which is the first paint-critical application.
+   */
+  rendererDidApplyColorTheme: 'code/renderer/didApplyColorTheme',
   /** Renderer: monaco-editor finished lazy initialization (lazy, may fire after mount). */
   rendererDidInitializeMonaco: 'code/renderer/didInitializeMonaco',
 } as const
