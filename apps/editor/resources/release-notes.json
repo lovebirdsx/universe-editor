@@ -1,5 +1,18 @@
 [
   {
+    "version": "0.1.57",
+    "date": "2026-07-31",
+    "groups": [
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "统一 token 颜色映射，修复 JSON 键值颜色丢失"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.56",
     "date": "2026-07-31",
     "groups": [
