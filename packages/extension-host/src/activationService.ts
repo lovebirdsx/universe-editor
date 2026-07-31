@@ -13,6 +13,7 @@ import {
 } from '@universe-editor/extensions-common'
 import type { IScannedExtension } from './extensionScanner.js'
 import { createExtensionContext, type IExtensionStorage } from './apiFactory.js'
+import { runWithExtensionActivation } from './activationContext.js'
 
 interface ActivatedExtension {
   readonly context: ExtensionContext
@@ -109,7 +110,7 @@ export class ExtensionActivationService {
       let deactivate: (() => unknown) | undefined
       if (ext.mainPath) {
         const mod = (await import(pathToFileURL(ext.mainPath).href)) as ExtensionModule
-        await mod.activate?.(context)
+        await runWithExtensionActivation(ext, () => mod.activate?.(context))
         deactivate = mod.deactivate
       }
       this._activated.set(ext.id, {

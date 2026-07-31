@@ -34,6 +34,7 @@ import {
   type IMainThreadEditor,
   type IMainThreadFs,
   type IMainThreadLanguages,
+  type IMainThreadMcp,
   type IMainThreadOutput,
   type IMainThreadScm,
   type IMainThreadTimeline,
@@ -127,6 +128,9 @@ const mainThreadWebviews = ProxyChannel.toService<IMainThreadWebviews>(
 )
 const mainThreadExtensions = ProxyChannel.toService<IMainThreadExtensions>(
   client.getChannel(ExtHostChannels.mainThreadExtensions),
+)
+const mainThreadMcp = ProxyChannel.toService<IMainThreadMcp>(
+  client.getChannel(ExtHostChannels.mainThreadMcp),
 )
 
 // Register channels synchronously so a renderer call that races the async scan
@@ -341,6 +345,7 @@ async function main(): Promise<void> {
       mainThreadWebviews,
       globalStorageHome,
       mainThreadExtensions,
+      mainThreadMcp,
     ),
   )
   console.info('[ext-host] ready')

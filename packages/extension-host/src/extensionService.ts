@@ -37,6 +37,7 @@ import {
   type ImplementationProvider,
   type InputBoxOptions,
   type LanguageServerStatus,
+  type McpServerDefinitionProvider,
   type OutputChannel,
   type QuickPickItem,
   type QuickPickOptions,
@@ -72,6 +73,7 @@ import {
   type IMainThreadFs,
   type IMainThreadEditor,
   type IMainThreadLanguages,
+  type IMainThreadMcp,
   type IMainThreadOutput,
   type IMainThreadScm,
   type IMainThreadTimeline,
@@ -126,6 +128,7 @@ import {
 import { ExtensionCommandRegistry } from './commandRegistry.js'
 import { LanguageProviderRegistry } from './languageProviderRegistry.js'
 import { ExtensionActivationService } from './activationService.js'
+import { currentActivatingExtension } from './activationContext.js'
 
 function toFileType(type: ExtHostFileType): FileType {
   return type === 'dir' ? FileType.Directory : FileType.File
@@ -148,6 +151,7 @@ export class ExtensionService implements IExtensionHostBridge {
   private readonly _sourceControls = new Map<number, HostSourceControl>()
   private readonly _timelines: ExtHostTimelineRegistry
   private readonly _webviews?: HostWebviewManager
+  private readonly _mcpProviders = new Map<string, Disposable>()
   private _statusBarHandle = 0
   private _scmHandle = 0
   private _outputHandle = 0
@@ -185,6 +189,7 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _mainThreadWebviews?: IMainThreadWebviews,
     private readonly _globalStorageHome?: string,
     private readonly _mainThreadExtensions?: IMainThreadExtensions,
+    private readonly _mainThreadMcp?: IMainThreadMcp,
   ) {
     this._commands = new ExtensionCommandRegistry(_mainThreadCommands)
     this._languageRegistry = new LanguageProviderRegistry(() => this._languages(), this._documents)
@@ -210,6 +215,66 @@ export class ExtensionService implements IExtensionHostBridge {
 
   executeCommand(command: string, args: unknown[]): Promise<unknown> {
     return this._commands.execute(command, args)
+  }
+
+  registerMcpServerDefinitionProvider(
+    id: string,
+    provider: McpServerDefinitionProvider,
+  ): Disposable {
+    const extension = currentActivatingExtension()
+    if (!extension) {
+      throw new Error('MCP providers must be registered while an extension is activating')
+    }
+    const declared = extension.manifest.contributes?.mcpServerDefinitionProviders?.some(
+      (entry) => entry.id === id,
+    )
+    if (!declared) {
+      throw new Error(
+        `MCP provider "${id}" must be declared in contributes.mcpServerDefinitionProviders`,
+      )
+    }
+    if (!this._mainThreadMcp) throw new Error('MCP provider registration is unavailable')
+
+    const sourceId = `${extension.id}/${id}`
+    if (this._mcpProviders.has(sourceId)) {
+      throw new Error(`MCP provider "${sourceId}" is already registered`)
+    }
+
+    let disposed = false
+    const refresh = async (): Promise<void> => {
+      try {
+        const definitions = (await provider.provideMcpServerDefinitions()) ?? []
+        if (disposed) return
+        await this._mainThreadMcp?.$setMcpServerDefinitions(
+          sourceId,
+          definitions.map((definition) => ({
+            type: definition.type,
+            name: definition.name,
+            command: definition.command,
+            args: definition.args,
+            env: definition.env,
+            ...(definition.cwd !== undefined ? { cwd: definition.cwd } : {}),
+          })),
+        )
+      } catch (err) {
+        console.error(
+          `[ext-host] MCP provider refresh failed ${sourceId}: ${(err as Error).message}`,
+        )
+      }
+    }
+    const changeSubscription = provider.onDidChangeMcpServerDefinitions?.(() => void refresh())
+    const registration: Disposable = {
+      dispose: () => {
+        if (disposed) return
+        disposed = true
+        changeSubscription?.dispose()
+        this._mcpProviders.delete(sourceId)
+        void this._mainThreadMcp?.$removeMcpServerDefinitions(sourceId)
+      },
+    }
+    this._mcpProviders.set(sourceId, registration)
+    void refresh()
+    return registration
   }
 
   // --- IExtensionHostBridge: window ---
@@ -840,6 +905,8 @@ export class ExtensionService implements IExtensionHostBridge {
    * orphan when the host process dies.
    */
   dispose(): void {
+    for (const provider of this._mcpProviders.values()) provider.dispose()
+    this._mcpProviders.clear()
     this._webviews?.dispose()
     this._timelines.dispose()
     this._activation.disposeAll()

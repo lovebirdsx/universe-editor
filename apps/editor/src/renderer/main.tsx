@@ -137,6 +137,10 @@ import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
 import { AcpSessionService, IAcpSessionService } from './services/acp/session/acpSessionService.js'
 import {
+  IMcpServerDefinitionRegistry,
+  mcpServerDefinitionRegistry,
+} from './services/acp/mcpServerDefinitionRegistry.js'
+import {
   AcpPromptHistoryService,
   IAcpPromptHistoryService,
 } from './services/acp/session/acpPromptHistoryService.js'
@@ -567,6 +571,7 @@ async function bootstrapWorkbench(): Promise<void> {
     home: typeof window.ipc?.home === 'string' ? window.ipc.home : '',
   })
   services.set(IAcpPathPolicy, acpPathPolicy)
+  services.set(IMcpServerDefinitionRegistry, mcpServerDefinitionRegistry)
   const acpClientService = workbenchStore.add(instantiation.createInstance(AcpClientService))
   services.set(IAcpClientService, acpClientService)
   // History + agent-defaults are registerSingleton services injected by

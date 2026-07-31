@@ -114,6 +114,9 @@
   纯新增方法与类型，不改既有签名。
 
 - `0.7.1` — patch：无 API 表面改动（仅注释/内部实现修正），契约测试快照不变。
+- `0.8.0` — 向后兼容的新增（minor）：`lm.registerMcpServerDefinitionProvider`、
+  `McpServerDefinitionProvider` 与 `McpStdioServerDefinition`。扩展可在运行时向 Agent
+  提供 MCP server 定义，定义只驻留于编辑器内存，不写入用户或工作区配置。
 
 ## 激活事件清单（activation events）
 

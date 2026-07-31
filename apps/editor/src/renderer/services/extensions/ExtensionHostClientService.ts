@@ -53,6 +53,7 @@ import {
 import { IExtensionManagementService } from '../../../shared/ipc/extensionManagementService.js'
 import { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
+import { mcpServerDefinitionRegistry } from '../acp/mcpServerDefinitionRegistry.js'
 import { getCurrentLocale } from '../../../shared/i18n/availableLocales.js'
 import { IScmService } from './ScmService.js'
 import { ITimelineService } from '../timeline/TimelineService.js'
@@ -276,6 +277,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       dialog: this._dialog,
       files: this._files,
       pathPolicy: this._pathPolicy,
+      mcpDefinitions: mcpServerDefinitionRegistry,
       commandService: this._commandService,
       storage: this._storage,
       webview: this._webview,

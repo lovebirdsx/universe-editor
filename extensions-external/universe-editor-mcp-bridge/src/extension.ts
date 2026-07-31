@@ -1,57 +1,35 @@
-import { commands, window, workspace, type ExtensionContext } from '@universe-editor/extension-api'
+import {
+  McpStdioServerDefinition,
+  lm,
+  workspace,
+  type ExtensionContext,
+} from '@universe-editor/extension-api'
+import { migrateSettings } from './extensionUpdateMigration.js'
 
 const SERVER_NAME = 'universe-editor'
 const CONFIG_SECTION = 'universeEditorMcp'
-
-interface McpServerConfig {
-  readonly command: string
-  readonly args: readonly string[]
-  readonly env: Record<string, string>
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {}
-}
 
 function bridgeEntry(context: ExtensionContext): string {
   return `${context.extensionPath.replace(/\\/g, '/')}/resources/bridge/bridge.mjs`
 }
 
-function mcpConfigFor(context: ExtensionContext): McpServerConfig {
-  return {
-    command: process.execPath,
-    args: [bridgeEntry(context)],
-    env: {
-      ELECTRON_RUN_AS_NODE: '1',
-    },
-  }
-}
-
-async function installMcpServer(context: ExtensionContext, interactive: boolean): Promise<void> {
-  const enabled = await workspace.getConfiguration(CONFIG_SECTION).get('enabled', true)
-  if (!enabled) return
-
-  const acpConfig = workspace.getConfiguration('acp')
-  const current = asRecord(await acpConfig.get('mcpServers', {}))
-  await acpConfig.update('mcpServers', {
-    ...current,
-    [SERVER_NAME]: mcpConfigFor(context),
+function mcpDefinitionFor(context: ExtensionContext): McpStdioServerDefinition {
+  return new McpStdioServerDefinition(SERVER_NAME, process.execPath, [bridgeEntry(context)], {
+    ELECTRON_RUN_AS_NODE: '1',
   })
-
-  if (interactive) {
-    await window.showInformationMessage('Universe Editor MCP 已重新注册。')
-  }
-  console.info('[universe-editor-mcp-bridge] registered MCP server')
 }
 
 export async function activate(context: ExtensionContext): Promise<void> {
-  context.subscriptions.push(
-    commands.registerCommand('universeEditorMcp.reconnect', () => installMcpServer(context, true)),
-  )
+  const enabled = await workspace.getConfiguration(CONFIG_SECTION).get('enabled', true)
+  if (!enabled) return
 
-  await installMcpServer(context, false)
+  await migrateSettings()
+
+  context.subscriptions.push(
+    lm.registerMcpServerDefinitionProvider(SERVER_NAME, {
+      provideMcpServerDefinitions: () => [mcpDefinitionFor(context)],
+    }),
+  )
   console.info('[universe-editor-mcp-bridge] activated')
 }
 

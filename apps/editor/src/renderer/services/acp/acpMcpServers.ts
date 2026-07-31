@@ -143,7 +143,7 @@ export function mcpServerTransport(server: McpServer): McpTransport {
 // ---------------------------------------------------------------------------
 
 /** Where an MCP server definition came from. `project` rows override `global` ones with the same name. */
-export type McpServerSource = 'global' | 'project'
+export type McpServerSource = 'extension' | 'global' | 'project'
 
 /**
  * One settings layer contributing to `acp.mcpServers`, lowest priority first.

@@ -104,6 +104,24 @@ describe('parseManifest', () => {
     })
   })
 
+  it('validates MCP server definition provider contributions', () => {
+    const manifest = parseManifest({
+      ...baseManifest(),
+      contributes: {
+        mcpServerDefinitionProviders: [{ id: 'example', label: 'Example MCP' }],
+      },
+    })
+    expect(manifest.contributes?.mcpServerDefinitionProviders).toEqual([
+      { id: 'example', label: 'Example MCP' },
+    ])
+    expect(() =>
+      parseManifest({
+        ...baseManifest(),
+        contributes: { mcpServerDefinitionProviders: [{ id: '', label: 'Example MCP' }] },
+      }),
+    ).toThrow(/mcpServerDefinitionProviders/)
+  })
+
   it('rejects a non-object input', () => {
     expect(() => parseManifest(null)).toThrow(/invalid manifest/)
     expect(() => parseManifest('nope')).toThrow(/invalid manifest/)

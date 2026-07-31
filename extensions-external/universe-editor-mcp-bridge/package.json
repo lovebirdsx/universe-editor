@@ -1,8 +1,8 @@
 {
   "name": "universe-editor-mcp-bridge",
   "displayName": "Universe Editor MCP Bridge",
-  "description": "Registers the Universe Editor MCP bridge for Agent sessions.",
-  "version": "0.1.1",
+  "description": "Provides the Universe Editor MCP bridge for Agent sessions.",
+  "version": "0.1.2",
   "publisher": "universe",
   "license": "Apache-2.0",
   "type": "module",
@@ -20,12 +20,10 @@
   "files": ["dist", "resources", "icon.png"],
   "activationEvents": ["onStartupFinished"],
   "contributes": {
-    "commands": [
+    "mcpServerDefinitionProviders": [
       {
-        "command": "universeEditorMcp.reconnect",
-        "title": "Universe Editor MCP: Reconnect",
-        "category": "Universe Editor MCP",
-        "icon": "plug"
+        "id": "universe-editor",
+        "label": "Universe Editor"
       }
     ],
     "configuration": {
@@ -34,7 +32,7 @@
         "universeEditorMcp.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically register the Universe Editor MCP bridge in Agent MCP server settings when a UE4Editor.exe process is found."
+          "description": "Provide the Universe Editor MCP bridge to Agent sessions."
         },
         "universeEditorMcp.timeoutMs": {
           "type": "number",

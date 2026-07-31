@@ -79,7 +79,7 @@ export { FoldingRangeKind } from 'vscode-languageserver-types'
 /** Semantic version of this API surface. The host checks `engines.universe`.
  *  Bumping this is governed by COMPATIBILITY.md — keep it in sync with the
  *  package.json version and the contract test's frozen snapshot. */
-export const version = '0.7.1'
+export const version = '0.8.0'
 
 export interface Disposable {
   dispose(): void
@@ -705,6 +705,31 @@ export interface AiApi {
   sendRequest(messages: readonly AiMessage[], options: AiRequestOptions): AiResponse
 }
 
+/** A local MCP server launched by the editor and connected over stdio. */
+export class McpStdioServerDefinition {
+  readonly type = 'stdio' as const
+
+  constructor(
+    readonly name: string,
+    readonly command: string,
+    readonly args: readonly string[] = [],
+    readonly env: Readonly<Record<string, string>> = {},
+    readonly cwd?: string,
+  ) {}
+}
+
+export type McpServerDefinition = McpStdioServerDefinition
+
+export interface McpServerDefinitionProvider {
+  readonly onDidChangeMcpServerDefinitions?: Event<void>
+  provideMcpServerDefinitions(): ProviderResult<readonly McpServerDefinition[]>
+}
+
+/** The `lm` namespace: language-model integrations supplied by extensions. */
+export interface LanguageModelApi {
+  registerMcpServerDefinitionProvider(id: string, provider: McpServerDefinitionProvider): Disposable
+}
+
 /**
  * Lifecycle state of a language server backing a plugin's providers. Reported via
  * {@link LanguagesApi.setLanguageServerStatus} so the editor can tell the user the
@@ -883,6 +908,7 @@ interface IExtensionHostBridge {
   readonly onDidCloseTextDocument: Event<TextDocument>
   readonly onWillSaveTextDocument: Event<WillSaveTextDocumentEvent>
   readonly ai: AiApi
+  registerMcpServerDefinitionProvider(id: string, provider: McpServerDefinitionProvider): Disposable
 }
 
 /** Global key the host installs the bridge under. KEEP IN SYNC with the host. */
@@ -930,6 +956,11 @@ export const ai: AiApi = {
   getActiveModelId: () => bridge().ai.getActiveModelId(),
   getCommitModelId: () => bridge().ai.getCommitModelId(),
   sendRequest: (messages, options) => bridge().ai.sendRequest(messages, options),
+}
+
+export const lm: LanguageModelApi = {
+  registerMcpServerDefinitionProvider: (id, provider) =>
+    bridge().registerMcpServerDefinitionProvider(id, provider),
 }
 
 export const languages: LanguagesApi = {

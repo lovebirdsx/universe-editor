@@ -58,6 +58,7 @@ import { MainThreadEditor } from './MainThreadEditor.js'
 import { MainThreadExtensions } from './MainThreadExtensions.js'
 import { MainThreadFs } from './MainThreadFs.js'
 import { MainThreadLanguages } from './MainThreadLanguages.js'
+import { MainThreadMcp } from './MainThreadMcp.js'
 import { MainThreadOutput } from './MainThreadOutput.js'
 import { MainThreadStorage } from './MainThreadStorage.js'
 import { MainThreadWindow } from './MainThreadWindow.js'
@@ -66,6 +67,7 @@ import type { IScmService } from './ScmService.js'
 import type { ITimelineService } from '../timeline/TimelineService.js'
 import type { IWebviewService } from './WebviewService.js'
 import type { IAiModelService } from '@universe-editor/platform'
+import type { IMcpServerDefinitionRegistry } from '../acp/mcpServerDefinitionRegistry.js'
 
 export interface HostConnectionDeps {
   readonly host: IExtensionHostService
@@ -75,6 +77,7 @@ export interface HostConnectionDeps {
   readonly dialog: IDialogService
   readonly files: IFileService
   readonly pathPolicy: IAcpPathPolicy
+  readonly mcpDefinitions: IMcpServerDefinitionRegistry
   readonly commandService: ICommandService
   readonly scm: IScmService
   readonly timeline: ITimelineService
@@ -210,6 +213,9 @@ export class HostConnection extends Disposable {
 
     const mainThreadFs = new MainThreadFs(workspaceRoot, deps.pathPolicy, deps.files)
     server.registerChannel(ExtHostChannels.mainThreadFs, ProxyChannel.fromService(mainThreadFs))
+
+    const mainThreadMcp = store.add(new MainThreadMcp(deps.mcpDefinitions))
+    server.registerChannel(ExtHostChannels.mainThreadMcp, ProxyChannel.fromService(mainThreadMcp))
 
     const mainThreadOutput = store.add(new MainThreadOutput(deps.output, deps.layout, deps.views))
     server.registerChannel(

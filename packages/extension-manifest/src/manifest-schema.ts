@@ -109,6 +109,11 @@ const grammarSchema = z.object({
   unbalancedBracketScopes: z.array(z.string().min(1)).optional(),
 })
 
+const mcpServerDefinitionProviderSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+})
+
 const contributesSchema = z
   .object({
     commands: z.array(commandContributionSchema).optional(),
@@ -122,6 +127,7 @@ const contributesSchema = z
     iconThemes: z.array(iconThemeSchema).optional(),
     productIconThemes: z.array(productIconThemeSchema).optional(),
     grammars: z.array(grammarSchema).optional(),
+    mcpServerDefinitionProviders: z.array(mcpServerDefinitionProviderSchema).optional(),
   })
   // Tolerate contribution points we don't understand yet (forward-compat).
   .passthrough()

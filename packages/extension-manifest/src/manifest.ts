@@ -112,6 +112,12 @@ export interface IJsonValidationContribution {
   url: string
 }
 
+/** Declares an MCP definition provider registered at runtime through `lm`. */
+export interface IMcpServerDefinitionProviderContribution {
+  id: string
+  label: string
+}
+
 /**
  * The host-resolved form of a jsonValidation entry. `fileMatch` is normalized to
  * an array. Exactly one of `schema` / `url` is set: a local file is read + parsed
@@ -192,6 +198,8 @@ export interface IExtensionContributions {
   iconThemes?: IIconThemeContribution[]
   productIconThemes?: IProductIconThemeContribution[]
   grammars?: IGrammarContribution[]
+  /** Runtime providers that contribute MCP server definitions without editing settings. */
+  mcpServerDefinitionProviders?: IMcpServerDefinitionProviderContribution[]
 }
 
 /**

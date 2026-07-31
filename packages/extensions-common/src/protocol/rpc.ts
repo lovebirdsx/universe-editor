@@ -78,6 +78,8 @@ export const ExtHostChannels = {
   mainThreadTimeline: 'mainThreadTimeline',
   /** Renderer → ext host: timeline page requests routed to a plugin's registered providers. */
   extHostTimeline: 'extHostTimeline',
+  /** Ext host → renderer: extension-contributed MCP server definition snapshots. */
+  mainThreadMcp: 'mainThreadMcp',
 } as const
 
 export type ExtHostChannelName = (typeof ExtHostChannels)[keyof typeof ExtHostChannels]
@@ -139,6 +141,27 @@ export interface IExtensionActivationErrorDto {
 export interface IMainThreadExtensions {
   /** An extension's `activate` threw. Provider → renderer push. */
   $onActivationError(error: IExtensionActivationErrorDto): void
+}
+
+/** JSON-serializable stdio MCP server definition contributed by an extension. */
+export interface IMcpStdioServerDefinitionDto {
+  readonly type: 'stdio'
+  readonly name: string
+  readonly command: string
+  readonly args: readonly string[]
+  readonly env: Readonly<Record<string, string>>
+  readonly cwd?: string
+}
+
+export type IMcpServerDefinitionDto = IMcpStdioServerDefinitionDto
+
+/** Ext host → renderer: lifecycle of one manifest-declared MCP provider. */
+export interface IMainThreadMcp {
+  $setMcpServerDefinitions(
+    sourceId: string,
+    definitions: readonly IMcpServerDefinitionDto[],
+  ): Promise<void>
+  $removeMcpServerDefinitions(sourceId: string): Promise<void>
 }
 
 /**

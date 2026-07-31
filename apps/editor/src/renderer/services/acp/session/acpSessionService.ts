@@ -75,6 +75,7 @@ import {
   type IAcpClientNotificationSink,
 } from '../acpClientService.js'
 import { IAcpAgentRegistry } from '../acpAgentRegistry.js'
+import { mcpServerDefinitionRegistry } from '../mcpServerDefinitionRegistry.js'
 import { ACP_EXT_METHODS } from './acpExtMethods.js'
 import { isAuthRequiredError } from './acpAuthError.js'
 import { IAcpPermissionHandler } from '../acpPermissionHandler.js'
@@ -511,6 +512,11 @@ export class AcpSessionService
             // refresh failures are non-fatal and already logged by the coordinator.
           })
         }
+      }),
+    )
+    this._register(
+      mcpServerDefinitionRegistry.onDidChangeDefinitions(() => {
+        void this.refreshMcpServerDefinitions()
       }),
     )
     // Global MCP config edited: keep the definition pool mirror fresh. Inheriting
@@ -1770,13 +1776,17 @@ export class AcpSessionService
   }
 
   async refreshMcpServerDefinitions(): Promise<void> {
+    const extensionDefs = mcpServerDefinitionRegistry.definitions()
     const globalDefs = this._readGlobalMcpDefinitions()
     const projectRaw = await this.readProjectMcpJson()
     const projectDefs = readMcpServerDefinitions(projectRaw, 'project', (m) =>
       this._logger.warn(`mcpServers(.mcp.json): ${m}`),
     ).map((d) => ({ ...d, fromMcpJson: true }))
     this._mcpJsonNames = new Set(Object.keys(mcpServerRawToRecord(projectRaw)))
-    this.mcpServerDefinitions.set(mergeMcpServerDefinitions(globalDefs, projectDefs), undefined)
+    this.mcpServerDefinitions.set(
+      mergeMcpServerDefinitions(mergeMcpServerDefinitions(extensionDefs, globalDefs), projectDefs),
+      undefined,
+    )
   }
 
   /**
@@ -1794,14 +1804,23 @@ export class AcpSessionService
     const projectWire = normalizeMcpServers(projectRaw, (m) =>
       this._logger.warn(`mcpServers(.mcp.json): ${m}`),
     )
-    const mergedWire = mergeWireMcpServers(this._readMcpServers(), projectWire)
+    const mergedWire = mergeWireMcpServers(
+      mergeWireMcpServers(mcpServerDefinitionRegistry.wireServers(), this._readMcpServers()),
+      projectWire,
+    )
     // Recompute the pool from the same snapshot instead of reading the async
     // mirror: the mirror's refresh (config-change → fs read) races session
     // creation, and a stale mirror silently filters the wire list down to [].
     const projectDefs = readMcpServerDefinitions(projectRaw, 'project', (m) =>
       this._logger.warn(`mcpServers(.mcp.json): ${m}`),
     )
-    const pool = mergeMcpServerDefinitions(this._readGlobalMcpDefinitions(), projectDefs)
+    const pool = mergeMcpServerDefinitions(
+      mergeMcpServerDefinitions(
+        mcpServerDefinitionRegistry.definitions(),
+        this._readGlobalMcpDefinitions(),
+      ),
+      projectDefs,
+    )
     const { enabledNames, staleNames } = resolveMcpServerSelection(pool, selection)
     if (warnStale && staleNames.length > 0) {
       this._logger.warn(
@@ -1831,6 +1850,9 @@ export class AcpSessionService
   }
 
   setMcpServerDefaultEnabled(name: string, enabled: boolean): boolean {
+    if (mcpServerDefinitionRegistry.definitions().some((definition) => definition.name === name)) {
+      return false
+    }
     if (this._mcpJsonNames.has(name)) return false
     // Highest priority first, mirroring _mcpSettingsLayers. A name resolves at
     // the first layer defining it; read-only compat layers are not written

@@ -30,6 +30,7 @@ import type {
   ImplementationProvider,
   InputBoxOptions,
   LanguageServerStatus,
+  McpServerDefinitionProvider,
   Memento,
   OutputChannel,
   QuickPickItem,
@@ -164,6 +165,7 @@ export interface IExtensionHostBridge {
   readonly onWillSaveTextDocument: Event<WillSaveTextDocumentEvent>
   /** The `ai` namespace. */
   readonly ai: AiApi
+  registerMcpServerDefinitionProvider(id: string, provider: McpServerDefinitionProvider): Disposable
 }
 
 export function installApiBridge(bridge: IExtensionHostBridge): void {

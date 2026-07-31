@@ -41,7 +41,7 @@ async function main(): Promise<void> {
   const config = readConfig()
   const server = new McpServer({
     name: 'universe-editor-mcp-bridge',
-    version: '0.1.1',
+    version: '0.1.2',
   })
 
   const log = (message: string): void => {
@@ -97,7 +97,7 @@ async function main(): Promise<void> {
                   option: {
                     type: 'string',
                     title: Title ?? '选择',
-                    oneOf: Options.map((option: { Label: string; Description?: string }) => ({
+                    oneOf: Options.map((option) => ({
                       const: option.Label,
                       title: option.Description
                         ? `${option.Label} - ${option.Description}`
