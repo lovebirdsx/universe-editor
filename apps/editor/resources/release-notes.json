@@ -1,5 +1,47 @@
 [
   {
+    "version": "0.1.56",
+    "date": "2026-07-31",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "移植 VSCode 经典主题",
+          "cssVarCoverage guard 扩 ts/tsx + didApplyColorTheme 打点（Phase 7.3）",
+          "系统暗色联动（window.autoDetectColorScheme + preferred 主题键）（Phase 7.1）",
+          "semanticTokenColors 对齐 VSCode 打分模型 + semanticHighlighting 三态（Phase 6）",
+          "TextMate factory 接管已开 model 的 tokenization（warm-up）+ e2e 冒烟（Phase 5.7）",
+          "TextMate 主题桥接（tokenColors → IRawTheme → colorMap）（Phase 5.6）",
+          "TextMateService 接入 monaco TokenizationRegistry（Phase 5.4/5.5）",
+          "TextMate token 位编码常量与 monaco 解码 roundtrip 单测（Phase 5.3）",
+          "TextMate grammars 扩展点与内置语法包（Phase 5.1/5.2）",
+          "对齐 VSCode 的图标主题机制（contributes.iconThemes / productIconThemes）",
+          "对齐 VSCode 的颜色主题机制（contributes.themes + WorkbenchThemeService）",
+          "新增主题纯内核（ColorThemeData/注册表/颜色定制解析/CSS 生成/Monaco 适配）",
+          "引入 VSCode 风格主题内核并将 CSS 变量全量迁移至 --vscode-*",
+          "Perforce 编辑器内可视化功能与 Git 对等（SCM 可视化泛化）",
+          "快速打开支持 Ctrl+Enter 打开文件到侧边栏",
+          "快速打开支持列出并切换非文本编辑器"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "permissionAuto 区域 legacy CSS 变量迁移至 --vscode-*",
+          "主题非 hex 色值 rgba() 转 hex，纠全工作台飘红",
+          "修复ctrl+k ctrl+t快捷键没有生效的bug",
+          "e2e 探针 getMarkdownLineTokens 适配 TextMate 接管（tokenizeEncoded 解码）",
+          "修复恢复session时，有些工具调用显示运行中",
+          "滚动/缩放时预览弹窗重新锚定缩略图，不再消失",
+          "快速打开文件时恢复关闭前的编辑器类型",
+          "修正会话列表选中状态条目右上的悬浮操作按钮会常显"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.55",
     "date": "2026-07-30",
     "groups": [
