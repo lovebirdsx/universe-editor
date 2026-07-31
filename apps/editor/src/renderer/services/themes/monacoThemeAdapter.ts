@@ -121,6 +121,15 @@ export function toStandaloneThemeData(
       base: toMonacoBase(theme.type),
       inherit: true,
       rules: tokenColorRulesToMonacoRules(theme.tokenColors),
+      // 统一色表的关键：monaco TokenTheme 构建 ColorMap 时先按序吃掉
+      // encodedTokensColors（id 1..N），再给 rules 分配新色。传入 TextMate 的
+      // tokenColorMap（去掉 0 位 '' 占位；表项已归一为 6 位大写 hex，见
+      // normalizeTokenColor）后，monaco 表与 vscode-textmate frozen 表在 1..N
+      // 索引 1:1 对齐——TextMate token、semantic token（getTokenColorIndexId
+      // 索引）与 Monarch token（monaco 自分配，落在既有项或 N 之后追加）共用
+      // 同一张 `.mtkN` 色表，双色表竞态（JSON 等 TextMate 语言随加载时序错色）
+      // 从根上消除。
+      encodedTokensColors: theme.tokenColorMap.slice(1),
       colors,
     },
   }

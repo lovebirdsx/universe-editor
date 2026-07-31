@@ -154,22 +154,10 @@ declare module 'monaco-editor/esm/vs/editor/common/encodedTokenAttributes.js' {
   }
 }
 
-// Color value consumed by TokenizationRegistry.setColorMap /
-// generateTokensCSSForColorMap. No shipped .d.ts.
-declare module 'monaco-editor/esm/vs/base/common/color.js' {
-  export class Color {
-    static fromHex(hex: string): Color
-    toString(): string
-    readonly rgba: { readonly r: number; readonly g: number; readonly b: number; readonly a: number }
-  }
-}
-
 // Internal tokenization registry + support plumbing the TextMate engine plugs
 // into (VSCode registers its TextMateTokenizationSupport the same way). No
 // shipped .d.ts; shapes mirrored from monaco 0.55 esm sources.
 declare module 'monaco-editor/esm/vs/editor/common/languages.js' {
-  import type { Color } from 'monaco-editor/esm/vs/base/common/color.js'
-
   export interface IState {
     clone(): IState
     equals(other: IState): boolean
@@ -198,8 +186,6 @@ declare module 'monaco-editor/esm/vs/editor/common/languages.js' {
     registerFactory(languageId: string, factory: LazyTokenizationSupport): { dispose(): void }
     getOrCreate(languageId: string): Promise<ITokenizationSupport | null>
     get(languageId: string): ITokenizationSupport | null
-    setColorMap(colorMap: Color[]): void
-    getColorMap(): Color[] | null
     onDidChange(
       listener: (e: {
         changedLanguages: readonly string[]
@@ -221,13 +207,6 @@ declare module 'monaco-editor/esm/vs/editor/common/languages/nullTokenize.js' {
     languageId: number,
     state: IState | null,
   ): EncodedTokenizationResult
-}
-
-// Token-type classifier CSS (`.mtkN { color }` + font-style rules), generated
-// from the active color map. No shipped .d.ts.
-declare module 'monaco-editor/esm/vs/editor/common/languages/supports/tokenization.js' {
-  import type { Color } from 'monaco-editor/esm/vs/base/common/color.js'
-  export function generateTokensCSSForColorMap(colorMap: readonly Color[]): string
 }
 
 // Monaco's error-handler singleton (module-level in vs/base/common/errors). The

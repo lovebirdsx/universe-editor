@@ -19,7 +19,9 @@ ColorThemeData (colorThemeData.ts)
 WorkbenchThemeService (workbenchThemeService.ts)  权威应用
   ├─→ generateColorThemeCss.ts        生成 `--vscode-<id>` CSS，注入 <style.contributedColorTheme>
   ├─→ monacoThemeBridge.ts            ColorThemeData → IStandaloneThemeData，defineTheme/setTheme
-  ├─→ textMateThemeBridge (textmate/) tokenColors → IRawTheme → TokenizationRegistry.setColorMap
+  │     （encodedTokensColors=tokenColorMap → monaco TokenTheme colorMap 与 TextMate 表索引对齐，
+  │      `.mtkN` CSS + TokenizationRegistry.setColorMap 唯一事实源 = monaco StandaloneThemeService）
+  ├─→ textMateThemeBridge (textmate/) tokenColors → IRawTheme（色值归一 6 位大写 hex）喂 grammar registry
   ├─→ dataset.theme + localStorage 快照（防启动闪烁，themeBootstrap 同步恢复）
   ▼
 事件扇出（终端 / Mermaid / webview）→ themeFileWatcher.ts 热更新
@@ -61,8 +63,10 @@ token 着色引擎在隔壁 [`../textmate/`](../textmate/)（grammarRegistry / t
 - `WorkbenchThemeService.initialize` 挂两条触发链：配置四键（COLOR_THEME/PREFERRED_*/DETECT）+ 系统配色事件（仅跟随开启时）→ restoreColorTheme。`setColorTheme` 写配置走当前活动键。
 - 裁剪：无高对比度维度。
 
-### token 着色优先级
+### token 着色优先级与单一色表
 TextMate（后注册者胜，无 grammar 回退 Monarch）→ LSP semantic tokens 独立叠加。`editor.semanticHighlighting.enabled`（true/false/'configuredByTheme'，对齐 VSCode 默认 configuredByTheme）经 monacoSemanticThemeBridge 注入的 flag 生效，FileEditor 不再硬编码。
+
+**三种 token（TextMate/Monarch/semantic）的 colorId 必须查同一张 `.mtkN` 色表**：tokenColorMap 表项归一为 6 位大写 hex（`normalizeTokenColor`，monaco ColorMap 只认 6/8 位 hex 且丢 alpha 折叠），monacoThemeBridge defineTheme 时经 `encodedTokensColors` 让 monaco TokenTheme colorMap 以它为前缀（索引 1:1），Monarch/builtin 规则色追加在 N 之后。CSS 与 `TokenizationRegistry.setColorMap` 由 monaco StandaloneThemeService 独家产出——**任何第二个 `.mtkN` 样式表都会按 DOM 顺序与之竞态**（曾致 JSON 等 TextMate 语言随加载时序错色：dev 必现、发布版随工作区摇摆）。
 
 ## 常见任务
 

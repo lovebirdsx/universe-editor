@@ -17,7 +17,6 @@ import {
   type ILogger,
 } from '@universe-editor/platform'
 import type { IGrammarContribution } from '@universe-editor/extensions-common'
-import type { Color } from 'monaco-editor/esm/vs/base/common/color.js'
 import type {
   ITokenizationSupport,
   LazyTokenizationSupport as LazyTokenizationSupportClass,
@@ -51,9 +50,16 @@ export interface ITextMateService {
     editor: { getModels(): readonly { getLanguageId(): string }[] }
   }): Promise<void>
 
-  /** Forward a color theme's token rules into the textmate registry, the
-   *  monaco color map, and the `.mtkN` classifier stylesheet (VSCode
-   *  `_updateTheme`). Safe before initialize(): the theme is replayed then. */
+  /**
+   * Forward a color theme's token rules into the textmate registry so newly
+   * produced tokens carry colorMap-indexed metadata. The `.mtkN` classifier
+   * stylesheet and `TokenizationRegistry.setColorMap` are owned exclusively by
+   * monaco's StandaloneThemeService: monacoThemeBridge passes the same
+   * colorMap as `encodedTokensColors` through defineTheme, which makes
+   * monaco's TokenTheme mirror it index-for-index (single source of truth —
+   * a second stylesheet here would race it by DOM order).
+   * Safe before initialize(): the theme is replayed then.
+   */
   setTheme(theme: IRawTheme, colorMap: string[]): void
 }
 
@@ -64,7 +70,6 @@ interface IMonacoTokenizationBindings {
   readonly TokenizationRegistry: {
     registerFactory(languageId: string, factory: LazyTokenizationSupportClass): { dispose(): void }
     getOrCreate(languageId: string): Promise<ITokenizationSupport | null>
-    setColorMap(colorMap: Color[]): void
     onDidChange(
       listener: (e: { changedLanguages: readonly string[]; changedColorMap: boolean }) => void,
     ): IDisposable
@@ -72,20 +77,6 @@ interface IMonacoTokenizationBindings {
   readonly LazyTokenizationSupport: new (
     createSupport: () => Promise<(ITokenizationSupport & IDisposable) | null>,
   ) => LazyTokenizationSupportClass
-  readonly Color: { fromHex(hex: string): Color }
-  readonly generateTokensCSSForColorMap: (colorMap: readonly Color[]) => string
-}
-
-function toColorMap(
-  colorMap: readonly string[],
-  Color: IMonacoTokenizationBindings['Color'],
-): Color[] {
-  // Index 0 is ColorId.None — always null (VSCode toColorMap).
-  const result: Color[] = [null as unknown as Color]
-  for (let i = 1, len = colorMap.length; i < len; i++) {
-    result[i] = Color.fromHex(colorMap[i]!)
-  }
-  return result
 }
 
 export class TextMateService extends Disposable implements ITextMateService {
@@ -99,7 +90,6 @@ export class TextMateService extends Disposable implements ITextMateService {
   private _encodeLanguageId: ((languageId: string) => number) | undefined
   private _registrations: DisposableStore | undefined
   private _grammarFactory: TMGrammarFactory | undefined
-  private _styleElement: HTMLStyleElement | undefined
   private _pendingTheme: { theme: IRawTheme; colorMap: string[] } | undefined
   /** Languages whose support we must re-warm after the next rebuild. */
   private readonly _languagesToWarm = new Set<string>()
@@ -133,16 +123,10 @@ export class TextMateService extends Disposable implements ITextMateService {
     if (this._monaco !== undefined) {
       return
     }
-    const [languages, color, tokenization] = await Promise.all([
-      import('monaco-editor/esm/vs/editor/common/languages.js'),
-      import('monaco-editor/esm/vs/base/common/color.js'),
-      import('monaco-editor/esm/vs/editor/common/languages/supports/tokenization.js'),
-    ])
+    const languages = await import('monaco-editor/esm/vs/editor/common/languages.js')
     this._monaco = {
       TokenizationRegistry: languages.TokenizationRegistry,
       LazyTokenizationSupport: languages.LazyTokenizationSupport,
-      Color: color.Color,
-      generateTokensCSSForColorMap: tokenization.generateTokensCSSForColorMap,
     }
     this._encodeLanguageId = (languageId) => monaco.languages.getEncodedLanguageId(languageId)
     this._register(this.grammarRegistry.onDidChangeGrammars(() => this._rebuildRegistrations()))
@@ -286,25 +270,15 @@ export class TextMateService extends Disposable implements ITextMateService {
       this._pendingTheme = { theme, colorMap }
       return
     }
-
+    // Only the grammar registry consumes the theme here (token metadata gets
+    // colorMap-indexed colorIds). CSS + TokenizationRegistry.setColorMap are
+    // monaco's, fed the same table via defineTheme's encodedTokensColors.
     this._grammarFactory?.setTheme(theme, colorMap)
-    const effectiveColorMap = this._grammarFactory?.getColorMap() ?? colorMap
-    const colors = toColorMap(effectiveColorMap, this._monaco.Color)
-    this._monaco.TokenizationRegistry.setColorMap(colors)
-    if (typeof document !== 'undefined') {
-      if (this._styleElement === undefined) {
-        this._styleElement = document.createElement('style')
-        this._styleElement.className = 'contributedTextMateTokens'
-        document.head.appendChild(this._styleElement)
-      }
-      this._styleElement.textContent = this._monaco.generateTokensCSSForColorMap(colors)
-    }
   }
 
   override dispose(): void {
     this._registrations?.dispose()
     this._grammarFactory?.dispose()
-    this._styleElement?.remove()
     super.dispose()
   }
 }

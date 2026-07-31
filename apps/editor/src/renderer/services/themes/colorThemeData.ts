@@ -468,15 +468,21 @@ export class ColorThemeData implements IColorTheme {
     // Index 0 is the ColorId.None slot and must never hold a real color:
     // vscode-textmate's frozen ColorMap treats id 0 as "missing". The empty
     // string is an invalid color no rule can reference. (VSCode TokenColorIndex
-    // likewise starts assigning at 1.)
+    // likewise starts assigning at 1.) Entries are normalized 6-digit upper-case
+    // hex (see normalizeTokenColor) so monaco's ColorMap can mirror this table
+    // index-for-index via `encodedTokensColors`.
     return ['', ...this.tokenColorIndex.keys()]
   }
 
   getTokenColorIndexId(color: string): number {
+    const normalized = normalizeTokenColor(color)
+    if (normalized === undefined) {
+      // 非法色不进表（VSCode TokenColorIndex.add 同样返回 0 = ColorId.None）。
+      return 0
+    }
     if (!this.tokenColorIndex) {
       this.tokenColorIndex = new Map()
     }
-    const normalized = color.toUpperCase()
     let index = this.tokenColorIndex.get(normalized)
     if (index === undefined) {
       index = this.tokenColorIndex.size + 1
@@ -812,6 +818,19 @@ function parseCssColorLenient(value: string): Color | null {
   } catch {
     return null
   }
+}
+
+/**
+ * token 色（tokenColorMap 表项与所有引用它的规则色）统一归一为 6 位大写 #RRGGBB。
+ *
+ * 去 alpha 是硬约定：monaco `ColorMap.getId` 只认 6/8 位 hex 且丢弃 alpha 后去重，
+ * 表内必须 6 位唯一，`defineTheme` 的 `encodedTokensColors` 才能与 vscode-textmate
+ * frozen 表索引 1:1 对齐（TextMate/semantic token 的 colorId 都指这张表）。alpha
+ * 丢失是 monaco 侧既有约束（TokenTheme 从不支持 token alpha）。
+ */
+export function normalizeTokenColor(color: string | undefined): string | undefined {
+  const normalized = normalizeColor(color)
+  return normalized?.slice(0, 7)
 }
 
 /** 宽容解析主题颜色值：非法值跳过（返回 undefined）并告警，调用方落回注册表默认。

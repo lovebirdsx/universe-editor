@@ -109,4 +109,32 @@ describe('toStandaloneThemeData', () => {
     expect(data.colors['editor.lineHighlightBackground']).toBe('#FFFFFF0F')
     expect(data.colors['editor.lineHighlightBorder']).toBeUndefined()
   })
+
+  it('mirrors the textmate tokenColorMap as encodedTokensColors (index-aligned)', () => {
+    const theme = ColorThemeData.createUnloadedTheme('Test', ColorScheme.DARK, {
+      'editor.foreground': '#D4D4D4',
+      'editor.background': '#1E1E1E',
+    })
+    theme.setCustomTokenColors([
+      { scope: 'keyword', settings: { foreground: '#c586c0' } },
+      // Alpha channel folds away (monaco's ColorMap drops it): must not
+      // produce a duplicate entry that would shift every later index.
+      { scope: 'constant', settings: { foreground: '#C586C0A0' } },
+      { scope: 'string', settings: { foreground: '#CE9178' } },
+    ])
+
+    const { data } = toStandaloneThemeData(theme)
+    // Slot 0 ('' = ColorId.None) is stripped; monaco's ColorMap assigns ids
+    // 1..N to encodedTokensColors in order, so entry i here lands on the same
+    // id (i+1) the frozen vscode-textmate table gives it.
+    expect(data.encodedTokensColors).toEqual(theme.tokenColorMap.slice(1))
+    expect(data.encodedTokensColors).toContain('#C586C0')
+    expect(data.encodedTokensColors).toContain('#CE9178')
+    for (const color of data.encodedTokensColors ?? []) {
+      // monaco ColorMap.getId throws on anything but 6/8-digit hex and folds
+      // duplicates — every entry must be unique 6-digit upper-case hex.
+      expect(color, `encodedTokensColors entry "${color}"`).toMatch(/^#[0-9A-F]{6}$/)
+    }
+    expect(new Set(data.encodedTokensColors).size).toBe(data.encodedTokensColors?.length)
+  })
 })

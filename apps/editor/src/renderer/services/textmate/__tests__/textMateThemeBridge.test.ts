@@ -65,4 +65,27 @@ describe('toTextMateRawTheme', () => {
     expect(map[1]).toBe('#D4D4D4')
     expect(map[2]).toBe('#1E1E1E')
   })
+
+  it('normalizes rule colors to the tokenColorMap entry form (frozen map lookup)', () => {
+    const theme = ColorThemeData.createUnloadedTheme('Norm', ColorScheme.DARK, {
+      'editor.foreground': '#D4D4D4',
+      'editor.background': '#1E1E1E',
+    })
+    theme.setCustomTokenColors([
+      // Lower-case + alpha'd hex: vscode-textmate's frozen ColorMap looks the
+      // rule color up literally, so it must match the table entry byte-for-byte.
+      { scope: 'constant', settings: { foreground: '#ae81ffa0', background: '#10201080' } },
+      { scope: 'invalid', settings: { foreground: 'garbage' } },
+    ])
+
+    const raw = toTextMateRawTheme(theme)
+    const constant = raw.settings.find((r) => r.scope === 'constant')
+    expect(constant?.settings).toEqual({ foreground: '#AE81FF', background: '#102010' })
+    expect(theme.tokenColorMap).toContain('#AE81FF')
+    expect(theme.tokenColorMap).toContain('#102010')
+    // Unparseable colors are dropped from the rule instead of poisoning the
+    // frozen color map with a value it cannot resolve.
+    const invalid = raw.settings.find((r) => r.scope === 'invalid')
+    expect(invalid?.settings).toEqual({})
+  })
 })

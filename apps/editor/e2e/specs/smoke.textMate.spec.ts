@@ -18,12 +18,21 @@ import { expect, test } from '../fixtures/coreTextMateApp.js'
 // themes map storage.type to the same value as keyword.
 const DARK_KEYWORD = 'rgb(86, 156, 214)' // #569CD6 (Universe Dark)
 const LIGHT_KEYWORD = 'rgb(0, 0, 255)' // #0000FF (Universe Light)
+// JSON: key (`support.type.property-name`) and string value (`string`) resolve
+// to distinct colors — a mismatch between the textmate colorMap and the
+// `.mtkN` stylesheet shows up here immediately.
+const DARK_JSON_KEY = 'rgb(156, 220, 254)' // #9CDCFE
+const DARK_JSON_STRING = 'rgb(206, 145, 120)' // #CE9178
 
-function seedTsFile(content: string): string {
+function seedFile(name: string, content: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'universe-textmate-'))
-  const filePath = join(dir, 'sample.ts')
+  const filePath = join(dir, name)
   writeFileSync(filePath, content, 'utf8')
   return filePath
+}
+
+function seedTsFile(content: string): string {
+  return seedFile('sample.ts', content)
 }
 
 /** Computed color of the first view-line span whose exact text is `token`. */
@@ -38,10 +47,28 @@ function tokenColor(page: Page, token: string): Promise<string | undefined> {
   }, token)
 }
 
+/** Same as tokenColor but matches by substring (JSON spans may keep quotes).
+ *  Leaf spans only: the view-line wrapper span contains the whole line text
+ *  and would otherwise win the DOM-order scan with its inherited color. */
+function tokenColorContaining(page: Page, fragment: string): Promise<string | undefined> {
+  return page.evaluate((t) => {
+    for (const span of document.querySelectorAll('.monaco-editor .view-line span')) {
+      if (
+        span.childElementCount === 0 &&
+        span.textContent !== null &&
+        span.textContent.includes(t)
+      ) {
+        return getComputedStyle(span).color
+      }
+    }
+    return undefined
+  }, fragment)
+}
+
 function textMateStyleRules(page: Page): Promise<string> {
-  return page.evaluate(
-    () => document.querySelector('style.contributedTextMateTokens')?.textContent ?? '',
-  )
+  // Single source of truth: monaco's StandaloneThemeService stylesheet, whose
+  // color map mirrors the textmate one via defineTheme's encodedTokensColors.
+  return page.evaluate(() => document.querySelector('style.monaco-colors')?.textContent ?? '')
 }
 
 test.describe('@p0 textmate', () => {
@@ -89,6 +116,26 @@ test.describe('@p0 textmate', () => {
       window.__E2E__!.updateConfigValue('workbench.colorTheme', 'Universe Light')
     })
     await expect.poll(() => tokenColor(page, 'const'), { timeout: 15000 }).toBe(LIGHT_KEYWORD)
+  })
+
+  test('json keys and string values render their distinct theme colors @regression', async ({
+    page,
+    workbench,
+  }) => {
+    // Guards the unified color table: with two independent color maps (monaco
+    // TokenTheme vs textmate) the `.mtkN` stylesheet that happened to load last
+    // won by DOM order, and JSON keys lost their #9CDCFE — reliably in dev,
+    // workspace-dependent in release builds.
+    const filePath = seedFile('sample.json', '{\n  "name": "universe",\n  "count": 42\n}\n')
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p), filePath)
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+
+    await expect
+      .poll(() => tokenColorContaining(page, 'name'), { timeout: 30000 })
+      .toBe(DARK_JSON_KEY)
+    await expect
+      .poll(() => tokenColorContaining(page, 'universe'), { timeout: 15000 })
+      .toBe(DARK_JSON_STRING)
   })
 
   test('over-long lines degrade to null tokenization without blocking render', async ({

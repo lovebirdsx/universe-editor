@@ -275,6 +275,21 @@ describe('ColorThemeData', () => {
     expect(map[first]).toBe('#608060'.toUpperCase())
   })
 
+  it('getTokenColorIndexId normalizes to 6-digit hex: alpha folds, junk maps to 0', async () => {
+    const theme = await loadTestTheme()
+    // Alpha variants collapse onto the 6-digit entry — monaco's ColorMap drops
+    // alpha, so distinct table entries per alpha would shift every index after
+    // the fold and break the encodedTokensColors alignment.
+    const opaque = theme.getTokenColorIndexId('#AE81FF')
+    expect(theme.getTokenColorIndexId('#AE81FFA0')).toBe(opaque)
+    expect(theme.getTokenColorIndexId('#ae81ffff')).toBe(opaque)
+    // Non-hex CSS colors normalize like the rest of the theme pipeline.
+    expect(theme.getTokenColorIndexId('rgb(174, 129, 255)')).toBe(opaque)
+    // Unparseable values stay out of the table (VSCode TokenColorIndex.add → 0).
+    expect(theme.getTokenColorIndexId('not-a-color')).toBe(0)
+    expect(theme.tokenColorMap).not.toContain('not-a-color'.toUpperCase())
+  })
+
   it('storage snapshot round-trips colors, token colors and semantic state', async () => {
     const theme = await loadTestTheme()
     const restored = ColorThemeData.fromStorageSnapshot(theme.toStorageSnapshot())
