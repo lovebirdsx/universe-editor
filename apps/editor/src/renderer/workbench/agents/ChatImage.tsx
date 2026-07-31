@@ -11,7 +11,9 @@
  *  Portaled to <body> and positioned in viewport coordinates so it is never
  *  clipped by a scroll container. Supports wheel-zoom (cursor-anchored),
  *  drag-to-pan, double-click reset, a close button, and Esc / click-outside to
- *  dismiss.
+ *  dismiss. Scroll/resize re-anchor the popover to its thumbnail (the chat
+ *  auto-pins on new session messages, so scrolling must not dismiss); once the
+ *  thumbnail's row unmounts there is nothing left to track and it closes.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -133,6 +135,62 @@ export function computeDisplaySize(
   return { width: naturalWidth * scale, height: naturalHeight * scale, isLarge: shrink < 1 }
 }
 
+function measureDisplaySize(anchor: HTMLImageElement): DisplaySize {
+  const minWidth = Math.min(PREVIEW_MIN_BASE, window.innerWidth * PREVIEW_MIN_VIEWPORT_RATIO)
+  const minHeight = Math.min(PREVIEW_MIN_BASE, window.innerHeight * PREVIEW_MIN_VIEWPORT_RATIO)
+  const maxWidth = Math.max(minWidth, window.innerWidth - PREVIEW_MAX_MARGIN * 2)
+  const maxHeight = Math.max(minHeight, window.innerHeight - PREVIEW_MAX_MARGIN * 2)
+  return computeDisplaySize(
+    anchor.naturalWidth,
+    anchor.naturalHeight,
+    minWidth,
+    minHeight,
+    maxWidth,
+    maxHeight,
+  )
+}
+
+function computePlacement(
+  anchor: HTMLImageElement,
+  popover: HTMLElement,
+  size: DisplaySize,
+): Placement {
+  const a = anchor.getBoundingClientRect()
+  const p = popover.getBoundingClientRect()
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+
+  if (size.isLarge) {
+    const left = clamp(
+      (vw - p.width) / 2,
+      VIEWPORT_MARGIN,
+      Math.max(VIEWPORT_MARGIN, vw - p.width - VIEWPORT_MARGIN),
+    )
+    const top = clamp(
+      (vh - p.height) / 2,
+      VIEWPORT_MARGIN,
+      Math.max(VIEWPORT_MARGIN, vh - p.height - VIEWPORT_MARGIN),
+    )
+    return { left, top }
+  }
+
+  let top = a.top - EDGE_GAP - p.height
+  if (top < VIEWPORT_MARGIN) {
+    const below = a.bottom + EDGE_GAP
+    // Use whichever side has more room if neither fully fits.
+    top = below + p.height <= vh - VIEWPORT_MARGIN || below < a.top ? below : VIEWPORT_MARGIN
+  }
+  top = clamp(top, VIEWPORT_MARGIN, Math.max(VIEWPORT_MARGIN, vh - p.height - VIEWPORT_MARGIN))
+
+  const left = clamp(
+    a.left,
+    VIEWPORT_MARGIN,
+    Math.max(VIEWPORT_MARGIN, vw - p.width - VIEWPORT_MARGIN),
+  )
+
+  return { left, top }
+}
+
 function ImagePreviewPopover({
   src,
   alt,
@@ -163,20 +221,7 @@ function ImagePreviewPopover({
   useLayoutEffect(() => {
     const anchor = anchorRef.current
     if (!anchor) return
-    const minWidth = Math.min(PREVIEW_MIN_BASE, window.innerWidth * PREVIEW_MIN_VIEWPORT_RATIO)
-    const minHeight = Math.min(PREVIEW_MIN_BASE, window.innerHeight * PREVIEW_MIN_VIEWPORT_RATIO)
-    const maxWidth = Math.max(minWidth, window.innerWidth - PREVIEW_MAX_MARGIN * 2)
-    const maxHeight = Math.max(minHeight, window.innerHeight - PREVIEW_MAX_MARGIN * 2)
-    setSize(
-      computeDisplaySize(
-        anchor.naturalWidth,
-        anchor.naturalHeight,
-        minWidth,
-        minHeight,
-        maxWidth,
-        maxHeight,
-      ),
-    )
+    setSize(measureDisplaySize(anchor))
   }, [anchorRef, src])
 
   // Position in viewport coordinates once the display size is known: large
@@ -187,39 +232,38 @@ function ImagePreviewPopover({
     const anchor = anchorRef.current
     const popover = containerRef.current
     if (!anchor || !popover || !size) return
-    const a = anchor.getBoundingClientRect()
-    const p = popover.getBoundingClientRect()
-    const vw = window.innerWidth
-    const vh = window.innerHeight
+    setPlacement(computePlacement(anchor, popover, size))
+  }, [anchorRef, size])
 
-    if (size.isLarge) {
-      const left = clamp(
-        (vw - p.width) / 2,
-        VIEWPORT_MARGIN,
-        Math.max(VIEWPORT_MARGIN, vw - p.width - VIEWPORT_MARGIN),
-      )
-      const top = clamp(
-        (vh - p.height) / 2,
-        VIEWPORT_MARGIN,
-        Math.max(VIEWPORT_MARGIN, vh - p.height - VIEWPORT_MARGIN),
-      )
-      setPlacement({ left, top })
+  // Re-track the anchor on scroll/resize instead of dismissing: the chat pins
+  // itself to the bottom whenever a new session message arrives, and treating
+  // that programmatic scroll as "the user panned away" used to close an open
+  // preview mid-session. Dismiss only once the thumbnail has left the DOM
+  // (its virtualized row unmounted) and there is nothing left to track.
+  const retrack = useCallback(() => {
+    const anchor = anchorRef.current
+    if (!anchor || !anchor.isConnected) {
+      onDismiss()
       return
     }
+    const nextSize = measureDisplaySize(anchor)
+    setSize((prev) =>
+      prev && prev.width === nextSize.width && prev.height === nextSize.height ? prev : nextSize,
+    )
+    const popover = containerRef.current
+    // If the size changed this placement pass used a stale popover rect; the
+    // layout effect above re-runs on the size commit and corrects it.
+    if (popover) setPlacement(computePlacement(anchor, popover, nextSize))
+  }, [anchorRef, onDismiss])
 
-    let top = a.top - EDGE_GAP - p.height
-    if (top < VIEWPORT_MARGIN) {
-      const below = a.bottom + EDGE_GAP
-      // Use whichever side has more room if neither fully fits.
-      top = below + p.height <= vh - VIEWPORT_MARGIN || below < a.top ? below : VIEWPORT_MARGIN
-    }
-    top = clamp(top, VIEWPORT_MARGIN, Math.max(VIEWPORT_MARGIN, vh - p.height - VIEWPORT_MARGIN))
-
-    let left = a.left
-    left = clamp(left, VIEWPORT_MARGIN, Math.max(VIEWPORT_MARGIN, vw - p.width - VIEWPORT_MARGIN))
-
-    setPlacement({ left, top })
-  }, [anchorRef, size])
+  const retrackRaf = useRef<number | undefined>(undefined)
+  const scheduleRetrack = useCallback(() => {
+    if (retrackRaf.current !== undefined) return
+    retrackRaf.current = requestAnimationFrame(() => {
+      retrackRaf.current = undefined
+      retrack()
+    })
+  }, [retrack])
 
   useEffect(() => {
     const handlePointer = (ev: MouseEvent) => {
@@ -240,23 +284,21 @@ function ImagePreviewPopover({
       ev.stopPropagation()
       onDismiss()
     }
-    const handleReflow = () => onDismiss()
     const raf = requestAnimationFrame(() => {
       document.addEventListener('mousedown', handlePointer)
       document.addEventListener('keydown', handleKey, true)
-      // Closing on scroll/resize is simpler and less jarring than re-tracking
-      // the anchor while the user pans the chat.
-      window.addEventListener('resize', handleReflow)
-      window.addEventListener('scroll', handleReflow, true)
+      window.addEventListener('resize', scheduleRetrack)
+      window.addEventListener('scroll', scheduleRetrack, true)
     })
     return () => {
       cancelAnimationFrame(raf)
+      if (retrackRaf.current !== undefined) cancelAnimationFrame(retrackRaf.current)
       document.removeEventListener('mousedown', handlePointer)
       document.removeEventListener('keydown', handleKey, true)
-      window.removeEventListener('resize', handleReflow)
-      window.removeEventListener('scroll', handleReflow, true)
+      window.removeEventListener('resize', scheduleRetrack)
+      window.removeEventListener('scroll', scheduleRetrack, true)
     }
-  }, [anchorRef, onDismiss])
+  }, [anchorRef, onDismiss, scheduleRetrack])
 
   const onWheel = useCallback((e: WheelEvent<HTMLDivElement>) => {
     e.preventDefault()

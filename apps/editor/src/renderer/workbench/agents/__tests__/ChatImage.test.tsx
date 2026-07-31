@@ -197,4 +197,50 @@ describe('ChatImage', () => {
     fireEvent.doubleClick(stage)
     expect(img.style.transform).toBe('translate(0px, 0px) scale(1)')
   })
+
+  it('stays open and re-tracks the anchor when an ancestor scrolls (session auto-pin)', async () => {
+    // Reproduces the real bug: while a session is running, a new incoming
+    // message pins the chat scroll container to the bottom, and that
+    // programmatic scroll used to dismiss the open preview popover.
+    render(<ChatImage src={SRC} alt="pic" testId="thumb" />)
+    fireEvent.click(screen.getByTestId('thumb'))
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(screen.getByTestId('acp-image-preview-popover')).toBeTruthy()
+    await act(async () => {
+      // scroll does not bubble; the popover observes it via a window capture
+      // listener, which dispatching on window reaches the same way.
+      window.dispatchEvent(new Event('scroll'))
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(screen.getByTestId('acp-image-preview-popover')).toBeTruthy()
+  })
+
+  it('stays open on window resize, re-anchored to the new viewport', async () => {
+    render(<ChatImage src={SRC} alt="pic" testId="thumb" />)
+    fireEvent.click(screen.getByTestId('thumb'))
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    await act(async () => {
+      window.dispatchEvent(new Event('resize'))
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(screen.getByTestId('acp-image-preview-popover')).toBeTruthy()
+  })
+
+  it('dismisses on scroll once the anchor thumbnail has left the DOM (virtualized row unmounted)', async () => {
+    render(<ChatImage src={SRC} alt="pic" testId="thumb" />)
+    fireEvent.click(screen.getByTestId('thumb'))
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    screen.getByTestId('thumb').remove()
+    await act(async () => {
+      window.dispatchEvent(new Event('scroll'))
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(screen.queryByTestId('acp-image-preview-popover')).toBeNull()
+  })
 })
