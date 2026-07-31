@@ -2269,7 +2269,7 @@
   gap: 8px;
   margin-top: 6px;
   font-size: calc(var(--agent-font-size, 12px) * 0.857);
-  color: var(--color-message-role-fg, #aaa);
+  color: var(--vscode-agent-messageRoleForeground, #aaa);
 }
 
 .permissionAutoToggle {
@@ -2288,14 +2288,14 @@
 .permissionAutoProgress {
   flex: 0 0 48px;
   height: 2px;
-  background: var(--color-border, #333);
+  background: var(--vscode-workbench-border, #333);
   border-radius: 1px;
   overflow: hidden;
 }
 
 .permissionAutoProgress > div {
   height: 100%;
-  background: var(--color-button-bg, #0e639c);
+  background: var(--vscode-button-background, #0e639c);
   transition: width 0.2s linear;
 }
 
