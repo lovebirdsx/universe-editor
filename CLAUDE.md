@@ -39,9 +39,13 @@ packages/
 ## 常用命令
 
 ```bash
-pnpm check        # 快速校验：docs:check + skills:check + lint + typecheck + test（纯测试文件变更时 targeted 跑变更测试，否则 turbo 全量）
+pnpm check        # 快速校验：docs/skills/knowledge 检查 + lint/typecheck（turbo 缓存）+ 按变更选测试
+                  #   纯测试变更 → 只跑变更测试文件；叶子包源码 → vitest related 按 import 图选测试；
+                  #   配置类/上游包变更 → turbo 全量兜底
+pnpm check:full   # 全量校验（lint + typecheck + test + build），大改动/发版前用
 pnpm test:changed # 只跑 git 变更涉及的测试（全是 *.test.* 才 targeted，混入源码则该域全量；--base main 看分支整体差异）
-pnpm e2e          # 端到端测试（本地未提交改动仅含 e2e spec 时自动只跑改动文件；UNIVERSE_E2E_FULL=1 强制全量）
+pnpm e2e:smoke    # 只跑 @p0 核心冒烟（约 30 用例），交互改动的快速 e2e 验证
+pnpm e2e          # 端到端测试（未提交改动仅含 e2e spec 时自动只跑改动文件；也可显式指定 pnpm e2e specs/<x>.spec.ts；UNIVERSE_E2E_FULL=1 强制全量）
 ```
 
 ## 跨包共同约定
@@ -72,10 +76,10 @@ Prettier：无分号、单引号、`trailingComma: all`、宽度 100。默认不
 
 ## 其它
 
-- 完成功能后，请根据情况来调用指令验证，这两个命令的输出内容较多，执行时请仅截取错误内容
-  - 总是用 `pnpm check` 来验证
-  - 如果涉及到编辑器交互逻辑的改动，用 `pnpm e2e` 跑基础端到端测试
-  - 如果需要回归整体功能，用 `pnpm e2ea` 跑全量端到端测试
+- 完成功能后按改动范围分级验证（命令输出较多，执行时请仅截取错误内容）。完备性由 CI 兜底（全量 lint/typecheck/test + affected e2e 矩阵），本地分级是提速不是放水：
+  - 任何改动收尾：总是用 `pnpm check`（纯测试/叶子包源码自动走快速路径；需要全量语义时用 `pnpm check:full`）
+  - 涉及编辑器交互逻辑：明确知道影响面时先 `pnpm e2e specs/<相关>.spec.ts` 定向验证，再用 `pnpm e2e:smoke` 跑 @p0 冒烟
+  - 大重构 / 跨包改动 / 需要回归整体功能：`pnpm e2e` 跑全量；含 bug 守护回归用 `pnpm e2ea`
 - 完成新功能后，仅在非常必要的场景，才更新 CLAUDE.md
 - 由于该项目还处在开发阶段，功能迭代不用考虑向后兼容
 - 仅在有必要的场景，才在代码里写注释；优先考虑通过命名和结构让代码自解释

@@ -21,10 +21,16 @@
  *  packages all fan out beyond a single spec file).
  *
  *  Usage:
- *    node scripts/e2e/run-e2e.mjs [--scope root|editor] [--suite e2e|e2ea] [--dry-run]
+ *    node scripts/e2e/run-e2e.mjs [--scope root|editor] [--suite e2e|e2ea] [--dry-run] [spec...]
  *  (`--suite e2ea` is the regression-including variant: its main pass folds
  *  @regression back in via UNIVERSE_E2E_INCLUDE_REGRESSION=1, exactly like the
  *  original e2ea scripts — including when scoped to changed specs.)
+ *
+ *  Positional args are core spec files to run explicitly — for "I changed src but
+ *  know exactly which spec covers it": `pnpm e2e specs/smoke.foo.spec.ts`. Accepted
+ *  forms: apps/editor/e2e/specs/x.spec.ts, e2e/specs/x.spec.ts, specs/x.spec.ts.
+ *  Explicit specs skip the git detection but NOT the CI/TURBO_HASH full-mode
+ *  overrides (a turbo task must stay full to keep its cache semantics honest).
  *--------------------------------------------------------------------------------------------*/
 
 import { execFileSync, spawnSync } from 'node:child_process'
@@ -40,11 +46,16 @@ const EDITOR_PREFIX = 'apps/editor/'
 
 /** CLI args. Pure so the parsing (and its rejection of bad values) is testable. */
 export function parseArgs(argv) {
-  const args = { scope: 'root', suite: 'e2e', dryRun: false }
+  const args = { scope: 'root', suite: 'e2e', dryRun: false, specs: [] }
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--scope') args.scope = argv[++i]
     else if (argv[i] === '--suite') args.suite = argv[++i]
     else if (argv[i] === '--dry-run') args.dryRun = true
+    else if (argv[i].startsWith('-')) {
+      // Fail loud: a silently ignored --grep would run the FULL suite while the
+      // user believes they filtered (use e2eg for --grep).
+      throw new Error(`unknown flag: ${argv[i]} (spec files are positional; --grep goes via e2eg)`)
+    } else args.specs.push(normalizeSpecArg(argv[i]))
   }
   if (args.scope !== 'root' && args.scope !== 'editor') {
     throw new Error(`unknown --scope: ${args.scope} (expected root|editor)`)
@@ -53,6 +64,28 @@ export function parseArgs(argv) {
     throw new Error(`unknown --suite: ${args.suite} (expected e2e|e2ea)`)
   }
   return args
+}
+
+/**
+ * Normalize an explicit spec argument to its repo-relative path. Only core specs
+ * are accepted — extension suites have their own configs, and a path outside
+ * specs/ would silently select nothing.
+ */
+export function normalizeSpecArg(arg) {
+  const p = arg.replace(/\\/g, '/')
+  const full = p.startsWith(SPEC_PREFIX)
+    ? p
+    : p.startsWith('e2e/specs/')
+      ? EDITOR_PREFIX + p
+      : p.startsWith('specs/')
+        ? `${SPEC_PREFIX}${p.slice('specs/'.length)}`
+        : undefined
+  if (!full || !full.endsWith(SPEC_SUFFIX)) {
+    throw new Error(
+      `not a core spec file: ${arg} (expected [apps/editor/][e2e/]specs/<name>.spec.ts)`,
+    )
+  }
+  return full
 }
 
 /**
@@ -186,7 +219,19 @@ function main() {
   else if (process.env['UNIVERSE_E2E_FULL'] === '1') forced = 'UNIVERSE_E2E_FULL=1'
 
   if (forced) {
+    if (args.specs.length > 0) {
+      console.log(`run-e2e: 忽略显式 spec 参数（${forced} 强制全量）`)
+    }
     plan = { mode: 'full', reason: forced }
+  } else if (args.specs.length > 0) {
+    // Explicit specs must exist — a typo silently selecting nothing is a false green.
+    const missing = args.specs.filter((p) => !existsSync(join(repoRoot, p)))
+    if (missing.length > 0) {
+      console.error(`run-e2e: 显式指定的 spec 不存在:`)
+      for (const p of missing) console.error(`  - ${p}`)
+      process.exit(1)
+    }
+    plan = { mode: 'specs', specs: args.specs, reason: '命令行显式指定 spec' }
   } else {
     try {
       plan = planChangedSpecs(uncommittedPaths())

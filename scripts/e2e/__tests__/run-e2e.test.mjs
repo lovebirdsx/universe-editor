@@ -11,7 +11,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseArgs, parsePorcelainV1z, planChangedSpecs } from '../run-e2e.mjs'
+import { parseArgs, parsePorcelainV1z, planChangedSpecs, normalizeSpecArg } from '../run-e2e.mjs'
 
 const SPEC = 'apps/editor/e2e/specs/smoke.foo.spec.ts'
 const SPEC2 = 'apps/editor/e2e/specs/smoke.bar.spec.ts'
@@ -72,7 +72,7 @@ test('plan: rename out of specs/ forces full via the old path', () => {
 })
 
 test('parseArgs defaults to root scope and e2e suite', () => {
-  assert.deepEqual(parseArgs([]), { scope: 'root', suite: 'e2e', dryRun: false })
+  assert.deepEqual(parseArgs([]), { scope: 'root', suite: 'e2e', dryRun: false, specs: [] })
 })
 
 test('parseArgs reads --scope / --suite / --dry-run in any order', () => {
@@ -80,10 +80,38 @@ test('parseArgs reads --scope / --suite / --dry-run in any order', () => {
     scope: 'editor',
     suite: 'e2ea',
     dryRun: true,
+    specs: [],
   })
 })
 
 test('parseArgs rejects unknown scope / suite values', () => {
   assert.throws(() => parseArgs(['--scope', 'extensions']), /--scope/)
   assert.throws(() => parseArgs(['--suite', 'e2e:regression']), /--suite/)
+})
+
+test('parseArgs collects positional spec args, normalized to repo-relative', () => {
+  assert.deepEqual(parseArgs(['specs/smoke.foo.spec.ts', '--dry-run']).specs, [SPEC])
+  assert.deepEqual(parseArgs([SPEC, 'e2e/specs/smoke.bar.spec.ts']).specs, [SPEC, SPEC2])
+})
+
+test('parseArgs rejects unknown flags instead of silently ignoring them', () => {
+  assert.throws(() => parseArgs(['--grep', '@p0']), /unknown flag/)
+})
+
+test('normalizeSpecArg accepts the three path forms and backslashes', () => {
+  assert.equal(normalizeSpecArg('specs/smoke.foo.spec.ts'), SPEC)
+  assert.equal(normalizeSpecArg('e2e/specs/smoke.foo.spec.ts'), SPEC)
+  assert.equal(normalizeSpecArg(SPEC), SPEC)
+  assert.equal(normalizeSpecArg('specs\\smoke.foo.spec.ts'), SPEC)
+})
+
+test('normalizeSpecArg rejects paths outside core specs/ and non-spec files', () => {
+  for (const bad of [
+    'apps/editor/e2e/fixtures/smoke.fake.spec.ts',
+    'extensions/markdown/e2e/specs/smoke.m.spec.ts',
+    'apps/editor/e2e/specs/README.md',
+    'apps/editor/src/renderer/main.tsx',
+  ]) {
+    assert.throws(() => normalizeSpecArg(bad), /not a core spec file/, bad)
+  }
 })

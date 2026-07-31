@@ -10,6 +10,7 @@
     "test:changed": "node scripts/test-changed.mjs",
     "e2e": "node scripts/e2e/run-e2e.mjs",
     "e2ea": "node scripts/e2e/run-e2e.mjs --suite e2ea",
+    "e2e:smoke": "pnpm --filter @universe-editor/editor e2e:smoke",
     "e2e:ext": "turbo run e2e --filter",
     "e2e:external": "node scripts/e2e/run-external-e2e-all.mjs",
     "e2ea:external": "node scripts/e2e/run-external-e2e-all.mjs --regression",

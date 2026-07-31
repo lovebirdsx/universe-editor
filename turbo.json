@@ -1,6 +1,7 @@
 {
   "$schema": "https://v2-10-3.turborepo.dev/schema.json",
   "//": "typecheck dependsOn build + ^build (not ^typecheck): extensions typecheck with `tsgo --noEmit` and resolve upstream package types from dist/*.d.ts, which only `build` produces; ^build means a typecheck cache hit still restores upstream dist (build.outputs) to disk first — otherwise a clean CI checkout sees missing .d.ts and fails TS2307. The own-package `build` dep exists because library packages' typecheck script is `tsgo --build`, which EMITS into dist/ — without the edge, `turbo run typecheck` schedules e.g. workbench-ui#typecheck concurrently with workbench-ui#build (pulled in as a downstream ^build dep), two tsgo processes rewrite the same dist/, and turbo tars build.outputs while the other writer is mid-write: the cached artifact then contains truncated/empty .js files and every later run that restores it fails with undefined imports (CI-only, unreproducible locally). Ordering typecheck after build makes its tsgo a no-op. @universe-editor/editor#typecheck keeps plain ^build: all its tsconfigs are noEmit (no dist collision) and its build is the heavy electron-vite bundle that typecheck shouldn't drag in. --- e2e: every e2e task drives the PACKAGED editor (apps/editor/out) + reads built-in extensions from their repo `extensions/<ext>/dist`; an extension does NOT depend on @universe-editor/editor (dep runs the other way), so the global e2e task depends on `@universe-editor/editor#build` to keep the host fresh. The editor's own e2e suite activates git/typescript/markdown via its scoped core*App fixtures; those are declared devDependencies of @universe-editor/editor (so turbo affected re-runs core when they change — see scripts/e2e/affected-e2e-matrix.mjs), which also means the editor#e2e `^build` builds them automatically — no per-extension #build override needed. Net: `turbo run e2e --filter=<anything>` always builds a fresh host + the exact extensions the suite exercises.",
+  "globalDependencies": [".prettierrc.json", ".prettierignore", "eslint.config.js"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -22,8 +23,24 @@
       "dependsOn": ["build", "^build"],
       "outputs": []
     },
+    // editor 的 lint/typecheck 默认 inputs 是整个包的 git 跟踪文件，改 CLAUDE.md/docs 也会
+    // 整包重跑。收窄为命令实际读取的目录整列（宁可略宽不猜扩展名）。同步约束：给 lint/
+    // typecheck 命令新增目录时必须同步这里的 inputs，否则改动不失效缓存=假绿。
+    // !e2e/test-results、!e2e/playwright-report、!integration/node_modules：运行产物/缓存，
+    // 显式 inputs glob 会匹配未跟踪文件，不排除则 hash 漂移、缓存永不命中（editor#test 同款教训）。
     "@universe-editor/editor#typecheck": {
       "dependsOn": ["^build"],
+      "inputs": [
+        "src/**",
+        "integration/**",
+        "!integration/node_modules/**",
+        "bench/**",
+        "e2e/**",
+        "!e2e/test-results/**",
+        "!e2e/playwright-report/**",
+        "tsconfig*.json",
+        "package.json"
+      ],
       "outputs": []
     },
     "test": {
@@ -50,14 +67,42 @@
     "e2e": {
       "dependsOn": ["^build", "build", "@universe-editor/editor#build"],
       "outputs": ["e2e/playwright-report/**", "e2e/test-results/**"],
-      "env": ["CI", "UNIVERSE_E2E", "UNIVERSE_E2E_INCLUDE_REGRESSION", "UNIVERSE_E2E_ONLY_TAG"]
+      "env": [
+        "CI",
+        "UNIVERSE_E2E",
+        "UNIVERSE_E2E_INCLUDE_REGRESSION",
+        "UNIVERSE_E2E_ONLY_TAG",
+        "UNIVERSE_E2E_ONLY_TAG_INVERT"
+      ]
     },
     "e2ea": {
       "dependsOn": ["^build", "build", "@universe-editor/editor#build"],
       "outputs": ["e2e/playwright-report/**", "e2e/test-results/**"],
-      "env": ["CI", "UNIVERSE_E2E", "UNIVERSE_E2E_INCLUDE_REGRESSION", "UNIVERSE_E2E_ONLY_TAG"]
+      "env": [
+        "CI",
+        "UNIVERSE_E2E",
+        "UNIVERSE_E2E_INCLUDE_REGRESSION",
+        "UNIVERSE_E2E_ONLY_TAG",
+        "UNIVERSE_E2E_ONLY_TAG_INVERT"
+      ]
     },
     "lint": {
+      "outputs": [".eslintcache"]
+    },
+    // 收窄理由与同步约束见 editor#typecheck 注释；lint 命令 = eslint src bench integration e2e
+    "@universe-editor/editor#lint": {
+      "inputs": [
+        "src/**",
+        "bench/**",
+        "integration/**",
+        "!integration/node_modules/**",
+        "e2e/**",
+        "!e2e/test-results/**",
+        "!e2e/playwright-report/**",
+        "eslint.config.js",
+        "package.json",
+        "tsconfig*.json"
+      ],
       "outputs": [".eslintcache"]
     },
     "lint:fix": {

@@ -63,6 +63,7 @@
 
 ## 工程约定 / 护栏
 
+- [win32 spawnSync shell:true 吞 ^](win32-spawnsync-cmd-caret-escaping.md) — cmd 元字符参数须包双引号；turbo `pkg^...` 静默变 `pkg...`
 - [ESLint 路径身份护栏](eslint-path-identity-guardrails.md) — 禁手写 fsPath 折叠/路径身份键；flat config 替换非合并
 - [UriComponents path 须带前导斜杠](uri-components-canonical-path-leading-slash.md) — 手写 'C:/...' 致 file://C:/ parse 不稳、URI 身份断裂；e2e 渲染日志在 userData/logs/window-N/console.log
 - [Action2 async accessor 失效](action2-async-accessor-invalidation.md) — await 前同步取完所有 service；持久 accessor 测试假绿

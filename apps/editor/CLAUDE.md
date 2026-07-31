@@ -269,11 +269,12 @@ test.describe('@p0 my thing', () => {
 ```bash
 pnpm --filter @universe-editor/editor build      # e2e 跑的是 out/ 产物
 pnpm --filter @universe-editor/editor e2e
+pnpm --filter @universe-editor/editor e2e:smoke  # 只跑 @p0 冒烟（日常交互改动首选）
 pnpm --filter @universe-editor/editor e2e:ui     # 本地交互调试
-pnpm --filter @universe-editor/editor e2e -- --grep "@p0"
+pnpm e2e specs/smoke.myThing.spec.ts             # 显式只跑指定 spec（--grep 走 e2eg）
 ```
 
-**标签**：`@p0` 失败阻塞 CI；`@p1` 仅产报告。CI 在 ubuntu + windows 双跑（`.github/workflows/ci.yml` 的 `e2e` job）。
+**标签**：`@p0` 核心冒烟（`e2e:smoke` 的选中集，**不与 @serial/@flaky/@perf/@visual 同标**）；`@p0`/`@p1` 失败均阻塞 CI。CI 在 ubuntu + windows 双跑（`.github/workflows/ci.yml` 的 `e2e` job）。
 
 **踩坑**：
 - 部件可见性走 ContextKey + `expect.poll(...)`，不要 `toBeVisible()`——Allotment.Pane 用 CSS visibility 隐藏后代，DOM 可见性会误判

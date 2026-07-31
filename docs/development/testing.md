@@ -2,7 +2,7 @@
 
 本仓库分三层测试，全部经 `pnpm check` / CI 门禁：**单元测试**（vitest）、**集成测试**（vitest，跨窗口/多进程场景）、**E2E 冒烟**（Playwright + Electron，跑打包产物）。
 
-> 只想跑一遍全绿：`pnpm check`（= `docs:check` + turbo `lint typecheck test`）；改了交互逻辑再跑 `pnpm e2e`。
+> 只想跑一遍全绿：`pnpm check`——`docs:check` + `skills:check` + `knowledge:check` + lint/typecheck（turbo 缓存）+ 按变更选测试（纯测试变更只跑变更文件；叶子包源码变更用 `vitest related` 按 import 图选受影响测试；配置类/上游包变更退 turbo 全量）。需要全量语义用 `pnpm check:full`。改了交互逻辑再跑 `pnpm e2e:smoke`（@p0 冒烟）或 `pnpm e2e`（全量）。本地是快信号，完备性由 CI 全量兜底。
 
 ## 一览
 
@@ -51,7 +51,9 @@ harness 的启动 fixture 接收 `extensions: string[]`（扩展 id allowlist）
 
 ### tag 体系
 
-tag 打在**用例级**标题末尾（`@regression` 尤其是单用例级）。**tag 分流策略集中在共享 config**（`packages/e2e-harness/src/playwrightConfig.ts` 的 `grepOptions`）——core 与**每个扩展**用同一套过滤，行为一致（此前扩展跑裸 `playwright test`，其 `@regression` 用例每次都跑，现已统一）。各 npm script 不再传 `--grep`，只翻两个环境变量：`UNIVERSE_E2E_INCLUDE_REGRESSION=1`（把 @regression 并回主趟）、`UNIVERSE_E2E_ONLY_TAG=<tag>`（只跑某 tag，用于 @serial/@regression/@flaky/@perf/@visual 的独立趟）。
+tag 打在**用例级**标题末尾（`@regression` 尤其是单用例级）。**tag 分流策略集中在共享 config**（`packages/e2e-harness/src/playwrightConfig.ts` 的 `grepOptions`）——core 与**每个扩展**用同一套过滤，行为一致（此前扩展跑裸 `playwright test`，其 `@regression` 用例每次都跑，现已统一）。各 npm script 不再传 `--grep`，只翻三个环境变量：`UNIVERSE_E2E_INCLUDE_REGRESSION=1`（把 @regression 并回主趟）、`UNIVERSE_E2E_ONLY_TAG=<tag>`（只跑某 tag，用于 @serial/@regression/@flaky/@perf/@visual 的独立趟）、`UNIVERSE_E2E_ONLY_TAG_INVERT=<正则>`（在 ONLY_TAG 趟上叠加排除，`e2e:smoke` 用它把 @p0∩@serial 的用例挡在并行趟外）。
+
+**约定：`@p0` 不与 `@serial`/`@flaky`/`@perf`/`@visual` 同标**——smoke 的语义是「可并行的主路径冒烟」；历史反例（`smoke.workspace.spec.ts`）由 `e2e:smoke` 的 INVERT 兜住。
 
 | tag | 含义 | 默认 `pnpm e2e` | `pnpm e2ea` | CI |
 |---|---|---|---|---|
@@ -68,6 +70,8 @@ tag 打在**用例级**标题末尾（`@regression` 尤其是单用例级）。*
 ```bash
 # E2E 入口（core + 所有扩展）；本地未提交改动仅含 core spec 时自动只跑改动文件（见下节）
 pnpm e2e                    # 默认：排除 @regression/@serial/@flaky/@perf/@visual；core 额外跑 @serial 趟
+pnpm e2e specs/smoke.foo.spec.ts   # 显式只跑指定 core spec（改了 src 但明确知道影响面时）
+pnpm e2e:smoke              # 只跑 @p0 冒烟（ONLY_TAG=@p0 + INVERT 挡 @serial 等 hazard tag），不含扩展 suite
 pnpm e2ea                   # 含 @regression 的全量（turbo `e2ea` task，独立缓存条目）
 pnpm e2e:force              # 忽略 turbo 缓存强制真跑 e2e（复跑 flaky 用），build 仍走缓存不重复
 pnpm e2ea:force             # 同上，含 @regression
@@ -92,6 +96,7 @@ pnpm e2e:ext @universe-editor/perforce
 
 `pnpm e2e` / `pnpm e2ea`（根或 apps/editor 内）的入口是 `scripts/e2e/run-e2e.mjs`：当**未提交改动**（staged + unstaged + untracked）全部落在 `apps/editor/e2e/specs/*.spec.ts` 时，自动只对改动文件跑「主趟 + `@serial` 趟」（`e2ea` 主趟照常含 `@regression`），几秒到十几秒即可验证；其余情况——fixtures/pages/harness/src 等任何非 core-spec 改动、工作区干净、CI、turbo 任务内——一律回退原全量命令。
 
+- **显式指定 spec**：`pnpm e2e specs/smoke.foo.spec.ts`（也接受 `e2e/specs/...`、`apps/editor/e2e/specs/...` 形式）——改了 src 但明确知道影响哪个 spec 时跳过 git 检测直接定向跑；spec 路径不存在会直接报错（防拼错假绿）；CI / turbo 任务内此参数被忽略仍全量。
 - 部分运行**绕过 turbo** 直接 spawn Playwright：turbo 缓存的 e2e 成功永远是全量成功，语义不被部分运行污染。
 - 强制全量：设 `UNIVERSE_E2E_FULL=1`；查看判定结果：`node scripts/e2e/run-e2e.mjs --dry-run`。
 - 判定只看未提交改动——已提交（含未推送）的 e2e 改动走全量，turbo 缓存照常生效。
@@ -126,6 +131,23 @@ E2E 在 CI 里**按改动范围选择性执行**，避免插件越多 E2E 越重
 node scripts/e2e/affected-e2e-matrix.mjs --base origin/main   # 相对主干算受影响
 node scripts/e2e/affected-e2e-matrix.mjs --all                # 全开（等价 main 全量）
 ```
+
+## 多 worktree / 多 clone 的 turbo 缓存
+
+**git worktree 之间无需任何配置**：turbo ≥ 2.10 原生把 worktree 的本地缓存统一存到主仓库的 `.turbo/cache`（worktree 内运行可见日志 `using shared worktree cache`）。worktree A 跑过的任务，worktree B 在相同输入下直接 `FULL TURBO`。
+
+同机**多个独立 clone**（非 worktree）之间默认各自一份缓存。想共享，设**用户级**环境变量 `TURBO_CACHE_DIR` 指向一个固定绝对路径：
+
+```bash
+# Windows（setx 写入用户环境变量，新开的 shell 生效）
+setx TURBO_CACHE_DIR "D:\cache\turbo"
+# macOS / Linux（写入 ~/.bashrc / ~/.zshrc）
+export TURBO_CACHE_DIR="$HOME/.cache/turbo-universe"
+```
+
+- **安全性**：turbo 缓存按内容 hash 寻址、并发写安全，多方共享同一目录不会互相污染——hash 不同的条目各存各的，hash 相同意味着输入完全一致、产物可复用。
+- **代价**：目录只增不减，磁盘涨了直接删整个目录即可（等于清缓存）。
+- 不写进仓库配置（`turbo.json` 的 `cacheDir` 是仓库相对路径且对所有人生效），机器级偏好留给各自的 shell 环境。
 
 ## flaky 排查
 

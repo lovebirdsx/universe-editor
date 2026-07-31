@@ -21,6 +21,7 @@
     "e2eg": "node ../../scripts/e2e/ensure-e2e-build.mjs @universe-editor/editor && cross-env UNIVERSE_E2E_NO_TAG_FILTER=1 playwright test -c e2e/playwright.config.ts --grep ",
     "e2e": "node ../../scripts/e2e/run-e2e.mjs --scope editor",
     "e2ea": "node ../../scripts/e2e/run-e2e.mjs --scope editor --suite e2ea",
+    "e2e:smoke": "node ../../scripts/e2e/ensure-e2e-build.mjs @universe-editor/editor && cross-env UNIVERSE_E2E_ONLY_TAG=@p0 \"UNIVERSE_E2E_ONLY_TAG_INVERT=@serial|@flaky|@perf|@visual\" playwright test -c e2e/playwright.config.ts",
     "e2e:regression": "node ../../scripts/e2e/ensure-e2e-build.mjs @universe-editor/editor && cross-env UNIVERSE_E2E_ONLY_TAG=@regression playwright test -c e2e/playwright.config.ts",
     "e2e:headed": "node ../../scripts/e2e/ensure-e2e-build.mjs @universe-editor/editor && playwright test -c e2e/playwright.config.ts --headed",
     "e2e:ui": "node ../../scripts/e2e/ensure-e2e-build.mjs @universe-editor/editor && playwright test -c e2e/playwright.config.ts --ui",

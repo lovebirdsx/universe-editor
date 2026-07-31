@@ -34,6 +34,9 @@ const localWorkers = Math.max(4, Math.min(8, Math.floor(cpus().length / 2)))
 //              separate --workers=1 pass (ONLY_TAG=@serial)
 //   @regression — bug-guard; excluded from the default pass, folded into `e2ea`
 //                 (INCLUDE_REGRESSION=1); CI runs it as its own pass (ONLY_TAG=@regression)
+//   @p0      — core smoke; `e2e:smoke` runs ONLY_TAG=@p0 with
+//              ONLY_TAG_INVERT=@serial|@flaky|@perf|@visual so a case double-tagged
+//              @p0+@serial cannot leak into the parallel smoke pass
 const NEVER_TAGS = ['@visual', '@flaky', '@perf'] as const
 
 // e2ea: fold @regression back into the main pass (@visual/@flaky/@perf stay out,
@@ -43,6 +46,10 @@ const INCLUDE_REGRESSION = process.env['UNIVERSE_E2E_INCLUDE_REGRESSION'] === '1
 // default exclusions. Used by the @serial (--workers=1) pass and by CI's separate
 // @regression / @flaky / @perf / @visual passes. Empty ⇒ the normal main pass.
 const ONLY_TAG = process.env['UNIVERSE_E2E_ONLY_TAG']
+// Exclusions applied ON TOP of an ONLY_TAG pass. The value is a regex alternation
+// (deliberately NOT escaped, unlike ONLY_TAG's literal single tag): e2e:smoke sets
+// `@serial|@flaky|@perf|@visual` so those hazard tags stay in their dedicated passes.
+const ONLY_TAG_INVERT = process.env['UNIVERSE_E2E_ONLY_TAG_INVERT']
 // Debug escape hatch (the `e2eg` script): drop the default exclusions entirely so a
 // hand-passed `--grep <title>` can select ANY spec, including ones tagged
 // @regression / @serial / @flaky / @perf / @visual — otherwise the default
@@ -56,7 +63,10 @@ function grepOptions(): { grep?: RegExp; grepInvert?: RegExp } {
   }
   if (ONLY_TAG) {
     // Match the tag literally (@ is not a regex metachar; escape defensively).
-    return { grep: new RegExp(ONLY_TAG.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) }
+    return {
+      grep: new RegExp(ONLY_TAG.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+      ...(ONLY_TAG_INVERT ? { grepInvert: new RegExp(ONLY_TAG_INVERT) } : {}),
+    }
   }
   const excluded = [...NEVER_TAGS, '@serial', ...(INCLUDE_REGRESSION ? [] : ['@regression'])]
   return { grepInvert: new RegExp(excluded.join('|')) }

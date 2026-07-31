@@ -69,13 +69,15 @@ harness 的启动 fixture 接收 `extensions: string[]`(扩展 id allowlist),拼
 
 ## tag 体系与脚本
 
-tag 打在**用例级** `test('... @p0')` 标题末尾（`@regression` 尤其是单用例级，不打在 `describe` 上）。**过滤策略集中在共享 config**（`packages/e2e-harness/src/playwrightConfig.ts` 的 `grepOptions`），core 与**每个扩展**同一套——script/CI **不传 `--grep`**，只翻两个 env：`UNIVERSE_E2E_INCLUDE_REGRESSION=1`（把 @regression 并回主趟，即 `e2ea`）、`UNIVERSE_E2E_ONLY_TAG=<tag>`（只跑某 tag，用于 serial/regression/flaky/perf/visual 独立趟）。加/改 tag 分流只改这一处。**加新 tag 记得同步 `turbo.json` 的 e2e/e2ea task `env` 声明**（否则 turbo strict 模式不透传、不入缓存 key）。
+tag 打在**用例级** `test('... @p0')` 标题末尾（`@regression` 尤其是单用例级，不打在 `describe` 上）。**过滤策略集中在共享 config**（`packages/e2e-harness/src/playwrightConfig.ts` 的 `grepOptions`），core 与**每个扩展**同一套——script/CI **不传 `--grep`**，只翻三个 env：`UNIVERSE_E2E_INCLUDE_REGRESSION=1`（把 @regression 并回主趟，即 `e2ea`）、`UNIVERSE_E2E_ONLY_TAG=<tag>`（只跑某 tag，用于 serial/regression/flaky/perf/visual 独立趟）、`UNIVERSE_E2E_ONLY_TAG_INVERT=<正则>`（ONLY_TAG 趟上叠加排除，`e2e:smoke` 用它把 @p0∩hazard-tag 的用例挡在并行趟外）。加/改 tag 分流只改这一处。**加新 tag 记得同步 `turbo.json` 的 e2e/e2ea task `env` 声明**（否则 turbo strict 模式不透传、不入缓存 key）。
+
+**约定：`@p0` 不与 `@serial`/`@flaky`/`@perf`/`@visual` 同标**——`e2e:smoke` 的语义是「可并行的主路径冒烟」，同标用例会被 INVERT 从 smoke 里排除（历史反例 `smoke.workspace.spec.ts` 即靠此兜住），等于白标了 @p0。
 
 > **坑：裸 `playwright test --grep "<标题>"` 想跑某个用例却报 `No tests found`。** 因为 config 默认设了 `grepInvert`（排除 @visual/@flaky/@perf/@serial/@regression），你的 `--grep` 与它**取交集**——若目标用例带这些 tag（如 `@regression`）就被过滤空。要跑：① 调试用 `pnpm e2eg "<标题>"`（设 `UNIVERSE_E2E_NO_TAG_FILTER=1` 关掉默认排除，能选中任意 tag）；② 或前缀 `UNIVERSE_E2E_ONLY_TAG=@regression` 再 `--grep`。**`e2eg` 直接跟标题，别加 `--`**（`pnpm e2eg -- "x"` 会把 `--` 当 grep 值）。
 
 | tag | 含义 | 默认 `pnpm e2e` | CI |
 |---|---|---|---|
-| `@p0` | 核心冒烟，失败**阻塞** CI | ✅ 跑 | 并行趟 shard×2 |
+| `@p0` | 核心冒烟，失败**阻塞** CI；`e2e:smoke` 的选中集 | ✅ 跑 | 并行趟 shard×2 |
 | `@p1` | 一般冒烟，阻塞 | ✅ 跑 | 并行趟 shard×2 |
 | `@regression` | 守护已修复 bug（非主路径冒烟） | ❌ 排除（`e2ea` 并回） | 单独并行趟 |
 | `@serial` | 跨进程 native 竞态需隔离 | 单独 `--workers=1` 串行趟 | 单独串行趟，仅 shard 1 |
@@ -95,6 +97,7 @@ pnpm e2ea:force    # 同上，含 @regression
 pnpm e2e:ext @universe-editor/<ext>   # 只跑单个扩展 suite（turbo 自动 build 宿主+扩展）
 
 # 子包级（只 core；前置守卫自动 build，但不缓存 e2e 结果——诊断单 spec / 反复调用）
+pnpm --filter @universe-editor/editor e2e:smoke      # 只跑 @p0 冒烟（根级 pnpm e2e:smoke 同款），日常交互改动首选
 pnpm --filter @universe-editor/editor e2e:regression # 只跑 @regression
 pnpm --filter @universe-editor/editor e2eg "<用例标题或grep>"  # 自由 grep 调试（NO_TAG_FILTER，能选中任意 tag）
 pnpm --filter @universe-editor/editor e2e:ui         # 本地交互调试
