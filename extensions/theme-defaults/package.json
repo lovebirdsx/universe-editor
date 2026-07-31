@@ -5,10 +5,14 @@
   "type": "module",
   "files": [
     "themes",
-    "icons"
+    "icons",
+    "package.nls.json",
+    "package.nls.zh-cn.json",
+    "LICENSE",
+    "icon.svg"
   ],
   "displayName": "Universe Themes",
-  "description": "Built-in default color themes (Universe Dark / Universe Light) and the default file icon theme.",
+  "description": "Built-in default color themes (Universe Dark / Universe Light), the classic VSCode default themes, and the default file icon theme.",
   "engines": {
     "universe": ">=0.1.0 <1.0.0"
   },
@@ -25,6 +29,66 @@
         "label": "Universe Light",
         "uiTheme": "vs",
         "path": "./themes/universe-light.json"
+      },
+      {
+        "id": "Light 2026",
+        "label": "%light2026ThemeLabel%",
+        "uiTheme": "vs",
+        "path": "./themes/2026-light.json"
+      },
+      {
+        "id": "Dark 2026",
+        "label": "%dark2026ThemeLabel%",
+        "uiTheme": "vs-dark",
+        "path": "./themes/2026-dark.json"
+      },
+      {
+        "id": "Dark+",
+        "label": "%darkPlusColorThemeLabel%",
+        "uiTheme": "vs-dark",
+        "path": "./themes/dark_plus.json"
+      },
+      {
+        "id": "Dark Modern",
+        "label": "%darkModernThemeLabel%",
+        "uiTheme": "vs-dark",
+        "path": "./themes/dark_modern.json"
+      },
+      {
+        "id": "Light+",
+        "label": "%lightPlusColorThemeLabel%",
+        "uiTheme": "vs",
+        "path": "./themes/light_plus.json"
+      },
+      {
+        "id": "Light Modern",
+        "label": "%lightModernThemeLabel%",
+        "uiTheme": "vs",
+        "path": "./themes/light_modern.json"
+      },
+      {
+        "id": "Visual Studio Dark",
+        "label": "%darkColorThemeLabel%",
+        "uiTheme": "vs-dark",
+        "path": "./themes/dark_vs.json"
+      },
+      {
+        "id": "Visual Studio Light",
+        "label": "%lightColorThemeLabel%",
+        "uiTheme": "vs",
+        "path": "./themes/light_vs.json"
+      },
+      {
+        "id": "Default High Contrast",
+        "label": "%hcColorThemeLabel%",
+        "uiTheme": "hc-black",
+        "path": "./themes/hc_black.json"
+      },
+      {
+        "id": "Default High Contrast Light",
+        "label": "%lightHcColorThemeLabel%",
+        "uiTheme": "hc-light",
+        "path": "./themes/hc_light.json"
       }
     ],
     "iconThemes": [
@@ -34,5 +98,6 @@
         "path": "./icons/universe-material-icon-theme.json"
       }
     ]
-  }
+  },
+  "icon": "icon.svg"
 }

@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "files": [
-    "syntaxes"
+    "syntaxes",
+    "icon.svg"
   ],
   "displayName": "TextMate Grammars",
   "description": "Built-in TextMate grammars (VSCode-compatible) for token colorization.",
@@ -62,12 +63,18 @@
       {
         "scopeName": "documentation.injection.ts",
         "path": "./syntaxes/jsdoc.ts.injection.tmLanguage.json",
-        "injectTo": ["source.ts", "source.tsx"]
+        "injectTo": [
+          "source.ts",
+          "source.tsx"
+        ]
       },
       {
         "scopeName": "documentation.injection.js.jsx",
         "path": "./syntaxes/jsdoc.js.injection.tmLanguage.json",
-        "injectTo": ["source.js", "source.js.jsx"]
+        "injectTo": [
+          "source.js",
+          "source.js.jsx"
+        ]
       },
       {
         "language": "javascriptreact",
@@ -277,8 +284,12 @@
         "language": "shellscript",
         "scopeName": "source.shell",
         "path": "./syntaxes/shell-unix-bash.tmLanguage.json",
-        "balancedBracketScopes": ["*"],
-        "unbalancedBracketScopes": ["meta.scope.case-pattern.shell"]
+        "balancedBracketScopes": [
+          "*"
+        ],
+        "unbalancedBracketScopes": [
+          "meta.scope.case-pattern.shell"
+        ]
       },
       {
         "language": "dockercompose",
@@ -327,5 +338,6 @@
         "path": "./syntaxes/xsl.tmLanguage.json"
       }
     ]
-  }
+  },
+  "icon": "icon.svg"
 }

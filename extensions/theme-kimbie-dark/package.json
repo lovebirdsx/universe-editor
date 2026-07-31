@@ -1,0 +1,29 @@
+{
+  "name": "@universe-editor/theme-kimbie-dark",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "themes",
+    "package.nls.json",
+    "package.nls.zh-cn.json",
+    "LICENSE",
+    "icon.svg"
+  ],
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "engines": {
+    "universe": ">=0.1.0 <1.0.0"
+  },
+  "contributes": {
+    "themes": [
+      {
+        "id": "Kimbie Dark",
+        "label": "%themeLabel%",
+        "uiTheme": "vs-dark",
+        "path": "./themes/kimbie-dark-color-theme.json"
+      }
+    ]
+  },
+  "icon": "icon.svg"
+}

@@ -123,4 +123,45 @@ test.describe('@p1 extensions', () => {
       })
       .not.toContain(target)
   })
+
+  test('built-ins hidden by default; @builtin lists them with text filtering', async ({
+    workbench,
+  }) => {
+    const { activityBar, sideBar, page } = workbench
+    await workbench.waitForBootstrapFocusSettled()
+
+    await activityBar.click(EXTENSIONS_CONTAINER)
+    await expect(sideBar.root).toHaveAttribute('data-active-view-container', EXTENSIONS_CONTAINER)
+
+    const rows = page.getByTestId('extension-row')
+
+    // Default list shows user-installed extensions only — the e2e baseline has
+    // none, so built-ins (e.g. the Monokai theme) must not appear.
+    await expect(rows.filter({ hasText: 'Monokai Theme' })).toHaveCount(0)
+
+    // `@builtin` switches the list to built-in extensions.
+    const searchBox = page.getByLabel('Search Extensions')
+    await searchBox.fill('@builtin')
+    await expect(page.getByText('Built-in', { exact: true })).toBeVisible()
+    await expect.poll(() => rows.count()).toBeGreaterThan(5)
+    await expect(rows.filter({ hasText: 'Monokai Theme' })).toHaveCount(1)
+    await expect(rows.filter({ hasText: 'Git' }).first()).toBeVisible()
+
+    // Extensions declaring `icon.svg` render a real <img>, not the lucide
+    // fallback glyph (themes + textmate-grammars both declare one).
+    await expect(rows.filter({ hasText: 'Monokai Theme' }).locator('img')).toHaveCount(1)
+    await expect(rows.filter({ hasText: 'TextMate Grammars' }).locator('img')).toHaveCount(1)
+
+    // Trailing text filters within the built-in pool (Monokai Theme matches by
+    // name; the dimmed variant matches by id/description).
+    await searchBox.fill('@builtin monokai')
+    await expect(rows.filter({ hasText: 'Monokai Theme' })).toHaveCount(1)
+    for (const text of await rows.allTextContents()) {
+      expect(text.toLowerCase()).toContain('monokai')
+    }
+
+    // Clearing the query returns to the user-installed list.
+    await searchBox.fill('')
+    await expect(rows.filter({ hasText: 'Monokai Theme' })).toHaveCount(0)
+  })
 })

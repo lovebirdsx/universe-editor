@@ -68,7 +68,7 @@ TextMate（后注册者胜，无 grammar 回退 Monarch）→ LSP semantic token
 
 **加一个新的可主题化颜色**：universeColorIds.ts `registerColor`（含 dark/light 默认）→ 消费处 `var(--vscode-<id>)` → 内置主题 JSON 填值。`__tests__/cssVarCoverage.test.ts` 会拦未注册的 `var(--vscode-X)`。
 
-**换内置主题**：改 `extensions/theme-defaults/`（Universe Dark/Light 的 JSON，include 链抄 VSCode theme-defaults）。
+**换内置主题**：改 `extensions/theme-defaults/`（Universe Dark/Light 的 JSON，include 链抄 VSCode theme-defaults）。VSCode 移植主题：`theme-defaults` 另含 8 个经典主题（Dark+/Dark Modern/2026/VS/HC 等，JSON 与上游逐字节一致），9 个风格主题各自独立成 `extensions/theme-*/`（abyss/monokai/solarized 等，照抄上游结构，带 LICENSE attribution + package.nls zh-cn）。
 
 **改语义染色**：`semanticSelector.ts`（打分）+ `colorThemeData.getSemanticTokenStyle`（装配）+ `monacoSemanticThemeBridge.ts`（注入）。测试看 `__tests__/semanticSelector.test.ts` 打分矩阵。
 

@@ -15,15 +15,24 @@
 
 ## 切换颜色主题
 
-编辑器目前提供深色和浅色两套配色，随光线和喜好切换：
+编辑器内置了多套配色主题（深色、浅色、高对比度），随光线和喜好切换：
 
 1. 按 `Ctrl+K Ctrl+T`（或按 `Ctrl+Shift+P` 打开[命令面板](../reference/glossary.md#命令面板)，输入「颜色主题」）。
 2. 在弹出的「选择颜色主题」列表里，用上下键预览、回车确认；按 `Esc` 取消并回到原来的主题。
 3. 当前正在使用的主题旁会标「（当前）」。
 
-可选项是「Universe Dark」和「Universe Light」。**主题立即生效，无需重启。** 你选的结果会保存在用户设置里（对应键名 `workbench.colorTheme`），下次打开自动沿用。
+**主题立即生效，无需重启。** 你选的结果会保存在用户设置里（对应键名 `workbench.colorTheme`），下次打开自动沿用。
 
-主题由内置的「Universe Themes」扩展提供，与 VSCode 的主题格式兼容——第三方 VSCode 主题扩展装上后也会出现在这个列表里。
+内置主题分几组（编辑器默认是 Universe Dark）：
+
+- **Universe**：Universe Dark、Universe Light
+- **深色**：Dark+、Dark Modern、Dark 2026、深色(Visual Studio)、Abyss、Kimbie Dark、Monokai、Monokai Dimmed、红色、Solarized Dark、Tomorrow Night Blue
+- **浅色**：Light+、Light Modern、Light 2026、浅色(Visual Studio)、Quiet Light、Solarized Light
+- **高对比度**：深色高对比度、浅色高对比度
+
+除 Universe 外，其余主题均移植自 VSCode 自带主题，主题 id 与 VSCode 一致——在设置（JSON）里填英文 id 即可，例如 `"workbench.colorTheme": "Monokai"`，从 VSCode 迁移过来的设置可以直接沿用。
+
+主题由内置主题扩展提供（Universe Themes、Monokai Theme 等），与 VSCode 的主题格式兼容——第三方 VSCode 主题扩展装上后也会出现在这个列表里。
 
 <!-- 截图：颜色主题快速选择列表，深色选中状态 -->
 

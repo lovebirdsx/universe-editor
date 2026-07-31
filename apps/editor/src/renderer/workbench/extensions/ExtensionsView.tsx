@@ -1,11 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  ExtensionsView — the Extensions viewlet. INSTALLED is always shown; when a
- *  marketplace is configured (GALLERY_URL set) a search box drives it and the
- *  "Market Extensions" group lists installable extensions (most-installed by
- *  default, search results while typing). With no marketplace the search box +
- *  Market group hide and only INSTALLED remains, alongside "install from VSIX".
- *  Dropping a `.vsix` file onto the view installs/updates it. Focusing the view
+ *  ExtensionsView — the Extensions viewlet. The INSTALLED group lists user-
+ *  installed extensions only (VSCode parity: built-ins stay out of the default
+ *  list); typing `@builtin` in the search box lists the built-in extensions
+ *  instead (plain text filters the local list by id/name/description). When a
+ *  marketplace is configured (GALLERY_URL set) the "Market Extensions" group
+ *  lists installable extensions (most-installed by default, search results
+ *  while typing) — marketplace search is skipped for local queries. Dropping
+ *  a `.vsix` file onto the view installs/updates it. Focusing the view
  *  (Ctrl+Shift+X) puts the caret in the search box. Clicking a row opens its
  *  detail editor. All state is read through IExtensionsWorkbenchService.
  *--------------------------------------------------------------------------------------------*/
@@ -30,6 +32,10 @@ import {
   EnablementState,
   type IExtensionEntry,
 } from '../../services/extensionsWorkbench/ExtensionsWorkbenchService.js'
+import {
+  filterExtensionEntries,
+  parseExtensionListQuery,
+} from '../../services/extensionsWorkbench/extensionListQuery.js'
 import { ExtensionEditorInput } from '../../services/editor/ExtensionEditorInput.js'
 import { ExtensionIcon } from './ExtensionIcon.js'
 import { ExtensionActionsMenu, type ExtensionActionsMenuState } from './ExtensionActionsMenu.js'
@@ -60,6 +66,8 @@ export function ExtensionsView() {
 
   const [marketplaceEnabled, setMarketplaceEnabled] = useState(false)
   const [query, setQuery] = useState('')
+  const listQuery = parseExtensionListQuery(query)
+  const visibleEntries = filterExtensionEntries(installed, listQuery)
   const [dropActive, setDropActive] = useState(false)
   const [menu, setMenu] = useState<ExtensionActionsMenuState | undefined>(undefined)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -89,6 +97,9 @@ export function ExtensionsView() {
       setQuery(value)
       if (debounceRef.current) clearTimeout(debounceRef.current)
       debounceRef.current = setTimeout(() => {
+        // Local queries (@builtin / plain text over the installed list) never
+        // hit the marketplace.
+        if (parseExtensionListQuery(value).builtin) return
         if (value.trim()) void service.search(value)
         else void service.loadFeatured()
       }, SEARCH_DEBOUNCE_MS)
@@ -160,21 +171,28 @@ export function ExtensionsView() {
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
-      {marketplaceEnabled && (
-        <div className={styles.searchRow}>
-          <Input
-            ref={inputRef}
-            value={query}
-            onChange={(e) => onQueryChange(e.target.value)}
-            placeholder={localize('extensions.search.placeholder', 'Search Extensions Marketplace')}
-            aria-label={localize('extensions.search.label', 'Search Extensions')}
-          />
-        </div>
-      )}
+      <div className={styles.searchRow}>
+        <Input
+          ref={inputRef}
+          value={query}
+          onChange={(e) => onQueryChange(e.target.value)}
+          placeholder={localize(
+            'extensions.search.placeholder',
+            'Search Extensions (@builtin for built-ins)',
+          )}
+          aria-label={localize('extensions.search.label', 'Search Extensions')}
+        />
+      </div>
 
       <div className={styles.scroll} ref={scrollRef}>
-        <Section title={localize('extensions.group.installed', 'Installed')}>
-          {installed.map((entry) => (
+        <Section
+          title={
+            listQuery.builtin
+              ? localize('extensions.group.builtin', 'Built-in')
+              : localize('extensions.group.installed', 'Installed')
+          }
+        >
+          {visibleEntries.map((entry) => (
             <ExtensionRow
               key={entry.id}
               entry={entry}
@@ -183,14 +201,16 @@ export function ExtensionsView() {
               onOpenMenu={openMenu}
             />
           ))}
-          {installed.length === 0 && (
+          {visibleEntries.length === 0 && (
             <div className={styles.empty}>
-              {localize('extensions.noneInstalled', 'No extensions installed')}
+              {listQuery.text || listQuery.builtin
+                ? localize('extensions.noResults', 'No extensions found')
+                : localize('extensions.noneInstalled', 'No extensions installed')}
             </div>
           )}
         </Section>
 
-        {marketplaceEnabled && (
+        {marketplaceEnabled && !listQuery.builtin && (
           <Section
             title={localize('extensions.group.marketplace', 'Market Extensions')}
             loading={searching}

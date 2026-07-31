@@ -38,6 +38,7 @@ import type {
   IExtensionUpdate,
 } from '../../../shared/ipc/extensionManagementService.js'
 import { IExtensionGalleryService } from '../../../shared/ipc/extensionGalleryService.js'
+import { getCurrentLocale } from '../../../shared/i18n/availableLocales.js'
 import { resolveUserExtensionsDir } from '../extensionHost/userExtensionsDir.js'
 import { resolveBuiltinExtensionsDir } from '../extensionHost/builtinExtensionsDir.js'
 import {
@@ -528,7 +529,62 @@ async function pathExists(p: string): Promise<boolean> {
   }
 }
 
-/** Read `package.json` text from an installed extension folder. */
+/** Read `package.json` from an extension folder with `%key%` placeholders localized. */
 async function readManifestJson(location: string): Promise<unknown> {
-  return JSON.parse(await fs.readFile(path.join(location, 'package.json'), 'utf8'))
+  const raw: unknown = JSON.parse(await fs.readFile(path.join(location, 'package.json'), 'utf8'))
+  const bundle = await loadNlsBundle(location, getCurrentLocale())
+  return bundle ? localizeManifest(raw, bundle) : raw
+}
+
+/* --------------------------------------------------------------------------
+ * Manifest NLS (`%key%` → `package.nls*.json`), mirroring VSCode's scheme.
+ * Duplicated from packages/extension-host/src/nls.ts — that package ships
+ * only a bundled host entry (no importable modules), and this lister is the
+ * second consumer: the host scanner localizes contributions for activation,
+ * this one localizes manifests for the Extensions UI. Keep the two in sync.
+ * ------------------------------------------------------------------------ */
+
+type NlsBundle = Readonly<Record<string, string>>
+
+const NLS_PLACEHOLDER = /^%([\w.-]+)%$/
+
+async function readNlsBundle(filePath: string): Promise<NlsBundle | undefined> {
+  try {
+    const parsed: unknown = JSON.parse(await fs.readFile(filePath, 'utf8'))
+    if (parsed && typeof parsed === 'object') return parsed as NlsBundle
+  } catch {
+    // absent or unreadable bundle → no translation for that file
+  }
+  return undefined
+}
+
+/** Default bundle merged with the per-locale override (locale wins per key). */
+async function loadNlsBundle(
+  extensionPath: string,
+  locale?: string,
+): Promise<NlsBundle | undefined> {
+  const defaultBundle = await readNlsBundle(path.join(extensionPath, 'package.nls.json'))
+  const localeBundle =
+    locale && locale.toLowerCase() !== 'en' && locale.toLowerCase() !== 'en-us'
+      ? await readNlsBundle(path.join(extensionPath, `package.nls.${locale.toLowerCase()}.json`))
+      : undefined
+  if (!defaultBundle && !localeBundle) return undefined
+  return { ...defaultBundle, ...localeBundle }
+}
+
+/** Deep-clone `value`, translating every whole-string `%key%` placeholder. */
+function localizeManifest<T>(value: T, bundle: NlsBundle): T {
+  if (typeof value === 'string') {
+    const match = NLS_PLACEHOLDER.exec(value)
+    if (!match) return value
+    const key = match[1]!
+    return (key in bundle ? bundle[key]! : value) as T
+  }
+  if (Array.isArray(value)) return value.map((item) => localizeManifest(item, bundle)) as T
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value)) out[k] = localizeManifest(v, bundle)
+    return out as T
+  }
+  return value
 }

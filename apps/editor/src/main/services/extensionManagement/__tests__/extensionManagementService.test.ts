@@ -370,6 +370,40 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
     svc2.dispose()
   })
 
+  it('localizes %key% manifest placeholders against package.nls.json', async () => {
+    const builtinDir = path.join(root, 'builtins')
+    const themeDir = path.join(builtinDir, 'theme-x')
+    await mkdir(themeDir, { recursive: true })
+    await writeFile(
+      path.join(themeDir, 'package.json'),
+      JSON.stringify(
+        manifest({
+          name: 'theme-x',
+          publisher: 'universe',
+          displayName: '%displayName%',
+          description: '%description%',
+          main: undefined,
+        }),
+      ),
+    )
+    await writeFile(
+      path.join(themeDir, 'package.nls.json'),
+      JSON.stringify({ displayName: 'X Theme', description: 'The X theme' }),
+    )
+    const svc2 = new ExtensionManagementMainService(
+      () => extDir,
+      HOST_API,
+      undefined,
+      undefined,
+      () => builtinDir,
+    )
+    const builtins = await svc2.listBuiltinExtensions()
+    expect(builtins).toHaveLength(1)
+    expect(builtins[0]!.manifest.displayName).toBe('X Theme')
+    expect(builtins[0]!.manifest.description).toBe('The X theme')
+    svc2.dispose()
+  })
+
   it('returns [] when the built-in dir is absent', async () => {
     const svc2 = new ExtensionManagementMainService(
       () => extDir,

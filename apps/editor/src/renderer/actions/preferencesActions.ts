@@ -469,20 +469,30 @@ function pickTheme<
   const openPicker = (): void => {
     const originalTheme = options.getCurrent()
     const currentLabel = localize('iconTheme.current', '(current)')
-    const themes = [...(options.extraItems ?? []), ...options.getThemes()]
-    const items: (IQuickPickItem & { theme: TTheme })[] = themes.map((theme) => ({
-      id: theme.settingsId ?? '',
-      label: theme.label,
-      ...(theme.settingsId === originalTheme.settingsId && { description: currentLabel }),
-      theme,
-    }))
+    const buildItems = (): (IQuickPickItem & { theme: TTheme })[] =>
+      [...(options.extraItems ?? []), ...options.getThemes()].map((theme) => ({
+        id: theme.settingsId ?? '',
+        label: theme.label,
+        ...(theme.settingsId === originalTheme.settingsId && { description: currentLabel }),
+        theme,
+      }))
 
     const pick = options.quickInput.createQuickPick<IQuickPickItem & { theme: TTheme }>()
     const disposables = new DisposableStore()
     disposables.add(pick)
+
+    const items = buildItems()
     pick.items = items
     pick.placeholder = options.placeholder
     pick.activeItems = items.filter((i) => i.theme.settingsId === originalTheme.settingsId)
+
+    // 主题按扩展分批注册（逐扩展 translate）：picker 打开期间到达的后续批次
+    // 要实时并入，否则启动早期打开时列表只含首批注册的主题。
+    disposables.add(
+      options.onDidChangeThemes(() => {
+        pick.items = buildItems()
+      }),
+    )
 
     let accepted = false
     disposables.add(
@@ -555,19 +565,30 @@ export class SelectColorThemeAction extends Action2 {
     const openPicker = (): void => {
       const originalTheme = themeService.getColorThemeData()
       const currentLabel = localize('colorTheme.current', '(current)')
-      const items: ColorThemePickItem[] = themeService.getColorThemes().map((theme) => ({
-        id: theme.settingsId,
-        label: theme.label,
-        ...(theme.settingsId === originalTheme.settingsId && { description: currentLabel }),
-        theme,
-      }))
+      const buildItems = (): ColorThemePickItem[] =>
+        themeService.getColorThemes().map((theme) => ({
+          id: theme.settingsId,
+          label: theme.label,
+          ...(theme.settingsId === originalTheme.settingsId && { description: currentLabel }),
+          theme,
+        }))
 
       const pick = quickInput.createQuickPick<ColorThemePickItem>()
       const disposables = new DisposableStore()
       disposables.add(pick)
+
+      const items = buildItems()
       pick.items = items
       pick.placeholder = localize('quickInput.colorTheme.placeholder', 'Select Color Theme')
       pick.activeItems = items.filter((i) => i.theme.settingsId === originalTheme.settingsId)
+
+      // 主题按扩展分批注册（逐扩展 translate）：picker 打开期间到达的后续批次
+      // 要实时并入，否则启动早期打开时列表只含首批注册的主题。
+      disposables.add(
+        themeService.onDidChangeColorThemes(() => {
+          pick.items = buildItems()
+        }),
+      )
 
       let accepted = false
       disposables.add(

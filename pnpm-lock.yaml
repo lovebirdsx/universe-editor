@@ -590,7 +590,25 @@ importers:
 
   extensions/textmate-grammars: {}
 
+  extensions/theme-abyss: {}
+
   extensions/theme-defaults: {}
+
+  extensions/theme-kimbie-dark: {}
+
+  extensions/theme-monokai: {}
+
+  extensions/theme-monokai-dimmed: {}
+
+  extensions/theme-quietlight: {}
+
+  extensions/theme-red: {}
+
+  extensions/theme-solarized-dark: {}
+
+  extensions/theme-solarized-light: {}
+
+  extensions/theme-tomorrow-night-blue: {}
 
   extensions/typescript:
     devDependencies:
