@@ -35,7 +35,8 @@ export interface IAction2Menu {
 
 export interface IAction2Keybinding {
   /**
-   * Platform-neutral key string for a single stroke (e.g. "ctrl+b"),
+   * Platform-neutral key string for a single stroke (e.g. "ctrl+b"), a
+   * VSCode-style space-separated 2-stroke chord (e.g. "ctrl+k ctrl+t"),
    * or a 2-element tuple for a chord (e.g. ["ctrl+k", "ctrl+s"]).
    */
   primary: string | readonly [string, string]
@@ -110,6 +111,20 @@ function asArray<T>(value: T | readonly T[] | undefined): readonly T[] {
 }
 
 /**
+ * Translates `primary` into the registry's key/chords shape. A string holding
+ * two whitespace-separated strokes is a VSCode-style chord; anything else
+ * stays a single-stroke key. Mirrors UserKeybindingsService's key parsing.
+ */
+function toKeyOrChords(
+  primary: string | readonly [string, string],
+): Pick<IKeybindingItem, 'key' | 'chords'> {
+  if (typeof primary !== 'string') return { chords: primary }
+  const strokes = primary.trim().split(/\s+/)
+  if (strokes.length === 2) return { chords: [strokes[0]!, strokes[1]!] }
+  return { key: primary }
+}
+
+/**
  * Instantiate the action and register its command, menus, and keybindings.
  * Returns a single disposable that unregisters everything.
  */
@@ -164,7 +179,7 @@ export function registerAction2(ctor: new () => Action2): IDisposable {
   for (const kb of asArray(desc.keybinding)) {
     const when = combineWhen(desc.precondition, kb.when)
     const item: IKeybindingItem = {
-      ...(typeof kb.primary === 'string' ? { key: kb.primary } : { chords: kb.primary }),
+      ...toKeyOrChords(kb.primary),
       command: desc.id,
       ...(when !== undefined ? { when } : {}),
       ...(kb.args !== undefined ? { args: kb.args } : {}),

@@ -107,12 +107,21 @@ registry 解析出来了，但 `useGlobalKeybindingHandler` 的某道闸把它�
 - **验证**：编辑器聚焦按 `ctrl+alt+up`，从「ArrowUp 整行消失」变 `EXECUTE editor.gotoPreviousFold` 且不再插入上方光标。
 - **锚点**：`UserKeybindingsService.ts`（`disabledCommands` / `_reloadVSCodeFile` 收集）、`contributions/MonacoDefaultKeybindingOverrideContribution.ts`（`diffMonacoDisabled` + `_sync`）、`contributions/index.ts`（`workbench.contrib.monacoDefaultKeybindingOverride`，AfterRestore）、`workbench/editor/monaco/MonacoLoader.ts:205-212`（`addKeybindingRule` 范式）、`monacoActionsBridge.ts`（头注释解释为何默认键不进 registry、`getMonacoDefaultKeybinding`）。
 
+### 案例 5：Action2 的 `keybinding.primary` 写 VSCode 风格空格 chord 字符串静默失效（注册期解析缺失）
+- **症状/诊断**：`SelectColorThemeAction` 声明 `keybinding: { primary: 'ctrl+k ctrl+t' }`，按 `ctrl+k ctrl+t` 不弹主题选择框；`same-key(ignoring when)=0`（`ctrl+k` 一条候选都没有），但命令存在、f1 也能从命令面板搜到。
+- **断在**：分叉 A——绑定“注册了但永远匹配不上”。
+- **根因**：`registerAction2` 对字符串 `primary` 原样当**单键**注册（`{ key: 'ctrl+k ctrl+t' }`），registry 规范化后存成一条 chords 长度为 1、键值为 `'ctrl+k ctrl+t'` 的记录；运行期每次按键产生的规范化键（`'ctrl+k'`、`'ctrl+t'`）永远不等于它 → chord 状态机永远进不去。而仓库里其它层（`UserKeybindingsService`、`ExtensionPointTranslator`、`monacoKeybindingDecoder`）都会 `trim().split(/\s+/)` 把空格分隔字符串拆成两段 chord——**只有 Action2 这层不拆**，静默失败不报错。全仓库其它 chord 都写元组形式 `['ctrl+k','ctrl+t']`，唯独这一处照 VSCode 习惯写了单字符串。
+- **修法（已落地）**：`registerAction2` 内新增 `toKeyOrChords`——字符串 `primary` 先 `trim().split(/\s+/)`，两段则注册为 `chords` 元组，否则按单键（与 `UserKeybindingsService.keyToKeybindingItem` 行为一致）。`IAction2Keybinding.primary` docstring 补上空格 chord 为合法输入。
+- **验证**：`action.test.ts` 新增用例（字符串 chord → `resolveKeystroke('ctrl+k')` 返回 `enter-chord` → 第二段返回 `execute`）；e2e `smoke.themes.spec.ts` 新增「ctrl+k ctrl+t chord opens the theme picker」真键盘整链守护。注意 Playwright `--grep` 是正则，标题含 `+` 需转义或换不含 `+` 的 grep 词，否则报 `No tests found`。
+- **锚点**：`packages/platform/src/command/action.ts`（`toKeyOrChords`）、`packages/platform/src/__tests__/command/action.test.ts`（SpaceChordAction 用例）、`apps/editor/src/renderer/actions/preferencesActions.ts`（`SelectColorThemeAction`，事发点）、对照已支持的各层：`UserKeybindingsService.ts:100`、`ExtensionPointTranslator.ts:293`、`monacoKeybindingDecoder.ts:249`。
+
 ## 易踩坑速记
 0. **先数日志行**：组合键应有「每修饰键一行 + 主键一行」。**主键那一行整个消失** = 键没到达 document 监听器（分叉 0、案例 4）。**头号嫌疑是编辑器聚焦时 Monaco 内置默认键 `stopPropagation`**（用「点到编辑器外按同键是否出现」区分；OS/显卡热键则编辑器内外都消失）。Monaco 吃键现在可用 keybindings.json 的 `-monacoCommand` 同步解绑（案例 4）。
 1. **`no-match` 先看 `same-key`**（前提：主键已到达、有 `traceKeystroke`）：`0` = 没注册（分叉 A）；`>0` = when/运行期问题（分叉 B/C）。别一上来就改 when。
 2. **只有 VSCode 兼容层有命令存在性过滤**，应用自己的 keybindings.json 没有——“VSCode 配的不灵、放本应用配置灵”就是这条分界。
 3. **Monaco 命令是懒注册**，启动期不存在；缺“桥接后 reload”就永久丢绑定（案例 2）。
 4. **同 command 多条键别按 command 去重**（案例 1）；用户层一命令一绑定、VSCode 层逐条注册，两套语义不同。
+5. **Action2 的 chord 两种写法都合法**：元组 `['ctrl+k','ctrl+t']` 或 VSCode 风格空格字符串 `'ctrl+k ctrl+t'`（`toKeyOrChords` 拆分，案例 5）；但**直接调 `KeybindingsRegistry.registerKeybinding` 时 `key` 只认单键**，chord 必须用 `chords` 元组——绕过 Action2 的底层调用没有空格拆分。
 5. **修饰键规范化是字母序**（alt/ctrl/meta/shift），断言/探针比较要用规范形（案例 3）。
 6. **`contextKeyParser.parse()` 不抛异常**，非法 when 返回 `undefined` 被静默忽略——表达式写错不会报错，只会“这条不生效”。
 7. **运行期 guard 会吞键**：可编辑目标保留可打印键、Quick Input 只放 Escape、dialog 自管、editorFocus 切 capture/bubble 把优先权让给 Monaco——`formatGuardStop` 会写明原因。

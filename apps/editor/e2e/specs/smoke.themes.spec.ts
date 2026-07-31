@@ -56,6 +56,14 @@ test.describe('@p0 themes', () => {
     expect(await datasetTheme(page)).toBe('light')
   })
 
+  test('ctrl+k ctrl+t chord opens the theme picker', async ({ page, workbench }) => {
+    await page.keyboard.press('Control+k')
+    await page.keyboard.press('Control+t')
+    await workbench.quickInput.waitForVisible()
+    await page.keyboard.press('Escape')
+    await workbench.quickInput.waitForHidden()
+  })
+
   test('theme picker previews on navigation and rolls back on Escape', async ({
     page,
     workbench,

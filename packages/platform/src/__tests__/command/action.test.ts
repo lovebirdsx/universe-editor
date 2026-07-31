@@ -70,6 +70,18 @@ class LocalizedAction extends Action2 {
   override run(): void {}
 }
 
+class SpaceChordAction extends Action2 {
+  static readonly ID = 'test.action.spaceChord'
+  constructor() {
+    super({
+      id: SpaceChordAction.ID,
+      title: 'Space Chord',
+      keybinding: { primary: 'ctrl+k ctrl+t' },
+    })
+  }
+  override run(): void {}
+}
+
 describe('Action2 / registerAction2', () => {
   it('registers a command, menu, keybinding and command palette entry', () => {
     const d = registerAction2(SimpleAction)
@@ -182,6 +194,18 @@ describe('Action2 / registerAction2', () => {
       expect(meta?.description).toBe('Simple Action')
       expect(meta?.originalDescription).toBeUndefined()
       expect(meta?.originalCategory).toBeUndefined()
+    } finally {
+      d.dispose()
+    }
+  })
+
+  it('parses a VSCode-style space-separated chord string into a 2-stroke chord', () => {
+    const d = registerAction2(SpaceChordAction)
+    try {
+      const first = KeybindingsRegistry.resolveKeystroke('ctrl+k')
+      expect(first).toMatchObject({ kind: 'enter-chord', pending: ['ctrl+k'] })
+      const second = KeybindingsRegistry.resolveKeystroke('ctrl+t', undefined, ['ctrl+k'])
+      expect(second).toMatchObject({ kind: 'execute', command: SpaceChordAction.ID })
     } finally {
       d.dispose()
     }
