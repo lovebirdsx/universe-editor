@@ -21,4 +21,5 @@ metadata:
 - 新增/改内置插件的可见文案：manifest 用 `%key%`，两份 nls 文件补 key（zh-cn 用带声调正字）。
 - **打包红线**：nls 文件必须显式列进插件 `package.json` 的 `files` 数组（如 git 的 `["dist","package.nls.json","package.nls.zh-cn.json"]`）；`scripts/release/runtime-resources.mjs` 的 `extensionPackageFiles` 只复制 files 列出的字面量条目，不支持通配符，漏列则打包版丢本地化。
 - 改 host 侧（scanner/nls/bootstrap）后必须 `pnpm --filter @universe-editor/extension-host build` 重建 dist，否则 dev/e2e 仍用旧产物。
+- **nls 有两个消费方（2026-07 补）**：① host scanner（激活贡献点）；② main `extensionManagementService.readManifestJson`（扩展列表/详情页的 displayName/description）——后者内联了同一套逻辑（extension-host 包只出 bundle 无可 import 模块，无法共享），locale 用 main 进程 `getCurrentLocale()`（`initializeMainNls` 在 index.ts 启动时从 settings.json 的 `workbench.language` 同步）。改 nls 语义要两边同步。
 - 相关：[[extension-system-progress]] [[monaco-055-editcontext-nls]]
