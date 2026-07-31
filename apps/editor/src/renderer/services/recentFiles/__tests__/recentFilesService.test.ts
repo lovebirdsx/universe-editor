@@ -348,6 +348,37 @@ describe('RecentFilesService', () => {
     expect(items).toHaveLength(1)
     expect(items[0]?.name).toBe('a.txt')
   })
+
+  // 虚拟编辑器资源（universe:/acp/session/…、universe:/gitGraph）不是文件：
+  // 一旦进入 recent files，重启后 Ctrl+P 会把它们当文件打开成空白 FileEditorInput，
+  // 且坏 tab 激活时 RecentFilesContribution 会用 basename(=guid) 覆盖条目名。
+  it('add() ignores non-file scheme resources', async () => {
+    const svc = buildService(new FakeStorage())
+    svc.add(URI.parse('universe:/acp/session/3f2a-guid'), 'My Session')
+    svc.add(URI.file('/real.ts'), 'real.ts')
+    const items = await svc.getAll()
+    expect(items).toHaveLength(1)
+    expect(items[0]?.uri.scheme).toBe('file')
+  })
+
+  it('load drops persisted non-file entries and rewrites storage', async () => {
+    const storage = new FakeStorage()
+    storage.seed('workbench.recentFiles', [
+      {
+        uri: URI.parse('universe:/acp/session/3f2a-guid').toJSON(),
+        name: '3f2a-guid',
+        lastOpened: 2,
+      },
+      { uri: URI.file('/keep.ts').toJSON(), name: 'keep.ts', lastOpened: 1 },
+    ])
+    const svc = buildService(storage)
+    const items = await svc.getAll()
+    expect(items.map((i) => i.name)).toEqual(['keep.ts'])
+
+    await Promise.resolve()
+    const persisted = await storage.get<Array<{ name: string }>>('workbench.recentFiles')
+    expect(persisted?.map((p) => p.name)).toEqual(['keep.ts'])
+  })
 })
 
 // ---------------------------------------------------------------------------

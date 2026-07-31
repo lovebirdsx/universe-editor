@@ -59,16 +59,32 @@ export class RecentFilesService extends Disposable implements IRecentFilesServic
       name: r.name,
       lastOpened: r.lastOpened,
     }))
+    // Scrub non-file entries that older builds let through: quick open used to
+    // add virtual editor resources (universe:/acp/session/…, universe:/gitGraph)
+    // here, which reopened after a restart as empty text tabs labelled by guid.
+    const files = loaded.filter((l) => l.uri.scheme === 'file')
     // Keep items already in-memory (added in this session before load completed).
     // Fill in from storage for URIs we don't have yet.
     const known = new Set(this._items.map((i) => i.uri.toString()))
-    this._items = [...this._items, ...loaded.filter((l) => !known.has(l.uri.toString()))].slice(
+    this._items = [...this._items, ...files.filter((l) => !known.has(l.uri.toString()))].slice(
       0,
       MAX_ITEMS,
     )
+    if (files.length !== loaded.length) {
+      const data: PersistedRecentFile[] = this._items.map((i) => ({
+        uri: i.uri.toJSON(),
+        name: i.name,
+        lastOpened: i.lastOpened,
+      }))
+      // Not _persist(): it awaits the load promise this method is resolving.
+      await this._storage.set(STORAGE_KEY, data, StorageScope.WORKSPACE)
+    }
   }
 
   add(uri: URI, name: string): void {
+    // Recent *files* only — virtual editor resources are restored through
+    // ClosedEditorsService instead and would be unopenable from here.
+    if (uri.scheme !== 'file') return
     const entry: IRecentFile = { uri, name, lastOpened: Date.now() }
     const uriStr = uri.toString()
     this._items = [entry, ...this._items.filter((i) => i.uri.toString() !== uriStr)].slice(

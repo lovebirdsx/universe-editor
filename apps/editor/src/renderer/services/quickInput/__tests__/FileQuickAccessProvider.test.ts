@@ -693,7 +693,8 @@ describe('FileQuickAccessProvider — closed editor restore', () => {
         typeId: FAKE_CUSTOM_TYPE,
         componentKey: 'fake.custom',
         deserialize: (data) => {
-          const d = data as { resource: string }
+          const d = data as { resource?: unknown }
+          if (typeof d?.resource !== 'string') return null
           return new FakeEditorInput(FAKE_CUSTOM_TYPE, URI.parse(d.resource), 'restored.custom')
         },
       }),
@@ -865,6 +866,57 @@ describe('FileQuickAccessProvider — closed editor restore', () => {
     expect(groupsFake.openLog).toHaveLength(0)
     expect(resolver.opened).toHaveLength(1)
     expect(resolver.opened[0]!.uri.toString()).toBe(uri.toString())
+  })
+
+  it('a virtual-scheme pick with no restorable closed entry never falls back to the resolver', async () => {
+    // Restart-shaped scenario: a stale universe:/acp/session/<guid> entry
+    // (e.g. from a persisted list) is accepted while the closed stack has
+    // nothing for it. Resolving it would fabricate an empty FileEditorInput
+    // tab labelled with the raw guid — the exact bug this guards against.
+    const uri = URI.parse('universe:/acp/session/3f2a-guid')
+    const recent: IRecentFile[] = [{ uri, name: 'My Session', lastOpened: 1 }]
+    const { provider, fileSearch, resolver, groupsFake } = setup({ recent })
+    fileSearch.resultPaths = ['/ws/other.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    const pick = picker.items.find((i) => (i as IQuickPickItem).label === 'My Session')
+    expect(pick).toBeDefined()
+    picker.fireAccept([pick as IQuickPickItem])
+
+    expect(resolver.opened).toHaveLength(0)
+    expect(groupsFake.openLog).toHaveLength(0)
+    expect(groupsFake.setActiveLog).toHaveLength(0)
+  })
+
+  it('a virtual-scheme closed entry that fails to deserialize does not fall back to the resolver', async () => {
+    const uri = URI.parse('universe:/gitGraph')
+    const entry: ClosedEditorEntry = {
+      resource: uri,
+      typeId: FAKE_CUSTOM_TYPE,
+      groupId: 1,
+      serializedData: { poison: true },
+      label: 'Git Graph',
+    }
+    const { provider, fileSearch, resolver, groupsFake, closedEditors } = setup({
+      closedEntries: [entry],
+    })
+    // The poisoned payload lacks `resource`, so the provider deserializes to
+    // null: the restore path fails after consuming the entry — the resolver
+    // must still not run for a virtual-scheme URI.
+    fileSearch.resultPaths = ['/ws/other.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    const pick = picker.items.find((i) => (i as IQuickPickItem).label === 'Git Graph')
+    expect(pick).toBeDefined()
+    picker.fireAccept([pick as IQuickPickItem])
+
+    expect(closedEditors.takeCalls).toHaveLength(1)
+    expect(resolver.opened).toHaveLength(0)
+    expect(groupsFake.openLog).toHaveLength(0)
   })
 
   it('restores into the active group when the entry group no longer exists', async () => {

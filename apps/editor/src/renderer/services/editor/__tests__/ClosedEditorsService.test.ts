@@ -18,6 +18,7 @@ import {
   registerAction2,
   type Event,
   type IFocusEntry,
+  type IStorageService as IStorageServiceType,
   type PartId,
 } from '@universe-editor/platform'
 import { EditorGroupsService } from '../EditorGroupsService.js'
@@ -144,6 +145,40 @@ class FakeFocusStackService implements IFocusStackService {
 }
 
 // ---------------------------------------------------------------------------
+// Fake IStorageService — JSON round-trips values like the real disk-backed
+// backend, so a missing URI.revive in the service under test fails loudly.
+// ---------------------------------------------------------------------------
+
+class FakeStorage implements IStorageServiceType {
+  declare readonly _serviceBrand: undefined
+  private _data = new Map<string, unknown>()
+  private readonly _scopeEmitter = new Emitter<void>()
+  readonly onDidChangeWorkspaceScope = this._scopeEmitter.event
+
+  async get<T>(key: string): Promise<T | undefined> {
+    return this._data.get(key) as T | undefined
+  }
+  async set(key: string, value: unknown): Promise<void> {
+    this._data.set(key, JSON.parse(JSON.stringify(value)))
+  }
+  async remove(key: string): Promise<void> {
+    this._data.delete(key)
+  }
+  swapWorkspaceScope(): void {
+    this._data = new Map()
+    this._scopeEmitter.fire()
+  }
+}
+
+function makeSvc(groups: EditorGroupsService, storage: IStorageServiceType = new FakeStorage()) {
+  return new ClosedEditorsService(groups, new UriIdentityService('linux'), storage)
+}
+
+function flush(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -178,7 +213,7 @@ afterEach(() => {
 describe('ClosedEditorsService — stack behavior', () => {
   it('popMostRecent returns undefined when no editor has been closed', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     expect(svc.popMostRecent()).toBeUndefined()
     svc.dispose()
     groups.dispose()
@@ -186,7 +221,7 @@ describe('ClosedEditorsService — stack behavior', () => {
 
   it('returns the most recently closed editor entry', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     const a = new FakeVirtualInput('a')
     const b = new FakeVirtualInput('b')
     groups.activeGroup.openEditor(a)
@@ -202,7 +237,7 @@ describe('ClosedEditorsService — stack behavior', () => {
 
   it('captures typeId correctly for non-text (virtual) editors', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     const input = new FakeNoSerializeInput('x')
     groups.activeGroup.openEditor(input)
     groups.activeGroup.closeEditor(input)
@@ -216,7 +251,7 @@ describe('ClosedEditorsService — stack behavior', () => {
 
   it('captures serializedData from editor.serialize() when implemented', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     const input = new FakeVirtualInput('ser')
     groups.activeGroup.openEditor(input)
     const expectedData = input.serialize()
@@ -231,7 +266,7 @@ describe('ClosedEditorsService — stack behavior', () => {
 
   it('serializedData is null for editors without serialize()', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     const input = new FakeNoSerializeInput('noser')
     groups.activeGroup.openEditor(input)
     groups.activeGroup.closeEditor(input)
@@ -245,7 +280,7 @@ describe('ClosedEditorsService — stack behavior', () => {
 
   it('popMostRecent skips entries whose editor is already open', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     const a = new FakeVirtualInput('skip-a')
     const b = new FakeVirtualInput('skip-b')
     groups.activeGroup.openEditor(a)
@@ -266,7 +301,7 @@ describe('ClosedEditorsService — stack behavior', () => {
 
   it('does not skip a closed editor when a different-typed editor of the same file stays open', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     const uri = URI.file('/w/pics/logo.svg')
     const text = new FakeTextInput(uri)
     const image = new FakeImageInput(uri)
@@ -289,7 +324,7 @@ describe('ClosedEditorsService — stack behavior', () => {
     // second file replaces the first in-place (previewReplace, no 'close' event).
     // The evicted preview must still be reopenable via Ctrl+Shift+T.
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     const a = new FakeVirtualInput('preview-a')
     const b = new FakeVirtualInput('preview-b')
     groups.activeGroup.openEditor(a, { pinned: false })
@@ -305,7 +340,7 @@ describe('ClosedEditorsService — stack behavior', () => {
 
   it('stack is LIFO — most recently closed comes first', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     const a = new FakeVirtualInput('lifo-a')
     const b = new FakeVirtualInput('lifo-b')
     groups.activeGroup.openEditor(a)
@@ -330,7 +365,7 @@ describe('ClosedEditorsService — stack behavior', () => {
 describe('ClosedEditorsService — takeMostRecentMatching', () => {
   it('returns undefined when nothing was closed', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     expect(svc.takeMostRecentMatching(URI.file('/w/a.png'))).toBeUndefined()
     svc.dispose()
     groups.dispose()
@@ -338,7 +373,7 @@ describe('ClosedEditorsService — takeMostRecentMatching', () => {
 
   it('returns the newest entry matching the resource and removes only it', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     const uri = URI.file('/w/pic.png')
     const other = new FakeVirtualInput('other')
     const first = new FakeImageInput(uri)
@@ -366,7 +401,7 @@ describe('ClosedEditorsService — takeMostRecentMatching', () => {
 
   it('skips a matching entry whose (typeId, resource) is currently open', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     const uri = URI.file('/w/pic.png')
     const image = new FakeImageInput(uri)
     groups.activeGroup.openEditor(image)
@@ -381,7 +416,7 @@ describe('ClosedEditorsService — takeMostRecentMatching', () => {
 
   it('does not skip when only a different-typed editor of the same file is open', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     const uri = URI.file('/w/pic.png')
     const text = new FakeTextInput(uri)
     const image = new FakeImageInput(uri)
@@ -398,7 +433,7 @@ describe('ClosedEditorsService — takeMostRecentMatching', () => {
 
   it('returns undefined when no entry matches the resource', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     const input = new FakeVirtualInput('unrelated')
     groups.activeGroup.openEditor(input)
     groups.activeGroup.closeEditor(input)
@@ -416,7 +451,7 @@ describe('ClosedEditorsService — takeMostRecentMatching', () => {
 describe('ClosedEditorsService — getClosedEditors', () => {
   it('returns entries newest-first and captures the editor label', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     const a = new FakeVirtualInput('list-a')
     const b = new FakeVirtualInput('list-b')
     groups.activeGroup.openEditor(a)
@@ -435,7 +470,7 @@ describe('ClosedEditorsService — getClosedEditors', () => {
 
   it('skips entries whose (typeId, resource) is currently open', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const svc = makeSvc(groups)
     const uri = URI.file('/w/pic.png')
     const text = new FakeTextInput(uri)
     const image = new FakeImageInput(uri)
@@ -449,6 +484,137 @@ describe('ClosedEditorsService — getClosedEditors', () => {
 
     // Reopen the image tab — now the entry is stale and must disappear.
     groups.activeGroup.openEditor(image)
+    expect(svc.getClosedEditors()).toHaveLength(0)
+    svc.dispose()
+    groups.dispose()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ClosedEditorsService — persistence across restarts
+// ---------------------------------------------------------------------------
+
+describe('ClosedEditorsService — persistence across restarts', () => {
+  it('restores the closed stack from storage in a fresh service (editor restart)', async () => {
+    const storage = new FakeStorage()
+    const groups1 = new EditorGroupsService()
+    const svc1 = makeSvc(groups1, storage)
+    const input = new FakeVirtualInput('persist')
+    groups1.activeGroup.openEditor(input)
+    groups1.activeGroup.closeEditor(input)
+    await flush()
+    svc1.dispose()
+    groups1.dispose()
+
+    // Fresh groups + service over the same storage — simulates an app restart.
+    const groups2 = new EditorGroupsService()
+    const svc2 = makeSvc(groups2, storage)
+    await flush()
+
+    const entries = svc2.getClosedEditors()
+    expect(entries).toHaveLength(1)
+    expect(entries[0]!.typeId).toBe(FakeVirtualInput.TYPE_ID)
+    expect(entries[0]!.label).toBe('FakeVirtual')
+    expect(entries[0]!.serializedData).toEqual(input.serialize())
+    // resource must be a revived URI, not a plain persisted object.
+    expect(entries[0]!.resource.toString()).toBe(input.resource.toString())
+    svc2.dispose()
+    groups2.dispose()
+  })
+
+  it('takeMostRecentMatching after a restart returns a deserializable entry and consumes it durably', async () => {
+    const storage = new FakeStorage()
+    const groups1 = new EditorGroupsService()
+    const svc1 = makeSvc(groups1, storage)
+    const input = new FakeVirtualInput('take-restart')
+    groups1.activeGroup.openEditor(input)
+    groups1.activeGroup.closeEditor(input)
+    await flush()
+    svc1.dispose()
+    groups1.dispose()
+
+    const groups2 = new EditorGroupsService()
+    const svc2 = makeSvc(groups2, storage)
+    await flush()
+    const entry = svc2.takeMostRecentMatching(input.resource)
+    expect(entry).toBeDefined()
+    const restored = EditorRegistry.deserialize(entry!.typeId, entry!.serializedData)
+    expect(restored).toBeInstanceOf(FakeVirtualInput)
+    expect(restored!.resource!.toString()).toBe(input.resource.toString())
+    await flush()
+    svc2.dispose()
+    groups2.dispose()
+
+    // Third boot: the consumed entry must not resurface.
+    const groups3 = new EditorGroupsService()
+    const svc3 = makeSvc(groups3, storage)
+    await flush()
+    expect(svc3.getClosedEditors()).toHaveLength(0)
+    svc3.dispose()
+    groups3.dispose()
+  })
+
+  it('popMostRecent consumption is persisted', async () => {
+    const storage = new FakeStorage()
+    const groups1 = new EditorGroupsService()
+    const svc1 = makeSvc(groups1, storage)
+    const input = new FakeVirtualInput('pop-restart')
+    groups1.activeGroup.openEditor(input)
+    groups1.activeGroup.closeEditor(input)
+    await flush()
+    expect(svc1.popMostRecent()).toBeDefined()
+    await flush()
+    svc1.dispose()
+    groups1.dispose()
+
+    const groups2 = new EditorGroupsService()
+    const svc2 = makeSvc(groups2, storage)
+    await flush()
+    expect(svc2.getClosedEditors()).toHaveLength(0)
+    svc2.dispose()
+    groups2.dispose()
+  })
+
+  it('keeps entries closed before the persisted stack finishes loading (merge, newest on top)', async () => {
+    const storage = new FakeStorage()
+    const groups1 = new EditorGroupsService()
+    const svc1 = makeSvc(groups1, storage)
+    const old = new FakeVirtualInput('old-session')
+    groups1.activeGroup.openEditor(old)
+    groups1.activeGroup.closeEditor(old)
+    await flush()
+    svc1.dispose()
+    groups1.dispose()
+
+    const groups2 = new EditorGroupsService()
+    const svc2 = makeSvc(groups2, storage)
+    // Close a new editor immediately — before the async load resolves.
+    const fresh = new FakeVirtualInput('fresh')
+    groups2.activeGroup.openEditor(fresh)
+    groups2.activeGroup.closeEditor(fresh)
+    await flush()
+
+    const entries = svc2.getClosedEditors()
+    expect(entries.map((e) => e.resource.toString())).toEqual([
+      fresh.resource.toString(),
+      old.resource.toString(),
+    ])
+    svc2.dispose()
+    groups2.dispose()
+  })
+
+  it('resets the stack when the workspace scope changes', async () => {
+    const storage = new FakeStorage()
+    const groups = new EditorGroupsService()
+    const svc = makeSvc(groups, storage)
+    const input = new FakeVirtualInput('scoped')
+    groups.activeGroup.openEditor(input)
+    groups.activeGroup.closeEditor(input)
+    await flush()
+    expect(svc.getClosedEditors()).toHaveLength(1)
+
+    storage.swapWorkspaceScope()
+    await flush()
     expect(svc.getClosedEditors()).toHaveLength(0)
     svc.dispose()
     groups.dispose()
@@ -472,7 +638,7 @@ describe('ReopenClosedEditorAction', () => {
 
   function makeHarness() {
     const groups = new EditorGroupsService()
-    const closedSvc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const closedSvc = makeSvc(groups)
     const focusSvc = new FakeFocusStackService()
 
     const services = new ServiceCollection()

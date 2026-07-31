@@ -190,11 +190,14 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
 
   /** Activate the editor if already open in any group, else open it via the
    *  editor resolver so contributed custom editors (e.g. the PDF viewer) win over
-   *  the plain text editor — mirroring how the Explorer opens files. With
-   *  `openToSide` (Ctrl/Alt+Enter), the target is the group to the right of the
-   *  active one (created when absent) and dedupe happens only within it, so a
-   *  file already open elsewhere gets a second copy — mirroring VSCode's
-   *  SIDE_GROUP quick open semantics. */
+   *  the plain text editor — mirroring how the Explorer opens files. Virtual
+   *  (non-file) resources never reach the resolver: it would fall back to a
+   *  FileEditorInput that renders empty and is labelled by the URI basename
+   *  (e.g. a session guid) — they either restore from the closed stack, activate
+   *  an already-open tab, or do nothing. With `openToSide` (Ctrl/Alt+Enter), the
+   *  target is the group to the right of the active one (created when absent)
+   *  and dedupe happens only within it, so a file already open elsewhere gets a
+   *  second copy — mirroring VSCode's SIDE_GROUP quick open semantics. */
   private _open(
     uri: URI,
     label: string,
@@ -213,6 +216,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         }
       }
       if (this._restoreClosed(uri, side, true)) return
+      if (uri.scheme !== 'file') return
       void this._editorResolver.openEditor(uri, { pinned: true })
       return
     }
@@ -230,6 +234,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         }
       }
     }
+    if (uri.scheme !== 'file') return
     void this._editorResolver.openEditor(uri, { pinned: opts.pinned })
   }
 

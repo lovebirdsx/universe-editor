@@ -1,21 +1,29 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Tracks recently closed editors so Ctrl+Shift+T can reopen them.
+ *  Tracks recently closed editors so Ctrl+Shift+T and quick open can reopen them.
  *
  *  Subscribes to IEditorGroupsService events to maintain a LIFO stack of
  *  closed editor entries. Each entry captures the resource URI, typeId, and
  *  the originating group so the editor can be reopened in the same location.
+ *
+ *  The stack is persisted per-workspace: quick open lists closed non-text
+ *  editors (sessions, git graph, previews…) across editor restarts and can
+ *  still restore them with their exact type — without persistence they would
+ *  survive only as unusable resource URIs.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   Disposable,
   IEditorGroupsService,
+  IStorageService,
   IUriIdentityService,
+  StorageScope,
   URI,
   createDecorator,
   type EditorInput,
   type IDisposable,
   type IEditorGroup,
+  type UriComponents,
 } from '@universe-editor/platform'
 
 export interface ClosedEditorEntry {
@@ -39,6 +47,15 @@ export interface IClosedEditorsService {
 
 export const IClosedEditorsService = createDecorator<IClosedEditorsService>('closedEditorsService')
 
+interface PersistedClosedEditor {
+  readonly resource: UriComponents
+  readonly typeId: string
+  readonly groupId: number
+  readonly serializedData: unknown
+  readonly label: string
+}
+
+const STORAGE_KEY = 'workbench.closedEditors'
 const MAX_ENTRIES = 20
 
 export class ClosedEditorsService extends Disposable implements IClosedEditorsService {
@@ -46,12 +63,22 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
 
   private readonly _stack: ClosedEditorEntry[] = []
   private readonly _groupWatchers = new Map<number, IDisposable>()
+  private _loadPromise: Promise<void>
 
   constructor(
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+    @IStorageService private readonly _storage: IStorageService,
   ) {
     super()
+
+    this._loadPromise = this._load()
+    this._register(
+      this._storage.onDidChangeWorkspaceScope(() => {
+        this._stack.length = 0
+        this._loadPromise = this._load()
+      }),
+    )
 
     for (const g of this._groups.groups) this._watchGroup(g)
 
@@ -73,11 +100,18 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
   }
 
   popMostRecent(): ClosedEditorEntry | undefined {
+    let mutated = false
+    let popped: ClosedEditorEntry | undefined
     while (this._stack.length > 0) {
       const entry = this._stack.pop()!
-      if (!this._isOpen(entry)) return entry
+      mutated = true
+      if (!this._isOpen(entry)) {
+        popped = entry
+        break
+      }
     }
-    return undefined
+    if (mutated) void this._persist()
+    return popped
   }
 
   getClosedEditors(): readonly ClosedEditorEntry[] {
@@ -95,6 +129,7 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
       if (!this._uriIdentity.isEqual(entry.resource, resource)) continue
       if (this._isOpen(entry)) continue
       this._stack.splice(i, 1)
+      void this._persist()
       return entry
     }
     return undefined
@@ -136,5 +171,32 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
       label: editor.getName(),
     })
     if (this._stack.length > MAX_ENTRIES) this._stack.shift()
+    void this._persist()
+  }
+
+  private async _load(): Promise<void> {
+    const raw = await this._storage.get<PersistedClosedEditor[]>(
+      STORAGE_KEY,
+      StorageScope.WORKSPACE,
+    )
+    if (!raw || !Array.isArray(raw)) return
+    const revived = raw.map((r) => ({ ...r, resource: URI.revive(r.resource) as URI }))
+    // Entries closed in this session before the load resolved stay newest: the
+    // persisted (previous-session) stack slides underneath them.
+    this._stack.unshift(...revived)
+    if (this._stack.length > MAX_ENTRIES) {
+      this._stack.splice(0, this._stack.length - MAX_ENTRIES)
+    }
+  }
+
+  /** Waits for the initial load first so an early write can never clobber the
+   *  persisted previous-session stack with only this session's entries. */
+  private async _persist(): Promise<void> {
+    await this._loadPromise
+    const data: PersistedClosedEditor[] = this._stack.map((e) => ({
+      ...e,
+      resource: e.resource.toJSON(),
+    }))
+    await this._storage.set(STORAGE_KEY, data, StorageScope.WORKSPACE)
   }
 }
