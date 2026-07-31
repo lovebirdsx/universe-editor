@@ -4,7 +4,7 @@
   gap: var(--spacing-3);
   cursor: pointer;
   font-size: var(--font-size-base);
-  color: var(--color-foreground, #c8c8c8);
+  color: var(--vscode-foreground, #c8c8c8);
   user-select: none;
 }
 
@@ -17,12 +17,12 @@
   width: 16px;
   height: 16px;
   margin: 0;
-  accent-color: var(--color-accent, #0070e0);
+  accent-color: var(--vscode-workbench-accent, #0070e0);
   cursor: inherit;
 }
 
 .box:focus-visible {
-  outline: 1px solid var(--color-focus-border, #0070e0);
+  outline: 1px solid var(--vscode-focusBorder, #0070e0);
   outline-offset: 1px;
   border-radius: var(--radius-xs);
 }

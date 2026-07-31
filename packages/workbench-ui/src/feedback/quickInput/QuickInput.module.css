@@ -12,8 +12,8 @@
 .container {
   width: 600px;
   max-width: 90vw;
-  background: var(--color-quick-input-bg, #242427);
-  border: 1px solid var(--color-quick-input-border, #2f2f35);
+  background: var(--vscode-quickInput-background, #242427);
+  border: 1px solid var(--vscode-quickInput-border, #2f2f35);
   border-radius: 6px;
   overflow: hidden;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
@@ -25,7 +25,7 @@
 .inputRow {
   display: flex;
   align-items: center;
-  border-bottom: 1px solid var(--color-border, #0f0f11);
+  border-bottom: 1px solid var(--vscode-workbench-border, #0f0f11);
   padding: 0 12px;
   flex-shrink: 0;
 }
@@ -35,8 +35,8 @@
   font-size: 12px;
   font-weight: 600;
   text-align: center;
-  color: var(--color-foreground, #c8c8c8);
-  border-bottom: 1px solid var(--color-border, #0f0f11);
+  color: var(--vscode-foreground, #c8c8c8);
+  border-bottom: 1px solid var(--vscode-workbench-border, #0f0f11);
   flex-shrink: 0;
   user-select: none;
 }
@@ -52,13 +52,13 @@
   border: none;
   border-radius: 3px;
   background: transparent;
-  color: var(--color-description-fg, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   cursor: pointer;
 }
 
 .inputButton:hover {
-  background: var(--color-list-hover-bg, #2f2f35);
-  color: var(--color-foreground, #c8c8c8);
+  background: var(--vscode-list-hoverBackground, #2f2f35);
+  color: var(--vscode-foreground, #c8c8c8);
 }
 
 .okButton {
@@ -67,15 +67,15 @@
   padding: 3px 12px;
   border: none;
   border-radius: 3px;
-  background: var(--color-accent, #0070e0);
-  color: var(--color-button-fg, #ffffff);
+  background: var(--vscode-workbench-accent, #0070e0);
+  color: var(--vscode-button-foreground, #ffffff);
   font-size: 12px;
   font-family: inherit;
   cursor: pointer;
 }
 
 .okButton:hover {
-  background: var(--color-accent-hover, #0a86f0);
+  background: var(--vscode-workbench-accentHover, #0a86f0);
 }
 
 .input {
@@ -85,13 +85,13 @@
   background: transparent;
   border: none;
   outline: none;
-  color: var(--color-foreground, #c8c8c8);
+  color: var(--vscode-foreground, #c8c8c8);
   font-size: 14px;
   font-family: inherit;
 }
 
 .input::placeholder {
-  color: var(--color-input-placeholder-fg, #5a5a5e);
+  color: var(--vscode-input-placeholderForeground, #5a5a5e);
 }
 
 /* Beat the global `:focus-visible` fallback ring (equal specificity, order-dependent)
@@ -114,7 +114,7 @@
   padding: 0;
   border: none;
   background: transparent;
-  color: var(--color-foreground-muted, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -123,8 +123,8 @@
 }
 
 .inputButton:hover {
-  background: var(--color-list-hover-bg, #2f2f35);
-  color: var(--color-foreground, #c8c8c8);
+  background: var(--vscode-list-hoverBackground, #2f2f35);
+  color: var(--vscode-foreground, #c8c8c8);
 }
 
 .inputButtonIcon {
@@ -147,7 +147,7 @@
   cursor: pointer;
   border: none;
   background: transparent;
-  color: var(--color-foreground, #c8c8c8);
+  color: var(--vscode-foreground, #c8c8c8);
   font-size: 13px;
   font-family: inherit;
   text-align: left;
@@ -163,11 +163,11 @@
 
 .item:hover,
 .item.focused {
-  background: var(--color-list-hover-bg, #2f2f35);
+  background: var(--vscode-list-hoverBackground, #2f2f35);
 }
 
 .item.focused {
-  outline: 1px solid var(--color-list-focus-outline, #0070e0);
+  outline: 1px solid var(--vscode-list-focusOutline, #0070e0);
   outline-offset: -1px;
 }
 
@@ -194,7 +194,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--color-description-fg, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
 }
 
 .itemStatusIcon {
@@ -205,7 +205,7 @@
 
 .highlight {
   background: transparent;
-  color: var(--color-match-highlight-fg, var(--color-accent, #2aaaff));
+  color: var(--vscode-list-highlightForeground, var(--vscode-workbench-accent, #2aaaff));
   font-weight: 600;
   padding: 0;
 }
@@ -225,7 +225,7 @@
 
 .itemDesc {
   font-size: 11px;
-  color: var(--color-description-fg, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   /* High shrink weight: the path collapses first (down to 0), so the label only
      truncates as a last resort when it alone can't fit the row. */
   flex: 0 9999 auto;
@@ -257,8 +257,8 @@
   align-items: end;
   gap: 8px;
   padding: 6px 12px 3px;
-  color: var(--color-description-fg, #8a8a92);
-  border-top: 1px solid var(--color-border, #0f0f11);
+  color: var(--vscode-descriptionForeground, #8a8a92);
+  border-top: 1px solid var(--vscode-workbench-border, #0f0f11);
   font-size: 11px;
   line-height: 1;
   user-select: none;
@@ -274,7 +274,7 @@
 }
 
 .separatorLabel {
-  color: var(--color-foreground, #c8c8c8);
+  color: var(--vscode-foreground, #c8c8c8);
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -283,7 +283,7 @@
 }
 
 .separatorDesc {
-  color: var(--color-description-fg, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -294,7 +294,7 @@
 .itemKeybinding {
   font-size: 11px;
   font-family: monospace;
-  color: var(--color-foreground-muted, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   margin-left: 16px;
   flex-shrink: 0;
   opacity: 0.85;
@@ -304,7 +304,7 @@
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: var(--color-accent, #0070e0);
+  background: var(--vscode-workbench-accent, #0070e0);
   margin-right: 8px;
   flex-shrink: 0;
   opacity: 0.6;
@@ -320,7 +320,7 @@
   justify-content: center;
   border-radius: 3px;
   font-size: 11px;
-  color: var(--color-description-fg, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   opacity: 0;
   cursor: pointer;
 }
@@ -332,28 +332,28 @@
 
 .itemRemove:hover {
   opacity: 1;
-  background: var(--color-list-hover-bg, #3a3a40);
-  color: var(--color-foreground, #c8c8c8);
+  background: var(--vscode-list-hoverBackground, #3a3a40);
+  color: var(--vscode-foreground, #c8c8c8);
 }
 
 .empty {
   padding: 12px;
   text-align: center;
-  color: var(--color-description-fg, #8a8a92);
+  color: var(--vscode-descriptionForeground, #8a8a92);
   font-size: 13px;
 }
 
 .prompt {
   padding: 4px 12px;
   font-size: 11px;
-  color: var(--color-description-fg, #8a8a92);
-  border-bottom: 1px solid var(--color-border, #0f0f11);
+  color: var(--vscode-descriptionForeground, #8a8a92);
+  border-bottom: 1px solid var(--vscode-workbench-border, #0f0f11);
   flex-shrink: 0;
 }
 
 .progress {
   height: 2px;
-  background: var(--color-border, #2f2f35);
+  background: var(--vscode-workbench-border, #2f2f35);
   position: relative;
   overflow: hidden;
   flex-shrink: 0;
@@ -362,7 +362,7 @@
 .progressBar {
   position: absolute;
   inset: 0;
-  background: var(--color-accent, #0070e0);
+  background: var(--vscode-workbench-accent, #0070e0);
   animation: quick-input-indeterminate 1.4s ease infinite;
   transform-origin: left;
 }

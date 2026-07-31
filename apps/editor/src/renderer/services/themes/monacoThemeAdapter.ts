@@ -14,7 +14,7 @@
  */
 
 import { ColorScheme, getColorRegistry } from '@universe-editor/platform'
-import type { ColorThemeData, ITokenColorRule } from './colorThemeData.js'
+import { normalizeColor, type ColorThemeData, type ITokenColorRule } from './colorThemeData.js'
 
 export interface IMonacoTokenThemeRule {
   token: string
@@ -100,17 +100,19 @@ export function toStandaloneThemeData(
     }
     const color = theme.getColor(item.id, true)
     if (color) {
-      // Color.toString() yields #rrggbb for opaque colors and rgba(...)
-      // otherwise; Monaco theme colors accept both forms.
-      colors[item.id] = color.toString()
+      // Monaco 侧用 Color.fromHex（= parseHex || Color.red）解析这些值，rgba() 等
+      // 非 hex 字面量会静默退成纯红——必须归一化成 #RRGGBB(AA)。
+      colors[item.id] = normalizeColor(color)
     }
   }
 
-  if (overrides.lineHighlightBackground) {
-    colors['editor.lineHighlightBackground'] = overrides.lineHighlightBackground
+  const lineHighlightBackground = normalizeColor(overrides.lineHighlightBackground)
+  if (lineHighlightBackground) {
+    colors['editor.lineHighlightBackground'] = lineHighlightBackground
   }
-  if (overrides.lineHighlightBorder) {
-    colors['editor.lineHighlightBorder'] = overrides.lineHighlightBorder
+  const lineHighlightBorder = normalizeColor(overrides.lineHighlightBorder)
+  if (lineHighlightBorder) {
+    colors['editor.lineHighlightBorder'] = lineHighlightBorder
   }
 
   return {

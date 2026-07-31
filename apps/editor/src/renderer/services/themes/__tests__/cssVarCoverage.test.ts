@@ -23,6 +23,20 @@ import { describe, expect, it } from 'vitest'
 import { LEGACY_CSS_VARIABLE_IDS, UNIVERSE_COLOR_DEFINITIONS } from '../universeColorIds.js'
 
 const rendererRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+// workbench-ui ships css consumed by the same runtime document, so its variable
+// references must satisfy the same contract (this is where the 2026-07 light
+// theme "dark leftovers" hid: the package was outside the scanned roots).
+const workbenchUiRoot = join(
+  rendererRoot,
+  '..',
+  '..',
+  '..',
+  '..',
+  'packages',
+  'workbench-ui',
+  'src',
+)
+const scanRoots = [rendererRoot, workbenchUiRoot]
 
 function* walk(dir: string): Generator<string> {
   for (const name of readdirSync(dir)) {
@@ -66,7 +80,7 @@ const registeredVariableNames = new Set(
   UNIVERSE_COLOR_DEFINITIONS.map((def) => toCssVariableName(def.id)),
 )
 
-const cssFiles = [...walk(rendererRoot)]
+const cssFiles = scanRoots.flatMap((root) => [...walk(root)])
 const maskedContents = cssFiles.map((file) => ({
   file,
   text: maskComments(readFileSync(file, 'utf8')),
@@ -75,7 +89,7 @@ const maskedContents = cssFiles.map((file) => ({
 // ts/tsx inline references: same unknown/legacy checks, but only inside
 // `var(--...)` calls (a plain `--color-x` substring in ts could be a test id or
 // unrelated token, so we require the var() wrapper there).
-const tsFiles = [...walkTs(rendererRoot)]
+const tsFiles = scanRoots.flatMap((root) => [...walkTs(root)])
 const tsContents = tsFiles.map((file) => ({
   file,
   text: maskComments(readFileSync(file, 'utf8')),
@@ -84,6 +98,9 @@ const tsContents = tsFiles.map((file) => ({
 describe('css variable coverage', () => {
   it('found renderer css files to scan', () => {
     expect(cssFiles.length).toBeGreaterThan(40)
+    // Path drift guard: the workbench-ui root must actually contribute files,
+    // otherwise the whole package silently escapes the contract again.
+    expect(cssFiles.some((f) => f.includes('workbench-ui'))).toBe(true)
   })
 
   it('every var(--vscode-X) reference resolves to a registered color id', () => {

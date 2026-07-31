@@ -2,8 +2,8 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *--------------------------------------------------------------------------------------------*/
 
-import { ColorScheme, ThemeTypeSelector, URI } from '@universe-editor/platform'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { Color, ColorScheme, ThemeTypeSelector, URI } from '@universe-editor/platform'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ColorThemeData,
   loadThemeDocument,
@@ -11,6 +11,7 @@ import {
   normalizeColor,
   toCSSSelector,
   type IRawThemeDocument,
+  type ISerializedColorThemeData,
 } from '../colorThemeData.js'
 import { registerUniverseColorIds } from '../universeColorIds.js'
 
@@ -363,6 +364,92 @@ describe('ColorThemeData', () => {
     const decl = theme.getTokenStyleMetadata('variable', ['declaration'], 'typescript')
     expect(decl?.bold).toBe(true)
   })
+
+  describe('non-hex color values (built-in themes historically used rgba())', () => {
+    const loadThemeWithColors = async (colors: Record<string, string>): Promise<ColorThemeData> => {
+      const theme = ColorThemeData.fromExtensionTheme(
+        {
+          id: 'Test Dark',
+          label: 'Test Dark',
+          uiTheme: ThemeTypeSelector.VS_DARK,
+          path: './themes/colors.json',
+        },
+        themeFile('/themes/colors.json'),
+        { extensionId: 'test.themes', extensionIsBuiltin: true },
+      )
+      await theme.ensureLoaded(fileReader({ '/themes/colors.json': JSON.stringify({ colors }) }))
+      return theme
+    }
+
+    it('reload resolves rgba() theme colors to their real value instead of red', async () => {
+      const theme = await loadThemeWithColors({ 'error.background': 'rgba(209, 36, 47, 0.12)' })
+      expect(Color.Format.CSS.formatHexA(theme.getColor('error.background')!)).toBe('#d1242f1f')
+    })
+
+    it('reload skips malformed colors and falls back to the registry default', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const theme = await loadThemeWithColors({ 'editor.background': 'rgba(1,2)' })
+        expect(theme.defines('editor.background')).toBe(false)
+        expect(theme.getColor('editor.background')?.toString()).toBe('#1a1a1c')
+        expect(warn).toHaveBeenCalled()
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
+    it('setCustomColors accepts rgba() and skips garbage values', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const theme = await loadThemeWithColors({})
+        theme.setCustomColors({
+          'editor.background': 'rgba(209, 36, 47, 0.12)',
+          'sideBar.background': 'rgba(1,2)',
+          'editor.foreground': 'not-a-color',
+        })
+        expect(Color.Format.CSS.formatHexA(theme.getColor('editor.background')!)).toBe('#d1242f1f')
+        // garbage skipped -> falls back to the registry default
+        expect(theme.getColor('sideBar.background')?.toString()).toBe('#242427')
+        expect(warn).toHaveBeenCalledTimes(2)
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
+    it('createUnloadedTheme parses rgba() color maps', () => {
+      const theme = ColorThemeData.createUnloadedTheme('Fallback', ColorScheme.DARK, {
+        'editor.background': 'rgba(16, 16, 16, 1)',
+      })
+      expect(theme.getColor('editor.background')?.toString()).toBe('#101010')
+    })
+
+    it('fromStorageSnapshot keeps valid entries and skips corrupted ones', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const snapshot: ISerializedColorThemeData = {
+          id: 'vs-dark test-themes-themes-colors-json',
+          label: 'Test Dark',
+          settingsId: 'Test Dark',
+          type: ColorScheme.DARK,
+          colorMap: {
+            'editor.background': '#101010',
+            'error.background': 'rgba(209, 36, 47, 0.12)',
+            'sideBar.background': 'bogus',
+          },
+          tokenColors: [],
+          semanticTokenColors: {},
+          semanticHighlighting: false,
+        }
+        const theme = ColorThemeData.fromStorageSnapshot(snapshot)!
+        expect(theme.getColor('editor.background')?.toString()).toBe('#101010')
+        expect(Color.Format.CSS.formatHexA(theme.getColor('error.background')!)).toBe('#d1242f1f')
+        expect(theme.defines('sideBar.background')).toBe(false)
+        expect(warn).toHaveBeenCalledTimes(1)
+      } finally {
+        warn.mockRestore()
+      }
+    })
+  })
 })
 
 describe('normalizeColor', () => {
@@ -372,5 +459,10 @@ describe('normalizeColor', () => {
     expect(normalizeColor('rgba(1, 2, 3, 0.5)')).toBe('#01020380')
     expect(normalizeColor(undefined)).toBeUndefined()
     expect(normalizeColor('garbage')).toBeUndefined()
+  })
+
+  it('returns undefined for malformed rgba() instead of throwing (CSS.parse throws on it)', () => {
+    expect(normalizeColor('rgba(banana)')).toBeUndefined()
+    expect(normalizeColor('rgba(255, 255)')).toBeUndefined()
   })
 })

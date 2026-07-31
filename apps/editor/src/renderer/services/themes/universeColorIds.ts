@@ -234,7 +234,7 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
   d(
     'sideBar.border',
     'rgba(255, 255, 255, 0.08)',
-    'rgba(255, 255, 255, 0.08)',
+    'rgba(0, 0, 0, 0.1)',
     'Side bar border color on the side separating the editor.',
     'color-sidebar-border',
   ),
@@ -316,14 +316,14 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
   d(
     'editorGroup.border',
     'rgba(255, 255, 255, 0.1)',
-    'rgba(255, 255, 255, 0.1)',
+    'rgba(0, 0, 0, 0.1)',
     'Border color of editor areas and editor-internal widgets.',
     'color-editor-border',
   ),
   d(
     'editorWidget.background',
     '#252526',
-    '#252526',
+    '#f3f3f3',
     'Background color of editor widgets such as inline threads.',
     'color-editor-widget-bg',
   ),
@@ -344,7 +344,7 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
   d(
     'breadcrumb.foreground',
     '#a0a0a0',
-    '#a0a0a0',
+    '#666b76',
     'Foreground color of breadcrumb items.',
     'color-breadcrumb-fg',
   ),
@@ -367,7 +367,7 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
   d(
     'textLink.foreground',
     '#4daafc',
-    '#4daafc',
+    '#006ab1',
     'Foreground color for links in text.',
     'color-text-link-foreground',
     'color-textlink',
@@ -583,6 +583,13 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
     'Background color of activated input option toggles (e.g. match case).',
     'color-toggle-active-bg',
   ),
+  d(
+    'inputValidation.errorBorder',
+    '#be1100',
+    '#be1100',
+    'Input validation border color for error severity.',
+    'color-error-border',
+  ),
 
   // ---------------------------------------------------------------- Symbol icons
   d(
@@ -667,7 +674,14 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
 
   // ---------------------------------------------------------------- Buttons
   d('button.background', '#0e639c', '#0067c0', 'Button background color.', 'color-button-bg'),
-  d('button.foreground', '#ffffff', '#ffffff', 'Button foreground color.', 'color-button-fg'),
+  d(
+    'button.foreground',
+    '#ffffff',
+    '#ffffff',
+    'Button foreground color.',
+    'color-button-fg',
+    'color-accent-fg',
+  ),
   d(
     'button.hoverBackground',
     '#1177bb',
@@ -740,7 +754,7 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
   d(
     'menu.selectionForeground',
     '#ffffff',
-    '#ffffff',
+    '#24262b',
     'Context menu selected item foreground color.',
     'color-menu-selection-fg',
   ),
@@ -892,7 +906,7 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
   d(
     'success.foreground',
     '#89d185',
-    '#89d185',
+    '#1a7f37',
     'Foreground color for success messages.',
     'color-success-fg',
   ),
@@ -948,7 +962,7 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
   d(
     'progressBar.trackBackground',
     'rgba(255, 255, 255, 0.12)',
-    'rgba(255, 255, 255, 0.12)',
+    'rgba(0, 0, 0, 0.12)',
     'Track (background) color of progress bars.',
     'color-progress-track',
   ),
@@ -1017,21 +1031,21 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
   d(
     'gitDecoration.addedResourceForeground',
     '#73c991',
-    '#73c991',
+    '#587c0c',
     'Foreground color for added git resources.',
     'color-scm-added',
   ),
   d(
     'gitDecoration.modifiedResourceForeground',
     '#e2c08d',
-    '#e2c08d',
+    '#895503',
     'Foreground color for modified git resources.',
     'color-scm-modified',
   ),
   d(
     'gitDecoration.conflictingResourceForeground',
     '#e2c08d',
-    '#e2c08d',
+    '#ad0707',
     'Foreground color for conflicting git resources.',
     'color-scm-conflict',
   ),

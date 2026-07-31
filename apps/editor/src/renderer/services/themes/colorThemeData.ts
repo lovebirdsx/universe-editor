@@ -641,7 +641,10 @@ export class ColorThemeData implements IColorTheme {
     this.isLoaded = true
     this.colorMap = {}
     for (const [colorId, colorValue] of Object.entries(doc.colors)) {
-      this.colorMap[colorId] = Color.fromHex(colorValue)
+      const parsed = parseThemeColor(colorValue, `${this.label} / ${colorId}`)
+      if (parsed) {
+        this.colorMap[colorId] = parsed
+      }
     }
     this.themeTokenColors = doc.tokenColors
     this.themeSemanticTokenColors = doc.semanticTokenColors
@@ -676,7 +679,10 @@ export class ColorThemeData implements IColorTheme {
   ): ColorThemeData {
     const theme = new ColorThemeData(`unloaded ${label}`, label, label, type)
     for (const [colorId, colorValue] of Object.entries(colorMap)) {
-      theme.colorMap[colorId] = Color.fromHex(colorValue)
+      const parsed = parseThemeColor(colorValue, `${label} / ${colorId}`)
+      if (parsed) {
+        theme.colorMap[colorId] = parsed
+      }
     }
     theme.isLoaded = true
     return theme
@@ -690,7 +696,10 @@ export class ColorThemeData implements IColorTheme {
       if (colorValue === DEFAULT_COLOR_CONFIG_VALUE) {
         this.customColorMap[colorId] = DEFAULT_COLOR_CONFIG_VALUE
       } else if (typeof colorValue === 'string') {
-        this.customColorMap[colorId] = Color.fromHex(colorValue)
+        const parsed = parseThemeColor(colorValue, `colorCustomizations / ${colorId}`)
+        if (parsed) {
+          this.customColorMap[colorId] = parsed
+        }
       }
     }
     this.clearCaches()
@@ -747,7 +756,10 @@ export class ColorThemeData implements IColorTheme {
       data.type ?? ColorScheme.DARK,
     )
     for (const [colorId, colorValue] of Object.entries(data.colorMap ?? {})) {
-      theme.colorMap[colorId] = Color.fromHex(colorValue)
+      const parsed = parseThemeColor(colorValue, `snapshot ${data.settingsId} / ${colorId}`)
+      if (parsed) {
+        theme.colorMap[colorId] = parsed
+      }
     }
     theme.themeTokenColors = Array.isArray(data.tokenColors) ? data.tokenColors : []
     theme.themeSemanticTokenColors = data.semanticTokenColors ?? {}
@@ -786,9 +798,30 @@ export function normalizeColor(color: Color | string | undefined | null): string
   if (!color) {
     return undefined
   }
-  const parsed = typeof color === 'string' ? Color.Format.CSS.parse(color) : color
+  const parsed = typeof color === 'string' ? parseCssColorLenient(color) : color
   if (!parsed) {
     return undefined
   }
   return Color.Format.CSS.formatHexA(parsed, true).toUpperCase()
+}
+
+/** `CSS.parse` 对畸形 rgba()/hsla() 会 throw；这里统一吞掉按解析失败处理。 */
+function parseCssColorLenient(value: string): Color | null {
+  try {
+    return Color.Format.CSS.parse(value)
+  } catch {
+    return null
+  }
+}
+
+/** 宽容解析主题颜色值：非法值跳过（返回 undefined）并告警，调用方落回注册表默认。
+ *  VSCode 此处用 `Color.fromHex`——非法值静默回退 `Color.red`，整片 UI 被染成纯红
+ *  而无任何线索；跳过缺色比静默纯红更易排查。 */
+function parseThemeColor(colorValue: string, context: string): Color | undefined {
+  const parsed = parseCssColorLenient(colorValue)
+  if (!parsed) {
+    console.warn(`[ColorThemeData] skipped invalid color value "${colorValue}" (${context})`)
+    return undefined
+  }
+  return parsed
 }

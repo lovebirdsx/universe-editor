@@ -35,6 +35,37 @@ for (let i = 0; i < callSites.length - 1; i++) {
 
 const isLiteral = (v) => v !== undefined && v !== 'null' && (v.startsWith('#') || v.includes('('))
 
+// Theme documents are consumed by hex-only parsing downstream, so rgba()/rgb()
+// slot values must be converted here — a non-hex literal used to collapse to
+// solid red across the whole workbench.
+const HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/
+const RGBA_PATTERN = /^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+(?:\.\d+)?)\s*\)$/
+const RGB_PATTERN = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/
+
+function toHexLiteral(value, id, slot) {
+  if (value.startsWith('#')) {
+    if (!HEX_COLOR_PATTERN.test(value)) {
+      throw new Error(`invalid color literal: ${id} (${slot}) = ${value}`)
+    }
+    return value
+  }
+  const rgba = RGBA_PATTERN.exec(value)
+  const rgb = RGB_PATTERN.exec(value)
+  const match = rgba ?? rgb
+  if (!match) {
+    throw new Error(`invalid color literal: ${id} (${slot}) = ${value}`)
+  }
+  const [r, g, b] = [Number(match[1]), Number(match[2]), Number(match[3])]
+  const a = rgba ? parseFloat(rgba[4]) : 1
+  if (r > 255 || g > 255 || b > 255 || a > 1) {
+    throw new Error(`color component out of range: ${id} (${slot}) = ${value}`)
+  }
+  const hex = (n) => n.toString(16).padStart(2, '0')
+  const base = `#${hex(r)}${hex(g)}${hex(b)}`
+  // Math.round keeps parity with platform's Color.Format.CSS.formatHexA.
+  return a === 1 ? base : `${base}${hex(Math.round(a * 255))}`
+}
+
 function resolveSlot(slot) {
   const byId = new Map(defs.map((d) => [d.id, slot === 'dark' ? d.dark : d.light]))
   const colors = {}
@@ -52,7 +83,7 @@ function resolveSlot(slot) {
       }
       value = next
     }
-    colors[def.id] = value
+    colors[def.id] = toHexLiteral(value, def.id, slot)
   }
   return colors
 }

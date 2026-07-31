@@ -11,9 +11,9 @@
 .dialog {
   min-width: 360px;
   max-width: 560px;
-  background: var(--color-dialog-bg, #2d2d30);
-  color: var(--color-dialog-fg, #cccccc);
-  border: 1px solid var(--color-dialog-border, #454545);
+  background: var(--vscode-dialog-background, #2d2d30);
+  color: var(--vscode-dialog-foreground, #cccccc);
+  border: 1px solid var(--vscode-dialog-border, #454545);
   border-radius: 4px;
   padding: 20px 24px 16px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
@@ -33,7 +33,7 @@
 .detail {
   margin: -4px 0 0;
   font-size: 12px;
-  color: var(--color-dialog-detail-fg, #aaaaaa);
+  color: var(--vscode-dialog-detailForeground, #aaaaaa);
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 320px;
@@ -44,16 +44,16 @@
   width: 100%;
   box-sizing: border-box;
   padding: 6px 8px;
-  background: var(--color-input-bg, #3c3c3c);
-  color: var(--color-input-fg, #cccccc);
-  border: 1px solid var(--color-input-border, #3c3c3c);
+  background: var(--vscode-input-background, #3c3c3c);
+  color: var(--vscode-input-foreground, #cccccc);
+  border: 1px solid var(--vscode-input-border, #3c3c3c);
   border-radius: 2px;
   font-size: 13px;
   outline: none;
 }
 
 .input:focus {
-  border-color: var(--color-focus-border, #007fd4);
+  border-color: var(--vscode-focusBorder, #007fd4);
 }
 
 .buttons {
@@ -75,28 +75,28 @@
 }
 
 .btn {
-  background: var(--color-button-secondary-bg, #3a3d41);
-  color: var(--color-button-secondary-fg, #cccccc);
-  border-color: var(--color-button-secondary-border, #3a3d41);
+  background: var(--vscode-button-secondaryBackground, #3a3d41);
+  color: var(--vscode-button-secondaryForeground, #cccccc);
+  border-color: var(--vscode-button-secondaryBorder, #3a3d41);
 }
 
 .btn:hover {
-  background: var(--color-button-secondary-hover-bg, #45494e);
+  background: var(--vscode-button-secondaryHoverBackground, #45494e);
 }
 
 .btnPrimary {
-  background: var(--color-button-bg, #0e639c);
-  color: var(--color-button-fg, #ffffff);
-  border-color: var(--color-button-bg, #0e639c);
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #ffffff);
+  border-color: var(--vscode-button-background, #0e639c);
 }
 
 .btnPrimary:hover {
-  background: var(--color-button-hover-bg, #1177bb);
+  background: var(--vscode-button-hoverBackground, #1177bb);
 }
 
 .btn:focus-visible,
 .btnPrimary:focus-visible {
-  outline: 1px solid var(--color-focus-border, #007fd4);
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
   outline-offset: 1px;
 }
 
@@ -105,7 +105,7 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--color-dialog-detail-fg, #aaaaaa);
+  color: var(--vscode-dialog-detailForeground, #aaaaaa);
   cursor: pointer;
   user-select: none;
 }

@@ -18,5 +18,5 @@
 
 .sash:hover,
 .sash.active {
-  background: var(--color-sash-active, #0070e0);
+  background: var(--vscode-sash-hoverBorder, #0070e0);
 }

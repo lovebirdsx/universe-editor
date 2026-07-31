@@ -6,9 +6,9 @@
   width: 100%;
   box-sizing: border-box;
   padding: var(--spacing-2) var(--spacing-3);
-  background: var(--color-quick-input-bg, #242427);
-  color: var(--color-foreground, #c8c8c8);
-  border: 1px solid var(--color-quick-input-border, #2f2f35);
+  background: var(--vscode-quickInput-background, #242427);
+  color: var(--vscode-foreground, #c8c8c8);
+  border: 1px solid var(--vscode-quickInput-border, #2f2f35);
   border-radius: var(--radius-sm);
   font-family: inherit;
   font-size: var(--font-size-base);
@@ -19,7 +19,7 @@
 
 .trigger:focus-visible {
   outline: none;
-  border-color: var(--color-focus-border, #0070e0);
+  border-color: var(--vscode-focusBorder, #0070e0);
 }
 
 .trigger:disabled {
@@ -28,7 +28,7 @@
 }
 
 .invalid {
-  border-color: var(--color-error-border, #be1100);
+  border-color: var(--vscode-inputValidation-errorBorder, #be1100);
 }
 
 .value {
@@ -46,8 +46,8 @@
   z-index: var(--z-popover);
   overflow-y: auto;
   padding: var(--spacing-1);
-  background: var(--color-dropdown-bg, #2f2f35);
-  border: 1px solid var(--color-dropdown-border, #0f0f11);
+  background: var(--vscode-dropdown-background, #2f2f35);
+  border: 1px solid var(--vscode-dropdown-border, #0f0f11);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-md);
   font-size: var(--font-size-base);
@@ -56,16 +56,16 @@
 .item {
   padding: var(--spacing-2) var(--spacing-3);
   border-radius: var(--radius-xs);
-  color: var(--color-foreground, #c8c8c8);
+  color: var(--vscode-foreground, #c8c8c8);
   cursor: pointer;
   outline: none;
   white-space: nowrap;
 }
 
 .item:hover {
-  background: var(--color-list-hover-bg, #2f2f35);
+  background: var(--vscode-list-hoverBackground, #2f2f35);
 }
 
 .item[data-active='true'] {
-  background: var(--color-list-active-bg, #094771);
+  background: var(--vscode-list-activeSelectionBackground, #094771);
 }

@@ -62,14 +62,32 @@ describe('toStandaloneThemeData', () => {
     expect(data.base).toBe('vs-dark')
     expect(data.inherit).toBe(true)
     expect(data.colors['editor.background']).toBe('#101010')
-    expect(data.colors['editor.foreground']).toBe('#c8c8c8')
+    expect(data.colors['editor.foreground']).toBe('#C8C8C8')
     expect(data.colors['sideBar.background']).toBeUndefined()
-    expect(data.colors['diffEditor.insertedTextBackground']).toBe('rgba(46, 160, 67, 0.18)')
+    expect(data.colors['diffEditor.insertedTextBackground']).toBe('#2EA0432E')
     expect(data.rules.length).toBeGreaterThan(0)
     expect(data.rules[0]?.token).toBe('')
     // The default rule's foreground goes through normalizeColor (uppercase,
     // like VSCode); monaco parses rule colors case-insensitively.
     expect(data.rules[0]?.foreground).toBe('C8C8C8')
+  })
+
+  // Monaco standalone 侧用 Color.fromHex（= parseHex || Color.red）解析 defineTheme
+  // 的 colors——rgba() 等非 hex 字面量会静默退成纯红。复刻其可解析判定兜住全量输出。
+  const MONACO_PARSEABLE_HEX = /^#([0-9A-Fa-f]{3,4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/
+
+  it('emits only monaco-parseable hex colors for translucent theme values', () => {
+    const theme = ColorThemeData.createUnloadedTheme('Test', ColorScheme.DARK, {
+      // 2026-light 实值：半透明当前行高亮，曾经 toString() 成 rgba() 后被 Monaco 退成纯红
+      'editor.lineHighlightBackground': '#EAEAEA40',
+    })
+    const { data } = toStandaloneThemeData(theme)
+    expect(data.colors['editor.lineHighlightBackground']).toBe('#EAEAEA40')
+    for (const [id, value] of Object.entries(data.colors)) {
+      expect(value, `colors['${id}'] must be monaco-parseable, got "${value}"`).toMatch(
+        MONACO_PARSEABLE_HEX,
+      )
+    }
   })
 
   it('applies lineHighlight overrides', () => {
@@ -80,5 +98,15 @@ describe('toStandaloneThemeData', () => {
     })
     expect(data.colors['editor.lineHighlightBackground']).toBe('#123456')
     expect(data.colors['editor.lineHighlightBorder']).toBe('#654321')
+  })
+
+  it('normalizes rgba() lineHighlight overrides to hex and drops invalid ones', () => {
+    const theme = ColorThemeData.createUnloadedTheme('Test', ColorScheme.DARK, {})
+    const { data } = toStandaloneThemeData(theme, {
+      lineHighlightBackground: 'rgba(255, 255, 255, 0.06)',
+      lineHighlightBorder: 'rgba(banana)',
+    })
+    expect(data.colors['editor.lineHighlightBackground']).toBe('#FFFFFF0F')
+    expect(data.colors['editor.lineHighlightBorder']).toBeUndefined()
   })
 })

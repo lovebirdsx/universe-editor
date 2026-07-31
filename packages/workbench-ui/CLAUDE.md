@@ -28,7 +28,7 @@ Workbench 风格 React UI 基础设施。**依赖 React，不依赖 Electron**�
 
 ## 设计 token
 
-新组件一律只用 `theme/tokens.css` 的 token + 现有 `--color-*` 变量，禁硬编码间距/圆角/字号/阴影。颜色 token 仍由应用层（editor `workbench.css`）提供双主题，变量名不重叠。被搬迁的旧 css 顺手换 token；未触及的旧 css 作为渐进迁移技术债保留。
+新组件一律只用 `theme/tokens.css` 的 token（间距/圆角/字号/阴影）+ 颜色变量 `var(--vscode-<colorId 点转横线>)`，禁硬编码。颜色变量由 editor 主题系统运行时注入（注册表在 editor 的 `services/themes/universeColorIds.ts`，本包 css 只消费；fallback 值仅兜底无主题环境如单测）。**禁止再引入旧 `--color-*` / `--workbench-menu-*` 变量**——它们已无定义源，fallback 是深色值，浅色主题下必穿帮；editor 侧 `cssVarCoverage.test.ts` 会扫描本包并拦截 legacy 变量与未注册的 `--vscode-*`。
 
 ## 何时新建组件
 

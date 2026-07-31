@@ -18,8 +18,8 @@
 }
 
 .toast {
-  background: var(--color-dialog-bg, #252526);
-  border: 1px solid var(--color-border, #454545);
+  background: var(--vscode-dialog-background, #252526);
+  border: 1px solid var(--vscode-workbench-border, #454545);
   border-left: 3px solid var(--toast-accent, #007acc);
   border-radius: 4px;
   padding: 10px 12px;
@@ -27,7 +27,7 @@
   align-items: flex-start;
   gap: 10px;
   font-size: 13px;
-  color: var(--color-dialog-fg, #ccc);
+  color: var(--vscode-dialog-foreground, #ccc);
   pointer-events: auto;
   animation: slideIn 0.2s ease;
   max-width: 380px;
@@ -80,7 +80,7 @@
 .progress {
   margin-top: 6px;
   height: 2px;
-  background: var(--color-border, #454545);
+  background: var(--vscode-workbench-border, #454545);
   border-radius: 2px;
   overflow: hidden;
 }
@@ -114,9 +114,9 @@
 .cancelBtn {
   flex-shrink: 0;
   background: none;
-  border: 1px solid var(--color-border, #454545);
+  border: 1px solid var(--vscode-workbench-border, #454545);
   border-radius: 3px;
-  color: var(--color-dialog-fg, #ccc);
+  color: var(--vscode-dialog-foreground, #ccc);
   cursor: pointer;
   font-size: 11px;
   padding: 1px 6px;
@@ -124,7 +124,7 @@
 }
 
 .cancelBtn:hover {
-  background: var(--color-hover, rgba(255, 255, 255, 0.08));
+  background: var(--vscode-workbench-hoverBackground, rgba(255, 255, 255, 0.08));
 }
 
 @keyframes indeterminate {
@@ -148,23 +148,23 @@
 
 .actionBtn {
   background: none;
-  border: 1px solid var(--color-border, #454545);
+  border: 1px solid var(--vscode-workbench-border, #454545);
   border-radius: 3px;
-  color: var(--color-dialog-fg, #ccc);
+  color: var(--vscode-dialog-foreground, #ccc);
   cursor: pointer;
   font-size: 12px;
   padding: 2px 8px;
 }
 
 .actionBtn:hover {
-  background: var(--color-hover, rgba(255, 255, 255, 0.08));
+  background: var(--vscode-workbench-hoverBackground, rgba(255, 255, 255, 0.08));
 }
 
 .closeBtn {
   flex-shrink: 0;
   background: none;
   border: none;
-  color: var(--color-dialog-fg, #ccc);
+  color: var(--vscode-dialog-foreground, #ccc);
   cursor: pointer;
   font-size: 14px;
   padding: 0;

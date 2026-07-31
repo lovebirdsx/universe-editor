@@ -2,9 +2,9 @@
   width: 100%;
   box-sizing: border-box;
   padding: var(--spacing-2) var(--spacing-3);
-  background: var(--color-quick-input-bg, #242427);
-  color: var(--color-foreground, #c8c8c8);
-  border: 1px solid var(--color-quick-input-border, #2f2f35);
+  background: var(--vscode-quickInput-background, #242427);
+  color: var(--vscode-foreground, #c8c8c8);
+  border: 1px solid var(--vscode-quickInput-border, #2f2f35);
   border-radius: var(--radius-sm);
   font-family: inherit;
   font-size: var(--font-size-base);
@@ -12,12 +12,12 @@
 }
 
 .input::placeholder {
-  color: var(--color-input-placeholder-fg, #5a5a5e);
+  color: var(--vscode-input-placeholderForeground, #5a5a5e);
 }
 
 .input:focus {
   outline: none;
-  border-color: var(--color-focus-border, #0070e0);
+  border-color: var(--vscode-focusBorder, #0070e0);
 }
 
 .input:disabled {
@@ -26,5 +26,5 @@
 }
 
 .invalid {
-  border-color: var(--color-error-border, #be1100);
+  border-color: var(--vscode-inputValidation-errorBorder, #be1100);
 }

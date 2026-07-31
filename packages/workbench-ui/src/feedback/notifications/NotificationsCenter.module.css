@@ -5,14 +5,14 @@
   z-index: 999;
   width: 380px;
   max-height: 60vh;
-  background: var(--color-dialog-bg, #252526);
-  border: 1px solid var(--color-border, #454545);
+  background: var(--vscode-dialog-background, #252526);
+  border: 1px solid var(--vscode-workbench-border, #454545);
   border-radius: 4px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   font-size: 13px;
-  color: var(--color-dialog-fg, #ccc);
+  color: var(--vscode-dialog-foreground, #ccc);
   animation: fadeIn 0.15s ease;
 }
 
@@ -31,7 +31,7 @@
   display: flex;
   align-items: center;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--color-border, #454545);
+  border-bottom: 1px solid var(--vscode-workbench-border, #454545);
   gap: 8px;
 }
 
@@ -47,7 +47,7 @@
 .clearBtn {
   background: none;
   border: none;
-  color: var(--color-dialog-fg, #ccc);
+  color: var(--vscode-dialog-foreground, #ccc);
   cursor: pointer;
   font-size: 12px;
   padding: 2px 8px;
@@ -57,13 +57,13 @@
 
 .clearBtn:hover {
   opacity: 1;
-  background: var(--color-hover, rgba(255, 255, 255, 0.08));
+  background: var(--vscode-workbench-hoverBackground, rgba(255, 255, 255, 0.08));
 }
 
 .closeBtn {
   background: none;
   border: none;
-  color: var(--color-dialog-fg, #ccc);
+  color: var(--vscode-dialog-foreground, #ccc);
   cursor: pointer;
   font-size: 14px;
   padding: 0;
@@ -92,7 +92,7 @@
   align-items: flex-start;
   gap: 10px;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.06));
+  border-bottom: 1px solid var(--vscode-workbench-borderSubtle, rgba(255, 255, 255, 0.06));
   word-break: break-word;
 }
 
@@ -101,7 +101,7 @@
 }
 
 .item.unread {
-  background: var(--color-hover, rgba(255, 255, 255, 0.04));
+  background: var(--vscode-workbench-hoverBackground, rgba(255, 255, 255, 0.04));
 }
 
 .icon {
@@ -142,21 +142,21 @@
 .progress {
   flex: 1;
   height: 2px;
-  background: var(--color-border, #454545);
+  background: var(--vscode-workbench-border, #454545);
   border-radius: 2px;
   overflow: hidden;
 }
 
 .progressBar {
   height: 100%;
-  background: var(--color-accent);
+  background: var(--vscode-workbench-accent);
   animation: indeterminate 1.4s ease infinite;
   transform-origin: left;
 }
 
 .progressBarDeterminate {
   height: 100%;
-  background: var(--color-accent);
+  background: var(--vscode-workbench-accent);
   width: 0;
   transition: width 120ms ease-out;
 }
@@ -176,37 +176,37 @@
 .cancelBtn {
   flex-shrink: 0;
   background: none;
-  border: 1px solid var(--color-border, #454545);
+  border: 1px solid var(--vscode-workbench-border, #454545);
   border-radius: 3px;
-  color: var(--color-dialog-fg, #ccc);
+  color: var(--vscode-dialog-foreground, #ccc);
   cursor: pointer;
   font-size: 11px;
   padding: 1px 6px;
 }
 
 .cancelBtn:hover {
-  background: var(--color-hover, rgba(255, 255, 255, 0.08));
+  background: var(--vscode-workbench-hoverBackground, rgba(255, 255, 255, 0.08));
 }
 
 .actionBtn {
   background: none;
-  border: 1px solid var(--color-border, #454545);
+  border: 1px solid var(--vscode-workbench-border, #454545);
   border-radius: 3px;
-  color: var(--color-dialog-fg, #ccc);
+  color: var(--vscode-dialog-foreground, #ccc);
   cursor: pointer;
   font-size: 12px;
   padding: 2px 8px;
 }
 
 .actionBtn:hover {
-  background: var(--color-hover, rgba(255, 255, 255, 0.08));
+  background: var(--vscode-workbench-hoverBackground, rgba(255, 255, 255, 0.08));
 }
 
 .itemClose {
   flex-shrink: 0;
   background: none;
   border: none;
-  color: var(--color-dialog-fg, #ccc);
+  color: var(--vscode-dialog-foreground, #ccc);
   cursor: pointer;
   font-size: 14px;
   padding: 0;

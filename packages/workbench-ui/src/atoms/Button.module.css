@@ -14,7 +14,7 @@
 }
 
 .button:focus-visible {
-  outline: 1px solid var(--color-focus-border, #0070e0);
+  outline: 1px solid var(--vscode-focusBorder, #0070e0);
   outline-offset: 1px;
 }
 
@@ -36,7 +36,7 @@
 
 /* variants */
 .primary {
-  background: var(--color-accent, #0070e0);
+  background: var(--vscode-workbench-accent, #0070e0);
   color: #ffffff;
 }
 
@@ -45,20 +45,20 @@
 }
 
 .secondary {
-  background: var(--color-surface, #242427);
-  color: var(--color-foreground, #c8c8c8);
-  border-color: var(--color-border, #0f0f11);
+  background: var(--vscode-workbench-surface, #242427);
+  color: var(--vscode-foreground, #c8c8c8);
+  border-color: var(--vscode-workbench-border, #0f0f11);
 }
 
 .secondary:hover:not(:disabled) {
-  background: var(--color-list-hover-bg, #2f2f35);
+  background: var(--vscode-list-hoverBackground, #2f2f35);
 }
 
 .ghost {
   background: transparent;
-  color: var(--color-foreground, #c8c8c8);
+  color: var(--vscode-foreground, #c8c8c8);
 }
 
 .ghost:hover:not(:disabled) {
-  background: var(--color-list-hover-bg, #2f2f35);
+  background: var(--vscode-list-hoverBackground, #2f2f35);
 }

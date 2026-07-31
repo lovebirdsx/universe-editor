@@ -29,7 +29,7 @@ import {
 } from '../configuration/fontDefaults.js'
 import { MonacoLoader } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { getBuiltinTokenRules } from '../../workbench/panel/output/monacoLogLanguage.js'
-import type { ColorThemeData } from './colorThemeData.js'
+import { normalizeColor, type ColorThemeData } from './colorThemeData.js'
 import { toStandaloneThemeData } from './monacoThemeAdapter.js'
 import type { WorkbenchThemeService } from './workbenchThemeService.js'
 
@@ -46,21 +46,21 @@ export function initMonacoThemeBridge(
     void MonacoLoader.ensureInitialized().then((m) => {
       const dark = isDark(theme.type)
       const defaults = dark ? OUTPUT_LINE_HIGHLIGHT_DARK : OUTPUT_LINE_HIGHLIGHT_LIGHT
-      const configuredBackground = configurationService.get<string>(
-        'editor.lineHighlightBackground',
+      // 每级先归一化成 hex：用户配置写 rgba()/非法值时落到下一级，而不是把
+      // Monaco 解析不了的字面量直通 defineTheme（fromHex 失败会静默退成纯红）。
+      const configuredBackground = normalizeColor(
+        configurationService.get<string>('editor.lineHighlightBackground'),
       )
-      const configuredBorder = configurationService.get<string>('editor.lineHighlightBorder')
-      const themeBackground = theme.getColor('editor.lineHighlightBackground', false)?.toString()
-      const themeBorder = theme.getColor('editor.lineHighlightBorder', false)?.toString()
+      const configuredBorder = normalizeColor(
+        configurationService.get<string>('editor.lineHighlightBorder'),
+      )
+      const themeBackground = normalizeColor(
+        theme.getColor('editor.lineHighlightBackground', false),
+      )
+      const themeBorder = normalizeColor(theme.getColor('editor.lineHighlightBorder', false))
       const { name, data } = toStandaloneThemeData(theme, {
-        lineHighlightBackground:
-          configuredBackground !== undefined && configuredBackground.length > 0
-            ? configuredBackground
-            : (themeBackground ?? defaults.background),
-        lineHighlightBorder:
-          configuredBorder !== undefined && configuredBorder.length > 0
-            ? configuredBorder
-            : (themeBorder ?? defaults.border),
+        lineHighlightBackground: configuredBackground ?? themeBackground ?? defaults.background,
+        lineHighlightBorder: configuredBorder ?? themeBorder ?? defaults.border,
       })
       data.rules = [...data.rules, ...getBuiltinTokenRules(dark)]
       m.editor.defineTheme(name, data)

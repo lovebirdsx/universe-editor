@@ -11,11 +11,11 @@
 }
 
 .default {
-  background: var(--color-badge-bg, #2f2f35);
-  color: var(--color-badge-fg, #c8c8c8);
+  background: var(--vscode-badge-background, #2f2f35);
+  color: var(--vscode-badge-foreground, #c8c8c8);
 }
 
 .accent {
-  background: var(--color-accent, #0070e0);
+  background: var(--vscode-workbench-accent, #0070e0);
   color: #ffffff;
 }

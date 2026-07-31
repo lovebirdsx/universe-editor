@@ -16,8 +16,8 @@
   height: 15px;
   padding: 0 3px;
   border-radius: 3px;
-  background: var(--color-accent, #0070e0);
-  color: var(--color-accent-fg, #fff);
+  background: var(--vscode-workbench-accent, #0070e0);
+  color: var(--vscode-button-foreground, #fff);
   font-size: 10px;
   font-weight: 700;
   line-height: 1;
@@ -43,7 +43,7 @@
   flex: none;
   display: inline-flex;
   align-items: center;
-  color: var(--color-message-role-fg, #888);
+  color: var(--vscode-agent-messageRoleForeground, #888);
 }
 
 .slotTitle {
@@ -60,7 +60,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--color-message-role-fg, #aaa);
+  color: var(--vscode-agent-messageRoleForeground, #aaa);
   font-size: 0.917em;
 }
 
@@ -68,7 +68,7 @@
   flex: none;
   display: inline-flex;
   align-items: center;
-  color: var(--color-message-role-fg, #888);
+  color: var(--vscode-agent-messageRoleForeground, #888);
 }
 
 .slotBody {

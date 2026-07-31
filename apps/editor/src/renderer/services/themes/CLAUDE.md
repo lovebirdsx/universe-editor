@@ -76,7 +76,7 @@ TextMate（后注册者胜，无 grammar 回退 Monarch）→ LSP semantic token
 
 ## 测试
 
-`__tests__/`：colorThemeData / themeRegistry / themeConfiguration / colorResolver / semanticSelector / workbenchThemeService / cssVarCoverage。环境 renderer-node（纯逻辑，cssVarCoverage 用 node fs 扫全 css）。e2e：`e2e/specs/smoke.themes.spec.ts`。
+`__tests__/`：colorThemeData / themeRegistry / themeConfiguration / colorResolver / semanticSelector / workbenchThemeService / cssVarCoverage。环境 renderer-node（纯逻辑，cssVarCoverage 用 node fs 扫全 css，扫描根含 `packages/workbench-ui/src`——该包 css 与 renderer 同一 document，同受变量契约约束）。e2e：`e2e/specs/smoke.themes.spec.ts`。
 
 ## 相关
 

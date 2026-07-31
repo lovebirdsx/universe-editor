@@ -101,7 +101,7 @@
 }
 
 /* Mirror the SCM resource row: tint the filename by status and strike through
-   deletions. Colors come from the same --color-scm-* tokens as the badge. */
+   deletions. Colors come from the same gitDecoration.* theme colors as the badge. */
 .row[data-status='added'] .name {
   color: var(--vscode-gitDecoration-addedResourceForeground, #73c991);
 }
