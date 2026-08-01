@@ -91,6 +91,9 @@ catalog:
   # Archive extraction (on-demand claude binary download)
   tar: ^7.4.3
 
+  # Interactive prompts for the create-extension scaffolding CLI
+  '@clack/prompts': ^0.10.0
+
   # VSIX (zip) read + extract for the extension packaging package
   adm-zip: ^0.5.16
   '@types/adm-zip': ^0.5.7

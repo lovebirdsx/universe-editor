@@ -1,0 +1,58 @@
+{
+  "name": "@universe-editor/create-extension",
+  "version": "0.1.0",
+  "description": "Scaffold a new Universe Editor extension (npm create @universe-editor/extension).",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lovebirdsx/universe-editor.git",
+    "directory": "packages/create-extension"
+  },
+  "homepage": "https://github.com/lovebirdsx/universe-editor#readme",
+  "keywords": [
+    "universe-editor",
+    "extension",
+    "scaffold",
+    "create",
+    "template"
+  ],
+  "bin": {
+    "create-extension": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "templates",
+    "!dist/__tests__"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsgo --build",
+    "typecheck": "tsgo --build",
+    "test": "vitest run",
+    "lint": "eslint src --cache --cache-strategy content",
+    "lint:fix": "eslint --fix src",
+    "clean": "tsgo --build --clean"
+  },
+  "dependencies": {
+    "@clack/prompts": "catalog:"
+  },
+  "devDependencies": {
+    "@universe-editor/config-ts": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

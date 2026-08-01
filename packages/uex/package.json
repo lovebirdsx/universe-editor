@@ -1,0 +1,58 @@
+{
+  "name": "@universe-editor/uex",
+  "version": "0.1.0",
+  "description": "Command-line toolchain for Universe Editor extension authors: package, dev, login, publish (the Universe equivalent of vsce).",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lovebirdsx/universe-editor.git",
+    "directory": "packages/uex"
+  },
+  "homepage": "https://github.com/lovebirdsx/universe-editor#readme",
+  "keywords": [
+    "universe-editor",
+    "extension",
+    "cli",
+    "vsix",
+    "publish"
+  ],
+  "bin": {
+    "uex": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "!dist/__tests__"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsgo --build",
+    "typecheck": "tsgo --build",
+    "test": "vitest run",
+    "lint": "eslint src --cache --cache-strategy content",
+    "lint:fix": "eslint --fix src",
+    "clean": "tsgo --build --clean"
+  },
+  "dependencies": {
+    "@universe-editor/extension-manifest": "workspace:*",
+    "@universe-editor/extension-packaging": "workspace:*"
+  },
+  "devDependencies": {
+    "@universe-editor/config-ts": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

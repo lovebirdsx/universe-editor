@@ -12,6 +12,9 @@ catalogs:
     '@changesets/cli':
       specifier: ^2.27.0
       version: 2.30.0
+    '@clack/prompts':
+      specifier: ^0.10.0
+      version: 0.10.1
     '@floating-ui/react':
       specifier: ^0.27.0
       version: 0.27.19
@@ -673,6 +676,28 @@ importers:
 
   packages/config-ts: {}
 
+  packages/create-extension:
+    dependencies:
+      '@clack/prompts':
+        specifier: 'catalog:'
+        version: 0.10.1
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.17
+      '@universe-editor/config-ts':
+        specifier: workspace:*
+        version: link:../config-ts
+      eslint:
+        specifier: 'catalog:'
+        version: 9.39.4
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.17)(happy-dom@17.6.3)(lightningcss@1.33.0)
+
   packages/e2e-contract:
     devDependencies:
       '@universe-editor/config-eslint':
@@ -874,6 +899,31 @@ importers:
 
   packages/platform:
     devDependencies:
+      '@universe-editor/config-ts':
+        specifier: workspace:*
+        version: link:../config-ts
+      eslint:
+        specifier: 'catalog:'
+        version: 9.39.4
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.17)(happy-dom@17.6.3)(lightningcss@1.33.0)
+
+  packages/uex:
+    dependencies:
+      '@universe-editor/extension-manifest':
+        specifier: workspace:*
+        version: link:../extension-manifest
+      '@universe-editor/extension-packaging':
+        specifier: workspace:*
+        version: link:../extension-packaging
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.17
       '@universe-editor/config-ts':
         specifier: workspace:*
         version: link:../config-ts
@@ -1102,6 +1152,12 @@ packages:
 
   '@chevrotain/types@11.1.2':
     resolution: {integrity: sha512-U+HFai5+zmJCkK86QsaJtoITlboZHBqrVketcO2ROv865xfCMSFpELQoz1GkX5GzME8pTa+3kbKrZHQtI0gdbw==}
+
+  '@clack/core@0.4.2':
+    resolution: {integrity: sha512-NYQfcEy8MWIxrT5Fj8nIVchfRFA26yYKJcvBS7WlUIlw2OmQOY9DhGGXMovyI5J5PpxrCPGkgUi207EBrjpBvg==}
+
+  '@clack/prompts@0.10.1':
+    resolution: {integrity: sha512-Q0T02vx8ZM9XSv9/Yde0jTmmBQufZhPJfYAg2XrrrxWWaZgq1rr8nU8Hv710BQ1dhoP8rtY7YUdpGej2Qza/cw==}
 
   '@develar/schema-utils@2.6.5':
     resolution: {integrity: sha512-0cp4PsWQ/9avqTVMCtZ+GirikIA36ikvjtHweU4/j8yLtgObI0+JUPhYFScgwlteveGB1rt3Cm8UhN04XayDig==}
@@ -4609,6 +4665,9 @@ packages:
     resolution: {integrity: sha512-a2B9Y0KlNXl9u/vsW6sTIu9vGEpfKu2wRV6l1H3XEas/0gUIzGzBoP/IouTcUQbm9JWZLH3COxyn03TYlFax6w==}
     engines: {node: '>=10'}
 
+  sisteransi@1.0.5:
+    resolution: {integrity: sha512-bLGGlR1QxBcynn2d5YmDX4MGjlZvy2MRBDRNHLJ8VI6l6+9FUiyTFNJ0IveOSP0bcXgVDPRcfGqA0pjaqUpfVg==}
+
   slash@3.0.0:
     resolution: {integrity: sha512-g9Q1haeby36OSStwb4ntCGGGaKsaVSjQ68fBxoQcutl5fS1vuY18H3wSt3jFyFtrkx+Kz0V1G85A4MyAdDMi2Q==}
     engines: {node: '>=8'}
@@ -5334,6 +5393,17 @@ snapshots:
       prettier: 2.8.8
 
   '@chevrotain/types@11.1.2': {}
+
+  '@clack/core@0.4.2':
+    dependencies:
+      picocolors: 1.1.1
+      sisteransi: 1.0.5
+
+  '@clack/prompts@0.10.1':
+    dependencies:
+      '@clack/core': 0.4.2
+      picocolors: 1.1.1
+      sisteransi: 1.0.5
 
   '@develar/schema-utils@2.6.5':
     dependencies:
@@ -8862,6 +8932,8 @@ snapshots:
   simple-update-notifier@2.0.0:
     dependencies:
       semver: 7.7.4
+
+  sisteransi@1.0.5: {}
 
   slash@3.0.0: {}
 
