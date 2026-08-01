@@ -58,6 +58,20 @@ const PRICING: Readonly<Record<string, ClaudeModelPricing>> = {
     cacheRead: 2 / CNY_PER_USD,
     output: 100 / CNY_PER_USD,
   },
+  // DeepSeek CNY list prices. Cache Write is "—" in the price sheet — no
+  // separate tier, billed as base input.
+  'deepseek-v4-flash': {
+    input: 1 / CNY_PER_USD,
+    cacheWrite: 1 / CNY_PER_USD,
+    cacheRead: 0.2 / CNY_PER_USD,
+    output: 2 / CNY_PER_USD,
+  },
+  'deepseek-v4-pro': {
+    input: 12 / CNY_PER_USD,
+    cacheWrite: 12 / CNY_PER_USD,
+    cacheRead: 1 / CNY_PER_USD,
+    output: 24 / CNY_PER_USD,
+  },
 }
 
 /** Family used when a model id matches no priced tier — the current flagship. */
@@ -84,8 +98,10 @@ export interface ClaudeTokenTally {
  * `claude-<tier>-<version>` prefix (`claude-opus-4-8`, `claude-sonnet-5[1m]`,
  * `claude-3-5-haiku-20241022`), so match on the tier token appearing anywhere in
  * the id rather than the leading segment. Kimi gateway ids are matched on their
- * generation token (`kimi-k2.6`, `kimi-k2.7-code`, `kimi-k3`). Unknown ids resolve
- * to {@link DEFAULT_FAMILY}, unknown kimi ids to {@link KIMI_DEFAULT_FAMILY}.
+ * generation token (`kimi-k2.6`, `kimi-k2.7-code`, `kimi-k3`). DeepSeek ids carry
+ * the tier directly (`deepseek-v4-flash`, `deepseek-v4-pro`); unknown deepseek ids
+ * resolve to the pro tier. Unknown ids resolve to {@link DEFAULT_FAMILY}, unknown
+ * kimi ids to {@link KIMI_DEFAULT_FAMILY}.
  */
 export function claudeModelFamily(modelId: string): string {
   const id = modelId.toLowerCase()
@@ -95,6 +111,8 @@ export function claudeModelFamily(modelId: string): string {
   if (id.includes('haiku')) return 'claude-haiku'
   if (id.includes('kimi-k2')) return 'kimi-k2'
   if (id.includes('kimi')) return KIMI_DEFAULT_FAMILY
+  if (id.includes('deepseek') && id.includes('flash')) return 'deepseek-v4-flash'
+  if (id.includes('deepseek')) return 'deepseek-v4-pro'
   return DEFAULT_FAMILY
 }
 

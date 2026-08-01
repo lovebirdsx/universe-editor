@@ -31,6 +31,13 @@ describe('claudeModelFamily', () => {
     expect(claudeModelFamily('kimi-k9')).toBe('kimi-k3')
   })
 
+  it('matches deepseek ids on their tier token', () => {
+    expect(claudeModelFamily('deepseek-v4-flash')).toBe('deepseek-v4-flash')
+    expect(claudeModelFamily('deepseek-v4-pro')).toBe('deepseek-v4-pro')
+    expect(claudeModelFamily('DeepSeek-V4-Flash')).toBe('deepseek-v4-flash')
+    expect(claudeModelFamily('deepseek-v9')).toBe('deepseek-v4-pro')
+  })
+
   it('falls back to the default family for unknown ids', () => {
     expect(claudeModelFamily('some-future-model')).toBe('claude-sonnet')
   })
@@ -55,6 +62,20 @@ describe('claudeModelPricing', () => {
     expect(k3.cacheWrite).toBe(k3.input)
     expect(k3.cacheRead).toBeCloseTo(2 / 7.2, 9)
     expect(k3.output).toBeCloseTo(100 / 7.2, 9)
+  })
+
+  it('converts deepseek CNY list prices to USD at 7.2', () => {
+    const flash = claudeModelPricing('deepseek-v4-flash')
+    expect(flash.input).toBeCloseTo(1 / 7.2, 9)
+    expect(flash.cacheWrite).toBe(flash.input)
+    expect(flash.cacheRead).toBeCloseTo(0.2 / 7.2, 9)
+    expect(flash.output).toBeCloseTo(2 / 7.2, 9)
+
+    const pro = claudeModelPricing('deepseek-v4-pro')
+    expect(pro.input).toBeCloseTo(12 / 7.2, 9)
+    expect(pro.cacheWrite).toBe(pro.input)
+    expect(pro.cacheRead).toBeCloseTo(1 / 7.2, 9)
+    expect(pro.output).toBeCloseTo(24 / 7.2, 9)
   })
 })
 
