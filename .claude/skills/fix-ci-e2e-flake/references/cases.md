@@ -249,6 +249,12 @@ typescript 套件 `tsCodeLens`/`tsSemanticTokens` CI 2 workers 偶发——spec 
 
 ---
 
+**案例 57 — 忙等+可信输入的双竞态：setTimeout 提前量赛跑 CDP 输入派发 & dedupe 单赢家断言错具体事件名**
+信号：**本地** `--repeat-each=8` 必现 flaky 且两种形态交替：① poll received 恒 0（被测事件根本没录到）② byType/类型聚合断言 received 是**单元素数组但不是期望类型**（如期望含 `keydown` 实收 `["keyup"]`）=「忙等+可信输入」spec 的两个独立薄弱点。
+`smoke.interactionPerf`「records a slow interaction when a trusted key lands in a busy main thread」（9106fe25 引入）本地 8 跑 4 flaky。根因①：spec 先 `press('a')` 再 `setTimeout(busy 400ms, 50)`，按键要成为慢交互**必须落在忙等窗口内**，但 CDP 输入派发若 <50ms 到达（本地常态），主线程还空闲、keydown 被立即处理→不快→slowCount 恒 0——50ms 提前量本身就是赛道。修：反转顺序——renderer 里 `console.log(token)` 后**立即**进入忙等，Node 侧 `page.waitForEvent('console')` 收到 token（console 走 IO 线程 mojo flush，主线程阻塞也能送达）再 `keyboard.press`——按键**保证**在已阻塞的主线程上排队，input delay ≈ 忙等时长，确定性慢。根因②：`dedupeByInteraction` 同一 interactionId 只留**最慢**样本，`byType` 只记该样本的 eventType——keydown/keyup 时长差 <8ms 量化粒度，谁最慢是掷硬币，断言具体 `keydown` 错设计（守护的是「eventType 映射不是 undefined」，不是「keydown 一定赢」）。修：断言放宽到 `byType` keys 含任一 `key*` 类型，守护强度不降。锚：`apps/editor/e2e/specs/smoke.interactionPerf.spec.ts`；`interactionPerf.ts`（`dedupeByInteraction` 只留最慢）。
+
+---
+
 ## 根治 TODO
 
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。

@@ -16,20 +16,26 @@ test.describe('interaction perf monitoring', () => {
   }) => {
     await evaluateWhenRestored(page)
 
-    // Schedule the busy-wait so the trusted key press lands inside it: the
-    // event's dispatch waits on the blocked main thread, pushing its Event
-    // Timing input delay past the warn threshold. The busy-wait must start
-    // AFTER the press is dispatched (setTimeout), otherwise the CDP call
-    // itself would block before the input ever reaches the renderer.
-    await page.evaluate(() => {
-      setTimeout(() => {
-        const busyEnd = performance.now() + 400
-        while (performance.now() < busyEnd) {
-          /* busy */
-        }
-      }, 50)
+    // Block the main thread FIRST, then press: console output flushes over the
+    // IO thread, so the token reaches Playwright while the renderer is already
+    // spinning. The trusted key then queues behind the busy loop and its Event
+    // Timing input delay clears the warn threshold deterministically. (The
+    // previous shape — press, then setTimeout(busy, 50) — raced the CDP input
+    // dispatch against the 50ms lead and flaked ~50% locally.)
+    const blockToken = 'E2E_INTERACTION_PERF_BLOCKING'
+    const evaluated = page.evaluate((token) => {
+      console.log(token)
+      const busyEnd = performance.now() + 800
+      while (performance.now() < busyEnd) {
+        /* busy */
+      }
+    }, blockToken)
+    await page.waitForEvent('console', {
+      predicate: (msg) => msg.text() === blockToken,
+      timeout: 5000,
     })
     await page.keyboard.press('a')
+    await evaluated
 
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getInteractionPerfSummary().slowCount), {
@@ -41,6 +47,9 @@ test.describe('interaction perf monitoring', () => {
     expect(summary.interactionCount).toBeGreaterThan(0)
     // The slow interaction must carry its real event name — a mapping slip that
     // turns every type into "undefined" would still satisfy slowCount above.
-    expect(Object.keys(summary.byType)).toContain('keydown')
+    // Dedup keeps only the slowest sample per interaction id, so one key press
+    // contributes exactly one of keydown/keyup to byType — assert keyboard,
+    // not keydown specifically.
+    expect(Object.keys(summary.byType).some((t) => t.startsWith('key'))).toBe(true)
   })
 })
