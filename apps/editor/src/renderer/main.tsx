@@ -65,6 +65,7 @@ import { IDisposableLeakService, ILogChannelService } from '../shared/ipc/servic
 import { IUpdateService } from '../shared/ipc/updateService.js'
 import { ITerminalService } from '../shared/ipc/terminalService.js'
 import { IExtensionManagementService } from '../shared/ipc/extensionManagementService.js'
+import { IExtensionGalleryService } from '../shared/ipc/extensionGalleryService.js'
 import { type IAiModelMainService } from '../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../shared/ipc/aiDebugService.js'
 import { ITimerService } from './services/performance/TimerService.js'
@@ -758,6 +759,7 @@ async function bootstrapWorkbench(): Promise<void> {
     extensionManagementService: services.get(
       IExtensionManagementService,
     ) as IExtensionManagementService,
+    extensionGalleryService: services.get(IExtensionGalleryService) as IExtensionGalleryService,
     extensionEnablementService,
     extensionHostClientService,
     outputModelService: instantiation.invokeFunction((a) => a.get(IOutputModelService)),

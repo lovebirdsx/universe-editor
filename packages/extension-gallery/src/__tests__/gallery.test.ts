@@ -150,4 +150,39 @@ describe('parseQueryResult', () => {
     expect(readEngineConstraint(v)).toBe('^1.80.0')
     expect(pickVsixAsset(v)).toBe('x')
   })
+
+  it('surfaces marketplace hash + signature when both signature properties are present', () => {
+    const v: IRawGalleryVersion = {
+      version: '1.0.0',
+      files: [{ assetType: AssetType.Vsix, source: 'x' }],
+      properties: [
+        { key: 'Universe.Editor.VsixHash', value: 'ab12' },
+        { key: 'Universe.Editor.VsixSignature', value: 'c2ln' },
+        { key: 'Universe.Editor.SignatureKeyId', value: 'market-v1' },
+      ],
+    }
+    const result = parseQueryResult(
+      rawResult([{ extensionName: 'demo', publisher: { publisherName: 'acme' }, versions: [v] }]),
+    )
+    const ext = result.extensions[0]!
+    expect(ext.vsixHash).toBe('ab12')
+    expect(ext.vsixSignature).toEqual({ algorithm: 'ed25519', keyId: 'market-v1', value: 'c2ln' })
+  })
+
+  it('treats a signature without a keyId as unsigned', () => {
+    const v: IRawGalleryVersion = {
+      version: '1.0.0',
+      files: [{ assetType: AssetType.Vsix, source: 'x' }],
+      properties: [
+        { key: 'Universe.Editor.VsixHash', value: 'ab12' },
+        { key: 'Universe.Editor.VsixSignature', value: 'c2ln' },
+      ],
+    }
+    const result = parseQueryResult(
+      rawResult([{ extensionName: 'demo', publisher: { publisherName: 'acme' }, versions: [v] }]),
+    )
+    const ext = result.extensions[0]!
+    expect(ext.vsixHash).toBe('ab12')
+    expect(ext.vsixSignature).toBeUndefined()
+  })
 })

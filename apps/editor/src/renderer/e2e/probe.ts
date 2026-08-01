@@ -75,6 +75,7 @@ import type { IScmService } from '../services/extensions/ScmService.js'
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { ExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import type { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
+import type { IExtensionGalleryService } from '../../shared/ipc/extensionGalleryService.js'
 import type { IExtensionEnablementService } from '../services/extensions/ExtensionEnablementService.js'
 import type { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 import { EnablementState } from '../services/extensions/ExtensionEnablementService.js'
@@ -111,6 +112,7 @@ export interface E2EProbeServices {
   readonly explorerTreeService: ExplorerTreeService
   readonly fileService: IFileService
   readonly extensionManagementService: IExtensionManagementService
+  readonly extensionGalleryService: IExtensionGalleryService
   readonly extensionEnablementService: IExtensionEnablementService
   readonly extensionHostClientService: IExtensionHostClientService
   readonly outputModelService: IOutputModelService
@@ -663,6 +665,12 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     },
     installVsixExtension: async (vsixPath: string): Promise<string> => {
       const local = await services.extensionManagementService.installVSIX(vsixPath)
+      return local.identifier
+    },
+    installGalleryExtension: async (identifier: string): Promise<string> => {
+      const [gallery] = await services.extensionGalleryService.getExtensions([identifier])
+      if (!gallery) throw new Error(`marketplace has no extension ${identifier}`)
+      const local = await services.extensionManagementService.installFromGallery(gallery)
       return local.identifier
     },
     uninstallExtension: (identifier: string): Promise<void> =>

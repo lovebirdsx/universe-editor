@@ -11,7 +11,8 @@
  *  本脚本只写本地 stage，不碰服务器。
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdirSync, writeFileSync, copyFileSync, existsSync } from 'node:fs'
+import { mkdirSync, writeFileSync, copyFileSync, existsSync, readFileSync } from 'node:fs'
+import { createPrivateKey } from 'node:crypto'
 import { resolve, basename } from 'node:path'
 import {
   readVsixManifest,
@@ -20,6 +21,7 @@ import {
   readRegistry,
   writeRegistry,
   upsertVersion,
+  signVsix,
 } from './lib.mjs'
 
 function parseArgs(argv) {
@@ -58,6 +60,13 @@ if (vsixPaths.length === 0) die('未指定 .vsix 文件')
 
 // ISO 时间；--now 覆盖（测试可注入固定值以确定性）。
 const nowIso = args.now ?? new Date().toISOString()
+
+// 市场签名私钥（Ed25519，pkcs8 PEM）：--signing-key-file 或 env 注入；绝不进 repo。
+const signingKeyFile = args['signing-key-file'] ?? process.env.UE_GALLERY_SIGNING_KEY_FILE
+if (!signingKeyFile) die('缺少 --signing-key-file <pem>（市场签名私钥；先跑 pnpm gallery:keygen 生成）')
+if (!existsSync(signingKeyFile)) die(`找不到签名私钥: ${signingKeyFile}`)
+const privateKey = createPrivateKey(readFileSync(signingKeyFile, 'utf8'))
+const keyId = args['key-id'] ?? 'market-v1'
 
 const registry = readRegistry(stageDir)
 
@@ -99,17 +108,22 @@ for (const rawPath of vsixPaths) {
     }
   }
 
+  // 签名落在暂存后的规范文件上——客户端下载的就是这份字节。
+  const { sha256, signature } = signVsix(resolve(destDir, vsixName), { privateKey, keyId })
+
   const versionEntry = {
     version: meta.version,
     lastUpdated: nowIso,
     engine: meta.engine,
     assetDir,
     files,
+    sha256,
+    signature,
   }
 
   const { warnings } = upsertVersion(registry, meta, versionEntry)
   for (const w of warnings) warn(w)
-  ok(`已发布 ${id}@${meta.version} → ${assetDir}`)
+  ok(`已发布 ${id}@${meta.version} → ${assetDir}（keyId ${keyId}，sha256 ${sha256.slice(0, 12)}…）`)
 }
 
 writeRegistry(stageDir, registry)

@@ -81,11 +81,12 @@
 - **详情页**：虚拟 `ExtensionEditorInput`（scheme `universe:/extension/<id>`，TYPE_ID `extensionDetail`）+ `ExtensionEditor.tsx`（Header 装/卸/能力警告 + README tab（`MarkdownView` 传 `text`）+ Contributions tab）。provider 在 `BuiltInEditorProvidersContribution.ts` 注册，`EditorArea.tsx` 的 `editorComponentMap.set('extensionDetail', ExtensionEditor)`。
 - **命令** `extensionsActions.ts`：ShowExtensions / InstallFromVSIX / Uninstall / CheckForExtensionUpdates，在 `actions/index.ts` 注册（套路 A）。
 
-## 三道安全闸门（安全红线，勿拆）
+## 四道安全闸门（安全红线，勿拆）
 
 1. **防投毒**：市场安装校验下载 VSIX 的 `publisher.name.version` 与市场元数据一致（`installFromGallery`）。
-2. **发布者信任**：首次安装某发布者弹确认（`_ensurePublisherTrusted`），记住集存 `IStorageService` GLOBAL scope（key `extensions.trustedPublishers`）。诚实告知"接近编辑器本身的权限"。
-3. **恶意隔离**：control manifest 标记的恶意扩展——安装时拒绝（`_assertNotMalicious`，fetch 失败 fail-open、命中 fail-closed），已装的在启动时 `quarantineMalicious` 自动禁用 + 通知（`ExtensionsContribution._boot` 末尾）。
+2. **市场验签（fail-closed）**：市场安装强制校验 VSIX 字节的 Ed25519 签名（registry 条目的 `vsixHash`+`vsixSignature`，公钥内置在 `marketplaceSigningKeys.ts`，keyId 查找）——未签名 / hash 不符 / 签名不通过 / 未知 keyId 一律拒装；签名指纹（`vsixHash`）随 `galleryMetadata` 持久化。本地 `installVSIX` **有意不验签**（用户显式选择的文件属显式信任，无市场签名可验）。验签逻辑在纯包 `extension-packaging/signature.ts`；发布侧签名见 `scripts/gallery`（keygen/publish）。公钥可用 env `UNIVERSE_GALLERY_SIGNING_KEYS` 叠加覆盖（dev/e2e 测试密钥 seam，走 ConfigItem，env-only）。
+3. **发布者信任**：首次安装某发布者弹确认（`_ensurePublisherTrusted`），记住集存 `IStorageService` GLOBAL scope（key `extensions.trustedPublishers`）。诚实告知"接近编辑器本身的权限"。
+4. **恶意隔离**：control manifest 标记的恶意扩展——安装时拒绝（`_assertNotMalicious`，fetch 失败 fail-open、命中 fail-closed），已装的在启动时 `quarantineMalicious` 自动禁用 + 通知（`ExtensionsContribution._boot` 末尾）。
 
 **贯穿红线（全项目级）**：密钥只走 main `ISecretStorageService`(safeStorage)，绝不进 renderer/settings.json/任何 wire DTO；扩展无读密钥接口；**UI/文档不得宣称扩展已沙箱**（外部扩展近乎原生 Node 权限，`docs/user/zh-CN/customization/extensions.md` 已如实写"接近编辑器本身的权限"）。
 
@@ -95,7 +96,7 @@
 - **GALLERY_URL 默认空 = OSS**；协议对齐 `/extensionquery`，后端形态不锁死（可指自建或 open-vsx）。
 - **System（内置、不可卸） vs User（市场/VSIX 装）**：市场只管 User。
 - **启用禁用只做全局粒度**，workspace 级后置。
-- **Phase E（Node 硬隔离 + VSIX 签名验证）不做**，仅登记未来路线。
+- **市场签名已落地（2026-08）**：gallery 安装强制验签（fail-closed），本地 VSIX 不验签；硬隔离/权限模型经决策不做（隔离架构另行拍板）。
 
 ## 常见任务 → 改哪里
 
@@ -103,6 +104,7 @@
 - **改 VSIX 读取 / 打包兼容**：`extension-packaging/vsix.ts`（zip-slip 防护勿动）。
 - **改安装落盘流程 / 原子性 / 占用兜底**：`extensionManagementService.ts` 的 install 七步 + `installedExtensionsManifest.ts`。
 - **改防投毒校验**：`extensionManagementService._installFromGallery` 的一致性校验段。
+- **改市场验签 / 密钥轮换**：纯逻辑在 `extension-packaging/signature.ts`（verifyVsixSignature，fail-closed 错误码）；公钥在 `marketplaceSigningKeys.ts`（env `UNIVERSE_GALLERY_SIGNING_KEYS` 叠加）；插入点在 `_installFromGallery` 防投毒段后；发布侧签名在 `scripts/gallery`（keygen/publish）。
 - **改市场地址配置**：`main/environment/configItems.ts`（GALLERY_URL 项 + CLI_OPTIONS）+ `environmentMainService.ts` getter。
 - **改启用禁用粒度 / 生效方式**：管理服务 `getDisabledIds/setEnablement` + host 过滤链（env `UNIVERSE_DISABLED_EXTENSIONS` → bootstrap 过滤）。
 - **改更新检查策略**：`checkForUpdates`（版本比较用 `extensions-common/semver.ts` 的 `compareVersions`）。
@@ -129,6 +131,7 @@ install 命令走文件对话框，无法在 e2e 里直接驱动，因此加了�
 - 契约 `apps/editor/src/shared/e2e/contract.ts`：`installVsixExtension` / `uninstallExtension` / `getInstalledExtensionIds`。
 - 实现 `apps/editor/src/renderer/e2e/probe.ts`（注入 `extensionManagementService`，在 `main.tsx` 的 `installE2EProbeIfEnabled({...})` 里接线）。
 - spec `apps/editor/e2e/specs/smoke.extensions.spec.ts`（@p1；打开视图容器 + 用 `adm-zip` 现造 VSIX 装→`hasCommand` 出现→卸载消失，装卸那条打 `@regression` 从主趟剥离、CI 全量覆盖，见 [[e2e-regression-tag]]）。
+- 市场链路 e2e：`smoke.extensionsGallery.spec.ts`（@p1，文件内串行）——beforeAll 现场生成 Ed25519 密钥对、真跑 `publish.mjs --signing-key-file` + `server.mjs`，app 经 `UNIVERSE_GALLERY_URL` + `UNIVERSE_GALLERY_SIGNING_KEYS` 指向该实例；探针 `installGalleryExtension`（getExtensions → installFromGallery，直调服务绕过信任对话框）。
 - **e2e 跑 `out/` 产物**，改 renderer/main/probe 后必先 `pnpm --filter editor build` 再跑。
 
 ## 验证

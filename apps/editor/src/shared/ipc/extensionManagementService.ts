@@ -21,6 +21,8 @@ export interface IExtensionGalleryMetadata {
   readonly installCount?: number
   /** The gallery `vsixUrl` at install time — lets update-check re-download. */
   readonly vsixUrl?: string
+  /** sha256 of the installed VSIX, as advertised + verified at install time. */
+  readonly vsixHash?: string
 }
 
 /** A user-installed extension, as tracked in `extensions.json` + on disk. */
@@ -70,9 +72,11 @@ export interface IExtensionManagementService {
 
   /**
    * Install from the marketplace: download the VSIX, verify its manifest matches
-   * the gallery metadata (publisher/name/version — anti-poisoning), then install
-   * it. Refuses extensions the control manifest marks malicious. Carries the
-   * gallery metadata into the installed record.
+   * the gallery metadata (publisher/name/version — anti-poisoning) and its bytes
+   * against the marketplace Ed25519 signature (fail-closed: unsigned or invalid
+   * packages are refused), then install it. Refuses extensions the control
+   * manifest marks malicious. Carries the gallery metadata into the installed
+   * record.
    */
   installFromGallery(extension: IGalleryExtension): Promise<ILocalExtension>
 

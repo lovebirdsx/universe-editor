@@ -6,6 +6,9 @@
 import {
   AssetType,
   ENGINE_PROPERTY_KEYS,
+  VSIX_HASH_PROPERTY_KEY,
+  VSIX_SIGNATURE_KEY_ID_PROPERTY_KEY,
+  VSIX_SIGNATURE_PROPERTY_KEY,
   type IGalleryExtension,
   type IGalleryQueryResult,
   type IRawGalleryExtension,
@@ -34,6 +37,11 @@ export function readEngineConstraint(version: IRawGalleryVersion): string | unde
   return undefined
 }
 
+function readProperty(version: IRawGalleryVersion, key: string): string | undefined {
+  const prop = version.properties?.find((p) => p.key === key)
+  return prop && prop.value ? prop.value : undefined
+}
+
 function statistic(raw: IRawGalleryExtension, name: string): number | undefined {
   const stat = raw.statistics?.find((s) => s.statisticName === name)
   return stat?.value
@@ -54,6 +62,14 @@ function toGalleryExtension(raw: IRawGalleryExtension): IGalleryExtension | unde
   const readmeUrl = pickAsset(version, AssetType.Details)
   const changelogUrl = pickAsset(version, AssetType.Changelog)
   const engineConstraint = readEngineConstraint(version)
+  const vsixHash = readProperty(version, VSIX_HASH_PROPERTY_KEY)
+  const signatureValue = readProperty(version, VSIX_SIGNATURE_PROPERTY_KEY)
+  const signatureKeyId = readProperty(version, VSIX_SIGNATURE_KEY_ID_PROPERTY_KEY)
+  // Only a complete signature pair is usable — a partial one is treated as unsigned.
+  const vsixSignature =
+    signatureValue && signatureKeyId
+      ? { algorithm: 'ed25519', keyId: signatureKeyId, value: signatureValue }
+      : undefined
   const installCount = statistic(raw, 'install')
   const rating = statistic(raw, 'averagerating')
   const ratingCount = statistic(raw, 'ratingcount')
@@ -72,6 +88,8 @@ function toGalleryExtension(raw: IRawGalleryExtension): IGalleryExtension | unde
     ...(readmeUrl ? { readmeUrl } : {}),
     ...(changelogUrl ? { changelogUrl } : {}),
     ...(engineConstraint ? { engineConstraint } : {}),
+    ...(vsixHash ? { vsixHash } : {}),
+    ...(vsixSignature ? { vsixSignature } : {}),
     ...(installCount !== undefined ? { installCount } : {}),
     ...(rating !== undefined ? { rating } : {}),
     ...(ratingCount !== undefined ? { ratingCount } : {}),

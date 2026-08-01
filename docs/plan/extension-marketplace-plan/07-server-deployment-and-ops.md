@@ -62,7 +62,9 @@
           "engine": "^0.1.0",           // 写进 properties[] 的 Universe.Editor.Engine
           "assetDir": "assets/universe.universe-pdf/0.1.0",
           "files": { "vsix": "package.vsix", "icon": "icon.png", "readme": "README.md" },
-          "installCount": 0             // 可选统计，运维可手动/脚本累加
+          "installCount": 0,            // 可选统计，运维可手动/脚本累加
+          "sha256": "<64-hex>",         // publish.mjs 写入：VSIX 字节哈希（市场签名）
+          "signature": { "algorithm": "ed25519", "keyId": "market-v1", "value": "<base64>" }
         }
       ]
     }
@@ -70,7 +72,7 @@
 }
 ```
 
-> 设计原则：`registry.json` 只存「市场元数据」，VSIX 是唯一真相源。发布脚本读 VSIX 内 `extension/package.json` 抽 `publisher/name/version/displayName/description/categories/engines.universe`，回填进 registry——**避免手写元数据与包内声明不一致**（否则客户端防投毒校验会拒装，见 marketplace-server.md「防投毒」节）。
+> 设计原则：`registry.json` 只存「市场元数据」，VSIX 是唯一真相源。发布脚本读 VSIX 内 `extension/package.json` 抽 `publisher/name/version/displayName/description/categories/engines.universe`，回填进 registry——**避免手写元数据与包内声明不一致**（否则客户端防投毒校验会拒装，见 marketplace-server.md「防投毒」节）。`sha256`/`signature` 同样由 `publish.mjs` 写入（2026-08 落地的市场签名，见 §4 运维脚本与 marketplace-server.md「registry.json 格式」节）；服务端在 `properties[]` 里透传，客户端强制验签。
 
 ## 3. 服务端改动：`server.mjs` 挂市场路由
 
@@ -87,7 +89,7 @@
 - `sortBy`：0 相关度（默认原序）/ 4 安装量 / 6 评分 / 10 更新时间；`sortOrder` 升降序。
 - `pageNumber/pageSize` 分页。
 - 按 `flags`（`IncludeLatestVersionOnly` 等）决定每个扩展返回全部版本还是仅首个（最新版放数组首位）。
-- 组装成 `IRawGalleryQueryResult`：每个 version 的 `files[]` 用 `AssetType` 常量名（`Microsoft.VisualStudio.Services.VSIXPackage` / `...Icons.Default` / `...Content.Details` / `...Content.Changelog`），`source` 拼成**绝对 URL**（`{请求 origin}/{base}gallery/<assetDir>/<file>`）；`properties[]` 写 `Universe.Editor.Engine`；`statistics[]` 写 install/rating；`resultMetadata` 写 `ResultCount → TotalCount`。
+- 组装成 `IRawGalleryQueryResult`：每个 version 的 `files[]` 用 `AssetType` 常量名（`Microsoft.VisualStudio.Services.VSIXPackage` / `...Icons.Default` / `...Content.Details` / `...Content.Changelog`），`source` 拼成**绝对 URL**（`{请求 origin}/{base}gallery/<assetDir>/<file>`）；`properties[]` 写 `Universe.Editor.Engine`，并在条目带签名时透传 `Universe.Editor.VsixHash` / `VsixSignature` / `SignatureKeyId`；`statistics[]` 写 install/rating；`resultMetadata` 写 `ResultCount → TotalCount`。
 - 空 registry / 读失败 → 返回 `{"results":[{"extensions":[],"resultMetadata":[...0]}]}`（**永不 500**，与客户端「网络失败降级空」对称）。
 
 ### 3.2 `GET .../control.json`
@@ -110,7 +112,8 @@
 
 | 脚本 | 作用 |
 |---|---|
-| `publish.mjs` | 核心。输入一个或多个 `.vsix`：解压读 `extension/package.json` → 校验 `publisher` 必填、`engines.universe` 存在 → 抽 icon/README → 落地到 `<stageDir>/gallery/assets/<pub>.<name>/<version>/` → upsert 进 `registry.json`（同 version 覆盖，新 version 插到 `versions[]` 首位并按 semver 校验递增）。**本地生成/更新 stage 目录**，不碰服务器。 |
+| `publish.mjs` | 核心。输入一个或多个 `.vsix`：解压读 `extension/package.json` → 校验 `publisher` 必填、`engines.universe` 存在 → 抽 icon/README → 落地到 `<stageDir>/gallery/assets/<pub>.<name>/<version>/` → **对暂存字节做 Ed25519 市场签名**（`--signing-key-file` / `UE_GALLERY_SIGNING_KEY_FILE` 提供私钥，`--key-id` 默认 `market-v1`）→ upsert 进 `registry.json`（同 version 覆盖，新 version 插到 `versions[]` 首位并按 semver 校验递增；条目含 `sha256`+`signature`）。**本地生成/更新 stage 目录**，不碰服务器。 |
+| `keygen.mjs` | 生成市场签名密钥对（Ed25519）：私钥 pkcs8 PEM 落盘（mode 0600、已存在拒覆盖），打印公钥 JWK x 与客户端内置片段。私钥只存运维机/CI secret，绝不进 repo。 |
 | `unpublish.mjs` | 从 registry 移除某扩展或某版本（删条目 + 删 assets 目录）。 |
 | `upload.mjs`（复用/扩展 `scripts/release/upload.mjs`） | 把 `<stageDir>/gallery/**` scp 到服务器发布目录。**顺序红线**：先传 `assets/**`（VSIX 落地），最后覆盖 `registry.json`（清单最后覆盖，与 latest.yml 排最后同理，避免客户端读到「清单说有、包还没到」的半态）。 |
 
@@ -119,12 +122,16 @@
 发布流（对照 `scripts/server/README.md §三`）：
 
 ```bash
+# 0) 首次：生成市场签名密钥对（私钥只存运维机；公钥交客户端内置）
+node scripts/gallery/keygen.mjs --out market-key.pem
 # 1) 打包扩展成 vsix（各扩展自带，如 extensions-external/pdf/scripts/pack.mjs）
-# 2) 发布进本地 stage 的 registry
-node scripts/gallery/publish.mjs --stage <stageDir> path/to/universe.universe-pdf-0.1.0.vsix
+# 2) 发布进本地 stage 的 registry（签名入条目）
+node scripts/gallery/publish.mjs --stage <stageDir> --signing-key-file market-key.pem path/to/universe.universe-pdf-0.1.0.vsix
 # 3) 上传 gallery 子树到服务器（assets 先、registry.json 后）
 node scripts/gallery/upload.mjs --host <IP> --user deploy --dir /srv/universe-editor
 ```
+
+**密钥轮换**：生成 `market-v2` → 新客户端 `marketplaceSigningKeys.ts` 加 v2 公钥（保留 v1）→ 等带 v2 的客户端铺量 → 发布侧切 `--key-id market-v2`。旧客户端遇未知 keyId fail-closed 拒装，切换必须等铺量窗口。
 
 ## 5. 部署与服务化：复用现有一键范式
 

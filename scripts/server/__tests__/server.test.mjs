@@ -74,6 +74,8 @@ const REGISTRY = {
           assetDir: 'assets/acme.demo/1.2.3',
           files: { vsix: 'acme.demo-1.2.3.vsix', icon: 'icon.png', readme: 'README.md' },
           installCount: 100,
+          sha256: 'deadbeef'.repeat(8),
+          signature: { algorithm: 'ed25519', keyId: 'market-v1', value: 'ZmFrZXNpZw==' },
         },
       ],
     },
@@ -216,6 +218,12 @@ test('POST extensionquery 搜索命中并生成绝对资产 URL', async () => {
   )
   // 引擎属性写进 properties[]
   assert.equal(exts[0].versions[0].properties[0].key, 'Universe.Editor.Engine')
+  // 市场签名三件套透传（客户端验签依赖）
+  const props = exts[0].versions[0].properties
+  const prop = (k) => props.find((p) => p.key === k)?.value
+  assert.equal(prop('Universe.Editor.VsixHash'), 'deadbeef'.repeat(8))
+  assert.equal(prop('Universe.Editor.VsixSignature'), 'ZmFrZXNpZw==')
+  assert.equal(prop('Universe.Editor.SignatureKeyId'), 'market-v1')
   // TotalCount 元数据
   const total = data.results[0].resultMetadata[0].metadataItems[0].count
   assert.equal(total, 1)

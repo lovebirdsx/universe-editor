@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import AdmZip from 'adm-zip'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID, sign } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs'
 import { dirname, resolve, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -151,6 +151,23 @@ export function removeFromRegistry(registry, publisher, name, version) {
     registry.extensions.splice(idx, 1)
   }
   return { removedAssetDirs, found: true }
+}
+
+/**
+ * 计算 VSIX 的 sha256 + 市场 Ed25519 签名。签的是文件原始字节（Ed25519 内部已含哈希），
+ * 客户端用内置公钥验签（packages/extension-packaging signature.ts），防托管层篡改。
+ * privateKey 为 node:crypto KeyObject；keyId 进签名块，供客户端按 id 查公钥（支持轮换）。
+ */
+export function signVsix(vsixPath, { privateKey, keyId }) {
+  const bytes = readFileSync(vsixPath)
+  return {
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    signature: {
+      algorithm: 'ed25519',
+      keyId,
+      value: sign(null, bytes, privateKey).toString('base64'),
+    },
+  }
 }
 
 export { basename }

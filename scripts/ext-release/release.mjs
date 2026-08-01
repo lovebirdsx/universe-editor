@@ -16,6 +16,8 @@
  *
  *  连接信息与 gallery/upload.mjs 共用: UE_RELEASE_HOST/USER + UE_GALLERY_DIR；
  *  stage 目录: --stage 或 UE_GALLERY_STAGE，默认 <repo>/market-stage。
+ *  市场签名: --signing-key-file <pem> 或 UE_GALLERY_SIGNING_KEY_FILE（客户端强制验签，
+ *  未签名的条目会被拒装）；keyId 用 --key-id（默认 market-v1）。dry-run 时不要求私钥。
  *
  *  纯逻辑（发现/选择/增量）在 lib.mjs，便于单测。
  *--------------------------------------------------------------------------------------------*/
@@ -76,6 +78,8 @@ if (args.help) {
       '  --force         忽略增量判定，强制重新 build/pack/publish',
       '  --no-upload     只写本地 stage，不 scp 到服务器',
       '  --dry-run       打印将执行的步骤，不实际改动',
+      '  --signing-key-file <pem>  市场签名私钥（或 UE_GALLERY_SIGNING_KEY_FILE；dry-run 可省）',
+      '  --key-id <id>   签名 keyId（默认 market-v1）',
       '  [ext ...]       只处理指定扩展（目录名或 publisher.name），默认全部合法扩展',
     ].join('\n'),
   )
@@ -86,6 +90,15 @@ const stageDir = resolve(args.stage ?? process.env.UE_GALLERY_STAGE ?? join(repo
 const dryRun = args['dry-run'] ?? false
 const force = args.force ?? false
 const doUpload = !(args['no-upload'] ?? false)
+
+// 市场签名：客户端对市场安装强制验签，未签名的条目会被拒装——真发布必须有私钥。
+const signingKeyFile = args['signing-key-file'] ?? process.env.UE_GALLERY_SIGNING_KEY_FILE
+if (!dryRun && !signingKeyFile) {
+  die('缺少 --signing-key-file <pem>（市场签名私钥；先跑 pnpm gallery:keygen 生成）')
+}
+const publishSigningArgs = signingKeyFile
+  ? ['--signing-key-file', signingKeyFile, '--key-id', args['key-id'] ?? 'market-v1']
+  : []
 
 function run(cmd, cmdArgs, cwd) {
   const printable = `${cmd} ${cmdArgs.join(' ')}`
@@ -135,7 +148,13 @@ for (const ext of toPublish) {
 }
 
 console.log(`\n📥 发布进 stage: ${stageDir}`)
-run('node', [join(repoRoot, 'scripts/gallery/publish.mjs'), '--stage', stageDir, ...vsixPaths])
+run('node', [
+  join(repoRoot, 'scripts/gallery/publish.mjs'),
+  '--stage',
+  stageDir,
+  ...publishSigningArgs,
+  ...vsixPaths,
+])
 
 if (!doUpload) {
   ok(`已发布 ${toPublish.length} 个扩展到本地 stage（--no-upload，未同步服务器）`)

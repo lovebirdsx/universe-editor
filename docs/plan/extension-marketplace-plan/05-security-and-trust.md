@@ -65,18 +65,18 @@ installVSIX 前:
 
 > 这与代码库现有注释的态度一致——把 fs 网关称为"honest boundary"（诚实边界）而非"sandbox"。市场放大了触达用户的范围，这条纪律更要守住。
 
-## 4. 后置路线（Phase E，MVP 不做）
+## 4. 硬隔离与能力声明（决策：不做）
 
-登记未来的硬隔离方向，供后续规划。这些**不阻塞市场上线**，但决定了长期安全上限：
+2026-08 决策更新：**Node 权限模型与能力声明 manifest 均不做**——2026-07 单 host + Workspace Trust 重构后，隔离架构已由用户另行拍板调整；能力声明失去运行时强制对象后只剩告知价值，一并取消。原登记的四条未来路线（权限模型 / 签名 / 能力声明 / Web Worker host）中，**只有 VSIX 签名验证落地**（见 §4.1）；Web Worker / WASM host 如未来重提，另行立项。
 
-| 方向 | 说明 | 对标 |
-|---|---|---|
-| **Node 权限模型默认开** | `--experimental-permission` 稳定后默认开启，限制扩展的 fs/child_process/网络到白名单 | Node Permission Model；VSCode 无此，我们可领先 |
-| **VSIX 签名验证** | 发布者签名 + 客户端验签，防包被篡改 | `@vscode/vsce-sign`（PKCS#7） |
-| **能力声明 manifest** | 扩展在 manifest 声明所需能力（读哪些目录、连哪些域名），安装时用户审批、运行时强制 | 浏览器扩展 permissions 模型 |
-| **Web Worker / WASM host** | 把纯计算类扩展跑在无 Node 能力的 worker 里 | VSCode Web Extension Host |
+**演进策略（历史结论）**：曾评估"能力声明 + 权限模型是性价比最高的下一步"；该评估基于双 host 时代的 restricted host，随单 host 重构与隔离决策调整而失效。
 
-**演进策略**：能力声明 + 权限模型是性价比最高的下一步——它把"软隔离"变成"用户知情的受限访问"，且不需要重写运行时。签名解决的是"包完整性"，与隔离正交，可独立推进。
+### 4.1 已落地：VSIX 市场签名（2026-08）
+
+- **模型**：市场签名（非发布者签名）。发布管线 `scripts/gallery/publish.mjs --signing-key-file` 用市场 Ed25519 私钥对暂存 VSIX 字节签名，`sha256` + `signature{algorithm,keyId,value}` 写入 registry 版本条目，经 `/extensionquery` 的 `properties[]`（`Universe.Editor.VsixHash/VsixSignature/SignatureKeyId`）透出。
+- **验签**：客户端 `installFromGallery` 用内置公钥（`marketplaceSigningKeys.ts`，keyId → JWK x）**强制验签，fail-closed**——未签名 / hash 不符 / 签名不通过 / 未知 keyId 一律拒装。本地 `installVSIX` **不验签**（用户显式选择的文件属显式信任，无市场签名可验）。
+- **密钥**：私钥只存运维机/CI secret，绝不进 repo；`pnpm gallery:keygen` 生成。轮换 = 新客户端内置新 keyId 公钥（保留旧）→ 铺量后发布侧切 `--key-id`。测试/联调经 env `UNIVERSE_GALLERY_SIGNING_KEYS` 注入测试公钥。
+- **防护定位**：防"包在托管/传输层被篡改"（篡改者拿不到离线私钥，无法伪造签名），与防投毒一致性校验（id+version）、恶意清单串行互补；**不防"发布者本身恶意"**，那仍靠 §2 的社会工程层。
 
 ## 5. 密钥红线（贯穿始终，不可退让）
 
@@ -90,4 +90,4 @@ installVSIX 前:
 
 ---
 
-**本文结论**：MVP 的隔离是软的，且**诚实地软**——技术上外部扩展有接近本机的 Node 能力，防护靠发布者信任提示 + 恶意清单 + 一致性校验 + 如实告知。硬隔离（权限模型/签名/能力声明）后置且不阻塞上线。密钥红线现在与将来都不退让。UI/文档措辞不得暗示"已沙箱"。
+**本文结论**：MVP 的隔离是软的，且**诚实地软**——技术上外部扩展有接近本机的 Node 能力，防护靠发布者信任提示 + 恶意清单 + 一致性校验 + **市场签名验签（已落地，见 §4.1）** + 如实告知。硬隔离（权限模型/能力声明）经决策不做（隔离架构另行拍板）。密钥红线现在与将来都不退让。UI/文档措辞不得暗示"已沙箱"。

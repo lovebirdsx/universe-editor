@@ -137,6 +137,13 @@ export const INSPECT_BRK_EXTENSIONS: ConfigItem<'number'> = {
 
 /** Platform data roots — env-only inputs to productPaths' identity resolution. */
 export const APP_DATA: ConfigItem<'string'> = { id: 'appData', type: 'string', env: 'APPDATA' }
+
+/** Marketplace signing-key overlay (JSON {"<keyId>": "<base64url JWK x>"}) — env-only dev/e2e seam. */
+export const GALLERY_SIGNING_KEYS: ConfigItem<'string'> = {
+  id: 'gallerySigningKeys',
+  type: 'string',
+  env: 'UNIVERSE_GALLERY_SIGNING_KEYS',
+}
 export const XDG_CONFIG_HOME: ConfigItem<'string'> = {
   id: 'xdgConfigHome',
   type: 'string',

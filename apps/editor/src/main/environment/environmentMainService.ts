@@ -25,6 +25,7 @@ import {
   CLI_OPTIONS,
   CONFIG_DIR,
   EXTENSION_DEV_PATHS,
+  GALLERY_SIGNING_KEYS,
   GALLERY_URL,
   HELP,
   HOME,
@@ -192,6 +193,11 @@ export class EnvironmentMainService {
 
   get galleryUrl(): string | undefined {
     return this._resolver.get(GALLERY_URL)
+  }
+
+  /** Env-only signing-key overlay for marketplace VSIX verification (dev/e2e seam). */
+  get gallerySigningKeys(): string | undefined {
+    return this._resolver.get(GALLERY_SIGNING_KEYS)
   }
 
   /**

@@ -109,12 +109,14 @@ pickAsset(version, type): string | undefined   // 取图标/README/etc
 readEngineConstraint(version): string | undefined  // 从 properties[] 取引擎约束
 ```
 
+> **签名 property（2026-08 落地）**：自建后端在 `properties[]` 里额外透传市场签名三件套——`Universe.Editor.VsixHash`（sha256 hex）、`Universe.Editor.VsixSignature`（base64 Ed25519 签名）、`Universe.Editor.SignatureKeyId`（keyId）。客户端 parse 成 `IGalleryExtension.vsixHash` / `vsixSignature`（签名与 keyId 任一缺失即整体缺省，视为未签名）；`installFromGallery` 据此强制验签（见 [05 §4.1](./05-security-and-trust.md)）。
+
 领域模型 `IGalleryExtension`（客户端内部表示，屏蔽协议细节）：
 
 ```
 { identifier: { id: "publisher.name" }, uuid, displayName, publisher,
   version, description, iconUrl?, readmeUrl?, vsixUrl,
-  engineConstraint?, installCount?, rating?, categories?, ... }
+  engineConstraint?, vsixHash?, vsixSignature?, installCount?, rating?, categories?, ... }
 ```
 
 **为什么独立成包**：协议解析是最容易出 bug 又最好测的部分（各种缺字段/多版本/资产缺失），单测覆盖它，主服务只管网络与编排。对标 VSCode 把 `extensionGalleryService` 里纯函数部分抽出来的思路。

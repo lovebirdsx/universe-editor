@@ -55,6 +55,16 @@ export const ENGINE_PROPERTY_KEYS = [
   'Microsoft.VisualStudio.Code.Engine',
 ] as const
 
+/**
+ * Marketplace-signing property keys emitted by our registry server
+ * (scripts/server `toRawVersion`). The signature covers the raw VSIX bytes;
+ * hash + signature + keyId travel as plain properties to avoid a wire-schema
+ * bump. Clients refuse gallery installs lacking them.
+ */
+export const VSIX_HASH_PROPERTY_KEY = 'Universe.Editor.VsixHash'
+export const VSIX_SIGNATURE_PROPERTY_KEY = 'Universe.Editor.VsixSignature'
+export const VSIX_SIGNATURE_KEY_ID_PROPERTY_KEY = 'Universe.Editor.SignatureKeyId'
+
 // --- Wire request ---------------------------------------------------------
 
 export interface IRawGalleryQueryCriterion {
@@ -151,6 +161,14 @@ export interface IGalleryExtension {
   readonly readmeUrl?: string
   readonly changelogUrl?: string
   readonly engineConstraint?: string
+  /** sha256 (hex) of the VSIX, advertised by the marketplace registry. */
+  readonly vsixHash?: string
+  /** Marketplace Ed25519 signature over the raw VSIX bytes (see extension-packaging). */
+  readonly vsixSignature?: {
+    readonly algorithm: string
+    readonly keyId: string
+    readonly value: string
+  }
   readonly installCount?: number
   readonly rating?: number
   readonly ratingCount?: number

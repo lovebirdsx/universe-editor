@@ -1,8 +1,10 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, rm, writeFile, mkdir, stat, readFile, readdir } from 'node:fs/promises'
+import { generateKeyPairSync, sign } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import AdmZip from 'adm-zip'
+import { hashVsixFile } from '@universe-editor/extension-packaging'
 import {
   ExtensionManagementMainService,
   type IManagementGallery,
@@ -10,6 +12,28 @@ import {
 import { deleteExtensionFolder, sweepDeletedFolders } from '../installedExtensionsManifest.js'
 
 const HOST_API = '0.1.0'
+
+const TEST_KEY_ID = 'market-test'
+const TEST_KEY_PAIR = generateKeyPairSync('ed25519')
+const TEST_PUBLIC_KEYS = {
+  [TEST_KEY_ID]: TEST_KEY_PAIR.publicKey.export({ format: 'jwk' }).x as string,
+}
+
+/** Gallery-install signing metadata for a VSIX on disk (test key pair). */
+async function signedByTestKey(vsixPath: string): Promise<{
+  vsixHash: string
+  vsixSignature: { algorithm: string; keyId: string; value: string }
+}> {
+  const bytes = await readFile(vsixPath)
+  return {
+    vsixHash: await hashVsixFile(vsixPath),
+    vsixSignature: {
+      algorithm: 'ed25519',
+      keyId: TEST_KEY_ID,
+      value: sign(null, bytes, TEST_KEY_PAIR.privateKey).toString('base64'),
+    },
+  }
+}
 
 function manifest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -157,6 +181,7 @@ describe('ExtensionManagementMainService', () => {
 describe('ExtensionManagementMainService — gallery install', () => {
   let root: string
   let extDir: string
+  let downloadSeq = 0
 
   function galleryExtension(
     overrides: Record<string, unknown> = {},
@@ -175,16 +200,42 @@ describe('ExtensionManagementMainService — gallery install', () => {
     } as Parameters<ExtensionManagementMainService['installFromGallery']>[0]
   }
 
-  /** A stub gallery whose download() returns a VSIX built from the given manifest. */
-  function stubGallery(
+  /** Build a VSIX, sign it with the test key, and stub a gallery serving it. */
+  async function signedGallery(
     manifestForDownload: Record<string, unknown>,
     malicious: string[] = [],
-  ): IManagementGallery {
-    return {
-      download: async () => makeVsix(root, `download-${Date.now()}.vsix`, manifestForDownload),
+    entrySource?: string,
+  ): Promise<{
+    gallery: IManagementGallery
+    signing: Awaited<ReturnType<typeof signedByTestKey>>
+    vsixPath: string
+  }> {
+    const vsixPath = await makeVsix(
+      root,
+      `download-${++downloadSeq}.vsix`,
+      manifestForDownload,
+      entrySource,
+    )
+    const signing = await signedByTestKey(vsixPath)
+    const gallery: IManagementGallery = {
+      download: async () => vsixPath,
       getControlManifest: async () => ({ malicious }),
       getExtensions: async () => [],
     }
+    return { gallery, signing, vsixPath }
+  }
+
+  /** A management service wired to the test signing keys. */
+  function gallerySvc(gallery: IManagementGallery): ExtensionManagementMainService {
+    return new ExtensionManagementMainService(
+      () => extDir,
+      HOST_API,
+      gallery,
+      undefined,
+      undefined,
+      undefined,
+      TEST_PUBLIC_KEYS,
+    )
   }
 
   beforeEach(async () => {
@@ -196,15 +247,54 @@ describe('ExtensionManagementMainService — gallery install', () => {
   })
 
   it('installs from the gallery and records gallery metadata', async () => {
-    const svc = new ExtensionManagementMainService(() => extDir, HOST_API, stubGallery(manifest()))
-    const local = await svc.installFromGallery(galleryExtension())
+    const { gallery, signing } = await signedGallery(manifest())
+    const svc = gallerySvc(gallery)
+    const local = await svc.installFromGallery(galleryExtension(signing))
     expect(local.source).toBe('gallery')
     expect(local.galleryMetadata?.publisherDisplayName).toBe('ACME Inc')
     expect(local.galleryMetadata?.installCount).toBe(42)
     expect(local.galleryMetadata?.vsixUrl).toBe('https://host/sample.vsix')
+    expect(local.galleryMetadata?.vsixHash).toBe(signing.vsixHash)
 
     const list = await svc.getInstalled()
     expect(list[0]?.source).toBe('gallery')
+    svc.dispose()
+  })
+
+  it('refuses a gallery entry without signing metadata (fail-closed)', async () => {
+    const { gallery } = await signedGallery(manifest())
+    const svc = gallerySvc(gallery)
+    await expect(svc.installFromGallery(galleryExtension())).rejects.toThrow(/unsigned/)
+    expect(await svc.getInstalled()).toHaveLength(0)
+    svc.dispose()
+  })
+
+  it('refuses a package whose bytes do not match the advertised hash', async () => {
+    const { gallery } = await signedGallery(manifest())
+    // Advertise metadata for a package other than the one downloaded — the
+    // classic tampered-download case. (Signing metadata is well-formed but for
+    // a different manifest's bytes, so the real package fails the hash check.)
+    const other = await makeVsix(root, 'other.vsix', manifest({ name: 'other' }))
+    const wrongSigning = await signedByTestKey(other)
+    const svc = gallerySvc(gallery)
+    await expect(
+      svc.installFromGallery(galleryExtension({ ...wrongSigning, version: '1.0.0' })),
+    ).rejects.toThrow(/hash mismatch/)
+    expect(await svc.getInstalled()).toHaveLength(0)
+    svc.dispose()
+  })
+
+  it('refuses a signature from an unknown keyId', async () => {
+    const { gallery, signing } = await signedGallery(manifest())
+    const svc = gallerySvc(gallery)
+    await expect(
+      svc.installFromGallery(
+        galleryExtension({
+          vsixHash: signing.vsixHash,
+          vsixSignature: { ...signing.vsixSignature, keyId: 'market-unknown' },
+        }),
+      ),
+    ).rejects.toThrow(/unknown VSIX signing key/)
     svc.dispose()
   })
 
@@ -212,20 +302,22 @@ describe('ExtensionManagementMainService — gallery install', () => {
     // A dev rebuild keeps the version number but changes dist/extension.js. The
     // user reinstalls from the gallery expecting the new bits — the old idempotent
     // short-circuit returned early and left the stale code on disk.
-    let entry = 'OLD-BITS'
+    const first = await signedGallery(manifest(), [], 'OLD-BITS')
+    let current = first
     const gallery: IManagementGallery = {
-      download: async () => makeVsix(root, `download-${entry}.vsix`, manifest(), entry),
+      download: async () => current.vsixPath,
       getControlManifest: async () => ({ malicious: [] }),
       getExtensions: async () => [],
     }
-    const svc = new ExtensionManagementMainService(() => extDir, HOST_API, gallery)
+    const svc = gallerySvc(gallery)
 
-    await svc.installFromGallery(galleryExtension())
+    await svc.installFromGallery(galleryExtension(first.signing))
     const entryPath = path.join(extDir, 'acme.sample-1.0.0', 'dist', 'extension.js')
     expect(await readFile(entryPath, 'utf8')).toBe('OLD-BITS')
 
-    entry = 'NEW-BITS'
-    await svc.installFromGallery(galleryExtension())
+    const second = await signedGallery(manifest(), [], 'NEW-BITS')
+    current = second
+    await svc.installFromGallery(galleryExtension(second.signing))
     expect(await readFile(entryPath, 'utf8')).toBe('NEW-BITS')
     expect(await svc.getInstalled()).toHaveLength(1)
     svc.dispose()
@@ -233,35 +325,27 @@ describe('ExtensionManagementMainService — gallery install', () => {
 
   it('refuses a downloaded package that does not match the gallery entry', async () => {
     // Gallery claims 1.0.0 but the downloaded VSIX is 2.0.0 — poisoning guard.
-    const svc = new ExtensionManagementMainService(
-      () => extDir,
-      HOST_API,
-      stubGallery(manifest({ version: '2.0.0' })),
-    )
-    await expect(svc.installFromGallery(galleryExtension({ version: '1.0.0' }))).rejects.toThrow(
-      /does not match the marketplace entry/,
-    )
+    // (Signed correctly for its own bytes; the id/version mismatch rejects it first.)
+    const { gallery, signing } = await signedGallery(manifest({ version: '2.0.0' }))
+    const svc = gallerySvc(gallery)
+    await expect(
+      svc.installFromGallery(galleryExtension({ ...signing, version: '1.0.0' })),
+    ).rejects.toThrow(/does not match the marketplace entry/)
     expect(await svc.getInstalled()).toHaveLength(0)
     svc.dispose()
   })
 
   it('refuses to install an extension marked malicious', async () => {
-    const svc = new ExtensionManagementMainService(
-      () => extDir,
-      HOST_API,
-      stubGallery(manifest(), ['acme.sample']),
-    )
-    await expect(svc.installFromGallery(galleryExtension())).rejects.toThrow(/malicious/)
+    const { gallery, signing } = await signedGallery(manifest(), ['acme.sample'])
+    const svc = gallerySvc(gallery)
+    await expect(svc.installFromGallery(galleryExtension(signing))).rejects.toThrow(/malicious/)
     expect(await svc.getInstalled()).toHaveLength(0)
     svc.dispose()
   })
 
   it('also blocks a local VSIX whose id is marked malicious', async () => {
-    const svc = new ExtensionManagementMainService(
-      () => extDir,
-      HOST_API,
-      stubGallery(manifest(), ['acme.sample']),
-    )
+    const { gallery } = await signedGallery(manifest(), ['acme.sample'])
+    const svc = gallerySvc(gallery)
     const vsix = await makeVsix(root, 'evil.vsix', manifest())
     await expect(svc.installVSIX(vsix)).rejects.toThrow(/malicious/)
     svc.dispose()
@@ -321,6 +405,8 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
   })
 
   it('reports available updates for gallery-sourced extensions', async () => {
+    const vsixPath = await makeVsix(root, 'dl.vsix', manifest())
+    const signing = await signedByTestKey(vsixPath)
     const galleryEntry = {
       identifier: 'acme.sample',
       name: 'sample',
@@ -329,13 +415,22 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
       description: '',
       version: '2.0.0',
       vsixUrl: 'https://host/sample.vsix',
+      ...signing,
     }
     const gallery = {
-      download: async () => makeVsix(root, `dl-${Date.now()}.vsix`, manifest()),
+      download: async () => vsixPath,
       getControlManifest: async () => ({ malicious: [] as string[] }),
       getExtensions: async () => [galleryEntry],
     }
-    const svc = new ExtensionManagementMainService(() => extDir, HOST_API, gallery)
+    const svc = new ExtensionManagementMainService(
+      () => extDir,
+      HOST_API,
+      gallery,
+      undefined,
+      undefined,
+      undefined,
+      TEST_PUBLIC_KEYS,
+    )
     // Install a v1 gallery extension first.
     await svc.installFromGallery({ ...galleryEntry, version: '1.0.0' })
 

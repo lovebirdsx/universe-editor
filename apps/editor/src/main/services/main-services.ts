@@ -66,6 +66,7 @@ import { createTsServerSpecResolver } from './extensionHost/tsServerPaths.js'
 import { normalizeDevExtensionPaths } from './extensionHost/devExtensionsDir.js'
 import { ExtensionManagementMainService } from './extensionManagement/extensionManagementService.js'
 import { ExtensionGalleryMainService } from './extensionManagement/extensionGalleryService.js'
+import { resolveMarketplaceSigningKeys } from './extensionManagement/marketplaceSigningKeys.js'
 import { AcpTerminalMainService } from './acpTerminal/acpTerminalMainService.js'
 import { ClaudeBinaryMainService } from './claudeBinary/claudeBinaryMainService.js'
 import { ClaudeConfigMainService } from './claudeConfig/claudeConfigMainService.js'
@@ -162,6 +163,7 @@ registerSingletonFactory(
       acc.get(ILoggerService),
       undefined,
       () => normalizeDevExtensionPaths(acc.get(IEnvironmentMainService).extensionDevPaths),
+      resolveMarketplaceSigningKeys(acc.get(IEnvironmentMainService).gallerySigningKeys),
     ),
 )
 registerSingleton(

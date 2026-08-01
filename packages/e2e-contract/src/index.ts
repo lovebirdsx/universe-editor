@@ -585,6 +585,13 @@ export interface E2EProbe {
   // -- Extension management probe -------------------------------------------
   /** Install a local `.vsix`, returning the installed extension's identifier. */
   installVsixExtension(vsixPath: string): Promise<string>
+  /**
+   * Install from the configured marketplace by `publisher.name`, returning the
+   * installed identifier. Requires GALLERY_URL (and signing keys) to be wired
+   * into the launched app; bypasses the publisher-trust dialog by calling the
+   * management service directly.
+   */
+  installGalleryExtension(identifier: string): Promise<string>
   /** Uninstall an extension by identifier. */
   uninstallExtension(identifier: string): Promise<void>
   /** Identifiers of every user-installed extension. */

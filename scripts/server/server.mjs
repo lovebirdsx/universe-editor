@@ -208,6 +208,9 @@ const ASSET_ICON = 'Microsoft.VisualStudio.Services.Icons.Default'
 const ASSET_README = 'Microsoft.VisualStudio.Services.Content.Details'
 const ASSET_CHANGELOG = 'Microsoft.VisualStudio.Services.Content.Changelog'
 const ENGINE_KEY = 'Universe.Editor.Engine'
+const VSIX_HASH_KEY = 'Universe.Editor.VsixHash'
+const VSIX_SIGNATURE_KEY = 'Universe.Editor.VsixSignature'
+const VSIX_SIGNATURE_KEY_ID_KEY = 'Universe.Editor.SignatureKeyId'
 
 // filterType（子集，与客户端一致）
 const FILTER_CATEGORY = 5
@@ -368,6 +371,14 @@ function toRawVersion(ext, version, assetBase) {
   push(ASSET_CHANGELOG, f.changelog)
   const properties = []
   if (version.engine) properties.push({ key: ENGINE_KEY, value: version.engine })
+  // 市场签名（publish.mjs 写入 registry）：客户端验签 fail-closed 依赖这三个 property。
+  if (version.sha256) properties.push({ key: VSIX_HASH_KEY, value: version.sha256 })
+  if (version.signature?.value) {
+    properties.push({ key: VSIX_SIGNATURE_KEY, value: version.signature.value })
+    if (version.signature.keyId) {
+      properties.push({ key: VSIX_SIGNATURE_KEY_ID_KEY, value: version.signature.keyId })
+    }
+  }
   return {
     version: version.version,
     ...(version.lastUpdated ? { lastUpdated: version.lastUpdated } : {}),

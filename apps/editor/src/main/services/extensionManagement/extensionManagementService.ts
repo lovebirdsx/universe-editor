@@ -23,7 +23,11 @@ import {
   type ILogger,
 } from '@universe-editor/platform'
 import { version as HOST_API_VERSION } from '@universe-editor/extension-api'
-import { readVsixManifest, extractVsix } from '@universe-editor/extension-packaging'
+import {
+  readVsixManifest,
+  extractVsix,
+  verifyVsixSignature,
+} from '@universe-editor/extension-packaging'
 import { parseManifest } from '@universe-editor/extensions-common/manifest-schema'
 import {
   satisfies,
@@ -41,6 +45,7 @@ import { IExtensionGalleryService } from '../../../shared/ipc/extensionGallerySe
 import { getCurrentLocale } from '../../../shared/i18n/availableLocales.js'
 import { resolveUserExtensionsDir } from '../extensionHost/userExtensionsDir.js'
 import { resolveBuiltinExtensionsDir } from '../extensionHost/builtinExtensionsDir.js'
+import { BUILTIN_MARKETPLACE_SIGNING_KEYS } from './marketplaceSigningKeys.js'
 import {
   readInstalledRecords,
   writeInstalledRecords,
@@ -123,6 +128,9 @@ export class ExtensionManagementMainService
     @ILoggerService loggerService?: ILoggerService,
     private readonly _resolveBuiltinDir: UserExtensionsDirResolver = resolveBuiltinExtensionsDir,
     private readonly _resolveDevExtensionPaths: () => readonly string[] = () => [],
+    private readonly _signingKeys: Readonly<
+      Record<string, string>
+    > = BUILTIN_MARKETPLACE_SIGNING_KEYS,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, {
@@ -248,12 +256,30 @@ export class ExtensionManagementMainService
       )
     }
 
+    // Marketplace signature gate (fail-closed): the VSIX bytes must verify
+    // against the marketplace signing key built into the client. An unsigned
+    // entry or any mismatch means the package (or registry) was tampered with.
+    if (!extension.vsixHash || !extension.vsixSignature) {
+      throw new Error(
+        `marketplace entry ${extension.identifier}@${extension.version} is unsigned — refusing to install`,
+      )
+    }
+    await verifyVsixSignature(
+      vsixPath,
+      { hash: extension.vsixHash, signature: extension.vsixSignature },
+      this._signingKeys,
+    )
+    this._logger.info(
+      `verified marketplace signature for ${extension.identifier}@${extension.version} (keyId ${extension.vsixSignature.keyId})`,
+    )
+
     const galleryMetadata: IExtensionGalleryMetadata = {
       ...(extension.publisherDisplayName
         ? { publisherDisplayName: extension.publisherDisplayName }
         : {}),
       ...(extension.installCount !== undefined ? { installCount: extension.installCount } : {}),
       vsixUrl: extension.vsixUrl,
+      vsixHash: extension.vsixHash,
     }
     return this._install(vsixPath, manifest, 'gallery', galleryMetadata)
   }
@@ -261,6 +287,9 @@ export class ExtensionManagementMainService
   private async _installVSIX(vsixPath: string): Promise<ILocalExtension> {
     const manifest = readVsixManifest(vsixPath)
     await this._assertNotMalicious(extensionId(manifest))
+    // No signature verification here by design: a local file was explicitly
+    // chosen by the user (explicit trust), and there is no marketplace
+    // signature to check it against.
     return this._install(vsixPath, manifest, 'vsix', undefined)
   }
 

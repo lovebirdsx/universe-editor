@@ -176,7 +176,7 @@ apps/editor/src/
 
 按"能尽早跑通一个最小闭环"排序，每个阶段独立可验证：
 
-> **实施状态（截至 2026-07）**：Phase A–D 已全部落地并通过 `pnpm check`；Phase E 按既定决策不做，仅登记为未来路线。实施中确定的次级问题决策见 [§6](#6-实施中已拍板的次级问题决策)。
+> **实施状态（截至 2026-08）**：Phase A–D、F 已全部落地并通过 `pnpm check`；Phase E 的 **VSIX 市场签名已落地**（发布侧 `publish.mjs --signing-key-file` Ed25519 签名入 registry，客户端内置公钥强制验签 fail-closed，本地 VSIX 不验签），硬隔离/权限模型经决策**不做**（隔离架构另行拍板）。实施中确定的次级问题决策见 [§6](#6-实施中已拍板的次级问题决策)。
 
 ### Phase A — 本地安装闭环（不依赖市场后端） ✅ 已完成
 > 目标：能从一个 `.vsix` 文件手动安装扩展并生效。这把整条"落盘→重扫→生效"链路打通，且不阻塞在后端。
@@ -215,11 +215,11 @@ apps/editor/src/
 - 启用/禁用（全局粒度）+ 恶意扩展启动时自动隔离
 - **验证**：装旧版→有更新徽标→更新到新版
 
-### Phase E（后置）— 硬隔离与签名 ⏸️ 未做（登记未来路线）
-> 决策已定：MVP 不做。此处仅登记未来路线，见 [05-security-and-trust.md](./05-security-and-trust.md)。
+### Phase E（后置）— 硬隔离与签名 ⚠️ 部分落地
+> 决策更新（2026-08）：**VSIX 签名验证已落地**（市场签名模型：发布侧 Ed25519 签名入 registry，客户端内置公钥验签，gallery 安装 fail-closed，本地 VSIX 不验签；密钥/轮换见 [`scripts/gallery/README.md`](../../../scripts/gallery/README.md)）。**硬隔离不做**——2026-07 单 host + Workspace Trust 重构后隔离架构已另行拍板，本计划不再登记权限模型路线。能力声明（manifest capabilities）随隔离一并取消。
 
-- Node 权限模型默认开启且可靠
-- VSIX 签名验证（PKCS#7，对标 `@vscode/vsce-sign`）
+- ~~Node 权限模型默认开启且可靠~~（不做）
+- ✅ VSIX 签名验证（Ed25519 市场签名；未采用 `@vscode/vsce-sign` 的 PKCS#7 发布者签名模型）
 
 ### Phase F — 市场后端部署与运维 ✅ 已完成
 > 目标：补齐分发链路的服务端——此前客户端与「后端该实现什么」的契约文档已齐，唯缺后端实现与内容运维。

@@ -96,7 +96,9 @@ node scripts/server/server.mjs --root apps/editor/release --gallery-root market-
           "engine": "^0.1.0",                          // 写进 properties[] 的 Universe.Editor.Engine
           "assetDir": "assets/universe.universe-pdf/0.1.0",
           "files": { "vsix": "universe.universe-pdf-0.1.0.vsix", "icon": "icon.png", "readme": "README.md" },
-          "installCount": 0                            // 可选统计
+          "installCount": 0,                           // 可选统计
+          "sha256": "<64-hex>",                        // publish.mjs 写入：VSIX 字节哈希
+          "signature": { "algorithm": "ed25519", "keyId": "market-v1", "value": "<base64>" }
         }
       ]
     }
@@ -105,6 +107,8 @@ node scripts/server/server.mjs --root apps/editor/release --gallery-root market-
 ```
 
 服务器把每个 version 的 `files` 拼成**绝对下载 URL**（`{请求来源}{base}gallery/{assetDir}/{file}`）注入协议响应的 `files[]`。`versions[]` 首位视为最新版（`publish.mjs` 按 semver 降序维护）。改动 `registry.json` / `control.json` 后**无需重启**服务器——它按文件 mtime 自动重载。
+
+`sha256` / `signature` 是**市场签名**（`publish.mjs --signing-key-file` 写入，签名为对暂存 VSIX 字节的 Ed25519 签名）：服务器把它们透传进协议响应 `properties[]`（`Universe.Editor.VsixHash` / `Universe.Editor.VsixSignature` / `Universe.Editor.SignatureKeyId`），客户端下载后验签，**未签名或验签失败一律拒装**（fail-closed）。密钥与轮换见 [`scripts/gallery/README.md`](../../scripts/gallery/README.md#市场签名发布必配)。**自己从零写后端时**：要么如实透出这三个 property（签名由你的发布管线生成），要么接受客户端拒装——没有第三条路。
 
 ### 发布与下架
 
@@ -121,10 +125,13 @@ node scripts/server/server.mjs --root apps/editor/release --gallery-root market-
 ```bash
 pnpm ext:release                    # 发布所有有改动的外部扩展并上传
 pnpm ext:release -- --no-upload     # 只写本地 stage
+```
 
-# 手上已有现成的 .vsix（第三方产物），或想单独操作 stage/下架，用 scripts/gallery 的脚本：
-# 打包扩展成 .vsix 后，发布进本地 stage
-pnpm gallery:publish -- --stage ./market-stage path/to/universe.universe-pdf-0.1.0.vsix
+若你手上已有现成的 `.vsix`（第三方产物），或想单独操作 stage/下架，用 [`scripts/gallery`](../../scripts/gallery/README.md) 的脚本（零依赖）：
+
+```bash
+# 打包扩展成 .vsix 后，发布进本地 stage（签名私钥没有就先 pnpm gallery:keygen -- --out market-key.pem）
+pnpm gallery:publish -- --stage ./market-stage --signing-key-file ./market-key.pem path/to/universe.universe-pdf-0.1.0.vsix
 # 同步到服务器的市场根（--dir = server 的 --gallery-root；先 assets、后 registry.json，避免半态）
 #   合并部署： --dir /srv/universe-editor/gallery
 #   独立部署： --dir /data/extensions
@@ -138,10 +145,13 @@ pnpm gallery:unpublish -- --stage ./market-stage universe.universe-pdf@0.1.0
 ### 本地端到端联调
 
 ```bash
-pnpm gallery:publish -- --stage ./market-stage extensions-external/pdf/universe.universe-pdf-0.1.0.vsix
+pnpm gallery:keygen -- --out ./market-key.pem --key-id market-test   # 本地测试密钥对
+pnpm gallery:publish -- --stage ./market-stage --signing-key-file ./market-key.pem --key-id market-test \
+  extensions-external/pdf/universe.universe-pdf-0.1.0.vsix
 # --gallery-root 指向 stage 的 gallery，与更新根解耦（本地更新根随意，这里也用 stage）
 node scripts/server/server.mjs --root ./market-stage --gallery-root ./market-stage/gallery --port 8788 --base /
-UNIVERSE_GALLERY_URL=http://localhost:8788 pnpm dev   # 扩展视图搜索 → 安装 → 生效
+UNIVERSE_GALLERY_URL=http://localhost:8788 \
+UNIVERSE_GALLERY_SIGNING_KEYS='{"market-test":"<keygen 打印的 x>"}' pnpm dev   # 扩展视图搜索 → 安装 → 生效
 # 便捷等价：pnpm gallery:serve
 ```
 

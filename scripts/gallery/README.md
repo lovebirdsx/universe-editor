@@ -21,13 +21,24 @@
 
 > 「市场根」与更新目录解耦：合并部署时它是 `<更新根>/gallery`（默认），独立部署时可指向另一块磁盘（如 `/data/extensions`）。URL 上市场始终挂在 `{base}gallery/` 命名空间，与磁盘位置无关。详见 [`docs/development/marketplace-server.md`](../../docs/development/marketplace-server.md)。
 
-`registry.json` 里的元数据**全部由 `publish.mjs` 从 VSIX 内 `extension/package.json` 抽取**（`publisher/name/version/displayName/description/categories/engines.universe`），你无需手写——这样也杜绝了「市场元数据与包内声明不一致」导致客户端防投毒校验拒装。
+`registry.json` 里的元数据**全部由 `publish.mjs` 从 VSIX 内 `extension/package.json` 抽取**（`publisher/name/version/displayName/description/categories/engines.universe`），你无需手写——这样也杜绝了「市场元数据与包内声明不一致」导致客户端防投毒校验拒装。每个版本条目还带 `publish.mjs` 写入的 `sha256` + `signature`（市场签名，见下）。
+
+## 市场签名（发布必配）
+
+客户端对市场安装的 VSIX **强制验签**（fail-closed）：registry 条目的 `signature` 须能被客户端内置的市场公钥验证，否则拒装。签名与 `sha256` 由 `publish.mjs` 在发布时自动计算，签的是**暂存后的规范文件字节**（Ed25519）。
+
+- **私钥**：`--signing-key-file <pem>`（或 env `UE_GALLERY_SIGNING_KEY_FILE`）传入，pkcs8 PEM，只存运维机/CI secret，**绝不进 repo**。没有就跑 `pnpm gallery:keygen -- --out market-key.pem` 生成（mode 0600，已存在拒覆盖）。
+- **keyId**：默认 `market-v1`，`--key-id` 覆盖。registry 里签名带 keyId，客户端按 id 查公钥。
+- **公钥**：内置在客户端 `apps/editor/src/main/services/extensionManagement/marketplaceSigningKeys.ts`（keygen 会打印要贴入的片段）。
+- **轮换**：生成 `market-v2` → 新客户端内置 v2 公钥（保留 v1）→ 等带 v2 的客户端铺量 → 发布侧切 `--key-id market-v2`。旧客户端遇到未知 keyId 会拒装，故切换必须等铺量。
+- **本地 VSIX 安装不验签**（用户显式选择的文件属显式信任，无市场签名可验）。
 
 ## 脚本
 
 | 脚本 | npm 别名 | 作用 |
 |---|---|---|
-| `publish.mjs` | `pnpm gallery:publish` | 读 `.vsix` → 抽元数据/图标/README → 落地到本地 stage 的 `gallery/assets/**` → upsert `registry.json` |
+| `publish.mjs` | `pnpm gallery:publish` | 读 `.vsix` → 抽元数据/图标/README → 落地到本地 stage 的 `gallery/assets/**` → 签名 → upsert `registry.json` |
+| `keygen.mjs` | `pnpm gallery:keygen` | 生成市场签名密钥对（Ed25519）：私钥 PEM 落盘（0600），打印公钥与客户端内置片段 |
 | `unpublish.mjs` | `pnpm gallery:unpublish` | 从 registry 下架某扩展或某版本 + 删本地资产 |
 | `upload.mjs` | `pnpm gallery:upload` | 把 stage 的 `gallery/**` scp 到服务器**市场根**（`--dir` = server 的 `--gallery-root`；**先 assets 后 registry.json**，避免半态） |
 | `token.mjs` | `pnpm gallery:token` | 自助发布 API 的 token 签发/吊销/盘点（直接读写服务器 `--auth-dir` 下的 `publishers.json`，只存 sha256 哈希） |
@@ -47,7 +58,8 @@ cd extensions-external/pdf && pnpm build && pnpm package && cd -
 cd extensions-external/eslint && pnpm build && pnpm package && cd -
 
 # 2) 发布进本地 stage（首次会创建 stage/gallery/；可一次传多个 .vsix）
-pnpm gallery:publish -- --stage ./market-stage \
+#    需市场签名私钥（没有先跑：pnpm gallery:keygen -- --out market-key.pem）
+pnpm gallery:publish -- --stage ./market-stage --signing-key-file ./market-key.pem \
   extensions-external/pdf/universe.universe-pdf-0.1.0.vsix \
   extensions-external/eslint/universe.universe-eslint-0.1.0.vsix
 
@@ -57,7 +69,7 @@ pnpm gallery:upload -- --stage ./market-stage --host iloop.aki.kuro.com  --user 
 
 `--stage` 也可用环境变量 `UE_GALLERY_STAGE`；`upload.mjs` 的 `--host/--user` 与 `scripts/release/upload.mjs` 共用 `UE_RELEASE_*`，而**市场根用独立的 `--dir`（或 `UE_GALLERY_DIR`）**，与更新目录 `UE_RELEASE_DIR` 解耦。
 
-发布多个：`pnpm gallery:publish -- --stage ./market-stage a.vsix b.vsix c.vsix`。
+发布多个：`pnpm gallery:publish -- --stage ./market-stage --signing-key-file ./market-key.pem a.vsix b.vsix c.vsix`。
 
 ## 下架
 
@@ -102,13 +114,17 @@ pnpm gallery:token -- list --auth-dir /srv/auth
 ## 本地端到端联调（无需真服务器）
 
 ```bash
+# 0) 生成本地测试密钥对（私钥只在本机；打印的公钥用于第 3 步 env 注入）
+pnpm gallery:keygen -- --out ./market-key.pem --key-id market-test
 # 1) 发布进本地 stage
-pnpm gallery:publish -- --stage ./market-stage extensions-external/pdf/universe.universe-pdf-0.1.0.vsix
+pnpm gallery:publish -- --stage ./market-stage --signing-key-file ./market-key.pem --key-id market-test \
+  extensions-external/pdf/universe.universe-pdf-0.1.0.vsix
 # 2) 起静态服务器，市场根指向 stage/gallery（与更新根解耦；base=/ 便于本地）
 node scripts/server/server.mjs --root ./market-stage --gallery-root ./market-stage/gallery --port 8788 --base /
 #    便捷等价：pnpm gallery:serve
-# 3) 起编辑器 dev 指向本地市场
-UNIVERSE_GALLERY_URL=http://localhost:8788 pnpm dev
+# 3) 起编辑器 dev 指向本地市场，并把测试公钥注为验签公钥（x 取自 keygen 输出）
+UNIVERSE_GALLERY_URL=http://localhost:8788 \
+UNIVERSE_GALLERY_SIGNING_KEYS='{"market-test":"<keygen 打印的 x>"}' pnpm dev
 # → 扩展视图搜 pdf → 安装 → 生效 → 卸载
 ```
 
