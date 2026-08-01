@@ -51,7 +51,10 @@ export interface IConfigurationService {
   getMerged<T = Record<string, unknown>>(key: string): T
 
   /**
-   * Write a configuration value to the specified target layer.
+   * Write a configuration value to the specified target layer. Passing
+   * `undefined` removes the key from that layer (reset): the layer no longer
+   * owns the key, so reads fall through to lower layers, and persistence
+   * sync (UserSettingsSync) deletes the key from the backing settings file.
    */
   update(key: string, value: unknown, target?: ConfigurationTarget): void
 
@@ -167,6 +170,19 @@ export class ConfigurationService extends Disposable implements IConfigurationSe
       throw new Error(`Unknown configuration target: ${target}`)
     }
     const oldValue = this.get(key)
+    if (value === undefined) {
+      const hadOwn = Object.prototype.hasOwnProperty.call(layer, key)
+      delete layer[key]
+      // Fire even when the effective value stays the same (e.g. a higher layer
+      // still shadows the key): persistence sync diffs layer snapshots and must
+      // observe the removal to delete the key from the settings file.
+      if (hadOwn) {
+        this._onDidChangeConfiguration.fire({
+          affectsConfiguration: (k) => k === key,
+        })
+      }
+      return
+    }
     layer[key] = value
 
     // Only fire if the effective value changed

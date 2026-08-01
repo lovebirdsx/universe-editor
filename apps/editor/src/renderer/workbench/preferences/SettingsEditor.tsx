@@ -1,155 +1,93 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Form-driven settings editor. Renders one section per registered
- *  ConfigurationNode; control type is chosen from the JSON-schema entry.
+ *  Form-driven settings editor, VSCode style: left TOC + virtualized flat list
+ *  of group headers and setting rows. Search supports `@modified`, `@id:` and
+ *  tiered relevance ranking. Query and scroll position persist across tab
+ *  switches and reloads (GLOBAL storage); the target tab rides the input's
+ *  own serialization.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useMemo, useReducer, useRef, useState, type JSX } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import {
   ConfigurationRegistry,
   ConfigurationTarget,
   IConfigurationService,
   INotificationService,
+  IStorageService,
   IWorkspaceService,
   Severity,
   localize,
-  type IConfigurationNode,
-  type IConfigurationPropertySchema,
   type IEditorInput,
 } from '@universe-editor/platform'
+import {
+  VirtualList,
+  useScrollRestore,
+  type VirtualListHandle,
+} from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import {
   SETTINGS_EDITOR_FOCUS_SEARCH_EVENT,
   SETTINGS_EDITOR_SWITCH_TARGET_EVENT,
 } from './preferencesFocus.js'
 import { SettingsEditorInput } from '../../services/editor/SettingsEditorInput.js'
+import {
+  buildFlatModel,
+  buildTocEntries,
+  estimateFlatItemSize,
+  type SettingsFlatItem,
+  type SettingsTocEntry,
+} from '../../services/preferences/settingsFlatModel.js'
+import {
+  filterAndRankSettings,
+  parseQuery,
+  type SettingSearchEntry,
+} from '../../services/preferences/settingsSearchModel.js'
+import { SettingsScrollPersister } from '../../services/preferences/settingsScrollPersister.js'
+import { SettingsRow } from './SettingsRow.js'
+import { SettingsToc } from './SettingsToc.js'
+import { useSettingsQueryState } from './useSettingsQueryState.js'
 import styles from './SettingsEditor.module.css'
 
-function originLabel(origin: ConfigurationTarget | undefined): string {
-  switch (origin) {
-    case ConfigurationTarget.Project:
-      return localize('settings.origin.workspace', 'Workspace')
-    case ConfigurationTarget.VSCodeWorkspace:
-      return localize('settings.origin.vscodeWorkspace', 'VSCode Workspace')
-    case ConfigurationTarget.User:
-      return localize('settings.origin.user', 'User')
-    case ConfigurationTarget.VSCodeUser:
-      return localize('settings.origin.vscodeUser', 'VSCode User')
-    case ConfigurationTarget.Memory:
-      return localize('settings.origin.memory', 'Runtime')
-    case ConfigurationTarget.Default:
-      return localize('settings.origin.default', 'Default')
-    default:
-      return localize('settings.origin.default', 'Default')
-  }
+type EditableTarget = ConfigurationTarget.User | ConfigurationTarget.Project
+
+function scrollStorageKey(target: EditableTarget): string {
+  return target === ConfigurationTarget.Project
+    ? 'settingsEditor.scroll.project'
+    : 'settingsEditor.scroll.user'
 }
 
-// The form only renders scalar settings (boolean / number / string / single
-// enum). Object / array / union (type[]) / anyOf settings have no good form
-// control — they remain fully editable in settings.json (which gets the complete
-// schema for completion + validation). This keeps the form usable instead of
-// showing dozens of "not editable" rows.
-function isScalarSchema(schema: IConfigurationPropertySchema): boolean {
-  if (schema.anyOf !== undefined) return false
-  // Union types (e.g. boolean | string) have no clean single control even when
-  // they carry an enum, so keep them in settings.json only.
-  if (Array.isArray(schema.type)) return false
-  if (Array.isArray(schema.enum) && schema.enum.length > 0) return true
-  const t = schema.type
-  return t === 'boolean' || t === 'number' || t === 'integer' || t === 'string'
-}
-
-interface RowProps {
-  configKey: string
-  schema: IConfigurationPropertySchema
-  value: unknown
-  origin: ConfigurationTarget | undefined
-  onChange: (value: unknown) => void
-}
-
-function PropertyRow({ configKey, schema, value, origin, onChange }: RowProps) {
-  let control: JSX.Element
-
-  if (Array.isArray(schema.enum) && schema.enum.length > 0) {
-    control = (
-      <select
-        className={styles['control']}
-        value={String(value ?? '')}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        {schema.enum.map((opt) => (
-          <option key={String(opt)} value={String(opt)}>
-            {schema.enumItemLabels?.[String(opt)] ?? String(opt)}
-          </option>
-        ))}
-      </select>
-    )
-  } else if (schema.type === 'boolean') {
-    control = (
-      <input
-        className={styles['checkbox']}
-        type="checkbox"
-        checked={Boolean(value)}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-    )
-  } else if (schema.type === 'number' || schema.type === 'integer') {
-    control = (
-      <input
-        className={styles['control']}
-        type="number"
-        value={Number(value ?? 0)}
-        {...(schema.minimum !== undefined ? { min: schema.minimum } : {})}
-        {...(schema.maximum !== undefined ? { max: schema.maximum } : {})}
-        onChange={(e) => {
-          const n = Number(e.target.value)
-          if (!Number.isNaN(n)) onChange(n)
-        }}
-      />
-    )
-  } else if (schema.type === 'string') {
-    control = (
-      <input
-        className={styles['control']}
-        type="text"
-        value={String(value ?? '')}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    )
-  } else {
-    control = (
-      <span className={styles['readonly']}>
-        {localize('settings.readonly', 'Not editable in form view')}
-      </span>
-    )
-  }
-
-  return (
-    <div className={styles['row']} data-key={configKey}>
-      <div className={styles['rowMeta']}>
-        <div className={styles['rowKey']}>
-          {configKey}
-          <span className={styles['originBadge']}>{originLabel(origin)}</span>
-        </div>
-        {schema.description ? <div className={styles['rowDesc']}>{schema.description}</div> : null}
-      </div>
-      <div className={styles['rowControl']}>{control}</div>
-    </div>
-  )
+function flatItemKey(item: SettingsFlatItem): string {
+  return item.kind === 'header' ? `h:${item.id}` : `r:${item.key}`
 }
 
 export function SettingsEditor({ input }: { input: IEditorInput }) {
   const config = useService(IConfigurationService)
   const workspace = useService(IWorkspaceService)
   const notifications = useService(INotificationService)
+  const storage = useService(IStorageService)
 
-  const [activeTarget, setActiveTarget] = useState<
-    ConfigurationTarget.User | ConfigurationTarget.Project
-  >(() => (input as SettingsEditorInput).target ?? ConfigurationTarget.User)
+  const [activeTarget, setActiveTarget] = useState<EditableTarget>(
+    () => (input as SettingsEditorInput).target ?? ConfigurationTarget.User,
+  )
   const [hasWorkspace, setHasWorkspace] = useState(() => workspace.current !== null)
-  const [query, setQuery] = useState('')
+  const { query, setQuery } = useSettingsQueryState(storage)
   const [, bump] = useReducer((n: number) => n + 1, 0)
+  const [activeTocId, setActiveTocId] = useState<string | undefined>(undefined)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const listRef = useRef<VirtualListHandle>(null)
+
+  const scrollPersister = useMemo(() => new SettingsScrollPersister(storage), [storage])
+  useEffect(() => {
+    void scrollPersister.prefetch([
+      scrollStorageKey(ConfigurationTarget.User),
+      scrollStorageKey(ConfigurationTarget.Project),
+    ])
+  }, [scrollPersister])
+  useScrollRestore(
+    scrollStorageKey(activeTarget),
+    () => listRef.current?.getScrollElement() ?? null,
+    scrollPersister,
+  )
 
   useEffect(() => {
     const focusSearch = () => {
@@ -176,9 +114,7 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
   // Listen for external switch-target dispatches (e.g. from OpenWorkspaceSettingsAction).
   useEffect(() => {
     const handler = (e: Event) => {
-      const t = (e as CustomEvent<number>).detail as
-        | ConfigurationTarget.User
-        | ConfigurationTarget.Project
+      const t = (e as CustomEvent<number>).detail as EditableTarget
       if (t === ConfigurationTarget.Project && !workspace.current) return
       setActiveTarget(t)
       ;(input as SettingsEditorInput).switchTarget(t)
@@ -197,7 +133,7 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
     }
   }, [config])
 
-  function handleSwitchTarget(t: ConfigurationTarget.User | ConfigurationTarget.Project): void {
+  function handleSwitchTarget(t: EditableTarget): void {
     if (t === ConfigurationTarget.Project && !hasWorkspace) {
       notifications.notify({
         message: localize('settings.noWorkspace', 'Open a folder to edit workspace settings.'),
@@ -210,38 +146,115 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
   }
 
   const nodes = ConfigurationRegistry.getConfigurationNodes()
-  const normalisedQuery = query.trim().toLowerCase()
+  const parsedQuery = useMemo(() => parseQuery(query), [query])
+  const hasQuery = query.trim() !== ''
 
-  // Drop non-scalar settings up front so both the count and the rendered rows
-  // reflect only what the form can edit.
-  const scalarNodes = useMemo<IConfigurationNode[]>(() => {
-    return nodes
-      .map((node) => {
-        const keep: Record<string, IConfigurationPropertySchema> = {}
-        for (const [k, s] of Object.entries(node.properties)) {
-          if (isScalarSchema(s)) keep[k] = s
-        }
-        return Object.keys(keep).length ? { ...node, properties: keep } : null
-      })
-      .filter((n): n is IConfigurationNode => n !== null)
+  // The search/flat models are rebuilt every render on purpose: a registry walk
+  // over a few hundred keys is sub-millisecond, and computing fresh values on
+  // every config/registry bump keeps the data flow trivially correct. The
+  // render cost that matters (row DOM) is guarded by the memoized SettingsRow.
+  let ranked: ReturnType<typeof filterAndRankSettings> | undefined
+  if (hasQuery) {
+    const entries: SettingSearchEntry[] = []
+    let order = 0
+    for (const node of nodes) {
+      for (const [key, schema] of Object.entries(node.properties)) {
+        entries.push({
+          key,
+          description: schema.description ?? '',
+          order: order++,
+          isModified: config.getValueOriginForTarget(key, activeTarget) === activeTarget,
+        })
+      }
+    }
+    ranked = filterAndRankSettings(entries, parsedQuery)
+  }
+
+  const model = buildFlatModel(nodes, ranked)
+  const tocEntries = buildTocEntries(model)
+  const groupTitles = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const node of nodes) map.set(node.id, node.title ?? node.id)
+    return map
   }, [nodes])
+  const totalRows = model.items.reduce((acc, item) => acc + (item.kind === 'row' ? 1 : 0), 0)
 
-  const filtered = useMemo<IConfigurationNode[]>(() => {
-    if (!normalisedQuery) return scalarNodes
-    return scalarNodes
-      .map((node) => {
-        const keep: Record<string, IConfigurationPropertySchema> = {}
-        for (const [k, s] of Object.entries(node.properties)) {
-          if (k.toLowerCase().includes(normalisedQuery)) keep[k] = s
+  // Keep the TOC highlight on the group whose header scrolled past the top.
+  useEffect(() => {
+    const el = listRef.current?.getScrollElement()
+    if (!el || model.headerIndexes.length === 0) {
+      setActiveTocId(undefined)
+      return
+    }
+    const update = () => {
+      const top = el.scrollTop + 40
+      let active: string | undefined
+      for (let i = 0; i < model.headerIndexes.length; i++) {
+        if (model.headerOffsets[i]! <= top) {
+          const header = model.items[model.headerIndexes[i]!]
+          if (header?.kind === 'header') active = header.id
+        } else {
+          break
         }
-        return Object.keys(keep).length ? { ...node, properties: keep } : null
-      })
-      .filter((n): n is IConfigurationNode => n !== null)
-  }, [scalarNodes, normalisedQuery])
+      }
+      setActiveTocId(active)
+    }
+    update()
+    el.addEventListener('scroll', update, { passive: true })
+    return () => el.removeEventListener('scroll', update)
+  }, [model])
 
-  const totalKeys = useMemo(
-    () => scalarNodes.reduce((acc, n) => acc + Object.keys(n.properties).length, 0),
-    [scalarNodes],
+  const handleTocNavigate = useCallback((entry: SettingsTocEntry) => {
+    setActiveTocId(entry.id)
+    listRef.current?.scrollToIndex(entry.itemIndex, { align: 'start' })
+  }, [])
+
+  const handleUpdate = useCallback(
+    (key: string, value: unknown) => {
+      config.update(key, value, activeTarget)
+    },
+    [config, activeTarget],
+  )
+
+  const renderItem = useCallback(
+    (item: SettingsFlatItem) => {
+      if (item.kind === 'header') {
+        return (
+          <div
+            key={flatItemKey(item)}
+            className={styles['sectionHeader']}
+            data-testid={`settings-group-${item.id}`}
+          >
+            <span className={styles['sectionTitle']}>{item.title}</span>
+            <span className={styles['sectionCount']}>{item.count}</span>
+          </div>
+        )
+      }
+      const origin = config.getValueOriginForTarget(item.key, activeTarget)
+      const otherTarget =
+        activeTarget === ConfigurationTarget.User
+          ? ConfigurationTarget.Project
+          : ConfigurationTarget.User
+      const rawOther = hasWorkspace
+        ? config.getValueOriginForTarget(item.key, otherTarget)
+        : undefined
+      const otherOrigin =
+        rawOther !== undefined && rawOther !== ConfigurationTarget.Default ? rawOther : undefined
+      return (
+        <SettingsRow
+          key={flatItemKey(item)}
+          configKey={item.key}
+          schema={item.schema}
+          groupTitle={groupTitles.get(item.groupId) ?? item.groupId}
+          value={config.getValueForTarget(item.key, activeTarget)}
+          origin={origin}
+          activeTarget={activeTarget}
+          otherOrigin={otherOrigin}
+          onUpdate={handleUpdate}
+        />
+      )
+    },
+    [config, activeTarget, hasWorkspace, groupTitles, handleUpdate],
   )
 
   return (
@@ -263,38 +276,52 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
             {localize('settings.tab.workspace', 'Workspace')}
           </button>
         </div>
-        <input
-          ref={searchInputRef}
-          className={styles['search']}
-          type="search"
-          placeholder={localize('settings.search.placeholder', 'Search settings ({count})', {
-            count: totalKeys,
-          })}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+        <div className={styles['searchRow']}>
+          <input
+            ref={searchInputRef}
+            className={styles['search']}
+            type="search"
+            placeholder={localize('settings.search.placeholder', 'Search settings ({count})', {
+              count: totalRows,
+            })}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {hasQuery ? (
+            <span className={styles['countBadge']} data-testid="settings-count">
+              {localize('settings.count', '{count} Settings Found', { count: totalRows })}
+            </span>
+          ) : null}
+        </div>
       </div>
       <div className={styles['body']}>
-        {filtered.length === 0 ? (
+        {model.items.length === 0 ? (
           <div className={styles['empty']}>
-            {localize('settings.empty', 'No matching settings.')}
+            <div>{localize('settings.empty', 'No matching settings.')}</div>
+            {hasQuery ? (
+              <button className={styles['clearSearch']} onClick={() => setQuery('')}>
+                {localize('settings.clearSearch', 'Clear Search')}
+              </button>
+            ) : null}
           </div>
         ) : (
-          filtered.map((node) => (
-            <section key={node.id} className={styles['section']}>
-              <h2 className={styles['sectionTitle']}>{node.title ?? node.id}</h2>
-              {Object.entries(node.properties).map(([key, schema]) => (
-                <PropertyRow
-                  key={key}
-                  configKey={key}
-                  schema={schema}
-                  value={config.getValueForTarget(key, activeTarget)}
-                  origin={config.getValueOriginForTarget(key, activeTarget)}
-                  onChange={(v) => config.update(key, v, activeTarget)}
-                />
-              ))}
-            </section>
-          ))
+          <>
+            <SettingsToc
+              entries={tocEntries}
+              activeId={activeTocId}
+              onNavigate={handleTocNavigate}
+            />
+            <VirtualList
+              ref={listRef}
+              className={styles['list']}
+              items={model.items}
+              estimateSize={(index) => estimateFlatItemSize(model.items[index]!)}
+              getItemKey={(index) => flatItemKey(model.items[index]!)}
+              measureDynamically
+              overscan={8}
+              renderItem={renderItem}
+            />
+          </>
         )}
       </div>
     </div>

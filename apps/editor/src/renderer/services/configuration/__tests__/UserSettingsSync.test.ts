@@ -160,6 +160,42 @@ describe('UserSettingsSync', () => {
     config.dispose()
   })
 
+  it('reset (update undefined) deletes the key from settings.json', async () => {
+    const storage = new FakeStorage()
+    const files = new FakeUserData()
+    const { sync, config } = makeInstance(storage, files)
+    await sync.initialize()
+
+    config.update('editor.fontSize', 18, ConfigurationTarget.User)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(files.setValueCalls).toHaveLength(1)
+
+    config.update('editor.fontSize', undefined, ConfigurationTarget.User)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(files.setValueCalls).toHaveLength(2)
+    expect(files.setValueCalls[1]?.path).toEqual(['editor.fontSize'])
+    expect(files.setValueCalls[1]?.value).toBeUndefined()
+    expect(files.files.get(UserDataFile.Settings)).not.toContain('editor.fontSize')
+    sync.dispose()
+    config.dispose()
+  })
+
+  it('reset of a never-owned key produces no file write', async () => {
+    const storage = new FakeStorage()
+    const files = new FakeUserData()
+    const { sync, config } = makeInstance(storage, files)
+    await sync.initialize()
+
+    config.update('ghost.key', undefined, ConfigurationTarget.User)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(files.setValueCalls).toHaveLength(0)
+    sync.dispose()
+    config.dispose()
+  })
+
   it('external file change reloads the User layer', async () => {
     const storage = new FakeStorage()
     const files = new FakeUserData()

@@ -14,9 +14,18 @@ export interface VirtualListProps<T> {
   items: readonly T[]
   renderItem: (item: T, style: CSSProperties) => ReactNode
   estimateSize: (index: number) => number
-  className?: string
-  style?: CSSProperties
+  className?: string | undefined
+  style?: CSSProperties | undefined
   overscan?: number
+  /**
+   * Dynamic row heights: each rendered item is measured after mount (and on
+   * resize) instead of being pinned to `estimateSize`. The positioning style is
+   * owned by an internal wrapper, so `renderItem` receives a shared empty
+   * style object it may ignore.
+   */
+  measureDynamically?: boolean
+  /** Stable identity per index (e.g. for re-orderable lists). Defaults to the index. */
+  getItemKey?: (index: number) => string | number
 }
 
 export interface VirtualListHandle {
@@ -31,8 +40,21 @@ interface CachedStyle {
   style: CSSProperties
 }
 
+// Shared style for dynamic mode: positioning lives on the measuring wrapper,
+// so item roots have nothing to apply. One frozen object keeps memo intact.
+const EMPTY_STYLE: CSSProperties = Object.freeze({})
+
 function VirtualListInner<T>(
-  { items, renderItem, estimateSize, className, style, overscan = 5 }: VirtualListProps<T>,
+  {
+    items,
+    renderItem,
+    estimateSize,
+    className,
+    style,
+    overscan = 5,
+    measureDynamically = false,
+    getItemKey,
+  }: VirtualListProps<T>,
   ref: ForwardedRef<VirtualListHandle>,
 ) {
   const parentRef = useRef<HTMLDivElement>(null)
@@ -43,6 +65,7 @@ function VirtualListInner<T>(
     getScrollElement: () => parentRef.current,
     estimateSize,
     overscan,
+    ...(getItemKey ? { getItemKey } : {}),
   })
 
   useImperativeHandle(
@@ -68,7 +91,7 @@ function VirtualListInner<T>(
       top: 0,
       left: 0,
       width: '100%',
-      height: `${size}px`,
+      ...(measureDynamically ? {} : { height: `${size}px` }),
       transform: `translateY(${start}px)`,
     }
     styleCacheRef.current.set(index, { start, size, style: next })
@@ -81,10 +104,20 @@ function VirtualListInner<T>(
         {virtualizer.getVirtualItems().map((virtualItem) => {
           const item = items[virtualItem.index]
           if (item === undefined) return null
-          return renderItem(
-            item,
-            getStableStyle(virtualItem.index, virtualItem.start, virtualItem.size),
-          )
+          const style = getStableStyle(virtualItem.index, virtualItem.start, virtualItem.size)
+          if (measureDynamically) {
+            return (
+              <div
+                key={virtualItem.key}
+                data-index={virtualItem.index}
+                ref={virtualizer.measureElement}
+                style={style}
+              >
+                {renderItem(item, EMPTY_STYLE)}
+              </div>
+            )
+          }
+          return renderItem(item, style)
         })}
       </div>
     </div>

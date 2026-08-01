@@ -228,6 +228,85 @@ describe('ConfigurationService', () => {
   })
 })
 
+describe('ConfigurationService.update with undefined (reset)', () => {
+  it('removes the key from the layer so reads fall through to Default', () => {
+    const d = ConfigurationRegistry.registerConfiguration({
+      id: 'reset-test',
+      properties: { 'reset-test.size': { type: 'number', default: 10 } },
+    })
+    const svc = new ConfigurationService()
+    svc.update('reset-test.size', 99, ConfigurationTarget.User)
+    expect(svc.get('reset-test.size')).toBe(99)
+
+    svc.update('reset-test.size', undefined, ConfigurationTarget.User)
+    expect(svc.get('reset-test.size')).toBe(10)
+    expect(svc.getValueOrigin('reset-test.size')).toBe(ConfigurationTarget.Default)
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        svc.getLayerSnapshot(ConfigurationTarget.User),
+        'reset-test.size',
+      ),
+    ).toBe(false)
+    d.dispose()
+    svc.dispose()
+  })
+
+  it('reset on the target layer restores the inherited lower-layer value', () => {
+    const svc = new ConfigurationService()
+    svc.update('theme', 'dark', ConfigurationTarget.User)
+    svc.update('theme', 'light', ConfigurationTarget.Project)
+    expect(svc.getValueForTarget('theme', ConfigurationTarget.Project)).toBe('light')
+
+    svc.update('theme', undefined, ConfigurationTarget.Project)
+    expect(svc.getValueForTarget('theme', ConfigurationTarget.Project)).toBe('dark')
+    expect(svc.getValueOriginForTarget('theme', ConfigurationTarget.Project)).toBe(
+      ConfigurationTarget.User,
+    )
+    svc.dispose()
+  })
+
+  it('fires onDidChangeConfiguration when an owned key is removed', () => {
+    const svc = new ConfigurationService()
+    svc.update('my.key', 'value', ConfigurationTarget.User)
+
+    let count = 0
+    const sub = svc.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('my.key')) count++
+    })
+    svc.update('my.key', undefined, ConfigurationTarget.User)
+    expect(count).toBe(1)
+    sub.dispose()
+    svc.dispose()
+  })
+
+  it('fires even when a higher layer still shadows the key (persistence must see the removal)', () => {
+    const svc = new ConfigurationService()
+    svc.update('s.key', 'mem', ConfigurationTarget.Memory)
+    svc.update('s.key', 'user', ConfigurationTarget.User)
+    // Effective value is 'mem' before and after the User reset — the event must
+    // still fire so UserSettingsSync deletes the key from the settings file.
+    let count = 0
+    const sub = svc.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('s.key')) count++
+    })
+    svc.update('s.key', undefined, ConfigurationTarget.User)
+    expect(count).toBe(1)
+    expect(svc.get('s.key')).toBe('mem')
+    sub.dispose()
+    svc.dispose()
+  })
+
+  it('does NOT fire when resetting a key the layer never owned', () => {
+    const svc = new ConfigurationService()
+    let count = 0
+    const sub = svc.onDidChangeConfiguration(() => count++)
+    svc.update('never.set', undefined, ConfigurationTarget.User)
+    expect(count).toBe(0)
+    sub.dispose()
+    svc.dispose()
+  })
+})
+
 describe('ConfigurationService.getValueOrigin', () => {
   it('returns undefined when key is not in any layer', () => {
     const svc = new ConfigurationService()

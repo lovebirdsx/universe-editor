@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, act } from '@testing-library/react'
+import { fireEvent, render, act, cleanup } from '@testing-library/react'
 import {
   ConfigurationRegistry,
   ConfigurationService,
   ConfigurationTarget,
+  Event as PlatformEvent,
   IConfigurationService,
   INotificationService,
+  IStorageService,
   IWorkspaceService,
   InstantiationService,
   ServiceCollection,
@@ -18,6 +20,37 @@ import {
   SETTINGS_EDITOR_SWITCH_TARGET_EVENT,
   dispatchSettingsEditorSwitchTarget,
 } from '../preferencesFocus.js'
+
+// happy-dom has no layout engine — the real virtualizer would render 0 items.
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getTotalSize: () => count * 100,
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, index) => ({
+        index,
+        key: index,
+        start: index * 100,
+        size: 100,
+      })),
+    scrollToIndex: () => {},
+    measureElement: () => {},
+  }),
+}))
+
+class FakeStorage implements IStorageService {
+  declare readonly _serviceBrand: undefined
+  readonly onDidChangeWorkspaceScope = PlatformEvent.None
+  store = new Map<string, unknown>()
+  async get<T = unknown>(key: string): Promise<T | undefined> {
+    return this.store.get(key) as T | undefined
+  }
+  async set(key: string, value: unknown): Promise<void> {
+    this.store.set(key, value)
+  }
+  async remove(key: string): Promise<void> {
+    this.store.delete(key)
+  }
+}
 
 function makeWorkspaceStub(open: boolean) {
   const listeners: Array<(w: null) => void> = []
@@ -69,6 +102,7 @@ function mount(opts: { workspaceOpen?: boolean } = {}) {
   services.set(IConfigurationService, config)
   services.set(IWorkspaceService, workspace as never)
   services.set(INotificationService, notif as never)
+  services.set(IStorageService, new FakeStorage())
   const instantiation = new InstantiationService(services)
   const input = new SettingsEditorInput()
 
@@ -80,6 +114,10 @@ function mount(opts: { workspaceOpen?: boolean } = {}) {
 
   return { ...utils, config, workspace, notifySpy, input }
 }
+
+afterEach(() => {
+  cleanup()
+})
 
 describe('SettingsEditor target switching', () => {
   let disposables: IDisposable[] = []
@@ -188,7 +226,7 @@ describe('SettingsEditor target switching', () => {
     ).toBeUndefined()
 
     // Switch back to the User tab — it must show the inherited default ('hello'),
-    // NOT the Workspace layer's value, and its origin badge must not read Workspace.
+    // NOT the Workspace layer's value, and must not be marked modified.
     const userBtn = Array.from(container.querySelectorAll('button')).find(
       (b) => b.textContent?.trim() === 'User',
     )!
@@ -198,8 +236,10 @@ describe('SettingsEditor target switching', () => {
       '[data-key="test.value"] input[type=text]',
     ) as HTMLInputElement
     expect(userInput.value).toBe('hello')
-    const badge = container.querySelector('[data-key="test.value"] [class*=originBadge]')
-    expect(badge?.textContent).toBe('Default')
+    const row = container.querySelector('[data-key="test.value"]')!
+    expect(row.getAttribute('data-modified')).toBeNull()
+    // …but the cross-scope override is hinted, like VSCode's "Also modified in".
+    expect(row.textContent).toContain('Also modified in Workspace')
   })
 
   it('edits in User tab write to User layer', () => {
@@ -215,24 +255,26 @@ describe('SettingsEditor target switching', () => {
     ).toBe('user-val')
   })
 
-  it('origin badge shows Default for unset key', () => {
+  it('unset key is not marked modified', () => {
     registerSchema()
     const { container } = mount()
-    const badge = container.querySelector('[data-key="test.value"] [class*=originBadge]')
-    expect(badge?.textContent).toBe('Default')
+    expect(
+      container.querySelector('[data-key="test.value"]')?.getAttribute('data-modified'),
+    ).toBeNull()
   })
 
-  it('origin badge shows User after User-layer write', () => {
+  it('row is marked modified after a User-layer write', () => {
     registerSchema()
     const { container, config } = mount()
     act(() => {
       config.update('test.value', 'x', ConfigurationTarget.User)
     })
-    const badge = container.querySelector('[data-key="test.value"] [class*=originBadge]')
-    expect(badge?.textContent).toBe('User')
+    expect(container.querySelector('[data-key="test.value"]')?.getAttribute('data-modified')).toBe(
+      'true',
+    )
   })
 
-  it('origin badge shows Workspace after Project-layer write (on the Workspace tab)', () => {
+  it('row is marked modified after a Project-layer write (on the Workspace tab)', () => {
     registerSchema()
     const { container, config } = mount({ workspaceOpen: true })
     // The Workspace-scoped origin is only visible from the Workspace tab.
@@ -243,8 +285,24 @@ describe('SettingsEditor target switching', () => {
     act(() => {
       config.update('test.value', 'x', ConfigurationTarget.Project)
     })
-    const badge = container.querySelector('[data-key="test.value"] [class*=originBadge]')
-    expect(badge?.textContent).toBe('Workspace')
+    expect(container.querySelector('[data-key="test.value"]')?.getAttribute('data-modified')).toBe(
+      'true',
+    )
+  })
+
+  it('Workspace tab hints when the key is also set in the User layer', () => {
+    registerSchema()
+    const { container, config } = mount({ workspaceOpen: true })
+    act(() => {
+      config.update('test.value', 'user-val', ConfigurationTarget.User)
+    })
+    const wsBtn = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Workspace',
+    )!
+    fireEvent.click(wsBtn)
+    expect(container.querySelector('[data-key="test.value"]')?.textContent).toContain(
+      'Also modified in User',
+    )
   })
 
   it('external dispatchSettingsEditorSwitchTarget switches tab', async () => {

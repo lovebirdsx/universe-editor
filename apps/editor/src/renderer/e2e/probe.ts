@@ -246,6 +246,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     whenBootstrapFocusSettled: () => services.bootstrapFocusSettled,
     getLifecyclePhase: () => phaseToName(services.lifecycleService.phase),
     getContextKey: (key) => services.contextKeyService.get(key),
+    getConfigurationValue: (key) => services.configurationService.get(key),
     runCommand: (id, ...args) => services.commandService.executeCommand(id, ...args),
     getActiveEditorUri: () => services.editorService.activeEditorId.get(),
     isReferencePeekFocused: () => {

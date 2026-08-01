@@ -163,6 +163,8 @@ export interface E2EProbe {
   getLifecyclePhase(): E2ELifecyclePhase
   /** Looks up a ContextKey value (falls back through scopes). */
   getContextKey(key: string): unknown
+  /** Reads a configuration value through the merged layer stack (IConfigurationService.get). */
+  getConfigurationValue(key: string): unknown
   /** Executes a command via ICommandService.executeCommand. */
   runCommand<T = unknown>(id: string, ...args: unknown[]): Promise<T | undefined>
   /** Active editor URI string, or undefined if none. */

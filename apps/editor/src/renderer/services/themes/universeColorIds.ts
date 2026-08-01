@@ -773,6 +773,14 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
     'workbench-menu-separator',
   ),
 
+  // ---------------------------------------------------------------- Settings editor
+  d(
+    'settings.modifiedItemIndicator',
+    '#0c7d9d',
+    '#0c7d9d',
+    'Left-edge indicator of a setting whose value differs from the default.',
+  ),
+
   // ---------------------------------------------------------------- Agent session (chat)
   d(
     'agent.messageBackground',
