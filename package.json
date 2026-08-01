@@ -44,6 +44,7 @@
     "release:upload": "node scripts/release/upload.mjs",
     "release:notes": "node scripts/release/changelog.mjs",
     "test:release": "node --test \"scripts/**/__tests__/**/*.test.mjs\"",
+    "test:templates": "node scripts/toolchain/template-smoke.mjs",
     "server:serve": "node scripts/server/server.mjs --root apps/editor/release --gallery-root market-stage/gallery --port 8788 --base /",
     "gallery:serve": "node scripts/server/server.mjs --root market-stage --gallery-root market-stage/gallery --port 8788 --base /",
     "gallery:publish": "node scripts/gallery/publish.mjs",

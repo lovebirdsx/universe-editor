@@ -104,6 +104,47 @@ jobs:
       - name: Run integration tests
         run: pnpm --filter @universe-editor/editor test:integration
 
+  # Template anti-rot: scaffold both extension templates from packed tarballs,
+  # build them against those tarballs, and `uex package` each into a VSIX.
+  # Catches SDK/template/CLI drift the way a third-party author would.
+  extension-templates:
+    name: Extension Templates Smoke
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
+      - name: Build toolchain packages
+        run: >-
+          pnpm build
+          --filter=@universe-editor/extension-api
+          --filter=@universe-editor/extension-manifest
+          --filter=@universe-editor/extension-packaging
+          --filter=@universe-editor/uex
+          --filter=@universe-editor/create-extension
+
+      - name: Template smoke (scaffold → npm i → build → uex package)
+        run: pnpm test:templates
+
   # Cross-repo ACP contract test: spawns the REAL built fork dist and asserts the
   # editor↔fork ext-method / _meta wire shape (see acpForkContract.integration.test).
   # Needs the submodules + `pnpm agent:build`, so it's gated by detect-affected to
@@ -676,6 +717,7 @@ jobs:
     needs:
       - ci
       - integration
+      - extension-templates
       - detect-affected
       - acp-contract
       - e2e
