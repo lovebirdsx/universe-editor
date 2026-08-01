@@ -38,6 +38,12 @@ async function main(argv: string[]): Promise<number> {
       return (await import('./commands/ls.js')).run(rest)
     case 'dev':
       return (await import('./commands/dev.js')).run(rest)
+    case 'login':
+      return (await import('./commands/login.js')).run(rest)
+    case 'publish':
+      return (await import('./commands/publish.js')).run(rest)
+    case 'unpublish':
+      return (await import('./commands/unpublish.js')).run(rest)
     case '--version':
     case '-v':
       printVersion()
