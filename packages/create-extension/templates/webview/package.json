@@ -1,0 +1,40 @@
+{
+  "name": "__name__",
+  "displayName": "__displayName__",
+  "description": "__description__",
+  "version": "0.0.1",
+  "publisher": "__publisher__",
+  "license": "Apache-2.0",
+  "type": "module",
+  "icon": "icon.png",
+  "categories": ["Other"],
+  "main": "./dist/extension.js",
+  "engines": {
+    "universe": "__enginesUniverse__"
+  },
+  "files": ["dist", "icon.png"],
+  "activationEvents": ["onCustomEditor:__name__.preview"],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "__name__.preview",
+        "displayName": "__displayName__ Preview",
+        "selector": [{ "filenamePattern": "*.__name__" }],
+        "priority": "default"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "package": "uex package",
+    "universe:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "__nodeTypesVersion__",
+    "@universe-editor/extension-api": "^__apiVersion__",
+    "@universe-editor/uex": "^__uexVersion__",
+    "esbuild": "__esbuildVersion__",
+    "typescript": "__tsVersion__"
+  }
+}
