@@ -45,7 +45,7 @@ import { IScmDecorationsService } from '../services/scm/ScmDecorationsService.js
 import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
 import { scmViewState } from '../workbench/scm/scmViewState.js'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
-import { recordTabSwitchPhase } from '../services/performance/tabSwitchPerf.js'
+import { recordPerfPhase } from '../services/performance/perfPhases.js'
 import { InlineDirtyDiffController } from '../workbench/scm/dirtyDiff/InlineDirtyDiffController.js'
 import {
   DirtyDiffPeekRegistry,
@@ -264,7 +264,7 @@ export class DirtyDiffContribution
     }
     this._headText = head.text
     const startedAt = performance.now()
-    const { bufferLines, regions } = recordTabSwitchPhase('dirtyDiff.compute', () => {
+    const { bufferLines, regions } = recordPerfPhase('dirtyDiff.compute', () => {
       const lines = trimTrailingEmptyLine(liveModel.getLinesContent())
       return { bufferLines: lines, regions: computeDirtyDiffRegionsFromLines(head.lines, lines) }
     })

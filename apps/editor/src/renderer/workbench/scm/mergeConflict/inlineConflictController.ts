@@ -20,7 +20,7 @@ import {
   localize,
 } from '@universe-editor/platform'
 import { MonacoLoader, type monaco } from '../../editor/monaco/MonacoLoader.js'
-import { recordTabSwitchPhase } from '../../../services/performance/tabSwitchPerf.js'
+import { recordPerfPhase } from '../../../services/performance/perfPhases.js'
 import { CONFLICT_START_MARKERS, parseConflicts, type ConflictRegion } from './conflictParser.js'
 
 type Choice = 'current' | 'incoming' | 'both' | 'compare'
@@ -43,7 +43,7 @@ const scanCache = new WeakMap<
 function scanConflicts(model: monaco.editor.ITextModel): readonly ConflictRegion[] {
   const cached = scanCache.get(model)
   if (cached && cached.versionId === model.getVersionId()) return cached.conflicts
-  return recordTabSwitchPhase('mergeConflict.scan', () => {
+  return recordPerfPhase('mergeConflict.scan', () => {
     // Cheap piece-tree prefilter before the full-text scan: getValue() on a
     // multi-MB model per tab switch / keystroke stalls the renderer, and the
     // overwhelmingly common case is "no conflict markers at all".

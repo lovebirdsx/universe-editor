@@ -5,7 +5,7 @@
  *  switch opens an observation window: a double requestAnimationFrame measures
  *  how long the previous frame stayed frozen on screen, a `longtask`
  *  PerformanceObserver totals main-thread blockage, and instrumented reactions
- *  (recordTabSwitchPhase) contribute named durations for attribution. Windows
+ *  (recordPerfPhase) contribute named durations for attribution. Windows
  *  past TAB_SWITCH_WARN_MS log a warning, everything else a debug line, so a
  *  janky switch reported from the wild can be diagnosed from the window log.
  *--------------------------------------------------------------------------------------------*/
@@ -25,10 +25,9 @@ import {
   TAB_SWITCH_OBSERVE_WINDOW_MS,
   buildTabSwitchReport,
   formatTabSwitchReport,
-  getRecordedPhases,
   shouldWarnTabSwitch,
-  type TabSwitchSample,
 } from '../services/performance/tabSwitchPerf.js'
+import { getRecordedPhases, type PerfSample } from '../services/performance/perfPhases.js'
 
 const MAX_TASK_SAMPLES = 128
 
@@ -41,7 +40,7 @@ interface PendingSwitch {
 
 export class TabSwitchPerfContribution extends Disposable implements IWorkbenchContribution {
   private readonly _logger: ILogger
-  private readonly _longTasks: TabSwitchSample[] = []
+  private readonly _longTasks: PerfSample[] = []
   private _observer: PerformanceObserver | undefined
   private _pending: PendingSwitch | undefined
 

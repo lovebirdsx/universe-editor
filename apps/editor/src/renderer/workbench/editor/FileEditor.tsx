@@ -35,7 +35,7 @@ import { EditorGroupContext } from './EditorGroupContext.js'
 import { Breadcrumbs } from './Breadcrumbs.js'
 import { clampRevealScrollTop } from './previewScrollMap.js'
 import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
-import { recordTabSwitchPhase } from '../../services/performance/tabSwitchPerf.js'
+import { recordPerfPhase } from '../../services/performance/perfPhases.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { IRecentEditsTracker } from '../../services/ai/RecentEditsTracker.js'
@@ -388,10 +388,10 @@ export function FileEditor({ input }: { input: IEditorInput }) {
 
     const applyModel = (model: monaco.editor.ITextModel) => {
       if (cancelled) return
-      recordTabSwitchPhase('fileEditor.setModel', () => editorRef.current?.setModel(model))
+      recordPerfPhase('fileEditor.setModel', () => editorRef.current?.setModel(model))
       // The editor instance is reused across tabs; keep readOnly in sync with
       // the current input (the create-effect only set it for the first input).
-      recordTabSwitchPhase('fileEditor.applyOptions', () =>
+      recordPerfPhase('fileEditor.applyOptions', () =>
         editorRef.current?.updateOptions({
           readOnly: fileInput.isReadonly,
           // Reset drop-into-editor to the OFF baseline on every model swap; the
@@ -403,12 +403,12 @@ export function FileEditor({ input }: { input: IEditorInput }) {
 
       // Initialise dirty state: covers hot-exit restore (pending dirty content)
       // and shared models that are already dirty in another split.
-      recordTabSwitchPhase('fileEditor.updateDirty', () => fileInput.updateDirtyFromModel(model))
+      recordPerfPhase('fileEditor.updateDirty', () => fileInput.updateDirtyFromModel(model))
 
       // Restore previously saved viewState (cursor, selection, scroll).
       if (groupId !== undefined && editorRef.current) {
         const ed = editorRef.current
-        recordTabSwitchPhase('fileEditor.restoreViewState', () => {
+        recordPerfPhase('fileEditor.restoreViewState', () => {
           const saved = EditorViewStateCache.load(groupId, resourceUri)
           if (saved) {
             ed.restoreViewState(saved as monaco.editor.ICodeEditorViewState)
@@ -449,7 +449,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
 
       if (editorRef.current) {
         const ed = editorRef.current
-        recordTabSwitchPhase('fileEditor.registerAndFocus', () => {
+        recordPerfPhase('fileEditor.registerAndFocus', () => {
           registeredEditor = ed
           FileEditorRegistry.register(fileInput, registeredEditor, group?.id)
           // Focus the editor once its model lands — unless the open asked to keep
