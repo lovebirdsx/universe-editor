@@ -227,4 +227,21 @@ renderer 冻死 ── main: webContents 'unresponsive'/'responsive' → main �
 
 ## 验证记录
 
-（各阶段完成后回填：阶段 0 的 entry 字段样例、慢交互 warn 行样例、e2e 结果、`pnpm check` / `pnpm e2e:smoke` 结论。）
+**阶段 0 · API spike（2026-08-01，Electron 33 / Chromium 130，临时 e2e spec 驱动，已删）**：
+
+- `supportedEntryTypes` 含 `'event'` 与 `'long-animation-frame'` ✓
+- **`performance.interactionCount` 不可用（undefined）** → 聚合分母按预案降级为"仅 ≥16ms 样本数"，报告页标注口径 ✓
+- 可信输入（`page.keyboard.type` / `mouse.click`）产 keydown/keypress/keyup、pointerdown/pointerup/click entry，带非零 `interactionId`、`processingStart/End`、`target`（Element，可读 tagName/id/className）✓
+- **同一交互的多 entry 共享 interactionId**（pointerdown/pointerup/click 同 id）→ `dedupeByInteraction` 必要 ✓
+- `duration` 确为 8ms 取整（144/256/336…）✓；entry 在 present 后派发（需等帧 + takeRecords 收全）
+- 忙等 300ms 中点击：pointerdown `startTime→processingStart` inputDelay ≈ 79ms、processing ≈ 0、presentation ≈ 65ms（duration 144ms）；rAF 实测 click→paint 492ms——entry duration 与感知延迟正相关但口径不同 ✓
+- **LoAF `scripts[]` 可为空数组**（React 调度/async 边界场景），代码必须容错 ✓；注入代码的 script invoker 为 `TimerHandler:setTimeout`、sourceURL 空，真实 bundle 代码带 url+fn（如 `index-*.js performWorkUntilDeadline`）
+- 坑：`buffered: true` 装配早期有交付竞态（首轮 keydown 漏收，重试收到）——e2e 断言一律 `expect.poll`，勿一次性读取
+
+真实 entry 样例（忙等中点击的 pointerdown）：
+```json
+{ "name": "pointerdown", "startTime": 1146.8, "duration": 144, "interactionId": 2834,
+  "processingStart": 1225.8, "processingEnd": 1225.8,
+  "target": { "tagName": "DIV", "className": "_agentActions_..." } }
+```
+LoAF 样例（忙等帧）：`{ duration: 301, blockingDuration: 250, scripts: [{ invoker: "TimerHandler:setTimeout", duration: 300 }] }`
