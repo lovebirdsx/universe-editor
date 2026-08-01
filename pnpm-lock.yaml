@@ -191,6 +191,7 @@ catalogs:
       version: 3.25.76
 
 patchedDependencies:
+  monaco-editor@0.55.1: b0e2d579336ad1e44c50badcc1a68f79cc11bf3e168cd089bcce197ebc21ac00
   vscode-markdown-languageservice@0.5.0-alpha.13: 352c1a4172115d38431c0aaaade5dd08833a22f2cde87684040e3a5fbd2b3b6c
 
 importers:
@@ -371,7 +372,7 @@ importers:
         version: 11.15.0
       monaco-editor:
         specifier: 'catalog:'
-        version: 0.55.1
+        version: 0.55.1(patch_hash=b0e2d579336ad1e44c50badcc1a68f79cc11bf3e168cd089bcce197ebc21ac00)
       pixelmatch:
         specifier: 'catalog:'
         version: 5.3.0
@@ -8371,7 +8372,7 @@ snapshots:
 
   mkdirp@1.0.4: {}
 
-  monaco-editor@0.55.1:
+  monaco-editor@0.55.1(patch_hash=b0e2d579336ad1e44c50badcc1a68f79cc11bf3e168cd089bcce197ebc21ac00):
     dependencies:
       dompurify: 3.2.7
       marked: 14.0.0

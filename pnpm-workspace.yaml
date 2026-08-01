@@ -136,5 +136,13 @@ catalog:
   '@xterm/addon-fit': ^0.11.0
   '@xterm/addon-web-links': ^0.12.0
 
+# 注意:patchedDependencies 按「包名@精确版本」匹配,升级依赖不会自动迁移 patch——
+# 版本对不上时 pnpm 仅警告且补丁静默失效。升级步骤:
+# 1. grep 新版源码确认是否已含修复;2. 已含 → 删 entry + patch 文件;
+# 3. 未含 → 对新版本重新 pnpm patch / patch-commit。
 patchedDependencies:
+  # sticky scroll 崩溃修复(vscode #325642):陈旧 showEndForLine 索引造稀疏数组,
+  # NaN 绕过边界检查后读 isVisible 崩溃。移植上游 PR #325646 + #326669;
+  # monaco 0.56.0 仍未携带,升级时须按上方流程处理。
+  monaco-editor@0.55.1: patches/monaco-editor@0.55.1.patch
   vscode-markdown-languageservice@0.5.0-alpha.13: patches/vscode-markdown-languageservice@0.5.0-alpha.13.patch

@@ -1,0 +1,26 @@
+diff --git a/esm/vs/editor/contrib/stickyScroll/browser/stickyScrollWidget.js b/esm/vs/editor/contrib/stickyScroll/browser/stickyScrollWidget.js
+index add9b6ae422ce73d5e08edfd32d823d955cadd24..86bd1190ca0401aafd72b2f6e88a8f8fe80987c6 100644
+--- a/esm/vs/editor/contrib/stickyScroll/browser/stickyScrollWidget.js
++++ b/esm/vs/editor/contrib/stickyScroll/browser/stickyScrollWidget.js
+@@ -130,7 +130,7 @@ class StickyScrollWidget extends Disposable {
+             return { lineNumbers: [], lastLineRelativePosition: 0 };
+         }
+         const candidateLineNumbers = [...state.startLineNumbers];
+-        if (state.showEndForLine !== null) {
++        if (state.showEndForLine !== null && state.showEndForLine < candidateLineNumbers.length) {
+             candidateLineNumbers[state.showEndForLine] = state.endLineNumbers[state.showEndForLine];
+         }
+         let totalHeight = 0;
+@@ -198,7 +198,11 @@ class StickyScrollWidget extends Disposable {
+         }
+         const layoutInfo = this._editor.getLayoutInfo();
+         for (let i = rebuildFromIndex; i < lineNumbers.length; i++) {
+-            const stickyLine = this._renderChildNode(viewModel, i, lineNumbers[i], top, lastLineNumber === lineNumbers[i], foldingModel, layoutInfo);
++            const lineNumber = lineNumbers[i];
++            if (lineNumber > viewModel.getLineCount()) {
++                continue;
++            }
++            const stickyLine = this._renderChildNode(viewModel, i, lineNumber, top, lastLineNumber === lineNumber, foldingModel, layoutInfo);
+             top += stickyLine.height;
+             this._linesDomNode.appendChild(stickyLine.lineDomNode);
+             this._lineNumbersDomNode.appendChild(stickyLine.lineNumberDomNode);
