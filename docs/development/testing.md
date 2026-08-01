@@ -167,7 +167,14 @@ export TURBO_CACHE_DIR="$HOME/.cache/turbo-universe"
 ```bash
 pnpm --filter @universe-editor/editor e2eg "drives an editing tour"
 # 报告：apps/editor/e2e/test-results/interaction-perf-report.md
+
+# 对着真实文件夹采集（真实 watcher/索引/搜索负载；写操作只落自清理的探针文件）：
+UNIVERSE_PERF_WORKSPACE=<目录> pnpm --filter @universe-editor/editor e2eg "drives the editing tour against a user-picked folder"
+# 深采（降阈值放大归因）：加 UNIVERSE_PERF_THRESHOLD_MS=50
+# 报告：apps/editor/e2e/test-results/interaction-perf-collect.md
 ```
+
+排查方法论（采集 → 定性 JS 瓶颈 vs 渲染管线 vs 环境噪音 → 优化）收敛在 skill **`analyze-interaction-performance`**（按需加载）。
 
 用户侧的手动排查路径（报告页 / `interactionPerf.log` / 配置项）见 [`docs/user/zh-CN/reference/troubleshooting.md`](../user/zh-CN/reference/troubleshooting.md)。
 
