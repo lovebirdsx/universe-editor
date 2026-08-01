@@ -1,0 +1,20 @@
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import * as path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { SDK_VERSIONS } from '../sdkVersions.js'
+
+const pkgRoot = (name: string) =>
+  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', name, 'package.json')
+
+describe('SDK_VERSIONS bump guards', () => {
+  it('extensionApi matches packages/extension-api', () => {
+    const pkg = JSON.parse(readFileSync(pkgRoot('extension-api'), 'utf8')) as { version: string }
+    expect(SDK_VERSIONS.extensionApi).toBe(pkg.version)
+  })
+
+  it('uex matches packages/uex', () => {
+    const pkg = JSON.parse(readFileSync(pkgRoot('uex'), 'utf8')) as { version: string }
+    expect(SDK_VERSIONS.uex).toBe(pkg.version)
+  })
+})
