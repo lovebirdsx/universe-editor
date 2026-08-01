@@ -81,6 +81,23 @@ export interface E2EStartupMetrics {
   readonly phases: readonly E2EStartupPhase[]
 }
 
+/** Session snapshot of the interaction-responsiveness floor; see
+ *  E2EProbe.getInteractionPerfSummary. */
+export interface E2EInteractionPerfSummary {
+  /** Event Timing samples seen (≥16ms), deduped interactions + non-interactions. */
+  readonly totalSampleCount: number
+  /** Deduped user interactions (interactionId ≠ 0). */
+  readonly interactionCount: number
+  /** Interactions at or past the warn threshold. */
+  readonly slowCount: number
+  /** Per event-type aggregation for deduped interactions. */
+  readonly byType: Readonly<
+    Record<string, { count: number; maxMs: number; p95Ms: number; p99Ms: number }>
+  >
+  /** Long-animation-frame entries observed. */
+  readonly loafCount: number
+}
+
 /**
  * Runtime state of the TS semantic-highlighting chain at a probed position (see
  * E2EProbe.getSemanticTokenDebug). All fields optional so the `no-model` early
@@ -869,6 +886,13 @@ export interface E2EProbe {
    * observability. See renderer TimerService.getStartupMetrics().
    */
   getStartupMetrics(): Promise<E2EStartupMetrics>
+  /**
+   * Session snapshot of the interaction-responsiveness floor (Event Timing
+   * aggregation + slow-interaction counts). Backs the smoke spec that forces a
+   * busy main thread and asserts a slow interaction was recorded. Note only
+   * interactions ≥16ms are sampled (Event Timing duration threshold).
+   */
+  getInteractionPerfSummary(): E2EInteractionPerfSummary
   /**
    * Drive one poll cycle of the Swarm review-notification contribution
    * synchronously (its own timer is 60s — far too slow for a spec). Resolves once

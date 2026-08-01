@@ -163,10 +163,18 @@ export class InteractionPerfService extends Disposable implements IInteractionPe
     try {
       const observer = new PerformanceObserver((entries) => {
         this._handleEventEntries(
-          entries.getEntries() as unknown as readonly (InteractionEventSample & {
-            name: string
-            target: EventTarget | null
-          })[],
+          entries.getEntries().map((entry) => {
+            const e = entry as PerformanceEventTiming
+            return {
+              eventType: e.name,
+              startTime: e.startTime,
+              processingStart: e.processingStart,
+              processingEnd: e.processingEnd,
+              duration: e.duration,
+              interactionId: e.interactionId,
+              target: e.target,
+            }
+          }),
         )
       })
       observer.observe({

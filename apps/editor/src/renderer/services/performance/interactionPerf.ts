@@ -201,17 +201,19 @@ export function buildSlowInteractionReport(input: {
   }
 }
 
+function formatLoafScripts(loaf: LoafSample): string {
+  return loaf.scripts.length > 0
+    ? loaf.scripts
+        .map(
+          (s) =>
+            `${s.sourceUrl || '<anonymous>'}${s.sourceFunctionName ? `#${s.sourceFunctionName}` : ''} (${s.invoker}) ${Math.round(s.durationMs)}ms`,
+        )
+        .join('; ')
+    : '<no script attribution>'
+}
+
 function formatLoaf(loaf: LoafSample): string {
-  const scripts =
-    loaf.scripts.length > 0
-      ? loaf.scripts
-          .map(
-            (s) =>
-              `${s.sourceUrl || '<anonymous>'}${s.sourceFunctionName ? `#${s.sourceFunctionName}` : ''} (${s.invoker}) ${Math.round(s.durationMs)}ms`,
-          )
-          .join('; ')
-      : '<no script attribution>'
-  return `frame ${Math.round(loaf.duration)}ms blocking ${Math.round(loaf.blockingDuration)}ms: ${scripts}`
+  return `frame ${Math.round(loaf.duration)}ms blocking ${Math.round(loaf.blockingDuration)}ms: ${formatLoafScripts(loaf)}`
 }
 
 /** One-line log format, aligned with formatTabSwitchReport:
@@ -251,7 +253,7 @@ export function isUnattributedLongFrame(
 }
 
 export function formatLongFrameLine(loaf: LoafSample): string {
-  return `long frame ${Math.round(loaf.duration)}ms blocking ${Math.round(loaf.blockingDuration)}ms (no interaction) scripts: ${formatLoaf(loaf)}`
+  return `long frame ${Math.round(loaf.duration)}ms blocking ${Math.round(loaf.blockingDuration)}ms (no interaction) scripts: ${formatLoafScripts(loaf)}`
 }
 
 /** Per-key warn throttle: one warn per window; suppressed counts fold into the

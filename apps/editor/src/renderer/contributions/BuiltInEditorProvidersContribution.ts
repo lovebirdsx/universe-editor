@@ -32,6 +32,7 @@ import { CustomEditorInput } from '../services/editor/CustomEditorInput.js'
 import { WebviewDiffInput } from '../services/editor/WebviewDiffInput.js'
 import { SchemaViewerInput } from '../services/editor/SchemaViewerInput.js'
 import { StartupPerformanceInput } from '../services/editor/StartupPerformanceInput.js'
+import { InteractionPerformanceInput } from '../services/editor/InteractionPerformanceInput.js'
 import { TerminalEditorInput } from '../services/editor/TerminalEditorInput.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
 import { WelcomeEditorInput } from '../services/editor/WelcomeEditorInput.js'
@@ -52,6 +53,7 @@ import { HtmlPreviewEditor } from '../workbench/editor/HtmlPreviewEditor.js'
 import { ImageEditor } from '../workbench/editor/ImageEditor.js'
 import { ReleaseNotesEditor } from '../workbench/editor/ReleaseNotesEditor.js'
 import { StartupPerformanceEditor } from '../workbench/editor/StartupPerformanceEditor.js'
+import { InteractionPerformanceEditor } from '../workbench/editor/InteractionPerformanceEditor.js'
 import { DocEditor } from '../workbench/editor/DocEditor.js'
 import { TerminalEditorView } from '../workbench/editor/TerminalEditorView.js'
 import { GitGraphEditor } from '../workbench/gitGraph/GitGraphEditor.js'
@@ -219,6 +221,15 @@ export class BuiltInEditorProvidersContribution
           deserialize: () => StartupPerformanceInput.deserialize(),
         },
         StartupPerformanceEditor,
+      ),
+    )
+    this._register(
+      registerEditorWithComponent(
+        {
+          typeId: InteractionPerformanceInput.TYPE_ID,
+          deserialize: () => InteractionPerformanceInput.deserialize(),
+        },
+        InteractionPerformanceEditor,
       ),
     )
     this._register(

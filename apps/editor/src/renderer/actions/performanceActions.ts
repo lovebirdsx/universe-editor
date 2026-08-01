@@ -10,6 +10,7 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { StartupPerformanceInput } from '../services/editor/StartupPerformanceInput.js'
+import { InteractionPerformanceInput } from '../services/editor/InteractionPerformanceInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 
 export class ShowStartupPerformanceAction extends Action2 {
@@ -26,6 +27,26 @@ export class ShowStartupPerformanceAction extends Action2 {
 
   override run(accessor: ServicesAccessor): void {
     openInLockAwareGroup(accessor.get(IEditorGroupsService), new StartupPerformanceInput(), {
+      activate: true,
+      pinned: true,
+    })
+  }
+}
+
+export class ShowInteractionPerformanceAction extends Action2 {
+  static readonly ID = 'workbench.action.showInteractionPerformance'
+
+  constructor() {
+    super({
+      id: ShowInteractionPerformanceAction.ID,
+      title: localize2('action.showInteractionPerformance.title', 'Interaction Performance'),
+      category: localize2('command.category.developer', 'Developer'),
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    openInLockAwareGroup(accessor.get(IEditorGroupsService), new InteractionPerformanceInput(), {
       activate: true,
       pinned: true,
     })

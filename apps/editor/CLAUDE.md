@@ -312,6 +312,8 @@ mark(PerfMarks.rendererDidMount)
 
 要点：底层 `mark()` 是通用基建，未来加任何性能检测都从「往 `PerfMarks` 加常量 + 打点」起步;跨进程聚合统一走 `ITimerService`。
 
+**运行时响应性监控（常驻保底）**：`IInteractionPerfService`（`services/performance/InteractionPerfService.ts`）用 Event Timing + LoAF 双 observer 常驻采集，慢交互（≥ `performance.responsiveness.warnThresholdMs`，默认 200ms）写单行 warn 到窗口日志 `interactionPerf.log`（三段分解 + 相位/脚本归因 + O(1) 上下文）；`recordPerfPhase(name, fn)`（`services/performance/perfPhases.ts`）是给热路径反应加相位归因的统一入口——包上即自动进入慢交互与切 tab 两份报告。会话聚合经命令 Developer: Interaction Performance 查看；配置门控见 `InteractionPerfContribution`。
+
 ## 套路 H：加一个语言特性（DocumentSymbol / Definition / Reference / Outline）
 
 语言特性走**薄门面 `ILanguageFeaturesService`**（`services/languageFeatures/`）：注册时一边存进镜像表（供 Outline 枚举），一边转发给 `monaco.languages.register*Provider`——所以注册一个 provider 即同时点亮 **Outline 视图** 和 Monaco 内置的 **F12 跳转定义 / Shift+F12 查看引用 peek**，无需自己写 UI。

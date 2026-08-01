@@ -752,6 +752,7 @@ async function bootstrapWorkbench(): Promise<void> {
     outlineService,
     aiDebugService: services.get(IAiDebugService) as IAiDebugService,
     timerService: instantiation.invokeFunction((a) => a.get(ITimerService)),
+    interactionPerfService,
     explorerTreeService,
     fileService: services.get(IFileService) as IFileService,
     extensionManagementService: services.get(

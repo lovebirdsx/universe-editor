@@ -47,6 +47,7 @@ import type { ITerminalManagerService } from '../services/terminal/TerminalManag
 import type { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
 import type { IOutlineService } from '../services/languageFeatures/OutlineService.js'
 import type { ITimerService } from '../services/performance/TimerService.js'
+import type { IInteractionPerfService } from '../services/performance/InteractionPerfService.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
@@ -105,6 +106,7 @@ export interface E2EProbeServices {
   readonly outlineService: IOutlineService
   readonly aiDebugService: IAiDebugService
   readonly timerService: ITimerService
+  readonly interactionPerfService: IInteractionPerfService
   readonly explorerTreeService: ExplorerTreeService
   readonly fileService: IFileService
   readonly extensionManagementService: IExtensionManagementService
@@ -1547,6 +1549,16 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
           to: p.to,
           duration: p.duration,
         })),
+      }
+    },
+    getInteractionPerfSummary: () => {
+      const s = services.interactionPerfService.getSummary()
+      return {
+        totalSampleCount: s.totalSampleCount,
+        interactionCount: s.interactionCount,
+        slowCount: s.slowCount,
+        byType: s.byType,
+        loafCount: s.loafCount,
       }
     },
     driveSwarmNotificationPoll: async () => {

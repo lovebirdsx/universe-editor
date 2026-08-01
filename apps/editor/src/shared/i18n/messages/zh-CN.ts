@@ -354,6 +354,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.showOutputChannel.title': '输出：显示输出通道...',
   'action.showScm.title': '显示源代码管理',
   'action.showStartupPerformance.title': '启动性能',
+  'action.showInteractionPerformance.title': '交互性能',
   'action.splitEditorDown.title': '向下拆分编辑器',
   'action.splitEditorLeft.title': '向左拆分编辑器',
   'action.splitEditorRight.title': '向右拆分编辑器',
@@ -609,6 +610,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '交互耗时超过此毫秒数时记录警告日志。',
   'settings.performance.responsiveness.statusWarning.enabled.description':
     '当慢交互频繁发生时在状态栏显示警告。',
+  'performance.responsiveness.statusbar.tooltip': '最近一分钟发生 {count} 次慢交互——点击查看报告',
   'settings.readonly': '在表单视图中不可编辑',
   'settings.search': '搜索',
   'settings.search.exclude.description':
@@ -969,6 +971,25 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'startupPerformance.title': '启动性能',
   'startupPerformance.to': '到',
   'startupPerformance.total': '总启动时间：',
+  'interactionPerformance.title': '交互性能',
+  'interactionPerformance.refresh': '刷新',
+  'interactionPerformance.overview':
+    '已采样交互：{count} · 慢交互：{slow}（{share}） · 长帧：{loaf}',
+  'interactionPerformance.samplingNote':
+    '仅采样耗时 ≥16ms 的交互（Event Timing 采样阈值）；分位数为这些样本的直方图桶下界估计。',
+  'interactionPerformance.byType': '按交互类型',
+  'interactionPerformance.noSamples': '尚未采样到交互。',
+  'interactionPerformance.type': '类型',
+  'interactionPerformance.count': '次数',
+  'interactionPerformance.p95': 'p95',
+  'interactionPerformance.p99': 'p99',
+  'interactionPerformance.max': '最大',
+  'interactionPerformance.slowest': '最慢交互',
+  'interactionPerformance.noSlow': '暂无慢交互记录。',
+  'interactionPerformance.duration': '耗时',
+  'interactionPerformance.split': '输入 / 处理 / 呈现',
+  'interactionPerformance.attribution': '归因',
+  'interactionPerformance.context': '上下文',
 
   // --- Release notes ---
   'releaseNotes.empty': '没有可用的发行说明。',

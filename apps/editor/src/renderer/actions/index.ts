@@ -237,7 +237,10 @@ import {
   ToggleBlameEditorDecorationAction,
   ToggleBlameStatusBarItemAction,
 } from './scmBlameActions.js'
-import { ShowStartupPerformanceAction } from './performanceActions.js'
+import {
+  ShowStartupPerformanceAction,
+  ShowInteractionPerformanceAction,
+} from './performanceActions.js'
 import { ToggleKeybindingsTroubleshootingAction } from './developerActions.js'
 import { OpenDocsAction, OpenEditorGuideAction, OpenAgentGuideAction } from './helpActions.js'
 import {
@@ -606,6 +609,7 @@ registerAction2(ToggleBlameStatusBarItemAction)
 
 // Developer
 registerAction2(ShowStartupPerformanceAction)
+registerAction2(ShowInteractionPerformanceAction)
 registerAction2(ToggleKeybindingsTroubleshootingAction)
 
 // Markdown

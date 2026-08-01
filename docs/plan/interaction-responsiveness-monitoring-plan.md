@@ -245,3 +245,14 @@ renderer 冻死 ── main: webContents 'unresponsive'/'responsive' → main �
   "target": { "tagName": "DIV", "className": "_agentActions_..." } }
 ```
 LoAF 样例（忙等帧）：`{ duration: 301, blockingDuration: 250, scripts: [{ invoker: "TimerHandler:setTimeout", duration: 300 }] }`
+
+**阶段 1-5 实施（2026-08-01）**：
+
+- 全阶段落地，`pnpm check` 全绿；`pnpm e2e specs/smoke.interactionPerf.spec.ts` 定向通过；`pnpm e2e:smoke` 66 用例全绿（监控常驻 + 泄漏门禁对每个用例生效，零干扰）。
+- 真实慢交互 warn 行（e2e 忙等 400ms 中按键，取自 `window-1/interactionPerf.log`）：
+  ```
+  slow keydown 496ms (input 36 / processing 1 / present 459) events=[keydown+keypress+keyup] target=body loaf: [frame 460ms blocking 352ms: <anonymous> (TimerHandler:setTimeout) 400ms | frame 93ms blocking 36ms: <no script attribution>]
+  long frame 460ms blocking 352ms (no interaction) scripts: <anonymous> (TimerHandler:setTimeout) 400ms
+  ```
+- 真实环境抓到一个单测覆盖不到的 bug 并已修：observer 回调直接把 PerformanceEntry cast 成 DTO，真实 entry 的字段是 `name` 而非 `eventType`，导致 label/直方图键全为 `undefined`（单测 DTO 自带 eventType 所以全绿）。现为显式 DTO 转换 + e2e 断言 `byType` 含真实事件名防回归。
+- @p0 冒烟全程（正常使用场景）`interactionPerf.log` 未产生任何慢交互行——"正常使用零输出"红线成立（仅忙等注入的 spec 目录下有行）。
