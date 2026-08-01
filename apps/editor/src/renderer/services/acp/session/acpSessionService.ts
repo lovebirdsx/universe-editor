@@ -1141,6 +1141,17 @@ export class AcpSessionService
       })
     } finally {
       this._reconnectingSessions.delete(session.id)
+      // A connection lost while this loop was finishing (after the reattach
+      // cleared the session's latch) had its onDidLoseConnection swallowed by
+      // the dedup above. Re-run so the session isn't stranded in `connecting`
+      // forever. Healthy outcomes (reattached / sealed / closed / cancelled)
+      // all leave isReconnecting false, so this is a no-op for them.
+      if (session.isReconnecting && session.status.get() !== 'closed') {
+        const st = session.recoveryState.get()
+        void this._reconnectSession(session, {
+          reason: st?.phase === 'reconnecting' && st.reason === 'stalled' ? 'stalled' : 'crash',
+        })
+      }
     }
   }
 

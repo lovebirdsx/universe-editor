@@ -173,6 +173,8 @@ interface Script {
    * report no bag (agent without config options).
    */
   configOptions?: SessionConfigOption[]
+  /** When set, newSession rejects with this error — simulates a startup failure. */
+  newSessionError?: Error
 }
 
 class ScriptedClient implements IAcpClientService {
@@ -188,7 +190,7 @@ class ScriptedClient implements IAcpClientService {
     events: string[]
   }> = []
 
-  constructor(private readonly _script: Script) {}
+  constructor(readonly script: Script) {}
 
   setNotificationSink(sink: IAcpClientNotificationSink): void {
     this._sink = sink
@@ -217,7 +219,7 @@ class ScriptedClient implements IAcpClientService {
     this.connections.push({ agentSessionId, controller, promptCalls, configCalls, events })
     const isFirst = this._seq === 0
     this._seq++
-    const bag = this._script.configOptions
+    const bag = this.script.configOptions
     const sessionResponse = {
       sessionId: agentSessionId,
       ...(bag ? { configOptions: bag } : {}),
@@ -227,12 +229,15 @@ class ScriptedClient implements IAcpClientService {
       prompt: (req: PromptRequest): Promise<PromptResponse> => {
         promptCalls.push(req)
         events.push('prompt')
-        const next = this._script.promptResults.shift()
+        const next = this.script.promptResults.shift()
         if (!next) return Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)
         return next(req)
       },
       cancel: () => Promise.resolve(),
-      newSession: () => Promise.resolve(sessionResponse),
+      newSession: () =>
+        this.script.newSessionError
+          ? Promise.reject(this.script.newSessionError)
+          : Promise.resolve(sessionResponse),
       loadSession: () => Promise.resolve({}),
       resumeSession: () => Promise.resolve(sessionResponse),
       // Apply the pushed value into the returned bag, like a real agent whose
@@ -248,7 +253,7 @@ class ScriptedClient implements IAcpClientService {
     }
     const initializeResult = Promise.resolve({
       protocolVersion: 1,
-      agentCapabilities: { loadSession: this._script.loadSession, promptCapabilities: {} },
+      agentCapabilities: { loadSession: this.script.loadSession, promptCapabilities: {} },
       authMethods: [],
     } as unknown as InitializeResponse)
     return {
@@ -557,5 +562,176 @@ describe('AcpSession auto-recovery', () => {
     expect(events.indexOf('config:mode')).toBeGreaterThanOrEqual(0)
     expect(events.indexOf('prompt')).toBeGreaterThan(events.indexOf('config:mode'))
     await waitFor(s.status, (v) => v === 'idle')
+  })
+
+  it('re-handshakes on demand when the connection died while the session sat idle', async () => {
+    // The agent process exits with nothing in flight: the close path seals
+    // the session silently (status 'closed', no recovery state, no [error]).
+    // The next user prompt must drive the re-handshake instead of dying on
+    // the aborted connection with "ACP connection closed".
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    client.killConnection(0)
+    await waitFor(s.status, (v) => v === 'closed')
+    expect(s.recoveryState.get()).toBeUndefined()
+
+    await s.sendPrompt('follow up')
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    // Fresh spawn + session/resume, then the queued prompt dispatched on the
+    // new connection — untouched by the dead one.
+    expect(client.connections.length).toBe(2)
+    expect(client.connections[0]!.promptCalls.length).toBe(0)
+    expect(client.connections[1]!.promptCalls.length).toBe(1)
+    const sent = client.connections[1]!.promptCalls[0]!
+    expect(sent.prompt.some((b) => b.type === 'text' && b.text.includes('follow up'))).toBe(true)
+    expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(false)
+  })
+
+  it('surfaces an error when the idle-dead agent cannot resume the session', async () => {
+    client = new ScriptedClient({ loadSession: false, promptResults: [] })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    client.killConnection(0)
+    await waitFor(s.status, (v) => v === 'closed')
+
+    await s.sendPrompt('follow up')
+    // Without session/resume support every reconnect attempt fails; the
+    // session seals to errored with a manual-retry affordance.
+    await waitFor(s.recoveryState, (v) => v?.phase === 'exhausted')
+    expect(s.status.get()).toBe('errored')
+    expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(true)
+    // The prompt was never dispatched onto any connection.
+    for (const c of client.connections) expect(c.promptCalls.length).toBe(0)
+  })
+
+  it('re-enters reconnect when the user prompts again after recovery exhaustion', async () => {
+    client = new ScriptedClient({
+      loadSession: false,
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    client.killConnection(0)
+    await waitFor(s.status, (v) => v === 'closed')
+    await s.sendPrompt('first attempt')
+    await waitFor(s.recoveryState, (v) => v?.phase === 'exhausted')
+    const connsAfterExhausted = client.connections.length
+
+    // The agent is fixed so it now supports resume; the user's next prompt
+    // drives a fresh reconnect round instead of being swallowed silently.
+    client.script.loadSession = true
+    await s.sendPrompt('second attempt')
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    expect(client.connections.length).toBe(connsAfterExhausted + 1)
+    const last = client.connections[client.connections.length - 1]!
+    expect(last.promptCalls.length).toBe(1)
+    expect(
+      last.promptCalls[0]!.prompt.some(
+        (b) => b.type === 'text' && b.text.includes('second attempt'),
+      ),
+    ).toBe(true)
+  })
+
+  it('hot-reconnects a manual retry when the connection died after retries exhausted', async () => {
+    // Transient retries run out (connection alive, _failedPrompt kept), then
+    // the process dies while the session sits in the exhausted state. The
+    // recovery bar's Retry must hot-reconnect and re-dispatch the failed
+    // prompt on the fresh connection — not fire it into the dead one.
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => Promise.reject(transientError()),
+        () => Promise.reject(transientError()),
+        () => Promise.reject(transientError()),
+        // After the reconnect, the resent turn succeeds.
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    await s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v?.phase === 'exhausted')
+    const failedMessageId = client.connections[0]!.promptCalls[0]!._meta?.messageId
+
+    client.killConnection(0)
+    await waitFor(s.status, (v) => v === 'closed')
+
+    await s.retryRecovery()
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    expect(client.connections.length).toBe(2)
+    // The zero-output turn is resent verbatim (same messageId) on the new connection.
+    expect(client.connections[1]!.promptCalls.length).toBe(1)
+    expect(client.connections[1]!.promptCalls[0]!._meta?.messageId).toBe(failedMessageId)
+    // Only the original exhaustion [error] is on the timeline — the retry
+    // itself recovered silently.
+    expect(s.messages.get().filter((m) => m.text.startsWith('[error]')).length).toBe(1)
+  })
+
+  it('does not reconnect after a user-initiated close', async () => {
+    client = new ScriptedClient({ loadSession: true, promptResults: [] })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    await s.close()
+    await s.sendPrompt('too late')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(client.connections.length).toBe(1)
+  })
+
+  it('queues prompts sent while a reconnect is already in flight', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    client.killConnection(0)
+    await waitFor(s.status, (v) => v === 'closed')
+    void s.sendPrompt('one')
+    void s.sendPrompt('two')
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    // A single reconnect round; both prompts flush on the fresh connection.
+    expect(client.connections.length).toBe(2)
+    expect(client.connections[1]!.promptCalls.length).toBe(2)
+  })
+
+  it('does not reconnect a session that failed during startup (no durable id)', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [],
+      newSessionError: new Error('spawn failed'),
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await waitFor(s.status, (v) => v === 'errored')
+
+    await s.sendPrompt('hello')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(client.connections.length).toBe(1)
   })
 })

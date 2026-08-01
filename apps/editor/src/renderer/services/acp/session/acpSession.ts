@@ -784,6 +784,21 @@ export class AcpSession extends Disposable implements IAcpSession {
   async retryRecovery(): Promise<void> {
     if (this.recovery.state.get()?.phase !== 'exhausted') return
     if (this._failedPrompt !== undefined) {
+      // The connection may have died while the session sat in `exhausted`
+      // (idle seal keeps the dead lease bound, phase still 'connected').
+      // Re-dispatching onto it would reproduce the same dead-end this manual
+      // retry was meant to escape, so hot-reconnect instead; the failed
+      // prompt is `_lastDispatch`, and continueInterruptedTurn re-sends it
+      // (same messageId when the turn produced no output).
+      if (this._connection.phase === 'connected' && this._conn?.conn.signal.aborted === true) {
+        this._failedPrompt = undefined
+        this.recovery.clear()
+        this._handleConnectionLost('crash')
+        // Assigned AFTER the call: _handleConnectionLost derives the flag from
+        // the (empty) in-flight set and would overwrite this with false.
+        this._turnInterrupted = true
+        return
+      }
       const failed = this._failedPrompt
       this._failedPrompt = undefined
       this.recovery.clear()
@@ -969,6 +984,24 @@ export class AcpSession extends Disposable implements IAcpSession {
     // is ready (queued) so the prompt is not lost.
     this._appendMessage('user', text, composeImageBlocks(images ?? []), messageId)
     void this._maybeGenerateTitle(text)
+    // Re-handshake on demand: the agent process died while the session sat
+    // idle (the idle close path sealed the status but kept the dead lease
+    // bound, phase still 'connected'), or an earlier reconnect exhausted / was
+    // cancelled and the user typed a new prompt instead of the recovery bar's
+    // Retry. Park the session back in `connecting` so this prompt queues; the
+    // service re-handshakes (fresh spawn + session/resume) and the attach
+    // flush dispatches it. A user-initiated close() moves the phase to
+    // 'closed' and is never revived here; a startup failure has no durable id
+    // to resume against and keeps its existing behaviour.
+    if (!this._reconnecting && this.sessionIdOnAgent.get() !== undefined) {
+      const phase = this._connection.phase
+      if (
+        (phase === 'connected' && this._conn?.conn.signal.aborted === true) ||
+        phase === 'failed'
+      ) {
+        this._handleConnectionLost('crash')
+      }
+    }
     // Still connecting — buffer the prompt; the returned promise settles when it
     // is eventually dispatched (on connect) or rejected (on connection failure).
     if (!this._connection.isSettled) {
