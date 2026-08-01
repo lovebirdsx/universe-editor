@@ -9,6 +9,7 @@ import { ContributionsRegistry, WorkbenchPhase } from '@universe-editor/platform
 import { AgentBinaryPrefetchContribution } from '../AgentBinaryPrefetchContribution.js'
 import { ExtensionsContribution } from '../ExtensionsContribution.js'
 import { LanguageServicePrewarmContribution } from '../LanguageServicePrewarmContribution.js'
+import { LegacyMcpBridgeCleanupContribution } from '../LegacyMcpBridgeCleanupContribution.js'
 import { StartupTimingLogContribution } from '../StartupTimingLogContribution.js'
 import { WorkspaceWatchContribution } from '../WorkspaceWatchContribution.js'
 
@@ -57,5 +58,13 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.startupTimingLog',
   StartupTimingLogContribution,
+  WorkbenchPhase.Eventually,
+)
+
+// One-shot removal of the settings.json entry old versions of the MCP bridge
+// extension wrote at activation; the server is now a declarative contribution.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.legacyMcpBridgeCleanup',
+  LegacyMcpBridgeCleanupContribution,
   WorkbenchPhase.Eventually,
 )

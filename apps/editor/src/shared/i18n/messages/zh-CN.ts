@@ -1213,6 +1213,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'aiMcp.scope.workspace': '工作区',
   'aiMcp.scope.vscodeWorkspace': 'VSCode 工作区（只读）',
   'aiMcp.scope.vscodeUser': 'VSCode 用户（只读）',
+  'aiMcp.scope.extension': '扩展（只读）',
   'aiMcp.remove.confirm': '从{scope}移除 MCP 服务器 {name}？',
   'aiMcp.remove.remove': '移除',
   'aiMcp.row.disabled': '已禁用',
@@ -1248,6 +1249,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.mcp.picker.default': '默认',
   'acp.mcp.picker.defaultTitle': '新会话默认启用',
   'acp.mcp.picker.defaultLocked': '在 .mcp.json 中定义——请编辑该文件修改默认值',
+  'acp.mcp.picker.defaultLockedExtension': '由扩展贡献——请通过禁用扩展或其设置项关闭',
+  'acp.mcp.picker.sourceExtension': '扩展',
   'acp.mcp.picker.defaultHint': '左侧复选框只作用于当前会话；「默认」开关决定新会话启用哪些。',
 
   // --- ACP: permission card (plan review) ---

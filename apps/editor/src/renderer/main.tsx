@@ -156,6 +156,10 @@ import {
   IExtensionHostClientService,
 } from './services/extensions/ExtensionHostClientService.js'
 import {
+  ExtensionMcpServersService,
+  IExtensionMcpServersService,
+} from './services/extensions/extensionMcpServersService.js'
+import {
   ExtensionEnablementService,
   IExtensionEnablementService,
 } from './services/extensions/ExtensionEnablementService.js'
@@ -569,6 +573,13 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(IAcpPathPolicy, acpPathPolicy)
   const acpClientService = workbenchStore.add(instantiation.createInstance(AcpClientService))
   services.set(IAcpClientService, acpClientService)
+  // Extension-contributed MCP servers (declarative `contributes.mcpServers`):
+  // resolved runtime source, lowest-priority layer of the MCP merge pipeline.
+  // Set before AcpSessionService, which injects it.
+  const extensionMcpServersService = workbenchStore.add(
+    instantiation.createInstance(ExtensionMcpServersService),
+  )
+  services.set(IExtensionMcpServersService, extensionMcpServersService)
   // History + agent-defaults are registerSingleton services injected by
   // AcpSessionService (materialized here); AcpInitContribution drives their
   // initialize() on the lifecycle timeline.

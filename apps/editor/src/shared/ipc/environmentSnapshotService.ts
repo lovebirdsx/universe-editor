@@ -15,6 +15,8 @@ export interface IEnvironmentSnapshot {
   readonly userHome: string
   /** The main process working directory (`process.cwd()`). */
   readonly cwd: string
+  /** The editor's Electron executable (`process.execPath`). */
+  readonly execPath: string
   /** Full process environment (name → value), undefined entries dropped. */
   readonly env: Readonly<Record<string, string>>
 }

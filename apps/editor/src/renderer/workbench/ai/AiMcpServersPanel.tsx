@@ -47,12 +47,13 @@ import {
   type McpServerEntryValidation,
 } from '../../services/acp/acpMcpServers.js'
 import { McpServerEditDialog, type McpServerScope } from './McpServerEditDialog.js'
+import { IExtensionMcpServersService } from '../../services/extensions/extensionMcpServersService.js'
 import shellStyles from './AiSettingsEditor.module.css'
 import styles from './AiMcpServersPanel.module.css'
 
 const CONFIG_KEY = 'acp.mcpServers'
 
-type GroupId = 'user' | 'workspace' | 'vscodeWorkspace' | 'vscodeUser' | 'mcpJson'
+type GroupId = 'user' | 'workspace' | 'vscodeWorkspace' | 'vscodeUser' | 'mcpJson' | 'extension'
 
 interface PanelRow {
   readonly name: string
@@ -110,6 +111,7 @@ const GROUP_DEFS: ReadonlyArray<{
     target: ConfigurationTarget.VSCodeUser,
     file: UserDataFile.VSCodeUserSettings,
   },
+  { id: 'extension', writable: false },
 ]
 
 const GROUP_LABELS: Record<GroupId, () => string> = {
@@ -118,10 +120,12 @@ const GROUP_LABELS: Record<GroupId, () => string> = {
   mcpJson: () => '.mcp.json',
   vscodeWorkspace: () => localize('aiMcp.scope.vscodeWorkspace', 'VSCode workspace (read-only)'),
   vscodeUser: () => localize('aiMcp.scope.vscodeUser', 'VSCode user (read-only)'),
+  extension: () => localize('aiMcp.scope.extension', 'Extensions (read-only)'),
 }
 
 /** Shadow priority, lowest first — the last group defining a name wins it. */
 const SHADOW_ORDER: readonly GroupId[] = [
+  'extension',
   'vscodeUser',
   'user',
   'vscodeWorkspace',
@@ -145,6 +149,7 @@ function AiMcpServersPanelInner({
   const commands = useService(ICommandService)
   const editorResolver = useService(IEditorResolverService)
   const dialog = useService(IDialogService)
+  const extensionMcp = useOptionalService(IExtensionMcpServersService)
 
   const [version, setVersion] = useState(0)
   const [mcpJsonRaw, setMcpJsonRaw] = useState<Record<string, unknown>>({})
@@ -164,8 +169,9 @@ function AiMcpServersPanelInner({
         if (e.affectsConfiguration(CONFIG_KEY)) setVersion((v) => v + 1)
       }),
       workspace.onDidChangeWorkspace(() => setVersion((v) => v + 1)),
+      ...(extensionMcp ? [extensionMcp.onDidChange(() => setVersion((v) => v + 1))] : []),
     ],
-    [config, workspace],
+    [config, workspace, extensionMcp],
   )
 
   // `.mcp.json` has no file watcher (same as the session picker) — re-read it
@@ -220,6 +226,7 @@ function AiMcpServersPanelInner({
       }
     }
     rawByGroup.set('mcpJson', mcpServerRawToRecord(mcpJsonRaw))
+    rawByGroup.set('extension', { ...(extensionMcp?.rawRecord ?? {}) })
 
     const winnerByName = new Map<string, GroupId>()
     for (const id of SHADOW_ORDER) {
@@ -232,7 +239,7 @@ function AiMcpServersPanelInner({
       const raw = rawByGroup.get(def.id) ?? {}
       // Compat layers stay hidden unless they actually define something.
       if (
-        (def.id === 'vscodeWorkspace' || def.id === 'vscodeUser') &&
+        (def.id === 'vscodeWorkspace' || def.id === 'vscodeUser' || def.id === 'extension') &&
         Object.keys(raw).length === 0
       )
         continue
@@ -264,7 +271,7 @@ function AiMcpServersPanelInner({
       })
     }
     return result
-  }, [config, mcpJsonRaw, version, workspaceFolder])
+  }, [config, extensionMcp, mcpJsonRaw, version, workspaceFolder])
 
   const writeEntry = useCallback(
     (target: ConfigurationTarget, name: string, entry: unknown | undefined) => {
@@ -402,12 +409,16 @@ function AiMcpServersPanelInner({
                     <Plus size={15} strokeWidth={2} />
                   </IconButton>
                 )}
-              <IconButton
-                label={localize('aiMcp.openJson', 'Open JSON')}
-                onClick={() => void openFile(group)}
-              >
-                <FileJson size={15} strokeWidth={1.75} />
-              </IconButton>
+              {(group.file !== undefined ||
+                group.openCommand !== undefined ||
+                group.id === 'mcpJson') && (
+                <IconButton
+                  label={localize('aiMcp.openJson', 'Open JSON')}
+                  onClick={() => void openFile(group)}
+                >
+                  <FileJson size={15} strokeWidth={1.75} />
+                </IconButton>
+              )}
             </div>
             {group.rows.length > 0 && (
               <ul className={styles['serverList']}>

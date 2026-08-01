@@ -2,14 +2,13 @@
   "name": "universe-editor-mcp-bridge",
   "displayName": "Universe Editor MCP Bridge",
   "description": "Registers the Universe Editor MCP bridge for Agent sessions.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "universe",
   "license": "Apache-2.0",
   "type": "module",
   "icon": "icon.png",
-  "main": "dist/extension.js",
   "engines": {
-    "universe": ">=0.6.0 <1.0.0"
+    "universe": ">=0.8.0 <1.0.0"
   },
   "capabilities": {
     "untrustedWorkspaces": {
@@ -17,36 +16,23 @@
       "description": "该扩展会向 Agent 会话注入 MCP server（可执行编辑器侧工具），因此需要信任工作区。"
     }
   },
-  "files": ["dist", "resources", "icon.png"],
-  "activationEvents": ["onStartupFinished"],
+  "files": ["resources", "icon.png"],
   "contributes": {
-    "commands": [
-      {
-        "command": "universeEditorMcp.reconnect",
-        "title": "Universe Editor MCP: Reconnect",
-        "category": "Universe Editor MCP",
-        "icon": "plug"
+    "mcpServers": {
+      "universe-editor": {
+        "command": "${execPath}",
+        "args": ["${extensionPath}/resources/bridge/bridge.mjs"],
+        "env": { "ELECTRON_RUN_AS_NODE": "1" },
+        "whenConfiguration": "universeEditorMcp.enabled"
       }
-    ],
+    },
     "configuration": {
       "title": "Universe Editor MCP",
       "properties": {
         "universeEditorMcp.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically register the Universe Editor MCP bridge in Agent MCP server settings when a UE4Editor.exe process is found."
-        },
-        "universeEditorMcp.timeoutMs": {
-          "type": "number",
-          "default": 60000,
-          "minimum": 1000,
-          "description": "How long the bridge waits for a tool response from Universe Editor before timing out, in milliseconds."
-        },
-        "universeEditorMcp.connectTimeoutMs": {
-          "type": "number",
-          "default": 15000,
-          "minimum": 1000,
-          "description": "How long the bridge waits to connect to the Universe Editor named pipe before timing out, in milliseconds."
+          "description": "Inject the Universe Editor MCP bridge into Agent sessions."
         }
       }
     }

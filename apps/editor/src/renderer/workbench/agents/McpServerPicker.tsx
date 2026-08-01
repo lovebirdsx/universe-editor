@@ -192,7 +192,9 @@ function McpPickerPopover({
                 ? '.mcp.json'
                 : def.source === 'project'
                   ? localize('acp.mcp.picker.sourceProject', 'project')
-                  : localize('acp.mcp.picker.sourceGlobal', 'global')}
+                  : def.source === 'extension'
+                    ? localize('acp.mcp.picker.sourceExtension', 'extension')
+                    : localize('acp.mcp.picker.sourceGlobal', 'global')}
             </span>
           </label>
           <label
@@ -203,14 +205,19 @@ function McpPickerPopover({
                     'acp.mcp.picker.defaultLocked',
                     'Defined in .mcp.json — edit the file to change its default',
                   )
-                : localize('acp.mcp.picker.defaultTitle', 'Enabled by default for new sessions')
+                : def.source === 'extension'
+                  ? localize(
+                      'acp.mcp.picker.defaultLockedExtension',
+                      'Contributed by an extension — disable it via the extension or its setting',
+                    )
+                  : localize('acp.mcp.picker.defaultTitle', 'Enabled by default for new sessions')
             }
           >
             <input
               type="checkbox"
               data-testid="acp-mcp-picker-default-toggle"
               checked={!def.disabled}
-              disabled={def.fromMcpJson === true}
+              disabled={def.fromMcpJson === true || def.source === 'extension'}
               onChange={(e) => service.setMcpServerDefaultEnabled(def.name, e.target.checked)}
             />
             <span>{localize('acp.mcp.picker.default', 'default')}</span>

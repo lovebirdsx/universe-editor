@@ -109,6 +109,19 @@ const grammarSchema = z.object({
   unbalancedBracketScopes: z.array(z.string().min(1)).optional(),
 })
 
+// Deliberately lenient (passthrough + optional command): a future http/sse
+// shape must not fail manifest parsing and unload the whole extension. The
+// renderer resolver skips entries it can't inject and warns instead.
+const mcpServerContributionSchema = z
+  .object({
+    command: z.string().min(1).optional(),
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string()).optional(),
+    disabled: z.boolean().optional(),
+    whenConfiguration: z.string().min(1).optional(),
+  })
+  .passthrough()
+
 const contributesSchema = z
   .object({
     commands: z.array(commandContributionSchema).optional(),
@@ -122,6 +135,7 @@ const contributesSchema = z
     iconThemes: z.array(iconThemeSchema).optional(),
     productIconThemes: z.array(productIconThemeSchema).optional(),
     grammars: z.array(grammarSchema).optional(),
+    mcpServers: z.record(mcpServerContributionSchema).optional(),
   })
   // Tolerate contribution points we don't understand yet (forward-compat).
   .passthrough()

@@ -6,17 +6,19 @@ import { describe, expect, it } from 'vitest'
 import { EnvironmentSnapshotMainService } from '../environmentSnapshotMainService.js'
 
 describe('EnvironmentSnapshotMainService', () => {
-  it('returns home / cwd / env from the injected sources', async () => {
+  it('returns home / cwd / execPath / env from the injected sources', async () => {
     const service = new EnvironmentSnapshotMainService({
       env: { FOO: 'bar', PATH: '/usr/bin' },
       cwd: () => '/work/dir',
       userHome: () => '/home/user',
+      execPath: () => '/app/editor.exe',
     })
 
     const snap = await service.getSnapshot()
 
     expect(snap.userHome).toBe('/home/user')
     expect(snap.cwd).toBe('/work/dir')
+    expect(snap.execPath).toBe('/app/editor.exe')
     expect(snap.env).toEqual({ FOO: 'bar', PATH: '/usr/bin' })
   })
 
@@ -25,6 +27,7 @@ describe('EnvironmentSnapshotMainService', () => {
       env: { A: 'x', B: undefined },
       cwd: () => '/',
       userHome: () => '/',
+      execPath: () => '/',
     })
 
     const snap = await service.getSnapshot()

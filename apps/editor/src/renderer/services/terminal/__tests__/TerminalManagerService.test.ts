@@ -160,6 +160,7 @@ function makeHarness(
   const snapshot: IEnvironmentSnapshot = {
     userHome: opts?.userHome ?? '/home/tester',
     cwd: '/main/cwd',
+    execPath: '/app/editor.exe',
     env: { FOO: 'bar' },
   }
   const envSnapshot: IEnvironmentSnapshotService = {

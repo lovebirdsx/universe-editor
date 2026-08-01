@@ -402,6 +402,20 @@ describe('mergeMcpServerRawLayers / readMcpServerDefinitionsLayered', () => {
     expect(defs).toEqual([])
     expect(warns.some((m) => m.includes('fs'))).toBe(true)
   })
+
+  it('extension layer is lowest priority: a same-named user entry overrides it', () => {
+    const defs = readMcpServerDefinitionsLayered([
+      {
+        source: 'extension',
+        raw: { bridge: { command: '/app/editor' }, extra: { command: 'ext-extra' } },
+      },
+      { source: 'global', raw: { bridge: { command: 'user-bridge', disabled: true } } },
+    ])
+    expect(defs).toEqual([
+      { name: 'bridge', transport: 'stdio', disabled: true, source: 'global' },
+      { name: 'extra', transport: 'stdio', disabled: false, source: 'extension' },
+    ])
+  })
 })
 
 describe('validateMcpServerEntry', () => {

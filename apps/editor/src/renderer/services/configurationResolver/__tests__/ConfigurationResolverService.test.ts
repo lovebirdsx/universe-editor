@@ -67,6 +67,7 @@ function makeSnapshot(snapshot: IEnvironmentSnapshot): IEnvironmentSnapshotServi
 const DEFAULT_SNAPSHOT: IEnvironmentSnapshot = {
   userHome: '/home/user',
   cwd: '/main/cwd',
+  execPath: '/app/editor.exe',
   env: { FOO: 'bar' },
 }
 

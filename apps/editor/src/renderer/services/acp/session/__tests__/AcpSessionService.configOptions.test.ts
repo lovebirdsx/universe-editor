@@ -65,6 +65,7 @@ import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
+import { StubExtensionMcpServersService } from './stubExtensionMcpServers.js'
 import { StubFileService } from './stubFileService.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import {
@@ -443,6 +444,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
       ),
     ),
     new StubFileService(),
+    new StubExtensionMcpServersService(),
   )
   return { svc, client, history, agentDefaults, configOptionsCache }
 }

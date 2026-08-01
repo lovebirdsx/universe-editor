@@ -74,6 +74,7 @@ import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { AcpPromptDraftCache } from '../acpPromptDraftCache.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
+import { StubExtensionMcpServersService } from './stubExtensionMcpServers.js'
 import { StubFileService } from './stubFileService.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import type { IAcpSessionTitleService } from '../acpSessionTitleService.js'
@@ -501,6 +502,7 @@ describe('AcpSessionService', () => {
         compactionStats,
       ),
       new StubFileService(),
+      new StubExtensionMcpServersService(),
     )
   })
 
@@ -648,6 +650,7 @@ describe('AcpSessionService', () => {
         makeCompactionStats(),
       ),
       new StubFileService(),
+      new StubExtensionMcpServersService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -866,6 +869,7 @@ describe('AcpSessionService', () => {
         makeCompactionStats(),
       ),
       new StubFileService(),
+      new StubExtensionMcpServersService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -918,6 +922,7 @@ describe('AcpSessionService', () => {
           makeCompactionStats(),
         ),
         new StubFileService(),
+        new StubExtensionMcpServersService(),
       )
     }
 
@@ -1196,6 +1201,7 @@ describe('AcpSessionService — rewind / fork', () => {
         makeCompactionStats(),
       ),
       new StubFileService(),
+      new StubExtensionMcpServersService(),
     )
     return { svc, history }
   }
@@ -1885,6 +1891,7 @@ describe('AcpSessionService — startup timeout', () => {
         makeCompactionStats(),
       ),
       new StubFileService(),
+      new StubExtensionMcpServersService(),
     )
     // createSession returns synchronously now; the handshake fails in the
     // background after the startup timeout fires, sealing the session via
@@ -1929,6 +1936,7 @@ describe('AcpSessionService — startup timeout', () => {
         makeCompactionStats(),
       ),
       new StubFileService(),
+      new StubExtensionMcpServersService(),
     )
     const s = await svc.createSession()
     // Submit a prompt while still connecting — it is buffered by the connection
@@ -1954,6 +1962,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     client: FakeAcpClientService,
     config: ConfigurationService,
     compactionStats: AcpCompactionStatsService = makeCompactionStats(),
+    extensionMcp: StubExtensionMcpServersService = new StubExtensionMcpServersService(),
   ) {
     const notification = new StubNotificationService()
     const telemetry = new NoopTelemetryService()
@@ -1983,6 +1992,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
         compactionStats,
       ),
       new StubFileService(),
+      extensionMcp,
     )
   }
 
@@ -2050,6 +2060,89 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       { name: 'fs', command: 'node', args: ['workspace.js'], env: [] },
       { name: 'docs', command: 'npx', args: ['docs'], env: [] },
     ])
+    svc.dispose()
+  })
+
+  it('extension-contributed servers reach the wire as the lowest-priority layer', async () => {
+    const client = new FakeAcpClientService()
+    const extensionMcp = new StubExtensionMcpServersService()
+    extensionMcp.setRecord({
+      'universe-editor': {
+        command: '/app/editor',
+        args: ['bridge.mjs'],
+        env: { ELECTRON_RUN_AS_NODE: '1' },
+      },
+    })
+    const svc = makeService(client, new ConfigurationService(), makeCompactionStats(), extensionMcp)
+    expect(svc.mcpServerDefinitions.get()).toEqual([
+      { name: 'universe-editor', transport: 'stdio', disabled: false, source: 'extension' },
+    ])
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const params = client.connected[0]!.agent.newSessionCalls[0]!
+    expect(params.mcpServers).toEqual([
+      {
+        name: 'universe-editor',
+        command: '/app/editor',
+        args: ['bridge.mjs'],
+        env: [{ name: 'ELECTRON_RUN_AS_NODE', value: '1' }],
+      },
+    ])
+    svc.dispose()
+  })
+
+  it('a same-named user settings entry overrides the extension-contributed server', async () => {
+    const client = new FakeAcpClientService()
+    const extensionMcp = new StubExtensionMcpServersService()
+    extensionMcp.setRecord({ bridge: { command: '/app/editor', args: ['ext.mjs'] } })
+    const config = new ConfigurationService()
+    config.loadLayer(ConfigurationTarget.User, {
+      'acp.mcpServers': { bridge: { command: 'node', args: ['user.js'] } },
+    })
+    const svc = makeService(client, config, makeCompactionStats(), extensionMcp)
+    expect(svc.mcpServerDefinitions.get()).toEqual([
+      { name: 'bridge', transport: 'stdio', disabled: false, source: 'global' },
+    ])
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const params = client.connected[0]!.agent.newSessionCalls[0]!
+    expect(params.mcpServers).toEqual([
+      { name: 'bridge', command: 'node', args: ['user.js'], env: [] },
+    ])
+    svc.dispose()
+  })
+
+  it('refreshes the pool when the extension record changes; vanished servers leave the wire', async () => {
+    const client = new FakeAcpClientService()
+    const extensionMcp = new StubExtensionMcpServersService()
+    const svc = makeService(client, new ConfigurationService(), makeCompactionStats(), extensionMcp)
+    expect(svc.mcpServerDefinitions.get()).toEqual([])
+
+    extensionMcp.setRecord({ bridge: { command: '/app/editor' } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(svc.mcpServerDefinitions.get()).toEqual([
+      { name: 'bridge', transport: 'stdio', disabled: false, source: 'extension' },
+    ])
+
+    extensionMcp.setRecord({})
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(svc.mcpServerDefinitions.get()).toEqual([])
+    const s = await svc.createSession()
+    await s.whenConnected()
+    expect(client.connected[0]!.agent.newSessionCalls[0]!.mcpServers).toEqual([])
+    svc.dispose()
+  })
+
+  it('setMcpServerDefaultEnabled refuses extension entries (no settings layer to write)', async () => {
+    const extensionMcp = new StubExtensionMcpServersService()
+    extensionMcp.setRecord({ bridge: { command: '/app/editor' } })
+    const svc = makeService(
+      new FakeAcpClientService(),
+      new ConfigurationService(),
+      makeCompactionStats(),
+      extensionMcp,
+    )
+    expect(svc.setMcpServerDefaultEnabled('bridge', false)).toBe(false)
     svc.dispose()
   })
 
@@ -2385,6 +2478,7 @@ describe('AcpSessionService — session MCP selection', () => {
         makeCompactionStats(),
       ),
       new StubFileService(),
+      new StubExtensionMcpServersService(),
     )
     return { svc, history, agentDefaults }
   }
@@ -2743,6 +2837,7 @@ describe('AcpSessionService — AI session title push-back', () => {
         makeCompactionStats(),
       ),
       new StubFileService(),
+      new StubExtensionMcpServersService(),
     )
     return { svc, history }
   }
@@ -2967,6 +3062,7 @@ describe('AcpSessionService — first prompt history mirror', () => {
         makeCompactionStats(),
       ),
       new StubFileService(),
+      new StubExtensionMcpServersService(),
     )
     return { svc, history }
   }
@@ -3082,6 +3178,7 @@ describe('AcpSessionService — configOptions history snapshot', () => {
         makeCompactionStats(),
       ),
       new StubFileService(),
+      new StubExtensionMcpServersService(),
     )
     return { svc, history }
   }

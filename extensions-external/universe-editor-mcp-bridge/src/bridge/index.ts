@@ -97,12 +97,14 @@ async function main(): Promise<void> {
                   option: {
                     type: 'string',
                     title: Title ?? '选择',
-                    oneOf: Options.map((option: { Label: string; Description?: string }) => ({
-                      const: option.Label,
-                      title: option.Description
-                        ? `${option.Label} - ${option.Description}`
-                        : option.Label,
-                    })),
+                    oneOf: Options.map(
+                      (option: { Label: string; Description?: string | undefined }) => ({
+                        const: option.Label,
+                        title: option.Description
+                          ? `${option.Label} - ${option.Description}`
+                          : option.Label,
+                      }),
+                    ),
                   },
                   ...(Input
                     ? {

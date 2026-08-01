@@ -176,6 +176,30 @@ export interface IGrammarContribution {
   unbalancedBracketScopes?: string[]
 }
 
+/**
+ * One entry under `contributes.mcpServers` (keyed by server name). A declarative
+ * MCP server the editor injects into agent sessions as the lowest-priority
+ * source — same-named user `acp.mcpServers` entries override it, and the entry
+ * vanishes when the extension is uninstalled/disabled (never written to
+ * settings.json). v1 supports stdio only. `command` / `args[]` / `env` values
+ * may reference `${execPath}` (the editor executable) and `${extensionPath}`
+ * (this extension's install root).
+ */
+export interface IMcpServerContribution {
+  /** Required for stdio entries; the renderer skips (and warns on) entries without it. */
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  /** Seed the entry as default-disabled in the definition pool. */
+  disabled?: boolean
+  /**
+   * Configuration key gating injection: when the setting resolves to `false`
+   * the server is not injected (undefined/truthy injects). Editor-side
+   * annotation only — never sent on the wire.
+   */
+  whenConfiguration?: string
+}
+
 /** The `contributes` block as declared in a manifest. Grows phase by phase. */
 export interface IExtensionContributions {
   commands?: ICommandContribution[]
@@ -192,6 +216,8 @@ export interface IExtensionContributions {
   iconThemes?: IIconThemeContribution[]
   productIconThemes?: IProductIconThemeContribution[]
   grammars?: IGrammarContribution[]
+  /** Declarative MCP servers, keyed by server name (stdio only in v1). */
+  mcpServers?: Record<string, IMcpServerContribution>
 }
 
 /**

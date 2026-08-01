@@ -140,6 +140,7 @@ export {
 } from './acpSession.js'
 import { AcpForeignWorktreeError } from './acpErrors.js'
 import { snapshotConfigSelections } from '../configOptionLabel.js'
+import { IExtensionMcpServersService } from '../../extensions/extensionMcpServersService.js'
 
 /**
  * Re-exported from ./acpErrors.js (the consolidated ACP error family) so the
@@ -445,6 +446,8 @@ export class AcpSessionService
     @IAcpAuthGuidanceService private readonly _authGuidance: IAcpAuthGuidanceService,
     @IAcpSessionFactory private readonly _sessionFactory: IAcpSessionFactory,
     @IFileService private readonly _fileService: IFileService,
+    @IExtensionMcpServersService
+    private readonly _extensionMcpServers: IExtensionMcpServersService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
@@ -523,6 +526,12 @@ export class AcpSessionService
           void this.refreshMcpServerDefinitions()
         }
       }),
+    )
+    // Extension-contributed MCP servers changed (install / uninstall / trust /
+    // gate setting): refresh the pool mirror. Same live-session semantics as a
+    // config edit — next (re)connect picks it up.
+    this._register(
+      this._extensionMcpServers.onDidChange(() => void this.refreshMcpServerDefinitions()),
     )
   }
 
@@ -1722,15 +1731,18 @@ export class AcpSessionService
   }
 
   /**
-   * The `acp.mcpServers` raw values of every settings layer, lowest priority
-   * first (mirrors `IConfigurationService.get` precedence). Layers compose per
+   * The `acp.mcpServers` raw values of every layer, lowest priority first:
+   * the extension-contributed runtime record (declarative
+   * `contributes.mcpServers`, never persisted), then the settings layers
+   * (mirrors `IConfigurationService.get` precedence). Layers compose per
    * server name — a workspace entry overrides only the same-named global one,
-   * never the whole map.
+   * never the whole map; a user entry likewise overrides an extension one.
    */
   private _mcpSettingsLayers(): McpServerRawLayer[] {
     const raw = (t: ConfigurationTarget): unknown =>
       this._config.getLayerSnapshot(t)['acp.mcpServers']
     return [
+      { source: 'extension', raw: this._extensionMcpServers.rawRecord },
       { source: 'global', raw: raw(ConfigurationTarget.VSCodeUser) },
       { source: 'global', raw: raw(ConfigurationTarget.User) },
       { source: 'project', raw: raw(ConfigurationTarget.VSCodeWorkspace) },
@@ -1770,6 +1782,9 @@ export class AcpSessionService
   }
 
   async refreshMcpServerDefinitions(): Promise<void> {
+    // Cold-start barrier: the extension layer resolves asynchronously (execPath
+    // snapshot fetch); don't publish a pool that silently misses it.
+    await this._extensionMcpServers.whenReady
     const globalDefs = this._readGlobalMcpDefinitions()
     const projectRaw = await this.readProjectMcpJson()
     const projectDefs = readMcpServerDefinitions(projectRaw, 'project', (m) =>
@@ -1790,6 +1805,7 @@ export class AcpSessionService
     selection: readonly string[] | null,
     warnStale: boolean,
   ): Promise<McpServer[]> {
+    await this._extensionMcpServers.whenReady
     const projectRaw = await this.readProjectMcpJson()
     const projectWire = normalizeMcpServers(projectRaw, (m) =>
       this._logger.warn(`mcpServers(.mcp.json): ${m}`),

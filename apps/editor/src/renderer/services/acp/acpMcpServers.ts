@@ -142,8 +142,12 @@ export function mcpServerTransport(server: McpServer): McpTransport {
 // joined back by server name.
 // ---------------------------------------------------------------------------
 
-/** Where an MCP server definition came from. `project` rows override `global` ones with the same name. */
-export type McpServerSource = 'global' | 'project'
+/**
+ * Where an MCP server definition came from. Later layers override earlier ones
+ * with the same name: `extension` (declarative `contributes.mcpServers`, lowest)
+ * < `global` (user settings) < `project` (workspace settings / `.mcp.json`).
+ */
+export type McpServerSource = 'extension' | 'global' | 'project'
 
 /**
  * One settings layer contributing to `acp.mcpServers`, lowest priority first.

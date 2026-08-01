@@ -27,7 +27,14 @@ import { AcpSessionService } from '../acpSessionService.js'
 // reads the project-level `.mcp.json` from the workspace root — that file
 // lives on the workspace filesystem, not in configuration, so no existing
 // collaborator (config / registry / coordinator) can reach it.
-const MAX_INJECTED = 16
+//
+// +1 IExtensionMcpServersService (declarative `contributes.mcpServers`):
+// extension-contributed MCP servers are a RUNTIME source — they are never
+// written to any settings layer, so IConfigurationService cannot surface them,
+// and no other collaborator owns the scanned-extension record. The facade
+// needs the record (merge layer) + whenReady (cold-start barrier) +
+// onDidChange (pool refresh).
+const MAX_INJECTED = 17
 
 describe('AcpSessionService dependency budget', () => {
   it('does not exceed the injected-dependency ceiling', () => {

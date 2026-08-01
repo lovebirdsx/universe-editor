@@ -20,12 +20,14 @@ export interface EnvironmentSnapshotSources {
   readonly env: Readonly<Record<string, string | undefined>>
   readonly cwd: () => string
   readonly userHome: () => string
+  readonly execPath: () => string
 }
 
 const defaultSources: EnvironmentSnapshotSources = {
   env: process.env,
   cwd: () => process.cwd(),
   userHome: () => homedir(),
+  execPath: () => process.execPath,
 }
 
 export class EnvironmentSnapshotMainService implements IEnvironmentSnapshotService {
@@ -41,6 +43,7 @@ export class EnvironmentSnapshotMainService implements IEnvironmentSnapshotServi
     return Promise.resolve({
       userHome: this._sources.userHome(),
       cwd: this._sources.cwd(),
+      execPath: this._sources.execPath(),
       env,
     })
   }

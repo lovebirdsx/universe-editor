@@ -276,6 +276,15 @@ describe('McpServerPicker', () => {
     expect(defaultToggleOf('local').disabled).toBe(true)
   })
 
+  it('the default toggle is disabled for extension-contributed entries', () => {
+    const pool: readonly McpServerDefinition[] = [
+      { name: 'bridge', transport: 'stdio', disabled: false, source: 'extension' },
+    ]
+    renderPicker({ service: makeService(pool), open: true })
+    expect(rowOf('bridge').textContent).toContain('extension')
+    expect(defaultToggleOf('bridge').disabled).toBe(true)
+  })
+
   it('shows the prompt-cache hint in the popover footer', () => {
     renderPicker({ service: makeService(POOL), open: true })
     expect(screen.getByTestId('acp-mcp-picker-popover').textContent).toContain('prompt cache')

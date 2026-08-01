@@ -94,6 +94,54 @@ describe('parseManifest', () => {
     })
   })
 
+  describe('contributes.mcpServers', () => {
+    it('accepts a stdio entry with variables and a whenConfiguration gate', () => {
+      const m = parseManifest({
+        ...baseManifest(),
+        contributes: {
+          mcpServers: {
+            'universe-editor': {
+              command: '${execPath}',
+              args: ['${extensionPath}/resources/bridge/bridge.mjs'],
+              env: { ELECTRON_RUN_AS_NODE: '1' },
+              whenConfiguration: 'universeEditorMcp.enabled',
+            },
+          },
+        },
+      })
+      expect(m.contributes?.mcpServers?.['universe-editor']).toMatchObject({
+        command: '${execPath}',
+        whenConfiguration: 'universeEditorMcp.enabled',
+      })
+    })
+
+    it('is lenient: passes through unknown entry fields (future transports)', () => {
+      const m = parseManifest({
+        ...baseManifest(),
+        contributes: { mcpServers: { remote: { type: 'http', url: 'https://x' } } },
+      })
+      expect(m.contributes?.mcpServers?.remote).toBeDefined()
+    })
+
+    it('rejects an empty command string', () => {
+      expect(() =>
+        parseManifest({
+          ...baseManifest(),
+          contributes: { mcpServers: { s: { command: '' } } },
+        }),
+      ).toThrow(/invalid manifest/)
+    })
+
+    it('rejects non-string args items', () => {
+      expect(() =>
+        parseManifest({
+          ...baseManifest(),
+          contributes: { mcpServers: { s: { command: 'node', args: [42] } } },
+        }),
+      ).toThrow(/invalid manifest/)
+    })
+  })
+
   describe('forward-compat passthrough', () => {
     it('tolerates unknown contribution points', () => {
       const m = parseManifest({

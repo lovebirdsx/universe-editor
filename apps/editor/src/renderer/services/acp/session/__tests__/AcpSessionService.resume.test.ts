@@ -76,6 +76,7 @@ import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
+import { StubExtensionMcpServersService } from './stubExtensionMcpServers.js'
 import { StubFileService } from './stubFileService.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
@@ -437,6 +438,7 @@ function buildService(
       ),
     ),
     new StubFileService(),
+    new StubExtensionMcpServersService(),
   )
   return { svc, client, history, agentDefaults, notifications, storage }
 }
@@ -1044,6 +1046,7 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
         ),
       ),
       new StubFileService(),
+      new StubExtensionMcpServersService(),
     )
     // Kick off history hydration but DO NOT await — race the resume call.
     void history.initialize()
@@ -1169,6 +1172,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         ),
       ),
       new StubFileService(),
+      new StubExtensionMcpServersService(),
     )
     expect(svc.activeSession.get()).toBeUndefined()
     await svc.tryRestoreActiveSession()
@@ -1233,6 +1237,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         ),
       ),
       new StubFileService(),
+      new StubExtensionMcpServersService(),
     )
     // Let _loadPendingRestore() resolve.
     await Promise.resolve()
@@ -1295,6 +1300,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         ),
       ),
       new StubFileService(),
+      new StubExtensionMcpServersService(),
     )
     await Promise.resolve()
     await svc.tryRestoreActiveSession()
@@ -1359,6 +1365,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         ),
       ),
       new StubFileService(),
+      new StubExtensionMcpServersService(),
     )
     await Promise.resolve()
     await Promise.all([svc.tryRestoreActiveSession(), svc.tryRestoreActiveSession()])

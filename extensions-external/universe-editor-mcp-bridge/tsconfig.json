@@ -4,10 +4,7 @@
   "compilerOptions": {
     "noEmit": true,
     "types": ["node"],
-    "typeRoots": ["./node_modules/@types", "../../extensions/typescript/node_modules/@types"],
-    "paths": {
-      "@universe-editor/extension-api": ["../../packages/extension-api/dist/index.d.ts"]
-    }
+    "typeRoots": ["./node_modules/@types", "../../extensions/typescript/node_modules/@types"]
   },
   "include": ["src", "esbuild.config.mjs"]
 }

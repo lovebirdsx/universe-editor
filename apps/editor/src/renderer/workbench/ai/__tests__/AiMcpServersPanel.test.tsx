@@ -29,6 +29,8 @@ import type {
   IAcpSessionService,
 } from '../../../services/acp/session/acpSessionService.js'
 import { IAcpSessionService as IAcpSessionServiceId } from '../../../services/acp/session/acpSessionService.js'
+import type { IExtensionMcpServersService } from '../../../services/extensions/extensionMcpServersService.js'
+import { IExtensionMcpServersService as IExtensionMcpServersServiceId } from '../../../services/extensions/extensionMcpServersService.js'
 import { AiMcpServersPanel } from '../AiMcpServersPanel.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -75,6 +77,7 @@ function renderPanel({
   activeSession,
   confirmResult = { confirmed: true },
   workspaceOpen = true,
+  extensionRecord,
 }: {
   config: FakeConfigurationService
   withSessionService?: boolean
@@ -82,6 +85,7 @@ function renderPanel({
   activeSession?: IAcpSession
   confirmResult?: { confirmed: boolean }
   workspaceOpen?: boolean
+  extensionRecord?: Record<string, unknown>
 }) {
   const services = new ServiceCollection()
   services.set(IConfigurationService, config as unknown as IConfigurationService)
@@ -100,6 +104,14 @@ function renderPanel({
   services.set(IDialogService, dialog as unknown as IDialogService)
   if (withSessionService) {
     services.set(IAcpSessionServiceId, makeSessionService(mcpJson, activeSession))
+  }
+  if (extensionRecord) {
+    services.set(IExtensionMcpServersServiceId, {
+      rawRecord: extensionRecord,
+      whenReady: Promise.resolve(),
+      onDidChange: Event.None,
+      setContributions: () => {},
+    } as unknown as IExtensionMcpServersService)
   }
   const inst = new InstantiationService(services)
   const utils = render(<AiMcpServersPanel />, {
@@ -241,6 +253,37 @@ describe('AiMcpServersPanel', () => {
     fireEvent.click(within(rowIn('user', 'fs')).getByRole('button', { name: 'Remove' }))
     await flushEffects()
     expect(config.serversOf(ConfigurationTarget.User)).toEqual({ fs: { command: 'node' } })
+  })
+
+  it('shows the extension group read-only, shadowed by a same-named user entry', async () => {
+    const config = new FakeConfigurationService()
+    config.seed(ConfigurationTarget.User, { bridge: { command: 'node user.js' } })
+    renderPanel({
+      config,
+      extensionRecord: {
+        bridge: { command: '/app/editor' },
+        extra: { command: '/app/editor', args: ['b.mjs'] },
+      },
+    })
+    await flushEffects()
+
+    const bridgeRow = rowIn('extension', 'bridge')
+    expect(bridgeRow.textContent).toContain('overridden by')
+    expect(within(bridgeRow).queryByTestId('ai-mcp-row-toggle')).toBeNull()
+    expect(within(bridgeRow).queryByRole('button', { name: 'Edit' })).toBeNull()
+    expect(within(bridgeRow).queryByRole('button', { name: 'Remove' })).toBeNull()
+    expect(rowIn('extension', 'extra').textContent).not.toContain('overridden by')
+    // No JSON file backs the extension group — the open button is absent.
+    expect(within(groupEl('extension')).queryByRole('button', { name: /Open JSON/ })).toBeNull()
+  })
+
+  it('hides the extension group when no extension contributes servers', async () => {
+    const config = new FakeConfigurationService()
+    config.seed(ConfigurationTarget.User, { fs: { command: 'node' } })
+    renderPanel({ config, extensionRecord: {} })
+    await flushEffects()
+
+    expect(screen.queryByTestId('ai-mcp-group-extension')).toBeNull()
   })
 
   it('shows the .mcp.json group as read-only (no toggle, no row actions)', async () => {

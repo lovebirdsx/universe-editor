@@ -33,6 +33,7 @@ import {
   type IExtensionDescriptionDto,
 } from '@universe-editor/extensions-common'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
+import { IExtensionMcpServersService } from '../services/extensions/extensionMcpServersService.js'
 import { ExtensionPointTranslator } from '../services/extensions/ExtensionPointTranslator.js'
 import { ITextMateService } from '../services/textmate/textMateService.js'
 import type { WorkbenchThemeService } from '../services/themes/workbenchThemeService.js'
@@ -58,6 +59,7 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @IThemeService private readonly _themeService: WorkbenchThemeService,
     @ITextMateService private readonly _textMateService: ITextMateService,
+    @IExtensionMcpServersService private readonly _extensionMcpServers: IExtensionMcpServersService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -181,6 +183,10 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
     )
     translator.translate(contributions)
     this._translator.value = translator
+
+    // Extension-contributed MCP servers are not a core-registry concern — hand
+    // the DTOs to their dedicated resolver (covers first boot + host restarts).
+    this._extensionMcpServers.setContributions(contributions)
 
     // Extension commands are now in CommandsRegistry; re-apply VSCode/user
     // keybindings so bindings to those commands (skipped at startup) take effect.
