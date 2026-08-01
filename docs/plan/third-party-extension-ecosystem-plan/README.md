@@ -95,8 +95,8 @@
 | 扩展开发模式 | `--extensionDevelopmentPath` | 新 CLI 参数（附加语义 + id 冲突 dev 胜）、单实例锁豁免、窗口标识、trust 豁免 | [02](./02-dev-experience.md) |
 | host 断点调试 | `--inspect-extensions` | spawn 时注入 `--inspect=<port>`、sourcemap 约定、launch.json attach 模板 | [02](./02-dev-experience.md) |
 | 重启 host 命令 | `workbench.action.restartExtensionHost` | Action2 包一层现成 `_restart`；可选 dev path watch 自动重载 | [02](./02-dev-experience.md) |
-| 脚手架 | `yo code` | `@universe-editor/create-extension`：basic / webview 两模板，含 launch.json、esbuild、watch | [03](./03-toolchain.md) |
-| 打包/发布 CLI | `vsce` | `@universe-editor/uex`：`package`（复用 extension-packaging）、`dev`（定位并拉起编辑器）、`login`/`publish` | [03](./03-toolchain.md) |
+| 脚手架 ✅ | `yo code` | `@universe-editor/create-extension`：basic / webview 两模板，含 launch.json、esbuild、watch | [03](./03-toolchain.md) |
+| 打包/发布 CLI ✅ | `vsce` | `@universe-editor/uex`：`package`（复用 extension-packaging）、`dev`（定位并拉起编辑器）、`login`/`publish` | [03](./03-toolchain.md) |
 | 自助发布后端 | Marketplace publish API | server 加 `POST /api/gallery/publish` 等端点 + publisher/token 模型 + 服务端防投毒校验 + 版本不可变 | [04](./04-publishing-backend.md) |
 | 对外开发者文档 | code.visualstudio.com/api | `docs/extension-dev/zh-CN/`：getting-started、贡献点参考、webview/语言指南、发布、移植指南 | [05](./05-docs-and-samples.md) |
 | 外部形态样例 | extension-samples 仓库 | `samples/hello-world`（不进 workspace、真 npm 依赖）+ CI 外部消费者冒烟 job | [05](./05-docs-and-samples.md) |
@@ -194,7 +194,7 @@ samples/hello-world/           🆕       外部形态样例（不进 workspace�
 - 命令 `workbench.action.restartExtensionHost`（id 对齐 VSCode）；可选增强：watch dev path 产物变更自动重启
 - **验证**：手工目录 → dev path 启动 → 命令生效 → VSCode attach 断点命中 → 重启命令后新代码生效；e2e 补 dev path 加载冒烟
 
-### Phase C — 工具链（[03](./03-toolchain.md)）
+### Phase C — 工具链（[03](./03-toolchain.md)）✅ 已完成（2026-08-01）
 > 目标：`npm create` 起步、`uex package` 出包，全程不接触本仓库。
 
 - `@universe-editor/create-extension`：交互问询（名称/publisher/模板）+ basic/webview 两模板（esbuild + watch + launch.json/tasks.json + vitest 可选）

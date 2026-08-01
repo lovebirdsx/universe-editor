@@ -11,6 +11,10 @@
 | `@universe-editor/extension-api` | **版本号 = 扩展 API 版本**，bump 走 [COMPATIBILITY.md](../../packages/extension-api/COMPATIBILITY.md) 的破坏性变更流程（契约测试快照 + 变更记录） | API 面（Universe 版 `vscode.d.ts`） |
 | `@universe-editor/extension-manifest` | 独立 semver，有对外可见变更才发 | manifest 类型/zod 校验、激活事件构造器、`engines.universe` 协商、分类集合 |
 | `@universe-editor/extension-packaging` | 独立 semver，同上 | `createVsix` / `readVsixManifest`（`uex package` 的依赖） |
+| `@universe-editor/uex` | 独立 semver，同上 | 对外 CLI（bin `uex`）：`package` / `ls` / `dev` / `login` / `publish` / `unpublish` |
+| `@universe-editor/create-extension` | 独立 semver，同上 | `npm create @universe-editor/extension` 脚手架（basic / webview 两模板） |
+
+**版本联动注意**：`create-extension` 的 `src/sdkVersions.ts` 常量表与 `uex` 的 `src/lib/sdkVersion.ts` 分别注入了 extension-api / uex 的版本号，各有守卫测试锁定——bump 那两个包后必须同步这两处，否则测试红。
 
 `@universe-editor/extensions-common` **不在发布集合**：它的 RPC 基建（`stdioProtocol` 等）运行时依赖不可发布的 `@universe-editor/platform`。作者面模块已物理迁入 `extension-manifest`，`extensions-common` 依赖并 re-export 它，仓库内消费方零改动。
 
@@ -29,20 +33,24 @@
 #    否则视为破坏性变更流程未走完，禁止发布。
 # 1. 全量校验 + 构建（dist 必须是最新）
 pnpm check
-pnpm --filter @universe-editor/extension-api --filter @universe-editor/extension-manifest --filter @universe-editor/extension-packaging build
+pnpm --filter @universe-editor/extension-api --filter @universe-editor/extension-manifest --filter @universe-editor/extension-packaging --filter @universe-editor/uex --filter @universe-editor/create-extension build
 
 # 2. 内容检查点：dist 无 __tests__，LICENSE / README.md 在列
-cd packages/extension-api && npm pack --dry-run   # 另两个包同样过目
+cd packages/extension-api && npm pack --dry-run   # 其余包同样过目
+#    create-extension 额外确认 templates/ 在列、uex/create-extension 的 bin 字段指向 dist/cli.js
 
 # 3. 发布（pnpm 会把 workspace:/catalog: 协议替换为真实版本号）
 pnpm --filter @universe-editor/extension-api publish
 pnpm --filter @universe-editor/extension-manifest publish
 pnpm --filter @universe-editor/extension-packaging publish
+pnpm --filter @universe-editor/uex publish
+pnpm --filter @universe-editor/create-extension publish
 
 # 4. 核对协议替换结果（catalog 首次对外，别盲信）
 npm view @universe-editor/extension-api dependencies
 npm view @universe-editor/extension-packaging dependencies
-# 期望：vscode-languageserver-types / adm-zip 是真实版本区间；
+npm view @universe-editor/uex dependencies
+# 期望：vscode-languageserver-types / adm-zip / @clack/prompts 是真实版本区间；
 #       @universe-editor/* 互赖是真实版本号（不是 workspace:* / catalog:）
 
 # 5. 打 tag（extension-api 必打；另两个有发布就打）

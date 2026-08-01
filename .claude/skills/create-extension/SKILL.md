@@ -5,6 +5,8 @@ description: 从零创建一个新插件（extension）时使用。当任务是�
 
 # 从零创建一个新插件（extension）
 
+> 本 skill 面向**仓库内内置扩展**（`extensions/<name>/`，in-workspace）。**仓库外第三方作者**走 npm 脚手架 `npm create @universe-editor/extension`（`packages/create-extension`），不要照本 skill 的外部目录套路手工搭建。
+
 本仓库的扩展模型完整对标 VSCode：一个插件是 `extensions/<name>/` 下的一个目录，由 **manifest（`package.json`）声明贡献点 + 激活时机**，可选地带 **运行时代码（`src/extension.ts`）** 在激活时通过 `@universe-editor/extension-api` 门面注册命令/菜单/键位/配置/provider。放进 `extensions/` 目录即被扫描器自动发现，**无需在主程序手动注册**。
 
 > ⚠️ 第一原则：**先判断你要的是"纯声明"还是"有代码"**。很多需求（给某 JSON 配 schema、给已有命令加键位、挂个菜单项）只需一个 `package.json`，**不写一行 TS、不需要构建**（见 `claude-helper`）。只有当激活时要跑逻辑（注册命令处理器、装饰、状态栏、SCM、provider）才需要 `src/extension.ts` + esbuild。别默认从代码起步。
