@@ -434,6 +434,12 @@ export interface E2EProbe {
    * session reload in the background.
    */
   setAcpSessionMcpServers(names: readonly string[] | null): void
+  /**
+   * Set a server's default-enable override at GLOBAL scope (what new sessions
+   * start with), exactly like toggling a "default" switch in the MCP picker or
+   * the settings panel. Waits for the enablement store's cold-start barrier.
+   */
+  setAcpMcpServerEnabled(name: string, enabled: boolean): Promise<void>
   /** Status of the active ACP session ('connecting' | 'idle' | 'running' | 'closed'), if any. */
   getAcpSessionStatus(): string | undefined
   /**

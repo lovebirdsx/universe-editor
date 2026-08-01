@@ -55,7 +55,6 @@ import {
 import {
   filterMcpServersByCapabilities,
   filterWireByNames,
-  mcpServerRawToRecord,
   mcpServerTransport,
   mergeMcpServerDefinitions,
   mergeMcpServerRawLayers,
@@ -65,7 +64,6 @@ import {
   readMcpServerDefinitions,
   readMcpServerDefinitionsLayered,
   resolveMcpServerSelection,
-  writeMcpServerEntry,
   type McpServerDefinition,
   type McpServerRawLayer,
 } from '../acpMcpServers.js'
@@ -141,6 +139,7 @@ export {
 import { AcpForeignWorktreeError } from './acpErrors.js'
 import { snapshotConfigSelections } from '../configOptionLabel.js'
 import { IExtensionMcpServersService } from '../../extensions/extensionMcpServersService.js'
+import { IMcpServerEnablementService } from '../mcpServerEnablementService.js'
 
 /**
  * Re-exported from ./acpErrors.js (the consolidated ACP error family) so the
@@ -319,15 +318,6 @@ export interface IAcpSessionService {
    * No-op for read-only previews.
    */
   setSessionMcpServers(sessionId: string, names: readonly string[] | null): void
-  /**
-   * Flip the default-enable switch (`disabled` flag) of one pool entry — the
-   * manually configured set every NEW session starts with. The write lands at
-   * the layer that wins the name (read-only compat layers are overridden in
-   * the matching writable layer instead). Returns `false` when the name is
-   * not configurable here (unknown, or defined by the workspace `.mcp.json`,
-   * which must be edited as a file).
-   */
-  setMcpServerDefaultEnabled(name: string, enabled: boolean): boolean
 }
 
 export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessionService')
@@ -393,13 +383,6 @@ export class AcpSessionService
   private readonly _mcpReloadingSessions = new Set<string>()
 
   /**
-   * Names the last pool refresh read from the workspace `.mcp.json`. That file
-   * outranks every settings layer, so a name present here is not toggleable
-   * through {@link setMcpServerDefaultEnabled} — the file must be edited.
-   */
-  private _mcpJsonNames: ReadonlySet<string> = new Set()
-
-  /**
    * Consented url-mode elicitations awaiting the agent's `elicitation/complete`,
    * keyed by the request's `elicitationId`. Entries are removed when the card
    * is torn down (decline / cancel / dismiss / session close).
@@ -448,6 +431,8 @@ export class AcpSessionService
     @IFileService private readonly _fileService: IFileService,
     @IExtensionMcpServersService
     private readonly _extensionMcpServers: IExtensionMcpServersService,
+    @IMcpServerEnablementService
+    private readonly _mcpEnablement: IMcpServerEnablementService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
@@ -533,6 +518,11 @@ export class AcpSessionService
     this._register(
       this._extensionMcpServers.onDidChange(() => void this.refreshMcpServerDefinitions()),
     )
+    // MCP default-enable overrides changed (storage-backed, user/workspace
+    // scope): refresh the pool mirror so the picker's "default" toggles and
+    // the next session's wire list reflect the new overrides. Live sessions
+    // are NOT reloaded — same semantics as a config edit.
+    this._register(this._mcpEnablement.onDidChange(() => void this.refreshMcpServerDefinitions()))
   }
 
   private _historyScope(): SessionHistoryScope {
@@ -1759,9 +1749,15 @@ export class AcpSessionService
 
   // -- MCP definition pool & session selection ---------------------------
 
+  /** Pool `disabled` annotation source: the storage-backed enablement overrides. */
+  private readonly _isMcpDefaultDisabled = (name: string): boolean =>
+    !this._mcpEnablement.isEnabled(name)
+
   private _readGlobalMcpDefinitions(): readonly McpServerDefinition[] {
-    return readMcpServerDefinitionsLayered(this._mcpSettingsLayers(), (m) =>
-      this._logger.warn(`mcpServers: ${m}`),
+    return readMcpServerDefinitionsLayered(
+      this._mcpSettingsLayers(),
+      (m) => this._logger.warn(`mcpServers: ${m}`),
+      this._isMcpDefaultDisabled,
     )
   }
 
@@ -1782,16 +1778,33 @@ export class AcpSessionService
   }
 
   async refreshMcpServerDefinitions(): Promise<void> {
-    // Cold-start barrier: the extension layer resolves asynchronously (execPath
-    // snapshot fetch); don't publish a pool that silently misses it.
-    await this._extensionMcpServers.whenReady
+    // Cold-start barriers: the extension layer resolves asynchronously
+    // (execPath snapshot fetch) and the enablement overrides hydrate from
+    // storage — don't publish a pool that silently misses either.
+    await Promise.all([this._extensionMcpServers.whenReady, this._mcpEnablement.whenReady])
     const globalDefs = this._readGlobalMcpDefinitions()
     const projectRaw = await this.readProjectMcpJson()
-    const projectDefs = readMcpServerDefinitions(projectRaw, 'project', (m) =>
-      this._logger.warn(`mcpServers(.mcp.json): ${m}`),
+    const projectDefs = readMcpServerDefinitions(
+      projectRaw,
+      'project',
+      (m) => this._logger.warn(`mcpServers(.mcp.json): ${m}`),
+      this._isMcpDefaultDisabled,
     ).map((d) => ({ ...d, fromMcpJson: true }))
-    this._mcpJsonNames = new Set(Object.keys(mcpServerRawToRecord(projectRaw)))
-    this.mcpServerDefinitions.set(mergeMcpServerDefinitions(globalDefs, projectDefs), undefined)
+    // `.mcp.json` winners never carry the user-level annotation from the
+    // layered read (the file is not a settings layer) — propagate it so a
+    // same-named user-level definition still offers the user-level toggle.
+    const userLevelNames = new Set(
+      globalDefs.filter((d) => d.hasUserLevelDefinition).map((d) => d.name),
+    )
+    const annotatedProjectDefs = projectDefs.map((d) =>
+      !d.hasUserLevelDefinition && userLevelNames.has(d.name)
+        ? { ...d, hasUserLevelDefinition: true }
+        : d,
+    )
+    this.mcpServerDefinitions.set(
+      mergeMcpServerDefinitions(globalDefs, annotatedProjectDefs),
+      undefined,
+    )
   }
 
   /**
@@ -1805,7 +1818,7 @@ export class AcpSessionService
     selection: readonly string[] | null,
     warnStale: boolean,
   ): Promise<McpServer[]> {
-    await this._extensionMcpServers.whenReady
+    await Promise.all([this._extensionMcpServers.whenReady, this._mcpEnablement.whenReady])
     const projectRaw = await this.readProjectMcpJson()
     const projectWire = normalizeMcpServers(projectRaw, (m) =>
       this._logger.warn(`mcpServers(.mcp.json): ${m}`),
@@ -1814,8 +1827,11 @@ export class AcpSessionService
     // Recompute the pool from the same snapshot instead of reading the async
     // mirror: the mirror's refresh (config-change → fs read) races session
     // creation, and a stale mirror silently filters the wire list down to [].
-    const projectDefs = readMcpServerDefinitions(projectRaw, 'project', (m) =>
-      this._logger.warn(`mcpServers(.mcp.json): ${m}`),
+    const projectDefs = readMcpServerDefinitions(
+      projectRaw,
+      'project',
+      (m) => this._logger.warn(`mcpServers(.mcp.json): ${m}`),
+      this._isMcpDefaultDisabled,
     )
     const pool = mergeMcpServerDefinitions(this._readGlobalMcpDefinitions(), projectDefs)
     const { enabledNames, staleNames } = resolveMcpServerSelection(pool, selection)
@@ -1833,8 +1849,8 @@ export class AcpSessionService
     const next = names === null ? null : [...names]
     if (selectionEquals(session.mcpServerSelection.get(), next)) return
     // Session-scoped pin only: the default set for new sessions is governed
-    // exclusively by each entry's `disabled` flag (see
-    // setMcpServerDefaultEnabled), never by the latest picker choice.
+    // exclusively by the enablement overrides (IMcpServerEnablementService),
+    // never by the latest picker choice.
     session.mcpServerSelection.set(next, undefined)
     this._telemetry.publicLog('acp.session_mcp_selection_changed', {
       agentId: session.agentId,
@@ -1844,47 +1860,6 @@ export class AcpSessionService
     const sid = session.sessionIdOnAgent.get()
     if (sid !== undefined) this._history.setHistoryMcpServerNames(sid, next)
     this._convergeMcpDrift(session)
-  }
-
-  setMcpServerDefaultEnabled(name: string, enabled: boolean): boolean {
-    if (this._mcpJsonNames.has(name)) return false
-    // Highest priority first, mirroring _mcpSettingsLayers. A name resolves at
-    // the first layer defining it; read-only compat layers are not written
-    // directly — an override entry lands in the matching writable layer
-    // instead (which outranks the compat layer by construction).
-    const layers: ReadonlyArray<{
-      readonly target: ConfigurationTarget
-      readonly writeTarget: ConfigurationTarget
-    }> = [
-      { target: ConfigurationTarget.Memory, writeTarget: ConfigurationTarget.Memory },
-      { target: ConfigurationTarget.Project, writeTarget: ConfigurationTarget.Project },
-      {
-        target: ConfigurationTarget.VSCodeWorkspace,
-        writeTarget: ConfigurationTarget.Project,
-      },
-      { target: ConfigurationTarget.User, writeTarget: ConfigurationTarget.User },
-      { target: ConfigurationTarget.VSCodeUser, writeTarget: ConfigurationTarget.User },
-    ]
-    for (const layer of layers) {
-      const raw = this._config.getLayerSnapshot(layer.target)['acp.mcpServers']
-      const record = mcpServerRawToRecord(raw)
-      const entry = record[name]
-      if (entry == null || typeof entry !== 'object' || Array.isArray(entry)) continue
-      const nextEntry: Record<string, unknown> = { ...(entry as Record<string, unknown>) }
-      if (enabled) delete nextEntry.disabled
-      else nextEntry.disabled = true
-      const writeRaw =
-        layer.writeTarget === layer.target
-          ? raw
-          : this._config.getLayerSnapshot(layer.writeTarget)['acp.mcpServers']
-      this._config.update(
-        'acp.mcpServers',
-        writeMcpServerEntry(writeRaw, name, nextEntry),
-        layer.writeTarget,
-      )
-      return true
-    }
-    return false
   }
 
   /**

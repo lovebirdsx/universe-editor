@@ -30,9 +30,12 @@ const PNG_BASE64 =
 async function setupEchoSession(page: Page, env?: Record<string, string>) {
   await page.evaluate(() =>
     window.__E2E__!.updateConfigValue('acp.mcpServers', {
-      web: { command: 'node', args: ['-e', ''], disabled: true },
+      web: { command: 'node', args: ['-e', ''] },
     }),
   )
+  // Default-disabled at the user (GLOBAL) scope — the session starts without
+  // the server until the picker explicitly enables it.
+  await page.evaluate(() => window.__E2E__!.setAcpMcpServerEnabled('web', false))
   await page.evaluate(([id, p, e]) => window.__E2E__!.installAcpEchoAgent(id, p, e), [
     'echo',
     ECHO_AGENT_PATH,

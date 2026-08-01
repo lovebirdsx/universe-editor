@@ -2813,6 +2813,10 @@
   text-overflow: ellipsis;
 }
 
+.mcpPickName[data-default-disabled] {
+  opacity: 0.55;
+}
+
 .mcpPickMeta {
   color: var(--vscode-agent-messageRoleForeground, #888);
   font-size: calc(var(--agent-font-size, 12px) * 0.78);
@@ -2832,6 +2836,27 @@
 .mcpPickDefault:has(input:disabled) {
   opacity: 0.55;
   cursor: default;
+}
+
+.mcpEnaToggles {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcpEnaToggles.compact {
+  gap: 6px;
+}
+
+.mcpEnaToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--vscode-agent-messageRoleForeground, #888);
+}
+
+.mcpEnaToggle:has(input:disabled) {
+  opacity: 0.55;
 }
 
 .mcpPickFooter {

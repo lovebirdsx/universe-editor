@@ -227,9 +227,11 @@ describe('readMcpServerDefinitions', () => {
     const defs = readMcpServerDefinitions(
       {
         fs: { command: 'node', args: [] },
-        docs: { type: 'http', url: 'https://x', disabled: true },
+        docs: { type: 'http', url: 'https://x' },
       },
       'global',
+      undefined,
+      (name) => name === 'docs',
     )
     expect(defs).toEqual([
       {
@@ -247,13 +249,15 @@ describe('readMcpServerDefinitions', () => {
     ])
   })
 
-  it('only treats disabled === true as disabled', () => {
-    const defs = readMcpServerDefinitions(
-      { fs: { command: 'node', disabled: 1 as unknown as boolean } },
-      'project',
-    )
+  it('never reads the legacy `disabled` entry field — it is inert', () => {
+    const defs = readMcpServerDefinitions({ fs: { command: 'node', disabled: true } }, 'project')
     expect(defs[0]!.disabled).toBe(false)
     expect(defs[0]!.source).toBe('project')
+  })
+
+  it('defaults to enabled when no isDisabled callback is given', () => {
+    const defs = readMcpServerDefinitions({ fs: { command: 'node' } }, 'global')
+    expect(defs[0]!.disabled).toBe(false)
   })
 
   it('skips invalid entries with a warning, like normalizeMcpServers', () => {
@@ -384,9 +388,43 @@ describe('mergeMcpServerRawLayers / readMcpServerDefinitionsLayered', () => {
       { source: 'global', raw: { fs: { command: 'user-fs' }, docs: { command: 'user-docs' } } },
       { source: 'project', raw: { fs: { command: 'ws-fs', disabled: true } } },
     ])
+    // The legacy `disabled` entry field is inert — enablement comes from the callback.
     expect(defs).toEqual([
-      { name: 'fs', transport: 'stdio', disabled: true, source: 'project' },
-      { name: 'docs', transport: 'stdio', disabled: false, source: 'global' },
+      {
+        name: 'fs',
+        transport: 'stdio',
+        disabled: false,
+        source: 'project',
+        hasUserLevelDefinition: true,
+      },
+      {
+        name: 'docs',
+        transport: 'stdio',
+        disabled: false,
+        source: 'global',
+        hasUserLevelDefinition: true,
+      },
+    ])
+  })
+
+  it('forwards the isDisabled callback to the merged pool', () => {
+    const defs = readMcpServerDefinitionsLayered(
+      [
+        { source: 'global', raw: { fs: { command: 'user-fs' } } },
+        { source: 'project', raw: { docs: { command: 'ws-docs' } } },
+      ],
+      undefined,
+      (name) => name === 'docs',
+    )
+    expect(defs).toEqual([
+      {
+        name: 'fs',
+        transport: 'stdio',
+        disabled: false,
+        source: 'global',
+        hasUserLevelDefinition: true,
+      },
+      { name: 'docs', transport: 'stdio', disabled: true, source: 'project' },
     ])
   })
 
@@ -412,8 +450,40 @@ describe('mergeMcpServerRawLayers / readMcpServerDefinitionsLayered', () => {
       { source: 'global', raw: { bridge: { command: 'user-bridge', disabled: true } } },
     ])
     expect(defs).toEqual([
-      { name: 'bridge', transport: 'stdio', disabled: true, source: 'global' },
-      { name: 'extra', transport: 'stdio', disabled: false, source: 'extension' },
+      {
+        name: 'bridge',
+        transport: 'stdio',
+        disabled: false,
+        source: 'global',
+        hasUserLevelDefinition: true,
+      },
+      {
+        name: 'extra',
+        transport: 'stdio',
+        disabled: false,
+        source: 'extension',
+        hasUserLevelDefinition: true,
+      },
+    ])
+  })
+
+  it('annotates hasUserLevelDefinition only for names present in user-level layers', () => {
+    const defs = readMcpServerDefinitionsLayered([
+      { source: 'global', raw: { shared: { command: 'user-shared' } } },
+      {
+        source: 'project',
+        raw: { shared: { command: 'ws-shared' }, local: { command: 'ws-local' } },
+      },
+    ])
+    expect(defs).toEqual([
+      {
+        name: 'shared',
+        transport: 'stdio',
+        disabled: false,
+        source: 'project',
+        hasUserLevelDefinition: true,
+      },
+      { name: 'local', transport: 'stdio', disabled: false, source: 'project' },
     ])
   })
 })

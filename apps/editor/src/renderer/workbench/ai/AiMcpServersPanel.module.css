@@ -1,47 +1,7 @@
 /*---------------------------------------------------------------------------------------------
- *  AI settings — MCP Servers panel. Scope-grouped server rows styled with
- *  workbench tokens + --color-* theme variables (dark / light safe).
+ *  AI settings — MCP Servers panel. Merged single-list server rows styled
+ *  with workbench tokens + --color-* theme variables (dark / light safe).
  *--------------------------------------------------------------------------------------------*/
-
-.groupSection {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--vscode-workbench-border);
-  border-radius: var(--radius-md);
-  background: var(--vscode-workbench-surface);
-}
-
-.groupHeader {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-4);
-  padding: var(--spacing-4) var(--spacing-6);
-  border-bottom: 1px solid var(--vscode-workbench-borderSubtle);
-}
-
-.groupHeader:last-child {
-  border-bottom: none;
-}
-
-.groupTitle {
-  font-size: var(--font-size-base);
-  font-weight: var(--font-weight-medium);
-}
-
-.groupPath {
-  min-width: 0;
-  overflow: hidden;
-  font-family: var(--font-family-mono, monospace);
-  font-size: var(--font-size-xs);
-  color: var(--vscode-editor-mutedForeground);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.groupNote {
-  font-size: var(--font-size-xs);
-  color: var(--vscode-editor-mutedForeground);
-}
 
 .serverList {
   display: flex;
@@ -49,6 +9,9 @@
   margin: 0;
   padding: 0;
   list-style: none;
+  border: 1px solid var(--vscode-workbench-border);
+  border-radius: var(--radius-md);
+  background: var(--vscode-workbench-surface);
 }
 
 .serverRow {
@@ -66,6 +29,31 @@
 .serverRow[data-disabled='true'] .serverName,
 .serverRow[data-disabled='true'] .serverSummary {
   opacity: 0.55;
+}
+
+.sourceBadge {
+  flex: none;
+  padding: 0 var(--spacing-2);
+  border: 1px solid var(--vscode-workbench-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  line-height: 1.6;
+  color: var(--vscode-editor-mutedForeground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.sourceBadge[data-shadowed] {
+  opacity: 0.55;
+}
+
+.sourceBadge[data-invalid] {
+  border-color: var(--vscode-warning-foreground, #cca700);
+  color: var(--vscode-warning-foreground, #cca700);
+}
+
+.sourceBadge:hover {
+  color: var(--vscode-editor-foreground);
 }
 
 .statusDot {
@@ -150,6 +138,54 @@
   align-items: center;
   gap: var(--spacing-2);
   flex: 0 0 auto;
+}
+
+/* -- "open configuration file" dropdown ----------------------------------- */
+
+.menu {
+  min-width: 240px;
+  margin: 0;
+  padding: var(--spacing-2) 0;
+  list-style: none;
+  background: var(--vscode-menu-background, #252526);
+  color: var(--vscode-menu-foreground, #cccccc);
+  border: 1px solid var(--vscode-menu-border, #454545);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--font-size-base);
+  min-height: 0;
+  overflow: auto;
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) var(--spacing-4);
+  cursor: pointer;
+  user-select: none;
+}
+
+.menuItem:hover {
+  background: var(--vscode-menu-selectionBackground, #094771);
+}
+
+.menuItemIcon {
+  display: flex;
+  flex: none;
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.menuItemText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.menuItemDetail {
+  font-size: var(--font-size-xs);
+  color: var(--vscode-editor-mutedForeground);
 }
 
 /* -- add / edit dialog --------------------------------------------------- */

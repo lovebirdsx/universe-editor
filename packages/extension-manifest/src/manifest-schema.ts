@@ -117,7 +117,6 @@ const mcpServerContributionSchema = z
     command: z.string().min(1).optional(),
     args: z.array(z.string()).optional(),
     env: z.record(z.string()).optional(),
-    disabled: z.boolean().optional(),
     whenConfiguration: z.string().min(1).optional(),
   })
   .passthrough()

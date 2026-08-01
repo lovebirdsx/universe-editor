@@ -34,7 +34,16 @@ import { AcpSessionService } from '../acpSessionService.js'
 // and no other collaborator owns the scanned-extension record. The facade
 // needs the record (merge layer) + whenReady (cold-start barrier) +
 // onDidChange (pool refresh).
-const MAX_INJECTED = 17
+//
+// +1 IMcpServerEnablementService (storage-backed MCP default on/off): the
+// default enable switch moved out of `acp.mcpServers` entries into
+// IStorageService (GLOBAL + WORKSPACE scopes). It is a distinct storage domain
+// with its own cold-start barrier and change event — no existing collaborator
+// (config reads settings layers, extension service owns the manifest record)
+// can answer isEnabled/whenReady/onDidChange for it. The facade needs all
+// three to annotate the definition pool and keep it fresh; writes go straight
+// to IMcpServerEnablementService from the UI (no facade method).
+const MAX_INJECTED = 18
 
 describe('AcpSessionService dependency budget', () => {
   it('does not exceed the injected-dependency ceiling', () => {

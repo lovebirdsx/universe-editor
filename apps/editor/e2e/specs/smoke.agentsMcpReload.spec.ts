@@ -1,14 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Session MCP picker reload regression (@p1).
  *
- *  Repro: define a disabled MCP server in `acp.mcpServers`, create a session
- *  (never messaged → hasMessages=false), then enable the server from the
- *  session MCP picker. The seamless reload closed the session and tried to
- *  `session/load` it — but real agents never persist an empty session, so the
- *  load failed, the resume-failure policy discarded the row, and the session
- *  simply vanished from the list. The fix detects the empty session and
- *  replaces it with a fresh session pinned to the new selection instead of
- *  resuming the old one.
+ *  Repro: define an MCP server in `acp.mcpServers` and disable it by default
+ *  (enablement storage), create a session (never messaged → hasMessages=false),
+ *  then enable the server from the session MCP picker. The seamless reload
+ *  closed the session and tried to `session/load` it — but real agents never
+ *  persist an empty session, so the load failed, the resume-failure policy
+ *  discarded the row, and the session simply vanished from the list. The fix
+ *  detects the empty session and replaces it with a fresh session pinned to
+ *  the new selection instead of resuming the old one.
  *
  *  The echo fixture mirrors real-agent persistence semantics with
  *  ECHO_AGENT_LOAD_SESSION=1: session/load succeeds only for sessions that
@@ -26,9 +26,12 @@ const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', '
 async function setupEchoSession(page: import('@playwright/test').Page) {
   await page.evaluate(() =>
     window.__E2E__!.updateConfigValue('acp.mcpServers', {
-      web: { command: 'node', args: ['-e', ''], disabled: true },
+      web: { command: 'node', args: ['-e', ''] },
     }),
   )
+  // Default-disabled at the user (GLOBAL) scope — the session starts without
+  // the server until the picker explicitly enables it.
+  await page.evaluate(() => window.__E2E__!.setAcpMcpServerEnabled('web', false))
   await page.evaluate(([id, p, env]) => window.__E2E__!.installAcpEchoAgent(id, p, env), [
     'echo',
     ECHO_AGENT_PATH,

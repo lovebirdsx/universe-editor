@@ -75,6 +75,7 @@ import { AcpPromptDraftCache } from '../acpPromptDraftCache.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubExtensionMcpServersService } from './stubExtensionMcpServers.js'
+import { StubMcpServerEnablementService } from './stubMcpServerEnablement.js'
 import { StubFileService } from './stubFileService.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import type { IAcpSessionTitleService } from '../acpSessionTitleService.js'
@@ -503,6 +504,7 @@ describe('AcpSessionService', () => {
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
     )
   })
 
@@ -651,6 +653,7 @@ describe('AcpSessionService', () => {
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -870,6 +873,7 @@ describe('AcpSessionService', () => {
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -923,6 +927,7 @@ describe('AcpSessionService', () => {
         ),
         new StubFileService(),
         new StubExtensionMcpServersService(),
+        new StubMcpServerEnablementService(),
       )
     }
 
@@ -1202,6 +1207,7 @@ describe('AcpSessionService — rewind / fork', () => {
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
     )
     return { svc, history }
   }
@@ -1892,6 +1898,7 @@ describe('AcpSessionService — startup timeout', () => {
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
     )
     // createSession returns synchronously now; the handshake fails in the
     // background after the startup timeout fires, sealing the session via
@@ -1937,6 +1944,7 @@ describe('AcpSessionService — startup timeout', () => {
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
     )
     const s = await svc.createSession()
     // Submit a prompt while still connecting — it is buffered by the connection
@@ -1963,6 +1971,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     config: ConfigurationService,
     compactionStats: AcpCompactionStatsService = makeCompactionStats(),
     extensionMcp: StubExtensionMcpServersService = new StubExtensionMcpServersService(),
+    enablement: StubMcpServerEnablementService = new StubMcpServerEnablementService(),
   ) {
     const notification = new StubNotificationService()
     const telemetry = new NoopTelemetryService()
@@ -1993,6 +2002,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       ),
       new StubFileService(),
       extensionMcp,
+      enablement,
     )
   }
 
@@ -2050,8 +2060,20 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     // User-only entry survives alongside the workspace override; attribution
     // follows the winning layer.
     expect(svc.mcpServerDefinitions.get()).toEqual([
-      { name: 'fs', transport: 'stdio', disabled: false, source: 'project' },
-      { name: 'docs', transport: 'stdio', disabled: false, source: 'global' },
+      {
+        name: 'fs',
+        transport: 'stdio',
+        disabled: false,
+        source: 'project',
+        hasUserLevelDefinition: true,
+      },
+      {
+        name: 'docs',
+        transport: 'stdio',
+        disabled: false,
+        source: 'global',
+        hasUserLevelDefinition: true,
+      },
     ])
     const s = await svc.createSession()
     await s.whenConnected()
@@ -2075,7 +2097,13 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     })
     const svc = makeService(client, new ConfigurationService(), makeCompactionStats(), extensionMcp)
     expect(svc.mcpServerDefinitions.get()).toEqual([
-      { name: 'universe-editor', transport: 'stdio', disabled: false, source: 'extension' },
+      {
+        name: 'universe-editor',
+        transport: 'stdio',
+        disabled: false,
+        source: 'extension',
+        hasUserLevelDefinition: true,
+      },
     ])
     const s = await svc.createSession()
     await s.whenConnected()
@@ -2101,7 +2129,13 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     })
     const svc = makeService(client, config, makeCompactionStats(), extensionMcp)
     expect(svc.mcpServerDefinitions.get()).toEqual([
-      { name: 'bridge', transport: 'stdio', disabled: false, source: 'global' },
+      {
+        name: 'bridge',
+        transport: 'stdio',
+        disabled: false,
+        source: 'global',
+        hasUserLevelDefinition: true,
+      },
     ])
     const s = await svc.createSession()
     await s.whenConnected()
@@ -2121,7 +2155,13 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     extensionMcp.setRecord({ bridge: { command: '/app/editor' } })
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(svc.mcpServerDefinitions.get()).toEqual([
-      { name: 'bridge', transport: 'stdio', disabled: false, source: 'extension' },
+      {
+        name: 'bridge',
+        transport: 'stdio',
+        disabled: false,
+        source: 'extension',
+        hasUserLevelDefinition: true,
+      },
     ])
 
     extensionMcp.setRecord({})
@@ -2133,16 +2173,30 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     svc.dispose()
   })
 
-  it('setMcpServerDefaultEnabled refuses extension entries (no settings layer to write)', async () => {
+  it('enablement overrides apply to extension entries (source-agnostic) and refresh the pool', async () => {
     const extensionMcp = new StubExtensionMcpServersService()
     extensionMcp.setRecord({ bridge: { command: '/app/editor' } })
+    const enablement = new StubMcpServerEnablementService()
     const svc = makeService(
       new FakeAcpClientService(),
       new ConfigurationService(),
       makeCompactionStats(),
       extensionMcp,
+      enablement,
     )
-    expect(svc.setMcpServerDefaultEnabled('bridge', false)).toBe(false)
+    await enablement.setEnabled('bridge', false, StorageScope.GLOBAL)
+    // The pool mirror picks the override up via the enablement change event.
+    await vi.waitFor(() => {
+      expect(svc.mcpServerDefinitions.get()).toEqual([
+        {
+          name: 'bridge',
+          transport: 'stdio',
+          disabled: true,
+          source: 'extension',
+          hasUserLevelDefinition: true,
+        },
+      ])
+    })
     svc.dispose()
   })
 
@@ -2454,6 +2508,7 @@ describe('AcpSessionService — session MCP selection', () => {
     const telemetry = new NoopTelemetryService()
     const history = makeHistory()
     const agentDefaults = makeAgentDefaults()
+    const enablement = new StubMcpServerEnablementService()
     const svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
@@ -2479,8 +2534,9 @@ describe('AcpSessionService — session MCP selection', () => {
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
+      enablement,
     )
-    return { svc, history, agentDefaults }
+    return { svc, history, agentDefaults, enablement }
   }
 
   it('sends all non-disabled pool servers when the session inherits', async () => {
@@ -2488,9 +2544,10 @@ describe('AcpSessionService — session MCP selection', () => {
     const config = new ConfigurationService()
     await config.update('acp.mcpServers', {
       fs: { command: 'node', args: ['fs.js'] },
-      web: { command: 'node', args: ['web.js'], disabled: true },
+      web: { command: 'node', args: ['web.js'] },
     })
-    const { svc } = makeService(client, config)
+    const { svc, enablement } = makeService(client, config)
+    await enablement.setEnabled('web', false, StorageScope.GLOBAL)
     const s = await svc.createSession()
     await s.whenConnected()
     const params = client.connected[0]!.agent.newSessionCalls[0]!
@@ -2686,57 +2743,31 @@ describe('AcpSessionService — session MCP selection', () => {
     svc.dispose()
   })
 
-  it('setMcpServerDefaultEnabled writes the disabled flag at the winning layer', async () => {
+  it('a workspace enablement override wins over the global one for new sessions', async () => {
     const client = new FakeAcpClientService()
     const config = new ConfigurationService()
     await config.update(
       'acp.mcpServers',
       {
         fs: { command: 'node', args: [] },
-        web: { command: 'node', args: [], disabled: true },
+        docs: { command: 'node', args: [] },
       },
       ConfigurationTarget.User,
     )
-    const { svc } = makeService(client, config)
-
-    expect(svc.setMcpServerDefaultEnabled('fs', false)).toBe(true)
-    expect(
-      (
-        config.getLayerSnapshot(ConfigurationTarget.User)['acp.mcpServers'] as Record<
-          string,
-          { disabled?: boolean }
-        >
-      )['fs']?.disabled,
-    ).toBe(true)
-
-    expect(svc.setMcpServerDefaultEnabled('web', true)).toBe(true)
-    expect(
-      (
-        config.getLayerSnapshot(ConfigurationTarget.User)['acp.mcpServers'] as Record<
-          string,
-          { disabled?: boolean }
-        >
-      )['web']?.disabled,
-    ).toBeUndefined()
-
-    expect(svc.setMcpServerDefaultEnabled('nope', false)).toBe(false)
-    svc.dispose()
-  })
-
-  it('setMcpServerDefaultEnabled narrows the pool a new session starts with', async () => {
-    const client = new FakeAcpClientService()
-    const config = new ConfigurationService()
-    await config.update('acp.mcpServers', {
-      fs: { command: 'node', args: [] },
-      docs: { command: 'node', args: [] },
-    })
-    const { svc } = makeService(client, config)
-
-    svc.setMcpServerDefaultEnabled('docs', false)
+    const { svc, enablement } = makeService(client, config)
+    // Global default: fs disabled. Workspace re-enables it and disables docs.
+    await enablement.setEnabled('fs', false, StorageScope.GLOBAL)
+    await enablement.setEnabled('fs', true, StorageScope.WORKSPACE)
+    await enablement.setEnabled('docs', false, StorageScope.WORKSPACE)
     const s = await svc.createSession()
     await s.whenConnected()
     const params = client.connected[0]!.agent.newSessionCalls[0]!
     expect(params.mcpServers.map((m) => m.name)).toEqual(['fs'])
+    // Settings stay untouched — enablement lives in storage, not in entries.
+    expect(config.getLayerSnapshot(ConfigurationTarget.User)['acp.mcpServers']).toEqual({
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
     svc.dispose()
   })
 
@@ -2838,6 +2869,7 @@ describe('AcpSessionService — AI session title push-back', () => {
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
     )
     return { svc, history }
   }
@@ -3063,6 +3095,7 @@ describe('AcpSessionService — first prompt history mirror', () => {
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
     )
     return { svc, history }
   }
@@ -3179,6 +3212,7 @@ describe('AcpSessionService — configOptions history snapshot', () => {
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
     )
     return { svc, history }
   }

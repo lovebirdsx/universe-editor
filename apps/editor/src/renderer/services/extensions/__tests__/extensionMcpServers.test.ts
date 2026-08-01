@@ -218,21 +218,21 @@ describe('resolveExtensionMcpServerRecord', () => {
     expect(warnings.some((w) => w.includes('requires "command"'))).toBe(true)
   })
 
-  it('filters non-string args and forwards disabled: true only', () => {
+  it('filters non-string args', () => {
     const record = resolveExtensionMcpServerRecord(
       [
         makeExt({
           contributes: {
             mcpServers: {
-              a: { command: 'node', args: ['ok', 42, null] as never, disabled: true },
-              b: { command: 'node', disabled: false },
+              a: { command: 'node', args: ['ok', 42, null] as never },
+              b: { command: 'node' },
             },
           },
         }),
       ],
       makeCtx(),
     )
-    expect(record.a).toEqual({ command: 'node', args: ['ok'], disabled: true })
+    expect(record.a).toEqual({ command: 'node', args: ['ok'] })
     expect(record.b).toEqual({ command: 'node' })
   })
 })

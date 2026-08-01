@@ -10,6 +10,7 @@ export interface CheckboxProps {
   indeterminate?: boolean
   className?: string
   'data-testid'?: string
+  'aria-label'?: string
 }
 
 export function Checkbox({
@@ -20,6 +21,7 @@ export function Checkbox({
   indeterminate = false,
   className,
   'data-testid': testId,
+  'aria-label': ariaLabel,
 }: CheckboxProps) {
   const ref = useRef<HTMLInputElement>(null)
 
@@ -37,6 +39,7 @@ export function Checkbox({
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
         data-testid={testId}
+        aria-label={ariaLabel}
       />
       {label}
     </label>

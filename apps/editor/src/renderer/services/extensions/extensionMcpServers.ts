@@ -84,7 +84,6 @@ function resolveEntry(
     }
     out.env = env
   }
-  if (entry.disabled === true) out.disabled = true
   return out
 }
 

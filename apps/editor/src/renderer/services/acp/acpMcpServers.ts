@@ -190,28 +190,46 @@ export function mergeMcpServerRawLayers(
 /**
  * Layered variant of {@link readMcpServerDefinitions}: merges the raw layers
  * per name and attributes each surviving definition to the layer that won it
- * (transport / disabled are also read from the winning entry). An invalid
- * winning entry drops the name entirely — a broken workspace override must not
- * silently fall back to the global definition it shadows.
+ * (transport is read from the winning entry). An invalid winning entry drops
+ * the name entirely — a broken workspace override must not silently fall back
+ * to the global definition it shadows.
  */
 export function readMcpServerDefinitionsLayered(
   layers: readonly McpServerRawLayer[],
   onWarn?: WarnFn,
+  isDisabled?: (name: string) => boolean,
 ): McpServerDefinition[] {
   const sourceByName = new Map<string, McpServerSource>()
+  // Names defined by any user-level layer (everything except the workspace
+  // `project` layers: extension contributions, VSCodeUser, User, Memory) — the
+  // UI offers the user-level default toggle only for these.
+  const userLevelNames = new Set<string>()
   for (const layer of layers) {
-    for (const name of Object.keys(mcpServerRawToRecord(layer.raw)))
+    for (const name of Object.keys(mcpServerRawToRecord(layer.raw))) {
       sourceByName.set(name, layer.source)
+      if (layer.source !== 'project') userLevelNames.add(name)
+    }
   }
-  const defs = readMcpServerDefinitions(mergeMcpServerRawLayers(layers), 'global', onWarn)
-  return defs.map((d) => ({ ...d, source: sourceByName.get(d.name) ?? d.source }))
+  const defs = readMcpServerDefinitions(
+    mergeMcpServerRawLayers(layers),
+    'global',
+    onWarn,
+    isDisabled,
+  )
+  return defs.map((d) => ({
+    ...d,
+    source: sourceByName.get(d.name) ?? d.source,
+    ...(userLevelNames.has(d.name) ? { hasUserLevelDefinition: true } : {}),
+  }))
 }
 
 /**
  * One entry of the MCP definition pool shown in the session picker. `disabled`
- * is the global default switch (`acp.mcpServers` entry flag): a disabled server
- * is not forwarded on session/new unless a session-level whitelist explicitly
- * re-enables it.
+ * is the default switch for new sessions, resolved by the caller via the
+ * `isDisabled` callback (today: `IMcpServerEnablementService`, persisted in
+ * storage — the legacy `disabled` entry field in settings.json is inert and
+ * never read): a disabled server is not forwarded on session/new unless a
+ * session-level whitelist explicitly re-enables it.
  */
 export interface McpServerDefinition {
   readonly name: string
@@ -220,11 +238,21 @@ export interface McpServerDefinition {
   readonly source: McpServerSource
   /**
    * True when the winning definition lives in the workspace `.mcp.json` file
-   * (set by the session service when it merges the pool). Such entries shadow
-   * every settings layer, so their default switch is not editable through the
-   * configuration service — the file must be edited.
+   * (set by the session service when it merges the pool). Surfaced as the
+   * source badge in the picker; the default switch is editable for these
+   * entries like any other (enablement lives in storage, not in the file).
    */
   readonly fromMcpJson?: boolean
+  /**
+   * True when a user-level layer (extension contribution, VSCodeUser, User,
+   * Memory — anything but the workspace `project` layers) defines this name.
+   * Drives the visibility of the user-level default toggle: workspace-only
+   * names get just the workspace switch, while names that also exist at user
+   * level offer both (workspace wins). Absent (undefined) means false; set by
+   * `readMcpServerDefinitionsLayered`, and propagated to `.mcp.json` winners
+   * by the session service at merge time.
+   */
+  readonly hasUserLevelDefinition?: boolean
 }
 
 /**
@@ -237,6 +265,7 @@ export function readMcpServerDefinitions(
   raw: unknown,
   source: McpServerSource,
   onWarn?: WarnFn,
+  isDisabled?: (name: string) => boolean,
 ): McpServerDefinition[] {
   const out: McpServerDefinition[] = []
   const seen = new Set<string>()
@@ -244,8 +273,7 @@ export function readMcpServerDefinitions(
     const server = buildServer(name, cfg, onWarn)
     if (!server || seen.has(server.name)) return
     seen.add(server.name)
-    const disabled =
-      cfg != null && typeof cfg === 'object' && (cfg as Record<string, unknown>).disabled === true
+    const disabled = isDisabled?.(server.name) ?? false
     out.push({ name: server.name, transport: mcpServerTransport(server), disabled, source })
   }
   if (Array.isArray(raw)) {

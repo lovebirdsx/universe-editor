@@ -137,6 +137,10 @@ import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
 import { AcpSessionService, IAcpSessionService } from './services/acp/session/acpSessionService.js'
 import {
+  IMcpServerEnablementService,
+  McpServerEnablementService,
+} from './services/acp/mcpServerEnablementService.js'
+import {
   AcpPromptHistoryService,
   IAcpPromptHistoryService,
 } from './services/acp/session/acpPromptHistoryService.js'
@@ -580,6 +584,12 @@ async function bootstrapWorkbench(): Promise<void> {
     instantiation.createInstance(ExtensionMcpServersService),
   )
   services.set(IExtensionMcpServersService, extensionMcpServersService)
+  // MCP server default enablement (storage-backed, GLOBAL + WORKSPACE scopes,
+  // workspace wins). Set before AcpSessionService, which injects it.
+  const mcpServerEnablementService = workbenchStore.add(
+    instantiation.createInstance(McpServerEnablementService),
+  )
+  services.set(IMcpServerEnablementService, mcpServerEnablementService)
   // History + agent-defaults are registerSingleton services injected by
   // AcpSessionService (materialized here); AcpInitContribution drives their
   // initialize() on the lifecycle timeline.
@@ -720,6 +730,7 @@ async function bootstrapWorkbench(): Promise<void> {
     configurationService,
     storageService: instantiation.invokeFunction((a) => a.get(IStorageService)),
     acpSessionService,
+    mcpServerEnablementService,
     outputService,
     updateService: services.get(IUpdateService) as IUpdateService,
     terminalService: services.get(ITerminalService) as ITerminalService,

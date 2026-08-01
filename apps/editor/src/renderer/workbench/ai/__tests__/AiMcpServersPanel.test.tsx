@@ -1,9 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors.
- *  AiMcpServersPanel tests — scope grouping, per-name shadow notes, the
- *  enable/disable toggle write path, add/edit/remove flows through the edit
- *  dialog, invalid-entry warnings, the read-only .mcp.json group, and the
- *  active-session status dot.
+ *  AiMcpServersPanel tests — merged single-list rendering (one row per
+ *  server, source badges, shadow dimming), two-level enablement toggles,
+ *  edit/remove targeting the highest-priority writable definition, source
+ *  badge routing, the toolbar config-file menu, and the active-session status dot.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -20,6 +20,7 @@ import {
   IUserDataFilesService,
   IWorkspaceService,
   ServiceCollection,
+  StorageScope,
   URI,
   observableValue,
   type IConfigurationChangeEvent,
@@ -31,6 +32,8 @@ import type {
 import { IAcpSessionService as IAcpSessionServiceId } from '../../../services/acp/session/acpSessionService.js'
 import type { IExtensionMcpServersService } from '../../../services/extensions/extensionMcpServersService.js'
 import { IExtensionMcpServersService as IExtensionMcpServersServiceId } from '../../../services/extensions/extensionMcpServersService.js'
+import type { IMcpServerEnablementService } from '../../../services/acp/mcpServerEnablementService.js'
+import { IMcpServerEnablementService as IMcpServerEnablementServiceId } from '../../../services/acp/mcpServerEnablementService.js'
 import { AiMcpServersPanel } from '../AiMcpServersPanel.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -60,6 +63,36 @@ class FakeConfigurationService {
 
   serversOf(target: ConfigurationTarget): Record<string, unknown> {
     return (this.layers.get(target)?.[CONFIG_KEY] ?? {}) as Record<string, unknown>
+  }
+}
+
+/** In-memory two-scope enablement stub (fires synchronously like the real one). */
+class StubEnablementService implements IMcpServerEnablementService {
+  declare readonly _serviceBrand: undefined
+  readonly whenReady = Promise.resolve()
+  private readonly _onDidChange = new Emitter<void>()
+  readonly onDidChange = this._onDidChange.event
+  readonly records: Record<StorageScope, Record<string, boolean>> = {
+    [StorageScope.GLOBAL]: {},
+    [StorageScope.WORKSPACE]: {},
+  }
+  isEnabled(name: string): boolean {
+    return (
+      this.records[StorageScope.WORKSPACE][name] ?? this.records[StorageScope.GLOBAL][name] ?? true
+    )
+  }
+  getOverride(name: string, scope: StorageScope): boolean | undefined {
+    return this.records[scope][name]
+  }
+  setEnabled(name: string, enabled: boolean, scope: StorageScope): Promise<void> {
+    this.records[scope][name] = enabled
+    this._onDidChange.fire()
+    return Promise.resolve()
+  }
+  removeOverride(name: string, scope: StorageScope): Promise<void> {
+    delete this.records[scope][name]
+    this._onDidChange.fire()
+    return Promise.resolve()
   }
 }
 
@@ -102,6 +135,8 @@ function renderPanel({
   services.set(IEditorResolverService, editorResolver as unknown as IEditorResolverService)
   const dialog = { confirm: vi.fn(async () => confirmResult) }
   services.set(IDialogService, dialog as unknown as IDialogService)
+  const enablement = new StubEnablementService()
+  services.set(IMcpServerEnablementServiceId, enablement)
   if (withSessionService) {
     services.set(IAcpSessionServiceId, makeSessionService(mcpJson, activeSession))
   }
@@ -119,19 +154,23 @@ function renderPanel({
       <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
     ),
   })
-  return { ...utils, commands, editorResolver, dialog }
+  return { ...utils, commands, editorResolver, dialog, enablement }
 }
 
-function groupEl(id: string): HTMLElement {
-  return screen.getByTestId(`ai-mcp-group-${id}`)
-}
-
-function rowIn(groupId: string, name: string): HTMLElement {
-  const row = [...within(groupEl(groupId)).getAllByTestId('ai-mcp-row')].find(
+function rowOf(name: string): HTMLElement {
+  const row = [...screen.getAllByTestId('ai-mcp-row')].find(
     (n) => n.getAttribute('data-name') === name,
   )
-  expect(row).toBeTruthy()
+  expect(row, `row for "${name}"`).toBeTruthy()
   return row!
+}
+
+function badgeOf(row: HTMLElement, source: string): HTMLElement {
+  const badge = [...within(row).getAllByTestId('ai-mcp-source-badge')].find(
+    (b) => b.getAttribute('data-source') === source,
+  )
+  expect(badge, `${source} badge`).toBeTruthy()
+  return badge!
 }
 
 async function flushEffects(): Promise<void> {
@@ -139,52 +178,153 @@ async function flushEffects(): Promise<void> {
 }
 
 describe('AiMcpServersPanel', () => {
-  it('groups rows by scope and annotates entries shadowed by a higher scope', async () => {
+  it('merges same-named definitions into one row with per-source badges, winner last priority', async () => {
     const config = new FakeConfigurationService()
-    config.seed(ConfigurationTarget.User, {
-      fs: { command: 'node' },
-      docs: { command: 'npx' },
-    })
+    config.seed(ConfigurationTarget.User, { fs: { command: 'node' } })
     config.seed(ConfigurationTarget.Project, { fs: { command: 'bun' } })
     renderPanel({ config })
     await flushEffects()
 
-    const userFs = rowIn('user', 'fs')
-    expect(userFs.textContent).toContain('overridden by')
-    expect(rowIn('user', 'docs').textContent).not.toContain('overridden by')
-    expect(rowIn('workspace', 'fs').textContent).not.toContain('overridden by')
-    expect(rowIn('workspace', 'fs').textContent).toContain('bun')
+    const row = rowOf('fs')
+    // One row only (no per-group duplication), summary from the winner.
+    expect(screen.getAllByTestId('ai-mcp-row')).toHaveLength(1)
+    expect(row.textContent).toContain('bun')
+    const userBadge = badgeOf(row, 'user')
+    const wsBadge = badgeOf(row, 'workspace')
+    expect(userBadge.getAttribute('data-shadowed')).toBe('true')
+    expect(userBadge.getAttribute('title')).toContain('overridden by')
+    expect(wsBadge.getAttribute('data-shadowed')).toBeNull()
   })
 
-  it('the toggle checkbox writes the disabled flag into the owning layer', async () => {
+  it('shows the user-level toggle only when a user-level source defines the name', async () => {
+    const config = new FakeConfigurationService()
+    config.seed(ConfigurationTarget.User, { shared: { command: 'node' } })
+    config.seed(ConfigurationTarget.Project, {
+      shared: { command: 'bun' },
+      local: { command: 'deno' },
+    })
+    renderPanel({ config, mcpJson: { proj: { command: 'node p.js' } } })
+    await flushEffects()
+    await flushEffects()
+
+    // 'shared' has a user-level definition → both switches.
+    expect(within(rowOf('shared')).getByTestId('mcp-ena-user-toggle')).toBeTruthy()
+    expect(within(rowOf('shared')).getByTestId('mcp-ena-ws-toggle')).toBeTruthy()
+    // 'local' is workspace-only → only the workspace switch.
+    expect(within(rowOf('local')).queryByTestId('mcp-ena-user-toggle')).toBeNull()
+    expect(within(rowOf('local')).getByTestId('mcp-ena-ws-toggle')).toBeTruthy()
+    // 'proj' lives only in .mcp.json → only the workspace switch.
+    expect(within(rowOf('proj')).queryByTestId('mcp-ena-user-toggle')).toBeNull()
+  })
+
+  it('the user-level switch writes GLOBAL; the workspace switch cycles three states', async () => {
     const config = new FakeConfigurationService()
     config.seed(ConfigurationTarget.User, { fs: { command: 'node', args: ['a'] } })
-    renderPanel({ config })
+    const { enablement } = renderPanel({ config })
     await flushEffects()
 
-    const toggle = within(rowIn('user', 'fs')).getByTestId('ai-mcp-row-toggle')
-    expect((toggle as HTMLInputElement).checked).toBe(true)
-    fireEvent.click(toggle)
-    expect(config.serversOf(ConfigurationTarget.User)).toEqual({
-      fs: { command: 'node', args: ['a'], disabled: true },
-    })
-
-    await flushEffects()
-    const toggleAgain = within(rowIn('user', 'fs')).getByTestId('ai-mcp-row-toggle')
-    expect((toggleAgain as HTMLInputElement).checked).toBe(false)
-    fireEvent.click(toggleAgain)
+    const row = rowOf('fs')
+    fireEvent.click(within(row).getByTestId('mcp-ena-user-toggle'))
+    expect(enablement.getOverride('fs', StorageScope.GLOBAL)).toBe(false)
+    // The definition in settings stays untouched.
     expect(config.serversOf(ConfigurationTarget.User)).toEqual({
       fs: { command: 'node', args: ['a'] },
     })
+    await flushEffects()
+    expect(rowOf('fs').getAttribute('data-disabled')).toBe('true')
+
+    const wsToggle = within(rowOf('fs')).getByTestId('mcp-ena-ws-toggle')
+    fireEvent.click(wsToggle)
+    expect(enablement.getOverride('fs', StorageScope.WORKSPACE)).toBe(true)
+    await flushEffects()
+    expect(rowOf('fs').getAttribute('data-disabled')).toBe('false')
+    fireEvent.click(within(rowOf('fs')).getByTestId('mcp-ena-ws-toggle'))
+    expect(enablement.getOverride('fs', StorageScope.WORKSPACE)).toBe(false)
+    fireEvent.click(within(rowOf('fs')).getByTestId('mcp-ena-ws-toggle'))
+    expect(enablement.getOverride('fs', StorageScope.WORKSPACE)).toBeUndefined()
   })
 
-  it('surfaces a runtime warning for entries the wire path would skip', async () => {
+  it('edit/remove act on the highest-priority writable definition (workspace over user)', async () => {
+    const config = new FakeConfigurationService()
+    config.seed(ConfigurationTarget.User, { fs: { command: 'node' } })
+    config.seed(ConfigurationTarget.Project, { fs: { command: 'bun' } })
+    const { dialog } = renderPanel({ config })
+    await flushEffects()
+
+    const row = rowOf('fs')
+    fireEvent.click(within(row).getByRole('button', { name: /Edit .* definition/ }))
+    const dialogEl = await screen.findByRole('dialog')
+    // Prefilled from the workspace definition.
+    expect((within(dialogEl).getByPlaceholderText('npx') as HTMLInputElement).value).toBe('bun')
+    fireEvent.click(within(dialogEl).getByRole('button', { name: 'Cancel' }))
+
+    fireEvent.click(within(row).getByRole('button', { name: 'Remove' }))
+    await flushEffects()
+    expect(dialog.confirm).toHaveBeenCalledOnce()
+    // The workspace definition is removed; the user one survives and wins now.
+    expect(config.serversOf(ConfigurationTarget.Project)).toEqual({})
+    expect(config.serversOf(ConfigurationTarget.User)).toEqual({ fs: { command: 'node' } })
+  })
+
+  it('clicking a user/workspace badge opens the edit dialog for that exact source', async () => {
+    const config = new FakeConfigurationService()
+    config.seed(ConfigurationTarget.User, { fs: { command: 'node' } })
+    config.seed(ConfigurationTarget.Project, { fs: { command: 'bun' } })
+    renderPanel({ config })
+    await flushEffects()
+
+    fireEvent.click(badgeOf(rowOf('fs'), 'user'))
+    const dialogEl = await screen.findByRole('dialog')
+    expect((within(dialogEl).getByPlaceholderText('npx') as HTMLInputElement).value).toBe('node')
+  })
+
+  it('clicking a file-source badge opens the backing file', async () => {
+    const config = new FakeConfigurationService()
+    const { editorResolver } = renderPanel({ config, mcpJson: { proj: { command: 'node p.js' } } })
+    await flushEffects()
+    await flushEffects()
+
+    fireEvent.click(badgeOf(rowOf('proj'), 'mcpJson'))
+    expect(editorResolver.openEditor).toHaveBeenCalledWith(
+      expect.objectContaining({ path: expect.stringContaining('.mcp.json') }),
+      expect.anything(),
+    )
+  })
+
+  it('the extension badge is inert (no edit affordance)', async () => {
+    const config = new FakeConfigurationService()
+    renderPanel({ config, extensionRecord: { bridge: { command: '/app/editor' } } })
+    await flushEffects()
+
+    const badge = badgeOf(rowOf('bridge'), 'extension')
+    fireEvent.click(badge)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('extension rows have both enablement switches but no edit/remove', async () => {
+    const config = new FakeConfigurationService()
+    const { enablement } = renderPanel({
+      config,
+      extensionRecord: { bridge: { command: '/app/editor' } },
+    })
+    await flushEffects()
+
+    const row = rowOf('bridge')
+    fireEvent.click(within(row).getByTestId('mcp-ena-user-toggle'))
+    expect(enablement.getOverride('bridge', StorageScope.GLOBAL)).toBe(false)
+    expect(within(row).queryByRole('button', { name: /Edit .* definition/ })).toBeNull()
+    expect(within(row).queryByRole('button', { name: 'Remove' })).toBeNull()
+  })
+
+  it('surfaces a runtime warning when the winning definition is invalid', async () => {
     const config = new FakeConfigurationService()
     config.seed(ConfigurationTarget.User, { bad: { args: [] } })
     renderPanel({ config })
     await flushEffects()
 
-    expect(rowIn('user', 'bad').textContent).toContain('Skipped at runtime')
+    const row = rowOf('bad')
+    expect(row.textContent).toContain('Skipped at runtime')
+    expect((within(row).getByTestId('mcp-ena-ws-toggle') as HTMLInputElement).disabled).toBe(true)
   })
 
   it('adds a stdio server through the dialog into the workspace layer', async () => {
@@ -211,37 +351,30 @@ describe('AiMcpServersPanel', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
-  it('edits an existing user entry through the dialog', async () => {
+  it('edits an entry through the dialog and persists enablement separately', async () => {
     const config = new FakeConfigurationService()
     config.seed(ConfigurationTarget.User, {
-      docs: { type: 'http', url: 'https://x', headers: { A: 'b' }, disabled: true },
+      docs: { type: 'http', url: 'https://x', headers: { A: 'b' } },
     })
-    renderPanel({ config })
+    const { enablement } = renderPanel({ config })
     await flushEffects()
 
-    fireEvent.click(within(rowIn('user', 'docs')).getByRole('button', { name: 'Edit' }))
+    fireEvent.click(within(rowOf('docs')).getByRole('button', { name: /Edit .* definition/ }))
     const dialogEl = await screen.findByRole('dialog')
 
     const urlInput = within(dialogEl).getByPlaceholderText('https://example.com/mcp')
     expect((urlInput as HTMLInputElement).value).toBe('https://x')
     fireEvent.change(urlInput, { target: { value: 'https://y' } })
+    // Uncheck "Enabled by default" — saved as an enablement override, not an entry field.
+    const enabledToggle = dialogEl.querySelector('input[type="checkbox"]')!
+    expect((enabledToggle as HTMLInputElement).checked).toBe(true)
+    fireEvent.click(enabledToggle)
     fireEvent.click(within(dialogEl).getByRole('button', { name: 'Save' }))
 
     expect(config.serversOf(ConfigurationTarget.User)).toEqual({
-      docs: { type: 'http', url: 'https://y', headers: { A: 'b' }, disabled: true },
+      docs: { type: 'http', url: 'https://y', headers: { A: 'b' } },
     })
-  })
-
-  it('removes an entry only after the confirm dialog approves', async () => {
-    const config = new FakeConfigurationService()
-    config.seed(ConfigurationTarget.User, { fs: { command: 'node' } })
-    const { dialog } = renderPanel({ config })
-    await flushEffects()
-
-    fireEvent.click(within(rowIn('user', 'fs')).getByRole('button', { name: 'Remove' }))
-    await flushEffects()
-    expect(dialog.confirm).toHaveBeenCalledOnce()
-    expect(config.serversOf(ConfigurationTarget.User)).toEqual({})
+    expect(enablement.getOverride('docs', StorageScope.GLOBAL)).toBe(false)
   })
 
   it('keeps the entry when the confirm dialog is cancelled', async () => {
@@ -250,52 +383,9 @@ describe('AiMcpServersPanel', () => {
     renderPanel({ config, confirmResult: { confirmed: false } })
     await flushEffects()
 
-    fireEvent.click(within(rowIn('user', 'fs')).getByRole('button', { name: 'Remove' }))
+    fireEvent.click(within(rowOf('fs')).getByRole('button', { name: 'Remove' }))
     await flushEffects()
     expect(config.serversOf(ConfigurationTarget.User)).toEqual({ fs: { command: 'node' } })
-  })
-
-  it('shows the extension group read-only, shadowed by a same-named user entry', async () => {
-    const config = new FakeConfigurationService()
-    config.seed(ConfigurationTarget.User, { bridge: { command: 'node user.js' } })
-    renderPanel({
-      config,
-      extensionRecord: {
-        bridge: { command: '/app/editor' },
-        extra: { command: '/app/editor', args: ['b.mjs'] },
-      },
-    })
-    await flushEffects()
-
-    const bridgeRow = rowIn('extension', 'bridge')
-    expect(bridgeRow.textContent).toContain('overridden by')
-    expect(within(bridgeRow).queryByTestId('ai-mcp-row-toggle')).toBeNull()
-    expect(within(bridgeRow).queryByRole('button', { name: 'Edit' })).toBeNull()
-    expect(within(bridgeRow).queryByRole('button', { name: 'Remove' })).toBeNull()
-    expect(rowIn('extension', 'extra').textContent).not.toContain('overridden by')
-    // No JSON file backs the extension group — the open button is absent.
-    expect(within(groupEl('extension')).queryByRole('button', { name: /Open JSON/ })).toBeNull()
-  })
-
-  it('hides the extension group when no extension contributes servers', async () => {
-    const config = new FakeConfigurationService()
-    config.seed(ConfigurationTarget.User, { fs: { command: 'node' } })
-    renderPanel({ config, extensionRecord: {} })
-    await flushEffects()
-
-    expect(screen.queryByTestId('ai-mcp-group-extension')).toBeNull()
-  })
-
-  it('shows the .mcp.json group as read-only (no toggle, no row actions)', async () => {
-    const config = new FakeConfigurationService()
-    renderPanel({ config, mcpJson: { proj: { command: 'node p.js' } } })
-    await flushEffects()
-    await flushEffects() // readProjectMcpJson resolves after the first pass
-
-    const row = rowIn('mcpJson', 'proj')
-    expect(row.textContent).toContain('node p.js')
-    expect(within(row).queryByTestId('ai-mcp-row-toggle')).toBeNull()
-    expect(within(row).queryByRole('button', { name: 'Edit' })).toBeNull()
   })
 
   it('renders the active-session status dot for matching server names', async () => {
@@ -307,7 +397,7 @@ describe('AiMcpServersPanel', () => {
     renderPanel({ config, activeSession: session })
     await flushEffects()
 
-    const dot = rowIn('user', 'fs').querySelector('[data-status]')
+    const dot = rowOf('fs').querySelector('[data-status]')
     expect(dot?.getAttribute('data-status')).toBe('connected')
   })
 
@@ -317,5 +407,20 @@ describe('AiMcpServersPanel', () => {
     await flushEffects()
 
     expect(screen.getByTestId('ai-mcp-panel').textContent).toContain('No MCP servers configured')
+  })
+
+  it('toolbar opens a config-file menu listing only present sources', async () => {
+    const config = new FakeConfigurationService()
+    const { commands } = renderPanel({ config })
+    await flushEffects()
+
+    const panel = screen.getByTestId('ai-mcp-panel')
+    fireEvent.click(within(panel).getByRole('button', { name: 'Open a configuration file' }))
+    const menu = screen.getByTestId('ai-mcp-config-menu')
+    expect(within(menu).getByText('User settings.json')).toBeTruthy()
+    expect(within(menu).getByText('Workspace settings.json')).toBeTruthy()
+    expect(within(menu).queryByText('.mcp.json')).toBeNull()
+    fireEvent.click(within(menu).getByText('User settings.json'))
+    expect(commands.executeCommand).toHaveBeenCalledWith('workbench.action.openSettingsJson')
   })
 })

@@ -62,6 +62,7 @@ import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubExtensionMcpServersService } from './stubExtensionMcpServers.js'
+import { StubMcpServerEnablementService } from './stubMcpServerEnablement.js'
 import { StubFileService } from './stubFileService.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import {
@@ -326,6 +327,7 @@ function makeService(
     ),
     new StubFileService(),
     new StubExtensionMcpServersService(),
+    new StubMcpServerEnablementService(),
   )
 }
 

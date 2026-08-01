@@ -190,8 +190,6 @@ export interface IMcpServerContribution {
   command?: string
   args?: string[]
   env?: Record<string, string>
-  /** Seed the entry as default-disabled in the definition pool. */
-  disabled?: boolean
   /**
    * Configuration key gating injection: when the setting resolves to `false`
    * the server is not injected (undefined/truthy injects). Editor-side

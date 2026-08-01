@@ -24,6 +24,7 @@ import {
   resolveMcpServerSelection,
   type McpServerDefinition,
 } from '../../services/acp/acpMcpServers.js'
+import { McpEnablementToggles } from './McpEnablementToggles.js'
 import { usePopoverDismiss } from './usePopoverDismiss.js'
 import styles from './agents.module.css'
 
@@ -186,7 +187,12 @@ function McpPickerPopover({
             {liveStatus.has(def.name) ? (
               <span className={styles['mcpStatusDot']} aria-hidden="true" />
             ) : null}
-            <span className={styles['mcpPickName']}>{def.name}</span>
+            <span
+              className={styles['mcpPickName']}
+              data-default-disabled={def.disabled || undefined}
+            >
+              {def.name}
+            </span>
             <span className={styles['mcpPickMeta']}>
               {def.fromMcpJson
                 ? '.mcp.json'
@@ -197,31 +203,11 @@ function McpPickerPopover({
                     : localize('acp.mcp.picker.sourceGlobal', 'global')}
             </span>
           </label>
-          <label
-            className={styles['mcpPickDefault']}
-            title={
-              def.fromMcpJson
-                ? localize(
-                    'acp.mcp.picker.defaultLocked',
-                    'Defined in .mcp.json — edit the file to change its default',
-                  )
-                : def.source === 'extension'
-                  ? localize(
-                      'acp.mcp.picker.defaultLockedExtension',
-                      'Contributed by an extension — disable it via the extension or its setting',
-                    )
-                  : localize('acp.mcp.picker.defaultTitle', 'Enabled by default for new sessions')
-            }
-          >
-            <input
-              type="checkbox"
-              data-testid="acp-mcp-picker-default-toggle"
-              checked={!def.disabled}
-              disabled={def.fromMcpJson === true || def.source === 'extension'}
-              onChange={(e) => service.setMcpServerDefaultEnabled(def.name, e.target.checked)}
-            />
-            <span>{localize('acp.mcp.picker.default', 'default')}</span>
-          </label>
+          <McpEnablementToggles
+            name={def.name}
+            showUserToggle={def.hasUserLevelDefinition ?? false}
+            compact
+          />
         </div>
       ))}
       <div className={styles['mcpPickFooter']}>
@@ -243,7 +229,7 @@ function McpPickerPopover({
         )}{' '}
         {localize(
           'acp.mcp.picker.defaultHint',
-          'Checkboxes on the left apply to this session only; the "default" toggle decides what new sessions start with.',
+          'Checkboxes on the left apply to this session only; the person/folder switches set the user-level and workspace-level defaults (workspace wins, and can go back to inheriting).',
         )}
       </div>
     </div>

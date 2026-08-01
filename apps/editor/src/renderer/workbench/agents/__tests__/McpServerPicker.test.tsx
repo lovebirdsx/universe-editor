@@ -8,10 +8,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import {
+  Emitter,
   Event,
   InstantiationService,
   observableValue,
   ServiceCollection,
+  StorageScope,
 } from '@universe-editor/platform'
 import type { ISettableObservable } from '@universe-editor/platform'
 import type { AvailableCommand } from '@agentclientprotocol/sdk'
@@ -28,6 +30,8 @@ import type {
   TimelineItem,
 } from '../../../services/acp/session/acpSessionService.js'
 import { IAcpSessionService as IAcpSessionServiceId } from '../../../services/acp/session/acpSessionService.js'
+import type { IMcpServerEnablementService } from '../../../services/acp/mcpServerEnablementService.js'
+import { IMcpServerEnablementService as IMcpServerEnablementServiceId } from '../../../services/acp/mcpServerEnablementService.js'
 import type { McpServerDefinition } from '../../../services/acp/acpMcpServers.js'
 import { McpServerPicker } from '../McpServerPicker.js'
 import { ServicesContext } from '../../useService.js'
@@ -88,7 +92,35 @@ interface FakeService {
   readonly mcpServerDefinitions: ISettableObservable<readonly McpServerDefinition[]>
   readonly refreshMcpServerDefinitions: ReturnType<typeof vi.fn>
   readonly setSessionMcpServers: ReturnType<typeof vi.fn>
-  readonly setMcpServerDefaultEnabled: ReturnType<typeof vi.fn>
+}
+
+class StubEnablement implements IMcpServerEnablementService {
+  declare readonly _serviceBrand: undefined
+  readonly whenReady = Promise.resolve()
+  private readonly _onDidChange = new Emitter<void>()
+  readonly onDidChange = this._onDidChange.event
+  readonly records: Record<StorageScope, Record<string, boolean>> = {
+    [StorageScope.GLOBAL]: {},
+    [StorageScope.WORKSPACE]: {},
+  }
+  isEnabled(name: string): boolean {
+    return (
+      this.records[StorageScope.WORKSPACE][name] ?? this.records[StorageScope.GLOBAL][name] ?? true
+    )
+  }
+  getOverride(name: string, scope: StorageScope): boolean | undefined {
+    return this.records[scope][name]
+  }
+  setEnabled(name: string, enabled: boolean, scope: StorageScope): Promise<void> {
+    this.records[scope][name] = enabled
+    this._onDidChange.fire()
+    return Promise.resolve()
+  }
+  removeOverride(name: string, scope: StorageScope): Promise<void> {
+    delete this.records[scope][name]
+    this._onDidChange.fire()
+    return Promise.resolve()
+  }
 }
 
 function makeService(pool: readonly McpServerDefinition[]): FakeService {
@@ -96,7 +128,6 @@ function makeService(pool: readonly McpServerDefinition[]): FakeService {
     mcpServerDefinitions: observableValue<readonly McpServerDefinition[]>('defs', pool),
     refreshMcpServerDefinitions: vi.fn().mockResolvedValue(undefined),
     setSessionMcpServers: vi.fn(),
-    setMcpServerDefaultEnabled: vi.fn().mockReturnValue(true),
   }
 }
 
@@ -111,16 +142,19 @@ function renderPicker({
   service,
   open = false,
   withService = true,
+  enablement = new StubEnablement(),
 }: {
   session?: FakeSession
   service: FakeService
   open?: boolean
   withService?: boolean
+  enablement?: StubEnablement
 }) {
   const services = new ServiceCollection()
   if (withService) {
     services.set(IAcpSessionServiceId, service as unknown as IAcpSessionService)
   }
+  services.set(IMcpServerEnablementServiceId, enablement)
   const inst = new InstantiationService(services)
   const onOpen = vi.fn()
   const onClose = vi.fn()
@@ -132,7 +166,7 @@ function renderPicker({
       ),
     },
   )
-  return { ...utils, onOpen, onClose }
+  return { ...utils, onOpen, onClose, enablement }
 }
 
 function rowOf(name: string): HTMLElement {
@@ -151,10 +185,12 @@ function checkboxOf(name: string): HTMLInputElement {
   return input as HTMLInputElement
 }
 
-function defaultToggleOf(name: string): HTMLInputElement {
-  const input = rowOf(name).querySelector('input[data-testid="acp-mcp-picker-default-toggle"]')
-  expect(input).toBeTruthy()
-  return input as HTMLInputElement
+function defaultUserToggleOf(name: string): HTMLInputElement {
+  return rowOf(name).querySelector('input[data-testid="mcp-ena-user-toggle"]') as HTMLInputElement
+}
+
+function defaultWsToggleOf(name: string): HTMLInputElement {
+  return rowOf(name).querySelector('input[data-testid="mcp-ena-ws-toggle"]') as HTMLInputElement
 }
 
 describe('McpServerPicker', () => {
@@ -249,40 +285,96 @@ describe('McpServerPicker', () => {
     expect(rowOf('docs').textContent).toContain('project')
   })
 
-  it('the default toggle mirrors the pool entry disabled flag', () => {
-    renderPicker({ service: makeService(POOL), open: true })
-    expect(defaultToggleOf('fs').checked).toBe(true)
-    expect(defaultToggleOf('docs').checked).toBe(true)
-    expect(defaultToggleOf('web').checked).toBe(false)
+  it('shows the user-level switch only for names with a user-level definition', () => {
+    const pool: readonly McpServerDefinition[] = [
+      {
+        name: 'fs',
+        transport: 'stdio',
+        disabled: false,
+        source: 'global',
+        hasUserLevelDefinition: true,
+      },
+      { name: 'local', transport: 'stdio', disabled: false, source: 'project' },
+    ]
+    renderPicker({ service: makeService(pool), open: true })
+    expect(defaultUserToggleOf('fs')).toBeTruthy()
+    expect(defaultWsToggleOf('fs')).toBeTruthy()
+    expect(defaultWsToggleOf('local')).toBeTruthy()
+    expect(rowOf('local').querySelector('input[data-testid="mcp-ena-user-toggle"]')).toBeNull()
   })
 
-  it('toggling the default switch writes through setMcpServerDefaultEnabled', () => {
-    const service = makeService(POOL)
-    renderPicker({ service, open: true })
-    fireEvent.click(defaultToggleOf('web'))
-    expect(service.setMcpServerDefaultEnabled).toHaveBeenCalledWith('web', true)
-    fireEvent.click(defaultToggleOf('fs'))
-    expect(service.setMcpServerDefaultEnabled).toHaveBeenCalledWith('fs', false)
+  it('the two default switches write the matching enablement scope', () => {
+    const pool: readonly McpServerDefinition[] = [
+      {
+        name: 'fs',
+        transport: 'stdio',
+        disabled: false,
+        source: 'global',
+        hasUserLevelDefinition: true,
+      },
+    ]
+    const service = makeService(pool)
+    const { enablement } = renderPicker({ service, open: true })
+    fireEvent.click(defaultUserToggleOf('fs'))
+    expect(enablement.getOverride('fs', StorageScope.GLOBAL)).toBe(false)
+    fireEvent.click(defaultWsToggleOf('fs'))
+    expect(enablement.getOverride('fs', StorageScope.WORKSPACE)).toBe(true)
     // The session pin is untouched.
     expect(service.setSessionMcpServers).not.toHaveBeenCalled()
   })
 
-  it('the default toggle is disabled for .mcp.json entries', () => {
+  it('the workspace switch cycles back to inheriting', () => {
     const pool: readonly McpServerDefinition[] = [
-      { name: 'local', transport: 'stdio', disabled: false, source: 'project', fromMcpJson: true },
+      {
+        name: 'fs',
+        transport: 'stdio',
+        disabled: false,
+        source: 'global',
+        hasUserLevelDefinition: true,
+      },
     ]
-    renderPicker({ service: makeService(pool), open: true })
-    expect(rowOf('local').textContent).toContain('.mcp.json')
-    expect(defaultToggleOf('local').disabled).toBe(true)
+    const { enablement } = renderPicker({ service: makeService(pool), open: true })
+    fireEvent.click(defaultWsToggleOf('fs'))
+    fireEvent.click(defaultWsToggleOf('fs'))
+    expect(enablement.getOverride('fs', StorageScope.WORKSPACE)).toBe(false)
+    fireEvent.click(defaultWsToggleOf('fs'))
+    expect(enablement.getOverride('fs', StorageScope.WORKSPACE)).toBeUndefined()
   })
 
-  it('the default toggle is disabled for extension-contributed entries', () => {
+  it('both switches are writable for .mcp.json and extension entries (enablement lives in storage)', () => {
     const pool: readonly McpServerDefinition[] = [
-      { name: 'bridge', transport: 'stdio', disabled: false, source: 'extension' },
+      {
+        name: 'local',
+        transport: 'stdio',
+        disabled: false,
+        source: 'project',
+        fromMcpJson: true,
+        hasUserLevelDefinition: true,
+      },
+      {
+        name: 'bridge',
+        transport: 'stdio',
+        disabled: false,
+        source: 'extension',
+        hasUserLevelDefinition: true,
+      },
     ]
-    renderPicker({ service: makeService(pool), open: true })
+    const { enablement } = renderPicker({ service: makeService(pool), open: true })
+    expect(rowOf('local').textContent).toContain('.mcp.json')
     expect(rowOf('bridge').textContent).toContain('extension')
-    expect(defaultToggleOf('bridge').disabled).toBe(true)
+    fireEvent.click(defaultWsToggleOf('local'))
+    expect(enablement.getOverride('local', StorageScope.WORKSPACE)).toBe(true)
+    fireEvent.click(defaultWsToggleOf('local'))
+    expect(enablement.getOverride('local', StorageScope.WORKSPACE)).toBe(false)
+    fireEvent.click(defaultUserToggleOf('bridge'))
+    expect(enablement.getOverride('bridge', StorageScope.GLOBAL)).toBe(false)
+  })
+
+  it('names with an effective disabled default render dimmed', () => {
+    renderPicker({ service: makeService(POOL), open: true })
+    const name = rowOf('web').querySelector('[data-default-disabled]')
+    expect(name).toBeTruthy()
+    expect(rowOf('fs').querySelector('[data-default-disabled]')).toBeNull()
   })
 
   it('shows the prompt-cache hint in the popover footer', () => {

@@ -3,8 +3,10 @@
  *  McpServerEditDialog — focus-trapped modal for adding / editing one MCP
  *  server entry inside `acp.mcpServers`. Add mode also picks the target scope
  *  (user-global or workspace); edit mode keeps name + scope fixed (a rename is
- *  delete + add). The dialog only shapes the entry object — persistence goes
- *  through the caller's onSave.
+ *  delete + add). The dialog only shapes the entry object plus the desired
+ *  default-enabled flag — persistence of both goes through the caller's onSave
+ *  (the definition lands in settings; enablement lands in storage via
+ *  IMcpServerEnablementService).
  *--------------------------------------------------------------------------------------------*/
 
 import { useMemo, useState } from 'react'
@@ -33,12 +35,19 @@ export interface McpServerEditTarget {
   readonly existingNames: Readonly<Record<McpServerScope, readonly string[]>>
   readonly initialName?: string
   readonly initialEntry?: unknown
+  /** Initial state of the "Enabled by default" checkbox (defaults to true). */
+  readonly initialEnabled?: boolean
 }
 
 interface McpServerEditDialogProps {
   readonly target: McpServerEditTarget
   readonly onClose: () => void
-  readonly onSave: (scope: McpServerScope, name: string, entry: Record<string, unknown>) => void
+  readonly onSave: (
+    scope: McpServerScope,
+    name: string,
+    entry: Record<string, unknown>,
+    enabled: boolean,
+  ) => void
 }
 
 interface KvPair {
@@ -56,7 +65,7 @@ export function McpServerEditDialog({ target, onClose, onSave }: McpServerEditDi
   const [url, setUrl] = useState(prefill.url)
   const [env, setEnv] = useState<readonly KvPair[]>(prefill.env)
   const [headers, setHeaders] = useState<readonly KvPair[]>(prefill.headers)
-  const [enabled, setEnabled] = useState(prefill.enabled)
+  const [enabled, setEnabled] = useState(target.initialEnabled ?? true)
 
   const trimmedName = name.trim()
   const nameError = useMemo(() => {
@@ -111,8 +120,7 @@ export function McpServerEditDialog({ target, onClose, onSave }: McpServerEditDi
       const headerRecord = pairsToRecord(headers)
       if (Object.keys(headerRecord).length > 0) entry.headers = headerRecord
     }
-    if (!enabled) entry.disabled = true
-    onSave(scope, trimmedName, entry)
+    onSave(scope, trimmedName, entry, enabled)
   }
 
   return (
@@ -319,7 +327,6 @@ interface Prefill {
   readonly url: string
   readonly env: readonly KvPair[]
   readonly headers: readonly KvPair[]
-  readonly enabled: boolean
 }
 
 /** Best-effort form prefill from a raw entry (tolerates entries that would fail validation). */
@@ -338,6 +345,5 @@ function prefillFromRaw(raw: unknown): Prefill {
     url: typeof o.url === 'string' ? o.url : '',
     env: mcpServerPairs(o.env),
     headers: mcpServerPairs(o.headers),
-    enabled: o.disabled !== true,
   }
 }

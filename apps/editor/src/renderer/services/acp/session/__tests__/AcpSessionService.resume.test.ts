@@ -77,6 +77,7 @@ import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubExtensionMcpServersService } from './stubExtensionMcpServers.js'
+import { StubMcpServerEnablementService } from './stubMcpServerEnablement.js'
 import { StubFileService } from './stubFileService.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
@@ -439,6 +440,7 @@ function buildService(
     ),
     new StubFileService(),
     new StubExtensionMcpServersService(),
+    new StubMcpServerEnablementService(),
   )
   return { svc, client, history, agentDefaults, notifications, storage }
 }
@@ -1047,6 +1049,7 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
     )
     // Kick off history hydration but DO NOT await — race the resume call.
     void history.initialize()
@@ -1173,6 +1176,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
     )
     expect(svc.activeSession.get()).toBeUndefined()
     await svc.tryRestoreActiveSession()
@@ -1238,6 +1242,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
     )
     // Let _loadPendingRestore() resolve.
     await Promise.resolve()
@@ -1301,6 +1306,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
     )
     await Promise.resolve()
     await svc.tryRestoreActiveSession()
@@ -1366,6 +1372,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
     )
     await Promise.resolve()
     await Promise.all([svc.tryRestoreActiveSession(), svc.tryRestoreActiveSession()])

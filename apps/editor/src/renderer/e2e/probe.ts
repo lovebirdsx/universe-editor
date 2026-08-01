@@ -18,6 +18,7 @@ import {
   LifecyclePhase,
   LogLevel,
   StatusBarAlignment,
+  StorageScope,
   URI,
   onUnexpectedError,
   type ICommandService,
@@ -39,6 +40,7 @@ import {
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import type { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
+import type { IMcpServerEnablementService } from '../services/acp/mcpServerEnablementService.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import type { ITerminalManagerService } from '../services/terminal/TerminalManagerService.js'
@@ -93,6 +95,7 @@ export interface E2EProbeServices {
   readonly configurationService: IConfigurationService
   readonly storageService: IStorageService
   readonly acpSessionService: IAcpSessionService
+  readonly mcpServerEnablementService: IMcpServerEnablementService
   readonly outputService: IOutputService
   readonly updateService: IUpdateService
   readonly terminalService: ITerminalService
@@ -516,6 +519,10 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const s = services.acpSessionService.activeSession.get()
       if (!s) throw new Error('[E2E] no active ACP session')
       services.acpSessionService.setSessionMcpServers(s.id, names)
+    },
+    setAcpMcpServerEnabled: async (name, enabled) => {
+      await services.mcpServerEnablementService.whenReady
+      await services.mcpServerEnablementService.setEnabled(name, enabled, StorageScope.GLOBAL)
     },
     getAcpSessionStatus: () => services.acpSessionService.activeSession.get()?.status.get(),
     getAcpPendingElicitation: () => {

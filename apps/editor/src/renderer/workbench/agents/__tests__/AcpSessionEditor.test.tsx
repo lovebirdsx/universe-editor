@@ -107,9 +107,6 @@ function makeService(
     mcpServerDefinitions: observableValue('test.mcpDefs', []),
     async refreshMcpServerDefinitions(): Promise<void> {},
     setSessionMcpServers(): void {},
-    setMcpServerDefaultEnabled(): boolean {
-      return false
-    },
     async readProjectMcpJson(): Promise<Record<string, unknown>> {
       return {}
     },

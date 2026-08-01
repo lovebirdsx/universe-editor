@@ -47,6 +47,7 @@ import { __setRecoveryBackoffForTests, MAX_RECOVERY_ATTEMPTS } from '../acpSessi
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubExtensionMcpServersService } from './stubExtensionMcpServers.js'
+import { StubMcpServerEnablementService } from './stubMcpServerEnablement.js'
 import { StubFileService } from './stubFileService.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import {
@@ -306,6 +307,7 @@ function makeService(client: IAcpClientService, config: ConfigurationService): A
     ),
     new StubFileService(),
     new StubExtensionMcpServersService(),
+    new StubMcpServerEnablementService(),
   )
 }
 
