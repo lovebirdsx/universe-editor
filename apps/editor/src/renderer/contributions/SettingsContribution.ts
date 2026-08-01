@@ -37,6 +37,12 @@ import {
   STARTUP_WARNING_ENABLED_KEY,
   STARTUP_WARNING_RELEASE_THRESHOLD_KEY,
 } from '../services/performance/startupPerformanceSettings.js'
+import {
+  DEFAULT_RESPONSIVENESS_WARN_THRESHOLD_MS,
+  RESPONSIVENESS_ENABLED_KEY,
+  RESPONSIVENESS_STATUS_WARNING_ENABLED_KEY,
+  RESPONSIVENESS_WARN_THRESHOLD_KEY,
+} from '../services/performance/interactionPerfSettings.js'
 
 export class SettingsContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -652,6 +658,31 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             description: localize(
               'settings.performance.startupWarning.developmentThresholdMs.description',
               'Show a startup warning in development builds only when startup exceeds this many milliseconds.',
+            ),
+          },
+          [RESPONSIVENESS_ENABLED_KEY]: {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.performance.responsiveness.enabled.description',
+              'Continuously monitor interaction responsiveness (typing, clicks, tab switches) and log slow interactions with attribution to the window log. Near-zero overhead.',
+            ),
+          },
+          [RESPONSIVENESS_WARN_THRESHOLD_KEY]: {
+            type: 'number',
+            default: DEFAULT_RESPONSIVENESS_WARN_THRESHOLD_MS,
+            minimum: 50,
+            description: localize(
+              'settings.performance.responsiveness.warnThresholdMs.description',
+              'Log a warning for interactions slower than this many milliseconds.',
+            ),
+          },
+          [RESPONSIVENESS_STATUS_WARNING_ENABLED_KEY]: {
+            type: 'boolean',
+            default: false,
+            description: localize(
+              'settings.performance.responsiveness.statusWarning.enabled.description',
+              'Show a status bar warning when slow interactions occur frequently.',
             ),
           },
         },

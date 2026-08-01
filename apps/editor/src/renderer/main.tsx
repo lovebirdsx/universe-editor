@@ -68,6 +68,10 @@ import { IExtensionManagementService } from '../shared/ipc/extensionManagementSe
 import { type IAiModelMainService } from '../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../shared/ipc/aiDebugService.js'
 import { ITimerService } from './services/performance/TimerService.js'
+import {
+  IInteractionPerfService,
+  InteractionPerfService,
+} from './services/performance/InteractionPerfService.js'
 import { IRemoteSchemaService } from '../shared/ipc/remoteSchemaService.js'
 import { IClaudeConfigService } from '../shared/ipc/claudeConfigService.js'
 import { IDocsService } from '../shared/ipc/docsService.js'
@@ -522,6 +526,14 @@ async function bootstrapWorkbench(): Promise<void> {
     instantiation.createInstance(ClosedEditorsService),
   )
   services.set(IClosedEditorsService, closedEditorsService)
+
+  // Always-on interaction responsiveness floor (Event Timing + LoAF observers).
+  // Observers only attach when InteractionPerfContribution starts the service
+  // (default on) — registration here is inert state.
+  const interactionPerfService = workbenchStore.add(
+    instantiation.createInstance(InteractionPerfService),
+  )
+  services.set(IInteractionPerfService, interactionPerfService)
 
   // IDialogService — React-portal-backed; <DialogHost /> is mounted by Workbench.
   const dialogService = workbenchStore.add(new RendererDialogService())

@@ -603,6 +603,12 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.performance.startupWarning.enabled.description': '控制是否在状态栏显示慢启动警告。',
   'settings.performance.startupWarning.releaseThresholdMs.description':
     '仅当发布构建启动超过此毫秒数时显示启动警告。',
+  'settings.performance.responsiveness.enabled.description':
+    '持续监控交互响应（键入、点击、切标签页），交互变慢时在窗口日志中留下可归因的记录。开销接近零。',
+  'settings.performance.responsiveness.warnThresholdMs.description':
+    '交互耗时超过此毫秒数时记录警告日志。',
+  'settings.performance.responsiveness.statusWarning.enabled.description':
+    '当慢交互频繁发生时在状态栏显示警告。',
   'settings.readonly': '在表单视图中不可编辑',
   'settings.search': '搜索',
   'settings.search.exclude.description':

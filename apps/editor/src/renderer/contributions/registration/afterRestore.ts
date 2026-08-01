@@ -65,6 +65,7 @@ import { SessionChangesDiffSyncContribution } from '../SessionChangesDiffSyncCon
 import { DiffLiveContentSyncContribution } from '../DiffLiveContentSyncContribution.js'
 import { LargeFileOptimizationsContribution } from '../LargeFileOptimizationsContribution.js'
 import { TabSwitchPerfContribution } from '../TabSwitchPerfContribution.js'
+import { InteractionPerfContribution } from '../InteractionPerfContribution.js'
 import { TextMateContribution } from '../TextMateContribution.js'
 
 // `activeEditorHasJsonSchema` context key — drives the editor-title "Show JSON
@@ -534,6 +535,16 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.tabSwitchPerf',
   TabSwitchPerfContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Always-on responsiveness floor: Event Timing aggregation + slow-interaction
+// warn lines with phase/LoAF attribution, gated on performance.responsiveness.*
+// (default on, release included — passive observers cost ~nothing). Same phase
+// as the tab-switch watchdog; measurement only, no UI.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.interactionPerf',
+  InteractionPerfContribution,
   WorkbenchPhase.AfterRestore,
 )
 
