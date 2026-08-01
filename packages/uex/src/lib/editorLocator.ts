@@ -50,6 +50,9 @@ export function locateEditor(
   opts: { readonly flagPath?: string | undefined },
   deps: EditorLocatorDeps,
 ): LocatedEditor | null {
+  // Path math follows the *target* platform, not the host — the deps are
+  // injectable precisely so tests can probe win32 from a posix host.
+  const p = deps.platform === 'win32' ? path.win32 : path.posix
   if (opts.flagPath !== undefined) {
     if (!deps.exists(opts.flagPath)) {
       throw new UexError(`--editor-path does not exist: ${opts.flagPath}`, [
@@ -74,7 +77,7 @@ export function locateEditor(
     // to `..\Universe Editor.exe` relative to itself.
     const ueCmd = deps.which('ue.cmd')
     if (ueCmd) {
-      const exe = path.resolve(path.dirname(ueCmd), '..', PRODUCT_EXE)
+      const exe = p.resolve(p.dirname(ueCmd), '..', PRODUCT_EXE)
       const hit = candidate(deps, exe, 'path')
       if (hit) return hit
     }
@@ -82,14 +85,14 @@ export function locateEditor(
     if (localAppData) {
       const hit = candidate(
         deps,
-        path.join(localAppData, 'Programs', 'Universe Editor', PRODUCT_EXE),
+        p.join(localAppData, 'Programs', 'Universe Editor', PRODUCT_EXE),
         'install-dir',
       )
       if (hit) return hit
     }
     const installLocation = deps.regInstallLocation()
     if (installLocation) {
-      const hit = candidate(deps, path.join(installLocation, PRODUCT_EXE), 'registry')
+      const hit = candidate(deps, p.join(installLocation, PRODUCT_EXE), 'registry')
       if (hit) return hit
     }
     return null
@@ -98,7 +101,7 @@ export function locateEditor(
   if (deps.platform === 'darwin') {
     const hit = candidate(
       deps,
-      path.join('/Applications', PRODUCT_APP, 'Contents', 'MacOS', 'Universe Editor'),
+      p.join('/Applications', PRODUCT_APP, 'Contents', 'MacOS', 'Universe Editor'),
       'app-bundle',
     )
     if (hit) return hit
