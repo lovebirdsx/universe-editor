@@ -9,6 +9,9 @@
   - [registry.json 格式](#registryjson-格式)
   - [发布与下架](#发布与下架)
   - [本地端到端联调](#本地端到端联调)
+- [自助发布 API：uex publish 直达](#自助发布-apiuex-publish-直达)
+  - [token 签发与吊销](#token-签发与吊销)
+  - [服务端发布流水线](#服务端发布流水线)
 - [把客户端指向你的服务器](#把客户端指向你的服务器)
   - [三种配置方式](#三种配置方式)
   - [关于配置文件的一个坑](#关于配置文件的一个坑)
@@ -105,16 +108,21 @@ node scripts/server/server.mjs --root apps/editor/release --gallery-root market-
 
 ### 发布与下架
 
-从源码发布 `extensions-external/*` 的扩展，用 [`pnpm ext:release`](publishing-extensions.md)（自动 build + 打包 + 发布 + 上传，支持增量）：
+三条写入通道，写同一份 registry（格式由 `scripts/gallery/lib.mjs` 单点保证）：
+
+1. **自助发布 API（推荐，第三方/CI）**：开发者持 token 直接 `uex publish` 直达，无需运维经手——见下节[自助发布 API](#自助发布-apiuex-publish-直达)。
+2. **本地 stage + scp 上传（运维通道）**：登第一批内置扩展、灾备（server 挂了仍可静态重建 registry）、以及"第三方交 vsix 由运维代传"的受控兜底。
+3. **`pnpm ext:release`**：本仓库 `extensions-external/*` 从源码一键发布（build + 打包 + 发布 + 上传，支持增量），本质是通道 2 的封装，见[发布扩展](publishing-extensions.md)。
+
+> ⚠️ **通道 1 与通道 2/3 不要并发使用**：scp 整文件覆盖与 publish API 同时写 registry 理论上会互相撕。约定：启用 API 后 scp 通道仅灾备用。
+
+运维通道用法：
 
 ```bash
 pnpm ext:release                    # 发布所有有改动的外部扩展并上传
 pnpm ext:release -- --no-upload     # 只写本地 stage
-```
 
-若你手上已有现成的 `.vsix`（第三方产物），或想单独操作 stage/下架，用 [`scripts/gallery`](../../scripts/gallery/README.md) 的脚本（零依赖）：
-
-```bash
+# 手上已有现成的 .vsix（第三方产物），或想单独操作 stage/下架，用 scripts/gallery 的脚本：
 # 打包扩展成 .vsix 后，发布进本地 stage
 pnpm gallery:publish -- --stage ./market-stage path/to/universe.universe-pdf-0.1.0.vsix
 # 同步到服务器的市场根（--dir = server 的 --gallery-root；先 assets、后 registry.json，避免半态）
@@ -125,6 +133,8 @@ pnpm gallery:upload -- --stage ./market-stage --host <IP> --user deploy --dir /s
 pnpm gallery:unpublish -- --stage ./market-stage universe.universe-pdf@0.1.0
 ```
 
+注意运维通道的 `publish.mjs` **允许同版本覆盖**（带告警，用于受控修复）；自助 API 则强制版本不可变（409），这是供应链安全地基——两条通道的严格度刻意不同。
+
 ### 本地端到端联调
 
 ```bash
@@ -134,6 +144,59 @@ node scripts/server/server.mjs --root ./market-stage --gallery-root ./market-sta
 UNIVERSE_GALLERY_URL=http://localhost:8788 pnpm dev   # 扩展视图搜索 → 安装 → 生效
 # 便捷等价：pnpm gallery:serve
 ```
+
+## 自助发布 API：uex publish 直达
+
+内置服务器在静态市场之外还提供一套 **Bearer token 认证的自助发布 API**，让仓库外的开发者不依赖运维 scp 即可上架（对标 `vsce publish`）。三个端点（与 [`uex` CLI](../../packages/uex/README.md) 的 `login/publish/unpublish` 一一对应）：
+
+| 端点 | 方法 / 认证 | 行为 |
+| --- | --- | --- |
+| `{base}gallery/api/publish` | POST；`Authorization: Bearer <token>` | body 为 **VSIX 二进制流**（`application/octet-stream`）。成功 `201` 返回 `{ "id", "version" }` |
+| `{base}gallery/api/unpublish` | POST；Bearer | body JSON `{ "id": "<publisher>.<name>", "version": "1.2.3" \| null }`（`null` = 整扩展下架）。只能下架 token 归属 publisher 名下的条目 |
+| `{base}gallery/api/whoami` | GET；Bearer | `200 { "publisher": "acme" }`——`uex login` 用它验证 token 有效性 |
+
+状态码约定：认证失败一律 `401`（不区分 token 不存在/已吊销，不给探测面）；manifest publisher 与 token 归属不符 `403`；**同版本已存在 `409`（版本不可变——改内容必须 bump version，这是供应链安全地基，无例外）**；包体超限 `413`（默认 128MB，`--max-vsix-size` 字节数可配）。
+
+> **`uex --registry` 的地址是服务器 base、不带 `gallery`**：例如 server 以 `--base /universe-editor/` 部署在 `https://market.example.com`，则 `uex login acme --registry https://market.example.com/universe-editor`。uex 会自行拼 `gallery/api/...` 后缀；编辑器侧 `GALLERY_URL` 同理（两者指向同一个 base）。
+
+开发者侧全流程（`uex` 的安装与更多命令见其 [README](../../packages/uex/README.md)）：
+
+```bash
+uex login acme --registry <服务器 base>      # 贴运维签发的 token；whoami 验证后存 ~/.uex/config.json
+uex publish                                  # 打包 + 上传；CI 里用 UNIVERSE_MARKET_TOKEN 传 token
+uex unpublish acme.demo@1.0.0                # 下架某个版本
+```
+
+### token 签发与吊销
+
+认证数据存 **`--auth-dir`（默认 `<root>/../auth`）下的 `publishers.json`**，只存 token 的 sha256 哈希与 label/时间戳。🔴 **红线：`--auth-dir` 绝不允许落在任何静态服务目录（`--root` / `--gallery-root`）之内**——`gallery/**` 整个是公开静态命名空间，落进去等于把哈希表公开下载；server 启动时自检，命中直接拒绝启动。
+
+签发/吊销用 [`scripts/gallery/token.mjs`](../../scripts/gallery/README.md)（直接读写服务器上的 `publishers.json`：ssh 上去跑，或对本地副本跑完随既有 scp 通道上传；server 按 mtime 自动重载，**无需重启**）：
+
+```bash
+# 签发：明文只打印一次（此后不可再查，泄露只能吊销重签）；publisher 首次出现即隐式创建
+pnpm gallery:token -- issue --publisher acme --label zhangsan-laptop --auth-dir /srv/auth
+# 吊销（label 定点，立即生效）与盘点（只列 label/时间，不列哈希）
+pnpm gallery:token -- revoke --publisher acme --label zhangsan-laptop --auth-dir /srv/auth
+pnpm gallery:token -- list --auth-dir /srv/auth
+```
+
+> ⚠️ **HTTPS 是 token 安全的前提**：token 以 Bearer 明文过线。公网/跨办公网部署必须置于 TLS 反代之后（server 自身不做 TLS，反代是标准解）；纯内网 HTTP 部署请自知风险等级。
+
+### 服务端发布流水线
+
+发布侧是[客户端防投毒校验](#防投毒客户端会做的一致性校验)的对称另一半：**registry 元数据只从服务端亲自解开的 VSIX 里抽取，客户端上传时声称什么一概不信**。一次 publish 的处理顺序：
+
+1. Bearer token → sha256 → `publishers.json` 查归属（revoked 拒）；
+2. 请求体**流式落盘**临时文件，边写边计体积（超限中断 `413`，不整包进内存）；
+3. 亲自读包内 `extension/package.json` 并过 **zod 校验**（与宿主同一份 schema）；
+4. manifest `publisher` 必须等于 token 归属，否则 `403`；
+5. registry 已有 `<id>@<version>` → `409`；
+6. 抽 icon/README/CHANGELOG 落 `assets/<id>/<version>/`（zip entry 名一律 basename 化后落地，zip-slip 免疫；staging 目录写完原子 rename）；
+7. 原子更新 `registry.json`（先 assets 后 registry 的既有约定；写后显式失效进程内缓存，紧随其后的搜索立即可见）；
+8. 审计日志记录 publish/unpublish（who/id/version）——日志即内部阶段的审计面。
+
+发布实现依赖解 zip 与 zod，因此部署形态是 **esbuild 打包的单文件产物**（`scripts/server/dist/server.js`，仓库内 `pnpm server:bundle` 生成），而非直接跑源码 `server.mjs`——部署流程仍是"一个文件 + node"，见 [`scripts/server/README.md`](../../scripts/server/README.md)。
 
 ## 把客户端指向你的服务器
 

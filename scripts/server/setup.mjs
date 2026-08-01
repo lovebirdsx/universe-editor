@@ -120,16 +120,27 @@ function buildConfig(args) {
     root,
     // 市场根，默认 <root>/gallery；--gallery-root 可指向独立目录/磁盘。
     galleryRoot: resolve(args['gallery-root'] ?? join(root, 'gallery')),
+    // publish API 认证目录（publishers.json）。默认 <root>/../auth，绝不能在静态根之内。
+    authDir: resolve(args['auth-dir'] ?? resolve(root, '..', 'auth')),
     port: String(args.port ?? d.port),
     base: args.base ?? d.base,
   }
 }
 
-// 把 server.mjs 拷到独立安装目录，让服务不依赖仓库存在。
+// 把打包产物（单文件，publish API 依赖已内联）拷到独立安装目录，让服务不依赖仓库存在。
+// dist/server.js 由仓库侧 `pnpm server:bundle` 生成——部署方须先把 scripts/server/ 整目录
+// （含 dist/）带到服务器，服务器上没有 node_modules 可解析 adm-zip/zod。
 function deployServer(appDir) {
+  const bundled = join(__dirname, 'dist', 'server.js')
+  if (!existsSync(bundled)) {
+    die(
+      `缺少打包产物 ${bundled}\n` +
+        '  发布流程: 在仓库内跑 pnpm server:bundle，再把 scripts/server/ 整目录拷到服务器执行本脚本',
+    )
+  }
   mkdirSync(appDir, { recursive: true })
   const dest = join(appDir, 'server.mjs')
-  copyFileSync(join(__dirname, 'server.mjs'), dest)
+  copyFileSync(bundled, dest)
   return dest
 }
 
@@ -146,6 +157,7 @@ function installLinux(cfg) {
   const serverPath = deployServer(cfg.appDir)
   mkdirSync(cfg.root, { recursive: true })
   mkdirSync(cfg.galleryRoot, { recursive: true })
+  mkdirSync(cfg.authDir, { recursive: true })
 
   const unit = `[Unit]
 Description=Universe Editor 更新分发静态服务器
@@ -155,7 +167,7 @@ After=network.target
 Type=simple
 User=www-data
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-ExecStart=${nodePath} ${serverPath} --root ${cfg.root} --gallery-root ${cfg.galleryRoot} --port ${cfg.port} --base ${cfg.base}
+ExecStart=${nodePath} ${serverPath} --root ${cfg.root} --gallery-root ${cfg.galleryRoot} --auth-dir ${cfg.authDir} --port ${cfg.port} --base ${cfg.base}
 Restart=always
 RestartSec=2
 StandardOutput=journal
@@ -167,10 +179,14 @@ WantedBy=multi-user.target
   writeFileSync(unitPath(), unit)
   info(`已写入 ${unitPath()}`)
 
-  // 发布目录 + 市场根归 www-data 可读写（上传脚本用别的账号写，运行用 www-data 读）。
+  // 发布目录 + 市场根 + 认证目录归 www-data 可读写（上传脚本用别的账号写，运行用 www-data 读；
+  // publish API 运行时还要写 galleryRoot 的资产与 registry）。
   run('chown', ['-R', 'www-data:www-data', cfg.root], { ignoreFail: true })
   if (!cfg.galleryRoot.startsWith(cfg.root + '/')) {
     run('chown', ['-R', 'www-data:www-data', cfg.galleryRoot], { ignoreFail: true })
+  }
+  if (!cfg.authDir.startsWith(cfg.root + '/')) {
+    run('chown', ['-R', 'www-data:www-data', cfg.authDir], { ignoreFail: true })
   }
 
   run('systemctl', ['daemon-reload'])
@@ -210,9 +226,10 @@ function installWin(cfg) {
   const serverPath = deployServer(cfg.appDir)
   mkdirSync(cfg.root, { recursive: true })
   mkdirSync(cfg.galleryRoot, { recursive: true })
+  mkdirSync(cfg.authDir, { recursive: true })
 
   // /TR 全绝对路径：任务以 SYSTEM 跑、cwd 是 system32、无用户 PATH。
-  const tr = `"${nodePath}" "${serverPath}" --root "${cfg.root}" --gallery-root "${cfg.galleryRoot}" --port ${cfg.port} --base ${cfg.base}`
+  const tr = `"${nodePath}" "${serverPath}" --root "${cfg.root}" --gallery-root "${cfg.galleryRoot}" --auth-dir "${cfg.authDir}" --port ${cfg.port} --base ${cfg.base}`
   run('schtasks', [
     '/Create',
     '/TN',
@@ -284,6 +301,7 @@ console.log(`\n🔧 universe-update-server setup [${action}] (${process.platform
 console.log(`   appDir:      ${cfg.appDir}`)
 console.log(`   root:        ${cfg.root}`)
 console.log(`   galleryRoot: ${cfg.galleryRoot}`)
+console.log(`   authDir:     ${cfg.authDir}`)
 console.log(`   port:        ${cfg.port}  base: ${cfg.base}\n`)
 
 switch (action) {

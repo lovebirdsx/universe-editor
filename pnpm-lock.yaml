@@ -210,6 +210,15 @@ importers:
       '@universe-editor/config-eslint':
         specifier: workspace:*
         version: link:packages/config-eslint
+      '@universe-editor/extension-packaging':
+        specifier: workspace:*
+        version: link:packages/extension-packaging
+      adm-zip:
+        specifier: 'catalog:'
+        version: 0.5.18
+      esbuild:
+        specifier: 'catalog:'
+        version: 0.25.12
       eslint:
         specifier: 'catalog:'
         version: 9.39.4

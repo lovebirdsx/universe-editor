@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -16,6 +16,7 @@ import {
   metadataFromManifest,
   upsertVersion,
   removeFromRegistry,
+  writeJsonAtomic,
 } from '../lib.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -128,6 +129,19 @@ test('removeFromRegistry 删版本与删整个扩展', () => {
   assert.equal(reg.extensions.length, 0)
 
   assert.equal(removeFromRegistry(reg, 'no', 'ne').found, false)
+})
+
+test('writeJsonAtomic 写入并可覆盖，JSON 完整可读，不留 tmp 文件', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ue-atomic-'))
+  const file = join(dir, 'nested', 'data.json')
+  writeJsonAtomic(file, { a: 1 })
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { a: 1 })
+  writeJsonAtomic(file, { a: 2, b: 'x' })
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { a: 2, b: 'x' })
+  assert.deepEqual(
+    readdirSync(join(dir, 'nested')).filter((f) => f.startsWith('.tmp-')),
+    [],
+  )
 })
 
 test('publish.mjs 端到端：写 registry + 落地 assets', () => {

@@ -1,17 +1,25 @@
 #!/usr/bin/env node
 /*---------------------------------------------------------------------------------------------
- *  Universe Editor 更新分发用的零依赖静态 HTTP 服务器。
+ *  Universe Editor 更新分发 + 扩展市场的 HTTP 服务器。
  *
  *  electron-updater 的 generic provider 只需要一个能按 URL 取静态文件的 HTTP 服务：
  *    GET <base>/latest.yml   读清单比对版本
  *    GET <base>/*.exe        下载安装包（差分时带 Range）
  *    GET <base>/*.blockmap   差分下载的块映射（带 Range，可能是多段）
  *
+ *  同一进程也是扩展市场后端（docs/development/marketplace-server.md）：
+ *    POST <base>/extensionquery            市场搜索（静态 registry.json 内存过滤）
+ *    GET  <base>/gallery/**                VSIX / 图标 / README 静态资产
+ *    POST <base>/gallery/api/publish       自助发布（Bearer token，见 galleryPublish.mjs）
+ *    POST <base>/gallery/api/unpublish     自助下架
+ *    GET  <base>/gallery/api/whoami        验证 token 归属
+ *
  *  用法（在仓库根目录，本地联调）:
  *    node scripts/server/server.mjs --root apps/editor/release --port 8788 --base /
- *  生产由 setup.mjs 注册成系统服务后台跑，无需手动调用。
+ *  生产由 setup.mjs 注册成系统服务后台跑（部署 esbuild 打包产物 dist/server.js，见 bundle.mjs）。
  *
- *  只用 node 内置模块，无第三方依赖。
+ *  静态/更新服务只用 node 内置模块；publish API 经 lazy import 引入 extension-packaging
+ *  （zod 校验 + adm-zip），未命中 API 路径时不加载。
  *--------------------------------------------------------------------------------------------*/
 
 import { createServer } from 'node:http'
@@ -58,6 +66,11 @@ const config = {
   galleryRoot: resolve(
     args['gallery-root'] ?? process.env.UE_SERVER_GALLERY_ROOT ?? join(root, 'gallery'),
   ),
+  // publish API 认证数据（publishers.json）。🔴 绝不允许落在任何静态根之内——
+  // gallery/** 整个是公开静态命名空间，进去等于把 token 哈希表公开下载。
+  authDir: resolve(args['auth-dir'] ?? process.env.UE_SERVER_AUTH_DIR ?? resolve(root, '..', 'auth')),
+  // publish 上传体积上限（字节）。
+  maxVsixSize: Number(args['max-vsix-size'] ?? process.env.UE_SERVER_MAX_VSIX_SIZE ?? 128 << 20),
   port: Number(args.port ?? process.env.UE_SERVER_PORT ?? 80),
   host: args.host ?? process.env.UE_SERVER_HOST ?? '0.0.0.0',
   base: normalizeBase(args.base ?? process.env.UE_SERVER_BASE ?? '/universe-editor/'),
@@ -65,6 +78,14 @@ const config = {
 
 if (!Number.isInteger(config.port) || config.port <= 0 || config.port > 65535) {
   die(`--port 非法: ${config.port}`)
+}
+if (!Number.isFinite(config.maxVsixSize) || config.maxVsixSize <= 0) {
+  die(`--max-vsix-size 非法: ${config.maxVsixSize}`)
+}
+for (const staticRoot of [config.root, config.galleryRoot]) {
+  if (config.authDir === staticRoot || config.authDir.startsWith(staticRoot + sep)) {
+    die(`--auth-dir 不能落在静态服务目录（${staticRoot}）之内: ${config.authDir}`)
+  }
 }
 
 const MIME = {
@@ -223,6 +244,11 @@ function readJsonCached(file, fallback) {
     console.error(`\x1b[33m⚠ 解析失败 ${file}: ${err?.message ?? err}\x1b[0m`)
     return fallback
   }
+}
+
+// publish/unpublish 自己写 registry 后显式失效（mtime 判定之外的确定性保证）。
+function invalidateJsonCache(file) {
+  jsonCache.delete(file)
 }
 
 function loadRegistry() {
@@ -413,9 +439,49 @@ function requestOrigin(req) {
   return `${proto}://${host}`
 }
 
+// galleryPublish.mjs 的 lazy import 缓存（首次命中 publish API 时加载）。
+let galleryApiPromise
+
 // 处理市场端点。命中返回 true（已响应），否则 false（交回静态文件处理）。
 async function handleGallery(req, res, pathname) {
   const rel = pathname.slice(config.base.length) // base 命中后的相对路径
+
+  // 自助发布 API（Bearer token；流水线在 galleryPublish.mjs）。
+  if (rel === 'gallery/api/publish' || rel === 'gallery/api/unpublish' || rel === 'gallery/api/whoami') {
+    if (rel !== 'gallery/api/whoami' && req.method !== 'POST') return false // 静态处理会给 405/404
+    if (rel === 'gallery/api/whoami' && req.method !== 'GET') return false
+    // lazy：静态/更新服务在源码态保持零依赖，命中 API 才需要 extension-packaging dist。
+    galleryApiPromise ??= import('./galleryPublish.mjs').then((m) =>
+      m.createGalleryApi({
+        galleryRoot: config.galleryRoot,
+        authDir: config.authDir,
+        maxVsixSize: config.maxVsixSize,
+        send,
+        logLine,
+        readJsonCached,
+        invalidateJsonCache,
+        readBody,
+      }),
+    )
+    try {
+      const api = await galleryApiPromise
+      return await api.handle(req, res, rel)
+    } catch (err) {
+      if (!res.headersSent) {
+        send(
+          req,
+          res,
+          500,
+          `publish API 不可用: ${err?.message ?? err}（源码直跑需先 pnpm build 构建 extension-packaging，部署形态用 pnpm server:bundle 产物）`,
+        )
+      } else {
+        res.end()
+        logLine(req, 500, 'publish api mid-response failure')
+      }
+      console.error(`\x1b[31m✗ publish api ${rel}: ${err?.stack ?? err}\x1b[0m`)
+      return true
+    }
+  }
 
   if (rel === 'extensionquery') {
     if (req.method !== 'POST') return false // 静态处理会给 405/404
@@ -610,6 +676,7 @@ server.listen(config.port, config.host, () => {
   console.log(
     `   市场根: ${config.galleryRoot}${galleryExists ? '' : ' (暂不存在，市场搜索将为空)'}`,
   )
+  console.log(`   认证目录: ${config.authDir}（publish API；token 用 scripts/gallery/token.mjs 签发）`)
   console.log(`   路径段: ${config.base}`)
   console.log(`   node:   ${process.version}\n`)
 })

@@ -1,5 +1,7 @@
 # 04 — 自助发布通路：市场后端的 publisher/token 模型与 publish API
 
+> ✅ 已完成（2026-08-01）。`scripts/server/server.mjs` 挂 `gallery/api/{publish,unpublish,whoami}`（流水线在 `galleryPublish.mjs`）；`scripts/gallery/token.mjs` 签发/吊销；esbuild 单文件产物 `scripts/server/dist/server.js`（`pnpm server:bundle`，`setup.mjs` 部署该产物）；测试含 uex CLI 真联调（`scripts/server/__tests__/uex-publish.integration.test.mjs`）。运维与协议文档见 `docs/development/marketplace-server.md`「自助发布 API」节。
+>
 > Phase D。目标：拿到 token 的第三方开发者 `uex publish` 直达市场，运维不再人肉 scp。
 > 现状：`scripts/server/server.mjs`（626 行零依赖静态服务器）已挂 `/extensionquery`（POST，先于静态判定）+ `gallery/**` 静态托管；registry 由维护者本地跑 `scripts/gallery/publish.mjs` 生成后 `upload.mjs` scp 上去。
 > 决策背景（README 决策 1+2）：自助 token 发布，但**两步走**——本阶段只做"运维签发 token + 服务端认证 API"；自助注册/邮箱验证是公开阶段的事（[06](./06-public-phase-roadmap.md)）。

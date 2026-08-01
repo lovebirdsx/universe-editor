@@ -1,16 +1,18 @@
 # 自建更新服务器（跨平台一键 · 服务化）
 
 Universe Editor 通过 **electron-updater 的 generic provider** 从一个**静态 HTTP 服务器**拉取更新。
-本目录提供一套**零依赖 Node 服务器 + 一键安装脚本**，可在 **Ubuntu 和 Windows** 上从0搭起，并注册成
-**开机自启的后台服务**。
+本目录提供一套**单文件 Node 服务器（esbuild 打包产物，零外部依赖）+ 一键安装脚本**，可在
+**Ubuntu 和 Windows** 上从0搭起，并注册成**开机自启的后台服务**。
 
 > 与 `scripts/release/README.md` 里的 **nginx 手动方案二选一**：那套适合已有 nginx 的 Linux 机器；
 > 本套适合「裸机、一键、跨平台、Windows 也要」的场景，自带 Range/差分下载与禁缓存处理。
 
 > **同一进程也是扩展市场后端**。`server.mjs` 除服务自动更新外，还按发布目录下的 `gallery/registry.json`
-> 生成 `/extensionquery` 响应、静态托管 `.vsix`，即 [`docs/development/marketplace-server.md`](../../docs/development/marketplace-server.md)
-> 描述的市场后端。搭好本服务器就自带市场，无需另装。市场内容（registry / vsix）用
-> [`scripts/gallery`](../gallery/README.md) 的脚本发布，见本文[「市场内容发布」](#九市场内容发布)节。
+> 生成 `/extensionquery` 响应、静态托管 `.vsix`、并挂 token 认证的自助发布 API（`gallery/api/*`），即
+> [`docs/development/marketplace-server.md`](../../docs/development/marketplace-server.md) 描述的市场后端。
+> 搭好本服务器就自带市场，无需另装。市场内容（registry / vsix）可用
+> [`scripts/gallery`](../gallery/README.md) 的脚本发布（见[「市场内容发布」](#九市场内容发布)节），
+> 或开放第三方经 token 自助 `uex publish`（见[「市场自助发布」](#十市场自助发布publish-token-运维)节）。
 
 整体链路：
 
@@ -28,9 +30,11 @@ Universe Editor 通过 **electron-updater 的 generic provider** 从一个**静�
 
 | 文件 | 作用 |
 |---|---|
-| `server.mjs` | 零依赖静态服务器核心。两平台共用。处理 latest.yml 禁缓存、Range/多段 Range（差分下载）、路径穿越防护；目录请求回退到同目录 `index.html`（下载页）。 |
+| `server.mjs` | 静态服务器核心。两平台共用。处理 latest.yml 禁缓存、Range/多段 Range（差分下载）、路径穿越防护；目录请求回退到同目录 `index.html`（下载页）。还挂市场路由（`/extensionquery`、`gallery/**` 静态、`gallery/api/*` 自助发布 API）。 |
+| `galleryPublish.mjs` | 自助发布 API 流水线（token 认证、解 VSIX 校验、registry 原子更新）。由 `server.mjs` 在命中 `gallery/api/*` 时 lazy import。 |
+| `bundle.mjs` | 打包脚本（`pnpm server:bundle`）：把 server + 发布依赖（adm-zip/zod/extension-packaging）esbuild 成单文件产物 `dist/server.js`。**部署跑的是这个产物**（服务器上无 node_modules）。 |
 | `download-page/index.html` | 面向用户的静态下载页。纯前端，运行时读同目录 `latest.yml` / `release-notes.json`，展示最新版本、发布日期与更新日志，并提供下载按钮。发布时由 `release:upload` 同步到发布目录。 |
-| `setup.mjs` | 跨平台部署逻辑（按平台分支）：拷文件 / 注册服务 / 防火墙 / 启停 / 卸载。 |
+| `setup.mjs` | 跨平台部署逻辑（按平台分支）：拷 `dist/server.js` / 注册服务 / 防火墙 / 启停 / 卸载。 |
 | `setup.sh` | **Ubuntu 入口**：自检 root → 装 Node（缺则装）→ 调 `setup.mjs`。 |
 | `setup.ps1` | **Windows 入口**：自检管理员 → winget 装 Node → 调 `setup.mjs`。 |
 
@@ -40,7 +44,13 @@ Universe Editor 通过 **electron-updater 的 generic provider** 从一个**静�
 
 ## 一、搭建（在服务器上）
 
-把本目录（`scripts/server/`）整个拷到服务器任意位置，然后：
+先在**仓库内**构建部署产物（publish API 需要解 zip/zod，单文件产物已把这些依赖内联）：
+
+```bash
+pnpm install && pnpm server:bundle    # 产出 scripts/server/dist/server.js
+```
+
+然后把本目录（`scripts/server/`，**含 `dist/`**）整个拷到服务器任意位置，然后：
 
 ### Ubuntu
 
@@ -66,10 +76,11 @@ cd scripts\server
 | 服务程序安装目录 | `/opt/universe-update-server/` | `C:\universe-editor\app\` |
 | 发布目录（更新产物落地） | `/srv/universe-editor` | `C:\universe-editor\data` |
 | 市场根（扩展内容落地） | `/srv/universe-editor/gallery` | `C:\universe-editor\data\gallery` |
+| 认证目录（publish token，静态根之外） | `/srv/auth` | `C:\universe-editor\auth` |
 | 端口 | `80` | `80` |
 | URL 前缀（`--base`） | `/universe-editor/` | `/universe-editor/` |
 
-可用 `--root` / `--gallery-root` / `--port` / `--base` 覆盖。**`--gallery-root` 默认 `<root>/gallery`（合并部署）**，想把扩展内容放另一块磁盘/另一套权限时指向独立目录即可（如 `--gallery-root /data/extensions`）——URL 上市场始终挂在 `{base}gallery/`，与磁盘位置无关。
+可用 `--root` / `--gallery-root` / `--auth-dir` / `--port` / `--base` 覆盖。**`--gallery-root` 默认 `<root>/gallery`（合并部署）**，想把扩展内容放另一块磁盘/另一套权限时指向独立目录即可（如 `--gallery-root /data/extensions`）——URL 上市场始终挂在 `{base}gallery/`，与磁盘位置无关。**`--auth-dir` 默认 `<root>/../auth`，绝不允许落在 `--root` 或 `--gallery-root` 之内**（publish token 哈希表会被静态服务公开下载；server 启动自检命中即拒绝启动）。
 
 ---
 
@@ -147,16 +158,16 @@ schtasks /Query /TN UniverseUpdateServer /V /FO LIST   # 状态
 
 ## 六、更新服务器程序（改了 `server.mjs` 后）
 
-服务器跑的是 setup 部署时拷到安装目录的 `server.mjs` **副本**（Ubuntu `/opt/universe-update-server/`、Windows `C:\universe-editor\app\`），且进程已把它加载进内存。改了仓库里的源码后，要把新文件送上去**并重启进程**才生效——只 `git pull` 或重传文件不够。
+服务器跑的是 setup 部署时拷到安装目录的 `server.mjs` **副本**（Ubuntu `/opt/universe-update-server/`、Windows `C:\universe-editor\app\`），内容是 **`dist/server.js` 打包产物**（依赖已内联），且进程已把它加载进内存。改了仓库里的源码后，要**重新打包**、把新产物送上去**并重启进程**才生效——只 `git pull` 或重传文件不够。
 
 改动一般向后兼容，可热替换；重启的一两秒内 systemd / 计划任务会自动拉起，不影响客户端正在进行的自动更新。
 
-先让服务器拿到新 `server.mjs`：服务器上有仓库就 `git pull`，否则从开发机 `scp scripts/server/server.mjs <user>@<IP>:~/`。然后：
+先在仓库侧 `pnpm server:bundle` 重新打包，让服务器拿到新产物：服务器上有仓库就 `git pull && pnpm install && pnpm server:bundle`，否则从开发机 `scp scripts/server/dist/server.js <user>@<IP>:~/`。然后：
 
 ### Ubuntu
 
 ```bash
-sudo cp scripts/server/server.mjs /opt/universe-update-server/server.mjs
+sudo cp scripts/server/dist/server.js /opt/universe-update-server/server.mjs
 sudo systemctl restart universe-update-server
 systemctl status universe-update-server          # 确认 active (running)
 ```
@@ -164,7 +175,7 @@ systemctl status universe-update-server          # 确认 active (running)
 ### Windows（管理员 PowerShell）
 
 ```powershell
-Copy-Item scripts\server\server.mjs C:\universe-editor\app\server.mjs -Force
+Copy-Item scripts\server\dist\server.js C:\universe-editor\app\server.mjs -Force
 schtasks /End /TN UniverseUpdateServer           # 先停旧实例，避免端口占用
 schtasks /Run /TN UniverseUpdateServer           # 用新文件起进程
 ```
@@ -237,4 +248,33 @@ curl -X POST http://localhost/universe-editor/extensionquery \
   -H 'Content-Type: application/json' \
   -d '{"filters":[{"criteria":[{"filterType":10,"value":""}],"pageNumber":1,"pageSize":50}],"flags":787}'
 curl -i http://localhost/universe-editor/control.json
+```
+
+---
+
+## 十、市场自助发布（publish token 运维）
+
+服务器还挂了 Bearer token 认证的发布 API（`POST {base}gallery/api/publish` 等），让第三方开发者用 [`uex`](../../packages/uex/README.md) 直接上架，运维不再人肉 scp。完整协议与服务端流水线见 [`docs/development/marketplace-server.md`](../../docs/development/marketplace-server.md)「自助发布 API」节，这里只列运维动作。
+
+token 数据存 **`--auth-dir`（默认 `<root>/../auth`）的 `publishers.json`**（只存 sha256 哈希；server 按 mtime 自动重载，改完免重启）。用 [`scripts/gallery/token.mjs`](../gallery/README.md) 签发/吊销——直接读写服务器上的文件（ssh 上去跑），或对本地副本跑完随 `gallery:upload` 通道上传：
+
+```bash
+# 签发（明文只打印一次，交付给开发者用于 uex login；publisher 首次隐式创建）
+pnpm gallery:token -- issue --publisher acme --label zhangsan-laptop --auth-dir /srv/auth
+# 吊销（label 定点，立即生效）/ 盘点
+pnpm gallery:token -- revoke --publisher acme --label zhangsan-laptop --auth-dir /srv/auth
+pnpm gallery:token -- list --auth-dir /srv/auth
+```
+
+安全要点：
+
+- 🔴 `--auth-dir` 绝不能在 `--root` / `--gallery-root` 之内（启动自检会拒），否则 token 哈希表被静态服务公开下载。
+- ⚠️ token 走 Bearer 明文过线，**公网/跨办公网部署必须置于 TLS 反代之后**（server 自身不做 TLS）。
+- 上传体积上限 `--max-vsix-size`（默认 128MB）。限流未做（内部信任环境），公开前见公开阶段清单。
+- 版本不可变：同版本重发一律 409，改内容必须 bump version——服务端强制，无例外。
+
+验证（token 签发后）：
+
+```bash
+curl -i http://localhost/universe-editor/gallery/api/whoami -H "Authorization: Bearer uet_xxx"   # 200 {"publisher":"acme"}
 ```

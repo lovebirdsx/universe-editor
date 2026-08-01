@@ -47,7 +47,7 @@
 | 开发调试 | F5 → Extension Development Host + 断点 | `--extension-development-path` + `--inspect-extensions` + launch.json 模板 | 无（仅 e2e env hack） |
 | 快速迭代 | Reload Window / restartExtensionHost | `workbench.action.restartExtensionHost` 命令 + 可选 watch 自动重载 | host 重启机制已有，无命令入口 |
 | 打包 | `vsce package` → .vsix | `uex package` | `createVsix` 逻辑已有（`extension-packaging`），无对外 CLI |
-| 发布 | `vsce publish`（PAT token） | `uex publish`（Bearer token） | 无（运维手动 scp） |
+| 发布 | `vsce publish`（PAT token） | `uex publish`（Bearer token） | ✅ 已落地（token 认证 API + 联调测试） |
 | 市场侧账号 | Marketplace publisher 注册 | 内部阶段运维发 token；公开阶段自助注册（Phase F） | 无 |
 | 学习资料 | code.visualstudio.com/api + samples 仓库 | `docs/extension-dev/` + 外部形态 hello-world 样例 | 无 |
 
@@ -97,7 +97,7 @@
 | 重启 host 命令 | `workbench.action.restartExtensionHost` | Action2 包一层现成 `_restart`；可选 dev path watch 自动重载 | [02](./02-dev-experience.md) |
 | 脚手架 ✅ | `yo code` | `@universe-editor/create-extension`：basic / webview 两模板，含 launch.json、esbuild、watch | [03](./03-toolchain.md) |
 | 打包/发布 CLI ✅ | `vsce` | `@universe-editor/uex`：`package`（复用 extension-packaging）、`dev`（定位并拉起编辑器）、`login`/`publish` | [03](./03-toolchain.md) |
-| 自助发布后端 | Marketplace publish API | server 加 `POST /api/gallery/publish` 等端点 + publisher/token 模型 + 服务端防投毒校验 + 版本不可变 | [04](./04-publishing-backend.md) |
+| 自助发布后端 ✅ | Marketplace publish API | server 加 `gallery/api/publish` 等端点 + publisher/token 模型 + 服务端防投毒校验 + 版本不可变 | [04](./04-publishing-backend.md) |
 | 对外开发者文档 | code.visualstudio.com/api | `docs/extension-dev/zh-CN/`：getting-started、贡献点参考、webview/语言指南、发布、移植指南 | [05](./05-docs-and-samples.md) |
 | 外部形态样例 | extension-samples 仓库 | `samples/hello-world`（不进 workspace、真 npm 依赖）+ CI 外部消费者冒烟 job | [05](./05-docs-and-samples.md) |
 | 公开阶段硬化 | publisher 注册 / vsce-sign | 自助注册、VSIX 签名、审核 SOP、API 1.0 —— 只登记 | [06](./06-public-phase-roadmap.md) |
@@ -131,8 +131,10 @@ packages/extension-host/src/
   bootstrap.ts / extensionScanner.ts     【改】三目录合并扫描（builtin/user/dev），id 冲突 dev 胜（02）
   activationService.ts                   【改】isUnderDevelopment 豁免 trust 门控（02）
 
-scripts/server/server.mjs               【改】+POST /api/gallery/{publish,unpublish} + GET /api/gallery/whoami（04）
-scripts/gallery/token.mjs      🆕       运维签发/吊销 publisher token（04）
+scripts/server/server.mjs               【改】✅ +gallery/api/{publish,unpublish,whoami}（04）
+scripts/server/galleryPublish.mjs 🆕✅   publish 服务端流水线（防投毒：亲自解包校验）（04）
+scripts/server/bundle.mjs       🆕✅     esbuild 单文件产物 dist/server.js（04）
+scripts/gallery/token.mjs       🆕✅     运维签发/吊销 publisher token（04）
 
 docs/extension-dev/zh-CN/      🆕       第三方开发者文档全套（05）
 samples/hello-world/           🆕       外部形态样例（不进 workspace）（05）
@@ -201,14 +203,14 @@ samples/hello-world/           🆕       外部形态样例（不进 workspace�
 - `@universe-editor/uex`：`package`（extension-packaging 封装 + manifest 校验前置）、`dev`（定位已装编辑器并带 dev 参数拉起）、`login`/`publish`（客户端先行，服务端 Phase D 联调）
 - **验证**：`npm create` → `uex dev` 起宿主 F5 断点 → `uex package` 出 .vsix → 编辑器"从 VSIX 安装"成功
 
-### Phase D — 自助发布通路（[04](./04-publishing-backend.md)）
+### Phase D — 自助发布通路（[04](./04-publishing-backend.md)）✅ 已完成（2026-08-01）
 > 目标：拿到 token 的第三方 `uex publish` 直达市场。
 
-- server：publisher/token 模型（`publishers.json`，存 token 哈希）+ `POST /api/gallery/publish`（Bearer + vsix 流）+ `unpublish` + `whoami`
-- 服务端防投毒：**亲自**读 VSIX 的 `extension/package.json`（不信任客户端元数据），publisher 必须等于 token 归属，同版本不可覆盖
-- registry 原子更新沿用"先 assets 后 registry"约定；`scripts/gallery/token.mjs` 运维签发/吊销
-- `uex login`（token 存本地配置 + env 覆盖）/ `uex publish` 打通
-- **验证**：本地起 server → 签 token → `uex publish` → 编辑器搜到并安装；`pnpm test:release` 扩认证/一致性/不可变用例
+- server：publisher/token 模型（`<authDir>/publishers.json`，存 token 哈希）+ `POST gallery/api/publish`（Bearer + vsix 流）+ `unpublish` + `whoami`；auth-dir 落入静态根启动自检硬拒
+- 服务端防投毒：**亲自**读 VSIX 的 `extension/package.json`（extension-packaging 的 zod 校验，与宿主同 schema），publisher 必须等于 token 归属，同版本 409 不可变；流式落盘 + `--max-vsix-size` 413
+- registry 原子更新（`writeJsonAtomic` + 缓存显式失效）沿用"先 assets 后 registry"约定；`scripts/gallery/token.mjs` 运维签发/吊销（与签发能力同批交付）
+- 部署升级：esbuild 单文件产物（`pnpm server:bundle` → `dist/server.js`），`setup.mjs` 部署产物；`uex login/publish/unpublish` 全链路联调通过
+- **验证**：本地起 server → 签 token → `uex login`（whoami）→ `uex publish` → extensionquery 可见 → 同版本 409 → revoke 后 401（`pnpm test:release` 内真 CLI 联调）
 
 ### Phase E — 对外文档与样例（[05](./05-docs-and-samples.md)）
 > 目标：一个没接触过本项目的开发者，只靠文档走通全流程。

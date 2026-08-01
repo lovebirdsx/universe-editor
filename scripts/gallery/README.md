@@ -30,8 +30,11 @@
 | `publish.mjs` | `pnpm gallery:publish` | 读 `.vsix` → 抽元数据/图标/README → 落地到本地 stage 的 `gallery/assets/**` → upsert `registry.json` |
 | `unpublish.mjs` | `pnpm gallery:unpublish` | 从 registry 下架某扩展或某版本 + 删本地资产 |
 | `upload.mjs` | `pnpm gallery:upload` | 把 stage 的 `gallery/**` scp 到服务器**市场根**（`--dir` = server 的 `--gallery-root`；**先 assets 后 registry.json**，避免半态） |
+| `token.mjs` | `pnpm gallery:token` | 自助发布 API 的 token 签发/吊销/盘点（直接读写服务器 `--auth-dir` 下的 `publishers.json`，只存 sha256 哈希） |
 
 「stage 目录」是本地的市场镜像，脚本只写它、不碰服务器；`upload.mjs` 才做同步。stage 可以就是服务器市场根的本地副本，长期保留以便增量发布。
+
+> 自助发布通道（`uex publish` 经服务器的 `gallery/api/*` 端点直达）与本目录的 stage+scp 通道写**同一份** registry（格式由 `lib.mjs` 单点保证）。启用 API 后约定 scp 通道仅灾备/代传用，两者不要并发写。详见 [`docs/development/marketplace-server.md`](../../docs/development/marketplace-server.md)「自助发布 API」节。
 
 ## 发布一个扩展
 
@@ -68,6 +71,20 @@ pnpm gallery:upload -- --stage ./market-stage --host <IP> --user deploy --dir /s
 ```
 
 > `upload` 用 scp 增量同步，**不会删除**服务器上已存在的旧 assets 目录。彻底清理需按 `unpublish` 的提示到服务器手动删对应 `<市场根>/assets/<...>` 目录。
+
+## publish token 签发/吊销（自助发布 API）
+
+服务器 `gallery/api/*` 端点的认证数据存 **`--auth-dir`（默认 `<root>/../auth`）下的 `publishers.json`**（只存 token 的 sha256 哈希 + label/时间戳；server 按 mtime 自动重载，改完免重启）。🔴 `--auth-dir` 绝不能在 server 的 `--root` / `--gallery-root` 之内——那是公开静态命名空间。
+
+```bash
+# 签发：明文只打印一次（交付给开发者 uex login；publisher 首次隐式创建；label 用于对账/定点吊销）
+pnpm gallery:token -- issue --publisher acme --label zhangsan-laptop --auth-dir /srv/auth
+# 吊销（立即生效）/ 盘点（不列哈希）
+pnpm gallery:token -- revoke --publisher acme --label zhangsan-laptop --auth-dir /srv/auth
+pnpm gallery:token -- list --auth-dir /srv/auth
+```
+
+直接读写服务器上的文件：ssh 上去跑，或对本地副本跑完随 `gallery:upload` 通道上传。token 走 Bearer 明文过线——公网部署务必把服务器置于 TLS 反代之后。协议细节见 [`docs/development/marketplace-server.md`](../../docs/development/marketplace-server.md)「自助发布 API」节。
 
 ## 恶意/弃用清单（control.json）
 

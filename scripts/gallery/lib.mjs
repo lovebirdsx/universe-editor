@@ -1,23 +1,20 @@
 /*---------------------------------------------------------------------------------------------
  *  扩展市场运维脚本的共用逻辑：读 VSIX、抽资产、维护 registry.json。
  *
- *  零 npm 依赖（adm-zip 从 packages/extension-packaging 解析，与 extensions-external/pdf 的
- *  pack.mjs 同范式，避免脚本目录自带 node_modules）。registry / VSIX 是市场后端的唯一真相源，
+ *  adm-zip 经仓库根 package.json 的 devDependency 解析（根 node_modules 对 scripts/ 可见；
+ *  服务端 bundle 产物则内联它）。registry / VSIX 是市场后端的唯一真相源，
  *  服务端 server.mjs 据 registry.json 生成 /extensionquery 响应，客户端下载 VSIX 后会校验包内
  *  publisher.name.version 与市场元数据一致（防投毒）——故这里的元数据全部从 VSIX 内抽取，杜绝漂移。
  *--------------------------------------------------------------------------------------------*/
 
-import { createRequire } from 'node:module'
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import AdmZip from 'adm-zip'
+import { randomUUID } from 'node:crypto'
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs'
 import { dirname, resolve, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 export const repoRoot = resolve(__dirname, '..', '..')
-
-// adm-zip 随 extension-packaging 安装，从那儿解析（脚本目录本身无 node_modules）。
-const require = createRequire(resolve(repoRoot, 'packages/extension-packaging/package.json'))
-const AdmZip = require('adm-zip')
 
 const EXTENSION_PREFIX = 'extension/'
 
@@ -89,10 +86,16 @@ export function readRegistry(stageDir) {
   }
 }
 
+/** 同目录 tmp + rename 原子写 JSON（半写文件不会让读侧落到 fallback 空态）。 */
+export function writeJsonAtomic(file, value) {
+  mkdirSync(dirname(file), { recursive: true })
+  const tmp = resolve(dirname(file), `.tmp-${randomUUID()}`)
+  writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n')
+  renameSync(tmp, file)
+}
+
 export function writeRegistry(stageDir, registry) {
-  const dir = resolve(stageDir, 'gallery')
-  mkdirSync(dir, { recursive: true })
-  writeFileSync(resolve(dir, 'registry.json'), JSON.stringify(registry, null, 2) + '\n')
+  writeJsonAtomic(resolve(stageDir, 'gallery', 'registry.json'), registry)
 }
 
 /**
