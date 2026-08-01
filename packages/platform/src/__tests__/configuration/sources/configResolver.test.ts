@@ -7,7 +7,7 @@ import {
 
 function source(
   name: string,
-  values: Record<string, string | string[] | boolean | undefined>,
+  values: Record<string, string | string[] | boolean | number | undefined>,
 ): IConfigSource {
   return {
     name,
@@ -18,6 +18,7 @@ function source(
 const STR: ConfigItem<'string'> = { id: 'k', type: 'string' }
 const BOOL: ConfigItem<'boolean'> = { id: 'k', type: 'boolean' }
 const ARR: ConfigItem<'string[]'> = { id: 'k', type: 'string[]' }
+const NUM: ConfigItem<'number'> = { id: 'k', type: 'number' }
 
 describe('ConfigResolver', () => {
   it('takes the highest-priority source that has a value', () => {
@@ -67,6 +68,35 @@ describe('ConfigResolver', () => {
   it('normalizes string[] values from a single string', () => {
     expect(new ConfigResolver([source('env', { k: 'one' })]).get(ARR)).toEqual(['one'])
     expect(new ConfigResolver([source('env', { k: ['a', 'b'] })]).get(ARR)).toEqual(['a', 'b'])
+  })
+
+  it('normalizes number values from a numeric string', () => {
+    expect(new ConfigResolver([source('cli', { k: '9229' })]).get(NUM)).toBe(9229)
+    expect(new ConfigResolver([source('cli', { k: 9229 })]).get(NUM)).toBe(9229)
+  })
+
+  it('falls through when a number value is not numeric', () => {
+    const r = new ConfigResolver([source('cli', { k: 'not-a-port' }), source('env', { k: '9229' })])
+    expect(r.resolve(NUM)).toEqual({ value: 9229, origin: 'env' })
+  })
+
+  it('validates the normalized number and skips failing sources', () => {
+    const item: ConfigItem<'number'> = {
+      id: 'k',
+      type: 'number',
+      validate: (v) => Number.isInteger(v) && v >= 1 && v <= 65535,
+    }
+    const r = new ConfigResolver([source('cli', { k: '99999' }), source('env', { k: '9229' })])
+    expect(r.resolve(item)).toEqual({ value: 9229, origin: 'env' })
+  })
+
+  it('runs string[] validate on the collected array', () => {
+    const item: ConfigItem<'string[]'> = {
+      id: 'k',
+      type: 'string[]',
+      validate: (v) => v.every((p) => p !== ''),
+    }
+    expect(new ConfigResolver([source('cli', { k: ['a', 'b'] })]).get(item)).toEqual(['a', 'b'])
   })
 
   it('appendSource adds a lower-priority source', () => {

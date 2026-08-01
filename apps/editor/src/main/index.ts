@@ -244,6 +244,12 @@ const consoleInterceptor = installConsoleInterceptor({ logger: consoleLogger })
 installChildProcessGoneLogging(mainLogger)
 
 const e2eEnabled = environmentService.isE2E
+// Extension-development mode (--extension-development-path): like E2E, each dev
+// host is an independent process — joining single-instance negotiation would
+// just focus the already-open main instance and drop the dev args on the floor
+// (second-instance has no consumer for them). userData is isolated by the
+// ExtDev flavor (productPaths), so settings never cross-contaminate.
+const extDevEnabled = environmentService.isExtensionDevelopment
 
 // E2E：Playwright 多 worker 会并发开多个互相遮挡的窗口；Chromium 对被遮挡/
 // 后台窗口节流计时器与渲染，使 3 秒通知自动已读等时序相关 UI 偶发失败。
@@ -257,8 +263,9 @@ if (e2eEnabled) {
 // Single-instance lock: a second launch focuses the existing window instead of
 // starting a rival process. Required for the auto-update restart-to-install flow
 // (quitAndInstall relaunches the app). E2E spawns many isolated instances (each
-// with its own userData dir), so it opts out.
-const hasSingleInstanceLock = e2eEnabled || app.requestSingleInstanceLock()
+// with its own userData dir), so it opts out — as does extension-development
+// mode (see above).
+const hasSingleInstanceLock = e2eEnabled || extDevEnabled || app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) {
   app.quit()
 } else {
@@ -458,6 +465,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       appServices: applicationServices,
       logService: logMainService,
       e2eEnabled,
+      extensionDevelopment: extDevEnabled,
       rendererDebug: environmentService.rendererDebug,
       ...(appIconPath ? { appIconPath } : {}),
       preloadPath: join(import.meta.dirname, '../preload/index.cjs'),

@@ -16,6 +16,10 @@ function ext(id: string, builtin = true, withMain = true): IScannedExtension {
   }
 }
 
+function devExt(id: string): IScannedExtension {
+  return { ...ext(id, false), isUnderDevelopment: true }
+}
+
 describe('computeActiveExtensions', () => {
   it('de-dupes by id, keeping the first occurrence (built-in wins over user)', () => {
     const scanned = [ext('a', true), ext('b', true), ext('a', false)]
@@ -89,6 +93,31 @@ describe('computeActiveExtensions', () => {
     }
     const { active } = computeActiveExtensions([ext('a'), ext('b')], filter)
     expect(active.map((e) => e.id)).toEqual(['a'])
+  })
+
+  it('dev wins the id collision against built-in and user copies (scan order dev first)', () => {
+    const scanned = [devExt('x'), ext('x', true), ext('x', false)]
+    const { deduped } = computeActiveExtensions(scanned)
+    expect(deduped).toHaveLength(1)
+    expect(deduped[0]?.isUnderDevelopment).toBe(true)
+  })
+
+  it('the disabled set never drops a dev extension (dev overrides everything)', () => {
+    // The user disabled the SHIPPED build of the extension they are iterating
+    // on; their dev copy must still activate (VSCode dev extensions don't
+    // participate in enablement at all).
+    const filter: ActivationFilter = { disabled: new Set(['x']) }
+    const scanned = [devExt('x'), ext('x', true)]
+    const { active } = computeActiveExtensions(scanned, filter)
+    expect(active.map((e) => e.id)).toEqual(['x'])
+    expect(active[0]?.isUnderDevelopment).toBe(true)
+  })
+
+  it('an empty allowlist still activates dev extensions (they are not built-ins)', () => {
+    const filter: ActivationFilter = { allowlist: new Set() }
+    const scanned = [devExt('dev.x'), ext('builtin.y', true)]
+    const { active } = computeActiveExtensions(scanned, filter)
+    expect(active.map((e) => e.id)).toEqual(['dev.x'])
   })
 })
 

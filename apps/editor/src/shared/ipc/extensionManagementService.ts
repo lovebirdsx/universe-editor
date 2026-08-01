@@ -13,7 +13,7 @@ import type { IExtensionManifest } from '@universe-editor/extensions-common'
 import type { IGalleryExtension } from './extensionGalleryService.js'
 
 /** How an installed extension entered the user extensions directory. */
-export type ExtensionInstallSource = 'vsix' | 'gallery' | 'builtin'
+export type ExtensionInstallSource = 'vsix' | 'gallery' | 'builtin' | 'development'
 
 /** Marketplace metadata carried forward for gallery-sourced installs (UI + updates). */
 export interface IExtensionGalleryMetadata {
@@ -59,6 +59,14 @@ export interface IExtensionManagementService {
    * `source` is `'builtin'`; they can never be uninstalled.
    */
   listBuiltinExtensions(): Promise<ILocalExtension[]>
+
+  /**
+   * Extensions loaded from `--extension-development-path` roots. Surfaced to the
+   * Extensions UI with `source: 'development'` so they show a "development" badge
+   * and get no uninstall/disable affordances (they are not in `extensions.json`,
+   * so neither operation has meaning for them). Empty outside ext-dev mode.
+   */
+  listDevExtensions(): Promise<ILocalExtension[]>
 
   /**
    * Install from the marketplace: download the VSIX, verify its manifest matches

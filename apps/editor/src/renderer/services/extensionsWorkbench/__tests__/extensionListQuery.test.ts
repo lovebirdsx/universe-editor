@@ -18,6 +18,7 @@ function entry(
     outdated: false,
     installing: false,
     isBuiltin,
+    isUnderDevelopment: false,
     enabled: true,
     enablementState: EnablementState.EnabledGlobally,
   }

@@ -122,6 +122,7 @@ export class ExtensionManagementMainService
     @IExtensionGalleryService private readonly _gallery?: IManagementGallery,
     @ILoggerService loggerService?: ILoggerService,
     private readonly _resolveBuiltinDir: UserExtensionsDirResolver = resolveBuiltinExtensionsDir,
+    private readonly _resolveDevExtensionPaths: () => readonly string[] = () => [],
   ) {
     super()
     this._logger = createNamedLogger(loggerService, {
@@ -192,6 +193,28 @@ export class ExtensionManagementMainService
       } catch (err) {
         this._logger.warn(
           `built-in extension ${name} has an unreadable manifest: ${(err as Error).message}`,
+        )
+      }
+    }
+    return result
+  }
+
+  async listDevExtensions(): Promise<ILocalExtension[]> {
+    const result: ILocalExtension[] = []
+    for (const devPath of this._resolveDevExtensionPaths()) {
+      try {
+        const manifest = parseManifest(await readManifestJson(devPath))
+        result.push({
+          identifier: extensionId(manifest),
+          manifest,
+          version: manifest.version,
+          location: devPath,
+          source: 'development',
+          installedAt: 0,
+        })
+      } catch (err) {
+        this._logger.warn(
+          `dev extension at ${devPath} has an unreadable manifest: ${(err as Error).message}`,
         )
       }
     }

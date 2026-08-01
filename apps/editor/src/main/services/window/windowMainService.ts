@@ -24,6 +24,7 @@ import {
   type IWorkspace,
 } from '@universe-editor/platform'
 import { E2E_PROBE_ARGV_FLAG } from '../../../shared/e2e/contract.js'
+import { EXTENSION_DEVELOPMENT_ARGV_FLAG } from '../../../shared/extensionDevelopment.js'
 import { PerfMarks } from '../../../shared/perf/marks.js'
 import { APP_PROTOCOL_SCHEME, APP_SHELL_URL } from '../../ipc/resourceProtocol.js'
 import { type IRendererLifecycleService } from '../../../shared/ipc/lifecycleService.js'
@@ -78,6 +79,8 @@ export interface WindowMainServiceOptions {
   readonly appServices: ApplicationServices
   readonly logService: LogMainService
   readonly e2eEnabled: boolean
+  /** Extension-development host instance (--extension-development-path present). */
+  readonly extensionDevelopment: boolean
   /** Delay renderer load so VS Code's Chrome debugger can attach (dev only). */
   readonly rendererDebug: boolean
   /** Absolute path to app icon (.ico on Windows). */
@@ -118,6 +121,7 @@ export class WindowMainService implements IWindowMainService {
   async createWindow(opts?: ICreateWindowOptions): Promise<number> {
     const {
       e2eEnabled,
+      extensionDevelopment,
       rendererDebug,
       appIconPath,
       preloadPath,
@@ -170,6 +174,7 @@ export class WindowMainService implements IWindowMainService {
           ...(opts?.sessionToOpen ? [`--ue-open-session=${opts.sessionToOpen}`] : []),
           ...(opts?.deepLink ? [`--ue-open-uri=${opts.deepLink}`] : []),
           ...(e2eEnabled ? [E2E_PROBE_ARGV_FLAG] : []),
+          ...(extensionDevelopment ? [EXTENSION_DEVELOPMENT_ARGV_FLAG] : []),
         ],
       },
     })

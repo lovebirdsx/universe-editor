@@ -24,6 +24,7 @@ import { ExplorerAutoRevealContribution } from '../ExplorerAutoRevealContributio
 import { RecentFilesContribution } from '../RecentFilesContribution.js'
 import { NotificationStatusContribution } from '../NotificationStatusContribution.js'
 import { WorkspaceTrustContribution } from '../WorkspaceTrustContribution.js'
+import { ExtensionDevelopmentContribution } from '../ExtensionDevelopmentContribution.js'
 import { UpdateContribution } from '../UpdateContribution.js'
 import { ReleaseNotesContribution } from '../ReleaseNotesContribution.js'
 import { LogTailContribution } from '../LogTailContribution.js'
@@ -217,6 +218,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.workspaceTrust',
   WorkspaceTrustContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Extension-development mode: status-bar entry with the dev extension count.
+// AfterRestore so the status bar is live and the host has started.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.extensionDevelopment',
+  ExtensionDevelopmentContribution,
   WorkbenchPhase.AfterRestore,
 )
 

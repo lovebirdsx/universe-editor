@@ -591,6 +591,11 @@ export interface E2EProbe {
   getInstalledExtensionIds(): Promise<readonly string[]>
   /** Identifiers of every bundled built-in extension. */
   getBuiltinExtensionIds(): Promise<readonly string[]>
+  /**
+   * Identifiers of extensions loaded from --extension-development-path roots
+   * (the host's `extensionIsUnderDevelopment` DTO flag). Empty outside ext-dev mode.
+   */
+  getDevExtensionIds(): Promise<readonly string[]>
   /** Effective disabled identifiers (global ∪ workspace, workspace overrides applied). */
   getDisabledExtensionIds(): Promise<readonly string[]>
   /** Enable / disable an extension, globally (default) or for the current workspace. */

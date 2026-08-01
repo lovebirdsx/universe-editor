@@ -27,6 +27,16 @@ export function asStringArray(raw: RawConfigValue): string[] | undefined {
   return undefined
 }
 
+export function asNumber(raw: RawConfigValue): number | undefined {
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : undefined
+  if (typeof raw === 'string') {
+    if (raw.trim() === '') return undefined
+    const n = Number(raw)
+    return Number.isFinite(n) ? n : undefined
+  }
+  return undefined
+}
+
 export function isHttpUrl(value: string): boolean {
   try {
     const url = new URL(value)

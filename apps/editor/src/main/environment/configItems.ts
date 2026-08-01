@@ -97,6 +97,44 @@ export const GALLERY_URL: ConfigItem<'string'> = {
   validate: isHttpUrl,
 }
 
+/**
+ * Extension development roots (each is ONE extension's root containing package.json,
+ * not a container directory). Repeatable; env form joins multiple roots with
+ * path.delimiter. Presence switches the instance into extension-development mode:
+ * no single-instance lock, isolated userData ("- ExtDev" flavor).
+ */
+export const EXTENSION_DEV_PATHS: ConfigItem<'string[]'> = {
+  id: 'extensionDevPaths',
+  type: 'string[]',
+  cli: 'extension-development-path',
+  env: 'UNIVERSE_EXTENSION_DEV_PATH',
+  args: '<dir>',
+  description: '从源码目录加载开发中的扩展（每个路径是一个扩展根目录）',
+  validate: (paths) => paths.every((p) => p !== ''),
+}
+
+/** Start the extension host with --inspect bound to loopback on this port. */
+export const INSPECT_EXTENSIONS: ConfigItem<'number'> = {
+  id: 'inspectExtensionsPort',
+  type: 'number',
+  cli: 'inspect-extensions',
+  env: 'UNIVERSE_INSPECT_EXTENSIONS',
+  args: '<port>',
+  description: '在指定端口启用扩展宿主调试（绑定 127.0.0.1）',
+  validate: (p) => Number.isInteger(p) && p >= 1 && p <= 65535,
+}
+
+/** Like INSPECT_EXTENSIONS but breaks before user code (--inspect-brk). Wins when both are set. */
+export const INSPECT_BRK_EXTENSIONS: ConfigItem<'number'> = {
+  id: 'inspectBrkExtensionsPort',
+  type: 'number',
+  cli: 'inspect-brk-extensions',
+  env: 'UNIVERSE_INSPECT_BRK_EXTENSIONS',
+  args: '<port>',
+  description: '在指定端口启用扩展宿主调试并在激活前断住（绑定 127.0.0.1）',
+  validate: (p) => Number.isInteger(p) && p >= 1 && p <= 65535,
+}
+
 /** Platform data roots — env-only inputs to productPaths' identity resolution. */
 export const APP_DATA: ConfigItem<'string'> = { id: 'appData', type: 'string', env: 'APPDATA' }
 export const XDG_CONFIG_HOME: ConfigItem<'string'> = {
@@ -119,4 +157,7 @@ export const CLI_OPTIONS: readonly ConfigItem[] = [
   CONFIG_DIR,
   UPDATE_URL,
   GALLERY_URL,
+  EXTENSION_DEV_PATHS,
+  INSPECT_EXTENSIONS,
+  INSPECT_BRK_EXTENSIONS,
 ]

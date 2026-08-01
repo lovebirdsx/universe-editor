@@ -52,7 +52,7 @@
 
 `ExtensionHostMainService` **只搬字节**，照抄 `AcpHostMainService`：`spawn(process.execPath, [entry], { env: {ELECTRON_RUN_AS_NODE:1, ...} })`——用 Electron 自带 node，**不依赖系统 node/npx**。每个进程一个 opaque `handle`（randomUUID），`onStdout/onStderr/onExit` 都带 handle，renderer 按 handle 分流。
 
-- **env**（`start(spec)`，单 host 无分叉）：`UNIVERSE_BUILTIN_EXTENSIONS_DIR` + `UNIVERSE_USER_EXTENSIONS_DIR`（两目录都扫，内置胜 id 碰撞）、`UNIVERSE_TSLS_CLI`/`UNIVERSE_TSLS_TSSERVER`（typescript 插件自 spawn tsserver 用）、`UNIVERSE_WORKSPACE_ROOT`（workspace 根）、`UNIVERSE_DISPLAY_LOCALE`（manifest NLS）、`UNIVERSE_DISABLED_EXTENSIONS`（**启用禁用生效点**，见下）。另有 e2e 专用的 `UNIVERSE_ENABLED_EXTENSIONS` allowlist。
+- **env**（`start(spec)`，单 host 无分叉）：`UNIVERSE_BUILTIN_EXTENSIONS_DIR` + `UNIVERSE_USER_EXTENSIONS_DIR`（两目录都扫，内置胜 id 碰撞）、`UNIVERSE_TSLS_CLI`/`UNIVERSE_TSLS_TSSERVER`（typescript 插件自 spawn tsserver 用）、`UNIVERSE_WORKSPACE_ROOT`（workspace 根）、`UNIVERSE_DISPLAY_LOCALE`（manifest NLS）、`UNIVERSE_DISABLED_EXTENSIONS`（**启用禁用生效点**，见下）。另有 e2e 专用的 `UNIVERSE_ENABLED_EXTENSIONS` allowlist。`UNIVERSE_DEV_EXTENSIONS`（`--extension-development-path`，path.delimiter 拼接的扩展根列表；附加扫描、id 冲突 dev 胜、豁免 disabled 过滤与 trust 门控，scanner 打 `isUnderDevelopment`）。
 - **treeKill 回收孙子进程**：host fork 出 grandchild（typescript 插件 → tsserver）。优雅停（`stop` 关 stdin / `stopAll` before-quit / renderer `beforeunload`）让 CLI 自己的 exit hook 回收 tsserver；**treeKill 是 backstop**（硬 SIGKILL 会甩掉慢启动的 tsserver 成孤儿，卡 Playwright teardown、给真实用户留 stray electron.exe）。这条链路的坑详见 memory [[agent-binary-silent-download-e2e-fix]]。
 - **已无进程级沙箱**：单 host 后所有扩展（含外置）与内置同权（裸 node:fs/spawn），隔离只在激活期（见 ⑤）。曾经的 restricted host fs 网关与 Node 权限模型 opt-in 已随双 host 一并拆除；**UI/文档不得宣称外部扩展已沙箱**（`docs/user/zh-CN/customization/extensions.md` 已如实写"接近编辑器本身的权限"）。
 

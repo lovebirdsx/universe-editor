@@ -40,9 +40,12 @@ export function formatWindowTitle(args: {
   parent?: string
   symbol?: string | undefined
   sessionTitle?: string | undefined
+  /** Mode badge appended at the very end, e.g. "[Extension Development Host]". */
+  devHostBadge?: string | undefined
 }): string {
-  const { appName, workspaceName, parent, symbol, sessionTitle } = args
-  if (workspaceName === undefined) return appName
-  if (symbol && sessionTitle) return `${workspaceName} — ${symbol} ${sessionTitle}`
-  return parent ? `${workspaceName} - ${parent}` : workspaceName
+  const { appName, workspaceName, parent, symbol, sessionTitle, devHostBadge } = args
+  const badge = devHostBadge ? ` ${devHostBadge}` : ''
+  if (workspaceName === undefined) return `${appName}${badge}`
+  if (symbol && sessionTitle) return `${workspaceName} — ${symbol} ${sessionTitle}${badge}`
+  return `${parent ? `${workspaceName} - ${parent}` : workspaceName}${badge}`
 }

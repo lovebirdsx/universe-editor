@@ -305,6 +305,15 @@ function ExtensionRow({
       <div className={styles.body}>
         <div className={styles.title}>
           <span className={styles.name}>{entry.displayName}</span>
+          {entry.isUnderDevelopment && (
+            <span
+              className={styles.badge}
+              title={entry.local?.location}
+              data-testid="extension-dev-badge"
+            >
+              {localize('extensions.development', 'Development')}
+            </span>
+          )}
           {disabled && (
             <span className={cx(styles.badge, styles.disabledBadge)}>
               {workspaceScoped

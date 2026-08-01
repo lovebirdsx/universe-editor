@@ -11,6 +11,8 @@ export interface ProductIdentity {
 export interface ResolveEnv {
   isDev: boolean
   isE2E: boolean
+  /** True when at least one --extension-development-path is present (ext-dev host). */
+  isExtensionDevelopment: boolean
   override?: string | undefined
   platform: NodeJS.Platform
   appData?: string | undefined
@@ -40,6 +42,15 @@ function resolveProductFlavor(env: ResolveEnv): {
     return {
       productName: `${BASE_PRODUCT_NAME} - E2E`,
       appUserModelId: `${BASE_APP_ID}.e2e`,
+    }
+  }
+  // ExtDev outranks Dev but not E2E: e2e fixtures rely on --user-data-dir
+  // overrides (which win regardless), but the e2e AppUserModelId/deep-link
+  // semantics must not be taken over when a spec passes a dev path.
+  if (env.isExtensionDevelopment) {
+    return {
+      productName: `${BASE_PRODUCT_NAME} - ExtDev`,
+      appUserModelId: `${BASE_APP_ID}.extdev`,
     }
   }
   if (env.isDev) {

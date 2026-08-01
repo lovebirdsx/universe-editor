@@ -7,10 +7,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { EventEmitter } from 'node:events'
+import { delimiter } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { markAsSingleton } from '@universe-editor/platform'
-import { ExtensionHostMainService, type ExtHostSpawner } from '../extensionHostMainService.js'
+import {
+  ExtensionHostMainService,
+  type ExtHostDevPathsResolver,
+  type ExtHostInspectResolver,
+  type ExtHostSpawner,
+} from '../extensionHostMainService.js'
 
 // The service imports `app` from electron for its default resolvers; the tests
 // inject their own, so these stubs are never exercised.
@@ -48,7 +54,14 @@ class FakeProc extends EventEmitter {
 
 type Level = 'debug' | 'info' | 'warn' | 'error'
 
-function makeService(proc: FakeProc): {
+function makeService(
+  proc: FakeProc,
+  opts?: {
+    devPaths?: ExtHostDevPathsResolver
+    inspect?: ExtHostInspectResolver
+    onSpawn?: (args: readonly string[], env: NodeJS.ProcessEnv | undefined) => void
+  },
+): {
   svc: ExtensionHostMainService
   records: Array<{ level: Level; message: string }>
 } {
@@ -62,14 +75,19 @@ function makeService(proc: FakeProc): {
   }
   const loggerService = {
     createLogger: () => markAsSingleton(logger),
-  } as unknown as ConstructorParameters<typeof ExtensionHostMainService>[5]
-  const spawner: ExtHostSpawner = () => proc as unknown as ChildProcessWithoutNullStreams
+  } as unknown as ConstructorParameters<typeof ExtensionHostMainService>[7]
+  const spawner: ExtHostSpawner = (_command, args, options) => {
+    opts?.onSpawn?.(args, options.env)
+    return proc as unknown as ChildProcessWithoutNullStreams
+  }
   const svc = new ExtensionHostMainService(
     spawner,
     () => '/fake/entry.js',
     () => '/fake/builtin',
     () => '/fake/user',
     () => ({ kind: 'tsls', cli: '/fake/cli.mjs', tsserver: '/fake/tsserver.js', version: '0' }),
+    opts?.devPaths ?? (() => []),
+    opts?.inspect ?? (() => ({ port: undefined, brk: undefined })),
     loggerService,
   )
   return { svc, records }
@@ -140,5 +158,57 @@ describe('ExtensionHostMainService stderr level routing', () => {
     expect(stderr()).toEqual([
       { level: 'info', message: `[stderr ${handle}] partial without newline` },
     ])
+  })
+})
+
+describe('ExtensionHostMainService dev extensions + inspect flags', () => {
+  let svc: ExtensionHostMainService | undefined
+
+  afterEach(() => {
+    svc?.dispose()
+    svc = undefined
+  })
+
+  async function captureStart(opts?: {
+    devPaths?: readonly string[]
+    inspect?: { port: number | undefined; brk: number | undefined }
+  }): Promise<{ args: readonly string[]; env: NodeJS.ProcessEnv }> {
+    let captured: { args: readonly string[]; env: NodeJS.ProcessEnv } | undefined
+    const made = makeService(new FakeProc(), {
+      devPaths: () => opts?.devPaths ?? [],
+      inspect: () => opts?.inspect ?? { port: undefined, brk: undefined },
+      onSpawn: (args, env) => {
+        captured = { args, env: env ?? {} }
+      },
+    })
+    svc = made.svc
+    await made.svc.start()
+    if (!captured) throw new Error('spawner was not called')
+    return captured
+  }
+
+  it('passes dev paths to the host env joined by path.delimiter', async () => {
+    const { env } = await captureStart({ devPaths: ['D:\\dev\\ext-a', 'D:\\dev\\ext-b'] })
+    expect(env.UNIVERSE_DEV_EXTENSIONS).toBe(['D:\\dev\\ext-a', 'D:\\dev\\ext-b'].join(delimiter))
+  })
+
+  it('omits UNIVERSE_DEV_EXTENSIONS when no dev paths are configured', async () => {
+    const { env } = await captureStart()
+    expect(env.UNIVERSE_DEV_EXTENSIONS).toBeUndefined()
+  })
+
+  it('injects --inspect bound to loopback BEFORE the entry script', async () => {
+    const { args } = await captureStart({ inspect: { port: 9229, brk: undefined } })
+    expect(args).toEqual(['--inspect=127.0.0.1:9229', '/fake/entry.js'])
+  })
+
+  it('inspect-brk wins over inspect and also precedes the entry', async () => {
+    const { args } = await captureStart({ inspect: { port: 9229, brk: 9230 } })
+    expect(args).toEqual(['--inspect-brk=127.0.0.1:9230', '/fake/entry.js'])
+  })
+
+  it('leaves argv as just the entry when neither dev nor inspect is configured', async () => {
+    const { args } = await captureStart()
+    expect(args).toEqual(['/fake/entry.js'])
   })
 })

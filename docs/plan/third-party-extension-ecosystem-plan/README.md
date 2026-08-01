@@ -184,7 +184,7 @@ samples/hello-world/           🆕       外部形态样例（不进 workspace�
 - 宿主 API 版本可查询：`--version` 输出与 About 对话框均带 `Extension API` 行
 - **验证**：仓库外空目录 `npm i @universe-editor/extension-api` + `tsc` 编译一个 hello 扩展通过；`FoldingRangeKind` 等运行时值可导入（实施以 pnpm pack tarball 等价验证，待 org 注册后按手册发布）
 
-### Phase B — 扩展开发模式（[02](./02-dev-experience.md)）
+### Phase B — 扩展开发模式（[02](./02-dev-experience.md)）✅ 已完成（2026-08-01）
 > 目标：从开发目录直接加载扩展，断点可命中，改代码一条命令重载。
 
 - `--extension-development-path`（可重复）：configItems 声明 → `ExtHostStartSpec` → env → bootstrap 三目录合并扫描（dev 附加、id 冲突 dev 胜）

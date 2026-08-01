@@ -23,6 +23,7 @@ import {
   IExtensionEnablementService,
   EnablementState,
 } from '../services/extensions/ExtensionEnablementService.js'
+import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 
 const CATEGORY = localize2('command.category.extensions', 'Extensions')
 
@@ -226,6 +227,28 @@ export class CheckForExtensionUpdatesAction extends Action2 {
         count: updates.length,
       }),
     })
+  }
+}
+
+export class RestartExtensionHostAction extends Action2 {
+  static readonly ID = 'workbench.action.restartExtensionHost'
+  constructor() {
+    super({
+      id: RestartExtensionHostAction.ID,
+      title: localize2('action.extensions.restartHost', 'Restart Extension Host'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    // Snapshot before the first await — the accessor is invalid afterwards.
+    const client = accessor.get(IExtensionHostClientService)
+    // refreshExtensions() is the public restart primitive (stop → start →
+    // re-translate → replay activation), shared with crash / trust-revocation /
+    // enablement restarts. This command is its fourth, manual entry — useful to
+    // every user (a wedged extension self-service), not only ext-dev.
+    await client.refreshExtensions()
   }
 }
 

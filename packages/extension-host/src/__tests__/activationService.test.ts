@@ -173,6 +173,15 @@ describe('ExtensionActivationService', () => {
     expect(activatedCount()).toBe(1)
   })
 
+  it('activates a dev extension even when untrusted (--extension-development-path)', async () => {
+    const svc = new ExtensionActivationService(
+      [scanned(['*'], { isUnderDevelopment: true })],
+      () => false,
+    )
+    await svc.activateByEvent('onStartupFinished')
+    expect(activatedCount()).toBe(1)
+  })
+
   it('replayFiredEvents activates gated-off extensions after trust flips', async () => {
     let trusted = false
     const svc = new ExtensionActivationService([scanned(['onLanguage:typescript'])], () => trusted)

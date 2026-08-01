@@ -22,6 +22,7 @@ main 进程入口（`src/main/index.ts`）在所有 service 实例化前调用 `
 | 发布版 | `import.meta.env.DEV === false` 且无环境变量 | `%APPDATA%/Universe Editor` | `io.universe.editor` |
 | dev | `import.meta.env.DEV === true` | `%APPDATA%/Universe Editor - Dev` | `io.universe.editor.dev` |
 | E2E | `UNIVERSE_E2E=1` | `%APPDATA%/Universe Editor - E2E` | `io.universe.editor.e2e` |
+| 扩展开发宿主 | 存在 `--extension-development-path`（优先级低于 E2E） | `%APPDATA%/Universe Editor - ExtDev` | `io.universe.editor.extdev` |
 
 任何模式都可用 `UNIVERSE_USER_DATA_DIR=<absolute>` 或 Electron 原生 `--user-data-dir=<absolute>` CLI 参数覆盖 userData 目录（CLI 优先；productName 仍按 dev/e2e 决定）。E2E fixture 给每个 Playwright worker 分配 tmp 目录即依赖此机制。darwin/linux 走平台标准目录（`~/Library/Application Support` 或 `XDG_CONFIG_HOME || ~/.config`）。
 

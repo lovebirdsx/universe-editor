@@ -238,7 +238,16 @@ export async function launchApp(options: LaunchAppOptions): Promise<ElectronAppl
   // ELECTRON_RUN_AS_NODE=1 (set by Claude Code's shell) makes Electron behave as
   // plain Node.js, which rejects Chromium-only flags like --remote-debugging-port.
   // Explicitly unset it so the Electron binary runs as a full Chromium app.
-  const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
+  const {
+    ELECTRON_RUN_AS_NODE: _ignored,
+    // A developer's own ext-dev env must not leak into the e2e instance (an
+    // inherited UNIVERSE_INSPECT_EXTENSIONS would make every spawned host try to
+    // bind the same debug port).
+    UNIVERSE_EXTENSION_DEV_PATH: _ignoredDevPath,
+    UNIVERSE_INSPECT_EXTENSIONS: _ignoredInspect,
+    UNIVERSE_INSPECT_BRK_EXTENSIONS: _ignoredInspectBrk,
+    ...inheritedEnv
+  } = process.env
   const extraEnv: Record<string, string> = { ...(options.env ?? {}) }
   if (options.extensions !== undefined) {
     extraEnv[ENABLED_EXTENSIONS_ENV] = options.extensions.join(',')

@@ -142,6 +142,21 @@ describe('ExtensionService', () => {
     expect(dtos[0]?.contributes.commands?.[0]?.command).toBe('test.cmd')
   })
 
+  it('maps isUnderDevelopment onto the DTO only for dev extensions', () => {
+    const mt = recordingMainThread()
+    const dev = { ...scanned(['*']), id: 'dev.ext', isUnderDevelopment: true }
+    const service = new ExtensionService(
+      [scanned(['*']), dev],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+    )
+    const dtos = service.getContributions()
+    expect(dtos.find((d) => d.id === 'test.ext')?.extensionIsUnderDevelopment).toBeUndefined()
+    expect(dtos.find((d) => d.id === 'dev.ext')?.extensionIsUnderDevelopment).toBe(true)
+  })
+
   it('does not activate until a matching event fires', async () => {
     const mt = recordingMainThread()
     const service = new ExtensionService(

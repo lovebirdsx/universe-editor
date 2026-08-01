@@ -37,7 +37,10 @@ export function buildHelpMessage(opts: HelpMessageOptions): string {
     `Usage: ${opts.executableName} [options]`,
     '',
     'Options:',
-    ...options.map((item, i) => `  ${usages[i]!.padEnd(width)}  ${item.description}`),
+    ...options.map(
+      (item, i) =>
+        `  ${usages[i]!.padEnd(width)}  ${item.description}${item.type === 'string[]' ? '（可重复）' : ''}`,
+    ),
   ]
   return lines.join('\n')
 }

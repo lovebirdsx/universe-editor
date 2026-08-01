@@ -63,6 +63,7 @@ import {
 import { AcpHostMainService } from './acpHost/acpHostMainService.js'
 import { ExtensionHostMainService } from './extensionHost/extensionHostMainService.js'
 import { createTsServerSpecResolver } from './extensionHost/tsServerPaths.js'
+import { normalizeDevExtensionPaths } from './extensionHost/devExtensionsDir.js'
 import { ExtensionManagementMainService } from './extensionManagement/extensionManagementService.js'
 import { ExtensionGalleryMainService } from './extensionManagement/extensionGalleryService.js'
 import { AcpTerminalMainService } from './acpTerminal/acpTerminalMainService.js'
@@ -134,6 +135,11 @@ registerSingletonFactory(
         // tsServer line lands in the "Extension Host" output channel.
         createNamedLogger(acc.get(ILoggerService), { id: 'extensionHost', name: 'Extension Host' }),
       ),
+      () => normalizeDevExtensionPaths(acc.get(IEnvironmentMainService).extensionDevPaths),
+      () => ({
+        port: acc.get(IEnvironmentMainService).inspectExtensionsPort,
+        brk: acc.get(IEnvironmentMainService).inspectBrkExtensionsPort,
+      }),
       acc.get(ILoggerService),
     ),
 )
@@ -154,6 +160,8 @@ registerSingletonFactory(
       undefined,
       acc.get(IExtensionGalleryService),
       acc.get(ILoggerService),
+      undefined,
+      () => normalizeDevExtensionPaths(acc.get(IEnvironmentMainService).extensionDevPaths),
     ),
 )
 registerSingleton(

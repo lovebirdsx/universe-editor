@@ -356,6 +356,7 @@ import {
   EnableExtensionForWorkspaceAction,
   EnableExtensionGloballyAction,
   InstallExtensionFromVsixAction,
+  RestartExtensionHostAction,
   ShowExtensionsAction,
   UninstallExtensionAction,
 } from './extensionsActions.js'
@@ -753,6 +754,7 @@ registerAction2(InstallExtensionFromVsixAction)
 registerAction2(UninstallExtensionAction)
 registerAction2(ShowExtensionsAction)
 registerAction2(CheckForExtensionUpdatesAction)
+registerAction2(RestartExtensionHostAction)
 registerAction2(EnableExtensionGloballyAction)
 registerAction2(DisableExtensionGloballyAction)
 registerAction2(EnableExtensionForWorkspaceAction)

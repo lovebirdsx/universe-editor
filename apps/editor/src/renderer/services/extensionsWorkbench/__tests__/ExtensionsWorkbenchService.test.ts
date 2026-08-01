@@ -64,6 +64,7 @@ function makeMocks() {
     onDidChangeExtensions: onDidChangeExtensions.event,
     getInstalled: vi.fn(async () => [] as ILocalExtension[]),
     listBuiltinExtensions: vi.fn(async () => [] as ILocalExtension[]),
+    listDevExtensions: vi.fn(async () => [] as ILocalExtension[]),
     installFromGallery: vi.fn(async () => localExtension()),
     installVSIX: vi.fn(async () => localExtension()),
     uninstall: vi.fn(async () => undefined),
@@ -137,6 +138,33 @@ describe('ExtensionsWorkbenchService', () => {
     const entries = svc.getInstalled()
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({ id: 'acme.installed', installed: true, outdated: false })
+  })
+
+  it('surfaces dev extensions first with the development flag (and both entries on an id collision)', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.listDevExtensions).mockResolvedValue([
+      localExtension({ identifier: 'acme.dev', source: 'development' }),
+    ])
+    vi.mocked(mocks.management.listBuiltinExtensions).mockResolvedValue([
+      localExtension({ identifier: 'acme.dev', source: 'builtin' }),
+      localExtension({ identifier: 'acme.tool', source: 'builtin' }),
+    ])
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    const entries = svc.getInstalled()
+    expect(entries).toHaveLength(3)
+    expect(entries[0]).toMatchObject({
+      id: 'acme.dev',
+      isUnderDevelopment: true,
+      isBuiltin: false,
+      enabled: true,
+      installed: true,
+    })
+    // The same-id built-in still shows (badge distinguishes them); scan dedupe
+    // governs which activates, the UI presents "what is installed".
+    expect(entries[1]).toMatchObject({ id: 'acme.dev', isUnderDevelopment: false, isBuiltin: true })
+    expect(entries[2]).toMatchObject({ id: 'acme.tool', isBuiltin: true })
   })
 
   it('marks a search result as installed + outdated when a lower version is installed', async () => {

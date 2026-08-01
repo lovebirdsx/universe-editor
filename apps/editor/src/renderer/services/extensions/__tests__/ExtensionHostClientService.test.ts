@@ -141,6 +141,11 @@ function makeServiceWith(
   workspaceChange = Event.None,
   trustChange: Event<boolean> = Event.None,
   workspaceState: WorkspaceState = { current: undefined },
+  stubs?: {
+    effectiveDisabledIds?: string[]
+    builtinIds?: string[]
+    installedIds?: string[]
+  },
 ) {
   const nullLogger = {
     info: vi.fn(),
@@ -149,6 +154,15 @@ function makeServiceWith(
     debug: vi.fn(),
     trace: vi.fn(),
   }
+  const asLocal = (identifier: string) =>
+    ({
+      identifier,
+      manifest: { name: identifier, version: '1.0.0', engines: { universe: '^0.1.0' } },
+      version: '1.0.0',
+      location: `/ext/${identifier}`,
+      source: 'vsix',
+      installedAt: 0,
+    }) as const
   return new ExtensionHostClientService(
     host,
     { createChannel: vi.fn().mockReturnValue({ append: vi.fn() }) } as unknown as IOutputService,
@@ -183,12 +197,12 @@ function makeServiceWith(
     new UriIdentityService('linux'),
     {
       getDisabledIds: vi.fn().mockResolvedValue([]),
-      getInstalled: vi.fn().mockResolvedValue([]),
-      listBuiltinExtensions: vi.fn().mockResolvedValue([]),
+      getInstalled: vi.fn().mockResolvedValue((stubs?.installedIds ?? []).map(asLocal)),
+      listBuiltinExtensions: vi.fn().mockResolvedValue((stubs?.builtinIds ?? []).map(asLocal)),
     } as unknown as IExtensionManagementService,
     {
       onDidChangeEnablement: Event.None,
-      getEffectiveDisabledIds: vi.fn().mockResolvedValue([]),
+      getEffectiveDisabledIds: vi.fn().mockResolvedValue(stubs?.effectiveDisabledIds ?? []),
     } as unknown as IExtensionEnablementService,
     {
       onDidChangeTrust: trustChange,
@@ -210,6 +224,34 @@ describe('ExtensionHostClientService', () => {
 
     svc.dispose()
     expect(disposed).toHaveLength(1)
+  })
+
+  it('never forwards a dev-extension id into the spec disabledIds (owned-set intersection)', async () => {
+    // Regression pin: dev extensions (--extension-development-path) are NOT in
+    // listBuiltinExtensions() ∪ getInstalled(), so even if enablement reports a
+    // dev id as disabled (e.g. the same-id shipped build was disabled), the
+    // intersection keeps it out of UNIVERSE_DISABLED_EXTENSIONS and the dev
+    // copy still activates. The host-side filter also exempts dev extensions;
+    // this test guards the renderer side from future refactors folding dev
+    // extensions into the owned set without thinking.
+    const host = fakeHost()
+    const svc = makeServiceWith(
+      host,
+      vi.fn(),
+      Event.None,
+      Event.None,
+      { current: undefined },
+      {
+        effectiveDisabledIds: ['dev.iterating', 'shipped.disabled'],
+        builtinIds: ['shipped.disabled'],
+      },
+    )
+
+    await svc.start()
+    const spec = vi.mocked(host.start).mock.calls[0]?.[0]
+    expect(spec?.disabledIds).toEqual(['shipped.disabled'])
+
+    svc.dispose()
   })
 
   it('re-emits contributions after a workspace-swap restart', async () => {

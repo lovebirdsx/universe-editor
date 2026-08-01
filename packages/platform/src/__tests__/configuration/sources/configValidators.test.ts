@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   asBoolean,
+  asNumber,
   asString,
   asStringArray,
   isHttpUrl,
@@ -33,6 +34,30 @@ describe('asStringArray', () => {
     expect(asStringArray(['a', 'b'])).toEqual(['a', 'b'])
     expect(asStringArray('')).toBeUndefined()
     expect(asStringArray(undefined)).toBeUndefined()
+  })
+})
+
+describe('asNumber', () => {
+  it('passes finite numbers through', () => {
+    expect(asNumber(9229)).toBe(9229)
+    expect(asNumber(0)).toBe(0)
+    expect(asNumber(Number.NaN)).toBeUndefined()
+    expect(asNumber(Number.POSITIVE_INFINITY)).toBeUndefined()
+  })
+
+  it('parses numeric strings', () => {
+    expect(asNumber('9229')).toBe(9229)
+    expect(asNumber(' 42 ')).toBe(42)
+  })
+
+  it('rejects non-numeric strings and other types', () => {
+    expect(asNumber('')).toBeUndefined()
+    expect(asNumber('   ')).toBeUndefined()
+    expect(asNumber('abc')).toBeUndefined()
+    expect(asNumber('1.5.6')).toBeUndefined()
+    expect(asNumber(true)).toBeUndefined()
+    expect(asNumber(['1'])).toBeUndefined()
+    expect(asNumber(undefined)).toBeUndefined()
   })
 })
 

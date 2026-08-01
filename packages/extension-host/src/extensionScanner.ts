@@ -39,6 +39,14 @@ export interface IScannedExtension {
    * VSCode's system extensions.
    */
   readonly builtin: boolean
+  /**
+   * True for extensions loaded from a --extension-development-path root. Like
+   * `builtin` they bypass the Workspace Trust gate (a developer obviously trusts
+   * their own code), but the flags are deliberately separate: `builtin` also
+   * feeds distribution-side rules (not uninstallable, id-collision winner in
+   * the management UI), which must NOT apply to a dev extension.
+   */
+  readonly isUnderDevelopment?: boolean
   /** Absolute path to the entry module, or undefined for a declaration-only extension. */
   readonly mainPath?: string
   /**
@@ -95,11 +103,18 @@ async function resolveJsonValidation(
   return resolved
 }
 
-async function scanOne(
+/**
+ * Scan ONE extension root (a directory that itself contains a `package.json` —
+ * the --extension-development-path shape), as opposed to {@link scanExtensions}
+ * where every subdirectory is an extension. Throws on a missing/invalid manifest
+ * or an unsatisfied `engines.universe` — the caller decides whether to skip.
+ */
+export async function scanSingleExtension(
   extensionPath: string,
   builtin: boolean,
   hostApiVersion?: string,
   locale?: string,
+  opts?: { readonly isUnderDevelopment?: boolean },
 ): Promise<IScannedExtension> {
   const manifestPath = path.join(extensionPath, 'package.json')
   const raw = JSON.parse(await readFile(manifestPath, 'utf8')) as unknown
@@ -118,6 +133,7 @@ async function scanOne(
     manifest,
     extensionPath,
     builtin,
+    ...(opts?.isUnderDevelopment === true ? { isUnderDevelopment: true } : {}),
     ...(manifest.main !== undefined
       ? { mainPath: path.resolve(extensionPath, manifest.main) }
       : {}),
@@ -163,7 +179,7 @@ export async function scanExtensions(
     if (entry.name.endsWith(DELETED_FOLDER_POSTFIX)) continue
     const extensionPath = path.join(dir, entry.name)
     try {
-      result.push(await scanOne(extensionPath, builtin, hostApiVersion, locale))
+      result.push(await scanSingleExtension(extensionPath, builtin, hostApiVersion, locale))
     } catch (err) {
       console.error(`[ext-host] skipping ${entry.name}: ${(err as Error).message}`)
     }

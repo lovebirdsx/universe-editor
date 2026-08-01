@@ -20,6 +20,7 @@ import {
   type IReader,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
+import { EXTENSION_DEVELOPMENT_ENABLED_KEY } from '../../shared/extensionDevelopment.js'
 import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
 import {
@@ -67,8 +68,15 @@ export class WindowTitleContribution extends Disposable implements IWorkbenchCon
     this._workspaceRev.read(r)
     const workspace = this._workspaceService.current
     const appName = localize('app.name', 'Universe Editor')
+    // Extension-development host instances get a mode badge, like VSCode's
+    // "[Extension Development Host]" — a dev window must be visually
+    // distinguishable from the main instance at a glance (Alt+Tab / taskbar).
+    const devHostBadge =
+      window[EXTENSION_DEVELOPMENT_ENABLED_KEY] === true
+        ? localize('windowTitle.extDevHost', '[Extension Development Host]')
+        : undefined
     if (!workspace) {
-      document.title = appName
+      document.title = formatWindowTitle({ appName, devHostBadge })
       return
     }
     const parentPath = workspace.folder.path.replace(/\/[^/]+\/?$/, '')
@@ -94,6 +102,7 @@ export class WindowTitleContribution extends Disposable implements IWorkbenchCon
       parent,
       symbol,
       sessionTitle,
+      devHostBadge,
     })
   }
 }

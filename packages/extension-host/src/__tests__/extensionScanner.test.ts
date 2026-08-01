@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { scanExtensions } from '../extensionScanner.js'
+import { scanExtensions, scanSingleExtension } from '../extensionScanner.js'
 
 let dir: string
 
@@ -228,5 +228,42 @@ describe('scanExtensions', () => {
 
     const [dflt] = await scanExtensions(dir, false)
     expect(dflt?.manifest.contributes?.commands?.[0]?.title).toBe('Hi')
+  })
+})
+
+describe('scanSingleExtension', () => {
+  async function writeRoot(manifest: unknown): Promise<string> {
+    const root = join(dir, 'dev-ext')
+    await mkdir(root, { recursive: true })
+    await writeFile(join(root, 'package.json'), JSON.stringify(manifest), 'utf8')
+    return root
+  }
+
+  it('scans the directory itself as one extension root (--extension-development-path shape)', async () => {
+    const root = await writeRoot(goodManifest)
+    const ext = await scanSingleExtension(root, false)
+    expect(ext.id).toBe('good')
+    expect(ext.extensionPath).toBe(root)
+    expect(ext.mainPath).toBe(join(root, 'dist', 'extension.js'))
+    expect(ext.builtin).toBe(false)
+    expect(ext.isUnderDevelopment).toBeUndefined()
+  })
+
+  it('tags the result as under development via opts', async () => {
+    const root = await writeRoot(goodManifest)
+    const ext = await scanSingleExtension(root, false, undefined, undefined, {
+      isUnderDevelopment: true,
+    })
+    expect(ext.isUnderDevelopment).toBe(true)
+  })
+
+  it('throws on an invalid manifest so the caller can skip + warn', async () => {
+    const root = await writeRoot({ name: 'bad' }) // missing version + engines
+    await expect(scanSingleExtension(root, false)).rejects.toThrow()
+  })
+
+  it('throws on an unsatisfied engines.universe when a host API version is given', async () => {
+    const root = await writeRoot({ ...goodManifest, engines: { universe: '^2.0.0' } })
+    await expect(scanSingleExtension(root, false, '0.1.5')).rejects.toThrow(/requires universe/)
   })
 })

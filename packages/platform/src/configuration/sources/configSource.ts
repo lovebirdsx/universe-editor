@@ -6,16 +6,18 @@
  *  Pure: no IO, no electron/fs imports — sources inject their inputs.
  *--------------------------------------------------------------------------------------------*/
 
-import { asBoolean, asString, asStringArray } from './configValidators.js'
+import { asBoolean, asNumber, asString, asStringArray } from './configValidators.js'
 
-export type ConfigItemType = 'string' | 'boolean' | 'string[]'
+export type ConfigItemType = 'string' | 'boolean' | 'string[]' | 'number'
 
 /** Maps a ConfigItemType to its resolved value type. */
 export type ConfigItemValue<K extends ConfigItemType> = K extends 'string'
   ? string
   : K extends 'boolean'
     ? boolean
-    : string[]
+    : K extends 'number'
+      ? number
+      : string[]
 
 export interface ConfigItem<K extends ConfigItemType = ConfigItemType> {
   /** Stable identifier used to index resolver output. */
@@ -42,7 +44,7 @@ export interface ConfigItem<K extends ConfigItemType = ConfigItemType> {
 }
 
 /** A raw value located by a source, before type normalization. */
-export type RawConfigValue = string | string[] | boolean | undefined
+export type RawConfigValue = string | string[] | boolean | number | undefined
 
 export interface IConfigSource {
   /** Diagnostic origin label: 'cli' | 'env' | 'file' | 'settings' | … */
@@ -68,6 +70,8 @@ function normalize<K extends ConfigItemType>(
       return asBoolean(raw) as ConfigItemValue<K> | undefined
     case 'string[]':
       return asStringArray(raw) as ConfigItemValue<K> | undefined
+    case 'number':
+      return asNumber(raw) as ConfigItemValue<K> | undefined
     default:
       return undefined
   }

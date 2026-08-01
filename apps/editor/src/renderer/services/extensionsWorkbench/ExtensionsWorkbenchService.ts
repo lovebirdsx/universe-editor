@@ -56,6 +56,12 @@ export interface IExtensionEntry {
   readonly installing: boolean
   /** A bundled built-in extension (git / typescript / …); cannot be uninstalled. */
   readonly isBuiltin: boolean
+  /**
+   * Loaded from a --extension-development-path root. Shows a "development"
+   * badge; uninstall/disable affordances are hidden (it is not in
+   * `extensions.json`, so neither operation has meaning for it).
+   */
+  readonly isUnderDevelopment: boolean
   /** Whether the extension is currently enabled (resolved global + workspace). */
   readonly enabled: boolean
   /** The resolved enablement state (drives which enable/disable actions to show). */
@@ -147,6 +153,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 
   private _installed: ILocalExtension[] = []
   private _builtin: ILocalExtension[] = []
+  private _dev: ILocalExtension[] = []
   private _results: IGalleryExtension[] = []
   private _searchText = ''
   private _searching = false
@@ -202,8 +209,13 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
   }
 
   getInstalled(): IExtensionEntry[] {
-    // Built-ins first, then user-installed; both carry enablement state.
-    return [...this._builtin, ...this._installed].map((local) => this._entryFromLocal(local))
+    // Dev extensions first (the thing you're iterating on should be on top),
+    // then built-ins, then user-installed. A dev extension sharing an id with a
+    // built-in shows BOTH entries — the UI presents "what is installed" (the
+    // badge tells them apart); the host's scan dedupe governs which activates.
+    return [...this._dev, ...this._builtin, ...this._installed].map((local) =>
+      this._entryFromLocal(local),
+    )
   }
 
   getSearchResults(): IExtensionEntry[] {
@@ -211,12 +223,14 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
   }
 
   async refreshInstalled(): Promise<void> {
-    const [installed, builtin] = await Promise.all([
+    const [installed, builtin, dev] = await Promise.all([
       this._management.getInstalled(),
       this._management.listBuiltinExtensions(),
+      this._management.listDevExtensions(),
     ])
     this._installed = installed
     this._builtin = builtin
+    this._dev = dev
     // Resolve enablement for every id in one pass so entry mapping stays sync.
     const ids = [...builtin, ...installed].map((e) => e.identifier)
     const states = await Promise.all(ids.map((id) => this._enablement.getEnablementState(id)))
@@ -410,6 +424,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
       outdated: false,
       installing: this._installing.has(local.identifier),
       isBuiltin: local.source === 'builtin',
+      isUnderDevelopment: local.source === 'development',
       enabled: this._isEnabledState(state),
       enablementState: state,
       local,
@@ -436,6 +451,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
       outdated: local !== undefined && local.version !== gallery.version,
       installing: this._installing.has(gallery.identifier),
       isBuiltin: false,
+      isUnderDevelopment: false,
       enabled: local === undefined || this._isEnabledState(state),
       enablementState: state,
       gallery,

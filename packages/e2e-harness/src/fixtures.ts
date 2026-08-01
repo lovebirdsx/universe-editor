@@ -43,6 +43,12 @@ export interface AppFixtureConfig {
    * `--extensionDevelopmentPath` model). Applied to every launch this fixture makes.
    */
   readonly env?: Readonly<Record<string, string>>
+  /**
+   * Extra CLI args appended to every launch (e.g.
+   * `['--extension-development-path', dir]` to exercise the real CLI path rather
+   * than an env injection). Placed before any workspace positional arg.
+   */
+  readonly extraArgs?: readonly string[]
 }
 
 export interface E2EFixtures {
@@ -120,7 +126,7 @@ export function createColdAppTest(config: AppFixtureConfig): E2ETest {
         ...(config.env !== undefined ? { env: config.env } : {}),
         // Positional folder arg → main's parseFileToOpen → openWindowForFolder:
         // the app boots with this workspace already attached.
-        ...(launchWorkspace ? { extraArgs: [launchWorkspace.dir] } : {}),
+        extraArgs: [...(config.extraArgs ?? []), ...(launchWorkspace ? [launchWorkspace.dir] : [])],
       })
       await use(app)
       await closeApp(app)
@@ -277,6 +283,7 @@ export function createSharedAppTest(config: AppFixtureConfig): SharedE2ETest {
           userDataDir,
           ...(config.extensions !== undefined ? { extensions: config.extensions } : {}),
           ...(config.env !== undefined ? { env: config.env } : {}),
+          ...(config.extraArgs !== undefined ? { extraArgs: config.extraArgs } : {}),
         })
         const page = await app.firstWindow()
         await page.waitForLoadState('domcontentloaded')

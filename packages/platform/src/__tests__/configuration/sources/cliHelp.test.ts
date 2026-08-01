@@ -30,6 +30,24 @@ describe('buildHelpMessage', () => {
     expect(help).not.toContain('APPDATA')
     expect(help).not.toContain('appData')
   })
+
+  it('marks string[] options as repeatable', () => {
+    const withArr = buildHelpMessage({
+      executableName: 'universe-editor',
+      version: '0.1.0',
+      items: [
+        {
+          id: 'devPaths',
+          type: 'string[]',
+          cli: 'extension-development-path',
+          args: '<dir>',
+          description: 'Load extension from source',
+        },
+      ],
+    })
+    expect(withArr).toContain('--extension-development-path <dir>')
+    expect(withArr).toContain('Load extension from source（可重复）')
+  })
 })
 
 describe('buildVersionMessage', () => {

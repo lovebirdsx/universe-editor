@@ -78,6 +78,11 @@ export class ExtensionActivationService {
     if (this._isTrusted()) return true
     // Built-ins ship with the app — implicitly trusted, like VSCode system extensions.
     if (ext.builtin) return true
+    // Dev extensions (--extension-development-path): the developer obviously
+    // trusts their own code, and a debugging workspace is typically an ad-hoc
+    // fixture dir that is never trusted — gating would make the first-run
+    // experience "the extension doesn't activate".
+    if (ext.isUnderDevelopment) return true
     const support = getUntrustedWorkspaceSupportType({
       hasMain: ext.mainPath !== undefined,
       ...(ext.manifest.capabilities?.untrustedWorkspaces !== undefined

@@ -108,8 +108,8 @@ function Header({
             <Spinner size={16} />
           ) : entry.installed ? (
             <>
-              <EnablementActions entry={entry} service={service} />
-              {!entry.isBuiltin && (
+              {!entry.isUnderDevelopment && <EnablementActions entry={entry} service={service} />}
+              {!entry.isBuiltin && !entry.isUnderDevelopment && (
                 <Button variant="secondary" onClick={() => void service.uninstall(entry)}>
                   {localize('extensions.uninstall', 'Uninstall')}
                 </Button>

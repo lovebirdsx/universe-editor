@@ -47,6 +47,13 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'command.category.terminal': '终端',
   'command.category.view': '视图',
 
+  // --- Extensions ---
+  'action.extensions.restartHost': '重启扩展宿主',
+  'extensions.development': '开发中',
+  'extDev.statusBar': '扩展开发宿主 ({count})',
+  'extDev.statusBar.tooltip': '扩展开发宿主：从源码目录加载了 {count} 个开发中的扩展\n{paths}',
+  'windowTitle.extDevHost': '[扩展开发宿主]',
+
   // --- Menus ---
   'menu.activityBar': '活动栏',
   'menu.edit': '编辑',

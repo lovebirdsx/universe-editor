@@ -2,6 +2,10 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { IPC_PROTOCOL_CHANNEL } from '../shared/ipc/channelNames.js'
 import { E2E_PROBE_ARGV_FLAG, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
+import {
+  EXTENSION_DEVELOPMENT_ARGV_FLAG,
+  EXTENSION_DEVELOPMENT_ENABLED_KEY,
+} from '../shared/extensionDevelopment.js'
 
 const HOME_DIR_FLAG = '--ue-home-dir='
 const homeArg = process.argv.find((a) => a.startsWith(HOME_DIR_FLAG))
@@ -99,6 +103,10 @@ contextBridge.exposeInMainWorld('ipc', bridge)
 
 if (process.argv.includes(E2E_PROBE_ARGV_FLAG)) {
   contextBridge.exposeInMainWorld(E2E_PROBE_ENABLED_KEY, true)
+}
+
+if (process.argv.includes(EXTENSION_DEVELOPMENT_ARGV_FLAG)) {
+  contextBridge.exposeInMainWorld(EXTENSION_DEVELOPMENT_ENABLED_KEY, true)
 }
 
 export type IpcBridge = typeof bridge

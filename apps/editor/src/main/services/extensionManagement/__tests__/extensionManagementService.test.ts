@@ -415,6 +415,42 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
     expect(await svc2.listBuiltinExtensions()).toEqual([])
     svc2.dispose()
   })
+
+  it('lists dev extensions from --extension-development-path roots with source=development', async () => {
+    const devRoot = path.join(root, 'dev-ext')
+    await mkdir(devRoot, { recursive: true })
+    await writeFile(
+      path.join(devRoot, 'package.json'),
+      JSON.stringify(manifest({ name: 'iterating', publisher: 'acme' })),
+    )
+    const badRoot = path.join(root, 'dev-bad')
+    await mkdir(badRoot, { recursive: true })
+    await writeFile(path.join(badRoot, 'package.json'), '{ not json', 'utf8')
+
+    const svc2 = new ExtensionManagementMainService(
+      () => extDir,
+      HOST_API,
+      undefined,
+      undefined,
+      () => path.join(root, 'nonexistent'),
+      () => [devRoot, badRoot, path.join(root, 'dev-missing')],
+    )
+    const dev = await svc2.listDevExtensions()
+    // A broken or missing root is skipped with a warning, never blocking the rest.
+    expect(dev).toHaveLength(1)
+    expect(dev[0]).toMatchObject({
+      identifier: 'acme.iterating',
+      source: 'development',
+      location: devRoot,
+    })
+    svc2.dispose()
+  })
+
+  it('lists no dev extensions when no dev paths are configured', async () => {
+    const svc2 = new ExtensionManagementMainService(() => extDir, HOST_API, undefined, undefined)
+    expect(await svc2.listDevExtensions()).toEqual([])
+    svc2.dispose()
+  })
 })
 
 describe('deleteExtensionFolder / sweepDeletedFolders', () => {

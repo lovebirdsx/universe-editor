@@ -76,6 +76,7 @@ import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { ExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import type { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
 import type { IExtensionEnablementService } from '../services/extensions/ExtensionEnablementService.js'
+import type { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 import { EnablementState } from '../services/extensions/ExtensionEnablementService.js'
 import type { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
 import type { WorkbenchThemeService } from '../services/themes/workbenchThemeService.js'
@@ -111,6 +112,7 @@ export interface E2EProbeServices {
   readonly fileService: IFileService
   readonly extensionManagementService: IExtensionManagementService
   readonly extensionEnablementService: IExtensionEnablementService
+  readonly extensionHostClientService: IExtensionHostClientService
   readonly outputModelService: IOutputModelService
   readonly loggerService: ILoggerService
   readonly userKeybindingsService: IUserKeybindingsService
@@ -672,6 +674,10 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getBuiltinExtensionIds: async (): Promise<readonly string[]> => {
       const list = await services.extensionManagementService.listBuiltinExtensions()
       return list.map((e) => e.identifier)
+    },
+    getDevExtensionIds: async (): Promise<readonly string[]> => {
+      const contributions = await services.extensionHostClientService.getContributions()
+      return contributions.filter((c) => c.extensionIsUnderDevelopment === true).map((c) => c.id)
     },
     getDisabledExtensionIds: (): Promise<readonly string[]> =>
       services.extensionEnablementService.getEffectiveDisabledIds(),

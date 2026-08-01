@@ -317,6 +317,14 @@ export interface IExtensionDescriptionDto {
   readonly extensionLocation: string
   /** True for extensions shipped with the app (built-in dir). */
   readonly extensionIsBuiltin: boolean
+  /**
+   * True for extensions loaded from a --extension-development-path root: they
+   * bypass the Workspace Trust activation gate and show a "development" badge
+   * in the Extensions UI. Deliberately separate from `extensionIsBuiltin` —
+   * built-in also feeds distribution-side rules (not uninstallable) that must
+   * not apply to a dev extension.
+   */
+  readonly extensionIsUnderDevelopment?: boolean
 }
 
 /**

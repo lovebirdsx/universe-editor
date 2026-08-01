@@ -128,6 +128,7 @@ function makeOpts() {
     } as never,
     logService: new LogMainService(),
     e2eEnabled: false,
+    extensionDevelopment: false,
     rendererDebug: false,
     preloadPath: '/preload/index.cjs',
     rendererUrl: 'http://localhost:5173',

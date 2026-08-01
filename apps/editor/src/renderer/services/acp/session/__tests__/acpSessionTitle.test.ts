@@ -27,6 +27,30 @@ describe('formatWindowTitle', () => {
     expect(formatWindowTitle({ appName: 'Universe Editor' })).toBe('Universe Editor')
   })
 
+  it('appends the dev-host badge to every title shape', () => {
+    const badge = '[Extension Development Host]'
+    expect(formatWindowTitle({ appName: 'Universe Editor', devHostBadge: badge })).toBe(
+      `Universe Editor ${badge}`,
+    )
+    expect(
+      formatWindowTitle({
+        appName: 'Universe Editor',
+        workspaceName: 'universe-editor3',
+        parent: 'D:\\git_project',
+        devHostBadge: badge,
+      }),
+    ).toBe(`universe-editor3 - D:\\git_project ${badge}`)
+    expect(
+      formatWindowTitle({
+        appName: 'Universe Editor',
+        workspaceName: 'universe-editor3',
+        symbol: '●',
+        sessionTitle: '修复登录Bug',
+        devHostBadge: badge,
+      }),
+    ).toBe(`universe-editor3 — ● 修复登录Bug ${badge}`)
+  })
+
   it('falls back to "name - parent" without an active session', () => {
     expect(
       formatWindowTitle({

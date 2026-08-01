@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { EnvironmentMainService } from '../environmentMainService.js'
 
 function make(opts: {
@@ -205,6 +205,91 @@ describe('configDir', () => {
   })
 })
 
+describe('extensionDevPaths / isExtensionDevelopment', () => {
+  it('collects a repeatable cli flag in order', () => {
+    const env = make({
+      argv: [
+        'node',
+        'main.js',
+        '--extension-development-path=/a',
+        '--extension-development-path=/b',
+      ],
+    })
+    expect(env.extensionDevPaths).toEqual(['/a', '/b'])
+    expect(env.isExtensionDevelopment).toBe(true)
+  })
+
+  it('reads the env form and splits on path.delimiter', () => {
+    const env = make({ env: { UNIVERSE_EXTENSION_DEV_PATH: ['/x', '/y'].join(delimiter) } })
+    expect(env.extensionDevPaths).toEqual(['/x', '/y'])
+  })
+
+  it('cli wins over env', () => {
+    const env = make({
+      argv: ['node', 'main.js', '--extension-development-path=/cli'],
+      env: { UNIVERSE_EXTENSION_DEV_PATH: '/env' },
+    })
+    expect(env.extensionDevPaths).toEqual(['/cli'])
+  })
+
+  it('is empty and non-development by default', () => {
+    const env = make({})
+    expect(env.extensionDevPaths).toEqual([])
+    expect(env.isExtensionDevelopment).toBe(false)
+  })
+
+  it('flags isExtensionDevelopment in toResolveEnv', () => {
+    const env = make({ argv: ['node', 'main.js', '--extension-development-path=/a'] })
+    expect(env.toResolveEnv().isExtensionDevelopment).toBe(true)
+  })
+})
+
+describe('inspectExtensionsPort / inspectBrkExtensionsPort', () => {
+  it('parses a valid port from cli', () => {
+    const env = make({ argv: ['node', 'main.js', '--inspect-extensions=9229'] })
+    expect(env.inspectExtensionsPort).toBe(9229)
+  })
+
+  it('parses a valid port from env', () => {
+    const env = make({ env: { UNIVERSE_INSPECT_EXTENSIONS: '9229' } })
+    expect(env.inspectExtensionsPort).toBe(9229)
+  })
+
+  it('falls through to env when the cli value is not numeric', () => {
+    const env = make({
+      argv: ['node', 'main.js', '--inspect-extensions=abc'],
+      env: { UNIVERSE_INSPECT_EXTENSIONS: '9229' },
+    })
+    expect(env.inspectExtensionsPort).toBe(9229)
+  })
+
+  it('rejects out-of-range and non-integer ports', () => {
+    expect(
+      make({ argv: ['node', 'main.js', '--inspect-extensions=99999'] }).inspectExtensionsPort,
+    ).toBeUndefined()
+    expect(
+      make({ argv: ['node', 'main.js', '--inspect-extensions=80.5'] }).inspectExtensionsPort,
+    ).toBeUndefined()
+    expect(
+      make({ argv: ['node', 'main.js', '--inspect-extensions=0'] }).inspectExtensionsPort,
+    ).toBeUndefined()
+  })
+
+  it('reads --inspect-brk-extensions independently', () => {
+    const env = make({
+      argv: ['node', 'main.js', '--inspect-extensions=9229', '--inspect-brk-extensions=9230'],
+    })
+    expect(env.inspectExtensionsPort).toBe(9229)
+    expect(env.inspectBrkExtensionsPort).toBe(9230)
+  })
+
+  it('is undefined by default', () => {
+    const env = make({})
+    expect(env.inspectExtensionsPort).toBeUndefined()
+    expect(env.inspectBrkExtensionsPort).toBeUndefined()
+  })
+})
+
 describe('cli commands', () => {
   it('shouldPrintHelp for --help and -h', () => {
     expect(make({ argv: ['node', 'main.js', '--help'] }).shouldPrintHelp).toBe(true)
@@ -249,6 +334,7 @@ describe('toResolveEnv', () => {
     expect(env.toResolveEnv()).toEqual({
       isDev: true,
       isE2E: true,
+      isExtensionDevelopment: false,
       platform: 'win32',
       home: 'C:\\Users\\u',
       override: '/cli',

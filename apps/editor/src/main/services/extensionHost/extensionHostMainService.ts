@@ -63,6 +63,18 @@ export type ExtHostExtensionsDirResolver = () => string
  *  applies (see tsServerPaths). */
 export type TsServerSpecResolver = (workspaceRoot?: string) => TsServerSpec
 
+/** Resolves extension-development roots (--extension-development-path). Injectable for tests. */
+export type ExtHostDevPathsResolver = () => readonly string[]
+
+/** Extension-host inspector ports; `brk` wins over `port` when both are set. */
+export interface ExtHostInspectOptions {
+  readonly port: number | undefined
+  readonly brk: number | undefined
+}
+
+/** Resolves inspector options (--inspect-extensions / --inspect-brk-extensions). Injectable for tests. */
+export type ExtHostInspectResolver = () => ExtHostInspectOptions
+
 /** Default settings dir for the TS-server preference chain: the deployment
  *  config location (<userData>). `--config-dir` relocations only kick in via
  *  an explicit constructor override (the DI wiring below passes the resolved
@@ -157,6 +169,11 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     private readonly _resolveTsServerSpec: TsServerSpecResolver = createTsServerSpecResolver(
       defaultSettingsDir(),
     ),
+    private readonly _resolveDevExtensionPaths: ExtHostDevPathsResolver = () => [],
+    private readonly _resolveInspect: ExtHostInspectResolver = () => ({
+      port: undefined,
+      brk: undefined,
+    }),
     @ILoggerService loggerService?: ILoggerService,
   ) {
     super()
@@ -207,6 +224,26 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     // Disabled / quarantined extensions the host must skip scanning.
     if (spec?.disabledIds && spec.disabledIds.length > 0) {
       env.UNIVERSE_DISABLED_EXTENSIONS = spec.disabledIds.join(',')
+    }
+    // Extension-development roots (--extension-development-path), merged into the
+    // scan additively with dev > builtin > user precedence on id collision.
+    // Merged here (not via ExtHostStartSpec) so renderer-driven restarts
+    // (crash / workspace switch / enablement) keep them for free. Windows paths
+    // contain ':' — the env separator must be path.delimiter, and bootstrap
+    // splits with the same constant.
+    const devPaths = this._resolveDevExtensionPaths()
+    if (devPaths.length > 0) {
+      env.UNIVERSE_DEV_EXTENSIONS = devPaths.join(path.delimiter)
+    }
+    // Inspector flags are node CLI flags — they must precede the script entry.
+    // Bound to loopback explicitly: the inspector protocol is remote code
+    // execution, never bind 0.0.0.0. inspect-brk wins over inspect (both listen;
+    // one is meaningless), matching VSCode.
+    const inspect = this._resolveInspect()
+    if (inspect.brk !== undefined) {
+      args.push(`--inspect-brk=127.0.0.1:${inspect.brk}`)
+    } else if (inspect.port !== undefined) {
+      args.push(`--inspect=127.0.0.1:${inspect.port}`)
     }
     args.push(entry)
 

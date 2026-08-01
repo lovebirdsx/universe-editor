@@ -5,6 +5,7 @@ import { applyProductIdentity, resolveProductIdentity, type ResolveEnv } from '.
 const winBase: ResolveEnv = {
   isDev: false,
   isE2E: false,
+  isExtensionDevelopment: false,
   platform: 'win32',
   appData: 'C:\\Users\\u\\AppData\\Roaming',
   home: 'C:\\Users\\u',
@@ -31,6 +32,29 @@ describe('resolveProductIdentity', () => {
     expect(id.appUserModelId).toBe('io.universe.editor.e2e')
   })
 
+  it('extension-development mode uses the ExtDev flavor with an isolated userData', () => {
+    const id = resolveProductIdentity({ ...winBase, isDev: true, isExtensionDevelopment: true })
+    expect(id.productName).toBe('Universe Editor - ExtDev')
+    expect(id.appUserModelId).toBe('io.universe.editor.extdev')
+    expect(id.userDataDir).toBe(pathWin32.join(winBase.appData!, 'Universe Editor - ExtDev'))
+  })
+
+  it('e2e wins over extension-development mode', () => {
+    const id = resolveProductIdentity({ ...winBase, isE2E: true, isExtensionDevelopment: true })
+    expect(id.productName).toBe('Universe Editor - E2E')
+    expect(id.appUserModelId).toBe('io.universe.editor.e2e')
+  })
+
+  it('override still outranks the ExtDev flavor default', () => {
+    const id = resolveProductIdentity({
+      ...winBase,
+      isExtensionDevelopment: true,
+      override: 'D:\\tmp\\extdev',
+    })
+    expect(id.userDataDir).toBe('D:\\tmp\\extdev')
+    expect(id.productName).toBe('Universe Editor - ExtDev')
+  })
+
   it('override forces userDataDir but keeps productName from flavor', () => {
     const id = resolveProductIdentity({
       ...winBase,
@@ -45,6 +69,7 @@ describe('resolveProductIdentity', () => {
     const id = resolveProductIdentity({
       isDev: false,
       isE2E: false,
+      isExtensionDevelopment: false,
       platform: 'darwin',
       home: '/Users/u',
     })
@@ -55,6 +80,7 @@ describe('resolveProductIdentity', () => {
     const id = resolveProductIdentity({
       isDev: false,
       isE2E: false,
+      isExtensionDevelopment: false,
       platform: 'linux',
       home: '/home/u',
       xdgConfigHome: '/home/u/.config-custom',
@@ -66,6 +92,7 @@ describe('resolveProductIdentity', () => {
     const id = resolveProductIdentity({
       isDev: false,
       isE2E: false,
+      isExtensionDevelopment: false,
       platform: 'linux',
       home: '/home/u',
     })
@@ -76,6 +103,7 @@ describe('resolveProductIdentity', () => {
     const id = resolveProductIdentity({
       isDev: false,
       isE2E: false,
+      isExtensionDevelopment: false,
       platform: 'win32',
       home: 'C:\\Users\\u',
     })

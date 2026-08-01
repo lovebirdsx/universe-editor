@@ -26,10 +26,17 @@ export interface ActivationFilter {
 }
 
 /**
- * De-dupe scanned extensions by id (first occurrence wins — built-in over user,
- * since the caller scans built-in dir first), then drop disabled and, when an
- * allowlist is present, drop BUILT-INS WITH A MAIN MODULE not on it
+ * De-dupe scanned extensions by id (first occurrence wins — the caller orders
+ * the scan dev > built-in > user, so a --extension-development-path extension
+ * overrides a same-id built-in or installed copy), then drop disabled and, when
+ * an allowlist is present, drop BUILT-INS WITH A MAIN MODULE not on it
  * (declaration-only built-ins and user-installed extensions are never gated).
+ *
+ * Development extensions (`isUnderDevelopment`) are exempt from the disabled
+ * set: VSCode's dev extensions don't participate in the enablement system at
+ * all, and the dev semantic is "override everything" — a user who disabled the
+ * shipped build of the extension they're iterating on must still see their
+ * dev copy activate.
  */
 export function computeActiveExtensions(
   scanned: readonly IScannedExtension[],
@@ -43,7 +50,9 @@ export function computeActiveExtensions(
   const { disabled, allowlist } = filter
   const gatedByAllowlist = (e: IScannedExtension): boolean =>
     allowlist !== undefined && e.builtin && e.mainPath !== undefined && !allowlist.has(e.id)
-  const active = deduped.filter((e) => !(disabled?.has(e.id) ?? false) && !gatedByAllowlist(e))
+  const active = deduped.filter(
+    (e) => !((disabled?.has(e.id) ?? false) && !e.isUnderDevelopment) && !gatedByAllowlist(e),
+  )
   return { deduped, active }
 }
 

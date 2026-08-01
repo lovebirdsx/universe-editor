@@ -24,9 +24,12 @@ import {
   APP_DATA,
   CLI_OPTIONS,
   CONFIG_DIR,
+  EXTENSION_DEV_PATHS,
   GALLERY_URL,
   HELP,
   HOME,
+  INSPECT_BRK_EXTENSIONS,
+  INSPECT_EXTENSIONS,
   IS_E2E,
   RENDERER_DEBUG,
   RENDERER_URL,
@@ -95,6 +98,29 @@ export class EnvironmentMainService {
     return this._resolver.get(RENDERER_DEBUG) ?? false
   }
 
+  /**
+   * Extension development roots (cli repeatable flag, or env joined by
+   * path.delimiter — the EnvConfigSource already split it). Empty when absent.
+   */
+  get extensionDevPaths(): string[] {
+    return this._resolver.get(EXTENSION_DEV_PATHS) ?? []
+  }
+
+  /** True when at least one --extension-development-path is present. */
+  get isExtensionDevelopment(): boolean {
+    return this.extensionDevPaths.length > 0
+  }
+
+  /** Extension-host debug port (--inspect-extensions); undefined when absent/invalid. */
+  get inspectExtensionsPort(): number | undefined {
+    return this._resolver.get(INSPECT_EXTENSIONS)
+  }
+
+  /** Extension-host debug port with pre-activation break (--inspect-brk-extensions). */
+  get inspectBrkExtensionsPort(): number | undefined {
+    return this._resolver.get(INSPECT_BRK_EXTENSIONS)
+  }
+
   // ---- CLI commands (--help / --version) -------------------------------------
 
   get shouldPrintHelp(): boolean {
@@ -126,6 +152,7 @@ export class EnvironmentMainService {
     return {
       isDev: this._isDev,
       isE2E: this.isE2E,
+      isExtensionDevelopment: this.isExtensionDevelopment,
       platform: this._platform,
       home,
       ...(override !== undefined ? { override } : {}),

@@ -48,6 +48,20 @@ function buildItems(
     h.onSetEnablement(entry, state)
   }
 
+  // A dev extension is not in extensions.json — enable/disable and uninstall
+  // have no meaning for it. Offer only the details page.
+  if (entry.isUnderDevelopment) {
+    items.push({
+      kind: 'item',
+      label: localize('extensions.viewDetails', 'View Details'),
+      run: () => {
+        close()
+        h.onOpen(entry)
+      },
+    })
+    return items
+  }
+
   if (entry.enabled) {
     items.push({
       kind: 'item',

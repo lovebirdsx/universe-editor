@@ -17,6 +17,7 @@
  * `console.log` inside a language-service dependency), we capture the real
  * stdout for framing and then point every stdout-bound `console.*` at stderr.
  */
+import * as path from 'node:path'
 import { ChannelClient, ChannelServer, Emitter, ProxyChannel } from '@universe-editor/platform'
 import {
   ExtHostChannels,
@@ -43,7 +44,7 @@ import {
   type IMainThreadExtensions,
   type StdioTransport,
 } from '@universe-editor/extensions-common'
-import { scanExtensions } from './extensionScanner.js'
+import { scanExtensions, scanSingleExtension, type IScannedExtension } from './extensionScanner.js'
 import { computeActiveExtensions, parseIdSet } from './extensionActivationFilter.js'
 import { ExtensionService } from './extensionService.js'
 import { protectStdout } from './stdoutProtection.js'
@@ -286,10 +287,35 @@ async function main(): Promise<void> {
     { dir: process.env.UNIVERSE_BUILTIN_EXTENSIONS_DIR, builtin: true },
     { dir: process.env.UNIVERSE_USER_EXTENSIONS_DIR, builtin: false },
   ].filter((d): d is { dir: string; builtin: boolean } => !!d.dir)
-  const scanned = (
-    await Promise.all(dirs.map((d) => scanExtensions(d.dir, d.builtin, HOST_API_VERSION, locale)))
-  ).flat()
-  // De-dupe by id (built-in wins over user), then apply the disabled set and the
+  // Extension-development roots (--extension-development-path): each is ONE
+  // extension's root (not a container dir). Windows paths contain ':' — the env
+  // separator is path.delimiter on both sides. A broken root (missing/invalid
+  // manifest) is skipped with a warning, never blocking the rest of the scan.
+  const devPaths = (process.env.UNIVERSE_DEV_EXTENSIONS ?? '')
+    .split(path.delimiter)
+    .filter((p) => p !== '')
+  const devScanned: IScannedExtension[] = []
+  for (const devPath of devPaths) {
+    try {
+      devScanned.push(
+        await scanSingleExtension(devPath, false, HOST_API_VERSION, locale, {
+          isUnderDevelopment: true,
+        }),
+      )
+    } catch (err) {
+      console.warn(`[ext-host] skipping dev extension ${devPath}: ${(err as Error).message}`)
+    }
+  }
+  // Dev entries come FIRST: computeActiveExtensions dedupes "first occurrence
+  // wins", so a dev extension overrides a same-id built-in or installed copy
+  // (iterating the next version of a shipped extension must win).
+  const scanned = [
+    ...devScanned,
+    ...(
+      await Promise.all(dirs.map((d) => scanExtensions(d.dir, d.builtin, HOST_API_VERSION, locale)))
+    ).flat(),
+  ]
+  // De-dupe by id (dev > built-in > user), then apply the disabled set and the
   // optional allowlist (e2e minimal-extension-set). See extensionActivationFilter.
   const disabled = parseIdSet(process.env.UNIVERSE_DISABLED_EXTENSIONS)
   const allowlist = parseIdSet(process.env.UNIVERSE_ENABLED_EXTENSIONS)
@@ -304,6 +330,9 @@ async function main(): Promise<void> {
       `[ext-host] scanned ${extensions.length} extension(s) from [${dirs
         .map((d) => d.dir)
         .join(', ')}]` +
+        (devScanned.length > 0
+          ? `, ${devScanned.length} under development [${devScanned.map((e) => e.id).join(', ')}]`
+          : '') +
         (allowlist !== undefined
           ? `, allowlist active → ${activeExtensions.length} enabled [${activeExtensions
               .map((e) => e.id)
