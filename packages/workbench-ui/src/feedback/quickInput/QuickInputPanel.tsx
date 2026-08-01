@@ -423,7 +423,12 @@ export function QuickPickPanel({
   const prefixMissing = prefix.length > 0 && !query.startsWith(prefix)
   const filterText = prefixActive ? query.slice(prefix.length) : prefix.length > 0 ? '' : query
 
-  const deferredFilterText = useDeferredValue(filterText)
+  // Only defer when the list is filtered locally. Externally-filtered pickers
+  // (quick open, workspace/text search) never read the deferred value, so
+  // deferring would just schedule a second render of the whole tree per
+  // keystroke whose output is identical to the first.
+  const filtersLocally = !filterExternally && !prefixMissing
+  const deferredFilterText = useDeferredValue(filtersLocally ? filterText : '')
 
   // Base list with removed items filtered out, memoized on its inputs only. In
   // filterExternally mode this reference must stay stable as the user types (the
