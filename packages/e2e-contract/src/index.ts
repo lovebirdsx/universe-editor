@@ -81,9 +81,46 @@ export interface E2EStartupMetrics {
   readonly phases: readonly E2EStartupPhase[]
 }
 
+/** One recorded slow interaction (≥ warn threshold) with its decomposition and
+ *  attribution — the rows of the Interaction Performance report's slowest table. */
+export interface E2EInteractionPerfSlowEntry {
+  readonly label: string
+  readonly durationMs: number
+  /** performance.now() timebase — the same axis page.evaluate(performance.now) reads,
+   *  so a spec can bucket entries into the scenario window that produced them. */
+  readonly startTime: number
+  readonly eventTypes: readonly string[]
+  readonly decomposition: {
+    readonly inputDelayMs: number
+    readonly processingMs: number
+    readonly presentationDelayMs: number
+  }
+  /** recordPerfPhase samples overlapping the interaction window. */
+  readonly phases: readonly {
+    readonly name: string
+    readonly startTime: number
+    readonly duration: number
+  }[]
+  /** Long-animation-frame samples overlapping the window, with script attribution. */
+  readonly loafs: readonly {
+    readonly startTime: number
+    readonly duration: number
+    readonly blockingDuration: number
+    readonly scripts: readonly {
+      readonly invoker: string
+      readonly sourceUrl: string
+      readonly sourceFunctionName: string
+      readonly durationMs: number
+    }[]
+  }[]
+  readonly context: { readonly target: string; readonly editor: string }
+}
+
 /** Session snapshot of the interaction-responsiveness floor; see
  *  E2EProbe.getInteractionPerfSummary. */
 export interface E2EInteractionPerfSummary {
+  /** Wall-clock epoch ms (Date.now) when the monitoring session started. */
+  readonly startedAt: number | undefined
   /** Event Timing samples seen (≥16ms), deduped interactions + non-interactions. */
   readonly totalSampleCount: number
   /** Deduped user interactions (interactionId ≠ 0). */
@@ -96,6 +133,8 @@ export interface E2EInteractionPerfSummary {
   >
   /** Long-animation-frame entries observed. */
   readonly loafCount: number
+  /** Slowest recorded interactions (capped), slowest first. */
+  readonly slowest: readonly E2EInteractionPerfSlowEntry[]
 }
 
 /**

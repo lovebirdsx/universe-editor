@@ -1568,11 +1568,22 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getInteractionPerfSummary: () => {
       const s = services.interactionPerfService.getSummary()
       return {
+        startedAt: s.startedAt,
         totalSampleCount: s.totalSampleCount,
         interactionCount: s.interactionCount,
         slowCount: s.slowCount,
         byType: s.byType,
         loafCount: s.loafCount,
+        slowest: s.slowest.map((entry) => ({
+          label: entry.label,
+          durationMs: entry.durationMs,
+          startTime: entry.startTime,
+          eventTypes: entry.report.eventTypes,
+          decomposition: entry.report.decomposition,
+          phases: entry.report.phases,
+          loafs: entry.report.loafs,
+          context: entry.report.context,
+        })),
       }
     },
     driveSwarmNotificationPoll: async () => {

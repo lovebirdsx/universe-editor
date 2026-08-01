@@ -315,6 +315,8 @@ mark(PerfMarks.rendererDidMount)
 
 **运行时响应性监控（常驻保底）**：`IInteractionPerfService`（`services/performance/InteractionPerfService.ts`）用 Event Timing + LoAF 双 observer 常驻采集，慢交互（≥ `performance.responsiveness.warnThresholdMs`，默认 200ms）写单行 warn 到窗口日志 `interactionPerf.log`（三段分解 + 相位/脚本归因 + O(1) 上下文）；`recordPerfPhase(name, fn)`（`services/performance/perfPhases.ts`）是给热路径反应加相位归因的统一入口——包上即自动进入慢交互与切 tab 两份报告。会话聚合经命令 Developer: Interaction Performance 查看；配置门控见 `InteractionPerfContribution`。
 
+**交互卡顿排查（agent 自助采集）**：`e2e/specs/smoke.interactionPerfReport.spec.ts`（@perf）用真实键鼠把典型编辑手势跑一遍（quick open/打字/大文件滚动/切 tab/搜索/资源管理器点击/保存等），产出 `e2e/test-results/interaction-perf-report.{json,md}`——慢交互按场景窗口归桶，含三段分解与相位/LoAF 归因，直接喂给 agent 定位卡顿。跑法：`pnpm --filter @universe-editor/editor e2eg "drives an editing tour"`。
+
 ## 套路 H：加一个语言特性（DocumentSymbol / Definition / Reference / Outline）
 
 语言特性走**薄门面 `ILanguageFeaturesService`**（`services/languageFeatures/`）：注册时一边存进镜像表（供 Outline 枚举），一边转发给 `monaco.languages.register*Provider`——所以注册一个 provider 即同时点亮 **Outline 视图** 和 Monaco 内置的 **F12 跳转定义 / Shift+F12 查看引用 peek**，无需自己写 UI。

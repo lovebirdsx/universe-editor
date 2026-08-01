@@ -62,7 +62,7 @@ tag 打在**用例级**标题末尾（`@regression` 尤其是单用例级）。*
 | `@regression` | 守护已修复 bug | ❌ 排除（保持轻快） | ✅ 并回 | 单独并行趟，阻塞 |
 | `@serial` | 跨进程竞态需隔离 | 单独 `--workers=1` 趟 | 同左 | 单独串行趟 |
 | `@flaky` | headless 偶发（如 DnD） | 排除 | 排除 | `continue-on-error`，不阻塞 |
-| `@perf` | 启动性能观测 | 排除 | 排除 | 写 metrics 工件 |
+| `@perf` | 性能观测（启动 / 交互响应），observe-only 不卡预算 | 排除 | 排除 | 写 metrics 工件 |
 | `@visual` | 视觉回归 | 排除 | 排除 | 需显式跑（`test:visual`） |
 
 ### 命令
@@ -152,6 +152,24 @@ export TURBO_CACHE_DIR="$HOME/.cache/turbo-universe"
 ## flaky 排查
 
 「CI 偶发挂、本地稳过」的排查流程、案例库（含已知环境 flake 登记）全部收敛在 skill **`fix-ci-e2e-flake`**（按需加载）。遇 flaky 先查它，别当回归改产品代码。
+
+## 性能观测（@perf）
+
+性能类 spec 打 `@perf` tag，**observe-only**：只记录指标到工件、不断言预算（CI 共享 runner 噪音太大，硬门禁必然误伤）。CI 在 Linux shard 1 单独跑这一趟（`continue-on-error`），工件上传到 `perf-metrics` artifact。
+
+- **启动性能**：`smoke.startupPerformance.spec.ts` 聚合 main + renderer 双端 perf marks，产出 `test-results/startup-metrics.json`（各阶段耗时），供回归追踪。
+- **交互响应性报告**：`smoke.interactionPerfReport.spec.ts` 用真实可信键鼠把典型编辑手势跑一遍（quick open / 打字 / 大文件滚动 / 切 tab / 撤销重做 / 命令面板 / 搜索 / 资源管理器点击 / 保存），按场景窗口归桶慢交互，产出 `test-results/interaction-perf-report.{json,md}`——Markdown 报告含总览、分类型 p95/p99/max 直方图、每场景慢交互明细（input/processing/present 三段分解 + `recordPerfPhase` 相位与 LoAF 脚本归因 + target/editor 上下文），可直接喂给 agent 定位卡顿。
+
+采集层是常驻的 `IInteractionPerfService`（Event Timing ≥16ms 聚合 + LoAF 归因，慢交互阈值 `performance.responsiveness.warnThresholdMs` 默认 200ms）；热路径想进归因报告，用 `recordPerfPhase(name, fn)` 包一层即可。机制与打点套路见 [`apps/editor/CLAUDE.md`](../../apps/editor/CLAUDE.md) 套路 G。
+
+本地复现交互卡顿 / 给 agent 采集现场：
+
+```bash
+pnpm --filter @universe-editor/editor e2eg "drives an editing tour"
+# 报告：apps/editor/e2e/test-results/interaction-perf-report.md
+```
+
+用户侧的手动排查路径（报告页 / `interactionPerf.log` / 配置项）见 [`docs/user/zh-CN/reference/troubleshooting.md`](../user/zh-CN/reference/troubleshooting.md)。
 
 ## 设计背景
 

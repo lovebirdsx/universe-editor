@@ -344,20 +344,23 @@ jobs:
         continue-on-error: true
         run: UNIVERSE_E2E_ONLY_TAG=@flaky xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
 
-      # @perf records the startup timeline into a JSON artifact (observe-only, no
-      # budget assertion). Single worker, Linux+shard 1 only. Non-blocking; the
-      # metrics are uploaded below for regression tracking. See apps/editor/e2e/CLAUDE.md.
+      # @perf records the startup timeline and the interaction-responsiveness
+      # report into JSON/Markdown artifacts (observe-only, no budget assertion).
+      # Single worker, Linux+shard 1 only. Non-blocking; the metrics are uploaded
+      # below for regression tracking. See apps/editor/e2e/CLAUDE.md.
       - name: Run E2E startup perf (Linux, xvfb, observe-only)
         if: runner.os == 'Linux' && matrix.shard == 1
         continue-on-error: true
         run: UNIVERSE_E2E_ONLY_TAG=@perf xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
 
-      - name: Upload startup metrics
+      - name: Upload perf metrics
         if: always() && runner.os == 'Linux' && matrix.shard == 1
         uses: actions/upload-artifact@v4
         with:
-          name: startup-metrics
-          path: apps/editor/e2e/test-results/startup-metrics.json
+          name: perf-metrics
+          path: |
+            apps/editor/e2e/test-results/startup-metrics.json
+            apps/editor/e2e/test-results/interaction-perf-report.*
           retention-days: 30
           if-no-files-found: ignore
 
