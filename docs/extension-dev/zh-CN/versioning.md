@@ -1,6 +1,6 @@
 # API 版本与 `engines.universe`
 
-> 面向扩展作者的版本协商说明。本文为草稿（生态 Phase A 先行落地），正式完整版随 Phase E 的开发者文档套件完善。
+> 面向扩展作者的版本协商说明：你的扩展会被什么版本的宿主加载、`engines.universe` 怎么写才安全。
 
 ## 三句话
 
@@ -31,5 +31,7 @@
 
 ## 相关阅读
 
+- [扩展开发文档首页](./README.md) — 完整的开发者旅程与文档地图
+- [发布扩展](./publishing.md) — 版本不可变规则与发布流程
 - [`@universe-editor/extension-api`](https://www.npmjs.com/package/@universe-editor/extension-api) — API 面包（版本即 API 版本）
 - [`@universe-editor/extension-manifest`](https://www.npmjs.com/package/@universe-editor/extension-manifest) — 激活事件构造器 / manifest 类型与校验 / `satisfies` 协商实现

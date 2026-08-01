@@ -1,6 +1,6 @@
 # 03 — 工具链：create-extension 脚手架与 uex CLI
 
-> 实施状态（2026-08-01）：✅ 已完成。`packages/create-extension`（basic/webview 两模板）与 `packages/uex`（package/ls/dev/login/publish/unpublish）落地；模板防腐冒烟 `pnpm test:templates` + CI `extension-templates` job（已进 ci-gate）。`uex publish` 客户端先行，服务端 Phase D 联调。
+> 实施状态（2026-08-01）：✅ 已完成。`packages/create-extension`（basic/webview 两模板）与 `packages/uex`（package/ls/dev/login/publish/unpublish）落地；模板防腐冒烟 `pnpm test:templates` + CI job（已进 ci-gate；Phase E 扩展为 `external-consumer-smoke`，双 OS 并纳入 samples 漂移检查与消费冒烟）。`uex publish` 客户端先行，服务端 Phase D 联调。
 > 与草图的差异：模板主入口为 `dist/extension.js`（对齐全仓扩展惯例，非草图的 `dist/index.js`）。
 
 > Phase C。目标：`npm create @universe-editor/extension` 起项目、`uex dev` 起开发宿主、`uex package` 出 .vsix、`uex publish` 上市场（服务端 Phase D 联调）——全程不接触本仓库。

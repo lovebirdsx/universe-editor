@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  check-doc-links.mjs — verify internal relative links in docs/user/**\/*.md.
+ *  check-doc-links.mjs — verify internal relative links in docs/{user,extension-dev}/**\/*.md.
  *
  *  For each .md file, extract all [text](href) relative links and check that
  *  the resolved target file exists on disk. Anchor fragments (#section) are
@@ -17,7 +17,7 @@ import { resolve, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), '../../')
-const DOCS_ROOT = join(REPO_ROOT, 'docs', 'user')
+const DOCS_ROOTS = [join(REPO_ROOT, 'docs', 'user'), join(REPO_ROOT, 'docs', 'extension-dev')]
 
 /** Recursively collect all .md files under a directory. */
 function collectMd(dir) {
@@ -59,12 +59,13 @@ function extractRelativeLinks(source) {
 }
 
 function run() {
-  if (!existsSync(DOCS_ROOT)) {
-    console.log('docs/user/ directory not found — nothing to check.')
+  const roots = DOCS_ROOTS.filter((root) => existsSync(root))
+  if (roots.length === 0) {
+    console.log('no docs roots found — nothing to check.')
     process.exit(0)
   }
 
-  const files = collectMd(DOCS_ROOT)
+  const files = roots.flatMap((root) => collectMd(root))
   const broken = []
 
   for (const file of files) {

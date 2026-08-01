@@ -104,13 +104,21 @@ jobs:
       - name: Run integration tests
         run: pnpm --filter @universe-editor/editor test:integration
 
-  # Template anti-rot: scaffold both extension templates from packed tarballs,
-  # build them against those tarballs, and `uex package` each into a VSIX.
-  # Catches SDK/template/CLI drift the way a third-party author would.
-  extension-templates:
-    name: Extension Templates Smoke
+  # External consumer anti-rot: scaffold both extension templates from packed
+  # tarballs, build them against those tarballs, and `uex package` each into a
+  # VSIX; additionally drift-checks samples/hello-world against the basic
+  # template and builds/packages it the same way. Catches SDK/template/sample/
+  # CLI drift the way a third-party author would. Runs on both OSes because
+  # path/shell handling in the toolchain differs (uex dev's editor lookup is
+  # excluded — it needs an installed editor, covered by e2e instead).
+  external-consumer-smoke:
+    name: External Consumer Smoke
     needs: ci
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -142,7 +150,7 @@ jobs:
           --filter=@universe-editor/uex
           --filter=@universe-editor/create-extension
 
-      - name: Template smoke (scaffold → npm i → build → uex package)
+      - name: External consumer smoke (scaffold/sample → npm i → build → uex package)
         run: pnpm test:templates
 
   # Cross-repo ACP contract test: spawns the REAL built fork dist and asserts the
@@ -717,7 +725,7 @@ jobs:
     needs:
       - ci
       - integration
-      - extension-templates
+      - external-consumer-smoke
       - detect-affected
       - acp-contract
       - e2e

@@ -3,6 +3,7 @@
 > Phase E。目标：一个没接触过本项目的开发者，只靠文档从零走通 create → 调试 → package → publish；文档接入 `pnpm docs:check` 防死链。
 > 对标：code.visualstudio.com/api + microsoft/vscode-extension-samples。
 > 定位边界：`docs/user/`（编辑器用户）、`docs/development/`（本仓库开发者）、**`docs/extension-dev/`（第三方扩展作者，本阶段新建）**——三个受众三套文档，互链不互抄。
+> 实施状态（2026-08-01）：✅ 已完成（dogfood 终验除外，见 §6）。`docs/extension-dev/zh-CN/` 全套 12 篇（README/getting-started/extension-anatomy/contribution-points/api/README/debugging/webview-guide/language-guide/versioning/publishing/migration-from-vscode/security-and-trust）落地并接入 `pnpm docs:check`（校验器改多根扫描 `scripts/check-doc-links.mjs`）；`samples/hello-world` 按 basic 模板生成固化（不进 workspace）；CI `extension-templates` job 扩展并更名为 `external-consumer-smoke`（ubuntu+windows 双跑，进 ci-gate），`scripts/toolchain/template-smoke.mjs` 覆盖两模板 + samples 漂移检查（骨架文件逐字比对，仅 `src/extension.ts`/`README.md` 豁免）与消费冒烟。
 
 ## 1. 目录结构（对齐 `docs/user/zh-CN` 惯例）
 

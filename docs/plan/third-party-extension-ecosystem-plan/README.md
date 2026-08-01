@@ -98,8 +98,8 @@
 | 脚手架 ✅ | `yo code` | `@universe-editor/create-extension`：basic / webview 两模板，含 launch.json、esbuild、watch | [03](./03-toolchain.md) |
 | 打包/发布 CLI ✅ | `vsce` | `@universe-editor/uex`：`package`（复用 extension-packaging）、`dev`（定位并拉起编辑器）、`login`/`publish` | [03](./03-toolchain.md) |
 | 自助发布后端 ✅ | Marketplace publish API | server 加 `gallery/api/publish` 等端点 + publisher/token 模型 + 服务端防投毒校验 + 版本不可变 | [04](./04-publishing-backend.md) |
-| 对外开发者文档 | code.visualstudio.com/api | `docs/extension-dev/zh-CN/`：getting-started、贡献点参考、webview/语言指南、发布、移植指南 | [05](./05-docs-and-samples.md) |
-| 外部形态样例 | extension-samples 仓库 | `samples/hello-world`（不进 workspace、真 npm 依赖）+ CI 外部消费者冒烟 job | [05](./05-docs-and-samples.md) |
+| 对外开发者文档 ✅ | code.visualstudio.com/api | `docs/extension-dev/zh-CN/`：getting-started、贡献点参考、webview/语言指南、发布、移植指南 | [05](./05-docs-and-samples.md) |
+| 外部形态样例 ✅ | extension-samples 仓库 | `samples/hello-world`（不进 workspace、真 npm 依赖）+ CI 外部消费者冒烟 job | [05](./05-docs-and-samples.md) |
 | 公开阶段硬化 | publisher 注册 / vsce-sign | 自助注册、VSIX 签名、审核 SOP、API 1.0 —— 只登记 | [06](./06-public-phase-roadmap.md) |
 
 ---
@@ -136,8 +136,8 @@ scripts/server/galleryPublish.mjs 🆕✅   publish 服务端流水线（防投�
 scripts/server/bundle.mjs       🆕✅     esbuild 单文件产物 dist/server.js（04）
 scripts/gallery/token.mjs       🆕✅     运维签发/吊销 publisher token（04）
 
-docs/extension-dev/zh-CN/      🆕       第三方开发者文档全套（05）
-samples/hello-world/           🆕       外部形态样例（不进 workspace）（05）
+docs/extension-dev/zh-CN/      🆕✅     第三方开发者文档全套（05）
+samples/hello-world/           🆕✅     外部形态样例（不进 workspace）（05）
 ```
 
 ### 3.2 端到端开发者旅程（目标态）
@@ -212,7 +212,7 @@ samples/hello-world/           🆕       外部形态样例（不进 workspace�
 - 部署升级：esbuild 单文件产物（`pnpm server:bundle` → `dist/server.js`），`setup.mjs` 部署产物；`uex login/publish/unpublish` 全链路联调通过
 - **验证**：本地起 server → 签 token → `uex login`（whoami）→ `uex publish` → extensionquery 可见 → 同版本 409 → revoke 后 401（`pnpm test:release` 内真 CLI 联调）
 
-### Phase E — 对外文档与样例（[05](./05-docs-and-samples.md)）
+### Phase E — 对外文档与样例（[05](./05-docs-and-samples.md)）✅ 已完成（2026-08-01，dogfood 终验除外）
 > 目标：一个没接触过本项目的开发者，只靠文档走通全流程。
 
 - `docs/extension-dev/zh-CN/`：getting-started（create→F5→package→publish 全程）、贡献点参考、webview/语言特性指南、发布规范、`engines.universe` 语义、VSCode 移植指南（API 对照表 + pdf 案例提炼）
