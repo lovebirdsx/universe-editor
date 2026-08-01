@@ -193,6 +193,22 @@ export class WindowMainService implements IWindowMainService {
       }
     })
 
+    // Renderer freeze floor: when the renderer hangs so hard that its own
+    // monitors (Event Timing / LoAF) cannot even run, Chromium flags the
+    // webContents unresponsive. Log-only — Windows lock/suspend can trigger
+    // false unresponsive blips, and a dialog would compound the annoyance;
+    // the responsive pairing below carries the recovery duration instead.
+    let unresponsiveSince: number | undefined
+    win.webContents.on('unresponsive', () => {
+      unresponsiveSince = Date.now()
+      logger.error(`renderer unresponsive id=${win.id}`)
+    })
+    win.webContents.on('responsive', () => {
+      const recoveredMs = unresponsiveSince === undefined ? -1 : Date.now() - unresponsiveSince
+      unresponsiveSince = undefined
+      logger.warn(`renderer responsive again id=${win.id} after ${recoveredMs}ms`)
+    })
+
     // Renderer crash recovery. A dead renderer leaves the window frame drawable
     // (draggable) but blank — the content process is gone. Without this the user
     // is stuck at a black window with no way back. `clean-exit` is a normal
