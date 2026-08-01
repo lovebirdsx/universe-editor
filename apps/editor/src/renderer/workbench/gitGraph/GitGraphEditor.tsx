@@ -31,6 +31,7 @@ import {
   CommandsRegistry,
   ICommandService,
   IDialogService,
+  IEditorGroupsService,
   IEditorResolverService,
   IFileService,
   INotificationService,
@@ -42,7 +43,7 @@ import {
   URI,
   localize,
 } from '@universe-editor/platform'
-import { FileSymlink } from 'lucide-react'
+import { Eye, FileSymlink } from 'lucide-react'
 import {
   GitGraphCommands,
   type GitGraphCommitDto,
@@ -64,6 +65,8 @@ import {
 import { IScmService } from '../../services/extensions/ScmService.js'
 import { computeGraphLayout, type GraphGrid } from '../../services/gitGraph/graphLayout.js'
 import { buildFileTree, type FileTreeNode } from '../../services/gitGraph/fileTree.js'
+import { isPreviewablePath } from '../../services/resourcePreview/resourcePreviewSupport.js'
+import { openResourcePreviewInGroup } from '../../services/resourcePreview/openResourcePreview.js'
 import {
   gitGraphViewState,
   selectionKey,
@@ -317,6 +320,7 @@ function FileTreeView({
   onToggle,
   onOpen,
   onOpenFile,
+  onOpenPreview,
   depth = 0,
 }: {
   nodes: readonly FileTreeNode<GitGraphFileChangeDto>[]
@@ -324,6 +328,7 @@ function FileTreeView({
   onToggle: (path: string) => void
   onOpen: (file: GitGraphFileChangeDto) => void
   onOpenFile?: (file: GitGraphFileChangeDto) => void
+  onOpenPreview?: (file: GitGraphFileChangeDto) => void
   depth?: number
 }) {
   return (
@@ -347,6 +352,7 @@ function FileTreeView({
                 onToggle={onToggle}
                 onOpen={onOpen}
                 {...(onOpenFile !== undefined ? { onOpenFile } : {})}
+                {...(onOpenPreview !== undefined ? { onOpenPreview } : {})}
                 depth={depth + 1}
               />
             )}
@@ -363,6 +369,19 @@ function FileTreeView({
               {node.file.status.charAt(0)}
             </span>
             <span className={styles['filePath']}>{node.name}</span>
+            {onOpenPreview && isPreviewablePath(node.file.path) && (
+              <button
+                type="button"
+                className={styles['fileActionBtn']}
+                title={localize('gitGraph.openPreview', 'Open Preview')}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onOpenPreview(node.file)
+                }}
+              >
+                <Eye size={14} />
+              </button>
+            )}
             {onOpenFile && (
               <button
                 type="button"
@@ -444,6 +463,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   const commands = useService(ICommandService)
   const dialog = useService(IDialogService)
   const editorResolverService = useService(IEditorResolverService)
+  const editorGroupsService = useService(IEditorGroupsService)
   const fileService = useService(IFileService)
   const notification = useService(INotificationService)
   // Optional so unit tests without a progress binding still render the editor.
@@ -950,6 +970,28 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       })()
     },
     [discoverEffectiveRepoRoot, editorResolverService, fileService, notification],
+  )
+
+  const openPreviewFile = useCallback(
+    (file: GitGraphFileChangeDto) => {
+      void (async () => {
+        const repoRoot = await discoverEffectiveRepoRoot()
+        if (!repoRoot) {
+          notification.notify({
+            severity: Severity.Warning,
+            message: localize(
+              'gitGraph.openFile.noRepository',
+              'Unable to open {path}: no Git repository is selected.',
+              { path: file.path },
+            ),
+          })
+          return
+        }
+        const resource = URI.joinPath(URI.file(repoRoot), file.path)
+        openResourcePreviewInGroup(editorGroupsService.activeGroup, resource, false)
+      })()
+    },
+    [discoverEffectiveRepoRoot, editorGroupsService, notification],
   )
 
   // Run a mutating op, then revalidate in place so the scroll position and
@@ -1667,6 +1709,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
                 onToggle={toggleDir}
                 onOpen={openWorkingTreeFile}
                 onOpenFile={openSourceFile}
+                onOpenPreview={openPreviewFile}
               />
             )}
           </div>
@@ -1704,6 +1747,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
                 onToggle={toggleDir}
                 onOpen={(f) => openFile(f, selection[0]!, selection[1]!)}
                 onOpenFile={openSourceFile}
+                onOpenPreview={openPreviewFile}
               />
             )}
           </div>
@@ -1751,6 +1795,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
               onToggle={toggleDir}
               onOpen={(f) => openFile(f, details.parents[0] ?? '', details.hash)}
               onOpenFile={openSourceFile}
+              onOpenPreview={openPreviewFile}
             />
           )}
         </div>

@@ -31,6 +31,7 @@ import { type IEditorInput } from '@universe-editor/platform'
 import {
   autorun,
   ICommandService,
+  IEditorGroupsService,
   IEditorResolverService,
   IFileService,
   INotificationService,
@@ -40,7 +41,7 @@ import {
   URI,
   localize,
 } from '@universe-editor/platform'
-import { FileSymlink, Globe } from 'lucide-react'
+import { Eye, FileSymlink, Globe } from 'lucide-react'
 import {
   PerforceGraphCommands,
   type P4GraphChangeDto,
@@ -55,6 +56,8 @@ import { useService, useObservable } from '../useService.js'
 import { IScmService } from '../../services/extensions/ScmService.js'
 import { computeGraphLayout, type GraphGrid } from '../../services/gitGraph/graphLayout.js'
 import { buildFileTree, type FileTreeNode } from '../../services/gitGraph/fileTree.js'
+import { isPreviewablePath } from '../../services/resourcePreview/resourcePreviewSupport.js'
+import { openResourcePreviewInGroup } from '../../services/resourcePreview/openResourcePreview.js'
 import {
   perforceGraphViewState,
   selectionKey,
@@ -145,6 +148,7 @@ function FileTreeView({
   onToggle,
   onOpen,
   onOpenFile,
+  onOpenPreview,
   depth = 0,
 }: {
   nodes: readonly FileTreeNode<P4GraphFileChangeDto>[]
@@ -152,6 +156,7 @@ function FileTreeView({
   onToggle: (path: string) => void
   onOpen: (file: P4GraphFileChangeDto) => void
   onOpenFile?: (file: P4GraphFileChangeDto) => void
+  onOpenPreview?: (file: P4GraphFileChangeDto) => void
   depth?: number
 }) {
   return (
@@ -175,6 +180,7 @@ function FileTreeView({
                 onToggle={onToggle}
                 onOpen={onOpen}
                 {...(onOpenFile !== undefined ? { onOpenFile } : {})}
+                {...(onOpenPreview !== undefined ? { onOpenPreview } : {})}
                 depth={depth + 1}
               />
             )}
@@ -191,6 +197,19 @@ function FileTreeView({
               {node.file.status.charAt(0)}
             </span>
             <span className={styles['filePath']}>{node.name}</span>
+            {onOpenPreview && node.file.localPath && isPreviewablePath(node.file.path) && (
+              <button
+                type="button"
+                className={styles['fileActionBtn']}
+                title={localize('gitGraph.openPreview', 'Open Preview')}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onOpenPreview(node.file)
+                }}
+              >
+                <Eye size={14} />
+              </button>
+            )}
             {onOpenFile && node.file.localPath && (
               <button
                 type="button"
@@ -247,6 +266,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   const commands = useService(ICommandService)
   const scm = useService(IScmService)
   const editorResolverService = useService(IEditorResolverService)
+  const editorGroupsService = useService(IEditorGroupsService)
   const fileService = useService(IFileService)
   const notification = useService(INotificationService)
   const storage = useService(IStorageService)
@@ -657,6 +677,14 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     [editorResolverService, fileService, notification],
   )
 
+  const openPreviewFile = useCallback(
+    (file: P4GraphFileChangeDto) => {
+      if (!file.localPath) return
+      openResourcePreviewInGroup(editorGroupsService.activeGroup, URI.file(file.localPath), false)
+    },
+    [editorGroupsService],
+  )
+
   const openChangeMenu = useCallback(
     (change: P4GraphChangeDto, e: MouseEvent) => {
       e.preventDefault()
@@ -785,6 +813,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
                 onToggle={toggleDir}
                 onOpen={openPendingFile}
                 onOpenFile={openSourceFile}
+                onOpenPreview={openPreviewFile}
               />
             )}
           </div>
@@ -826,6 +855,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
               onToggle={toggleDir}
               onOpen={openFileDiff}
               onOpenFile={openSourceFile}
+              onOpenPreview={openPreviewFile}
             />
           )}
         </div>

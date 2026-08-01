@@ -24,6 +24,7 @@ import {
 } from '@universe-editor/platform'
 import { ScmView } from '../ScmView.js'
 import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
+import { HtmlPreviewInput } from '../../../services/editor/HtmlPreviewInput.js'
 import { IScmService, ScmService } from '../../../services/extensions/ScmService.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -270,5 +271,32 @@ describe('ScmView — markdown preview action', () => {
 
     await screen.findByText('main.ts')
     expect(screen.queryByTitle('Open Preview')).toBeNull()
+  })
+
+  it('shows a preview button for html files and opens an html preview', async () => {
+    const { scm, editorGroup } = setup()
+
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'git', 'Git', 'D:/repo')
+      await scm.$registerGroup(0, 1, 'workingTree', 'Changes')
+      await scm.$updateGroupResourceStates(1, [
+        {
+          resourceUri: 'D:/repo/index.html',
+          contextValue: 'M',
+          command: { command: 'git.openChange', title: 'Open Change' },
+        },
+      ])
+    })
+
+    const label = await screen.findByText('index.html')
+    const row = label.closest('[role="treeitem"]')
+    expect(row).not.toBeNull()
+    fireEvent.click(within(row as HTMLElement).getByRole('button', { name: 'Open Preview' }))
+
+    expect(editorGroup.opened).toHaveLength(1)
+    const previewInput = editorGroup.opened[0]?.input
+    expect(previewInput).toBeInstanceOf(HtmlPreviewInput)
+    expect(editorGroup.opened[0]?.options).toEqual({ activate: true, pinned: true })
+    expect((previewInput as HtmlPreviewInput | undefined)?.sourceUri.fsPath).toContain('index.html')
   })
 })

@@ -9,9 +9,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, Eye, FileSymlink } from 'lucide-react'
+import { ChevronDown, ChevronRight, FileSymlink } from 'lucide-react'
 import {
-  IEditorGroupsService,
   IEditorResolverService,
   IEditorService,
   IStorageService,
@@ -29,11 +28,9 @@ import {
   type SessionFileChange,
 } from '../../services/acp/session/sessionChangeTracker.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
-import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
-import { openMarkdownPreviewInGroup } from '../../services/editor/openMarkdownPreview.js'
 import { FileIcon } from '../files/fileIconTheme.js'
+import { ResourcePreviewButton } from '../files/ResourcePreviewButton.js'
 import { basenameOfResource, dirnameOfResource } from '../files/resourceInfo.js'
-import { isMarkdownPreviewResource } from '../files/resourceLanguage.js'
 import { sessionChangesViewState, type SessionChangesViewMode } from './sessionChangesViewState.js'
 import styles from './SessionChangesView.module.css'
 
@@ -127,29 +124,13 @@ function useOpenFile(): (c: SessionFileChange) => void {
   }
 }
 
-function useOpenMarkdownPreview(): (c: SessionFileChange) => void {
-  const groups = useService(IEditorGroupsService)
-  return (c) => {
-    openMarkdownPreviewInGroup(groups.activeGroup, new MarkdownPreviewInput(c.uri), false)
-  }
-}
-
 function ChangeFlatList({ changes }: { changes: readonly SessionFileChange[] }) {
   const open = useOpenChange()
   const openFile = useOpenFile()
-  const openMarkdownPreview = useOpenMarkdownPreview()
   return (
     <ul className={styles['list']}>
       {changes.map((c) => (
-        <ChangeRow
-          key={c.path}
-          change={c}
-          depth={0}
-          showDir
-          onOpen={open}
-          onOpenFile={openFile}
-          onOpenMarkdownPreview={openMarkdownPreview}
-        />
+        <ChangeRow key={c.path} change={c} depth={0} showDir onOpen={open} onOpenFile={openFile} />
       ))}
     </ul>
   )
@@ -209,7 +190,6 @@ function compressFolder(f: TreeFolder): { leaf: TreeFolder; displayName: string 
 function ChangeTree({ changes }: { changes: readonly SessionFileChange[] }) {
   const open = useOpenChange()
   const openFile = useOpenFile()
-  const openMarkdownPreview = useOpenMarkdownPreview()
   const workspace = useService(IWorkspaceService)
   const rootDir = workspace.current?.folder.fsPath ?? ''
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
@@ -231,7 +211,6 @@ function ChangeTree({ changes }: { changes: readonly SessionFileChange[] }) {
         onToggle={toggle}
         onOpen={open}
         onOpenFile={openFile}
-        onOpenMarkdownPreview={openMarkdownPreview}
       />
     </ul>
   )
@@ -244,7 +223,6 @@ function TreeFolderRows({
   onToggle,
   onOpen,
   onOpenFile,
-  onOpenMarkdownPreview,
 }: {
   folder: TreeFolder
   depth: number
@@ -252,7 +230,6 @@ function TreeFolderRows({
   onToggle: (path: string) => void
   onOpen: (c: SessionFileChange, preview: boolean) => void
   onOpenFile: (c: SessionFileChange) => void
-  onOpenMarkdownPreview: (c: SessionFileChange) => void
 }) {
   const folders = [...folder.folders.values()].sort((a, b) => a.name.localeCompare(b.name))
   const files = [...folder.files].sort((a, b) =>
@@ -288,7 +265,6 @@ function TreeFolderRows({
                   onToggle={onToggle}
                   onOpen={onOpen}
                   onOpenFile={onOpenFile}
-                  onOpenMarkdownPreview={onOpenMarkdownPreview}
                 />
               </ul>
             )}
@@ -296,14 +272,7 @@ function TreeFolderRows({
         )
       })}
       {files.map((c) => (
-        <ChangeRow
-          key={c.path}
-          change={c}
-          depth={depth}
-          onOpen={onOpen}
-          onOpenFile={onOpenFile}
-          onOpenMarkdownPreview={onOpenMarkdownPreview}
-        />
+        <ChangeRow key={c.path} change={c} depth={depth} onOpen={onOpen} onOpenFile={onOpenFile} />
       ))}
     </>
   )
@@ -315,16 +284,13 @@ function ChangeRow({
   showDir,
   onOpen,
   onOpenFile,
-  onOpenMarkdownPreview,
 }: {
   change: SessionFileChange
   depth: number
   showDir?: boolean
   onOpen: (c: SessionFileChange, preview: boolean) => void
   onOpenFile: (c: SessionFileChange) => void
-  onOpenMarkdownPreview: (c: SessionFileChange) => void
 }) {
-  const canPreviewMarkdown = isMarkdownPreviewResource(change.uri)
   return (
     <li
       className={styles['row']}
@@ -340,20 +306,7 @@ function ChangeRow({
       <span className={styles['name']}>{basenameOfResource(change.uri)}</span>
       {showDir && <span className={styles['dir']}>{dirnameOfResource(change.uri)}</span>}
       <span className={styles['actions']}>
-        {canPreviewMarkdown && (
-          <button
-            type="button"
-            className={styles['actionButton']}
-            title={localize('acp.changes.openPreview', 'Open Preview')}
-            data-testid="acp-changes-open-preview"
-            onClick={(e) => {
-              e.stopPropagation()
-              onOpenMarkdownPreview(change)
-            }}
-          >
-            <Eye size={16} strokeWidth={1.6} />
-          </button>
-        )}
+        <ResourcePreviewButton resource={change.uri} testId="acp-changes-open-preview" />
         <button
           type="button"
           className={styles['actionButton']}

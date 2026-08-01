@@ -24,6 +24,7 @@ import type {
   IExplorerResourceOperation,
 } from '../../services/explorer/ExplorerTreeService.js'
 import { FileIcon } from '../files/fileIconTheme.js'
+import { ResourcePreviewButton } from '../files/ResourcePreviewButton.js'
 import styles from './ExplorerView.module.css'
 
 const SYMLINK_LABEL = localize('explorer.symbolicLink', 'Symbolic Link')
@@ -278,6 +279,11 @@ function ExplorerTreeNodeImpl({
           aria-hidden="true"
         >
           {decoLetter}
+        </span>
+      )}
+      {!isDirectory && (
+        <span className={styles['rowActions']}>
+          <ResourcePreviewButton resource={resource} testId="explorer-open-preview" />
         </span>
       )}
     </div>

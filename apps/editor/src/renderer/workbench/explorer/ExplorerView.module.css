@@ -135,6 +135,38 @@
   min-width: 12px;
 }
 
+/* Floating row actions — overlaid on the right edge, revealed on hover,
+   mirroring the SCM resource row. The opaque backdrop hides the status badge
+   underneath; the selected/hover variants keep it opaque across selection
+   states so the icon always reads. */
+.rowActions {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  z-index: 1;
+  display: none;
+  gap: 2px;
+  transform: translateY(-50%);
+}
+
+.row:hover .rowActions,
+.row:focus-within .rowActions {
+  display: flex;
+}
+
+.row:hover .rowActions {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
+.row.selected .rowActions {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+}
+
+.row.selected:hover .rowActions,
+.view:not([data-focused='true']) .row.selected:hover .rowActions {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
 /* Compact folder ("a/b/c"): each segment is independently hoverable so the
    active directory under the cursor is highlighted (drag / right-click / new). */
 .segment {

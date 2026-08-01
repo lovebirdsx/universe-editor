@@ -3,11 +3,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import {
   Emitter,
   IConfigurationService,
   IDialogService,
+  IEditorGroupsService,
   IEditorResolverService,
   IEditorService,
   IFileService,
@@ -21,6 +22,7 @@ import {
   type IConfirmResult,
   type IDialogService as IDialogServiceType,
   type IDirectoryEntry,
+  type IEditorGroupsService as IEditorGroupsServiceType,
   type IEditorInput,
   type IFileService as IFileServiceType,
   type IFileWatcherService as IFileWatcherServiceType,
@@ -30,6 +32,7 @@ import {
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import { ExplorerView } from '../ExplorerView.js'
+import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
 import {
   ExplorerTreeService,
   IExplorerTreeService,
@@ -109,6 +112,19 @@ class FakeCommand {
   async executeCommand() {}
 }
 
+class FakeEditorGroup {
+  activeEditor: unknown
+  opened: Array<{ input: unknown; options: unknown }> = []
+  indexOf(): number {
+    return -1
+  }
+  openEditor(input: unknown, options?: unknown): void {
+    this.opened.push({ input, options })
+    this.activeEditor = input
+  }
+  closeEditor(): void {}
+}
+
 function makeNoopWatcher(): IFileWatcherServiceType {
   return {
     _serviceBrand: undefined,
@@ -148,6 +164,11 @@ function renderView(folder: URI, fs: IFileServiceType) {
   const inst = new InstantiationService(services)
   const editorResolver = inst.createInstance(EditorResolverService)
   services.set(IEditorResolverService, editorResolver)
+  const editorGroup = new FakeEditorGroup()
+  services.set(IEditorGroupsService, {
+    _serviceBrand: undefined,
+    activeGroup: editorGroup,
+  } as unknown as IEditorGroupsServiceType)
   const tree = inst.createInstance(ExplorerTreeService)
   services.set(IExplorerTreeService, tree)
   const result = render(
@@ -155,7 +176,7 @@ function renderView(folder: URI, fs: IFileServiceType) {
       <ExplorerView />
     </ServicesContext.Provider>,
   )
-  return { ...result, editor }
+  return { ...result, editor, editorGroup }
 }
 
 afterEach(() => cleanup())
@@ -186,5 +207,31 @@ describe('ExplorerView — preview', () => {
     const pinnedOpen = editor.opened.find((o) => o.options?.pinned === true)
     expect(pinnedOpen).toBeDefined()
     expect(pinnedOpen?.options?.preserveFocus).not.toBe(true)
+  })
+
+  it('hover preview button opens a markdown preview for previewable files', async () => {
+    const root = URI.file('/ws')
+    const fs = makeFs({
+      [root.toString()]: [{ name: 'README.md', isFile: true, isDirectory: false }],
+    })
+    const { editorGroup } = renderView(root, fs)
+    const label = await screen.findByText('README.md')
+    const row = label.closest('[role="treeitem"]') as HTMLElement
+    fireEvent.click(within(row).getByTestId('explorer-open-preview'))
+    await waitFor(() => expect(editorGroup.opened).toHaveLength(1))
+    const input = editorGroup.opened[0]?.input
+    expect(input).toBeInstanceOf(MarkdownPreviewInput)
+    expect(editorGroup.opened[0]?.options).toEqual({ activate: true, pinned: true })
+    expect((input as MarkdownPreviewInput | undefined)?.sourceUri.fsPath).toContain('README.md')
+  })
+
+  it('does not render a preview button for non-previewable files', async () => {
+    const root = URI.file('/ws')
+    const fs = makeFs({
+      [root.toString()]: [{ name: 'main.ts', isFile: true, isDirectory: false }],
+    })
+    renderView(root, fs)
+    await screen.findByText('main.ts')
+    expect(screen.queryByTestId('explorer-open-preview')).toBeNull()
   })
 })

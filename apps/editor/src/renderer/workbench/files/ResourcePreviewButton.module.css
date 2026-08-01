@@ -1,0 +1,19 @@
+/* Shared hover "Open Preview" button look, converged from the SCM and session
+   changes rows' identical `.actionButton` rules. Visibility on hover is the
+   consumer row's job; this file only styles the button itself. */
+
+.actionButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--vscode-descriptionForeground, #8a8a92);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 3px;
+}
+
+.actionButton:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.06));
+}
