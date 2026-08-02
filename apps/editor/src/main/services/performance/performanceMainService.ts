@@ -12,6 +12,7 @@ import { app } from 'electron'
 import {
   createNamedLogger,
   getMarks,
+  getOriginalConsole,
   type ILogger,
   ILoggerService,
   type PerformanceMark,
@@ -22,6 +23,7 @@ import type {
   StartupTimingReport,
 } from '../../../shared/ipc/services.js'
 import type { Storage } from '../../storage.js'
+import { PerfMarks } from '../../../shared/perf/marks.js'
 
 const LAST_RUN_VERSION_KEY = 'startup.lastRunVersion'
 
@@ -59,6 +61,28 @@ export class PerformanceMainService implements IPerformanceMarksService {
     this._logger.info(
       `startup postUpdate=${ctx.postUpdate} cur=${ctx.currentVersion}${versionJump} ` +
         `total=${Math.round(report.totalTime)}ms${preJs} [${phases}]`,
+    )
+    this._logDevWallClock(report.totalTime)
+  }
+
+  // Dev-only: print the full wall clock from the moment `pnpm dev` was typed to the
+  // window being responsive. scripts/dev.mjs stamps UNIVERSE_DEV_T0 (epoch ms) before
+  // spawning electron-vite; report.totalTime spans OS-process-creation → window mount,
+  // and (processCreated − T0) is the electron-vite compile + spawn segment that no
+  // in-process perf mark can see. Printed via the original console so it survives the
+  // console interceptor and lands in the `pnpm dev` terminal.
+  private _logDevWallClock(totalTime: number): void {
+    if (!import.meta.env.DEV) return
+    const t0 = Number(process.env.UNIVERSE_DEV_T0)
+    const processCreated = getMarks().find(
+      (m) => m.name === PerfMarks.mainProcessCreated,
+    )?.startTime
+    if (!Number.isFinite(t0) || processCreated === undefined) return
+    const compileAndSpawn = processCreated - t0
+    const fullWallClock = compileAndSpawn + totalTime
+    getOriginalConsole().log(
+      `\x1b[36m[startup] pnpm dev -> window responsive: ${Math.round(fullWallClock)}ms\x1b[0m ` +
+        `(compile+spawn ${Math.round(compileAndSpawn)}ms + in-process ${Math.round(totalTime)}ms)`,
     )
   }
 
