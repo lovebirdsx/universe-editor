@@ -8,6 +8,7 @@
   "main": "out/main/index.js",
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "dev:run": "node scripts/dev-run.mjs",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsgo --build integration/tsconfig.json && tsgo --project bench/tsconfig.json && tsgo --project e2e/tsconfig.json",

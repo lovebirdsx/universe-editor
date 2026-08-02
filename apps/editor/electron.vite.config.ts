@@ -17,6 +17,24 @@ const workbenchUiSrc = resolve(__dirname, '../../packages/workbench-ui/src/index
 const extensionsCommonSrc = resolve(__dirname, '../../packages/extensions-common/src/index.ts')
 const REPO_ROOT = resolve(__dirname, '../..')
 
+// `electron-vite build` hard-sets NODE_ENV=production before loading this config,
+// which bakes import.meta.env.DEV to false. The `pnpm dev:run` wrapper sets
+// UNIVERSE_DEV_BUILD=1 to build a one-shot **dev-flavor** bundle (DEV===true → the
+// "Universe Editor - Dev" data dir and dev-only features) without a dev server; flip
+// NODE_ENV back here — this config loads after electron-vite's assignment, so it wins.
+const isDevBuild = process.env.UNIVERSE_DEV_BUILD === '1'
+if (isDevBuild) {
+  process.env.NODE_ENV = 'development'
+}
+
+// Keep the dev:run bundle out of `out/` so it never clobbers a production build (and
+// vice versa). main resolves preload/renderer relative to its own dir (import.meta.
+// dirname), so all three ends must share the same base; dev-run.mjs points Electron at
+// out-dev/main/index.js. An absolute per-end outDir is required — electron-vite's
+// default is <root>/out/<end> and the renderer's root is src/renderer, so a bare
+// 'out-dev' would land renderer under src/renderer/out-dev.
+const outBase = resolve(__dirname, isDevBuild ? 'out-dev' : 'out')
+
 // platform/src uses `.js` suffix on relative imports (TS NodeNext convention).
 // Vite 7 removed extensionAlias; use a plugin instead to remap .js → .ts.
 function jsToTsResolvePlugin(): Plugin {
@@ -56,6 +74,7 @@ export default defineConfig({
       },
     },
     build: {
+      outDir: resolve(outBase, 'main'),
       // Dev only: the main sourcemap (~1.2MB) is dead weight inside the asar in
       // production and inflates Defender's first-run scan.
       sourcemap: process.env['NODE_ENV'] !== 'production',
@@ -81,6 +100,7 @@ export default defineConfig({
   },
   preload: {
     build: {
+      outDir: resolve(outBase, 'preload'),
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/preload/index.ts') },
         external: nodeExternal,
@@ -185,6 +205,7 @@ export default defineConfig({
       format: 'es',
     },
     build: {
+      outDir: resolve(outBase, 'renderer'),
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/renderer/index.html') },
       },

@@ -62,27 +62,37 @@ export class PerformanceMainService implements IPerformanceMarksService {
       `startup postUpdate=${ctx.postUpdate} cur=${ctx.currentVersion}${versionJump} ` +
         `total=${Math.round(report.totalTime)}ms${preJs} [${phases}]`,
     )
-    this._logDevWallClock(report.totalTime)
+    this._logStartupWallClock(report.totalTime)
   }
 
-  // Dev-only: print the full wall clock from the moment `pnpm dev` was typed to the
-  // window being responsive. scripts/dev.mjs stamps UNIVERSE_DEV_T0 (epoch ms) before
-  // spawning electron-vite; report.totalTime spans OS-process-creation → window mount,
-  // and (processCreated − T0) is the electron-vite compile + spawn segment that no
-  // in-process perf mark can see. Printed via the original console so it survives the
-  // console interceptor and lands in the `pnpm dev` terminal.
-  private _logDevWallClock(totalTime: number): void {
-    if (!import.meta.env.DEV) return
-    const t0 = Number(process.env.UNIVERSE_DEV_T0)
+  // Print the full wall clock from the moment `pnpm dev` / `pnpm dev:run` was typed to
+  // the window being responsive. The wrapper scripts stamp an epoch-ms T0 into env
+  // before spawning: scripts/dev.mjs → UNIVERSE_DEV_T0 (before electron-vite dev),
+  // scripts/dev-run.mjs → UNIVERSE_DEVRUN_T0 (after build, before spawning Electron on
+  // the out-dev/ bundle). report.totalTime spans OS-process-creation → window mount, and
+  // (processCreated − T0) is the pre-JS segment no in-process perf mark can see: for
+  // dev it's electron-vite compile + spawn, for dev:run it's the bare Electron spawn.
+  // A real packaged install has no wrapper and stamps no env, so this stays silent.
+  // Printed via the original console so it survives the console interceptor and lands
+  // in the launching terminal.
+  private _logStartupWallClock(totalTime: number): void {
+    const devT0 = Number(process.env.UNIVERSE_DEV_T0)
+    const devRunT0 = Number(process.env.UNIVERSE_DEVRUN_T0)
+    const [label, preSpawnLabel, t0] = Number.isFinite(devT0)
+      ? (['pnpm dev', 'compile+spawn', devT0] as const)
+      : Number.isFinite(devRunT0)
+        ? (['pnpm dev:run', 'spawn', devRunT0] as const)
+        : (['', '', NaN] as const)
+    if (!Number.isFinite(t0)) return
     const processCreated = getMarks().find(
       (m) => m.name === PerfMarks.mainProcessCreated,
     )?.startTime
-    if (!Number.isFinite(t0) || processCreated === undefined) return
-    const compileAndSpawn = processCreated - t0
-    const fullWallClock = compileAndSpawn + totalTime
+    if (processCreated === undefined) return
+    const preSpawn = processCreated - t0
+    const fullWallClock = preSpawn + totalTime
     getOriginalConsole().log(
-      `\x1b[36m[startup] pnpm dev -> window responsive: ${Math.round(fullWallClock)}ms\x1b[0m ` +
-        `(compile+spawn ${Math.round(compileAndSpawn)}ms + in-process ${Math.round(totalTime)}ms)`,
+      `\x1b[36m[startup] ${label} -> window responsive: ${Math.round(fullWallClock)}ms\x1b[0m ` +
+        `(${preSpawnLabel} ${Math.round(preSpawn)}ms + in-process ${Math.round(totalTime)}ms)`,
     )
   }
 
