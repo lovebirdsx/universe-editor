@@ -5,14 +5,13 @@
   "type": "module",
   "files": [
     "themes",
-    "icons",
     "package.nls.json",
     "package.nls.zh-cn.json",
     "LICENSE",
     "icon.svg"
   ],
   "displayName": "Universe Themes",
-  "description": "Built-in default color themes (Universe Dark / Universe Light), the classic VSCode default themes, and the default file icon theme.",
+  "description": "Built-in default color themes (Universe Dark / Universe Light) and the classic VSCode default themes.",
   "engines": {
     "universe": ">=0.1.0 <1.0.0"
   },
@@ -89,13 +88,6 @@
         "label": "%lightHcColorThemeLabel%",
         "uiTheme": "hc-light",
         "path": "./themes/hc_light.json"
-      }
-    ],
-    "iconThemes": [
-      {
-        "id": "universe-material",
-        "label": "Universe Material",
-        "path": "./icons/universe-material-icon-theme.json"
       }
     ]
   },

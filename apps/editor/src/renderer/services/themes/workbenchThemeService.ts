@@ -56,7 +56,6 @@ import { ProductIconThemeData } from './productIconThemeData.js'
 import { ExtensionThemeRegistry } from './themeRegistry.js'
 import {
   DEFAULT_DARK_COLOR_THEME_ID,
-  DEFAULT_FILE_ICON_THEME_ID,
   DEFAULT_LIGHT_COLOR_THEME_ID,
   ThemeConfiguration,
   ThemeSettings,
@@ -467,10 +466,11 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
     }
 
     // Icon themes ride the same deferred-application pattern: extension
-    // translation lands after initialize() (Eventually phase), so wait for the
-    // first registration batch before applying the configured icon theme. The
-    // configured value can be null (explicit None → noIconTheme, rendered
-    // programmatically — VSCode's "no theme" equivalent).
+    // translation lands after initialize() (Eventually phase), so when the
+    // user configured a contributed icon theme, wait for the first
+    // registration batch before applying it. The default value is null
+    // (noIconTheme, shown as "Universe Material" — rendered programmatically
+    // with the built-in Material SVGs) and applies immediately.
     const configuredFileIconTheme = this._themeConfiguration.fileIconTheme
     if (configuredFileIconTheme === null || this.getFileIconThemes().length > 0) {
       await this.setFileIconTheme(configuredFileIconTheme)
@@ -604,12 +604,12 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
 
   /**
    * Apply a file icon theme by settingsId or full theme id; serialized through
-   * the same promise chain as color themes. `undefined` applies the built-in
-   * default ({@link DEFAULT_FILE_ICON_THEME_ID}，VSCode 缺省回退 Seti 的对等
-   * 物）；`null` is the explicit "None" choice → noIconTheme (rendered
-   * programmatically with the built-in Material SVGs); an unknown id also falls
-   * back to `noIconTheme`. Does not persist configuration — the settings
-   * subscription / picker accept path owns that.
+   * the same promise chain as color themes. `null` / `undefined` select
+   * noIconTheme (the default, shown as "Universe Material" — rendered
+   * programmatically with the built-in Material SVGs); an unknown id also
+   * falls back to `noIconTheme`.
+   * Does not persist configuration — the settings subscription / picker accept
+   * path owns that.
    */
   setFileIconTheme(
     themeIdOrSettingsId: string | null | undefined,
@@ -641,13 +641,12 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
   }
 
   private _findFileIconTheme(idOrSettingsId: string | null | undefined): FileIconThemeData {
-    if (idOrSettingsId === null) {
+    if (idOrSettingsId === null || idOrSettingsId === undefined) {
       return FileIconThemeData.noIconTheme
     }
     const theme =
-      this._fileIconThemeRegistry.findThemeBySettingsId(
-        idOrSettingsId ?? DEFAULT_FILE_ICON_THEME_ID,
-      ) ?? this._fileIconThemeRegistry.findThemeById(idOrSettingsId)
+      this._fileIconThemeRegistry.findThemeBySettingsId(idOrSettingsId) ??
+      this._fileIconThemeRegistry.findThemeById(idOrSettingsId)
     return theme ?? FileIconThemeData.noIconTheme
   }
 

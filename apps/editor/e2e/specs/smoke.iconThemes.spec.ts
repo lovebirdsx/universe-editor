@@ -1,17 +1,20 @@
 /*---------------------------------------------------------------------------------------------
  *  S2 — 文件/产品图标主题机制冒烟（P0）。
  *
- *  对照 VSCode 的 contributes.iconThemes / productIconThemes 链路：
- *  内置 theme-defaults 扩展注册 universe-material（VSCode JSON 格式）→ 缺省
- *  激活，FileIcon 走样式表协议类（.ts-ext-file-icon…）+ body.show-file-icons
- *  门闸；workbench.iconTheme=null（None）回退内联 Material SVG；picker 导航
- *  即预览、Escape 回滚。产品图标主题默认 Default（codicon，无样式表覆盖）。
+ *  对照 VSCode 的 workbench.iconTheme / productIconTheme 语义：文件图标主题
+ *  默认 Universe Material（workbench.iconTheme=null 的内置项）——FileIcon 走
+ *  内联 Material SVG（data-file-icon="mi-<name>"），无 body.show-file-icons
+ *  门闸、无 contributed 样式表；picker 列出 Universe Material 条目，Enter 确认
+ *  后保持默认。JSON 图标主题机制
+ *  （contributes.iconThemes → 协议类 + 门闸）由单测覆盖（workbenchThemeService /
+ *  fileIconThemeData / generateFileIconThemeCss）。产品图标主题默认 Default
+ *  （codicon，无样式表覆盖）。
  *--------------------------------------------------------------------------------------------*/
 
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'
-import { expect, test } from '../fixtures/coreThemesColdApp.js'
+import { expect, test } from '../fixtures/electronApp.js'
 
 test.use({
   workspaceSeeder: {
@@ -40,94 +43,41 @@ function explorerIcon(page: Page, name: string) {
 }
 
 test.describe('@p0 icon themes', () => {
-  test('universe-material activates by default: protocol classes + show-file-icons gate', async ({
+  test('Universe Material is the default: inline Material SVGs, no stylesheet gate', async ({
     page,
   }) => {
-    await expect
-      .poll(() => fileIconThemeId(page), { timeout: 20000 })
-      .toContain('universe-material')
-    await expect.poll(() => showFileIconsGate(page)).toBe(true)
-
-    // sample.ts renders through the stylesheet protocol classes, not inline SVG.
-    await expect
-      .poll(() => explorerIcon(page, 'sample.ts').getAttribute('class'), { timeout: 15000 })
-      .toContain('ts-ext-file-icon')
-    await expect
-      .poll(() => explorerIcon(page, 'src').getAttribute('class'), { timeout: 15000 })
-      .toContain('folder-icon')
-    // README.md resolves through the extension + language fallbacks.
-    await expect
-      .poll(() => explorerIcon(page, 'README.md').getAttribute('class'), { timeout: 15000 })
-      .toContain('md-ext-file-icon')
-  })
-
-  test('workbench.iconTheme=null (None) falls back to inline Material SVGs', async ({ page }) => {
-    await expect
-      .poll(() => fileIconThemeId(page), { timeout: 20000 })
-      .toContain('universe-material')
-
-    await page.evaluate(() => {
-      window.__E2E__!.updateConfigValue('workbench.iconTheme', null)
-    })
-    await expect.poll(() => fileIconThemeId(page), { timeout: 15000 }).toBe('')
+    await expect.poll(() => fileIconThemeId(page), { timeout: 20000 }).toBe('')
     await expect.poll(() => showFileIconsGate(page)).toBe(false)
 
-    // Programmatic fallback: the built-in inline-SVG path tags mi-<name> ids.
+    // Files/folders render through the inline-SVG path (mi-<name> ids), covering
+    // extension, folder-name and file-name resolution.
     await expect
       .poll(() => explorerIcon(page, 'sample.ts').getAttribute('data-file-icon'), {
         timeout: 15000,
       })
       .toBe('mi-typescript')
-
-    // Restoring the setting brings the stylesheet theme back.
-    await page.evaluate(() => {
-      window.__E2E__!.updateConfigValue('workbench.iconTheme', 'universe-material')
-    })
     await expect
-      .poll(() => fileIconThemeId(page), { timeout: 15000 })
-      .toContain('universe-material')
+      .poll(() => explorerIcon(page, 'src').getAttribute('data-file-icon'), { timeout: 15000 })
+      .toBe('mi-folder-src')
     await expect
-      .poll(() => explorerIcon(page, 'sample.ts').getAttribute('class'), { timeout: 15000 })
-      .toContain('ts-ext-file-icon')
+      .poll(() => explorerIcon(page, 'README.md').getAttribute('data-file-icon'), {
+        timeout: 15000,
+      })
+      .toBe('mi-readme')
   })
 
-  test('file icon theme picker previews on navigation and rolls back on Escape', async ({
+  test('file icon theme picker lists Universe Material and accept keeps it active', async ({
     page,
     workbench,
   }) => {
-    // Wait for the deferred initial application (extension translation lands in
-    // the Eventually phase) before driving the picker.
-    await expect
-      .poll(() => fileIconThemeId(page), { timeout: 20000 })
-      .toContain('universe-material')
-    const originalId = await fileIconThemeId(page)
+    await expect.poll(() => fileIconThemeId(page), { timeout: 20000 }).toBe('')
 
     // selectIconTheme awaits the pick — fire-and-forget so the test drives the UI.
     await page.evaluate(() => {
       void window.__E2E__!.runCommand('workbench.action.selectIconTheme')
     })
     await workbench.quickInput.waitForVisible()
-
-    // Filtering to "None" activates it, which previews immediately.
-    await workbench.quickInput.input.fill('None')
-    await expect.poll(() => fileIconThemeId(page), { timeout: 15000 }).toBe('')
-
-    await page.keyboard.press('Escape')
-    await workbench.quickInput.waitForHidden()
-    await expect.poll(() => fileIconThemeId(page), { timeout: 15000 }).toBe(originalId)
-  })
-
-  test('file icon theme picker accept persists the selection', async ({ page, workbench }) => {
-    await expect
-      .poll(() => fileIconThemeId(page), { timeout: 20000 })
-      .toContain('universe-material')
-    await page.evaluate(() => {
-      void window.__E2E__!.runCommand('workbench.action.selectIconTheme')
-    })
-    await workbench.quickInput.waitForVisible()
-    await workbench.quickInput.input.fill('None')
-    // Wait until the preview applied — guarantees the None item is active.
-    await expect.poll(() => fileIconThemeId(page), { timeout: 15000 }).toBe('')
+    await workbench.quickInput.input.fill('Universe Material')
     await page.keyboard.press('Enter')
     await workbench.quickInput.waitForHidden()
 

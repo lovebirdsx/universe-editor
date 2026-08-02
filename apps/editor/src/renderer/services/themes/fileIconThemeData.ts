@@ -101,7 +101,7 @@ export class FileIconThemeData implements IFileIconTheme {
   }
 
   static noIconTheme: FileIconThemeData = (() => {
-    const theme = new FileIconThemeData('', 'None', null)
+    const theme = new FileIconThemeData('', 'Universe Material', null)
     theme.hasFileIcons = false
     theme.hasFolderIcons = false
     theme.hidesExplorerArrows = false

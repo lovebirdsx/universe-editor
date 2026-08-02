@@ -525,7 +525,7 @@ function pickTheme<
     pick.show()
   }
 
-  // extraItems (None / Default) are always available even with zero registered
+  // extraItems (Universe Material / Default) are always available even with zero registered
   // themes, so a non-empty extraItems list is enough to open the picker.
   const canOpen = (): boolean =>
     options.getThemes().length > 0 || (options.extraItems?.length ?? 0) > 0
@@ -661,8 +661,8 @@ export class SelectFileIconThemeAction extends Action2 {
       getThemes: () => themeService.getFileIconThemes(),
       getCurrent: () => themeService.getFileIconThemeData(),
       applyTheme: (theme) => {
-        // settingsId null = the explicit "None" entry (noIconTheme) — pass it
-        // through so preview/rollback apply None instead of the default theme.
+        // settingsId null = the built-in Universe Material entry (noIconTheme) —
+        // pass it through so preview/rollback re-apply the built-in inline icons.
         void themeService.setFileIconTheme(theme.settingsId)
       },
       persist: () => {

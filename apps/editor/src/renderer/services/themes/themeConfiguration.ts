@@ -26,7 +26,6 @@ export const ThemeSettings = {
 /** 内置默认主题（`extensions/theme-defaults` 的 settingsId）。 */
 export const DEFAULT_DARK_COLOR_THEME_ID = 'Universe Dark'
 export const DEFAULT_LIGHT_COLOR_THEME_ID = 'Universe Light'
-export const DEFAULT_FILE_ICON_THEME_ID = 'universe-material'
 export const DEFAULT_PRODUCT_ICON_THEME_ID = 'Default'
 
 /** 旧版二选一配置值 → 内置主题 settingsId 的迁移映射。 */
@@ -133,14 +132,11 @@ export class ThemeConfiguration {
   }
 
   /**
-   * 用户配置的 `workbench.iconTheme`：settingsId 字符串；`null` = 显式 None
-   * （VSCode 同款语义，此编辑器里 None 回退到内联 Material SVG 渲染）。
-   * schema default 保证缺省时返回 {@link DEFAULT_FILE_ICON_THEME_ID}。
-   * 注意不能用 `??`：显式 null 必须原样穿透（None），只有 undefined 才回退默认。
+   * 用户配置的 `workbench.iconTheme`：settingsId 字符串；`null` = 默认的
+   * Universe Material（内置内联 Material SVG 渲染，无 contributed 样式表）。
    */
   get fileIconTheme(): string | null {
-    const value = this.configurationService.get<string | null>(ThemeSettings.FILE_ICON_THEME)
-    return value === undefined ? DEFAULT_FILE_ICON_THEME_ID : value
+    return this.configurationService.get<string | null>(ThemeSettings.FILE_ICON_THEME) ?? null
   }
 
   get productIconTheme(): string {

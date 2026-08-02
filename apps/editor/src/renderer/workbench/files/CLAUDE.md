@@ -6,10 +6,10 @@
 
 文件图标**是** VSCode 那种可切换的 icon-theme 系统（Phase 4 起）：`workbench.iconTheme` 设置驱动，`FileIcon` 组件按活动主题分流渲染。当前有两条渲染路径：
 
-- **JSON 文件图标主题激活（默认）**：走 stylesheet 协议类——`FileIcon` 只发 `file-icon`/`folder-icon`/`ts-lang-file-icon` 等 class（`getFileIconClasses`），真正的图形由主题贡献的 CSS 经 `::before` background 绘制。内置默认主题 `universe-material`（`extensions/theme-defaults/icons/universe-material-icon-theme.json`，与颜色主题同扩展）就是这种 JSON 主题，**数据源与本目录的 material 白名单同源**。第三方 VSCode 文件图标主题扩展装上后也会出现在「文件图标主题」列表里（对齐 VSCode `fileIconThemeData` JSON→CSS 机制）。
-- **None（`workbench.iconTheme: null`）**：回退到本目录的**内联 SVG 方案**——`resolveFileIcon` + `FileIcon` 把 `material-icon-theme`（MIT）精选彩色 SVG 以 `?raw` 内联渲染。这套内联数据由可重跑脚本生成，无自定义 scheme、happy-dom 可断言，也是单元测试（容器里无 theme service）走的兜底路径。
+- **Universe Material（`workbench.iconTheme: null`，默认）**：走本目录的**内联 SVG 方案**——`resolveFileIcon` + `FileIcon` 把 `material-icon-theme`（MIT）精选彩色 SVG 以 `?raw` 内联渲染。这套内联数据由可重跑脚本生成，无自定义 scheme、happy-dom 可断言，也是单元测试（容器里无 theme service）走的路径。picker/设置里显示为「Universe Material」，运行时形态是 `FileIconThemeData.noIconTheme`（id `''`、settingsId `null`）。
+- **JSON 文件图标主题激活**（安装并选中第三方 VSCode 文件图标主题扩展时）：走 stylesheet 协议类——`FileIcon` 只发 `file-icon`/`folder-icon`/`ts-lang-file-icon` 等 class（`getFileIconClasses`），真正的图形由主题贡献的 CSS 经 `::before` background 绘制（对齐 VSCode `fileIconThemeData` JSON→CSS 机制）。
 
-**本目录维护的是内联 SVG 数据与解析逻辑**，它同时喂给 None 路径和 universe-material JSON 主题的图标源。改图标（加/换/升级 material 版本）仍只动本目录脚本与生成物。主题切换/JSON→CSS/热更新的机制在 `services/themes/`（见其 CLAUDE.md）。
+**本目录维护的是内联 SVG 数据与解析逻辑**（默认 Universe Material 路径的数据源）。改图标（加/换/升级 material 版本）只动本目录脚本与生成物。主题切换/JSON→CSS/热更新的机制在 `services/themes/`（见其 CLAUDE.md）。
 
 ## 数据流（从文件名到渲染）
 
@@ -23,9 +23,9 @@ resource(URI) ──► resolveFileIcon(resource, {isDirectory, expanded?, langu
   ──► FileIconDescriptor { icon: <material图标名>, id: `mi-<icon>` }
 
 FileIcon 组件分流（useFileIconThemeActive，订阅 onDidFileIconThemeChange）：
-  ├─ 主题激活（默认）: getFileIconClasses → <span class="file-icon ts-lang-file-icon ...">
+  ├─ JSON 主题激活: getFileIconClasses → <span class="file-icon ts-lang-file-icon ...">
   │                    主题 CSS 绘图形；data-file-icon="file"/"folder"
-  └─ None / 无 theme service: svgByName[icon] (import.meta.glob('./icons/*.svg',{query:'?raw',eager:true}))
+  └─ Universe Material（默认）/ 无 theme service: svgByName[icon] (import.meta.glob('./icons/*.svg',{query:'?raw',eager:true}))
                        dangerouslySetInnerHTML 内联，data-file-icon="mi-<icon>"
 ```
 
@@ -71,7 +71,7 @@ FileIcon 组件分流（useFileIconThemeActive，订阅 onDidFileIconThemeChange
 - `search/__tests__/SearchResultsTree.test.tsx`（`mi-typescript` / `mi-nodejs`）
 - `files/__tests__/fileIconTheme.test.tsx`（`mi-nodejs` / `mi-folder-src(-open)` / `mi-json` / `mi-document`(plaintext 兜底) / `mi-file`(无匹配兜底)）
 
-这些单测容器里**没有** theme service，走内联 SVG 兜底路径，故 `data-file-icon` 是 `mi-<name>`。**JSON 主题激活时**（真实 app / 装了 theme service 的 e2e）stylesheet 模式的 `data-file-icon` 是 `file`/`folder`，图形断言要靠协议 class（如 `ts-lang-file-icon`），不是 `mi-*`。
+这些单测容器里**没有** theme service，与默认 Universe Material 一样走内联 SVG 路径，故 `data-file-icon` 是 `mi-<name>`。**JSON 主题激活时**（选中第三方文件图标主题）stylesheet 模式的 `data-file-icon` 是 `file`/`folder`，图形断言要靠协议 class（如 `ts-lang-file-icon`），不是 `mi-*`。
 
 注意 `package.json` → material 图标名是 **`nodejs`**（不是 `package`）；`tsconfig.json`→`tsconfig`；`readme.md`→`readme`；未知扩展但可识别为 plaintext 的文件 → `document`（比通用 `file` 友好）；连 language 都无匹配才落 `file`。
 
@@ -87,7 +87,7 @@ FileIcon 组件分流（useFileIconThemeActive，订阅 onDidFileIconThemeChange
 4. **图标名 ≠ 文件类型名**：SolidJS 无独立图标、`.ini`→`settings`、`.bat`→`console`、`.wgsl`→`shader`、`.wat`→`webassembly`、`.xlsx`→`table`、`assets` 文件夹→`folder-resource`。写白名单前先确认 material 里的真名，否则 `not found` 警告。
 5. **folder-open 变体**：脚本对每个 kept folder 自动带出 `<name>-open.svg`（若存在）+ manifest 的 `folderNamesExpanded`。别单独往白名单加 `-open`。
 6. **复合扩展名**：`foo.spec.ts` 先试 `spec.ts` 再试 `ts`（最长后缀优先），`matchExtension` 已实现，material 有 `spec.ts`/`d.ts`/`cy.js` 等复合键。
-7. **内联 SVG 不是字体**：None 路径渲染走 `dangerouslySetInnerHTML`，无 tone/color 类（material SVG 自带 `fill`）。想改颜色得改 SVG 本身，别加 CSS color（对内联 SVG 无效，除非 SVG 用 currentColor）。JSON 主题路径同理——颜色由主题 SVG/CSS 决定。
+7. **内联 SVG 不是字体**：默认路径渲染走 `dangerouslySetInnerHTML`，无 tone/color 类（material SVG 自带 `fill`）。想改颜色得改 SVG 本身，别加 CSS color（对内联 SVG 无效，除非 SVG 用 currentColor）。JSON 主题路径同理——颜色由主题 SVG/CSS 决定。
 8. **e2e 跑 `out/` 产物**：改了 renderer 后先 `pnpm --filter @universe-editor/editor build` 再单跑 spec，否则看旧图标。根 `pnpm e2e` 会自动先 build。
 9. **体积权衡**：全量 material 是 1250 图标/3.3MB；精选 203 个约 467KB 内联进 bundle。加图标前想想是否常见，冷门类型落默认 `file`/`document` 也可接受。
 

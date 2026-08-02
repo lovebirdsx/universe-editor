@@ -10,7 +10,8 @@ import { Emitter, type Event } from '@universe-editor/platform'
 export interface ThemeData {
   readonly id: string
   readonly label?: string
-  // File icon themes use null for the built-in None entry (VSCode parity).
+  // File icon themes use null for the built-in Universe Material entry
+  // (settingsId null, VSCode "None" parity).
   readonly settingsId?: string | null
 }
 

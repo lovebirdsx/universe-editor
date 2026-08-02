@@ -6,7 +6,6 @@ import { IConfigurationService, ColorScheme, Event } from '@universe-editor/plat
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_DARK_COLOR_THEME_ID,
-  DEFAULT_FILE_ICON_THEME_ID,
   DEFAULT_LIGHT_COLOR_THEME_ID,
   migrateColorThemeSettingId,
   ThemeConfiguration,
@@ -57,11 +56,11 @@ describe('ThemeConfiguration', () => {
     })
   })
 
-  it('fileIconTheme defaults to universe-material, null means None, productIconTheme to Default', () => {
+  it('fileIconTheme defaults to Universe Material (null), productIconTheme to Default', () => {
     const config = new ThemeConfiguration(stubConfiguration({}))
-    expect(config.fileIconTheme).toBe(DEFAULT_FILE_ICON_THEME_ID)
+    expect(config.fileIconTheme).toBeNull()
     expect(config.productIconTheme).toBe('Default')
-    // Explicit null = None (must pass through, not fall back to the default).
+    // Explicit null keeps meaning the built-in default.
     const none = new ThemeConfiguration(
       stubConfiguration({ [ThemeSettings.FILE_ICON_THEME]: null }),
     )

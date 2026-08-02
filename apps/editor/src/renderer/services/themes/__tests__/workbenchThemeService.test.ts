@@ -87,13 +87,13 @@ function fileIconStyleElement(): HTMLStyleElement | null {
   return document.head.querySelector('style.contributedFileIconTheme')
 }
 
-function registerBuiltInIconThemes(service: WorkbenchThemeService): void {
+function registerTestIconThemes(service: WorkbenchThemeService): void {
   service.registerFileIconThemes(
     [
       {
-        id: 'universe-material',
-        label: 'Universe Material',
-        path: './icons/universe-material-icon-theme.json',
+        id: 'test-icons',
+        label: 'Test Icons',
+        path: './icons/test-icon-theme.json',
       },
     ],
     { extensionId: 'test.themes', extensionLocation: '/ext', extensionIsBuiltin: true },
@@ -282,64 +282,79 @@ describe('WorkbenchThemeService', () => {
     d.dispose()
   })
 
-  it('setFileIconTheme(undefined) applies the built-in default (universe-material)', async () => {
-    files['/ext/icons/universe-material-icon-theme.json'] = ICON_THEME_JSON
-    registerBuiltInIconThemes(service)
+  it('setFileIconTheme(undefined) selects noIconTheme (the default Universe Material)', async () => {
+    files['/ext/icons/test-icon-theme.json'] = ICON_THEME_JSON
+    registerTestIconThemes(service)
     const theme = await service.setFileIconTheme(undefined)
-    expect(theme?.settingsId).toBe('universe-material')
-    expect(service.getFileIconTheme().id).toBe('test.themes-universe-material')
+    expect(theme?.id).toBe('')
+    expect(service.getFileIconTheme().id).toBe('')
+    expect(fileIconStyleElement()?.textContent ?? '').toBe('')
+  })
+
+  it('setFileIconTheme applies a registered theme by settingsId', async () => {
+    files['/ext/icons/test-icon-theme.json'] = ICON_THEME_JSON
+    registerTestIconThemes(service)
+    const theme = await service.setFileIconTheme('test-icons')
+    expect(theme?.settingsId).toBe('test-icons')
+    expect(service.getFileIconTheme().id).toBe('test.themes-test-icons')
     expect(fileIconStyleElement()?.textContent).toContain('.ts-ext-file-icon')
   })
 
-  it('setFileIconTheme(null) selects noIconTheme (explicit None, VSCode semantics)', async () => {
-    files['/ext/icons/universe-material-icon-theme.json'] = ICON_THEME_JSON
-    registerBuiltInIconThemes(service)
-    await service.setFileIconTheme(undefined)
+  it('setFileIconTheme(null) selects noIconTheme and clears the stylesheet', async () => {
+    files['/ext/icons/test-icon-theme.json'] = ICON_THEME_JSON
+    registerTestIconThemes(service)
+    await service.setFileIconTheme('test-icons')
     expect(service.getFileIconTheme().id).not.toBe('')
 
     const theme = await service.setFileIconTheme(null)
     expect(theme?.id).toBe('')
     expect(service.getFileIconTheme().id).toBe('')
-    // None clears the contributed stylesheet.
+    // The built-in default has no contributed stylesheet.
     expect(fileIconStyleElement()?.textContent ?? '').not.toContain('.ts-ext-file-icon')
   })
 
   it('setFileIconTheme with an unknown id falls back to noIconTheme', async () => {
-    files['/ext/icons/universe-material-icon-theme.json'] = ICON_THEME_JSON
-    registerBuiltInIconThemes(service)
+    files['/ext/icons/test-icon-theme.json'] = ICON_THEME_JSON
+    registerTestIconThemes(service)
     const theme = await service.setFileIconTheme('no-such-icon-theme')
     expect(theme?.id).toBe('')
   })
 
-  it('initialize applies the schema default icon theme once it registers', async () => {
-    files['/ext/icons/universe-material-icon-theme.json'] = ICON_THEME_JSON
+  it('initialize applies the built-in default without waiting for icon theme registration', async () => {
+    registerBuiltInThemes(service)
+    await service.initialize()
+    expect(service.getFileIconTheme().id).toBe('')
+    expect(fileIconStyleElement()?.textContent ?? '').toBe('')
+  })
+
+  it('initialize defers a configured icon theme until it registers', async () => {
+    files['/ext/icons/test-icon-theme.json'] = ICON_THEME_JSON
+    config.update('workbench.iconTheme', 'test-icons', ConfigurationTarget.User)
     const initialized = service.initialize()
     registerBuiltInThemes(service)
-    registerBuiltInIconThemes(service)
+    registerTestIconThemes(service)
     await initialized
     await vi.waitFor(() => {
-      expect(service.getFileIconTheme().id).toBe('test.themes-universe-material')
+      expect(service.getFileIconTheme().id).toBe('test.themes-test-icons')
     })
     expect(fileIconStyleElement()?.textContent).toContain('.ts-ext-file-icon')
   })
 
-  it('writing workbench.iconTheme=null at runtime switches to None via the subscription', async () => {
-    files['/ext/icons/universe-material-icon-theme.json'] = ICON_THEME_JSON
+  it('writing workbench.iconTheme at runtime switches themes via the subscription', async () => {
+    files['/ext/icons/test-icon-theme.json'] = ICON_THEME_JSON
     registerBuiltInThemes(service)
-    registerBuiltInIconThemes(service)
+    registerTestIconThemes(service)
     await service.initialize()
+    expect(service.getFileIconTheme().id).toBe('')
+
+    config.update('workbench.iconTheme', 'test-icons', ConfigurationTarget.User)
     await vi.waitFor(() => {
-      expect(service.getFileIconTheme().id).toBe('test.themes-universe-material')
+      expect(service.getFileIconTheme().id).toBe('test.themes-test-icons')
     })
 
     config.update('workbench.iconTheme', null, ConfigurationTarget.User)
     await vi.waitFor(() => {
       expect(service.getFileIconTheme().id).toBe('')
-    })
-
-    config.update('workbench.iconTheme', 'universe-material', ConfigurationTarget.User)
-    await vi.waitFor(() => {
-      expect(service.getFileIconTheme().id).toBe('test.themes-universe-material')
     })
   })
 })

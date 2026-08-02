@@ -35,7 +35,6 @@ import { initMonacoThemeBridge } from '../services/themes/monacoThemeBridge.js'
 import { initMonacoSemanticThemeBridge } from '../services/themes/monacoSemanticThemeBridge.js'
 import {
   DEFAULT_DARK_COLOR_THEME_ID,
-  DEFAULT_FILE_ICON_THEME_ID,
   DEFAULT_LIGHT_COLOR_THEME_ID,
   ThemeSettings,
 } from '../services/themes/themeConfiguration.js'
@@ -176,15 +175,15 @@ export class ThemesContribution extends Disposable implements IWorkbenchContribu
         properties: {
           [ThemeSettings.FILE_ICON_THEME]: {
             type: ['string', 'null'],
-            default: DEFAULT_FILE_ICON_THEME_ID,
+            default: null,
             enum: [null, ...themes.map((t) => t.settingsId)],
             enumItemLabels: {
-              null: localize('settings.workbench.iconTheme.none', 'None'),
+              null: 'Universe Material',
               ...Object.fromEntries(themes.map((t) => [t.settingsId ?? '', t.label])),
             },
             description: localize(
               'settings.workbench.iconTheme.description',
-              'Specifies the file icon theme used in the workbench, or "None" to disable file icons.',
+              'Specifies the file icon theme used in the workbench. `null` selects the built-in Universe Material icons.',
             ),
           },
         },

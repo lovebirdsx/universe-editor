@@ -137,7 +137,7 @@ Markdown 的格式命令与预览链接导航命令，目前有相当一部分�
 | 打开更新配置 (JSON) | 编辑 update-config.json，覆盖自动更新服务器地址（仅打包版生效） | 无 |
 | 打开键盘快捷方式 | 打开快捷键编辑器 | `Ctrl+K Ctrl+S` |
 | 颜色主题 | 切换颜色主题（Universe Dark / Light） | `Ctrl+K Ctrl+T` |
-| 文件图标主题 | 切换文件/文件夹图标主题（默认 universe-material，None 回退内置图标） | 无 |
+| 文件图标主题 | 切换文件/文件夹图标主题（默认 Universe Material，内置彩色 Material 图标） | 无 |
 | 产品图标主题 | 切换界面图标主题（默认 Default） | 无 |
 | 配置显示语言 | 切换中文 / 英文界面（重启生效） | 无 |
 | 打开 AI 与 Agent 设置 | 配置供应商、模型、密钥 | 无 |

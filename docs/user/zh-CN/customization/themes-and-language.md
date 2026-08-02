@@ -64,9 +64,8 @@
 
 1. 按 `Ctrl+Shift+P` 打开命令面板，输入「文件图标主题」。
 2. 在列表里用上下键预览、回车确认；按 `Esc` 取消并回到原来的主题。
-3. 选择 **None** 则不使用图标主题，回退到编辑器内置的彩色 Material 图标。
 
-默认使用内置的「universe-material」主题（Material 风格彩色图标）。与 VSCode 的文件图标主题格式兼容——第三方 VSCode 文件图标主题扩展装上后也会出现在这个列表里。选择结果保存在用户设置里（对应键名 `workbench.iconTheme`，设为 `null` 等同选择 None）。
+默认是 **Universe Material**（编辑器内置的彩色 Material 图标）。与 VSCode 的文件图标主题格式兼容——第三方 VSCode 文件图标主题扩展装上后会出现在这个列表里。选择结果保存在用户设置里（对应键名 `workbench.iconTheme`，`null` 即默认的 Universe Material）。
 
 ## 切换产品图标主题
 
