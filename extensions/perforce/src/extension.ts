@@ -116,7 +116,7 @@ function createReconcileStore(context: ExtensionContext, root: string): Reconcil
 export async function activate(context: ExtensionContext): Promise<void> {
   const root = workspace.rootPath
   if (!root) {
-    console.error('[perforce] no workspace folder open; perforce source control disabled')
+    console.info('[perforce] no workspace folder open; perforce source control disabled')
     return
   }
 
