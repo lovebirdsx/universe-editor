@@ -441,6 +441,64 @@ test.describe('@p1 markdown preview', () => {
     })
   })
 
+  // Regression: a dirty source must survive preview link navigation. The toggle
+  // preview holds the detached (dirty) FileEditorInput; closing the preview on a
+  // link jump used to cascade-dispose it and release the shared Monaco model,
+  // silently dropping the unsaved edits.
+  test('a dirty source survives a preview link jump @regression', async ({ page, workbench }) => {
+    test.setTimeout(120_000)
+    await workbench.waitForRestored()
+
+    const ws = writePreviewWorkspace()
+    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), ws.dir)
+
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), ws.index)
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })
+      .toBe('markdown')
+
+    // Edit the source so it is dirty, then toggle into the preview. The Monaco
+    // instance may still be mounting right after open (the probe returns false
+    // until it registers), so re-issue the edit until it lands.
+    await expect
+      .poll(
+        async () => {
+          await page.evaluate(
+            (text) => window.__E2E__!.setActiveEditorText(text),
+            '# Index\n\nLOCAL EDIT\n\n[go to target](target.md)\n',
+          )
+          return page.evaluate(() => window.__E2E__!.getActiveEditorText())
+        },
+        { timeout: 10000 },
+      )
+      .toContain('LOCAL EDIT')
+
+    await workbench.runCommand('workbench.action.markdown.openPreview')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('markdown.preview')
+
+    // Follow the link with a real mouse click — the exact gesture from the bug.
+    const link = page.locator('[data-testid="markdown-preview"] a').first()
+    await expect(link).toBeVisible()
+    await link.click()
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorUri()), { timeout: 10000 })
+      .toEqual(expect.stringContaining('target.md'))
+
+    // The dirty source is re-attached as a tab next to the new preview, and its
+    // edits are still there when switching back to it.
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveGroupEditorCount()), {
+        timeout: 5000,
+      })
+      .toBe(2)
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), ws.index)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorText()), { timeout: 5000 })
+      .toContain('LOCAL EDIT')
+  })
+
   // Regression journey: outline survival + the preview's keyboard-focus contract
   // (every step chains on the same linked workspace and the focused preview).
   test('outline survives preview mode and preview keyboard focus flows stay unbroken @regression', async ({

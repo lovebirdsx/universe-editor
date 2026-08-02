@@ -26,6 +26,15 @@ export function openMarkdownPreviewInGroup(
     if (current instanceof MarkdownPreviewInput && current.id !== preview.id) {
       const index = group.indexOf(current)
       group.openEditor(preview, { activate: true, pinned: true, index })
+      // A toggle-mode preview holds its source FileEditorInput; closing it
+      // would cascade-dispose the source and release the shared Monaco model,
+      // silently dropping unsaved edits. Re-attach a dirty source as a tab
+      // next to the new preview before closing the old one (a clean source
+      // loses nothing and keeps the single-tab behavior).
+      if (current.isDirty) {
+        const held = current.releaseSource()
+        if (held) group.openEditor(held, { activate: false, pinned: true, index: index + 1 })
+      }
       group.closeEditor(current)
       return
     }
