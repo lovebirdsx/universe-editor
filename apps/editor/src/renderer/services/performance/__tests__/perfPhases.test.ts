@@ -3,6 +3,7 @@ import {
   _resetPerfPhasesForTests,
   getRecordedPhases,
   recordPerfPhase,
+  recordPerfPhaseAsync,
   samplesInWindow,
   type PerfSample,
 } from '../perfPhases.js'
@@ -42,6 +43,36 @@ describe('recordPerfPhase', () => {
     expect(phases.length).toBeLessThanOrEqual(256)
     // Oldest samples were evicted, latest kept.
     expect(phases[phases.length - 1]?.name).toBe('p399')
+  })
+})
+
+describe('recordPerfPhaseAsync', () => {
+  it('spans the whole promise, not just the synchronous head', async () => {
+    let resume!: () => void
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve
+    })
+    const pending = recordPerfPhaseAsync('test.async', async () => {
+      await gate
+      return 'done'
+    })
+    // Still in flight: nothing recorded yet (a sync wrapper would have stopped
+    // at the first await and recorded a ~0ms sample already).
+    expect(getRecordedPhases()).toHaveLength(0)
+    resume()
+    await expect(pending).resolves.toBe('done')
+    const phases = getRecordedPhases()
+    expect(phases).toHaveLength(1)
+    expect(phases[0]?.name).toBe('test.async')
+  })
+
+  it('records the sample even when the promise rejects', async () => {
+    await expect(
+      recordPerfPhaseAsync('test.asyncThrow', async () => {
+        throw new Error('boom')
+      }),
+    ).rejects.toThrow('boom')
+    expect(getRecordedPhases()).toHaveLength(1)
   })
 })
 

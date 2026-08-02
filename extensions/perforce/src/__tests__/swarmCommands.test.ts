@@ -117,9 +117,21 @@ describe('registerSwarmCommands review operations', () => {
       revision: '@=900',
     })
 
-    expect(mocks.printRevisionBytes).toHaveBeenCalledWith('//depot/x.xlsx@=900')
+    expect(mocks.printRevisionBytes).toHaveBeenCalledWith('//depot/x.xlsx@=900', false)
     expect(result).toBe(raw.toString('base64'))
     expect(Buffer.from(result as string, 'base64')).toEqual(raw)
+  })
+
+  it('passes the immutable flag through to printRevisionBytes', async () => {
+    mocks.printRevisionBytes.mockResolvedValue(Buffer.from('x'))
+
+    await mocks.handlers.get('perforce.swarm.getFileContentBytes')?.({
+      depotFile: '//depot/x.xlsx',
+      revision: '@=900',
+      immutable: true,
+    })
+
+    expect(mocks.printRevisionBytes).toHaveBeenCalledWith('//depot/x.xlsx@=900', true)
   })
 
   it('rejects a revision that is not a bare #rev or @=change (filespec guard)', async () => {

@@ -46,7 +46,11 @@ import {
 } from '@universe-editor/extensions-common'
 import { useObservable, useService } from '../useService.js'
 import { SwarmReviewEditorInput } from '../../services/editor/SwarmReviewEditorInput.js'
-import { SwarmDiffEditorInput } from '../../services/editor/SwarmDiffEditorInput.js'
+import {
+  SwarmDiffEditorInput,
+  swarmDiffEditorId,
+} from '../../services/editor/SwarmDiffEditorInput.js'
+import { recordPerfPhase, recordPerfPhaseAsync } from '../../services/performance/perfPhases.js'
 import { type OpenWebviewDiffPayload } from '../../actions/diffActions.js'
 import { waitForSwarmCommand } from '../../services/swarm/swarmCommandReady.js'
 import { buildSwarmReviewUrl } from '../../services/swarm/swarmReviewUrl.js'
@@ -392,6 +396,16 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     [detail],
   )
 
+  // A version backed by an archive shelf is a content-addressed snapshot: its
+  // diff content can be cached forever (unlike the author's re-shelvable CL).
+  const immutableForVersion = useCallback(
+    (versionIdx: number | null): boolean => {
+      if (versionIdx === null) return false
+      return detail?.versions[versionIdx]?.archiveChange !== undefined
+    },
+    [detail],
+  )
+
   // Load the selected version's files. Use the immutable archive shelf (via
   // changeForVersion), not the author's raw changelist: the latter can be
   // re-shelved / emptied after the version was recorded, which would make the
@@ -586,6 +600,10 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
             : null
           : `@=${leftChange}`
       const modifiedRevision = rightChange ? `@=${rightChange}` : null
+      // `#<rev>` sides need no flag — the client caches concrete revisions
+      // unconditionally; the flag matters for `@=<change>` archive shelves.
+      const originalImmutable = leftChange !== null && immutableForVersion(compareVersionIdx)
+      const modifiedImmutable = rightChange !== null && immutableForVersion(selectedVersionIdx)
 
       // Spreadsheets can't be shown in a Monaco text diff — utf8-decoding the zip
       // bytes yields garbage and the diff looks empty. Route them to the Excel
@@ -597,18 +615,19 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       // flag, either of which would silently drop us back to the empty text diff.
       if (isSpreadsheetPath(file.path)) {
         try {
-          const getBytes = async (revision: string | null): Promise<string> => {
+          const getBytes = async (revision: string | null, immutable: boolean): Promise<string> => {
             if (!revision) return ''
             return (
               (await commands.executeCommand<string>(SwarmCommands.getFileContentBytes, {
                 depotFile: file.depotFile,
                 revision,
+                ...(immutable ? { immutable: true } : {}),
               } satisfies SwarmFileContentRequest)) ?? ''
             )
           }
           const [leftBase64, rightBase64] = await Promise.all([
-            getBytes(added ? null : originalRevision),
-            getBytes(deleted ? null : modifiedRevision),
+            getBytes(added ? null : originalRevision, originalImmutable),
+            getBytes(deleted ? null : modifiedRevision, modifiedImmutable),
           ])
           // Distinct left/right URIs carrying the backing-change pair keep the
           // diff tab's identity unique per comparison (WebviewDiffInput ids by
@@ -637,41 +656,70 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
         return
       }
 
-      const getContent = async (revision: string | null): Promise<string> => {
+      const context = {
+        reviewId: detail.id,
+        depotFile: file.depotFile,
+        displayPath: file.path,
+        localPath: file.localPath,
+        leftVersion: added ? null : leftVersion,
+        rightVersion: deleted ? null : rightRev,
+        leftChange: added ? null : leftChange,
+        rightChange: deleted ? null : rightChange,
+      }
+      // Both sides immutable (archive shelves / depot base / absent) → the diff
+      // can never change, so a reopen of an already-open tab skips the p4 fetch
+      // entirely. A pending (re-shelvable) side keeps the refetch-and-refresh
+      // semantics. openEditors mirrors the active group — the same scope
+      // EditorService.openEditor dedupes in.
+      const bothImmutable =
+        (added || leftChange === null || originalImmutable) && (deleted || modifiedImmutable)
+      if (bothImmutable) {
+        const existing = editorService.openEditors
+          .get()
+          .find((e) => e.id === swarmDiffEditorId(context))
+        if (existing) {
+          recordPerfPhase('swarm.openFileDiff.reuse', () => {})
+          editorService.openEditor(existing)
+          return
+        }
+      }
+      const getContent = async (revision: string | null, immutable: boolean): Promise<string> => {
         if (!revision) return ''
-        return (
-          (await commands.executeCommand<string>(SwarmCommands.getFileContent, {
-            depotFile: file.depotFile,
-            revision,
-          } satisfies SwarmFileContentRequest)) ?? ''
+        return recordPerfPhaseAsync(
+          'swarm.openFileDiff.fetchSide',
+          async () =>
+            (await commands.executeCommand<string>(SwarmCommands.getFileContent, {
+              depotFile: file.depotFile,
+              revision,
+              ...(immutable ? { immutable: true } : {}),
+            } satisfies SwarmFileContentRequest)) ?? '',
         )
       }
       try {
-        const [original, modified] = await Promise.all([
-          getContent(added ? null : originalRevision),
-          getContent(deleted ? null : modifiedRevision),
-        ])
-        await editorService.openEditor(
-          new SwarmDiffEditorInput(
-            {
-              reviewId: detail.id,
-              depotFile: file.depotFile,
-              displayPath: file.path,
-              localPath: file.localPath,
-              leftVersion: added ? null : leftVersion,
-              rightVersion: deleted ? null : rightRev,
-              leftChange: added ? null : leftChange,
-              rightChange: deleted ? null : rightChange,
-            },
-            original ?? '',
-            modified ?? '',
-          ),
-        )
+        await recordPerfPhaseAsync('swarm.openFileDiff.total', async () => {
+          const [original, modified] = await recordPerfPhaseAsync('swarm.openFileDiff.fetch', () =>
+            Promise.all([
+              getContent(added ? null : originalRevision, originalImmutable),
+              getContent(deleted ? null : modifiedRevision, modifiedImmutable),
+            ]),
+          )
+          await editorService.openEditor(
+            new SwarmDiffEditorInput(context, original ?? '', modified ?? ''),
+          )
+        })
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : String(e))
       }
     },
-    [commands, editorService, detail, selectedVersionIdx, compareVersionIdx, changeForVersion],
+    [
+      commands,
+      editorService,
+      detail,
+      selectedVersionIdx,
+      compareVersionIdx,
+      changeForVersion,
+      immutableForVersion,
+    ],
   )
 
   const loadComments = useCallback(
@@ -770,11 +818,10 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   // (re-shelvable) changelist stays on the short-TTL + force path — otherwise the
   // minute-interval refresh would re-run `p4 describe -S -s` every tick and churn
   // the file list even though the archived snapshot can't have changed.
-  const selectedChangeImmutable = useMemo(() => {
-    if (selectedVersionIdx === null) return false
-    const entry = detail?.versions[selectedVersionIdx]
-    return entry?.archiveChange !== undefined
-  }, [detail, selectedVersionIdx])
+  const selectedChangeImmutable = useMemo(
+    () => immutableForVersion(selectedVersionIdx),
+    [immutableForVersion, selectedVersionIdx],
+  )
   useEffect(() => {
     if (!selectedChange) {
       setFiles(null)

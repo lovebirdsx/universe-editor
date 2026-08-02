@@ -713,22 +713,31 @@ export function registerSwarmCommands(
     // constrained before it reaches p4 so this data command cannot become a
     // general filespec escape hatch.
     commands.registerCommand(Cmd.getFileContent, async (req: unknown) => {
-      const r = req as { depotFile: string; revision: string }
+      const r = req as { depotFile: string; revision: string; immutable?: boolean }
       const active = mgr.active
       if (!active || !r?.depotFile || !/^#\d+$|^@=\d+$/.test(r.revision)) return ''
-      logger.debug('cmd', `getFileContent ${r.depotFile}${r.revision} (p4 print)`)
-      return active.printRevision(`${r.depotFile}${r.revision}`)
+      logger.debug(
+        'cmd',
+        `getFileContent ${r.depotFile}${r.revision} (p4 print${r.immutable === true ? ', immutable' : ''})`,
+      )
+      return active.printRevision(`${r.depotFile}${r.revision}`, r.immutable === true)
     }),
 
     // Same as getFileContent but returns raw bytes base64-encoded, for binary
     // files (e.g. xlsx) that UTF-8 decoding would corrupt — consumed by the
     // spreadsheet webview diff. Same revision-suffix guard as the text variant.
     commands.registerCommand(Cmd.getFileContentBytes, async (req: unknown) => {
-      const r = req as { depotFile: string; revision: string }
+      const r = req as { depotFile: string; revision: string; immutable?: boolean }
       const active = mgr.active
       if (!active || !r?.depotFile || !/^#\d+$|^@=\d+$/.test(r.revision)) return ''
-      logger.debug('cmd', `getFileContentBytes ${r.depotFile}${r.revision} (p4 print, binary)`)
-      const bytes = await active.printRevisionBytes(`${r.depotFile}${r.revision}`)
+      logger.debug(
+        'cmd',
+        `getFileContentBytes ${r.depotFile}${r.revision} (p4 print, binary${r.immutable === true ? ', immutable' : ''})`,
+      )
+      const bytes = await active.printRevisionBytes(
+        `${r.depotFile}${r.revision}`,
+        r.immutable === true,
+      )
       return bytes.toString('base64')
     }),
   ]

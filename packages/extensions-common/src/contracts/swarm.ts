@@ -306,6 +306,10 @@ export interface SwarmFileContentRequest {
   depotFile: string
   /** A validated p4 revision suffix such as `#4` or `@=12345`. */
   revision: string
+  /** True when the revision's backing change is an immutable archive shelf, so the
+   *  content may be served from / stored in the persistent print cache. A pending
+   *  shelf selected by `@=change` can be re-shelved in place and must stay uncached. */
+  immutable?: boolean
 }
 
 /** Argument for `perforce.swarm.describeVersion`. */

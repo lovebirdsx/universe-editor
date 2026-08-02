@@ -38,6 +38,10 @@ import {
 } from '../../services/configuration/fontDefaults.js'
 import styles from './DiffEditor.module.css'
 
+// Per-mount monotonically increasing id, used to qualify this instance's diff
+// model URIs so the same input mounted in two groups never collides on one URI.
+let nextDiffEditorInstanceId = 0
+
 function getEditorFontOptions(
   configService: IConfigurationService,
   languageId: string,
@@ -63,6 +67,7 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
   const originalModelRef = useRef<monaco.editor.ITextModel | null>(null)
   const modifiedModelRef = useRef<monaco.editor.ITextModel | null>(null)
   const diffLanguageRef = useRef<string>('plaintext')
+  const instanceQualifierRef = useRef(`d${nextDiffEditorInstanceId++}`)
   // Holds the current view-state wiring so the create-effect cleanup can flush it
   // (persist scroll/cursor) *before* it disposes the Monaco instance — otherwise,
   // on unmount, React runs the create-effect cleanup first and disposes the editor,
@@ -147,15 +152,16 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     const language = languageForResource(diffInput.originalUri)
     const modifiedLanguage = languageForResource(diffInput.modifiedUri)
     diffLanguageRef.current = modifiedLanguage
+    const qualifier = instanceQualifierRef.current
     const originalModel = monacoNs.editor.createModel(
       diffInput.originalContent,
       language,
-      monacoNs.Uri.parse(diffModelUri(diffInput.originalUri, 'original').toString()),
+      monacoNs.Uri.parse(diffModelUri(diffInput.originalUri, 'original', qualifier).toString()),
     )
     const modifiedModel = monacoNs.editor.createModel(
       diffInput.modifiedContent,
       modifiedLanguage,
-      monacoNs.Uri.parse(diffModelUri(diffInput.modifiedUri, 'modified').toString()),
+      monacoNs.Uri.parse(diffModelUri(diffInput.modifiedUri, 'modified', qualifier).toString()),
     )
     ed.setModel({ original: originalModel, modified: modifiedModel })
     ed.updateOptions(getEditorFontOptions(configService, modifiedLanguage))

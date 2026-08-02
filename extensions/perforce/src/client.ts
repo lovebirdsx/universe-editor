@@ -1704,15 +1704,17 @@ export class PerforceClient {
    * Print a file revision's content (`p4 print -q <spec>`) for the diff editor,
    * or empty string when the spec is null (an added/deleted side) or print fails.
    * A concrete `#revision` is immutable and cached. A pending shelf selected by
-   * `@=change` can be replaced in place, so it must bypass the persistent cache.
+   * `@=change` can be replaced in place, so it must bypass the persistent cache —
+   * unless the caller marks it `immutable` (a Swarm archive shelf, which is a
+   * content-addressed snapshot that can never be re-shelved).
    */
-  async printRevision(spec: string | null): Promise<string> {
+  async printRevision(spec: string | null, immutable = false): Promise<string> {
     if (!spec) return ''
     // Read via depot syntax with no client (`noClient`), so a file not mapped in
     // the current client's view still prints — the out-of-workspace Swarm diff
     // case. A shelf spec (`@=change`) can be re-shelved in place, so it bypasses
     // the persistent cache; a concrete `#revision` is immutable and cached.
-    if (spec.includes('@=')) {
+    if (!immutable && spec.includes('@=')) {
       const res = await this._p4.exec(['print', '-q', spec], { noClient: true })
       if (res.exitCode !== 0) {
         this._log?.(`[perforce] print ${spec} failed (exit ${res.exitCode}): ${res.stderr.trim()}`)
@@ -1721,6 +1723,7 @@ export class PerforceClient {
       return res.stdout
     }
     const value = await this._cache.wrap(P4CacheNs.print, spec, async () => {
+      this._log?.(`[perforce] print ${spec} (cache miss, p4 print)`)
       const res = await this._p4.exec(['print', '-q', spec], { noClient: true })
       if (res.exitCode !== 0) {
         this._log?.(`[perforce] print ${spec} failed (exit ${res.exitCode}): ${res.stderr.trim()}`)
@@ -1733,18 +1736,30 @@ export class PerforceClient {
 
   /**
    * Print a file revision's content as raw bytes (`p4 print -q <spec>`), for
-   * binary files (e.g. xlsx) that UTF-8 decoding would corrupt. Not cached (the
-   * string `print` cache stores decoded text); returns an empty buffer when the
-   * spec is null (an added/deleted side) or print fails.
+   * binary files (e.g. xlsx) that UTF-8 decoding would corrupt. Returns an empty
+   * buffer when the spec is null (an added/deleted side) or print fails. Like
+   * `printRevision`, a pending `@=change` shelf bypasses the cache unless the
+   * caller marks it `immutable`; cached bytes are base64-encoded into the string
+   * cache under a `bytes:` key prefix so they never collide with decoded text.
    */
-  async printRevisionBytes(spec: string | null): Promise<Buffer> {
+  async printRevisionBytes(spec: string | null, immutable = false): Promise<Buffer> {
     if (!spec) return Buffer.alloc(0)
-    const res = await this._p4.execBinary(['print', '-q', spec], { noClient: true })
-    if (res.exitCode !== 0) {
-      this._log?.(`[perforce] print ${spec} failed (exit ${res.exitCode}): ${res.stderr.trim()}`)
-      return Buffer.alloc(0)
+    const fetch = async (): Promise<Buffer | undefined> => {
+      const res = await this._p4.execBinary(['print', '-q', spec], { noClient: true })
+      if (res.exitCode !== 0) {
+        this._log?.(`[perforce] print ${spec} failed (exit ${res.exitCode}): ${res.stderr.trim()}`)
+        return undefined
+      }
+      return res.stdout
     }
-    return res.stdout
+    if (!immutable && spec.includes('@=')) {
+      return (await fetch()) ?? Buffer.alloc(0)
+    }
+    const value = await this._cache.wrap(P4CacheNs.print, `bytes:${spec}`, async () => {
+      this._log?.(`[perforce] print ${spec} (cache miss, p4 print bytes)`)
+      return (await fetch())?.toString('base64')
+    })
+    return value === undefined ? Buffer.alloc(0) : Buffer.from(value, 'base64')
   }
 
   /**

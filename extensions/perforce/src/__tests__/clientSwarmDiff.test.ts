@@ -420,4 +420,94 @@ describe('PerforceClient Swarm diff files', () => {
     ).toHaveLength(0)
     client!.dispose()
   })
+
+  function spawnPrinting(text: string): void {
+    spawnMock.mockImplementation((...args: unknown[]) => {
+      const argv = (args[1] as string[]) ?? []
+      const child = new FakeChildProcess()
+      queueMicrotask(() => {
+        const cmd = subcommand(argv)
+        if (cmd === 'info') {
+          child.stdout.emit(
+            'data',
+            Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),
+          )
+        } else if (cmd === 'print') {
+          child.stdout.emit('data', Buffer.from(text))
+        }
+        child.emit('close', 0)
+      })
+      return child
+    })
+  }
+
+  const printCount = () =>
+    spawnMock.mock.calls.filter((call) => subcommand((call[1] as string[]) ?? []) === 'print')
+      .length
+
+  it('caches an archive-shelf print when marked immutable (second open is free)', async () => {
+    spawnPrinting('SHELVED CONTENT\n')
+    const client = await PerforceClient.create(ROOT, {}, new ConcurrencyGate(4), {
+      enabled: true,
+      workspaceTtlMs: 4000,
+    })
+
+    const first = await client!.printRevision('//depot/src/a.ts@=2999', true)
+    const second = await client!.printRevision('//depot/src/a.ts@=2999', true)
+    expect(first).toBe('SHELVED CONTENT\n')
+    expect(second).toBe('SHELVED CONTENT\n')
+    expect(printCount()).toBe(1)
+    client!.dispose()
+  })
+
+  it('keeps a pending-shelf print uncached without the immutable flag', async () => {
+    spawnPrinting('SHELVED CONTENT\n')
+    const client = await PerforceClient.create(ROOT, {}, new ConcurrencyGate(4), {
+      enabled: true,
+      workspaceTtlMs: 4000,
+    })
+
+    await client!.printRevision('//depot/src/a.ts@=2999')
+    await client!.printRevision('//depot/src/a.ts@=2999')
+    expect(printCount()).toBe(2)
+    client!.dispose()
+  })
+
+  it('caches immutable print bytes under a key that never collides with text', async () => {
+    const bytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff, 0xfe, 0x00, 0x01])
+    spawnMock.mockImplementation((...args: unknown[]) => {
+      const argv = (args[1] as string[]) ?? []
+      const child = new FakeChildProcess()
+      queueMicrotask(() => {
+        const cmd = subcommand(argv)
+        if (cmd === 'info') {
+          child.stdout.emit(
+            'data',
+            Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),
+          )
+        } else if (cmd === 'print') {
+          child.stdout.emit('data', bytes)
+        }
+        child.emit('close', 0)
+      })
+      return child
+    })
+    const client = await PerforceClient.create(ROOT, {}, new ConcurrencyGate(4), {
+      enabled: true,
+      workspaceTtlMs: 4000,
+    })
+
+    // Text and bytes for the same spec each fetch once — neither serves the other.
+    await client!.printRevision('//depot/x.xlsx@=2999', true)
+    const firstBytes = await client!.printRevisionBytes('//depot/x.xlsx@=2999', true)
+    expect(printCount()).toBe(2)
+    expect(firstBytes).toEqual(bytes)
+
+    // Second round-trips are cache hits, and the bytes survive base64 intact.
+    await client!.printRevision('//depot/x.xlsx@=2999', true)
+    const secondBytes = await client!.printRevisionBytes('//depot/x.xlsx@=2999', true)
+    expect(printCount()).toBe(2)
+    expect(secondBytes).toEqual(bytes)
+    client!.dispose()
+  })
 })

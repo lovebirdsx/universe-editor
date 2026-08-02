@@ -13,6 +13,7 @@ interface DiffEditorStub {
 
 const monacoTestState = vi.hoisted(() => ({
   diffEditors: [] as DiffEditorStub[],
+  createModelCalls: 0,
 }))
 
 vi.mock('../../editor/monaco/MonacoLoader.js', () => {
@@ -20,8 +21,18 @@ vi.mock('../../editor/monaco/MonacoLoader.js', () => {
     return { dispose }
   }
 
-  function makeModel(uri: unknown) {
-    return { uri, dispose: () => {} }
+  function makeModel(text: string, uri: unknown) {
+    return {
+      uri,
+      value: text,
+      getValue() {
+        return this.value as string
+      },
+      setValue(next: string) {
+        this.value = next
+      },
+      dispose: () => {},
+    }
   }
 
   // Monaco fires an initial cursor event while a model attaches; mimic it so the
@@ -77,7 +88,10 @@ vi.mock('../../editor/monaco/MonacoLoader.js', () => {
   const monacoStub = {
     Uri: { parse: (value: string) => ({ toString: () => value }) },
     editor: {
-      createModel: (_text: string, _language: string, uri: unknown) => makeModel(uri),
+      createModel: (text: string, _language: string, uri: unknown) => {
+        monacoTestState.createModelCalls++
+        return makeModel(text, uri)
+      },
       createDiffEditor: () => makeDiffEditor(),
     },
   }
@@ -110,6 +124,7 @@ import {
 import { SwarmDiffEditorInput } from '../../../services/editor/SwarmDiffEditorInput.js'
 import { DiffEditorRegistry } from '../../../services/editor/DiffEditorRegistry.js'
 import { EditorViewStateCache } from '../../../services/editor/EditorViewStateCache.js'
+import { _resetDiffModelCacheForTests } from '../../../services/editor/diffModelCache.js'
 import { ServicesContext } from '../../useService.js'
 import { EditorGroupContext } from '../../editor/EditorGroupContext.js'
 import { SwarmDiffEditor } from '../SwarmDiffEditor.js'
@@ -163,7 +178,9 @@ afterEach(() => {
   cleanup()
   DiffEditorRegistry._resetForTests()
   EditorViewStateCache._resetForTests()
+  _resetDiffModelCacheForTests()
   monacoTestState.diffEditors.length = 0
+  monacoTestState.createModelCalls = 0
 })
 
 describe('SwarmDiffEditor', () => {
@@ -229,5 +246,62 @@ describe('SwarmDiffEditor', () => {
     expect(EditorViewStateCache.load(group.id, input.resource.toString())).toEqual({
       kind: 'auto-flushed',
     })
+  })
+
+  it('updates the live models in place when the input content changes', async () => {
+    const input = createInput()
+    render(
+      <ServicesContext.Provider value={createInstantiationService()}>
+        <EditorGroupContext.Provider value={{ id: 10 } as never}>
+          <SwarmDiffEditor input={input} />
+        </EditorGroupContext.Provider>
+      </ServicesContext.Provider>,
+    )
+    const editor = await waitForDiffEditor()
+    const model = editor.model as {
+      original: { getValue(): string }
+      modified: { getValue(): string }
+    }
+    expect(model.original.getValue()).toBe('before\n')
+    expect(model.modified.getValue()).toBe('after\n')
+
+    // A re-shelved pending version re-opened onto the same tab: updateFrom mutates
+    // the input, the mounted editor must refresh instead of showing stale text.
+    input.update('re-shelved left\n', 're-shelved right\n')
+    expect(model.original.getValue()).toBe('re-shelved left\n')
+    expect(model.modified.getValue()).toBe('re-shelved right\n')
+  })
+
+  it('reuses the cached models on a remount with identical content', async () => {
+    const group = { id: 11 }
+    const first = render(
+      <ServicesContext.Provider value={createInstantiationService()}>
+        <EditorGroupContext.Provider value={group as never}>
+          <SwarmDiffEditor input={createInput()} />
+        </EditorGroupContext.Provider>
+      </ServicesContext.Provider>,
+    )
+    const firstEditor = await waitForDiffEditor()
+    const firstModel = firstEditor.model as { original: unknown; modified: unknown }
+    expect(monacoTestState.createModelCalls).toBe(2)
+    first.unmount()
+
+    // Same id + same text: the second mount takes the LRU pair back instead of
+    // rebuilding (createModel + tokenize are the cost this avoids).
+    render(
+      <ServicesContext.Provider value={createInstantiationService()}>
+        <EditorGroupContext.Provider value={group as never}>
+          <SwarmDiffEditor input={createInput()} />
+        </EditorGroupContext.Provider>
+      </ServicesContext.Provider>,
+    )
+    await vi.waitFor(() => expect(monacoTestState.diffEditors.at(1)?.model).toBeTruthy())
+    expect(monacoTestState.createModelCalls).toBe(2)
+    const secondModel = monacoTestState.diffEditors.at(1)?.model as {
+      original: unknown
+      modified: unknown
+    }
+    expect(secondModel.original).toBe(firstModel.original)
+    expect(secondModel.modified).toBe(firstModel.modified)
   })
 })

@@ -21,10 +21,12 @@ import {
   ServiceCollection,
   UriIdentityService,
   URI,
+  observableValue,
   type ICommand,
   type IConfigurationChangeEvent,
   type IConfirmOptions,
   type IConfirmResult,
+  type IEditorInput,
 } from '@universe-editor/platform'
 import {
   SwarmCommands,
@@ -154,9 +156,17 @@ function renderReview(configValues: Record<string, unknown> = {}) {
     ),
   }
   services.set(IDialogService, dialog as unknown as IDialogService)
+  const openEditorsValue = observableValue<readonly IEditorInput[]>('test.openEditors', [])
   const editorService = {
     _serviceBrand: undefined,
-    openEditor: vi.fn(),
+    // Mimic EditorService: open dedupes by id within the active group and
+    // openEditors mirrors what is open there (the reopen shortcut reads it).
+    openEditor: vi.fn((input: IEditorInput) => {
+      if (!openEditorsValue.get().some((e) => e.id === input.id)) {
+        openEditorsValue.set([...openEditorsValue.get(), input], undefined)
+      }
+    }),
+    openEditors: openEditorsValue,
     closeEditor: vi.fn(),
   }
   services.set(IEditorService, editorService as unknown as IEditorService)
@@ -410,6 +420,7 @@ describe('SwarmReviewEditor restore', () => {
       expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getFileContent, {
         depotFile: '//depot/src/editor/a.ts',
         revision: '@=2999',
+        immutable: true,
       })
       const diffInput = editorService.openEditor.mock.calls[0]?.[0] as SwarmDiffEditorInput
       expect(diffInput.context.leftVersion).toBe(0)
@@ -719,6 +730,76 @@ describe('SwarmReviewEditor restore', () => {
     } finally {
       describeVersion.dispose()
       listComments.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('reopens an already-open immutable diff without re-fetching content', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL_WITH_ARCHIVE)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const listComments = registerCommand(SwarmCommands.listComments, () => [])
+    let contentFetches = 0
+    const getFileContent = registerCommand(SwarmCommands.getFileContent, () => {
+      contentFetches++
+      return 'export const a = 1\n'
+    })
+    const { editorService } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+
+      fireEvent.click(screen.getByText('a.ts'))
+      await act(async () => Promise.resolve())
+      // First open: both sides fetched (#1 left, @=2999 right).
+      expect(contentFetches).toBe(2)
+      const firstInput = editorService.openEditor.mock.calls[0]?.[0] as SwarmDiffEditorInput
+      expect(firstInput).toBeInstanceOf(SwarmDiffEditorInput)
+
+      // Second click on the same file: the diff is immutable, so the live tab is
+      // simply re-activated — zero p4 traffic, and the very same input instance.
+      fireEvent.click(screen.getByText('a.ts'))
+      await act(async () => Promise.resolve())
+      expect(contentFetches).toBe(2)
+      expect(editorService.openEditor).toHaveBeenCalledTimes(2)
+      expect(editorService.openEditor.mock.calls[1]?.[0]).toBe(firstInput)
+    } finally {
+      getFileContent.dispose()
+      listComments.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('refetches a pending (re-shelvable) diff on every click — no reopen shortcut', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const listComments = registerCommand(SwarmCommands.listComments, () => [])
+    let contentFetches = 0
+    const getFileContent = registerCommand(SwarmCommands.getFileContent, () => {
+      contentFetches++
+      return 'export const a = 1\n'
+    })
+    const { commands, editorService } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+
+      fireEvent.click(screen.getByText('a.ts'))
+      await act(async () => Promise.resolve())
+      expect(contentFetches).toBe(2)
+      // No immutable flag travels with a pending shelf's `@=` request.
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getFileContent, {
+        depotFile: '//depot/src/editor/a.ts',
+        revision: '@=2001',
+      })
+
+      fireEvent.click(screen.getByText('a.ts'))
+      await act(async () => Promise.resolve())
+      // A pending shelf can be re-shelved: the second click refetches both sides.
+      expect(contentFetches).toBe(4)
+      expect(editorService.openEditor).toHaveBeenCalledTimes(2)
+    } finally {
+      getFileContent.dispose()
+      listComments.dispose()
+      describeVersion.dispose()
       getReview.dispose()
     }
   })

@@ -31,6 +31,8 @@ import { diffModelUri } from '../editor/diffModelUri.js'
 import { wireDiffEditorViewState } from '../editor/diffEditorViewState.js'
 import { SwarmDiffEditorInput } from '../../services/editor/SwarmDiffEditorInput.js'
 import { DiffEditorRegistry } from '../../services/editor/DiffEditorRegistry.js'
+import { acquireDiffModels, storeDiffModels } from '../../services/editor/diffModelCache.js'
+import { recordPerfPhase, recordPerfPhaseAsync } from '../../services/performance/perfPhases.js'
 import { syncEditorFocusContext } from '../../services/editor/editorFocus.js'
 import { EditorGroupContext } from '../editor/EditorGroupContext.js'
 import {
@@ -51,6 +53,8 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null)
+  const originalModelRef = useRef<monaco.editor.ITextModel | null>(null)
+  const modifiedModelRef = useRef<monaco.editor.ITextModel | null>(null)
   const controllerRef = useRef<SwarmInlineCommentController | null>(null)
   const [monacoNs, setMonacoNs] = useState<typeof monaco | null>(null)
   const [inlineCommentsEnabled, setInlineCommentsEnabled] = useState(
@@ -140,18 +144,56 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
     diffEditorRef.current = ed
     const hoverGuard = MonacoLoader.trackEditorDispose(ed)
 
-    const language = languageForResource(diffInput.fileUri)
-    const original = monacoNs.editor.createModel(
-      diffInput.originalContent,
-      language,
-      monacoNs.Uri.parse(diffModelUri(diffInput.fileUri, 'original').toString()),
+    // Reuse the previous mount's models when their text still matches the
+    // input's (tab reopen / switch-back) — skips two createModel + tokenize
+    // passes. A reopened pending version whose shelf changed fails the text
+    // check inside acquire and falls through to a fresh build.
+    const cached = acquireDiffModels(diffInput.id, {
+      originalText: diffInput.originalContent,
+      modifiedText: diffInput.modifiedContent,
+    })
+    let original: monaco.editor.ITextModel
+    let modified: monaco.editor.ITextModel
+    if (cached) {
+      recordPerfPhase('swarmDiffEditor.modelCacheHit', () => {})
+      original = cached.original
+      modified = cached.modified
+    } else {
+      const language = languageForResource(diffInput.fileUri)
+      // The qualifier carries this comparison's identity so two diffs of the
+      // same file at different versions never collide on a model URI.
+      const qualifier = encodeURIComponent(diffInput.id)
+      const built = recordPerfPhase('swarmDiffEditor.createModels', () => ({
+        original: monacoNs.editor.createModel(
+          diffInput.originalContent,
+          language,
+          monacoNs.Uri.parse(diffModelUri(diffInput.fileUri, 'original', qualifier).toString()),
+        ),
+        modified: monacoNs.editor.createModel(
+          diffInput.modifiedContent,
+          language,
+          monacoNs.Uri.parse(diffModelUri(diffInput.fileUri, 'modified', qualifier).toString()),
+        ),
+      }))
+      original = built.original
+      modified = built.modified
+    }
+    recordPerfPhase('swarmDiffEditor.setModel', () => {
+      ed.setModel({ original, modified })
+    })
+    originalModelRef.current = original
+    modifiedModelRef.current = modified
+    // Wall time from setModel to Monaco's first completed diff computation.
+    void recordPerfPhaseAsync(
+      'swarmDiffEditor.firstDiffCompute',
+      () =>
+        new Promise<void>((resolve) => {
+          const listener = ed.onDidUpdateDiff(() => {
+            listener.dispose()
+            resolve()
+          })
+        }),
     )
-    const modified = monacoNs.editor.createModel(
-      diffInput.modifiedContent,
-      language,
-      monacoNs.Uri.parse(diffModelUri(diffInput.fileUri, 'modified').toString()),
-    )
-    ed.setModel({ original, modified })
     DiffEditorRegistry.register(diffInput, ed, group?.id)
 
     const activeGroup = groupsService.activeGroup
@@ -187,8 +229,11 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
       viewState.dispose()
       DiffEditorRegistry.unregister(diffInput, ed)
       ed.setModel(null)
-      original.dispose()
-      modified.dispose()
+      // Hand the models to the LRU instead of disposing — a reopen of this same
+      // diff (tab close/reopen, switch-back) then skips createModel + tokenize.
+      storeDiffModels(diffInput.id, original, modified)
+      originalModelRef.current = null
+      modifiedModelRef.current = null
       hoverGuard.dispose()
       ed.dispose()
       diffEditorRef.current = null
@@ -205,6 +250,28 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
     groupsService,
     contextKeyService,
   ])
+
+  // Refresh both sides in place when the input's content changes (a re-shelved
+  // pending version re-opened onto the same tab). The diffInput instance is
+  // mutated via updateFrom, so the set-model effect above won't re-run — update
+  // the live models directly (mirrors the generic DiffEditor).
+  useEffect(() => {
+    const disposable = diffInput.onDidChangeContent(() => {
+      if (
+        originalModelRef.current &&
+        originalModelRef.current.getValue() !== diffInput.originalContent
+      ) {
+        originalModelRef.current.setValue(diffInput.originalContent)
+      }
+      if (
+        modifiedModelRef.current &&
+        modifiedModelRef.current.getValue() !== diffInput.modifiedContent
+      ) {
+        modifiedModelRef.current.setValue(diffInput.modifiedContent)
+      }
+    })
+    return () => disposable.dispose()
+  }, [diffInput])
 
   if (!monacoNs) {
     return (

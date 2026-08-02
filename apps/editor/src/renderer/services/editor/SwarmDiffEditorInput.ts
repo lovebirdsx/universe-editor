@@ -35,6 +35,12 @@ function swarmFileUri(context: SwarmDiffContext): URI {
   return URI.from({ scheme: 'swarm', path: `/${context.displayPath}` })
 }
 
+/** The tab-identity string for a swarm diff — exported so callers (e.g. the
+ *  review editor's reopen shortcut) can compute the id without an instance. */
+export function swarmDiffEditorId(context: SwarmDiffContext): string {
+  return `swarmDiff:${context.reviewId}:${context.depotFile}:${context.leftChange ?? context.leftVersion ?? ''}-${context.rightChange ?? context.rightVersion ?? ''}`
+}
+
 export class SwarmDiffEditorInput extends DiffEditorInput {
   static readonly TYPE_ID: string = 'swarmDiff'
 
@@ -74,7 +80,7 @@ export class SwarmDiffEditorInput extends DiffEditorInput {
   }
 
   override get id(): string {
-    return `swarmDiff:${this._context.reviewId}:${this._context.depotFile}:${this._context.leftChange ?? this._context.leftVersion ?? ''}-${this._context.rightChange ?? this._context.rightVersion ?? ''}`
+    return swarmDiffEditorId(this._context)
   }
 
   override getName(): string {

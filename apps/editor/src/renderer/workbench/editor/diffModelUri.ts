@@ -17,6 +17,11 @@ const SCHEME: Record<DiffSide, string> = {
   modified: 'diff-modified',
 }
 
-export function diffModelUri(originalUri: URI, side: DiffSide): URI {
-  return originalUri.with({ scheme: SCHEME[side] })
+export function diffModelUri(originalUri: URI, side: DiffSide, qualifier?: string): URI {
+  // The qualifier distinguishes two diffs of the same resource (e.g. a swarm file
+  // at two different versions, or the same input mounted in two groups) whose
+  // model URIs would otherwise collide. It lives in the query so the path — which
+  // language workers resolve by — stays untouched.
+  if (qualifier === undefined) return originalUri.with({ scheme: SCHEME[side] })
+  return originalUri.with({ scheme: SCHEME[side], query: qualifier })
 }

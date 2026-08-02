@@ -33,6 +33,20 @@ export function recordPerfPhase<T>(name: string, fn: () => T): T {
   }
 }
 
+/** Async twin of {@link recordPerfPhase}: the sample spans the whole promise,
+ *  not just the synchronous head up to the first await. */
+export async function recordPerfPhaseAsync<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  const startTime = performance.now()
+  try {
+    return await fn()
+  } finally {
+    phaseSamples.push({ name, startTime, duration: performance.now() - startTime })
+    if (phaseSamples.length > MAX_PHASE_SAMPLES) {
+      phaseSamples.splice(0, phaseSamples.length - MAX_PHASE_SAMPLES)
+    }
+  }
+}
+
 export function getRecordedPhases(): readonly PerfSample[] {
   return phaseSamples
 }
