@@ -19,7 +19,7 @@ import {
   type SourceControlResourceGroup,
   type SourceControlResourceState,
 } from '@universe-editor/extension-api'
-import { readFile } from 'node:fs/promises'
+import { chmod, readFile, writeFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { ConcurrencyGate } from './concurrency.js'
@@ -129,6 +129,15 @@ const SPREADSHEET_EXTS = ['.xlsx', '.xls', '.xlsm', '.csv']
 function isSpreadsheetPath(path: string): boolean {
   const lower = path.toLowerCase()
   return SPREADSHEET_EXTS.some((ext) => lower.endsWith(ext))
+}
+
+/** First non-empty stderr line — p4's per-file refusal reason, used as the
+ *  human-facing `skipped`/`keptOpen` cause. */
+function firstStderrLine(stderr: string): string | undefined {
+  return stderr
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0)
 }
 
 export class PerforceClient {
@@ -1063,28 +1072,151 @@ export class PerforceClient {
    * structured applied/skipped split rather than a toast + boolean. Falls back
    * to per-file retries when the batch fails so one refused file doesn't take
    * down the rest. Refreshes once at the end when anything applied.
+   *
+   * With `opts.intoChangelist === false` the restored files are immediately
+   * un-opened again (`p4 revert -k`): content stays on disk but nothing lands
+   * in a changelist. A failed revert leaves the file open (content is never
+   * lost) and is reported in `keptOpen`.
    */
   async unshelveFiles(
     change: string,
     depotFiles: readonly string[],
-  ): Promise<{ applied: string[]; skipped: { depotFile: string; reason: string }[] }> {
-    const empty: { applied: string[]; skipped: { depotFile: string; reason: string }[] } = {
-      applied: [],
-      skipped: [],
-    }
+    opts?: { intoChangelist?: boolean },
+  ): Promise<{
+    applied: string[]
+    skipped: { depotFile: string; reason: string }[]
+    keptOpen: { depotFile: string; reason: string }[]
+  }> {
+    const empty: {
+      applied: string[]
+      skipped: { depotFile: string; reason: string }[]
+      keptOpen: { depotFile: string; reason: string }[]
+    } = { applied: [], skipped: [], keptOpen: [] }
     if (!change || change === 'default' || depotFiles.length === 0) return empty
     return this._withBusy(this._busyLabel('unshelve'), async () => {
       const batch = await this._p4.exec(['unshelve', '-s', change, '-f', ...depotFiles])
+      // A committed change has no shelf to unshelve (approved-and-committed
+      // reviews) — force-apply by printing the committed snapshot instead.
+      if (batch.exitCode !== 0 && /already committed/i.test(batch.stderr)) {
+        this._log?.(
+          `[perforce] unshelve -s ${change} refused (already committed) — applying via print`,
+        )
+        return this._applyCommittedChange(change, depotFiles, opts)
+      }
       const result =
         batch.exitCode === 0
           ? { applied: [...depotFiles], skipped: empty.skipped }
           : await this._unshelveFilesIndividually(change, depotFiles)
+      let keptOpen = empty.keptOpen
+      if (result.applied.length > 0 && opts?.intoChangelist === false) {
+        keptOpen = await this._unopenFilesKeepContent(result.applied)
+      }
       if (result.applied.length > 0) {
         this._cache.invalidateWorkspace()
         await this.refresh()
       }
-      return result
+      return { ...result, keptOpen }
     })
+  }
+
+  /** Un-open files while keeping their workspace content (`p4 revert -k`).
+   *  Used after an unshelve that must not land in a changelist. A failed
+   *  revert is a safe degradation (file stays open, content intact) and comes
+   *  back with the first non-empty stderr line as the reason. Unlike
+   *  `moveToReconcile` this deliberately does NOT call `refreshReconcilePaths`
+   *  — the point is that the files show up nowhere until the next reconcile
+   *  scan. */
+  private async _unopenFilesKeepContent(
+    depotFiles: readonly string[],
+  ): Promise<{ depotFile: string; reason: string }[]> {
+    const batch = await this._p4.exec(['revert', '-k', ...depotFiles])
+    if (batch.exitCode === 0) return []
+    const keptOpen: { depotFile: string; reason: string }[] = []
+    for (const depotFile of depotFiles) {
+      const res = await this._p4.exec(['revert', '-k', depotFile])
+      if (res.exitCode !== 0) {
+        const reason = firstStderrLine(res.stderr) ?? `p4 revert -k failed (exit ${res.exitCode})`
+        keptOpen.push({ depotFile, reason })
+      }
+    }
+    return keptOpen
+  }
+
+  /** Force-apply a COMMITTED change's files: `p4 unshelve` only works on
+   *  pending shelves, so approved-and-committed reviews take this path —
+   *  print each file's content as of the change (`@=<change>`) and write it
+   *  over the local copy. With `intoChangelist` the files are first opened
+   *  for edit (default changelist, which also clears the read-only bit);
+   *  otherwise they stay un-opened and a read-only local file is chmodded
+   *  writable. Files that can't be mapped / edited / printed / written land
+   *  in `skipped`; `keptOpen` is always empty here (a failed edit already
+   *  skips the file). */
+  private async _applyCommittedChange(
+    change: string,
+    depotFiles: readonly string[],
+    opts?: { intoChangelist?: boolean },
+  ): Promise<{
+    applied: string[]
+    skipped: { depotFile: string; reason: string }[]
+    keptOpen: { depotFile: string; reason: string }[]
+  }> {
+    const applied: string[] = []
+    const skipped: { depotFile: string; reason: string }[] = []
+    const localByDepot = await this._whereLocalPaths(depotFiles)
+    const editFailed = new Set<string>()
+    if (opts?.intoChangelist !== false) {
+      const mappable = depotFiles.filter((f) => localByDepot.has(f))
+      const batchEdit = mappable.length > 0 ? await this._p4.exec(['edit', ...mappable]) : undefined
+      if (batchEdit && batchEdit.exitCode !== 0) {
+        for (const depotFile of mappable) {
+          const res = await this._p4.exec(['edit', depotFile])
+          // Already-open files are fine — overwriting them is the point.
+          if (res.exitCode !== 0 && !/already opened/i.test(res.stderr)) {
+            editFailed.add(depotFile)
+            skipped.push({
+              depotFile,
+              reason: firstStderrLine(res.stderr) ?? `p4 edit failed (exit ${res.exitCode})`,
+            })
+          }
+        }
+      }
+    }
+    for (const depotFile of depotFiles) {
+      if (editFailed.has(depotFile)) continue
+      const local = localByDepot.get(depotFile)
+      if (!local) {
+        skipped.push({ depotFile, reason: 'not mapped in the client view' })
+        continue
+      }
+      const res = await this._p4.execBinary(['print', '-q', `${depotFile}@=${change}`], {
+        noClient: true,
+      })
+      if (res.exitCode !== 0) {
+        skipped.push({
+          depotFile,
+          reason: firstStderrLine(res.stderr) ?? `p4 print failed (exit ${res.exitCode})`,
+        })
+        continue
+      }
+      try {
+        await writeFile(local, res.stdout)
+      } catch {
+        // Un-opened p4 workspace files are read-only — make writable and retry.
+        try {
+          await chmod(local, 0o666)
+          await writeFile(local, res.stdout)
+        } catch (e: unknown) {
+          skipped.push({ depotFile, reason: e instanceof Error ? e.message : String(e) })
+          continue
+        }
+      }
+      applied.push(depotFile)
+    }
+    if (applied.length > 0) {
+      this._cache.invalidateWorkspace()
+      await this.refresh()
+    }
+    return { applied, skipped, keptOpen: [] }
   }
 
   /** Per-file unshelve retry after a batch failure. A single-file unshelve is
@@ -1102,11 +1234,7 @@ export class PerforceClient {
       if (res.exitCode === 0) {
         applied.push(depotFile)
       } else {
-        const reason =
-          res.stderr
-            .split('\n')
-            .map((line) => line.trim())
-            .find((line) => line.length > 0) ?? `p4 unshelve failed (exit ${res.exitCode})`
+        const reason = firstStderrLine(res.stderr) ?? `p4 unshelve failed (exit ${res.exitCode})`
         skipped.push({ depotFile, reason })
       }
     }

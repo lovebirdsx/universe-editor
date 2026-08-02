@@ -427,6 +427,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     if (!reviewId || busy || !change || !versionFiles?.length) return
     await swarmApplyStore.attach(storage)
     const includeOutside = swarmApplyStore.includeOutside
+    const intoChangelist = swarmApplyStore.intoChangelist
     const folder = workspaceService.current?.folder
     const plan = planApplyToLocal(
       versionFiles,
@@ -492,20 +493,32 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       }),
       detail: detailParts.join('\n'),
       primaryButton: localize('swarm.applyToLocal', 'Apply to Local'),
-      checkbox: {
-        label: localize('swarm.apply.checkbox', 'Also replace files outside the workspace'),
-        initiallyChecked: includeOutside,
-      },
+      checkboxes: [
+        {
+          label: localize('swarm.apply.checkbox', 'Also replace files outside the workspace'),
+          initiallyChecked: includeOutside,
+        },
+        {
+          label: localize(
+            'swarm.apply.checkbox.changelist',
+            'Open applied files in the default changelist',
+          ),
+          initiallyChecked: intoChangelist,
+        },
+      ],
     })
     if (!res.confirmed) return
-    // The checkbox can change which files are in scope — re-plan with it before
-    // persisting/sending.
+    // The checkboxes can change which files are in scope and how they land —
+    // re-plan with the final values before persisting/sending.
+    const outsideChecked = res.checkboxChecked?.[0] ?? includeOutside
+    const changelistChecked = res.checkboxChecked?.[1] ?? intoChangelist
     const finalPlan = planApplyToLocal(
       versionFiles,
-      res.checkboxChecked ?? includeOutside,
+      outsideChecked,
       (fsPath) => folder !== undefined && uriIdentity.isEqualOrParent(URI.file(fsPath), folder),
     )
-    swarmApplyStore.setIncludeOutside(res.checkboxChecked ?? includeOutside)
+    swarmApplyStore.setIncludeOutside(outsideChecked)
+    swarmApplyStore.setIntoChangelist(changelistChecked)
     if (finalPlan.depotFiles.length === 0) {
       notifications.notify({
         severity: Severity.Info,
@@ -517,10 +530,15 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     try {
       const result = await commands.executeCommand<SwarmApplyToLocalResult>(
         SwarmCommands.applyToLocal,
-        { change, depotFiles: finalPlan.depotFiles } satisfies SwarmApplyToLocalRequest,
+        {
+          change,
+          depotFiles: finalPlan.depotFiles,
+          intoChangelist: changelistChecked,
+        } satisfies SwarmApplyToLocalRequest,
       )
       const applied = result?.applied.length ?? 0
       const skipped = result?.skipped ?? []
+      const keptOpen = result?.keptOpen ?? []
       if (applied === 0 && skipped.length === 0) {
         notifications.notify({
           severity: Severity.Info,
@@ -529,9 +547,15 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       } else if (skipped.length === 0) {
         notifications.notify({
           severity: Severity.Info,
-          message: localize('swarm.apply.done', 'Applied {0} file(s) to the workspace.', {
-            0: String(applied),
-          }),
+          message: changelistChecked
+            ? localize('swarm.apply.done', 'Applied {0} file(s) to the workspace.', {
+                0: String(applied),
+              })
+            : localize(
+                'swarm.apply.done.noChangelist',
+                'Applied {0} file(s) to the workspace (not opened in a changelist).',
+                { 0: String(applied) },
+              ),
         })
       } else {
         // INotification has no detail field — the first few skipped entries go
@@ -550,6 +574,24 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
               1: String(skipped.length),
               2: preview,
               3: skipped.length > 3 ? `\n…and ${skipped.length - 3} more` : '',
+            },
+          ),
+        })
+      }
+      if (keptOpen.length > 0) {
+        const keptPreview = keptOpen
+          .slice(0, 3)
+          .map((s) => `${s.depotFile} — ${s.reason}`)
+          .join('\n')
+        notifications.notify({
+          severity: Severity.Warning,
+          message: localize(
+            'swarm.apply.keptOpen',
+            '{0} file(s) could not be removed from the default changelist and remain open:\n{1}{2}',
+            {
+              0: String(keptOpen.length),
+              1: keptPreview,
+              2: keptOpen.length > 3 ? `\n…and ${keptOpen.length - 3} more` : '',
             },
           ),
         })

@@ -330,6 +330,10 @@ export interface SwarmApplyToLocalRequest {
   /** Depot files to restore; files outside the client view are refused by p4 and
    *  come back in {@link SwarmApplyToLocalResult.skipped}. */
   depotFiles: string[]
+  /** When false, files are restored to disk but immediately un-opened
+   *  (`p4 revert -k`): content is kept, nothing lands in a changelist.
+   *  Defaults to true when omitted. */
+  intoChangelist?: boolean
 }
 
 /** Result of `perforce.swarm.applyToLocal`. */
@@ -339,6 +343,10 @@ export interface SwarmApplyToLocalResult {
   /** Files p4 refused (already opened / out-of-date base / not in client view),
    *  with the p4 error line as the reason. */
   skipped: { depotFile: string; reason: string }[]
+  /** Files that were applied to disk but could NOT be un-opened (`revert -k`
+   *  failed) — they remain in the default changelist. Only meaningful when the
+   *  request had `intoChangelist: false`. */
+  keptOpen?: { depotFile: string; reason: string }[]
 }
 
 /** Argument for `perforce.swarm.getFileDiff` — the two version snapshots to compare. */

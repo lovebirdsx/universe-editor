@@ -689,6 +689,13 @@ function main() {
       // lands in `skipped`.
       const src = argAfter(rest, '-s')
       if (!src) return 1
+      // A submitted change has no shelf — real p4 refuses with "already
+      // committed" (the approved-review Apply-to-Local case, which the
+      // extension answers with the print fallback).
+      if (state.submitted?.[src]) {
+        process.stderr.write(`Change ${src} is already committed.\n`)
+        return 1
+      }
       const shelf = state.shelved[src]
       if (!shelf) {
         process.stderr.write(`Change ${src} - no shelved files.\n`)

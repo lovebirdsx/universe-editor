@@ -208,9 +208,10 @@ afterEach(() => {
   vi.useRealTimers()
   swarmReviewDetailCache.clear()
   clearSwarmReviewEditorStates()
-  // Module singleton: restore the OFF default for the next test (attach in the
-  // apply flow is idempotent, only the value can leak).
+  // Module singleton: restore the defaults for the next test (attach in the
+  // apply flow is idempotent, only the values can leak).
   swarmApplyStore.setIncludeOutside(false)
+  swarmApplyStore.setIntoChangelist(true)
 })
 
 describe('SwarmReviewEditor restore', () => {
@@ -817,7 +818,7 @@ describe('SwarmReviewEditor apply to local', () => {
     dialog.confirm.mockResolvedValueOnce({
       confirmed: true,
       choice: 'primary' as const,
-      checkboxChecked: false,
+      checkboxChecked: [false, true],
     })
     try {
       await act(async () => Promise.resolve())
@@ -825,19 +826,25 @@ describe('SwarmReviewEditor apply to local', () => {
 
       await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Apply to Local' })))
 
-      // The dialog warns about the replacing semantics and offers the toggle.
+      // The dialog warns about the replacing semantics and offers the toggles.
       const confirmOpts = dialog.confirm.mock.calls[0]?.[0]
       expect(confirmOpts?.type).toBe('warning')
       expect(confirmOpts?.message).toBe('Apply review #1001 to local files?')
-      expect(confirmOpts?.checkbox?.label).toBe('Also replace files outside the workspace')
-      expect(confirmOpts?.checkbox?.initiallyChecked).toBe(false)
+      expect(confirmOpts?.checkboxes?.[0]?.label).toBe('Also replace files outside the workspace')
+      expect(confirmOpts?.checkboxes?.[0]?.initiallyChecked).toBe(false)
+      expect(confirmOpts?.checkboxes?.[1]?.label).toBe(
+        'Open applied files in the default changelist',
+      )
+      expect(confirmOpts?.checkboxes?.[1]?.initiallyChecked).toBe(true)
       expect(confirmOpts?.detail).toContain('external/c.ts')
 
-      // Toggle off → the outside file stays out of the unshelve request, and
-      // the archive/immutable change is used (versions[0].change here).
+      // Outside toggle off → the outside file stays out of the unshelve
+      // request, and the archive/immutable change is used (versions[0].change
+      // here).
       expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.applyToLocal, {
         change: '2001',
         depotFiles: ['//depot/src/editor/a.ts', '//depot/src/runtime/b.ts'],
+        intoChangelist: true,
       })
       expect(swarmApplyStore.includeOutside).toBe(false)
       expect(notifications.notify).toHaveBeenCalledWith(
@@ -861,7 +868,7 @@ describe('SwarmReviewEditor apply to local', () => {
     dialog.confirm.mockResolvedValueOnce({
       confirmed: true,
       choice: 'primary' as const,
-      checkboxChecked: true,
+      checkboxChecked: [true, true],
     })
     try {
       await act(async () => Promise.resolve())
@@ -874,6 +881,7 @@ describe('SwarmReviewEditor apply to local', () => {
           '//depot/src/runtime/b.ts',
           '//other/external/c.ts',
         ],
+        intoChangelist: true,
       })
       expect(swarmApplyStore.includeOutside).toBe(true)
     } finally {
@@ -894,7 +902,7 @@ describe('SwarmReviewEditor apply to local', () => {
     dialog.confirm.mockResolvedValueOnce({
       confirmed: true,
       choice: 'primary' as const,
-      checkboxChecked: false,
+      checkboxChecked: [false, true],
     })
     try {
       await act(async () => Promise.resolve())
@@ -904,6 +912,73 @@ describe('SwarmReviewEditor apply to local', () => {
         expect.objectContaining({
           severity: 1,
           message: expect.stringContaining('//depot/src/runtime/b.ts — already opened for edit'),
+        }),
+      )
+    } finally {
+      applyToLocal.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('passes intoChangelist false when the changelist checkbox is off and persists it', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const applyToLocal = registerCommand(SwarmCommands.applyToLocal, () => ({
+      applied: ['//depot/src/editor/a.ts', '//depot/src/runtime/b.ts'],
+      skipped: [],
+      keptOpen: [],
+    }))
+    const { commands, dialog, notifications } = renderReview()
+    dialog.confirm.mockResolvedValueOnce({
+      confirmed: true,
+      choice: 'primary' as const,
+      checkboxChecked: [false, false],
+    })
+    try {
+      await act(async () => Promise.resolve())
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Apply to Local' })))
+
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.applyToLocal, {
+        change: '2001',
+        depotFiles: ['//depot/src/editor/a.ts', '//depot/src/runtime/b.ts'],
+        intoChangelist: false,
+      })
+      expect(swarmApplyStore.intoChangelist).toBe(false)
+      expect(notifications.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'Applied 2 file(s) to the workspace (not opened in a changelist).',
+        }),
+      )
+    } finally {
+      applyToLocal.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('warns about files the host could not un-open (keptOpen)', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const applyToLocal = registerCommand(SwarmCommands.applyToLocal, () => ({
+      applied: ['//depot/src/editor/a.ts', '//depot/src/runtime/b.ts'],
+      skipped: [],
+      keptOpen: [{ depotFile: '//depot/src/runtime/b.ts', reason: 'file(s) not opened' }],
+    }))
+    const { dialog, notifications } = renderReview()
+    dialog.confirm.mockResolvedValueOnce({
+      confirmed: true,
+      choice: 'primary' as const,
+      checkboxChecked: [false, false],
+    })
+    try {
+      await act(async () => Promise.resolve())
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Apply to Local' })))
+
+      expect(notifications.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          severity: 1,
+          message: expect.stringContaining('//depot/src/runtime/b.ts — file(s) not opened'),
         }),
       )
     } finally {

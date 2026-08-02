@@ -687,20 +687,33 @@ export function registerSwarmCommands(
     // partial refusal (already-opened / stale-base files) is reported in-band
     // via the result's `skipped`, and the renderer owns the user-facing toast.
     commands.registerCommand(Cmd.applyToLocal, async (req: unknown) => {
-      const r = req as { change?: unknown; depotFiles?: unknown }
-      const empty: { applied: string[]; skipped: { depotFile: string; reason: string }[] } = {
-        applied: [],
-        skipped: [],
-      }
+      const r = req as { change?: unknown; depotFiles?: unknown; intoChangelist?: unknown }
+      const empty: {
+        applied: string[]
+        skipped: { depotFile: string; reason: string }[]
+        keptOpen: { depotFile: string; reason: string }[]
+      } = { applied: [], skipped: [], keptOpen: [] }
       const active = mgr.active
       if (!active || typeof r?.change !== 'string' || !Array.isArray(r?.depotFiles)) return empty
       const depotFiles = r.depotFiles.filter((f): f is string => typeof f === 'string')
-      logger.info('cmd', `applyToLocal change=${r.change} files=${depotFiles.length} (p4 unshelve)`)
-      const result = await active.unshelveFiles(r.change, depotFiles)
+      const intoChangelist = r.intoChangelist !== false
+      logger.info(
+        'cmd',
+        `applyToLocal change=${r.change} files=${depotFiles.length} intoChangelist=${intoChangelist} (p4 unshelve)`,
+      )
+      const result = await active.unshelveFiles(r.change, depotFiles, { intoChangelist })
       if (result.skipped.length > 0) {
         logger.warn(
           'cmd',
           `applyToLocal skipped ${result.skipped.length}/${depotFiles.length}: ${result.skipped
+            .map((s) => `${s.depotFile} (${s.reason})`)
+            .join('; ')}`,
+        )
+      }
+      if (result.keptOpen.length > 0) {
+        logger.warn(
+          'cmd',
+          `applyToLocal kept ${result.keptOpen.length} file(s) open in the default changelist (revert -k failed): ${result.keptOpen
             .map((s) => `${s.depotFile} (${s.reason})`)
             .join('; ')}`,
         )

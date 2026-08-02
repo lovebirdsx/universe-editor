@@ -68,4 +68,38 @@ describe('swarmApplyStore', () => {
     store.setIncludeOutside(true)
     expect(changes).toBe(0)
   })
+
+  it('defaults intoChangelist to true and persists setIntoChangelist to GLOBAL storage', async () => {
+    const store = await freshStore()
+    const storage = fakeStorage()
+    await store.attach(storage)
+
+    let changes = 0
+    store.onDidChange(() => changes++)
+
+    expect(store.intoChangelist).toBe(true)
+    store.setIntoChangelist(false)
+    expect(store.intoChangelist).toBe(false)
+    expect(changes).toBeGreaterThanOrEqual(1)
+    expect(storage.data.get('swarm.applyToLocal.intoChangelist')).toBe(false)
+  })
+
+  it('hydrates the persisted intoChangelist toggle on attach', async () => {
+    const store = await freshStore()
+    const storage = fakeStorage({ 'swarm.applyToLocal.intoChangelist': false })
+    await store.attach(storage)
+    expect(store.intoChangelist).toBe(false)
+  })
+
+  it('keeps intoChangelist true when no persisted value exists, and same-value set is a no-op', async () => {
+    const store = await freshStore()
+    const storage = fakeStorage({ 'swarm.applyToLocal.includeOutsideWorkspace': true })
+    await store.attach(storage)
+    expect(store.intoChangelist).toBe(true)
+    let changes = 0
+    store.onDidChange(() => changes++)
+    store.setIntoChangelist(true)
+    expect(changes).toBe(0)
+    expect(storage.data.has('swarm.applyToLocal.intoChangelist')).toBe(false)
+  })
 })

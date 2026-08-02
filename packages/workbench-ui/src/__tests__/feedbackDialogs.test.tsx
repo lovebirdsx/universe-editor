@@ -79,7 +79,7 @@ describe('ConfirmDialog', () => {
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Create' }))
   })
 
-  it('does not render a checkbox row without opts.checkbox, and omits checkboxChecked', () => {
+  it('does not render a checkbox row without opts.checkboxes, and omits checkboxChecked', () => {
     const onResolve = vi.fn()
     render(<ConfirmDialog opts={{ message: 'Sure?' }} onResolve={onResolve} />)
     expect(screen.queryByRole('checkbox')).toBeNull()
@@ -95,7 +95,10 @@ describe('ConfirmDialog', () => {
     const onResolve = vi.fn()
     render(
       <ConfirmDialog
-        opts={{ message: 'Apply?', checkbox: { label: 'Include outside', initiallyChecked: true } }}
+        opts={{
+          message: 'Apply?',
+          checkboxes: [{ label: 'Include outside', initiallyChecked: true }],
+        }}
         onResolve={onResolve}
       />,
     )
@@ -107,7 +110,7 @@ describe('ConfirmDialog', () => {
       confirmed: true,
       choice: 'primary',
       neverAskAgain: false,
-      checkboxChecked: false,
+      checkboxChecked: [false],
     })
   })
 
@@ -115,7 +118,7 @@ describe('ConfirmDialog', () => {
     const onResolve = vi.fn()
     render(
       <ConfirmDialog
-        opts={{ message: 'Apply?', checkbox: { label: 'Include outside' } }}
+        opts={{ message: 'Apply?', checkboxes: [{ label: 'Include outside' }] }}
         onResolve={onResolve}
       />,
     )
@@ -125,7 +128,7 @@ describe('ConfirmDialog', () => {
       confirmed: false,
       choice: 'cancel',
       neverAskAgain: false,
-      checkboxChecked: true,
+      checkboxChecked: [true],
     })
   })
 
@@ -135,13 +138,49 @@ describe('ConfirmDialog', () => {
         opts={{
           message: 'Sure?',
           neverAskAgainLabel: "Don't ask again",
-          checkbox: { label: 'Include outside' },
+          checkboxes: [{ label: 'Include outside' }],
         }}
         onResolve={vi.fn()}
       />,
     )
     expect(screen.getByRole('checkbox', { name: "Don't ask again" })).toBeTruthy()
     expect(screen.getByRole('checkbox', { name: 'Include outside' })).toBeTruthy()
+  })
+
+  it('toggles multiple checkboxes independently and echoes them in order', () => {
+    const onResolve = vi.fn()
+    render(
+      <ConfirmDialog
+        opts={{
+          message: 'Apply?',
+          checkboxes: [
+            { label: 'Include outside', initiallyChecked: true },
+            { label: 'Open in changelist', initiallyChecked: true },
+          ],
+        }}
+        onResolve={onResolve}
+      />,
+    )
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Open in changelist' }))
+    fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    expect(onResolve).toHaveBeenCalledWith({
+      confirmed: true,
+      choice: 'primary',
+      neverAskAgain: false,
+      checkboxChecked: [true, false],
+    })
+  })
+
+  it('renders no checkbox row for an empty checkboxes array', () => {
+    const onResolve = vi.fn()
+    render(<ConfirmDialog opts={{ message: 'Sure?', checkboxes: [] }} onResolve={onResolve} />)
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    expect(onResolve).toHaveBeenCalledWith({
+      confirmed: true,
+      choice: 'primary',
+      neverAskAgain: false,
+    })
   })
 })
 
