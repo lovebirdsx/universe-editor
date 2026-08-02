@@ -5,64 +5,41 @@ VSCode 范式的桌面游戏内容编辑器（TypeScript monorepo）。
 ## 快速上手
 
 ```bash
-pnpm install              # 首次或依赖更新后
-pnpm dev                  # 启动所有 dev（推荐）
-
-# 或单独启动
-pnpm --filter @universe-editor/editor dev     # 桌面编辑器（Electron）
+git submodule update --init   # 首次克隆后（或 clone --recurse-submodules）
+pnpm install
+pnpm dev                      # 启动编辑器（开发模式）
 ```
 
-## 共享 Claude memory
-
-Claude 的 auto-memory 默认按工作目录绝对路径隔离存放，导致同一工程的多个 clone /
-worktree、以及不同机器之间，memory 互不可见。本仓库把 memory 真身放在
-`.claude/memory/` 并纳入 git，再用一条命令把它链接到当前 clone 对应的 Claude
-全局 memory 目录（Windows junction / posix symlink，均无需管理员权限）：
-
-```bash
-pnpm memory:link          # 链接当前 clone 的 memory 到 .claude/memory/
-pnpm memory:status        # 只查看链接状态，不做任何改动
-```
-
-- **每个 clone / 每台新机器各跑一次** `pnpm memory:link`（链接是本机文件系统状态，
-  不随 git 走）。worktree 无需单独执行——它会自动跟随主 clone 的 memory 目录。
-- 链接建立后，Claude 的 memory 读写直接落进 `.claude/memory/`，`git pull/push`
-  即可跨机同步。
-- 若目标目录已存在且含 `.claude-memory/` 里没有的文件，脚本会**拒绝覆盖**并列出
-  这些文件，需先手动合并进 `.claude-memory/` 再重跑。
-
+AI agent 功能依赖 `vendor/` 下的 ACP fork，首次使用或更新 fork 后需执行 `pnpm agent:build`。
 
 ## 仓库结构
 
 ```
 apps/
-  api/      Hono + Node
-  web/      Vite + React
-  editor/   Electron 桌面编辑器（main / preload / renderer）
+  editor/             Electron 桌面编辑器（main / preload / renderer）
 packages/
-  shared/         纯工具函数
-  ui/             React 组件库
-  platform/       VSCode 风格内核（DI / Command / IPC / Workbench services）
-  config-ts/      共享 tsconfig 预设
-  config-eslint/  共享 ESLint flat config
+  platform/           VSCode 风格内核（DI / Event / Command / Workbench services）
+  workbench-ui/       通用 UI 控件库
+  extension-host/     扩展运行时（配套 extension-api / extension-manifest / extension-packaging）
+  config-ts/          共享 tsconfig 预设
+  config-eslint/      共享 ESLint flat config
+extensions/           内置扩展（typescript / git / markdown / ai / perforce / 主题等）
+extensions-external/  外部扩展范例（pdf / eslint / excel-diff 等）
+vendor/               内置 ACP agent fork（claude-agent-acp / codex-acp）等，独立工具链构建
+docs/                 用户文档（user/）与开发文档（development/）
 ```
 
 ## 常用命令
 
 | 命令 | 作用 |
 | --- | --- |
-| `pnpm check` | 快速校验：lint + typecheck + test |
-| `pnpm check:full` | 全量验收：lint + typecheck + test + build（提交前跑这个） |
-| `pnpm build` | 全量构建 |
+| `pnpm dev` | 启动编辑器（开发模式，热更新） |
+| `pnpm check` | 快速校验：lint + typecheck + 按变更选测试 |
+| `pnpm check:full` | 全量校验：lint + typecheck + test + build |
 | `pnpm test` | 全量测试 |
-| `pnpm typecheck` | 全量类型检查 |
-| `pnpm lint` / `lint:fix` | 代码规范 + Prettier 格式 |
-| `pnpm --filter @universe-editor/editor package:win` | 构建 Windows 安装器 + `win-unpacked` 可执行目录 |
-| `pnpm --filter @universe-editor/editor package:win:installer` | 仅构建 Windows NSIS 安装器 |
-| `pnpm --filter @universe-editor/editor package:win:dir` | 仅构建 Windows `win-unpacked` 目录包 |
-| `pnpm changeset` | 声明变更（配合 `version-packages` / `publish-packages` 发版） |
-
-技术栈：pnpm 10 · Turborepo 2 · TypeScript 5.8 · React 19 · Hono 4 · Electron 33 · Vitest 3。
+| `pnpm e2e:smoke` | @p0 核心端到端冒烟 |
+| `pnpm e2e` | 全量端到端测试 |
+| `pnpm build` | 全量构建 |
 
 ## Windows 打包
 
@@ -70,11 +47,19 @@ packages/
 pnpm --filter @universe-editor/editor package:win
 ```
 
-构建产物输出到 `apps/editor/release/`：
+产物输出到 `apps/editor/release/`：`win-unpacked/` 免安装目录包 + NSIS 安装器。产物默认未签名，首次运行可能触发 SmartScreen 警告。
 
-- `win-unpacked/Universe Editor.exe`：免安装目录包，适合本地冒烟验证
-- `Universe Editor-<version>-win-x64.exe`：NSIS 安装器，适合分发给最终用户
+## 共享 Claude memory
 
-当前 Windows 产物默认未签名，首次运行可能触发 SmartScreen 警告；仓库里也还没有自定义应用图标，会继续使用 Electron 默认图标。
+本仓库把 Claude memory 真身放在 `.claude/memory/` 并纳入 git，通过链接实现跨 clone / 跨机共享：
 
-开发约定与陷阱详见 [CLAUDE.md](./CLAUDE.md)。
+```bash
+pnpm memory:link      # 每个 clone / 每台新机器各跑一次
+pnpm memory:status    # 只查看链接状态
+```
+
+## 更多
+
+开发约定、各子目录导航与常见套路详见 [CLAUDE.md](./CLAUDE.md)。
+
+技术栈：pnpm 11 · Turborepo 2 · TypeScript 5.8 · React 19 · Electron 33 (electron-vite) · Monaco · Vitest 3 · Playwright
