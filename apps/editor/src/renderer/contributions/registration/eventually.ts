@@ -11,6 +11,7 @@ import { ExtensionsContribution } from '../ExtensionsContribution.js'
 import { LanguageServicePrewarmContribution } from '../LanguageServicePrewarmContribution.js'
 import { LegacyMcpBridgeCleanupContribution } from '../LegacyMcpBridgeCleanupContribution.js'
 import { StartupTimingLogContribution } from '../StartupTimingLogContribution.js'
+import { WorkspaceFileListingContribution } from '../WorkspaceFileListingContribution.js'
 import { WorkspaceWatchContribution } from '../WorkspaceWatchContribution.js'
 
 // Idle-time background prefetch of the Claude / codex-acp binaries so upgrading
@@ -49,6 +50,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.workspaceWatch',
   WorkspaceWatchContribution,
+  WorkbenchPhase.Eventually,
+)
+
+// Keeps the shared workspace file listing (Ctrl+P / @-mention cache) fresh via
+// watcher invalidation, and idle-prewarms it so the first quick open of a
+// session doesn't pay the full disk walk.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.workspaceFileListing',
+  WorkspaceFileListingContribution,
   WorkbenchPhase.Eventually,
 )
 

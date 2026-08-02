@@ -7,7 +7,7 @@
  *  and the no-workspace fallback to the recent files list.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   EditorInput,
   EditorRegistry,
@@ -494,6 +494,61 @@ describe('FileQuickAccessProvider', () => {
     picker.fireValue('deep/exact.ts')
     await flushPromises()
     expect(picker.items[0]).toMatchObject({ label: 'exact.ts', description: 'deep/exact.ts' })
+  })
+
+  it('probes the exact path while the listing is still warming (cold cache)', async () => {
+    const { provider, fileSearch } = setup({ existingFiles: ['/ws/deep/exact.ts'] })
+    fileSearch.deferred = true
+    fileSearch.resultPaths = ['/ws/src/other.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+
+    // The walk hasn't landed, yet a path-shaped query resolves via the single
+    // exists() probe instead of waiting for the full listing.
+    picker.fireValue('deep/exact.ts')
+    await flushPromises()
+    expect(picker.busy).toBe(true)
+    expect(picker.items[0]).toMatchObject({ label: 'exact.ts', description: 'deep/exact.ts' })
+
+    // Once the walk lands the query re-runs against the full listing; the
+    // exact-path pick stays (still probed, still not in the listing).
+    fileSearch.resolveAll()
+    await flushPromises()
+    expect(picker.busy).toBe(false)
+    expect(picker.items[0]).toMatchObject({ label: 'exact.ts', description: 'deep/exact.ts' })
+  })
+
+  it('seeds from the stale cached listing instantly, then re-runs when fresh files land', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      // First session warms the module-level listing cache.
+      const first = setup()
+      first.fileSearch.resultPaths = ['/ws/src/stale.ts']
+      const picker1 = new FakeQuickPick<IQuickPickItem>()
+      const session1 = run(first.provider, picker1)
+      await flushPromises()
+      session1.disposables.dispose()
+
+      // Past the TTL the cached listing is stale.
+      vi.setSystemTime(Date.now() + 60 * 60_000)
+
+      // Second session: the revalidating walk is deferred, but the stale
+      // listing still filters instantly — no spinner wait for the user.
+      const second = setup()
+      second.fileSearch.deferred = true
+      second.fileSearch.resultPaths = ['/ws/src/fresh.ts']
+      const picker2 = new FakeQuickPick<IQuickPickItem>()
+      run(second.provider, picker2)
+
+      picker2.fireValue('ts')
+      expect(picker2.items.map((i) => (i as IQuickPickItem).label)).toEqual(['stale.ts'])
+
+      second.fileSearch.resolveAll()
+      await flushPromises()
+      expect(picker2.items.map((i) => (i as IQuickPickItem).label)).toEqual(['fresh.ts'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('discards results that arrive after the token is cancelled', async () => {

@@ -4,12 +4,13 @@
  *    - filterMentionFiles ranks basename matches above path matches
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { URI, type IFileSearchService } from '@universe-editor/platform'
 import {
   filterMentionFiles,
   invalidateMentionFileCache,
   loadWorkspaceFiles,
+  peekWorkspaceFiles,
   type MentionFileEntry,
 } from '../mentionFileSearch.js'
 
@@ -126,6 +127,49 @@ describe('loadWorkspaceFiles', () => {
     invalidateMentionFileCache(root)
     await loadWorkspaceFiles(root, fs)
     expect(calls).toBe(2)
+  })
+
+  it('peekWorkspaceFiles returns the stale listing past the TTL without re-walking', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const root = URI.file('/repo')
+      let calls = 0
+      const fs = {
+        _serviceBrand: undefined,
+        async search() {
+          calls++
+          return {
+            results: [
+              {
+                resource: URI.file('/repo/a.ts'),
+                fsPath: '/repo/a.ts',
+                relativePath: 'a.ts',
+                basename: 'a.ts',
+                score: 0,
+              },
+            ],
+            limitHit: false,
+            filesWalked: 1,
+            directoriesWalked: 1,
+            durationMs: 0,
+          }
+        },
+      } satisfies IFileSearchService
+      await loadWorkspaceFiles(root, fs)
+      expect(calls).toBe(1)
+
+      // Past the TTL the listing is stale, but peeking still serves it
+      // instantly (stale-while-revalidate) and triggers no walk.
+      vi.setSystemTime(Date.now() + 60 * 60_000)
+      expect(peekWorkspaceFiles(root)?.map((e) => e.relPath)).toEqual(['a.ts'])
+      expect(calls).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('peekWorkspaceFiles returns undefined when nothing was ever cached', () => {
+    expect(peekWorkspaceFiles(URI.file('/never-loaded'))).toBeUndefined()
   })
 })
 

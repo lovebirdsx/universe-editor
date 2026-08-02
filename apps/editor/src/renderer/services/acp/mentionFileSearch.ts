@@ -1,10 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Workspace file fuzzy search for the @-mention popover. Caches the file
- *  listing per workspace root (TTL = 10s) so repeated keystrokes don't
- *  re-walk the tree on every IPC. The fuzzy match itself is intentionally
- *  simple: a case-insensitive subsequence match favouring shorter / earlier
- *  matches, which is "good enough" without a fuzzy-search dependency.
+ *  listing per workspace root so repeated keystrokes don't re-walk the tree
+ *  on every IPC. Freshness is driven by the file watcher (a change event
+ *  invalidates the cache); the TTL is only a backstop. Callers that can
+ *  tolerate briefly-stale data use `peekWorkspaceFiles` to render the cached
+ *  listing instantly while `loadWorkspaceFiles` revalidates in the background.
+ *  The fuzzy match itself is intentionally simple: a case-insensitive
+ *  subsequence match favouring shorter / earlier matches, which is "good
+ *  enough" without a fuzzy-search dependency.
  *
  *  Returns relative-to-root entries: the absolute fsPath becomes the
  *  resource URI; the workspace-relative path is the display label inserted
@@ -36,7 +40,10 @@ export interface MentionFileFilter {
 
 const FALLBACK_IGNORE_DIRS = ['node_modules', '.git', 'dist', 'out', 'build', '.next', '.turbo']
 const MAX_FILES = 100_000
-const CACHE_TTL_MS = 10_000
+// Backstop only: day-to-day freshness comes from the file watcher invalidating
+// the cache on change events, so the TTL can be generous. A stale entry is still
+// returned instantly (stale-while-revalidate) — see peekWorkspaceFiles.
+const CACHE_TTL_MS = 5 * 60_000
 
 interface _Cache {
   readonly key: string
@@ -44,6 +51,10 @@ interface _Cache {
   readonly timestamp: number
 }
 const _cache = new Map<string, _Cache>()
+
+function cacheKey(root: URI, dirNames: readonly string[], excludeGlobs: readonly string[]): string {
+  return root.toString() + '|' + dirNames.join(',') + '|' + excludeGlobs.join(',')
+}
 
 /**
  * Walk the workspace under `root` (cached). Returns at most `MAX_FILES`
@@ -58,7 +69,7 @@ export async function loadWorkspaceFiles(
 ): Promise<readonly MentionFileEntry[]> {
   const dirNames = filter ? filter.dirNames : FALLBACK_IGNORE_DIRS
   const excludeGlobs = filter?.excludeGlobs ?? []
-  const key = root.toString() + '|' + dirNames.join(',') + '|' + excludeGlobs.join(',')
+  const key = cacheKey(root, dirNames, excludeGlobs)
   const now = Date.now()
   const cached = _cache.get(key)
   if (cached && now - cached.timestamp < CACHE_TTL_MS) return cached.entries
@@ -80,6 +91,21 @@ export async function loadWorkspaceFiles(
   })
   _cache.set(key, { key, entries, timestamp: now })
   return entries
+}
+
+/**
+ * Return the cached listing for `root` without triggering a walk — including
+ * past-TTL (stale) entries. Lets a picker render the previous listing instantly
+ * while `loadWorkspaceFiles` revalidates in the background (stale-while-
+ * revalidate). Returns undefined when nothing was ever cached for this root.
+ */
+export function peekWorkspaceFiles(
+  root: URI,
+  filter?: MentionFileFilter,
+): readonly MentionFileEntry[] | undefined {
+  const dirNames = filter ? filter.dirNames : FALLBACK_IGNORE_DIRS
+  const excludeGlobs = filter?.excludeGlobs ?? []
+  return _cache.get(cacheKey(root, dirNames, excludeGlobs))?.entries
 }
 
 /** Invalidate the cache — exposed for tests and for explicit refresh actions. */

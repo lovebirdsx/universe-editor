@@ -31,7 +31,12 @@ import {
 import { compareByScoreThenPath, scoreFuzzyMatch } from '@universe-editor/workbench-ui'
 import { IRecentFilesService } from '../../recentFiles/recentFilesService.js'
 import { IExcludeService } from '../../exclude/ExcludeService.js'
-import { loadWorkspaceFiles, type MentionFileEntry } from '../../acp/mentionFileSearch.js'
+import {
+  loadWorkspaceFiles,
+  peekWorkspaceFiles,
+  type MentionFileEntry,
+  type MentionFileFilter,
+} from '../../acp/mentionFileSearch.js'
 import {
   decodeEditorPickId,
   encodeEditorPickId,
@@ -308,21 +313,26 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     let allFiles: readonly MentionFileEntry[] | undefined
     let seq = 0
 
+    // Fuzzy match over the open-editor candidates only — used both as the
+    // editor tier of the full filter and as the cold-cache fallback list.
+    const matchEditors = (
+      pattern: string,
+    ): { pick: IQuickPickItem; score: number; path: string }[] => {
+      const hits: { pick: IQuickPickItem; score: number; path: string }[] = []
+      for (const cand of editorCandidates) {
+        const score = scoreFileMatch(cand.name, cand.path, pattern)
+        if (score >= 0) hits.push({ pick: cand.pick, score, path: cand.path })
+      }
+      return hits
+    }
+
     // In-memory fuzzy filter over the cached listing. Whitespace-separated pieces
     // must all match; a basename hit outranks a path hit; results are capped at 512.
     const filterInMemory = (pattern: string): IQuickPickItem[] => {
-      if (allFiles === undefined) return []
-      const editorHits: { pick: IQuickPickItem; score: number; path: string }[] = []
-      const editorIds = new Set<string>()
-      for (const cand of editorCandidates) {
-        const score = scoreFileMatch(cand.name, cand.path, pattern)
-        if (score >= 0) {
-          editorHits.push({ pick: cand.pick, score, path: cand.path })
-          editorIds.add(cand.pick.id)
-        }
-      }
+      const editorHits = matchEditors(pattern)
+      const editorIds = new Set(editorHits.map((h) => h.pick.id))
       const fileHits: { entry: MentionFileEntry; score: number }[] = []
-      for (const entry of allFiles) {
+      for (const entry of allFiles ?? []) {
         if (editorIds.has(entry.uri)) continue
         const score = scoreFileMatch(entry.name, entry.relPath, pattern)
         if (score >= 0) fileHits.push({ entry, score })
@@ -370,9 +380,17 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         return
       }
       if (allFiles === undefined) {
-        // Listing not warmed yet: keep the spinner; the warm-up below re-runs the
-        // current query once files land.
+        // Listing not warmed yet: keep the spinner, but don't leave the user
+        // staring at it — editor hits filter instantly, and a path-shaped query
+        // is probed with a single stat (the warm-up below re-runs the current
+        // query once files land, superseding these interim results).
         picker.busy = true
+        const editorOnly = matchEditors(pattern)
+          .sort((a, b) => compareByScoreThenPath(a.score, b.score, a.path, b.path))
+          .slice(0, GO_TO_FILE_MAX_RESULTS)
+          .map((h) => h.pick)
+        picker.items = editorOnly
+        void prependExactPathMatch(pattern, mySeq, editorOnly)
         return
       }
       const items = filterInMemory(pattern)
@@ -396,14 +414,20 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     // recent-files list lands.
     if (picker.value.trim().length === 0) picker.items = emptyQueryItems()
 
-    // Warm the full listing once (cached with a short TTL, shared with @-mention).
-    // While it loads, the input stays responsive; the current query re-runs when
-    // files arrive so an early keystroke isn't lost.
-    if (picker.value.trim().length > 0) picker.busy = true
-    void loadWorkspaceFiles(root, this._fileSearch, {
+    // Warm the full listing once (watcher-invalidated cache shared with
+    // @-mention). Seed from the previous listing first — even a stale one beats
+    // an empty picker — then revalidate in the background and re-run the
+    // current query when fresh files land, so an early keystroke isn't lost.
+    const filter: MentionFileFilter = {
       dirNames: this._exclude.getDirNameIgnores(),
       excludeGlobs: this._exclude.getSearchExcludeGlobs(),
-    }).then((files) => {
+    }
+    allFiles = peekWorkspaceFiles(root, filter)
+    if (picker.value.trim().length > 0) {
+      if (allFiles === undefined) picker.busy = true
+      else runSearch(picker.value)
+    }
+    void loadWorkspaceFiles(root, this._fileSearch, filter).then((files) => {
       if (token.isCancellationRequested) return
       allFiles = files
       if (picker.value.trim().length > 0) runSearch(picker.value)
