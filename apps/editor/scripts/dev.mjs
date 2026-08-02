@@ -20,6 +20,16 @@ const vendor = spawnSync(
 )
 if (vendor.status !== 0) process.exit(vendor.status ?? 1)
 
+// Bundled-into-main workspace packages must have their dist/ built before
+// electron-vite resolves them (see scripts/dev/ensure-workspace-build.mjs). Fast no-op
+// once present; only a fresh clone / cleaned dist pays the turbo build.
+const upstream = spawnSync(
+  process.execPath,
+  [resolve(REPO_ROOT, 'scripts/dev/ensure-workspace-build.mjs')],
+  { cwd: REPO_ROOT, stdio: 'inherit' },
+)
+if (upstream.status !== 0) process.exit(upstream.status ?? 1)
+
 // ELECTRON_RUN_AS_NODE leaks in from an agent/tooling shell would make electron-vite
 // spawn the ESM main process in plain-node mode and crash it. Strip it here so a
 // stray export in the caller's environment can't break `pnpm dev`.
