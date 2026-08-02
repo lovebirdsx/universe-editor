@@ -37,7 +37,7 @@ export function statusBarContent(spec: TsServerSpec, state: LspServerState): Sta
       // Icon-only (the accessible label falls back to the tooltip) so the entry
       // doesn't repeat the Editor Language indicator's "TypeScript" text.
       return {
-        text: '$(pulse)',
+        text: '$(bracket)',
         tooltip: `${server}\n${localize('ts.status.version', 'Version')}: ${spec.version}`,
         showProgress: false,
         visible: true,

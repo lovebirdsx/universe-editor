@@ -16,7 +16,7 @@ describe('statusBarContent', () => {
 
   it('ready stays visible with the version in the tooltip', () => {
     const content = statusBarContent(tsls, 'ready')
-    expect(content.text).toBe('$(pulse)')
+    expect(content.text).toBe('$(bracket)')
     expect(content.showProgress).toBe(false)
     expect(content.visible).toBe(true)
     expect(content.tooltip).toContain('typescript-language-server (tsserver)')
@@ -25,7 +25,7 @@ describe('statusBarContent', () => {
 
   it('ready under native reports tsgo + version in the tooltip', () => {
     const content = statusBarContent(native, 'ready')
-    expect(content.text).toBe('$(pulse)')
+    expect(content.text).toBe('$(bracket)')
     expect(content.tooltip).toContain('TypeScript Native (tsgo)')
     expect(content.tooltip).toContain('7.0.0-dev.1')
   })
