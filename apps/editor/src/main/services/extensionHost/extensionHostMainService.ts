@@ -9,7 +9,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
@@ -40,6 +40,7 @@ import type {
 import { createTsServerSpecResolver, type TsServerSpec } from './tsServerPaths.js'
 import { resolveUserExtensionsDir } from './userExtensionsDir.js'
 import { resolveBuiltinExtensionsDir } from './builtinExtensionsDir.js'
+import { resolveFromRepo } from '../../repoPaths.js'
 import { PerfMarks } from '../../../shared/perf/marks.js'
 
 /** Grace period after closing the host's stdin before we force-kill its tree. */
@@ -97,23 +98,6 @@ const defaultSpawner: ExtHostSpawner = (command, args, options) =>
 const ENTRY_DEV = 'packages/extension-host/dist/bootstrap.js'
 /** Bootstrap entry under `resourcesPath` in a packaged build. */
 const ENTRY_PACKAGED = 'extension-host/dist/bootstrap.js'
-
-/**
- * Walk up from `app.getAppPath()` looking for a repo-relative path. Tolerates
- * both `electron .` (appPath = apps/editor) and the e2e `electron out/main/index.js`
- * layout (appPath points deeper), same approach as `resolveTsServerPaths`.
- */
-function resolveFromRepo(relative: string): string {
-  let dir = app.getAppPath()
-  for (let i = 0; i < 6; i++) {
-    const candidate = path.join(dir, relative)
-    if (existsSync(candidate)) return candidate
-    const parent = path.dirname(dir)
-    if (parent === dir) break
-    dir = parent
-  }
-  return path.resolve(app.getAppPath(), '../..', relative)
-}
 
 const defaultResolveEntry: ExtHostEntryResolver = () =>
   app.isPackaged ? path.join(process.resourcesPath, ENTRY_PACKAGED) : resolveFromRepo(ENTRY_DEV)

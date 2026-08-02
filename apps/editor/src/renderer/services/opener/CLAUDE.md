@@ -106,6 +106,7 @@
 5. **platform 未 re-export → 编译过但运行时拿不到**：新加的 opener 符号忘了在 `opener/index.ts` 或 `src/index.ts` re-export，`index.test.ts` 会红；apps 端 import 报找不到。
 6. **改 platform 后 apps 用旧 dist**：非 dev 模式改完 `openerService.ts` 要重建 platform，否则 renderer/main 仍是旧契约。
 7. **深链 command 走白名单，普通 opener.open 默认拒 command**：两处信任级独立——`DeepLinkContribution` 显式传 `allowCommands: DEEP_LINK_ALLOWED_COMMANDS`；其它调用方（如未来 markdown command 链接）要各自决定传什么。默认不传 = 不执行任何命令。
+8. **agent 深链必须先 `await IUserSettingsSyncService.whenInitialized`**（勿回退）：用户设置 hydration 是 fire-and-forget（ConfigInitContribution），冷启动窗口的 AfterRestore 可能先于 settings.json 读盘完成——bootstrap 一提速竞态就翻转，深链会话读到默认 `acp.defaultAgentId`（claude-code）而非用户配置，直接在错误 agent 上建会话（一次性动作，无法靠配置变更事件自愈）。守护用例：`smoke.deepLinkAgentWorkspace.spec.ts`。
 
 ### 验证
 

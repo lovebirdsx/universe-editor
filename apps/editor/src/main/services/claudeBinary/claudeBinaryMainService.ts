@@ -26,6 +26,7 @@ import {
   type ILogger,
   ILoggerService,
 } from '@universe-editor/platform'
+import { resolveFromRepo } from '../../repoPaths.js'
 import type {
   IClaudeBinaryProgress,
   IClaudeBinaryResolveOptions,
@@ -258,11 +259,12 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     // Dev convenience: reuse the binary npm already installed in the fork so
     // contributors don't download ~100MB on first run.
     if (!app.isPackaged) {
-      const vendor = path.resolve(
-        app.getAppPath(),
-        '../../vendor/claude-agent-acp/node_modules/@anthropic-ai',
-        `claude-agent-sdk-${suffix}`,
-        binName,
+      const vendor = resolveFromRepo(
+        path.join(
+          'vendor/claude-agent-acp/node_modules/@anthropic-ai',
+          `claude-agent-sdk-${suffix}`,
+          binName,
+        ),
       )
       if (await pathExists(vendor)) {
         this._logger.info(`dev reuse of vendored claude binary ${vendor}`)
@@ -433,7 +435,7 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
   private async _readSdkVersion(): Promise<string> {
     const metaPath = app.isPackaged
       ? path.join(process.resourcesPath, 'claude-agent-acp/dist/claude-binary.json')
-      : path.resolve(app.getAppPath(), '../../vendor/claude-agent-acp/dist/claude-binary.json')
+      : resolveFromRepo('vendor/claude-agent-acp/dist/claude-binary.json')
     const raw = await readFile(metaPath, 'utf8')
     const meta = JSON.parse(raw) as { sdkVersion?: string }
     if (!meta.sdkVersion) {
@@ -531,11 +533,12 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     // bundled version, so prefetching it is pointless. But when the target is a
     // newer `latest`, vendor (= bundled) can't help — fall through and fetch it.
     if (!app.isPackaged && target === bundledVersion) {
-      const vendor = path.resolve(
-        app.getAppPath(),
-        '../../vendor/claude-agent-acp/node_modules/@anthropic-ai',
-        `claude-agent-sdk-${suffix}`,
-        binName,
+      const vendor = resolveFromRepo(
+        path.join(
+          'vendor/claude-agent-acp/node_modules/@anthropic-ai',
+          `claude-agent-sdk-${suffix}`,
+          binName,
+        ),
       )
       if (await pathExists(vendor)) return
     }

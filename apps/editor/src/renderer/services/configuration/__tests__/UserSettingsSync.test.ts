@@ -321,4 +321,40 @@ describe('UserSettingsSync', () => {
     sync.dispose()
     config.dispose()
   })
+
+  // Cold-launch one-shot consumers (e.g. a deep link picking acp.defaultAgentId)
+  // gate on whenInitialized — it must resolve only after the User layer is live,
+  // and must still settle when a load fails so awaiters never deadlock.
+  it('whenInitialized resolves only after the initial hydration', async () => {
+    const storage = new FakeStorage()
+    const files = new FakeUserData()
+    files.files.set(UserDataFile.Settings, '{ "acp.defaultAgentId": "echo" }')
+    const { sync, config } = makeInstance(storage, files)
+
+    let settled = false
+    void sync.whenInitialized.then(() => {
+      settled = true
+    })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    const initialize = sync.initialize()
+    await sync.whenInitialized
+    expect(config.get('acp.defaultAgentId')).toBe('echo')
+    await initialize
+    sync.dispose()
+    config.dispose()
+  })
+
+  it('whenInitialized settles even when a layer load throws', async () => {
+    const storage = new FakeStorage()
+    const files = new FakeUserData()
+    files.read = () => Promise.reject(new Error('disk gone'))
+    const { sync, config } = makeInstance(storage, files)
+
+    await expect(sync.initialize()).rejects.toThrow('disk gone')
+    await expect(sync.whenInitialized).resolves.toBeUndefined()
+    sync.dispose()
+    config.dispose()
+  })
 })

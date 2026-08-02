@@ -9,14 +9,34 @@
 import { parse, type ParseError } from 'jsonc-parser'
 import {
   ConfigurationTarget,
+  createDecorator,
+  DeferredPromise,
   Disposable,
   IConfigurationService,
+  InstantiationType,
   IStorageService,
   IUserDataFilesService,
+  registerSingleton,
   UserDataFile,
 } from '@universe-editor/platform'
 
 export const USER_SETTINGS_KEY = 'workbench.userSettings'
+
+export interface IUserSettingsSyncService {
+  readonly _serviceBrand: undefined
+  /**
+   * Resolves once the initial file → layer hydration has completed (all
+   * layers). One-shot startup actions that read configuration (e.g. a
+   * cold-launch deep link picking `acp.defaultAgentId`) must await this —
+   * `initialize()` is fired-and-forgotten from ConfigInitContribution, so a
+   * fast bootstrap can otherwise reach AfterRestore before settings.json is in.
+   */
+  readonly whenInitialized: Promise<void>
+  initialize(): Promise<void>
+}
+
+export const IUserSettingsSyncService =
+  createDecorator<IUserSettingsSyncService>('userSettingsSyncService')
 
 function parseJsoncObject(text: string): Record<string, unknown> {
   if (text.trim() === '') return {}
@@ -27,7 +47,12 @@ function parseJsoncObject(text: string): Record<string, unknown> {
   return parsed as Record<string, unknown>
 }
 
-export class UserSettingsSync extends Disposable {
+export class UserSettingsSync extends Disposable implements IUserSettingsSyncService {
+  declare readonly _serviceBrand: undefined
+
+  private readonly _initialized = new DeferredPromise<void>()
+  readonly whenInitialized = this._initialized.p
+
   /**
    * Set while a file → layer load is in flight, so onDidChangeConfiguration
    * doesn't trigger another write back to disk (avoids round-trip loops).
@@ -49,11 +74,16 @@ export class UserSettingsSync extends Disposable {
   }
 
   async initialize(): Promise<void> {
-    await this._migrateLegacyUserSettings()
-    await this._reloadVSCodeUserLayer()
-    await this._reloadUserLayer()
-    await this._reloadProjectLayer()
-    await this._reloadVSCodeLayer()
+    try {
+      await this._migrateLegacyUserSettings()
+      await this._reloadVSCodeUserLayer()
+      await this._reloadUserLayer()
+      await this._reloadProjectLayer()
+      await this._reloadVSCodeLayer()
+    } finally {
+      // Settle even on failure so whenInitialized awaiters never deadlock.
+      this._initialized.complete(undefined)
+    }
 
     this._register(
       this._files.onDidChangeFile(({ file, source }) => {
@@ -176,3 +206,5 @@ export class UserSettingsSync extends Disposable {
     await this._storage.set(USER_SETTINGS_KEY, {})
   }
 }
+
+registerSingleton(IUserSettingsSyncService, UserSettingsSync, InstantiationType.Delayed)

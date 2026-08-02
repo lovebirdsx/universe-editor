@@ -17,6 +17,7 @@ import {
   DEFAULT_TS_SERVER_IMPLEMENTATION,
   type TsServerImplementationName,
 } from '../../../shared/tsServerImplementation.js'
+import { resolveFromRepo } from '../../repoPaths.js'
 
 /**
  * Which language-server implementation the `typescript` plugin spawns.
@@ -99,15 +100,7 @@ export function resolveTsServerPaths(): { cli: string; tsserver: string } {
     const cli = path.join(process.resourcesPath, CLI_PACKAGED_REL)
     return { cli, tsserver: tsserverFor(cli) }
   }
-  let dir = app.getAppPath()
-  for (let i = 0; i < 6; i++) {
-    const candidate = path.join(dir, CLI_VENDOR_REL)
-    if (existsSync(candidate)) return { cli: candidate, tsserver: tsserverFor(candidate) }
-    const parent = path.dirname(dir)
-    if (parent === dir) break
-    dir = parent
-  }
-  const cli = path.resolve(app.getAppPath(), '../..', CLI_VENDOR_REL)
+  const cli = resolveFromRepo(CLI_VENDOR_REL)
   return { cli, tsserver: tsserverFor(cli) }
 }
 

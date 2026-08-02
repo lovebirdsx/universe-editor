@@ -44,6 +44,7 @@ import {
   IAcpSessionService,
   type IAcpCreateSessionOptions,
 } from '../services/acp/session/acpSessionService.js'
+import { IUserSettingsSyncService } from '../services/configuration/UserSettingsSync.js'
 
 export class DeepLinkContribution extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -58,6 +59,7 @@ export class DeepLinkContribution extends Disposable implements IWorkbenchContri
     @ILayoutService private readonly _layout: ILayoutService,
     @IViewsService private readonly _views: IViewsService,
     @INotificationService private readonly _notification: INotificationService,
+    @IUserSettingsSyncService private readonly _userSettings: IUserSettingsSyncService,
   ) {
     super()
     const ipc = (window as { ipc?: IpcBridge }).ipc
@@ -82,6 +84,12 @@ export class DeepLinkContribution extends Disposable implements IWorkbenchContri
   }
 
   private async _openAgentPrompt(target: DeepLinkAgentPromptTarget): Promise<void> {
+    // A cold-launch deep link (this window was created FOR the link) reaches
+    // AfterRestore while UserSettingsSync's fire-and-forget hydration may still
+    // be reading settings.json — creating the session is a one-shot action that
+    // cannot self-heal on a later config change, so gate on the initial load
+    // (agent list, default agent id and allowAutoSubmit all come from config).
+    await this._userSettings.whenInitialized
     const agentId = target.agent ?? this._agents.defaultAgentId()
     try {
       this._agents.get(agentId)

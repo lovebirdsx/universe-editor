@@ -21,6 +21,7 @@ import {
 } from '@universe-editor/platform'
 import { buildChildEnv } from '../process/env.js'
 import { decodeDiagnostic } from '../process/decode.js'
+import { resolveFromRepo } from '../../repoPaths.js'
 import {
   CHILD_PROCESS_EXITED_CODE,
   CHILD_STDIN_NOT_WRITABLE_CODE,
@@ -81,14 +82,14 @@ const defaultSpawner: AcpSpawner = (command, args, options) =>
   })
 
 /**
- * Bundled agent entries, relative to `app.getAppPath()` in the dev tree
- * (`apps/editor` → repo root → `vendor/`).
+ * Bundled agent entries, repo-relative in the dev tree (located by walking up
+ * from `app.getAppPath()` — see `resolveFromRepo`).
  */
-const BUNDLED_CLAUDE_ENTRY_DEV = '../../vendor/claude-agent-acp/dist/index.js'
+const BUNDLED_CLAUDE_ENTRY_DEV = 'vendor/claude-agent-acp/dist/index.js'
 /** Bundled Claude agent entry under `resourcesPath` in a packaged build. */
 const BUNDLED_CLAUDE_ENTRY_PACKAGED = 'claude-agent-acp/dist/index.js'
 /** Bundled Codex agent entry in the dev tree. */
-const BUNDLED_CODEX_ENTRY_DEV = '../../vendor/codex-acp/dist/index.js'
+const BUNDLED_CODEX_ENTRY_DEV = 'vendor/codex-acp/dist/index.js'
 /** Bundled Codex agent entry under `resourcesPath` in a packaged build. */
 const BUNDLED_CODEX_ENTRY_PACKAGED = 'codex-acp/dist/index.js'
 
@@ -108,9 +109,7 @@ function acpHostStdinError(message: string): Error & { code: string } {
 const defaultResolveNodeEntry: NodeEntryResolver = (entry) => {
   const dev = entry === 'codex' ? BUNDLED_CODEX_ENTRY_DEV : BUNDLED_CLAUDE_ENTRY_DEV
   const packaged = entry === 'codex' ? BUNDLED_CODEX_ENTRY_PACKAGED : BUNDLED_CLAUDE_ENTRY_PACKAGED
-  return app.isPackaged
-    ? path.join(process.resourcesPath, packaged)
-    : path.resolve(app.getAppPath(), dev)
+  return app.isPackaged ? path.join(process.resourcesPath, packaged) : resolveFromRepo(dev)
 }
 
 const defaultLookup: AcpCommandLookup = (command) =>

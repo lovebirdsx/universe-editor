@@ -9,12 +9,13 @@
  *  degrades to an empty map rather than crashing startup.
  *--------------------------------------------------------------------------------------------*/
 
-import { type Dirent, existsSync, readdirSync, readFileSync } from 'node:fs'
+import { type Dirent, readdirSync, readFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { app } from 'electron'
 import { createNamedLogger, type ILogger, ILoggerService } from '@universe-editor/platform'
 import { SUPPORTED_LOCALES, type SupportedLocale } from '../../../shared/i18n/availableLocales.js'
 import type { DocsByLocale, IDocsService } from '../../../shared/ipc/docsService.js'
+import { resolveFromRepo } from '../../repoPaths.js'
 
 /** Packaged location of the docs root, under `resourcesPath` (see electron-builder.yml). */
 const DOCS_PACKAGED = 'docs/user'
@@ -22,23 +23,6 @@ const DOCS_PACKAGED = 'docs/user'
 const DOCS_DEV = 'docs/user'
 
 export type DocsRootResolver = () => string
-
-/**
- * Walk up from `app.getAppPath()` looking for a repo-relative path. Tolerates
- * both `electron .` (appPath = apps/editor) and the e2e `electron out/main/index.js`
- * layout (appPath points deeper), same approach as the extension host / tsserver.
- */
-function resolveFromRepo(relative: string): string {
-  let dir = app.getAppPath()
-  for (let i = 0; i < 6; i++) {
-    const candidate = path.join(dir, relative)
-    if (existsSync(candidate)) return candidate
-    const parent = path.dirname(dir)
-    if (parent === dir) break
-    dir = parent
-  }
-  return path.resolve(app.getAppPath(), '../..', relative)
-}
 
 const defaultResolveRoot: DocsRootResolver = () =>
   app.isPackaged ? path.join(process.resourcesPath, DOCS_PACKAGED) : resolveFromRepo(DOCS_DEV)
