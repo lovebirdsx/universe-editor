@@ -62,6 +62,8 @@ const MILESTONES: readonly IMilestone[] = [
   { mark: PerfMarks.extHostDidSpawn, label: 'Extension host spawned' },
   { mark: PerfMarks.rendererWillStartBootstrap, label: 'Renderer bootstrap' },
   { mark: PerfMarks.rendererDidCreateIpc, label: 'IPC ready' },
+  { mark: PerfMarks.rendererWillImportContributions, label: 'Services assembled' },
+  { mark: PerfMarks.rendererDidImportContributions, label: 'Contributions imported' },
   { mark: PerfMarks.rendererWillRestore, label: 'Ready phase' },
   { mark: PerfMarks.rendererDidBlockRestore, label: 'BlockRestore contributions' },
   { mark: PerfMarks.rendererDidApplyColorTheme, label: 'Color theme applied' },

@@ -1,5 +1,5 @@
 import { defineConfig } from 'electron-vite'
-import react from '@vitejs/plugin-react'
+import react from '@vitejs/plugin-react-oxc'
 import { resolve } from 'node:path'
 import { readFileSync } from 'node:fs'
 import type { Plugin } from 'vite'
@@ -115,11 +115,46 @@ export default defineConfig({
       ],
       include: [
         'monaco-editor',
+        // Deep `monaco-editor/esm/...` imports (textMateService, monacoSemanticThemeBridge,
+        // monacoActionsBridge, ...) bypass the bare `monaco-editor` optimized chunk and
+        // otherwise load ~185 raw ESM files one request at a time. Bundle each used
+        // entrypoint; rolldown splits their shared internals into common chunks.
+        'monaco-editor/esm/vs/base/browser/ui/hover/hoverDelegateFactory.js',
+        'monaco-editor/esm/vs/base/common/errors.js',
+        'monaco-editor/esm/vs/editor/browser/editorExtensions.js',
+        'monaco-editor/esm/vs/editor/browser/services/bulkEditService.js',
+        'monaco-editor/esm/vs/editor/browser/services/codeEditorService.js',
+        'monaco-editor/esm/vs/editor/common/encodedTokenAttributes.js',
+        'monaco-editor/esm/vs/editor/common/languages.js',
+        'monaco-editor/esm/vs/editor/common/languages/nullTokenize.js',
+        'monaco-editor/esm/vs/editor/common/services/languageFeatures.js',
+        'monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js',
+        'monaco-editor/esm/vs/editor/standalone/browser/standaloneThemeService.js',
+        'monaco-editor/esm/vs/editor/standalone/common/standaloneTheme.js',
+        'monaco-editor/esm/vs/basic-languages/markdown/markdown.js',
+        'monaco-editor/esm/vs/platform/commands/common/commands.js',
+        'monaco-editor/esm/vs/platform/configuration/common/configuration.js',
+        'monaco-editor/esm/vs/platform/hover/browser/hover.js',
+        'monaco-editor/esm/vs/platform/instantiation/common/instantiation.js',
+        'monaco-editor/esm/vs/platform/list/browser/listService.js',
+        '@agentclientprotocol/sdk',
+        '@floating-ui/react',
+        '@react-aria/focus',
+        '@tanstack/react-virtual',
+        '@xterm/addon-fit',
+        '@xterm/addon-web-links',
+        '@xterm/xterm',
         'allotment',
+        'jsonc-parser',
         'lucide-react',
+        'mermaid',
+        'vscode-oniguruma',
+        'vscode-textmate',
         'react',
         'react-dom',
         'react-dom/client',
+        'react/jsx-dev-runtime',
+        'react/jsx-runtime',
       ],
       rolldownOptions: {
         plugins: [
@@ -139,7 +174,11 @@ export default defineConfig({
     server: {
       warmup: {
         // Paths are resolved relative to vite root (src/renderer), not __dirname.
-        clientFiles: ['./main.tsx', './workbench/Workbench.tsx'],
+        // The three serial module waves of bootstrap (main.tsx static graph →
+        // dynamic import('./contributions') → dynamic import('./workbench/Workbench')):
+        // warming all three lets the dev server pre-transform them in parallel
+        // instead of discovering each wave only when execution reaches its await.
+        clientFiles: ['./main.tsx', './contributions/index.ts', './workbench/Workbench.tsx'],
       },
     },
     worker: {

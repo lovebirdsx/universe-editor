@@ -32,6 +32,13 @@ export const PerfMarks = {
 
   rendererWillStartBootstrap: 'code/renderer/willStartBootstrap',
   rendererDidCreateIpc: 'code/renderer/didCreateIpc',
+  /**
+   * Renderer: around the dynamic `import('./contributions/index.js')`. In dev
+   * this wave of module transforms dominates the gap between IPC ready and
+   * willRestore; the pair isolates it from plain service assembly.
+   */
+  rendererWillImportContributions: 'code/renderer/willImportContributions',
+  rendererDidImportContributions: 'code/renderer/didImportContributions',
   rendererWillRestore: 'code/renderer/willRestore',
 
   /**

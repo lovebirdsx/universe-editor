@@ -63,6 +63,9 @@ catalogs:
     '@vitejs/plugin-react':
       specifier: ^5.2.0
       version: 5.2.0
+    '@vitejs/plugin-react-oxc':
+      specifier: ^0.4.3
+      version: 0.4.3
     '@vscode/codicons':
       specifier: ^0.0.45
       version: 0.0.45
@@ -265,6 +268,9 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 'catalog:'
         version: 1.2.1(zod@3.25.76)
+      '@floating-ui/react':
+        specifier: 'catalog:'
+        version: 0.27.19(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@fontsource/roboto':
         specifier: 'catalog:'
         version: 5.2.10
@@ -340,6 +346,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: 'catalog:'
         version: 5.2.0(rolldown-vite@7.3.1(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@22.19.17)(esbuild@0.27.7))
+      '@vitejs/plugin-react-oxc':
+        specifier: 'catalog:'
+        version: 0.4.3(rolldown-vite@7.3.1(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@22.19.17)(esbuild@0.27.7))
       '@vscode/codicons':
         specifier: 'catalog:'
         version: 0.0.45
@@ -1920,6 +1929,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@rolldown/pluginutils@1.0.0-beta.47':
+    resolution: {integrity: sha512-8QagwMH3kNCuzD8EWL8R2YPW5e4OrHNSAHRFDdmFqEwEaD/KcNKjVoumo+gP2vW5eKB2UPbM6vTYiGZX0ixLnw==}
+
   '@rolldown/pluginutils@1.0.0-beta.53':
     resolution: {integrity: sha512-vENRlFU4YbrwVqNDZ7fLvy+JR1CRkyr01jhSiDpE1u6py3OMzQfztQU2jxykW3ALNxO4kSlqIDeYyD0Y9RcQeQ==}
 
@@ -2440,6 +2452,12 @@ packages:
 
   '@upsetjs/venn.js@2.0.0':
     resolution: {integrity: sha512-WbBhLrooyePuQ1VZxrJjtLvTc4NVfpOyKx0sKqioq9bX1C1m7Jgykkn8gLrtwumBioXIqam8DLxp88Adbue6Hw==}
+
+  '@vitejs/plugin-react-oxc@0.4.3':
+    resolution: {integrity: sha512-eJv6hHOIOVXzA4b2lZwccu/7VNmk9372fGOqsx5tNxiJHLtFBokyCTQUhlgjjXxl7guLPauHp0TqGTVyn1HvQA==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    peerDependencies:
+      vite: ^6.3.0 || ^7.0.0
 
   '@vitejs/plugin-react@5.2.0':
     resolution: {integrity: sha512-YmKkfhOAi3wsB1PhJq5Scj3GXMn3WvtQ/JC0xoopuHoXSdmtdStOpFrYaT1kie2YgFBcIe64ROzMYRjCrYOdYw==}
@@ -6020,6 +6038,8 @@ snapshots:
   '@rolldown/binding-win32-x64-msvc@1.0.0-beta.53':
     optional: true
 
+  '@rolldown/pluginutils@1.0.0-beta.47': {}
+
   '@rolldown/pluginutils@1.0.0-beta.53': {}
 
   '@rolldown/pluginutils@1.0.0-rc.3': {}
@@ -6523,6 +6543,11 @@ snapshots:
     optionalDependencies:
       d3-selection: 3.0.0
       d3-transition: 3.0.1(d3-selection@3.0.0)
+
+  '@vitejs/plugin-react-oxc@0.4.3(rolldown-vite@7.3.1(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@22.19.17)(esbuild@0.27.7))':
+    dependencies:
+      '@rolldown/pluginutils': 1.0.0-beta.47
+      vite: rolldown-vite@7.3.1(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@22.19.17)(esbuild@0.27.7)
 
   '@vitejs/plugin-react@5.2.0(rolldown-vite@7.3.1(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@22.19.17)(esbuild@0.27.7))':
     dependencies:

@@ -7,7 +7,6 @@
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {
-    "predev": "node ../../scripts/release/vendor-install.mjs",
     "dev": "node scripts/dev.mjs",
     "build": "electron-vite build",
     "start": "electron-vite preview",
@@ -46,6 +45,7 @@
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "catalog:",
+    "@floating-ui/react": "catalog:",
     "@fontsource/roboto": "catalog:",
     "@react-aria/focus": "catalog:",
     "@tanstack/react-virtual": "catalog:",
@@ -86,6 +86,7 @@
     "@universe-editor/typescript": "workspace:*",
     "@universe-editor/workbench-ui": "workspace:*",
     "@vitejs/plugin-react": "catalog:",
+    "@vitejs/plugin-react-oxc": "catalog:",
     "electron": "catalog:",
     "electron-builder": "catalog:",
     "electron-vite": "catalog:",

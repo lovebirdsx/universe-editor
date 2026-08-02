@@ -362,6 +362,16 @@ async function bootstrapWorkbench(): Promise<void> {
     services.get(IUserDataFilesService) as IUserDataFilesService,
     window.navigator.language,
   )
+  // Prefetch the two later dynamic-import waves so their network loading and
+  // module evaluation overlap the service assembly / IPC awaits below instead
+  // of starting only when execution reaches their await. Must stay after NLS
+  // init: actions' top-level registerAction2 calls localize() during module
+  // evaluation. The awaits further down consume these same promises.
+  const contributionsModulePromise = import('./contributions/index.js')
+  const workbenchModulesPromise = Promise.all([
+    import('./workbench/Workbench.js'),
+    import('./workbench/errors/WorkbenchErrorBoundary.js'),
+  ])
   const workspaceWire = ProxyChannel.toService<IWorkspaceServiceWire>(
     ipcService.getChannel(ServiceChannels.Workspace),
   )
@@ -696,7 +706,9 @@ async function bootstrapWorkbench(): Promise<void> {
   // Register all built-in contributions + actions (side-effect import) so the
   // ContributionService below can instantiate them by phase. UserSettingsSync +
   // UserKeybindings loads are driven by ConfigInitContribution (BlockStartup).
-  await import('./contributions/index.js')
+  mark(PerfMarks.rendererWillImportContributions)
+  await contributionsModulePromise
+  mark(PerfMarks.rendererDidImportContributions)
 
   // ContributionService wires lifecycle → built-in contributions auto-instantiate.
   // The side-effect import at the top of this file populated the registry.
@@ -832,8 +844,7 @@ async function bootstrapWorkbench(): Promise<void> {
   const rootEl = document.getElementById('root')
   if (!rootEl) throw new Error('[bootstrap] #root element not found')
 
-  const { Workbench } = await import('./workbench/Workbench.js')
-  const { WorkbenchErrorBoundary } = await import('./workbench/errors/WorkbenchErrorBoundary.js')
+  const [{ Workbench }, { WorkbenchErrorBoundary }] = await workbenchModulesPromise
 
   mark(PerfMarks.rendererWillMountReact)
   reactRoot = createRoot(rootEl)

@@ -60,15 +60,31 @@ description: 诊断启动/恢复耗时问题——「A 目录启动比 B 慢」�
 
 | Phase（Phases 表标签） | 代码位置 | 内容 |
 |---|---|---|
+| IPC ready → Services assembled | `main.tsx` 服务装配段 | ProxyChannel 绑定 + 纯 renderer 服务构建 + NLS/docs IPC await；dev 下还与两波动态 import 预取（contributions / Workbench，NLS 后发起）共享主线程 |
+| Services assembled → Contributions imported | `main.tsx` `await contributionsModulePromise` | `contributions/index.js` 动态 import 落地（注册全部 contributions/actions 的模块执行）。dev 下这段是 vite 按需转换该子图的时间，已被 `server.warmup` + 预取压缩 |
 | Ready phase → BlockRestore contributions | `main.tsx` setPhase(Ready) + `await when(Ready)` | BlockRestore contributions 实例化，含 `WorkspaceRestoreContribution` 从 storage 重建编辑器组（打开 tab 越多越慢） |
 | BlockRestore → State restore start | `main.tsx` E2E 探针安装等 | 通常很小 |
-| State restore start → Services restored | `main.tsx` `Promise.all([layout/viewDescriptor/views/terminal .load()])` | 四个并行恢复；看 `didLoad*` 各自 offset 找瓶颈（终端恢复、大 layout 常是主犯） |
+| State restore start → Services restored | `main.tsx` `loadDefaults()` ×4 | 同步 seed 默认 layout/view/terminal 状态（≈0ms）；真正按工作区恢复的 `reconcileFromStorage` 在 mount 后异步跑，各自完成点是 `didLoad*` marks |
+| Services restored → Mounting workbench | `main.tsx` `await workbenchModulesPromise` | Workbench React 树模块加载；已在 NLS 后预取，通常 ≈0ms，若变大说明预取被打断 |
 | Services restored → Monaco initialized | `MonacoLoader.ts` lazy | Monaco dynamic import；会被主进程 CPU 争抢拖慢 |
 | Workbench mounted → Editors restored | `Workbench.tsx` useEffect | React 挂载 + 编辑器实体恢复，tab 越多越慢 |
 | Workspace watch start → ready | `fileWatcherMainService._subscribe` | 主进程对工作区根**递归** parcel 订阅；大目录冷订阅 + FS 遍历吃 CPU，和 renderer 恢复同时发生形成争抢（`.git`/`node_modules`/`dist` 已在 ignore 里，见文件头） |
 | Editors restored → Extension host spawned | `Eventually` phase | SCM/git 扩展宿主在**独立进程**、首屏之后才 spawn（`eventually.ts`）。**它不在首屏恢复窗口内**——别把 git 扩展当成恢复变慢的病因 |
 
 > 关键澄清：git repo 常被当成「启动慢」的元凶，但 SCM/git 跑在懒启动的扩展宿主进程、在 `extHostDidSpawn`（通常晚于 `didRestoreEditors`）才起。git 真正影响首屏的路径是**间接**的：git repo 往往 = 大目录 → parcel 递归订阅 + Explorer 树首读吃 CPU，拖慢同时在跑的 renderer 恢复。用步骤 2 的隔离实验区分「git 本身」vs「目录规模」。
+
+## dev 模式（`pnpm dev`）特有的链路
+
+dev 与打包版的差异集中在两处，报告读法不变但病因谱不同：
+
+- **外部链路**（敲命令 → Electron spawn，稳态 ~1.4s，`[startup] pnpm dev -> window responsive` 一行的 `compile+spawn` 段）：根 `pnpm dev` 直接执行 `apps/editor/scripts/dev.mjs`（不经第二层 pnpm；wrapper 记 T0、跑 vendor-install、strip `ELECTRON_RUN_AS_NODE`）+ electron-vite 构建 main/preload。`devRuntimeWatchPlugin` 直接 spawn turbo shim 跑 ext:build（省 pnpm run 进程），与 main 构建**并行**：dist 齐全时完全后台不阻塞（ext host 首屏后才懒 spawn）；dist 缺失（首次 clone / clean 后）由 `closeBundle` 把 electron spawn 门控到构建完成。若 `compile+spawn` 远超 2s，先看是不是走了门控分支或 turbo 缓存未命中。
+- **Renderer bootstrap 段显著大于打包版**（~4.5s vs 打包版首屏）：vite dev 按需转换 + HTTP/1.1 瀑布加载 renderer 首波静态模块图（含 platform/workbench-ui **源码** alias），是 dev 的结构性成本。已做的压缩：`@vitejs/plugin-react-oxc`（oxc 替代 Babel 转换）、`optimizeDeps.include` 显式列出 `monaco-editor/esm/...` 深路径入口（否则 ~185 个裸 ESM 文件逐请求加载，主要影响 Monaco lazy init 段）。**改 optimizeDeps.include 后第一、二轮启动会因缓存重建偏慢 2-10s，取第三轮为稳态**。首波之外原有两波串行动态 import（contributions / Workbench），已通过 `server.warmup.clientFiles`（三入口并行预转换）+ `main.tsx` 中 NLS 后预取消除串行等待——若 `Contributions imported` / `Services restored → Mounting workbench` 再次变大，先查这两处是否被改动。**红线：不要把 `contributions/index.js` 改成静态 import**——`registerAction2` 构造期调 `localize()`，静态化会把全部命令标题在 NLS 初始化前固化成英文（e2e pin en-US 抓不住此回归）。曾实验过放开 Chromium 6 连接/host 限制（`ignore-connections-limit`），实测无收益已弃用。
+
+### dev 下无头采集与重测（agent 自助）
+
+- **应用内时间线免开 UI**：每次启动 main 侧自动 dump 一行完整 phases 到 `<userData>/logs/<会话时间戳>/startupPerf.log`（dev 的 userData = `%APPDATA%/Universe Editor - Dev`），renderer/window 日志同目录。
+- **外部链路计时**：`pnpm dev 2>&1 | node -e "…readline 加时间戳…"`。Git Bash 里**不要**用 `while read; do date; done` 逐行打戳——Windows 下每行 fork 一个 `date`（~80ms/行），密集输出段消费滞后，时间戳系统性漂移到不可用。
+- **重测前必做**：① 杀干净上一轮进程树——TaskStop/Ctrl-C 常留下 Electron 孙进程，残留实例持有**单实例锁**会让下一轮静默 `app.quit`（现象=没有新日志会话目录）；用 PowerShell 按 `CommandLine -match '<worktree 名>'` 杀 electron.exe + electron-vite node。② 确认 `state.json` 的 `workbench.windowsState` 只有预期窗口——残留的 second-instance 空窗口会被 session 恢复成双窗口并发加载，测量全部失真（windows 数可从 window.log 的 loadURL 行数确认）。
 
 ## 参考文件
 
