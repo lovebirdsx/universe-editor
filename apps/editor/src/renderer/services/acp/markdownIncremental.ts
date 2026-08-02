@@ -17,7 +17,7 @@
  *  block `line` numbers), so callers can swap it in transparently.
  *--------------------------------------------------------------------------------------------*/
 
-import { parseMarkdown, type MdNode } from './markdownRenderer.js'
+import { codeFenceMask, parseMarkdown, type MdNode } from './markdownRenderer.js'
 
 /**
  * Per-message incremental parse cache. Hold one of these in a ref across renders
@@ -110,12 +110,7 @@ function lastSafeSplit(text: string): number {
   }
 
   // Fence state per line: whether the line sits inside an open code fence.
-  const insideFence: boolean[] = new Array(lines.length)
-  let fenceOpen = false
-  for (let i = 0; i < lines.length; i++) {
-    insideFence[i] = fenceOpen
-    if (/^```/.test(lines[i] ?? '')) fenceOpen = !fenceOpen
-  }
+  const insideFence = codeFenceMask(lines)
 
   for (let i = lines.length - 1; i >= 0; i--) {
     if ((lines[i] ?? '').trim() !== '') continue

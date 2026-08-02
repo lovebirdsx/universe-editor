@@ -80,6 +80,41 @@ describe('parseMarkdown — block layer', () => {
     ])
   })
 
+  it('allows whitespace between the fence and its info string', () => {
+    expect(parseMarkdown('``` json\n"a": 1\n```')).toEqual<readonly MdNode[]>([
+      { type: 'code_fence', lang: 'json', code: '"a": 1', line: 0 },
+    ])
+  })
+
+  it('keeps only the first word of a multi-word info string as the language', () => {
+    expect(parseMarkdown('```ts title="a.ts"\nconst x = 1\n```')).toEqual<readonly MdNode[]>([
+      { type: 'code_fence', lang: 'ts', code: 'const x = 1', line: 0 },
+    ])
+  })
+
+  it('parses a tilde fence', () => {
+    expect(parseMarkdown('~~~py\nx = 1\n~~~')).toEqual<readonly MdNode[]>([
+      { type: 'code_fence', lang: 'py', code: 'x = 1', line: 0 },
+    ])
+  })
+
+  it('lets a longer fence wrap shorter fences verbatim', () => {
+    expect(parseMarkdown('````md\n```ts\nx\n```\n````')).toEqual<readonly MdNode[]>([
+      { type: 'code_fence', lang: 'md', code: '```ts\nx\n```', line: 0 },
+    ])
+  })
+
+  it('parses a fence indented by up to three spaces', () => {
+    expect(parseMarkdown('   ```ts\nconst x = 1\n   ```')).toEqual<readonly MdNode[]>([
+      { type: 'code_fence', lang: 'ts', code: 'const x = 1', line: 0 },
+    ])
+  })
+
+  it('does not treat inline backticks as a fence', () => {
+    const nodes = parseMarkdown('use ```code``` here')
+    expect(nodes[0]?.type).toBe('paragraph')
+  })
+
   it('parses unordered lists with -, *, +', () => {
     const md = '- one\n* two\n+ three'
     const nodes = parseMarkdown(md)

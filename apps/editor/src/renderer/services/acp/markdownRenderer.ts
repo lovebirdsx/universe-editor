@@ -145,22 +145,26 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
     // the markdown preview for scroll sync; ACP chat ignores it.
     const blockStart = i
 
-    // Fenced code block. We require the closing fence at column 0 to keep
-    // the parser cheap; if the agent emits a fence inside indented content
-    // we treat the rest as code until we see the closing line.
-    const fence = /^```(\S*)\s*$/.exec(line)
+    // Fenced code block. The opening fence carries the marker (3+ backticks or
+    // tildes); the block ends at the first line closing that same marker, or at
+    // EOF for a partial stream.
+    const fence = matchCodeFenceStart(line)
     if (fence) {
-      const lang = fence[1] ?? ''
       i++
       const codeLines: string[] = []
-      while (i < lines.length && !/^```\s*$/.test(lines[i] ?? '')) {
+      while (i < lines.length && !isCodeFenceEnd(lines[i] ?? '', fence.marker)) {
         codeLines.push(lines[i] ?? '')
         i++
       }
       // Consume the closing fence if present; an unterminated fence still
       // produces a code block ending at EOF (defensive against partial streams).
       if (i < lines.length) i++
-      out.push({ type: 'code_fence', lang, code: codeLines.join('\n'), line: blockStart })
+      out.push({
+        type: 'code_fence',
+        lang: fence.lang,
+        code: codeLines.join('\n'),
+        line: blockStart,
+      })
       continue
     }
 
@@ -307,7 +311,7 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
     while (i < lines.length) {
       const cur = lines[i] ?? ''
       if (cur.trim() === '') break
-      if (/^```/.test(cur)) break
+      if (matchCodeFenceStart(cur)) break
       if (/^#{1,6}\s/.test(cur)) break
       if (/^\s*>/.test(cur)) break
       if (/^\s*[-*+]\s+/.test(cur)) break
@@ -325,6 +329,48 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
 
 function isListItemStart(line: string): boolean {
   return /^\s*(?:[-*+]|\d+\.)\s+/.test(line)
+}
+
+const FENCE_START_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*(.*)$/
+const BACKTICK_FENCE_END_RE = /^ {0,3}(`{3,})[ \t]*$/
+const TILDE_FENCE_END_RE = /^ {0,3}(~{3,})[ \t]*$/
+
+/**
+ * Opening fence of a code block (CommonMark §4.5): up to 3 leading spaces, 3+
+ * backticks or tildes, then an optional info string whose first word is the
+ * language. The whitespace before the info string is allowed — ` ``` json `
+ * opens a json block just like ` ```json `. A backtick fence may not carry a
+ * backtick in its info string, which keeps inline `` `code` `` runs out.
+ */
+function matchCodeFenceStart(line: string): { marker: string; lang: string } | undefined {
+  const m = FENCE_START_RE.exec(line)
+  if (!m) return undefined
+  const marker = m[1] ?? ''
+  const info = (m[2] ?? '').trim()
+  if (marker.startsWith('`') && info.includes('`')) return undefined
+  return { marker, lang: info.split(/\s+/)[0] ?? '' }
+}
+
+/** Closing fence: same character as `marker`, at least as long, nothing else on the line. */
+function isCodeFenceEnd(line: string, marker: string): boolean {
+  const m = (marker.startsWith('`') ? BACKTICK_FENCE_END_RE : TILDE_FENCE_END_RE).exec(line)
+  return m !== null && (m[1] ?? '').length >= marker.length
+}
+
+/**
+ * Fence state of each line, for consumers that only need to know whether a line
+ * sits inside a code block (the incremental parser's split-point search).
+ */
+export function codeFenceMask(lines: readonly string[]): boolean[] {
+  const inside: boolean[] = new Array(lines.length)
+  let openMarker: string | undefined
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? ''
+    inside[i] = openMarker !== undefined
+    if (openMarker === undefined) openMarker = matchCodeFenceStart(line)?.marker
+    else if (isCodeFenceEnd(line, openMarker)) openMarker = undefined
+  }
+  return inside
 }
 
 /**
@@ -358,7 +404,7 @@ function indentOf(line: string): number {
 
 function isTopLevelBlockStart(line: string, nextLine: string): boolean {
   return (
-    /^```/.test(line) ||
+    matchCodeFenceStart(line) !== undefined ||
     /^#{1,6}\s/.test(line) ||
     /^\s*>/.test(line) ||
     /^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line) ||
