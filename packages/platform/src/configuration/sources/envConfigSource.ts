@@ -1,24 +1,29 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Environment-variable source. Reads any env key declared on the item. `string[]`
- *  items split a single env value on path.delimiter (`;` on win32, `:` elsewhere) —
- *  Windows paths contain `:` so a hardcoded `:` separator would corrupt them.
+ *  items split a single env value on the injected delimiter (`;` on win32, `:`
+ *  elsewhere) — Windows paths contain `:` so a hardcoded `:` separator would
+ *  corrupt them. The delimiter is injected (not read from `node:path`) because
+ *  this module also ships in the renderer bundle, where node builtins are
+ *  externalized and any property access throws at module evaluation.
  *--------------------------------------------------------------------------------------------*/
 
-import { delimiter } from 'node:path'
 import type { ConfigItem, IConfigSource, RawConfigValue } from './configSource.js'
 
 export class EnvConfigSource implements IConfigSource {
   readonly name = 'env'
 
-  constructor(private readonly _env: Readonly<Record<string, string | undefined>>) {}
+  constructor(
+    private readonly _env: Readonly<Record<string, string | undefined>>,
+    private readonly _delimiter: string,
+  ) {}
 
   getRawValue(item: ConfigItem): RawConfigValue {
     const key = item.env
     if (!key) return undefined
     const value = this._env[key]
     if (item.type === 'string[]' && value !== undefined) {
-      const parts = value.split(delimiter).filter((p) => p !== '')
+      const parts = value.split(this._delimiter).filter((p) => p !== '')
       return parts.length > 0 ? parts : undefined
     }
     return value

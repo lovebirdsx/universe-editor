@@ -9,7 +9,7 @@
 
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, delimiter } from 'node:path'
 import { parse } from 'jsonc-parser'
 import {
   CliConfigSource,
@@ -73,7 +73,7 @@ export class EnvironmentMainService {
     this._homeDir = opts.homeDir ?? homedir()
     this._resolver = new ConfigResolver([
       new CliConfigSource(opts.argv),
-      new EnvConfigSource(opts.env),
+      new EnvConfigSource(opts.env, delimiter),
     ])
   }
 
