@@ -70,6 +70,7 @@ import { StickyUserMessageBar } from './StickyUserMessageBar.js'
 import { SideTasksBar, SideTaskQuoteBar } from './SideTasksBar.js'
 import { PromptInput } from './PromptInput.js'
 import { ForeignSessionFooter } from './ForeignSessionPreview.js'
+import { ForkTipFooter } from './ForkTipFooter.js'
 import { ToolCallCard } from './ToolCallCard.js'
 import { CompactionCard } from './CompactionCard.js'
 import { ResurrectionCard } from './ResurrectionCard.js'
@@ -1371,6 +1372,7 @@ function ChatScroll({
             })}
           </ol>
         )}
+        {hasTimelineContent && !readOnly && <ForkTipFooter session={session} />}
         {menu && (
           <AgentChatContextMenu
             state={menu}

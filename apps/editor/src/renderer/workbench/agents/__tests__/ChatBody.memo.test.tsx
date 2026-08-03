@@ -121,6 +121,7 @@ function makeSession(
     accumulatedRunningMs: observableValue('t.arm', 0),
     runningStartedAt: observableValue<number | undefined>('t.rsa', undefined),
     imageSupported: observableValue<boolean>('t.imageSupported', false),
+    forkSupported: observableValue<boolean>('t.forkSupported', false),
     cycleCollapseMode: () => {},
   } as unknown as IAcpSession
   return { session, timeline }

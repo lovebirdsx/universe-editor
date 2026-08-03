@@ -29,6 +29,7 @@ interface FakeSessionOpts {
   readonly forkSupported?: boolean
   readonly messageText?: string
   readonly messageId?: string
+  readonly status?: 'idle' | 'running'
 }
 
 function fakeSession(id: string, opts: FakeSessionOpts = {}): IAcpSession {
@@ -38,6 +39,8 @@ function fakeSession(id: string, opts: FakeSessionOpts = {}): IAcpSession {
     agentId: opts.rewindSupported ? 'claude-code' : 'fake',
     rewindSupported: observableValue<boolean>('t.rewind', opts.rewindSupported ?? false),
     forkSupported: observableValue<boolean>('t.fork', opts.forkSupported ?? false),
+    status: observableValue<string>('t.status', opts.status ?? 'idle'),
+    sessionIdOnAgent: observableValue<string | undefined>('t.sid', undefined),
     messages: observableValue('t.messages', [
       {
         id: 'm1',
@@ -57,6 +60,7 @@ interface Harness {
     rewindSession: ReturnType<typeof vi.fn>
     forkSession: ReturnType<typeof vi.fn>
     setActive: ReturnType<typeof vi.fn>
+    activeSessionId: ReturnType<typeof observableValue<string | undefined>>
   }
   readonly dialog: { confirm: ReturnType<typeof vi.fn> }
   readonly notify: ReturnType<typeof vi.fn>
@@ -71,6 +75,7 @@ function makeHarness(overrides: Partial<Harness['service']> = {}): Harness {
     rewindSession: vi.fn().mockResolvedValue({ canRewind: true } satisfies RewindFilesResult),
     forkSession: vi.fn(),
     setActive: vi.fn(),
+    activeSessionId: observableValue<string | undefined>('t.activeId', undefined),
     ...overrides,
   }
   const dialog = { confirm: vi.fn().mockResolvedValue({ confirmed: true }) }
@@ -224,6 +229,7 @@ describe('Rewind / Fork agent session commands', () => {
   it('fork creates a new session and opens it as an editor', async () => {
     disposables.push(registerAction2(ForkAgentSessionAction))
     const h = makeHarness()
+    h.service.getById.mockReturnValue(fakeSession('s1', { forkSupported: true }))
     h.service.forkSession.mockResolvedValue(fakeSession('s2'))
 
     await h.run(ForkAgentSessionAction.ID, { sessionId: 's1', messageId: 'mid-1' })
@@ -232,9 +238,55 @@ describe('Rewind / Fork agent session commands', () => {
     expect(h.openEditor).toHaveBeenCalledTimes(1)
   })
 
+  it('fork without a messageId forks from the session tip', async () => {
+    disposables.push(registerAction2(ForkAgentSessionAction))
+    const h = makeHarness()
+    h.service.getById.mockReturnValue(fakeSession('s1', { forkSupported: true }))
+    h.service.forkSession.mockResolvedValue(fakeSession('s2'))
+
+    await h.run(ForkAgentSessionAction.ID, { sessionId: 's1' })
+
+    expect(h.service.forkSession).toHaveBeenCalledWith('s1', undefined)
+    expect(h.openEditor).toHaveBeenCalledTimes(1)
+  })
+
+  it('fork from the command palette targets the active session', async () => {
+    disposables.push(registerAction2(ForkAgentSessionAction))
+    const h = makeHarness()
+    h.service.getById.mockReturnValue(fakeSession('s1', { forkSupported: true }))
+    h.service.forkSession.mockResolvedValue(fakeSession('s2'))
+    h.service.activeSessionId.set('s1', undefined)
+
+    await h.run(ForkAgentSessionAction.ID)
+
+    expect(h.service.forkSession).toHaveBeenCalledWith('s1', undefined)
+  })
+
+  it('fork warns and stops while the session is running', async () => {
+    disposables.push(registerAction2(ForkAgentSessionAction))
+    const h = makeHarness()
+    h.service.getById.mockReturnValue(fakeSession('s1', { forkSupported: true, status: 'running' }))
+
+    await h.run(ForkAgentSessionAction.ID, { sessionId: 's1' })
+
+    expect(h.service.forkSession).not.toHaveBeenCalled()
+    expect(h.notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('fork from the palette warns when there is no forkable active session', async () => {
+    disposables.push(registerAction2(ForkAgentSessionAction))
+    const h = makeHarness()
+
+    await h.run(ForkAgentSessionAction.ID)
+
+    expect(h.service.forkSession).not.toHaveBeenCalled()
+    expect(h.notify).toHaveBeenCalledTimes(1)
+  })
+
   it('fork surfaces a friendly notice for a foreign worktree', async () => {
     disposables.push(registerAction2(ForkAgentSessionAction))
     const h = makeHarness()
+    h.service.getById.mockReturnValue(fakeSession('s1', { forkSupported: true }))
     h.service.forkSession.mockRejectedValue(new AcpForeignWorktreeError('s1', '/a', '/b'))
 
     await h.run(ForkAgentSessionAction.ID, { sessionId: 's1', messageId: 'mid-1' })
@@ -243,16 +295,13 @@ describe('Rewind / Fork agent session commands', () => {
     expect(h.notify).toHaveBeenCalledTimes(1)
   })
 
-  it('both commands ignore calls without a messageId', async () => {
+  it('rewind ignores calls without a messageId', async () => {
     disposables.push(registerAction2(RewindAgentSessionAction))
-    disposables.push(registerAction2(ForkAgentSessionAction))
     const h = makeHarness()
     h.service.getById.mockReturnValue(fakeSession('s1', { rewindSupported: true }))
 
     await h.run(RewindAgentSessionAction.ID, { sessionId: 's1' })
-    await h.run(ForkAgentSessionAction.ID, { sessionId: 's1' })
 
     expect(h.service.rewindSession).not.toHaveBeenCalled()
-    expect(h.service.forkSession).not.toHaveBeenCalled()
   })
 })

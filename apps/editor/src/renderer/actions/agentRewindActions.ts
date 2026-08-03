@@ -1,13 +1,18 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Rewind / Fork commands for an agent session, invoked from the hover actions on
- *  a user message (UserMessageItem passes { sessionId, messageId }):
+ *  Rewind / Fork commands for an agent session. Rewind is invoked from the hover
+ *  actions on a user message (UserMessageItem passes { sessionId, messageId });
+ *  fork additionally from the timeline-end ForkTipFooter ({ sessionId } only) and
+ *  the command palette (no arg → the active session, forked from the tip):
  *   - Rewind (回退): truncate the conversation back to that user turn AND roll the
  *     agent-modified files back to their on-disk state at that point, then backfill
  *     the turn's text into the prompt input for edit-and-retry. Destructive, so it
  *     confirms first, previewing the file changes via a dry run.
  *   - Fork (分叉): create a NEW independent session seeded with only the history
- *     before that turn; the original session is left untouched.
+ *     before that turn; the original session is left untouched. Invoked with a
+ *     messageId it forks before that turn; invoked without one (timeline-end
+ *     footer, or a bare command-palette call targeting the active session) it
+ *     forks the whole conversation from the tip.
  *
  *  Both are gated on the source session's capabilities (rewind → claude-code only,
  *  fork → the agent advertising sessionCapabilities.fork); the buttons already
@@ -51,6 +56,18 @@ function readArg(
   if (typeof sessionId !== 'string' || sessionId.length === 0) return undefined
   if (typeof messageId !== 'string' || messageId.length === 0) return undefined
   return { sessionId, messageId }
+}
+
+// Fork tolerates a missing messageId: omitting it forks from the session TIP
+// (the whole conversation) — the timeline-end entry point relies on this.
+function readForkArg(arg: RewindForkArg | undefined): { sessionId?: string; messageId?: string } {
+  const sessionId = typeof arg?.sessionId === 'string' ? arg.sessionId : undefined
+  const messageId = typeof arg?.messageId === 'string' ? arg.messageId : undefined
+  if (sessionId === undefined || sessionId.length === 0) return {}
+  return {
+    sessionId,
+    ...(messageId !== undefined && messageId.length > 0 ? { messageId } : {}),
+  }
 }
 
 export class RewindAgentSessionAction extends Action2 {
@@ -154,15 +171,13 @@ export class ForkAgentSessionAction extends Action2 {
   constructor() {
     super({
       id: ForkAgentSessionAction.ID,
-      title: localize2('action.agent.forkSession', 'Fork from Here'),
+      title: localize2('action.agent.forkSession', 'Fork Session'),
       category: CATEGORY,
-      f1: false,
+      f1: true,
     })
   }
 
   override async run(accessor: ServicesAccessor, arg?: RewindForkArg): Promise<void> {
-    const target = readArg(arg)
-    if (target === undefined) return
     const sessions = accessor.get(IAcpSessionService)
     const notification = accessor.get(INotificationService)
     const location = accessor.get(IAcpChatLocationService)
@@ -171,9 +186,40 @@ export class ForkAgentSessionAction extends Action2 {
     const layout = accessor.get(ILayoutService)
     const views = accessor.get(IViewsService)
 
+    // The arg carries an explicit target (per-message hover button, timeline-end
+    // footer); a bare invocation (command palette) forks the active session.
+    const target = readForkArg(arg)
+    const sessionId = target.sessionId ?? sessions.activeSessionId.get()
+    const session = sessionId !== undefined ? sessions.getById(sessionId) : undefined
+    if (!session || !session.forkSupported.get()) {
+      // Arg-driven callers are already capability-gated by the UI; only a bare
+      // palette invocation can land here, so explain the no-op.
+      if (target.sessionId === undefined) {
+        notification.notify({
+          severity: Severity.Warning,
+          message: localize(
+            'agent.fork.unsupported',
+            'The active session cannot be forked (no session, or the agent does not support it).',
+          ),
+        })
+      }
+      return
+    }
+    if (session.status.get() === 'running') {
+      // Forking the tip mid-turn would capture a half-written turn.
+      notification.notify({
+        severity: Severity.Warning,
+        message: localize(
+          'agent.fork.running',
+          'Wait for the current turn to finish before forking.',
+        ),
+      })
+      return
+    }
+
     let forked
     try {
-      forked = await sessions.forkSession(target.sessionId, target.messageId)
+      forked = await sessions.forkSession(session.id, target.messageId)
     } catch (err) {
       const message =
         err instanceof AcpForeignWorktreeError
