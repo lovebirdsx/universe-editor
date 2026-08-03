@@ -442,6 +442,38 @@
   cursor: pointer;
 }
 
+.codeBlockWrap {
+  position: relative;
+}
+
+/* Hover copy button for code blocks. Hidden until the block is hovered or the
+   button itself is focused (keyboard reachability). */
+.codeBlockCopy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  background: var(--vscode-textCodeBlock-background, #1a1a1a);
+  color: var(--vscode-foreground, #ccc);
+  border: 1px solid var(--vscode-workbench-border, #444);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.codeBlockWrap:hover .codeBlockCopy,
+.codeBlockCopy:focus-visible {
+  opacity: 1;
+}
+
+.codeBlockCopy:hover {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
 .codeBlockLink:hover {
   text-decoration: underline;
 }

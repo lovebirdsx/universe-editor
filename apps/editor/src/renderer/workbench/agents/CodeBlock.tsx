@@ -11,7 +11,9 @@
  *  so a path in a code block opens the file just like one in prose.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Check, Copy } from 'lucide-react'
+import { localize } from '@universe-editor/platform'
 import { MonacoLoader } from '../editor/monaco/MonacoLoader.js'
 import { resolveLanguageId } from '../editor/monaco/languageId.js'
 import {
@@ -40,7 +42,26 @@ interface CodeBlockProps {
 
 export function CodeBlock({ code, lang, line, onOpenFilePath }: CodeBlockProps) {
   const [html, setHtml] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
   const codeRef = useRef<HTMLElement>(null)
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (copyTimer.current) clearTimeout(copyTimer.current)
+    },
+    [],
+  )
+
+  const onCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(code)
+      setCopied(true)
+      if (copyTimer.current) clearTimeout(copyTimer.current)
+      copyTimer.current = setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // Best-effort: leave the button in its idle state on failure.
+    }
+  }, [code])
 
   useEffect(() => {
     if (!lang) {
@@ -85,13 +106,33 @@ export function CodeBlock({ code, lang, line, onOpenFilePath }: CodeBlockProps) 
   // text is escaped first (Monaco already escapes its colorized output).
   const innerHtml = html === null ? escapeHtmlText(code) : html
 
+  // The wrapper owns the hover copy button: it can't live inside <pre> because
+  // `overflow-x: auto` would clip it and scroll it away with long lines.
   return (
-    <pre
-      className={styles['codeBlock']}
-      data-lang={lang || 'text'}
-      {...(line !== undefined ? { 'data-line': line } : {})}
-    >
-      <code ref={codeRef} onClick={onClick} dangerouslySetInnerHTML={{ __html: innerHtml }} />
-    </pre>
+    <div className={styles['codeBlockWrap']}>
+      <pre
+        className={styles['codeBlock']}
+        data-lang={lang || 'text'}
+        {...(line !== undefined ? { 'data-line': line } : {})}
+      >
+        <code ref={codeRef} onClick={onClick} dangerouslySetInnerHTML={{ __html: innerHtml }} />
+      </pre>
+      <button
+        type="button"
+        className={styles['codeBlockCopy']}
+        title={
+          copied ? localize('codeBlock.copied', 'Copied') : localize('codeBlock.copy', 'Copy code')
+        }
+        aria-label={localize('codeBlock.copy', 'Copy code')}
+        onClick={onCopy}
+        data-testid="code-block-copy"
+      >
+        {copied ? (
+          <Check size={14} strokeWidth={2} aria-hidden="true" />
+        ) : (
+          <Copy size={14} strokeWidth={2} aria-hidden="true" />
+        )}
+      </button>
+    </div>
   )
 }
