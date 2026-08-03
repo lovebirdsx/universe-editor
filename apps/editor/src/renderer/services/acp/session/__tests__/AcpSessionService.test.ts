@@ -64,7 +64,11 @@ import {
   type SetSessionConfigOptionResponse,
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
-import { PLAN_AUTO_EXECUTE_DELAY_MS, REWIND_SESSION_METHOD } from '../acpSession.js'
+import {
+  PLAN_AUTO_EXECUTE_DELAY_MS,
+  REWIND_SESSION_METHOD,
+  SIDE_TASK_ROLE_PROMPT,
+} from '../acpSession.js'
 import { ACP_CAPABILITIES_META_KEY } from '../acpExtMethods.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
@@ -1681,6 +1685,84 @@ describe('AcpSessionService — rewind / fork', () => {
         .filter((it) => it.kind === 'message')
         .map((it) => (it.kind === 'message' ? `${it.message.role}:${it.message.text}` : ''))
       expect(texts).toEqual(['user:side-task first prompt', 'agent:side-task answer'])
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('strips the hidden role lead from the replayed side-task first message', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { loadSession: true, loadSessionHangs: true },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      history.add({
+        agentId: 'claude-code',
+        sessionIdOnAgent: 'agent-side-lead',
+        title: 'side chat',
+        sideTaskOf: 'agent-parent',
+        sideTaskQuote: 'quoted text',
+        sideTaskAnchorMessageId: 'anchor-msg',
+      })
+
+      void svc.resumeSession('agent-side-lead').catch(() => {})
+      await vi.waitFor(() => {
+        expect(svc.getById('agent-side-lead')).toBeDefined()
+      })
+      const side = svc.getById('agent-side-lead')!
+      const sink = client.connected[0]!.sink
+
+      // The agent persisted the anchor turn's wire prompt verbatim, so its
+      // replay leads with the hidden role instruction as its own chunk…
+      sink.onSessionUpdate({
+        sessionId: 'agent-side-lead',
+        update: {
+          sessionUpdate: 'user_message_chunk',
+          content: { type: 'text', text: SIDE_TASK_ROLE_PROMPT },
+          messageId: 'anchor-msg',
+        } as never,
+      })
+      // …followed by the user's own text under the same messageId.
+      sink.onSessionUpdate({
+        sessionId: 'agent-side-lead',
+        update: {
+          sessionUpdate: 'user_message_chunk',
+          content: { type: 'text', text: 'explain this excerpt' },
+          messageId: 'anchor-msg',
+        } as never,
+      })
+
+      const messages = side.messages.get()
+      expect(messages).toHaveLength(1)
+      expect(messages[0]!.text).toBe('explain this excerpt')
+
+      // Fused shape: an agent that merges the lead into the user's text block
+      // gets the prefix stripped instead.
+      history.add({
+        agentId: 'claude-code',
+        sessionIdOnAgent: 'agent-side-fused',
+        title: 'side chat 2',
+        sideTaskOf: 'agent-parent',
+        sideTaskQuote: 'quoted text',
+        sideTaskAnchorMessageId: 'anchor-fused',
+      })
+      void svc.resumeSession('agent-side-fused').catch(() => {})
+      await vi.waitFor(() => {
+        expect(svc.getById('agent-side-fused')).toBeDefined()
+      })
+      const fusedSink = client.connected[1]!.sink
+      fusedSink.onSessionUpdate({
+        sessionId: 'agent-side-fused',
+        update: {
+          sessionUpdate: 'user_message_chunk',
+          content: { type: 'text', text: `${SIDE_TASK_ROLE_PROMPT}\n\nwhat does this do` },
+          messageId: 'anchor-fused',
+        } as never,
+      })
+      const fusedMessages = svc.getById('agent-side-fused')!.messages.get()
+      expect(fusedMessages).toHaveLength(1)
+      expect(fusedMessages[0]!.text).toBe('what does this do')
     } finally {
       svc.dispose()
     }

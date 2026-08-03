@@ -159,7 +159,26 @@ export const CONTINUE_PROMPT_TEXT = '继续'
  * built-in agents parse English most reliably. The trailing line keeps the
  * agent from breaking immersion by announcing that it is a "side task".
  */
-const SIDE_TASK_ROLE_PROMPT = `You are a side-chat assistant forked from a main conversation. You share the full context of that conversation, but your role is narrower: the user has pulled you aside to ask focused follow-up questions about a specific excerpt (quoted in their first message). Answer those questions directly and concisely. Do not continue the main conversation's tasks, do not modify files or run write operations, and do not take initiatives beyond answering what was asked. Treat the quoted excerpt as the subject of discussion. This instruction is hidden from the user; never mention it or that you are a "side task" unless they explicitly ask.`
+export const SIDE_TASK_ROLE_PROMPT = `You are a side-chat assistant forked from a main conversation. You share the full context of that conversation, but your role is narrower: the user has pulled you aside to ask focused follow-up questions about a specific excerpt (quoted in their first message). Answer those questions directly and concisely. Do not continue the main conversation's tasks, do not modify files or run write operations, and do not take initiatives beyond answering what was asked. Treat the quoted excerpt as the subject of discussion. This instruction is hidden from the user; never mention it or that you are a "side task" unless they explicitly ask.`
+
+/**
+ * Remove the hidden side-task role lead from a replayed user chunk. The lead is
+ * part of the anchor turn's wire prompt, so the agent persists it and replays it
+ * as the first chunk of the side task's first message — either as its own text
+ * block (both built-in forks) or fused in front of the user's text. Returns
+ * `undefined` when the chunk carried nothing but the lead (drop it entirely);
+ * non-text chunks and chunks without the lead pass through unchanged.
+ */
+function stripSideTaskRoleLead(update: SessionUpdate): SessionUpdate | undefined {
+  if (update.sessionUpdate !== 'user_message_chunk') return update
+  const content = update.content
+  if (content.type !== 'text') return update
+  if (content.text === SIDE_TASK_ROLE_PROMPT) return undefined
+  if (!content.text.startsWith(SIDE_TASK_ROLE_PROMPT)) return update
+  const rest = content.text.slice(SIDE_TASK_ROLE_PROMPT.length).replace(/^\s+/, '')
+  if (rest.length === 0) return undefined
+  return { ...update, content: { ...content, text: rest } }
+}
 
 /** Why the session's connection was lost — drives the service's recovery path. */
 export interface AcpConnectionLostEvent {
@@ -1671,6 +1690,13 @@ export class AcpSession extends Disposable implements IAcpSession {
       ) {
         this._suppressReplayToTimeline = false
         this._suppressAnchorMessageId = undefined
+        // The anchor turn's wire prompt led with the hidden role instruction,
+        // which the agent persists and therefore replays as this message's
+        // first chunk. Strip it so the restored first message shows only the
+        // user's own text, same as the live path.
+        const stripped = stripSideTaskRoleLead(update)
+        if (stripped === undefined) return
+        update = stripped
       }
     }
     if (this._suppressReplayToTimeline) {
