@@ -3222,6 +3222,36 @@ describe('AcpSessionService — AI session title push-back', () => {
       svc.dispose()
     }
   })
+
+  it('feeds the side-task quote as context to the title generation', async () => {
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-side-ctx' },
+    })
+    let seen: Parameters<IAcpSessionTitleService['generateTitle']>[2] | undefined
+    const recording: IAcpSessionTitleService = {
+      _serviceBrand: undefined,
+      generateTitle: (_user, _agent, options) => {
+        seen = options
+        return Promise.resolve('Side Title')
+      },
+    }
+    const { svc } = makeServiceWithTitle(client, recording)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      await new Promise((r) => setTimeout(r, 0))
+      // A regular session has no quote — the context must stay empty.
+      expect(seen?.context?.quotedText).toBeUndefined()
+
+      const side = await svc.forkSideTask(s.id, { text: 'const x = scrollTop', label: 'quote' })
+      await side.sendPrompt('why does this jump?')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(seen?.context?.quotedText).toBe('const x = scrollTop')
+    } finally {
+      svc.dispose()
+    }
+  })
 })
 
 describe('AcpSessionService — first prompt history mirror', () => {

@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { sanitizeTitle } from '../acpSessionTitleService.js'
+import { buildTitlePrompt, sanitizeTitle } from '../acpSessionTitleService.js'
 
 describe('sanitizeTitle', () => {
   it('trims surrounding quotes and backticks', () => {
@@ -41,5 +41,26 @@ describe('sanitizeTitle', () => {
 
   it('returns an empty string for blank input', () => {
     expect(sanitizeTitle('   \n  ')).toBe('')
+  })
+})
+
+describe('buildTitlePrompt', () => {
+  it('omits the excerpt section when no quote is provided', () => {
+    const prompt = buildTitlePrompt('how do I fix login?', '')
+    expect(prompt).toBe('User message:\nhow do I fix login?\n\nTitle:')
+  })
+
+  it('includes the assistant reply when present', () => {
+    const prompt = buildTitlePrompt('how do I fix login?', 'check the auth token')
+    expect(prompt).toBe(
+      'User message:\nhow do I fix login?\n\nAssistant reply:\ncheck the auth token\n\nTitle:',
+    )
+  })
+
+  it('leads with the excerpt when a side-task quote is provided', () => {
+    const prompt = buildTitlePrompt('why does this jump?', '', 'const x = scrollTop')
+    expect(prompt).toBe(
+      'Excerpt the user pulled aside to discuss:\nconst x = scrollTop\n\nUser message:\nwhy does this jump?\n\nTitle:',
+    )
   })
 })

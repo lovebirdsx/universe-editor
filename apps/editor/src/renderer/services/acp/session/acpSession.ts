@@ -1617,7 +1617,15 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (source.length === 0) return
     this._titleGenerated = true
     const agentText = this._messages.find((m) => m.role === 'agent')?.text ?? ''
-    const title = await this._titleService.generateTitle(source, agentText)
+    // Side tasks: the quote the chat was forked from is the actual subject — a
+    // title generated from the bare question ("why is this wrong?") misses what
+    // "this" is, so feed the excerpt along as context.
+    const sid = this.sessionIdOnAgent.get()
+    const row = sid !== undefined ? this._history.get(sid) : undefined
+    const quotedText = row?.sideTaskOf !== undefined ? row.sideTaskQuote : undefined
+    const title = await this._titleService.generateTitle(source, agentText, {
+      ...(quotedText !== undefined ? { context: { quotedText } } : {}),
+    })
     if (title === undefined) {
       // No model configured / unavailable, or an unusable response — let the
       // next prompt retry instead of permanently losing the AI title.

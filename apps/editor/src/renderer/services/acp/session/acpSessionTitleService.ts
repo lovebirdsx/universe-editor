@@ -22,6 +22,16 @@ import {
   type ILogger,
 } from '@universe-editor/platform'
 
+/** Extra conversation context a generated title should reflect. */
+export interface AcpSessionTitleContext {
+  /**
+   * Excerpt the user pulled aside into a side task — the actual subject of the
+   * discussion. The bare question alone ("why is this wrong?") doesn't say what
+   * "this" is, so the excerpt grounds the title.
+   */
+  readonly quotedText?: string
+}
+
 export interface IAcpSessionTitleService {
   readonly _serviceBrand: undefined
   /**
@@ -32,7 +42,7 @@ export interface IAcpSessionTitleService {
   generateTitle(
     userText: string,
     agentText: string,
-    token?: CancellationToken,
+    options?: { token?: CancellationToken; context?: AcpSessionTitleContext },
   ): Promise<string | undefined>
 }
 
@@ -49,6 +59,7 @@ const SYSTEM_PROMPT = [
   '- At most 6 words. No surrounding quotes, no trailing punctuation.',
   '- Use the same language as the user message.',
   '- Capture the core task/topic, not pleasantries.',
+  '- If an excerpt is provided, the user is asking about that excerpt — capture what they want to know about it.',
 ].join('\n')
 
 export class AcpSessionTitleService implements IAcpSessionTitleService {
@@ -69,7 +80,7 @@ export class AcpSessionTitleService implements IAcpSessionTitleService {
   async generateTitle(
     userText: string,
     agentText: string,
-    token?: CancellationToken,
+    options?: { token?: CancellationToken; context?: AcpSessionTitleContext },
   ): Promise<string | undefined> {
     const modelId = await this._resolveModelId()
     if (!modelId) return undefined
@@ -77,15 +88,16 @@ export class AcpSessionTitleService implements IAcpSessionTitleService {
     const user = clip(userText, MAX_INPUT_CHARS)
     if (user.length === 0) return undefined
     const agent = clip(agentText, MAX_INPUT_CHARS)
+    const quote = clip(options?.context?.quotedText ?? '', MAX_INPUT_CHARS)
 
-    const cts = new CancellationTokenSource(token)
+    const cts = new CancellationTokenSource(options?.token)
     try {
       const response = this._aiModel.sendRequest(
         [
           { role: AiMessageRole.System, content: [{ type: 'text', value: SYSTEM_PROMPT }] },
           {
             role: AiMessageRole.User,
-            content: [{ type: 'text', value: buildUserPrompt(user, agent) }],
+            content: [{ type: 'text', value: buildTitlePrompt(user, agent, quote) }],
           },
         ],
         { modelId, maxTokens: 32, temperature: 0.2, purpose: 'session-title' },
@@ -128,8 +140,13 @@ export class AcpSessionTitleService implements IAcpSessionTitleService {
   }
 }
 
-function buildUserPrompt(userText: string, agentText: string): string {
-  const parts = [`User message:\n${userText}`]
+/** Exported for tests. `quotedText` (side-task excerpt) leads when present. */
+export function buildTitlePrompt(userText: string, agentText: string, quotedText = ''): string {
+  const parts: string[] = []
+  if (quotedText.length > 0) {
+    parts.push(`Excerpt the user pulled aside to discuss:\n${quotedText}`)
+  }
+  parts.push(`User message:\n${userText}`)
   if (agentText.length > 0) parts.push(`Assistant reply:\n${agentText}`)
   parts.push('Title:')
   return parts.join('\n\n')
