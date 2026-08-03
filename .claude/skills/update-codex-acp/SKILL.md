@@ -141,6 +141,13 @@ git push -u origin chore/update-codex-acp
   3. **上游注册方式演进撞我方表驱动**：上游把 steering/goal_control 两个新 ext-method 的 parser（`sessionSteerParamsParser`/`goalControlParamsParser`）定义在 `index.ts` 并手写 `.onRequest` 注册——按案例 2 套路搬进 `AcpExtensions.ts` 并加进 `EXTENSION_METHOD_REGISTRATIONS` 表，`index.ts` 里删掉（连带 `import {z} from "zod"` 变成多余）。
 - **锚点**：`src/AcpExtensions.ts`（类型 union / parser / 注册表）、`src/CodexAcpClient.ts`（`forkSession` 的 `collaborationMode`）、`src/__tests__/CodexACPAgent/auth-error-events.test.ts`（`{result: error}` 解构）。
 
+### 案例 6：上游反向删除我方依赖的行为（v1.1.9 合并实战：#358 删 notifyConversationInterrupted）
+- **现象**：rebase 到 v1.1.9 时，我方「修复取消未开始 turn 时缺少中断通知」提交在 `src/CodexAcpServer.ts` 出 3 处冲突。根因是上游 #358「Stop emitting "Conversation interrupted" message」**故意删掉**了 `notifyConversationInterrupted`（定义 + 3 处调用点），而我方提交反其道行之——把通知**收拢进** `cancelledPromptResponse` 让每次 cancel 都发（editor 依赖它渲染中断态，否则只显示 `[cancelled]` 而 agent 还在跑）。
+- **根因**：同一行为双方意图直接相反（上游 JetBrains 客户端自己渲染中断 UI；我方 renderer 依赖该通知）。属「第一原则」场景：我方自定义行为不能被上游同名演进覆盖。
+- **解法**：**保留我方语义**，三层处理——① 调用点冲突取我方 `return await this.cancelledPromptResponse(...)`（含上游新增的 `await eventHandler.flushPendingPlanUpdates()` 行，两者都要）；② 方法定义冲突保留上游新增的 `requestPlanImplementationPermission` + 我方 async 版 `cancelledPromptResponse`；③ 上游删除 `notifyConversationInterrupted` 定义是**自动合入**的（不在冲突块里！），须手动补回该方法并加注释说明为何保留。另外上游 #351 plan review 新流程引入的 3 处 `return this.cancelledPromptResponse(...)`（无 await）要统一改 `return await`，保证中断通知先于响应发出。
+- **教训**：上游「删除函数」若与我方「调用该函数」不落在同一 hunk，删除会静默生效——解完冲突后务必 `grep` 我方提交引入的每个符号，确认其定义仍存在于最终文件。
+- **锚点**：`src/CodexAcpServer.ts`（`cancelledPromptResponse`、`notifyConversationInterrupted`、`requestPlanImplementationPermission`）、上游提交 `efa3789`、我方提交「修复取消未开始 turn 时缺少中断通知」。
+
 ## 检查清单要点
 1. 调查阶段全程只读（`git ls-remote` / `gh api` / 只读 git），别在 plan mode 改 submodule。
 2. **真上游是 `agentclientprotocol/codex-acp`，不是已废弃的 `zed-industries/codex-acp`**。设错会出现 merge-base 为空 / 代码倒退的假象；用 `merge-base 命中基线` + `ahead/behind 与我方提交数吻合` 校验。
