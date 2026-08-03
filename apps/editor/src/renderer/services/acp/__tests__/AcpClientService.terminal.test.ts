@@ -34,6 +34,7 @@ import type {
 } from '@universe-editor/platform'
 import { AcpClientService } from '../acpClientService.js'
 import type { IAcpClientNotificationSink } from '../acpClientService.js'
+import { AcpSessionCreateProfiler } from '../acpSessionCreateProfiler.js'
 import { AcpPathPolicy } from '../acpPathPolicy.js'
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import type { IClaudeBinaryService } from '../../../../shared/ipc/claudeBinaryService.js'
@@ -672,5 +673,42 @@ describe('AcpClientService — connect handshake timeout', () => {
       /timed out/,
     )
     expect(h.transport.starts()).toBe(2)
+  })
+})
+
+describe('AcpClientService — connect profile steps', () => {
+  let h: Harness
+  afterEach(() => {
+    h.transport.dispose()
+  })
+
+  it('records binary/spawn/initialize segments on a fresh spawn and marks pool hits', async () => {
+    h = makeService()
+    const profiler = new AcpSessionCreateProfiler()
+
+    const first = profiler.begin('fake')
+    const lease = await h.svc.connect('fake', { cwd: CWD, profile: first })
+    const firstProfile = first.end()
+    expect(firstProfile.pooledConnection).toBe(false)
+    expect(firstProfile.steps.map((s) => s.name)).toEqual([
+      'willResolveBinary',
+      'didResolveBinary',
+      'willSpawn',
+      'didSpawn',
+      'willInitialize',
+      'didInitialize',
+    ])
+
+    // Second connect for the same (agentId, cwd) reuses the pooled entry: the
+    // binary/spawn segments are skipped and the profile is tagged as pooled.
+    const second = profiler.begin('fake')
+    await h.svc.connect('fake', { cwd: CWD, profile: second })
+    const secondProfile = second.end()
+    expect(secondProfile.pooledConnection).toBe(true)
+    expect(secondProfile.steps.map((s) => s.name)).toEqual(['willInitialize', 'didInitialize'])
+    expect(h.transport.starts()).toBe(1)
+
+    lease.dispose()
+    h.svc.drainAll()
   })
 })

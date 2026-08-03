@@ -277,6 +277,10 @@ interface StubAgentOptions {
   forkedSessionId?: string
   /** Result returned from extMethod(REWIND_SESSION_METHOD). */
   rewindResult?: Record<string, unknown>
+  /** Extra delay before initialize() resolves — exercises slow-handshake paths. */
+  initializeDelayMs?: number
+  /** Extra delay before newSession() resolves — exercises slow session/new. */
+  newSessionDelayMs?: number
 }
 
 class StubAgent implements Agent {
@@ -302,7 +306,7 @@ class StubAgent implements Agent {
   initialize(params: InitializeRequest): Promise<InitializeResponse> {
     this.initializeCalls.push(params)
     if (this._opts.initializeHangs) return new Promise<never>(() => {})
-    return Promise.resolve({
+    const response = {
       protocolVersion: 1,
       agentCapabilities: {
         loadSession: (this._opts.loadSession ?? false) || (this._opts.loadSessionHangs ?? false),
@@ -322,17 +326,27 @@ class StubAgent implements Agent {
           : {}),
       },
       authMethods: [],
-    } as unknown as InitializeResponse)
+    } as unknown as InitializeResponse
+    const delay = this._opts.initializeDelayMs
+    if (delay !== undefined) {
+      return new Promise((resolve) => setTimeout(() => resolve(response), delay))
+    }
+    return Promise.resolve(response)
   }
 
   newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
     this.newSessionCalls.push(params)
-    return Promise.resolve({
+    const response = {
       sessionId: this._agentSessionId,
       ...(this._opts.newSessionConfigOptions
         ? { configOptions: this._opts.newSessionConfigOptions }
         : {}),
-    } as unknown as NewSessionResponse)
+    } as unknown as NewSessionResponse
+    const delay = this._opts.newSessionDelayMs
+    if (delay !== undefined) {
+      return new Promise((resolve) => setTimeout(() => resolve(response), delay))
+    }
+    return Promise.resolve(response)
   }
 
   prompt(params: PromptRequest): Promise<PromptResponse> {
@@ -541,6 +555,69 @@ describe('AcpSessionService', () => {
     // `this._register(session)` in createSession the session is orphaned and
     // its DisposableStore leaks (reported by DisposableTracker on teardown).
     expect(conn.disposed).toBe(true)
+  })
+
+  it('records a complete create profile for the handshake', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const profiles = svc.getSessionCreateProfiles()
+    expect(profiles).toHaveLength(1)
+    const profile = profiles[0]!
+    expect(profile.agentId).toBe('fake')
+    expect(profile.failed).toBeUndefined()
+    expect(profile.endedAt).toBeDefined()
+    // The fake client service does not emit the client-layer steps
+    // (willResolveBinary / willSpawn / willInitialize) — those belong to the
+    // real AcpClientService. The service-layer sequence must be complete.
+    expect(profile.steps.map((s) => s.name)).toEqual([
+      'willResolveMcp',
+      'didResolveMcp',
+      'willConnect',
+      'didConnect',
+      'willNewSession',
+      'didNewSession',
+      'didHistoryAdd',
+      'didAttach',
+    ])
+    const ats = profile.steps.map((s) => s.at)
+    expect([...ats].sort((a, b) => a - b)).toEqual(ats)
+  })
+
+  it('captures a slow session/new in the create profile', async () => {
+    const slowClient = new FakeAcpClientService({ stubOptions: { newSessionDelayMs: 30 } })
+    const slowSvc = new AcpSessionService(
+      slowClient,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      notifications,
+      new NoopTelemetryService(),
+      permission,
+      new StubLoggerService(),
+      makeHistory(),
+      new FakeStorage(),
+      makeAgentDefaults(),
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        new NoopTelemetryService(),
+        makeHistory(),
+        makeAgentDefaults(),
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
+    )
+    const s = await slowSvc.createSession()
+    await s.whenConnected()
+    const profile = slowSvc.getSessionCreateProfiles()[0]!
+    const at = (name: string) => profile.steps.find((st) => st.name === name)!.at
+    expect(at('didNewSession') - at('willNewSession')).toBeGreaterThanOrEqual(25)
+    slowSvc.dispose()
   })
 
   it('setActive switches the active session', async () => {
@@ -1990,6 +2067,10 @@ describe('AcpSessionService — startup timeout', () => {
     await s.whenConnected()
     expect(s.status.get()).toBe('errored')
     expect(s.messages.get().at(-1)?.text).toMatch(/timed out/)
+    // The failed handshake is captured in the create profile ring buffer.
+    const failed = svc.getSessionCreateProfiles().at(-1)
+    expect(failed?.failed).toMatch(/timed out/)
+    expect(failed?.steps.map((st) => st.name)).not.toContain('didNewSession')
     svc.dispose()
   })
 

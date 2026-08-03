@@ -73,6 +73,12 @@ import {
   type IAcpClientNotificationSink,
 } from '../acpClientService.js'
 import { IAcpAgentRegistry } from '../acpAgentRegistry.js'
+import {
+  AcpSessionCreateProfiler,
+  formatSessionCreateProfile,
+  type ISessionCreateProfileHandle,
+  type SessionCreateProfile,
+} from '../acpSessionCreateProfiler.js'
 import { ACP_EXT_METHODS } from './acpExtMethods.js'
 import { isAuthRequiredError } from './acpAuthError.js'
 import { IAcpPermissionHandler } from '../acpPermissionHandler.js'
@@ -318,6 +324,12 @@ export interface IAcpSessionService {
    * No-op for read-only previews.
    */
   setSessionMcpServers(sessionId: string, names: readonly string[] | null): void
+  /**
+   * Per-attempt createSession handshake profiles (ring buffer, most recent
+   * last). Exposed for diagnostics and the e2e probe — see
+   * `AcpSessionCreateProfiler`.
+   */
+  getSessionCreateProfiles(): readonly SessionCreateProfile[]
 }
 
 export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessionService')
@@ -354,6 +366,7 @@ export class AcpSessionService
 
   private readonly _sessionStore = new AcpSessionRegistry()
   readonly sessions: IObservable<readonly IAcpSession[]> = this._sessionStore.sessions
+  private readonly _createProfiler = new AcpSessionCreateProfiler()
   readonly activeSessionId: IObservable<string | undefined> = this._sessionStore.activeSessionId
   readonly activeSession: IObservable<IAcpSession | undefined> = this._sessionStore.activeSession
 
@@ -572,8 +585,13 @@ export class AcpSessionService
     return this._coordinator.refresh()
   }
 
+  getSessionCreateProfiles(): readonly SessionCreateProfile[] {
+    return this._createProfiler.lastProfiles()
+  }
+
   async createSession(agentId?: string, options?: IAcpCreateSessionOptions): Promise<IAcpSession> {
     const resolvedAgentId = agentId ?? this._registry.defaultAgentId()
+    const profile = this._createProfiler.begin(resolvedAgentId)
     const agentName = this._registry.get(resolvedAgentId).name
     const collapseModes = this._config.get<Record<string, string>>('acp.defaultCollapseModes') ?? {}
     const initialCollapseMode: CollapseMode =
@@ -627,7 +645,7 @@ export class AcpSessionService
     this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
     this._onDidCreate.fire(session)
 
-    void this._connectSession(session, resolvedAgentId, cwd)
+    void this._connectSession(session, resolvedAgentId, cwd, profile)
     return session
   }
 
@@ -636,13 +654,16 @@ export class AcpSessionService
    * session/new, then hand the live connection to the session via
    * `attachConnection` (which flushes any queued prompts) and register it in
    * durable history. On failure the session is sealed via `failConnection` and
-   * the user is guided to fix auth / sees the error — the session row stays in
-   * the list so the failure is visible instead of vanishing.
+   * the user is guided to fix auth / sees the error. Throughout the handshake
+   * (and after a failure) the session stays visible in the session list via
+   * SessionListBody's optimistic pending rows — the durable history row only
+   * exists once session/new returns.
    */
   private async _connectSession(
     session: AcpSession,
     resolvedAgentId: string,
     cwd: string | undefined,
+    profile: ISessionCreateProfileHandle,
   ): Promise<void> {
     const agentName = this._registry.get(resolvedAgentId).name
     const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
@@ -652,10 +673,17 @@ export class AcpSessionService
     // itself (not the resolved value) so inheriting sessions never drift
     // against the defaults.
     const selection = session.mcpServerSelection.get()
+    profile.step('willResolveMcp')
     const mcpServers = await this._resolveSessionWireMcpServers(resolvedAgentId, selection, true)
+    profile.step('didResolveMcp')
     let conn: IAcpClientConnection | undefined
     try {
-      conn = await this._client.connect(resolvedAgentId, cwd !== undefined ? { cwd } : {})
+      profile.step('willConnect')
+      conn = await this._client.connect(resolvedAgentId, {
+        ...(cwd !== undefined ? { cwd } : {}),
+        profile,
+      })
+      profile.step('didConnect')
       const activeConn = conn
       const initResult = await withTimeout(activeConn.initializeResult, timeoutMs, 'ACP initialize')
       const { kept, dropped } = filterMcpServersByCapabilities(
@@ -668,11 +696,13 @@ export class AcpSessionService
         mcpServers: kept,
         _meta: EMIT_INIT_SDK_MESSAGE_META,
       }
+      profile.step('willNewSession')
       const result = await withTimeout(
         activeConn.conn.newSession(newParams),
         timeoutMs,
         'ACP session/new',
       )
+      profile.step('didNewSession')
       // The session may have been closed by the user while connecting.
       if (session.status.get() === 'closed') {
         activeConn.dispose()
@@ -696,6 +726,7 @@ export class AcpSessionService
         hasMessages: false,
         ...(liveSelection !== null ? { mcpServerNames: [...liveSelection] } : {}),
       })
+      profile.step('didHistoryAdd')
       this._mcpSelectionAtAttach.set(session.id, selection)
       // Seed the saved per-agent defaults BEFORE applying the bag so the state
       // machine reconciles it flicker-free (server default → saved value, with
@@ -710,10 +741,14 @@ export class AcpSessionService
         this._configOptionsCache.set(resolvedAgentId, result.configOptions)
       }
       session.attachConnection(activeConn, result.sessionId)
+      profile.step('didAttach')
+      this._logger.info(formatSessionCreateProfile(profile.end()))
     } catch (err) {
       if (conn) conn.dispose()
       const msg = (err as Error).message
-      this._logger.warn(`createSession failed: ${msg}`)
+      this._logger.warn(
+        `createSession failed: ${msg} — ${formatSessionCreateProfile(profile.fail(msg))}`,
+      )
       session.failConnection(msg)
       if (isAuthRequiredError(err)) {
         // No usable credentials yet — point the user straight at the

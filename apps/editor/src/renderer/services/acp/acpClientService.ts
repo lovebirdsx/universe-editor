@@ -84,6 +84,7 @@ import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPathPolicy } from './acpPathPolicy.js'
 import { createSdkHostStream, type SdkHostStream } from './sdkHostStream.js'
 import { AcpProtocolTracer } from './acpProtocolTracer.js'
+import type { ISessionCreateProfileHandle } from './acpSessionCreateProfiler.js'
 import { IOutputService } from '@universe-editor/platform'
 
 export interface IAcpClientNotificationSink {
@@ -155,10 +156,19 @@ export interface IAcpClientService {
    * telemetry; only the notification is skipped. Only takes effect when this
    * call spawns a brand-new pool entry — a concurrent call sharing an in-flight
    * spawn defers to whichever caller triggered the spawn first.
+   *
+   * `options.profile` (createSession only) receives per-attempt timing steps:
+   * pool hits are tagged via `markPooled()`, a fresh spawn records
+   * binary-resolve / spawn / initialize segments.
    */
   connect(
     agentId: string,
-    options?: { cwd?: string; leaseFor?: string; silent?: boolean },
+    options?: {
+      cwd?: string
+      leaseFor?: string
+      silent?: boolean
+      profile?: ISessionCreateProfileHandle
+    },
   ): Promise<IAcpClientConnection>
   /** Synchronously stop every pooled process and clear the pool. */
   drainAll(): void
@@ -346,7 +356,12 @@ export class AcpClientService extends Disposable implements IAcpClientService {
 
   async connect(
     agentId: string,
-    options?: { cwd?: string; leaseFor?: string; silent?: boolean },
+    options?: {
+      cwd?: string
+      leaseFor?: string
+      silent?: boolean
+      profile?: ISessionCreateProfileHandle
+    },
   ): Promise<IAcpClientConnection> {
     if (!this._sink) {
       throw new Error('AcpClientService.connect: notification sink not installed')
@@ -355,12 +370,20 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     const key = this._poolKey(agentId, cwd)
     let entryPromise = this._pool.get(key)
     if (!entryPromise) {
-      entryPromise = this._createEntry(agentId, key, cwd, options?.silent ?? false)
+      entryPromise = this._createEntry(
+        agentId,
+        key,
+        cwd,
+        options?.silent ?? false,
+        options?.profile,
+      )
       this._pool.set(key, entryPromise)
       // If spawn fails, drop the entry so the next caller retries.
       entryPromise.catch(() => {
         if (this._pool.get(key) === entryPromise) this._pool.delete(key)
       })
+    } else {
+      options?.profile?.markPooled()
     }
     const entry = await entryPromise
     if (entry.evicted) {
@@ -376,7 +399,9 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     const initTimeoutMs =
       this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_INIT_TIMEOUT_MS
     try {
+      options?.profile?.step('willInitialize')
       await withTimeout(entry.initializeResult, initTimeoutMs, 'ACP initialize')
+      options?.profile?.step('didInitialize')
     } catch (err) {
       entry.refcount--
       // A *rejected* handshake already self-evicted via _createEntry's catch; a
@@ -543,14 +568,19 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     key: string,
     cwd: string,
     silent: boolean,
+    profile?: ISessionCreateProfileHandle,
   ): Promise<PoolEntry> {
     const sink = this._sink!
     let spec = this._registry.resolve(agentId, cwd || undefined)
     let handle: string
     try {
+      profile?.step('willResolveBinary')
       spec = await this._ensureClaudeBinary(spec, agentId, silent)
       spec = await this._ensureCodexBinary(spec, agentId, silent)
+      profile?.step('didResolveBinary')
+      profile?.step('willSpawn')
       handle = (await this._host.start(spec)).handle
+      profile?.step('didSpawn')
     } catch (err) {
       this._telemetry.publicLogError('acp.spawn_failed', {
         agentId,

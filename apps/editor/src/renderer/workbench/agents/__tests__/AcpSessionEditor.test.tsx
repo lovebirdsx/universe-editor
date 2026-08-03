@@ -110,6 +110,7 @@ function makeService(
     async readProjectMcpJson(): Promise<Record<string, unknown>> {
       return {}
     },
+    getSessionCreateProfiles: () => [],
   } satisfies FakeAcpSessionService
 }
 

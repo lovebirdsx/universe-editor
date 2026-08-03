@@ -12,6 +12,8 @@
  *                                      → succeeds only for sessions that ran a
  *                                        prompt; empty sessions fail like they
  *                                        do on real agents (never persisted)
+ *  ECHO_AGENT_SESSION_NEW_DELAY_MS=<ms> delays every session/new response —
+ *  used by E2E to exercise the editor's optimistic "connecting" session row.
  *    - session/prompt                    → emits two session/update chunks and
  *                                          a tool_call cycle, then resolves
  *                                          with stopReason='end_turn'
@@ -336,6 +338,11 @@ function handle(msg) {
       const sessionId = 'echo-' + nextSessionId++
       sessionMcpServers.set(sessionId, msg.params?.mcpServers ?? [])
       sessionCwds.set(sessionId, msg.params?.cwd ?? '')
+      const newDelayMs = Number(process.env.ECHO_AGENT_SESSION_NEW_DELAY_MS ?? 0)
+      if (newDelayMs > 0) {
+        setTimeout(() => reply(msg.id, { sessionId }), newDelayMs)
+        return
+      }
       return reply(msg.id, { sessionId })
     }
     case 'session/load': {

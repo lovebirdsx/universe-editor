@@ -54,7 +54,7 @@ const NETWORK_TIMEOUT_MS = 10_000
  * Pinned `@openai/codex` version to download. Kept in sync with the codex-acp
  * fork's lockfile (`vendor/codex-acp`); bumped by hand when following upstream.
  */
-const CODEX_VERSION = '0.141.0'
+const CODEX_VERSION = '0.146.0'
 
 interface PlatformBinary {
   /** Platform/arch suffix of the `@openai/codex` platform version, e.g. `win32-x64`. */

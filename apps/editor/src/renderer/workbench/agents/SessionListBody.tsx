@@ -29,7 +29,18 @@ import {
   IUriIdentityService,
   ICommandService,
 } from '@universe-editor/platform'
-import { X, Trash2, GitBranch, Pencil, Archive, ArchiveRestore, Pin, PinOff } from 'lucide-react'
+import {
+  X,
+  Trash2,
+  GitBranch,
+  Pencil,
+  Archive,
+  ArchiveRestore,
+  Pin,
+  PinOff,
+  Loader2,
+  AlertCircle,
+} from 'lucide-react'
 import {
   IconButton,
   Input,
@@ -130,6 +141,39 @@ function LiveSessionTimer({ session }: { session: IAcpSession }) {
   return <span className={styles['sessionRowTimer']}>{formatRunningTime(ms)}</span>
 }
 
+/**
+ * Self-subscribed status glyph for a live row: a spinner while the background
+ * handshake is in flight, an error badge when it failed. The row list itself
+ * does not re-render on status flips (the sessions array identity is stable
+ * across attach/fail), so the subscription must live here.
+ */
+function LiveSessionStatus({ session }: { session: IAcpSession }) {
+  const status = useObservable(session.status)
+  if (status === 'connecting') {
+    return (
+      <Loader2
+        size={13}
+        strokeWidth={1.75}
+        className={styles['spin']}
+        data-status="connecting"
+        aria-label={localize('acp.sessions.connecting', 'Connecting…')}
+      />
+    )
+  }
+  if (status === 'errored') {
+    return (
+      <AlertCircle
+        size={13}
+        strokeWidth={1.75}
+        className={styles['sessionRowError']}
+        data-status="errored"
+        aria-label={localize('acp.sessions.startFailed', 'Failed to start')}
+      />
+    )
+  }
+  return null
+}
+
 function LiveSessionCost({ session, rate }: { session: IAcpSession; rate: number }) {
   const usage = useObservable(session.usage)
   const totalUsd = usage?.cost?.amount
@@ -192,6 +236,7 @@ function SessionRow({
   entry,
   liveSession,
   isActive,
+  isPending,
   onActivate,
   onRemove,
   onRename,
@@ -206,6 +251,8 @@ function SessionRow({
   entry: AcpSessionHistoryEntry
   liveSession: IAcpSession | undefined
   isActive: boolean
+  /** True for the optimistic row of a session still in its background handshake. */
+  isPending: boolean
   onActivate: () => void
   onRemove: () => void
   onRename: (() => void) | undefined
@@ -262,6 +309,7 @@ function SessionRow({
       data-running={isRunning ? 'true' : 'false'}
       data-foreign={isForeign ? 'true' : 'false'}
       data-archived={isArchived ? 'true' : 'false'}
+      data-pending={isPending ? 'true' : 'false'}
       data-testid={`session-row-${entry.id}`}
       data-tooltip={rowTooltip}
       tabIndex={0}
@@ -292,6 +340,7 @@ function SessionRow({
           ) : null}
         </span>
         <span className={styles['sessionRowMeta']}>
+          {liveSession !== undefined ? <LiveSessionStatus session={liveSession} /> : null}
           {relativeTime(entry.lastUsedAt)}
           {liveSession !== undefined ? (
             <LiveSessionModel session={liveSession} />
@@ -333,35 +382,45 @@ function SessionRow({
           ) : null}
         </span>
       </div>
-      <button
-        type="button"
-        className={styles['sessionArchive']}
-        onClick={(e) => {
-          e.stopPropagation()
-          onToggleArchive()
-        }}
-        aria-label={archiveLabel}
-        data-tooltip={archiveLabel}
-      >
-        {isArchived ? (
-          <ArchiveRestore size={13} strokeWidth={1.75} />
-        ) : (
-          <Archive size={13} strokeWidth={1.75} />
-        )}
-      </button>
-      <button
-        type="button"
-        className={styles['sessionPin']}
-        onClick={(e) => {
-          e.stopPropagation()
-          onTogglePin()
-        }}
-        aria-label={pinLabel}
-        data-tooltip={pinLabel}
-      >
-        {isPinned ? <PinOff size={13} strokeWidth={1.75} /> : <Pin size={13} strokeWidth={1.75} />}
-      </button>
-      {onRename ? (
+      {/* Archive/Pin/Rename are history-row flags — meaningless on the
+          optimistic pending row (nothing persisted yet), so hidden there. */}
+      {!isPending ? (
+        <button
+          type="button"
+          className={styles['sessionArchive']}
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleArchive()
+          }}
+          aria-label={archiveLabel}
+          data-tooltip={archiveLabel}
+        >
+          {isArchived ? (
+            <ArchiveRestore size={13} strokeWidth={1.75} />
+          ) : (
+            <Archive size={13} strokeWidth={1.75} />
+          )}
+        </button>
+      ) : null}
+      {!isPending ? (
+        <button
+          type="button"
+          className={styles['sessionPin']}
+          onClick={(e) => {
+            e.stopPropagation()
+            onTogglePin()
+          }}
+          aria-label={pinLabel}
+          data-tooltip={pinLabel}
+        >
+          {isPinned ? (
+            <PinOff size={13} strokeWidth={1.75} />
+          ) : (
+            <Pin size={13} strokeWidth={1.75} />
+          )}
+        </button>
+      ) : null}
+      {onRename && !isPending ? (
         <button
           type="button"
           className={styles['sessionRename']}
@@ -401,8 +460,9 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
   const instantiation = useService(IInstantiationService)
   const commandService = useService(ICommandService)
   const entries = useObservable(history.entries)
-  // Subscribe to sessions so the running indicator re-renders.
-  useObservable(service.sessions)
+  // Subscribe to sessions so the running indicator re-renders; the value also
+  // feeds the optimistic pending rows below.
+  const sessions = useObservable(service.sessions)
   const activeId = useObservable(service.activeSessionId)
 
   const [menu, setMenu] = useState<SessionRowContextMenuState | null>(null)
@@ -432,15 +492,53 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
     useCallback(() => scrollRef.current, []),
   )
 
+  // Optimistic rows for sessions still in their background handshake. The
+  // durable history row is keyed by the agent-issued sessionIdOnAgent, which
+  // only exists after session/new returns — so without these the freshly
+  // created session is invisible here for the whole handshake (codex: 10s+).
+  // Guards: not closed, not a read-only foreign preview, no agent id yet (an
+  // attached session already has its history row), and no history row under
+  // the local id (a resume-in-progress shares the durable id with its row).
+  // The handshake lands `_history.add` and `attachConnection` in one sync
+  // block, so by the next render guard 3 has dropped the pending row exactly
+  // as the history row appears — they never coexist, never both vanish.
+  const pendingEntries = useMemo(() => {
+    const now = Date.now()
+    const pending: AcpSessionHistoryEntry[] = []
+    for (let i = sessions.length - 1; i >= 0; i--) {
+      const s = sessions[i]!
+      if (s.status.get() === 'closed') continue
+      if (s.readOnly) continue
+      if (s.sessionIdOnAgent.get() !== undefined) continue
+      // A resume-in-progress shares the durable id with its history row.
+      if (entries.some((e) => e.id === s.id)) continue
+      pending.push({
+        id: s.id,
+        agentId: s.agentId,
+        sessionIdOnAgent: '',
+        title: s.title,
+        ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
+        createdAt: now,
+        lastUsedAt: now,
+      })
+    }
+    return pending
+  }, [sessions, entries, currentCwd])
+
+  const pendingIds = useMemo(() => new Set(pendingEntries.map((e) => e.id)), [pendingEntries])
+
+  const merged = useMemo(
+    () => (pendingEntries.length > 0 ? [...pendingEntries, ...entries] : entries),
+    [pendingEntries, entries],
+  )
+
   // In `workspace` scope keep only exact-cwd rows so narrowing applies instantly
   // without waiting for the next replace-mode hydrate. `worktree`/`all` trust the
   // hydrate sweep's scoping (which already bounds what the bucket contains).
   const scoped = useMemo(() => {
-    if (scope !== 'workspace' || currentCwd === undefined) return entries
-    return entries.filter(
-      (e) => e.cwd === undefined || uriIdentity.arePathsEqual(e.cwd, currentCwd),
-    )
-  }, [entries, scope, currentCwd, uriIdentity])
+    if (scope !== 'workspace' || currentCwd === undefined) return merged
+    return merged.filter((e) => e.cwd === undefined || uriIdentity.arePathsEqual(e.cwd, currentCwd))
+  }, [merged, scope, currentCwd, uriIdentity])
 
   const filtered = useMemo(() => filterSessions(scoped, query), [scoped, query])
 
@@ -469,8 +567,11 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
       return true
     })
     if (query.trim().length > 0) return kept
+    // Pending rows rank above everything (band -1) — a just-created session
+    // belongs at the top. Once attached, its history row sorts by lastUsedAt
+    // and lands in the same top position, so the swap is position-continuous.
     const rank = (e: AcpSessionHistoryEntry) =>
-      e.archived === true ? 2 : e.pinned === true ? 0 : 1
+      pendingIds.has(e.id) ? -1 : e.archived === true ? 2 : e.pinned === true ? 0 : 1
     const sorted = [...kept]
     sorted.sort((a, b) => {
       const band = rank(a) - rank(b)
@@ -478,7 +579,16 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
       return sortMode === 'created' ? b.createdAt - a.createdAt : b.lastUsedAt - a.lastUsedAt
     })
     return sorted
-  }, [filtered, showArchived, excludedAgents, excludedStatuses, sortMode, query, service])
+  }, [
+    filtered,
+    showArchived,
+    excludedAgents,
+    excludedStatuses,
+    sortMode,
+    query,
+    service,
+    pendingIds,
+  ])
 
   const exchangeRate = useUsdToCnyRate()
   const rate = exchangeRate?.rate ?? FALLBACK_RATE
@@ -511,7 +621,7 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
     }
   }
 
-  if (entries.length === 0) {
+  if (merged.length === 0) {
     if (hideEmptyState) return null
     return <p className={styles['empty']}>{localize('acp.sessions.empty', 'No sessions yet.')}</p>
   }
@@ -544,6 +654,7 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
       ) : (
         <ul className={styles['sessionRows']} ref={scrollRef}>
           {visible.map((entry) => {
+            const isPending = pendingIds.has(entry.id)
             const live = service.getById(entry.id)
             // A read-only foreign preview is a live AcpSession instance but must
             // not light up the running indicator / timer / "active" styling — it
@@ -555,34 +666,39 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
               entry.cwd !== undefined &&
               currentCwd !== undefined &&
               !uriIdentity.arePathsEqual(entry.cwd, currentCwd)
-            const onRename = isForeign
-              ? undefined
-              : () => {
-                  void commandService.executeCommand('workbench.action.agent.renameSession', {
-                    sessionId: entry.id,
-                  })
-                }
+            const onRename =
+              isForeign || isPending
+                ? undefined
+                : () => {
+                    void commandService.executeCommand('workbench.action.agent.renameSession', {
+                      sessionId: entry.id,
+                    })
+                  }
             const onReveal = () => {
               void commandService.executeCommand('workbench.action.agent.revealSessionInOS', {
                 sessionId: entry.id,
               })
             }
-            const onToggleArchive = () => {
-              void commandService.executeCommand(
-                entry.archived === true
-                  ? 'workbench.action.agent.unarchiveSession'
-                  : 'workbench.action.agent.archiveSession',
-                { sessionId: entry.id },
-              )
-            }
-            const onTogglePin = () => {
-              void commandService.executeCommand(
-                entry.pinned === true
-                  ? 'workbench.action.agent.unpinSession'
-                  : 'workbench.action.agent.pinSession',
-                { sessionId: entry.id },
-              )
-            }
+            const onToggleArchive = isPending
+              ? () => {}
+              : () => {
+                  void commandService.executeCommand(
+                    entry.archived === true
+                      ? 'workbench.action.agent.unarchiveSession'
+                      : 'workbench.action.agent.archiveSession',
+                    { sessionId: entry.id },
+                  )
+                }
+            const onTogglePin = isPending
+              ? () => {}
+              : () => {
+                  void commandService.executeCommand(
+                    entry.pinned === true
+                      ? 'workbench.action.agent.unpinSession'
+                      : 'workbench.action.agent.pinSession',
+                    { sessionId: entry.id },
+                  )
+                }
             const onRemove = () => {
               void (async () => {
                 if (config.get<boolean>('acp.sessions.confirmDelete') !== false) {
@@ -602,6 +718,10 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
                   }
                 }
                 if (liveSession) await service.closeSession(liveSession.id)
+                // A pending row has no agent-side session yet (session/new may
+                // still be in flight) and no history row — closing the live
+                // session is the whole delete.
+                if (isPending) return
                 await service.deleteOnAgent(entry.id)
                 history.remove(entry.id)
               })()
@@ -614,36 +734,38 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
               e.preventDefault()
               e.stopPropagation()
               const items: SessionRowMenuItem[] = []
-              items.push({
-                kind: 'item',
-                label:
-                  entry.pinned === true
-                    ? localize('acp.sessions.unpinMenu', 'Unpin Session')
-                    : localize('acp.sessions.pinMenu', 'Pin Session'),
-                run: onTogglePin,
-              })
-              items.push({
-                kind: 'item',
-                label:
-                  entry.archived === true
-                    ? localize('acp.sessions.unarchiveMenu', 'Unarchive Session')
-                    : localize('acp.sessions.archiveMenu', 'Archive Session'),
-                run: onToggleArchive,
-              })
-              if (onRename) {
+              if (!isPending) {
                 items.push({
                   kind: 'item',
-                  label: localize('acp.sessions.renameMenu', 'Rename Session'),
-                  run: onRename,
+                  label:
+                    entry.pinned === true
+                      ? localize('acp.sessions.unpinMenu', 'Unpin Session')
+                      : localize('acp.sessions.pinMenu', 'Pin Session'),
+                  run: onTogglePin,
                 })
+                items.push({
+                  kind: 'item',
+                  label:
+                    entry.archived === true
+                      ? localize('acp.sessions.unarchiveMenu', 'Unarchive Session')
+                      : localize('acp.sessions.archiveMenu', 'Archive Session'),
+                  run: onToggleArchive,
+                })
+                if (onRename) {
+                  items.push({
+                    kind: 'item',
+                    label: localize('acp.sessions.renameMenu', 'Rename Session'),
+                    run: onRename,
+                  })
+                }
+                items.push({
+                  kind: 'item',
+                  label: localize('acp.sessions.revealTranscript', 'Open Session Location'),
+                  disabled: !hasTranscript,
+                  run: onReveal,
+                })
+                items.push({ kind: 'separator' })
               }
-              items.push({
-                kind: 'item',
-                label: localize('acp.sessions.revealTranscript', 'Open Session Location'),
-                disabled: !hasTranscript,
-                run: onReveal,
-              })
-              items.push({ kind: 'separator' })
               items.push({
                 kind: 'item',
                 label: localize('acp.sessions.removeMenu', 'Delete Session'),
@@ -658,6 +780,7 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
                 entry={entry}
                 liveSession={liveSession}
                 isActive={isActive}
+                isPending={isPending}
                 rate={rate}
                 scope={scope}
                 isForeign={isForeign}

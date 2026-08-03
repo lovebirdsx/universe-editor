@@ -531,6 +531,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       await services.mcpServerEnablementService.setEnabled(name, enabled, StorageScope.GLOBAL)
     },
     getAcpSessionStatus: () => services.acpSessionService.activeSession.get()?.status.get(),
+    getAcpSessionCreateProfiles: () => services.acpSessionService.getSessionCreateProfiles(),
     getAcpPendingElicitation: () => {
       const s = services.acpSessionService.activeSession.get()
       const e = s?.pendingElicitation.get()

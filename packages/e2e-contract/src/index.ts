@@ -81,6 +81,17 @@ export interface E2EStartupMetrics {
   readonly phases: readonly E2EStartupPhase[]
 }
 
+/** One createSession handshake attempt, mirroring the renderer's
+ *  `SessionCreateProfile` (see AcpSessionCreateProfiler). */
+export interface E2EAcpSessionCreateProfile {
+  readonly agentId: string
+  readonly startedAt: number
+  readonly steps: ReadonlyArray<{ readonly name: string; readonly at: number }>
+  readonly endedAt?: number
+  readonly failed?: string
+  readonly pooledConnection: boolean
+}
+
 /** One recorded slow interaction (≥ warn threshold) with its decomposition and
  *  attribution — the rows of the Interaction Performance report's slowest table. */
 export interface E2EInteractionPerfSlowEntry {
@@ -498,6 +509,12 @@ export interface E2EProbe {
   setAcpMcpServerEnabled(name: string, enabled: boolean): Promise<void>
   /** Status of the active ACP session ('connecting' | 'idle' | 'running' | 'closed'), if any. */
   getAcpSessionStatus(): string | undefined
+  /**
+   * Ring buffer of recent createSession handshake profiles (most recent last).
+   * Lets @perf specs assert the will/did step sequence and segment durations
+   * without scraping the Output channel.
+   */
+  getAcpSessionCreateProfiles(): readonly E2EAcpSessionCreateProfile[]
   /**
    * Snapshot of the active session's pending elicitation (form mode), or
    * undefined when none is awaiting an answer. `fields` lists the normalized

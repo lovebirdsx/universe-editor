@@ -1666,6 +1666,11 @@
   flex-shrink: 0;
 }
 
+.sessionRowError {
+  color: var(--vscode-errorForeground, #f48771);
+  flex-shrink: 0;
+}
+
 .sessionRowModel {
   flex-shrink: 1;
   min-width: 0;

@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import {
   Emitter,
   Event,
@@ -30,6 +30,7 @@ import {
   IWorkspaceService,
   type ILogger,
   type ILoggerService,
+  type ISettableObservable,
   type IStorageService as IStorageServiceType,
   type IWorkspace as IWorkspaceType,
   type IWorkspaceService as IWorkspaceServiceType,
@@ -39,6 +40,7 @@ import {
   type IAcpSession,
   type IAcpSessionService as IAcpSessionServiceType,
 } from '../../../services/acp/session/acpSessionService.js'
+import type { AcpSessionStatus } from '../../../services/acp/session/acpSessionModel.js'
 import {
   AcpSessionHistoryService,
   IAcpSessionHistoryService,
@@ -90,11 +92,25 @@ class StubLoggerService implements ILoggerService {
   }
 }
 
-function makeSessionService(): IAcpSessionServiceType {
+function makeSessionService() {
   const sessions = observableValue<readonly IAcpSession[]>('test.sessions', [])
   const activeSessionId = observableValue<string | undefined>('test.activeId', undefined)
   const activeSession = observableValue<IAcpSession | undefined>('test.active', undefined)
-  return {
+  const liveById = new Map<string, IAcpSession>()
+  const setActiveFn = vi.fn((id: string) => {
+    activeSessionId.set(id, undefined)
+  })
+  const closeSessionFn = vi.fn(async (id: string) => {
+    liveById.delete(id)
+    sessions.set(
+      sessions.get().filter((s) => s.id !== id),
+      undefined,
+    )
+  })
+  const deleteOnAgentFn = vi.fn(
+    async (): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> => 'unsupported',
+  )
+  const service = {
     _serviceBrand: undefined,
     sessions,
     activeSessionId,
@@ -103,15 +119,13 @@ function makeSessionService(): IAcpSessionServiceType {
     createSession: (() => Promise.reject(new Error('not implemented'))) as never,
     resumeSession: vi.fn().mockRejectedValue(new Error('not implemented')) as never,
     resumeSessionReadOnly: (() => Promise.reject(new Error('not implemented'))) as never,
-    setActive(): void {},
-    async closeSession(): Promise<void> {},
-    getById: () => undefined,
+    setActive: setActiveFn,
+    closeSession: closeSessionFn,
+    getById: (id: string) => liveById.get(id),
     async tryRestoreActiveSession(): Promise<void> {},
     requestHydrateIfNeeded(): void {},
     async refreshSessions(): Promise<void> {},
-    async deleteOnAgent(): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
-      return 'unsupported'
-    },
+    deleteOnAgent: deleteOnAgentFn,
     renameSession(): boolean {
       return false
     },
@@ -124,13 +138,60 @@ function makeSessionService(): IAcpSessionServiceType {
     async readProjectMcpJson(): Promise<Record<string, unknown>> {
       return {}
     },
+    getSessionCreateProfiles: () => [],
   } as unknown as IAcpSessionServiceType
+  return {
+    service,
+    sessions,
+    activeSessionId,
+    liveById,
+    setActiveFn,
+    closeSessionFn,
+    deleteOnAgentFn,
+  }
+}
+
+/** Minimal IAcpSession face for the list rows — observable status / agent id so
+ *  tests can flip a pending session through its handshake lifecycle. */
+function makeFakeSession(opts: {
+  id: string
+  agentId?: string
+  title?: string
+  readOnly?: boolean
+  status?: 'connecting' | 'idle' | 'running' | 'errored' | 'closed'
+  sessionIdOnAgent?: string
+}): IAcpSession & {
+  status: ISettableObservable<AcpSessionStatus>
+  sessionIdOnAgent: ISettableObservable<string | undefined>
+} {
+  const status = observableValue<AcpSessionStatus>(
+    'test.session.status',
+    opts.status ?? 'connecting',
+  )
+  const sessionIdOnAgent = observableValue<string | undefined>(
+    'test.session.sid',
+    opts.sessionIdOnAgent,
+  )
+  return {
+    id: opts.id,
+    agentId: opts.agentId ?? 'fake',
+    title: opts.title ?? `Fake ${opts.id}`,
+    readOnly: opts.readOnly ?? false,
+    status,
+    sessionIdOnAgent,
+    configOptions: observableValue('test.session.configOptions', []),
+    usage: observableValue('test.session.usage', undefined),
+    accumulatedRunningMs: observableValue('test.session.accumulated', 0),
+    runningStartedAt: observableValue<number | undefined>('test.session.startedAt', undefined),
+  } as never
 }
 
 interface Harness {
   history: AcpSessionHistoryService
   filterService: AcpSessionFilterService
   executeCommand: ReturnType<typeof vi.fn>
+  sessionCtl: ReturnType<typeof makeSessionService>
+  confirm: ReturnType<typeof vi.fn>
   dispose: () => void
 }
 
@@ -155,9 +216,10 @@ async function makeHarness(): Promise<Harness> {
     new StubLoggerService(),
   )
   const executeCommand = vi.fn().mockResolvedValue(undefined)
+  const sessionCtl = makeSessionService()
 
   const services = new ServiceCollection()
-  services.set(IAcpSessionService, makeSessionService())
+  services.set(IAcpSessionService, sessionCtl.service)
   services.set(IAcpSessionHistoryService, history)
   services.set(IAcpSessionFilterService, filterService)
   services.set(IAcpAgentRegistry, {
@@ -171,9 +233,10 @@ async function makeHarness(): Promise<Harness> {
   } as unknown as IConfigurationService)
   services.set(IWorkspaceService, workspace)
   services.set(IUriIdentityService, uriIdentity)
+  const confirm = vi.fn(async () => ({ confirmed: true, neverAskAgain: false }))
   services.set(IDialogService, {
     _serviceBrand: undefined,
-    confirm: vi.fn(),
+    confirm,
   } as unknown as IDialogService)
   services.set(IEditorService, {
     _serviceBrand: undefined,
@@ -195,6 +258,8 @@ async function makeHarness(): Promise<Harness> {
     history,
     filterService,
     executeCommand,
+    sessionCtl,
+    confirm,
     dispose: () => {
       history.dispose()
       filterService.dispose()
@@ -396,5 +461,122 @@ describe('SessionListBody — archive / pin', () => {
       filterService.toggleArchived()
     })
     expect(rowOrder()).toEqual(['a'])
+  })
+})
+
+describe('SessionListBody — optimistic pending rows', () => {
+  let harness: Harness
+  beforeEach(async () => {
+    harness = await makeHarness()
+  })
+  afterEach(() => {
+    harness.dispose()
+  })
+
+  function pushSession(session: IAcpSession) {
+    const { sessionCtl } = harness
+    act(() => {
+      sessionCtl.liveById.set(session.id, session)
+      sessionCtl.sessions.set([...sessionCtl.sessions.get(), session], undefined)
+    })
+  }
+
+  it('shows a connecting live session immediately, above every history row', () => {
+    const { history } = harness
+    addEntry(history, 'old', 'older session', 3000)
+    pushSession(makeFakeSession({ id: 'local-1', title: 'Codex 09:30' }))
+
+    expect(rowOrder()).toEqual(['local-1', 'old'])
+    const row = screen.getByTestId('session-row-local-1')
+    expect(row.dataset['pending']).toBe('true')
+    expect(within(row).getByLabelText('Connecting…')).toBeTruthy()
+    // History-only affordances are hidden on the pending row.
+    expect(within(row).queryByRole('button', { name: 'Archive session (Del)' })).toBeNull()
+    expect(within(row).queryByRole('button', { name: 'Pin session' })).toBeNull()
+    expect(within(row).queryByRole('button', { name: 'Rename session' })).toBeNull()
+    expect(within(row).getByRole('button', { name: 'Remove session' })).toBeTruthy()
+  })
+
+  it('renders the pending row instead of the empty state when there is no history', () => {
+    pushSession(makeFakeSession({ id: 'local-1' }))
+    expect(screen.queryByText('No sessions yet.')).toBeNull()
+    expect(screen.getByTestId('session-row-local-1')).toBeTruthy()
+  })
+
+  it('swaps the pending row for the history row in the same frame on attach — never two rows', () => {
+    const { history } = harness
+    const session = makeFakeSession({ id: 'local-1' })
+    pushSession(session)
+    expect(rowOrder()).toEqual(['local-1'])
+
+    act(() => {
+      session.sessionIdOnAgent.set('agent-1', undefined)
+      history.add({ agentId: 'fake', sessionIdOnAgent: 'agent-1', title: 'Codex 09:30' })
+    })
+    expect(rowOrder()).toEqual(['agent-1'])
+    expect(screen.queryByTestId('session-row-local-1')).toBeNull()
+    expect(screen.getByTestId('session-row-agent-1').dataset['pending']).toBe('false')
+  })
+
+  it('keeps the failed-start row in the list and flips the glyph to the error badge', () => {
+    const session = makeFakeSession({ id: 'local-1' })
+    pushSession(session)
+    act(() => {
+      session.status.set('errored', undefined)
+    })
+    expect(rowOrder()).toEqual(['local-1'])
+    expect(screen.getByLabelText('Failed to start')).toBeTruthy()
+    expect(screen.queryByLabelText('Connecting…')).toBeNull()
+  })
+
+  it('deleting a pending row only closes the live session — no deleteOnAgent, no history churn', async () => {
+    const { history, sessionCtl } = harness
+    const removeSpy = vi.spyOn(history, 'remove')
+    pushSession(makeFakeSession({ id: 'local-1' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove session' }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(sessionCtl.closeSessionFn).toHaveBeenCalledWith('local-1')
+    expect(sessionCtl.deleteOnAgentFn).not.toHaveBeenCalled()
+    expect(removeSpy).not.toHaveBeenCalled()
+    expect(rowOrder()).toEqual([])
+  })
+
+  it('activates the pending session on click with its local id', () => {
+    const { sessionCtl } = harness
+    pushSession(makeFakeSession({ id: 'local-1' }))
+    fireEvent.click(screen.getByTestId('session-row-local-1'))
+    expect(sessionCtl.setActiveFn).toHaveBeenCalledWith('local-1')
+  })
+
+  it('does not render a pending row for a resume-in-progress (history row already exists)', () => {
+    const { history } = harness
+    addEntry(history, 'durable-1', 'resumed session', 1000)
+    // A resume shares the durable id with its history row: the live session's
+    // local id IS the agent id, and the row must not duplicate while loading.
+    pushSession(makeFakeSession({ id: 'durable-1', title: 'resumed session' }))
+    expect(rowOrder()).toEqual(['durable-1'])
+  })
+
+  it('drops pending rows when the live session list is cleared (workspace swap)', () => {
+    const { sessionCtl } = harness
+    pushSession(makeFakeSession({ id: 'local-1' }))
+    expect(rowOrder()).toEqual(['local-1'])
+    act(() => {
+      sessionCtl.sessions.set([], undefined)
+    })
+    expect(rowOrder()).toEqual([])
+  })
+
+  it('ranks pending rows above pinned history rows', () => {
+    const { history } = harness
+    addEntry(history, 'pinned-1', 'pinned session', 1000)
+    act(() => {
+      history.setHistoryPinned('pinned-1', true)
+    })
+    pushSession(makeFakeSession({ id: 'local-1' }))
+    expect(rowOrder()).toEqual(['local-1', 'pinned-1'])
   })
 })

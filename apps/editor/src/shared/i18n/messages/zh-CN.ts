@@ -1457,6 +1457,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.session.runningTime': '会话运行时间',
   'acp.sessions.empty': '还没有会话。',
   'acp.sessions.noMatch': '没有匹配的会话。',
+  'acp.sessions.connecting': '正在连接…',
+  'acp.sessions.startFailed': '启动失败',
   'acp.sessions.popover': '会话',
   'acp.sessions.remove': '移除会话',
   'acp.sessions.search': '搜索会话',
