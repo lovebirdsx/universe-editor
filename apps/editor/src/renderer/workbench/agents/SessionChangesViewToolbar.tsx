@@ -20,7 +20,7 @@ export function SessionChangesViewToolbar() {
       type="button"
       className={styles['toolbarBtn']}
       data-testid="session-changes-toggle-view-mode"
-      title={
+      data-tooltip={
         isTree
           ? localize('acp.changes.viewAsList', 'View as List')
           : localize('acp.changes.viewAsTree', 'View as Tree')

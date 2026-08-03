@@ -498,7 +498,7 @@ const ScmFileRow = memo(function ScmFileRow({
       style={
         rowStyle ? { paddingLeft: indentPadding, ...rowStyle } : { paddingLeft: indentPadding }
       }
-      title={resource.decorations?.tooltip ?? resource.resourceUri}
+      data-tooltip={resource.decorations?.tooltip ?? resource.resourceUri}
       onClick={(e) => rowClick(model, node, e, openChange)}
       onDoubleClick={openChangePinned}
       onContextMenu={onContextMenu}
@@ -763,7 +763,7 @@ const ScmGroupRow = memo(function ScmGroupRow({
           />
         ) : null
       })()}
-      <span className={styles['groupLabel']} title={node.label}>
+      <span className={styles['groupLabel']} data-tooltip={node.label}>
         {node.label}
       </span>
       <span className={styles['groupActions']}>
@@ -1202,7 +1202,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
             <button
               type="button"
               className={styles['commitDropdown']}
-              title={localize('scm.commitActions', 'Commit actions...')}
+              data-tooltip={localize('scm.commitActions', 'Commit actions...')}
               disabled={isCommitting}
               onClick={openCommitMenu}
             >

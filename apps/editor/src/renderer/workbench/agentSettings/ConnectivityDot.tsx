@@ -55,5 +55,5 @@ export function ConnectivityDot({
       : state === 'checking'
         ? `${styles['connDot']} ${styles['connDotChecking']}`
         : styles['connDot']
-  return <span className={className} title={tooltip} role="img" aria-label={tooltip} />
+  return <span className={className} data-tooltip={tooltip} role="img" aria-label={tooltip} />
 }

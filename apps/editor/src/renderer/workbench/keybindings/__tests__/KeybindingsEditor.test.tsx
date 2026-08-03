@@ -96,7 +96,7 @@ describe('KeybindingsEditor', () => {
     disposables.push(...registerVisibleCommand())
     const { container } = mount()
     const editButton = container.querySelector(
-      'button[title="Edit keybinding"]',
+      'button[data-tooltip="Edit keybinding"]',
     ) as HTMLButtonElement
     fireEvent.click(editButton)
 

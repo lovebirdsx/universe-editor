@@ -37,7 +37,7 @@ export function TimelineViewToolbar() {
         type="button"
         className={styles['toolbarBtn']}
         disabled={!pinned && uri === undefined}
-        title={
+        data-tooltip={
           pinned
             ? localize('timeline.unpin', 'Unpin Timeline')
             : localize('timeline.pin', 'Pin Timeline')
@@ -56,7 +56,7 @@ export function TimelineViewToolbar() {
       <button
         type="button"
         className={styles['toolbarBtn']}
-        title={localize('timeline.moreActions', 'More Actions...')}
+        data-tooltip={localize('timeline.moreActions', 'More Actions...')}
         onClick={openOverflow}
       >
         <MoreHorizontal size={16} strokeWidth={1.6} aria-hidden="true" />

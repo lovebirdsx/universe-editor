@@ -48,7 +48,8 @@ function Toggle({ label, title, active, onClick }: ToggleProps) {
   return (
     <button
       type="button"
-      title={title}
+      data-tooltip={title}
+      aria-label={title}
       aria-pressed={active}
       className={`${styles['toggle']} ${active ? styles['toggleActive'] : ''}`}
       onClick={onClick}
@@ -149,7 +150,7 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
           </div>
           <button
             type="button"
-            title={localize('search.toggleDetails', 'Toggle Search Details')}
+            data-tooltip={localize('search.toggleDetails', 'Toggle Search Details')}
             aria-label={localize('search.toggleDetails', 'Toggle Search Details')}
             aria-pressed={props.filtersVisible}
             className={`${styles['filterToggle']} ${props.filtersVisible ? styles['filterToggleActive'] : ''}`}
@@ -190,7 +191,7 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
                 {localize('search.filesToExclude', 'files to exclude')}
                 <button
                   type="button"
-                  title={localize(
+                  data-tooltip={localize(
                     'search.useExcludeSettings',
                     'Use Exclude Settings and Ignore Files',
                   )}

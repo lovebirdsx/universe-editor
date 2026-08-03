@@ -24,7 +24,7 @@ export function WindowControls() {
       <button
         className={styles['ctrl-btn']}
         onClick={() => void host.minimizeWindow()}
-        title={localize('windowControls.minimize', 'Minimize')}
+        data-tooltip={localize('windowControls.minimize', 'Minimize')}
         aria-label={localize('windowControls.minimize', 'Minimize')}
       >
         <svg width="10" height="1" viewBox="0 0 10 1">
@@ -34,7 +34,7 @@ export function WindowControls() {
       <button
         className={styles['ctrl-btn']}
         onClick={() => void host.toggleMaximizeWindow()}
-        title={
+        data-tooltip={
           isMaximized
             ? localize('windowControls.restore', 'Restore Down')
             : localize('windowControls.maximize', 'Maximize')
@@ -63,7 +63,7 @@ export function WindowControls() {
       <button
         className={`${styles['ctrl-btn']} ${styles['close']}`}
         onClick={() => void host.closeWindow()}
-        title={localize('common.close', 'Close')}
+        data-tooltip={localize('common.close', 'Close')}
         aria-label={localize('common.close', 'Close')}
       >
         <svg width="10" height="10" viewBox="0 0 10 10">

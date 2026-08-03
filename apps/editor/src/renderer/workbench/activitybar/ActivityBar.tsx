@@ -42,7 +42,6 @@ function ActivityBarItem({
   dragging,
   dropEdge,
 }: ActivityBarItemProps) {
-  const [showTooltip, setShowTooltip] = useState(false)
   const activityService = useService(IActivityService)
   const viewDescriptors = useViewDescriptors()
   const badge = useObservable(activityService.getBadge(descriptor.id))
@@ -69,9 +68,7 @@ function ActivityBarItem({
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
-      onMouseEnter={() => setShowTooltip(true)}
-      onMouseLeave={() => setShowTooltip(false)}
-      title={descriptor.label}
+      data-tooltip={descriptor.label}
       aria-label={descriptor.label}
       aria-pressed={isActive}
       data-testid={`activitybar-item-${descriptor.id}`}
@@ -82,7 +79,6 @@ function ActivityBarItem({
           {badge.count > 99 ? '99+' : badge.count}
         </span>
       )}
-      {showTooltip && <span className={styles['tooltip']}>{descriptor.label}</span>}
     </button>
   )
 }

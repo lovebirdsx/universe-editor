@@ -454,7 +454,7 @@ function GroupCard({
           role="button"
           tabIndex={0}
           aria-label={localize('aiModels.removeGroup', 'Remove')}
-          title={localize('aiModels.removeGroup', 'Remove provider group')}
+          data-tooltip={localize('aiModels.removeGroup', 'Remove provider group')}
           onClick={(e) => {
             e.stopPropagation()
             onRemoveGroup()

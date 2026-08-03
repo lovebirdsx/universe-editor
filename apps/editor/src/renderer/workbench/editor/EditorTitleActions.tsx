@@ -77,7 +77,7 @@ export function EditorTitleActions({ group }: { group: IEditorGroup }) {
             const rect = btnRef.current?.getBoundingClientRect()
             if (rect) setMenu({ x: rect.left, y: rect.bottom })
           }}
-          title={label}
+          data-tooltip={label}
           aria-label={label}
           data-testid="editor-title-overflow"
         >

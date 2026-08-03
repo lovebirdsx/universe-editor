@@ -104,7 +104,7 @@ export function AgentStatusIndicator() {
     <button
       className={`${styles['agent-status']} ${stateClass}`}
       onClick={() => void commandService.executeCommand(SwitchSessionAction.ID)}
-      title={tooltip}
+      data-tooltip={tooltip}
       aria-label={tooltip}
       data-testid="titlebar-agent-status"
     >

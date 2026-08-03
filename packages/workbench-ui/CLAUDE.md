@@ -9,6 +9,7 @@ Workbench 风格 React UI 基础设施。**依赖 React，不依赖 Electron**�
 | `ContextViewService` | Floating UI 定位 + Portal 渲染的浮层服务 |
 | `ContextMenu` | MenuRegistry 驱动的右键菜单（消费 `MenuId.*` 注册的条目，`args` 透传命令参数） |
 | `HoverService` | delay 触发 / keyboard-accessible 的 hover popup |
+| `TooltipProvider` | 全局委托 tooltip：元素挂 `data-tooltip="…"` 即得主题化气泡（替代原生 `title`）；editor 在 `main.tsx` 根部挂载 |
 | `VirtualList` | `@tanstack/react-virtual` 薄包装，固定/动态行高均支持 |
 | `Tree` / `useTreeModel` / `useOwnedTreeModel` | 虚拟化树（数据源 + 选择 + 展开模型）；组件自建 TreeModel 用 `useOwnedTreeModel` |
 | `useDragHandle` / `useDropTarget` / `DragSessionContext` | 原生 HTML5 DnD source/target + 跨边界 payload 传递 |

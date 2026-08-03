@@ -111,7 +111,8 @@ export function ActionButton({
     <button
       type="button"
       className={styles['actionButton']}
-      title={action.title}
+      data-tooltip={action.title}
+      aria-label={action.title}
       disabled={busy === true}
       onClick={onRun}
       data-testid={`scm-title-action-${action.command}`}

@@ -1302,7 +1302,7 @@ describe('ChatBody — side task affordances', () => {
       expect(container.querySelector('[data-testid="acp-side-tasks-trigger"]')).toBeNull()
       const chip = container.querySelector('[data-testid="acp-side-task-quote"]')
       expect(chip).not.toBeNull()
-      expect(chip?.getAttribute('title')).toBe('quote side-1')
+      expect(chip?.getAttribute('data-tooltip')).toBe('quote side-1')
     })
 
     it('opens the picked side task in a right-split editor tab', () => {

@@ -34,7 +34,7 @@ export function SessionCostIndicator({ session }: { session: IAcpSession }) {
       <button
         type="button"
         className={styles['usageIndicator']}
-        title={
+        data-tooltip={
           estimated
             ? localize(
                 'acp.cost.indicator.estimated',
@@ -173,7 +173,7 @@ function ModelRow({ model, rate }: { model: AcpModelCost; rate: number }) {
   const inputTotal = model.inputTokens + model.cacheReadTokens + model.cacheCreateTokens
   return (
     <tr>
-      <td className={styles['sessionCostModelName']} title={model.model}>
+      <td className={styles['sessionCostModelName']} data-tooltip={model.model}>
         {shortModelName(model.model)}
       </td>
       <td>{formatTokens(inputTotal)}</td>

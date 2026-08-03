@@ -142,7 +142,7 @@ export function UpdateIndicator() {
     <button
       className={classNames.join(' ')}
       onClick={onClick}
-      title={view.tooltip}
+      data-tooltip={view.tooltip}
       aria-label={view.tooltip}
       data-testid="titlebar-update-indicator"
     >

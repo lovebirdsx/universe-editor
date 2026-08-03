@@ -87,7 +87,7 @@ export function HtmlPreviewEditor({ input }: { input: IEditorInput }) {
           // allow-same-origin so the page's `universe-app://root` sub-resources
           // load; allow-scripts so the page's own JS runs (Live-Preview parity).
           sandbox="allow-scripts allow-same-origin"
-          title={(input as HtmlPreviewInput).getName()}
+          data-tooltip={(input as HtmlPreviewInput).getName()}
         />
       )}
     </div>

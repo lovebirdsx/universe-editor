@@ -47,7 +47,7 @@ describe('CollapsibleSlot', () => {
 
   it('exposes the kind label as the header tooltip', () => {
     renderSlot(true)
-    expect(screen.getByTestId('acp-collapsible-toggle').getAttribute('title')).toBe('read')
+    expect(screen.getByTestId('acp-collapsible-toggle').getAttribute('data-tooltip')).toBe('read')
   })
 
   it('invokes onToggle when the header is clicked', () => {

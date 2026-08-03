@@ -190,7 +190,7 @@ function FileTreeView({
             key={`f:${node.file.path}`}
             className={styles['treeFileRow']}
             style={{ paddingLeft: depth * 12 + 8 + 14 }}
-            title={STATUS_LABEL[node.file.status.charAt(0)] ?? node.file.status}
+            data-tooltip={STATUS_LABEL[node.file.status.charAt(0)] ?? node.file.status}
             onClick={() => onOpen(node.file)}
           >
             <span className={`${styles['fileStatus']} ${statusClass(node.file.status) ?? ''}`}>
@@ -201,7 +201,8 @@ function FileTreeView({
               <button
                 type="button"
                 className={styles['fileActionBtn']}
-                title={localize('gitGraph.openPreview', 'Open Preview')}
+                data-tooltip={localize('gitGraph.openPreview', 'Open Preview')}
+                aria-label={localize('gitGraph.openPreview', 'Open Preview')}
                 onClick={(e) => {
                   e.stopPropagation()
                   onOpenPreview(node.file)
@@ -214,7 +215,8 @@ function FileTreeView({
               <button
                 type="button"
                 className={styles['fileActionBtn']}
-                title={localize('gitGraph.openFile', 'Open File')}
+                data-tooltip={localize('gitGraph.openFile', 'Open File')}
+                aria-label={localize('gitGraph.openFile', 'Open File')}
                 onClick={(e) => {
                   e.stopPropagation()
                   onOpenFile(node.file)
@@ -796,7 +798,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
               type="button"
               className={styles['detailClose']}
               onClick={() => setSelection([])}
-              title={localize('common.close', 'Close')}
+              data-tooltip={localize('common.close', 'Close')}
             >
               ×
             </button>
@@ -837,7 +839,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
             type="button"
             className={styles['detailClose']}
             onClick={() => setSelection([])}
-            title={localize('common.close', 'Close')}
+            data-tooltip={localize('common.close', 'Close')}
           >
             ×
           </button>
@@ -893,7 +895,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
             className={styles['repoSelect']}
             value={selectedRepo ?? repos[0]?.root ?? ''}
             onChange={(e) => onSelectRepo(e.target.value)}
-            title={localize('perforceGraph.client', 'Client')}
+            data-tooltip={localize('perforceGraph.client', 'Client')}
           >
             {repos.map((r) => (
               <option key={r.root} value={r.root}>
@@ -906,7 +908,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
           type="button"
           className={`${styles['toolBtn']} ${wholeRepo ? styles['toolBtnActive'] : ''}`}
           onClick={() => setWholeRepo((v) => !v)}
-          title={
+          data-tooltip={
             wholeRepo
               ? localize('perforceGraph.scope.showFolder', 'Show current folder changes only')
               : localize('perforceGraph.scope.showWholeRepo', 'Show whole repository changes')
@@ -920,7 +922,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
           type="button"
           className={styles['toolBtn']}
           onClick={() => load()}
-          title={localize('common.refresh', 'Refresh')}
+          data-tooltip={localize('common.refresh', 'Refresh')}
           aria-label={localize('common.refresh', 'Refresh')}
         >
           ↺

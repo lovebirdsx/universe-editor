@@ -217,8 +217,8 @@ describe('ExplorerView', () => {
     const label = await screen.findByText('README.md')
     const row = label.closest('[role="treeitem"]')
     const expected = URI.file('/ws/README.md').fsPath
-    expect(row?.getAttribute('title')).toBe(expected)
-    expect(label.getAttribute('title')).toBe(expected)
+    expect(row?.getAttribute('data-tooltip')).toBe(expected)
+    expect(label.getAttribute('data-tooltip')).toBe(expected)
   })
 
   it('renders themed file icons instead of emoji fallbacks', async () => {

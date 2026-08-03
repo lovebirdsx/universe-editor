@@ -300,7 +300,9 @@ export const ToolCallCard = memo(function ToolCallCard({
       {call.mcpServer !== undefined && (
         <span
           className={styles['mcpBadge']}
-          title={call.mcpTool !== undefined ? `${call.mcpServer} · ${call.mcpTool}` : call.title}
+          data-tooltip={
+            call.mcpTool !== undefined ? `${call.mcpServer} · ${call.mcpTool}` : call.title
+          }
         >
           MCP · {call.mcpServer}
         </span>

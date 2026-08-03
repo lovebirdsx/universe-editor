@@ -1277,7 +1277,7 @@ export function PromptInput({
         {totalRunningMs > 0 || running ? (
           <span
             className={styles['sessionTimerInline']}
-            title={localize('acp.session.runningTime', 'Session running time')}
+            data-tooltip={localize('acp.session.runningTime', 'Session running time')}
           >
             {formatRunningTime(totalRunningMs)}
           </span>
@@ -1378,7 +1378,7 @@ function CollapseToggleButton({ mode, onCycle }: { mode: CollapseMode; onCycle: 
       type="button"
       className={styles['collapseToggle']}
       onClick={onCycle}
-      title={COLLAPSE_TOOLTIP[mode]}
+      data-tooltip={COLLAPSE_TOOLTIP[mode]}
       aria-label={COLLAPSE_TOOLTIP[mode]}
     >
       <Icon size={14} strokeWidth={1.75} aria-hidden="true" />

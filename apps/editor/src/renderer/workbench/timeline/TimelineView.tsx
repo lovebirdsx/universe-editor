@@ -320,7 +320,7 @@ export function TimelineView() {
                     ? { paddingLeft: ctx.indentPadding, ...ctx.style }
                     : { paddingLeft: ctx.indentPadding }
                 }
-                title={item.tooltip}
+                data-tooltip={item.tooltip}
                 onClick={(e) => {
                   ctx.onClickRow(e)
                   runItem(item)

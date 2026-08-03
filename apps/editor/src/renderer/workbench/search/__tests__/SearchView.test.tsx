@@ -348,7 +348,7 @@ describe('SearchView', () => {
     })
     const before = search.searchCalls
     act(() => {
-      fireEvent.click(screen.getByTitle('Match Case'))
+      fireEvent.click(screen.getByRole('button', { name: 'Match Case' }))
     })
     await act(async () => {
       await vi.advanceTimersByTimeAsync(260)

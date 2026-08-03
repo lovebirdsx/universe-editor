@@ -26,12 +26,12 @@ export function PromptImageChips({
         const src = `data:${img.mimeType};base64,${img.dataBase64}`
         const label = img.name ?? formatBytes(img.byteSize)
         return (
-          <span key={img.id} className={styles['imageChip']} title={label}>
+          <span key={img.id} className={styles['imageChip']} data-tooltip={label}>
             <ChatImage src={src} alt={label} mimeType={img.mimeType} />
             <button
               type="button"
               className={styles['imageChipRemove']}
-              title={localize('acp.image.remove', 'Remove image')}
+              data-tooltip={localize('acp.image.remove', 'Remove image')}
               aria-label={localize('acp.image.remove', 'Remove image')}
               onClick={() => onRemove(img.id)}
             >

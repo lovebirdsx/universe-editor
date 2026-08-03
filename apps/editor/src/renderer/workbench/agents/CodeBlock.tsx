@@ -120,7 +120,7 @@ export function CodeBlock({ code, lang, line, onOpenFilePath }: CodeBlockProps) 
       <button
         type="button"
         className={styles['codeBlockCopy']}
-        title={
+        data-tooltip={
           copied ? localize('codeBlock.copied', 'Copied') : localize('codeBlock.copy', 'Copy code')
         }
         aria-label={localize('codeBlock.copy', 'Copy code')}

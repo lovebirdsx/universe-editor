@@ -194,6 +194,7 @@ import { RendererLifecycleService } from './services/lifecycle/RendererLifecycle
 import { RendererSessionsService } from './services/sessionSwitcher/RendererSessionsService.js'
 import { ITerminalManagerService } from './services/terminal/TerminalManagerService.js'
 import { ApiUsageService, IApiUsageService } from './services/usage/ApiUsageService.js'
+import { TooltipProvider } from '@universe-editor/workbench-ui'
 import '@universe-editor/workbench-ui/tokens.css'
 import '@vscode/codicons/dist/codicon.css'
 import './workbench.css'
@@ -851,7 +852,9 @@ async function bootstrapWorkbench(): Promise<void> {
   reactRoot.render(
     <StrictMode>
       <WorkbenchErrorBoundary logger={rootLogger}>
-        <Workbench instantiation={instantiation} lifecycle={lifecycle} />
+        <TooltipProvider>
+          <Workbench instantiation={instantiation} lifecycle={lifecycle} />
+        </TooltipProvider>
       </WorkbenchErrorBoundary>
     </StrictMode>,
   )

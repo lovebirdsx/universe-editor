@@ -39,7 +39,7 @@ export function SubagentStatsBadge({ call }: { call: AcpToolCall }) {
   return (
     <span className={styles['subagentStats']} data-testid="acp-subagent-stats">
       {model !== undefined && (
-        <span className={styles['subagentStatItem']} title={stats?.model}>
+        <span className={styles['subagentStatItem']} data-tooltip={stats?.model}>
           <Bot size={11} strokeWidth={1.75} aria-hidden="true" />
           {model}
         </span>
@@ -52,7 +52,10 @@ export function SubagentStatsBadge({ call }: { call: AcpToolCall }) {
       )}
       {tokens !== undefined && <span className={styles['subagentStatItem']}>{tokens}</span>}
       {costCny !== undefined && (
-        <span className={styles['subagentStatItem']} title="本地按 token 估算，实际计费可能不同">
+        <span
+          className={styles['subagentStatItem']}
+          data-tooltip="本地按 token 估算，实际计费可能不同"
+        >
           <Coins size={11} strokeWidth={1.75} aria-hidden="true" />
           ≈¥{formatCny(costCny)}
         </span>

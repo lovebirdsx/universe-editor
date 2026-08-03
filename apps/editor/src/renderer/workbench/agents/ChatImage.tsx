@@ -50,7 +50,7 @@ export function ChatImage({
         ref={anchorRef}
         src={src}
         alt={alt}
-        title={alt}
+        data-tooltip={alt}
         className={styles['chatImageThumb']}
         onClick={() => setOpen((v) => !v)}
         role="button"
@@ -388,7 +388,7 @@ function ImagePreviewPopover({
         <button
           type="button"
           className={styles['imagePreviewCopy']}
-          title={
+          data-tooltip={
             copied
               ? localize('acp.image.copied', 'Copied')
               : localize('acp.image.copy', 'Copy image')
@@ -406,7 +406,7 @@ function ImagePreviewPopover({
         <button
           type="button"
           className={styles['imagePreviewClose']}
-          title={localize('acp.image.close', 'Close preview')}
+          data-tooltip={localize('acp.image.close', 'Close preview')}
           aria-label={localize('acp.image.close', 'Close preview')}
           onClick={onDismiss}
           data-testid="acp-image-preview-close"

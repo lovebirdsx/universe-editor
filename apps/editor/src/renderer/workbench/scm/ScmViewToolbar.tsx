@@ -147,7 +147,7 @@ export function ScmViewToolbar() {
         <button
           type="button"
           className={styles['repoSelector']}
-          title={selected.label}
+          data-tooltip={selected.label}
           onClick={openRepoMenu}
         >
           <span className={styles['repoSelectorLabel']}>{repoShortName(selected)}</span>
@@ -170,7 +170,8 @@ export function ScmViewToolbar() {
       <button
         type="button"
         className={styles['actionButton']}
-        title={localize('scm.moreActions', 'More Actions...')}
+        data-tooltip={localize('scm.moreActions', 'More Actions...')}
+        aria-label={localize('scm.moreActions', 'More Actions...')}
         onClick={openOverflow}
       >
         {(() => {

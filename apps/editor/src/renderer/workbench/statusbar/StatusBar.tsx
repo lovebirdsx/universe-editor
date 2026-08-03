@@ -73,7 +73,12 @@ function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
     .join(' ')
 
   return (
-    <button className={className} onClick={handleClick} title={entry.tooltip} aria-label={label}>
+    <button
+      className={className}
+      onClick={handleClick}
+      data-tooltip={entry.tooltip}
+      aria-label={label}
+    >
       {showSpinner && (
         <Loader2
           size={14}

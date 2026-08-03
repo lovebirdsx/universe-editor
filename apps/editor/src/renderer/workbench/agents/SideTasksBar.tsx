@@ -132,7 +132,7 @@ export function SideTaskQuoteBar({ session }: { session: IAcpSession }) {
       <span
         className={styles['sideTaskQuoteChip']}
         data-testid="acp-side-task-quote"
-        title={entry.sideTaskQuote}
+        data-tooltip={entry.sideTaskQuote}
       >
         <TextQuote size={12} strokeWidth={1.75} aria-hidden="true" />
         {localize('acp.sideTask.quoteChip', '{count} selected text fragment(s)', { count: 1 })}

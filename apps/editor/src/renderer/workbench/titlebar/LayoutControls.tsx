@@ -106,7 +106,7 @@ function ConfigureLayoutDropdown() {
       <button
         className={styles['layout-btn']}
         onClick={() => setOpen((prev) => !prev)}
-        title={localize('layoutControls.configureLayout', 'Configure Layout')}
+        data-tooltip={localize('layoutControls.configureLayout', 'Configure Layout')}
         aria-label={localize('layoutControls.configureLayout', 'Configure Layout')}
         aria-haspopup="true"
         aria-expanded={open}
@@ -136,7 +136,7 @@ export function LayoutControls() {
       <button
         className={`${styles['layout-btn']} ${sidebarVisible ? styles['layout-btn--active'] : ''}`}
         onClick={() => layoutService.toggleVisible(PartId.SideBar)}
-        title={localize(
+        data-tooltip={localize(
           'layoutControls.togglePrimarySideBarWithKey',
           'Toggle Primary Side Bar (Ctrl+B)',
         )}
@@ -148,7 +148,7 @@ export function LayoutControls() {
       <button
         className={`${styles['layout-btn']} ${panelVisible ? styles['layout-btn--active'] : ''}`}
         onClick={() => layoutService.toggleVisible(PartId.Panel)}
-        title={localize('layoutControls.togglePanelWithKey', 'Toggle Panel (Ctrl+J)')}
+        data-tooltip={localize('layoutControls.togglePanelWithKey', 'Toggle Panel (Ctrl+J)')}
         aria-label={localize('action.togglePanel.title', 'Toggle Panel')}
         aria-pressed={panelVisible}
       >
@@ -157,7 +157,7 @@ export function LayoutControls() {
       <button
         className={`${styles['layout-btn']} ${secondarySidebarVisible ? styles['layout-btn--active'] : ''}`}
         onClick={() => layoutService.toggleVisible(PartId.SecondarySideBar)}
-        title={localize(
+        data-tooltip={localize(
           'layoutControls.toggleSecondarySideBarWithKey',
           'Toggle Secondary Side Bar (Ctrl+Alt+B)',
         )}

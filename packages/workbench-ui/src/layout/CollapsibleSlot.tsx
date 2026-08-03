@@ -80,7 +80,7 @@ export function CollapsibleSlot({
         className={styles['collapsibleHeader']}
         aria-expanded={!collapsed}
         onClick={onToggle}
-        title={kindLabel}
+        data-tooltip={kindLabel}
         data-testid="acp-collapsible-toggle"
       >
         <span className={styles['slotIcon']} aria-hidden="true">

@@ -101,7 +101,7 @@ function RecordRow({
       data-selected={selected ? 'true' : undefined}
       data-testid="ai-debug-row"
       onClick={onSelect}
-      title={record.modelId}
+      data-tooltip={record.modelId}
     >
       <span className={styles['purpose']}>{record.purpose ?? 'unknown'}</span>
       <span className={styles['model']}>{bareModel(record.modelId)}</span>

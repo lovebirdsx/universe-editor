@@ -797,13 +797,13 @@ function ReviewRow({
         {StateIcon && (
           <span
             className={cx(styles['stateIcon'], stateIcon.className)}
-            title={review.stateLabel}
+            data-tooltip={review.stateLabel}
             aria-label={review.stateLabel}
           >
             <StateIcon size={13} />
           </span>
         )}
-        <span className={styles['desc']} title={review.description}>
+        <span className={styles['desc']} data-tooltip={review.description}>
           {review.description || localize('swarm.noDescription', '(no description)')}
         </span>
       </div>
@@ -813,7 +813,10 @@ function ReviewRow({
         </span>
         <span className={styles['metaItem']}>{review.author}</span>
         {review.stream && (
-          <span className={cx(styles['metaItem'], styles['metaStream'])} title={review.stream}>
+          <span
+            className={cx(styles['metaItem'], styles['metaStream'])}
+            data-tooltip={review.stream}
+          >
             <GitBranch size={11} />
             <span className={styles['metaStreamText']}>{review.stream}</span>
           </span>

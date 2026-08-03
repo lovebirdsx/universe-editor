@@ -307,7 +307,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
             aria-expanded={ctx.node.expanded}
             className={className}
             style={style}
-            title={n.relPath}
+            data-tooltip={n.relPath}
             onClick={ctx.onClickRow}
             onContextMenu={(e) => openRowMenu(e, n)}
           >
@@ -355,7 +355,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
             aria-expanded={ctx.node.expanded}
             className={className}
             style={style}
-            title={n.relPath}
+            data-tooltip={n.relPath}
             onClick={ctx.onClickRow}
             onContextMenu={(e) => openRowMenu(e, n)}
             {...resourceDragProps(() =>
@@ -401,7 +401,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
               <button
                 type="button"
                 className={styles['replaceBtn']}
-                title={localize('search.replaceAllInFile', 'Replace All in File')}
+                data-tooltip={localize('search.replaceAllInFile', 'Replace All in File')}
                 aria-label={localize('search.replaceAllInNamedFile', 'Replace all in {name}', {
                   name: n.name,
                 })}
@@ -426,7 +426,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           role="treeitem"
           className={className}
           style={style}
-          title={n.match.preview}
+          data-tooltip={n.match.preview}
           onClick={ctx.onClickRow}
           onDoubleClick={() => onActivateMatch(n.resource, n.match, n.rangeIndex, false)}
           onContextMenu={(e) => openRowMenu(e, n)}
@@ -440,7 +440,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
             <button
               type="button"
               className={styles['replaceBtn']}
-              title={localize('search.replace', 'Replace')}
+              data-tooltip={localize('search.replace', 'Replace')}
               aria-label={localize('search.replaceMatchAtLine', 'Replace match at line {line}', {
                 line: n.match.lineNumber,
               })}

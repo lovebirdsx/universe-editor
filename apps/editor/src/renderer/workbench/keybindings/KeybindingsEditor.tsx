@@ -262,7 +262,7 @@ export function KeybindingsEditor(): JSX.Element {
                         <div className={styles['actions']}>
                           <button
                             className={styles['btn']}
-                            title={localize('keybindings.edit', 'Edit keybinding')}
+                            data-tooltip={localize('keybindings.edit', 'Edit keybinding')}
                             onClick={() => setRecordingCommand(cmd.id)}
                           >
                             {localize('common.edit', 'Edit')}
@@ -270,7 +270,7 @@ export function KeybindingsEditor(): JSX.Element {
                           {isUser && (
                             <button
                               className={`${styles['btn']} ${styles['danger']}`}
-                              title={localize('keybindings.reset', 'Reset to default')}
+                              data-tooltip={localize('keybindings.reset', 'Reset to default')}
                               onClick={() => userKeybindingsService.resetKeybinding(cmd.id)}
                             >
                               {localize('common.reset', 'Reset')}

@@ -3,7 +3,7 @@ import { cx } from './cx.js'
 import styles from './IconButton.module.css'
 
 export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
-  /** Required: drives both aria-label and the native title tooltip. */
+  /** Required: drives both aria-label and the tooltip. */
   label: string
   /** Square edge length in px. Defaults to 22 (workbench toolbar standard). */
   size?: number
@@ -22,7 +22,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       ref={ref}
       type="button"
       aria-label={label}
-      title={label}
+      data-tooltip={label}
       className={cx(styles['iconButton'], active && styles['active'], className)}
       style={{ width: size, height: size, ...style }}
       {...rest}

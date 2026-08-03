@@ -304,7 +304,7 @@ describe('ToolCallCard', () => {
     // Basename label + line suffix; full path lives in the tooltip.
     expect(link.textContent).toContain('foo.ts')
     expect(link.textContent).toContain(':42')
-    expect(link.getAttribute('title')).toBe('/repo/src/foo.ts:42')
+    expect(link.getAttribute('data-tooltip')).toBe('/repo/src/foo.ts:42')
     // Clicking is wired to the file opener (a no-op without file services here,
     // but must not throw).
     fireEvent.click(link)

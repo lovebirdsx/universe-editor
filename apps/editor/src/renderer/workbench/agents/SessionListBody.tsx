@@ -263,7 +263,7 @@ function SessionRow({
       data-foreign={isForeign ? 'true' : 'false'}
       data-archived={isArchived ? 'true' : 'false'}
       data-testid={`session-row-${entry.id}`}
-      title={rowTooltip}
+      data-tooltip={rowTooltip}
       tabIndex={0}
       onClick={onActivate}
       onContextMenu={onContextMenu}
@@ -316,7 +316,7 @@ function SessionRow({
             </span>
           ) : null}
           {chip ? (
-            <span className={styles['sessionRowScopeGroup']} title={chip.title}>
+            <span className={styles['sessionRowScopeGroup']} data-tooltip={chip.title}>
               {isForeign ? (
                 <GitBranch
                   size={12}
@@ -341,7 +341,7 @@ function SessionRow({
           onToggleArchive()
         }}
         aria-label={archiveLabel}
-        title={archiveLabel}
+        data-tooltip={archiveLabel}
       >
         {isArchived ? (
           <ArchiveRestore size={13} strokeWidth={1.75} />
@@ -357,7 +357,7 @@ function SessionRow({
           onTogglePin()
         }}
         aria-label={pinLabel}
-        title={pinLabel}
+        data-tooltip={pinLabel}
       >
         {isPinned ? <PinOff size={13} strokeWidth={1.75} /> : <Pin size={13} strokeWidth={1.75} />}
       </button>

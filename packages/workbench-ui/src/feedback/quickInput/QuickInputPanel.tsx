@@ -724,7 +724,7 @@ export function QuickPickPanel({
             key={`qp-btn-${i}`}
             type="button"
             className={styles['inputButton']}
-            title={button.tooltip}
+            data-tooltip={button.tooltip}
             aria-label={button.tooltip ?? 'Quick pick button'}
             data-testid="quick-input-button"
             onClick={() => state.onTriggerButton?.(button)}

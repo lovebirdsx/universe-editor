@@ -268,7 +268,7 @@ function VerifyStatus({ state }: { readonly state: VerifyState }) {
     )
   }
   return (
-    <span className={styles['verifyFail']} title={state.error}>
+    <span className={styles['verifyFail']} data-tooltip={state.error}>
       <XCircle size={14} strokeWidth={2} />
       {state.error}
     </span>

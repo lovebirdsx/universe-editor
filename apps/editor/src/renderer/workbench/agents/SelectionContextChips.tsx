@@ -30,7 +30,7 @@ export function SelectionContextChips({
           <span
             key={`${ctx.uri}:${ctx.startLine}-${ctx.endLine}:${i}`}
             className={styles['contextChip']}
-            title={`${label}\n\n${ctx.text}`}
+            data-tooltip={`${label}\n\n${ctx.text}`}
             onClick={() => onReveal(ctx)}
           >
             <FileCode size={12} strokeWidth={1.75} aria-hidden="true" />
@@ -38,7 +38,7 @@ export function SelectionContextChips({
             <button
               type="button"
               className={styles['contextChipRemove']}
-              title={localize('acp.context.remove', 'Remove context')}
+              data-tooltip={localize('acp.context.remove', 'Remove context')}
               aria-label={localize('acp.context.remove', 'Remove context')}
               onClick={(e) => {
                 e.stopPropagation()

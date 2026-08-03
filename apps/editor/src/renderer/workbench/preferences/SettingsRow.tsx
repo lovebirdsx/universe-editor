@@ -64,7 +64,7 @@ export const SettingsRow = memo(function SettingsRow({
     >
       <div className={styles['modifiedBar']} aria-hidden="true" />
       <div className={styles['rowMeta']}>
-        <div className={styles['rowTitle']} title={configKey}>
+        <div className={styles['rowTitle']} data-tooltip={configKey}>
           {category ? <span className={styles['rowCategory']}>{category}: </span> : null}
           <span className={styles['rowLabel']}>{label}</span>
         </div>

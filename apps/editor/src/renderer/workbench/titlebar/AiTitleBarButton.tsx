@@ -228,7 +228,7 @@ export function AiTitleBarButton() {
         ref={btnRef}
         className={styles['ai-button']}
         onClick={toggleOpen}
-        title={tooltip}
+        data-tooltip={tooltip}
         aria-label={tooltip}
         aria-expanded={open}
         aria-haspopup="dialog"

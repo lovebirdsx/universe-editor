@@ -244,7 +244,7 @@ describe('PerforceGraphEditor', () => {
     fireEvent.click(screen.getByText('Fix widget'))
     await flush()
 
-    fireEvent.click(screen.getByTitle('Open File'))
+    fireEvent.click(screen.getByRole('button', { name: 'Open File' }))
     await flush()
 
     // The icon opens the local source file through the editor resolver — it does

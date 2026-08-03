@@ -133,7 +133,7 @@ export function ForeignSessionPreview({ entry }: { entry: AcpSessionHistoryEntry
 
       <div className={styles['foreignPreviewMeta']}>
         {entry.branch ? (
-          <span className={styles['foreignPreviewMetaRow']} title={entry.cwd}>
+          <span className={styles['foreignPreviewMetaRow']} data-tooltip={entry.cwd}>
             <GitBranch size={13} strokeWidth={1.75} aria-hidden="true" />
             {entry.branch}
           </span>
@@ -146,7 +146,7 @@ export function ForeignSessionPreview({ entry }: { entry: AcpSessionHistoryEntry
           {config.map((c) => {
             const Icon = categoryIcon(c.category)
             return (
-              <span key={c.id} className={styles['foreignPreviewConfigItem']} title={c.name}>
+              <span key={c.id} className={styles['foreignPreviewConfigItem']} data-tooltip={c.name}>
                 <Icon size={13} strokeWidth={1.75} aria-hidden="true" />
                 {c.name}: {c.valueLabel}
               </span>

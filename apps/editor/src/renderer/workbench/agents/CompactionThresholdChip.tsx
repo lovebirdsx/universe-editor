@@ -28,7 +28,7 @@ export function CompactionThresholdChip({ session }: { session: IAcpSession }) {
       className={styles['compactionChip']}
       data-state={danger ? 'danger' : 'warn'}
       data-testid="acp-compaction-chip"
-      title={localize(
+      data-tooltip={localize(
         'acp.compaction.chip.title',
         'Context at {pct}% — nearing automatic compaction',
         { pct },

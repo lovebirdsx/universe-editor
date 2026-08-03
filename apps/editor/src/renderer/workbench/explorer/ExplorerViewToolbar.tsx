@@ -20,7 +20,7 @@ export function ExplorerViewToolbar() {
       <button
         type="button"
         className={styles['toolbarBtn']}
-        title={localize('explorer.newFile', 'New File...')}
+        data-tooltip={localize('explorer.newFile', 'New File...')}
         disabled={!hasRoot}
         onClick={() => void commandService.executeCommand('workbench.files.action.newFile')}
       >
@@ -29,7 +29,7 @@ export function ExplorerViewToolbar() {
       <button
         type="button"
         className={styles['toolbarBtn']}
-        title={localize('explorer.newFolder', 'New Folder...')}
+        data-tooltip={localize('explorer.newFolder', 'New Folder...')}
         disabled={!hasRoot}
         onClick={() => void commandService.executeCommand('workbench.files.action.newFolder')}
       >
@@ -38,7 +38,7 @@ export function ExplorerViewToolbar() {
       <button
         type="button"
         className={styles['toolbarBtn']}
-        title={localize('explorer.refresh', 'Refresh Explorer')}
+        data-tooltip={localize('explorer.refresh', 'Refresh Explorer')}
         disabled={!hasRoot}
         onClick={() => {
           const root = tree.root
@@ -50,7 +50,7 @@ export function ExplorerViewToolbar() {
       <button
         type="button"
         className={styles['toolbarBtn']}
-        title={localize('explorer.collapseAll', 'Collapse All')}
+        data-tooltip={localize('explorer.collapseAll', 'Collapse All')}
         disabled={!hasRoot}
         onClick={() => tree.collapseAll()}
       >

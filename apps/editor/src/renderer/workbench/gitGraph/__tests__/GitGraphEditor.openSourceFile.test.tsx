@@ -248,7 +248,7 @@ describe('GitGraphEditor open source file', () => {
     const { resolver } = renderEditor({ fileExists: true })
     await flush()
 
-    fireEvent.click(screen.getByTitle('Open File'))
+    fireEvent.click(screen.getByRole('button', { name: 'Open File' }))
     await flush()
 
     const expected = URI.joinPath(URI.file(REPO.root), FILE_PATH)
@@ -260,7 +260,7 @@ describe('GitGraphEditor open source file', () => {
 
     const { resolver } = renderEditor({ fileExists: true, stallInitialGetRepos: true })
 
-    fireEvent.click(screen.getByTitle('Open File'))
+    fireEvent.click(screen.getByRole('button', { name: 'Open File' }))
     await flush()
 
     const expected = URI.joinPath(URI.file(REPO.root), FILE_PATH)
@@ -272,7 +272,7 @@ describe('GitGraphEditor open source file', () => {
     const { resolver, notification } = renderEditor({ fileExists: false })
     await flush()
 
-    fireEvent.click(screen.getByTitle('Open File'))
+    fireEvent.click(screen.getByRole('button', { name: 'Open File' }))
     await flush()
 
     expect(resolver.openEditor).not.toHaveBeenCalled()
@@ -291,7 +291,7 @@ describe('GitGraphEditor open source file', () => {
     })
     await flush()
 
-    fireEvent.click(screen.getByTitle('Open File'))
+    fireEvent.click(screen.getByRole('button', { name: 'Open File' }))
     await flush()
 
     expect(notification.notify).toHaveBeenCalledWith(

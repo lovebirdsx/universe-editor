@@ -29,14 +29,14 @@ describe('atoms', () => {
     expect(btn.getAttribute('aria-busy')).toBe('true')
   })
 
-  it('IconButton exposes label as aria-label and title', () => {
+  it('IconButton exposes label as aria-label and tooltip', () => {
     render(
       <IconButton label="Refresh">
         <svg />
       </IconButton>,
     )
     const btn = screen.getByRole('button', { name: 'Refresh' })
-    expect(btn.getAttribute('title')).toBe('Refresh')
+    expect(btn.getAttribute('data-tooltip')).toBe('Refresh')
   })
 
   it('Input reflects invalid state via aria-invalid', () => {

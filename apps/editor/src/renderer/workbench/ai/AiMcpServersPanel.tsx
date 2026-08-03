@@ -652,7 +652,7 @@ function SourceBadge({
       className={styles['sourceBadge']}
       data-shadowed={!presence.isWinner || undefined}
       data-invalid={!presence.validation.valid || undefined}
-      title={title}
+      data-tooltip={title}
       onClick={onClick}
       data-testid="ai-mcp-source-badge"
       data-source={presence.id}
@@ -685,7 +685,12 @@ function SessionStatusDot({
   const status = servers.find((s) => s.name === name)?.status
   if (!status) return null
   return (
-    <span className={styles['statusDot']} data-status={status} title={status} aria-hidden="true" />
+    <span
+      className={styles['statusDot']}
+      data-status={status}
+      data-tooltip={status}
+      aria-hidden="true"
+    />
   )
 }
 

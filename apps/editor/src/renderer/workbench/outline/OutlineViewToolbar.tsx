@@ -39,7 +39,12 @@ export function OutlineViewToolbar() {
       <button
         type="button"
         className={styles['toolbarBtn']}
-        title={
+        data-tooltip={
+          allCollapsed
+            ? localize('outline.expandAll', 'Expand All')
+            : localize('outline.collapseAll', 'Collapse All')
+        }
+        aria-label={
           allCollapsed
             ? localize('outline.expandAll', 'Expand All')
             : localize('outline.collapseAll', 'Collapse All')
@@ -57,7 +62,8 @@ export function OutlineViewToolbar() {
       <button
         type="button"
         className={styles['toolbarBtn']}
-        title={localize('outline.moreActions', 'More Actions...')}
+        data-tooltip={localize('outline.moreActions', 'More Actions...')}
+        aria-label={localize('outline.moreActions', 'More Actions...')}
         onClick={openOverflow}
       >
         <MoreHorizontal size={16} strokeWidth={1.6} aria-hidden="true" />

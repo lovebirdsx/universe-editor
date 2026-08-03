@@ -142,7 +142,7 @@ function UserMessageActions({ session, messageId }: { session: IAcpSession; mess
         <button
           type="button"
           className={styles['userMessageAction']}
-          title={localize('acp.userMessage.rewind', 'Rewind to here')}
+          data-tooltip={localize('acp.userMessage.rewind', 'Rewind to here')}
           aria-label={localize('acp.userMessage.rewind', 'Rewind to here')}
           onClick={() => void executeCommand(RewindAgentSessionAction.ID, arg)}
           data-testid="acp-user-message-rewind"
@@ -154,7 +154,7 @@ function UserMessageActions({ session, messageId }: { session: IAcpSession; mess
         <button
           type="button"
           className={styles['userMessageAction']}
-          title={localize('acp.userMessage.fork', 'Fork from here')}
+          data-tooltip={localize('acp.userMessage.fork', 'Fork from here')}
           aria-label={localize('acp.userMessage.fork', 'Fork from here')}
           onClick={() => void executeCommand(ForkAgentSessionAction.ID, arg)}
           data-testid="acp-user-message-fork"

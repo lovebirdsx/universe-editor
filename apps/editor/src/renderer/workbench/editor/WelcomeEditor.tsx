@@ -138,7 +138,7 @@ export function WelcomeEditor(_props: { input: IEditorInput }) {
                   type="button"
                   className={styles['welcome-recent-item']}
                   onClick={() => void workspace.openFolder(entry.folder)}
-                  title={entry.folder.fsPath}
+                  data-tooltip={entry.folder.fsPath}
                 >
                   <span className={styles['welcome-recent-name']}>{entry.name}</span>
                   <span className={styles['welcome-recent-path']}>{entry.folder.fsPath}</span>

@@ -294,7 +294,7 @@ function CommitRefs({
         <span
           key={entry.key}
           className={entry.className}
-          title={entry.title}
+          data-tooltip={entry.title}
           onContextMenu={entry.onMenu}
         >
           {entry.text}
@@ -304,7 +304,7 @@ function CommitRefs({
         <button
           type="button"
           className={styles['badgeOverflow']}
-          title={hidden.map((e) => e.menuLabel).join('\n')}
+          data-tooltip={hidden.map((e) => e.menuLabel).join('\n')}
           onClick={(e) => onOverflowMenu(hidden, e)}
         >
           +{hidden.length}
@@ -362,7 +362,7 @@ function FileTreeView({
             key={`f:${node.file.path}`}
             className={styles['treeFileRow']}
             style={{ paddingLeft: depth * 12 + 8 + 14 }}
-            title={STATUS_LABEL[node.file.status.charAt(0)] ?? node.file.status}
+            data-tooltip={STATUS_LABEL[node.file.status.charAt(0)] ?? node.file.status}
             onClick={() => onOpen(node.file)}
           >
             <span className={`${styles['fileStatus']} ${statusClass(node.file.status) ?? ''}`}>
@@ -373,7 +373,8 @@ function FileTreeView({
               <button
                 type="button"
                 className={styles['fileActionBtn']}
-                title={localize('gitGraph.openPreview', 'Open Preview')}
+                data-tooltip={localize('gitGraph.openPreview', 'Open Preview')}
+                aria-label={localize('gitGraph.openPreview', 'Open Preview')}
                 onClick={(e) => {
                   e.stopPropagation()
                   onOpenPreview(node.file)
@@ -386,7 +387,8 @@ function FileTreeView({
               <button
                 type="button"
                 className={styles['fileActionBtn']}
-                title={localize('gitGraph.openFile', 'Open File')}
+                data-tooltip={localize('gitGraph.openFile', 'Open File')}
+                aria-label={localize('gitGraph.openFile', 'Open File')}
                 onClick={(e) => {
                   e.stopPropagation()
                   onOpenFile(node.file)
@@ -1692,7 +1694,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
               type="button"
               className={styles['detailClose']}
               onClick={() => setSelection([])}
-              title={localize('common.close', 'Close')}
+              data-tooltip={localize('common.close', 'Close')}
             >
               ×
             </button>
@@ -1730,7 +1732,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
               type="button"
               className={styles['detailClose']}
               onClick={() => setSelection([])}
-              title={localize('common.close', 'Close')}
+              data-tooltip={localize('common.close', 'Close')}
             >
               ×
             </button>
@@ -1772,7 +1774,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
             type="button"
             className={styles['detailClose']}
             onClick={() => setSelection([])}
-            title={localize('common.close', 'Close')}
+            data-tooltip={localize('common.close', 'Close')}
           >
             ×
           </button>
@@ -1833,7 +1835,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
             className={styles['repoSelect']}
             value={selectedRepo ?? repos[0]?.root ?? ''}
             onChange={(e) => onSelectRepo(e.target.value)}
-            title={localize('gitGraph.repository', 'Repository')}
+            data-tooltip={localize('gitGraph.repository', 'Repository')}
           >
             {repos.map((r) => (
               <option key={r.root} value={r.root}>
@@ -1846,7 +1848,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           type="button"
           className={`${styles['toolBtn']} ${settings.includeRemotes ? styles['toolBtnActive'] : ''}`}
           onClick={() => setSettings((s) => ({ ...s, includeRemotes: !s.includeRemotes }))}
-          title={
+          data-tooltip={
             settings.includeRemotes
               ? localize('gitGraph.hideRemoteBranches', 'Hide remote branches')
               : localize('gitGraph.showRemoteBranches', 'Show remote branches')
@@ -1859,7 +1861,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           type="button"
           className={styles['toolBtn']}
           onClick={() => setShowSettings((s) => !s)}
-          title={localize('gitGraph.viewSettings', 'View settings')}
+          data-tooltip={localize('gitGraph.viewSettings', 'View settings')}
           aria-label={localize('gitGraph.viewSettings', 'View settings')}
         >
           ⚙
@@ -1868,7 +1870,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           type="button"
           className={styles['toolBtn']}
           onClick={() => load()}
-          title={localize('common.refresh', 'Refresh')}
+          data-tooltip={localize('common.refresh', 'Refresh')}
           aria-label={localize('common.refresh', 'Refresh')}
         >
           ↺

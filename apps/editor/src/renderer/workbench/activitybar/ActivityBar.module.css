@@ -115,20 +115,3 @@
   text-align: center;
   pointer-events: none;
 }
-
-.tooltip {
-  position: absolute;
-  left: 100%;
-  margin-left: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  background: var(--vscode-tooltip-background, #2f2f35);
-  color: var(--vscode-tooltip-foreground, #c8c8c8);
-  padding: 4px 8px;
-  border-radius: 3px;
-  white-space: nowrap;
-  font-size: 12px;
-  pointer-events: none;
-  z-index: 100;
-  border: 1px solid var(--vscode-workbench-border, #0f0f11);
-}

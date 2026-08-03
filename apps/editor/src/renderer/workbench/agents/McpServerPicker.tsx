@@ -91,7 +91,7 @@ function McpServerPickerInner({
         data-testid="acp-mcp-picker-trigger"
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={localize('acp.mcp.picker.title', 'MCP servers enabled for this session')}
+        data-tooltip={localize('acp.mcp.picker.title', 'MCP servers enabled for this session')}
         onClick={() => {
           if (open) {
             onClose()

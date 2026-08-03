@@ -225,7 +225,7 @@ export function SwarmReviewFiles({
           aria-expanded={ctx.node.expanded}
           className={className}
           style={style}
-          title={node.path}
+          data-tooltip={node.path}
           onClick={ctx.onClickRow}
         >
           <button
@@ -263,7 +263,7 @@ export function SwarmReviewFiles({
         role="treeitem"
         className={className}
         style={style}
-        title={node.file.path}
+        data-tooltip={node.file.path}
         onClick={ctx.onClickRow}
       >
         <span className={styles['fileTreeChevronGap']} />

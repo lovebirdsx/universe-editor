@@ -36,7 +36,7 @@ function UsageIndicatorInner({ service }: { service: IApiUsageService }) {
         type="button"
         className={styles['usageIndicator']}
         data-state="error"
-        title={localize('acp.usage.error', 'API usage unavailable: {reason}', {
+        data-tooltip={localize('acp.usage.error', 'API usage unavailable: {reason}', {
           reason: state.message,
         })}
         onClick={() => service.refresh()}
@@ -53,7 +53,7 @@ function UsageIndicatorInner({ service }: { service: IApiUsageService }) {
         type="button"
         className={styles['usageIndicator']}
         data-state="loading"
-        title={localize('acp.usage.loading', 'Loading API usage…')}
+        data-tooltip={localize('acp.usage.loading', 'Loading API usage…')}
         onClick={() => service.refresh()}
         data-testid="acp-usage-indicator"
       >
@@ -69,7 +69,7 @@ function UsageIndicatorInner({ service }: { service: IApiUsageService }) {
         type="button"
         className={styles['usageIndicator']}
         data-state="ok"
-        title={localize('acp.usage.indicator', 'API monthly usage — click for breakdown')}
+        data-tooltip={localize('acp.usage.indicator', 'API monthly usage — click for breakdown')}
         onClick={() => {
           if (!open) service.refresh()
           setOpen((v) => !v)
@@ -157,7 +157,7 @@ function UsagePopover({
           <tbody>
             {s.models.map((m) => (
               <tr key={m.model}>
-                <td className={styles['sessionCostModelName']} title={m.model}>
+                <td className={styles['sessionCostModelName']} data-tooltip={m.model}>
                   {m.model}
                 </td>
                 <td>{m.requests}</td>

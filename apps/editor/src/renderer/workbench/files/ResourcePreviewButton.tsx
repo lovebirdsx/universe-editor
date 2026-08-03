@@ -32,7 +32,8 @@ export const ResourcePreviewButton = memo(function ResourcePreviewButton({
     <button
       type="button"
       className={styles['actionButton']}
-      title={TITLE}
+      data-tooltip={TITLE}
+      aria-label={TITLE}
       {...(testId !== undefined ? { 'data-testid': testId } : {})}
       onClick={(e) => {
         e.stopPropagation()

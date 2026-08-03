@@ -96,7 +96,7 @@ export function TerminalViewToolbar() {
           className={styles['instanceBtn']}
           onClick={() => setShowInstanceMenu((v) => !v)}
           disabled={terminals.length === 0}
-          title={activeLabel}
+          data-tooltip={activeLabel}
           aria-label={localize('terminal.selectInstance', 'Select terminal instance')}
           aria-haspopup="listbox"
           aria-expanded={showInstanceMenu}
@@ -118,7 +118,7 @@ export function TerminalViewToolbar() {
                 className={`${styles['instanceItem']} ${
                   t.id === activeId ? styles['instanceItemActive'] : ''
                 }`}
-                title={t.name}
+                data-tooltip={t.name}
                 onClick={() => handleSelectInstance(t.id)}
                 data-testid={`terminal-instance-item-${t.id}`}
               >
@@ -133,7 +133,7 @@ export function TerminalViewToolbar() {
       <button
         type="button"
         className={styles['iconBtn']}
-        title={localize('action.terminalInEditor.title', 'Open Terminal in Editor')}
+        data-tooltip={localize('action.terminalInEditor.title', 'Open Terminal in Editor')}
         onClick={handleOpenInEditor}
       >
         <ExternalLink size={14} />
@@ -142,7 +142,7 @@ export function TerminalViewToolbar() {
       <button
         type="button"
         className={styles['iconBtn']}
-        title={localize('terminal.splitWithKey', 'Split Terminal (Ctrl+Shift+5)')}
+        data-tooltip={localize('terminal.splitWithKey', 'Split Terminal (Ctrl+Shift+5)')}
         onClick={handleSplit}
         disabled={!activeId}
       >
@@ -152,7 +152,7 @@ export function TerminalViewToolbar() {
       <button
         type="button"
         className={styles['iconBtn']}
-        title={localize('terminal.close', 'Close Terminal')}
+        data-tooltip={localize('terminal.close', 'Close Terminal')}
         onClick={handleClose}
         disabled={!activeId}
       >
@@ -163,7 +163,7 @@ export function TerminalViewToolbar() {
         <button
           type="button"
           className={styles['newBtn']}
-          title={localize('action.newTerminal.title', 'New Terminal')}
+          data-tooltip={localize('action.newTerminal.title', 'New Terminal')}
           onClick={handleNewDefault}
         >
           <Plus size={14} />
@@ -172,7 +172,7 @@ export function TerminalViewToolbar() {
           ref={chevronRef}
           type="button"
           className={`${styles['chevronBtn']} ${showShellMenu ? styles['active'] : ''}`}
-          title={localize('terminal.selectShell', 'Select Shell')}
+          data-tooltip={localize('terminal.selectShell', 'Select Shell')}
           onClick={() => {
             if (!showShellMenu) void manager.refreshProfiles()
             setShowShellMenu((v) => !v)
@@ -199,7 +199,7 @@ export function TerminalViewToolbar() {
                 key={profile.profileName}
                 type="button"
                 className={styles['shellItem']}
-                title={profile.path}
+                data-tooltip={profile.path}
                 onClick={() => handleNewProfile(profile.profileName)}
                 data-testid={`terminal-profile-item-${profile.profileName}`}
               >

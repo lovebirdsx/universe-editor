@@ -192,7 +192,7 @@ describe('AiMcpServersPanel', () => {
     const userBadge = badgeOf(row, 'user')
     const wsBadge = badgeOf(row, 'workspace')
     expect(userBadge.getAttribute('data-shadowed')).toBe('true')
-    expect(userBadge.getAttribute('title')).toContain('overridden by')
+    expect(userBadge.getAttribute('data-tooltip')).toContain('overridden by')
     expect(wsBadge.getAttribute('data-shadowed')).toBeNull()
   })
 

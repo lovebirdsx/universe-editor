@@ -39,7 +39,7 @@ export function PlanAutoExecuteToggle({
   return (
     <label
       className={styles['permissionAutoToggle']}
-      title={localize(
+      data-tooltip={localize(
         'acp.permission.autoExecute.tooltip',
         'When a plan finishes, continue automatically after a short countdown. Choose the mode in setting acp.plan.autoExecute.',
       )}

@@ -32,7 +32,7 @@ export function ToolCallLocations({
           type="button"
           className={styles['toolCallLocation']}
           onClick={() => onOpen(loc)}
-          title={loc.line !== undefined ? `${loc.path}:${loc.line}` : loc.path}
+          data-tooltip={loc.line !== undefined ? `${loc.path}:${loc.line}` : loc.path}
           data-testid="acp-toolcall-location"
         >
           <FileText size={12} strokeWidth={1.75} aria-hidden="true" />

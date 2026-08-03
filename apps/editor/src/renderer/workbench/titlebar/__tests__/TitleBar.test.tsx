@@ -379,6 +379,6 @@ describe('TitleBar — command center', () => {
     )
 
     const pill = screen.getByTestId('titlebar-command-center')
-    expect(pill.getAttribute('title')).toContain('src/main.ts — /my/project')
+    expect(pill.getAttribute('data-tooltip')).toContain('src/main.ts — /my/project')
   })
 })

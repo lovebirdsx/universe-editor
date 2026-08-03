@@ -75,7 +75,7 @@ export function SendButton({
       type="button"
       className={`${styles['sendButtonCircle']} ${styles['sendButtonCirclePrimary']}`}
       disabled={inert}
-      title={title}
+      data-tooltip={title}
       aria-label={title}
       onClick={() => (inert ? undefined : onSend())}
       data-testid="acp-prompt-send"

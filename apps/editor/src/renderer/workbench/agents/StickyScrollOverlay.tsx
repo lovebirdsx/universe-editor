@@ -168,7 +168,7 @@ function StickyHeader({
           type="button"
           className={styles['stickyTitleBtn']}
           onClick={onJump}
-          title={label}
+          data-tooltip={label}
           data-testid="acp-sticky-jump"
         >
           <span className={styles['stickyIcon']} aria-hidden="true">
@@ -182,7 +182,7 @@ function StickyHeader({
           className={styles['stickyChevronBtn']}
           aria-expanded={!collapsed}
           onClick={onToggle}
-          title={localize('acp.sticky.collapse', 'Collapse')}
+          data-tooltip={localize('acp.sticky.collapse', 'Collapse')}
           data-testid="acp-sticky-toggle"
         >
           {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}

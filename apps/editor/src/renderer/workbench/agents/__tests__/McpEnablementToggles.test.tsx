@@ -116,8 +116,8 @@ describe('McpEnablementToggles', () => {
     // Stance: default-on, even though the effective value is disabled.
     expect(userToggle().checked).toBe(true)
     expect(wsToggle().checked).toBe(false)
-    const userWrap = container.querySelector('span[title]')!
-    expect(userWrap.getAttribute('title')).toContain('overridden by the workspace')
+    const userWrap = container.querySelector('span[data-tooltip]')!
+    expect(userWrap.getAttribute('data-tooltip')).toContain('overridden by the workspace')
   })
 
   it('no shadow hint once the workspace record is removed', async () => {
@@ -125,8 +125,8 @@ describe('McpEnablementToggles', () => {
     await enablement.setEnabled('fs', false, StorageScope.WORKSPACE)
     await enablement.setEnabled('fs', false, StorageScope.GLOBAL)
     const { container } = renderToggles({ enablement })
-    const userWrap = container.querySelector('span[title]')!
-    expect(userWrap.getAttribute('title')).not.toContain('overridden by the workspace')
+    const userWrap = container.querySelector('span[data-tooltip]')!
+    expect(userWrap.getAttribute('data-tooltip')).not.toContain('overridden by the workspace')
   })
 
   it('reflects external writes via onDidChange', async () => {

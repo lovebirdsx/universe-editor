@@ -22,7 +22,7 @@ export function SearchViewToolbar() {
       <button
         type="button"
         className={styles['toolbarBtn']}
-        title={localize('search.refresh', 'Refresh')}
+        data-tooltip={localize('search.refresh', 'Refresh')}
         disabled={!hasResults}
         onClick={() => searchViewState.requestRefresh()}
       >
@@ -31,7 +31,7 @@ export function SearchViewToolbar() {
       <button
         type="button"
         className={styles['toolbarBtn']}
-        title={localize('search.clear', 'Clear Search Results')}
+        data-tooltip={localize('search.clear', 'Clear Search Results')}
         disabled={!hasResults}
         onClick={() => searchViewState.requestClear()}
       >
@@ -40,7 +40,7 @@ export function SearchViewToolbar() {
       <button
         type="button"
         className={styles['toolbarBtn']}
-        title={localize('search.collapseAll', 'Collapse All')}
+        data-tooltip={localize('search.collapseAll', 'Collapse All')}
         disabled={!hasResults}
         onClick={() => searchViewState.requestCollapseAll()}
       >
@@ -49,7 +49,7 @@ export function SearchViewToolbar() {
       <button
         type="button"
         className={styles['toolbarBtn']}
-        title={
+        data-tooltip={
           isTree
             ? localize('search.viewAsList', 'View as List')
             : localize('search.viewAsTree', 'View as Tree')

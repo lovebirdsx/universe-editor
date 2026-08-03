@@ -161,7 +161,7 @@ export function TitleBar() {
           type="button"
           className={styles['command-center']}
           onClick={() => void commandService.executeCommand(GoToFileAction.ID)}
-          title={localize('commandCenter.tooltip', 'Search {name} (Ctrl+P) — {title}', {
+          data-tooltip={localize('commandCenter.tooltip', 'Search {name} (Ctrl+P) — {title}', {
             name: workspace.current?.name ?? '',
             title,
           })}

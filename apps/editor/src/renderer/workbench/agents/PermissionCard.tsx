@@ -147,7 +147,7 @@ function ActivePermissionCard({ pending }: { pending: AcpPendingPermission }) {
           {autoActive && auto && (
             <span
               className={styles['permissionAutoCountdown']}
-              title={autoOptionName}
+              data-tooltip={autoOptionName}
               data-testid="acp-permission-auto-countdown"
             >
               {localize('acp.permission.autoExecute.countdown', 'auto-executing in {secs}s', {

@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from 'react'
 import { AnchoredSurface } from '../overlay/AnchoredSurface.js'
+import styles from '../tooltip/tooltipSurface.module.css'
 
 interface HoverState {
   x: number
@@ -76,17 +77,7 @@ export function useHover(delay = 500): UseHoverResult {
           y={state.y}
           surfaceProps={{
             role: 'tooltip',
-            style: {
-              zIndex: 10000,
-              background: 'var(--vscode-tooltip-background, #2f2f35)',
-              border: '1px solid var(--vscode-workbench-border, #3c3c3c)',
-              borderRadius: 4,
-              padding: '4px 8px',
-              fontSize: 12,
-              color: 'var(--vscode-tooltip-foreground, #c8c8c8)',
-              pointerEvents: 'none',
-              boxShadow: 'var(--shadow-md, 0 2px 8px rgba(0, 0, 0, 0.28))',
-            },
+            className: styles['tooltipSurface'],
           }}
         >
           {children}

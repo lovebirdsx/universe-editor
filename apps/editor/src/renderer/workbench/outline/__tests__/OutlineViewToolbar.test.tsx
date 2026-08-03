@@ -22,7 +22,7 @@ beforeEach(() => {
 })
 
 function openOverflow(): void {
-  fireEvent.click(screen.getByTitle('More Actions...'))
+  fireEvent.click(screen.getByRole('button', { name: 'More Actions...' }))
 }
 
 describe('OutlineViewToolbar', () => {
@@ -30,14 +30,14 @@ describe('OutlineViewToolbar', () => {
     render(<OutlineViewToolbar />)
 
     const before = outlineViewState.collapseAllSignal.get()
-    fireEvent.click(screen.getByTitle('Collapse All'))
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse All' }))
     expect(outlineViewState.collapseAllSignal.get()).toBe(before + 1)
 
     // Simulate the view reporting everything is now collapsed.
     act(() => outlineViewState.setAllCollapsed(true))
 
     const expandBefore = outlineViewState.expandAllSignal.get()
-    fireEvent.click(screen.getByTitle('Expand All'))
+    fireEvent.click(screen.getByRole('button', { name: 'Expand All' }))
     expect(outlineViewState.expandAllSignal.get()).toBe(expandBefore + 1)
   })
 

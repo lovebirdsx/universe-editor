@@ -112,7 +112,7 @@ function ConfigOptionTrigger({
         data-testid={`acp-config-${testKey}-trigger`}
         aria-haspopup="listbox"
         aria-expanded={open}
-        title={tooltipParts.join(' — ')}
+        data-tooltip={tooltipParts.join(' — ')}
         onClick={() => (open ? onClose() : onOpen())}
       >
         <Icon size={13} strokeWidth={1.75} aria-hidden="true" />
@@ -198,7 +198,7 @@ function PopoverItem({
       aria-selected={active}
       data-active={active}
       className={styles['configPopoverItem']}
-      title={option.description ?? option.name}
+      data-tooltip={option.description ?? option.name}
       onMouseDown={(e) => {
         e.preventDefault()
         onPick(option.value)

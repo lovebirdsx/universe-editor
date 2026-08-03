@@ -24,7 +24,7 @@ export function NavigationControls() {
         className={styles['layout-btn']}
         disabled={!canGoBack}
         onClick={() => void commandService.executeCommand(GoBackAction.ID)}
-        title={localize('navigationControls.goBackWithKey', 'Go Back (Alt+LeftArrow)')}
+        data-tooltip={localize('navigationControls.goBackWithKey', 'Go Back (Alt+LeftArrow)')}
         aria-label={localize('action.goBack.title', 'Go Back')}
         data-testid="titlebar-nav-back"
       >
@@ -34,7 +34,10 @@ export function NavigationControls() {
         className={styles['layout-btn']}
         disabled={!canGoForward}
         onClick={() => void commandService.executeCommand(GoForwardAction.ID)}
-        title={localize('navigationControls.goForwardWithKey', 'Go Forward (Alt+RightArrow)')}
+        data-tooltip={localize(
+          'navigationControls.goForwardWithKey',
+          'Go Forward (Alt+RightArrow)',
+        )}
         aria-label={localize('action.goForward.title', 'Go Forward')}
         data-testid="titlebar-nav-forward"
       >

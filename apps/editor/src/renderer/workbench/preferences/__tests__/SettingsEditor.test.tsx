@@ -190,8 +190,8 @@ describe('SettingsEditor', () => {
   it('shows the wordified label with the full key as tooltip', () => {
     registerSeedSchema()
     const { container } = mount()
-    const title = container.querySelector('[data-key="editor.fontSize"] [title]')
-    expect(title?.getAttribute('title')).toBe('editor.fontSize')
+    const title = container.querySelector('[data-key="editor.fontSize"] [data-tooltip]')
+    expect(title?.getAttribute('data-tooltip')).toBe('editor.fontSize')
     expect(title?.textContent).toContain('Font Size')
   })
 

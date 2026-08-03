@@ -45,7 +45,7 @@ export function PromptHistoryPopover({
       data-testid="acp-history-popover"
       aria-label={localize('acp.history.popover.label', 'Input history')}
       renderItem={(entry) => (
-        <span className={styles['historyEntry']} title={entry}>
+        <span className={styles['historyEntry']} data-tooltip={entry}>
           {entry}
         </span>
       )}

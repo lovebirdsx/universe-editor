@@ -308,7 +308,7 @@ function ExtensionRow({
           {entry.isUnderDevelopment && (
             <span
               className={styles.badge}
-              title={entry.local?.location}
+              data-tooltip={entry.local?.location}
               data-testid="extension-dev-badge"
             >
               {localize('extensions.development', 'Development')}
@@ -324,7 +324,7 @@ function ExtensionRow({
           {entry.activationError && (
             <span
               className={cx(styles.badge, styles.errorBadge)}
-              title={entry.activationError.stack ?? entry.activationError.message}
+              data-tooltip={entry.activationError.stack ?? entry.activationError.message}
               data-testid="extension-activation-error"
             >
               {localize('extensions.activationFailed', 'Activation Failed')}
@@ -340,7 +340,7 @@ function ExtensionRow({
             {entry.isBuiltin && (
               <span
                 className={styles.builtinIcon}
-                title={localize('extensions.builtin', 'Built-in')}
+                data-tooltip={localize('extensions.builtin', 'Built-in')}
                 aria-label={localize('extensions.builtin', 'Built-in')}
               >
                 <ShieldCheck size={15} />

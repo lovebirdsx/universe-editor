@@ -31,7 +31,7 @@ export function ConfigFileLink({
       type="button"
       className={styles['pathLink']}
       onClick={open}
-      title={path}
+      data-tooltip={path}
       aria-label={localize('agentSettings.openConfigFile', 'Open {path}', { path })}
     >
       {label}

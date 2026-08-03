@@ -68,7 +68,7 @@ export function ViewTitleActions({ menuId, contextKeyService, group, actionArg }
             className={styles['actionBtn']}
             disabled={busy}
             onClick={() => runAction(a.command)}
-            title={tooltip}
+            data-tooltip={tooltip}
             aria-label={tooltip}
             data-testid={`view-title-action-${a.command}`}
           >

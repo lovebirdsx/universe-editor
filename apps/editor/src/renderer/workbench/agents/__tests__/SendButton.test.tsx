@@ -53,7 +53,7 @@ describe('SendButton', () => {
     const { session } = makeSession({ used: 50000, size: 100000 })
     render(<SendButton session={session} running={false} disabled={false} onSend={vi.fn()} />)
     expect(screen.getByTestId('acp-usage-progress')).toBeTruthy()
-    expect(screen.getByTestId('acp-prompt-send').getAttribute('title')).toContain('50%')
+    expect(screen.getByTestId('acp-prompt-send').getAttribute('data-tooltip')).toContain('50%')
   })
 
   it('omits the progress arc when no usage is reported', () => {

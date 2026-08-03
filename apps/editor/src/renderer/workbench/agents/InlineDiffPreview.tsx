@@ -68,14 +68,14 @@ export function InlineDiffPreview({
           <button
             type="button"
             className={styles['inlineDiffPathButton']}
-            title={path}
+            data-tooltip={path}
             onClick={onOpenPath}
             data-testid="acp-inline-diff-path"
           >
             📝 {path}
           </button>
         ) : (
-          <span className={styles['inlineDiffPath']} title={path}>
+          <span className={styles['inlineDiffPath']} data-tooltip={path}>
             📝 {path}
           </span>
         )}
@@ -83,7 +83,7 @@ export function InlineDiffPreview({
           type="button"
           className={styles['inlineDiffOpen']}
           onClick={onOpen}
-          title="查看完整修改"
+          data-tooltip="查看完整修改"
           data-testid="acp-inline-diff-open"
         >
           <ArrowLeftRight size={14} aria-hidden />

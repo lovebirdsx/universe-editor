@@ -153,7 +153,7 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
               className={tabClass}
               role="tab"
               aria-selected={active}
-              title={c.label}
+              data-tooltip={c.label}
               aria-label={c.label}
               data-testid={`view-container-tab-${c.id}`}
               draggable
@@ -192,7 +192,7 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
           <button
             className={styles['closeBtn']}
             onClick={() => layoutService.togglePanelMaximized()}
-            title={
+            data-tooltip={
               panelMaximized
                 ? localize('panel.restore', 'Restore Panel Size')
                 : localize('panel.maximize', 'Maximize Panel Size')
@@ -214,7 +214,7 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
         <button
           className={styles['closeBtn']}
           onClick={() => layoutService.setVisible(partId, false)}
-          title={localize('viewContainer.close', 'Close')}
+          data-tooltip={localize('viewContainer.close', 'Close')}
           aria-label={localize('viewContainer.close', 'Close')}
           data-testid={`view-container-header-close-${partId}`}
         >

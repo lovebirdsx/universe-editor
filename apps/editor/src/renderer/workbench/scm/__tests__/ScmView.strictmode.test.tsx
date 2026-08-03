@@ -270,7 +270,7 @@ describe('ScmView — markdown preview action', () => {
     })
 
     await screen.findByText('main.ts')
-    expect(screen.queryByTitle('Open Preview')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Open Preview' })).toBeNull()
   })
 
   it('shows a preview button for html files and opens an html preview', async () => {

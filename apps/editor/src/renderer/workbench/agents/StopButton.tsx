@@ -13,7 +13,7 @@ export function StopButton({ onCancel }: { onCancel: () => void }) {
     <button
       type="button"
       className={styles['sendButtonCircle']}
-      title={title}
+      data-tooltip={title}
       aria-label={title}
       onClick={onCancel}
       data-testid="acp-prompt-cancel"

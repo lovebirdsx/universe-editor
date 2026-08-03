@@ -728,7 +728,7 @@ describe('QuickPickPanel simple-file-dialog extras', () => {
       />,
     )
     const btn = screen.getByTestId('quick-input-button')
-    expect(btn.getAttribute('title')).toBe('Toggle hidden files')
+    expect(btn.getAttribute('data-tooltip')).toBe('Toggle hidden files')
     fireEvent.click(btn)
     expect(onTriggerButton).toHaveBeenCalledWith(button)
   })

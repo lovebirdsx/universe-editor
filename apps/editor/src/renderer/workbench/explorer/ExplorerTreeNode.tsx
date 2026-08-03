@@ -205,7 +205,7 @@ function ExplorerTreeNodeImpl({
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={(e) => handleContextMenu(e, { resource, isDirectory })}
-      title={fullPathTooltip(resource)}
+      data-tooltip={fullPathTooltip(resource)}
       {...dragHandleProps}
       {...(isDirectory ? dropTargetProps : {})}
     >
@@ -220,7 +220,7 @@ function ExplorerTreeNodeImpl({
       <span
         className={styles['icon']}
         aria-hidden="true"
-        title={isSymbolicLink ? SYMLINK_LABEL : undefined}
+        data-tooltip={isSymbolicLink ? SYMLINK_LABEL : undefined}
       >
         <FileIcon
           resource={resource}
@@ -245,7 +245,7 @@ function ExplorerTreeNodeImpl({
                   .join(' ')}
                 data-segment-uri={s.uri.toString()}
                 {...(activeSeg === i ? { 'data-segment-active': 'true' } : {})}
-                title={fullPathTooltip(s.uri)}
+                data-tooltip={fullPathTooltip(s.uri)}
                 onMouseEnter={() => setActiveSeg(i)}
                 onMouseLeave={() => setActiveSeg((cur) => (cur === i ? null : cur))}
                 onContextMenu={(e) => {
@@ -268,7 +268,11 @@ function ExplorerTreeNodeImpl({
           ))}
         </span>
       ) : (
-        <span className={styles['label']} style={labelStyle} title={fullPathTooltip(resource)}>
+        <span
+          className={styles['label']}
+          style={labelStyle}
+          data-tooltip={fullPathTooltip(resource)}
+        >
           {name}
         </span>
       )}

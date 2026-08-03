@@ -88,7 +88,7 @@ export function McpEnablementToggles({
   return (
     <span className={cx(styles['mcpEnaToggles'], compact && styles['compact'])}>
       {showUserToggle && (
-        <span className={styles['mcpEnaToggle']} title={userTitle}>
+        <span className={styles['mcpEnaToggle']} data-tooltip={userTitle}>
           <User size={compact ? 10 : 11} strokeWidth={1.75} aria-hidden="true" />
           <Checkbox
             checked={globalStance ?? true}
@@ -99,7 +99,7 @@ export function McpEnablementToggles({
           />
         </span>
       )}
-      <span className={styles['mcpEnaToggle']} title={wsTitle}>
+      <span className={styles['mcpEnaToggle']} data-tooltip={wsTitle}>
         <Folder size={compact ? 10 : 11} strokeWidth={1.75} aria-hidden="true" />
         <Checkbox
           checked={wsStance === true}

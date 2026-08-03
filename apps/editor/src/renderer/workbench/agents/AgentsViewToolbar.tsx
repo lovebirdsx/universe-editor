@@ -109,7 +109,7 @@ export function AgentsViewToolbar() {
       </IconButton>
       <IconButton
         label={localize('acp.selectAgent', 'Choose agent…')}
-        title={localize('acp.selectAgent.titled', 'Choose agent… (current: {name})', {
+        data-tooltip={localize('acp.selectAgent.titled', 'Choose agent… (current: {name})', {
           name: defaultAgentId,
         })}
         onClick={() => void commands.executeCommand('workbench.action.agent.selectAgent')}

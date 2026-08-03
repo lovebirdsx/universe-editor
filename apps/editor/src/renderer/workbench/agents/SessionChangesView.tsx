@@ -247,7 +247,7 @@ function TreeFolderRows({
               style={{ paddingLeft: 8 + depth * 12 }}
               data-testid="acp-changes-folder"
               onClick={() => onToggle(leaf.path)}
-              title={leaf.path}
+              data-tooltip={leaf.path}
             >
               {isCollapsed ? (
                 <ChevronRight size={16} strokeWidth={1.75} className={styles['chevron']} />
@@ -299,7 +299,7 @@ function ChangeRow({
       data-testid="acp-changes-row"
       onClick={() => onOpen(change, true)}
       onDoubleClick={() => onOpen(change, false)}
-      title={change.path}
+      data-tooltip={change.path}
       {...resourceDragProps(() => [change.uri.toString()])}
     >
       <FileIcon resource={change.uri} isDirectory={false} className={styles['icon']} />
@@ -310,7 +310,8 @@ function ChangeRow({
         <button
           type="button"
           className={styles['actionButton']}
-          title={localize('acp.changes.openFile', 'Open File')}
+          data-tooltip={localize('acp.changes.openFile', 'Open File')}
+          aria-label={localize('acp.changes.openFile', 'Open File')}
           data-testid="acp-changes-open-file"
           onClick={(e) => {
             e.stopPropagation()
