@@ -105,11 +105,14 @@ export class SwarmNotificationPoller {
 
   /** Lifecycle lines the 2026-08 incident proved must SURVIVE A RESTART: the Swarm
    *  output channel is in-memory, so mirror them to stderr — the main process
-   *  forwards host stderr into the session's extensionHost.log. Never stdout
-   *  (that is the host RPC channel). */
+   *  forwards host stderr into the session's extensionHost.log. The host's
+   *  stdoutProtection routes every console.* call to stderr with a level tag that
+   *  main maps back to a log level, so use the SEMANTIC method: plain console
+   *  calls can never touch the RPC wire (stdout), but console.error would
+   *  misfile these routine lines as errors. */
   private _lifecycle(message: string): void {
     this._logger?.info('status', message)
-    console.error(`[swarm poll] ${message}`)
+    console.info(`[swarm poll] ${message}`)
   }
 
   private _tick(): void {
@@ -152,7 +155,7 @@ export class SwarmNotificationPoller {
       // of these per interval — the evidence the 2026-08 incident lacked.
       const message = `poll tick not acknowledged by renderer within ${Math.round(TICK_ACK_TIMEOUT_MS / 1000)}s`
       this._logger?.warn('status', message)
-      console.error(`[swarm poll] ${message}`)
+      console.warn(`[swarm poll] ${message}`)
     }, TICK_ACK_TIMEOUT_MS)
     this._watchdogs.add(watchdog)
     Promise.resolve(commands.executeCommand(TICK_COMMAND)).then(
@@ -162,7 +165,7 @@ export class SwarmNotificationPoller {
         if (this._ackTimedOut) {
           this._ackTimedOut = false
           this._logger?.info('status', 'poll tick ack restored')
-          console.error('[swarm poll] poll tick ack restored')
+          console.info('[swarm poll] poll tick ack restored')
         }
       },
       (err: unknown) => {

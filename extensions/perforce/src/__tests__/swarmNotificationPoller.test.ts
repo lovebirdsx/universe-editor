@@ -23,6 +23,10 @@ const tickCalls = () =>
   mocks.executeCommand.mock.calls.filter((c) => c[0] === '_workbench.swarmPollTick')
 
 describe('SwarmNotificationPoller', () => {
+  // The poller mirrors lifecycle lines to stderr (→ extensionHost.log) via the
+  // semantic console method; spy on all of them so tests stay quiet and the
+  // mirror stays assertable in call order.
+  const mirroredLines: string[] = []
   beforeEach(() => {
     vi.useFakeTimers()
     mocks.executeCommand.mockReset().mockResolvedValue(undefined)
@@ -30,9 +34,12 @@ describe('SwarmNotificationPoller', () => {
     logger.info.mockClear()
     logger.warn.mockClear()
     logger.error.mockClear()
-    // The poller mirrors lifecycle lines to stderr (→ extensionHost.log); spy so
-    // tests stay quiet and the mirror is assertable.
-    vi.spyOn(console, 'error').mockImplementation(() => {})
+    mirroredLines.length = 0
+    for (const method of ['info', 'warn', 'error'] as const) {
+      vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+        mirroredLines.push(String(args[0]))
+      })
+    }
   })
   afterEach(() => {
     vi.restoreAllMocks()
@@ -200,7 +207,7 @@ describe('SwarmNotificationPoller', () => {
   // into the session's extensionHost.log. Frequency is bounded (start/stop are
   // rare, timeouts at most one per interval), so the log cannot be flooded.
   describe('lifecycle mirror to stderr (extensionHost.log)', () => {
-    const stderrLines = () => vi.mocked(console.error).mock.calls.map((c) => String(c[0]))
+    const stderrLines = () => [...mirroredLines]
 
     it('mirrors start / re-arm / stop, but not the per-tick failure warn', async () => {
       const poller = new SwarmNotificationPoller(() => true, logger, 1000)
@@ -212,6 +219,10 @@ describe('SwarmNotificationPoller', () => {
         '[swarm poll] poll driver re-armed every 2s',
         '[swarm poll] poll driver stopped (backgroundPoll disabled)',
       ])
+      // Routine lifecycle is not an error: main routes the stderr level tag back
+      // to a log level, so these must ride console.info, not console.error.
+      expect(vi.mocked(console.error)).not.toHaveBeenCalled()
+      expect(vi.mocked(console.info)).toHaveBeenCalledTimes(3)
 
       // A rejected poke stays channel-only: it is renderer-state noise (normal
       // during activation), not poller lifecycle.
@@ -236,10 +247,15 @@ describe('SwarmNotificationPoller', () => {
       expect(stderrLines()).toContain(
         '[swarm poll] poll tick not acknowledged by renderer within 30s',
       )
+      // A wedged renderer is a genuine warning; the recovery line is not.
+      expect(vi.mocked(console.warn)).toHaveBeenCalledWith(
+        '[swarm poll] poll tick not acknowledged by renderer within 30s',
+      )
 
       resolvePoke!()
       await vi.advanceTimersByTimeAsync(0)
       expect(stderrLines()).toContain('[swarm poll] poll tick ack restored')
+      expect(vi.mocked(console.error)).not.toHaveBeenCalled()
       poller.dispose()
     })
   })
