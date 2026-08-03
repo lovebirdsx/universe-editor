@@ -479,6 +479,12 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
   // ---------------------------------------------------------------- Panel
   d('panel.background', '#1a1a1c', '#ffffff', 'Panel background color.', 'color-panel-bg'),
   d(
+    'panel.border',
+    '#80808059',
+    '#80808059',
+    'Panel border color separating the panel from the editor.',
+  ),
+  d(
     'panel.tabBarBackground',
     '#0f0f11',
     '#eceef2',
