@@ -110,6 +110,7 @@ git push -u origin chore/update-claude-agent-acp
 - **案例 8**：上游 #848 把阻塞 CLI 往返（`getContextUsage`/`setModel`）塞进 resume 关键路径，恢复 2s→20s+ → 我方 `getAvailableModels` resume 零往返 + `reconcileResumedSessionModel` 后台纠偏。**原则：任何 CLI 控制请求都不得回到 session/load 关键路径**。
 - **案例 9**（0.58.1→0.62.0）：上游 #894 contextWindow seeding 也进 resume 关键路径，与案例 8 正面冲突 → 语义合并（以我方零往返为准）；含 5 类坑：dogfood env 污染测试、git 对齐吞噬闭合行、extNotification 旁路 sendUpdate 副作用、autosquash 时序陷阱、rebase 中途 git 操作禁忌。
 - **案例 10**：vendor submodule `npm ci` 报 `Missing ... from lock file`（peer 无祖先链节点，上游依赖链演进致老 lock 失效）→ `npm install --package-lock-only --registry=https://registry.npmjs.org` 重生成，`npm ci --dry-run` 验证。与要点 8 是同一 lock 环节的两个坑。
+- **案例 11**（0.62.0→0.64.2）：上游 #881 给「丢弃子代理 text」分支加 forwardSubagentText 门控 → 我方挂分支上的副作用（用量累积）必须提升到分支决策前，否则新路径丢失；replay 强类型辅助撞 union 类型 → 补接口字段；测试尾部相邻 append 冲突在 `=======` 处补闭合括号。
 
 ## 要点速记
 
