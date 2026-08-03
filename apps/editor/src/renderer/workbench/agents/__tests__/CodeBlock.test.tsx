@@ -29,12 +29,12 @@ describe('CodeBlock copy button', () => {
     await act(async () => {})
 
     expect(writeText).toHaveBeenCalledWith('const a = 1\nconst b = 2')
-    expect(button.title).toBe('Copied')
+    expect(button.dataset['tooltip']).toBe('Copied')
 
     act(() => {
       vi.advanceTimersByTime(1500)
     })
-    expect(button.title).toBe('Copy code')
+    expect(button.dataset['tooltip']).toBe('Copy code')
   })
 
   it('stays in the idle state when the clipboard write fails', async () => {
@@ -46,6 +46,6 @@ describe('CodeBlock copy button', () => {
     fireEvent.click(button)
     await act(async () => {})
 
-    expect(button.title).toBe('Copy code')
+    expect(button.dataset['tooltip']).toBe('Copy code')
   })
 })
