@@ -4,11 +4,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  DisposableStore,
   ILoggerService,
   ITextSearchService,
   IWorkspaceService,
   InstantiationType,
   createNamedLogger,
+  markAsSingleton,
   registerSingleton,
   type IFileMatch,
   type ILogger,
@@ -30,6 +32,11 @@ export class TextSearchService implements ITextSearchService {
   declare readonly _serviceBrand: undefined
 
   private readonly _logger: ILogger
+
+  // Roots in-flight searches' event listeners under a singleton so the dev/E2E
+  // leak tracker tolerates a not-yet-settled search at teardown; each search's
+  // store is deleted in `finally`, so nothing accumulates.
+  private readonly _searchStores = markAsSingleton(new DisposableStore())
 
   constructor(
     @IWorkspaceService private readonly _workspace: IWorkspaceServiceType,
@@ -69,15 +76,20 @@ export class TextSearchService implements ITextSearchService {
 
     const startedAt = Date.now()
     const sessionId = `renderer-${Date.now().toString(36)}-${++searchSessionSeq}`
-    const progressListener = this._mainSearch.onDidSearchProgress((event) => {
-      if (event.sessionId !== sessionId) return
-      opts.onProgress?.(event.progress)
-    })
-    const resultsListener = this._mainSearch.onDidSearchResults((event) => {
-      if (event.sessionId !== sessionId) return
-      if (opts.signal?.aborted) return
-      opts.onResults?.(event.results)
-    })
+    const searchStore = this._searchStores.add(new DisposableStore())
+    searchStore.add(
+      this._mainSearch.onDidSearchProgress((event) => {
+        if (event.sessionId !== sessionId) return
+        opts.onProgress?.(event.progress)
+      }),
+    )
+    searchStore.add(
+      this._mainSearch.onDidSearchResults((event) => {
+        if (event.sessionId !== sessionId) return
+        if (opts.signal?.aborted) return
+        opts.onResults?.(event.results)
+      }),
+    )
     const onAbort = (): void => {
       void this._mainSearch.cancel(sessionId).catch((err: unknown) => {
         this._logger.warn(`search cancel failed: ${(err as Error).message}`)
@@ -113,8 +125,7 @@ export class TextSearchService implements ITextSearchService {
       throw err
     } finally {
       opts.signal?.removeEventListener('abort', onAbort)
-      progressListener.dispose()
-      resultsListener.dispose()
+      this._searchStores.delete(searchStore)
     }
   }
 }

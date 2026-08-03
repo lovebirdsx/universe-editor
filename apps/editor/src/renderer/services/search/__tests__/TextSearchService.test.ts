@@ -4,9 +4,11 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import {
+  DisposableTracker,
   Emitter,
   Event,
   LogLevel,
+  setDisposableTracker,
   URI,
   type IFileMatch,
   type ILoggerService,
@@ -192,6 +194,36 @@ describe('TextSearchService renderer adapter', () => {
     await promise
 
     expect(main.cancelCalls).toEqual([main.queries[0]!.sessionId])
+  })
+
+  it('keeps in-flight search listeners rooted so teardown snapshots stay clean', async () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    try {
+      const main = new FakeMainSearch()
+      main.waitForCancel = true
+      const { service } = makeService(URI.file('/ws'), main)
+
+      const promise = service.search({
+        pattern: 'foo',
+        isRegex: false,
+        matchCase: false,
+        matchWholeWord: false,
+        includes: [],
+        excludes: [],
+      })
+      await Promise.resolve()
+
+      // The search promise has not settled (e2e teardown can snapshot here);
+      // the listeners are still legitimately alive and must not count as leaks.
+      expect(tracker.computeLeakingDisposables()).toBeUndefined()
+
+      await main.cancel(main.queries[0]!.sessionId)
+      await promise
+      expect(tracker.computeLeakingDisposables()).toBeUndefined()
+    } finally {
+      setDisposableTracker(null)
+    }
   })
 
   it('returns an empty result without calling main search when no workspace is open', async () => {
