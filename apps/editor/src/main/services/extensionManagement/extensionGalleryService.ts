@@ -18,6 +18,7 @@ import {
   ILoggerService,
   type ILogger,
 } from '@universe-editor/platform'
+import { hashVsixFile } from '@universe-editor/extension-packaging'
 import {
   buildQuery,
   parseQueryResult,
@@ -107,8 +108,16 @@ export class ExtensionGalleryMainService extends Disposable implements IExtensio
     await fs.mkdir(this._cacheDir, { recursive: true })
     const file = join(this._cacheDir, vsixFileName(extension))
     if (await pathExists(file)) {
-      this._logger.info(`vsix cache hit for ${extension.identifier}@${extension.version}`)
-      return file
+      // 同版本重发（--force / 轮换签名 key）后 registry 的 sha256 会变，缓存文件名不变。
+      // 命中前必须对得上市场当前指纹，否则验签永远 hash-mismatch 且无自愈路径。
+      if (!extension.vsixHash || (await hashVsixFile(file)) === extension.vsixHash) {
+        this._logger.info(`vsix cache hit for ${extension.identifier}@${extension.version}`)
+        return file
+      }
+      this._logger.info(
+        `vsix cache stale for ${extension.identifier}@${extension.version} (marketplace hash changed), re-downloading`,
+      )
+      await fs.rm(file, { force: true })
     }
 
     const res = await fetch(extension.vsixUrl, { redirect: 'follow' })

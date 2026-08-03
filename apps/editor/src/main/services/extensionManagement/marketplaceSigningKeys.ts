@@ -17,7 +17,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 export const BUILTIN_MARKETPLACE_SIGNING_KEYS: Readonly<Record<string, string>> = {
-  'market-v1': 'Rhnaa4DTnCTYQszMmGVMkNP3MMOxhFXdak66ew4jpgQ',
+  'market-v1': 'ygBMXrD6w96p8I0uYBejToWvqU8DUer--4cWJ676A-g',
 }
 
 /**

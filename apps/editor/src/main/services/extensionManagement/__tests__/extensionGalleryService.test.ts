@@ -124,6 +124,36 @@ describe('ExtensionGalleryMainService', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1) // second call was a cache hit
   })
 
+  it('re-downloads when the cached vsix no longer matches the marketplace hash', async () => {
+    // 场景：同版本重发（--force / 轮换签名 key）后 registry 的 sha256 变了，缓存名不变。
+    const { createHash } = await import('node:crypto')
+    const { writeFile } = await import('node:fs/promises')
+    const newBytes = [9, 8, 7]
+    const newHash = createHash('sha256').update(Buffer.from(newBytes)).digest('hex')
+    const fetchMock = vi.fn(async () => {
+      const res = jsonResponse('')
+      ;(res as unknown as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer = async () =>
+        new Uint8Array(newBytes).buffer
+      return res
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    // 预埋一个"上一版"的缓存文件（与当前 hash 对不上）。
+    const stale = path.join(cacheDir, 'acme.demo-1.0.0.vsix')
+    await writeFile(stale, Buffer.from([1, 2, 3]))
+
+    const svc = new ExtensionGalleryMainService({ galleryUrl: 'https://x' }, cacheDir)
+    const file = await svc.download(galleryExtension({ vsixHash: newHash }))
+    expect(file).toBe(stale)
+    expect(Array.from(await readFile(file))).toEqual(newBytes) // 旧缓存被替换
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    // hash 对得上的缓存照常命中，不再下载。
+    const file2 = await svc.download(galleryExtension({ vsixHash: newHash }))
+    expect(file2).toBe(file)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('normalizes an untrusted control.json', async () => {
     globalThis.fetch = vi.fn(async () =>
       jsonResponse({

@@ -124,6 +124,7 @@
 7. **详情页 EditorInput 身份隔离**：虚拟 scheme `universe:/extension/<id>` 让每个扩展的详情页是独立 tab（见 [[editor-input-identity-isolation]]）。
 8. **测恶意隔离要用可变 malicious 列表**：先干净装、再把 id 加进 malicious，然后测 `quarantineMalicious`——否则 install 自身的恶意检查会直接拒绝安装，测不到隔离路径。
 9. **市场服务网络失败别 throw**：`query`/`getExtensions` 降级空数组。UI 层不该因市场不可达而崩。
+10. **VSIX 磁盘缓存必须对 hash 才准命中**：缓存名只有 `<id>-<version>.vsix`，同版本重发（--force / 轮换签名 key）后 registry 的 sha256 会变；`download()` 命中前比对 `extension.vsixHash`，不符则删了重下，否则验签永远 hash-mismatch 且无自愈路径。
 
 ## E2E
 
