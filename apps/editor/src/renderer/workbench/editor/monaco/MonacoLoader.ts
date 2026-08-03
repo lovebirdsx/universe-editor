@@ -197,19 +197,23 @@ async function loadMonaco(): Promise<typeof monaco> {
   if (!_monacoPromise) {
     _monacoPromise = (async () => {
       applyMonacoNls(getCurrentLocale())
-      // Mirror every monaco-internal EditorAction + core command into our
-      // CommandsRegistry / KeybindingsRegistry so the Keyboard Shortcuts
-      // editor can list and rebind them. Runs CONCURRENTLY with the monaco
-      // barrel load below (it only touches our registries plus one small
-      // chunk import), and is awaited before publishing: fire-and-forget
-      // left a window where a freshly mounted editor silently ignored
-      // editor.action.* commands (executeCommand no-ops on unknown ids),
-      // which showed up as a ~40% flake when a command ran right after the
-      // first editor opened. Failure here only means the shortcuts editor
-      // shows fewer entries, the editor itself still works.
-      const bridgePromise = bridgeAllMonacoActions().catch((err: unknown) => {
-        _logger.error('bridgeAllMonacoActions failed', err)
-      })
+      // Pre-warm the action-bridge chunk CONCURRENTLY with the barrel load
+      // below (pure fetch; the bridge's own import then hits the module
+      // cache). Enumeration must still wait until the barrel has resolved:
+      // EditorActions are registered by contrib modules DURING barrel
+      // evaluation, so bridging concurrently saw an empty registry and
+      // editor.action.* commands silently no-op'd everywhere. The bridge
+      // stays awaited before publishing: fire-and-forget left a window
+      // where a freshly mounted editor silently ignored editor.action.*
+      // commands (executeCommand no-ops on unknown ids), which showed up
+      // as a ~40% flake when a command ran right after the first editor
+      // opened. Failure there only means the shortcuts editor shows fewer
+      // entries, the editor itself still works.
+      void import('monaco-editor/esm/vs/editor/browser/editorExtensions.js').catch(
+        (err: unknown) => {
+          _logger.error('monaco action-bridge chunk failed to preload', err)
+        },
+      )
       const [monacoMod, EditorWorker, JsonWorker, TsWorker, CssWorker, HtmlWorker] =
         await Promise.all([
           import('monaco-editor'),
@@ -285,13 +289,18 @@ async function loadMonaco(): Promise<typeof monaco> {
       // keys/values. Must run before any markdown model is tokenized; it's cheap
       // (registers a lazy factory, no import yet) so we do it inline here.
       registerMarkdownFrontmatterHighlight(monacoMod)
-      // Bridge was kicked off in parallel with the barrel load; by now it is
-      // almost always resolved, so this await adds no critical-path time.
+      // Mirror every monaco-internal EditorAction + core command into our
+      // CommandsRegistry / KeybindingsRegistry so the Keyboard Shortcuts
+      // editor can list and rebind them. The barrel above has resolved, so
+      // all contrib modules have registered their actions; the chunk was
+      // pre-warmed at kick-off, so this await adds no critical-path time.
       // Fire the waiters regardless of outcome (see the kick-off comment) so
       // MonacoKeybindingSyncContribution.reload /
       // MonacoDefaultKeybindingOverrideContribution._sync run against whatever
       // did register instead of hanging forever.
-      await bridgePromise
+      await bridgeAllMonacoActions().catch((err: unknown) => {
+        _logger.error('bridgeAllMonacoActions failed', err)
+      })
       _actionsBridged = true
       _onDidBridgeActions.fire()
       mark(PerfMarks.rendererDidInitializeMonaco)
