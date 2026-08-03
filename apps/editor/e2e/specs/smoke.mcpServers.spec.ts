@@ -69,8 +69,8 @@ test.describe('@p1 mcp servers', () => {
 
     // 7. 标题栏 AI 按钮：MCP 信息只进 tooltip（状态栏 AI 入口已迁到标题栏）。
     const aiTooltip = page.getByTestId('titlebar-ai-button')
-    await expect(aiTooltip).toHaveAttribute('title', /MCP 1\/2 connected/)
-    await expect(aiTooltip).toHaveAttribute('title', /1 failed/)
+    await expect(aiTooltip).toHaveAttribute('data-tooltip', /MCP 1\/2 connected/)
+    await expect(aiTooltip).toHaveAttribute('data-tooltip', /1 failed/)
 
     // 8. 打开 Agents 容器后，MCP Servers view 每个 server 渲染一行。
     await page.evaluate(() => {

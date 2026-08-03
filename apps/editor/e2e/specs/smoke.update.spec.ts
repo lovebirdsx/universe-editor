@@ -93,7 +93,7 @@ test.describe('@p1 auto-update', () => {
     // tooltip carrying the available version.
     const indicator = workbench.page.getByTestId('titlebar-update-indicator')
     await expect(indicator).toBeVisible()
-    await expect(indicator).toHaveAttribute('title', new RegExp(FUTURE_VERSION))
+    await expect(indicator).toHaveAttribute('data-tooltip', new RegExp(FUTURE_VERSION))
   })
 
   test('reports the running version, distinct from the feed version', async ({ workbench }) => {

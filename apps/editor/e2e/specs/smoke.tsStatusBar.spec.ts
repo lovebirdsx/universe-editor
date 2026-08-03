@@ -47,16 +47,17 @@ test.describe('@p1 typescript status bar', () => {
       const expectedServer = native
         ? 'TypeScript Native (tsgo)'
         : 'typescript-language-server (tsserver)'
-      // The tooltip lives in `title`; it disambiguates from the Editor Language
-      // entry which is also labelled "TypeScript".
-      const entry = statusbar.locator(`button[title*="${expectedServer}"]`)
+      // The tooltip lives in `data-tooltip` (TooltipProvider replaces native
+      // `title`); it disambiguates from the Editor Language entry which is also
+      // labelled "TypeScript".
+      const entry = statusbar.locator(`button[data-tooltip*="${expectedServer}"]`)
       await expect(entry).toBeVisible({ timeout: 30000 })
       // Icon-only text: the accessible name falls back to the tooltip.
       await expect(entry).toHaveAttribute(
         'aria-label',
         new RegExp(expectedServer.replace(/[()]/g, '\\$&')),
       )
-      await expect(entry).toHaveAttribute('title', /\d+\.\d+\.\d+/)
+      await expect(entry).toHaveAttribute('data-tooltip', /\d+\.\d+\.\d+/)
     },
   )
 })
