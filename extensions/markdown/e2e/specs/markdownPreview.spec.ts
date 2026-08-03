@@ -736,8 +736,8 @@ test.describe('@p1 markdown preview', () => {
         '[data-testid="view-title-action-workbench.action.markdownPreview.help"]',
       )
       await expect(helpButton).toBeVisible()
-      // The tooltip carries the keybinding hint.
-      await expect(helpButton).toHaveAttribute('title', /\?/)
+      // The tooltip carries the keybinding hint (TooltipProvider reads data-tooltip).
+      await expect(helpButton).toHaveAttribute('data-tooltip', /\?/)
 
       await helpButton.click()
       await expect(help).toBeVisible()
@@ -755,7 +755,7 @@ test.describe('@p1 markdown preview', () => {
       )
       await expect(findButton).toBeVisible()
       // The tooltip carries the keybinding hint (Ctrl+F).
-      await expect(findButton).toHaveAttribute('title', /Ctrl\+F/i)
+      await expect(findButton).toHaveAttribute('data-tooltip', /Ctrl\+F/i)
 
       await findButton.click()
       await expect
