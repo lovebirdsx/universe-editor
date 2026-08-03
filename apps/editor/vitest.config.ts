@@ -27,6 +27,7 @@ const rendererDomTests = [
   'src/renderer/actions/__tests__/preferencesActions.test.ts',
   'src/renderer/contributions/__tests__/AgentFontContribution.test.ts',
   'src/renderer/contributions/__tests__/ScmBlameContribution.test.ts',
+  'src/renderer/contributions/__tests__/SwarmReviewNotificationContribution.test.ts',
   'src/renderer/contributions/__tests__/WindowTitleContribution.test.ts',
   'src/renderer/contributions/__tests__/WorkbenchFontContribution.test.ts',
   'src/renderer/services/acp/session/__tests__/acpChatWidgetService.test.ts',

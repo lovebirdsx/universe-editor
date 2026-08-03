@@ -68,12 +68,20 @@ export interface SwarmConfig {
 
 async function readSwarmConfig(): Promise<SwarmConfig | undefined> {
   const cfg = workspace.getConfiguration('perforce')
-  if (!(await cfg.get('swarm.enabled', true))) return undefined
-  const url = ((await cfg.get('swarm.url', 'http://swarm.aki.kuro.com/')) as string).trim()
+  // Every host-side config read is a renderer-answered RPC (extensionService
+  // routes getConfiguration through `_workbench.getConfiguration`), and a
+  // backgrounded window answers late — so the four reads go out in ONE parallel
+  // round instead of four serial ones (activation used to stall minutes on this).
+  const [enabled, urlRaw, apiVersionRaw, authMode] = await Promise.all([
+    cfg.get('swarm.enabled', true),
+    cfg.get('swarm.url', 'http://swarm.aki.kuro.com/'),
+    cfg.get('swarm.apiVersion', 'v9'),
+    cfg.get<'ticket' | 'token'>('swarm.authMode', 'ticket'),
+  ])
+  if (!enabled) return undefined
+  const url = urlRaw.trim()
   if (!url) return undefined
-  const apiVersion = ((await cfg.get('swarm.apiVersion', 'v9')) as string).trim() || 'v9'
-  const authMode = ((await cfg.get('swarm.authMode', 'ticket')) as 'ticket' | 'token') ?? 'ticket'
-  return { url, apiVersion, authMode }
+  return { url, apiVersion: apiVersionRaw.trim() || 'v9', authMode }
 }
 
 /** The persisted `perforce.swarm.needsActionAuthors` set. Drives an extra
@@ -110,6 +118,14 @@ export function registerSwarmCommands(
 ): Disposable {
   let client: SwarmClient | undefined
   let signature = ''
+  /** Host-side cache of "is Swarm configured", read SYNCHRONOUSLY by the
+   *  notification poller on every tick — it must never await a renderer RPC
+   *  there (a backgrounded window answers late and once stalled the whole
+   *  driver). Fed by the activation fallback below and by the renderer's
+   *  setBackgroundPoll pushes (which read the same IConfigurationService, so
+   *  the two sides cannot diverge). `undefined` = not populated yet; the poller
+   *  fails open on it. */
+  let swarmConfiguredCache: boolean | undefined
 
   const swarm = async (): Promise<SwarmClient | undefined> => {
     const config = await readSwarmConfig()
@@ -769,27 +785,48 @@ export function registerSwarmCommands(
   // notifications, the Activity Bar badge and the status bar in the sidebar's
   // scope. The whole driver is gated on `perforce.swarm.backgroundPoll.enabled`
   // (default off); `perforce.swarm.pollInterval` (seconds, 0 = default 60s,
-  // floor 10s) overrides the tick interval.
-  const notificationPoller = new SwarmNotificationPoller(
-    async () => (await readSwarmConfig()) !== undefined,
-    logger,
-  )
+  // floor 10s) overrides the tick interval. The `isConfigured` callback is a
+  // synchronous CACHE READ: a tick path that awaits a renderer RPC stalls
+  // entirely while the window is background-throttled (the 2026-08 incident).
+  const notificationPoller = new SwarmNotificationPoller(() => swarmConfiguredCache, logger)
   subs.push(notificationPoller)
   void (async () => {
     void statusBar.refresh()
     const cfg = workspace.getConfiguration('perforce')
-    const pollInterval = (await cfg.get('swarm.pollInterval', 0)) as number
+    // One parallel round instead of six serial renderer RPCs (each
+    // getConfiguration call is a `_workbench.getConfiguration` command the
+    // renderer must answer — serial rounds took minutes on a backgrounded
+    // window, delaying the first tick long past activation).
+    const [pollInterval, backgroundPollEnabled, config] = await Promise.all([
+      cfg.get('swarm.pollInterval', 0),
+      cfg.get('swarm.backgroundPoll.enabled', false),
+      readSwarmConfig(),
+    ])
+    swarmConfiguredCache = config !== undefined
     notificationPoller.setIntervalMs(resolveSwarmPollIntervalMs(pollInterval))
-    if ((await cfg.get('swarm.backgroundPoll.enabled', false)) as boolean) {
+    if (backgroundPollEnabled) {
       notificationPoller.start()
     }
   })()
 
   // The renderer owns the switch's live state (the host has no config-change
-  // event): it pushes the current value on startup and on every toggle.
+  // event): it pushes the full polling snapshot on startup (with retries until
+  // this command exists) and on every `perforce.swarm` configuration change.
+  // Interval conversion stays HOST-side: `UNIVERSE_SWARM_POLL_INTERVAL_MS` is a
+  // host-process env (e2e relies on it to bypass the 10s floor), so the
+  // renderer only ever pushes raw seconds.
   subs.push(
-    commands.registerCommand(Cmd.setBackgroundPoll, (enabled: unknown) => {
-      notificationPoller.setEnabled(enabled === true)
+    commands.registerCommand(Cmd.setBackgroundPoll, (payload: unknown) => {
+      const p = (payload ?? {}) as {
+        enabled?: unknown
+        pollIntervalSeconds?: unknown
+        configured?: unknown
+      }
+      if (typeof p.configured === 'boolean') swarmConfiguredCache = p.configured
+      if (typeof p.pollIntervalSeconds === 'number') {
+        notificationPoller.setIntervalMs(resolveSwarmPollIntervalMs(p.pollIntervalSeconds))
+      }
+      notificationPoller.setEnabled(p.enabled === true)
     }),
   )
 

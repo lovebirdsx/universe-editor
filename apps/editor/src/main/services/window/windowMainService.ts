@@ -162,12 +162,16 @@ export class WindowMainService implements IWindowMainService {
         // Prod serves the shell on universe-app:// itself, so images are
         // same-origin and this stays on.
         ...(rendererUrl ? { webSecurity: false } : {}),
-        // E2E opt-out: UNIVERSE_E2E_THROTTLE=1 keeps Chromium background throttling
-        // enabled (production behavior) so specs can exercise hidden/minimized
-        // windows — the default off would mask background-only bugs.
-        ...(e2eEnabled && !process.env['UNIVERSE_E2E_THROTTLE']
-          ? { backgroundThrottling: false }
-          : {}),
+        // VSCode parity (vs/platform/windows/electron-main/windowImpl.ts):
+        // Chromium background throttling is OFF for every window — a hidden
+        // renderer's timers freeze and every host↔renderer RPC chain stalls
+        // silently otherwise (the 2026-08 swarm-notification incident: 2.5h of
+        // dropped polls while the window sat occluded). rAF already pauses on
+        // hidden (visibility-governed, not throttling-governed) and the resident
+        // timers are 60s-class polls, so the CPU/battery cost is negligible.
+        // UNIVERSE_E2E_THROTTLE=1 opts back INTO throttling for specs that
+        // explicitly verify throttled-window behavior.
+        ...(process.env['UNIVERSE_E2E_THROTTLE'] ? {} : { backgroundThrottling: false }),
         additionalArguments: [
           `--ue-home-dir=${homedir()}`,
           ...(opts?.fileToOpen ? [`--ue-open-file=${opts.fileToOpen}`] : []),

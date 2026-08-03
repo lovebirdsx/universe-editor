@@ -96,6 +96,14 @@ function withDeadline<T>(promise: Promise<T>, ms: number, label: string): Promis
  *  its manual Refresh button, but nothing polls while the view sits closed. */
 const BACKGROUND_POLL_CONFIG_KEY = 'perforce.swarm.backgroundPoll.enabled'
 
+/** The host-side `setBackgroundPoll` command registers a few seconds after this
+ *  contribution (extension-host activation race). Retry the push with the same
+ *  250ms x20 backoff pattern as SwarmReviewsView.load instead of dropping it —
+ *  the host driver's configured/enabled/interval state would otherwise stay
+ *  wrong until the next configuration change. */
+const PUSH_RETRY_DELAY_MS = 250
+const PUSH_RETRY_LIMIT = 20
+
 export class SwarmReviewNotificationContribution
   extends Disposable
   implements IWorkbenchContribution
@@ -106,6 +114,13 @@ export class SwarmReviewNotificationContribution
   private _known = new Set<string>()
   /** First poll only primes the baseline (avoids a startup burst of notifications). */
   private _primed = false
+  /** Last time a poll cycle reached the dashboard successfully. Drives the
+   *  visibilitychange catch-up tick. */
+  private _lastSuccessfulPollAt = Date.now()
+  /** Last time the host-driven tick handler fired. Drives the tick-gap log. */
+  private _lastTickAt = Date.now()
+  private _pushRetryTimer: ReturnType<typeof setTimeout> | undefined
+  private _pushRetryAttempt = 0
   private readonly _logger: ILogger
 
   constructor(
@@ -131,14 +146,52 @@ export class SwarmReviewNotificationContribution
     // stays as a foreground-only backstop (and covers windows whose perforce host
     // isn't driving ticks); refresh() is serialized + de-duped so both driving it
     // is harmless.
-    setSwarmNotificationTickHandler(() => this.refresh())
+    setSwarmNotificationTickHandler(() => {
+      // Gap detection: the host driver fires on a fixed interval, so ticks
+      // arriving more than 3x apart mean the chain stalled somewhere (host
+      // driver wedged, or this renderer was background-throttled). Zero noise
+      // in the steady state, direct evidence of the stall duration otherwise.
+      const now = Date.now()
+      const gapMs = now - this._lastTickAt
+      this._lastTickAt = now
+      if (gapMs > 3 * this._pollIntervalMs()) {
+        this._logger.info(
+          `tick gap ${Math.round(gapMs / 1000)}s (host driver stalled or renderer was throttled)`,
+        )
+      }
+      return this.refresh()
+    })
 
     this._register({ dispose: () => this._stop() })
+    // Coarse-grained on purpose: the pushed snapshot (enabled switch + interval +
+    // configured flag) reads several `perforce.swarm.*` keys, so re-push on any
+    // change under that section (changes are rare; the push is one RPC).
     this._register(
       this._config.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration(BACKGROUND_POLL_CONFIG_KEY)) this._syncPolling()
+        if (e.affectsConfiguration('perforce.swarm')) this._syncPolling()
       }),
     )
+    // Catch-up tick on window foregrounding: when the renderer was
+    // background-throttled (or the host tick chain wedged) long enough that no
+    // poll succeeded for over an interval, refreshing on `visible` turns
+    // "reviews appear the moment the user comes back" from a throttling side
+    // effect into an explicit guarantee.
+    if (typeof document !== 'undefined') {
+      const onVisibilityChange = () => {
+        if (document.visibilityState !== 'visible') return
+        const elapsedMs = Date.now() - this._lastSuccessfulPollAt
+        if (elapsedMs > this._pollIntervalMs()) {
+          this._logger.info(
+            `window visible after ${Math.round(elapsedMs / 1000)}s without a successful poll → catch-up tick`,
+          )
+          void this.refresh()
+        }
+      }
+      document.addEventListener('visibilitychange', onVisibilityChange)
+      this._register({
+        dispose: () => document.removeEventListener('visibilitychange', onVisibilityChange),
+      })
+    }
     // E2E: let a spec drive one poll synchronously (the 60s timer is far too slow
     // for a test, and the window is focused so the OS toast is gated away anyway).
     if (typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true) {
@@ -147,8 +200,9 @@ export class SwarmReviewNotificationContribution
     this._syncPolling()
   }
 
-  /** Start/stop the renderer backstop timer + prime, and push the switch to the
-   *  host-side poll driver (which has no config-change event of its own). */
+  /** Start/stop the renderer backstop timer + prime, and push the polling
+   *  snapshot to the host-side poll driver (which has no config-change event of
+   *  its own). */
   private _syncPolling(): void {
     const enabled = this._pollEnabled()
     if (enabled && !this._timer) {
@@ -164,9 +218,57 @@ export class SwarmReviewNotificationContribution
       swarmNeedsActionCount.set(0)
       this._logger.info('background poll disabled: backstop timer stopped')
     }
-    if (CommandsRegistry.getCommand(SwarmCommands.setBackgroundPoll)) {
-      void this._commands.executeCommand(SwarmCommands.setBackgroundPoll, enabled).catch(() => {})
+    this._pushPollingState()
+  }
+
+  /** Push the full polling snapshot to the host driver. `configured` mirrors the
+   *  host's readSwarmConfig verdict (both sides read the same
+   *  IConfigurationService, so they cannot diverge); `pollIntervalSeconds` is
+   *  the RAW setting — the ms conversion (and the e2e env override) is
+   *  host-side. When the host command isn't registered yet (activation race),
+   *  retry with a bounded backoff instead of silently skipping. */
+  private _pushPollingState(): void {
+    if (!CommandsRegistry.getCommand(SwarmCommands.setBackgroundPoll)) {
+      if (this._pushRetryTimer) return // a retry already reads the latest state when it fires
+      if (this._pushRetryAttempt >= PUSH_RETRY_LIMIT) return
+      this._pushRetryAttempt++
+      if (this._pushRetryAttempt === PUSH_RETRY_LIMIT) {
+        this._logger.warn(
+          'setBackgroundPoll command still unregistered after 20 retries — host poll driver not synced',
+        )
+      }
+      this._pushRetryTimer = setTimeout(() => {
+        this._pushRetryTimer = undefined
+        this._pushPollingState()
+      }, PUSH_RETRY_DELAY_MS)
+      return
     }
+    this._pushRetryAttempt = 0
+    void this._commands
+      .executeCommand(SwarmCommands.setBackgroundPoll, {
+        enabled: this._pollEnabled(),
+        pollIntervalSeconds: this._config.get<number>('perforce.swarm.pollInterval') ?? 0,
+        configured: this._swarmConfigured(),
+      })
+      .catch(() => {})
+  }
+
+  /** Same verdict as the host's readSwarmConfig: `perforce.swarm.enabled`
+   *  (default true) and a non-empty `perforce.swarm.url` (default non-empty). */
+  private _swarmConfigured(): boolean {
+    const enabled = this._config.get<boolean>('perforce.swarm.enabled') ?? true
+    const url = (
+      this._config.get<string>('perforce.swarm.url') ?? 'http://swarm.aki.kuro.com/'
+    ).trim()
+    return enabled && url.length > 0
+  }
+
+  /** Renderer-side mirror of the host's resolveSwarmPollIntervalMs, minus the
+   *  e2e env override (a host-process env the renderer cannot see — a slightly
+   *  stale interval here only makes the visibility catch-up more conservative). */
+  private _pollIntervalMs(): number {
+    const seconds = this._config.get<number>('perforce.swarm.pollInterval') ?? 0
+    return seconds > 0 ? Math.max(10, seconds) * 1000 : POLL_INTERVAL_MS
   }
 
   private _stop(): void {
@@ -174,6 +276,10 @@ export class SwarmReviewNotificationContribution
     if (this._timer) {
       clearInterval(this._timer)
       this._timer = undefined
+    }
+    if (this._pushRetryTimer) {
+      clearTimeout(this._pushRetryTimer)
+      this._pushRetryTimer = undefined
     }
   }
 
@@ -219,6 +325,7 @@ export class SwarmReviewNotificationContribution
       // `undefined` = the perforce extension host hasn't registered the command yet
       // (activation race). Skip this tick without disturbing the primed baseline.
       if (dashboard === undefined) return
+      this._lastSuccessfulPollAt = Date.now()
       const transitionsStartedAt = Date.now()
       const displayed = await this._computeDisplayed(dashboard)
       transitionsMs = Date.now() - transitionsStartedAt

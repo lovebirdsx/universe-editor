@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+// The module is fully mocked below; importing `commands` here yields the mock's
+// registerCommand/executeCommand spies for the poller-driving assertions.
+import { commands } from '@universe-editor/extension-api'
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
@@ -209,5 +212,75 @@ describe('registerSwarmCommands dashboard failures (poll-driven, silent)', () =>
       mocks.handlers.get('perforce.swarm.dashboard')?.({ force: true }),
     ).rejects.toMatchObject({ code: SwarmErrorCode.Network })
     expect(mocks.showErrorMessage).not.toHaveBeenCalled()
+  })
+})
+
+// The renderer pushes the full polling snapshot ({enabled, pollIntervalSeconds,
+// configured}) because the host has no config-change event. The host-side
+// configured cache feeds the poller's SYNCHRONOUS per-tick read (a tick path
+// awaiting a renderer RPC is the 2026-08 silent-stall class), and the interval
+// conversion stays host-side so UNIVERSE_SWARM_POLL_INTERVAL_MS keeps winning.
+describe('registerSwarmCommands setBackgroundPoll payload', () => {
+  const tickCalls = () =>
+    vi.mocked(commands.executeCommand).mock.calls.filter((c) => c[0] === '_workbench.swarmPollTick')
+
+  beforeEach(async () => {
+    vi.useFakeTimers()
+    mocks.handlers.clear()
+    vi.mocked(commands.executeCommand).mockClear()
+
+    registerSwarmCommands(
+      {
+        active: { user: 'songxiao', p4Service: {} },
+      } as never,
+      logger,
+    )
+    // Let the activation fallback finish (mocked config reads resolve with their
+    // defaults: pollInterval 0, backgroundPoll disabled, Swarm configured).
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.useRealTimers()
+  })
+
+  it('starts the driver with the pushed interval (raw seconds → host-side ms)', async () => {
+    mocks.handlers.get('perforce.swarm.setBackgroundPoll')?.({
+      enabled: true,
+      pollIntervalSeconds: 30,
+      configured: true,
+    })
+
+    expect(tickCalls().length).toBe(1) // immediate tick on start
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(tickCalls().length).toBe(2)
+    await vi.advanceTimersByTimeAsync(29_000)
+    expect(tickCalls().length).toBe(2)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(tickCalls().length).toBe(3)
+  })
+
+  it('skips ticks after the renderer reports configured: false', async () => {
+    mocks.handlers.get('perforce.swarm.setBackgroundPoll')?.({
+      enabled: true,
+      pollIntervalSeconds: 10,
+      configured: false,
+    })
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(tickCalls().length).toBe(0)
+  })
+
+  it('lets UNIVERSE_SWARM_POLL_INTERVAL_MS override the pushed seconds (e2e)', async () => {
+    vi.stubEnv('UNIVERSE_SWARM_POLL_INTERVAL_MS', '1000')
+    mocks.handlers.get('perforce.swarm.setBackgroundPoll')?.({
+      enabled: true,
+      pollIntervalSeconds: 30,
+      configured: true,
+    })
+
+    expect(tickCalls().length).toBe(1)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(tickCalls().length).toBe(2)
   })
 })

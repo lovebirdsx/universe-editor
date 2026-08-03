@@ -7,6 +7,14 @@
  * renderer still owns all the detection / filtering / notification logic (ignore
  * set, author / approvable filters, OS toast + in-app fallback).
  *
+ * RED LINE: the tick path must NEVER await a renderer round-trip before firing the
+ * poke. A deeply-backgrounded window answers RPCs slowly (or, under OS-level
+ * throttling, not for hours) — awaiting the config read once stalled every later
+ * tick silently for 2.5 hours (the 2026-08 incident). The configuration is a
+ * synchronous CACHE READ instead, fed by the activation fallback and the
+ * renderer's `setBackgroundPoll` pushes. The poke itself is fire-and-forget with
+ * an ack watchdog: late acks only warn, they never delay the next tick.
+ *
  * Only ticks while Swarm is configured (`isConfigured()` truthy), mirroring the
  * SwarmStatusBarController lifecycle. start() ticks IMMEDIATELY rather than a
  * full interval later: the renderer's self-prime usually no-ops on the host
@@ -21,6 +29,11 @@ const POLL_INTERVAL_MS = 60_000
 
 /** The host→renderer command the renderer's notification contribution answers. */
 const TICK_COMMAND = '_workbench.swarmPollTick'
+
+/** How long a poke may go unanswered before the tick is reported wedged. Warning
+ *  only — the poke is never cancelled and the next tick fires on schedule; a
+ *  backgrounded renderer answering late must not slow the driver down. */
+const TICK_ACK_TIMEOUT_MS = 30_000
 
 /** Tick interval resolution, mirroring `resolveSwarmRequestTimeoutMs`: the
  *  `UNIVERSE_SWARM_POLL_INTERVAL_MS` env override (e2e — bypasses the 10s floor
@@ -39,9 +52,18 @@ export function resolveSwarmPollIntervalMs(configSeconds: number): number {
 export class SwarmNotificationPoller {
   private _timer: ReturnType<typeof setInterval> | undefined
   private _disposed = false
+  /** Whether the previous tick's poke went unacknowledged past the watchdog. */
+  private _ackTimedOut = false
 
+  /**
+   * @param _isConfigured SYNCHRONOUS cache read — `true` ticks, `false` skips,
+   * `undefined` (cache not populated yet) fails OPEN and ticks anyway: the poke
+   * is harmless (the renderer defends itself against an unregistered dashboard
+   * command), while a stuck "not configured" verdict is the silent-death class
+   * this poller exists to kill.
+   */
   constructor(
-    private readonly _isConfigured: () => Promise<boolean>,
+    private readonly _isConfigured: () => boolean | undefined,
     private readonly _logger?: SwarmLogger,
     private _intervalMs: number = POLL_INTERVAL_MS,
   ) {}
@@ -55,8 +77,8 @@ export class SwarmNotificationPoller {
     this._intervalMs = ms
     if (this._timer) {
       clearInterval(this._timer)
-      this._timer = setInterval(() => void this._tick(), this._intervalMs)
-      this._logger?.info('status', `poll driver re-armed every ${Math.round(ms / 1000)}s`)
+      this._timer = setInterval(() => this._tick(), this._intervalMs)
+      this._lifecycle(`poll driver re-armed every ${Math.round(ms / 1000)}s`)
     }
   }
 
@@ -64,9 +86,9 @@ export class SwarmNotificationPoller {
     if (this._disposed || this._timer) return
     // Immediate first tick — see the header. Worst case the renderer's tick
     // handler isn't mounted yet and this tick no-ops; interval ticks recover.
-    void this._tick()
-    this._timer = setInterval(() => void this._tick(), this._intervalMs)
-    this._logger?.info('status', `poll driver every ${Math.round(this._intervalMs / 1000)}s`)
+    this._tick()
+    this._timer = setInterval(() => this._tick(), this._intervalMs)
+    this._lifecycle(`poll driver every ${Math.round(this._intervalMs / 1000)}s`)
   }
 
   /** Mirror of the `perforce.swarm.backgroundPoll.enabled` switch (default off):
@@ -77,24 +99,82 @@ export class SwarmNotificationPoller {
     } else if (this._timer) {
       clearInterval(this._timer)
       this._timer = undefined
-      this._logger?.info('status', 'poll driver stopped (backgroundPoll disabled)')
+      this._lifecycle('poll driver stopped (backgroundPoll disabled)')
     }
   }
 
-  private async _tick(): Promise<void> {
+  /** Lifecycle lines the 2026-08 incident proved must SURVIVE A RESTART: the Swarm
+   *  output channel is in-memory, so mirror them to stderr — the main process
+   *  forwards host stderr into the session's extensionHost.log. Never stdout
+   *  (that is the host RPC channel). */
+  private _lifecycle(message: string): void {
+    this._logger?.info('status', message)
+    console.error(`[swarm poll] ${message}`)
+  }
+
+  private _tick(): void {
     if (this._disposed) return
-    try {
-      if (!(await this._isConfigured())) {
-        this._logger?.debug('status', 'poll tick skipped: Swarm not configured')
-        return
-      }
-      // Trace-level heartbeat: with `perforce.swarm.trace` on, a missing tick line
-      // in the panel answers "is the host driver even alive?" without a debugger.
-      this._logger?.debug('status', 'poll tick → renderer')
-      await commands.executeCommand(TICK_COMMAND)
-    } catch (err) {
-      this._logger?.warn('status', `poll tick failed: ${err instanceof Error ? err.message : err}`)
+    const configured = this._isConfigured()
+    if (configured === false) {
+      this._logger?.debug('status', 'poll tick skipped: Swarm not configured')
+      return
     }
+    if (configured === undefined) {
+      // Cache not populated yet (renderer push hasn't landed / activation
+      // fallback still in flight) — fail open. The poke is a no-op when the
+      // renderer has no dashboard command, so this costs nothing.
+      this._logger?.debug('status', 'poll tick: configured cache cold, failing open')
+    }
+    // Trace-level heartbeat: with `perforce.swarm.trace` on, a missing tick line
+    // in the panel answers "is the host driver even alive?" without a debugger.
+    this._logger?.debug('status', 'poll tick → renderer')
+    this._poke()
+  }
+
+  /** Fire the renderer poke WITHOUT blocking the tick lifecycle. A deeply-
+   *  backgrounded window answers RPCs slowly (Chromium/OS throttling); awaiting
+   *  the ack once froze every later tick for hours (the promise neither settles
+   *  nor rejects, so there is nothing to catch). Instead each poke gets an ack
+   *  watchdog: late acks warn (per tick, so a wedged renderer leaves exactly one
+   *  log line per interval — the missing-log evidence of the 2026-08 incident),
+   *  and the first ack after a timeout window logs the recovery. The poke's own
+   *  rejection is caught here so it can never escape as an unhandled rejection
+   *  in the host process. */
+  /** Watchdogs of in-flight pokes (several when the interval < ack timeout, e.g.
+   *  e2e's 1s interval). Cleared on ack and on dispose. */
+  private readonly _watchdogs = new Set<ReturnType<typeof setTimeout>>()
+
+  private _poke(): void {
+    const watchdog = setTimeout(() => {
+      this._watchdogs.delete(watchdog)
+      this._ackTimedOut = true
+      // Mirrored to stderr (→ extensionHost.log): a wedged renderer leaves one
+      // of these per interval — the evidence the 2026-08 incident lacked.
+      const message = `poll tick not acknowledged by renderer within ${Math.round(TICK_ACK_TIMEOUT_MS / 1000)}s`
+      this._logger?.warn('status', message)
+      console.error(`[swarm poll] ${message}`)
+    }, TICK_ACK_TIMEOUT_MS)
+    this._watchdogs.add(watchdog)
+    Promise.resolve(commands.executeCommand(TICK_COMMAND)).then(
+      () => {
+        clearTimeout(watchdog)
+        this._watchdogs.delete(watchdog)
+        if (this._ackTimedOut) {
+          this._ackTimedOut = false
+          this._logger?.info('status', 'poll tick ack restored')
+          console.error('[swarm poll] poll tick ack restored')
+        }
+      },
+      (err: unknown) => {
+        clearTimeout(watchdog)
+        this._watchdogs.delete(watchdog)
+        this._ackTimedOut = false
+        this._logger?.warn(
+          'status',
+          `poll tick failed: ${err instanceof Error ? err.message : err}`,
+        )
+      },
+    )
   }
 
   dispose(): void {
@@ -103,5 +183,7 @@ export class SwarmNotificationPoller {
       clearInterval(this._timer)
       this._timer = undefined
     }
+    for (const watchdog of this._watchdogs) clearTimeout(watchdog)
+    this._watchdogs.clear()
   }
 }

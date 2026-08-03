@@ -194,6 +194,7 @@ async function setup(opts: SetupOpts = {}) {
     executeCommand,
     tick,
     viewState,
+    platform,
     configValues,
     configChange,
     logger,
@@ -245,7 +246,7 @@ describe('SwarmReviewNotificationContribution', () => {
 
     t.configValues['perforce.swarm.backgroundPoll.enabled'] = true
     t.configChange.fire({
-      affectsConfiguration: (k) => k === 'perforce.swarm.backgroundPoll.enabled',
+      affectsConfiguration: (k) => k === 'perforce.swarm',
     })
     await flush()
 
@@ -262,7 +263,7 @@ describe('SwarmReviewNotificationContribution', () => {
 
     t.configValues['perforce.swarm.backgroundPoll.enabled'] = false
     t.configChange.fire({
-      affectsConfiguration: (k) => k === 'perforce.swarm.backgroundPoll.enabled',
+      affectsConfiguration: (k) => k === 'perforce.swarm',
     })
     await flush()
 
@@ -274,7 +275,7 @@ describe('SwarmReviewNotificationContribution', () => {
     t.dispose()
   })
 
-  it('pushes the switch to the host poll driver when setBackgroundPoll is registered', async () => {
+  it('pushes the polling snapshot to the host poll driver when setBackgroundPoll is registered', async () => {
     const { contrib, platform } = await freshModules()
     const setBackgroundPoll = vi.fn()
     const dashboardCmd = platform.CommandsRegistry.registerCommand(
@@ -302,10 +303,158 @@ describe('SwarmReviewNotificationContribution', () => {
       fakeLoggerService().service,
     )
     await flush()
-    expect(setBackgroundPoll).toHaveBeenCalledWith(true)
+    // Full snapshot: the enabled switch, the RAW poll-interval seconds (ms
+    // conversion + e2e env override stay host-side), and the configured verdict
+    // (mirrors the host's readSwarmConfig defaults: enabled=true, url non-empty).
+    expect(setBackgroundPoll).toHaveBeenCalledWith({
+      enabled: true,
+      pollIntervalSeconds: 0,
+      configured: true,
+    })
     instance.dispose()
     dashboardCmd.dispose()
     pushCmd.dispose()
+  })
+
+  // Repro for the host-activation race: the contribution is constructed before the
+  // perforce extension host registers setBackgroundPoll. The push must retry with
+  // a bounded backoff (previously it skipped silently and the host driver kept
+  // stale enabled/interval/configured state until the next config change).
+  describe('setBackgroundPoll push retry (host activation race)', () => {
+    afterEach(() => vi.useRealTimers())
+
+    function raceSetup() {
+      const executeCommand = vi.fn(
+        async (_id: string, ..._args: unknown[]): Promise<unknown> => undefined,
+      )
+      const pushCalls = () =>
+        executeCommand.mock.calls.filter((c) => c[0] === 'perforce.swarm.setBackgroundPoll')
+      const config = {
+        get: (key: string) => (key === 'perforce.swarm.backgroundPoll.enabled' ? true : undefined),
+        onDidChangeConfiguration: new Emitter<void>().event,
+      } as never
+      return { executeCommand, pushCalls, config }
+    }
+
+    it('retries until the command registers, then pushes exactly once', async () => {
+      const { contrib, platform } = await freshModules()
+      const dashboardCmd = platform.CommandsRegistry.registerCommand(
+        'perforce.swarm.dashboard',
+        () => undefined,
+      )
+      const { executeCommand, pushCalls, config } = raceSetup()
+      vi.useFakeTimers()
+      const instance = new contrib.SwarmReviewNotificationContribution(
+        { executeCommand } as never,
+        { notify: vi.fn() } as never,
+        config,
+        fakeStorage(),
+        { current: null } as never,
+        { notify: vi.fn(), dismiss: vi.fn() } as never,
+        fakeLoggerService().service,
+      )
+      await vi.advanceTimersByTimeAsync(0)
+      expect(pushCalls().length).toBe(0)
+
+      // The host finishes activating — the pending retry picks the command up.
+      const pushCmd = platform.CommandsRegistry.registerCommand(
+        'perforce.swarm.setBackgroundPoll',
+        vi.fn(),
+      )
+      await vi.advanceTimersByTimeAsync(250)
+      expect(pushCalls().length).toBe(1)
+      expect(pushCalls()[0]![1]).toEqual({
+        enabled: true,
+        pollIntervalSeconds: 0,
+        configured: true,
+      })
+
+      // Delivered — no further retries.
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(pushCalls().length).toBe(1)
+      instance.dispose()
+      dashboardCmd.dispose()
+      pushCmd.dispose()
+    })
+
+    it('cancels a pending retry on dispose', async () => {
+      const { contrib, platform } = await freshModules()
+      const dashboardCmd = platform.CommandsRegistry.registerCommand(
+        'perforce.swarm.dashboard',
+        () => undefined,
+      )
+      const { executeCommand, pushCalls, config } = raceSetup()
+      vi.useFakeTimers()
+      const instance = new contrib.SwarmReviewNotificationContribution(
+        { executeCommand } as never,
+        { notify: vi.fn() } as never,
+        config,
+        fakeStorage(),
+        { current: null } as never,
+        { notify: vi.fn(), dismiss: vi.fn() } as never,
+        fakeLoggerService().service,
+      )
+      await vi.advanceTimersByTimeAsync(0)
+      instance.dispose()
+
+      platform.CommandsRegistry.registerCommand('perforce.swarm.setBackgroundPoll', vi.fn())
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(pushCalls().length).toBe(0)
+      dashboardCmd.dispose()
+    })
+  })
+
+  it('re-pushes the polling snapshot when any perforce.swarm configuration changes', async () => {
+    const t = await setup()
+    const pushCmd = t.platform.CommandsRegistry.registerCommand(
+      'perforce.swarm.setBackgroundPoll',
+      vi.fn(),
+    )
+    const pushCalls = () =>
+      t.executeCommand.mock.calls.filter((c) => c[0] === 'perforce.swarm.setBackgroundPoll')
+
+    t.configValues['perforce.swarm.pollInterval'] = 30
+    t.configChange.fire({ affectsConfiguration: (k: string) => k === 'perforce.swarm' })
+    await flush()
+
+    expect(pushCalls().length).toBeGreaterThanOrEqual(1)
+    expect(pushCalls().at(-1)![1]).toMatchObject({
+      enabled: true,
+      pollIntervalSeconds: 30,
+      configured: true,
+    })
+    pushCmd.dispose()
+    t.dispose()
+  })
+
+  // The visibilitychange catch-up: when the window returns to the foreground after
+  // longer than one poll interval without a successful poll (background throttling
+  // froze both drivers, or the host chain wedged), refresh immediately instead of
+  // waiting out the next timer.
+  describe('visibilitychange catch-up tick', () => {
+    afterEach(() => vi.useRealTimers())
+
+    it('refreshes on visible only when the last successful poll is over an interval old', async () => {
+      const t = await setup({ config: { 'perforce.swarm.pollInterval': 10 } })
+      const dashboardCalls = () =>
+        t.executeCommand.mock.calls.filter((c) => c[0] === 'perforce.swarm.dashboard').length
+      const baseline = dashboardCalls()
+      expect(baseline).toBeGreaterThanOrEqual(1) // priming poll ran
+
+      // A visible event with a fresh poll behind us is a no-op…
+      document.dispatchEvent(new Event('visibilitychange'))
+      await flush()
+      expect(dashboardCalls()).toBe(baseline)
+
+      // …but once the last success is older than the interval, foregrounding
+      // drives an immediate catch-up refresh.
+      vi.useFakeTimers()
+      await vi.advanceTimersByTimeAsync(11_000)
+      document.dispatchEvent(new Event('visibilitychange'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dashboardCalls()).toBe(baseline + 1)
+      t.dispose()
+    })
   })
 
   it('does not notify for reviews already present at launch (priming poll)', async () => {
@@ -546,6 +695,25 @@ describe('SwarmReviewNotificationContribution', () => {
       await t.tick.driveSwarmNotificationTick()
       await flush()
       expect(t.notify).not.toHaveBeenCalled()
+    })
+
+    // Gap detection: host ticks arriving more than 3 intervals apart mean the
+    // chain stalled (host wedged / renderer throttled) — the log line carries
+    // the stall duration, zero noise in the steady state.
+    it('logs the stall duration when host ticks arrive more than 3 intervals apart', async () => {
+      const t = await setup({ config: { 'perforce.swarm.pollInterval': 10 } })
+      vi.useFakeTimers()
+      try {
+        await t.tick.driveSwarmNotificationTick()
+        await vi.advanceTimersByTimeAsync(31_000) // > 3x the 10s interval
+        await t.tick.driveSwarmNotificationTick()
+        expect(t.logger.info).toHaveBeenCalledWith(
+          expect.stringContaining('tick gap 31s (host driver stalled or renderer was throttled)'),
+        )
+      } finally {
+        t.dispose()
+        vi.useRealTimers()
+      }
     })
   })
 
