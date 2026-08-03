@@ -10,23 +10,27 @@
  *  appears, not just that the probe recorded the notify decision.
  *--------------------------------------------------------------------------------------------*/
 
+import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 import { expect, test } from '../fixtures/swarmApp.js'
 
 test.describe('@p1 swarm review notification with the window focused', () => {
-  // 10s = the setting's floor; the renderer backstop stays at 60s. The background
-  // poll itself is opt-in (default off), so enable it here.
+  // The background poll itself is opt-in (default off), so enable it here. The
+  // env override runs the host poller below the product 10s floor (still 60x
+  // faster than the renderer's 60s backstop) — otherwise the detect phase alone
+  // waits a full 10s interval.
   test.use({
     swarmExtraSettings: {
       'perforce.swarm.pollInterval': 10,
       'perforce.swarm.backgroundPoll.enabled': true,
     },
+    swarmExtraEnv: { UNIVERSE_SWARM_POLL_INTERVAL_MS: '1000' },
   })
 
   test('a new review raises the in-app fallback toast while the window is focused', async ({
     page,
     swarm,
   }) => {
-    await page.evaluate(() => window.__E2E__!.whenRestored())
+    await evaluateWhenRestored(page)
 
     // Baseline prime off the host poller (no probe-driven polls): the seeded
     // actionable reviews must appear without notifying.
@@ -37,10 +41,16 @@ test.describe('@p1 swarm review notification with the window focused', () => {
       .toBeGreaterThan(0)
     expect(await page.evaluate(() => window.__E2E__!.getSwarmNotifiedReviewIds())).toEqual([])
 
+    // The spec's premise is "window focused" — but every worker's win.show()
+    // grabs the OS foreground at launch, and at 1s ticks the notify lands inside
+    // the parallel launch churn. Re-assert focus right before the review lands
+    // so the OS toast is reliably gated to the in-app fallback.
+    await page.bringToFront()
+
     // A brand-new review lands, requiring the e2e user's action.
     await swarm.addReview({ id: '2001', author: 'dave', description: 'Urgent hotfix' })
 
-    // The next host tick (≤10s out) must detect and notify.
+    // The next host tick (≤1s out) must detect and notify.
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getSwarmNotifiedReviewIds()), {
         timeout: 40_000,

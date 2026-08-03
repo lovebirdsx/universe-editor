@@ -24,7 +24,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - `Test timeout of 30000ms exceeded`（非 poll message）=test 天花板击穿 → 案例 3/10/32
 - CI 每次必挂+本地稳过+received 恒空+retry 救不回=伪 flake（CI 缺产物）→ 案例 4
 - `expect.poll` 里 `keyboard.press` 后 received 稳定错值=盲按污染被测对象 → 案例 5
-- `Execution context was destroyed ... navigation`（fire 后页面 reload/导航再 evaluate）→ 案例 6
+- `Execution context was destroyed ... navigation`（fire 后页面 reload/导航再 evaluate）→ 案例 6；冷启动首个裸 evaluate、无任何导航/崩溃（utility world 销毁，挂 CDP 后不复现）→ 案例 58
 - 冷启动首 poll 恒 `""`：局部硬编码 timeout 盖 CI 分档 / 首 poll 漏带大 timeout → 案例 7/25/31
 - `EBUSY/EPERM rmdir` 栈在 teardown=Windows 文件锁 → 案例 8；`ENOTEMPTY`+`.json.tmp`=storage 原子写竞态 → 案例 17
 - `runCommand`+`expect.poll` 分离、received 卡死初值=fire-once 在就位前空转 → 案例 9
@@ -58,6 +58,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - openWorkspace 后立即外部写文件、等 watcher surface 的 treeitem 等满 timeout 恒不出现=watcher 跨进程 arm（spawn utility process+subscribe）窗口吞事件，seed 可见≠订阅生效 → 案例 55
 - teardown 泄漏栈 `MainThreadLanguages._createProvider` 但**断言全过**、bundle 变更提交后 CI 恒定挂、泄漏数=activate 注册批大小=host activate 赢了 Monaco dynamic import，注册抛 not-initialized 半建 store 成孤儿+provider 批静默丢失 → 案例 56（区分 54：那是 dying-host 帧打 **disposed** 对象）
 - 「忙等+可信输入」spec 本地 `--repeat-each` 必现 flaky、双形态交替（poll 恒 0 / byType 实收单元素但非期望类型如 `["keyup"]`）=setTimeout 提前量赛跑 CDP 输入派发 + dedupe 只留最慢样本；修=console token 确认主线程已阻塞再按键 + 断言放宽到事件族 → 案例 57
+- 焦点门控断言（如聚焦时应出现应用内 toast）恒不出现+host.log 是 `notify shown` 而非 `skipped`=并行 worker `win.show()` 偷前台，断言前 `page.bringToFront()` 钉焦点 → 案例 59
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

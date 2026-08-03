@@ -16,10 +16,13 @@
  *  the wedged latch drops every tick.
  *--------------------------------------------------------------------------------------------*/
 
+import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 import { expect, test } from '../fixtures/swarmApp.js'
 
 // The extension under test reads UNIVERSE_SWARM_REQUEST_TIMEOUT_MS (added with the
-// fix); 3s keeps a hung request recoverable within a poll cycle.
+// fix); 3s keeps a hung request recoverable within a poll cycle. The poll-interval
+// env override runs the host poller below the product 10s floor (still 60x faster
+// than the renderer's 60s backstop) so the wedged cycles take seconds, not 22s.
 test.describe('@p1 swarm poll survives a hung request', () => {
   test.use({
     swarmExtraSettings: {
@@ -28,6 +31,7 @@ test.describe('@p1 swarm poll survives a hung request', () => {
     },
     swarmExtraEnv: {
       UNIVERSE_SWARM_REQUEST_TIMEOUT_MS: '3000',
+      UNIVERSE_SWARM_POLL_INTERVAL_MS: '1000',
     },
   })
 
@@ -35,10 +39,10 @@ test.describe('@p1 swarm poll survives a hung request', () => {
     page,
     swarm,
   }) => {
-    // Prime (≤40s) + two wedged poll cycles (22s) + recovery window (60s) far
+    // Prime (≤40s) + wedged poll cycles (5s) + recovery window (60s) far
     // exceed the harness's 30s default test timeout.
     test.setTimeout(150_000)
-    await page.evaluate(() => window.__E2E__!.whenRestored())
+    await evaluateWhenRestored(page)
 
     // Baseline prime off the host poller (no probe-driven polls).
     await expect
@@ -48,10 +52,11 @@ test.describe('@p1 swarm poll survives a hung request', () => {
       .toBeGreaterThan(0)
     expect(await page.evaluate(() => window.__E2E__!.getSwarmNotifiedReviewIds())).toEqual([])
 
-    // The gateway wedges: the next poll's dashboard fetch hangs mid-flight. Give it
-    // two poll cycles so a poll is definitely stuck.
+    // The gateway wedges: the next poll's dashboard fetch hangs mid-flight. At 1s
+    // ticks + a 3s request timeout, 5s spans a full wedge cycle (fetch hung →
+    // timed out → latch released) and starts the next — a poll is definitely stuck.
     await swarm.setHang(true)
-    await page.waitForTimeout(22_000)
+    await page.waitForTimeout(5_000)
 
     // The gateway answers again and a brand-new review lands. Pre-fix the wedged
     // poll holds the renderer's refresh latch for ~300s (undici headersTimeout),

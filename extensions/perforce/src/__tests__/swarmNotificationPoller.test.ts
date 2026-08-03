@@ -8,7 +8,8 @@ vi.mock('@universe-editor/extension-api', () => ({
   commands: { executeCommand: mocks.executeCommand },
 }))
 
-const { SwarmNotificationPoller } = await import('../swarm/swarmNotificationPoller.js')
+const { SwarmNotificationPoller, resolveSwarmPollIntervalMs } =
+  await import('../swarm/swarmNotificationPoller.js')
 
 const logger = {
   debug: vi.fn(),
@@ -18,6 +19,9 @@ const logger = {
   isTraceEnabled: vi.fn(async () => false),
 }
 
+const tickCalls = () =>
+  mocks.executeCommand.mock.calls.filter((c) => c[0] === '_workbench.swarmPollTick')
+
 describe('SwarmNotificationPoller', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -25,17 +29,16 @@ describe('SwarmNotificationPoller', () => {
   })
   afterEach(() => vi.useRealTimers())
 
-  it('pokes the renderer via _workbench.swarmPollTick on each interval when configured', async () => {
+  it('ticks immediately on start, then on each interval when configured', async () => {
     const poller = new SwarmNotificationPoller(async () => true, logger, 1000)
     poller.start()
+    // The immediate tick is fire-and-forget; let its isConfigured() await flush.
+    await vi.advanceTimersByTimeAsync(0)
+    expect(tickCalls().length).toBe(1)
 
     await vi.advanceTimersByTimeAsync(1000)
     await vi.advanceTimersByTimeAsync(1000)
-
-    const tickCalls = mocks.executeCommand.mock.calls.filter(
-      (c) => c[0] === '_workbench.swarmPollTick',
-    )
-    expect(tickCalls.length).toBe(2)
+    expect(tickCalls().length).toBe(3)
     poller.dispose()
   })
 
@@ -53,11 +56,11 @@ describe('SwarmNotificationPoller', () => {
     const poller = new SwarmNotificationPoller(async () => true, logger, 1000)
     poller.start()
     await vi.advanceTimersByTimeAsync(1000)
-    expect(mocks.executeCommand).toHaveBeenCalledTimes(1)
+    expect(mocks.executeCommand).toHaveBeenCalledTimes(2)
 
     poller.dispose()
     await vi.advanceTimersByTimeAsync(3000)
-    expect(mocks.executeCommand).toHaveBeenCalledTimes(1)
+    expect(mocks.executeCommand).toHaveBeenCalledTimes(2)
   })
 
   it('swallows executeCommand failures and keeps ticking', async () => {
@@ -68,23 +71,59 @@ describe('SwarmNotificationPoller', () => {
     await vi.advanceTimersByTimeAsync(1000)
     await vi.advanceTimersByTimeAsync(1000)
 
-    expect(mocks.executeCommand).toHaveBeenCalledTimes(2)
+    expect(mocks.executeCommand).toHaveBeenCalledTimes(3)
     poller.dispose()
   })
 
-  it('setEnabled(false) stops the driver; setEnabled(true) restarts it', async () => {
+  it('setEnabled(false) stops the driver; setEnabled(true) restarts it with an immediate tick', async () => {
     const poller = new SwarmNotificationPoller(async () => true, logger, 1000)
     poller.setEnabled(true)
     await vi.advanceTimersByTimeAsync(1000)
-    expect(mocks.executeCommand).toHaveBeenCalledTimes(1)
+    expect(mocks.executeCommand).toHaveBeenCalledTimes(2)
 
     poller.setEnabled(false)
     await vi.advanceTimersByTimeAsync(3000)
-    expect(mocks.executeCommand).toHaveBeenCalledTimes(1)
+    expect(mocks.executeCommand).toHaveBeenCalledTimes(2)
 
     poller.setEnabled(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(mocks.executeCommand).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(mocks.executeCommand).toHaveBeenCalledTimes(4)
+    poller.dispose()
+  })
+
+  it('setIntervalMs re-arms a running driver instead of locking in the old interval', async () => {
+    const poller = new SwarmNotificationPoller(async () => true, logger, 60_000)
+    poller.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(mocks.executeCommand).toHaveBeenCalledTimes(1)
+
+    // The renderer's setEnabled(true) push started the driver before the async
+    // config read delivered the configured interval — it must still apply.
+    poller.setIntervalMs(1000)
     await vi.advanceTimersByTimeAsync(1000)
     expect(mocks.executeCommand).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(mocks.executeCommand).toHaveBeenCalledTimes(3)
     poller.dispose()
+  })
+})
+
+describe('resolveSwarmPollIntervalMs', () => {
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('defaults to 60s when unset and the config is 0', () => {
+    expect(resolveSwarmPollIntervalMs(0)).toBe(60_000)
+  })
+
+  it('applies the 10s floor to the configured seconds', () => {
+    expect(resolveSwarmPollIntervalMs(30)).toBe(30_000)
+    expect(resolveSwarmPollIntervalMs(5)).toBe(10_000)
+  })
+
+  it('lets the e2e env override bypass the floor', () => {
+    vi.stubEnv('UNIVERSE_SWARM_POLL_INTERVAL_MS', '1000')
+    expect(resolveSwarmPollIntervalMs(10)).toBe(1000)
   })
 })

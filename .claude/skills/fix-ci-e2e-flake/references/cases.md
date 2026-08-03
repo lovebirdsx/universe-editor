@@ -255,6 +255,18 @@ typescript 套件 `tsCodeLens`/`tsSemanticTokens` CI 2 workers 偶发——spec 
 
 ---
 
+**案例 58 — 冷启动首个裸 evaluate 撞 Playwright utility world 销毁（无导航同型）**
+信号：`Execution context was destroyed ... navigation` 栈在冷启动 spec 的**第一步** `page.evaluate(whenRestored)`（fixture `waitForProbe` 已成功、之后页面一直活着、无 reload 语义）——与案例 6 同信号但**没有任何导航**：CDP 监听证实无 `framenavigated`、无 crash、URL 不变，~100ms 后 evaluate 即恢复；被销毁的是 Playwright 自己的 `__playwright_utility_world_page` 隔离世界（早期 attach 竞态，utility world 销毁重建时命中在飞的 evaluate）。**挂上外部 CDP 会话后 30 连过**（观察者效应，可据此与真导航区分）；父提交同样挂 → 纯 harness 层时序，与触发关注的代码提交无关。
+perforce 全部 4 个 swarm 通知 spec（`swarmReviewNotification{,Focused,Hung,Poller}`）首行裸 `page.evaluate(() => window.__E2E__!.whenRestored())`，本地 ~30-50% 挂、retry 常救回。修：统一换 `evaluateWhenRestored(page)`（案例 6 抽出的硬化 helper，e2e-harness 已导出）——**凡冷启动 spec 的首个 probe evaluate 都不许裸写**。锚：`packages/e2e-harness/src/pages/WorkbenchPO.ts`（`evaluateWhenRestored`）。
+
+---
+
+**案例 59 — 焦点门控断言被并行 worker 的 win.show() 偷焦点**
+信号：断言「聚焦时应走应用内 fallback」的 UI（如 in-app toast locator）恒不出现，但探针侧决策已发生；host.log 出现 `notify shown`（期望的是 `notify skipped (window focused, user present)`）= notify 时刻本窗口**根本没聚焦**。
+`swarmReviewNotificationFocused` 把 host 轮询从 10s 提速到 1s 后 2/6 挂：notify 从启动后 ~20s 提前到 ~5s，正好落进并行 worker 的 `win.show()` 前台争抢风暴（`win.show()` 默认聚焦，Windows 前台锁只是概率性拦截）；`isFocused()=false` → OS toast 路径 → 应用内 toast 永不渲染。10s 时侥幸是因为 notify 远在争抢平息之后。修：断言前提自己造——`addReview` 前 `await page.bringToFront()` 重新钉住焦点（判别套路沿用 swarm CLAUDE.md「缺失的日志行」：host.log 的 shown/skipped 决策行是第一现场）。锚：`swarmReviewNotificationFocused.spec.ts`；`hostMainService.notify` 门控。
+
+---
+
 ## 根治 TODO
 
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。

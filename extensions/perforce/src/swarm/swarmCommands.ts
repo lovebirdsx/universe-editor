@@ -16,7 +16,7 @@ import { changelistIdFromGroupId } from '../changelist.js'
 import { SwarmClient, type SwarmReviewFilter } from './swarmClient.js'
 import { SwarmError, SwarmErrorCode } from './swarmApi.js'
 import { SwarmStatusBarController } from './swarmStatusBar.js'
-import { SwarmNotificationPoller } from './swarmNotificationPoller.js'
+import { SwarmNotificationPoller, resolveSwarmPollIntervalMs } from './swarmNotificationPoller.js'
 import type { SwarmLogger } from './swarmLog.js'
 import { buildReviewPicks } from './swarmReviewPick.js'
 import { localize } from '../nls.js'
@@ -779,9 +779,7 @@ export function registerSwarmCommands(
     void statusBar.refresh()
     const cfg = workspace.getConfiguration('perforce')
     const pollInterval = (await cfg.get('swarm.pollInterval', 0)) as number
-    if (Number.isFinite(pollInterval) && pollInterval > 0) {
-      notificationPoller.setIntervalMs(Math.max(10, pollInterval) * 1000)
-    }
+    notificationPoller.setIntervalMs(resolveSwarmPollIntervalMs(pollInterval))
     if ((await cfg.get('swarm.backgroundPoll.enabled', false)) as boolean) {
       notificationPoller.start()
     }

@@ -13,6 +13,7 @@
  *  contribution's own timer, so a new review must surface even with the view shut.
  *--------------------------------------------------------------------------------------------*/
 
+import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 import { expect, test } from '../fixtures/swarmApp.js'
 
 test.describe('@p1 swarm review notification', () => {
@@ -24,7 +25,7 @@ test.describe('@p1 swarm review notification', () => {
     page,
     swarm,
   }) => {
-    await page.evaluate(() => window.__E2E__!.whenRestored())
+    await evaluateWhenRestored(page)
     const badge = page.getByTestId('activitybar-badge-workbench.view.swarm')
 
     // Let the baseline prime: the perforce extension host activates lazily, so the
