@@ -1,5 +1,66 @@
 [
   {
+    "version": "0.1.58",
+    "date": "2026-08-03",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "按端指纹增量跳过 dev:run 构建，加快其启动速度",
+          "新增 start 脚本启动编辑器应用",
+          "新增 dev:run 无热更快速启动模式",
+          "优化pnpm dev的启动速度",
+          "增加 pnpm dev 完整启动耗时墙钟测量",
+          "review修改应用到本地新增不进changelist的选项",
+          "文件搜索并发扫描与预热缓存优化",
+          "新增交互卡顿排查闭环——真实文件夹采集与skill",
+          "新增交互性能报告 Spec 与 CI 工件采集",
+          "插件市场 Phase E 收尾：VSIX 市场签名 + 客户端验签",
+          "发布外部插件 P5",
+          "发布外部插件 P4",
+          "模板防腐冒烟与 CI extension-templates job",
+          "create-extension webview 模板与交互问询",
+          "create-extension 脚手架与 basic 模板",
+          "uex login/publish/unpublish（服务端 Phase D 联调）",
+          "uex dev 编辑器定位与拉起",
+          "uex package/ls 命令与发布前校验链",
+          "新增 uex 与 create-extension 包骨架",
+          "发布外部插件 P2",
+          "explorer，p4中加入针对md，html文件的预览入口",
+          "交互性能报告页 + 状态栏警示 + e2e 冒烟 + eventType 映射修复",
+          "main 侧 renderer 冻结兜底日志",
+          "常驻交互响应性监控——Event Timing 采集 + LoAF 归因 + 慢交互日志",
+          "MCP 服务器的启用状态从配置转移到存储",
+          "MCP Bridge 插件去 settings.json 化：声明式 contributes.mcpServers 贡献点",
+          "claude添加 DeepSeek 模型计价",
+          "设定界面重构，ui操作友好化，界面虚拟化加快响应速度，界面状态可保存",
+          "支持关闭编辑器持久化与 quick open 恢复"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "将TypeScript状态栏ready图标从pulse改为bracket",
+          "markdown预览增强代码围栏解析以正确处理多词信息字符串和波浪线",
+          "在 dev 启动前确保 workspace dist 已构建",
+          "将perforce未打开工作区日志级别从error降为info",
+          "提取 resolveFromRepo 为共享工具函数，修正因为renderer bootstrap提速带来的e2e失败",
+          "! 修复markdown预览链接跳转丢失脏编辑",
+          "修复pnpm dev，窗口黑屏bug",
+          "优化QuickInput外部过滤时的渲染性能",
+          "修复ci报错",
+          "补充AcpSession空闲断开与恢复相关的集成测试",
+          "修正编辑器定位中跨平台路径拼接问题",
+          "修复pnpm test报错",
+          "修复 interactionPerf 忙等+可信输入双竞态 flaky",
+          "修复 monaco-editor sticky scroll 崩溃"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.57",
     "date": "2026-07-31",
     "groups": [
