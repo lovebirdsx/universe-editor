@@ -80,6 +80,7 @@ import {
   type CodexBinarySource,
   type ICodexBinaryResolveOptions,
 } from '../../../shared/ipc/codexBinaryService.js'
+import { IClaudeConfigService } from '../../../shared/ipc/claudeConfigService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPathPolicy } from './acpPathPolicy.js'
 import { createSdkHostStream, type SdkHostStream } from './sdkHostStream.js'
@@ -273,6 +274,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     @IAcpTerminalService private readonly _terminals: IAcpTerminalService,
     @IClaudeBinaryService private readonly _claudeBinary: IClaudeBinaryService,
     @ICodexBinaryService private readonly _codexBinary: ICodexBinaryService,
+    @IClaudeConfigService private readonly _claudeConfig: IClaudeConfigService,
     @IConfigurationService private readonly _config: IConfigurationService,
     @IProgressService private readonly _progress: IProgressService,
     @ILoggerService loggerService: ILoggerService,
@@ -497,7 +499,26 @@ export class AcpClientService extends Disposable implements IAcpClientService {
         }
       },
     )
-    return { ...spec, env: { ...spec.env, CLAUDE_CODE_EXECUTABLE: result.path } }
+    // The native CLI's first-run onboarding decides whether to auto-start the
+    // OAuth browser flow by probing process env only — it never sees the
+    // settings.json env block. Inject that block into the agent process env so
+    // a configured gateway token suppresses the spurious browser login on a
+    // fresh machine. spec.env wins so explicit overrides are never clobbered.
+    const settingsEnv = await this._readClaudeSettingsEnv()
+    return {
+      ...spec,
+      env: { ...settingsEnv, ...spec.env, CLAUDE_CODE_EXECUTABLE: result.path },
+    }
+  }
+
+  private async _readClaudeSettingsEnv(): Promise<Record<string, string>> {
+    try {
+      const settings = await this._claudeConfig.read()
+      return settings.env ?? {}
+    } catch (err) {
+      this._logger.warn(`reading claude settings env failed: ${(err as Error).message}`)
+      return {}
+    }
   }
 
   /**

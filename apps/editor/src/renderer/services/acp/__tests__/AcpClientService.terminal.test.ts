@@ -36,11 +36,13 @@ import { AcpClientService } from '../acpClientService.js'
 import type { IAcpClientNotificationSink } from '../acpClientService.js'
 import { AcpSessionCreateProfiler } from '../acpSessionCreateProfiler.js'
 import { AcpPathPolicy } from '../acpPathPolicy.js'
-import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
+import type { IAcpAgentDescriptor, IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import type { IClaudeBinaryService } from '../../../../shared/ipc/claudeBinaryService.js'
 import type { ICodexBinaryService } from '../../../../shared/ipc/codexBinaryService.js'
+import type { IClaudeConfigService } from '../../../../shared/ipc/claudeConfigService.js'
 import type {
   AcpExitEvent,
+  AcpLaunchSpec,
   AcpStdioChunk,
   IAcpHostService,
 } from '../../../../shared/ipc/acpHostService.js'
@@ -58,6 +60,7 @@ interface InMemoryAcpHostHarness extends IDisposable {
   inject(data: string): void
   written(): readonly string[]
   starts(): number
+  lastSpec(): AcpLaunchSpec | undefined
   exit(code: number | null, signal: string | null): void
 }
 
@@ -68,13 +71,15 @@ function createInMemoryAcpHost(): InMemoryAcpHostHarness {
   const handle = 'mem-' + Math.random().toString(36).slice(2, 10)
   const writes: string[] = []
   let startCount = 0
+  let spec: AcpLaunchSpec | undefined
   const host: IAcpHostService = {
     _serviceBrand: undefined,
     onStdout: onStdout.event,
     onStderr: onStderr.event,
     onExit: onExit.event,
-    start: () => {
+    start: (s) => {
       startCount++
+      spec = s
       return Promise.resolve({ handle })
     },
     writeStdin: (_h, data) => {
@@ -96,6 +101,9 @@ function createInMemoryAcpHost(): InMemoryAcpHostHarness {
     starts() {
       return startCount
     },
+    lastSpec() {
+      return spec
+    },
     exit(code, signal) {
       onExit.fire({ handle, code, signal })
     },
@@ -111,17 +119,37 @@ type IAcpTransportTestHarness = InMemoryAcpHostHarness
 
 class FakeAgentRegistry implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
+  private readonly _agents: readonly IAcpAgentDescriptor[] = [
+    { id: 'fake', name: 'Fake', command: '/x', args: [] },
+    {
+      id: 'claude-code',
+      name: 'Claude Code',
+      command: 'claude-agent-acp',
+      args: [],
+      runAsNode: true,
+      nodeEntry: 'claude',
+    },
+  ]
   list() {
-    return [{ id: 'fake', name: 'Fake', command: '/x', args: [] }]
+    return this._agents
   }
   allAgentIds(): readonly string[] {
-    return ['fake']
+    return this._agents.map((a) => a.id)
   }
-  get(_agentId: string) {
-    return this.list()[0]!
+  get(agentId: string) {
+    const found = this._agents.find((a) => a.id === agentId)
+    if (!found) throw new Error(`Unknown ACP agent: ${agentId}`)
+    return found
   }
-  resolve(_agentId: string, cwd?: string) {
-    return { command: '/x', args: [], ...(cwd !== undefined ? { cwd } : {}) }
+  resolve(agentId: string, cwd?: string): AcpLaunchSpec {
+    const d = this.get(agentId)
+    return {
+      command: d.command,
+      args: d.args,
+      ...(d.runAsNode ? { runAsNode: true } : {}),
+      ...(d.nodeEntry ? { nodeEntry: d.nodeEntry } : {}),
+      ...(cwd !== undefined ? { cwd } : {}),
+    }
   }
   defaultAgentId() {
     return 'fake'
@@ -277,7 +305,13 @@ interface Harness {
   ): Promise<{ result?: unknown; error?: { code: number; message: string } }>
 }
 
-function makeService(opts: { autoInitialize?: boolean; startupTimeoutMs?: number } = {}): Harness {
+function makeService(
+  opts: {
+    autoInitialize?: boolean
+    startupTimeoutMs?: number
+    claudeSettingsEnv?: Record<string, string>
+  } = {},
+): Harness {
   const transport = createInMemoryAcpHost()
   const terminals = makeFakeTerminalService()
   const notifications = new StubNotificationService()
@@ -305,6 +339,9 @@ function makeService(opts: { autoInitialize?: boolean; startupTimeoutMs?: number
       onDidChangeProgress: new Emitter<never>().event,
       resolve: () => Promise.resolve({ path: '/x' }),
     } as unknown as ICodexBinaryService,
+    {
+      read: () => Promise.resolve(opts.claudeSettingsEnv ? { env: opts.claudeSettingsEnv } : {}),
+    } as unknown as IClaudeConfigService,
     {
       get: (key: string) => (key === 'acp.startupTimeoutMs' ? opts.startupTimeoutMs : undefined),
     } as unknown as IConfigurationService,
@@ -710,5 +747,40 @@ describe('AcpClientService — connect profile steps', () => {
 
     lease.dispose()
     h.svc.drainAll()
+  })
+})
+
+describe('AcpClientService — claude settings env injection', () => {
+  let h: Harness
+  afterEach(() => {
+    h.transport.dispose()
+  })
+
+  it('injects the settings.json env block into the claude-code launch env', async () => {
+    h = makeService({
+      claudeSettingsEnv: {
+        ANTHROPIC_AUTH_TOKEN: 'tok-123',
+        ANTHROPIC_BASE_URL: 'https://gateway.example.com',
+      },
+    })
+    const conn = await h.svc.connect('claude-code', { cwd: CWD, leaseFor: SESSION_ID })
+    try {
+      const spec = h.transport.lastSpec()
+      expect(spec?.env?.['ANTHROPIC_AUTH_TOKEN']).toBe('tok-123')
+      expect(spec?.env?.['ANTHROPIC_BASE_URL']).toBe('https://gateway.example.com')
+      expect(spec?.env?.['CLAUDE_CODE_EXECUTABLE']).toBe('/x')
+    } finally {
+      conn.dispose()
+    }
+  })
+
+  it('leaves non-claude agents without the settings env', async () => {
+    h = makeService({ claudeSettingsEnv: { ANTHROPIC_AUTH_TOKEN: 'tok-123' } })
+    const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
+    try {
+      expect(h.transport.lastSpec()?.env?.['ANTHROPIC_AUTH_TOKEN']).toBeUndefined()
+    } finally {
+      conn.dispose()
+    }
   })
 })
