@@ -10,13 +10,17 @@ import { app } from 'electron'
 
 /**
  * Walk up from `app.getAppPath()` looking for a repo-relative path. Tolerates
- * both `electron .` (appPath = apps/editor) and the e2e
- * `electron out/main/index.js` layout (appPath points deeper). Falls back to
- * the historical `<appPath>/../../<relative>` guess when nothing exists, so
+ * both `electron .` (appPath = apps/editor) and the e2e / dev:run
+ * `electron <entry>` layout (appPath points deeper). Falls back to the
+ * historical `<appPath>/../../<relative>` guess when nothing exists, so
  * error messages still name a plausible location.
  *
  * Dev-tree only — packaged builds resolve under `process.resourcesPath`
  * instead; callers must branch on `app.isPackaged` before calling this.
+ *
+ * Red line: NEVER join repo-relative paths onto `app.getAppPath()` directly —
+ * it silently breaks under `pnpm dev:run` (appPath = out-dev). Always go
+ * through this helper.
  */
 export function resolveFromRepo(relative: string): string {
   let dir = app.getAppPath()

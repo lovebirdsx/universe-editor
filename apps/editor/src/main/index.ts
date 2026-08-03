@@ -32,6 +32,7 @@ import {
 } from '../shared/deepLink.js'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
 import { parseFileToOpen } from './cliArgs.js'
+import { resolveFromRepo } from './repoPaths.js'
 import { installImageProtocol, IMAGE_SCHEME_PRIVILEGE } from './ipc/imageProtocol.js'
 import { APP_SCHEME_PRIVILEGE, installAppProtocolHandler } from './ipc/resourceProtocol.js'
 import { LogMainService, ILogMainService } from './services/log/logMainService.js'
@@ -406,12 +407,14 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     // layered in (lowest priority) before services that read it are constructed.
     // The bundled product defaults (galleryUrl etc.) rank below cli/env/user-file:
     // packaged reads resources/product.json (staged by runtime-resources.mjs), dev
-    // reads build/product.dev.json. E2E stays on the OSS "no marketplace" default.
+    // reads build/product.dev.json (via resolveFromRepo — `pnpm dev` runs
+    // `electron .` while `pnpm dev:run` runs a file entry, so getAppPath() differs).
+    // E2E stays on the OSS "no marketplace" default.
     const productConfigFile = environmentService.isE2E
       ? undefined
       : app.isPackaged
         ? join(process.resourcesPath, 'product.json')
-        : join(app.getAppPath(), 'build', 'product.dev.json')
+        : resolveFromRepo('build/product.dev.json')
     environmentService.resolveFileConfig(app.getPath('userData'), productConfigFile)
 
     // Root DI container. Preset instances (constructed before the container,

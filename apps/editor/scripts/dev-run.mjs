@@ -13,8 +13,8 @@
 //     服务创建阶段（build 留下的进程级状态干扰子进程；隔离到子进程后消失）。
 //
 // 产物隔离：dev-flavor 构建落到 `out-dev/`（由 electron.vite.config.ts 据 UNIVERSE_DEV_BUILD
-// 切换），不碰生产/e2e 用的 `out/`。Electron 直接以 out-dev/main/index.js 为入口启动；
-// main 用 import.meta.dirname 相对定位 preload/renderer，自然跟随到 out-dev/*。
+// 切换），不碰生产/e2e 用的 `out/`。Electron 以 out-dev 目录为入口启动（见下方 manifest
+// 播种注释）；main 用 import.meta.dirname 相对定位 preload/renderer，自然跟随到 out-dev/*。
 //
 // dev-flavor 的关键：electron-vite build 会在加载配置前硬设 NODE_ENV=production，把
 // import.meta.env.DEV 烤成 false。这里设 UNIVERSE_DEV_BUILD=1，electron.vite.config.ts
@@ -37,7 +37,6 @@ const REPO_ROOT = resolve(APP_ROOT, '../..')
 const OUT_DEV = resolve(APP_ROOT, 'out-dev')
 const STAMP_FILE = resolve(OUT_DEV, '.devrun-stamp.json')
 const STAMP_VERSION = 1
-const DEV_MAIN_ENTRY = resolve(OUT_DEV, 'main/index.js')
 
 const BUILD_CHILD_FLAG = '--build-child'
 
@@ -236,8 +235,22 @@ if (dirty.length > 0) {
 // from a plain node process.
 const electronExe = createRequire(import.meta.url)('electron')
 
+// Launch with a DIRECTORY entry (like `pnpm dev`'s `electron .`), not the main
+// file: Electron only loads package.json for directory entries, so a file entry
+// leaves app.getVersion()/getName() at the Electron binary's own version/name.
+// Seed a minimal manifest so both entries agree. Must run after the build (vite
+// empties each target's outDir) and is content-gated to avoid pointless writes.
+{
+  const pkg = JSON.parse(readFileSync(resolve(APP_ROOT, 'package.json'), 'utf8'))
+  const manifest = `${JSON.stringify({ name: pkg.name, version: pkg.version, type: 'module', main: 'main/index.js' }, null, 2)}\n`
+  const manifestPath = resolve(OUT_DEV, 'package.json')
+  if (!existsSync(manifestPath) || readFileSync(manifestPath, 'utf8') !== manifest) {
+    writeFileSync(manifestPath, manifest)
+  }
+}
+
 const t0 = Date.now()
-const child = spawn(electronExe, [DEV_MAIN_ENTRY, ...electronArgs], {
+const child = spawn(electronExe, [OUT_DEV, ...electronArgs], {
   cwd: APP_ROOT,
   stdio: 'inherit',
   env: { ...cleanEnv, UNIVERSE_DEVRUN_T0: String(t0) },

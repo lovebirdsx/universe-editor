@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { app } from 'electron'
 import { createNamedLogger, type ILogger, ILoggerService } from '@universe-editor/platform'
+import { resolveFromRepo } from '../../repoPaths.js'
 import type {
   IReleaseNote,
   IReleaseNotesData,
@@ -18,7 +19,7 @@ import type {
 
 /** Packaged location, under `resourcesPath` (see electron-builder.yml). */
 const RELEASE_NOTES_PACKAGED = 'release-notes.json'
-/** Dev/E2E location, relative to `app.getAppPath()` (== `apps/editor`). */
+/** Dev/E2E location, repo-relative (see resolveFromRepo). */
 const RELEASE_NOTES_DEV = 'resources/release-notes.json'
 
 export type ReleaseNotesPathResolver = () => string
@@ -26,7 +27,7 @@ export type ReleaseNotesPathResolver = () => string
 const defaultResolvePath: ReleaseNotesPathResolver = () =>
   app.isPackaged
     ? path.join(process.resourcesPath, RELEASE_NOTES_PACKAGED)
-    : path.resolve(app.getAppPath(), RELEASE_NOTES_DEV)
+    : resolveFromRepo(RELEASE_NOTES_DEV)
 
 export class ReleaseNotesMainService implements IReleaseNotesService {
   declare readonly _serviceBrand: undefined
