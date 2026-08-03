@@ -4,11 +4,17 @@
  *  and that dispose() reverses both sides cleanly.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
+  EditorInput,
+  IEditorGroupsService,
+  INotificationService,
+  InstantiationService,
   KeybindingsRegistry,
   KeybindingWeight,
+  ServiceCollection,
+  URI,
   type IDisposable,
 } from '@universe-editor/platform'
 import {
@@ -18,6 +24,7 @@ import {
   type CoreCommand,
   type IMonacoEditorExtensionsRegistry,
 } from '../monaco/monacoActionsBridge.js'
+import { FileEditorRegistry } from '../../../services/editor/FileEditorRegistry.js'
 
 const CtrlCmd = 2048
 const Shift = 1024
@@ -351,5 +358,64 @@ describe('bridgeMonacoActionsForTests', () => {
     expect(
       KeybindingsRegistry.getAllKeybindings().some((kb) => kb.command === 'editor.action.demo'),
     ).toBe(false)
+  })
+
+  describe('command handler editor resolution', () => {
+    class FakeTextInput extends EditorInput {
+      override get typeId(): string {
+        return 'fakeText'
+      }
+      override get resource(): URI {
+        return URI.parse('untitled:///Fake-1')
+      }
+      getName(): string {
+        return 'Fake-1'
+      }
+    }
+
+    function setup(activeEditor: EditorInput | null) {
+      const trigger = vi.fn()
+      const status = vi.fn()
+      const services = new ServiceCollection()
+      services.set(IEditorGroupsService, {
+        _serviceBrand: undefined,
+        activeGroup: { id: 1, activeEditor },
+      } as never)
+      services.set(INotificationService, { _serviceBrand: undefined, status } as never)
+      const inst = new InstantiationService(services)
+      return { inst, trigger, status }
+    }
+
+    afterEach(() => {
+      FileEditorRegistry._resetForTests()
+    })
+
+    it('dispatches to a mounted editor even when the active input is not a FileEditorInput', () => {
+      registered = bridgeMonacoActionsForTests(
+        makeRegistry([{ id: 'editor.action.insertCursorBelow', label: 'Add Cursor Below' }]),
+        [],
+      )
+      const input = new FakeTextInput()
+      const { inst, trigger } = setup(input)
+      FileEditorRegistry.register(input, { trigger } as never, 1)
+
+      inst.invokeFunction((accessor) => {
+        CommandsRegistry.getCommand('editor.action.insertCursorBelow')!.handler(accessor)
+      })
+      expect(trigger).toHaveBeenCalledWith('', 'editor.action.insertCursorBelow', {})
+    })
+
+    it('notifies instead of throwing when no text editor is mounted', () => {
+      registered = bridgeMonacoActionsForTests(
+        makeRegistry([{ id: 'editor.action.insertCursorBelow', label: 'Add Cursor Below' }]),
+        [],
+      )
+      const { inst, status } = setup(null)
+
+      inst.invokeFunction((accessor) => {
+        CommandsRegistry.getCommand('editor.action.insertCursorBelow')!.handler(accessor)
+      })
+      expect(status).toHaveBeenCalledTimes(1)
+    })
   })
 })

@@ -21,6 +21,7 @@ import {
   ITextEditorSelection,
   URI,
   toDisposable,
+  type EditorInput,
 } from '@universe-editor/platform'
 import { type monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { FileEditorInput } from './FileEditorInput.js'
@@ -62,7 +63,7 @@ const EDITOR_MOUNT_TIMEOUT_MS = 30_000
  * leak gate flags at teardown.
  */
 export async function waitForFileEditor(
-  input: FileEditorInput,
+  input: EditorInput,
   disposables?: DisposableStore,
 ): Promise<monaco.editor.IStandaloneCodeEditor | undefined> {
   const existing = FileEditorRegistry.get(input)
@@ -122,7 +123,7 @@ export function applyEditorSelection(
 
 /** Wait for {@link input}'s editor to mount, then reveal {@link selection}. */
 export async function revealSelectionInInput(
-  input: FileEditorInput,
+  input: EditorInput,
   selection: ITextEditorSelection,
   disposables?: DisposableStore,
 ): Promise<void> {

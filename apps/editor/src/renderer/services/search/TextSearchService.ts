@@ -5,18 +5,22 @@
 
 import {
   DisposableStore,
+  IEditorGroupsService,
   ILoggerService,
   ITextSearchService,
+  IUriIdentityService,
   IWorkspaceService,
   InstantiationType,
   createNamedLogger,
   markAsSingleton,
   registerSingleton,
+  type IEditorGroupsService as IEditorGroupsServiceType,
   type IFileMatch,
   type ILogger,
   type ILoggerService as ILoggerServiceType,
   type ITextSearchOptions,
   type ITextSearchQuery,
+  type IUriIdentityService as IUriIdentityServiceType,
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import {
@@ -24,6 +28,7 @@ import {
   type ITextSearchMainService as ITextSearchMainServiceType,
 } from '../../../shared/ipc/textSearchService.js'
 import { compileQuery } from './scanText.js'
+import { mergeOpenEditorResults, searchOpenEditorModels } from './openEditorSearch.js'
 import { IExcludeService } from '../exclude/ExcludeService.js'
 
 let searchSessionSeq = 0
@@ -42,6 +47,8 @@ export class TextSearchService implements ITextSearchService {
     @IWorkspaceService private readonly _workspace: IWorkspaceServiceType,
     @ITextSearchMainService private readonly _mainSearch: ITextSearchMainServiceType,
     @IExcludeService private readonly _exclude: IExcludeService,
+    @IEditorGroupsService private readonly _editorGroups: IEditorGroupsServiceType,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityServiceType,
     @ILoggerService loggerService: ILoggerServiceType,
   ) {
     this._logger = createNamedLogger(loggerService, { id: 'search', name: 'Search' })
@@ -52,10 +59,6 @@ export class TextSearchService implements ITextSearchService {
     opts: ITextSearchOptions = {},
   ): Promise<readonly IFileMatch[]> {
     const root = this._workspace.current?.folder ?? null
-    if (!root) {
-      this._logger.debug('search skipped noWorkspace')
-      return []
-    }
     const pattern = query.pattern.trim()
     if (pattern.length === 0) {
       this._logger.debug('search skipped emptyPattern')
@@ -72,6 +75,21 @@ export class TextSearchService implements ITextSearchService {
     if (opts.signal?.aborted) {
       this._logger.info('search aborted beforeStart')
       return []
+    }
+
+    // Untitled / dirty buffers exist only in memory, so ripgrep can never see
+    // them (or sees stale content). Search their models up front and fold the
+    // results into the disk set at completion, VSCode getOpenEditorResults-style.
+    const editorResults = searchOpenEditorModels(this._editorGroups, { ...query, pattern })
+    if (editorResults.length > 0 && !opts.signal?.aborted) opts.onResults?.(editorResults)
+
+    if (!root) {
+      if (editorResults.length > 0) {
+        this._logger.info(`search openEditorsOnly files=${editorResults.length}`)
+      } else {
+        this._logger.debug('search skipped noWorkspace')
+      }
+      return editorResults
     }
 
     const startedAt = Date.now()
@@ -91,6 +109,10 @@ export class TextSearchService implements ITextSearchService {
       }),
     )
     const onAbort = (): void => {
+      // Release the IPC subscriptions immediately: the main-side search promise
+      // may never settle once the caller aborts (e.g. the window is reloading),
+      // so waiting for `finally` would leak them past teardown.
+      this._searchStores.delete(searchStore)
       void this._mainSearch.cancel(sessionId).catch((err: unknown) => {
         this._logger.warn(`search cancel failed: ${(err as Error).message}`)
       })
@@ -115,7 +137,7 @@ export class TextSearchService implements ITextSearchService {
           `matched=${complete.progress.filesMatched} matches=${complete.progress.totalMatches} ` +
           `limit=${complete.progress.limitHit ?? 'none'} ms=${Date.now() - startedAt}`,
       )
-      return complete.results
+      return mergeOpenEditorResults(complete.results, editorResults, this._uriIdentity)
     } catch (err) {
       if (opts.signal?.aborted) {
         this._logger.info('search aborted')

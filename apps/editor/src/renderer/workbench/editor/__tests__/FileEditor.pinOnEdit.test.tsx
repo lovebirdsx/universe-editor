@@ -29,7 +29,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
   const makeModel = (initial: string, language: string, uri: unknown) => {
     let value = normalizeModelText(initial)
     let alternativeVersionId = 1
-    const listeners = new Set<() => void>()
+    const listeners = new Set<(e: { changes: unknown[] }) => void>()
     return {
       uri,
       getValue: () => value,
@@ -40,10 +40,11 @@ vi.mock('../monaco/MonacoLoader.js', () => {
         if (normalized === value) return
         value = normalized
         alternativeVersionId++
-        for (const listener of listeners) listener()
+        // Match real Monaco: content events always carry a payload.
+        for (const listener of listeners) listener({ changes: [] })
       },
       getLanguageId: () => language,
-      onDidChangeContent: (cb: () => void) => {
+      onDidChangeContent: (cb: (e: { changes: unknown[] }) => void) => {
         listeners.add(cb)
         return { dispose: () => listeners.delete(cb) }
       },

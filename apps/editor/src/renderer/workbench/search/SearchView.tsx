@@ -17,6 +17,7 @@ import {
   URI,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
 import { SearchInputBar } from './SearchInputBar.js'
 import { SearchResultsTree, type SearchResultsTreeHandle } from './SearchResultsTree.js'
 import { useSearchEngine, type ISearchQuery } from './useSearchEngine.js'
@@ -85,7 +86,10 @@ export function SearchView() {
     'workbench.view.search.results',
     useCallback(() => {
       const active = editorService.activeEditor.get()
-      const resource = active instanceof FileEditorInput ? active.resource : null
+      const resource =
+        active instanceof FileEditorInput || active instanceof UntitledEditorInput
+          ? active.resource
+          : null
       const current = resultsRef.current
       if (current.length > 0 && resource && treeRef.current) {
         const inResults = current.some((fm) =>

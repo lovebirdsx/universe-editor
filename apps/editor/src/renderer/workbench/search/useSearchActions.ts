@@ -12,6 +12,7 @@
 
 import { useCallback } from 'react'
 import {
+  EditorInput,
   IDialogService,
   IEditorGroupsService,
   IEditorService,
@@ -63,8 +64,9 @@ export function useSearchActions(
       editorService.openEditor(input, { pinned: !preview })
       // openEditor dedupes by resource and can discard the fresh input, so reveal
       // against the active instance that actually owns the mounted Monaco editor.
+      // Untitled results resolve to the already-open UntitledEditorInput this way.
       const active = editorService.activeEditor.get()
-      if (!(active instanceof FileEditorInput)) return
+      if (!(active instanceof EditorInput)) return
       void (async () => {
         const editor = await waitForFileEditor(active)
         const range = match.ranges[rangeIndex]

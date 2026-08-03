@@ -129,7 +129,7 @@
   3. **生产窗口全局 `backgroundThrottling: false`**（`windowMainService.ts`，对齐 VSCode `windowImpl.ts`），从机制上消灭"renderer 被节流"整类 bug；`UNIVERSE_E2E_THROTTLE=1` 语义反转为"显式 opt-in 节流场景验证"。renderer 另加 `visibilitychange` 补 tick（visible 且距上次成功 poll 超一个 interval 即 refresh），把"切窗即见"从节流解除的副作用变成显式保证。
 - **观测补课（本次"死无对证"的两个缺口）**：poller 生命周期行（start / re-arm / stop / ack 超时 / ack 恢复）同时 `console.error` 镜像——host stderr 由 main 转发进会话根 `extensionHost.log`（红线：**绝不写 stdout，那是 RPC 通道**；`poll tick failed` 这类 renderer 状态噪音不镜像）；renderer tick handler 记录上次 tick 时刻，gap > 3×interval 打 info `tick gap <N>s` 到 `swarmNotify` logger。
 - **红线重申**：poller tick 路径**不得引入任何对 renderer 的前置 await**（配置读取、健康探测、握手——一律不许）。需要 renderer 状态时走"renderer 推送 + host 缓存"模式。
-- **回归**：poller 单测（poke 永不 settle 时 tick 不停摆 + watchdog warn + ack 恢复 + stderr 镜像断言）、`swarmCommands.test.ts` 的 setBackgroundPoll payload 套件、renderer contribution 单测（推送 retry / 粗粒度配置重推 / visibilitychange 补 tick / tick gap）、e2e `swarmReviewNotificationThrottled.spec.ts`（`UNIVERSE_E2E_THROTTLE=1` 真实节流 + minimize，通知必达）。完整根因与时间线见 `docs/plan/swarm-background-notify-throttling-fix-plan.md`。
+- **回归**：poller 单测（poke 永不 settle 时 tick 不停摆 + watchdog warn + ack 恢复 + stderr 镜像断言）、`swarmCommands.test.ts` 的 setBackgroundPoll payload 套件、renderer contribution 单测（推送 retry / 粗粒度配置重推 / visibilitychange 补 tick / tick gap）、e2e `swarmReviewNotificationThrottled.spec.ts`（`UNIVERSE_E2E_THROTTLE=1` 真实节流 + minimize，通知必达）。
 
 ### 🔍 通知链路的日志观测点（排查「收不到通知」先看这三处）
 

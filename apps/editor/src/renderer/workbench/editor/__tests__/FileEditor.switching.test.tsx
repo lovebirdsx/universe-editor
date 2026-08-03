@@ -4,7 +4,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-type Listener = () => void
+type Listener = (e: { changes: unknown[] }) => void
 
 vi.mock('../monaco/MonacoLoader.js', () => {
   function disposable(dispose: () => void = () => {}) {
@@ -24,7 +24,8 @@ vi.mock('../monaco/MonacoLoader.js', () => {
         if (next === value) return
         value = next
         alternativeVersionId++
-        for (const listener of listeners) listener()
+        // Match real Monaco: content events always carry a payload.
+        for (const listener of listeners) listener({ changes: [] })
       },
       getLanguageId: () => language,
       onDidChangeContent: (listener: Listener) => {

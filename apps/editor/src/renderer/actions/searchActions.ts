@@ -13,8 +13,7 @@ import {
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { FileEditorInput } from '../services/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { getActiveTextEditor } from '../services/editor/activeTextEditor.js'
 import { IQuickTextSearchService } from '../services/search/QuickTextSearchService.js'
 import { searchSession } from '../workbench/search/searchSession.js'
 import { searchViewState } from '../workbench/search/searchViewState.js'
@@ -24,12 +23,10 @@ const SEED_TEXT_MAX_LENGTH = 200
 /** Single-line selection text from the active editor, for seeding the search box. */
 function readEditorSelection(accessor: ServicesAccessor): string {
   const groups = accessor.get(IEditorGroupsService)
-  const active = groups.activeGroup.activeEditor
-  if (!(active instanceof FileEditorInput)) return ''
-  const editor = FileEditorRegistry.get(active, groups.activeGroup.id)
-  const selection = editor?.getSelection()
-  if (!editor || !selection || selection.isEmpty()) return ''
-  const text = editor.getModel()?.getValueInRange(selection).trim()
+  const active = getActiveTextEditor(groups)
+  const selection = active?.editor.getSelection()
+  if (!active || !selection || selection.isEmpty()) return ''
+  const text = active.editor.getModel()?.getValueInRange(selection).trim()
   if (!text || text.includes('\n')) return ''
   return text.length > SEED_TEXT_MAX_LENGTH ? text.slice(0, SEED_TEXT_MAX_LENGTH) : text
 }
@@ -88,10 +85,8 @@ export class QuickTextSearchAction extends Action2 {
 
 function runActiveMonacoAction(accessor: ServicesAccessor, actionId: string): void {
   const groups = accessor.get(IEditorGroupsService)
-  const active = groups.activeGroup.activeEditor
-  if (!(active instanceof FileEditorInput)) return
-  const editor = FileEditorRegistry.get(active)
-  const action = editor?.getAction(actionId)
+  const active = getActiveTextEditor(groups)
+  const action = active?.editor.getAction(actionId)
   if (action) void action.run()
 }
 

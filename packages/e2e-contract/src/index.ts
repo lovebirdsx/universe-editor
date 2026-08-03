@@ -355,6 +355,12 @@ export interface E2EProbe {
    */
   getActiveEditorCursor(): { lineNumber: number; column: number } | undefined
   /**
+   * Number of active selections/cursors in the active Monaco editor, or
+   * undefined when no text editor is mounted. Lets multicursor specs assert
+   * that cursor-add commands actually landed before typing.
+   */
+  getActiveEditorSelectionCount(): number | undefined
+  /**
    * The 1-based line currently at the top of the active file editor's viewport
    * (its first visible line), or undefined when the active editor isn't a file
    * editor (or its Monaco instance isn't mounted). Backs the markdown preview

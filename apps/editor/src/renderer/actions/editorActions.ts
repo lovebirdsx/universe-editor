@@ -28,7 +28,6 @@ import {
 import { closeEditorWithConfirm } from '../services/editor/closeEditorWithConfirm.js'
 import { cloneEditorInputForSplit } from '../services/editor/cloneEditorInput.js'
 import { focusEditorInput } from '../services/editor/editorFocus.js'
-import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IClosedEditorsService } from '../services/editor/ClosedEditorsService.js'
 import {
@@ -51,8 +50,8 @@ function activateGroupAndFocus(
   groups.activateGroup(group)
   focusStack?.push({ partId: PartId.EditorArea, groupId: group.id })
   const ae = group.activeEditor
-  if (!(ae instanceof FileEditorInput)) return
-  FileEditorRegistry.get(ae)?.focus()
+  if (!ae) return
+  FileEditorRegistry.get(ae, group.id)?.focus()
 }
 
 // ---------------------------------------------------------------------------

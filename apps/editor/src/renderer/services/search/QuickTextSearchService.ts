@@ -22,9 +22,12 @@ import {
   type IQuickPickSeparator,
   type ITextSearchMatch,
   type ITextSearchRange,
+  type EditorInput,
   type QuickPickInput,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../editor/FileEditorInput.js'
+import { UntitledEditorInput } from '../editor/UntitledEditorInput.js'
+import { getActiveTextEditor } from '../editor/activeTextEditor.js'
 import { openInLockAwareGroup } from '../editor/openInLockAwareGroup.js'
 import { FileEditorRegistry } from '../editor/FileEditorRegistry.js'
 
@@ -402,28 +405,29 @@ export class QuickTextSearchService implements IQuickTextSearchService {
 
   private _getActiveFileResource(): URI | undefined {
     const active = this._groups.activeGroup.activeEditor
-    return active instanceof FileEditorInput ? active.resource : undefined
+    return active instanceof FileEditorInput || active instanceof UntitledEditorInput
+      ? active.resource
+      : undefined
   }
 
   private _getSeedText(): string {
-    const active = this._groups.activeGroup.activeEditor
-    if (!(active instanceof FileEditorInput)) return ''
-    const editor = FileEditorRegistry.get(active, this._groups.activeGroup.id)
-    if (!editor) return ''
-    const selection = editor?.getSelection()
+    const active = getActiveTextEditor(this._groups)
+    if (!active) return ''
+    const { editor } = active
+    const selection = editor.getSelection()
     if (!selection || selection.isEmpty()) return ''
     const text = editor.getModel()?.getValueInRange(selection).trim()
     if (!text || text.includes('\n')) return ''
     return text.length > SEED_TEXT_MAX_LENGTH ? text.slice(0, SEED_TEXT_MAX_LENGTH) : text
   }
 
-  private _openFile(resource: URI, pinned: boolean): FileEditorInput {
+  private _openFile(resource: URI, pinned: boolean): EditorInput {
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
-        if (
-          editor instanceof FileEditorInput &&
+        const matches =
+          (editor instanceof FileEditorInput || editor instanceof UntitledEditorInput) &&
           this._uriIdentity.isEqual(editor.resource, resource)
-        ) {
+        if (matches) {
           this._groups.activateGroup(group)
           group.setActive(editor)
           if (pinned) group.pinEditor(editor)
@@ -437,12 +441,12 @@ export class QuickTextSearchService implements IQuickTextSearchService {
     return input
   }
 
-  private _focusEditor(input: FileEditorInput): void {
+  private _focusEditor(input: EditorInput): void {
     FileEditorRegistry.get(input)?.focus()
   }
 
   private async _revealMatch(
-    input: FileEditorInput,
+    input: EditorInput,
     match: ITextSearchMatch,
     rangeIndex: number,
   ): Promise<void> {

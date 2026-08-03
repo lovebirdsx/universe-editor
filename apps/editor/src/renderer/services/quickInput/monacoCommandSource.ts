@@ -13,8 +13,7 @@
 
 import { localize, type IEditorGroupsService, type IQuickPickItem } from '@universe-editor/platform'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
-import { FileEditorInput } from '../editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../editor/FileEditorRegistry.js'
+import { getActiveTextEditor } from '../editor/activeTextEditor.js'
 
 export interface MonacoCommandItem extends IQuickPickItem {
   readonly _monaco: true
@@ -48,10 +47,9 @@ function getMonacoKeybindingLabel(
 }
 
 export function collectMonacoCommands(groupsService: IEditorGroupsService): MonacoCommandItem[] {
-  const active = groupsService.activeGroup.activeEditor
-  if (!(active instanceof FileEditorInput)) return []
-  const editor = FileEditorRegistry.get(active)
-  if (!editor) return []
+  const active = getActiveTextEditor(groupsService)
+  if (!active) return []
+  const { editor } = active
   return editor
     .getSupportedActions()
     .filter((action) => action.isSupported())

@@ -36,7 +36,6 @@ import {
   type IDisposable,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../../services/editor/FileEditorRegistry.js'
 import {
   decodeMonacoKeybinding,
@@ -136,8 +135,10 @@ function makeHandler(commandId: string) {
   return (accessor: ServicesAccessor, ...args: unknown[]): void => {
     const groups = accessor.get(IEditorGroupsService)
     const activeInput = groups.activeGroup.activeEditor
-    const editor =
-      activeInput instanceof FileEditorInput ? FileEditorRegistry.get(activeInput) : undefined
+    // Capability-based, not instanceof FileEditorInput: untitled buffers (and any
+    // other text input mounted through FileEditor) register here too, and Monaco
+    // actions like multicursor / find must work on them.
+    const editor = activeInput ? FileEditorRegistry.get(activeInput) : undefined
     if (!editor) {
       // The mirrored editor.action.* commands are always listed in the command
       // palette (CommandsQuickAccessProvider enumerates CommandsRegistry without

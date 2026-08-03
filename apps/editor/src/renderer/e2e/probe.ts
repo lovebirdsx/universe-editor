@@ -50,6 +50,7 @@ import type { ITimerService } from '../services/performance/TimerService.js'
 import type { IInteractionPerfService } from '../services/performance/InteractionPerfService.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { getActiveTextEditor } from '../services/editor/activeTextEditor.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
@@ -341,9 +342,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         .map((e) => e.resource?.toString())
         .filter((u): u is string => u !== undefined),
     setActiveEditorCursor: (lineNumber: number, column: number) => {
-      const active = services.editorGroupsService.activeGroup?.activeEditor
-      if (!(active instanceof FileEditorInput)) return false
-      const monaco = FileEditorRegistry.get(active)
+      const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
       if (!monaco) return false
       monaco.setPosition({ lineNumber, column })
       // Monaco 0.55's setPosition no longer reveals: a real user's "cursor on
@@ -354,36 +353,30 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return true
     },
     getActiveEditorCursor: () => {
-      const active = services.editorGroupsService.activeGroup?.activeEditor
-      if (!(active instanceof FileEditorInput)) return undefined
-      const monaco = FileEditorRegistry.get(active)
+      const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
       const position = monaco?.getPosition()
       if (!position) return undefined
       return { lineNumber: position.lineNumber, column: position.column }
     },
+    getActiveEditorSelectionCount: () => {
+      const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
+      return monaco?.getSelections()?.length
+    },
     getActiveEditorFirstVisibleLine: () => {
-      const active = services.editorGroupsService.activeGroup?.activeEditor
-      if (!(active instanceof FileEditorInput)) return undefined
-      const monaco = FileEditorRegistry.get(active)
+      const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
       return monaco?.getVisibleRanges()[0]?.startLineNumber
     },
     getActiveEditorLastVisibleLine: () => {
-      const active = services.editorGroupsService.activeGroup?.activeEditor
-      if (!(active instanceof FileEditorInput)) return undefined
-      const monaco = FileEditorRegistry.get(active)
+      const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
       const ranges = monaco?.getVisibleRanges()
       return ranges && ranges.length > 0 ? ranges[ranges.length - 1]?.endLineNumber : undefined
     },
     getActiveEditorText: () => {
-      const active = services.editorGroupsService.activeGroup?.activeEditor
-      if (!(active instanceof FileEditorInput)) return undefined
-      const monaco = FileEditorRegistry.get(active)
+      const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
       return monaco?.getModel()?.getValue()
     },
     setActiveEditorText: (text: string) => {
-      const active = services.editorGroupsService.activeGroup?.activeEditor
-      if (!(active instanceof FileEditorInput)) return false
-      const monaco = FileEditorRegistry.get(active)
+      const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
       const model = monaco?.getModel()
       if (!monaco || !model) return false
       model.setValue(text)
@@ -397,9 +390,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       endLineNumber: number,
       endColumn: number,
     ) => {
-      const active = services.editorGroupsService.activeGroup?.activeEditor
-      if (!(active instanceof FileEditorInput)) return false
-      const monaco = FileEditorRegistry.get(active)
+      const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
       if (!monaco) return false
       monaco.setSelection({ startLineNumber, startColumn, endLineNumber, endColumn })
       monaco.focus()

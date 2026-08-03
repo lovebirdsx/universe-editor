@@ -10,6 +10,8 @@ import {
   LogLevel,
   setDisposableTracker,
   URI,
+  UriIdentityService,
+  type IEditorGroupsService,
   type IFileMatch,
   type ILoggerService,
   type ITextSearchProgress,
@@ -122,9 +124,17 @@ function makeService(
   readonly service: TextSearchService
 } {
   const exclude = new FakeSearchExcludeService()
+  const editorGroups = { _serviceBrand: undefined, groups: [] } as unknown as IEditorGroupsService
   return {
     main,
-    service: new TextSearchService(new FakeWorkspace(root), main, exclude, makeLoggerService()),
+    service: new TextSearchService(
+      new FakeWorkspace(root),
+      main,
+      exclude,
+      editorGroups,
+      new UriIdentityService('linux'),
+      makeLoggerService(),
+    ),
   }
 }
 

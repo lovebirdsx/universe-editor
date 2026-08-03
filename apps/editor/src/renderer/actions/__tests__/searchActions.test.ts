@@ -29,6 +29,7 @@ import {
 } from '../searchActions.js'
 import { IQuickTextSearchService } from '../../services/search/QuickTextSearchService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
 
@@ -274,6 +275,30 @@ describe('Monaco single-file find wrappers', () => {
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+h')).toBe(FindReplaceInFileAction.ID)
     await inst.invokeFunction((accessor) => {
       CommandsRegistry.getCommand(FindReplaceInFileAction.ID)!.handler(accessor)
+    })
+    expect(runSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('FindInFileAction triggers actions.find for an untitled buffer too', async () => {
+    disposables.push(registerAction2(FindInFileAction))
+    const services = new ServiceCollection()
+    services.set(IFileService, stubFs() as never)
+    const inst = new InstantiationService(services)
+    services.set(IInstantiationService, inst)
+
+    const runSpy = vi.fn()
+    const input = new UntitledEditorInput()
+    FileEditorRegistry.register(input, {
+      getAction: (id: string) => (id === 'actions.find' ? { run: runSpy } : undefined),
+    } as never)
+    disposables.push({ dispose: () => input.dispose() })
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      activeGroup: { id: 1, activeEditor: input },
+    } as never)
+
+    await inst.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand(FindInFileAction.ID)!.handler(accessor)
     })
     expect(runSpy).toHaveBeenCalledTimes(1)
   })
