@@ -19,6 +19,7 @@ import {
   removeFromRegistry,
   writeJsonAtomic,
   signVsix,
+  resolveSigningKeyFile,
 } from '../lib.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -161,6 +162,27 @@ test('signVsix 产出 sha256 + 可用公钥验证的 Ed25519 签名', () => {
   )
 })
 
+test('resolveSigningKeyFile 优先级：arg > env > 默认路径（存在才用）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ue-key-'))
+  const keyFile = join(dir, 'market-key.pem')
+  writeFileSync(keyFile, 'pem-bytes')
+
+  // 屏蔽外部环境变量，保证 undefined 分支的确定性
+  const saved = process.env.UE_GALLERY_SIGNING_KEY_FILE
+  delete process.env.UE_GALLERY_SIGNING_KEY_FILE
+  try {
+    assert.equal(resolveSigningKeyFile('/arg.pem', '/env.pem', keyFile), '/arg.pem')
+    assert.equal(resolveSigningKeyFile(undefined, '/env.pem', keyFile), '/env.pem')
+    // 默认路径存在 → 回退命中；env 显式空串 → 屏蔽回退
+    assert.equal(resolveSigningKeyFile(undefined, undefined, keyFile), keyFile)
+    assert.equal(resolveSigningKeyFile(undefined, '', keyFile), '')
+    // 默认路径不存在 → undefined
+    assert.equal(resolveSigningKeyFile(undefined, undefined, join(dir, 'nope.pem')), undefined)
+  } finally {
+    if (saved !== undefined) process.env.UE_GALLERY_SIGNING_KEY_FILE = saved
+  }
+})
+
 test('publish.mjs 缺 --signing-key-file 时报错退出', () => {
   const stage = mkdtempSync(join(tmpdir(), 'ue-gallery-'))
   const vsixDir = mkdtempSync(join(tmpdir(), 'ue-vsix-'))
@@ -171,8 +193,8 @@ test('publish.mjs 缺 --signing-key-file 时报错退出', () => {
     engines: { universe: '^0.1.0' },
   })
   const script = resolve(__dirname, '..', 'publish.mjs')
-  const env = { ...process.env }
-  delete env.UE_GALLERY_SIGNING_KEY_FILE
+  // env 显式置空：屏蔽 <repo>/market-key.pem 默认路径回退，保证本用例不受本机环境影响
+  const env = { ...process.env, UE_GALLERY_SIGNING_KEY_FILE: '' }
   const res = spawnSync(process.execPath, [script, '--stage', stage, vsix], { encoding: 'utf8', env })
   assert.notEqual(res.status, 0)
   assert.match(res.stderr, /signing-key-file/)

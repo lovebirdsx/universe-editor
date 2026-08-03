@@ -29,13 +29,13 @@ pnpm ext:release -- --dry-run
 | `--force` | 忽略增量判定，强制重新 build/打包/发布（覆盖已存在版本） |
 | `--no-upload` | 只写本地 stage，不 `scp` 到服务器 |
 | `--dry-run` | 打印将执行的步骤，不实际改动 |
-| `--signing-key-file <pem>` | 市场签名私钥（或 `UE_GALLERY_SIGNING_KEY_FILE`；客户端强制验签，真发布必填，`--dry-run` 可省） |
+| `--signing-key-file <pem>` | 市场签名私钥（或 `UE_GALLERY_SIGNING_KEY_FILE`；均未给时回退默认路径 `<repo>/market-key.pem`；客户端强制验签，真发布必填，`--dry-run` 可省） |
 | `--key-id <id>` | 签名 keyId（默认 `market-v1`，轮换时用） |
 | `[ext ...]` | 只处理指定扩展（目录名或 `publisher.name`），默认全部合法扩展 |
 
 上传所需的连接信息与市场运维脚本共用（见 [`scripts/gallery/README.md`](../../scripts/gallery/README.md)）：`UE_RELEASE_HOST` / `UE_RELEASE_USER` / `UE_GALLERY_DIR`。
 
-**签名私钥**（`--signing-key-file`）只存运维机/CI secret，绝不进 repo；没有就用 `pnpm gallery:keygen -- --out market-key.pem` 生成。客户端对市场安装**强制验签**——未签名的 registry 条目会被拒装，所以发布链路必带私钥。模型与轮换详见 [`scripts/gallery/README.md`](../../scripts/gallery/README.md#市场签名发布必配)。
+**签名私钥**（`--signing-key-file`）只存运维机/CI secret，绝不进 repo；没有就用 `pnpm gallery:keygen -- --out market-key.pem` 生成——生成到仓库根默认路径后 `ext:release` 会自动读取，之后无需再传参（该文件已 gitignore）。客户端对市场安装**强制验签**——未签名的 registry 条目会被拒装，所以发布链路必带私钥。模型与轮换详见 [`scripts/gallery/README.md`](../../scripts/gallery/README.md#市场签名发布必配)。
 
 ## 它做了什么
 

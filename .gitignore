@@ -5,6 +5,7 @@ out-dev/
 release/
 .eslintcache
 market-stage/
+market-key.pem
 apps/editor/.runtime-resources/
 !scripts/release/
 .turbo/

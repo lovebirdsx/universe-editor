@@ -22,6 +22,8 @@ import {
   writeRegistry,
   upsertVersion,
   signVsix,
+  resolveSigningKeyFile,
+  DEFAULT_SIGNING_KEY_FILE,
 } from './lib.mjs'
 
 function parseArgs(argv) {
@@ -61,9 +63,13 @@ if (vsixPaths.length === 0) die('未指定 .vsix 文件')
 // ISO 时间；--now 覆盖（测试可注入固定值以确定性）。
 const nowIso = args.now ?? new Date().toISOString()
 
-// 市场签名私钥（Ed25519，pkcs8 PEM）：--signing-key-file 或 env 注入；绝不进 repo。
-const signingKeyFile = args['signing-key-file'] ?? process.env.UE_GALLERY_SIGNING_KEY_FILE
-if (!signingKeyFile) die('缺少 --signing-key-file <pem>（市场签名私钥；先跑 pnpm gallery:keygen 生成）')
+// 市场签名私钥（Ed25519，pkcs8 PEM）：--signing-key-file > env > 默认路径 market-key.pem；绝不进 repo。
+const signingKeyFile = resolveSigningKeyFile(args['signing-key-file'])
+if (!signingKeyFile) {
+  die(
+    `缺少市场签名私钥：--signing-key-file <pem> / UE_GALLERY_SIGNING_KEY_FILE / ${DEFAULT_SIGNING_KEY_FILE}（先跑 pnpm gallery:keygen 生成）`,
+  )
+}
 if (!existsSync(signingKeyFile)) die(`找不到签名私钥: ${signingKeyFile}`)
 const privateKey = createPrivateKey(readFileSync(signingKeyFile, 'utf8'))
 const keyId = args['key-id'] ?? 'market-v1'

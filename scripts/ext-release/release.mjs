@@ -16,8 +16,9 @@
  *
  *  连接信息与 gallery/upload.mjs 共用: UE_RELEASE_HOST/USER + UE_GALLERY_DIR；
  *  stage 目录: --stage 或 UE_GALLERY_STAGE，默认 <repo>/market-stage。
- *  市场签名: --signing-key-file <pem> 或 UE_GALLERY_SIGNING_KEY_FILE（客户端强制验签，
- *  未签名的条目会被拒装）；keyId 用 --key-id（默认 market-v1）。dry-run 时不要求私钥。
+ *  市场签名: --signing-key-file <pem> 或 UE_GALLERY_SIGNING_KEY_FILE，均未给时回退默认路径
+ *  <repo>/market-key.pem（存在才用；客户端强制验签，未签名的条目会被拒装）；
+ *  keyId 用 --key-id（默认 market-v1）。dry-run 时不要求私钥。
  *
  *  纯逻辑（发现/选择/增量）在 lib.mjs，便于单测。
  *--------------------------------------------------------------------------------------------*/
@@ -26,7 +27,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { readRegistry } from '../gallery/lib.mjs'
+import { readRegistry, resolveSigningKeyFile, DEFAULT_SIGNING_KEY_FILE } from '../gallery/lib.mjs'
 import { discoverExtensions, depsInstallPlan, filterIncremental, selectExtensions } from './lib.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -78,7 +79,7 @@ if (args.help) {
       '  --force         忽略增量判定，强制重新 build/pack/publish',
       '  --no-upload     只写本地 stage，不 scp 到服务器',
       '  --dry-run       打印将执行的步骤，不实际改动',
-      '  --signing-key-file <pem>  市场签名私钥（或 UE_GALLERY_SIGNING_KEY_FILE；dry-run 可省）',
+      '  --signing-key-file <pem>  市场签名私钥（或 UE_GALLERY_SIGNING_KEY_FILE；缺省回退 <repo>/market-key.pem；dry-run 可省）',
       '  --key-id <id>   签名 keyId（默认 market-v1）',
       '  [ext ...]       只处理指定扩展（目录名或 publisher.name），默认全部合法扩展',
     ].join('\n'),
@@ -92,9 +93,11 @@ const force = args.force ?? false
 const doUpload = !(args['no-upload'] ?? false)
 
 // 市场签名：客户端对市场安装强制验签，未签名的条目会被拒装——真发布必须有私钥。
-const signingKeyFile = args['signing-key-file'] ?? process.env.UE_GALLERY_SIGNING_KEY_FILE
+const signingKeyFile = resolveSigningKeyFile(args['signing-key-file'])
 if (!dryRun && !signingKeyFile) {
-  die('缺少 --signing-key-file <pem>（市场签名私钥；先跑 pnpm gallery:keygen 生成）')
+  die(
+    `缺少市场签名私钥：--signing-key-file <pem> / UE_GALLERY_SIGNING_KEY_FILE / ${DEFAULT_SIGNING_KEY_FILE}（先跑 pnpm gallery:keygen 生成）`,
+  )
 }
 const publishSigningArgs = signingKeyFile
   ? ['--signing-key-file', signingKeyFile, '--key-id', args['key-id'] ?? 'market-v1']

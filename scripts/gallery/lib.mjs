@@ -16,6 +16,20 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 export const repoRoot = resolve(__dirname, '..', '..')
 
+/** 市场签名私钥的默认落盘位置（已 gitignore，绝不提交）。 */
+export const DEFAULT_SIGNING_KEY_FILE = resolve(repoRoot, 'market-key.pem')
+
+/**
+ * 解析市场签名私钥路径，优先级：--signing-key-file > UE_GALLERY_SIGNING_KEY_FILE >
+ * 默认路径（存在才用）。env 显式设为空串可屏蔽默认路径回退（测试/CI 确定性）。
+ * 均未命中返回 undefined，由调用方决定报错文案。
+ */
+export function resolveSigningKeyFile(argValue, envValue, defaultFile = DEFAULT_SIGNING_KEY_FILE) {
+  const explicit = argValue ?? envValue ?? process.env.UE_GALLERY_SIGNING_KEY_FILE
+  if (explicit !== undefined) return explicit
+  return existsSync(defaultFile) ? defaultFile : undefined
+}
+
 const EXTENSION_PREFIX = 'extension/'
 
 /** 读并解析 VSIX 内 extension/package.json；缺失或不可解析则抛错。 */

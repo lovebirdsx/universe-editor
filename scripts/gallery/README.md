@@ -27,7 +27,7 @@
 
 客户端对市场安装的 VSIX **强制验签**（fail-closed）：registry 条目的 `signature` 须能被客户端内置的市场公钥验证，否则拒装。签名与 `sha256` 由 `publish.mjs` 在发布时自动计算，签的是**暂存后的规范文件字节**（Ed25519）。
 
-- **私钥**：`--signing-key-file <pem>`（或 env `UE_GALLERY_SIGNING_KEY_FILE`）传入，pkcs8 PEM，只存运维机/CI secret，**绝不进 repo**。没有就跑 `pnpm gallery:keygen -- --out market-key.pem` 生成（mode 0600，已存在拒覆盖）。
+- **私钥**：按 `--signing-key-file <pem>` → env `UE_GALLERY_SIGNING_KEY_FILE` → 默认路径 `<repo>/market-key.pem`（存在才用）的优先级解析，pkcs8 PEM，只存运维机/CI secret，**绝不进 repo**（`market-key.pem` 已 gitignore）。没有就跑 `pnpm gallery:keygen -- --out market-key.pem` 生成（mode 0600，已存在拒覆盖）——输出到默认路径后 `publish.mjs`/`ext:release` 自动读取，无需再传参。env 显式设为空串可屏蔽默认路径回退。
 - **keyId**：默认 `market-v1`，`--key-id` 覆盖。registry 里签名带 keyId，客户端按 id 查公钥。
 - **公钥**：内置在客户端 `apps/editor/src/main/services/extensionManagement/marketplaceSigningKeys.ts`（keygen 会打印要贴入的片段）。
 - **轮换**：生成 `market-v2` → 新客户端内置 v2 公钥（保留 v1）→ 等带 v2 的客户端铺量 → 发布侧切 `--key-id market-v2`。旧客户端遇到未知 keyId 会拒装，故切换必须等铺量。
