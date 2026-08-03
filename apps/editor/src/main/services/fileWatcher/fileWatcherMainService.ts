@@ -7,8 +7,9 @@
  *  in a dedicated utility process owned by the app-singleton
  *  WatcherProcessClient (see watcherHost.ts for why — native win32 crashes).
  *  This service keeps the per-window orchestration: root/exclude dedupe,
- *  event debounce, and the out-of-workspace extra watches (plain node:fs
- *  non-recursive watches — no native addon, safe in-process).
+ *  re-subscribe coalescing, event debounce, and the out-of-workspace extra
+ *  watches (plain node:fs non-recursive watches — no native addon, safe
+ *  in-process).
  *
  *  Excludes (`files.watcherExclude`) are pushed down as parcel's `ignore`
  *  option, so excluded directories (node_modules, .git, …) are pruned at the
@@ -23,6 +24,7 @@ import { dirname } from 'node:path'
 import type { FSWatcher } from 'node:fs'
 import {
   createNamedLogger,
+  DeferredPromise,
   Emitter,
   mark,
   normalizePlatform,
@@ -42,6 +44,14 @@ import type { WatcherProcessClient } from './watcherProcessClient.js'
 import type { WatcherRawEventType } from './watcherProtocol.js'
 
 const DEBOUNCE_MS = 50
+
+// Replacing a live subscription is a native unsubscribe→subscribe on the same
+// root; the win32 parcel backend has crashed under fast repeats of that
+// sequence (watcher.node ACCESS_VIOLATION during startup exclude hydration).
+// Re-subscribes are coalesced through a sliding quiet window (capped) so only
+// the settled target reaches native.
+const RESUBSCRIBE_QUIET_MS = 500
+const RESUBSCRIBE_MAX_WAIT_MS = 2000
 
 // Fallback ignore globs, used only when watch() is called without explicit
 // excludes (the renderer normally seeds `files.watcherExclude` from the start).
@@ -133,6 +143,16 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   private _currentIgnore: string[] = []
   private _pending = new Map<string, FileChangeType>()
   private _flushTimer: NodeJS.Timeout | null = null
+  // Coalesced re-subscribe waiting out its quiet window. Waiters resolve when
+  // the coalesced _subscribe lands, or when cancelled (teardown / superseded by
+  // a different root) — their intent was replaced, which still satisfies watch().
+  private _scheduledSubscribe: {
+    target: string
+    ignore: string[]
+    waiters: DeferredPromise<void>[]
+    quietTimer: NodeJS.Timeout
+    maxTimer: NodeJS.Timeout
+  } | null = null
   // Perf: mark only the first recursive subscribe (cold startup) so re-subscribes
   // (setExcludes / workspace swap) don't pollute the startup timeline.
   private _didMarkFirstWatch = false
@@ -147,21 +167,37 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     }
     const target = uri.fsPath
     const ignore = toIgnore(options?.excludes ?? DEFAULT_IGNORE)
-    if (this._rootFsPath === target && this._watching && sameSet(ignore, this._currentIgnore)) {
+    if (this._scheduledSubscribe) {
+      return this._scheduleSubscribe(target, ignore)
+    }
+    if (this._watching && this._rootFsPath === target && sameSet(ignore, this._currentIgnore)) {
       return
     }
-    await this._subscribe(target, ignore)
+    if (!this._watching) {
+      // No live subscription to tear down — arm immediately.
+      return this._subscribe(target, ignore)
+    }
+    return this._scheduleSubscribe(target, ignore)
   }
 
   async setExcludes(excludes: readonly string[]): Promise<void> {
     const ignore = toIgnore(excludes)
+    const scheduled = this._scheduledSubscribe
+    if (scheduled) {
+      if (!sameSet(ignore, scheduled.ignore)) {
+        scheduled.ignore = ignore
+        this._slideQuietWindow()
+      }
+      return
+    }
     if (sameSet(ignore, this._currentIgnore)) return
     if (!this._rootFsPath) {
       this._currentIgnore = ignore
       return
     }
     // parcel's `ignore` is fixed at subscribe time; re-subscribe the same root.
-    await this._subscribe(this._rootFsPath, ignore)
+    // Fire-and-forget: callers notify, they don't wait out the quiet window.
+    this._scheduleSubscribe(this._rootFsPath, ignore)
   }
 
   async unwatch(): Promise<void> {
@@ -244,6 +280,56 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     this._flush()
   }
 
+  private _scheduleSubscribe(target: string, ignore: string[]): Promise<void> {
+    const existing = this._scheduledSubscribe
+    if (existing && existing.target === target) {
+      if (!sameSet(ignore, existing.ignore)) {
+        existing.ignore = ignore
+        this._slideQuietWindow()
+      }
+      const waiter = new DeferredPromise<void>()
+      existing.waiters.push(waiter)
+      return waiter.p
+    }
+    // A different root supersedes the pending target entirely.
+    if (existing) this._cancelScheduledSubscribe()
+    const waiter = new DeferredPromise<void>()
+    const quietTimer = setTimeout(() => this._flushScheduledSubscribe(), RESUBSCRIBE_QUIET_MS)
+    quietTimer.unref()
+    const maxTimer = setTimeout(() => this._flushScheduledSubscribe(), RESUBSCRIBE_MAX_WAIT_MS)
+    maxTimer.unref()
+    this._scheduledSubscribe = { target, ignore, waiters: [waiter], quietTimer, maxTimer }
+    return waiter.p
+  }
+
+  private _slideQuietWindow(): void {
+    const scheduled = this._scheduledSubscribe
+    if (!scheduled) return
+    clearTimeout(scheduled.quietTimer)
+    scheduled.quietTimer = setTimeout(() => this._flushScheduledSubscribe(), RESUBSCRIBE_QUIET_MS)
+    scheduled.quietTimer.unref()
+  }
+
+  private _flushScheduledSubscribe(): void {
+    const scheduled = this._scheduledSubscribe
+    if (!scheduled) return
+    clearTimeout(scheduled.quietTimer)
+    clearTimeout(scheduled.maxTimer)
+    this._scheduledSubscribe = null
+    void this._subscribe(scheduled.target, scheduled.ignore).then(() => {
+      for (const waiter of scheduled.waiters) waiter.complete()
+    })
+  }
+
+  private _cancelScheduledSubscribe(): void {
+    const scheduled = this._scheduledSubscribe
+    if (!scheduled) return
+    clearTimeout(scheduled.quietTimer)
+    clearTimeout(scheduled.maxTimer)
+    this._scheduledSubscribe = null
+    for (const waiter of scheduled.waiters) waiter.complete()
+  }
+
   private async _subscribe(target: string, ignore: string[]): Promise<void> {
     this._resetPending()
     const isFirstWatch = !this._didMarkFirstWatch
@@ -251,13 +337,15 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
       this._didMarkFirstWatch = true
       mark(PerfMarks.mainWillWatchWorkspace)
     }
+    // Adopt the target state up front: concurrent watch()/setExcludes() calls
+    // must coalesce against the in-flight target, not the stale subscription.
+    this._watching = true
+    this._rootFsPath = target
+    this._currentIgnore = ignore
     try {
       // Same-id subscribe replaces the previous subscription inside the watcher
       // process, so the old root is torn down there without a separate round trip.
       await this._host.watch(this._watchId, target, ignore)
-      this._watching = true
-      this._rootFsPath = target
-      this._currentIgnore = ignore
       this._logger.info(`watch ${target}`)
     } catch (err) {
       // Watcher failures are non-fatal: the tree still works, just no auto-refresh.
@@ -273,6 +361,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   }
 
   private async _teardown(): Promise<void> {
+    this._cancelScheduledSubscribe()
     this._resetPending()
     this._watching = false
     const root = this._rootFsPath

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, sep as pathSep } from 'node:path'
-import { URI, type IFileChangeEvent } from '@universe-editor/platform'
+import { Emitter, URI, type IFileChangeEvent } from '@universe-editor/platform'
 import { FileWatcherMainService } from '../fileWatcherMainService.js'
 import { WatcherProcessClient } from '../watcherProcessClient.js'
 import {
@@ -146,7 +146,10 @@ describe('FileWatcherMainService', () => {
     async () => {
       await svc.watch(URI.file(root))
       // node_modules is no longer ignored once we install an empty exclude set.
+      // Re-subscribes are coalesced through a quiet window before reaching
+      // native, so wait it out for the write below to be observed.
       await svc.setExcludes([])
+      await new Promise((r) => setTimeout(r, 1200))
       await fs.mkdir(join(root, 'node_modules'), { recursive: true })
       const c = startCollecting(svc)
       await fs.writeFile(join(root, 'node_modules', 'pkg.json'), '{}')
@@ -260,4 +263,134 @@ describe('FileWatcherMainService', () => {
     },
     WATCHER_TEST_TIMEOUT,
   )
+})
+
+// Re-subscribe coalescing — the guard against the win32 parcel backend crashing
+// on fast unsubscribe→subscribe repeats (observed during startup exclude
+// hydration). A stub host + fake timers keep these deterministic and fast; the
+// real native chain is covered by the integration tests above.
+describe('FileWatcherMainService re-subscribe coalescing', () => {
+  function createStubHost() {
+    return {
+      allocateId: () => 1,
+      watch: vi.fn(async (_id: number, _dir: string, _ignore: readonly string[]) => {}),
+      unwatch: vi.fn(async (_id: number) => {}),
+      onFileEvents: new Emitter<never>().event,
+      onWatchError: new Emitter<never>().event,
+      onDidRestart: new Emitter<void>().event,
+    }
+  }
+
+  let host: ReturnType<typeof createStubHost>
+  let svc: FileWatcherMainService
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    host = createStubHost()
+    svc = new FileWatcherMainService(host as unknown as WatcherProcessClient)
+  })
+
+  afterEach(() => {
+    svc.dispose()
+    vi.useRealTimers()
+  })
+
+  const root = URI.file('/w/root')
+  const otherRoot = URI.file('/w/other')
+
+  it('arms the first watch immediately', async () => {
+    await svc.watch(root)
+    expect(host.watch).toHaveBeenCalledTimes(1)
+  })
+
+  it('dedupes a same-state watch against the live subscription', async () => {
+    await svc.watch(root, { excludes: ['**/a/**'] })
+    await svc.watch(root, { excludes: ['**/a/**'] })
+    expect(host.watch).toHaveBeenCalledTimes(1)
+  })
+
+  it('coalesces an exclude storm into one re-subscribe with the latest globs', async () => {
+    await svc.watch(root, { excludes: ['**/a/**'] })
+    await svc.setExcludes(['**/b/**'])
+    await svc.setExcludes(['**/c/**'])
+    await svc.setExcludes(['**/d/**'])
+    expect(host.watch).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(host.watch).toHaveBeenCalledTimes(2)
+    expect(host.watch.mock.calls[1]?.[2]).toEqual(['**/d', '**/d/**'])
+  })
+
+  it('slides the quiet window on each change', async () => {
+    await svc.watch(root)
+    await svc.setExcludes(['**/b/**'])
+    await vi.advanceTimersByTimeAsync(300)
+    await svc.setExcludes(['**/c/**']) // slides the flush to t=800
+    await vi.advanceTimersByTimeAsync(300)
+    expect(host.watch).toHaveBeenCalledTimes(1) // t=600: would have flushed without sliding
+    await vi.advanceTimersByTimeAsync(200)
+    expect(host.watch).toHaveBeenCalledTimes(2)
+    expect(host.watch.mock.calls[1]?.[2]).toEqual(['**/c', '**/c/**'])
+  })
+
+  it('forces the flush at the max wait even while changes keep sliding the window', async () => {
+    await svc.watch(root)
+    await svc.setExcludes(['**/b/**']) // quiet@500, max@2000
+    for (const glob of ['**/c/**', '**/d/**', '**/e/**', '**/f/**']) {
+      await vi.advanceTimersByTimeAsync(400)
+      await svc.setExcludes([glob])
+    }
+    // t=1600: quiet window keeps sliding (next flush would be t=2100)…
+    expect(host.watch).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(400) // t=2000: max wait hits
+    expect(host.watch).toHaveBeenCalledTimes(2)
+    expect(host.watch.mock.calls[1]?.[2]).toEqual(['**/f', '**/f/**'])
+  })
+
+  it('resolves a merged watch() once the coalesced subscribe lands', async () => {
+    await svc.watch(root, { excludes: ['**/a/**'] })
+    let landed = false
+    const merged = svc.watch(root, { excludes: ['**/b/**'] }).then(() => {
+      landed = true
+    })
+    await vi.advanceTimersByTimeAsync(499)
+    expect(landed).toBe(false)
+    expect(host.watch).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await merged
+    expect(landed).toBe(true)
+    expect(host.watch).toHaveBeenCalledTimes(2)
+  })
+
+  it('supersedes a pending target when a different root is watched', async () => {
+    await svc.watch(root)
+    let supersededLanded = false
+    const superseded = svc.watch(root, { excludes: ['**/b/**'] }).then(() => {
+      supersededLanded = true
+    })
+    const takeover = svc.watch(otherRoot, { excludes: ['**/c/**'] })
+    await vi.advanceTimersByTimeAsync(500)
+    await superseded
+    await takeover
+    expect(supersededLanded).toBe(true)
+    expect(host.watch).toHaveBeenCalledTimes(2)
+    expect(host.watch.mock.calls[1]?.[1]).toBe(otherRoot.fsPath)
+  })
+
+  it('cancels a pending re-subscribe on unwatch', async () => {
+    await svc.watch(root)
+    await svc.setExcludes(['**/b/**'])
+    await svc.unwatch()
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(host.watch).toHaveBeenCalledTimes(1)
+    expect(host.unwatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-arms immediately after unwatch (no stale subscription to race)', async () => {
+    await svc.watch(root)
+    await svc.setExcludes(['**/b/**'])
+    await svc.unwatch()
+    await svc.watch(otherRoot)
+    expect(host.watch).toHaveBeenCalledTimes(2)
+    expect(host.watch.mock.calls[1]?.[1]).toBe(otherRoot.fsPath)
+  })
 })
