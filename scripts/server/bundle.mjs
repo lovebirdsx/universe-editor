@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*---------------------------------------------------------------------------------------------
- *  把 server.mjs + publish API 依赖（extension-packaging / adm-zip / zod / gallery/lib.mjs）
+ *  把 server.mjs + publish API 依赖（extension-packaging / adm-zip / gallery/lib.mjs）
  *  打包成单文件产物 scripts/server/dist/server.js。
  *
  *  背景：publish 端点需要解 zip（adm-zip）与 zod 校验，打破了 server.mjs 曾经"拷一个文件
