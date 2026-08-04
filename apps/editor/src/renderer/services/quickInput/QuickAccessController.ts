@@ -65,6 +65,9 @@ export class QuickAccessController extends Disposable implements IQuickAccessCon
       let didResolve = false
 
       const disposeActiveProvider = (): void => {
+        // Cancel BEFORE disposing the store: Emitter 是快照派发，被切换击键的本次
+        // fire 里 provider 的残留监听器仍会跑完，它们以 token.cancelled 作为
+        // stale-fire 守卫——必须保证残留调用到达时 token 已经 cancelled。
         tokenSource?.cancel()
         tokenSource?.dispose()
         tokenSource = undefined

@@ -285,4 +285,63 @@ describe('QuickAccessController', () => {
     quickInput.picker!.hide()
     await expect(promise).resolves.toBeUndefined()
   })
+
+  it('stale snapshot listener of the disposed provider cannot clobber the newly activated provider', () => {
+    // Emitter 是快照派发（VSCode parity）：切换前缀的这次 fire 里，旧 provider 的
+    // onDidChangeValue 监听器在 controller route 之后仍会被调用一次。契约是：此时
+    // 它的 token 必须已经 cancelled（controller 先 cancel 再 dispose），provider 侧
+    // 以守卫 no-op——本用例固化这个顺序，防回归"重新输入 '>' 命令列表被覆盖"。
+    log = { activated: [], disposed: [], seenPrefix: [], cancelledAfterSwitch: false }
+    disposables.push(
+      QuickAccessRegistry.registerQuickAccessProvider({
+        ctor: class implements IQuickAccessProvider {
+          provide(
+            picker: IQuickPick<IQuickPickItem>,
+            options: IQuickAccessProviderRunOptions,
+          ): void {
+            log.activated.push('file')
+            options.disposables.add(
+              picker.onDidChangeValue(() => {
+                // 真实 FileQuickAccessProvider 修复后的契约写法：stale-fire 守卫
+                if (options.token.isCancellationRequested) return
+                picker.items = [{ id: 'stale', label: 'stale file result' }]
+              }),
+            )
+          }
+        },
+        prefix: '',
+        placeholder: 'Go to File…',
+      }),
+    )
+    disposables.push(
+      QuickAccessRegistry.registerQuickAccessProvider({
+        ctor: class implements IQuickAccessProvider {
+          provide(picker: IQuickPick<IQuickPickItem>): void {
+            log.activated.push('commands')
+            picker.items = [{ id: 'cmd', label: 'Command: Do Thing' }]
+          }
+        },
+        prefix: '>',
+        placeholder: 'Show Commands…',
+      }),
+    )
+    const { controller, quickInput } = setup()
+
+    void controller.show('>')
+    const picker = quickInput.picker!
+    expect(log.activated).toEqual(['commands'])
+    expect(picker.items[0]).toMatchObject({ id: 'cmd' })
+
+    // 删掉 '>' → 切到文件 provider
+    picker.value = ''
+    expect(log.activated).toEqual(['commands', 'file'])
+
+    // 重新输入 '>'：本次 fire 快照 = [route, fileListener]。route 先切回命令
+    // provider，fileListener 残留调用时 token 已 cancelled → 守卫生效不覆盖。
+    picker.value = '>'
+    expect(log.activated).toEqual(['commands', 'file', 'commands'])
+    expect(picker.prefix).toBe('>')
+    expect(picker.items).toHaveLength(1)
+    expect(picker.items[0]).toMatchObject({ id: 'cmd' })
+  })
 })

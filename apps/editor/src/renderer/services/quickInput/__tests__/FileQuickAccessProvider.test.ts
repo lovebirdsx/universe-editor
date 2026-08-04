@@ -565,6 +565,27 @@ describe('FileQuickAccessProvider', () => {
     expect(picker.items).toHaveLength(0)
   })
 
+  it('ignores value events fired after the token is cancelled (stale snapshot dispatch)', async () => {
+    // Emitter 是快照派发：controller 路由切换（如重新输入 '>'）时已先 cancel 本
+    // provider 的 token，但本次 fire 里 runSearch 仍会被残留调用——此时绝不能改写
+    // picker 状态，否则会覆盖新激活 provider 刚设置的 items。
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = ['/ws/src/a.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    const { token } = run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('a')
+    const itemsBefore = picker.items
+    expect(itemsBefore).toHaveLength(1)
+    expect(picker.busy).toBe(false)
+
+    token.isCancellationRequested = true
+    picker.fireValue('>')
+    expect(picker.items).toBe(itemsBefore)
+    expect(picker.busy).toBe(false)
+  })
+
   it('with no workspace, falls back to the recent files list without searching', async () => {
     const recent: IRecentFile[] = [{ uri: URI.file('/home/a.ts'), name: 'a.ts', lastOpened: 1 }]
     const { provider, fileSearch } = setup({ root: null, recent })

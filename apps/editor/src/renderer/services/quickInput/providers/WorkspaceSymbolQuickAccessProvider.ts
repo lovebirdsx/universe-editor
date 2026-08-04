@@ -285,6 +285,7 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
 
     disposables.add(
       picker.onDidChangeValue((value) => {
+        if (disposed) return
         currentValue = value.slice(prefix.length)
         scheduleRefresh()
       }),

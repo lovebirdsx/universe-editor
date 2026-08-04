@@ -372,6 +372,11 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     }
 
     const runSearch = (value: string): void => {
+      // Emitter 是快照派发（VSCode parity）：前缀翻转的这次击键里，本监听器可能在
+      // controller 已 dispose 本 provider 之后仍被本次 fire 调用。disposeActiveProvider
+      // 先 cancel 再 dispose，所以 token 已 cancelled 意味着再写 picker 会覆盖新激活
+      // provider 刚设置的状态（如重新输入 '>' 时命令列表被文件结果覆盖）。
+      if (token.isCancellationRequested) return
       const mySeq = ++seq
       const pattern = value.trim()
       if (pattern.length === 0) {
