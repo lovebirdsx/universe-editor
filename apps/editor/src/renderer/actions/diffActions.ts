@@ -56,19 +56,20 @@ export class OpenDiffAction extends Action2 {
 
   override run(accessor: ServicesAccessor, payload: OpenDiffPayload): void {
     const groups = accessor.get(IEditorGroupsService)
-    const group = groups.activeGroup
+    const activeGroup = groups.activeGroup
     const id = `diff:${URI.parse(payload.originalUri).toString()}`
 
     const pinned = payload.pinned ?? false
     const preserveFocus = payload.preserveFocus ?? false
 
     // Reuse an already-open diff for the same file: refresh its content in place
-    // and re-activate, instead of opening a duplicate.
-    const existing = group.editors.find((e) => e.id === id)
+    // and re-activate, instead of opening a duplicate. Revealing an existing tab
+    // stays in its group even when that group is locked.
+    const existing = activeGroup.editors.find((e) => e.id === id)
     if (existing instanceof DiffEditorInput) {
       existing.update(payload.original, payload.modified, payload.liveModified ?? false)
       // Double-click (pinned=true) promotes a preview tab to permanent.
-      group.openEditor(existing, { activate: true, pinned, preserveFocus })
+      activeGroup.openEditor(existing, { activate: true, pinned, preserveFocus })
       return
     }
 
@@ -80,8 +81,12 @@ export class OpenDiffAction extends Action2 {
       payload.openableUri ? URI.parse(payload.openableUri) : undefined,
       payload.liveModified ?? false,
     )
+    // A brand-new diff respects the group lock: route to an unlocked group and
+    // surface it (unless this is a focus-preserving preview).
+    const group = groups.activeGroupForOpen
     // Single-click uses the preview slot; double-click opens a permanent tab.
     group.openEditor(input, { activate: true, pinned, preserveFocus })
+    if (group !== activeGroup && !preserveFocus) groups.activateGroup(group)
   }
 }
 
@@ -130,7 +135,7 @@ export class OpenWebviewDiffAction extends Action2 {
 
   override run(accessor: ServicesAccessor, payload: OpenWebviewDiffPayload): void {
     const groups = accessor.get(IEditorGroupsService)
-    const group = groups.activeGroup
+    const activeGroup = groups.activeGroup
     const leftUri = URI.parse(payload.leftUri)
     const rightUri = URI.parse(payload.rightUri)
     const pinned = payload.pinned ?? false
@@ -147,12 +152,14 @@ export class OpenWebviewDiffAction extends Action2 {
 
     // Reuse an already-open diff for the same identity (viewType + both URIs):
     // re-activate it instead of opening a duplicate.
-    const existing = group.editors.find((e) => e.id === input.id)
+    const existing = activeGroup.editors.find((e) => e.id === input.id)
     if (existing) {
-      group.openEditor(existing, { activate: true, pinned, preserveFocus })
+      activeGroup.openEditor(existing, { activate: true, pinned, preserveFocus })
       return
     }
+    const group = groups.activeGroupForOpen
     group.openEditor(input, { activate: true, pinned, preserveFocus })
+    if (group !== activeGroup && !preserveFocus) groups.activateGroup(group)
   }
 }
 
