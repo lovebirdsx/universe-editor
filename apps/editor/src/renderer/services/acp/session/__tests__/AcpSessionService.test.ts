@@ -2569,6 +2569,139 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     svc.dispose()
   })
 
+  it('merges a restarted compaction into the stuck-running orphan slot', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, new ConfigurationService())
+    const session = await svc.createSession()
+    await session.whenConnected()
+
+    // The agent dies mid-compaction: the settle for cmp-a never arrives.
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-a',
+      phase: 'start',
+    })
+    const beforeIdx = session.timeline.get().findIndex((it) => it.kind === 'compaction')
+
+    // After recovery the agent compacts again, reporting under a fresh id.
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-b',
+      phase: 'start',
+    })
+    const items = session.timeline.get().filter((it) => it.kind === 'compaction')
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      kind: 'compaction',
+      id: 'compaction:cmp-b',
+      compaction: { phase: 'running' },
+    })
+    // The merged card keeps the orphan's timeline position instead of jumping
+    // to the end.
+    expect(session.timeline.get().findIndex((it) => it.kind === 'compaction')).toBe(beforeIdx)
+    svc.dispose()
+  })
+
+  it('settles a stuck-running orphan when the terminal event arrives under a fresh id', async () => {
+    const client = new FakeAcpClientService()
+    const stats = makeCompactionStats()
+    const recorded: number[] = []
+    const origRecord = stats.record.bind(stats)
+    stats.record = (agentId: string, durationMs: number) => {
+      recorded.push(durationMs)
+      origRecord(agentId, durationMs)
+    }
+    const svc = makeService(client, new ConfigurationService(), stats)
+    const session = await svc.createSession()
+    await session.whenConnected()
+
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-a',
+      phase: 'start',
+    })
+    // e.g. a replayed isolated success, or a settle that outlived its start.
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-b',
+      phase: 'success',
+    })
+    const items = session.timeline.get().filter((it) => it.kind === 'compaction')
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      kind: 'compaction',
+      id: 'compaction:cmp-b',
+      compaction: { phase: 'success' },
+    })
+    expect(recorded).toHaveLength(1)
+    svc.dispose()
+  })
+
+  it('keeps an isolated terminal compaction appended when no orphan is running', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, new ConfigurationService())
+    const session = await svc.createSession()
+    await session.whenConnected()
+
+    // The replay path reports a settled compaction with no preceding start.
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-replay',
+      phase: 'success',
+    })
+    const items = session.timeline.get().filter((it) => it.kind === 'compaction')
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      kind: 'compaction',
+      id: 'compaction:cmp-replay',
+      compaction: { phase: 'success' },
+    })
+    svc.dispose()
+  })
+
+  it('treats a duplicate start for the same id as an in-place reset, not a second card', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, new ConfigurationService())
+    const session = await svc.createSession()
+    await session.whenConnected()
+
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-dup',
+      phase: 'start',
+    })
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-dup',
+      phase: 'start',
+    })
+    const items = session.timeline.get().filter((it) => it.kind === 'compaction')
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'compaction', compaction: { phase: 'running' } })
+    svc.dispose()
+  })
+
+  it('settles a stuck-running orphan as failed when reconnect recovery is sealed', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, new ConfigurationService())
+    const session = await svc.createSession()
+    await session.whenConnected()
+
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-seal',
+      phase: 'start',
+    })
+    ;(session as AcpSession).sealRecoveryFailure('connection lost')
+    const items = session.timeline.get().filter((it) => it.kind === 'compaction')
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      kind: 'compaction',
+      compaction: { phase: 'failed', reason: 'reconnect failed' },
+    })
+    svc.dispose()
+  })
+
   it('routes _universe/sessionResurrection notifications to a timeline slot that settles in place', async () => {
     const client = new FakeAcpClientService()
     const svc = makeService(client, new ConfigurationService())

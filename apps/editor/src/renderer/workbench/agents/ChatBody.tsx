@@ -1549,6 +1549,7 @@ const TimelineSlot = memo(function TimelineSlot({
               contentKey={`msg:${key}`}
               session={session}
               {...(m.messageId !== undefined ? { messageId: m.messageId } : {})}
+              {...(m.autoRetry === true ? { autoRetry: true } : {})}
             />
           ) : (
             <MessageContent blocks={m.blocks} streaming={m.streaming} />

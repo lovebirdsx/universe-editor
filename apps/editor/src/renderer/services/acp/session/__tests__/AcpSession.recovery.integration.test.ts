@@ -514,6 +514,8 @@ describe('AcpSession auto-recovery', () => {
     expect(client.connections[1]!.promptCalls.length).toBe(1)
     resolveFirst?.()
     await waitFor(s.status, (v) => v === 'idle')
+    // A zero-output resend never appends the continuation bubble.
+    expect(s.messages.get().some((m) => m.role === 'user' && m.text === '继续')).toBe(false)
   })
 
   it('resumes an interrupted turn with a re-ask hint when a pending elicitation was cancelled by the disconnect', async () => {
@@ -886,5 +888,153 @@ describe('AcpSession auto-recovery', () => {
     await s.sendPrompt('hello')
     await new Promise((r) => setTimeout(r, 20))
     expect(client.connections.length).toBe(1)
+  })
+
+  it('marks the automatic continuation message autoRetry on a transient retry with partial output', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        // First attempt streams partial output, then fails transiently.
+        () => {
+          client.emit(0, {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'partial' },
+          })
+          return Promise.reject(transientError())
+        },
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    await s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+
+    // The recovery machinery appended one continuation bubble, stamped autoRetry;
+    // the user's own message is untouched.
+    const continuation = s.messages.get().find((m) => m.role === 'user' && m.text === '继续')
+    expect(continuation).toMatchObject({ autoRetry: true })
+    const original = s.messages.get().find((m) => m.role === 'user' && m.text === 'do it')
+    expect(original?.autoRetry).toBeUndefined()
+    // The wire retry carried the continuation text, not the original prompt.
+    const second = client.connections[0]!.promptCalls[1]!
+    expect(second.prompt.some((b) => b.type === 'text' && b.text === '继续')).toBe(true)
+  })
+
+  it('merges the restarted compaction into the orphan slot after a hot-reconnect', async () => {
+    let resolveSecond: ((r: PromptResponse) => void) | undefined
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        // First turn hangs until the connection is killed (never resolves).
+        () => new Promise<PromptResponse>(() => {}),
+        // The continuation turn stays open until the test resolves it, so the
+        // restarted compaction lands while the turn is still in flight.
+        () =>
+          new Promise<PromptResponse>((resolve) => {
+            resolveSecond = resolve
+          }),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    void s.sendPrompt('run something')
+    await waitFor(s.status, (v) => v === 'running')
+    // Partial output before the death, so the continuation path is taken.
+    client.emit(0, {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'partial' },
+    })
+    // Compaction starts; its settle is lost when the process dies.
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: s.id,
+      id: 'cmp-a',
+      phase: 'start',
+    })
+
+    client.killConnection(0)
+    await waitFor(s.recoveryState, (v) => v?.phase === 'reconnecting')
+    await waitFor(s.recoveryState, (v) => v === undefined)
+    await waitFor({ get: () => client.connections[1]?.promptCalls.length ?? 0 }, (n) => n === 1)
+
+    // The continuation prompt went out on the fresh connection, stamped autoRetry.
+    expect(
+      client.connections[1]!.promptCalls[0]!.prompt.some(
+        (b) => b.type === 'text' && b.text === '继续',
+      ),
+    ).toBe(true)
+    const continuation = s.messages.get().find((m) => m.role === 'user' && m.text === '继续')
+    expect(continuation).toMatchObject({ autoRetry: true })
+    // The orphan card is still running (not settled) — the merge target.
+    expect(
+      s.timeline
+        .get()
+        .filter((it) => it.kind === 'compaction' && it.compaction.phase === 'running'),
+    ).toHaveLength(1)
+
+    // The rebuilt agent restarts compaction under a fresh id: one card, not two.
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: s.id,
+      id: 'cmp-b',
+      phase: 'start',
+    })
+    let cards = s.timeline.get().filter((it) => it.kind === 'compaction')
+    expect(cards).toHaveLength(1)
+    expect(cards[0]).toMatchObject({ id: 'compaction:cmp-b', compaction: { phase: 'running' } })
+
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: s.id,
+      id: 'cmp-b',
+      phase: 'success',
+    })
+    cards = s.timeline.get().filter((it) => it.kind === 'compaction')
+    expect(cards).toHaveLength(1)
+    expect(cards[0]).toMatchObject({ id: 'compaction:cmp-b', compaction: { phase: 'success' } })
+
+    resolveSecond?.({ stopReason: 'end_turn' } as PromptResponse)
+    await waitFor(s.status, (v) => v === 'idle')
+  })
+
+  it('does not append a second continuation bubble when a manual retry re-dispatches the failed one', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => {
+          client.emit(0, {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'partial' },
+          })
+          return Promise.reject(transientError())
+        },
+        () => Promise.reject(transientError()),
+        () => Promise.reject(transientError()),
+        // The manual retry lands.
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    await s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v?.phase === 'exhausted')
+    const continuations = () =>
+      s.messages.get().filter((m) => m.role === 'user' && m.text === '继续')
+    expect(continuations()).toHaveLength(1)
+    const continueMessageId = continuations()[0]!.messageId
+
+    await s.retryRecovery()
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    // Re-dispatch only: the timeline still holds exactly one continuation bubble.
+    expect(continuations()).toHaveLength(1)
+    expect(client.connections[0]!.promptCalls.length).toBe(4)
+    expect(client.connections[0]!.promptCalls[3]!._meta?.messageId).toBe(continueMessageId)
   })
 })

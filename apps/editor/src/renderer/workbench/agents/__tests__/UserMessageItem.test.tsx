@@ -46,6 +46,7 @@ function fakeSession(opts: { rewind?: boolean; fork?: boolean }): IAcpSession {
 function renderItem(
   session: IAcpSession | undefined,
   messageId: string | undefined,
+  autoRetry?: boolean,
 ): { execute: ReturnType<typeof vi.fn>; container: HTMLElement } {
   const execute = vi.fn().mockResolvedValue(undefined)
   const services = new ServiceCollection()
@@ -58,6 +59,7 @@ function renderItem(
         blocks={blocks}
         {...(session !== undefined ? { session } : {})}
         {...(messageId !== undefined ? { messageId } : {})}
+        {...(autoRetry === true ? { autoRetry: true } : {})}
       />
     </ServicesContext.Provider>,
   )
@@ -98,6 +100,31 @@ describe('UserMessageItem — rewind / fork actions', () => {
   it('renders no actions when the message has no messageId', () => {
     const { container } = renderItem(fakeSession({ rewind: true, fork: true }), undefined)
     expect(container.querySelector('[data-testid="acp-user-message-actions"]')).toBeNull()
+  })
+})
+
+describe('UserMessageItem — autoRetry demotion', () => {
+  it('shows the auto-retry badge and hides rewind/fork actions', () => {
+    const { container } = renderItem(fakeSession({ rewind: true, fork: true }), 'mid-1', true)
+    expect(container.querySelector('[data-testid="acp-user-message-auto-badge"]')).not.toBeNull()
+    expect(
+      container
+        .querySelector('[data-testid="acp-user-message-body"]')
+        ?.getAttribute('data-auto-retry'),
+    ).toBe('true')
+    // Rewind/fork against a recovery-generated anchor is meaningless — hidden.
+    expect(container.querySelector('[data-testid="acp-user-message-actions"]')).toBeNull()
+  })
+
+  it('renders normally without the flag', () => {
+    const { container } = renderItem(fakeSession({ rewind: true, fork: true }), 'mid-1')
+    expect(container.querySelector('[data-testid="acp-user-message-auto-badge"]')).toBeNull()
+    expect(
+      container
+        .querySelector('[data-testid="acp-user-message-body"]')
+        ?.getAttribute('data-auto-retry'),
+    ).toBe('false')
+    expect(container.querySelector('[data-testid="acp-user-message-actions"]')).not.toBeNull()
   })
 })
 

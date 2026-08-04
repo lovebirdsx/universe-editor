@@ -6,7 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { memo, useLayoutEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronUp, GitBranch, Undo2 } from 'lucide-react'
+import { ChevronDown, ChevronUp, GitBranch, RotateCcw, Undo2 } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { MessageContent } from './MessageContent.js'
@@ -30,11 +30,14 @@ export const UserMessageItem = memo(function UserMessageItem({
   contentKey,
   session,
   messageId,
+  autoRetry,
 }: {
   blocks: readonly ContentBlock[]
   contentKey?: string
   session?: IAcpSession
   messageId?: string
+  /** Recovery-sent continuation ("继续"): demoted styling + badge, no rewind/fork. */
+  autoRetry?: boolean
 }) {
   const innerRef = useRef<HTMLDivElement | null>(null)
   // Seed from the last measured state / a synchronous estimate (never a bare
@@ -85,17 +88,27 @@ export const UserMessageItem = memo(function UserMessageItem({
   return (
     <>
       <div className={styles['userMessageWrap']}>
+        {autoRetry === true && (
+          <span
+            className={styles['userMessageAutoBadge']}
+            data-testid="acp-user-message-auto-badge"
+          >
+            <RotateCcw size={11} strokeWidth={1.75} aria-hidden="true" />
+            {localize('acp.userMessage.autoRetry', 'Auto-retry')}
+          </span>
+        )}
         <div
           className={styles['userMessageBody']}
           data-collapsed={collapsed ? 'true' : 'false'}
           data-overflow={overflows ? 'true' : 'false'}
+          data-auto-retry={autoRetry === true ? 'true' : 'false'}
           data-testid="acp-user-message-body"
         >
           <div ref={innerRef}>
             <MessageContent blocks={blocks} />
           </div>
         </div>
-        {session !== undefined && messageId !== undefined && (
+        {session !== undefined && messageId !== undefined && autoRetry !== true && (
           <UserMessageActions session={session} messageId={messageId} />
         )}
       </div>

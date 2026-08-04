@@ -1504,6 +1504,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.usage.totals': '本周总计：{requests} 次请求  Token：{tokens}',
   'acp.usage.unavailable': '上下文用量不可用',
   'acp.usage.usedTotal': '已用：¥{used} / 总额：¥{total}  （{pct}%）',
+  'acp.userMessage.autoRetry': '自动重试',
   'acp.userMessage.collapse': '折叠',
   'acp.userMessage.expand': '展开',
 

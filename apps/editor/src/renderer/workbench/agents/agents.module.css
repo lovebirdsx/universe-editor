@@ -340,6 +340,22 @@
   max-height: 160px;
 }
 
+/* Recovery-sent continuation ("继续"): demoted so it doesn't read as a
+   user-typed bubble. */
+.userMessageBody[data-auto-retry='true'] {
+  opacity: 0.6;
+}
+
+.userMessageAutoBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-bottom: 2px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--vscode-agent-messageRoleForeground, #888);
+}
+
 .userMessageBody[data-collapsed='true'][data-overflow='true']::after {
   content: '';
   position: absolute;

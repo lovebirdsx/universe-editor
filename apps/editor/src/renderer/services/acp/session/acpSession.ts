@@ -163,6 +163,23 @@ export function recoveryContinuePromptText(): string {
 }
 
 /**
+ * Flip a stuck-`running` compaction to `failed`, freezing the stopwatch. Shared
+ * by orphan merging (defense pass) and `_settleOrphanCompactions`.
+ */
+function settleRunning(compaction: AcpCompaction, reason: string): AcpCompaction {
+  const startedAt = compaction.startedAt
+  return {
+    phase: 'failed',
+    reason,
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(startedAt !== undefined ? { durationMs: Math.max(0, Date.now() - startedAt) } : {}),
+    ...(compaction.expectedDurationMs !== undefined
+      ? { expectedDurationMs: compaction.expectedDurationMs }
+      : {}),
+  }
+}
+
+/**
  * Hidden role prompt prepended to the wire blocks of a side task's FIRST user
  * prompt only (never re-sent, never shown in the UI — `_appendMessage` uses the
  * plain user text). It establishes the side-chat persona so the agent answers
@@ -793,7 +810,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     // was aborted by the interruption and it should re-ask instead.
     const text = withPendingInteraction ? recoveryContinuePromptText() : CONTINUE_PROMPT_TEXT
     const messageId = generateUuid()
-    this._appendMessage('user', text, [], messageId)
+    this._appendMessage('user', text, [], messageId, { autoRetry: true })
     await this._dispatchPrompt(text, [], [], [], messageId)
   }
 
@@ -814,6 +831,8 @@ export class AcpSession extends Disposable implements IAcpSession {
     })
     this._connection.fail(message)
     this._appendMessage('agent', `[error] ${message}`)
+    // Reconnect ran out — no restarted compaction is coming to merge the orphan.
+    this._settleOrphanCompactions('reconnect failed')
     if (this.status.get() !== 'closed') this.status.set('errored', undefined)
   }
 
@@ -831,6 +850,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       this._turnInterrupted = false
       this._interruptedWithPendingInteraction = false
       this._connection.fail('reconnect cancelled')
+      this._settleOrphanCompactions('cancelled')
       if (this.status.get() !== 'closed') this.status.set('errored', undefined)
     }
   }
@@ -1205,12 +1225,20 @@ export class AcpSession extends Disposable implements IAcpSession {
         this._ingestPromptResponse(response)
         // A success after automatic retries ends the recovery episode.
         if (this.recovery.state.get()?.phase === 'retrying') this.recovery.clear()
+        // The compaction settle notification precedes turn completion in the
+        // vendor's stream, so a slot still running here lost its settle — stop
+        // the card from spinning forever.
+        this._settleOrphanCompactions('interrupted')
         return
       } catch (err) {
         if (err instanceof AcpAbortError) {
           // '[cancelled]' is appended once by cancelTurn — appending here would
           // duplicate it when several concurrent prompts abort together.
           this._telemetry.publicLog('acp.prompt_cancelled', { sessionId: sid })
+          // A reconnect aborts in-flight prompts too, but that path is an
+          // interruption, not a cancellation: the orphan compaction must stay
+          // `running` so the restarted compaction's `start` can merge it.
+          if (!this._reconnecting) this._settleOrphanCompactions('cancelled')
           return
         }
         failure = err as Error
@@ -1229,7 +1257,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           continued = true
           const continueId = generateUuid()
           currentMessageId = continueId
-          this._appendMessage('user', CONTINUE_PROMPT_TEXT, [], continueId)
+          this._appendMessage('user', CONTINUE_PROMPT_TEXT, [], continueId, { autoRetry: true })
           params = {
             sessionId: sid,
             _meta: { messageId: continueId },
@@ -1254,6 +1282,9 @@ export class AcpSession extends Disposable implements IAcpSession {
           await Promise.race([this.recovery.sleep(delay), abortPromise])
         } catch {
           this._telemetry.publicLog('acp.prompt_cancelled', { sessionId: sid })
+          // Same guard as the abort branch above: a mid-backoff reconnect owns
+          // the orphan compaction, don't settle it here.
+          if (!this._reconnecting) this._settleOrphanCompactions('cancelled')
           return
         }
         continue
@@ -1302,6 +1333,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         sessionId: sid,
         error: failure.message,
       })
+      this._settleOrphanCompactions('turn failed')
       if (isAuthRequiredError(failure)) this._onDidRequireAuth.fire()
       return
     }
@@ -1773,9 +1805,21 @@ export class AcpSession extends Disposable implements IAcpSession {
       }
     }
     switch (update.sessionUpdate) {
-      case 'user_message_chunk':
-        this._appendChunk('user', update.content, parentId, readMessageId(update))
+      case 'user_message_chunk': {
+        // Best-effort parity with the live path: a replayed user chunk whose
+        // text is exactly one of the recovery continuation sentinels is the
+        // automatic continuation the recovery machinery sent before the
+        // session was reloaded — stamp it so it renders demoted like its live
+        // counterpart. A chunk the user genuinely typed never matches here
+        // (live sends skip this check).
+        const trimmed = update.content.type === 'text' ? update.content.text.trim() : undefined
+        const autoRetry =
+          this.isReplayingHistory.get() &&
+          trimmed !== undefined &&
+          (trimmed === CONTINUE_PROMPT_TEXT || trimmed === recoveryContinuePromptText())
+        this._appendChunk('user', update.content, parentId, readMessageId(update), autoRetry)
         break
+      }
       case 'agent_message_chunk':
         this._appendChunk('agent', update.content, parentId)
         break
@@ -2078,6 +2122,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     block: ContentBlock,
     parentId?: string,
     messageId?: string,
+    autoRetry?: boolean,
   ): void {
     if (parentId != null) {
       this._appendChildChunk(role, block, parentId)
@@ -2098,6 +2143,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           : messageId !== undefined
             ? { messageId }
             : {}),
+        ...(last.autoRetry === true || autoRetry === true ? { autoRetry: true as const } : {}),
       }
       this._messages = [...this._messages.slice(0, -1), next]
       this._upsertMessageInTimeline(next)
@@ -2122,6 +2168,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         text: blocksToText(blocks),
         streaming: true,
         ...(messageId !== undefined ? { messageId } : {}),
+        ...(autoRetry === true ? { autoRetry: true as const } : {}),
       }
       this._messages = [...this._messages, next]
       for (const c of closed) this._upsertMessageInTimeline(c)
@@ -2186,6 +2233,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     text: string,
     leadingBlocks: readonly ContentBlock[] = [],
     messageId?: string,
+    opts?: { autoRetry?: boolean },
   ): void {
     const id = `m${++this._msgCounter}`
     // Image (or other) blocks lead, then the text block. Skip an empty text
@@ -2199,6 +2247,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       text,
       streaming: false,
       ...(messageId !== undefined ? { messageId } : {}),
+      ...(opts?.autoRetry === true ? { autoRetry: true as const } : {}),
     }
     this._messages = [...this._messages, message]
     this._upsertMessageInTimeline(message)
@@ -2218,18 +2267,32 @@ export class AcpSession extends Disposable implements IAcpSession {
    * event replaces it in place via the stable `id`, so a single compaction shows
    * as one card that settles rather than two stacked entries. Read-only preview
    * sessions ignore these (they never run turns).
+   *
+   * Orphan merging: when the agent dies mid-compaction the `running` slot's
+   * settle notification is lost with the connection, and the compaction the
+   * agent restarts after recovery reports under a fresh `id`. Without merging
+   * that stacks a second card next to the stuck one — from the user's seat it
+   * looks like two compactions. So a new event whose `id` has no slot silently
+   * replaces the leftover `running` slot in place (resetting the stopwatch for
+   * a start; reusing the orphan's `startedAt` for a terminal phase).
    */
   applyCompaction(id: string, phase: AcpCompactionPhase, reason?: string): void {
     if (this.readOnly) return
     const slotId = `compaction:${id}`
     const idx = this._timeline.findIndex((it) => it.kind === 'compaction' && it.id === slotId)
-    const prev = idx === -1 ? undefined : this._timeline[idx]
+    const orphanIdx = this._timeline.findIndex(
+      (it) => it.kind === 'compaction' && it.compaction.phase === 'running' && it.id !== slotId,
+    )
+    const targetIdx = idx !== -1 ? idx : orphanIdx
+    const prev = targetIdx === -1 ? undefined : this._timeline[targetIdx]
     const prevStartedAt = prev?.kind === 'compaction' ? prev.compaction.startedAt : undefined
     const prevExpected =
       prev?.kind === 'compaction' ? prev.compaction.expectedDurationMs : undefined
     // The SDK compaction has no true progress; the card shows a live stopwatch
     // from `startedAt`. Stamp it when `running` begins, then settle a fixed
-    // `durationMs` at the terminal phase so the elapsed time freezes.
+    // `durationMs` at the terminal phase so the elapsed time freezes. A start
+    // that merges an orphan still resets the stopwatch: the card times the
+    // retried compaction, not the interrupted attempt.
     const startedAt = phase === 'running' ? Date.now() : prevStartedAt
     const durationMs =
       phase !== 'running' && startedAt !== undefined
@@ -2252,11 +2315,48 @@ export class AcpSession extends Disposable implements IAcpSession {
       ...(expectedDurationMs !== undefined ? { expectedDurationMs } : {}),
     }
     const slot: TimelineItem = { kind: 'compaction', id: slotId, compaction }
-    if (idx === -1) {
+    if (targetIdx === -1) {
       this._timeline = [...this._timeline, slot]
     } else {
-      this._timeline = [...this._timeline.slice(0, idx), slot, ...this._timeline.slice(idx + 1)]
+      this._timeline = this._timeline.map((it, i) => {
+        if (i === targetIdx) return slot
+        // Defensive: at most one running slot is ever expected, but never leave
+        // another stuck-running orphan behind the merged one.
+        if (it.kind === 'compaction' && it.compaction.phase === 'running') {
+          return {
+            kind: 'compaction',
+            id: it.id,
+            compaction: settleRunning(it.compaction, 'superseded'),
+          }
+        }
+        return it
+      })
     }
+    const tx = this._batchedTx()
+    this.timeline.set(this._timeline, tx)
+    this._commitBatchedTx()
+  }
+
+  /**
+   * Settle any compaction slot still stuck in `running` as `failed`. A running
+   * slot whose settle notification was lost (agent died mid-compaction and the
+   * turn ended without a restart) would otherwise spin forever. Called only on
+   * terminal turn/recovery paths — NOT on connection loss, where the
+   * hot-reconnect flow expects a restarted compaction's `start` to silently
+   * merge the orphan instead (see {@link applyCompaction}).
+   */
+  private _settleOrphanCompactions(reason: string): void {
+    if (this.readOnly) return
+    if (
+      !this._timeline.some((it) => it.kind === 'compaction' && it.compaction.phase === 'running')
+    ) {
+      return
+    }
+    this._timeline = this._timeline.map((it) =>
+      it.kind === 'compaction' && it.compaction.phase === 'running'
+        ? { kind: 'compaction', id: it.id, compaction: settleRunning(it.compaction, reason) }
+        : it,
+    )
     const tx = this._batchedTx()
     this.timeline.set(this._timeline, tx)
     this._commitBatchedTx()

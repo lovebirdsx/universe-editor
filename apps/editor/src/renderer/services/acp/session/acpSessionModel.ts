@@ -43,6 +43,14 @@ export interface AcpMessage {
    * messages sent before this field existed.
    */
   readonly messageId?: string
+  /**
+   * True when this user message was appended by the recovery machinery (the
+   * automatic `CONTINUE_PROMPT_TEXT` continuation after an interrupted turn),
+   * not typed by the user. The UI demotes it and shows an auto-retry badge.
+   * Also stamped on replayed history chunks whose text matches the continuation
+   * sentinel exactly (best-effort — see `AcpSession.applyUpdate`).
+   */
+  readonly autoRetry?: true
 }
 
 export type AcpToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed'

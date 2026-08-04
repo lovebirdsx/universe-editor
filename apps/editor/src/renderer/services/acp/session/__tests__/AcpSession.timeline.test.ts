@@ -1294,6 +1294,47 @@ describe('AcpSession.timeline', () => {
     s.endHistoryReplay()
   })
 
+  it('stamps a replayed user chunk matching the continuation sentinel as autoRetry', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: '继续' },
+        messageId: 'cont-1',
+      } as never,
+    })
+    // An agent reply seals the user stream so the next user chunk opens a fresh
+    // message instead of merging.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'reply' },
+      },
+    })
+    s.endHistoryReplay()
+
+    // The same text outside the replay window is a genuinely typed message.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: '继续' },
+        messageId: 'live-1',
+      } as never,
+    })
+
+    const users = s.messages.get().filter((m) => m.role === 'user')
+    expect(users).toHaveLength(2)
+    expect(users[0]).toMatchObject({ text: '继续', autoRetry: true })
+    expect(users[1]!.autoRetry).toBeUndefined()
+  })
+
   it('config_option_update still applies while replay is suppressed', async () => {
     const s = await svc.createSession()
     await s.whenConnected()
