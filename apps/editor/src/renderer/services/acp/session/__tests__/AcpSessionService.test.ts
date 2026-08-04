@@ -65,10 +65,12 @@ import {
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
 import {
+  AcpSession,
   PLAN_AUTO_EXECUTE_DELAY_MS,
   REWIND_SESSION_METHOD,
   SIDE_TASK_ROLE_PROMPT,
 } from '../acpSession.js'
+import type { AcpPendingElicitation, AcpPendingPermission } from '../acpSessionModel.js'
 import { ACP_CAPABILITIES_META_KEY } from '../acpExtMethods.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
@@ -3425,5 +3427,130 @@ describe('AcpSessionService — configOptions history snapshot', () => {
     } finally {
       svc.dispose()
     }
+  })
+})
+
+describe('AcpSessionService — stall watchdog', () => {
+  const STALL_TIMEOUT_MS = 30_000
+
+  function makeService(): AcpSessionService {
+    const notifications = new StubNotificationService()
+    const config: IConfigurationService = new ConfigurationService()
+    void config.update('acp.turnStallTimeoutMs', STALL_TIMEOUT_MS, ConfigurationTarget.Memory)
+    void config.update('acp.startupTimeoutMs', 5 * 60_000, ConfigurationTarget.Memory)
+    return new AcpSessionService(
+      new FakeAcpClientService({ stubOptions: { promptHangs: true } }),
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      notifications,
+      new NoopTelemetryService(),
+      new StubPermissionHandler(),
+      new StubLoggerService(),
+      makeHistory(),
+      new FakeStorage(),
+      makeAgentDefaults(),
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        new NoopTelemetryService(),
+        makeHistory(),
+        makeAgentDefaults(),
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
+    )
+  }
+
+  async function makeRunningSession(): Promise<{ svc: AcpSessionService; session: AcpSession }> {
+    const svc = makeService()
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    void session.sendPrompt('hi')
+    // Let the prompt request land so the session flips to running.
+    await vi.advanceTimersByTimeAsync(10)
+    expect(session.status.get()).toBe('running')
+    return { svc, session }
+  }
+
+  function pendingElicitation(): AcpPendingElicitation {
+    return {
+      request: {},
+      resolve: () => {},
+      cancel: () => {},
+    } as unknown as AcpPendingElicitation
+  }
+
+  function pendingPermission(): AcpPendingPermission {
+    return {
+      toolCallId: 'tc-1',
+      title: 'run command',
+      options: [{ optionId: 'allow', name: 'Allow' }],
+      resolve: () => {},
+      cancel: () => {},
+    }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('declares a silent running session stalled past the timeout', async () => {
+    const { svc, session } = await makeRunningSession()
+    const stallSpy = vi.spyOn(session, 'handleStall')
+    await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 90_000)
+    expect(stallSpy).toHaveBeenCalled()
+    svc.dispose()
+  })
+
+  it('skips a session awaiting an elicitation answer', async () => {
+    const { svc, session } = await makeRunningSession()
+    const stallSpy = vi.spyOn(session, 'handleStall')
+    session.presentElicitation(pendingElicitation())
+    await vi.advanceTimersByTimeAsync(3 * STALL_TIMEOUT_MS)
+    expect(stallSpy).not.toHaveBeenCalled()
+    expect(session.status.get()).toBe('running')
+    svc.dispose()
+  })
+
+  it('skips a session awaiting a permission decision', async () => {
+    const { svc, session } = await makeRunningSession()
+    const stallSpy = vi.spyOn(session, 'handleStall')
+    session.presentPermission(pendingPermission())
+    await vi.advanceTimersByTimeAsync(3 * STALL_TIMEOUT_MS)
+    expect(stallSpy).not.toHaveBeenCalled()
+    expect(session.status.get()).toBe('running')
+    svc.dispose()
+  })
+
+  it('resumes watchdog coverage once the pending card settles', async () => {
+    const { svc, session } = await makeRunningSession()
+    const stallSpy = vi.spyOn(session, 'handleStall')
+    session.presentElicitation(pendingElicitation())
+    await vi.advanceTimersByTimeAsync(3 * STALL_TIMEOUT_MS)
+    expect(stallSpy).not.toHaveBeenCalled()
+    session.pendingElicitation.set(undefined, undefined)
+    await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 90_000)
+    expect(stallSpy).toHaveBeenCalled()
+    svc.dispose()
+  })
+
+  it('handleStall itself refuses while user input is pending (belt-and-braces)', async () => {
+    const { svc, session } = await makeRunningSession()
+    session.presentPermission(pendingPermission())
+    session.handleStall()
+    expect(session.status.get()).toBe('running')
+    expect(session.isReconnecting).toBe(false)
+    svc.dispose()
   })
 })

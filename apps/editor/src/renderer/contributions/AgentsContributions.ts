@@ -152,7 +152,7 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
             default: 600000,
             description: localize(
               'settings.acp.turnStallTimeoutMs',
-              'A running turn that produces no output for this long (milliseconds) is declared wedged: the agent process is killed and the session hot-reconnects, resuming the interrupted turn. Set 0 to disable the watchdog.',
+              'A running turn that produces no output for this long (milliseconds) is declared wedged: the agent process is killed and the session hot-reconnects, resuming the interrupted turn. Set 0 to disable the watchdog. Sessions waiting for you to answer a question or approve a permission are exempt.',
             ),
           },
           'acp.mcpServers': {

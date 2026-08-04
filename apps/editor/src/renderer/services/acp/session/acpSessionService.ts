@@ -1196,7 +1196,9 @@ export class AcpSessionService
    * crash — the agent process is alive but its turn is wedged (e.g. a hung
    * subprocess the agent spawned), so it is killed and hot-reconnected.
    * Sessions mid-recovery or in backoff are skipped: their wait is expected
-   * silence, not a wedge.
+   * silence, not a wedge. Sessions awaiting user input (AskUserQuestion /
+   * permission card) are also skipped: the wire is silent while the user
+   * thinks, and that wait is unbounded by nature.
    */
   private _startStallWatchdog(): void {
     const interval = setInterval(() => this._checkStalledSessions(), STALL_WATCHDOG_TICK_MS)
@@ -1211,6 +1213,11 @@ export class AcpSessionService
       if (!(session instanceof AcpSession)) continue
       if (session.readOnly || session.status.get() !== 'running') continue
       if (session.recovery.state.get() !== undefined) continue
+      // Awaiting user input (question / permission card) is expected silence —
+      // the agent is demonstrably alive (it just asked), and the wait lasts as
+      // long as the user thinks.
+      if (session.pendingElicitation.get() !== undefined) continue
+      if (session.pendingPermission.get() !== undefined) continue
       const silentMs = now - session.lastActivityAt
       if (silentMs < stallMs) continue
       this._logger.warn(

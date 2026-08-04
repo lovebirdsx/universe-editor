@@ -711,6 +711,11 @@ export class AcpSession extends Disposable implements IAcpSession {
   /** Watchdog entry point: the turn went silent past the stall threshold. */
   handleStall(): void {
     if (this.status.get() === 'closed' || this.readOnly || this._reconnecting) return
+    // A pending question/permission card means the silence is the user thinking,
+    // not a wedged turn. The service-level watchdog already skips these; guard
+    // here too so future callers can't bypass the exemption.
+    if (this.pendingElicitation.get() !== undefined) return
+    if (this.pendingPermission.get() !== undefined) return
     this._handleConnectionLost('stalled')
   }
 
