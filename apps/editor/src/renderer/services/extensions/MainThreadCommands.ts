@@ -24,7 +24,13 @@ import { type IExtHostCommands, type IMainThreadCommands } from '@universe-edito
  * extension-contributed command and loop.
  */
 const HOST_INVOKABLE_PREFIX = '_workbench.'
-const HOST_INVOKABLE_BUILT_INS = new Set(['revealInExplorer'])
+const HOST_INVOKABLE_BUILT_INS = new Set([
+  'revealInExplorer',
+  // SCM extensions' no-resource fallback for Open Changes (git.openChange /
+  // perforce.openChange invoked from keybinding / toolbar) — a renderer Action2,
+  // so allowlisting it cannot re-enter an extension-contributed command.
+  'workbench.action.editor.openActiveFileChanges',
+])
 
 function isHostInvokableCommand(id: string): boolean {
   return id.startsWith(HOST_INVOKABLE_PREFIX) || HOST_INVOKABLE_BUILT_INS.has(id)
