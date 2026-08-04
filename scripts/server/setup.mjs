@@ -12,6 +12,7 @@
  *    sudo node scripts/server/setup.mjs install
  *    sudo node scripts/server/setup.mjs uninstall
  *    node scripts/server/setup.mjs status
+ *    sudo node scripts/server/setup.mjs restart
  *
  *  可选参数（带默认）: --root <发布目录> --port <端口> --base <URL前缀>
  *--------------------------------------------------------------------------------------------*/
@@ -219,6 +220,12 @@ function statusLinux() {
   run('systemctl', ['status', SERVICE_NAME], { check: false, ignoreFail: true })
 }
 
+function restartLinux() {
+  if (process.getuid && process.getuid() !== 0) die('请用 sudo 运行')
+  run('systemctl', ['restart', SERVICE_NAME])
+  ok(`已重启 ${SERVICE_NAME}`)
+}
+
 /*--------------------------------- Windows: schtasks ---------------------------------*/
 
 function installWin(cfg) {
@@ -291,6 +298,12 @@ function statusWin() {
   })
 }
 
+function restartWin() {
+  run('schtasks', ['/End', '/TN', TASK_NAME], { ignoreFail: true })
+  run('schtasks', ['/Run', '/TN', TASK_NAME])
+  ok(`已重启 ${TASK_NAME}`)
+}
+
 /*--------------------------------- 入口 ---------------------------------*/
 
 const args = parseArgs(process.argv.slice(2))
@@ -314,6 +327,9 @@ switch (action) {
   case 'status':
     isWin ? statusWin() : statusLinux()
     break
+  case 'restart':
+    isWin ? restartWin() : restartLinux()
+    break
   default:
-    die(`未知动作: ${action}（支持 install / uninstall / status）`)
+    die(`未知动作: ${action}（支持 install / uninstall / status / restart）`)
 }

@@ -6,6 +6,7 @@
 #    sudo bash setup.sh                 # 安装并启动（默认 /srv/universe-editor, 80 端口）
 #    sudo bash setup.sh uninstall       # 卸载服务（保留发布目录）
 #    sudo bash setup.sh status          # 查看服务状态
+#    sudo bash setup.sh restart         # 重启服务（如替换 server.mjs 后）
 #    sudo bash setup.sh install --root /data/ue --port 8080 --base /ue/   # 自定义
 #-----------------------------------------------------------------------------------------------
 set -euo pipefail

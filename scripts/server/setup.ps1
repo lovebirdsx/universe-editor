@@ -5,6 +5,7 @@
 #    ./setup.ps1                         # 安装并启动（默认 C:\universe-editor\data, 80 端口）
 #    ./setup.ps1 uninstall               # 卸载任务（保留发布目录）
 #    ./setup.ps1 status                  # 查看任务状态
+#    ./setup.ps1 restart                 # 重启任务（如替换 server.mjs 后）
 #    ./setup.ps1 install --port 8080 --base /ue/   # 自定义
 #
 #  若提示脚本被禁止运行: PowerShell 里先跑

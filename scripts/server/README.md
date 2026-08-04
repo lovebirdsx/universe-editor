@@ -144,6 +144,7 @@ cp apps/editor/resources/release-notes.json apps/editor/release/
 ```bash
 systemctl status universe-update-server         # 状态
 journalctl -u universe-update-server -f         # 日志
+sudo bash setup.sh restart                      # 重启
 sudo bash setup.sh uninstall                    # 卸载（保留发布目录）
 ```
 
@@ -151,6 +152,7 @@ sudo bash setup.sh uninstall                    # 卸载（保留发布目录）
 
 ```powershell
 schtasks /Query /TN UniverseUpdateServer /V /FO LIST   # 状态
+./setup.ps1 restart                                    # 重启
 ./setup.ps1 uninstall                                  # 卸载（保留发布目录）
 ```
 
@@ -168,7 +170,7 @@ schtasks /Query /TN UniverseUpdateServer /V /FO LIST   # 状态
 
 ```bash
 sudo cp scripts/server/dist/server.js /opt/universe-update-server/server.mjs
-sudo systemctl restart universe-update-server
+sudo bash setup.sh restart
 systemctl status universe-update-server          # 确认 active (running)
 ```
 
@@ -176,8 +178,7 @@ systemctl status universe-update-server          # 确认 active (running)
 
 ```powershell
 Copy-Item scripts\server\dist\server.js C:\universe-editor\app\server.mjs -Force
-schtasks /End /TN UniverseUpdateServer           # 先停旧实例，避免端口占用
-schtasks /Run /TN UniverseUpdateServer           # 用新文件起进程
+./setup.ps1 restart                              # 内部 End+Run，避免旧实例抢端口
 ```
 
 > 重跑 `setup.sh install` / `setup.ps1 install` 也会重新拷文件，但对**已运行**的服务不一定重启进程
