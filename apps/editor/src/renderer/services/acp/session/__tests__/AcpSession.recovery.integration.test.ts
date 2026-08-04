@@ -38,6 +38,7 @@ import type {
   SetSessionConfigOptionRequest,
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
+import { CONTINUE_PROMPT_TEXT, recoveryContinuePromptText } from '../acpSession.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
@@ -207,6 +208,16 @@ class ScriptedClient implements IAcpClientService {
   /** Abort the given connection's signal — simulates the agent process dying. */
   killConnection(connIndex: number): void {
     this.connections[connIndex]!.controller.abort()
+  }
+
+  /** Drive an inbound elicitation through the sink (routes by params.sessionId). */
+  createElicitation(params: Record<string, unknown>): Promise<unknown> {
+    return this._sink!.onCreateElicitation(params as never)
+  }
+
+  /** Drive an inbound permission request through the sink. */
+  requestPermission(params: Record<string, unknown>): Promise<unknown> {
+    return this._sink!.onRequestPermission(params as never)
   }
 
   async connect(): Promise<IAcpClientConnection> {
@@ -502,6 +513,148 @@ describe('AcpSession auto-recovery', () => {
     await waitFor(s.status, (v) => v === 'running')
     expect(client.connections[1]!.promptCalls.length).toBe(1)
     resolveFirst?.()
+    await waitFor(s.status, (v) => v === 'idle')
+  })
+
+  it('resumes an interrupted turn with a re-ask hint when a pending elicitation was cancelled by the disconnect', async () => {
+    // Plan-mode AskUserQuestion scenario: the question card is up when the
+    // process dies. The card settles as cancelled on disconnect, so a bare
+    // '继续' would read as "the user skipped the question" — the continuation
+    // must tell the agent the question was aborted and should be re-asked.
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        // First turn hangs until the connection is killed (never resolves).
+        () => new Promise<PromptResponse>(() => {}),
+        // The continuation turn after reconnect succeeds.
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    void s.sendPrompt('plan it')
+    await waitFor(s.status, (v) => v === 'running')
+
+    // The AskUserQuestion tool_call lands before the elicitation request.
+    client.emit(0, {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-1',
+      title: 'AskUserQuestion',
+      kind: 'other',
+      status: 'in_progress',
+      content: [],
+      locations: [],
+    })
+    const elicitationPromise = client.createElicitation({
+      sessionId: 'agent-durable',
+      mode: 'form',
+      message: 'Pick one',
+      requestedSchema: { type: 'object', properties: { q: { type: 'string' } } },
+    })
+    await waitFor(s.pendingElicitation, (v) => v !== undefined)
+
+    // Process dies while the question card is up: the card settles as cancelled.
+    client.killConnection(0)
+    await expect(elicitationPromise).resolves.toMatchObject({ action: 'cancel' })
+    await waitFor(s.recoveryState, (v) => v === undefined)
+    expect(client.connections.length).toBe(2)
+
+    // The continuation prompt is the re-ask hint, not a bare '继续'.
+    expect(client.connections[1]!.promptCalls.length).toBe(1)
+    const sent = client.connections[1]!.promptCalls[0]!
+    expect(
+      sent.prompt.some((b) => b.type === 'text' && b.text === recoveryContinuePromptText()),
+    ).toBe(true)
+    // What went on the wire is also what the user sees on the timeline.
+    expect(
+      s.messages.get().some((m) => m.role === 'user' && m.text === recoveryContinuePromptText()),
+    ).toBe(true)
+    await waitFor(s.status, (v) => v === 'idle')
+  })
+
+  it('resumes an interrupted turn with a re-ask hint when a pending permission was cancelled by the disconnect', async () => {
+    // Same as the elicitation case but for the ExitPlanMode permission card.
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => new Promise<PromptResponse>(() => {}),
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    void s.sendPrompt('plan it')
+    await waitFor(s.status, (v) => v === 'running')
+
+    client.emit(0, {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-1',
+      title: 'ExitPlanMode',
+      kind: 'switch_mode',
+      status: 'in_progress',
+      content: [],
+      locations: [],
+    })
+    const permissionPromise = client.requestPermission({
+      sessionId: 'agent-durable',
+      toolCall: {
+        toolCallId: 'call-1',
+        title: 'ExitPlanMode',
+        kind: 'switch_mode',
+        status: 'in_progress',
+        content: [],
+        locations: [],
+      },
+      options: [{ optionId: 'default', kind: 'allow_once', name: 'Yes' }],
+    })
+    await waitFor(s.pendingPermission, (v) => v !== undefined)
+
+    client.killConnection(0)
+    await expect(permissionPromise).resolves.toMatchObject({ outcome: { outcome: 'cancelled' } })
+    await waitFor(s.recoveryState, (v) => v === undefined)
+    expect(client.connections.length).toBe(2)
+    expect(client.connections[1]!.promptCalls.length).toBe(1)
+    const sent = client.connections[1]!.promptCalls[0]!
+    expect(
+      sent.prompt.some((b) => b.type === 'text' && b.text === recoveryContinuePromptText()),
+    ).toBe(true)
+    await waitFor(s.status, (v) => v === 'idle')
+  })
+
+  it('still sends a bare continuation when the interrupted turn had no pending interaction', async () => {
+    // Partial output but nothing awaiting the user — the classic '继续' keeps
+    // the agent transcript free of a duplicate user prompt.
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => new Promise<PromptResponse>(() => {}),
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    void s.sendPrompt('run something')
+    await waitFor(s.status, (v) => v === 'running')
+    client.emit(0, {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'working…' },
+    })
+
+    client.killConnection(0)
+    await waitFor(s.recoveryState, (v) => v === undefined)
+    expect(client.connections.length).toBe(2)
+    expect(client.connections[1]!.promptCalls.length).toBe(1)
+    const sent = client.connections[1]!.promptCalls[0]!
+    expect(sent.prompt.some((b) => b.type === 'text' && b.text === CONTINUE_PROMPT_TEXT)).toBe(true)
     await waitFor(s.status, (v) => v === 'idle')
   })
 

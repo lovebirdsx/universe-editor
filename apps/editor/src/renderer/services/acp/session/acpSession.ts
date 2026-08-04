@@ -10,6 +10,7 @@ import {
   Disposable,
   autorun,
   generateUuid,
+  localize,
   observableValue,
   Emitter,
   TransactionImpl,
@@ -149,6 +150,17 @@ type TitleKind = 'ai' | 'manual' | undefined
  * the original prompt would duplicate the turn in the agent transcript.
  */
 export const CONTINUE_PROMPT_TEXT = '继续'
+
+/**
+ * Function rather than a module constant: `localize` reads the NLS state at
+ * call time, and module evaluation may run before `configureNls`.
+ */
+export function recoveryContinuePromptText(): string {
+  return localize(
+    'acp.recovery.continueAfterInterrupt',
+    'Continue. Note: the previous turn was aborted by a connection interruption, not by me. If you had a question or confirmation waiting for my answer at that moment, do not treat it as answered, skipped, or declined — re-ask it now.',
+  )
+}
 
 /**
  * Hidden role prompt prepended to the wire blocks of a side task's FIRST user
@@ -373,6 +385,14 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   /** Set when the connection died mid-turn; consumed by {@link continueInterruptedTurn}. */
   private _turnInterrupted = false
+
+  /**
+   * Set alongside {@link _turnInterrupted} when the lost connection had a
+   * pending elicitation/permission card — the card is settled as cancelled on
+   * disconnect, so the continuation prompt must tell the agent the question
+   * was aborted (not skipped/declined) and should be re-asked.
+   */
+  private _interruptedWithPendingInteraction = false
 
   /** Last dispatched prompt + its output baseline, for zero-output resend after reconnect. */
   private _lastDispatch: PromptSnapshot | undefined
@@ -683,10 +703,15 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (this._reconnecting) return
     this._reconnecting = true
     const deadLease = this._conn
+    // Captured before _cancelPending settles the cards — after it, both
+    // observables read undefined and the pending state is unrecoverable.
+    const hadPendingInteraction =
+      this.pendingElicitation.get() !== undefined || this.pendingPermission.get() !== undefined
     this._commitBatchedTx()
     this._finalizeRunningSegment()
     this._cancelPending()
     this._turnInterrupted = this._inFlight.size > 0
+    this._interruptedWithPendingInteraction = hadPendingInteraction
     this._abortAllInFlight()
     this._sawError = false
     this._connection.beginReconnect()
@@ -704,6 +729,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       agentId: this.agentId,
       reason,
       interrupted: this._turnInterrupted,
+      pendingInteraction: hadPendingInteraction,
     })
     this._onDidLoseConnection.fire({ reason })
   }
@@ -754,15 +780,21 @@ export class AcpSession extends Disposable implements IAcpSession {
   async continueInterruptedTurn(): Promise<void> {
     if (!this._turnInterrupted) return
     this._turnInterrupted = false
+    const withPendingInteraction = this._interruptedWithPendingInteraction
+    this._interruptedWithPendingInteraction = false
     if (this.status.get() === 'closed') return
     const last = this._lastDispatch
     if (last !== undefined && this._applyUpdateCount === last.baseline) {
       await this._dispatchPrompt(last.text, last.refs, last.contexts, last.images, last.messageId)
       return
     }
+    // A pending question/permission was settled as cancelled by the disconnect;
+    // a bare "继续" reads as "the user skipped it", so tell the agent the card
+    // was aborted by the interruption and it should re-ask instead.
+    const text = withPendingInteraction ? recoveryContinuePromptText() : CONTINUE_PROMPT_TEXT
     const messageId = generateUuid()
-    this._appendMessage('user', CONTINUE_PROMPT_TEXT, [], messageId)
-    await this._dispatchPrompt(CONTINUE_PROMPT_TEXT, [], [], [], messageId)
+    this._appendMessage('user', text, [], messageId)
+    await this._dispatchPrompt(text, [], [], [], messageId)
   }
 
   /**
@@ -773,6 +805,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   sealRecoveryFailure(message: string): void {
     this._reconnecting = false
     this._turnInterrupted = false
+    this._interruptedWithPendingInteraction = false
     this.recovery.set({
       phase: 'exhausted',
       attempt: MAX_RECOVERY_ATTEMPTS,
@@ -796,6 +829,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (this._reconnecting) {
       this._reconnecting = false
       this._turnInterrupted = false
+      this._interruptedWithPendingInteraction = false
       this._connection.fail('reconnect cancelled')
       if (this.status.get() !== 'closed') this.status.set('errored', undefined)
     }
@@ -1649,6 +1683,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     // observing this session bails instead of reattaching a closed session.
     this._reconnecting = false
     this._turnInterrupted = false
+    this._interruptedWithPendingInteraction = false
     this.recovery.dispose()
     // Unblock anyone awaiting the handshake and reject any still-queued prompts
     // — a session closed mid-connect never reaches attach/fail, so settle the
