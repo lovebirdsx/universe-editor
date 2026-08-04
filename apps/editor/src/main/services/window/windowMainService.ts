@@ -223,12 +223,14 @@ export class WindowMainService implements IWindowMainService {
     // is stuck at a black window with no way back. `clean-exit` is a normal
     // teardown (e.g. reload) and must be ignored; anything else (crashed / oom /
     // killed) offers a one-click reload. `_crashHandled` de-bounces the dialog so
-    // a crash storm never stacks multiple prompts.
+    // a crash storm never stacks multiple prompts. E2E skips the native modal —
+    // it would block the driver; a crash there must fail the test, not stall it.
     win.webContents.on('render-process-gone', (_event, details) => {
       if (details.reason === 'clean-exit') return
-      logger.error(
-        `render-process-gone id=${win.id} reason=${details.reason} exitCode=${details.exitCode ?? 'n/a'}`,
-      )
+      const line = `render-process-gone id=${win.id} reason=${details.reason} exitCode=${details.exitCode ?? 'n/a'}`
+      logger.error(line)
+      appServices.errorSink.recordLocal('renderProcessGone', line, `renderer:${win.id}`)
+      if (e2eEnabled) return
       if (this._crashHandled.has(win.id)) return
       this._crashHandled.add(win.id)
       if (win.isDestroyed()) return

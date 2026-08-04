@@ -53,6 +53,8 @@ vi.mock('electron', () => ({
     show: vi.fn(),
     focus: vi.fn(),
     restore: vi.fn(),
+    reload: vi.fn(),
+    close: vi.fn(),
     loadURL: vi.fn().mockResolvedValue(undefined),
     loadFile: vi.fn().mockResolvedValue(undefined),
     isDestroyed: vi.fn().mockReturnValue(false),
@@ -70,6 +72,9 @@ vi.mock('electron', () => ({
       setWindowOpenHandler: vi.fn(),
     },
   })),
+  dialog: {
+    showMessageBox: vi.fn().mockResolvedValue({ response: 1, checkboxChecked: false }),
+  },
   screen: {
     getAllDisplays: vi.fn().mockReturnValue([]),
     getDisplayNearestPoint: vi.fn().mockReturnValue({ id: 1 }),
@@ -85,7 +90,7 @@ const { WorkspaceMainService } = await import('../../workspace/workspaceMainServ
 const { UserDataMainService } = await import('../../userData/userDataMainService.js')
 const { createStubWatcherProcessClient } =
   await import('../../fileWatcher/testing/stubWatcherProcessClient.js')
-const { BrowserWindow } = await import('electron')
+const { BrowserWindow, dialog } = await import('electron')
 
 function grabLastWindowCloseHandler(): (e: { preventDefault: () => void }) => void {
   const win = vi.mocked(BrowserWindow).mock.results.at(-1)?.value as {
@@ -97,6 +102,20 @@ function grabLastWindowCloseHandler(): (e: { preventDefault: () => void }) => vo
   const call = win.on.mock.calls.filter(([event]) => event === 'close').at(-1)
   if (!call) throw new Error('no close handler registered')
   return call[1] as (e: { preventDefault: () => void }) => void
+}
+
+interface CrashDetails {
+  reason: string
+  exitCode?: number
+}
+
+function grabRenderProcessGoneHandler(): (e: unknown, details: CrashDetails) => void {
+  const win = vi.mocked(BrowserWindow).mock.results.at(-1)?.value as {
+    webContents: { on: { mock: { calls: Array<[string, (...args: never[]) => void]> } } }
+  }
+  const call = win.webContents.on.mock.calls.find(([event]) => event === 'render-process-gone')
+  if (!call) throw new Error('no render-process-gone handler registered')
+  return call[1] as (e: unknown, details: CrashDetails) => void
 }
 
 function makeOpts() {
@@ -136,6 +155,8 @@ function makeOpts() {
       exchangeRate: {} as never,
       resourceAccess: {} as never,
       environmentSnapshot: {} as never,
+      errorSink: { recordLocal: vi.fn() } as never,
+      diagnostics: {} as never,
       watcherProcess: createStubWatcherProcessClient(),
     },
     logService,
@@ -152,6 +173,59 @@ describe('WindowMainService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     windowIdCounter.value = 1
+  })
+
+  describe('render-process-gone crash recovery', () => {
+    it('records the crash in the error sink and skips the native modal in E2E', async () => {
+      const opts = makeOpts()
+      opts.e2eEnabled = true
+      const svc = new WindowMainService(opts)
+      await svc.createWindow()
+      const errorSink = opts.appServices.errorSink as { recordLocal: ReturnType<typeof vi.fn> }
+      grabRenderProcessGoneHandler()(undefined, { reason: 'crashed', exitCode: 1 })
+      expect(errorSink.recordLocal).toHaveBeenCalledWith(
+        'renderProcessGone',
+        expect.stringContaining('crashed'),
+        expect.stringMatching(/^renderer:\d+$/),
+      )
+      expect(vi.mocked(dialog.showMessageBox)).not.toHaveBeenCalled()
+    })
+
+    it('ignores clean-exit entirely', async () => {
+      const opts = makeOpts()
+      const svc = new WindowMainService(opts)
+      await svc.createWindow()
+      const errorSink = opts.appServices.errorSink as { recordLocal: ReturnType<typeof vi.fn> }
+      grabRenderProcessGoneHandler()(undefined, { reason: 'clean-exit' })
+      expect(errorSink.recordLocal).not.toHaveBeenCalled()
+      expect(vi.mocked(dialog.showMessageBox)).not.toHaveBeenCalled()
+    })
+
+    it('offers a reload dialog outside E2E and reloads on confirm', async () => {
+      vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 0, checkboxChecked: false })
+      const svc = new WindowMainService(makeOpts())
+      await svc.createWindow()
+      grabRenderProcessGoneHandler()(undefined, { reason: 'oom' })
+      await vi.waitFor(() => {
+        expect(vi.mocked(dialog.showMessageBox)).toHaveBeenCalledTimes(1)
+      })
+      const win = vi.mocked(BrowserWindow).mock.results.at(-1)?.value as { reload: unknown }
+      await vi.waitFor(() => {
+        expect(win.reload).toHaveBeenCalledTimes(1)
+      })
+    })
+
+    it('de-bounces a crash storm into a single dialog', async () => {
+      const svc = new WindowMainService(makeOpts())
+      await svc.createWindow()
+      const handler = grabRenderProcessGoneHandler()
+      handler(undefined, { reason: 'crashed' })
+      handler(undefined, { reason: 'crashed' })
+      handler(undefined, { reason: 'crashed' })
+      await vi.waitFor(() => {
+        expect(vi.mocked(dialog.showMessageBox)).toHaveBeenCalledTimes(1)
+      })
+    })
   })
 
   it('createWindow returns a numeric window id', async () => {

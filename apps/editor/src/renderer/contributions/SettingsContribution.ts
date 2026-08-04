@@ -43,6 +43,7 @@ import {
   RESPONSIVENESS_STATUS_WARNING_ENABLED_KEY,
   RESPONSIVENESS_WARN_THRESHOLD_KEY,
 } from '../services/performance/interactionPerfSettings.js'
+import { ERROR_COLLECTION_ENABLED_KEY } from '../services/telemetry/telemetryClientService.js'
 
 export class SettingsContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -683,6 +684,23 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             description: localize(
               'settings.performance.responsiveness.statusWarning.enabled.description',
               'Show a status bar warning when slow interactions occur frequently.',
+            ),
+          },
+        },
+      }),
+    )
+
+    this._register(
+      ConfigurationRegistry.registerConfiguration({
+        id: 'telemetry',
+        title: localize('settings.telemetry', 'Telemetry'),
+        properties: {
+          [ERROR_COLLECTION_ENABLED_KEY]: {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.telemetry.errorCollection.enabled.description',
+              'Collect structured error records (fingerprint, redacted stack, occurrence count) into the local errors.jsonl log for diagnostics. Nothing is sent over the network.',
             ),
           },
         },

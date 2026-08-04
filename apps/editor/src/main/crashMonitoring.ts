@@ -23,14 +23,22 @@ export function installCrashReporter(): void {
 /**
  * GPU / utility process deaths never surface through render-process-gone (that
  * only covers renderers) — without this hook they are completely invisible.
+ * Non-clean exits are also folded into the structured error sink.
  */
-export function installChildProcessGoneLogging(logger: ILogger): void {
+export function installChildProcessGoneLogging(
+  logger: ILogger,
+  record?: (event: string, error: unknown) => void,
+): void {
   app.on('child-process-gone', (_event, details) => {
     const line =
       `child-process-gone type=${details.type} reason=${details.reason} exitCode=${details.exitCode}` +
       (details.serviceName ? ` service=${details.serviceName}` : '') +
       (details.name ? ` name=${details.name}` : '')
-    if (details.reason === 'clean-exit') logger.info(line)
-    else logger.error(line)
+    if (details.reason === 'clean-exit') {
+      logger.info(line)
+    } else {
+      logger.error(line)
+      record?.('childProcessGone', line)
+    }
   })
 }

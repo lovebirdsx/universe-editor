@@ -11,7 +11,10 @@ export function setUnexpectedErrorHandler(handler: (e: unknown) => void): void {
   unexpectedErrorHandler = handler
 }
 
-type ErrorTelemetryHook = (errorEventName: string, data: { stack?: string }) => void
+type ErrorTelemetryHook = (
+  errorEventName: string,
+  data: { stack?: string; message: string },
+) => void
 let _errorTelemetryHook: ErrorTelemetryHook | undefined
 
 export function setErrorTelemetryHook(hook: ErrorTelemetryHook): void {
@@ -22,7 +25,8 @@ export function onUnexpectedError(e: unknown): void {
   if (e instanceof ErrorNoTelemetry) return
   if (isCancellationError(e)) return
   _errorTelemetryHook?.('unhandledError', {
-    stack: e instanceof Error ? (e.stack ?? e.message) : String(e),
+    ...(e instanceof Error && e.stack !== undefined ? { stack: e.stack } : {}),
+    message: e instanceof Error ? e.message : String(e),
   })
   unexpectedErrorHandler(e)
 }

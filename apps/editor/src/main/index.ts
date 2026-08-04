@@ -51,6 +51,8 @@ import { IRecentWorkspacesService } from './services/workspace/recentWorkspacesM
 import { IWatcherProcessService } from './services/fileWatcher/watcherProcessClient.js'
 import {
   IDisposableLeakService,
+  IDiagnosticsService,
+  IErrorSinkService,
   IExchangeRateService,
   IPingService,
   IPerformanceMarksService,
@@ -72,6 +74,8 @@ import { ISessionSwitcherService } from '../shared/ipc/sessionSwitcher.js'
 import { ITextSearchMainService } from '../shared/ipc/textSearchService.js'
 import { installMainErrorHandlers } from './errors.js'
 import { installCrashReporter, installChildProcessGoneLogging } from './crashMonitoring.js'
+import { ErrorSinkMainService } from './services/telemetry/errorSinkMainService.js'
+import { DiagnosticsMainService } from './services/diagnostics/diagnosticsMainService.js'
 import {
   armSessionSentinel,
   disarmSessionSentinel,
@@ -234,7 +238,25 @@ if (import.meta.env.DEV && environmentService.rendererDebug) {
 // Install global error handlers as early as possible (before any async work).
 const logMainService = new LogMainService()
 const mainLogger = logMainService.createLogger({ id: 'main', name: 'Main' })
-installMainErrorHandlers(mainLogger)
+// Structured error sink (errors.jsonl). Constructed beside the log service so
+// every failure path below — including main's own uncaughtException — is
+// machine-readable, not just a text line. Preset into the DI collection later.
+const errorSink = new ErrorSinkMainService(
+  {
+    sessionDir: logMainService.getSessionDir(),
+    sessionId: logMainService.getSessionId(),
+    appVersion: app.getVersion(),
+    piiPaths: [
+      app.getPath('userData'),
+      homedir(),
+      app.getAppPath(),
+      app.getPath('temp'),
+      logMainService.getLogRoot(),
+    ],
+  },
+  logMainService,
+)
+installMainErrorHandlers(mainLogger, (event, error) => errorSink.recordLocal(event, error))
 
 // Route console.* through the log system so ad-hoc console output and
 // third-party library noise reach the Console channel (and therefore the
@@ -242,7 +264,7 @@ installMainErrorHandlers(mainLogger)
 const consoleLogger = logMainService.createLogger({ id: 'console', name: 'Console' })
 const consoleInterceptor = installConsoleInterceptor({ logger: consoleLogger })
 
-installChildProcessGoneLogging(mainLogger)
+installChildProcessGoneLogging(mainLogger, (event, error) => errorSink.recordLocal(event, error))
 
 const e2eEnabled = environmentService.isE2E
 // Extension-development mode (--extension-development-path): like E2E, each dev
@@ -426,6 +448,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     collection.set(ILogMainService, logMainService)
     collection.set(IEnvironmentMainService, environmentService)
     collection.set(IMainStorageService, getDefaultStorage())
+    collection.set(IErrorSinkService, errorSink)
     for (const [id, descriptor] of getSingletonServiceDescriptors()) {
       if (!collection.has(id)) collection.set(id, descriptor)
     }
@@ -458,6 +481,8 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       exchangeRate: accessor.get(IExchangeRateService),
       resourceAccess: accessor.get(IResourceAccessService),
       environmentSnapshot: accessor.get(IEnvironmentSnapshotService),
+      errorSink: accessor.get(IErrorSinkService) as ErrorSinkMainService,
+      diagnostics: accessor.get(IDiagnosticsService) as DiagnosticsMainService,
       sessionSwitcher: accessor.get(ISessionSwitcherService) as SessionSwitcherMainService,
       configLocation: accessor.get(IConfigLocationService) as ConfigLocationMainService,
       watcherProcess: accessor.get(IWatcherProcessService),
@@ -516,6 +541,10 @@ void app.whenReady().then(async () => {
           ? `crash dumps: ${abnormalExit.crashDumps.join(', ')}`
           : 'no crash dump found — likely killed externally (AV / OOM / task kill)'),
     )
+    errorSink.recordLocal(
+      'abnormalExit',
+      `previous session ${abnormalExit.previousSessionId} terminated abnormally; crashDumps=${abnormalExit.crashDumps.length}`,
+    )
   }
   armSessionSentinel(app.getPath('userData'), logMainService.getSessionId())
 
@@ -533,7 +562,10 @@ void app.whenReady().then(async () => {
   installImageProtocol()
   installAppProtocolHandler(join(import.meta.dirname, '../renderer'))
   initializeMainNls(await loadMainSettingsText(), app.getLocale())
-  const { windows } = getOrCreateServices()
+  const { windows, app: appServices } = getOrCreateServices()
+  // Hand the abnormal-exit report to the diagnostics service before the first
+  // window can ask for it (consume-once: exactly one window notifies).
+  appServices.diagnostics.setAbnormalExitReport(abnormalExit)
   mark(PerfMarks.mainDidCreateServices)
 
   const sessionList = await loadSession(getDefaultStorage())
@@ -622,6 +654,7 @@ app.on('will-quit', () => {
   // Disposes every materialized application service (acpHost kills child
   // processes, recentWorkspaces flushes its writes, update tears down, etc.).
   rootInstantiation?.dispose()
+  errorSink.dispose()
   // Synchronous: Electron does not wait for promises in will-quit, so a
   // fire-and-forget flush() could be truncated by process exit. flushSync writes
   // the latest in-memory state atomically before we return.

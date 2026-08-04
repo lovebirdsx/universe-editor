@@ -20,6 +20,7 @@ import { createWindowScopedSessionSwitcher } from '../services/sessionSwitcher/s
 import { createMainProtocolForWindow } from './electronProtocol.js'
 import type { ApplicationServices, WindowScopedServices } from '../window/scopedServicesFactory.js'
 import { createWindowScopedUpdateService } from '../services/update/updateMainService.js'
+import { createWindowScopedErrorSink } from '../services/telemetry/errorSinkMainService.js'
 
 export interface WindowIpcBootstrap {
   readonly disposable: IDisposable
@@ -102,6 +103,11 @@ export function bootstrapWindowIpc(
     ServiceChannels.EnvironmentSnapshot,
     ProxyChannel.fromService(app.environmentSnapshot),
   )
+  server.registerChannel(
+    ServiceChannels.ErrorSink,
+    ProxyChannel.fromService(createWindowScopedErrorSink(app.errorSink, win.id)),
+  )
+  server.registerChannel(ServiceChannels.Diagnostics, ProxyChannel.fromService(app.diagnostics))
   server.registerChannel(
     ServiceChannels.SessionSwitcher,
     ProxyChannel.fromService(createWindowScopedSessionSwitcher(app.sessionSwitcher, win.id)),

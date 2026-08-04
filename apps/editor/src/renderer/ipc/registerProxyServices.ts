@@ -27,6 +27,7 @@ import {
 import { ServiceChannels, type ServiceChannelName } from '../../shared/ipc/channelNames.js'
 import {
   ILogFilesService,
+  IDiagnosticsService,
   IPerformanceMarksService,
   IPingService,
   IUsageService,
@@ -96,6 +97,7 @@ export const PROXY_SERVICE_BINDINGS: readonly ProxyServiceBinding[] = [
   { id: IExchangeRateService, channel: ServiceChannels.ExchangeRate },
   { id: IResourceAccessService, channel: ServiceChannels.ResourceAccess },
   { id: IEnvironmentSnapshotService, channel: ServiceChannels.EnvironmentSnapshot },
+  { id: IDiagnosticsService, channel: ServiceChannels.Diagnostics },
 ]
 
 export function registerProxyChannelServices(

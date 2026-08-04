@@ -221,3 +221,78 @@ export interface IExchangeRateService {
 }
 
 export const IExchangeRateService = createDecorator<IExchangeRateService>('exchangeRateService')
+
+// -------- Error Sink (renderer → main structured error records → errors.jsonl) --------
+
+/**
+ * One structured error occurrence (already fingerprinted, dedup-merged and
+ * redacted by the producer). `source` / `appVersion` are NOT on the wire: the
+ * main receiver stamps them authoritatively (per-window wrapper knows the
+ * BrowserWindow id) so a renderer cannot forge another window's records.
+ */
+export interface WireErrorRecord {
+  readonly v: 1
+  /** Epoch ms of the latest occurrence folded into this record. */
+  readonly ts: number
+  /** Event name, e.g. 'unhandledError'. */
+  readonly event: string
+  /** Stable short fingerprint (`func@file`) for grouping across sessions. */
+  readonly fingerprint: string
+  /** How many occurrences this record folds. */
+  readonly count: number
+  /** Redacted message (first line). */
+  readonly message: string
+  /** Redacted stack, when available. */
+  readonly stack?: string
+  /** Producer's session id (renderer bootstrap uuid / main session id). */
+  readonly sessionId: string
+  /** Extra scalar dimensions supplied by the reporter (e.g. acp sessionId, agent kind). */
+  readonly dimensions?: { readonly [key: string]: string | number | boolean }
+}
+
+/**
+ * Receives structured error records from any process and persists them to
+ * `<userData>/logs/<session>/errors.jsonl`. Main-process errors are recorded
+ * through the same implementation (see ErrorSinkMainService.recordLocal).
+ */
+export interface IErrorSinkService {
+  readonly _serviceBrand: undefined
+  ingestErrors(records: readonly WireErrorRecord[]): Promise<void>
+}
+
+export const IErrorSinkService = createDecorator<IErrorSinkService>('errorSinkService')
+
+// -------- Diagnostics (abnormal-exit report, crash dumps, system info) --------
+
+/** Structured form of the previous session's abnormal exit (sentinel + crashpad). */
+export interface AbnormalExitInfo {
+  readonly previousSessionId: string
+  readonly previousStartedAt: number
+  /** Absolute paths of crash dumps written since the previous session started. */
+  readonly crashDumps: readonly string[]
+}
+
+/**
+ * Diagnostics facade. The abnormal-exit report has consume-once semantics: the
+ * first window to ask surfaces the notification, later windows get null (same
+ * pattern as IDisposableLeakService.consumePendingReport).
+ */
+export interface IDiagnosticsService {
+  readonly _serviceBrand: undefined
+  consumeAbnormalExitReport(): Promise<AbnormalExitInfo | null>
+  /** Reveal the crash-dump directory (or the newest dump in it) in the OS shell. */
+  revealCrashesFolder(): Promise<void>
+  /**
+   * Build the markdown diagnostics summary (versions / system info / extensions /
+   * top error fingerprints from errors.jsonl) for the Report Issue flow.
+   */
+  collectIssueReport(): Promise<string>
+  /**
+   * Write a diagnostics zip (sysinfo + recent errors.jsonl + tail of recent
+   * session logs + crash-dump listing) under <userData>/diagnostics/, reveal it
+   * in the OS shell, and return its absolute path.
+   */
+  exportDiagnosticsZip(): Promise<string>
+}
+
+export const IDiagnosticsService = createDecorator<IDiagnosticsService>('diagnosticsService')

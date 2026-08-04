@@ -42,6 +42,8 @@ import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { IRemoteSchemaService } from '../../shared/ipc/remoteSchemaService.js'
 import type { IResourceAccessService } from '../../shared/ipc/resourceAccessService.js'
 import type { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapshotService.js'
+import type { ErrorSinkMainService } from '../services/telemetry/errorSinkMainService.js'
+import type { DiagnosticsMainService } from '../services/diagnostics/diagnosticsMainService.js'
 import type { IHostServiceWire } from '@universe-editor/platform'
 import type { RecentWorkspacesMainService } from '../services/workspace/recentWorkspacesMainService.js'
 import type { SessionSwitcherMainService } from '../services/sessionSwitcher/sessionSwitcherMainService.js'
@@ -76,6 +78,17 @@ export interface ApplicationServices {
   readonly exchangeRate: IExchangeRateService
   readonly resourceAccess: IResourceAccessService
   readonly environmentSnapshot: IEnvironmentSnapshotService
+  /**
+   * Concrete (not interface) type: the IPC bootstrap wraps it per-window via
+   * createWindowScopedErrorSink to stamp the authoritative source window.
+   */
+  readonly errorSink: ErrorSinkMainService
+  /**
+   * Concrete (not interface) type: the bootstrap feeds it the abnormal-exit
+   * report before any window can consume it (setAbnormalExitReport is
+   * main-internal, not on the wire contract).
+   */
+  readonly diagnostics: DiagnosticsMainService
   /**
    * Concrete (not interface) type: WindowMainService calls registerWindow /
    * unregisterWindow on it, which are main-internal and not on the wire contract.

@@ -1,2 +1,5 @@
 export * from './telemetryService.js'
 export * from './noopTelemetryService.js'
+export * from './errorFingerprint.js'
+export * from './errorRedaction.js'
+export * from './errorAggregation.js'

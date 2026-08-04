@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ContributionsRegistry, WorkbenchPhase } from '@universe-editor/platform'
+import { AbnormalExitNotificationContribution } from '../AbnormalExitNotificationContribution.js'
 import { JsonSchemaContextContribution } from '../JsonSchemaContextContribution.js'
 import { JsonLanguageFeaturesContribution } from '../JsonLanguageFeaturesContribution.js'
 import { InlineCompletionContribution } from '../InlineCompletionContribution.js'
@@ -75,6 +76,14 @@ import { TextMateContribution } from '../TextMateContribution.js'
 ContributionsRegistry.registerContribution(
   'workbench.contrib.jsonSchemaContext',
   JsonSchemaContextContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Abnormal-exit notification: the report is consume-once on the main side, so
+// the first window to reach AfterRestore surfaces it; later windows get null.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.abnormalExitNotification',
+  AbnormalExitNotificationContribution,
   WorkbenchPhase.AfterRestore,
 )
 

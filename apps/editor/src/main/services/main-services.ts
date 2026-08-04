@@ -18,7 +18,9 @@ import {
   registerSingletonFactory,
   SyncDescriptor,
 } from '@universe-editor/platform'
+import { app } from 'electron'
 import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { ILoggerService, createNamedLogger } from '@universe-editor/platform'
 import { IFileService } from '@universe-editor/platform'
 import { IFileSearchService } from '@universe-editor/platform'
@@ -28,6 +30,7 @@ import { IEnvironmentMainService } from '../environment/environmentMainService.j
 import { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 import {
   IDisposableLeakService,
+  IDiagnosticsService,
   IExchangeRateService,
   IPerformanceMarksService,
   IPingService,
@@ -88,6 +91,7 @@ import { RemoteSchemaMainService } from './remoteSchema/remoteSchemaMainService.
 import { ExchangeRateMainService } from './exchangeRate/exchangeRateMainService.js'
 import { ResourceAccessMainService } from './resourceAccess/resourceAccessMainService.js'
 import { EnvironmentSnapshotMainService } from './environmentSnapshot/environmentSnapshotMainService.js'
+import { DiagnosticsMainService } from './diagnostics/diagnosticsMainService.js'
 import { IWatcherProcessService, WatcherProcessClient } from './fileWatcher/watcherProcessClient.js'
 import { createWatcherUtilityTransportFactory } from './fileWatcher/watcherUtilityTransport.js'
 
@@ -247,6 +251,30 @@ registerSingleton(
   IEnvironmentSnapshotService,
   new SyncDescriptor<IEnvironmentSnapshotService>(EnvironmentSnapshotMainService, [], false),
 )
+registerSingletonFactory(IDiagnosticsService, (acc) => {
+  const extensionManagement = acc.get(IExtensionManagementService)
+  return new DiagnosticsMainService(
+    {
+      crashDumpsDir: app.getPath('crashDumps'),
+      logRoot: join(app.getPath('userData'), 'logs'),
+      diagnosticsDir: join(app.getPath('userData'), 'diagnostics'),
+      mode: process.env['UNIVERSE_E2E'] === '1' ? 'e2e' : app.isPackaged ? 'release' : 'dev',
+      revealInShell: process.env['UNIVERSE_E2E'] !== '1',
+      listExtensions: async () => {
+        const [installed, builtin] = await Promise.all([
+          extensionManagement.getInstalled(),
+          extensionManagement.listBuiltinExtensions(),
+        ])
+        return [...installed, ...builtin].map((e) => ({
+          id: e.identifier,
+          version: e.version,
+          source: e.source,
+        }))
+      },
+    },
+    acc.get(ILoggerService),
+  )
+})
 registerSingletonFactory(IWatcherProcessService, (acc) => {
   const loggerService = acc.get(ILoggerService)
   const logger = createNamedLogger(loggerService, { id: 'fileWatcher', name: 'File Watcher' })

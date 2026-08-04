@@ -38,6 +38,7 @@ import {
   WorkspaceTrustManagementService,
   type IWorkspaceServiceWire,
   ConfigurationService,
+  ConfigurationTarget,
   ContributionService,
   IContributionService,
   ILoggerService,
@@ -45,11 +46,11 @@ import {
   IUndoRedoService,
   UndoRedoService,
   ITelemetryService,
-  NoopTelemetryService,
   Severity,
   ProxyChannel,
   DisposableStore,
   DisposableTracker,
+  computeErrorFingerprint,
   localize,
   mark,
   markAsSingleton,
@@ -61,7 +62,11 @@ import {
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../shared/ipc/channelNames.js'
 import { PerfMarks } from '../shared/perf/marks.js'
-import { IDisposableLeakService, ILogChannelService } from '../shared/ipc/services.js'
+import {
+  IDisposableLeakService,
+  IErrorSinkService,
+  ILogChannelService,
+} from '../shared/ipc/services.js'
 import { IUpdateService } from '../shared/ipc/updateService.js'
 import { ITerminalService } from '../shared/ipc/terminalService.js'
 import { IExtensionManagementService } from '../shared/ipc/extensionManagementService.js'
@@ -82,6 +87,10 @@ import { DISPOSABLE_LEAK_REPORT_KEY, E2E_PROBE_ENABLED_KEY } from '../shared/e2e
 import { createRendererIpcService } from './ipc/bootstrap.js'
 import { registerProxyChannelServices } from './ipc/registerProxyServices.js'
 import { installRendererErrorHandlers, isBenignError } from './errors.js'
+import {
+  ERROR_COLLECTION_ENABLED_KEY,
+  TelemetryClientService,
+} from './services/telemetry/telemetryClientService.js'
 import { RendererLoggerService } from './services/log/rendererLoggerService.js'
 import { CommandService } from './services/command/CommandService.js'
 import { EditorService } from './services/editor/EditorService.js'
@@ -228,8 +237,9 @@ async function bootstrapWorkbench(): Promise<void> {
 
   const services = new ServiceCollection()
 
-  // Telemetry: noop sink by default; wire real sinks via ITelemetrySinkRegistry later.
-  const telemetry = new NoopTelemetryService()
+  // Telemetry: errors are folded (same-stack dedup + count) and shipped to the
+  // main-side error sink (errors.jsonl). The sink binds once IPC is up below.
+  const telemetry = workbenchStore.add(new TelemetryClientService())
   services.set(ITelemetryService, telemetry)
   setErrorTelemetryHook((name, data) => telemetry.publicLogError(name, data))
 
@@ -264,6 +274,12 @@ async function bootstrapWorkbench(): Promise<void> {
   const ipcService = workbenchStore.add(createRendererIpcService())
   services.set(IIpcService, ipcService)
   mark(PerfMarks.rendererDidCreateIpc)
+
+  // Errors raised before this point stayed in the telemetry buffer; binding the
+  // main-side sink flushes them and streams everything from here on.
+  telemetry.bindSink(
+    ProxyChannel.toService<IErrorSinkService>(ipcService.getChannel(ServiceChannels.ErrorSink)),
+  )
 
   // Reverse channel: the main process invokes this before closing a window /
   // quitting so the renderer can run its lifecycle veto chain (e.g. confirm
@@ -389,6 +405,22 @@ async function bootstrapWorkbench(): Promise<void> {
   // IStorageService so user settings persist across restarts.
   const configurationService = workbenchStore.add(new ConfigurationService())
   services.set(IConfigurationService, configurationService)
+
+  // Error-collection settings gate. Read lazily after the configuration
+  // service exists; flipping the setting off drops any pending records.
+  const syncErrorCollectionGate = (): void =>
+    telemetry.setCollectionEnabled(
+      configurationService.getValueForTarget<boolean>(
+        ERROR_COLLECTION_ENABLED_KEY,
+        ConfigurationTarget.User,
+      ) !== false,
+    )
+  syncErrorCollectionGate()
+  workbenchStore.add(
+    configurationService.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration(ERROR_COLLECTION_ENABLED_KEY)) syncErrorCollectionGate()
+    }),
+  )
 
   // AI model facade: wraps the main-process transport proxy and reassembles
   // streams. Provider groups, per-model config and the active model selections
@@ -556,14 +588,41 @@ async function bootstrapWorkbench(): Promise<void> {
   const notificationService = workbenchStore.add(instantiation.createInstance(NotificationService))
   services.set(INotificationService, notificationService)
   // Route unhandled errors to the sticky Error toast so they're visible to users.
+  // Same-fingerprint toasts are suppressed for a cooldown (VSCode dedups on
+  // identical messages within 1s; fingerprinting survives line-noise better),
+  // and every toast carries a Copy Details action so a user report includes
+  // the stack without needing DevTools.
+  const ERROR_TOAST_COOLDOWN_MS = 5000
+  const recentErrorToasts = new Map<string, number>()
   setUnexpectedErrorHandler((e) => {
     if (isBenignError(e)) return
-    const msg = e instanceof Error ? (e.stack ?? e.message) : String(e)
-    rootLogger.error(msg)
+    const detail = e instanceof Error ? (e.stack ?? e.message) : String(e)
+    rootLogger.error(detail)
+    const message = e instanceof Error ? e.message : String(e)
+    const fingerprint =
+      e instanceof Error ? computeErrorFingerprint(e.stack, e.message) : message.slice(0, 80)
+    const now = Date.now()
+    const lastShown = recentErrorToasts.get(fingerprint) ?? 0
+    if (now - lastShown < ERROR_TOAST_COOLDOWN_MS) return
+    recentErrorToasts.set(fingerprint, now)
+    // Bound the map: drop entries whose cooldown has long expired.
+    if (recentErrorToasts.size > 50) {
+      for (const [key, ts] of recentErrorToasts) {
+        if (now - ts > ERROR_TOAST_COOLDOWN_MS * 10) recentErrorToasts.delete(key)
+      }
+    }
     notificationService.notify({
       severity: Severity.Error,
-      message: e instanceof Error ? e.message : String(e),
+      message,
       sticky: true,
+      actions: [
+        {
+          label: localize('errorToast.copyDetails', 'Copy Details'),
+          run: () => {
+            void navigator.clipboard.writeText(`${message}\n\n${detail}`)
+          },
+        },
+      ],
     })
   })
 

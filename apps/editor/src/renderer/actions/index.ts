@@ -242,7 +242,13 @@ import {
   ShowInteractionPerformanceAction,
 } from './performanceActions.js'
 import { ToggleKeybindingsTroubleshootingAction } from './developerActions.js'
-import { OpenDocsAction, OpenEditorGuideAction, OpenAgentGuideAction } from './helpActions.js'
+import {
+  OpenDocsAction,
+  OpenEditorGuideAction,
+  OpenAgentGuideAction,
+  ReportIssueAction,
+  ExportDiagnosticsAction,
+} from './helpActions.js'
 import {
   OpenMarkdownPreviewAction,
   OpenMarkdownPreviewToSideAction,
@@ -662,6 +668,8 @@ registerAction2(CheckForUpdatesAction)
 registerAction2(DownloadUpdateAction)
 registerAction2(InstallUpdateAction)
 registerAction2(ShowReleaseNotesAction)
+registerAction2(ReportIssueAction)
+registerAction2(ExportDiagnosticsAction)
 
 // Terminal
 registerAction2(OpenInTerminalAction)

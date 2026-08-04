@@ -46,6 +46,8 @@ export const ServiceChannels = {
   ExchangeRate: 'exchangeRate',
   ResourceAccess: 'resourceAccess',
   EnvironmentSnapshot: 'environmentSnapshot',
+  ErrorSink: 'errorSink',
+  Diagnostics: 'diagnostics',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]
