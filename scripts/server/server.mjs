@@ -27,6 +27,10 @@ import { createReadStream, statSync, readFileSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { resolve, join, normalize, extname, sep } from 'node:path'
 
+// 服务器自身版本，手动维护：改了 server.mjs / galleryPublish.mjs 的行为就 +1。
+// 启动横幅与健康检查响应都会带上，用来确认服务器上跑的到底是哪版代码。
+const SERVER_VERSION = '1'
+
 function parseArgs(argv) {
   const out = {}
   for (let i = 0; i < argv.length; i++) {
@@ -560,9 +564,9 @@ async function handle(req, res) {
     return send(req, res, 400, 'Bad Request')
   }
 
-  // 根路径给个健康检查响应，方便 curl / 负载均衡探活。
+  // 根路径给个健康检查响应，方便 curl / 负载均衡探活；带版本号便于确认部署版本。
   if (pathname === '/' && config.base !== '/') {
-    return send(req, res, 200, 'universe-update-server ok\n')
+    return send(req, res, 200, `universe-update-server v${SERVER_VERSION} ok\n`)
   }
 
   if (!pathname.startsWith(config.base)) {
@@ -674,7 +678,7 @@ server.on('error', (err) => {
 })
 
 server.listen(config.port, config.host, () => {
-  console.log(`\n📡 Universe 更新服务器已启动`)
+  console.log(`\n📡 Universe 更新服务器已启动 (v${SERVER_VERSION})`)
   console.log(`   监听:   http://${config.host}:${config.port}`)
   console.log(`   更新根: ${config.root}`)
   const galleryExists = (() => {

@@ -177,7 +177,7 @@ test('latest.yml 禁缓存（回归保护）', async () => {
 test('根路径 / 返回健康检查', async () => {
   const r = await httpGet('/')
   assert.equal(r.status, 200)
-  assert.match(r.body, /universe-update-server ok/)
+  assert.match(r.body, /universe-update-server v\d+ ok/)
 })
 
 test('穿越尝试不泄露 root 外文件', async () => {

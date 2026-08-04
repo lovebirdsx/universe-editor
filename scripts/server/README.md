@@ -164,6 +164,9 @@ schtasks /Query /TN UniverseUpdateServer /V /FO LIST   # 状态
 
 改动一般向后兼容，可热替换；重启的一两秒内 systemd / 计划任务会自动拉起，不影响客户端正在进行的自动更新。
 
+> 改了服务器行为时，顺手把 `server.mjs` 顶部的 `SERVER_VERSION` +1（手动维护）。启动横幅
+> 和健康检查响应（`curl http://<IP>/`）都会带上它，能立刻确认服务器跑的是哪版代码。
+
 先在仓库侧 `pnpm server:bundle` 重新打包，让服务器拿到新产物：服务器上有仓库就 `git pull && pnpm install && pnpm server:bundle`，否则从开发机 `scp scripts/server/dist/server.js <user>@<IP>:~/`。然后：
 
 ### Ubuntu
@@ -198,6 +201,7 @@ Copy-Item scripts\server\dist\server.js C:\universe-editor\app\server.mjs -Force
 服务器本机（把 `<name>` 换成实际 .blockmap 文件名）：
 
 ```bash
+curl -i http://localhost/                                     # 200，响应体含服务器版本号
 curl -i http://localhost/universe-editor/                    # 200 text/html，下载页（目录回退 index.html）
 curl -i http://localhost/universe-editor/latest.yml          # 200，响应头含 no-store
 curl -r 0-99 -i http://localhost/universe-editor/<name>      # 206 + Content-Range
