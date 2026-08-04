@@ -1,5 +1,28 @@
 [
   {
+    "version": "0.1.59",
+    "date": "2026-08-04",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "为side task生成标题时附加上下文引用",
+          "Fork支持从会话末尾/命令面板触发",
+          "加入agent会话连接中的提示，为会话创建添加性能分析工具",
+          "markdown代码块预览支持复制"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "注入Claude配置环境变量到ACP启动env，解决本地没有安装过claude命令行工具时，启动session会跳网页认证的bug"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.58",
     "date": "2026-08-03",
     "groups": [
