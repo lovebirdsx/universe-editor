@@ -246,6 +246,15 @@ export interface IAcpSessionService {
    */
   deleteOnAgent(sessionId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'>
   /**
+   * Resolve the session's transcript file path, history cache first, then a
+   * lazy `session/list` roundtrip against the owning agent. Needed because a
+   * session created during this window's lifetime only gains `transcriptPath`
+   * on the next hydrate sweep — without this the reveal-in-OS action has
+   * nothing to open for a running session. A resolved path is written back to
+   * history. Returns undefined when no path can be determined.
+   */
+  resolveTranscriptPath(sessionId: string): Promise<string | undefined>
+  /**
    * Manually rename a session by its local or agent-issued id. A live (non
    * read-only) session is renamed through the view-model so the title is pushed
    * to the agent and protected from hydrate; a history-only row is renamed
@@ -1283,6 +1292,10 @@ export class AcpSessionService
 
   deleteOnAgent(sessionId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
     return this._coordinator.deleteOnAgent(sessionId)
+  }
+
+  resolveTranscriptPath(sessionId: string): Promise<string | undefined> {
+    return this._coordinator.fetchTranscriptPath(sessionId)
   }
 
   renameSession(sessionId: string, title: string): boolean {

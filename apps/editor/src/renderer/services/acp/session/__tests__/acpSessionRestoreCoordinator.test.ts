@@ -920,6 +920,139 @@ describe('AcpSessionRestoreCoordinator — deleteOnAgent', () => {
   })
 })
 
+describe('AcpSessionRestoreCoordinator — fetchTranscriptPath', () => {
+  let coordinator: AcpSessionRestoreCoordinator | undefined
+
+  afterEach(() => {
+    coordinator?.dispose()
+    coordinator = undefined
+  })
+
+  function sessionInfo(sessionId: string, transcriptPath?: string): SessionInfo {
+    return {
+      sessionId,
+      cwd: 'C:/ws',
+      title: sessionId,
+      updatedAt: null,
+      ...(transcriptPath !== undefined ? { _meta: { transcriptPath } } : {}),
+    } as unknown as SessionInfo
+  }
+
+  it('returns undefined for an unknown session id without connecting', async () => {
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
+    coordinator = built.coordinator
+    await built.history.initialize()
+    const result = await coordinator.fetchTranscriptPath('does-not-exist')
+    expect(result).toBeUndefined()
+    expect(built.client.connectCalls).toHaveLength(0)
+  })
+
+  it('returns the cached history path without any agent roundtrip', async () => {
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
+    coordinator = built.coordinator
+    await built.history.initialize()
+    const entry = built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'agent-x',
+      title: 'x',
+      transcriptPath: '/cached/agent-x.jsonl',
+    })
+    const result = await coordinator.fetchTranscriptPath(entry.id)
+    expect(result).toBe('/cached/agent-x.jsonl')
+    expect(built.client.connectCalls).toHaveLength(0)
+  })
+
+  it('resolves via session/list and writes the path back to history', async () => {
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
+    coordinator = built.coordinator
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as unknown as AgentCapabilities,
+      listPages: [[sessionInfo('agent-x', '/live/agent-x.jsonl')]],
+    })
+    await built.history.initialize()
+    const entry = built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'agent-x',
+      title: 'x',
+    })
+    const result = await coordinator.fetchTranscriptPath(entry.id)
+    expect(result).toBe('/live/agent-x.jsonl')
+    expect(built.history.get(entry.id)?.transcriptPath).toBe('/live/agent-x.jsonl')
+    // Background lookups must never surface a spawn-failure toast.
+    expect(built.client.connectCalls.every((c) => c.silent === true)).toBe(true)
+    expect(built.client.disposed.every((d) => d)).toBe(true)
+  })
+
+  it('returns undefined when the agent does not advertise sessionCapabilities.list', async () => {
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
+    coordinator = built.coordinator
+    built.client.agentOptions.set('fake', { capabilities: {} })
+    await built.history.initialize()
+    const entry = built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'agent-x',
+      title: 'x',
+    })
+    const result = await coordinator.fetchTranscriptPath(entry.id)
+    expect(result).toBeUndefined()
+    expect(built.client.agents.at(-1)?.listCalls).toHaveLength(0)
+  })
+
+  it('returns undefined when the agent lists the session without a transcript path', async () => {
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
+    coordinator = built.coordinator
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as unknown as AgentCapabilities,
+      listPages: [[sessionInfo('agent-x')]],
+    })
+    await built.history.initialize()
+    const entry = built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'agent-x',
+      title: 'x',
+    })
+    const result = await coordinator.fetchTranscriptPath(entry.id)
+    expect(result).toBeUndefined()
+    expect(built.history.get(entry.id)?.transcriptPath).toBeUndefined()
+  })
+
+  it('walks cursor pages until the session is found', async () => {
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
+    coordinator = built.coordinator
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as unknown as AgentCapabilities,
+      listPages: [[sessionInfo('other')], [sessionInfo('agent-x', '/live/agent-x.jsonl')]],
+    })
+    await built.history.initialize()
+    const entry = built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'agent-x',
+      title: 'x',
+    })
+    const result = await coordinator.fetchTranscriptPath(entry.id)
+    expect(result).toBe('/live/agent-x.jsonl')
+    expect(built.client.agents.at(-1)?.listCalls).toHaveLength(2)
+  })
+
+  it('returns undefined (and does not throw) when session/list fails', async () => {
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
+    coordinator = built.coordinator
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as unknown as AgentCapabilities,
+      listError: { code: -32603, message: 'boom' },
+    })
+    await built.history.initialize()
+    const entry = built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'agent-x',
+      title: 'x',
+    })
+    const result = await coordinator.fetchTranscriptPath(entry.id)
+    expect(result).toBeUndefined()
+    expect(built.client.disposed[built.client.disposed.length - 1]).toBe(true)
+  })
+})
+
 describe('AcpSessionRestoreCoordinator — notifyFailure', () => {
   let coordinator: AcpSessionRestoreCoordinator | undefined
 

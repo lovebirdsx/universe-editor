@@ -768,6 +768,9 @@ describe('RevealAgentSessionInOSAction', () => {
   function build(opts: { entries: readonly AcpSessionHistoryEntry[]; activeSessionId?: string }) {
     const showItemInFolder = vi.fn(async () => {})
     const notify = vi.fn()
+    const resolveTranscriptPath = vi.fn(
+      async (_sessionId: string): Promise<string | undefined> => undefined,
+    )
     const activeSession = opts.activeSessionId
       ? ({ id: opts.activeSessionId } as IAcpSession)
       : undefined
@@ -775,6 +778,7 @@ describe('RevealAgentSessionInOSAction', () => {
     const sessions = {
       _serviceBrand: undefined,
       activeSession: observableValue<IAcpSession | undefined>('test.active', activeSession),
+      resolveTranscriptPath,
     } as unknown as IAcpSessionService
     const history = {
       _serviceBrand: undefined,
@@ -793,7 +797,7 @@ describe('RevealAgentSessionInOSAction', () => {
     services.set(IHostService, host)
     services.set(INotificationService, notification)
     const inst = new InstantiationService(services)
-    return { inst, showItemInFolder, notify }
+    return { inst, showItemInFolder, notify, resolveTranscriptPath }
   }
 
   async function run(
@@ -809,6 +813,8 @@ describe('RevealAgentSessionInOSAction', () => {
     await run(b, { sessionId: 'sess-1' })
     expect(b.showItemInFolder).toHaveBeenCalledWith('/home/u/.claude/projects/x/sess-1.jsonl')
     expect(b.notify).not.toHaveBeenCalled()
+    // Cached path wins — no on-demand session/list roundtrip.
+    expect(b.resolveTranscriptPath).not.toHaveBeenCalled()
   })
 
   it('falls back to the active session when no arg is given', async () => {
@@ -818,10 +824,23 @@ describe('RevealAgentSessionInOSAction', () => {
     expect(b.showItemInFolder).toHaveBeenCalledWith('/p/sess-1.jsonl')
   })
 
-  it('notifies (and does not reveal) when the session has no transcript path', async () => {
+  it('resolves the transcript path on demand when the history row has none', async () => {
+    // A session created during this window's lifetime has no transcriptPath on
+    // its history row until the next hydrate sweep — reveal must still work.
+    const entry = makeEntry({})
+    const b = build({ entries: [entry] })
+    b.resolveTranscriptPath.mockResolvedValue('/live/sess-1.jsonl')
+    await run(b, { sessionId: 'sess-1' })
+    expect(b.resolveTranscriptPath).toHaveBeenCalledWith('sess-1')
+    expect(b.showItemInFolder).toHaveBeenCalledWith('/live/sess-1.jsonl')
+    expect(b.notify).not.toHaveBeenCalled()
+  })
+
+  it('notifies (and does not reveal) when no transcript path resolves', async () => {
     const entry = makeEntry({})
     const b = build({ entries: [entry] })
     await run(b, { sessionId: 'sess-1' })
+    expect(b.resolveTranscriptPath).toHaveBeenCalledWith('sess-1')
     expect(b.showItemInFolder).not.toHaveBeenCalled()
     expect(b.notify).toHaveBeenCalledTimes(1)
   })

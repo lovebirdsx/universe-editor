@@ -726,10 +726,14 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
                 history.remove(entry.id)
               })()
             }
+            // A live session has no transcriptPath on its history row until the
+            // next hydrate sweep, but the reveal action resolves it on demand —
+            // so only a history-only row without a path stays disabled.
             const hasTranscript =
-              entry.transcriptPath !== undefined &&
-              entry.transcriptPath !== null &&
-              entry.transcriptPath.length > 0
+              liveSession !== undefined ||
+              (entry.transcriptPath !== undefined &&
+                entry.transcriptPath !== null &&
+                entry.transcriptPath.length > 0)
             const openContextMenu = (e: ReactMouseEvent) => {
               e.preventDefault()
               e.stopPropagation()

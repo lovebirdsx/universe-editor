@@ -98,6 +98,9 @@ function makeService(
     async deleteOnAgent(): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
       return 'unsupported'
     },
+    async resolveTranscriptPath(): Promise<string | undefined> {
+      return undefined
+    },
     renameSession(): boolean {
       return false
     },

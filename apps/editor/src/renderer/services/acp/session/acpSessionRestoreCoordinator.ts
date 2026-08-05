@@ -273,6 +273,64 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     this._notification.notify({ severity: Severity.Error, message })
   }
 
+  /**
+   * Resolve a session's transcript file path on demand. The path normally
+   * reaches history via the hydrate sweep's `session/list` (`_meta.transcriptPath`),
+   * but a session created during this window's lifetime has no transcript row
+   * until the next sweep — so the reveal-in-OS action resolves it lazily here.
+   * A found path is written back to history so later lookups are cache hits.
+   * Returns undefined when the agent lacks `sessionCapabilities.list`, the
+   * session is not listed, or the agent reports no transcript for it.
+   */
+  async fetchTranscriptPath(sessionId: string): Promise<string | undefined> {
+    const entry = this._history.get(sessionId)
+    if (!entry) return undefined
+    const cached = entry.transcriptPath
+    if (cached !== undefined && cached.length > 0) return cached
+    let conn: IAcpClientConnection | undefined
+    try {
+      conn = await this._client.connect(
+        entry.agentId,
+        entry.cwd !== undefined ? { cwd: entry.cwd, silent: true } : { silent: true },
+      )
+      const init = await withTimeout(
+        conn.initializeResult,
+        HYDRATE_TIMEOUT_MS,
+        'ACP transcript lookup initialize',
+      )
+      if (init.agentCapabilities?.sessionCapabilities?.list == null) return undefined
+      let cursor: string | null | undefined
+      for (let page = 0; page < HYDRATE_MAX_PAGES; page++) {
+        const params: ListSessionsRequest = {
+          cwd: entry.cwd ?? null,
+          ...(cursor !== undefined ? { cursor } : {}),
+        }
+        const resp: ListSessionsResponse = await withTimeout(
+          conn.conn.listSessions(params),
+          HYDRATE_TIMEOUT_MS,
+          'ACP transcript lookup session/list',
+        )
+        const hit = resp.sessions.find((s) => s.sessionId === entry.sessionIdOnAgent)
+        if (hit) {
+          const transcriptPath = toBulkMergeInfo(hit).transcriptPath
+          if (typeof transcriptPath === 'string' && transcriptPath.length > 0) {
+            this._history.setHistoryTranscriptPath(sessionId, transcriptPath)
+            return transcriptPath
+          }
+          return undefined
+        }
+        cursor = resp.nextCursor ?? undefined
+        if (!cursor) return undefined
+      }
+      return undefined
+    } catch (err) {
+      this._logger.warn(`fetchTranscriptPath failed for ${sessionId}: ${(err as Error).message}`)
+      return undefined
+    } finally {
+      if (conn) conn.dispose()
+    }
+  }
+
   private async _loadPendingRestore(): Promise<void> {
     try {
       const sessionId = await this._storage.get<string>(

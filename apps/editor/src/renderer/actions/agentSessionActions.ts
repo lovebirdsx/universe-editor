@@ -567,8 +567,9 @@ export class RenameAgentSessionAction extends Action2 {
  * Reveal a session's transcript file in the OS file manager. Target resolution:
  *  1. explicit `{ sessionId }` arg (session list context menu),
  *  2. the active session (command palette / sidebar chat).
- * No-op when the session has no transcript path (agents without a per-session
- * transcript file, or ephemeral threads, report none).
+ * The transcript path comes from the history entry; a session created during
+ * this window's lifetime has none until the next hydrate sweep, so it is
+ * resolved on demand via the owning agent's `session/list` before giving up.
  */
 export class RevealAgentSessionInOSAction extends Action2 {
   static readonly ID = 'workbench.action.agent.revealSessionInOS'
@@ -595,8 +596,11 @@ export class RevealAgentSessionInOSAction extends Action2 {
         : sessions.activeSession.get()?.id
     if (sessionId === undefined) return
 
-    const transcriptPath = history.get(sessionId)?.transcriptPath
-    if (transcriptPath === undefined || transcriptPath === null || transcriptPath.length === 0) {
+    let transcriptPath = history.get(sessionId)?.transcriptPath
+    if (transcriptPath === undefined || transcriptPath.length === 0) {
+      transcriptPath = await sessions.resolveTranscriptPath(sessionId)
+    }
+    if (transcriptPath === undefined || transcriptPath.length === 0) {
       notifications.notify({
         severity: Severity.Info,
         message: localize(

@@ -283,6 +283,14 @@ export interface IAcpSessionHistoryService {
    */
   setHistoryPinned(sessionId: string, pinned: boolean): void
   /**
+   * Record the session's transcript file path (see
+   * {@link AcpSessionHistoryEntry.transcriptPath}). Idempotent; no-op if the id
+   * is unknown or the value is unchanged. Used by the on-demand reveal lookup —
+   * the path normally arrives via the hydrate sweep, which a session created
+   * during this window's lifetime has not seen yet.
+   */
+  setHistoryTranscriptPath(sessionId: string, path: string): void
+  /**
    * Persist the session's MCP whitelist ({@link AcpSessionHistoryEntry.mcpServerNames}).
    * `null` clears the pin (back to inheriting the defaults). No-op if the id is
    * unknown or the value is unchanged.
@@ -488,6 +496,10 @@ export class AcpSessionHistoryService
     const carriedRetractedMessageIds =
       entry.retractedMessageIds ??
       (existingIdx >= 0 ? this._state[existingIdx]!.retractedMessageIds : undefined)
+    // Same carry-over for the transcript path: re-adding must not drop it.
+    const carriedTranscriptPath =
+      entry.transcriptPath ??
+      (existingIdx >= 0 ? this._state[existingIdx]!.transcriptPath : undefined)
     const next: AcpSessionHistoryEntry = {
       id,
       agentId: entry.agentId,
@@ -514,6 +526,7 @@ export class AcpSessionHistoryService
       ...(carriedRetractedMessageIds !== undefined
         ? { retractedMessageIds: carriedRetractedMessageIds }
         : {}),
+      ...(carriedTranscriptPath !== undefined ? { transcriptPath: carriedTranscriptPath } : {}),
       ...(existingAiTitle === true ? { aiTitle: true } : {}),
       ...(existingManualTitle === true ? { manualTitle: true } : {}),
       // Same carry-over for the archive/pin flags: re-adding the same session
@@ -714,6 +727,18 @@ export class AcpSessionHistoryService
     if ((cur.pinned === true) === pinned) return
     const { pinned: _drop, ...base } = cur
     const next: AcpSessionHistoryEntry = pinned ? { ...base, pinned: true } : base
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  setHistoryTranscriptPath(sessionId: string, path: string): void {
+    if (path.length === 0) return
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if (cur.transcriptPath === path) return
+    const next: AcpSessionHistoryEntry = { ...cur, transcriptPath: path }
     this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()
