@@ -398,6 +398,15 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Configure glob patterns for excluding files and folders in searches and quick open. Inherits files.exclude.',
             ),
           },
+          'search.threads': {
+            type: 'number',
+            default: 0,
+            minimum: 0,
+            description: localize(
+              'settings.search.threads.description',
+              'Number of threads used for workspace text search. 0 means automatic (CPU cores minus 2).',
+            ),
+          },
         },
       }),
     )

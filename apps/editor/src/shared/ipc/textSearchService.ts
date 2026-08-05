@@ -17,6 +17,8 @@ export interface ITextSearchMainQuery extends ITextSearchQuery {
   readonly root: UriComponents
   readonly configurationExcludes: readonly string[]
   readonly maxFileSizeBytes?: number
+  /** Ripgrep `--threads`; 0/absent = automatic (CPU cores − 2). */
+  readonly threads?: number
 }
 
 export interface ITextSearchMainProgressEvent {

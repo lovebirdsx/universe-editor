@@ -4,10 +4,11 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { tmpdir, cpus } from 'node:os'
 import path from 'node:path'
 import { DisposableTracker, setDisposableTracker, URI } from '@universe-editor/platform'
 import {
+  resolveSearchThreads,
   rgErrorMsgForDisplay,
   resolveRipgrepDiskPath,
   TextSearchMainService,
@@ -214,6 +215,15 @@ describe('TextSearchMainService', () => {
       setDisposableTracker(null)
       svc.dispose()
     }
+  })
+
+  it('resolves search threads from the configured value or CPU cores minus 2', () => {
+    expect(resolveSearchThreads(4)).toBe(4)
+    expect(resolveSearchThreads(3.9)).toBe(3)
+    expect(resolveSearchThreads(undefined)).toBe(Math.max(1, cpus().length - 2))
+    expect(resolveSearchThreads(0)).toBe(Math.max(1, cpus().length - 2))
+    // Degenerate values must never reach ripgrep as a non-positive --threads.
+    expect(resolveSearchThreads(-5)).toBeGreaterThanOrEqual(1)
   })
 
   it('classifies fatal ripgrep stderr but ignores non-fatal path errors', () => {

@@ -5,6 +5,7 @@
 
 import {
   DisposableStore,
+  IConfigurationService,
   IEditorGroupsService,
   ILoggerService,
   ITextSearchService,
@@ -14,6 +15,7 @@ import {
   createNamedLogger,
   markAsSingleton,
   registerSingleton,
+  type IConfigurationService as IConfigurationServiceType,
   type IEditorGroupsService as IEditorGroupsServiceType,
   type IFileMatch,
   type ILogger,
@@ -49,6 +51,7 @@ export class TextSearchService implements ITextSearchService {
     @IExcludeService private readonly _exclude: IExcludeService,
     @IEditorGroupsService private readonly _editorGroups: IEditorGroupsServiceType,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityServiceType,
+    @IConfigurationService private readonly _config: IConfigurationServiceType,
     @ILoggerService loggerService: ILoggerServiceType,
   ) {
     this._logger = createNamedLogger(loggerService, { id: 'search', name: 'Search' })
@@ -130,6 +133,7 @@ export class TextSearchService implements ITextSearchService {
         pattern,
         configurationExcludes:
           opts.useExcludeSettings === false ? [] : this._exclude.getSearchExcludeGlobs(),
+        threads: this._config.get<number>('search.threads', 0) ?? 0,
       })
       opts.onProgress?.(complete.progress)
       this._logger.info(

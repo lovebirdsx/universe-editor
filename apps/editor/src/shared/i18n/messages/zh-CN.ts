@@ -623,6 +623,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.search': '搜索',
   'settings.search.exclude.description':
     '配置搜索和快速打开时要排除的文件和文件夹 glob 模式。继承 files.exclude。',
+  'settings.search.threads.description': '全局搜索使用的线程数。0 表示自动（CPU 内核数减 2）。',
   'settings.search.placeholder': '搜索设置（{count}）',
   'settings.swarm.notifications.enabled':
     '当有新审核进入「需我处理」列表且编辑器窗口未聚焦时，显示系统桌面通知。点击通知会打开该审核。',

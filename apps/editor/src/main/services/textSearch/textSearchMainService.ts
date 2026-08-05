@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn } from 'node:child_process'
+import os from 'node:os'
 import path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { rgPath } from '@vscode/ripgrep'
@@ -46,6 +47,13 @@ const STDERR_LIMIT = 1_000_000
 
 export function resolveRipgrepDiskPath(ripgrepPath: string = rgPath): string {
   return ripgrepPath.replace(/\.asar([\\/])/g, '.asar.unpacked$1')
+}
+
+// Explicit `search.threads` wins; otherwise leave headroom for the app itself
+// instead of letting ripgrep saturate every core.
+export function resolveSearchThreads(requested: number | undefined): number {
+  if (requested !== undefined && requested >= 1) return Math.floor(requested)
+  return Math.max(1, os.cpus().length - 2)
 }
 
 const rgDiskPath = resolveRipgrepDiskPath()
@@ -110,6 +118,7 @@ function buildRgArgs(query: ITextSearchMainQuery): string[] {
   args.push('--follow')
   args.push(query.matchCase ? '--case-sensitive' : '--ignore-case')
   args.push('--crlf')
+  args.push('--threads', String(resolveSearchThreads(query.threads)))
   args.push('--max-filesize', String(query.maxFileSizeBytes ?? DEFAULT_MAX_FILE_SIZE_BYTES))
 
   for (const include of query.includes) {
@@ -225,7 +234,8 @@ export class TextSearchMainService extends Disposable implements ITextSearchMain
     const args = buildRgArgs({ ...query, pattern })
     this._logger.info(
       `textSearch start root=${root.fsPath} includes=${query.includes.length} ` +
-        `excludes=${query.excludes.length} configExcludes=${query.configurationExcludes.length}`,
+        `excludes=${query.excludes.length} configExcludes=${query.configurationExcludes.length} ` +
+        `threads=${resolveSearchThreads(query.threads)}`,
     )
 
     const child = new ManagedChildProcess(spawn(rgDiskPath, args, { cwd: root.fsPath }), {

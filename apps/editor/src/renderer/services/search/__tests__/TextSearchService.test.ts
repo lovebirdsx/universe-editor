@@ -12,6 +12,7 @@ import {
   URI,
   UriIdentityService,
   type IEditorGroupsService,
+  type IConfigurationService,
   type IFileMatch,
   type ILoggerService,
   type ITextSearchProgress,
@@ -119,12 +120,17 @@ function makeMatch(path: string): IFileMatch {
 function makeService(
   root: URI | null,
   main = new FakeMainSearch(),
+  threads = 0,
 ): {
   readonly main: FakeMainSearch
   readonly service: TextSearchService
 } {
   const exclude = new FakeSearchExcludeService()
   const editorGroups = { _serviceBrand: undefined, groups: [] } as unknown as IEditorGroupsService
+  const config = {
+    _serviceBrand: undefined,
+    get: <T>(key: string, defaultValue?: T) => (key === 'search.threads' ? threads : defaultValue),
+  } as unknown as IConfigurationService
   return {
     main,
     service: new TextSearchService(
@@ -133,6 +139,7 @@ function makeService(
       exclude,
       editorGroups,
       new UriIdentityService('linux'),
+      config,
       makeLoggerService(),
     ),
   }
@@ -159,6 +166,32 @@ describe('TextSearchService renderer adapter', () => {
     expect(main.queries[0]!.includes).toEqual(['**/*.ts'])
     expect(main.queries[0]!.excludes).toEqual(['**/*.test.ts'])
     expect(main.queries[0]!.configurationExcludes).toEqual(['node_modules'])
+  })
+
+  it('forwards the configured search.threads to the main query', async () => {
+    const root = URI.file('/ws')
+
+    const explicit = makeService(root, undefined, 8)
+    await explicit.service.search({
+      pattern: 'foo',
+      isRegex: false,
+      matchCase: true,
+      matchWholeWord: false,
+      includes: [],
+      excludes: [],
+    })
+    expect(explicit.main.queries[0]!.threads).toBe(8)
+
+    const automatic = makeService(root)
+    await automatic.service.search({
+      pattern: 'foo',
+      isRegex: false,
+      matchCase: true,
+      matchWholeWord: false,
+      includes: [],
+      excludes: [],
+    })
+    expect(automatic.main.queries[0]!.threads).toBe(0)
   })
 
   it('routes progress events for the current search session', async () => {
