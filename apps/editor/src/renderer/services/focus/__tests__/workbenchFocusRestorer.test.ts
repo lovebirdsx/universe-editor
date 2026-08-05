@@ -10,11 +10,7 @@ import {
   type ILayoutService,
   type IViewsService,
 } from '@universe-editor/platform'
-import {
-  EXPLORER_TREE_VIEW_ID,
-  restoreWorkbenchFocus,
-  syncTerminalFocusContext,
-} from '../workbenchFocusRestorer.js'
+import { EXPLORER_TREE_VIEW_ID, restoreWorkbenchFocus } from '../workbenchFocusRestorer.js'
 
 class SelfFocusingInput extends EditorInput {
   constructor(private readonly _target: HTMLElement) {
@@ -119,7 +115,7 @@ describe('restoreWorkbenchFocus', () => {
     document.body.innerHTML = ''
   })
 
-  it('focuses Explorer and clears stale terminalFocus when no editor is open', async () => {
+  it('focuses Explorer without touching terminalFocus (FocusContextKeyContribution owns it)', async () => {
     const context = new ContextKeyService()
     context.set('terminalFocus', true)
     const terminal = focusTerminalHost()
@@ -137,7 +133,7 @@ describe('restoreWorkbenchFocus', () => {
     expect(result).toEqual({ target: 'explorer', ok: true })
     expect(focusView).toHaveBeenCalledWith(EXPLORER_TREE_VIEW_ID, { source: 'restore' })
     expect(document.activeElement).toBe(explorer)
-    expect(context.get('terminalFocus')).toBe(false)
+    expect(context.get('terminalFocus')).toBe(true)
   })
 
   it('keeps a non-Explorer side bar container the user already switched to', async () => {
@@ -207,22 +203,6 @@ describe('restoreWorkbenchFocus', () => {
     })
     expect(focusView).not.toHaveBeenCalled()
     expect(document.activeElement).toBe(editorTarget)
-    expect(context.get('terminalFocus')).toBe(false)
-  })
-})
-
-describe('syncTerminalFocusContext', () => {
-  afterEach(() => {
-    document.body.innerHTML = ''
-  })
-
-  it('does not keep terminalFocus true for a hidden panel terminal', () => {
-    const context = new ContextKeyService()
-    focusTerminalHost()
-
-    const { layout } = makeLayoutService()
-    syncTerminalFocusContext(context, layout)
-
-    expect(context.get('terminalFocus')).toBe(false)
+    expect(context.get('terminalFocus')).toBe(true)
   })
 })

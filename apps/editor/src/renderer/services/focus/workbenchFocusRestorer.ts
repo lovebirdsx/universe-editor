@@ -36,7 +36,6 @@ export async function restoreWorkbenchFocus(
     activeElement.closest('[data-testid="part-editorArea"]') !== null
   ) {
     syncEditorFocusContext(contextKeyService)
-    syncTerminalFocusContext(contextKeyService, layoutService)
     return { target: 'kept', ok: true }
   }
 
@@ -48,7 +47,6 @@ export async function restoreWorkbenchFocus(
     let ok = focusEditorInput(editor, contextKeyService, group.id)
     if (!ok) ok = await layoutService.focusPart(PartId.EditorArea, { source: 'restore' })
     syncEditorFocusContext(contextKeyService)
-    syncTerminalFocusContext(contextKeyService, layoutService)
     return { target: 'editor', ok, groupId: group.id, editorId: editor.id }
   }
 
@@ -58,30 +56,12 @@ export async function restoreWorkbenchFocus(
   const active = viewsService.getActiveViewContainerId(ViewContainerLocation.SideBar)
   if (active !== undefined && active !== EXPLORER_CONTAINER_ID) {
     syncEditorFocusContext(contextKeyService)
-    syncTerminalFocusContext(contextKeyService, layoutService)
     return { target: 'kept', ok: true }
   }
 
   const ok = await layoutService.focusView(EXPLORER_TREE_VIEW_ID, { source: 'restore' })
   syncEditorFocusContext(contextKeyService)
-  syncTerminalFocusContext(contextKeyService, layoutService)
   return { target: 'explorer', ok }
-}
-
-export function syncTerminalFocusContext(
-  contextKeyService: IContextKeyService,
-  layoutService?: ILayoutService,
-): void {
-  const active = globalThis.document?.activeElement
-  const terminalHost =
-    active instanceof HTMLElement ? active.closest<HTMLElement>('[data-terminal-id]') : null
-  const panelTerminal =
-    terminalHost !== null && active instanceof HTMLElement
-      ? active.closest('[data-testid="part-panel"]') !== null
-      : false
-  const hiddenPanelTerminal =
-    panelTerminal && layoutService !== undefined && !layoutService.getVisible(PartId.Panel)
-  contextKeyService.set('terminalFocus', terminalHost !== null && !hiddenPanelTerminal)
 }
 
 function resolveGroupWithEditor(

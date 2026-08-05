@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { URI } from '@universe-editor/platform'
-import { IContextKeyService, markAsSingleton } from '@universe-editor/platform'
+import { markAsSingleton } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
 import {
   ITerminalXtermService,
@@ -34,7 +34,6 @@ export function TerminalInstance({
   openFile,
 }: TerminalInstanceProps) {
   const isFocused = focused ?? active
-  const contextKeyService = useService(IContextKeyService)
   const manager = useService(ITerminalManagerService)
   const xtermService = useService(ITerminalXtermService)
 
@@ -73,26 +72,13 @@ export function TerminalInstance({
     const observer = new ResizeObserver(() => holder.scheduleFit())
     observer.observe(host)
 
-    const onFocusIn = () => contextKeyService.set('terminalFocus', true)
-    const onFocusOut = (e: FocusEvent) => {
-      if (!host.contains(e.relatedTarget as Node | null)) {
-        contextKeyService.set('terminalFocus', false)
-      }
-    }
-    host.addEventListener('focusin', onFocusIn)
-    host.addEventListener('focusout', onFocusOut)
-
     return () => {
-      host.removeEventListener('focusin', onFocusIn)
-      host.removeEventListener('focusout', onFocusOut)
-      contextKeyService.set('terminalFocus', false)
       observer.disconnect()
       selectionSub.dispose()
       holder.saveScroll()
       holder.wrapper.remove()
       holderRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, xtermService])
 
   // Becoming active may follow a display:none (size 0) phase; refit, then focus

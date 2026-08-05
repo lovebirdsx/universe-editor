@@ -7,6 +7,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { test as coldTest, expect as coldExpect } from '../fixtures/electronApp.js'
 
 const EXPLORER_TREE = 'workbench.view.explorer.tree'
 
@@ -47,4 +48,31 @@ test.describe('@p1 workspace focus restore', () => {
     await workbench.quickInput.waitForVisible()
     await expect(workbench.quickInput.input).toBeFocused()
   })
+})
+
+coldTest.describe('cold-start terminal focus', () => {
+  coldTest(
+    'a fresh window keeps terminalFocus false so physical Ctrl+P opens quick access @regression',
+    async ({ page, workbench }) => {
+      // Regression: the panel auto-spawns a terminal while hidden on first
+      // launch; before terminalFocus became focus-tracker-derived, a transient
+      // focus landing in that hidden host left the key stuck true and swallowed
+      // every `!terminalFocus` keybinding (Ctrl+P reached the shell instead).
+      await workbench.waitForRestored()
+      await workbench.waitForBootstrapFocusSettled()
+
+      await coldExpect.poll(() => workbench.getContextKey<boolean>('panelVisible')).toBe(false)
+      // Give the background terminal spawn a chance to (wrongly) claim focus.
+      await coldExpect
+        .poll(() => workbench.getContextKey<boolean>('terminalFocus'), { timeout: 10_000 })
+        .toBe(false)
+
+      await page.keyboard.press('Control+P')
+      await workbench.quickInput.waitForVisible()
+      await coldExpect(workbench.quickInput.input).toBeFocused()
+
+      await page.keyboard.press('Escape')
+      await workbench.quickInput.waitForHidden()
+    },
+  )
 })

@@ -12,14 +12,24 @@
  *    activityBarFocus           — focus is inside ActivityBar
  *    editorAreaFocus            — focus is inside EditorArea
  *    statusBarFocus             — focus is inside StatusBar
+ *    terminalFocus              — focus is inside an xterm host, and not a
+ *                                 hidden panel terminal (see below)
  *
  *  Each Part exposes onDidFocus / onDidBlur (bridged from FocusTracker in
  *  main.tsx), so we use those for the per-part booleans rather than walking
  *  the DOM on every transition. `focusedPart` / `focusedView` come from the
  *  FocusTracker's settled current element via [data-view-id] / [data-testid].
+ *
+ *  `terminalFocus` is derived from the same settled element instead of being
+ *  book-kept by TerminalInstance's own focusin/focusout listeners: startup
+ *  spawns panel terminals while the panel is still hidden, and any focus that
+ *  transiently lands in such a host must not leave the key stuck true (it
+ *  would swallow every `!terminalFocus` keybinding, e.g. Ctrl+P quick open).
+ *  Panel visibility is part of the derivation, so it re-syncs on toggle too.
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  autorun,
   Disposable,
   IContextKeyService,
   IFocusTrackerService,
@@ -47,6 +57,7 @@ export class FocusContextKeyContribution extends Disposable implements IWorkbenc
 
     const focusedPart = contextKeyService.createKey<string>('focusedPart', '')
     const focusedView = contextKeyService.createKey<string>('focusedView', '')
+    const terminalFocus = contextKeyService.createKey<boolean>('terminalFocus', false)
 
     const perPart = new Map<PartId, ReturnType<typeof contextKeyService.createKey<boolean>>>()
     for (const [id, key] of Object.entries(PART_KEY_BY_ID) as [PartId, string][]) {
@@ -85,6 +96,27 @@ export class FocusContextKeyContribution extends Disposable implements IWorkbenc
     }
     this._register(focusTracker.onDidFocusChange(updateFromCurrent))
     updateFromCurrent()
+
+    const updateTerminalFocus = () => {
+      const cur = focusTracker.current as unknown as HTMLElement | null
+      const terminalHost = cur?.closest?.('[data-terminal-id]') ?? null
+      const hiddenPanelTerminal =
+        terminalHost !== null &&
+        terminalHost.closest('[data-testid="part-panel"]') !== null &&
+        !layoutService.getVisible(PartId.Panel)
+      terminalFocus.set(terminalHost !== null && !hiddenPanelTerminal)
+    }
+    this._register(focusTracker.onDidFocusChange(updateTerminalFocus))
+    // Panel toggles don't move DOM focus by themselves fast enough to rely on
+    // the tracker alone (the pass-focus handoff is best-effort), so re-derive
+    // on visibility changes too.
+    this._register(
+      autorun((r) => {
+        layoutService.visible.read(r)
+        updateTerminalFocus()
+      }),
+    )
+    updateTerminalFocus()
   }
 
   private _closestAttr(el: HTMLElement, attr: string): string | undefined {
