@@ -77,6 +77,7 @@ import type {
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk'
 import { invalidateMentionFileCache } from '../../../services/acp/mentionFileSearch.js'
 import { AcpPromptDraftCache } from '../../../services/acp/session/acpPromptDraftCache.js'
+import { AcpPromptCancelledDraftStash } from '../../../services/acp/session/acpPromptCancelledDraftStash.js'
 import { PromptInput, extractSlashQuery } from '../PromptInput.js'
 import type { WidgetHandle } from '../ChatBody.js'
 import { ServicesContext } from '../../useService.js'
@@ -103,6 +104,7 @@ afterEach(() => {
   nextPick = undefined
   invalidateMentionFileCache()
   AcpPromptDraftCache._resetForTests()
+  AcpPromptCancelledDraftStash._resetForTests()
   stubHistoryEntries.set([], undefined)
 })
 
@@ -395,6 +397,7 @@ interface FakeSession extends IAcpSession {
   readonly cancelTurn: ReturnType<typeof vi.fn> & IAcpSession['cancelTurn']
   readonly statusObs: ISettableObservable<AcpSessionStatus>
   readonly commandsObs: ISettableObservable<readonly AvailableCommand[]>
+  readonly cancelRestoreEmitter: Emitter<void>
 }
 
 function makeSession(opts: FakeSessionOptions = {}): FakeSession {
@@ -411,6 +414,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
   const configOptions = observableValue<readonly SessionConfigOption[]>('test.configOptions', [])
   const sendPrompt = vi.fn().mockResolvedValue(undefined)
   const cancelTurn = vi.fn().mockResolvedValue(undefined)
+  const cancelRestoreEmitter = new Emitter<void>()
   return {
     id: opts.id ?? 's1',
     agentId: 'fake',
@@ -426,6 +430,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     beginHistoryReplay: () => {},
     endHistoryReplay: () => {},
     suppressReplayToTimeline: () => {},
+    setRetractedMessageIds: () => {},
     usage: observableValue<AcpUsage | undefined>('test.usage', opts.usage),
     pendingPermission: permission,
     pendingElicitation: observableValue<AcpPendingElicitation | undefined>('pe', undefined),
@@ -440,6 +445,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     forkSupported: observableValue<boolean>('test.forkSupported', false),
     rewindSupported: observableValue<boolean>('test.rewindSupported', false),
     onDidRequireAuth: Event.None,
+    onDidCancelForRestore: cancelRestoreEmitter.event,
     presentPermission: () => {},
     presentElicitation: () => {},
     sendPrompt: sendPrompt as never,
@@ -455,6 +461,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     retryRecovery: () => Promise.resolve(),
     statusObs,
     commandsObs,
+    cancelRestoreEmitter,
   } satisfies FakeSession
 }
 
@@ -728,6 +735,72 @@ describe('PromptInput — submit and cancel', () => {
       session.commandsObs.set(COMMANDS, undefined)
     })
     expect(screen.getByTestId('acp-slash-popover')).toBeTruthy()
+  })
+})
+
+describe('PromptInput — cancel restore', () => {
+  it('restores the submitted text into the input when the turn is cancelled', () => {
+    const session = makeSession({ status: 'running' })
+    renderWithServices(<PromptInput session={session} />)
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'hello world' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(session.sendPrompt).toHaveBeenCalledWith('hello world', [], [], [])
+    expect(ta.value).toBe('')
+
+    act(() => session.cancelRestoreEmitter.fire())
+    expect(ta.value).toBe('hello world')
+  })
+
+  it('does not overwrite fresh typing when restoring after a cancel', () => {
+    const session = makeSession({ status: 'running' })
+    renderWithServices(<PromptInput session={session} />)
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'first' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    fireEvent.change(ta, { target: { value: 'new typing' } })
+
+    act(() => session.cancelRestoreEmitter.fire())
+    expect(ta.value).toBe('new typing')
+    // The stashed draft is single-consume — a second cancel restores nothing.
+    fireEvent.change(ta, { target: { value: '' } })
+    act(() => session.cancelRestoreEmitter.fire())
+    expect(ta.value).toBe('')
+  })
+
+  it('restores ref pills so a resubmission after cancel still sends its references', async () => {
+    const session = makeSession({ id: 's1', status: 'running' })
+    const handleRef = makeHandleRef()
+    renderWithServices(<PromptInput session={session} handleRef={handleRef} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      fileSearch: makeFileSearch(['/repo/src/main.ts']),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '@')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    typeAt(ta, '@main')
+    act(() => handleRef.current.popoverAccept()) // accept mention → tracked pill
+    expect(ta.value).toContain('@src/main.ts')
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(session.sendPrompt).toHaveBeenCalledTimes(1)
+    expect(ta.value).toBe('')
+
+    act(() => session.cancelRestoreEmitter.fire())
+    expect(ta.value).toContain('@src/main.ts')
+
+    // Resubmitting the restored draft hands the range-tracked ref back to
+    // sendPrompt — the pill survived the cancel round-trip.
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(session.sendPrompt).toHaveBeenCalledTimes(2)
+    const [, refs] = session.sendPrompt.mock.calls[1]!
+    expect(refs).toHaveLength(1)
+    expect(refs[0].ref).toMatchObject({
+      kind: 'file',
+      label: 'src/main.ts',
+      uri: URI.file('/repo/src/main.ts').toString(),
+    })
   })
 })
 

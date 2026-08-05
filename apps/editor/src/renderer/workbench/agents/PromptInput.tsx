@@ -106,6 +106,7 @@ import { ConfigOptionsBar } from './ConfigOptionsBar.js'
 import { SendButton } from './SendButton.js'
 import { StopButton } from './StopButton.js'
 import { AcpPromptDraftCache } from '../../services/acp/session/acpPromptDraftCache.js'
+import { AcpPromptCancelledDraftStash } from '../../services/acp/session/acpPromptCancelledDraftStash.js'
 import { AcpPromptContextInbox } from '../../services/acp/session/acpPromptContextInbox.js'
 import { AcpPromptTextInbox } from '../../services/acp/session/acpPromptTextInbox.js'
 import { AcpPromptReplaceInbox } from '../../services/acp/session/acpPromptReplaceInbox.js'
@@ -439,6 +440,28 @@ export function PromptInput({
     })
     return () => sub.dispose()
   }, [session.id, editorReady])
+
+  // Cancel restore (Claude Code CLI parity): a user-initiated cancel with an
+  // in-flight turn fires session.onDidCancelForRestore — restore the stashed
+  // submitted draft (text + ref pills + contexts + images) so the user can edit
+  // and resend instead of losing the input. Skipped when the input already has
+  // new content, so a cancel never clobbers fresh typing.
+  useEffect(() => {
+    if (!editorReady) return
+    const sub = session.onDidCancelForRestore(() => {
+      const draft = AcpPromptCancelledDraftStash.drain(session.id)
+      if (draft === undefined) return
+      const el = editorHandleRef.current
+      if (!el) return
+      if (el.getText().length > 0 || contexts.length > 0 || images.length > 0) return
+      el.setText(draft.text, draft.text.length)
+      el.restoreRefs(draft.refs ?? [])
+      setContexts(draft.contexts ?? [])
+      setImages(draft.images ?? [])
+      requestAnimationFrame(() => el.focus())
+    })
+    return () => sub.dispose()
+  }, [session, session.id, editorReady, contexts, images])
 
   // On mount, restore the saved caret position into the textarea DOM so the
   // cursor lands at the right spot when the user refocuses after switching
@@ -893,6 +916,15 @@ export function PromptInput({
     const refs = editorHandleRef.current?.listRefs() ?? []
     const attached = contexts
     const attachedImages = images
+    // Stash the full submitted draft so cancelling the turn before any response
+    // arrives can restore it verbatim (onDidCancelForRestore → drain below).
+    // Cleared by the session once the turn settles without a cancel.
+    AcpPromptCancelledDraftStash.save(session.id, {
+      text: value,
+      refs,
+      contexts: attached,
+      images: attachedImages,
+    })
     editorHandleRef.current?.clearRefs()
     editorHandleRef.current?.setText('', 0)
     setText('')

@@ -953,6 +953,10 @@ export class AcpSessionService
       // until session/load replays it below. Mark the replay so ChatBody keeps
       // showing a loading placeholder instead of flashing the empty-session hint.
       session.beginHistoryReplay()
+      // Prompts retracted by a cancel-restore stay in the agent transcript —
+      // filter them (and their interruption marker) out of the replay so the
+      // reloaded timeline matches what the user saw after cancelling.
+      session.setRetractedMessageIds(entry.retractedMessageIds)
       // Side tasks: the fork exists only as agent-side context — drop the
       // baseline replay from the timeline so the child looks like a fresh chat.
       // The flag lives on the history row (not a resume option) so it also

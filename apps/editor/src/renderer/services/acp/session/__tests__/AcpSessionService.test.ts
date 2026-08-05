@@ -78,6 +78,7 @@ import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { AcpPromptDraftCache } from '../acpPromptDraftCache.js'
+import { AcpPromptCancelledDraftStash } from '../acpPromptCancelledDraftStash.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubExtensionMcpServersService } from './stubExtensionMcpServers.js'
@@ -968,11 +969,200 @@ describe('AcpSessionService', () => {
     expect(conn.agent.promptCalls).toHaveLength(1)
     expect(s.status.get()).toBe('running')
 
+    let cancelRestoreFires = 0
+    const sub = s.onDidCancelForRestore(() => cancelRestoreFires++)
     await s.cancelTurn()
     await promptPromise
     expect(s.status.get()).toBe('idle')
-    const msgs = s.messages.get()
-    expect(msgs.at(-1)?.text).toBe('[cancelled]')
+    // No '[cancelled]' sentinel — the cancel surfaces via onDidCancelForRestore
+    // so the input box can restore the submitted draft instead.
+    expect(s.messages.get().some((m) => m.text === '[cancelled]')).toBe(false)
+    expect(cancelRestoreFires).toBe(1)
+    // The just-sent user message is retracted too — the restored draft replaces
+    // it, so the timeline keeps no trace of the cancelled turn.
+    expect(s.messages.get().some((m) => m.role === 'user')).toBe(false)
+    expect(s.timeline.get().filter((it) => it.kind === 'message')).toHaveLength(0)
+    sub.dispose()
+  })
+
+  it('cancelTurn persists the retracted message id to history so a later resume filters the replay', async () => {
+    svc.dispose()
+    client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
+    const config: IConfigurationService = new ConfigurationService()
+    const telemetry: ITelemetryService = new NoopTelemetryService()
+    const history = makeHistory()
+    const agentDefaults = makeAgentDefaults()
+    svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      notifications,
+      telemetry,
+      permission,
+      new StubLoggerService(),
+      history,
+      new FakeStorage(),
+      agentDefaults,
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
+    )
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    const promptPromise = s.sendPrompt('hi there')
+    await new Promise((r) => setTimeout(r, 10))
+    const sentMessageId = s.messages.get().find((m) => m.role === 'user')?.messageId
+    expect(sentMessageId).toBeDefined()
+
+    await s.cancelTurn()
+    await promptPromise
+
+    // The persisted id is the same anchor the wire prompt carried — the
+    // transcript's user row has this uuid, so resume replay can match on it.
+    expect(conn.agent.promptCalls[0]?._meta?.['messageId']).toBe(sentMessageId)
+    expect(history.get('agent-1')?.retractedMessageIds).toEqual([sentMessageId])
+  })
+
+  it('cancelTurn after partial agent output is a normal interruption — the turn stays, nothing is restored or persisted', async () => {
+    svc.dispose()
+    client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
+    const config: IConfigurationService = new ConfigurationService()
+    const telemetry: ITelemetryService = new NoopTelemetryService()
+    const history = makeHistory()
+    const agentDefaults = makeAgentDefaults()
+    svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      notifications,
+      telemetry,
+      permission,
+      new StubLoggerService(),
+      history,
+      new FakeStorage(),
+      agentDefaults,
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
+    )
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    const promptPromise = s.sendPrompt('hi there')
+    await new Promise((r) => setTimeout(r, 10))
+    // The agent starts answering — a single streamed character is enough to
+    // turn a later cancel into a normal interruption.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'p' },
+      },
+    })
+
+    let cancelRestoreFires = 0
+    const sub = s.onDidCancelForRestore(() => cancelRestoreFires++)
+    await s.cancelTurn()
+    await promptPromise
+    expect(s.status.get()).toBe('idle')
+
+    // The user message and the partial answer both stay on the timeline, and
+    // the interruption marker is appended locally — the live stream never
+    // delivers the SDK's marker row, but a later resume replays it from the
+    // transcript, so live appends the same trace to keep the two identical.
+    const texts = s.messages.get().map((m) => `${m.role}:${m.text}`)
+    expect(texts).toEqual(['user:hi there', 'agent:p', 'user:[Request interrupted by user]'])
+    // No draft restore, no persisted retraction.
+    expect(cancelRestoreFires).toBe(0)
+    expect(history.get('agent-1')?.retractedMessageIds).toBeUndefined()
+    sub.dispose()
+  })
+
+  it('cancelTurn with restorePrompt:false does not fire onDidCancelForRestore (rewind path)', async () => {
+    svc.dispose()
+    client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
+    const config: IConfigurationService = new ConfigurationService()
+    const telemetry: ITelemetryService = new NoopTelemetryService()
+    const history = makeHistory()
+    const agentDefaults = makeAgentDefaults()
+    svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      notifications,
+      telemetry,
+      permission,
+      new StubLoggerService(),
+      history,
+      new FakeStorage(),
+      agentDefaults,
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
+    )
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    const promptPromise = s.sendPrompt('hi there')
+    await new Promise((r) => setTimeout(r, 10))
+    let cancelRestoreFires = 0
+    const sub = s.onDidCancelForRestore(() => cancelRestoreFires++)
+    await s.cancelTurn({ restorePrompt: false })
+    await promptPromise
+    expect(s.status.get()).toBe('idle')
+    expect(cancelRestoreFires).toBe(0)
+    // No restore → the sent user message stays on the timeline.
+    expect(s.messages.get().some((m) => m.role === 'user' && m.text === 'hi there')).toBe(true)
+    sub.dispose()
+  })
+
+  it('cancelTurn with no in-flight prompt does not fire onDidCancelForRestore', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    let cancelRestoreFires = 0
+    const sub = s.onDidCancelForRestore(() => cancelRestoreFires++)
+    await s.cancelTurn()
+    expect(cancelRestoreFires).toBe(0)
+    sub.dispose()
   })
 
   describe('concurrent steering prompts', () => {
@@ -1050,7 +1240,7 @@ describe('AcpSessionService', () => {
       expect(errors).toHaveLength(1)
     })
 
-    it('cancelTurn interrupts all in-flight prompts with a single notification and message', async () => {
+    it('cancelTurn interrupts all in-flight prompts with a single notification and one restore event', async () => {
       rebuildControlled()
       const s = await svc.createSession()
       await s.whenConnected()
@@ -1060,12 +1250,48 @@ describe('AcpSessionService', () => {
       await tick()
       expect(s.status.get()).toBe('running')
 
+      let cancelRestoreFires = 0
+      const sub = s.onDidCancelForRestore(() => cancelRestoreFires++)
       await s.cancelTurn()
       await Promise.all([p1, p2])
       expect(conn.agent.cancelCalls).toHaveLength(1)
-      const cancels = s.messages.get().filter((m) => m.text === '[cancelled]')
-      expect(cancels).toHaveLength(1)
+      expect(s.messages.get().some((m) => m.text === '[cancelled]')).toBe(false)
+      expect(cancelRestoreFires).toBe(1)
+      // Only the latest dispatched prompt's user message is retracted (matching
+      // the last-wins restore stash); the earlier one stays.
+      expect(
+        s.messages
+          .get()
+          .filter((m) => m.role === 'user')
+          .map((m) => m.text),
+      ).toEqual(['one'])
       expect(s.status.get()).toBe('idle')
+      sub.dispose()
+    })
+
+    it('keeps the stashed submitted draft after a cancel; clears it after a clean settle', async () => {
+      rebuildControlled()
+      AcpPromptCancelledDraftStash._resetForTests()
+      const s = await svc.createSession()
+      await s.whenConnected()
+      const conn = client.connected[0]!
+
+      // PromptInput stashes on submit; simulate that here.
+      AcpPromptCancelledDraftStash.save(s.id, { text: 'one' })
+      const p1 = s.sendPrompt('one')
+      await tick()
+      await s.cancelTurn()
+      await p1
+      // Cancel keeps the stash so onDidCancelForRestore can restore it.
+      expect(AcpPromptCancelledDraftStash.drain(s.id)).toEqual({ text: 'one' })
+
+      AcpPromptCancelledDraftStash.save(s.id, { text: 'two' })
+      const p2 = s.sendPrompt('two')
+      await tick()
+      conn.agent.promptDeferreds[1]!.resolve()
+      await p2
+      // A clean settle drops the stash so it can't resurface on a later cancel.
+      expect(AcpPromptCancelledDraftStash.drain(s.id)).toBeUndefined()
     })
 
     it('recovers from errored to running to idle when a new prompt is sent', async () => {

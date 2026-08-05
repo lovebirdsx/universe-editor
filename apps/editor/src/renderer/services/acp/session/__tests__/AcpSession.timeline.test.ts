@@ -218,8 +218,16 @@ class StubAgent implements Agent {
   }
   prompt(p: PromptRequest): Promise<PromptResponse> {
     this.promptCalls.push(p)
+    const nextError = this._nextPromptError
+    this._nextPromptError = undefined
+    if (nextError !== undefined) return Promise.reject(nextError)
     if (this._opts.promptHangs) return new Promise<never>(() => {})
     return Promise.resolve({ stopReason: 'end_turn' } as unknown as PromptResponse)
+  }
+  /** Reject only the next prompt() call — used to land an `[error]` sentinel. */
+  private _nextPromptError: Error | undefined
+  rejectNextPrompt(err: Error): void {
+    this._nextPromptError = err
   }
   cancel(_p: CancelNotification): Promise<void> {
     return Promise.resolve()
@@ -707,7 +715,7 @@ describe('AcpSession.timeline', () => {
     await promptPromise
   })
 
-  it('user prompt and [cancelled] sentinel messages are never marked streaming', async () => {
+  it('a cancel retracts the just-sent user message from the timeline', async () => {
     svc.dispose()
     client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
     svc = makeService(client)
@@ -719,12 +727,12 @@ describe('AcpSession.timeline', () => {
     await s.cancelTurn()
     await promptPromise
 
+    // No trace of the cancelled turn: no '[cancelled]' sentinel, and the sent
+    // user message is retracted — the restore event carries the draft back to
+    // the input box, so the timeline would otherwise duplicate it.
     const slots = s.timeline.get().filter((it) => it.kind === 'message')
-    expect(slots.length).toBeGreaterThanOrEqual(2)
-    for (const slot of slots) {
-      if (slot.kind !== 'message') throw new Error('unreachable')
-      expect(slot.message.streaming).toBe(false)
-    }
+    expect(slots).toHaveLength(0)
+    expect(s.messages.get()).toHaveLength(0)
   })
 
   it('only the active streaming message carries streaming:true across role switches', async () => {
@@ -1335,6 +1343,140 @@ describe('AcpSession.timeline', () => {
     expect(users[1]!.autoRetry).toBeUndefined()
   })
 
+  it('drops replayed user chunks whose messageId was retracted, plus the trailing interruption marker', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+    s.setRetractedMessageIds(['mid-1'])
+
+    // The retracted prompt replays from the transcript — dropped.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'retracted prompt' },
+        messageId: 'mid-1',
+      } as never,
+    })
+    // The SDK's trailing interruption marker is a separate user message with its
+    // own id — dropped via the one-shot flag armed by the retracted chunk.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: '[Request interrupted by user]' },
+        messageId: 'mid-2',
+      } as never,
+    })
+    // The next genuine user message still lands.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'next prompt' },
+        messageId: 'mid-3',
+      } as never,
+    })
+
+    const texts = s.timeline
+      .get()
+      .filter((it) => it.kind === 'message')
+      .map((it) => (it.kind === 'message' ? `${it.message.role}:${it.message.text}` : ''))
+    expect(texts).toEqual(['user:next prompt'])
+
+    s.endHistoryReplay()
+  })
+
+  it('consumes the interruption-marker skip on the next user chunk even when it is not the marker', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+    s.setRetractedMessageIds(['mid-1'])
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'retracted prompt' },
+        messageId: 'mid-1',
+      } as never,
+    })
+    // Agent had already produced output before the cancel, so the transcript's
+    // next user message is a genuine reprompt, not the marker — it must land,
+    // and the one-shot skip is spent (a later stray marker text then lands too).
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'reprompt' },
+        messageId: 'mid-2',
+      } as never,
+    })
+
+    const texts = s.timeline
+      .get()
+      .filter((it) => it.kind === 'message')
+      .map((it) => (it.kind === 'message' ? `${it.message.role}:${it.message.text}` : ''))
+    expect(texts).toEqual(['user:reprompt'])
+
+    s.endHistoryReplay()
+  })
+
+  it('keeps replayed adjacent user messages as separate cards when their anchors differ', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+
+    // The interruption marker (anchorless) followed by the re-sent prompt
+    // (anchored) must not fuse into one card.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: '[Request interrupted by user]' },
+      } as never,
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: '继续' },
+        messageId: 'mid-next',
+      } as never,
+    })
+    // Two chunks of the SAME persisted message (multi-block prompt) still merge.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'part1 ' },
+        messageId: 'mid-multi',
+      } as never,
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'part2' },
+        messageId: 'mid-multi',
+      } as never,
+    })
+
+    const texts = s.timeline
+      .get()
+      .filter((it) => it.kind === 'message')
+      .map((it) => (it.kind === 'message' ? `${it.message.role}:${it.message.text}` : ''))
+    expect(texts).toEqual(['user:[Request interrupted by user]', 'user:继续', 'user:part1 part2'])
+
+    s.endHistoryReplay()
+  })
+
   it('config_option_update still applies while replay is suppressed', async () => {
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1376,7 +1518,7 @@ describe('AcpSession.timeline — batched/immediate atomicity', () => {
 
   beforeEach(() => {
     // Hanging prompt so the turn stays 'running' and a mid-stream sentinel
-    // (`[cancelled]`) can be appended while a chunk batch is still pending.
+    // (`[error]`) can be appended while a chunk batch is still pending.
     client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
     svc = makeService(client)
   })
@@ -1404,22 +1546,24 @@ describe('AcpSession.timeline — batched/immediate atomicity', () => {
       if (!inTimeline) torn++
     })
 
-    void s.sendPrompt('go')
+    const promptPromise = s.sendPrompt('go')
 
-    // Open a pending chunk batch, then append a `[cancelled]` sentinel via
-    // cancelTurn while that batch is still pending — the prior bug set messages
-    // and timeline with separate immediate notifications, tearing them.
+    // Open a pending chunk batch, then append an `[error]` sentinel (the agent
+    // fails the prompt) while that batch is still pending — the prior bug set
+    // messages and timeline with separate immediate notifications, tearing them.
     conn.sink.onSessionUpdate({
       sessionId: 'agent-1',
       update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial' } },
     })
-    await s.cancelTurn()
+    conn.agent.rejectNextPrompt(new Error('agent crashed'))
+    await promptPromise
 
     expect(torn).toBe(0)
-    // Final state is consistent: the cancelled sentinel is in both lanes.
+    // Final state is consistent: the error sentinel is in both lanes. (The
+    // agent-side rejection crosses the wire SDK-wrapped as 'Internal error'.)
     const msgs = s.messages.get()
     const last = msgs[msgs.length - 1]!
-    expect(last.text).toBe('[cancelled]')
+    expect(last.text).toMatch(/^\[error\] /)
     expect(s.timeline.get().some((it) => it.kind === 'message' && it.id === last.id)).toBe(true)
     stop.dispose()
   })
@@ -1428,14 +1572,15 @@ describe('AcpSession.timeline — batched/immediate atomicity', () => {
     const s = await svc.createSession()
     await s.whenConnected()
     const conn = client.connected[0]!
-    void s.sendPrompt('go')
+    const promptPromise = s.sendPrompt('go')
     conn.sink.onSessionUpdate({
       sessionId: 'agent-1',
       update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'chunk' } },
     })
     // _appendMessage runs while the chunk batch is pending; it must commit the
     // batch rather than tripping the immediate-set guard.
-    await expect(s.cancelTurn()).resolves.toBeUndefined()
+    conn.agent.rejectNextPrompt(new Error('agent crashed'))
+    await promptPromise
   })
 
   it('merges sub-agent stats onto the parent Task card and prices Claude token tallies', async () => {

@@ -800,6 +800,50 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     expect(resumed.isReplayingHistory.get()).toBe(false)
     expect(resumed.messages.get().map((m) => m.text)).toEqual(['replayed history'])
   })
+
+  it('filters retracted user messages (and the trailing interruption marker) out of the resume replay', async () => {
+    const built = buildService({
+      loadSessionUpdates: [
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'user_message_chunk',
+            content: { type: 'text', text: 'cancelled prompt' },
+            messageId: 'retracted-1',
+          } as never,
+        },
+        {
+          // The SDK writes the interruption marker as a separate user message
+          // right after the interrupted one — dropped via the one-shot skip.
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'user_message_chunk',
+            content: { type: 'text', text: '[Request interrupted by user]' },
+            messageId: 'interrupted-marker',
+          } as never,
+        },
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'user_message_chunk',
+            content: { type: 'text', text: 'kept prompt' },
+            messageId: 'kept-1',
+          } as never,
+        },
+      ],
+      loadSessionResult: {},
+    })
+    svc = built.svc
+    await built.history.initialize()
+    const original = await svc.createSession()
+    await original.whenConnected()
+    const historyId = built.history.list()[0]!.id
+    built.history.addRetractedMessageId(historyId, 'retracted-1')
+    await svc.closeSession(original.id)
+
+    const resumed = await svc.resumeSession(historyId)
+    expect(resumed.messages.get().map((m) => `${m.role}:${m.text}`)).toEqual(['user:kept prompt'])
+  })
 })
 
 describe('AcpSessionService.resumeSession — failure paths', () => {

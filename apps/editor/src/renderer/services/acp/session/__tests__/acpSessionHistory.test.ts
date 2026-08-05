@@ -247,6 +247,27 @@ describe('AcpSessionHistoryService — add / list', () => {
     const readded = svc.add({ agentId: 'a', sessionIdOnAgent: 'child-1', title: 'new title' })
     expect(readded.sideTaskAnchorMessageId).toBe('anchor-1')
   })
+
+  it('addRetractedMessageId appends, dedupes, and survives re-add', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })
+
+    svc.addRetractedMessageId('s1', 'mid-1')
+    svc.addRetractedMessageId('s1', 'mid-2')
+    expect(svc.get('s1')?.retractedMessageIds).toEqual(['mid-1', 'mid-2'])
+
+    // Deduped: a repeat id is ignored.
+    svc.addRetractedMessageId('s1', 'mid-1')
+    expect(svc.get('s1')?.retractedMessageIds).toEqual(['mid-1', 'mid-2'])
+
+    // Unknown id is a no-op.
+    svc.addRetractedMessageId('nope', 'mid-3')
+    expect(svc.get('nope')).toBeUndefined()
+
+    // Carried across re-add (the upsert incoming row never carries the field).
+    const readded = svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 'new title' })
+    expect(readded.retractedMessageIds).toEqual(['mid-1', 'mid-2'])
+  })
 })
 
 describe('AcpSessionHistoryService — touch / remove / clear', () => {
@@ -441,6 +462,46 @@ describe('AcpSessionHistoryService — persistence', () => {
     })
     await svc.initialize()
     expect(svc.list().map((e) => e.id)).toEqual(['ok'])
+  })
+
+  it('persists retractedMessageIds and hydrates them back verbatim', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })
+    svc.addRetractedMessageId('s1', 'mid-1')
+    svc.addRetractedMessageId('s1', 'mid-2')
+    await flushWrite()
+    const call = storage.setCalls.at(-1)!
+    const persisted = call.value as { entries: Array<{ retractedMessageIds?: string[] }> }
+    expect(persisted.entries[0]?.retractedMessageIds).toEqual(['mid-1', 'mid-2'])
+  })
+
+  it('hydrates retractedMessageIds and drops rows whose value is not a string array', async () => {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 2,
+      entries: [
+        {
+          id: 'ok',
+          agentId: 'a',
+          sessionIdOnAgent: 'ok',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 2,
+          retractedMessageIds: ['mid-1'],
+        },
+        {
+          id: 'bad',
+          agentId: 'a',
+          sessionIdOnAgent: 'bad',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 2,
+          retractedMessageIds: 'mid-1',
+        },
+      ],
+    })
+    await svc.initialize()
+    expect(svc.list().map((e) => e.id)).toEqual(['ok'])
+    expect(svc.get('ok')?.retractedMessageIds).toEqual(['mid-1'])
   })
 
   it('normalizes legacy entries whose id !== sessionIdOnAgent so get(sessionIdOnAgent) hits', async () => {

@@ -38,6 +38,7 @@ import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
 import { AcpSessionConnection, type QueuedPrompt } from './acpSessionConnection.js'
 import { isAuthRequiredError } from './acpAuthError.js'
 import { classifyAcpError } from './acpErrorClassify.js'
+import { AcpPromptCancelledDraftStash } from './acpPromptCancelledDraftStash.js'
 import {
   MAX_RECOVERY_ATTEMPTS,
   SessionRecovery,
@@ -222,9 +223,42 @@ interface PromptSnapshot {
   readonly contexts: readonly SelectionContext[]
   readonly images: readonly PromptImage[]
   readonly messageId: string
+  /**
+   * The dispatch's own anchor id (never switched to a continuation id) — the
+   * user message it appended, which cancelTurn retracts on restore.
+   */
+  readonly sentMessageId: string
   /** `_applyUpdateCount` when the prompt was first dispatched — zero-output detection. */
   readonly baseline: number
+  /**
+   * `_agentOutputCount` when the prompt was dispatched. cancelTurn retracts the
+   * prompt (and restores the draft) only while this still matches — once the
+   * agent has emitted any visible output the cancel is a normal interruption.
+   */
+  readonly outputBaseline: number
 }
+
+/**
+ * Update kinds that surface as visible agent output. Feeds `_agentOutputCount`
+ * — cancelTurn's "did the agent answer at all" signal. Metadata updates
+ * (usage / config / session_info / available_commands) deliberately excluded:
+ * they don't answer the user's prompt.
+ */
+const AGENT_OUTPUT_UPDATE_KINDS: ReadonlySet<SessionUpdate['sessionUpdate']> = new Set([
+  'agent_message_chunk',
+  'agent_thought_chunk',
+  'tool_call',
+  'tool_call_update',
+  'plan',
+])
+
+/**
+ * The marker the SDK appends to the transcript (as its own user row) when a
+ * turn is interrupted mid-stream. The live ACP stream never delivers it, so
+ * cancelTurn appends it locally on a normal interruption, and the replay
+ * filter matches on it when skipping a retracted turn's trailing marker.
+ */
+const INTERRUPTED_MARKER_TEXT = '[Request interrupted by user]'
 
 // Built-in slash commands the agent handles locally (mirrors
 // BUILT_IN_COMMANDS in vendor/claude-agent-acp/src/acp-agent.ts). Their args
@@ -280,6 +314,9 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   private readonly _onDidRequireAuth = this._register(new Emitter<void>())
   readonly onDidRequireAuth: Event<void> = this._onDidRequireAuth.event
+
+  private readonly _onDidCancelForRestore = this._register(new Emitter<void>())
+  readonly onDidCancelForRestore: Event<void> = this._onDidCancelForRestore.event
 
   private readonly _configOptions: ConfigOptionStateMachine
 
@@ -394,6 +431,16 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   private _applyUpdateCount = 0
 
+  /**
+   * Monotonic counter bumped only by updates that surface as visible agent
+   * output (message / thought / tool call / plan). cancelTurn compares it
+   * against the dispatch-time `outputBaseline`: still equal → the agent never
+   * answered, so the prompt is retracted and restored into the input; advanced
+   * by even a single streamed character → the cancel is a normal interruption
+   * and the partial turn stays on the timeline.
+   */
+  private _agentOutputCount = 0
+
   /** Wall-clock of the last inbound update — read by the service's stall watchdog. */
   private _lastActivityAt = Date.now()
 
@@ -449,6 +496,23 @@ export class AcpSession extends Disposable implements IAcpSession {
    * `undefined` = no turns sent yet → the whole replay is suppressed.
    */
   private _suppressAnchorMessageId: string | undefined
+
+  /**
+   * Anchor ids of user prompts retracted by {@link cancelTurn}'s restore. The
+   * retraction is local-only — the agent transcript keeps the turn — so a
+   * resume replay would resurface it. Replayed user chunks carrying one of
+   * these ids are dropped instead (see the `user_message_chunk` case).
+   * Hydrated from the history row on resume; appended on every retraction.
+   */
+  private readonly _retractedMessageIds = new Set<string>()
+
+  /**
+   * Set when a replayed user chunk is dropped via {@link _retractedMessageIds}:
+   * the transcript's trailing `[Request interrupted by user]` marker (written
+   * by the SDK as a separate user message right after the interrupted one) is
+   * dropped with it. Consumed by the next user chunk either way.
+   */
+  private _skipInterruptedMarker = false
 
   /**
    * Whether the connected agent advertised `promptCapabilities.image`. Cached
@@ -908,6 +972,11 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._suppressAnchorMessageId = anchorMessageId
   }
 
+  setRetractedMessageIds(ids: readonly string[] | undefined): void {
+    this._retractedMessageIds.clear()
+    for (const id of ids ?? []) this._retractedMessageIds.add(id)
+  }
+
   private _flushQueuedPrompts(queued: readonly QueuedPrompt[]): void {
     for (const q of queued) {
       this._dispatchPrompt(q.text, q.refs, q.contexts, q.images, q.messageId).then(
@@ -1174,7 +1243,9 @@ export class AcpSession extends Disposable implements IAcpSession {
       contexts,
       images,
       messageId,
+      sentMessageId: messageId,
       baseline: this._applyUpdateCount,
+      outputBaseline: this._agentOutputCount,
     }
     this._lastDispatch = snapshot
     try {
@@ -1185,6 +1256,12 @@ export class AcpSession extends Disposable implements IAcpSession {
       // would clear the streaming caret while another prompt is still emitting
       // chunks, splitting its output into a fresh card.
       if (this._inFlight.size === 0) this._flushStream()
+      // All prompts settled without a cancel — the stashed submitted draft is
+      // stale (its turn completed), drop it so it can't resurface on a later
+      // cancel. Aborted prompts keep the stash for cancelTurn's restore event.
+      if (this._inFlight.size === 0 && !abort.signal.aborted) {
+        AcpPromptCancelledDraftStash.clear(this.id)
+      }
       this._recomputeStatus()
     }
   }
@@ -1232,8 +1309,6 @@ export class AcpSession extends Disposable implements IAcpSession {
         return
       } catch (err) {
         if (err instanceof AcpAbortError) {
-          // '[cancelled]' is appended once by cancelTurn — appending here would
-          // duplicate it when several concurrent prompts abort together.
           this._telemetry.publicLog('acp.prompt_cancelled', { sessionId: sid })
           // A reconnect aborts in-flight prompts too, but that path is an
           // interruption, not a cancellation: the orphan compaction must stay
@@ -1320,7 +1395,9 @@ export class AcpSession extends Disposable implements IAcpSession {
           contexts: continued ? [] : snapshot.contexts,
           images: continued ? [] : snapshot.images,
           messageId: currentMessageId,
+          sentMessageId: snapshot.sentMessageId,
           baseline: this._applyUpdateCount,
+          outputBaseline: this._agentOutputCount,
         }
         this.recovery.set({
           phase: 'exhausted',
@@ -1339,7 +1416,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
   }
 
-  async cancelTurn(): Promise<void> {
+  async cancelTurn(options?: { readonly restorePrompt?: boolean }): Promise<void> {
     const conn = this._conn
     const sid = this.sessionIdOnAgent.get()
     const had = this._inFlight.size > 0
@@ -1353,7 +1430,60 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Snapshot before aborting: abort() synchronously triggers each prompt's
     // finally, which deletes from the live set.
     for (const a of [...this._inFlight]) a.abort()
-    if (had) this._appendMessage('agent', '[cancelled]')
+    // Zero-output turn: the stashed submitted draft survives the abort (the
+    // catch branch in _sendWithRecovery never clears it); PromptInput drains it
+    // on this event and restores it into the input box for edit-and-retry. The
+    // just-sent user message leaves the timeline with it — keeping both would
+    // show the prompt the user is about to edit as if it had already been
+    // answered. Once the agent has streamed any visible output the cancel is a
+    // normal interruption instead: the partial turn stays and nothing is
+    // restored or retracted.
+    if (had && options?.restorePrompt !== false) {
+      if (
+        this._lastDispatch === undefined ||
+        this._agentOutputCount === this._lastDispatch.outputBaseline
+      ) {
+        const retractedId = this._retractLastDispatchedUserMessage()
+        // Persist the retraction: the turn stays in the agent transcript, so the
+        // resume replay filters it back out via _retractedMessageIds.
+        if (retractedId !== undefined && sid !== undefined) {
+          this._retractedMessageIds.add(retractedId)
+          this._history?.addRetractedMessageId(sid, retractedId)
+        }
+        this._onDidCancelForRestore.fire()
+      } else {
+        // Normal interruption: the SDK writes an interruption-marker user row
+        // into the transcript after the partial output, but the live stream
+        // never delivers it — append it locally so the running session shows
+        // the same trace a later resume will replay.
+        this._appendMessage('user', INTERRUPTED_MARKER_TEXT)
+      }
+    }
+  }
+
+  /**
+   * Pull the user message of the last dispatched prompt back off the timeline.
+   * Keyed by the dispatch's own anchor id (not a continuation prompt's), so an
+   * automatic-retry cancel retracts the synthetic 继续 message while the original
+   * prompt stays; concurrent steering prompts retract only the latest (matching
+   * the last-wins restore stash). Returns the retracted anchor id, or undefined
+   * when no matching user message exists.
+   */
+  private _retractLastDispatchedUserMessage(): string | undefined {
+    const sentMessageId = this._lastDispatch?.sentMessageId
+    if (sentMessageId === undefined) return undefined
+    const idx = this._messages.findIndex((m) => m.role === 'user' && m.messageId === sentMessageId)
+    const retracted = idx === -1 ? undefined : this._messages[idx]
+    if (retracted === undefined) return undefined
+    this._messages = [...this._messages.slice(0, idx), ...this._messages.slice(idx + 1)]
+    this._timeline = this._timeline.filter(
+      (it) => !(it.kind === 'message' && it.id === retracted.id),
+    )
+    const tx = this._batchedTx()
+    this.messages.set(this._messages, tx)
+    this.timeline.set(this._timeline, tx)
+    this._commitBatchedTx()
+    return sentMessageId
   }
 
   /**
@@ -1414,7 +1544,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       }
     }
 
-    if (!dryRun) await this.cancelTurn()
+    if (!dryRun) await this.cancelTurn({ restorePrompt: false })
 
     if (filesAreClientSide) {
       // Real rewind: roll files back first (unless the user kept edits), then ask
@@ -1791,6 +1921,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       }
     }
     const parentId = readParentToolUseId(update)
+    if (AGENT_OUTPUT_UPDATE_KINDS.has(update.sessionUpdate)) this._agentOutputCount++
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
       for (const change of readFileChanges(update)) {
         if (sid !== undefined) {
@@ -1806,6 +1937,19 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
     switch (update.sessionUpdate) {
       case 'user_message_chunk': {
+        const mid = readMessageId(update)
+        // A prompt retracted by cancelTurn's restore stays in the transcript —
+        // drop its replay (and the SDK's trailing interruption marker) so a
+        // reloaded session shows the same timeline the user left.
+        if (mid !== undefined && this._retractedMessageIds.has(mid)) {
+          this._skipInterruptedMarker = true
+          break
+        }
+        if (this._skipInterruptedMarker) {
+          this._skipInterruptedMarker = false
+          const text = update.content.type === 'text' ? update.content.text.trim() : ''
+          if (text === INTERRUPTED_MARKER_TEXT) break
+        }
         // Best-effort parity with the live path: a replayed user chunk whose
         // text is exactly one of the recovery continuation sentinels is the
         // automatic continuation the recovery machinery sent before the
@@ -1817,7 +1961,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           this.isReplayingHistory.get() &&
           trimmed !== undefined &&
           (trimmed === CONTINUE_PROMPT_TEXT || trimmed === recoveryContinuePromptText())
-        this._appendChunk('user', update.content, parentId, readMessageId(update), autoRetry)
+        this._appendChunk('user', update.content, parentId, mid, autoRetry)
         break
       }
       case 'agent_message_chunk':
@@ -2130,7 +2274,14 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
     const last = this._messages[this._messages.length - 1]
     let next: AcpMessage
-    if (last && last.role === role && this._isStreaming(last.id)) {
+    // Chunks merge into the open streaming message only when they belong to it:
+    // same role AND same anchor. Replays stamp each persisted message with its
+    // own messageId, so without the anchor check two adjacent replayed user
+    // messages (e.g. an interruption marker followed by the re-sent prompt, once
+    // any filtered chunks in between are dropped) would fuse into one card.
+    // Anchorless chunks (agent/thought paths never pass one) keep the old
+    // merge-anything behavior — undefined === undefined.
+    if (last && last.role === role && this._isStreaming(last.id) && last.messageId === messageId) {
       const blocks = mergeStreamingBlock(last.blocks, block)
       next = {
         id: last.id,
@@ -2254,7 +2405,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Atomic + synchronous: write both observables on the batched tx then commit
     // immediately. Folding in any chunk tx already pending keeps messages and
     // timeline from being observed in a torn intermediate state (e.g. a
-    // mid-stream `[cancelled]`/`[error]` sentinel landing between two chunks).
+    // mid-stream `[error]` sentinel landing between two chunks).
     const tx = this._batchedTx()
     this.messages.set(this._messages, tx)
     this.timeline.set(this._timeline, tx)

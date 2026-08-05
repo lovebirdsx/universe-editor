@@ -530,6 +530,21 @@ export interface IAcpSession {
    */
   readonly onDidRequireAuth: Event<void>
   /**
+   * Fires when a user-initiated cancel interrupts at least one in-flight prompt
+   * (Stop button / cancel command), so the input box can restore the submitted
+   * draft for edit-and-retry (Claude Code CLI parity). Does NOT fire for
+   * rewind's internal cancel — rewind refills via AcpPromptReplaceInbox instead.
+   */
+  readonly onDidCancelForRestore: Event<void>
+  /**
+   * Arm the messageId filter for replayed user chunks: ids recorded by
+   * {@link cancelTurn}'s retraction (persisted on the history row) are dropped
+   * from the replay so a cancelled-and-restored prompt stays invisible after a
+   * reload, together with the trailing `[Request interrupted by user]` marker
+   * the agent transcript carries.
+   */
+  setRetractedMessageIds(ids: readonly string[] | undefined): void
+  /**
    * Auto-recovery progress (prompt retry after a transient failure, or a
    * hot-reconnect after the agent process died / stalled); `undefined` when
    * healthy. The chat UI renders a non-intrusive bar from this: countdown to
@@ -607,7 +622,16 @@ export interface IAcpSession {
     contexts?: readonly SelectionContext[],
     images?: readonly PromptImage[],
   ): Promise<void>
-  cancelTurn(): Promise<void>
+  /**
+   * Cancel all in-flight prompts. `restorePrompt: false` suppresses
+   * {@link onDidCancelForRestore} — used by rewind, which refills the input box
+   * with the anchor message through its own channel.
+   *
+   * The restore + retraction only happen while the turn produced no visible
+   * agent output; once the agent has streamed anything, the cancel is treated
+   * as a normal interruption and the partial turn stays on the timeline.
+   */
+  cancelTurn(options?: { readonly restorePrompt?: boolean }): Promise<void>
   close(): Promise<void>
   /** Change one configuration option via `session/set_config_option`. */
   setConfigOption(configId: string, value: string): Promise<void>

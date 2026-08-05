@@ -139,6 +139,7 @@ function makeSession(
     imageSupported: observableValue<boolean>('t.imageSupported', false),
     forkSupported: observableValue<boolean>('t.forkSupported', opts.forkSupported ?? false),
     rewindSupported: observableValue<boolean>('t.rewindSupported', false),
+    onDidCancelForRestore: Event.None,
     cycleCollapseMode: () => {
       const cur = collapseMode.get()
       const next = cur === 'default' ? 'collapsed' : cur === 'collapsed' ? 'expanded' : 'default'

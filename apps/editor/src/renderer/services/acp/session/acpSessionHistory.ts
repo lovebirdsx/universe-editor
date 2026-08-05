@@ -184,6 +184,13 @@ export interface AcpSessionHistoryEntry {
    * the side task's own turns from here on. Unset until the first turn is sent.
    */
   readonly sideTaskAnchorMessageId?: string
+  /**
+   * Anchor ids of user prompts retracted by cancelTurn's restore (the draft
+   * went back to the input box). They stay in the agent transcript, so the
+   * resume replay filters them — and the trailing
+   * `[Request interrupted by user]` marker — back out of the timeline.
+   */
+  readonly retractedMessageIds?: readonly string[]
 }
 
 export interface IAcpSessionHistoryService {
@@ -244,6 +251,12 @@ export interface IAcpSessionHistoryService {
    * forked baseline apart from the side task's own turns.
    */
   setSideTaskAnchorMessageId(sessionId: string, messageId: string): void
+  /**
+   * Record a user prompt retracted by cancelTurn's restore (see
+   * {@link AcpSessionHistoryEntry.retractedMessageIds}). Deduped; no-op if the
+   * id is unknown.
+   */
+  addRetractedMessageId(sessionId: string, messageId: string): void
   /**
    * Mark a session's title as AI-generated. Idempotent; no-op if the id is
    * unknown. Called by `AcpSession` when it sets a title from the session-title
@@ -471,6 +484,10 @@ export class AcpSessionHistoryService
     // First prompt is write-once; a re-add (e.g. on resume) must not drop it.
     const carriedFirstPrompt =
       entry.firstPrompt ?? (existingIdx >= 0 ? this._state[existingIdx]!.firstPrompt : undefined)
+    // Cancel-retractions accumulate across turns; a re-add must keep them.
+    const carriedRetractedMessageIds =
+      entry.retractedMessageIds ??
+      (existingIdx >= 0 ? this._state[existingIdx]!.retractedMessageIds : undefined)
     const next: AcpSessionHistoryEntry = {
       id,
       agentId: entry.agentId,
@@ -494,6 +511,9 @@ export class AcpSessionHistoryService
         : {}),
       ...(carriedHasMessages !== undefined ? { hasMessages: carriedHasMessages } : {}),
       ...(carriedFirstPrompt !== undefined ? { firstPrompt: carriedFirstPrompt } : {}),
+      ...(carriedRetractedMessageIds !== undefined
+        ? { retractedMessageIds: carriedRetractedMessageIds }
+        : {}),
       ...(existingAiTitle === true ? { aiTitle: true } : {}),
       ...(existingManualTitle === true ? { manualTitle: true } : {}),
       // Same carry-over for the archive/pin flags: re-adding the same session
@@ -632,6 +652,20 @@ export class AcpSessionHistoryService
     const cur = this._state[idx]!
     if (cur.sideTaskAnchorMessageId !== undefined) return
     const next: AcpSessionHistoryEntry = { ...cur, sideTaskAnchorMessageId: messageId }
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  addRetractedMessageId(sessionId: string, messageId: string): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if (cur.retractedMessageIds?.includes(messageId)) return
+    const next: AcpSessionHistoryEntry = {
+      ...cur,
+      retractedMessageIds: [...(cur.retractedMessageIds ?? []), messageId],
+    }
     this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()
@@ -970,7 +1004,9 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     (o['mcpServerNames'] === undefined || isStringArray(o['mcpServerNames'])) &&
     (o['sideTaskOf'] === undefined || typeof o['sideTaskOf'] === 'string') &&
     (o['sideTaskQuote'] === undefined || typeof o['sideTaskQuote'] === 'string') &&
-    (o['sideTaskAnchorMessageId'] === undefined || typeof o['sideTaskAnchorMessageId'] === 'string')
+    (o['sideTaskAnchorMessageId'] === undefined ||
+      typeof o['sideTaskAnchorMessageId'] === 'string') &&
+    (o['retractedMessageIds'] === undefined || isStringArray(o['retractedMessageIds']))
   )
 }
 
