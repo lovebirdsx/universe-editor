@@ -315,7 +315,8 @@ describe('ElicitationCard — AskUserQuestion folding', () => {
           question_0_custom: {
             type: 'string',
             title: 'Other',
-            description: 'Type your own answer instead of choosing an option above (optional).',
+            description:
+              'Add a note to the selected option, or type your own answer instead (optional).',
           },
         },
       },
@@ -346,11 +347,11 @@ describe('ElicitationCard — AskUserQuestion folding', () => {
     expect(input.tagName).toBe('INPUT')
   })
 
-  it('a typed Other answer keeps the enum selection and wins in the submitted content', () => {
+  it('a typed note is submitted alongside the enum selection, not instead of it', () => {
     const h = makePending(askRequest())
     render(renderCard(makeSession('A', h.pending)))
 
-    // Select an option first, then type a custom answer — the select is kept.
+    // Select an option first, then type a note — the select is kept.
     fireEvent.click(screen.getByTestId('acp-elicitation-input-question_0'))
     fireEvent.click(screen.getByRole('option', { name: /Option A/ }))
     fireEvent.change(screen.getByTestId('acp-elicitation-input-question_0_custom'), {
@@ -360,11 +361,11 @@ describe('ElicitationCard — AskUserQuestion folding', () => {
 
     fireEvent.click(screen.getByTestId('acp-elicitation-submit'))
     expect(h.resolved).toEqual([
-      { action: 'accept', content: { question_0_custom: 'my own answer' } },
+      { action: 'accept', content: { question_0: 'opt-a', question_0_custom: 'my own answer' } },
     ])
   })
 
-  it('picking a concrete option keeps the typed custom answer; clearing the input lets the enum win', () => {
+  it('picking a concrete option keeps the typed note; both are submitted together', () => {
     const h = makePending(askRequest())
     render(renderCard(makeSession('A', h.pending)))
 
@@ -377,9 +378,11 @@ describe('ElicitationCard — AskUserQuestion folding', () => {
       (screen.getByTestId('acp-elicitation-input-question_0_custom') as HTMLInputElement).value,
     ).toBe('stale')
 
-    // Non-empty custom text still wins on submit…
+    // Non-empty custom text rides along with the selection on submit…
     fireEvent.click(screen.getByTestId('acp-elicitation-submit'))
-    expect(h.resolved).toEqual([{ action: 'accept', content: { question_0_custom: 'stale' } }])
+    expect(h.resolved).toEqual([
+      { action: 'accept', content: { question_0: 'opt-b', question_0_custom: 'stale' } },
+    ])
   })
 
   it('clearing the Other input lets the picked option through on submit', () => {

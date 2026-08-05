@@ -99,11 +99,11 @@ function buildContent(
 /**
  * Pairs an AskUserQuestion-style `<name>_custom` free-text field with its enum
  * question so the two render side by side on one row: the select plus an
- * always-visible "Other" input. The fork emits the custom field per question
- * and its non-empty text wins over the enum selection (see elicitation.ts in
- * the fork). The two controls keep their values independently — clearing
- * either on the other's edit would silently destroy user input; the
- * custom-wins rule is applied at submit instead (see submit's `cleaned` pass).
+ * always-visible notes/"Other" input. The fork emits the custom field per
+ * question; on submit both values travel together and the agent bridge folds
+ * the text into notes on the selection (never replacing it). The two controls
+ * keep their values independently — clearing either on the other's edit would
+ * silently destroy user input.
  */
 interface DisplayField {
   readonly field: ElicitationFormField
@@ -306,18 +306,10 @@ function FormElicitationCard({
   }
 
   const submit = (): void => {
-    // A typed "Other" answer replaces the enum selection: non-empty custom text
-    // drops the enum value, so the content only carries the custom field —
-    // mirroring the fork's custom-wins rule.
-    const cleaned: CardValues = { ...values }
-    for (const { field, customField } of displayFields) {
-      if (!customField) continue
-      const custom = cleaned[customField.name]
-      if (typeof custom === 'string' && custom.trim() !== '') {
-        delete cleaned[field.name]
-      }
-    }
-    const built = buildContent(fields, cleaned)
+    // Selection and custom text are submitted together: the agent bridge folds
+    // non-empty custom text into notes on the selection (or a notes-only answer
+    // when nothing is picked), so a remark never swallows the picked option.
+    const built = buildContent(fields, values)
     if ('errorField' in built) {
       setError(
         localize('acp.elicitation.notANumber', '"{field}" must be a number', {
@@ -589,7 +581,7 @@ function EnumSelect({
           <Input
             value={customValue}
             spellCheck={false}
-            placeholder={localize('acp.elicitation.otherPlaceholder', 'Other…')}
+            placeholder={localize('acp.elicitation.otherPlaceholder', 'Notes or other answer…')}
             aria-label={customField.title ?? 'Other'}
             onChange={(e) => onCustomChange?.(e.target.value)}
             data-testid={`acp-elicitation-input-${customField.name}`}
