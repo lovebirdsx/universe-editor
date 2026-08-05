@@ -28,4 +28,16 @@ describe('buildPlaceholders', () => {
     expect(range).not.toContain('||')
     expect(range).not.toMatch(/\d\s+-\s+\d/)
   })
+
+  it('produces no undefined/empty-substitution surprises for an empty description', () => {
+    // An interactive "just hit Enter" on the description prompt must land as
+    // '' — never the string "undefined" — in every placeholder value, since
+    // String(undefined) by replaceAll would write it into the manifest.
+    const map = buildPlaceholders({ ...answers, description: '' }, SDK_VERSIONS)
+    for (const [token, value] of Object.entries(map)) {
+      expect(value, `placeholder ${token}`).not.toBe('undefined')
+      expect(typeof value, `placeholder ${token}`).toBe('string')
+    }
+    expect(map.__description__).toBe('')
+  })
 })

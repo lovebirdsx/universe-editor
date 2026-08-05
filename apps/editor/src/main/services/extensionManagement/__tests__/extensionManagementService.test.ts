@@ -546,6 +546,33 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
     expect(await svc2.listDevExtensions()).toEqual([])
     svc2.dispose()
   })
+
+  it('resolves a dev extension icon to a data URL', async () => {
+    const devRoot = path.join(root, 'dev-ext')
+    await mkdir(devRoot, { recursive: true })
+    await writeFile(
+      path.join(devRoot, 'package.json'),
+      JSON.stringify(manifest({ name: 'iterating', publisher: 'acme', icon: 'icon.png' })),
+    )
+    // 1×1 transparent PNG
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      'base64',
+    )
+    await writeFile(path.join(devRoot, 'icon.png'), png)
+
+    const svc2 = new ExtensionManagementMainService(
+      () => extDir,
+      HOST_API,
+      undefined,
+      undefined,
+      () => path.join(root, 'nonexistent'),
+      () => [devRoot],
+    )
+    const url = await svc2.getLocalIcon('acme.iterating')
+    expect(url.startsWith('data:image/png;base64,')).toBe(true)
+    svc2.dispose()
+  })
 })
 
 describe('deleteExtensionFolder / sweepDeletedFolders', () => {

@@ -427,7 +427,11 @@ export class ExtensionManagementMainService
   }
 
   private async _readLocalIcon(identifier: string): Promise<string> {
-    const all = [...(await this.getInstalled()), ...(await this.listBuiltinExtensions())]
+    const all = [
+      ...(await this.getInstalled()),
+      ...(await this.listBuiltinExtensions()),
+      ...(await this.listDevExtensions()),
+    ]
     const local = all.find((e) => e.identifier === identifier)
     const iconPath = local?.manifest.icon
     if (!local || !iconPath) return ''

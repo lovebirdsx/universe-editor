@@ -65,12 +65,16 @@ export async function promptForMissing(partial: PartialAnswers): Promise<Scaffol
       name)
   const description =
     partial.description ??
-    guard(
+    // @clack/core resolves an empty submit to defaultValue (undefined when not
+    // passed), so an interactive "just hit Enter" yields undefined — fall back
+    // to '' or the scaffold writes the literal string "undefined".
+    (guard(
       await p.text({
         message: 'description (optional)',
         placeholder: '',
       }),
-    )
+    ) ||
+      '')
   const template =
     partial.template ??
     guard(
