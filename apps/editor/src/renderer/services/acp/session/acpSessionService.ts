@@ -1234,7 +1234,7 @@ export class AcpSessionService
       const silentMs = now - session.lastActivityAt
       if (silentMs < stallMs) continue
       this._logger.warn(
-        `session ${session.id} stalled (no updates for ${Math.round(silentMs / 1000)}s) — hot-reconnecting`,
+        `session ${session.id} (agent id ${session.sessionIdOnAgent.get() ?? 'unattached'}) stalled (no updates for ${Math.round(silentMs / 1000)}s) — hot-reconnecting`,
       )
       this._telemetry.publicLog('acp.session_stall_detected', { agentId: session.agentId })
       session.handleStall()

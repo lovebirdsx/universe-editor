@@ -3792,10 +3792,10 @@ describe('AcpSessionService — configOptions history snapshot', () => {
 describe('AcpSessionService — stall watchdog', () => {
   const STALL_TIMEOUT_MS = 30_000
 
-  function makeService(): AcpSessionService {
+  function makeService(stallMs: number = STALL_TIMEOUT_MS): AcpSessionService {
     const notifications = new StubNotificationService()
     const config: IConfigurationService = new ConfigurationService()
-    void config.update('acp.turnStallTimeoutMs', STALL_TIMEOUT_MS, ConfigurationTarget.Memory)
+    void config.update('acp.turnStallTimeoutMs', stallMs, ConfigurationTarget.Memory)
     void config.update('acp.startupTimeoutMs', 5 * 60_000, ConfigurationTarget.Memory)
     return new AcpSessionService(
       new FakeAcpClientService({ stubOptions: { promptHangs: true } }),
@@ -3868,6 +3868,39 @@ describe('AcpSessionService — stall watchdog', () => {
     const { svc, session } = await makeRunningSession()
     const stallSpy = vi.spyOn(session, 'handleStall')
     await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 90_000)
+    expect(stallSpy).toHaveBeenCalled()
+    svc.dispose()
+  })
+
+  it('does not declare a stall right after a prompt dispatched following a long idle gap', async () => {
+    // Regression: lastActivityAt used to advance only on inbound updates, so
+    // the first prompt after a >stall-timeout idle gap was declared stalled on
+    // the very next watchdog tick (silence measured from the PREVIOUS turn's
+    // last update) and the shared agent process got killed mid-turn. Dispatch
+    // now counts as activity, so silence is measured from the turn start.
+    const stallMs = 90_000 // above the 60s watchdog tick so the first tick after dispatch is observable
+    const svc = makeService(stallMs)
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    const stallSpy = vi.spyOn(session, 'handleStall')
+
+    // Idle (no in-flight turn) far past the stall timeout — the watchdog skips
+    // non-running sessions, so nothing fires.
+    await vi.advanceTimersByTimeAsync(200_000)
+    expect(stallSpy).not.toHaveBeenCalled()
+
+    void session.sendPrompt('hi')
+    await vi.advanceTimersByTimeAsync(10)
+    expect(session.status.get()).toBe('running')
+
+    // Next tick lands ~40s after the dispatch: well under the stall timeout,
+    // no matter how long the session idled before it.
+    await vi.advanceTimersByTimeAsync(45_000)
+    expect(stallSpy).not.toHaveBeenCalled()
+
+    // But a turn that then stays silent past the timeout still stalls.
+    await vi.advanceTimersByTimeAsync(stallMs + 60_000)
     expect(stallSpy).toHaveBeenCalled()
     svc.dispose()
   })

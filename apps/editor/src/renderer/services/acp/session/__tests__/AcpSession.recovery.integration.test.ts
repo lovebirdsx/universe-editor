@@ -518,6 +518,47 @@ describe('AcpSession auto-recovery', () => {
     expect(s.messages.get().some((m) => m.role === 'user' && m.text === '继续')).toBe(false)
   })
 
+  it('resends the original prompt after reconnect when only metadata updates arrived', async () => {
+    // Regression: the reconnect handshake always echoes metadata updates
+    // (available_commands / current_mode / usage) before the interrupted turn
+    // resumes. Those must not flip a zero-output turn onto the '继续' path —
+    // the agent never answered, so the original prompt is resent verbatim.
+    let resolveResent: (() => void) | undefined
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        // First turn: a metadata update lands, then the call hangs until killed.
+        () => {
+          client.emit(0, { sessionUpdate: 'usage_update', used: 0, size: 300000 })
+          return new Promise<PromptResponse>(() => {})
+        },
+        () =>
+          new Promise<PromptResponse>((resolve) => {
+            resolveResent = () => resolve({ stopReason: 'end_turn' } as PromptResponse)
+          }),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    void s.sendPrompt('run something')
+    await waitFor(s.status, (v) => v === 'running')
+
+    client.killConnection(0)
+    await waitFor(s.recoveryState, (v) => v === undefined)
+    expect(client.connections.length).toBe(2)
+    await waitFor({ get: () => client.connections[1]?.promptCalls.length ?? 0 }, (n) => n === 1)
+    const sent = client.connections[1]!.promptCalls[0]!
+    expect(sent.prompt.some((b) => b.type === 'text' && b.text === 'run something')).toBe(true)
+    expect(s.messages.get().some((m) => m.role === 'user' && m.text === CONTINUE_PROMPT_TEXT)).toBe(
+      false,
+    )
+    resolveResent?.()
+    await waitFor(s.status, (v) => v === 'idle')
+  })
+
   it('resumes an interrupted turn with a re-ask hint when a pending elicitation was cancelled by the disconnect', async () => {
     // Plan-mode AskUserQuestion scenario: the question card is up when the
     // process dies. The card settles as cancelled on disconnect, so a bare
@@ -922,6 +963,34 @@ describe('AcpSession auto-recovery', () => {
     // The wire retry carried the continuation text, not the original prompt.
     const second = client.connections[0]!.promptCalls[1]!
     expect(second.prompt.some((b) => b.type === 'text' && b.text === '继续')).toBe(true)
+  })
+
+  it('retries with the original prompt when only metadata arrived before a transient failure', async () => {
+    // Same guard on the in-place retry path: usage/config echoes during the
+    // failed attempt must not switch the resend to a '继续' continuation.
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => {
+          client.emit(0, { sessionUpdate: 'usage_update', used: 0, size: 300000 })
+          return Promise.reject(transientError())
+        },
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    await s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+
+    const second = client.connections[0]!.promptCalls[1]!
+    expect(second.prompt.some((b) => b.type === 'text' && b.text === 'do it')).toBe(true)
+    expect(s.messages.get().some((m) => m.role === 'user' && m.text === CONTINUE_PROMPT_TEXT)).toBe(
+      false,
+    )
   })
 
   it('merges the restarted compaction into the orphan slot after a hot-reconnect', async () => {

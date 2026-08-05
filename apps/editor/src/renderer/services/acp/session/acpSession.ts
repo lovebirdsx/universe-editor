@@ -228,12 +228,15 @@ interface PromptSnapshot {
    * user message it appended, which cancelTurn retracts on restore.
    */
   readonly sentMessageId: string
-  /** `_applyUpdateCount` when the prompt was first dispatched — zero-output detection. */
-  readonly baseline: number
   /**
-   * `_agentOutputCount` when the prompt was dispatched. cancelTurn retracts the
-   * prompt (and restores the draft) only while this still matches — once the
-   * agent has emitted any visible output the cancel is a normal interruption.
+   * `_agentOutputCount` when the prompt was dispatched — zero-output detection.
+   * A turn still at this baseline produced no visible output: the retry /
+   * reconnect paths resend the prompt verbatim, and cancelTurn retracts it
+   * (restoring the draft). Once the agent has emitted any visible output the
+   * turn is continued (`继续`) instead, and a cancel is a normal interruption.
+   * Metadata updates (usage / config / session_info / available_commands)
+   * deliberately don't move this counter — the reconnect handshake always
+   * echoes a few of those, and they don't answer the user's prompt.
    */
   readonly outputBaseline: number
 }
@@ -424,24 +427,23 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly recovery = new SessionRecovery()
 
   /**
-   * Monotonic counter bumped on every inbound `session/update`. Compared
-   * against a prompt's dispatch-time baseline to tell "the turn produced no
-   * output" (safe to auto-resend) from "partial output exists" (continue
-   * instead, or the transcript duplicates the turn).
-   */
-  private _applyUpdateCount = 0
-
-  /**
    * Monotonic counter bumped only by updates that surface as visible agent
-   * output (message / thought / tool call / plan). cancelTurn compares it
-   * against the dispatch-time `outputBaseline`: still equal → the agent never
-   * answered, so the prompt is retracted and restored into the input; advanced
-   * by even a single streamed character → the cancel is a normal interruption
-   * and the partial turn stays on the timeline.
+   * output (message / thought / tool call / plan). Compared against a prompt's
+   * dispatch-time `outputBaseline` to tell "the turn produced no output" (safe
+   * to auto-resend, and cancelTurn retracts the prompt + restores the draft)
+   * from "partial output exists" (retry/reconnect continue with `继续` instead
+   * so the agent transcript doesn't duplicate the turn, and a cancel is a
+   * normal interruption keeping the partial turn on the timeline). Metadata
+   * updates (usage / config / session_info / available_commands) don't move it.
    */
   private _agentOutputCount = 0
 
-  /** Wall-clock of the last inbound update — read by the service's stall watchdog. */
+  /**
+   * Wall-clock of the last activity on the turn — bumped by every inbound
+   * `session/update` AND by each outbound prompt dispatch. Read by the
+   * service's stall watchdog: measuring from dispatch too keeps the first
+   * prompt after a long idle gap from being declared stalled instantly.
+   */
   private _lastActivityAt = Date.now()
 
   /** True while a hot-reconnect is in progress (connection lost → reattached). */
@@ -768,7 +770,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     return this._reconnecting
   }
 
-  /** Wall-clock of the last inbound session/update — read by the stall watchdog. */
+  /** Wall-clock of the last inbound update or outbound dispatch — read by the stall watchdog. */
   get lastActivityAt(): number {
     return this._lastActivityAt
   }
@@ -865,7 +867,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._interruptedWithPendingInteraction = false
     if (this.status.get() === 'closed') return
     const last = this._lastDispatch
-    if (last !== undefined && this._applyUpdateCount === last.baseline) {
+    if (last !== undefined && this._agentOutputCount === last.outputBaseline) {
       await this._dispatchPrompt(last.text, last.refs, last.contexts, last.images, last.messageId)
       return
     }
@@ -1233,6 +1235,11 @@ export class AcpSession extends Disposable implements IAcpSession {
     )
     const abort = new AbortController()
     this._inFlight.add(abort)
+    // Outbound dispatch counts as activity too: the stall watchdog measures
+    // silence from here, not from the previous turn's last inbound update —
+    // otherwise the first prompt after a >stall-timeout idle gap is declared
+    // stalled on the next tick and the shared agent process gets killed.
+    this._lastActivityAt = Date.now()
     // Status is derived from the in-flight set — never set directly per prompt,
     // so N concurrent steering prompts stay 'running' until the last settles.
     this._recomputeStatus()
@@ -1244,7 +1251,6 @@ export class AcpSession extends Disposable implements IAcpSession {
       images,
       messageId,
       sentMessageId: messageId,
-      baseline: this._applyUpdateCount,
       outputBaseline: this._agentOutputCount,
     }
     this._lastDispatch = snapshot
@@ -1328,7 +1334,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         !this._reconnecting
       if (retryable) {
         attempt++
-        if (!continued && this._applyUpdateCount !== snapshot.baseline) {
+        if (!continued && this._agentOutputCount !== snapshot.outputBaseline) {
           continued = true
           const continueId = generateUuid()
           currentMessageId = continueId
@@ -1396,7 +1402,6 @@ export class AcpSession extends Disposable implements IAcpSession {
           images: continued ? [] : snapshot.images,
           messageId: currentMessageId,
           sentMessageId: snapshot.sentMessageId,
-          baseline: this._applyUpdateCount,
           outputBaseline: this._agentOutputCount,
         }
         this.recovery.set({
@@ -1884,9 +1889,7 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   applyUpdate(update: SessionUpdate): void {
     const sid = this.sessionIdOnAgent.get()
-    // Liveness bookkeeping: the counter backs zero-output detection for prompt
-    // retry, the timestamp backs the service's stall watchdog.
-    this._applyUpdateCount++
+    // Liveness bookkeeping for the service's stall watchdog.
     this._lastActivityAt = Date.now()
     if (this._suppressReplayToTimeline) {
       // Side-task anchor: the replayed user chunk carrying the side task's
