@@ -1,6 +1,6 @@
 # 语言特性
 
-> 用 `languages` namespace 给编辑器注册语言 provider（补全、跳转、诊断……），以及进阶形态「扩展内自 spawn 语言服务器」。以 API 0.7.1 为准。
+> 用 `languages` namespace 给编辑器注册语言 provider（补全、跳转、诊断……），以及进阶形态「扩展内自 spawn 语言服务器」。以 API 0.8.0 为准。
 
 语言支持分两层：
 
@@ -41,7 +41,7 @@ import { languages, type Hover, type Diagnostic } from '@universe-editor/extensi
 
 ## provider 清单
 
-`languages` namespace 当前（0.7.1）的全部方法：18 个 `register*` 加诊断与状态上报两个工具方法。
+`languages` namespace 当前（0.8.0）的全部方法：18 个 `register*` 加诊断与状态上报两个工具方法。
 
 | 方法 | 用途 | 备注 |
 |---|---|---|

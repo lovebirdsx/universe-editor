@@ -1,6 +1,6 @@
 # 贡献点参考
 
-> `contributes` 是扩展在 `package.json` 里声明的静态能力清单——命令、菜单、快捷键、设置、自定义编辑器等。宿主在扩展激活**之前**就把这些声明翻译成核心注册表里的条目：你的命令因此能出现在命令面板里、被点击时才触发懒激活。本文逐个列出宿主当前（API 0.7.1）真实支持的贡献点，每个一节：字段、行为、示例。
+> `contributes` 是扩展在 `package.json` 里声明的静态能力清单——命令、菜单、快捷键、设置、自定义编辑器等。宿主在扩展激活**之前**就把这些声明翻译成核心注册表里的条目：你的命令因此能出现在命令面板里、被点击时才触发懒激活。本文逐个列出宿主当前（API 0.8.0）真实支持的贡献点，每个一节：字段、行为、示例。
 
 ## 总览
 
@@ -17,6 +17,7 @@
 | `iconThemes` | 文件图标主题 |
 | `productIconThemes` | 产品图标主题 |
 | `grammars` | TextMate 语法（词法高亮） |
+| `mcpServers` | 声明式注入 MCP server（stdio），供 AI agent 会话使用 |
 
 **前向兼容**：`contributes` 对象本身是透传（passthrough）校验的——写了宿主不认识的贡献点不会报错，会被静默忽略。这是为了旧宿主能加载新扩展，不是给你试验幻想贡献点的许可证：**只写本文列出的分支**。
 
@@ -46,6 +47,8 @@
 - 声明的命令**默认出现在命令面板**里。首次调用走 bootstrap proxy：宿主先派发 `onCommand:<command>` 激活事件，等扩展激活并注册真正的 handler，再把调用路由过去。
 - 想**不进命令面板**（命令只从菜单/快捷键触发）：在 `menus.commandPalette` 里为该命令显式声明一条（通常配 `when` 条件），声明即覆盖默认条目。
 - 命令 id 与宿主内置命令冲突时，扩展的声明被忽略（内置优先）。
+
+> `title` / `category` 等用户可见字符串支持 `%key%` 本地化，见 [语言特性 · 本地化](./language-guide.md#本地化)。
 
 ## menus
 
@@ -199,6 +202,8 @@
 
 实战参考：内置的 ESLint 扩展通过单节点声明了 `eslint.enable` / `eslint.run` / `eslint.validate` / `eslint.format.enable` / `eslint.codeActionsOnSave.enable` / `eslint.options` 六个配置项。
 
+> `title` 与属性的 `description` 同样支持 `%key%` 本地化，见 [语言特性 · 本地化](./language-guide.md#本地化)。
+
 ## jsonValidation
 
 给匹配 `fileMatch` 的 JSON 文件关联一个 JSON schema，宿主据此提供校验、补全与 hover。
@@ -343,6 +348,48 @@
   }
 }
 ```
+
+## mcpServers
+
+> 0.8.0 新增。使用该贡献点的扩展，`engines.universe` 下界需 `>=0.8.0`。
+
+以声明方式往 AI agent 会话注入 MCP server——不需要写任何代码，纯 manifest 声明即可生效（纯声明式扩展同样适用）。结构是 `{ "<server 名>": <定义> }`，server 名即会话里看到的 MCP server id。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `command` | string | 是 | stdio server 的可执行命令；缺失的条目会被跳过并记 warning |
+| `args` | string[] | 否 | 命令行参数 |
+| `env` | object | 否 | 环境变量（`{ "<名>": "<值>" }`） |
+| `whenConfiguration` | string | 否 | 配置门控：引用的设置项解析为 `false` 时不注入该 server（未定义/真值则注入）。纯编辑器侧注解，不会随 server 定义发给 agent |
+
+`command` / `args` / `env` 的字符串值支持两个变量：
+
+- `${execPath}` —— 编辑器自带的 Electron/Node 可执行文件路径。用它跑扩展包内的 JS server（`ELECTRON_RUN_AS_NODE` 语义），用户机器上不需要装 Node。
+- `${extensionPath}` —— 扩展根目录的绝对路径（正斜杠形式），用来指向包内的 server 脚本。
+
+未知 `${...}` 变量会原样保留并记 warning（可见地降级，而不是静默产出空路径段）。
+
+```jsonc
+{
+  "contributes": {
+    "mcpServers": {
+      "my-tools": {
+        "command": "${execPath}",
+        "args": ["${extensionPath}/dist/mcp-server.js"],
+        "env": { "ELECTRON_RUN_AS_NODE": "1" },
+        "whenConfiguration": "myExtension.mcp.enable"
+      }
+    }
+  }
+}
+```
+
+行为：
+
+- **运行时来源，不落盘**：解析结果作为**最低优先级**的一层并入 `acp.mcpServers` 设置的合并管线——用户在 settings.json 里写的同名 server 会覆盖扩展的贡献；贡献本身**永远不会写进 settings.json**，扩展卸载或禁用后立即消失。
+- **v1 仅支持 stdio**：条目里带 `type` 字段（http/sse 等传输形态）会被跳过并记 warning。
+- **容错**：非法条目（缺 `command`、空 server 名等）跳过并记 warning，不影响会话创建与扩展其余部分。多个扩展贡献同名 server 时后扫描到的覆盖先到的，并记 warning。
+- **Workspace Trust 门控**：不受信任的工作区里，`untrustedWorkspaces` 解析为 `false` 的非内置扩展不注入任何 server（`limited` 仍注入，与激活门控一致）。门控状态或 `whenConfiguration` 引用的设置变化时实时重算，无需重启。
 
 ## 相关阅读
 

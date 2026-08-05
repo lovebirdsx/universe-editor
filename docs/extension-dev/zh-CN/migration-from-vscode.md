@@ -1,6 +1,6 @@
 # 从 VSCode 移植
 
-> 已有一个 VSCode 扩展，想让它跑在 Universe Editor 上：哪些只要机械替换、哪些要换写法、哪些能力根本没有。以 **API 0.7.1** 为准。
+> 已有一个 VSCode 扩展，想让它跑在 Universe Editor 上：哪些只要机械替换、哪些要换写法、哪些能力根本没有。以 **API 0.8.0** 为准。
 
 ## 决策背景：不 shim，但对齐
 
@@ -141,7 +141,7 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 仓库里的 [`extensions-external/pdf/`](../../../extensions-external/pdf/) 是一次真实移植——从 vscode-pdf（Apache-2.0）到 `universe-pdf`，用 Mozilla pdf.js 在 webview 里渲染 `.pdf`，`src/extension.ts` 的头注释如实标注了移植来源。相对原版，有效改动只有三处：
 
 1. **改 import（机械）**。`import * as vscode from 'vscode'` 换成从 `@universe-editor/extension-api` 具名导入 `window` 与类型；`vscode.ExtensionContext` 等类型注解换成具名 `type` 导入。主体逻辑（`openCustomDocument` / `resolveCustomEditor` 两方法、CSP 注入、`asWebviewUri` 重写资产 URL）原样保留。
-2. **砍掉自动重载（缺失能力）**。原版用 `vscode.workspace.createFileSystemWatcher` 监听文件变化自动重载；0.7.1 没有 watcher（计划中），改为打开时一次性渲染。代码里如实留了注释（`PdfDocument.dispose` 的 "auto-reload-on-change is not wired because the API has no filesystem watcher yet"），watcher 落地后可补回。
+2. **砍掉自动重载（缺失能力）**。原版用 `vscode.workspace.createFileSystemWatcher` 监听文件变化自动重载；当前（0.8.0）没有 watcher（计划中），改为打开时一次性渲染。代码里如实留了注释（`PdfDocument.dispose` 的 "auto-reload-on-change is not wired because the API has no filesystem watcher yet"），watcher 落地后可补回。
 3. **`localResourceRoots` 补文档所在目录（语义差异）**。Universe 只默认放行**扩展目录**；要 `asWebviewUri(document.uri)` 能解析，必须把文档所在目录显式加进 allow-list——漏了的症状是「预览器 UI 出来了但内容空白」。
 
 **工作量锚点**：这类纯预览扩展（一个只读 custom editor + 静态资产 + 少量 postMessage）**半天内**可移植完；大头通常在 pdf.js 这类第三方资产的打包与 CSP，而不是 API 差异。写新预览扩展可直接照抄它的骨架。
