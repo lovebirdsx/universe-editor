@@ -44,6 +44,17 @@ import {
   RESPONSIVENESS_WARN_THRESHOLD_KEY,
 } from '../services/performance/interactionPerfSettings.js'
 import { ERROR_COLLECTION_ENABLED_KEY } from '../services/telemetry/telemetryClientService.js'
+import {
+  DEFAULT_ISSUE_REPORTER_PROVIDER,
+  GITHUB_PROVIDER_ID,
+  ILOOP_APP_URL_SETTING_KEY,
+  ILOOP_BOARD_SETTING_KEY,
+  ILOOP_CATEGORY_SETTING_KEY,
+  ILOOP_PROVIDER_ID,
+  ILOOP_SERVER_URL_SETTING_KEY,
+  ISSUE_REPORTER_PROVIDER_SETTING_KEY,
+  ILoopDefaults,
+} from '../../shared/issueReporter.js'
 
 export class SettingsContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -710,6 +721,56 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             description: localize(
               'settings.telemetry.errorCollection.enabled.description',
               'Collect structured error records (fingerprint, redacted stack, occurrence count) into the local errors.jsonl log for diagnostics. Nothing is sent over the network.',
+            ),
+          },
+        },
+      }),
+    )
+
+    this._register(
+      ConfigurationRegistry.registerConfiguration({
+        id: 'issueReporter',
+        title: localize('settings.issueReporter', 'Issue Reporter'),
+        properties: {
+          [ISSUE_REPORTER_PROVIDER_SETTING_KEY]: {
+            type: 'string',
+            enum: [ILOOP_PROVIDER_ID, GITHUB_PROVIDER_ID],
+            default: DEFAULT_ISSUE_REPORTER_PROVIDER,
+            description: localize(
+              'settings.issueReporter.provider.description',
+              'Target the Report Issue command submits to. iLoop supports attaching the diagnostics package; GitHub only pre-fills the issue body.',
+            ),
+          },
+          [ILOOP_SERVER_URL_SETTING_KEY]: {
+            type: 'string',
+            default: ILoopDefaults.serverUrl,
+            description: localize(
+              'settings.issueReporter.iloop.serverUrl.description',
+              'iLoop file server (go-fastdfs) the diagnostics package is uploaded to when reporting an issue with attachments.',
+            ),
+          },
+          [ILOOP_APP_URL_SETTING_KEY]: {
+            type: 'string',
+            default: ILoopDefaults.appUrl,
+            description: localize(
+              'settings.issueReporter.iloop.appUrl.description',
+              'iLoop web app base URL. Report Issue opens its pre-filled addPost page.',
+            ),
+          },
+          [ILOOP_BOARD_SETTING_KEY]: {
+            type: 'string',
+            default: ILoopDefaults.board,
+            description: localize(
+              'settings.issueReporter.iloop.board.description',
+              'iLoop board (name or id) the issue report post is pre-filled for.',
+            ),
+          },
+          [ILOOP_CATEGORY_SETTING_KEY]: {
+            type: 'string',
+            default: ILoopDefaults.category,
+            description: localize(
+              'settings.issueReporter.iloop.category.description',
+              'iLoop category the issue report post is pre-filled for.',
             ),
           },
         },

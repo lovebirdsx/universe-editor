@@ -20,6 +20,7 @@ import type {
   IPerformanceMarksService,
   IPingService,
   IDisposableLeakService,
+  IIssueReporterService,
   IUsageService,
   IExchangeRateService,
 } from '../../shared/ipc/services.js'
@@ -89,6 +90,7 @@ export interface ApplicationServices {
    * main-internal, not on the wire contract).
    */
   readonly diagnostics: DiagnosticsMainService
+  readonly issueReporter: IIssueReporterService
   /**
    * Concrete (not interface) type: WindowMainService calls registerWindow /
    * unregisterWindow on it, which are main-internal and not on the wire contract.

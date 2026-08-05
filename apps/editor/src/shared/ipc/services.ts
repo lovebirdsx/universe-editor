@@ -8,7 +8,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '@universe-editor/platform'
-import type { Event, LogLevel, PerformanceMark } from '@universe-editor/platform'
+import type {
+  Event,
+  IssueReportPayload,
+  IssueReportProviderInfo,
+  LogLevel,
+  PerformanceMark,
+} from '@universe-editor/platform'
 
 // -------- Ping (demo/smoke-test) --------
 
@@ -293,6 +299,29 @@ export interface IDiagnosticsService {
    * in the OS shell, and return its absolute path.
    */
   exportDiagnosticsZip(): Promise<string>
+  /**
+   * Same zip as exportDiagnosticsZip but without the OS-shell reveal — used by
+   * main-internal consumers (the iLoop issue reporter uploads it as an
+   * attachment).
+   */
+  createDiagnosticsZip(): Promise<string>
 }
 
 export const IDiagnosticsService = createDecorator<IDiagnosticsService>('diagnosticsService')
+
+// -------- Issue Reporter (pluggable Report Issue targets) --------
+
+/**
+ * Facade over the pluggable issue-report providers (GitHub / iLoop) held by
+ * the main process. The renderer collects the markdown, asks the chosen
+ * provider for a pre-filled issue-page URL (uploading the diagnostics zip
+ * first when `attachDiagnostics`), then opens that URL itself.
+ */
+export interface IIssueReporterService {
+  readonly _serviceBrand: undefined
+  listProviders(): Promise<IssueReportProviderInfo[]>
+  /** Throws on unknown provider id or when the attachment upload fails. */
+  buildIssueUrl(providerId: string, payload: IssueReportPayload): Promise<string>
+}
+
+export const IIssueReporterService = createDecorator<IIssueReporterService>('issueReporterService')

@@ -101,6 +101,14 @@ export class DiagnosticsMainService extends Disposable implements IDiagnosticsSe
   }
 
   async exportDiagnosticsZip(): Promise<string> {
+    const zipPath = await this.createDiagnosticsZip()
+    if (this._options.revealInShell !== false) {
+      shell.showItemInFolder(zipPath)
+    }
+    return zipPath
+  }
+
+  async createDiagnosticsZip(): Promise<string> {
     const zip = new AdmZip()
     const markdown = await this.collectIssueReport()
     zip.addFile('sysinfo.md', Buffer.from(markdown, 'utf8'))
@@ -128,9 +136,6 @@ export class DiagnosticsMainService extends Disposable implements IDiagnosticsSe
     const zipPath = join(this._options.diagnosticsDir, `universe-diagnostics-${stamp}.zip`)
     await zip.writeZipPromise(zipPath)
     this._logger.info(`diagnostics zip written: ${zipPath}`)
-    if (this._options.revealInShell !== false) {
-      shell.showItemInFolder(zipPath)
-    }
     return zipPath
   }
 

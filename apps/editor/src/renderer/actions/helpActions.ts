@@ -7,10 +7,12 @@
 
 import {
   Action2,
+  IConfigurationService,
   IEditorService,
   IEditorGroupsService,
   INotificationService,
   IOpenerService,
+  IQuickInputService,
   MenuId,
   Severity,
   localize,
@@ -19,11 +21,11 @@ import {
 } from '@universe-editor/platform'
 import { DocEditorInput } from '../services/editor/DocEditorInput.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
-import { IDiagnosticsService } from '../../shared/ipc/services.js'
+import { IDiagnosticsService, IIssueReporterService } from '../../shared/ipc/services.js'
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { renderReleaseNotesMarkdown } from '../services/releaseNotes/releaseNotes.js'
-import { buildIssueUrl } from '../services/diagnostics/issueUrl.js'
+import { runReportIssueFlow } from '../services/issueReporter/reportIssue.js'
 
 export class OpenDocsAction extends Action2 {
   static readonly ID = 'workbench.action.openDocs'
@@ -108,9 +110,11 @@ export class ShowReleaseNotesAction extends Action2 {
 /**
  * Report Issue (VSCode parity: workbench.action.openIssueReporter). Builds the
  * diagnostics markdown (versions / system / extensions / top error
- * fingerprints), copies it to the clipboard, then offers the issue page
- * (pre-filled body, degrading to paste-from-clipboard when too long) and the
- * diagnostics zip export.
+ * fingerprints), copies it to the clipboard, then delegates to the configured
+ * issue-report provider (iLoop by default, GitHub optional) for a pre-filled
+ * issue URL. Providers with attachment support (iLoop) first ask whether to
+ * upload the diagnostics zip alongside the report. The orchestration lives in
+ * services/issueReporter/reportIssue.ts.
  */
 export class ReportIssueAction extends Action2 {
   static readonly ID = 'workbench.action.openIssueReporter'
@@ -125,38 +129,14 @@ export class ReportIssueAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
-    const diagnostics = accessor.get(IDiagnosticsService)
-    const notifications = accessor.get(INotificationService)
-    const opener = accessor.get(IOpenerService)
-    const markdown = await diagnostics.collectIssueReport()
-    await navigator.clipboard.writeText(markdown)
-    notifications.notify({
-      severity: Severity.Info,
-      message: localize('reportIssue.copied', '诊断摘要已复制到剪贴板，可直接粘贴到 Issue 中。'),
-      sticky: true,
-      actions: [
-        {
-          label: localize('reportIssue.openIssuePage', '打开 Issue 页面'),
-          run: () => {
-            void opener.open(
-              buildIssueUrl(
-                markdown,
-                localize(
-                  'reportIssue.pasteHint',
-                  '（诊断信息较长，请从剪贴板粘贴 / paste the diagnostics summary from your clipboard）',
-                ),
-              ),
-            )
-          },
-        },
-        {
-          label: localize('reportIssue.exportZip', '导出诊断包'),
-          run: () => {
-            void exportDiagnostics(diagnostics, notifications)
-          },
-          isSecondary: true,
-        },
-      ],
+    await runReportIssueFlow({
+      diagnostics: accessor.get(IDiagnosticsService),
+      issueReporter: accessor.get(IIssueReporterService),
+      notifications: accessor.get(INotificationService),
+      opener: accessor.get(IOpenerService),
+      quickInput: accessor.get(IQuickInputService),
+      configuration: accessor.get(IConfigurationService),
+      writeClipboard: (text) => navigator.clipboard.writeText(text),
     })
   }
 }

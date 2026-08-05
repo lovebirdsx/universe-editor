@@ -17,6 +17,7 @@ function makeDiagnostics(report: AbnormalExitInfo | null): IDiagnosticsService &
     revealCrashesFolder,
     collectIssueReport: () => Promise.resolve(''),
     exportDiagnosticsZip: () => Promise.resolve(''),
+    createDiagnosticsZip: () => Promise.resolve(''),
   }
 }
 

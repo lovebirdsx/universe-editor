@@ -157,6 +157,7 @@ function makeOpts() {
       environmentSnapshot: {} as never,
       errorSink: { recordLocal: vi.fn() } as never,
       diagnostics: {} as never,
+      issueReporter: {} as never,
       watcherProcess: createStubWatcherProcessClient(),
     },
     logService,

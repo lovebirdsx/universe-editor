@@ -32,6 +32,7 @@ import {
   IDisposableLeakService,
   IDiagnosticsService,
   IExchangeRateService,
+  IIssueReporterService,
   IPerformanceMarksService,
   IPingService,
   IUsageService,
@@ -92,6 +93,7 @@ import { ExchangeRateMainService } from './exchangeRate/exchangeRateMainService.
 import { ResourceAccessMainService } from './resourceAccess/resourceAccessMainService.js'
 import { EnvironmentSnapshotMainService } from './environmentSnapshot/environmentSnapshotMainService.js'
 import { DiagnosticsMainService } from './diagnostics/diagnosticsMainService.js'
+import { IssueReporterMainService } from './issueReporter/issueReporterMainService.js'
 import { IWatcherProcessService, WatcherProcessClient } from './fileWatcher/watcherProcessClient.js'
 import { createWatcherUtilityTransportFactory } from './fileWatcher/watcherUtilityTransport.js'
 
@@ -272,6 +274,13 @@ registerSingletonFactory(IDiagnosticsService, (acc) => {
         }))
       },
     },
+    acc.get(ILoggerService),
+  )
+})
+registerSingletonFactory(IIssueReporterService, (acc) => {
+  const diagnostics = acc.get(IDiagnosticsService)
+  return new IssueReporterMainService(
+    { createDiagnosticsZip: () => diagnostics.createDiagnosticsZip() },
     acc.get(ILoggerService),
   )
 })
