@@ -69,7 +69,7 @@ beforeEach(() => {
 })
 
 describe('GitTimelineProvider', () => {
-  it('builds the git log command with follow, limit+1 probing and the file path', async () => {
+  it('builds the git log command with limit+1 probing and the file path', async () => {
     const repo = fakeRepo()
     const provider = new GitTimelineProvider(fakeManager(repo))
     mocks.gitExec.mockResolvedValue(gitOk(''))
@@ -80,7 +80,6 @@ describe('GitTimelineProvider', () => {
       [
         'log',
         '-z',
-        '--follow',
         `--format=%H${FIELD}%an${FIELD}%ae${FIELD}%at${FIELD}%s`,
         '--max-count=11',
         '--',

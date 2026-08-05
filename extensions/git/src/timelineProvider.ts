@@ -1,9 +1,13 @@
 /**
- * GitTimelineProvider — TimelineProvider backed by `git log --follow` for a
+ * GitTimelineProvider — TimelineProvider backed by `git log -- <path>` for a
  * single file (the Universe counterpart of VSCode's `extensions/git`
- * timelineProvider). Registered for the `file` scheme; the built-in Timeline
- * view pulls pages, merges them with other sources, and runs each item's
- * command on click.
+ * timelineProvider). No `--follow`: rename/copy detection chains files whose
+ * contents merely coincide (e.g. the near-identical per-package tsconfig.json
+ * files in this monorepo), listing commits that never touched the path — and
+ * their blobs don't exist at the current path, so every such entry renders an
+ * empty diff. Registered for the `file` scheme; the built-in Timeline view
+ * pulls pages, merges them with other sources, and runs each item's command
+ * on click.
  *
  * Paging: each request fetches `limit + 1` commits; the extra record both
  * proves another page exists and becomes the cursor — the next page's
@@ -135,7 +139,6 @@ export class GitTimelineProvider implements TimelineProvider {
     const args = [
       'log',
       '-z',
-      '--follow',
       `--format=%H${FIELD}%an${FIELD}%ae${FIELD}%at${FIELD}%s`,
       `--max-count=${limit + 1}`,
       ...(options.cursor !== undefined ? [options.cursor] : []),
@@ -226,8 +229,9 @@ export function createGitTimelineCommands(
       if (!repo) return
       const rel = relative(repo.root, uri).replace(/\\/g, '/')
 
-      // A renamed file has no blob at the old path on the far side; the empty
-      // fallback renders the entry as added/deleted rather than failing.
+      // A missing blob on either side (e.g. the entry that added the file has
+      // no previous version) falls back to empty and renders as added/deleted
+      // rather than failing.
       let original = ''
       if (previousHash) {
         const res = await gitExec(['show', `${previousHash}:${rel}`], repo.root, log)
