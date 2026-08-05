@@ -8,6 +8,7 @@
  * absolute `resourceUri`, matched to the repo with the longest containing root
  * (a submodule root is a sub-path of the main root, so longest wins).
  */
+import type { Disposable } from '@universe-editor/extension-api'
 import { Repository } from './repository.js'
 import { norm } from './pathUtil.js'
 
@@ -18,20 +19,29 @@ interface RepoArg {
 
 export class RepositoryManager {
   private readonly _repos = new Map<string, Repository>()
+  private readonly _addListeners = new Set<(repo: Repository) => void>()
   /** The repo argument-less commands (command palette, keybindings, status bar)
    *  target. Mirrors the SCM view's selected repo, pushed via `git.setActiveRepo`;
    *  defaults to the main repo until the renderer syncs a selection. */
   private _activeRoot: string
+  /** Mutable so the workspace folder becoming a repo after startup (`git init`
+   *  in an already-open folder) can be promoted to main. */
+  private _mainRoot: string
 
   constructor(
-    readonly mainRoot: string,
+    mainRoot: string,
     private readonly _log?: (msg: string) => void,
   ) {
+    this._mainRoot = mainRoot
     this._activeRoot = mainRoot
   }
 
+  get mainRoot(): string {
+    return this._mainRoot
+  }
+
   get main(): Repository | undefined {
-    return this._repos.get(norm(this.mainRoot))
+    return this._repos.get(norm(this._mainRoot))
   }
 
   /** The currently active repo (falls back to main when the selection is gone). */
@@ -44,6 +54,24 @@ export class RepositoryManager {
     if (root && this._repos.has(norm(root))) this._activeRoot = root
   }
 
+  /** Promote an already-added repo to main (late `git init` in the workspace root). */
+  setMainRoot(root: string): void {
+    if (this._repos.has(norm(root))) {
+      this._mainRoot = root
+      this._activeRoot = root
+    }
+  }
+
+  has(root: string): boolean {
+    return this._repos.has(norm(root))
+  }
+
+  /** Fired when `add` surfaces a repo the manager didn't already know. */
+  onDidAdd(listener: (repo: Repository) => void): Disposable {
+    this._addListeners.add(listener)
+    return { dispose: () => this._addListeners.delete(listener) }
+  }
+
   get all(): Repository[] {
     return [...this._repos.values()]
   }
@@ -54,6 +82,7 @@ export class RepositoryManager {
     if (existing) return existing
     const repo = new Repository(root, this._log, opts)
     this._repos.set(key, repo)
+    for (const l of this._addListeners) l(repo)
     return repo
   }
 
@@ -80,6 +109,7 @@ export class RepositoryManager {
   }
 
   dispose(): void {
+    this._addListeners.clear()
     for (const repo of this._repos.values()) repo.dispose()
     this._repos.clear()
   }

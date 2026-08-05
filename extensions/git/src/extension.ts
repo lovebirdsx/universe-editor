@@ -4,17 +4,36 @@
  * by real `git status` output), and wires the stage/unstage/commit/refresh/
  * checkout commands to the `git` CLI. A filesystem watcher keeps the view live.
  *
+ * Repositories may also appear after activation (`git init` / `git clone` in an
+ * already-open folder): mirroring VSCode's `onPossibleGitRepositoryChange`, a
+ * workspace-wide watcher reacts to any `.git` entry showing up — running the
+ * full setup when no repo was known at startup, or adding the late repo to the
+ * existing manager otherwise. No window reload needed.
+ *
  * `activate` runs inside the extension host process; the host injects the API
  * and the open folder via `workspace.rootPath`. Everything is registered on
  * `context.subscriptions` so it is torn down on deactivate.
  */
-import { commands, workspace, window, type ExtensionContext } from '@universe-editor/extension-api'
+import {
+  commands,
+  workspace,
+  window,
+  type Disposable,
+  type ExtensionContext,
+} from '@universe-editor/extension-api'
 import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { RepositoryManager } from './repositoryManager.js'
 import { GitStatusBarController } from './gitStatusBar.js'
 import { commitAmendSmart, commitSmart } from './commitOperations.js'
-import { discoverRepos, type DiscoverOptions, type DiscoveredRepo } from './repoDiscovery.js'
+import {
+  discoverRepos,
+  type DiscoverOptions,
+  type DiscoverResult,
+  type DiscoveredRepo,
+} from './repoDiscovery.js'
+import { PossibleRepoWatcher, joinCandidate } from './possibleRepoWatcher.js'
+import { detectRepoRoot, type GitExecResult } from './gitService.js'
 import { norm } from './pathUtil.js'
 import {
   getCommits as getGitGraphCommits,
@@ -32,7 +51,6 @@ import { getBlame } from './blameSource.js'
 import { createGitTimelineCommands, GitTimelineProvider } from './timelineProvider.js'
 import { notifyGitFailure, setGitLogShower } from './gitError.js'
 import { localize } from './nls.js'
-import type { GitExecResult } from './gitService.js'
 
 function resourcePath(arg: unknown): string | undefined {
   return (arg as { resourceUri?: string } | undefined)?.resourceUri
@@ -66,44 +84,37 @@ export function pickStatusBarRoot(repos: readonly DiscoveredRepo[]): string {
 // With no git repo the real commands never register, but a restored Git Graph
 // tab still queries them. Stubs answer "no repos / unavailable" so the view
 // settles instead of spinning on unregistered commands.
-function registerGitGraphStubs(context: ExtensionContext): void {
-  context.subscriptions.push(
+function registerGitGraphStubs(): Disposable[] {
+  return [
     commands.registerCommand('git-graph.getRepos', () => []),
     commands.registerCommand('git-graph.getCommits', () => null),
     commands.registerCommand('git-graph.setRepo', () => undefined),
-  )
+  ]
 }
 
-export async function activate(context: ExtensionContext): Promise<void> {
-  const root = workspace.rootPath
-  if (!root) {
-    console.info('[git] no workspace folder open; git source control disabled')
-    registerGitGraphStubs(context)
-    return
-  }
+interface GitEnv {
+  /** Workspace folder path. */
+  readonly root: string
+  readonly scanOpts: DiscoverOptions
+  readonly log: (msg: string) => void
+}
 
-  const out = window.createOutputChannel('Git')
-  context.subscriptions.push(out)
-  const log = (msg: string): void => out.appendLine(msg)
-  // Let failure toasts offer an "Open Git Log" button that reveals this channel.
-  setGitLogShower(() => out.show())
-
-  const scanOpts = await readScanConfig()
-  const { repos, mainRoot } = await discoverRepos(root, scanOpts, log)
-  if (repos.length === 0) {
-    // Register a stub so DirtyDiffContribution doesn't warn "command not found"
-    // on every file switch. Files outside a git repo have no HEAD content → null.
-    context.subscriptions.push(commands.registerCommand('git.getHeadContent', () => null))
-
-    registerGitGraphStubs(context)
-    console.info(`[git] no git repository found under ${root}; source control disabled`)
-    return
-  }
-
+/**
+ * Build everything a discovered repo set needs: the RepositoryManager + SCM
+ * providers, the shared status-bar pair, the timeline provider, and the full
+ * command surface. Runs either at activation (repos found by the initial scan)
+ * or later, when the workspace watcher sees the first `.git` appear.
+ */
+function setupRepositories(
+  context: ExtensionContext,
+  env: GitEnv,
+  found: DiscoverResult,
+): RepositoryManager {
+  const { log } = env
   // The status-bar owner is the workspace-root repo when there is one; otherwise
   // a deterministically chosen repo. Only it owns the branch / sync status-bar
   // items, and the Git Graph view defaults to it.
-  const statusBarRoot = mainRoot ?? pickStatusBarRoot(repos)
+  const statusBarRoot = found.mainRoot ?? pickStatusBarRoot(found.repos)
 
   // Surface every discovered (initialized) repo as its own SCM provider.
   const mgr = new RepositoryManager(statusBarRoot, log)
@@ -113,7 +124,20 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const statusBar = new GitStatusBarController(mgr)
   context.subscriptions.push(statusBar)
 
-  for (const { root: repoRoot, name, initialized } of repos) {
+  // Timeline — file-history entries for the Explorer Timeline view. One provider
+  // serves every discovered repo; each repo refresh invalidates the view's pages.
+  // Late-added repos (workspace watcher) attach through the same onDidAdd hook.
+  const timelineProvider = new GitTimelineProvider(mgr, log)
+  context.subscriptions.push(
+    mgr.onDidAdd((repo) => {
+      context.subscriptions.push(timelineProvider.trackRepo(repo))
+      statusBar.refresh()
+    }),
+  )
+  context.subscriptions.push(workspace.registerTimelineProvider(['file'], timelineProvider))
+  context.subscriptions.push(...createGitTimelineCommands(mgr, log))
+
+  for (const { root: repoRoot, name, initialized } of found.repos) {
     const isMain = norm(repoRoot) === norm(statusBarRoot)
     if (!isMain && !initialized) continue
     mgr.add(repoRoot, { label: isMain ? 'Git' : `Git: ${name}` })
@@ -121,18 +145,23 @@ export async function activate(context: ExtensionContext): Promise<void> {
   statusBar.refresh()
   for (const repo of mgr.all) void repo.refresh({ fetch: true, silent: true })
 
-  // Timeline — file-history entries for the Explorer Timeline view. One provider
-  // serves every discovered repo; each repo refresh invalidates the view's pages.
-  const timelineProvider = new GitTimelineProvider(mgr, log)
-  for (const repo of mgr.all) context.subscriptions.push(timelineProvider.trackRepo(repo))
-  context.subscriptions.push(workspace.registerTimelineProvider(['file'], timelineProvider))
-  context.subscriptions.push(...createGitTimelineCommands(mgr, log))
-
   // The repository the Git Graph view currently targets. Defaults to the
   // status-bar repo; `git-graph.setRepo` switches it to another discovered repo.
-  // All Git Graph queries and operations below run against this root, so
-  // switching needs no per-command argument changes.
-  let gitGraphRoot = statusBarRoot
+  // Boxed so the command closures below share the mutable reference.
+  const graph = { current: statusBarRoot }
+  registerGitCommands(context, env, mgr, graph, statusBar)
+  return mgr
+}
+
+/** The whole git command surface, routed through `mgr` and the Git Graph target box. */
+function registerGitCommands(
+  context: ExtensionContext,
+  env: GitEnv,
+  mgr: RepositoryManager,
+  graph: { current: string },
+  statusBar: GitStatusBarController,
+): void {
+  const { root, scanOpts, log } = env
 
   // Run a Git Graph mutating op: report failure (with the real git error), refresh
   // SCM, return ok.
@@ -140,7 +169,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     const res = await p
     const ok = res.exitCode === 0
     if (!ok) await notifyGitFailure(`Graph: ${label}`, res)
-    await mgr.resolveRepo({ rootUri: gitGraphRoot })?.refresh()
+    await mgr.resolveRepo({ rootUri: graph.current })?.refresh()
     return ok
   }
 
@@ -254,37 +283,39 @@ export async function activate(context: ExtensionContext): Promise<void> {
       // as "the default repo" — it skips a redundant reload when the SCM view
       // selects that same default on first open.
       return [...list].sort((a, b) =>
-        norm(a.root) === norm(gitGraphRoot) ? -1 : norm(b.root) === norm(gitGraphRoot) ? 1 : 0,
+        norm(a.root) === norm(graph.current) ? -1 : norm(b.root) === norm(graph.current) ? 1 : 0,
       )
     }),
     commands.registerCommand('git-graph.setRepo', (...args: unknown[]) => {
       const next = args[0] as string
-      if (next) gitGraphRoot = next
+      if (next) graph.current = next
       return true
     }),
     commands.registerCommand('git-graph.getCommits', (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as GitGraphLoadOptions
-      return getGitGraphCommits(gitGraphRoot, { ...opts, workspaceRoot: root }, log)
+      return getGitGraphCommits(graph.current, { ...opts, workspaceRoot: root }, log)
     }),
     commands.registerCommand('git-graph.getCommitDetails', (...args: unknown[]) => {
       const hash = args[0] as string
-      return getGitGraphCommitDetails(gitGraphRoot, hash, log)
+      return getGitGraphCommitDetails(graph.current, hash, log)
     }),
     commands.registerCommand('git-graph.getUncommittedChanges', () =>
-      getGitGraphUncommittedChanges(gitGraphRoot, log),
+      getGitGraphUncommittedChanges(graph.current, log),
     ),
     commands.registerCommand('git-graph.compareCommits', (...args: unknown[]) => {
       const [from, to] = args as [string, string]
-      return compareGitGraphCommits(gitGraphRoot, from, to, log)
+      return compareGitGraphCommits(graph.current, from, to, log)
     }),
-    commands.registerCommand('git-graph.getBranches', () => getGitGraphBranches(gitGraphRoot, log)),
+    commands.registerCommand('git-graph.getBranches', () =>
+      getGitGraphBranches(graph.current, log),
+    ),
     commands.registerCommand('git-graph.openWorkingTreeFile', (...args: unknown[]) => {
       const path = args[0] as string
-      return mgr.resolveRepo({ rootUri: gitGraphRoot })?.openChange(join(gitGraphRoot, path))
+      return mgr.resolveRepo({ rootUri: graph.current })?.openChange(join(graph.current, path))
     }),
     commands.registerCommand('git-graph.openFileDiff', async (...args: unknown[]) => {
       const req = args[0] as GitGraphFileDiffRequest
-      const content = await getGitGraphFileDiffContent(gitGraphRoot, req, log)
+      const content = await getGitGraphFileDiffContent(graph.current, req, log)
       await commands.executeCommand('_workbench.openDiff', {
         title: content.title,
         originalUri: pathToFileURL(content.path).href,
@@ -307,7 +338,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('git-graph.deleteWorktree', async (...args: unknown[]) => {
       const path = args[0] as string
       if (!path) return
-      await mgr.resolveRepo({ rootUri: gitGraphRoot })?.removeWorktreeAt(path, basename(path))
+      await mgr.resolveRepo({ rootUri: graph.current })?.removeWorktreeAt(path, basename(path))
     }),
     commands.registerCommand('git-graph.syncWorktrees', async (...args: unknown[]) => {
       const [targetBranch, worktrees, force] = args as [string, gga.SyncWorktreeRef[], boolean?]
@@ -317,7 +348,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
         log,
         force === true,
       )
-      await mgr.resolveRepo({ rootUri: gitGraphRoot })?.refresh()
+      await mgr.resolveRepo({ rootUri: graph.current })?.refresh()
       return result
     }),
 
@@ -325,49 +356,52 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // git, surfaces failures, then refreshes the SCM view; returns ok to the
     // renderer, which reloads the graph afterwards.
     commands.registerCommand('git-graph.checkout', (...a: unknown[]) =>
-      finishOp('checkout', gga.checkout(gitGraphRoot, a[0] as string, log)),
+      finishOp('checkout', gga.checkout(graph.current, a[0] as string, log)),
     ),
     commands.registerCommand('git-graph.cherrypick', (...a: unknown[]) =>
-      finishOp('cherry-pick', gga.cherrypick(gitGraphRoot, a[0] as string, log)),
+      finishOp('cherry-pick', gga.cherrypick(graph.current, a[0] as string, log)),
     ),
     commands.registerCommand('git-graph.cherryPickToBranch', (...a: unknown[]) =>
       finishOp(
         'cherry-pick to branch',
-        gga.cherryPickToBranch(gitGraphRoot, a[0] as string, a[1] as string, log),
+        gga.cherryPickToBranch(graph.current, a[0] as string, a[1] as string, log),
       ),
     ),
     commands.registerCommand('git-graph.revert', (...a: unknown[]) =>
-      finishOp('revert', gga.revert(gitGraphRoot, a[0] as string, log)),
+      finishOp('revert', gga.revert(graph.current, a[0] as string, log)),
     ),
     commands.registerCommand('git-graph.reset', (...a: unknown[]) =>
-      finishOp('reset', gga.reset(gitGraphRoot, a[0] as string, a[1] as gga.ResetMode, log)),
+      finishOp('reset', gga.reset(graph.current, a[0] as string, a[1] as gga.ResetMode, log)),
     ),
     commands.registerCommand('git-graph.merge', (...a: unknown[]) =>
-      finishOp('merge', gga.merge(gitGraphRoot, a[0] as string, log)),
+      finishOp('merge', gga.merge(graph.current, a[0] as string, log)),
     ),
     commands.registerCommand('git-graph.rebase', (...a: unknown[]) =>
-      finishOp('rebase', gga.rebase(gitGraphRoot, a[0] as string, log)),
+      finishOp('rebase', gga.rebase(graph.current, a[0] as string, log)),
     ),
     commands.registerCommand('git-graph.createBranch', (...a: unknown[]) =>
       finishOp(
         'create branch',
-        gga.createBranch(gitGraphRoot, a[0] as string, a[1] as string, a[2] !== false, log),
+        gga.createBranch(graph.current, a[0] as string, a[1] as string, a[2] !== false, log),
       ),
     ),
     commands.registerCommand('git-graph.renameBranch', (...a: unknown[]) =>
       finishOp(
         'rename branch',
-        gga.renameBranch(gitGraphRoot, a[0] as string, a[1] as string, log),
+        gga.renameBranch(graph.current, a[0] as string, a[1] as string, log),
       ),
     ),
     commands.registerCommand('git-graph.deleteBranch', (...a: unknown[]) =>
-      finishOp('delete branch', gga.deleteBranch(gitGraphRoot, a[0] as string, a[1] === true, log)),
+      finishOp(
+        'delete branch',
+        gga.deleteBranch(graph.current, a[0] as string, a[1] === true, log),
+      ),
     ),
     commands.registerCommand('git-graph.pushBranch', (...a: unknown[]) =>
       finishOp(
         'push branch',
         gga.pushBranch(
-          gitGraphRoot,
+          graph.current,
           a[0] as string,
           (a[1] as string) || 'origin',
           a[2] === true,
@@ -376,12 +410,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
       ),
     ),
     commands.registerCommand('git-graph.checkoutRemote', (...a: unknown[]) =>
-      finishOp('checkout', gga.checkoutRemote(gitGraphRoot, a[0] as string, a[1] as string, log)),
+      finishOp('checkout', gga.checkoutRemote(graph.current, a[0] as string, a[1] as string, log)),
     ),
     commands.registerCommand('git-graph.resetBranchToRemote', (...a: unknown[]) =>
       finishOp(
         'reset branch',
-        gga.resetBranchToRemote(gitGraphRoot, a[0] as string, a[1] as string, log),
+        gga.resetBranchToRemote(graph.current, a[0] as string, a[1] as string, log),
       ),
     ),
     commands.registerCommand('git-graph.deleteRemoteBranch', (...a: unknown[]) => {
@@ -392,14 +426,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
       const branch = name.slice(slashIdx + 1)
       return finishOp(
         'delete remote branch',
-        gga.deleteRemoteBranch(gitGraphRoot, remote, branch, log),
+        gga.deleteRemoteBranch(graph.current, remote, branch, log),
       )
     }),
     commands.registerCommand('git-graph.createTag', (...a: unknown[]) =>
       finishOp(
         'create tag',
         gga.createTag(
-          gitGraphRoot,
+          graph.current,
           a[0] as string,
           a[1] as string,
           a[2] as string | undefined,
@@ -408,22 +442,22 @@ export async function activate(context: ExtensionContext): Promise<void> {
       ),
     ),
     commands.registerCommand('git-graph.deleteTag', (...a: unknown[]) =>
-      finishOp('delete tag', gga.deleteTag(gitGraphRoot, a[0] as string, log)),
+      finishOp('delete tag', gga.deleteTag(graph.current, a[0] as string, log)),
     ),
     commands.registerCommand('git-graph.pushTag', (...a: unknown[]) =>
       finishOp(
         'push tag',
-        gga.pushTag(gitGraphRoot, a[0] as string, (a[1] as string) || 'origin', log),
+        gga.pushTag(graph.current, a[0] as string, (a[1] as string) || 'origin', log),
       ),
     ),
     commands.registerCommand('git-graph.stashApply', (...a: unknown[]) =>
-      finishOp('stash apply', gga.stashApply(gitGraphRoot, a[0] as string, log)),
+      finishOp('stash apply', gga.stashApply(graph.current, a[0] as string, log)),
     ),
     commands.registerCommand('git-graph.stashPop', (...a: unknown[]) =>
-      finishOp('stash pop', gga.stashPop(gitGraphRoot, a[0] as string, log)),
+      finishOp('stash pop', gga.stashPop(graph.current, a[0] as string, log)),
     ),
     commands.registerCommand('git-graph.stashDrop', (...a: unknown[]) =>
-      finishOp('stash drop', gga.stashDrop(gitGraphRoot, a[0] as string, log)),
+      finishOp('stash drop', gga.stashDrop(graph.current, a[0] as string, log)),
     ),
 
     commands.registerCommand('git.getBlame', (...args: unknown[]) => {
@@ -490,6 +524,74 @@ export async function activate(context: ExtensionContext): Promise<void> {
       if (path) await commands.executeCommand('_workbench.openFile', path)
     }),
   )
+}
+
+export async function activate(context: ExtensionContext): Promise<void> {
+  const root = workspace.rootPath
+  if (!root) {
+    console.info('[git] no workspace folder open; git source control disabled')
+    context.subscriptions.push(...registerGitGraphStubs())
+    return
+  }
+
+  const out = window.createOutputChannel('Git')
+  context.subscriptions.push(out)
+  const log = (msg: string): void => out.appendLine(msg)
+  // Let failure toasts offer an "Open Git Log" button that reveals this channel.
+  setGitLogShower(() => out.show())
+
+  const scanOpts = await readScanConfig()
+  const env: GitEnv = { root, scanOpts, log }
+  const initial = await discoverRepos(root, scanOpts, log)
+
+  let mgr: RepositoryManager | undefined
+  // Stubs answering "no repos yet" for a restored Git Graph tab / dirty-diff
+  // HEAD lookups. Held in a bag so the late setup can dispose them before
+  // registering the real commands — the registry throws on duplicates.
+  let stubs: Disposable[] = []
+  if (initial.repos.length > 0) {
+    mgr = setupRepositories(context, env, initial)
+  } else {
+    stubs = [commands.registerCommand('git.getHeadContent', () => null), ...registerGitGraphStubs()]
+    context.subscriptions.push(...stubs)
+    console.info(`[git] no git repository found under ${root}; watching for one to appear`)
+  }
+
+  const onPossibleRepos = async (candidates: readonly string[]): Promise<void> => {
+    if (!mgr) {
+      // Nothing was known at startup: any candidate may complete the picture
+      // (root repo, nested repos, submodules), so rescan wholesale.
+      const found = await discoverRepos(root, scanOpts, log)
+      if (found.repos.length === 0) return
+      for (const s of stubs) s.dispose()
+      stubs = []
+      log(`[git] repository appeared under ${root}; enabling source control`)
+      mgr = setupRepositories(context, env, found)
+      return
+    }
+    const known = mgr
+    for (const candidate of candidates) {
+      const dir = joinCandidate(root, candidate)
+      if (known.has(dir)) continue
+      const confirmed = await detectRepoRoot(dir)
+      if (!confirmed || known.has(confirmed)) continue
+      // The workspace folder itself becoming a repo upgrades to main.
+      const isMain = norm(confirmed) === norm(root)
+      const repo = known.add(confirmed, {
+        label: isMain ? 'Git' : `Git: ${basename(confirmed)}`,
+      })
+      if (isMain) known.setMainRoot(confirmed)
+      log(`[git] late repository detected: ${confirmed}`)
+      void repo.refresh({ fetch: true, silent: true })
+    }
+  }
+
+  // Mirror VSCode's onPossibleGitRepositoryChange: a `.git` entry appearing
+  // anywhere in the workspace (git init / clone / submodule update) brings the
+  // new repo online without a window reload.
+  const watcher = new PossibleRepoWatcher(root, (dirs) => void onPossibleRepos(dirs), log)
+  watcher.start()
+  context.subscriptions.push(watcher)
 }
 
 export function deactivate(): void {
