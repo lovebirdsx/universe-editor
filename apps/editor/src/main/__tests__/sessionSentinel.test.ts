@@ -11,6 +11,7 @@ import {
   disarmSessionSentinel,
   findCrashDumpsSince,
   readAbnormalExitReport,
+  shouldOfferRestoreSkip,
   _resetSentinelForTests,
 } from '../sessionSentinel.js'
 
@@ -82,5 +83,46 @@ describe('sessionSentinel', () => {
     armSessionSentinel(userDataDir, 'session-b')
     const report = readAbnormalExitReport(userDataDir, join(userDataDir, 'nope'))
     expect(report?.crashDumps).toEqual([])
+  })
+
+  it('a first abnormal exit counts as one consecutive abnormal exit', () => {
+    armSessionSentinel(userDataDir, 'session-a')
+    const report = readAbnormalExitReport(userDataDir, crashDumpsDir)
+    expect(report?.consecutiveAbnormalExits).toBe(1)
+  })
+
+  it('arming with the prior count carries the crash streak across launches', () => {
+    // Launch N detects 2 prior abnormal exits and arms with that count; when it
+    // also dies abnormally, launch N+1 must see a streak of 3.
+    _resetSentinelForTests()
+    armSessionSentinel(userDataDir, 'session-c', 2)
+    const report = readAbnormalExitReport(userDataDir, crashDumpsDir)
+    expect(report?.consecutiveAbnormalExits).toBe(3)
+  })
+
+  it('a legacy sentinel without the counter field reads as a streak of 1', async () => {
+    await fs.writeFile(
+      join(userDataDir, 'session-sentinel.json'),
+      JSON.stringify({ sessionId: 'legacy', startedAt: Date.now() }),
+    )
+    const report = readAbnormalExitReport(userDataDir, crashDumpsDir)
+    expect(report?.consecutiveAbnormalExits).toBe(1)
+  })
+
+  it('a clean shutdown resets the streak (sentinel removed)', () => {
+    armSessionSentinel(userDataDir, 'session-d', 5)
+    disarmSessionSentinel(userDataDir)
+    expect(readAbnormalExitReport(userDataDir, crashDumpsDir)).toBeUndefined()
+  })
+})
+
+describe('shouldOfferRestoreSkip', () => {
+  it('does not offer after a single abnormal exit (isolated crash / external kill)', () => {
+    expect(shouldOfferRestoreSkip(1)).toBe(false)
+  })
+
+  it('offers from the second consecutive abnormal exit on (likely restore loop)', () => {
+    expect(shouldOfferRestoreSkip(2)).toBe(true)
+    expect(shouldOfferRestoreSkip(3)).toBe(true)
   })
 })

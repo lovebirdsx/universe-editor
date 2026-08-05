@@ -14,16 +14,30 @@ import { join } from 'node:path'
 
 const SENTINEL_FILE = 'session-sentinel.json'
 
+// Two consecutive abnormal exits suggest the crash follows the restored state
+// (e.g. a workspace whose walk OOMs the main process) rather than being a
+// one-off external kill — from then on the user is offered a restore-free start.
+const RESTORE_SKIP_OFFER_THRESHOLD = 2
+
 interface SessionSentinel {
   readonly sessionId: string
   readonly startedAt: number
+  /** Abnormal exits already accumulated before this session started. */
+  readonly priorAbnormalExits?: number
 }
 
 export interface AbnormalExitReport {
   readonly previousSessionId: string
   readonly previousStartedAt: number
+  /** Length of the current crash streak, including the exit just detected. */
+  readonly consecutiveAbnormalExits: number
   /** Absolute paths of crash dumps written since the previous session started. */
   readonly crashDumps: readonly string[]
+}
+
+/** Whether the crash streak is long enough to offer skipping workspace restore. */
+export function shouldOfferRestoreSkip(consecutiveAbnormalExits: number): boolean {
+  return consecutiveAbnormalExits >= RESTORE_SKIP_OFFER_THRESHOLD
 }
 
 // Only the process that wrote the sentinel may delete it: a second instance
@@ -45,19 +59,29 @@ export function readAbnormalExitReport(
   if (typeof sentinel?.sessionId !== 'string' || typeof sentinel?.startedAt !== 'number') {
     return undefined
   }
+  const prior = typeof sentinel.priorAbnormalExits === 'number' ? sentinel.priorAbnormalExits : 0
   return {
     previousSessionId: sentinel.sessionId,
     previousStartedAt: sentinel.startedAt,
+    consecutiveAbnormalExits: prior + 1,
     crashDumps: findCrashDumpsSince(crashDumpsDir, sentinel.startedAt),
   }
 }
 
 /** Mark this session as live. Call only after the single-instance lock is held. */
-export function armSessionSentinel(userDataDir: string, sessionId: string): void {
+export function armSessionSentinel(
+  userDataDir: string,
+  sessionId: string,
+  priorAbnormalExits = 0,
+): void {
   try {
     writeFileSync(
       join(userDataDir, SENTINEL_FILE),
-      JSON.stringify({ sessionId, startedAt: Date.now() } satisfies SessionSentinel),
+      JSON.stringify({
+        sessionId,
+        startedAt: Date.now(),
+        priorAbnormalExits,
+      } satisfies SessionSentinel),
     )
     _armed = true
   } catch {

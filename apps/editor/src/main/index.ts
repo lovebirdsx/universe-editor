@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, protocol } from 'electron'
+import { app, BrowserWindow, dialog, Menu, protocol } from 'electron'
 import { promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -14,6 +14,7 @@ import {
   IFileSearchService,
   IFileService,
   isEqualOrParentResource,
+  localize,
   mark,
   normalizePlatform,
   URI,
@@ -81,6 +82,7 @@ import {
   armSessionSentinel,
   disarmSessionSentinel,
   readAbnormalExitReport,
+  shouldOfferRestoreSkip,
 } from './sessionSentinel.js'
 import { applyProductIdentity, resolveProductIdentity } from './productPaths.js'
 import {
@@ -539,16 +541,21 @@ void app.whenReady().then(async () => {
   if (abnormalExit) {
     mainLogger.error(
       `previous session ${abnormalExit.previousSessionId} terminated abnormally (no clean-shutdown record); ` +
+        `consecutive=${abnormalExit.consecutiveAbnormalExits}; ` +
         (abnormalExit.crashDumps.length > 0
           ? `crash dumps: ${abnormalExit.crashDumps.join(', ')}`
           : 'no crash dump found — likely killed externally (AV / OOM / task kill)'),
     )
     errorSink.recordLocal(
       'abnormalExit',
-      `previous session ${abnormalExit.previousSessionId} terminated abnormally; crashDumps=${abnormalExit.crashDumps.length}`,
+      `previous session ${abnormalExit.previousSessionId} terminated abnormally; consecutive=${abnormalExit.consecutiveAbnormalExits}; crashDumps=${abnormalExit.crashDumps.length}`,
     )
   }
-  armSessionSentinel(app.getPath('userData'), logMainService.getSessionId())
+  armSessionSentinel(
+    app.getPath('userData'),
+    logMainService.getSessionId(),
+    abnormalExit?.consecutiveAbnormalExits ?? 0,
+  )
 
   // Drop Electron's built-in application menu on Windows/Linux. Those platforms
   // render a self-drawn title bar (frame:false), so the default menu is invisible
@@ -570,7 +577,49 @@ void app.whenReady().then(async () => {
   appServices.diagnostics.setAbnormalExitReport(abnormalExit)
   mark(PerfMarks.mainDidCreateServices)
 
-  const sessionList = await loadSession(getDefaultStorage())
+  let sessionList = await loadSession(getDefaultStorage())
+
+  // Two or more abnormal exits in a row with a workspace waiting to be restored
+  // usually means the restore itself feeds the crash (e.g. a workspace whose
+  // startup walk OOMs the main process). Offer a restore-free start to break
+  // the loop before touching that workspace again. Recents keep the folders
+  // reachable. Skipped in E2E: a native modal would deadlock the driver.
+  if (
+    abnormalExit &&
+    shouldOfferRestoreSkip(abnormalExit.consecutiveAbnormalExits) &&
+    sessionList.some((w) => w.workspace) &&
+    !e2eEnabled
+  ) {
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      buttons: [
+        localize('crashLoop.restore', '正常启动（恢复工作区）'),
+        localize('crashLoop.skip', '跳过恢复（打开空窗口）'),
+      ],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+      title: localize('crashLoop.title', '连续异常退出'),
+      message: localize('crashLoop.message', '应用已连续 {count} 次异常退出。', {
+        count: String(abnormalExit.consecutiveAbnormalExits),
+      }),
+      detail: localize(
+        'crashLoop.detail',
+        '崩溃可能由上次打开的工作区触发（例如包含海量文件的目录）。可以跳过本次工作区恢复，以空窗口启动进行排查；之前的目录仍可从「最近打开」进入。',
+      ),
+    })
+    if (response === 1) {
+      mainLogger.warn(
+        `workspace restore skipped by user after ${abnormalExit.consecutiveAbnormalExits} consecutive abnormal exits`,
+      )
+      sessionList = []
+    } else {
+      mainLogger.info(
+        `workspace restore kept despite ${abnormalExit.consecutiveAbnormalExits} consecutive abnormal exits`,
+      )
+    }
+  }
+
   let startupFolderUri: URI | undefined
   let startupFilePath: string | undefined
   if (startupPath) {
