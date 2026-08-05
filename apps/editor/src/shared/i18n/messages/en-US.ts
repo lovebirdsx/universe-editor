@@ -130,6 +130,7 @@ export const EN_US_MESSAGES: MessageMap = {
   'action.openFolder.title': 'Open Folder…',
   'action.openAgentGuide.title': 'Agent Guide',
   'action.openEditorGuide.title': 'Editor Guide',
+  'action.openExtensionDocs.title': 'Extension Development',
   'action.openKeybindingsJson.title': 'Open Keyboard Shortcuts (JSON)',
   'action.openKeybindings.title': 'Open Keyboard Shortcuts',
   'action.openRecent.title': 'Open Recent…',

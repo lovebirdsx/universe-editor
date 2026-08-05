@@ -85,6 +85,7 @@ import { IExcludeService } from '../../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../../services/exclude/testing/fakeExcludeService.js'
 import { IAcpPromptHistoryService } from '../../../services/acp/session/acpPromptHistoryService.js'
 import { MonacoLoader } from '../../editor/monaco/MonacoLoader.js'
+import { initUserDocsForTests } from '../../../services/editor/docRegistry.js'
 import styles from '../agents.module.css'
 
 // Preload Monaco once so <PromptMonacoEditor> mounts its (stubbed) editor
@@ -106,6 +107,9 @@ afterEach(() => {
   AcpPromptDraftCache._resetForTests()
   AcpPromptCancelledDraftStash._resetForTests()
   stubHistoryEntries.set([], undefined)
+  // Only the user-guide category loaded: the # panel's docs entry stays a
+  // single item in these fixtures, matching the pre-category behavior.
+  initUserDocsForTests({ 'zh-CN': { index: '# 指南' }, 'en-US': {} })
 })
 
 const stubFileSearch: IFileSearchServiceType = {
@@ -265,7 +269,7 @@ function makeDocsService(root = '/repo/docs'): IDocsServiceType {
   return {
     _serviceBrand: undefined,
     getDocs: async () => ({}),
-    getDocsRoot: async () => root,
+    getDocsRoot: async (_category: unknown) => root,
   } as unknown as IDocsServiceType
 }
 
@@ -1174,7 +1178,7 @@ describe('PromptInput — # context popover', () => {
     expect(refs[0].ref).toMatchObject({
       kind: 'docs',
       label: 'Editor User Guide',
-      uri: URI.file('/repo/docs').toString(),
+      uri: URI.file('/repo/docs/zh-CN').toString(),
       meta: { description: expect.any(String) },
     })
   })

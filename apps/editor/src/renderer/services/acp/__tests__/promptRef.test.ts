@@ -219,21 +219,31 @@ describe('composeRefBlock', () => {
     })
   })
 
-  it('maps a docs ref to a text block, falling back to a localized message', () => {
-    const withDesc: PromptRef = {
+  it('maps a docs ref to a directory-instruction text block (agents must list, not read as a file)', () => {
+    const withDir: PromptRef = {
       id: 'x',
       kind: 'docs',
-      label: 'docs',
-      uri: 'file:///docs',
-      meta: { description: 'Docs at /docs' },
+      label: 'Extension Development Guide',
+      uri: 'file:///docs/extension-dev/zh-CN',
+      meta: {
+        description: 'Located at /docs/extension-dev/zh-CN',
+        dirPath: '/docs/extension-dev/zh-CN',
+      },
     }
-    expect(composeRefBlock(withDesc)).toEqual({ type: 'text', text: 'Docs at /docs' })
+    const block = composeRefBlock(withDir)
+    expect(block.type).toBe('text')
+    // The wire text must name the directory path and tell the agent it's a
+    // directory, so it lists + reads instead of probing the extensionless path
+    // as a single file.
+    expect(block).toMatchObject({ type: 'text' })
+    const text = (block as { text: string }).text
+    expect(text).toContain('/docs/extension-dev/zh-CN')
+    expect(text).toContain('Extension Development Guide')
 
-    const noDesc: PromptRef = { id: 'x', kind: 'docs', label: 'docs', uri: 'file:///docs' }
-    expect(composeRefBlock(noDesc)).toEqual({
-      type: 'text',
-      text: 'Documentation available at file:///docs',
-    })
+    // Falls back to the uri when no dirPath is present.
+    const noDir: PromptRef = { id: 'x', kind: 'docs', label: 'docs', uri: 'file:///docs' }
+    const fallback = composeRefBlock(noDir)
+    expect((fallback as { text: string }).text).toContain('file:///docs')
   })
 
   it('maps a commit ref to a text block carrying the full hash (agents drop resource_link _meta)', () => {

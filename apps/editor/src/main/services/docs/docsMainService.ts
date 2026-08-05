@@ -1,12 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Reads the built-in user guide documents (docs/user/<locale>/**\/*.md) from disk
- *  and exposes them to the renderer. The files ship beside app.asar via
- *  electron-builder extraResources (staged into .runtime-resources/docs by
- *  scripts/release/runtime-resources.mjs); dev/E2E read the in-repo source at the
- *  repo root. Keeping them as plain files (rather than inlining via Vite ?raw)
- *  lets external agents read the guides straight off disk. A missing directory
- *  degrades to an empty map rather than crashing startup.
+ *  Reads the built-in guide documents (docs/user/ and docs/extension-dev/, each
+ *  organized as locale trees of markdown files) from disk and exposes them to
+ *  the renderer. The files ship
+ *  beside app.asar via electron-builder extraResources (staged into
+ *  .runtime-resources/docs by scripts/release/runtime-resources.mjs); dev/E2E
+ *  read the in-repo sources at the repo root. Keeping them as plain files
+ *  (rather than inlining via Vite ?raw) lets external agents read the guides
+ *  straight off disk. A missing directory degrades to an empty map rather than
+ *  crashing startup.
  *--------------------------------------------------------------------------------------------*/
 
 import { type Dirent, readdirSync, readFileSync } from 'node:fs'
@@ -14,24 +16,28 @@ import * as path from 'node:path'
 import { app } from 'electron'
 import { createNamedLogger, type ILogger, ILoggerService } from '@universe-editor/platform'
 import { SUPPORTED_LOCALES, type SupportedLocale } from '../../../shared/i18n/availableLocales.js'
-import type { DocsByLocale, IDocsService } from '../../../shared/ipc/docsService.js'
+import type { DocsByLocale, DocCategory, IDocsService } from '../../../shared/ipc/docsService.js'
+import { DOC_CATEGORIES } from '../../../shared/ipc/docsService.js'
 import { resolveFromRepo } from '../../repoPaths.js'
 
-/** Packaged location of the docs root, under `resourcesPath` (see electron-builder.yml). */
-const DOCS_PACKAGED = 'docs/user'
-/** Repo-relative docs root in the dev tree. */
-const DOCS_DEV = 'docs/user'
+/** Packaged location of each doc-category root, under `resourcesPath` (see electron-builder.yml). */
+const DOCS_ROOTS: Record<DocCategory, string> = {
+  user: 'docs/user',
+  extensionDev: 'docs/extension-dev',
+}
 
-export type DocsRootResolver = () => string
+export type DocsRootResolver = (category: DocCategory) => string
 
-const defaultResolveRoot: DocsRootResolver = () =>
-  app.isPackaged ? path.join(process.resourcesPath, DOCS_PACKAGED) : resolveFromRepo(DOCS_DEV)
+const defaultResolveRoot: DocsRootResolver = (category) =>
+  app.isPackaged
+    ? path.join(process.resourcesPath, DOCS_ROOTS[category])
+    : resolveFromRepo(DOCS_ROOTS[category])
 
 export class DocsMainService implements IDocsService {
   declare readonly _serviceBrand: undefined
 
   private readonly _logger: ILogger
-  private _docs: DocsByLocale | undefined
+  private _docs: Record<DocCategory, DocsByLocale> | undefined
 
   constructor(
     private readonly _resolveRoot: DocsRootResolver = defaultResolveRoot,
@@ -40,19 +46,23 @@ export class DocsMainService implements IDocsService {
     this._logger = createNamedLogger(loggerService, { id: 'docs', name: 'User Docs' })
   }
 
-  async getDocs(): Promise<DocsByLocale> {
+  async getDocs(): Promise<Record<DocCategory, DocsByLocale>> {
     if (this._docs) return this._docs
-    const root = this._resolveRoot()
-    const docs: DocsByLocale = {}
-    for (const locale of SUPPORTED_LOCALES) {
-      docs[locale] = this._readLocale(root, locale)
+    const docs = {} as Record<DocCategory, DocsByLocale>
+    for (const category of DOC_CATEGORIES) {
+      const root = this._resolveRoot(category)
+      const byLocale: DocsByLocale = {}
+      for (const locale of SUPPORTED_LOCALES) {
+        byLocale[locale] = this._readLocale(root, locale)
+      }
+      docs[category] = byLocale
     }
     this._docs = docs
     return docs
   }
 
-  async getDocsRoot(): Promise<string> {
-    return this._resolveRoot()
+  async getDocsRoot(category: DocCategory): Promise<string> {
+    return this._resolveRoot(category)
   }
 
   private _readLocale(root: string, locale: SupportedLocale): Record<string, string> {

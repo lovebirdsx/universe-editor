@@ -48,6 +48,8 @@ export interface PromptRef {
     readonly symbolKind?: number
     readonly scmStatus?: string
     readonly description?: string
+    /** `docs`: native fs path of the locale directory, sent to the agent verbatim. */
+    readonly dirPath?: string
     /** `commit`: the full 40-char SHA (the label only carries a truncated short hash). */
     readonly commitHash?: string
   }
@@ -159,15 +161,25 @@ export function composeRefBlock(ref: PromptRef): ContentBlock {
         name: ref.label,
         ...(ref.meta?.scmStatus !== undefined ? { description: ref.meta.scmStatus } : {}),
       }
-    case 'docs':
+    case 'docs': {
+      // A docs ref points at a locale DIRECTORY holding many markdown files, not
+      // a single file. Built-in agents only pass `text` blocks through verbatim
+      // (resource_link name/description are dropped, same as the symbol/commit
+      // cases), and the bare extensionless path alone reads as a file — so the
+      // agent probes it as a file, fails, then recovers. Spell out that it's a
+      // directory to read so the agent lists it and reads the relevant page in
+      // one hop. `meta.dirPath` carries the native fs path (the popover-facing
+      // `meta.description` is display-only and not sent).
+      const dirPath = ref.meta?.dirPath ?? ref.uri
       return {
         type: 'text',
-        text:
-          ref.meta?.description ??
-          localize('acp.contextRef.docs.fallback', 'Documentation available at {uri}', {
-            uri: ref.uri,
-          }),
+        text: localize(
+          'acp.contextRef.docs.instruction',
+          '{label} (documentation directory at {path} — list this directory and read the relevant markdown files as needed)',
+          { label: ref.label, path: dirPath },
+        ),
       }
+    }
     case 'commit': {
       // Same protocol-boundary problem as `symbol`: a resource_link would drop
       // the hash entirely, so the agent has nothing to `git show`. Encode it in
@@ -246,7 +258,14 @@ export function suggestionItemToRef(item: ContextSuggestionItem): PromptRef {
     case 'openEditor':
       return { ...base, kind: 'openEditor' }
     case 'docs':
-      return { ...base, kind: 'docs', meta: { description: item.description } }
+      return {
+        ...base,
+        kind: 'docs',
+        meta: {
+          description: item.description,
+          ...(item.meta?.dirPath !== undefined ? { dirPath: item.meta.dirPath } : {}),
+        },
+      }
     case 'commit':
       // The commit entry is a picker trigger, not a directly convertible ref —
       // acceptContextRef intercepts it before it ever reaches this function.

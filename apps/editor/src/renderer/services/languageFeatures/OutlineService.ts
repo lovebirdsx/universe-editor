@@ -255,7 +255,8 @@ export class OutlineService extends Disposable implements IOutlineService {
     const sameDoc =
       docInput !== undefined &&
       this._currentDoc !== undefined &&
-      docInput.docId === this._currentDoc.docId
+      docInput.docId === this._currentDoc.docId &&
+      docInput.category === this._currentDoc.category
     const sameSession =
       sessionInput !== undefined &&
       this._currentSession !== undefined &&
@@ -398,7 +399,7 @@ export class OutlineService extends Disposable implements IOutlineService {
     this._currentModel = undefined
     this._clearRetry()
 
-    const content = getDocContent(doc.docId)
+    const content = getDocContent(doc.docId, doc.category)
     const roots = content !== undefined ? docSymbolsFromMarkdown(content) : []
     this._outline.set(
       { uri: doc.resource.toString(), roots, languageId: 'markdown', version: ++this._version },

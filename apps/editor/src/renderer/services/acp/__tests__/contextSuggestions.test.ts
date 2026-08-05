@@ -12,7 +12,7 @@ import type { ISourceControlResourceStateDto } from '@universe-editor/extensions
 import { URI } from '@universe-editor/platform'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
-import { initDocRegistry } from '../../editor/docRegistry.js'
+import { initDocRegistry, initUserDocsForTests } from '../../editor/docRegistry.js'
 import { setCurrentLocale } from '../../../../shared/i18n/availableLocales.js'
 import { resourceIconId } from '../../quickInput/quickPickResourceIcon.js'
 import type { WorkspaceSymbolEntry } from '../../languageFeatures/typescript/lspMonacoConvert.js'
@@ -336,16 +336,19 @@ describe('OpenEditorContextProvider', () => {
 })
 
 function makeDocsProvider(root: string) {
-  const docs = { getDocsRoot: async () => root }
+  const docs = {
+    getDocsRoot: async (category: string) =>
+      category === 'extensionDev' ? root.replace(/docs\/user$/, 'docs/extension-dev') : root,
+  }
   return new DocsContextProvider(docs as never)
 }
 
 describe('DocsContextProvider', () => {
-  afterEach(() => initDocRegistry({ 'zh-CN': {}, 'en-US': {} }))
+  afterEach(() => initUserDocsForTests({ 'zh-CN': {}, 'en-US': {} }))
 
   it('points at the current locale subdirectory when it has docs', async () => {
     setCurrentLocale('en-US')
-    initDocRegistry({ 'en-US': { index: '# Guide' }, 'zh-CN': { index: '# 指南' } })
+    initUserDocsForTests({ 'en-US': { index: '# Guide' }, 'zh-CN': { index: '# 指南' } })
     const provider = makeDocsProvider('/repo/docs/user')
     const items = await provider.query('')
     const expected = URI.joinPath(URI.file('/repo/docs/user'), 'en-US')
@@ -357,7 +360,7 @@ describe('DocsContextProvider', () => {
     setCurrentLocale('en-US')
     // Only zh-CN is translated (mirrors the current repo state): an English UI
     // must still be pointed at docs/user/zh-CN, not docs/user/en-US.
-    initDocRegistry({ 'en-US': {}, 'zh-CN': { index: '# 指南' } })
+    initUserDocsForTests({ 'en-US': {}, 'zh-CN': { index: '# 指南' } })
     const provider = makeDocsProvider('/repo/docs/user')
     const items = await provider.query('')
     const expected = URI.joinPath(URI.file('/repo/docs/user'), 'zh-CN')
@@ -365,9 +368,24 @@ describe('DocsContextProvider', () => {
     expect(items[0]?.description).toContain(expected.fsPath)
   })
 
-  it('returns a single entry pointing at the docs locale dir for an empty query', async () => {
+  it('returns one entry per loaded doc category for an empty query', async () => {
     setCurrentLocale('zh-CN')
-    initDocRegistry({ 'zh-CN': { index: '# 指南' }, 'en-US': {} })
+    initDocRegistry({
+      user: { 'zh-CN': { index: '# 指南' }, 'en-US': {} },
+      extensionDev: { 'zh-CN': { README: '# 扩展开发' }, 'en-US': {} },
+    })
+    const provider = makeDocsProvider('/repo/docs/user')
+    const items = await provider.query('')
+    expect(items).toHaveLength(2)
+    const extDev = items[1]
+    expect(extDev).toMatchObject({ kind: 'docs', iconId: 'docs' })
+    const expected = URI.joinPath(URI.file('/repo/docs/extension-dev'), 'zh-CN')
+    expect(extDev?.uri).toBe(expected.toString())
+  })
+
+  it('skips a category whose docs are not loaded', async () => {
+    setCurrentLocale('zh-CN')
+    initUserDocsForTests({ 'zh-CN': { index: '# 指南' }, 'en-US': {} })
     const provider = makeDocsProvider('/repo/docs/user')
     const items = await provider.query('')
     expect(items).toHaveLength(1)
@@ -375,9 +393,10 @@ describe('DocsContextProvider', () => {
   })
 
   it('matches docs/help-related keywords', async () => {
+    initUserDocsForTests({ 'zh-CN': { index: '# 指南' }, 'en-US': {} })
     const provider = makeDocsProvider('/repo/docs/user')
     for (const query of ['doc', 'docs', '文档', '帮助', '使用', '编辑器']) {
-      expect(await provider.query(query)).toHaveLength(1)
+      expect((await provider.query(query)).length).toBeGreaterThanOrEqual(1)
     }
   })
 

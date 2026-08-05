@@ -1,27 +1,35 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  docRegistry — an in-memory cache of the user-facing guide documents from
- *  docs/user/<locale>/. The markdown lives on disk beside the app (shipped as
- *  plain files, not inlined into the bundle); the renderer reads the whole set
- *  once via IDocsService during bootstrap and calls initDocRegistry() to populate
- *  this cache. All lookups below are synchronous reads of that cache, so the
- *  EditorInput contracts (getName / deserialize) stay synchronous. DocId is the
- *  locale-relative path without the .md suffix (e.g. "getting-started/interface-tour",
- *  "index").
+ *  docRegistry — an in-memory cache of the built-in guide documents: the
+ *  end-user guide (docs/user/<locale>/) and the extension-author guide
+ *  (docs/extension-dev/<locale>/). The markdown lives on disk beside the app
+ *  (shipped as plain files, not inlined into the bundle); the renderer reads
+ *  the whole set once via IDocsService during bootstrap and calls
+ *  initDocRegistry() to populate this cache. All lookups below are synchronous
+ *  reads of that cache, so the EditorInput contracts (getName / deserialize)
+ *  stay synchronous. DocId is the locale-relative path without the .md suffix
+ *  (e.g. "getting-started/interface-tour", "index").
  *--------------------------------------------------------------------------------------------*/
 
 import type { SupportedLocale } from '../../../shared/i18n/availableLocales.js'
 import { getCurrentLocale, SUPPORTED_LOCALES } from '../../../shared/i18n/availableLocales.js'
-import type { DocsByLocale } from '../../../shared/ipc/docsService.js'
+import type { DocCategory, DocsByLocale } from '../../../shared/ipc/docsService.js'
+import { DOC_CATEGORIES } from '../../../shared/ipc/docsService.js'
 
 // The locale whose docs are the source of truth: any doc missing in the active
 // locale falls back to this one so the guide is never a dead end while other
 // locales are still being translated.
 const FALLBACK_LOCALE: SupportedLocale = 'zh-CN'
 
-const REGISTRIES: Record<SupportedLocale, Map<string, string>> = {
-  'zh-CN': new Map(),
-  'en-US': new Map(),
+type LocaleRegistry = Record<SupportedLocale, Map<string, string>>
+
+function emptyLocaleRegistry(): LocaleRegistry {
+  return { 'zh-CN': new Map(), 'en-US': new Map() }
+}
+
+const REGISTRIES: Record<DocCategory, LocaleRegistry> = {
+  user: emptyLocaleRegistry(),
+  extensionDev: emptyLocaleRegistry(),
 }
 
 /**
@@ -29,16 +37,28 @@ const REGISTRIES: Record<SupportedLocale, Map<string, string>> = {
  * at bootstrap). Called once before React mounts, so every synchronous lookup
  * below — including tab deserialization — sees the docs.
  */
-export function initDocRegistry(docs: DocsByLocale): void {
-  for (const locale of SUPPORTED_LOCALES) {
-    const map = REGISTRIES[locale]
-    map.clear()
-    const entries = docs[locale]
-    if (!entries) continue
-    for (const [docId, content] of Object.entries(entries)) {
-      map.set(docId, content)
+export function initDocRegistry(docs: Record<DocCategory, DocsByLocale>): void {
+  for (const category of DOC_CATEGORIES) {
+    const registries = REGISTRIES[category]
+    for (const locale of SUPPORTED_LOCALES) {
+      const map = registries[locale]
+      map.clear()
+      const entries = docs[category]?.[locale]
+      if (!entries) continue
+      for (const [docId, content] of Object.entries(entries)) {
+        map.set(docId, content)
+      }
     }
   }
+}
+
+/**
+ * Test convenience: populate only the user-guide category (the common case for
+ * doc-registry fixtures) and clear the rest. Wraps initDocRegistry so callers
+ * don't have to repeat the empty extensionDev shape.
+ */
+export function initUserDocsForTests(userDocs: DocsByLocale): void {
+  initDocRegistry({ user: userDocs, extensionDev: {} })
 }
 
 /**
@@ -52,20 +72,24 @@ export interface IResolvedDoc {
 }
 
 /** Resolve a docId to its content and source locale, falling back when needed. */
-export function resolveDoc(docId: string): IResolvedDoc | undefined {
+export function resolveDoc(
+  docId: string,
+  category: DocCategory = 'user',
+): IResolvedDoc | undefined {
   const locale = getCurrentLocale()
-  const own = REGISTRIES[locale].get(docId)
+  const registries = REGISTRIES[category]
+  const own = registries[locale].get(docId)
   if (own !== undefined) return { content: own, locale }
   if (locale !== FALLBACK_LOCALE) {
-    const fallback = REGISTRIES[FALLBACK_LOCALE].get(docId)
+    const fallback = registries[FALLBACK_LOCALE].get(docId)
     if (fallback !== undefined) return { content: fallback, locale: FALLBACK_LOCALE }
   }
   return undefined
 }
 
 /** Get the raw markdown content for a docId in the current locale (fallback: zh-CN). */
-export function getDocContent(docId: string): string | undefined {
-  return resolveDoc(docId)?.content
+export function getDocContent(docId: string, category: DocCategory = 'user'): string | undefined {
+  return resolveDoc(docId, category)?.content
 }
 
 /**
@@ -75,11 +99,12 @@ export function getDocContent(docId: string): string | undefined {
  * no docs are loaded at all. This mirrors resolveDoc's precedence so a `#docs`
  * ref never points an agent at an untranslated (empty) locale directory.
  */
-export function resolveDocsLocale(): SupportedLocale | undefined {
+export function resolveDocsLocale(category: DocCategory = 'user'): SupportedLocale | undefined {
+  const registries = REGISTRIES[category]
   const current = getCurrentLocale()
-  if (REGISTRIES[current].size > 0) return current
-  if (REGISTRIES[FALLBACK_LOCALE].size > 0) return FALLBACK_LOCALE
-  return SUPPORTED_LOCALES.find((locale) => REGISTRIES[locale].size > 0)
+  if (registries[current].size > 0) return current
+  if (registries[FALLBACK_LOCALE].size > 0) return FALLBACK_LOCALE
+  return SUPPORTED_LOCALES.find((locale) => registries[locale].size > 0)
 }
 
 /** Extract the first H1 heading from a markdown string. */
@@ -89,12 +114,12 @@ export function extractH1(content: string): string | undefined {
 }
 
 /** Return the display title for a docId (H1 of its content, or the docId itself). */
-export function getDocTitle(docId: string): string {
-  const content = getDocContent(docId)
+export function getDocTitle(docId: string, category: DocCategory = 'user'): string {
+  const content = getDocContent(docId, category)
   return (content && extractH1(content)) ?? docId
 }
 
 /** True when the value is a known docId in the current locale (or zh-CN fallback). */
-export function isDocId(value: unknown): value is string {
-  return typeof value === 'string' && getDocContent(value) !== undefined
+export function isDocId(value: unknown, category: DocCategory = 'user'): value is string {
+  return typeof value === 'string' && getDocContent(value, category) !== undefined
 }

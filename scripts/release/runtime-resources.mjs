@@ -116,6 +116,11 @@ const REQUIRED_SOURCE_FILES = [
     source: join(repoRoot, 'docs/user/zh-CN/index.md'),
     packaged: 'docs/user/zh-CN/index.md',
   },
+  {
+    label: 'extension dev docs',
+    source: join(repoRoot, 'docs/extension-dev/zh-CN/README.md'),
+    packaged: 'docs/extension-dev/zh-CN/README.md',
+  },
 ]
 
 function readJson(path) {
@@ -220,6 +225,9 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
   // IDocsService at startup. The `_template.md` at the docs/user root stays out
   // of any locale dir, so copying the whole tree is fine — it's never a docId.
   copyPath(join(repoRoot, 'docs/user'), join(stageDir, 'docs/user'))
+  // Extension-author docs ship the same way and load through the same
+  // IDocsService pipeline, as a separate doc category.
+  copyPath(join(repoRoot, 'docs/extension-dev'), join(stageDir, 'docs/extension-dev'))
 
   for (const extension of discoverBuiltinExtensions()) {
     const destinationRoot = join(stageDir, 'extensions', extension.id)

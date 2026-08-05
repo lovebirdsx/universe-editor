@@ -246,6 +246,7 @@ import {
   OpenDocsAction,
   OpenEditorGuideAction,
   OpenAgentGuideAction,
+  OpenExtensionDocsAction,
   ReportIssueAction,
   ExportDiagnosticsAction,
 } from './helpActions.js'
@@ -530,6 +531,7 @@ registerAction2(AboutAction)
 registerAction2(OpenDocsAction)
 registerAction2(OpenEditorGuideAction)
 registerAction2(OpenAgentGuideAction)
+registerAction2(OpenExtensionDocsAction)
 registerAction2(OpenUserDataFolderAction)
 registerAction2(OpenInstallFolderAction)
 registerAction2(ShowLogsAction)

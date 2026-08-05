@@ -18,7 +18,7 @@ import { FileEditorInput } from '../../editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../editor/FileEditorRegistry.js'
 import { MarkdownPreviewInput } from '../../editor/MarkdownPreviewInput.js'
 import { DocEditorInput } from '../../editor/DocEditorInput.js'
-import { initDocRegistry } from '../../editor/docRegistry.js'
+import { initDocRegistry, initUserDocsForTests } from '../../editor/docRegistry.js'
 import {
   MarkdownPreviewRegistry,
   type IMarkdownPreviewController,
@@ -190,7 +190,7 @@ describe('OutlineService', () => {
     FileEditorRegistry._resetForTests()
     MarkdownPreviewRegistry._resetForTests()
     AcpSessionOutlineRegistry._resetForTests()
-    initDocRegistry({})
+    initUserDocsForTests({})
     previewModels.clear()
     markerListeners.length = 0
     modelAddListeners.length = 0
@@ -1067,7 +1067,7 @@ describe('OutlineService', () => {
   ].join('\n')
 
   function setupDoc() {
-    initDocRegistry({ 'en-US': { index: DOC_MARKDOWN } })
+    initUserDocsForTests({ 'en-US': { index: DOC_MARKDOWN } })
     const activeEditor = observableValue<DocEditorInput | undefined>('t', undefined)
     const editorService = { activeEditor } as unknown as IEditorService
     const facade = {
@@ -1154,7 +1154,7 @@ describe('OutlineService', () => {
   })
 
   it('re-parses when navigating to another doc in the same tab slot', async () => {
-    initDocRegistry({
+    initUserDocsForTests({
       'en-US': { index: DOC_MARKDOWN, other: '# Other\n\nbody\n\n## Sub\n\nx' },
     })
     const activeEditor = observableValue<DocEditorInput | undefined>('t', undefined)
@@ -1178,6 +1178,39 @@ describe('OutlineService', () => {
     expect(roots.map((r) => r.name)).toEqual(['# Other'])
     expect((roots[0]!.children ?? []).map((c) => c.name)).toEqual(['## Sub'])
     expect(svc.outline.get()?.uri).toBe(other.resource.toString())
+    svc.dispose()
+  })
+
+  it('parses extensionDev-category docs from their own registry', async () => {
+    initDocRegistry({
+      user: { 'en-US': {} },
+      extensionDev: { 'en-US': { README: '# Extension Guide\n\n## Setup\n\nx' } },
+    })
+    const activeEditor = observableValue<DocEditorInput | undefined>('t', undefined)
+    const editorService = { activeEditor } as unknown as IEditorService
+    const facade = {
+      onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+      getDocumentSymbolProviders: () => [],
+    } as unknown as ILanguageFeaturesService
+    const svc = new OutlineService(editorService, facade, undefined as never)
+
+    const doc = new DocEditorInput('README', 'extensionDev')
+    activeEditor.set(doc, undefined)
+    await flush()
+    const outline = svc.outline.get()
+    expect(outline?.uri).toBe(doc.resource.toString())
+    expect(outline?.roots.map((r) => r.name)).toEqual(['# Extension Guide'])
+    expect((outline?.roots[0]?.children ?? []).map((c) => c.name)).toEqual(['## Setup'])
+
+    // Switching to a same-docId doc of another category must re-parse, not be
+    // treated as a same-doc re-attach.
+    initDocRegistry({
+      user: { 'en-US': { README: '# User Readme\n\n## Usage\n\ny' } },
+      extensionDev: { 'en-US': { README: '# Extension Guide\n\n## Setup\n\nx' } },
+    })
+    activeEditor.set(new DocEditorInput('README'), undefined)
+    await flush()
+    expect(svc.outline.get()?.roots.map((r) => r.name)).toEqual(['# User Readme'])
     svc.dispose()
   })
 })

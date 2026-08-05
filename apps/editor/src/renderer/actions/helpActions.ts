@@ -78,6 +78,23 @@ export class OpenAgentGuideAction extends Action2 {
   }
 }
 
+export class OpenExtensionDocsAction extends Action2 {
+  static readonly ID = 'workbench.action.openExtensionDocs'
+  constructor() {
+    super({
+      id: OpenExtensionDocsAction.ID,
+      title: localize2('action.openExtensionDocs.title', 'Extension Development'),
+      category: localize2('command.category.help', 'Help'),
+      menu: { id: MenuId.MenubarHelpMenu, group: '0_docs', order: 3 },
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IEditorService).openEditor(new DocEditorInput('README', 'extensionDev'))
+  }
+}
+
 export class ShowReleaseNotesAction extends Action2 {
   static readonly ID = 'workbench.action.showReleaseNotes'
   constructor() {
@@ -85,7 +102,7 @@ export class ShowReleaseNotesAction extends Action2 {
       id: ShowReleaseNotesAction.ID,
       title: localize2('releaseNotes.show', 'Show Release Notes'),
       category: localize2('command.category.help', 'Help'),
-      menu: { id: MenuId.MenubarHelpMenu, group: '0_docs', order: 3 },
+      menu: { id: MenuId.MenubarHelpMenu, group: '0_docs', order: 4 },
       f1: true,
     })
   }

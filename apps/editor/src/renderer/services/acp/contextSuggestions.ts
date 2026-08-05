@@ -42,6 +42,8 @@ export interface ContextSuggestionItem {
     readonly column?: number
     readonly symbolKind?: number
     readonly scmStatus?: string
+    /** `docs`: native fs path of the locale directory, forwarded to the agent. */
+    readonly dirPath?: string
   }
 }
 
@@ -268,9 +270,19 @@ export class OpenEditorContextProvider {
   }
 }
 
-// Query substrings that surface the single docs entry — a progressive prefix of
+// Query substrings that surface the docs entries — a progressive prefix of
 // any of these (typed char by char) keeps matching as the user types.
-const DOCS_MATCH_KEYWORDS = ['docs', 'doc', '文档', '帮助', '使用', '编辑器']
+const DOCS_MATCH_KEYWORDS = [
+  'docs',
+  'doc',
+  '文档',
+  '帮助',
+  '使用',
+  '编辑器',
+  'extension',
+  '扩展',
+  '插件',
+]
 
 function matchesDocsQuery(query: string): boolean {
   const q = query.toLowerCase()
@@ -282,8 +294,11 @@ function joinLocale(root: string, locale: SupportedLocale): string {
   return URI.joinPath(URI.file(root), locale).fsPath
 }
 
-function toDocsItem(root: string, localeDir: string | undefined): ContextSuggestionItem {
-  const label = localize('acp.contextRef.docs.label', 'Editor User Guide')
+function toDocsItem(
+  root: string,
+  localeDir: string | undefined,
+  label: string,
+): ContextSuggestionItem {
   // Point at the locale subdirectory that actually holds translated docs (never
   // the parent root, whose sibling locale dirs may be empty) so the agent reads
   // the guide in one hop instead of probing an untranslated locale first.
@@ -297,14 +312,15 @@ function toDocsItem(root: string, localeDir: string | undefined): ContextSuggest
     uri: URI.file(target).toString(),
     description,
     iconId: 'docs',
+    meta: { dirPath: target },
   }
 }
 
 /**
- * User documentation source for the `#` panel's "文档" group. Unlike the other
- * providers this is a single whole-entry shortcut (not per-file results): it
- * surfaces one item pointing at the docs root when the query is empty or looks
- * like it's asking for docs/help, per plan §4.
+ * Built-in documentation source for the `#` panel's "文档" group. Unlike the
+ * other providers this surfaces whole-guide entry points (not per-file
+ * results): one item per doc category (user guide / extension-author guide),
+ * shown when the query is empty or looks like it's asking for docs/help.
  */
 export class DocsContextProvider {
   constructor(@IDocsService private readonly _docs: IDocsService) {}
@@ -312,10 +328,30 @@ export class DocsContextProvider {
   async query(query: string): Promise<readonly ContextSuggestionItem[]> {
     const trimmed = query.trim()
     if (trimmed && !matchesDocsQuery(trimmed)) return []
-    const root = await this._docs.getDocsRoot()
-    const locale = resolveDocsLocale()
-    const localeDir = locale ? joinLocale(root, locale) : undefined
-    return [toDocsItem(root, localeDir)]
+    const items: ContextSuggestionItem[] = []
+    const userRoot = await this._docs.getDocsRoot('user')
+    const userLocale = resolveDocsLocale('user')
+    if (userLocale) {
+      items.push(
+        toDocsItem(
+          userRoot,
+          joinLocale(userRoot, userLocale),
+          localize('acp.contextRef.docs.label', 'Editor User Guide'),
+        ),
+      )
+    }
+    const extDevRoot = await this._docs.getDocsRoot('extensionDev')
+    const extDevLocale = resolveDocsLocale('extensionDev')
+    if (extDevLocale) {
+      items.push(
+        toDocsItem(
+          extDevRoot,
+          joinLocale(extDevRoot, extDevLocale),
+          localize('acp.contextRef.extensionDevDocs.label', 'Extension Development Guide'),
+        ),
+      )
+    }
+    return items
   }
 }
 

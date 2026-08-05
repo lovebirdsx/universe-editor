@@ -12,12 +12,21 @@ import { createDecorator } from '@universe-editor/platform'
 /** All guide docs for one locale, keyed by docId (locale-relative path, no `.md`). */
 export type DocsByLocale = Record<string, Record<string, string>>
 
+/**
+ * Built-in doc sets. `user` is the end-user guide (docs/user/), `extensionDev`
+ * the extension-author guide (docs/extension-dev/). Each ships as its own
+ * directory beside app.asar and is cached separately in the renderer.
+ */
+export type DocCategory = 'user' | 'extensionDev'
+
+export const DOC_CATEGORIES: readonly DocCategory[] = ['user', 'extensionDev']
+
 export interface IDocsService {
   readonly _serviceBrand: undefined
-  /** Load every guide document grouped by locale. Missing files degrade to an empty map. */
-  getDocs(): Promise<DocsByLocale>
-  /** Absolute path to the docs root (dev tree or packaged resources), for the `#docs` context ref. */
-  getDocsRoot(): Promise<string>
+  /** Load every built-in document grouped by category and locale. Missing dirs degrade to empty maps. */
+  getDocs(): Promise<Record<DocCategory, DocsByLocale>>
+  /** Absolute path to a category's docs root (dev tree or packaged resources), for `#docs`-style context refs. */
+  getDocsRoot(category: DocCategory): Promise<string>
 }
 
 export const IDocsService = createDecorator<IDocsService>('docsService')

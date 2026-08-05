@@ -61,7 +61,8 @@ function resolveDocLink(
 export function DocEditor({ input }: { input: IEditorInput }) {
   const docInput = input as DocEditorInput
   const docId = docInput.docId
-  const resolved = resolveDoc(docId)
+  const category = docInput.category
+  const resolved = resolveDoc(docId, category)
   const content = resolved?.content ?? `# 文档未找到\n\n文档 "${docId}" 不存在。`
   const isFallback = resolved !== undefined && resolved.locale !== getCurrentLocale()
 
@@ -82,8 +83,8 @@ export function DocEditor({ input }: { input: IEditorInput }) {
   const openDocLink = useCallback(
     (href: string, opts?: { toSide?: boolean }) => {
       const { targetDocId, anchor } = resolveDocLink(href, docId)
-      if (!isDocId(targetDocId)) return
-      const target = new DocEditorInput(targetDocId, anchor)
+      if (!isDocId(targetDocId, category)) return
+      const target = new DocEditorInput(targetDocId, category, anchor)
       // Default: navigate in place — the new doc takes the current tab's slot and
       // the old one closes, so a single tab walks the trail and H/L (or Alt+←/→)
       // steps through history (mirrors the markdown preview). Ctrl/Cmd+click opens
@@ -95,7 +96,7 @@ export function DocEditor({ input }: { input: IEditorInput }) {
       }
       void editorService.openEditor(target, { activate: true, pinned: true })
     },
-    [docId, editorService, group, input],
+    [docId, category, editorService, group, input],
   )
 
   return (

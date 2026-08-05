@@ -7,11 +7,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { EditorInput, URI } from '@universe-editor/platform'
+import type { DocCategory } from '../../../shared/ipc/docsService.js'
 import { getDocTitle, isDocId } from './docRegistry.js'
 import { MarkdownPreviewRegistry } from './MarkdownPreviewRegistry.js'
 
 interface ISerializedDoc {
   readonly docId: string
+  /** Absent in pre-category serializations; those tabs were user-guide docs. */
+  readonly category?: DocCategory
 }
 
 export class DocEditorInput extends EditorInput {
@@ -19,6 +22,7 @@ export class DocEditorInput extends EditorInput {
 
   constructor(
     private readonly _docId: string,
+    readonly category: DocCategory = 'user',
     /** Anchor to scroll to when the document first renders (not persisted). */
     readonly initialAnchor?: string,
   ) {
@@ -30,7 +34,12 @@ export class DocEditorInput extends EditorInput {
   }
 
   override get resource(): URI {
-    return URI.from({ scheme: 'universe', path: `/doc/${this._docId}` })
+    // The user guide keeps the original flat path so already-serialized tabs
+    // keep restoring; other categories nest under their own segment to keep
+    // docIds collision-free across categories.
+    const path =
+      this.category === 'user' ? `/doc/${this._docId}` : `/doc/${this.category}/${this._docId}`
+    return URI.from({ scheme: 'universe', path })
   }
 
   get docId(): string {
@@ -38,7 +47,7 @@ export class DocEditorInput extends EditorInput {
   }
 
   override getName(): string {
-    return getDocTitle(this._docId)
+    return getDocTitle(this._docId, this.category)
   }
 
   /**
@@ -58,12 +67,13 @@ export class DocEditorInput extends EditorInput {
   }
 
   override serialize(): ISerializedDoc {
-    return { docId: this._docId }
+    return { docId: this._docId, category: this.category }
   }
 
   static deserialize(data: unknown): DocEditorInput | null {
     const d = data as ISerializedDoc | null
-    if (!d || !isDocId(d.docId)) return null
-    return new DocEditorInput(d.docId)
+    const category = d?.category ?? 'user'
+    if (!d || !isDocId(d.docId, category)) return null
+    return new DocEditorInput(d.docId, category)
   }
 }
