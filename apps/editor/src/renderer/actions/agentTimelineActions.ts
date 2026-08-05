@@ -9,20 +9,13 @@
 import {
   Action2,
   IViewsService,
-  KeybindingWeight,
   MenuId,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
-import { ACP_NAV_WHEN, CATEGORY, resolveNavWidget } from './_agentShared.js'
-
-// The prompt-suggestion popover and in-session find bind keys that would otherwise
-// hit Monaco / global bindings (down/up/tab/enter/escape/f3). Registering them above
-// the default WorkbenchContrib guarantees the scoped binding wins whenever its
-// ContextKey is set, independent of registration order.
-const ACP_SCOPED_KEY_WEIGHT = KeybindingWeight.WorkbenchContrib + 50
+import { ACP_NAV_WHEN, ACP_SCOPED_KEY_WEIGHT, CATEGORY, resolveNavWidget } from './_agentShared.js'
 
 // ---------------------------------------------------------------------------
 // Timeline keyboard navigation (Alt+J / Alt+K, vim-style)

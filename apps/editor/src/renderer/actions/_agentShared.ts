@@ -6,7 +6,12 @@
  *  group live next to that group.
  *--------------------------------------------------------------------------------------------*/
 
-import { IEditorService, localize2, type ServicesAccessor } from '@universe-editor/platform'
+import {
+  IEditorService,
+  KeybindingWeight,
+  localize2,
+  type ServicesAccessor,
+} from '@universe-editor/platform'
 import {
   IAcpChatWidgetService,
   type AcpChatWidget,
@@ -14,6 +19,12 @@ import {
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 
 export const CATEGORY = localize2('command.category.agents', 'Agents')
+
+// The prompt-suggestion popover, in-session find, and turn-cancel bind keys that
+// would otherwise hit Monaco / global bindings (down/up/tab/enter/escape/f3).
+// Registering them above the default WorkbenchContrib guarantees the scoped
+// binding wins whenever its ContextKey is set, independent of registration order.
+export const ACP_SCOPED_KEY_WEIGHT = KeybindingWeight.WorkbenchContrib + 50
 
 // Gate for session-scoped navigation commands (timeline move/scroll, collapse,
 // find-open, font, copy). The chat widget can be driven two ways:

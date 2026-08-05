@@ -218,6 +218,55 @@ describe('AcpChatWidgetService', () => {
     expect(() => svc.register(a.widget)).toThrow()
   })
 
+  it('acpChatTurnRunning follows the focused widget turn state', () => {
+    const a = makeWidget('a')
+    svc.register(a.widget)
+    expect(cks.get('acpChatTurnRunning')).toBe(false)
+
+    // Running but not focused: the key stays false.
+    svc.setTurnRunning(a.widget, true)
+    expect(cks.get('acpChatTurnRunning')).toBe(false)
+
+    fireFocusIn(a.child)
+    expect(cks.get('acpChatTurnRunning')).toBe(true)
+
+    // Turn settles while focused.
+    svc.setTurnRunning(a.widget, false)
+    expect(cks.get('acpChatTurnRunning')).toBe(false)
+  })
+
+  it('acpChatTurnRunning flips with focus, not with the blurred widget state', () => {
+    const a = makeWidget('a')
+    const b = makeWidget('b')
+    svc.register(a.widget)
+    svc.register(b.widget)
+    svc.setTurnRunning(a.widget, true)
+
+    fireFocusIn(a.child)
+    expect(cks.get('acpChatTurnRunning')).toBe(true)
+
+    // A stays running but loses focus to idle B: Esc must not cancel A's turn
+    // from inside B's chat.
+    fireFocusOut(a.child, b.child)
+    fireFocusIn(b.child, a.child)
+    expect(cks.get('acpChatTurnRunning')).toBe(false)
+
+    // Focus back on the still-running A restores the key.
+    fireFocusOut(b.child, a.child)
+    fireFocusIn(a.child, b.child)
+    expect(cks.get('acpChatTurnRunning')).toBe(true)
+  })
+
+  it('unregistering the focused running widget clears acpChatTurnRunning', () => {
+    const a = makeWidget('a')
+    const sub = svc.register(a.widget)
+    svc.setTurnRunning(a.widget, true)
+    fireFocusIn(a.child)
+    expect(cks.get('acpChatTurnRunning')).toBe(true)
+    sub.dispose()
+    expect(cks.get('acpChatTurnRunning')).toBe(false)
+  })
+
   it('disposing the service detaches listeners', () => {
     const a = makeWidget('a')
     svc.register(a.widget)

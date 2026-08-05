@@ -42,7 +42,7 @@ import { AcpPromptReplaceInbox } from '../services/acp/session/acpPromptReplaceI
 import { resolveLiveSessionTitle } from '../services/acp/session/acpSessionTitle.js'
 import { ISessionSwitcherService, type SessionSummary } from '../../shared/ipc/sessionSwitcher.js'
 import { basenameOfPath } from '../workbench/files/resourceInfo.js'
-import { CATEGORY, resolveNavWidget } from './_agentShared.js'
+import { ACP_SCOPED_KEY_WEIGHT, CATEGORY, resolveNavWidget } from './_agentShared.js'
 
 export class NewAgentSessionAction extends Action2 {
   static readonly ID = 'workbench.action.agent.newSession'
@@ -151,7 +151,22 @@ export class CancelAgentTurnAction extends Action2 {
       id: CancelAgentTurnAction.ID,
       title: localize2('action.agent.cancelTurn', 'Cancel Agent Turn'),
       category: CATEGORY,
-      keybinding: { primary: 'ctrl+shift+escape' },
+      // Two bindings, one command: Ctrl+Shift+Esc works from anywhere; bare Esc
+      // is scoped to the focused chat of a running session so it cancels the
+      // turn instead of stealing focus back to the editor. The scoped weight
+      // must outrank FocusActiveEditorGroupAction's global Esc binding; the
+      // popover (acpPromptPopupVisible) and find (acpChatFindVisible) Esc
+      // bindings sit at the same weight, so this when-clause excludes both —
+      // Esc closes an open popover / find widget first, and only cancels the
+      // turn once nothing else owns the key.
+      keybinding: [
+        { primary: 'ctrl+shift+escape' },
+        {
+          primary: 'escape',
+          when: 'acpChatFocused && acpChatTurnRunning && !acpPromptPopupVisible && !acpChatFindVisible',
+          weight: ACP_SCOPED_KEY_WEIGHT,
+        },
+      ],
       f1: true,
     })
   }

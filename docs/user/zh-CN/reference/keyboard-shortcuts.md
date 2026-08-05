@@ -91,7 +91,7 @@
 | --- | --- |
 | 新建 Agent 会话 | `Ctrl+Alt+N` |
 | 聚焦 Agent 输入框 | `Ctrl+Alt+I` |
-| 取消 Agent 回合 | `Ctrl+Shift+Escape` |
+| 取消 Agent 回合 | `Ctrl+Shift+Escape`；会话聚焦时也可按 `Esc` |
 | 将选区添加到 Agent 聊天 | `Ctrl+K Ctrl+L` |
 | 恢复 Agent 会话… | `Ctrl+Shift+H` |
 | 切换会话…（跨窗口） | `Alt+S` |

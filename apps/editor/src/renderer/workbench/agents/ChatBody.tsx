@@ -30,6 +30,7 @@ import {
 import { useVirtualizer, type Virtualizer, type VirtualItem } from '@tanstack/react-virtual'
 import { Bot, History, Loader2, Plus } from 'lucide-react'
 import {
+  autorun,
   Emitter,
   Event,
   IConfigurationService,
@@ -293,6 +294,19 @@ function ChatSessionBody({
     },
     [widgetService],
   )
+
+  // Push the session's turn-running flag up so the service flips
+  // `acpChatTurnRunning` for the focused widget (gates the Esc cancel binding).
+  // Registered as a plain autorun — it must fire for the initial state too, and
+  // status changes are rare enough that re-render indirection is unnecessary.
+  useEffect(() => {
+    const widget = widgetRef.current
+    if (!widget) return
+    const sub = autorun((reader) => {
+      widgetService.setTurnRunning(widget, session.status.read(reader) === 'running')
+    })
+    return () => sub.dispose()
+  }, [widgetService, session])
 
   // A resumed session is registered (so getById hits and we render here) before
   // session/load replays its history — the timeline is transiently empty. Show a

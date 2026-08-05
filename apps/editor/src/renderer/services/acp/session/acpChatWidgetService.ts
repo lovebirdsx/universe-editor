@@ -20,6 +20,11 @@
  *  widget is open. Pushed via `setFindVisible`, aggregated like the popover key;
  *  the FindNext/FindPrevious/FindClose commands (F3 / Shift+F3 / Escape) gate on
  *  it (mirroring VSCode's `findWidgetVisible`).
+ *
+ *  And `acpChatTurnRunning`: true iff the *focused* widget's session is running
+ *  a turn. Pushed via `setTurnRunning`, aggregated the same way; the
+ *  CancelAgentTurn Escape binding gates on it so Esc stops the turn only while
+ *  focus sits inside the chat of the running session.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -84,6 +89,9 @@ export interface IAcpChatWidgetService {
   /** Push a widget's find open/closed state; the service flips
    *  `acpChatFindVisible` on iff the *focused* widget's find widget is open. */
   setFindVisible(widget: AcpChatWidget, open: boolean): void
+  /** Push a widget's turn-running state; the service flips
+   *  `acpChatTurnRunning` on iff the *focused* widget's session is running. */
+  setTurnRunning(widget: AcpChatWidget, running: boolean): void
   /** Set `acpChatHasSelection` — true when text is selected at context-menu time. */
   setHasSelection(hasSelection: boolean): void
   /**
@@ -101,6 +109,7 @@ interface Entry {
   focused: boolean
   popoverOpen: boolean
   findVisible: boolean
+  turnRunning: boolean
   onFocusIn: (e: FocusEvent) => void
   onFocusOut: (e: FocusEvent) => void
 }
@@ -113,6 +122,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   private readonly _key: IContextKey<boolean>
   private readonly _popupKey: IContextKey<boolean>
   private readonly _findKey: IContextKey<boolean>
+  private readonly _runningKey: IContextKey<boolean>
   private readonly _selectionKey: IContextKey<boolean>
   private readonly _forkSupportedKey: IContextKey<boolean>
 
@@ -126,6 +136,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     this._key = contextKeyService.createKey<boolean>('acpChatFocused', false)
     this._popupKey = contextKeyService.createKey<boolean>('acpPromptPopupVisible', false)
     this._findKey = contextKeyService.createKey<boolean>('acpChatFindVisible', false)
+    this._runningKey = contextKeyService.createKey<boolean>('acpChatTurnRunning', false)
     this._selectionKey = contextKeyService.createKey<boolean>('acpChatHasSelection', false)
     this._forkSupportedKey = contextKeyService.createKey<boolean>('acpChatForkSupported', false)
   }
@@ -153,6 +164,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
       focused: false,
       popoverOpen: false,
       findVisible: false,
+      turnRunning: false,
       onFocusIn,
       onFocusOut,
     }
@@ -207,6 +219,16 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     this._recomputeFindKey()
   }
 
+  // Same plumbing again for turn-running: gates the Esc cancel binding on the
+  // *focused* widget's session, so Esc in another chat (or outside any chat)
+  // never cancels a turn it isn't looking at.
+  setTurnRunning(widget: AcpChatWidget, running: boolean): void {
+    const entry = this._entries.get(widget)
+    if (!entry || entry.turnRunning === running) return
+    entry.turnRunning = running
+    this._recomputeRunningKey()
+  }
+
   setHasSelection(hasSelection: boolean): void {
     this._selectionKey.set(hasSelection)
   }
@@ -227,6 +249,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     this._recomputeKey()
     this._recomputePopupKey()
     this._recomputeFindKey()
+    this._recomputeRunningKey()
   }
 
   private _setFocused(widget: AcpChatWidget, focused: boolean): void {
@@ -240,6 +263,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     this._recomputeKey()
     this._recomputePopupKey()
     this._recomputeFindKey()
+    this._recomputeRunningKey()
   }
 
   private _recomputeKey(): void {
@@ -273,5 +297,16 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
       }
     }
     this._findKey.set(visible)
+  }
+
+  private _recomputeRunningKey(): void {
+    let running = false
+    for (const entry of this._entries.values()) {
+      if (entry.focused && entry.turnRunning) {
+        running = true
+        break
+      }
+    }
+    this._runningKey.set(running)
   }
 }
