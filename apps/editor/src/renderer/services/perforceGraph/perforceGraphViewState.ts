@@ -28,6 +28,11 @@ export interface PerforceGraphViewState {
   focusSearch: (() => void) | null
   /** Callback registered by the mounted editor to reload the graph (toolbar ↺). */
   refresh: (() => void) | null
+  /** Callback registered by the mounted editor to select + scroll to a change,
+   *  paging in more history until the change is loaded. */
+  revealCommit: ((id: string) => void) | null
+  /** Change to reveal once the editor mounts (set while unmounted). */
+  pendingReveal: string | null
   /** Last loaded change list, or null if never loaded. */
   result: P4GraphLoadResult | null
   /** Selected change id (single), or the synthetic pending id. */
@@ -63,6 +68,8 @@ export const PERFORCE_GRAPH_PAGE_SIZE = 300
 export const perforceGraphViewState: PerforceGraphViewState = {
   focusSearch: null,
   refresh: null,
+  revealCommit: null,
+  pendingReveal: null,
   result: null,
   selection: [],
   details: null,

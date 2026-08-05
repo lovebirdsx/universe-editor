@@ -42,6 +42,15 @@ import { scmViewState } from '../workbench/scm/scmViewState.js'
 const OPEN_COMMIT_COMMAND = 'scm.blame.openCommit'
 const DEFAULT_TEMPLATE = '${subject}, ${authorName} (${authorDateAgo})'
 const DEFAULT_STATUSBAR_TEMPLATE = '${authorName} (${authorDateAgo})'
+
+/** Command that opens the provider's history graph at a commit. git/perforce
+ *  have reveal bridges (`_workbench.*`); other providers fall back to the
+ *  `<providerId>-graph.view` naming convention (no reveal argument). */
+function openCommitGraphCommand(providerId: string): string {
+  if (providerId === 'git') return '_workbench.openGitGraph'
+  if (providerId === 'perforce') return '_workbench.openPerforceGraph'
+  return `${providerId}-graph.view`
+}
 /**
  * Editing invalidates the blame cache, so an un-throttled refresh would rerun
  * `git blame` on every keystroke (typing fires content + cursor events as a
@@ -119,13 +128,9 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
     this._logger = loggerService.createLogger({ id: 'scmBlame', name: 'SCM Blame' })
 
     this._register(
-      CommandsRegistry.registerCommand(OPEN_COMMIT_COMMAND, () => {
-        // `<providerId>-graph.view` is the naming convention both the git and
-        // perforce graph actions follow (git-graph.view / perforce-graph.view).
-        const providerId = this._activeProviderId
-        if (this._currentHash && providerId) {
-          void this._commandService.executeCommand(`${providerId}-graph.view`)
-        }
+      CommandsRegistry.registerCommand(OPEN_COMMIT_COMMAND, (_accessor, ...args) => {
+        const [hash, providerId] = args as [string | undefined, string | undefined]
+        return this._openCommit(hash, providerId)
       }),
     )
 
@@ -170,11 +175,22 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
       }),
     )
 
-    void MonacoLoader.ensureInitialized().then(() => {
+    void MonacoLoader.ensureInitialized().then(async () => {
       if (this._store.isDisposed) return
       this._register(
         languageFeatures.registerHoverProvider('*', {
           provideHover: (model, position) => this._provideHover(model, position),
+        }),
+      )
+      // Trusted-hover `command:` links dispatch through monaco's own command
+      // registry — a separate registry from the platform one above.
+      const { CommandsRegistry: monacoCommandsRegistry } =
+        await import('monaco-editor/esm/vs/platform/commands/common/commands.js')
+      if (this._store.isDisposed) return
+      this._register(
+        monacoCommandsRegistry.registerCommand(OPEN_COMMIT_COMMAND, (_accessor, ...args) => {
+          const [hash, providerId] = args as [string | undefined, string | undefined]
+          return this._openCommit(hash, providerId)
         }),
       )
     })
@@ -265,6 +281,17 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
     void this._blameDelayer.trigger(async () => this._refresh()).catch(() => undefined)
   }
 
+  /** Open the blame commit in its provider's history graph (status-bar click,
+   *  hover link). Args come from the hover link; the status-bar click relies on
+   *  the current-line fallback. */
+  private _openCommit(hash?: string, providerId?: string): Promise<unknown> {
+    const provider = providerId ?? this._activeProviderId
+    if (!provider) return Promise.resolve(undefined)
+    const target = hash ?? this._currentHash
+    if (!target) return Promise.resolve(undefined)
+    return this._commandService.executeCommand(openCommitGraphCommand(provider), target)
+  }
+
   private _refresh(): void {
     const editor = this._activeEditor
     const path = this._activePath
@@ -292,7 +319,7 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
       if (seq !== this._refreshSeq) return
       if (this._activeEditor !== editor || editor.getPosition()?.lineNumber !== line) return
       this._activeProviderId = providerId
-      this._render(result ? this._resolveLine(result, line) : undefined)
+      this._render(result ? this._resolveLine(result, line, providerId) : undefined)
     })
   }
 
@@ -340,7 +367,11 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
     return p
   }
 
-  private _resolveLine(result: BlameResultDto, line: number): ResolvedLineBlame | undefined {
+  private _resolveLine(
+    result: BlameResultDto,
+    line: number,
+    providerId: string | undefined,
+  ): ResolvedLineBlame | undefined {
     if (result.uncommittedLines.includes(line)) {
       return { decorationText: 'Not Committed Yet', statusBarText: 'Not Committed Yet' }
     }
@@ -367,6 +398,11 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
         'scm.blame.statusBarItem.template',
         DEFAULT_STATUSBAR_TEMPLATE,
       ) ?? DEFAULT_STATUSBAR_TEMPLATE
+    // The hash is a `command:` link opening the commit in the graph (dispatched
+    // via the monaco-side registration of OPEN_COMMIT_COMMAND).
+    const hashLinkArgs = encodeURIComponent(
+      JSON.stringify(providerId ? [commit.hash, providerId] : [commit.hash]),
+    )
     const hover = [
       `**${commit.authorName}** <${commit.authorEmail}>`,
       '',
@@ -374,7 +410,7 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
       '',
       `${new Date(commit.authorDate).toLocaleString()} (${ago})`,
       '',
-      `\`${commit.hash.slice(0, 8)}\``,
+      `[\`${commit.hash.slice(0, 8)}\`](command:${OPEN_COMMIT_COMMAND}?${hashLinkArgs})`,
     ].join('\n')
     return {
       decorationText: applyTemplate(decorationTemplate, tokens),
@@ -480,8 +516,13 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
         path,
       ),
     )
+    const providerId = resolveScmProviderId(
+      this._scm.sourceControls.get(),
+      path,
+      scmViewState.selectedRepo.get(),
+    )
     if (!cached) return null
-    const resolved = this._resolveLine(cached, position.lineNumber)
+    const resolved = this._resolveLine(cached, position.lineNumber, providerId)
     if (!resolved?.hover) return null
     return { contents: [{ value: resolved.hover, isTrusted: true }] }
   }

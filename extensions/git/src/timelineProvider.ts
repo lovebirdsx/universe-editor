@@ -278,5 +278,11 @@ export function createGitTimelineCommands(
       if (label) return commands.executeCommand('_workbench.writeClipboard', label)
       return undefined
     }),
+
+    commands.registerCommand('git.timeline.openInGraph', (item: unknown) => {
+      const id = (item as { id?: string } | undefined)?.id
+      if (id) return commands.executeCommand('_workbench.openGitGraph', id)
+      return undefined
+    }),
   ]
 }

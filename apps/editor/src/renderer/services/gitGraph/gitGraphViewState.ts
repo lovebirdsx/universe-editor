@@ -41,6 +41,11 @@ export interface GitGraphViewState {
   toggleRemoteBranches: (() => void) | null
   /** Callback registered by the mounted editor to reload the graph (toolbar ↺). */
   refresh: (() => void) | null
+  /** Callback registered by the mounted editor to select + scroll to a commit,
+   *  paging in more history until the commit is loaded. */
+  revealCommit: ((hash: string) => void) | null
+  /** Commit to reveal once the editor mounts (set while unmounted). */
+  pendingReveal: string | null
   /** Last loaded commit list, or null if never loaded. */
   result: GitGraphLoadResult | null
   /** Selected commit hash(es): one to expand details, two to compare. */
@@ -76,6 +81,8 @@ export const gitGraphViewState: GitGraphViewState = {
   focusSearch: null,
   toggleRemoteBranches: null,
   refresh: null,
+  revealCommit: null,
+  pendingReveal: null,
   result: null,
   selection: [],
   details: null,

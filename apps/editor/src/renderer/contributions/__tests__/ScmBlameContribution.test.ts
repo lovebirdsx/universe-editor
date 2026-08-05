@@ -76,11 +76,15 @@ function makeLogger(): ILogger {
 function makeFakeEditor() {
   const cursor = new Emitter<unknown>()
   const node = document.createElement('div')
+  const model = {
+    getLineMaxColumn: () => 5,
+    onDidChangeContent: () => ({ dispose() {} }),
+  }
   return {
     cursor,
     getPosition: () => ({ lineNumber: 1, column: 1 }),
     onDidChangeCursorPosition: (cb: () => void) => cursor.event(cb),
-    getModel: () => null,
+    getModel: () => model,
     createDecorationsCollection: () => ({ set: vi.fn(), clear: vi.fn() }),
     getContainerDomNode: () => node,
   }
@@ -135,9 +139,22 @@ function setup(
     activeEditorId: observableValue<string | undefined>('id', undefined),
     activeEditor: active,
   } as unknown as IEditorService
+  interface CapturedHoverProvider {
+    provideHover: (
+      model: unknown,
+      position: { lineNumber: number; column: number },
+    ) =>
+      | Promise<{ contents: { value: string; isTrusted?: boolean }[] } | null>
+      | { contents: { value: string; isTrusted?: boolean }[] }
+      | null
+  }
+  let hoverProvider: CapturedHoverProvider | undefined
   const languageFeatures = {
     _serviceBrand: undefined,
-    registerHoverProvider: () => ({ dispose() {} }),
+    registerHoverProvider: (_lang: string, provider: CapturedHoverProvider) => {
+      hoverProvider = provider
+      return { dispose() {} }
+    },
   } as unknown as ILanguageFeaturesService
 
   services.set(IFileService, makeFileService())
@@ -170,7 +187,7 @@ function setup(
 
   const statusBar = services.get(IStatusBarService) as StatusBarService
   const contrib = inst.createInstance(ScmBlameContribution)
-  return { inst, logger, active, statusBar, contrib, store }
+  return { inst, logger, active, statusBar, contrib, store, getHoverProvider: () => hoverProvider }
 }
 
 async function flushMicrotasks(): Promise<void> {
@@ -253,7 +270,7 @@ describe('ScmBlameContribution', () => {
       input,
       editor as unknown as Parameters<typeof FileEditorRegistry.register>[1],
     )
-    return input
+    return { input, editor }
   }
 
   it('switches the status-bar blame when the SCM view selection changes provider', async () => {
@@ -266,7 +283,7 @@ describe('ScmBlameContribution', () => {
       CommandsRegistry.registerCommand(blameCommandId('perforce'), () => blameResult('P4aula')),
     ]
     try {
-      const input = openFile(inst)
+      const { input } = openFile(inst)
       active.set(input, undefined)
       await flushMicrotasks()
 
@@ -306,7 +323,7 @@ describe('ScmBlameContribution', () => {
     ]
     try {
       scmViewState.setSelectedRepo('/ws')
-      const input = openFile(inst)
+      const { input } = openFile(inst)
       active.set(input, undefined)
       await flushMicrotasks()
 
@@ -347,7 +364,7 @@ describe('ScmBlameContribution', () => {
     ]
     try {
       inst.createInstance(ScmSelectedRepoContribution)
-      const input = openFile(inst)
+      const { input } = openFile(inst)
       active.set(input, undefined)
       await flushMicrotasks()
 
@@ -387,7 +404,7 @@ describe('ScmBlameContribution', () => {
       ),
     ]
     try {
-      const input = openFile(inst)
+      const { input } = openFile(inst)
       active.set(input, undefined)
       await flushMicrotasks() // refresh #1: git (longest prefix), in-flight
 
@@ -420,7 +437,7 @@ describe('ScmBlameContribution', () => {
       CommandsRegistry.registerCommand('git-graph.view', () => undefined),
     ]
     try {
-      const input = openFile(inst)
+      const { input } = openFile(inst)
       active.set(input, undefined)
       await flushMicrotasks()
 
@@ -435,7 +452,7 @@ describe('ScmBlameContribution', () => {
     const { inst, statusBar, active } = setup()
     const reg = CommandsRegistry.registerCommand(GET_BLAME, () => blameResult('Ada'))
     try {
-      const input = openFile(inst)
+      const { input } = openFile(inst)
       active.set(input, undefined)
       await flushMicrotasks()
 
@@ -444,6 +461,85 @@ describe('ScmBlameContribution', () => {
       expect(entry?.entry.command).toBeUndefined()
     } finally {
       reg.dispose()
+    }
+  })
+
+  it('status-bar click opens the git graph reveal bridge at the current commit', async () => {
+    const { inst, active } = setup()
+    const bridge = vi.fn()
+    const regs = [
+      CommandsRegistry.registerCommand(GET_BLAME, () => blameResult('Ada')),
+      CommandsRegistry.registerCommand('git-graph.view', () => undefined),
+      CommandsRegistry.registerCommand('_workbench.openGitGraph', bridge),
+    ]
+    try {
+      const { input } = openFile(inst)
+      active.set(input, undefined)
+      await flushMicrotasks()
+
+      // Status-bar entries carry no arguments — the handler must fall back to
+      // the current line's hash/provider.
+      await CommandsRegistry.getCommand('scm.blame.openCommit')!.handler({} as never)
+
+      expect(bridge).toHaveBeenCalledWith(expect.anything(), 'b'.repeat(40))
+    } finally {
+      regs.forEach((r) => r.dispose())
+    }
+  })
+
+  it('scm.blame.openCommit routes an explicit hash+provider to the matching bridge', async () => {
+    setup([
+      { id: 'git', rootUri: '/ws/git' },
+      { id: 'perforce', rootUri: '/ws' },
+    ])
+    const gitBridge = vi.fn()
+    const p4Bridge = vi.fn()
+    const otherView = vi.fn()
+    const regs = [
+      CommandsRegistry.registerCommand('_workbench.openGitGraph', gitBridge),
+      CommandsRegistry.registerCommand('_workbench.openPerforceGraph', p4Bridge),
+      CommandsRegistry.registerCommand('hg-graph.view', otherView),
+    ]
+    try {
+      const handler = CommandsRegistry.getCommand('scm.blame.openCommit')!.handler
+
+      await handler({} as never, 'abc123', 'git')
+      expect(gitBridge).toHaveBeenCalledWith(expect.anything(), 'abc123')
+
+      await handler({} as never, '4521', 'perforce')
+      expect(p4Bridge).toHaveBeenCalledWith(expect.anything(), '4521')
+
+      // A third-party provider without a reveal bridge keeps the
+      // `<providerId>-graph.view` convention (no reveal argument).
+      await handler({} as never, 'cafe99', 'hg')
+      expect(otherView).toHaveBeenCalledWith(expect.anything(), 'cafe99')
+    } finally {
+      regs.forEach((r) => r.dispose())
+    }
+  })
+
+  it('serves a hover whose commit hash is a trusted command link to the graph', async () => {
+    const { inst, active, getHoverProvider } = setup()
+    const regs = [
+      CommandsRegistry.registerCommand(GET_BLAME, () => blameResult('Ada')),
+      CommandsRegistry.registerCommand('git-graph.view', () => undefined),
+    ]
+    try {
+      const { input, editor } = openFile(inst)
+      active.set(input, undefined)
+      await flushMicrotasks()
+      await flushMicrotasks()
+
+      const provider = getHoverProvider()
+      expect(provider).toBeDefined()
+      // The hover is gated on the active editor's own model — reuse the fake's.
+      const hover = await provider!.provideHover(editor.getModel(), { lineNumber: 1, column: 5 })
+      const value = hover?.contents[0]?.value ?? ''
+      const expectedArgs = encodeURIComponent(JSON.stringify(['b'.repeat(40), 'git']))
+      expect(value).toContain(`command:scm.blame.openCommit?${expectedArgs}`)
+      expect(hover?.contents[0]?.isTrusted).toBe(true)
+    } finally {
+      regs.forEach((r) => r.dispose())
     }
   })
 })

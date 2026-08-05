@@ -50,6 +50,7 @@
   "git.command.timeline.openDiff.title": "打开比较",
   "git.command.timeline.copyCommitId.title": "复制提交 ID",
   "git.command.timeline.copyCommitMessage.title": "复制提交消息",
+  "git.command.timeline.openInGraph.title": "在 Git Graph 中显示",
 
   "git.submenu.commit.label": "提交",
   "git.submenu.changes.label": "更改",

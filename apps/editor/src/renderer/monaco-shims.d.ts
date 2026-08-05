@@ -23,9 +23,17 @@ declare module 'monaco-editor/esm/vs/editor/browser/services/codeEditorService.j
 
 // ICommandService decorator, used as the lookup key for StandaloneServices.get so
 // the workbench can invoke monaco-internal commands like the references-peek
-// `openReference` (see MonacoLoader / PeekNavigationContribution).
+// `openReference` (see MonacoLoader / PeekNavigationContribution). CommandsRegistry
+// is monaco's own command registry — a separate registry from the platform one —
+// which trusted-hover `command:` links dispatch through (see ScmBlameContribution).
 declare module 'monaco-editor/esm/vs/platform/commands/common/commands.js' {
   export const ICommandService: unknown
+  export const CommandsRegistry: {
+    registerCommand(
+      id: string,
+      handler: (accessor: unknown, ...args: unknown[]) => unknown,
+    ): { dispose(): void }
+  }
 }
 
 // IListService decorator + lookup key for StandaloneServices.get. We reach

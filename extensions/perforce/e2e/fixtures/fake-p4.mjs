@@ -340,7 +340,24 @@ function main() {
       const submitted = clId ? state.submitted?.[clId] : undefined
       const files = submitted ?? (clId ? state.shelved[clId] : undefined)
       if (!files || Object.keys(files).length === 0) {
-        emit([])
+        // No seeded file set: fall back to changeMeta so the graph's details
+        // panel still renders the change header (author/date/description)
+        // for a submitted cl seeded only via the annotate/changeMeta seed.
+        const meta = clId ? state.changeMeta?.[clId] : undefined
+        if (meta) {
+          emit([
+            {
+              change: clId,
+              status: 'submitted',
+              user: meta.user,
+              time: meta.time,
+              desc: meta.desc,
+              client: state.client,
+            },
+          ])
+        } else {
+          emit([])
+        }
         return 0
       }
       const record = { change: clId, status: submitted ? 'submitted' : 'pending' }

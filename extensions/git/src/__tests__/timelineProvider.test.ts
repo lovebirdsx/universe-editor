@@ -293,4 +293,15 @@ describe('git.timeline commands', () => {
     await commands.get('git.timeline.copyCommitId')?.({ label: 'no id' })
     expect(mocks.executeCommand).not.toHaveBeenCalled()
   })
+
+  it('openInGraph routes the commit id through the graph bridge command', async () => {
+    const commands = registeredCommands()
+
+    await commands.get('git.timeline.openInGraph')?.({ id: 'abc123' })
+    expect(mocks.executeCommand).toHaveBeenCalledWith('_workbench.openGitGraph', 'abc123')
+
+    mocks.executeCommand.mockClear()
+    await commands.get('git.timeline.openInGraph')?.({ label: 'no id' })
+    expect(mocks.executeCommand).not.toHaveBeenCalled()
+  })
 })

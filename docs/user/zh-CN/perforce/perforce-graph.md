@@ -26,6 +26,8 @@ Perforce 图谱是一个专门用来**可视化浏览已提交 changelist 历史
 
 打开后是一个编辑器标签页，标题为 **"Perforce Graph"**。
 
+也可以"带着目标 changelist 来"：从[时间线](./daily-workflow.md#时间线文件历史)历史行的行内按钮 / 右键菜单，或点击状态栏 Blame 项（及 Blame 悬停卡片里的 changelist 链接）——图谱会直接**选中并滚动定位到该 changelist**，未加载时自动向前翻页查找（最多补 20 页）。
+
 <!-- 截图：Perforce 图谱编辑器全貌（单泳道 changelist 列表 + 文件更改） -->
 
 ## 图谱里能看到什么

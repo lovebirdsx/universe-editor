@@ -217,11 +217,13 @@ import {
   GitGraphFocusSearchAction,
   GitGraphRefreshAction,
   GitGraphToggleRemoteBranchesAction,
+  OpenGitGraphFromExtensionAction,
 } from './gitGraphActions.js'
 import {
   ViewPerforceGraphAction,
   PerforceGraphFocusSearchAction,
   PerforceGraphRefreshAction,
+  OpenPerforceGraphFromExtensionAction,
 } from './perforceGraphActions.js'
 import { SwitchScmRepoAction } from './scmActions.js'
 import {
@@ -664,6 +666,8 @@ registerAction2(OpenFolderInNewWindowFromExtensionAction)
 registerAction2(GetConfigurationAction)
 registerAction2(UpdateConfigurationAction)
 registerAction2(WriteClipboardAction)
+registerAction2(OpenGitGraphFromExtensionAction)
+registerAction2(OpenPerforceGraphFromExtensionAction)
 
 // Update
 registerAction2(CheckForUpdatesAction)

@@ -29,6 +29,27 @@ export class ViewPerforceGraphAction extends Action2 {
   }
 }
 
+/**
+ * Bridge for extension-host / cross-feature callers (MainThreadCommands only
+ * lets `_workbench.*` through): open the Perforce Graph and reveal the given
+ * changelist. Never declare this id in an extension manifest — it would shadow
+ * the renderer handler.
+ */
+export class OpenPerforceGraphFromExtensionAction extends Action2 {
+  static readonly ID = '_workbench.openPerforceGraph'
+
+  constructor() {
+    super({ id: OpenPerforceGraphFromExtensionAction.ID, title: 'Open Perforce Graph' })
+  }
+
+  override async run(accessor: ServicesAccessor, changelist?: unknown): Promise<void> {
+    await accessor.get(IEditorService).openEditor(new PerforceGraphEditorInput())
+    if (typeof changelist !== 'string' || changelist === '') return
+    if (perforceGraphViewState.revealCommit) perforceGraphViewState.revealCommit(changelist)
+    else perforceGraphViewState.pendingReveal = changelist
+  }
+}
+
 export class PerforceGraphFocusSearchAction extends Action2 {
   static readonly ID = 'perforce-graph.focusSearch'
 

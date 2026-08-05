@@ -83,6 +83,7 @@ Perforce 里改文件前要先"签出"。三种改动方式：
 - **单击某一行**：打开该修订与**上一修订**的差异对比（新增的文件左侧为空、删除的修订右侧为空）。
 - 文件有未提交改动时（已签出，或在磁盘上改过但还没签出），**第一页顶部会出现「待定更改」行**：单击打开工作区内容与 **have 版本** 的对比，右侧跟随你的实时编辑。可用 `perforce.timeline.showPending`（默认开）关掉这一行。
 - 右键历史行可复制 changelist 编号；底部 **加载更多** 翻更早的历史。
+- **在图谱中定位某个 changelist**：悬停历史行点行尾跳转按钮，或右键选 **"Open in Perforce Graph"（在 Perforce Graph 中显示）**——打开 [Perforce Graph](./perforce-graph.md)并选中、滚动定位到该 changelist（未加载时图谱自动向前翻页，最多补 20 页）。「待定更改」行没有这个入口。
 
 > 想纵览**整个仓库**的提交历史（而不是单个文件），用 [Perforce Graph](./perforce-graph.md)。
 

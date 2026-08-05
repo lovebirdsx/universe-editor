@@ -245,6 +245,11 @@
         "command": "perforce.timeline.copyChangelistNumber",
         "title": "%perforce.command.timeline.copyChangelistNumber.title%",
         "category": "Perforce"
+      },
+      {
+        "command": "perforce.timeline.openInGraph",
+        "title": "%perforce.command.timeline.openInGraph.title%",
+        "category": "Perforce"
       }
     ],
     "submenus": [
@@ -589,6 +594,11 @@
           "command": "perforce.timeline.copyChangelistNumber",
           "when": "timelineItem == perforce:file:rev",
           "group": "2_copy@1"
+        },
+        {
+          "command": "perforce.timeline.openInGraph",
+          "when": "timelineItem == perforce:file:rev",
+          "group": "3_graph@1"
         }
       ]
     },

@@ -50,6 +50,7 @@
   "perforce.config.timeline.showPending.description": "在时间线视图顶部显示该文件的待定更改条目（已签出的，或在磁盘上被修改但未签出的）。",
   "perforce.command.timeline.openDiff.title": "打开比较",
   "perforce.command.timeline.copyChangelistNumber.title": "复制 Changelist 编号",
+  "perforce.command.timeline.openInGraph.title": "在 Perforce Graph 中显示",
   "perforce.command.swarm.ping.title": "Swarm：检查连接",
   "perforce.command.swarm.requestReview.title": "发起新的 Swarm 审核…",
   "perforce.command.swarm.updateReviewFromChangelist.title": "更新 Swarm 审核…",

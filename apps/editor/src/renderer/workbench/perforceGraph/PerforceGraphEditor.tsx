@@ -78,6 +78,9 @@ const GRID: GraphGrid = { x: 14, y: ROW_HEIGHT, offsetX: 12, offsetY: 12 }
 const DETAIL_HEIGHT = 300
 /** Id of the synthetic pending-changes node prepended above the latest change. */
 const PENDING_ID = '*'
+
+/** Reveal paging cap: stop paging in history after this many extra pages. */
+const MAX_REVEAL_PAGES = 20
 /** Idle delay before an external change triggers a background reload. */
 const AUTO_REFRESH_DEBOUNCE = 500
 /** Minimum width (px) a draggable column can shrink to. */
@@ -317,6 +320,9 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
       ? selectionKey(perforceGraphViewState.selection)
       : null,
   )
+  // Guards against revalidate clobbering the intermediate pages pulled in by
+  // revealCommit.
+  const revealingRef = useRef(false)
 
   useEffect(() => {
     perforceGraphViewState.focusSearch = () => {
@@ -412,10 +418,77 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     }
   }, [load])
 
+  const scrollToChange = useCallback((id: string) => {
+    // getAttribute comparison instead of a `[data-id="${CSS.escape(id)}"]`
+    // selector: attribute-string escape sequences are not honoured by every
+    // selector engine (happy-dom in tests).
+    const row = scrollRef.current
+      ?.querySelectorAll('[data-id]')
+      .values()
+      .find((el) => el.getAttribute('data-id') === id)
+    row?.scrollIntoView({ block: 'center' })
+  }, [])
+
+  // Reveal entry point (timeline / blame → `_workbench.openPerforceGraph`):
+  // select the change and scroll it into view, paging in older history until it
+  // is loaded. The loop stops on a hit, on `moreAvailable === false`, or at the
+  // page cap (unknown id → silently no-op).
+  const revealCommit = useCallback(
+    (id: string) => {
+      void (async () => {
+        revealingRef.current = true
+        try {
+          // A filter would hide the target row.
+          setSearchQuery('')
+          let current = result
+          let nextLimit = limit
+          for (let i = 0; i < MAX_REVEAL_PAGES && !current?.changes.some((c) => c.id === id); i++) {
+            if (current && !current.moreAvailable) break
+            nextLimit += PERFORCE_GRAPH_PAGE_SIZE
+            const r = await commands.executeCommand<P4GraphLoadResult>(
+              PerforceGraphCommands.getChanges,
+              { ...queryRef.current, maxChanges: nextLimit },
+            )
+            if (!r) break
+            setResult(r)
+            current = r
+          }
+          if (!current?.changes.some((c) => c.id === id)) return
+          if (nextLimit !== limit) setLimit(nextLimit)
+          fetchedKeyRef.current = null
+          setSelection([id])
+          requestAnimationFrame(() => scrollToChange(id))
+        } finally {
+          revealingRef.current = false
+        }
+      })()
+    },
+    [commands, result, limit, scrollToChange],
+  )
+
+  useEffect(() => {
+    perforceGraphViewState.revealCommit = revealCommit
+    return () => {
+      perforceGraphViewState.revealCommit = null
+    }
+  }, [revealCommit])
+
+  // Reveal requested while the tab was unmounted lands in pendingReveal; consume
+  // it once the first page is in.
+  useEffect(() => {
+    const pending = perforceGraphViewState.pendingReveal
+    if (!pending || !result) return
+    perforceGraphViewState.pendingReveal = null
+    revealCommit(pending)
+  }, [result, revealCommit])
+
   // Background reload: refresh data in place without the loading flicker, keeping
   // the current selection when its change still exists.
   const revalidate = useCallback(
     (forceDetailRefetch = false) => {
+      // A reveal in progress drives its own paging; a mid-flight revalidate
+      // would clobber the intermediate result and filter out the target.
+      if (revealingRef.current) return
       void commands
         .executeCommand<P4GraphLoadResult>(PerforceGraphCommands.getChanges, queryRef.current)
         .then((r) => {

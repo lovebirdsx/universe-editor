@@ -98,6 +98,9 @@ const DETAIL_HEIGHT = 300
 const UNCOMMITTED_HASH = '*'
 /** Idle delay before an external git change triggers a background reload. */
 const AUTO_REFRESH_DEBOUNCE = 500
+
+/** Reveal paging cap: stop paging in history after this many extra pages. */
+const MAX_REVEAL_PAGES = 20
 /** Minimum width (px) a draggable column can shrink to. */
 const MIN_COL_WIDTH = 60
 
@@ -533,6 +536,9 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       ? selectionKey(gitGraphViewState.selection)
       : null,
   )
+  // Guards against revalidate clobbering the intermediate pages pulled in by
+  // revealCommit (auto-refresh fires independently of the reveal loop).
+  const revealingRef = useRef(false)
 
   useEffect(() => {
     gitGraphViewState.focusSearch = () => {
@@ -636,6 +642,75 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     }
   }, [load])
 
+  const scrollToHash = useCallback((hash: string) => {
+    // getAttribute comparison instead of a `[data-hash="${CSS.escape(hash)}"]`
+    // selector: attribute-string escape sequences are not honoured by every
+    // selector engine (happy-dom in tests).
+    const row = scrollRef.current
+      ?.querySelectorAll('[data-hash]')
+      .values()
+      .find((el) => el.getAttribute('data-hash') === hash)
+    row?.scrollIntoView({ block: 'center' })
+  }, [])
+
+  // Reveal entry point (timeline / blame → `_workbench.openGitGraph`): select the
+  // commit and scroll it into view, paging in older history until the commit is
+  // loaded. Synchronous per-page awaits keep the ordering simple; the loop stops
+  // on a hit, on `moreAvailable === false`, or at the page cap (unknown hash →
+  // silently no-op, matching reveal semantics elsewhere).
+  const revealCommit = useCallback(
+    (hash: string) => {
+      void (async () => {
+        revealingRef.current = true
+        try {
+          // A filter would hide the target row.
+          setSearchQuery('')
+          let current = result
+          let nextLimit = limit
+          for (
+            let i = 0;
+            i < MAX_REVEAL_PAGES && !current?.commits.some((c) => c.hash === hash);
+            i++
+          ) {
+            if (current && !current.moreAvailable) break
+            nextLimit += GIT_GRAPH_PAGE_SIZE
+            const r = await commands.executeCommand<GitGraphLoadResult>(
+              GitGraphCommands.getCommits,
+              { ...queryRef.current, maxCommits: nextLimit },
+            )
+            if (!r) break
+            setResult(r)
+            current = r
+          }
+          if (!current?.commits.some((c) => c.hash === hash)) return
+          if (nextLimit !== limit) setLimit(nextLimit)
+          fetchedKeyRef.current = null
+          setSelection([hash])
+          requestAnimationFrame(() => scrollToHash(hash))
+        } finally {
+          revealingRef.current = false
+        }
+      })()
+    },
+    [commands, result, limit, scrollToHash],
+  )
+
+  useEffect(() => {
+    gitGraphViewState.revealCommit = revealCommit
+    return () => {
+      gitGraphViewState.revealCommit = null
+    }
+  }, [revealCommit])
+
+  // Reveal requested while the tab was unmounted lands in pendingReveal; consume
+  // it once the first page is in.
+  useEffect(() => {
+    const pending = gitGraphViewState.pendingReveal
+    if (!pending || !result) return
+    gitGraphViewState.pendingReveal = null
+    revealCommit(pending)
+  }, [result, revealCommit])
+
   // Background reload: refresh data in place without the loading flicker, keeping
   // the current selection when its commit still exists. Used by auto-refresh and
   // when re-activating a cached tab (stale-while-revalidate).
@@ -647,6 +722,9 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   // immutable anyway.
   const revalidate = useCallback(
     (forceDetailRefetch = false) => {
+      // A reveal in progress drives its own paging; a mid-flight auto-refresh
+      // would clobber the intermediate result and filter out the target.
+      if (revealingRef.current) return
       // The auto-refresh autorun (below) reacts to the SCM provider appearing,
       // which the git extension does BEFORE registering the git-graph commands —
       // querying here would warn "command not found" and drop the refresh.

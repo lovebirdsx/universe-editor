@@ -390,6 +390,25 @@ describe('perforce.timeline.copyChangelistNumber', () => {
   })
 })
 
+describe('perforce.timeline.openInGraph', () => {
+  it('routes the changelist number through the graph bridge command', async () => {
+    const handlers = new Map<string, (arg: unknown) => unknown>()
+    mocks.registerCommand.mockImplementation((id: string, handler: (arg: unknown) => unknown) => {
+      handlers.set(id, handler)
+      return { dispose: () => undefined }
+    })
+    createPerforceTimelineCommands(fakeManager(fakeClient()))
+
+    await handlers.get('perforce.timeline.openInGraph')?.({ id: '12345' })
+
+    expect(mocks.executeCommand).toHaveBeenCalledWith('_workbench.openPerforceGraph', '12345')
+
+    mocks.executeCommand.mockClear()
+    await handlers.get('perforce.timeline.openInGraph')?.({ label: 'no id' })
+    expect(mocks.executeCommand).not.toHaveBeenCalled()
+  })
+})
+
 describe('PerforceTimelineProvider.trackClient', () => {
   it('debounces a client change burst into one reset event', () => {
     vi.useFakeTimers()

@@ -29,6 +29,27 @@ export class ViewGitGraphAction extends Action2 {
   }
 }
 
+/**
+ * Bridge for extension-host / cross-feature callers (MainThreadCommands only
+ * lets `_workbench.*` through): open the Git Graph and reveal the given commit.
+ * Never declare this id in an extension manifest — it would shadow the
+ * renderer handler.
+ */
+export class OpenGitGraphFromExtensionAction extends Action2 {
+  static readonly ID = '_workbench.openGitGraph'
+
+  constructor() {
+    super({ id: OpenGitGraphFromExtensionAction.ID, title: 'Open Git Graph' })
+  }
+
+  override async run(accessor: ServicesAccessor, hash?: unknown): Promise<void> {
+    await accessor.get(IEditorService).openEditor(new GitGraphEditorInput())
+    if (typeof hash !== 'string' || hash === '') return
+    if (gitGraphViewState.revealCommit) gitGraphViewState.revealCommit(hash)
+    else gitGraphViewState.pendingReveal = hash
+  }
+}
+
 export class GitGraphFocusSearchAction extends Action2 {
   static readonly ID = 'git-graph.focusSearch'
 

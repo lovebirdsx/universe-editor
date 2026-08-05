@@ -37,15 +37,15 @@ import {
 } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
-import { getOriginalResource } from '../../services/editor/editorResourceAccessor.js'
 import {
   ITimelineService,
   type ITimelineProviderModel,
 } from '../../services/timeline/TimelineService.js'
+import { timelineFollowTarget } from '../../services/timeline/followTarget.js'
 import { mergeTimelineItems } from '../../services/timeline/timelineMerge.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
-import { GitCommitHorizontal, type LucideIcon } from 'lucide-react'
+import { GitCommitHorizontal, Waypoints, type LucideIcon } from 'lucide-react'
 import { timelineViewState } from './timelineViewState.js'
 import styles from './TimelineView.module.css'
 
@@ -61,6 +61,32 @@ const ROW_ICON_MAP: Record<string, LucideIcon> = {
 function resolveRowIcon(themeIcon: string | undefined): LucideIcon | undefined {
   if (!themeIcon) return undefined
   return ROW_ICON_MAP[themeIcon] ?? resolveHeaderIcon(themeIcon)
+}
+
+// Inline "reveal in graph" row action, keyed by the owning provider's
+// (source, contextValue) pair — only commit/revision rows get it, never the
+// working-tree rows.
+interface RowGraphTarget {
+  /** `_workbench.*` bridge command (extension-host-callable, opens the graph). */
+  command: string
+  tooltip: string
+}
+
+function resolveRowGraphTarget(item: ITimelineItemDto): RowGraphTarget | undefined {
+  if (!item.id) return undefined
+  if (item.source === 'git-history' && item.contextValue === 'git:file:commit') {
+    return {
+      command: '_workbench.openGitGraph',
+      tooltip: localize('timeline.openInGitGraph', 'Open in Git Graph'),
+    }
+  }
+  if (item.source === 'perforce-history' && item.contextValue === 'perforce:file:rev') {
+    return {
+      command: '_workbench.openPerforceGraph',
+      tooltip: localize('timeline.openInPerforceGraph', 'Open in Perforce Graph'),
+    }
+  }
+  return undefined
 }
 
 interface TimelineRow {
@@ -100,12 +126,14 @@ export function TimelineView() {
   const loadGenerationRef = useRef(0)
 
   // Follow the active editor unless pinned. Depending on pinnedUri re-points the
-  // view at the active editor right after an unpin. getOriginalResource keeps the
-  // target on the file when a diff/merge of it becomes active (VSCode parity),
-  // so opening a timeline entry's diff doesn't blank the view.
+  // view at the active editor right after an unpin. timelineFollowTarget keeps the
+  // view on the last file while a diff/merge or a virtual editor (graph, settings)
+  // is active (VSCode parity), so opening a timeline entry's diff or jumping to a
+  // commit in the graph doesn't blank the view.
   useEffect(() => {
     if (pinnedUri !== undefined) return
-    timelineService.followUri(getOriginalResource(activeEditor))
+    const target = timelineFollowTarget(activeEditor)
+    if (target !== 'keep') timelineService.followUri(target)
   }, [activeEditor, pinnedUri, timelineService])
 
   const activeProviders = useMemo<readonly ITimelineProviderModel[]>(() => {
@@ -308,6 +336,7 @@ export function TimelineView() {
             }
             const item = row.item
             const ItemIcon = resolveRowIcon(item.themeIcon)
+            const graphTarget = resolveRowGraphTarget(item)
             return (
               <div
                 key={row.id}
@@ -337,6 +366,23 @@ export function TimelineView() {
                 <span className={styles['label']}>{item.label}</span>
                 {item.description && (
                   <span className={styles['description']}>{item.description}</span>
+                )}
+                {graphTarget && (
+                  <button
+                    type="button"
+                    className={styles['rowAction']}
+                    data-tooltip={graphTarget.tooltip}
+                    aria-label={graphTarget.tooltip}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      // Act on the row under the mouse, so it becomes the selected
+                      // one (same as openRowMenu) — without firing runItem's diff.
+                      model.setSelection([row.id], row.id)
+                      void commandService.executeCommand(graphTarget.command, item.id)
+                    }}
+                  >
+                    <Waypoints size={14} strokeWidth={1.6} />
+                  </button>
                 )}
               </div>
             )

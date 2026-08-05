@@ -50,6 +50,7 @@
   "git.command.timeline.openDiff.title": "Open Comparison",
   "git.command.timeline.copyCommitId.title": "Copy Commit ID",
   "git.command.timeline.copyCommitMessage.title": "Copy Commit Message",
+  "git.command.timeline.openInGraph.title": "Open in Git Graph",
 
   "git.submenu.commit.label": "Commit",
   "git.submenu.changes.label": "Changes",
