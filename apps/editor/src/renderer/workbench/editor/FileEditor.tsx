@@ -411,7 +411,9 @@ export function FileEditor({ input }: { input: IEditorInput }) {
         recordPerfPhase('fileEditor.restoreViewState', () => {
           const saved = EditorViewStateCache.load(groupId, resourceUri)
           if (saved) {
-            ed.restoreViewState(saved as monaco.editor.ICodeEditorViewState)
+            recordPerfPhase('fileEditor.restoreViewState.apply', () =>
+              ed.restoreViewState(saved as monaco.editor.ICodeEditorViewState),
+            )
           }
           // A one-shot reveal request (e.g. toggling back from a markdown preview
           // that had been scrolled, or entering the preview aligned to the cursor)
@@ -420,14 +422,16 @@ export function FileEditor({ input }: { input: IEditorInput }) {
           // instead of overshooting into scroll-beyond-last-line padding.
           const revealLine = EditorViewStateCache.takeRevealLine(groupId, resourceUri)
           if (revealLine !== undefined) {
-            const lineTop = ed.getTopForLineNumber(revealLine)
-            const lastLine = ed.getModel()?.getLineCount() ?? revealLine
-            const contentBottom = ed.getBottomForLineNumber(lastLine)
-            const viewportHeight = ed.getLayoutInfo().height
-            ed.setScrollTop(
-              clampRevealScrollTop({ lineTop, contentBottom, viewportHeight }),
-              1 /* ScrollType.Immediate */,
-            )
+            recordPerfPhase('fileEditor.restoreViewState.reveal', () => {
+              const lineTop = ed.getTopForLineNumber(revealLine)
+              const lastLine = ed.getModel()?.getLineCount() ?? revealLine
+              const contentBottom = ed.getBottomForLineNumber(lastLine)
+              const viewportHeight = ed.getLayoutInfo().height
+              ed.setScrollTop(
+                clampRevealScrollTop({ lineTop, contentBottom, viewportHeight }),
+                1 /* ScrollType.Immediate */,
+              )
+            })
           }
           // A more recent cursor written by the diff editor for the same file wins
           // over our own (possibly stale) viewState, so switching diff -> file
@@ -440,8 +444,10 @@ export function FileEditor({ input }: { input: IEditorInput }) {
               cur.lineNumber !== sharedCursor.lineNumber ||
               cur.column !== sharedCursor.column
             ) {
-              ed.setPosition(sharedCursor)
-              ed.revealPositionInCenter(sharedCursor)
+              recordPerfPhase('fileEditor.restoreViewState.cursor', () => {
+                ed.setPosition(sharedCursor)
+                ed.revealPositionInCenter(sharedCursor)
+              })
             }
           }
         })

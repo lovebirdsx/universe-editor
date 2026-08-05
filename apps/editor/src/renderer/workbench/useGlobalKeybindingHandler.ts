@@ -22,6 +22,7 @@ import { formatChord } from './titlebar/keybindingFormat.js'
 import { IKeyboardDebugService } from '../services/keybinding/keyboardDebugService.js'
 import { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
 import { MonacoLoader } from './editor/monaco/MonacoLoader.js'
+import { recordPerfPhase } from '../services/performance/perfPhases.js'
 import {
   formatGuardStop,
   formatKeystrokeTrace,
@@ -183,6 +184,19 @@ export function useGlobalKeybindingHandler(): void {
       pendingRef.current = { key, entry, timer }
     }
 
+    // Phase attribution for the interaction-perf watchdog: release logs showed
+    // this capture handler blocking 120-260ms with no in-window phases, so the
+    // resolve/dispatch split is recorded explicitly to localize the cost.
+    const resolveWithPhase = (key: string, pending?: readonly string[]) =>
+      recordPerfPhase('keybinding.resolve', () =>
+        KeybindingsRegistry.resolveKeystroke(key, contextKeyService, pending),
+      )
+
+    const executeWithPhase = (command: string, args: unknown) =>
+      recordPerfPhase(`keybinding.command:${command}`, () => {
+        void commandService.executeCommand(command, ...(args !== undefined ? [args] : []))
+      })
+
     // Single document capture-phase listener. It always runs *before* Monaco's
     // own dispatch, then decides per keystroke who wins — by consulting the one
     // registry (KeybindingsRegistry) for every key, focused editor or not.
@@ -259,7 +273,7 @@ export function useGlobalKeybindingHandler(): void {
           return
         }
 
-        const result = KeybindingsRegistry.resolveKeystroke(key, contextKeyService, undefined)
+        const result = resolveWithPhase(key)
         if (dbg) {
           const trace = KeybindingsRegistry.traceKeystroke(key, contextKeyService, undefined)
           const note =
@@ -275,10 +289,7 @@ export function useGlobalKeybindingHandler(): void {
         e.preventDefault()
         e.stopPropagation()
         if (result.kind === 'execute' && e.key.toLowerCase() === 'escape') {
-          void commandService.executeCommand(
-            result.command,
-            ...(result.args !== undefined ? [result.args] : []),
-          )
+          executeWithPhase(result.command, result.args)
         }
         return
       }
@@ -289,9 +300,7 @@ export function useGlobalKeybindingHandler(): void {
         // Prevents Monaco from also acting on the keystroke that completes
         // (or aborts) our chord.
         const secondKey = buildKeyString(e)
-        const result = KeybindingsRegistry.resolveKeystroke(secondKey, contextKeyService, [
-          pending.key,
-        ])
+        const result = resolveWithPhase(secondKey, [pending.key])
         if (dbg) {
           const trace = KeybindingsRegistry.traceKeystroke(secondKey, contextKeyService, [
             pending.key,
@@ -319,17 +328,14 @@ export function useGlobalKeybindingHandler(): void {
         e.preventDefault()
         e.stopPropagation()
         if (result.kind === 'execute') {
-          void commandService.executeCommand(
-            result.command,
-            ...(result.args !== undefined ? [result.args] : []),
-          )
+          executeWithPhase(result.command, result.args)
         }
         return
       }
 
       const key = buildKeyString(e)
 
-      const result = KeybindingsRegistry.resolveKeystroke(key, contextKeyService, undefined)
+      const result = resolveWithPhase(key)
       const diag = dbg ? toDiagnostics(e, key) : undefined
       if (dbg && diag) {
         const trace = KeybindingsRegistry.traceKeystroke(key, contextKeyService, undefined)
@@ -404,12 +410,9 @@ export function useGlobalKeybindingHandler(): void {
       e.preventDefault()
       e.stopPropagation()
       if (result.kind === 'execute') {
-        void commandService.executeCommand(
-          result.command,
-          ...(result.args !== undefined ? [result.args] : []),
-        )
+        executeWithPhase(result.command, result.args)
       } else {
-        enterChord(result.pending[0]!)
+        recordPerfPhase('keybinding.chordEnter', () => enterChord(result.pending[0]!))
       }
     }
 

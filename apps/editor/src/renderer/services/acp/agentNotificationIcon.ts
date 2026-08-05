@@ -29,7 +29,12 @@ export function primeAgentNotificationIcon(agentId: string | undefined): void {
     _resolved.set(iconId, undefined)
     return
   }
-  const job = _rasterize(path, bg)
+  // The SVG decode + canvas rasterization fires an Image onload task (30-100ms
+  // for the full logo path) that the interaction-perf watchdog attributes to
+  // whatever interaction happens to be in flight. Scheduling it behind an idle
+  // callback keeps that work out of interactive windows.
+  const job = _scheduleIdle()
+    .then(() => _rasterize(path, bg))
     .then((url) => {
       _resolved.set(iconId, url)
     })
@@ -45,6 +50,16 @@ export function primeAgentNotificationIcon(agentId: string | undefined): void {
 /** Synchronously read the cached PNG data URL for an agent, if rasterized yet. */
 export function getAgentNotificationIcon(agentId: string | undefined): string | undefined {
   return _resolved.get(agentIconId(agentId))
+}
+
+function _scheduleIdle(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(() => resolve(), { timeout: 2000 })
+    } else {
+      setTimeout(resolve, 0)
+    }
+  })
 }
 
 function _rasterize(path: string, bg: string): Promise<string | undefined> {
