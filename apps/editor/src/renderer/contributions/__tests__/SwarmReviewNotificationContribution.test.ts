@@ -137,10 +137,11 @@ async function setup(opts: SetupOpts = {}) {
   await ignore.swarmIgnoreStore.attach(storage)
 
   let current: SwarmDashboardResult | undefined = dashboard(opts.initialNeedsAction ?? [])
+  let transitionsById: Record<string, SwarmTransitionDto[]> = opts.transitions ?? {}
   const executeCommand = vi.fn(async (id: string, arg?: unknown): Promise<unknown> => {
     if (id === 'perforce.swarm.dashboard') return current
     if (id === 'perforce.swarm.getTransitions')
-      return opts.transitions?.[String(arg)] ?? ([] as SwarmTransitionDto[])
+      return transitionsById[String(arg)] ?? ([] as SwarmTransitionDto[])
     return undefined
   })
   const notify = vi.fn(async (_opts: { title: string; body: string }) => ({
@@ -204,6 +205,9 @@ async function setup(opts: SetupOpts = {}) {
     },
     setDashboard: (needsAction: SwarmReviewDto[], authored: SwarmReviewDto[] = []) => {
       current = dashboard(needsAction, authored)
+    },
+    setTransitionsResponse: (map: Record<string, SwarmTransitionDto[]>) => {
+      transitionsById = map
     },
     refresh: () => instance.refresh(),
   }
@@ -402,6 +406,47 @@ describe('SwarmReviewNotificationContribution', () => {
       expect(pushCalls().length).toBe(0)
       dashboardCmd.dispose()
     })
+
+    // A cold extension host can take longer than the 5s the retry budget covers
+    // (observed: 11s+). The first host-driven tick proves the host's command
+    // surface is alive, so an exhausted push must be redone there — otherwise
+    // the host driver keeps running on a stale enabled/interval snapshot until
+    // the next configuration change.
+    it('re-pushes on the first host tick after the retry budget was exhausted', async () => {
+      const { contrib, platform, tick } = await freshModules()
+      const dashboardCmd = platform.CommandsRegistry.registerCommand(
+        'perforce.swarm.dashboard',
+        () => undefined,
+      )
+      const { executeCommand, pushCalls, config } = raceSetup()
+      vi.useFakeTimers()
+      const instance = new contrib.SwarmReviewNotificationContribution(
+        { executeCommand } as never,
+        { notify: vi.fn() } as never,
+        config,
+        fakeStorage(),
+        { current: null } as never,
+        { notify: vi.fn(), dismiss: vi.fn() } as never,
+        fakeLoggerService().service,
+      )
+      // Exhaust the 20 x 250ms retry budget with the command still unregistered.
+      await vi.advanceTimersByTimeAsync(20 * 250 + 500)
+      expect(pushCalls().length).toBe(0)
+
+      // The host finishes activating LATE: the command registers and its poll
+      // driver delivers the first tick — which must redo the abandoned push.
+      const pushCmd = platform.CommandsRegistry.registerCommand(
+        'perforce.swarm.setBackgroundPoll',
+        vi.fn(),
+      )
+      await tick.driveSwarmNotificationTick()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(pushCalls().length).toBe(1)
+      expect(pushCalls()[0]![1]).toMatchObject({ enabled: true, configured: true })
+      instance.dispose()
+      dashboardCmd.dispose()
+      pushCmd.dispose()
+    })
   })
 
   it('re-pushes the polling snapshot when any perforce.swarm configuration changes', async () => {
@@ -576,6 +621,112 @@ describe('SwarmReviewNotificationContribution', () => {
     await t.refresh()
     expect(t.notify).toHaveBeenCalledTimes(1)
     expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #1: review 1' })
+    t.dispose()
+  })
+
+  // Repro for the FIFTH "no background notification" incident: this Swarm
+  // deployment's workflow withholds the `approved` transition from a fresh review
+  // until its vote conditions are met, so the first transitions fetch reports
+  // "cannot approve" and the approvable-only filter drops the review. The old
+  // cache never re-fetched an existing entry, so the teammate vote that later
+  // flipped the verdict server-side (bumping the review's `updated` stamp) went
+  // unseen forever — zero background notifications until a manual sidebar
+  // refresh happened to re-fetch verdicts.
+  describe('approvable-only: transitions cache invalidation on `updated` (fifth incident)', () => {
+    const notApprovable: SwarmTransitionDto[] = [
+      { state: 'needsRevision', label: 'Needs Revision' },
+    ]
+    const approvable: SwarmTransitionDto[] = [{ state: 'approved', label: 'Approve' }]
+    const transitionsCalls = (t: { executeCommand: ReturnType<typeof vi.fn> }) =>
+      t.executeCommand.mock.calls.filter((c) => c[0] === 'perforce.swarm.getTransitions')
+
+    it('re-fetches on a moved `updated` stamp and notifies when the verdict flips (regression)', async () => {
+      const t = await setup({ config: { 'perforce.swarm.needsActionApprovableOnly': true } })
+      t.setTransitionsResponse({ '1': notApprovable })
+      t.setDashboard([review('1', { updated: 1000 })])
+      await t.refresh()
+      // Vote conditions unmet → correctly filtered out, silent.
+      expect(t.notify).not.toHaveBeenCalled()
+
+      // A teammate votes: the server flips the verdict AND bumps `updated`.
+      t.setTransitionsResponse({ '1': approvable })
+      t.setDashboard([review('1', { updated: 2000 })])
+      await t.refresh()
+      // The re-fetch must force through the host's TTL cache (or it would echo
+      // the stale verdict back) and stay silent (poll-driven, no UI on failure).
+      const refetch = transitionsCalls(t).at(-1)!
+      expect(refetch[2]).toBe(true)
+      expect(refetch[3]).toBe(true)
+      expect(t.notify).toHaveBeenCalledTimes(1)
+      expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #1: review 1' })
+      t.dispose()
+    })
+
+    it('does not re-fetch while `updated` is unchanged, and never forces the first fetch', async () => {
+      const t = await setup({ config: { 'perforce.swarm.needsActionApprovableOnly': true } })
+      t.setTransitionsResponse({ '1': approvable })
+      t.setDashboard([review('1', { updated: 1000 })])
+      await t.refresh()
+      const afterFirst = transitionsCalls(t).length
+      expect(afterFirst).toBeGreaterThanOrEqual(1)
+      // First fetch has no pinned verdict to flush — it may take the TTL value.
+      expect(transitionsCalls(t)[0]![2]).toBe(false)
+      await t.refresh()
+      await t.refresh()
+      // Steady state stays cheap: no extra transitions RPCs.
+      expect(transitionsCalls(t).length).toBe(afterFirst)
+      t.dispose()
+    })
+
+    it('a failed re-fetch keeps the entry stale and retries next tick until it succeeds', async () => {
+      const t = await setup({ config: { 'perforce.swarm.needsActionApprovableOnly': true } })
+      t.setTransitionsResponse({ '1': notApprovable })
+      t.setDashboard([review('1', { updated: 1000 })])
+      await t.refresh()
+      expect(t.notify).not.toHaveBeenCalled()
+
+      // The vote bumps `updated`, but the re-fetch fails (host restarting).
+      const original = t.executeCommand.getMockImplementation()!
+      t.executeCommand.mockImplementation(async (id: string, arg?: unknown): Promise<unknown> => {
+        if (id === 'perforce.swarm.getTransitions') throw new Error('host gone')
+        return original(id, arg)
+      })
+      t.setDashboard([review('1', { updated: 2000 })])
+      await t.refresh()
+      // The old (not-approvable) verdict is retained — still silent, no false positive.
+      expect(t.notify).not.toHaveBeenCalled()
+
+      // Host recovers. The seen-updated stamp was NOT advanced on failure, so the
+      // entry is still stale: the next tick re-fetches and the flip notifies.
+      t.executeCommand.mockImplementation(original)
+      t.setTransitionsResponse({ '1': approvable })
+      await t.refresh()
+      expect(t.notify).toHaveBeenCalledTimes(1)
+      expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'Review #1: review 1' })
+      t.dispose()
+    })
+  })
+
+  // The fifth incident hid behind a debug-only "N actionable" line: reviews
+  // silently dropped by the approvable filter never appeared in any log. Any
+  // change in the counts now logs the per-filter breakdown at info.
+  it('raises `poll ok` to info with the filter breakdown when the counts change', async () => {
+    const t = await setup({ config: { 'perforce.swarm.needsActionApprovableOnly': true } })
+    t.setTransitionsResponse({ '1': [{ state: 'needsRevision', label: 'Needs Revision' }] })
+    t.setDashboard([review('1', { updated: 1000 })])
+    t.logger.info.mockClear()
+    t.logger.debug.mockClear()
+    await t.refresh()
+    expect(t.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '0 actionable (pool 1, dropped: 0 author-filtered, 1 not-approvable, 0 ignored, 0 authored)',
+      ),
+    )
+    // Unchanged counts on the next tick stay at debug — steady state, zero info noise.
+    t.logger.info.mockClear()
+    await t.refresh()
+    expect(t.logger.info).not.toHaveBeenCalledWith(expect.stringContaining('poll ok'))
+    expect(t.logger.debug).toHaveBeenCalledWith(expect.stringContaining('poll ok'))
     t.dispose()
   })
 

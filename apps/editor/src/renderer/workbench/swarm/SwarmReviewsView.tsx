@@ -201,23 +201,41 @@ export function SwarmReviewsView() {
   const keywordRef = useRef(keyword)
 
   const loadTransitions = useCallback(
-    async (reviewId: string, force = false): Promise<SwarmTransitionDto[]> => {
-      if (!force) {
-        const cached = transitionsRef.current[reviewId]
-        if (cached) return cached
+    async (
+      review: Pick<SwarmReviewDto, 'id' | 'updated'>,
+      force = false,
+    ): Promise<SwarmTransitionDto[]> => {
+      // A moved `updated` stamp invalidates the cached verdict: a teammate's vote
+      // (or a re-shelve) can flip the server's approve verdict, and serving the
+      // stale "cannot approve" kept such reviews filtered out everywhere — the
+      // notification poll shares this cache (fifth silent-notification incident).
+      // A first fetch (no cached entry) is not stale — nothing is pinned yet, so
+      // it may take the host's TTL-cached value instead of forcing a server hit.
+      const cached = transitionsRef.current[review.id]
+      const stale =
+        cached !== undefined &&
+        swarmReviewsViewState.transitionsSeenUpdated[review.id] !== review.updated
+      if (!force && !stale && cached) return cached
+      const result = await commands.executeCommand<SwarmTransitionDto[]>(
+        SwarmCommands.getTransitions,
+        review.id,
+        // Bypass the host-side TTL cache too, or it would echo the old verdict back.
+        /* force */ force || stale,
+      )
+      // `undefined` = the command isn't registered yet (host activation racing the
+      // view's first mount). Render as "no transitions" but skip the seen-updated
+      // stamp so the next load retries instead of pinning the empty verdict.
+      if (result !== undefined) {
+        swarmReviewsViewState.transitionsSeenUpdated[review.id] = review.updated
       }
-      const result =
-        (await commands.executeCommand<SwarmTransitionDto[]>(
-          SwarmCommands.getTransitions,
-          reviewId,
-        )) ?? []
+      const transitions = result ?? []
       // Merge (never replace wholesale) so a forced refresh updates one review's
       // verdict without dropping the others — keeping the approvable filter stable
       // instead of briefly widening the list while verdicts reload.
-      transitionsRef.current = { ...transitionsRef.current, [reviewId]: result }
+      transitionsRef.current = { ...transitionsRef.current, [review.id]: transitions }
       swarmReviewsViewState.transitions = transitionsRef.current
-      setTransitions((prev) => ({ ...prev, [reviewId]: result }))
-      return result
+      setTransitions((prev) => ({ ...prev, [review.id]: transitions }))
+      return transitions
     },
     [commands],
   )
@@ -264,12 +282,15 @@ export function SwarmReviewsView() {
           // approvable filter never briefly widens the list.
           const staleIds = new Set(Object.keys(transitionsRef.current))
           for (const review of r.needsAction) {
-            void loadTransitions(review.id, force).catch(() => {})
+            void loadTransitions(review, force).catch(() => {})
             staleIds.delete(review.id)
           }
           // Drop verdicts for reviews no longer in the needs-action set.
           if (staleIds.size > 0) {
-            for (const id of staleIds) delete transitionsRef.current[id]
+            for (const id of staleIds) {
+              delete transitionsRef.current[id]
+              delete swarmReviewsViewState.transitionsSeenUpdated[id]
+            }
             swarmReviewsViewState.transitions = transitionsRef.current
             setTransitions((prev) => {
               const next = { ...prev }
@@ -581,7 +602,7 @@ export function SwarmReviewsView() {
         setMenu({ x, y, reviewId: review.id, items: createMenuItems(review, allowedTransitions) })
       show(transitionsRef.current[review.id] ?? [])
       if (!transitionsRef.current[review.id]) {
-        void loadTransitions(review.id)
+        void loadTransitions(review)
           .then((result) => {
             setMenu((current) =>
               current?.reviewId === review.id

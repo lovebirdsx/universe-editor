@@ -7,7 +7,7 @@ metadata:
   originSessionId: f7fe7855-0b03-47c7-a41b-c521947b4a3c
 ---
 
-swarm 后台通知 bug 是三环链条,前两环(401 模态卡闩锁、p4 spawn 挂死)修完后 2026-07-29 又复发:renderer 日志三次 `notifying N new review(s)` 全部跟着 `OS toast gated (window focused...)`,其中一次在深夜 00:07——检测链路全部健康,断在最后一环发送门控。
+swarm 后台通知 bug 是多环链条(第五环见 [[swarm-notify-transitions-cache-stale]]),前两环(401 模态卡闩锁、p4 spawn 挂死)修完后 2026-07-29 又复发:renderer 日志三次 `notifying N new review(s)` 全部跟着 `OS toast gated (window focused...)`,其中一次在深夜 00:07——检测链路全部健康,断在最后一环发送门控。
 
 **Why:** Windows 在用户锁屏 / 人离开后仍保持最后前台窗口的 focused 状态,`MainHostService.notify()` 只看 `win.isFocused()` 就把 OS toast 吞成后台窗口里没人看的 in-app toast。多窗口场景更放大(只有 swarm 工作区那个窗口的焦点状态说了算)。诊断铁证是"缺失的日志行":host.log 同时段只有 agent 的 `notify shown`、没有 swarm 的——skipped 分支当时是 debug 级不落盘,靠反证定位。
 

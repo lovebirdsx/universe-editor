@@ -90,8 +90,29 @@ describe('registerSwarmCommands review operations', () => {
 
     const result = await mocks.handlers.get('perforce.swarm.getTransitions')?.('1001')
 
-    expect(mocks.getTransitions).toHaveBeenCalledWith('1001')
+    // No force argument → a plain cached read (the renderer only forces when
+    // the review's `updated` stamp moved).
+    expect(mocks.getTransitions).toHaveBeenCalledWith('1001', false)
     expect(result).toEqual(transitions)
+  })
+
+  it('passes force through to the client so a moved `updated` stamp bypasses the TTL cache', async () => {
+    const transitions = [{ state: 'approved', label: 'Approve' }]
+    mocks.getTransitions.mockResolvedValue(transitions)
+
+    const result = await mocks.handlers.get('perforce.swarm.getTransitions')?.('1001', true, true)
+
+    expect(mocks.getTransitions).toHaveBeenCalledWith('1001', true)
+    expect(result).toEqual(transitions)
+  })
+
+  it('getTransitions with silent rethrows instead of raising UI (poll-driven path)', async () => {
+    mocks.getTransitions.mockRejectedValue(new SwarmError(SwarmErrorCode.Network, 'boom'))
+
+    await expect(
+      mocks.handlers.get('perforce.swarm.getTransitions')?.('1001', false, true),
+    ).rejects.toThrow('boom')
+    expect(mocks.showErrorMessage).not.toHaveBeenCalled()
   })
 
   it('forwards obliterateReview and returns true on success', async () => {

@@ -110,6 +110,8 @@ function createServices(
 afterEach(() => {
   cleanup()
   swarmReviewsViewState.dashboard = null
+  swarmReviewsViewState.transitions = {}
+  swarmReviewsViewState.transitionsSeenUpdated = {}
   for (const id of swarmIgnoreStore.list()) swarmIgnoreStore.unignore(id)
   vi.restoreAllMocks()
 })
@@ -150,7 +152,8 @@ describe('SwarmReviewsView', () => {
     expect(screen.getByRole('menuitem', { name: 'Copy Review Name' })).toBeTruthy()
     expect(screen.getByRole('menuitem', { name: 'Copy Review Link' })).toBeTruthy()
     expect(screen.getByRole('menuitem', { name: 'Obliterate Review' })).toBeTruthy()
-    expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.getTransitions, '1001')
+    // First fetch (nothing pinned yet): must NOT force through the host TTL cache.
+    expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.getTransitions, '1001', false)
 
     fireEvent.click(approve)
     await waitFor(() =>

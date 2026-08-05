@@ -28,11 +28,18 @@ export interface SwarmReviewsViewState {
    *  view keeps the approvable filter accurate immediately (no flash of the full
    *  list while verdicts reload). */
   transitions: Record<string, SwarmTransitionDto[]>
+  /** The review's `updated` stamp at the time its transitions entry was fetched.
+   *  A moved stamp (vote / re-shelve / comment) invalidates the entry: a vote can
+   *  flip the server's approve verdict, and holding the stale "cannot approve"
+   *  kept every such review silently filtered out of the notification poll until
+   *  a manual sidebar refresh (the fifth "no background notification" incident). */
+  transitionsSeenUpdated: Record<string, number>
 }
 
 export const swarmReviewsViewState: SwarmReviewsViewState = {
   dashboard: null,
   transitions: {},
+  transitionsSeenUpdated: {},
 }
 
 const _needsActionCount = observableValue<number>('swarm.needsActionCount', 0)

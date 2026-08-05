@@ -348,8 +348,13 @@ export class SwarmClient {
     return { ...detail, transitions }
   }
 
-  /** Legal state transitions for the current user (server-authoritative). */
-  async getTransitions(id: string): Promise<SwarmTransition[]> {
+  /** Legal state transitions for the current user (server-authoritative).
+   *  `force` bypasses the TTL cache — the renderer passes it when the review's
+   *  `updated` stamp moved (a vote / re-shelve can flip the approve verdict, and
+   *  a stale "cannot approve" here silently suppresses the new-review
+   *  notification for as long as the cache survives). */
+  async getTransitions(id: string, force = false): Promise<SwarmTransition[]> {
+    if (force) this._cache.invalidate(SwarmCacheNs.transitions, id)
     const cached = await this._cache.wrap(SwarmCacheNs.transitions, id, async () => {
       const raw = await this._api.get(`reviews/${encodeURIComponent(id)}/transitions`)
       return JSON.stringify(parseTransitions(raw))

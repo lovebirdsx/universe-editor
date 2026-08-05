@@ -379,6 +379,32 @@ describe('SwarmClient cache', () => {
     expect(fetchMock).toHaveBeenCalledTimes(4)
   })
 
+  it('getTransitions(force) bypasses the transitions TTL cache and re-primes it', async () => {
+    // A fresh Response per call — a shared instance's body can only be read once.
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ transitions: { approved: 'Approve' } }), { status: 200 }),
+      ),
+    )
+    const c = client()
+
+    await c.getTransitions('1001')
+    await c.getTransitions('1001')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    // The renderer passes force when the review's `updated` stamp moved: a vote
+    // can flip the approve verdict, and a TTL-cached "cannot approve" echoing
+    // back would keep the review filtered out of the notification poll.
+    await expect(c.getTransitions('1001', true)).resolves.toEqual([
+      { state: 'approved', label: 'Approve' },
+    ])
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    // The forced result re-primes the cache for subsequent plain reads.
+    await c.getTransitions('1001')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
   it('invalidates cached comments and review data after a comment is added', async () => {
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       const method = init?.method ?? 'GET'

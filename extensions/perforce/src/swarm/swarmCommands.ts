@@ -389,8 +389,17 @@ export function registerSwarmCommands(
       )
     }),
 
-    commands.registerCommand(Cmd.getTransitions, (id: unknown) =>
-      guard(`getTransitions #${String(id)}`, (c) => c.getTransitions(String(id)), []),
+    // `force` bypasses the transitions TTL cache (renderer passes it when the
+    // review's `updated` stamp moved). `silent` marks poll-driven calls: like the
+    // poll dashboard above, they must never raise UI and rethrow instead — the
+    // renderer's poll catch treats the failure as "not loaded yet" and retries.
+    commands.registerCommand(Cmd.getTransitions, (id: unknown, force?: unknown, silent?: unknown) =>
+      guard(
+        `getTransitions #${String(id)}`,
+        (c) => c.getTransitions(String(id), force === true),
+        [],
+        { silent: silent === true },
+      ),
     ),
 
     commands.registerCommand(Cmd.createReview, (req: unknown) =>

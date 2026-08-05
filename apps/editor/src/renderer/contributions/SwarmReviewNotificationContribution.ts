@@ -119,6 +119,11 @@ export class SwarmReviewNotificationContribution
   private _lastSuccessfulPollAt = Date.now()
   /** Last time the host-driven tick handler fired. Drives the tick-gap log. */
   private _lastTickAt = Date.now()
+  /** Fingerprint of the last poll's counts (actionable + per-filter drops). A
+   *  changed fingerprint raises `poll ok` to info, so filter-layer suppression
+   *  shows up in the log at the default level — the fifth silent-notification
+   *  incident stayed invisible behind a debug-only "N actionable" line. */
+  private _lastPollCounts: string | undefined
   private _pushRetryTimer: ReturnType<typeof setTimeout> | undefined
   private _pushRetryAttempt = 0
   private readonly _logger: ILogger
@@ -158,6 +163,18 @@ export class SwarmReviewNotificationContribution
         this._logger.info(
           `tick gap ${Math.round(gapMs / 1000)}s (host driver stalled or renderer was throttled)`,
         )
+      }
+      // The tick itself proves the perforce host's command surface is alive, so
+      // if the polling-state push exhausted its retry budget earlier (a cold
+      // host can take longer than the 5s the backoff covers), redo it now —
+      // otherwise the host driver keeps running on a stale enabled/interval
+      // snapshot until the next configuration change.
+      if (this._pushRetryAttempt >= PUSH_RETRY_LIMIT) {
+        this._logger.info(
+          'host tick arrived after push retries were exhausted — re-pushing polling state',
+        )
+        this._pushRetryAttempt = 0
+        this._pushPollingState()
       }
       return this.refresh()
     })
@@ -327,28 +344,41 @@ export class SwarmReviewNotificationContribution
       if (dashboard === undefined) return
       this._lastSuccessfulPollAt = Date.now()
       const transitionsStartedAt = Date.now()
-      const displayed = await this._computeDisplayed(dashboard)
+      const { displayed, pool, authorFiltered, notApprovable, ignored } =
+        await this._computeDisplayed(dashboard)
       transitionsMs = Date.now() - transitionsStartedAt
       // The Activity Bar badge mirrors the sidebar's group scope, which — unlike
       // the notification set below — includes open reviews authored by the user.
       swarmNeedsActionCount.set(displayed.length)
       const authoredIds = new Set(dashboard.authored.map((review) => review.id))
       const actionable = displayed.filter((review) => !authoredIds.has(review.id))
+      const authored = displayed.length - actionable.length
       if (typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true) {
         swarmNotificationE2E.lastActionable = actionable.map((r) => r.id)
       }
       // Per-phase timing is what the 44-minute wedge lacked: a poll stuck in the
       // dashboard phase points at the host-side p4 credential probes; stuck in
       // the transitions phase points at per-review getTransitions. Slow phases
-      // are raised to info so they show at the default log level.
+      // are raised to info so they show at the default log level. The filter
+      // breakdown is what the FIFTH incident lacked: reviews silently dropped by
+      // the approvable filter never appeared in any log, so "0 actionable" was
+      // indistinguishable from "0 candidates" — any count change now logs at
+      // info with the per-filter drops.
+      const counts =
+        `${actionable.length} actionable ` +
+        `(pool ${pool}, dropped: ${authorFiltered} author-filtered, ` +
+        `${notApprovable} not-approvable, ${ignored} ignored, ${authored} authored)`
       const okMessage =
         `poll ok in ${Date.now() - startedAt}ms ` +
-        `(dashboard ${dashboardMs}ms, transitions ${transitionsMs}ms): ${actionable.length} actionable`
+        `(dashboard ${dashboardMs}ms, transitions ${transitionsMs}ms): ${counts}`
       if (dashboardMs > SLOW_PHASE_MS || transitionsMs > SLOW_PHASE_MS) {
         this._logger.info(`slow phase — ${okMessage}`)
+      } else if (counts !== this._lastPollCounts) {
+        this._logger.info(okMessage)
       } else {
         this._logger.debug(okMessage)
       }
+      this._lastPollCounts = counts
       this._notifyNew(actionable)
     } catch (err) {
       // Swarm unconfigured / offline / timed out — stay quiet on the UI, but NOT
@@ -367,31 +397,75 @@ export class SwarmReviewNotificationContribution
   /** Reproduce the sidebar's "Needs My Action" group scope, sans the keyword box:
    *  apply author / approvable-only filters, then drop the client-side ignored
    *  set. Notifications additionally exclude reviews authored by the current user
-   *  (the caller does that); the badge count uses this list as-is. */
-  private async _computeDisplayed(dashboard: SwarmDashboardResult): Promise<SwarmReviewDto[]> {
+   *  (the caller does that); the badge count uses this list as-is. Returns the
+   *  per-filter drop counts alongside so the poll log can show WHERE candidates
+   *  disappeared (running filterNeedsAction twice keeps the shared filter the
+   *  single source of truth; the inputs are ≤50 rows). */
+  private async _computeDisplayed(dashboard: SwarmDashboardResult): Promise<{
+    displayed: SwarmReviewDto[]
+    pool: number
+    authorFiltered: number
+    notApprovable: number
+    ignored: number
+  }> {
     const config = readSwarmFilterConfig(this._config)
     const transitions = config.needsActionApprovableOnly
       ? await this._loadTransitions(dashboard.needsAction)
       : {}
-    const filtered = filterNeedsAction(dashboard.needsAction, config, transitions)
+    const afterAuthor = filterNeedsAction(
+      dashboard.needsAction,
+      { ...config, needsActionApprovableOnly: false },
+      {},
+    )
+    const filtered = filterNeedsAction(
+      afterAuthor,
+      { ...config, needsActionAuthors: [] },
+      transitions,
+    )
     const ignoredIds = new Set(swarmIgnoreStore.list())
-    return splitIgnored(filtered, ignoredIds).active
+    const displayed = splitIgnored(filtered, ignoredIds).active
+    return {
+      displayed,
+      pool: dashboard.needsAction.length,
+      authorFiltered: dashboard.needsAction.length - afterAuthor.length,
+      notApprovable: afterAuthor.length - filtered.length,
+      ignored: filtered.length - displayed.length,
+    }
   }
 
   /** Fetch (and cache) transitions for the candidate reviews so approvable-only is
    *  decided accurately, not optimistically. Reuses the view-state cache the sidebar
-   *  shares, so an open view doesn't re-fetch what we just loaded. */
+   *  shares, so an open view doesn't re-fetch what we just loaded.
+   *
+   *  An entry is stale once the review's `updated` stamp moved past the one it was
+   *  fetched under: a teammate's vote (or a re-shelve) flips the server's approve
+   *  verdict, and this deployment's workflow withholds `approved` from a fresh
+   *  review until its vote conditions are met. Holding the first "cannot approve"
+   *  verdict forever kept every such review filtered out of this poll — zero
+   *  background notifications until a manual sidebar refresh re-fetched verdicts
+   *  (the fifth silent-notification incident). Stale entries re-fetch with
+   *  `force` so the host-side 60s TTL cache cannot echo the old verdict back. */
   private async _loadTransitions(
     reviews: readonly SwarmReviewDto[],
   ): Promise<Record<string, SwarmTransitionDto[]>> {
     const cache = swarmReviewsViewState.transitions
+    const seenUpdated = swarmReviewsViewState.transitionsSeenUpdated
+    let refetched = 0
     await Promise.all(
       reviews.map(async (review) => {
-        if (cache[review.id]) return
+        const cached = cache[review.id]
+        // Stale = a verdict was fetched under an older `updated` stamp. A first
+        // fetch (no entry) is NOT stale: there is no pinned verdict to flush, so
+        // it takes the host's TTL-cached value instead of forcing a server hit.
+        const stale = cached !== undefined && seenUpdated[review.id] !== review.updated
+        if (cached !== undefined && !stale) return
+        if (stale) refetched++
         const result = await withDeadline(
           this._commands.executeCommand<SwarmTransitionDto[]>(
             SwarmCommands.getTransitions,
             review.id,
+            /* force */ stale,
+            /* silent */ true,
           ),
           TRANSITIONS_DEADLINE_MS,
           `getTransitions RPC (review #${review.id})`,
@@ -406,9 +480,17 @@ export class SwarmReviewNotificationContribution
         // a review whose transitions haven't loaded (optimistic) but drops one
         // whose loaded transitions lack Approve — caching `[]` here would
         // silently hide the review (and poison the sidebar's shared cache).
-        if (result !== undefined) cache[review.id] = result
+        // The seen-updated stamp is only written on success so the next tick
+        // retries a failed refetch instead of trusting the stale verdict.
+        if (result !== undefined) {
+          cache[review.id] = result
+          seenUpdated[review.id] = review.updated
+        }
       }),
     )
+    if (refetched > 0) {
+      this._logger.debug(`transitions refetched for ${refetched} review(s) (updated moved)`)
+    }
     swarmReviewsViewState.transitions = cache
     return cache
   }
