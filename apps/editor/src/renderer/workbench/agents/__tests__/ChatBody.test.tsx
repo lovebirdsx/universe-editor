@@ -109,7 +109,7 @@ function makeMessage(id: string, text: string): AcpMessage {
 function makeSession(
   id: string,
   items: readonly TimelineItem[],
-  opts: { isReplayingHistory?: boolean; forkSupported?: boolean } = {},
+  opts: { isReplayingHistory?: boolean; forkSupported?: boolean; status?: AcpSessionStatus } = {},
 ): IAcpSession {
   const collapseMode = observableValue<'default' | 'collapsed' | 'expanded'>(
     't.collapse',
@@ -124,7 +124,7 @@ function makeSession(
     toolCalls: observableValue<readonly AcpToolCall[]>('t.toolCalls', []),
     plan: observableValue<readonly AcpPlanEntry[]>('t.plan', []),
     timeline: observableValue<readonly TimelineItem[]>('t.timeline', items),
-    status: observableValue<AcpSessionStatus>('t.status', 'idle'),
+    status: observableValue<AcpSessionStatus>('t.status', opts.status ?? 'idle'),
     isReplayingHistory: observableValue<boolean>('t.replay', opts.isReplayingHistory ?? false),
     usage: observableValue<AcpUsage | undefined>('t.usage', undefined),
     pendingPermission: observableValue<AcpPendingPermission | undefined>('t.perm', undefined),
@@ -476,6 +476,84 @@ describe('ChatBody — re-pin on async content growth', () => {
     })
 
     // Position held — growth must not yank a user who scrolled away.
+    expect(scroll.scrollTop).toBe(200)
+  })
+})
+
+describe('ChatBody — re-pin when the turn settles and the fork footer mounts', () => {
+  const RealRO = globalThis.ResizeObserver
+
+  afterEach(() => {
+    globalThis.ResizeObserver = RealRO
+    FakeResizeObserver.instances = []
+  })
+
+  // Regression for "fork footer sits half below the fold at turn end": the
+  // ForkTipFooter is gated on status === 'idle' and mounts OUTSIDE the observed
+  // [data-testid="acp-timeline"] element, so the content-growth observer never
+  // sees it. The tail signature is also already stable by the time the status
+  // flips (the last chunk arrived first), so without `status` in the re-pin
+  // effect's deps nothing re-runs and scrollTop stays where it was before the
+  // footer grew the content by ~30px.
+  it('re-pins to the bottom when the fork footer mounts on idle while pinned', () => {
+    globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver
+    const items: readonly TimelineItem[] = [
+      { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
+    ]
+    const session = makeSession('s1', items, { forkSupported: true, status: 'running' })
+    const setStatus = (
+      session.status as ReturnType<typeof observableValue<AcpSessionStatus>>
+    ).set.bind(session.status)
+    const { container } = renderChat(session)
+    const scroll = scrollEl(container)
+
+    // Footer is gated on idle — hidden while running.
+    expect(container.querySelector('[data-testid="acp-fork-tip-footer"]')).toBeNull()
+
+    // Pinned at the bottom of the content as it was mid-turn.
+    Object.defineProperty(scroll, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(scroll, 'clientHeight', { value: 300, configurable: true })
+    scroll.scrollTop = 1700
+
+    // Turn settles: footer mounts, growing the scrollable content. happy-dom
+    // does not do layout, so model the growth by bumping scrollHeight.
+    act(() => {
+      Object.defineProperty(scroll, 'scrollHeight', { value: 2030, configurable: true })
+      setStatus('idle', undefined)
+    })
+    expect(container.querySelector('[data-testid="acp-fork-tip-footer"]')).not.toBeNull()
+
+    // scrollToBottomStable pins synchronously on its first frame.
+    expect(scroll.scrollTop).toBe(2030)
+  })
+
+  it('does not re-pin on idle when the user has scrolled up', () => {
+    globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver
+    const items: readonly TimelineItem[] = [
+      { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
+    ]
+    const session = makeSession('s1', items, { forkSupported: true, status: 'running' })
+    const setStatus = (
+      session.status as ReturnType<typeof observableValue<AcpSessionStatus>>
+    ).set.bind(session.status)
+    const { container } = renderChat(session)
+    const scroll = scrollEl(container)
+
+    // User scrolls up mid-turn → not stuck.
+    Object.defineProperty(scroll, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(scroll, 'clientHeight', { value: 300, configurable: true })
+    scroll.scrollTop = 200
+    act(() => {
+      fireEvent.scroll(scroll)
+    })
+    expect(AcpChatViewStateCache.load('s1')?.stuck).toBe(false)
+
+    act(() => {
+      Object.defineProperty(scroll, 'scrollHeight', { value: 2030, configurable: true })
+      setStatus('idle', undefined)
+    })
+
+    // The footer mounting must not yank a user who scrolled away.
     expect(scroll.scrollTop).toBe(200)
   })
 })

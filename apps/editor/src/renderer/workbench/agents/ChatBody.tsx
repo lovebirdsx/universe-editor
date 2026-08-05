@@ -941,14 +941,18 @@ function ChatScroll({
 
   // Re-pin on slot count AND on the tail's content size so streaming chunks
   // that grow within an existing slot (i.e. text appended to the last agent
-  // message) still scroll into view.
+  // message) still scroll into view. `status` is a dependency too: the
+  // ForkTipFooter mounts on the running → idle flip OUTSIDE the observed
+  // timeline element, so neither the content-growth observer nor the tail
+  // signature (already settled by the last chunk) sees the ~30px it adds —
+  // without this the footer sits half below the fold at turn end.
   const tailSignature = tailContentSignature(timeline)
 
   useEffect(() => {
     if (restoringRef.current) return
     if (!stickRef.current) return
     scrollToBottomStable()
-  }, [timeline.length, tailSignature, scrollToBottomStable])
+  }, [timeline.length, tailSignature, status, scrollToBottomStable])
 
   // Re-pin when chatBody clientHeight shrinks (e.g. PermissionCard /
   // ElicitationCard appears, or the PromptInput textarea grows via
