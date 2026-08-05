@@ -13,7 +13,12 @@ import {
 import { URI } from '../../base/uri.js'
 import { CancellationToken, CancellationTokenSource } from '../../base/cancellation.js'
 import { CancellationError } from '../../base/errors.js'
-import { DisposableTracker, setDisposableTracker } from '../../base/lifecycle.js'
+import {
+  DisposableStore,
+  DisposableTracker,
+  markAsSingleton,
+  setDisposableTracker,
+} from '../../base/lifecycle.js'
 
 async function flushMicrotasks(n = 5): Promise<void> {
   for (let i = 0; i < n; i++) {
@@ -455,5 +460,43 @@ describe('request cancellation', () => {
 
     client.dispose()
     server.dispose()
+  })
+
+  it('keeps in-flight token subscriptions owned by the client (clean teardown snapshot)', async () => {
+    // e2e teardown snapshots the tracker while prewarm requests are still in
+    // flight: that subscription is alive by design, so its ownership chain
+    // must root in a singleton instead of floating as a leak candidate.
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    try {
+      const root = markAsSingleton(new DisposableStore())
+      const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+      const server = new ChannelServer(serverProto)
+      const client = new ChannelClient(clientProto)
+      root.add(server)
+      root.add(client)
+      server.registerChannel('slow', {
+        call: () => new Promise<never>(() => {}),
+        listen: () => {
+          throw new Error('no events')
+        },
+      })
+
+      const cts = new CancellationTokenSource()
+      const pending = client.getChannel('slow').call('wait', undefined, cts.token)
+      await flushMicrotasks()
+
+      const leaks = tracker.computeLeakingDisposables()
+      expect(leaks?.details ?? '').toBe('')
+
+      const assertion = expect(pending).rejects.toBeInstanceOf(IpcChannelDisposedError)
+      client.dispose()
+      await assertion
+      server.dispose()
+      root.dispose()
+      cts.dispose()
+    } finally {
+      setDisposableTracker(null)
+    }
   })
 })

@@ -4,7 +4,13 @@
  *  M1 scope: abstraction layer only. Electron adapter lives in apps/editor (M2).
  *--------------------------------------------------------------------------------------------*/
 
-import { Disposable, IDisposable, toDisposable } from '../base/lifecycle.js'
+import {
+  Disposable,
+  DisposableStore,
+  IDisposable,
+  markAsSingleton,
+  toDisposable,
+} from '../base/lifecycle.js'
 import { Emitter, Event } from '../base/event.js'
 import { URI, type UriComponents } from '../base/uri.js'
 import { CancellationToken, CancellationTokenSource } from '../base/cancellation.js'
@@ -261,6 +267,11 @@ export class ChannelClient extends Disposable implements IChannelClient {
     { resolve: (v: unknown) => void; reject: (e: Error) => void }
   >()
   private readonly _eventEmitters = new Map<string, Emitter<unknown>>()
+  // Owns the cancellation subscriptions of in-flight requests. Deliberately a
+  // parentless singleton store (not _register'ed): the subscriptions are alive
+  // by design until the request settles, so teardown leak snapshots must not
+  // flag them — dispose() below still clears them with the pending requests.
+  private readonly _inflightCancelListeners = markAsSingleton(new DisposableStore())
 
   constructor(private readonly _protocol: IMessagePassingProtocol) {
     super()
@@ -306,13 +317,16 @@ export class ChannelClient extends Disposable implements IChannelClient {
             }
             pending.reject(new CancellationError())
           })
+          if (cancelListener) {
+            client._inflightCancelListeners.add(cancelListener)
+          }
           client._pendingRequests.set(id, {
             resolve: (v) => {
-              cancelListener?.dispose()
+              if (cancelListener) client._inflightCancelListeners.delete(cancelListener)
               resolve(v as T)
             },
             reject: (e) => {
-              cancelListener?.dispose()
+              if (cancelListener) client._inflightCancelListeners.delete(cancelListener)
               reject(e)
             },
           })
@@ -361,6 +375,7 @@ export class ChannelClient extends Disposable implements IChannelClient {
       }
       this._pendingRequests.clear()
     }
+    this._inflightCancelListeners.dispose()
     for (const emitter of this._eventEmitters.values()) {
       emitter.dispose()
     }
