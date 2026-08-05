@@ -18,6 +18,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  CancellationTokenSource,
   ConfigurationRegistry,
   Disposable,
   IConfigurationService,
@@ -27,6 +28,8 @@ import {
   localize,
   MutableDisposable,
   runWhenIdle,
+  toDisposable,
+  type CancellationToken,
 } from '@universe-editor/platform'
 import { languageActivationEvent } from '@universe-editor/extensions-common'
 import { DEFAULT_TS_SERVER_IMPLEMENTATION } from '../../shared/tsServerImplementation.js'
@@ -49,6 +52,11 @@ export class LanguageServicePrewarmContribution
    *  singleton root — a plain field would be flagged as a leak by the disposable
    *  tracker (it roots to nothing) even while the contribution is alive. */
   private readonly _tsProjectsConfig = this._register(new MutableDisposable())
+
+  /** Cancels the previous tsconfig walk when a workspace swap starts a new one
+   *  (and on dispose) — on a huge tree the walk is expensive main-process I/O
+   *  that must not outlive the refresh that wanted it. */
+  private readonly _tsconfigScan = this._register(new MutableDisposable())
 
   constructor(
     @IConfigurationService private readonly _config: IConfigurationService,
@@ -136,11 +144,13 @@ export class LanguageServicePrewarmContribution
    * whenever the workspace (and hence its tsconfig set) changes.
    */
   private async _refreshTsProjectsSchema(): Promise<void> {
+    const cts = new CancellationTokenSource()
+    this._tsconfigScan.value = toDisposable(() => cts.dispose(true))
     await this._workspace.whenReady
-    const tsconfigs = await this._scanTsconfigs()
-    // Disposed while we awaited the workspace / file search — don't leak a fresh
-    // registration the dispose already ran past.
-    if (this._store.isDisposed) return
+    const tsconfigs = await this._scanTsconfigs(cts.token)
+    // Disposed or superseded by a newer refresh while we awaited — registering
+    // now would clobber the newer scan's schema with stale (or empty) paths.
+    if (this._store.isDisposed || cts.token.isCancellationRequested) return
 
     this._tsProjectsConfig.value = ConfigurationRegistry.registerConfiguration({
       id: 'typescript.prewarm',
@@ -160,17 +170,20 @@ export class LanguageServicePrewarmContribution
   }
 
   /** Enumerate `tsconfig*.json` in the workspace as workspace-relative paths. */
-  private async _scanTsconfigs(): Promise<string[]> {
+  private async _scanTsconfigs(token: CancellationToken): Promise<string[]> {
     const root = this._workspace.current?.folder
     if (!root) return []
     try {
-      const complete = await this._fileSearch.search({
-        root,
-        pattern: '',
-        matchAll: true,
-        ignore: TSCONFIG_IGNORE_DIRS,
-        maxResults: 5000,
-      })
+      const complete = await this._fileSearch.search(
+        {
+          root,
+          pattern: '',
+          matchAll: true,
+          ignore: TSCONFIG_IGNORE_DIRS,
+          maxResults: 5000,
+        },
+        token,
+      )
       const paths = complete.results
         .filter((m) => /^tsconfig(\..+)?\.json$/i.test(m.basename))
         .map((m) => m.relativePath.replace(/\\/g, '/'))

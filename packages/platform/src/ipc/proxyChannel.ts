@@ -11,6 +11,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Event } from '../base/event.js'
+import { CancellationToken } from '../base/cancellation.js'
 import { IChannel } from './ipc.js'
 
 const EVENT_PROP_RE = /^on[A-Z]/
@@ -61,7 +62,15 @@ export namespace ProxyChannel {
           cache.set(propKey, event)
           return event
         }
-        const fn = (...args: unknown[]): Promise<unknown> => channel.call(propKey, args)
+        const fn = (...args: unknown[]): Promise<unknown> => {
+          // A trailing CancellationToken is never serialized: it is lifted out
+          // of the argument list and travels via the channel's cancel path.
+          const last = args.length > 0 ? args[args.length - 1] : undefined
+          if (CancellationToken.isCancellationToken(last)) {
+            return channel.call(propKey, args.slice(0, -1), last)
+          }
+          return channel.call(propKey, args)
+        }
         cache.set(propKey, fn)
         return fn
       },
@@ -77,12 +86,17 @@ export namespace ProxyChannel {
   export function fromService<T extends object>(service: T): IChannel {
     const record = service as unknown as Record<string, unknown>
     return {
-      call<R>(command: string, arg?: unknown): Promise<R> {
+      call<R>(command: string, arg?: unknown, token?: CancellationToken): Promise<R> {
         const member = record[command]
         if (typeof member !== 'function') {
           return Promise.reject(new Error(`Method not found: ${command}`))
         }
-        const args = Array.isArray(arg) ? arg : arg === undefined ? [] : [arg]
+        const args = Array.isArray(arg) ? [...arg] : arg === undefined ? [] : [arg]
+        // The token is appended as a trailing argument (VSCode convention):
+        // methods that accept one observe remote cancellation, others ignore it.
+        if (token !== undefined) {
+          args.push(token)
+        }
         try {
           const result = (member as (...a: unknown[]) => unknown).apply(service, args)
           return Promise.resolve(result) as Promise<R>

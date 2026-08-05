@@ -14,6 +14,8 @@ import { describe, expect, it } from 'vitest'
 import { ChannelClient, ChannelServer, InMemoryMessagePassingProtocol } from '../../ipc/ipc.js'
 import { ProxyChannel } from '../../ipc/proxyChannel.js'
 import { Emitter, Event } from '../../base/event.js'
+import { CancellationToken, CancellationTokenSource } from '../../base/cancellation.js'
+import { CancellationError } from '../../base/errors.js'
 
 async function flushMicrotasks(n = 10): Promise<void> {
   for (let i = 0; i < n; i++) {
@@ -193,5 +195,77 @@ describe('IPC subscribe/unsubscribe envelope', () => {
     await flushMicrotasks()
     expect(received).toEqual([200])
     cleanup()
+  })
+})
+
+describe('ProxyChannel cancellation', () => {
+  interface ISlowService {
+    readonly _serviceBrand: undefined
+    work(label: string, token?: CancellationToken): Promise<string>
+  }
+
+  it('lifts a trailing token off the args and delivers cancellation to the remote method', async () => {
+    const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+    const server = new ChannelServer(serverProto)
+    const client = new ChannelClient(clientProto)
+
+    const seen: { label?: string; token?: CancellationToken | undefined } = {}
+    const service = {
+      work: (label: string, token?: CancellationToken): Promise<string> => {
+        seen.label = label
+        seen.token = token
+        return new Promise<string>(() => {})
+      },
+    }
+    server.registerChannel('slow', ProxyChannel.fromService(service))
+    const proxy = ProxyChannel.toService<ISlowService>(client.getChannel('slow'))
+
+    const cts = new CancellationTokenSource()
+    const pending = proxy.work('job', cts.token)
+    const assertion = expect(pending).rejects.toBeInstanceOf(CancellationError)
+    await flushMicrotasks()
+    // The token itself is never serialized: the method sees its real arguments
+    // plus a server-side token linked to the client's via the cancel message.
+    expect(seen.label).toBe('job')
+    expect(seen.token).toBeDefined()
+    expect(seen.token?.isCancellationRequested).toBe(false)
+
+    cts.cancel()
+    await assertion
+    await flushMicrotasks()
+    expect(seen.token?.isCancellationRequested).toBe(true)
+
+    client.dispose()
+    server.dispose()
+  })
+
+  it('methods called without a token keep their exact argument shape', async () => {
+    const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+    const server = new ChannelServer(serverProto)
+    const client = new ChannelClient(clientProto)
+
+    // Regression guard: appending a server-side token unconditionally poisons
+    // optional trailing parameters (`readFileText(uri, encoding = 'utf8')`
+    // received the token in the encoding slot and returned a Buffer).
+    const seen: { encoding?: string; argCount?: number } = {}
+    const service = {
+      read: function (label: string, encoding = 'utf8'): Promise<string> {
+        seen.argCount = arguments.length
+        seen.encoding = encoding
+        return Promise.resolve(`${label}:${encoding}`)
+      },
+    }
+    server.registerChannel('slow', ProxyChannel.fromService(service))
+    const proxy = ProxyChannel.toService<{ read(label: string): Promise<string> }>(
+      client.getChannel('slow'),
+    )
+
+    const result = await proxy.read('job')
+    expect(result).toBe('job:utf8')
+    expect(seen.encoding).toBe('utf8')
+    expect(seen.argCount).toBe(1)
+
+    client.dispose()
+    server.dispose()
   })
 })

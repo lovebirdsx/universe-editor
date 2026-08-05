@@ -432,11 +432,14 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       if (allFiles === undefined) picker.busy = true
       else runSearch(picker.value)
     }
-    void loadWorkspaceFiles(root, this._fileSearch, filter).then((files) => {
-      if (token.isCancellationRequested) return
-      allFiles = files
-      if (picker.value.trim().length > 0) runSearch(picker.value)
-    })
+    void loadWorkspaceFiles(root, this._fileSearch, filter, token)
+      .then((files) => {
+        if (token.isCancellationRequested) return
+        allFiles = files
+        if (picker.value.trim().length > 0) runSearch(picker.value)
+      })
+      // Closing the picker cancels the walk — rejection is the normal path.
+      .catch(() => undefined)
 
     void this._recentFiles.getAll().then((recent) => {
       if (token.isCancellationRequested) return

@@ -7,6 +7,8 @@
 import { Disposable, IDisposable, toDisposable } from '../base/lifecycle.js'
 import { Emitter, Event } from '../base/event.js'
 import { URI, type UriComponents } from '../base/uri.js'
+import { CancellationToken, CancellationTokenSource } from '../base/cancellation.js'
+import { CancellationError } from '../base/errors.js'
 
 // -------- Transport abstraction --------
 
@@ -27,11 +29,13 @@ export interface IMessagePassingProtocol {
 
 /**
  * A typed communication channel.
- * - `call` is request/response (returns a Promise).
+ * - `call` is request/response (returns a Promise). An optional
+ *   `CancellationToken` propagates cancellation to the remote handler and, on
+ *   the client, rejects the pending promise with `CancellationError`.
  * - `listen` is push-based (returns an Event).
  */
 export interface IChannel {
-  call<T>(command: string, arg?: unknown): Promise<T>
+  call<T>(command: string, arg?: unknown, token?: CancellationToken): Promise<T>
   listen<T>(event: string, arg?: unknown): Event<T>
 }
 
@@ -82,6 +86,11 @@ type RequestMessage = {
   channel: string
   command: string
   arg: unknown
+  // Set only when the caller passed a CancellationToken. The server must not
+  // append a token to the handler args otherwise: service methods with an
+  // optional trailing parameter (`readFileText(uri, encoding = 'utf8')`) would
+  // silently receive the token in that slot and misbehave.
+  hasToken?: true
 }
 
 type ResponseMessage = {
@@ -124,12 +133,18 @@ type UnsubscribeMessage = {
   event: string
 }
 
+type CancelMessage = {
+  type: 'cancel'
+  id: number
+}
+
 type IpcMessage =
   | RequestMessage
   | ResponseMessage
   | EventMessage
   | SubscribeMessage
   | UnsubscribeMessage
+  | CancelMessage
 
 /**
  * Rejection reason for any request still pending when a {@link ChannelClient} is
@@ -273,14 +288,44 @@ export class ChannelClient extends Disposable implements IChannelClient {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const client = this
     return {
-      call<T>(command: string, arg?: unknown): Promise<T> {
+      call<T>(command: string, arg?: unknown, token?: CancellationToken): Promise<T> {
+        if (token?.isCancellationRequested) {
+          return Promise.reject(new CancellationError())
+        }
         const id = ++client._requestId
         return new Promise<T>((resolve, reject) => {
-          client._pendingRequests.set(id, {
-            resolve: (v) => resolve(v as T),
-            reject,
+          // Cancellation notifies the server (so a long-running handler can
+          // stop early) and settles the local promise immediately. Settle via
+          // the pending wrapper so the token subscription itself is disposed.
+          const cancelListener = token?.onCancellationRequested(() => {
+            const pending = client._pendingRequests.get(id)
+            if (!pending) return
+            client._pendingRequests.delete(id)
+            if (!client._disposed) {
+              client._protocol.send(encode({ type: 'cancel', id }))
+            }
+            pending.reject(new CancellationError())
           })
-          client._protocol.send(encode({ type: 'request', id, channel: channelName, command, arg }))
+          client._pendingRequests.set(id, {
+            resolve: (v) => {
+              cancelListener?.dispose()
+              resolve(v as T)
+            },
+            reject: (e) => {
+              cancelListener?.dispose()
+              reject(e)
+            },
+          })
+          client._protocol.send(
+            encode({
+              type: 'request',
+              id,
+              channel: channelName,
+              command,
+              arg,
+              ...(token !== undefined ? { hasToken: true as const } : {}),
+            }),
+          )
         })
       },
       listen<T>(event: string, arg?: unknown): Event<T> {
@@ -331,6 +376,7 @@ export class ChannelClient extends Disposable implements IChannelClient {
 export class ChannelServer extends Disposable implements IChannelServer {
   private readonly _channels = new Map<string, IChannel>()
   private readonly _eventSubscriptions = new Map<string, IDisposable>()
+  private readonly _pendingCancellations = new Map<number, CancellationTokenSource>()
 
   constructor(private readonly _protocol: IMessagePassingProtocol) {
     super()
@@ -348,6 +394,8 @@ export class ChannelServer extends Disposable implements IChannelServer {
       this._handleSubscribe(msg)
     } else if (msg.type === 'unsubscribe') {
       this._handleUnsubscribe(msg)
+    } else if (msg.type === 'cancel') {
+      this._pendingCancellations.get(msg.id)?.cancel()
     }
   }
 
@@ -366,12 +414,36 @@ export class ChannelServer extends Disposable implements IChannelServer {
       return
     }
 
+    // Only calls that declared a token get one server-side: handlers then see
+    // client cancellation and server teardown (window closed mid-flight).
+    // Token-less calls keep their exact original argument shape.
+    if (!msg.hasToken) {
+      channel
+        .call(command, arg)
+        .then((data) => {
+          this._protocol.send(encode({ type: 'response', id, data }))
+        })
+        .catch((err: unknown) => {
+          this._protocol.send(encode({ type: 'response', id, error: serializeError(err) }))
+        })
+      return
+    }
+
+    const cts = new CancellationTokenSource()
+    this._pendingCancellations.set(id, cts)
+    const finish = (): void => {
+      this._pendingCancellations.delete(id)
+      cts.dispose()
+    }
+
     channel
-      .call(command, arg)
+      .call(command, arg, cts.token)
       .then((data) => {
+        finish()
         this._protocol.send(encode({ type: 'response', id, data }))
       })
       .catch((err: unknown) => {
+        finish()
         this._protocol.send(encode({ type: 'response', id, error: serializeError(err) }))
       })
   }
@@ -401,6 +473,13 @@ export class ChannelServer extends Disposable implements IChannelServer {
   }
 
   override dispose(): void {
+    // Cancel in-flight handlers first: a torn-down window must not leave
+    // long-running work (e.g. a workspace walk) running in this process.
+    for (const cts of this._pendingCancellations.values()) {
+      cts.cancel()
+      cts.dispose()
+    }
+    this._pendingCancellations.clear()
     for (const sub of this._eventSubscriptions.values()) {
       sub.dispose()
     }
@@ -416,13 +495,13 @@ export function createChannelFromObject(obj: {
   [command: string]: (...args: unknown[]) => unknown
 }): IChannel {
   return {
-    call<T>(command: string, arg?: unknown): Promise<T> {
+    call<T>(command: string, arg?: unknown, token?: CancellationToken): Promise<T> {
       const handler = obj[command]
       if (typeof handler !== 'function') {
         return Promise.reject(new Error(`Unknown command: ${command}`))
       }
       try {
-        return Promise.resolve(handler(arg) as T)
+        return Promise.resolve(handler(arg, token) as T)
       } catch (e) {
         return Promise.reject(e)
       }

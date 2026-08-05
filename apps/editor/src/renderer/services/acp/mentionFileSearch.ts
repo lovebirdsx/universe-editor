@@ -15,7 +15,7 @@
  *  after `@` (and the popover detail).
  *--------------------------------------------------------------------------------------------*/
 
-import { URI, type IFileSearchService } from '@universe-editor/platform'
+import { URI, type CancellationToken, type IFileSearchService } from '@universe-editor/platform'
 import { compareByScoreThenPath, fuzzyMatchField } from '@universe-editor/workbench-ui'
 
 export interface MentionFileEntry {
@@ -66,6 +66,7 @@ export async function loadWorkspaceFiles(
   root: URI,
   fileSearch: IFileSearchService,
   filter?: MentionFileFilter,
+  token?: CancellationToken,
 ): Promise<readonly MentionFileEntry[]> {
   const dirNames = filter ? filter.dirNames : FALLBACK_IGNORE_DIRS
   const excludeGlobs = filter?.excludeGlobs ?? []
@@ -74,14 +75,17 @@ export async function loadWorkspaceFiles(
   const cached = _cache.get(key)
   if (cached && now - cached.timestamp < CACHE_TTL_MS) return cached.entries
 
-  const complete = await fileSearch.search({
-    root,
-    pattern: '',
-    matchAll: true,
-    excludes: excludeGlobs,
-    ignore: dirNames,
-    maxResults: MAX_FILES,
-  })
+  const complete = await fileSearch.search(
+    {
+      root,
+      pattern: '',
+      matchAll: true,
+      excludes: excludeGlobs,
+      ignore: dirNames,
+      maxResults: MAX_FILES,
+    },
+    token,
+  )
   const entries = complete.results.map((match) => {
     return {
       uri: match.resource.toString(),
@@ -89,7 +93,11 @@ export async function loadWorkspaceFiles(
       name: match.basename,
     }
   })
-  _cache.set(key, { key, entries, timestamp: now })
+  // A cancelled walk returns whatever partial listing it had; caching it would
+  // serve an arbitrarily truncated workspace for the whole TTL.
+  if (complete.stopReason !== 'canceled') {
+    _cache.set(key, { key, entries, timestamp: now })
+  }
   return entries
 }
 

@@ -9,11 +9,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  CancellationTokenSource,
   Disposable,
   IFileSearchService,
   IFileWatcherService,
   IWorkspaceService,
   runWhenIdle,
+  toDisposable,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import {
@@ -23,6 +25,10 @@ import {
 import { IExcludeService } from '../services/exclude/ExcludeService.js'
 
 export class WorkspaceFileListingContribution extends Disposable implements IWorkbenchContribution {
+  // Prewarm walks the whole workspace; on a pathological tree that is minutes
+  // of main-process I/O, so it must die with the contribution, not linger.
+  private readonly _prewarmCts = new CancellationTokenSource()
+
   constructor(
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IFileWatcherService private readonly _watcher: IFileWatcherService,
@@ -30,6 +36,7 @@ export class WorkspaceFileListingContribution extends Disposable implements IWor
     @IExcludeService private readonly _exclude: IExcludeService,
   ) {
     super()
+    this._register(toDisposable(() => this._prewarmCts.dispose(true)))
     this._register(
       this._watcher.onDidChangeFiles(() =>
         invalidateMentionFileCache(this._workspace.current?.folder),
@@ -46,9 +53,14 @@ export class WorkspaceFileListingContribution extends Disposable implements IWor
     await this._workspace.whenReady
     const root = this._workspace.current?.folder
     if (!root || this._store.isDisposed) return
-    await loadWorkspaceFiles(root, this._fileSearch, {
-      dirNames: this._exclude.getDirNameIgnores(),
-      excludeGlobs: this._exclude.getSearchExcludeGlobs(),
-    }).catch(() => undefined)
+    await loadWorkspaceFiles(
+      root,
+      this._fileSearch,
+      {
+        dirNames: this._exclude.getDirNameIgnores(),
+        excludeGlobs: this._exclude.getSearchExcludeGlobs(),
+      },
+      this._prewarmCts.token,
+    ).catch(() => undefined)
   }
 }

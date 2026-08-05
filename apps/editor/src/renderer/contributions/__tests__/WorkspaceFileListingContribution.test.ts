@@ -13,6 +13,7 @@ import {
   IWorkspaceService,
   ServiceCollection,
   URI,
+  type CancellationToken,
   type IFileChangeEvent,
   type IFileSearchService as IFileSearchServiceType,
   type IFileWatcherService as IFileWatcherServiceType,
@@ -78,8 +79,7 @@ function makeFileSearch(): IFileSearchServiceType & { calls: number } {
   return svc
 }
 
-function setup() {
-  const fileSearch = makeFileSearch()
+function setup(fileSearch: ReturnType<typeof makeFileSearch> = makeFileSearch()) {
   const watcher = new FakeFileWatcherService()
   const services = new ServiceCollection()
   services.set(IWorkspaceService, new FakeWorkspaceService())
@@ -127,5 +127,25 @@ describe('WorkspaceFileListingContribution', () => {
     await loadWorkspaceFiles(URI.file('/ws'), fileSearch, { dirNames: [] })
     expect(fileSearch.calls).toBe(2)
     contribution.dispose()
+  })
+
+  it('disposing the contribution cancels an in-flight pre-warm walk', async () => {
+    let seenToken: CancellationToken | undefined
+    const neverSettling = {
+      _serviceBrand: undefined,
+      calls: 0,
+      search(_query: unknown, token?: CancellationToken) {
+        neverSettling.calls++
+        seenToken = token
+        return new Promise<never>(() => {})
+      },
+    }
+    const { contribution } = setup(neverSettling as ReturnType<typeof makeFileSearch>)
+    await flush()
+    expect(neverSettling.calls).toBe(1)
+    expect(seenToken?.isCancellationRequested).toBe(false)
+
+    contribution.dispose()
+    expect(seenToken?.isCancellationRequested).toBe(true)
   })
 })

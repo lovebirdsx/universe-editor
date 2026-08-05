@@ -11,6 +11,9 @@ import {
   IpcChannelDisposedError,
 } from '../../ipc/ipc.js'
 import { URI } from '../../base/uri.js'
+import { CancellationToken, CancellationTokenSource } from '../../base/cancellation.js'
+import { CancellationError } from '../../base/errors.js'
+import { DisposableTracker, setDisposableTracker } from '../../base/lifecycle.js'
 
 async function flushMicrotasks(n = 5): Promise<void> {
   for (let i = 0; i < n; i++) {
@@ -308,6 +311,149 @@ describe('ChannelClient.dispose rejects pending requests', () => {
     client.dispose()
     await assertion
 
+    server.dispose()
+  })
+})
+
+describe('request cancellation', () => {
+  function slowPair() {
+    const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+    const server = new ChannelServer(serverProto)
+    const client = new ChannelClient(clientProto)
+    const seen: { token?: CancellationToken | undefined } = {}
+    server.registerChannel('slow', {
+      call: (_command: string, _arg?: unknown, token?: CancellationToken) => {
+        seen.token = token
+        return new Promise<never>(() => {})
+      },
+      listen: () => {
+        throw new Error('no events')
+      },
+    })
+    return { server, client, seen }
+  }
+
+  it('rejects the call with CancellationError and cancels the server-side token', async () => {
+    const { server, client, seen } = slowPair()
+
+    const cts = new CancellationTokenSource()
+    const pending = client.getChannel('slow').call('wait', undefined, cts.token)
+    const assertion = expect(pending).rejects.toBeInstanceOf(CancellationError)
+    await flushMicrotasks()
+    expect(seen.token).toBeDefined()
+    expect(seen.token?.isCancellationRequested).toBe(false)
+
+    cts.cancel()
+    await assertion
+    await flushMicrotasks()
+    expect(seen.token?.isCancellationRequested).toBe(true)
+
+    client.dispose()
+    server.dispose()
+  })
+
+  it('rejects immediately when the token is already cancelled, without sending a request', async () => {
+    const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+    const server = new ChannelServer(serverProto)
+    const client = new ChannelClient(clientProto)
+
+    let called = 0
+    server.registerChannel(
+      'fast',
+      createChannelFromObject({
+        run: () => {
+          called++
+          return 1
+        },
+      }),
+    )
+
+    await expect(
+      client.getChannel('fast').call('run', undefined, CancellationToken.Cancelled),
+    ).rejects.toBeInstanceOf(CancellationError)
+    await flushMicrotasks()
+    expect(called).toBe(0)
+
+    client.dispose()
+    server.dispose()
+  })
+
+  it('cancels in-flight handler tokens when the server is disposed', async () => {
+    const { server, client, seen } = slowPair()
+
+    const cts = new CancellationTokenSource()
+    const pending = client.getChannel('slow').call('wait', undefined, cts.token)
+    await flushMicrotasks()
+    expect(seen.token).toBeDefined()
+
+    server.dispose()
+    expect(seen.token?.isCancellationRequested).toBe(true)
+
+    const assertion = expect(pending).rejects.toBeInstanceOf(IpcChannelDisposedError)
+    client.dispose()
+    await assertion
+  })
+
+  it('token-less calls reach the handler without a server-side token', async () => {
+    const { server, client, seen } = slowPair()
+
+    const pending = client.getChannel('slow').call('wait')
+    await flushMicrotasks()
+    expect(seen.token).toBeUndefined()
+
+    const assertion = expect(pending).rejects.toBeInstanceOf(IpcChannelDisposedError)
+    client.dispose()
+    server.dispose()
+    await assertion
+  })
+
+  it('a response after cancellation is ignored (no double settle)', async () => {
+    const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+    const server = new ChannelServer(serverProto)
+    const client = new ChannelClient(clientProto)
+
+    // Handler ignores the token and eventually resolves anyway.
+    server.registerChannel(
+      'stubborn',
+      createChannelFromObject({
+        run: () => new Promise((resolve) => queueMicrotask(() => resolve('late'))),
+      }),
+    )
+
+    const cts = new CancellationTokenSource()
+    const pending = client.getChannel('stubborn').call('run', undefined, cts.token)
+    const assertion = expect(pending).rejects.toBeInstanceOf(CancellationError)
+    cts.cancel()
+    await assertion
+    // The late response arrives for an id no longer pending — must be a no-op.
+    await flushMicrotasks()
+
+    client.dispose()
+    server.dispose()
+  })
+
+  it('cancelling a call releases its token subscription (no disposable leak)', async () => {
+    const { server, client } = slowPair()
+    const cts = new CancellationTokenSource()
+
+    // Track only what the call itself creates: the token subscription used to
+    // observe cancellation must not outlive the request (e2e teardown flags it).
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    try {
+      const pending = client.getChannel('slow').call('wait', undefined, cts.token)
+      const assertion = expect(pending).rejects.toBeInstanceOf(CancellationError)
+      await flushMicrotasks()
+      cts.cancel()
+      await assertion
+      await flushMicrotasks()
+      const leaks = tracker.computeLeakingDisposables()
+      expect(leaks?.details ?? '').toBe('')
+    } finally {
+      setDisposableTracker(null)
+    }
+
+    client.dispose()
     server.dispose()
   })
 })

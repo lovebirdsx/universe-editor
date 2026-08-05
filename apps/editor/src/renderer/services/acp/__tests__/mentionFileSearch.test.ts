@@ -5,7 +5,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { URI, type IFileSearchService } from '@universe-editor/platform'
+import {
+  CancellationTokenSource,
+  URI,
+  type CancellationToken,
+  type IFileSearchService,
+} from '@universe-editor/platform'
 import {
   filterMentionFiles,
   invalidateMentionFileCache,
@@ -170,6 +175,37 @@ describe('loadWorkspaceFiles', () => {
 
   it('peekWorkspaceFiles returns undefined when nothing was ever cached', () => {
     expect(peekWorkspaceFiles(URI.file('/never-loaded'))).toBeUndefined()
+  })
+
+  it('passes the caller token through and does not cache a cancelled walk', async () => {
+    const root = URI.file('/repo')
+    let calls = 0
+    let seenToken: CancellationToken | undefined
+    const fs = {
+      _serviceBrand: undefined,
+      async search(_query, token) {
+        calls++
+        seenToken = token
+        return {
+          results: [],
+          limitHit: true,
+          filesWalked: 0,
+          directoriesWalked: 0,
+          durationMs: 0,
+          stopReason: 'canceled' as const,
+        }
+      },
+    } satisfies IFileSearchService
+    const cts = new CancellationTokenSource()
+
+    await loadWorkspaceFiles(root, fs, undefined, cts.token)
+    expect(seenToken).toBe(cts.token)
+
+    // A cancelled walk yields a partial listing — caching it would serve a
+    // truncated workspace for the whole TTL, so the next call must re-walk.
+    await loadWorkspaceFiles(root, fs, undefined, cts.token)
+    expect(calls).toBe(2)
+    expect(peekWorkspaceFiles(root)).toBeUndefined()
   })
 })
 
