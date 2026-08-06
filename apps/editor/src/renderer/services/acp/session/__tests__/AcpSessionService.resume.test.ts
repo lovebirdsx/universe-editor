@@ -1584,4 +1584,50 @@ describe('AcpSessionService.resumeSession — configOption push-back', () => {
     const resumeAgent = built.client.connected[1]!.agent
     expect(resumeAgent.setConfigOptionCalls).toHaveLength(0)
   })
+
+  it('passes the history-remembered model to session/load via _meta.claudeCode.resumeModel', async () => {
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+
+    const original = await svc.createSession()
+    await original.whenConnected()
+    const historyId = built.history.list()[0]!.id
+    // The context-lane spelling must survive verbatim — dropping "[1m]" is the
+    // bug this meta exists to prevent (resume would clamp the window to 200k).
+    built.history.setHistoryConfigOption(historyId, 'model', 'claude-fable-5[1m]')
+    await svc.closeSession(original.id)
+
+    await svc.resumeSession(historyId)
+
+    const resumeAgent = built.client.connected[1]!.agent
+    expect(resumeAgent.loadSessionCalls).toHaveLength(1)
+    expect(resumeAgent.loadSessionCalls[0]?._meta).toEqual({
+      claudeCode: {
+        emitRawSDKMessages: [{ type: 'system', subtype: 'init' }],
+        resumeModel: 'claude-fable-5[1m]',
+      },
+    })
+  })
+
+  it('omits resumeModel from session/load _meta when history has no model memory', async () => {
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+
+    const original = await svc.createSession()
+    await original.whenConnected()
+    const historyId = built.history.list()[0]!.id
+    await svc.closeSession(original.id)
+
+    await svc.resumeSession(historyId)
+
+    const resumeAgent = built.client.connected[1]!.agent
+    expect(resumeAgent.loadSessionCalls).toHaveLength(1)
+    expect(resumeAgent.loadSessionCalls[0]?._meta).toEqual({
+      claudeCode: { emitRawSDKMessages: [{ type: 'system', subtype: 'init' }] },
+    })
+  })
 })

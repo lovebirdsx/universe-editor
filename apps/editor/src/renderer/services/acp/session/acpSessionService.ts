@@ -367,6 +367,23 @@ const EMIT_INIT_SDK_MESSAGE_META = {
   claudeCode: { emitRawSDKMessages: [{ type: 'system', subtype: 'init' }] },
 }
 
+/**
+ * `_meta` for session/load + session/resume: the init-message filter above,
+ * plus the model this session is remembered to run (`history.configOptions.model`).
+ * The fork re-asserts it after load — a resume otherwise lands on the
+ * transcript's bare API name, dropping the "[1m]" context-lane spelling and
+ * clamping the effective window to 200k. See `ACP_META_KEYS.resumeModel`.
+ */
+function buildResumeMeta(entry: AcpSessionHistoryEntry | undefined): Record<string, unknown> {
+  const resumeModel = entry?.configOptions?.['model']
+  return {
+    claudeCode: {
+      ...EMIT_INIT_SDK_MESSAGE_META.claudeCode,
+      ...(resumeModel !== undefined ? { resumeModel } : {}),
+    },
+  }
+}
+
 export class AcpSessionService
   extends Disposable
   implements IAcpSessionService, IAcpClientNotificationSink
@@ -989,7 +1006,7 @@ export class AcpSessionService
         sessionId: entry.sessionIdOnAgent,
         cwd: cwd ?? '',
         mcpServers: kept,
-        _meta: EMIT_INIT_SDK_MESSAGE_META,
+        _meta: buildResumeMeta(entry),
       }
       const loadResult = await withTimeout(
         conn.conn.loadSession(loadParams),
@@ -1116,7 +1133,7 @@ export class AcpSessionService
                 sessionId: sid,
                 cwd: cwd ?? '',
                 mcpServers: kept,
-                _meta: EMIT_INIT_SDK_MESSAGE_META,
+                _meta: buildResumeMeta(entry),
               }),
               timeoutMs,
               'ACP session/resume',

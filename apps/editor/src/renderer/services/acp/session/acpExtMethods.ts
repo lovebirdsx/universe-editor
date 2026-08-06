@@ -48,6 +48,14 @@ export type AcpExtMethodName = (typeof ACP_EXT_METHODS)[keyof typeof ACP_EXT_MET
 export const ACP_META_KEYS = {
   /** session/new + session/load _meta asking the fork to emit raw SDK init message. */
   emitRawSdkMessages: 'claudeCode.emitRawSDKMessages',
+  /**
+   * session/load + session/resume _meta carrying the editor's per-session model
+   * memory (the user's in-session pick, context-lane spelling intact, e.g.
+   * "claude-fable-5[1m]"). A resume restores the bare API name from the
+   * transcript — dropping "[1m]" and clamping the effective window to 200k —
+   * so the fork re-asserts this remembered spelling on load.
+   */
+  resumeModel: 'claudeCode.resumeModel',
   /** usage_update _meta carrying the per-model cost breakdown. */
   modelBreakdown: '_universe/modelBreakdown',
   /** tool_call_update _meta carrying per-sub-agent token tally. */
