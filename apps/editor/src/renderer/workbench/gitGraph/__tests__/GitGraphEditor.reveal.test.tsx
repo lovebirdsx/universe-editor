@@ -63,7 +63,9 @@ function resultWith(commits: GitGraphCommitDto[], moreAvailable: boolean): GitGr
 }
 
 function renderEditor(
-  getCommits: (options: { maxCommits?: number }) => GitGraphLoadResult | undefined,
+  getCommits: (options: {
+    maxCommits?: number
+  }) => GitGraphLoadResult | undefined | Promise<GitGraphLoadResult | undefined>,
 ) {
   const executeCommand = vi.fn(async (id: string, arg?: { maxCommits?: number }) => {
     switch (id) {
@@ -240,6 +242,40 @@ describe('GitGraphEditor reveal', () => {
       })
 
       expect(gitGraphViewState.pendingReveal).toBeNull()
+      expect(gitGraphViewState.selection).toEqual([PAGE1_HASH])
+    } finally {
+      gate.dispose()
+    }
+  })
+
+  it('keeps the reveal selection when the initial load resolves after the reveal', async () => {
+    const gate = CommandsRegistry.registerCommand(GitGraphCommands.getCommits, () => undefined)
+    try {
+      // First getCommits call (the initial load) stays pending until released;
+      // any later call (the reveal's own paging) resolves immediately.
+      let releaseInitialLoad: (() => void) | undefined
+      let call = 0
+      renderEditor(async () => {
+        if (++call === 1) await new Promise<void>((r) => (releaseInitialLoad = r))
+        return resultWith([commit(PAGE1_HASH, 'first')], false)
+      })
+      await flush()
+      expect(releaseInitialLoad).toBeDefined()
+
+      // Reveal arrives while the initial load is still in flight (the action
+      // calls revealCommit right after openEditor resolves).
+      await act(async () => {
+        gitGraphViewState.revealCommit?.(PAGE1_HASH)
+        await flush()
+      })
+
+      // The late initial load lands afterwards; its "fresh load" selection
+      // reset must not clobber the reveal.
+      await act(async () => {
+        releaseInitialLoad?.()
+        await flush()
+      })
+
       expect(gitGraphViewState.selection).toEqual([PAGE1_HASH])
     } finally {
       gate.dispose()

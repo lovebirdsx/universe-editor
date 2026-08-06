@@ -18,6 +18,7 @@ import { mkdtempSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { seedBaselineUserData } from '@universe-editor/e2e-harness'
 import { closeApp, launchCoreGitApp } from '../fixtures/coreGitApp.js'
 import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
@@ -49,16 +50,7 @@ test.describe('@p1 dirty diff peek', () => {
     test.setTimeout(120_000)
 
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ddp-'))
-    writeFileSync(
-      join(userDataDir, 'settings.json'),
-      JSON.stringify({ 'workbench.language': 'en-US', 'update.mode': 'manual' }, null, 2),
-      'utf8',
-    )
-    writeFileSync(
-      join(userDataDir, 'state.json'),
-      JSON.stringify({ 'welcome.agentOnboarding.seen': true }, null, 2),
-      'utf8',
-    )
+    seedBaselineUserData(userDataDir)
 
     // `git rev-parse --show-toplevel` (used by the git extension to key its repo)
     // always returns the LONG canonical path. On CI Windows `os.tmpdir()` is an 8.3

@@ -14,7 +14,12 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { closeApp, expectNoLeaks, evaluateWhenRestored } from '@universe-editor/e2e-harness'
+import {
+  closeApp,
+  expectNoLeaks,
+  evaluateWhenRestored,
+  seedBaselineUserData,
+} from '@universe-editor/e2e-harness'
 import { launchAiApp } from '../fixtures/aiApp.js'
 
 function git(cwd: string, ...args: string[]): void {
@@ -30,16 +35,7 @@ test.describe('@p1 ai commit message', () => {
     // mirrors the heavier @p0 generation spec.
     test.setTimeout(120_000)
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ai-'))
-    writeFileSync(
-      join(userDataDir, 'settings.json'),
-      JSON.stringify({ 'workbench.language': 'en-US', 'update.mode': 'manual' }, null, 2),
-      'utf8',
-    )
-    writeFileSync(
-      join(userDataDir, 'state.json'),
-      JSON.stringify({ 'welcome.agentOnboarding.seen': true }, null, 2),
-      'utf8',
-    )
+    seedBaselineUserData(userDataDir)
 
     // A real git repo with one uncommitted change so the SCM view has a provider.
     const repoDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ai-repo-'))

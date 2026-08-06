@@ -62,6 +62,8 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - `EPERM rename '<x>.json.<pid>.<ts>.tmp'` 经 reviveWireError 从 main 传回、retry 救得回=产品原子写 rename 撞 Windows 瞬时锁（并发读/AV），修产品加重试 → 案例 60
 - beforeAll 起本地 server 报 `did not start on <url>`、retry 救得回=固定随机端口撞占用（上轮孤儿 server）+stdio ignore 无诊断 → 案例 61
 - `tokenColor(<word>)` poll 恒 undefined 到 `Test timeout`=Monarch 合并 span 使 exact-text 在 TextMate takeover 前结构性匹配不到，补显式 takeover 门控+test.slow → 案例 62
+- 图表 reveal 断言 received 恒 `_row_…`（行在、选中类稳定缺失）+retry 变 "Loading…" 行不出现=reveal 与初始 load 双发请求、晚到 load 清选中（产品竞态）→ 案例 64
+- 自启动 spec `closeApp: graceful close still pending`→force-kill 后 `CDP pipe still open`→teardown 30s 超时、事后无孤儿=某进程握子端 pipe 句柄（wsl 探测/agent 孙进程/并发 spawn 继承泄漏），终解=closeApp 父端 stdio destroy 兜底 + seed 收敛 + 死父指纹清扫 → 案例 65
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

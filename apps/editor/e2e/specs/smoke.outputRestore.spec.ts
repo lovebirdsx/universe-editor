@@ -15,15 +15,12 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { ENABLED_EXTENSIONS_ENV, INITIAL_SETTINGS } from '@universe-editor/e2e-harness'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
 function seedUserSettings(userDataDir: string): void {
-  writeFileSync(
-    join(userDataDir, 'settings.json'),
-    JSON.stringify({ 'workbench.language': 'en-US', 'update.mode': 'manual' }, null, 2),
-    'utf8',
-  )
+  writeFileSync(join(userDataDir, 'settings.json'), INITIAL_SETTINGS, 'utf8')
 }
 
 function fsPathToUriComponents(fsPath: string) {
@@ -79,7 +76,12 @@ async function launchWithState(userDataDir: string) {
   const app = await electron.launch({
     args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     cwd: APP_ROOT,
-    env: { ...inheritedEnv, UNIVERSE_E2E: '1', NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production' },
+    env: {
+      ...inheritedEnv,
+      UNIVERSE_E2E: '1',
+      NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production',
+      [ENABLED_EXTENSIONS_ENV]: '',
+    },
   })
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
@@ -92,6 +94,9 @@ async function launchWithState(userDataDir: string) {
 
 test.describe('@p1 output channel restore', () => {
   test('stable channel is restored from workspace state after restart', async () => {
+    // Self-launched cold boot: leave room for the graceful-close + force-kill
+    // teardown under full-suite parallel load (see smoke.viewSizes).
+    test.setTimeout(120_000)
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-output-restore-'))
     try {
       const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-out-'))
@@ -130,6 +135,7 @@ test.describe('@p1 output channel restore', () => {
   })
 
   test('deferred stable channel is activated once created', async () => {
+    test.setTimeout(120_000)
     // "TestChannel" does not exist at startup; it is created via probe after
     // the workbench mounts.  The pending-restore path should pick it up.
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-output-deferred-'))
@@ -177,6 +183,7 @@ test.describe('@p1 output channel restore', () => {
   })
 
   test('ACP channel is restored after handle rotation', async () => {
+    test.setTimeout(120_000)
     // Simulates the case where the user had acp/claude/old-handle active.
     // On restart the ACP service creates acp/claude/new-handle.
     // The prefix-matching fix should activate the new channel automatically.

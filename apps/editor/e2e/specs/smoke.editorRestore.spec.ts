@@ -14,6 +14,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { ENABLED_EXTENSIONS_ENV, INITIAL_SETTINGS } from '@universe-editor/e2e-harness'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
@@ -85,6 +86,7 @@ function seedGlobalSession(userDataDir: string, folder: string): void {
 }
 
 async function launchWithState(userDataDir: string) {
+  writeFileSync(join(userDataDir, 'settings.json'), INITIAL_SETTINGS, 'utf8')
   // ELECTRON_RUN_AS_NODE=1 (set by Claude Code's shell) makes Electron behave as
   // plain Node.js, which rejects Chromium-only flags. Unset it so the binary runs
   // as a full Chromium app (mirrors the shared electronApp fixture).
@@ -92,7 +94,12 @@ async function launchWithState(userDataDir: string) {
   const app = await electron.launch({
     args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     cwd: APP_ROOT,
-    env: { ...inheritedEnv, UNIVERSE_E2E: '1', NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production' },
+    env: {
+      ...inheritedEnv,
+      UNIVERSE_E2E: '1',
+      NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production',
+      [ENABLED_EXTENSIONS_ENV]: '',
+    },
   })
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
@@ -105,6 +112,9 @@ async function launchWithState(userDataDir: string) {
 
 test.describe('@p1 editor restore', () => {
   test('file editor is restored from workspace state after restart', async () => {
+    // Self-launched cold boot: leave room for the graceful-close + force-kill
+    // teardown under full-suite parallel load (see smoke.viewSizes).
+    test.setTimeout(120_000)
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-editor-restore-'))
     try {
       const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-'))
@@ -148,6 +158,7 @@ test.describe('@p1 editor restore', () => {
   // smoke.simpleFileDialog). Single-instance runs never trip it, so we pin this
   // case to a single worker. See `pnpm e2e` (serial pass).
   test('switching workspaces does not leak editors across scopes', { tag: '@serial' }, async () => {
+    test.setTimeout(120_000)
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-editor-restore-iso-'))
     try {
       // Workspace A has an open editor; workspace B is empty.

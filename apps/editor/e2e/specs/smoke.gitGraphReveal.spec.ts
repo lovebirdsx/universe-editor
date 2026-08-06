@@ -12,6 +12,7 @@ import { mkdtempSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { seedBaselineUserData } from '@universe-editor/e2e-harness'
 import { closeApp, launchCoreGitApp } from '../fixtures/coreGitApp.js'
 import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
@@ -23,16 +24,7 @@ function git(cwd: string, ...args: string[]): string {
 
 function makeUserDataDir(): string {
   const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ggr-'))
-  writeFileSync(
-    join(userDataDir, 'settings.json'),
-    JSON.stringify({ 'workbench.language': 'en-US', 'update.mode': 'manual' }, null, 2),
-    'utf8',
-  )
-  writeFileSync(
-    join(userDataDir, 'state.json'),
-    JSON.stringify({ 'welcome.agentOnboarding.seen': true }, null, 2),
-    'utf8',
-  )
+  seedBaselineUserData(userDataDir)
   return userDataDir
 }
 
@@ -88,11 +80,14 @@ test.describe('@p1 git graph reveal', () => {
 
       const editor = page.locator('[data-testid="gitGraph-editor"]')
       await expect(editor).toBeVisible()
-      // The bridge selects the target row and scrolls it into view (the CSS
-      // module class keeps its `rowSelected` local name in the bundle).
+      // The graph's first load runs a git query after cold-boot extension
+      // activation — well beyond the default expect timeout under parallel
+      // suite load, so wait like the SCM/timeline steps above do. The bridge
+      // selects the target row and scrolls it into view (the CSS module class
+      // keeps its `rowSelected` local name in the bundle).
       const row = editor.locator(`[data-hash="${firstHash}"]`)
-      await expect(row).toBeVisible()
-      await expect(row).toHaveClass(/rowSelected/)
+      await expect(row).toBeVisible({ timeout: 30_000 })
+      await expect(row).toHaveClass(/rowSelected/, { timeout: 30_000 })
     } finally {
       await closeApp(app)
     }
@@ -146,7 +141,10 @@ test.describe('@p1 git graph reveal', () => {
 
       const editor = page.locator('[data-testid="gitGraph-editor"]')
       await expect(editor).toBeVisible()
-      await expect(editor.locator(`[data-hash="${firstHash}"]`)).toHaveClass(/rowSelected/)
+      // Same slow-first-load window as the first test: give the git query room.
+      await expect(editor.locator(`[data-hash="${firstHash}"]`)).toHaveClass(/rowSelected/, {
+        timeout: 30_000,
+      })
     } finally {
       await closeApp(app)
     }

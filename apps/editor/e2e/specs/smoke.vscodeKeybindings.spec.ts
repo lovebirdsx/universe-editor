@@ -25,6 +25,7 @@ import { test, expect } from '@playwright/test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { seedBaselineUserData } from '@universe-editor/e2e-harness'
 import { closeApp, launchCoreGitApp } from '../fixtures/coreGitApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
@@ -40,16 +41,7 @@ test.describe('@p1 vscode keybindings', () => {
     // test ceiling would fire first on slow CI. Raise it (case 10 / note 10).
     test.slow()
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-vscodekb-'))
-    writeFileSync(
-      join(userDataDir, 'settings.json'),
-      JSON.stringify({ 'workbench.language': 'en-US', 'update.mode': 'manual' }, null, 2),
-      'utf8',
-    )
-    writeFileSync(
-      join(userDataDir, 'state.json'),
-      JSON.stringify({ 'welcome.agentOnboarding.seen': true }, null, 2),
-      'utf8',
-    )
+    seedBaselineUserData(userDataDir)
     const vscodeKeybindingsPath = join(userDataDir, 'vscode-keybindings.json')
     writeFileSync(
       vscodeKeybindingsPath,
@@ -117,16 +109,7 @@ test.describe('@p1 vscode keybindings', () => {
     // normalized this way, and the probe compares the stored form verbatim.
     const SECOND_KEY = 'alt+shift+down'
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-vscodekb-multi-'))
-    writeFileSync(
-      join(userDataDir, 'settings.json'),
-      JSON.stringify({ 'workbench.language': 'en-US', 'update.mode': 'manual' }, null, 2),
-      'utf8',
-    )
-    writeFileSync(
-      join(userDataDir, 'state.json'),
-      JSON.stringify({ 'welcome.agentOnboarding.seen': true }, null, 2),
-      'utf8',
-    )
+    seedBaselineUserData(userDataDir)
     const vscodeKeybindingsPath = join(userDataDir, 'vscode-keybindings.json')
     writeFileSync(
       vscodeKeybindingsPath,

@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import { ENABLED_EXTENSIONS_ENV, INITIAL_SETTINGS } from '@universe-editor/e2e-harness'
 import { URI } from '@universe-editor/platform'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks } from '../pages/WorkbenchPO.js'
@@ -57,11 +58,17 @@ function workspaceIdFromUri(uriString: string): string {
 }
 
 async function launchWithState(userDataDir: string) {
+  writeFileSync(join(userDataDir, 'settings.json'), INITIAL_SETTINGS, 'utf8')
   const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
   const app = await electron.launch({
     args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     cwd: APP_ROOT,
-    env: { ...inheritedEnv, UNIVERSE_E2E: '1', NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production' },
+    env: {
+      ...inheritedEnv,
+      UNIVERSE_E2E: '1',
+      NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production',
+      [ENABLED_EXTENSIONS_ENV]: '',
+    },
   })
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
@@ -74,6 +81,9 @@ async function launchWithState(userDataDir: string) {
 
 test.describe('@regression terminal restore', () => {
   test('restores exactly the persisted terminals when panel + terminal view were active', async () => {
+    // Self-launched cold boot: leave room for the graceful-close + force-kill
+    // teardown under full-suite parallel load (see smoke.viewSizes).
+    test.setTimeout(120_000)
     test.slow()
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-term-restore-'))
 

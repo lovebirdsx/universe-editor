@@ -69,8 +69,11 @@ const CLOSE_TIMEOUT_MS = 10_000
 // Kill the Electron process AND every descendant. `taskkill /pid <root> /T`
 // only works while the root is still alive; by teardown the main process has
 // often already exited (exitCode 0) leaving orphaned children whose parent PID
-// no longer resolves. So on Windows we enumerate the descendant tree ourselves
-// (via WMIC/CIM) starting from the root PID and kill each survivor by PID.
+// no longer resolves. So on Windows we pull the whole process table in ONE
+// CIM query and walk the parent→child graph in JS. (An earlier variant
+// recursed with one Get-CimInstance call per descendant; under full-suite load
+// the compounded WMI latency blew the timeout, the catch fell back to a /T on
+// the already-dead root, and nothing got killed — the CDP pipe stayed open.)
 // Non-Windows: a parent SIGKILL suffices (the orphan bug is Windows-only).
 function forceKillTree(pid: number): void {
   if (process.platform !== 'win32') {
@@ -81,21 +84,35 @@ function forceKillTree(pid: number): void {
     }
     return
   }
-  // Collect descendant PIDs first (root may already be dead, so /T is unreliable).
   const pids = new Set<number>([pid])
   try {
-    const script =
-      `$ErrorActionPreference='SilentlyContinue';` +
-      `function t($p){Get-CimInstance Win32_Process -Filter "ParentProcessId=$p"|` +
-      `ForEach-Object{$_.ProcessId; t $_.ProcessId}}; t ${pid}`
-    const out = execFileSync('powershell', ['-NoProfile', '-Command', script], {
-      encoding: 'utf8',
-      timeout: 5_000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
+    const out = execFileSync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-Command',
+        `$ErrorActionPreference='SilentlyContinue';` +
+          `Get-CimInstance Win32_Process|ForEach-Object{'{0} {1}' -f $_.ProcessId,$_.ParentProcessId}`,
+      ],
+      { encoding: 'utf8', timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'] },
+    )
+    const children = new Map<number, number[]>()
     for (const line of out.split(/\r?\n/)) {
-      const n = Number(line.trim())
-      if (Number.isInteger(n) && n > 0) pids.add(n)
+      const [child, parent] = line.trim().split(/\s+/).map(Number)
+      if (!Number.isInteger(child) || !Number.isInteger(parent)) continue
+      const siblings = children.get(parent!) ?? []
+      siblings.push(child!)
+      children.set(parent!, siblings)
+    }
+    const queue = [pid]
+    while (queue.length > 0) {
+      const current = queue.pop()!
+      for (const child of children.get(current) ?? []) {
+        if (!pids.has(child)) {
+          pids.add(child)
+          queue.push(child)
+        }
+      }
     }
   } catch {
     // Enumeration failed — fall back to a best-effort /T on the root below.
@@ -115,32 +132,74 @@ function forceKillTree(pid: number): void {
   }
 }
 
-// Sweep ORPHANED language-server processes the tree walk above cannot reach. The
-// typescript built-in plugin spawns a `typescript-language-server` CLI, which
-// forks tsserver. On graceful shutdown that CLI reaps its own tsserver — but a
-// semantic server that was still spawning at kill time gets DETACHED from the
-// tree (its parent CLI dies first), so `forceKillTree` (descendants of the app
-// root only) never sees it. Left alive it holds an inherited pipe open and wedges
-// `app.close()` past the worker-teardown budget. Here we find every electron.exe
-// running our vendored tsserver/CLI whose PARENT no longer exists (a true orphan)
-// and kill it. Cross-worker-safe: a still-running worker's servers have a live
-// parent, so they never match the dead-parent filter.
-function killOrphanedLanguageServers(): void {
+// Sweep ORPHANED descendants the tree walk above cannot reach: the walk
+// follows live ParentProcessId links, so a child whose intermediate parent
+// died first (renderer → ConPTY host, CLI → forked tsserver, codex CLI →
+// `where git` probe, …) is invisible from the root. Left alive such a process
+// holds an inherited pipe open and wedges `app.close()` past the worker-
+// teardown budget. Match by (name, commandline) fingerprints of processes OUR
+// app tree is known to spawn, and only kill when the PARENT no longer exists
+// (a true orphan). Cross-worker-safe: a still-running worker's processes have
+// a live parent, so they never match the dead-parent filter.
+//   - electron.exe helpers / vendored tsserver+LSP CLIs
+//   - node/electron running the vendored ACP agents (codex-acp,
+//     claude-agent-acp) — the agent re-spawns itself, so the respawned
+//     grandchild survives the app's own taskkill /T
+//   - probe processes those agents shell out to and leak when wedged:
+//     `where <tool>` lookups, `wmic baseboard` fingerprinting, and conhost
+//     corpses (a dead-parent conhost's console app is gone — headless ConPTY
+//     hosts and plain `0x4` hosts alike are pure leftovers)
+function killOrphanedElectronProcesses(): void {
   if (process.platform !== 'win32') return
   try {
     const script =
       `$ErrorActionPreference='SilentlyContinue';` +
-      `$targets=Get-CimInstance Win32_Process -Filter "Name='electron.exe'"|` +
-      `Where-Object{$_.CommandLine -match 'tsserver\\.js|typescript-language-server'};` +
-      `foreach($t in $targets){` +
-      `if(-not(Get-CimInstance Win32_Process -Filter "ProcessId=$($t.ParentProcessId)")){` +
-      `Stop-Process -Id $t.ProcessId -Force}}`
+      `$procs=Get-CimInstance Win32_Process;` +
+      `$alive=@{};foreach($p in $procs){$alive[$p.ProcessId]=$true};` +
+      `foreach($p in $procs){` +
+      `if($alive[$p.ParentProcessId]){continue};` +
+      `$n=$p.Name;$cl=[string]$p.CommandLine;` +
+      `$hit=$false;` +
+      `if($n -eq 'electron.exe' -and $cl -match '--type=|tsserver\\.js|typescript-language-server'){$hit=$true}` +
+      `elseif(($n -eq 'node.exe' -or $n -eq 'electron.exe') -and $cl -match 'codex-acp|claude-agent-acp'){$hit=$true}` +
+      `elseif($n -eq 'where.exe' -and $cl -match 'git|codex|claude'){$hit=$true}` +
+      `elseif($n -eq 'conhost.exe'){$hit=$true}` +
+      `elseif(($n -eq 'WMIC.exe' -or $n -eq 'cmd.exe') -and $cl -match 'wmic'){$hit=$true};` +
+      `if($hit){Stop-Process -Id $p.ProcessId -Force}}`
     execFileSync('powershell', ['-NoProfile', '-Command', script], {
-      timeout: 5_000,
+      timeout: 10_000,
       stdio: 'ignore',
     })
   } catch {
     // Best-effort teardown hygiene — never fail a passing test over cleanup.
+  }
+}
+
+// Diagnostic for the "CDP pipe still open after force-kill" path: print every
+// process that could plausibly hold an inherited pipe handle — dead-parent
+// orphans plus anything from our spawn ecosystem — with pid/ppid/name/cmdline.
+// Post-mortem scans miss the culprit (wedged probes eventually exit on their
+// own), so this must run at the moment the pipe is stuck.
+function dumpSuspectProcesses(): void {
+  if (process.platform !== 'win32') return
+  try {
+    const script =
+      `$ErrorActionPreference='SilentlyContinue';` +
+      `$procs=Get-CimInstance Win32_Process;` +
+      `$alive=@{};foreach($p in $procs){$alive[$p.ProcessId]=$true};` +
+      `foreach($p in $procs){` +
+      `$n=$p.Name;$dead=-not $alive[$p.ParentProcessId];` +
+      `if($dead -or $n -match 'electron|node|git|where|wsl|conhost|cmd|powershell|WMIC'){` +
+      `$cl=[string]$p.CommandLine;if($cl.Length -gt 180){$cl=$cl.Substring(0,180)};` +
+      `Write-Output ('{0} ppid={1}{2} {3} {4}' -f $p.ProcessId,$p.ParentProcessId,$(if($dead){'(dead)'}else{''}),$n,$cl)}}`
+    const out = execFileSync('powershell', ['-NoProfile', '-Command', script], {
+      encoding: 'utf8',
+      timeout: 15_000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+    console.warn(`[e2e] closeApp: process table at stuck-pipe time:\n${out.trimEnd()}`)
+  } catch {
+    // Diagnostics only.
   }
 }
 
@@ -180,10 +239,10 @@ export async function closeApp(app: ElectronApplication): Promise<void> {
       `[e2e] closeApp: graceful close still pending after ${CLOSE_TIMEOUT_MS}ms (pid=${pid}) — force-killing the process tree`,
     )
     forceKillTree(pid)
-    // The tree walk misses tsserver detached from the app root (its parent CLI
-    // was reaped first on graceful shutdown). Sweep those dead-parent orphans too,
+    // The tree walk misses processes detached from the app root (an
+    // intermediate parent died first). Sweep those dead-parent orphans too,
     // else they hold the pipe open and app.close() never resolves.
-    killOrphanedLanguageServers()
+    killOrphanedElectronProcesses()
 
     // Killing the orphans EOFs the pipe → the pending close() resolves. Wait
     // briefly so Playwright's connection is fully torn down before the worker
@@ -193,12 +252,27 @@ export async function closeApp(app: ElectronApplication): Promise<void> {
       new Promise<boolean>((res) => setTimeout(() => res(true), 3_000)),
     ])
     if (stillOpen) {
-      // The smoking gun for a future "Worker teardown timeout": something the
-      // tree walk cannot reach is holding inherited handles. Hunt it with a
-      // dead-parent process scan (see skill fix-ci-e2e-flake, case 45).
+      // Something unreachable (a stray process that inherited the pipe's child
+      // end during a concurrent spawn) is keeping EOF from ever arriving. We
+      // don't need it: Node fires the child's 'close' event once every
+      // PARENT-side stdio stream is closed, and those are ours to destroy.
+      // The tree is already force-killed, so tearing the streams down is safe
+      // and lets the pending close() (and the worker teardown waiting on it)
+      // resolve instead of blowing the 30s worker-teardown budget.
       console.warn(
-        `[e2e] closeApp: CDP pipe still open after force-kill (pid=${pid}) — an unreachable orphan is holding inherited handles`,
+        `[e2e] closeApp: CDP pipe still open after force-kill (pid=${pid}) — destroying parent-side stdio to unblock close()`,
       )
+      dumpSuspectProcesses()
+      for (const stream of proc.stdio) stream?.destroy()
+      const unblocked = await Promise.race([
+        closePromise,
+        new Promise<boolean>((res) => setTimeout(() => res(true), 3_000)),
+      ])
+      if (unblocked) {
+        // Playwright's transport still notices the dead pipe and tears down
+        // without blowing the worker budget — this line is just breadcrumbs.
+        console.warn(`[e2e] closeApp: close() still pending after stdio destroy (pid=${pid})`)
+      }
     }
   }
 }

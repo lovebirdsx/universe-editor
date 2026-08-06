@@ -13,6 +13,7 @@ import { test, expect, _electron as electron } from '@playwright/test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { ENABLED_EXTENSIONS_ENV, INITIAL_SETTINGS } from '@universe-editor/e2e-harness'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
@@ -22,11 +23,7 @@ const EXPLORER_CONTAINER = 'workbench.view.explorer'
 const HEADER_H = 28
 
 function seedUserSettings(userDataDir: string): void {
-  writeFileSync(
-    join(userDataDir, 'settings.json'),
-    JSON.stringify({ 'workbench.language': 'en-US', 'update.mode': 'manual' }, null, 2),
-    'utf8',
-  )
+  writeFileSync(join(userDataDir, 'settings.json'), INITIAL_SETTINGS, 'utf8')
 }
 
 function fsPathToUriComponents(fsPath: string) {
@@ -66,7 +63,15 @@ async function launchWithState(userDataDir: string) {
   const app = await electron.launch({
     args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     cwd: APP_ROOT,
-    env: { ...inheritedEnv, UNIVERSE_E2E: '1', NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production' },
+    env: {
+      ...inheritedEnv,
+      UNIVERSE_E2E: '1',
+      NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production',
+      // Core-only baseline (same as the fixtures): view-pane sizing needs no
+      // extensions, and skipping the LSP hosts avoids the orphaned child
+      // processes that wedge app.close() past its graceful window.
+      [ENABLED_EXTENSIONS_ENV]: '',
+    },
   })
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
@@ -90,6 +95,10 @@ async function waitForPanes(page: import('@playwright/test').Page): Promise<void
 
 test.describe('@p0 view pane sizes', () => {
   test('collapse + expand restores both panes to their previous sizes', async () => {
+    // Self-launched cold boot; under full-suite parallel load the teardown's
+    // graceful-close + force-kill recovery alone can eat ~20s — the default
+    // 30s ceiling is too tight (the assertions themselves finish in seconds).
+    test.setTimeout(120_000)
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-viewsize-'))
     const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-viewsize-'))
     try {
@@ -143,6 +152,7 @@ test.describe('@p0 view pane sizes', () => {
   })
 
   test('sash-dragged sizes survive a window reload', async () => {
+    test.setTimeout(120_000)
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-viewsize2-'))
     const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-viewsize2-'))
     try {

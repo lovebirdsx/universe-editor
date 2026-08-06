@@ -18,11 +18,13 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import {
+  INITIAL_SETTINGS,
   WorkbenchPO,
   closeApp,
   expectNoLeaks,
   launchApp,
   resolveEditorBuild,
+  seedBaselineUserData,
   waitForProbe,
 } from '@universe-editor/e2e-harness'
 
@@ -233,12 +235,12 @@ export const test = base.extend<SwarmFixtures>({
     })
     const baseUrl = await waitForPortfile(portfile)
 
+    seedBaselineUserData(userDataDir)
     writeFileSync(
       join(userDataDir, 'settings.json'),
       JSON.stringify(
         {
-          'workbench.language': 'en-US',
-          'update.mode': 'manual',
+          ...JSON.parse(INITIAL_SETTINGS),
           'perforce.swarm.enabled': true,
           'perforce.swarm.url': baseUrl,
           'perforce.swarm.apiVersion': 'v9',
@@ -250,11 +252,6 @@ export const test = base.extend<SwarmFixtures>({
         null,
         2,
       ),
-      'utf8',
-    )
-    writeFileSync(
-      join(userDataDir, 'state.json'),
-      JSON.stringify({ 'welcome.agentOnboarding.seen': true }, null, 2),
       'utf8',
     )
 

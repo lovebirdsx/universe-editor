@@ -21,7 +21,12 @@ import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { closeApp, expectNoLeaks, evaluateWhenRestored } from '@universe-editor/e2e-harness'
+import {
+  closeApp,
+  expectNoLeaks,
+  evaluateWhenRestored,
+  seedBaselineUserData,
+} from '@universe-editor/e2e-harness'
 import { launchAiApp } from '../fixtures/aiApp.js'
 
 const GENERATED_MESSAGE = 'feat: add greeting'
@@ -67,16 +72,7 @@ test.describe('@p0 ai commit message generation', () => {
     const ollama = await startMockOllama()
 
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-aigen-'))
-    writeFileSync(
-      join(userDataDir, 'settings.json'),
-      JSON.stringify({ 'workbench.language': 'en-US', 'update.mode': 'manual' }, null, 2),
-      'utf8',
-    )
-    writeFileSync(
-      join(userDataDir, 'state.json'),
-      JSON.stringify({ 'welcome.agentOnboarding.seen': true }, null, 2),
-      'utf8',
-    )
+    seedBaselineUserData(userDataDir)
     // Point the Ollama provider group at the mock server via aiSettings.json (the
     // config dir defaults to userData). commitMessage.modelId stays empty so
     // resolveModelId auto-picks the first available model.

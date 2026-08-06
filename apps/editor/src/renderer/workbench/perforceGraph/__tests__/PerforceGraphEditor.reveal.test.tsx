@@ -50,7 +50,9 @@ function resultWith(changes: P4GraphChangeDto[], moreAvailable: boolean): P4Grap
   }
 }
 
-function renderEditor(getChanges: (options: { maxChanges?: number }) => P4GraphLoadResult) {
+function renderEditor(
+  getChanges: (options: { maxChanges?: number }) => P4GraphLoadResult | Promise<P4GraphLoadResult>,
+) {
   const executeCommand = vi.fn(async (id: string, arg?: { maxChanges?: number }) => {
     switch (id) {
       case PerforceGraphCommands.getChanges:
@@ -209,6 +211,35 @@ describe('PerforceGraphEditor reveal', () => {
     await flush()
 
     expect(perforceGraphViewState.pendingReveal).toBeNull()
+    expect(perforceGraphViewState.selection).toEqual(['4521'])
+  })
+
+  it('keeps the reveal selection when the initial load resolves after the reveal', async () => {
+    // First getChanges call (the initial load) stays pending until released;
+    // any later call (the reveal's own paging) resolves immediately.
+    let releaseInitialLoad: (() => void) | undefined
+    let call = 0
+    renderEditor(async () => {
+      if (++call === 1) await new Promise<void>((r) => (releaseInitialLoad = r))
+      return resultWith([change('4521', 'Fix widget')], false)
+    })
+    await flush()
+    expect(releaseInitialLoad).toBeDefined()
+
+    // Reveal arrives while the initial load is still in flight (the action
+    // calls revealCommit right after openEditor resolves).
+    await act(async () => {
+      perforceGraphViewState.revealCommit?.('4521')
+      await flush()
+    })
+
+    // The late initial load lands afterwards; its "fresh load" selection
+    // reset must not clobber the reveal.
+    await act(async () => {
+      releaseInitialLoad?.()
+      await flush()
+    })
+
     expect(perforceGraphViewState.selection).toEqual(['4521'])
   })
 })

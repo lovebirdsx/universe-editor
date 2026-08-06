@@ -660,6 +660,15 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   // silently no-op, matching reveal semantics elsewhere).
   const revealCommit = useCallback(
     (hash: string) => {
+      // Requested while the initial load is still in flight (the bridge action
+      // calls in right after openEditor resolves): queue it instead of racing
+      // that load — the load's "fresh load" continuation resets the selection,
+      // which would clobber a reveal whose own fetch resolved first. The
+      // pendingReveal effect consumes the queue once the first page lands.
+      if (result === null) {
+        gitGraphViewState.pendingReveal = hash
+        return
+      }
       void (async () => {
         revealingRef.current = true
         try {

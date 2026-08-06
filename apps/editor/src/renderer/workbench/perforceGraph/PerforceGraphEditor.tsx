@@ -435,6 +435,15 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   // page cap (unknown id → silently no-op).
   const revealCommit = useCallback(
     (id: string) => {
+      // Requested while the initial load is still in flight (the bridge action
+      // calls in right after openEditor resolves): queue it instead of racing
+      // that load — the load's "fresh load" continuation resets the selection,
+      // which would clobber a reveal whose own fetch resolved first. The
+      // pendingReveal effect consumes the queue once the first page lands.
+      if (result === null) {
+        perforceGraphViewState.pendingReveal = id
+        return
+      }
       void (async () => {
         revealingRef.current = true
         try {
