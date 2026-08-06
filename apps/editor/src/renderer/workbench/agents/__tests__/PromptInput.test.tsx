@@ -1100,6 +1100,81 @@ describe('PromptInput — @-mention popover', () => {
     expect(screen.getByTestId('acp-slash-popover')).toBeTruthy()
     expect(screen.queryByTestId('acp-mention-popover')).toBeNull()
   })
+
+  it('falls back to a scored search for files outside a truncated listing', async () => {
+    // 预热清单被截断（limitHit）：iaction.ts 不在缓存子集里，只有兜底的主进程
+    // 打分搜索（带 pattern、非 matchAll）能找到它。
+    const calls: Array<{ pattern: string; matchAll: boolean | undefined }> = []
+    const fileSearch: IFileSearchServiceType = {
+      _serviceBrand: undefined,
+      async search(query) {
+        calls.push({ pattern: query.pattern, matchAll: query.matchAll })
+        const paths = query.matchAll
+          ? ['/repo/src/main.ts']
+          : ['/repo/deep/nested/iaction.ts'].filter((p) => p.includes(query.pattern))
+        return {
+          results: paths.map((abs) => {
+            const rel = abs.slice('/repo/'.length)
+            return {
+              resource: URI.file(abs),
+              fsPath: abs,
+              relativePath: rel,
+              basename: rel.split('/').pop() ?? rel,
+              score: 100,
+            }
+          }),
+          limitHit: query.matchAll === true,
+          filesWalked: paths.length,
+          directoriesWalked: 1,
+          durationMs: 0,
+          ...(query.matchAll === true ? { stopReason: 'maxResults' as const } : {}),
+        }
+      },
+    }
+    renderWithServices(<PromptInput session={makeSession()} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      fileSearch,
+    })
+    const ta = getTextarea()
+    typeAt(ta, '@')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    typeAt(ta, '@iaction')
+    // 兜底带 150ms 防抖 + 异步搜索，等它落地补进候选。
+    await waitFor(() => {
+      const options = screen.getAllByRole('option')
+      expect(options.some((o) => o.textContent?.includes('iaction.ts'))).toBe(true)
+    })
+    expect(calls.some((c) => c.matchAll !== true && c.pattern === 'iaction')).toBe(true)
+  })
+
+  it('never runs the fallback search when the listing is complete', async () => {
+    const calls: Array<boolean | undefined> = []
+    const base = makeFileSearch(FILES)
+    const fileSearch: IFileSearchServiceType = {
+      _serviceBrand: undefined,
+      async search(query, token) {
+        calls.push(query.matchAll)
+        return base.search(query, token)
+      },
+    }
+    renderWithServices(<PromptInput session={makeSession()} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      fileSearch,
+    })
+    const ta = getTextarea()
+    typeAt(ta, '@')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    typeAt(ta, '@main')
+    // 给足防抖窗口：完整清单不应触发任何带 pattern 的兜底搜索。
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 250))
+    })
+    expect(calls).toEqual([true])
+  })
 })
 
 // ---------------------------------------------------------------------------

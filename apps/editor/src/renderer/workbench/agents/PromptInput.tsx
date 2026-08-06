@@ -28,6 +28,7 @@ import {
   type MutableRefObject,
 } from 'react'
 import {
+  CancellationTokenSource,
   IConfigurationService,
   IContextKeyService,
   IFileDialogService,
@@ -185,6 +186,10 @@ export function PromptInput({
   )
   const [files, setFiles] = useState<readonly MentionFileEntry[]>([])
   const [filesLoading, setFilesLoading] = useState(false)
+  // False when the warm-up walk was truncated (listing is a subset of the
+  // workspace) — mentions then also run a per-keystroke fallback search.
+  const [filesComplete, setFilesComplete] = useState(true)
+  const [mentionFallback, setMentionFallback] = useState<readonly MentionFileEntry[]>([])
   const [hashSuggestions, setHashSuggestions] = useState<{
     readonly symbol: readonly ContextSuggestionItem[]
     readonly scmChange: readonly ContextSuggestionItem[]
@@ -206,6 +211,8 @@ export function PromptInput({
   // Guards the hash-suggestions fetch effect against out-of-order async
   // resolution (a slow symbol query landing after a newer one started).
   const hashSeqRef = useRef(0)
+  // Same guard for the truncated-listing mention fallback search.
+  const mentionFallbackSeqRef = useRef(0)
   const contextProvidersRef = useRef<{
     readonly symbol: WorkspaceSymbolContextProvider
     readonly scmChange: ScmChangeContextProvider
@@ -635,15 +642,68 @@ export function PromptInput({
       dirNames: exclude.getDirNameIgnores(),
       excludeGlobs: exclude.getSearchExcludeGlobs(),
     })
-      .then((listing) => setFiles(listing.entries))
+      .then((listing) => {
+        setFiles(listing.entries)
+        setFilesComplete(listing.complete)
+      })
       .catch(() => setFiles([]))
       .finally(() => setFilesLoading(false))
   }, [mentionQuery, files.length, filesLoading, workspaceRoot, fileSearch, exclude])
 
-  const mentionMatches = useMemo<readonly MentionFileEntry[]>(
-    () => (mentionQuery === null ? [] : filterMentionFiles(files, mentionQuery.query)),
-    [files, mentionQuery],
-  )
+  // Truncated-listing fallback (mirrors quick open's): the cached listing is an
+  // arbitrary subset of the workspace, so relying on it alone would make every
+  // file outside it un-mentionable. Debounced per keystroke like the symbol
+  // search; a superseding query cancels the in-flight walk.
+  useEffect(() => {
+    if (filesComplete || mentionQuery === null || mentionQuery.query.length === 0) {
+      setMentionFallback((prev) => (prev.length === 0 ? prev : []))
+      return
+    }
+    if (!workspaceRoot) return
+    const seq = ++mentionFallbackSeqRef.current
+    const cts = new CancellationTokenSource()
+    const timer = setTimeout(() => {
+      fileSearch
+        .search(
+          {
+            root: workspaceRoot,
+            pattern: mentionQuery.query,
+            maxResults: 30,
+            ignore: exclude.getDirNameIgnores(),
+            excludes: exclude.getSearchExcludeGlobs(),
+          },
+          cts.token,
+        )
+        .then((complete) => {
+          if (seq !== mentionFallbackSeqRef.current) return
+          setMentionFallback(
+            complete.results.map((m) => ({
+              uri: m.resource.toString(),
+              relPath: m.relativePath,
+              name: m.basename,
+            })),
+          )
+        })
+        .catch(() => undefined)
+    }, 150)
+    return () => {
+      clearTimeout(timer)
+      cts.dispose(true)
+    }
+  }, [filesComplete, mentionQuery, workspaceRoot, fileSearch, exclude])
+
+  const mentionMatches = useMemo<readonly MentionFileEntry[]>(() => {
+    if (mentionQuery === null) return []
+    const local = filterMentionFiles(files, mentionQuery.query)
+    if (mentionFallback.length === 0) return local
+    // Re-rank the union so fallback hits interleave by the same scoring
+    // instead of dangling at the tail (both sets are ≤30 entries — cheap).
+    const seen = new Set(local.map((e) => e.uri))
+    return filterMentionFiles(
+      [...local, ...mentionFallback.filter((e) => !seen.has(e.uri))],
+      mentionQuery.query,
+    )
+  }, [files, mentionQuery, mentionFallback])
   // Only open when there's actually a workspace to search — without one we
   // have nothing to suggest, so the popover (including its "Scanning files…"
   // and "No matching files" states) would be pure noise.
