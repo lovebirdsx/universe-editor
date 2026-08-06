@@ -183,21 +183,29 @@ function killOrphanedElectronProcesses(): void {
 function dumpSuspectProcesses(): void {
   if (process.platform !== 'win32') return
   try {
+    // Only lines with diagnostic value: anything from OUR ecosystem (command
+    // line mentions the repo / userData temp dirs, both contain
+    // "universe-editor"), plus dead-parent orphans whose name matches our
+    // known leak fingerprints. Unrelated desktop software and Docker's WSL
+    // fleet dominated earlier full dumps without ever being the culprit.
     const script =
       `$ErrorActionPreference='SilentlyContinue';` +
       `$procs=Get-CimInstance Win32_Process;` +
       `$alive=@{};foreach($p in $procs){$alive[$p.ProcessId]=$true};` +
       `foreach($p in $procs){` +
       `$n=$p.Name;$dead=-not $alive[$p.ParentProcessId];` +
-      `if($dead -or $n -match 'electron|node|git|where|wsl|conhost|cmd|powershell|WMIC'){` +
-      `$cl=[string]$p.CommandLine;if($cl.Length -gt 180){$cl=$cl.Substring(0,180)};` +
+      `$cl=[string]$p.CommandLine;` +
+      `$ours=$cl -match 'universe-editor';` +
+      `$fp=$dead -and $n -match 'electron|node|git|where|wsl|conhost|WMIC';` +
+      `if($ours -or $fp){` +
+      `if($cl.Length -gt 180){$cl=$cl.Substring(0,180)};` +
       `Write-Output ('{0} ppid={1}{2} {3} {4}' -f $p.ProcessId,$p.ParentProcessId,$(if($dead){'(dead)'}else{''}),$n,$cl)}}`
     const out = execFileSync('powershell', ['-NoProfile', '-Command', script], {
       encoding: 'utf8',
       timeout: 15_000,
       stdio: ['ignore', 'pipe', 'ignore'],
     })
-    console.warn(`[e2e] closeApp: process table at stuck-pipe time:\n${out.trimEnd()}`)
+    console.warn(`[e2e] closeApp: suspect processes at stuck-pipe time:\n${out.trimEnd()}`)
   } catch {
     // Diagnostics only.
   }
