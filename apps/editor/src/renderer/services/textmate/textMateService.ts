@@ -46,7 +46,11 @@ export interface ITextMateService {
    * package finished initializing (standalone services lock on first use).
    */
   initialize(monaco: {
-    languages: { getEncodedLanguageId(languageId: string): number }
+    languages: {
+      getEncodedLanguageId(languageId: string): number
+      getLanguages(): readonly { id: string }[]
+      register(language: { id: string }): void
+    }
     editor: { getModels(): readonly { getLanguageId(): string }[] }
   }): Promise<void>
 
@@ -88,6 +92,7 @@ export class TextMateService extends Disposable implements ITextMateService {
   private readonly _logger: ILogger
   private _monaco: IMonacoTokenizationBindings | undefined
   private _encodeLanguageId: ((languageId: string) => number) | undefined
+  private _registerMonacoLanguage: ((languageId: string) => void) | undefined
   private _registrations: DisposableStore | undefined
   private _grammarFactory: TMGrammarFactory | undefined
   private _pendingTheme: { theme: IRawTheme; colorMap: string[] } | undefined
@@ -117,7 +122,11 @@ export class TextMateService extends Disposable implements ITextMateService {
   }
 
   async initialize(monaco: {
-    languages: { getEncodedLanguageId(languageId: string): number }
+    languages: {
+      getEncodedLanguageId(languageId: string): number
+      getLanguages(): readonly { id: string }[]
+      register(language: { id: string }): void
+    }
     editor: { getModels(): readonly { getLanguageId(): string }[] }
   }): Promise<void> {
     if (this._monaco !== undefined) {
@@ -129,6 +138,19 @@ export class TextMateService extends Disposable implements ITextMateService {
       LazyTokenizationSupport: languages.LazyTokenizationSupport,
     }
     this._encodeLanguageId = (languageId) => monaco.languages.getEncodedLanguageId(languageId)
+    // Monaco's createModel falls back to plaintext for language ids its own
+    // registry doesn't know (LanguageService._createAndGetLanguageIdentifier),
+    // which would silently un-tokenize grammar-only languages like toml. The
+    // selection re-evaluates on language registration, so models already open
+    // switch over once we register the id here.
+    const knownLanguages = new Set(monaco.languages.getLanguages().map((l) => l.id))
+    this._registerMonacoLanguage = (languageId) => {
+      if (knownLanguages.has(languageId)) {
+        return
+      }
+      knownLanguages.add(languageId)
+      monaco.languages.register({ id: languageId })
+    }
     this._register(this.grammarRegistry.onDidChangeGrammars(() => this._rebuildRegistrations()))
     this._register(
       languages.TokenizationRegistry.onDidChange((e) => {
@@ -197,6 +219,7 @@ export class TextMateService extends Disposable implements ITextMateService {
         continue
       }
       seenLanguages.add(monacoLanguageId)
+      this._registerMonacoLanguage?.(monacoLanguageId)
       const lazySupport = new monaco.LazyTokenizationSupport(() =>
         this._createTokenizationSupport(monacoLanguageId, definition),
       )

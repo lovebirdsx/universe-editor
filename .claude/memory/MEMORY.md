@@ -57,6 +57,7 @@
 - [Peek 预览面板 blank](peek-preview-blank-embedded-automaticlayout.md) — .preview.inline 与 automaticLayout 死锁；CSS 填满 slot 断环
 - [最大化重启二级侧栏宽度重置](secondary-sidebar-maximize-restart-width-reset.md) — allotment 回调读 props 走 ref；宽度只在 onDragEnd 持久化
 - [agent shell 的 ELECTRON_RUN_AS_NODE](agent-shell-electron-run-as-node.md) — 跑 electron/pnpm dev 前必须 unset，否则 ESM 主进程必崩
+- [纯语法语言 plaintext 回退无高亮](textmate-grammar-only-language-plaintext-fallback.md) — createModel 对未注册语言 id 静默回退 plaintext；TextMateService.initialize 补 register 自愈
 
 ## 打包 / 构建
 

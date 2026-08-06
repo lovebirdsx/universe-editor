@@ -56,8 +56,11 @@ describe('languageForResource', () => {
     expect(lang('/proj/RENDERER.LOG')).toBe('log')
   })
 
-  it('keeps TOML as plaintext (Monaco has no TOML grammar)', () => {
-    expect(lang('/proj/Cargo.toml')).toBe('plaintext')
+  it('maps TOML files to the toml language', () => {
+    expect(lang('/proj/Cargo.toml')).toBe('toml')
+    expect(lang('/proj/Cargo.lock')).toBe('toml')
+    expect(lang('/proj/Pipfile')).toBe('toml')
+    expect(lang('/proj/poetry.lock')).toBe('toml')
   })
 
   it('falls back to plaintext for unknown or extension-less files', () => {

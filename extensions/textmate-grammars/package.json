@@ -336,6 +336,11 @@
         "language": "xsl",
         "scopeName": "text.xml.xsl",
         "path": "./syntaxes/xsl.tmLanguage.json"
+      },
+      {
+        "language": "toml",
+        "scopeName": "source.toml",
+        "path": "./syntaxes/toml.tmLanguage.json"
       }
     ]
   },

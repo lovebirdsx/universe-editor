@@ -29,11 +29,9 @@ const LANG_BY_EXT: Record<string, string> = {
   '.yml': 'yaml',
   '.ini': 'ini',
   '.properties': 'ini',
+  '.toml': 'toml',
   '.graphql': 'graphql',
   '.gql': 'graphql',
-  // Monaco has no TOML grammar; keep it readable as plaintext rather than
-  // mis-highlighting it as ini.
-  '.toml': 'plaintext',
 
   // web / scripting
   '.ts': 'typescript',
@@ -121,6 +119,9 @@ const LANG_BY_FILENAME: Record<string, string> = {
   '.gitattributes': 'ini',
   '.gitconfig': 'ini',
   '.editorconfig': 'ini',
+  'cargo.lock': 'toml',
+  pipfile: 'toml',
+  'poetry.lock': 'toml',
 }
 
 export function languageForResource(resource: URI): string {
