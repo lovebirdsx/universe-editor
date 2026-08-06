@@ -21,6 +21,7 @@ const EMPTY_METRICS: IStartupMetrics = {
   totalTime: 0,
   phases: [],
   marks: [],
+  isReload: false,
 }
 
 function timerStub(metrics: IStartupMetrics = EMPTY_METRICS): ITimerService {
