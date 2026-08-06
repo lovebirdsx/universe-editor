@@ -152,6 +152,8 @@ type IpcMessage =
   | UnsubscribeMessage
   | CancelMessage
 
+export type { IpcMessage }
+
 /**
  * Rejection reason for any request still pending when a {@link ChannelClient} is
  * disposed (e.g. its window closed). Named so callers can distinguish a torn-down
@@ -273,12 +275,20 @@ export class ChannelClient extends Disposable implements IChannelClient {
   // flag them — dispose() below still clears them with the pending requests.
   private readonly _inflightCancelListeners = markAsSingleton(new DisposableStore())
 
-  constructor(private readonly _protocol: IMessagePassingProtocol) {
+  constructor(
+    private readonly _protocol: IMessagePassingProtocol,
+    autoDispatch = true,
+  ) {
     super()
-    this._register(_protocol.onMessage((data) => this._handleMessage(decode(data))))
+    // A ChannelPair shares the protocol with a ChannelServer and dispatches
+    // decoded messages itself — decoding every frame twice on multi-MB payloads
+    // is exactly the main-thread stall the pair exists to avoid.
+    if (autoDispatch) {
+      this._register(_protocol.onMessage((data) => this.handleMessage(decode(data))))
+    }
   }
 
-  private _handleMessage(msg: IpcMessage): void {
+  handleMessage(msg: IpcMessage): void {
     if (msg.type === 'response') {
       const pending = this._pendingRequests.get(msg.id)
       if (pending) {
@@ -393,16 +403,21 @@ export class ChannelServer extends Disposable implements IChannelServer {
   private readonly _eventSubscriptions = new Map<string, IDisposable>()
   private readonly _pendingCancellations = new Map<number, CancellationTokenSource>()
 
-  constructor(private readonly _protocol: IMessagePassingProtocol) {
+  constructor(
+    private readonly _protocol: IMessagePassingProtocol,
+    autoDispatch = true,
+  ) {
     super()
-    this._register(_protocol.onMessage((data) => this._handleMessage(decode(data))))
+    if (autoDispatch) {
+      this._register(_protocol.onMessage((data) => this.handleMessage(decode(data))))
+    }
   }
 
   registerChannel(channelName: string, channel: IChannel): void {
     this._channels.set(channelName, channel)
   }
 
-  private _handleMessage(msg: IpcMessage): void {
+  handleMessage(msg: IpcMessage): void {
     if (msg.type === 'request') {
       this._handleRequest(msg)
     } else if (msg.type === 'subscribe') {
@@ -504,6 +519,41 @@ export class ChannelServer extends Disposable implements IChannelServer {
 }
 
 /**
+ * Client + server sharing one full-duplex protocol with a SINGLE decode per
+ * frame. Wiring a standalone ChannelClient AND ChannelServer onto the same
+ * protocol makes both sides JSON-parse every incoming message only for one of
+ * them to discard it — on multi-MB frames (language-service responses crossing
+ * the extension-host tunnel) that doubles the main-thread stall. The pair
+ * decodes once and routes by message type instead.
+ *
+ * `decodeInstrument` optionally wraps each decode so the embedder can attribute
+ * its wall time (e.g. the renderer records a perf phase for slow decodes).
+ */
+export class ChannelPair extends Disposable {
+  readonly client: ChannelClient
+  readonly server: ChannelServer
+
+  constructor(
+    protocol: IMessagePassingProtocol,
+    decodeInstrument?: (run: () => IpcMessage) => IpcMessage,
+  ) {
+    super()
+    this.client = this._register(new ChannelClient(protocol, false))
+    this.server = this._register(new ChannelServer(protocol, false))
+    this._register(
+      protocol.onMessage((data) => {
+        const msg = decodeInstrument ? decodeInstrument(() => decode(data)) : decode(data)
+        if (msg.type === 'response' || msg.type === 'event') {
+          this.client.handleMessage(msg)
+        } else {
+          this.server.handleMessage(msg)
+        }
+      }),
+    )
+  }
+}
+
+/**
  * Helper: create a simple IChannel from a plain object of command handlers and events.
  */
 export function createChannelFromObject(obj: {
@@ -545,10 +595,14 @@ export class IpcService extends Disposable implements IIpcService {
   private readonly _client: ChannelClient
   private readonly _server: ChannelServer
 
-  constructor(protocol: IMessagePassingProtocol) {
+  constructor(
+    protocol: IMessagePassingProtocol,
+    decodeInstrument?: (run: () => IpcMessage) => IpcMessage,
+  ) {
     super()
-    this._client = this._register(new ChannelClient(protocol))
-    this._server = this._register(new ChannelServer(protocol))
+    const pair = this._register(new ChannelPair(protocol, decodeInstrument))
+    this._client = pair.client
+    this._server = pair.server
   }
 
   getChannel(channelName: string): IChannel {

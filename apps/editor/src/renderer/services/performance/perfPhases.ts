@@ -20,16 +20,23 @@ export interface PerfSample {
 const MAX_PHASE_SAMPLES = 256
 const phaseSamples: PerfSample[] = []
 
+/** Record a pre-measured sample. For high-frequency paths (e.g. per-IPC-message
+ *  decode) that must only report slow occurrences, so the ring buffer isn't
+ *  flooded with healthy sub-millisecond samples evicting useful phases. */
+export function pushPerfPhaseSample(name: string, startTime: number, duration: number): void {
+  phaseSamples.push({ name, startTime, duration })
+  if (phaseSamples.length > MAX_PHASE_SAMPLES) {
+    phaseSamples.splice(0, phaseSamples.length - MAX_PHASE_SAMPLES)
+  }
+}
+
 /** Run `fn`, recording its wall time under `name` for perf reports. */
 export function recordPerfPhase<T>(name: string, fn: () => T): T {
   const startTime = performance.now()
   try {
     return fn()
   } finally {
-    phaseSamples.push({ name, startTime, duration: performance.now() - startTime })
-    if (phaseSamples.length > MAX_PHASE_SAMPLES) {
-      phaseSamples.splice(0, phaseSamples.length - MAX_PHASE_SAMPLES)
-    }
+    pushPerfPhaseSample(name, startTime, performance.now() - startTime)
   }
 }
 
@@ -40,9 +47,22 @@ export async function recordPerfPhaseAsync<T>(name: string, fn: () => Promise<T>
   try {
     return await fn()
   } finally {
-    phaseSamples.push({ name, startTime, duration: performance.now() - startTime })
-    if (phaseSamples.length > MAX_PHASE_SAMPLES) {
-      phaseSamples.splice(0, phaseSamples.length - MAX_PHASE_SAMPLES)
+    pushPerfPhaseSample(name, startTime, performance.now() - startTime)
+  }
+}
+
+/** Instrument for ChannelPair/IpcService message decoding: records a perf phase
+ *  only when a single frame's decode blocked the main thread noticeably, so a
+ *  slow tab switch caused by a multi-MB RPC payload shows up attributed in the
+ *  tab-switch / interaction reports instead of as an anonymous long task. */
+export function slowDecodePhaseInstrument(name: string, minMs = 5): <T>(run: () => T) => T {
+  return (run) => {
+    const startTime = performance.now()
+    try {
+      return run()
+    } finally {
+      const duration = performance.now() - startTime
+      if (duration >= minMs) pushPerfPhaseSample(name, startTime, duration)
     }
   }
 }

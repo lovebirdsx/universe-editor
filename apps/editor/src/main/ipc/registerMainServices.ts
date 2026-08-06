@@ -6,8 +6,7 @@
 
 import { type BrowserWindow } from 'electron'
 import {
-  ChannelClient,
-  ChannelServer,
+  ChannelPair,
   combinedDisposable,
   type IDisposable,
   type IWindowsService,
@@ -44,8 +43,9 @@ export function bootstrapWindowIpc(
   windows: IWindowsService,
 ): WindowIpcBootstrap {
   const { protocol, disposable: protoDisposable } = createMainProtocolForWindow(win)
-  const server = new ChannelServer(protocol)
-  const client = new ChannelClient(protocol)
+  // One decode per frame, routed by message type (see ChannelPair).
+  const pair = new ChannelPair(protocol)
+  const { client, server } = pair
 
   server.registerChannel(ServiceChannels.Host, ProxyChannel.fromService(window.host))
   server.registerChannel(ServiceChannels.Storage, ProxyChannel.fromService(window.storage))
@@ -122,7 +122,7 @@ export function bootstrapWindowIpc(
   )
 
   return {
-    disposable: combinedDisposable(server, client, protoDisposable),
+    disposable: combinedDisposable(pair, protoDisposable),
     rendererLifecycle,
     rendererSessions,
   }

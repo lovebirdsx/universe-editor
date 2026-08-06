@@ -18,7 +18,7 @@
  * stdout for framing and then point every stdout-bound `console.*` at stderr.
  */
 import * as path from 'node:path'
-import { ChannelClient, ChannelServer, Emitter, ProxyChannel } from '@universe-editor/platform'
+import { ChannelPair, Emitter, ProxyChannel } from '@universe-editor/platform'
 import {
   ExtHostChannels,
   StdioFramingProtocol,
@@ -93,8 +93,9 @@ const transport: StdioTransport = {
 }
 
 const protocol = new StdioFramingProtocol(transport)
-const server = new ChannelServer(protocol)
-const client = new ChannelClient(protocol)
+// One decode per frame, routed by message type (see ChannelPair): a huge
+// didOpen/didChange from the renderer must not be JSON-parsed twice.
+const { client, server } = new ChannelPair(protocol)
 
 const mainThreadCommands = ProxyChannel.toService<IMainThreadCommands>(
   client.getChannel(ExtHostChannels.mainThreadCommands),

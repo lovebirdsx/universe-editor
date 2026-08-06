@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { IExtHostLanguages, ISemanticTokensLegend } from '@universe-editor/extensions-common'
-import type { Event } from '@universe-editor/platform'
+import type { DisposableStore, Event } from '@universe-editor/platform'
 import { MonacoLoader, type monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { PendingDocumentSync } from '../extensions/PendingDocumentSync.js'
 import type { IWorkspaceSymbolProvider } from './LanguageFeaturesService.js'
@@ -165,13 +165,59 @@ export function createSignatureHelpProxy(
   }
 }
 
+const PULL_CACHE_MAX_URIS = 8
+
+/**
+ * Version-keyed pull cache at the wire boundary. Symbol/lens payloads for a
+ * large file are multi-MB JSON frames, and every consumer that re-attaches a
+ * model (tab switch → sticky scroll, outline, breadcrumbs, codelens) re-pulls
+ * them — decoding the same frame repeatedly stalls the renderer main thread.
+ * Sharing one in-flight/settled promise per (uri, model version) makes a
+ * switch back to an unchanged file wire-free. Empty and rejected results are
+ * never cached: providers legitimately return [] while their backing server
+ * is still starting, and consumers retry expecting a fresh pull.
+ */
+function createVersionedPullCache<T>(isEmpty: (value: T) => boolean) {
+  const cache = new Map<string, { versionId: number; promise: Promise<T> }>()
+  const pull = (model: monaco.editor.ITextModel, run: () => Promise<T>): Promise<T> => {
+    const key = model.uri.toString()
+    const versionId = model.getVersionId()
+    const hit = cache.get(key)
+    if (hit && hit.versionId === versionId) {
+      cache.delete(key)
+      cache.set(key, hit)
+      return hit.promise
+    }
+    const promise = run()
+    cache.delete(key)
+    cache.set(key, { versionId, promise })
+    promise.then(
+      (value) => {
+        if (isEmpty(value) && cache.get(key)?.promise === promise) cache.delete(key)
+      },
+      () => {
+        if (cache.get(key)?.promise === promise) cache.delete(key)
+      },
+    )
+    if (cache.size > PULL_CACHE_MAX_URIS) {
+      const oldest = cache.keys().next().value
+      if (oldest !== undefined) cache.delete(oldest)
+    }
+    return promise
+  }
+  return { pull, clear: () => cache.clear() }
+}
+
 export function createDocumentSymbolProxy(
   handle: number,
   extHost: IExtHostLanguages,
 ): monaco.languages.DocumentSymbolProvider {
+  const cache = createVersionedPullCache<monaco.languages.DocumentSymbol[]>((v) => v.length === 0)
   return {
-    provideDocumentSymbols: async (model) =>
-      documentSymbolsToMonaco(await extHost.$provideDocumentSymbols(handle, model.uri)),
+    provideDocumentSymbols: (model) =>
+      cache.pull(model, async () =>
+        documentSymbolsToMonaco(await extHost.$provideDocumentSymbols(handle, model.uri)),
+      ),
   }
 }
 
@@ -330,6 +376,7 @@ export function createCodeLensProxy(
   handle: number,
   extHost: IExtHostLanguages,
   onDidChange: Event<void>,
+  store: DisposableStore,
 ): monaco.languages.CodeLensProvider {
   // Monaco types onDidChange as IEvent<this> (the listener receives the provider),
   // but its CodeLens controller ignores the argument and just re-requests on any
@@ -338,10 +385,18 @@ export function createCodeLensProxy(
   const onDidChangeCodeLenses = onDidChange as unknown as NonNullable<
     monaco.languages.CodeLensProvider['onDidChange']
   >
+  const cache = createVersionedPullCache<monaco.languages.CodeLensList>(
+    (v) => v.lenses.length === 0,
+  )
+  // The host fires onDidChange when lens data (e.g. reference counts) changed
+  // without a document edit — the version key alone would serve stale lenses.
+  store.add(onDidChange(() => cache.clear()))
   return {
     onDidChange: onDidChangeCodeLenses,
-    provideCodeLenses: async (model) =>
-      codeLensesToMonaco(await extHost.$provideCodeLenses(handle, model.uri), MonacoLoader.get()),
+    provideCodeLenses: (model) =>
+      cache.pull(model, async () =>
+        codeLensesToMonaco(await extHost.$provideCodeLenses(handle, model.uri), MonacoLoader.get()),
+      ),
     resolveCodeLens: async (_model, codeLens) => {
       const monacoLens = codeLens as MonacoCodeLens
       if (!monacoLens._lspLens) return codeLens

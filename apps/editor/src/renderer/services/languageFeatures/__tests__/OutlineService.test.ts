@@ -139,6 +139,7 @@ function makeFakeEditor(languageId: string) {
     uri: { toString: () => 'file:///x.md' },
     getLanguageId: () => languageId,
     getValue: () => '',
+    getVersionId: () => 1,
     isDisposed: () => false,
     onDidChangeContent: () => ({ dispose: () => {} }),
   } as unknown as monaco.editor.ITextModel
@@ -167,10 +168,12 @@ function makeFakeEditor(languageId: string) {
 /** Editor whose model carries a given URI; `getModel()` returns null once disposed. */
 function makeFakeEditorFor(uri: string, languageId = 'markdown') {
   let disposed = false
+  let version = 1
   const model = {
     uri: { toString: () => uri },
     getLanguageId: () => languageId,
     getValue: () => '',
+    getVersionId: () => version,
     isDisposed: () => disposed,
     onDidChangeContent: () => ({ dispose: () => {} }),
   } as unknown as monaco.editor.ITextModel
@@ -182,7 +185,7 @@ function makeFakeEditorFor(uri: string, languageId = 'markdown') {
     revealLineInCenterIfOutsideViewport: () => {},
     focus: () => {},
   } as unknown as monaco.editor.IStandaloneCodeEditor
-  return { editor, dispose: () => (disposed = true) }
+  return { editor, dispose: () => (disposed = true), bumpVersion: () => void version++ }
 }
 
 describe('OutlineService', () => {
@@ -304,6 +307,114 @@ describe('OutlineService', () => {
     await flush()
     expect(svc.outline.get()?.uri).toBe(uriA.toString())
     expect(svc.outline.get()?.roots).toEqual(symbolsByUri[uriA.toString()])
+    svc.dispose()
+  })
+
+  // Repro for the aki_3.7 tab-switch jank: every switch re-pulled the full
+  // symbol tree (×3 trigger paths), and a 17k-line file's tree is a multi-MB
+  // RPC payload. Switching back to an UNCHANGED file must be served from the
+  // version-keyed cache with zero provider calls.
+  it('serves an unchanged file from the symbol cache when switching back (no re-pull)', async () => {
+    const services = new ServiceCollection()
+    services.set(IFileService, makeFs())
+    const inst = new InstantiationService(services)
+    const uriA = URI.file('/ws/a.md')
+    const uriB = URI.file('/ws/b.md')
+    const inputA = inst.createInstance(FileEditorInput, uriA)
+    const inputB = inst.createInstance(FileEditorInput, uriB)
+
+    const callsByUri = new Map<string, number>()
+    const symbolsByUri: Record<string, monaco.languages.DocumentSymbol[]> = {
+      [uriA.toString()]: [makeSymbol('Alpha', 1, 5)],
+      [uriB.toString()]: [makeSymbol('Beta', 1, 9)],
+    }
+    const provider = {
+      provideDocumentSymbols: (model: monaco.editor.ITextModel) => {
+        const key = model.uri.toString()
+        callsByUri.set(key, (callsByUri.get(key) ?? 0) + 1)
+        return symbolsByUri[key] ?? []
+      },
+    } as unknown as monaco.languages.DocumentSymbolProvider
+    const facade = {
+      onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+      getDocumentSymbolProviders: (lang: string) => (lang === 'markdown' ? [provider] : []),
+    } as unknown as ILanguageFeaturesService
+
+    const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
+    const editorService = { activeEditor } as unknown as IEditorService
+    const svc = new OutlineService(editorService, facade, undefined as never)
+
+    const fakeA = makeFakeEditorFor(uriA.toString())
+    FileEditorRegistry.register(inputA, fakeA.editor)
+    FileEditorRegistry.register(inputB, makeFakeEditorFor(uriB.toString()).editor)
+
+    activeEditor.set(inputA, undefined)
+    await flush()
+    activeEditor.set(inputB, undefined)
+    await flush()
+    activeEditor.set(inputA, undefined)
+    await flush()
+    activeEditor.set(inputB, undefined)
+    await flush()
+
+    expect(callsByUri.get(uriA.toString())).toBe(1)
+    expect(callsByUri.get(uriB.toString())).toBe(1)
+    // The cached tree is still published correctly on each switch.
+    expect(svc.outline.get()?.uri).toBe(uriB.toString())
+    expect(svc.outline.get()?.roots).toEqual(symbolsByUri[uriB.toString()])
+
+    // A marker burst on the active, unchanged file must not re-pull either.
+    fireMarkers(uriB.toString())
+    await new Promise((r) => setTimeout(r, 250))
+    expect(callsByUri.get(uriB.toString())).toBe(1)
+
+    // Editing the file while it was inactive invalidates its cache entry.
+    fakeA.bumpVersion()
+    activeEditor.set(inputA, undefined)
+    await flush()
+    expect(callsByUri.get(uriA.toString())).toBe(2)
+    svc.dispose()
+  })
+
+  it('coalesces concurrent pulls for the same model version (re-attach while in flight)', async () => {
+    const services = new ServiceCollection()
+    services.set(IFileService, makeFs())
+    const inst = new InstantiationService(services)
+    const input = inst.createInstance(FileEditorInput, URI.file('/ws/x.md'))
+
+    let calls = 0
+    let resolvePull: ((s: monaco.languages.DocumentSymbol[]) => void) | undefined
+    const provider = {
+      provideDocumentSymbols: () => {
+        calls++
+        return new Promise<monaco.languages.DocumentSymbol[]>((r) => (resolvePull = r))
+      },
+    } as unknown as monaco.languages.DocumentSymbolProvider
+    const facade = {
+      onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+      getDocumentSymbolProviders: (lang: string) => (lang === 'markdown' ? [provider] : []),
+    } as unknown as ILanguageFeaturesService
+
+    const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
+    const editorService = { activeEditor } as unknown as IEditorService
+    const svc = new OutlineService(editorService, facade, undefined as never)
+
+    const fake = makeFakeEditorFor('file:///ws/x.md')
+    FileEditorRegistry.register(input, fake.editor)
+    activeEditor.set(input, undefined)
+    await flush()
+    expect(calls).toBe(1)
+
+    // The Monaco editor (re)mounting mid-pull re-attaches the same input — the
+    // duplicated trigger must not stack a second full-size pull on the wire.
+    FileEditorRegistry.register(input, fake.editor)
+    await flush()
+    expect(calls).toBe(1)
+
+    const symbols = [makeSymbol('A', 1, 5)]
+    resolvePull!(symbols)
+    await flush()
+    expect(svc.outline.get()?.roots).toEqual(symbols)
     svc.dispose()
   })
 
@@ -644,6 +755,7 @@ describe('OutlineService', () => {
         ({
           uri: { toString: () => 'file:///ws/x.md' },
           getLanguageId: () => 'markdown',
+          getVersionId: () => 1,
           isDisposed: () => false,
           onDidChangeContent: () => ({ dispose: () => {} }),
         }) as unknown as monaco.editor.ITextModel,
@@ -685,6 +797,7 @@ describe('OutlineService', () => {
         ({
           uri: { toString: () => 'file:///ws/x.md' },
           getLanguageId: () => 'markdown',
+          getVersionId: () => 1,
           isDisposed: () => false,
           onDidChangeContent: () => ({ dispose: () => {} }),
         }) as unknown as monaco.editor.ITextModel,
@@ -731,6 +844,7 @@ describe('OutlineService', () => {
       uri: { toString: () => sourceUri.toString() },
       getLanguageId: () => 'markdown',
       getValue: () => '',
+      getVersionId: () => 1,
       isDisposed: () => false,
       onDidChangeContent: () => ({ dispose: () => {} }),
     } as unknown as monaco.editor.ITextModel
@@ -841,6 +955,7 @@ describe('OutlineService', () => {
       uri: { toString: () => sourceUri.toString() },
       getLanguageId: () => 'markdown',
       getValue: () => '',
+      getVersionId: () => 1,
       isDisposed: () => false,
       onDidChangeContent: () => ({ dispose: () => {} }),
     } as unknown as monaco.editor.ITextModel

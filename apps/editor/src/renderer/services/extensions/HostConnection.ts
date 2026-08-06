@@ -13,8 +13,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
-  ChannelClient,
-  ChannelServer,
+  ChannelPair,
   Disposable,
   DisposableStore,
   Event,
@@ -52,6 +51,7 @@ import type {
   IExtensionHostService,
 } from '../../../shared/ipc/extensionHostService.js'
 import type { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
+import { slowDecodePhaseInstrument } from '../performance/perfPhases.js'
 import { MainThreadCommands, type CommandOwnershipLedger } from './MainThreadCommands.js'
 import { MainThreadAi } from './MainThreadAi.js'
 import { MainThreadEditor } from './MainThreadEditor.js'
@@ -135,8 +135,14 @@ export class HostConnection extends Disposable {
       }),
     )
 
-    const client = store.add(new ChannelClient(protocol))
-    const server = store.add(new ChannelServer(protocol))
+    // Decode each frame ONCE and route by type: language-service responses for a
+    // large file are multi-MB frames, and a second parse (client + server each
+    // decoding everything) doubles the main-thread stall on every tab switch.
+    // Slow decodes surface as an `extHost.rpcDecode` phase in the perf reports.
+    const pair = store.add(
+      new ChannelPair(protocol, slowDecodePhaseInstrument('extHost.rpcDecode')),
+    )
+    const { client, server } = pair
 
     this.commands = ProxyChannel.toService<IExtHostCommands>(
       client.getChannel(ExtHostChannels.extHostCommands),

@@ -257,7 +257,7 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
         this._codeLensChange.set(handle, changeEmitter)
         store.add(toDisposable(() => this._codeLensChange.delete(handle)))
         store.add(changeEmitter)
-        const p = createCodeLensProxy(handle, ext, changeEmitter.event)
+        const p = createCodeLensProxy(handle, ext, changeEmitter.event, store)
         for (const lang of selector) store.add(lf.registerCodeLensProvider(lang, p))
         break
       }

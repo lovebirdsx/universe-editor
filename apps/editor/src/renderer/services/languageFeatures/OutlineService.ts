@@ -111,6 +111,17 @@ const NONE_TOKEN = {
   onCancellationRequested: () => ({ dispose: () => {} }),
 } as monaco.CancellationToken
 
+/** Cached symbol trees kept across tab switches (see `_symbolCache`). Small on
+ *  purpose: a huge file's tree is itself megabytes of retained objects, and tab
+ *  switching patterns rarely cycle through more files than this. */
+const SYMBOL_CACHE_MAX = 8
+
+interface CachedSymbols {
+  readonly modelVersionId: number
+  readonly languageId: string
+  readonly roots: readonly monaco.languages.DocumentSymbol[]
+}
+
 export class OutlineService extends Disposable implements IOutlineService {
   declare readonly _serviceBrand: undefined
 
@@ -151,6 +162,14 @@ export class OutlineService extends Disposable implements IOutlineService {
   private _attachGeneration = 0
   /** Active live-preview highlight, owned by whichever editor it was set on. */
   private _previewDecorations: monaco.editor.IEditorDecorationsCollection | undefined
+  /** Symbol trees already pulled, keyed by model URI and valid while the model
+   *  version is unchanged (VSCode's OutlineModel cache). Switching back to a tab
+   *  must NOT re-cross the wire: a large file's symbol tree is a multi-MB RPC
+   *  payload whose re-pull (×3 attach paths) froze tab switches on big projects. */
+  private readonly _symbolCache = new Map<string, CachedSymbols>()
+  /** `uri@version` of the pull currently on the wire; duplicate triggers for the
+   *  same state (re-attach, marker burst) coalesce instead of stacking pulls. */
+  private _pullInFlightKey: string | undefined
 
   private readonly _logger: ILogger
 
@@ -220,14 +239,16 @@ export class OutlineService extends Disposable implements IOutlineService {
     // Providers register at AfterRestore — possibly after the first editor is
     // already active — and a freshly-registered server still needs a moment to
     // analyse the file, so its first pull may be empty. Recompute WITH retries.
+    // A provider change also invalidates every cached tree (results may differ).
     this._register(
-      this._languageFeatures.onDidChangeDocumentSymbolProviders(() =>
+      this._languageFeatures.onDidChangeDocumentSymbolProviders(() => {
+        this._symbolCache.clear()
         this._recomputeSymbols({
           generation: this._attachGeneration,
           delay: INITIAL_PULL_RETRY_MS,
           elapsed: 0,
-        }),
-      ),
+        })
+      }),
     )
   }
 
@@ -468,41 +489,75 @@ export class OutlineService extends Disposable implements IOutlineService {
     const model = this._currentModel
     if (!model || model.isDisposed()) return
 
-    const providers = this._languageFeatures.getDocumentSymbolProviders(model.getLanguageId())
-    const provider = providers[0]
+    const uri = model.uri.toString()
     const languageId = model.getLanguageId()
+    const versionId = model.getVersionId()
+
+    // Unchanged model with a known tree: republish from cache, no wire pull.
+    // Only non-empty trees are cached, so the cold-server fill-in paths (retry
+    // chain, marker-driven recompute) still re-pull until symbols exist.
+    const cached = this._symbolCache.get(uri)
+    if (cached && cached.modelVersionId === versionId && cached.languageId === languageId) {
+      this._symbolCache.delete(uri)
+      this._symbolCache.set(uri, cached) // refresh LRU order
+      const current = this._outline.get()
+      if (!current || current.uri !== uri || current.roots !== cached.roots) {
+        this._outline.set(
+          { uri, roots: cached.roots, languageId, version: ++this._version },
+          undefined,
+        )
+        this._recomputeActiveSymbol()
+      }
+      return
+    }
+
+    const providers = this._languageFeatures.getDocumentSymbolProviders(languageId)
+    const provider = providers[0]
     if (!provider) {
       // The provider may simply not be registered yet (language plugins activate
       // lazily). Publish empty for now but keep retrying so the outline fills in
       // once the provider appears, instead of staying blank until re-activation.
-      this._publish(
-        { uri: model.uri.toString(), roots: [], languageId, version: ++this._version },
-        undefined,
-      )
+      this._publish({ uri, roots: [], languageId, version: ++this._version }, undefined)
       this._maybeRetry([], retry)
       return
     }
 
+    // Coalesce concurrent triggers for the same model state: the attach autorun,
+    // the editor-mount re-attach and the marker-driven recompute can all fire
+    // within one switch, and each duplicated pull is a full-size RPC round trip.
+    const pullKey = `${uri}@${versionId}`
+    if (this._pullInFlightKey === pullKey) return
+    this._pullInFlightKey = pullKey
+
     const pullStarted = performance.now()
     void this._pullWithTimeout(provider, model)
       .then((result) => {
+        if (this._pullInFlightKey === pullKey) this._pullInFlightKey = undefined
         // Discard if the model was swapped or disposed while we awaited.
         if (this._currentModel !== model || model.isDisposed()) return
         const roots = result ?? []
         const pullMs = performance.now() - pullStarted
         if (pullMs > 500) {
           this._logger.info(
-            `document-symbol pull ${model.uri.toString()} took ${pullMs.toFixed(0)}ms roots=${roots.length} lines=${model.getLineCount()}`,
+            `document-symbol pull ${uri} took ${pullMs.toFixed(0)}ms roots=${roots.length} lines=${model.getLineCount()}`,
           )
         }
-        this._outline.set(
-          { uri: model.uri.toString(), roots, languageId, version: ++this._version },
-          undefined,
-        )
+        // Cache only a non-empty tree, and only if the model didn't change while
+        // the pull was in flight (the result describes the pre-edit content).
+        if (roots.length > 0 && model.getVersionId() === versionId) {
+          this._symbolCache.delete(uri)
+          this._symbolCache.set(uri, { modelVersionId: versionId, languageId, roots })
+          if (this._symbolCache.size > SYMBOL_CACHE_MAX) {
+            const oldest = this._symbolCache.keys().next().value
+            if (oldest !== undefined) this._symbolCache.delete(oldest)
+          }
+        }
+        this._outline.set({ uri, roots, languageId, version: ++this._version }, undefined)
         this._recomputeActiveSymbol()
         this._maybeRetry(roots, retry)
       })
       .catch((err: unknown) => {
+        if (this._pullInFlightKey === pullKey) this._pullInFlightKey = undefined
         // A provider can reject — or hang past PULL_TIMEOUT_MS — during a cold
         // start: the JSON symbol provider delegates to Monaco's JSON worker, which
         // may not be warm yet (the workbench now mounts before Monaco finishes
@@ -512,7 +567,7 @@ export class OutlineService extends Disposable implements IOutlineService {
         // published before the provider appeared.
         if (this._currentModel !== model || model.isDisposed()) return
         this._logger.debug(
-          `document-symbol pull failed for ${languageId} (${model.uri.toString()}); retrying: ${
+          `document-symbol pull failed for ${languageId} (${uri}); retrying: ${
             (err as Error).message
           }`,
         )
