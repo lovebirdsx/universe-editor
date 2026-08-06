@@ -539,6 +539,13 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   // Guards against revalidate clobbering the intermediate pages pulled in by
   // revealCommit (auto-refresh fires independently of the reveal loop).
   const revealingRef = useRef(false)
+  // Generation counter over getCommits dispatches (load / revalidate / reveal):
+  // continuations only land while still the latest dispatch, so a stale
+  // revalidate already in flight when a reveal starts cannot resolve afterwards
+  // and clobber the paged-in result (last dispatch wins).
+  const fetchSeqRef = useRef(0)
+  // Commit hash the reveal still needs to scroll to, once its row is in the DOM.
+  const pendingScrollRef = useRef<string | null>(null)
 
   useEffect(() => {
     gitGraphViewState.focusSearch = () => {
@@ -604,12 +611,14 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
 
   const load = useCallback(() => {
     let cancelled = false
+    const seq = ++fetchSeqRef.current
+    pendingScrollRef.current = null
     setLoading(true)
     setError(null)
     void commands
       .executeCommand<GitGraphLoadResult>(GitGraphCommands.getCommits, queryRef.current)
       .then((r) => {
-        if (cancelled) return
+        if (cancelled || seq !== fetchSeqRef.current) return
         setResult(r ?? null)
         // A fresh load invalidates the previous selection and its cached detail.
         setSelection([])
@@ -625,7 +634,8 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           )
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+        if (!cancelled && seq === fetchSeqRef.current)
+          setError(e instanceof Error ? e.message : String(e))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -642,7 +652,9 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     }
   }, [load])
 
-  const scrollToHash = useCallback((hash: string) => {
+  const scrollPendingReveal = useCallback(() => {
+    const hash = pendingScrollRef.current
+    if (!hash) return
     // getAttribute comparison instead of a `[data-hash="${CSS.escape(hash)}"]`
     // selector: attribute-string escape sequences are not honoured by every
     // selector engine (happy-dom in tests).
@@ -650,8 +662,16 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       ?.querySelectorAll('[data-hash]')
       .values()
       .find((el) => el.getAttribute('data-hash') === hash)
-    row?.scrollIntoView({ block: 'center' })
+    if (!row) return
+    pendingScrollRef.current = null
+    row.scrollIntoView({ block: 'center' })
   }, [])
+
+  // A paged-in target row reaches the DOM only after React commits the reveal's
+  // setResult — and later still when a search filter was active (the cleared
+  // query re-renders at deferred priority). A one-shot rAF would race those
+  // commits and silently skip the scroll, so retry after every commit instead.
+  useLayoutEffect(scrollPendingReveal)
 
   // Reveal entry point (timeline / blame → `_workbench.openGitGraph`): select the
   // commit and scroll it into view, paging in older history until the commit is
@@ -671,6 +691,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       }
       void (async () => {
         revealingRef.current = true
+        const seq = ++fetchSeqRef.current
         try {
           // A filter would hide the target row.
           setSearchQuery('')
@@ -687,6 +708,8 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
               GitGraphCommands.getCommits,
               { ...queryRef.current, maxCommits: nextLimit },
             )
+            // Superseded by a newer dispatch (e.g. a manual refresh) — yield.
+            if (seq !== fetchSeqRef.current) return
             if (!r) break
             setResult(r)
             current = r
@@ -695,13 +718,17 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           if (nextLimit !== limit) setLimit(nextLimit)
           fetchedKeyRef.current = null
           setSelection([hash])
-          requestAnimationFrame(() => scrollToHash(hash))
+          // Scroll now when the row is already rendered (re-reveal of a loaded
+          // commit commits no state change); otherwise the layout effect picks
+          // it up once the row lands in the DOM.
+          pendingScrollRef.current = hash
+          scrollPendingReveal()
         } finally {
           revealingRef.current = false
         }
       })()
     },
-    [commands, result, limit, scrollToHash],
+    [commands, result, limit, scrollPendingReveal],
   )
 
   useEffect(() => {
@@ -738,10 +765,11 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       // which the git extension does BEFORE registering the git-graph commands —
       // querying here would warn "command not found" and drop the refresh.
       if (!CommandsRegistry.getCommand(GitGraphCommands.getCommits)) return
+      const seq = ++fetchSeqRef.current
       void commands
         .executeCommand<GitGraphLoadResult>(GitGraphCommands.getCommits, queryRef.current)
         .then((r) => {
-          if (!r) return
+          if (!r || seq !== fetchSeqRef.current) return
           setError(null)
           setResult(r)
           setSelection((prev) => {

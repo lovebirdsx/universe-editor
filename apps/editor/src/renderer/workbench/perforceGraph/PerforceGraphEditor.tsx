@@ -323,6 +323,13 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   // Guards against revalidate clobbering the intermediate pages pulled in by
   // revealCommit.
   const revealingRef = useRef(false)
+  // Generation counter over getChanges dispatches (load / revalidate / reveal):
+  // continuations only land while still the latest dispatch, so a stale
+  // revalidate already in flight when a reveal starts cannot resolve afterwards
+  // and clobber the paged-in result (last dispatch wins).
+  const fetchSeqRef = useRef(0)
+  // Change id the reveal still needs to scroll to, once its row is in the DOM.
+  const pendingScrollRef = useRef<string | null>(null)
 
   useEffect(() => {
     perforceGraphViewState.focusSearch = () => {
@@ -381,12 +388,14 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
 
   const load = useCallback(() => {
     let cancelled = false
+    const seq = ++fetchSeqRef.current
+    pendingScrollRef.current = null
     setLoading(true)
     setError(null)
     void commands
       .executeCommand<P4GraphLoadResult>(PerforceGraphCommands.getChanges, queryRef.current)
       .then((r) => {
-        if (cancelled) return
+        if (cancelled || seq !== fetchSeqRef.current) return
         setResult(r ?? null)
         setSelection([])
         setDetails(null)
@@ -401,7 +410,8 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
           )
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+        if (!cancelled && seq === fetchSeqRef.current)
+          setError(e instanceof Error ? e.message : String(e))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -418,7 +428,9 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     }
   }, [load])
 
-  const scrollToChange = useCallback((id: string) => {
+  const scrollPendingReveal = useCallback(() => {
+    const id = pendingScrollRef.current
+    if (!id) return
     // getAttribute comparison instead of a `[data-id="${CSS.escape(id)}"]`
     // selector: attribute-string escape sequences are not honoured by every
     // selector engine (happy-dom in tests).
@@ -426,8 +438,16 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
       ?.querySelectorAll('[data-id]')
       .values()
       .find((el) => el.getAttribute('data-id') === id)
-    row?.scrollIntoView({ block: 'center' })
+    if (!row) return
+    pendingScrollRef.current = null
+    row.scrollIntoView({ block: 'center' })
   }, [])
+
+  // A paged-in target row reaches the DOM only after React commits the reveal's
+  // setResult — and later still when a search filter was active (the cleared
+  // query re-renders at deferred priority). A one-shot rAF would race those
+  // commits and silently skip the scroll, so retry after every commit instead.
+  useLayoutEffect(scrollPendingReveal)
 
   // Reveal entry point (timeline / blame → `_workbench.openPerforceGraph`):
   // select the change and scroll it into view, paging in older history until it
@@ -446,6 +466,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
       }
       void (async () => {
         revealingRef.current = true
+        const seq = ++fetchSeqRef.current
         try {
           // A filter would hide the target row.
           setSearchQuery('')
@@ -458,6 +479,8 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
               PerforceGraphCommands.getChanges,
               { ...queryRef.current, maxChanges: nextLimit },
             )
+            // Superseded by a newer dispatch (e.g. a manual refresh) — yield.
+            if (seq !== fetchSeqRef.current) return
             if (!r) break
             setResult(r)
             current = r
@@ -466,13 +489,17 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
           if (nextLimit !== limit) setLimit(nextLimit)
           fetchedKeyRef.current = null
           setSelection([id])
-          requestAnimationFrame(() => scrollToChange(id))
+          // Scroll now when the row is already rendered (re-reveal of a loaded
+          // change commits no state change); otherwise the layout effect picks
+          // it up once the row lands in the DOM.
+          pendingScrollRef.current = id
+          scrollPendingReveal()
         } finally {
           revealingRef.current = false
         }
       })()
     },
-    [commands, result, limit, scrollToChange],
+    [commands, result, limit, scrollPendingReveal],
   )
 
   useEffect(() => {
@@ -498,10 +525,11 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
       // A reveal in progress drives its own paging; a mid-flight revalidate
       // would clobber the intermediate result and filter out the target.
       if (revealingRef.current) return
+      const seq = ++fetchSeqRef.current
       void commands
         .executeCommand<P4GraphLoadResult>(PerforceGraphCommands.getChanges, queryRef.current)
         .then((r) => {
-          if (!r) return
+          if (!r || seq !== fetchSeqRef.current) return
           setError(null)
           setResult(r)
           setSelection((prev) => {

@@ -248,6 +248,75 @@ describe('GitGraphEditor reveal', () => {
     }
   })
 
+  it('keeps the reveal selection when an in-flight revalidate resolves after the reveal', async () => {
+    const gate = CommandsRegistry.registerCommand(GitGraphCommands.getCommits, () => undefined)
+    try {
+      // A cached result makes the mount dispatch a background revalidate (base
+      // limit) instead of a fresh load.
+      gitGraphViewState.result = resultWith([commit(PAGE1_HASH, 'first')], true)
+      let releaseRevalidate: (() => void) | undefined
+      let call = 0
+      renderEditor(async (options) => {
+        if (++call === 1) {
+          await new Promise<void>((r) => (releaseRevalidate = r))
+          return resultWith([commit(PAGE1_HASH, 'first')], true)
+        }
+        return (options.maxCommits ?? 0) > GIT_GRAPH_PAGE_SIZE
+          ? resultWith([commit(PAGE1_HASH, 'first'), commit(PAGE2_HASH, 'older')], true)
+          : resultWith([commit(PAGE1_HASH, 'first')], true)
+      })
+      await flush()
+      expect(releaseRevalidate).toBeDefined()
+
+      // Reveal arrives while the mount revalidate is still in flight; it pages
+      // in the target commit and selects it.
+      await act(async () => {
+        gitGraphViewState.revealCommit?.(PAGE2_HASH)
+        await flush()
+      })
+      expect(gitGraphViewState.selection).toEqual([PAGE2_HASH])
+
+      // The stale revalidate lands last — it must not clobber the paged-in
+      // result (which would filter the reveal selection out).
+      await act(async () => {
+        releaseRevalidate?.()
+        await flush()
+      })
+
+      expect(gitGraphViewState.selection).toEqual([PAGE2_HASH])
+      expect(gitGraphViewState.result?.commits.some((c) => c.hash === PAGE2_HASH)).toBe(true)
+    } finally {
+      gate.dispose()
+    }
+  })
+
+  it('scrolls to a commit that only exists after paging', async () => {
+    const gate = CommandsRegistry.registerCommand(GitGraphCommands.getCommits, () => undefined)
+    try {
+      renderEditor((options) =>
+        (options.maxCommits ?? 0) > GIT_GRAPH_PAGE_SIZE
+          ? resultWith([commit(PAGE1_HASH, 'first'), commit(PAGE2_HASH, 'older')], true)
+          : resultWith([commit(PAGE1_HASH, 'first')], true),
+      )
+      await flush()
+
+      await act(async () => {
+        gitGraphViewState.revealCommit?.(PAGE2_HASH)
+        await flush()
+      })
+
+      expect(gitGraphViewState.selection).toEqual([PAGE2_HASH])
+      // The paged-in row enters the DOM only after React commits the reveal's
+      // result — the scroll must wait for it rather than fire-and-forget.
+      const scrolledRows = scrollIntoViewSpy.mock.contexts.map((el) =>
+        (el as Element).getAttribute('data-hash'),
+      )
+      expect(scrolledRows).toContain(PAGE2_HASH)
+    } finally {
+      gate.dispose()
+    }
+  })
+
   it('keeps the reveal selection when the initial load resolves after the reveal', async () => {
     const gate = CommandsRegistry.registerCommand(GitGraphCommands.getCommits, () => undefined)
     try {

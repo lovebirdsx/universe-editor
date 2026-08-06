@@ -47,6 +47,39 @@ function makeRepo(): { repoDir: string; firstHash: string; secondHash: string } 
   return { repoDir, firstHash, secondHash }
 }
 
+/** A linear history of `count` commits built with one `git fast-import` spawn
+ *  (per-commit `git commit` is far too slow for 500+ on CI Windows). */
+function makeManyCommitsRepo(count: number): { repoDir: string; oldestHash: string } {
+  const repoDir = realpathSync.native(mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ggr-page-')))
+  git(repoDir, 'init')
+  git(repoDir, 'config', 'user.email', 'e2e@example.com')
+  git(repoDir, 'config', 'user.name', 'E2E')
+  const branch = git(repoDir, 'symbolic-ref', '--short', 'HEAD')
+  const lines = ['blob', 'mark :1', 'data 2', 'a']
+  for (let i = 1; i <= count; i++) {
+    const message = `c${i}`
+    lines.push(
+      `commit refs/heads/${branch}`,
+      `mark :${i + 1}`,
+      `committer E2E <e2e@example.com> ${1700000000 + i} +0000`,
+      `data ${message.length}`,
+      message,
+      ...(i > 1 ? [`from :${i}`] : []),
+      'M 100644 :1 a.ts',
+      '',
+    )
+  }
+  lines.push('done', '')
+  execFileSync('git', ['fast-import', '--done'], {
+    cwd: repoDir,
+    input: lines.join('\n'),
+    stdio: ['pipe', 'ignore', 'ignore'],
+  })
+  git(repoDir, 'reset', '--hard')
+  const oldestHash = git(repoDir, 'rev-list', '--max-parents=0', 'HEAD')
+  return { repoDir, oldestHash }
+}
+
 test.describe('@p1 git graph reveal', () => {
   test('opens the graph at the requested commit via the _workbench bridge', async () => {
     // Cold boot + git extension activation in a real repo is heavy on Windows CI.
@@ -88,6 +121,48 @@ test.describe('@p1 git graph reveal', () => {
       const row = editor.locator(`[data-hash="${firstHash}"]`)
       await expect(row).toBeVisible({ timeout: 30_000 })
       await expect(row).toHaveClass(/rowSelected/, { timeout: 30_000 })
+    } finally {
+      await closeApp(app)
+    }
+  })
+
+  test('pages in older history when the target commit is beyond the first page', async () => {
+    test.setTimeout(120_000)
+
+    const userDataDir = makeUserDataDir()
+    // 520 commits: the oldest sits past the 500-commit first page, so the
+    // reveal must page in more history before it can select + scroll.
+    const { repoDir, oldestHash } = makeManyCommitsRepo(520)
+
+    const app = await launchCoreGitApp({ userDataDir })
+
+    try {
+      const page = await app.firstWindow()
+      await page.waitForLoadState('domcontentloaded')
+      await page.waitForFunction(() =>
+        Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
+      )
+      await evaluateWhenRestored(page)
+
+      await page.evaluate((p) => window.__E2E__!.openWorkspace(p), repoDir)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
+          timeout: 60_000,
+          message: 'git extension should register a source control',
+        })
+        .toBeGreaterThan(0)
+
+      await page.evaluate(
+        (hash) => window.__E2E__!.runCommand('_workbench.openGitGraph', hash),
+        oldestHash,
+      )
+
+      const editor = page.locator('[data-testid="gitGraph-editor"]')
+      await expect(editor).toBeVisible()
+      const row = editor.locator(`[data-hash="${oldestHash}"]`)
+      await expect(row).toHaveClass(/rowSelected/, { timeout: 30_000 })
+      // The reveal must also have scrolled the paged-in row into view.
+      await expect(row).toBeInViewport()
     } finally {
       await closeApp(app)
     }

@@ -214,6 +214,65 @@ describe('PerforceGraphEditor reveal', () => {
     expect(perforceGraphViewState.selection).toEqual(['4521'])
   })
 
+  it('keeps the reveal selection when an in-flight revalidate resolves after the reveal', async () => {
+    // A cached result makes the mount dispatch a background revalidate (base
+    // limit) instead of a fresh load.
+    perforceGraphViewState.result = resultWith([change('4521', 'Fix widget')], true)
+    let releaseRevalidate: (() => void) | undefined
+    let call = 0
+    renderEditor(async (options) => {
+      if (++call === 1) {
+        await new Promise<void>((r) => (releaseRevalidate = r))
+        return resultWith([change('4521', 'Fix widget')], true)
+      }
+      return (options.maxChanges ?? 0) > PERFORCE_GRAPH_PAGE_SIZE
+        ? resultWith([change('4521', 'Fix widget'), change('4000', 'Older')], true)
+        : resultWith([change('4521', 'Fix widget')], true)
+    })
+    await flush()
+    expect(releaseRevalidate).toBeDefined()
+
+    // Reveal arrives while the mount revalidate is still in flight; it pages
+    // in the target change and selects it.
+    await act(async () => {
+      perforceGraphViewState.revealCommit?.('4000')
+      await flush()
+    })
+    expect(perforceGraphViewState.selection).toEqual(['4000'])
+
+    // The stale revalidate lands last — it must not clobber the paged-in
+    // result (which would filter the reveal selection out).
+    await act(async () => {
+      releaseRevalidate?.()
+      await flush()
+    })
+
+    expect(perforceGraphViewState.selection).toEqual(['4000'])
+    expect(perforceGraphViewState.result?.changes.some((c) => c.id === '4000')).toBe(true)
+  })
+
+  it('scrolls to a change that only exists after paging', async () => {
+    renderEditor((options) =>
+      (options.maxChanges ?? 0) > PERFORCE_GRAPH_PAGE_SIZE
+        ? resultWith([change('4521', 'Fix widget'), change('4000', 'Older')], true)
+        : resultWith([change('4521', 'Fix widget')], true),
+    )
+    await flush()
+
+    await act(async () => {
+      perforceGraphViewState.revealCommit?.('4000')
+      await flush()
+    })
+
+    expect(perforceGraphViewState.selection).toEqual(['4000'])
+    // The paged-in row enters the DOM only after React commits the reveal's
+    // result — the scroll must wait for it rather than fire-and-forget.
+    const scrolledRows = scrollIntoViewSpy.mock.contexts.map((el) =>
+      (el as Element).getAttribute('data-id'),
+    )
+    expect(scrolledRows).toContain('4000')
+  })
+
   it('keeps the reveal selection when the initial load resolves after the reveal', async () => {
     // First getChanges call (the initial load) stays pending until released;
     // any later call (the reveal's own paging) resolves immediately.
