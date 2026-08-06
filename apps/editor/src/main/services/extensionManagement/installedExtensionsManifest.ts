@@ -56,11 +56,32 @@ function obsoletePath(dir: string): string {
   return path.join(dir, OBSOLETE_NAME)
 }
 
+// On Windows a rename over a target that is momentarily held open — an
+// antivirus scan, or a concurrent manifest read from the extension-host rescan
+// that a setEnablement/install itself triggers — fails with EPERM/EBUSY. The
+// lock is transient by construction, so retry briefly instead of surfacing it.
+const RENAME_RETRYABLE = new Set(['EPERM', 'EACCES', 'EBUSY'])
+const RENAME_ATTEMPTS = 10
+const RENAME_RETRY_DELAY_MS = 100
+
+async function renameWithRetries(from: string, to: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await fs.rename(from, to)
+      return
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? ''
+      if (attempt >= RENAME_ATTEMPTS || !RENAME_RETRYABLE.has(code)) throw err
+      await new Promise((resolve) => setTimeout(resolve, RENAME_RETRY_DELAY_MS))
+    }
+  }
+}
+
 /** Atomically write JSON (temp file + rename) so readers never see a partial file. */
 async function writeJsonAtomic(target: string, value: unknown): Promise<void> {
   const tmp = `${target}.${process.pid}.${Date.now()}.tmp`
   await fs.writeFile(tmp, JSON.stringify(value, null, 2), 'utf8')
-  await fs.rename(tmp, target)
+  await renameWithRetries(tmp, target)
 }
 
 /** Read `extensions.json` installed records. Returns [] if absent / malformed. */

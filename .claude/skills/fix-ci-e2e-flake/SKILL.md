@@ -31,7 +31,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - click 把状态切离默认后 received 恒卡默认值=mount 后 fire-and-forget reconcile 迟到覆盖 → 案例 27
 - 上轮修完形态变了仍挂=只治了表象，复合根因继续剥 → 案例 11/30/40
 - `Target page ... has been closed`+退出码 0xC0000005：单实例过、多实例崩=parcel watcher → 案例 12/16/44；sharedApp 下崩点飘忽受害者无辜 → 案例 26
-- `Worker teardown timeout`+测试全过：有 fixture 名=quit 链 veto → 案例 13；无 fixture 名=孤儿子进程握 CDP pipe → 案例 45
+- `Worker teardown timeout`+测试全过：有 fixture 名=quit 链 veto → 案例 13；无 fixture 名+事后有孤儿=孤儿子进程握 CDP pipe → 案例 45；无 fixture 名+事后无孤儿=多 shared app 串行 closeApp 超预算 → 案例 63
 - 滚动采样 received 单调爬升、`--workers=1` 过 `--workers=4` 挂=测量瞬时值 → 案例 14
 - 滚动恢复断言 frac 异常（RAF 过冲/虚拟双峰/像素中点落末条）→ 案例 15/34/41
 - 仅 CI Windows 确定性挂+涉及 tmp 路径/git=8.3 短路径 → 案例 18；URI 字符串稳定差 `%7E`/`~` → 案例 29
@@ -59,6 +59,9 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - teardown 泄漏栈 `MainThreadLanguages._createProvider` 但**断言全过**、bundle 变更提交后 CI 恒定挂、泄漏数=activate 注册批大小=host activate 赢了 Monaco dynamic import，注册抛 not-initialized 半建 store 成孤儿+provider 批静默丢失 → 案例 56（区分 54：那是 dying-host 帧打 **disposed** 对象）
 - 「忙等+可信输入」spec 本地 `--repeat-each` 必现 flaky、双形态交替（poll 恒 0 / byType 实收单元素但非期望类型如 `["keyup"]`）=setTimeout 提前量赛跑 CDP 输入派发 + dedupe 只留最慢样本；修=console token 确认主线程已阻塞再按键 + 断言放宽到事件族 → 案例 57
 - 焦点门控断言（如聚焦时应出现应用内 toast）恒不出现+host.log 是 `notify shown` 而非 `skipped`=并行 worker `win.show()` 偷前台，断言前 `page.bringToFront()` 钉焦点 → 案例 59
+- `EPERM rename '<x>.json.<pid>.<ts>.tmp'` 经 reviveWireError 从 main 传回、retry 救得回=产品原子写 rename 撞 Windows 瞬时锁（并发读/AV），修产品加重试 → 案例 60
+- beforeAll 起本地 server 报 `did not start on <url>`、retry 救得回=固定随机端口撞占用（上轮孤儿 server）+stdio ignore 无诊断 → 案例 61
+- `tokenColor(<word>)` poll 恒 undefined 到 `Test timeout`=Monarch 合并 span 使 exact-text 在 TextMate takeover 前结构性匹配不到，补显式 takeover 门控+test.slow → 案例 62
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

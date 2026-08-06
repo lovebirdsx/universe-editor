@@ -20,6 +20,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import { generateKeyPairSync } from 'node:crypto'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { createServer, type AddressInfo } from 'node:net'
 import AdmZip from 'adm-zip'
 import { createColdAppTest, expect } from '@universe-editor/e2e-harness'
 import { APP_ROOT, MAIN_ENTRY } from '../fixtures/electronApp.js'
@@ -33,26 +34,28 @@ const KEY_PAIR = generateKeyPairSync('ed25519')
 const PUBLIC_X = KEY_PAIR.publicKey.export({ format: 'jwk' }).x as string
 const PRIVATE_PEM = KEY_PAIR.privateKey.export({ format: 'pem', type: 'pkcs8' })
 
-// Random port per worker: parallel workers each load this module and get their
-// own gallery instance, key pair, and stage directory.
-const PORT = 18300 + Math.floor(Math.random() * 500)
-const GALLERY_URL = `http://127.0.0.1:${PORT}`
-
 const EXT_ID = 'acme.e2e-gallery'
 const COMMAND_ID = 'e2eGallery.hello'
+
+// The gallery URL is only known once beforeAll has bound a free port. The env
+// object is shared by reference with the fixture, and launchApp reads it at
+// launch time — beforeAll runs before any test launches the app, so the
+// mutation below is always visible to every launch.
+const galleryEnv: Record<string, string> = {
+  UNIVERSE_GALLERY_URL: '',
+  UNIVERSE_GALLERY_SIGNING_KEYS: JSON.stringify({ [KEY_ID]: PUBLIC_X }),
+}
 
 const test = createColdAppTest({
   appRoot: APP_ROOT,
   mainEntry: MAIN_ENTRY,
   extensions: [],
-  env: {
-    UNIVERSE_GALLERY_URL: GALLERY_URL,
-    UNIVERSE_GALLERY_SIGNING_KEYS: JSON.stringify({ [KEY_ID]: PUBLIC_X }),
-  },
+  env: galleryEnv,
 })
 
 let stageDir: string
 let server: ChildProcess
+let galleryUrl: string
 
 /** Build the sample extension VSIX contributing one command. */
 async function makeVsix(dir: string): Promise<string> {
@@ -91,12 +94,26 @@ function run(
   })
 }
 
+/** Bind port 0 to let the OS pick a free port, then release it for the server.
+ *  Eliminates the fixed-random-range collisions (a leftover server from a
+ *  hard-killed previous run silently holds its port for the whole 15s wait). */
+function getFreePort(): Promise<number> {
+  return new Promise((resolvePromise, reject) => {
+    const probe = createServer()
+    probe.once('error', reject)
+    probe.listen(0, '127.0.0.1', () => {
+      const port = (probe.address() as AddressInfo).port
+      probe.close(() => resolvePromise(port))
+    })
+  })
+}
+
 /** Poll the gallery endpoint until the server answers (or time out). */
-async function waitForServer(timeoutMs = 15000): Promise<void> {
+async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     try {
-      const res = await fetch(`${GALLERY_URL}/extensionquery`, {
+      const res = await fetch(`${url}/extensionquery`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -108,7 +125,7 @@ async function waitForServer(timeoutMs = 15000): Promise<void> {
     } catch {
       // connection refused — server not up yet
     }
-    if (Date.now() > deadline) throw new Error(`gallery server did not start on ${GALLERY_URL}`)
+    if (Date.now() > deadline) throw new Error(`gallery server did not start on ${url}`)
     await new Promise((r) => setTimeout(r, 250))
   }
 }
@@ -134,6 +151,11 @@ test.describe('@p1 extensions gallery', () => {
     ])
     if (publish.code !== 0) throw new Error(`publish.mjs failed: ${publish.stderr}`)
 
+    const port = await getFreePort()
+    galleryUrl = `http://127.0.0.1:${port}`
+    galleryEnv['UNIVERSE_GALLERY_URL'] = galleryUrl
+
+    let serverStderr = ''
     server = spawn(
       process.execPath,
       [
@@ -143,13 +165,25 @@ test.describe('@p1 extensions gallery', () => {
         '--gallery-root',
         path.join(stageDir, 'gallery'),
         '--port',
-        String(PORT),
+        String(port),
         '--base',
         '/',
       ],
-      { stdio: 'ignore' },
+      { stdio: ['ignore', 'ignore', 'pipe'] },
     )
-    await waitForServer()
+    server.stderr?.on('data', (d: Buffer) => (serverStderr += d.toString()))
+    // Fail fast (with the real error) if the server dies instead of listening —
+    // an opaque 15s poll timeout hides EADDRINUSE / script crashes entirely.
+    const exited = new Promise<number | null>((resolvePromise) => {
+      server.on('exit', (code) => resolvePromise(code))
+    })
+    const outcome = await Promise.race([
+      waitForServer(galleryUrl).then(() => 'ready' as const),
+      exited,
+    ])
+    if (outcome !== 'ready') {
+      throw new Error(`gallery server exited before listening (code ${outcome}): ${serverStderr}`)
+    }
   })
 
   test.afterAll(async () => {

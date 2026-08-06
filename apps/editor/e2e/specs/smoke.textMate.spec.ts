@@ -71,6 +71,23 @@ function textMateStyleRules(page: Page): Promise<string> {
   return page.evaluate(() => document.querySelector('style.monaco-colors')?.textContent ?? '')
 }
 
+/** Poll until the TextMate grammar factory owns tokenization for `languageId`.
+ *  Every color assertion implicitly depends on this takeover (pre-takeover the
+ *  Monarch renderer merges neighbouring same-class tokens into one span, so
+ *  exact-text probes can never match) — gate on it explicitly so a slow or lost
+ *  takeover fails here, loudly, instead of as an opaque undefined color. */
+async function waitForTextMateTakeover(page: Page, languageId: string): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page
+          .evaluate((lang) => window.__E2E__!.getTokenizationSupportInfo(lang), languageId)
+          .then((info) => info?.constructorName),
+      { timeout: 30000 },
+    )
+    .toBe('TokenizationSupportWithLineLimit')
+}
+
 test.describe('@p0 textmate', () => {
   test.afterEach(async ({ page }) => {
     await page.evaluate(() => {
@@ -82,21 +99,17 @@ test.describe('@p0 textmate', () => {
     page,
     workbench,
   }) => {
+    // First test on a fresh/reset worker pays the extension-host boot: a 30s
+    // takeover poll needs headroom over the 30s test ceiling (whole file: every
+    // test here opens with a 30s first poll, so they all get the slow budget).
+    test.slow()
     const filePath = seedTsFile('const answer: number = 42\n')
     await page.evaluate((p) => window.__E2E__!.openFileUri(p), filePath)
     await expect(workbench.editor.monacoEditor).toBeVisible()
 
     // The TextMate factory registers after monaco loads and must replace the
     // Monarch support (registry change re-tokenizes the open model).
-    await expect
-      .poll(
-        () =>
-          page
-            .evaluate(() => window.__E2E__!.getTokenizationSupportInfo('typescript'))
-            .then((info) => info?.constructorName),
-        { timeout: 30000 },
-      )
-      .toBe('TokenizationSupportWithLineLimit')
+    await waitForTextMateTakeover(page, 'typescript')
 
     // The theme bridge injects the .mtkN classifier stylesheet.
     await expect.poll(() => textMateStyleRules(page), { timeout: 15000 }).toContain('.mtk')
@@ -107,6 +120,7 @@ test.describe('@p0 textmate', () => {
   })
 
   test('token colors follow color theme switches', async ({ page, workbench }) => {
+    test.slow()
     const filePath = seedTsFile('const answer: number = 42\n')
     await page.evaluate((p) => window.__E2E__!.openFileUri(p), filePath)
     await expect(workbench.editor.monacoEditor).toBeVisible()
@@ -122,6 +136,7 @@ test.describe('@p0 textmate', () => {
     page,
     workbench,
   }) => {
+    test.slow()
     // Guards the unified color table: with two independent color maps (monaco
     // TokenTheme vs textmate) the `.mtkN` stylesheet that happened to load last
     // won by DOM order, and JSON keys lost their #9CDCFE — reliably in dev,
@@ -142,6 +157,7 @@ test.describe('@p0 textmate', () => {
     page,
     workbench,
   }) => {
+    test.slow()
     // 25k chars on one line exceeds the 20k limit: nullTokenizeEncoded keeps
     // the line a single default-foreground token instead of stalling the
     // tokenizer on pathological regex backtracking.
@@ -149,8 +165,13 @@ test.describe('@p0 textmate', () => {
     await page.evaluate((p) => window.__E2E__!.openFileUri(p), filePath)
     await expect(workbench.editor.monacoEditor).toBeVisible()
 
+    // The `after` probe below only matches once TextMate owns tokenization
+    // (Monarch merges ` after ` with its neighbours into one span) — gate the
+    // takeover first so a slow extension-host boot fails with a clear signal.
+    await waitForTextMateTakeover(page, 'typescript')
+
     // The editor renders and the next (short) line still tokenizes normally.
-    await expect.poll(() => tokenColor(page, 'after'), { timeout: 30000 }).toBeDefined()
+    await expect.poll(() => tokenColor(page, 'after'), { timeout: 15000 }).toBeDefined()
     expect(await page.evaluate(() => window.__E2E__!.getActiveEditorUri())).toContain('sample.ts')
   })
 })

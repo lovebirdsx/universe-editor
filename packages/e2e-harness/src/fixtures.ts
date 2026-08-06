@@ -115,22 +115,31 @@ export function createColdAppTest(config: AppFixtureConfig): E2ETest {
       const posix = dir.replace(/\\/g, '/')
       await use({ dir: posix, file: (rel) => `${posix}/${rel}` })
     },
-    electronApp: async ({ launchWorkspace }, use) => {
-      const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-'))
-      seedBaselineUserData(userDataDir)
-      const app = await launchApp({
-        appRoot: config.appRoot,
-        mainEntry: config.mainEntry,
-        userDataDir,
-        ...(config.extensions !== undefined ? { extensions: config.extensions } : {}),
-        ...(config.env !== undefined ? { env: config.env } : {}),
-        // Positional folder arg → main's parseFileToOpen → openWindowForFolder:
-        // the app boots with this workspace already attached.
-        extraArgs: [...(config.extraArgs ?? []), ...(launchWorkspace ? [launchWorkspace.dir] : [])],
-      })
-      await use(app)
-      await closeApp(app)
-    },
+    electronApp: [
+      async ({ launchWorkspace }, use) => {
+        const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-'))
+        seedBaselineUserData(userDataDir)
+        const app = await launchApp({
+          appRoot: config.appRoot,
+          mainEntry: config.mainEntry,
+          userDataDir,
+          ...(config.extensions !== undefined ? { extensions: config.extensions } : {}),
+          ...(config.env !== undefined ? { env: config.env } : {}),
+          // Positional folder arg → main's parseFileToOpen → openWindowForFolder:
+          // the app boots with this workspace already attached.
+          extraArgs: [
+            ...(config.extraArgs ?? []),
+            ...(launchWorkspace ? [launchWorkspace.dir] : []),
+          ],
+        })
+        await use(app)
+        await closeApp(app)
+      },
+      // Own budget: a closeApp that needs the force-kill path (10s graceful wait
+      // + tree enumeration + orphan sweep) legitimately takes ~20s; sharing the
+      // 30s test budget with the body risks flagging a successful teardown.
+      { timeout: 60_000 },
+    ],
     page: async ({ electronApp }, use) => {
       const page = await electronApp.firstWindow()
       await page.waitForLoadState('domcontentloaded')
@@ -295,7 +304,13 @@ export function createSharedAppTest(config: AppFixtureConfig): SharedE2ETest {
         // force-kill, exactly as the cold-launch fixture does.
         await closeApp(app)
       },
-      { scope: 'worker' },
+      // Own budget, decoupled from the 30s worker-teardown default: a worker can
+      // host several shared apps (one per shared fixture type it touched), and
+      // each closeApp may legitimately take ~20s on the force-kill path — two of
+      // those in sequence already blow a shared 30s budget even though every
+      // process dies. Seen live as "Worker teardown timeout of 30000ms exceeded"
+      // with all tests passing.
+      { scope: 'worker', timeout: 60_000 },
     ],
     electronApp: async ({ sharedApp }, use) => {
       await use(sharedApp.app)

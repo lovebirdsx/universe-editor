@@ -267,6 +267,24 @@ perforce 全部 4 个 swarm 通知 spec（`swarmReviewNotification{,Focused,Hung
 
 ---
 
+**案例 60 — 产品原子写 rename 撞 Windows 瞬时锁：EPERM rename \*.json.tmp（产品修复）**
+信号：spec 的 `page.evaluate` 直调服务后报 `EPERM: operation not permitted, rename '<file>.json.<pid>.<ts>.tmp' -> '<file>.json'`（经 reviveWireError 从 main 传回）；retry 救得回（锁是瞬时的）。与案例 17 同族但对偶：17 是 fixture 删目录撞产品**持续写**，本条是产品 rename 撞**并发读/AV 扫描**。
+`smoke.extensions`「disabling a built-in extension…」本地 e2ea 偶发——`setExtensionEnablement(false)` 触发 host 重启重扫（读 extensions.json），紧接的 `setExtensionEnablement(true)` 走 `writeJsonAtomic` 裸 `fs.rename`，目标文件正被 rescan/Defender 短暂持有 → Windows rename-over-open-file EPERM。真实用户快速连点启用/禁用同样触发=产品健壮性缺陷，修产品不动 spec：`renameWithRetries`（EPERM/EACCES/EBUSY 重试 10×100ms，非可重试码直接 throw）。回归单测：spy `fs.rename` 前两次 reject 后放行断言落盘、非可重试码不重试、预算耗尽后透传。锚：`installedExtensionsManifest.ts`（`renameWithRetries`）；`__tests__/installedExtensionsManifest.test.ts`。
+
+**案例 61 — beforeAll 起本地 server：固定随机端口 + stdio ignore = 撞占用端口后 15s 盲等（伪 flake 不可诊断）**
+信号：报错 `<x> server did not start on http://127.0.0.1:<port>`，栈在 beforeAll 的 waitForServer；retry 救得回（新 worker 重新 import module → 新随机端口）。命中信号=模块级 `PORT = BASE + random(N)` + `spawn(..., { stdio: 'ignore' })`——端口被占（上轮硬杀 worker 留下的孤儿 server 是常见占用者）时 server 早退 EADDRINUSE 但无人看见，只剩盲等超时。
+`smoke.extensionsGallery`「installs a signed marketplace extension…」本地 e2ea 偶发——三层修：① 端口改 net `listen(0)` 探测空闲端口（消灭碰撞类）；② env 经**可变对象引用**注入（`launchApp` 在每次 launch 时展开 `config.env`，beforeAll 先于任何 app launch，故 beforeAll 里回填 `env.UNIVERSE_GALLERY_URL` 对所有 launch 可见）；③ `Promise.race([waitForServer, server exit])` + 捕获 stderr——server 早退立即 fail 并带真实错误，不再 15s 盲等。整类扫：全 specs 只有此文件在 beforeAll spawn HTTP server（update spec 用固定 feed 端口但走 `mode: 'default'` 文件内串行 + 已知端口，暂不动）。锚：`smoke.extensionsGallery.spec.ts`（`getFreePort`/`galleryEnv` 回填/race）。
+
+**案例 62 — 颜色探针隐式依赖 TextMate takeover：Monarch 合并 span 使 exact-text 匹配永假（门控缺失 + poll==test 天花板）**
+信号：`tokenColor(page, '<word>')` poll received 恒 undefined 直到 `Test timeout of 30000ms exceeded`（poll 30s==test 30s，天花板击穿）；retry 秒过。命中信号=断言依赖某 token 独立成 span，但 Monarch（takeover 前）把同 class 相邻 token 合并渲染（`' after '` 带空格一个 span），exact `textContent === 'after'` 在 takeover 前**结构性匹配不到**——poll 实际在隐式等 TextMate 接管，接管慢/丢失时以不透明的 undefined 超时。
+`smoke.textMate`「over-long lines degrade…」本地 e2ea 偶发——修 spec：抽 `waitForTextMateTakeover(page, lang)`（poll `getTokenizationSupportInfo` constructorName === 'TokenizationSupportWithLineLimit'，对齐第一个用例的显式门控），插在颜色断言前——接管失败时在门控处 fail，信号清晰；颜色 poll 降回 15s。整文件同型加固（案例 31 教训）：四个用例首 poll 均 30s==test 天花板，全部补 `test.slow()`。若此后门控本身超时复发=接管在 reload 后丢失（案例 56 族的产品竞态），继续往产品层剥。锚：`smoke.textMate.spec.ts`（`waitForTextMateTakeover`）。
+
+**案例 63 — Worker teardown 30s 预算被多个 shared app 串行 closeApp 吃穿（含 45 之后的复发形态）**
+信号：「Worker teardown timeout of 30000ms exceeded」无 fixture 名 + 所有测试 pass + **事后系统无存活孤儿**（dead-parent 扫描干净、各 userData main.log 全部 before-quit→will-quit 齐全）——与案例 45（真孤儿握 pipe）区分：45 的孤儿事后仍在，本条一切最终都死了，只是慢。一个 worker 可持有多个 worker-scoped shared app（每种 shared fixture 类型一个：sharedApp/coreGitApp/coreTextMateApp/iconThemes…），worker teardown 串行 closeApp，任一走强杀路径（10s 等待 + 5s 树枚举 + taskkill + 5s 孤儿清扫 + 3s 等 EOF ≈ 20s+）×2 即吃穿共享 30s 预算。
+本地 e2ea 一轮 2 个 worker teardown 超时（206 passed）——三层修（harness）：① `sharedApp`/`electronApp` fixture 加独立 `timeout: 60_000`（Playwright fixture 自带 timeout 与 test/teardown 共享预算解耦，慢而成功的 teardown 不再误报）；② `closeApp` 强杀路径与「强杀后 pipe 仍未 EOF」各输出 `console.warn`（下次复发直接指认哪个 app/是否真有不可达孤儿，不再事后盲扫）；③ `forceKillTree` 的逐 pid `taskkill` 合并为单次多 `/pid` 调用提速。锚：`packages/e2e-harness/src/fixtures.ts`（fixture timeout）；`launch.ts`（closeApp warn/批量 taskkill）。
+
+---
+
 ## 根治 TODO
 
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。

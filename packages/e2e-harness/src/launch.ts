@@ -100,9 +100,15 @@ function forceKillTree(pid: number): void {
   } catch {
     // Enumeration failed — fall back to a best-effort /T on the root below.
   }
-  for (const p of pids) {
+  // One batched call: taskkill keeps processing later /pid args when an
+  // earlier one is already gone, and a single spawn is much cheaper than one
+  // per pid — worker teardown closes apps sequentially against a shared
+  // budget, so every second here counts.
+  if (pids.size > 0) {
+    const pidArgs: string[] = []
+    for (const p of pids) pidArgs.push('/pid', String(p))
     try {
-      execFileSync('taskkill', ['/pid', String(p), '/T', '/F'], { stdio: 'ignore' })
+      execFileSync('taskkill', [...pidArgs, '/T', '/F'], { stdio: 'ignore' })
     } catch {
       // Already exited, or unkillable — nothing actionable for teardown.
     }
@@ -168,6 +174,11 @@ export async function closeApp(app: ElectronApplication): Promise<void> {
   // already exited cleanly (exitCode 0) while orphaned children keep the pipe
   // open — that is exactly the case app.close() cannot resolve on its own.
   if (timedOut && pid !== undefined) {
+    // Loud on purpose: worker stderr surfaces in the Playwright report, so a
+    // teardown that went down the force-kill path is attributable to its app.
+    console.warn(
+      `[e2e] closeApp: graceful close still pending after ${CLOSE_TIMEOUT_MS}ms (pid=${pid}) — force-killing the process tree`,
+    )
     forceKillTree(pid)
     // The tree walk misses tsserver detached from the app root (its parent CLI
     // was reaped first on graceful shutdown). Sweep those dead-parent orphans too,
@@ -177,7 +188,18 @@ export async function closeApp(app: ElectronApplication): Promise<void> {
     // Killing the orphans EOFs the pipe → the pending close() resolves. Wait
     // briefly so Playwright's connection is fully torn down before the worker
     // exits (otherwise its own teardown can still block).
-    await Promise.race([closePromise, new Promise((res) => setTimeout(res, 3_000))])
+    const stillOpen = await Promise.race([
+      closePromise,
+      new Promise<boolean>((res) => setTimeout(() => res(true), 3_000)),
+    ])
+    if (stillOpen) {
+      // The smoking gun for a future "Worker teardown timeout": something the
+      // tree walk cannot reach is holding inherited handles. Hunt it with a
+      // dead-parent process scan (see skill fix-ci-e2e-flake, case 45).
+      console.warn(
+        `[e2e] closeApp: CDP pipe still open after force-kill (pid=${pid}) — an unreachable orphan is holding inherited handles`,
+      )
+    }
   }
 }
 
