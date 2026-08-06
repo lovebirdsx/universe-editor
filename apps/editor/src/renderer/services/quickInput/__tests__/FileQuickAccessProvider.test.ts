@@ -139,6 +139,9 @@ interface FakeFileSearch extends IFileSearchServiceType {
   }>
   resultPaths: string[]
   deferred: boolean
+  /** 模拟主进程预热 walk 截断：matchAll 调用最多返回这么多条并置 limitHit。
+   *  打分搜索（带 pattern 的兜底）是全树 top-K，不受此截断。 */
+  truncateAt: number | undefined
   resolveAll(): void
 }
 
@@ -151,6 +154,7 @@ function makeFileSearch(root: URI): FakeFileSearch {
     calls,
     resultPaths: [],
     deferred: false,
+    truncateAt: undefined,
     resolveAll() {
       while (resolvers.length > 0) resolvers.pop()?.()
     },
@@ -162,9 +166,18 @@ function makeFileSearch(root: URI): FakeFileSearch {
         ignore: query.ignore ?? [],
         maxResults: query.maxResults,
       })
-      const max = query.maxResults ?? Number.MAX_SAFE_INTEGER
+      const max = Math.min(
+        query.maxResults ?? Number.MAX_SAFE_INTEGER,
+        (query.matchAll ? svc.truncateAt : undefined) ?? Number.MAX_SAFE_INTEGER,
+      )
+      const pattern = query.pattern.trim().toLowerCase()
       const build = (): IFileSearchComplete => {
-        const all = svc.resultPaths.map((p) => URI.file(p))
+        const all = svc.resultPaths
+          .map((p) => URI.file(p))
+          .filter((uri) => {
+            if (query.matchAll || pattern.length === 0) return true
+            return uri.fsPath.replace(/\\/g, '/').toLowerCase().includes(pattern)
+          })
         const results = all.slice(0, max).map((uri, i) => {
           const norm = uri.fsPath.replace(/\\/g, '/')
           const relativePath = norm.startsWith(rootPath + '/')
@@ -875,6 +888,93 @@ describe('FileQuickAccessProvider — large listing (chunked filter + narrowing)
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Truncated listings: the cached pool is a subset of the workspace, so typing
+// must also fall back to a scored main-process search (regression: on a
+// multi-million-file workspace files outside the 100k warm-up cap could never
+// be found through Ctrl+P)
+// ---------------------------------------------------------------------------
+
+describe('FileQuickAccessProvider — truncated listing (main-search fallback)', () => {
+  beforeEach(() => {
+    invalidateMentionFileCache()
+  })
+  afterEach(() => {
+    invalidateMentionFileCache()
+  })
+
+  it('finds a file outside the truncated cached listing via the fallback search', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = ['/ws/src/a.ts', '/ws/src/b.ts', '/ws/deep/nested/iaction.ts']
+    fileSearch.truncateAt = 2
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('iaction')
+    await flushPromises()
+
+    expect(fileSearch.calls).toHaveLength(2)
+    expect(fileSearch.calls[1]!.pattern).toBe('iaction')
+    expect(fileSearch.calls[1]!.matchAll).toBeUndefined()
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['iaction.ts'])
+    expect(picker.busy).toBe(false)
+  })
+
+  it('shows cached hits instantly, then merges fallback hits deduped by resource', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = ['/ws/xa.ts', '/ws/xb.ts', '/ws/xc.ts']
+    fileSearch.truncateAt = 2
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('x')
+    // 缓存池命中即时可见，同时兜底搜索仍在跑（busy 亮起）。
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['xa.ts', 'xb.ts'])
+    expect(picker.busy).toBe(true)
+
+    await flushPromises()
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual([
+      'xa.ts',
+      'xb.ts',
+      'xc.ts',
+    ])
+    expect(picker.busy).toBe(false)
+  })
+
+  it('a superseding keystroke discards the stale fallback result', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = ['/ws/xa.ts', '/ws/xb.ts', '/ws/xc.ts']
+    fileSearch.truncateAt = 2
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    fileSearch.deferred = true
+    picker.fireValue('xa')
+    picker.fireValue('xc')
+    fileSearch.resolveAll()
+    await flushPromises()
+
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['xc.ts'])
+    expect(picker.busy).toBe(false)
+  })
+
+  it('never falls back when the cached listing is complete', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = ['/ws/src/a.ts', '/ws/src/b.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('a')
+    await flushPromises()
+    expect(fileSearch.calls).toHaveLength(1)
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['a.ts'])
   })
 })
 

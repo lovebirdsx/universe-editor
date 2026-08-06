@@ -45,9 +45,18 @@ const MAX_FILES = 100_000
 // returned instantly (stale-while-revalidate) — see peekWorkspaceFiles.
 const CACHE_TTL_MS = 5 * 60_000
 
+/** The cached workspace listing plus whether the walk saw the whole tree.
+ *  `complete: false` means the walk stopped early (MAX_FILES / timeout), so the
+ *  entries are an arbitrary subset — consumers that must find *any* file (e.g.
+ *  Ctrl+P) need a fallback search for what the subset misses. */
+export interface WorkspaceFileListing {
+  readonly entries: readonly MentionFileEntry[]
+  readonly complete: boolean
+}
+
 interface _Cache {
   readonly key: string
-  readonly entries: readonly MentionFileEntry[]
+  readonly listing: WorkspaceFileListing
   readonly timestamp: number
 }
 const _cache = new Map<string, _Cache>()
@@ -67,13 +76,13 @@ export async function loadWorkspaceFiles(
   fileSearch: IFileSearchService,
   filter?: MentionFileFilter,
   token?: CancellationToken,
-): Promise<readonly MentionFileEntry[]> {
+): Promise<WorkspaceFileListing> {
   const dirNames = filter ? filter.dirNames : FALLBACK_IGNORE_DIRS
   const excludeGlobs = filter?.excludeGlobs ?? []
   const key = cacheKey(root, dirNames, excludeGlobs)
   const now = Date.now()
   const cached = _cache.get(key)
-  if (cached && now - cached.timestamp < CACHE_TTL_MS) return cached.entries
+  if (cached && now - cached.timestamp < CACHE_TTL_MS) return cached.listing
 
   const complete = await fileSearch.search(
     {
@@ -93,12 +102,13 @@ export async function loadWorkspaceFiles(
       name: match.basename,
     }
   })
+  const listing: WorkspaceFileListing = { entries, complete: !complete.limitHit }
   // A cancelled walk returns whatever partial listing it had; caching it would
   // serve an arbitrarily truncated workspace for the whole TTL.
   if (complete.stopReason !== 'canceled') {
-    _cache.set(key, { key, entries, timestamp: now })
+    _cache.set(key, { key, listing, timestamp: now })
   }
-  return entries
+  return listing
 }
 
 /**
@@ -110,10 +120,10 @@ export async function loadWorkspaceFiles(
 export function peekWorkspaceFiles(
   root: URI,
   filter?: MentionFileFilter,
-): readonly MentionFileEntry[] | undefined {
+): WorkspaceFileListing | undefined {
   const dirNames = filter ? filter.dirNames : FALLBACK_IGNORE_DIRS
   const excludeGlobs = filter?.excludeGlobs ?? []
-  return _cache.get(cacheKey(root, dirNames, excludeGlobs))?.entries
+  return _cache.get(cacheKey(root, dirNames, excludeGlobs))?.listing
 }
 
 /** Invalidate the cache — exposed for tests and for explicit refresh actions. */

@@ -635,7 +635,7 @@ export function PromptInput({
       dirNames: exclude.getDirNameIgnores(),
       excludeGlobs: exclude.getSearchExcludeGlobs(),
     })
-      .then((entries) => setFiles(entries))
+      .then((listing) => setFiles(listing.entries))
       .catch(() => setFiles([]))
       .finally(() => setFilesLoading(false))
   }, [mentionQuery, files.length, filesLoading, workspaceRoot, fileSearch, exclude])

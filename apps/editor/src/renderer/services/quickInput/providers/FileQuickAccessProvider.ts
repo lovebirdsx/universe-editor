@@ -6,7 +6,10 @@
  *  disk walk. Large listings score in time-sliced chunks off the input event,
  *  and every completed scan narrows the candidate pool for the next extending
  *  keystroke (fuzzy matches are subsequence-based, so extending the query can
- *  only shrink the match set) — huge workspaces stay responsive too.
+ *  only shrink the match set) — huge workspaces stay responsive too. When the
+ *  warm-up walk could not see the whole tree (listing truncated at the cache
+ *  cap), each keystroke additionally runs a scored main-process search and
+ *  merges the hits, so files outside the cached subset remain findable.
  *  Open editors (all types, MRU order) head the empty-query list and
  *  join fuzzy matching while typing, followed by recent files; with no workspace
  *  it falls back to the recent files list. Mirrors VSCode's file quick access,
@@ -14,6 +17,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  CancellationTokenSource,
   EditorRegistry,
   GroupDirection,
   IEditorGroupsService,
@@ -322,6 +326,11 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     picker.filterExternally = true
     picker.placeholder = localize('quickInput.goToFile.placeholder', 'Go to File…')
 
+    const filter: MentionFileFilter = {
+      dirNames: this._exclude.getDirNameIgnores(),
+      excludeGlobs: this._exclude.getSearchExcludeGlobs(),
+    }
+
     // Open editors (all types, MRU order) participate both as the head of the
     // empty-query list and as fuzzy-match candidates while typing — mirroring
     // VSCode, where Ctrl+P mixes open editors with recent files.
@@ -339,6 +348,10 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     // The cached full file listing (loaded once when the picker opens). Filtering
     // then runs in-memory on every keystroke — no per-keystroke disk walk.
     let allFiles: readonly MentionFileEntry[] | undefined
+    // False when the warm-up walk stopped early (MAX_FILES / timeout): the pool
+    // is an arbitrary subset of the workspace, so in-memory filtering alone
+    // would permanently hide every file outside it.
+    let listingComplete = true
     let seq = 0
     // The last fully-scanned pattern and the entries it matched. A keystroke
     // that extends that pattern only rescans this (usually far smaller) match
@@ -405,15 +418,12 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         ? lastCompleted.entries
         : (allFiles ?? [])
 
-    const filterPoolSync = (
-      pattern: string,
-      pool: readonly MentionFileEntry[],
-    ): IQuickPickItem[] => {
+    const filterPoolSync = (pattern: string, pool: readonly MentionFileEntry[]): ScoredRow[] => {
       const { rows, ids } = editorRows(pattern)
       const matched: MentionFileEntry[] = []
       scanPool(pool, 0, pattern, ids, rows, matched)
       lastCompleted = { pattern, entries: matched }
-      return finalizeRows(rows)
+      return rows
     }
 
     // Chunked scan for large pools: abandons itself (returns undefined) when a
@@ -422,7 +432,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       pattern: string,
       pool: readonly MentionFileEntry[],
       mySeq: number,
-    ): Promise<IQuickPickItem[] | undefined> => {
+    ): Promise<ScoredRow[] | undefined> => {
       const { rows, ids } = editorRows(pattern)
       const matched: MentionFileEntry[] = []
       let next = scanPool(pool, 0, pattern, ids, rows, matched, performance.now() + CHUNK_BUDGET_MS)
@@ -444,7 +454,63 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         )
       }
       lastCompleted = { pattern, entries: matched }
-      return finalizeRows(rows)
+      return rows
+    }
+
+    // Truncated-listing fallback: when the warm-up walk could not see the whole
+    // tree, every keystroke also runs a scored main-process search (globally
+    // top-K over the full walk, cancelled by the next keystroke) and merges the
+    // hits — cached-pool results stay instant, files outside the cache become
+    // findable again. Complete listings never pay this walk.
+    let fallbackCts: CancellationTokenSource | undefined
+    let localRows: ScoredRow[] | undefined
+    let fallbackRows: ScoredRow[] | undefined
+    let fallbackPending = false
+    disposables.add(toDisposable(() => fallbackCts?.dispose(true)))
+
+    const renderMerged = (pattern: string, mySeq: number): void => {
+      if (mySeq !== seq || token.isCancellationRequested || localRows === undefined) return
+      let rows = localRows
+      if (fallbackRows !== undefined && fallbackRows.length > 0) {
+        const seen = new Set(rows.map((r) => r.pick?.id ?? r.entry!.uri))
+        rows = [...rows, ...fallbackRows.filter((r) => !seen.has(r.entry!.uri))]
+      }
+      const items = finalizeRows([...rows])
+      picker.items = items
+      picker.busy = fallbackPending
+      void prependExactPathMatch(pattern, mySeq, items)
+    }
+
+    const runFallbackSearch = (pattern: string, mySeq: number): void => {
+      if (listingComplete) return
+      const cts = new CancellationTokenSource(token)
+      fallbackCts = cts
+      fallbackPending = true
+      void this._fileSearch
+        .search(
+          {
+            root,
+            pattern,
+            maxResults: GO_TO_FILE_MAX_RESULTS,
+            excludes: filter.excludeGlobs ?? [],
+            ignore: filter.dirNames,
+          },
+          cts.token,
+        )
+        .then((complete) => {
+          if (mySeq !== seq || token.isCancellationRequested) return
+          fallbackRows = complete.results.map((m) => ({
+            score: m.score,
+            path: m.relativePath,
+            entry: { uri: m.resource.toString(), relPath: m.relativePath, name: m.basename },
+          }))
+        })
+        .catch(() => undefined)
+        .then(() => {
+          if (mySeq !== seq) return
+          fallbackPending = false
+          renderMerged(pattern, mySeq)
+        })
     }
 
     // When the query looks like a path (contains a separator), probe the exact
@@ -475,6 +541,11 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       // provider 刚设置的状态（如重新输入 '>' 时命令列表被文件结果覆盖）。
       if (token.isCancellationRequested) return
       const mySeq = ++seq
+      fallbackCts?.dispose(true)
+      fallbackCts = undefined
+      localRows = undefined
+      fallbackRows = undefined
+      fallbackPending = false
       const pattern = value.trim()
       if (pattern.length === 0) {
         picker.busy = false
@@ -496,21 +567,19 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         return
       }
       const pool = candidatePool(pattern)
+      runFallbackSearch(pattern, mySeq)
       if (pool.length <= SYNC_FILTER_LIMIT) {
-        const items = recordPerfPhase('quickOpen.filterFiles', () => filterPoolSync(pattern, pool))
-        picker.items = items
-        picker.busy = false
-        void prependExactPathMatch(pattern, mySeq, items)
+        localRows = recordPerfPhase('quickOpen.filterFiles', () => filterPoolSync(pattern, pool))
+        renderMerged(pattern, mySeq)
         return
       }
       picker.busy = true
       void recordPerfPhaseAsync('quickOpen.filterFiles', () =>
         filterPoolChunked(pattern, pool, mySeq),
-      ).then((items) => {
-        if (!items || mySeq !== seq || token.isCancellationRequested) return
-        picker.items = items
-        picker.busy = false
-        void prependExactPathMatch(pattern, mySeq, items)
+      ).then((rows) => {
+        if (rows === undefined || mySeq !== seq || token.isCancellationRequested) return
+        localRows = rows
+        renderMerged(pattern, mySeq)
       })
     }
 
@@ -533,19 +602,18 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     // @-mention). Seed from the previous listing first — even a stale one beats
     // an empty picker — then revalidate in the background and re-run the
     // current query when fresh files land, so an early keystroke isn't lost.
-    const filter: MentionFileFilter = {
-      dirNames: this._exclude.getDirNameIgnores(),
-      excludeGlobs: this._exclude.getSearchExcludeGlobs(),
-    }
-    allFiles = peekWorkspaceFiles(root, filter)
+    const cachedListing = peekWorkspaceFiles(root, filter)
+    allFiles = cachedListing?.entries
+    listingComplete = cachedListing?.complete ?? true
     if (picker.value.trim().length > 0) {
       if (allFiles === undefined) picker.busy = true
       else runSearch(picker.value)
     }
     void loadWorkspaceFiles(root, this._fileSearch, filter, token)
-      .then((files) => {
+      .then((listing) => {
         if (token.isCancellationRequested) return
-        allFiles = files
+        allFiles = listing.entries
+        listingComplete = listing.complete
         // The fresh listing may contain files the stale scan never saw — the
         // narrowing pool must not survive it.
         lastCompleted = undefined
