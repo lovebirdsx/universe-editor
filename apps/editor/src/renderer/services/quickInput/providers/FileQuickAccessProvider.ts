@@ -65,6 +65,9 @@ const CHUNK_BUDGET_MS = 8
 // kept top slice under a static comparator, so the final top results are
 // unaffected — this only bounds the final sort.
 const COMPACT_ROWS_AT = 8_192
+// 截断清单的兜底搜索按击键防抖：连续输入时只有停顿后的最终 pattern 会真正
+// 打到主进程（上一次在飞的搜索由 seq/CTS 取消），避免每个字符都 spawn rg。
+const FALLBACK_DEBOUNCE_MS = 200
 
 const yieldToMain = (): Promise<void> => {
   const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler
@@ -463,10 +466,16 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     // hits — cached-pool results stay instant, files outside the cache become
     // findable again. Complete listings never pay this walk.
     let fallbackCts: CancellationTokenSource | undefined
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined
     let localRows: ScoredRow[] | undefined
     let fallbackRows: ScoredRow[] | undefined
     let fallbackPending = false
-    disposables.add(toDisposable(() => fallbackCts?.dispose(true)))
+    disposables.add(
+      toDisposable(() => {
+        fallbackCts?.dispose(true)
+        if (fallbackTimer !== undefined) clearTimeout(fallbackTimer)
+      }),
+    )
 
     const renderMerged = (pattern: string, mySeq: number): void => {
       if (mySeq !== seq || token.isCancellationRequested || localRows === undefined) return
@@ -483,34 +492,39 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
 
     const runFallbackSearch = (pattern: string, mySeq: number): void => {
       if (listingComplete) return
-      const cts = new CancellationTokenSource(token)
-      fallbackCts = cts
+      // busy 在防抖等待期就点亮：合并结果尚不完整，进度条如实反映。
       fallbackPending = true
-      void this._fileSearch
-        .search(
-          {
-            root,
-            pattern,
-            maxResults: GO_TO_FILE_MAX_RESULTS,
-            excludes: filter.excludeGlobs ?? [],
-            ignore: filter.dirNames,
-          },
-          cts.token,
-        )
-        .then((complete) => {
-          if (mySeq !== seq || token.isCancellationRequested) return
-          fallbackRows = complete.results.map((m) => ({
-            score: m.score,
-            path: m.relativePath,
-            entry: { uri: m.resource.toString(), relPath: m.relativePath, name: m.basename },
-          }))
-        })
-        .catch(() => undefined)
-        .then(() => {
-          if (mySeq !== seq) return
-          fallbackPending = false
-          renderMerged(pattern, mySeq)
-        })
+      fallbackTimer = setTimeout(() => {
+        fallbackTimer = undefined
+        if (mySeq !== seq || token.isCancellationRequested) return
+        const cts = new CancellationTokenSource(token)
+        fallbackCts = cts
+        void this._fileSearch
+          .search(
+            {
+              root,
+              pattern,
+              maxResults: GO_TO_FILE_MAX_RESULTS,
+              excludes: filter.excludeGlobs ?? [],
+              ignore: filter.dirNames,
+            },
+            cts.token,
+          )
+          .then((complete) => {
+            if (mySeq !== seq || token.isCancellationRequested) return
+            fallbackRows = complete.results.map((m) => ({
+              score: m.score,
+              path: m.relativePath,
+              entry: { uri: m.resource.toString(), relPath: m.relativePath, name: m.basename },
+            }))
+          })
+          .catch(() => undefined)
+          .then(() => {
+            if (mySeq !== seq) return
+            fallbackPending = false
+            renderMerged(pattern, mySeq)
+          })
+      }, FALLBACK_DEBOUNCE_MS)
     }
 
     // When the query looks like a path (contains a separator), probe the exact
@@ -543,6 +557,10 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       const mySeq = ++seq
       fallbackCts?.dispose(true)
       fallbackCts = undefined
+      if (fallbackTimer !== undefined) {
+        clearTimeout(fallbackTimer)
+        fallbackTimer = undefined
+      }
       localRows = undefined
       fallbackRows = undefined
       fallbackPending = false

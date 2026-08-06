@@ -915,13 +915,13 @@ describe('FileQuickAccessProvider — truncated listing (main-search fallback)',
     await flushPromises()
 
     picker.fireValue('iaction')
-    await flushPromises()
+    // 兜底搜索按击键防抖，停顿后才打到主进程。
+    await vi.waitFor(() => expect(fileSearch.calls).toHaveLength(2))
+    await vi.waitFor(() => expect(picker.busy).toBe(false))
 
-    expect(fileSearch.calls).toHaveLength(2)
     expect(fileSearch.calls[1]!.pattern).toBe('iaction')
     expect(fileSearch.calls[1]!.matchAll).toBeUndefined()
     expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['iaction.ts'])
-    expect(picker.busy).toBe(false)
   })
 
   it('shows cached hits instantly, then merges fallback hits deduped by resource', async () => {
@@ -933,17 +933,16 @@ describe('FileQuickAccessProvider — truncated listing (main-search fallback)',
     await flushPromises()
 
     picker.fireValue('x')
-    // 缓存池命中即时可见，同时兜底搜索仍在跑（busy 亮起）。
+    // 缓存池命中即时可见；兜底搜索还在防抖/在飞（busy 亮起）。
     expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['xa.ts', 'xb.ts'])
     expect(picker.busy).toBe(true)
 
-    await flushPromises()
+    await vi.waitFor(() => expect(picker.busy).toBe(false))
     expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual([
       'xa.ts',
       'xb.ts',
       'xc.ts',
     ])
-    expect(picker.busy).toBe(false)
   })
 
   it('a superseding keystroke discards the stale fallback result', async () => {
@@ -956,12 +955,14 @@ describe('FileQuickAccessProvider — truncated listing (main-search fallback)',
 
     fileSearch.deferred = true
     picker.fireValue('xa')
+    // 等防抖到期、'xa' 的兜底搜索真正在飞后，再用新击键取代它。
+    await vi.waitFor(() => expect(fileSearch.calls.filter((c) => !c.matchAll)).toHaveLength(1))
     picker.fireValue('xc')
+    await vi.waitFor(() => expect(fileSearch.calls.filter((c) => !c.matchAll)).toHaveLength(2))
     fileSearch.resolveAll()
-    await flushPromises()
+    await vi.waitFor(() => expect(picker.busy).toBe(false))
 
     expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['xc.ts'])
-    expect(picker.busy).toBe(false)
   })
 
   it('never falls back when the cached listing is complete', async () => {
@@ -972,7 +973,8 @@ describe('FileQuickAccessProvider — truncated listing (main-search fallback)',
     await flushPromises()
 
     picker.fireValue('a')
-    await flushPromises()
+    // 超过防抖窗口仍不该有第二次主进程调用。
+    await new Promise((resolve) => setTimeout(resolve, 300))
     expect(fileSearch.calls).toHaveLength(1)
     expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['a.ts'])
   })

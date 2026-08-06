@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Tests for main-process workspace file-name search.
+ *  Tests for main-process workspace file-name search (ripgrep engine).
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -11,11 +11,20 @@ import { CancellationToken, CancellationTokenSource, URI } from '@universe-edito
 import { FileSearchMainService } from '../fileSearchMainService.js'
 
 const roots: string[] = []
+const services: FileSearchMainService[] = []
 
 async function makeRoot(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'universe-file-search-'))
   roots.push(root)
   return root
+}
+
+// 缓存目录必须在工作区根之外，否则清单构建会把缓存文件自己也枚举进清单。
+async function makeService(): Promise<FileSearchMainService> {
+  const cacheDir = path.join(await makeRoot(), 'listings')
+  const service = new FileSearchMainService(undefined, { cacheDir })
+  services.push(service)
+  return service
 }
 
 async function writeFile(root: string, relPath: string): Promise<void> {
@@ -38,30 +47,67 @@ async function trySymlink(
 }
 
 afterEach(async () => {
+  for (const service of services.splice(0)) service.dispose()
   const prefix = path.resolve(os.tmpdir(), 'universe-file-search-')
   for (const root of roots.splice(0)) {
     const resolved = path.resolve(root)
     if (resolved.startsWith(prefix)) {
-      await fs.rm(resolved, { recursive: true, force: true })
+      await fs.rm(resolved, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
     }
   }
 })
 
 describe('FileSearchMainService', () => {
-  it('uses maxResults as a result cap, not a traversal cap', async () => {
+  it('uses maxResults as a result cap, not a candidate cap', async () => {
     const root = await makeRoot()
     await writeFile(root, 'first.txt')
     await writeFile(root, 'ActionDetailView.tsx')
 
-    const service = new FileSearchMainService()
+    const service = await makeService()
     const complete = await service.search({
       root: URI.file(root),
       pattern: 'ActionDetailView.tsx',
       maxResults: 1,
     })
 
-    expect(complete.filesWalked).toBe(2)
     expect(complete.results.map((r) => r.relativePath)).toEqual(['ActionDetailView.tsx'])
+    expect(complete.limitHit).toBe(false)
+  })
+
+  it('matches path-shaped patterns across directory segments', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'src/main.ts')
+    await writeFile(root, 'other/unrelated.ts')
+
+    const service = await makeService()
+    const complete = await service.search({
+      root: URI.file(root),
+      pattern: 'src/main',
+      includeExactPathMatches: false,
+      maxResults: 10,
+    })
+
+    expect(complete.results.map((r) => r.relativePath)).toEqual(['src/main.ts'])
+  })
+
+  it('reuses the on-disk listing across scored searches within the TTL', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'alpha.ts')
+    await writeFile(root, 'beta.ts')
+
+    const cacheDir = path.join(await makeRoot(), 'listings')
+    const service = new FileSearchMainService(undefined, { cacheDir })
+    services.push(service)
+
+    const first = await service.search({ root: URI.file(root), pattern: 'alpha', maxResults: 10 })
+    expect(first.results.map((r) => r.relativePath)).toEqual(['alpha.ts'])
+
+    const second = await service.search({ root: URI.file(root), pattern: 'beta', maxResults: 10 })
+    expect(second.results.map((r) => r.relativePath)).toEqual(['beta.ts'])
+
+    // 同一 root+excludes 签名在 TTL 内只构建一次清单文件。
+    const listings = (await fs.readdir(cacheDir)).filter((n) => n.endsWith('.list'))
+    expect(listings).toHaveLength(1)
   })
 
   it('supports matchAll with search excludes and ignored directory names', async () => {
@@ -70,11 +116,29 @@ describe('FileSearchMainService', () => {
     await writeFile(root, 'dist/generated.ts')
     await writeFile(root, 'node_modules/pkg/index.ts')
 
-    const service = new FileSearchMainService()
+    const service = await makeService()
     const complete = await service.search({
       root: URI.file(root),
       pattern: '',
       matchAll: true,
+      excludes: ['dist/**'],
+      ignore: ['node_modules'],
+      maxResults: 10,
+    })
+
+    expect(complete.results.map((r) => r.relativePath)).toEqual(['src/main.ts'])
+  })
+
+  it('applies excludes and ignored directory names to scored searches too', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'src/main.ts')
+    await writeFile(root, 'dist/main.ts')
+    await writeFile(root, 'node_modules/pkg/main.ts')
+
+    const service = await makeService()
+    const complete = await service.search({
+      root: URI.file(root),
+      pattern: 'main',
       excludes: ['dist/**'],
       ignore: ['node_modules'],
       maxResults: 10,
@@ -88,7 +152,7 @@ describe('FileSearchMainService', () => {
     await writeFile(root, 'real.ts')
     if (!(await trySymlink(path.join(root, 'real.ts'), path.join(root, 'link.ts'), 'file'))) return
 
-    const service = new FileSearchMainService()
+    const service = await makeService()
     const complete = await service.search({
       root: URI.file(root),
       pattern: '',
@@ -104,7 +168,7 @@ describe('FileSearchMainService', () => {
     await writeFile(root, 'target/inside.ts')
     if (!(await trySymlink(path.join(root, 'target'), path.join(root, 'linkdir'), 'dir'))) return
 
-    const service = new FileSearchMainService()
+    const service = await makeService()
     const complete = await service.search({
       root: URI.file(root),
       pattern: 'inside.ts',
@@ -125,7 +189,7 @@ describe('FileSearchMainService', () => {
     )
       return
 
-    const service = new FileSearchMainService()
+    const service = await makeService()
     const complete = await service.search({
       root: URI.file(root),
       pattern: '',
@@ -137,7 +201,7 @@ describe('FileSearchMainService', () => {
   })
 
   describe('bounded accumulation', () => {
-    it('stops walking once matchAll accumulates maxResults', async () => {
+    it('stops the enumeration once matchAll accumulates maxResults', async () => {
       const root = await makeRoot()
       const writes: Promise<void>[] = []
       for (let dir = 0; dir < 20; dir++) {
@@ -147,7 +211,7 @@ describe('FileSearchMainService', () => {
       }
       await Promise.all(writes)
 
-      const service = new FileSearchMainService()
+      const service = await makeService()
       const complete = await service.search({
         root: URI.file(root),
         pattern: '',
@@ -157,12 +221,12 @@ describe('FileSearchMainService', () => {
 
       expect(complete.results).toHaveLength(10)
       expect(complete.limitHit).toBe(true)
-      // The walk must short-circuit: without it every one of the 200 files is
-      // accumulated in memory (the unbounded-growth main-process OOM).
+      // 枚举必须在 cap 处截断：没有截断的话 200 个文件全被累进内存
+      //（曾经的主进程无界增长 OOM）。
       expect(complete.filesWalked).toBeLessThan(200)
     })
 
-    it('keeps the global best matches when accumulation is compacted mid-walk', async () => {
+    it('keeps the global best matches when accumulation is compacted mid-search', async () => {
       const root = await makeRoot()
       const writes = [writeFile(root, 'fa.ts'), writeFile(root, 'faa.ts')]
       for (let i = 0; i < 300; i++) {
@@ -170,15 +234,15 @@ describe('FileSearchMainService', () => {
       }
       await Promise.all(writes)
 
-      const service = new FileSearchMainService()
+      const service = await makeService()
       const complete = await service.search({
         root: URI.file(root),
         pattern: 'f',
         maxResults: 2,
       })
 
-      // Scoring walks the whole tree (maxResults is a result cap, not a
-      // traversal cap) but must still surface the two globally best matches.
+      // maxResults 是结果页大小而非候选上限：全部 302 个候选都要参与打分，
+      // 最终页必须是全局最优两条。
       expect(complete.filesWalked).toBe(302)
       expect(complete.results.map((r) => r.relativePath)).toEqual(['fa.ts', 'faa.ts'])
       expect(complete.limitHit).toBe(true)
@@ -190,7 +254,7 @@ describe('FileSearchMainService', () => {
       const root = await makeRoot()
       await writeFile(root, 'a.ts')
 
-      const service = new FileSearchMainService()
+      const service = await makeService()
       const complete = await service.search(
         { root: URI.file(root), pattern: '', matchAll: true, maxResults: 10 },
         CancellationToken.Cancelled,
@@ -200,10 +264,9 @@ describe('FileSearchMainService', () => {
       expect(complete.stopReason).toBe('canceled')
       expect(complete.limitHit).toBe(true)
       expect(complete.filesWalked).toBe(0)
-      expect(complete.directoriesWalked).toBe(0)
     })
 
-    it('stops the walk when cancelled mid-flight', async () => {
+    it('stops the enumeration when cancelled mid-flight', async () => {
       const root = await makeRoot()
       const writes: Promise<void>[] = []
       for (let i = 0; i < 50; i++) {
@@ -211,9 +274,9 @@ describe('FileSearchMainService', () => {
       }
       await Promise.all(writes)
 
-      const service = new FileSearchMainService()
+      const service = await makeService()
       const cts = new CancellationTokenSource()
-      // Cancel after the walk has started (it is parked on the first readdir).
+      // rg 尚未产出任何数据事件前取消（spawn 后的 I/O 事件都在下一轮事件循环）。
       const pending = service.search(
         { root: URI.file(root), pattern: '', matchAll: true, maxResults: 100 },
         cts.token,
@@ -226,11 +289,11 @@ describe('FileSearchMainService', () => {
       expect(complete.filesWalked).toBe(0)
     })
 
-    it('stops the walk once the time budget is exhausted', async () => {
+    it('stops once the time budget is exhausted', async () => {
       const root = await makeRoot()
       await writeFile(root, 'a.ts')
 
-      const service = new FileSearchMainService()
+      const service = await makeService()
       const complete = await service.search({
         root: URI.file(root),
         pattern: '',
@@ -242,7 +305,6 @@ describe('FileSearchMainService', () => {
       expect(complete.stopReason).toBe('timeout')
       expect(complete.limitHit).toBe(true)
       expect(complete.filesWalked).toBe(0)
-      expect(complete.directoriesWalked).toBe(0)
     })
   })
 })

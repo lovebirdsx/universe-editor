@@ -4,10 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn } from 'node:child_process'
-import os from 'node:os'
 import path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import { rgPath } from '@vscode/ripgrep'
 import {
   createNamedLogger,
   Disposable,
@@ -25,6 +23,13 @@ import {
   type UriComponents,
 } from '@universe-editor/platform'
 import { ManagedChildProcess } from '../process/managedChildProcess.js'
+import {
+  escapeForRegex,
+  expandExcludeGlob,
+  normalizeGlob,
+  resolveSearchThreads,
+  rgDiskPath,
+} from '../ripgrep/ripgrepUtil.js'
 import {
   ITextSearchMainService,
   type ITextSearchMainComplete,
@@ -45,18 +50,9 @@ const RESULTS_FLUSH_INTERVAL_MS = 100
 const RESULTS_FLUSH_AFTER_COUNT = 50
 const STDERR_LIMIT = 1_000_000
 
-export function resolveRipgrepDiskPath(ripgrepPath: string = rgPath): string {
-  return ripgrepPath.replace(/\.asar([\\/])/g, '.asar.unpacked$1')
-}
-
-// Explicit `search.threads` wins; otherwise leave headroom for the app itself
-// instead of letting ripgrep saturate every core.
-export function resolveSearchThreads(requested: number | undefined): number {
-  if (requested !== undefined && requested >= 1) return Math.floor(requested)
-  return Math.max(1, os.cpus().length - 2)
-}
-
-const rgDiskPath = resolveRipgrepDiskPath()
+// Shared rg path/glob/thread policy now lives in ripgrepUtil.ts (also used by
+// the file-name search); re-exported here to keep existing import sites stable.
+export { resolveRipgrepDiskPath, resolveSearchThreads } from '../ripgrep/ripgrepUtil.js'
 
 type RgBytesOrText = { bytes: string } | { text: string }
 
@@ -96,21 +92,6 @@ function reviveUri(value: URI | UriComponents | string): URI {
   if (value instanceof URI) return value
   if (typeof value === 'string') return URI.parse(value)
   return URI.revive(value) as URI
-}
-
-function escapeForRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function normalizeGlob(value: string): string {
-  return value.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
-}
-
-function expandExcludeGlob(value: string): string[] {
-  const normalized = normalizeGlob(value)
-  if (!normalized) return []
-  if (normalized.endsWith('/**')) return [normalized]
-  return [normalized, `${normalized}/**`]
 }
 
 function buildRgArgs(query: ITextSearchMainQuery): string[] {
