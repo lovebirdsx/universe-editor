@@ -358,13 +358,24 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   }, [configService])
 
   // Wire the active input -> model swap + dirty tracking + viewState save/restore.
-  // useLayoutEffect (not useEffect) so that switching back to an already-open file
-  // swaps the model *before* the browser paints — mirroring VSCode, which avoids a
-  // one-frame flash of the previous file's content on every tab switch.
+  // Two-phase tab switch: this effect only *schedules* the model swap for the
+  // next animation frame, so the click frame paints just the cheap React updates
+  // (tab activation, breadcrumbs) and stays responsive. The heavy Monaco work
+  // (setModel + layout of a large file) lands one frame later — the editor shows
+  // the previous file's content for that one frame, a deliberate trade for
+  // instant click feedback on large files. Focus is deferred one further frame:
+  // focusing between setModel and Monaco's render forces a wasted full relayout.
   useLayoutEffect(() => {
     fileInputRef.current = fileInput
     if (!monacoNs) return
     let cancelled = false
+    let modelRaf: number | undefined
+    let focusRaf: number | undefined
+    // True once applyModel actually ran: guards the cleanup flush — with the
+    // swap deferred a frame, cleanup can run while the editor still holds the
+    // *previous* input's model, and flushing then would save that file's
+    // viewState under this input's key.
+    let modelApplied = false
     let contentSub: IDisposable | undefined
     let cursorSub: IDisposable | undefined
     let scrollSub: IDisposable | undefined
@@ -380,6 +391,9 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // Flush current viewState into cache — called on cursor/scroll change and on cleanup.
     const flushViewState = () => {
       if (groupId === undefined) return
+      // Never flush before our own model landed: the editor would still hold
+      // the previous input's model and we'd save its viewState under our key.
+      if (!modelApplied) return
       const ed = editorRef.current
       const state = ed?.saveViewState()
       if (state) EditorViewStateCache.save(groupId, resourceUri, state)
@@ -394,6 +408,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
 
     const applyModel = (model: monaco.editor.ITextModel) => {
       if (cancelled) return
+      modelApplied = true
       recordPerfPhase('fileEditor.setModel', () => editorRef.current?.setModel(model))
       // The editor instance is reused across tabs; keep readOnly in sync with
       // the current input (the create-effect only set it for the first input).
@@ -466,12 +481,21 @@ export function FileEditor({ input }: { input: IEditorInput }) {
           FileEditorRegistry.register(fileInput, registeredEditor, group?.id)
           // Focus the editor once its model lands — unless the open asked to keep
           // focus elsewhere (single-click preview from a list keeps focus in the
-          // originating tree so its selection highlight stays active).
+          // originating tree so its selection highlight stays active). Deferred
+          // one frame: focusing now, between setModel and Monaco's render, forces
+          // the browser to relayout the half-updated DOM (~30ms on large files)
+          // that it would relayout again right after.
           if (
             groupsService.activeGroup.activeEditor === fileInput &&
             !groupsService.activeGroup.lastActivationPreservedFocus
           ) {
-            focusStandaloneEditor(ed, contextKeyService)
+            focusRaf = requestAnimationFrame(() => {
+              if (!cancelled) {
+                recordPerfPhase('fileEditor.focus', () =>
+                  focusStandaloneEditor(ed, contextKeyService),
+                )
+              }
+            })
           }
           // Keep cache live so toJSON() always captures the latest position.
           cursorSub = ed.onDidChangeCursorPosition(flushViewState)
@@ -494,18 +518,26 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       })
     }
 
-    // Already-open file: its model is cached and our ref is held — swap it
-    // synchronously, before paint. First open needs a disk read, so it falls
-    // back to the async path (a brief loading frame here is unavoidable).
+    // Already-open file: its model is cached and our ref is held — schedule the
+    // swap for the next frame so the click frame paints only the cheap tab/
+    // breadcrumb updates (two-phase switch; see the effect comment). Double-rAF:
+    // a single rAF registered here (before this frame's rendering steps) would
+    // still fire before this frame's paint, keeping the heavy swap on the click
+    // frame. First open needs a disk read, so it falls back to the async path
+    // (a brief loading frame there is unavoidable).
     const cachedModel = fileInput.peekModel()
     if (cachedModel) {
-      applyModel(cachedModel)
+      modelRaf = requestAnimationFrame(() => {
+        modelRaf = requestAnimationFrame(() => applyModel(cachedModel))
+      })
     } else {
       void fileInput.resolveModel().then(applyModel)
     }
 
     return () => {
       cancelled = true
+      if (modelRaf !== undefined) cancelAnimationFrame(modelRaf)
+      if (focusRaf !== undefined) cancelAnimationFrame(focusRaf)
       // Final flush before this input is swapped out or component unmounts.
       flushViewState()
       contentSub?.dispose()
@@ -527,7 +559,12 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     if (activeGroup !== group) return
     if (activeGroupActiveEditor !== fileInput) return
     if (activeGroup.lastActivationPreservedFocus) return
-    if (editorRef.current) focusStandaloneEditor(editorRef.current, contextKeyService)
+    // Deferred a frame for the same reason as the model-swap focus: a sync
+    // focus here on the switch frame forces a wasted relayout of a large file.
+    const raf = requestAnimationFrame(() => {
+      if (editorRef.current) focusStandaloneEditor(editorRef.current, contextKeyService)
+    })
+    return () => cancelAnimationFrame(raf)
   }, [activeGroup, activeGroupActiveEditor, contextKeyService, fileInput, group])
 
   if (!monacoNs) {
