@@ -108,6 +108,35 @@ describe('TimerService', () => {
     expect(metrics.totalTime).toBe(800)
   })
 
+  it('reload: drops pre-navigation marks so totalTime spans only the reload', async () => {
+    // A window reload keeps the main process (and its day-old startup marks) alive;
+    // metrics must re-anchor on the reload navigation, not the original process spawn.
+    const reloadAt = 100_000
+    const timeline: PerformanceMark[] = [
+      { name: PerfMarks.mainProcessCreated, startTime: 700 },
+      ...FULL_TIMELINE,
+      { name: PerfMarks.rendererWillStartBootstrap, startTime: 100_100 },
+      { name: PerfMarks.rendererDidCreateIpc, startTime: 100_200 },
+      { name: PerfMarks.rendererDidMount, startTime: 100_500 },
+    ]
+    const svc = new TimerService(mainMarksStub(timeline))
+    ;(svc as unknown as { _reloadNavigationStart: () => number })._reloadNavigationStart = () =>
+      reloadAt
+    const metrics = await svc.getStartupMetrics()
+    expect(metrics.isReload).toBe(true)
+    expect(metrics.totalTime).toBe(500) // 100500 - 100000, not 100500 - 700
+    for (const phase of metrics.phases) {
+      expect(phase.duration).toBeLessThan(reloadAt)
+    }
+    expect(metrics.phases.some((p) => p.label === 'Electron app ready')).toBe(false)
+  })
+
+  it('non-reload: isReload is false and full timeline is kept', async () => {
+    const svc = new TimerService(mainMarksStub(FULL_TIMELINE))
+    const metrics = await svc.getStartupMetrics()
+    expect(metrics.isReload).toBe(false)
+  })
+
   it('falls back to renderer-only marks when main channel fails', async () => {
     const failing: IPerformanceMarksService = {
       _serviceBrand: undefined,

@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, Menu, protocol } from 'electron'
 import { promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import {
   DisposableTracker,
   setDisposableTracker,
@@ -84,6 +84,7 @@ import {
   readAbnormalExitReport,
   shouldOfferRestoreSkip,
 } from './sessionSentinel.js'
+import { collectWindowsCrashForensics } from './werForensics.js'
 import { applyProductIdentity, resolveProductIdentity } from './productPaths.js'
 import {
   EnvironmentMainService,
@@ -539,8 +540,10 @@ void app.whenReady().then(async () => {
   // dumps written since — the difference tells "crashed" apart from "killed".
   const abnormalExit = readAbnormalExitReport(app.getPath('userData'), app.getPath('crashDumps'))
   if (abnormalExit) {
+    const lastAlive = new Date(abnormalExit.previousLastAliveAt).toISOString()
     mainLogger.error(
       `previous session ${abnormalExit.previousSessionId} terminated abnormally (no clean-shutdown record); ` +
+        `last alive ≈ ${lastAlive}; ` +
         `consecutive=${abnormalExit.consecutiveAbnormalExits}; ` +
         (abnormalExit.crashDumps.length > 0
           ? `crash dumps: ${abnormalExit.crashDumps.join(', ')}`
@@ -548,8 +551,29 @@ void app.whenReady().then(async () => {
     )
     errorSink.recordLocal(
       'abnormalExit',
-      `previous session ${abnormalExit.previousSessionId} terminated abnormally; consecutive=${abnormalExit.consecutiveAbnormalExits}; crashDumps=${abnormalExit.crashDumps.length}`,
+      `previous session ${abnormalExit.previousSessionId} terminated abnormally; lastAlive=${lastAlive}; consecutive=${abnormalExit.consecutiveAbnormalExits}; crashDumps=${abnormalExit.crashDumps.length}`,
     )
+    // No dump means our own logs hold zero evidence of the cause; the Windows
+    // Application event log is the only remaining witness. Crash/hang events
+    // (1000/1002) for our exe prove a native death; none at all points at an
+    // external TerminateProcess (task kill / AV) or power loss. Fire-and-forget —
+    // startup must not wait on wevtutil.
+    if (abnormalExit.crashDumps.length === 0 && process.platform === 'win32') {
+      const exeName = basename(process.execPath)
+      void collectWindowsCrashForensics(exeName, abnormalExit.previousStartedAt)
+        .then((events) => {
+          if (events.length > 0) {
+            for (const line of events) mainLogger.error(`abnormal-exit forensics: ${line}`)
+            errorSink.recordLocal('abnormalExitForensics', events.join('; '))
+          } else {
+            mainLogger.warn(
+              'abnormal-exit forensics: no crash/hang/WER event for this exe in the Windows Application log — ' +
+                'process was likely terminated externally (task kill / AV) or the machine lost power',
+            )
+          }
+        })
+        .catch(() => undefined)
+    }
   }
   armSessionSentinel(
     app.getPath('userData'),

@@ -144,6 +144,8 @@ export interface StartupTimingReport {
   readonly totalTime: number
   /** Process created → first main-process JS line, ms; undefined if unavailable. */
   readonly preJsGapMs?: number
+  /** True when the window load was a reload — the timeline spans the reload only. */
+  readonly isReload?: boolean
   /** Adjacent-milestone phases: label → duration ms. */
   readonly phases: ReadonlyArray<{ readonly label: string; readonly duration: number }>
 }
@@ -274,6 +276,8 @@ export const IErrorSinkService = createDecorator<IErrorSinkService>('errorSinkSe
 export interface AbnormalExitInfo {
   readonly previousSessionId: string
   readonly previousStartedAt: number
+  /** Last sentinel heartbeat — the session died within one interval after this. */
+  readonly previousLastAliveAt: number
   /** Absolute paths of crash dumps written since the previous session started. */
   readonly crashDumps: readonly string[]
 }

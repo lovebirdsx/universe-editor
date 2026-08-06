@@ -30,6 +30,8 @@ export interface IStartupMetrics {
   readonly phases: readonly IStartupPhase[]
   /** Merged main + renderer marks, sorted by startTime. */
   readonly marks: readonly PerformanceMark[]
+  /** True when this window load was a reload — metrics span the reload, not the process spawn. */
+  readonly isReload: boolean
 }
 
 export interface ITimerService {
@@ -89,10 +91,18 @@ export class TimerService implements ITimerService {
   async getStartupMetrics(): Promise<IStartupMetrics> {
     const marks = await this.getPerfMarks()
 
+    // A reload keeps the main process alive, so its startup marks may be hours
+    // old; anchoring totalTime on them yields absurd day-long "startups". Filter
+    // BEFORE the earliest-wins merge below, or a stale mark of the same name
+    // (e.g. the first load's renderer bootstrap) would shadow the fresh one.
+    const reloadStart = this._reloadNavigationStart()
+    const isReload = reloadStart !== undefined
+    const scoped = isReload ? marks.filter((m) => m.startTime >= reloadStart) : marks
+
     // name → earliest startTime (both processes inject `code/timeOrigin`; the
     // main one is earlier and wins).
     const at = new Map<string, number>()
-    for (const m of marks) {
+    for (const m of scoped) {
       const prev = at.get(m.name)
       if (prev === undefined || m.startTime < prev) at.set(m.name, m.startTime)
     }
@@ -119,6 +129,7 @@ export class TimerService implements ITimerService {
     // mark) so totalTime spans the pre-JS gap — the antivirus first-scan window on
     // a post-update launch. Fall back to timeOrigin, then to the first milestone.
     const origin =
+      reloadStart ??
       at.get(PerfMarks.mainProcessCreated) ??
       at.get(PerfMarks.timeOrigin) ??
       (firstPresent ? at.get(firstPresent.mark) : 0)
@@ -126,7 +137,20 @@ export class TimerService implements ITimerService {
       at.get(PerfMarks.rendererDidMount) ?? (lastPresent ? at.get(lastPresent.mark) : origin)
     const totalTime = (end ?? 0) - (origin ?? 0)
 
-    return { totalTime, phases, marks }
+    return { totalTime, phases, marks, isReload }
+  }
+
+  /** Epoch-ms start of the current navigation when it was a reload; undefined on first load. */
+  protected _reloadNavigationStart(): number | undefined {
+    try {
+      const nav = globalThis.performance?.getEntriesByType?.('navigation')?.[0] as
+        | PerformanceNavigationTiming
+        | undefined
+      if (nav?.type !== 'reload') return undefined
+      return performance.timeOrigin + nav.startTime
+    } catch {
+      return undefined
+    }
   }
 
   private async _safeMainMarks(): Promise<PerformanceMark[]> {

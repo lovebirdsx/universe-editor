@@ -64,6 +64,7 @@ describe('DiagnosticsMainService', () => {
     service.setAbnormalExitReport({
       previousSessionId: '20260803T010203',
       previousStartedAt: 1700000000000,
+      previousLastAliveAt: 1700000090000,
       consecutiveAbnormalExits: 1,
       crashDumps: ['C:\\dump\\a.dmp'],
     })

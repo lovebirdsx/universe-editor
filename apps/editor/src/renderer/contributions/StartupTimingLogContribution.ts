@@ -40,7 +40,8 @@ export class StartupTimingLogContribution extends Disposable implements IWorkben
       .reportStartupTiming({
         totalTime: metrics.totalTime,
         phases: metrics.phases.map((p) => ({ label: p.label, duration: p.duration })),
-        ...(preJsGapMs !== undefined ? { preJsGapMs } : {}),
+        ...(metrics.isReload ? { isReload: true } : {}),
+        ...(preJsGapMs !== undefined && !metrics.isReload ? { preJsGapMs } : {}),
       })
       .catch(() => undefined)
   }

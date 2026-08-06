@@ -31,6 +31,7 @@ export class AbnormalExitNotificationContribution
     const report = await this._diagnostics.consumeAbnormalExitReport()
     if (!report) return
     const hasDumps = report.crashDumps.length > 0
+    const diedAround = new Date(report.previousLastAliveAt).toLocaleString()
     this._notifications.notify({
       severity: Severity.Warning,
       message: hasDumps
@@ -39,7 +40,8 @@ export class AbnormalExitNotificationContribution
           })
         : localize(
             'abnormalExit.noDumps',
-            '上次会话未正常退出（可能被外部强制终止，如杀毒软件 / 内存不足）。',
+            '上次会话在 {time} 前后未正常退出（可能被外部强制终止，如杀毒软件 / 内存不足）。',
+            { time: diedAround },
           ),
       sticky: true,
       actions: [

@@ -31,6 +31,7 @@ describe('AbnormalExitNotificationContribution', () => {
     const diagnostics = makeDiagnostics({
       previousSessionId: 's1',
       previousStartedAt: 1,
+      previousLastAliveAt: 1,
       crashDumps: ['D:\\d\\a.dmp', 'D:\\d\\b.dmp'],
     })
     const notifications = makeNotifications()
@@ -51,12 +52,15 @@ describe('AbnormalExitNotificationContribution', () => {
     const diagnostics = makeDiagnostics({
       previousSessionId: 's1',
       previousStartedAt: 1,
+      previousLastAliveAt: Date.UTC(2026, 7, 6, 12, 37, 59),
       crashDumps: [],
     })
     const notifications = makeNotifications()
     const c = new AbnormalExitNotificationContribution(diagnostics, notifications as never)
     await vi.waitFor(() => expect(notifications.notify).toHaveBeenCalledTimes(1))
-    expect(notifications.notify.mock.calls[0]?.[0].message).toContain('外部')
+    const message = notifications.notify.mock.calls[0]?.[0].message
+    expect(message).toContain('外部')
+    expect(message).toContain(new Date(Date.UTC(2026, 7, 6, 12, 37, 59)).toLocaleString())
     c.dispose()
   })
 

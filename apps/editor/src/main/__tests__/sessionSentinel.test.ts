@@ -2,7 +2,7 @@
  *  Tests for apps/editor/src/main/sessionSentinel.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,6 +12,7 @@ import {
   findCrashDumpsSince,
   readAbnormalExitReport,
   shouldOfferRestoreSkip,
+  SENTINEL_HEARTBEAT_INTERVAL_MS,
   _resetSentinelForTests,
 } from '../sessionSentinel.js'
 
@@ -113,6 +114,43 @@ describe('sessionSentinel', () => {
     armSessionSentinel(userDataDir, 'session-d', 5)
     disarmSessionSentinel(userDataDir)
     expect(readAbnormalExitReport(userDataDir, crashDumpsDir)).toBeUndefined()
+  })
+
+  it('the heartbeat refreshes lastAliveAt so the report bounds the death time', () => {
+    vi.useFakeTimers()
+    try {
+      const armedAt = Date.now()
+      armSessionSentinel(userDataDir, 'session-hb')
+      vi.advanceTimersByTime(SENTINEL_HEARTBEAT_INTERVAL_MS * 3)
+      const report = readAbnormalExitReport(userDataDir, crashDumpsDir)
+      expect(report?.previousStartedAt).toBe(armedAt)
+      expect(report?.previousLastAliveAt).toBe(armedAt + SENTINEL_HEARTBEAT_INTERVAL_MS * 3)
+    } finally {
+      _resetSentinelForTests()
+      vi.useRealTimers()
+    }
+  })
+
+  it('disarm stops the heartbeat (no sentinel resurrection after clean shutdown)', () => {
+    vi.useFakeTimers()
+    try {
+      armSessionSentinel(userDataDir, 'session-hb2')
+      disarmSessionSentinel(userDataDir)
+      vi.advanceTimersByTime(SENTINEL_HEARTBEAT_INTERVAL_MS * 2)
+      expect(readAbnormalExitReport(userDataDir, crashDumpsDir)).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a legacy sentinel without lastAliveAt falls back to startedAt', async () => {
+    const startedAt = Date.now() - 1000
+    await fs.writeFile(
+      join(userDataDir, 'session-sentinel.json'),
+      JSON.stringify({ sessionId: 'legacy', startedAt }),
+    )
+    const report = readAbnormalExitReport(userDataDir, crashDumpsDir)
+    expect(report?.previousLastAliveAt).toBe(startedAt)
   })
 })
 

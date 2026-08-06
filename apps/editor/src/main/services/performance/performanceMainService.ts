@@ -58,11 +58,12 @@ export class PerformanceMainService implements IPerformanceMarksService {
     const preJs =
       report.preJsGapMs !== undefined ? ` preJsGap=${Math.round(report.preJsGapMs)}ms` : ''
     const phases = report.phases.map((p) => `${p.label}:${Math.round(p.duration)}ms`).join(', ')
+    const kind = report.isReload ? 'reload' : `startup postUpdate=${ctx.postUpdate}`
     this._logger.info(
-      `startup postUpdate=${ctx.postUpdate} cur=${ctx.currentVersion}${versionJump} ` +
+      `${kind} cur=${ctx.currentVersion}${versionJump} ` +
         `total=${Math.round(report.totalTime)}ms${preJs} [${phases}]`,
     )
-    this._logStartupWallClock(report.totalTime)
+    if (!report.isReload) this._logStartupWallClock(report.totalTime)
   }
 
   // Print the full wall clock from the moment `pnpm dev` / `pnpm dev:run` was typed to
