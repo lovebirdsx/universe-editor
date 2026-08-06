@@ -4,7 +4,8 @@
  *  picker opens (reusing the @-mention cache) then filters it in-memory on every
  *  keystroke, the exact-path fast path, the 512 result cap, token cancellation,
  *  open editors (all types) mixed into the empty-query list and fuzzy matching,
- *  and the no-workspace fallback to the recent files list.
+ *  and the no-workspace fallback to the recent files list. Large listings get
+ *  their own block: chunked off-keystroke scanning and match-set narrowing.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -751,6 +752,129 @@ describe('FileQuickAccessProvider', () => {
     expect(groupsFake.activatedGroupIds).toEqual([2])
     expect(groupsFake.setActiveLog).toEqual([sideEditor])
     expect(resolver.opened).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Large listings: chunked filtering off the keystroke + match-set narrowing
+// ---------------------------------------------------------------------------
+
+describe('FileQuickAccessProvider — large listing (chunked filter + narrowing)', () => {
+  // 超过 provider 的 SYNC_FILTER_LIMIT（5000）即走分块异步路径。
+  const LARGE = 6000
+
+  beforeEach(() => {
+    invalidateMentionFileCache()
+  })
+  afterEach(() => {
+    invalidateMentionFileCache()
+    vi.restoreAllMocks()
+  })
+
+  it('filters a large listing off the keystroke: async publication, still capped at 512', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = Array.from({ length: LARGE }, (_, i) => `/ws/x${i}.ts`)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('x')
+    // 大清单不再同步出结果：击键处理返回时列表尚未更新，busy 亮起。
+    expect(picker.items).toHaveLength(0)
+    expect(picker.busy).toBe(true)
+
+    await vi.waitFor(() => expect(picker.busy).toBe(false))
+    expect(picker.items).toHaveLength(512)
+  })
+
+  it('a superseding keystroke aborts the in-flight chunked scan (only the newest publishes)', async () => {
+    // 每次 deadline 检查都触发让出，制造真实的多分片扫描与中途放弃。
+    let t = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => (t += 5))
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = [
+      ...Array.from({ length: LARGE / 2 }, (_, i) => `/ws/red${i}.ts`),
+      ...Array.from({ length: LARGE / 2 }, (_, i) => `/ws/blue${i}.ts`),
+    ]
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('red')
+    picker.fireValue('blue')
+
+    await vi.waitFor(() => expect(picker.busy).toBe(false))
+    expect(picker.items).toHaveLength(512)
+    for (const item of picker.items) {
+      expect((item as IQuickPickItem).label.startsWith('blue')).toBe(true)
+    }
+  })
+
+  it('an extending keystroke narrows over the completed match set (sync fast path)', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = [
+      ...Array.from({ length: LARGE - 20 }, (_, i) => `/ws/f${i}.md`),
+      ...Array.from({ length: 10 }, (_, i) => `/ws/needle-a${i}.ts`),
+      ...Array.from({ length: 10 }, (_, i) => `/ws/needle-b${i}.ts`),
+    ]
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('needle')
+    await vi.waitFor(() => expect(picker.busy).toBe(false))
+    expect(picker.items).toHaveLength(20)
+
+    // 上一轮命中 20 条 → 追加字符后的候选池落回同步阈值内，结果同步落地。
+    picker.fireValue('needleb')
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(
+      Array.from({ length: 10 }, (_, i) => `needle-b${i}.ts`),
+    )
+  })
+
+  it('discards a chunked scan when the token is cancelled before it publishes', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = Array.from({ length: LARGE }, (_, i) => `/ws/x${i}.ts`)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    const { token } = run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('x')
+    token.isCancellationRequested = true
+    await flushPromises()
+    await flushPromises()
+    expect(picker.items).toHaveLength(0)
+  })
+
+  it('a fresh listing resets the narrowing pool (the auto re-run sees new files)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const first = setup()
+      first.fileSearch.resultPaths = ['/ws/rest.ts']
+      const picker1 = new FakeQuickPick<IQuickPickItem>()
+      const session1 = run(first.provider, picker1)
+      await flushPromises()
+      session1.disposables.dispose()
+
+      vi.setSystemTime(Date.now() + 60 * 60_000)
+
+      const second = setup()
+      second.fileSearch.deferred = true
+      second.fileSearch.resultPaths = ['/ws/rest.ts', '/ws/realm.ts']
+      const picker2 = new FakeQuickPick<IQuickPickItem>()
+      run(second.provider, picker2)
+
+      // Stale 池上完成一轮 're' 扫描（命中仅 rest.ts）……
+      picker2.fireValue('re')
+      expect(picker2.items.map((i) => (i as IQuickPickItem).label)).toEqual(['rest.ts'])
+
+      // ……新清单落地后自动重跑同一 pattern：若收窄池未重置，realm.ts 永远出不来。
+      second.fileSearch.resolveAll()
+      await flushPromises()
+      expect(picker2.items.map((i) => (i as IQuickPickItem).label)).toEqual(['rest.ts', 'realm.ts'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

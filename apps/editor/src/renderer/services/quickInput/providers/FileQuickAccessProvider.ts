@@ -3,7 +3,11 @@
  *  Default quick access (no prefix): Go to File. With a workspace open it warms
  *  the full file list once when the picker opens (reusing the @-mention file
  *  cache) and then filters it in-memory on every keystroke — no per-keystroke
- *  disk walk. Open editors (all types, MRU order) head the empty-query list and
+ *  disk walk. Large listings score in time-sliced chunks off the input event,
+ *  and every completed scan narrows the candidate pool for the next extending
+ *  keystroke (fuzzy matches are subsequence-based, so extending the query can
+ *  only shrink the match set) — huge workspaces stay responsive too.
+ *  Open editors (all types, MRU order) head the empty-query list and
  *  join fuzzy matching while typing, followed by recent files; with no workspace
  *  it falls back to the recent files list. Mirrors VSCode's file quick access,
  *  whose cached-listing fast path is what keeps typing responsive on large trees.
@@ -29,6 +33,7 @@ import {
   type IEditorGroup,
 } from '@universe-editor/platform'
 import { compareByScoreThenPath, scoreFuzzyMatch } from '@universe-editor/workbench-ui'
+import { recordPerfPhase, recordPerfPhaseAsync } from '../../performance/perfPhases.js'
 import { IRecentFilesService } from '../../recentFiles/recentFilesService.js'
 import { IExcludeService } from '../../exclude/ExcludeService.js'
 import {
@@ -46,6 +51,29 @@ import { IClosedEditorsService } from '../../editor/ClosedEditorsService.js'
 import { resourceIconId } from '../quickPickResourceIcon.js'
 
 const GO_TO_FILE_MAX_RESULTS = 512
+// Above this pool size the per-keystroke scan leaves the input event and runs
+// in time-sliced chunks: scoring a 100k-entry listing costs 100-200ms, which as
+// a synchronous onDidChangeValue reaction blocks every quick-open keystroke
+// (measured on a 4.3M-file workspace via the interaction perf collect spec).
+const SYNC_FILTER_LIMIT = 5_000
+const CHUNK_BUDGET_MS = 8
+// Mid-scan row-compaction bound: rows dropped by a compaction rank below the
+// kept top slice under a static comparator, so the final top results are
+// unaffected — this only bounds the final sort.
+const COMPACT_ROWS_AT = 8_192
+
+const yieldToMain = (): Promise<void> => {
+  const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler
+  return scheduler?.yield?.() ?? new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+/** A scored filter hit: either an open-editor pick or a file listing entry. */
+interface ScoredRow {
+  readonly score: number
+  readonly path: string
+  readonly pick?: IQuickPickItem
+  readonly entry?: MentionFileEntry
+}
 
 function workspaceRelativePath(root: URI, uri: URI): string {
   const rootPath = root.fsPath.replace(/\\/g, '/').replace(/\/$/, '')
@@ -312,6 +340,11 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     // then runs in-memory on every keystroke — no per-keystroke disk walk.
     let allFiles: readonly MentionFileEntry[] | undefined
     let seq = 0
+    // The last fully-scanned pattern and the entries it matched. A keystroke
+    // that extends that pattern only rescans this (usually far smaller) match
+    // set — subsequence matching guarantees extending the query can only shrink
+    // it. Reset whenever a fresh listing lands.
+    let lastCompleted: { pattern: string; entries: readonly MentionFileEntry[] } | undefined
 
     // Fuzzy match over the open-editor candidates only — used both as the
     // editor tier of the full filter and as the cold-cache fallback list.
@@ -326,28 +359,92 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       return hits
     }
 
-    // In-memory fuzzy filter over the cached listing. Whitespace-separated pieces
+    // In-memory fuzzy filter over the candidate pool. Whitespace-separated pieces
     // must all match; a basename hit outranks a path hit; results are capped at 512.
-    const filterInMemory = (pattern: string): IQuickPickItem[] => {
-      const editorHits = matchEditors(pattern)
-      const editorIds = new Set(editorHits.map((h) => h.pick.id))
-      const fileHits: { entry: MentionFileEntry; score: number }[] = []
-      for (const entry of allFiles ?? []) {
+    // Small pools filter synchronously inside the keystroke (zero added latency);
+    // large pools scan in time-sliced chunks so the input event returns instantly.
+    const sortRows = (rows: ScoredRow[]): void => {
+      rows.sort((a, b) => compareByScoreThenPath(a.score, b.score, a.path, b.path))
+    }
+    const finalizeRows = (rows: ScoredRow[]): IQuickPickItem[] => {
+      sortRows(rows)
+      return rows.slice(0, GO_TO_FILE_MAX_RESULTS).map((r) => r.pick ?? entryToPick(r.entry!))
+    }
+    const editorRows = (pattern: string): { rows: ScoredRow[]; ids: Set<string> } => {
+      const hits = matchEditors(pattern)
+      return {
+        rows: hits.map((h) => ({ score: h.score, path: h.path, pick: h.pick })),
+        ids: new Set(hits.map((h) => h.pick.id)),
+      }
+    }
+    // Score `pool` from index `from` into rows/matched; stops once past
+    // `deadline` (checked every 1024 entries). Returns the resume index.
+    const scanPool = (
+      pool: readonly MentionFileEntry[],
+      from: number,
+      pattern: string,
+      editorIds: ReadonlySet<string>,
+      rows: ScoredRow[],
+      matched: MentionFileEntry[],
+      deadline?: number,
+    ): number => {
+      for (let i = from; i < pool.length; i++) {
+        if (deadline !== undefined && (i & 1023) === 1023 && performance.now() > deadline) return i
+        const entry = pool[i]!
         if (editorIds.has(entry.uri)) continue
         const score = scoreFileMatch(entry.name, entry.relPath, pattern)
-        if (score >= 0) fileHits.push({ entry, score })
+        if (score >= 0) {
+          matched.push(entry)
+          rows.push({ score, path: entry.relPath, entry })
+        }
       }
-      const merged: {
-        score: number
-        path: string
-        pick?: IQuickPickItem
-        entry?: MentionFileEntry
-      }[] = [
-        ...editorHits.map((h) => ({ score: h.score, path: h.path, pick: h.pick })),
-        ...fileHits.map((h) => ({ score: h.score, path: h.entry.relPath, entry: h.entry })),
-      ]
-      merged.sort((a, b) => compareByScoreThenPath(a.score, b.score, a.path, b.path))
-      return merged.slice(0, GO_TO_FILE_MAX_RESULTS).map((s) => s.pick ?? entryToPick(s.entry!))
+      return pool.length
+    }
+    const candidatePool = (pattern: string): readonly MentionFileEntry[] =>
+      lastCompleted && pattern.startsWith(lastCompleted.pattern)
+        ? lastCompleted.entries
+        : (allFiles ?? [])
+
+    const filterPoolSync = (
+      pattern: string,
+      pool: readonly MentionFileEntry[],
+    ): IQuickPickItem[] => {
+      const { rows, ids } = editorRows(pattern)
+      const matched: MentionFileEntry[] = []
+      scanPool(pool, 0, pattern, ids, rows, matched)
+      lastCompleted = { pattern, entries: matched }
+      return finalizeRows(rows)
+    }
+
+    // Chunked scan for large pools: abandons itself (returns undefined) when a
+    // newer keystroke bumps `seq` or the picker is dismissed.
+    const filterPoolChunked = async (
+      pattern: string,
+      pool: readonly MentionFileEntry[],
+      mySeq: number,
+    ): Promise<IQuickPickItem[] | undefined> => {
+      const { rows, ids } = editorRows(pattern)
+      const matched: MentionFileEntry[] = []
+      let next = scanPool(pool, 0, pattern, ids, rows, matched, performance.now() + CHUNK_BUDGET_MS)
+      while (next < pool.length) {
+        if (rows.length > COMPACT_ROWS_AT) {
+          sortRows(rows)
+          rows.length = GO_TO_FILE_MAX_RESULTS
+        }
+        await yieldToMain()
+        if (mySeq !== seq || token.isCancellationRequested) return undefined
+        next = scanPool(
+          pool,
+          next,
+          pattern,
+          ids,
+          rows,
+          matched,
+          performance.now() + CHUNK_BUDGET_MS,
+        )
+      }
+      lastCompleted = { pattern, entries: matched }
+      return finalizeRows(rows)
     }
 
     // When the query looks like a path (contains a separator), probe the exact
@@ -398,10 +495,23 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         void prependExactPathMatch(pattern, mySeq, editorOnly)
         return
       }
-      const items = filterInMemory(pattern)
-      picker.items = items
-      picker.busy = false
-      void prependExactPathMatch(pattern, mySeq, items)
+      const pool = candidatePool(pattern)
+      if (pool.length <= SYNC_FILTER_LIMIT) {
+        const items = recordPerfPhase('quickOpen.filterFiles', () => filterPoolSync(pattern, pool))
+        picker.items = items
+        picker.busy = false
+        void prependExactPathMatch(pattern, mySeq, items)
+        return
+      }
+      picker.busy = true
+      void recordPerfPhaseAsync('quickOpen.filterFiles', () =>
+        filterPoolChunked(pattern, pool, mySeq),
+      ).then((items) => {
+        if (!items || mySeq !== seq || token.isCancellationRequested) return
+        picker.items = items
+        picker.busy = false
+        void prependExactPathMatch(pattern, mySeq, items)
+      })
     }
 
     disposables.add(picker.onDidChangeValue(runSearch))
@@ -436,6 +546,9 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       .then((files) => {
         if (token.isCancellationRequested) return
         allFiles = files
+        // The fresh listing may contain files the stale scan never saw — the
+        // narrowing pool must not survive it.
+        lastCompleted = undefined
         if (picker.value.trim().length > 0) runSearch(picker.value)
       })
       // Closing the picker cancels the walk — rejection is the normal path.
