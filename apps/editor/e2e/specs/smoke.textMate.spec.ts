@@ -124,7 +124,8 @@ test.describe('@p0 textmate', () => {
     const filePath = seedTsFile('const answer: number = 42\n')
     await page.evaluate((p) => window.__E2E__!.openFileUri(p), filePath)
     await expect(workbench.editor.monacoEditor).toBeVisible()
-    await expect.poll(() => tokenColor(page, 'const'), { timeout: 30000 }).toBe(DARK_KEYWORD)
+    await waitForTextMateTakeover(page, 'typescript')
+    await expect.poll(() => tokenColor(page, 'const'), { timeout: 15000 }).toBe(DARK_KEYWORD)
 
     await page.evaluate(() => {
       window.__E2E__!.updateConfigValue('workbench.colorTheme', 'Universe Light')

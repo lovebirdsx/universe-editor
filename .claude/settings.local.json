@@ -2,6 +2,13 @@
   "permissions": {
     "additionalDirectories": [
       "..\\vscode"
+    ],
+    "allow": [
+      "Bash(mkdir -p /tmp/tmtrace)",
+      "Read(//tmp/**)",
+      "Bash(rm -rf *)",
+      "Bash(unzip -o -q /d/git_project/universe-editor.worktrees/task1/apps/editor/e2e/test-results/smoke.textMate--p0-textmat-99ebe-follow-color-theme-switches-repeat9/trace.zip)",
+      "Bash(ls)"
     ]
   },
   "hooks": {

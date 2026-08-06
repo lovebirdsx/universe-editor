@@ -29,7 +29,7 @@ import {
 } from '../configuration/fontDefaults.js'
 import { MonacoLoader } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { getBuiltinTokenRules } from '../../workbench/panel/output/monacoLogLanguage.js'
-import { normalizeColor, type ColorThemeData } from './colorThemeData.js'
+import { normalizeColor } from './colorThemeData.js'
 import { toStandaloneThemeData } from './monacoThemeAdapter.js'
 import type { WorkbenchThemeService } from './workbenchThemeService.js'
 
@@ -42,8 +42,13 @@ export function initMonacoThemeBridge(
 ): IDisposable {
   const disposables = new DisposableStore()
 
-  const applyTheme = (theme: ColorThemeData): void => {
+  // ensureInitialized 回调内重读当前主题：Monaco 懒加载/主题 ensureLoaded 都是
+  // 异步的，多次 applyTheme 的回调可能乱序到达——若捕获调用时的主题快照，
+  // 最后落盘的 defineTheme 可能用的是未加载主题的残缺色表（tokenColorMap 仅
+  // 默认 5 规则），与 TextMate 的 token 索引错位（e2e 曾稳定复现 #B267E6 错色）。
+  const applyTheme = (): void => {
     void MonacoLoader.ensureInitialized().then((m) => {
+      const theme = themeService.getColorThemeData()
       const dark = isDark(theme.type)
       const defaults = dark ? OUTPUT_LINE_HIGHLIGHT_DARK : OUTPUT_LINE_HIGHLIGHT_LIGHT
       // 每级先归一化成 hex：用户配置写 rgba()/非法值时落到下一级，而不是把
@@ -65,18 +70,18 @@ export function initMonacoThemeBridge(
       data.rules = [...data.rules, ...getBuiltinTokenRules(dark)]
       m.editor.defineTheme(name, data)
       m.editor.setTheme(name)
-      logger.debug(`monaco theme applied: ${name}`)
+      logger.info(
+        `monaco theme applied: ${name} loaded=${theme.isLoaded} encodedTokensColors=${data.encodedTokensColors?.length ?? 0}`,
+      )
     })
   }
 
-  applyTheme(themeService.getColorThemeData())
-  disposables.add(
-    themeService.onDidColorThemeChange(() => applyTheme(themeService.getColorThemeData())),
-  )
+  applyTheme()
+  disposables.add(themeService.onDidColorThemeChange(() => applyTheme()))
   disposables.add(
     configurationService.onDidChangeConfiguration((e) => {
       if (LINE_HIGHLIGHT_KEYS.some((key) => e.affectsConfiguration(key))) {
-        applyTheme(themeService.getColorThemeData())
+        applyTheme()
       }
     }),
   )

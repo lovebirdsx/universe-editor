@@ -330,6 +330,7 @@ export class ColorThemeData implements IColorTheme {
 
   private textMateThemingRules: ITokenColorRule[] | undefined
   private tokenColorIndex: Map<string, number> | undefined
+  private tokenColorIndexSeeded = false
 
   private constructor(id: string, label: string, settingsId: string, type: ColorScheme) {
     this.id = id
@@ -442,36 +443,53 @@ export class ColorThemeData implements IColorTheme {
   }
 
   get tokenColorMap(): string[] {
-    if (!this.tokenColorIndex) {
-      this.tokenColorIndex = new Map()
-      for (const rule of this.tokenColors) {
-        if (rule.settings.foreground) {
-          this.getTokenColorIndexId(rule.settings.foreground)
-        }
-        if (rule.settings.background) {
-          this.getTokenColorIndexId(rule.settings.background)
-        }
-      }
-      // 对齐 VSCode getTokenColorIndex：semantic 规则的前景色也进 colorMap，
-      // 否则 getTokenStyleMetadata 返回的索引在 map 里查不到色值。
-      for (const rule of this.getSemanticTokenRules()) {
-        if (rule.style.foreground) {
-          this.getTokenColorIndexId(rule.style.foreground)
-        }
-      }
-      for (const rule of this.getCustomSemanticTokenRules()) {
-        if (rule.style.foreground) {
-          this.getTokenColorIndexId(rule.style.foreground)
-        }
-      }
-    }
+    this.ensureTokenColorIndexSeeded()
     // Index 0 is the ColorId.None slot and must never hold a real color:
     // vscode-textmate's frozen ColorMap treats id 0 as "missing". The empty
     // string is an invalid color no rule can reference. (VSCode TokenColorIndex
     // likewise starts assigning at 1.) Entries are normalized 6-digit upper-case
     // hex (see normalizeTokenColor) so monaco's ColorMap can mirror this table
     // index-for-index via `encodedTokensColors`.
-    return ['', ...this.tokenColorIndex.keys()]
+    return ['', ...this.tokenColorIndex!.keys()]
+  }
+
+  /**
+   * Seed the color index from the full rule set exactly once per cache
+   * generation. Both entry points (the map getter and external
+   * getTokenColorIndexId calls, e.g. the semantic bridge) must run the same
+   * seeding first: keying the guard on map existence let an early external
+   * call pre-create the map and silently skip seeding — the "color table"
+   * then held only the probed colors and every consumer of tokenColorMap
+   * (monaco stylesheet, textmate registry) got a corrupt, truncated table.
+   */
+  private ensureTokenColorIndexSeeded(): void {
+    if (this.tokenColorIndex !== undefined && this.tokenColorIndexSeeded) {
+      return
+    }
+    this.tokenColorIndex = new Map()
+    // The seeding loops below re-enter getTokenColorIndexId: flip the flag
+    // first so they assign directly instead of recursing.
+    this.tokenColorIndexSeeded = true
+    for (const rule of this.tokenColors) {
+      if (rule.settings.foreground) {
+        this.getTokenColorIndexId(rule.settings.foreground)
+      }
+      if (rule.settings.background) {
+        this.getTokenColorIndexId(rule.settings.background)
+      }
+    }
+    // 对齐 VSCode getTokenColorIndex：semantic 规则的前景色也进 colorMap，
+    // 否则 getTokenStyleMetadata 返回的索引在 map 里查不到色值。
+    for (const rule of this.getSemanticTokenRules()) {
+      if (rule.style.foreground) {
+        this.getTokenColorIndexId(rule.style.foreground)
+      }
+    }
+    for (const rule of this.getCustomSemanticTokenRules()) {
+      if (rule.style.foreground) {
+        this.getTokenColorIndexId(rule.style.foreground)
+      }
+    }
   }
 
   getTokenColorIndexId(color: string): number {
@@ -480,13 +498,11 @@ export class ColorThemeData implements IColorTheme {
       // 非法色不进表（VSCode TokenColorIndex.add 同样返回 0 = ColorId.None）。
       return 0
     }
-    if (!this.tokenColorIndex) {
-      this.tokenColorIndex = new Map()
-    }
-    let index = this.tokenColorIndex.get(normalized)
+    this.ensureTokenColorIndexSeeded()
+    let index = this.tokenColorIndex!.get(normalized)
     if (index === undefined) {
-      index = this.tokenColorIndex.size + 1
-      this.tokenColorIndex.set(normalized, index)
+      index = this.tokenColorIndex!.size + 1
+      this.tokenColorIndex!.set(normalized, index)
     }
     return index
   }
@@ -728,6 +744,7 @@ export class ColorThemeData implements IColorTheme {
   private clearCaches(): void {
     this.textMateThemingRules = undefined
     this.tokenColorIndex = undefined
+    this.tokenColorIndexSeeded = false
     this.semanticTokenRules = undefined
     this.customSemanticTokenRules = undefined
   }

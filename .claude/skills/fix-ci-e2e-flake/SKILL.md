@@ -64,6 +64,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - `tokenColor(<word>)` poll 恒 undefined 到 `Test timeout`=Monarch 合并 span 使 exact-text 在 TextMate takeover 前结构性匹配不到，补显式 takeover 门控+test.slow → 案例 62
 - 图表 reveal 断言 received 恒 `_row_…`（行在、选中类稳定缺失）+retry 变 "Loading…" 行不出现=reveal 与初始 load 双发请求、晚到 load 清选中（产品竞态）→ 案例 64
 - 自启动 spec `closeApp: graceful close still pending`→force-kill 后 `CDP pipe still open`→teardown 30s 超时、事后无孤儿=某进程握子端 pipe 句柄（wsl 探测/agent 孙进程/并发 spawn 继承泄漏），终解=closeApp 父端 stdio destroy 兜底 + seed 收敛 + 死父指纹清扫 → 案例 65
+- takeover 门控过后 `tokenColor` 仍恒 undefined（整行单 mtk1 span）/ token 有色但错色（mtkN 呈 +1 位移查了残表）=TextMate 双产品竞态（grammar 注册竞速 Monarch 丢 resolve 不 fire + 主题快照乱序落盘残表）；探针门控用 getOrCreate 会替产品治病，须改只读 → 案例 66
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

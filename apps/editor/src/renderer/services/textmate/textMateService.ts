@@ -51,7 +51,13 @@ export interface ITextMateService {
       getLanguages(): readonly { id: string }[]
       register(language: { id: string }): void
     }
-    editor: { getModels(): readonly { getLanguageId(): string }[] }
+    editor: {
+      getModels(): readonly { getLanguageId(): string }[]
+      onDidCreateModel(listener: (model: { getLanguageId(): string }) => void): IDisposable
+      onDidChangeModelLanguage(
+        listener: (e: { model: { getLanguageId(): string } }) => void,
+      ): IDisposable
+    }
   }): Promise<void>
 
   /**
@@ -74,9 +80,7 @@ interface IMonacoTokenizationBindings {
   readonly TokenizationRegistry: {
     registerFactory(languageId: string, factory: LazyTokenizationSupportClass): { dispose(): void }
     getOrCreate(languageId: string): Promise<ITokenizationSupport | null>
-    onDidChange(
-      listener: (e: { changedLanguages: readonly string[]; changedColorMap: boolean }) => void,
-    ): IDisposable
+    handleChange(languageIds: string[]): void
   }
   readonly LazyTokenizationSupport: new (
     createSupport: () => Promise<(ITokenizationSupport & IDisposable) | null>,
@@ -93,12 +97,12 @@ export class TextMateService extends Disposable implements ITextMateService {
   private _monaco: IMonacoTokenizationBindings | undefined
   private _encodeLanguageId: ((languageId: string) => number) | undefined
   private _registerMonacoLanguage: ((languageId: string) => void) | undefined
+  private _getLiveLanguages: (() => Set<string>) | undefined
   private _registrations: DisposableStore | undefined
   private _grammarFactory: TMGrammarFactory | undefined
   private _pendingTheme: { theme: IRawTheme; colorMap: string[] } | undefined
-  /** Languages whose support we must re-warm after the next rebuild. */
-  private readonly _languagesToWarm = new Set<string>()
-  private _hasResolvedSupportOnce = false
+  /** monaco language ids owned by the current factory registrations. */
+  private _registeredLanguages: ReadonlySet<string> = new Set()
 
   constructor(
     @IFileService private readonly _fileService: IFileService,
@@ -127,7 +131,13 @@ export class TextMateService extends Disposable implements ITextMateService {
       getLanguages(): readonly { id: string }[]
       register(language: { id: string }): void
     }
-    editor: { getModels(): readonly { getLanguageId(): string }[] }
+    editor: {
+      getModels(): readonly { getLanguageId(): string }[]
+      onDidCreateModel(listener: (model: { getLanguageId(): string }) => void): IDisposable
+      onDidChangeModelLanguage(
+        listener: (e: { model: { getLanguageId(): string } }) => void,
+      ): IDisposable
+    }
   }): Promise<void> {
     if (this._monaco !== undefined) {
       return
@@ -152,19 +162,21 @@ export class TextMateService extends Disposable implements ITextMateService {
       monaco.languages.register({ id: languageId })
     }
     this._register(this.grammarRegistry.onDidChangeGrammars(() => this._rebuildRegistrations()))
+    this._getLiveLanguages = () =>
+      new Set(monaco.editor.getModels().map((model) => model.getLanguageId()))
+    // Models resolve tokenization exactly once per language via monaco's
+    // requestRichLanguageFeatures (deduped by language id). When that one shot
+    // happened before our factory registration — and the rebuild found no live
+    // model to warm up — a model created afterwards would only observe the
+    // registry (`get()` + change event) and stay untokenized forever. Warm up
+    // at model birth / language switch to cover that direction of the race;
+    // getOrCreate is idempotent once resolved.
     this._register(
-      languages.TokenizationRegistry.onDidChange((e) => {
-        if (!e.changedColorMap) {
-          this._hasResolvedSupportOnce = true
-        }
-      }),
+      monaco.editor.onDidCreateModel((model) => this._warmUpLanguage(model.getLanguageId())),
     )
-    // Models created before this initialize resolved their Monarch support
-    // through TextModel's creation-time warm-up; registering our factories
-    // disposes those supports, so they must resolve again through ours.
-    for (const model of monaco.editor.getModels()) {
-      this._languagesToWarm.add(model.getLanguageId())
-    }
+    this._register(
+      monaco.editor.onDidChangeModelLanguage((e) => this._warmUpLanguage(e.model.getLanguageId())),
+    )
     this._rebuildRegistrations()
     if (this._pendingTheme !== undefined) {
       this.setTheme(this._pendingTheme.theme, this._pendingTheme.colorMap)
@@ -227,26 +239,37 @@ export class TextMateService extends Disposable implements ITextMateService {
       registrations.add(monaco.TokenizationRegistry.registerFactory(monacoLanguageId, lazySupport))
     }
     this._registrations = this._register(registrations)
-    this._logger.trace(
+    this._registeredLanguages = seenLanguages
+    this._logger.info(
       `registered ${seenLanguages.size} TextMate grammar factories: ${[...seenLanguages].join(', ')}`,
     )
 
     // VSCode _handleGrammarsExtPoint warms up `createdModes`: a fresh factory
-    // only resolves when someone calls getOrCreate. TextModel does that once
-    // at creation time, so models opened before this rebuild — and any model
-    // whose support we just unregistered — would otherwise stay untokenized.
-    for (const languageId of this._languagesToWarm) {
-      if (seenLanguages.has(languageId)) {
-        void monaco.TokenizationRegistry.getOrCreate(languageId)
-      }
+    // only resolves when someone calls getOrCreate. TextModel does that once at
+    // creation time, so a model opened before this rebuild would stay
+    // untokenized forever — including the race where the rebuild replaced the
+    // Monarch factory while the model's creation-time resolve was still in
+    // flight (the pending resolve is dropped with the old factory and no
+    // registry event ever fires for the language). Snapshot the live models
+    // here instead of bookkeeping past resolutions: it is the only condition
+    // that matters.
+    this._warmUpLiveModels()
+  }
+
+  /** Force-resolve the factory of every registered language a live model uses. */
+  private _warmUpLiveModels(): void {
+    const liveLanguages = this._getLiveLanguages?.()
+    if (liveLanguages === undefined) {
+      return
     }
-    this._languagesToWarm.clear()
-    if (this._hasResolvedSupportOnce) {
-      // Some language had a resolved support before this rebuild: the rebuild
-      // unregistered it, and its model never re-resolves on its own.
-      for (const languageId of seenLanguages) {
-        void monaco.TokenizationRegistry.getOrCreate(languageId)
-      }
+    for (const languageId of liveLanguages) {
+      this._warmUpLanguage(languageId)
+    }
+  }
+
+  private _warmUpLanguage(languageId: string): void {
+    if (this._monaco !== undefined && this._registeredLanguages.has(languageId)) {
+      void this._monaco.TokenizationRegistry.getOrCreate(languageId)
     }
   }
 
@@ -268,9 +291,7 @@ export class TextMateService extends Disposable implements ITextMateService {
         result.initialState,
         result.containsEmbeddedLanguages,
       )
-      // A resolved support means a live model uses this language: after every
-      // later rebuild the new factory must resolve again for it.
-      this._languagesToWarm.add(monacoLanguageId)
+      this._logger.info(`tokenization support created for ${monacoLanguageId}`)
       // Owned by monaco's TokenizationRegistry through the factory registration:
       // alive as long as the app, disposed only when the factory is re-registered.
       return markAsSingleton(
@@ -289,14 +310,34 @@ export class TextMateService extends Disposable implements ITextMateService {
   }
 
   setTheme(theme: IRawTheme, colorMap: string[]): void {
-    if (this._monaco === undefined) {
+    const monaco = this._monaco
+    if (monaco === undefined) {
+      this._logger.info(
+        `setTheme queued (pre-initialize): rules=${theme.settings.length} colorMap=${colorMap.length}`,
+      )
       this._pendingTheme = { theme, colorMap }
       return
     }
+    this._logger.info(
+      `setTheme applied: rules=${theme.settings.length} colorMap=${colorMap.length}`,
+    )
     // Only the grammar registry consumes the theme here (token metadata gets
     // colorMap-indexed colorIds). CSS + TokenizationRegistry.setColorMap are
     // monaco's, fed the same table via defineTheme's encodedTokensColors.
     this._grammarFactory?.setTheme(theme, colorMap)
+    // Tokens already on screen carry colorIds resolved against the previous
+    // theme's color table; monaco never re-tokenizes on its own for a grammar
+    // theme change (its setColorMap event only covers languages with a
+    // *resolved* support, and fires from the async theme bridge with no
+    // ordering guarantee against this call). Fire the change ourselves so
+    // every live model on our languages re-tokenizes against the new table.
+    const changedLanguages = [...(this._getLiveLanguages?.() ?? [])].filter((languageId) =>
+      this._registeredLanguages.has(languageId),
+    )
+    if (changedLanguages.length > 0) {
+      monaco.TokenizationRegistry.handleChange(changedLanguages)
+      this._warmUpLiveModels()
+    }
   }
 
   override dispose(): void {

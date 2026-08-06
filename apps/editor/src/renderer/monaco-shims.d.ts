@@ -194,6 +194,7 @@ declare module 'monaco-editor/esm/vs/editor/common/languages.js' {
     registerFactory(languageId: string, factory: LazyTokenizationSupport): { dispose(): void }
     getOrCreate(languageId: string): Promise<ITokenizationSupport | null>
     get(languageId: string): ITokenizationSupport | null
+    handleChange(languageIds: string[]): void
     onDidChange(
       listener: (e: {
         changedLanguages: readonly string[]
