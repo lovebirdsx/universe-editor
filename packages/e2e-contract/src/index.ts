@@ -401,6 +401,20 @@ export interface E2EProbe {
     endColumn: number,
   ): boolean
   /**
+   * The active Monaco editor's primary selection (1-based), or undefined when
+   * the active editor isn't a file editor (or its Monaco instance isn't
+   * mounted). Used by the findWordAtCursor spec to assert loose-mode jumps
+   * select the matched range.
+   */
+  getActiveEditorSelection():
+    | {
+        startLineNumber: number
+        startColumn: number
+        endLineNumber: number
+        endColumn: number
+      }
+    | undefined
+  /**
    * Snapshot of the active diff editor's modified-side view state: the cursor
    * line and the first visible line. Used by diff auto-reveal specs to assert
    * the view scrolled to the first change. Undefined when the active editor is

@@ -396,6 +396,17 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       monaco.focus()
       return true
     },
+    getActiveEditorSelection: () => {
+      const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
+      const selection = monaco?.getSelection()
+      if (!selection) return undefined
+      return {
+        startLineNumber: selection.startLineNumber,
+        startColumn: selection.startColumn,
+        endLineNumber: selection.endLineNumber,
+        endColumn: selection.endColumn,
+      }
+    },
     getActiveDiffViewState: () => {
       const group = services.editorGroupsService.activeGroup
       const active = group?.activeEditor

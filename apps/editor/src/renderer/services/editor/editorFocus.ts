@@ -62,6 +62,42 @@ export function bridgeSuggestWidgetVisible(
   }
 }
 
+/** Minimal shape of Monaco's FindController/FindState exposed for visibility tracking. */
+interface FindStateLike {
+  readonly isRevealed: boolean
+  readonly onFindReplaceStateChange: monaco.IEvent<unknown>
+}
+interface FindControllerLike {
+  getState(): FindStateLike
+  dispose(): void
+}
+
+/**
+ * Mirror Monaco's find-widget visibility onto the global `findWidgetVisible`
+ * context key. Monaco confines that key to the editor's own scoped context-key
+ * service, so the global keybinding handler can't see it — without this, the
+ * findWordAtCursor Alt+Down/Alt+Up bindings would fire while the find widget
+ * is open but the editor text still holds focus.
+ */
+export function bridgeFindWidgetVisible(
+  editor: monaco.editor.IStandaloneCodeEditor,
+  contextKeyService: IContextKeyService,
+): IDisposable {
+  if (typeof editor.getContribution !== 'function') return { dispose: () => undefined }
+  const controller = editor.getContribution<FindControllerLike>('editor.contrib.findController')
+  const state = controller?.getState()
+  if (!state) return { dispose: () => undefined }
+  const sync = () => contextKeyService.set('findWidgetVisible', state.isRevealed)
+  sync()
+  const sub = state.onFindReplaceStateChange(sync)
+  return {
+    dispose: () => {
+      sub.dispose()
+      contextKeyService.set('findWidgetVisible', false)
+    },
+  }
+}
+
 /** Minimal observable shape of Monaco's inline-completions model for visibility tracking. */
 interface ObservableLike<T> {
   read(reader: unknown): T

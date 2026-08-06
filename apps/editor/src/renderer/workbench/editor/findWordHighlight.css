@@ -1,0 +1,6 @@
+/* Transient highlight painted by findWordAtCursor (Alt+Down/Alt+Up) on the
+ * match a loose (selection-based) jump lands on. Clears on the next cursor
+ * move — see services/editor/findWordAtCursor.ts. */
+.findWordAtCursorMatch {
+  background-color: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 179, 8, 0.35));
+}

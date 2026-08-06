@@ -8,6 +8,7 @@
  *   - isInDiffEditor / textCompareEditorVisible                  (active editor is a diff)
  *   - editorFocus                                                (Monaco widget DOM focus)
  *   - editorTextFocus                                            (Monaco text input focus)
+ *   - findWidgetVisible                                          (Monaco find widget revealed)
  *   - editorColumnSelection                                      (Monaco column-selection mode)
  *   - editorLangId / editorReadonly                              (active editor attributes, monaco parity)
  *   - editorHasDefinitionProvider                               (definition provider for active lang)
@@ -185,6 +186,11 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     // on its own scoped context-key service; FileEditor mirrors it here so global
     // and extension keybindings (e.g. smart Enter/Tab) can yield to accept.
     contextKeyService.createKey<boolean>('suggestWidgetVisible', false)
+
+    // True while Monaco's find widget is revealed. Same scoped-key situation as
+    // suggestWidgetVisible; FileEditor mirrors it so keybindings can yield to the
+    // widget (e.g. findWordAtCursor's Alt+Down/Alt+Up use `!findWidgetVisible`).
+    contextKeyService.createKey<boolean>('findWidgetVisible', false)
 
     // True while an inline suggestion (ghost text) is visible. Monaco keeps this
     // on the editor's scoped context-key service; FileEditor mirrors it here so

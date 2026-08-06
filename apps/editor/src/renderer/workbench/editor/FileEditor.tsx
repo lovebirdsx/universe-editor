@@ -43,6 +43,7 @@ import {
   bridgeInlineSuggestionVisible,
   bridgeInlineEditState,
   bridgeSuggestWidgetVisible,
+  bridgeFindWidgetVisible,
   bridgeEditorColumnSelection,
   focusStandaloneEditor,
   syncEditorFocusContext,
@@ -60,6 +61,7 @@ import {
   resolveLanguageFonts,
 } from '../../services/configuration/fontDefaults.js'
 import styles from './FileEditor.module.css'
+import './findWordHighlight.css'
 
 function getEditorTypographyOptions(
   configService: IConfigurationService,
@@ -254,6 +256,9 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // accept while the widget is open. Monaco keeps this key only on its own scoped
     // context-key service; the global handler can't see it otherwise.
     const suggestSub = bridgeSuggestWidgetVisible(ed, contextKeyService)
+    // Mirror find-widget visibility so keybindings can yield while it is open
+    // (findWordAtCursor's Alt+Down/Alt+Up gate on `!findWidgetVisible`).
+    const findWidgetSub = bridgeFindWidgetVisible(ed, contextKeyService)
     // Mirror inline-suggestion (ghost text) visibility so our Tab binding can
     // accept it; Monaco's own editContext Tab dispatch can't be relied on.
     const inlineSuggestSub = bridgeInlineSuggestionVisible(ed, contextKeyService)
@@ -288,6 +293,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       textBlurSub.dispose()
       modelChangeSub.dispose()
       suggestSub.dispose()
+      findWidgetSub.dispose()
       inlineSuggestSub.dispose()
       inlineEditSub.dispose()
       columnSelectionSub.dispose()

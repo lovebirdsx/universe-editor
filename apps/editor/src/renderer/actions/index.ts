@@ -180,6 +180,7 @@ import {
   FindReplaceInFileAction,
   QuickTextSearchAction,
 } from './searchActions.js'
+import { FindWordAtCursorNextAction, FindWordAtCursorPreviousAction } from './findWordActions.js'
 import { CloseQuickInputAction } from './quickInputActions.js'
 import { FocusNextPartAction, FocusPreviousPartAction } from './focusActions.js'
 import { ClearHistoryAction, GoBackAction, GoForwardAction } from './historyActions.js'
@@ -554,6 +555,8 @@ registerAction2(FindInFileAction)
 registerAction2(FindReplaceInFileAction)
 registerAction2(FindNextAction)
 registerAction2(FindPreviousAction)
+registerAction2(FindWordAtCursorNextAction)
+registerAction2(FindWordAtCursorPreviousAction)
 
 // Quick Input — `escape` binding gates on `quickInputVisible` and carries an
 // explicit higher weight, so it wins regardless of registration order.
