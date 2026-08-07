@@ -35,6 +35,15 @@ export const ACP_EXT_METHODS = {
   compaction: '_universe/compaction',
   /** agent->client notification: wedged-session resurrection lifecycle (start/success/failed). */
   sessionResurrection: '_universe/sessionResurrection',
+  /**
+   * agent->client notification: content-free proof of life (codex fork's
+   * liveness probe). The SDK zod-validates session/update against the
+   * SessionUpdate union — a private variant there is rejected before reaching
+   * any handler, so the ping travels as a custom notification instead. Params:
+   * `{ sessionId }`; the editor only resets the stall watchdog's silence
+   * window, no timeline entry.
+   */
+  livenessPing: '_universe/liveness_ping',
   /** agent->client notification: raw Claude SDK message passthrough (init snapshot). */
   sdkMessage: '_claude/sdkMessage',
 } as const

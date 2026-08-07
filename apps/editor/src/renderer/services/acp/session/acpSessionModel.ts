@@ -339,6 +339,17 @@ export const COMPACTION_METHOD = ACP_EXT_METHODS.compaction
  */
 export const RESURRECTION_METHOD = ACP_EXT_METHODS.sessionResurrection
 
+/**
+ * Custom ACP extension notification the codex agent fork sends as a
+ * content-free proof of life during long silent turns, so the stall watchdog
+ * doesn't mistake a legitimately quiet operation for a wedged process.
+ * Shared verbatim with the fork's `ACPSessionConnection.ts`
+ * (`LIVENESS_PING_METHOD`) — keep both in sync. Params: `{ sessionId }`.
+ * (The claude fork has no equivalent: the Claude SDK's tool_progress
+ * heartbeats keep the wire busy on their own.)
+ */
+export const LIVENESS_PING_METHOD = ACP_EXT_METHODS.livenessPing
+
 /** Result the agent returns from {@link REWIND_SESSION_METHOD} (mirrors the SDK's RewindFilesResult). */
 export interface RewindFilesResult {
   readonly canRewind: boolean

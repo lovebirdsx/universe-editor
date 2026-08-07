@@ -65,6 +65,7 @@ const EXPECTED_METHOD_NAMES = {
   rewindSession: 'universe-editor/rewind_session',
   compaction: '_universe/compaction',
   sessionResurrection: '_universe/sessionResurrection',
+  livenessPing: '_universe/liveness_ping',
   sdkMessage: '_claude/sdkMessage',
 } as const
 
@@ -83,9 +84,10 @@ describe('editor ext-method name table is the single source of truth', () => {
 // OFFLINE (no spawn, no binary), so CI fails the instant a fork drops/renames a
 // method the editor still calls.
 //
-// claude declares all five; codex only the two client->agent request methods it
+// claude declares five; codex declares the two client->agent request methods it
 // implements (rewind/set_title — it does file rollback client-side and has no
-// compaction / sdkMessage surface). The forks' ask_user_question ext-method is
+// compaction / sdkMessage surface) plus the liveness ping notification its
+// stall-watchdog probe forwards. The forks' ask_user_question ext-method is
 // their own fallback asset — the editor no longer calls it (AskUserQuestion now
 // flows over the standard elicitation channel), so it's not asserted here.
 const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
@@ -101,6 +103,7 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
   codex: [
     EXPECTED_METHOD_NAMES.setSessionTitle,
     EXPECTED_METHOD_NAMES.rewindSession,
+    EXPECTED_METHOD_NAMES.livenessPing,
     'universe-editor/capabilities',
   ],
 }

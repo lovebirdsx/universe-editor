@@ -60,7 +60,6 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionConfigOption,
-  type SessionUpdate,
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
 } from '@agentclientprotocol/sdk'
@@ -453,6 +452,9 @@ class FakeAcpClientService implements IAcpClientService {
       requestPermission: (params) => sink.onRequestPermission(params),
       sessionUpdate: async (params) => {
         sink.onSessionUpdate(params)
+      },
+      extNotification: async (method, params) => {
+        sink.onExtNotification?.(method, params)
       },
     }
     const clientConn = new ClientSideConnection(() => clientImpl, pair.clientStream)
@@ -3829,13 +3831,16 @@ describe('AcpSessionService — configOptions history snapshot', () => {
 describe('AcpSessionService — stall watchdog', () => {
   const STALL_TIMEOUT_MS = 30_000
 
-  function makeService(stallMs: number = STALL_TIMEOUT_MS): AcpSessionService {
+  function makeService(
+    stallMs: number = STALL_TIMEOUT_MS,
+    client: FakeAcpClientService = new FakeAcpClientService({ stubOptions: { promptHangs: true } }),
+  ): AcpSessionService {
     const notifications = new StubNotificationService()
     const config: IConfigurationService = new ConfigurationService()
     void config.update('acp.turnStallTimeoutMs', stallMs, ConfigurationTarget.Memory)
     void config.update('acp.startupTimeoutMs', 5 * 60_000, ConfigurationTarget.Memory)
     return new AcpSessionService(
-      new FakeAcpClientService({ stubOptions: { promptHangs: true } }),
+      client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
       config,
@@ -4033,12 +4038,15 @@ describe('AcpSessionService — stall watchdog', () => {
     svc.dispose()
   })
 
-  it('treats an unknown sessionUpdate variant as activity and otherwise ignores it', async () => {
-    // Contract the codex fork's liveness probe relies on: it forwards a
-    // content-free `_universe/liveness_ping` session/update to keep long
-    // silent turns (collab sub-agent waits, output-less builds) alive. ANY
-    // inbound session/update must refresh lastActivityAt, and unknown
-    // variants must be ignored — no timeline entry, no visible output.
+  it('treats a liveness ping ext-notification as activity, with no timeline or output churn', async () => {
+    // The codex fork's liveness probe keeps long silent turns (collab
+    // sub-agent waits, output-less builds) alive. The ping CANNOT ride
+    // session/update: the SDK zod-validates those params against the
+    // SessionUpdate union before dispatch, so a private variant is rejected
+    // and never reaches any handler (production bug). It travels as a custom
+    // `_universe/liveness_ping` notification, which the SDK routes to the
+    // client impl's extNotification hook — the channel exercised here. The
+    // ping must refresh lastActivityAt while producing no visible output.
     const stallMs = 90_000 // above the 60s watchdog tick so tick alignment can't flake the assertions
     const svc = makeService(stallMs)
     const session = await svc.createSession()
@@ -4049,16 +4057,50 @@ describe('AcpSessionService — stall watchdog', () => {
     expect(session.status.get()).toBe('running')
     const stallSpy = vi.spyOn(session, 'handleStall')
 
-    const ping = { sessionUpdate: '_universe/liveness_ping' } as unknown as SessionUpdate
+    const agentSessionId = session.sessionIdOnAgent.get()
+    if (agentSessionId === undefined) throw new Error('expected an attached session')
     const timelineBefore = session.timeline.get().length
     await vi.advanceTimersByTimeAsync(60_000)
-    session.applyUpdate(ping)
+    svc.onExtNotification('_universe/liveness_ping', { sessionId: agentSessionId })
     expect(session.timeline.get().length).toBe(timelineBefore)
 
     // The ping reset the silence window, so the next ticks see no stall…
     await vi.advanceTimersByTimeAsync(60_000)
     expect(stallSpy).not.toHaveBeenCalled()
     // …but genuine silence afterwards still stalls.
+    await vi.advanceTimersByTimeAsync(stallMs + 60_000)
+    expect(stallSpy).toHaveBeenCalled()
+    svc.dispose()
+  })
+
+  it('routes a real-wire _universe/liveness_ping notification from agent to the stall watchdog', async () => {
+    // End-to-end over the actual SDK dispatch: a custom-method notification
+    // sent by AgentSideConnection.notify() must pass the SDK's validation and
+    // land on the client impl's extNotification hook — unlike the old
+    // session/update variant, which the SDK rejected with "Invalid params".
+    const stallMs = 90_000
+    const client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
+    const svc = makeService(stallMs, client)
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    void session.sendPrompt('hi')
+    await vi.advanceTimersByTimeAsync(10)
+    expect(session.status.get()).toBe('running')
+    const stallSpy = vi.spyOn(session, 'handleStall')
+
+    const agentSessionId = session.sessionIdOnAgent.get()
+    if (agentSessionId === undefined) throw new Error('expected an attached session')
+    const agentConn = client.connected[0]?.agentConn
+    if (!agentConn) throw new Error('expected a connected agent')
+    await vi.advanceTimersByTimeAsync(60_000)
+    await agentConn.notify('_universe/liveness_ping', { sessionId: agentSessionId })
+    // Notifications have no response — flush the transform hops.
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(stallSpy).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(stallMs + 60_000)
     expect(stallSpy).toHaveBeenCalled()
     svc.dispose()

@@ -99,6 +99,7 @@ import { AcpElicitationDraftCache } from './acpElicitationDraftCache.js'
 import {
   AcpSession,
   COMPACTION_METHOD,
+  LIVENESS_PING_METHOD,
   PLAN_AUTO_EXECUTE_DELAY_MS,
   RESURRECTION_METHOD,
   type AcpConnectionLostEvent,
@@ -1658,6 +1659,12 @@ export class AcpSessionService
     }
     if (method === RESURRECTION_METHOD) {
       this._handleResurrectionNotification(params)
+      return
+    }
+    if (method === LIVENESS_PING_METHOD) {
+      const sessionId = params['sessionId']
+      if (typeof sessionId !== 'string') return
+      this._findSession(sessionId)?.applyLivenessPing()
       return
     }
     if (method !== SDK_MESSAGE_EXT_METHOD) return

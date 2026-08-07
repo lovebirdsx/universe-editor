@@ -104,6 +104,7 @@ import {
 export {
   AcpAbortError,
   COMPACTION_METHOD,
+  LIVENESS_PING_METHOD,
   PLAN_AUTO_EXECUTE_DELAY_MS,
   RESURRECTION_METHOD,
   REWIND_SESSION_METHOD,
@@ -1994,6 +1995,15 @@ export class AcpSession extends Disposable implements IAcpSession {
       this._terminalOutput.set(toolCallId, chunk.mode === 'append' ? prev + chunk.data : chunk.data)
     }
     return this._terminalOutput.get(toolCallId)
+  }
+
+  /**
+   * Proof of life for the stall watchdog from the agent's liveness ping
+   * (a content-free ext-notification): only resets the silence window — no
+   * timeline entry, no observable churn.
+   */
+  applyLivenessPing(): void {
+    this._lastActivityAt = Date.now()
   }
 
   applyUpdate(update: SessionUpdate): void {
