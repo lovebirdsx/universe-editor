@@ -60,6 +60,7 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionConfigOption,
+  type SessionUpdate,
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
 } from '@agentclientprotocol/sdk'
@@ -3993,6 +3994,37 @@ describe('AcpSessionService — stall watchdog', () => {
     session.handleStall()
     expect(session.status.get()).toBe('running')
     expect(session.isReconnecting).toBe(false)
+    svc.dispose()
+  })
+
+  it('treats an unknown sessionUpdate variant as activity and otherwise ignores it', async () => {
+    // Contract the codex fork's liveness probe relies on: it forwards a
+    // content-free `_universe/liveness_ping` session/update to keep long
+    // silent turns (collab sub-agent waits, output-less builds) alive. ANY
+    // inbound session/update must refresh lastActivityAt, and unknown
+    // variants must be ignored — no timeline entry, no visible output.
+    const stallMs = 90_000 // above the 60s watchdog tick so tick alignment can't flake the assertions
+    const svc = makeService(stallMs)
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    void session.sendPrompt('hi')
+    await vi.advanceTimersByTimeAsync(10)
+    expect(session.status.get()).toBe('running')
+    const stallSpy = vi.spyOn(session, 'handleStall')
+
+    const ping = { sessionUpdate: '_universe/liveness_ping' } as unknown as SessionUpdate
+    const timelineBefore = session.timeline.get().length
+    await vi.advanceTimersByTimeAsync(60_000)
+    session.applyUpdate(ping)
+    expect(session.timeline.get().length).toBe(timelineBefore)
+
+    // The ping reset the silence window, so the next ticks see no stall…
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(stallSpy).not.toHaveBeenCalled()
+    // …but genuine silence afterwards still stalls.
+    await vi.advanceTimersByTimeAsync(stallMs + 60_000)
+    expect(stallSpy).toHaveBeenCalled()
     svc.dispose()
   })
 })
