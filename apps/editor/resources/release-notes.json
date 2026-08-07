@@ -1,5 +1,31 @@
 [
   {
+    "version": "0.1.61",
+    "date": "2026-08-07",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "支持光标处单词快速跳转（Alt+Down/Up）",
+          "支持toml语法高亮",
+          "timelien可跳转到Git/Peforce图表中对应的提交",
+          "发布版加入扩展开发文档支持",
+          "支持监听工作区新增Git仓库，无需重载窗口"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复海量文件工作区触发主进程OOM闪退",
+          "修复session长时间空闲后发提示被误判为停滞",
+          "修复codex恢复session时工具调用显示为wait的bug"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.60",
     "date": "2026-08-05",
     "groups": [
