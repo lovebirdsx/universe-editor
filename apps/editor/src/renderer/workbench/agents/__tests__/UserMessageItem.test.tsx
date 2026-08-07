@@ -10,8 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render } from '@testing-library/react'
 import {
   ICommandService,
+  IOpenerService,
   InstantiationService,
   ServiceCollection,
+  URI,
   observableValue,
 } from '@universe-editor/platform'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
@@ -47,10 +49,17 @@ function renderItem(
   session: IAcpSession | undefined,
   messageId: string | undefined,
   autoRetry?: boolean,
-): { execute: ReturnType<typeof vi.fn>; container: HTMLElement } {
+  selectionContexts?: Parameters<typeof UserMessageItem>[0]['selectionContexts'],
+): {
+  execute: ReturnType<typeof vi.fn>
+  open: ReturnType<typeof vi.fn>
+  container: HTMLElement
+} {
   const execute = vi.fn().mockResolvedValue(undefined)
+  const open = vi.fn().mockResolvedValue(true)
   const services = new ServiceCollection()
   services.set(ICommandService, { executeCommand: execute } as unknown as ICommandService)
+  services.set(IOpenerService, { open } as unknown as IOpenerService)
   const inst = new InstantiationService(services)
   const blocks: readonly ContentBlock[] = [{ type: 'text', text: 'hi' }]
   const { container } = render(
@@ -60,10 +69,11 @@ function renderItem(
         {...(session !== undefined ? { session } : {})}
         {...(messageId !== undefined ? { messageId } : {})}
         {...(autoRetry === true ? { autoRetry: true } : {})}
+        {...(selectionContexts !== undefined ? { selectionContexts } : {})}
       />
     </ServicesContext.Provider>,
   )
-  return { execute, container }
+  return { execute, open, container }
 }
 
 describe('UserMessageItem — rewind / fork actions', () => {
@@ -125,6 +135,34 @@ describe('UserMessageItem — autoRetry demotion', () => {
         ?.getAttribute('data-auto-retry'),
     ).toBe('false')
     expect(container.querySelector('[data-testid="acp-user-message-actions"]')).not.toBeNull()
+  })
+})
+
+describe('UserMessageItem — selection attachments', () => {
+  const selectionContexts = [
+    {
+      uri: 'file:///w/src/a.ts',
+      relPath: 'src/a.ts',
+      text: 'const x = 1',
+      startLine: 12,
+      endLine: 40,
+      languageId: 'typescript',
+    },
+  ] as const
+
+  it('renders submitted selections as read-only chips before the message body', () => {
+    const { container } = renderItem(undefined, undefined, false, selectionContexts)
+    const content = container.querySelector('[class*="userMessageContent"]')
+    expect(content?.firstElementChild?.textContent).toContain('src/a.ts:12-40')
+    expect(container.querySelector('[aria-label="Remove context"]')).toBeNull()
+  })
+
+  it('opens the source range when a submitted selection chip is clicked', () => {
+    const { container, open } = renderItem(undefined, undefined, false, selectionContexts)
+    fireEvent.click(container.querySelector('[class*="contextChipLabel"]')!)
+    expect(open).toHaveBeenCalledWith(URI.parse('file:///w/src/a.ts#12,1-40,1'), {
+      fromUserGesture: true,
+    })
   })
 })
 

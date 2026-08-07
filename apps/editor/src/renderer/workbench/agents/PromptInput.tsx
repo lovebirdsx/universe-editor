@@ -428,16 +428,17 @@ export function PromptInput({
   // Drain any replacement text the Rewind command deposited (edit-and-retry):
   // unlike the append inbox above this OVERWRITES the draft, since the turn it
   // came from — and everything after it — has been rewound out of the timeline.
-  // Clears any leftover contexts/images so the input reflects only the rewound
-  // prompt. Mirrors the drain-on-mount + onDidDeposit pattern.
+  // Restores the rewound turn's selection contexts while clearing unrelated
+  // refs/images. Mirrors the drain-on-mount + onDidDeposit pattern.
   useEffect(() => {
     if (!editorReady) return
     const pull = (): void => {
-      const incoming = AcpPromptReplaceInbox.drain(session.id)
-      if (incoming === undefined) return
+      const replacement = AcpPromptReplaceInbox.drain(session.id)
+      if (replacement === undefined) return
       const el = editorHandleRef.current
-      el?.setText(incoming, incoming.length)
-      setContexts([])
+      el?.setText(replacement.text, replacement.text.length)
+      el?.clearRefs()
+      setContexts(replacement.contexts)
       setImages([])
       requestAnimationFrame(() => el?.focus())
     }

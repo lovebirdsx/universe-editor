@@ -475,6 +475,9 @@ export class AcpSessionService
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
+    // Start the sidecar load early. Prompt dispatch awaits the same idempotent
+    // promise before its first save, so pre-existing records cannot be clobbered.
+    void this._sessionFactory.messageAttachments.initialize()
     this.mcpServerDefinitions = observableValue<readonly McpServerDefinition[]>(
       'acp.mcpServerDefinitions',
       this._readGlobalMcpDefinitions(),
@@ -873,6 +876,11 @@ export class AcpSessionService
     },
   ): Promise<IAcpSession> {
     const { readOnly } = options
+    try {
+      await this._sessionFactory.messageAttachments.initialize()
+    } catch {
+      // A broken sidecar must not make the agent transcript itself unreadable.
+    }
     // History hydration is fire-and-forget at bootstrap; on editor restart the
     // restored AcpSessionEditorInput triggers an auto-resume via useEffect that
     // races with the load. Wait for hydration so a transient empty-state
@@ -1284,6 +1292,7 @@ export class AcpSessionService
     } else if (entry.hasMessages === false) {
       this._logger.info(`discarding empty session that failed to resume: ${entry.id}`)
       this._history.remove(entry.id)
+      this._sessionFactory.messageAttachments.removeSession(entry.id)
     } else {
       this._logger.warn(`resumeSession failed: ${msg}`)
       this._notification.notify({
@@ -1318,8 +1327,11 @@ export class AcpSessionService
     return this._findSession(sessionId)
   }
 
-  deleteOnAgent(sessionId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
-    return this._coordinator.deleteOnAgent(sessionId)
+  async deleteOnAgent(sessionId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
+    const result = await this._coordinator.deleteOnAgent(sessionId)
+    await this._sessionFactory.messageAttachments.initialize().catch(() => {})
+    this._sessionFactory.messageAttachments.removeSession(sessionId)
+    return result
   }
 
   resolveTranscriptPath(sessionId: string): Promise<string | undefined> {
@@ -1371,6 +1383,11 @@ export class AcpSessionService
       forkMcpSelection,
       messageId,
     )
+    try {
+      await this._sessionFactory.messageAttachments.initialize()
+    } catch {
+      // Fork remains usable even if its local attachment sidecar cannot load.
+    }
 
     // Register the fork as a durable history row so resumeSession can load it.
     const forkTitle = localize('acp.session.forkTitle', '{title} (fork)', { title: entry.title })
@@ -1397,6 +1414,16 @@ export class AcpSessionService
         ? { configOptions: forkConfig.values, configLabels: forkConfig.labels }
         : {}),
     })
+    const copiedMessageIds = live
+      ? messageIdsThrough(live.messages.get(), messageId)
+      : messageId === undefined
+        ? undefined
+        : []
+    this._sessionFactory.messageAttachments.copySession(
+      sourceAgentSessionId,
+      newSessionId,
+      copiedMessageIds,
+    )
     this._telemetry.publicLog('acp.session_forked', {
       agentId: entry.agentId,
       fromMessage: messageId !== undefined,
@@ -2043,6 +2070,7 @@ export class AcpSessionService
         const title = session.title
         await this.closeSession(sid)
         this._history.remove(entry.id)
+        this._sessionFactory.messageAttachments.removeSession(entry.id)
         const fresh = await this.createSession(session.agentId, {
           title,
           ...(pin !== null ? { mcpServerNames: pin } : {}),
@@ -2115,6 +2143,19 @@ function selectionEquals(a: readonly string[] | null, b: readonly string[] | nul
   if (a === null || b === null) return false
   if (a.length !== b.length) return false
   return a.every((x, i) => x === b[i])
+}
+
+function messageIdsThrough(
+  messages: readonly { readonly role: string; readonly messageId?: string }[],
+  anchorMessageId?: string,
+): readonly string[] {
+  const ids: string[] = []
+  for (const message of messages) {
+    if (message.role !== 'user' || message.messageId === undefined) continue
+    ids.push(message.messageId)
+    if (anchorMessageId !== undefined && message.messageId === anchorMessageId) return ids
+  }
+  return anchorMessageId === undefined ? ids : []
 }
 
 /**

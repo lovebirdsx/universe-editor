@@ -12,7 +12,7 @@ import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { MessageContent } from './MessageContent.js'
 import { useContentExpansion } from './chatContentExpansion.js'
 import { useExecuteCommand, useObservable } from '../useService.js'
-import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
+import type { IAcpSession, SelectionContext } from '../../services/acp/session/acpSessionService.js'
 import {
   RewindAgentSessionAction,
   ForkAgentSessionAction,
@@ -23,6 +23,7 @@ import {
   initialOverflow,
   rememberMeasuredOverflow,
 } from './contentOverflow.js'
+import { SelectionContextChips, useSelectionContextReveal } from './SelectionContextChips.js'
 import styles from './agents.module.css'
 
 export const UserMessageItem = memo(function UserMessageItem({
@@ -30,15 +31,18 @@ export const UserMessageItem = memo(function UserMessageItem({
   contentKey,
   session,
   messageId,
+  selectionContexts,
   autoRetry,
 }: {
   blocks: readonly ContentBlock[]
   contentKey?: string
   session?: IAcpSession
   messageId?: string
+  selectionContexts?: readonly SelectionContext[]
   /** Recovery-sent continuation ("继续"): demoted styling + badge, no rewind/fork. */
   autoRetry?: boolean
 }) {
+  const revealSelection = useSelectionContextReveal()
   const innerRef = useRef<HTMLDivElement | null>(null)
   // Seed from the last measured state / a synchronous estimate (never a bare
   // `false`) so the FIRST paint already clamps a long prompt. In the virtualized
@@ -47,7 +51,9 @@ export const UserMessageItem = memo(function UserMessageItem({
   // (re)mount and drives the endless scroll-correction loop (the reported
   // flicker-and-drift after an outline jump). See contentOverflow.ts.
   const [overflows, setOverflows] = useState(() =>
-    initialOverflow(contentKey, () => estimateUserMessageOverflow(blocks)),
+    initialOverflow(contentKey, () =>
+      estimateUserMessageOverflow(blocks, selectionContexts?.length ?? 0),
+    ),
   )
   // Persist the expanded state (via the timeline's content-expansion store) so
   // it survives an unmount → remount cycle (session / tab switch, virtualization
@@ -84,7 +90,6 @@ export const UserMessageItem = memo(function UserMessageItem({
   const toggleLabel = expanded
     ? localize('acp.userMessage.collapse', 'Collapse')
     : localize('acp.userMessage.expand', 'Expand')
-
   return (
     <>
       <div className={styles['userMessageWrap']}>
@@ -104,7 +109,8 @@ export const UserMessageItem = memo(function UserMessageItem({
           data-auto-retry={autoRetry === true ? 'true' : 'false'}
           data-testid="acp-user-message-body"
         >
-          <div ref={innerRef}>
+          <div ref={innerRef} className={styles['userMessageContent']}>
+            <SelectionContextChips contexts={selectionContexts ?? []} onReveal={revealSelection} />
             <MessageContent blocks={blocks} />
           </div>
         </div>

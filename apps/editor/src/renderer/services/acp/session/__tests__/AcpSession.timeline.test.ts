@@ -52,13 +52,16 @@ import {
   type RequestPermissionResponse,
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
+  type SessionUpdate,
 } from '@agentclientprotocol/sdk'
+import { stripSelectionReplayChunk } from '../acpSession.js'
 import { AcpSessionService } from '../acpSessionService.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
+import type { IAcpMessageAttachmentStore } from '../acpMessageAttachmentStore.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubExtensionMcpServersService } from './stubExtensionMcpServers.js'
@@ -72,9 +75,39 @@ import {
 } from '../../acpClientService.js'
 import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
+import type { SelectionContext } from '../../promptContext.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
 
 const FAKE_URI_IDENTITY = new UriIdentityService('linux')
+
+class InMemoryMessageAttachments implements IAcpMessageAttachmentStore {
+  declare readonly _serviceBrand: undefined
+  private readonly selections = new Map<string, readonly SelectionContext[]>()
+  initialize(): Promise<void> {
+    return Promise.resolve()
+  }
+  saveSelections(
+    sessionId: string,
+    messageId: string,
+    selections: readonly SelectionContext[],
+  ): void {
+    this.selections.set(
+      `${sessionId}:${messageId}`,
+      selections.map((selection) => ({ ...selection })),
+    )
+  }
+  getSelections(sessionId: string, messageId: string): readonly SelectionContext[] {
+    return this.selections.get(`${sessionId}:${messageId}`) ?? []
+  }
+  removeMessages(sessionId: string, messageIds: readonly string[]): void {
+    for (const id of messageIds) this.selections.delete(`${sessionId}:${id}`)
+  }
+  copySession(): void {}
+  removeSession(): void {}
+  clear(): void {
+    this.selections.clear()
+  }
+}
 
 class FakeAgentRegistry implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
@@ -306,7 +339,8 @@ function makeService(
   const telemetry = new NoopTelemetryService() as ITelemetryService
   const history = makeHistory()
   const agentDefaults = makeAgentDefaults()
-  return new AcpSessionService(
+  const messageAttachments = new InMemoryMessageAttachments()
+  const service = new AcpSessionService(
     client,
     new FakeAgentRegistry(),
     new FakeWorkspaceService(),
@@ -332,12 +366,48 @@ function makeService(
         new NoopTelemetryService(),
         new StubLoggerService(),
       ),
+      messageAttachments,
     ),
     new StubFileService(),
     new StubExtensionMcpServersService(),
     new StubMcpServerEnablementService(),
   )
+  attachmentStores.set(service, messageAttachments)
+  return service
 }
+
+const attachmentStores = new WeakMap<AcpSessionService, InMemoryMessageAttachments>()
+
+describe('stripSelectionReplayChunk', () => {
+  const selection: SelectionContext = {
+    uri: 'file:///w/src/a.ts',
+    relPath: 'src/a.ts',
+    text: 'const x = 1',
+    startLine: 12,
+    endLine: 12,
+    languageId: 'typescript',
+  }
+  const update = (text: string): SessionUpdate => ({
+    sessionUpdate: 'user_message_chunk',
+    content: { type: 'text', text },
+  })
+
+  it('drops exact embedded-resource replay text for both built-in agent shapes', () => {
+    const link = '[@a.ts](file:///w/src/a.ts)'
+    const context = '<context ref="file:///w/src/a.ts">\nconst x = 1\n</context>'
+    expect(stripSelectionReplayChunk(update(link), [selection])).toBeUndefined()
+    expect(stripSelectionReplayChunk(update(`\n${context}`), [selection])).toBeUndefined()
+    expect(stripSelectionReplayChunk(update(`${link}\n${context}`), [selection])).toBeUndefined()
+  })
+
+  it('drops the exact fallback fence but preserves unrelated transcript text', () => {
+    expect(
+      stripSelectionReplayChunk(update('```typescript src/a.ts:12\nconst x = 1\n```'), [selection]),
+    ).toBeUndefined()
+    const unrelated = update('Please keep this user-authored context explanation.')
+    expect(stripSelectionReplayChunk(unrelated, [selection])).toBe(unrelated)
+  })
+})
 
 describe('AcpSession.timeline', () => {
   let svc: AcpSessionService
@@ -710,6 +780,37 @@ describe('AcpSession.timeline', () => {
       .flatMap((it) => (it.kind === 'message' ? [it.message] : []))
       .find((m) => m.role === 'user')
     expect(userMsg?.blocks.some((b) => b.type === 'image')).toBe(true)
+
+    await s.cancelTurn()
+    await promptPromise
+  })
+
+  it('keeps attached selection snapshots on the local user message', async () => {
+    svc.dispose()
+    client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
+    svc = makeService(client)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    const selectionContexts = [
+      {
+        uri: 'file:///w/src/a.ts',
+        relPath: 'src/a.ts',
+        text: 'const x = 1',
+        startLine: 12,
+        endLine: 12,
+        languageId: 'typescript',
+      },
+    ] as const
+    const promptPromise = s.sendPrompt('explain', undefined, selectionContexts)
+    await new Promise((r) => setTimeout(r, 10))
+
+    const userMsg = s.timeline
+      .get()
+      .flatMap((it) => (it.kind === 'message' ? [it.message] : []))
+      .find((m) => m.role === 'user')
+    expect(userMsg?.selectionContexts).toEqual(selectionContexts)
+    expect(userMsg?.blocks).toEqual([{ type: 'text', text: 'explain' }])
 
     await s.cancelTurn()
     await promptPromise
@@ -1341,6 +1442,45 @@ describe('AcpSession.timeline', () => {
     expect(users).toHaveLength(2)
     expect(users[0]).toMatchObject({ text: '继续', autoRetry: true })
     expect(users[1]!.autoRetry).toBeUndefined()
+  })
+
+  it('rehydrates selection chips by messageId and hides their exact transport chunks', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+    const selection: SelectionContext = {
+      uri: 'file:///w/src/a.ts',
+      relPath: 'src/a.ts',
+      text: 'const x = 1',
+      startLine: 12,
+      endLine: 12,
+      languageId: 'typescript',
+    }
+    const messageId = 'selection-mid'
+    const sid = s.sessionIdOnAgent.get()!
+    const attachments = attachmentStores.get(svc)!
+    attachments.saveSelections(sid, messageId, [selection])
+
+    s.beginHistoryReplay()
+    for (const text of [
+      '[@a.ts](file:///w/src/a.ts)',
+      '\n<context ref="file:///w/src/a.ts">\nconst x = 1\n</context>',
+      'Explain this selection',
+    ]) {
+      conn.sink.onSessionUpdate({
+        sessionId: sid,
+        update: {
+          sessionUpdate: 'user_message_chunk',
+          content: { type: 'text', text },
+          messageId,
+        } as never,
+      })
+    }
+    s.endHistoryReplay()
+
+    const user = s.messages.get().find((message) => message.messageId === messageId)
+    expect(user?.text).toBe('Explain this selection')
+    expect(user?.selectionContexts).toEqual([selection])
   })
 
   it('drops replayed user chunks whose messageId was retracted, plus the trailing interruption marker', async () => {

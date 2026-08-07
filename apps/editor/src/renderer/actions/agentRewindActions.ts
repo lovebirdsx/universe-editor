@@ -36,6 +36,7 @@ import {
 import {
   AcpForeignWorktreeError,
   IAcpSessionService,
+  type AcpMessage,
   type RewindFilesResult,
 } from '../services/acp/session/acpSessionService.js'
 import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
@@ -93,7 +94,7 @@ export class RewindAgentSessionAction extends Action2 {
     if (!session || !session.rewindSupported.get()) return
     // Capture the turn's text now, before the rewind clears the timeline, so we
     // can backfill it for edit-and-retry.
-    const originalText = findMessageText(sessions, target.sessionId, target.messageId)
+    const originalMessage = findMessage(sessions, target.sessionId, target.messageId)
 
     let preview: RewindFilesResult | undefined
     try {
@@ -160,8 +161,11 @@ export class RewindAgentSessionAction extends Action2 {
     // Backfill the rewound turn so the user can tweak and resend it. PromptInput
     // drains this replace-inbox on its next render (it is already mounted for the
     // session the user just rewound).
-    if (originalText !== undefined && originalText.length > 0) {
-      AcpPromptReplaceInbox.deposit(target.sessionId, originalText)
+    if (originalMessage !== undefined && originalMessage.text.length > 0) {
+      AcpPromptReplaceInbox.deposit(target.sessionId, {
+        text: originalMessage.text,
+        contexts: originalMessage.selectionContexts ?? [],
+      })
     }
   }
 }
@@ -244,15 +248,14 @@ export class ForkAgentSessionAction extends Action2 {
   }
 }
 
-function findMessageText(
+function findMessage(
   sessions: IAcpSessionService,
   sessionId: string,
   messageId: string,
-): string | undefined {
+): AcpMessage | undefined {
   const session = sessions.getById(sessionId)
   if (!session) return undefined
-  const message = session.messages.get().find((m) => m.messageId === messageId)
-  return message?.text
+  return session.messages.get().find((message) => message.messageId === messageId)
 }
 
 function rewindDetail(preview: RewindFilesResult | undefined): string {

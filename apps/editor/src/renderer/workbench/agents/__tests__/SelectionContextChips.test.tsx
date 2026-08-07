@@ -49,4 +49,9 @@ describe('SelectionContextChips', () => {
     )
     expect(screen.getByText('src/a.ts:7')).toBeTruthy()
   })
+
+  it('omits the remove affordance in read-only mode', () => {
+    render(<SelectionContextChips contexts={[CTX]} onReveal={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Remove context' })).toBeNull()
+  })
 })

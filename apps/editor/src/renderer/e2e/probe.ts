@@ -478,12 +478,23 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     },
     getAcpSessionCount: () => services.acpSessionService.sessions.get().length,
     getActiveAcpSessionId: () => services.acpSessionService.activeSessionId.get(),
+    reloadActiveAcpSession: async () => {
+      const session = services.acpSessionService.activeSession.get()
+      const durableId = session?.sessionIdOnAgent.get()
+      if (!session || !durableId) throw new Error('[E2E] no durable active ACP session')
+      await services.acpSessionService.closeSession(session.id)
+      const resumed = await services.acpSessionService.resumeSession(durableId)
+      return resumed.id
+    },
     getActiveAcpSessionImageSupported: () =>
       services.acpSessionService.activeSession.get()?.imageSupported.get() === true,
     sendAcpPrompt: async (text) => {
       const s = services.acpSessionService.activeSession.get()
       if (!s) throw new Error('[E2E] no active ACP session')
       await s.sendPrompt(text)
+    },
+    addActiveSelectionToAcpPrompt: async () => {
+      await services.commandService.executeCommand('workbench.action.agent.addSelectionToChat')
     },
     setAcpCollapseMode: (mode) => {
       const s = services.acpSessionService.activeSession.get()
@@ -505,7 +516,18 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getAcpMessages: () => {
       const s = services.acpSessionService.activeSession.get()
       if (!s) return []
-      return s.messages.get().map((m) => ({ role: m.role, text: m.text }))
+      return s.messages.get().map((m) => ({
+        role: m.role,
+        text: m.text,
+        ...(m.selectionContexts !== undefined && m.selectionContexts.length > 0
+          ? {
+              selectionLabels: m.selectionContexts.map(
+                (selection) =>
+                  `${selection.relPath}:${selection.startLine === selection.endLine ? selection.startLine : `${selection.startLine}-${selection.endLine}`}`,
+              ),
+            }
+          : {}),
+      }))
     },
     getAcpToolCalls: () => {
       const s = services.acpSessionService.activeSession.get()

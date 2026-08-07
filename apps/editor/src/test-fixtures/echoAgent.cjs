@@ -50,6 +50,7 @@ const sessionCwds = new Map() // sessionId -> cwd from session/new
 // the fixture mirrors real agents: an empty session is never persisted, so
 // session/load only succeeds for messaged sessions.
 const messagedSessions = new Set()
+const sessionPrompts = new Map() // sessionId -> [{ messageId, prompt }]
 const loadSessionEnabled = process.env.ECHO_AGENT_LOAD_SESSION === '1'
 
 function send(msg) {
@@ -84,6 +85,9 @@ async function delay(ms) {
 async function runPrompt(id, params) {
   const sessionId = params.sessionId
   messagedSessions.add(sessionId)
+  const promptHistory = sessionPrompts.get(sessionId) ?? []
+  promptHistory.push({ messageId: params._meta?.messageId, prompt: params.prompt ?? [] })
+  sessionPrompts.set(sessionId, promptHistory)
   const userText = (params.prompt || [])
     .filter((b) => b && b.type === 'text')
     .map((b) => b.text)
@@ -356,6 +360,18 @@ function handle(msg) {
         return fail(msg.id, -32602, 'session not found: ' + sessionId)
       }
       sessionMcpServers.set(sessionId, msg.params?.mcpServers ?? [])
+      for (const turn of sessionPrompts.get(sessionId) ?? []) {
+        for (const content of turn.prompt) {
+          notify('session/update', {
+            sessionId,
+            update: {
+              sessionUpdate: 'user_message_chunk',
+              content,
+              ...(turn.messageId ? { messageId: turn.messageId } : {}),
+            },
+          })
+        }
+      }
       return reply(msg.id, {})
     }
     case 'session/prompt':

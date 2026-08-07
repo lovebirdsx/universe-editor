@@ -42,6 +42,7 @@
 | `acpSessionConfigOptions.ts` | `ConfigOptionStateMachine`：configOptions observable + echo 抑制 + `setConfigOption` 推送 + 持久化分支（注入 `AcpSession`，连接前 `getConn()` 返回 undefined 时静默 no-op） | 配置项（model/mode/thought-level）同步 |
 | `acpSessionRestoreCoordinator.ts` | 启动/workspace-swap 恢复 + `session/list` 扫描 + `session/delete` 转发 + `_pendingRestoreHistoryId` | 恢复时序、跨 workspace 重连 |
 | `acpSessionHistory.ts` | 会话元数据落盘（`PersistedStateBase`，`MAX_ENTRIES=100`，键 `sessionIdOnAgent`） | 历史字段（见 `../CLAUDE.md` 套路 ACP-E） |
+| `acpMessageAttachmentStore.ts` | 已发送消息的选区快照侧车（durable session id + messageId，双桶持久化 + 预算淘汰） | 恢复/回退/分叉/删除时维护用户消息附件 |
 | `acpAgentDefaultsService.ts` | 每 agent configOption 默认值（`PersistedStateBase`） | 配置项默认值持久化 |
 | `acpSessionEditorInput.ts` | `EditorInput` 子类——会话即编辑器 tab，可序列化恢复（serialize 写 `sessionIdOnAgent ?? 本地id`） | 全屏 tab 行为、重启恢复 |
 | `acpSessionTitleService.ts` / `acpSessionTitle.ts` / `sessionTitleFormat.ts` | 标题自动生成（AI purpose `session-title`）+ 解析/截断/格式化 | 标题逻辑 |
@@ -117,6 +118,7 @@
 - **`@@`/`@#` 触发 SimpleFileDialog 选文件/文件夹作为 @提及**：纯函数 `promptMentions.ts` 的 `detectFilePickerTrigger(text, caret)` 识别刚敲下的 `@@`(file)/`@#`(folder)，边界规则同 `extractMentionQuery`（`@` 须在行首或空白后，光标须紧跟两字符）；`PromptInput.tsx` 的 textarea `onChange` 里拦截该触发 → 剥掉两字符 → 走 `IFileDialogService.showOpenDialog`（file: canSelectFiles / folder: canSelectFolders）→ 选中后 `toMentionName(uri, workspaceRoot)` + `mergeMention` 复用既有 @提及管线（发送时 `composePromptBlocks` 序列化成 `resource_link`）。取消则只留剥除触发后的文本。测试 stub 需注册 `IFileDialogService`。
 - **把 editor 选区作为上下文推给 input**（"Add Selection to Agent Chat"，Cursor Ctrl+L 式）：`promptContext.ts`（`SelectionContext` 类型 + `composeContextBlocks`：embeddedContext→`EmbeddedResource`，否则降级围栏文本块）+ `acpSession.ts`（`sendPrompt`/`_dispatchPrompt` 第三参 `contexts`，attach 时缓存 `_embeddedContextSupported`，context block 置于 prompt 前）+ `acpSessionConnection.ts`（`QueuedPrompt`/`enqueue` 带 contexts）+ 命令 `actions/agentContextActions.ts`（`FileEditorRegistry.get(activeEditor).getSelections()` 取多选区）+ UI `SelectionContextChips.tsx` + `PromptInput.tsx`（contexts state/持久化/reveal）+ 右键菜单走 Monaco `editor.addAction`（FileEditor.tsx，Monaco 自带右键菜单**不读**我们的 MenuRegistry）。draft cache 加 `contexts` 字段，按**本地 id** 缓存（未发送草稿）。
   - **路由关键坑**：命令**不能直接调** `widget.addSelectionContext`——用户在文件编辑器里选文本时，目标 session 的 ChatBody 常常**没挂载**（editor 模式 session tab 没打开，或刚 `createSession` 还没渲染），widget 为 undefined 会静默丢弃。正解：`acpPromptContextInbox.ts`（模块单例收件箱，按**本地 session id** 存 + `onDidDeposit` 事件）。命令流程：定位/创建目标 session（activeSession 否则 createSession）→ `deposit(session.id, contexts)` → 打开并聚焦该 chat（editor 模式 openEditor AcpSessionEditorInput / sidebar 模式 openViewContainer + `focusSessionInput`）。PromptInput 挂载时 `drain` + 订阅 `onDidDeposit` 即时消费，跨「未挂载→挂载」不丢。
+  - **发送后附件不能只依赖 agent transcript**：agent 回放只保留传输形态（`<context>` / 文件链接 / fallback fence），无法还原行号标签与发送时快照。`acpMessageAttachmentStore.ts` 按 **durable session id + messageId** 保存快照；恢复时 `acpSession.ts` 回填 `selectionContexts` 并严格去掉等值传输文本，避免芯片与原始上下文重复。生命周期必须联动零输出取消、rewind、普通 fork、session 删除/清空；side task 不复制隐藏基线。首条用户消息由 `StickyUserMessageBar` 单独渲染，不走普通 `UserMessageItem`，两处都要接只读芯片。
 
 ### 关键架构决策与「为什么」
 

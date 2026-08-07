@@ -25,6 +25,7 @@ import type { IAcpSession, TimelineItem } from '../../services/acp/session/acpSe
 import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
+import { SelectionContextChips, useSelectionContextReveal } from './SelectionContextChips.js'
 import { roleIcon } from './timelineIcons.js'
 import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
 import { itemSlotKey } from './stickyScroll.js'
@@ -63,6 +64,7 @@ export function StickyUserMessageBar({
   const commandService = useService(ICommandService)
   const contextKeyService = useService(IContextKeyService)
   const widgetService = useService(IAcpChatWidgetService)
+  const revealSelection = useSelectionContextReveal()
 
   const item = firstUserItem(timeline)
   const slotKey = item ? itemSlotKey(item) : null
@@ -132,7 +134,13 @@ export function StickyUserMessageBar({
           'data-testid': 'acp-user-bar-card',
         }}
       >
-        <MessageContent blocks={message.blocks} />
+        <div className={styles['userMessageContent']}>
+          <SelectionContextChips
+            contexts={message.selectionContexts ?? []}
+            onReveal={revealSelection}
+          />
+          <MessageContent blocks={message.blocks} />
+        </div>
       </CollapsibleSlot>
       {menu && (
         <AgentChatContextMenu

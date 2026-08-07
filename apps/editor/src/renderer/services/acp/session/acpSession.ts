@@ -33,6 +33,7 @@ import type { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import type { ISessionChangeTrackerService } from './sessionChangeTracker.js'
 import type { IAcpSessionTitleService } from './acpSessionTitleService.js'
 import type { IAcpCompactionStatsService } from './acpCompactionStats.js'
+import type { IAcpMessageAttachmentStore } from './acpMessageAttachmentStore.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
 import { AcpSessionConnection, type QueuedPrompt } from './acpSessionConnection.js'
@@ -45,7 +46,11 @@ import {
   recoveryBackoffMs,
   type AcpRecoveryState,
 } from './acpSessionRecovery.js'
-import { composeContextBlocks, type SelectionContext } from '../promptContext.js'
+import {
+  composeContextBlocks,
+  formatSelectionFallback,
+  type SelectionContext,
+} from '../promptContext.js'
 import { composeImageBlocks, type PromptImage } from '../promptImage.js'
 import { composePromptBlocksFromRefs, type PlacedRef } from '../promptRef.js'
 import { estimateClaudeCostUSD } from '../../../../shared/ai/claudePricing.js'
@@ -208,6 +213,44 @@ function stripSideTaskRoleLead(update: SessionUpdate): SessionUpdate | undefined
   const rest = content.text.slice(SIDE_TASK_ROLE_PROMPT.length).replace(/^\s+/, '')
   if (rest.length === 0) return undefined
   return { ...update, content: { ...content, text: rest } }
+}
+
+/**
+ * Both built-in agents persist selection resources as ordinary transcript text.
+ * When our sidecar has the matching messageId, remove only the exact transport
+ * representation generated from that snapshot; any edited or unrelated text is
+ * kept verbatim. This prevents a restored message from showing both the chip and
+ * the hidden `<context>` / fallback fence that originally fed the model.
+ */
+export function stripSelectionReplayChunk(
+  update: SessionUpdate,
+  selections: readonly SelectionContext[],
+): SessionUpdate | undefined {
+  if (
+    update.sessionUpdate !== 'user_message_chunk' ||
+    update.content.type !== 'text' ||
+    selections.length === 0
+  ) {
+    return update
+  }
+
+  let text = update.content.text
+  for (const selection of selections) {
+    for (const transport of selectionReplayTransports(selection)) {
+      if (text === transport) return undefined
+      if (text.startsWith(transport)) text = text.slice(transport.length).replace(/^\s+/, '')
+      if (text.endsWith(transport)) text = text.slice(0, -transport.length).replace(/\s+$/, '')
+    }
+  }
+  if (text.length === 0) return undefined
+  return text === update.content.text ? update : { ...update, content: { ...update.content, text } }
+}
+
+function selectionReplayTransports(selection: SelectionContext): readonly string[] {
+  const fileName = selection.uri.split('/').pop() || selection.uri
+  const link = `[@${fileName}](${selection.uri})`
+  const context = `<context ref="${selection.uri}">\n${selection.text}\n</context>`
+  return [link, `\n${context}`, context, `${link}\n${context}`, formatSelectionFallback(selection)]
 }
 
 /** Why the session's connection was lost — drives the service's recovery path. */
@@ -570,6 +613,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     private readonly _titleService?: IAcpSessionTitleService,
     readonly readOnly: boolean = false,
     private readonly _compactionStats?: IAcpCompactionStatsService,
+    private readonly _messageAttachments?: IAcpMessageAttachmentStore,
   ) {
     super()
     this._costStrategy = getAgentCostStrategy(agentId)
@@ -1151,7 +1195,9 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Always surface the user's message immediately, even while connecting, so
     // typing feels instant. The wire dispatch is deferred until the connection
     // is ready (queued) so the prompt is not lost.
-    this._appendMessage('user', text, composeImageBlocks(images ?? []), messageId)
+    this._appendMessage('user', text, composeImageBlocks(images ?? []), messageId, {
+      selectionContexts: contexts ?? [],
+    })
     void this._maybeGenerateTitle(text)
     // Re-handshake on demand: the agent process died while the session sat
     // idle (the idle close path sealed the status but kept the dead lease
@@ -1219,6 +1265,15 @@ export class AcpSession extends Disposable implements IAcpSession {
     const conn = this._conn
     const sid = this.sessionIdOnAgent.get()
     if (conn === undefined || sid === undefined) return
+    // The local message can be rendered while session/new is still pending.
+    // Once a durable id exists, persist the same send-time snapshot so a later
+    // session/load can attach it to the matching user message.
+    try {
+      await this._messageAttachments?.initialize()
+      this._messageAttachments?.saveSelections(sid, messageId, contexts)
+    } catch {
+      // Best-effort persistence must never prevent the prompt from being sent.
+    }
     // Bump the history entry's lastUsedAt so the LRU order tracks user activity.
     this._history?.touch(sid)
     this._history?.setHistoryHasMessages(sid)
@@ -1474,6 +1529,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         if (retractedId !== undefined && sid !== undefined) {
           this._retractedMessageIds.add(retractedId)
           this._history?.addRetractedMessageId(sid, retractedId)
+          this._messageAttachments?.removeMessages(sid, [retractedId])
         }
         this._onDidCancelForRestore.fire()
       } else {
@@ -1545,6 +1601,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Snapshot the tool calls issued AFTER the rewind anchor *before* any reset
     // clears the timeline — those are the edits a codex file rollback un-applies.
     const postAnchorToolCallIds = filesAreClientSide ? this._toolCallIdsAfterMessage(messageId) : []
+    const attachmentMessageIds = dryRun ? [] : this._userMessageIdsFrom(messageId)
 
     if (filesAreClientSide && dryRun) {
       // Preview: ask the agent whether it can truncate, and compute file impact
@@ -1598,6 +1655,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           keepFiles,
           canRewind,
         })
+        if (canRewind) this._messageAttachments?.removeMessages(sid, attachmentMessageIds)
         return { canRewind }
       } catch (err) {
         this._telemetry.publicLogError('acp.rewind_failed', {
@@ -1626,6 +1684,9 @@ export class AcpSession extends Disposable implements IAcpSession {
       // When the user kept their edits the files still reflect those changes, so
       // the tracker must stay intact for session diff to remain accurate.
       if (!dryRun && !keepFiles && result.canRewind !== false) this._changeTracker?.clear(sid)
+      if (!dryRun && result.canRewind !== false) {
+        this._messageAttachments?.removeMessages(sid, attachmentMessageIds)
+      }
       this._telemetry.publicLog('acp.rewind', {
         sessionId: sid,
         dryRun,
@@ -1660,6 +1721,21 @@ export class AcpSession extends Disposable implements IAcpSession {
     for (let i = anchorIdx; i < timeline.length; i++) {
       const item = timeline[i]
       if (item?.kind === 'toolCall') ids.push(item.call.id)
+    }
+    return ids
+  }
+
+  /** User attachment records removed by a rewind: the anchor and all later turns. */
+  private _userMessageIdsFrom(messageId: string): string[] {
+    const anchorIdx = this._timeline.findIndex(
+      (item) => item.kind === 'message' && item.message.messageId === messageId,
+    )
+    if (anchorIdx < 0) return []
+    const ids: string[] = []
+    for (let i = anchorIdx; i < this._timeline.length; i++) {
+      const item = this._timeline[i]
+      if (item?.kind !== 'message' || item.message.role !== 'user') continue
+      if (item.message.messageId !== undefined) ids.push(item.message.messageId)
     }
     return ids
   }
@@ -1986,7 +2062,25 @@ export class AcpSession extends Disposable implements IAcpSession {
           this.isReplayingHistory.get() &&
           trimmed !== undefined &&
           (trimmed === CONTINUE_PROMPT_TEXT || trimmed === recoveryContinuePromptText())
-        this._appendChunk('user', update.content, parentId, mid, autoRetry)
+        const selectionContexts =
+          sid !== undefined && mid !== undefined
+            ? this._messageAttachments?.getSelections(sid, mid)
+            : undefined
+        const visibleUpdate = stripSelectionReplayChunk(update, selectionContexts ?? [])
+        if (visibleUpdate === undefined) break
+        const visibleContent = (
+          visibleUpdate as Extract<SessionUpdate, { sessionUpdate: 'user_message_chunk' }>
+        ).content
+        this._appendChunk(
+          'user',
+          visibleContent,
+          parentId,
+          mid,
+          autoRetry,
+          selectionContexts !== undefined && selectionContexts.length > 0
+            ? selectionContexts
+            : undefined,
+        )
         break
       }
       case 'agent_message_chunk':
@@ -2297,6 +2391,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     parentId?: string,
     messageId?: string,
     autoRetry?: boolean,
+    selectionContexts?: readonly SelectionContext[],
   ): void {
     if (parentId != null) {
       this._appendChildChunk(role, block, parentId)
@@ -2325,6 +2420,11 @@ export class AcpSession extends Disposable implements IAcpSession {
             ? { messageId }
             : {}),
         ...(last.autoRetry === true || autoRetry === true ? { autoRetry: true as const } : {}),
+        ...(last.selectionContexts !== undefined
+          ? { selectionContexts: last.selectionContexts }
+          : selectionContexts !== undefined && selectionContexts.length > 0
+            ? { selectionContexts }
+            : {}),
       }
       this._messages = [...this._messages.slice(0, -1), next]
       this._upsertMessageInTimeline(next)
@@ -2350,6 +2450,9 @@ export class AcpSession extends Disposable implements IAcpSession {
         streaming: true,
         ...(messageId !== undefined ? { messageId } : {}),
         ...(autoRetry === true ? { autoRetry: true as const } : {}),
+        ...(selectionContexts !== undefined && selectionContexts.length > 0
+          ? { selectionContexts }
+          : {}),
       }
       this._messages = [...this._messages, next]
       for (const c of closed) this._upsertMessageInTimeline(c)
@@ -2414,7 +2517,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     text: string,
     leadingBlocks: readonly ContentBlock[] = [],
     messageId?: string,
-    opts?: { autoRetry?: boolean },
+    opts?: {
+      autoRetry?: boolean
+      selectionContexts?: readonly SelectionContext[]
+    },
   ): void {
     const id = `m${++this._msgCounter}`
     // Image (or other) blocks lead, then the text block. Skip an empty text
@@ -2428,6 +2534,9 @@ export class AcpSession extends Disposable implements IAcpSession {
       text,
       streaming: false,
       ...(messageId !== undefined ? { messageId } : {}),
+      ...(opts?.selectionContexts !== undefined && opts.selectionContexts.length > 0
+        ? { selectionContexts: opts.selectionContexts.map((context) => ({ ...context })) }
+        : {}),
       ...(opts?.autoRetry === true ? { autoRetry: true as const } : {}),
     }
     this._messages = [...this._messages, message]

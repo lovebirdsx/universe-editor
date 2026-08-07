@@ -22,6 +22,10 @@ import { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import { ISessionChangeTrackerService } from './sessionChangeTracker.js'
 import { IAcpSessionTitleService } from './acpSessionTitleService.js'
 import { IAcpCompactionStatsService } from './acpCompactionStats.js'
+import {
+  IAcpMessageAttachmentStore,
+  NULL_ACP_MESSAGE_ATTACHMENT_STORE,
+} from './acpMessageAttachmentStore.js'
 
 export interface IAcpSessionCreateOptions {
   readonly id: string
@@ -40,6 +44,7 @@ export interface IAcpSessionCreateOptions {
 
 export interface IAcpSessionFactory {
   readonly _serviceBrand: undefined
+  readonly messageAttachments: IAcpMessageAttachmentStore
   create(opts: IAcpSessionCreateOptions): AcpSession
 }
 
@@ -49,13 +54,36 @@ export class AcpSessionFactory implements IAcpSessionFactory {
   declare readonly _serviceBrand: undefined
 
   constructor(
+    telemetry: ITelemetryService,
+    history: IAcpSessionHistoryService,
+    agentDefaults: IAcpAgentDefaultsService,
+    changeTracker: ISessionChangeTrackerService,
+    titleService: IAcpSessionTitleService,
+    compactionStats: IAcpCompactionStatsService,
+  )
+  constructor(
+    telemetry: ITelemetryService,
+    history: IAcpSessionHistoryService,
+    agentDefaults: IAcpAgentDefaultsService,
+    changeTracker: ISessionChangeTrackerService,
+    titleService: IAcpSessionTitleService,
+    compactionStats: IAcpCompactionStatsService,
+    messageAttachments: IAcpMessageAttachmentStore,
+  )
+  constructor(
     @ITelemetryService private readonly _telemetry: ITelemetryService,
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
     @IAcpAgentDefaultsService private readonly _agentDefaults: IAcpAgentDefaultsService,
     @ISessionChangeTrackerService private readonly _changeTracker: ISessionChangeTrackerService,
     @IAcpSessionTitleService private readonly _titleService: IAcpSessionTitleService,
     @IAcpCompactionStatsService private readonly _compactionStats: IAcpCompactionStatsService,
+    @IAcpMessageAttachmentStore
+    private readonly _messageAttachments?: IAcpMessageAttachmentStore,
   ) {}
+
+  get messageAttachments(): IAcpMessageAttachmentStore {
+    return this._messageAttachments ?? NULL_ACP_MESSAGE_ATTACHMENT_STORE
+  }
 
   create(opts: IAcpSessionCreateOptions): AcpSession {
     return new AcpSession(
@@ -71,6 +99,7 @@ export class AcpSessionFactory implements IAcpSessionFactory {
       opts.withTitleService ? this._titleService : undefined,
       opts.readOnly ?? false,
       this._compactionStats,
+      this.messageAttachments,
     )
   }
 }

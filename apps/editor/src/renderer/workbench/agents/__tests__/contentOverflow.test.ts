@@ -85,6 +85,10 @@ describe('estimateUserMessageOverflow', () => {
       ]),
     ).toBe(true)
   })
+
+  it('includes leading attachment rows in the user-message estimate', () => {
+    expect(estimateUserMessageOverflow([{ type: 'text', text: 'short' }], 8)).toBe(true)
+  })
 })
 
 describe('measured-overflow cache', () => {

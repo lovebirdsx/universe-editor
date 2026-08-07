@@ -43,6 +43,8 @@ export interface AcpMessage {
    * messages sent before this field existed.
    */
   readonly messageId?: string
+  /** Editor selections attached to this user turn, snapshotted when it was sent. */
+  readonly selectionContexts?: readonly SelectionContext[]
   /**
    * True when this user message was appended by the recovery machinery (the
    * automatic `CONTINUE_PROMPT_TEXT` continuation after an interrupted turn),

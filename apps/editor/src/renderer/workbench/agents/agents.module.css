@@ -294,6 +294,11 @@
   position: relative;
 }
 
+.userMessageContent {
+  display: flex;
+  flex-direction: column;
+}
+
 /* Rewind / Fork hover affordances, pinned to the top-right of the user turn.
    Hidden until the message row (or a button) is hovered / focused, mirroring the
    session-row delete/rename reveal. */
@@ -363,7 +368,11 @@
   right: 0;
   bottom: 0;
   height: 28px;
-  background: linear-gradient(to bottom, transparent, var(--vscode-agent-userMessageBackground, #2a3550));
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--vscode-agent-userMessageBackground, #2a3550)
+  );
   pointer-events: none;
 }
 
@@ -3162,7 +3171,6 @@
   will-change: transform;
 }
 
-
 /* Anchor for PopoverList above the prompt textarea (slash / mention). The
    popover's own surface styling lives in workbench-ui; this only positions it. */
 .promptPopover {
@@ -3388,7 +3396,6 @@
   align-items: center;
   gap: 3px;
 }
-
 
 /* In-session find bar. Sticky so it stays pinned to the top-right of the scroll
    viewport while the timeline scrolls beneath it (mirrors Monaco's find widget).

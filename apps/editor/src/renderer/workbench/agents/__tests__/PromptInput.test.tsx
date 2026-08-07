@@ -78,6 +78,8 @@ import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol
 import { invalidateMentionFileCache } from '../../../services/acp/mentionFileSearch.js'
 import { AcpPromptDraftCache } from '../../../services/acp/session/acpPromptDraftCache.js'
 import { AcpPromptCancelledDraftStash } from '../../../services/acp/session/acpPromptCancelledDraftStash.js'
+import { AcpPromptReplaceInbox } from '../../../services/acp/session/acpPromptReplaceInbox.js'
+import type { SelectionContext } from '../../../services/acp/promptContext.js'
 import { PromptInput, extractSlashQuery } from '../PromptInput.js'
 import type { WidgetHandle } from '../ChatBody.js'
 import { ServicesContext } from '../../useService.js'
@@ -106,6 +108,7 @@ afterEach(() => {
   invalidateMentionFileCache()
   AcpPromptDraftCache._resetForTests()
   AcpPromptCancelledDraftStash._resetForTests()
+  AcpPromptReplaceInbox._resetForTests()
   stubHistoryEntries.set([], undefined)
   // Only the user-guide category loaded: the # panel's docs entry stays a
   // single item in these fixtures, matching the pre-category behavior.
@@ -1633,6 +1636,29 @@ describe('PromptInput — focus handoff', () => {
 // ---------------------------------------------------------------------------
 
 describe('PromptInput — draft persistence', () => {
+  it('atomically replaces text and selection contexts from the rewind inbox', () => {
+    const session = makeSession({ id: 's1' })
+    const context: SelectionContext = {
+      uri: 'file:///repo/src/a.ts',
+      relPath: 'src/a.ts',
+      text: 'const answer = 42',
+      startLine: 7,
+      endLine: 7,
+      languageId: 'typescript',
+    }
+    renderWithServices(<PromptInput session={session} />)
+    fireEvent.change(getTextarea(), { target: { value: 'stale draft' } })
+
+    act(() => {
+      AcpPromptReplaceInbox.deposit('s1', { text: 'review this', contexts: [context] })
+    })
+
+    expect(getTextarea().value).toBe('review this')
+    expect(screen.getByText('src/a.ts:7')).toBeTruthy()
+    fireEvent.keyDown(getTextarea(), { key: 'Enter' })
+    expect(session.sendPrompt).toHaveBeenCalledWith('review this', [], [context], [])
+  })
+
   it('keeps each session draft isolated in the cache', () => {
     renderWithServices(<PromptInput session={makeSession({ id: 's1' })} />)
     fireEvent.change(getTextarea(), { target: { value: 'draft for one' } })

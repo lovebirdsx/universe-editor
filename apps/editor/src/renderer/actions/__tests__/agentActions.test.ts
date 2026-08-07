@@ -1005,7 +1005,10 @@ describe('AskInSideChatAction', () => {
     expect(tab).toBeInstanceOf(AcpSessionEditorInput)
     expect((tab as AcpSessionEditorInput).sessionId).toBe('side-1')
     // The prefill is a markdown blockquote; blank lines become bare '>'.
-    expect(AcpPromptReplaceInbox.drain('side-1')).toBe('> line one\n>\n> line two\n\n')
+    expect(AcpPromptReplaceInbox.drain('side-1')).toEqual({
+      text: '> line one\n>\n> line two\n\n',
+      contexts: [],
+    })
   })
 
   it('reuses an existing right group instead of splitting again', async () => {
@@ -1016,7 +1019,7 @@ describe('AskInSideChatAction', () => {
     await run(h.inst, { sessionId: 'parent-1' })
 
     expect(h.groups.groups).toHaveLength(2)
-    expect(AcpPromptReplaceInbox.drain('side-1')).toBe('> quote\n\n')
+    expect(AcpPromptReplaceInbox.drain('side-1')).toEqual({ text: '> quote\n\n', contexts: [] })
   })
 
   it('truncates quotes past the hard cap and still deposits', async () => {

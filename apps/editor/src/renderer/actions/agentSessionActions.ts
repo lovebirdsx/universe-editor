@@ -39,6 +39,7 @@ import { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHis
 import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { AcpPromptReplaceInbox } from '../services/acp/session/acpPromptReplaceInbox.js'
+import { IAcpMessageAttachmentStore } from '../services/acp/session/acpMessageAttachmentStore.js'
 import { resolveLiveSessionTitle } from '../services/acp/session/acpSessionTitle.js'
 import { ISessionSwitcherService, type SessionSummary } from '../../shared/ipc/sessionSwitcher.js'
 import { basenameOfPath } from '../workbench/files/resourceInfo.js'
@@ -431,6 +432,7 @@ export class ClearAgentSessionHistoryAction extends Action2 {
   }
   override async run(accessor: ServicesAccessor): Promise<void> {
     const history = accessor.get(IAcpSessionHistoryService)
+    const messageAttachments = accessor.get(IAcpMessageAttachmentStore)
     const dialog = accessor.get(IDialogService)
     const notification = accessor.get(INotificationService)
 
@@ -455,7 +457,9 @@ export class ClearAgentSessionHistoryAction extends Action2 {
       primaryButton: localize('agent.history.clear.primary', 'Clear'),
     })
     if (!result.confirmed) return
+    await messageAttachments.initialize().catch(() => {})
     history.clear()
+    messageAttachments.clear()
     notification.notify({
       severity: Severity.Info,
       message: localize('agent.history.clear.done', 'Agent session history cleared.'),
@@ -940,6 +944,6 @@ export class AskInSideChatAction extends Action2 {
       .split('\n')
       .map((line) => (line.trim().length === 0 ? '>' : `> ${line}`))
       .join('\n')
-    AcpPromptReplaceInbox.deposit(side.id, `${quoted}\n\n`)
+    AcpPromptReplaceInbox.deposit(side.id, { text: `${quoted}\n\n`, contexts: [] })
   }
 }

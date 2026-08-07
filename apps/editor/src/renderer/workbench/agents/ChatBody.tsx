@@ -1567,6 +1567,9 @@ const TimelineSlot = memo(function TimelineSlot({
               contentKey={`msg:${key}`}
               session={session}
               {...(m.messageId !== undefined ? { messageId: m.messageId } : {})}
+              {...(m.selectionContexts !== undefined
+                ? { selectionContexts: m.selectionContexts }
+                : {})}
               {...(m.autoRetry === true ? { autoRetry: true } : {})}
             />
           ) : (

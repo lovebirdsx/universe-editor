@@ -4,16 +4,22 @@
  *  timeline, starts collapsed, expands on click, and pins the opening message.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   ICommandService,
   IContextKeyService,
+  IOpenerService,
   InstantiationService,
   ServiceCollection,
+  URI,
   observableValue,
 } from '@universe-editor/platform'
-import type { IAcpSession, TimelineItem } from '../../../services/acp/session/acpSessionService.js'
+import type {
+  IAcpSession,
+  SelectionContext,
+  TimelineItem,
+} from '../../../services/acp/session/acpSessionService.js'
 import { IAcpChatWidgetService } from '../../../services/acp/session/acpChatWidgetService.js'
 import { StickyUserMessageBar } from '../StickyUserMessageBar.js'
 import { ServicesContext } from '../../useService.js'
@@ -22,11 +28,23 @@ afterEach(() => {
   cleanup()
 })
 
-function message(id: string, role: 'user' | 'agent', text: string): TimelineItem {
+function message(
+  id: string,
+  role: 'user' | 'agent',
+  text: string,
+  selectionContexts?: readonly SelectionContext[],
+): TimelineItem {
   return {
     kind: 'message',
     id,
-    message: { id, role, text, blocks: [{ type: 'text', text }], streaming: false },
+    message: {
+      id,
+      role,
+      text,
+      blocks: [{ type: 'text', text }],
+      streaming: false,
+      ...(selectionContexts !== undefined ? { selectionContexts } : {}),
+    },
   }
 }
 
@@ -38,6 +56,7 @@ function makeSession(id: string, items: TimelineItem[]): IAcpSession {
 }
 
 function renderWithServices(node: React.ReactNode) {
+  const open = vi.fn().mockResolvedValue(true)
   const services = new ServiceCollection()
   services.set(ICommandService, {
     executeCommand: () => Promise.resolve(),
@@ -49,11 +68,12 @@ function renderWithServices(node: React.ReactNode) {
     setHasSelection: () => {},
     setForkSupported: () => {},
   } as unknown as IAcpChatWidgetService)
+  services.set(IOpenerService, { open } as unknown as IOpenerService)
   const inst = new InstantiationService(services)
   const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
   )
-  return render(node, { wrapper: Wrapper })
+  return { ...render(node, { wrapper: Wrapper }), open }
 }
 
 describe('StickyUserMessageBar', () => {
@@ -89,5 +109,27 @@ describe('StickyUserMessageBar', () => {
     )
     expect(screen.getByText('first request')).toBeTruthy()
     expect(screen.queryByText('second request')).toBeNull()
+  })
+
+  it('shows and reveals selection attachments for the pinned first message', () => {
+    const selection: SelectionContext = {
+      uri: 'file:///workspace/src/a.ts',
+      relPath: 'src/a.ts',
+      text: 'const value = 1',
+      startLine: 12,
+      endLine: 12,
+      languageId: 'typescript',
+    }
+    const { open } = renderWithServices(
+      <StickyUserMessageBar
+        session={makeSession('s-selection', [message('u1', 'user', 'Explain', [selection])])}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('acp-selection-context-chip'))
+    expect(screen.getByText('src/a.ts:12')).toBeTruthy()
+    expect(open).toHaveBeenCalledWith(URI.parse('file:///workspace/src/a.ts#12,1-12,1'), {
+      fromUserGesture: true,
+    })
   })
 })

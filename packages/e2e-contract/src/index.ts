@@ -472,6 +472,8 @@ export interface E2EProbe {
   getAcpSessionCount(): number
   /** Active ACP session id (the local one assigned by AcpSessionService), if any. */
   getActiveAcpSessionId(): string | undefined
+  /** Close and resume the active durable session, returning the resumed local id. */
+  reloadActiveAcpSession(): Promise<string>
   /** Whether the active ACP session has advertised prompt image support. */
   getActiveAcpSessionImageSupported(): boolean
   /**
@@ -480,6 +482,8 @@ export interface E2EProbe {
    * turn). Specs that don't want to wait should not await this call.
    */
   sendAcpPrompt(text: string): Promise<void>
+  /** Attach the active editor's current non-empty selections to the active prompt. */
+  addActiveSelectionToAcpPrompt(): Promise<void>
   /**
    * Force the active session's timeline collapse mode ('default' | 'collapsed' |
    * 'expanded'). Lets a spec expand every card so async-height bodies (terminal
@@ -500,8 +504,12 @@ export interface E2EProbe {
    * Multi-line content loses its line breaks (view lines concatenate).
    */
   getAcpVisiblePromptText(): string
-  /** Snapshot of the active session's messages (role + text). */
-  getAcpMessages(): ReadonlyArray<{ role: string; text: string }>
+  /** Snapshot of the active session's messages, including attached selection labels. */
+  getAcpMessages(): ReadonlyArray<{
+    role: string
+    text: string
+    selectionLabels?: readonly string[]
+  }>
   /** Snapshot of the active session's tool calls (id, title, status, text). */
   getAcpToolCalls(): ReadonlyArray<{
     id: string

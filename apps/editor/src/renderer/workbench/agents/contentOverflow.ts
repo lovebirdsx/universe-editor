@@ -99,8 +99,11 @@ const USER_MAX_LINES = Math.ceil(USER_MESSAGE_COLLAPSED_MAX_PX / USER_LINE_PX)
  * the first paint clamps; the measured cache corrects the rare small-image case
  * once and keeps it stable from then on.
  */
-export function estimateUserMessageOverflow(blocks: readonly ContentBlock[]): boolean {
-  let lines = 0
+export function estimateUserMessageOverflow(
+  blocks: readonly ContentBlock[],
+  leadingLines = 0,
+): boolean {
+  let lines = leadingLines
   for (const block of blocks) {
     if (block.type === 'image') return true
     if (block.type === 'text') {

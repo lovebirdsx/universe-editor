@@ -23,12 +23,23 @@ import {
 import { IAcpChatLocationService } from '../../services/acp/session/acpChatLocationService.js'
 import { IAcpSessionHistoryService } from '../../services/acp/session/acpSessionHistory.js'
 import { AcpPromptReplaceInbox } from '../../services/acp/session/acpPromptReplaceInbox.js'
+import type { SelectionContext } from '../../services/acp/promptContext.js'
+
+const SELECTION: SelectionContext = {
+  uri: 'file:///repo/src/a.ts',
+  relPath: 'src/a.ts',
+  text: 'const answer = 42',
+  startLine: 7,
+  endLine: 7,
+  languageId: 'typescript',
+}
 
 interface FakeSessionOpts {
   readonly rewindSupported?: boolean
   readonly forkSupported?: boolean
   readonly messageText?: string
   readonly messageId?: string
+  readonly selectionContexts?: readonly SelectionContext[]
   readonly status?: 'idle' | 'running'
 }
 
@@ -49,6 +60,9 @@ function fakeSession(id: string, opts: FakeSessionOpts = {}): IAcpSession {
         text: opts.messageText ?? 'hello',
         streaming: false,
         messageId,
+        ...(opts.selectionContexts !== undefined
+          ? { selectionContexts: opts.selectionContexts }
+          : {}),
       },
     ]),
   } as unknown as IAcpSession
@@ -151,7 +165,7 @@ describe('Rewind / Fork agent session commands', () => {
     expect(h.service.rewindSession).toHaveBeenNthCalledWith(1, 's1', 'mid-1', { dryRun: true })
     expect(h.dialog.confirm).toHaveBeenCalledTimes(1)
     expect(h.service.rewindSession).toHaveBeenNthCalledWith(2, 's1', 'mid-1', {})
-    expect(AcpPromptReplaceInbox.drain('s1')).toBe('do the thing')
+    expect(AcpPromptReplaceInbox.drain('s1')).toEqual({ text: 'do the thing', contexts: [] })
   })
 
   it('rewind keeps file changes when the user picks the secondary button', async () => {
@@ -175,7 +189,25 @@ describe('Rewind / Fork agent session commands', () => {
     expect(h.service.rewindSession).toHaveBeenNthCalledWith(2, 's1', 'mid-1', {
       rewindFiles: false,
     })
-    expect(AcpPromptReplaceInbox.drain('s1')).toBe('retry this')
+    expect(AcpPromptReplaceInbox.drain('s1')).toEqual({ text: 'retry this', contexts: [] })
+  })
+
+  it('rewind backfills the turn selection contexts with its text', async () => {
+    disposables.push(registerAction2(RewindAgentSessionAction))
+    const session = fakeSession('s1', {
+      rewindSupported: true,
+      messageText: 'review this',
+      selectionContexts: [SELECTION],
+    })
+    const h = makeHarness()
+    h.service.getById.mockReturnValue(session)
+
+    await h.run(RewindAgentSessionAction.ID, { sessionId: 's1', messageId: 'mid-1' })
+
+    expect(AcpPromptReplaceInbox.drain('s1')).toEqual({
+      text: 'review this',
+      contexts: [SELECTION],
+    })
   })
 
   it('rewind aborts when the user cancels the three-button dialog', async () => {
