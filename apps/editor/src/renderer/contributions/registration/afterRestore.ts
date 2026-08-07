@@ -10,6 +10,7 @@ import { AbnormalExitNotificationContribution } from '../AbnormalExitNotificatio
 import { JsonSchemaContextContribution } from '../JsonSchemaContextContribution.js'
 import { JsonLanguageFeaturesContribution } from '../JsonLanguageFeaturesContribution.js'
 import { InlineCompletionContribution } from '../InlineCompletionContribution.js'
+import { AiFixCodeActionContribution } from '../AiFixCodeActionContribution.js'
 import { FileEditorStatusContribution } from '../FileEditorStatusContribution.js'
 import { ScmBlameContribution } from '../ScmBlameContribution.js'
 import { ScmSelectedRepoContribution } from '../ScmSelectedRepoContribution.js'
@@ -101,6 +102,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.inlineCompletion',
   InlineCompletionContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// "Fix with AI" quickfix on marker hovers (monaco renders the sparkle button
+// for an isAI code action). AfterRestore alongside the other language-feature
+// wiring; registration itself waits on MonacoLoader.ensureInitialized().
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.aiFixCodeAction',
+  AiFixCodeActionContribution,
   WorkbenchPhase.AfterRestore,
 )
 

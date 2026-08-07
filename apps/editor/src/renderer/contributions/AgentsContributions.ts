@@ -63,6 +63,38 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Default agent used by "New Agent Session".',
             ),
           },
+          'acp.aiFix.agentId': {
+            type: 'string',
+            default: 'codex',
+            description: localize(
+              'settings.acp.aiFix.agentId',
+              'Agent used by "Fix with AI" (the error-hover quick fix). Each run starts a dedicated session with this agent; invalid ids fall back to the default agent. Configure via the "Configure AI Fix" command.',
+            ),
+          },
+          'acp.aiFix.model': {
+            type: 'string',
+            default: '',
+            description: localize(
+              'settings.acp.aiFix.model',
+              'Model for "Fix with AI" sessions. Empty follows the agent default. Pick via the "Configure AI Fix" command rather than typing an id.',
+            ),
+          },
+          'acp.aiFix.thoughtLevel': {
+            type: 'string',
+            default: 'low',
+            description: localize(
+              'settings.acp.aiFix.thoughtLevel',
+              'Thinking depth for "Fix with AI" sessions (e.g. low/medium/high). Empty follows the agent default; values the agent does not offer are ignored with a warning. Pick via the "Configure AI Fix" command.',
+            ),
+          },
+          'acp.aiFix.mode': {
+            type: 'string',
+            default: '',
+            description: localize(
+              'settings.acp.aiFix.mode',
+              'Mode for "Fix with AI" sessions. Empty does not pin a mode (AI Fix needs write access to fix files, so no mode is pinned by default).',
+            ),
+          },
           'acp.prefetchBinaries': {
             type: 'boolean',
             default: true,

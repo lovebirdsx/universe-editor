@@ -35,6 +35,11 @@ export interface IAcpSessionCreateOptions {
   readonly collapseMode?: CollapseMode
   readonly readOnly?: boolean
   /**
+   * Isolated sessions (AI Fix): config selections never write back to the
+   * per-agent defaults; per-session history still records them.
+   */
+  readonly suppressConfigDefaults?: boolean
+  /**
    * Whether the session may auto-generate an AI title from its opening exchange.
    * New sessions want this; resumed sessions already carry a durable title and
    * must NOT regenerate (and overwrite) it, so they pass `false`.
@@ -100,6 +105,7 @@ export class AcpSessionFactory implements IAcpSessionFactory {
       opts.readOnly ?? false,
       this._compactionStats,
       this.messageAttachments,
+      opts.suppressConfigDefaults ?? false,
     )
   }
 }

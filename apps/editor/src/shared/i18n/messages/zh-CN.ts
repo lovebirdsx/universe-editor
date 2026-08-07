@@ -157,6 +157,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // --- Actions ---
   'action.about.title': '关于 Universe Editor',
   'action.agent.addSelectionToChat': '将选区添加到 Agent 聊天',
+  'action.agent.aiFixProblem': '使用 AI 修复',
   'action.agent.cancelTurn': '取消 Agent 回合',
   'action.agent.clearHistory': '清除 Agent 会话历史',
   'action.agent.copyFocusedMessage': '复制消息',
@@ -196,6 +197,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.agent.selectMode': '选择 Agent 模式…',
   'action.agent.selectModel': '选择 Agent 模型…',
   'action.agent.selectThoughtLevel': '选择 Agent 思考级别…',
+  'action.agent.configureAiFix': '配置 AI 修复…',
   'action.agent.showSessionChanges': '显示会话更改',
   'action.agent.switchSession': '切换会话…',
   'action.agent.toggleChatLocation': '切换 Agent 聊天位置',
@@ -526,6 +528,14 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.acp.codex.source':
     '如何获取内置 Codex Agent 使用的 codex-acp 适配器二进制文件："download" 会在首次使用时下载到用户数据目录，"system" 会复用 PATH 中找到的 `codex-acp` 安装，"custom" 会使用 `acp.codex.executablePath` 中的路径。',
   'settings.acp.defaultAgentId': '"新建 Agent 会话"使用的默认 Agent。',
+  'settings.acp.aiFix.agentId':
+    '「使用 AI 修复」（错误悬停快速修复）使用的 Agent。每次修复都新建专用会话；非法 ID 回退到默认 Agent。请通过「配置 AI 修复」命令选择。',
+  'settings.acp.aiFix.model':
+    '「使用 AI 修复」会话使用的模型。留空跟随 Agent 默认。请通过「配置 AI 修复」命令选择，不要手填 ID。',
+  'settings.acp.aiFix.thoughtLevel':
+    '「使用 AI 修复」会话的思考深度（如 low/medium/high）。留空跟随 Agent 默认；Agent 不提供的值会被忽略并告警。请通过「配置 AI 修复」命令选择。',
+  'settings.acp.aiFix.mode':
+    '「使用 AI 修复」会话的模式。留空不固定模式（AI 修复需要写权限来改文件，默认不固定）。',
   'settings.acp.defaultCollapseModes':
     '按 Agent ID 设置新会话的默认时间线折叠模式。可选值："default"（按类型智能折叠）、"collapsed"（全部折叠）、"expanded"（全部展开）。示例：{ "claude-code": "default", "codex": "collapsed" }。',
   'settings.acp.mcpCard.defaultExpanded':
@@ -1546,6 +1556,19 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.resurrection.success': '会话已恢复',
   'acp.resurrection.successReplay': '会话已恢复 — 补发 {count} 条排队消息',
   'acp.elicitation.required': '「{field}」为必填项',
+  'acp.aiFix.severity.error': '错误',
+  'acp.aiFix.severity.warning': '警告',
+  'acp.aiFix.severity.info': '信息',
+  'acp.aiFix.severity.hint': '提示',
+  'acp.aiFix.prompt.header': '修复 {path} 中的以下问题（相关代码已作为上下文附上）：',
+  'acp.aiFix.prompt.more': '……以及另外 {count} 个问题',
+  'acp.aiFix.prompt.instruction': '请直接对文件做最小修复。',
+  'acp.aiFix.sessionTitle': 'AI 修复：{path}',
+  'acp.aiFix.noCachedOptions':
+    'AI 修复：该 Agent 还没有缓存的配置项——请先与它开一个会话，专用模型/思考深度才能生效。本次先使用 Agent 默认值。',
+  'acp.aiFix.optionMissing':
+    'AI 修复：该 Agent 不提供 {category} 配置项，配置的值「{value}」已被忽略。',
+  'acp.aiFix.valueInvalid': 'AI 修复：「{value}」不是该 Agent 可选的 {category}——已忽略。',
   'acp.elicitation.minLength': '「{field}」至少需要 {limit} 个字符',
   'acp.elicitation.maxLength': '「{field}」最多允许 {limit} 个字符',
   'acp.elicitation.pattern': '「{field}」不符合要求的格式',
@@ -1689,6 +1712,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'agent.selectModel.placeholder': '选择模型',
   'agent.selectThoughtLevel.notFound': '活跃 Agent 未提供思考级别开关。',
   'agent.selectThoughtLevel.placeholder': '选择思考深度',
+  'agent.configureAiFix.followDefault': '（默认）跟随 Agent 默认',
+  'agent.configureAiFix.noOptions':
+    '该 Agent 还没有缓存的配置项——请先与它开一个会话，然后在这里配置模型/思考深度/模式。',
+  'agent.configureAiFix.pickAgent': '选择 AI 修复使用的 Agent',
   'agent.switchSession.placeholder': '切换到任意窗口中的会话',
   'agent.switchSession.untitled': '未命名',
 

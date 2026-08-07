@@ -614,6 +614,11 @@ export class AcpSession extends Disposable implements IAcpSession {
     readonly readOnly: boolean = false,
     private readonly _compactionStats?: IAcpCompactionStatsService,
     private readonly _messageAttachments?: IAcpMessageAttachmentStore,
+    /**
+     * Isolated sessions (AI Fix): config selections never write back to the
+     * per-agent defaults. Threaded into the config-option state machine.
+     */
+    suppressConfigDefaults: boolean = false,
   ) {
     super()
     this._costStrategy = getAgentCostStrategy(agentId)
@@ -677,6 +682,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       },
       ...(_history !== undefined ? { history: _history } : {}),
       ...(_agentDefaults !== undefined ? { defaults: _agentDefaults } : {}),
+      ...(suppressConfigDefaults ? { suppressDefaults: true } : {}),
     })
     if (initState) {
       this.applyInitState(initState)

@@ -8,6 +8,8 @@
 
 import {
   Action2,
+  ConfigurationTarget,
+  IConfigurationService,
   IDialogService,
   INotificationService,
   IQuickInputService,
@@ -24,6 +26,15 @@ import type {
   SessionConfigSelectOption,
 } from '@agentclientprotocol/sdk'
 import { findConfigOptionLabel } from '../services/acp/configOptionLabel.js'
+import {
+  AI_FIX_AGENT_ID_KEY,
+  AI_FIX_MODE_KEY,
+  AI_FIX_MODEL_KEY,
+  AI_FIX_THOUGHT_LEVEL_KEY,
+  readAiFixSettings,
+} from '../services/acp/aiFixConfig.js'
+import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
+import { IAcpConfigOptionsCacheService } from '../services/acp/session/acpConfigOptionsCache.js'
 import {
   confirmModelSwitchContextShrink,
   evaluateModelSwitchContextShrink,
@@ -173,5 +184,119 @@ export class SelectAgentThoughtLevelAction extends Action2 {
         "Active agent doesn't expose a thinking-level switch.",
       ),
     )
+  }
+}
+
+/**
+ * Dedicated-parameter picker for the "Fix with AI" quick fix: pick the agent,
+ * then its model / thinking depth / mode. Each pick writes one `acp.aiFix.*`
+ * setting (User target); picking the leading "(default)" entry clears that
+ * setting so the session follows the per-agent default. Cancelling any step
+ * keeps the values written so far.
+ */
+export class ConfigureAiFixAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.configureAiFix'
+  constructor() {
+    super({
+      id: ConfigureAiFixAction.ID,
+      title: localize2('action.agent.configureAiFix', 'Configure AI Fix…'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    // Snapshot every service before the first await (the accessor dies there).
+    const registry = accessor.get(IAcpAgentRegistry)
+    const config = accessor.get(IConfigurationService)
+    const cache = accessor.get(IAcpConfigOptionsCacheService)
+    const quickInput = accessor.get(IQuickInputService)
+    const notification = accessor.get(INotificationService)
+
+    const settings = readAiFixSettings(config)
+    const currentLabel = localize('agent.configOption.current', 'current')
+    const defaultItemLabel = localize(
+      'agent.configureAiFix.followDefault',
+      '(Default) Follow the agent default',
+    )
+
+    // Step 1: the agent. The current choice is annotated.
+    const agents = registry.list()
+    const agentItems: IQuickPickItem[] = agents.map((a) => ({
+      id: a.id,
+      label: a.id === settings.agentId ? `${a.name} · ${currentLabel}` : a.name,
+    }))
+    const pickedAgent = await quickInput.pick(agentItems, {
+      placeholder: localize('agent.configureAiFix.pickAgent', 'Select the AI Fix agent'),
+    })
+    if (!pickedAgent || pickedAgent.id === undefined) return
+    const agentId = pickedAgent.id
+    if (agentId !== settings.agentId) {
+      await config.update(AI_FIX_AGENT_ID_KEY, agentId, ConfigurationTarget.User)
+    }
+
+    // Steps 2-4: model / thinking depth / mode, resolved by category against
+    // the agent's last-known bag. A cold cache (agent never ran here) or a
+    // missing category skips that step with a hint.
+    const bag = cache.get(agentId)
+    const noCacheWarned = { value: false }
+    const steps: ReadonlyArray<{
+      readonly category: SessionConfigOptionCategory
+      readonly settingKey: string
+      readonly currentValue: string
+      readonly placeholder: string
+    }> = [
+      {
+        category: 'model',
+        settingKey: AI_FIX_MODEL_KEY,
+        currentValue: agentId === settings.agentId ? settings.model : '',
+        placeholder: localize('agent.selectModel.placeholder', 'Select model'),
+      },
+      {
+        category: 'thought_level',
+        settingKey: AI_FIX_THOUGHT_LEVEL_KEY,
+        currentValue: agentId === settings.agentId ? settings.thoughtLevel : '',
+        placeholder: localize('agent.selectThoughtLevel.placeholder', 'Select thinking depth'),
+      },
+      {
+        category: 'mode',
+        settingKey: AI_FIX_MODE_KEY,
+        currentValue: agentId === settings.agentId ? settings.mode : '',
+        placeholder: localize('agent.selectMode.placeholder', 'Select session mode'),
+      },
+    ]
+    for (const step of steps) {
+      const option = bag.find((o) => o.type === 'select' && o.category === step.category)
+      if (!option || option.type !== 'select') {
+        if (!noCacheWarned.value) {
+          noCacheWarned.value = true
+          notification.notify({
+            severity: Severity.Info,
+            message: localize(
+              'agent.configureAiFix.noOptions',
+              'No cached config options for this agent yet — open one session with it first, then configure model / thinking depth / mode here.',
+            ),
+          })
+        }
+        continue
+      }
+      const flatValues = flattenSelectOptions(option.options)
+      const items: IQuickPickItem[] = [
+        {
+          id: '',
+          label:
+            step.currentValue === '' ? `${defaultItemLabel} · ${currentLabel}` : defaultItemLabel,
+        },
+        ...flatValues.map((v) => ({
+          id: v.value,
+          label: v.value === step.currentValue ? `${v.name} · ${currentLabel}` : v.name,
+          ...(v.description != null ? { description: v.description } : {}),
+        })),
+      ]
+      const picked = await quickInput.pick(items, { placeholder: step.placeholder })
+      if (!picked || picked.id === undefined) return
+      if (picked.id !== step.currentValue) {
+        await config.update(step.settingKey, picked.id, ConfigurationTarget.User)
+      }
+    }
   }
 }

@@ -1431,3 +1431,107 @@ describe('AcpSessionService — createSession push-back of agent defaults', () =
     expect(calls).toContainEqual({ sessionId: 'agent-1', configId: 'effort', value: 'high' })
   })
 })
+
+describe('AcpSessionService — AI Fix sessions (configDesiredOverrides + suppressDefaults)', () => {
+  let svc: AcpSessionService
+
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  const MODEL: SessionConfigOption = {
+    id: 'model',
+    name: 'Model',
+    category: 'model',
+    type: 'select',
+    currentValue: 'sonnet',
+    options: [
+      { value: 'sonnet', name: 'Sonnet' },
+      { value: 'opus', name: 'Opus' },
+      { value: 'haiku', name: 'Haiku' },
+    ],
+  }
+
+  it('pushes configDesiredOverrides on attach and marks history aiFix — without touching agent defaults', async () => {
+    const built = buildService({
+      newSessionResult: { configOptions: [{ ...MODEL }] },
+      setConfigOptionResult: { configOptions: [{ ...MODEL, currentValue: 'opus' }] },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    const s = await svc.createSession('fake', {
+      title: 'AI Fix: a.ts',
+      aiFix: true,
+      configDesiredOverrides: { model: 'opus' },
+    })
+    await s.whenConnected()
+    await new Promise((r) => setTimeout(r, 20))
+    const agent = built.client.connected[0]!.agent
+    expect(agent.setConfigOptionCalls).toEqual([
+      { sessionId: 'agent-1', configId: 'model', value: 'opus' },
+    ])
+    expect(s.configOptions.get()[0]?.currentValue).toBe('opus')
+    // The history row is tagged so resume rebuilds the suppressDefaults channel.
+    expect(built.history.get('agent-1')?.aiFix).toBe(true)
+    // Pollution regression: the AI Fix override must NOT leak into the
+    // per-agent defaults the user's chat sessions seed from.
+    expect(built.agentDefaults.getDefaults('fake')).toEqual({})
+  })
+
+  it('overrides win over agent defaults when both seed the same configId', async () => {
+    // Server says haiku; the user's per-agent default is opus; the AI Fix
+    // setting says sonnet. The override must be the value pushed on attach.
+    const built = buildService({
+      newSessionResult: { configOptions: [{ ...MODEL, currentValue: 'haiku' }] },
+      setConfigOptionResult: { configOptions: [{ ...MODEL, currentValue: 'sonnet' }] },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    built.agentDefaults.setDefault('fake', 'model', 'opus')
+    const s = await svc.createSession('fake', {
+      aiFix: true,
+      configDesiredOverrides: { model: 'sonnet' },
+    })
+    await s.whenConnected()
+    await new Promise((r) => setTimeout(r, 20))
+    const agent = built.client.connected[0]!.agent
+    expect(agent.setConfigOptionCalls).toEqual([
+      { sessionId: 'agent-1', configId: 'model', value: 'sonnet' },
+    ])
+    // And the user's default survived — only the session diverged.
+    expect(built.agentDefaults.getDefaults('fake')).toEqual({ model: 'opus' })
+  })
+
+  it('a mid-session pick on an AI Fix session writes history but NOT agent defaults', async () => {
+    const built = buildService({
+      newSessionResult: { configOptions: [{ ...MODEL }] },
+      setConfigOptionResult: { configOptions: [{ ...MODEL, currentValue: 'opus' }] },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    const s = await svc.createSession('fake', { aiFix: true })
+    await s.whenConnected()
+    await s.setConfigOption('model', 'opus')
+    const entry = built.history.list().find((e) => e.id === s.sessionIdOnAgent.get())
+    expect(entry?.configOptions).toEqual({ model: 'opus' })
+    expect(built.agentDefaults.getDefaults('fake')).toEqual({})
+  })
+
+  it('a plain session still records picks into agent defaults (suppress is opt-in)', async () => {
+    const built = buildService({
+      newSessionResult: { configOptions: [{ ...MODEL }] },
+      setConfigOptionResult: { configOptions: [{ ...MODEL, currentValue: 'opus' }] },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    const s = await svc.createSession()
+    await s.whenConnected()
+    await s.setConfigOption('model', 'opus')
+    expect(built.agentDefaults.getDefaults('fake')).toEqual({ model: 'opus' })
+    expect(built.history.get('agent-1')?.aiFix).toBeUndefined()
+  })
+})

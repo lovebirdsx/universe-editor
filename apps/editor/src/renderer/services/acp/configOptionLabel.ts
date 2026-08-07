@@ -12,6 +12,25 @@ import type {
   SessionConfigSelectOption,
 } from '@agentclientprotocol/sdk'
 
+/**
+ * Whether a select option actually offers `value` among its (possibly grouped)
+ * candidates. Shared by every "override the server value with a saved one" site
+ * so an unselectable value is never shown.
+ */
+export function selectOptionHasValue(
+  opt: SessionConfigOption & { type: 'select' },
+  value: string,
+): boolean {
+  for (const o of opt.options) {
+    if ('group' in o) {
+      for (const v of o.options) if (v.value === value) return true
+    } else if (o.value === value) {
+      return true
+    }
+  }
+  return false
+}
+
 /** Resolve the friendly name for `value` within an option's (possibly grouped) list, falling back to the raw value. */
 export function findConfigOptionLabel(
   options: readonly SessionConfigSelectOption[] | readonly SessionConfigSelectGroup[],

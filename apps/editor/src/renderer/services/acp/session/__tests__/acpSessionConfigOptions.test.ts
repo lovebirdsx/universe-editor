@@ -273,6 +273,41 @@ describe('ConfigOptionStateMachine', () => {
     expect(fakeDefaults.calls).toEqual([{ agentId: 'fake', configId: 'MODEL', value: 'b' }])
   })
 
+  it('suppressDefaults skips the defaults write but keeps history + RPC (connected)', async () => {
+    const fakeConn = makeFakeConn({ setSessionConfigOption: async () => ({ configOptions: [] }) })
+    const fakeDefaults = makeFakeDefaults()
+    const fakeHistory = makeFakeHistory()
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => fakeConn.conn,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'ag-1', agentId: 'fake', getSessionId: () => 'ag-1' },
+      history: fakeHistory.history,
+      defaults: fakeDefaults.defaults,
+      suppressDefaults: true,
+    })
+    await sm.setConfigOption('MODEL', 'b')
+    // The RPC still goes out and per-session history still records the pick…
+    expect(fakeConn.calls).toEqual([{ sessionId: 'ag-1', configId: 'MODEL', value: 'b' }])
+    expect(fakeHistory.calls).toEqual([{ sessionId: 'ag-1', configId: 'MODEL', value: 'b' }])
+    // …but the per-agent defaults are NOT touched (AI Fix isolation).
+    expect(fakeDefaults.calls).toEqual([])
+  })
+
+  it('suppressDefaults skips the defaults write on the optimistic (pre-connect) path', async () => {
+    const fakeDefaults = makeFakeDefaults()
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => undefined,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'local-1', agentId: 'fake', getSessionId: () => undefined },
+      defaults: fakeDefaults.defaults,
+      suppressDefaults: true,
+    })
+    sm.applyInitState([makeConfigOption('MODEL', 'a')])
+    await sm.setConfigOption('MODEL', 'b')
+    expect(sm.configOptions.get()[0]?.currentValue).toBe('b')
+    expect(fakeDefaults.calls).toEqual([])
+  })
+
   it('flushPendingPushes resolves only after every pending push has been sent to the agent', async () => {
     const fakeConn = makeFakeConn({
       setSessionConfigOption: async (req) => ({

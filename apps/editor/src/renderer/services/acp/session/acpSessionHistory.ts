@@ -200,6 +200,13 @@ export interface AcpSessionHistoryEntry {
    * `[Request interrupted by user]` marker — back out of the timeline.
    */
   readonly retractedMessageIds?: readonly string[]
+  /**
+   * True when this session was created by the AI Fix code action. Its config
+   * selections never write back to the per-agent defaults (the session's
+   * config-option state machine is built with `suppressDefaults`); the flag is
+   * persisted so a resume rebuilds the same isolation.
+   */
+  readonly aiFix?: boolean
 }
 
 export interface IAcpSessionHistoryService {
@@ -400,7 +407,7 @@ export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryServi
 )
 
 const STORAGE_KEY = 'acp.sessionHistory'
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 const MAX_ENTRIES = 100
 
 /**
@@ -520,6 +527,9 @@ export class AcpSessionHistoryService
     const carriedTranscriptPath =
       entry.transcriptPath ??
       (existingIdx >= 0 ? this._state[existingIdx]!.transcriptPath : undefined)
+    // AI Fix isolation: set once at creation, carried across re-adds (resume).
+    const carriedAiFix =
+      entry.aiFix ?? (existingIdx >= 0 ? this._state[existingIdx]!.aiFix : undefined)
     const next: AcpSessionHistoryEntry = {
       id,
       agentId: entry.agentId,
@@ -548,6 +558,7 @@ export class AcpSessionHistoryService
         ? { retractedMessageIds: carriedRetractedMessageIds }
         : {}),
       ...(carriedTranscriptPath !== undefined ? { transcriptPath: carriedTranscriptPath } : {}),
+      ...(carriedAiFix !== undefined ? { aiFix: carriedAiFix } : {}),
       ...(existingAiTitle === true ? { aiTitle: true } : {}),
       ...(existingManualTitle === true ? { manualTitle: true } : {}),
       // Same carry-over for the archive/pin flags: re-adding the same session
@@ -978,7 +989,12 @@ export class AcpSessionHistoryService
     if (typeof raw !== 'object' || raw === null) return undefined
     const o = raw as PersistedShape
     if (!Array.isArray(o.entries)) return undefined
-    if (o.schemaVersion !== SCHEMA_VERSION && o.schemaVersion !== 2 && o.schemaVersion !== 1) {
+    if (
+      o.schemaVersion !== SCHEMA_VERSION &&
+      o.schemaVersion !== 3 &&
+      o.schemaVersion !== 2 &&
+      o.schemaVersion !== 1
+    ) {
       this._logger.warn(`ignoring acp.sessionHistory with schemaVersion=${o.schemaVersion}`)
       return undefined
     }
@@ -986,6 +1002,8 @@ export class AcpSessionHistoryService
     // defaults on next resume — no data migration needed.
     // v2 → v3: `plan` is optional, old rows simply have no plan seed on the
     // next resume — no data migration needed.
+    // v3 → v4: `aiFix` is optional, old rows are simply non-AI-Fix sessions — no
+    // data migration needed.
     // schema 约定 id === sessionIdOnAgent；老版本曾用自增 id，这里在反序列化时无损归一化，
     // 否则 history.get(sessionIdOnAgent) 永远 miss。
     return o.entries
@@ -1069,7 +1087,8 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     (o['sideTaskQuote'] === undefined || typeof o['sideTaskQuote'] === 'string') &&
     (o['sideTaskAnchorMessageId'] === undefined ||
       typeof o['sideTaskAnchorMessageId'] === 'string') &&
-    (o['retractedMessageIds'] === undefined || isStringArray(o['retractedMessageIds']))
+    (o['retractedMessageIds'] === undefined || isStringArray(o['retractedMessageIds'])) &&
+    (o['aiFix'] === undefined || typeof o['aiFix'] === 'boolean')
   )
 }
 

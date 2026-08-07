@@ -341,7 +341,7 @@ describe('AcpSessionHistoryService — persistence', () => {
     expect(call.key).toBe('acp.sessionHistory')
     expect(call.scope).toBe(StorageScope.WORKSPACE)
     const persisted = call.value as { schemaVersion: number; entries: unknown[] }
-    expect(persisted.schemaVersion).toBe(3)
+    expect(persisted.schemaVersion).toBe(4)
     expect(persisted.entries).toHaveLength(1)
   })
 
@@ -527,6 +527,80 @@ describe('AcpSessionHistoryService — persistence', () => {
     expect(got).toBeDefined()
     expect(got?.id).toBe('04470b5c-fcf7-473e-814d-cb9f2ac997f3')
     expect(got?.title).toBe('你的工作目录是？')
+  })
+
+  it('persists the aiFix flag and hydrates it back', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'codex', sessionIdOnAgent: 'fix-1', title: 'AI Fix: a.ts', aiFix: true })
+    svc.add({ agentId: 'a', sessionIdOnAgent: 'plain-1', title: 't' })
+    await flushWrite()
+    const call = storage.setCalls.at(-1)!
+    const persisted = call.value as {
+      entries: Array<{ sessionIdOnAgent: string; aiFix?: boolean }>
+    }
+    expect(persisted.entries.find((e) => e.sessionIdOnAgent === 'fix-1')?.aiFix).toBe(true)
+    // Plain sessions stay absent (not `false`) so the payload doesn't grow.
+    expect(persisted.entries.find((e) => e.sessionIdOnAgent === 'plain-1')).not.toHaveProperty(
+      'aiFix',
+    )
+
+    // Round-trip through hydration.
+    const made2 = makeService({ storage })
+    const svc2 = made2.svc
+    try {
+      await svc2.initialize()
+      expect(svc2.get('fix-1')?.aiFix).toBe(true)
+      expect(svc2.get('plain-1')?.aiFix).toBeUndefined()
+    } finally {
+      svc2.dispose()
+    }
+  })
+
+  it('hydrates v3 rows that predate the aiFix field', async () => {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 3,
+      entries: [
+        {
+          id: 'old',
+          agentId: 'a',
+          sessionIdOnAgent: 'old',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 2,
+        },
+      ],
+    })
+    await svc.initialize()
+    expect(svc.get('old')?.aiFix).toBeUndefined()
+  })
+
+  it('drops rows whose aiFix field is not a boolean', async () => {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 3,
+      entries: [
+        { id: 'ok', agentId: 'a', sessionIdOnAgent: 'ok', title: 't', createdAt: 1, lastUsedAt: 2 },
+        {
+          id: 'bad',
+          agentId: 'a',
+          sessionIdOnAgent: 'bad',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 2,
+          aiFix: 'yes',
+        },
+      ],
+    })
+    await svc.initialize()
+    expect(svc.list().map((e) => e.id)).toEqual(['ok'])
+  })
+
+  it('re-adding the same key carries over aiFix', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'codex', sessionIdOnAgent: 'fix-1', title: 'AI Fix: a.ts', aiFix: true })
+    // A later upsert (e.g. title refresh) that doesn't mention aiFix must not
+    // strip the flag — resumeSession relies on it to rebuild suppressDefaults.
+    const readded = svc.add({ agentId: 'codex', sessionIdOnAgent: 'fix-1', title: 'AI Fix: a.ts' })
+    expect(readded.aiFix).toBe(true)
   })
 
   it('initialize() is idempotent — second call resolves without re-reading', async () => {

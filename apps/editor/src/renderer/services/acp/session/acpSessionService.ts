@@ -143,7 +143,7 @@ export {
   type TimelineItem,
 } from './acpSession.js'
 import { AcpForeignWorktreeError } from './acpErrors.js'
-import { snapshotConfigSelections } from '../configOptionLabel.js'
+import { selectOptionHasValue, snapshotConfigSelections } from '../configOptionLabel.js'
 import { IExtensionMcpServersService } from '../../extensions/extensionMcpServersService.js'
 import { IMcpServerEnablementService } from '../mcpServerEnablementService.js'
 
@@ -184,6 +184,20 @@ export interface IAcpCreateSessionOptions {
    * input over the transparent session swap.
    */
   readonly promptDraft?: AcpPromptDraft
+  /**
+   * AI Fix session: config selections never write back to the per-agent
+   * defaults (`AcpAgentDefaultsService`), so an AI Fix choice cannot leak into
+   * ordinary chat defaults. Per-session history still records them. The flag is
+   * persisted on the history entry so a resume rebuilds the same isolation.
+   */
+  readonly aiFix?: boolean
+  /**
+   * Desired configOption values layered on top of the per-agent defaults for
+   * this session only (`{ ...agentDefaults, ...overrides }`). Must be passed
+   * here (not set after creation) because the connect path re-seeds the desired
+   * map and would clobber a later override.
+   */
+  readonly configDesiredOverrides?: Readonly<Record<string, string>>
 }
 
 export interface IAcpSessionService {
@@ -642,6 +656,7 @@ export class AcpSessionService
       title,
       collapseMode: initialCollapseMode,
       withTitleService: true,
+      ...(options?.aiFix === true ? { suppressConfigDefaults: true } : {}),
     })
     this._register(session)
     this._wireAuthGuidance(session)
@@ -653,9 +668,12 @@ export class AcpSessionService
     // config switches render the instant the session appears, instead of
     // popping in 1-5s later when session/new returns the real bag. The real bag
     // replaces this once the handshake lands (see _connectSession).
-    const seededOptions = this._seedConfigOptions(resolvedAgentId)
+    const seededOptions = this._seedConfigOptions(resolvedAgentId, options?.configDesiredOverrides)
     if (seededOptions.length > 0) {
-      session.setConfigDesired(this._agentDefaults.getDefaults(resolvedAgentId))
+      session.setConfigDesired({
+        ...this._agentDefaults.getDefaults(resolvedAgentId),
+        ...options?.configDesiredOverrides,
+      })
       session.seedConfigOptions(seededOptions)
     }
     // A caller-supplied pin must land before _connectSession snapshots the
@@ -674,7 +692,7 @@ export class AcpSessionService
     this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
     this._onDidCreate.fire(session)
 
-    void this._connectSession(session, resolvedAgentId, cwd, profile)
+    void this._connectSession(session, resolvedAgentId, cwd, profile, options)
     return session
   }
 
@@ -693,6 +711,7 @@ export class AcpSessionService
     resolvedAgentId: string,
     cwd: string | undefined,
     profile: ISessionCreateProfileHandle,
+    options?: IAcpCreateSessionOptions,
   ): Promise<void> {
     const agentName = this._registry.get(resolvedAgentId).name
     const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
@@ -754,13 +773,17 @@ export class AcpSessionService
         ...(cwd !== undefined ? { cwd } : {}),
         hasMessages: false,
         ...(liveSelection !== null ? { mcpServerNames: [...liveSelection] } : {}),
+        ...(options?.aiFix === true ? { aiFix: true } : {}),
       })
       profile.step('didHistoryAdd')
       this._mcpSelectionAtAttach.set(session.id, selection)
       // Seed the saved per-agent defaults BEFORE applying the bag so the state
       // machine reconciles it flicker-free (server default → saved value, with
       // no intermediate frame) and queues the real RPC for the agent to adopt.
-      session.setConfigDesired(this._agentDefaults.getDefaults(resolvedAgentId))
+      session.setConfigDesired({
+        ...this._agentDefaults.getDefaults(resolvedAgentId),
+        ...options?.configDesiredOverrides,
+      })
       session.applyInitState(initState)
       // Snapshot the (reconciled) configOption selections into history so the
       // sidebar can show model / effort on this row even after it stops being
@@ -966,6 +989,8 @@ export class AcpSessionService
         // placeholder, so the first turn should derive/generate the real one.
         withTitleService: options.withTitleService === true,
         readOnly,
+        // AI Fix sessions keep their defaults-write isolation across restarts.
+        ...(entry.aiFix === true ? { suppressConfigDefaults: true } : {}),
       })
       session.attachConnection(conn, entry.sessionIdOnAgent)
       this._register(session)
@@ -1584,10 +1609,16 @@ export class AcpSessionService
    * session will end up with (avoiding a server-default → user-value flicker).
    * Returns an empty array when nothing is cached (cold start / first session).
    */
-  private _seedConfigOptions(agentId: string): readonly SessionConfigOption[] {
+  private _seedConfigOptions(
+    agentId: string,
+    overrides?: Readonly<Record<string, string>>,
+  ): readonly SessionConfigOption[] {
     const cached = this._configOptionsCache.get(agentId)
     if (cached.length === 0) return cached
-    return overrideConfigOptionValues(cached, this._agentDefaults.getDefaults(agentId)).bag
+    return overrideConfigOptionValues(cached, {
+      ...this._agentDefaults.getDefaults(agentId),
+      ...overrides,
+    }).bag
   }
 
   /**
@@ -2188,18 +2219,4 @@ function overrideConfigOptionValues(
     return { ...opt, currentValue: want }
   })
   return overridden.length > 0 ? { bag: next, overridden } : { bag, overridden: [] }
-}
-
-function selectOptionHasValue(
-  opt: SessionConfigOption & { type: 'select' },
-  value: string,
-): boolean {
-  for (const o of opt.options) {
-    if ('group' in o) {
-      for (const v of o.options) if (v.value === value) return true
-    } else if (o.value === value) {
-      return true
-    }
-  }
-  return false
 }

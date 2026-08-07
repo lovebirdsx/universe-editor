@@ -30,7 +30,7 @@ import type {
 import type { IAcpClientConnection } from '../acpClientService.js'
 import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import type { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
-import { findConfigOptionLabel } from '../configOptionLabel.js'
+import { findConfigOptionLabel, selectOptionHasValue } from '../configOptionLabel.js'
 import { readChangedConfigIds } from './acpSessionUpdateMeta.js'
 
 export interface ConfigOptionSessionInfo {
@@ -51,6 +51,12 @@ export interface ConfigOptionStateMachineDeps {
   readonly sessionInfo: ConfigOptionSessionInfo
   readonly history?: IAcpSessionHistoryService
   readonly defaults?: IAcpAgentDefaultsService
+  /**
+   * Isolated sessions (AI Fix): never write selections back to the per-agent
+   * defaults. Per-session history still records them so a resume restores this
+   * session's own values.
+   */
+  readonly suppressDefaults?: boolean
   /** Logs a non-fatal push-back failure. Optional so unit tests can omit it. */
   warn?(message: string): void
 }
@@ -257,7 +263,8 @@ export class ConfigOptionStateMachine {
     return opts.map((opt) => {
       if (opt.type !== 'select' || !consider(opt.id)) return opt
       const want = this._desired[opt.id]
-      if (want === undefined || want === opt.currentValue || !selectHasValue(opt, want)) return opt
+      if (want === undefined || want === opt.currentValue || !selectOptionHasValue(opt, want))
+        return opt
       this._needsPush.add(opt.id)
       return { ...opt, currentValue: want }
     })
@@ -274,7 +281,8 @@ export class ConfigOptionStateMachine {
     return bag.map((opt) => {
       if (opt.type !== 'select' || !this._needsPush.has(opt.id)) return opt
       const want = this._desired[opt.id]
-      if (want === undefined || want === opt.currentValue || !selectHasValue(opt, want)) return opt
+      if (want === undefined || want === opt.currentValue || !selectOptionHasValue(opt, want))
+        return opt
       return { ...opt, currentValue: want }
     })
   }
@@ -290,7 +298,9 @@ export class ConfigOptionStateMachine {
     if (conn === undefined || sessionId === undefined) {
       this._applyLocalValue(configId, value)
       const { agentId } = this._deps.sessionInfo
-      this._deps.defaults?.setDefault(agentId, configId, value)
+      if (this._deps.suppressDefaults !== true) {
+        this._deps.defaults?.setDefault(agentId, configId, value)
+      }
       return
     }
     const params: SetSessionConfigOptionRequest = {
@@ -329,7 +339,9 @@ export class ConfigOptionStateMachine {
         value,
         this._labelOf(configId, value),
       )
-      this._deps.defaults?.setDefault(agentId, configId, value)
+      if (this._deps.suppressDefaults !== true) {
+        this._deps.defaults?.setDefault(agentId, configId, value)
+      }
       this._deps.telemetry.publicLog('acp.config_option_set', { sessionId, configId })
     } catch (err) {
       // Restore the pre-push value so a rejected change isn't left showing.
@@ -363,15 +375,4 @@ export class ConfigOptionStateMachine {
     })
     if (changed) this.configOptions.set(next, undefined)
   }
-}
-
-function selectHasValue(opt: SessionConfigOption & { type: 'select' }, value: string): boolean {
-  for (const o of opt.options) {
-    if ('group' in o) {
-      for (const v of o.options) if (v.value === value) return true
-    } else if (o.value === value) {
-      return true
-    }
-  }
-  return false
 }
