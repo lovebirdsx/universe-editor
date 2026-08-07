@@ -30,6 +30,7 @@ import {
   type IStatusBarEntryAccessor,
   type IWorkbenchContribution,
   autorun,
+  localize,
 } from '@universe-editor/platform'
 import { blameCommandId, type BlameResultDto } from '@universe-editor/extensions-common'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -410,7 +411,9 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
       '',
       `${new Date(commit.authorDate).toLocaleString()} (${ago})`,
       '',
-      `[\`${commit.hash.slice(0, 8)}\`](command:${OPEN_COMMIT_COMMAND}?${hashLinkArgs})`,
+      // The quoted link title replaces the raw `command:` URI as the tooltip
+      // text (monaco's markdown renderer uses `title || href` for the `<a>`).
+      `[\`${commit.hash.slice(0, 8)}\`](command:${OPEN_COMMIT_COMMAND}?${hashLinkArgs} "${localize('scm.blame.openCommitTooltip', 'Open Commit')}")`,
     ].join('\n')
     return {
       decorationText: applyTemplate(decorationTemplate, tokens),

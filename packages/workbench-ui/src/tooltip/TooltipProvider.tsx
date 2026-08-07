@@ -1,8 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *
  *  TooltipProvider — the single tooltip surface for the whole workbench.
  *  A global event delegation replaces the native `title` attribute: any element
  *  carrying `data-tooltip="…"` gets a themed tooltip after a hover/focus delay.
+ *  Elements carrying a plain `title` attribute (Monaco hover links, third-party
+ *  widgets, stray JSX) get the same themed tooltip instead of the OS-native one:
+ *  the attribute is stashed while hovered (suppressing the native bubble) and
+ *  restored afterwards so accessibility tooling still sees it.
  *  Rendered through Floating UI anchored to the element (top, flipping below when
  *  there is no room), styled by tooltipSurface.module.css so it matches the rest
  *  of the overlay family (menu / dialog / popover).
@@ -13,6 +18,9 @@ import { useFloating, autoUpdate, offset, flip, shift, FloatingPortal } from '@f
 import styles from './tooltipSurface.module.css'
 
 export const TOOLTIP_ATTRIBUTE = 'data-tooltip'
+
+/** Where a native `title` is stashed while the themed tooltip stands in for it. */
+const NATIVE_TITLE_STASH = 'data-tooltip-native-title'
 
 const REOPEN_WINDOW_MS = 200
 const FOCUS_SUPPRESS_AFTER_MOUSEDOWN_MS = 350
@@ -29,11 +37,39 @@ export interface TooltipProviderProps {
   children?: ReactNode
 }
 
+/** Elements whose `title` carries semantics the tooltip must not stand in for
+ *  (an iframe's title names the frame for assistive tech). */
+const NATIVE_TITLE_EXCLUDED_TAGS = new Set(['IFRAME', 'WEBVIEW'])
+
+/** Suppress the OS-native tooltip by moving `title` aside; the stash attribute
+ *  keeps the element matching future `closest` lookups for the same hover. */
+function claimNativeTitle(el: Element): void {
+  if (NATIVE_TITLE_EXCLUDED_TAGS.has(el.tagName)) return
+  const title = el.getAttribute('title')
+  if (title === null || el.hasAttribute(NATIVE_TITLE_STASH)) return
+  el.setAttribute(NATIVE_TITLE_STASH, title)
+  el.removeAttribute('title')
+}
+
+function restoreNativeTitle(el: Element): void {
+  const stashed = el.getAttribute(NATIVE_TITLE_STASH)
+  if (stashed === null) return
+  el.removeAttribute(NATIVE_TITLE_STASH)
+  el.setAttribute('title', stashed)
+}
+
 function tooltipTargetFrom(node: EventTarget | null): { target: Element; text: string } | null {
   if (!(node instanceof Element)) return null
-  const el = node.closest(`[${TOOLTIP_ATTRIBUTE}]`)
+  const el = node.closest(`[${TOOLTIP_ATTRIBUTE}],[${NATIVE_TITLE_STASH}],[title]`)
   if (!el) return null
-  const text = el.getAttribute(TOOLTIP_ATTRIBUTE)?.trim()
+  // A native `title` on the resolved element would pop the OS bubble alongside
+  // ours — claim it even when `data-tooltip` wins the text.
+  claimNativeTitle(el)
+  const text = (
+    el.getAttribute(TOOLTIP_ATTRIBUTE) ??
+    el.getAttribute(NATIVE_TITLE_STASH) ??
+    ''
+  ).trim()
   return text ? { target: el, text } : null
 }
 
@@ -55,15 +91,23 @@ export function TooltipProvider({ delay = 500, children }: TooltipProviderProps)
     }
     const hide = () => {
       clear()
-      if (tipRef.current !== null) lastHideAtRef.current = Date.now()
+      if (tipRef.current !== null) {
+        restoreNativeTitle(tipRef.current.target)
+        lastHideAtRef.current = Date.now()
+      }
       setTip(null)
     }
     const show = (next: TooltipState) => {
       clear()
       // Chain behavior: while a tooltip is visible (or just dismissed), moving to
       // another tooltip host shows it instantly instead of waiting out the delay.
+      // Nested hosts (parent/child both titled) switch without a mouseout, so the
+      // previous host's native title is restored here rather than in hide().
       const instant =
         tipRef.current !== null || Date.now() - lastHideAtRef.current < REOPEN_WINDOW_MS
+      if (tipRef.current !== null && tipRef.current.target !== next.target) {
+        restoreNativeTitle(tipRef.current.target)
+      }
       if (instant) {
         setTip(next)
       } else {

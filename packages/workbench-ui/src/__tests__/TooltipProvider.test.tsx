@@ -17,6 +17,12 @@ function Fixture({ delay = 500 }: { delay?: number }) {
         empty
       </div>
       <div data-testid="plain">plain</div>
+      <a href="command:example.run" title="command:example.run" data-testid="native">
+        link
+      </a>
+      <div data-tooltip="both tip" data-testid="both" title="both title">
+        both
+      </div>
     </TooltipProvider>
   )
 }
@@ -113,5 +119,71 @@ describe('TooltipProvider', () => {
 
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('tooltip')).toBeNull()
+  })
+
+  it('replaces a native title with the themed tooltip and restores it on hide', () => {
+    vi.useFakeTimers()
+    render(<Fixture delay={0} />)
+    const link = screen.getByTestId('native')
+
+    fireEvent.mouseOver(link)
+    // The native attribute is stashed immediately so the OS bubble never shows.
+    expect(link.getAttribute('title')).toBeNull()
+
+    act(() => {
+      vi.advanceTimersByTime(10)
+    })
+    expect(screen.getByRole('tooltip').textContent).toBe('command:example.run')
+
+    fireEvent.mouseOut(link)
+    expect(screen.queryByRole('tooltip')).toBeNull()
+    expect(link.getAttribute('title')).toBe('command:example.run')
+  })
+
+  it('claims a native title on the same element when data-tooltip wins the text', () => {
+    vi.useFakeTimers()
+    render(<Fixture delay={0} />)
+    const el = screen.getByTestId('both')
+
+    fireEvent.mouseOver(el)
+    expect(el.getAttribute('title')).toBeNull()
+
+    act(() => {
+      vi.advanceTimersByTime(10)
+    })
+    expect(screen.getByRole('tooltip').textContent).toBe('both tip')
+
+    fireEvent.mouseOut(el)
+    expect(el.getAttribute('title')).toBe('both title')
+  })
+
+  it('restores the previous native title when chaining into a nested host', () => {
+    vi.useFakeTimers()
+    render(
+      <TooltipProvider delay={0}>
+        <div title="parent title" data-testid="parent">
+          <button type="button" title="child title" data-testid="child">
+            child
+          </button>
+        </div>
+      </TooltipProvider>,
+    )
+    const parent = screen.getByTestId('parent')
+    const child = screen.getByTestId('child')
+
+    fireEvent.mouseOver(parent)
+    act(() => {
+      vi.advanceTimersByTime(10)
+    })
+    expect(screen.getByRole('tooltip').textContent).toBe('parent title')
+
+    // Moving into the child fires no mouseout that would restore the parent.
+    fireEvent.mouseOver(child)
+    expect(parent.getAttribute('title')).toBe('parent title')
+    expect(child.getAttribute('title')).toBeNull()
+    expect(screen.getByRole('tooltip').textContent).toBe('child title')
+
+    fireEvent.mouseOut(child)
+    expect(child.getAttribute('title')).toBe('child title')
   })
 })
