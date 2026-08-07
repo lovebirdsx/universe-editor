@@ -1265,6 +1265,11 @@ export class AcpSession extends Disposable implements IAcpSession {
     const conn = this._conn
     const sid = this.sessionIdOnAgent.get()
     if (conn === undefined || sid === undefined) return
+    // Bump the history entry's lastUsedAt so the LRU order tracks user activity.
+    // Synchronous on purpose: callers (and tests) observe the new order right
+    // after sendPrompt returns, before any awaited persistence below.
+    this._history?.touch(sid)
+    this._history?.setHistoryHasMessages(sid)
     // The local message can be rendered while session/new is still pending.
     // Once a durable id exists, persist the same send-time snapshot so a later
     // session/load can attach it to the matching user message.
@@ -1274,9 +1279,6 @@ export class AcpSession extends Disposable implements IAcpSession {
     } catch {
       // Best-effort persistence must never prevent the prompt from being sent.
     }
-    // Bump the history entry's lastUsedAt so the LRU order tracks user activity.
-    this._history?.touch(sid)
-    this._history?.setHistoryHasMessages(sid)
     const prompt = composePromptBlocksFromRefs(text, refs)
     // Attached selections lead the prompt as context blocks (EmbeddedResource
     // when the agent supports it, else a fenced-code text block).
