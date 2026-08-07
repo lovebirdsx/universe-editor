@@ -8,7 +8,8 @@
 
 import { useRef, useState } from 'react'
 import { Bot, ChevronDown, Settings2, Sliders, Sparkles } from 'lucide-react'
-import { useObservable } from '../useService.js'
+import { IDialogService } from '@universe-editor/platform'
+import { useObservable, useService } from '../useService.js'
 import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
 import type {
   SessionConfigOption,
@@ -17,6 +18,10 @@ import type {
   SessionConfigSelectOption,
 } from '@agentclientprotocol/sdk'
 import { findConfigOptionLabel } from '../../services/acp/configOptionLabel.js'
+import {
+  confirmModelSwitchContextShrink,
+  evaluateModelSwitchContextShrink,
+} from '../../services/acp/session/modelSwitchContextGuard.js'
 import { McpServerPicker } from './McpServerPicker.js'
 import { usePopoverDismiss } from './usePopoverDismiss.js'
 import styles from './agents.module.css'
@@ -97,12 +102,27 @@ function ConfigOptionTrigger({
   onOpen: () => void
   onClose: () => void
 }) {
+  const dialogService = useService(IDialogService)
   if (option.type !== 'select') return null
   const Icon = categoryIcon(option.category)
   const currentLabel = findConfigOptionLabel(option.options, option.currentValue)
   const testKey = option.category ?? option.id
   const tooltipParts = [option.name]
   if (option.description) tooltipParts.push(option.description)
+  const pickValue = async (value: string) => {
+    if (value === option.currentValue) return
+    // Switching a large session onto a smaller-context model silently
+    // compacts it on the next prompt — confirm before applying.
+    if (option.category === 'model') {
+      const shrink = evaluateModelSwitchContextShrink(session.agentId, session.usage.get(), value)
+      if (shrink) {
+        const label = findConfigOptionLabel(option.options, value)
+        const ok = await confirmModelSwitchContextShrink(dialogService, shrink, label)
+        if (!ok) return
+      }
+    }
+    await session.setConfigOption(option.id, value)
+  }
   return (
     <div className={styles['configTriggerWrap']} data-testid={`acp-config-${testKey}`}>
       <button
@@ -124,7 +144,7 @@ function ConfigOptionTrigger({
           option={option}
           onPick={(value) => {
             onClose()
-            if (value !== option.currentValue) void session.setConfigOption(option.id, value)
+            void pickValue(value)
           }}
           onDismiss={onClose}
           testKey={testKey}

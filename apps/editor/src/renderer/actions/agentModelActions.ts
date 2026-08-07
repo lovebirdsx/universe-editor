@@ -8,6 +8,7 @@
 
 import {
   Action2,
+  IDialogService,
   INotificationService,
   IQuickInputService,
   Severity,
@@ -22,6 +23,11 @@ import type {
   SessionConfigSelectGroup,
   SessionConfigSelectOption,
 } from '@agentclientprotocol/sdk'
+import { findConfigOptionLabel } from '../services/acp/configOptionLabel.js'
+import {
+  confirmModelSwitchContextShrink,
+  evaluateModelSwitchContextShrink,
+} from '../services/acp/session/modelSwitchContextGuard.js'
 import { CATEGORY } from './_agentShared.js'
 
 async function pickConfigOption(
@@ -30,9 +36,15 @@ async function pickConfigOption(
   placeholder: string,
   notFound: string,
 ): Promise<void> {
-  const session = accessor.get(IAcpSessionService).activeSession.get()
+  // Resolve every service up-front: the accessor is invalidated by the first
+  // await (see memory: action2-async-accessor-invalidation).
+  const sessionService = accessor.get(IAcpSessionService)
+  const notificationService = accessor.get(INotificationService)
+  const quickInputService = accessor.get(IQuickInputService)
+  const dialogService = accessor.get(IDialogService)
+  const session = sessionService.activeSession.get()
   if (!session) {
-    accessor.get(INotificationService).notify({
+    notificationService.notify({
       severity: Severity.Info,
       message: localize('agent.noSession', 'No active agent session.'),
     })
@@ -40,7 +52,7 @@ async function pickConfigOption(
   }
   const option = session.configOptions.get().find((o) => o.category === category)
   if (!option || option.type !== 'select') {
-    accessor.get(INotificationService).notify({ severity: Severity.Info, message: notFound })
+    notificationService.notify({ severity: Severity.Info, message: notFound })
     return
   }
   const currentLabel = localize('agent.configOption.current', 'current')
@@ -50,9 +62,19 @@ async function pickConfigOption(
     label: v.value === option.currentValue ? `${v.name} · ${currentLabel}` : v.name,
     ...(v.description != null ? { description: v.description } : {}),
   }))
-  const picked = await accessor.get(IQuickInputService).pick(items, { placeholder })
+  const picked = await quickInputService.pick(items, { placeholder })
   if (!picked || picked.id === option.currentValue) return
-  await applyConfigOption(session, option.id, picked.id, accessor)
+  // Switching a large session onto a smaller-context model silently compacts
+  // it on the next prompt — confirm before applying.
+  if (category === 'model') {
+    const shrink = evaluateModelSwitchContextShrink(session.agentId, session.usage.get(), picked.id)
+    if (shrink) {
+      const targetLabel = findConfigOptionLabel(flatValues, picked.id)
+      const ok = await confirmModelSwitchContextShrink(dialogService, shrink, targetLabel)
+      if (!ok) return
+    }
+  }
+  await applyConfigOption(session, option.id, picked.id, notificationService)
 }
 
 /**
@@ -77,12 +99,12 @@ async function applyConfigOption(
   session: IAcpSession,
   configId: string,
   value: string,
-  accessor: ServicesAccessor,
+  notificationService: INotificationService,
 ): Promise<void> {
   try {
     await session.setConfigOption(configId, value)
   } catch (err) {
-    accessor.get(INotificationService).notify({
+    notificationService.notify({
       severity: Severity.Error,
       message: localize('agent.configOption.failed', 'Failed to apply option: {error}', {
         error: (err as Error).message,

@@ -1305,6 +1305,12 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.mcp.picker.defaultHint':
     '左侧复选框只作用于当前会话；人形/文件夹开关分别是用户级与工作区级默认（工作区优先，可回到继承）。',
 
+  // --- ACP: model switch context guard ---
+  'acp.modelSwitch.shrink.message': '切换到 "{model}"？',
+  'acp.modelSwitch.shrink.detail':
+    '当前会话已使用约 {used} tokens 上下文，而 "{model}" 的上下文窗口只有约 {window} tokens。切换后下一条消息将立即触发上下文压缩，较早的细节可能丢失。如需保留完整上下文，请选择更大窗口的型号（如带 "1M context" 的选项）。',
+  'acp.modelSwitch.shrink.confirm': '仍然切换',
+
   // --- ACP: permission card (plan review) ---
   'acp.permission.autoExecute': '此后自动执行计划',
   'acp.permission.autoExecute.tooltip':

@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import {
   Event,
+  IDialogService,
   IFileService,
   InstantiationService,
   IWorkspaceService,
@@ -20,6 +21,8 @@ import {
   ServiceCollection,
 } from '@universe-editor/platform'
 import type {
+  IConfirmResult,
+  IDialogService as IDialogServiceType,
   IFileService as IFileServiceType,
   ISettableObservable,
   IWorkspaceService as IWorkspaceServiceType,
@@ -54,10 +57,19 @@ const stubWorkspaceService = {
   async removeRecent() {},
 } as unknown as IWorkspaceServiceType
 
-function renderWithServices(node: React.ReactNode) {
+function renderWithServices(node: React.ReactNode, dialogService?: IDialogServiceType) {
   const services = new ServiceCollection()
   services.set(IFileService, stubFileService)
   services.set(IWorkspaceService, stubWorkspaceService)
+  services.set(
+    IDialogService,
+    dialogService ??
+      ({
+        _serviceBrand: undefined,
+        confirm: vi.fn().mockResolvedValue({ confirmed: true, choice: 'primary' }),
+        prompt: vi.fn().mockResolvedValue(undefined),
+      } as unknown as IDialogServiceType),
+  )
   const inst = new InstantiationService(services)
   return render(node, {
     wrapper: ({ children }) => (
@@ -71,12 +83,15 @@ interface FakeSession extends IAcpSession {
   readonly setConfigOption: ReturnType<typeof vi.fn> & IAcpSession['setConfigOption']
 }
 
-function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession {
+function makeSession(
+  initial: readonly SessionConfigOption[] = [],
+  opts: { agentId?: string; usage?: AcpUsage } = {},
+): FakeSession {
   const configObs = observableValue<readonly SessionConfigOption[]>('cfg', initial)
   const setConfigOption = vi.fn().mockResolvedValue(undefined)
   return {
     id: 's1',
-    agentId: 'fake',
+    agentId: opts.agentId ?? 'fake',
     readOnly: false,
     sessionIdOnAgent: observableValue<string | undefined>('sid', 's1'),
     title: 'Fake',
@@ -90,7 +105,7 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
     endHistoryReplay: () => {},
     suppressReplayToTimeline: () => {},
     setRetractedMessageIds: () => {},
-    usage: observableValue<AcpUsage | undefined>('u', undefined),
+    usage: observableValue<AcpUsage | undefined>('u', opts.usage),
     pendingPermission: observableValue<AcpPendingPermission | undefined>('pp', undefined),
     pendingElicitation: observableValue<AcpPendingElicitation | undefined>('pe', undefined),
     configOptions: configObs,
@@ -279,5 +294,92 @@ describe('ConfigOptionsBar', () => {
       'acp-config-thought_level-trigger',
       'acp-config-temp-trigger',
     ])
+  })
+})
+
+describe('ConfigOptionsBar — model switch context guard', () => {
+  // The incident shape: a claude-code session at 172k tokens (300k window,
+  // "[1m]" lane) offered both the bare "sonnet" row and the 1M lane row.
+  const LANE_MODEL_OPTION: SessionConfigOption = {
+    id: 'model',
+    category: 'model',
+    type: 'select',
+    name: 'Model',
+    currentValue: 'claude-fable-5[1m]',
+    options: [
+      { value: 'claude-fable-5[1m]', name: 'Fable 5' },
+      { value: 'sonnet', name: 'Sonnet' },
+      { value: 'sonnet[1m]', name: 'Sonnet 5 (1M context)' },
+    ],
+  }
+  const INCIDENT_USAGE: AcpUsage = { used: 172_224, size: 300_000 }
+
+  function makeDialog(confirmed: boolean) {
+    const confirm = vi.fn().mockResolvedValue({
+      confirmed,
+      choice: confirmed ? 'primary' : 'cancel',
+    } satisfies IConfirmResult)
+    return {
+      dialog: {
+        _serviceBrand: undefined,
+        confirm,
+        prompt: vi.fn().mockResolvedValue(undefined),
+      } as unknown as IDialogServiceType,
+      confirm,
+    }
+  }
+
+  async function pickModel(name: string) {
+    fireEvent.click(screen.getByTestId('acp-config-model-trigger'))
+    const item = [
+      ...screen.getByTestId('acp-config-model-popover').querySelectorAll('[role="option"]'),
+    ].find((n) => n.textContent === name)!
+    fireEvent.mouseDown(item)
+    await act(async () => {})
+  }
+
+  it('asks for confirmation before switching a large session onto a bare 200k row', async () => {
+    const session = makeSession([LANE_MODEL_OPTION], {
+      agentId: 'claude-code',
+      usage: INCIDENT_USAGE,
+    })
+    const { dialog, confirm } = makeDialog(true)
+    renderWithServices(<ConfigOptionsBar session={session} />, dialog)
+    await pickModel('Sonnet')
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(session.setConfigOption).toHaveBeenCalledWith('model', 'sonnet')
+  })
+
+  it('does not switch when the user cancels the confirmation', async () => {
+    const session = makeSession([LANE_MODEL_OPTION], {
+      agentId: 'claude-code',
+      usage: INCIDENT_USAGE,
+    })
+    const { dialog, confirm } = makeDialog(false)
+    renderWithServices(<ConfigOptionsBar session={session} />, dialog)
+    await pickModel('Sonnet')
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(session.setConfigOption).not.toHaveBeenCalled()
+  })
+
+  it('switches lane-preserving picks without confirmation', async () => {
+    const session = makeSession([LANE_MODEL_OPTION], {
+      agentId: 'claude-code',
+      usage: INCIDENT_USAGE,
+    })
+    const { dialog, confirm } = makeDialog(false)
+    renderWithServices(<ConfigOptionsBar session={session} />, dialog)
+    await pickModel('Sonnet 5 (1M context)')
+    expect(confirm).not.toHaveBeenCalled()
+    expect(session.setConfigOption).toHaveBeenCalledWith('model', 'sonnet[1m]')
+  })
+
+  it('does not guard non-claude sessions', async () => {
+    const session = makeSession([LANE_MODEL_OPTION], { agentId: 'codex', usage: INCIDENT_USAGE })
+    const { dialog, confirm } = makeDialog(false)
+    renderWithServices(<ConfigOptionsBar session={session} />, dialog)
+    await pickModel('Sonnet')
+    expect(confirm).not.toHaveBeenCalled()
+    expect(session.setConfigOption).toHaveBeenCalledWith('model', 'sonnet')
   })
 })
