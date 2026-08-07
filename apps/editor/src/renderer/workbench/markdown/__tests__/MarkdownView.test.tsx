@@ -15,6 +15,7 @@ import {
   IEditorResolverService,
   IFileService,
   IThemeService,
+  IWindowsService,
   InstantiationService,
   ServiceCollection,
   URI,
@@ -28,6 +29,7 @@ import type {
   IEditorResolverService as IEditorResolverServiceType,
   IFileService as IFileServiceType,
   IThemeService as IThemeServiceType,
+  IWindowsService as IWindowsServiceType,
 } from '@universe-editor/platform'
 import { MarkdownView, DocLinkContext } from '../MarkdownView.js'
 import { ServicesContext } from '../../useService.js'
@@ -89,7 +91,10 @@ function makeThemeService(): IThemeServiceType {
   } as unknown as IThemeServiceType
 }
 
-function makeFileService(exists: (resource: URI) => boolean | Promise<boolean>): IFileServiceType {
+function makeFileService(
+  exists: (resource: URI) => boolean | Promise<boolean>,
+  statIsDirectory = false,
+): IFileServiceType {
   return {
     _serviceBrand: undefined,
     async readFile() {
@@ -103,7 +108,7 @@ function makeFileService(exists: (resource: URI) => boolean | Promise<boolean>):
       return exists(resource)
     },
     async stat(resource: URI) {
-      return { resource, isFile: true, isDirectory: false, size: 0, mtime: 0 }
+      return { resource, isFile: !statIsDirectory, isDirectory: statIsDirectory, size: 0, mtime: 0 }
     },
     async list() {
       return []
@@ -116,6 +121,13 @@ function makeFileService(exists: (resource: URI) => boolean | Promise<boolean>):
       return []
     },
   }
+}
+
+function makeWindowsService(openWindow = vi.fn().mockResolvedValue(undefined)) {
+  return {
+    _serviceBrand: undefined,
+    openWindow,
+  } as unknown as IWindowsServiceType
 }
 
 function makeEditorService(openEditor = vi.fn()): IEditorServiceType {
@@ -606,6 +618,61 @@ describe('MarkdownView', () => {
     await waitFor(() => expect(resolverOpen).toHaveBeenCalledTimes(1))
     expect(exists.mock.calls.some(([resource]) => resource.fsPath === decoded)).toBe(true)
     expect(resolverOpen.mock.calls[0]?.[0]?.fsPath).toBe(decoded)
+  })
+
+  it('opens a file:// directory link as a folder in a new window', async () => {
+    const openWindow = vi.fn().mockResolvedValue(undefined)
+    const resolverOpen = vi.fn().mockResolvedValue(undefined)
+    const exists = vi.fn((resource: URI) => resource.fsPath === 'D:/git_project/vscode')
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver(resolverOpen))
+    services.set(IConfigurationService, makeConfig())
+    services.set(IFileService, makeFileService(exists, true))
+    services.set(IEditorService, makeEditorService())
+    services.set(IWindowsService, makeWindowsService(openWindow))
+    const inst = new InstantiationService(services)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <MarkdownView
+          text="[@vscode](file:///D:/git_project/vscode)"
+          baseUri={URI.file('/repo/docs')}
+        />
+      </ServicesContext.Provider>,
+    )
+
+    screen.getByRole('link', { name: '@vscode' }).click()
+    await waitFor(() => expect(openWindow).toHaveBeenCalledTimes(1))
+    expect(openWindow.mock.calls[0]?.[0]?.fsPath).toBe('D:/git_project/vscode')
+    // A directory target never reaches the editor resolver.
+    expect(resolverOpen).not.toHaveBeenCalled()
+  })
+
+  it('routes a file:// file link through the editor resolver', async () => {
+    const openWindow = vi.fn().mockResolvedValue(undefined)
+    const resolverOpen = vi.fn().mockResolvedValue(undefined)
+    const exists = vi.fn((resource: URI) => resource.fsPath === 'D:/git_project/repo/docs/a.md')
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver(resolverOpen))
+    services.set(IConfigurationService, makeConfig())
+    services.set(IFileService, makeFileService(exists))
+    services.set(IEditorService, makeEditorService())
+    services.set(IWindowsService, makeWindowsService(openWindow))
+    const inst = new InstantiationService(services)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <MarkdownView
+          text="[doc](file:///D:/git_project/repo/docs/a.md)"
+          baseUri={URI.file('/repo/docs')}
+        />
+      </ServicesContext.Provider>,
+    )
+
+    screen.getByRole('link', { name: 'doc' }).click()
+    await waitFor(() => expect(resolverOpen).toHaveBeenCalledTimes(1))
+    expect(resolverOpen.mock.calls[0]?.[0]?.fsPath).toBe('D:/git_project/repo/docs/a.md')
+    expect(openWindow).not.toHaveBeenCalled()
   })
 
   it('routes a mermaid fence to MermaidBlock and injects the rendered svg', async () => {

@@ -15,6 +15,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '@universe-editor/platform'
+import { splitFilePathLocation } from '../../services/acp/filePathLink.js'
 
 /** True for `C:\…`, `C:/…`, or a leading `/` (POSIX absolute). */
 export function isAbsolutePath(p: string): boolean {
@@ -77,4 +78,37 @@ export function searchPatternFor(rawPath: string): string {
     .split(/[/\\]/)
     .filter((s) => s.length > 0 && s !== '.' && s !== '..')
     .join('/')
+}
+
+export interface FileUriLinkTarget {
+  readonly path: string
+  readonly line?: number
+  readonly col?: number
+  readonly fragment?: string
+}
+
+/**
+ * Split a `file://` href into the same shape {@link splitFilePathLocation}
+ * produces for plain path links, so a `file:` link flows through the exact
+ * same open pipeline (directory → folder window, markdown → preview, other →
+ * editor resolver) instead of being force-fed to the editor resolver. `URI.parse`
+ * already percent-decodes the path; a `:line:col` suffix rides on the fsPath.
+ */
+export function fileUriLinkTarget(href: string): FileUriLinkTarget | undefined {
+  let uri: URI
+  try {
+    uri = URI.parse(href)
+  } catch {
+    return undefined
+  }
+  if (uri.scheme !== 'file') return undefined
+  const fsPath = uri.fsPath
+  if (fsPath.length === 0) return undefined
+  const { path, line, col } = splitFilePathLocation(fsPath)
+  return {
+    path,
+    ...(line !== undefined ? { line } : {}),
+    ...(col !== undefined ? { col } : {}),
+    ...(uri.fragment.length > 0 ? { fragment: uri.fragment } : {}),
+  }
 }

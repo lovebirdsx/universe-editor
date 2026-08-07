@@ -16,7 +16,7 @@ import {
   useRef,
   type ReactNode,
 } from 'react'
-import { IEditorResolverService, IWorkspaceService, URI } from '@universe-editor/platform'
+import { IWorkspaceService, URI } from '@universe-editor/platform'
 import { IResourceAccessService } from '../../../shared/ipc/resourceAccessService.js'
 import {
   inlineToText,
@@ -40,8 +40,9 @@ import {
 } from '../../services/acp/filePathLink.js'
 import { CodeBlock } from '../agents/CodeBlock.js'
 import { MermaidBlock } from './MermaidBlock.js'
-import { useService, useOptionalService } from '../useService.js'
+import { useOptionalService } from '../useService.js'
 import { useMarkdownFileLink, type OpenMarkdownLinkOptions } from './useMarkdownFileLink.js'
+import { fileUriLinkTarget } from './markdownLinkResolve.js'
 import { findMarkdownAnchor } from './markdownAnchors.js'
 import { asPreviewResourceUri } from './resourceUri.js'
 import styles from './markdown.module.css'
@@ -453,7 +454,6 @@ function parseInlineCodeMarkdownLink(
 }
 
 function SafeLink({ href, children }: { href: string; children: ReactNode }) {
-  const editorResolver = useService(IEditorResolverService)
   const openFileLink = useContext(FileLinkContext)
   const scrollToAnchor = useContext(AnchorScrollContext)
   const openDocLink = useContext(DocLinkContext)
@@ -485,11 +485,16 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
       return
     }
     if (isFile) {
-      try {
-        const uri = URI.parse(href)
-        void editorResolver.openEditor(uri)
-      } catch {
-        // Malformed URI — silently ignore so untrusted input can't crash render.
+      // Route through the same file-link pipeline as plain path links so a
+      // directory target opens as a folder window and a markdown target can
+      // open as a preview — not blindly into the editor resolver.
+      const target = fileUriLinkTarget(href)
+      if (target) {
+        openFileLink(target.path, target.line, target.col, {
+          toSide: e.ctrlKey || e.metaKey,
+          openFolderInCurrentWindow: (e.ctrlKey || e.metaKey) && e.altKey,
+          ...(target.fragment !== undefined ? { fragment: target.fragment } : {}),
+        })
       }
       return
     }

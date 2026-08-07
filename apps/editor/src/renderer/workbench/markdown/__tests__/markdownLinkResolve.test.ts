@@ -5,7 +5,12 @@
 
 import { describe, expect, it } from 'vitest'
 import { URI } from '@universe-editor/platform'
-import { isAbsolutePath, markdownLinkCandidates, searchPatternFor } from '../markdownLinkResolve.js'
+import {
+  fileUriLinkTarget,
+  isAbsolutePath,
+  markdownLinkCandidates,
+  searchPatternFor,
+} from '../markdownLinkResolve.js'
 
 const root = URI.file('/repo')
 const baseDir = URI.file('/repo/docs/plan')
@@ -98,5 +103,42 @@ describe('searchPatternFor', () => {
 
   it('is empty for a path of only relative segments', () => {
     expect(searchPatternFor('../..')).toBe('')
+  })
+})
+
+describe('fileUriLinkTarget', () => {
+  it('extracts the path from a file: URI link', () => {
+    expect(fileUriLinkTarget('file:///D:/git_project/vscode')).toEqual({
+      path: 'D:/git_project/vscode',
+    })
+  })
+
+  it('decodes percent-encoded path segments', () => {
+    expect(fileUriLinkTarget('file:///D:/git_project/Universe%20Editor')).toEqual({
+      path: 'D:/git_project/Universe Editor',
+    })
+  })
+
+  it('splits a :line:col location off the URI path', () => {
+    expect(fileUriLinkTarget('file:///D:/repo/src/a.ts:12:5')).toEqual({
+      path: 'D:/repo/src/a.ts',
+      line: 12,
+      col: 5,
+    })
+  })
+
+  it('splits the fragment off a file: URI link', () => {
+    expect(fileUriLinkTarget('file:///D:/repo/docs/foo.md#hello')).toEqual({
+      path: 'D:/repo/docs/foo.md',
+      fragment: 'hello',
+    })
+  })
+
+  it('extracts a POSIX file: URI path', () => {
+    expect(fileUriLinkTarget('file:///etc/hosts')).toEqual({ path: '/etc/hosts' })
+  })
+
+  it('rejects a malformed file: URI', () => {
+    expect(fileUriLinkTarget('file://')).toBeUndefined()
   })
 })

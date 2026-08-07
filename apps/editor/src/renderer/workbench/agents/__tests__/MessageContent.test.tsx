@@ -6,13 +6,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   IEditorResolverService,
+  IEditorService,
+  IFileService,
   InstantiationService,
   ServiceCollection,
 } from '@universe-editor/platform'
-import type { IEditorResolverService as IEditorResolverServiceType } from '@universe-editor/platform'
+import type {
+  IEditorResolverService as IEditorResolverServiceType,
+  IEditorService as IEditorServiceType,
+  IFileService as IFileServiceType,
+} from '@universe-editor/platform'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { MessageContent } from '../MessageContent.js'
 import { ServicesContext } from '../../useService.js'
@@ -197,12 +203,31 @@ describe('MessageContent', () => {
     expect(resolver.openEditor).not.toHaveBeenCalled()
   })
 
-  it('opens the editor when a file:// markdown link is clicked', () => {
+  it('opens the editor when a file:// markdown link is clicked', async () => {
     const resolver = makeEditorResolver()
-    renderContent([{ type: 'text', text: '[foo](file:///workspace/foo.ts)' }], resolver)
+    // file:// links resolve through the shared file-link pipeline, which probes
+    // the target on disk before opening.
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, resolver)
+    services.set(IFileService, {
+      _serviceBrand: undefined,
+      exists: () => Promise.resolve(true),
+      stat: (resource: unknown) =>
+        Promise.resolve({ resource, isFile: true, isDirectory: false, size: 0, mtime: 0 }),
+    } as unknown as IFileServiceType)
+    services.set(IEditorService, {
+      _serviceBrand: undefined,
+      openEditor: vi.fn(),
+    } as unknown as IEditorServiceType)
+    const inst = new InstantiationService(services)
+    render(
+      <ServicesContext.Provider value={inst}>
+        <MessageContent blocks={[{ type: 'text', text: '[foo](file:///workspace/foo.ts)' }]} />
+      </ServicesContext.Provider>,
+    )
     const a = screen.getByRole('link', { name: 'foo' })
     fireEvent.click(a)
-    expect(resolver.openEditor).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(resolver.openEditor).toHaveBeenCalledTimes(1))
   })
 
   it('routes external http(s) markdown links through window.open', () => {
