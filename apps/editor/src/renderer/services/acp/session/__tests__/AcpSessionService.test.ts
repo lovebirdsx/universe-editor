@@ -3945,4 +3945,54 @@ describe('AcpSessionService — stall watchdog', () => {
     expect(session.isReconnecting).toBe(false)
     svc.dispose()
   })
+
+  it('skips a session with a compaction in progress', async () => {
+    const { svc, session } = await makeRunningSession()
+    const stallSpy = vi.spyOn(session, 'handleStall')
+    session.applyCompaction('c-1', 'running')
+    await vi.advanceTimersByTimeAsync(5 * STALL_TIMEOUT_MS)
+    expect(stallSpy).not.toHaveBeenCalled()
+    expect(session.status.get()).toBe('running')
+    svc.dispose()
+  })
+
+  it('does not stall right after a long compaction settles', async () => {
+    // Regression: compaction lifecycle travels via ext-notifications, which
+    // used to never bump lastActivityAt. After a compaction longer than the
+    // stall timeout settled, the silence was still measured from BEFORE the
+    // compaction started, so the very next tick declared the turn wedged and
+    // killed the agent mid-turn.
+    const stallMs = 90_000 // above the 60s watchdog tick so tick alignment can't flake the assertions
+    const svc = makeService(stallMs)
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    void session.sendPrompt('hi')
+    await vi.advanceTimersByTimeAsync(10)
+    expect(session.status.get()).toBe('running')
+    const stallSpy = vi.spyOn(session, 'handleStall')
+
+    session.applyCompaction('c-1', 'running')
+    // A compaction outliving the stall timeout is skipped while running…
+    await vi.advanceTimersByTimeAsync(stallMs + 60_000)
+    expect(stallSpy).not.toHaveBeenCalled()
+    // …and its settle counts as activity, so the post-compaction turn gets a
+    // fresh silence window instead of an instant stall.
+    session.applyCompaction('c-1', 'success')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(stallSpy).not.toHaveBeenCalled()
+    // But genuine post-compaction silence still stalls.
+    await vi.advanceTimersByTimeAsync(stallMs + 60_000)
+    expect(stallSpy).toHaveBeenCalled()
+    svc.dispose()
+  })
+
+  it('handleStall itself refuses while a compaction is running (belt-and-braces)', async () => {
+    const { svc, session } = await makeRunningSession()
+    session.applyCompaction('c-1', 'running')
+    session.handleStall()
+    expect(session.status.get()).toBe('running')
+    expect(session.isReconnecting).toBe(false)
+    svc.dispose()
+  })
 })

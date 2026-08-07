@@ -776,6 +776,18 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   /**
+   * True while a compaction card sits in its `running` phase. Read by the
+   * stall watchdog: the fork reports compaction lifecycle through
+   * ext-notifications (no streamed text on the wire while it runs), so a
+   * compaction — however long — is expected silence, not a wedged turn.
+   */
+  get compactionInProgress(): boolean {
+    return this._timeline.some(
+      (it) => it.kind === 'compaction' && it.compaction.phase === 'running',
+    )
+  }
+
+  /**
    * The agent process died (or was declared stalled, or threw internally
    * mid-turn) while this session was live. Instead of sealing, park the
    * session back in `connecting`: the timeline is kept, in-flight prompts are
@@ -822,9 +834,12 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (this.status.get() === 'closed' || this.readOnly || this._reconnecting) return
     // A pending question/permission card means the silence is the user thinking,
     // not a wedged turn. The service-level watchdog already skips these; guard
-    // here too so future callers can't bypass the exemption.
+    // here too so future callers can't bypass the exemption. A running
+    // compaction is likewise expected silence (its lifecycle travels via
+    // ext-notifications, never session/update).
     if (this.pendingElicitation.get() !== undefined) return
     if (this.pendingPermission.get() !== undefined) return
+    if (this.compactionInProgress) return
     this._handleConnectionLost('stalled')
   }
 
@@ -2432,6 +2447,12 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   applyCompaction(id: string, phase: AcpCompactionPhase, reason?: string): void {
     if (this.readOnly) return
+    // Proof of life for the stall watchdog: compaction lifecycle travels via
+    // ext-notifications, which never touch `lastActivityAt` otherwise. The
+    // terminal-phase bump matters most — without it, the silence after a long
+    // compaction would be measured from BEFORE the compaction started and
+    // stall the turn the moment the card settles.
+    this._lastActivityAt = Date.now()
     const slotId = `compaction:${id}`
     const idx = this._timeline.findIndex((it) => it.kind === 'compaction' && it.id === slotId)
     const orphanIdx = this._timeline.findIndex(

@@ -1228,7 +1228,9 @@ export class AcpSessionService
    * Sessions mid-recovery or in backoff are skipped: their wait is expected
    * silence, not a wedge. Sessions awaiting user input (AskUserQuestion /
    * permission card) are also skipped: the wire is silent while the user
-   * thinks, and that wait is unbounded by nature.
+   * thinks, and that wait is unbounded by nature. So are sessions running a
+   * compaction: the fork reports its lifecycle via ext-notifications, never
+   * session/update, so the wire stays quiet for as long as it takes.
    */
   private _startStallWatchdog(): void {
     const interval = setInterval(() => this._checkStalledSessions(), STALL_WATCHDOG_TICK_MS)
@@ -1248,6 +1250,10 @@ export class AcpSessionService
       // long as the user thinks.
       if (session.pendingElicitation.get() !== undefined) continue
       if (session.pendingPermission.get() !== undefined) continue
+      // A running compaction is expected silence too: its lifecycle arrives
+      // via ext-notifications rather than session/update, so it never bumps
+      // lastActivityAt mid-run no matter how long it takes.
+      if (session.compactionInProgress) continue
       const silentMs = now - session.lastActivityAt
       if (silentMs < stallMs) continue
       this._logger.warn(
