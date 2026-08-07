@@ -1617,6 +1617,42 @@ describe('AcpSession.timeline', () => {
     s.endHistoryReplay()
   })
 
+  it('renders a replayed user image block in the leading image row ahead of the text', async () => {
+    // Codex resume replay: the fork restores pasted images (persisted as data:
+    // URLs in the rollout) as real image blocks ahead of the text chunk. The
+    // editor must keep that lead — an image merged into the text stream would
+    // render after the user's words.
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'image', data: 'AAA', mimeType: 'image/png' },
+        messageId: 'mid-img',
+      } as never,
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'hi' },
+        messageId: 'mid-img',
+      } as never,
+    })
+    s.endHistoryReplay()
+
+    const userMsg = s.timeline
+      .get()
+      .flatMap((it) => (it.kind === 'message' ? [it.message] : []))
+      .find((m) => m.role === 'user')
+    expect(userMsg?.blocks[0]).toEqual({ type: 'image', data: 'AAA', mimeType: 'image/png' })
+    expect(userMsg?.blocks[1]).toMatchObject({ type: 'text', text: 'hi' })
+  })
+
   it('config_option_update still applies while replay is suppressed', async () => {
     const s = await svc.createSession()
     await s.whenConnected()
