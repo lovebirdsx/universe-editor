@@ -125,7 +125,10 @@ export class FileEditorStatusContribution extends Disposable implements IWorkben
   }
 
   private _renderCursor(line: number, column: number): void {
-    const text = `Ln ${line}, Col ${column}`
+    const text = localize('status.cursorPositionText', 'Ln {line}, Col {column}', {
+      line,
+      column,
+    })
     if (!this._cursorEntry) {
       this._cursorEntry = this._statusBarService.addEntry({
         text,

@@ -15,6 +15,7 @@ import {
   IEditorGroupsService,
   type IDisposable,
   type IEditorInput,
+  localize,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
@@ -231,7 +232,9 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
   if (!monacoNs) {
     return (
       <div className={styles['diffEditor']} data-testid="diff-editor">
-        <div className={styles['diffEditorLoading']}>正在加载编辑器…</div>
+        <div className={styles['diffEditorLoading']}>
+          {localize('editor.loading', 'Loading editor…')}
+        </div>
       </div>
     )
   }

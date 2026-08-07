@@ -41,7 +41,7 @@ describe('AbnormalExitNotificationContribution', () => {
     expect(arg.severity).toBe(Severity.Warning)
     expect(arg.sticky).toBe(true)
     expect(arg.message).toContain('2')
-    const reveal = arg.actions.find((a: { label: string }) => a.label.includes('崩溃目录'))
+    const reveal = arg.actions.find((a: { label: string }) => a.label.includes('Crashes'))
     expect(reveal).toBeDefined()
     reveal.run()
     expect(diagnostics.revealCrashesFolder).toHaveBeenCalledTimes(1)
@@ -59,7 +59,7 @@ describe('AbnormalExitNotificationContribution', () => {
     const c = new AbnormalExitNotificationContribution(diagnostics, notifications as never)
     await vi.waitFor(() => expect(notifications.notify).toHaveBeenCalledTimes(1))
     const message = notifications.notify.mock.calls[0]?.[0].message
-    expect(message).toContain('外部')
+    expect(message).toContain('externally')
     expect(message).toContain(new Date(Date.UTC(2026, 7, 6, 12, 37, 59)).toLocaleString())
     c.dispose()
   })

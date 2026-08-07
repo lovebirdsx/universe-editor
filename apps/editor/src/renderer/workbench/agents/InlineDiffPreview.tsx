@@ -7,6 +7,7 @@
 
 import { useMemo, useState } from 'react'
 import { ArrowLeftRight } from 'lucide-react'
+import { localize } from '@universe-editor/platform'
 import { computeLineDiff, type DiffLine } from './lineDiff.js'
 import styles from './agents.module.css'
 
@@ -83,7 +84,7 @@ export function InlineDiffPreview({
           type="button"
           className={styles['inlineDiffOpen']}
           onClick={onOpen}
-          data-tooltip="查看完整修改"
+          data-tooltip={localize('acp.inlineDiff.openTooltip', 'View full changes')}
           data-testid="acp-inline-diff-open"
         >
           <ArrowLeftRight size={14} aria-hidden />
@@ -99,7 +100,9 @@ export function InlineDiffPreview({
             className={styles['inlineDiffExpand']}
             onClick={() => setExpanded(true)}
           >
-            … 展开 {hiddenCount} 行
+            {localize('acp.inlineDiff.expandLines', '… Expand {count} lines', {
+              count: hiddenCount,
+            })}
           </button>
         )}
       </pre>

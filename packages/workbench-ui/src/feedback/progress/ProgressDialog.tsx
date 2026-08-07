@@ -4,6 +4,7 @@
  *  a portal and feeds it DialogProgressState.
  *--------------------------------------------------------------------------------------------*/
 
+import { localize } from '@universe-editor/platform'
 import type { DialogProgressState } from './progressViewModel.js'
 import styles from './ProgressDialog.module.css'
 
@@ -40,7 +41,7 @@ export function ProgressDialog({ state }: ProgressDialogProps) {
               onClick={state.cancel}
               data-testid="progress-dialog-cancel"
             >
-              Cancel
+              {localize('common.cancel', 'Cancel')}
             </button>
           </div>
         )}

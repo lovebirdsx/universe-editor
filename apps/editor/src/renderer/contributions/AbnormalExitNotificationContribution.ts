@@ -35,18 +35,22 @@ export class AbnormalExitNotificationContribution
     this._notifications.notify({
       severity: Severity.Warning,
       message: hasDumps
-        ? localize('abnormalExit.withDumps', '上次会话异常终止，已留下 {count} 个崩溃转储文件。', {
-            count: String(report.crashDumps.length),
-          })
+        ? localize(
+            'abnormalExit.withDumps',
+            'The previous session terminated abnormally and left {count} crash dump files.',
+            {
+              count: String(report.crashDumps.length),
+            },
+          )
         : localize(
             'abnormalExit.noDumps',
-            '上次会话在 {time} 前后未正常退出（可能被外部强制终止，如杀毒软件 / 内存不足）。',
+            'The previous session did not exit cleanly around {time} (it may have been killed externally, e.g. by antivirus or out of memory).',
             { time: diedAround },
           ),
       sticky: true,
       actions: [
         {
-          label: localize('abnormalExit.openCrashes', '打开崩溃目录'),
+          label: localize('abnormalExit.openCrashes', 'Open Crashes Folder'),
           run: () => {
             void this._diagnostics.revealCrashesFolder()
           },

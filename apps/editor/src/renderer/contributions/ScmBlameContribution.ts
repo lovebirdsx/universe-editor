@@ -374,7 +374,8 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
     providerId: string | undefined,
   ): ResolvedLineBlame | undefined {
     if (result.uncommittedLines.includes(line)) {
-      return { decorationText: 'Not Committed Yet', statusBarText: 'Not Committed Yet' }
+      const text = localize('scm.blame.notCommittedYet', 'Not Committed Yet')
+      return { decorationText: text, statusBarText: text }
     }
     const commit = result.commits.find((c) =>
       c.ranges.some((range) => line >= range.startLine && line <= range.endLine),
@@ -488,7 +489,7 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
       CommandsRegistry.getCommand(`${providerId}-graph.view`) !== undefined
     const entry = {
       text: blame.statusBarText,
-      tooltip: 'Blame',
+      tooltip: localize('scm.blame.statusBarTooltip', 'Blame'),
       alignment: StatusBarAlignment.Right,
       priority: 95,
       ...(blame.hash && hasGraph ? { command: OPEN_COMMIT_COMMAND } : {}),

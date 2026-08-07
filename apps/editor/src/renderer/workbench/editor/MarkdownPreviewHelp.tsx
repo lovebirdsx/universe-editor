@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect } from 'react'
+import { localize } from '@universe-editor/platform'
 import styles from './MarkdownPreviewEditor.module.css'
 
 interface Shortcut {
@@ -13,19 +14,45 @@ interface Shortcut {
   readonly desc: string
 }
 
-const SHORTCUTS: readonly Shortcut[] = [
-  { keys: 'f', desc: '链接提示（当前打开）' },
-  { keys: 'F', desc: '链接提示（侧边打开）' },
-  { keys: 'j / k', desc: '下 / 上 滚动一行' },
-  { keys: 'h / l', desc: '左 / 右 滚动' },
-  { keys: 'd / u', desc: '下 / 上 半屏' },
-  { keys: 'Space / ⇧Space', desc: '下 / 上 整屏' },
-  { keys: 'gg / G', desc: '滚到顶部 / 底部' },
-  { keys: 'H / L', desc: '后退 / 前进' },
-  { keys: 'Ctrl+F', desc: '在预览中查找' },
-  { keys: '3j', desc: '数字前缀重复（如向下 3 行）' },
-  { keys: '?', desc: '显示 / 隐藏本帮助' },
-]
+function shortcuts(): readonly Shortcut[] {
+  return [
+    {
+      keys: 'f',
+      desc: localize('markdownPreview.help.linkHintsCurrent', 'Link hints (open here)'),
+    },
+    {
+      keys: 'F',
+      desc: localize('markdownPreview.help.linkHintsSide', 'Link hints (open to the side)'),
+    },
+    { keys: 'j / k', desc: localize('markdownPreview.help.scrollLine', 'Scroll down / up a line') },
+    {
+      keys: 'h / l',
+      desc: localize('markdownPreview.help.scrollHorizontal', 'Scroll left / right'),
+    },
+    {
+      keys: 'd / u',
+      desc: localize('markdownPreview.help.scrollHalfPage', 'Scroll down / up half a page'),
+    },
+    {
+      keys: 'Space / ⇧Space',
+      desc: localize('markdownPreview.help.scrollPage', 'Scroll down / up a page'),
+    },
+    {
+      keys: 'gg / G',
+      desc: localize('markdownPreview.help.scrollTopBottom', 'Scroll to top / bottom'),
+    },
+    { keys: 'H / L', desc: localize('markdownPreview.help.backForward', 'Back / forward') },
+    { keys: 'Ctrl+F', desc: localize('markdownPreview.help.find', 'Find in preview') },
+    {
+      keys: '3j',
+      desc: localize(
+        'markdownPreview.help.countPrefix',
+        'Numeric prefix repeats (e.g. 3 lines down)',
+      ),
+    },
+    { keys: '?', desc: localize('markdownPreview.help.toggle', 'Show / hide this help') },
+  ]
+}
 
 export function MarkdownPreviewHelp({ onClose }: { onClose: () => void }) {
   useEffect(() => {
@@ -48,10 +75,12 @@ export function MarkdownPreviewHelp({ onClose }: { onClose: () => void }) {
       onClick={onClose}
     >
       <div className={styles['helpPanel']} onClick={(e) => e.stopPropagation()}>
-        <div className={styles['helpTitle']}>键盘快捷键</div>
+        <div className={styles['helpTitle']}>
+          {localize('markdownPreview.help.title', 'Keyboard Shortcuts')}
+        </div>
         <table className={styles['helpTable']}>
           <tbody>
-            {SHORTCUTS.map((s) => (
+            {shortcuts().map((s) => (
               <tr key={s.keys}>
                 <td className={styles['helpKeys']}>
                   <kbd>{s.keys}</kbd>

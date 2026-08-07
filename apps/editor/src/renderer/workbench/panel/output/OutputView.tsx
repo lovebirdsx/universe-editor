@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react'
-import { IConfigurationService, IOutputService, markAsSingleton } from '@universe-editor/platform'
+import {
+  IConfigurationService,
+  IOutputService,
+  localize,
+  markAsSingleton,
+} from '@universe-editor/platform'
 import {
   OUTPUT_FONT_FAMILY_DEFAULT,
   OUTPUT_FONT_SIZE_DEFAULT,
@@ -46,7 +51,7 @@ export function OutputView() {
           <LogOutputView fontSize={fontSize} fontFamily={fontFamily} />
         ) : (
           <div className={styles['empty']} style={{ fontSize: `${fontSize}px`, fontFamily }}>
-            No output.
+            {localize('output.empty', 'No output.')}
           </div>
         )}
       </div>

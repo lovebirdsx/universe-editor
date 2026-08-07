@@ -14,6 +14,7 @@ import {
   KeybindingsRegistry,
   KeybindingWeight,
   StatusBarAlignment,
+  localize,
   type IDisposable,
 } from '@universe-editor/platform'
 import { useService } from './useService.js'
@@ -176,7 +177,9 @@ export function useGlobalKeybindingHandler(): void {
     function enterChord(key: string) {
       clearChord()
       const entry = statusBarService.addEntry({
-        text: `(${formatChord([key])}) was pressed. Waiting for second key…`,
+        text: localize('keybinding.chordPending', '({key}) was pressed. Waiting for second key…', {
+          key: formatChord([key]),
+        }),
         alignment: StatusBarAlignment.Left,
         priority: 10_000,
       })

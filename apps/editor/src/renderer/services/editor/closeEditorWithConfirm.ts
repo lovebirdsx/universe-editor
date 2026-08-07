@@ -4,7 +4,12 @@
  *  may be dirty. Used by tab × buttons, Ctrl+W, and Close All paths.
  *--------------------------------------------------------------------------------------------*/
 
-import type { EditorInput, IDialogService, IEditorGroup } from '@universe-editor/platform'
+import {
+  localize,
+  type EditorInput,
+  type IDialogService,
+  type IEditorGroup,
+} from '@universe-editor/platform'
 
 /**
  * Returns `true` when the editor was closed (either was clean, saved, or
@@ -28,11 +33,20 @@ export async function closeEditorWithConfirm(
   }
 
   const result = await dialogService.confirm({
-    message: `Do you want to save the changes you made to ${input.label}?`,
-    detail: "Your changes will be lost if you don't save them.",
-    primaryButton: 'Save',
-    secondaryButton: "Don't Save",
-    cancelButton: 'Cancel',
+    message: localize(
+      'dialog.closeEditor.message',
+      'Do you want to save the changes you made to {label}?',
+      {
+        label: input.label,
+      },
+    ),
+    detail: localize(
+      'dialog.closeEditor.detail',
+      "Your changes will be lost if you don't save them.",
+    ),
+    primaryButton: localize('common.save', 'Save'),
+    secondaryButton: localize('dialog.closeEditor.dontSave', "Don't Save"),
+    cancelButton: localize('common.cancel', 'Cancel'),
     type: 'warning',
   })
 

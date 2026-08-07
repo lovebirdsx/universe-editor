@@ -11,6 +11,7 @@ import { promises as fs } from 'node:fs'
 import { basename } from 'node:path'
 import {
   ISSUE_URL_MAX_LENGTH,
+  localize,
   type IIssueReporterProvider,
   type ILogger,
   type IssueReportPayload,
@@ -73,11 +74,28 @@ export class ILoopIssueReporterProvider implements IIssueReporterProvider {
       body: formData,
     })
     if (!response.ok) {
-      throw new Error(`诊断包上传失败: HTTP ${response.status} ${response.statusText}`)
+      throw new Error(
+        localize(
+          'issueReporter.error.uploadHttp',
+          'Diagnostics upload failed: HTTP {status} {statusText}',
+          {
+            status: response.status,
+            statusText: response.statusText,
+          },
+        ),
+      )
     }
     const data = (await response.json()) as { path?: string }
     if (!data.path) {
-      throw new Error(`诊断包上传响应中没有 path: ${JSON.stringify(data)}`)
+      throw new Error(
+        localize(
+          'issueReporter.error.uploadNoPath',
+          'Diagnostics upload response has no path: {body}',
+          {
+            body: JSON.stringify(data),
+          },
+        ),
+      )
     }
     this._logger.info(`diagnostics zip uploaded: ${localPath} -> ${data.path}`)
     return { name, path: data.path }

@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react'
+import { localize } from '@universe-editor/platform'
 import { cx } from './cx.js'
 import styles from './Spinner.module.css'
 
@@ -14,7 +15,7 @@ export function Spinner({ size = 16, className, style }: SpinnerProps) {
       className={cx(styles['spinner'], className)}
       style={{ width: size, height: size, ...style }}
       role="status"
-      aria-label="Loading"
+      aria-label={localize('common.loading', 'Loading')}
     />
   )
 }

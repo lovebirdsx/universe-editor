@@ -11,6 +11,7 @@ import {
   ICommandService,
   IEditorGroupsService,
   KeybindingWeight,
+  localize,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -126,7 +127,7 @@ export class OpenActiveFileChangesAction extends Action2 {
     const modified = model?.getValue() ?? active.backupContent
 
     await commandService.executeCommand('_workbench.openDiff', {
-      title: `${active.label} (Working Tree)`,
+      title: localize('diff.workingTreeTitle', '{label} (Working Tree)', { label: active.label }),
       originalUri: active.resource.toString(),
       original: head ?? '',
       modified,

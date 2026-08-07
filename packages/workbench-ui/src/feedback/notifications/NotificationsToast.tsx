@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { INotification } from '@universe-editor/platform'
-import { Severity } from '@universe-editor/platform'
+import { Severity, localize } from '@universe-editor/platform'
 import styles from './NotificationsToast.module.css'
 
 export interface NotificationsToastProps {
@@ -61,7 +61,7 @@ export function NotificationsToast({
                     type="button"
                     data-testid="notification-cancel-btn"
                   >
-                    Cancel
+                    {localize('common.cancel', 'Cancel')}
                   </button>
                 )}
               </div>
@@ -83,7 +83,7 @@ export function NotificationsToast({
           </div>
           {n.sticky && (
             <button
-              aria-label="Dismiss notification"
+              aria-label={localize('notification.dismissAria', 'Dismiss notification')}
               className={styles['closeBtn']}
               onClick={() => onDismiss(n.id)}
               type="button"

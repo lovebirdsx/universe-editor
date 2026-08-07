@@ -14,6 +14,7 @@ import {
   IEditorService,
   IUriIdentityService,
   IWorkspaceService,
+  localize,
   URI,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
@@ -220,14 +221,14 @@ export function SearchView() {
       {regexError && <p className={styles['error']}>{regexError}</p>}
       {isStale && results.length > 0 && (
         <div className={styles['staleBanner']} data-testid="search-stale">
-          <span>结果可能已过期</span>
+          <span>{localize('search.staleBanner', 'Results may be outdated')}</span>
           <button
             type="button"
             className={styles['rerunBtn']}
             onClick={rerunSearch}
             data-testid="search-rerun"
           >
-            重新搜索
+            {localize('search.rerun', 'Search Again')}
           </button>
         </div>
       )}
@@ -235,10 +236,18 @@ export function SearchView() {
         <div className={styles['summaryRow']}>
           <p className={styles['summary']} data-testid="search-summary">
             {isSearching
-              ? `搜索中… ${progress ? `${progress.filesMatched}/${progress.filesScanned} 文件` : ''}`
+              ? progress
+                ? localize('search.searchingProgress', 'Searching… {matched}/{scanned} files', {
+                    matched: progress.filesMatched,
+                    scanned: progress.filesScanned,
+                  })
+                : localize('search.searching', 'Searching…')
               : results.length === 0
-                ? '未找到结果'
-                : `${totals.matches} 个匹配，分布在 ${totals.files} 个文件`}
+                ? localize('search.noResults', 'No results found')
+                : localize('search.summary', '{matches} matches in {files} files', {
+                    matches: totals.matches,
+                    files: totals.files,
+                  })}
           </p>
           {replaceVisible && results.length > 0 && (
             <button
@@ -246,7 +255,7 @@ export function SearchView() {
               className={styles['replaceAllBtn']}
               onClick={() => void replaceAll()}
             >
-              全部替换
+              {localize('search.replaceAll', 'Replace All')}
             </button>
           )}
         </div>

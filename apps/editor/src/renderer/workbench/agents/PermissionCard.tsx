@@ -138,7 +138,7 @@ function ActivePermissionCard({ pending }: { pending: AcpPendingPermission }) {
           onClick={() => pending.cancel()}
           data-testid="acp-permission-cancel"
         >
-          Dismiss
+          {localize('common.dismiss', 'Dismiss')}
         </button>
       </div>
       {isPlanReview && (

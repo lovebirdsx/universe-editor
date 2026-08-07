@@ -64,18 +64,18 @@ export async function runReportIssueFlow(deps: ReportIssueFlowDeps): Promise<voi
       [
         {
           id: 'attach',
-          label: localize('reportIssue.attachDiagnostics', '附带诊断包'),
+          label: localize('reportIssue.attachDiagnostics', 'Attach diagnostics bundle'),
           description: localize(
             'reportIssue.attachDiagnostics.description',
-            '上传诊断 zip 作为附件（含系统信息与近期日志）',
+            'Upload the diagnostics zip as an attachment (includes system info and recent logs)',
           ),
         },
-        { id: 'skip', label: localize('reportIssue.skipDiagnostics', '不附带') },
+        { id: 'skip', label: localize('reportIssue.skipDiagnostics', 'Do not attach') },
       ],
       {
         placeholder: localize(
           'reportIssue.attachPrompt',
-          '是否在问题报告中附带诊断包？（诊断摘要已复制到剪贴板）',
+          'Attach a diagnostics bundle to the issue report? (The diagnostics summary has been copied to your clipboard)',
         ),
       },
     )
@@ -87,7 +87,7 @@ export async function runReportIssueFlow(deps: ReportIssueFlowDeps): Promise<voi
     markdown,
     pasteHint: localize(
       'reportIssue.pasteHint',
-      '（诊断信息较长，请从剪贴板粘贴 / paste the diagnostics summary from your clipboard）',
+      '(The diagnostics summary is long — please paste it from your clipboard)',
     ),
     attachDiagnostics,
     ...(provider.id === ILOOP_PROVIDER_ID
@@ -102,7 +102,7 @@ export async function runReportIssueFlow(deps: ReportIssueFlowDeps): Promise<voi
       severity: Severity.Info,
       message: localize(
         'reportIssue.opened',
-        '诊断摘要已复制到剪贴板，请在打开的上报页面中补充问题描述。',
+        'The diagnostics summary has been copied to your clipboard. Please describe the issue on the reporting page that just opened.',
       ),
     })
   } catch (err) {
@@ -110,17 +110,25 @@ export async function runReportIssueFlow(deps: ReportIssueFlowDeps): Promise<voi
     if (!attachDiagnostics) {
       deps.notifications.notify({
         severity: Severity.Error,
-        message: localize('reportIssue.failed', '打开问题上报页面失败：{message}', { message }),
+        message: localize(
+          'reportIssue.failed',
+          'Failed to open the issue reporting page: {message}',
+          { message },
+        ),
       })
       return
     }
     deps.notifications.notify({
       severity: Severity.Error,
       sticky: true,
-      message: localize('reportIssue.uploadFailed', '诊断包上传失败：{message}', { message }),
+      message: localize(
+        'reportIssue.uploadFailed',
+        'Failed to upload the diagnostics bundle: {message}',
+        { message },
+      ),
       actions: [
         {
-          label: localize('reportIssue.openWithoutAttachment', '不附带诊断包直接打开'),
+          label: localize('reportIssue.openWithoutAttachment', 'Open without attachment'),
           run: () => {
             void deps.issueReporter
               .buildIssueUrl(provider.id, { ...payload, attachDiagnostics: false })

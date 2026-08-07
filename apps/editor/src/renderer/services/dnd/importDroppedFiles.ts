@@ -6,7 +6,12 @@
  *  containing folder is a no-op.
  *--------------------------------------------------------------------------------------------*/
 
-import { type IDialogService, type IFileService, type URI } from '@universe-editor/platform'
+import {
+  localize,
+  type IDialogService,
+  type IFileService,
+  type URI,
+} from '@universe-editor/platform'
 
 export async function importDroppedResources(
   sources: readonly URI[],
@@ -25,9 +30,13 @@ export async function importDroppedResources(
 
     if (await fileService.exists(dest)) {
       const { confirmed } = await dialogService.confirm({
-        message: `A file or folder with the name "${name}" already exists in the destination folder. Do you want to replace it?`,
-        detail: 'This action is irreversible!',
-        primaryButton: 'Replace',
+        message: localize(
+          'dnd.replaceExisting.message',
+          'A file or folder with the name "{name}" already exists in the destination folder. Do you want to replace it?',
+          { name },
+        ),
+        detail: localize('dnd.replaceExisting.detail', 'This action is irreversible!'),
+        primaryButton: localize('common.replace', 'Replace'),
         type: 'warning',
       })
       if (!confirmed) continue

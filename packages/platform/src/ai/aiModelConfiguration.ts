@@ -12,6 +12,7 @@ import type {
   AiModelConfigProperty,
   AiModelConfigSchema,
 } from './aiModelTypes.js'
+import { localize } from '../nls/nls.js'
 
 /** Persisted form of one provider group, as stored in aiSettings.json. */
 export interface AiProviderGroup {
@@ -136,7 +137,7 @@ export function buildModelConfigSchema(
     merged.reasoningEffort = {
       type: 'enum',
       enum: [...config.supportsReasoningEffort],
-      description: 'Reasoning effort level.',
+      description: localize('ai.modelSettings.reasoningEffort', 'Reasoning effort level.'),
       group: 'navigation',
     }
   }

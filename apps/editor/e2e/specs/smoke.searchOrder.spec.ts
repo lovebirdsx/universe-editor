@@ -63,7 +63,7 @@ test.describe('@p1 search order', () => {
     const runOnce = async (): Promise<string[]> => {
       await input.fill('')
       await input.fill(NEEDLE)
-      await expect(searchView.getByTestId('search-summary')).toContainText('匹配', {
+      await expect(searchView.getByTestId('search-summary')).toContainText('matches', {
         timeout: 20000,
       })
       // The tree renders incrementally after the summary appears; under load a

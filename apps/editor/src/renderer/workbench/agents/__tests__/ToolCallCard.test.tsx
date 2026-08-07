@@ -235,7 +235,7 @@ describe('ToolCallCard', () => {
       }),
     )
     // Friendly title, not the raw "Ready to code?".
-    expect(screen.getByText('已继续规划')).toBeTruthy()
+    expect(screen.getByText('Continued planning')).toBeTruthy()
     // The internal (default, no-note) rejection text is suppressed from the body.
     expect(screen.queryByText(/User rejected request to exit plan mode/)).toBeNull()
     expect(screen.queryByTestId('acp-keep-planning-feedback')).toBeNull()
@@ -254,7 +254,7 @@ describe('ToolCallCard', () => {
         blocks: [{ type: 'text', text: '先不做了' }],
       }),
     )
-    expect(screen.getByText('已继续规划')).toBeTruthy()
+    expect(screen.getByText('Continued planning')).toBeTruthy()
     const feedback = screen.getByTestId('acp-keep-planning-feedback')
     expect(feedback.textContent).toContain('先不做了')
     expect(screen.getByLabelText('completed')).toBeTruthy()

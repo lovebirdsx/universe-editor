@@ -7,10 +7,13 @@ import {
   Action2,
   IEditorService,
   KeybindingWeight,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { GitGraphEditorInput } from '../services/editor/GitGraphEditorInput.js'
 import { gitGraphViewState } from '../services/gitGraph/gitGraphViewState.js'
+
+const CATEGORY = localize2('command.category.gitGraph', 'Git Graph')
 
 export class ViewGitGraphAction extends Action2 {
   static readonly ID = 'git-graph.view'
@@ -18,8 +21,8 @@ export class ViewGitGraphAction extends Action2 {
   constructor() {
     super({
       id: ViewGitGraphAction.ID,
-      title: 'View Git Graph',
-      category: 'Git Graph',
+      title: localize2('action.gitGraph.view', 'View Git Graph'),
+      category: CATEGORY,
       f1: true,
     })
   }
@@ -39,7 +42,10 @@ export class OpenGitGraphFromExtensionAction extends Action2 {
   static readonly ID = '_workbench.openGitGraph'
 
   constructor() {
-    super({ id: OpenGitGraphFromExtensionAction.ID, title: 'Open Git Graph' })
+    super({
+      id: OpenGitGraphFromExtensionAction.ID,
+      title: localize2('action.gitGraph.open', 'Open Git Graph'),
+    })
   }
 
   override async run(accessor: ServicesAccessor, hash?: unknown): Promise<void> {
@@ -56,8 +62,8 @@ export class GitGraphFocusSearchAction extends Action2 {
   constructor() {
     super({
       id: GitGraphFocusSearchAction.ID,
-      title: 'Focus Search',
-      category: 'Git Graph',
+      title: localize2('action.gitGraph.focusSearch', 'Focus Search'),
+      category: CATEGORY,
       keybinding: { primary: 'ctrl+f', when: "activeEditorId == 'universe:/gitGraph'" },
       precondition: "activeEditorId == 'universe:/gitGraph'",
       f1: true,
@@ -75,8 +81,8 @@ export class GitGraphRefreshAction extends Action2 {
   constructor() {
     super({
       id: GitGraphRefreshAction.ID,
-      title: 'Refresh',
-      category: 'Git Graph',
+      title: localize2('action.gitGraph.refresh', 'Refresh'),
+      category: CATEGORY,
       // Outranks the unscoped Open Recent (ctrl+r) binding — resolution is
       // weight-first, when-clauses only filter, they don't boost priority.
       keybinding: {
@@ -100,8 +106,8 @@ export class GitGraphToggleRemoteBranchesAction extends Action2 {
   constructor() {
     super({
       id: GitGraphToggleRemoteBranchesAction.ID,
-      title: 'Toggle Remote Branches',
-      category: 'Git Graph',
+      title: localize2('action.gitGraph.toggleRemoteBranches', 'Toggle Remote Branches'),
+      category: CATEGORY,
       f1: true,
     })
   }

@@ -294,8 +294,10 @@ test.describe('@p0 quick access', () => {
         void window.__E2E__!.runCommand('workbench.action.quickOpen')
       })
       await workbench.quickInput.waitForVisible()
-      await workbench.quickInput.input.fill('预览')
-      const previewOption = workbench.quickInput.dialog.getByRole('option', { name: /预览 a\.md/ })
+      await workbench.quickInput.input.fill('Preview')
+      const previewOption = workbench.quickInput.dialog.getByRole('option', {
+        name: /Preview a\.md/,
+      })
       await expect(previewOption).toBeVisible()
       // Closed virtual-scheme entries carry the same resource icon as the open
       // editor pick (regression: the icon slot used to render empty).

@@ -184,14 +184,20 @@ async function exportDiagnostics(
     const zipPath = await diagnostics.exportDiagnosticsZip()
     notifications.notify({
       severity: Severity.Info,
-      message: localize('exportDiagnostics.done', '诊断包已导出：{path}', { path: zipPath }),
+      message: localize('exportDiagnostics.done', 'Diagnostics bundle exported: {path}', {
+        path: zipPath,
+      }),
     })
   } catch (err) {
     notifications.notify({
       severity: Severity.Error,
-      message: localize('exportDiagnostics.failed', '诊断包导出失败：{message}', {
-        message: err instanceof Error ? err.message : String(err),
-      }),
+      message: localize(
+        'exportDiagnostics.failed',
+        'Failed to export diagnostics bundle: {message}',
+        {
+          message: err instanceof Error ? err.message : String(err),
+        },
+      ),
     })
   }
 }

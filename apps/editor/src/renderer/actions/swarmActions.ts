@@ -16,11 +16,14 @@ import {
   MenuId,
   PartId,
   localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { SwarmReviewEditorInput } from '../services/editor/SwarmReviewEditorInput.js'
 import { requestSwarmReviewsRefresh } from '../services/swarm/swarmViewState.js'
 import { driveSwarmNotificationTick } from '../services/swarm/swarmNotificationTick.js'
+
+const CATEGORY = localize2('command.category.swarm', 'Swarm')
 
 /** Focus (and reveal) the Swarm Reviews view container in the primary side bar. */
 function revealSwarmContainer(accessor: ServicesAccessor): void {
@@ -35,8 +38,8 @@ export class OpenSwarmReviewsAction extends Action2 {
   constructor() {
     super({
       id: OpenSwarmReviewsAction.ID,
-      title: 'Show Swarm Reviews',
-      category: 'Swarm',
+      title: localize2('action.swarm.showReviews', 'Show Swarm Reviews'),
+      category: CATEGORY,
       f1: true,
     })
   }
@@ -52,8 +55,8 @@ export class OpenSwarmReviewAction extends Action2 {
   constructor() {
     super({
       id: OpenSwarmReviewAction.ID,
-      title: 'Open Swarm Review',
-      category: 'Swarm',
+      title: localize2('action.swarm.openReview', 'Open Swarm Review'),
+      category: CATEGORY,
     })
   }
 
@@ -75,8 +78,8 @@ export class OpenSwarmReviewByIdAction extends Action2 {
   constructor() {
     super({
       id: OpenSwarmReviewByIdAction.ID,
-      title: 'Open Swarm Review by ID…',
-      category: 'Swarm',
+      title: localize2('action.swarm.openReviewById', 'Open Swarm Review by ID…'),
+      category: CATEGORY,
       f1: true,
       icon: 'go-to-file',
       menu: [
@@ -121,7 +124,10 @@ export class WorkbenchOpenSwarmReviewAction extends Action2 {
   static readonly ID = '_workbench.openSwarmReview'
 
   constructor() {
-    super({ id: WorkbenchOpenSwarmReviewAction.ID, title: 'Open Swarm Review' })
+    super({
+      id: WorkbenchOpenSwarmReviewAction.ID,
+      title: localize2('action.swarm.openReview', 'Open Swarm Review'),
+    })
   }
 
   override async run(accessor: ServicesAccessor, reviewId?: unknown): Promise<void> {
@@ -140,7 +146,10 @@ export class WorkbenchOpenSwarmReviewsAction extends Action2 {
   static readonly ID = '_workbench.openSwarmReviews'
 
   constructor() {
-    super({ id: WorkbenchOpenSwarmReviewsAction.ID, title: 'Show Swarm Reviews' })
+    super({
+      id: WorkbenchOpenSwarmReviewsAction.ID,
+      title: localize2('action.swarm.showReviews', 'Show Swarm Reviews'),
+    })
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
@@ -161,7 +170,10 @@ export class WorkbenchSwarmPollTickAction extends Action2 {
   static readonly ID = '_workbench.swarmPollTick'
 
   constructor() {
-    super({ id: WorkbenchSwarmPollTickAction.ID, title: 'Swarm Poll Tick' })
+    super({
+      id: WorkbenchSwarmPollTickAction.ID,
+      title: localize2('action.swarm.pollTick', 'Swarm Poll Tick'),
+    })
   }
 
   override async run(): Promise<void> {
@@ -182,8 +194,8 @@ export class RefreshSwarmReviewsAction extends Action2 {
   constructor() {
     super({
       id: RefreshSwarmReviewsAction.ID,
-      title: 'Refresh Swarm Reviews',
-      category: 'Swarm',
+      title: localize2('action.swarm.refreshReviews', 'Refresh Swarm Reviews'),
+      category: CATEGORY,
       icon: 'refresh',
       menu: [
         {

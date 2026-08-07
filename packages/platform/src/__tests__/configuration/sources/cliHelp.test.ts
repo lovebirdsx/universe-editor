@@ -46,7 +46,7 @@ describe('buildHelpMessage', () => {
       ],
     })
     expect(withArr).toContain('--extension-development-path <dir>')
-    expect(withArr).toContain('Load extension from source（可重复）')
+    expect(withArr).toContain('Load extension from source (repeatable)')
   })
 })
 

@@ -14,6 +14,7 @@ import {
   IStatusBarService,
   ITextSearchService,
   IWorkspaceService,
+  localize,
   StatusBarAlignment,
   markAsSingleton,
   type IFileMatch,
@@ -148,7 +149,7 @@ export function useSearchEngine(
         })
         .catch(() => {
           if (ac.signal.aborted) return
-          setRegexError('搜索失败')
+          setRegexError(localize('search.failed', 'Search failed'))
           setIsSearching(false)
         })
     },
@@ -213,7 +214,7 @@ export function useSearchEngine(
   useEffect(() => {
     if (isSearching && !statusEntryRef.current) {
       statusEntryRef.current = statusBarService.addEntry({
-        text: '$(search) 搜索中…',
+        text: localize('search.statusSearching', '$(search) Searching…'),
         alignment: StatusBarAlignment.Right,
         priority: 500,
       })
@@ -234,8 +235,16 @@ export function useSearchEngine(
     if (!isSearching) return
     if (!statusEntryRef.current) return
     const text = progress
-      ? `$(search) 搜索中… ${progress.filesMatched}/${progress.filesScanned} 文件，${progress.totalMatches} 匹配`
-      : '$(search) 搜索中…'
+      ? localize(
+          'search.statusProgress',
+          '$(search) Searching… {matched}/{scanned} files, {matches} matches',
+          {
+            matched: progress.filesMatched,
+            scanned: progress.filesScanned,
+            matches: progress.totalMatches,
+          },
+        )
+      : localize('search.statusSearching', '$(search) Searching…')
     statusEntryRef.current.update({
       text,
       alignment: StatusBarAlignment.Right,

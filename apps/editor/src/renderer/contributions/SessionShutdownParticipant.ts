@@ -62,12 +62,12 @@ export class SessionShutdownParticipant extends Disposable implements IWorkbench
       type: 'warning',
       message: localize(
         'shutdown.runningSessions.message',
-        '{count} 个会话正在运行，{action}将中断它们',
+        '{count} sessions are running; {action} will interrupt them',
         { count: runningCount, action: actionLabel(reason) },
       ),
-      detail: localize('shutdown.runningSessions.detail', '是否继续？'),
-      primaryButton: localize('shutdown.runningSessions.continue', '继续'),
-      cancelButton: localize('common.cancel', '取消'),
+      detail: localize('shutdown.runningSessions.detail', 'Do you want to continue?'),
+      primaryButton: localize('shutdown.runningSessions.continue', 'Continue'),
+      cancelButton: localize('common.cancel', 'Cancel'),
     })
     return !confirmed
   }
@@ -76,12 +76,12 @@ export class SessionShutdownParticipant extends Disposable implements IWorkbench
 function actionLabel(reason: ShutdownReason): string {
   switch (reason) {
     case ShutdownReason.Quit:
-      return localize('shutdown.action.quit', '退出')
+      return localize('shutdown.action.quit', 'Quitting')
     case ShutdownReason.CloseWindow:
-      return localize('shutdown.action.closeWindow', '关闭窗口')
+      return localize('shutdown.action.closeWindow', 'Closing the window')
     case ShutdownReason.Reload:
-      return localize('shutdown.action.reload', '重启编辑器')
+      return localize('shutdown.action.reload', 'Reloading the editor')
     case ShutdownReason.SwitchWorkspace:
-      return localize('shutdown.action.switchWorkspace', '切换工作区')
+      return localize('shutdown.action.switchWorkspace', 'Switching workspace')
   }
 }

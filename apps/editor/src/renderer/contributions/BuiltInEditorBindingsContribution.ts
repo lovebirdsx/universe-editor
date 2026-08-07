@@ -15,6 +15,7 @@ import {
   IInstantiationService,
   MenuId,
   MenuRegistry,
+  localize,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -39,7 +40,7 @@ export class BuiltInEditorBindingsContribution
         '**/*',
         {
           typeId: FileEditorInput.TYPE_ID,
-          displayName: 'File Editor',
+          displayName: localize('editorResolver.fileEditor', 'File Editor'),
           priority: 1,
         },
         (uri) => this._inst.createInstance(FileEditorInput, uri),
@@ -55,7 +56,7 @@ export class BuiltInEditorBindingsContribution
           `**/*${ext}`,
           {
             typeId: ImageEditorInput.TYPE_ID,
-            displayName: 'Image Preview',
+            displayName: localize('editorResolver.imagePreview', 'Image Preview'),
             priority: 100,
           },
           (uri) => this._inst.createInstance(ImageEditorInput, uri),
@@ -70,7 +71,7 @@ export class BuiltInEditorBindingsContribution
     this._register(
       MenuRegistry.addMenuItem(MenuId.EditorTabContext, {
         command: 'workbench.action.reopenWith',
-        title: 'Reopen With...',
+        title: localize('action.reopenWith', 'Reopen With...'),
         when: 'resourceScheme == file',
         group: 'z_commands',
         order: 1,

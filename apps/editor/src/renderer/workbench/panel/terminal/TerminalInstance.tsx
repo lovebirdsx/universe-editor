@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { URI } from '@universe-editor/platform'
-import { markAsSingleton } from '@universe-editor/platform'
+import { localize, markAsSingleton } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
 import {
   ITerminalXtermService,
@@ -187,10 +187,10 @@ export function TerminalInstance({
               disabled={!hasSelection}
               onClick={handleCopy}
             >
-              Copy
+              {localize('common.copy', 'Copy')}
             </button>
             <button className={styles['ctx-item']} onClick={handlePaste}>
-              Paste
+              {localize('common.paste', 'Paste')}
             </button>
           </div>
         </>

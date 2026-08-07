@@ -16,6 +16,7 @@ import {
   createNamedLogger,
   Disposable,
   ILoggerService,
+  localize,
   type ILogger,
 } from '@universe-editor/platform'
 import { hashVsixFile } from '@universe-editor/extension-packaging'
@@ -121,7 +122,13 @@ export class ExtensionGalleryMainService extends Disposable implements IExtensio
     }
 
     const res = await fetch(extension.vsixUrl, { redirect: 'follow' })
-    if (!res.ok) throw new Error(`download ${extension.identifier}: HTTP ${res.status}`)
+    if (!res.ok)
+      throw new Error(
+        localize('extGallery.error.downloadFailed', 'download {id}: HTTP {status}', {
+          id: extension.identifier,
+          status: String(res.status),
+        }),
+      )
     const buffer = Buffer.from(await res.arrayBuffer())
 
     // Write to a temp file then rename so a partial download never looks complete.

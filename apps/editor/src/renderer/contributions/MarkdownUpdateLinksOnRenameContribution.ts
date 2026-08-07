@@ -27,6 +27,7 @@ import {
   ILoggerService,
   type IWorkbenchContribution,
   createNamedLogger,
+  localize,
 } from '@universe-editor/platform'
 import type { WorkspaceEdit } from 'vscode-languageserver-types'
 import {
@@ -263,17 +264,31 @@ export class MarkdownUpdateLinksOnRenameContribution
     const shown = files.slice(0, MAX_CONFIRM_FILES).map((f) => basename(f))
     const extra = files.length - shown.length
     const detail =
-      shown.join(', ') + (extra > 0 ? `, and ${extra} more file${extra === 1 ? '' : 's'}` : '')
+      shown.join(', ') +
+      (extra > 0
+        ? localize('markdown.updateLinks.moreFiles', ', and {count} more file(s)', {
+            count: extra,
+          })
+        : '')
 
     const result = await this._dialog.confirm({
       message:
         files.length === 1
-          ? 'Update the Markdown link in 1 file?'
-          : `Update Markdown links in ${files.length} files?`,
+          ? localize('markdown.updateLinks.messageOne', 'Update the Markdown link in 1 file?')
+          : localize(
+              'markdown.updateLinks.messageMany',
+              'Update Markdown links in {count} files?',
+              {
+                count: files.length,
+              },
+            ),
       detail,
-      primaryButton: 'Update',
-      cancelButton: "Don't Update",
-      neverAskAgainLabel: 'Always do this (never ask again)',
+      primaryButton: localize('markdown.updateLinks.update', 'Update'),
+      cancelButton: localize('markdown.updateLinks.dontUpdate', "Don't Update"),
+      neverAskAgainLabel: localize(
+        'markdown.updateLinks.neverAskAgain',
+        'Always do this (never ask again)',
+      ),
       type: 'info',
     })
 

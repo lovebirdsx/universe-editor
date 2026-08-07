@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { INotification } from '@universe-editor/platform'
-import { Severity } from '@universe-editor/platform'
+import { Severity, localize } from '@universe-editor/platform'
 import styles from './NotificationsCenter.module.css'
 
 export interface NotificationsCenterProps {
@@ -24,10 +24,20 @@ function severityIcon(severity: Severity): string {
 
 function relativeTime(timestamp: number): string {
   const diff = Date.now() - timestamp
-  if (diff < 60_000) return 'just now'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
-  return `${Math.floor(diff / 86_400_000)}d ago`
+  if (diff < 60_000) return localize('notification.time.justNow', 'just now')
+  if (diff < 3_600_000) {
+    return localize('notification.time.minutesAgo', '{count}m ago', {
+      count: String(Math.floor(diff / 60_000)),
+    })
+  }
+  if (diff < 86_400_000) {
+    return localize('notification.time.hoursAgo', '{count}h ago', {
+      count: String(Math.floor(diff / 3_600_000)),
+    })
+  }
+  return localize('notification.time.daysAgo', '{count}d ago', {
+    count: String(Math.floor(diff / 86_400_000)),
+  })
 }
 
 export function NotificationsCenter({
@@ -43,14 +53,16 @@ export function NotificationsCenter({
   return (
     <div className={styles['overlay']} data-testid="notifications-center">
       <div className={styles['header']}>
-        <span className={styles['title']}>Notifications</span>
+        <span className={styles['title']}>
+          {localize('notification.center.title', 'Notifications')}
+        </span>
         {notifications.length > 0 && (
           <button className={styles['clearBtn']} onClick={() => onClearAll()} type="button">
-            Clear All
+            {localize('notification.center.clearAll', 'Clear All')}
           </button>
         )}
         <button
-          aria-label="Close notification center"
+          aria-label={localize('notification.center.closeAria', 'Close notification center')}
           className={styles['closeBtn']}
           onClick={() => onClose()}
           type="button"
@@ -60,7 +72,9 @@ export function NotificationsCenter({
       </div>
       <div className={styles['list']}>
         {items.length === 0 ? (
-          <div className={styles['empty']}>No notifications</div>
+          <div className={styles['empty']}>
+            {localize('notification.center.empty', 'No notifications')}
+          </div>
         ) : (
           items.map((n) => (
             <div
@@ -90,7 +104,7 @@ export function NotificationsCenter({
                         onClick={() => onCancelProgress(n.id)}
                         type="button"
                       >
-                        Cancel
+                        {localize('common.cancel', 'Cancel')}
                       </button>
                     )}
                   </div>
@@ -111,7 +125,7 @@ export function NotificationsCenter({
                 )}
               </div>
               <button
-                aria-label="Dismiss"
+                aria-label={localize('common.dismiss', 'Dismiss')}
                 className={styles['itemClose']}
                 onClick={() => onDismiss(n.id)}
                 type="button"

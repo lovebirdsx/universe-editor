@@ -9,6 +9,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Bot, Clock, Coins } from 'lucide-react'
+import { localize } from '@universe-editor/platform'
 import type {
   AcpSubagentStats,
   AcpToolCall,
@@ -54,7 +55,10 @@ export function SubagentStatsBadge({ call }: { call: AcpToolCall }) {
       {costCny !== undefined && (
         <span
           className={styles['subagentStatItem']}
-          data-tooltip="本地按 token 估算，实际计费可能不同"
+          data-tooltip={localize(
+            'acp.subagentStats.costTooltip',
+            'Estimated locally from token counts; actual billing may differ',
+          )}
         >
           <Coins size={11} strokeWidth={1.75} aria-hidden="true" />
           ≈¥{formatCny(costCny)}

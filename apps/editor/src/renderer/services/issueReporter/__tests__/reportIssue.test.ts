@@ -147,7 +147,7 @@ describe('runReportIssueFlow', () => {
       pickResult: 'attach',
       buildIssueUrl: (_id, payload) =>
         payload.attachDiagnostics
-          ? Promise.reject(new Error('诊断包上传失败: HTTP 500'))
+          ? Promise.reject(new Error('Diagnostics upload failed: HTTP 500'))
           : Promise.resolve('http://example.com/no-attach'),
     })
     await runReportIssueFlow(deps)

@@ -572,7 +572,9 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       <div className={styles['fileEditorRoot']}>
         <Breadcrumbs input={fileInput} />
         <div className={styles['fileEditor']} data-testid="file-editor">
-          <div className={styles['fileEditorLoading']}>正在加载编辑器…</div>
+          <div className={styles['fileEditorLoading']}>
+            {localize('editor.loading', 'Loading editor…')}
+          </div>
         </div>
       </div>
     )

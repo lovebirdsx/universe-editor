@@ -51,7 +51,7 @@ export class OpenDiffAction extends Action2 {
   static readonly ID = '_workbench.openDiff'
 
   constructor() {
-    super({ id: OpenDiffAction.ID, title: 'Open Diff' })
+    super({ id: OpenDiffAction.ID, title: localize2('action.diff.openDiff', 'Open Diff') })
   }
 
   override run(accessor: ServicesAccessor, payload: OpenDiffPayload): void {
@@ -130,7 +130,10 @@ export class OpenWebviewDiffAction extends Action2 {
   static readonly ID = '_workbench.openWebviewDiff'
 
   constructor() {
-    super({ id: OpenWebviewDiffAction.ID, title: 'Open Webview Diff' })
+    super({
+      id: OpenWebviewDiffAction.ID,
+      title: localize2('action.diff.openWebviewDiff', 'Open Webview Diff'),
+    })
   }
 
   override run(accessor: ServicesAccessor, payload: OpenWebviewDiffPayload): void {

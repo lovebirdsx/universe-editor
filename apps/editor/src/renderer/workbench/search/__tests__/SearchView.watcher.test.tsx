@@ -194,10 +194,10 @@ describe('SearchView watcher + workspace', () => {
     search.results = [makeFileMatch('/ws/a.ts')]
     const ctx = renderWithServices(search)
     await runQuery(search)
-    expect(screen.queryByText(/匹配/)).toBeTruthy()
+    expect(screen.queryByText(/matches/)).toBeTruthy()
     act(() => {
       ctx.workspaceEmitter.fire(null)
     })
-    expect(screen.queryByText(/匹配/)).toBeFalsy()
+    expect(screen.queryByText(/matches/)).toBeFalsy()
   })
 })

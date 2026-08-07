@@ -9,6 +9,7 @@ import {
   IDialogService,
   IFileService,
   IInstantiationService,
+  localize,
   URI,
   type ServicesAccessor,
   type UriComponents,
@@ -245,10 +246,17 @@ export class FileEditorInput extends EditorInput {
     }
 
     const result = await dialog.confirm({
-      message: `文件 "${basenameOfResource(this._resource)}" 在外部已修改。`,
-      detail: '是否放弃当前更改并从磁盘重新加载?',
-      primaryButton: '重新加载',
-      cancelButton: '保留当前更改',
+      message: localize(
+        'editor.externallyModified.message',
+        'The file "{name}" has been modified externally.',
+        { name: basenameOfResource(this._resource) },
+      ),
+      detail: localize(
+        'editor.externallyModified.detail',
+        'Discard your current changes and reload from disk?',
+      ),
+      primaryButton: localize('editor.externallyModified.reload', 'Reload'),
+      cancelButton: localize('editor.externallyModified.keepChanges', 'Keep Current Changes'),
       type: 'warning',
     })
     if (result.confirmed) {

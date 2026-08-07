@@ -783,7 +783,9 @@ export class AcpSessionService
       } else {
         this._notification.notify({
           severity: Severity.Error,
-          message: `Failed to start agent session: ${msg}`,
+          message: localize('acp.sessionStartFailed', 'Failed to start agent session: {msg}', {
+            msg,
+          }),
         })
       }
       this._telemetry.publicLogError('acp.session_create_failed', {
@@ -1286,7 +1288,9 @@ export class AcpSessionService
       this._logger.warn(`resumeSession failed: ${msg}`)
       this._notification.notify({
         severity: Severity.Error,
-        message: `Failed to resume agent session: ${msg}`,
+        message: localize('acp.sessionResumeFailed', 'Failed to resume agent session: {msg}', {
+          msg,
+        }),
       })
       this._telemetry.publicLogError('acp.session_resume_failed', {
         agentId: entry.agentId,
@@ -2086,7 +2090,11 @@ export class AcpSessionService
     const names = dropped.map((d) => `"${d.name}"`).join(', ')
     this._notification.notify({
       severity: Severity.Warning,
-      message: `${agentName} does not support the configured MCP transport for ${names}; these servers were skipped.`,
+      message: localize(
+        'acp.mcpTransportUnsupported',
+        '{agent} does not support the configured MCP transport for {names}; these servers were skipped.',
+        { agent: agentName, names },
+      ),
     })
   }
 }

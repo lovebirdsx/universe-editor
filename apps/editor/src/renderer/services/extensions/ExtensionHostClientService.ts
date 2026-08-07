@@ -480,10 +480,14 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     if (state.count > MAX_RESTARTS) {
       this._notification.notify({
         severity: Severity.Error,
-        message: `The extension host keeps crashing (code ${evt.code ?? 'n/a'}) and won't be restarted automatically.`,
+        message: localize(
+          'extHost.crash.noMoreRestarts',
+          "The extension host keeps crashing (code {code}) and won't be restarted automatically.",
+          { code: evt.code ?? 'n/a' },
+        ),
         actions: [
           {
-            label: 'Restart',
+            label: localize('common.restart', 'Restart'),
             run: () => {
               state.count = 0
               void this._restart()
@@ -496,7 +500,13 @@ export class ExtensionHostClientService extends Disposable implements IExtension
 
     this._notification.notify({
       severity: Severity.Warning,
-      message: `The extension host crashed (code ${evt.code ?? 'n/a'}). Restarting…`,
+      message: localize(
+        'extHost.crash.restarting',
+        'The extension host crashed (code {code}). Restarting…',
+        {
+          code: evt.code ?? 'n/a',
+        },
+      ),
     })
     const delay = RESTART_BASE_DELAY_MS * 2 ** (state.count - 1)
     setTimeout(() => void this._restart(), delay)

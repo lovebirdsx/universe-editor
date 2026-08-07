@@ -23,6 +23,7 @@ import {
   type Event,
   type IUserDataFileChange,
   type IUserDataFilesService,
+  localize,
   URI,
   UserDataFile,
 } from '@universe-editor/platform'
@@ -217,11 +218,19 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
       file === UserDataFile.VSCodeUserSettings ||
       file === UserDataFile.VSCodeKeybindings
     ) {
-      throw new Error(`UserData: ${file} is read-only`)
+      throw new Error(
+        localize('userData.error.readOnly', 'UserData: {file} is read-only', { file }),
+      )
     }
     const slot = this._slots.get(file)
     if (!slot) {
-      throw new Error(`UserData: no workspace open (cannot write ${file})`)
+      throw new Error(
+        localize(
+          'userData.error.noWorkspace',
+          'UserData: no workspace open (cannot write {file})',
+          { file },
+        ),
+      )
     }
     await this._atomicWrite(file, slot, content)
   }

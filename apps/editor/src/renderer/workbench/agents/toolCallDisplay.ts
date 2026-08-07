@@ -50,7 +50,10 @@ function deriveExecuteDisplay(call: AcpToolCall): ToolCallDisplay {
 function deriveSearchDisplay(call: AcpToolCall): ToolCallDisplay {
   const pattern = readStringField(call.rawInput, 'pattern')
   if (pattern && pattern !== call.title) {
-    return { title: `搜索 “${pattern}”`, subtitle: call.title }
+    return {
+      title: localize('acp.toolCall.searchTitle', 'Search “{pattern}”', { pattern }),
+      subtitle: call.title,
+    }
   }
   return { title: call.title }
 }
@@ -140,7 +143,7 @@ export function keepPlanningFeedback(call: AcpToolCall): string | undefined {
 
 function deriveSwitchModeDisplay(call: AcpToolCall): ToolCallDisplay {
   if (isKeepPlanning(call)) {
-    return { title: localize('acp.switchMode.keepPlanning', '已继续规划') }
+    return { title: localize('acp.switchMode.keepPlanning', 'Continued planning') }
   }
   return { title: call.title }
 }

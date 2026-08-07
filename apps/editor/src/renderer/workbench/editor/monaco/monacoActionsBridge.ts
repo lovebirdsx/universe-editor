@@ -32,6 +32,7 @@ import {
   KeybindingsRegistry,
   KeybindingWeight,
   combinedDisposable,
+  localize,
   markAsSingleton,
   type IDisposable,
   type ServicesAccessor,
@@ -65,10 +66,18 @@ export interface CoreCommandKeybinding {
 
 export interface CoreCommand {
   id: string
-  /** English fallback shown when __MONACO_NLS__ has no translation. */
+  /** English fallback shown when no translation is found. */
   label: string
-  /** NLS key monaco itself uses for this command's command-palette title. */
+  /**
+   * Key into the `__MONACO_NLS__` table (keyed by English source text, see
+   * monacoNlsBootstrap) for this command's command-palette title.
+   */
   nlsKey?: string
+  /**
+   * Our own NLS key, resolved via `localize` when the command is absent from
+   * the monaco translation table.
+   */
+  labelKey?: string
   /** Back-compat shorthand for a single default keybinding. */
   primary?: number
   /** Default keybindings to mirror into the registry. */
@@ -144,7 +153,9 @@ function makeHandler(commandId: string) {
       // palette (CommandsQuickAccessProvider enumerates CommandsRegistry without
       // when-filtering), so a user can pick one with no active text editor. Tell
       // them why nothing happened instead of returning silently.
-      accessor.get(INotificationService).status('该命令需要一个活动的文本编辑器')
+      accessor
+        .get(INotificationService)
+        .status(localize('monaco.needsActiveEditor', 'This command requires an active text editor'))
       return
     }
     editor.trigger('', commandId, args[0] ?? {})
@@ -180,17 +191,18 @@ const ctrlAltShift = (token: string): number =>
   MASK_CTRLCMD | KEYMOD_ALT | KEYMOD_SHIFT | TOKEN_TO_KEYCODE[token]!
 
 const CORE_COMMANDS: readonly CoreCommand[] = [
-  { id: 'undo', label: 'Undo', nlsKey: 'undo', primary: ctrl('z') },
-  { id: 'redo', label: 'Redo', nlsKey: 'redo', primary: ctrl('y') },
+  { id: 'undo', label: 'Undo', nlsKey: 'Undo', primary: ctrl('z') },
+  { id: 'redo', label: 'Redo', nlsKey: 'Redo', primary: ctrl('y') },
   {
     id: 'editor.action.selectAll',
     label: 'Select All',
-    nlsKey: 'editor.action.selectAll',
+    nlsKey: 'Select All',
     primary: ctrl('a'),
   },
   {
     id: 'cursorColumnSelectUp',
     label: 'Column Select Up',
+    labelKey: 'monaco.command.columnSelectUp',
     keybindings: [
       { primary: ctrlAltShift('arrowup'), when: 'editorTextFocus' },
       { primary: shift('arrowup'), when: 'editorTextFocus && editorColumnSelection' },
@@ -199,6 +211,7 @@ const CORE_COMMANDS: readonly CoreCommand[] = [
   {
     id: 'cursorColumnSelectDown',
     label: 'Column Select Down',
+    labelKey: 'monaco.command.columnSelectDown',
     keybindings: [
       { primary: ctrlAltShift('arrowdown'), when: 'editorTextFocus' },
       { primary: shift('arrowdown'), when: 'editorTextFocus && editorColumnSelection' },
@@ -264,7 +277,8 @@ export function bridgeMonacoActionsForTests(
   for (const core of coreCommands) {
     if (seenIds.has(core.id)) continue
     seenIds.add(core.id)
-    const label = core.nlsKey ? nlsLookup(core.nlsKey, core.label) : core.label
+    const fallback = core.labelKey ? localize(core.labelKey, core.label) : core.label
+    const label = core.nlsKey ? nlsLookup(core.nlsKey, fallback) : fallback
     disposables.push(
       CommandsRegistry.registerCommand({
         id: core.id,

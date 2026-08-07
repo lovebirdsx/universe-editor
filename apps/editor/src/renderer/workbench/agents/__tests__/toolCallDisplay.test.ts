@@ -62,7 +62,7 @@ describe('deriveToolCallDisplay', () => {
         rawInput: { pattern: 'foo', path: 'src' },
       }),
     )
-    expect(d.title).toBe('搜索 “foo”')
+    expect(d.title).toBe('Search “foo”')
     expect(d.subtitle).toBe('grep -i "foo" src')
   })
 
@@ -96,7 +96,7 @@ describe('deriveToolCallDisplay', () => {
     const d = deriveToolCallDisplay(
       makeCall({ kind: 'switch_mode', title: 'Ready to code?', status: 'failed' }),
     )
-    expect(d.title).toBe('已继续规划')
+    expect(d.title).toBe('Continued planning')
   })
 
   it('keeps the raw title for a switch_mode that was NOT rejected', () => {

@@ -25,6 +25,7 @@ import {
   type AiResponseChunk,
   type CancellationToken,
   type IAiModelProvider,
+  localize,
 } from '@universe-editor/platform'
 import { retryWithBackoff, toAbortSignal } from './retry.js'
 
@@ -259,15 +260,39 @@ function isTransient(err: unknown): boolean {
 
 function mapHttpError(status: number, detail: string): AiError {
   if (status === 401 || status === 403) {
-    return new AiError(AiErrorCode.Unauthorized, `Ollama unauthorized (${status}): ${detail}`)
+    return new AiError(
+      AiErrorCode.Unauthorized,
+      localize('ai.error.ollama.unauthorized', 'Ollama unauthorized ({status}): {detail}', {
+        status: String(status),
+        detail,
+      }),
+    )
   }
   if (status === 429) {
-    return new AiError(AiErrorCode.RateLimited, `Ollama rate limited (${status}): ${detail}`)
+    return new AiError(
+      AiErrorCode.RateLimited,
+      localize('ai.error.ollama.rateLimited', 'Ollama rate limited ({status}): {detail}', {
+        status: String(status),
+        detail,
+      }),
+    )
   }
   if (status >= 500) {
-    return new AiError(AiErrorCode.NetworkError, `Ollama server error (${status}): ${detail}`)
+    return new AiError(
+      AiErrorCode.NetworkError,
+      localize('ai.error.ollama.serverError', 'Ollama server error ({status}): {detail}', {
+        status: String(status),
+        detail,
+      }),
+    )
   }
-  return new AiError(AiErrorCode.Unknown, `Ollama request failed (${status}): ${detail}`)
+  return new AiError(
+    AiErrorCode.Unknown,
+    localize('ai.error.ollama.requestFailed', 'Ollama request failed ({status}): {detail}', {
+      status: String(status),
+      detail,
+    }),
+  )
 }
 
 function normalizeError(err: unknown, token: CancellationToken): unknown {

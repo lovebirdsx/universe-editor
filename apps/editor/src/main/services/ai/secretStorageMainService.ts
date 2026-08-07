@@ -12,6 +12,7 @@ import {
   type ILogger,
   ILoggerService,
   type ISecretStorageService,
+  localize,
 } from '@universe-editor/platform'
 import { IMainStorageService, type Storage } from '../../storage.js'
 
@@ -56,7 +57,12 @@ export class SecretStorageMainService extends Disposable implements ISecretStora
 
   async set(key: string, value: string): Promise<void> {
     if (!this._ensureAvailable()) {
-      throw new Error('Secret storage unavailable: OS encryption is not available')
+      throw new Error(
+        localize(
+          'secretStorage.error.unavailable',
+          'Secret storage unavailable: OS encryption is not available',
+        ),
+      )
     }
     const encoded = this._safeStorage.encryptString(value).toString('base64')
     const map = await this._readMap()

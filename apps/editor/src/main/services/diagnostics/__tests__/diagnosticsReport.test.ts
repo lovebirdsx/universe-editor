@@ -103,18 +103,18 @@ describe('buildIssueMarkdown', () => {
         },
       ],
     )
-    expect(md).toContain('应用版本: 1.2.3 (release)')
+    expect(md).toContain('App version: 1.2.3 (release)')
     expect(md).toContain('Electron: 33.0.0')
     expect(md).toContain('| CPUs | Test CPU (8 × 3.0GHz) |')
-    expect(md).toContain('<details><summary>已安装扩展 (1)</summary>')
+    expect(md).toContain('<details><summary>Installed extensions (1)</summary>')
     expect(md).toContain('| pub.ext | 0.1.0 | gallery |')
     expect(md).toContain('| 7 | unhandledError | run@a.ts | main | boom |')
   })
 
   it('renders empty states when nothing is installed / recorded', () => {
     const md = buildIssueMarkdown(INFO, [], [])
-    expect(md).toContain('（无已安装扩展）')
-    expect(md).toContain('（近期无错误记录）')
+    expect(md).toContain('(No extensions installed)')
+    expect(md).toContain('(No recent errors)')
   })
 
   it('escapes pipes in table cells', () => {

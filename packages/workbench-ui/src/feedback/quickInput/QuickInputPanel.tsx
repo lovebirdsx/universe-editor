@@ -26,6 +26,7 @@ import type {
   IQuickPickSeparator,
   QuickPickInput,
 } from '@universe-editor/platform'
+import { localize } from '@universe-editor/platform'
 import { fuzzyScore, wordMatchField } from '../../text/fuzzyMatch.js'
 import type { QuickPickState } from './quickInputViewModel.js'
 import styles from './QuickInput.module.css'
@@ -713,8 +714,12 @@ export function QuickPickPanel({
             state.onValueChange?.(value)
           }}
           onKeyDown={handleKey}
-          placeholder={state.placeholder ?? 'Type to filter…'}
-          aria-label={state.placeholder ?? 'Quick pick input'}
+          placeholder={
+            state.placeholder ?? localize('quickInput.filter.placeholder', 'Type to filter…')
+          }
+          aria-label={
+            state.placeholder ?? localize('quickInput.input.ariaLabel', 'Quick pick input')
+          }
           spellCheck={false}
           data-testid="quick-input-field"
         />
@@ -725,7 +730,9 @@ export function QuickPickPanel({
             type="button"
             className={styles['inputButton']}
             data-tooltip={button.tooltip}
-            aria-label={button.tooltip ?? 'Quick pick button'}
+            aria-label={
+              button.tooltip ?? localize('quickInput.button.ariaLabel', 'Quick pick button')
+            }
             data-testid="quick-input-button"
             onClick={() => state.onTriggerButton?.(button)}
           >
@@ -757,9 +764,13 @@ export function QuickPickPanel({
       )}
       <div className={styles['list']} role="listbox" ref={listRef}>
         {prefixMissing ? (
-          <p className={styles['empty']}>Type {`'${prefix}'`} followed by a command name</p>
+          <p className={styles['empty']}>
+            {localize('quickInput.prefixHint', "Type '{prefix}' followed by a command name", {
+              prefix,
+            })}
+          </p>
         ) : sortedFiltered.length === 0 ? (
-          <p className={styles['empty']}>No results</p>
+          <p className={styles['empty']}>{localize('quickInput.noResults', 'No results')}</p>
         ) : (
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {virtualizer.getVirtualItems().map((virtualRow) => {
@@ -839,7 +850,7 @@ export function QuickPickPanel({
                       {onItemRemove && (
                         <span
                           role="button"
-                          aria-label="Remove from list"
+                          aria-label={localize('quickInput.removeFromList', 'Remove from list')}
                           className={styles['itemRemove']}
                           data-testid="quick-input-item-remove"
                           onClick={(e) => {
@@ -903,7 +914,7 @@ function InputPanel({ state, onClose }: { state: QuickPickState; onClose: () => 
           }}
           onKeyDown={handleKey}
           placeholder={state.placeholder}
-          aria-label={state.placeholder ?? 'Input'}
+          aria-label={state.placeholder ?? localize('quickInput.inputBox.ariaLabel', 'Input')}
           aria-invalid={!!error}
           spellCheck={false}
         />

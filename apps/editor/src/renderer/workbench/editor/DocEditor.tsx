@@ -63,7 +63,11 @@ export function DocEditor({ input }: { input: IEditorInput }) {
   const docId = docInput.docId
   const category = docInput.category
   const resolved = resolveDoc(docId, category)
-  const content = resolved?.content ?? `# 文档未找到\n\n文档 "${docId}" 不存在。`
+  const content =
+    resolved?.content ??
+    localize('doc.notFound', '# Document not found\n\nDocument "{docId}" does not exist.', {
+      docId,
+    })
   const isFallback = resolved !== undefined && resolved.locale !== getCurrentLocale()
 
   const editorService = useService(IEditorService)

@@ -92,12 +92,12 @@ function showNoLogs(
 }
 
 const LOG_LEVEL_ITEMS: readonly LogLevelQuickPickItem[] = [
-  { id: 'trace', label: 'Trace', level: LogLevel.Trace },
-  { id: 'debug', label: 'Debug', level: LogLevel.Debug },
-  { id: 'info', label: 'Info', level: LogLevel.Info },
-  { id: 'warning', label: 'Warning', level: LogLevel.Warning },
-  { id: 'error', label: 'Error', level: LogLevel.Error },
-  { id: 'off', label: 'Off', level: LogLevel.Off },
+  { id: 'trace', label: localize('logLevel.trace', 'Trace'), level: LogLevel.Trace },
+  { id: 'debug', label: localize('logLevel.debug', 'Debug'), level: LogLevel.Debug },
+  { id: 'info', label: localize('logLevel.info', 'Info'), level: LogLevel.Info },
+  { id: 'warning', label: localize('logLevel.warning', 'Warning'), level: LogLevel.Warning },
+  { id: 'error', label: localize('logLevel.error', 'Error'), level: LogLevel.Error },
+  { id: 'off', label: localize('logLevel.off', 'Off'), level: LogLevel.Off },
 ]
 
 const LEVEL_TO_SETTING_VALUE: Record<LogLevel, string> = {

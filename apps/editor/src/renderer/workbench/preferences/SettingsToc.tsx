@@ -6,6 +6,7 @@
  *  Fixed width — hidden below 700px via CSS, mirroring VSCode's narrow mode.
  *--------------------------------------------------------------------------------------------*/
 
+import { localize } from '@universe-editor/platform'
 import type { SettingsTocEntry } from '../../services/preferences/settingsFlatModel.js'
 import styles from './SettingsEditor.module.css'
 
@@ -17,7 +18,11 @@ export interface SettingsTocProps {
 
 export function SettingsToc({ entries, activeId, onNavigate }: SettingsTocProps) {
   return (
-    <nav className={styles['toc']} aria-label="Settings categories" data-testid="settings-toc">
+    <nav
+      className={styles['toc']}
+      aria-label={localize('settings.tocAriaLabel', 'Settings categories')}
+      data-testid="settings-toc"
+    >
       {entries.map((entry) => (
         <button
           key={entry.id}

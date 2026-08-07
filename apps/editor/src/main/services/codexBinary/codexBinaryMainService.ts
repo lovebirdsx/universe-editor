@@ -29,6 +29,7 @@ import {
   Emitter,
   type ILogger,
   ILoggerService,
+  localize,
 } from '@universe-editor/platform'
 import type {
   ICodexBinaryProgress,
@@ -76,7 +77,13 @@ function detectPlatformBinary(): PlatformBinary {
     return { suffix: `darwin-${arch}`, triple: mac, binName: 'codex' }
   if (process.platform === 'linux')
     return { suffix: `linux-${arch}`, triple: linux, binName: 'codex' }
-  throw new Error(`Unsupported platform for codex binary: ${process.platform}-${arch}`)
+  throw new Error(
+    localize(
+      'codexBinary.error.unsupportedPlatform',
+      'Unsupported platform for codex binary: {platform}',
+      { platform: `${process.platform}-${arch}` },
+    ),
+  )
 }
 
 async function pathExists(p: string): Promise<boolean> {
@@ -141,10 +148,21 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
 
   private async _resolveCustom(customPath: string | undefined): Promise<ICodexBinaryResult> {
     if (!customPath) {
-      throw new Error('codex binary: custom source selected but no path is configured.')
+      throw new Error(
+        localize(
+          'codexBinary.error.noCustomPath',
+          'Codex binary: custom source selected but no path is configured.',
+        ),
+      )
     }
     if (!(await pathExists(customPath))) {
-      throw new Error(`codex binary not found at configured path: ${customPath}`)
+      throw new Error(
+        localize(
+          'codexBinary.error.customPathNotFound',
+          'Codex binary not found at configured path: {path}',
+          { path: customPath },
+        ),
+      )
     }
     return { path: customPath }
   }
@@ -153,8 +171,11 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
     const resolved = await this._whichCodex()
     if (!resolved) {
       throw new Error(
-        'No system `codex` executable found on PATH. Install it or switch ' +
-          '`acp.codex.source` to "download".',
+        localize(
+          'codexBinary.error.noSystemBinary',
+          'No system `codex` executable found on PATH. Install it or switch ' +
+            '`acp.codex.source` to "download".',
+        ),
       )
     }
     this._logger.info(`using system codex at ${resolved}`)
@@ -236,8 +257,11 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
     }
     if (!allowDownload) {
       throw new Error(
-        'codex binary is not downloaded yet — background probes never trigger a download; ' +
-          'start a Codex session or download it explicitly to fetch it.',
+        localize(
+          'codexBinary.error.downloadNotAllowed',
+          'Codex binary is not downloaded yet — background probes never trigger a download; ' +
+            'start a Codex session or download it explicitly to fetch it.',
+        ),
       )
     }
     const versionDir = this._versionDir(CODEX_VERSION)
@@ -413,7 +437,11 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
       this._logger.info(`downloading codex binary complete, extracted to ${tmpDir}`)
       if (!(await pathExists(extracted))) {
         throw new Error(
-          `Tarball ${pkg}@${platformVersion} did not contain vendor/${triple}/bin/${binName}`,
+          localize(
+            'codexBinary.error.tarballMissingBinary',
+            'Tarball {pkg}@{version} did not contain vendor/{triple}/bin/{binName}',
+            { pkg, version: platformVersion, triple, binName },
+          ),
         )
       }
       if (process.platform !== 'win32') await chmod(extracted, 0o755)
@@ -431,11 +459,23 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
     const url = `${REGISTRY}/${pkg}/${version}`
     const res = await fetch(url, { signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS) })
     if (!res.ok) {
-      throw new Error(`Failed to fetch ${pkg}@${version} metadata: HTTP ${res.status}`)
+      throw new Error(
+        localize(
+          'codexBinary.error.fetchMetadataFailed',
+          'Failed to fetch {pkg}@{version} metadata: HTTP {status}',
+          { pkg, version, status: String(res.status) },
+        ),
+      )
     }
     const body = (await res.json()) as { dist?: RegistryDist }
     if (!body.dist?.tarball) {
-      throw new Error(`Registry metadata for ${pkg}@${version} has no tarball URL`)
+      throw new Error(
+        localize(
+          'codexBinary.error.noTarballUrl',
+          'Registry metadata for {pkg}@{version} has no tarball URL',
+          { pkg, version },
+        ),
+      )
     }
     return body.dist
   }
@@ -450,7 +490,14 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
     // (potentially large, potentially slow) body stream is read unbounded below.
     const controller = new AbortController()
     const connectTimer = setTimeout(
-      () => controller.abort(new Error(`Timed out connecting to ${dist.tarball}`)),
+      () =>
+        controller.abort(
+          new Error(
+            localize('codexBinary.error.connectTimeout', 'Timed out connecting to {url}', {
+              url: dist.tarball,
+            }),
+          ),
+        ),
       NETWORK_TIMEOUT_MS,
     )
     let res: Response
@@ -460,7 +507,12 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
       clearTimeout(connectTimer)
     }
     if (!res.ok || !res.body) {
-      throw new Error(`Failed to download ${dist.tarball}: HTTP ${res.status}`)
+      throw new Error(
+        localize('codexBinary.error.downloadFailed', 'Failed to download {url}: HTTP {status}', {
+          url: dist.tarball,
+          status: String(res.status),
+        }),
+      )
     }
     const total = Number(res.headers.get('content-length') ?? 0)
     let received = 0
@@ -522,14 +574,26 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
       const expected = dist.integrity.replace(/^sha512-/, '')
       const actual = hash.digest('base64')
       if (actual !== expected) {
-        throw new Error(`Integrity check failed for ${url} (sha512 mismatch)`)
+        throw new Error(
+          localize(
+            'codexBinary.error.integritySha512',
+            'Integrity check failed for {url} (sha512 mismatch)',
+            { url },
+          ),
+        )
       }
       return
     }
     if (dist.shasum) {
       const actual = hash.digest('hex')
       if (actual !== dist.shasum) {
-        throw new Error(`Integrity check failed for ${url} (sha1 mismatch)`)
+        throw new Error(
+          localize(
+            'codexBinary.error.integritySha1',
+            'Integrity check failed for {url} (sha1 mismatch)',
+            { url },
+          ),
+        )
       }
     }
   }

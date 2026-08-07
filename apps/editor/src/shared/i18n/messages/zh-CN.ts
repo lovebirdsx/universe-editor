@@ -19,14 +19,18 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'common.delete': '删除',
   'common.deleteWithEllipsis': '删除…',
   'common.details': '详情',
+  'common.dismiss': '忽略',
   'common.edit': '编辑',
   'common.loading': '正在加载…',
   'common.name': '名称',
   'common.ok': '确定',
   'common.open': '打开',
+  'common.paste': '粘贴',
   'common.refresh': '刷新',
   'common.replace': '替换',
   'common.reset': '重置',
+  'common.restart': '重启',
+  'common.save': '保存',
 
   // --- Command categories ---
   'command.category.agents': 'Agents',
@@ -35,15 +39,18 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'command.category.diffEditor': '差异编辑器',
   'command.category.editor': '编辑器',
   'command.category.file': '文件',
+  'command.category.gitGraph': 'Git Graph',
   'command.category.go': '转到',
   'command.category.help': '帮助',
   'command.category.json': 'JSON',
   'command.category.markdown': 'Markdown',
   'command.category.merge': '合并编辑器',
   'command.category.mergeConflict': '合并冲突',
+  'command.category.perforceGraph': 'Perforce Graph',
   'command.category.preferences': '首选项',
   'command.category.search': '搜索',
   'command.category.scm': '源代码管理',
+  'command.category.swarm': 'Swarm',
   'command.category.terminal': '终端',
   'command.category.view': '视图',
 
@@ -53,6 +60,16 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'extDev.statusBar': '扩展开发宿主 ({count})',
   'extDev.statusBar.tooltip': '扩展开发宿主：从源码目录加载了 {count} 个开发中的扩展\n{paths}',
   'windowTitle.extDevHost': '[扩展开发宿主]',
+  'extensions.activation.failed': '扩展"{name}"激活失败：{error}',
+  'extHost.crash.restarting': '扩展宿主已崩溃（代码 {code}），正在重启…',
+  'extHost.crash.noMoreRestarts': '扩展宿主持续崩溃（代码 {code}），将不再自动重启。',
+  'extManagement.error.noMarketplace': '扩展市场不可用。',
+  'extManagement.error.packageMismatch':
+    '下载的扩展包（{downloadedId}@{downloadedVersion}）与市场条目（{expectedId}@{expectedVersion}）不一致。',
+  'extManagement.error.unsigned': '市场条目 {id}@{version} 未签名——拒绝安装。',
+  'extManagement.error.engineMismatch':
+    '该扩展需要 universe {required}，而当前宿主 API 为 {actual}。',
+  'extGallery.error.downloadFailed': '下载 {id} 失败：HTTP {status}',
 
   // --- Menus ---
   'menu.activityBar': '活动栏',
@@ -114,6 +131,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'status.editorEncoding': '编辑器编码',
   'status.editorLanguage': '编辑器语言',
   'status.notifications': '通知',
+  'status.cursorPositionText': '行 {line}，列 {column}',
+  'status.unreadNotifications': '{count} 条未读通知',
   'statusbar.label': '状态栏',
   'windowControls.maximize': '最大化',
   'windowControls.minimize': '最小化',
@@ -388,10 +407,42 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.zoomIn.title': '放大',
   'action.zoomOut.title': '缩小',
   'action.zoomReset.title': '重置缩放',
+  'action.diff.openDiff': '打开差异对比',
+  'action.diff.openWebviewDiff': '打开 Webview 差异对比',
+  'action.editor.closeChange.title': '关闭更改速览',
+  'action.editor.openActiveFileChanges.title': '打开活动文件的更改',
+  'action.editor.showChange.title': '显示更改',
+  'action.extensionApi.getActiveEditorFile': '获取活动编辑器文件',
+  'action.extensionApi.getConfiguration': '获取配置',
+  'action.extensionApi.openFile': '打开文件',
+  'action.extensionApi.openFileAt': '在指定位置打开文件',
+  'action.extensionApi.openFolder': '打开文件夹',
+  'action.extensionApi.openFolderInNewWindow': '在新窗口中打开文件夹',
+  'action.extensionApi.updateConfiguration': '更新配置',
+  'action.extensionApi.writeClipboard': '写入剪贴板',
+  'action.gitGraph.focusSearch': '聚焦搜索',
+  'action.gitGraph.open': '打开 Git Graph',
+  'action.gitGraph.refresh': '刷新',
+  'action.gitGraph.toggleRemoteBranches': '切换远程分支显示',
+  'action.gitGraph.view': '查看 Git Graph',
+  'action.merge.openMergeEditor': '打开合并编辑器',
+  'action.perforceGraph.focusSearch': '聚焦搜索',
+  'action.perforceGraph.open': '打开 Perforce Graph',
+  'action.perforceGraph.refresh': '刷新',
+  'action.perforceGraph.view': '查看 Perforce Graph',
+  'action.reopenWith': '重新打开方式…',
+  'action.swarm.openReview': '打开 Swarm 审核',
+  'action.swarm.openReviewById': '按 ID 打开 Swarm 审核…',
+  'action.swarm.pollTick': 'Swarm 轮询',
+  'action.swarm.refreshReviews': '刷新 Swarm 审核',
+  'action.swarm.showReviews': '显示 Swarm 审核',
 
   // --- Dialogs ---
   'dialog.default.cancel': '取消',
   'dialog.default.ok': '确定',
+  'dialog.closeEditor.message': '是否保存对 {label} 的更改？',
+  'dialog.closeEditor.detail': '如果不保存，你的更改将丢失。',
+  'dialog.closeEditor.dontSave': '不保存',
   'dialog.displayLanguage.detail': '重启应用后，所选显示语言才会生效。',
   'dialog.displayLanguage.message': '显示语言已更新。',
   'dialog.file.create.error.file': '创建文件失败',
@@ -452,12 +503,20 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'quickInput.switchWindow.placeholder': '选择要切换到的窗口',
   'quickOpenRecentEditor.group': '组 {id}',
   'quickOpenRecentEditor.placeholder': '最近使用的编辑器',
+  'quickInput.button.ariaLabel': '快速选择按钮',
+  'quickInput.filter.placeholder': '输入以筛选…',
+  'quickInput.input.ariaLabel': '快速选择输入框',
+  'quickInput.inputBox.ariaLabel': '输入框',
+  'quickInput.noResults': '没有结果',
+  'quickInput.prefixHint': "输入 '{prefix}' 后接命令名称",
+  'quickInput.removeFromList': '从列表中移除',
 
   // --- Settings ---
   'settings.acp.agents':
     '自定义 ACP 兼容 Agent 命令。每项都需要 `id`、`command`；`args`、`env`、`cwd` 可选。Env 值会以明文存储 - 请将 API 密钥保存在真实环境变量中。',
   'settings.acp.claude.executablePath':
     'Claude 可执行文件的绝对路径。仅当 `acp.claude.source` 为 "custom" 时使用。',
+  'settings.tocAriaLabel': '设置分类',
   'settings.acp.claude.source':
     '如何获取内置 Agent 使用的原生 Claude 二进制文件："download" 会在首次使用时下载到用户数据目录，"system" 会复用 PATH 中找到的 `claude` 安装，"custom" 会使用 `acp.claude.executablePath` 中的路径。',
   'settings.acp.codex.apiKey':
@@ -718,6 +777,22 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'search.useRegex': '使用正则表达式',
   'search.viewAsList': '以列表查看',
   'search.viewAsTree': '以树查看',
+  'search.menu.copy': '复制',
+  'search.menu.copyAll': '全部复制',
+  'search.menu.copyPath': '复制路径',
+  'search.menu.remove': '移除',
+  'search.staleBanner': '结果可能已过期',
+  'search.rerun': '重新搜索',
+  'search.searching': '搜索中…',
+  'search.searchingProgress': '搜索中… {matched}/{scanned} 文件',
+  'search.noResults': '未找到结果',
+  'search.summary': '{matches} 个匹配，分布在 {files} 个文件',
+  'search.replaceAll': '全部替换',
+  'search.replaceAll.confirm': '在 {files} 个文件中替换 {changes} 处。继续？',
+  'search.replaceAll.replace': '替换',
+  'search.failed': '搜索失败',
+  'search.statusSearching': '$(search) 搜索中…',
+  'search.statusProgress': '$(search) 搜索中… {matched}/{scanned} 文件，{matches} 匹配',
 
   // --- Outline ---
   'outline.collapse': '折叠',
@@ -758,6 +833,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'scm.unstageChanges': '取消暂存更改',
   'scm.discardChanges': '放弃更改',
   'scm.stageChanges': '暂存更改',
+  'scm.blame.notCommittedYet': '尚未提交',
+  'scm.blame.openCommitTooltip': '打开提交',
+  'scm.blame.statusBarTooltip': '追溯（Blame）',
 
   // --- Git graph ---
   'gitGraph.checkout': '检出',
@@ -896,6 +974,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'swarm.notify.needsAction.inAppOneNoDesc': '有新的 Swarm 审核 #{0} 待你处理',
   'swarm.notify.needsAction.open': '打开审核',
   'swarm.notify.needsAction.openList': '打开 Swarm 审核列表',
+  'swarm.openById.invalid': '请输入数字形式的审核 ID。',
+  'swarm.openById.placeholder': '审核 ID，例如 8113801',
+  'swarm.openById.prompt': '输入要打开的 Swarm 审核 ID',
 
   // --- Diff editor & Merge ---
   'diffEditor.nextChange': '下一处更改 ({key})',
@@ -915,6 +996,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'mergeEditor.loading': '正在加载编辑器…',
   'mergeEditor.result': '结果',
   'mergeEditor.unresolved': '{count} 处冲突待解决',
+  'diff.workingTreeTitle': '{label}（工作区）',
 
   // --- Terminal ---
   'terminal.close': '关闭终端',
@@ -946,6 +1028,14 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'output.filter.placeholder': '筛选（例如 text, !exclude）',
   'output.noChannels': '没有通道',
   'output.selectChannel': '选择输出通道',
+  'output.empty': '没有输出。',
+  'logFiles.error.invalidId': '无效的日志文件 id：{id}',
+  'logLevel.trace': '跟踪',
+  'logLevel.debug': '调试',
+  'logLevel.info': '信息',
+  'logLevel.warning': '警告',
+  'logLevel.error': '错误',
+  'logLevel.off': '关闭',
 
   // --- Keybindings ---
   'keybindings.column.command': '命令',
@@ -969,6 +1059,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'keybindings.search.placeholder': '搜索键盘快捷方式（{count}）',
   'keybindings.source.default': '默认',
   'keybindings.source.user': '用户',
+  'keybinding.chordPending': '已按下（{key}），等待第二个按键…',
 
   // --- Performance ---
   'performance.statusbar.tooltip': '启动耗时 {seconds}s - 点击查看报告',
@@ -1074,6 +1165,20 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'window.untitled': '未命名（窗口 {id}）',
   'workspace.recent.opened': '已打开',
   'workspace.recent.openedSuffix': '（已打开）',
+  'crash.reload': '重新加载',
+  'crash.close': '关闭窗口',
+  'crash.title': '编辑器窗口已崩溃',
+  'crash.detail': '渲染进程意外退出（{reason}）。重新加载可恢复窗口，正在进行的任务可能已中断。',
+  'crashLoop.restore': '正常启动（恢复工作区）',
+  'crashLoop.skip': '跳过恢复（打开空窗口）',
+  'crashLoop.title': '连续异常退出',
+  'crashLoop.message': '应用已连续 {count} 次异常退出。',
+  'crashLoop.detail':
+    '崩溃可能由上次打开的工作区触发（例如包含海量文件的目录）。可以跳过本次工作区恢复，以空窗口启动进行排查；之前的目录仍可从「最近打开」进入。',
+  'abnormalExit.withDumps': '上次会话异常终止，已留下 {count} 个崩溃转储文件。',
+  'abnormalExit.noDumps':
+    '上次会话在 {time} 前后未正常退出（可能被外部强制终止，如杀毒软件 / 内存不足）。',
+  'abnormalExit.openCrashes': '打开崩溃目录',
 
   // --- Update ---
   'update.availableMsg': '有新版本（{version}）可用。',
@@ -1094,6 +1199,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // --- Workbench error & Monaco ---
   'monaco.commandSource': 'Monaco',
   'workbenchError.title': '出现错误',
+  'monaco.needsActiveEditor': '此命令需要一个活动的文本编辑器',
+  'monaco.command.columnSelectUp': '向上列选择',
+  'monaco.command.columnSelectDown': '向下列选择',
 
   // --- AI: commands & model picker ---
   'ai.clearApiKey.confirm': '清除已存储的 {group} API 密钥？',
@@ -1123,6 +1231,25 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'ai.setApiKey.empty': 'API 密钥不能为空。',
   'ai.setApiKey.prompt': '输入 {group} 的 API 密钥（加密存储，绝不写入 aiSettings.json）。',
   'ai.statusbar.tooltip': 'AI',
+  'ai.vendor.openai.label': 'OpenAI（兼容）',
+  'ai.vendor.ollama.label': 'Ollama',
+  'ai.verify.noProvider': '未注册提供方"{vendor}"。',
+  'ai.verify.noModels': '端点有响应，但没有可用的模型。',
+  'ai.modelSettings.temperature': '采样温度（0–2）。',
+  'ai.modelSettings.maxTokens': '生成的最大 token 数。',
+  'ai.modelSettings.topP': '核采样概率（0–1）。',
+  'ai.modelSettings.frequencyPenalty': '按 token 已有频率施加惩罚（−2 到 2）。',
+  'ai.modelSettings.presencePenalty': '对已出现过的 token 施加惩罚（−2 到 2）。',
+  'ai.modelSettings.seed': '用于（尽力而为的）确定性采样的种子。',
+  'ai.modelSettings.reasoningEffort': '推理投入级别。',
+  'ai.error.unauthorized': 'OpenAI 未授权（{status}）：{detail}',
+  'ai.error.rateLimited': 'OpenAI 触发限流（{status}）：{detail}',
+  'ai.error.serverError': 'OpenAI 服务器错误（{status}）：{detail}',
+  'ai.error.requestFailed': 'OpenAI 请求失败（{status}）：{detail}',
+  'ai.error.ollama.unauthorized': 'Ollama 未授权（{status}）：{detail}',
+  'ai.error.ollama.rateLimited': 'Ollama 触发限流（{status}）：{detail}',
+  'ai.error.ollama.serverError': 'Ollama 服务器错误（{status}）：{detail}',
+  'ai.error.ollama.requestFailed': 'Ollama 请求失败（{status}）：{detail}',
 
   // --- AI: settings shell ---
   'aiSettings.group.agents': 'Agents',
@@ -1316,6 +1443,22 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.permission.autoExecute.tooltip':
     '计划完成后经短暂倒计时自动继续。可在设置 acp.plan.autoExecute 中调整模式。',
   'acp.permission.autoExecute.countdown': '{secs} 秒后自动执行',
+  'acp.permission.steer.placeholder': '告诉 Claude 应该怎么做…',
+  'acp.permission.steer.submit': '发送',
+  'acp.session.forkTitle': '{title}（分叉）',
+  'acp.sessionStartFailed': '启动 Agent 会话失败：{msg}',
+  'acp.sessionResumeFailed': '恢复 Agent 会话失败：{msg}',
+  'acp.mcpTransportUnsupported':
+    '{agent} 不支持为 {names} 配置的 MCP 传输方式，这些服务器已被跳过。',
+  'acp.mcp.reloading':
+    'MCP 服务器配置已变更——正在重启会话以应用。这会使模型提示缓存失效，下一轮对话可能变慢。',
+  'acp.mcp.reloadFailed': '重启会话失败：{message}',
+  'acp.switchMode.keepPlanning': '已继续规划',
+  'acp.switchMode.feedbackLabel': '你的反馈',
+  'acp.toolCall.searchTitle': '搜索“{pattern}”',
+  'acp.inlineDiff.openTooltip': '查看完整变更',
+  'acp.inlineDiff.expandLines': '… 展开 {count} 行',
+  'acp.subagentStats.costTooltip': '本地按 token 估算，实际计费可能不同',
 
   // --- AI: debug ---
   'aiDebug.clear': '清空',
@@ -1652,6 +1795,24 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'binaryPanel.version.title': '版本',
   'binaryPanel.version.upgrade': '升级到 {version}',
   'binaryPanel.version.upgradeReady': '升级到 {version}（已就绪）',
+  'claudeBinary.error.unsupportedPlatform': '当前平台不支持 Claude 二进制文件：{platform}',
+  'claudeBinary.error.noCustomPath': 'Claude 二进制文件：已选择自定义来源，但未配置路径。',
+  'claudeBinary.error.customPathNotFound': '在配置的路径中找不到 Claude 二进制文件：{path}',
+  'claudeBinary.error.notNativeExecutable':
+    'Claude 二进制文件路径不是原生 Windows 可执行文件：{path}。请将 `acp.claude.executablePath` 指向包内的 bin/claude.exe。',
+  'claudeBinary.error.noSystemBinary':
+    'PATH 中找不到系统 `claude` 可执行文件。请安装 Claude Code，或将 `acp.claude.source` 切换为 "download"。',
+  'claudeBinary.error.downloadNotAllowed':
+    'Claude 二进制文件尚未下载——后台探测不会触发下载；请启动一个 Claude 会话或显式下载以获取。',
+  'claudeBinary.error.tarballMissingBinary': '压缩包 {pkg}@{version} 中不包含 {binName}',
+  'claudeBinary.error.fetchMetadataFailed': '获取 {pkg}@{version} 元数据失败：HTTP {status}',
+  'claudeBinary.error.noTarballUrl': '{pkg}@{version} 的注册表元数据中没有压缩包 URL',
+  'claudeBinary.error.connectTimeout': '连接 {url} 超时',
+  'claudeBinary.error.downloadFailed': '下载 {url} 失败：HTTP {status}',
+  'claudeBinary.error.integritySha512': '{url} 的完整性校验失败（sha512 不匹配）',
+  'claudeBinary.error.integritySha1': '{url} 的完整性校验失败（sha1 不匹配）',
+  'claudeBinary.error.missingSdkVersion': '{path} 处的 claude-binary.json 缺少 sdkVersion',
+  'secretStorage.error.unavailable': '密钥存储不可用：操作系统加密功能不可用',
 
   // --- Binary: Codex ---
   'codexBinaryPanel.customPath': '可执行文件路径',
@@ -1683,6 +1844,21 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'codexBinaryPanel.version.title': '版本',
   'codexBinaryPanel.version.upgrade': '升级到 {version}',
   'codexBinaryPanel.version.upgradeReady': '升级到 {version}（已就绪）',
+  'codexBinary.error.unsupportedPlatform': '当前平台不支持 codex 二进制文件：{platform}',
+  'codexBinary.error.noCustomPath': 'Codex 二进制文件：已选择自定义来源，但未配置路径。',
+  'codexBinary.error.customPathNotFound': '在配置的路径中找不到 Codex 二进制文件：{path}',
+  'codexBinary.error.noSystemBinary':
+    'PATH 中找不到系统 `codex` 可执行文件。请安装它，或将 `acp.codex.source` 切换为 "download"。',
+  'codexBinary.error.downloadNotAllowed':
+    'Codex 二进制文件尚未下载——后台探测不会触发下载；请启动一个 Codex 会话或显式下载以获取。',
+  'codexBinary.error.tarballMissingBinary':
+    '压缩包 {pkg}@{version} 中不包含 vendor/{triple}/bin/{binName}',
+  'codexBinary.error.fetchMetadataFailed': '获取 {pkg}@{version} 元数据失败：HTTP {status}',
+  'codexBinary.error.noTarballUrl': '{pkg}@{version} 的注册表元数据中没有压缩包 URL',
+  'codexBinary.error.connectTimeout': '连接 {url} 超时',
+  'codexBinary.error.downloadFailed': '下载 {url} 失败：HTTP {status}',
+  'codexBinary.error.integritySha512': '{url} 的完整性校验失败（sha512 不匹配）',
+  'codexBinary.error.integritySha1': '{url} 的完整性校验失败（sha1 不匹配）',
 
   // --- Codex settings ---
   'codexSettings.approval': '审批策略',
@@ -1753,4 +1929,74 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'codexSettings.sandbox.default': '（默认）',
   'codexSettings.sandbox.desc':
     'config.toml `sandbox_mode` - Codex 运行时使用的文件系统/网络沙箱。"danger-full-access" 会完全禁用沙箱。',
+
+  // --- Editor resolver ---
+  'editorResolver.fileEditor': '文本编辑器',
+  'editorResolver.imagePreview': '图片预览',
+  'editor.loading': '正在加载编辑器…',
+  'editor.previewTitle': '预览 {name}',
+  'editor.externallyModified.message': '文件 "{name}" 在外部已修改。',
+  'editor.externallyModified.detail': '是否放弃当前更改并从磁盘重新加载？',
+  'editor.externallyModified.reload': '重新加载',
+  'editor.externallyModified.keepChanges': '保留当前更改',
+  'doc.notFound': '# 文档不存在\n\n文档 "{docId}" 不存在。',
+
+  // --- Notifications center ---
+  'notification.center.title': '通知',
+  'notification.center.clearAll': '全部清除',
+  'notification.center.closeAria': '关闭通知中心',
+  'notification.center.empty': '没有通知',
+  'notification.dismissAria': '忽略通知',
+  'notification.time.justNow': '刚刚',
+  'notification.time.minutesAgo': '{count} 分钟前',
+  'notification.time.hoursAgo': '{count} 小时前',
+  'notification.time.daysAgo': '{count} 天前',
+
+  // --- Issue reporter ---
+  'issueReporter.error.unknownProvider': '未知的问题上报提供方"{providerId}"',
+  'issueReporter.error.attachmentsNotSupported': '问题上报提供方"{providerId}"不支持附件',
+  'issueReporter.error.uploadHttp': '诊断包上传失败：HTTP {status} {statusText}',
+  'issueReporter.error.uploadNoPath': '诊断包上传响应中没有 path：{body}',
+  'reportIssue.attachDiagnostics': '附带诊断包',
+  'reportIssue.attachDiagnostics.description': '上传诊断 zip 作为附件（含系统信息与近期日志）',
+  'reportIssue.skipDiagnostics': '不附带',
+  'reportIssue.attachPrompt': '是否在问题报告中附带诊断包？（诊断摘要已复制到剪贴板）',
+  'reportIssue.pasteHint': '（诊断信息较长，请从剪贴板粘贴）',
+  'reportIssue.opened': '诊断摘要已复制到剪贴板，请在打开的上报页面中补充问题描述。',
+  'reportIssue.failed': '打开问题上报页面失败：{message}',
+  'reportIssue.uploadFailed': '诊断包上传失败：{message}',
+  'reportIssue.openWithoutAttachment': '不附带诊断包直接打开',
+
+  // --- Diagnostics ---
+  'exportDiagnostics.done': '诊断包已导出：{path}',
+  'exportDiagnostics.failed': '诊断包导出失败：{message}',
+
+  // --- User data ---
+  'userData.error.readOnly': 'UserData：{file} 为只读',
+  'userData.error.noWorkspace': 'UserData：未打开工作区（无法写入 {file}）',
+
+  // --- Markdown ---
+  'markdown.updateLinks.messageOne': '是否更新 1 个文件中的 Markdown 链接？',
+  'markdown.updateLinks.messageMany': '是否更新 {count} 个文件中的 Markdown 链接？',
+  'markdown.updateLinks.moreFiles': '，以及另外 {count} 个文件',
+  'markdown.updateLinks.update': '更新',
+  'markdown.updateLinks.dontUpdate': '不更新',
+  'markdown.updateLinks.neverAskAgain': '始终如此（不再询问）',
+  'markdown.linkFileNotFound': '文件不存在：{path}',
+  'markdownPreview.help.title': '键盘快捷键',
+  'markdownPreview.help.linkHintsCurrent': '链接提示（在当前页打开）',
+  'markdownPreview.help.linkHintsSide': '链接提示（在侧边打开）',
+  'markdownPreview.help.scrollLine': '向下 / 向上滚动一行',
+  'markdownPreview.help.scrollHorizontal': '向左 / 向右滚动',
+  'markdownPreview.help.scrollHalfPage': '向下 / 向上滚动半页',
+  'markdownPreview.help.scrollPage': '向下 / 向上滚动一页',
+  'markdownPreview.help.scrollTopBottom': '滚动到顶部 / 底部',
+  'markdownPreview.help.backForward': '后退 / 前进',
+  'markdownPreview.help.find': '在预览中查找',
+  'markdownPreview.help.countPrefix': '数字前缀重复执行（如向下 3 行）',
+  'markdownPreview.help.toggle': '显示 / 隐藏此帮助',
+
+  // --- Drag & drop ---
+  'dnd.replaceExisting.message': '目标文件夹中已存在名为"{name}"的文件或文件夹。是否替换？',
+  'dnd.replaceExisting.detail': '此操作不可逆！',
 } as const

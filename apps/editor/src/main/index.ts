@@ -617,19 +617,23 @@ void app.whenReady().then(async () => {
     const { response } = await dialog.showMessageBox({
       type: 'warning',
       buttons: [
-        localize('crashLoop.restore', '正常启动（恢复工作区）'),
-        localize('crashLoop.skip', '跳过恢复（打开空窗口）'),
+        localize('crashLoop.restore', 'Start Normally (Restore Workspace)'),
+        localize('crashLoop.skip', 'Skip Restore (Open Empty Window)'),
       ],
       defaultId: 0,
       cancelId: 0,
       noLink: true,
-      title: localize('crashLoop.title', '连续异常退出'),
-      message: localize('crashLoop.message', '应用已连续 {count} 次异常退出。', {
-        count: String(abnormalExit.consecutiveAbnormalExits),
-      }),
+      title: localize('crashLoop.title', 'Repeated Abnormal Exits'),
+      message: localize(
+        'crashLoop.message',
+        'The application has exited abnormally {count} times in a row.',
+        {
+          count: String(abnormalExit.consecutiveAbnormalExits),
+        },
+      ),
       detail: localize(
         'crashLoop.detail',
-        '崩溃可能由上次打开的工作区触发（例如包含海量文件的目录）。可以跳过本次工作区恢复，以空窗口启动进行排查；之前的目录仍可从「最近打开」进入。',
+        'The crashes may have been triggered by the previously opened workspace (for example, a directory containing a huge number of files). You can skip workspace restore this time and start with an empty window for troubleshooting; the previous folders remain reachable from "Recent".',
       ),
     })
     if (response === 1) {

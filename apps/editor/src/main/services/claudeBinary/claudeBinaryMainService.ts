@@ -25,6 +25,7 @@ import {
   Emitter,
   type ILogger,
   ILoggerService,
+  localize,
 } from '@universe-editor/platform'
 import { resolveFromRepo } from '../../repoPaths.js'
 import type {
@@ -61,7 +62,15 @@ function detectPlatformBinary(): PlatformBinary {
   if (process.platform === 'linux') {
     return { suffix: `linux-${arch}${isMuslLibc() ? '-musl' : ''}`, binName: 'claude' }
   }
-  throw new Error(`Unsupported platform for Claude binary: ${process.platform}-${arch}`)
+  throw new Error(
+    localize(
+      'claudeBinary.error.unsupportedPlatform',
+      'Unsupported platform for Claude binary: {platform}',
+      {
+        platform: `${process.platform}-${arch}`,
+      },
+    ),
+  )
 }
 
 function isMuslLibc(): boolean {
@@ -160,16 +169,31 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
 
   private async _resolveCustom(customPath: string | undefined): Promise<IClaudeBinaryResult> {
     if (!customPath) {
-      throw new Error('Claude binary: custom source selected but no path is configured.')
+      throw new Error(
+        localize(
+          'claudeBinary.error.noCustomPath',
+          'Claude binary: custom source selected but no path is configured.',
+        ),
+      )
     }
     if (!(await pathExists(customPath))) {
-      throw new Error(`Claude binary not found at configured path: ${customPath}`)
+      throw new Error(
+        localize(
+          'claudeBinary.error.customPathNotFound',
+          'Claude binary not found at configured path: {path}',
+          { path: customPath },
+        ),
+      )
     }
     const selected = await selectClaudeExecutable([customPath])
     if (!selected) {
       throw new Error(
-        `Claude binary path is not a native Windows executable: ${customPath}. ` +
-          'Point `acp.claude.executablePath` at the package bin claude.exe instead.',
+        localize(
+          'claudeBinary.error.notNativeExecutable',
+          'Claude binary path is not a native Windows executable: {path}. ' +
+            'Point `acp.claude.executablePath` at the package bin claude.exe instead.',
+          { path: customPath },
+        ),
       )
     }
     return { path: selected }
@@ -179,8 +203,11 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     const resolved = await this._whichClaude()
     if (!resolved) {
       throw new Error(
-        'No system `claude` executable found on PATH. Install Claude Code or switch ' +
-          '`acp.claude.source` to "download".',
+        localize(
+          'claudeBinary.error.noSystemBinary',
+          'No system `claude` executable found on PATH. Install Claude Code or switch ' +
+            '`acp.claude.source` to "download".',
+        ),
       )
     }
     this._logger.info(`using system claude at ${resolved}`)
@@ -274,8 +301,11 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
 
     if (!allowDownload) {
       throw new Error(
-        'Claude binary is not downloaded yet — background probes never trigger a download; ' +
-          'start a Claude session or download it explicitly to fetch it.',
+        localize(
+          'claudeBinary.error.downloadNotAllowed',
+          'Claude binary is not downloaded yet — background probes never trigger a download; ' +
+            'start a Claude session or download it explicitly to fetch it.',
+        ),
       )
     }
 
@@ -318,7 +348,13 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
       const extracted = path.join(tmpDir, binName)
       this._logger.info(`downloading claude binary complete, extracted to ${extracted}`)
       if (!(await pathExists(extracted))) {
-        throw new Error(`Tarball ${pkg}@${version} did not contain ${binName}`)
+        throw new Error(
+          localize(
+            'claudeBinary.error.tarballMissingBinary',
+            'Tarball {pkg}@{version} did not contain {binName}',
+            { pkg, version, binName },
+          ),
+        )
       }
       if (process.platform !== 'win32') await chmod(extracted, 0o755)
       await this._rmQuiet(cached)
@@ -334,11 +370,23 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     const url = `${REGISTRY}/${pkg}/${version}`
     const res = await fetch(url, { signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS) })
     if (!res.ok) {
-      throw new Error(`Failed to fetch ${pkg}@${version} metadata: HTTP ${res.status}`)
+      throw new Error(
+        localize(
+          'claudeBinary.error.fetchMetadataFailed',
+          'Failed to fetch {pkg}@{version} metadata: HTTP {status}',
+          { pkg, version, status: String(res.status) },
+        ),
+      )
     }
     const body = (await res.json()) as { dist?: RegistryDist }
     if (!body.dist?.tarball) {
-      throw new Error(`Registry metadata for ${pkg}@${version} has no tarball URL`)
+      throw new Error(
+        localize(
+          'claudeBinary.error.noTarballUrl',
+          'Registry metadata for {pkg}@{version} has no tarball URL',
+          { pkg, version },
+        ),
+      )
     }
     return body.dist
   }
@@ -353,7 +401,14 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     // (potentially large, potentially slow) body stream is read unbounded below.
     const controller = new AbortController()
     const connectTimer = setTimeout(
-      () => controller.abort(new Error(`Timed out connecting to ${dist.tarball}`)),
+      () =>
+        controller.abort(
+          new Error(
+            localize('claudeBinary.error.connectTimeout', 'Timed out connecting to {url}', {
+              url: dist.tarball,
+            }),
+          ),
+        ),
       NETWORK_TIMEOUT_MS,
     )
     let res: Response
@@ -363,7 +418,12 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
       clearTimeout(connectTimer)
     }
     if (!res.ok || !res.body) {
-      throw new Error(`Failed to download ${dist.tarball}: HTTP ${res.status}`)
+      throw new Error(
+        localize('claudeBinary.error.downloadFailed', 'Failed to download {url}: HTTP {status}', {
+          url: dist.tarball,
+          status: String(res.status),
+        }),
+      )
     }
     const total = Number(res.headers.get('content-length') ?? 0)
     let received = 0
@@ -420,14 +480,26 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
       const expected = dist.integrity.replace(/^sha512-/, '')
       const actual = hash.digest('base64')
       if (actual !== expected) {
-        throw new Error(`Integrity check failed for ${url} (sha512 mismatch)`)
+        throw new Error(
+          localize(
+            'claudeBinary.error.integritySha512',
+            'Integrity check failed for {url} (sha512 mismatch)',
+            { url },
+          ),
+        )
       }
       return
     }
     if (dist.shasum) {
       const actual = hash.digest('hex')
       if (actual !== dist.shasum) {
-        throw new Error(`Integrity check failed for ${url} (sha1 mismatch)`)
+        throw new Error(
+          localize(
+            'claudeBinary.error.integritySha1',
+            'Integrity check failed for {url} (sha1 mismatch)',
+            { url },
+          ),
+        )
       }
     }
   }
@@ -439,7 +511,13 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     const raw = await readFile(metaPath, 'utf8')
     const meta = JSON.parse(raw) as { sdkVersion?: string }
     if (!meta.sdkVersion) {
-      throw new Error(`claude-binary.json at ${metaPath} is missing sdkVersion`)
+      throw new Error(
+        localize(
+          'claudeBinary.error.missingSdkVersion',
+          'claude-binary.json at {path} is missing sdkVersion',
+          { path: metaPath },
+        ),
+      )
     }
     return meta.sdkVersion
   }

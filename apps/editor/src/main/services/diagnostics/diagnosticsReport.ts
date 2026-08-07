@@ -99,31 +99,31 @@ export function buildIssueMarkdown(
   errorTop: readonly ErrorFingerprintAggregate[],
 ): string {
   const lines: string[] = []
-  lines.push('## 版本')
+  lines.push('## Version')
   lines.push('')
-  lines.push(`- 应用版本: ${info.appVersion} (${info.mode})`)
+  lines.push(`- App version: ${info.appVersion} (${info.mode})`)
   lines.push(`- Electron: ${info.electron}`)
   lines.push(`- Chromium: ${info.chromium}`)
   lines.push(`- Node.js: ${info.node}`)
   lines.push(`- OS: ${info.os}`)
   lines.push(`- Locale: ${info.locale}`)
   lines.push('')
-  lines.push('## 系统信息')
+  lines.push('## System Info')
   lines.push('')
-  lines.push('| 项目 | 值 |')
+  lines.push('| Item | Value |')
   lines.push('| --- | --- |')
   lines.push(`| CPUs | ${escapeTableCell(info.cpus)} |`)
-  lines.push(`| 内存 | ${escapeTableCell(info.memory)} |`)
+  lines.push(`| Memory | ${escapeTableCell(info.memory)} |`)
   lines.push('')
 
-  lines.push('## 扩展')
+  lines.push('## Extensions')
   lines.push('')
   if (extensions.length === 0) {
-    lines.push('（无已安装扩展）')
+    lines.push('(No extensions installed)')
   } else {
-    lines.push(`<details><summary>已安装扩展 (${extensions.length})</summary>`)
+    lines.push(`<details><summary>Installed extensions (${extensions.length})</summary>`)
     lines.push('')
-    lines.push('| 扩展 | 版本 | 来源 |')
+    lines.push('| Extension | Version | Source |')
     lines.push('| --- | --- | --- |')
     for (const ext of extensions) {
       lines.push(
@@ -135,14 +135,16 @@ export function buildIssueMarkdown(
   }
   lines.push('')
 
-  lines.push('## 近期错误聚合（本地 errors.jsonl）')
+  lines.push('## Recent Error Aggregation (local errors.jsonl)')
   lines.push('')
   if (errorTop.length === 0) {
-    lines.push('（近期无错误记录）')
+    lines.push('(No recent errors)')
   } else {
-    lines.push(`<details><summary>按出现次数排序的 Top ${errorTop.length} 错误指纹</summary>`)
+    lines.push(
+      `<details><summary>Top ${errorTop.length} error fingerprints by occurrence</summary>`,
+    )
     lines.push('')
-    lines.push('| 次数 | 事件 | 指纹 | 来源 | 最近消息 |')
+    lines.push('| Count | Event | Fingerprint | Source | Last Message |')
     lines.push('| --- | --- | --- | --- | --- |')
     for (const e of errorTop) {
       lines.push(

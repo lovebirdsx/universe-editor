@@ -13,6 +13,7 @@ import {
   ILoggerService,
   IssueReporterRegistry,
   createNamedLogger,
+  localize,
   type IssueReportPayload,
   type IssueReportProviderInfo,
 } from '@universe-editor/platform'
@@ -53,10 +54,22 @@ export class IssueReporterMainService extends Disposable implements IIssueReport
   async buildIssueUrl(providerId: string, payload: IssueReportPayload): Promise<string> {
     const provider = this._registry.getProvider(providerId)
     if (!provider) {
-      throw new Error(`Unknown issue reporter provider '${providerId}'`)
+      throw new Error(
+        localize(
+          'issueReporter.error.unknownProvider',
+          "Unknown issue reporter provider '{providerId}'",
+          { providerId },
+        ),
+      )
     }
     if (payload.attachDiagnostics && !provider.supportsAttachments) {
-      throw new Error(`Issue reporter provider '${providerId}' does not support attachments`)
+      throw new Error(
+        localize(
+          'issueReporter.error.attachmentsNotSupported',
+          "Issue reporter provider '{providerId}' does not support attachments",
+          { providerId },
+        ),
+      )
     }
     return provider.buildIssueUrl(payload)
   }

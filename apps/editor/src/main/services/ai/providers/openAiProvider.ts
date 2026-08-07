@@ -29,6 +29,7 @@ import {
   type AiResponseChunk,
   type CancellationToken,
   type IAiModelProvider,
+  localize,
 } from '@universe-editor/platform'
 import { retryWithBackoff, toAbortSignal } from './retry.js'
 
@@ -38,19 +39,43 @@ const DEFAULT_BASE_URL = 'https://api.openai.com/v1'
 const DEFAULT_MAX_TOKENS = 8192
 
 /** Tunable request parameters shared by every OpenAI-compatible model. */
-const BASE_SCHEMA: AiModelConfigSchema = {
-  temperature: { type: 'number', description: 'Sampling temperature (0–2).', group: 'navigation' },
-  maxTokens: { type: 'number', description: 'Maximum tokens to generate.' },
-  topP: { type: 'number', description: 'Nucleus sampling probability (0–1).' },
-  frequencyPenalty: {
-    type: 'number',
-    description: 'Penalize tokens by their existing frequency (−2 to 2).',
-  },
-  presencePenalty: {
-    type: 'number',
-    description: 'Penalize tokens that have already appeared (−2 to 2).',
-  },
-  seed: { type: 'number', description: 'Seed for (best-effort) deterministic sampling.' },
+function baseSchema(): AiModelConfigSchema {
+  return {
+    temperature: {
+      type: 'number',
+      description: localize('ai.modelSettings.temperature', 'Sampling temperature (0–2).'),
+      group: 'navigation',
+    },
+    maxTokens: {
+      type: 'number',
+      description: localize('ai.modelSettings.maxTokens', 'Maximum tokens to generate.'),
+    },
+    topP: {
+      type: 'number',
+      description: localize('ai.modelSettings.topP', 'Nucleus sampling probability (0–1).'),
+    },
+    frequencyPenalty: {
+      type: 'number',
+      description: localize(
+        'ai.modelSettings.frequencyPenalty',
+        'Penalize tokens by their existing frequency (−2 to 2).',
+      ),
+    },
+    presencePenalty: {
+      type: 'number',
+      description: localize(
+        'ai.modelSettings.presencePenalty',
+        'Penalize tokens that have already appeared (−2 to 2).',
+      ),
+    },
+    seed: {
+      type: 'number',
+      description: localize(
+        'ai.modelSettings.seed',
+        'Seed for (best-effort) deterministic sampling.',
+      ),
+    },
+  }
 }
 
 /** Maps camelCase config keys to the snake_case fields the OpenAI API expects. */
@@ -250,12 +275,12 @@ function toMetadata(group: AiResolvedGroup, id: string): AiModelMetadata {
     maxInputTokens: DEFAULT_MAX_TOKENS,
     maxOutputTokens: DEFAULT_MAX_TOKENS,
     capabilities: { streaming: true },
-    configurationSchema: BASE_SCHEMA,
+    configurationSchema: baseSchema(),
   }
 }
 
 function declaredMetadata(group: AiResolvedGroup, config: AiCustomModelConfig): AiModelMetadata {
-  const schema = buildModelConfigSchema(config, BASE_SCHEMA)
+  const schema = buildModelConfigSchema(config, baseSchema())
   return {
     id: composeModelId(VENDOR, group.name, config.id),
     vendor: VENDOR,
@@ -317,15 +342,39 @@ function isTransient(err: unknown): boolean {
 
 function mapHttpError(status: number, detail: string): AiError {
   if (status === 401 || status === 403) {
-    return new AiError(AiErrorCode.Unauthorized, `OpenAI unauthorized (${status}): ${detail}`)
+    return new AiError(
+      AiErrorCode.Unauthorized,
+      localize('ai.error.unauthorized', 'OpenAI unauthorized ({status}): {detail}', {
+        status: String(status),
+        detail,
+      }),
+    )
   }
   if (status === 429) {
-    return new AiError(AiErrorCode.RateLimited, `OpenAI rate limited (${status}): ${detail}`)
+    return new AiError(
+      AiErrorCode.RateLimited,
+      localize('ai.error.rateLimited', 'OpenAI rate limited ({status}): {detail}', {
+        status: String(status),
+        detail,
+      }),
+    )
   }
   if (status >= 500) {
-    return new AiError(AiErrorCode.NetworkError, `OpenAI server error (${status}): ${detail}`)
+    return new AiError(
+      AiErrorCode.NetworkError,
+      localize('ai.error.serverError', 'OpenAI server error ({status}): {detail}', {
+        status: String(status),
+        detail,
+      }),
+    )
   }
-  return new AiError(AiErrorCode.Unknown, `OpenAI request failed (${status}): ${detail}`)
+  return new AiError(
+    AiErrorCode.Unknown,
+    localize('ai.error.requestFailed', 'OpenAI request failed ({status}): {detail}', {
+      status: String(status),
+      detail,
+    }),
+  )
 }
 
 function normalizeError(err: unknown, token: CancellationToken): unknown {

@@ -255,14 +255,14 @@ describe('SearchView', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(260)
     })
-    expect(screen.queryByText(/匹配/)).toBeTruthy()
+    expect(screen.queryByText(/matches/)).toBeTruthy()
     act(() => {
       fireEvent.change(input, { target: { value: '' } })
     })
     await act(async () => {
       await vi.advanceTimersByTimeAsync(260)
     })
-    expect(screen.queryByText(/匹配/)).toBeFalsy()
+    expect(screen.queryByText(/matches/)).toBeFalsy()
   })
 
   it('cancels a previous search when input changes mid-flight', async () => {

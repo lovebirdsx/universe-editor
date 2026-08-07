@@ -16,6 +16,7 @@ import {
   IContextKeyService,
   IEditorGroupsService,
   type IEditorInput,
+  localize,
 } from '@universe-editor/platform'
 import {
   SwarmCommands,
@@ -276,7 +277,7 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
   if (!monacoNs) {
     return (
       <div className={styles['diffEditor']} data-testid="swarm-diff-editor">
-        <div className={styles['loading']}>正在加载编辑器…</div>
+        <div className={styles['loading']}>{localize('editor.loading', 'Loading editor…')}</div>
       </div>
     )
   }

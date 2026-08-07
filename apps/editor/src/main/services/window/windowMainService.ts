@@ -237,14 +237,14 @@ export class WindowMainService implements IWindowMainService {
       void dialog
         .showMessageBox(win, {
           type: 'error',
-          buttons: [localize('crash.reload', '重新加载'), localize('crash.close', '关闭窗口')],
+          buttons: [localize('crash.reload', 'Reload'), localize('crash.close', 'Close Window')],
           defaultId: 0,
           cancelId: 1,
-          title: localize('crash.title', '编辑器窗口已崩溃'),
-          message: localize('crash.title', '编辑器窗口已崩溃'),
+          title: localize('crash.title', 'The editor window has crashed'),
+          message: localize('crash.title', 'The editor window has crashed'),
           detail: localize(
             'crash.detail',
-            '渲染进程意外退出（{reason}）。重新加载可恢复窗口，正在进行的任务可能已中断。',
+            'The renderer process exited unexpectedly ({reason}). Reloading restores the window; any ongoing tasks may have been interrupted.',
             { reason: details.reason },
           ),
         })

@@ -39,7 +39,7 @@ export function buildHelpMessage(opts: HelpMessageOptions): string {
     'Options:',
     ...options.map(
       (item, i) =>
-        `  ${usages[i]!.padEnd(width)}  ${item.description}${item.type === 'string[]' ? '（可重复）' : ''}`,
+        `  ${usages[i]!.padEnd(width)}  ${item.description}${item.type === 'string[]' ? ' (repeatable)' : ''}`,
     ),
   ]
   return lines.join('\n')

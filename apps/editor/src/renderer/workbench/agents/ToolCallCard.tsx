@@ -250,7 +250,7 @@ export const ToolCallCard = memo(function ToolCallCard({
         ? steerFeedback !== undefined && (
             <div className={styles['toolCallFeedback']} data-testid="acp-keep-planning-feedback">
               <span className={styles['toolCallFeedbackLabel']}>
-                {localize('acp.switchMode.feedbackLabel', '你的反馈')}
+                {localize('acp.switchMode.feedbackLabel', 'Your feedback')}
               </span>
               <span>{steerFeedback}</span>
             </div>

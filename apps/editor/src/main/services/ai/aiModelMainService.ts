@@ -23,6 +23,7 @@ import {
   ILoggerService,
   ISecretStorageService,
   isCancellationError,
+  localize,
   transformErrorForSerialization,
   type AiActiveModelKind,
   type AiActiveModels,
@@ -68,13 +69,17 @@ const METADATA_REQUEST_TIMEOUT_MS = 10_000
  * Endpoint defaults per built-in vendor, surfaced in the "add provider" picker.
  * Vendors without an entry still appear (from the registry) with no defaults.
  */
-const VENDOR_DESCRIPTORS: Readonly<Record<string, Omit<AiVendorDescriptor, 'vendor'>>> = {
+const VENDOR_DESCRIPTORS: Readonly<
+  Record<string, Omit<AiVendorDescriptor, 'vendor' | 'label'> & { labelKey: string; label: string }>
+> = {
   openai: {
+    labelKey: 'ai.vendor.openai.label',
     label: 'OpenAI (compatible)',
     defaultBaseUrl: 'https://api.openai.com/v1',
     requiresApiKey: true,
   },
   ollama: {
+    labelKey: 'ai.vendor.ollama.label',
     label: 'Ollama',
     defaultBaseUrl: 'http://127.0.0.1:11434',
     requiresApiKey: false,
@@ -211,7 +216,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
       const desc = VENDOR_DESCRIPTORS[vendor]
       return {
         vendor,
-        label: desc?.label ?? vendor,
+        label: desc ? localize(desc.labelKey, desc.label) : vendor,
         requiresApiKey: desc?.requiresApiKey ?? false,
         ...(desc?.defaultBaseUrl !== undefined ? { defaultBaseUrl: desc.defaultBaseUrl } : {}),
       }
@@ -222,7 +227,13 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     await this._ready
     const provider = this._registry.getProvider(input.vendor)
     if (!provider) {
-      return { ok: false, modelCount: 0, error: `No provider registered for '${input.vendor}'.` }
+      return {
+        ok: false,
+        modelCount: 0,
+        error: localize('ai.verify.noProvider', "No provider registered for '{vendor}'.", {
+          vendor: input.vendor,
+        }),
+      }
     }
     // A throwaway resolved group: the probed key is read from the input only and
     // never written to secret storage or aiSettings.json.
@@ -238,7 +249,10 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
         return {
           ok: false,
           modelCount: 0,
-          error: 'The endpoint responded but no models are available.',
+          error: localize(
+            'ai.verify.noModels',
+            'The endpoint responded but no models are available.',
+          ),
         }
       }
       return { ok: true, modelCount: models.length }

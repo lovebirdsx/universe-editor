@@ -19,6 +19,7 @@ import {
   IFileService,
   IInstantiationService,
   IUriIdentityService,
+  localize,
   URI,
   type IFileMatch,
   type ITextSearchMatch,
@@ -184,10 +185,14 @@ export function useSearchActions(
     )
     if (totalChanges === 0) return
     const ok = await dialogService.confirm({
-      message: `在 ${results.length} 个文件中替换 ${totalChanges} 处。继续?`,
+      message: localize(
+        'search.replaceAll.confirm',
+        'Replace {changes} occurrences across {files} files. Continue?',
+        { changes: totalChanges, files: results.length },
+      ),
       type: 'warning',
-      primaryButton: '替换',
-      cancelButton: '取消',
+      primaryButton: localize('search.replaceAll.replace', 'Replace'),
+      cancelButton: localize('common.cancel', 'Cancel'),
     })
     if (!ok.confirmed) return
     for (const fm of results) {

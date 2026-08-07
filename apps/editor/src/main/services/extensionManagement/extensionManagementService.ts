@@ -21,6 +21,7 @@ import {
   ILoggerService,
   type Event,
   type ILogger,
+  localize,
 } from '@universe-editor/platform'
 import { version as HOST_API_VERSION } from '@universe-editor/extension-api'
 import {
@@ -238,7 +239,11 @@ export class ExtensionManagementMainService
   }
 
   private async _installFromGallery(extension: IGalleryExtension): Promise<ILocalExtension> {
-    if (!this._gallery) throw new Error('marketplace is not available')
+    if (!this._gallery) {
+      throw new Error(
+        localize('extManagement.error.noMarketplace', 'The marketplace is not available.'),
+      )
+    }
 
     await this._assertNotMalicious(extension.identifier)
 
@@ -251,8 +256,16 @@ export class ExtensionManagementMainService
     const downloadedId = extensionId(manifest)
     if (downloadedId !== extension.identifier || manifest.version !== extension.version) {
       throw new Error(
-        `downloaded package (${downloadedId}@${manifest.version}) does not match the ` +
-          `marketplace entry (${extension.identifier}@${extension.version})`,
+        localize(
+          'extManagement.error.packageMismatch',
+          'The downloaded package ({downloadedId}@{downloadedVersion}) does not match the marketplace entry ({expectedId}@{expectedVersion}).',
+          {
+            downloadedId,
+            downloadedVersion: manifest.version,
+            expectedId: extension.identifier,
+            expectedVersion: extension.version,
+          },
+        ),
       )
     }
 
@@ -261,7 +274,11 @@ export class ExtensionManagementMainService
     // entry or any mismatch means the package (or registry) was tampered with.
     if (!extension.vsixHash || !extension.vsixSignature) {
       throw new Error(
-        `marketplace entry ${extension.identifier}@${extension.version} is unsigned — refusing to install`,
+        localize(
+          'extManagement.error.unsigned',
+          'Marketplace entry {id}@{version} is unsigned — refusing to install.',
+          { id: extension.identifier, version: extension.version },
+        ),
       )
     }
     await verifyVsixSignature(
@@ -301,7 +318,11 @@ export class ExtensionManagementMainService
   ): Promise<ILocalExtension> {
     if (!satisfies(this._hostApiVersion, manifest.engines.universe)) {
       throw new Error(
-        `extension requires universe ${manifest.engines.universe}, host API is ${this._hostApiVersion}`,
+        localize(
+          'extManagement.error.engineMismatch',
+          'The extension requires universe {required}, host API is {actual}.',
+          { required: manifest.engines.universe, actual: this._hostApiVersion },
+        ),
       )
     }
 

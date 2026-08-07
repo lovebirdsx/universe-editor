@@ -18,6 +18,7 @@ import {
   IWorkspaceService,
   ShutdownReason,
   URI,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
@@ -32,7 +33,10 @@ import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js
   static readonly ID = '_workbench.getConfiguration'
 
   constructor() {
-    super({ id: GetConfigurationAction.ID, title: 'Get Configuration' })
+    super({
+      id: GetConfigurationAction.ID,
+      title: localize2('action.extensionApi.getConfiguration', 'Get Configuration'),
+    })
   }
 
   override run(accessor: ServicesAccessor, key: string, defaultValue?: unknown): unknown {
@@ -46,7 +50,10 @@ export class UpdateConfigurationAction extends Action2 {
   static readonly ID = '_workbench.updateConfiguration'
 
   constructor() {
-    super({ id: UpdateConfigurationAction.ID, title: 'Update Configuration' })
+    super({
+      id: UpdateConfigurationAction.ID,
+      title: localize2('action.extensionApi.updateConfiguration', 'Update Configuration'),
+    })
   }
 
   override async run(accessor: ServicesAccessor, key: string, value: unknown): Promise<void> {
@@ -64,7 +71,10 @@ export class GetActiveEditorFileAction extends Action2 {
   static readonly ID = '_workbench.getActiveEditorFile'
 
   constructor() {
-    super({ id: GetActiveEditorFileAction.ID, title: 'Get Active Editor File' })
+    super({
+      id: GetActiveEditorFileAction.ID,
+      title: localize2('action.extensionApi.getActiveEditorFile', 'Get Active Editor File'),
+    })
   }
 
   override run(accessor: ServicesAccessor): string | undefined {
@@ -80,7 +90,7 @@ export class OpenFileAction extends Action2 {
   static readonly ID = '_workbench.openFile'
 
   constructor() {
-    super({ id: OpenFileAction.ID, title: 'Open File' })
+    super({ id: OpenFileAction.ID, title: localize2('action.extensionApi.openFile', 'Open File') })
   }
 
   override run(accessor: ServicesAccessor, fsPath: string): void {
@@ -118,7 +128,10 @@ export class OpenFileAtAction extends Action2 {
   static readonly ID = '_workbench.openFileAt'
 
   constructor() {
-    super({ id: OpenFileAtAction.ID, title: 'Open File At Position' })
+    super({
+      id: OpenFileAtAction.ID,
+      title: localize2('action.extensionApi.openFileAt', 'Open File At Position'),
+    })
   }
 
   override run(accessor: ServicesAccessor, fsPath: string, line: number, column = 0): void {
@@ -139,7 +152,10 @@ export class WriteClipboardAction extends Action2 {
   static readonly ID = '_workbench.writeClipboard'
 
   constructor() {
-    super({ id: WriteClipboardAction.ID, title: 'Write Clipboard' })
+    super({
+      id: WriteClipboardAction.ID,
+      title: localize2('action.extensionApi.writeClipboard', 'Write Clipboard'),
+    })
   }
 
   override async run(_accessor: ServicesAccessor, text: unknown): Promise<void> {
@@ -157,7 +173,10 @@ export class OpenFolderFromExtensionAction extends Action2 {
   static readonly ID = '_workbench.openFolder'
 
   constructor() {
-    super({ id: OpenFolderFromExtensionAction.ID, title: 'Open Folder' })
+    super({
+      id: OpenFolderFromExtensionAction.ID,
+      title: localize2('action.extensionApi.openFolder', 'Open Folder'),
+    })
   }
 
   override async run(accessor: ServicesAccessor, fsPath: string): Promise<void> {
@@ -177,7 +196,10 @@ export class OpenFolderInNewWindowFromExtensionAction extends Action2 {
   static readonly ID = '_workbench.openFolderInNewWindow'
 
   constructor() {
-    super({ id: OpenFolderInNewWindowFromExtensionAction.ID, title: 'Open Folder in New Window' })
+    super({
+      id: OpenFolderInNewWindowFromExtensionAction.ID,
+      title: localize2('action.extensionApi.openFolderInNewWindow', 'Open Folder in New Window'),
+    })
   }
 
   override async run(accessor: ServicesAccessor, fsPath: string): Promise<void> {

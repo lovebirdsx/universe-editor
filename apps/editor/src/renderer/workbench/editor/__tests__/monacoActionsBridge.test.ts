@@ -160,6 +160,22 @@ describe('bridgeMonacoActionsForTests', () => {
     expect(getMonacoDefaultKeybinding('editor.action.selectAll')).toEqual({ key: 'ctrl+a' })
   })
 
+  it('falls back to labelKey (localize) when the NLS table has no entry', () => {
+    const coreCommands: CoreCommand[] = [
+      {
+        id: 'cursorColumnSelectUp',
+        label: 'Column Select Up',
+        nlsKey: 'Column Select Up',
+        labelKey: 'monaco.command.columnSelectUp',
+      },
+    ]
+    registered = bridgeMonacoActionsForTests(makeRegistry([]), coreCommands)
+    // No configureNls / no table entry → English defaultMessage wins.
+    expect(CommandsRegistry.getCommands().get('cursorColumnSelectUp')?.metadata?.description).toBe(
+      'Column Select Up',
+    )
+  })
+
   it('registers cursor column selection core commands with VSCode default keys', () => {
     const coreCommands: CoreCommand[] = [
       {

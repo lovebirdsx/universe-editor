@@ -23,7 +23,10 @@ export class OpenMergeEditorAction extends Action2 {
   static readonly ID = '_workbench.openMergeEditor'
 
   constructor() {
-    super({ id: OpenMergeEditorAction.ID, title: 'Open Merge Editor' })
+    super({
+      id: OpenMergeEditorAction.ID,
+      title: localize2('action.merge.openMergeEditor', 'Open Merge Editor'),
+    })
   }
 
   override run(accessor: ServicesAccessor, payload: OpenMergeEditorPayload): void {

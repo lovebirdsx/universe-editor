@@ -37,7 +37,7 @@ export class NotificationStatusContribution extends Disposable implements IWorkb
   private _update(count: number): void {
     const hasUnread = count > 0
     const tooltip = hasUnread
-      ? `${count} unread notification(s)`
+      ? localize('status.unreadNotifications', '{count} unread notification(s)', { count })
       : localize('status.notifications', 'Notifications')
     const entry: IStatusBarEntry = hasUnread
       ? {

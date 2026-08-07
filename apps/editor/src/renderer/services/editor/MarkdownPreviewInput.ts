@@ -12,7 +12,7 @@
  *  releases the model.
  *--------------------------------------------------------------------------------------------*/
 
-import { EditorInput, URI, type UriComponents } from '@universe-editor/platform'
+import { EditorInput, localize, URI, type UriComponents } from '@universe-editor/platform'
 import { basenameOfResource } from '../../workbench/files/resourceInfo.js'
 import { MarkdownPreviewRegistry } from './MarkdownPreviewRegistry.js'
 import type { FileEditorInput } from './FileEditorInput.js'
@@ -52,7 +52,9 @@ export class MarkdownPreviewInput extends EditorInput {
   }
 
   override getName(): string {
-    return `预览 ${basenameOfResource(this._sourceUri)}`
+    return localize('editor.previewTitle', 'Preview {name}', {
+      name: basenameOfResource(this._sourceUri),
+    })
   }
 
   get sourceUri(): URI {

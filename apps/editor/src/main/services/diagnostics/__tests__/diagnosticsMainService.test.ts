@@ -107,7 +107,7 @@ describe('DiagnosticsMainService', () => {
       }) + '\n',
     )
     const md = await service.collectIssueReport()
-    expect(md).toContain('应用版本: 9.9.9-test (release)')
+    expect(md).toContain('App version: 9.9.9-test (release)')
     expect(md).toContain('| pub.ext | 0.1.0 | gallery |')
     expect(md).toContain('| 4 | unhandledError | run@thing/doer.ts | main | boom |')
   })

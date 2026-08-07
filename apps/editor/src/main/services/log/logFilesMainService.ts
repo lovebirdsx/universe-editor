@@ -10,7 +10,7 @@
 import { shell } from 'electron'
 import { promises as fs } from 'node:fs'
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path'
-import { Event, LogLevel } from '@universe-editor/platform'
+import { Event, localize, LogLevel } from '@universe-editor/platform'
 import type {
   ILogFilesService,
   LogAppendEvent,
@@ -128,7 +128,7 @@ export class LogFilesMainService implements ILogFilesService {
     const target = this._resolveId(id)
     const stat = await fs.stat(target)
     if (!stat.isFile() || extname(target) !== '.log') {
-      throw new Error(`Invalid log file id: ${id}`)
+      throw new Error(localize('logFiles.error.invalidId', 'Invalid log file id: {id}', { id }))
     }
 
     const limit = normalizeMaxBytes(maxBytes)
@@ -191,12 +191,12 @@ export class LogFilesMainService implements ILogFilesService {
     const parts = id.split('/')
     const file = parts[parts.length - 1]
     if (file === undefined || !LOG_FILE_RE.test(file)) {
-      throw new Error(`Invalid log file id: ${id}`)
+      throw new Error(localize('logFiles.error.invalidId', 'Invalid log file id: {id}', { id }))
     }
 
     const sessionId = parts[0]
     if (sessionId === undefined || !SESSION_DIR_RE.test(sessionId)) {
-      throw new Error(`Invalid log file id: ${id}`)
+      throw new Error(localize('logFiles.error.invalidId', 'Invalid log file id: {id}', { id }))
     }
 
     let target: string
@@ -205,11 +205,11 @@ export class LogFilesMainService implements ILogFilesService {
     } else if (parts.length === 3 && parts[1] !== undefined && WINDOW_DIR_RE.test(parts[1])) {
       target = resolve(this._root(), sessionId, parts[1], file)
     } else {
-      throw new Error(`Invalid log file id: ${id}`)
+      throw new Error(localize('logFiles.error.invalidId', 'Invalid log file id: {id}', { id }))
     }
 
     if (!isInside(this._root(), target)) {
-      throw new Error(`Invalid log file id: ${id}`)
+      throw new Error(localize('logFiles.error.invalidId', 'Invalid log file id: {id}', { id }))
     }
     return target
   }

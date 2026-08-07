@@ -13,7 +13,7 @@ export const HELP: ConfigItem<'boolean'> = {
   type: 'boolean',
   cli: 'help',
   cliAlias: 'h',
-  description: '打印命令行用法并退出',
+  description: 'Print command-line usage and exit',
 }
 
 /** Print version and exit. */
@@ -22,7 +22,7 @@ export const VERSION: ConfigItem<'boolean'> = {
   type: 'boolean',
   cli: 'version',
   cliAlias: 'v',
-  description: '打印版本号并退出',
+  description: 'Print the version and exit',
 }
 
 /** userData directory override. CLI wins over env (matches legacy productPaths). */
@@ -32,7 +32,7 @@ export const USER_DATA_DIR: ConfigItem<'string'> = {
   cli: 'user-data-dir',
   env: 'UNIVERSE_USER_DATA_DIR',
   args: '<path>',
-  description: '覆盖用户数据目录',
+  description: 'Override the user data directory',
 }
 
 /**
@@ -48,7 +48,7 @@ export const CONFIG_DIR: ConfigItem<'string'> = {
   env: 'UNIVERSE_CONFIG_DIR',
   filePath: 'configDir',
   args: '<path>',
-  description: '从指定目录加载用户设置（settings.json / keybindings.json）',
+  description: 'Load user settings (settings.json / keybindings.json) from the given directory',
 }
 
 export const IS_E2E: ConfigItem<'boolean'> = {
@@ -81,7 +81,7 @@ export const UPDATE_URL: ConfigItem<'string'> = {
   env: 'UNIVERSE_UPDATE_URL',
   filePath: 'updateUrl',
   args: '<url>',
-  description: '覆盖自动更新服务器地址（仅打包版生效）',
+  description: 'Override the auto-update feed URL (packaged builds only)',
   validate: isHttpUrl,
 }
 
@@ -93,7 +93,7 @@ export const GALLERY_URL: ConfigItem<'string'> = {
   env: 'UNIVERSE_GALLERY_URL',
   filePath: 'galleryUrl',
   args: '<url>',
-  description: '覆盖扩展市场地址',
+  description: 'Override the extension marketplace URL',
   validate: isHttpUrl,
 }
 
@@ -109,7 +109,8 @@ export const EXTENSION_DEV_PATHS: ConfigItem<'string[]'> = {
   cli: 'extension-development-path',
   env: 'UNIVERSE_EXTENSION_DEV_PATH',
   args: '<dir>',
-  description: '从源码目录加载开发中的扩展（每个路径是一个扩展根目录）',
+  description:
+    'Load an in-development extension from a source directory (each path is one extension root)',
   validate: (paths) => paths.every((p) => p !== ''),
 }
 
@@ -120,7 +121,7 @@ export const INSPECT_EXTENSIONS: ConfigItem<'number'> = {
   cli: 'inspect-extensions',
   env: 'UNIVERSE_INSPECT_EXTENSIONS',
   args: '<port>',
-  description: '在指定端口启用扩展宿主调试（绑定 127.0.0.1）',
+  description: 'Enable extension-host debugging on the given port (bound to 127.0.0.1)',
   validate: (p) => Number.isInteger(p) && p >= 1 && p <= 65535,
 }
 
@@ -131,7 +132,8 @@ export const INSPECT_BRK_EXTENSIONS: ConfigItem<'number'> = {
   cli: 'inspect-brk-extensions',
   env: 'UNIVERSE_INSPECT_BRK_EXTENSIONS',
   args: '<port>',
-  description: '在指定端口启用扩展宿主调试并在激活前断住（绑定 127.0.0.1）',
+  description:
+    'Enable extension-host debugging on the given port, breaking before activation (bound to 127.0.0.1)',
   validate: (p) => Number.isInteger(p) && p >= 1 && p <= 65535,
 }
 

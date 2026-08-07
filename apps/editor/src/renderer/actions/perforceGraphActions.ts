@@ -7,10 +7,13 @@ import {
   Action2,
   IEditorService,
   KeybindingWeight,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { PerforceGraphEditorInput } from '../services/editor/PerforceGraphEditorInput.js'
 import { perforceGraphViewState } from '../services/perforceGraph/perforceGraphViewState.js'
+
+const CATEGORY = localize2('command.category.perforceGraph', 'Perforce Graph')
 
 export class ViewPerforceGraphAction extends Action2 {
   static readonly ID = 'perforce-graph.view'
@@ -18,8 +21,8 @@ export class ViewPerforceGraphAction extends Action2 {
   constructor() {
     super({
       id: ViewPerforceGraphAction.ID,
-      title: 'View Perforce Graph',
-      category: 'Perforce Graph',
+      title: localize2('action.perforceGraph.view', 'View Perforce Graph'),
+      category: CATEGORY,
       f1: true,
     })
   }
@@ -39,7 +42,10 @@ export class OpenPerforceGraphFromExtensionAction extends Action2 {
   static readonly ID = '_workbench.openPerforceGraph'
 
   constructor() {
-    super({ id: OpenPerforceGraphFromExtensionAction.ID, title: 'Open Perforce Graph' })
+    super({
+      id: OpenPerforceGraphFromExtensionAction.ID,
+      title: localize2('action.perforceGraph.open', 'Open Perforce Graph'),
+    })
   }
 
   override async run(accessor: ServicesAccessor, changelist?: unknown): Promise<void> {
@@ -56,8 +62,8 @@ export class PerforceGraphFocusSearchAction extends Action2 {
   constructor() {
     super({
       id: PerforceGraphFocusSearchAction.ID,
-      title: 'Focus Search',
-      category: 'Perforce Graph',
+      title: localize2('action.perforceGraph.focusSearch', 'Focus Search'),
+      category: CATEGORY,
       keybinding: { primary: 'ctrl+f', when: "activeEditorId == 'universe:/perforceGraph'" },
       precondition: "activeEditorId == 'universe:/perforceGraph'",
       f1: true,
@@ -75,8 +81,8 @@ export class PerforceGraphRefreshAction extends Action2 {
   constructor() {
     super({
       id: PerforceGraphRefreshAction.ID,
-      title: 'Refresh',
-      category: 'Perforce Graph',
+      title: localize2('action.perforceGraph.refresh', 'Refresh'),
+      category: CATEGORY,
       // Outranks the unscoped Open Recent (ctrl+r) binding — resolution is
       // weight-first, when-clauses only filter, they don't boost priority.
       keybinding: {

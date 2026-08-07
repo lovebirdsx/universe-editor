@@ -28,6 +28,7 @@ import {
   INotificationService,
   IWindowsService,
   IWorkspaceService,
+  localize,
   Severity,
   ShutdownReason,
   URI,
@@ -161,7 +162,9 @@ export function useMarkdownFileLink(
         if (resolution.kind === 'missing') {
           notificationService?.notify({
             severity: Severity.Warning,
-            message: `文件不存在: ${stripFilePathLinkPrefix(rawPath)}`,
+            message: localize('markdown.linkFileNotFound', 'File does not exist: {path}', {
+              path: stripFilePathLinkPrefix(rawPath),
+            }),
           })
           return
         }
