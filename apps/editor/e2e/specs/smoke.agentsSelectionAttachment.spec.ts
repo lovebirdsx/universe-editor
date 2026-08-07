@@ -68,6 +68,19 @@ test.describe('@p0 agents selection attachment', () => {
       })
     await expect(page.getByTestId('acp-selection-context-chip')).toHaveText('selection.ts:2')
 
+    // 等 echo 回复落地再 reload：上面的 user 消息是本地乐观上屏，不等 attach 完成；
+    // 而 echo agent 的 session/load 只接受跑过 prompt 的 session。agent 回复出现
+    // 才同时证明 durable session id 已就位且 prompt 已在 agent 端落账。
+    await expect
+      .poll(
+        async () =>
+          (await page.evaluate(() => window.__E2E__!.getAcpMessages())).some(
+            (m) => m.role === 'agent',
+          ),
+        { timeout: 15000 },
+      )
+      .toBe(true)
+
     const beforeReload = await page.evaluate(() => window.__E2E__!.getActiveAcpSessionId())
     const afterReload = await page.evaluate(() => window.__E2E__!.reloadActiveAcpSession())
     expect(afterReload).not.toBe(beforeReload)

@@ -65,6 +65,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 图表 reveal 断言 received 恒 `_row_…`（行在、选中类稳定缺失）+retry 变 "Loading…" 行不出现=reveal 与初始 load 双发请求、晚到 load 清选中（产品竞态）→ 案例 64
 - 自启动 spec `closeApp: graceful close still pending`→force-kill 后 `CDP pipe still open`→teardown 30s 超时、事后无孤儿=某进程握子端 pipe 句柄（wsl 探测/agent 孙进程/并发 spawn 继承泄漏），终解=closeApp 父端 stdio destroy 兜底 + seed 收敛 + 死父指纹清扫 → 案例 65
 - takeover 门控过后 `tokenColor` 仍恒 undefined（整行单 mtk1 span）/ token 有色但错色（mtkN 呈 +1 位移查了残表）=TextMate 双产品竞态（grammar 注册竞速 Monarch 丢 resolve 不 fire + 主题快照乱序落盘残表）；探针门控用 getOrCreate 会替产品治病，须改只读 → 案例 66
+- 探针抛 `[E2E] no durable active ACP session` / echo agent `session/load` 拒 `session not found`、失败点在「发送 prompt 后立刻依赖 durable id/agent 落账」=user 消息本地乐观上屏不等握手；就位信号=agent 回复进 timeline，poll `status==='idle'` 有假窗口不充分 → 案例 67
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级
