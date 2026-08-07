@@ -24,6 +24,14 @@ export const DirtyDiffCapabilities = {
   stageChange: 'stageChange',
   /** Open the file's changes as a diff editor. Args: `(fsPath?, options?)`. */
   openChange: 'openChange',
+  /**
+   * Filter a batch of paths down to those the SCM ignores (gitignore & friends).
+   * Args: `(fsPaths: string[])`; returns the ignored subset, each element identical
+   * to the input string it came from. Paths outside any repo report as not
+   * ignored. The session diff's fs-watch fallback uses this to drop noise like
+   * `.eslintcache` that would otherwise surface as a spurious "created" row.
+   */
+  checkIgnore: 'checkIgnore',
 } as const
 
 /** Build a provider-scoped dirty-diff command id, e.g. `('git','getHeadContent')

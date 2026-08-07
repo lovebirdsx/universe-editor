@@ -86,7 +86,24 @@ function makeScm(rootUri: string | null = '/ws'): IScmService {
 
 function makeCommands(headContent: string | null | undefined): ICommandService {
   return {
-    executeCommand: vi.fn().mockResolvedValue(headContent),
+    executeCommand: vi
+      .fn()
+      .mockImplementation((id: string) =>
+        Promise.resolve(id.endsWith('.checkIgnore') ? [] : headContent),
+      ),
+  } as unknown as ICommandService
+}
+
+function makeCheckIgnoreCommands(
+  checkIgnore: string[] | undefined | Error,
+  headContent: string | null = 'head content',
+): ICommandService {
+  return {
+    executeCommand: vi.fn().mockImplementation((id: string) => {
+      if (!id.endsWith('.checkIgnore')) return Promise.resolve(headContent)
+      if (checkIgnore instanceof Error) return Promise.reject(checkIgnore)
+      return Promise.resolve(checkIgnore)
+    }),
   } as unknown as ICommandService
 }
 
@@ -196,7 +213,7 @@ describe('SessionWatchedChangesContribution', () => {
     emitter.fire([{ type: 'modified', resource: FOO }])
     await flush()
     expect(tracker.watched).toEqual([{ sessionId: 'agent-1', path: FOO.fsPath }])
-    expect(commands.executeCommand).not.toHaveBeenCalled()
+    expect(commands.executeCommand).not.toHaveBeenCalledWith('git.getHeadContent', FOO.fsPath)
     contrib.dispose()
   })
 
@@ -250,6 +267,39 @@ describe('SessionWatchedChangesContribution', () => {
     emitter.fire([{ type: 'modified', resource: FOO }])
     await flush()
     expect(tracker.watched).toHaveLength(1)
+    contrib.dispose()
+  })
+
+  it('drops gitignored paths without recording them', async () => {
+    const commands = makeCheckIgnoreCommands([FOO.fsPath])
+    const { contrib, emitter, tracker } = make({ commands })
+    emitter.fire([{ type: 'modified', resource: FOO }])
+    await flush()
+    expect(tracker.watched).toEqual([])
+    expect(commands.executeCommand).toHaveBeenCalledWith('git.checkIgnore', [FOO.fsPath])
+    expect(commands.executeCommand).not.toHaveBeenCalledWith('git.getHeadContent', FOO.fsPath)
+    contrib.dispose()
+  })
+
+  it('records unfiltered when checkIgnore is not registered yet', async () => {
+    const { contrib, emitter, tracker } = make({ commands: makeCheckIgnoreCommands(undefined) })
+    emitter.fire([{ type: 'modified', resource: FOO }])
+    await flush()
+    expect(tracker.watched).toEqual([
+      { sessionId: 'agent-1', path: FOO.fsPath, baseline: 'head content' },
+    ])
+    contrib.dispose()
+  })
+
+  it('still records when the checkIgnore call fails (degrades to unfiltered)', async () => {
+    const { contrib, emitter, tracker } = make({
+      commands: makeCheckIgnoreCommands(new Error('git blew up')),
+    })
+    emitter.fire([{ type: 'modified', resource: FOO }])
+    await flush()
+    expect(tracker.watched).toEqual([
+      { sessionId: 'agent-1', path: FOO.fsPath, baseline: 'head content' },
+    ])
     contrib.dispose()
   })
 })

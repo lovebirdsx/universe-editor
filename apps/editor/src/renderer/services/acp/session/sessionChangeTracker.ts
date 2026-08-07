@@ -29,6 +29,7 @@ import {
   URI,
   IFileService,
   IStorageService,
+  IUriIdentityService,
   IWorkspaceService,
   ITelemetryService,
   ILoggerService,
@@ -179,6 +180,10 @@ async function mapWithConcurrency<T, R>(
 
 /** Per-file tracking record. */
 interface FileRecord {
+  /** Display path in its first-seen casing (separator-normalized). The state
+   *  map is keyed by the platform-aware comparison key instead, so an agent
+   *  report (`d:/...`) and an fs-watch hit (`D:/...`) share one record. */
+  path: string
   /** Per-tool-call hunk batches — rewind rollback data only, never used for display. */
   batches: DiffBatch[]
   /** Total distinct tool-call batches ever recorded (survives batch pruning). */
@@ -194,7 +199,7 @@ interface FileRecord {
   ignored?: boolean
 }
 
-/** Tracker state keyed by sessionId → path → record. */
+/** Tracker state keyed by sessionId → path comparison key → record. */
 type TrackerState = Map<string, Map<string, FileRecord>>
 
 interface PersistedFile {
@@ -216,8 +221,8 @@ interface PersistedShape {
   }>
 }
 
-/** Canonicalize a file path so agent-reported paths and fs-watch paths key the
- *  same record (e.g. Windows drive-letter casing). Non-file URIs pass through. */
+/** Canonicalize a file path for display (separators only — casing is preserved;
+ *  identity is the comparison key's job). Non-file URIs pass through. */
 function normalizePath(path: string): string {
   return path.includes('://') ? path : URI.file(path).fsPath
 }
@@ -265,6 +270,7 @@ export class SessionChangeTrackerService
     @ITelemetryService telemetry: ITelemetryService,
     @ILoggerService loggerService: ILoggerService,
     @IFileService private readonly _files: IFileService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
   ) {
     super(storage, workspace, telemetry, loggerService, {
       storageKey: STORAGE_KEY,
@@ -291,8 +297,8 @@ export class SessionChangeTrackerService
       schemaVersion: SCHEMA_VERSION,
       sessions: [...state.entries()].map(([sessionId, files]) => ({
         sessionId,
-        files: [...files.entries()].map(([path, rec]) => ({
-          path,
+        files: [...files.values()].map((rec) => ({
+          path: rec.path,
           batches: rec.batches,
           batchCount: rec.batchCount,
           origin: rec.origin,
@@ -328,6 +334,7 @@ export class SessionChangeTrackerService
       for (const f of s.files) {
         const batches = Array.isArray(f.batches) ? [...f.batches] : []
         const rec: FileRecord = {
+          path: f.path,
           batches,
           batchCount: typeof f.batchCount === 'number' ? f.batchCount : batches.length,
           origin: f.origin === 'watched' ? 'watched' : 'agent',
@@ -338,7 +345,25 @@ export class SessionChangeTrackerService
           ...(f.created ? { created: true } : {}),
           ...(f.ignored ? { ignored: true } : {}),
         }
-        files.set(f.path, rec)
+        const key = this._pathKey(f.path)
+        const existing = files.get(key)
+        if (existing) {
+          // Stores written before comparison-key tracking may list the same
+          // file twice under different casings — fold them into one record.
+          existing.batches.push(...rec.batches)
+          existing.batchCount += rec.batchCount
+          if (rec.origin === 'agent') {
+            existing.origin = 'agent'
+            delete existing.ignored
+          }
+          if (existing.baseline === undefined && rec.baseline !== undefined) {
+            existing.baseline = rec.baseline
+            if (rec.baselineSource !== undefined) existing.baselineSource = rec.baselineSource
+          }
+          if (rec.created) existing.created = true
+        } else {
+          files.set(key, rec)
+        }
         bytes += recordBytes(rec)
       }
       if (bytes > this.maxSessionBytes) {
@@ -411,12 +436,12 @@ export class SessionChangeTrackerService
       )
       return
     }
-    const p = normalizePath(path)
+    const key = this._pathKey(path)
     const files = this._filesFor(sessionId)
-    let rec = files.get(p)
+    let rec = files.get(key)
     if (!rec) {
-      rec = { batches: [], batchCount: 0, origin: 'agent' }
-      files.set(p, rec)
+      rec = { path: normalizePath(path), batches: [], batchCount: 0, origin: 'agent' }
+      files.set(key, rec)
     }
     let bytes = this._sessionBytes.get(sessionId) ?? 0
     // An agent report is authoritative: it upgrades a watched entry and
@@ -431,7 +456,7 @@ export class SessionChangeTrackerService
       const baselineBytes = opts.baseline === null ? 0 : jsonSize(opts.baseline)
       if (baselineBytes > this.maxBaselineBytes) {
         this._logger.warn(
-          `not pinning a ${(baselineBytes / 1024 / 1024).toFixed(1)}MB baseline for ${p} — exceeds the per-file cap`,
+          `not pinning a ${(baselineBytes / 1024 / 1024).toFixed(1)}MB baseline for ${key} — exceeds the per-file cap`,
         )
       } else {
         rec.baseline = opts.baseline
@@ -477,16 +502,21 @@ export class SessionChangeTrackerService
     path: string,
     opts?: { readonly baseline?: string | null },
   ): void {
-    const p = normalizePath(path)
+    const key = this._pathKey(path)
     const files = this._filesFor(sessionId)
-    const existing = files.get(p)
+    const existing = files.get(key)
     if (existing) {
       // Already tracked (or dismissed) — just refresh: the disk changed under
       // a tracked file, so the diff against its pinned baseline moved too.
       if (!existing.ignored) this._scheduleRecompute(sessionId)
       return
     }
-    const rec: FileRecord = { batches: [], batchCount: 0, origin: 'watched' }
+    const rec: FileRecord = {
+      path: normalizePath(path),
+      batches: [],
+      batchCount: 0,
+      origin: 'watched',
+    }
     if (opts?.baseline !== undefined) {
       const baselineBytes = opts.baseline === null ? 0 : jsonSize(opts.baseline)
       if (baselineBytes <= this.maxBaselineBytes) {
@@ -494,7 +524,7 @@ export class SessionChangeTrackerService
         if (opts.baseline !== null) rec.baselineSource = 'git'
       }
     }
-    files.set(p, rec)
+    files.set(key, rec)
     this._sessionBytes.set(sessionId, (this._sessionBytes.get(sessionId) ?? 0) + recordBytes(rec))
     this._touchLru(sessionId, files)
     this._scheduleWrite()
@@ -503,7 +533,7 @@ export class SessionChangeTrackerService
 
   dismissWatched(sessionId: string, path: string): void {
     const files = this._state.get(sessionId)
-    const rec = files?.get(normalizePath(path))
+    const rec = files?.get(this._pathKey(path))
     if (!rec || rec.origin !== 'watched' || rec.ignored) return
     rec.ignored = true
     this._scheduleWrite()
@@ -539,6 +569,15 @@ export class SessionChangeTrackerService
   }
 
   // -- internals ------------------------------------------------------
+
+  /** Platform-aware identity key for a tracked path: folds Windows drive-letter
+   *  and (on win32/darwin) path casing, so agent-reported and fs-watch paths
+   *  address the same record. URI strings go through URI comparison. */
+  private _pathKey(path: string): string {
+    return path.includes('://')
+      ? this._uriIdentity.getComparisonKey(URI.parse(path))
+      : this._uriIdentity.getPathComparisonKey(path)
+  }
 
   private _filesFor(sessionId: string): Map<string, FileRecord> {
     let files = this._state.get(sessionId)
@@ -593,11 +632,11 @@ export class SessionChangeTrackerService
     let deletions = 0
     let mutated = false
 
-    for (const [path, rec] of files.entries()) {
+    for (const rec of files.values()) {
       const removed = rec.batches.filter((b) => b.toolCallId !== undefined && ids.has(b.toolCallId))
       if (removed.length === 0) continue
 
-      const uri = path.includes('://') ? URI.parse(path) : URI.file(path)
+      const uri = rec.path.includes('://') ? URI.parse(rec.path) : URI.file(rec.path)
       let current = ''
       try {
         current = await this._files.readFileText(uri)
@@ -617,7 +656,7 @@ export class SessionChangeTrackerService
           }
         }
       }
-      filesChanged.push(path)
+      filesChanged.push(rec.path)
 
       if (write) {
         await this._files.writeFile(uri, reverted)
@@ -634,8 +673,8 @@ export class SessionChangeTrackerService
       // the pre-edit state, and a later re-edit should pin a fresh baseline),
       // then persist + refresh.
       let bytes = 0
-      for (const [path, rec] of [...files.entries()]) {
-        if (rec.batches.length === 0 && rec.origin === 'agent') files.delete(path)
+      for (const [key, rec] of [...files.entries()]) {
+        if (rec.batches.length === 0 && rec.origin === 'agent') files.delete(key)
         else bytes += recordBytes(rec)
       }
       this._sessionBytes.set(sessionId, bytes)
@@ -671,9 +710,9 @@ export class SessionChangeTrackerService
       return
     }
     const changes = await mapWithConcurrency(
-      [...files.entries()],
+      [...files.values()],
       RECOMPUTE_READ_CONCURRENCY,
-      ([path, rec]) => this._buildChange(path, rec),
+      (rec) => this._buildChange(rec),
     )
     obs.set(
       changes.filter((c): c is SessionFileChange => c !== undefined),
@@ -681,13 +720,10 @@ export class SessionChangeTrackerService
     )
   }
 
-  private async _buildChange(
-    path: string,
-    record: FileRecord,
-  ): Promise<SessionFileChange | undefined> {
+  private async _buildChange(record: FileRecord): Promise<SessionFileChange | undefined> {
     if (record.ignored) return undefined
     if (record.batchCount === 0 && record.origin === 'agent') return undefined
-    const uri = path.includes('://') ? URI.parse(path) : URI.file(path)
+    const uri = record.path.includes('://') ? URI.parse(record.path) : URI.file(record.path)
     let current = ''
     let existed = true
     try {
@@ -740,7 +776,7 @@ export class SessionChangeTrackerService
     const effectiveBaseline = created && existed ? '' : baseline
     return {
       uri,
-      path,
+      path: record.path,
       baseline: effectiveBaseline,
       current,
       status,

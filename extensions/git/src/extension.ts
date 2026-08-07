@@ -35,6 +35,7 @@ import {
 import { PossibleRepoWatcher, joinCandidate } from './possibleRepoWatcher.js'
 import { detectRepoRoot, type GitExecResult } from './gitService.js'
 import { norm } from './pathUtil.js'
+import type { Repository } from './repository.js'
 import {
   getCommits as getGitGraphCommits,
   getCommitDetails as getGitGraphCommitDetails,
@@ -485,6 +486,24 @@ function registerGitCommands(
       return repo.getHeadContent(path)
     }),
 
+    commands.registerCommand('git.checkIgnore', async (...args: unknown[]) => {
+      const paths = Array.isArray(args[0]) ? (args[0] as string[]) : []
+      const byRepo = new Map<Repository, string[]>()
+      for (const path of paths) {
+        // Paths outside every repo report as not ignored (never filtered).
+        const repo = mgr.resolveRepo({ resourceUri: path })
+        if (!repo) continue
+        const list = byRepo.get(repo)
+        if (list) list.push(path)
+        else byRepo.set(repo, [path])
+      }
+      const ignored: string[] = []
+      for (const [repo, repoPaths] of byRepo) {
+        ignored.push(...(await repo.checkIgnore(repoPaths)))
+      }
+      return ignored
+    }),
+
     commands.registerCommand('git.stageChange', (...args: unknown[]) => {
       const [path, startLine, endLine] = args as [string, number, number]
       const repo = mgr.resolveRepo({ resourceUri: path })
@@ -552,7 +571,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
   if (initial.repos.length > 0) {
     mgr = setupRepositories(context, env, initial)
   } else {
-    stubs = [commands.registerCommand('git.getHeadContent', () => null), ...registerGitGraphStubs()]
+    stubs = [
+      commands.registerCommand('git.getHeadContent', () => null),
+      commands.registerCommand('git.checkIgnore', () => []),
+      ...registerGitGraphStubs(),
+    ]
     context.subscriptions.push(...stubs)
     console.info(`[git] no git repository found under ${root}; watching for one to appear`)
   }

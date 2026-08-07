@@ -12,10 +12,12 @@ import {
   IEditorResolverService,
   IEditorService,
   IStorageService,
+  IUriIdentityService,
   IWorkspaceService,
   InstantiationService,
   ServiceCollection,
   URI,
+  UriIdentityService,
   observableValue,
   type IEditorInput,
   type IObservable,
@@ -97,7 +99,11 @@ class FakeWorkspace {
   async removeRecent() {}
 }
 
-function renderView(changes: readonly SessionFileChange[], root: URI | null = URI.file('/ws')) {
+function renderView(
+  changes: readonly SessionFileChange[],
+  root: URI | null = URI.file('/ws'),
+  uriIdentity: IUriIdentityService = new UriIdentityService('linux'),
+) {
   const services = new ServiceCollection()
   const editor = new FakeEditor()
   const editorGroup = new FakeEditorGroup()
@@ -137,6 +143,7 @@ function renderView(changes: readonly SessionFileChange[], root: URI | null = UR
   )
   services.set(IStorageService, new FakeStorage() as unknown as IStorageService)
   services.set(IWorkspaceService, new FakeWorkspace(root) as unknown as IWorkspaceService)
+  services.set(IUriIdentityService, uriIdentity)
   services.set(IEditorResolverService, resolver as unknown as IEditorResolverService)
   services.set(IAcpSessionService, sessions as unknown as IAcpSessionService)
   services.set(ISessionChangeTrackerService, tracker as unknown as ISessionChangeTrackerService)
@@ -282,6 +289,17 @@ describe('SessionChangesView — list/tree mode', () => {
     expect(screen.getAllByTestId('acp-changes-folder')).toHaveLength(1)
     expect(screen.getByText('a.js')).toBeTruthy()
     expect(screen.getByText('b.js')).toBeTruthy()
+  })
+
+  it('tree mode relativizes files whose drive-letter casing differs from the workspace root', async () => {
+    // claude-code reports lowercase drive letters (d:/...) on Windows while the
+    // workspace folder carries the OS casing (D:/...). The file must still group
+    // under `src`, not an absolute `d:/ws/src` top-level group.
+    renderView([change('d:/ws/src/a.ts')], URI.file('D:/ws'), new UriIdentityService('win32'))
+    sessionChangesViewState.setViewMode('tree')
+    await waitFor(() => expect(screen.getByText('src')).toBeTruthy())
+    expect(screen.queryByText('d:/ws/src')).toBeNull()
+    expect(screen.getByText('a.ts')).toBeTruthy()
   })
 
   it('collapsing a folder hides its files', async () => {

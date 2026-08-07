@@ -15,11 +15,13 @@ import {
   IEditorResolverService,
   IEditorService,
   IStorageService,
+  IUriIdentityService,
   IWorkspaceService,
   StorageScope,
   localize,
   observableValue,
   type IObservable,
+  type IUriIdentityService as UriIdentity,
 } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import { resourceDragProps, useScrollRestore } from '@universe-editor/workbench-ui'
@@ -167,14 +169,19 @@ function newFolder(name: string, path: string): TreeFolder {
   return { name, path, folders: new Map(), files: [] }
 }
 
-function buildTree(changes: readonly SessionFileChange[], rootDir: string): TreeFolder {
+function buildTree(
+  changes: readonly SessionFileChange[],
+  rootDir: string,
+  uriIdentity: UriIdentity,
+): TreeFolder {
   const root = newFolder('', '')
-  const normRoot = rootDir.replace(/\\/g, '/').replace(/\/+$/, '')
   const segmentsOf = (c: SessionFileChange): string[] => {
-    let dir = dirnameOfResource(c.uri).replace(/\\/g, '/')
-    if (normRoot.length > 0 && dir.startsWith(`${normRoot}/`)) dir = dir.slice(normRoot.length + 1)
-    else if (dir === normRoot) dir = ''
-    return dir.length === 0 ? [] : dir.split('/').filter((s) => s.length > 0)
+    const dir = dirnameOfResource(c.uri).replace(/\\/g, '/')
+    // Platform-aware relativization: an agent-reported path whose drive-letter
+    // casing differs from the workspace folder still groups under the root.
+    const rel = rootDir.length > 0 ? uriIdentity.relativePathUnder(rootDir, dir) : null
+    const effective = rel ?? dir
+    return effective.length === 0 ? [] : effective.split('/').filter((s) => s.length > 0)
   }
   for (const c of changes) {
     let node = root
@@ -212,6 +219,7 @@ function ChangeTree({ changes }: { changes: readonly SessionFileChange[] }) {
   const openFile = useOpenFile()
   const dismiss = useDismissWatched()
   const workspace = useService(IWorkspaceService)
+  const uriIdentity = useService(IUriIdentityService)
   const rootDir = workspace.current?.folder.fsPath ?? ''
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
   const toggle = (path: string): void => {
@@ -222,7 +230,7 @@ function ChangeTree({ changes }: { changes: readonly SessionFileChange[] }) {
       return next
     })
   }
-  const root = buildTree(changes, rootDir)
+  const root = buildTree(changes, rootDir, uriIdentity)
   return (
     <ul className={styles['list']}>
       <TreeFolderRows

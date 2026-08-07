@@ -147,13 +147,54 @@ export class SessionWatchedChangesContribution
       )
       this._droppedSinceFlush = 0
     }
+    const ignored = await this._ignoredPaths(entries.map(([, entry]) => entry.uri.fsPath))
     for (const [key, entry] of entries) {
+      if (ignored.has(entry.uri.fsPath)) continue
       try {
         await this._processEntry(key, entry)
       } catch (err) {
         this._logger.warn(`watched change failed for ${entry.uri.toString()}`, err)
       }
     }
+  }
+
+  /**
+   * Batch check-ignore over the flush's paths: ignored files (build caches like
+   * `.eslintcache`) have no HEAD revision, so without this they'd all surface as
+   * spurious "created" rows. Best-effort — an unregistered command or a failed
+   * call degrades to no filtering rather than breaking the fallback chain.
+   */
+  private async _ignoredPaths(fsPaths: readonly string[]): Promise<ReadonlySet<string>> {
+    const byProvider = new Map<string, string[]>()
+    for (const fsPath of fsPaths) {
+      const providerId = resolveScmProviderId(
+        this._scm.sourceControls.get(),
+        fsPath,
+        scmViewState.selectedRepo.get(),
+      )
+      if (providerId === undefined) continue
+      const list = byProvider.get(providerId)
+      if (list) list.push(fsPath)
+      else byProvider.set(providerId, [fsPath])
+    }
+    const ignored = new Set<string>()
+    for (const [providerId, paths] of byProvider) {
+      try {
+        const res = await this._commands.executeCommand<readonly string[] | undefined>(
+          dirtyDiffCommandId(providerId, 'checkIgnore'),
+          paths,
+        )
+        // undefined = command not registered (extension still activating).
+        if (res === undefined) continue
+        for (const p of res) ignored.add(p)
+      } catch (err) {
+        this._logger.warn(`check-ignore via ${providerId} failed; keeping batch unfiltered`, err)
+      }
+    }
+    if (ignored.size > 0) {
+      this._logger.debug(`dropping ${ignored.size} ignored watched-change path(s)`)
+    }
+    return ignored
   }
 
   private async _processEntry(key: string, entry: PendingChange): Promise<void> {

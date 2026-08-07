@@ -12,7 +12,7 @@
  * watcher in repositoryWatcher.ts, worktree operations in repositoryWorktrees.ts,
  * and types / input-command constants / classifiers in repositoryTypes.ts.
  */
-import { basename, join, relative } from 'node:path'
+import { basename, isAbsolute, join, relative } from 'node:path'
 import { readFile, stat } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import {
@@ -777,6 +777,35 @@ export class Repository {
     const rel = relative(this.root, absPath).replace(/\\/g, '/')
     const head = await gitExec(['show', `HEAD:${rel}`], this.root, this._log)
     return head.exitCode === 0 ? head.stdout : null
+  }
+
+  /**
+   * The subset of `absPaths` that gitignore-style rules exclude, returned in the
+   * exact input string form. One batched `check-ignore --stdin -z` per call; exit
+   * code 1 means "none ignored" (not an error), anything else unexpected degrades
+   * to "none ignored" so callers never filter on a broken answer.
+   */
+  async checkIgnore(absPaths: readonly string[]): Promise<string[]> {
+    const byRel = new Map<string, string>()
+    for (const abs of absPaths) {
+      const rel = relative(this.root, abs).replace(/\\/g, '/')
+      if (rel === '' || rel === '..' || rel.startsWith('../') || isAbsolute(rel)) continue
+      byRel.set(rel, abs)
+    }
+    if (byRel.size === 0) return []
+    const res = await gitExec(['check-ignore', '--stdin', '-z'], this.root, this._log, {
+      input: `${[...byRel.keys()].join('\0')}\0`,
+    })
+    if (res.exitCode !== 0) {
+      if (res.exitCode !== 1) {
+        this._log?.(`check-ignore failed (exit ${res.exitCode}): ${res.stderr.trim()}`)
+      }
+      return []
+    }
+    return res.stdout
+      .split('\0')
+      .filter(Boolean)
+      .map((rel) => byRel.get(rel) ?? rel)
   }
 
   /** Open a diff of the file's HEAD revision against its current working-tree content. */

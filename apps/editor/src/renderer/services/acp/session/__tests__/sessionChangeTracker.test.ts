@@ -11,6 +11,8 @@ import {
   NullLogger,
   StorageScope,
   URI,
+  UriIdentityService,
+  type HostPlatform,
   type IDirectoryEntry,
   type IFileService,
   type IFileStat,
@@ -125,7 +127,10 @@ class FakeFileService implements IFileService {
   }
 }
 
-function makeService(): { svc: SessionChangeTrackerService; files: FakeFileService } {
+function makeService(platform: HostPlatform = 'linux'): {
+  svc: SessionChangeTrackerService
+  files: FakeFileService
+} {
   const files = new FakeFileService()
   const svc = new SessionChangeTrackerService(
     new FakeStorage(),
@@ -133,6 +138,7 @@ function makeService(): { svc: SessionChangeTrackerService; files: FakeFileServi
     new NoopTelemetryService(),
     new StubLoggerService(),
     files,
+    new UriIdentityService(platform),
   )
   svc.recomputeThrottleMs = 0 // no throttle in tests — the 5ms flush settles it
   return { svc, files }
@@ -313,6 +319,7 @@ describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
       new NoopTelemetryService(),
       overrides.loggerService ?? new StubLoggerService(),
       files,
+      new UriIdentityService('linux'),
     )
     svc.recomputeThrottleMs = 0
     if (overrides.maxTrackedSessions !== undefined) {
@@ -702,6 +709,72 @@ describe('SessionChangeTrackerService — watched changes (fs-watch fallback)', 
   })
 })
 
+describe('SessionChangeTrackerService — path identity (Windows drive-letter casing)', () => {
+  // claude-code reports lowercase drive letters (d:/...) on Windows while the
+  // fs-watch fallback reports the workspace folder's casing (D:/...). Both
+  // ingresses must key the same record, or the session diff lists the file twice.
+  function makeWin32(): { svc: SessionChangeTrackerService; files: FakeFileService } {
+    return makeService('win32')
+  }
+
+  const editHunk: DiffHunk = {
+    oldStart: 1,
+    oldLines: 1,
+    newStart: 1,
+    newLines: 1,
+    lines: ['-a', '+b'],
+  }
+
+  it('recordWatched after an agent record with a different drive-letter casing refreshes, not duplicates', async () => {
+    const { svc, files } = makeWin32()
+    await svc.initialize()
+    files.set('d:/work/w.ts', 'now')
+    const obs = svc.changesFor(SID)
+    svc.record(SID, 'd:/work/w.ts', 'tc-1', [editHunk], { baseline: 'agent' })
+    svc.recordWatched(SID, 'D:/work/w.ts', { baseline: 'git-head' })
+    await flush()
+    const list = obs.get()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.origin).toBe('agent')
+    expect(list[0]?.baseline).toBe('agent')
+    svc.dispose()
+  })
+
+  it('an agent record after recordWatched with a different casing upgrades the same record', async () => {
+    const { svc, files } = makeWin32()
+    await svc.initialize()
+    files.set('d:/work/w.ts', 'now')
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, 'D:/work/w.ts', { baseline: 'head' })
+    svc.record(SID, 'd:/work/w.ts', 'tc-1', [editHunk])
+    await flush()
+    const list = obs.get()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.origin).toBe('agent')
+    // The watched entry's earlier git baseline stays pinned (first-touch-wins).
+    expect(list[0]?.baseline).toBe('head')
+    expect(list[0]?.baselineSource).toBe('git')
+    svc.dispose()
+  })
+
+  it('dismissWatched matches across casings and keeps the entry dismissed', async () => {
+    const { svc, files } = makeWin32()
+    await svc.initialize()
+    files.set('d:/work/w.ts', 'now')
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, 'D:/work/w.ts', { baseline: 'head' })
+    await flush()
+    expect(obs.get()).toHaveLength(1)
+    svc.dismissWatched(SID, 'd:/work/w.ts')
+    await flush()
+    expect(obs.get()).toHaveLength(0)
+    svc.recordWatched(SID, 'D:/work/w.ts', { baseline: 'head' })
+    await flush()
+    expect(obs.get()).toHaveLength(0)
+    svc.dispose()
+  })
+})
+
 describe('SessionChangeTrackerService — edit-storm resilience (EMFILE guard)', () => {
   /** Build a service with a real throttle so a burst of records coalesces. */
   function makeThrottled(throttleMs: number): {
@@ -715,6 +788,7 @@ describe('SessionChangeTrackerService — edit-storm resilience (EMFILE guard)',
       new NoopTelemetryService(),
       new StubLoggerService(),
       files,
+      new UriIdentityService('linux'),
     )
     svc.recomputeThrottleMs = throttleMs
     return { svc, files }

@@ -311,3 +311,63 @@ describe('Repository remote state refresh', () => {
     })
   })
 })
+
+describe('Repository.checkIgnore', () => {
+  async function createPlainRepo(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'ue-git-checkignore-'))
+    tmpRoots.push(root)
+    await git(['init', root])
+    return root
+  }
+
+  it('returns the ignored subset of a batch, in the input string form', async () => {
+    const root = await createPlainRepo()
+    await writeFile(join(root, '.gitignore'), '.eslintcache\ndist/\n')
+    const repo = new Repository(root)
+    try {
+      const ignoredCache = join(root, '.eslintcache')
+      const ignoredDist = join(root, 'dist', 'bundle.js')
+      const kept = join(root, 'src', 'app.ts')
+      await expect(repo.checkIgnore([kept, ignoredCache, ignoredDist])).resolves.toEqual([
+        ignoredCache,
+        ignoredDist,
+      ])
+    } finally {
+      repo.dispose()
+    }
+  })
+
+  it('treats exit code 1 (nothing ignored) as an empty result, not an error', async () => {
+    const root = await createPlainRepo()
+    await writeFile(join(root, '.gitignore'), '.eslintcache\n')
+    const repo = new Repository(root)
+    try {
+      await expect(repo.checkIgnore([join(root, 'src', 'app.ts')])).resolves.toEqual([])
+    } finally {
+      repo.dispose()
+    }
+  })
+
+  it('skips paths outside the repository root', async () => {
+    const root = await createPlainRepo()
+    const repo = new Repository(root)
+    try {
+      await expect(
+        repo.checkIgnore([join(tmpdir(), 'elsewhere-xyz', '.eslintcache')]),
+      ).resolves.toEqual([])
+    } finally {
+      repo.dispose()
+    }
+  })
+
+  it('degrades to "nothing ignored" when git check-ignore fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ue-git-notrepo-'))
+    tmpRoots.push(root)
+    const repo = new Repository(root) // no `git init` — check-ignore exits 128
+    try {
+      await expect(repo.checkIgnore([join(root, 'x.ts')])).resolves.toEqual([])
+    } finally {
+      repo.dispose()
+    }
+  })
+})
