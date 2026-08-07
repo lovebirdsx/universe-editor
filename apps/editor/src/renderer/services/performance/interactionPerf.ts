@@ -74,6 +74,25 @@ export function dedupeByInteraction(
   return interactions.concat(nonInteraction)
 }
 
+/** HTML5 drag events always report interactionId 0, and their Event Timing
+ *  duration spans to drag end: the native drag loop suppresses paint, so
+ *  presentation delay is the drag's remaining time, not per-event jank
+ *  (decomposition is ~0/0/N). Excluded from slow reporting — real main-thread
+ *  stalls during a drag still surface via isUnattributedLongFrame. */
+const DRAG_SESSION_EVENT_TYPES = new Set([
+  'dragstart',
+  'drag',
+  'dragenter',
+  'dragover',
+  'dragleave',
+  'drop',
+  'dragend',
+])
+
+export function isDragSessionEvent(eventType: string): boolean {
+  return DRAG_SESSION_EVENT_TYPES.has(eventType)
+}
+
 /** Histogram bucket upper bounds (ms); the last bucket catches everything above. */
 export const HISTOGRAM_BUCKETS_MS = [16, 25, 50, 100, 200, 500, 1000] as const
 

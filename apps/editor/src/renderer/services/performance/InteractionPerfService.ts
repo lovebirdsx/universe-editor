@@ -32,6 +32,7 @@ import {
   formatLongFrameLine,
   formatSlowInteractionLine,
   formatSuppressedSuffix,
+  isDragSessionEvent,
   isUnattributedLongFrame,
   recordDuration,
   type InteractionEventSample,
@@ -236,7 +237,7 @@ export class InteractionPerfService extends Disposable implements IInteractionPe
         }
         recordDuration(stats, sample.duration)
       }
-      if (sample.duration >= this._warnThresholdMs) {
+      if (sample.duration >= this._warnThresholdMs && !isDragSessionEvent(sample.eventType)) {
         this._reportSlowInteraction(item.kind, sample, item.eventTypes, entries)
       }
     }

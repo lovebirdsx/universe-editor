@@ -132,6 +132,24 @@ describe('InteractionPerfService aggregation', () => {
     expect(ctx.logger.warnings[0]).toContain('slow (non-interaction) pointerenter 240ms')
   })
 
+  it('skips slow reporting for drag session events while still counting the samples', () => {
+    const ctx = createService()
+    service = ctx.service
+    const fired: string[] = []
+    service.onDidRecordSlowInteraction((r) => fired.push(r.label))
+    service._handleEventEntries([
+      entry('dragenter', 100, 432, 0),
+      entry('dragover', 200, 440, 0),
+      entry('dragleave', 300, 424, 0),
+    ])
+    const summary = service.getSummary()
+    expect(summary.slowCount).toBe(0)
+    expect(summary.slowest).toHaveLength(0)
+    expect(summary.totalSampleCount).toBe(3)
+    expect(fired).toHaveLength(0)
+    expect(ctx.logger.warnings).toHaveLength(0)
+  })
+
   it('fires onDidRecordSlowInteraction even when the warn is throttled', () => {
     const ctx = createService()
     service = ctx.service
