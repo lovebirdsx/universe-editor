@@ -561,7 +561,7 @@ export class RenameAgentSessionAction extends Action2 {
     const quickInput = accessor.get(IQuickInputService)
     const editor = accessor.get(IEditorService)
 
-    const sessionId = resolveRenameTargetId(arg, editor, sessions)
+    const sessionId = resolveSessionTargetId(arg, editor, sessions)
     if (sessionId === undefined) return
 
     const current = resolveLiveSessionTitle(history, sessions, sessionId)
@@ -580,8 +580,10 @@ export class RenameAgentSessionAction extends Action2 {
 
 /**
  * Reveal a session's transcript file in the OS file manager. Target resolution:
- *  1. explicit `{ sessionId }` arg (session list context menu),
- *  2. the active session (command palette / sidebar chat).
+ *  1. explicit `{ sessionId }` arg (session list / chat-area context menu),
+ *  2. the `{ resource }` arg from the editor tab context menu,
+ *  3. the active AcpSessionEditorInput (editor focused),
+ *  4. the active session (command palette / sidebar chat).
  * The transcript path comes from the history entry; a session created during
  * this window's lifetime has none until the next hydrate sweep, so it is
  * resolved on demand via the owning agent's `session/list` before giving up.
@@ -596,24 +598,47 @@ export class RevealAgentSessionInOSAction extends Action2 {
         'Reveal Session Transcript in File Manager',
       ),
       category: CATEGORY,
+      menu: [
+        {
+          id: MenuId.AcpChatContext,
+          group: '2_session',
+          order: 4,
+          // Match the session list's context menu label for the same action.
+          title: localize2('acp.sessions.revealTranscript', 'Open Session Location'),
+        },
+        {
+          id: MenuId.EditorTabContext,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
+          group: '1_session',
+          order: 2,
+          title: localize2('acp.sessions.revealTranscript', 'Open Session Location'),
+        },
+      ],
       f1: true,
     })
   }
-  override async run(accessor: ServicesAccessor, arg?: { sessionId?: unknown }): Promise<void> {
+  override async run(
+    accessor: ServicesAccessor,
+    arg?: { sessionId?: unknown; resource?: unknown },
+  ): Promise<void> {
+    // Snapshot every service synchronously — the accessor is invalid after the
+    // first await (resolveTranscriptPath / showItemInFolder below).
     const sessions = accessor.get(IAcpSessionService)
     const history = accessor.get(IAcpSessionHistoryService)
+    const editor = accessor.get(IEditorService)
     const host = accessor.get(IHostService)
     const notifications = accessor.get(INotificationService)
 
-    const sessionId =
-      arg && typeof arg.sessionId === 'string' && arg.sessionId.length > 0
-        ? arg.sessionId
-        : sessions.activeSession.get()?.id
+    const sessionId = resolveSessionTargetId(arg, editor, sessions)
     if (sessionId === undefined) return
 
-    let transcriptPath = history.get(sessionId)?.transcriptPath
+    // History rows are keyed by the agent-issued durable id; a live session
+    // created in this window is addressed by its local id, so map it first.
+    const durableId = sessions.getById(sessionId)?.sessionIdOnAgent.get() ?? sessionId
+
+    let transcriptPath = history.get(durableId)?.transcriptPath
     if (transcriptPath === undefined || transcriptPath.length === 0) {
-      transcriptPath = await sessions.resolveTranscriptPath(sessionId)
+      transcriptPath = await sessions.resolveTranscriptPath(durableId)
     }
     if (transcriptPath === undefined || transcriptPath.length === 0) {
       notifications.notify({
@@ -720,7 +745,7 @@ function sessionIdFromResource(resource: unknown): string | undefined {
   return m ? m[1] : undefined
 }
 
-function resolveRenameTargetId(
+function resolveSessionTargetId(
   arg: { sessionId?: unknown; resource?: unknown } | undefined,
   editor: IEditorService,
   sessions: IAcpSessionService,

@@ -753,6 +753,18 @@ describe('ResumeAgentSessionAction', () => {
 })
 
 describe('RevealAgentSessionInOSAction', () => {
+  it('is available from the chat-area context menu', () => {
+    const disposable = registerAction2(RevealAgentSessionInOSAction)
+    try {
+      const items = MenuRegistry.getMenuItems(MenuId.AcpChatContext, new ContextKeyService())
+      expect(
+        items.some((item) => 'command' in item && item.command === RevealAgentSessionInOSAction.ID),
+      ).toBe(true)
+    } finally {
+      disposable.dispose()
+    }
+  })
+
   function makeEntry(over: Partial<AcpSessionHistoryEntry>): AcpSessionHistoryEntry {
     return {
       id: 'sess-1',
@@ -765,7 +777,11 @@ describe('RevealAgentSessionInOSAction', () => {
     }
   }
 
-  function build(opts: { entries: readonly AcpSessionHistoryEntry[]; activeSessionId?: string }) {
+  function build(opts: {
+    entries: readonly AcpSessionHistoryEntry[]
+    activeSessionId?: string
+    liveSessions?: Record<string, IAcpSession>
+  }) {
     const showItemInFolder = vi.fn(async () => {})
     const notify = vi.fn()
     const resolveTranscriptPath = vi.fn(
@@ -778,12 +794,17 @@ describe('RevealAgentSessionInOSAction', () => {
     const sessions = {
       _serviceBrand: undefined,
       activeSession: observableValue<IAcpSession | undefined>('test.active', activeSession),
+      getById: (id: string) => opts.liveSessions?.[id],
       resolveTranscriptPath,
     } as unknown as IAcpSessionService
     const history = {
       _serviceBrand: undefined,
       get: (id: string) => opts.entries.find((e) => e.id === id),
     } as unknown as IAcpSessionHistoryService
+    const editor = {
+      _serviceBrand: undefined,
+      activeEditor: observableValue<unknown>('test.activeEditor', undefined),
+    } as unknown as IEditorService
     const host = {
       _serviceBrand: undefined,
       platform: 'linux',
@@ -794,6 +815,7 @@ describe('RevealAgentSessionInOSAction', () => {
     const services = new ServiceCollection()
     services.set(IAcpSessionService, sessions)
     services.set(IAcpSessionHistoryService, history)
+    services.set(IEditorService, editor)
     services.set(IHostService, host)
     services.set(INotificationService, notification)
     const inst = new InstantiationService(services)
@@ -802,7 +824,7 @@ describe('RevealAgentSessionInOSAction', () => {
 
   async function run(
     b: { inst: InstantiationService },
-    arg?: { sessionId?: unknown },
+    arg?: { sessionId?: unknown; resource?: unknown },
   ): Promise<void> {
     await b.inst.invokeFunction((accessor) => new RevealAgentSessionInOSAction().run(accessor, arg))
   }
@@ -850,6 +872,30 @@ describe('RevealAgentSessionInOSAction', () => {
     await run(b)
     expect(b.showItemInFolder).not.toHaveBeenCalled()
     expect(b.notify).not.toHaveBeenCalled()
+  })
+
+  it('resolves the session from the editor tab context menu resource arg', async () => {
+    const entry = makeEntry({ transcriptPath: '/p/sess-1.jsonl' })
+    const b = build({ entries: [entry] })
+    await run(b, { resource: { scheme: 'universe', path: '/acp/session/sess-1' } })
+    expect(b.showItemInFolder).toHaveBeenCalledWith('/p/sess-1.jsonl')
+  })
+
+  it('maps a live session local id to the durable agent id before hitting history', async () => {
+    // A session created in this window keeps its local uuid on the editor input,
+    // but the history row is keyed by sessionIdOnAgent — reveal must map first.
+    const entry = makeEntry({
+      id: 'agent-1',
+      sessionIdOnAgent: 'agent-1',
+      transcriptPath: '/p/agent-1.jsonl',
+    })
+    const live = {
+      id: 'local-1',
+      sessionIdOnAgent: observableValue<string | undefined>('test.onAgent', 'agent-1'),
+    } as unknown as IAcpSession
+    const b = build({ entries: [entry], liveSessions: { 'local-1': live } })
+    await run(b, { resource: { scheme: 'universe', path: '/acp/session/local-1' } })
+    expect(b.showItemInFolder).toHaveBeenCalledWith('/p/agent-1.jsonl')
   })
 })
 

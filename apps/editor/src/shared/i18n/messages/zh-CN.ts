@@ -1487,6 +1487,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.sessions.unarchiveMenu': '取消归档会话',
   'acp.sessions.pinMenu': '置顶会话',
   'acp.sessions.unpinMenu': '取消置顶会话',
+  'acp.sessions.revealTranscript': '打开会话所在位置',
   'acp.sideTask.ask': '在侧边聊天中提问',
   'acp.sideTask.badge': '侧边任务',
   'acp.sideTask.bar': '侧边任务',

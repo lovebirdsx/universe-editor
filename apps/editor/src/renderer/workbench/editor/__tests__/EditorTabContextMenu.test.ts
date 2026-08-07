@@ -3,8 +3,9 @@
  *  Regression guard: the editor tab right-click menu must gate its entries on
  *  the *clicked* tab. Path commands (Copy Path/Relative Path, Reveal, Reopen
  *  With) only show for on-disk `file:` tabs; "Copy Name" shows for *every* tab
- *  (it copies the input's display name); "Rename Agent Session…" only for
- *  acp.session tabs. A diff tab (virtual `diff:` scheme) shows only Copy Name.
+ *  (it copies the input's display name); "Rename Agent Session…" and "Open
+ *  Session Location" only for acp.session tabs. A diff tab (virtual `diff:`
+ *  scheme) shows only Copy Name.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -22,7 +23,10 @@ import {
 } from '../../../actions/fileCopyActions.js'
 import { RevealInExplorerAction, RevealInOSExplorerAction } from '../../../actions/revealActions.js'
 import { ReopenWithAction } from '../../../actions/editorResolverActions.js'
-import { RenameAgentSessionAction } from '../../../actions/agentSessionActions.js'
+import {
+  RenameAgentSessionAction,
+  RevealAgentSessionInOSAction,
+} from '../../../actions/agentSessionActions.js'
 import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
 import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
 
@@ -37,6 +41,7 @@ function register(): void {
     registerAction2(RevealInOSExplorerAction),
     registerAction2(ReopenWithAction),
     registerAction2(RenameAgentSessionAction),
+    registerAction2(RevealAgentSessionInOSAction),
     // "Reopen With…" is registered as a bare MenuRegistry item (not via the
     // ReopenWithAction's own menu), mirroring BuiltInEditorBindingsContribution.
     MenuRegistry.addMenuItem(MenuId.EditorTabContext, {
@@ -101,7 +106,7 @@ describe('EditorTabContext menu — per-tab gating', () => {
     expect(commands).not.toContain(RenameAgentSessionAction.ID)
   })
 
-  it('an acp.session tab shows Copy Name and Rename Agent Session but no path commands', () => {
+  it('an acp.session tab shows Copy Name and the session commands but no path commands', () => {
     register()
     const commands = menuCommandsFor({
       resourceScheme: 'universe',
@@ -109,6 +114,13 @@ describe('EditorTabContext menu — per-tab gating', () => {
     })
     expect(commands).toContain(CopyEditorNameAction.ID)
     expect(commands).toContain(RenameAgentSessionAction.ID)
+    expect(commands).toContain(RevealAgentSessionInOSAction.ID)
     for (const id of PATH_COMMANDS) expect(commands).not.toContain(id)
+  })
+
+  it('a file tab does not show the session reveal command', () => {
+    register()
+    const commands = menuCommandsFor({ resourceScheme: 'file', activeEditorType: 'file' })
+    expect(commands).not.toContain(RevealAgentSessionInOSAction.ID)
   })
 })
