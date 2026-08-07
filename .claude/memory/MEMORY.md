@@ -20,7 +20,7 @@
 - [窗口私有日志隔离](window-private-log-isolation.md) — renderer 日志按 BrowserWindow.id 分流 window-`<id>`/
 - [monaco 0.55 EditContext + NLS 索引制](monaco-055-editcontext-nls.md) — editContext 修中文 IME；NLS 索引制改英文桥接
 - [Session 执行时间统计](session-timer-feature.md) — 只计 running 净时长；useSessionTimer+持久化
-- [会话级 diff](session-diff-feature.md) — 逆推 baseline 跟踪 agent 改动；list/tree 视图+预览/钉住
+- [会话级 diff](session-diff-feature.md) — pinned baseline 快照制+fs-watch 兜底侦测；watched 推测徽标+忽略
 - [新建 session 异步化](async-session-create.md) — 同步渲染后台握手；双 id；queued prompts 自动派发
 - [Codex 三种登录方案](codex-three-auth-modes.md) — gateway 须自包含 provider；统一 applyCredential 原子入口
 - [markdown 预览键盘导航](markdown-preview-link-hints.md) — f/F link hints+滚动/前进后退；controller+contextKey+Action2
