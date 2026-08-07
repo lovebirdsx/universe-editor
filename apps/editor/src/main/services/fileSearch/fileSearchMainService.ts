@@ -520,6 +520,7 @@ export class FileSearchMainService extends Disposable implements IFileSearchServ
             child = spawn(rgDiskPath, fileListArgs(spec), {
               cwd: spec.rootFsPath,
               stdio: ['ignore', fh.fd, 'pipe'],
+              windowsHide: true,
             })
           } catch (err) {
             resolve({ code: null, error: (err as Error).message })
@@ -619,6 +620,7 @@ export class FileSearchMainService extends Disposable implements IFileSearchServ
         child = spawn(rgDiskPath, args as string[], {
           ...(cwd !== undefined ? { cwd } : {}),
           stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
         })
       } catch (err) {
         this._logger.error(`fileSearch rg(${label}) spawn error: ${(err as Error).message}`)

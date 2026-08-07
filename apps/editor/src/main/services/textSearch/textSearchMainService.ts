@@ -219,10 +219,13 @@ export class TextSearchMainService extends Disposable implements ITextSearchMain
         `threads=${resolveSearchThreads(query.threads)}`,
     )
 
-    const child = new ManagedChildProcess(spawn(rgDiskPath, args, { cwd: root.fsPath }), {
-      logger: this._logger,
-      label: query.sessionId,
-    })
+    const child = new ManagedChildProcess(
+      spawn(rgDiskPath, args, { cwd: root.fsPath, windowsHide: true }),
+      {
+        logger: this._logger,
+        label: query.sessionId,
+      },
+    )
     const running: RunningSearch = {
       process: child,
       cancelled: false,
