@@ -1027,6 +1027,11 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (state.usage !== undefined && this.usage.get() === undefined) {
       this.usage.set(state.usage, undefined)
     }
+    // Seed the plan bar from a restored snapshot, but never clobber a live
+    // plan already emitted in this session (replay updates are last-wins).
+    if (state.plan !== undefined && state.plan.length > 0 && this.plan.get().length === 0) {
+      this.plan.set(state.plan, undefined)
+    }
     // Seed the MCP server list from config (status `pending`) so the panel shows
     // configured servers before the SDK init snapshot arrives. Don't clobber a
     // snapshot already applied.
@@ -1678,6 +1683,11 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._setImmediate(this.toolCalls, this._toolCalls)
     this._setImmediate(this.timeline, this._timeline)
     this._setImmediate(this.plan, [])
+    // Rewind truncates the conversation; clear the persisted plan mirror too
+    // so the pre-rewind plan doesn't resurrect on the next restart. If the
+    // replay re-emits a plan, the applyUpdate mirror writes it back.
+    const sid = this.sessionIdOnAgent.get()
+    if (sid !== undefined) this._history?.setHistoryPlan(sid, null)
   }
 
   private _recomputeStatus(): void {
@@ -2099,6 +2109,11 @@ export class AcpSession extends Disposable implements IAcpSession {
           ...(e.priority !== undefined ? { priority: e.priority } : {}),
         }))
         this.plan.set(entries, this._batchedTx())
+        // Mirror onto history so the plan bar survives resume — codex's
+        // session/load replay does not re-emit plan. An empty snapshot clears
+        // the mirror so a cleared plan doesn't resurrect on restart.
+        if (sid !== undefined)
+          this._history?.setHistoryPlan(sid, entries.length > 0 ? entries : null)
         break
       }
       case 'available_commands_update':

@@ -31,6 +31,7 @@ import {
 } from '@universe-editor/platform'
 import { PersistedStateBase } from '../persistedStateBase.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
+import type { AcpPlanEntry } from './acpSessionModel.js'
 
 /**
  * Which sessions the Agents history surfaces:
@@ -109,6 +110,14 @@ export interface AcpSessionHistoryEntry {
     /** True when cost/models are locally estimated (Codex) rather than agent-reported. */
     readonly costEstimated?: boolean
   }
+  /**
+   * Latest plan snapshot the agent reported via `sessionUpdate: 'plan'`
+   * (whole-list, last-wins). Mirrored here so the StickyPlanBar can be
+   * restored on resume — the codex fork's `session/load` replay does not
+   * re-emit plan updates, so without this snapshot the plan bar stays blank
+   * after an editor restart.
+   */
+  readonly plan?: readonly AcpPlanEntry[]
   /** Timeline collapse mode persisted per-session so it survives editor restarts. */
   readonly collapseMode?: CollapseMode
   /** Cumulative milliseconds the session spent in 'running' status. Updated each time a run segment ends. */
@@ -225,6 +234,14 @@ export interface IAcpSessionHistoryService {
    * on every `usage_update` so the arc can be restored after resume.
    */
   setHistoryUsage(sessionId: string, usage: AcpSessionHistoryEntry['usage']): void
+  /**
+   * Mirror the latest plan snapshot onto a history entry. `null` clears the
+   * mirror (the agent emitted an empty plan, or a rewind reset the replay
+   * state). No-op if id is unknown or the snapshot is unchanged. Called by
+   * `AcpSession.applyUpdate` on every `plan` update so the StickyPlanBar can
+   * be restored after resume.
+   */
+  setHistoryPlan(sessionId: string, plan: readonly AcpPlanEntry[] | null): void
   /**
    * Accumulate the total running duration for a session. No-op if id is
    * unknown. Called each time a 'running' segment ends (transition to idle /
@@ -383,7 +400,7 @@ export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryServi
 )
 
 const STORAGE_KEY = 'acp.sessionHistory'
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 const MAX_ENTRIES = 100
 
 /**
@@ -457,6 +474,9 @@ export class AcpSessionHistoryService
     // (e.g. on resume) must not blow away the restored arc.
     const carriedUsage =
       entry.usage ?? (existingIdx >= 0 ? this._state[existingIdx]!.usage : undefined)
+    // And the plan snapshot — re-adding on resume must keep the restored bar.
+    const carriedPlan =
+      entry.plan ?? (existingIdx >= 0 ? this._state[existingIdx]!.plan : undefined)
     // Once hasMessages is true it must never revert. Input value takes
     // precedence; fall back to the existing row so resume() preserves it.
     const carriedHasMessages = (() => {
@@ -512,6 +532,7 @@ export class AcpSessionHistoryService
       ...(carriedConfigOptions !== undefined ? { configOptions: carriedConfigOptions } : {}),
       ...(carriedConfigLabels !== undefined ? { configLabels: carriedConfigLabels } : {}),
       ...(carriedUsage !== undefined ? { usage: carriedUsage } : {}),
+      ...(carriedPlan !== undefined ? { plan: carriedPlan } : {}),
       ...(carriedMcpServerNames !== undefined ? { mcpServerNames: carriedMcpServerNames } : {}),
       ...(carriedSideTaskOf !== undefined ? { sideTaskOf: carriedSideTaskOf } : {}),
       ...(carriedSideTaskQuote !== undefined ? { sideTaskQuote: carriedSideTaskQuote } : {}),
@@ -613,6 +634,20 @@ export class AcpSessionHistoryService
     const cur = this._state[idx]!
     if (sameUsage(cur.usage, usage)) return
     const next: AcpSessionHistoryEntry = { ...cur, usage }
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  setHistoryPlan(sessionId: string, plan: readonly AcpPlanEntry[] | null): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    const nextPlan = plan === null ? undefined : plan
+    if (samePlan(cur.plan, nextPlan)) return
+    // exactOptionalPropertyTypes: clearing must rebuild the entry without the key.
+    const { plan: _drop, ...base } = cur
+    const next: AcpSessionHistoryEntry = nextPlan === undefined ? base : { ...base, plan: nextPlan }
     this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()
@@ -943,12 +978,14 @@ export class AcpSessionHistoryService
     if (typeof raw !== 'object' || raw === null) return undefined
     const o = raw as PersistedShape
     if (!Array.isArray(o.entries)) return undefined
-    if (o.schemaVersion !== SCHEMA_VERSION && o.schemaVersion !== 1) {
+    if (o.schemaVersion !== SCHEMA_VERSION && o.schemaVersion !== 2 && o.schemaVersion !== 1) {
       this._logger.warn(`ignoring acp.sessionHistory with schemaVersion=${o.schemaVersion}`)
       return undefined
     }
     // v1 → v2: `mcpServerNames` is optional, old rows simply inherit the
     // defaults on next resume — no data migration needed.
+    // v2 → v3: `plan` is optional, old rows simply have no plan seed on the
+    // next resume — no data migration needed.
     // schema 约定 id === sessionIdOnAgent；老版本曾用自增 id，这里在反序列化时无损归一化，
     // 否则 history.get(sessionIdOnAgent) 永远 miss。
     return o.entries
@@ -1020,6 +1057,7 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     (o['configOptions'] === undefined || isStringRecord(o['configOptions'])) &&
     (o['configLabels'] === undefined || isStringRecord(o['configLabels'])) &&
     (o['usage'] === undefined || isValidUsage(o['usage'])) &&
+    (o['plan'] === undefined || isValidPlan(o['plan'])) &&
     (o['hasMessages'] === undefined || typeof o['hasMessages'] === 'boolean') &&
     (o['firstPrompt'] === undefined || typeof o['firstPrompt'] === 'string') &&
     (o['aiTitle'] === undefined || typeof o['aiTitle'] === 'boolean') &&
@@ -1071,6 +1109,35 @@ function sameUsage(
     a.size === b.size &&
     a.cost?.amount === b.cost?.amount &&
     a.cost?.currency === b.cost?.currency
+  )
+}
+
+const PLAN_STATUSES = new Set(['pending', 'in_progress', 'completed'])
+
+function isValidPlan(v: unknown): v is readonly AcpPlanEntry[] {
+  if (!Array.isArray(v)) return false
+  return v.every((e) => {
+    if (typeof e !== 'object' || e === null) return false
+    const o = e as Record<string, unknown>
+    return (
+      typeof o['content'] === 'string' &&
+      typeof o['status'] === 'string' &&
+      PLAN_STATUSES.has(o['status']) &&
+      (o['priority'] === undefined || typeof o['priority'] === 'string')
+    )
+  })
+}
+
+function samePlan(
+  a: readonly AcpPlanEntry[] | undefined,
+  b: readonly AcpPlanEntry[] | undefined,
+): boolean {
+  if (a === b) return true
+  if (a === undefined || b === undefined) return false
+  if (a.length !== b.length) return false
+  return a.every(
+    (e, i) =>
+      e.content === b[i]!.content && e.status === b[i]!.status && e.priority === b[i]!.priority,
   )
 }
 

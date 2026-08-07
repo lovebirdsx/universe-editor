@@ -943,6 +943,7 @@ export class AcpSessionService
         title,
         initState: {
           ...(entry.usage ? { usage: entry.usage } : {}),
+          ...(entry.plan && entry.plan.length > 0 ? { plan: entry.plan } : {}),
           ...(entry.accumulatedRunningMs
             ? { accumulatedRunningMs: entry.accumulatedRunningMs }
             : {}),

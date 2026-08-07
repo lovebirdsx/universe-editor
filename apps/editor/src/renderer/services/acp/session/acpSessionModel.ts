@@ -411,6 +411,8 @@ export interface IAcpSessionInitState {
   readonly configOptions?: readonly SessionConfigOption[]
   /** Usage snapshot to seed the arc on resume (restored from history). */
   readonly usage?: AcpUsage
+  /** Plan snapshot to seed the StickyPlanBar on resume (restored from history). */
+  readonly plan?: readonly AcpPlanEntry[]
   /**
    * MCP servers forwarded on session/new, seeded into `mcpServers` with a
    * `pending` status before the SDK init snapshot arrives. Carries the known

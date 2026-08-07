@@ -341,7 +341,7 @@ describe('AcpSessionHistoryService — persistence', () => {
     expect(call.key).toBe('acp.sessionHistory')
     expect(call.scope).toBe(StorageScope.WORKSPACE)
     const persisted = call.value as { schemaVersion: number; entries: unknown[] }
-    expect(persisted.schemaVersion).toBe(2)
+    expect(persisted.schemaVersion).toBe(3)
     expect(persisted.entries).toHaveLength(1)
   })
 
@@ -921,6 +921,136 @@ describe('AcpSessionHistoryService — setHistoryUsage', () => {
     })
     await svc.initialize()
     expect(svc.list().map((e) => e.id)).toEqual(['good'])
+  })
+})
+
+describe('AcpSessionHistoryService — setHistoryPlan', () => {
+  let svc: AcpSessionHistoryService
+  let storage: FakeStorage
+  beforeEach(() => {
+    const made = makeService()
+    svc = made.svc
+    storage = made.storage
+  })
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('sets a plan snapshot on an entry with none', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    svc.setHistoryPlan(e.id, [
+      { content: 'step one', status: 'completed' },
+      { content: 'step two', status: 'in_progress', priority: 'high' },
+    ])
+    expect(svc.get(e.id)?.plan).toEqual([
+      { content: 'step one', status: 'completed' },
+      { content: 'step two', status: 'in_progress', priority: 'high' },
+    ])
+  })
+
+  it('is a no-op for unknown ids', async () => {
+    await svc.initialize()
+    svc.setHistoryPlan('nope', [{ content: 'x', status: 'pending' }])
+    expect(svc.list()).toEqual([])
+  })
+
+  it('skips the write when the snapshot is unchanged', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    await flushWrite()
+    const before = storage.setCalls.length
+    svc.setHistoryPlan(e.id, [{ content: 'x', status: 'pending' }])
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(before + 1)
+    // Identical snapshot (fresh array) — no new write.
+    svc.setHistoryPlan(e.id, [{ content: 'x', status: 'pending' }])
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(before + 1)
+  })
+
+  it('clearing with null removes the key entirely', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    svc.setHistoryPlan(e.id, [{ content: 'x', status: 'pending' }])
+    svc.setHistoryPlan(e.id, null)
+    const row = svc.get(e.id)!
+    expect('plan' in row).toBe(false)
+  })
+
+  it('preserves a plan snapshot when add() re-inserts the same session', async () => {
+    await svc.initialize()
+    const first = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't1' })
+    svc.setHistoryPlan(first.id, [{ content: 'x', status: 'in_progress' }])
+    // Re-add without plan — must preserve the snapshot (resumeSession path).
+    const second = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't2' })
+    expect(second.plan).toEqual([{ content: 'x', status: 'in_progress' }])
+  })
+
+  it('round-trips a plan snapshot through persistence', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: 'with-plan', title: 't' })
+    svc.setHistoryPlan(e.id, [
+      { content: 'a', status: 'completed' },
+      { content: 'b', status: 'pending', priority: 'low' },
+    ])
+    await flushWrite()
+
+    const { svc: reloaded } = makeService({ storage })
+    await reloaded.initialize()
+    expect(reloaded.get('with-plan')?.plan).toEqual([
+      { content: 'a', status: 'completed' },
+      { content: 'b', status: 'pending', priority: 'low' },
+    ])
+    reloaded.dispose()
+  })
+
+  it('drops entries whose plan shape is malformed during hydration', async () => {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 3,
+      entries: [
+        {
+          id: 'bad',
+          agentId: 'a',
+          sessionIdOnAgent: 'bad',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 1,
+          plan: [{ content: 'x', status: 'not-a-status' }],
+        },
+        {
+          id: 'good',
+          agentId: 'a',
+          sessionIdOnAgent: 'good',
+          title: 't2',
+          createdAt: 1,
+          lastUsedAt: 2,
+          plan: [{ content: 'y', status: 'pending' }],
+        },
+      ],
+    })
+    await svc.initialize()
+    expect(svc.list().map((e) => e.id)).toEqual(['good'])
+  })
+
+  it('loads v2 rows (no plan key) fine — no migration needed', async () => {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 2,
+      entries: [
+        {
+          id: 'v2-row',
+          agentId: 'a',
+          sessionIdOnAgent: 'v2-row',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 1,
+        },
+      ],
+    })
+    await svc.initialize()
+    const row = svc.get('v2-row')
+    expect(row).toBeDefined()
+    expect(row?.plan).toBeUndefined()
   })
 })
 

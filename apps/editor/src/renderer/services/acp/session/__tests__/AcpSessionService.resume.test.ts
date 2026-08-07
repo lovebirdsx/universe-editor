@@ -741,6 +741,69 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     expect(resumed.usage.get()?.used).toBe(9000)
   })
 
+  it('seeds the plan bar from the persisted snapshot on resume', async () => {
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    const original = await svc.createSession()
+    await original.whenConnected()
+    const historyId = built.history.list()[0]!.id
+    // Mirror a plan snapshot onto history as a live session would, then close.
+    built.history.setHistoryPlan(historyId, [
+      { content: 'step one', status: 'completed' },
+      { content: 'step two', status: 'in_progress', priority: 'high' },
+    ])
+    await svc.closeSession(original.id)
+
+    const resumed = await svc.resumeSession(historyId)
+    // session/load replay emits no plan update (codex) — the bar must come
+    // from the snapshot.
+    expect(resumed.plan.get()).toEqual([
+      { content: 'step one', status: 'completed' },
+      { content: 'step two', status: 'in_progress', priority: 'high' },
+    ])
+  })
+
+  it('a plan update streamed during replay overrides the seeded snapshot', async () => {
+    const built = buildService({
+      loadSessionUpdates: [
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'plan',
+            entries: [{ content: 'replayed', priority: 'medium', status: 'pending' }],
+          },
+        },
+      ],
+      loadSessionResult: {},
+    })
+    svc = built.svc
+    await built.history.initialize()
+    const original = await svc.createSession()
+    await original.whenConnected()
+    const historyId = built.history.list()[0]!.id
+    built.history.setHistoryPlan(historyId, [{ content: 'seeded', status: 'pending' }])
+    await svc.closeSession(original.id)
+
+    const resumed = await svc.resumeSession(historyId)
+    // The seed lands in the constructor; a plan update streamed during replay
+    // (claude's TodoWrite replay) must win — applyUpdate is last-wins.
+    expect(resumed.plan.get().map((e) => e.content)).toEqual(['replayed'])
+  })
+
+  it('resumes with an empty plan when the history row has no snapshot', async () => {
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    const original = await svc.createSession()
+    await original.whenConnected()
+    const historyId = built.history.list()[0]!.id
+    await svc.closeSession(original.id)
+
+    const resumed = await svc.resumeSession(historyId)
+    expect(resumed.plan.get()).toEqual([])
+  })
+
   it('routes session/update notifications streamed DURING session/load to the resumed session', async () => {
     const built = buildService({
       loadSessionUpdates: [

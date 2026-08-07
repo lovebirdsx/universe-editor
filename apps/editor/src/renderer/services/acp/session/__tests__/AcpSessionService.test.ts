@@ -490,13 +490,14 @@ describe('AcpSessionService', () => {
   let notifications: StubNotificationService
   let permission: StubPermissionHandler
   let config: IConfigurationService
+  let history: AcpSessionHistoryService
   beforeEach(() => {
     client = new FakeAcpClientService()
     notifications = new StubNotificationService()
     permission = new StubPermissionHandler()
     config = new ConfigurationService()
     const telemetry: ITelemetryService = new NoopTelemetryService()
-    const history = makeHistory()
+    history = makeHistory()
     const agentDefaults = makeAgentDefaults()
     const changeTracker = new StubSessionChangeTracker()
     const titleService = new StubSessionTitleService()
@@ -894,6 +895,41 @@ describe('AcpSessionService', () => {
       },
     })
     expect(s.plan.get().map((e) => e.status)).toEqual(['completed', 'in_progress', 'pending'])
+  })
+
+  it('mirrors the plan snapshot onto the history entry', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'plan',
+        entries: [{ content: 'step one', priority: 'high', status: 'in_progress' }],
+      },
+    })
+    expect(history.get('agent-1')?.plan).toEqual([
+      { content: 'step one', priority: 'high', status: 'in_progress' },
+    ])
+  })
+
+  it('an empty plan snapshot clears the history mirror', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'plan',
+        entries: [{ content: 'step one', priority: 'high', status: 'pending' }],
+      },
+    })
+    expect(history.get('agent-1')?.plan).toBeDefined()
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'plan', entries: [] },
+    })
+    expect(history.get('agent-1')?.plan).toBeUndefined()
   })
 
   it('closeSession removes the session and falls back to the next active one', async () => {
