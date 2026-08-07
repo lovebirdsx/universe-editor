@@ -6,6 +6,7 @@
 
 import type { INotification } from '@universe-editor/platform'
 import { Severity, localize } from '@universe-editor/platform'
+import { notificationSeverityClass, notificationSeverityIcon } from './severityIcon.js'
 import styles from './NotificationsToast.module.css'
 
 export interface NotificationsToastProps {
@@ -16,15 +17,7 @@ export interface NotificationsToastProps {
 }
 
 function severityClass(severity: Severity): string {
-  if (severity === Severity.Error) return `${styles['toast']} ${styles['severity-error']}`
-  if (severity === Severity.Warning) return `${styles['toast']} ${styles['severity-warning']}`
-  return `${styles['toast']} ${styles['severity-info']}`
-}
-
-function severityIcon(severity: Severity): string {
-  if (severity === Severity.Error) return '✕'
-  if (severity === Severity.Warning) return '⚠'
-  return 'ℹ'
+  return `${styles['toast']} ${styles[notificationSeverityClass(severity)] ?? ''}`
 }
 
 export function NotificationsToast({
@@ -38,7 +31,7 @@ export function NotificationsToast({
     <div className={styles['container']} data-testid="notifications-toast-container">
       {notifications.map((n) => (
         <div key={n.id} className={severityClass(n.severity)} data-testid="notification-toast-item">
-          <span className={styles['icon']}>{severityIcon(n.severity)}</span>
+          <span className={styles['icon']}>{notificationSeverityIcon(n.severity)}</span>
           <div className={styles['body']}>
             <p className={styles['message']}>{n.message}</p>
             {n.progress !== undefined && !n.progress.done && (

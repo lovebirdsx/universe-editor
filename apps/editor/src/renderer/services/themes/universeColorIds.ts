@@ -960,11 +960,23 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
     'color-notification-info-bg',
   ),
   d(
+    'notificationsErrorIcon.foreground',
+    '#f44747',
+    '#e51400',
+    'Foreground color of the error notification icon.',
+  ),
+  d(
     'notificationsWarningIcon.foreground',
     '#cca700',
     '#cca700',
     'Foreground color of the warning notification icon.',
     'color-notifications-warning-icon',
+  ),
+  d(
+    'notificationsInfoIcon.foreground',
+    '#3794ff',
+    '#1a85ff',
+    'Foreground color of the info notification icon.',
   ),
   d(
     'progressBar.background',

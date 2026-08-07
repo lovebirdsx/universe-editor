@@ -5,7 +5,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { INotification } from '@universe-editor/platform'
-import { Severity, localize } from '@universe-editor/platform'
+import { localize } from '@universe-editor/platform'
+import { notificationSeverityClass, notificationSeverityIcon } from './severityIcon.js'
 import styles from './NotificationsCenter.module.css'
 
 export interface NotificationsCenterProps {
@@ -14,12 +15,6 @@ export interface NotificationsCenterProps {
   readonly onCancelProgress: (id: string) => void
   readonly onClearAll: () => void
   readonly onClose: () => void
-}
-
-function severityIcon(severity: Severity): string {
-  if (severity === Severity.Error) return '✕'
-  if (severity === Severity.Warning) return '⚠'
-  return 'ℹ'
 }
 
 function relativeTime(timestamp: number): string {
@@ -82,7 +77,11 @@ export function NotificationsCenter({
               className={n.read ? styles['item'] : `${styles['item']} ${styles['unread']}`}
               data-testid="notification-center-item"
             >
-              <span className={styles['icon']}>{severityIcon(n.severity)}</span>
+              <span
+                className={`${styles['icon']} ${styles[notificationSeverityClass(n.severity)] ?? ''}`}
+              >
+                {notificationSeverityIcon(n.severity)}
+              </span>
               <div className={styles['body']}>
                 <p className={styles['message']}>{n.message}</p>
                 <span className={styles['time']}>{relativeTime(n.timestamp)}</span>

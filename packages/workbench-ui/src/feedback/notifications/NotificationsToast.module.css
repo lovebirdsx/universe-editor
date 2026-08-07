@@ -46,13 +46,13 @@
 }
 
 .toast.severity-info {
-  --toast-accent: #007acc;
+  --toast-accent: var(--vscode-notificationsInfoIcon-foreground, #3794ff);
 }
 .toast.severity-warning {
-  --toast-accent: #cca700;
+  --toast-accent: var(--vscode-notificationsWarningIcon-foreground, #cca700);
 }
 .toast.severity-error {
-  --toast-accent: #f44747;
+  --toast-accent: var(--vscode-notificationsErrorIcon-foreground, #f44747);
 }
 
 @keyframes slideIn {
@@ -68,8 +68,12 @@
 
 .icon {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
   font-size: 14px;
   line-height: 18px;
+  color: var(--toast-accent, #3794ff);
 }
 
 .body {

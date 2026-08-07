@@ -106,8 +106,23 @@
 
 .icon {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
   font-size: 14px;
   line-height: 1.4;
+}
+
+.icon.severity-error {
+  color: var(--vscode-notificationsErrorIcon-foreground, #f44747);
+}
+
+.icon.severity-warning {
+  color: var(--vscode-notificationsWarningIcon-foreground, #cca700);
+}
+
+.icon.severity-info {
+  color: var(--vscode-notificationsInfoIcon-foreground, #3794ff);
 }
 
 .body {
