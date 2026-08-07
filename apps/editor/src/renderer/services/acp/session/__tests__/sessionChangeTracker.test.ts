@@ -170,7 +170,7 @@ describe('SessionChangeTrackerService — added (Write create)', () => {
   it('surfaces a non-empty Write create as added with an empty baseline', async () => {
     files.set('/work/new.ts', 'alpha\nbeta')
     const obs = svc.changesFor(SID)
-    svc.record(SID, '/work/new.ts', 'tc-1', [createHunk(['alpha', 'beta'])], true)
+    svc.record(SID, '/work/new.ts', 'tc-1', [createHunk(['alpha', 'beta'])], { created: true })
     await flush()
     const list = obs.get()
     expect(list).toHaveLength(1)
@@ -182,7 +182,7 @@ describe('SessionChangeTrackerService — added (Write create)', () => {
   it('surfaces an EMPTY-content Write create (zero hunks) as added — the core bug', async () => {
     files.set('/work/empty.ts', '')
     const obs = svc.changesFor(SID)
-    svc.record(SID, '/work/empty.ts', 'tc-empty', [], true)
+    svc.record(SID, '/work/empty.ts', 'tc-empty', [], { created: true })
     await flush()
     const list = obs.get()
     expect(list).toHaveLength(1)
@@ -270,7 +270,7 @@ describe('SessionChangeTrackerService — restore (codex rewind file rollback)',
 
   it('returns an empty impact when no batches match', async () => {
     files.set('/work/f.ts', 'x')
-    svc.record(SID, '/work/f.ts', 'tc-1', [createHunk(['x'])], true)
+    svc.record(SID, '/work/f.ts', 'tc-1', [createHunk(['x'])], { created: true })
     await flush()
     const impact = await svc.restore(SID, ['tc-missing'])
     expect(impact.filesChanged).toEqual([])
@@ -343,14 +343,37 @@ describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
     await svc.initialize()
     files.set('/work/big.ts', 'x'.repeat(500))
     const obs = svc.changesFor(SID)
-    svc.record(SID, '/work/big.ts', 'tc-big', [createHunk(['x'.repeat(500)])], true)
+    svc.record(SID, '/work/big.ts', 'tc-big', [createHunk(['x'.repeat(500)])], { created: true })
     await flush()
     expect(obs.get()).toHaveLength(0)
     svc.dispose()
     expect(storage.buckets.get(StorageScope.WORKSPACE)?.has('acp.sessionChanges')).toBe(false)
   })
 
-  it('drops a session whole once accumulated hunks exceed the per-session budget', async () => {
+  it('over-budget hunks drop rollback batches but keep the pinned-baseline diff', async () => {
+    const { svc, files } = makeBudgeted({ maxSessionBytes: 200 })
+    await svc.initialize()
+    files.set('/work/a.ts', 'b')
+    const obs = svc.changesFor(SID)
+    const first = smallEdit('tc-1')
+    svc.record(SID, '/work/a.ts', first.toolCallId, first.hunks, { baseline: 'a' })
+    await flush()
+    expect(obs.get()).toHaveLength(1)
+    // A second batch tips the session over budget — batches are dropped (rewind
+    // rollback degraded) but the baseline-vs-disk diff survives.
+    const second = smallEdit('tc-2')
+    svc.record(SID, '/work/a.ts', second.toolCallId, second.hunks)
+    await flush()
+    const list = obs.get()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.baseline).toBe('a')
+    expect(list[0]?.status).toBe('modified')
+    const impact = await svc.restore(SID, ['tc-1', 'tc-2'])
+    expect(impact.filesChanged).toEqual([])
+    svc.dispose()
+  })
+
+  it('drops entries without a baseline once accumulated hunks exceed the budget', async () => {
     const { svc, files } = makeBudgeted({ maxSessionBytes: 150 })
     await svc.initialize()
     files.set('/work/a.ts', 'b')
@@ -359,8 +382,8 @@ describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
     svc.record(SID, '/work/a.ts', first.toolCallId, first.hunks)
     await flush()
     expect(obs.get()).toHaveLength(1)
-    // A second ~100-byte batch tips the session over 150 — tracking is dropped
-    // whole because a partial batch history reconstructs a wrong baseline.
+    // No baseline was ever reported, so once the batches are dropped there is
+    // nothing left to diff against — the entry disappears.
     const second = smallEdit('tc-2')
     svc.record(SID, '/work/a.ts', second.toolCallId, second.hunks)
     await flush()
@@ -373,7 +396,7 @@ describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
     await svc.initialize()
     for (const s of ['s1', 's2', 's3', 's4']) {
       files.set(`/work/${s}.ts`, 'v')
-      svc.record(s, `/work/${s}.ts`, 'tc-1', [createHunk(['v'])], true)
+      svc.record(s, `/work/${s}.ts`, 'tc-1', [createHunk(['v'])], { created: true })
     }
     svc.dispose() // flush the debounced write
     expect(persistedSessionIds(storage)).toEqual(['s2', 's3', 's4'])
@@ -382,13 +405,39 @@ describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
   it('prunes over-budget and malformed sessions on load, persisting the slimmed state', async () => {
     const storage = new FakeStorage()
     storage.buckets.get(StorageScope.WORKSPACE)?.set('acp.sessionChanges', {
-      schemaVersion: 2,
+      schemaVersion: 3,
       sessions: [
         {
+          // Baselines alone exceed the budget — batch-clearing can't save this
+          // session, so it is dropped whole on load.
           sessionId: 'huge',
+          files: [{ path: '/work/h.ts', batches: [], baseline: 'x'.repeat(1000) }],
+        },
+        { sessionId: 'small', files: [{ path: '/work/s.ts', batches: [smallEdit('tc-1')] }] },
+        { bogus: true },
+      ],
+    })
+    const { svc, files } = makeBudgeted({ maxSessionBytes: 512, storage })
+    await svc.initialize()
+    files.set('/work/s.ts', 'b')
+    const obs = svc.changesFor('small')
+    await flush()
+    expect(obs.get()).toHaveLength(1) // the healthy session survives pruning
+    svc.dispose() // flush the pruned-state write
+    expect(persistedSessionIds(storage)).toEqual(['small'])
+  })
+
+  it('clears batches but keeps the session when only the batches blow the budget on load', async () => {
+    const storage = new FakeStorage()
+    storage.buckets.get(StorageScope.WORKSPACE)?.set('acp.sessionChanges', {
+      schemaVersion: 3,
+      sessions: [
+        {
+          sessionId: 'bulky',
           files: [
             {
               path: '/work/h.ts',
+              baseline: 'a',
               batches: [
                 {
                   toolCallId: 'tc-9',
@@ -406,24 +455,41 @@ describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
             },
           ],
         },
-        { sessionId: 'small', files: [{ path: '/work/s.ts', batches: [smallEdit('tc-1')] }] },
-        { bogus: true },
       ],
     })
     const { svc, files } = makeBudgeted({ maxSessionBytes: 512, storage })
     await svc.initialize()
-    files.set('/work/s.ts', 'b')
-    const obs = svc.changesFor('small')
+    files.set('/work/h.ts', 'b')
+    const obs = svc.changesFor('bulky')
     await flush()
-    expect(obs.get()).toHaveLength(1) // the healthy session survives pruning
-    svc.dispose() // flush the pruned-state write
-    expect(persistedSessionIds(storage)).toEqual(['small'])
+    const list = obs.get()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.baseline).toBe('a')
+    svc.dispose()
+    expect(persistedSessionIds(storage)).toEqual(['bulky'])
+  })
+
+  it('discards pre-v3 persisted data instead of migrating it', async () => {
+    const storage = new FakeStorage()
+    storage.buckets.get(StorageScope.WORKSPACE)?.set('acp.sessionChanges', {
+      schemaVersion: 2,
+      sessions: [
+        { sessionId: 'legacy', files: [{ path: '/work/a.ts', batches: [smallEdit('tc-1')] }] },
+      ],
+    })
+    const { svc, files } = makeBudgeted({ storage })
+    await svc.initialize()
+    files.set('/work/a.ts', 'b')
+    const obs = svc.changesFor('legacy')
+    await flush()
+    expect(obs.get()).toHaveLength(0)
+    svc.dispose()
   })
 
   it('logs a bounded summary instead of the full state on load', async () => {
     const storage = new FakeStorage()
     storage.buckets.get(StorageScope.WORKSPACE)?.set('acp.sessionChanges', {
-      schemaVersion: 2,
+      schemaVersion: 3,
       sessions: [
         { sessionId: 's1', files: [{ path: '/work/a.ts', batches: [smallEdit('tc-1')] }] },
       ],
@@ -436,6 +502,203 @@ describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
     expect(loadLine!.length).toBeLessThan(200)
     expect(loadLine).toContain('1 entries')
     svc.dispose()
+  })
+})
+
+describe('SessionChangeTrackerService — pinned baseline (agent-reported pre-edit content)', () => {
+  let svc: SessionChangeTrackerService
+  let files: FakeFileService
+  beforeEach(async () => {
+    const made = makeService()
+    svc = made.svc
+    files = made.files
+    await svc.initialize()
+  })
+  afterEach(() => svc.dispose())
+
+  const edit = (toolCallId: string): { toolCallId: string; hunks: DiffHunk[] } => ({
+    toolCallId,
+    hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-a', '+b'] }],
+  })
+
+  it('pins the first reported baseline and ignores later reports (first-touch-wins)', async () => {
+    files.set('/work/p.ts', 'current')
+    const obs = svc.changesFor(SID)
+    const e1 = edit('tc-1')
+    svc.record(SID, '/work/p.ts', e1.toolCallId, e1.hunks, { baseline: 'first' })
+    const e2 = edit('tc-2')
+    svc.record(SID, '/work/p.ts', e2.toolCallId, e2.hunks, { baseline: 'second' })
+    await flush()
+    const list = obs.get()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.baseline).toBe('first')
+    expect(list[0]?.baselineSource).toBe('reported')
+    expect(list[0]?.status).toBe('modified')
+    expect(list[0]?.batchCount).toBe(2)
+  })
+
+  it('stays comparable when the user hand-edits on top of the agent edit', async () => {
+    // The historic false-positive: hunk un-apply against a hand-edited file
+    // either degraded or silently rebuilt a wrong baseline. With a pinned
+    // baseline the diff is always pinned-vs-disk, whatever the disk holds.
+    files.set('/work/p.ts', 'user tweaked this afterwards')
+    const obs = svc.changesFor(SID)
+    const e1 = edit('tc-1')
+    svc.record(SID, '/work/p.ts', e1.toolCallId, e1.hunks, { baseline: 'agent saw this' })
+    await flush()
+    const list = obs.get()
+    expect(list[0]?.status).toBe('modified')
+    expect(list[0]?.baseline).toBe('agent saw this')
+    expect(list[0]?.current).toBe('user tweaked this afterwards')
+  })
+
+  it('treats a null baseline as created even without the created flag', async () => {
+    files.set('/work/n.ts', 'body')
+    const obs = svc.changesFor(SID)
+    const e1 = edit('tc-1')
+    svc.record(SID, '/work/n.ts', e1.toolCallId, e1.hunks, { baseline: null })
+    await flush()
+    const list = obs.get()
+    expect(list[0]?.status).toBe('added')
+    expect(list[0]?.baseline).toBe('')
+  })
+
+  it('self-heals out of the list when disk returns to the pinned baseline', async () => {
+    files.set('/work/s.ts', 'same')
+    const obs = svc.changesFor(SID)
+    const e1 = edit('tc-1')
+    svc.record(SID, '/work/s.ts', e1.toolCallId, e1.hunks, { baseline: 'same' })
+    await flush()
+    expect(obs.get()).toHaveLength(0)
+  })
+
+  it('keeps the pinned baseline for a deleted file so the diff stays previewable', async () => {
+    const obs = svc.changesFor(SID)
+    const e1 = edit('tc-1')
+    svc.record(SID, '/work/gone.ts', e1.toolCallId, e1.hunks, { baseline: 'was here' })
+    await flush()
+    const list = obs.get()
+    expect(list[0]?.status).toBe('deleted')
+    expect(list[0]?.baseline).toBe('was here')
+  })
+
+  it('drops a created-then-deleted file as net-zero', async () => {
+    const obs = svc.changesFor(SID)
+    svc.record(SID, '/work/tmp.ts', 'tc-1', [createHunk(['x'])], { created: true, baseline: null })
+    await flush()
+    expect(obs.get()).toHaveLength(0)
+  })
+
+  it('falls back to hunk reconstruction when the baseline exceeds the per-file cap', async () => {
+    svc.maxBaselineBytes = 16
+    files.set('/work/big.ts', ['a', 'b', 'NEW', 'c'].join('\n'))
+    const obs = svc.changesFor(SID)
+    svc.record(
+      SID,
+      '/work/big.ts',
+      'tc-1',
+      [{ oldStart: 3, oldLines: 1, newStart: 3, newLines: 1, lines: ['-OLD', '+NEW'] }],
+      { baseline: 'x'.repeat(100) },
+    )
+    await flush()
+    const list = obs.get()
+    expect(list[0]?.baselineSource).toBe('reconstructed')
+    expect(list[0]?.baseline).toBe(['a', 'b', 'OLD', 'c'].join('\n'))
+  })
+})
+
+describe('SessionChangeTrackerService — watched changes (fs-watch fallback)', () => {
+  let svc: SessionChangeTrackerService
+  let files: FakeFileService
+  beforeEach(async () => {
+    const made = makeService()
+    svc = made.svc
+    files = made.files
+    await svc.initialize()
+  })
+  afterEach(() => svc.dispose())
+
+  it('surfaces a watched change with a git baseline', async () => {
+    files.set('/work/w.ts', 'now')
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/w.ts', { baseline: 'head' })
+    await flush()
+    const list = obs.get()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.origin).toBe('watched')
+    expect(list[0]?.baselineSource).toBe('git')
+    expect(list[0]?.status).toBe('modified')
+    expect(list[0]?.baseline).toBe('head')
+  })
+
+  it('marks a watched file created when git reports it did not exist before', async () => {
+    files.set('/work/new.ts', 'fresh')
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/new.ts', { baseline: null })
+    await flush()
+    const list = obs.get()
+    expect(list[0]?.status).toBe('added')
+    expect(list[0]?.baseline).toBe('')
+  })
+
+  it('degrades a watched change with no obtainable baseline instead of claiming a diff', async () => {
+    files.set('/work/u.ts', 'now')
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/u.ts')
+    await flush()
+    const list = obs.get()
+    expect(list[0]?.status).toBe('degraded')
+    expect(list[0]?.baselineSource).toBe('none')
+    expect(list[0]?.baseline).toBe('now')
+  })
+
+  it('never downgrades an agent-tracked file to watched', async () => {
+    files.set('/work/a.ts', 'now')
+    const obs = svc.changesFor(SID)
+    svc.record(
+      SID,
+      '/work/a.ts',
+      'tc-1',
+      [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-a', '+b'] }],
+      { baseline: 'agent' },
+    )
+    svc.recordWatched(SID, '/work/a.ts', { baseline: 'git-head' })
+    await flush()
+    const list = obs.get()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.origin).toBe('agent')
+    expect(list[0]?.baseline).toBe('agent')
+  })
+
+  it('dismissWatched hides the entry and blocks re-adds from the watcher', async () => {
+    files.set('/work/w.ts', 'now')
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/w.ts', { baseline: 'head' })
+    await flush()
+    expect(obs.get()).toHaveLength(1)
+    svc.dismissWatched(SID, '/work/w.ts')
+    await flush()
+    expect(obs.get()).toHaveLength(0)
+    svc.recordWatched(SID, '/work/w.ts', { baseline: 'head' })
+    await flush()
+    expect(obs.get()).toHaveLength(0)
+  })
+
+  it('an agent report un-dismisses and upgrades a dismissed watched entry', async () => {
+    files.set('/work/w.ts', 'now')
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/w.ts', { baseline: 'head' })
+    svc.dismissWatched(SID, '/work/w.ts')
+    svc.record(SID, '/work/w.ts', 'tc-1', [
+      { oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-a', '+b'] },
+    ])
+    await flush()
+    const list = obs.get()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.origin).toBe('agent')
+    // The watched entry's earlier git baseline stays pinned (first-touch-wins).
+    expect(list[0]?.baseline).toBe('head')
+    expect(list[0]?.baselineSource).toBe('git')
   })
 })
 
@@ -466,7 +729,9 @@ describe('SessionChangeTrackerService — edit-storm resilience (EMFILE guard)',
     const obs = svc.changesFor(SID)
     for (let round = 0; round < 50; round++) {
       for (let f = 0; f < 200; f++) {
-        svc.record(SID, `/work/f${f}.ts`, `tc-${f}-${round}`, [createHunk([`v${f}`])], true)
+        svc.record(SID, `/work/f${f}.ts`, `tc-${f}-${round}`, [createHunk([`v${f}`])], {
+          created: true,
+        })
       }
     }
     // Before the throttle fires, no recompute reads have happened yet.
@@ -485,7 +750,7 @@ describe('SessionChangeTrackerService — edit-storm resilience (EMFILE guard)',
     files.deferReads = true
     for (let f = 0; f < 100; f++) {
       files.set(`/work/f${f}.ts`, `v${f}`)
-      svc.record(SID, `/work/f${f}.ts`, `tc-${f}`, [createHunk([`v${f}`])], true)
+      svc.record(SID, `/work/f${f}.ts`, `tc-${f}`, [createHunk([`v${f}`])], { created: true })
     }
     await new Promise((r) => setTimeout(r, 20))
     expect(files.reads).toBe(100)

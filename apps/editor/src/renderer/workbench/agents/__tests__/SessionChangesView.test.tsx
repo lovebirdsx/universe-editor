@@ -69,7 +69,16 @@ class FakeEditorGroups {
 }
 
 function change(path: string, status: SessionFileChange['status'] = 'modified'): SessionFileChange {
-  return { uri: URI.file(path), path, baseline: 'a', current: 'b', status, batchCount: 1 }
+  return {
+    uri: URI.file(path),
+    path,
+    baseline: 'a',
+    current: 'b',
+    status,
+    origin: 'agent',
+    baselineSource: 'reported',
+    batchCount: 1,
+  }
 }
 
 class FakeWorkspace {
@@ -116,6 +125,10 @@ function renderView(changes: readonly SessionFileChange[], root: URI | null = UR
   const tracker = {
     _serviceBrand: undefined,
     changesFor: () => changesObs,
+    dismissed: [] as Array<{ sessionId: string; path: string }>,
+    dismissWatched(sessionId: string, path: string) {
+      this.dismissed.push({ sessionId, path })
+    },
   }
   services.set(IEditorService, editor as unknown as IEditorService)
   services.set(
@@ -133,7 +146,7 @@ function renderView(changes: readonly SessionFileChange[], root: URI | null = UR
       <SessionChangesView />
     </ServicesContext.Provider>,
   )
-  return { ...result, editor, resolver, editorGroup }
+  return { ...result, editor, resolver, editorGroup, tracker }
 }
 
 beforeEach(() => sessionChangesViewState.setViewMode('list'))
@@ -206,6 +219,37 @@ describe('SessionChangesView — status decoration (SCM-aligned)', () => {
     renderView([change('/ws/src/gone.ts', 'deleted')])
     await screen.findByText('gone.ts')
     expect(screen.getByTestId('acp-changes-row').getAttribute('data-status')).toBe('deleted')
+  })
+})
+
+describe('SessionChangesView — watched (inferred) entries', () => {
+  const watched = (path: string): SessionFileChange => ({
+    ...change(path),
+    origin: 'watched',
+    baselineSource: 'git',
+  })
+
+  it('shows the inferred badge and dismiss button only on watched rows', async () => {
+    renderView([watched('/ws/src/w.ts')])
+    await screen.findByText('w.ts')
+    expect(screen.queryByTestId('acp-changes-inferred')).not.toBeNull()
+    expect(screen.queryByTestId('acp-changes-dismiss')).not.toBeNull()
+  })
+
+  it('agent-reported rows show neither badge nor dismiss', async () => {
+    renderView([change('/ws/src/a.ts')])
+    await screen.findByText('a.ts')
+    expect(screen.queryByTestId('acp-changes-inferred')).toBeNull()
+    expect(screen.queryByTestId('acp-changes-dismiss')).toBeNull()
+  })
+
+  it('dismiss delegates to tracker.dismissWatched with the agent session id', async () => {
+    const { editor, tracker } = renderView([watched('/ws/src/w.ts')])
+    await screen.findByText('w.ts')
+    fireEvent.click(screen.getByTestId('acp-changes-dismiss'))
+    expect(tracker.dismissed).toEqual([{ sessionId: 's1', path: '/ws/src/w.ts' }])
+    // The row's own diff handler must not fire when dismissing.
+    expect(editor.opened).toHaveLength(0)
   })
 })
 

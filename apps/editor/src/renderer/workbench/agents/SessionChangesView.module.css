@@ -77,6 +77,19 @@
   font-size: 12px;
 }
 
+/* Watched (inferred) entries: the change was seen on disk during the turn but
+   never reported by the agent — flag the guess so the user can dismiss it. */
+.inferredBadge {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 14px;
+  background: var(--vscode-badge-background, rgba(255, 255, 255, 0.12));
+  color: var(--vscode-badge-foreground, #c5c5c5);
+  opacity: 0.85;
+}
+
 .badge {
   flex-shrink: 0;
   width: 14px;

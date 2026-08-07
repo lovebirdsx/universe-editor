@@ -1351,6 +1351,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.changes.openPreview': '打开预览',
   'acp.changes.viewAsList': '以列表查看',
   'acp.changes.viewAsTree': '以树查看',
+  'acp.changes.inferred': '推测',
+  'acp.changes.inferredTip':
+    '本轮执行期间在磁盘上侦测到、但 agent 未上报的改动——可能并非 agent 所为。',
+  'acp.changes.dismissInferred': '非 agent 改动——忽略',
   'acp.chat.forkFromTip': '从此处分叉',
   'acp.collapse.collapsed': '时间线：全部折叠 - 点击全部展开',
   'acp.collapse.default': '时间线：智能折叠 - 点击全部折叠',

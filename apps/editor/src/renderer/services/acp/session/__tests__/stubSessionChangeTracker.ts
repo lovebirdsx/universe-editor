@@ -19,11 +19,14 @@ export interface StubSessionChangeRecord {
   readonly toolCallId: string
   readonly hunks: readonly DiffHunk[]
   readonly created?: boolean
+  readonly baseline?: string | null
 }
 
 export class StubSessionChangeTracker implements ISessionChangeTrackerService {
   declare readonly _serviceBrand: undefined
   readonly records: StubSessionChangeRecord[] = []
+  readonly watchedRecords: { sessionId: string; path: string; baseline?: string | null }[] = []
+  readonly dismissedWatched: { sessionId: string; path: string }[] = []
   readonly clearedSessions: string[] = []
   readonly restoredCalls: { sessionId: string; toolCallIds: readonly string[] }[] = []
   /** Overridable impact returned by previewRestore/restore. */
@@ -40,21 +43,34 @@ export class StubSessionChangeTracker implements ISessionChangeTrackerService {
     path: string,
     toolCallId: string,
     hunks: readonly DiffHunk[],
-    created?: boolean,
+    opts?: { readonly created?: boolean; readonly baseline?: string | null },
   ): void {
     this.records.push({
       sessionId,
       path,
       toolCallId,
       hunks: [...hunks],
-      ...(created !== undefined ? { created } : {}),
+      ...(opts?.created !== undefined ? { created: opts.created } : {}),
+      ...(opts?.baseline !== undefined ? { baseline: opts.baseline } : {}),
     })
+  }
+  recordWatched(
+    sessionId: string,
+    path: string,
+    opts?: { readonly baseline?: string | null },
+  ): void {
+    this.watchedRecords.push({
+      sessionId,
+      path,
+      ...(opts?.baseline !== undefined ? { baseline: opts.baseline } : {}),
+    })
+  }
+  dismissWatched(sessionId: string, path: string): void {
+    this.dismissedWatched.push({ sessionId, path })
   }
   changesFor(): IObservable<readonly SessionFileChange[]> {
     return this._empty
   }
-  markDeleted(): void {}
-  unmarkDeleted(): void {}
   clear(sessionId: string): void {
     this.clearedSessions.push(sessionId)
   }

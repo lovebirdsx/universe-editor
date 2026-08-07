@@ -2,17 +2,23 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  SessionChangeTrackerService — per-session, whole-file change tracking.
  *
- *  Agent adapters report each file edit as hunk batches normalized by
- *  AcpSession (Claude `structuredPatch`, Codex ACP diff content). We accumulate
- *  those hunks per (sessionId, path) in apply-order. To render a *whole-file*
- *  diff scoped to the session, we read the file's current on-disk content and run
- *  {@link reconstructBaseline} in reverse to recover the pre-session baseline —
- *  the agent writes directly to disk, so the renderer can never read the real
- *  pre-edit content otherwise.
+ *  Baseline model: the first time an agent tool call touches a file, the agent
+ *  reports the file's full pre-edit content (claude `originalFile`, codex diff
+ *  `oldText`). We pin that snapshot as the session baseline for the file —
+ *  first-touch-wins — and render the session diff as pinned-baseline vs the
+ *  file's current on-disk content. Any later change to the file (further agent
+ *  edits, shell writes, user tweaks) is reflected by re-reading disk; nothing
+ *  is ever reconstructed by replaying hunks, so a hand-edited file can no
+ *  longer corrupt the baseline. Hunk batches are still accumulated per tool
+ *  call, but only to power rewind's file rollback ({@link restore}).
  *
- *  Only the hunk batches are persisted (workspace-first via PersistedStateBase);
- *  baseline and current are always recomputed from disk so the store stays small
- *  and survives editor restarts / session resume.
+ *  A second ingress ({@link recordWatched}) lets the fs-watch fallback surface
+ *  files the agent changed without reporting (terminal commands); their
+ *  baseline comes from the owning SCM provider (git HEAD) when available.
+ *
+ *  Only baselines + hunk batches are persisted (workspace-first via
+ *  PersistedStateBase); current content is always re-read from disk so the
+ *  store stays small and survives editor restarts / session resume.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -34,12 +40,22 @@ import { reconstructBaseline, type DiffBatch, type DiffHunk } from './sessionDif
 
 export type SessionFileChangeStatus = 'added' | 'modified' | 'deleted' | 'degraded'
 
+/** How a change entered tracking: reported by an agent tool call, or inferred
+ *  by the fs-watch fallback during a running turn. */
+export type SessionChangeOrigin = 'agent' | 'watched'
+
+/** Where the pinned baseline came from. 'none' = no pre-change content could be
+ *  obtained — the file is known changed but the diff is not comparable. */
+export type SessionBaselineSource = 'reported' | 'git' | 'reconstructed' | 'none'
+
 export interface SessionFileChange {
   readonly uri: URI
   readonly path: string
   readonly baseline: string
   readonly current: string
   readonly status: SessionFileChangeStatus
+  readonly origin: SessionChangeOrigin
+  readonly baselineSource: SessionBaselineSource
   /** Number of tool-call batches that touched this file. */
   readonly batchCount: number
 }
@@ -52,15 +68,30 @@ export interface ISessionChangeTrackerService {
    * Record one Edit/Write tool call's hunks against a file. Re-delivered updates
    * for the same `toolCallId` replace the prior batch rather than duplicating.
    * `created` marks a Write that created the file (forces `added` even with no
-   * hunks, e.g. an empty-content Write).
+   * hunks, e.g. an empty-content Write). `baseline` is the agent-reported full
+   * pre-edit content (null = the call created the file); the first reported
+   * value is pinned as the session baseline for the file.
    */
   record(
     sessionId: string,
     path: string,
     toolCallId: string,
     hunks: readonly DiffHunk[],
-    created?: boolean,
+    opts?: { readonly created?: boolean; readonly baseline?: string | null },
   ): void
+  /**
+   * Surface a file change detected by the fs-watch fallback (agent shell
+   * writes). No-op when the path is already tracked (the recompute still runs,
+   * so an external change to a tracked file refreshes the view) or was
+   * dismissed. `baseline` is the SCM-provided pre-change content (null = the
+   * file did not exist before, i.e. it was created during the turn).
+   */
+  recordWatched(sessionId: string, path: string, opts?: { readonly baseline?: string | null }): void
+  /**
+   * Dismiss a watched entry (user judged it their own change). The entry stays
+   * ignored for the session until an agent tool call touches the path.
+   */
+  dismissWatched(sessionId: string, path: string): void
   /** Observable list of whole-file changes for a session (empty if none/unknown). */
   changesFor(sessionId: string): IObservable<readonly SessionFileChange[]>
   /** Drop all tracked changes for a session (e.g. on user-initiated clear). */
@@ -93,20 +124,24 @@ export const ISessionChangeTrackerService = createDecorator<ISessionChangeTracke
 )
 
 const STORAGE_KEY = 'acp.sessionChanges'
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 
 /**
- * Hard caps on persisted hunk data. A real workspace once accumulated ~150MB of
+ * Hard caps on persisted data. A real workspace once accumulated ~150MB of
  * hunks in a single storage bucket (large generated/minified files diff as
  * megabyte-scale lines); loading it then shuttled 100MB+ payloads across the
  * IPC and log channels and rewrote the whole bucket on every edit, exhausting
  * the main-process heap and aborting it (exit 134). Budgets keep the tracker
- * bounded: per-session all-or-nothing (a partial batch history can't
- * reconstruct an honest baseline), plus global LRU eviction.
+ * bounded. Baselines are O(files touched) so they rarely hit the budget; hunk
+ * batches are O(edits) and are the first to go — dropping them only degrades
+ * rewind's file rollback, never the session diff itself.
  */
 const MAX_TRACKED_SESSIONS = 20
 const MAX_SESSION_BYTES = 8 * 1024 * 1024
 const MAX_TOTAL_BYTES = 32 * 1024 * 1024
+/** Per-file cap on a pinned baseline; larger files fall back to hunk
+ *  reconstruction (or 'none') rather than bloating the store. */
+const MAX_BASELINE_BYTES = 4 * 1024 * 1024
 
 /** Serialized size of a value in bytes (safe on undefined). */
 function jsonSize(value: unknown): number {
@@ -142,22 +177,42 @@ async function mapWithConcurrency<T, R>(
   return results
 }
 
-/** Per-file tracking record: accumulated hunk batches. */
+/** Per-file tracking record. */
 interface FileRecord {
+  /** Per-tool-call hunk batches — rewind rollback data only, never used for display. */
   batches: DiffBatch[]
+  /** Total distinct tool-call batches ever recorded (survives batch pruning). */
+  batchCount: number
+  origin: SessionChangeOrigin
+  /** Pinned first-touch pre-change content; null = created during the session;
+   *  absent = unknown (display falls back to hunk reconstruction / 'none'). */
+  baseline?: string | null
+  baselineSource?: 'reported' | 'git'
+  /** Sticky create marker from the agent (survives batch pruning). */
+  created?: boolean
+  /** Watched entry dismissed by the user; cleared when an agent call touches the path. */
+  ignored?: boolean
 }
 
 /** Tracker state keyed by sessionId → path → record. */
 type TrackerState = Map<string, Map<string, FileRecord>>
 
+interface PersistedFile {
+  readonly path: string
+  readonly batches: readonly DiffBatch[]
+  readonly batchCount?: number
+  readonly origin?: SessionChangeOrigin
+  readonly baseline?: string | null
+  readonly baselineSource?: 'reported' | 'git'
+  readonly created?: boolean
+  readonly ignored?: boolean
+}
+
 interface PersistedShape {
   readonly schemaVersion: number
   readonly sessions: ReadonlyArray<{
     readonly sessionId: string
-    readonly files: ReadonlyArray<{
-      readonly path: string
-      readonly batches: readonly DiffBatch[]
-    }>
+    readonly files: readonly PersistedFile[]
   }>
 }
 
@@ -165,6 +220,12 @@ interface PersistedShape {
  *  same record (e.g. Windows drive-letter casing). Non-file URIs pass through. */
 function normalizePath(path: string): string {
   return path.includes('://') ? path : URI.file(path).fsPath
+}
+
+function recordBytes(rec: FileRecord): number {
+  let bytes = rec.baseline != null ? jsonSize(rec.baseline) : 0
+  for (const b of rec.batches) bytes += jsonSize(b)
+  return bytes
 }
 
 export class SessionChangeTrackerService
@@ -196,6 +257,7 @@ export class SessionChangeTrackerService
   maxTrackedSessions = MAX_TRACKED_SESSIONS
   maxSessionBytes = MAX_SESSION_BYTES
   maxTotalBytes = MAX_TOTAL_BYTES
+  maxBaselineBytes = MAX_BASELINE_BYTES
 
   constructor(
     @IStorageService storage: IStorageService,
@@ -232,6 +294,12 @@ export class SessionChangeTrackerService
         files: [...files.entries()].map(([path, rec]) => ({
           path,
           batches: rec.batches,
+          batchCount: rec.batchCount,
+          origin: rec.origin,
+          ...(rec.baseline !== undefined ? { baseline: rec.baseline } : {}),
+          ...(rec.baselineSource !== undefined ? { baselineSource: rec.baselineSource } : {}),
+          ...(rec.created ? { created: true } : {}),
+          ...(rec.ignored ? { ignored: true } : {}),
         })),
       })),
     }
@@ -240,11 +308,9 @@ export class SessionChangeTrackerService
   protected _deserialize(raw: unknown): TrackerState | undefined {
     if (!raw || typeof raw !== 'object') return undefined
     const shape = raw as Partial<PersistedShape>
-    // v1 had no `deleted` flag; its file entries deserialize cleanly here.
-    if (
-      (shape.schemaVersion !== 1 && shape.schemaVersion !== SCHEMA_VERSION) ||
-      !Array.isArray(shape.sessions)
-    ) {
+    // v1/v2 stored hunk batches only (baselines were reconstructed) — the
+    // project is pre-release, so old data is dropped rather than migrated.
+    if (shape.schemaVersion !== SCHEMA_VERSION || !Array.isArray(shape.sessions)) {
       return undefined
     }
     this._sessionBytes.clear()
@@ -261,14 +327,30 @@ export class SessionChangeTrackerService
       let bytes = 0
       for (const f of s.files) {
         const batches = Array.isArray(f.batches) ? [...f.batches] : []
-        files.set(f.path, { batches })
-        for (const b of batches) bytes += jsonSize(b)
+        const rec: FileRecord = {
+          batches,
+          batchCount: typeof f.batchCount === 'number' ? f.batchCount : batches.length,
+          origin: f.origin === 'watched' ? 'watched' : 'agent',
+          ...(f.baseline !== undefined ? { baseline: f.baseline } : {}),
+          ...(f.baselineSource === 'reported' || f.baselineSource === 'git'
+            ? { baselineSource: f.baselineSource }
+            : {}),
+          ...(f.created ? { created: true } : {}),
+          ...(f.ignored ? { ignored: true } : {}),
+        }
+        files.set(f.path, rec)
+        bytes += recordBytes(rec)
       }
-      // All-or-nothing: a partial batch history would reconstruct a silently
-      // wrong baseline, so an over-budget session is dropped whole.
+      if (bytes > this.maxSessionBytes) {
+        // Try the graceful degradation first: batches are rollback data only.
+        for (const rec of files.values()) rec.batches = []
+        bytes = 0
+        for (const rec of files.values()) bytes += recordBytes(rec)
+        pruned = true
+      }
       if (bytes > this.maxSessionBytes) {
         this._logger.warn(
-          `pruning session ${s.sessionId} on load — ${(bytes / 1024 / 1024).toFixed(1)}MB of hunks exceeds the per-session budget`,
+          `pruning session ${s.sessionId} on load — ${(bytes / 1024 / 1024).toFixed(1)}MB exceeds the per-session budget`,
         )
         pruned = true
         continue
@@ -315,8 +397,9 @@ export class SessionChangeTrackerService
     path: string,
     toolCallId: string,
     hunks: readonly DiffHunk[],
-    created = false,
+    opts?: { readonly created?: boolean; readonly baseline?: string | null },
   ): void {
+    const created = opts?.created === true
     if (hunks.length === 0 && !created) return
     const batch: DiffBatch = created
       ? { toolCallId, hunks: [...hunks], created: true }
@@ -329,41 +412,100 @@ export class SessionChangeTrackerService
       return
     }
     const p = normalizePath(path)
-    let files = this._state.get(sessionId)
-    if (!files) {
-      files = new Map()
-      this._state.set(sessionId, files)
-    }
+    const files = this._filesFor(sessionId)
     let rec = files.get(p)
     if (!rec) {
-      rec = { batches: [] }
+      rec = { batches: [], batchCount: 0, origin: 'agent' }
       files.set(p, rec)
+    }
+    let bytes = this._sessionBytes.get(sessionId) ?? 0
+    // An agent report is authoritative: it upgrades a watched entry and
+    // un-dismisses an ignored one.
+    rec.origin = 'agent'
+    delete rec.ignored
+    if (created) rec.created = true
+    // First-touch-wins: pin the earliest reported pre-edit content as the
+    // session baseline. A watched entry's git baseline (recorded even earlier)
+    // also wins over a later agent report for the same reason.
+    if (rec.baseline === undefined && opts?.baseline !== undefined) {
+      const baselineBytes = opts.baseline === null ? 0 : jsonSize(opts.baseline)
+      if (baselineBytes > this.maxBaselineBytes) {
+        this._logger.warn(
+          `not pinning a ${(baselineBytes / 1024 / 1024).toFixed(1)}MB baseline for ${p} — exceeds the per-file cap`,
+        )
+      } else {
+        rec.baseline = opts.baseline
+        rec.baselineSource = 'reported'
+        bytes += baselineBytes
+      }
     }
     const batches = rec.batches
     const idx = batches.findIndex((b) => b.toolCallId === toolCallId)
-    let bytes = this._sessionBytes.get(sessionId) ?? 0
     if (idx >= 0) {
       bytes -= jsonSize(batches[idx])
       batches[idx] = batch
     } else {
       batches.push(batch)
+      rec.batchCount++
     }
     bytes += batchBytes
 
     if (bytes > this.maxSessionBytes) {
-      // All-or-nothing: keeping only recent batches would reconstruct a
-      // silently wrong baseline, so the whole session's tracking is dropped.
+      // Batches are rewind rollback data only — drop them all and keep the
+      // pinned baselines, so the session diff survives at the cost of rewind's
+      // file rollback for this session.
       this._logger.warn(
-        `dropping change tracking for session ${sessionId} — accumulated hunks exceed the ${(this.maxSessionBytes / 1024 / 1024).toFixed(0)}MB per-session budget`,
+        `dropping hunk batches for session ${sessionId} — accumulated data exceeds the ${(this.maxSessionBytes / 1024 / 1024).toFixed(0)}MB per-session budget; session diff is kept, rewind file rollback is degraded`,
       )
-      this.clear(sessionId)
-      return
+      for (const r of files.values()) r.batches = []
+      bytes = 0
+      for (const r of files.values()) bytes += recordBytes(r)
+      if (bytes > this.maxSessionBytes) {
+        this._logger.warn(`baselines alone exceed the budget — dropping session ${sessionId}`)
+        this.clear(sessionId)
+        return
+      }
     }
     this._sessionBytes.set(sessionId, bytes)
-    // Refresh LRU recency: the most-recently-recorded session sits at the end.
-    this._state.delete(sessionId)
-    this._state.set(sessionId, files)
-    this._evictOverflow(sessionId)
+    this._touchLru(sessionId, files)
+    this._scheduleWrite()
+    this._scheduleRecompute(sessionId)
+  }
+
+  recordWatched(
+    sessionId: string,
+    path: string,
+    opts?: { readonly baseline?: string | null },
+  ): void {
+    const p = normalizePath(path)
+    const files = this._filesFor(sessionId)
+    const existing = files.get(p)
+    if (existing) {
+      // Already tracked (or dismissed) — just refresh: the disk changed under
+      // a tracked file, so the diff against its pinned baseline moved too.
+      if (!existing.ignored) this._scheduleRecompute(sessionId)
+      return
+    }
+    const rec: FileRecord = { batches: [], batchCount: 0, origin: 'watched' }
+    if (opts?.baseline !== undefined) {
+      const baselineBytes = opts.baseline === null ? 0 : jsonSize(opts.baseline)
+      if (baselineBytes <= this.maxBaselineBytes) {
+        rec.baseline = opts.baseline
+        if (opts.baseline !== null) rec.baselineSource = 'git'
+      }
+    }
+    files.set(p, rec)
+    this._sessionBytes.set(sessionId, (this._sessionBytes.get(sessionId) ?? 0) + recordBytes(rec))
+    this._touchLru(sessionId, files)
+    this._scheduleWrite()
+    this._scheduleRecompute(sessionId)
+  }
+
+  dismissWatched(sessionId: string, path: string): void {
+    const files = this._state.get(sessionId)
+    const rec = files?.get(normalizePath(path))
+    if (!rec || rec.origin !== 'watched' || rec.ignored) return
+    rec.ignored = true
     this._scheduleWrite()
     this._scheduleRecompute(sessionId)
   }
@@ -397,6 +539,38 @@ export class SessionChangeTrackerService
   }
 
   // -- internals ------------------------------------------------------
+
+  private _filesFor(sessionId: string): Map<string, FileRecord> {
+    let files = this._state.get(sessionId)
+    if (!files) {
+      files = new Map()
+      this._state.set(sessionId, files)
+    }
+    return files
+  }
+
+  /** Refresh LRU recency (most-recently-recorded session sits at the end) and
+   *  evict least-recently-used sessions until the global budgets hold. */
+  private _touchLru(sessionId: string, files: Map<string, FileRecord>): void {
+    this._state.delete(sessionId)
+    this._state.set(sessionId, files)
+    let total = 0
+    for (const b of this._sessionBytes.values()) total += b
+    while (this._state.size > this.maxTrackedSessions || total > this.maxTotalBytes) {
+      let oldest: string | undefined
+      for (const id of this._state.keys()) {
+        if (id === sessionId && this._state.size > 1) continue
+        oldest = id
+        break
+      }
+      if (oldest === undefined) break
+      this._logger.warn(`evicting change tracking for session ${oldest} — global budget exceeded`)
+      total -= this._sessionBytes.get(oldest) ?? 0
+      this._state.delete(oldest)
+      this._sessionBytes.delete(oldest)
+      this._observables.get(oldest)?.set([], undefined)
+    }
+  }
 
   /**
    * Shared engine for {@link previewRestore} / {@link restore}. For each tracked
@@ -450,16 +624,19 @@ export class SessionChangeTrackerService
         rec.batches = rec.batches.filter(
           (b) => b.toolCallId === undefined || !ids.has(b.toolCallId),
         )
+        rec.batchCount = Math.max(0, rec.batchCount - removed.length)
         mutated = true
       }
     }
 
     if (mutated) {
-      // Drop files whose batches were fully removed, then persist + refresh.
+      // Drop files whose batches were fully removed (their content is back at
+      // the pre-edit state, and a later re-edit should pin a fresh baseline),
+      // then persist + refresh.
       let bytes = 0
       for (const [path, rec] of [...files.entries()]) {
-        if (rec.batches.length === 0) files.delete(path)
-        else for (const b of rec.batches) bytes += jsonSize(b)
+        if (rec.batches.length === 0 && rec.origin === 'agent') files.delete(path)
+        else bytes += recordBytes(rec)
       }
       this._sessionBytes.set(sessionId, bytes)
       this._scheduleWrite()
@@ -467,26 +644,6 @@ export class SessionChangeTrackerService
     }
 
     return { filesChanged, insertions, deletions }
-  }
-
-  /** Evict least-recently-recorded sessions until the global budgets hold. */
-  private _evictOverflow(protectId: string): void {
-    let total = 0
-    for (const b of this._sessionBytes.values()) total += b
-    while (this._state.size > this.maxTrackedSessions || total > this.maxTotalBytes) {
-      let oldest: string | undefined
-      for (const id of this._state.keys()) {
-        if (id === protectId && this._state.size > 1) continue
-        oldest = id
-        break
-      }
-      if (oldest === undefined) break
-      this._logger.warn(`evicting change tracking for session ${oldest} — global budget exceeded`)
-      total -= this._sessionBytes.get(oldest) ?? 0
-      this._state.delete(oldest)
-      this._sessionBytes.delete(oldest)
-      this._observables.get(oldest)?.set([], undefined)
-    }
   }
 
   /**
@@ -528,6 +685,8 @@ export class SessionChangeTrackerService
     path: string,
     record: FileRecord,
   ): Promise<SessionFileChange | undefined> {
+    if (record.ignored) return undefined
+    if (record.batchCount === 0 && record.origin === 'agent') return undefined
     const uri = path.includes('://') ? URI.parse(path) : URI.file(path)
     let current = ''
     let existed = true
@@ -536,22 +695,59 @@ export class SessionChangeTrackerService
     } catch {
       existed = false
     }
-    const batches = record.batches
-    if (batches.length === 0) return undefined
-    const created = batches.some((b) => b.created)
-    const { baseline, degraded } = reconstructBaseline(current, batches)
-    if (baseline === current && existed && !created) return undefined
+
+    // A pinned baseline of null means the file was created during the session;
+    // the sticky created flag covers legacy agents that report no baseline.
+    const created =
+      record.baseline === null ||
+      (record.baseline === undefined &&
+        (record.created === true || record.batches.some((b) => b.created)))
+
+    let baseline: string
+    let source: SessionBaselineSource
+    let degraded = false
+    if (record.baseline !== undefined) {
+      baseline = record.baseline ?? ''
+      source = record.baselineSource ?? 'reported'
+    } else if (record.batches.length > 0) {
+      const r = reconstructBaseline(current, record.batches)
+      baseline = r.baseline
+      degraded = r.degraded
+      source = 'reconstructed'
+    } else if (record.origin === 'watched') {
+      // Watched change with no obtainable pre-change content: known changed,
+      // not comparable. Baseline mirrors current so no false diff is claimed.
+      baseline = current
+      source = 'none'
+    } else {
+      return undefined
+    }
+
+    // Created then deleted → net-zero for the session; drop the row.
+    if (!existed && created) return undefined
+    // Changed back to the baseline (or rewound) → self-heals out of the list.
+    if (source !== 'none' && baseline === current && existed && !created) return undefined
+
     const status: SessionFileChangeStatus = !existed
       ? 'deleted'
       : created
         ? 'added'
-        : degraded
+        : degraded || source === 'none'
           ? 'degraded'
           : baseline === ''
             ? 'added'
             : 'modified'
     const effectiveBaseline = created && existed ? '' : baseline
-    return { uri, path, baseline: effectiveBaseline, current, status, batchCount: batches.length }
+    return {
+      uri,
+      path,
+      baseline: effectiveBaseline,
+      current,
+      status,
+      origin: record.origin,
+      baselineSource: source,
+      batchCount: record.batchCount,
+    }
   }
 }
 

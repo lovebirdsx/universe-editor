@@ -64,6 +64,7 @@ import { StartupFileContribution } from '../StartupFileContribution.js'
 import { DeepLinkContribution } from '../DeepLinkContribution.js'
 import { StartupSessionContribution } from '../StartupSessionContribution.js'
 import { SessionChangesDiffSyncContribution } from '../SessionChangesDiffSyncContribution.js'
+import { SessionWatchedChangesContribution } from '../SessionWatchedChangesContribution.js'
 import { DiffLiveContentSyncContribution } from '../DiffLiveContentSyncContribution.js'
 import { LargeFileOptimizationsContribution } from '../LargeFileOptimizationsContribution.js'
 import { TabSwitchPerfContribution } from '../TabSwitchPerfContribution.js'
@@ -522,6 +523,16 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.sessionChangesDiffSync',
   SessionChangesDiffSyncContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// fs-watch fallback for the session diff: while a turn is running, disk
+// changes the agent never reported (shell/terminal writes) are recorded as
+// inferred "watched" entries with a git-HEAD baseline. AfterRestore so the
+// watcher, session service and SCM command surface are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.sessionWatchedChanges',
+  SessionWatchedChangesContribution,
   WorkbenchPhase.AfterRestore,
 )
 

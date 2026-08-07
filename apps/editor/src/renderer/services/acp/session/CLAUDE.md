@@ -47,14 +47,14 @@
 | `acpSessionTitleService.ts` / `acpSessionTitle.ts` / `sessionTitleFormat.ts` | 标题自动生成（AI purpose `session-title`）+ 解析/截断/格式化 | 标题逻辑 |
 | `acpChatLocationService.ts` | **单一真相**：Chat 渲染在 EditorArea（全屏 tab）还是 SecondarySideBar（停靠面板）。三向同步 + ContextKey | 双模式切换 |
 | `acpChatWidgetService.ts` | 已挂载 ChatBody 的 registry：DOM 容器 + moveTimeline/focusInput 回调 + `lastFocusedWidget`（命令定向） | 多实例聚焦/定向命令 |
-| `sessionChangeTracker.ts` | 每会话整文件改动追踪（逆推 baseline，键 `sessionIdOnAgent`） | 会话级 diff（见 [[session-diff-feature]]） |
+| `sessionChangeTracker.ts` | 每会话整文件改动追踪（pinned baseline 快照制：first-touch 钉住 agent 上报的写前全文 / watched 条目的 git HEAD，hunks 仅供 rewind 回滚；键 `sessionIdOnAgent`） | 会话级 diff（见 [[session-diff-feature]]） |
 | `acpPromptDraftCache.ts` / `acpQuestionDraftCache.ts` / `acpChatViewStateCache.ts` / `acpPromptCancelledDraftStash.ts` | 草稿/问题答案/视图态缓存（按**本地 id** 缓存）；取消时的已提交草稿暂存（last-wins，供恢复输入框） | 草稿持久、折叠态、取消恢复 |
 | `acpSessionFilterService.ts` / `acpSessionStatus.ts` / `acpAuthError.ts` | 列表过滤/状态枚举/auth 错误判定 | — |
 | `acpSessionConnection.ts` / `acpSessionContent.ts` / `acpSessionCost.ts` / `acpSessionModel.ts` / `acpSessionFactory.ts` / `acpSessionRecovery.ts` / `acpSessionRegistry.ts` / `acpSessionOutlineRegistry.ts` / `acpSessionUpdateMeta.ts` / `acpTimelineOutline.ts` | 连接绑定 / 内容组装 / 开销 / 接口模型 / 工厂 / 恢复 / 注册表 / outline 注册 / update `_meta` 读取 / timeline outline | 见各自头注释 |
 | `acpPromptHistoryService.ts` / `acpPromptContextInbox.ts` / `acpPromptReplaceInbox.ts` / `acpPromptTextInbox.ts` / `acpElicitationDraftCache.ts` | prompt 历史 / 上下文收件箱 / 替换收件箱（rewind 回填）/ 文本收件箱 / elicitation 草稿 | — |
 | `sessionBookmarks.ts` / `sessionBookmarkService.ts` | 会话书签 | — |
 | `acpCompactionStats.ts` / `acpConfigOptionsCache.ts` / `acpAgentCostStrategy.ts` / `acpAuthGuidanceService.ts` / `acpErrors.ts` / `acpErrorClassify.ts` / `acpExtMethods.ts` | compaction 统计 / 配置项缓存 / 开销策略 / auth 引导 / 错误模型 / 错误分类 / ext-method 常量 | — |
-| `sessionDiffReconstruct.ts` | 会话级 diff 的 baseline 逆推（原 `diff/reconstructBaseline.ts`） | diff 精度 |
+| `sessionDiffReconstruct.ts` | 会话级 diff 的 baseline 逆推（原 `diff/reconstructBaseline.ts`）——仅当条目无 pinned baseline（如超 4MB 未钉）时兜底 | diff 精度 |
 
 #### 同域核心层 `apps/editor/src/renderer/services/acp/`（上一级）
 

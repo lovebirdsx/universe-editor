@@ -1943,13 +1943,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
       for (const change of readFileChanges(update)) {
         if (sid !== undefined) {
-          this._changeTracker?.record(
-            sid,
-            change.path,
-            update.toolCallId,
-            change.hunks,
-            change.isCreate,
-          )
+          this._changeTracker?.record(sid, change.path, update.toolCallId, change.hunks, {
+            created: change.isCreate,
+            ...(change.baseline !== undefined ? { baseline: change.baseline } : {}),
+          })
         }
       }
     }

@@ -56,7 +56,16 @@ function makeTracker(obs: IObservable<readonly SessionFileChange[]>): ISessionCh
 }
 
 function change(uri: URI, baseline: string, current: string): SessionFileChange {
-  return { uri, path: uri.fsPath, baseline, current, status: 'modified', batchCount: 1 }
+  return {
+    uri,
+    path: uri.fsPath,
+    baseline,
+    current,
+    status: 'modified',
+    origin: 'agent',
+    baselineSource: 'reported',
+    batchCount: 1,
+  }
 }
 
 describe('SessionChangesDiffSyncContribution', () => {

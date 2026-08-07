@@ -175,6 +175,14 @@ export interface FileChangeDescriptor {
   readonly path: string
   readonly hunks: readonly DiffHunk[]
   readonly isCreate: boolean
+  /**
+   * The file's full pre-edit content as reported by the agent (claude
+   * `toolResponse.originalFile`, codex diff-content `oldText`) — the authoritative
+   * write-front snapshot the tracker pins as the session baseline on first touch.
+   * `null` = the tool call created the file; `undefined` = the agent did not
+   * report pre-edit content (tracker falls back to hunk reconstruction).
+   */
+  readonly baseline?: string | null
 }
 
 export function readFileChanges(update: SessionUpdate): readonly FileChangeDescriptor[] {
@@ -206,6 +214,8 @@ function readStructuredPatch(update: SessionUpdate): FileChangeDescriptor | unde
   const patch = resp?.structuredPatch
   if (typeof path !== 'string' || path.length === 0 || !Array.isArray(patch)) return undefined
   const isCreate = resp?.type === 'create' || resp?.originalFile === null
+  const original = resp?.originalFile
+  const baseline = typeof original === 'string' ? original : isCreate ? null : undefined
   const hunks: DiffHunk[] = []
   for (const h of patch) {
     if (
@@ -226,7 +236,7 @@ function readStructuredPatch(update: SessionUpdate): FileChangeDescriptor | unde
     }
   }
   if (hunks.length === 0 && !isCreate) return undefined
-  return { path, hunks, isCreate }
+  return baseline === undefined ? { path, hunks, isCreate } : { path, hunks, isCreate, baseline }
 }
 
 function readDiffContentChanges(update: SessionUpdate): readonly FileChangeDescriptor[] {
@@ -243,7 +253,7 @@ function readDiffContentChanges(update: SessionUpdate): readonly FileChangeDescr
     const oldText = typeof diff.oldText === 'string' ? diff.oldText : ''
     const hunks = wholeFileDiffHunks(oldText, diff.newText, isCreate)
     if (hunks.length === 0 && !isCreate) continue
-    changes.push({ path: diff.path, hunks, isCreate })
+    changes.push({ path: diff.path, hunks, isCreate, baseline: isCreate ? null : oldText })
   }
   return changes
 }

@@ -4,12 +4,13 @@
  *  modifications the active agent session made (tracked via ISessionChange
  *  TrackerService), SCM-CHANGES style: a list or tree of changed files. Single-
  *  click previews a whole-file diff (reuses the preview tab); double-click pins
- *  it. The baseline is reconstructed from the session's edits vs. the current
+ *  it. The baseline is the pinned pre-edit snapshot captured at first touch
+ *  (agent-reported, or git HEAD for watched entries), diffed vs. the current
  *  on-disk content.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, FileSymlink } from 'lucide-react'
+import { ChevronDown, ChevronRight, EyeOff, FileSymlink } from 'lucide-react'
 import {
   IEditorResolverService,
   IEditorService,
@@ -124,13 +125,32 @@ function useOpenFile(): (c: SessionFileChange) => void {
   }
 }
 
+/** Dismiss a watched (inferred) entry — the user judged it their own change. */
+function useDismissWatched(): (c: SessionFileChange) => void {
+  const sessions = useService(IAcpSessionService)
+  const tracker = useService(ISessionChangeTrackerService)
+  return (c) => {
+    const sid = sessions.activeSession.get()?.sessionIdOnAgent.get()
+    if (sid !== undefined) tracker.dismissWatched(sid, c.path)
+  }
+}
+
 function ChangeFlatList({ changes }: { changes: readonly SessionFileChange[] }) {
   const open = useOpenChange()
   const openFile = useOpenFile()
+  const dismiss = useDismissWatched()
   return (
     <ul className={styles['list']}>
       {changes.map((c) => (
-        <ChangeRow key={c.path} change={c} depth={0} showDir onOpen={open} onOpenFile={openFile} />
+        <ChangeRow
+          key={c.path}
+          change={c}
+          depth={0}
+          showDir
+          onOpen={open}
+          onOpenFile={openFile}
+          onDismiss={dismiss}
+        />
       ))}
     </ul>
   )
@@ -190,6 +210,7 @@ function compressFolder(f: TreeFolder): { leaf: TreeFolder; displayName: string 
 function ChangeTree({ changes }: { changes: readonly SessionFileChange[] }) {
   const open = useOpenChange()
   const openFile = useOpenFile()
+  const dismiss = useDismissWatched()
   const workspace = useService(IWorkspaceService)
   const rootDir = workspace.current?.folder.fsPath ?? ''
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
@@ -211,6 +232,7 @@ function ChangeTree({ changes }: { changes: readonly SessionFileChange[] }) {
         onToggle={toggle}
         onOpen={open}
         onOpenFile={openFile}
+        onDismiss={dismiss}
       />
     </ul>
   )
@@ -223,6 +245,7 @@ function TreeFolderRows({
   onToggle,
   onOpen,
   onOpenFile,
+  onDismiss,
 }: {
   folder: TreeFolder
   depth: number
@@ -230,6 +253,7 @@ function TreeFolderRows({
   onToggle: (path: string) => void
   onOpen: (c: SessionFileChange, preview: boolean) => void
   onOpenFile: (c: SessionFileChange) => void
+  onDismiss: (c: SessionFileChange) => void
 }) {
   const folders = [...folder.folders.values()].sort((a, b) => a.name.localeCompare(b.name))
   const files = [...folder.files].sort((a, b) =>
@@ -265,6 +289,7 @@ function TreeFolderRows({
                   onToggle={onToggle}
                   onOpen={onOpen}
                   onOpenFile={onOpenFile}
+                  onDismiss={onDismiss}
                 />
               </ul>
             )}
@@ -272,7 +297,14 @@ function TreeFolderRows({
         )
       })}
       {files.map((c) => (
-        <ChangeRow key={c.path} change={c} depth={depth} onOpen={onOpen} onOpenFile={onOpenFile} />
+        <ChangeRow
+          key={c.path}
+          change={c}
+          depth={depth}
+          onOpen={onOpen}
+          onOpenFile={onOpenFile}
+          onDismiss={onDismiss}
+        />
       ))}
     </>
   )
@@ -284,13 +316,16 @@ function ChangeRow({
   showDir,
   onOpen,
   onOpenFile,
+  onDismiss,
 }: {
   change: SessionFileChange
   depth: number
   showDir?: boolean
   onOpen: (c: SessionFileChange, preview: boolean) => void
   onOpenFile: (c: SessionFileChange) => void
+  onDismiss: (c: SessionFileChange) => void
 }) {
+  const inferred = change.origin === 'watched'
   return (
     <li
       className={styles['row']}
@@ -304,8 +339,35 @@ function ChangeRow({
     >
       <FileIcon resource={change.uri} isDirectory={false} className={styles['icon']} />
       <span className={styles['name']}>{basenameOfResource(change.uri)}</span>
+      {inferred && (
+        <span
+          className={styles['inferredBadge']}
+          data-testid="acp-changes-inferred"
+          data-tooltip={localize(
+            'acp.changes.inferredTip',
+            'Detected on disk during the turn but not reported by the agent — the change may not be its doing.',
+          )}
+        >
+          {localize('acp.changes.inferred', 'inferred')}
+        </span>
+      )}
       {showDir && <span className={styles['dir']}>{dirnameOfResource(change.uri)}</span>}
       <span className={styles['actions']}>
+        {inferred && (
+          <button
+            type="button"
+            className={styles['actionButton']}
+            data-tooltip={localize('acp.changes.dismissInferred', 'Not the agent — ignore')}
+            aria-label={localize('acp.changes.dismissInferred', 'Not the agent — ignore')}
+            data-testid="acp-changes-dismiss"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDismiss(change)
+            }}
+          >
+            <EyeOff size={16} strokeWidth={1.6} />
+          </button>
+        )}
         <ResourcePreviewButton resource={change.uri} testId="acp-changes-open-preview" />
         <button
           type="button"
