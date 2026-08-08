@@ -36,7 +36,7 @@ import { PerforceGraphEditor } from '../PerforceGraphEditor.js'
 const REPO: P4GraphRepoDto = { root: 'C:/ws/main', name: 'alice-ws' }
 
 function change(id: string, message: string): P4GraphChangeDto {
-  return { id, parents: [], author: 'alice', client: 'alice-ws', date: 1, message }
+  return { id, parents: [], author: 'alice', client: 'alice-ws', date: 1, message, body: message }
 }
 
 function resultWith(changes: P4GraphChangeDto[], moreAvailable: boolean): P4GraphLoadResult {

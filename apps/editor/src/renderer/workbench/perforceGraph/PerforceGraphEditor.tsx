@@ -140,7 +140,9 @@ const ChangeRow = memo(function ChangeRow({
     >
       <span className={styles['graphSpacer']} />
       <span className={styles['description']}>
-        <span className={styles['message']}>{change.message}</span>
+        <span className={styles['message']} data-tooltip={change.body || change.message}>
+          {change.message}
+        </span>
       </span>
       <span className={styles['author']}>{change.author}</span>
       <span className={styles['date']}>{formatDate(change.date)}</span>
@@ -603,7 +605,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
         {
           kind: 'item',
           label: localize('gitGraph.copyMessage', 'Copy commit message'),
-          run: () => void navigator.clipboard?.writeText(change.message),
+          run: () => void navigator.clipboard?.writeText(change.body || change.message),
         },
         { kind: 'sep' },
         {
@@ -634,6 +636,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
         message: localize('perforceGraph.pendingCount', 'Pending Changes ({count})', {
           count: result.pendingCount,
         }),
+        body: '',
       }
       return [node, ...result.changes]
     }

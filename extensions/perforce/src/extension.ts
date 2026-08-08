@@ -866,6 +866,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
                 client: c.client,
                 date: c.date,
                 message: c.message,
+                body: c.body,
               }) satisfies P4GraphChangeDto,
           )
           return {

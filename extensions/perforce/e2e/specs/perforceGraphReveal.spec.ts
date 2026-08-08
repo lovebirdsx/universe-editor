@@ -8,8 +8,8 @@
  *  specs use the cold-launch perforce fixture rather than the shared instance.
  *--------------------------------------------------------------------------------------------*/
 
-import { expect, test } from '../fixtures/perforceApp.js'
-import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
+import { expect, test, waitForPerforceCommands } from '../fixtures/perforceApp.js'
+import { evaluateWhenRestored, type WorkbenchPO } from '@universe-editor/e2e-harness'
 
 const REVEAL_SEEDS = {
   files: [{ relPath: 'tracked.txt', content: 'original content\n' }],
@@ -26,7 +26,7 @@ test.describe('@p1 perforce graph reveal', () => {
 
   async function openSeededWorkspace(
     page: Parameters<typeof evaluateWhenRestored>[0],
-    workbench: { openWorkspace(dir: string): Promise<unknown> },
+    workbench: WorkbenchPO,
     openDir: string,
   ): Promise<void> {
     // Cold boot + host relaunch on workspace open; give headroom like the other
@@ -40,6 +40,10 @@ test.describe('@p1 perforce graph reveal', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
+    // The SCM-count gate flips before the contributed command handlers register
+    // (same activate(), later burst) — the graph's getChanges would resolve to
+    // no handler and the editor would stick on "unavailable" with no retry.
+    await waitForPerforceCommands(workbench)
   }
 
   test('reveals a seeded changelist via the _workbench bridge', async ({

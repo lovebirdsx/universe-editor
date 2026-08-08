@@ -249,3 +249,39 @@ export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; open
 })
 
 export { expect } from '@playwright/test'
+
+import { expect as playwrightExpect } from '@playwright/test'
+
+/**
+ * Wait out the extension-host cold start before firing perforce.* commands.
+ *
+ * The SCM source control is created EARLY in the perforce extension's activate()
+ * (PerforceClient.create → scm.createSourceControl), but the contributed command
+ * handlers register LATER in the same activate(), in one synchronous
+ * `context.subscriptions.push(...)` burst. getScmSourceControlCount() flips >0 in
+ * that window, so a perforce.* command fired right after the SCM-count gate can
+ * reach a host that has no handler yet: the renderer forwards the contributed
+ * command, the host has nothing to run and forwards it back, and the renderer
+ * rejects it ("extension host may only execute _workbench.* commands"). Because
+ * all handlers register in one synchronous burst, polling any one read-only
+ * command (perforce.refresh) until it stops rejecting gates them all.
+ */
+export async function waitForPerforceCommands(workbench: WorkbenchPO): Promise<void> {
+  await playwrightExpect
+    .poll(
+      async () => {
+        try {
+          await workbench.runCommand('perforce.refresh')
+          return true
+        } catch (err) {
+          if (/extension host may only execute/.test(String(err))) return false
+          throw err
+        }
+      },
+      {
+        timeout: 30_000,
+        message: 'perforce contributed commands should be registered in the host',
+      },
+    )
+    .toBe(true)
+}

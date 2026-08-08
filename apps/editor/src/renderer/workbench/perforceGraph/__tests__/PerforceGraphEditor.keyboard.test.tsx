@@ -47,6 +47,7 @@ function makeResult(pendingCount = 0): P4GraphLoadResult {
         client: 'alice-ws',
         date: 1,
         message: 'Fix widget',
+        body: 'Fix widget',
       },
       {
         id: '4519',
@@ -55,6 +56,7 @@ function makeResult(pendingCount = 0): P4GraphLoadResult {
         client: 'bob-ws',
         date: 1,
         message: 'Middle',
+        body: 'Middle',
       },
       {
         id: '4500',
@@ -63,6 +65,7 @@ function makeResult(pendingCount = 0): P4GraphLoadResult {
         client: 'carol-ws',
         date: 1,
         message: 'Initial',
+        body: 'Initial',
       },
     ],
     head: '4521',

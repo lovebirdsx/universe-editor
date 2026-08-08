@@ -39,6 +39,8 @@ export interface GraphChangeMeta {
   readonly date: number
   /** Description first line. */
   readonly message: string
+  /** Full description (all lines) — `changes -l` already returns it. */
+  readonly body: string
 }
 
 /** Parse `p4 -Mj changes -s submitted -l` records, newest-first (p4's order). */
@@ -47,12 +49,14 @@ export function parseChangesList(records: readonly Record<string, unknown>[]): G
   for (const record of records) {
     const id = asString(record['change'])
     if (!id) continue
+    const desc = asString(record['desc']) ?? ''
     out.push({
       id,
       author: asString(record['user']) ?? '',
       client: asString(record['client']) ?? '',
       date: Number(asString(record['time']) ?? 0),
-      message: descriptionFirstLine(asString(record['desc']) ?? ''),
+      message: descriptionFirstLine(desc),
+      body: desc.replace(/\n+$/, ''),
     })
   }
   return out

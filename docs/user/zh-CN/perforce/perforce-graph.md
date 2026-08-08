@@ -79,7 +79,7 @@ Perforce 图谱是一个专门用来**可视化浏览已提交 changelist 历史
 在某个 changelist 上**右键**可执行：
 
 - **复制变更号**：拷贝该 changelist 的编号。
-- **复制提交信息**：拷贝该 changelist 的描述文字。
+- **复制提交信息**：拷贝该 changelist 的完整描述文字（含所有行）。鼠标悬停在描述上也会以悬浮提示显示完整内容。
 - **发送到 Agent Chat**（Send to Agent Chat）：把这个 changelist 的编号和描述发到 AI 会话的输入框，方便让 agent 结合这次改动回答问题。没有活动会话时会自动新建一个。
 
 <!-- 截图：对某 changelist 右键的操作菜单 -->

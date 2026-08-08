@@ -78,6 +78,7 @@ import {
   type GitGraphMenuState,
 } from './GitGraphContextMenu.js'
 import { useGraphKeyboardNav } from './useGraphKeyboardNav.js'
+import { useFullCommitMessages } from './useFullCommitMessages.js'
 import {
   GitGraphWorktreePickerDialog,
   type GitGraphWorktreePickerState,
@@ -292,6 +293,7 @@ const CommitRow = memo(function CommitRow({
   commit,
   selected,
   headName,
+  fullMessage,
   onRowClick,
   onCommitMenu,
   onBranchMenu,
@@ -299,10 +301,13 @@ const CommitRow = memo(function CommitRow({
   onTagMenu,
   onWorktreeMenu,
   onOverflowMenu,
+  onMessageHover,
 }: {
   commit: GitGraphCommitDto
   selected: boolean
   headName: string | null
+  /** Lazily fetched full commit message; falls back to the subject. */
+  fullMessage: string | undefined
   onRowClick: (hash: string, e: MouseEvent) => void
   onCommitMenu: (commit: GitGraphCommitDto, e: MouseEvent) => void
   onBranchMenu: (name: string, e: MouseEvent) => void
@@ -310,6 +315,7 @@ const CommitRow = memo(function CommitRow({
   onTagMenu: (name: string, e: MouseEvent) => void
   onWorktreeMenu: (worktree: GitGraphWorktreeDto, e: MouseEvent) => void
   onOverflowMenu: (entries: RefEntry[], e: MouseEvent) => void
+  onMessageHover: (hash: string) => void
 }) {
   return (
     <div
@@ -330,7 +336,13 @@ const CommitRow = memo(function CommitRow({
           onWorktreeMenu={onWorktreeMenu}
           onOverflowMenu={onOverflowMenu}
         />
-        <span className={styles['message']}>{commit.message}</span>
+        <span
+          className={styles['message']}
+          data-tooltip={fullMessage ?? commit.message}
+          onMouseEnter={() => onMessageHover(commit.hash)}
+        >
+          {commit.message}
+        </span>
       </span>
       <span className={styles['author']}>{commit.author}</span>
       <span className={styles['date']}>{formatDate(commit.date)}</span>
@@ -569,6 +581,25 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       })
     },
     [commands, discoverEffectiveRepoRoot, logger],
+  )
+
+  // Full commit messages (subject + body) are fetched on demand: hovering a
+  // message prefetches it for the tooltip, the Copy action awaits it.
+  const fullMessages = useFullCommitMessages(
+    useCallback(
+      (hash: string) =>
+        commands
+          .executeCommand<GitGraphCommitDetailsDto | null>(GitGraphCommands.getCommitDetails, hash)
+          .then((details) => details?.body ?? null),
+      [commands],
+    ),
+  )
+  const onMessageHover = useCallback(
+    (hash: string) => {
+      if (hash === UNCOMMITTED_HASH) return
+      void fullMessages.load(hash)
+    },
+    [fullMessages],
   )
 
   // Silent Commit Changes follow for programmatic reveals (Open in Graph from
@@ -1066,7 +1097,10 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         {
           kind: 'item',
           label: localize('gitGraph.copyMessage', 'Copy commit message'),
-          run: () => void navigator.clipboard?.writeText(commit.message),
+          run: async () => {
+            const body = await fullMessages.load(hash)
+            await navigator.clipboard?.writeText(body ?? commit.message)
+          },
         },
         { kind: 'sep' },
         {
@@ -1081,7 +1115,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       ]
       setMenu({ x: e.clientX, y: e.clientY, items })
     },
-    [commands, dialog, runOp, openCherryPickToBranch],
+    [commands, dialog, runOp, openCherryPickToBranch, fullMessages],
   )
 
   const openBranchMenu = useCallback(
@@ -1850,6 +1884,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
                   commit={c}
                   selected={selected.has(c.hash)}
                   headName={result.headName}
+                  fullMessage={fullMessages.get(c.hash)}
                   onRowClick={onRowClick}
                   onCommitMenu={openCommitMenu}
                   onBranchMenu={openBranchMenu}
@@ -1857,6 +1892,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
                   onTagMenu={openTagMenu}
                   onWorktreeMenu={openWorktreeMenu}
                   onOverflowMenu={openOverflowMenu}
+                  onMessageHover={onMessageHover}
                 />
               ))}
             </div>

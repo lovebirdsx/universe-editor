@@ -113,7 +113,9 @@ export function TooltipProvider({ delay = 500, children }: TooltipProviderProps)
       } else {
         timerRef.current = setTimeout(() => {
           timerRef.current = null
-          setTip(next)
+          // Re-read the attribute at fire time: hosts may fill in the text
+          // asynchronously (e.g. lazy-fetched content) during the delay.
+          setTip(tooltipTargetFrom(next.target) ?? next)
         }, delay)
       }
     }

@@ -125,6 +125,9 @@ describe('CommitChangesView', () => {
     })
 
     expect(screen.getByTestId('commitChanges-title').textContent).toBe('a1b2c3d — fix crash')
+    expect(screen.getByTestId('commitChanges-title').getAttribute('data-tooltip')).toBe(
+      'fix crash\n\nlong body here',
+    )
     const meta = screen.getByTestId('commitChanges-meta').textContent ?? ''
     expect(meta).toContain('Jane Doe')
     expect(meta).toContain(' · ')
@@ -139,6 +142,10 @@ describe('CommitChangesView', () => {
     })
 
     expect(screen.getByTestId('commitChanges-title').textContent).toBe('a1b2c3d — fix crash')
+    // No full message — the tooltip falls back to the title itself.
+    expect(screen.getByTestId('commitChanges-title').getAttribute('data-tooltip')).toBe(
+      'a1b2c3d — fix crash',
+    )
     expect(screen.queryByTestId('commitChanges-meta')).toBeNull()
   })
 

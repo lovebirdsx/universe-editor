@@ -411,7 +411,7 @@ function CommitChangesContent({ payload }: { payload: ShowCommitChangesPayload }
       <div className={styles['header']}>
         <div
           className={styles['title']}
-          data-tooltip={payload.title}
+          data-tooltip={metadata?.message ?? payload.title}
           data-testid="commitChanges-title"
         >
           {payload.title}

@@ -26,8 +26,11 @@ export interface P4GraphChangeDto {
   client: string
   /** Submit date, Unix seconds. */
   date: number
-  /** Description first line. Full body is fetched on demand. */
+  /** Description first line. */
   message: string
+  /** Full description (all lines) — the list call (`p4 changes -l`) already
+   *  returns it, so no on-demand fetch is needed (unlike git). */
+  body: string
 }
 
 /** A client (workspace) the Perforce Graph view can target. */

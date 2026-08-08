@@ -49,6 +49,20 @@ describe('TooltipProvider', () => {
     expect(screen.getByRole('tooltip').textContent).toBe('outer tip')
   })
 
+  it('re-reads the attribute at fire time so async-filled text wins', () => {
+    vi.useFakeTimers()
+    render(<Fixture delay={100} />)
+    const el = screen.getByTestId('outer')
+
+    fireEvent.mouseOver(el)
+    // The host fills in fresh text during the delay (e.g. a lazy fetch).
+    el.setAttribute('data-tooltip', 'updated tip')
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+    expect(screen.getByRole('tooltip').textContent).toBe('updated tip')
+  })
+
   it('hides on mouseout', () => {
     vi.useFakeTimers()
     render(<Fixture delay={0} />)

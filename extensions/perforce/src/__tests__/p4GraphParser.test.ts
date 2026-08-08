@@ -16,7 +16,7 @@ describe('parseChangesList', () => {
         user: 'alice',
         client: 'alice-ws',
         time: '1700000000',
-        desc: 'Fix the widget\nlong body ignored',
+        desc: 'Fix the widget\nwith a longer explanation',
       },
       { change: '4519', user: 'bob', client: 'bob-ws', time: '1699990000', desc: 'Initial' },
     ])
@@ -27,14 +27,22 @@ describe('parseChangesList', () => {
         client: 'alice-ws',
         date: 1700000000,
         message: 'Fix the widget',
+        body: 'Fix the widget\nwith a longer explanation',
       },
-      { id: '4519', author: 'bob', client: 'bob-ws', date: 1699990000, message: 'Initial' },
+      {
+        id: '4519',
+        author: 'bob',
+        client: 'bob-ws',
+        date: 1699990000,
+        message: 'Initial',
+        body: 'Initial',
+      },
     ])
   })
 
   it('skips records without a change id and defaults empty fields', () => {
     const changes = parseChangesList([{ user: 'x' }, { change: '7' }])
-    expect(changes).toEqual([{ id: '7', author: '', client: '', date: 0, message: '' }])
+    expect(changes).toEqual([{ id: '7', author: '', client: '', date: 0, message: '', body: '' }])
   })
 })
 
