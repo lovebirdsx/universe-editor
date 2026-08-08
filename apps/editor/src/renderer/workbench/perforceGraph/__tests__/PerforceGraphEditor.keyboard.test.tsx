@@ -31,7 +31,10 @@ import { perforceGraphViewState } from '../../../services/perforceGraph/perforce
 import { scmViewState } from '../../scm/scmViewState.js'
 import { _clearGraphPayloadCacheForTests } from '../../scm/commitChanges/graphPayloadCache.js'
 import { ServicesContext } from '../../useService.js'
-import { ShowCommitChangesAction } from '../../../actions/commitChangesActions.js'
+import {
+  FocusCommitChangesAction,
+  ShowCommitChangesAction,
+} from '../../../actions/commitChangesActions.js'
 import { SendCommitToAgentChatAction } from '../../../actions/agentContextActions.js'
 import { PerforceGraphEditor } from '../PerforceGraphEditor.js'
 
@@ -293,6 +296,31 @@ describe('PerforceGraphEditor menu focus on open', () => {
     await flush()
     expect(menu.querySelector('[data-active]')?.textContent).toBe('Copy commit message')
     expect(perforceGraphViewState.selection).toEqual(['4521'])
+  })
+})
+
+describe('PerforceGraphEditor Enter focuses Commit Changes', () => {
+  it('plain Enter on the selected row runs the focus command without opening the menu', async () => {
+    const { container, executeCommand } = renderEditor()
+    await flush()
+
+    const body = scrollBody(container)
+    fireEvent.keyDown(body, { key: 'ArrowDown' })
+    await flush()
+    fireEvent.keyDown(body, { key: 'Enter' })
+    await flush()
+
+    expect(executeCommand).toHaveBeenCalledWith(FocusCommitChangesAction.ID)
+    expect(openMenu()).toBeNull()
+  })
+
+  it('Enter with no selection bubbles up untouched', async () => {
+    const { container, executeCommand } = renderEditor()
+    await flush()
+
+    const notPrevented = fireEvent.keyDown(scrollBody(container), { key: 'Enter' })
+    expect(notPrevented).toBe(true)
+    expect(executeCommand).not.toHaveBeenCalledWith(FocusCommitChangesAction.ID)
   })
 })
 

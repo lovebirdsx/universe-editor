@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { EditorInput, URI } from '@universe-editor/platform'
+import { gitGraphViewState } from '../gitGraph/gitGraphViewState.js'
 
 const GIT_GRAPH_URI = URI.from({ scheme: 'universe', path: '/gitGraph' })
 
@@ -24,5 +25,14 @@ export class GitGraphEditorInput extends EditorInput {
 
   getName(): string {
     return 'Git Graph'
+  }
+
+  /** Route focus into the graph's row list (not the editor-group body) so
+   *  arrow-key navigation works as soon as the tab opens — the graph is a
+   *  plain React tree with no Monaco registration. */
+  override focus(): boolean {
+    if (!gitGraphViewState.focusRows) return false
+    gitGraphViewState.focusRows()
+    return true
   }
 }

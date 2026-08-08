@@ -33,6 +33,10 @@ export interface GitGraphColumnWidths {
 export interface GitGraphViewState {
   /** Callback registered by the mounted editor to focus the search input. */
   focusSearch: (() => void) | null
+  /** Callback registered by the mounted editor to focus the row list, used by
+   *  GitGraphEditorInput.focus() so opening/activating the tab lands keyboard
+   *  focus on the commits (arrow keys work without a prior mouse click). */
+  focusRows: (() => void) | null
   /** Callback registered by the mounted editor to toggle remote-branch visibility. */
   toggleRemoteBranches: (() => void) | null
   /** Callback registered by the mounted editor to reload the graph (toolbar ↺). */
@@ -71,6 +75,7 @@ export const GIT_GRAPH_PAGE_SIZE = 500
 
 export const gitGraphViewState: GitGraphViewState = {
   focusSearch: null,
+  focusRows: null,
   toggleRemoteBranches: null,
   refresh: null,
   revealCommit: null,

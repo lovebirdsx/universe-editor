@@ -37,7 +37,10 @@ import { gitGraphViewState } from '../../../services/gitGraph/gitGraphViewState.
 import { scmViewState } from '../../scm/scmViewState.js'
 import { _clearGraphPayloadCacheForTests } from '../../scm/commitChanges/graphPayloadCache.js'
 import { ServicesContext } from '../../useService.js'
-import { ShowCommitChangesAction } from '../../../actions/commitChangesActions.js'
+import {
+  FocusCommitChangesAction,
+  ShowCommitChangesAction,
+} from '../../../actions/commitChangesActions.js'
 import { GitGraphEditor } from '../GitGraphEditor.js'
 
 const HASH_A = 'b2c4079fd07dfa7c73fee004e5a0736ff4a2dd80'
@@ -287,6 +290,32 @@ describe('GitGraphEditor keyboard navigation', () => {
     const notPrevented = fireEvent.keyDown(body, { key: 'a' })
     expect(notPrevented).toBe(true)
     expect(gitGraphViewState.selection).toEqual([])
+  })
+})
+
+describe('GitGraphEditor Enter focuses Commit Changes', () => {
+  it('plain Enter on the selected row runs the focus command without opening the menu', async () => {
+    const { container, executeCommand, pick } = renderEditor()
+    await flush()
+
+    const body = scrollBody(container)
+    fireEvent.keyDown(body, { key: 'ArrowDown' })
+    await flush()
+    fireEvent.keyDown(body, { key: 'Enter' })
+    await flush()
+
+    expect(executeCommand).toHaveBeenCalledWith(FocusCommitChangesAction.ID)
+    expect(openMenu()).toBeNull()
+    expect(pick).not.toHaveBeenCalled()
+  })
+
+  it('Enter with no selection bubbles up untouched', async () => {
+    const { container, executeCommand } = renderEditor()
+    await flush()
+
+    const notPrevented = fireEvent.keyDown(scrollBody(container), { key: 'Enter' })
+    expect(notPrevented).toBe(true)
+    expect(executeCommand).not.toHaveBeenCalledWith(FocusCommitChangesAction.ID)
   })
 })
 

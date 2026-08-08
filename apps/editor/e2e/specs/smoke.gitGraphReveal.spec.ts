@@ -168,6 +168,53 @@ test.describe('@p1 git graph reveal', () => {
     }
   })
 
+  test('focus lands on the commit list on open, arrows move, Enter focuses Commit Changes', async () => {
+    test.setTimeout(120_000)
+
+    const userDataDir = makeUserDataDir()
+    const { repoDir, secondHash } = makeRepo()
+
+    const app = await launchCoreGitApp({ userDataDir })
+
+    try {
+      const page = await app.firstWindow()
+      await page.waitForLoadState('domcontentloaded')
+      await page.waitForFunction(() =>
+        Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
+      )
+      await evaluateWhenRestored(page)
+
+      await page.evaluate((p) => window.__E2E__!.openWorkspace(p), repoDir)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
+          timeout: 60_000,
+          message: 'git extension should register a source control',
+        })
+        .toBeGreaterThan(0)
+
+      await page.evaluate(() => window.__E2E__!.runCommand('git-graph.view'))
+
+      const editor = page.locator('[data-testid="gitGraph-editor"]')
+      await expect(editor).toBeVisible()
+      const body = editor.locator('[data-testid="gitGraph-scrollBody"]')
+      // Opening the tab routes focus into the row list (same slow-first-load
+      // window as the reveal tests).
+      await expect(body).toBeFocused({ timeout: 30_000 })
+
+      // Arrow keys move the selection with no prior mouse click (no
+      // uncommitted node in this repo: the first row is HEAD).
+      await page.keyboard.press('ArrowDown')
+      await expect(editor.locator(`[data-hash="${secondHash}"]`)).toHaveClass(/rowSelected/)
+
+      // Enter hands focus to the Commit Changes view's file tree.
+      await page.keyboard.press('Enter')
+      const tree = page.locator('[data-testid="commitChanges-view"] [role="tree"]')
+      await expect(tree).toBeFocused({ timeout: 30_000 })
+    } finally {
+      await closeApp(app)
+    }
+  })
+
   test('clicking a timeline row action selects that row before opening the graph', async () => {
     test.setTimeout(120_000)
 

@@ -54,7 +54,10 @@ import {
   PERFORCE_GRAPH_PAGE_SIZE,
 } from '../../services/perforceGraph/perforceGraphViewState.js'
 import { scmViewState } from '../scm/scmViewState.js'
-import { ShowCommitChangesAction } from '../../actions/commitChangesActions.js'
+import {
+  FocusCommitChangesAction,
+  ShowCommitChangesAction,
+} from '../../actions/commitChangesActions.js'
 import { createCommitChangesFollower } from '../scm/commitChanges/graphFollow.js'
 import { getOrBuildGraphPayload } from '../scm/commitChanges/graphPayloadCache.js'
 import { buildChangePayload } from './commitChangesPayload.js'
@@ -64,6 +67,7 @@ import {
   type GitGraphMenuState,
 } from '../gitGraph/GitGraphContextMenu.js'
 import { useGraphKeyboardNav } from '../gitGraph/useGraphKeyboardNav.js'
+import { usePersistedGraphSelection } from '../gitGraph/usePersistedGraphSelection.js'
 import { SendCommitToAgentChatAction } from '../../actions/agentContextActions.js'
 import styles from '../gitGraph/GitGraphEditor.module.css'
 
@@ -71,6 +75,8 @@ const ROW_HEIGHT = 24
 const GRID: GraphGrid = { x: 14, y: ROW_HEIGHT, offsetX: 12, offsetY: 12 }
 /** Id of the synthetic pending-changes node prepended above the latest change. */
 const PENDING_ID = '*'
+/** Rows that must not be persisted as the last focused change. */
+const PERSISTENCE_EXCLUDED_IDS = [PENDING_ID]
 
 /** Reveal paging cap: stop paging in history after this many extra pages. */
 const MAX_REVEAL_PAGES = 20
@@ -217,6 +223,28 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     }
   }, [])
 
+  // Layout effect on purpose: EditorGroupView's activation focus runs in a
+  // layout effect as well, so a passive registration would miss the first
+  // PerforceGraphEditorInput.focus() call on open.
+  const focusRequestedRef = useRef(false)
+  useLayoutEffect(() => {
+    perforceGraphViewState.focusRows = () => {
+      // The first open arrives while the loading state is still up and the
+      // listbox isn't in the DOM yet — defer to the effect below.
+      focusRequestedRef.current = true
+      scrollRef.current?.focus()
+    }
+    return () => {
+      perforceGraphViewState.focusRows = null
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!focusRequestedRef.current || !scrollRef.current) return
+    focusRequestedRef.current = false
+    scrollRef.current.focus()
+  })
+
   // Mirror state into the module-level store so it survives unmount.
   useEffect(() => {
     perforceGraphViewState.result = result
@@ -239,6 +267,15 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   useEffect(() => {
     perforceGraphViewState.wholeRepo = wholeRepo
   }, [wholeRepo])
+
+  usePersistedGraphSelection({
+    storageKey: 'perforceGraph.lastSelectedChange',
+    selection,
+    effectiveRepo: selectedRepo ?? repos[0]?.root ?? null,
+    result,
+    pendingReveal: perforceGraphViewState.pendingReveal,
+    excludedIds: PERSISTENCE_EXCLUDED_IDS,
+  })
 
   // Persist the scope toggle per-workspace so it's remembered across restarts.
   const wholeRepoLoadedRef = useRef(false)
@@ -694,11 +731,16 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
 
   const rowKeys = useMemo(() => filteredChanges.map((c) => c.id), [filteredChanges])
   const selectFromKeyboard = useCallback((id: string) => applySelection([id]), [applySelection])
+  const openCommitChanges = useCallback(
+    () => void commands.executeCommand(FocusCommitChangesAction.ID),
+    [commands],
+  )
   const onRowsKeyDown = useGraphKeyboardNav({
     rows: rowKeys,
     selectionRef,
     select: selectFromKeyboard,
     openMenu: openRowMenu,
+    openCommitChanges,
     scrollRef,
     rowAttribute: 'data-id',
     rowHeight: ROW_HEIGHT,

@@ -34,6 +34,8 @@ import { focusEditorInput } from '../editor/editorFocus.js'
 const STORAGE_KEY = 'workbench.layout'
 const SAVE_DEBOUNCE_MS = 200
 const INITIAL_LOAD_TIMEOUT_MS = 500
+/** Budget for `focusView` to wait for the view's focusable element to register. */
+const FOCUS_ELEMENT_TIMEOUT_MS = 2000
 
 const INITIAL_VISIBLE: Readonly<Record<PartId, boolean>> = {
   [PartId.ActivityBar]: true,
@@ -354,16 +356,22 @@ export class LayoutService extends Disposable implements ILayoutService {
     const ok = await this.focusPart(partId, opts)
     if (!ok) return false
 
-    // Wait one rAF / microtask so the React subtree gets a chance to mount the
-    // view component and call useViewFocusable.
-    const getter = this._focusableRegistry.get(viewId)
-    if (getter) {
+    // The view's focusable element registers when its React subtree mounts,
+    // which can lag the part focus (the view content may load asynchronously —
+    // e.g. the Commit Changes view still fetching its payload). Poll per frame
+    // within the focus budget instead of giving up after a single rAF.
+    const deadline = Date.now() + (opts.timeoutMs ?? FOCUS_ELEMENT_TIMEOUT_MS)
+    for (;;) {
+      const el = this._focusableRegistry.get(viewId)?.()
+      if (el) {
+        ;(el as { focus?(): void } | null)?.focus?.()
+        break
+      }
+      if (Date.now() >= deadline) break
       await new Promise<void>((r) => {
         if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => r())
-        else queueMicrotask(r)
+        else setTimeout(r, 16)
       })
-      const el = this._focusableRegistry.get(viewId)?.() ?? getter()
-      ;(el as { focus?(): void } | null)?.focus?.()
     }
     return true
   }

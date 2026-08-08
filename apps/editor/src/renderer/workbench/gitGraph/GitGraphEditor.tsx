@@ -68,7 +68,10 @@ import {
   type GitGraphSettings,
 } from '../../services/gitGraph/gitGraphViewState.js'
 import { scmViewState } from '../scm/scmViewState.js'
-import { ShowCommitChangesAction } from '../../actions/commitChangesActions.js'
+import {
+  FocusCommitChangesAction,
+  ShowCommitChangesAction,
+} from '../../actions/commitChangesActions.js'
 import { createCommitChangesFollower } from '../scm/commitChanges/graphFollow.js'
 import { getOrBuildGraphPayload } from '../scm/commitChanges/graphPayloadCache.js'
 import { buildCommitPayload, buildComparePayload } from './commitChangesPayload.js'
@@ -79,6 +82,7 @@ import {
 } from './GitGraphContextMenu.js'
 import { useGraphKeyboardNav } from './useGraphKeyboardNav.js'
 import { useFullCommitMessages } from './useFullCommitMessages.js'
+import { usePersistedGraphSelection } from './usePersistedGraphSelection.js'
 import {
   GitGraphWorktreePickerDialog,
   type GitGraphWorktreePickerState,
@@ -94,6 +98,8 @@ const ROW_HEIGHT = 24
 const GRID: GraphGrid = { x: 14, y: ROW_HEIGHT, offsetX: 12, offsetY: 12 }
 /** Hash of the synthetic working-tree node prepended above HEAD. */
 const UNCOMMITTED_HASH = '*'
+/** Rows that must not be persisted as the last focused commit. */
+const PERSISTENCE_EXCLUDED_IDS = [UNCOMMITTED_HASH]
 /** Idle delay before an external git change triggers a background reload. */
 const AUTO_REFRESH_DEBOUNCE = 500
 
@@ -442,6 +448,28 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     }
   }, [])
 
+  // Layout effect on purpose: EditorGroupView's activation focus runs in a
+  // layout effect as well, so a passive registration would miss the first
+  // GitGraphEditorInput.focus() call on open.
+  const focusRequestedRef = useRef(false)
+  useLayoutEffect(() => {
+    gitGraphViewState.focusRows = () => {
+      // The first open arrives while the loading state is still up and the
+      // listbox isn't in the DOM yet — defer to the effect below.
+      focusRequestedRef.current = true
+      scrollRef.current?.focus()
+    }
+    return () => {
+      gitGraphViewState.focusRows = null
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!focusRequestedRef.current || !scrollRef.current) return
+    focusRequestedRef.current = false
+    scrollRef.current.focus()
+  })
+
   useEffect(() => {
     gitGraphViewState.toggleRemoteBranches = () =>
       setSettings((s) => ({ ...s, includeRemotes: !s.includeRemotes }))
@@ -487,6 +515,15 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   useEffect(() => {
     gitGraphViewState.searchQuery = searchQuery
   }, [searchQuery])
+
+  usePersistedGraphSelection({
+    storageKey: 'gitGraph.lastSelectedCommit',
+    selection,
+    effectiveRepo: resolveEffectiveRepoRoot(repos, selectedRepo),
+    result,
+    pendingReveal: gitGraphViewState.pendingReveal,
+    excludedIds: PERSISTENCE_EXCLUDED_IDS,
+  })
 
   const load = useCallback(() => {
     let cancelled = false
@@ -1651,11 +1688,16 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
 
   const rowKeys = useMemo(() => filteredCommits.map((c) => c.hash), [filteredCommits])
   const selectFromKeyboard = useCallback((hash: string) => applySelection([hash]), [applySelection])
+  const openCommitChanges = useCallback(
+    () => void commands.executeCommand(FocusCommitChangesAction.ID),
+    [commands],
+  )
   const onRowsKeyDown = useGraphKeyboardNav({
     rows: rowKeys,
     selectionRef,
     select: selectFromKeyboard,
     openMenu: openRowMenu,
+    openCommitChanges,
     scrollRef,
     rowAttribute: 'data-hash',
     rowHeight: ROW_HEIGHT,

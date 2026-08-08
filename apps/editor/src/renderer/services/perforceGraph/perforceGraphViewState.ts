@@ -22,6 +22,10 @@ export interface PerforceGraphColumnWidths {
 export interface PerforceGraphViewState {
   /** Callback registered by the mounted editor to focus the search input. */
   focusSearch: (() => void) | null
+  /** Callback registered by the mounted editor to focus the row list, used by
+   *  PerforceGraphEditorInput.focus() so opening/activating the tab lands
+   *  keyboard focus on the changes (arrow keys work without a prior click). */
+  focusRows: (() => void) | null
   /** Callback registered by the mounted editor to reload the graph (toolbar ↺). */
   refresh: (() => void) | null
   /** Callback registered by the mounted editor to select + scroll to a change,
@@ -57,6 +61,7 @@ export const PERFORCE_GRAPH_PAGE_SIZE = 300
 
 export const perforceGraphViewState: PerforceGraphViewState = {
   focusSearch: null,
+  focusRows: null,
   refresh: null,
   revealCommit: null,
   pendingReveal: observableValue<string | null>('perforceGraph.pendingReveal', null),
