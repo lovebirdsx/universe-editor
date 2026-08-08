@@ -686,7 +686,9 @@ export class FocusActiveEditorGroupAction extends Action2 {
       category: localize2('command.category.view', 'View'),
       keybinding: {
         primary: 'escape',
-        when: '!quickInputVisible && !editorFocus && !terminalFocus',
+        // `!whenFocus`: the keybindings editor's inline when editor owns Escape
+        // while it is open (dismiss suggestions, then cancel the edit).
+        when: '!quickInputVisible && !editorFocus && !terminalFocus && !whenFocus',
       },
       precondition: 'hasActiveEditor',
       f1: true,

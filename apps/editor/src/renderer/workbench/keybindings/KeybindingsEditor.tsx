@@ -240,17 +240,27 @@ export function KeybindingsEditor(): JSX.Element {
   )
 
   // -- inline when editing ---------------------------------------------------------
+  // Exiting hands focus back to the table (VSCode's selectKeybinding →
+  // domFocus) so arrow-key navigation keeps working — but only for explicit
+  // keyboard exits; a blur means the user clicked elsewhere on purpose.
   const commitWhen = useCallback(
     (row: IKeybindingRow, when: string) => {
       setWhenEditingRowId(undefined)
+      tableContainerRef.current?.focus()
       if (row.keybinding === undefined) return
       const next = when === '' ? undefined : when
       if (next === row.when) return
       userKeybindingsService.editKeybinding(rowTargetOf(row), row.keybinding, next)
+      // The rebuild gives the row a new identity (id embeds when + source, and
+      // the edit lands in the user layer); reveal + re-select the fresh row.
+      setRevealRowId(`${row.command}|${row.keybinding}|${next ?? ''}|user`)
     },
     [userKeybindingsService],
   )
-  const cancelWhen = useCallback(() => setWhenEditingRowId(undefined), [])
+  const cancelWhen = useCallback((viaKeyboard: boolean) => {
+    setWhenEditingRowId(undefined)
+    if (viaKeyboard) tableContainerRef.current?.focus()
+  }, [])
 
   // -- runtime handle (T8 Action2 entry point) --------------------------------
   const stateRef = useRef({ rows, selectedRowId })

@@ -57,7 +57,7 @@ export interface KeybindingsTableProps {
   readonly onContextMenu: (row: IKeybindingRow, x: number, y: number) => void
   readonly onFocusChange: (focused: boolean) => void
   readonly onWhenCommit: (row: IKeybindingRow, when: string) => void
-  readonly onWhenCancel: () => void
+  readonly onWhenCancel: (viaKeyboard: boolean) => void
   readonly onWhenFocusChange: (focused: boolean) => void
 }
 
@@ -108,6 +108,10 @@ export function KeybindingsTable({
   )
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    // Navigation keys belong to the grid itself; a keydown bubbling up from an
+    // inner control (the inline when editor's input) is that control's key —
+    // VSCode gets the same split via listFocus/whenFocus context gating.
+    if (e.target !== e.currentTarget) return
     if (rows.length === 0) return
     const pageSize = Math.max(
       1,

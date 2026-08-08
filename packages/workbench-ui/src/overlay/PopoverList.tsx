@@ -8,7 +8,7 @@
  *  Row content is the caller's concern — supply it via `renderItem`.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, type CSSProperties, type ReactNode, type Ref } from 'react'
 import { cx } from '../atoms/cx.js'
 import styles from './PopoverList.module.css'
 
@@ -26,6 +26,10 @@ export interface PopoverListProps<T> {
   readonly loadingLabel?: ReactNode
   /** Caller-supplied positioning/anchor class merged onto the root. */
   readonly className?: string | undefined
+  /** Inline style merged onto the root (e.g. Floating UI styles when portaled). */
+  readonly style?: CSSProperties | undefined
+  /** Ref forwarded to the root element (e.g. Floating UI's `setFloating`). */
+  readonly ref?: Ref<HTMLDivElement>
   /** Extra class merged onto every row. */
   readonly itemClassName?: string | undefined
   readonly 'data-testid'?: string
@@ -43,6 +47,8 @@ export function PopoverList<T>({
   loading = false,
   loadingLabel,
   className,
+  style,
+  ref,
   itemClassName,
   'data-testid': testId,
   'aria-label': ariaLabel,
@@ -62,6 +68,8 @@ export function PopoverList<T>({
     return (
       <div
         className={cx(styles['popover'], className)}
+        style={style}
+        ref={ref}
         role="listbox"
         data-testid={testId}
         aria-label={ariaLabel}
@@ -74,8 +82,13 @@ export function PopoverList<T>({
   return (
     <div
       className={cx(styles['popover'], className)}
+      style={style}
       role="listbox"
-      ref={listRef}
+      ref={(el) => {
+        listRef.current = el
+        if (typeof ref === 'function') ref(el)
+        else if (ref) ref.current = el
+      }}
       data-testid={testId}
       aria-label={ariaLabel}
     >

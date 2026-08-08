@@ -30,7 +30,7 @@ export interface KeybindingsRowProps {
   readonly onDefine: () => void
   readonly onContextMenu: (e: MouseEvent<HTMLDivElement>) => void
   readonly onWhenCommit: (when: string) => void
-  readonly onWhenCancel: () => void
+  readonly onWhenCancel: (viaKeyboard: boolean) => void
   readonly onWhenFocusChange: (focused: boolean) => void
 }
 
@@ -85,11 +85,7 @@ export const KeybindingsRow = memo(function KeybindingsRow({
       aria-selected={selected}
       data-parity={index % 2 === 1 ? 'odd' : 'even'}
       data-selected={selected || undefined}
-      className={cx(
-        styles['row'],
-        selected && styles['selected'],
-        whenEditing && styles['editingWhen'],
-      )}
+      className={cx(styles['row'], selected && styles['selected'])}
       style={style}
       onClick={onSelect}
       onDoubleClick={onDefine}

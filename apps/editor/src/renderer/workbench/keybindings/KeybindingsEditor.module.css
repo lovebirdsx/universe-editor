@@ -277,13 +277,6 @@
 
 /* -- inline when-expression editing */
 
-/* The row/cell clip overflow by default; editing needs the suggestion popover
- * to escape the 24px row box. */
-.row.editingWhen,
-.row.editingWhen .whenCell {
-  overflow: visible;
-}
-
 .whenEditor {
   position: relative;
   display: flex;
@@ -302,12 +295,11 @@
   outline: none;
 }
 
+/* Portaled to <body> and positioned by Floating UI (fixed + inline styles);
+ * only sizing constraints live here. */
 .whenSuggestions {
-  top: 100%;
-  left: 0;
   min-width: 240px;
   max-width: 420px;
-  z-index: var(--z-popover);
 }
 
 .whenSuggestionKey {

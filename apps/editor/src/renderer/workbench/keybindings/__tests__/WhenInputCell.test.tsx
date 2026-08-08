@@ -59,13 +59,38 @@ describe('WhenInputCell', () => {
     const { props, input } = mount('editorTextFocus')
     fireEvent.keyDown(input, { key: 'Escape' })
     expect(props.onCancel).toHaveBeenCalledTimes(1)
+    expect(props.onCancel).toHaveBeenCalledWith(true)
     expect(props.onCommit).not.toHaveBeenCalled()
   })
 
-  it('cancels on blur', () => {
+  it('cancels on blur without claiming a keyboard exit', () => {
     const { props, input } = mount()
     fireEvent.blur(input)
     expect(props.onCancel).toHaveBeenCalledTimes(1)
+    expect(props.onCancel).toHaveBeenCalledWith(false)
+  })
+
+  it('Escape hides visible suggestions first; a second Escape cancels', () => {
+    const { props, input } = mount()
+    setValue(input, 'editortextf')
+    expect(document.querySelector('[data-testid=keybindings-when-suggestions]')).not.toBeNull()
+
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(document.querySelector('[data-testid=keybindings-when-suggestions]')).toBeNull()
+    expect(props.onCancel).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(props.onCancel).toHaveBeenCalledTimes(1)
+    expect(props.onCancel).toHaveBeenCalledWith(true)
+  })
+
+  it('renders suggestions portaled to the body, not inside the row', () => {
+    const { container, input } = mount()
+    setValue(input, 'editortext')
+    const popover = document.querySelector('[data-testid=keybindings-when-suggestions]')
+    expect(popover).not.toBeNull()
+    expect(container.contains(popover)).toBe(false)
+    expect(document.body.contains(popover)).toBe(true)
   })
 
   it('filters context-key suggestions by the token before the cursor', () => {

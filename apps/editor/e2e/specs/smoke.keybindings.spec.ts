@@ -223,4 +223,98 @@ test.describe('@p1 keybindings editor', () => {
     await page.keyboard.press('Escape')
     await expect.poll(() => searchBox(page).getAttribute('placeholder')).toBe(SEARCH_PLACEHOLDER)
   })
+
+  // The inline when editor (Change When Expression): the suggestion popup must
+  // paint above the virtualized rows (it is portaled to <body>), editing keys
+  // like End must stay inside the input instead of navigating the table, and a
+  // keyboard exit must hand focus back to the grid.
+  test('inline when editing keeps keys in the input, layers suggestions on top, and commits', async ({
+    page,
+    workbench,
+  }) => {
+    const BOUND_COMMAND = 'workbench.action.findInFiles'
+    const whenInput = page.locator('input[aria-label="When expression"]')
+    const suggestions = page.locator('[data-testid=keybindings-when-suggestions]')
+    const selectedRowTitle = () =>
+      page.evaluate(
+        () =>
+          document
+            .querySelector('[role=grid] [role=row][aria-selected="true"] [role=gridcell][title]')
+            ?.getAttribute('title') ?? null,
+      )
+    const openWhenEditor = async () => {
+      const row = grid(page).locator(
+        `[role=row][aria-selected]:has([role=gridcell][title*="${BOUND_COMMAND}"])`,
+      )
+      await row.click({ button: 'right' })
+      await page.getByRole('menuitem', { name: 'Change When Expression' }).click()
+      await expect(whenInput).toBeFocused()
+    }
+
+    await openKeybindingsEditor(workbench)
+    await searchBox(page).fill('Find in Files')
+    await expect.poll(() => totalRowCount(page)).toBeGreaterThan(0)
+
+    try {
+      await openWhenEditor()
+
+      // Typing a partial token shows the context-key suggestions, portaled to
+      // <body>: the popup must be the topmost element at its own position
+      // (before the fix it painted UNDER the rows below the editing row).
+      await page.keyboard.type('editortextf')
+      await expect.poll(() => suggestions.count()).toBe(1)
+      const onTop = await page.evaluate(() => {
+        const pop = document.querySelector('[data-testid=keybindings-when-suggestions]')
+        if (!pop) return false
+        const r = pop.getBoundingClientRect()
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 4)
+        return hit !== null && pop.contains(hit)
+      })
+      expect(onTop).toBe(true)
+
+      // End must move the input caret, not the table selection (before the fix
+      // the keydown bubbled to the grid and jumped the selection/scroll).
+      const titleBefore = await selectedRowTitle()
+      await page.keyboard.press('End')
+      expect(await selectedRowTitle()).toBe(titleBefore)
+
+      // Escape first dismisses the visible suggestions (VSCode parity), and
+      // only a second Escape cancels the edit — then focus returns to the grid.
+      await page.keyboard.press('Escape')
+      await expect.poll(() => suggestions.count()).toBe(0)
+      await expect(whenInput).toBeFocused()
+      await page.keyboard.press('Escape')
+      await expect.poll(() => whenInput.count()).toBe(0)
+      await expect
+        .poll(() => page.evaluate(() => document.activeElement?.getAttribute('role')))
+        .toBe('grid')
+
+      // Commit a real expression: it lands in the user layer, focus returns to
+      // the grid, and the rebuilt row keeps the selection.
+      await openWhenEditor()
+      await page.keyboard.type('editorTextFocus')
+      await page.keyboard.press('Enter')
+      await expect
+        .poll(async () => {
+          const entries = await page.evaluate(
+            (c) => window.__E2E__!.getUserKeybindingEntries(c),
+            BOUND_COMMAND,
+          )
+          return entries[0]?.when
+        })
+        .toBe('editorTextFocus')
+      await expect.poll(() => workbench.getContextKey<boolean>('keybindingFocus')).toBe(true)
+      await expect.poll(selectedRowTitle).toContain(BOUND_COMMAND)
+    } finally {
+      // Best-effort restore so a mid-flow failure cannot leak a user binding
+      // into later tests on this worker (the @source:user assertion depends on it).
+      if ((await userEntryCount(page, BOUND_COMMAND)) > 0) {
+        await page
+          .evaluate(() => {
+            void window.__E2E__!.runCommand('keybindings.editor.resetKeybinding')
+          })
+          .catch(() => {})
+      }
+    }
+  })
 })

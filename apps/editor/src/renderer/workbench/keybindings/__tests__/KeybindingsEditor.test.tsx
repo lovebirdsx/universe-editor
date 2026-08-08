@@ -396,5 +396,87 @@ describe('KeybindingsEditor', () => {
       'editorTextFocus',
     )
     expect(contextKeyService.get('whenFocus')).toBe(false)
+    // Keyboard exit hands focus back to the table so arrow navigation keeps working.
+    expect(document.activeElement).toBe(container.querySelector('[role=grid]'))
+  })
+
+  it('keeps End/Home/PageDown inside the when editor input instead of navigating the table', () => {
+    registerTestCommands()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({ key: 'ctrl+alt+t', command: 'test.kb.alpha' }),
+    )
+    const { container } = mount()
+
+    const menu = openMenuOnRow(container, 'Alpha Command')
+    const whenItem = [...menu.querySelectorAll('[role=menuitem]')].find((el) =>
+      el.textContent?.includes('Change When Expression'),
+    )!
+    fireEvent.click(whenItem)
+
+    const input = container.querySelector('input[aria-label="When expression"]') as HTMLInputElement
+    const selectedIndex = () =>
+      gridRows(container).findIndex((el) => el.getAttribute('aria-selected') === 'true')
+    const before = selectedIndex()
+    expect(before).toBeGreaterThanOrEqual(0)
+
+    // Without the grid's target guard these bubble up and jump the selection.
+    fireEvent.keyDown(input, { key: 'End' })
+    fireEvent.keyDown(input, { key: 'Home' })
+    fireEvent.keyDown(input, { key: 'PageDown' })
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(selectedIndex()).toBe(before)
+  })
+
+  it('Escape cancels the when editor and returns focus to the table', () => {
+    registerTestCommands()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({ key: 'ctrl+alt+t', command: 'test.kb.alpha' }),
+    )
+    const { container, userKeybindingsService } = mount()
+
+    const menu = openMenuOnRow(container, 'Alpha Command')
+    const whenItem = [...menu.querySelectorAll('[role=menuitem]')].find((el) =>
+      el.textContent?.includes('Change When Expression'),
+    )!
+    fireEvent.click(whenItem)
+
+    const input = container.querySelector('input[aria-label="When expression"]') as HTMLInputElement
+    fireEvent.keyDown(input, { key: 'Escape' })
+
+    expect(container.querySelector('input[aria-label="When expression"]')).toBeNull()
+    expect(userKeybindingsService.editKeybinding).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(container.querySelector('[role=grid]'))
+  })
+
+  it('re-selects the rebuilt row after a when commit changes its identity', () => {
+    registerTestCommands()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({ key: 'ctrl+alt+t', command: 'test.kb.alpha' }),
+    )
+    const { container, userKeybindingsService, onDidChangeEmitter } = mount()
+    // Behave like the real service: the edit lands in the user layer and fires
+    // a change, rebuilding the model with a new row id (when + source change).
+    vi.mocked(userKeybindingsService.editKeybinding).mockImplementation((target, key, when) => {
+      ;(userKeybindingsService as unknown as { userEntries: IUserKeybindingEntry[] }).userEntries =
+        [{ command: target.command, key, ...(when !== undefined ? { when } : {}) }]
+      onDidChangeEmitter.fire()
+    })
+
+    const menu = openMenuOnRow(container, 'Alpha Command')
+    const whenItem = [...menu.querySelectorAll('[role=menuitem]')].find((el) =>
+      el.textContent?.includes('Change When Expression'),
+    )!
+    fireEvent.click(whenItem)
+
+    const input = container.querySelector('input[aria-label="When expression"]') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'editorTextFocus' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    const editedRow = gridRows(container).find(
+      (el) => el.textContent?.includes('Alpha Command') && el.textContent?.includes('User'),
+    )
+    expect(editedRow, 'rebuilt user row carrying the new when').toBeDefined()
+    expect(editedRow!.textContent).toContain('editorTextFocus')
+    expect(editedRow!.getAttribute('aria-selected')).toBe('true')
   })
 })
