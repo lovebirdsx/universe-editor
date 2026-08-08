@@ -46,6 +46,7 @@ import {
   type ISubmenuContribution,
   type IThemeContribution,
 } from '@universe-editor/extensions-common'
+import { registerCommandSource } from './contributedCommandSources.js'
 
 /** Maps VSCode-style manifest menu keys to our internal MenuId. */
 const MENU_ID_BY_KEY: Readonly<Record<string, MenuId>> = {
@@ -142,13 +143,13 @@ export class ExtensionPointTranslator extends Disposable {
           .filter((id): id is string => id !== undefined),
       )
       for (const command of contributes.commands ?? []) {
-        this._registerCommand(command, explicitPaletteCommands.has(command.command))
+        this._registerCommand(ext, command, explicitPaletteCommands.has(command.command))
       }
       if (contributes.menus) {
         this._registerMenus(contributes.menus, contributes.submenus ?? [])
       }
       for (const keybinding of contributes.keybindings ?? []) {
-        this._registerKeybinding(keybinding)
+        this._registerKeybinding(ext, keybinding)
       }
       this._registerConfiguration(ext.id, contributes.configuration)
       this._registerJsonValidation(ext.id, contributes.jsonValidation ?? [])
@@ -206,12 +207,17 @@ export class ExtensionPointTranslator extends Disposable {
     this._register(this._registerCustomEditor(editor))
   }
 
-  private _registerCommand(command: ICommandContribution, hasExplicitPaletteEntry: boolean): void {
+  private _registerCommand(
+    ext: IExtensionDescriptionDto,
+    command: ICommandContribution,
+    hasExplicitPaletteEntry: boolean,
+  ): void {
     // A command id the core already registered (a built-in Action2, e.g. the git
     // blame toggles) stays core-owned: installing a bootstrap proxy on top would
     // shadow the real handler and route execution to a host that doesn't implement
     // it. Mirrors the same guard in MainThreadCommands.$registerCommand.
     if (CommandsRegistry.getCommand(command.command)) return
+    this._register(registerCommandSource(command.command, ext.id))
     const metadata: ICommandMetadata = {
       description: command.title,
       ...(command.category !== undefined ? { category: command.category } : {}),
@@ -289,7 +295,11 @@ export class ExtensionPointTranslator extends Disposable {
     }
   }
 
-  private _registerKeybinding(keybinding: IKeybindingContribution): void {
+  private _registerKeybinding(
+    ext: IExtensionDescriptionDto,
+    keybinding: IKeybindingContribution,
+  ): void {
+    this._register(registerCommandSource(keybinding.command, ext.id))
     const strokes = keybinding.key.trim().split(/\s+/)
     const base = {
       command: keybinding.command,

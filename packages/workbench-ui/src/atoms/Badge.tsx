@@ -5,7 +5,7 @@ import styles from './Badge.module.css'
 export interface BadgeProps {
   children: ReactNode
   tone?: 'default' | 'accent'
-  className?: string
+  className?: string | undefined
 }
 
 export function Badge({ children, tone = 'default', className }: BadgeProps) {

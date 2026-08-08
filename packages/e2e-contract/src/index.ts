@@ -889,6 +889,15 @@ export interface E2EProbe {
     vscodeRegisteredCount: number
   }
   /**
+   * Positive (non-removal) user-layer entries for ONE command, via
+   * IUserKeybindingsService.getUserEntries. Backs the Keyboard Shortcuts editor
+   * spec: after the define-keybinding flow a user entry must exist, and after
+   * removal it must be gone — asserted on the service, not the DOM.
+   */
+  getUserKeybindingEntries(
+    command: string,
+  ): ReadonlyArray<{ key: string | null; command: string; when?: string }>
+  /**
    * Write a configuration value at Memory scope, bypassing settings.json. Lets
    * specs flip runtime knobs (e.g. lowering
    * `workbench.chat.virtualizationThreshold` so a short timeline still exercises

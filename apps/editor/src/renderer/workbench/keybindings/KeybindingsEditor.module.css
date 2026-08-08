@@ -1,4 +1,9 @@
 .root {
+  /* Shared grid template for the header and every row: 40px actions column +
+   * VSCode column weights 0.3 / 0.2 / 0.35 / 0.15. */
+  --kb-grid-columns: 40px minmax(0, 30fr) minmax(0, 20fr) minmax(0, 35fr) minmax(0, 15fr);
+
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -9,186 +14,310 @@
 }
 
 .header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-4) var(--spacing-7);
   flex-shrink: 0;
-  padding: 16px 24px;
-  border-bottom: 1px solid var(--vscode-workbench-border, #3c3c3c);
+}
+
+.searchContainer {
+  flex: 1;
+  max-width: 720px;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
 }
 
 .search {
-  width: 100%;
-  max-width: 720px;
-  height: 30px;
-  padding: 0 10px;
-  background: var(--vscode-input-background, #2d2d2d);
-  color: var(--vscode-input-foreground, #cccccc);
-  border: 1px solid var(--vscode-input-border, #3c3c3c);
-  border-radius: 3px;
-  font-size: 13px;
-  outline: none;
+  flex: 1;
 }
 
-.search:focus {
-  border-color: var(--vscode-focusBorder, #0070e0);
+.recordingBadge {
+  flex-shrink: 0;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
 }
 
 .body {
   flex: 1;
-  overflow: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  outline: none;
 }
 
-.thead {
-  position: sticky;
-  top: 0;
-  background: var(--vscode-editor-background, #1e1e1e);
-  z-index: 1;
+.table:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #0070e0);
+  outline-offset: -1px;
 }
 
-.th {
-  padding: 8px 12px;
-  text-align: left;
-  font-weight: 600;
-  font-size: 11px;
+.tableHeader {
+  display: grid;
+  grid-template-columns: var(--kb-grid-columns);
+  align-items: center;
+  height: 30px;
+  padding: 0 var(--spacing-4);
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--vscode-editor-mutedForeground, #9d9d9d);
-  border-bottom: 1px solid var(--vscode-workbench-border, #3c3c3c);
+  color: var(--vscode-descriptionForeground, #8a8a92);
+  border-bottom: 1px solid var(--vscode-workbench-border, #0f0f11);
+}
+
+.headerCell {
+  min-width: 0;
+  padding: 0 var(--spacing-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.list {
+  flex: 1;
+  min-height: 0;
+}
+
 .row {
-  border-bottom: 1px solid var(--vscode-workbench-border, #2a2a2a);
+  display: grid;
+  grid-template-columns: var(--kb-grid-columns);
+  align-items: center;
+  padding: 0 var(--spacing-4);
+  overflow: hidden;
+  cursor: default;
+}
+
+/* Zebra stripes: no keybindingTable.rowsBackground color is registered, so
+ * the stripe is derived from the registered list.hoverBackground at reduced
+ * strength (VSCode's stripe is likewise a barely-visible tint). */
+.row[data-parity='odd'] {
+  background: color-mix(in srgb, var(--vscode-list-hoverBackground, #2f2f35) 40%, transparent);
 }
 
 .row:hover {
-  background: var(--vscode-list-hoverBackground, #2a2d2e);
+  background: var(--vscode-list-hoverBackground, #2f2f35);
 }
 
-.row.userRow {
-  background: var(--vscode-list-activeSelectionBackground, rgba(0, 112, 224, 0.08));
+.row.selected,
+.row[data-parity='odd'].selected {
+  background: var(--vscode-list-inactiveSelectionBackground, rgba(58, 61, 65, 0.6));
 }
 
-.row.userRow:hover {
-  background: rgba(0, 112, 224, 0.15);
+.table:focus-within .row.selected,
+.table:focus-within .row[data-parity='odd'].selected {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+  color: var(--vscode-list-activeSelectionForeground, #ffffff);
 }
 
-.td {
-  padding: 8px 12px;
-  vertical-align: middle;
+.cell {
+  min-width: 0;
+  padding: 0 var(--spacing-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.commandName {
-  font-size: 13px;
-  color: var(--vscode-editor-foreground, #cccccc);
+.actionsCell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  visibility: hidden;
+}
+
+.row:hover .actionsCell,
+.row.selected .actionsCell {
+  visibility: visible;
+}
+
+.commandCell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-overflow: clip;
+}
+
+.commandLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commandDefaultLabel {
+  font-size: var(--font-size-xs);
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .commandId {
   font-family: var(--font-monospace, monospace);
-  font-size: 11px;
-  color: var(--vscode-editor-mutedForeground, #9d9d9d);
-  margin-top: 2px;
-}
-
-.keybinding {
-  font-family: var(--font-monospace, monospace);
-  font-size: 12px;
-  color: var(--vscode-editor-foreground, #cccccc);
-}
-
-.keybinding.none {
-  color: var(--vscode-editor-mutedForeground, #9d9d9d);
-  font-style: italic;
-}
-
-.kbd {
-  display: inline-block;
-  padding: 1px 5px;
-  background: var(--vscode-input-background, #2d2d2d);
-  border: 1px solid var(--vscode-workbench-border, #3c3c3c);
-  border-radius: 3px;
-  font-family: var(--font-monospace, monospace);
-  font-size: 11px;
-  color: var(--vscode-editor-foreground, #cccccc);
-  margin-right: 2px;
-}
-
-.sourceTag {
-  display: inline-block;
-  padding: 1px 6px;
-  border-radius: 10px;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.sourceTag.user {
-  background: rgba(0, 112, 224, 0.2);
-  color: #569cd6;
-}
-
-.sourceTag.default {
-  background: transparent;
-  color: var(--vscode-editor-mutedForeground, #9d9d9d);
-}
-
-.actions {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-
-.btn {
-  padding: 2px 8px;
-  font-size: 11px;
-  border-radius: 3px;
-  border: 1px solid var(--vscode-workbench-border, #3c3c3c);
-  background: var(--vscode-input-background, #2d2d2d);
-  color: var(--vscode-editor-foreground, #cccccc);
-  cursor: pointer;
+  font-size: var(--font-size-xs);
+  color: var(--vscode-descriptionForeground, #8a8a92);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.btn:hover {
-  background: var(--vscode-list-hoverBackground, #2a2d2e);
-  border-color: var(--vscode-focusBorder, #0070e0);
+.keybindingCell {
+  overflow: visible;
 }
 
-.btn.danger:hover {
-  border-color: #f44747;
-  color: #f44747;
-}
-
-.recorder {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.recorderInput {
-  padding: 2px 8px;
-  background: var(--vscode-input-background, #2d2d2d);
-  color: var(--vscode-input-foreground, #cccccc);
-  border: 1px solid var(--vscode-focusBorder, #0070e0);
-  border-radius: 3px;
+.whenCode {
   font-family: var(--font-monospace, monospace);
-  font-size: 12px;
-  width: 180px;
-  outline: none;
-  caret-color: transparent;
-}
-
-.recorderHint {
-  font-size: 11px;
-  color: var(--vscode-editor-mutedForeground, #9d9d9d);
+  font-size: var(--font-size-sm);
 }
 
 .empty {
-  padding: 32px;
-  text-align: center;
-  color: var(--vscode-editor-mutedForeground, #9d9d9d);
-  font-size: 13px;
+  color: var(--vscode-descriptionForeground, #8a8a92);
+}
+
+.extensionLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.emptyResult {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vscode-descriptionForeground, #8a8a92);
+  font-size: var(--font-size-base);
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* -- define-keybinding overlay (VSCode DefineKeybindingWidget, 400x110 centered) */
+
+.defineBackdrop {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-popover);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--vscode-editor-background, #1e1e1e) 55%, transparent);
+}
+
+.defineWidget {
+  width: 400px;
+  height: 110px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4);
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-workbench-border, #0f0f11);
+  box-shadow: var(--shadow-md);
+  outline: none;
+}
+
+.defineMessage {
+  font-size: var(--font-size-sm);
+}
+
+.defineOutput {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.defineStroke {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.defineChordTo {
+  font-size: var(--font-size-xs);
+  color: var(--vscode-descriptionForeground, #8a8a92);
+}
+
+.defineExisting {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  color: var(--vscode-textLink-foreground, #3794ff);
+}
+
+.defineExisting:hover {
+  text-decoration: underline;
+}
+
+/* -- inline when-expression editing */
+
+/* The row/cell clip overflow by default; editing needs the suggestion popover
+ * to escape the 24px row box. */
+.row.editingWhen,
+.row.editingWhen .whenCell {
+  overflow: visible;
+}
+
+.whenEditor {
+  position: relative;
+  display: flex;
+  width: 100%;
+}
+
+.whenInput {
+  width: 100%;
+  height: 20px;
+  padding: 0 var(--spacing-1);
+  font-family: var(--font-monospace, monospace);
+  font-size: var(--font-size-sm);
+  color: var(--vscode-input-foreground, #d4d4d4);
+  background: var(--vscode-input-background, #3c3c3c);
+  border: 1px solid var(--vscode-focusBorder, #0070e0);
+  outline: none;
+}
+
+.whenSuggestions {
+  top: 100%;
+  left: 0;
+  min-width: 240px;
+  max-width: 420px;
+  z-index: var(--z-popover);
+}
+
+.whenSuggestionKey {
+  font-family: var(--font-monospace, monospace);
+}
+
+.whenSuggestionDescription {
+  font-size: var(--font-size-xs);
+  color: var(--vscode-descriptionForeground, #8a8a92);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

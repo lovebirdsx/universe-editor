@@ -1,0 +1,4 @@
+.match {
+  font-weight: var(--font-weight-bold);
+  color: var(--vscode-list-highlightForeground, #2aaaff);
+}

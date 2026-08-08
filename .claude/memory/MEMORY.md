@@ -32,6 +32,7 @@
 - [ACP 输入框图片](acp-prompt-image-feature.md) — 三入口+能力降级；卡死真因=filePathLink 正则回溯；codex 渲染层解析
 - [链接打开机制 + 深链接](opener-service-deeplink-feature.md) — IOpenerService 三档+#L 行列；universe-editor:// 深链；套路见 services/opener/CLAUDE.md
 - [commit changes 视图 + graph 打磨](commit-changes-view-graph-polish.md) — reveal 走 pendingReveal observable 防旧实例闭包；点击延迟=回调身份致全表重渲染；silent 跟随+LRU+latest-wins
+- [快捷键编辑器对标 VSCode](keybindings-editor-vscode-parity.md) — model/视图分离+VirtualList 确定行高+行级多键 API；坑=浮层 Escape 须 window capture 自拦
 
 ## 性能 / 疑难根因
 

@@ -110,6 +110,7 @@ import {
   ResetConfigLocationAction,
   SetConfigLocationAction,
 } from './configLocationActions.js'
+import { keybindingsEditorActions } from './keybindingsEditorActions.js'
 import {
   AboutAction,
   CloseWindowAction,
@@ -479,6 +480,13 @@ registerAction2(SelectProductIconThemeAction)
 registerAction2(SetConfigLocationAction)
 registerAction2(OpenConfigLocationFolderAction)
 registerAction2(ResetConfigLocationAction)
+
+// Keyboard Shortcuts editor — in-editor commands (enter/delete/ctrl+c/escape/
+// ctrl+f/ctrl+down/alt+k/alt+p, chords ctrl+k ctrl+a|ctrl+e). Their explicit
+// weight above WorkbenchContrib beats same-key global bindings (Find,
+// focus-editor-group Escape, Explorer copy/delete) whenever the keybindings
+// editor when-clauses hold, regardless of registration order.
+for (const action of keybindingsEditorActions) registerAction2(action)
 
 // Workspace
 registerAction2(OpenFolderAction)

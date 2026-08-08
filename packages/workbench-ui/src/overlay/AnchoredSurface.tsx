@@ -104,6 +104,25 @@ export function AnchoredSurface({
     enabled: onClose !== undefined,
     outsidePressEvent: 'mousedown',
   })
+
+  // Escape dismissal on WINDOW capture. Floating UI's own escape handling waits
+  // for the event to bubble back to the target, which never happens here: the
+  // workbench's keybinding dispatcher (document capture) stopPropagation()s any
+  // key it resolves — e.g. the bare-Escape focus-editor binding fires whenever a
+  // non-editor element holds focus — so the event dies mid-capture and the
+  // surface stayed open. Intercepting at window capture runs ahead of the
+  // dispatcher and keeps the Escape fully owned by the topmost surface.
+  useEffect(() => {
+    if (onClose === undefined) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      onClose()
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [onClose])
   const { getFloatingProps } = useInteractions([dismiss])
 
   const { style: extraStyle, ...restSurfaceProps } = surfaceProps ?? {}

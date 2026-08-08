@@ -62,6 +62,16 @@ interface FileKeybindingEntry {
   args?: unknown
 }
 
+/** Identifies one row in the Keyboard Shortcuts editor for row-level edit/remove. */
+export interface IKeybindingRowTarget {
+  readonly command: string
+  /** The row's current key (registry key space); undefined for an unbound row. */
+  readonly key: string | undefined
+  readonly when: string | undefined
+  /** True for default/system/extension entries; false for user-layer entries. */
+  readonly isDefault: boolean
+}
+
 export interface IUserKeybindingsService {
   readonly _serviceBrand: undefined
   readonly onDidChange: Event<void>
@@ -78,6 +88,14 @@ export interface IUserKeybindingsService {
   resetKeybinding(command: string): void
   getUserEntry(command: string): IUserKeybindingEntry | undefined
   getDefaultKey(command: string): string | undefined
+  /** Append a positive binding without touching the command's other entries (VSCode addKeybinding). */
+  addKeybinding(command: string, key: string, when?: string): void
+  /** Re-key one row: user rows update in place; default rows become an appended user entry plus a removal of just the row's old key. */
+  editKeybinding(target: IKeybindingRowTarget, key: string, when?: string): void
+  /** Remove one row: user rows are deleted; default rows get a removal entry for just the row's key. */
+  removeKeybinding(target: IKeybindingRowTarget): void
+  /** All positive (non-removal) user entries of one command. */
+  getUserEntries(command: string): readonly IUserKeybindingEntry[]
 }
 
 export interface IUserKeybindingsDiagnostics {
@@ -335,6 +353,83 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     this._applyAllUserEntries()
     void this._writeFile()
     this._onDidChange.fire()
+  }
+
+  addKeybinding(command: string, key: string, when?: string): void {
+    this._userEntries.push({
+      command,
+      key: normalizeKeybindingString(key),
+      ...(when !== undefined ? { when } : {}),
+    })
+    this._applyAllUserEntries()
+    void this._writeFile()
+    this._onDidChange.fire()
+  }
+
+  editKeybinding(target: IKeybindingRowTarget, key: string, when?: string): void {
+    const newKey = normalizeKeybindingString(key)
+    if (!target.isDefault) {
+      const index = this._findPositiveEntryIndex(target)
+      if (index === -1) {
+        this.addKeybinding(target.command, key, when)
+        return
+      }
+      const entry = this._userEntries[index]!
+      entry.key = newKey
+      if (when === undefined) delete entry.when
+      else entry.when = when
+    } else {
+      this._userEntries.push({
+        command: target.command,
+        key: newKey,
+        ...(when !== undefined ? { when } : {}),
+      })
+      if (target.key !== undefined && normalizeKeybindingString(target.key) !== newKey) {
+        this._addRemovalEntry(target.command, target.key)
+      }
+    }
+    this._applyAllUserEntries()
+    void this._writeFile()
+    this._onDidChange.fire()
+  }
+
+  removeKeybinding(target: IKeybindingRowTarget): void {
+    if (!target.isDefault) {
+      const index = this._findPositiveEntryIndex(target)
+      if (index === -1) return
+      this._userEntries.splice(index, 1)
+    } else {
+      if (target.key === undefined) return
+      this._addRemovalEntry(target.command, target.key)
+    }
+    this._applyAllUserEntries()
+    void this._writeFile()
+    this._onDidChange.fire()
+  }
+
+  getUserEntries(command: string): readonly IUserKeybindingEntry[] {
+    return this._userEntries.filter((e) => e.command === command && !e.isRemoval)
+  }
+
+  // Rows are identified by (command, normalized key, when) — the same identity a
+  // keybindings.json entry carries, so an edit/remove lands on exactly one entry.
+  private _findPositiveEntryIndex(target: IKeybindingRowTarget): number {
+    return this._userEntries.findIndex(
+      (e) =>
+        e.command === target.command &&
+        !e.isRemoval &&
+        e.key !== null &&
+        (target.key === undefined || e.key === normalizeKeybindingString(target.key)) &&
+        e.when === target.when,
+    )
+  }
+
+  private _addRemovalEntry(command: string, key: string): void {
+    const normalized = normalizeKeybindingString(key)
+    const exists = this._userEntries.some(
+      (e) => e.command === command && e.isRemoval && e.key === normalized,
+    )
+    if (!exists) this._userEntries.push({ command, key: normalized, isRemoval: true })
   }
 
   private _removeUserEntries(command: string): void {

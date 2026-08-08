@@ -336,4 +336,262 @@ describe('UserKeybindingsService', () => {
     // Original key no longer fires it (auto-negated).
     expect(KeybindingsRegistry.resolveKeystroke('ctrl+alt+p').kind).toBe('no-match')
   })
+
+  describe('row-level API (multi-key per command)', () => {
+    const flushWrites = () => new Promise((r) => setTimeout(r, 0))
+
+    const writtenFileEntries = (files: FakeUserData) => {
+      const text = files.files.get(UserDataFile.Keybindings) ?? ''
+      return JSON.parse(text.slice(text.indexOf('['))) as Array<Record<string, unknown>>
+    }
+
+    const setup = async (cmd: string, defaultKeys: string[] = []) => {
+      disposables.push(CommandsRegistry.registerCommand({ id: cmd, handler: () => {} }))
+      for (const key of defaultKeys) {
+        disposables.push(
+          KeybindingsRegistry.registerKeybinding({
+            key,
+            command: cmd,
+            weight: KeybindingWeight.WorkbenchContrib,
+          }),
+        )
+      }
+      const files = new FakeUserData()
+      const service = new UserKeybindingsService(new FakeStorage(), files)
+      disposables.push(service)
+      await service.initialize()
+      return { files, service }
+    }
+
+    it('addKeybinding lets multiple keys coexist for one command without removals', async () => {
+      const cmd = 'test.rows.add'
+      const { files, service } = await setup(cmd, ['alt+ctrl+p'])
+
+      service.addKeybinding(cmd, 'Alt+Ctrl+N')
+      service.addKeybinding(cmd, 'alt+ctrl+m', 'editorTextFocus')
+
+      const entries = service.getUserEntries(cmd)
+      expect(entries).toHaveLength(2)
+      expect(entries.map((e) => e.key)).toEqual(['alt+ctrl+n', 'alt+ctrl+m'])
+      expect(entries[1]!.when).toBe('editorTextFocus')
+      expect(service.userEntries.some((e) => e.isRemoval)).toBe(false)
+
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+n')).toMatchObject({
+        kind: 'execute',
+        command: cmd,
+      })
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+m')).toMatchObject({
+        kind: 'execute',
+        command: cmd,
+      })
+      // The default key stays live — addKeybinding never negates.
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+p')).toMatchObject({
+        kind: 'execute',
+        command: cmd,
+      })
+
+      await flushWrites()
+      expect(writtenFileEntries(files)).toEqual([
+        { key: 'alt+ctrl+n', command: cmd },
+        { key: 'alt+ctrl+m', command: cmd, when: 'editorTextFocus' },
+      ])
+    })
+
+    it('editKeybinding on a user entry re-keys only that entry', async () => {
+      const cmd = 'test.rows.editUser'
+      const { files, service } = await setup(cmd)
+
+      service.addKeybinding(cmd, 'alt+ctrl+n')
+      service.addKeybinding(cmd, 'alt+ctrl+m')
+
+      service.editKeybinding(
+        { command: cmd, key: 'alt+ctrl+n', when: undefined, isDefault: false },
+        'alt+ctrl+x',
+        'editorTextFocus',
+      )
+
+      const entries = service.getUserEntries(cmd)
+      expect(entries).toHaveLength(2)
+      expect(entries[0]).toMatchObject({ key: 'alt+ctrl+x', when: 'editorTextFocus' })
+      expect(entries[1]).toEqual({ command: cmd, key: 'alt+ctrl+m' })
+
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+n').kind).toBe('no-match')
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+x')).toMatchObject({
+        kind: 'execute',
+        command: cmd,
+      })
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+m')).toMatchObject({
+        kind: 'execute',
+        command: cmd,
+      })
+
+      await flushWrites()
+      expect(writtenFileEntries(files)).toEqual([
+        { key: 'alt+ctrl+x', command: cmd, when: 'editorTextFocus' },
+        { key: 'alt+ctrl+m', command: cmd },
+      ])
+    })
+
+    it('editKeybinding on a user entry clears when when the new value is undefined', async () => {
+      const cmd = 'test.rows.editUserClearWhen'
+      const { service } = await setup(cmd)
+
+      service.addKeybinding(cmd, 'alt+ctrl+n', 'editorTextFocus')
+      service.editKeybinding(
+        { command: cmd, key: 'alt+ctrl+n', when: 'editorTextFocus', isDefault: false },
+        'alt+ctrl+x',
+      )
+
+      expect(service.getUserEntries(cmd)).toEqual([{ command: cmd, key: 'alt+ctrl+x' }])
+    })
+
+    it('editKeybinding on an unmatched user row falls back to appending', async () => {
+      const cmd = 'test.rows.editUserMiss'
+      const { service } = await setup(cmd)
+
+      service.editKeybinding(
+        { command: cmd, key: 'alt+ctrl+q', when: undefined, isDefault: false },
+        'alt+ctrl+x',
+      )
+
+      expect(service.getUserEntries(cmd)).toEqual([{ command: cmd, key: 'alt+ctrl+x' }])
+    })
+
+    it('editKeybinding on a default entry appends a positive plus a removal of only that key', async () => {
+      const cmd = 'test.rows.editDefault'
+      const { files, service } = await setup(cmd, ['alt+ctrl+p', 'alt+ctrl+o'])
+
+      service.editKeybinding(
+        { command: cmd, key: 'alt+ctrl+p', when: undefined, isDefault: true },
+        'alt+ctrl+n',
+        'editorTextFocus',
+      )
+
+      expect(service.getUserEntries(cmd)).toEqual([
+        { command: cmd, key: 'alt+ctrl+n', when: 'editorTextFocus' },
+      ])
+      const removals = service.userEntries.filter((e) => e.isRemoval)
+      expect(removals).toEqual([{ command: cmd, key: 'alt+ctrl+p', isRemoval: true }])
+
+      // Old key freed, sibling default key untouched.
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+p').kind).toBe('no-match')
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+o')).toMatchObject({
+        kind: 'execute',
+        command: cmd,
+      })
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+n')).toMatchObject({
+        kind: 'execute',
+        command: cmd,
+      })
+
+      await flushWrites()
+      expect(writtenFileEntries(files)).toEqual([
+        { key: 'alt+ctrl+n', command: cmd, when: 'editorTextFocus' },
+        { command: `-${cmd}`, key: 'alt+ctrl+p' },
+      ])
+
+      // Editing the same default row again must not duplicate the removal.
+      service.editKeybinding(
+        { command: cmd, key: 'alt+ctrl+p', when: undefined, isDefault: true },
+        'alt+ctrl+y',
+      )
+      expect(service.userEntries.filter((e) => e.isRemoval)).toHaveLength(1)
+    })
+
+    it('editKeybinding on a default entry skips the removal when re-assigning the same key', async () => {
+      const cmd = 'test.rows.editDefaultSameKey'
+      const { service } = await setup(cmd, ['alt+ctrl+p'])
+
+      service.editKeybinding(
+        { command: cmd, key: 'Alt+Ctrl+P', when: undefined, isDefault: true },
+        'alt+ctrl+p',
+      )
+
+      expect(service.getUserEntries(cmd)).toEqual([{ command: cmd, key: 'alt+ctrl+p' }])
+      expect(service.userEntries.some((e) => e.isRemoval)).toBe(false)
+    })
+
+    it('removeKeybinding on a user entry deletes exactly that row', async () => {
+      const cmd = 'test.rows.removeUser'
+      const { files, service } = await setup(cmd)
+
+      service.addKeybinding(cmd, 'alt+ctrl+n')
+      service.addKeybinding(cmd, 'alt+ctrl+m')
+
+      service.removeKeybinding({
+        command: cmd,
+        key: 'alt+ctrl+n',
+        when: undefined,
+        isDefault: false,
+      })
+
+      expect(service.getUserEntries(cmd)).toEqual([{ command: cmd, key: 'alt+ctrl+m' }])
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+n').kind).toBe('no-match')
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+m')).toMatchObject({
+        kind: 'execute',
+        command: cmd,
+      })
+
+      await flushWrites()
+      expect(writtenFileEntries(files)).toEqual([{ key: 'alt+ctrl+m', command: cmd }])
+    })
+
+    it('removeKeybinding on a default entry writes a `-command` removal for that key', async () => {
+      const cmd = 'test.rows.removeDefault'
+      const { files, service } = await setup(cmd, ['alt+ctrl+p', 'alt+ctrl+o'])
+
+      service.removeKeybinding({
+        command: cmd,
+        key: 'alt+ctrl+p',
+        when: undefined,
+        isDefault: true,
+      })
+
+      expect(service.getUserEntries(cmd)).toEqual([])
+      expect(service.userEntries).toEqual([{ command: cmd, key: 'alt+ctrl+p', isRemoval: true }])
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+p').kind).toBe('no-match')
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+o')).toMatchObject({
+        kind: 'execute',
+        command: cmd,
+      })
+
+      await flushWrites()
+      expect(writtenFileEntries(files)).toEqual([{ command: `-${cmd}`, key: 'alt+ctrl+p' }])
+    })
+
+    it('removeKeybinding on an unbound row is a no-op', async () => {
+      const cmd = 'test.rows.removeUnbound'
+      const { service } = await setup(cmd)
+
+      service.removeKeybinding({ command: cmd, key: undefined, when: undefined, isDefault: true })
+      service.removeKeybinding({ command: cmd, key: undefined, when: undefined, isDefault: false })
+
+      expect(service.userEntries).toEqual([])
+    })
+
+    it('resetKeybinding clears every user entry of the command, restoring defaults', async () => {
+      const cmd = 'test.rows.reset'
+      const { files, service } = await setup(cmd, ['alt+ctrl+p'])
+
+      service.editKeybinding(
+        { command: cmd, key: 'alt+ctrl+p', when: undefined, isDefault: true },
+        'alt+ctrl+n',
+      )
+      service.addKeybinding(cmd, 'alt+ctrl+m')
+      expect(service.userEntries).toHaveLength(3)
+
+      service.resetKeybinding(cmd)
+
+      expect(service.userEntries).toEqual([])
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+p')).toMatchObject({
+        kind: 'execute',
+        command: cmd,
+      })
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+n').kind).toBe('no-match')
+      expect(KeybindingsRegistry.resolveKeystroke('alt+ctrl+m').kind).toBe('no-match')
+
+      await flushWrites()
+      expect(writtenFileEntries(files)).toEqual([])
+    })
+  })
 })

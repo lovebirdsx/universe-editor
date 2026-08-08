@@ -1401,6 +1401,12 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       vscodeParsedCount: services.userKeybindingsService.diagnostics.vscodeParsedCount,
       vscodeRegisteredCount: services.userKeybindingsService.diagnostics.vscodeRegisteredCount,
     }),
+    getUserKeybindingEntries: (command: string) =>
+      services.userKeybindingsService.getUserEntries(command).map((e) => ({
+        key: e.key,
+        command: e.command,
+        ...(e.when !== undefined ? { when: e.when } : {}),
+      })),
     updateConfigValue: (key: string, value: unknown): void =>
       services.configurationService.update(key, value, ConfigurationTarget.Memory),
     renameExplorerResource: async (fsPath: string, newName: string): Promise<string> => {

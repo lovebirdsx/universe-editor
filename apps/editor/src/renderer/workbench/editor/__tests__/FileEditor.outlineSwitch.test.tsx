@@ -252,6 +252,10 @@ function makeServices() {
     resetKeybinding: () => {},
     getUserEntry: () => undefined,
     getDefaultKey: () => undefined,
+    addKeybinding: () => {},
+    editKeybinding: () => {},
+    removeKeybinding: () => {},
+    getUserEntries: () => [],
     diagnostics: { vscodeFilePath: undefined, vscodeParsedCount: 0, vscodeRegisteredCount: 0 },
   })
   services.set(IOutlineService, {

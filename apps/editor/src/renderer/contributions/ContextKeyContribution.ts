@@ -5,6 +5,7 @@
  *   - activityBarVisible / sideBarVisible / secondarySideBarVisible / panelVisible  (Part visibility)
  *   - activeEditorId / hasActiveEditor                          (editor state)
  *   - activeEditorLanguageId / activeEditorTypeId                (active editor attributes)
+ *   - inKeybindings                                              (active editor is Keyboard Shortcuts)
  *   - isInDiffEditor / textCompareEditorVisible                  (active editor is a diff)
  *   - editorFocus                                                (Monaco widget DOM focus)
  *   - editorTextFocus                                            (Monaco text input focus)
@@ -40,6 +41,7 @@ import {
   PartId,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { MergeEditorInput } from '../services/editor/MergeEditorInput.js'
 import { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
@@ -87,6 +89,8 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     const activeEditorTypeId = contextKeyService.createKey<string>('activeEditorTypeId', '')
     const isInDiffEditor = contextKeyService.createKey<boolean>('isInDiffEditor', false)
     const isInMergeEditor = contextKeyService.createKey<boolean>('isInMergeEditor', false)
+    // True while the Keyboard Shortcuts editor is the active editor.
+    const inKeybindings = contextKeyService.createKey<boolean>('inKeybindings', false)
     const textCompareEditorVisible = contextKeyService.createKey<boolean>(
       'textCompareEditorVisible',
       false,
@@ -103,6 +107,9 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
         }
         activeEditorLanguageId.set(editor instanceof FileEditorInput ? editor.language : '')
         activeEditorTypeId.set(editor instanceof EditorInput ? editor.typeId : '')
+        inKeybindings.set(
+          editor instanceof EditorInput && editor.typeId === KeybindingsEditorInput.TYPE_ID,
+        )
         const isDiff = editor instanceof DiffEditorInput
         isInDiffEditor.set(isDiff)
         isInMergeEditor.set(editor instanceof MergeEditorInput)

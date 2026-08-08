@@ -1,320 +1,451 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Keyboard Shortcuts editor: searchable table of all commands with their
- *  keybindings; supports inline key recording and per-command user overrides.
+ *  Keyboard Shortcuts editor (VSCode parity): header with debounced search +
+ *  toolbar (Record Keys / Sort by Precedence / Clear), virtualized keybinding
+ *  table, define-keybinding overlay, inline when-expression editing, context
+ *  menu, context keys, and the runtime handle that T8's Action2s drive.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useReducer, useRef, useState, type JSX } from 'react'
-import { CommandsRegistry, KeybindingsRegistry, localize } from '@universe-editor/platform'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type JSX } from 'react'
+import { CommandsRegistry, IContextKeyService, localize } from '@universe-editor/platform'
+import { Badge, IconButton, Input } from '@universe-editor/workbench-ui'
+import { ArrowDownWideNarrow, CircleDot, X } from 'lucide-react'
 import { useService } from '../useService.js'
-import { formatKey, formatChord } from '../titlebar/keybindingFormat.js'
 import { KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT } from '../preferences/preferencesFocus.js'
-import { IUserKeybindingsService } from '../../services/keybindings/UserKeybindingsService.js'
-import { getMonacoDefaultKeybinding } from '../editor/monaco/monacoActionsBridge.js'
+import {
+  IUserKeybindingsService,
+  type IKeybindingRowTarget,
+} from '../../services/keybindings/UserKeybindingsService.js'
+import {
+  collectKeybindingModelDeps,
+  normalizeKeybindingKey,
+  resolveKeybindingEntries,
+  type IKeybindingRow,
+} from '../../services/keybindings/keybindingsEditorModel.js'
+import {
+  countKeybindingConflicts,
+  fetchKeybindings,
+  parseKeybindingsQuery,
+} from '../../services/keybindings/keybindingsSearchModel.js'
+import {
+  registerKeybindingsEditor,
+  type IKeybindingsEditorHandle,
+} from '../../services/keybindings/keybindingsEditorRuntime.js'
+import { buildKeyString, isModifierOnly } from './keyEventUtils.js'
+import { DefineKeybindingOverlay } from './DefineKeybindingOverlay.js'
+import { KeybindingsTable } from './KeybindingsTable.js'
+import { KeybindingsContextMenu } from './KeybindingsContextMenu.js'
 import styles from './KeybindingsEditor.module.css'
 
-function buildKeyString(e: KeyboardEvent): string {
-  const parts: string[] = []
-  if (e.ctrlKey) parts.push('ctrl')
-  if (e.altKey) parts.push('alt')
-  if (e.shiftKey) parts.push('shift')
-  if (e.metaKey) parts.push('meta')
-  parts.push(e.key.toLowerCase())
-  return parts.join('+')
+const SEARCH_DEBOUNCE_MS = 300
+
+interface IMenuState {
+  readonly x: number
+  readonly y: number
+  readonly row: IKeybindingRow
 }
 
-function isModifierOnly(key: string): boolean {
-  const k = key.toLowerCase()
-  return k === 'control' || k === 'shift' || k === 'alt' || k === 'meta'
+interface IDefineState {
+  readonly row: IKeybindingRow
+  readonly add: boolean
 }
 
-/** Display a normalized key like 'ctrl+shift+b' as individual <kbd> chips. */
-function KeyChips({ keyStr }: { keyStr: string }): JSX.Element {
-  const chords = keyStr.split(/\s+/)
-  return (
-    <>
-      {chords.map((chord, chordIndex) => (
-        <span key={chordIndex}>
-          {chordIndex > 0 ? ' ' : null}
-          {chord.split('+').map((p, i) => (
-            <span key={i} className={styles['kbd']}>
-              {p}
-            </span>
-          ))}
-        </span>
-      ))}
-    </>
-  )
-}
-
-/** Inline key-recording widget. Replaces the keybinding cell while active. */
-function KeyRecorder({
-  onConfirm,
-  onCancel,
-}: {
-  onConfirm: (key: string) => void
-  onCancel: () => void
-}): JSX.Element {
-  const [pending, setPending] = useState<string>('')
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    inputRef.current?.focus()
-
-    const handler = (e: KeyboardEvent) => {
-      e.preventDefault()
-      e.stopPropagation()
-
-      if (e.key === 'Escape') {
-        onCancel()
-        return
-      }
-      if (e.key === 'Enter') {
-        if (pending) onConfirm(pending)
-        else onCancel()
-        return
-      }
-      if (isModifierOnly(e.key)) return
-
-      setPending(buildKeyString(e))
-    }
-
-    // Capture phase so we intercept before global handler.
-    window.addEventListener('keydown', handler, true)
-    return () => window.removeEventListener('keydown', handler, true)
-  }, [pending, onConfirm, onCancel])
-
-  return (
-    <div className={styles['recorder']}>
-      <input
-        ref={inputRef}
-        readOnly
-        className={styles['recorderInput']}
-        value={pending ? formatKey(pending) : ''}
-        placeholder={localize('keybindings.record.placeholder', 'Press a key…')}
-      />
-      {pending ? (
-        <>
-          <button className={styles['btn']} onClick={() => onConfirm(pending)}>
-            {localize('common.ok', 'OK')}
-          </button>
-          <button className={styles['btn']} onClick={onCancel}>
-            {localize('common.cancel', 'Cancel')}
-          </button>
-        </>
-      ) : (
-        <span className={styles['recorderHint']}>
-          {localize('keybindings.record.cancelHint', 'Esc to cancel')}
-        </span>
-      )}
-    </div>
-  )
-}
-
-interface CommandRow {
-  id: string
-  label: string
-  category?: string | undefined
+function rowTargetOf(row: IKeybindingRow): IKeybindingRowTarget {
+  return {
+    command: row.command,
+    key: row.keybinding,
+    when: row.when,
+    isDefault: row.isDefault,
+  }
 }
 
 export function KeybindingsEditor(): JSX.Element {
   const userKeybindingsService = useService(IUserKeybindingsService)
+  const contextKeyService = useService(IContextKeyService)
+
   const [query, setQuery] = useState('')
-  const [, bump] = useReducer((n: number) => n + 1, 0)
-  const [recordingCommand, setRecordingCommand] = useState<string | null>(null)
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [sortByPrecedence, setSortByPrecedence] = useState(false)
+  const [selectedRowId, setSelectedRowId] = useState<string | undefined>(undefined)
+  const [revealRowId, setRevealRowId] = useState<string | undefined>(undefined)
+  const [menuState, setMenuState] = useState<IMenuState | undefined>(undefined)
+  const [tableFocused, setTableFocused] = useState(false)
+  const [defineState, setDefineState] = useState<IDefineState | undefined>(undefined)
+  const [recordingKeys, setRecordingKeys] = useState(false)
+  const [whenEditingRowId, setWhenEditingRowId] = useState<string | undefined>(undefined)
+  const [modelVersion, bumpModel] = useReducer((n: number) => n + 1, 0)
+
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const tableContainerRef = useRef<HTMLDivElement | null>(null)
 
+  // Immediate echo in the input; the expensive re-filter trails by 300ms.
   useEffect(() => {
-    const focusSearch = () => {
-      searchInputRef.current?.focus()
-      searchInputRef.current?.select()
-    }
+    const timer = setTimeout(() => setDebouncedQuery(query), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [query])
 
+  // The model is a pure function of the registries + user layer; resolution is
+  // sub-millisecond, so any change just rebuilds it wholesale.
+  useEffect(() => {
+    const d1 = userKeybindingsService.onDidChange(() => bumpModel())
+    const d2 = CommandsRegistry.onDidChangeCommands(() => bumpModel())
+    return () => {
+      d1.dispose()
+      d2.dispose()
+    }
+  }, [userKeybindingsService])
+
+  const model = useMemo(() => {
+    void modelVersion
+    return resolveKeybindingEntries(collectKeybindingModelDeps(userKeybindingsService))
+  }, [userKeybindingsService, modelVersion])
+  const parsedQuery = useMemo(() => parseKeybindingsQuery(debouncedQuery), [debouncedQuery])
+  const rows = useMemo(
+    () => fetchKeybindings(model, parsedQuery, sortByPrecedence),
+    [model, parsedQuery, sortByPrecedence],
+  )
+
+  // -- context keys ---------------------------------------------------------
+  // createKey without a default: a default would set the key during render and
+  // fire onDidChangeContext into other components' render. Seed on mount,
+  // reset on unmount.
+  const inSearchKey = useMemo(
+    () => contextKeyService.createKey<boolean>('inKeybindingsSearch', undefined),
+    [contextKeyService],
+  )
+  const searchHasValueKey = useMemo(
+    () => contextKeyService.createKey<boolean>('keybindingsSearchHasValue', undefined),
+    [contextKeyService],
+  )
+  const keybindingFocusKey = useMemo(
+    () => contextKeyService.createKey<boolean>('keybindingFocus', undefined),
+    [contextKeyService],
+  )
+  const whenFocusKey = useMemo(
+    () => contextKeyService.createKey<boolean>('whenFocus', undefined),
+    [contextKeyService],
+  )
+  useEffect(() => {
+    inSearchKey.set(false)
+    searchHasValueKey.set(false)
+    keybindingFocusKey.set(false)
+    whenFocusKey.set(false)
+    return () => {
+      inSearchKey.reset()
+      searchHasValueKey.reset()
+      keybindingFocusKey.reset()
+      whenFocusKey.reset()
+    }
+  }, [inSearchKey, searchHasValueKey, keybindingFocusKey, whenFocusKey])
+  useEffect(() => {
+    searchHasValueKey.set(query.trim() !== '')
+  }, [query, searchHasValueKey])
+
+  // whenFocus is owned by the inline when editor (WhenInputCell): true for the
+  // whole editing session so Enter/Escape bindings can yield to the cell.
+  const setWhenFocus = useCallback((v: boolean) => whenFocusKey.set(v), [whenFocusKey])
+
+  const selectedIndex =
+    selectedRowId === undefined ? -1 : rows.findIndex((m) => m.row.id === selectedRowId)
+  const hasSelection = selectedIndex >= 0
+  useEffect(() => {
+    keybindingFocusKey.set(tableFocused && hasSelection)
+  }, [tableFocused, hasSelection, keybindingFocusKey])
+
+  // -- focus plumbing ---------------------------------------------------------
+  const focusSearch = useCallback(() => {
+    searchInputRef.current?.focus()
+    searchInputRef.current?.select()
+  }, [])
+  useEffect(() => {
     focusSearch()
     document.addEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
     return () => document.removeEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
+  }, [focusSearch])
+
+  // -- record keys mode ---------------------------------------------------------
+  // While active, every keystroke (capture phase, stopPropagation — nothing
+  // reaches the global dispatcher or the input) is appended to a max-2-stroke
+  // chord and mirrored into the search box as a quoted complete-match query.
+  const recordedStrokesRef = useRef<readonly string[]>([])
+  useEffect(() => {
+    if (!recordingKeys) return
+    recordedStrokesRef.current = []
+    focusSearch()
+    const onKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.key === 'Escape') {
+        setRecordingKeys(false)
+        return
+      }
+      if (isModifierOnly(e.key)) return
+      const key = buildKeyString(e)
+      const prev = recordedStrokesRef.current
+      const next = prev.length >= 2 ? [key] : [...prev, key]
+      recordedStrokesRef.current = next
+      setQuery(`"${next.join(' ')}"`)
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [recordingKeys, focusSearch])
+
+  // -- define keybinding overlay -------------------------------------------------
+  const closeDefine = useCallback(() => {
+    setDefineState(undefined)
+    tableContainerRef.current?.focus()
   }, [])
 
-  // Re-render on user keybinding changes.
+  const confirmDefine = useCallback(
+    (key: string) => {
+      const state = defineState
+      setDefineState(undefined)
+      tableContainerRef.current?.focus()
+      if (!state) return
+      const { row, add } = state
+      const normalized = normalizeKeybindingKey(key)
+      if (normalized === '') return
+      if (!add && row.keybinding !== undefined) {
+        if (normalized === row.keybinding) return
+        userKeybindingsService.editKeybinding(rowTargetOf(row), normalized, row.when)
+        return
+      }
+      // Add mode (explicit, or implicit because the row had no binding).
+      if (normalized === row.keybinding) return
+      // Only the synthetic "@command:x +when:y" virtual row carries its when
+      // into an add; a plain add never copies the row's when.
+      const when = row.keybinding === undefined ? row.when : undefined
+      userKeybindingsService.addKeybinding(row.command, normalized, when)
+      if (row.keybinding === undefined) {
+        // The fresh row is a user-layer row; reveal + select it once the model
+        // rebuild lands (VSCode's unAssignedKeybindingItemToRevealAndFocus).
+        setRevealRowId(`${row.command}|${normalized}|${when ?? ''}|user`)
+      }
+    },
+    [defineState, userKeybindingsService],
+  )
+
+  const countConflictsFor = useCallback(
+    (key: string) => countKeybindingConflicts(model, key),
+    [model],
+  )
+
+  const showConflicts = useCallback(
+    (key: string) => {
+      setDefineState(undefined)
+      setQuery(`"${key}"`)
+      focusSearch()
+    },
+    [focusSearch],
+  )
+
+  // -- inline when editing ---------------------------------------------------------
+  const commitWhen = useCallback(
+    (row: IKeybindingRow, when: string) => {
+      setWhenEditingRowId(undefined)
+      if (row.keybinding === undefined) return
+      const next = when === '' ? undefined : when
+      if (next === row.when) return
+      userKeybindingsService.editKeybinding(rowTargetOf(row), row.keybinding, next)
+    },
+    [userKeybindingsService],
+  )
+  const cancelWhen = useCallback(() => setWhenEditingRowId(undefined), [])
+
+  // -- runtime handle (T8 Action2 entry point) --------------------------------
+  const stateRef = useRef({ rows, selectedRowId })
+  stateRef.current = { rows, selectedRowId }
+
+  const handle = useMemo<IKeybindingsEditorHandle>(() => {
+    const selectedRow = (): IKeybindingRow | undefined => {
+      const { rows: currentRows, selectedRowId: currentId } = stateRef.current
+      return currentRows.find((m) => m.row.id === currentId)?.row
+    }
+    return {
+      getSelectedRow: selectedRow,
+      defineKeybinding: (add: boolean) => {
+        const row = selectedRow()
+        if (!row) return
+        setDefineState({ row, add })
+      },
+      defineWhenExpression: () => {
+        const row = selectedRow()
+        if (!row || row.keybinding === undefined) return
+        setWhenEditingRowId(row.id)
+      },
+      toggleRecordKeys: () => setRecordingKeys((v) => !v),
+      removeSelectedKeybinding: () => {
+        const row = selectedRow()
+        if (row?.keybinding === undefined) return
+        userKeybindingsService.removeKeybinding(rowTargetOf(row))
+      },
+      resetSelectedKeybinding: () => {
+        const row = selectedRow()
+        if (!row || row.isDefault) return
+        userKeybindingsService.resetKeybinding(row.command)
+      },
+      copyEntry: (kind) => {
+        const row = selectedRow()
+        if (!row) return
+        const text =
+          kind === 'commandId'
+            ? row.command
+            : kind === 'commandTitle'
+              ? row.commandLabel
+              : JSON.stringify(
+                  {
+                    ...(row.keybinding !== undefined ? { key: row.keybinding } : {}),
+                    command: row.command,
+                    ...(row.when !== undefined ? { when: row.when } : {}),
+                  },
+                  null,
+                  2,
+                )
+        void navigator.clipboard.writeText(text)
+      },
+      showSameKeybindings: () => {
+        const row = selectedRow()
+        if (row?.keybinding === undefined) return
+        setQuery(`"${row.keybinding}"`)
+      },
+      toggleSortByPrecedence: () => setSortByPrecedence((v) => !v),
+      clearSearch: () => {
+        setQuery('')
+        focusSearch()
+      },
+      focusSearch,
+      focusTable: () => {
+        tableContainerRef.current?.focus()
+        const { rows: currentRows, selectedRowId: currentId } = stateRef.current
+        if (currentId === undefined && currentRows.length > 0) {
+          setSelectedRowId(currentRows[0]!.row.id)
+        }
+      },
+      setQuery,
+    }
+  }, [userKeybindingsService, focusSearch])
+
   useEffect(() => {
-    const d = userKeybindingsService.onDidChange(() => bump())
+    const d = registerKeybindingsEditor(handle)
     return () => d.dispose()
-  }, [userKeybindingsService])
+  }, [handle])
 
-  // Build the list of all commands that have metadata (i.e., were registered via
-  // Action2 with a title/category — these are the user-visible commands).
-  const allCommands: CommandRow[] = [...CommandsRegistry.getCommands().values()]
-    .filter((cmd) => cmd.metadata !== undefined)
-    .map((cmd) => ({
-      id: cmd.id,
-      label: cmd.metadata?.description ?? cmd.id,
-      category: cmd.metadata?.category,
-    }))
-    .sort((a, b) => {
-      const ac = a.category ?? ''
-      const bc = b.category ?? ''
-      if (ac !== bc) return ac.localeCompare(bc)
-      return a.label.localeCompare(b.label)
-    })
+  // -- row interactions ---------------------------------------------------------
+  const onSelect = useCallback((rowId: string | undefined) => setSelectedRowId(rowId), [])
+  const onRevealed = useCallback(() => setRevealRowId(undefined), [])
+  const onDefineKeybinding = useCallback((row: IKeybindingRow) => {
+    setSelectedRowId(row.id)
+    setDefineState({ row, add: false })
+  }, [])
+  const onRowContextMenu = useCallback((row: IKeybindingRow, x: number, y: number) => {
+    setMenuState({ row, x, y })
+  }, [])
 
-  const normQuery = query.trim().toLowerCase()
-
-  const filtered = normQuery
-    ? allCommands.filter((cmd) => {
-        if (cmd.label.toLowerCase().includes(normQuery)) return true
-        if (cmd.id.toLowerCase().includes(normQuery)) return true
-        const effective = getEffectiveKey(cmd.id, userKeybindingsService)
-        if (effective && effective.toLowerCase().includes(normQuery)) return true
-        return false
-      })
-    : allCommands
+  const hasQuery = query.trim() !== ''
 
   return (
     <div className={styles['root']}>
       <div className={styles['header']}>
-        <input
-          ref={searchInputRef}
-          className={styles['search']}
-          type="search"
-          placeholder={localize('keybindings.search.placeholder', 'Search keybindings ({count})', {
-            count: allCommands.length,
-          })}
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value)
-            setRecordingCommand(null)
-          }}
-        />
+        <div className={styles['searchContainer']}>
+          <Input
+            ref={searchInputRef}
+            className={styles['search']}
+            type="search"
+            placeholder={
+              recordingKeys
+                ? localize(
+                    'keybindings.recording.placeholder',
+                    'Recording Keys. Press Escape to exit.',
+                  )
+                : localize('keybindings.search.placeholder', 'Type to search in keybindings')
+            }
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onFocus={() => inSearchKey.set(true)}
+            onBlur={() => inSearchKey.set(false)}
+          />
+          {recordingKeys && (
+            <Badge className={styles['recordingBadge']}>
+              {localize('keybindings.recording.badge', 'Recording Keys')}
+            </Badge>
+          )}
+        </div>
+        <div className={styles['headerActions']}>
+          <IconButton
+            label={localize('keybindings.recordKeys', 'Record Keys')}
+            active={recordingKeys}
+            aria-pressed={recordingKeys}
+            onClick={() => setRecordingKeys((v) => !v)}
+          >
+            <CircleDot size={15} strokeWidth={1.75} />
+          </IconButton>
+          <IconButton
+            label={localize('keybindings.sortByPrecedence', 'Sort by Precedence (Highest First)')}
+            active={sortByPrecedence}
+            aria-pressed={sortByPrecedence}
+            onClick={() => setSortByPrecedence((v) => !v)}
+          >
+            <ArrowDownWideNarrow size={15} strokeWidth={1.75} />
+          </IconButton>
+          <IconButton
+            label={localize('keybindings.clearSearch', 'Clear Keybindings Search Input')}
+            disabled={!hasQuery}
+            onClick={() => {
+              setQuery('')
+              focusSearch()
+            }}
+          >
+            <X size={15} strokeWidth={1.75} />
+          </IconButton>
+        </div>
       </div>
 
       <div className={styles['body']}>
-        {filtered.length === 0 ? (
-          <div className={styles['empty']}>
+        {rows.length === 0 ? (
+          <div className={styles['emptyResult']}>
             {localize('keybindings.empty', 'No matching keybindings.')}
           </div>
         ) : (
-          <table className={styles['table']}>
-            <thead className={styles['thead']}>
-              <tr>
-                <th className={styles['th']}>
-                  {localize('keybindings.column.command', 'Command')}
-                </th>
-                <th className={styles['th']}>
-                  {localize('keybindings.column.keybinding', 'Keybinding')}
-                </th>
-                <th className={styles['th']}>{localize('keybindings.column.source', 'Source')}</th>
-                <th className={styles['th']} />
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((cmd) => {
-                const userEntry = userKeybindingsService.getUserEntry(cmd.id)
-                const isUser = userEntry !== undefined
-                const effectiveKey = getEffectiveKey(cmd.id, userKeybindingsService)
-                const isRecording = recordingCommand === cmd.id
-
-                return (
-                  <tr
-                    key={cmd.id}
-                    className={`${styles['row']} ${isUser ? styles['userRow'] : ''}`}
-                  >
-                    {/* Command */}
-                    <td className={styles['td']}>
-                      <div className={styles['commandName']}>
-                        {cmd.category ? `${cmd.category}: ${cmd.label}` : cmd.label}
-                      </div>
-                      <div className={styles['commandId']}>{cmd.id}</div>
-                    </td>
-
-                    {/* Keybinding */}
-                    <td className={styles['td']}>
-                      {isRecording ? (
-                        <KeyRecorder
-                          onConfirm={(key) => {
-                            userKeybindingsService.setKeybinding(cmd.id, key)
-                            setRecordingCommand(null)
-                          }}
-                          onCancel={() => setRecordingCommand(null)}
-                        />
-                      ) : effectiveKey ? (
-                        <span className={styles['keybinding']}>
-                          <KeyChips keyStr={effectiveKey} />
-                        </span>
-                      ) : (
-                        <span className={`${styles['keybinding']} ${styles['none']}`}>—</span>
-                      )}
-                    </td>
-
-                    {/* Source */}
-                    <td className={styles['td']}>
-                      <span
-                        className={`${styles['sourceTag']} ${isUser ? styles['user'] : styles['default']}`}
-                      >
-                        {isUser
-                          ? localize('keybindings.source.user', 'User')
-                          : localize('keybindings.source.default', 'Default')}
-                      </span>
-                    </td>
-
-                    {/* Actions */}
-                    <td className={styles['td']}>
-                      {!isRecording && (
-                        <div className={styles['actions']}>
-                          <button
-                            className={styles['btn']}
-                            data-tooltip={localize('keybindings.edit', 'Edit keybinding')}
-                            onClick={() => setRecordingCommand(cmd.id)}
-                          >
-                            {localize('common.edit', 'Edit')}
-                          </button>
-                          {isUser && (
-                            <button
-                              className={`${styles['btn']} ${styles['danger']}`}
-                              data-tooltip={localize('keybindings.reset', 'Reset to default')}
-                              onClick={() => userKeybindingsService.resetKeybinding(cmd.id)}
-                            >
-                              {localize('common.reset', 'Reset')}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+          <KeybindingsTable
+            rows={rows}
+            selectedRowId={selectedRowId}
+            revealRowId={revealRowId}
+            whenEditingRowId={whenEditingRowId}
+            containerRef={tableContainerRef}
+            onSelect={onSelect}
+            onRevealed={onRevealed}
+            onDefineKeybinding={onDefineKeybinding}
+            onContextMenu={onRowContextMenu}
+            onFocusChange={setTableFocused}
+            onWhenCommit={commitWhen}
+            onWhenCancel={cancelWhen}
+            onWhenFocusChange={setWhenFocus}
+          />
         )}
       </div>
+
+      <div aria-live="polite" className={styles['visuallyHidden']}>
+        {localize('keybindings.aria.resultCount', '{count} keybindings', { count: rows.length })}
+      </div>
+
+      {menuState !== undefined && (
+        <KeybindingsContextMenu
+          x={menuState.x}
+          y={menuState.y}
+          row={menuState.row}
+          handle={handle}
+          onClose={() => setMenuState(undefined)}
+        />
+      )}
+
+      {defineState !== undefined && (
+        <DefineKeybindingOverlay
+          onConfirm={confirmDefine}
+          onCancel={closeDefine}
+          countConflicts={countConflictsFor}
+          onShowConflicts={showConflicts}
+        />
+      )}
     </div>
   )
-}
-
-function getEffectiveKey(command: string, svc: IUserKeybindingsService): string | undefined {
-  const userEntry = svc.getUserEntry(command)
-  if (userEntry !== undefined) {
-    return userEntry.key !== null ? formatUserKeybinding(userEntry.key) : undefined
-  }
-
-  // No user override — return default from registry.
-  const all = KeybindingsRegistry.getAllKeybindings()
-  for (let i = all.length - 1; i >= 0; i--) {
-    const kb = all[i]
-    if (!kb || kb.command !== command || kb.isNegated) continue
-    if (kb.chords) return formatChord(kb.chords)
-    if (kb.key !== undefined) return formatKey(kb.key)
-  }
-
-  // Fall back to the default keybinding monaco itself ships for built-in
-  // editor commands (recorded by monacoActionsBridge at MonacoLoader boot).
-  const decoded = getMonacoDefaultKeybinding(command)
-  if (!decoded) return undefined
-  if (decoded.chords) return formatChord(decoded.chords)
-  if (decoded.key !== undefined) return formatKey(decoded.key)
-  return undefined
-}
-
-function formatUserKeybinding(key: string): string {
-  const strokes = key.trim().split(/\s+/)
-  return strokes.length === 2 ? formatChord([strokes[0]!, strokes[1]!]) : formatKey(key)
 }

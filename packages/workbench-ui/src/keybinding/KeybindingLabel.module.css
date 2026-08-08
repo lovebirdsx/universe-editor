@@ -1,0 +1,27 @@
+.label {
+  display: inline-flex;
+  align-items: center;
+}
+
+.key {
+  display: inline-block;
+  padding: var(--spacing-1) var(--spacing-2);
+  margin-right: var(--spacing-1);
+  /* keybindingLabel.* is not registered in the editor theme registry; input.* is the closest registered approximation. */
+  background: var(--vscode-input-background, rgba(128, 128, 128, 0.17));
+  color: var(--vscode-input-foreground, #c8c8c8);
+  border: 1px solid var(--vscode-input-border, rgba(51, 51, 51, 0.6));
+  border-bottom-color: var(--vscode-dropdown-border, rgba(68, 68, 68, 0.6));
+  border-radius: var(--radius-xs);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-tight);
+}
+
+.key:last-child {
+  margin-right: 0;
+}
+
+.key.highlight {
+  border-color: var(--vscode-list-highlightForeground, #2aaaff);
+  font-weight: var(--font-weight-bold);
+}
