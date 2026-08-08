@@ -136,13 +136,21 @@ const argv = process.argv.slice(2)
 let mode = 'plain' // 'plain' | 'mj' | 'ztag'
 let i = 0
 let hadClientGlobal = false // whether a `-c <client>` global was passed
+const argfileArgs = [] // args from `-x <file>`, appended after the command-line args
 const WITH_VALUE = new Set(['-p', '-u', '-c', '-C', '-d', '-H', '-L', '-z', '-Q'])
 for (; i < argv.length; i++) {
   const a = argv[i]
   if (a === '-Mj') mode = 'mj'
   else if (a === '-ztag') mode = 'ztag'
   else if (a === '-G') mode = 'marshal'
-  else if (WITH_VALUE.has(a)) {
+  else if (a === '-x') {
+    // `-x <argfile>`: p4 reads extra args from a UTF-8 file (one per line) and
+    // appends them AFTER the command-line arguments — the extension's escape
+    // hatch for non-ASCII args (a Chinese depot path) that Windows argv would
+    // mangle via the ANSI code page.
+    const lines = readFileSync(argv[++i], 'utf8').split(/\r?\n/)
+    for (const line of lines) if (line !== '') argfileArgs.push(line)
+  } else if (WITH_VALUE.has(a)) {
     if (a === '-c') hadClientGlobal = true
     i++ // skip the flag's value
   } else if (a.startsWith('-'))
@@ -150,7 +158,7 @@ for (; i < argv.length; i++) {
   else break
 }
 const command = argv[i]
-const rest = argv.slice(i + 1)
+const rest = [...argv.slice(i + 1), ...argfileArgs]
 
 // --- output helpers ------------------------------------------------------------
 

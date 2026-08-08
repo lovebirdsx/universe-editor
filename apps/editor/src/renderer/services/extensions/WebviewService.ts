@@ -203,13 +203,22 @@ export class WebviewService extends Disposable implements IWebviewService {
     })
     this._panels.set(panelHandle, panel)
     this._panelRouting.set(panelHandle, { viewType, kind: provider.kind })
-    void extHost.$resolveCustomEditor(
-      provider.providerHandle,
-      panelHandle,
-      viewType,
-      resource.toJSON(),
-      diff,
-    )
+    void extHost
+      .$resolveCustomEditor(provider.providerHandle, panelHandle, viewType, resource.toJSON(), diff)
+      .catch((err: unknown) => {
+        // Without this the rejection is swallowed and the panel html stays ''
+        // forever — a blank tab with zero feedback (host-side resolve throw,
+        // host crash mid-resolve). Surface the failure in the panel itself.
+        const message = err instanceof Error ? err.message : String(err)
+        console.error(`[webview] resolveCustomEditor failed for ${viewType}: ${message}`)
+        const escaped = message.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        this._panels
+          .get(panelHandle)
+          ?.html.set(
+            `<!DOCTYPE html><html><body style="font-family: system-ui, sans-serif; padding: 16px;">Failed to open this editor: ${escaped}</body></html>`,
+            undefined,
+          )
+      })
     return panel
   }
 

@@ -11,6 +11,10 @@
  * `-G` (Python marshal) is intentionally not used.
  */
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { unlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { ConcurrencyGate } from './concurrency.js'
 import { parseMarshalJson, parseZtag, parseZtagAsMarshal, type P4Record } from './p4Output.js'
 
@@ -181,6 +185,68 @@ function sanitizeEnv(): NodeJS.ProcessEnv {
 }
 
 /**
+ * On Windows, `spawn('p4', argv)` hands argv over as UTF-16 and p4.exe's CRT
+ * re-encodes it via the system ANSI code page (GBK on zh-CN). With
+ * `P4CHARSET=utf8` p4 expects UTF-8 instead, so any non-ASCII argument (a
+ * Chinese depot path) arrives untranslatable — p4 exits 1 with "No Translation
+ * for parameter" and reads like an empty file (the empty-Swarm-diff bug). The
+ * escape hatch is p4's global `-x <argfile>`: arguments in a UTF-8 file bypass
+ * the ANSI argv conversion entirely.
+ *
+ * Splits at the first non-ASCII argument: everything from there on moves into
+ * the argfile (p4 appends file arguments after command-line ones, so order is
+ * preserved). Global options and subcommands are always ASCII, so the split
+ * never lands before the subcommand. Returns undefined for ASCII-only argv —
+ * the common case, which must stay zero-cost.
+ */
+export function splitArgsForArgfile(
+  args: readonly string[],
+): { argv: string[]; argfileLines: string[] } | undefined {
+  const nonAscii = /[^\x00-\x7f]/
+  const first = args.findIndex((a) => nonAscii.test(a))
+  if (first < 0) return undefined
+  return { argv: args.slice(0, first), argfileLines: args.slice(first) }
+}
+
+/**
+ * Rewrite argv for spawning: non-ASCII arguments are written to a UTF-8 temp
+ * argfile and replaced by a leading `-x <file>` (a global option, valid before
+ * the other globals). Callers must invoke `cleanup` once the child has closed.
+ * If the temp file can't be written we fall back to the original argv — the
+ * command then fails with p4's own translation warning instead of us throwing
+ * from an async spawn path (extension-host crash red line).
+ */
+function prepareSpawnArgs(
+  args: readonly string[],
+  log?: (msg: string) => void,
+): { args: readonly string[]; cleanup: () => void } {
+  const split = splitArgsForArgfile(args)
+  if (!split) return { args, cleanup: () => {} }
+  const argfile = join(tmpdir(), `universe-p4-args-${randomUUID()}.txt`)
+  try {
+    writeFileSync(argfile, split.argfileLines.join('\n') + '\n', 'utf8')
+  } catch (err) {
+    log?.(
+      `  failed to write argfile for non-ASCII args (${(err as Error).message}); passing argv as-is`,
+    )
+    return { args, cleanup: () => {} }
+  }
+  log?.(`  (non-ASCII args via -x argfile: ${split.argfileLines.join(' | ')})`)
+  return {
+    args: ['-x', argfile, ...split.argv],
+    cleanup: () => {
+      // Synchronous so callers observe the file gone as soon as the command
+      // settles; never throws (called from async spawn handlers — red line).
+      try {
+        unlinkSync(argfile)
+      } catch {
+        // best-effort
+      }
+    },
+  }
+}
+
+/**
  * The p4 executable to spawn. Defaults to `p4` (resolved from PATH), matching the
  * git extension's `spawn('git')`. `UNIVERSE_P4_PATH` overrides it — used by e2e to
  * point at a fake p4 (a Node script driven via `node <script>`), and available as
@@ -308,7 +374,8 @@ export class P4Service {
           this._log?.(`> p4 ${full.join(' ')} (binary)`)
           const env = sanitizeEnv()
           if (command === process.execPath) env.ELECTRON_RUN_AS_NODE = '1'
-          const proc = spawn(command, [...prefixArgs, ...full], {
+          const prepared = prepareSpawnArgs(full, this._log)
+          const proc = spawn(command, [...prefixArgs, ...prepared.args], {
             cwd: this._cwd,
             env,
             windowsHide: true,
@@ -326,10 +393,12 @@ export class P4Service {
           proc.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
           proc.on('error', (err) => {
             watchdog.dispose()
+            prepared.cleanup()
             reject(err)
           })
           proc.on('close', (code) => {
             watchdog.dispose()
+            prepared.cleanup()
             if (watchdog.timedOut) {
               resolve({ stdout: Buffer.alloc(0), stderr: watchdog.message, exitCode: code ?? 1 })
               return
@@ -355,7 +424,8 @@ export class P4Service {
       // ELECTRON_RUN_AS_NODE — re-add it so the child stays a Node process rather
       // than launching a full Electron app.
       if (command === process.execPath) env.ELECTRON_RUN_AS_NODE = '1'
-      const proc = spawn(command, [...prefixArgs, ...args], {
+      const prepared = prepareSpawnArgs(args, this._log)
+      const proc = spawn(command, [...prefixArgs, ...prepared.args], {
         cwd: this._cwd,
         env,
         windowsHide: true,
@@ -388,10 +458,12 @@ export class P4Service {
       proc.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
       proc.on('error', (err) => {
         watchdog.dispose()
+        prepared.cleanup()
         reject(err)
       })
       proc.on('close', (code) => {
         watchdog.dispose()
+        prepared.cleanup()
         if (watchdog.timedOut) {
           // The watchdog already logged the kill; resolve a failure result so a
           // hung command fails loudly instead of wedging its gate slot forever.

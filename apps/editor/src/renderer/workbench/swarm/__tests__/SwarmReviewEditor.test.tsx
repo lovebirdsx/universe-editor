@@ -19,6 +19,7 @@ import {
   IWorkspaceService,
   InstantiationService,
   ServiceCollection,
+  Severity,
   UriIdentityService,
   URI,
   observableValue,
@@ -86,6 +87,29 @@ const FILES_WITH_SPREADSHEET: SwarmReviewFileDto[] = [
     localPath: 'C:/workspace/tables/buff.xlsx',
   },
 ]
+
+const FILES_WITH_LARGE_CSV: SwarmReviewFileDto[] = [
+  {
+    status: 'M',
+    path: 'tables/big.csv',
+    depotFile: '//depot/tables/big.csv',
+    baseRevision: '3',
+    localPath: 'C:/workspace/tables/big.csv',
+  },
+]
+
+const FILES_WITH_LARGE_XLSX: SwarmReviewFileDto[] = [
+  {
+    status: 'M',
+    path: 'tables/huge.xlsx',
+    depotFile: '//depot/tables/huge.xlsx',
+    baseRevision: '3',
+    localPath: 'C:/workspace/tables/huge.xlsx',
+  },
+]
+
+// 2M base64 chars ≈ 1.5MB decoded — past the 1MB spreadsheet webview-diff cap.
+const OVERSIZED_BASE64 = 'A'.repeat(2 * 1024 * 1024)
 
 const FILES_WITH_OUTSIDE: SwarmReviewFileDto[] = [
   ...FILES,
@@ -369,6 +393,93 @@ describe('SwarmReviewEditor restore', () => {
     } finally {
       getFileContentBytes.dispose()
       getFileContent.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('falls back to the Monaco text diff for an oversized csv instead of the webview', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const describeVersion = registerCommand(
+      SwarmCommands.describeVersion,
+      () => FILES_WITH_LARGE_CSV,
+    )
+    // Both sides decode past the 1MB cap — the Excel viewer's whole-table LCS
+    // would OOM the extension host, so a csv degrades to the plain text diff.
+    const getFileContentBytes = registerCommand(
+      SwarmCommands.getFileContentBytes,
+      () => OVERSIZED_BASE64,
+    )
+    const getFileContent = registerCommand(
+      SwarmCommands.getFileContent,
+      (_accessor, request: unknown) =>
+        (request as { revision: string }).revision === '#3' ? 'LEFT-TEXT\n' : 'RIGHT-TEXT\n',
+    )
+    const { commands, editorService } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      fireEvent.click(screen.getByText('big.csv'))
+      await act(async () => Promise.resolve())
+
+      expect(
+        commands.executeCommand.mock.calls.some(([id]) => id === '_workbench.openWebviewDiff'),
+      ).toBe(false)
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getFileContent, {
+        depotFile: '//depot/tables/big.csv',
+        revision: '#3',
+      })
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getFileContent, {
+        depotFile: '//depot/tables/big.csv',
+        revision: '@=2001',
+      })
+      const diffInput = editorService.openEditor.mock.calls[0]?.[0] as SwarmDiffEditorInput
+      expect(diffInput).toBeInstanceOf(SwarmDiffEditorInput)
+      expect(diffInput.originalContent).toBe('LEFT-TEXT\n')
+      expect(diffInput.modifiedContent).toBe('RIGHT-TEXT\n')
+    } finally {
+      getFileContent.dispose()
+      getFileContentBytes.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('warns and opens nothing for an oversized binary workbook', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const describeVersion = registerCommand(
+      SwarmCommands.describeVersion,
+      () => FILES_WITH_LARGE_XLSX,
+    )
+    const getFileContentBytes = registerCommand(
+      SwarmCommands.getFileContentBytes,
+      () => OVERSIZED_BASE64,
+    )
+    // A binary workbook past the cap has no readable fallback: the utf8 text
+    // print must stay untouched and no editor opens.
+    const getFileContent = registerCommand(SwarmCommands.getFileContent, () => 'CORRUPTED')
+    const { commands, editorService, notifications } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      fireEvent.click(screen.getByText('huge.xlsx'))
+      await act(async () => Promise.resolve())
+
+      expect(notifications.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          severity: Severity.Warning,
+          message: expect.stringContaining('too large to compare as a table'),
+        }),
+      )
+      expect(
+        commands.executeCommand.mock.calls.some(([id]) => id === '_workbench.openWebviewDiff'),
+      ).toBe(false)
+      expect(commands.executeCommand).not.toHaveBeenCalledWith(
+        SwarmCommands.getFileContent,
+        expect.anything(),
+      )
+      expect(editorService.openEditor).not.toHaveBeenCalled()
+    } finally {
+      getFileContent.dispose()
+      getFileContentBytes.dispose()
       describeVersion.dispose()
       getReview.dispose()
     }

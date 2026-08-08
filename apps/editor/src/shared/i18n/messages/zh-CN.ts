@@ -985,6 +985,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'perforceGraph.unavailable': 'Perforce Graph 不可用——当前目录是否位于 Perforce 工作区内？',
 
   // --- Swarm ---
+  'swarm.diff.spreadsheetTooLarge': '该表格过大（{0} MB），无法以表格形式对比。',
   'swarm.notify.needsAction.title': '有新的 Swarm 审核待你处理',
   'swarm.notify.needsAction.one': '审核 #{0}：{1}',
   'swarm.notify.needsAction.oneNoDesc': '审核 #{0}',

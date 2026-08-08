@@ -129,6 +129,66 @@ test.describe('@p1 swarm reviews', () => {
       await expect(openFile).toHaveCount(0)
     })
 
+    await test.step('diffs a file whose depot path contains non-ASCII (Chinese) segments', async () => {
+      await view
+        .locator('[data-testid="swarm-review-row"]', { hasText: 'Patch shared lib' })
+        .first()
+        .click()
+      // `//depot/w.文本库/文本库_系统模块.ts` is shelved in the same review. Its
+      // `p4 print` args are non-ASCII and only reach the server intact via the
+      // `-x` argfile — a regression shows a blank diff on both sides (the bug
+      // this guards).
+      await expect(review.getByText('文本库_系统模块.ts')).toBeVisible()
+      await review.getByText('文本库_系统模块.ts').click()
+      await expect(diff).toBeVisible()
+
+      await expect
+        .poll(async () => {
+          const content = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
+          return content?.original
+        })
+        .toContain('文本库基线')
+      await expect
+        .poll(async () => {
+          const content = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
+          return content?.modified
+        })
+        .toContain('文本库改动')
+    })
+
+    await test.step('routes an oversized Chinese-path csv to the Monaco text diff, not the webview', async () => {
+      await view
+        .locator('[data-testid="swarm-review-row"]', { hasText: 'Patch shared lib' })
+        .first()
+        .click()
+      // `//depot/w.文本库/大数据表.csv` decodes past the 1MB spreadsheet-diff cap:
+      // the Excel webview's whole-table LCS would OOM the extension host, so the
+      // review must fall back to the plain text diff — fetched via `p4 print`
+      // through the `-x` argfile (the path is non-ASCII).
+      await expect(review.getByText('大数据表.csv')).toBeVisible()
+      await review.getByText('大数据表.csv').click()
+      // Four 1.5MB `p4 print` round-trips (bytes probe + text fetch, both sides)
+      // precede the editor mount — allow more than the default timeout.
+      await expect(diff).toBeVisible({ timeout: 20_000 })
+      await expect(page.locator('[data-testid="webview-frame"]')).toHaveCount(0)
+
+      await expect
+        .poll(
+          async () => {
+            const content = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
+            return content?.original
+          },
+          { timeout: 15_000 },
+        )
+        .toContain('数据表基线')
+      await expect
+        .poll(async () => {
+          const content = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
+          return content?.modified
+        })
+        .toContain('数据表改动')
+    })
+
     await test.step('diffs a submitted-change review against the pre-edit base', async () => {
       await view
         .locator('[data-testid="swarm-review-row"]', { hasText: 'Bump d constant' })

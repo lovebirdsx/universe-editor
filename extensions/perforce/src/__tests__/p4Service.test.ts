@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
+import { existsSync, readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { resolveP4Command } from '../p4Service.js'
+import { resolveP4Command, splitArgsForArgfile } from '../p4Service.js'
 
 const ORIGINAL = process.env.UNIVERSE_P4_PATH
 
@@ -108,6 +109,113 @@ describe('P4Service._spawn output cap', () => {
     await flush()
     child.emit('error', new Error('p4 not found'))
     await expect(p).rejects.toThrow('p4 not found')
+  })
+})
+
+// Repro for the "Chinese depot path → empty Swarm diff" bug: on Windows, spawn
+// passes argv as UTF-16 which p4.exe's CRT re-encodes via the system ANSI code
+// page (GBK on zh-CN), while P4CHARSET=utf8 makes p4 expect UTF-8 — any non-ASCII
+// argument arrives untranslatable and p4 exits 1 with "No Translation for
+// parameter". The fix routes such arguments through `p4 -x <argfile>`: a UTF-8
+// temp file p4 reads arguments from, bypassing the ANSI argv conversion entirely.
+describe('P4Service non-ASCII args go through -x argfile', () => {
+  const CN_SPEC = '//depot/w.文本库/文本库_系统模块.csv#47'
+  let child: FakeChildProcess
+  beforeEach(() => {
+    child = new FakeChildProcess()
+    spawnMock.mockReturnValue(child)
+  })
+  afterEach(() => {
+    spawnMock.mockReset()
+  })
+
+  function spawnedArgs(): string[] {
+    const call = spawnMock.mock.calls.at(-1)
+    return (call?.[1] ?? []) as string[]
+  }
+
+  it('splitArgsForArgfile moves everything from the first non-ASCII arg into the file', () => {
+    expect(splitArgsForArgfile(['print', '-q', CN_SPEC])).toEqual({
+      argv: ['print', '-q'],
+      argfileLines: [CN_SPEC],
+    })
+    expect(splitArgsForArgfile(['edit', '-c', '5', '中文A', 'asciiB'])).toEqual({
+      argv: ['edit', '-c', '5'],
+      argfileLines: ['中文A', 'asciiB'],
+    })
+    expect(splitArgsForArgfile(['files', '//depot/a.txt'])).toBeUndefined()
+  })
+
+  it('replaces non-ASCII argv with a leading -x <utf8 argfile>', async () => {
+    const svc = makeService()
+    const p = svc.exec(['print', '-q', CN_SPEC])
+    await flush()
+    const args = spawnedArgs()
+    expect(args[0]).toBe('-x')
+    const argfile = args[1] as string
+    expect(args.slice(2)).toEqual(['print', '-q'])
+    expect(args).not.toContain(CN_SPEC)
+    // The argfile holds the moved arguments, one per line, as UTF-8 bytes.
+    expect(readFileSync(argfile, 'utf8')).toBe(CN_SPEC + '\n')
+    child.stdout.emit('data', Buffer.from('content'))
+    child.emit('close', 0)
+    const result = await p
+    expect(result.stdout).toBe('content')
+    // The temp argfile is cleaned up once the command finishes.
+    expect(existsSync(argfile)).toBe(false)
+  })
+
+  it('keeps connection globals on the command line (only the non-ASCII tail moves)', async () => {
+    const svc = new P4Service('/repo', new ConcurrencyGate(4), {
+      port: 'p4:1666',
+      user: 'u',
+      client: 'c',
+    })
+    const p = svc.exec(['-Mj', 'files', CN_SPEC])
+    await flush()
+    const args = spawnedArgs()
+    expect(args[0]).toBe('-x')
+    expect(args.slice(2)).toEqual(['-p', 'p4:1666', '-u', 'u', '-c', 'c', '-Mj', 'files'])
+    expect(args).not.toContain(CN_SPEC)
+    child.emit('close', 0)
+    await p
+  })
+
+  it('leaves ASCII-only commands untouched (no argfile, no temp file I/O)', async () => {
+    const svc = makeService()
+    const p = svc.exec(['files', '//depot/a.txt'])
+    await flush()
+    expect(spawnedArgs()).toEqual(['files', '//depot/a.txt'])
+    child.emit('close', 0)
+    await p
+  })
+
+  it('cleans up the argfile when the command fails', async () => {
+    const svc = makeService()
+    const p = svc.exec(['print', '-q', CN_SPEC])
+    await flush()
+    const argfile = spawnedArgs()[1] as string
+    expect(existsSync(argfile)).toBe(true)
+    child.stderr.emit('data', Buffer.from('some error'))
+    child.emit('close', 1)
+    const result = await p
+    expect(result.exitCode).toBe(1)
+    expect(existsSync(argfile)).toBe(false)
+  })
+
+  it('execBinary routes non-ASCII args through an argfile too', async () => {
+    const svc = makeService()
+    const p = svc.execBinary(['print', '-q', '//depot/资源/图.xlsx#3'])
+    await flush()
+    const args = spawnedArgs()
+    expect(args[0]).toBe('-x')
+    const argfile = args[1] as string
+    expect(readFileSync(argfile, 'utf8')).toBe('//depot/资源/图.xlsx#3\n')
+    child.stdout.emit('data', Buffer.from([1, 2, 3]))
+    child.emit('close', 0)
+    const result = await p
+    expect(result.exitCode).toBe(0)
+    expect(existsSync(argfile)).toBe(false)
   })
 })
 

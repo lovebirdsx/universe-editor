@@ -129,16 +129,41 @@ export const test = base.extend<SwarmFixtures>({
     const xlsxBase = readFileSync(resolve(__dirname, 'assets', 'buff-base.xlsx'))
     const xlsxShelf = readFileSync(resolve(__dirname, 'assets', 'buff-shelf.xlsx'))
 
+    // A depot path with non-ASCII (Chinese) segments, backing review #1004's
+    // second file. `p4 print`/`where` on it must go through the `-x` argfile —
+    // Windows argv would mangle the bytes via the ANSI code page and the diff
+    // would come back blank (the empty-Swarm-diff bug). A plain text extension:
+    // spreadsheet extensions (.csv/.xlsx) route to the webview diff instead.
+    const cnDepot = '//depot/w.文本库/文本库_系统模块.ts'
+    const cnBase = '// 文本库基线\nexport const textLib = 1\n'
+    const cnShelf = '// 文本库改动\nexport const textLib = 2\n'
+
+    // A Chinese depot path whose csv payload decodes past the 1MB spreadsheet-diff
+    // cap: the Excel webview diff (whole-table LCS) would OOM the extension host,
+    // so the review must fall back to the Monaco text diff. Content is generated
+    // (not inlined) to keep this fixture readable; base/shelf carry distinct
+    // Chinese markers the spec asserts on.
+    const bigCsvDepot = '//depot/w.文本库/大数据表.csv'
+    const bigCsvRows = (marker: string, value: string): string =>
+      `编号,名称,${marker}\n` +
+      Array.from({ length: 70_000 }, (_, i) => `${i + 1},row-${i + 1},${value}`).join('\n') +
+      '\n'
+    const bigCsvBase = bigCsvRows('数据表基线', 'alpha')
+    const bigCsvShelf = bigCsvRows('数据表改动', 'beta')
+
     // Seed a minimal p4 depot so discovery succeeds + shelve has something.
     mkdirSync(join(workspaceDir, 'src', 'editor'), { recursive: true })
     mkdirSync(join(workspaceDir, 'src', 'runtime'), { recursive: true })
     mkdirSync(join(workspaceDir, 'AkiBase', 'Source', 'Config', 'z.battle', 'b.Buff'), {
       recursive: true,
     })
+    mkdirSync(join(workspaceDir, 'w.文本库'), { recursive: true })
     writeFileSync(join(workspaceDir, 'hello.txt'), 'hello\n', 'utf8')
     writeFileSync(join(workspaceDir, 'src', 'editor', 'a.ts'), baselineA, 'utf8')
     writeFileSync(join(workspaceDir, 'src', 'runtime', 'b.ts'), 'export const b = 1\n', 'utf8')
     writeFileSync(join(workspaceDir, xlsxRel), xlsxShelf)
+    writeFileSync(join(workspaceDir, 'w.文本库', '文本库_系统模块.ts'), cnBase, 'utf8')
+    writeFileSync(join(workspaceDir, 'w.文本库', '大数据表.csv'), bigCsvBase, 'utf8')
     writeFileSync(
       stateFile,
       JSON.stringify({
@@ -165,6 +190,8 @@ export const test = base.extend<SwarmFixtures>({
             revisions: { 5: 'export const d = 1\n', 6: 'export const d = 2\n' },
           },
           [xlsxDepot]: { rev: 3, contentBase64: xlsxBase.toString('base64') },
+          [cnDepot]: { rev: 2, content: cnBase },
+          [bigCsvDepot]: { rev: 2, content: bigCsvBase },
         },
         opened: {},
         // Submitted changelists (describe -S reports status=submitted; a file's
@@ -187,6 +214,13 @@ export const test = base.extend<SwarmFixtures>({
           // backs review #1004, the out-of-workspace diff regression guard.
           '904': {
             '//other/lib/c.ts': { action: 'edit', rev: 4, content: 'export const c = 2\n' },
+            // Second file in the same review: an IN-view depot path with Chinese
+            // segments. Its diff goes through `p4 print <depot>#2` / `<depot>@=904`
+            // with non-ASCII args, which only survive via the `-x` argfile.
+            [cnDepot]: { action: 'edit', rev: 2, content: cnShelf },
+            // Third file: an oversized Chinese-path csv — routes past the
+            // spreadsheet webview cap into the Monaco text diff.
+            [bigCsvDepot]: { action: 'edit', rev: 2, content: bigCsvShelf },
           },
           '903': {
             [xlsxDepot]: {

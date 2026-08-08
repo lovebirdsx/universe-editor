@@ -3,7 +3,7 @@
  *  host resolve, html/options/message plumbing, and host reset teardown.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { URI } from '@universe-editor/platform'
 import type { IExtHostWebviews } from '@universe-editor/extensions-common'
 import { WebviewService } from '../WebviewService.js'
@@ -116,5 +116,46 @@ describe('WebviewService', () => {
     svc.reset('local')
     expect(svc.hasProviderForViewType('pdf.view')).toBe(false)
     expect(svc.openPanel('pdf.view', URI.file('/a.pdf'))).toBeUndefined()
+  })
+
+  it('shows an error page in the panel when the host fails to resolve the editor', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const svc = new WebviewService()
+      const extHost = fakeExtHost()
+      extHost.$resolveCustomEditor = () => Promise.reject(new Error('resolver exploded'))
+      svc.setExtHost('local', extHost)
+      const mainThread = svc.createMainThread('local')
+      void mainThread.$registerCustomEditorProvider(0, 'pdf.view')
+
+      const panel = svc.openPanel('pdf.view', URI.file('/a.pdf'))!
+      expect(panel.html.get()).toBe('')
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(panel.html.get()).toContain('Failed to open this editor: resolver exploded')
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('escapes html in the resolve failure message', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const svc = new WebviewService()
+      const extHost = fakeExtHost()
+      extHost.$resolveCustomEditor = () => Promise.reject(new Error('bad <input> & more'))
+      svc.setExtHost('local', extHost)
+      const mainThread = svc.createMainThread('local')
+      void mainThread.$registerCustomEditorProvider(0, 'pdf.view')
+
+      const panel = svc.openPanel('pdf.view', URI.file('/a.pdf'))!
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      const html = panel.html.get()
+      expect(html).toContain('Failed to open this editor: bad &lt;input> &amp; more')
+      expect(html).not.toContain('<input>')
+    } finally {
+      consoleError.mockRestore()
+    }
   })
 })

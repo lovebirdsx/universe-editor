@@ -80,10 +80,25 @@ const AUTO_REFRESH_CONFIG_KEY = 'perforce.swarm.autoRefresh.enabled'
 const SPREADSHEET_VIEW_TYPE = 'universe.excel'
 const SPREADSHEET_EXTS = ['.xlsx', '.xls', '.xlsm', '.csv']
 
+/**
+ * Upper bound (decoded bytes, larger side) for routing a spreadsheet into the
+ * Excel webview diff. The viewer diffs with a whole-table LCS (O(rows²) dp
+ * matrix) and renders every cell unvirtualized — on a multi-MB table that OOMs
+ * the extension host (the panel then stays blank) and freezes the renderer for
+ * ~10s on base64 re-encoding alone. Past the cap, a CSV falls back to the
+ * Monaco text diff (it's plain text); binary workbooks get a notification.
+ */
+const SPREADSHEET_DIFF_MAX_BYTES = 1024 * 1024
+
 /** True when a path is a spreadsheet the Excel viewer should diff in a webview. */
 function isSpreadsheetPath(path: string): boolean {
   const lower = path.toLowerCase()
   return SPREADSHEET_EXTS.some((ext) => lower.endsWith(ext))
+}
+
+/** Decoded byte size of a base64 string (¾ of its length, ignoring padding). */
+function base64DecodedBytes(base64: string): number {
+  return Math.floor(base64.length * 0.75)
 }
 
 const STATE_CLASS: Record<string, string | undefined> = {
@@ -671,31 +686,51 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
             getBytes(added ? null : originalRevision, originalImmutable),
             getBytes(deleted ? null : modifiedRevision, modifiedImmutable),
           ])
-          // Distinct left/right URIs carrying the backing-change pair keep the
-          // diff tab's identity unique per comparison (WebviewDiffInput ids by
-          // both URIs) — pending versions share a rev, so only the change
-          // distinguishes them. The .xlsx path drives the tab icon. See memory
-          // editor-input-identity-isolation.
-          const sideUri = (side: 'l' | 'r', change: string | null): string =>
-            URI.from({
-              scheme: 'swarm',
-              path: `/${detail.id}/${file.path}`,
-              query: `${side}=${change ?? ''}`,
-            }).toString()
-          await commands.executeCommand('_workbench.openWebviewDiff', {
-            viewType: SPREADSHEET_VIEW_TYPE,
-            title: `${file.path.split('/').pop() ?? file.path} (Swarm)`,
-            leftUri: sideUri('l', added ? null : leftChange),
-            rightUri: sideUri('r', deleted ? null : rightChange),
-            leftBase64,
-            rightBase64,
-            pinned: false,
-            preserveFocus: false,
-          } satisfies OpenWebviewDiffPayload)
+          const largestSide = Math.max(
+            base64DecodedBytes(leftBase64),
+            base64DecodedBytes(rightBase64),
+          )
+          if (largestSide <= SPREADSHEET_DIFF_MAX_BYTES) {
+            // Distinct left/right URIs carrying the backing-change pair keep the
+            // diff tab's identity unique per comparison (WebviewDiffInput ids by
+            // both URIs) — pending versions share a rev, so only the change
+            // distinguishes them. The .xlsx path drives the tab icon. See memory
+            // editor-input-identity-isolation.
+            const sideUri = (side: 'l' | 'r', change: string | null): string =>
+              URI.from({
+                scheme: 'swarm',
+                path: `/${detail.id}/${file.path}`,
+                query: `${side}=${change ?? ''}`,
+              }).toString()
+            await commands.executeCommand('_workbench.openWebviewDiff', {
+              viewType: SPREADSHEET_VIEW_TYPE,
+              title: `${file.path.split('/').pop() ?? file.path} (Swarm)`,
+              leftUri: sideUri('l', added ? null : leftChange),
+              rightUri: sideUri('r', deleted ? null : rightChange),
+              leftBase64,
+              rightBase64,
+              pinned: false,
+              preserveFocus: false,
+            } satisfies OpenWebviewDiffPayload)
+            return
+          }
+          if (!file.path.toLowerCase().endsWith('.csv')) {
+            // A binary workbook past the cap has no readable fallback.
+            notifications.notify({
+              severity: Severity.Warning,
+              message: localize(
+                'swarm.diff.spreadsheetTooLarge',
+                'This spreadsheet is too large to compare as a table ({0} MB).',
+                { 0: (largestSide / (1024 * 1024)).toFixed(1) },
+              ),
+            })
+            return
+          }
+          // Oversized CSV: fall through to the Monaco text diff below.
         } catch (e: unknown) {
           setError(e instanceof Error ? e.message : String(e))
+          return
         }
-        return
       }
 
       const context = {
@@ -757,6 +792,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       commands,
       editorService,
       detail,
+      notifications,
       selectedVersionIdx,
       compareVersionIdx,
       changeForVersion,

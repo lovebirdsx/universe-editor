@@ -75,13 +75,13 @@
 - **P4ExecOptions.timeoutMs** 可按命令覆写（测试用小值复现挂死）。
 
 
-## ⚠️ 中文/非 ASCII 路径经 argv 传给 p4 会乱码（诊断过，**修复未落地**）
+## ⚠️ 中文/非 ASCII 路径经 argv 传给 p4 会乱码（已修复：`-x` argfile）
 
-**现象**：unicode-enabled 服务器 + `P4CHARSET=utf8` 环境下，对含中文的 depotFile 跑 `p4 print`（Swarm review diff、图谱文件 diff 都走它）报 `Perforce client warning: No Translation for parameter ...` exit 1 → `printRevision` 静默 `return ''` → **diff 两侧全空**（纯 ASCII 路径正常，极具迷惑性）。
+**现象（修复前）**：unicode-enabled 服务器 + `P4CHARSET=utf8` 环境下，对含中文的 depotFile 跑 `p4 print`（Swarm review diff、图谱文件 diff 都走它）报 `Perforce client warning: No Translation for parameter ...` exit 1 → `printRevision` 静默 `return ''` → **diff 两侧全空**（纯 ASCII 路径正常，极具迷惑性）。
 
 - **根因**：Windows 上 Node `spawn('p4', argv)` 用 `CreateProcessW` 传 UTF-16 argv；p4.exe 的 CRT `main` 按**系统 ANSI 代码页（cp936/GBK）**转回字节。而 `P4CHARSET=utf8` 让 p4 期望 argv 是 UTF-8 → GBK 字节里的中文无法翻译。
 - **已实测的死路**：env 注入 `P4COMMANDCHARSET=winansi`（CP1252 ≠ 系统 ANSI）；`=cp936`（机器相关，不可作通用修复）；清空 `P4CHARSET`（改变用户既有配置语义，副作用大）。
-- **修复方向（未实现）**：p4 全局选项 **`-x <argfile>`**——把含非 ASCII 的文件参数写进临时 UTF-8 文件，p4 从文件按 UTF-8 读参数，完全绕开 ANSI argv 转换（已实测 exit 0 正常输出）。应在 `P4Service._spawn` 层对所有带文件参数的命令统一处理，而不是只修 `print`。
+- **修复（`p4Service.ts`）**：p4 全局选项 **`-x <argfile>`**——`prepareSpawnArgs` 在 `_spawn`/`execBinary` 层统一检测：argv 含非 ASCII 参数时，从**第一个非 ASCII 参数起**整段写入 UTF-8 临时 argfile（p4 会把 argfile 参数追加在命令行参数之后，顺序不变；全局选项/子命令必为 ASCII 故切分点必在子命令后），命令行改写为 `p4 -x <file> <其余参数>`（`-x` 前置，与其它全局选项顺序无关，已实测）。命令结束同步删临时文件；写文件失败回退直传（绝不从异步 spawn 路径 throw——宿主崩溃红线）。纯切分逻辑 `splitArgsForArgfile` 已导出，单测见 `p4Service.test.ts`；e2e 的 fake-p4 已支持 `-x`（`swarmReview.spec.ts` 有中文路径 review diff 回归用例）。ASCII-only 命令零开销不受影响。
 
 ## SCM 分组模型（与 git 根本不同）
 
@@ -184,7 +184,7 @@ dirty-diff gutter 与 inline blame 原本硬编码 `git.*` 命令；已抽象为
 - **`trackClient` 防抖 200ms**：client 的 `onDidChange` 在 `_withBusy` push/pop 时也 fire，不防抖会让一次 mutate 触发视图反复重载。
 - **历史项 diff 两侧**：复用图谱的 `statusFromAction` + `fileDiffRevs`（add→左空、delete→右空、edit→`#rev-1`/`#rev`）+ `client.printRevision`（带 immutable 缓存）。
 - **右键菜单**：`timeline/item/context`，when `timelineItem == perforce:file:rev`（pending 项 `perforce:file:working` 不配菜单，对齐 git）。
-- **不做**：`-i` follow integrates（输出含来源行、解析复杂，第一版只显示当前 depot 路径历史）。中文 depot 路径走 argv 乱码是已知未修复问题（见上节），filelog/print 同样受限，修复时应统一在 `P4Service` 层做（`-x` argfile）。
+- **不做**：`-i` follow integrates（输出含来源行、解析复杂，第一版只显示当前 depot 路径历史）。中文 depot 路径的 argv 乱码已在 `P4Service` 层统一修复（`-x` argfile，见上节），filelog/print 不再受限。
 - 测试：`__tests__/timelineProvider.test.ts`（仿 git 测试 mock 套路 + 真 `ClientManager` 测 `resolveContaining`）+ `__tests__/filelogParser.test.ts`。
 
 ## 密钥 / env 安全红线（重申）
@@ -237,7 +237,7 @@ pnpm check                                       # lint+typecheck+全测+docs:ch
 - `extensions/git/` —— 对照样板（Repository/RepositoryManager/gitError/nls 都是 p4 的镜像来源）
 - 相关 skill：`create-extension`（插件通用套路）；dirty-diff 内联 peek UI 见 `apps/editor/src/renderer/workbench/scm/CLAUDE.md`
 - 相关 memory：`extension-system-progress` / `eslint-path-identity-guardrails` / `dirty-diff-inline-peek-feature` / `path-comparison-convergence` / `perforce-collect-changes-ux`
-- 相关分析（memory `swarm-chinese-path-print-empty-analysis`）：中文路径 `p4 print` 空 diff 的完整实测对比（`-x` argfile / `P4COMMANDCHARSET` / `P4CHARSET` 各方案数据）
+- 中文路径 `p4 print` 空 diff（`-x` argfile / `P4COMMANDCHARSET` / `P4CHARSET` 各方案实测对比）已收敛在上文「中文/非 ASCII 路径」节
 
 ## 其它
 
