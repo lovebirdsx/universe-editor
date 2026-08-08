@@ -158,9 +158,14 @@ function renderEditor(
 }
 
 async function flush(): Promise<void> {
-  for (let i = 0; i < 8; i++) await Promise.resolve()
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  for (let i = 0; i < 8; i++) await Promise.resolve()
+  // Several macro rounds: the storage-read → restore-decision →
+  // default-selection → payload-fetch chain schedules one React render per step, and each
+  // render is flushed on its own macrotask.
+  for (let round = 0; round < 10; round++) {
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+  }
 }
 
 // The editor gates its initial queries on the git-graph commands being
@@ -194,16 +199,18 @@ describe('GitGraphEditor commit click → Commit Changes view', () => {
     const { container, executeCommand } = renderEditor()
     await flush()
 
-    fireEvent.click(container.querySelector(`[data-hash="${HASH_A}"]`)!)
+    // The first row is already selected (and bridged) on open; click the second.
+    expect(gitGraphViewState.selection).toEqual([HASH_A])
+    fireEvent.click(container.querySelector(`[data-hash="${HASH_B}"]`)!)
     await flush()
 
-    expect(gitGraphViewState.selection).toEqual([HASH_A])
+    expect(gitGraphViewState.selection).toEqual([HASH_B])
     const calls = bridgeCalls(executeCommand)
-    expect(calls).toHaveLength(1)
-    const payload = calls[0]![1] as Record<string, unknown>
+    expect(calls).toHaveLength(2)
+    const payload = calls[1]![1] as Record<string, unknown>
     expect(payload.providerId).toBe('git')
-    expect(payload.title).toBe('b2c4079 — change file')
-    expect(payload.commitRef).toBe(HASH_A)
+    expect(payload.title).toBe('a1b3079 — change file')
+    expect(payload.commitRef).toBe(HASH_B)
     expect(payload.openExternalCommand).toBe('git-graph.openFileDiff')
     expect(payload.metadata).toEqual({
       author: 'tester',
@@ -216,7 +223,7 @@ describe('GitGraphEditor commit click → Commit Changes view', () => {
     expect(files[0]!.args).toEqual({
       root: REPO.root,
       fromHash: HASH_B,
-      toHash: HASH_A,
+      toHash: HASH_B,
       path: 'src/a.ts',
       status: 'M',
     })
@@ -227,8 +234,7 @@ describe('GitGraphEditor commit click → Commit Changes view', () => {
     const { container, executeCommand } = renderEditor()
     await flush()
 
-    fireEvent.click(container.querySelector(`[data-hash="${HASH_A}"]`)!)
-    await flush()
+    // HASH_A is already selected on open; Ctrl+click adds the second row.
     fireEvent.click(container.querySelector(`[data-hash="${HASH_B}"]`)!, { ctrlKey: true })
     await flush()
 
@@ -249,8 +255,7 @@ describe('GitGraphEditor commit click → Commit Changes view', () => {
     await flush()
 
     const row = container.querySelector(`[data-hash="${HASH_A}"]`)!
-    fireEvent.click(row)
-    await flush()
+    // The open-time default selection already bridged HASH_A.
     expect(bridgeCalls(executeCommand)).toHaveLength(1)
 
     fireEvent.click(row)
@@ -268,7 +273,8 @@ describe('GitGraphEditor commit click → Commit Changes view', () => {
 
     expect(openViewContainer).toHaveBeenCalledWith('workbench.view.scm')
     expect(setViewCollapsed).toHaveBeenCalledWith('workbench.view.scm.main', false)
-    expect(bridgeCalls(executeCommand)).toHaveLength(0)
+    // Only the open-time default selection bridged; the uncommitted node never does.
+    expect(bridgeCalls(executeCommand)).toHaveLength(1)
   })
 })
 
@@ -289,10 +295,11 @@ describe('GitGraphEditor click responsiveness', () => {
     await flush()
 
     // The details fetch never resolves within this assertion window: the
-    // selection (and thus the row highlight) must not wait for it.
-    fireEvent.click(container.querySelector(`[data-hash="${HASH_A}"]`)!)
+    // selection (and thus the row highlight) must not wait for it. The first
+    // row is already selected on open, so click the second row.
+    fireEvent.click(container.querySelector(`[data-hash="${HASH_B}"]`)!)
 
-    expect(gitGraphViewState.selection).toEqual([HASH_A])
+    expect(gitGraphViewState.selection).toEqual([HASH_B])
     expect(bridgeCalls(executeCommand)).toHaveLength(0)
 
     pending.resolve(makeDetails())

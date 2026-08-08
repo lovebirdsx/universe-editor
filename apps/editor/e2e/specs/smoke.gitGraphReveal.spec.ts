@@ -172,7 +172,7 @@ test.describe('@p1 git graph reveal', () => {
     test.setTimeout(120_000)
 
     const userDataDir = makeUserDataDir()
-    const { repoDir, secondHash } = makeRepo()
+    const { repoDir, firstHash, secondHash } = makeRepo()
 
     const app = await launchCoreGitApp({ userDataDir })
 
@@ -201,10 +201,15 @@ test.describe('@p1 git graph reveal', () => {
       // window as the reveal tests).
       await expect(body).toBeFocused({ timeout: 30_000 })
 
-      // Arrow keys move the selection with no prior mouse click (no
-      // uncommitted node in this repo: the first row is HEAD).
+      // The first commit (HEAD, no uncommitted node in this repo) is selected
+      // on open, with its changes pushed into the Commit Changes view.
+      await expect(editor.locator(`[data-hash="${secondHash}"]`)).toHaveClass(/rowSelected/, {
+        timeout: 30_000,
+      })
+
+      // Arrow keys move the selection from there with no prior mouse click.
       await page.keyboard.press('ArrowDown')
-      await expect(editor.locator(`[data-hash="${secondHash}"]`)).toHaveClass(/rowSelected/)
+      await expect(editor.locator(`[data-hash="${firstHash}"]`)).toHaveClass(/rowSelected/)
 
       // Enter hands focus to the Commit Changes view's file tree.
       await page.keyboard.press('Enter')

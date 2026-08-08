@@ -165,9 +165,14 @@ function renderEditor(withUncommitted = false, overrides: { commits?: GitGraphCo
 }
 
 async function flush(): Promise<void> {
-  for (let i = 0; i < 8; i++) await Promise.resolve()
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  for (let i = 0; i < 8; i++) await Promise.resolve()
+  // Several macro rounds: the storage-read → restore-decision →
+  // default-selection → payload-fetch chain schedules one React render per
+  // step, and each render is flushed on its own macrotask.
+  for (let round = 0; round < 10; round++) {
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+  }
 }
 
 let graphCommandStub: IDisposable
@@ -204,13 +209,11 @@ function menuLabels(): string[] {
 }
 
 describe('GitGraphEditor keyboard navigation', () => {
-  it('ArrowDown with no selection selects the first row and shows its changes', async () => {
-    const { container, executeCommand } = renderEditor()
+  it('selects the first row on open and shows its changes', async () => {
+    const { executeCommand } = renderEditor()
     await flush()
 
-    fireEvent.keyDown(scrollBody(container), { key: 'ArrowDown' })
-    await flush()
-
+    // No arrow key needed: the first row is selected right after the load.
     expect(gitGraphViewState.selection).toEqual([HASH_A])
     expect(bridgeCalls(executeCommand)).toHaveLength(1)
   })
@@ -222,30 +225,26 @@ describe('GitGraphEditor keyboard navigation', () => {
     const body = scrollBody(container)
     fireEvent.keyDown(body, { key: 'ArrowDown' })
     await flush()
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
     expect(gitGraphViewState.selection).toEqual([HASH_B])
 
     fireEvent.keyDown(body, { key: 'ArrowUp' })
     await flush()
     expect(gitGraphViewState.selection).toEqual([HASH_A])
-    // Every move goes through the selection bridge.
+    // Every move goes through the selection bridge (default + 2 moves).
     expect(bridgeCalls(executeCommand)).toHaveLength(3)
   })
 
-  it('ArrowDown from the uncommitted node moves to the first commit', async () => {
-    const { container, openViewContainer } = renderEditor(true)
+  it('the uncommitted node is skipped: the first commit is selected on open', async () => {
+    const { container, executeCommand } = renderEditor(true)
     await flush()
+
+    expect(gitGraphViewState.selection).toEqual([HASH_A])
+    expect(bridgeCalls(executeCommand)).toHaveLength(1)
 
     const body = scrollBody(container)
     fireEvent.keyDown(body, { key: 'ArrowDown' })
     await flush()
-    expect(gitGraphViewState.selection).toEqual(['*'])
-    expect(openViewContainer).toHaveBeenCalledWith('workbench.view.scm')
-
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
-    expect(gitGraphViewState.selection).toEqual([HASH_A])
+    expect(gitGraphViewState.selection).toEqual([HASH_B])
   })
 
   it('End selects the last loaded row, Home the first', async () => {
@@ -269,8 +268,6 @@ describe('GitGraphEditor keyboard navigation', () => {
     const body = scrollBody(container)
     // Two full rows per "page".
     Object.defineProperty(body, 'clientHeight', { configurable: true, value: 48 })
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
     expect(gitGraphViewState.selection).toEqual([HASH_A])
 
     fireEvent.keyDown(body, { key: 'PageDown' })
@@ -289,7 +286,7 @@ describe('GitGraphEditor keyboard navigation', () => {
     const body = scrollBody(container)
     const notPrevented = fireEvent.keyDown(body, { key: 'a' })
     expect(notPrevented).toBe(true)
-    expect(gitGraphViewState.selection).toEqual([])
+    expect(gitGraphViewState.selection).toEqual([HASH_A])
   })
 })
 
@@ -298,10 +295,8 @@ describe('GitGraphEditor Enter focuses Commit Changes', () => {
     const { container, executeCommand, pick } = renderEditor()
     await flush()
 
-    const body = scrollBody(container)
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
-    fireEvent.keyDown(body, { key: 'Enter' })
+    // The first row is already selected on open — Enter acts on it directly.
+    fireEvent.keyDown(scrollBody(container), { key: 'Enter' })
     await flush()
 
     expect(executeCommand).toHaveBeenCalledWith(FocusCommitChangesAction.ID)
@@ -312,6 +307,11 @@ describe('GitGraphEditor Enter focuses Commit Changes', () => {
   it('Enter with no selection bubbles up untouched', async () => {
     const { container, executeCommand } = renderEditor()
     await flush()
+
+    // Clicking the selected row again deselects it.
+    fireEvent.click(container.querySelector(`[data-hash="${HASH_A}"]`)!)
+    await flush()
+    expect(gitGraphViewState.selection).toEqual([])
 
     const notPrevented = fireEvent.keyDown(scrollBody(container), { key: 'Enter' })
     expect(notPrevented).toBe(true)
@@ -324,10 +324,8 @@ describe('GitGraphEditor Ctrl+Enter context menu', () => {
     const { container, pick } = renderEditor()
     await flush()
 
-    const body = scrollBody(container)
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
-    fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true })
+    // The open-selected first row is the menu target.
+    fireEvent.keyDown(scrollBody(container), { key: 'Enter', ctrlKey: true })
     await flush()
 
     expect(pick).not.toHaveBeenCalled()
@@ -346,10 +344,7 @@ describe('GitGraphEditor Ctrl+Enter context menu', () => {
     })
     await flush()
 
-    const body = scrollBody(container)
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
-    fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true })
+    fireEvent.keyDown(scrollBody(container), { key: 'Enter', ctrlKey: true })
     await flush()
 
     expect(pick).toHaveBeenCalledTimes(1)
@@ -371,10 +366,7 @@ describe('GitGraphEditor Ctrl+Enter context menu', () => {
     })
     await flush()
 
-    const body = scrollBody(container)
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
-    fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true })
+    fireEvent.keyDown(scrollBody(container), { key: 'Enter', ctrlKey: true })
     await flush()
 
     const items = pick.mock.calls[0]![0]
@@ -401,9 +393,7 @@ describe('GitGraphContextMenu focus on open', () => {
     const body = scrollBody(container)
     body.focus()
     expect(document.activeElement).toBe(body)
-
-    pressKey('ArrowDown')
-    await flush()
+    // The first row is already selected on open.
     expect(gitGraphViewState.selection).toEqual([HASH_A])
 
     pressKey('Enter', { ctrlKey: true })
@@ -426,8 +416,7 @@ describe('GitGraphContextMenu keyboard operation', () => {
     await flush()
 
     const body = scrollBody(container)
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
+    // The open-selected first row is the menu target.
     fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true })
     await flush()
 
@@ -450,10 +439,7 @@ describe('GitGraphContextMenu keyboard operation', () => {
     const { container } = renderEditor()
     await flush()
 
-    const body = scrollBody(container)
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
-    fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true })
+    fireEvent.keyDown(scrollBody(container), { key: 'Enter', ctrlKey: true })
     await flush()
 
     const menu = openMenu()!
@@ -469,10 +455,7 @@ describe('GitGraphContextMenu keyboard operation', () => {
     const { container } = renderEditor()
     await flush()
 
-    const body = scrollBody(container)
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
-    fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true })
+    fireEvent.keyDown(scrollBody(container), { key: 'Enter', ctrlKey: true })
     await flush()
     expect(openMenu()).not.toBeNull()
 

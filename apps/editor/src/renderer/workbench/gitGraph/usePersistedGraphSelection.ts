@@ -10,6 +10,12 @@
  *  path, so paging/scroll/selection semantics match an explicit "Open in
  *  Graph"; its silent follow into the Commit Changes view stays gated by
  *  `shouldFollowGraphSelection` and never pops the sidebar on startup.
+ *
+ *  When nothing is restored (fresh session without a stored commit, or a
+ *  remount with an empty selection), the first selectable row is selected
+ *  through the caller's `selectDefault` — with full click semantics, so the
+ *  Commit Changes view shows its changes and a following Enter lands in a
+ *  populated view.
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useRef, useState } from 'react'
@@ -31,7 +37,16 @@ export interface UsePersistedGraphSelectionOptions {
   readonly pendingReveal: ISettableObservable<string | null>
   /** Synthetic row ids (uncommitted / pending nodes) that must not be persisted. */
   readonly excludedIds: readonly string[]
+  /** First selectable row of the current list (synthetic rows already filtered
+   *  out by the caller), or null when nothing is visible. */
+  readonly defaultRowId: string | null
+  /** Select the default row, with the same semantics as clicking it. */
+  readonly selectDefault: (id: string) => void
 }
+
+/** Restore decision, in state (not a ref) so the default-selection effect
+ *  re-runs when the decision lands. Cached sessions start at 'none'. */
+type RestoreState = 'pending' | 'dispatched' | 'none'
 
 export function usePersistedGraphSelection({
   storageKey,
@@ -40,16 +55,18 @@ export function usePersistedGraphSelection({
   result,
   pendingReveal,
   excludedIds,
+  defaultRowId,
+  selectDefault,
 }: UsePersistedGraphSelectionOptions): void {
   const storage = useService(IStorageService)
 
-  const freshSessionRef = useRef(result === null)
+  const freshSession = result === null
   // null until the storage read settles. Kept in state (not a ref) so the
   // restore effect re-runs when the read lands after the first page, and so
   // writes always merge onto the stored map instead of clobbering the other
   // repos' entries.
   const [storedMap, setStoredMap] = useState<Record<string, string> | null>(null)
-  const restoreDoneRef = useRef(false)
+  const [restoreState, setRestoreState] = useState<RestoreState>(freshSession ? 'pending' : 'none')
 
   useEffect(() => {
     let cancelled = false
@@ -65,21 +82,43 @@ export function usePersistedGraphSelection({
   // first page (the repos discovery and the SCM repo mirror land in later
   // commits), so a miss only finalizes once the effective repo is known.
   useEffect(() => {
-    if (!freshSessionRef.current || restoreDoneRef.current) return
+    if (restoreState !== 'pending') return
     if (storedMap === null || result === null) return
     // A selection already (e.g. the user clicked during the load) wins.
     if (selection.length > 0) {
-      restoreDoneRef.current = true
+      setRestoreState('none')
       return
     }
     const hash = storedMap[effectiveRepo ?? '']
     if (hash === undefined) {
-      if (effectiveRepo !== null) restoreDoneRef.current = true
+      if (effectiveRepo !== null) setRestoreState('none')
       return
     }
-    restoreDoneRef.current = true
+    setRestoreState('dispatched')
     pendingReveal.set(hash, undefined)
-  }, [storedMap, result, effectiveRepo, selection, pendingReveal])
+  }, [restoreState, storedMap, result, effectiveRepo, selection, pendingReveal])
+
+  // Any non-empty selection — user's, restored or defaulted — disarms the
+  // default selection, so a later deliberate deselect is never re-selected.
+  const defaultDoneRef = useRef(false)
+  useEffect(() => {
+    if (selection.length > 0) defaultDoneRef.current = true
+  }, [selection])
+
+  // Default selection: nothing restored and nothing selected → select the
+  // first row with full click semantics. Declared after the restore effect so
+  // a reveal dispatched in the same commit is seen here.
+  useEffect(() => {
+    if (defaultDoneRef.current) return
+    if (restoreState !== 'none') return
+    if (result === null || selection.length > 0) return
+    // A reveal queued before the mount (e.g. `_workbench.openGitGraph <hash>`)
+    // owns the selection.
+    if (pendingReveal.get() !== null) return
+    if (defaultRowId === null) return
+    defaultDoneRef.current = true
+    selectDefault(defaultRowId)
+  }, [restoreState, result, selection, pendingReveal, defaultRowId, selectDefault])
 
   // Write-back: single selections persist per repo, a deselect clears the
   // repo's entry, and a two-commit compare leaves the persisted focus as is.

@@ -103,11 +103,15 @@ function renderEditor(
 // re-registers viewState.revealCommit with a fresh result/limit closure after
 // the initial load (a bare setTimeout flush races the scheduler).
 async function flush(): Promise<void> {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    for (let i = 0; i < 8; i++) await Promise.resolve()
-  })
+  // Several rounds: the storage-read → restore-decision → default-selection
+  // chain schedules one React render per step.
+  for (let round = 0; round < 10; round++) {
+    await act(async () => {
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+    })
+  }
 }
 
 function resetViewState(): void {
@@ -189,7 +193,8 @@ describe('PerforceGraphEditor reveal', () => {
     })
     await flush()
 
-    expect(perforceGraphViewState.selection).toEqual([])
+    // The missing changelist never got selected — the open-time default selection stands.
+    expect(perforceGraphViewState.selection).toEqual(['4521'])
     const pagedLimits = executeCommand.mock.calls
       .filter((c) => c[0] === PerforceGraphCommands.getChanges)
       .map((c) => (c[1] as { maxChanges?: number })?.maxChanges)
@@ -213,7 +218,8 @@ describe('PerforceGraphEditor reveal', () => {
     // the reveal highlight robust across the openEditor tab-switch race).
     renderEditor(() => resultWith([change('4521', 'Fix widget')], false))
     await flush()
-    expect(perforceGraphViewState.selection).toEqual([])
+    // The open-time default selection already landed on the first row.
+    expect(perforceGraphViewState.selection).toEqual(['4521'])
 
     await act(async () => {
       perforceGraphViewState.pendingReveal.set('4521', undefined)

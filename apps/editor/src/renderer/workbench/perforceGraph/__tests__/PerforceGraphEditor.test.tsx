@@ -159,9 +159,14 @@ function renderEditor() {
 }
 
 async function flush(): Promise<void> {
-  for (let i = 0; i < 8; i++) await Promise.resolve()
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  for (let i = 0; i < 8; i++) await Promise.resolve()
+  // Several macro rounds: the storage-read → restore-decision →
+  // default-selection → payload-fetch chain schedules one React render per step, and each
+  // render is flushed on its own macrotask.
+  for (let round = 0; round < 10; round++) {
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+  }
 }
 
 function resetViewState(): void {
@@ -218,11 +223,8 @@ describe('PerforceGraphEditor', () => {
     )
   })
 
-  it('clicking a change row shows it in the Commit Changes view', async () => {
-    const { container, commandService } = renderEditor()
-    await flush()
-
-    fireEvent.click(container.querySelector('[data-id="4521"]')!)
+  it('selects the first change on open and shows it in the Commit Changes view', async () => {
+    const { commandService } = renderEditor()
     await flush()
 
     expect(perforceGraphViewState.selection).toEqual(['4521'])

@@ -30,6 +30,8 @@ interface HarnessProps {
   readonly effectiveRepo: string | null
   readonly result: unknown
   readonly pendingReveal: ISettableObservable<string | null>
+  readonly defaultRowId: string | null
+  readonly selectDefault: (id: string) => void
 }
 
 function Harness(props: HarnessProps) {
@@ -37,7 +39,11 @@ function Harness(props: HarnessProps) {
   return null
 }
 
-function setup(stored: Record<string, string> | undefined, initial: Partial<HarnessProps> = {}) {
+function setup(
+  stored: Record<string, string> | undefined,
+  initial: Partial<HarnessProps> & { revealQueued?: string } = {},
+) {
+  const { revealQueued, ...initialProps } = initial
   const get = vi.fn().mockResolvedValue(stored)
   const set = vi.fn().mockResolvedValue(undefined)
   const services = new ServiceCollection()
@@ -49,13 +55,16 @@ function setup(stored: Record<string, string> | undefined, initial: Partial<Harn
     onDidChangeWorkspaceScope: Event.None,
   } as unknown as IStorageService)
   const instantiation = new InstantiationService(services)
-  const pendingReveal = observableValue<string | null>('test.pendingReveal', null)
+  const pendingReveal = observableValue<string | null>('test.pendingReveal', revealQueued ?? null)
+  const selectDefault = vi.fn()
   const base: HarnessProps = {
     selection: [],
     effectiveRepo: null,
     result: null,
     pendingReveal,
-    ...initial,
+    defaultRowId: null,
+    selectDefault,
+    ...initialProps,
   }
   const utils = render(
     <ServicesContext.Provider value={instantiation}>
@@ -68,10 +77,14 @@ function setup(stored: Record<string, string> | undefined, initial: Partial<Harn
         <Harness {...base} {...overrides} />
       </ServicesContext.Provider>,
     )
-  return { get, set, pendingReveal, update }
+  return { get, set, pendingReveal, selectDefault, update }
 }
 
 async function flush(): Promise<void> {
+  for (let i = 0; i < 8; i++) await Promise.resolve()
+  // Storage-settle setStates land outside act(): React's concurrent scheduler
+  // flushes them on a macrotask, not a microtask.
+  await new Promise((resolve) => setTimeout(resolve, 0))
   for (let i = 0; i < 8; i++) await Promise.resolve()
 }
 
@@ -113,6 +126,81 @@ describe('usePersistedGraphSelection restore', () => {
     update({ selection: ['userpicked'], result: { commits: [] }, effectiveRepo: REPO })
     await flush()
     expect(pendingReveal.get()).toBeNull()
+  })
+})
+
+describe('usePersistedGraphSelection default selection', () => {
+  it('selects the default row right away in a cached session with empty selection', async () => {
+    const { selectDefault } = setup(undefined, {
+      result: { commits: [] },
+      effectiveRepo: REPO,
+      defaultRowId: 'first',
+    })
+    await flush()
+    expect(selectDefault).toHaveBeenCalledTimes(1)
+    expect(selectDefault).toHaveBeenCalledWith('first')
+  })
+
+  it('selects the default row in a fresh session once the restore comes back empty', async () => {
+    const { selectDefault, update } = setup(undefined, { defaultRowId: 'first' })
+    await flush()
+    expect(selectDefault).not.toHaveBeenCalled()
+
+    update({ result: { commits: [] }, effectiveRepo: REPO, defaultRowId: 'first' })
+    await flush()
+    expect(selectDefault).toHaveBeenCalledWith('first')
+  })
+
+  it('yields to a dispatched restore reveal', async () => {
+    const { pendingReveal, selectDefault, update } = setup(
+      { [REPO]: 'hash1' },
+      { defaultRowId: 'first' },
+    )
+    update({ result: { commits: [] }, effectiveRepo: REPO, defaultRowId: 'first' })
+    await flush()
+    expect(pendingReveal.get()).toBe('hash1')
+    expect(selectDefault).not.toHaveBeenCalled()
+  })
+
+  it('yields to a reveal queued before the mount', async () => {
+    const { selectDefault, update } = setup(undefined, {
+      defaultRowId: 'first',
+      revealQueued: 'queued',
+    })
+    update({ result: { commits: [] }, effectiveRepo: REPO, defaultRowId: 'first' })
+    await flush()
+    expect(selectDefault).not.toHaveBeenCalled()
+  })
+
+  it('yields to a selection made during the load', async () => {
+    const { selectDefault, update } = setup(undefined, { defaultRowId: 'first' })
+    update({ selection: ['userpicked'], defaultRowId: 'first' })
+    await flush()
+    update({
+      selection: ['userpicked'],
+      result: { commits: [] },
+      effectiveRepo: REPO,
+      defaultRowId: 'first',
+    })
+    await flush()
+    expect(selectDefault).not.toHaveBeenCalled()
+  })
+
+  it('never re-selects after a deliberate deselect', async () => {
+    const { selectDefault, update } = setup(undefined, {
+      result: { commits: [] },
+      effectiveRepo: REPO,
+      defaultRowId: 'first',
+    })
+    await flush()
+    expect(selectDefault).toHaveBeenCalledTimes(1)
+
+    // The default landed, then the user deselected it again.
+    update({ selection: ['first'], result: { commits: [] }, effectiveRepo: REPO })
+    await flush()
+    update({ selection: [], result: { commits: [] }, effectiveRepo: REPO, defaultRowId: 'first' })
+    await flush()
+    expect(selectDefault).toHaveBeenCalledTimes(1)
   })
 })
 

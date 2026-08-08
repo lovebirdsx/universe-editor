@@ -133,11 +133,15 @@ function renderEditor() {
 }
 
 async function flush(): Promise<void> {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    for (let i = 0; i < 8; i++) await Promise.resolve()
-  })
+  // Several rounds: the storage-read → restore-decision → default-selection
+  // chain schedules one React render per step.
+  for (let round = 0; round < 10; round++) {
+    await act(async () => {
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+    })
+  }
 }
 
 beforeEach(() => {
@@ -179,13 +183,15 @@ describe('PerforceGraphEditor reveal → Commit Changes follow', () => {
 
     expect(perforceGraphViewState.selection).toEqual(['4519'])
     const calls = bridgeCalls(executeCommand)
-    expect(calls).toHaveLength(1)
-    const payload = calls[0]![1] as Record<string, unknown>
+    // calls[0] is the open-time default selection pushing '4521' (click
+    // semantics); calls[1] is the silent reveal follow.
+    expect(calls).toHaveLength(2)
+    const payload = calls[1]![1] as Record<string, unknown>
     expect(payload.commitRef).toBe('4519')
     expect(payload.silent).toBe(true)
   })
 
-  it('fetches nothing while the Commit Changes view has never been used', async () => {
+  it('fetches nothing for the reveal while the Commit Changes view has never been used', async () => {
     const { executeCommand } = renderEditor()
     await flush()
 
@@ -195,8 +201,11 @@ describe('PerforceGraphEditor reveal → Commit Changes follow', () => {
     })
 
     expect(perforceGraphViewState.selection).toEqual(['4519'])
-    expect(detailFetches(executeCommand)).toHaveLength(0)
-    expect(bridgeCalls(executeCommand)).toHaveLength(0)
+    // The only fetch/bridge is the open-time default selection of '4521'; the
+    // reveal itself stays gated because the mocked ShowCommitChanges never
+    // ran, so the view still counts as unused.
+    expect(detailFetches(executeCommand).map((c) => c[1])).toEqual(['4521'])
+    expect(bridgeCalls(executeCommand)).toHaveLength(1)
   })
 
   it('does not refetch the changelist the view already shows', async () => {
@@ -210,8 +219,10 @@ describe('PerforceGraphEditor reveal → Commit Changes follow', () => {
     })
 
     expect(perforceGraphViewState.selection).toEqual(['4519'])
-    expect(detailFetches(executeCommand)).toHaveLength(0)
-    expect(bridgeCalls(executeCommand)).toHaveLength(0)
+    // Only the open-time default selection fetched — the revealed '4519' was
+    // already shown, so its follow was skipped.
+    expect(detailFetches(executeCommand).map((c) => c[1])).toEqual(['4521'])
+    expect(bridgeCalls(executeCommand)).toHaveLength(1)
   })
 
   it('follows when the view shows another provider', async () => {
@@ -225,7 +236,8 @@ describe('PerforceGraphEditor reveal → Commit Changes follow', () => {
     })
 
     const calls = bridgeCalls(executeCommand)
-    expect(calls).toHaveLength(1)
-    expect((calls[0]![1] as Record<string, unknown>).commitRef).toBe('4519')
+    // calls[0] is the open-time default selection; calls[1] is the follow.
+    expect(calls).toHaveLength(2)
+    expect((calls[1]![1] as Record<string, unknown>).commitRef).toBe('4519')
   })
 })

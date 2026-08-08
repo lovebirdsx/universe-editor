@@ -516,15 +516,6 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     gitGraphViewState.searchQuery = searchQuery
   }, [searchQuery])
 
-  usePersistedGraphSelection({
-    storageKey: 'gitGraph.lastSelectedCommit',
-    selection,
-    effectiveRepo: resolveEffectiveRepoRoot(repos, selectedRepo),
-    result,
-    pendingReveal: gitGraphViewState.pendingReveal,
-    excludedIds: PERSISTENCE_EXCLUDED_IDS,
-  })
-
   const load = useCallback(() => {
     let cancelled = false
     const seq = ++fetchSeqRef.current
@@ -1692,6 +1683,17 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     () => void commands.executeCommand(FocusCommitChangesAction.ID),
     [commands],
   )
+
+  usePersistedGraphSelection({
+    storageKey: 'gitGraph.lastSelectedCommit',
+    selection,
+    effectiveRepo: resolveEffectiveRepoRoot(repos, selectedRepo),
+    result,
+    pendingReveal: gitGraphViewState.pendingReveal,
+    excludedIds: PERSISTENCE_EXCLUDED_IDS,
+    defaultRowId: rowKeys.find((k) => k !== UNCOMMITTED_HASH) ?? null,
+    selectDefault: selectFromKeyboard,
+  })
   const onRowsKeyDown = useGraphKeyboardNav({
     rows: rowKeys,
     selectionRef,

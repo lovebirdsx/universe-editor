@@ -268,15 +268,6 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     perforceGraphViewState.wholeRepo = wholeRepo
   }, [wholeRepo])
 
-  usePersistedGraphSelection({
-    storageKey: 'perforceGraph.lastSelectedChange',
-    selection,
-    effectiveRepo: selectedRepo ?? repos[0]?.root ?? null,
-    result,
-    pendingReveal: perforceGraphViewState.pendingReveal,
-    excludedIds: PERSISTENCE_EXCLUDED_IDS,
-  })
-
   // Persist the scope toggle per-workspace so it's remembered across restarts.
   const wholeRepoLoadedRef = useRef(false)
   useEffect(() => {
@@ -735,6 +726,17 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     () => void commands.executeCommand(FocusCommitChangesAction.ID),
     [commands],
   )
+
+  usePersistedGraphSelection({
+    storageKey: 'perforceGraph.lastSelectedChange',
+    selection,
+    effectiveRepo: selectedRepo ?? repos[0]?.root ?? null,
+    result,
+    pendingReveal: perforceGraphViewState.pendingReveal,
+    excludedIds: PERSISTENCE_EXCLUDED_IDS,
+    defaultRowId: rowKeys.find((k) => k !== PENDING_ID) ?? null,
+    selectDefault: selectFromKeyboard,
+  })
   const onRowsKeyDown = useGraphKeyboardNav({
     rows: rowKeys,
     selectionRef,

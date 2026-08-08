@@ -151,9 +151,14 @@ function renderEditor(pendingCount = 0) {
 }
 
 async function flush(): Promise<void> {
-  for (let i = 0; i < 8; i++) await Promise.resolve()
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  for (let i = 0; i < 8; i++) await Promise.resolve()
+  // Several macro rounds: the storage-read → restore-decision →
+  // default-selection → payload-fetch chain schedules one React render per step, and each
+  // render is flushed on its own macrotask.
+  for (let round = 0; round < 10; round++) {
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+  }
 }
 
 function resetViewState(): void {
@@ -193,6 +198,15 @@ function menuLabels(): string[] {
 }
 
 describe('PerforceGraphEditor keyboard navigation', () => {
+  it('selects the first change on open and drives the Commit Changes bridge', async () => {
+    const { executeCommand } = renderEditor()
+    await flush()
+
+    // No arrow key needed: the first changelist is selected right after the load.
+    expect(perforceGraphViewState.selection).toEqual(['4521'])
+    expect(bridgeCalls(executeCommand)).toHaveLength(1)
+  })
+
   it('ArrowDown/ArrowUp move the selection and drive the Commit Changes bridge', async () => {
     const { container, executeCommand } = renderEditor()
     await flush()
@@ -200,13 +214,12 @@ describe('PerforceGraphEditor keyboard navigation', () => {
     const body = scrollBody(container)
     fireEvent.keyDown(body, { key: 'ArrowDown' })
     await flush()
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
     expect(perforceGraphViewState.selection).toEqual(['4519'])
 
     fireEvent.keyDown(body, { key: 'ArrowUp' })
     await flush()
     expect(perforceGraphViewState.selection).toEqual(['4521'])
+    // Default selection + 2 moves all go through the bridge.
     expect(bridgeCalls(executeCommand)).toHaveLength(3)
   })
 
@@ -230,8 +243,6 @@ describe('PerforceGraphEditor keyboard navigation', () => {
 
     const body = scrollBody(container)
     Object.defineProperty(body, 'clientHeight', { configurable: true, value: 48 })
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
     fireEvent.keyDown(body, { key: 'PageDown' })
     await flush()
     expect(perforceGraphViewState.selection).toEqual(['4500'])
@@ -241,19 +252,17 @@ describe('PerforceGraphEditor keyboard navigation', () => {
     expect(perforceGraphViewState.selection).toEqual(['4521'])
   })
 
-  it('ArrowDown from the pending node moves to the first change', async () => {
-    const { container, openViewContainer } = renderEditor(2)
+  it('the pending node is skipped: the first change is selected on open', async () => {
+    const { container, executeCommand } = renderEditor(2)
     await flush()
+
+    expect(perforceGraphViewState.selection).toEqual(['4521'])
+    expect(bridgeCalls(executeCommand)).toHaveLength(1)
 
     const body = scrollBody(container)
     fireEvent.keyDown(body, { key: 'ArrowDown' })
     await flush()
-    expect(perforceGraphViewState.selection).toEqual(['*'])
-    expect(openViewContainer).toHaveBeenCalledWith('workbench.view.scm')
-
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
-    expect(perforceGraphViewState.selection).toEqual(['4521'])
+    expect(perforceGraphViewState.selection).toEqual(['4519'])
   })
 
   it('does not swallow plain character keys', async () => {
@@ -262,7 +271,7 @@ describe('PerforceGraphEditor keyboard navigation', () => {
 
     const notPrevented = fireEvent.keyDown(scrollBody(container), { key: 'x' })
     expect(notPrevented).toBe(true)
-    expect(perforceGraphViewState.selection).toEqual([])
+    expect(perforceGraphViewState.selection).toEqual(['4521'])
   })
 })
 
@@ -280,9 +289,7 @@ describe('PerforceGraphEditor menu focus on open', () => {
     const body = scrollBody(container)
     body.focus()
     expect(document.activeElement).toBe(body)
-
-    pressKey('ArrowDown')
-    await flush()
+    // The first changelist is already selected on open.
     expect(perforceGraphViewState.selection).toEqual(['4521'])
 
     pressKey('Enter', { ctrlKey: true })
@@ -304,10 +311,8 @@ describe('PerforceGraphEditor Enter focuses Commit Changes', () => {
     const { container, executeCommand } = renderEditor()
     await flush()
 
-    const body = scrollBody(container)
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
-    fireEvent.keyDown(body, { key: 'Enter' })
+    // The first changelist is already selected on open — Enter acts on it directly.
+    fireEvent.keyDown(scrollBody(container), { key: 'Enter' })
     await flush()
 
     expect(executeCommand).toHaveBeenCalledWith(FocusCommitChangesAction.ID)
@@ -317,6 +322,11 @@ describe('PerforceGraphEditor Enter focuses Commit Changes', () => {
   it('Enter with no selection bubbles up untouched', async () => {
     const { container, executeCommand } = renderEditor()
     await flush()
+
+    // Clicking the selected row again deselects it.
+    fireEvent.click(container.querySelector('[data-id="4521"]')!)
+    await flush()
+    expect(perforceGraphViewState.selection).toEqual([])
 
     const notPrevented = fireEvent.keyDown(scrollBody(container), { key: 'Enter' })
     expect(notPrevented).toBe(true)
@@ -329,10 +339,8 @@ describe('PerforceGraphEditor Ctrl+Enter context menu', () => {
     const { container } = renderEditor()
     await flush()
 
-    const body = scrollBody(container)
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
-    fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true })
+    // The open-selected first changelist is the menu target.
+    fireEvent.keyDown(scrollBody(container), { key: 'Enter', ctrlKey: true })
     await flush()
 
     expect(menuLabels()).toEqual([
@@ -347,8 +355,10 @@ describe('PerforceGraphEditor Ctrl+Enter context menu', () => {
     await flush()
 
     const body = scrollBody(container)
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
+    // The pending node is the row right above the open-selected first change.
+    fireEvent.keyDown(body, { key: 'ArrowUp' })
     await flush()
+    expect(perforceGraphViewState.selection).toEqual(['*'])
     fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true })
     await flush()
     expect(openMenu()).toBeNull()
@@ -358,10 +368,7 @@ describe('PerforceGraphEditor Ctrl+Enter context menu', () => {
     const { container, executeCommand } = renderEditor()
     await flush()
 
-    const body = scrollBody(container)
-    fireEvent.keyDown(body, { key: 'ArrowDown' })
-    await flush()
-    fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true })
+    fireEvent.keyDown(scrollBody(container), { key: 'Enter', ctrlKey: true })
     await flush()
 
     const menu = openMenu()!

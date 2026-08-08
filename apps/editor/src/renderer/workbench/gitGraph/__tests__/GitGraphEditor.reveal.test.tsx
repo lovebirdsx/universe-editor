@@ -125,11 +125,15 @@ function renderEditor(
 // re-registers viewState.revealCommit with a fresh result/limit closure after
 // the initial load (a bare setTimeout flush races the scheduler).
 async function flush(): Promise<void> {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    for (let i = 0; i < 8; i++) await Promise.resolve()
-  })
+  // Several rounds: the storage-read → restore-decision → default-selection
+  // chain schedules one React render per step.
+  for (let round = 0; round < 10; round++) {
+    await act(async () => {
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+    })
+  }
 }
 
 function resetViewState(): void {
@@ -227,7 +231,8 @@ describe('GitGraphEditor reveal', () => {
         await flush()
       })
 
-      expect(gitGraphViewState.selection).toEqual([])
+      // The missing hash never got selected — the open-time default selection stands.
+      expect(gitGraphViewState.selection).toEqual([PAGE1_HASH])
       const pagedLimits = executeCommand.mock.calls
         .filter((c) => c[0] === GitGraphCommands.getCommits)
         .map((c) => (c[1] as { maxCommits?: number })?.maxCommits)
@@ -264,7 +269,8 @@ describe('GitGraphEditor reveal', () => {
     try {
       renderEditor(() => resultWith([commit(PAGE1_HASH, 'first')], false))
       await flush()
-      expect(gitGraphViewState.selection).toEqual([])
+      // The open-time default selection already landed on the first row.
+      expect(gitGraphViewState.selection).toEqual([PAGE1_HASH])
 
       await act(async () => {
         gitGraphViewState.pendingReveal.set(PAGE1_HASH, undefined)

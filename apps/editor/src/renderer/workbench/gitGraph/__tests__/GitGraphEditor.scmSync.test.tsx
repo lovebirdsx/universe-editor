@@ -138,9 +138,14 @@ function renderEditor() {
 
 /** Let queued microtasks (effect promises) and a macrotask flush. */
 async function flush(): Promise<void> {
-  for (let i = 0; i < 8; i++) await Promise.resolve()
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  for (let i = 0; i < 8; i++) await Promise.resolve()
+  // Several macro rounds: the storage-read → restore-decision →
+  // default-selection → payload-fetch chain schedules one React render per step, and each
+  // render is flushed on its own macrotask.
+  for (let round = 0; round < 10; round++) {
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+  }
 }
 
 // The editor gates its initial queries on the git-graph commands being
