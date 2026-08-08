@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { localize } from '@universe-editor/platform'
+import { FocusScopeOverlay } from '@universe-editor/workbench-ui'
 import styles from './GitGraphEditor.module.css'
 
 export interface GitGraphBranchPickerState {
@@ -29,7 +30,6 @@ export function GitGraphBranchPickerDialog({
   onConfirm: (branch: string) => void
   onClose: () => void
 }) {
-  const ref = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const [filter, setFilter] = useState('')
   const [selected, setSelected] = useState<string | null>(null)
@@ -47,22 +47,14 @@ export function GitGraphBranchPickerDialog({
     inputRef.current?.focus()
   }, [])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   const confirm = (branch: string | null): void => {
     if (branch) onConfirm(branch)
   }
 
   return createPortal(
-    <>
+    <FocusScopeOverlay visible onEscape={onClose}>
       <div className={styles['pickerBackdrop']} onClick={onClose} />
-      <div ref={ref} role="dialog" aria-modal="true" className={styles['pickerDialog']}>
+      <div role="dialog" aria-modal="true" className={styles['pickerDialog']}>
         <div className={styles['pickerTitle']}>{state.title}</div>
         <input
           ref={inputRef}
@@ -110,7 +102,7 @@ export function GitGraphBranchPickerDialog({
           </button>
         </div>
       </div>
-    </>,
+    </FocusScopeOverlay>,
     document.body,
   )
 }

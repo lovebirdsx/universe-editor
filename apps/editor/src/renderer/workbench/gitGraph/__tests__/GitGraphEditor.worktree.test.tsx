@@ -360,6 +360,86 @@ describe('GitGraphEditor worktree sync', () => {
     )
   })
 
+  it('moves focus into the picker on open and restores it to the graph on close', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    renderEditor()
+    await flush()
+
+    const scrollBody = screen.getByTestId('gitGraph-scrollBody')
+    scrollBody.focus()
+
+    fireEvent.contextMenu(screen.getByText('✓ repo'))
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
+
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.contains(document.activeElement)).toBe(true)
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    await flush()
+
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(scrollBody)
+  })
+
+  it('is fully keyboard-operable: arrows move focus, space toggles, enter confirms', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt, detachedWt])
+    const { executeCommand } = renderEditor()
+    await flush()
+
+    fireEvent.contextMenu(screen.getByText('✓ repo'))
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
+
+    const dialog = screen.getByRole('dialog')
+    const boxes = within(dialog).getAllByRole('checkbox')
+    // Candidates are sorted alphabetically: Select all, feature, wip.
+    expect(boxes).toHaveLength(3)
+    // autoFocus lands on the first focusable element: the Select-all checkbox.
+    expect(document.activeElement).toBe(boxes[0])
+
+    fireEvent.keyDown(boxes[0]!, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(boxes[1])
+    fireEvent.keyDown(boxes[1]!, { key: ' ' })
+    expect((boxes[1] as HTMLInputElement).checked).toBe(false)
+
+    fireEvent.keyDown(boxes[1]!, { key: 'End' })
+    expect(document.activeElement).toBe(boxes[2])
+    fireEvent.keyDown(boxes[2]!, { key: 'Home' })
+    expect(document.activeElement).toBe(boxes[0])
+
+    fireEvent.keyDown(boxes[0]!, { key: 'Enter' })
+    await flush()
+
+    expect(executeCommand).toHaveBeenCalledWith(
+      GitGraphCommands.syncWorktrees,
+      'main',
+      [{ path: detachedWt.path, name: detachedWt.name }],
+      false,
+    )
+  })
+
+  it('does not confirm via Enter once every row is unchecked', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    const { executeCommand } = renderEditor()
+    await flush()
+
+    fireEvent.contextMenu(screen.getByText('✓ repo'))
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
+
+    const dialog = screen.getByRole('dialog')
+    const selectAll = within(dialog).getAllByRole('checkbox')[0]!
+    fireEvent.keyDown(selectAll, { key: ' ' })
+    fireEvent.keyDown(selectAll, { key: 'Enter' })
+    await flush()
+
+    expect(executeCommand).not.toHaveBeenCalledWith(
+      GitGraphCommands.syncWorktrees,
+      expect.anything(),
+      expect.anything(),
+    )
+    // The dialog stays open so the user can re-pick.
+    expect(screen.getByRole('dialog')).toBeTruthy()
+  })
+
   it('lists the candidate worktrees in alphabetical order', async () => {
     const zebra: GitGraphWorktreeDto = {
       path: '/repo.worktrees/zebra',

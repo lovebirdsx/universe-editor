@@ -691,6 +691,11 @@
   background: var(--vscode-list-hoverBackground);
 }
 
+.pickerRow:focus-within,
+.pickerSelectAll:focus-within {
+  background: var(--vscode-list-hoverBackground);
+}
+
 .pickerRowName {
   flex: 0 0 auto;
 }
