@@ -409,6 +409,72 @@ describe('perforce.timeline.openInGraph', () => {
   })
 })
 
+describe('perforce.timeline.viewCommit', () => {
+  function registeredHandlers(): Map<string, (arg: unknown) => unknown> {
+    const handlers = new Map<string, (arg: unknown) => unknown>()
+    mocks.registerCommand.mockImplementation((id: string, handler: (arg: unknown) => unknown) => {
+      handlers.set(id, handler)
+      return { dispose: () => undefined }
+    })
+    return handlers
+  }
+
+  it('takes the changelist from the item id and the uri from its command arguments', async () => {
+    const client = fakeClient({
+      getGraphChangeDetails: vi.fn(async () => ({
+        id: '12345',
+        author: 'alice',
+        client: 'alice-ws',
+        date: 1700000000,
+        body: 'fix the crash',
+        files: [{ depotFile: DEPOT, action: 'edit', rev: '3' }],
+        localPaths: new Map([[DEPOT, FILE]]),
+      })),
+    })
+    const handlers = registeredHandlers()
+    createPerforceTimelineCommands(fakeManager(client))
+
+    await handlers.get('perforce.timeline.viewCommit')?.({
+      id: '12345',
+      command: { arguments: [{ uri: FILE }] },
+    })
+
+    expect(client.getGraphChangeDetails).toHaveBeenCalledWith('12345')
+    expect(mocks.executeCommand).toHaveBeenCalledWith(
+      '_workbench.showCommitChanges',
+      expect.objectContaining({
+        providerId: 'perforce',
+        commitRef: '12345',
+        openExternalCommand: 'perforce-graph.openFileDiff',
+        title: 'Changelist 12345 — fix the crash',
+        metadata: { author: 'alice', authorDate: 1700000000, message: 'fix the crash' },
+        files: [
+          expect.objectContaining({
+            path: 'depot/main/src/a.txt',
+            status: 'M',
+            resourceUri: FILE_URI,
+            args: { depotFile: DEPOT, status: 'M', rev: '3', localPath: FILE },
+          }),
+        ],
+      }),
+    )
+  })
+
+  it('no-ops when the item carries no changelist id', async () => {
+    const client = fakeClient({
+      getGraphChangeDetails: vi.fn(async () => {
+        throw new Error('should not be called')
+      }),
+    })
+    const handlers = registeredHandlers()
+    createPerforceTimelineCommands(fakeManager(client))
+
+    await handlers.get('perforce.timeline.viewCommit')?.({ label: 'Pending Changes' })
+
+    expect(mocks.executeCommand).not.toHaveBeenCalled()
+  })
+})
+
 describe('PerforceTimelineProvider.trackClient', () => {
   it('debounces a client change burst into one reset event', () => {
     vi.useFakeTimers()

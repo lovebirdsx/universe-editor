@@ -28,19 +28,11 @@ export interface GraphGrid {
 
 export type GraphStyle = 'rounded' | 'angular'
 
-/** An inline gap inserted after `afterIndex`, shifting later rows down by `height` px. */
-export interface GraphExpand {
-  readonly afterIndex: number
-  readonly height: number
-}
-
 export interface GraphLayoutOptions {
   readonly grid: GraphGrid
   readonly style?: GraphStyle
   /** Mirror git-graph's `onlyFollowFirstParent`. Defaults to false. */
   readonly onlyFollowFirstParent?: boolean
-  /** Inline detail expansion: pushes commits below `afterIndex` down by `height`. */
-  readonly expand?: GraphExpand
 }
 
 /** Placement of a single commit node (index === commit index === row). */
@@ -395,10 +387,8 @@ class Graph {
     return this._availableColours.length - 1
   }
 
-  toLayout(grid: GraphGrid, style: GraphStyle, expand?: GraphExpand): GraphLayout {
-    const gap = expand && expand.height > 0 ? expand : null
-    const yOf = (logicalY: number): number =>
-      logicalY * grid.y + grid.offsetY + (gap && logicalY > gap.afterIndex ? gap.height : 0)
+  toLayout(grid: GraphGrid, style: GraphStyle): GraphLayout {
+    const yOf = (logicalY: number): number => logicalY * grid.y + grid.offsetY
 
     const vertices: VertexPlacement[] = this._vertices.map((v) => {
       const point = v.getPoint()
@@ -426,9 +416,8 @@ class Graph {
     }
     const laneCount = maxNextX
     const width = 2 * grid.offsetX + Math.max(0, laneCount - 1) * grid.x
-    const base =
+    const height =
       this._vertices.length > 0 ? this._vertices.length * grid.y + grid.offsetY - grid.y / 2 : 0
-    const height = base + (gap ? gap.height : 0)
 
     return { vertices, paths, width, height, laneCount }
   }
@@ -535,5 +524,5 @@ export function computeGraphLayout(
   options: GraphLayoutOptions,
 ): GraphLayout {
   const graph = new Graph(commits, headHash, options.onlyFollowFirstParent === true)
-  return graph.toLayout(options.grid, options.style ?? 'rounded', options.expand)
+  return graph.toLayout(options.grid, options.style ?? 'rounded')
 }

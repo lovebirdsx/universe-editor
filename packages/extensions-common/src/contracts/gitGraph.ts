@@ -144,6 +144,8 @@ export interface GitGraphCommitDetailsDto {
 
 /** Argument for `git-graph.openFileDiff` — opens a file's diff in a diff editor. */
 export interface GitGraphFileDiffRequest {
+  /** Repository root; defaults to the graph's current repo when omitted. */
+  root?: string
   /** Base revision (left side); a commit's first parent, or the compare base. */
   fromHash: string
   /** Target revision (right side); the commit itself, or the compare target. */
@@ -165,7 +167,6 @@ export const GitGraphCommands = {
   setRepo: 'git-graph.setRepo',
   getCommits: 'git-graph.getCommits',
   getCommitDetails: 'git-graph.getCommitDetails',
-  getUncommittedChanges: 'git-graph.getUncommittedChanges',
   compareCommits: 'git-graph.compareCommits',
   getBranches: 'git-graph.getBranches',
   openFileDiff: 'git-graph.openFileDiff',

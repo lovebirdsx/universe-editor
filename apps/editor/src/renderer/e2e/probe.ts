@@ -1418,6 +1418,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       services.fileService.readFileText(URI.file(fsPath)),
     getViewContainerByViewId: (viewId: string) =>
       services.viewDescriptorService.getViewContainerByViewId(viewId)?.id,
+    getActiveViewContainerId: (location: number) =>
+      services.viewsService.getActiveViewContainerId(location),
     getViewIdsByContainer: (containerId: string) =>
       services.viewDescriptorService.getViewsByContainer(containerId).map((v) => v.id),
     getViewContainerIdsByLocation: (location: number) =>

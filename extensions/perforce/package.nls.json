@@ -51,6 +51,8 @@
   "perforce.command.timeline.openDiff.title": "Open Comparison",
   "perforce.command.timeline.copyChangelistNumber.title": "Copy Changelist Number",
   "perforce.command.timeline.openInGraph.title": "Open in Perforce Graph",
+  "perforce.command.timeline.viewCommit.title": "Open Commit",
+  "perforce.command.viewCommit.title": "Open Commit",
   "perforce.command.swarm.ping.title": "Swarm: Check Connection",
   "perforce.command.swarm.requestReview.title": "Request New Swarm Review…",
   "perforce.command.swarm.updateReviewFromChangelist.title": "Update a Swarm Review…",

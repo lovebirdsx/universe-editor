@@ -51,6 +51,8 @@
   "perforce.command.timeline.openDiff.title": "打开比较",
   "perforce.command.timeline.copyChangelistNumber.title": "复制 Changelist 编号",
   "perforce.command.timeline.openInGraph.title": "在 Perforce Graph 中显示",
+  "perforce.command.timeline.viewCommit.title": "打开提交",
+  "perforce.command.viewCommit.title": "打开提交",
   "perforce.command.swarm.ping.title": "Swarm：检查连接",
   "perforce.command.swarm.requestReview.title": "发起新的 Swarm 审核…",
   "perforce.command.swarm.updateReviewFromChangelist.title": "更新 Swarm 审核…",

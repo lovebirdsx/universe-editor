@@ -1,7 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Coverage for the Perforce Graph editor: it loads submitted changes, renders
- *  rows, expands a change's detail on click, and opens a file diff.
+ *  rows, and clicking a row pushes the change's files into the Commit Changes
+ *  sidebar view via the `_workbench.showCommitChanges` bridge. Clicking the
+ *  synthetic pending-changes node reveals the SCM main view instead.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -9,10 +11,9 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import {
   Event,
   ICommandService,
-  IEditorResolverService,
-  IFileService,
-  INotificationService,
   IStorageService,
+  IViewDescriptorService,
+  IViewsService,
   InstantiationService,
   ServiceCollection,
   StorageScope,
@@ -28,11 +29,12 @@ import { IScmService } from '../../../services/extensions/ScmService.js'
 import { perforceGraphViewState } from '../../../services/perforceGraph/perforceGraphViewState.js'
 import { scmViewState } from '../../scm/scmViewState.js'
 import { ServicesContext } from '../../useService.js'
+import { ShowCommitChangesAction } from '../../../actions/commitChangesActions.js'
 import { PerforceGraphEditor } from '../PerforceGraphEditor.js'
 
 const REPO: P4GraphRepoDto = { root: 'C:/ws/main', name: 'alice-ws' }
 
-function makeResult(): P4GraphLoadResult {
+function makeResult(pendingCount = 0): P4GraphLoadResult {
   return {
     changes: [
       {
@@ -48,7 +50,7 @@ function makeResult(): P4GraphLoadResult {
     head: '4521',
     headClient: 'alice-ws',
     moreAvailable: false,
-    pendingCount: 0,
+    pendingCount,
   }
 }
 
@@ -102,27 +104,6 @@ function makeScmService(): IScmService {
   } as unknown as IScmService
 }
 
-function makeFileService(exists = true): IFileService {
-  return {
-    _serviceBrand: undefined,
-    exists: vi.fn(async () => exists),
-  } as unknown as IFileService
-}
-
-function makeEditorResolverService(): IEditorResolverService {
-  return {
-    _serviceBrand: undefined,
-    openEditor: vi.fn(async () => undefined),
-  } as unknown as IEditorResolverService
-}
-
-function makeNotificationService(): INotificationService {
-  return {
-    _serviceBrand: undefined,
-    notify: vi.fn(),
-  } as unknown as INotificationService
-}
-
 function makeStorageService(): IStorageService {
   return {
     _serviceBrand: undefined,
@@ -133,24 +114,38 @@ function makeStorageService(): IStorageService {
   } as unknown as IStorageService
 }
 
+function makeViewServices(services: ServiceCollection): {
+  openViewContainer: ReturnType<typeof vi.fn>
+  setViewCollapsed: ReturnType<typeof vi.fn>
+} {
+  const openViewContainer = vi.fn()
+  const setViewCollapsed = vi.fn()
+  services.set(IViewsService, {
+    _serviceBrand: undefined,
+    openViewContainer,
+  } as unknown as IViewsService)
+  services.set(IViewDescriptorService, {
+    _serviceBrand: undefined,
+    setViewCollapsed,
+  } as unknown as IViewDescriptorService)
+  return { openViewContainer, setViewCollapsed }
+}
+
 function renderEditor() {
   const commandService = makeCommandService()
-  const editorResolverService = makeEditorResolverService()
   const storageService = makeStorageService()
   const services = new ServiceCollection()
   services.set(ICommandService, commandService)
   services.set(IScmService, makeScmService())
-  services.set(IFileService, makeFileService())
-  services.set(IEditorResolverService, editorResolverService)
-  services.set(INotificationService, makeNotificationService())
   services.set(IStorageService, storageService)
+  const viewServices = makeViewServices(services)
   const instantiation = new InstantiationService(services)
   const utils = render(
     <ServicesContext.Provider value={instantiation}>
       <PerforceGraphEditor input={{} as never} />
     </ServicesContext.Provider>,
   )
-  return { commandService, editorResolverService, storageService, ...utils }
+  return { commandService, storageService, ...viewServices, ...utils }
 }
 
 async function flush(): Promise<void> {
@@ -159,24 +154,20 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 8; i++) await Promise.resolve()
 }
 
-beforeEach(() => {
+function resetViewState(): void {
   perforceGraphViewState.result = null
   perforceGraphViewState.selection = []
-  perforceGraphViewState.details = null
-  perforceGraphViewState.pendingFiles = null
   perforceGraphViewState.repos = []
   perforceGraphViewState.selectedRepo = null
   perforceGraphViewState.wholeRepo = false
+}
+
+beforeEach(() => {
+  resetViewState()
 })
 
 afterEach(() => {
-  perforceGraphViewState.result = null
-  perforceGraphViewState.selection = []
-  perforceGraphViewState.details = null
-  perforceGraphViewState.pendingFiles = null
-  perforceGraphViewState.repos = []
-  perforceGraphViewState.selectedRepo = null
-  perforceGraphViewState.wholeRepo = false
+  resetViewState()
   scmViewState.setSelectedRepo(undefined)
   vi.clearAllMocks()
 })
@@ -216,53 +207,41 @@ describe('PerforceGraphEditor', () => {
     )
   })
 
-  it('expands a change detail and opens a file diff', async () => {
-    const { commandService } = renderEditor()
+  it('clicking a change row shows it in the Commit Changes view', async () => {
+    const { container, commandService } = renderEditor()
     await flush()
 
-    fireEvent.click(screen.getByText('Fix widget'))
+    fireEvent.click(container.querySelector('[data-id="4521"]')!)
     await flush()
 
-    // The change body + changed file appear in the detail panel.
-    expect(screen.getByText('a.txt')).toBeTruthy()
-
-    fireEvent.click(screen.getByText('a.txt'))
-    await flush()
-
-    expect(commandService.executeCommand).toHaveBeenCalledWith(PerforceGraphCommands.openFileDiff, {
+    expect(perforceGraphViewState.selection).toEqual(['4521'])
+    const calls = (commandService.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => c[0] === ShowCommitChangesAction.ID,
+    )
+    expect(calls).toHaveLength(1)
+    const payload = calls[0]![1] as Record<string, unknown>
+    expect(payload.providerId).toBe('perforce')
+    expect(payload.title).toBe('Changelist 4521 — Fix widget')
+    expect(payload.commitRef).toBe('4521')
+    expect(payload.openExternalCommand).toBe('perforce-graph.openFileDiff')
+    expect(payload.metadata).toEqual({ author: 'alice', authorDate: 1, message: 'Fix widget' })
+    const files = payload.files as {
+      path: string
+      resourceUri: string | null
+      args: Record<string, unknown>
+    }[]
+    expect(files).toHaveLength(1)
+    expect(files[0]!.args).toEqual({
       depotFile: '//depot/main/a.txt',
       status: 'M',
       rev: '3',
       localPath: 'C:/ws/main/a.txt',
     })
-  })
-
-  it('opens the working-tree file via the resolver when the Open File icon is clicked', async () => {
-    const { commandService, editorResolverService } = renderEditor()
-    await flush()
-
-    fireEvent.click(screen.getByText('Fix widget'))
-    await flush()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Open File' }))
-    await flush()
-
-    // The icon opens the local source file through the editor resolver — it does
-    // NOT run a diff command like clicking the row does.
-    const openEditor = editorResolverService.openEditor as unknown as ReturnType<typeof vi.fn>
-    expect(openEditor).toHaveBeenCalledTimes(1)
-    const [resource, options] = openEditor.mock.calls[0]!
-    expect(resource.fsPath).toContain('a.txt')
-    expect(options).toEqual({ pinned: true })
-    expect(commandService.executeCommand).not.toHaveBeenCalledWith(
-      PerforceGraphCommands.openWorkingTreeFile,
-      expect.anything(),
-    )
+    expect(files[0]!.resourceUri).toContain('a.txt')
   })
 
   it('shows a pending-changes node when files are open', async () => {
-    const withPending = makeResult()
-    withPending.pendingCount = 2
+    const withPending = makeResult(2)
     const services = new ServiceCollection()
     services.set(ICommandService, {
       _serviceBrand: undefined,
@@ -275,10 +254,8 @@ describe('PerforceGraphEditor', () => {
       onDidExecuteCommand: Event.None,
     } as unknown as ICommandService)
     services.set(IScmService, makeScmService())
-    services.set(IFileService, makeFileService())
-    services.set(IEditorResolverService, makeEditorResolverService())
-    services.set(INotificationService, makeNotificationService())
     services.set(IStorageService, makeStorageService())
+    makeViewServices(services)
     render(
       <ServicesContext.Provider value={new InstantiationService(services)}>
         <PerforceGraphEditor input={{} as never} />
@@ -287,5 +264,65 @@ describe('PerforceGraphEditor', () => {
     await flush()
 
     expect(screen.getByText('Pending Changes (2)')).toBeTruthy()
+  })
+
+  it('clicking the pending-changes node reveals the SCM main view', async () => {
+    const withPending = makeResult(2)
+    const services = new ServiceCollection()
+    services.set(ICommandService, {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async (id: string) => {
+        if (id === PerforceGraphCommands.getChanges) return withPending
+        if (id === PerforceGraphCommands.getRepos) return [REPO]
+        return undefined
+      }),
+      onWillExecuteCommand: Event.None,
+      onDidExecuteCommand: Event.None,
+    } as unknown as ICommandService)
+    services.set(IScmService, makeScmService())
+    services.set(IStorageService, makeStorageService())
+    const { openViewContainer, setViewCollapsed } = makeViewServices(services)
+    const { container } = render(
+      <ServicesContext.Provider value={new InstantiationService(services)}>
+        <PerforceGraphEditor input={{} as never} />
+      </ServicesContext.Provider>,
+    )
+    await flush()
+
+    fireEvent.click(container.querySelector('[data-id="*"]')!)
+    await flush()
+
+    expect(openViewContainer).toHaveBeenCalledWith('workbench.view.scm')
+    expect(setViewCollapsed).toHaveBeenCalledWith('workbench.view.scm.main', false)
+  })
+
+  it('opens no context menu for the pending-changes node', async () => {
+    const withPending = makeResult(2)
+    const services = new ServiceCollection()
+    services.set(ICommandService, {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async (id: string) => {
+        if (id === PerforceGraphCommands.getChanges) return withPending
+        if (id === PerforceGraphCommands.getRepos) return [REPO]
+        return undefined
+      }),
+      onWillExecuteCommand: Event.None,
+      onDidExecuteCommand: Event.None,
+    } as unknown as ICommandService)
+    services.set(IScmService, makeScmService())
+    services.set(IStorageService, makeStorageService())
+    makeViewServices(services)
+    const { container } = render(
+      <ServicesContext.Provider value={new InstantiationService(services)}>
+        <PerforceGraphEditor input={{} as never} />
+      </ServicesContext.Provider>,
+    )
+    await flush()
+
+    const row = container.querySelector('[data-id="*"]')
+    expect(row).toBeTruthy()
+    fireEvent.contextMenu(row!)
+
+    expect(screen.queryByRole('menu')).toBeNull()
   })
 })

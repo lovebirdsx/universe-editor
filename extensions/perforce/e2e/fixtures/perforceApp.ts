@@ -63,6 +63,9 @@ interface FakeState {
   opened: Record<string, unknown>
   changelists?: Record<string, { description: string }>
   changeMeta?: Record<string, { user: string; time: string; desc: string }>
+  /** Submitted changelists with their file sets (`describe -s` source), keyed by
+   *  change id → depot file → action/rev. */
+  submitted?: Record<string, Record<string, { action: string; rev: number }>>
   annotateCl?: string
 }
 
@@ -72,6 +75,7 @@ function seedWorkspace(
   seeds: readonly SeedFile[],
   changelists: Readonly<Record<string, string>> = {},
   annotate?: P4AnnotateSeed,
+  submitted?: P4SubmittedSeed,
 ): {
   workspaceDir: string
   stateFile: string
@@ -87,6 +91,21 @@ function seedWorkspace(
   }
   const stateDir = mkdtempSync(join(tmpdir(), 'ue2-p4-state-'))
   const stateFile = join(stateDir, 'state.json')
+  const changeMeta: FakeState['changeMeta'] = {}
+  if (annotate) {
+    changeMeta[annotate.changelist] = {
+      user: annotate.user,
+      time: annotate.time,
+      desc: annotate.description,
+    }
+  }
+  if (submitted) {
+    changeMeta[submitted.changelist] = {
+      user: submitted.user,
+      time: submitted.time,
+      desc: submitted.description,
+    }
+  }
   const state: FakeState = {
     user: 'e2e',
     client: 'e2e-client',
@@ -101,15 +120,17 @@ function seedWorkspace(
           ),
         }
       : {}),
-    ...(annotate
+    ...(Object.keys(changeMeta).length > 0 ? { changeMeta } : {}),
+    ...(annotate ? { annotateCl: annotate.changelist } : {}),
+    ...(submitted
       ? {
-          annotateCl: annotate.changelist,
-          changeMeta: {
-            [annotate.changelist]: {
-              user: annotate.user,
-              time: annotate.time,
-              desc: annotate.description,
-            },
+          submitted: {
+            [submitted.changelist]: Object.fromEntries(
+              submitted.files.map((f) => [
+                `${depotPrefix}/${toPosix(f.relPath)}`,
+                { action: f.action, rev: f.rev },
+              ]),
+            ),
           },
         }
       : {}),
@@ -143,6 +164,9 @@ export interface P4SeedConfig {
    *  `changes -l` resolves its author/summary, so the inline blame + status bar
    *  show `user`. */
   readonly annotate?: P4AnnotateSeed
+  /** A submitted changelist with a real file set (`describe -s` + `changes -l`
+   *  source). Backs "Open Commit" (multi-diff) and graph details assertions. */
+  readonly submitted?: P4SubmittedSeed
 }
 
 /** Blame seed: the changelist annotate reports + the metadata `changes -l` returns. */
@@ -152,6 +176,21 @@ export interface P4AnnotateSeed {
   /** Unix seconds (string), matching `p4 -ztag changes` output. */
   readonly time: string
   readonly description: string
+}
+
+/** A submitted changelist: metadata (`changes -l`) plus the files it touched
+ *  (`describe -s`). `rev` is the revision CONTAINING the edit (base = rev-1). */
+export interface P4SubmittedSeed {
+  readonly changelist: string
+  readonly user: string
+  /** Unix seconds (string), matching `p4 -ztag changes` output. */
+  readonly time: string
+  readonly description: string
+  readonly files: readonly {
+    readonly relPath: string
+    readonly action: 'add' | 'edit' | 'delete'
+    readonly rev: number
+  }[]
 }
 
 export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; openSubdir: string }>({
@@ -167,6 +206,7 @@ export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; open
       p4Seeds.files,
       p4Seeds.changelists,
       p4Seeds.annotate,
+      p4Seeds.submitted,
     )
     const openDir = openSubdir ? join(workspaceDir, openSubdir) : workspaceDir
     await use({

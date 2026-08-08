@@ -231,7 +231,7 @@ describe('git.timeline commands', () => {
       map.set(id, handler)
       return { dispose: () => undefined }
     })
-    createGitTimelineCommands(fakeManager(fakeRepo()))
+    createGitTimelineCommands(fakeManager(fakeRepo()), { current: ROOT })
     return map
   }
 
@@ -303,5 +303,110 @@ describe('git.timeline commands', () => {
     mocks.executeCommand.mockClear()
     await commands.get('git.timeline.openInGraph')?.({ label: 'no id' })
     expect(mocks.executeCommand).not.toHaveBeenCalled()
+  })
+
+  describe('viewCommit', () => {
+    const HASH = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
+    const PARENT = 'f0e1d2c3b4a5968778695a4b3c2d1e0f98765432'
+
+    function mockCommitDetails(parents: string[]) {
+      mocks.gitExec.mockImplementation((args: string[]) => {
+        if (args[0] === 'show' && args[1] === '-s') {
+          const fields = [
+            HASH,
+            parents.join(' '),
+            'Ada',
+            'ada@x.io',
+            '1700000000',
+            '',
+            '',
+            '',
+            'fix crash',
+          ]
+          return Promise.resolve(gitOk(fields.join(FIELD)))
+        }
+        if (args[0] === 'diff' || args[0] === 'diff-tree') {
+          return Promise.resolve(gitOk(['M', 'src/a.ts', 'R', 'old/b.ts', 'src/b.ts'].join('\0')))
+        }
+        return Promise.resolve(gitOk(''))
+      })
+    }
+
+    it('opens the commit changes view with one entry per changed file and parent as fromHash', async () => {
+      const commands = registeredCommands()
+      mockCommitDetails([PARENT])
+
+      await commands.get('git.timeline.viewCommit')?.({
+        id: HASH,
+        command: { arguments: [{ uri: FILE, currentHash: HASH, previousHash: PARENT }] },
+      })
+
+      expect(mocks.executeCommand).toHaveBeenCalledTimes(1)
+      const [command, payload] = mocks.executeCommand.mock.calls[0] as [
+        string,
+        Record<string, unknown>,
+      ]
+      expect(command).toBe('_workbench.showCommitChanges')
+      expect(payload.providerId).toBe('git')
+      expect(payload.commitRef).toBe(HASH)
+      expect('contentCommand' in payload).toBe(false)
+      expect(payload.openExternalCommand).toBe('git-graph.openFileDiff')
+      expect(payload.title).toBe('a1b2c3d — fix crash')
+      expect(payload.subtitle).toContain('Ada')
+      expect(payload.metadata).toEqual({
+        author: 'Ada',
+        authorDate: 1700000000,
+        message: 'fix crash',
+        parents: [PARENT],
+      })
+
+      interface Entry {
+        path: string
+        oldPath: string | null
+        status: string
+        resourceUri: string
+        args: Record<string, unknown>
+      }
+      const files = payload.files as Entry[]
+      expect(files.map((f) => [f.status, f.path, f.oldPath])).toEqual([
+        ['M', 'src/a.ts', null],
+        ['R', 'src/b.ts', 'old/b.ts'],
+      ])
+      for (const f of files) {
+        expect(f.args).toMatchObject({ root: ROOT, fromHash: PARENT, toHash: HASH, path: f.path })
+        expect(f.resourceUri).toBe(pathToFileURL(join(ROOT, f.path)).href)
+      }
+    })
+
+    it('uses an empty fromHash for the root commit', async () => {
+      const commands = registeredCommands()
+      mockCommitDetails([])
+
+      await commands.get('git.timeline.viewCommit')?.({
+        id: HASH,
+        command: { arguments: [{ uri: FILE, currentHash: HASH }] },
+      })
+
+      expect(mocks.gitExec).toHaveBeenCalledWith(
+        expect.arrayContaining(['diff-tree', '--root']),
+        ROOT,
+        undefined,
+      )
+      const payload = mocks.executeCommand.mock.calls[0]?.[1] as {
+        files: { args: { fromHash: string } }[]
+      }
+      expect(payload.files[0]?.args.fromHash).toBe('')
+    })
+
+    it('does nothing when the item carries no hash or the commit cannot be read', async () => {
+      const commands = registeredCommands()
+
+      await commands.get('git.timeline.viewCommit')?.({ label: 'no id' })
+      expect(mocks.executeCommand).not.toHaveBeenCalled()
+
+      mocks.gitExec.mockResolvedValue(gitFail())
+      await commands.get('git.timeline.viewCommit')?.({ id: HASH })
+      expect(mocks.executeCommand).not.toHaveBeenCalled()
+    })
   })
 })

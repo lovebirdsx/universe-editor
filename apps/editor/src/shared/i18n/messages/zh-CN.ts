@@ -88,6 +88,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'view.agents.main': 'Agents',
   'view.agents.mcp': 'MCP 服务器',
   'view.aiDebug': 'AI 调试',
+  'view.commitChanges': '提交变更',
   'view.files': '文件',
   'view.outline': '大纲',
   'view.output': '输出',
@@ -422,6 +423,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.extensionApi.openFolderInNewWindow': '在新窗口中打开文件夹',
   'action.extensionApi.updateConfiguration': '更新配置',
   'action.extensionApi.writeClipboard': '写入剪贴板',
+  'action.commitChanges.show': '显示提交变更',
   'action.gitGraph.focusSearch': '聚焦搜索',
   'action.gitGraph.open': '打开 Git Graph',
   'action.gitGraph.refresh': '刷新',
@@ -829,6 +831,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'outline.sortByPosition': '排序方式：位置',
 
   // --- SCM ---
+  'commitChanges.empty': '从 Blame、时间线或图谱中选择一个提交以查看其变更。',
+  'commitChanges.parents': '父提交: {parents}',
+  'commitChanges.treeLabel': '变更的文件',
   'scm.collapseAll': '全部折叠',
   'scm.commit': '提交',
   'scm.commitActions': '提交操作...',
@@ -890,6 +895,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'gitGraph.newTagName': '新标签名称',
   'gitGraph.noCommitDetails': '没有提交详情。',
   'gitGraph.noFileChanges': '没有文件更改。',
+  'gitGraph.openCommitChanges': '打开提交更改',
   'gitGraph.openFile': '打开文件',
   'gitGraph.openFile.failed': '无法打开 {path}：{error}',
   'gitGraph.openFile.noRepository': '无法打开 {path}：当前未选中 Git 仓库。',
@@ -973,6 +979,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'perforceGraph.noPendingChanges': '没有待定的变更。',
   'perforceGraph.noChangeDetails': '没有变更详情。',
   'perforceGraph.copyId': '复制 changelist 编号',
+  'perforceGraph.openChangelistChanges': '打开 changelist 更改',
   'perforceGraph.unavailable': 'Perforce Graph 不可用——当前目录是否位于 Perforce 工作区内？',
 
   // --- Swarm ---

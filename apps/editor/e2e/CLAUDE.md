@@ -155,6 +155,7 @@ npm --prefix extensions-external/<ext> run e2e   # 单个外部 suite
 - **可见性别用 `toBeVisible()`**：Allotment.Pane 用 CSS visibility 隐藏后代，DOM 可见性会误判。走 ContextKey + `expect.poll`。
 - **长任务命令 fire-and-forget**：`showCommands` 之类内部 await 用户输入的命令必须 `void window.__E2E__!.runCommand(id)`，否则死锁。
 - **URI fsPath 用正斜杠**：本代码库 `URI.fsPath` 返回正斜杠，比对临时目录路径先 `.replace(/\\/g, '/')`。
+- **`page.viewportSize()` 在 Electron 下是 null**（非模拟视口）——位置/视口断言用 `page.evaluate(() => window.innerHeight)`，否则谓词恒 false 且报错看不出原因。
 - **真回归 vs 环境噪声**：失败先按 skill `fix-ci-e2e-flake` 的判定流程定性（已知环境 flake 都登记在它的案例库），别当回归改产品代码；新发现一类 flaky → 往该 skill 追加案例。
 - **在 script 里设 env 要跨平台**：用 `cross-env`（catalog 已加，editor + 各扩展 devDeps 引入）——裸 `FOO=1 cmd` 在 Windows 非 bash 下不生效。
 - **禁止**在 spec 里 mock main/renderer 服务；**禁止**断言 Monaco 内部 DOM（拿状态走 `getActiveEditorUri()` 等探针）。

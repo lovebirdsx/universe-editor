@@ -72,7 +72,9 @@
       { "command": "git.timeline.openDiff", "title": "%git.command.timeline.openDiff.title%", "category": "Git" },
       { "command": "git.timeline.copyCommitId", "title": "%git.command.timeline.copyCommitId.title%", "category": "Git" },
       { "command": "git.timeline.copyCommitMessage", "title": "%git.command.timeline.copyCommitMessage.title%", "category": "Git" },
-      { "command": "git.timeline.openInGraph", "title": "%git.command.timeline.openInGraph.title%", "category": "Git" }
+      { "command": "git.timeline.openInGraph", "title": "%git.command.timeline.openInGraph.title%", "category": "Git" },
+      { "command": "git.timeline.viewCommit", "title": "%git.command.timeline.viewCommit.title%", "category": "Git" },
+      { "command": "git.viewCommit", "title": "%git.command.viewCommit.title%", "category": "Git" }
     ],
     "submenus": [
       { "id": "git.commitMenu", "label": "%git.submenu.commit.label%", "icon": "git-commit" },
@@ -185,9 +187,15 @@
       ],
       "timeline/item/context": [
         { "command": "git.timeline.openDiff", "when": "timelineItem == git:file:commit", "group": "1_diff@1" },
+        { "command": "git.timeline.viewCommit", "when": "timelineItem == git:file:commit", "group": "1_actions@2" },
+        { "command": "git.timeline.viewCommit", "when": "timelineItem == git:file:commit", "group": "inline" },
         { "command": "git.timeline.copyCommitId", "when": "timelineItem == git:file:commit", "group": "2_copy@1" },
         { "command": "git.timeline.copyCommitMessage", "when": "timelineItem == git:file:commit", "group": "2_copy@2" },
         { "command": "git.timeline.openInGraph", "when": "timelineItem == git:file:commit", "group": "3_graph@1" }
+      ],
+      "commandPalette": [
+        { "command": "git.timeline.viewCommit", "when": "false" },
+        { "command": "git.viewCommit", "when": "false" }
       ]
     },
     "keybindings": [

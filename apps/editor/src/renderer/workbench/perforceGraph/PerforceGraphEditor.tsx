@@ -6,15 +6,14 @@
  *  DAG), so the graph is a single lane; it reuses the Git Graph layout engine,
  *  file tree, context menu and stylesheet for a consistent experience.
  *
- *  Clicking a row expands that change's details (description + changed files as a
- *  collapsible tree) inline beneath it; clicking a file opens it in a diff editor
- *  via `perforce-graph.openFileDiff`. A synthetic "pending changes" node at the
- *  top mirrors git's uncommitted node. View state is cached in
- *  `perforceGraphViewState` so re-activating the tab is instant.
+ *  Clicking a row selects the change and pushes its changed files into the
+ *  Commit Changes sidebar view (via the `_workbench.showCommitChanges` bridge);
+ *  clicking the synthetic "pending changes" node at the top reveals the SCM main
+ *  view. View state is cached in `perforceGraphViewState` so re-activating the
+ *  tab is instant.
  *--------------------------------------------------------------------------------------------*/
 
 import {
-  Fragment,
   memo,
   useCallback,
   useDeferredValue,
@@ -25,29 +24,22 @@ import {
   useState,
   type CSSProperties,
   type MouseEvent,
-  type UIEvent,
 } from 'react'
-import { type IEditorInput } from '@universe-editor/platform'
 import {
   autorun,
   ICommandService,
-  IEditorGroupsService,
-  IEditorResolverService,
-  IFileService,
-  INotificationService,
   IStorageService,
-  Severity,
+  IViewDescriptorService,
+  IViewsService,
   StorageScope,
-  URI,
   localize,
+  type IEditorInput,
 } from '@universe-editor/platform'
-import { Eye, FileSymlink, Globe } from 'lucide-react'
+import { Globe } from 'lucide-react'
 import {
   PerforceGraphCommands,
   type P4GraphChangeDto,
   type P4GraphChangeDetailsDto,
-  type P4GraphFileChangeDto,
-  type P4GraphFileDiffRequest,
   type P4GraphLoadOptions,
   type P4GraphLoadResult,
   type P4GraphRepoDto,
@@ -55,15 +47,13 @@ import {
 import { useService, useObservable } from '../useService.js'
 import { IScmService } from '../../services/extensions/ScmService.js'
 import { computeGraphLayout, type GraphGrid } from '../../services/gitGraph/graphLayout.js'
-import { buildFileTree, type FileTreeNode } from '../../services/gitGraph/fileTree.js'
-import { isPreviewablePath } from '../../services/resourcePreview/resourcePreviewSupport.js'
-import { openResourcePreviewInGroup } from '../../services/resourcePreview/openResourcePreview.js'
 import {
   perforceGraphViewState,
-  selectionKey,
   PERFORCE_GRAPH_PAGE_SIZE,
 } from '../../services/perforceGraph/perforceGraphViewState.js'
 import { scmViewState } from '../scm/scmViewState.js'
+import { ShowCommitChangesAction } from '../../actions/commitChangesActions.js'
+import { buildChangePayload } from './commitChangesPayload.js'
 import {
   GitGraphContextMenu,
   type GitGraphMenuItem,
@@ -74,8 +64,6 @@ import styles from '../gitGraph/GitGraphEditor.module.css'
 
 const ROW_HEIGHT = 24
 const GRID: GraphGrid = { x: 14, y: ROW_HEIGHT, offsetX: 12, offsetY: 12 }
-/** Fixed height of the inline detail block; its body scrolls when overflowing. */
-const DETAIL_HEIGHT = 300
 /** Id of the synthetic pending-changes node prepended above the latest change. */
 const PENDING_ID = '*'
 
@@ -100,27 +88,6 @@ function formatDate(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleString()
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  A: localize('gitGraph.status.added', 'Added'),
-  M: localize('gitGraph.status.modified', 'Modified'),
-  D: localize('gitGraph.status.deleted', 'Deleted'),
-  R: localize('gitGraph.status.renamed', 'Renamed'),
-}
-
-function statusClass(status: string): string | undefined {
-  switch (status.charAt(0)) {
-    case 'A':
-      return styles['statusAdded']
-    case 'D':
-      return styles['statusDeleted']
-    case 'M':
-    case 'R':
-      return styles['statusModified']
-    default:
-      return undefined
-  }
-}
-
 /** A thin draggable divider on a column's left edge; reports the horizontal drag
  *  delta so the caller can resize the column. */
 function ColumnResizer({ onResize }: { onResize: (deltaX: number) => void }) {
@@ -143,96 +110,6 @@ function ColumnResizer({ onResize }: { onResize: (deltaX: number) => void }) {
     document.body.style.cursor = 'col-resize'
   }
   return <span className={styles['colResizer']} onMouseDown={onMouseDown} />
-}
-
-function FileTreeView({
-  nodes,
-  collapsed,
-  onToggle,
-  onOpen,
-  onOpenFile,
-  onOpenPreview,
-  depth = 0,
-}: {
-  nodes: readonly FileTreeNode<P4GraphFileChangeDto>[]
-  collapsed: ReadonlySet<string>
-  onToggle: (path: string) => void
-  onOpen: (file: P4GraphFileChangeDto) => void
-  onOpenFile?: (file: P4GraphFileChangeDto) => void
-  onOpenPreview?: (file: P4GraphFileChangeDto) => void
-  depth?: number
-}) {
-  return (
-    <>
-      {nodes.map((node) =>
-        node.kind === 'dir' ? (
-          <Fragment key={`d:${node.path}`}>
-            <button
-              type="button"
-              className={styles['treeRow']}
-              style={{ paddingLeft: depth * 12 + 8 }}
-              onClick={() => onToggle(node.path)}
-            >
-              <span className={styles['chevron']}>{collapsed.has(node.path) ? '▶' : '▼'}</span>
-              <span className={styles['dirName']}>{node.name}</span>
-            </button>
-            {!collapsed.has(node.path) && (
-              <FileTreeView
-                nodes={node.children}
-                collapsed={collapsed}
-                onToggle={onToggle}
-                onOpen={onOpen}
-                {...(onOpenFile !== undefined ? { onOpenFile } : {})}
-                {...(onOpenPreview !== undefined ? { onOpenPreview } : {})}
-                depth={depth + 1}
-              />
-            )}
-          </Fragment>
-        ) : (
-          <div
-            key={`f:${node.file.path}`}
-            className={styles['treeFileRow']}
-            style={{ paddingLeft: depth * 12 + 8 + 14 }}
-            data-tooltip={STATUS_LABEL[node.file.status.charAt(0)] ?? node.file.status}
-            onClick={() => onOpen(node.file)}
-          >
-            <span className={`${styles['fileStatus']} ${statusClass(node.file.status) ?? ''}`}>
-              {node.file.status.charAt(0)}
-            </span>
-            <span className={styles['filePath']}>{node.name}</span>
-            {onOpenPreview && node.file.localPath && isPreviewablePath(node.file.path) && (
-              <button
-                type="button"
-                className={styles['fileActionBtn']}
-                data-tooltip={localize('gitGraph.openPreview', 'Open Preview')}
-                aria-label={localize('gitGraph.openPreview', 'Open Preview')}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onOpenPreview(node.file)
-                }}
-              >
-                <Eye size={14} />
-              </button>
-            )}
-            {onOpenFile && node.file.localPath && (
-              <button
-                type="button"
-                className={styles['fileActionBtn']}
-                data-tooltip={localize('gitGraph.openFile', 'Open File')}
-                aria-label={localize('gitGraph.openFile', 'Open File')}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onOpenFile(node.file)
-                }}
-              >
-                <FileSymlink size={14} />
-              </button>
-            )}
-          </div>
-        ),
-      )}
-    </>
-  )
 }
 
 /** A single change row. Memoised so a selection/scroll/refresh that re-renders
@@ -270,11 +147,9 @@ const ChangeRow = memo(function ChangeRow({
 export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   const commands = useService(ICommandService)
   const scm = useService(IScmService)
-  const editorResolverService = useService(IEditorResolverService)
-  const editorGroupsService = useService(IEditorGroupsService)
-  const fileService = useService(IFileService)
-  const notification = useService(INotificationService)
   const storage = useService(IStorageService)
+  const viewsService = useService(IViewsService)
+  const viewDescriptorService = useService(IViewDescriptorService)
   const [result, setResult] = useState<P4GraphLoadResult | null>(
     () => perforceGraphViewState.result,
   )
@@ -283,19 +158,6 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   const [menu, setMenu] = useState<GitGraphMenuState | null>(null)
 
   const [selection, setSelection] = useState<string[]>(() => perforceGraphViewState.selection)
-  const [details, setDetails] = useState<P4GraphChangeDetailsDto | null>(
-    () => perforceGraphViewState.details,
-  )
-  const [pendingFiles, setPendingFiles] = useState<P4GraphFileChangeDto[] | null>(
-    () => perforceGraphViewState.pendingFiles,
-  )
-  const [panelLoading, setPanelLoading] = useState(false)
-  const [collapsed, setCollapsed] = useState<Set<string>>(
-    () =>
-      new Set(
-        perforceGraphViewState.collapsed[selectionKey(perforceGraphViewState.selection)] ?? [],
-      ),
-  )
 
   const [limit, setLimit] = useState(() => perforceGraphViewState.limit)
   const [columnWidths, setColumnWidths] = useState(() => ({
@@ -313,13 +175,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   queryRef.current = { maxChanges: limit, wholeRepo }
 
   const scrollRef = useRef<HTMLDivElement>(null)
-  const detailBodyRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
-  const fetchedKeyRef = useRef<string | null>(
-    perforceGraphViewState.details || perforceGraphViewState.pendingFiles
-      ? selectionKey(perforceGraphViewState.selection)
-      : null,
-  )
   // Guards against revalidate clobbering the intermediate pages pulled in by
   // revealCommit.
   const revealingRef = useRef(false)
@@ -348,12 +204,6 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   useEffect(() => {
     perforceGraphViewState.selection = selection
   }, [selection])
-  useEffect(() => {
-    perforceGraphViewState.details = details
-  }, [details])
-  useEffect(() => {
-    perforceGraphViewState.pendingFiles = pendingFiles
-  }, [pendingFiles])
   useEffect(() => {
     perforceGraphViewState.limit = limit
   }, [limit])
@@ -398,9 +248,6 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
         if (cancelled || seq !== fetchSeqRef.current) return
         setResult(r ?? null)
         setSelection([])
-        setDetails(null)
-        setPendingFiles(null)
-        fetchedKeyRef.current = null
         if (!r)
           setError(
             localize(
@@ -487,7 +334,6 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
           }
           if (!current?.changes.some((c) => c.id === id)) return
           if (nextLimit !== limit) setLimit(nextLimit)
-          fetchedKeyRef.current = null
           setSelection([id])
           // Scroll now when the row is already rendered (re-reveal of a loaded
           // change commits no state change); otherwise the layout effect picks
@@ -520,32 +366,26 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
 
   // Background reload: refresh data in place without the loading flicker, keeping
   // the current selection when its change still exists.
-  const revalidate = useCallback(
-    (forceDetailRefetch = false) => {
-      // A reveal in progress drives its own paging; a mid-flight revalidate
-      // would clobber the intermediate result and filter out the target.
-      if (revealingRef.current) return
-      const seq = ++fetchSeqRef.current
-      void commands
-        .executeCommand<P4GraphLoadResult>(PerforceGraphCommands.getChanges, queryRef.current)
-        .then((r) => {
-          if (!r || seq !== fetchSeqRef.current) return
-          setError(null)
-          setResult(r)
-          setSelection((prev) => {
-            const next = prev.filter(
-              (id) => id === PENDING_ID || r.changes.some((c) => c.id === id),
-            )
-            return next.length === prev.length && next.every((h, i) => h === prev[i]) ? prev : next
-          })
-          if (forceDetailRefetch) fetchedKeyRef.current = null
+  const revalidate = useCallback(() => {
+    // A reveal in progress drives its own paging; a mid-flight revalidate
+    // would clobber the intermediate result and filter out the target.
+    if (revealingRef.current) return
+    const seq = ++fetchSeqRef.current
+    void commands
+      .executeCommand<P4GraphLoadResult>(PerforceGraphCommands.getChanges, queryRef.current)
+      .then((r) => {
+        if (!r || seq !== fetchSeqRef.current) return
+        setError(null)
+        setResult(r)
+        setSelection((prev) => {
+          const next = prev.filter((id) => id === PENDING_ID || r.changes.some((c) => c.id === id))
+          return next.length === prev.length && next.every((h, i) => h === prev[i]) ? prev : next
         })
-        .catch(() => {
-          // Transient failure — leave the stale view in place.
-        })
-    },
-    [commands],
-  )
+      })
+      .catch(() => {
+        // Transient failure — leave the stale view in place.
+      })
+  }, [commands])
 
   useEffect(() => {
     const start = (): (() => void) | undefined => {
@@ -641,7 +481,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
         return
       }
       if (timer) clearTimeout(timer)
-      timer = setTimeout(() => revalidate(true), AUTO_REFRESH_DEBOUNCE)
+      timer = setTimeout(() => revalidate(), AUTO_REFRESH_DEBOUNCE)
     })
     return () => {
       disposable.dispose()
@@ -653,148 +493,31 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     if (scrollRef.current) scrollRef.current.scrollTop = perforceGraphViewState.scrollTop
   }, [])
 
-  // Load (or rehydrate) the detail/pending contents when the selection changes.
-  const selKey = selectionKey(selection)
-  useEffect(() => {
-    if (selection.length === 0) {
-      setDetails(null)
-      setPendingFiles(null)
-      fetchedKeyRef.current = null
-      return
-    }
-    if (fetchedKeyRef.current === selKey) return
-    let cancelled = false
-    setPanelLoading(true)
-    if (selection.length === 1 && selection[0] === PENDING_ID) {
-      setDetails(null)
-      void commands
-        .executeCommand<P4GraphFileChangeDto[]>(PerforceGraphCommands.getPendingChanges)
-        .then((files) => {
-          if (cancelled) return
-          setPendingFiles(files ?? [])
-          fetchedKeyRef.current = selKey
-        })
-        .finally(() => {
-          if (!cancelled) setPanelLoading(false)
-        })
-    } else {
-      setPendingFiles(null)
-      void commands
-        .executeCommand<P4GraphChangeDetailsDto | null>(
-          PerforceGraphCommands.getChangeDetails,
-          selection[0],
-        )
-        .then((d) => {
-          if (cancelled) return
-          setDetails(d ?? null)
-          fetchedKeyRef.current = selKey
-        })
-        .finally(() => {
-          if (!cancelled) setPanelLoading(false)
-        })
-    }
-    return () => {
-      cancelled = true
-    }
-  }, [commands, selection, selKey])
-
-  useEffect(() => {
-    setCollapsed(new Set(perforceGraphViewState.collapsed[selKey] ?? []))
-  }, [selKey])
-
-  const onDetailScroll = useCallback(
-    (e: UIEvent<HTMLDivElement>) => {
-      perforceGraphViewState.detailScrollTop[selKey] = e.currentTarget.scrollTop
-    },
-    [selKey],
-  )
-  useLayoutEffect(() => {
-    if (panelLoading) return
-    const el = detailBodyRef.current
-    if (el) el.scrollTop = perforceGraphViewState.detailScrollTop[selKey] ?? 0
-  }, [selKey, panelLoading, details, pendingFiles])
-
-  const toggleDir = useCallback(
-    (path: string) => {
-      setCollapsed((prev) => {
-        const next = new Set(prev)
-        if (next.has(path)) next.delete(path)
-        else next.add(path)
-        perforceGraphViewState.collapsed[selKey] = [...next]
-        return next
-      })
-    },
-    [selKey],
-  )
-
-  const onRowClick = useCallback((id: string, _e: MouseEvent) => {
-    setSelection((prev) => (prev.length === 1 && prev[0] === id ? [] : [id]))
-  }, [])
-
-  const openFileDiff = useCallback(
-    (file: P4GraphFileChangeDto) => {
-      const req: P4GraphFileDiffRequest = {
-        depotFile: file.depotFile,
-        status: file.status,
-        rev: file.rev,
-        localPath: file.localPath,
+  // Click-driven sidebar handoff: a plain click shows the change's files in the
+  // Commit Changes view; the pending node reveals the SCM main view. Deselecting
+  // (re-clicking the selected row) leaves the sidebar untouched. This MUST stay
+  // event-driven — deriving it from a `selection` effect would fire on tab
+  // remount, where the restored selection would steal the sidebar.
+  const onRowClick = useCallback(
+    (id: string, _e: MouseEvent) => {
+      const next = selection.length === 1 && selection[0] === id ? [] : [id]
+      setSelection(next)
+      if (next.length === 0) return
+      if (id === PENDING_ID) {
+        viewsService.openViewContainer('workbench.view.scm')
+        viewDescriptorService.setViewCollapsed('workbench.view.scm.main', false)
+        return
       }
-      void commands.executeCommand(PerforceGraphCommands.openFileDiff, req)
-    },
-    [commands],
-  )
-
-  const openPendingFile = useCallback(
-    (file: P4GraphFileChangeDto) => {
-      if (file.localPath) {
-        void commands.executeCommand(PerforceGraphCommands.openWorkingTreeFile, file.localPath)
-      }
-    },
-    [commands],
-  )
-
-  // Open the file's current working-tree copy (not a diff). Perforce resolves
-  // `localPath` to an absolute filesystem path via `p4 where`, so — unlike git
-  // graph, which joins a repo root with a relative path — we open it directly,
-  // going through the resolver so images/markdown route to the right editor.
-  const openSourceFile = useCallback(
-    (file: P4GraphFileChangeDto) => {
-      if (!file.localPath) return
-      const resource = URI.file(file.localPath)
       void (async () => {
-        try {
-          if (!(await fileService.exists(resource))) {
-            notification.notify({
-              severity: Severity.Warning,
-              message: localize(
-                'perforceGraph.openFile.notFound',
-                'Unable to open {path}: the file does not exist in the current workspace. It may have been deleted, moved, or only exist at this revision.',
-                { path: resource.fsPath },
-              ),
-            })
-            return
-          }
-          await editorResolverService.openEditor(resource, { pinned: true })
-        } catch (error) {
-          notification.notify({
-            severity: Severity.Error,
-            message: localize('perforceGraph.openFile.failed', 'Unable to open {path}: {error}', {
-              path: resource.fsPath,
-              error: error instanceof Error ? error.message : String(error),
-            }),
-          })
-        }
+        const details = await commands.executeCommand<P4GraphChangeDetailsDto | null>(
+          PerforceGraphCommands.getChangeDetails,
+          id,
+        )
+        if (!details) return
+        await commands.executeCommand(ShowCommitChangesAction.ID, buildChangePayload(details))
       })()
     },
-    [editorResolverService, fileService, notification],
-  )
-
-  const openPreviewFile = useCallback(
-    (file: P4GraphFileChangeDto) => {
-      if (!file.localPath) return
-      openResourcePreviewInGroup(editorGroupsService.activeGroup, URI.file(file.localPath), false)
-    },
-    [editorGroupsService],
+    [commands, selection, viewsService, viewDescriptorService],
   )
 
   const openChangeMenu = useCallback(
@@ -861,16 +584,6 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     })
   }, [displayChanges, deferredQuery])
 
-  const anchorIndex = useMemo(() => {
-    if (selection.length === 0) return -1
-    const sel = new Set(selection)
-    let idx = -1
-    for (let i = 0; i < filteredChanges.length; i++) {
-      if (sel.has(filteredChanges[i]!.id)) idx = i
-    }
-    return idx
-  }, [selection, filteredChanges])
-
   const layout = useMemo(() => {
     if (!result) return null
     const isFiltering = deferredQuery.trim() !== ''
@@ -880,100 +593,11 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
       parents: filteredIdSet ? c.parents.filter((p) => filteredIdSet.has(p)) : c.parents,
       isUncommitted: c.id === PENDING_ID,
     }))
-    return computeGraphLayout(commits, result.head, {
-      grid: GRID,
-      ...(anchorIndex >= 0 ? { expand: { afterIndex: anchorIndex, height: DETAIL_HEIGHT } } : {}),
-    })
-  }, [result, filteredChanges, anchorIndex, deferredQuery])
+    return computeGraphLayout(commits, result.head, { grid: GRID })
+  }, [result, filteredChanges, deferredQuery])
 
   const graphWidth = layout?.width ?? GRID.offsetX * 2
   const selected = useMemo(() => new Set(selection), [selection])
-  const detailTree = useMemo(() => (details ? buildFileTree(details.files) : []), [details])
-  const pendingTree = useMemo(
-    () => (pendingFiles ? buildFileTree(pendingFiles) : []),
-    [pendingFiles],
-  )
-
-  const renderDetail = () => {
-    if (panelLoading)
-      return <div className={styles['detailEmpty']}>{localize('common.loading', 'Loading…')}</div>
-    if (selection.length === 1 && selection[0] === PENDING_ID) {
-      return (
-        <>
-          <div className={styles['detailHeader']}>
-            <span className={styles['detailTitle']}>
-              {localize('perforceGraph.pendingChanges', 'Pending Changes')}
-            </span>
-            <button
-              type="button"
-              className={styles['detailClose']}
-              onClick={() => setSelection([])}
-              data-tooltip={localize('common.close', 'Close')}
-            >
-              ×
-            </button>
-          </div>
-          <div className={styles['detailBody']} ref={detailBodyRef} onScroll={onDetailScroll}>
-            {pendingFiles && pendingFiles.length === 0 ? (
-              <div className={styles['detailEmpty']}>
-                {localize('perforceGraph.noPendingChanges', 'No pending changes.')}
-              </div>
-            ) : (
-              <FileTreeView
-                nodes={pendingTree}
-                collapsed={collapsed}
-                onToggle={toggleDir}
-                onOpen={openPendingFile}
-                onOpenFile={openSourceFile}
-                onOpenPreview={openPreviewFile}
-              />
-            )}
-          </div>
-        </>
-      )
-    }
-    if (!details)
-      return (
-        <div className={styles['detailEmpty']}>
-          {localize('perforceGraph.noChangeDetails', 'No change details.')}
-        </div>
-      )
-    return (
-      <>
-        <div className={styles['detailHeader']}>
-          <span className={styles['detailTitle']}>
-            #{details.id} · {details.author}
-            {details.client ? ` @${details.client}` : ''} · {formatDate(details.date)}
-          </span>
-          <button
-            type="button"
-            className={styles['detailClose']}
-            onClick={() => setSelection([])}
-            data-tooltip={localize('common.close', 'Close')}
-          >
-            ×
-          </button>
-        </div>
-        <div className={styles['detailBody']} ref={detailBodyRef} onScroll={onDetailScroll}>
-          <pre className={styles['commitBody']}>{details.body}</pre>
-          {details.files.length === 0 ? (
-            <div className={styles['detailEmpty']}>
-              {localize('gitGraph.noFileChanges', 'No file changes.')}
-            </div>
-          ) : (
-            <FileTreeView
-              nodes={detailTree}
-              collapsed={collapsed}
-              onToggle={toggleDir}
-              onOpen={openFileDiff}
-              onOpenFile={openSourceFile}
-              onOpenPreview={openPreviewFile}
-            />
-          )}
-        </div>
-      </>
-    )
-  }
 
   return (
     <div className={styles['gitGraph']} data-testid="perforceGraph-editor">
@@ -1125,20 +749,14 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
                 } as CSSProperties
               }
             >
-              {filteredChanges.map((c, i) => (
-                <Fragment key={c.id}>
-                  <ChangeRow
-                    change={c}
-                    selected={selected.has(c.id)}
-                    onRowClick={onRowClick}
-                    onChangeMenu={openChangeMenu}
-                  />
-                  {i === anchorIndex && (
-                    <div className={styles['detail']} style={{ height: DETAIL_HEIGHT }}>
-                      {renderDetail()}
-                    </div>
-                  )}
-                </Fragment>
+              {filteredChanges.map((c) => (
+                <ChangeRow
+                  key={c.id}
+                  change={c}
+                  selected={selected.has(c.id)}
+                  onRowClick={onRowClick}
+                  onChangeMenu={openChangeMenu}
+                />
               ))}
             </div>
           </div>

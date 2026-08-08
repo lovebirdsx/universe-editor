@@ -39,6 +39,7 @@ import {
   type TimelineProvider,
 } from '@universe-editor/extension-api'
 import { gitExec } from './gitService.js'
+import { buildCommitChangesPayload, revealPathForFile } from './gitGraphSource.js'
 import { localize } from './nls.js'
 import type { Repository } from './repository.js'
 import type { RepositoryManager } from './repositoryManager.js'
@@ -219,6 +220,7 @@ function commitItem(commit: LogCommit, previousHash: string, absPath: string): T
 /** The timeline feature's commands (item click + context menu entries). */
 export function createGitTimelineCommands(
   mgr: RepositoryManager,
+  graph: { current: string },
   log?: (msg: string) => void,
 ): Disposable[] {
   return [
@@ -283,6 +285,25 @@ export function createGitTimelineCommands(
       const id = (item as { id?: string } | undefined)?.id
       if (id) return commands.executeCommand('_workbench.openGitGraph', id)
       return undefined
+    }),
+
+    commands.registerCommand('git.timeline.viewCommit', async (item: unknown) => {
+      const it = item as { id?: string; command?: { arguments?: unknown[] } } | undefined
+      const args = (it?.command?.arguments?.[0] ?? {}) as OpenDiffArg
+      const hash = it?.id ?? args.currentHash
+      if (!hash) {
+        log?.('[git] git.timeline.viewCommit ignored: item has no commit hash')
+        return
+      }
+      const root = mgr.resolveRepo({ resourceUri: args.uri })?.root ?? graph.current
+      const payload = await buildCommitChangesPayload(root, hash, log)
+      if (!payload) return
+      const revealPath = args.uri !== undefined ? revealPathForFile(payload, args.uri) : undefined
+      log?.(`[git] git.timeline.viewCommit: ${hash} in ${root} (${payload.files.length} files)`)
+      await commands.executeCommand('_workbench.showCommitChanges', {
+        ...payload,
+        ...(revealPath !== undefined ? { revealPath } : {}),
+      })
     }),
   ]
 }

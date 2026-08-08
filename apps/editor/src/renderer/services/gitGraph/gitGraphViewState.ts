@@ -11,12 +11,7 @@
  *  editor (its resource is fixed), so a single store object suffices.
  *--------------------------------------------------------------------------------------------*/
 
-import type {
-  GitGraphCommitDetailsDto,
-  GitGraphFileChangeDto,
-  GitGraphLoadResult,
-  GitGraphRepoDto,
-} from '@universe-editor/extensions-common'
+import type { GitGraphLoadResult, GitGraphRepoDto } from '@universe-editor/extensions-common'
 
 /** User-tunable view options, surfaced through the settings popover. */
 export interface GitGraphSettings {
@@ -48,20 +43,12 @@ export interface GitGraphViewState {
   pendingReveal: string | null
   /** Last loaded commit list, or null if never loaded. */
   result: GitGraphLoadResult | null
-  /** Selected commit hash(es): one to expand details, two to compare. */
+  /** Selected commit hash(es): one shown in the Commit Changes view, two to compare. */
   selection: string[]
-  /** Cached details for a single-commit selection. */
-  details: GitGraphCommitDetailsDto | null
-  /** Cached file changes for a two-commit comparison. */
-  compareFiles: GitGraphFileChangeDto[] | null
   /** Vertical scroll offset of the graph body, restored on remount. */
   scrollTop: number
-  /** Vertical scroll offset of the detail panel body, keyed by selection. */
-  detailScrollTop: Record<string, number>
   /** Free-text filter over the loaded commits (message / author / hash). */
   searchQuery: string
-  /** Collapsed directory paths in the detail file tree, keyed by selection. */
-  collapsed: Record<string, string[]>
   /** View options (order / remotes / first-parent). */
   settings: GitGraphSettings
   /** Upper bound on commits to load; raised by "Load more". */
@@ -85,12 +72,8 @@ export const gitGraphViewState: GitGraphViewState = {
   pendingReveal: null,
   result: null,
   selection: [],
-  details: null,
-  compareFiles: null,
   scrollTop: 0,
-  detailScrollTop: {},
   searchQuery: '',
-  collapsed: {},
   settings: {
     order: 'date',
     includeRemotes: true,
@@ -103,9 +86,4 @@ export const gitGraphViewState: GitGraphViewState = {
   },
   repos: [],
   selectedRepo: null,
-}
-
-/** Stable key for the current selection, used to scope collapse state. */
-export function selectionKey(selection: readonly string[]): string {
-  return selection.join('..')
 }

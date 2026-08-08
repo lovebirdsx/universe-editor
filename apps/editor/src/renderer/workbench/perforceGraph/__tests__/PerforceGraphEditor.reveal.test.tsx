@@ -11,10 +11,9 @@ import { act, render } from '@testing-library/react'
 import {
   Event,
   ICommandService,
-  IEditorResolverService,
-  IFileService,
-  INotificationService,
   IStorageService,
+  IViewDescriptorService,
+  IViewsService,
   InstantiationService,
   ServiceCollection,
   observableValue,
@@ -77,18 +76,14 @@ function renderEditor(
     setExtHost: vi.fn(),
     resetSourceControls: vi.fn(),
   } as unknown as IScmService)
-  services.set(IFileService, {
+  services.set(IViewsService, {
     _serviceBrand: undefined,
-    exists: vi.fn(async () => true),
-  } as unknown as IFileService)
-  services.set(IEditorResolverService, {
+    openViewContainer: vi.fn(),
+  } as unknown as IViewsService)
+  services.set(IViewDescriptorService, {
     _serviceBrand: undefined,
-    openEditor: vi.fn(async () => undefined),
-  } as unknown as IEditorResolverService)
-  services.set(INotificationService, {
-    _serviceBrand: undefined,
-    notify: vi.fn(),
-  } as unknown as INotificationService)
+    setViewCollapsed: vi.fn(),
+  } as unknown as IViewDescriptorService)
   services.set(IStorageService, {
     _serviceBrand: undefined,
     get: vi.fn().mockResolvedValue(undefined),
@@ -120,8 +115,6 @@ function resetViewState(): void {
   perforceGraphViewState.pendingReveal = null
   perforceGraphViewState.result = null
   perforceGraphViewState.selection = []
-  perforceGraphViewState.details = null
-  perforceGraphViewState.pendingFiles = null
   perforceGraphViewState.repos = []
   perforceGraphViewState.selectedRepo = null
   perforceGraphViewState.searchQuery = ''

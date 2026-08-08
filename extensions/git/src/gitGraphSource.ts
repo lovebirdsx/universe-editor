@@ -10,6 +10,7 @@
  * rename in extensions-common then breaks this extension's compile immediately.
  */
 import { basename, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type {
   GitGraphTagDto,
   GitGraphRemoteDto,
@@ -25,6 +26,7 @@ import type {
 } from '@universe-editor/extensions-common'
 import { gitExec } from './gitService.js'
 import { discoverRepos, type DiscoverOptions } from './repoDiscovery.js'
+import { normalizeUriArg } from './extension.js'
 import { parseWorktrees } from './worktreeParser.js'
 import { norm } from './pathUtil.js'
 
@@ -60,6 +62,38 @@ export interface GitGraphFileDiffContent {
   original: string
   modified: string
 }
+
+// Local copies of the commit-changes wire shapes (`packages/extensions-common/src/
+// contracts/commitChanges.ts`) — same bundling rationale as the Dto aliases above.
+export interface CommitChangesFileEntry {
+  path: string
+  oldPath: string | null
+  status: string
+  resourceUri: string | null
+  args: unknown
+}
+
+export interface CommitChangesMetadata {
+  author?: string
+  /** Unix seconds. */
+  authorDate?: number
+  message?: string
+  parents?: string[]
+  compareRefs?: { from: string; to: string }
+}
+
+export interface ShowCommitChangesPayload {
+  providerId: string
+  title: string
+  subtitle?: string
+  commitRef: string
+  openExternalCommand: string
+  files: CommitChangesFileEntry[]
+  revealPath?: string
+  metadata?: CommitChangesMetadata
+}
+
+const OPEN_FILE_DIFF_COMMAND = 'git-graph.openFileDiff'
 
 /** The empty tree object — diff base for the very first commit's added files. */
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
@@ -321,29 +355,6 @@ function mergeByDateDesc(commits: GitGraphCommit[], node: GitGraphCommit): void 
   commits.splice(i, 0, node)
 }
 
-/**
- * The working tree's changes vs HEAD: tracked file changes plus untracked files
- * (reported with status `?`). Used by the synthetic "uncommitted changes" node.
- */
-export async function getUncommittedChanges(
-  root: string,
-  log?: (msg: string) => void,
-): Promise<GitGraphFileChange[]> {
-  const tracked = await gitExec(
-    ['diff', '--name-status', '--find-renames', '-z', 'HEAD'],
-    root,
-    log,
-  )
-  const files = tracked.exitCode === 0 ? parseNameStatusZ(tracked.stdout) : []
-  const untracked = await gitExec(['ls-files', '--others', '--exclude-standard', '-z'], root, log)
-  if (untracked.exitCode === 0) {
-    for (const path of untracked.stdout.split('\0').filter(Boolean)) {
-      files.push({ status: '?', path, oldPath: null })
-    }
-  }
-  return files
-}
-
 /** Parse `git diff --name-status -z` output into structured file changes. */
 function parseNameStatusZ(out: string): GitGraphFileChange[] {
   const parts = out.split('\0')
@@ -454,4 +465,67 @@ export async function getFileDiffContent(
     original,
     modified,
   }
+}
+
+/**
+ * Build the commit-changes payload for one commit: per-file metadata only (a
+ * single file's diff is opened on demand via `git-graph.openFileDiff`). A root
+ * commit has no parent, so `fromHash` is empty and the file diff falls back to
+ * the empty tree.
+ */
+export async function buildCommitChangesPayload(
+  root: string,
+  hash: string,
+  log?: (msg: string) => void,
+): Promise<ShowCommitChangesPayload | null> {
+  const details = await getCommitDetails(root, hash, log)
+  if (!details) {
+    log?.(`[git] buildCommitChangesPayload: no details for ${hash} in ${root}`)
+    return null
+  }
+  const fromHash = details.parents[0] ?? ''
+  const subject = details.body.split('\n', 1)[0] ?? ''
+  return {
+    providerId: 'git',
+    title: `${details.hash.slice(0, 7)} — ${subject}`,
+    subtitle: `${details.author} · ${new Date(details.authorDate * 1000).toLocaleString()}`,
+    commitRef: details.hash,
+    openExternalCommand: OPEN_FILE_DIFF_COMMAND,
+    files: details.files.map((f) => ({
+      path: f.path,
+      oldPath: f.oldPath,
+      status: f.status,
+      resourceUri: pathToFileURL(join(root, f.path)).href,
+      args: {
+        root,
+        fromHash,
+        toHash: details.hash,
+        path: f.path,
+        ...(f.oldPath !== null ? { oldPath: f.oldPath } : {}),
+        status: f.status,
+      } satisfies GitGraphFileDiffRequest & { root: string },
+    })),
+    metadata: {
+      author: details.author,
+      authorDate: details.authorDate,
+      message: details.body,
+      parents: details.parents,
+    },
+  }
+}
+
+/**
+ * Match a caller-supplied file uri (string / Uri-like, any case of path the
+ * blame or timeline route passes) against a payload's entries; returns the
+ * entry's `path` so the commit-changes view can scroll to that entry, or
+ * undefined when the file isn't part of the change set.
+ */
+export function revealPathForFile(
+  payload: ShowCommitChangesPayload,
+  fileUri: unknown,
+): string | undefined {
+  const fsPath = normalizeUriArg(fileUri)
+  if (!fsPath) return undefined
+  const href = pathToFileURL(fsPath).href
+  return payload.files.find((entry) => entry.resourceUri === href)?.path
 }

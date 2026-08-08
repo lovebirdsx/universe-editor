@@ -13,6 +13,8 @@ import {
   ICommandService,
   IDialogService,
   IStorageService,
+  IViewDescriptorService,
+  IViewsService,
   InstantiationService,
   ServiceCollection,
   observableValue,
@@ -116,6 +118,14 @@ function renderEditor() {
   services.set(IScmService, makeScmService())
   services.set(IDialogService, makeDialog())
   services.set(IStorageService, makeStorage())
+  services.set(IViewsService, {
+    _serviceBrand: undefined,
+    openViewContainer: vi.fn(),
+  } as unknown as IViewsService)
+  services.set(IViewDescriptorService, {
+    _serviceBrand: undefined,
+    setViewCollapsed: vi.fn(),
+  } as unknown as IViewDescriptorService)
   const instantiation = new InstantiationService(services)
 
   const utils = render(
@@ -144,8 +154,6 @@ afterEach(() => {
   graphCommandStub.dispose()
   gitGraphViewState.result = null
   gitGraphViewState.selection = []
-  gitGraphViewState.details = null
-  gitGraphViewState.compareFiles = null
   gitGraphViewState.repos = []
   gitGraphViewState.selectedRepo = null
   scmViewState.setSelectedRepo(undefined)

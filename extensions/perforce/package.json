@@ -250,6 +250,16 @@
         "command": "perforce.timeline.openInGraph",
         "title": "%perforce.command.timeline.openInGraph.title%",
         "category": "Perforce"
+      },
+      {
+        "command": "perforce.timeline.viewCommit",
+        "title": "%perforce.command.timeline.viewCommit.title%",
+        "category": "Perforce"
+      },
+      {
+        "command": "perforce.viewCommit",
+        "title": "%perforce.command.viewCommit.title%",
+        "category": "Perforce"
       }
     ],
     "submenus": [
@@ -591,6 +601,16 @@
           "group": "1_diff@1"
         },
         {
+          "command": "perforce.timeline.viewCommit",
+          "when": "timelineItem == perforce:file:rev",
+          "group": "1_actions@2"
+        },
+        {
+          "command": "perforce.timeline.viewCommit",
+          "when": "timelineItem == perforce:file:rev",
+          "group": "inline"
+        },
+        {
           "command": "perforce.timeline.copyChangelistNumber",
           "when": "timelineItem == perforce:file:rev",
           "group": "2_copy@1"
@@ -599,6 +619,16 @@
           "command": "perforce.timeline.openInGraph",
           "when": "timelineItem == perforce:file:rev",
           "group": "3_graph@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "perforce.timeline.viewCommit",
+          "when": "false"
+        },
+        {
+          "command": "perforce.viewCommit",
+          "when": "false"
         }
       ]
     },

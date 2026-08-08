@@ -1075,6 +1075,18 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
     'Foreground color for conflicting git resources.',
     'color-scm-conflict',
   ),
+  d(
+    'gitDecoration.deletedResourceForeground',
+    '#c74e39',
+    '#ad0707',
+    'Foreground color for deleted git resources.',
+  ),
+  d(
+    'gitDecoration.renamedResourceForeground',
+    '#73c991',
+    '#007100',
+    'Foreground color for renamed or copied git resources.',
+  ),
 
   // ---------------------------------------------------------------- Merge conflicts
   d(

@@ -4,15 +4,15 @@
  *  graph (SVG) alongside a per-commit row table. Layout comes from graphLayout.ts;
  *  the SVG overlay and the rows share a fixed row height so nodes line up.
  *
- *  Clicking a row expands that commit's details (parents/message/changed files as
- *  a collapsible tree) inline beneath it; Ctrl/Cmd-clicking a second row compares
- *  the two commits. Clicking a file opens it in a diff editor via the
- *  `git-graph.openFileDiff` command. View state (loaded commits, selection, scroll,
- *  collapse) is cached in `gitGraphViewState` so re-activating the tab is instant.
+ *  Clicking a row selects the commit and pushes its changed files into the
+ *  Commit Changes sidebar view (via the `_workbench.showCommitChanges` bridge);
+ *  Ctrl/Cmd-clicking a second row compares the two commits there. Clicking the
+ *  uncommitted node reveals the SCM main view. View state (loaded commits,
+ *  selection, scroll) is cached in `gitGraphViewState` so re-activating the tab
+ *  is instant.
  *--------------------------------------------------------------------------------------------*/
 
 import {
-  Fragment,
   memo,
   useCallback,
   useDeferredValue,
@@ -23,33 +23,28 @@ import {
   useState,
   type CSSProperties,
   type MouseEvent,
-  type UIEvent,
 } from 'react'
-import { type IEditorInput } from '@universe-editor/platform'
 import {
   autorun,
   CommandsRegistry,
   ICommandService,
   IDialogService,
-  IEditorGroupsService,
-  IEditorResolverService,
-  IFileService,
   INotificationService,
   IProgressService,
   IStorageService,
+  IViewDescriptorService,
+  IViewsService,
   ProgressLocation,
   Severity,
   StorageScope,
-  URI,
   localize,
+  type IEditorInput,
 } from '@universe-editor/platform'
-import { Eye, FileSymlink } from 'lucide-react'
 import {
   GitGraphCommands,
   type GitGraphCommitDto,
   type GitGraphCommitDetailsDto,
   type GitGraphFileChangeDto,
-  type GitGraphFileDiffRequest,
   type GitGraphLoadOptions,
   type GitGraphLoadResult,
   type GitGraphRepoDto,
@@ -64,16 +59,14 @@ import {
 } from '../useService.js'
 import { IScmService } from '../../services/extensions/ScmService.js'
 import { computeGraphLayout, type GraphGrid } from '../../services/gitGraph/graphLayout.js'
-import { buildFileTree, type FileTreeNode } from '../../services/gitGraph/fileTree.js'
-import { isPreviewablePath } from '../../services/resourcePreview/resourcePreviewSupport.js'
-import { openResourcePreviewInGroup } from '../../services/resourcePreview/openResourcePreview.js'
 import {
   gitGraphViewState,
-  selectionKey,
   GIT_GRAPH_PAGE_SIZE,
   type GitGraphSettings,
 } from '../../services/gitGraph/gitGraphViewState.js'
 import { scmViewState } from '../scm/scmViewState.js'
+import { ShowCommitChangesAction } from '../../actions/commitChangesActions.js'
+import { buildCommitPayload, buildComparePayload } from './commitChangesPayload.js'
 import {
   GitGraphContextMenu,
   type GitGraphMenuItem,
@@ -92,8 +85,6 @@ import styles from './GitGraphEditor.module.css'
 
 const ROW_HEIGHT = 24
 const GRID: GraphGrid = { x: 14, y: ROW_HEIGHT, offsetX: 12, offsetY: 12 }
-/** Fixed height of the inline detail block; its body scrolls when overflowing. */
-const DETAIL_HEIGHT = 300
 /** Hash of the synthetic working-tree node prepended above HEAD. */
 const UNCOMMITTED_HASH = '*'
 /** Idle delay before an external git change triggers a background reload. */
@@ -131,36 +122,6 @@ function shortHash(hash: string): string {
 function formatDate(unixSeconds: number): string {
   if (!unixSeconds) return ''
   return new Date(unixSeconds * 1000).toLocaleString()
-}
-
-const STATUS_LABEL: Record<string, string> = {
-  A: localize('gitGraph.status.added', 'Added'),
-  M: localize('gitGraph.status.modified', 'Modified'),
-  D: localize('gitGraph.status.deleted', 'Deleted'),
-  R: localize('gitGraph.status.renamed', 'Renamed'),
-  C: localize('gitGraph.status.copied', 'Copied'),
-  T: localize('gitGraph.status.typeChanged', 'Type changed'),
-  U: localize('gitGraph.status.unmerged', 'Unmerged'),
-}
-
-function statusClass(status: string): string | undefined {
-  switch (status.charAt(0)) {
-    case 'A':
-      return styles['statusAdded']
-    case 'D':
-      return styles['statusDeleted']
-    case 'M':
-    case 'R':
-    case 'C':
-    case 'T':
-      return styles['statusModified']
-    default:
-      return undefined
-  }
-}
-
-function toErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 function resolveEffectiveRepoRoot(
@@ -317,96 +278,6 @@ function CommitRefs({
   )
 }
 
-function FileTreeView({
-  nodes,
-  collapsed,
-  onToggle,
-  onOpen,
-  onOpenFile,
-  onOpenPreview,
-  depth = 0,
-}: {
-  nodes: readonly FileTreeNode<GitGraphFileChangeDto>[]
-  collapsed: ReadonlySet<string>
-  onToggle: (path: string) => void
-  onOpen: (file: GitGraphFileChangeDto) => void
-  onOpenFile?: (file: GitGraphFileChangeDto) => void
-  onOpenPreview?: (file: GitGraphFileChangeDto) => void
-  depth?: number
-}) {
-  return (
-    <>
-      {nodes.map((node) =>
-        node.kind === 'dir' ? (
-          <Fragment key={`d:${node.path}`}>
-            <button
-              type="button"
-              className={styles['treeRow']}
-              style={{ paddingLeft: depth * 12 + 8 }}
-              onClick={() => onToggle(node.path)}
-            >
-              <span className={styles['chevron']}>{collapsed.has(node.path) ? '▶' : '▼'}</span>
-              <span className={styles['dirName']}>{node.name}</span>
-            </button>
-            {!collapsed.has(node.path) && (
-              <FileTreeView
-                nodes={node.children}
-                collapsed={collapsed}
-                onToggle={onToggle}
-                onOpen={onOpen}
-                {...(onOpenFile !== undefined ? { onOpenFile } : {})}
-                {...(onOpenPreview !== undefined ? { onOpenPreview } : {})}
-                depth={depth + 1}
-              />
-            )}
-          </Fragment>
-        ) : (
-          <div
-            key={`f:${node.file.path}`}
-            className={styles['treeFileRow']}
-            style={{ paddingLeft: depth * 12 + 8 + 14 }}
-            data-tooltip={STATUS_LABEL[node.file.status.charAt(0)] ?? node.file.status}
-            onClick={() => onOpen(node.file)}
-          >
-            <span className={`${styles['fileStatus']} ${statusClass(node.file.status) ?? ''}`}>
-              {node.file.status.charAt(0)}
-            </span>
-            <span className={styles['filePath']}>{node.name}</span>
-            {onOpenPreview && isPreviewablePath(node.file.path) && (
-              <button
-                type="button"
-                className={styles['fileActionBtn']}
-                data-tooltip={localize('gitGraph.openPreview', 'Open Preview')}
-                aria-label={localize('gitGraph.openPreview', 'Open Preview')}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onOpenPreview(node.file)
-                }}
-              >
-                <Eye size={14} />
-              </button>
-            )}
-            {onOpenFile && (
-              <button
-                type="button"
-                className={styles['fileActionBtn']}
-                data-tooltip={localize('gitGraph.openFile', 'Open File')}
-                aria-label={localize('gitGraph.openFile', 'Open File')}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onOpenFile(node.file)
-                }}
-              >
-                <FileSymlink size={14} />
-              </button>
-            )}
-          </div>
-        ),
-      )}
-    </>
-  )
-}
-
 /** A single commit row. Memoised so a selection/scroll/refresh that re-renders
  *  the parent only reconciles the rows whose `selected` actually flipped — graph
  *  width and column widths are fed via CSS variables on the container (not props)
@@ -467,14 +338,13 @@ const CommitRow = memo(function CommitRow({
 export function GitGraphEditor(_props: { input: IEditorInput }) {
   const commands = useService(ICommandService)
   const dialog = useService(IDialogService)
-  const editorResolverService = useService(IEditorResolverService)
-  const editorGroupsService = useService(IEditorGroupsService)
-  const fileService = useService(IFileService)
   const notification = useService(INotificationService)
   // Optional so unit tests without a progress binding still render the editor.
   const progressService = useOptionalService(IProgressService)
   const scm = useService(IScmService)
   const storage = useService(IStorageService)
+  const viewsService = useService(IViewsService)
+  const viewDescriptorService = useService(IViewDescriptorService)
   const [result, setResult] = useState<GitGraphLoadResult | null>(() => gitGraphViewState.result)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(() => gitGraphViewState.result === null)
@@ -484,18 +354,8 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     (GitGraphBranchPickerState & { onPick: (branch: string) => void }) | null
   >(null)
 
-  // Selected commit(s): one hash to expand details, two to compare.
+  // Selected commit(s): one hash to show in the Commit Changes view, two to compare.
   const [selection, setSelection] = useState<string[]>(() => gitGraphViewState.selection)
-  const [details, setDetails] = useState<GitGraphCommitDetailsDto | null>(
-    () => gitGraphViewState.details,
-  )
-  const [compareFiles, setCompareFiles] = useState<GitGraphFileChangeDto[] | null>(
-    () => gitGraphViewState.compareFiles,
-  )
-  const [panelLoading, setPanelLoading] = useState(false)
-  const [collapsed, setCollapsed] = useState<Set<string>>(
-    () => new Set(gitGraphViewState.collapsed[selectionKey(gitGraphViewState.selection)] ?? []),
-  )
 
   // View options, paging limit, column widths and repo selection. Each mirrors a
   // field in the module-level store so it survives the tab being unmounted.
@@ -528,14 +388,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   }
 
   const scrollRef = useRef<HTMLDivElement>(null)
-  const detailBodyRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
-  // Selection key whose details/compareFiles are already loaded — skips refetch on remount.
-  const fetchedKeyRef = useRef<string | null>(
-    gitGraphViewState.details || gitGraphViewState.compareFiles
-      ? selectionKey(gitGraphViewState.selection)
-      : null,
-  )
   // Guards against revalidate clobbering the intermediate pages pulled in by
   // revealCommit (auto-refresh fires independently of the reveal loop).
   const revealingRef = useRef(false)
@@ -588,12 +441,6 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     gitGraphViewState.selection = selection
   }, [selection])
   useEffect(() => {
-    gitGraphViewState.details = details
-  }, [details])
-  useEffect(() => {
-    gitGraphViewState.compareFiles = compareFiles
-  }, [compareFiles])
-  useEffect(() => {
     gitGraphViewState.settings = settings
   }, [settings])
   useEffect(() => {
@@ -620,11 +467,8 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       .then((r) => {
         if (cancelled || seq !== fetchSeqRef.current) return
         setResult(r ?? null)
-        // A fresh load invalidates the previous selection and its cached detail.
+        // A fresh load invalidates the previous selection.
         setSelection([])
-        setDetails(null)
-        setCompareFiles(null)
-        fetchedKeyRef.current = null
         if (!r)
           setError(
             localize(
@@ -716,7 +560,6 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           }
           if (!current?.commits.some((c) => c.hash === hash)) return
           if (nextLimit !== limit) setLimit(nextLimit)
-          fetchedKeyRef.current = null
           setSelection([hash])
           // Scroll now when the row is already rendered (re-reveal of a loaded
           // commit commits no state change); otherwise the layout effect picks
@@ -750,44 +593,34 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   // Background reload: refresh data in place without the loading flicker, keeping
   // the current selection when its commit still exists. Used by auto-refresh and
   // when re-activating a cached tab (stale-while-revalidate).
-  //
-  // `forceDetailRefetch` re-pulls the open detail panel. Only real git changes
-  // (auto-refresh) need it — the working-tree file list may have changed. When
-  // re-activating a cached tab nothing changed, so refetching would just flash
-  // the open commit's detail ("Loading…" → same data); committed diffs are
-  // immutable anyway.
-  const revalidate = useCallback(
-    (forceDetailRefetch = false) => {
-      // A reveal in progress drives its own paging; a mid-flight auto-refresh
-      // would clobber the intermediate result and filter out the target.
-      if (revealingRef.current) return
-      // The auto-refresh autorun (below) reacts to the SCM provider appearing,
-      // which the git extension does BEFORE registering the git-graph commands —
-      // querying here would warn "command not found" and drop the refresh.
-      if (!CommandsRegistry.getCommand(GitGraphCommands.getCommits)) return
-      const seq = ++fetchSeqRef.current
-      void commands
-        .executeCommand<GitGraphLoadResult>(GitGraphCommands.getCommits, queryRef.current)
-        .then((r) => {
-          if (!r || seq !== fetchSeqRef.current) return
-          setError(null)
-          setResult(r)
-          setSelection((prev) => {
-            const next = prev.filter(
-              (h) => h === UNCOMMITTED_HASH || r.commits.some((c) => c.hash === h),
-            )
-            // Keep the previous array reference when unchanged so the detail
-            // effect's `selection` dependency doesn't re-run needlessly.
-            return next.length === prev.length && next.every((h, i) => h === prev[i]) ? prev : next
-          })
-          if (forceDetailRefetch) fetchedKeyRef.current = null
+  const revalidate = useCallback(() => {
+    // A reveal in progress drives its own paging; a mid-flight auto-refresh
+    // would clobber the intermediate result and filter out the target.
+    if (revealingRef.current) return
+    // The auto-refresh autorun (below) reacts to the SCM provider appearing,
+    // which the git extension does BEFORE registering the git-graph commands —
+    // querying here would warn "command not found" and drop the refresh.
+    if (!CommandsRegistry.getCommand(GitGraphCommands.getCommits)) return
+    const seq = ++fetchSeqRef.current
+    void commands
+      .executeCommand<GitGraphLoadResult>(GitGraphCommands.getCommits, queryRef.current)
+      .then((r) => {
+        if (!r || seq !== fetchSeqRef.current) return
+        setError(null)
+        setResult(r)
+        setSelection((prev) => {
+          const next = prev.filter(
+            (h) => h === UNCOMMITTED_HASH || r.commits.some((c) => c.hash === h),
+          )
+          // Keep the previous array reference when unchanged so memoised rows
+          // don't re-render needlessly.
+          return next.length === prev.length && next.every((h, i) => h === prev[i]) ? prev : next
         })
-        .catch(() => {
-          // A transient failure (e.g. host restarting) leaves the stale view in place.
-        })
-    },
-    [commands],
-  )
+      })
+      .catch(() => {
+        // A transient failure (e.g. host restarting) leaves the stale view in place.
+      })
+  }, [commands])
 
   // The git extension registers the git-graph commands only after it activates,
   // which races a startup-restored tab: executing earlier warns "command not
@@ -896,7 +729,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         return
       }
       if (timer) clearTimeout(timer)
-      timer = setTimeout(() => revalidate(true), AUTO_REFRESH_DEBOUNCE)
+      timer = setTimeout(() => revalidate(), AUTO_REFRESH_DEBOUNCE)
     })
     return () => {
       disposable.dispose()
@@ -908,129 +741,6 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   useLayoutEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = gitGraphViewState.scrollTop
   }, [])
-
-  // Load (or rehydrate) the detail/compare contents when the selection changes.
-  const selKey = selectionKey(selection)
-  useEffect(() => {
-    if (selection.length === 0) {
-      setDetails(null)
-      setCompareFiles(null)
-      fetchedKeyRef.current = null
-      return
-    }
-    if (fetchedKeyRef.current === selKey) return // already have data for this selection
-    let cancelled = false
-    setPanelLoading(true)
-    if (selection.length === 1 && selection[0] === UNCOMMITTED_HASH) {
-      setDetails(null)
-      void commands
-        .executeCommand<GitGraphFileChangeDto[]>(GitGraphCommands.getUncommittedChanges)
-        .then((files) => {
-          if (cancelled) return
-          setCompareFiles(files ?? [])
-          fetchedKeyRef.current = selKey
-        })
-        .finally(() => {
-          if (!cancelled) setPanelLoading(false)
-        })
-    } else if (selection.length === 1) {
-      setCompareFiles(null)
-      void commands
-        .executeCommand<GitGraphCommitDetailsDto | null>(
-          GitGraphCommands.getCommitDetails,
-          selection[0],
-        )
-        .then((d) => {
-          if (cancelled) return
-          setDetails(d ?? null)
-          fetchedKeyRef.current = selKey
-        })
-        .finally(() => {
-          if (!cancelled) setPanelLoading(false)
-        })
-    } else {
-      setDetails(null)
-      void commands
-        .executeCommand<GitGraphFileChangeDto[]>(
-          GitGraphCommands.compareCommits,
-          selection[0],
-          selection[1],
-        )
-        .then((files) => {
-          if (cancelled) return
-          setCompareFiles(files ?? [])
-          fetchedKeyRef.current = selKey
-        })
-        .finally(() => {
-          if (!cancelled) setPanelLoading(false)
-        })
-    }
-    return () => {
-      cancelled = true
-    }
-  }, [commands, selection, selKey])
-
-  // Restore per-selection collapse state.
-  useEffect(() => {
-    setCollapsed(new Set(gitGraphViewState.collapsed[selKey] ?? []))
-  }, [selKey])
-
-  // Persist and restore the detail panel's scroll offset per selection so it
-  // survives tab switches. Restore after the (async) content has rendered.
-  const onDetailScroll = useCallback(
-    (e: UIEvent<HTMLDivElement>) => {
-      gitGraphViewState.detailScrollTop[selKey] = e.currentTarget.scrollTop
-    },
-    [selKey],
-  )
-  useLayoutEffect(() => {
-    if (panelLoading) return
-    const el = detailBodyRef.current
-    if (el) el.scrollTop = gitGraphViewState.detailScrollTop[selKey] ?? 0
-  }, [selKey, panelLoading, details, compareFiles])
-
-  const toggleDir = useCallback(
-    (path: string) => {
-      setCollapsed((prev) => {
-        const next = new Set(prev)
-        if (next.has(path)) next.delete(path)
-        else next.add(path)
-        gitGraphViewState.collapsed[selKey] = [...next]
-        return next
-      })
-    },
-    [selKey],
-  )
-
-  const onRowClick = useCallback((hash: string, e: MouseEvent) => {
-    const multi = e.ctrlKey || e.metaKey
-    setSelection((prev) => {
-      if (multi && prev.length >= 1 && prev[0] !== hash) return [prev[0]!, hash]
-      if (!multi && prev.length === 1 && prev[0] === hash) return []
-      return [hash]
-    })
-  }, [])
-
-  const openFile = useCallback(
-    (file: GitGraphFileChangeDto, fromHash: string, toHash: string) => {
-      const req: GitGraphFileDiffRequest = {
-        fromHash,
-        toHash,
-        path: file.path,
-        status: file.status,
-        ...(file.oldPath ? { oldPath: file.oldPath } : {}),
-      }
-      void commands.executeCommand(GitGraphCommands.openFileDiff, req)
-    },
-    [commands],
-  )
-
-  const openWorkingTreeFile = useCallback(
-    (file: GitGraphFileChangeDto) => {
-      void commands.executeCommand(GitGraphCommands.openWorkingTreeFile, file.path)
-    },
-    [commands],
-  )
 
   const discoverEffectiveRepoRoot = useCallback(async (): Promise<string | null> => {
     const current = resolveEffectiveRepoRoot(repos, selectedRepo)
@@ -1044,71 +754,56 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     return resolveEffectiveRepoRoot(discovered, selectedRepo)
   }, [commands, repos, selectedRepo])
 
-  const openSourceFile = useCallback(
-    (file: GitGraphFileChangeDto) => {
+  // Click-driven sidebar handoff: a plain click shows the commit's changes in the
+  // Commit Changes view, Ctrl/Cmd+click on a second row shows the comparison, and
+  // the uncommitted node reveals the SCM main view. Deselecting (re-clicking the
+  // selected row) leaves the sidebar untouched. This MUST stay event-driven —
+  // deriving it from a `selection` effect would fire on tab remount, where the
+  // restored selection would steal the sidebar from whatever the user is viewing.
+  const onRowClick = useCallback(
+    (hash: string, e: MouseEvent) => {
+      const multi = e.ctrlKey || e.metaKey
+      let next: string[]
+      if (multi && selection.length >= 1 && selection[0] !== hash) next = [selection[0]!, hash]
+      else if (!multi && selection.length === 1 && selection[0] === hash) next = []
+      else next = [hash]
+      setSelection(next)
+      if (next.length === 0) return
+      if (next[0] === UNCOMMITTED_HASH) {
+        viewsService.openViewContainer('workbench.view.scm')
+        viewDescriptorService.setViewCollapsed('workbench.view.scm.main', false)
+        return
+      }
       void (async () => {
         const repoRoot = await discoverEffectiveRepoRoot()
-        if (!repoRoot) {
-          notification.notify({
-            severity: Severity.Warning,
-            message: localize(
-              'gitGraph.openFile.noRepository',
-              'Unable to open {path}: no Git repository is selected.',
-              { path: file.path },
-            ),
-          })
-          return
-        }
-
-        const resource = URI.joinPath(URI.file(repoRoot), file.path)
-        try {
-          if (!(await fileService.exists(resource))) {
-            notification.notify({
-              severity: Severity.Warning,
-              message: localize(
-                'gitGraph.openFile.notFound',
-                'Unable to open {path}: the file does not exist in the current working tree. It may have been deleted, renamed, or only exist in the selected commit.',
-                { path: resource.fsPath },
-              ),
-            })
-            return
-          }
-
-          await editorResolverService.openEditor(resource, { pinned: true })
-        } catch (error) {
-          notification.notify({
-            severity: Severity.Error,
-            message: localize('gitGraph.openFile.failed', 'Unable to open {path}: {error}', {
-              path: resource.fsPath,
-              error: toErrorMessage(error),
-            }),
-          })
+        if (!repoRoot) return
+        if (next.length === 2) {
+          const from = next[0]!
+          const to = next[1]!
+          const files = await commands.executeCommand<GitGraphFileChangeDto[]>(
+            GitGraphCommands.compareCommits,
+            from,
+            to,
+          )
+          if (!files) return
+          await commands.executeCommand(
+            ShowCommitChangesAction.ID,
+            buildComparePayload(repoRoot, from, to, files),
+          )
+        } else {
+          const details = await commands.executeCommand<GitGraphCommitDetailsDto | null>(
+            GitGraphCommands.getCommitDetails,
+            next[0],
+          )
+          if (!details) return
+          await commands.executeCommand(
+            ShowCommitChangesAction.ID,
+            buildCommitPayload(repoRoot, details),
+          )
         }
       })()
     },
-    [discoverEffectiveRepoRoot, editorResolverService, fileService, notification],
-  )
-
-  const openPreviewFile = useCallback(
-    (file: GitGraphFileChangeDto) => {
-      void (async () => {
-        const repoRoot = await discoverEffectiveRepoRoot()
-        if (!repoRoot) {
-          notification.notify({
-            severity: Severity.Warning,
-            message: localize(
-              'gitGraph.openFile.noRepository',
-              'Unable to open {path}: no Git repository is selected.',
-              { path: file.path },
-            ),
-          })
-          return
-        }
-        const resource = URI.joinPath(URI.file(repoRoot), file.path)
-        openResourcePreviewInGroup(editorGroupsService.activeGroup, resource, false)
-      })()
-    },
-    [discoverEffectiveRepoRoot, editorGroupsService, notification],
+    [commands, selection, viewsService, viewDescriptorService, discoverEffectiveRepoRoot],
   )
 
   // Run a mutating op, then revalidate in place so the scroll position and
@@ -1754,18 +1449,6 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     })
   }, [displayCommits, deferredQuery])
 
-  // Index of the row beneath which the inline detail block is rendered. For a
-  // comparison it anchors under the lower (later) of the two selected commits.
-  const anchorIndex = useMemo(() => {
-    if (selection.length === 0) return -1
-    const sel = new Set(selection)
-    let idx = -1
-    for (let i = 0; i < filteredCommits.length; i++) {
-      if (sel.has(filteredCommits[i]!.hash)) idx = i
-    }
-    return idx
-  }, [selection, filteredCommits])
-
   const isFiltering = deferredQuery.trim() !== ''
 
   const layout = useMemo(() => {
@@ -1780,9 +1463,8 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     return computeGraphLayout(commits, result.head, {
       grid: GRID,
       onlyFollowFirstParent: settings.onlyFollowFirstParent,
-      ...(anchorIndex >= 0 ? { expand: { afterIndex: anchorIndex, height: DETAIL_HEIGHT } } : {}),
     })
-  }, [result, filteredCommits, anchorIndex, settings.onlyFollowFirstParent, isFiltering])
+  }, [result, filteredCommits, settings.onlyFollowFirstParent, isFiltering])
 
   const graphWidth = layout?.width ?? GRID.offsetX * 2
   // Lane collapse only applies while searching; the normal view always renders
@@ -1790,135 +1472,6 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   const isCompact = isFiltering && (layout?.laneCount ?? 0) > 6
   const effectiveGraphWidth = isCompact ? GRID.offsetX * 2 : graphWidth
   const selected = useMemo(() => new Set(selection), [selection])
-  const detailTree = useMemo(() => (details ? buildFileTree(details.files) : []), [details])
-  const compareTree = useMemo(
-    () => (compareFiles ? buildFileTree(compareFiles) : []),
-    [compareFiles],
-  )
-  const renderDetail = () => {
-    if (panelLoading)
-      return <div className={styles['detailEmpty']}>{localize('common.loading', 'Loading…')}</div>
-    if (selection.length === 1 && selection[0] === UNCOMMITTED_HASH) {
-      return (
-        <>
-          <div className={styles['detailHeader']}>
-            <span className={styles['detailTitle']}>
-              {localize('gitGraph.uncommittedChanges', 'Uncommitted Changes')}
-            </span>
-            <button
-              type="button"
-              className={styles['detailClose']}
-              onClick={() => setSelection([])}
-              data-tooltip={localize('common.close', 'Close')}
-            >
-              ×
-            </button>
-          </div>
-          <div className={styles['detailBody']} ref={detailBodyRef} onScroll={onDetailScroll}>
-            {compareFiles && compareFiles.length === 0 ? (
-              <div className={styles['detailEmpty']}>
-                {localize('gitGraph.noUncommittedChanges', 'No uncommitted changes.')}
-              </div>
-            ) : (
-              <FileTreeView
-                nodes={compareTree}
-                collapsed={collapsed}
-                onToggle={toggleDir}
-                onOpen={openWorkingTreeFile}
-                onOpenFile={openSourceFile}
-                onOpenPreview={openPreviewFile}
-              />
-            )}
-          </div>
-        </>
-      )
-    }
-    if (selection.length === 2) {
-      return (
-        <>
-          <div className={styles['detailHeader']}>
-            <span className={styles['detailTitle']}>
-              {localize('gitGraph.comparing', 'Comparing {left} ↔ {right}', {
-                left: shortHash(selection[0]!),
-                right: shortHash(selection[1]!),
-              })}
-            </span>
-            <button
-              type="button"
-              className={styles['detailClose']}
-              onClick={() => setSelection([])}
-              data-tooltip={localize('common.close', 'Close')}
-            >
-              ×
-            </button>
-          </div>
-          <div className={styles['detailBody']} ref={detailBodyRef} onScroll={onDetailScroll}>
-            {compareFiles && compareFiles.length === 0 ? (
-              <div className={styles['detailEmpty']}>
-                {localize('gitGraph.noFileChanges', 'No file changes.')}
-              </div>
-            ) : (
-              <FileTreeView
-                nodes={compareTree}
-                collapsed={collapsed}
-                onToggle={toggleDir}
-                onOpen={(f) => openFile(f, selection[0]!, selection[1]!)}
-                onOpenFile={openSourceFile}
-                onOpenPreview={openPreviewFile}
-              />
-            )}
-          </div>
-        </>
-      )
-    }
-    if (!details)
-      return (
-        <div className={styles['detailEmpty']}>
-          {localize('gitGraph.noCommitDetails', 'No commit details.')}
-        </div>
-      )
-    return (
-      <>
-        <div className={styles['detailHeader']}>
-          <span className={styles['detailTitle']}>
-            {shortHash(details.hash)} · {details.author}
-            {details.authorEmail ? ` <${details.authorEmail}>` : ''} ·{' '}
-            {formatDate(details.authorDate)}
-          </span>
-          <button
-            type="button"
-            className={styles['detailClose']}
-            onClick={() => setSelection([])}
-            data-tooltip={localize('common.close', 'Close')}
-          >
-            ×
-          </button>
-        </div>
-        <div className={styles['detailBody']} ref={detailBodyRef} onScroll={onDetailScroll}>
-          {details.parents.length > 0 && (
-            <div className={styles['detailMeta']}>
-              {localize('gitGraph.parents', 'Parents:')} {details.parents.map(shortHash).join(', ')}
-            </div>
-          )}
-          <pre className={styles['commitBody']}>{details.body}</pre>
-          {details.files.length === 0 ? (
-            <div className={styles['detailEmpty']}>
-              {localize('gitGraph.noFileChanges', 'No file changes.')}
-            </div>
-          ) : (
-            <FileTreeView
-              nodes={detailTree}
-              collapsed={collapsed}
-              onToggle={toggleDir}
-              onOpen={(f) => openFile(f, details.parents[0] ?? '', details.hash)}
-              onOpenFile={openSourceFile}
-              onOpenPreview={openPreviewFile}
-            />
-          )}
-        </div>
-      </>
-    )
-  }
 
   return (
     <div className={styles['gitGraph']} data-testid="gitGraph-editor">
@@ -2132,26 +1685,20 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
                 } as CSSProperties
               }
             >
-              {filteredCommits.map((c, i) => (
-                <Fragment key={c.hash}>
-                  <CommitRow
-                    commit={c}
-                    selected={selected.has(c.hash)}
-                    headName={result.headName}
-                    onRowClick={onRowClick}
-                    onCommitMenu={openCommitMenu}
-                    onBranchMenu={openBranchMenu}
-                    onRemoteMenu={openRemoteMenu}
-                    onTagMenu={openTagMenu}
-                    onWorktreeMenu={openWorktreeMenu}
-                    onOverflowMenu={openOverflowMenu}
-                  />
-                  {i === anchorIndex && (
-                    <div className={styles['detail']} style={{ height: DETAIL_HEIGHT }}>
-                      {renderDetail()}
-                    </div>
-                  )}
-                </Fragment>
+              {filteredCommits.map((c) => (
+                <CommitRow
+                  key={c.hash}
+                  commit={c}
+                  selected={selected.has(c.hash)}
+                  headName={result.headName}
+                  onRowClick={onRowClick}
+                  onCommitMenu={openCommitMenu}
+                  onBranchMenu={openBranchMenu}
+                  onRemoteMenu={openRemoteMenu}
+                  onTagMenu={openTagMenu}
+                  onWorktreeMenu={openWorktreeMenu}
+                  onOverflowMenu={openOverflowMenu}
+                />
               ))}
             </div>
           </div>

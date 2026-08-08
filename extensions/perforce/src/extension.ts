@@ -34,6 +34,7 @@ import { WorkspaceWatchController } from './workspaceWatcher.js'
 import { notifyP4Failure, setP4OutputShower, isMissingCli } from './p4Error.js'
 import { changelistIdFromGroupId, RECONCILE_GROUP_ID, type P4Action } from './changelist.js'
 import { statusFromAction, fileDiffRevs, displayPath } from './p4GraphParser.js'
+import { viewCommit as viewChangelist, type P4GraphFileDiffRequest } from './viewCommit.js'
 import { uriToFsPath, norm } from './pathUtil.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
 import { createSwarmLogger } from './swarm/swarmLog.js'
@@ -914,13 +915,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
             } satisfies P4GraphFileChangeDto
           })
         }),
+        // Open Commit: the blame/status-bar route. Resolves the uri's client
+        // (falling back to the graph's current client) and opens the whole
+        // changelist in the commit-changes view.
+        commands.registerCommand('perforce.viewCommit', async (...args: unknown[]) => {
+          await viewChangelist(mgr, graphClient, args[0], args[1], log)
+        }),
         commands.registerCommand('perforce-graph.openFileDiff', async (...args: unknown[]) => {
-          const req = args[0] as {
-            depotFile: string
-            status: string
-            rev: string
-            localPath?: string | null
-          }
+          const req = args[0] as P4GraphFileDiffRequest
           const target = graphClient()
           if (!target) return
           const { left, right } = fileDiffRevs(req.depotFile, req.status, req.rev)

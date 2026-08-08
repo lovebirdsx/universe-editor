@@ -908,6 +908,8 @@ export interface E2EProbe {
   // -- Views / view-container customization probe ---------------------------
   /** Id of the container a view currently lives in (custom location aware). */
   getViewContainerByViewId(viewId: string): string | undefined
+  /** Id of the currently active (visible) view container at a location. */
+  getActiveViewContainerId(location: number): string | undefined
   /** Ids of the views in a container, in display order. */
   getViewIdsByContainer(containerId: string): readonly string[]
   /** Container ids at a location, in display order. */

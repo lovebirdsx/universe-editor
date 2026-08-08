@@ -1738,7 +1738,12 @@ export class PerforceClient {
    * Perforce analogue of git's uncommitted-changes row.
    */
   async getOpenedForGraph(): Promise<
-    { depotFile: string; action: P4Action; rev: string | undefined; localPath: string | null }[]
+    {
+      depotFile: string
+      action: P4Action
+      rev: string | undefined
+      localPath: string | null
+    }[]
   > {
     const opened = await this._openedFiles()
     const localByDepot = await this._whereLocalPaths(opened.map((f) => f.depotFile))

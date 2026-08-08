@@ -71,23 +71,4 @@ describe('computeGraphLayout', () => {
     expect(result.vertices[0]!.isStash).toBe(true)
     expect(result.vertices[1]!.isStash).toBe(false)
   })
-
-  it('shifts rows after an inline expansion gap', () => {
-    const commits: GraphCommitInput[] = [
-      { hash: 'a', parents: ['b'] },
-      { hash: 'b', parents: ['c'] },
-      { hash: 'c', parents: [] },
-    ]
-    const base = computeGraphLayout(commits, 'a', { grid: GRID })
-    const expanded = computeGraphLayout(commits, 'a', {
-      grid: GRID,
-      expand: { afterIndex: 0, height: 300 },
-    })
-    // Total height grows by exactly the gap.
-    expect(expanded.height).toBe(base.height + 300)
-    // The anchor row (index 0) is unchanged; rows after it shift down by the gap.
-    expect(expanded.vertices[0]!.cy).toBe(base.vertices[0]!.cy)
-    expect(expanded.vertices[1]!.cy).toBe(base.vertices[1]!.cy + 300)
-    expect(expanded.vertices[2]!.cy).toBe(base.vertices[2]!.cy + 300)
-  })
 })

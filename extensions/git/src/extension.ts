@@ -22,7 +22,7 @@ import {
   type ExtensionContext,
 } from '@universe-editor/extension-api'
 import { basename, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { RepositoryManager } from './repositoryManager.js'
 import { GitStatusBarController } from './gitStatusBar.js'
 import { commitAmendSmart, commitSmart } from './commitOperations.js'
@@ -39,11 +39,12 @@ import type { Repository } from './repository.js'
 import {
   getCommits as getGitGraphCommits,
   getCommitDetails as getGitGraphCommitDetails,
-  getUncommittedChanges as getGitGraphUncommittedChanges,
   getRepos as getGitGraphRepos,
   getBranches as getGitGraphBranches,
   compareCommits as compareGitGraphCommits,
   getFileDiffContent as getGitGraphFileDiffContent,
+  buildCommitChangesPayload,
+  revealPathForFile,
   type GitGraphLoadOptions,
   type GitGraphFileDiffRequest,
 } from './gitGraphSource.js'
@@ -63,6 +64,38 @@ function resourceLetter(arg: unknown): string | undefined {
 
 function isDirectoryArg(arg: unknown): boolean {
   return (arg as { isDirectory?: boolean } | undefined)?.isDirectory === true
+}
+
+/**
+ * Callers hand a repo file as an extension Uri object, a `file:` URI string, or
+ * a raw fsPath; resolveRepo wants a plain filesystem path. Anything
+ * unrecognizable comes back undefined so the caller falls back to the graph's
+ * current repo.
+ */
+export function normalizeUriArg(arg: unknown): string | undefined {
+  if (typeof arg === 'string') {
+    // Drive letters (`c:\...`) match a URI scheme pattern but are plain fsPaths.
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(arg) && !/^[a-zA-Z]:[\\/]/.test(arg)) {
+      if (!arg.startsWith('file:')) return undefined
+      try {
+        return fileURLToPath(arg)
+      } catch {
+        return undefined
+      }
+    }
+    return arg
+  }
+  if (typeof arg !== 'object' || arg === null) return undefined
+  const uri = arg as { fsPath?: unknown; scheme?: unknown; path?: unknown }
+  if (typeof uri.fsPath === 'string') return uri.fsPath
+  if ((uri.scheme === undefined || uri.scheme === 'file') && typeof uri.path === 'string') {
+    try {
+      return fileURLToPath(`file://${uri.path}`)
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
 }
 
 async function readScanConfig(): Promise<DiscoverOptions> {
@@ -93,7 +126,7 @@ function registerGitGraphStubs(): Disposable[] {
   ]
 }
 
-interface GitEnv {
+export interface GitEnv {
   /** Workspace folder path. */
   readonly root: string
   readonly scanOpts: DiscoverOptions
@@ -125,6 +158,11 @@ function setupRepositories(
   const statusBar = new GitStatusBarController(mgr)
   context.subscriptions.push(statusBar)
 
+  // The repository the Git Graph view currently targets. Defaults to the
+  // status-bar repo; `git-graph.setRepo` switches it to another discovered repo.
+  // Boxed so the command closures below share the mutable reference.
+  const graph = { current: statusBarRoot }
+
   // Timeline — file-history entries for the Explorer Timeline view. One provider
   // serves every discovered repo; each repo refresh invalidates the view's pages.
   // Late-added repos (workspace watcher) attach through the same onDidAdd hook.
@@ -136,7 +174,7 @@ function setupRepositories(
     }),
   )
   context.subscriptions.push(workspace.registerTimelineProvider(['file'], timelineProvider))
-  context.subscriptions.push(...createGitTimelineCommands(mgr, log))
+  context.subscriptions.push(...createGitTimelineCommands(mgr, graph, log))
 
   for (const { root: repoRoot, name, initialized } of found.repos) {
     const isMain = norm(repoRoot) === norm(statusBarRoot)
@@ -146,12 +184,14 @@ function setupRepositories(
   statusBar.refresh()
   for (const repo of mgr.all) void repo.refresh({ fetch: true, silent: true })
 
-  // The repository the Git Graph view currently targets. Defaults to the
-  // status-bar repo; `git-graph.setRepo` switches it to another discovered repo.
-  // Boxed so the command closures below share the mutable reference.
-  const graph = { current: statusBarRoot }
   registerGitCommands(context, env, mgr, graph, statusBar)
   return mgr
+}
+
+/** Box holding the repo the Git Graph view currently targets; command closures
+ *  share the mutable reference so `git-graph.setRepo` re-points them all. */
+export interface GitGraphTarget {
+  current: string
 }
 
 /** The whole git command surface, routed through `mgr` and the Git Graph target box. */
@@ -159,10 +199,15 @@ function registerGitCommands(
   context: ExtensionContext,
   env: GitEnv,
   mgr: RepositoryManager,
-  graph: { current: string },
+  graph: GitGraphTarget,
   statusBar: GitStatusBarController,
-): void {
+): Map<string, (...args: unknown[]) => unknown> {
   const { root, scanOpts, log } = env
+  const registry = new Map<string, (...args: unknown[]) => unknown>()
+  const register = (id: string, handler: (...args: unknown[]) => unknown): Disposable => {
+    registry.set(id, handler)
+    return commands.registerCommand(id, handler)
+  }
 
   // Run a Git Graph mutating op: report failure (with the real git error), refresh
   // SCM, return ok.
@@ -177,38 +222,36 @@ function registerGitCommands(
   context.subscriptions.push(
     // Point argument-less commands (command palette, keybindings, status bar) at
     // the repo the SCM view currently shows. Pushed by the renderer on selection.
-    commands.registerCommand('git.setActiveRepo', (...args: unknown[]) => {
+    register('git.setActiveRepo', (...args: unknown[]) => {
       mgr.setActive(args[0] as string | undefined)
       statusBar.refresh()
     }),
 
-    commands.registerCommand('git.refresh', (arg) =>
-      mgr.resolveRepo(arg)?.refresh({ fetch: true }),
-    ),
+    register('git.refresh', (arg) => mgr.resolveRepo(arg)?.refresh({ fetch: true })),
 
-    commands.registerCommand('git.commit', (arg) => commitSmart(mgr.resolveRepo(arg))),
-    commands.registerCommand('git.commitAmend', (arg) => commitAmendSmart(mgr.resolveRepo(arg))),
-    commands.registerCommand('git.commitAndPush', async (arg) => {
+    register('git.commit', (arg) => commitSmart(mgr.resolveRepo(arg))),
+    register('git.commitAmend', (arg) => commitAmendSmart(mgr.resolveRepo(arg))),
+    register('git.commitAndPush', async (arg) => {
       const repo = mgr.resolveRepo(arg)
       if (await commitSmart(repo)) await repo?.push()
     }),
-    commands.registerCommand('git.commitAndSync', async (arg) => {
+    register('git.commitAndSync', async (arg) => {
       const repo = mgr.resolveRepo(arg)
       if (await commitSmart(repo)) await repo?.sync()
     }),
 
-    commands.registerCommand('git.stage', (arg) => {
+    register('git.stage', (arg) => {
       const path = resourcePath(arg)
       return path ? mgr.resolveRepo(arg)?.stage([path]) : undefined
     }),
-    commands.registerCommand('git.unstage', (arg) => {
+    register('git.unstage', (arg) => {
       const path = resourcePath(arg)
       return path ? mgr.resolveRepo(arg)?.unstage([path]) : undefined
     }),
-    commands.registerCommand('git.stageAll', (arg) => mgr.resolveRepo(arg)?.stageAll()),
-    commands.registerCommand('git.unstageAll', (arg) => mgr.resolveRepo(arg)?.unstageAll()),
+    register('git.stageAll', (arg) => mgr.resolveRepo(arg)?.stageAll()),
+    register('git.unstageAll', (arg) => mgr.resolveRepo(arg)?.unstageAll()),
 
-    commands.registerCommand('git.discard', async (arg) => {
+    register('git.discard', async (arg) => {
       const repo = mgr.resolveRepo(arg)
       const path = resourcePath(arg)
       if (!repo || !path) return
@@ -227,58 +270,48 @@ function registerGitCommands(
       }
     }),
 
-    commands.registerCommand('git.checkout', (arg) => mgr.resolveRepo(arg)?.checkout()),
-    commands.registerCommand('git.createBranch', (arg) => mgr.resolveRepo(arg)?.createBranch()),
-    commands.registerCommand('git.renameBranch', (arg) => mgr.resolveRepo(arg)?.renameBranch()),
-    commands.registerCommand('git.deleteBranch', (arg) => mgr.resolveRepo(arg)?.deleteBranch()),
-    commands.registerCommand('git.merge', (arg) => mgr.resolveRepo(arg)?.merge()),
-    commands.registerCommand('git.rebase', (arg) => mgr.resolveRepo(arg)?.rebase()),
-    commands.registerCommand('git.publishBranch', (arg) => mgr.resolveRepo(arg)?.publishBranch()),
+    register('git.checkout', (arg) => mgr.resolveRepo(arg)?.checkout()),
+    register('git.createBranch', (arg) => mgr.resolveRepo(arg)?.createBranch()),
+    register('git.renameBranch', (arg) => mgr.resolveRepo(arg)?.renameBranch()),
+    register('git.deleteBranch', (arg) => mgr.resolveRepo(arg)?.deleteBranch()),
+    register('git.merge', (arg) => mgr.resolveRepo(arg)?.merge()),
+    register('git.rebase', (arg) => mgr.resolveRepo(arg)?.rebase()),
+    register('git.publishBranch', (arg) => mgr.resolveRepo(arg)?.publishBranch()),
 
-    commands.registerCommand('git.createWorktree', (arg) => mgr.resolveRepo(arg)?.createWorktree()),
-    commands.registerCommand('git.openWorktree', (arg) =>
-      mgr.resolveRepo(arg)?.openWorktree(false),
-    ),
-    commands.registerCommand('git.openWorktreeInNewWindow', (arg) =>
-      mgr.resolveRepo(arg)?.openWorktree(true),
-    ),
-    commands.registerCommand('git.deleteWorktree', (arg) => mgr.resolveRepo(arg)?.deleteWorktree()),
+    register('git.createWorktree', (arg) => mgr.resolveRepo(arg)?.createWorktree()),
+    register('git.openWorktree', (arg) => mgr.resolveRepo(arg)?.openWorktree(false)),
+    register('git.openWorktreeInNewWindow', (arg) => mgr.resolveRepo(arg)?.openWorktree(true)),
+    register('git.deleteWorktree', (arg) => mgr.resolveRepo(arg)?.deleteWorktree()),
 
-    commands.registerCommand('git.sync', (arg) => mgr.resolveRepo(arg)?.sync()),
-    commands.registerCommand('git.pull', (arg) => mgr.resolveRepo(arg)?.pull()),
-    commands.registerCommand('git.pullRebase', (arg) => mgr.resolveRepo(arg)?.pullRebase()),
-    commands.registerCommand('git.pullAutostash', (arg) => mgr.resolveRepo(arg)?.pullAutostash()),
-    commands.registerCommand('git.push', (arg) => mgr.resolveRepo(arg)?.push()),
-    commands.registerCommand('git.pushForce', (arg) => mgr.resolveRepo(arg)?.pushForce()),
-    commands.registerCommand('git.pushTo', (arg) => mgr.resolveRepo(arg)?.pushTo()),
-    commands.registerCommand('git.fetch', (arg) => mgr.resolveRepo(arg)?.fetch()),
-    commands.registerCommand('git.fetchPrune', (arg) =>
-      mgr.resolveRepo(arg)?.fetch({ prune: true }),
-    ),
-    commands.registerCommand('git.undoLastCommit', (arg) => mgr.resolveRepo(arg)?.undoLastCommit()),
-    commands.registerCommand('git.discardAll', (arg) => mgr.resolveRepo(arg)?.discardAll()),
+    register('git.sync', (arg) => mgr.resolveRepo(arg)?.sync()),
+    register('git.pull', (arg) => mgr.resolveRepo(arg)?.pull()),
+    register('git.pullRebase', (arg) => mgr.resolveRepo(arg)?.pullRebase()),
+    register('git.pullAutostash', (arg) => mgr.resolveRepo(arg)?.pullAutostash()),
+    register('git.push', (arg) => mgr.resolveRepo(arg)?.push()),
+    register('git.pushForce', (arg) => mgr.resolveRepo(arg)?.pushForce()),
+    register('git.pushTo', (arg) => mgr.resolveRepo(arg)?.pushTo()),
+    register('git.fetch', (arg) => mgr.resolveRepo(arg)?.fetch()),
+    register('git.fetchPrune', (arg) => mgr.resolveRepo(arg)?.fetch({ prune: true })),
+    register('git.undoLastCommit', (arg) => mgr.resolveRepo(arg)?.undoLastCommit()),
+    register('git.discardAll', (arg) => mgr.resolveRepo(arg)?.discardAll()),
 
-    commands.registerCommand('git.stash', (arg) => mgr.resolveRepo(arg)?.stashPush()),
-    commands.registerCommand('git.stashIncludeUntracked', (arg) =>
-      mgr.resolveRepo(arg)?.stashPush(true),
-    ),
-    commands.registerCommand('git.stashApply', (arg) => mgr.resolveRepo(arg)?.stashApply()),
-    commands.registerCommand('git.stashPop', (arg) => mgr.resolveRepo(arg)?.stashApply(true)),
-    commands.registerCommand('git.stashDrop', (arg) => mgr.resolveRepo(arg)?.stashDrop()),
+    register('git.stash', (arg) => mgr.resolveRepo(arg)?.stashPush()),
+    register('git.stashIncludeUntracked', (arg) => mgr.resolveRepo(arg)?.stashPush(true)),
+    register('git.stashApply', (arg) => mgr.resolveRepo(arg)?.stashApply()),
+    register('git.stashPop', (arg) => mgr.resolveRepo(arg)?.stashApply(true)),
+    register('git.stashDrop', (arg) => mgr.resolveRepo(arg)?.stashDrop()),
 
-    commands.registerCommand('git.addRemote', (arg) => mgr.resolveRepo(arg)?.addRemote()),
-    commands.registerCommand('git.removeRemote', (arg) => mgr.resolveRepo(arg)?.removeRemote()),
+    register('git.addRemote', (arg) => mgr.resolveRepo(arg)?.addRemote()),
+    register('git.removeRemote', (arg) => mgr.resolveRepo(arg)?.removeRemote()),
 
-    commands.registerCommand('git.createTag', (arg) => mgr.resolveRepo(arg)?.createTag()),
-    commands.registerCommand('git.deleteTag', (arg) => mgr.resolveRepo(arg)?.deleteTag()),
+    register('git.createTag', (arg) => mgr.resolveRepo(arg)?.createTag()),
+    register('git.deleteTag', (arg) => mgr.resolveRepo(arg)?.deleteTag()),
 
-    commands.registerCommand('git.submoduleUpdateInit', (arg) =>
-      mgr.resolveRepo(arg)?.submoduleUpdateInit(),
-    ),
-    commands.registerCommand('git.submoduleSync', (arg) => mgr.resolveRepo(arg)?.submoduleSync()),
+    register('git.submoduleUpdateInit', (arg) => mgr.resolveRepo(arg)?.submoduleUpdateInit()),
+    register('git.submoduleSync', (arg) => mgr.resolveRepo(arg)?.submoduleSync()),
 
     // Git Graph — read-only data source for the renderer's Git Graph editor.
-    commands.registerCommand('git-graph.getRepos', async () => {
+    register('git-graph.getRepos', async () => {
       const list = await getGitGraphRepos(root, scanOpts, log)
       // Surface the current graph root first so the renderer can treat repos[0]
       // as "the default repo" — it skips a redundant reload when the SCM view
@@ -287,36 +320,31 @@ function registerGitCommands(
         norm(a.root) === norm(graph.current) ? -1 : norm(b.root) === norm(graph.current) ? 1 : 0,
       )
     }),
-    commands.registerCommand('git-graph.setRepo', (...args: unknown[]) => {
+    register('git-graph.setRepo', (...args: unknown[]) => {
       const next = args[0] as string
       if (next) graph.current = next
       return true
     }),
-    commands.registerCommand('git-graph.getCommits', (...args: unknown[]) => {
+    register('git-graph.getCommits', (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as GitGraphLoadOptions
       return getGitGraphCommits(graph.current, { ...opts, workspaceRoot: root }, log)
     }),
-    commands.registerCommand('git-graph.getCommitDetails', (...args: unknown[]) => {
+    register('git-graph.getCommitDetails', (...args: unknown[]) => {
       const hash = args[0] as string
       return getGitGraphCommitDetails(graph.current, hash, log)
     }),
-    commands.registerCommand('git-graph.getUncommittedChanges', () =>
-      getGitGraphUncommittedChanges(graph.current, log),
-    ),
-    commands.registerCommand('git-graph.compareCommits', (...args: unknown[]) => {
+    register('git-graph.compareCommits', (...args: unknown[]) => {
       const [from, to] = args as [string, string]
       return compareGitGraphCommits(graph.current, from, to, log)
     }),
-    commands.registerCommand('git-graph.getBranches', () =>
-      getGitGraphBranches(graph.current, log),
-    ),
-    commands.registerCommand('git-graph.openWorkingTreeFile', (...args: unknown[]) => {
+    register('git-graph.getBranches', () => getGitGraphBranches(graph.current, log)),
+    register('git-graph.openWorkingTreeFile', (...args: unknown[]) => {
       const path = args[0] as string
       return mgr.resolveRepo({ rootUri: graph.current })?.openChange(join(graph.current, path))
     }),
-    commands.registerCommand('git-graph.openFileDiff', async (...args: unknown[]) => {
+    register('git-graph.openFileDiff', async (...args: unknown[]) => {
       const req = args[0] as GitGraphFileDiffRequest
-      const content = await getGitGraphFileDiffContent(graph.current, req, log)
+      const content = await getGitGraphFileDiffContent(req.root ?? graph.current, req, log)
       await commands.executeCommand('_workbench.openDiff', {
         title: content.title,
         originalUri: pathToFileURL(content.path).href,
@@ -327,8 +355,27 @@ function registerGitCommands(
         openableUri: pathToFileURL(content.path).href,
       })
     }),
+    register('git.viewCommit', async (...args: unknown[]) => {
+      const [uriArg, hash, revealUri] = args as [unknown, string | undefined, unknown]
+      if (typeof hash !== 'string' || !hash) {
+        log(`[git] git.viewCommit ignored: missing hash`)
+        return
+      }
+      const root = mgr.resolveRepo({ resourceUri: normalizeUriArg(uriArg) })?.root ?? graph.current
+      const payload = await buildCommitChangesPayload(root, hash, log)
+      if (!payload) return
+      // Scroll the opened view to the caller's file: the reveal uri wins
+      // (VSCode's history-view convention), else the first argument is often
+      // the blamed/timeline file itself.
+      const revealPath = revealPathForFile(payload, revealUri ?? uriArg)
+      log(`[git] git.viewCommit: ${hash} in ${root} (${payload.files.length} files)`)
+      await commands.executeCommand('_workbench.showCommitChanges', {
+        ...payload,
+        ...(revealPath !== undefined ? { revealPath } : {}),
+      })
+    }),
 
-    commands.registerCommand('git-graph.openWorktree', async (...args: unknown[]) => {
+    register('git-graph.openWorktree', async (...args: unknown[]) => {
       const [path, newWindow] = args as [string, boolean]
       if (!path) return
       await commands.executeCommand(
@@ -336,12 +383,12 @@ function registerGitCommands(
         path,
       )
     }),
-    commands.registerCommand('git-graph.deleteWorktree', async (...args: unknown[]) => {
+    register('git-graph.deleteWorktree', async (...args: unknown[]) => {
       const path = args[0] as string
       if (!path) return
       await mgr.resolveRepo({ rootUri: graph.current })?.removeWorktreeAt(path, basename(path))
     }),
-    commands.registerCommand('git-graph.syncWorktrees', async (...args: unknown[]) => {
+    register('git-graph.syncWorktrees', async (...args: unknown[]) => {
       const [targetBranch, worktrees, force] = args as [string, gga.SyncWorktreeRef[], boolean?]
       const result = await gga.syncWorktreesToBranch(
         targetBranch,
@@ -356,49 +403,49 @@ function registerGitCommands(
     // Git Graph — mutating operations targeting a right-clicked object. Each runs
     // git, surfaces failures, then refreshes the SCM view; returns ok to the
     // renderer, which reloads the graph afterwards.
-    commands.registerCommand('git-graph.checkout', (...a: unknown[]) =>
+    register('git-graph.checkout', (...a: unknown[]) =>
       finishOp('checkout', gga.checkout(graph.current, a[0] as string, log)),
     ),
-    commands.registerCommand('git-graph.cherrypick', (...a: unknown[]) =>
+    register('git-graph.cherrypick', (...a: unknown[]) =>
       finishOp('cherry-pick', gga.cherrypick(graph.current, a[0] as string, log)),
     ),
-    commands.registerCommand('git-graph.cherryPickToBranch', (...a: unknown[]) =>
+    register('git-graph.cherryPickToBranch', (...a: unknown[]) =>
       finishOp(
         'cherry-pick to branch',
         gga.cherryPickToBranch(graph.current, a[0] as string, a[1] as string, log),
       ),
     ),
-    commands.registerCommand('git-graph.revert', (...a: unknown[]) =>
+    register('git-graph.revert', (...a: unknown[]) =>
       finishOp('revert', gga.revert(graph.current, a[0] as string, log)),
     ),
-    commands.registerCommand('git-graph.reset', (...a: unknown[]) =>
+    register('git-graph.reset', (...a: unknown[]) =>
       finishOp('reset', gga.reset(graph.current, a[0] as string, a[1] as gga.ResetMode, log)),
     ),
-    commands.registerCommand('git-graph.merge', (...a: unknown[]) =>
+    register('git-graph.merge', (...a: unknown[]) =>
       finishOp('merge', gga.merge(graph.current, a[0] as string, log)),
     ),
-    commands.registerCommand('git-graph.rebase', (...a: unknown[]) =>
+    register('git-graph.rebase', (...a: unknown[]) =>
       finishOp('rebase', gga.rebase(graph.current, a[0] as string, log)),
     ),
-    commands.registerCommand('git-graph.createBranch', (...a: unknown[]) =>
+    register('git-graph.createBranch', (...a: unknown[]) =>
       finishOp(
         'create branch',
         gga.createBranch(graph.current, a[0] as string, a[1] as string, a[2] !== false, log),
       ),
     ),
-    commands.registerCommand('git-graph.renameBranch', (...a: unknown[]) =>
+    register('git-graph.renameBranch', (...a: unknown[]) =>
       finishOp(
         'rename branch',
         gga.renameBranch(graph.current, a[0] as string, a[1] as string, log),
       ),
     ),
-    commands.registerCommand('git-graph.deleteBranch', (...a: unknown[]) =>
+    register('git-graph.deleteBranch', (...a: unknown[]) =>
       finishOp(
         'delete branch',
         gga.deleteBranch(graph.current, a[0] as string, a[1] === true, log),
       ),
     ),
-    commands.registerCommand('git-graph.pushBranch', (...a: unknown[]) =>
+    register('git-graph.pushBranch', (...a: unknown[]) =>
       finishOp(
         'push branch',
         gga.pushBranch(
@@ -410,16 +457,16 @@ function registerGitCommands(
         ),
       ),
     ),
-    commands.registerCommand('git-graph.checkoutRemote', (...a: unknown[]) =>
+    register('git-graph.checkoutRemote', (...a: unknown[]) =>
       finishOp('checkout', gga.checkoutRemote(graph.current, a[0] as string, a[1] as string, log)),
     ),
-    commands.registerCommand('git-graph.resetBranchToRemote', (...a: unknown[]) =>
+    register('git-graph.resetBranchToRemote', (...a: unknown[]) =>
       finishOp(
         'reset branch',
         gga.resetBranchToRemote(graph.current, a[0] as string, a[1] as string, log),
       ),
     ),
-    commands.registerCommand('git-graph.deleteRemoteBranch', (...a: unknown[]) => {
+    register('git-graph.deleteRemoteBranch', (...a: unknown[]) => {
       const name = a[0] as string
       const slashIdx = name.indexOf('/')
       if (slashIdx === -1) return false
@@ -430,7 +477,7 @@ function registerGitCommands(
         gga.deleteRemoteBranch(graph.current, remote, branch, log),
       )
     }),
-    commands.registerCommand('git-graph.createTag', (...a: unknown[]) =>
+    register('git-graph.createTag', (...a: unknown[]) =>
       finishOp(
         'create tag',
         gga.createTag(
@@ -442,26 +489,26 @@ function registerGitCommands(
         ),
       ),
     ),
-    commands.registerCommand('git-graph.deleteTag', (...a: unknown[]) =>
+    register('git-graph.deleteTag', (...a: unknown[]) =>
       finishOp('delete tag', gga.deleteTag(graph.current, a[0] as string, log)),
     ),
-    commands.registerCommand('git-graph.pushTag', (...a: unknown[]) =>
+    register('git-graph.pushTag', (...a: unknown[]) =>
       finishOp(
         'push tag',
         gga.pushTag(graph.current, a[0] as string, (a[1] as string) || 'origin', log),
       ),
     ),
-    commands.registerCommand('git-graph.stashApply', (...a: unknown[]) =>
+    register('git-graph.stashApply', (...a: unknown[]) =>
       finishOp('stash apply', gga.stashApply(graph.current, a[0] as string, log)),
     ),
-    commands.registerCommand('git-graph.stashPop', (...a: unknown[]) =>
+    register('git-graph.stashPop', (...a: unknown[]) =>
       finishOp('stash pop', gga.stashPop(graph.current, a[0] as string, log)),
     ),
-    commands.registerCommand('git-graph.stashDrop', (...a: unknown[]) =>
+    register('git-graph.stashDrop', (...a: unknown[]) =>
       finishOp('stash drop', gga.stashDrop(graph.current, a[0] as string, log)),
     ),
 
-    commands.registerCommand('git.getBlame', (...args: unknown[]) => {
+    register('git.getBlame', (...args: unknown[]) => {
       const path = args[0] as string
       const ignoreWhitespace = args[1] === true
       const repo = mgr.resolveRepo({ resourceUri: path })
@@ -469,24 +516,24 @@ function registerGitCommands(
       return getBlame(repo.root, path, { ignoreWhitespace }, log)
     }),
 
-    commands.registerCommand('git.getCommitDiff', (arg) => mgr.resolveRepo(arg)?.getCommitDiff()),
-    commands.registerCommand('git.getCommitGenerationContext', (arg) =>
+    register('git.getCommitDiff', (arg) => mgr.resolveRepo(arg)?.getCommitDiff()),
+    register('git.getCommitGenerationContext', (arg) =>
       mgr.resolveRepo(arg)?.getCommitGenerationContext(),
     ),
-    commands.registerCommand('git.setCommitMessage', (...args: unknown[]) => {
+    register('git.setCommitMessage', (...args: unknown[]) => {
       const [arg, message] = args as [unknown, string]
       const repo = mgr.resolveRepo(arg)
       if (repo) repo.commitMessage = message
     }),
 
-    commands.registerCommand('git.getHeadContent', (...args: unknown[]) => {
+    register('git.getHeadContent', (...args: unknown[]) => {
       const path = args[0] as string
       const repo = mgr.resolveRepo({ resourceUri: path })
       if (!repo || !path) return null
       return repo.getHeadContent(path)
     }),
 
-    commands.registerCommand('git.checkIgnore', async (...args: unknown[]) => {
+    register('git.checkIgnore', async (...args: unknown[]) => {
       const paths = Array.isArray(args[0]) ? (args[0] as string[]) : []
       const byRepo = new Map<Repository, string[]>()
       for (const path of paths) {
@@ -504,14 +551,14 @@ function registerGitCommands(
       return ignored
     }),
 
-    commands.registerCommand('git.stageChange', (...args: unknown[]) => {
+    register('git.stageChange', (...args: unknown[]) => {
       const [path, startLine, endLine] = args as [string, number, number]
       const repo = mgr.resolveRepo({ resourceUri: path })
       if (!repo || !path) return false
       return repo.stageChange(path, startLine, endLine)
     }),
 
-    commands.registerCommand('git.openChange', async (...args: unknown[]) => {
+    register('git.openChange', async (...args: unknown[]) => {
       const [arg, options] = args as [
         unknown,
         ({ pinned?: boolean; preserveFocus?: boolean } | undefined)?,
@@ -530,19 +577,30 @@ function registerGitCommands(
         : undefined
     }),
 
-    commands.registerCommand('git.openMergeEditor', async (...args: unknown[]) => {
+    register('git.openMergeEditor', async (...args: unknown[]) => {
       const path = resourcePath(args[0])
       if (!path) return
       await mgr.resolveRepo({ resourceUri: path })?.openMergeEditor(path)
     }),
 
-    commands.registerCommand('git.openFile', async (...args: unknown[]) => {
+    register('git.openFile', async (...args: unknown[]) => {
       const path =
         resourcePath(args[0]) ??
         (await commands.executeCommand<string | undefined>('_workbench.getActiveEditorFile'))
       if (path) await commands.executeCommand('_workbench.openFile', path)
     }),
   )
+  return registry
+}
+
+/** Test seam: the git command surface without `activate`'s discovery/watcher. */
+export function createGitCommandsForTest(
+  mgr: RepositoryManager,
+  graph: GitGraphTarget,
+  env: GitEnv,
+): Map<string, (...args: unknown[]) => unknown> {
+  const context = { subscriptions: [] as Disposable[] } as unknown as ExtensionContext
+  return registerGitCommands(context, env, mgr, graph, {} as GitStatusBarController)
 }
 
 export async function activate(context: ExtensionContext): Promise<void> {

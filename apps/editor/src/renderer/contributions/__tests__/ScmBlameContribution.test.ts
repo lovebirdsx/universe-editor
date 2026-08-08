@@ -442,15 +442,17 @@ describe('ScmBlameContribution', () => {
       await flushMicrotasks()
 
       const withGraph = statusBar.entries.get().find((e) => e.entry.text.includes('Ada'))
-      expect(withGraph?.entry.command).toBe('scm.blame.openCommit')
+      expect(withGraph?.entry.command).toBe('scm.blame.openCommitChanges')
     } finally {
       regs.forEach((r) => r.dispose())
     }
   })
 
-  it('renders blame without a click-through when the provider has no graph view', async () => {
-    const { inst, statusBar, active } = setup()
-    const reg = CommandsRegistry.registerCommand(GET_BLAME, () => blameResult('Ada'))
+  it('renders blame without a click-through when the provider has neither viewCommit nor a graph view', async () => {
+    // git/perforce hardcode their viewCommit id, so a provider with no
+    // click-through at all must be a third-party one (probed by convention).
+    const { inst, statusBar, active } = setup([{ id: 'hg', rootUri: '/ws/git' }])
+    const reg = CommandsRegistry.registerCommand(blameCommandId('hg'), () => blameResult('Ada'))
     try {
       const { input } = openFile(inst)
       active.set(input, undefined)
@@ -518,7 +520,7 @@ describe('ScmBlameContribution', () => {
     }
   })
 
-  it('serves a hover whose commit hash is a trusted command link to the graph', async () => {
+  it('serves a hover whose commit hash is a trusted command link to the commit changes', async () => {
     const { inst, active, getHoverProvider } = setup()
     const regs = [
       CommandsRegistry.registerCommand(GET_BLAME, () => blameResult('Ada')),
@@ -536,8 +538,91 @@ describe('ScmBlameContribution', () => {
       const hover = await provider!.provideHover(editor.getModel(), { lineNumber: 1, column: 5 })
       const value = hover?.contents[0]?.value ?? ''
       const expectedArgs = encodeURIComponent(JSON.stringify(['b'.repeat(40), 'git']))
+      expect(value).toContain(`command:scm.blame.openCommitChanges?${expectedArgs}`)
       expect(value).toContain(`command:scm.blame.openCommit?${expectedArgs}`)
       expect(hover?.contents[0]?.isTrusted).toBe(true)
+    } finally {
+      regs.forEach((r) => r.dispose())
+    }
+  })
+
+  it('status-bar entry routes to the provider viewCommit command when one is registered', async () => {
+    const { inst, statusBar, active } = setup()
+    const viewCommit = vi.fn()
+    const regs = [
+      CommandsRegistry.registerCommand(GET_BLAME, () => blameResult('Ada')),
+      CommandsRegistry.registerCommand('git.viewCommit', viewCommit),
+    ]
+    try {
+      const { input } = openFile(inst)
+      active.set(input, undefined)
+      await flushMicrotasks()
+
+      const entry = statusBar.entries.get().find((e) => e.entry.text.includes('Ada'))
+      expect(entry?.entry.command).toBe('scm.blame.openCommitChanges')
+
+      // Status-bar entries carry no arguments — the handler falls back to the
+      // current line's hash/provider and passes the active file as a URI string.
+      await CommandsRegistry.getCommand('scm.blame.openCommitChanges')!.handler({} as never)
+      expect(viewCommit).toHaveBeenCalledWith(
+        expect.anything(),
+        URI.file('/ws/git/a.txt').toString(),
+        'b'.repeat(40),
+      )
+    } finally {
+      regs.forEach((r) => r.dispose())
+    }
+  })
+
+  it('scm.blame.openCommitChanges routes an explicit hash+provider to the provider viewCommit', async () => {
+    setup([
+      { id: 'git', rootUri: '/ws/git' },
+      { id: 'perforce', rootUri: '/ws' },
+    ])
+    const gitViewCommit = vi.fn()
+    const p4ViewCommit = vi.fn()
+    const regs = [
+      CommandsRegistry.registerCommand('git.viewCommit', gitViewCommit),
+      CommandsRegistry.registerCommand('perforce.viewCommit', p4ViewCommit),
+    ]
+    try {
+      const handler = CommandsRegistry.getCommand('scm.blame.openCommitChanges')!.handler
+
+      await handler({} as never, 'abc123', 'git')
+      expect(gitViewCommit).toHaveBeenCalledWith(expect.anything(), undefined, 'abc123')
+
+      await handler({} as never, '4521', 'perforce')
+      expect(p4ViewCommit).toHaveBeenCalledWith(expect.anything(), undefined, '4521')
+
+      // A third-party provider is routed when it follows the
+      // `<providerId>.viewCommit` convention (probed in the registry).
+      const hgViewCommit = vi.fn()
+      const hgReg = CommandsRegistry.registerCommand('hg.viewCommit', hgViewCommit)
+      try {
+        await handler({} as never, 'cafe99', 'hg')
+        expect(hgViewCommit).toHaveBeenCalledWith(expect.anything(), undefined, 'cafe99')
+      } finally {
+        hgReg.dispose()
+      }
+    } finally {
+      regs.forEach((r) => r.dispose())
+    }
+  })
+
+  it('scm.blame.openCommitChanges falls back to the graph when the provider has no viewCommit', async () => {
+    setup([
+      { id: 'git', rootUri: '/ws/git' },
+      { id: 'perforce', rootUri: '/ws' },
+    ])
+    const otherView = vi.fn()
+    const regs = [CommandsRegistry.registerCommand('hg-graph.view', otherView)]
+    try {
+      const handler = CommandsRegistry.getCommand('scm.blame.openCommitChanges')!.handler
+
+      // hg contributes no hg.viewCommit → the `<providerId>-graph.view`
+      // convention (no reveal argument), same as scm.blame.openCommit.
+      await handler({} as never, 'cafe99', 'hg')
+      expect(otherView).toHaveBeenCalledWith(expect.anything(), 'cafe99')
     } finally {
       regs.forEach((r) => r.dispose())
     }

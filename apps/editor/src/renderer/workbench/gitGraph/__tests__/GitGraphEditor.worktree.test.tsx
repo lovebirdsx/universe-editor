@@ -13,6 +13,8 @@ import {
   IDialogService,
   IProgressService,
   IStorageService,
+  IViewDescriptorService,
+  IViewsService,
   InstantiationService,
   ProgressLocation,
   ServiceCollection,
@@ -135,6 +137,14 @@ function renderEditor(confirmed = true) {
     remove: vi.fn().mockResolvedValue(undefined),
     onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
   } as unknown as IStorageService)
+  services.set(IViewsService, {
+    _serviceBrand: undefined,
+    openViewContainer: vi.fn(),
+  } as unknown as IViewsService)
+  services.set(IViewDescriptorService, {
+    _serviceBrand: undefined,
+    setViewCollapsed: vi.fn(),
+  } as unknown as IViewDescriptorService)
   const instantiation = new InstantiationService(services)
   const utils = render(
     <ServicesContext.Provider value={instantiation}>

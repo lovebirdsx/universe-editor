@@ -10,12 +10,7 @@
  *  registries); there is only ever one Perforce Graph editor (fixed resource).
  *--------------------------------------------------------------------------------------------*/
 
-import type {
-  P4GraphChangeDetailsDto,
-  P4GraphFileChangeDto,
-  P4GraphLoadResult,
-  P4GraphRepoDto,
-} from '@universe-editor/extensions-common'
+import type { P4GraphLoadResult, P4GraphRepoDto } from '@universe-editor/extensions-common'
 
 /** Draggable widths (px) of the fixed-width columns. */
 export interface PerforceGraphColumnWidths {
@@ -37,18 +32,10 @@ export interface PerforceGraphViewState {
   result: P4GraphLoadResult | null
   /** Selected change id (single), or the synthetic pending id. */
   selection: string[]
-  /** Cached details for a single-change selection. */
-  details: P4GraphChangeDetailsDto | null
-  /** Cached file changes for the pending node. */
-  pendingFiles: P4GraphFileChangeDto[] | null
   /** Vertical scroll offset of the graph body, restored on remount. */
   scrollTop: number
-  /** Vertical scroll offset of the detail panel body, keyed by selection. */
-  detailScrollTop: Record<string, number>
   /** Free-text filter over the loaded changes (message / author / id). */
   searchQuery: string
-  /** Collapsed directory paths in the detail file tree, keyed by selection. */
-  collapsed: Record<string, string[]>
   /** Upper bound on changes to load; raised by "Load more". */
   limit: number
   /** Column widths, adjusted by dragging the header dividers. */
@@ -72,12 +59,8 @@ export const perforceGraphViewState: PerforceGraphViewState = {
   pendingReveal: null,
   result: null,
   selection: [],
-  details: null,
-  pendingFiles: null,
   scrollTop: 0,
-  detailScrollTop: {},
   searchQuery: '',
-  collapsed: {},
   limit: PERFORCE_GRAPH_PAGE_SIZE,
   columnWidths: {
     author: 140,
@@ -86,9 +69,4 @@ export const perforceGraphViewState: PerforceGraphViewState = {
   repos: [],
   selectedRepo: null,
   wholeRepo: false,
-}
-
-/** Stable key for the current selection, used to scope collapse state. */
-export function selectionKey(selection: readonly string[]): string {
-  return selection.join('..')
 }

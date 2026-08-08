@@ -29,6 +29,7 @@ import {
   type ILogger,
   type IStatusBarEntryAccessor,
   type IWorkbenchContribution,
+  URI,
   autorun,
   localize,
 } from '@universe-editor/platform'
@@ -41,6 +42,7 @@ import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoad
 import { scmViewState } from '../workbench/scm/scmViewState.js'
 
 const OPEN_COMMIT_COMMAND = 'scm.blame.openCommit'
+const OPEN_COMMIT_CHANGES_COMMAND = 'scm.blame.openCommitChanges'
 const DEFAULT_TEMPLATE = '${subject}, ${authorName} (${authorDateAgo})'
 const DEFAULT_STATUSBAR_TEMPLATE = '${authorName} (${authorDateAgo})'
 
@@ -51,6 +53,17 @@ function openCommitGraphCommand(providerId: string): string {
   if (providerId === 'git') return '_workbench.openGitGraph'
   if (providerId === 'perforce') return '_workbench.openPerforceGraph'
   return `${providerId}-graph.view`
+}
+
+/** Command that opens the commit's full change set. git/perforce
+ *  follow the `<providerId>.viewCommit` convention; other providers are probed
+ *  for the same id — a miss means the provider contributes no such command and
+ *  the caller falls back to the graph view. */
+function viewCommitCommand(providerId: string): string | undefined {
+  if (providerId === 'git') return 'git.viewCommit'
+  if (providerId === 'perforce') return 'perforce.viewCommit'
+  const generic = `${providerId}.viewCommit`
+  return CommandsRegistry.getCommand(generic) ? generic : undefined
 }
 /**
  * Editing invalidates the blame cache, so an un-throttled refresh would rerun
@@ -134,6 +147,12 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
         return this._openCommit(hash, providerId)
       }),
     )
+    this._register(
+      CommandsRegistry.registerCommand(OPEN_COMMIT_CHANGES_COMMAND, (_accessor, ...args) => {
+        const [hash, providerId] = args as [string | undefined, string | undefined]
+        return this._openCommitChanges(hash, providerId)
+      }),
+    )
 
     this._register(
       autorun((r) => {
@@ -193,6 +212,15 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
           const [hash, providerId] = args as [string | undefined, string | undefined]
           return this._openCommit(hash, providerId)
         }),
+      )
+      this._register(
+        monacoCommandsRegistry.registerCommand(
+          OPEN_COMMIT_CHANGES_COMMAND,
+          (_accessor, ...args) => {
+            const [hash, providerId] = args as [string | undefined, string | undefined]
+            return this._openCommitChanges(hash, providerId)
+          },
+        ),
       )
     })
 
@@ -291,6 +319,25 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
     const target = hash ?? this._currentHash
     if (!target) return Promise.resolve(undefined)
     return this._commandService.executeCommand(openCommitGraphCommand(provider), target)
+  }
+
+  /** Open the blame commit's whole change set (status-bar click, hover hash
+   *  link) via the provider's `<providerId>.viewCommit`; providers without one
+   *  degrade to the graph view. Args come from the hover link; the status-bar
+   *  click relies on the current-line fallback. */
+  private _openCommitChanges(hash?: string, providerId?: string): Promise<unknown> {
+    const provider = providerId ?? this._activeProviderId
+    if (!provider) return Promise.resolve(undefined)
+    const target = hash ?? this._currentHash
+    if (!target) return Promise.resolve(undefined)
+    const viewCommit = viewCommitCommand(provider)
+    if (!viewCommit) {
+      this._logger.debug(`${provider} contributes no viewCommit; falling back to graph`)
+      return this._commandService.executeCommand(openCommitGraphCommand(provider), target)
+    }
+    this._logger.debug(`routing openCommitChanges to ${viewCommit} for ${target}`)
+    const resource = this._activePath ? URI.file(this._activePath).toString() : undefined
+    return this._commandService.executeCommand(viewCommit, resource, target)
   }
 
   private _refresh(): void {
@@ -400,8 +447,9 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
         'scm.blame.statusBarItem.template',
         DEFAULT_STATUSBAR_TEMPLATE,
       ) ?? DEFAULT_STATUSBAR_TEMPLATE
-    // The hash is a `command:` link opening the commit in the graph (dispatched
-    // via the monaco-side registration of OPEN_COMMIT_COMMAND).
+    // The hash is a `command:` link opening the commit's changes (dispatched
+    // via the monaco-side registration of OPEN_COMMIT_CHANGES_COMMAND), with a
+    // second link for the graph view.
     const hashLinkArgs = encodeURIComponent(
       JSON.stringify(providerId ? [commit.hash, providerId] : [commit.hash]),
     )
@@ -414,7 +462,8 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
       '',
       // The quoted link title replaces the raw `command:` URI as the tooltip
       // text (monaco's markdown renderer uses `title || href` for the `<a>`).
-      `[\`${commit.hash.slice(0, 8)}\`](command:${OPEN_COMMIT_COMMAND}?${hashLinkArgs} "${localize('scm.blame.openCommitTooltip', 'Open Commit')}")`,
+      `[\`${commit.hash.slice(0, 8)}\`](command:${OPEN_COMMIT_CHANGES_COMMAND}?${hashLinkArgs} "${localize('scm.blame.openCommitTooltip', 'Open Commit')}")`,
+      `[${localize('scm.blame.openInGraph', 'Open in Graph')}](command:${OPEN_COMMIT_COMMAND}?${hashLinkArgs} "${localize('scm.blame.openInGraphTooltip', 'Open in Graph')}")`,
     ].join('\n')
     return {
       decorationText: applyTemplate(decorationTemplate, tokens),
@@ -481,9 +530,11 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
       this._entry = undefined
       return
     }
-    // Only wire the click-through when this provider actually contributes a
-    // history graph (a future provider without one still gets blame text).
+    // Only wire the click-through when this provider can show the commit:
+    // either it contributes a viewCommit command (preferred) or a history
+    // graph (a future provider with neither still gets blame text).
     const providerId = this._activeProviderId
+    const hasViewCommit = providerId !== undefined && viewCommitCommand(providerId) !== undefined
     const hasGraph =
       providerId !== undefined &&
       CommandsRegistry.getCommand(`${providerId}-graph.view`) !== undefined
@@ -492,7 +543,9 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
       tooltip: localize('scm.blame.statusBarTooltip', 'Blame'),
       alignment: StatusBarAlignment.Right,
       priority: 95,
-      ...(blame.hash && hasGraph ? { command: OPEN_COMMIT_COMMAND } : {}),
+      ...(blame.hash && (hasViewCommit || hasGraph)
+        ? { command: OPEN_COMMIT_CHANGES_COMMAND }
+        : {}),
     }
     if (this._entry) {
       this._entry.update(entry)

@@ -126,7 +126,7 @@ test.describe('@p1 perforce editor visualizations', () => {
         .toBe(false)
     })
 
-    await test.step('inline blame feeds the status bar from p4 annotate and opens the graph', async () => {
+    await test.step('inline blame feeds the status bar from p4 annotate and opens the commit changes', async () => {
       // The seed's annotate metadata tags every line with changelist 42 by
       // alice, so the cursor line resolves to a committed blame entry whose
       // status-bar text mentions the author.
@@ -140,20 +140,21 @@ test.describe('@p1 perforce editor visualizations', () => {
         )
         .toBe(true)
 
-      // Clicking the blame entry routes through `scm.blame.openCommit` →
-      // `perforce-graph.view` (the <providerId>-graph.view convention).
+      // Clicking the blame entry routes through `scm.blame.openCommitChanges` →
+      // `perforce.viewCommit` → the sidebar Commit Changes view.
       const blameButton = page.locator('[data-testid="part-statusbar"] button', {
         hasText: annotate.user,
       })
       await expect(blameButton).toBeVisible({ timeout: 10_000 })
       await blameButton.click()
-      await expect
-        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), {
-          timeout: 30_000,
-          message: 'clicking the blame entry should open the perforce graph',
-        })
-        .toBe('perforceGraph')
-      await expect(page.getByTestId('perforceGraph-editor')).toBeVisible({ timeout: 30_000 })
+      const view = page.locator('[data-testid="commitChanges-view"]')
+      await expect(view).toBeVisible({ timeout: 30_000 })
+      // The seeded annotate cl carries no file set (`describe -s` of it reports
+      // only metadata), so the view shows its header with no file rows.
+      await expect(view.locator('[data-testid="commitChanges-title"]')).toContainText(
+        `Changelist ${annotate.changelist}`,
+      )
+      await expect(view.locator('[data-row-key^="file:"]')).toHaveCount(0)
     })
 
     await test.step('p4 conflict markers get inline Accept actions', async () => {

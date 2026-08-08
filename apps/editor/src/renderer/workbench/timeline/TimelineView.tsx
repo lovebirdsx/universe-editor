@@ -45,7 +45,7 @@ import { timelineFollowTarget } from '../../services/timeline/followTarget.js'
 import { mergeTimelineItems } from '../../services/timeline/timelineMerge.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
-import { GitCommitHorizontal, Waypoints, type LucideIcon } from 'lucide-react'
+import { FileDiff, GitCommitHorizontal, Waypoints, type LucideIcon } from 'lucide-react'
 import { timelineViewState } from './timelineViewState.js'
 import styles from './TimelineView.module.css'
 
@@ -63,16 +63,15 @@ function resolveRowIcon(themeIcon: string | undefined): LucideIcon | undefined {
   return ROW_ICON_MAP[themeIcon] ?? resolveHeaderIcon(themeIcon)
 }
 
-// Inline "reveal in graph" row action, keyed by the owning provider's
-// (source, contextValue) pair — only commit/revision rows get it, never the
-// working-tree rows.
-interface RowGraphTarget {
-  /** `_workbench.*` bridge command (extension-host-callable, opens the graph). */
+// Inline row actions, keyed by the owning provider's (source, contextValue)
+// pair — only commit/revision rows get them, never the working-tree rows.
+interface RowActionTarget {
+  /** Extension-contributed or `_workbench.*` bridge command. */
   command: string
   tooltip: string
 }
 
-function resolveRowGraphTarget(item: ITimelineItemDto): RowGraphTarget | undefined {
+function resolveRowGraphTarget(item: ITimelineItemDto): RowActionTarget | undefined {
   if (!item.id) return undefined
   if (item.source === 'git-history' && item.contextValue === 'git:file:commit') {
     return {
@@ -84,6 +83,25 @@ function resolveRowGraphTarget(item: ITimelineItemDto): RowGraphTarget | undefin
     return {
       command: '_workbench.openPerforceGraph',
       tooltip: localize('timeline.openInPerforceGraph', 'Open in Perforce Graph'),
+    }
+  }
+  return undefined
+}
+
+// Unlike the graph target (which takes just the hash), the viewCommit handlers
+// need the whole item DTO: the repo uri rides in item.command.arguments[0].
+function resolveRowCommitDiffTarget(item: ITimelineItemDto): RowActionTarget | undefined {
+  if (!item.id) return undefined
+  if (item.source === 'git-history' && item.contextValue === 'git:file:commit') {
+    return {
+      command: 'git.timeline.viewCommit',
+      tooltip: localize('timeline.viewCommit', 'Open Commit'),
+    }
+  }
+  if (item.source === 'perforce-history' && item.contextValue === 'perforce:file:rev') {
+    return {
+      command: 'perforce.timeline.viewCommit',
+      tooltip: localize('timeline.viewCommit', 'Open Commit'),
     }
   }
   return undefined
@@ -336,6 +354,7 @@ export function TimelineView() {
             }
             const item = row.item
             const ItemIcon = resolveRowIcon(item.themeIcon)
+            const commitDiffTarget = resolveRowCommitDiffTarget(item)
             const graphTarget = resolveRowGraphTarget(item)
             return (
               <div
@@ -366,6 +385,23 @@ export function TimelineView() {
                 <span className={styles['label']}>{item.label}</span>
                 {item.description && (
                   <span className={styles['description']}>{item.description}</span>
+                )}
+                {commitDiffTarget && (
+                  <button
+                    type="button"
+                    className={styles['rowAction']}
+                    data-tooltip={commitDiffTarget.tooltip}
+                    aria-label={commitDiffTarget.tooltip}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      // Act on the row under the mouse, so it becomes the selected
+                      // one (same as openRowMenu) — without firing runItem's diff.
+                      model.setSelection([row.id], row.id)
+                      void commandService.executeCommand(commitDiffTarget.command, item)
+                    }}
+                  >
+                    <FileDiff size={14} strokeWidth={1.6} />
+                  </button>
                 )}
                 {graphTarget && (
                   <button

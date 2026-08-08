@@ -51,6 +51,8 @@
   "git.command.timeline.copyCommitId.title": "Copy Commit ID",
   "git.command.timeline.copyCommitMessage.title": "Copy Commit Message",
   "git.command.timeline.openInGraph.title": "Open in Git Graph",
+  "git.command.timeline.viewCommit.title": "Open Commit",
+  "git.command.viewCommit.title": "Open Commit",
 
   "git.submenu.commit.label": "Commit",
   "git.submenu.changes.label": "Changes",

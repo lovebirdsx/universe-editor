@@ -38,6 +38,7 @@ import {
 } from '@universe-editor/extension-api'
 import { filelogLabel, type FilelogRevision } from './filelogParser.js'
 import { statusFromAction, fileDiffRevs, displayPath } from './p4GraphParser.js'
+import { viewCommit as viewChangelist } from './viewCommit.js'
 import { localize } from './nls.js'
 import type { PerforceClient } from './client.js'
 import type { ClientManager } from './clientManager.js'
@@ -288,6 +289,14 @@ export function createPerforceTimelineCommands(
       const id = (item as { id?: string } | undefined)?.id
       if (id) return commands.executeCommand('_workbench.openPerforceGraph', id)
       return undefined
+    }),
+
+    // Open Commit: the whole changelist in the multi-diff editor. The item id is
+    // the changelist number; the file uri rides in the item's openDiff command
+    // arguments (same source openInGraph-adjacent commands use).
+    commands.registerCommand('perforce.timeline.viewCommit', async (item: unknown) => {
+      const it = item as { id?: string; command?: { arguments?: [{ uri?: string }] } } | undefined
+      await viewChangelist(mgr, () => mgr.active, it?.command?.arguments?.[0]?.uri, it?.id, log)
     }),
   ]
 }

@@ -13,6 +13,8 @@ import {
   ICommandService,
   IDialogService,
   IStorageService,
+  IViewDescriptorService,
+  IViewsService,
   InstantiationService,
   ServiceCollection,
   observableValue,
@@ -91,6 +93,14 @@ function renderEditor() {
     remove: vi.fn().mockResolvedValue(undefined),
     onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
   } as unknown as IStorageService)
+  services.set(IViewsService, {
+    _serviceBrand: undefined,
+    openViewContainer: vi.fn(),
+  } as unknown as IViewsService)
+  services.set(IViewDescriptorService, {
+    _serviceBrand: undefined,
+    setViewCollapsed: vi.fn(),
+  } as unknown as IViewDescriptorService)
   const utils = render(
     <ServicesContext.Provider value={new InstantiationService(services)}>
       <GitGraphEditor input={{} as never} />

@@ -9,6 +9,7 @@
 
 import { Disposable, IWorkbenchContribution, localize } from '@universe-editor/platform'
 import { registerViewWithComponent } from '../services/views/ViewComponentRegistry.js'
+import { COMMIT_CHANGES_VIEW_ID } from '../actions/commitChangesActions.js'
 import { ExplorerView } from '../workbench/explorer/ExplorerView.js'
 import { ExplorerViewToolbar } from '../workbench/explorer/ExplorerViewToolbar.js'
 import { OutlineView } from '../workbench/outline/OutlineView.js'
@@ -17,6 +18,7 @@ import { SearchView } from '../workbench/search/SearchView.js'
 import { SearchViewToolbar } from '../workbench/search/SearchViewToolbar.js'
 import { ScmView } from '../workbench/scm/ScmView.js'
 import { ScmViewToolbar } from '../workbench/scm/ScmViewToolbar.js'
+import { CommitChangesView } from '../workbench/scm/commitChanges/CommitChangesView.js'
 import { TimelineView } from '../workbench/timeline/TimelineView.js'
 import { TimelineViewToolbar } from '../workbench/timeline/TimelineViewToolbar.js'
 import { SessionChangesView } from '../workbench/agents/SessionChangesView.js'
@@ -84,6 +86,19 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
         },
         ScmView,
         ScmViewToolbar,
+      ),
+    )
+
+    this._register(
+      registerViewWithComponent(
+        {
+          id: COMMIT_CHANGES_VIEW_ID,
+          name: localize('view.commitChanges', 'Commit Changes'),
+          containerId: 'workbench.view.scm',
+          icon: 'diff',
+          order: 2,
+        },
+        CommitChangesView,
       ),
     )
 
