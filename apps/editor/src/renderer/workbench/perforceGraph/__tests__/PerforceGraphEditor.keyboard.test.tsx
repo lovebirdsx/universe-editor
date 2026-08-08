@@ -260,6 +260,39 @@ describe('PerforceGraphEditor keyboard navigation', () => {
   })
 })
 
+describe('PerforceGraphEditor menu focus on open', () => {
+  // Driven through document.activeElement like a real browser: a keypress lands
+  // on whatever holds focus, so a missing menu focus is directly observable.
+  function pressKey(key: string, init: { ctrlKey?: boolean } = {}): void {
+    fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init })
+  }
+
+  it('Ctrl+Enter moves keyboard focus into the menu; arrows operate the menu, not the graph', async () => {
+    const { container } = renderEditor()
+    await flush()
+
+    const body = scrollBody(container)
+    body.focus()
+    expect(document.activeElement).toBe(body)
+
+    pressKey('ArrowDown')
+    await flush()
+    expect(perforceGraphViewState.selection).toEqual(['4521'])
+
+    pressKey('Enter', { ctrlKey: true })
+    await flush()
+
+    const menu = openMenu()!
+    expect(menu).not.toBeNull()
+    expect(document.activeElement).toBe(menu)
+
+    pressKey('ArrowDown')
+    await flush()
+    expect(menu.querySelector('[data-active]')?.textContent).toBe('Copy commit message')
+    expect(perforceGraphViewState.selection).toEqual(['4521'])
+  })
+})
+
 describe('PerforceGraphEditor Ctrl+Enter context menu', () => {
   it('opens the change menu directly (single menu target)', async () => {
     const { container } = renderEditor()

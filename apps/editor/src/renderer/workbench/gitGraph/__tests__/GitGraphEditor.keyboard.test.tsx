@@ -352,6 +352,42 @@ describe('GitGraphEditor Ctrl+Enter context menu', () => {
     items[0]!.context.open()
     await flush()
     expect(menuLabels()).toContain('Cherry-pick…')
+    // Menu opened from the pick must also hold keyboard focus.
+    expect(document.activeElement).toBe(openMenu())
+  })
+})
+
+describe('GitGraphContextMenu focus on open', () => {
+  // A real browser dispatches keydown to document.activeElement, so the whole
+  // flow is driven through it (instead of aiming fireEvent at a known node) —
+  // that is what makes a missing menu focus observable.
+  function pressKey(key: string, init: { ctrlKey?: boolean } = {}): void {
+    fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init })
+  }
+
+  it('Ctrl+Enter moves keyboard focus into the menu; arrows operate the menu, not the graph', async () => {
+    const { container } = renderEditor()
+    await flush()
+
+    const body = scrollBody(container)
+    body.focus()
+    expect(document.activeElement).toBe(body)
+
+    pressKey('ArrowDown')
+    await flush()
+    expect(gitGraphViewState.selection).toEqual([HASH_A])
+
+    pressKey('Enter', { ctrlKey: true })
+    await flush()
+
+    const menu = openMenu()!
+    expect(menu).not.toBeNull()
+    expect(document.activeElement).toBe(menu)
+
+    pressKey('ArrowDown')
+    await flush()
+    expect(menu.querySelector('[data-active]')?.textContent).toBe('Cherry-pick…')
+    expect(gitGraphViewState.selection).toEqual([HASH_A])
   })
 })
 

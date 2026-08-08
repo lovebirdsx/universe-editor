@@ -9,7 +9,7 @@
  *  Home/End) move the highlight across separators, Enter executes, Escape closes.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { AnchoredSurface } from '@universe-editor/workbench-ui'
 import styles from './GitGraphEditor.module.css'
 
@@ -49,7 +49,18 @@ export function GitGraphContextMenu({
   const listRef = useRef<HTMLUListElement>(null)
   const [activeIndex, setActiveIndex] = useState(() => firstItemIndex(state.items))
 
-  // A freshly opened menu takes keyboard focus and highlights its first item.
+  // AnchoredSurface portals through Floating UI's FloatingPortal, which creates
+  // the portal node in a layout effect — so on the first commit the <ul> does
+  // not exist yet and an on-mount focus effect silently no-ops (listRef.current
+  // is still null, and the [state] effect never re-runs). A callback ref fires
+  // on the deferred attach and grabs focus the moment the list actually exists.
+  const setListRef = useCallback((el: HTMLUListElement | null) => {
+    listRef.current = el
+    el?.focus()
+  }, [])
+
+  // Re-opening the menu for a different target keeps the same <ul> (no ref
+  // attach fires), so a fresh item list also re-highlights and re-focuses here.
   useEffect(() => {
     setActiveIndex(firstItemIndex(state.items))
     listRef.current?.focus()
@@ -114,7 +125,13 @@ export function GitGraphContextMenu({
 
   return (
     <AnchoredSurface x={state.x} y={state.y} onClose={onClose}>
-      <ul role="menu" className={styles['menu']} tabIndex={-1} ref={listRef} onKeyDown={onKeyDown}>
+      <ul
+        role="menu"
+        className={styles['menu']}
+        tabIndex={-1}
+        ref={setListRef}
+        onKeyDown={onKeyDown}
+      >
         {state.items.map((item, i) =>
           item.kind === 'sep' ? (
             <li key={`sep-${i}`} role="separator" className={styles['menuSep']} />
