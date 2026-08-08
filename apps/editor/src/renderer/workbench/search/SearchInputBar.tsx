@@ -118,6 +118,7 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
               ref={ref as RefObject<HTMLInputElement>}
               className={styles['input']}
               type="text"
+              spellCheck={false}
               placeholder={localize('search.input.placeholder', 'Search')}
               aria-label={localize('search.input.placeholder', 'Search')}
               value={props.pattern}
@@ -166,6 +167,7 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
               <input
                 className={styles['input']}
                 type="text"
+                spellCheck={false}
                 placeholder={localize('search.replace.placeholder', 'Replace')}
                 aria-label={localize('search.replace.placeholder', 'Replace')}
                 value={props.replacePattern}
@@ -181,6 +183,7 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
               <input
                 className={styles['input']}
                 type="text"
+                spellCheck={false}
                 placeholder="e.g. **/*.ts"
                 value={props.includes}
                 onChange={(e) => props.onIncludes(e.target.value)}
@@ -209,6 +212,7 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
               <input
                 className={styles['input']}
                 type="text"
+                spellCheck={false}
                 placeholder="e.g. **/__tests__/**"
                 value={props.excludes}
                 onChange={(e) => props.onExcludes(e.target.value)}
