@@ -13,6 +13,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   return (
     <input
       ref={ref}
+      spellCheck={false}
       className={cx(styles['input'], invalid && styles['invalid'], className)}
       aria-invalid={invalid || undefined}
       {...rest}
