@@ -146,6 +146,15 @@
   overflow: auto;
 }
 
+.scrollBody:focus {
+  outline: none;
+}
+
+.scrollBody:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, transparent);
+  outline-offset: -1px;
+}
+
 .header {
   position: sticky;
   top: 0;
@@ -252,6 +261,15 @@
 .rowSelected:hover {
   background: var(--vscode-list-activeSelectionBackground, var(--vscode-workbench-accent));
   color: var(--vscode-list-activeSelectionForeground, var(--vscode-button-foreground));
+}
+
+/* The muted column colour below would otherwise override the selection
+ *  foreground (later rule, equal specificity), leaving grey text on the
+ *  selection background. */
+.rowSelected .author,
+.rowSelected .date,
+.rowSelected .hash {
+  color: var(--vscode-list-activeSelectionForeground, inherit);
 }
 
 .graphSpacer {
@@ -592,7 +610,8 @@
   user-select: none;
 }
 
-.menuItem:hover {
+.menuItem:hover,
+.menuItemActive {
   background: var(--vscode-menu-selectionBackground, #094771);
   outline: none;
 }
@@ -601,7 +620,8 @@
   color: var(--vscode-tab-modifiedBorder, #c74e39);
 }
 
-.menuItemDanger:hover {
+.menuItemDanger:hover,
+.menuItemDanger.menuItemActive {
   background: var(--vscode-tab-modifiedBorder, #c74e39);
   color: #fff;
 }

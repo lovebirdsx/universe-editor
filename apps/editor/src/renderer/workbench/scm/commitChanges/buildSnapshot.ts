@@ -1,13 +1,17 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Pure snapshot builder for the Commit Changes view: flattens the payload's
- *  file entries into a folder tree (single-child folder chains compacted, e.g.
- *  "a" → "a/b"), sorted folders-first then alphabetically — the same shape the
- *  SCM changes tree produces, but sourced from CommitChangesFileEntry instead
- *  of IScmGroupModel so the two views stay decoupled.
+ *  Pure snapshot builder for the Commit Changes view. Tree mode flattens the
+ *  payload's file entries into a folder tree (single-child folder chains
+ *  compacted, e.g. "a" → "a/b"), sorted folders-first then alphabetically —
+ *  the same shape the SCM changes tree produces, but sourced from
+ *  CommitChangesFileEntry instead of IScmGroupModel so the two views stay
+ *  decoupled. List mode is a flat, alphabetically sorted file list whose rows
+ *  carry the grey `dir` suffix (tree mode omits it — the folder rows already
+ *  express the path).
  *--------------------------------------------------------------------------------------------*/
 
 import type { CommitChangesFileEntry } from '@universe-editor/extensions-common'
+import type { CommitChangesViewMode } from './viewState.js'
 
 export type CommitChangesNode =
   | { kind: 'folder'; id: string; path: string; name: string }
@@ -59,10 +63,20 @@ function buildFolderTree(files: readonly CommitChangesFileEntry[]): FolderNode {
 export function buildCommitChangesSnapshot(
   files: readonly CommitChangesFileEntry[],
   collapsed: ReadonlySet<string>,
+  viewMode: CommitChangesViewMode = 'tree',
 ): CommitChangesSnapshot {
   const roots: CommitChangesNode[] = []
   const childrenMap = new Map<string, CommitChangesNode[]>()
   const parentMap = new Map<string, CommitChangesNode>()
+
+  if (viewMode === 'list') {
+    for (const entry of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
+      const id = `file:${entry.path}`
+      const dir = dirname(entry.path)
+      roots.push({ kind: 'file', id, entry, ...(dir !== '' ? { dir } : {}) })
+    }
+    return { roots, childrenMap, parentMap }
+  }
 
   const addLevel = (
     node: FolderNode,
@@ -98,13 +112,7 @@ export function buildCommitChangesSnapshot(
     const files = [...node.files].sort((a, b) => a.path.localeCompare(b.path))
     for (const entry of files) {
       const id = `file:${entry.path}`
-      const dir = dirname(entry.path)
-      const fileNode: CommitChangesNode = {
-        kind: 'file',
-        id,
-        entry,
-        ...(dir !== '' ? { dir } : {}),
-      }
+      const fileNode: CommitChangesNode = { kind: 'file', id, entry }
       into.push(fileNode)
       if (parent) parentMap.set(id, parent)
     }

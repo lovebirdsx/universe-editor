@@ -344,6 +344,7 @@ function registerGitCommands(
     }),
     register('git-graph.openFileDiff', async (...args: unknown[]) => {
       const req = args[0] as GitGraphFileDiffRequest
+      const options = args[1] as { preserveFocus?: boolean } | undefined
       const content = await getGitGraphFileDiffContent(req.root ?? graph.current, req, log)
       await commands.executeCommand('_workbench.openDiff', {
         title: content.title,
@@ -351,7 +352,7 @@ function registerGitCommands(
         original: content.original,
         modified: content.modified,
         pinned: false,
-        preserveFocus: false,
+        preserveFocus: options?.preserveFocus ?? false,
         openableUri: pathToFileURL(content.path).href,
       })
     }),

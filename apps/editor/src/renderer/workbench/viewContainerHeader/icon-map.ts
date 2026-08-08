@@ -10,6 +10,7 @@ import {
   Check,
   ChevronDown,
   ChevronsDownUp,
+  ChevronsUpDown,
   ChevronUp,
   CircleHelp,
   Cloud,
@@ -100,6 +101,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   'list-view': List,
   'tree-view': FolderTree,
   'collapse-all': ChevronsDownUp,
+  'expand-all': ChevronsUpDown,
   more: MoreHorizontal,
   move: Move,
   // Editor title actions.

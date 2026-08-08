@@ -56,4 +56,11 @@ export interface ShowCommitChangesPayload {
    */
   revealPath?: string
   metadata?: CommitChangesMetadata
+  /**
+   * When true, the view's content is updated without revealing the SCM
+   * container or expanding the view — used by selection-follow (e.g. a graph
+   * reveal syncing the sidebar) where yanking the sidebar open would steal
+   * the user's context. Absent/false keeps the default reveal behaviour.
+   */
+  silent?: boolean
 }

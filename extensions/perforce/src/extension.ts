@@ -16,8 +16,6 @@ import type {
   P4GraphChangeDetailsDto,
   P4GraphFileChangeDto,
 } from '@universe-editor/extensions-common'
-import { basename } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { ConcurrencyGate } from './concurrency.js'
 import { setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
 import {
@@ -33,8 +31,12 @@ import { AutoEditController } from './autoEdit.js'
 import { WorkspaceWatchController } from './workspaceWatcher.js'
 import { notifyP4Failure, setP4OutputShower, isMissingCli } from './p4Error.js'
 import { changelistIdFromGroupId, RECONCILE_GROUP_ID, type P4Action } from './changelist.js'
-import { statusFromAction, fileDiffRevs, displayPath } from './p4GraphParser.js'
-import { viewCommit as viewChangelist, type P4GraphFileDiffRequest } from './viewCommit.js'
+import { statusFromAction, displayPath } from './p4GraphParser.js'
+import {
+  openGraphFileDiff,
+  viewCommit as viewChangelist,
+  type P4GraphFileDiffRequest,
+} from './viewCommit.js'
 import { uriToFsPath, norm } from './pathUtil.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
 import { createSwarmLogger } from './swarm/swarmLog.js'
@@ -922,25 +924,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
           await viewChangelist(mgr, graphClient, args[0], args[1], log)
         }),
         commands.registerCommand('perforce-graph.openFileDiff', async (...args: unknown[]) => {
-          const req = args[0] as P4GraphFileDiffRequest
           const target = graphClient()
           if (!target) return
-          const { left, right } = fileDiffRevs(req.depotFile, req.status, req.rev)
-          const [original, modified] = await Promise.all([
-            target.printRevision(left),
-            target.printRevision(right),
-          ])
-          const leftLabel = left ? left.slice(left.indexOf('#')) : '∅'
-          const rightLabel = right ? right.slice(right.indexOf('#')) : '∅'
-          await commands.executeCommand('_workbench.openDiff', {
-            title: `${basename(displayPath(req.depotFile))} (${leftLabel} ↔ ${rightLabel})`,
-            originalUri: pathToFileURL(displayPath(req.depotFile)).href,
-            original,
-            modified,
-            pinned: false,
-            preserveFocus: false,
-            ...(req.localPath ? { openableUri: pathToFileURL(req.localPath).href } : {}),
-          })
+          await openGraphFileDiff(
+            target,
+            args[0] as P4GraphFileDiffRequest,
+            args[1] as { preserveFocus?: boolean } | undefined,
+          )
         }),
         commands.registerCommand(
           'perforce-graph.openWorkingTreeFile',

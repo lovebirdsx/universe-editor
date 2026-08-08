@@ -28,6 +28,7 @@ import {
 import { IScmService } from '../../../services/extensions/ScmService.js'
 import { perforceGraphViewState } from '../../../services/perforceGraph/perforceGraphViewState.js'
 import { scmViewState } from '../../scm/scmViewState.js'
+import { _clearGraphPayloadCacheForTests } from '../../scm/commitChanges/graphPayloadCache.js'
 import { ServicesContext } from '../../useService.js'
 import { ShowCommitChangesAction } from '../../../actions/commitChangesActions.js'
 import { PerforceGraphEditor } from '../PerforceGraphEditor.js'
@@ -169,6 +170,7 @@ beforeEach(() => {
 afterEach(() => {
   resetViewState()
   scmViewState.setSelectedRepo(undefined)
+  _clearGraphPayloadCacheForTests()
   vi.clearAllMocks()
 })
 

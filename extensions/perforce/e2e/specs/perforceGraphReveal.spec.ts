@@ -55,10 +55,10 @@ test.describe('@p1 perforce graph reveal', () => {
     await expect(editor).toBeVisible()
     const row = editor.locator('[data-id="4521"]')
     await expect(row).toBeVisible()
-    // Selection shows in the row class (the CSS module keeps its local name) …
+    // Selection shows in the row class (the CSS module keeps its local name).
+    // Change details now live in the Commit Changes sidebar view (covered by
+    // perforceViewCommit.spec.ts); the graph no longer has a bottom panel.
     await expect(row).toHaveClass(/rowSelected/)
-    // … and loads the change's details into the bottom panel.
-    await expect(editor.getByText(/^#4521 · /)).toBeVisible()
   })
 
   test('timeline open-in-graph command drives the same reveal end to end', async ({

@@ -29,8 +29,10 @@ import {
   CommandsRegistry,
   ICommandService,
   IDialogService,
+  ILoggerService,
   INotificationService,
   IProgressService,
+  IQuickInputService,
   IStorageService,
   IViewDescriptorService,
   IViewsService,
@@ -50,6 +52,7 @@ import {
   type GitGraphRepoDto,
   type GitGraphWorktreeDto,
   type GitGraphWorktreeSyncResult,
+  type ShowCommitChangesPayload,
 } from '@universe-editor/extensions-common'
 import {
   useService,
@@ -66,12 +69,15 @@ import {
 } from '../../services/gitGraph/gitGraphViewState.js'
 import { scmViewState } from '../scm/scmViewState.js'
 import { ShowCommitChangesAction } from '../../actions/commitChangesActions.js'
+import { createCommitChangesFollower } from '../scm/commitChanges/graphFollow.js'
+import { getOrBuildGraphPayload } from '../scm/commitChanges/graphPayloadCache.js'
 import { buildCommitPayload, buildComparePayload } from './commitChangesPayload.js'
 import {
   GitGraphContextMenu,
   type GitGraphMenuItem,
   type GitGraphMenuState,
 } from './GitGraphContextMenu.js'
+import { useGraphKeyboardNav } from './useGraphKeyboardNav.js'
 import {
   GitGraphWorktreePickerDialog,
   type GitGraphWorktreePickerState,
@@ -341,6 +347,12 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   const notification = useService(INotificationService)
   // Optional so unit tests without a progress binding still render the editor.
   const progressService = useOptionalService(IProgressService)
+  const quickInput = useOptionalService(IQuickInputService)
+  const loggerService = useOptionalService(ILoggerService)
+  const logger = useMemo(
+    () => loggerService?.createLogger({ id: 'gitGraph', name: 'Git Graph' }) ?? null,
+    [loggerService],
+  )
   const scm = useService(IScmService)
   const storage = useService(IStorageService)
   const viewsService = useService(IViewsService)
@@ -356,6 +368,14 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
 
   // Selected commit(s): one hash to show in the Commit Changes view, two to compare.
   const [selection, setSelection] = useState<string[]>(() => gitGraphViewState.selection)
+  // Ref mirror so onRowClick stays referentially stable across selection
+  // changes — a fresh callback identity would bust CommitRow's memo and
+  // re-render the whole list before the new highlight paints.
+  const selectionRef = useRef(selection)
+  selectionRef.current = selection
+  // Latest-wins sequence shared by the click bridge and the silent follow: the
+  // most recent dispatch supersedes anything still in flight.
+  const graphSyncSeqRef = useRef(0)
 
   // View options, paging limit, column widths and repo selection. Each mirrors a
   // field in the module-level store so it survives the tab being unmounted.
@@ -517,20 +537,70 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   // commits and silently skip the scroll, so retry after every commit instead.
   useLayoutEffect(scrollPendingReveal)
 
-  // Reveal entry point (timeline / blame → `_workbench.openGitGraph`): select the
+  const discoverEffectiveRepoRoot = useCallback(async (): Promise<string | null> => {
+    const current = resolveEffectiveRepoRoot(repos, selectedRepo)
+    if (current) return current
+
+    const discovered = await commands.executeCommand<GitGraphRepoDto[]>(GitGraphCommands.getRepos)
+    if (!discovered || discovered.length === 0) return null
+
+    setRepos(discovered)
+    gitGraphViewState.repos = discovered
+    return resolveEffectiveRepoRoot(discovered, selectedRepo)
+  }, [commands, repos, selectedRepo])
+
+  // Fetch (or reuse from the shared payload cache) the Commit Changes payload
+  // for one commit. Backed by the extension's getCommitDetails (two git
+  // spawns), so repeat visits and concurrent follow/click requests coalesce.
+  const fetchCommitPayload = useCallback(
+    async (hash: string): Promise<ShowCommitChangesPayload | null> => {
+      const repoRoot = await discoverEffectiveRepoRoot()
+      if (!repoRoot) return null
+      return getOrBuildGraphPayload(`git\n${repoRoot}\n${hash}`, async () => {
+        const started = performance.now()
+        const details = await commands.executeCommand<GitGraphCommitDetailsDto | null>(
+          GitGraphCommands.getCommitDetails,
+          hash,
+        )
+        logger?.debug(
+          `commit details ${shortHash(hash)} fetched in ${Math.round(performance.now() - started)}ms`,
+        )
+        return details ? buildCommitPayload(repoRoot, details) : null
+      })
+    },
+    [commands, discoverEffectiveRepoRoot, logger],
+  )
+
+  // Silent Commit Changes follow for programmatic reveals (Open in Graph from
+  // blame / timeline / the Commit Changes toolbar): the sidebar content tracks
+  // the revealed commit without opening the container or moving focus.
+  // Deliberate row clicks keep the non-silent bridge (they DO reveal it).
+  const followCommitChanges = useMemo(
+    () =>
+      createCommitChangesFollower({
+        providerId: 'git',
+        build: fetchCommitPayload,
+        apply: (payload) => commands.executeCommand(ShowCommitChangesAction.ID, payload),
+        seq: graphSyncSeqRef,
+      }),
+    [commands, fetchCommitPayload],
+  )
+
+  // Reveal entry point (timeline / blame / Commit Changes → the observable
+  // `gitGraphViewState.pendingReveal`): select the
   // commit and scroll it into view, paging in older history until the commit is
   // loaded. Synchronous per-page awaits keep the ordering simple; the loop stops
   // on a hit, on `moreAvailable === false`, or at the page cap (unknown hash →
   // silently no-op, matching reveal semantics elsewhere).
   const revealCommit = useCallback(
     (hash: string) => {
-      // Requested while the initial load is still in flight (the bridge action
-      // calls in right after openEditor resolves): queue it instead of racing
-      // that load — the load's "fresh load" continuation resets the selection,
-      // which would clobber a reveal whose own fetch resolved first. The
-      // pendingReveal effect consumes the queue once the first page lands.
+      // Requested while the initial load is still in flight: re-queue it
+      // instead of racing that load — the load's "fresh load" continuation
+      // resets the selection, which would clobber a reveal whose own fetch
+      // resolved first. The pendingReveal effect re-dispatches once the first
+      // page lands.
       if (result === null) {
-        gitGraphViewState.pendingReveal = hash
+        gitGraphViewState.pendingReveal.set(hash, undefined)
         return
       }
       void (async () => {
@@ -561,6 +631,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           if (!current?.commits.some((c) => c.hash === hash)) return
           if (nextLimit !== limit) setLimit(nextLimit)
           setSelection([hash])
+          followCommitChanges(hash)
           // Scroll now when the row is already rendered (re-reveal of a loaded
           // commit commits no state change); otherwise the layout effect picks
           // it up once the row lands in the DOM.
@@ -571,7 +642,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         }
       })()
     },
-    [commands, result, limit, scrollPendingReveal],
+    [commands, result, limit, scrollPendingReveal, followCommitChanges],
   )
 
   useEffect(() => {
@@ -581,14 +652,15 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     }
   }, [revealCommit])
 
-  // Reveal requested while the tab was unmounted lands in pendingReveal; consume
-  // it once the first page is in.
+  // Reveal requests land in the observable pendingReveal (the bridge action
+  // writes it, possibly before this instance mounted); consume it reactively,
+  // once the first page is in.
+  const pendingReveal = useObservable(gitGraphViewState.pendingReveal)
   useEffect(() => {
-    const pending = gitGraphViewState.pendingReveal
-    if (!pending || !result) return
-    gitGraphViewState.pendingReveal = null
-    revealCommit(pending)
-  }, [result, revealCommit])
+    if (pendingReveal === null || result === null) return
+    gitGraphViewState.pendingReveal.set(null, undefined)
+    revealCommit(pendingReveal)
+  }, [pendingReveal, result, revealCommit])
 
   // Background reload: refresh data in place without the loading flicker, keeping
   // the current selection when its commit still exists. Used by auto-refresh and
@@ -742,32 +814,17 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     if (scrollRef.current) scrollRef.current.scrollTop = gitGraphViewState.scrollTop
   }, [])
 
-  const discoverEffectiveRepoRoot = useCallback(async (): Promise<string | null> => {
-    const current = resolveEffectiveRepoRoot(repos, selectedRepo)
-    if (current) return current
-
-    const discovered = await commands.executeCommand<GitGraphRepoDto[]>(GitGraphCommands.getRepos)
-    if (!discovered || discovered.length === 0) return null
-
-    setRepos(discovered)
-    gitGraphViewState.repos = discovered
-    return resolveEffectiveRepoRoot(discovered, selectedRepo)
-  }, [commands, repos, selectedRepo])
-
-  // Click-driven sidebar handoff: a plain click shows the commit's changes in the
-  // Commit Changes view, Ctrl/Cmd+click on a second row shows the comparison, and
-  // the uncommitted node reveals the SCM main view. Deselecting (re-clicking the
-  // selected row) leaves the sidebar untouched. This MUST stay event-driven —
-  // deriving it from a `selection` effect would fire on tab remount, where the
-  // restored selection would steal the sidebar from whatever the user is viewing.
-  const onRowClick = useCallback(
-    (hash: string, e: MouseEvent) => {
-      const multi = e.ctrlKey || e.metaKey
-      let next: string[]
-      if (multi && selection.length >= 1 && selection[0] !== hash) next = [selection[0]!, hash]
-      else if (!multi && selection.length === 1 && selection[0] === hash) next = []
-      else next = [hash]
+  // Selection entry shared by mouse and keyboard: applies the new selection and
+  // pushes the commit (or two-commit comparison) into the Commit Changes view;
+  // a deselect or the uncommitted node leaves the sidebar untouched and just
+  // supersedes any payload still in flight (latest-wins). This MUST stay
+  // event-driven — deriving it from a `selection` effect would fire on tab
+  // remount, where the restored selection would steal the sidebar from whatever
+  // the user is viewing.
+  const applySelection = useCallback(
+    (next: string[]) => {
       setSelection(next)
+      const seq = ++graphSyncSeqRef.current
       if (next.length === 0) return
       if (next[0] === UNCOMMITTED_HASH) {
         viewsService.openViewContainer('workbench.view.scm')
@@ -775,35 +832,52 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         return
       }
       void (async () => {
-        const repoRoot = await discoverEffectiveRepoRoot()
-        if (!repoRoot) return
+        let payload: ShowCommitChangesPayload | null
         if (next.length === 2) {
+          const repoRoot = await discoverEffectiveRepoRoot()
+          if (!repoRoot) return
           const from = next[0]!
           const to = next[1]!
-          const files = await commands.executeCommand<GitGraphFileChangeDto[]>(
-            GitGraphCommands.compareCommits,
-            from,
-            to,
-          )
-          if (!files) return
-          await commands.executeCommand(
-            ShowCommitChangesAction.ID,
-            buildComparePayload(repoRoot, from, to, files),
-          )
+          payload = await getOrBuildGraphPayload(`git\n${repoRoot}\n${from}..${to}`, async () => {
+            const files = await commands.executeCommand<GitGraphFileChangeDto[]>(
+              GitGraphCommands.compareCommits,
+              from,
+              to,
+            )
+            return files ? buildComparePayload(repoRoot, from, to, files) : null
+          })
         } else {
-          const details = await commands.executeCommand<GitGraphCommitDetailsDto | null>(
-            GitGraphCommands.getCommitDetails,
-            next[0],
-          )
-          if (!details) return
-          await commands.executeCommand(
-            ShowCommitChangesAction.ID,
-            buildCommitPayload(repoRoot, details),
-          )
+          payload = await fetchCommitPayload(next[0]!)
         }
+        if (payload === null || seq !== graphSyncSeqRef.current) return
+        logger?.debug(`select → show commit changes ref=${payload.commitRef}`)
+        await commands.executeCommand(ShowCommitChangesAction.ID, payload)
       })()
     },
-    [commands, selection, viewsService, viewDescriptorService, discoverEffectiveRepoRoot],
+    [
+      commands,
+      viewsService,
+      viewDescriptorService,
+      discoverEffectiveRepoRoot,
+      fetchCommitPayload,
+      logger,
+    ],
+  )
+
+  // Click semantics on top of applySelection: a plain click shows the commit's
+  // changes, Ctrl/Cmd+clicking a second row shows the comparison, re-clicking
+  // the selected row only deselects.
+  const onRowClick = useCallback(
+    (hash: string, e: MouseEvent) => {
+      // Keep the scroll container focused so arrow keys work right after a click.
+      scrollRef.current?.focus()
+      const current = selectionRef.current
+      const multi = e.ctrlKey || e.metaKey
+      if (multi && current.length >= 1 && current[0] !== hash) applySelection([current[0]!, hash])
+      else if (!multi && current.length === 1 && current[0] === hash) applySelection([])
+      else applySelection([hash])
+    },
+    [applySelection],
   )
 
   // Run a mutating op, then revalidate in place so the scroll position and
@@ -1473,6 +1547,86 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   const effectiveGraphWidth = isCompact ? GRID.offsetX * 2 : graphWidth
   const selected = useMemo(() => new Set(selection), [selection])
 
+  // Ctrl+Enter on the selected row: open the same context menu a right-click
+  // would show, anchored at the row. A row can carry several menu targets (the
+  // commit itself plus worktree / branch / tag / remote badges); when more than
+  // one applies, a QuickPick disambiguates first.
+  const openRowMenu = useCallback(
+    (hash: string) => {
+      const commit = filteredCommits.find((c) => c.hash === hash)
+      if (!commit || hash === UNCOMMITTED_HASH) return
+      const rowEl = scrollRef.current
+        ?.querySelectorAll('[data-hash]')
+        .values()
+        .find((el) => el.getAttribute('data-hash') === hash)
+      const rect = rowEl?.getBoundingClientRect()
+      const anchor = {
+        clientX: (rect?.left ?? 0) + 16,
+        clientY: rect?.bottom ?? 0,
+        preventDefault: () => {},
+        stopPropagation: () => {},
+      } as MouseEvent
+      const contexts = [
+        {
+          label: localize('gitGraph.ref.commit', 'Commit {hash}', { hash: shortHash(hash) }),
+          open: () => openCommitMenu(commit, anchor),
+        },
+        ...commit.worktrees.map((wt) => ({
+          label: localize('gitGraph.ref.worktree', 'Worktree {name}', { name: wt.name }),
+          open: () => openWorktreeMenu(wt, anchor),
+        })),
+        ...commit.heads.map((h) => ({
+          label: localize('gitGraph.ref.branch', 'Branch {name}', { name: h }),
+          open: () => openBranchMenu(h, anchor),
+        })),
+        ...commit.tags.map((t) => ({
+          label: localize('gitGraph.ref.tag', 'Tag {name}', { name: t.name }),
+          open: () => openTagMenu(t.name, anchor),
+        })),
+        ...commit.remotes.map((r) => ({
+          label: localize('gitGraph.ref.remote', 'Remote {name}', { name: r.name }),
+          open: () => openRemoteMenu(r.name, anchor),
+        })),
+      ]
+      if (contexts.length === 1 || !quickInput) {
+        contexts[0]!.open()
+        return
+      }
+      void quickInput
+        .pick(
+          contexts.map((c, i) => ({ id: String(i), label: c.label, context: c })),
+          {
+            placeholder: localize(
+              'gitGraph.pickMenuContext',
+              'Show context menu for which target?',
+            ),
+          },
+        )
+        .then((picked) => picked?.context.open())
+    },
+    [
+      filteredCommits,
+      quickInput,
+      openCommitMenu,
+      openWorktreeMenu,
+      openBranchMenu,
+      openTagMenu,
+      openRemoteMenu,
+    ],
+  )
+
+  const rowKeys = useMemo(() => filteredCommits.map((c) => c.hash), [filteredCommits])
+  const selectFromKeyboard = useCallback((hash: string) => applySelection([hash]), [applySelection])
+  const onRowsKeyDown = useGraphKeyboardNav({
+    rows: rowKeys,
+    selectionRef,
+    select: selectFromKeyboard,
+    openMenu: openRowMenu,
+    scrollRef,
+    rowAttribute: 'data-hash',
+    rowHeight: ROW_HEIGHT,
+  })
+
   return (
     <div className={styles['gitGraph']} data-testid="gitGraph-editor">
       <div className={styles['toolbar']}>
@@ -1595,6 +1749,11 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         <div
           className={styles['scrollBody']}
           ref={scrollRef}
+          tabIndex={0}
+          role="listbox"
+          aria-label={localize('gitGraph.commitList', 'Commits')}
+          data-testid="gitGraph-scrollBody"
+          onKeyDown={onRowsKeyDown}
           onScroll={(e) => {
             gitGraphViewState.scrollTop = e.currentTarget.scrollTop
           }}
@@ -1716,7 +1875,17 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         </div>
       )}
 
-      {menu && <GitGraphContextMenu state={menu} onClose={() => setMenu(null)} />}
+      {menu && (
+        <GitGraphContextMenu
+          state={menu}
+          onClose={() => {
+            setMenu(null)
+            // The menu lives in a portal; closing it drops focus to <body>
+            // otherwise, which would silently break arrow-key navigation.
+            scrollRef.current?.focus()
+          }}
+        />
+      )}
       {worktreePicker && (
         <GitGraphWorktreePickerDialog
           state={worktreePicker}

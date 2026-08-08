@@ -424,6 +424,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.extensionApi.updateConfiguration': '更新配置',
   'action.extensionApi.writeClipboard': '写入剪贴板',
   'action.commitChanges.show': '显示提交变更',
+  'action.commitChanges.focus': '聚焦提交变更视图',
   'action.gitGraph.focusSearch': '聚焦搜索',
   'action.gitGraph.open': '打开 Git Graph',
   'action.gitGraph.refresh': '刷新',
@@ -832,7 +833,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- SCM ---
   'commitChanges.empty': '从 Blame、时间线或图谱中选择一个提交以查看其变更。',
-  'commitChanges.parents': '父提交: {parents}',
+  'commitChanges.expandAll': '全部展开',
+  'commitChanges.openInGraph': '在图谱中显示',
   'commitChanges.treeLabel': '变更的文件',
   'scm.collapseAll': '全部折叠',
   'scm.commit': '提交',

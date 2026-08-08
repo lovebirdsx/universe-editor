@@ -20,7 +20,11 @@ import {
 } from '@universe-editor/platform'
 import type { ShowCommitChangesPayload } from '@universe-editor/extensions-common'
 import { commitChangesViewState } from '../../workbench/scm/commitChanges/viewState.js'
-import { COMMIT_CHANGES_VIEW_ID, ShowCommitChangesAction } from '../commitChangesActions.js'
+import {
+  COMMIT_CHANGES_VIEW_ID,
+  FocusCommitChangesAction,
+  ShowCommitChangesAction,
+} from '../commitChangesActions.js'
 
 function payload(overrides?: Partial<ShowCommitChangesPayload>): ShowCommitChangesPayload {
   return {
@@ -97,6 +101,17 @@ describe('ShowCommitChangesAction', () => {
     expect(setViewCollapsed).toHaveBeenCalledWith(COMMIT_CHANGES_VIEW_ID, false)
   })
 
+  it('a silent payload updates the store without revealing the container or expanding the view', async () => {
+    setup()
+
+    await run(payload({ silent: true }))
+
+    expect(commitChangesViewState.payload.get()?.commitRef).toBe('a1b2c3d')
+    expect(commitChangesViewState.tick.get()).toBe(1)
+    expect(openViewContainer).not.toHaveBeenCalled()
+    expect(setViewCollapsed).not.toHaveBeenCalled()
+  })
+
   it('never steals focus (focusView is not called)', async () => {
     setup()
 
@@ -154,6 +169,7 @@ describe('ShowCommitChangesAction', () => {
       { ...payload(), files: [{ path: 'a', oldPath: null, resourceUri: null, args: {} }] },
     ],
     ['revealPath not a string', { ...payload(), revealPath: 42 }],
+    ['silent not a boolean', { ...payload(), silent: 'yes' }],
     ['subtitle not a string', { ...payload(), subtitle: 42 }],
     ['metadata.authorDate not a number', { ...payload(), metadata: { authorDate: 'now' } }],
     ['metadata.parents not strings', { ...payload(), metadata: { parents: [42] } }],
@@ -167,5 +183,54 @@ describe('ShowCommitChangesAction', () => {
     expect(openViewContainer).not.toHaveBeenCalled()
     expect(setViewCollapsed).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('FocusCommitChangesAction', () => {
+  const disposables: IDisposable[] = []
+  let openViewContainer: ReturnType<typeof vi.fn>
+  let setViewCollapsed: ReturnType<typeof vi.fn>
+  let focusView: ReturnType<typeof vi.fn>
+
+  function setup(): void {
+    disposables.push(registerAction2(FocusCommitChangesAction))
+    openViewContainer = vi.fn()
+    setViewCollapsed = vi.fn()
+    focusView = vi.fn(async () => true)
+  }
+
+  async function run(): Promise<void> {
+    const services = new ServiceCollection()
+    services.set(IViewsService, {
+      _serviceBrand: undefined,
+      openViewContainer,
+    } as unknown as IViewsService)
+    services.set(IViewDescriptorService, {
+      _serviceBrand: undefined,
+      setViewCollapsed,
+    } as unknown as IViewDescriptorService)
+    services.set(ILayoutService, {
+      _serviceBrand: undefined,
+      focusView,
+    } as unknown as ILayoutService)
+    const inst = new InstantiationService(services)
+    await inst.invokeFunction(async (accessor) => {
+      await CommandsRegistry.getCommand(FocusCommitChangesAction.ID)!.handler(accessor)
+    })
+  }
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+    vi.clearAllMocks()
+  })
+
+  it('opens the SCM container, expands the view and focuses it', async () => {
+    setup()
+
+    await run()
+
+    expect(openViewContainer).toHaveBeenCalledWith('workbench.view.scm')
+    expect(setViewCollapsed).toHaveBeenCalledWith(COMMIT_CHANGES_VIEW_ID, false)
+    expect(focusView).toHaveBeenCalledWith(COMMIT_CHANGES_VIEW_ID, { source: 'command' })
   })
 })

@@ -28,6 +28,8 @@
   align-items: center;
   gap: 2px;
   max-width: 160px;
+  min-width: 0;
+  flex-shrink: 1;
   padding: 2px 4px;
   border: none;
   border-radius: 3px;
@@ -45,6 +47,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .repoSelectorChevron {

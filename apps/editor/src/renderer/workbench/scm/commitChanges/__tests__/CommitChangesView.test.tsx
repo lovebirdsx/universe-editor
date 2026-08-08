@@ -31,8 +31,10 @@ vi.mock('@tanstack/react-virtual', () => ({
 import {
   ICommandService,
   IEditorResolverService,
+  IStorageService,
   InstantiationService,
   ServiceCollection,
+  StorageScope,
 } from '@universe-editor/platform'
 import type {
   CommitChangesFileEntry,
@@ -44,6 +46,8 @@ import { commitChangesViewState } from '../viewState.js'
 
 const executeCommand = vi.fn(async (..._args: unknown[]) => undefined)
 const resolverOpenEditor = vi.fn(async (_uri: unknown, _opts?: unknown) => undefined)
+const storageGet = vi.fn(async (_key: string, _scope: unknown) => undefined)
+const storageSet = vi.fn(async (_key: string, _value: unknown, _scope: unknown) => undefined)
 
 function createInstantiationService(): InstantiationService {
   const services = new ServiceCollection()
@@ -54,6 +58,11 @@ function createInstantiationService(): InstantiationService {
   services.set(IEditorResolverService, {
     _serviceBrand: undefined,
     openEditor: resolverOpenEditor,
+  } as never)
+  services.set(IStorageService, {
+    _serviceBrand: undefined,
+    get: storageGet,
+    set: storageSet,
   } as never)
   return new InstantiationService(services)
 }
@@ -100,7 +109,7 @@ describe('CommitChangesView', () => {
     expect(screen.queryByRole('tree')).toBeNull()
   })
 
-  it('renders the header metadata (author / date / parents / message)', () => {
+  it('renders only the title and meta lines even when metadata carries parents / message', () => {
     renderView()
     act(() => {
       commitChangesViewState.show(
@@ -119,12 +128,8 @@ describe('CommitChangesView', () => {
     const meta = screen.getByTestId('commitChanges-meta').textContent ?? ''
     expect(meta).toContain('Jane Doe')
     expect(meta).toContain(' · ')
-    expect(screen.getByTestId('commitChanges-parents').textContent).toBe(
-      'Parents: 1234567, fedcba0',
-    )
-    expect(screen.getByTestId('commitChanges-message').textContent).toBe(
-      'fix crash\n\nlong body here',
-    )
+    expect(screen.queryByTestId('commitChanges-parents')).toBeNull()
+    expect(screen.queryByTestId('commitChanges-message')).toBeNull()
   })
 
   it('renders only the title when metadata is absent', () => {
@@ -135,8 +140,6 @@ describe('CommitChangesView', () => {
 
     expect(screen.getByTestId('commitChanges-title').textContent).toBe('a1b2c3d — fix crash')
     expect(screen.queryByTestId('commitChanges-meta')).toBeNull()
-    expect(screen.queryByTestId('commitChanges-parents')).toBeNull()
-    expect(screen.queryByTestId('commitChanges-message')).toBeNull()
   })
 
   it('clicking a file row executes openExternalCommand with the entry args', () => {
@@ -194,7 +197,7 @@ describe('CommitChangesView', () => {
     expect(executeCommand).not.toHaveBeenCalled()
   })
 
-  it('reveals the revealPath file row (selected) without focusing the tree', async () => {
+  it('reveals the revealPath file row and focuses the tree on it', async () => {
     renderView()
     act(() => {
       commitChangesViewState.show(payload({ revealPath: 'src/deep/b.ts' }))
@@ -205,7 +208,188 @@ describe('CommitChangesView', () => {
       const row = document.querySelector('[data-row-key="file:src/deep/b.ts"]')
       expect(row?.getAttribute('aria-selected')).toBe('true')
     })
+    // Opened from blame/timeline: the tree takes DOM focus on the revealed row.
     const tree = document.querySelector('[role="tree"]')
-    expect(tree?.contains(document.activeElement)).toBe(false)
+    expect(tree?.contains(document.activeElement)).toBe(true)
+  })
+
+  it('focusing the tree lands on the first file row (folders skipped)', () => {
+    renderView()
+    act(() => {
+      commitChangesViewState.show(payload())
+    })
+
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    fireEvent.focusIn(tree)
+
+    // Folders sort before files, so the first file row is the one nested
+    // inside the deepest-leading folder, not the alphabetically-first path.
+    const row = document.querySelector('[data-row-key="file:src/deep/b.ts"]')
+    expect(row?.getAttribute('aria-selected')).toBe('true')
+    expect(
+      document.querySelector('[data-row-key="folder:src"]')?.getAttribute('aria-selected'),
+    ).toBe('false')
+  })
+
+  it('focusing the tree in list mode lands on the first row', () => {
+    renderView()
+    act(() => {
+      commitChangesViewState.setViewMode('list')
+      commitChangesViewState.show(payload())
+    })
+
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    fireEvent.focusIn(tree)
+
+    const row = document.querySelector('[data-row-key="file:src/a.ts"]')
+    expect(row?.getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('restores the remembered file when the view remounts and regains focus', () => {
+    renderView()
+    act(() => {
+      commitChangesViewState.show(payload())
+    })
+
+    fireEvent.click(document.querySelector('[data-row-key="file:src/deep/b.ts"]')!)
+
+    // Re-showing the same commit remounts the content (fresh TreeModel).
+    act(() => {
+      commitChangesViewState.show(payload())
+    })
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    fireEvent.focusIn(tree)
+
+    const row = document.querySelector('[data-row-key="file:src/deep/b.ts"]')
+    expect(row?.getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('Space on a file row previews the diff preserving tree focus', () => {
+    renderView()
+    act(() => {
+      commitChangesViewState.show(payload())
+    })
+
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    fireEvent.click(document.querySelector('[data-row-key="file:src/a.ts"]')!)
+    executeCommand.mockClear()
+    fireEvent.keyDown(tree, { key: ' ' })
+
+    expect(executeCommand).toHaveBeenCalledTimes(1)
+    expect(executeCommand).toHaveBeenCalledWith(
+      'git-graph.openFileDiff',
+      { path: 'src/a.ts' },
+      { preserveFocus: true },
+    )
+  })
+
+  it('Enter on a file row opens the diff and hands focus to the editor', () => {
+    renderView()
+    act(() => {
+      commitChangesViewState.show(payload())
+    })
+
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    fireEvent.click(document.querySelector('[data-row-key="file:src/a.ts"]')!)
+    executeCommand.mockClear()
+    fireEvent.keyDown(tree, { key: 'Enter' })
+
+    expect(executeCommand).toHaveBeenCalledTimes(1)
+    expect(executeCommand).toHaveBeenCalledWith('git-graph.openFileDiff', { path: 'src/a.ts' })
+  })
+
+  it('Enter on a folder row toggles it instead of opening a diff', () => {
+    renderView()
+    act(() => {
+      commitChangesViewState.show(payload())
+    })
+
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    fireEvent.click(document.querySelector('[data-row-key="folder:src"]')!)
+    // Folder click collapsed it; Enter re-expands without running the command.
+    fireEvent.keyDown(tree, { key: 'Enter' })
+
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-row-key="file:src/a.ts"]')).toBeTruthy()
+  })
+
+  it('tree mode shows no directory suffix on file rows', () => {
+    renderView()
+    act(() => {
+      commitChangesViewState.show(payload())
+    })
+
+    const row = document.querySelector('[data-row-key="file:src/a.ts"]')
+    expect(row).toBeTruthy()
+    expect(row?.textContent).not.toContain('src')
+  })
+
+  it('list mode flattens the tree and shows the grey directory suffix', () => {
+    renderView()
+    act(() => {
+      commitChangesViewState.setViewMode('list')
+      commitChangesViewState.show(payload())
+    })
+
+    expect(document.querySelector('[data-row-key="folder:src"]')).toBeNull()
+    const row = document.querySelector('[data-row-key="file:src/a.ts"]')
+    expect(row).toBeTruthy()
+    expect(row?.textContent).toContain('a.ts')
+    expect(row?.textContent).toContain('src')
+
+    fireEvent.click(row!)
+    expect(executeCommand).toHaveBeenCalledWith('git-graph.openFileDiff', { path: 'src/a.ts' })
+  })
+
+  it('reveals the revealPath file row in list mode too', async () => {
+    renderView()
+    act(() => {
+      commitChangesViewState.setViewMode('list')
+      commitChangesViewState.show(payload({ revealPath: 'src/deep/b.ts' }))
+    })
+
+    await vi.waitFor(() => {
+      const row = document.querySelector('[data-row-key="file:src/deep/b.ts"]')
+      expect(row?.getAttribute('aria-selected')).toBe('true')
+    })
+  })
+
+  it('collapse-all / expand-all signals from the toolbar fold and restore the tree', () => {
+    renderView()
+    act(() => {
+      commitChangesViewState.show(payload())
+    })
+    expect(document.querySelector('[data-row-key="file:src/a.ts"]')).toBeTruthy()
+
+    act(() => {
+      commitChangesViewState.requestCollapseAll()
+    })
+    expect(document.querySelector('[data-row-key="file:src/a.ts"]')).toBeNull()
+    expect(document.querySelector('[data-row-key="folder:src"]')).toBeTruthy()
+
+    act(() => {
+      commitChangesViewState.requestExpandAll()
+    })
+    expect(document.querySelector('[data-row-key="file:src/a.ts"]')).toBeTruthy()
+  })
+
+  it('persists the view mode to GLOBAL storage once the stored value is restored', async () => {
+    renderView()
+    // Flush the restore read so restoredRef flips before the next mode change.
+    await act(async () => {
+      await storageGet.mock.results[0]?.value
+    })
+
+    act(() => {
+      commitChangesViewState.setViewMode('list')
+    })
+
+    await vi.waitFor(() => {
+      expect(storageSet).toHaveBeenCalledWith(
+        'scm.commitChanges.viewMode',
+        'list',
+        StorageScope.GLOBAL,
+      )
+    })
   })
 })

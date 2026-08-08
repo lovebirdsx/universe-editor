@@ -11,7 +11,7 @@ import {
   OpenDiffSourceFileAction,
   OpenWebviewDiffAction,
 } from './diffActions.js'
-import { ShowCommitChangesAction } from './commitChangesActions.js'
+import { FocusCommitChangesAction, ShowCommitChangesAction } from './commitChangesActions.js'
 import {
   CloseDirtyDiffPeekAction,
   GoToNextChangeAction,
@@ -650,6 +650,7 @@ registerAction2(ShowJsonSchemaAction)
 registerAction2(OpenDiffAction)
 registerAction2(OpenWebviewDiffAction)
 registerAction2(ShowCommitChangesAction)
+registerAction2(FocusCommitChangesAction)
 registerAction2(OpenDiffSourceFileAction)
 registerAction2(GoToNextDifferenceAction)
 registerAction2(GoToPreviousDifferenceAction)

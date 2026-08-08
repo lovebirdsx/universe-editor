@@ -134,7 +134,7 @@ async function flush(): Promise<void> {
 
 function resetViewState(): void {
   gitGraphViewState.revealCommit = null
-  gitGraphViewState.pendingReveal = null
+  gitGraphViewState.pendingReveal.set(null, undefined)
   gitGraphViewState.result = null
   gitGraphViewState.selection = []
   gitGraphViewState.repos = []
@@ -242,15 +242,38 @@ describe('GitGraphEditor reveal', () => {
   it('consumes pendingReveal once the mounted editor finishes its first load', async () => {
     const gate = CommandsRegistry.registerCommand(GitGraphCommands.getCommits, () => undefined)
     try {
-      gitGraphViewState.pendingReveal = PAGE1_HASH
+      gitGraphViewState.pendingReveal.set(PAGE1_HASH, undefined)
       renderEditor(() => resultWith([commit(PAGE1_HASH, 'first')], false))
       await flush()
       await act(async () => {
         await flush()
       })
 
-      expect(gitGraphViewState.pendingReveal).toBeNull()
+      expect(gitGraphViewState.pendingReveal.get()).toBeNull()
       expect(gitGraphViewState.selection).toEqual([PAGE1_HASH])
+    } finally {
+      gate.dispose()
+    }
+  })
+
+  it('consumes a pendingReveal that arrives while the editor is already mounted', async () => {
+    // The `_workbench.openGitGraph` bridge always writes the observable queue —
+    // the mounted editor must pick it up reactively (this is what makes the
+    // reveal highlight robust across the openEditor tab-switch race).
+    const gate = CommandsRegistry.registerCommand(GitGraphCommands.getCommits, () => undefined)
+    try {
+      renderEditor(() => resultWith([commit(PAGE1_HASH, 'first')], false))
+      await flush()
+      expect(gitGraphViewState.selection).toEqual([])
+
+      await act(async () => {
+        gitGraphViewState.pendingReveal.set(PAGE1_HASH, undefined)
+        await flush()
+      })
+
+      expect(gitGraphViewState.pendingReveal.get()).toBeNull()
+      expect(gitGraphViewState.selection).toEqual([PAGE1_HASH])
+      expect(scrollIntoViewSpy).toHaveBeenCalledWith({ block: 'center' })
     } finally {
       gate.dispose()
     }

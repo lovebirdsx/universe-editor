@@ -87,7 +87,44 @@ describe('buildCommitChangesSnapshot', () => {
     if (row.kind !== 'file') return
     expect(row.entry).toBe(renamed)
     expect(row.entry.oldPath).toBe('src/old.ts')
-    expect(row.dir).toBe('src')
+  })
+
+  it('omits the dir suffix in tree mode — the folder rows already express the path', () => {
+    const snapshot = buildCommitChangesSnapshot([entry('src/a.ts'), entry('b.ts')], new Set())
+
+    for (const node of flatten(snapshot)) {
+      if (node.kind === 'file') expect(node.dir).toBeUndefined()
+    }
+  })
+
+  it('list mode flattens all files into sorted roots with a dir suffix', () => {
+    const snapshot = buildCommitChangesSnapshot(
+      [entry('z.ts'), entry('src/b.ts'), entry('src/a.ts'), entry('lib/c.ts')],
+      new Set(),
+      'list',
+    )
+
+    expect(snapshot.roots.map((n) => n.id)).toEqual([
+      'file:lib/c.ts',
+      'file:src/a.ts',
+      'file:src/b.ts',
+      'file:z.ts',
+    ])
+    expect(snapshot.childrenMap.size).toBe(0)
+    const nested = snapshot.roots[1]!
+    expect(nested.kind === 'file' && nested.dir).toBe('src')
+    const topLevel = snapshot.roots[3]!
+    expect(topLevel.kind === 'file' ? topLevel.dir : 'x').toBeUndefined()
+  })
+
+  it('list mode ignores the collapsed set', () => {
+    const snapshot = buildCommitChangesSnapshot(
+      [entry('src/a.ts'), entry('src/b.ts')],
+      new Set(['src']),
+      'list',
+    )
+
+    expect(snapshot.roots.map((n) => n.id)).toEqual(['file:src/a.ts', 'file:src/b.ts'])
   })
 
   it('omits children of collapsed folders but keeps the folder row', () => {
@@ -128,6 +165,17 @@ describe('buildCommitChangesSnapshot', () => {
 
   it('findFileNode locates a file row by entry path', () => {
     const snapshot = buildCommitChangesSnapshot([entry('src/a.ts'), entry('lib/b.ts')], new Set())
+
+    expect(findFileNode(snapshot, 'lib/b.ts')?.entry.path).toBe('lib/b.ts')
+    expect(findFileNode(snapshot, 'missing.ts')).toBeUndefined()
+  })
+
+  it('findFileNode locates a file row in list mode', () => {
+    const snapshot = buildCommitChangesSnapshot(
+      [entry('src/a.ts'), entry('lib/b.ts')],
+      new Set(),
+      'list',
+    )
 
     expect(findFileNode(snapshot, 'lib/b.ts')?.entry.path).toBe('lib/b.ts')
     expect(findFileNode(snapshot, 'missing.ts')).toBeUndefined()

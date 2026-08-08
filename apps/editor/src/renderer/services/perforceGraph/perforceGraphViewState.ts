@@ -10,6 +10,7 @@
  *  registries); there is only ever one Perforce Graph editor (fixed resource).
  *--------------------------------------------------------------------------------------------*/
 
+import { observableValue, type ISettableObservable } from '@universe-editor/platform'
 import type { P4GraphLoadResult, P4GraphRepoDto } from '@universe-editor/extensions-common'
 
 /** Draggable widths (px) of the fixed-width columns. */
@@ -26,8 +27,10 @@ export interface PerforceGraphViewState {
   /** Callback registered by the mounted editor to select + scroll to a change,
    *  paging in more history until the change is loaded. */
   revealCommit: ((id: string) => void) | null
-  /** Change to reveal once the editor mounts (set while unmounted). */
-  pendingReveal: string | null
+  /** Change to reveal, consumed reactively by the mounted editor. Observable
+   *  for the same reason as gitGraphViewState.pendingReveal: a reveal issued
+   *  alongside the tab switch must reach the newly mounted instance. */
+  pendingReveal: ISettableObservable<string | null>
   /** Last loaded change list, or null if never loaded. */
   result: P4GraphLoadResult | null
   /** Selected change id (single), or the synthetic pending id. */
@@ -56,7 +59,7 @@ export const perforceGraphViewState: PerforceGraphViewState = {
   focusSearch: null,
   refresh: null,
   revealCommit: null,
-  pendingReveal: null,
+  pendingReveal: observableValue<string | null>('perforceGraph.pendingReveal', null),
   result: null,
   selection: [],
   scrollTop: 0,

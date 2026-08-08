@@ -193,3 +193,45 @@ describe('git.viewCommit', () => {
     expect(mocks.executeCommand).not.toHaveBeenCalled()
   })
 })
+
+describe('git-graph.openFileDiff', () => {
+  const REQ = { fromHash: PARENT, toHash: HASH, path: 'src/a.ts', status: 'M' }
+
+  function mockBlobContents() {
+    mocks.gitExec.mockImplementation((args: string[]) => {
+      if (args[0] === 'show' && typeof args[1] === 'string' && args[1].includes(':')) {
+        return Promise.resolve(gitOk(`content of ${args[1]}`))
+      }
+      return Promise.resolve(gitFail())
+    })
+  }
+
+  it('opens the diff focused by default', async () => {
+    const commands = makeCommands(() => fakeRepo(ROOT))
+    mockBlobContents()
+
+    await commands.get('git-graph.openFileDiff')?.(REQ)
+
+    expect(mocks.executeCommand).toHaveBeenCalledWith(
+      '_workbench.openDiff',
+      expect.objectContaining({
+        original: `content of ${PARENT}:src/a.ts`,
+        modified: `content of ${HASH}:src/a.ts`,
+        pinned: false,
+        preserveFocus: false,
+      }),
+    )
+  })
+
+  it('passes preserveFocus through for Space-preview from the commit-changes view', async () => {
+    const commands = makeCommands(() => fakeRepo(ROOT))
+    mockBlobContents()
+
+    await commands.get('git-graph.openFileDiff')?.(REQ, { preserveFocus: true })
+
+    expect(mocks.executeCommand).toHaveBeenCalledWith(
+      '_workbench.openDiff',
+      expect.objectContaining({ preserveFocus: true }),
+    )
+  })
+})

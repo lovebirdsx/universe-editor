@@ -9,6 +9,7 @@
 
 import {
   memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -17,7 +18,14 @@ import {
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
-import { ICommandService, IEditorResolverService, localize, URI } from '@universe-editor/platform'
+import {
+  ICommandService,
+  IEditorResolverService,
+  IStorageService,
+  localize,
+  StorageScope,
+  URI,
+} from '@universe-editor/platform'
 import type { ShowCommitChangesPayload } from '@universe-editor/extensions-common'
 import {
   Tree,
@@ -29,6 +37,8 @@ import {
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { FileIcon } from '../../files/fileIconTheme.js'
 import { useObservable, useService } from '../../useService.js'
+import { useViewFocusable } from '../../useViewFocusable.js'
+import { COMMIT_CHANGES_VIEW_ID } from '../../../actions/commitChangesActions.js'
 import { ActionButton } from '../scmShared.js'
 import {
   buildCommitChangesSnapshot,
@@ -36,16 +46,12 @@ import {
   type CommitChangesNode,
   type CommitChangesSnapshot,
 } from './buildSnapshot.js'
-import { commitChangesViewState } from './viewState.js'
+import { commitChangesViewState, COMMIT_CHANGES_VIEW_MODE_STORAGE_KEY } from './viewState.js'
 import styles from './CommitChangesView.module.css'
 
 function basename(path: string): string {
   const i = path.lastIndexOf('/')
   return i === -1 ? path : path.slice(i + 1)
-}
-
-function shortHash(hash: string): string {
-  return hash.slice(0, 7)
 }
 
 function formatAuthorDate(unixSeconds: number): string {
@@ -231,6 +237,7 @@ const FolderRow = memo(function FolderRow({
 
 function CommitChangesContent({ payload }: { payload: ShowCommitChangesPayload }) {
   const commandService = useService(ICommandService)
+  const viewMode = useObservable(commitChangesViewState.viewMode)
   // Collapse state lives outside the TreeModel: the snapshot drops a collapsed
   // folder's children outright, so a row click just edits this set and the
   // rebuilt snapshot re-renders the tree. The set starts empty for every show()
@@ -257,16 +264,69 @@ function CommitChangesContent({ payload }: { payload: ShowCommitChangesPayload }
   })
 
   const snapshot = useMemo(
-    () => buildCommitChangesSnapshot(payload.files, collapsed),
-    [payload.files, collapsed],
+    () => buildCommitChangesSnapshot(payload.files, collapsed, viewMode),
+    [payload.files, collapsed, viewMode],
   )
   snapshotRef.current = snapshot
   useLayoutEffect(() => {
     treeModel.refresh()
   }, [snapshot, treeModel])
 
-  // Reveal the file the payload points at (blame / timeline entry points):
-  // select + scroll it into view without pulling DOM focus into the tree.
+  // The tree container is the view's focus target (LayoutService.focusView
+  // resolves it through FocusableRegistry); onFocus below then picks the row.
+  const treeRef = useRef<HTMLDivElement>(null)
+  useViewFocusable(
+    COMMIT_CHANGES_VIEW_ID,
+    useCallback(() => treeRef.current, []),
+  )
+
+  // Remember the focused file per commit so a remount (every show() bumps the
+  // tick, resetting the TreeModel) can restore it when the view regains focus.
+  useEffect(() => {
+    const d = treeModel.onDidChangeSelection(() => {
+      const focusedId = treeModel.focused
+      if (!focusedId) return
+      const node = treeModel.getVisibleNodes().find((n) => n.id === focusedId)
+      if (node?.element.kind === 'file') {
+        commitChangesViewState.rememberFocusedFile(payload.commitRef, node.element.entry.path)
+      }
+    })
+    return () => d.dispose()
+  }, [treeModel, payload.commitRef])
+
+  // Collapse/expand-all are driven from the title toolbar via shared signal
+  // counters; each increment past the value seen at mount applies the request.
+  // Collapse-all collects every folder path from a fully-expanded tree
+  // snapshot (compaction-aware: the collapsed set is keyed by leaf path).
+  const collapseSignal = useObservable(commitChangesViewState.collapseAllSignal)
+  const expandSignal = useObservable(commitChangesViewState.expandAllSignal)
+  const seenSignalsRef = useRef({ collapse: collapseSignal, expand: expandSignal })
+  useEffect(() => {
+    if (collapseSignal === seenSignalsRef.current.collapse) return
+    seenSignalsRef.current.collapse = collapseSignal
+    const full = buildCommitChangesSnapshot(payload.files, new Set(), 'tree')
+    const paths = new Set<string>()
+    const walk = (nodes: readonly CommitChangesNode[]): void => {
+      for (const n of nodes) {
+        if (n.kind !== 'folder') continue
+        paths.add(n.path)
+        walk(full.childrenMap.get(n.id) ?? [])
+      }
+    }
+    walk(full.roots)
+    setCollapsed(paths)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collapseSignal])
+  useEffect(() => {
+    if (expandSignal === seenSignalsRef.current.expand) return
+    seenSignalsRef.current.expand = expandSignal
+    setCollapsed(new Set())
+  }, [expandSignal])
+
+  // Reveal the file the payload points at (blame / timeline entry points) and
+  // focus the tree on it — that route is an explicit "show me this file's
+  // commit" gesture, so landing the keyboard on the row is expected. A plain
+  // show() (no revealPath) still selects nothing and never steals focus.
   // `snapshot` is a dependency so a reveal issued before the tree has content
   // retries once data lands.
   const revealDoneRef = useRef(false)
@@ -281,9 +341,39 @@ function CommitChangesContent({ payload }: { payload: ShowCommitChangesPayload }
     if (!node) return
     revealDoneRef.current = true
     void treeModel.reveal(node)
+    treeRef.current?.focus({ preventScroll: true })
   }, [snapshot, treeModel, payload.revealPath])
 
+  // When the tree gains DOM focus without a (still-visible) focused row — via
+  // the focus command, or after a remount dropped the TreeModel's focus — land
+  // on the payload's reveal file, else the remembered file for this commit,
+  // else the first file row (folders are skipped: they only group).
+  const onTreeFocus = useCallback(() => {
+    const visible = treeModel.getVisibleNodes()
+    const focusedId = treeModel.focused
+    if (focusedId != null && visible.some((n) => n.id === focusedId)) return
+    const remembered =
+      payload.revealPath ?? commitChangesViewState.focusedFileFor(payload.commitRef)
+    let target =
+      remembered !== undefined ? findFileNode(snapshotRef.current, remembered) : undefined
+    if (!target) {
+      for (const n of visible) {
+        if (n.element.kind === 'file') {
+          target = n.element
+          break
+        }
+      }
+    }
+    if (target) treeModel.setSelection([target.id], target.id)
+  }, [treeModel, payload.revealPath, payload.commitRef])
+
   const toggleFolder = (node: Extract<CommitChangesNode, { kind: 'folder' }>): void => {
+    const willCollapse = !collapsed.has(node.path)
+    // Keep the TreeModel's expansion in lockstep with the view-level collapsed
+    // set — the Tree's own keyboard toggle (Enter/Space on a folder with
+    // children) only flips the model, and a stale model state would otherwise
+    // keep rows hidden after the view set re-expands them.
+    treeModel.setExpansion([[node.id, !willCollapse]])
     setCollapsed((prev) => {
       const next = new Set(prev)
       if (next.has(node.path)) next.delete(node.path)
@@ -331,18 +421,6 @@ function CommitChangesContent({ payload }: { payload: ShowCommitChangesPayload }
             {metaLine}
           </div>
         )}
-        {metadata?.parents !== undefined && metadata.parents.length > 0 && (
-          <div className={styles['parents']} data-testid="commitChanges-parents">
-            {localize('commitChanges.parents', 'Parents: {parents}', {
-              parents: metadata.parents.map(shortHash).join(', '),
-            })}
-          </div>
-        )}
-        {metadata?.message !== undefined && metadata.message !== '' && (
-          <pre className={styles['message']} data-testid="commitChanges-message">
-            {metadata.message}
-          </pre>
-        )}
       </div>
       <Tree<CommitChangesNode>
         model={treeModel}
@@ -350,12 +428,25 @@ function CommitChangesContent({ payload }: { payload: ShowCommitChangesPayload }
         virtualListClassName={styles['virtualList'] ?? ''}
         ariaLabel={localize('commitChanges.treeLabel', 'Changed files')}
         indentBase={0}
+        rootRef={treeRef}
         renderRow={renderRow}
-        onActivate={(node) => {
-          // Enter / Space on a file row runs the same command as a click; a
-          // folder keeps the Tree's built-in Enter toggle.
+        onFocus={onTreeFocus}
+        onActivate={(node, opts) => {
+          // Source Control parity: Space previews the diff and keeps focus on
+          // the tree; Enter opens it and hands focus to the diff editor. A
+          // folder with children keeps the Tree's built-in Enter/Space toggle;
+          // a view-collapsed folder reports no children, so the Tree delegates
+          // it here and we route it back into the same toggle.
           const n = node.element
-          if (n.kind === 'file') {
+          if (n.kind === 'folder') {
+            toggleFolder(n)
+            return
+          }
+          if (opts.preview) {
+            void commandService.executeCommand(payload.openExternalCommand, n.entry.args, {
+              preserveFocus: true,
+            })
+          } else {
             void commandService.executeCommand(payload.openExternalCommand, n.entry.args)
           }
         }}
@@ -365,8 +456,35 @@ function CommitChangesContent({ payload }: { payload: ShowCommitChangesPayload }
 }
 
 export function CommitChangesView() {
+  const storage = useService(IStorageService)
   const payload = useObservable(commitChangesViewState.payload)
   const tick = useObservable(commitChangesViewState.tick)
+
+  // CommitChangesView owns the IStorageService dependency, so it loads the
+  // persisted view mode into the shared store on mount and writes it back on
+  // change — same pattern as ScmView's 'scm.viewMode'. The title toolbar flips
+  // the mode through `commitChangesViewState`; the body just reads it.
+  const restoredRef = useRef(false)
+  useEffect(() => {
+    let active = true
+    void storage
+      .get<string>(COMMIT_CHANGES_VIEW_MODE_STORAGE_KEY, StorageScope.GLOBAL)
+      .then((stored) => {
+        if (active && (stored === 'list' || stored === 'tree')) {
+          commitChangesViewState.setViewMode(stored)
+        }
+        if (active) restoredRef.current = true
+      })
+    return () => {
+      active = false
+    }
+  }, [storage])
+
+  const viewMode = useObservable(commitChangesViewState.viewMode)
+  useEffect(() => {
+    if (!restoredRef.current) return
+    void storage.set(COMMIT_CHANGES_VIEW_MODE_STORAGE_KEY, viewMode, StorageScope.GLOBAL)
+  }, [viewMode, storage])
 
   return (
     <div className={styles['view']} tabIndex={-1} data-testid="commitChanges-view">

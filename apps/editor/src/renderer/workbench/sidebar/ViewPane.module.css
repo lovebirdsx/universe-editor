@@ -37,15 +37,27 @@
   text-align: left;
 }
 
+.title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 .header:hover {
   background: var(--vscode-sideBarSectionHeader-hoverBackground, #3a3a3a);
 }
 
+/* Shrink priority: the title (flex-basis 0) absorbs all pressure first and
+   ellipsizes away; only once it is gone may this row shrink, which in practice
+   compresses elastic blocks like the SCM repo selector — icon buttons sit at
+   their min-content size and never shrink. */
 .headerActions {
   display: flex;
   align-items: center;
   gap: 2px;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
 }
 
 .chevron {

@@ -28,6 +28,7 @@ import {
 import {
   autorun,
   ICommandService,
+  ILoggerService,
   IStorageService,
   IViewDescriptorService,
   IViewsService,
@@ -43,8 +44,9 @@ import {
   type P4GraphLoadOptions,
   type P4GraphLoadResult,
   type P4GraphRepoDto,
+  type ShowCommitChangesPayload,
 } from '@universe-editor/extensions-common'
-import { useService, useObservable } from '../useService.js'
+import { useService, useObservable, useOptionalService } from '../useService.js'
 import { IScmService } from '../../services/extensions/ScmService.js'
 import { computeGraphLayout, type GraphGrid } from '../../services/gitGraph/graphLayout.js'
 import {
@@ -53,12 +55,15 @@ import {
 } from '../../services/perforceGraph/perforceGraphViewState.js'
 import { scmViewState } from '../scm/scmViewState.js'
 import { ShowCommitChangesAction } from '../../actions/commitChangesActions.js'
+import { createCommitChangesFollower } from '../scm/commitChanges/graphFollow.js'
+import { getOrBuildGraphPayload } from '../scm/commitChanges/graphPayloadCache.js'
 import { buildChangePayload } from './commitChangesPayload.js'
 import {
   GitGraphContextMenu,
   type GitGraphMenuItem,
   type GitGraphMenuState,
 } from '../gitGraph/GitGraphContextMenu.js'
+import { useGraphKeyboardNav } from '../gitGraph/useGraphKeyboardNav.js'
 import { SendCommitToAgentChatAction } from '../../actions/agentContextActions.js'
 import styles from '../gitGraph/GitGraphEditor.module.css'
 
@@ -150,6 +155,11 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   const storage = useService(IStorageService)
   const viewsService = useService(IViewsService)
   const viewDescriptorService = useService(IViewDescriptorService)
+  const loggerService = useOptionalService(ILoggerService)
+  const logger = useMemo(
+    () => loggerService?.createLogger({ id: 'perforceGraph', name: 'Perforce Graph' }) ?? null,
+    [loggerService],
+  )
   const [result, setResult] = useState<P4GraphLoadResult | null>(
     () => perforceGraphViewState.result,
   )
@@ -158,6 +168,14 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   const [menu, setMenu] = useState<GitGraphMenuState | null>(null)
 
   const [selection, setSelection] = useState<string[]>(() => perforceGraphViewState.selection)
+  // Ref mirror so onRowClick stays referentially stable across selection
+  // changes — a fresh callback identity would bust ChangeRow's memo and
+  // re-render the whole list before the new highlight paints.
+  const selectionRef = useRef(selection)
+  selectionRef.current = selection
+  // Latest-wins sequence shared by the click bridge and the silent follow: the
+  // most recent dispatch supersedes anything still in flight.
+  const graphSyncSeqRef = useRef(0)
 
   const [limit, setLimit] = useState(() => perforceGraphViewState.limit)
   const [columnWidths, setColumnWidths] = useState(() => ({
@@ -296,19 +314,56 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   // commits and silently skip the scroll, so retry after every commit instead.
   useLayoutEffect(scrollPendingReveal)
 
-  // Reveal entry point (timeline / blame → `_workbench.openPerforceGraph`):
+  // Fetch (or reuse from the shared payload cache) the Commit Changes payload
+  // for one changelist. Keyed by client: a changelist's depot contents are
+  // immutable, but the local paths the payload carries depend on the client.
+  const fetchChangePayload = useCallback(
+    (id: string): Promise<ShowCommitChangesPayload | null> => {
+      const clientKey = selectedRepo ?? repos[0]?.root ?? ''
+      return getOrBuildGraphPayload(`perforce\n${clientKey}\n${id}`, async () => {
+        const started = performance.now()
+        const details = await commands.executeCommand<P4GraphChangeDetailsDto | null>(
+          PerforceGraphCommands.getChangeDetails,
+          id,
+        )
+        logger?.debug(
+          `change details #${id} fetched in ${Math.round(performance.now() - started)}ms`,
+        )
+        return details ? buildChangePayload(details) : null
+      })
+    },
+    [commands, logger, selectedRepo, repos],
+  )
+
+  // Silent Commit Changes follow for programmatic reveals (Open in Graph from
+  // blame / timeline / the Commit Changes toolbar): the sidebar content tracks
+  // the revealed change without opening the container or moving focus.
+  // Deliberate row clicks keep the non-silent bridge (they DO reveal it).
+  const followCommitChanges = useMemo(
+    () =>
+      createCommitChangesFollower({
+        providerId: 'perforce',
+        build: fetchChangePayload,
+        apply: (payload) => commands.executeCommand(ShowCommitChangesAction.ID, payload),
+        seq: graphSyncSeqRef,
+      }),
+    [commands, fetchChangePayload],
+  )
+
+  // Reveal entry point (timeline / blame / Commit Changes → the observable
+  // `perforceGraphViewState.pendingReveal`):
   // select the change and scroll it into view, paging in older history until it
   // is loaded. The loop stops on a hit, on `moreAvailable === false`, or at the
   // page cap (unknown id → silently no-op).
   const revealCommit = useCallback(
     (id: string) => {
-      // Requested while the initial load is still in flight (the bridge action
-      // calls in right after openEditor resolves): queue it instead of racing
-      // that load — the load's "fresh load" continuation resets the selection,
-      // which would clobber a reveal whose own fetch resolved first. The
-      // pendingReveal effect consumes the queue once the first page lands.
+      // Requested while the initial load is still in flight: re-queue it
+      // instead of racing that load — the load's "fresh load" continuation
+      // resets the selection, which would clobber a reveal whose own fetch
+      // resolved first. The pendingReveal effect re-dispatches once the first
+      // page lands.
       if (result === null) {
-        perforceGraphViewState.pendingReveal = id
+        perforceGraphViewState.pendingReveal.set(id, undefined)
         return
       }
       void (async () => {
@@ -335,6 +390,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
           if (!current?.changes.some((c) => c.id === id)) return
           if (nextLimit !== limit) setLimit(nextLimit)
           setSelection([id])
+          followCommitChanges(id)
           // Scroll now when the row is already rendered (re-reveal of a loaded
           // change commits no state change); otherwise the layout effect picks
           // it up once the row lands in the DOM.
@@ -345,7 +401,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
         }
       })()
     },
-    [commands, result, limit, scrollPendingReveal],
+    [commands, result, limit, scrollPendingReveal, followCommitChanges],
   )
 
   useEffect(() => {
@@ -355,14 +411,15 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     }
   }, [revealCommit])
 
-  // Reveal requested while the tab was unmounted lands in pendingReveal; consume
-  // it once the first page is in.
+  // Reveal requests land in the observable pendingReveal (the bridge action
+  // writes it, possibly before this instance mounted); consume it reactively,
+  // once the first page is in.
+  const pendingReveal = useObservable(perforceGraphViewState.pendingReveal)
   useEffect(() => {
-    const pending = perforceGraphViewState.pendingReveal
-    if (!pending || !result) return
-    perforceGraphViewState.pendingReveal = null
-    revealCommit(pending)
-  }, [result, revealCommit])
+    if (pendingReveal === null || result === null) return
+    perforceGraphViewState.pendingReveal.set(null, undefined)
+    revealCommit(pendingReveal)
+  }, [pendingReveal, result, revealCommit])
 
   // Background reload: refresh data in place without the loading flicker, keeping
   // the current selection when its change still exists.
@@ -493,31 +550,43 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     if (scrollRef.current) scrollRef.current.scrollTop = perforceGraphViewState.scrollTop
   }, [])
 
-  // Click-driven sidebar handoff: a plain click shows the change's files in the
-  // Commit Changes view; the pending node reveals the SCM main view. Deselecting
-  // (re-clicking the selected row) leaves the sidebar untouched. This MUST stay
-  // event-driven — deriving it from a `selection` effect would fire on tab
-  // remount, where the restored selection would steal the sidebar.
-  const onRowClick = useCallback(
-    (id: string, _e: MouseEvent) => {
-      const next = selection.length === 1 && selection[0] === id ? [] : [id]
+  // Selection entry shared by mouse and keyboard: applies the new selection and
+  // pushes the change's files into the Commit Changes view; a deselect or the
+  // pending node leaves the sidebar untouched and just supersedes any payload
+  // still in flight (latest-wins). This MUST stay event-driven — deriving it
+  // from a `selection` effect would fire on tab remount, where the restored
+  // selection would steal the sidebar.
+  const applySelection = useCallback(
+    (next: string[]) => {
       setSelection(next)
+      const seq = ++graphSyncSeqRef.current
       if (next.length === 0) return
+      const id = next[0]!
       if (id === PENDING_ID) {
         viewsService.openViewContainer('workbench.view.scm')
         viewDescriptorService.setViewCollapsed('workbench.view.scm.main', false)
         return
       }
       void (async () => {
-        const details = await commands.executeCommand<P4GraphChangeDetailsDto | null>(
-          PerforceGraphCommands.getChangeDetails,
-          id,
-        )
-        if (!details) return
-        await commands.executeCommand(ShowCommitChangesAction.ID, buildChangePayload(details))
+        const payload = await fetchChangePayload(id)
+        if (payload === null || seq !== graphSyncSeqRef.current) return
+        logger?.debug(`select → show commit changes ref=${payload.commitRef}`)
+        await commands.executeCommand(ShowCommitChangesAction.ID, payload)
       })()
     },
-    [commands, selection, viewsService, viewDescriptorService],
+    [commands, viewsService, viewDescriptorService, fetchChangePayload, logger],
+  )
+
+  // Click semantics on top of applySelection: a plain click shows the change's
+  // files; re-clicking the selected row only deselects.
+  const onRowClick = useCallback(
+    (id: string, _e: MouseEvent) => {
+      // Keep the scroll container focused so arrow keys work right after a click.
+      scrollRef.current?.focus()
+      const current = selectionRef.current
+      applySelection(current.length === 1 && current[0] === id ? [] : [id])
+    },
+    [applySelection],
   )
 
   const openChangeMenu = useCallback(
@@ -599,6 +668,39 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   const graphWidth = layout?.width ?? GRID.offsetX * 2
   const selected = useMemo(() => new Set(selection), [selection])
 
+  // Ctrl+Enter on the selected row: a changelist row has exactly one menu
+  // target (the change itself), so the menu opens directly, anchored at the row.
+  const openRowMenu = useCallback(
+    (id: string) => {
+      const change = filteredChanges.find((c) => c.id === id)
+      if (!change || id === PENDING_ID) return
+      const rowEl = scrollRef.current
+        ?.querySelectorAll('[data-id]')
+        .values()
+        .find((el) => el.getAttribute('data-id') === id)
+      const rect = rowEl?.getBoundingClientRect()
+      openChangeMenu(change, {
+        clientX: (rect?.left ?? 0) + 16,
+        clientY: rect?.bottom ?? 0,
+        preventDefault: () => {},
+        stopPropagation: () => {},
+      } as MouseEvent)
+    },
+    [filteredChanges, openChangeMenu],
+  )
+
+  const rowKeys = useMemo(() => filteredChanges.map((c) => c.id), [filteredChanges])
+  const selectFromKeyboard = useCallback((id: string) => applySelection([id]), [applySelection])
+  const onRowsKeyDown = useGraphKeyboardNav({
+    rows: rowKeys,
+    selectionRef,
+    select: selectFromKeyboard,
+    openMenu: openRowMenu,
+    scrollRef,
+    rowAttribute: 'data-id',
+    rowHeight: ROW_HEIGHT,
+  })
+
   return (
     <div className={styles['gitGraph']} data-testid="perforceGraph-editor">
       <div className={styles['toolbar']}>
@@ -670,6 +772,11 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
         <div
           className={styles['scrollBody']}
           ref={scrollRef}
+          tabIndex={0}
+          role="listbox"
+          aria-label={localize('perforceGraph.changeList', 'Changes')}
+          data-testid="perforceGraph-scrollBody"
+          onKeyDown={onRowsKeyDown}
           onScroll={(e) => {
             perforceGraphViewState.scrollTop = e.currentTarget.scrollTop
           }}
@@ -774,7 +881,17 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
         </div>
       )}
 
-      {menu && <GitGraphContextMenu state={menu} onClose={() => setMenu(null)} />}
+      {menu && (
+        <GitGraphContextMenu
+          state={menu}
+          onClose={() => {
+            setMenu(null)
+            // The menu lives in a portal; closing it drops focus to <body>
+            // otherwise, which would silently break arrow-key navigation.
+            scrollRef.current?.focus()
+          }}
+        />
+      )}
     </div>
   )
 }

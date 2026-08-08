@@ -51,8 +51,13 @@ export class OpenGitGraphFromExtensionAction extends Action2 {
   override async run(accessor: ServicesAccessor, hash?: unknown): Promise<void> {
     await accessor.get(IEditorService).openEditor(new GitGraphEditorInput())
     if (typeof hash !== 'string' || hash === '') return
-    if (gitGraphViewState.revealCommit) gitGraphViewState.revealCommit(hash)
-    else gitGraphViewState.pendingReveal = hash
+    // Always route through the observable pendingReveal, never a directly
+    // registered revealCommit: openEditor resolves before React commits the
+    // tab switch, so a registered callback could still belong to the
+    // about-to-unmount editor instance — its selection/scroll would die with
+    // it (the "reveal shows no highlight" bug). The mounted editor consumes
+    // pendingReveal reactively, with a fresh closure.
+    gitGraphViewState.pendingReveal.set(hash, undefined)
   }
 }
 

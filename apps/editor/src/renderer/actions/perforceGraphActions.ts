@@ -51,8 +51,10 @@ export class OpenPerforceGraphFromExtensionAction extends Action2 {
   override async run(accessor: ServicesAccessor, changelist?: unknown): Promise<void> {
     await accessor.get(IEditorService).openEditor(new PerforceGraphEditorInput())
     if (typeof changelist !== 'string' || changelist === '') return
-    if (perforceGraphViewState.revealCommit) perforceGraphViewState.revealCommit(changelist)
-    else perforceGraphViewState.pendingReveal = changelist
+    // Always route through the observable pendingReveal, never a directly
+    // registered revealCommit — see OpenGitGraphFromExtensionAction for why
+    // (a stale editor instance would swallow the reveal's selection).
+    perforceGraphViewState.pendingReveal.set(changelist, undefined)
   }
 }
 

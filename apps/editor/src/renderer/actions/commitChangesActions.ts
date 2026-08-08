@@ -8,6 +8,7 @@
 
 import {
   Action2,
+  ILayoutService,
   ILoggerService,
   IViewDescriptorService,
   IViewsService,
@@ -74,6 +75,7 @@ function isShowCommitChangesPayload(value: unknown): value is ShowCommitChangesP
     p['files'].every(isFileEntry) &&
     (p['subtitle'] === undefined || typeof p['subtitle'] === 'string') &&
     (p['revealPath'] === undefined || typeof p['revealPath'] === 'string') &&
+    (p['silent'] === undefined || typeof p['silent'] === 'boolean') &&
     (p['metadata'] === undefined || isMetadata(p['metadata']))
   )
 }
@@ -101,9 +103,43 @@ export class ShowCommitChangesAction extends Action2 {
       return
     }
 
-    logger.debug(`showing commit changes provider=${payload.providerId} ref=${payload.commitRef}`)
+    logger.debug(
+      `showing commit changes provider=${payload.providerId} ref=${payload.commitRef} silent=${payload.silent === true}`,
+    )
     commitChangesViewState.show(payload)
+    // Silent updates (graph selection follow) refresh the content only — the
+    // sidebar must not pop open or expand the view on the user's behalf.
+    if (payload.silent === true) return
     viewsService.openViewContainer('workbench.view.scm')
     viewDescriptorService.setViewCollapsed(COMMIT_CHANGES_VIEW_ID, false)
+  }
+}
+
+/**
+ * Focus the Commit Changes view: reveal the SCM container, expand the view and
+ * move DOM focus into its file tree. No default keybinding — VSCode assigns
+ * none to secondary views either; the command palette (f1) finds it.
+ */
+export class FocusCommitChangesAction extends Action2 {
+  static readonly ID = 'workbench.view.scm.commitChanges.focus'
+
+  constructor() {
+    super({
+      id: FocusCommitChangesAction.ID,
+      title: localize2('action.commitChanges.focus', 'Focus on Commit Changes View'),
+      category: localize2('command.category.view', 'View'),
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    // Snapshot every service synchronously — the accessor dies past the first await.
+    const layoutService = accessor.get(ILayoutService)
+    const viewsService = accessor.get(IViewsService)
+    const viewDescriptorService = accessor.get(IViewDescriptorService)
+
+    viewsService.openViewContainer('workbench.view.scm')
+    viewDescriptorService.setViewCollapsed(COMMIT_CHANGES_VIEW_ID, false)
+    await layoutService.focusView(COMMIT_CHANGES_VIEW_ID, { source: 'command' })
   }
 }

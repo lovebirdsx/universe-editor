@@ -19,6 +19,7 @@ import { SearchViewToolbar } from '../workbench/search/SearchViewToolbar.js'
 import { ScmView } from '../workbench/scm/ScmView.js'
 import { ScmViewToolbar } from '../workbench/scm/ScmViewToolbar.js'
 import { CommitChangesView } from '../workbench/scm/commitChanges/CommitChangesView.js'
+import { CommitChangesViewToolbar } from '../workbench/scm/commitChanges/CommitChangesViewToolbar.js'
 import { TimelineView } from '../workbench/timeline/TimelineView.js'
 import { TimelineViewToolbar } from '../workbench/timeline/TimelineViewToolbar.js'
 import { SessionChangesView } from '../workbench/agents/SessionChangesView.js'
@@ -99,6 +100,7 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
           order: 2,
         },
         CommitChangesView,
+        CommitChangesViewToolbar,
       ),
     )
 

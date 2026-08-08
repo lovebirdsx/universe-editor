@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PerforceClient } from '../client.js'
 import type { ClientManager } from '../clientManager.js'
 import type { GraphDescribe } from '../p4GraphParser.js'
-import { buildCommitChangesPayload, viewCommit } from '../viewCommit.js'
+import { buildCommitChangesPayload, openGraphFileDiff, viewCommit } from '../viewCommit.js'
 
 const mocks = vi.hoisted(() => ({
   executeCommand: vi.fn(),
@@ -191,5 +191,48 @@ describe('viewCommit', () => {
     const failing = fakeClient({ getGraphChangeDetails: vi.fn(async () => null) })
     await viewCommit(fakeManager(failing), () => failing, undefined, '12345', log)
     expect(mocks.executeCommand).not.toHaveBeenCalled()
+  })
+})
+
+describe('openGraphFileDiff', () => {
+  const REQ = { depotFile: DEPOT_A, status: 'M', rev: '3', localPath: LOCAL_A }
+
+  it('prints both revisions and opens the diff, focusing the editor by default', async () => {
+    const client = fakeClient()
+
+    await openGraphFileDiff(client, REQ)
+
+    expect(client.printRevision).toHaveBeenCalledWith(`${DEPOT_A}#2`)
+    expect(client.printRevision).toHaveBeenCalledWith(`${DEPOT_A}#3`)
+    expect(mocks.executeCommand).toHaveBeenCalledWith(
+      '_workbench.openDiff',
+      expect.objectContaining({
+        original: `content of ${DEPOT_A}#2`,
+        modified: `content of ${DEPOT_A}#3`,
+        pinned: false,
+        preserveFocus: false,
+        openableUri: pathToFileURL(LOCAL_A).href,
+      }),
+    )
+  })
+
+  it('passes preserveFocus through for Space-preview from the commit-changes view', async () => {
+    const client = fakeClient()
+
+    await openGraphFileDiff(client, REQ, { preserveFocus: true })
+
+    expect(mocks.executeCommand).toHaveBeenCalledWith(
+      '_workbench.openDiff',
+      expect.objectContaining({ preserveFocus: true }),
+    )
+  })
+
+  it('omits openableUri when the file has no local path', async () => {
+    const client = fakeClient()
+
+    await openGraphFileDiff(client, { ...REQ, localPath: null })
+
+    const payload = mocks.executeCommand.mock.calls[0]?.[1] as Record<string, unknown>
+    expect('openableUri' in payload).toBe(false)
   })
 })

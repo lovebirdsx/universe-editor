@@ -7,10 +7,11 @@
  *  — copied locally per the extension's convention (it must not bundle
  *  extensions-common).
  */
+import { basename } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { commands } from '@universe-editor/extension-api'
 import { descriptionFirstLine } from './changelist.js'
-import { displayPath, statusFromAction } from './p4GraphParser.js'
+import { displayPath, fileDiffRevs, statusFromAction } from './p4GraphParser.js'
 import { uriToFsPath } from './pathUtil.js'
 import type { PerforceClient } from './client.js'
 import type { ClientManager } from './clientManager.js'
@@ -163,4 +164,33 @@ export function revealPathForFile(
   if (!path) return undefined
   const href = pathToFileURL(path).href
   return payload.files.find((entry) => entry.resourceUri === href)?.path
+}
+
+/**
+ * `perforce-graph.openFileDiff` handler: print both revisions of one file and
+ * open them in the renderer's diff editor. `options.preserveFocus` previews
+ * the diff without stealing focus (Space-preview from the commit-changes
+ * view), mirroring the git extension's `git-graph.openFileDiff`.
+ */
+export async function openGraphFileDiff(
+  target: PerforceClient,
+  req: P4GraphFileDiffRequest,
+  options?: { preserveFocus?: boolean },
+): Promise<void> {
+  const { left, right } = fileDiffRevs(req.depotFile, req.status, req.rev)
+  const [original, modified] = await Promise.all([
+    target.printRevision(left),
+    target.printRevision(right),
+  ])
+  const leftLabel = left ? left.slice(left.indexOf('#')) : '∅'
+  const rightLabel = right ? right.slice(right.indexOf('#')) : '∅'
+  await commands.executeCommand('_workbench.openDiff', {
+    title: `${basename(displayPath(req.depotFile))} (${leftLabel} ↔ ${rightLabel})`,
+    originalUri: pathToFileURL(displayPath(req.depotFile)).href,
+    original,
+    modified,
+    pinned: false,
+    preserveFocus: options?.preserveFocus ?? false,
+    ...(req.localPath ? { openableUri: pathToFileURL(req.localPath).href } : {}),
+  })
 }

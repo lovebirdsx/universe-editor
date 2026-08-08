@@ -14,6 +14,7 @@ import { AiFixCodeActionContribution } from '../AiFixCodeActionContribution.js'
 import { FileEditorStatusContribution } from '../FileEditorStatusContribution.js'
 import { ScmBlameContribution } from '../ScmBlameContribution.js'
 import { ScmSelectedRepoContribution } from '../ScmSelectedRepoContribution.js'
+import { CommitChangesViewResetContribution } from '../CommitChangesViewResetContribution.js'
 import { MergeConflictContribution } from '../MergeConflictContribution.js'
 import { DirtyDiffContribution } from '../DirtyDiffContribution.js'
 import { ExternalChangeWatcher } from '../ExternalChangeWatcher.js'
@@ -129,6 +130,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.scmSelectedRepo',
   ScmSelectedRepoContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Clear the Commit Changes view's module-level payload when the workspace root
+// changes (switch / close folder), so stale commit content from the previous
+// workspace never lingers. AfterRestore alongside the other SCM view state.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.commitChangesViewReset',
+  CommitChangesViewResetContribution,
   WorkbenchPhase.AfterRestore,
 )
 

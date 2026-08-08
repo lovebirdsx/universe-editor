@@ -112,7 +112,7 @@ async function flush(): Promise<void> {
 
 function resetViewState(): void {
   perforceGraphViewState.revealCommit = null
-  perforceGraphViewState.pendingReveal = null
+  perforceGraphViewState.pendingReveal.set(null, undefined)
   perforceGraphViewState.result = null
   perforceGraphViewState.selection = []
   perforceGraphViewState.repos = []
@@ -199,12 +199,30 @@ describe('PerforceGraphEditor reveal', () => {
   })
 
   it('consumes pendingReveal once the mounted editor finishes its first load', async () => {
-    perforceGraphViewState.pendingReveal = '4521'
+    perforceGraphViewState.pendingReveal.set('4521', undefined)
     renderEditor(() => resultWith([change('4521', 'Fix widget')], false))
     await flush()
 
-    expect(perforceGraphViewState.pendingReveal).toBeNull()
+    expect(perforceGraphViewState.pendingReveal.get()).toBeNull()
     expect(perforceGraphViewState.selection).toEqual(['4521'])
+  })
+
+  it('consumes a pendingReveal that arrives while the editor is already mounted', async () => {
+    // The `_workbench.openPerforceGraph` bridge always writes the observable
+    // queue — the mounted editor must pick it up reactively (this is what makes
+    // the reveal highlight robust across the openEditor tab-switch race).
+    renderEditor(() => resultWith([change('4521', 'Fix widget')], false))
+    await flush()
+    expect(perforceGraphViewState.selection).toEqual([])
+
+    await act(async () => {
+      perforceGraphViewState.pendingReveal.set('4521', undefined)
+      await flush()
+    })
+
+    expect(perforceGraphViewState.pendingReveal.get()).toBeNull()
+    expect(perforceGraphViewState.selection).toEqual(['4521'])
+    expect(scrollIntoViewSpy).toHaveBeenCalledWith({ block: 'center' })
   })
 
   it('keeps the reveal selection when an in-flight revalidate resolves after the reveal', async () => {

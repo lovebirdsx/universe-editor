@@ -11,6 +11,7 @@
  *  editor (its resource is fixed), so a single store object suffices.
  *--------------------------------------------------------------------------------------------*/
 
+import { observableValue, type ISettableObservable } from '@universe-editor/platform'
 import type { GitGraphLoadResult, GitGraphRepoDto } from '@universe-editor/extensions-common'
 
 /** User-tunable view options, surfaced through the settings popover. */
@@ -39,8 +40,12 @@ export interface GitGraphViewState {
   /** Callback registered by the mounted editor to select + scroll to a commit,
    *  paging in more history until the commit is loaded. */
   revealCommit: ((hash: string) => void) | null
-  /** Commit to reveal once the editor mounts (set while unmounted). */
-  pendingReveal: string | null
+  /** Commit to reveal, consumed reactively by the mounted editor. Observable
+   *  (rather than a plain field) so a reveal issued by `_workbench.openGitGraph`
+   *  in the same tick as the tab switch is picked up by the NEWLY mounted
+   *  editor instance — a direct revealCommit call could otherwise land on the
+   *  about-to-unmount instance, losing the selection/highlight with it. */
+  pendingReveal: ISettableObservable<string | null>
   /** Last loaded commit list, or null if never loaded. */
   result: GitGraphLoadResult | null
   /** Selected commit hash(es): one shown in the Commit Changes view, two to compare. */
@@ -69,7 +74,7 @@ export const gitGraphViewState: GitGraphViewState = {
   toggleRemoteBranches: null,
   refresh: null,
   revealCommit: null,
-  pendingReveal: null,
+  pendingReveal: observableValue<string | null>('gitGraph.pendingReveal', null),
   result: null,
   selection: [],
   scrollTop: 0,

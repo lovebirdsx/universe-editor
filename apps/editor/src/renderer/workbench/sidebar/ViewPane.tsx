@@ -111,7 +111,7 @@ export function ViewPane({
               aria-hidden="true"
             />
           )}
-          {title}
+          <span className={styles['title']}>{title}</span>
         </button>
         <div className={styles['headerActions']}>
           {Toolbar ? <Toolbar /> : null}
