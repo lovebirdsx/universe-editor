@@ -1,3 +1,4 @@
+import { Fragment } from 'react'
 import { cx } from '../atoms/cx.js'
 import styles from './KeybindingLabel.module.css'
 
@@ -14,17 +15,19 @@ export function KeybindingLabel({ chords, highlights, className }: KeybindingLab
     <span className={cx(styles['label'], className)}>
       {chords.map((chord, chordIndex) => (
         <span key={chordIndex}>
-          {chordIndex > 0 && ' '}
+          {chordIndex > 0 && <span className={styles['chordSeparator']} />}
           {chord.map((keyLabel, keyIndex) => (
-            <span
-              key={keyIndex}
-              className={cx(
-                styles['key'],
-                highlights?.[chordIndex]?.[keyIndex] === true && styles['highlight'],
-              )}
-            >
-              {keyLabel}
-            </span>
+            <Fragment key={keyIndex}>
+              {keyIndex > 0 && <span className={styles['separator']}>+</span>}
+              <span
+                className={cx(
+                  styles['key'],
+                  highlights?.[chordIndex]?.[keyIndex] === true && styles['highlight'],
+                )}
+              >
+                {keyLabel}
+              </span>
+            </Fragment>
           ))}
         </span>
       ))}

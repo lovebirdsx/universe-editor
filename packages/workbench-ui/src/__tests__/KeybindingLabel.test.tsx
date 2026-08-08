@@ -6,7 +6,7 @@ import keyStyles from '../keybinding/KeybindingLabel.module.css'
 describe('KeybindingLabel', () => {
   afterEach(cleanup)
 
-  it('renders each key of each chord as a key block', () => {
+  it('renders each key of each chord as a key block with + separators', () => {
     const { container } = render(
       <KeybindingLabel
         chords={[
@@ -15,18 +15,22 @@ describe('KeybindingLabel', () => {
         ]}
       />,
     )
-    expect(container.textContent).toBe('CtrlK CtrlS')
+    expect(container.textContent).toBe('Ctrl+KCtrl+S')
     const keys = Array.from(container.querySelectorAll(`.${keyStyles['key']}`)).map(
       (el) => el.textContent,
     )
     expect(keys).toEqual(['Ctrl', 'K', 'Ctrl', 'S'])
+    expect(container.querySelectorAll(`.${keyStyles['separator']}`)).toHaveLength(2)
   })
 
-  it('separates chords with a plain space', () => {
+  it('separates chords with a fixed-width separator element', () => {
     const { container } = render(<KeybindingLabel chords={[['Ctrl', 'K'], ['S']]} />)
     const label = container.firstElementChild!
     expect(label.childNodes).toHaveLength(2)
-    expect(label.childNodes[1]!.textContent).toBe(' S')
+    const secondChord = label.childNodes[1] as HTMLElement
+    expect(
+      (secondChord.firstChild as HTMLElement).classList.contains(keyStyles['chordSeparator']!),
+    ).toBe(true)
   })
 
   it('marks highlighted keys from the parallel highlights structure', () => {

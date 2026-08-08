@@ -21,6 +21,17 @@
   margin-right: 0;
 }
 
+.separator {
+  margin-right: var(--spacing-1);
+  font-size: var(--font-size-xs);
+}
+
+/* VSCode .monaco-keybinding-key-chord-separator: 6px */
+.chordSeparator {
+  display: inline-block;
+  width: var(--spacing-3);
+}
+
 .key.highlight {
   border-color: var(--vscode-list-highlightForeground, #2aaaff);
   font-weight: var(--font-weight-bold);
