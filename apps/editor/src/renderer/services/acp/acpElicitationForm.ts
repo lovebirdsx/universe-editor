@@ -5,9 +5,11 @@
  *  before submit. Unrecognizable properties are skipped with a warn (never
  *  throw), matching the normalizeMcpServers "bad entries skipped" policy.
  *
- *  The AskUserQuestion bridge shape needs no special-casing: the fork's
- *  `question_<n>` (enum / enum-multi) and `question_<n>_custom` (string)
- *  fields fall into the generic model directly.
+ *  The AskUserQuestion bridge shape needs no special-casing: the claude fork's
+ *  `question_<n>` (enum / enum-multi) + `question_<n>_custom` (string) and the
+ *  codex fork's `<id>` (enum) + `<id>__other` (string) fields fall into the
+ *  generic model directly; ElicitationCard pairs the free-text suffix fields
+ *  with their enum for side-by-side rendering.
  *--------------------------------------------------------------------------------------------*/
 
 import type {

@@ -411,6 +411,59 @@ describe('ElicitationCard — AskUserQuestion folding', () => {
   })
 })
 
+describe('ElicitationCard — codex request_user_input folding', () => {
+  // The codex fork emits `<id>` (enum) + `<id>__other` (string) instead of
+  // claude's `_custom` pair; the card must pair them just the same.
+  function codexAskRequest(): CreateElicitationRequest {
+    return {
+      sessionId: 'agent-1',
+      mode: 'form',
+      message: 'Pick a color',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          q1: {
+            type: 'string',
+            title: 'Color',
+            oneOf: [
+              { const: 'red', title: 'Red', description: 'warm' },
+              { const: 'blue', title: 'Blue', description: 'cold' },
+            ],
+          },
+          q1__other: {
+            type: 'string',
+            title: 'Other',
+            description: 'Type your own answer instead of choosing an option above.',
+          },
+        },
+      },
+    } as CreateElicitationRequest
+  }
+
+  it('renders the __other field as an inline input beside the select, not its own row', () => {
+    const h = makePending(codexAskRequest())
+    render(renderCard(makeSession('A', h.pending)))
+
+    expect(screen.queryByTestId('acp-elicitation-field-q1__other')).toBeNull()
+    const input = screen.getByTestId('acp-elicitation-input-q1__other')
+    expect(input.tagName).toBe('INPUT')
+  })
+
+  it('submits the selection and the __other text together', () => {
+    const h = makePending(codexAskRequest())
+    render(renderCard(makeSession('A', h.pending)))
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-input-q1'))
+    fireEvent.click(screen.getByRole('option', { name: /Red/ }))
+    fireEvent.change(screen.getByTestId('acp-elicitation-input-q1__other'), {
+      target: { value: 'green' },
+    })
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-submit'))
+    expect(h.resolved).toEqual([{ action: 'accept', content: { q1: 'red', q1__other: 'green' } }])
+  })
+})
+
 describe('elicitationDraftKey', () => {
   it('prefers the toolCallId, falls back to a message hash', () => {
     expect(elicitationDraftKey('tc-1', 'hello')).toBe('tc-1')

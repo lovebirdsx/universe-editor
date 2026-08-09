@@ -97,17 +97,19 @@ function buildContent(
 }
 
 /**
- * Pairs an AskUserQuestion-style `<name>_custom` free-text field with its enum
- * question so the two render side by side on one row: the select plus an
- * always-visible notes/"Other" input. The fork emits the custom field per
- * question; on submit both values travel together and the agent bridge folds
- * the text into notes on the selection (never replacing it). The two controls
- * keep their values independently — clearing either on the other's edit would
+ * Pairs an AskUserQuestion-style free-text field with its enum question so the
+ * two render side by side on one row: the select plus an always-visible
+ * notes/"Other" input. Two suffix conventions are recognized: claude's fork
+ * emits `<name>_custom` per question, codex's fork emits `<name>__other` for
+ * request_user_input's other-answer; on submit both values travel together and
+ * each agent bridge interprets them (claude folds the text into notes on the
+ * selection, codex treats it as a replacement answer). The two controls keep
+ * their values independently — clearing either on the other's edit would
  * silently destroy user input.
  */
 interface DisplayField {
   readonly field: ElicitationFormField
-  /** The `<field.name>_custom` free-text field rendered beside this enum's select. */
+  /** The `<field.name>_custom` / `<field.name>__other` free-text field rendered beside this enum's select. */
   readonly customField?: ElicitationStringField
 }
 
@@ -120,7 +122,8 @@ function toDisplayFields(fields: readonly ElicitationFormField[]): DisplayField[
   for (const field of fields) {
     if (consumed.has(field.name)) continue
     if (field.kind === 'enum') {
-      const custom = stringFields.get(`${field.name}_custom`)
+      const custom =
+        stringFields.get(`${field.name}_custom`) ?? stringFields.get(`${field.name}__other`)
       if (custom) {
         consumed.add(custom.name)
         display.push({ field, customField: custom })
