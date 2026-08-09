@@ -47,7 +47,7 @@ harness 的启动 fixture 接收 `extensions: string[]`(扩展 id allowlist),拼
 
 判据：**window reload 能不能把状态复位干净？** 能 → `sharedApp`；碰了 main 进程持久态 → `electronApp`。选错 `sharedApp` 会让上一个测试的 main 态（幽灵窗口/PTY/session）泄漏进下一个测试。
 
-**自启动 spec**：需要完全掌控启动参数（多窗口、二次启动）的用例直接 `_electron.launch`（见 `smoke.windows.spec.ts`）。此时：
+**自启动 spec**：需要完全掌控启动参数（多窗口、二次启动）的用例用 harness 导出的 `launchElectron`（`_electron.launch` 的包装，对 CI 环境瞬时的 `Process failed to launch` 自带重试，见 `smoke.editorRestore.spec.ts`；**不要**再裸调 `_electron.launch`）。此时：
 - 必须先解构去掉 `ELECTRON_RUN_AS_NODE`（Claude Code shell 注入，会让 Electron 退化成纯 Node 拒绝 Chromium flag）——照抄 fixture 里的 `const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env`。
 - 自己 new 出来的窗口 fixture 不管，收尾要手动对**每个活窗口** `expectNoLeaks(page)` + `closeApp(app)`（都从 `WorkbenchPO.js` / `electronApp.js` 导出）。
 

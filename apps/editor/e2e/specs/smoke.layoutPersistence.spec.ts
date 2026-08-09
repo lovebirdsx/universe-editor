@@ -13,12 +13,16 @@
  *    命令式 resize Allotment，DOM 侧栏宽度收敛到 400。
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect, _electron as electron } from '@playwright/test'
+import { test, expect } from '@playwright/test'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { ENABLED_EXTENSIONS_ENV, INITIAL_SETTINGS } from '@universe-editor/e2e-harness'
+import {
+  ENABLED_EXTENSIONS_ENV,
+  INITIAL_SETTINGS,
+  launchElectron,
+} from '@universe-editor/e2e-harness'
 import { URI } from '@universe-editor/platform'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks } from '../pages/WorkbenchPO.js'
@@ -47,7 +51,7 @@ function workspaceIdFromUri(uriString: string): string {
 async function launchWithState(userDataDir: string) {
   writeFileSync(join(userDataDir, 'settings.json'), INITIAL_SETTINGS, 'utf8')
   const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
-  const app = await electron.launch({
+  const app = await launchElectron({
     args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     cwd: APP_ROOT,
     env: {

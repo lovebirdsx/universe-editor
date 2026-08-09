@@ -15,6 +15,7 @@ export {
 export {
   closeApp,
   launchApp,
+  launchElectron,
   resolveEditorBuild,
   seedBaselineUserData,
   ENABLED_EXTENSIONS_ENV,

@@ -8,11 +8,15 @@
  *  因此不能复用默认 fixture（fixture 默认把该标记置为已见以保证布局确定性）。
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect, _electron as electron } from '@playwright/test'
+import { test, expect } from '@playwright/test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ENABLED_EXTENSIONS_ENV, INITIAL_SETTINGS } from '@universe-editor/e2e-harness'
+import {
+  ENABLED_EXTENSIONS_ENV,
+  INITIAL_SETTINGS,
+  launchElectron,
+} from '@universe-editor/e2e-harness'
 import { APP_ROOT, MAIN_ENTRY, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
@@ -27,7 +31,7 @@ test.describe('@p1 first-run agent onboarding', () => {
     // reveal fires.
     writeFileSync(join(userDataDir, 'settings.json'), INITIAL_SETTINGS, 'utf8')
     const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
-    const app = await electron.launch({
+    const app = await launchElectron({
       args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
       cwd: APP_ROOT,
       env: {

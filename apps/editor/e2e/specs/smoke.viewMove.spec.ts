@@ -9,11 +9,15 @@
  *  数据模型 + 持久化这条主链路。
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect, _electron as electron } from '@playwright/test'
+import { test, expect } from '@playwright/test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ENABLED_EXTENSIONS_ENV, INITIAL_SETTINGS } from '@universe-editor/e2e-harness'
+import {
+  ENABLED_EXTENSIONS_ENV,
+  INITIAL_SETTINGS,
+  launchElectron,
+} from '@universe-editor/e2e-harness'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
@@ -59,7 +63,7 @@ async function waitForRestored(page: import('@playwright/test').Page): Promise<v
 async function launchWithState(userDataDir: string) {
   seedUserSettings(userDataDir)
   const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
-  const app = await electron.launch({
+  const app = await launchElectron({
     args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     cwd: APP_ROOT,
     env: {

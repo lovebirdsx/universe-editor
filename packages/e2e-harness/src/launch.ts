@@ -333,6 +333,37 @@ export interface LaunchAppOptions {
   readonly extraArgs?: readonly string[]
 }
 
+// CI Windows runners intermittently hold a lock on the Electron dist files
+// (Defender scanning electron.exe / icudtl.dat): the process dies before
+// Playwright's pipe connects — "Process failed to launch!" with an ICU-load or
+// "file is being used by another process" stderr. No app code has run at that
+// point, so retrying with the SAME userDataDir is safe (seeded state is
+// untouched); the backoff rides out the scan window, which was observed to
+// outlast a single Playwright test retry.
+const LAUNCH_ATTEMPTS = 3
+const LAUNCH_RETRY_DELAY_MS = 5_000
+
+/**
+ * `electron.launch` with transient-failure retry. Use this instead of the bare
+ * `_electron.launch` in self-launching specs so a runner-level file-lock window
+ * doesn't fail the test before the app under test even starts.
+ */
+export async function launchElectron(
+  options: Parameters<typeof electron.launch>[0],
+): Promise<ElectronApplication> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await electron.launch(options)
+    } catch (err) {
+      if (attempt >= LAUNCH_ATTEMPTS || !/Process failed to launch/i.test(String(err))) throw err
+      console.warn(
+        `[e2e] electron.launch failed (attempt ${attempt}/${LAUNCH_ATTEMPTS}), retrying in ${LAUNCH_RETRY_DELAY_MS}ms: ${String(err).split('\n', 1)[0]}`,
+      )
+      await new Promise((resolve) => setTimeout(resolve, LAUNCH_RETRY_DELAY_MS))
+    }
+  }
+}
+
 /**
  * Launch the packaged Electron build with the E2E probe enabled. Centralizes the
  * ELECTRON_RUN_AS_NODE strip + the enabled-extensions seam so every fixture and
@@ -367,7 +398,7 @@ export async function launchApp(options: LaunchAppOptions): Promise<ElectronAppl
     options.userDataDir,
     'vscode-user-keybindings.json',
   )
-  return electron.launch({
+  return launchElectron({
     args: [
       options.mainEntry,
       `--user-data-dir=${options.userDataDir}`,

@@ -331,6 +331,14 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 
 ---
 
+**案例 72 — CI Windows runner 文件锁窗口内 electron.launch 早夭：Process failed to launch!（ICU 加载失败 / 文件被占用），窗口可长过一次 test retry；修=harness 启动层瞬时重试（launchElectron）**
+信号：fixture 或自启动 spec 在 `electron.launch` 处抛 `Error: electron.launch: Process failed to launch!`；call log 里 `<launched> pid=N` 后进程立刻死亡，stderr 是 `Invalid file descriptor to ICU data received.`（exitCode=2147483651=0x80000003 STATUS_BREAKPOINT）或 `The process cannot access the file because it is being used by another process.`（exitCode=1）；**同一时间窗内多个 worker 的 launch 同时挂**（受害者跨 spec、互不相干），窗口外的 launch 全部正常；retry 若落在同一窗口内则同样挂（本例 acpEditorTitle initial+retry1 双挂，activityBar 单挂被 retry 救回）。与案例 28 区分：28 是**本机**环境、CI 正常、不修不打 tag；本条是 **CI Windows runner** 上的瞬时窗口（AV/Defender 扫描 electron dist 或并发进程短暂锁住 electron.exe/icudtl.dat），app 代码完全没跑（进程死在 Chromium 初始化前）。
+根因：Playwright 在 CDP 管道建立前进程退出即报 `Process failed to launch!`；此时 Electron 死在加载 ICU 数据/自身二进制的阶段——runner 上另一进程（最可信=Defender 实时扫描）短暂锁住 electron dist 下的文件。锁窗口可持续数十秒，能跨过 Playwright 的单次 test retry，靠 retries 兜不住。
+修（harness 层，不动产品、不弱化断言——app 根本没启动过，seeded userData 未被触碰，原地重试同一 userDataDir 安全）：`packages/e2e-harness/src/launch.ts` 新增 `launchElectron(options)` = `_electron.launch` 包装，仅对 `/Process failed to launch/` 重试（3 次、间隔 5s，console.warn 留痕），其它错误原样抛；`launchApp` 内部走它（覆盖 cold/shared/扩展全部 fixture），并从 index.ts 导出给自启动 spec。10 个裸 `_electron.launch` 的自启动 spec（viewSizes/viewMove/terminalRestore/quickOpenRestart/outputRestore/maximizedSecondarySidebarRestore/layoutPersistence/editorRestore/agentsEmptySessionRestore/agentOnboarding）全部改用 `launchElectron`；e2e/CLAUDE.md「自启动 spec」约定同步改为禁止再裸调。验证：`pnpm check` + acpEditorTitle/editorRestore 定向 + `e2e:smoke` 66/66 全绿。
+教训：a) 「launch 阶段死、同窗口多 worker 齐挂、窗口外全部正常」= runner 级文件锁，别当产品回归追；b) 环境窗口可长过单次 test retry，靠 Playwright retries 不够，要在更细粒度（launch 调用本身）重试；c) 新增自启动 spec 一律用 `launchElectron`，别裸 `_electron.launch`。锚：`packages/e2e-harness/src/launch.ts`（launchElectron）；`apps/editor/e2e/CLAUDE.md`（自启动 spec 约定）。
+
+---
+
 ## 根治 TODO
 
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
