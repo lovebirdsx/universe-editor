@@ -26,6 +26,8 @@ export {
 
 export { waitForProbe } from './fixtures.js'
 
+export { installFailureForensics } from './forensics.js'
+
 export { WorkbenchPO, expectNoLeaks, evaluateWhenRestored } from './pages/WorkbenchPO.js'
 export { ActivityBarPO } from './pages/ActivityBarPO.js'
 export { SideBarPO } from './pages/SideBarPO.js'

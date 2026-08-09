@@ -22,6 +22,7 @@ import {
   WorkbenchPO,
   closeApp,
   expectNoLeaks,
+  installFailureForensics,
   launchApp,
   resolveEditorBuild,
   seedBaselineUserData,
@@ -312,7 +313,7 @@ export const test = base.extend<SwarmFixtures>({
       swarmProc.kill()
     }
   },
-  electronApp: async ({ swarmBackend, swarmExtraEnv }, use) => {
+  electronApp: async ({ swarmBackend, swarmExtraEnv }, use, testInfo) => {
     const app = await launchApp({
       appRoot: APP_ROOT,
       mainEntry: MAIN_ENTRY,
@@ -326,8 +327,14 @@ export const test = base.extend<SwarmFixtures>({
         ...swarmExtraEnv,
       },
     })
+    // After closeApp so the log tail is flushed before the failure copy.
+    const finalizeForensics = installFailureForensics(
+      await app.firstWindow(),
+      swarmBackend.userDataDir,
+    )
     await use(app)
     await closeApp(app)
+    await finalizeForensics(testInfo)
   },
   page: async ({ electronApp }, use) => {
     const page = await electronApp.firstWindow()

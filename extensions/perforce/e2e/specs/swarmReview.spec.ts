@@ -171,14 +171,24 @@ test.describe('@p1 swarm reviews', () => {
       await expect(review.getByText('大数据表.csv')).toBeVisible()
       await review.getByText('大数据表.csv').click()
       // Two 1.1MB `p4 print` round-trips (bytes probe, both sides; the text diff
-      // reuses the probed bytes) precede the editor mount. Poll for EITHER editor
-      // kind first so a mis-route to the webview fails loud instead of timing out.
+      // reuses the probed bytes) precede the editor mount.
+      // Poll for ANY terminal editor kind, then assert which. A mis-route opens
+      // the excel viewType via a custom-editor host — which has no provider in
+      // this perforce-only suite, so neither the diff nor the webview-frame
+      // testid ever appears and a bare two-way poll dies as a silent 25s
+      // timeout (the CI shape of the fake-p4 stdout-truncation bug).
       const webviewFrame = page.locator('[data-testid="webview-frame"]')
+      const customEditor = page.locator('[data-testid="custom-editor"]')
       await expect
-        .poll(async () => (await diff.count()) + (await webviewFrame.count()), { timeout: 25_000 })
+        .poll(
+          async () =>
+            (await diff.count()) + (await webviewFrame.count()) + (await customEditor.count()),
+          { timeout: 25_000 },
+        )
         .toBeGreaterThan(0)
       await expect(diff).toBeVisible()
       await expect(webviewFrame).toHaveCount(0)
+      await expect(customEditor).toHaveCount(0)
 
       await expect
         .poll(

@@ -724,7 +724,11 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
             base64DecodedBytes(right.content),
           )
           if (largestSide <= SPREADSHEET_DIFF_MAX_BYTES) {
-            logger.debug(
+            // info, not debug: the size-based routing decision is the first thing to
+            // check when a diff opens in the wrong editor kind (e.g. a truncated p4
+            // print flipping a >1MB csv back under the cap) — it must be in the log
+            // file at the default level.
+            logger.info(
               `openFileDiff ${file.path}: largestSide=${largestSide} cap=${SPREADSHEET_DIFF_MAX_BYTES}, route=webview`,
             )
             // Distinct left/right URIs carrying the backing-change pair keep the
@@ -752,7 +756,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
           }
           if (!file.path.toLowerCase().endsWith('.csv')) {
             // A binary workbook past the cap has no readable fallback.
-            logger.debug(
+            logger.info(
               `openFileDiff ${file.path}: largestSide=${largestSide} cap=${SPREADSHEET_DIFF_MAX_BYTES}, route=too-large`,
             )
             notifications.notify({
@@ -768,7 +772,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
           // Oversized CSV: decode the bytes already probed above and diff them as
           // text below — re-printing both sides via getFileContent would double
           // the p4 traffic for the largest files we handle.
-          logger.debug(
+          logger.info(
             `openFileDiff ${file.path}: largestSide=${largestSide} cap=${SPREADSHEET_DIFF_MAX_BYTES}, route=monaco-text`,
           )
           spreadsheetText = {

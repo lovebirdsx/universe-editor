@@ -791,9 +791,19 @@ function main() {
   }
 }
 
+// The consumer may die mid-read (watchdog kill); a broken pipe must not surface
+// as a crash — just stop.
+process.stdout.on('error', () => process.exit(process.exitCode ?? 0))
+
 try {
-  process.exit(main())
+  // NOT process.exit(main()): on POSIX, pipe writes are asynchronous, and exit()
+  // discards whatever stdout hasn't flushed yet — a >64KB `print` payload gets
+  // silently truncated under CI load (Windows pipe writes are synchronous, so the
+  // bug never reproduces locally). Setting exitCode lets the process drain stdout
+  // and exit naturally once the event loop empties (no other live handles here:
+  // stdin is read via readFileSync(0), no timers/servers).
+  process.exitCode = main()
 } catch (err) {
   process.stderr.write(`fake-p4: ${err instanceof Error ? err.stack : String(err)}\n`)
-  process.exit(1)
+  process.exitCode = 1
 }

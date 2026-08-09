@@ -31,6 +31,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { WorkbenchPO, expectNoLeaks } from './pages/WorkbenchPO.js'
 import { closeApp, launchApp, seedBaselineUserData } from './launch.js'
+import { installFailureForensics } from './forensics.js'
 
 export interface AppFixtureConfig {
   readonly appRoot: string
@@ -116,7 +117,7 @@ export function createColdAppTest(config: AppFixtureConfig): E2ETest {
       await use({ dir: posix, file: (rel) => `${posix}/${rel}` })
     },
     electronApp: [
-      async ({ launchWorkspace }, use) => {
+      async ({ launchWorkspace }, use, testInfo) => {
         const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-'))
         seedBaselineUserData(userDataDir)
         const app = await launchApp({
@@ -132,8 +133,11 @@ export function createColdAppTest(config: AppFixtureConfig): E2ETest {
             ...(launchWorkspace ? [launchWorkspace.dir] : []),
           ],
         })
+        // After closeApp so the log tail is flushed before the failure copy.
+        const finalizeForensics = installFailureForensics(await app.firstWindow(), userDataDir)
         await use(app)
         await closeApp(app)
+        await finalizeForensics(testInfo)
       },
       // Own budget: a closeApp that needs the force-kill path (10s graceful wait
       // + tree enumeration + orphan sweep) legitimately takes ~20s; sharing the
@@ -332,7 +336,7 @@ export function createSharedAppTest(config: AppFixtureConfig): SharedE2ETest {
       await use(undefined)
     },
     _leakGate: [
-      async ({ sharedApp }, use) => {
+      async ({ sharedApp }, use, testInfo) => {
         // Setup (before the test body): reset the shared window to a clean
         // first-frame. The very first test skips this — the freshly launched
         // window is already clean.
@@ -341,7 +345,12 @@ export function createSharedAppTest(config: AppFixtureConfig): SharedE2ETest {
         } else {
           await resetWindow(sharedApp.page, sharedApp.userDataDir)
         }
+        const finalizeForensics = installFailureForensics(sharedApp.page, sharedApp.userDataDir)
         await use()
+        // The app keeps running (worker-scoped) — copy before the leak gate so a
+        // body failure is captured even when the gate throws too. The log tail
+        // may still be buffered; that beats losing everything.
+        await finalizeForensics(testInfo)
         // Teardown gate: fail the test if the session leaked any Disposables. This
         // unmounts React on the shared page; the next test's resetWindow reloads
         // the window (rebuilding the UI), and the worker fixture closes the app
