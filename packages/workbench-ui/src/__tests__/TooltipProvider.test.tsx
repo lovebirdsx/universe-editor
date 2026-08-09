@@ -200,4 +200,99 @@ describe('TooltipProvider', () => {
     fireEvent.mouseOut(child)
     expect(child.getAttribute('title')).toBe('child title')
   })
+
+  it('appends the resolved keybinding for data-tooltip-command hosts', () => {
+    vi.useFakeTimers()
+    render(
+      <TooltipProvider
+        delay={0}
+        resolveShortcut={(id) => (id === 'view.explorer' ? 'Ctrl+Shift+E' : undefined)}
+      >
+        <button
+          type="button"
+          data-tooltip="Explorer"
+          data-tooltip-command="view.explorer"
+          data-testid="bound"
+        >
+          explorer
+        </button>
+        <button
+          type="button"
+          data-tooltip="Unbound"
+          data-tooltip-command="view.unbound"
+          data-testid="unbound"
+        >
+          unbound
+        </button>
+      </TooltipProvider>,
+    )
+
+    fireEvent.mouseOver(screen.getByTestId('bound'))
+    act(() => {
+      vi.advanceTimersByTime(10)
+    })
+    expect(screen.getByRole('tooltip').textContent).toBe('Explorer (Ctrl+Shift+E)')
+
+    // An unbound command degrades to the plain label.
+    fireEvent.mouseOut(screen.getByTestId('bound'))
+    fireEvent.mouseOver(screen.getByTestId('unbound'))
+    expect(screen.getByRole('tooltip').textContent).toBe('Unbound')
+  })
+
+  it('leaves the text alone without a resolveShortcut prop', () => {
+    vi.useFakeTimers()
+    render(
+      <TooltipProvider delay={0}>
+        <button
+          type="button"
+          data-tooltip="Explorer"
+          data-tooltip-command="view.explorer"
+          data-testid="bound"
+        >
+          explorer
+        </button>
+      </TooltipProvider>,
+    )
+
+    fireEvent.mouseOver(screen.getByTestId('bound'))
+    act(() => {
+      vi.advanceTimersByTime(10)
+    })
+    expect(screen.getByRole('tooltip').textContent).toBe('Explorer')
+  })
+
+  it('resolves the keybinding at hover time so rebinding is reflected', () => {
+    vi.useFakeTimers()
+    let key = 'Ctrl+Shift+E'
+    render(
+      <TooltipProvider delay={0} resolveShortcut={() => key}>
+        <button
+          type="button"
+          data-tooltip="Explorer"
+          data-tooltip-command="view.explorer"
+          data-testid="bound"
+        >
+          explorer
+        </button>
+      </TooltipProvider>,
+    )
+    const el = screen.getByTestId('bound')
+
+    fireEvent.mouseOver(el)
+    act(() => {
+      vi.advanceTimersByTime(10)
+    })
+    expect(screen.getByRole('tooltip').textContent).toBe('Explorer (Ctrl+Shift+E)')
+
+    key = 'Ctrl+K E'
+    fireEvent.mouseOut(el)
+    act(() => {
+      vi.advanceTimersByTime(300)
+    })
+    fireEvent.mouseOver(el)
+    act(() => {
+      vi.advanceTimersByTime(10)
+    })
+    expect(screen.getByRole('tooltip').textContent).toBe('Explorer (Ctrl+K E)')
+  })
 })

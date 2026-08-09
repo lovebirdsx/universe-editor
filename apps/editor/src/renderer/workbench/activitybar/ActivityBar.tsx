@@ -12,6 +12,7 @@ import { useViewDescriptors } from '../dnd/useViewDescriptors.js'
 import { VIEW_DRAG_MIME, dragContainsView, viewDragData } from '../dnd/viewDragData.js'
 import { applyViewDrop } from '../dnd/applyViewDrop.js'
 import { IActivityService } from '../../services/activity/ActivityService.js'
+import { viewContainerToggleCommand } from '../../services/views/viewContainerToggleCommand.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { resolveActivityIcon } from './icon-map.js'
 import { resolveContainerIconName } from '../icons/resolveContainerIcon.js'
@@ -69,6 +70,7 @@ function ActivityBarItem({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
       data-tooltip={descriptor.label}
+      data-tooltip-command={viewContainerToggleCommand(descriptor.id)}
       aria-label={descriptor.label}
       aria-pressed={isActive}
       data-testid={`activitybar-item-${descriptor.id}`}

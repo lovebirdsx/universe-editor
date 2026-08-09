@@ -19,6 +19,15 @@ import styles from './tooltipSurface.module.css'
 
 export const TOOLTIP_ATTRIBUTE = 'data-tooltip'
 
+/**
+ * Optional companion to {@link TOOLTIP_ATTRIBUTE}: when the hovered element also
+ * carries `data-tooltip-command="<commandId>"` and the host injected
+ * {@link TooltipProviderProps.resolveShortcut}, the command's effective
+ * keybinding is appended to the text ("Label (Ctrl+Shift+E)"). Resolution
+ * happens at hover time, so user rebinding is reflected without re-render.
+ */
+export const TOOLTIP_COMMAND_ATTRIBUTE = 'data-tooltip-command'
+
 /** Where a native `title` is stashed while the themed tooltip stands in for it. */
 const NATIVE_TITLE_STASH = 'data-tooltip-native-title'
 
@@ -34,6 +43,12 @@ interface TooltipState {
 export interface TooltipProviderProps {
   /** Hover/focus delay in ms before the tooltip appears. Defaults to 500. */
   delay?: number
+  /**
+   * Host-injected keybinding resolver for {@link TOOLTIP_COMMAND_ATTRIBUTE}
+   * hosts: given a command id, return its effective keybinding label
+   * ("Ctrl+Shift+E") or undefined when unbound.
+   */
+  resolveShortcut?: ((commandId: string) => string | undefined) | undefined
   children?: ReactNode
 }
 
@@ -58,22 +73,30 @@ function restoreNativeTitle(el: Element): void {
   el.setAttribute('title', stashed)
 }
 
-function tooltipTargetFrom(node: EventTarget | null): { target: Element; text: string } | null {
+function tooltipTargetFrom(
+  node: EventTarget | null,
+  resolveShortcut?: (commandId: string) => string | undefined,
+): { target: Element; text: string } | null {
   if (!(node instanceof Element)) return null
   const el = node.closest(`[${TOOLTIP_ATTRIBUTE}],[${NATIVE_TITLE_STASH}],[title]`)
   if (!el) return null
   // A native `title` on the resolved element would pop the OS bubble alongside
   // ours — claim it even when `data-tooltip` wins the text.
   claimNativeTitle(el)
-  const text = (
+  let text = (
     el.getAttribute(TOOLTIP_ATTRIBUTE) ??
     el.getAttribute(NATIVE_TITLE_STASH) ??
     ''
   ).trim()
+  if (text && resolveShortcut) {
+    const commandId = el.getAttribute(TOOLTIP_COMMAND_ATTRIBUTE)
+    const shortcut = commandId ? resolveShortcut(commandId) : undefined
+    if (shortcut) text = `${text} (${shortcut})`
+  }
   return text ? { target: el, text } : null
 }
 
-export function TooltipProvider({ delay = 500, children }: TooltipProviderProps) {
+export function TooltipProvider({ delay = 500, resolveShortcut, children }: TooltipProviderProps) {
   const [tip, setTip] = useState<TooltipState | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const tipRef = useRef<TooltipState | null>(null)
@@ -115,13 +138,13 @@ export function TooltipProvider({ delay = 500, children }: TooltipProviderProps)
           timerRef.current = null
           // Re-read the attribute at fire time: hosts may fill in the text
           // asynchronously (e.g. lazy-fetched content) during the delay.
-          setTip(tooltipTargetFrom(next.target) ?? next)
+          setTip(tooltipTargetFrom(next.target, resolveShortcut) ?? next)
         }, delay)
       }
     }
 
     const onMouseOver = (e: MouseEvent) => {
-      const next = tooltipTargetFrom(e.target)
+      const next = tooltipTargetFrom(e.target, resolveShortcut)
       if (!next) return
       if (tipRef.current?.target === next.target && tipRef.current.text === next.text) return
       show(next)
@@ -139,7 +162,7 @@ export function TooltipProvider({ delay = 500, children }: TooltipProviderProps)
     const onFocusIn = (e: FocusEvent) => {
       // Clicking focuses the element too; the mouse handlers own that scenario.
       if (Date.now() - lastMouseDownAtRef.current < FOCUS_SUPPRESS_AFTER_MOUSEDOWN_MS) return
-      const next = tooltipTargetFrom(e.target)
+      const next = tooltipTargetFrom(e.target, resolveShortcut)
       if (next) show(next)
     }
     const onFocusOut = () => hide()
@@ -170,7 +193,7 @@ export function TooltipProvider({ delay = 500, children }: TooltipProviderProps)
       document.removeEventListener('scroll', hide, true)
       document.removeEventListener('wheel', hide, true)
     }
-  }, [delay])
+  }, [delay, resolveShortcut])
 
   // The host element can be unmounted by React while its tooltip is visible
   // (list re-render, tree collapse, …) — no mouseout fires in that case.

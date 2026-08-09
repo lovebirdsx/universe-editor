@@ -912,6 +912,7 @@ export const EditorGroupView = memo(function EditorGroupView({
                 className={styles['groupLockIndicator']}
                 data-testid="editor-group-lock-indicator"
                 data-tooltip={localize('editorGroup.unlock', 'Unlock Group')}
+                data-tooltip-command={ToggleEditorGroupLockAction.ID}
                 aria-label={localize('editorGroup.unlock', 'Unlock Group')}
                 onClick={() =>
                   void commandService.executeCommand(ToggleEditorGroupLockAction.ID, {

@@ -92,7 +92,8 @@ export function ChatFindWidget({
         {label}
       </span>
       <IconButton
-        label={localize('acp.find.previous', 'Previous match (Shift+F3)')}
+        label={localize('acp.find.previous', 'Previous match')}
+        command="workbench.action.agent.findPrevious"
         onClick={onPrev}
         disabled={disabled}
         data-testid="acp-find-prev"
@@ -100,7 +101,8 @@ export function ChatFindWidget({
         <ChevronUp size={14} strokeWidth={1.75} />
       </IconButton>
       <IconButton
-        label={localize('acp.find.next', 'Next match (F3)')}
+        label={localize('acp.find.next', 'Next match')}
+        command="workbench.action.agent.findNext"
         onClick={onNext}
         disabled={disabled}
         data-testid="acp-find-next"
@@ -108,7 +110,8 @@ export function ChatFindWidget({
         <ChevronDown size={14} strokeWidth={1.75} />
       </IconButton>
       <IconButton
-        label={localize('acp.find.close', 'Close (Esc)')}
+        label={localize('acp.find.close', 'Close')}
+        command="workbench.action.agent.findClose"
         onClick={onClose}
         data-testid="acp-find-close"
       >

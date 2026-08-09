@@ -136,10 +136,8 @@ export function LayoutControls() {
       <button
         className={`${styles['layout-btn']} ${sidebarVisible ? styles['layout-btn--active'] : ''}`}
         onClick={() => layoutService.toggleVisible(PartId.SideBar)}
-        data-tooltip={localize(
-          'layoutControls.togglePrimarySideBarWithKey',
-          'Toggle Primary Side Bar (Ctrl+B)',
-        )}
+        data-tooltip={localize('action.togglePrimarySideBar.title', 'Toggle Primary Side Bar')}
+        data-tooltip-command="workbench.action.toggleSidebarVisibility"
         aria-label={localize('action.togglePrimarySideBar.title', 'Toggle Primary Side Bar')}
         aria-pressed={sidebarVisible}
       >
@@ -148,7 +146,8 @@ export function LayoutControls() {
       <button
         className={`${styles['layout-btn']} ${panelVisible ? styles['layout-btn--active'] : ''}`}
         onClick={() => layoutService.toggleVisible(PartId.Panel)}
-        data-tooltip={localize('layoutControls.togglePanelWithKey', 'Toggle Panel (Ctrl+J)')}
+        data-tooltip={localize('action.togglePanel.title', 'Toggle Panel')}
+        data-tooltip-command="workbench.action.togglePanel"
         aria-label={localize('action.togglePanel.title', 'Toggle Panel')}
         aria-pressed={panelVisible}
       >
@@ -157,10 +156,8 @@ export function LayoutControls() {
       <button
         className={`${styles['layout-btn']} ${secondarySidebarVisible ? styles['layout-btn--active'] : ''}`}
         onClick={() => layoutService.toggleVisible(PartId.SecondarySideBar)}
-        data-tooltip={localize(
-          'layoutControls.toggleSecondarySideBarWithKey',
-          'Toggle Secondary Side Bar (Ctrl+Alt+B)',
-        )}
+        data-tooltip={localize('action.toggleSecondarySideBar.title', 'Toggle Secondary Side Bar')}
+        data-tooltip-command="workbench.action.toggleSecondarySidebarVisibility"
         aria-label={localize('action.toggleSecondarySideBar.title', 'Toggle Secondary Side Bar')}
         aria-pressed={secondarySidebarVisible}
       >

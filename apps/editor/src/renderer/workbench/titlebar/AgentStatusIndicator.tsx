@@ -89,22 +89,21 @@ export function AgentStatusIndicator() {
       : styles['agent-status--idle']
 
   const tooltip = hasAsk
-    ? localize(
-        'agentStatus.waitingTooltip',
-        '{0} session(s) waiting for input — Switch Session (Alt+S)',
-        { 0: String(total) },
-      )
+    ? localize('agentStatus.waitingTooltip', '{0} session(s) waiting for input — Switch Session', {
+        0: String(total),
+      })
     : total > 0
-      ? localize('agentStatus.runningTooltip', '{0} running session(s) — Switch Session (Alt+S)', {
+      ? localize('agentStatus.runningTooltip', '{0} running session(s) — Switch Session', {
           0: String(total),
         })
-      : localize('agentStatus.idleTooltip', 'Switch Session (Alt+S)')
+      : localize('agentStatus.idleTooltip', 'Switch Session')
 
   return (
     <button
       className={`${styles['agent-status']} ${stateClass}`}
       onClick={() => void commandService.executeCommand(SwitchSessionAction.ID)}
       data-tooltip={tooltip}
+      data-tooltip-command={SwitchSessionAction.ID}
       aria-label={tooltip}
       data-testid="titlebar-agent-status"
     >

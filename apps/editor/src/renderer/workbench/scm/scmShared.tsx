@@ -112,6 +112,7 @@ export function ActionButton({
       type="button"
       className={styles['actionButton']}
       data-tooltip={action.title}
+      data-tooltip-command={action.command}
       aria-label={action.title}
       disabled={busy === true}
       onClick={onRun}

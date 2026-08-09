@@ -134,6 +134,7 @@ export function TerminalViewToolbar() {
         type="button"
         className={styles['iconBtn']}
         data-tooltip={localize('action.terminalInEditor.title', 'Open Terminal in Editor')}
+        data-tooltip-command="workbench.action.createTerminalEditor"
         onClick={handleOpenInEditor}
       >
         <ExternalLink size={14} />
@@ -142,7 +143,8 @@ export function TerminalViewToolbar() {
       <button
         type="button"
         className={styles['iconBtn']}
-        data-tooltip={localize('terminal.splitWithKey', 'Split Terminal (Ctrl+Shift+5)')}
+        data-tooltip={localize('action.splitTerminal.title', 'Split Terminal')}
+        data-tooltip-command="workbench.action.terminal.split"
         onClick={handleSplit}
         disabled={!activeId}
       >
@@ -164,6 +166,7 @@ export function TerminalViewToolbar() {
           type="button"
           className={styles['newBtn']}
           data-tooltip={localize('action.newTerminal.title', 'New Terminal')}
+          data-tooltip-command="workbench.action.terminal.new"
           onClick={handleNewDefault}
         >
           <Plus size={14} />

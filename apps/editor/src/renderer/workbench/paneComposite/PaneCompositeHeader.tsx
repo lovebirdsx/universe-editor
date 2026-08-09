@@ -31,6 +31,7 @@ import { resolveContainerIconName } from '../icons/resolveContainerIcon.js'
 import { ViewTitleActions } from '../viewContainerHeader/ViewTitleActions.js'
 import { useViewScopedContextKey } from '../viewContainerHeader/useViewScopedContextKey.js'
 import { ViewToolbarRegistry } from '../../services/views/ViewComponentRegistry.js'
+import { viewContainerToggleCommand } from '../../services/views/viewContainerToggleCommand.js'
 import styles from './PaneComposite.module.css'
 
 interface Props {
@@ -154,6 +155,7 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
               role="tab"
               aria-selected={active}
               data-tooltip={c.label}
+              data-tooltip-command={viewContainerToggleCommand(c.id)}
               aria-label={c.label}
               data-testid={`view-container-tab-${c.id}`}
               draggable
@@ -197,6 +199,7 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
                 ? localize('panel.restore', 'Restore Panel Size')
                 : localize('panel.maximize', 'Maximize Panel Size')
             }
+            data-tooltip-command="workbench.action.toggleMaximizedPanel"
             aria-label={
               panelMaximized
                 ? localize('panel.restore', 'Restore Panel Size')

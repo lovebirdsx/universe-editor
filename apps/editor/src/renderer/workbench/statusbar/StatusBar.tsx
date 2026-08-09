@@ -77,6 +77,7 @@ function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
       className={className}
       onClick={handleClick}
       data-tooltip={entry.tooltip}
+      data-tooltip-command={entry.command}
       aria-label={label}
     >
       {showSpinner && (

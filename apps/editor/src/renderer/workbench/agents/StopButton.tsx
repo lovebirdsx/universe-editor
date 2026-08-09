@@ -1,5 +1,6 @@
 import { Square } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
+import { CancelAgentTurnAction } from '../../actions/agentSessionActions.js'
 import styles from './agents.module.css'
 
 /**
@@ -8,12 +9,13 @@ import styles from './agents.module.css'
  * from SendButton so the send action stays available for mid-turn steering.
  */
 export function StopButton({ onCancel }: { onCancel: () => void }) {
-  const title = localize('acp.stop', 'Stop (Esc)')
+  const title = localize('acp.stop', 'Stop')
   return (
     <button
       type="button"
       className={styles['sendButtonCircle']}
       data-tooltip={title}
+      data-tooltip-command={CancelAgentTurnAction.ID}
       aria-label={title}
       onClick={onCancel}
       data-testid="acp-prompt-cancel"

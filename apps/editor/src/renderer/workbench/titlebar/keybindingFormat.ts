@@ -28,11 +28,20 @@ export function formatChord(chords: readonly string[]): string {
 
 export function resolveShortcut(command: string): string | undefined {
   const all = KeybindingsRegistry.getAllKeybindings()
+  // A positive binding is suppressed when a `-command` (negated) entry targets
+  // the same (command, chords) — mirrors the registry's removal semantics so a
+  // user-disabled default key stops showing up in menus/tooltips.
+  const negations = new Set<string>()
+  for (const kb of all) {
+    if (!kb?.isNegated) continue
+    negations.add(`${kb.command}|${kb.chords ? kb.chords.join(' ') : (kb.key ?? '')}`)
+  }
   for (let i = all.length - 1; i >= 0; i--) {
     const kb = all[i]
     if (!kb || kb.command !== command || kb.isNegated) continue
-    if (kb.chords) return formatChord(kb.chords)
-    if (kb.key !== undefined) return formatKey(kb.key)
+    const key = kb.chords ? kb.chords.join(' ') : kb.key
+    if (key === undefined || negations.has(`${command}|${key}`)) continue
+    return kb.chords ? formatChord(kb.chords) : formatKey(key)
   }
   // Monaco-owned commands (undo/redo/clipboard/selectAll) don't register their
   // defaults with KeybindingsRegistry; fall back to the bridge's side-table.

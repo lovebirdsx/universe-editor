@@ -64,6 +64,34 @@ describe('resolveShortcut', () => {
     expect(resolveShortcut('test.neg')).toBeUndefined()
   })
 
+  it('suppresses a positive binding removed by a same-key negation', () => {
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({ key: 'ctrl+k', command: 'test.removed' }),
+    )
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+k',
+        command: 'test.removed',
+        isNegated: true,
+      }),
+    )
+    expect(resolveShortcut('test.removed')).toBeUndefined()
+  })
+
+  it('keeps a positive binding when the negation targets a different key', () => {
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({ key: 'ctrl+k', command: 'test.partial' }),
+    )
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+j',
+        command: 'test.partial',
+        isNegated: true,
+      }),
+    )
+    expect(resolveShortcut('test.partial')).toBe('Ctrl+K')
+  })
+
   it('prefers the most recently registered binding when there are multiple', () => {
     disposables.push(
       KeybindingsRegistry.registerKeybinding({ key: 'ctrl+1', command: 'test.multi' }),

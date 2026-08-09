@@ -46,7 +46,8 @@ export function AgentsViewToolbar() {
     return (
       <span className={styles['viewToolbar']}>
         <IconButton
-          label={localize('acp.find.open', 'Find in session (Ctrl+F)')}
+          label={localize('acp.find.open', 'Find in session')}
+          command="workbench.action.agent.find"
           onClick={() => void commands.executeCommand('workbench.action.agent.find')}
           data-testid="acp-find-open"
         >
@@ -63,6 +64,7 @@ export function AgentsViewToolbar() {
         </IconButton>
         <IconButton
           label={localize('acp.newSession.titled', 'New {name} session', { name: defaultAgentId })}
+          command="workbench.action.agent.newSession"
           onClick={() => void service.createSession(registry.defaultAgentId())}
           data-testid="acp-new-session"
         >
@@ -102,6 +104,7 @@ export function AgentsViewToolbar() {
       </IconButton>
       <IconButton
         label={localize('acp.newSession', 'New session')}
+        command="workbench.action.agent.newSession"
         onClick={() => void service.createSession(registry.defaultAgentId())}
         data-testid="acp-new-session"
       >
@@ -109,6 +112,7 @@ export function AgentsViewToolbar() {
       </IconButton>
       <IconButton
         label={localize('acp.selectAgent', 'Choose agent…')}
+        command="workbench.action.agent.selectAgent"
         data-tooltip={localize('acp.selectAgent.titled', 'Choose agent… (current: {name})', {
           name: defaultAgentId,
         })}
@@ -119,6 +123,7 @@ export function AgentsViewToolbar() {
       </IconButton>
       <IconButton
         label={localize('acp.refreshSessions', 'Refresh session list')}
+        command="workbench.action.agent.refreshSessions"
         onClick={handleRefresh}
         disabled={refreshing}
         data-testid="acp-refresh-sessions"

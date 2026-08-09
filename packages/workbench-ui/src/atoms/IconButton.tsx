@@ -5,6 +5,11 @@ import styles from './IconButton.module.css'
 export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
   /** Required: drives both aria-label and the tooltip. */
   label: string
+  /**
+   * Command the button triggers. Sets `data-tooltip-command` so the tooltip
+   * shows the command's effective keybinding ("Label (Ctrl+…)").
+   */
+  command?: string
   /** Square edge length in px. Defaults to 22 (workbench toolbar standard). */
   size?: number
   /** Selected/active visual state (independent of aria-expanded). */
@@ -14,7 +19,7 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
 }
 
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
-  { label, size = 22, active = false, className, style, children, ...rest },
+  { label, command, size = 22, active = false, className, style, children, ...rest },
   ref,
 ) {
   return (
@@ -23,6 +28,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       type="button"
       aria-label={label}
       data-tooltip={label}
+      data-tooltip-command={command}
       className={cx(styles['iconButton'], active && styles['active'], className)}
       style={{ width: size, height: size, ...style }}
       {...rest}

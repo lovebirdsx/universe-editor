@@ -82,6 +82,7 @@ export function OutputViewToolbar() {
       </select>
       <IconButton
         label={lockLabel}
+        command="workbench.action.toggleOutputAutoScroll"
         active={!autoScroll}
         aria-pressed={!autoScroll}
         onClick={() => void executeCommand('workbench.action.toggleOutputAutoScroll')}

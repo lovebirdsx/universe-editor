@@ -21,6 +21,7 @@ export function ExplorerViewToolbar() {
         type="button"
         className={styles['toolbarBtn']}
         data-tooltip={localize('explorer.newFile', 'New File...')}
+        data-tooltip-command="workbench.files.action.newFile"
         disabled={!hasRoot}
         onClick={() => void commandService.executeCommand('workbench.files.action.newFile')}
       >
@@ -30,6 +31,7 @@ export function ExplorerViewToolbar() {
         type="button"
         className={styles['toolbarBtn']}
         data-tooltip={localize('explorer.newFolder', 'New Folder...')}
+        data-tooltip-command="workbench.files.action.newFolder"
         disabled={!hasRoot}
         onClick={() => void commandService.executeCommand('workbench.files.action.newFolder')}
       >
