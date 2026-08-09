@@ -24,6 +24,7 @@ import type {
   IQuickPickItem,
   IQuickPickItemHighlights,
   IQuickPickSeparator,
+  QuickPickFilterMode,
   QuickPickInput,
 } from '@universe-editor/platform'
 import { localize } from '@universe-editor/platform'
@@ -241,6 +242,59 @@ function filterWithSeparators(
   return result
 }
 
+interface DisplayListOptions {
+  readonly prefixMissing: boolean
+  readonly filterExternally: boolean
+  readonly filterMode: QuickPickFilterMode
+  readonly matchOnDescription: boolean
+  readonly matchOnDetail: boolean
+  readonly mruIds: readonly string[]
+}
+
+/**
+ * The full filter+sort pipeline behind the rendered list. Shared between the
+ * deferred render memo and the accept path, which must be able to re-run it
+ * synchronously against the *live* filter text when the deferred value lags
+ * (see the Enter handler).
+ *
+ * In filterExternally mode returns `baseItems` by reference — the focus-reset
+ * effect keys off list identity, and a fresh array per keystroke would yank
+ * focus back to the top while the host autocompletes.
+ */
+function buildDisplayList(
+  baseItems: readonly QuickPickInput<IQuickPickItem>[],
+  filterText: string,
+  opts: DisplayListOptions,
+): readonly QuickPickInput<IQuickPickItem>[] {
+  if (opts.prefixMissing) return []
+  if (opts.filterExternally) return baseItems
+  if (opts.filterMode !== 'word') {
+    return fuzzyFilterAndSort(
+      baseItems,
+      filterText,
+      opts.matchOnDescription,
+      opts.matchOnDetail,
+      opts.mruIds,
+      opts.filterMode === 'fuzzyKeepOrder',
+    )
+  }
+  const filtered = filterWithSeparators(
+    baseItems,
+    filterText,
+    opts.matchOnDescription,
+    opts.matchOnDetail,
+  )
+  // Word mode keeps provider order per section; only a flat (separator-free)
+  // list gets the MRU + alphabetical ordering.
+  if (filtered.some(isSeparator)) return filtered
+  return filtered.sort((a, b) => {
+    if (isSeparator(a) || isSeparator(b)) return 0
+    const mruCompare = compareMru(a, b, opts.mruIds)
+    if (mruCompare !== 0) return mruCompare
+    return a.label.localeCompare(b.label)
+  })
+}
+
 function renderHighlightedText(
   text: string,
   highlights: readonly IQuickItemHighlight[] | undefined,
@@ -441,48 +495,22 @@ export function QuickPickPanel({
     [state.items, removedIds],
   )
 
-  const filtered = useMemo(() => {
-    if (prefixMissing) return []
-    if (filterExternally) return baseItems
-    if (filterMode === 'word') {
-      return filterWithSeparators(baseItems, deferredFilterText, matchOnDescription, matchOnDetail)
-    }
-    return fuzzyFilterAndSort(
-      baseItems,
-      deferredFilterText,
+  const displayListOptions = useMemo<DisplayListOptions>(
+    () => ({
+      prefixMissing,
+      filterExternally,
+      filterMode,
       matchOnDescription,
       matchOnDetail,
       mruIds,
-      filterMode === 'fuzzyKeepOrder',
-    )
+    }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    prefixMissing,
-    filterExternally,
-    baseItems,
-    deferredFilterText,
-    filterMode,
-    matchOnDescription,
-    matchOnDetail,
-    mruKey,
-  ])
+    [prefixMissing, filterExternally, filterMode, matchOnDescription, matchOnDetail, mruKey],
+  )
 
   const sortedFiltered = useMemo(
-    () => {
-      // Fuzzy modes are already relevance-sorted (with separator grouping) by
-      // fuzzyFilterAndSort — 'fuzzyKeepOrder' deliberately keeps provider order.
-      // External filtering and word mode keep provider order, applying only MRU
-      // and, for word mode, an alphabetical tiebreak.
-      if (filterExternally || filterMode !== 'word' || filtered.some(isSeparator)) return filtered
-      return [...filtered].sort((a, b) => {
-        if (isSeparator(a) || isSeparator(b)) return 0
-        const mruCompare = compareMru(a, b, mruIds)
-        if (mruCompare !== 0) return mruCompare
-        return a.label.localeCompare(b.label)
-      })
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [filtered, filterExternally, filterMode, mruKey],
+    () => buildDisplayList(baseItems, deferredFilterText, displayListOptions),
+    [baseItems, deferredFilterText, displayListOptions],
   )
 
   const ITEM_HEIGHT = compact ? 24 : 32
@@ -668,8 +696,20 @@ export function QuickPickPanel({
       // receives focus after the panel closes (typically the Monaco editor), which
       // would otherwise cause an unwanted newline insertion.
       e.preventDefault()
-      const item = sortedFiltered[focusedIdx]
-      if (isSelectable(item)) accept([item], { ctrl: e.ctrlKey, alt: e.altKey })
+      // The rendered list lags the input by design (useDeferredValue): typing then
+      // hitting Enter before the low-priority re-render commits would accept a row
+      // filtered by a STALE query (word mode sorts alphabetically, so e.g. "Focus
+      // Next Group" could accept "Focus Above Group" matched by just "Focus").
+      // Re-run the pipeline synchronously against the live text in that window and
+      // accept its best match — same outcome the settled render would offer.
+      const listIsCurrent = !filtersLocally || deferredFilterText === filterText
+      const acceptItem = listIsCurrent
+        ? sortedFiltered[focusedIdx]
+        : (() => {
+            const latest = buildDisplayList(baseItems, filterText, displayListOptions)
+            return latest[firstSelectableIndex(latest)]
+          })()
+      if (isSelectable(acceptItem)) accept([acceptItem], { ctrl: e.ctrlKey, alt: e.altKey })
       // No selectable item (e.g. an empty directory in the file dialog): fall back
       // to the host's OK handler so a trailing-separator path can still be opened.
       else state.onOk?.()

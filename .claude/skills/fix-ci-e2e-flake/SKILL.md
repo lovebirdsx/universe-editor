@@ -48,7 +48,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 元素 visible 但 click 超时+`intercepts pointer events`、本地全绿=en-US+1280 窗口溢出遮挡 → 案例 42；点击超高 Monaco `.view-lines` 容器中心、CI relayout 后中心滑出可见区被 Welcome/标签栏挡 → 案例 54
 - `toBeFocused` 恒 inactive+无 workspace 冷启动=bootstrap 一次性焦点恢复抢焦 → 案例 43；测试中途 openWorkspace 后编辑器区内焦点被抢=workspace restore 窗口 editor 分支裸抢 → 案例 53
 - 纯黑页+probe 恒无+业务无关 spec 同轮随机挂=bootstrap RPC 被 gate 丢弃 → 案例 33
-- 本机裸 `electron.launch` 报 `Process failed to launch!`（exitCode=9）、CI 正常=本机环境 → 案例 28；**CI Windows** 同报错+ICU 加载失败/文件被占用+同窗口多 worker 齐挂=runner 文件锁窗口，harness `launchElectron` 已内建重试 → 案例 72；**CI Linux** 报 `spawn ETXTBSY` 栈在 launchElectron 内=瞬时守卫正则不匹配新变体 / Windows 重试耗尽仍挂=锁窗口超预算（Defender 排除根治）→ 案例 72b；报错**无 `electron.launch:` 前缀**+trace error 条目早于重试留痕=playwright 内部游离 promise unhandledRejection 击穿守卫（已 pnpm patch playwright-core）→ 案例 72c
+- 本机裸 `electron.launch` 报 `Process failed to launch!`（exitCode=9）、CI 正常=本机环境 → 案例 28；**CI Windows** 同报错+ICU 加载失败/文件被占用+同窗口多 worker 齐挂=runner 文件锁窗口，harness `launchElectron` 已内建重试 → 案例 72；**CI Linux** 报 `spawn ETXTBSY` 栈在 launchElectron 内=瞬时守卫正则不匹配新变体 / Windows 重试耗尽仍挂=锁窗口超预算（Defender 排除根治）/ Windows 报 `Electron failed to install correctly`=同族新变体（已并入守卫）→ 案例 72b；报错**无 `electron.launch:` 前缀**+trace error 条目早于重试留痕=playwright 内部游离 promise unhandledRejection 击穿守卫（已 pnpm patch playwright-core）→ 案例 72c
 - 失败仅集中 DnD 类且重跑能过=headless 手势时序 → 案例 46；锁屏时剪贴板用例必败 → 案例 47
 - chord 用例卡 `defocusEditor` 等 focus 变 false+retry 秒过=defocus 时序噪声（观察中）→ 案例 48
 - 列表相等断言 received 是 expected 前缀子集+采样点为固定 sleep=增量渲染截半，poll 到收敛 → 案例 49
@@ -71,6 +71,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - `toBeFocused` 恒 `data-focused="false"`（稳定卡值）但 aria 快照树内容已正确、断言前一步刚触发异步数据推送=焦点交付后 payload 落地触发 keyed remount 换掉被聚焦节点；修=ChangesTree 同 commit 换树保焦（模块级 viewId 意图集+microtask 过期）→ 案例 70（与案例 64 同族互参）
 - poll context key 恒 `""`+截图纯黑+aria 只剩 alert 空壳+bootstrap 日志完整走完后静默（探针活着）=workspace-swap restore 竞态擦掉 swap 窗口内新开的编辑器；修=restore 读期间新进 editor 先 detach 再 re-admit 永不擦；React 19 逃逸边界错误静默 unmount root 且被 isBenignError 吞掉零留痕，createRoot 须显式 onUncaughtError 落盘 → 案例 71（与案例 33/69 的黑屏形态区分见详情）
 - toContainEqual 的 received 里消息 text 是期望的**前缀**（echo 回声同截断、retry 截断点漂移）+失败点前是 `keyboard.type` 直接 Enter 打 Monaco 输入框=EditContext 异步落字赛跑提交，type 后先 poll `getAcpPromptText()` 全文再 Enter → 案例 73
+- palette `type→Enter` 后命令效果 poll 恒卡初值、焦点断言正常+**双平台同 run initial+retry 全灭**+插桩（type 与 Enter 间加 evaluate）后不复现=QuickInputPanel useDeferredValue 旧列表被 accept（产品竞态,慢机高概率）,修产品 accept 路径不改 spec → 案例 74
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

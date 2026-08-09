@@ -342,11 +342,15 @@ export interface LaunchAppOptions {
 //  - Linux: `spawn ETXTBSY` — a concurrently forking worker briefly holds a
 //    write fd on the electron binary; the window is milliseconds, any retry
 //    clears it.
+//  - Windows variant: "Electron failed to install correctly" — Playwright's
+//    pre-launch executable check can't run electron.exe while Defender holds
+//    the lock; same file-lock window, same retry cure.
 // Retrying with the SAME userDataDir is safe in both cases (seeded state is
 // untouched). The escalating delays stay within the 60s fixture timeout; a
 // self-launching spec's 30s test timeout may cut the tail attempts short,
 // which is no worse than failing immediately.
-const TRANSIENT_LAUNCH_ERROR = /Process failed to launch|spawn ETXTBSY/i
+const TRANSIENT_LAUNCH_ERROR =
+  /Process failed to launch|spawn ETXTBSY|Electron failed to install correctly/i
 const LAUNCH_RETRY_DELAYS_MS = [5_000, 10_000, 20_000]
 
 /**

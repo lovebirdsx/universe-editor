@@ -342,6 +342,7 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 根因：a) `spawn ETXTBSY` 是 Linux 上 posix_spawn 撞上并发 fork 短暂持有 electron 二进制写 fd（多 worker 下的经典 Node spawn 竞态），窗口毫秒级，任何重试都能过——但旧守卫 `/Process failed to launch/i` 不匹配它；b) Defender 扫描窗口实测可超过 10s 重试总预算 + 单次 test retry，launch 层固定间隔重试兜不满。
 修（三点）：`launch.ts` 守卫改 `TRANSIENT_LAUNCH_ERROR = /Process failed to launch|spawn ETXTBSY/i`；重试改递增退避 `LAUNCH_RETRY_DELAYS_MS = [5s, 10s, 20s]`（总覆盖 ~35s+，fixture timeout 60s 内安全；自启动 spec 受 30s test timeout 截尾，不劣于原状）；`.github/workflows/ci.yml` e2e job checkout 后加 `Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE"`（仅 Windows）从源头消掉 Defender 锁，launch 重试降级为保险。
 教训：a) 包装重试的错误匹配正则是白名单——新变体(ETXTBSY/EBUSY/EAGAIN)出现时栈若落在包装内说明只差匹配，扩正则即可，别再包一层；b) 环境窗口长度要拿失败时间线实测（initial+retry 双挂=窗口>单 test 生命周期），重试预算按实测窗口定而不是拍脑袋；c) hosted runner 有 admin 权限，Defender 排除(`Add-MpPreference`)是比重试更根本的手段，两者叠加：排除治本、重试兜底。锚：同上 + `.github/workflows/ci.yml`（e2e job Defender 排除步骤）。
+2026-08-09 增补：CI Windows 又现同族新变体 `electron.launch: Electron failed to install correctly. Please delete node_modules/electron...`（playwright 启动前置的可执行性检查在 Defender 锁窗口内跑不动 electron.exe 的报法；栈落在 launchElectron 的 `electron.launch` 行=「只差匹配」直接实证，Playwright test 级 retry 救回标 flaky）。已并入守卫正则 `TRANSIENT_LAUNCH_ERROR`。
 
 ---
 
@@ -358,6 +359,14 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 根因：monaco 0.55 EditContext 下，CDP 派发的字符经 EditContext `textupdate` **异步**落进 model，而 Enter 的 keydown 走 keybinding 同步读 model 提交——CI 慢机上尾部字符还在途，发送即截断（HTML input 无此问题，quick input/find widget 不受影响）。
 修：type 后、Enter 前补 `expect.poll(() => getAcpPromptText()).toBe(<全文>)`（`smoke.agentsSelectionAttachment.spec.ts`）；`smoke.agentsPromptHistory.spec.ts` 第三用例的裸 type 后同款补齐（防迟到字符污染 popover 交互）。同族加固先例：`agentsPromptHistory` 的 `typeAndSend`、`agentsMcpDraft` 的 `typeDraft`（delay 20 + 双 poll）——本条正是「同文件族有的步骤已加固、有的还裸」的遗留薄弱点形态。
 教训：真键盘往 **Monaco**（EditContext）输入后要做结构性操作（Enter 提交/ArrowUp 弹层/光标移动依赖内容时），必须先 poll 模型内容到位；对 HTML input 则无需。新写 ACP prompt 相关 spec 直接抄 `typeAndSend` 模式。锚：`smoke.agentsSelectionAttachment.spec.ts`（poll 后 Enter）；`smoke.agentsPromptHistory.spec.ts`（typeAndSend）；`smoke.agentsMcpDraft.spec.ts`（typeDraft）。
+
+---
+
+**案例 74 — palette 打字后立即 Enter 接受了「旧过滤列表」的第一项：QuickInputPanel useDeferredValue 竞态（产品 bug，慢机高概率）**
+信号：palette 用例 `type('<命令名>') → Enter → waitForHidden` 后，断言命令效果的 poll 恒卡「命令没执行」的初值（本例 `getActiveEditorUri()` 恒 `Untitled-2`），但 `editorFocus` 等焦点断言正常 true（palette 关闭后焦点还原到原编辑器）；**双平台同 run 同形态 initial+retry 全灭**（CI 慢是持续条件，不是独立随机事件）；本地 `--repeat-each` 低概率复现（1/5）；**在 type 与 Enter 之间插入任何 evaluate 往返做插桩后不再复现＝海森堡效应，即竞态窗口就在 type→Enter 之间**。pageerrors 里的 `Canceled at Delayer.cancel/dispose` 是无关噪音。
+根因：`QuickInputPanel` 的过滤列表基于 `useDeferredValue(filterText)` 渲染（低优先级），Enter handler 读的是**已提交渲染**闭包里的 `sortedFiltered[focusedIdx]`。慢机上 type 完最后一个字符后 deferred 重渲染尚未 commit，Enter 读到的是**旧过滤文本**的列表——word mode 无分隔符时按 MRU+字母序排，`Focus Next Group` 打到一半的 "Focus" 匹配集第一项是 `Focus Above Group`（水平双组布局下 no-op）→ 执行了错误命令 → palette 关、焦点还原原组、断言恒卡。这是真产品 bug：真实用户快速打字+Enter 同样会执行错命令。
+修（产品层，勿在 spec 里遮）：把过滤+排序管线抽成纯函数 `buildDisplayList`，Enter/accept 路径检测 `filtersLocally && deferredFilterText !== filterText`（deferred 未追上）时，用**实时** filterText 同步重算列表并 accept 其第一可选项（与渲染稳定后的结果一致，对齐 VSCode「接受当前输入的最佳匹配」语义）；deferred 已同步时维持原 `sortedFiltered[focusedIdx]`（尊重箭头导航）。所有 quick pick（命令面板/编辑器选择/keybindings 等）统一受益。
+教训：a) 「双平台同 run 同形态、initial+retry 全灭、本地稳过」优先怀疑**持续条件型竞态**（慢机必然触发）而非独立随机 flake；b) 插桩后不再复现（海森堡）本身就是定位证据——窗口就在被插桩的两步之间；c) `useDeferredValue` 驱动的列表,任何「读已渲染列表做 accept」的路径都要校验 deferred 是否已追上实时输入，否则接受的是旧世界的选择；d) e2e 抓到的不一定是断言不鲁棒——本例断言完全正确，抓到的是产品竞态,修产品不改 spec。锚：`packages/workbench-ui/src/feedback/quickInput/QuickInputPanel.tsx`（buildDisplayList + Enter 分支）；`apps/editor/e2e/specs/smoke.editorGroupSwitch.spec.ts`（原样保留的用例）。
 
 ---
 
