@@ -111,6 +111,15 @@ describe('StickyUserMessageBar', () => {
     expect(screen.queryByText('second request')).toBeNull()
   })
 
+  // The bar scrolls internally (max-height) — the header must carry the sticky
+  // class so the collapse chevron stays reachable while scrolled.
+  it('marks the header sticky inside the scrolling bar', () => {
+    renderWithServices(
+      <StickyUserMessageBar session={makeSession('s-sticky', [message('u1', 'user', 'long')])} />,
+    )
+    expect(screen.getByTestId('acp-collapsible-toggle').className).toContain('stickyUserBarHeader')
+  })
+
   it('shows and reveals selection attachments for the pinned first message', () => {
     const selection: SelectionContext = {
       uri: 'file:///workspace/src/a.ts',

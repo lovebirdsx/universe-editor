@@ -55,4 +55,21 @@ describe('CollapsibleSlot', () => {
     fireEvent.click(screen.getByTestId('acp-collapsible-toggle'))
     expect(onToggle).toHaveBeenCalledTimes(1)
   })
+
+  it('merges headerClassName onto the header button', () => {
+    render(
+      <ul>
+        <CollapsibleSlot
+          icon={<span>icon</span>}
+          kindLabel="user"
+          collapsed={false}
+          onToggle={vi.fn()}
+          headerClassName="sticky-header"
+        >
+          <div>body</div>
+        </CollapsibleSlot>
+      </ul>,
+    )
+    expect(screen.getByTestId('acp-collapsible-toggle').className).toContain('sticky-header')
+  })
 })

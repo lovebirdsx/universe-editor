@@ -376,14 +376,20 @@
   pointer-events: none;
 }
 
+/* Sticky to the chat scrollport bottom so a long expanded message can be
+   re-collapsed from anywhere inside it instead of scrolling to its end. Solid
+   background because the stuck button floats over the message text. */
 .userMessageToggle {
+  position: sticky;
+  bottom: 4px;
+  z-index: 1;
   align-self: flex-start;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   margin-top: 2px;
   padding: 2px 6px;
-  background: transparent;
+  background: var(--vscode-agent-userMessageBackground, #2a3550);
   border: 0;
   color: var(--vscode-agent-messageRoleForeground, #888);
   font: inherit;
@@ -885,14 +891,18 @@
   word-break: break-word;
 }
 
+/* Sticky for the same reason as .userMessageToggle (collapse from anywhere). */
 .terminalOutputToggle {
+  position: sticky;
+  bottom: 4px;
+  z-index: 1;
   align-self: flex-start;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   margin-top: 2px;
   padding: 2px 6px;
-  background: transparent;
+  background: var(--vscode-editor-background, #1e1e1e);
   border: 0;
   color: var(--vscode-agent-messageRoleForeground, #888);
   font: inherit;
@@ -2185,6 +2195,17 @@
 
 .stickyUserBar .planCard {
   background: var(--vscode-agent-userMessageBackground, #2a3550);
+}
+
+/* The bar itself scrolls (max-height 30vh) — keep the header row (with the
+   collapse chevron) pinned to its top so a long first message stays foldable
+   while scrolled. Solid background because it floats over the message text. */
+.stickyUserBarHeader {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--vscode-agent-userMessageBackground, #2a3550);
+  border-radius: 4px 4px 0 0;
 }
 
 .planHeader {

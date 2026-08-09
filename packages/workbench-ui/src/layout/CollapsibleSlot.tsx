@@ -51,6 +51,9 @@ export interface CollapsibleSlotProps {
   readonly children: ReactNode
   /** Spread onto the root element (data-* hooks, focus class, etc.). */
   readonly rootProps?: HTMLAttributes<HTMLElement> & Record<`data-${string}`, string>
+  /** Extra class for the header button (e.g. sticky positioning inside a
+   *  scrolling host — the toggle must stay reachable while the body scrolls). */
+  readonly headerClassName?: string | undefined
   readonly as?: 'li' | 'section'
 }
 
@@ -65,6 +68,7 @@ export function CollapsibleSlot({
   onToggle,
   children,
   rootProps,
+  headerClassName,
   as = 'li',
 }: CollapsibleSlotProps) {
   const Tag = as
@@ -72,12 +76,15 @@ export function CollapsibleSlot({
   const cls = rootClassName
     ? `${styles['collapsibleSlot']} ${rootClassName}`
     : styles['collapsibleSlot']
+  const headerCls = headerClassName
+    ? `${styles['collapsibleHeader']} ${headerClassName}`
+    : styles['collapsibleHeader']
   return (
     <Tag className={cls} {...restRoot}>
       {badge != null && <span className={styles['slotBadge']}>{badge}</span>}
       <button
         type="button"
-        className={styles['collapsibleHeader']}
+        className={headerCls}
         aria-expanded={!collapsed}
         onClick={onToggle}
         data-tooltip={kindLabel}

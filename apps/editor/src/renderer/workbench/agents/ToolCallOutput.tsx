@@ -18,7 +18,7 @@ import { Check, ChevronDown, ChevronRight, ChevronUp, CircleX, Loader2 } from 'l
 import { localize } from '@universe-editor/platform'
 import { parseAnsi, type AnsiSegment } from '../../services/acp/ansi.js'
 import type { AcpToolCallStatus } from '../../services/acp/session/acpSessionService.js'
-import { useContentExpansion } from './chatContentExpansion.js'
+import { useContentExpansion, useRevealOnCollapse } from './chatContentExpansion.js'
 import {
   TERMINAL_COLLAPSED_MAX_PX,
   estimateTerminalOverflow,
@@ -70,6 +70,7 @@ export function ToolCallSection({
 export function TerminalOutput({ text, contentKey }: { text: string; contentKey?: string }) {
   const segments = useMemo(() => parseAnsi(text), [text])
   const innerRef = useRef<HTMLPreElement | null>(null)
+  const outerRef = useRef<HTMLDivElement | null>(null)
   // Seed from the last measured state / a synchronous estimate (never `false`)
   // so the FIRST render already clamps when the body is long — the committed
   // height must be identical on every (re)mount or the virtualized timeline's
@@ -109,6 +110,7 @@ export function TerminalOutput({ text, contentKey }: { text: string; contentKey?
   }, [contentKey])
 
   const collapsed = overflows && !expanded
+  useRevealOnCollapse(outerRef, expanded, overflows)
   const toggleLabel = expanded
     ? localize('acp.terminal.collapse', 'Collapse')
     : localize('acp.terminal.expand', 'Expand')
@@ -116,6 +118,7 @@ export function TerminalOutput({ text, contentKey }: { text: string; contentKey?
   return (
     <>
       <div
+        ref={outerRef}
         className={styles['terminalOutput']}
         data-collapsed={collapsed ? 'true' : 'false'}
         data-overflow={overflows ? 'true' : 'false'}

@@ -232,4 +232,26 @@ describe('UserMessageItem — overflow clamp stability', () => {
       restoreShort()
     }
   })
+
+  // The toggle is sticky at the scrollport bottom, so a collapse can happen
+  // while scrolled deep into the message — the card must be brought back into
+  // view or the viewport lands far below it after the row shrinks.
+  it('scrolls the message back into view on collapse (not on expand)', () => {
+    const restore = stubScrollHeight(500)
+    const scrollSpy = vi.fn()
+    const original = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = scrollSpy
+    try {
+      const { container } = renderWithKey('msg:m:4')
+      const toggle = container.querySelector('[data-testid="acp-user-message-toggle"]')
+      fireEvent.click(toggle!) // expand
+      expect(scrollSpy).not.toHaveBeenCalled()
+      fireEvent.click(toggle!) // collapse
+      expect(scrollSpy).toHaveBeenCalledTimes(1)
+      expect(scrollSpy).toHaveBeenCalledWith({ block: 'nearest' })
+    } finally {
+      Element.prototype.scrollIntoView = original
+      restore()
+    }
+  })
 })

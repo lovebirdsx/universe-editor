@@ -126,6 +126,7 @@ export function StickyUserMessageBar({
         summary={clampLine(message.text)}
         collapsed={collapsed}
         onToggle={toggle}
+        headerClassName={styles['stickyUserBarHeader']}
         rootProps={{
           // The focus ring goes on the card (inset by the bar's 12px padding),
           // not the full-width <ul> — a ring at the chat edge gets painted over

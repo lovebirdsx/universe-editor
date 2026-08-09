@@ -9,7 +9,7 @@
  *  Absent (null) for standalone use (ToolCallList) → leaf falls back to local state.
  *--------------------------------------------------------------------------------------------*/
 
-import { createContext, useContext } from 'react'
+import { createContext, useContext, useLayoutEffect, useRef, type RefObject } from 'react'
 
 export interface ContentExpansionStore {
   /** Keys whose inner content the user has expanded. Absent key ⇒ collapsed. */
@@ -23,4 +23,25 @@ export const ContentExpansionProvider = ContentExpansionContext.Provider
 
 export function useContentExpansion(): ContentExpansionStore | null {
   return useContext(ContentExpansionContext)
+}
+
+/**
+ * Scrolls the clamped card back into view when its inner content collapses.
+ * The expand/collapse toggle is sticky at the scrollport bottom, so the user
+ * can collapse a long card from deep inside it — the row then shrinks by
+ * thousands of pixels and, without this, the viewport lands on unrelated
+ * content far below the card (the virtualizer only compensates for rows
+ * entirely above the viewport).
+ */
+export function useRevealOnCollapse(
+  ref: RefObject<HTMLElement | null>,
+  expanded: boolean,
+  clamps: boolean,
+): void {
+  const prevExpanded = useRef(expanded)
+  useLayoutEffect(() => {
+    const was = prevExpanded.current
+    prevExpanded.current = expanded
+    if (was && !expanded && clamps) ref.current?.scrollIntoView({ block: 'nearest' })
+  }, [ref, expanded, clamps])
 }

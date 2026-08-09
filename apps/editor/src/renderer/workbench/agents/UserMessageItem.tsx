@@ -2,7 +2,9 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  UserMessageItem — renders a user message with a fixed max-height so a long
  *  prompt (pasted log, multi-block code) cannot dominate the timeline. When
- *  content exceeds the limit a chevron toggle reveals / hides the rest.
+ *  content exceeds the limit a chevron toggle reveals / hides the rest; the
+ *  toggle is sticky at the scrollport bottom (see agents.module.css) and a
+ *  collapse scrolls the card back into view (useRevealOnCollapse).
  *--------------------------------------------------------------------------------------------*/
 
 import { memo, useLayoutEffect, useRef, useState } from 'react'
@@ -10,7 +12,7 @@ import { ChevronDown, ChevronUp, GitBranch, RotateCcw, Undo2 } from 'lucide-reac
 import { localize } from '@universe-editor/platform'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { MessageContent } from './MessageContent.js'
-import { useContentExpansion } from './chatContentExpansion.js'
+import { useContentExpansion, useRevealOnCollapse } from './chatContentExpansion.js'
 import { useExecuteCommand, useObservable } from '../useService.js'
 import type { IAcpSession, SelectionContext } from '../../services/acp/session/acpSessionService.js'
 import {
@@ -44,6 +46,7 @@ export const UserMessageItem = memo(function UserMessageItem({
 }) {
   const revealSelection = useSelectionContextReveal()
   const innerRef = useRef<HTMLDivElement | null>(null)
+  const wrapRef = useRef<HTMLDivElement | null>(null)
   // Seed from the last measured state / a synchronous estimate (never a bare
   // `false`) so the FIRST paint already clamps a long prompt. In the virtualized
   // timeline a row remounts every time it scrolls back into overscan; mounting
@@ -87,12 +90,13 @@ export const UserMessageItem = memo(function UserMessageItem({
 
   const collapsed = overflows && !expanded
   const showToggle = overflows
+  useRevealOnCollapse(wrapRef, expanded, overflows)
   const toggleLabel = expanded
     ? localize('acp.userMessage.collapse', 'Collapse')
     : localize('acp.userMessage.expand', 'Expand')
   return (
     <>
-      <div className={styles['userMessageWrap']}>
+      <div ref={wrapRef} className={styles['userMessageWrap']}>
         {autoRetry === true && (
           <span
             className={styles['userMessageAutoBadge']}
