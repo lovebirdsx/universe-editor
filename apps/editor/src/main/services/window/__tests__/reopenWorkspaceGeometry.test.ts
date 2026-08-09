@@ -77,6 +77,7 @@ class FakeWindow extends EventEmitter {
     openDevTools: vi.fn(),
     setWindowOpenHandler: vi.fn(),
     send: vi.fn(),
+    getOSProcessId: () => 1000 + this.id,
   })
 
   isDestroyed = (): boolean => this._destroyed

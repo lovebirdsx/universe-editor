@@ -72,6 +72,9 @@ catalogs:
     '@vscode/ripgrep':
       specifier: ^1.18.0
       version: 1.18.0
+    '@vscode/windows-process-tree':
+      specifier: 0.8.0
+      version: 0.8.0
     '@xterm/addon-fit':
       specifier: ^0.11.0
       version: 0.11.0
@@ -249,6 +252,9 @@ importers:
       '@vscode/ripgrep':
         specifier: 'catalog:'
         version: 1.18.0
+      '@vscode/windows-process-tree':
+        specifier: 'catalog:'
+        version: 0.8.0
       adm-zip:
         specifier: 'catalog:'
         version: 0.5.18
@@ -2563,6 +2569,9 @@ packages:
   '@vscode/ripgrep@1.18.0':
     resolution: {integrity: sha512-ns5lWe44tSfbTMbVUsyB+I1819PVSw4AdpgK0RNkzfWfwy6+3IUNSxwSrfTno1/oWaS/hERNz+XLWVyga2aJBQ==}
 
+  '@vscode/windows-process-tree@0.8.0':
+    resolution: {integrity: sha512-TI+h2GRwX+igD/YYJMQQVAFcsCNSg7Te2yYxQpKMzwto5RsJ8d2KKgOeur/p/6sAOQwZvopiTDOClyTHEn9MhQ==}
+
   '@xmldom/xmldom@0.9.10':
     resolution: {integrity: sha512-A9gOqLdi6cV4ibazAjcQufGj0B1y/vDqYrcuP6d/6x8P27gRS8643Dj9o1dEKtB6O7fwxb2FgBmJS2mX7gpvdw==}
     engines: {node: '>=14.6'}
@@ -4221,6 +4230,10 @@ packages:
 
   node-addon-api@1.7.2:
     resolution: {integrity: sha512-ibPK3iA+vaY1eEjESkQkM0BbCqFOaZMiXRTtdB0u7b4djtY6JnsjvPdUHVMg6xQt3B8fpTTWHI9A+ADjM9frzg==}
+
+  node-addon-api@7.1.0:
+    resolution: {integrity: sha512-mNcltoe1R8o7STTegSOHdnJNN7s5EUvhoS7ShnTHDyOSd+8H+UdWODq6qSv67PjC8Zc5JRT8+oLAMCr0SIXw7g==}
+    engines: {node: ^16 || ^18 || >= 20}
 
   node-addon-api@7.1.1:
     resolution: {integrity: sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ==}
@@ -6658,6 +6671,10 @@ snapshots:
       '@vscode/ripgrep-win32-ia32': 1.18.0
       '@vscode/ripgrep-win32-x64': 1.18.0
 
+  '@vscode/windows-process-tree@0.8.0':
+    dependencies:
+      node-addon-api: 7.1.0
+
   '@xmldom/xmldom@0.9.10': {}
 
   '@xterm/addon-fit@0.11.0': {}
@@ -8497,6 +8514,8 @@ snapshots:
 
   node-addon-api@1.7.2:
     optional: true
+
+  node-addon-api@7.1.0: {}
 
   node-addon-api@7.1.1: {}
 

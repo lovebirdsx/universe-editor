@@ -168,4 +168,42 @@ describe('DiagnosticsMainService', () => {
     expect(dumpListing).toContain('deadbeef.dmp')
     expect(readFileSync(zipPath).length).toBeGreaterThan(0)
   })
+
+  it('createDiagnosticsZip includes the injected process list in processes.txt', async () => {
+    const withProcesses = new DiagnosticsMainService({
+      crashDumpsDir: crashDir,
+      logRoot,
+      diagnosticsDir,
+      mode: 'release',
+      collectProcesses: () => Promise.resolve('main (1234)\n  renderer (5678)\n'),
+    })
+    try {
+      const zip = new AdmZip(await withProcesses.createDiagnosticsZip())
+      expect(zip.getEntries().map((e) => e.entryName)).toContain('processes.txt')
+      expect(zip.readAsText('processes.txt')).toBe('main (1234)\n  renderer (5678)\n')
+    } finally {
+      withProcesses.dispose()
+    }
+  })
+
+  it('createDiagnosticsZip degrades processes.txt when collectProcesses throws', async () => {
+    const failing = new DiagnosticsMainService({
+      crashDumpsDir: crashDir,
+      logRoot,
+      diagnosticsDir,
+      mode: 'release',
+      collectProcesses: () => Promise.reject(new Error('ps exploded')),
+    })
+    try {
+      const zip = new AdmZip(await failing.createDiagnosticsZip())
+      expect(zip.readAsText('processes.txt')).toBe('(process list unavailable)\n')
+    } finally {
+      failing.dispose()
+    }
+  })
+
+  it('createDiagnosticsZip degrades processes.txt when collectProcesses is not injected', async () => {
+    const zip = new AdmZip(await service.createDiagnosticsZip())
+    expect(zip.readAsText('processes.txt')).toBe('(process list unavailable)\n')
+  })
 })

@@ -70,6 +70,7 @@ vi.mock('electron', () => ({
       openDevTools: vi.fn(),
       isDevToolsOpened: vi.fn().mockReturnValue(false),
       setWindowOpenHandler: vi.fn(),
+      getOSProcessId: vi.fn().mockReturnValue(1000),
     },
   })),
   dialog: {
@@ -158,6 +159,7 @@ function makeOpts() {
       errorSink: { recordLocal: vi.fn() } as never,
       diagnostics: {} as never,
       issueReporter: {} as never,
+      processMonitor: {} as never,
       watcherProcess: createStubWatcherProcessClient(),
     },
     logService,

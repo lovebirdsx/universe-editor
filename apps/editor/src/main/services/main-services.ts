@@ -94,6 +94,8 @@ import { ResourceAccessMainService } from './resourceAccess/resourceAccessMainSe
 import { EnvironmentSnapshotMainService } from './environmentSnapshot/environmentSnapshotMainService.js'
 import { DiagnosticsMainService } from './diagnostics/diagnosticsMainService.js'
 import { IssueReporterMainService } from './issueReporter/issueReporterMainService.js'
+import { IProcessMonitorService } from '../../shared/ipc/processMonitorService.js'
+import { ProcessMonitorMainService } from './processMonitor/processMonitorMainService.js'
 import { IWatcherProcessService, WatcherProcessClient } from './fileWatcher/watcherProcessClient.js'
 import { createWatcherUtilityTransportFactory } from './fileWatcher/watcherUtilityTransport.js'
 
@@ -255,6 +257,7 @@ registerSingleton(
 )
 registerSingletonFactory(IDiagnosticsService, (acc) => {
   const extensionManagement = acc.get(IExtensionManagementService)
+  const processMonitor = acc.get(IProcessMonitorService)
   return new DiagnosticsMainService(
     {
       crashDumpsDir: app.getPath('crashDumps'),
@@ -262,6 +265,7 @@ registerSingletonFactory(IDiagnosticsService, (acc) => {
       diagnosticsDir: join(app.getPath('userData'), 'diagnostics'),
       mode: process.env['UNIVERSE_E2E'] === '1' ? 'e2e' : app.isPackaged ? 'release' : 'dev',
       revealInShell: process.env['UNIVERSE_E2E'] !== '1',
+      collectProcesses: () => processMonitor.formatProcessList(),
       listExtensions: async () => {
         const [installed, builtin] = await Promise.all([
           extensionManagement.getInstalled(),
@@ -276,6 +280,9 @@ registerSingletonFactory(IDiagnosticsService, (acc) => {
     },
     acc.get(ILoggerService),
   )
+})
+registerSingletonFactory(IProcessMonitorService, (acc) => {
+  return new ProcessMonitorMainService(undefined, undefined, acc.get(ILoggerService))
 })
 registerSingletonFactory(IIssueReporterService, (acc) => {
   const diagnostics = acc.get(IDiagnosticsService)

@@ -19,6 +19,7 @@ import {
   ShutdownReason,
   URI,
   type Event,
+  type IDisposable,
   type IOpenWindowInfo,
   type ShutdownConfirmationContext,
   type IWorkspace,
@@ -36,6 +37,7 @@ import { getDefaultStorage, workspaceIdFromUri } from '../../storage.js'
 import { loadWorkspaceGeometry, type IRestoreWindow } from '../../windowsSession.js'
 import { WindowSessionStore } from './windowSessionStore.js'
 import { createWindowScopedServices } from './windowScopeFactory.js'
+import { processRoleRegistry } from '../process/processRoleRegistry.js'
 import type { ApplicationServices } from '../../window/scopedServicesFactory.js'
 
 export interface ICreateWindowOptions {
@@ -190,6 +192,20 @@ export class WindowMainService implements IWindowMainService {
       return { action: 'deny' }
     })
 
+    // reload / 崩溃重建会换掉渲染进程（pid 变），load 完成后重登记；
+    // 崩溃后未 reload 前旧 pid 已死，先在 render-process-gone 里摘除。
+    let roleRegistration: IDisposable | undefined
+    const registerRendererRole = (): void => {
+      roleRegistration?.dispose()
+      roleRegistration = undefined
+      roleRegistration = processRoleRegistry.register(win.webContents.getOSProcessId(), {
+        role: 'window',
+        label: `window-${win.id}`,
+      })
+    }
+    registerRendererRole()
+    win.webContents.on('did-finish-load', registerRendererRole)
+
     win.webContents.on('will-navigate', (event, url) => {
       // Allow in-app navigation on the shell's own origins (file:// dev fallback,
       // http:// dev server, and the prod universe-app:// scheme); block the rest.
@@ -227,6 +243,8 @@ export class WindowMainService implements IWindowMainService {
     // it would block the driver; a crash there must fail the test, not stall it.
     win.webContents.on('render-process-gone', (_event, details) => {
       if (details.reason === 'clean-exit') return
+      roleRegistration?.dispose()
+      roleRegistration = undefined
       const line = `render-process-gone id=${win.id} reason=${details.reason} exitCode=${details.exitCode ?? 'n/a'}`
       logger.error(line)
       appServices.errorSink.recordLocal('renderProcessGone', line, `renderer:${win.id}`)
@@ -352,6 +370,7 @@ export class WindowMainService implements IWindowMainService {
       void this._confirmAndClose(entry)
     })
     win.on('closed', () => {
+      roleRegistration?.dispose()
       this._windows.delete(win.id)
       this._allowClose.delete(win.id)
       this._crashHandled.delete(win.id)

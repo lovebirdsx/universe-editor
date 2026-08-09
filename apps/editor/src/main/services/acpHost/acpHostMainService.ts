@@ -21,6 +21,7 @@ import {
 } from '@universe-editor/platform'
 import { buildChildEnv } from '../process/env.js'
 import { decodeDiagnostic } from '../process/decode.js'
+import { processRoleRegistry } from '../process/processRoleRegistry.js'
 import { resolveFromRepo } from '../../repoPaths.js'
 import {
   CHILD_PROCESS_EXITED_CODE,
@@ -213,6 +214,11 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
       exited: false,
     }
     this._procs.set(handle, entry)
+
+    if (proc.pid !== undefined) {
+      const agent = spec.runAsNode ? (spec.nodeEntry ?? 'claude') : path.basename(spec.command)
+      store.add(processRoleRegistry.register(proc.pid, { role: 'acp-agent', label: agent }))
+    }
 
     store.add(
       proc.onStdout((data: Buffer) => {

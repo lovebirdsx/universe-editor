@@ -41,6 +41,7 @@
     "electron-updater": "^6.3.0",
     "jsonc-parser": "catalog:",
     "@vscode/ripgrep": "catalog:",
+    "@vscode/windows-process-tree": "catalog:",
     "tar": "catalog:",
     "smol-toml": "catalog:"
   },

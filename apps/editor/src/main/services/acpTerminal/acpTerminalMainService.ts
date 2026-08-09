@@ -26,6 +26,7 @@ import { StringDecoder } from 'node:string_decoder'
 import {
   createNamedLogger,
   Disposable,
+  type IDisposable,
   type ILogger,
   ILoggerService,
 } from '@universe-editor/platform'
@@ -38,6 +39,7 @@ import type {
 } from '@agentclientprotocol/sdk'
 import { buildChildEnv } from '../process/env.js'
 import { ManagedChildProcess } from '../process/managedChildProcess.js'
+import { processRoleRegistry } from '../process/processRoleRegistry.js'
 import type {
   AcpTerminalCreateSpec,
   IAcpTerminalService,
@@ -99,6 +101,8 @@ interface TerminalEntry {
   exit?: TerminalExitStatus
   /** True after `release()` — guards against double-release races. */
   released: boolean
+  /** 进程角色登记句柄；退出 / release / dispose 路径摘除。 */
+  roleRegistration?: IDisposable
 }
 
 export class AcpTerminalMainService extends Disposable implements IAcpTerminalService {
@@ -158,10 +162,18 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
     }
     this._entries.set(id, entry)
 
+    if (proc.pid !== undefined) {
+      entry.roleRegistration = processRoleRegistry.register(proc.pid, {
+        role: 'acp-terminal',
+        label: path.basename(spec.command),
+      })
+    }
+
     proc.onStdout((chunk: Buffer) => this._appendOutput(entry, entry.stdoutDecoder.write(chunk)))
     proc.onStderr((chunk: Buffer) => this._appendOutput(entry, entry.stderrDecoder.write(chunk)))
     proc.onDidExit((exit) => {
       if (entry.exit !== undefined) return
+      entry.roleRegistration?.dispose()
       if (exit.error !== undefined) {
         // Surface spawn failures (ENOENT etc.) as a synthetic exit so the agent
         // gets a deterministic terminal status instead of hanging on
@@ -226,6 +238,7 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
     if (!entry) return Promise.resolve()
     if (entry.released) return Promise.resolve()
     entry.released = true
+    entry.roleRegistration?.dispose()
     // Release implies the agent no longer cares about the process — dispose the
     // managed child (immediate SIGKILL if still alive + clears any pending kill
     // escalation timer), since we're about to drop the entry that owns it.
@@ -241,6 +254,7 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
 
   override dispose(): void {
     for (const [id, entry] of this._entries) {
+      entry.roleRegistration?.dispose()
       entry.proc.dispose()
       const err = new Error('AcpTerminal: service disposed')
       for (const w of entry.waiters.splice(0)) w.reject(err)

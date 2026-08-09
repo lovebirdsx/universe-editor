@@ -25,11 +25,13 @@ import {
   Disposable,
   Emitter,
   type Event,
+  type IDisposable,
   type ILogChannel,
   type ILogger,
 } from '@universe-editor/platform'
 import type { IPty } from '@lydell/node-pty'
 import { buildChildEnv } from '../process/env.js'
+import { processRoleRegistry } from '../process/processRoleRegistry.js'
 import { detectAvailableProfiles, type ITerminalProfilesDeps } from './terminalProfiles.js'
 import type {
   ITerminalCreatedInfo,
@@ -188,6 +190,8 @@ function sanitizeCwd(cwd: string, platform: NodeJS.Platform): string {
 interface TerminalEntry {
   readonly pty: IPty
   readonly info: ITerminalCreatedInfo
+  /** 进程角色登记句柄；退出 / release / dispose 路径摘除。 */
+  roleRegistration?: IDisposable
 }
 
 export class TerminalMainService extends Disposable implements ITerminalService {
@@ -251,12 +255,18 @@ export class TerminalMainService extends Disposable implements ITerminalService 
       shell,
       name: spec.name && spec.name.length > 0 ? spec.name : basename(shell),
     }
-    this._entries.set(id, { pty, info })
+    const entry: TerminalEntry = { pty, info }
+    entry.roleRegistration = processRoleRegistry.register(pty.pid, {
+      role: 'pty',
+      label: info.name,
+    })
+    this._entries.set(id, entry)
 
     pty.onData((data) => this._onData.fire({ id, data }))
     pty.onExit(({ exitCode, signal }) => {
       this._logger.info(`exit id=${id} code=${exitCode} signal=${signal ?? ''}`)
       this._onExit.fire({ id, exitCode, ...(signal != null ? { signal } : {}) })
+      entry.roleRegistration?.dispose()
       this._entries.delete(id)
     })
 
@@ -309,6 +319,7 @@ export class TerminalMainService extends Disposable implements ITerminalService 
     const entry = this._entries.get(id)
     if (!entry) return Promise.resolve()
     this._entries.delete(id)
+    entry.roleRegistration?.dispose()
     try {
       entry.pty.kill()
     } catch {
@@ -320,6 +331,7 @@ export class TerminalMainService extends Disposable implements ITerminalService 
 
   override dispose(): void {
     for (const [id, entry] of this._entries) {
+      entry.roleRegistration?.dispose()
       try {
         entry.pty.kill()
       } catch {

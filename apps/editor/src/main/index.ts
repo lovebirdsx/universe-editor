@@ -48,6 +48,7 @@ import { IAiDebugService } from '../shared/ipc/aiDebugService.js'
 import { IRemoteSchemaService } from '../shared/ipc/remoteSchemaService.js'
 import { IResourceAccessService } from '../shared/ipc/resourceAccessService.js'
 import { IEnvironmentSnapshotService } from '../shared/ipc/environmentSnapshotService.js'
+import { IProcessMonitorService } from '../shared/ipc/processMonitorService.js'
 import { IRecentWorkspacesService } from './services/workspace/recentWorkspacesMainService.js'
 import { IWatcherProcessService } from './services/fileWatcher/watcherProcessClient.js'
 import {
@@ -488,6 +489,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       errorSink: accessor.get(IErrorSinkService) as ErrorSinkMainService,
       diagnostics: accessor.get(IDiagnosticsService) as DiagnosticsMainService,
       issueReporter: accessor.get(IIssueReporterService),
+      processMonitor: accessor.get(IProcessMonitorService),
       sessionSwitcher: accessor.get(ISessionSwitcherService) as SessionSwitcherMainService,
       configLocation: accessor.get(IConfigLocationService) as ConfigLocationMainService,
       watcherProcess: accessor.get(IWatcherProcessService),

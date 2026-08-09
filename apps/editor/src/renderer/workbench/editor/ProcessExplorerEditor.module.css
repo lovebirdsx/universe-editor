@@ -1,0 +1,88 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  ProcessExplorerEditor styles — a live-updating process tree table.
+ *--------------------------------------------------------------------------------------------*/
+
+.root {
+  height: 100%;
+  overflow: auto;
+  background: var(--vscode-editor-background, #1e1e1e);
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  padding: 16px 24px;
+  font-size: 13px;
+}
+
+.error {
+  margin-bottom: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--vscode-errorForeground, #f48771);
+  color: var(--vscode-errorForeground, #f48771);
+  border-radius: 4px;
+}
+
+.loading {
+  opacity: 0.7;
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 3px 12px;
+  border-bottom: 1px solid var(--vscode-workbench-border, #333);
+  white-space: nowrap;
+}
+
+.table th {
+  font-weight: 600;
+  opacity: 0.8;
+  position: sticky;
+  top: 0;
+  background: var(--vscode-editor-background, #1e1e1e);
+}
+
+.table tbody tr:hover {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.name {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 480px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.twistie {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.twistieSpacer {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+}
+
+.highLoad {
+  color: var(--vscode-errorForeground, #f48771);
+}

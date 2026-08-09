@@ -7,6 +7,8 @@ allowBuilds:
   electron: true
   '@parcel/watcher': false
   electron-winstaller: false
+  # install 脚本是 node-gyp rebuild(无 prebuilds),必须放行,否则装出无 .node 的空壳。
+  '@vscode/windows-process-tree': true
 allowedDeprecatedVersions:
   boolean: 3.2.0
   glob: 7.2.3
@@ -139,6 +141,11 @@ catalog:
   '@xterm/xterm': ^6.0.0
   '@xterm/addon-fit': ^0.11.0
   '@xterm/addon-web-links': ^0.12.0
+
+  # Process Explorer(Windows 进程树采集,对齐 VSCode ps.ts)
+  # 无 prebuilds:install 脚本 node-gyp rebuild,需 MSVC 工具链;N-API addon,一次编译
+  # 跨 Node/Electron 版本通用,不走 electron-rebuild。固定精确版本。
+  '@vscode/windows-process-tree': 0.8.0
 
 # 注意:patchedDependencies 按「包名@精确版本」匹配,升级依赖不会自动迁移 patch——
 # 版本对不上时 pnpm 仅警告且补丁静默失效。升级步骤:

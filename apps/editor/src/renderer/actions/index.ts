@@ -246,6 +246,13 @@ import {
   ShowStartupPerformanceAction,
   ShowInteractionPerformanceAction,
 } from './performanceActions.js'
+import {
+  OpenProcessExplorerAction,
+  KillProcessAction,
+  ForceKillProcessAction,
+  CopyProcessAction,
+  CopyAllProcessesAction,
+} from './processExplorerActions.js'
 import { ToggleKeybindingsTroubleshootingAction } from './developerActions.js'
 import {
   OpenDocsAction,
@@ -636,6 +643,11 @@ registerAction2(ToggleBlameStatusBarItemAction)
 registerAction2(ShowStartupPerformanceAction)
 registerAction2(ShowInteractionPerformanceAction)
 registerAction2(ToggleKeybindingsTroubleshootingAction)
+registerAction2(OpenProcessExplorerAction)
+registerAction2(KillProcessAction)
+registerAction2(ForceKillProcessAction)
+registerAction2(CopyProcessAction)
+registerAction2(CopyAllProcessesAction)
 
 // Markdown
 registerAction2(OpenMarkdownPreviewAction)

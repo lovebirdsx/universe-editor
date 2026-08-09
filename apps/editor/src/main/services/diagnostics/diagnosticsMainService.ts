@@ -39,6 +39,8 @@ export interface DiagnosticsMainServiceOptions {
   readonly mode: string
   /** Extension listing for the report; injected so tests stay electron-light. */
   readonly listExtensions?: () => Promise<DiagnosticsExtensionEntry[]>
+  /** Process tree snapshot for the zip; injected so tests stay electron-light. */
+  readonly collectProcesses?: () => Promise<string>
   /**
    * Whether exports reveal themselves via shell.showItemInFolder. Disabled in
    * E2E: popping an Explorer/Finder window mid-test serves no one.
@@ -130,6 +132,9 @@ export class DiagnosticsMainService extends Disposable implements IDiagnosticsSe
       ? dumps.map((d) => `${new Date(d.mtime).toISOString()}  ${d.path}`).join('\n') + '\n'
       : '(no crash dumps)\n'
     zip.addFile('crash-dumps.txt', Buffer.from(dumpListing, 'utf8'))
+
+    const processList = await this._options.collectProcesses?.().catch(() => undefined)
+    zip.addFile('processes.txt', Buffer.from(processList ?? '(process list unavailable)\n', 'utf8'))
 
     await fs.mkdir(this._options.diagnosticsDir, { recursive: true })
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)

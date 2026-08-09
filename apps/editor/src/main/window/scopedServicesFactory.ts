@@ -45,6 +45,7 @@ import type { IResourceAccessService } from '../../shared/ipc/resourceAccessServ
 import type { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapshotService.js'
 import type { ErrorSinkMainService } from '../services/telemetry/errorSinkMainService.js'
 import type { DiagnosticsMainService } from '../services/diagnostics/diagnosticsMainService.js'
+import type { IProcessMonitorService } from '../../shared/ipc/processMonitorService.js'
 import type { IHostServiceWire } from '@universe-editor/platform'
 import type { RecentWorkspacesMainService } from '../services/workspace/recentWorkspacesMainService.js'
 import type { SessionSwitcherMainService } from '../services/sessionSwitcher/sessionSwitcherMainService.js'
@@ -91,6 +92,7 @@ export interface ApplicationServices {
    */
   readonly diagnostics: DiagnosticsMainService
   readonly issueReporter: IIssueReporterService
+  readonly processMonitor: IProcessMonitorService
   /**
    * Concrete (not interface) type: WindowMainService calls registerWindow /
    * unregisterWindow on it, which are main-internal and not on the wire contract.

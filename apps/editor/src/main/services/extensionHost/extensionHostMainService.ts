@@ -25,6 +25,7 @@ import {
 } from '@universe-editor/platform'
 import { buildChildEnv } from '../process/env.js'
 import { decodeDiagnostic } from '../process/decode.js'
+import { processRoleRegistry } from '../process/processRoleRegistry.js'
 import {
   CHILD_PROCESS_EXITED_CODE,
   CHILD_STDIN_NOT_WRITABLE_CODE,
@@ -263,6 +264,10 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
       exited: false,
     }
     this._procs.set(handle, procEntry)
+
+    if (proc.pid !== undefined) {
+      store.add(processRoleRegistry.register(proc.pid, { role: 'extension-host', label: handle }))
+    }
 
     if (!this._didMarkFirstSpawn) {
       this._didMarkFirstSpawn = true

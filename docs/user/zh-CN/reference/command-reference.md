@@ -153,6 +153,7 @@ Markdown 的格式命令与预览链接导航命令，目前有相当一部分�
 | Export Diagnostics Package...（英文） | 导出诊断包：把诊断摘要、近期错误记录与日志尾部打包成 zip | 无 |
 | 开发人员：显示日志... | 挑一个日志文件在输出底栏查看 | `Ctrl+Shift+U` |
 | 开发人员：打开日志文件夹 | 在系统文件管理器里打开日志目录 | 无 |
+| Developer: Open Process Explorer（英文） | 打开进程管理器：以表格树展示本应用全部进程（main、窗口、GPU/utility、extension host、AI agent、终端 pty、tsserver、ripgrep 等）的名称、CPU、PID 与内存占用，约每秒刷新；CPU 高于 90% 的行会高亮；右键行可结束进程（Windows 上等同强制结束）、复制该行或整棵进程树文本 | 无 |
 
 > 反馈问题时附上日志会更容易定位，取日志的步骤见 [排障指南 · 日志在哪、怎么取](./troubleshooting.md#日志在哪怎么取)。
 

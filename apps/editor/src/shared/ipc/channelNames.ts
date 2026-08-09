@@ -49,6 +49,7 @@ export const ServiceChannels = {
   ErrorSink: 'errorSink',
   Diagnostics: 'diagnostics',
   IssueReporter: 'issueReporter',
+  ProcessMonitor: 'processMonitor',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

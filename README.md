@@ -12,6 +12,11 @@ pnpm dev                      # 启动编辑器（开发模式）
 
 AI agent 功能依赖 `vendor/` 下的 ACP fork，首次使用或更新 fork 后需执行 `pnpm agent:build`。
 
+### 环境要求（Windows）
+
+- Node 22 + pnpm 11（corepack）
+- **MSVC C++ 工具链**：Visual Studio 2022 或 Build Tools 的「使用 C++ 的桌面开发」工作负载 + 任一 Windows 10/11 SDK
+
 ## 仓库结构
 
 ```

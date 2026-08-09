@@ -110,6 +110,10 @@ export function bootstrapWindowIpc(
   server.registerChannel(ServiceChannels.Diagnostics, ProxyChannel.fromService(app.diagnostics))
   server.registerChannel(ServiceChannels.IssueReporter, ProxyChannel.fromService(app.issueReporter))
   server.registerChannel(
+    ServiceChannels.ProcessMonitor,
+    ProxyChannel.fromService(app.processMonitor),
+  )
+  server.registerChannel(
     ServiceChannels.SessionSwitcher,
     ProxyChannel.fromService(createWindowScopedSessionSwitcher(app.sessionSwitcher, win.id)),
   )
