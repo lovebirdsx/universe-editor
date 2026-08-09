@@ -36,6 +36,7 @@ import {
   type IDisposable,
 } from '@universe-editor/platform'
 import { EditorGroup, directionToGridDirection } from './EditorGroup.js'
+import { DiffEditorInput } from './DiffEditorInput.js'
 import { EditorViewStateCache } from './EditorViewStateCache.js'
 import {
   collectLeavesInOrder,
@@ -336,7 +337,10 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
       return {
         editors: persistable.map((e) => ({
           typeId: e.typeId,
-          data: e.serialize?.() ?? null,
+          // Diff snapshots carry both sides' full text; routing them through
+          // the budgeted serializer keeps this write off the megabyte scale.
+          data:
+            e instanceof DiffEditorInput ? e.serializeForPersistence() : (e.serialize?.() ?? null),
         })),
         activeIndex: activeIdx >= 0 ? activeIdx : 0,
         ...(group.isLocked ? { locked: true } : {}),

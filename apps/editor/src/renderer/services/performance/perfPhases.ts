@@ -51,11 +51,12 @@ export async function recordPerfPhaseAsync<T>(name: string, fn: () => Promise<T>
   }
 }
 
-/** Instrument for ChannelPair/IpcService message decoding: records a perf phase
- *  only when a single frame's decode blocked the main thread noticeably, so a
- *  slow tab switch caused by a multi-MB RPC payload shows up attributed in the
- *  tab-switch / interaction reports instead of as an anonymous long task. */
-export function slowDecodePhaseInstrument(name: string, minMs = 5): <T>(run: () => T) => T {
+/** Instrument for ChannelPair/IpcService message decoding/encoding: records a
+ *  perf phase only when a single frame's (de)serialization blocked the main
+ *  thread noticeably, so a slow tab switch caused by a multi-MB RPC payload
+ *  shows up attributed in the tab-switch / interaction reports instead of as
+ *  an anonymous long task. */
+export function slowPhaseInstrument(name: string, minMs = 5): <T>(run: () => T) => T {
   return (run) => {
     const startTime = performance.now()
     try {

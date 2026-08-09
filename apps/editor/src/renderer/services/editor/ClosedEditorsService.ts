@@ -15,16 +15,21 @@
 import {
   Disposable,
   IEditorGroupsService,
+  ILoggerService,
   IStorageService,
   IUriIdentityService,
+  NullLogger,
   StorageScope,
   URI,
   createDecorator,
   type EditorInput,
   type IDisposable,
   type IEditorGroup,
+  type ILogger,
+  type ILoggerService as ILoggerServiceType,
   type UriComponents,
 } from '@universe-editor/platform'
+import { recordPerfPhase, recordPerfPhaseAsync } from '../performance/perfPhases.js'
 
 export interface ClosedEditorEntry {
   readonly resource: URI
@@ -57,6 +62,33 @@ interface PersistedClosedEditor {
 
 const STORAGE_KEY = 'workbench.closedEditors'
 const MAX_ENTRIES = 20
+const PERSIST_DEBOUNCE_MS = 200
+/** Entries whose serialized payload exceeds this stay in the in-memory stack
+ *  (same-session Ctrl+Shift+T keeps working) but are never written to storage:
+ *  persisting a multi-MB diff snapshot means synchronously stringifying it on
+ *  the main thread on every close. */
+export const MAX_PERSISTED_ENTRY_BYTES = 256 * 1024
+
+/** Cheap structural size estimate — counts string lengths without building the
+ *  serialized string (JSON.stringify of a 20MB payload is exactly the cost this
+ *  budget exists to avoid). */
+function estimateSerializedSize(data: unknown, depth = 0): number {
+  if (data === null || data === undefined) return 0
+  if (typeof data === 'string') return data.length
+  if (typeof data === 'number' || typeof data === 'boolean') return 8
+  if (depth > 16) return 0
+  if (Array.isArray(data)) {
+    let size = 0
+    for (const item of data) size += estimateSerializedSize(item, depth + 1)
+    return size
+  }
+  if (typeof data === 'object') {
+    let size = 0
+    for (const value of Object.values(data)) size += estimateSerializedSize(value, depth + 1)
+    return size
+  }
+  return 0
+}
 
 export class ClosedEditorsService extends Disposable implements IClosedEditorsService {
   declare readonly _serviceBrand: undefined
@@ -64,13 +96,25 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
   private readonly _stack: ClosedEditorEntry[] = []
   private readonly _groupWatchers = new Map<number, IDisposable>()
   private _loadPromise: Promise<void>
+  private _persistTimer: ReturnType<typeof setTimeout> | null = null
+  private _persistDebounceMs = PERSIST_DEBOUNCE_MS
+  private readonly _logger: ILogger
+
+  /** Test seam: collapse the debounce so specs can flush with a bare timer. */
+  _setPersistDebounceMsForTests(ms: number): void {
+    this._persistDebounceMs = ms
+  }
 
   constructor(
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IStorageService private readonly _storage: IStorageService,
+    @ILoggerService loggerService: ILoggerServiceType,
   ) {
     super()
+    this._logger =
+      loggerService?.createLogger({ id: 'closedEditors', name: 'Closed Editors' }) ??
+      new NullLogger()
 
     this._loadPromise = this._load()
     this._register(
@@ -110,7 +154,7 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
         break
       }
     }
-    if (mutated) void this._persist()
+    if (mutated) this._schedulePersist()
     return popped
   }
 
@@ -129,7 +173,7 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
       if (!this._uriIdentity.isEqual(entry.resource, resource)) continue
       if (this._isOpen(entry)) continue
       this._stack.splice(i, 1)
-      void this._persist()
+      this._schedulePersist()
       return entry
     }
     return undefined
@@ -162,16 +206,28 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
   }
 
   private _record(groupId: number, editor: EditorInput | undefined): void {
-    if (!editor?.resource) return
-    this._stack.push({
-      resource: editor.resource,
-      typeId: editor.typeId,
-      groupId,
-      serializedData: editor.serialize?.() ?? null,
-      label: editor.getName(),
+    const resource = editor?.resource
+    if (!editor || !resource) return
+    recordPerfPhase('closedEditors.record', () => {
+      // Closing the same (typeId, resource) again replaces its earlier entry —
+      // otherwise repeatedly closing a diff whose serializedData holds both
+      // sides' full text piles duplicate multi-MB entries into the stack.
+      for (let i = this._stack.length - 1; i >= 0; i--) {
+        const e = this._stack[i]!
+        if (e.typeId === editor.typeId && this._uriIdentity.isEqual(e.resource, resource)) {
+          this._stack.splice(i, 1)
+        }
+      }
+      this._stack.push({
+        resource,
+        typeId: editor.typeId,
+        groupId,
+        serializedData: editor.serialize?.() ?? null,
+        label: editor.getName(),
+      })
+      if (this._stack.length > MAX_ENTRIES) this._stack.shift()
     })
-    if (this._stack.length > MAX_ENTRIES) this._stack.shift()
-    void this._persist()
+    this._schedulePersist()
   }
 
   private async _load(): Promise<void> {
@@ -193,10 +249,46 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
    *  persisted previous-session stack with only this session's entries. */
   private async _persist(): Promise<void> {
     await this._loadPromise
-    const data: PersistedClosedEditor[] = this._stack.map((e) => ({
-      ...e,
-      resource: e.resource.toJSON(),
-    }))
-    await this._storage.set(STORAGE_KEY, data, StorageScope.WORKSPACE)
+    try {
+      let dropped = 0
+      await recordPerfPhaseAsync('closedEditors.persist', async () => {
+        const data: PersistedClosedEditor[] = []
+        for (const e of this._stack) {
+          if (estimateSerializedSize(e.serializedData) > MAX_PERSISTED_ENTRY_BYTES) {
+            dropped++
+            continue
+          }
+          data.push({ ...e, resource: e.resource.toJSON() })
+        }
+        await this._storage.set(STORAGE_KEY, data, StorageScope.WORKSPACE)
+      })
+      if (dropped > 0) {
+        this._logger.debug(
+          `persisted closed editors, kept ${dropped} oversized entries memory-only`,
+        )
+      }
+    } catch (err) {
+      this._logger.warn(
+        'failed to persist closed editors',
+        err instanceof Error ? (err.stack ?? err.message) : String(err),
+      )
+    }
+  }
+
+  private _schedulePersist(): void {
+    if (this._persistTimer !== null) clearTimeout(this._persistTimer)
+    this._persistTimer = setTimeout(() => {
+      this._persistTimer = null
+      void this._persist()
+    }, this._persistDebounceMs)
+  }
+
+  override dispose(): void {
+    if (this._persistTimer !== null) {
+      clearTimeout(this._persistTimer)
+      this._persistTimer = null
+      void this._persist()
+    }
+    super.dispose()
   }
 }

@@ -25,7 +25,16 @@ interface ISerializedDiffEditor {
   readonly modifiedUri?: UriComponents
   readonly openableResource?: UriComponents
   readonly liveModified?: boolean
+  /** Set when the entry was persisted without its content (size budget): the
+   *  tab is not restorable — deserialize returns null for these. */
+  readonly contentDropped?: boolean
 }
+
+/** Workspace-state persistence writes on every editor change (debounced);
+ *  stringifying a multi-MB diff snapshot there would tax the main thread each
+ *  time. Diffs whose two sides exceed this budget persist structure only and
+ *  are simply not restored on the next launch. */
+export const DIFF_PERSIST_BUDGET_BYTES = 256 * 1024
 
 export class DiffEditorInput extends EditorInput {
   static readonly TYPE_ID: string = 'diff'
@@ -172,6 +181,21 @@ export class DiffEditorInput extends EditorInput {
     }
   }
 
+  /** Like {@link serialize}, but for workspace-state persistence: oversized
+   *  snapshots degrade to a structure-only marker that restore skips. */
+  serializeForPersistence(maxBytes = DIFF_PERSIST_BUDGET_BYTES): ISerializedDiffEditor {
+    if (this._originalContent.length + this._modifiedContent.length <= maxBytes) {
+      return this.serialize()
+    }
+    return {
+      originalUri: this._originalUri.toJSON(),
+      originalContent: '',
+      modifiedContent: '',
+      ...(this._isCrossFile && { modifiedUri: this._modifiedUri!.toJSON() }),
+      contentDropped: true,
+    }
+  }
+
   /**
    * Rebuild a diff input from its persisted structure + content (Ctrl+Shift+T /
    * window restore). Both sides are restored verbatim; live SCM/session
@@ -181,6 +205,7 @@ export class DiffEditorInput extends EditorInput {
   static deserialize(data: unknown): DiffEditorInput | null {
     const d = data as ISerializedDiffEditor | null
     if (!d || !d.originalUri) return null
+    if (d.contentDropped) return null
     const originalUri = URI.revive(d.originalUri) as URI
     const modifiedUri = d.modifiedUri ? (URI.revive(d.modifiedUri) as URI) : undefined
     const openableResource = d.openableResource

@@ -3,7 +3,7 @@
  *  Tests for ClosedEditorsService and the ReopenClosedEditorAction that consumes it.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   EditorInput,
@@ -22,7 +22,11 @@ import {
   type PartId,
 } from '@universe-editor/platform'
 import { EditorGroupsService } from '../EditorGroupsService.js'
-import { ClosedEditorsService, IClosedEditorsService } from '../ClosedEditorsService.js'
+import {
+  ClosedEditorsService,
+  IClosedEditorsService,
+  MAX_PERSISTED_ENTRY_BYTES,
+} from '../ClosedEditorsService.js'
 import { ReopenClosedEditorAction } from '../../../actions/editorActions.js'
 
 // ---------------------------------------------------------------------------
@@ -98,7 +102,10 @@ class FakeTextInput extends EditorInput {
 
 class FakeImageInput extends EditorInput {
   static readonly TYPE_ID = 'fake.shared.image.closed.test'
-  constructor(private readonly _resource: URI) {
+  constructor(
+    private readonly _resource: URI,
+    private readonly _tag = '',
+  ) {
     super()
   }
   override get typeId() {
@@ -113,11 +120,33 @@ class FakeImageInput extends EditorInput {
   override getName() {
     return 'FakeImage'
   }
-  override serialize(): { uri: string } {
-    return { uri: this._resource.toString() }
+  override serialize(): { uri: string; tag: string } {
+    return { uri: this._resource.toString(), tag: this._tag }
   }
   static deserialize(data: unknown): FakeImageInput {
-    return new FakeImageInput(URI.parse((data as { uri: string }).uri))
+    const d = data as { uri: string; tag?: string }
+    return new FakeImageInput(URI.parse(d.uri), d.tag ?? '')
+  }
+}
+
+/** Input whose serialized payload is arbitrarily large — mirrors DiffEditorInput
+ *  persisting both sides' full text. */
+class FakeBigInput extends EditorInput {
+  static readonly TYPE_ID = 'fake.big.closed.test'
+  constructor(private readonly _payload: string) {
+    super()
+  }
+  override get typeId() {
+    return FakeBigInput.TYPE_ID
+  }
+  override get resource() {
+    return URI.parse('virtual:///big')
+  }
+  override getName() {
+    return 'FakeBig'
+  }
+  override serialize(): { payload: string } {
+    return { payload: this._payload }
   }
 }
 
@@ -170,8 +199,14 @@ class FakeStorage implements IStorageServiceType {
   }
 }
 
-function makeSvc(groups: EditorGroupsService, storage: IStorageServiceType = new FakeStorage()) {
-  return new ClosedEditorsService(groups, new UriIdentityService('linux'), storage)
+function makeSvc(
+  groups: EditorGroupsService,
+  storage: IStorageServiceType = new FakeStorage(),
+  persistDebounceMs = 0,
+) {
+  const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'), storage, null!)
+  svc._setPersistDebounceMsForTests(persistDebounceMs)
+  return svc
 }
 
 function flush(): Promise<void> {
@@ -390,11 +425,11 @@ describe('ClosedEditorsService — takeMostRecentMatching', () => {
     expect(entry!.typeId).toBe(FakeImageInput.TYPE_ID)
     expect(entry!.serializedData).toEqual(second.serialize())
 
-    // The older same-resource entry and the other-resource entry stay in the stack.
+    // The same-resource earlier entry was replaced by the newer close (dedup);
+    // only the other-resource entry stays in the stack.
     const next = svc.popMostRecent()
     expect(next!.resource.toString()).toBe(other.resource.toString())
-    const oldest = svc.popMostRecent()
-    expect(oldest!.serializedData).toEqual(first.serialize())
+    expect(svc.popMostRecent()).toBeUndefined()
     svc.dispose()
     groups.dispose()
   })
@@ -618,6 +653,118 @@ describe('ClosedEditorsService — persistence across restarts', () => {
     expect(svc.getClosedEditors()).toHaveLength(0)
     svc.dispose()
     groups.dispose()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ClosedEditorsService — dedup, size budget, debounce, error containment
+// ---------------------------------------------------------------------------
+
+describe('ClosedEditorsService — close-path cost guards', () => {
+  it('closing the same (typeId, resource) twice keeps only the newest entry', () => {
+    const groups = new EditorGroupsService()
+    const svc = makeSvc(groups)
+    const uri = URI.file('/w/dup.png')
+    const first = new FakeImageInput(uri, 'first')
+    const second = new FakeImageInput(uri, 'second')
+    groups.activeGroup.openEditor(first)
+    groups.activeGroup.closeEditor(first)
+    groups.activeGroup.openEditor(second)
+    groups.activeGroup.closeEditor(second)
+
+    const entries = svc.getClosedEditors()
+    expect(entries).toHaveLength(1)
+    expect(entries[0]!.serializedData).toEqual(second.serialize())
+    svc.dispose()
+    groups.dispose()
+  })
+
+  it('oversized entries stay reopenable in-session but are never persisted across restarts', async () => {
+    const storage = new FakeStorage()
+    const groups1 = new EditorGroupsService()
+    const svc1 = makeSvc(groups1, storage)
+    const small = new FakeVirtualInput('small')
+    const big = new FakeBigInput('x'.repeat(MAX_PERSISTED_ENTRY_BYTES + 1))
+    groups1.activeGroup.openEditor(small)
+    groups1.activeGroup.closeEditor(small)
+    groups1.activeGroup.openEditor(big)
+    groups1.activeGroup.closeEditor(big)
+
+    // Same session: the oversized entry keeps its full payload in memory.
+    const entries = svc1.getClosedEditors()
+    expect(entries).toHaveLength(2)
+    const bigEntry = entries.find((e) => e.typeId === FakeBigInput.TYPE_ID)!
+    expect((bigEntry.serializedData as { payload: string }).payload).toHaveLength(
+      MAX_PERSISTED_ENTRY_BYTES + 1,
+    )
+    await flush()
+    svc1.dispose()
+    groups1.dispose()
+
+    // After a restart only the small entry comes back.
+    const groups2 = new EditorGroupsService()
+    const svc2 = makeSvc(groups2, storage)
+    await flush()
+    const restored = svc2.getClosedEditors()
+    expect(restored).toHaveLength(1)
+    expect(restored[0]!.typeId).toBe(FakeVirtualInput.TYPE_ID)
+    svc2.dispose()
+    groups2.dispose()
+  })
+
+  it('coalesces a burst of closes into a single storage write', async () => {
+    vi.useFakeTimers()
+    try {
+      class CountingStorage extends FakeStorage {
+        setCount = 0
+        override async set(key: string, value: unknown): Promise<void> {
+          this.setCount++
+          await super.set(key, value)
+        }
+      }
+      const storage = new CountingStorage()
+      const groups = new EditorGroupsService()
+      const svc = makeSvc(groups, storage, 100)
+      for (const label of ['burst-a', 'burst-b', 'burst-c']) {
+        const input = new FakeVirtualInput(label)
+        groups.activeGroup.openEditor(input)
+        groups.activeGroup.closeEditor(input)
+      }
+      expect(storage.setCount).toBe(0)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(storage.setCount).toBe(1)
+      svc.dispose()
+      groups.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a failing storage.set is contained, not an unhandled rejection', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      class RejectingStorage extends FakeStorage {
+        override async set(): Promise<void> {
+          throw new Error('value too large')
+        }
+      }
+      const groups = new EditorGroupsService()
+      const svc = makeSvc(groups, new RejectingStorage())
+      const input = new FakeVirtualInput('reject')
+      groups.activeGroup.openEditor(input)
+      groups.activeGroup.closeEditor(input)
+      await flush()
+      await flush()
+      expect(unhandled).toHaveLength(0)
+      svc.dispose()
+      groups.dispose()
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
   })
 })
 

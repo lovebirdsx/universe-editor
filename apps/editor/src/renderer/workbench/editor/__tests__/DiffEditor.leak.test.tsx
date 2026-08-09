@@ -15,6 +15,7 @@ interface DiffEditorStub {
 
 const monacoTestState = vi.hoisted(() => ({
   diffEditors: [] as DiffEditorStub[],
+  createModelCount: 0,
 }))
 
 vi.mock('../monaco/MonacoLoader.js', () => {
@@ -63,7 +64,10 @@ vi.mock('../monaco/MonacoLoader.js', () => {
   const monacoStub = {
     Uri: { parse: (value: string) => ({ toString: () => value }) },
     editor: {
-      createModel: (text: string, language: string, uri: unknown) => makeModel(text, language, uri),
+      createModel: (text: string, language: string, uri: unknown) => {
+        monacoTestState.createModelCount++
+        return makeModel(text, language, uri)
+      },
       createDiffEditor: () => makeDiffEditor(),
     },
   }
@@ -82,12 +86,15 @@ import { cleanup, render } from '@testing-library/react'
 import {
   ICommandService,
   IConfigurationService,
+  IContextKeyService,
+  IEditorGroupsService,
   InstantiationService,
   ServiceCollection,
   URI,
 } from '@universe-editor/platform'
 import { DiffEditorInput } from '../../../services/editor/DiffEditorInput.js'
 import { EditorViewStateCache } from '../../../services/editor/EditorViewStateCache.js'
+import { _resetDiffModelCacheForTests } from '../../../services/editor/diffModelCache.js'
 import { ServicesContext } from '../../useService.js'
 import { DiffEditor } from '../DiffEditor.js'
 import { EditorGroupContext } from '../EditorGroupContext.js'
@@ -122,13 +129,20 @@ function createInstantiationService(config: CountingConfigService): Instantiatio
     _serviceBrand: undefined,
     executeCommand: async () => undefined,
   } as never)
+  services.set(IContextKeyService, { _serviceBrand: undefined, set: () => {} } as never)
+  services.set(IEditorGroupsService, {
+    _serviceBrand: undefined,
+    activeGroup: { activeEditor: undefined, lastActivationPreservedFocus: false },
+  } as never)
   return new InstantiationService(services)
 }
 
 afterEach(() => {
   cleanup()
   EditorViewStateCache._resetForTests()
+  _resetDiffModelCacheForTests()
   monacoTestState.diffEditors.length = 0
+  monacoTestState.createModelCount = 0
 })
 
 describe('DiffEditor disposal', () => {
@@ -171,5 +185,37 @@ describe('DiffEditor disposal', () => {
     // Every subscription opened must have been disposed by an effect cleanup.
     expect(config.disposeCount).toBe(config.subscribeCount)
     expect(contentDisposeCount).toBe(contentSubscribeCount)
+  })
+
+  it('reuses the cached model pair on remount instead of rebuilding', async () => {
+    const config = new CountingConfigService()
+    const instantiation = createInstantiationService(config)
+    const input = new DiffEditorInput(URI.file('/ws/big.txt'), 'before\n', 'after\n')
+
+    const renderDiff = () =>
+      render(
+        <StrictMode>
+          <ServicesContext.Provider value={instantiation}>
+            <EditorGroupContext.Provider value={{ id: 1 } as never}>
+              <DiffEditor input={input} />
+            </EditorGroupContext.Provider>
+          </ServicesContext.Provider>
+        </StrictMode>,
+      )
+
+    const first = renderDiff()
+    await vi.waitFor(() => {
+      expect(monacoTestState.diffEditors.at(-1)?.model).toBeTruthy()
+    })
+    // Two models total: StrictMode's second mount already re-acquires the pair
+    // the first mount handed to the cache.
+    expect(monacoTestState.createModelCount).toBe(2)
+    first.unmount()
+
+    renderDiff()
+    await vi.waitFor(() => {
+      expect(monacoTestState.diffEditors.at(-1)?.model).toBeTruthy()
+    })
+    expect(monacoTestState.createModelCount).toBe(2)
   })
 })

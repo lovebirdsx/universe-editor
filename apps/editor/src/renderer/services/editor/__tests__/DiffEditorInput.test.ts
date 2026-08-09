@@ -108,5 +108,23 @@ describe('DiffEditorInput', () => {
       expect(DiffEditorInput.deserialize(null)).toBeNull()
       expect(DiffEditorInput.deserialize({})).toBeNull()
     })
+
+    it('serializeForPersistence keeps full content within budget', () => {
+      const input = new DiffEditorInput(URI.file('/ws/a.ts'), 'base', 'current')
+      expect(input.serializeForPersistence(1024)).toEqual(input.serialize())
+    })
+
+    it('serializeForPersistence drops content over budget and deserialize skips it', () => {
+      const left = URI.file('/ws/a.ts')
+      const right = URI.file('/ws/b.ts')
+      const input = new DiffEditorInput(left, 'A'.repeat(100), 'B'.repeat(100), right)
+      const data = input.serializeForPersistence(64) as unknown as Record<string, unknown>
+      expect(data['contentDropped']).toBe(true)
+      expect(data['originalContent']).toBe('')
+      expect(data['modifiedContent']).toBe('')
+      // Structure survives so the entry could be identified, but it is not restorable.
+      expect(URI.revive(data['modifiedUri'] as never)?.toString()).toBe(right.toString())
+      expect(DiffEditorInput.deserialize(data)).toBeNull()
+    })
   })
 })

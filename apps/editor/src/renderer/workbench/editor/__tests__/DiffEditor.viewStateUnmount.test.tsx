@@ -111,6 +111,7 @@ import {
 } from '@universe-editor/platform'
 import { DiffEditorInput } from '../../../services/editor/DiffEditorInput.js'
 import { EditorViewStateCache } from '../../../services/editor/EditorViewStateCache.js'
+import { _resetDiffModelCacheForTests } from '../../../services/editor/diffModelCache.js'
 import { ServicesContext } from '../../useService.js'
 import { DiffEditor } from '../DiffEditor.js'
 import { EditorGroupContext } from '../EditorGroupContext.js'
@@ -146,6 +147,7 @@ function createInstantiationService(): InstantiationService {
 afterEach(() => {
   cleanup()
   EditorViewStateCache._resetForTests()
+  _resetDiffModelCacheForTests()
   monacoTestState.diffEditors.length = 0
 })
 

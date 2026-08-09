@@ -217,8 +217,18 @@ function reviver(_key: string, value: unknown): unknown {
   return value
 }
 
+let encodeInstrument: (<T>(run: () => T) => T) | undefined
+
+/** Optional hook wrapping every outgoing-message encode in this process, so the
+ *  embedder can attribute slow serializations (multi-MB payloads stringify on the
+ *  main thread) instead of them showing up as anonymous long tasks. */
+export function setIpcEncodeInstrument(instrument: (<T>(run: () => T) => T) | undefined): void {
+  encodeInstrument = instrument
+}
+
 function encode(msg: IpcMessage): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify(msg, replacer))
+  const run = () => new TextEncoder().encode(JSON.stringify(msg, replacer))
+  return encodeInstrument ? encodeInstrument(run) : run()
 }
 
 function decode(data: Uint8Array): IpcMessage {

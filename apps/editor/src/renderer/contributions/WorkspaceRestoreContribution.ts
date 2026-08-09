@@ -23,6 +23,7 @@ import {
   EditorGroupsService,
   type ISerializedEditorGroupsState,
 } from '../services/editor/EditorGroupsService.js'
+import { recordPerfPhaseAsync } from '../services/performance/perfPhases.js'
 
 export const WORKSPACE_STATE_STORAGE_KEY = 'workbench.workspaceState'
 
@@ -168,10 +169,12 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
 
   private async _persist(): Promise<void> {
     try {
-      const state: PersistedWorkspaceState = {
-        groups: (this._groups as EditorGroupsService).toJSON(),
-      }
-      await this._storage.set(WORKSPACE_STATE_STORAGE_KEY, state, StorageScope.WORKSPACE)
+      await recordPerfPhaseAsync('workspaceRestore.persist', async () => {
+        const state: PersistedWorkspaceState = {
+          groups: (this._groups as EditorGroupsService).toJSON(),
+        }
+        await this._storage.set(WORKSPACE_STATE_STORAGE_KEY, state, StorageScope.WORKSPACE)
+      })
       this._logger.debug(`persisted workspace state groups=${this._groups.groups.length}`)
     } catch (err) {
       this._logger.warn(

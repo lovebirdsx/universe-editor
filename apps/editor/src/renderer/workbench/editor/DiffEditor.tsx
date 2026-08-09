@@ -4,8 +4,10 @@
  *
  *  Creates a read-only side-by-side diff view driven by DiffEditorInput. The
  *  Monaco diff instance lives for the component lifetime; swapping inputs
- *  replaces the two models. Models are temporary (not shared via
- *  MonacoModelRegistry) because diff views are transient.
+ *  replaces the two models. Models are not shared via MonacoModelRegistry, but
+ *  on unmount they go to the diffModelCache LRU (services/editor/diffModelCache)
+ *  so a reopen skips the createModel + tokenization + diff-compute trio and the
+ *  unmount commit never pays a synchronous multi-MB model teardown.
  *--------------------------------------------------------------------------------------------*/
 
 import { useContext, useEffect, useRef, useState } from 'react'
@@ -27,6 +29,7 @@ import {
 import { languageForResource } from '../files/resourceLanguage.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../../services/editor/DiffEditorRegistry.js'
+import { acquireDiffModels, storeDiffModels } from '../../services/editor/diffModelCache.js'
 import { wireDiffEditorViewState } from './diffEditorViewState.js'
 import { syncEditorFocusContext } from '../../services/editor/editorFocus.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
@@ -154,16 +157,28 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     const modifiedLanguage = languageForResource(diffInput.modifiedUri)
     diffLanguageRef.current = modifiedLanguage
     const qualifier = instanceQualifierRef.current
-    const originalModel = monacoNs.editor.createModel(
-      diffInput.originalContent,
-      language,
-      monacoNs.Uri.parse(diffModelUri(diffInput.originalUri, 'original', qualifier).toString()),
-    )
-    const modifiedModel = monacoNs.editor.createModel(
-      diffInput.modifiedContent,
-      modifiedLanguage,
-      monacoNs.Uri.parse(diffModelUri(diffInput.modifiedUri, 'modified', qualifier).toString()),
-    )
+    // Reopening a diff (Ctrl+Shift+T, or switching back to an unmounted tab)
+    // reuses the cached live model pair — skipping two createModel + full
+    // tokenization passes plus a fresh diff computation, and sparing the
+    // unmount path a synchronous multi-MB model teardown.
+    const cached = acquireDiffModels(diffInput.id, {
+      originalText: diffInput.originalContent,
+      modifiedText: diffInput.modifiedContent,
+    })
+    const originalModel =
+      cached?.original ??
+      monacoNs.editor.createModel(
+        diffInput.originalContent,
+        language,
+        monacoNs.Uri.parse(diffModelUri(diffInput.originalUri, 'original', qualifier).toString()),
+      )
+    const modifiedModel =
+      cached?.modified ??
+      monacoNs.editor.createModel(
+        diffInput.modifiedContent,
+        modifiedLanguage,
+        monacoNs.Uri.parse(diffModelUri(diffInput.modifiedUri, 'modified', qualifier).toString()),
+      )
     ed.setModel({ original: originalModel, modified: modifiedModel })
     ed.updateOptions(getEditorFontOptions(configService, modifiedLanguage))
     originalModelRef.current = originalModel
@@ -203,8 +218,10 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       diffEditorRef.current?.setModel(null)
       originalModelRef.current = null
       modifiedModelRef.current = null
-      originalModel.dispose()
-      modifiedModel.dispose()
+      // Hand the pair to the LRU instead of disposing: reopening this diff is
+      // then model-free, and the synchronous teardown of two potentially huge
+      // TextModels leaves the unmount commit (the cache disposes on eviction).
+      storeDiffModels(diffInput.id, originalModel, modifiedModel)
     }
   }, [monacoNs, diffInput, group, configService, groupsService, contextKeyService])
 
