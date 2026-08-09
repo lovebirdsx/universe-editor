@@ -109,7 +109,12 @@ function makeMessage(id: string, text: string): AcpMessage {
 function makeSession(
   id: string,
   items: readonly TimelineItem[],
-  opts: { isReplayingHistory?: boolean; forkSupported?: boolean; status?: AcpSessionStatus } = {},
+  opts: {
+    isReplayingHistory?: boolean
+    forkSupported?: boolean
+    status?: AcpSessionStatus
+    plan?: readonly AcpPlanEntry[]
+  } = {},
 ): IAcpSession {
   const collapseMode = observableValue<'default' | 'collapsed' | 'expanded'>(
     't.collapse',
@@ -122,7 +127,7 @@ function makeSession(
     sessionIdOnAgent: observableValue<string | undefined>('t.sidOnAgent', id),
     messages: observableValue<readonly AcpMessage[]>('t.messages', []),
     toolCalls: observableValue<readonly AcpToolCall[]>('t.toolCalls', []),
-    plan: observableValue<readonly AcpPlanEntry[]>('t.plan', []),
+    plan: observableValue<readonly AcpPlanEntry[]>('t.plan', opts.plan ?? []),
     timeline: observableValue<readonly TimelineItem[]>('t.timeline', items),
     status: observableValue<AcpSessionStatus>('t.status', opts.status ?? 'idle'),
     isReplayingHistory: observableValue<boolean>('t.replay', opts.isReplayingHistory ?? false),
@@ -727,6 +732,123 @@ describe('ChatBody — timeline keyboard handle', () => {
       widgetRef.current!.cycleCollapseMode() // collapsed
     })
     expect(barExpanded()).toBe('false')
+  })
+})
+
+describe('ChatBody — pinned plan bar keyboard navigation', () => {
+  // The plan lives on `session.plan`, outside the timeline, and renders as a
+  // pinned bar above the scroll container. It is a keyboard-navigation stop
+  // (key `p:plan`) right after the first user message — same treatment as the
+  // sticky first-user bar. Regression: Alt+J/K could never land on it and
+  // Alt+P no-opped while a plan streamed mid-turn (no switch_mode card).
+  const planEntries: readonly AcpPlanEntry[] = [
+    { content: 'first step', status: 'completed' },
+    { content: 'second step', status: 'in_progress' },
+  ]
+  const userItem = (id: string, text: string): TimelineItem => ({
+    kind: 'message',
+    id,
+    message: { id, role: 'user', text, blocks: [{ type: 'text', text }], streaming: false },
+  })
+  const navItems: readonly TimelineItem[] = [
+    userItem('u', 'top question'),
+    { kind: 'message', id: 'a', message: makeMessage('a', 'answer one') },
+    { kind: 'message', id: 'b', message: makeMessage('b', 'answer two') },
+  ]
+  const planCard = (container: HTMLElement): HTMLElement =>
+    container.querySelector<HTMLElement>('[data-testid="acp-plan"]')!
+  const userBarCard = (container: HTMLElement): HTMLElement =>
+    container.querySelector<HTMLElement>('[data-testid="acp-user-bar-card"]')!
+
+  it('walks first user message → plan bar → in-list items with Alt+J, and back with Alt+K', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession('s-plan-nav', navItems, { plan: planEntries }),
+    )
+
+    act(() => {
+      widgetRef.current!.moveTimeline('first')
+    })
+    expect(userBarCard(container).className).toContain(focusedClass)
+
+    act(() => {
+      widgetRef.current!.moveTimeline('next')
+    })
+    expect(planCard(container).className).toContain(focusedClass)
+    expect(userBarCard(container).className).not.toContain(focusedClass)
+
+    act(() => {
+      widgetRef.current!.moveTimeline('next')
+    })
+    expect(slotEl(container, 'm:a').className).toContain(focusedClass)
+    expect(planCard(container).className).not.toContain(focusedClass)
+
+    // Back up: in-list item → plan bar → user bar, stopping at the top.
+    act(() => {
+      widgetRef.current!.moveTimeline('prev')
+    })
+    expect(planCard(container).className).toContain(focusedClass)
+    act(() => {
+      widgetRef.current!.moveTimeline('prev')
+    })
+    expect(userBarCard(container).className).toContain(focusedClass)
+    act(() => {
+      widgetRef.current!.moveTimeline('prev')
+    })
+    expect(userBarCard(container).className).toContain(focusedClass)
+  })
+
+  it('jumpToPlan focuses the pinned plan bar and its text is copyable', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession('s-plan-jump', navItems, { plan: planEntries }),
+    )
+    act(() => {
+      widgetRef.current!.jumpToPlan()
+    })
+    expect(planCard(container).className).toContain(focusedClass)
+    expect(widgetRef.current!.getFocusedText()).toBe('first step\nsecond step')
+  })
+
+  it('jumpToPlan still lands on the latest ExitPlanMode card when no plan bar exists', () => {
+    const switchModeCall: AcpToolCall = {
+      id: 'sw1',
+      title: 'Ready to code?',
+      kind: 'switch_mode',
+      status: 'completed',
+      text: '',
+      blocks: [],
+      diffs: [],
+    }
+    const items: readonly TimelineItem[] = [
+      userItem('u', 'top question'),
+      { kind: 'toolCall', id: 'sw1', call: switchModeCall },
+    ]
+    const { container, widgetRef } = renderChatWithWidget(makeSession('s-plan-fallback', items))
+    expect(container.querySelector('[data-testid="acp-plan"]')).toBeNull()
+    act(() => {
+      widgetRef.current!.jumpToPlan()
+    })
+    expect(slotEl(container, 't:sw1').className).toContain(focusedClass)
+  })
+
+  it('toggleCollapse folds the focused plan bar (Alt+F parity with the user bar)', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession('s-plan-fold', navItems, { plan: planEntries }),
+    )
+    const planExpanded = (): string | null =>
+      planCard(container).querySelector('button')!.getAttribute('aria-expanded')
+
+    act(() => {
+      widgetRef.current!.jumpToPlan()
+    })
+    expect(planExpanded()).toBe('true')
+    act(() => {
+      widgetRef.current!.toggleCollapse()
+    })
+    expect(planExpanded()).toBe('false')
+    act(() => {
+      widgetRef.current!.toggleCollapse()
+    })
+    expect(planExpanded()).toBe('true')
   })
 })
 

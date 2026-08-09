@@ -10,6 +10,11 @@
 
 import type { AcpChildItem, TimelineItem } from '../../services/acp/session/acpSession.js'
 
+/** Pseudo slot key for the pinned plan bar (StickyPlanBar). The plan lives on
+ *  `session.plan`, outside the timeline, so it gets a fixed key to participate
+ *  in keyboard navigation (Alt+J/K/P) like any timeline slot. */
+export const PLAN_SLOT_KEY = 'p:plan'
+
 /** Stable per-card identity, shared with ChatBody's timeline keys (`m:`/`t:`/`c:`/`r:`). */
 export function itemSlotKey(item: {
   readonly kind: 'message' | 'toolCall' | 'compaction' | 'resurrection'

@@ -79,7 +79,7 @@ import { roleIcon } from './timelineIcons.js'
 import { UserMessageItem } from './UserMessageItem.js'
 import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
 import { StickyScrollOverlay } from './StickyScrollOverlay.js'
-import { findByStickyKey, itemSlotKey } from './stickyScroll.js'
+import { findByStickyKey, itemSlotKey, PLAN_SLOT_KEY } from './stickyScroll.js'
 import {
   AcpSessionOutlineRegistry,
   type IAcpSessionOutlineController,
@@ -143,6 +143,14 @@ interface FocusedKeyBridge {
 interface CollapseBridge {
   resolve: (key: string) => boolean
   emitter: Emitter<void>
+}
+
+/** One-way route into StickyPlanBar's self-owned collapse state. The plan lives
+ *  on `session.plan`, outside the timeline, so ChatScroll's shared override
+ *  store can't reach it; Alt+F on the focused plan bar goes through here.
+ *  Assigned during the bar's render (same pattern as the bridges above). */
+export interface PlanBridge {
+  toggle: () => void
 }
 
 const NOOP_HANDLE: WidgetHandle = {
@@ -242,6 +250,14 @@ function ChatSessionBody({
   const collapseBridge = collapseBridgeRef.current
   handleRef.current.isSlotCollapsed = (key) => collapseBridge.resolve(key)
   handleRef.current.onDidChangeCollapse = collapseBridge.emitter.event
+
+  // Same pattern again for the pinned plan bar: its collapse state is its own
+  // (planCollapsedCache), and Alt+F reaches it through this bridge.
+  const planBridgeRef = useRef<PlanBridge | null>(null)
+  if (planBridgeRef.current === null) {
+    planBridgeRef.current = { toggle: noop }
+  }
+  const planBridge = planBridgeRef.current
 
   useEffect(() => {
     const container = containerRef.current
@@ -354,13 +370,20 @@ function ChatSessionBody({
           />
           <SideTaskQuoteBar key={`quote:${session.id}`} session={session} />
           <SideTasksBar key={`sideTasks:${session.id}`} session={session} />
-          <StickyPlanBar key={`plan:${session.id}`} session={session} />
+          <StickyPlanBar
+            key={`plan:${session.id}`}
+            session={session}
+            handleRef={handleRef}
+            onFocusSlot={(key) => handleRef.current.setFocusedKey(key)}
+            planBridge={planBridge}
+          />
           <ChatScroll
             key={session.id}
             session={session}
             handleRef={handleRef}
             focusBridge={focusBridge}
             collapseBridge={collapseBridge}
+            planBridge={planBridge}
             onFindVisibleChange={handleFindVisibleChange}
             readOnly={readOnly ?? false}
             isSideTask={isSideTask}
@@ -407,6 +430,7 @@ function ChatScroll({
   handleRef,
   focusBridge,
   collapseBridge,
+  planBridge,
   onFindVisibleChange,
   readOnly,
   isSideTask,
@@ -415,6 +439,7 @@ function ChatScroll({
   handleRef: MutableRefObject<WidgetHandle>
   focusBridge: FocusedKeyBridge
   collapseBridge: CollapseBridge
+  planBridge: PlanBridge
   onFindVisibleChange: (open: boolean) => void
   readOnly: boolean
   isSideTask: boolean
@@ -422,6 +447,12 @@ function ChatScroll({
   const timeline = useObservable(session.timeline)
   const status = useObservable(session.status)
   const isRunning = status === 'running'
+  // The pinned plan bar is a navigation stop (inserted into the move sequence
+  // right after the first user message) but lives outside the timeline; only
+  // its presence matters here, so the ref is what the handle closures read.
+  const hasPlan = useObservable(session.plan).length > 0
+  const planKeyRef = useRef<string | null>(null)
+  planKeyRef.current = hasPlan ? PLAN_SLOT_KEY : null
   const containerRef = useRef<HTMLDivElement | null>(null)
   const saved = AcpChatViewStateCache.load(session.id)
   const stickRef = useRef(saved?.stuck ?? true)
@@ -1003,16 +1034,25 @@ function ChatScroll({
 
   // Stable across renders (reads refs only) so passing it to the memoized
   // TimelineSlot does not bust memo. Toggles the per-item collapse override.
-  const handleToggleCollapse = useCallback((key: string) => {
-    const item = findByStickyKey(timelineRef.current, key)
-    if (!item) return
-    const current = resolveCollapsed(key, item, collapseRef.current)
-    setOverrides((prev) => {
-      const next = new Map(prev)
-      next.set(key, !current)
-      return next
-    })
-  }, [])
+  const handleToggleCollapse = useCallback(
+    (key: string) => {
+      // The pinned plan bar owns its collapse state (it has no timeline item
+      // for the override store to key on) — route through its bridge.
+      if (key === PLAN_SLOT_KEY) {
+        planBridge.toggle()
+        return
+      }
+      const item = findByStickyKey(timelineRef.current, key)
+      if (!item) return
+      const current = resolveCollapsed(key, item, collapseRef.current)
+      setOverrides((prev) => {
+        const next = new Map(prev)
+        next.set(key, !current)
+        return next
+      })
+    },
+    [planBridge],
+  )
 
   // Jump to a (possibly nested) card's top — from its pinned sticky header or from
   // an Outline row click. In virtual mode the target row may be unmounted and its
@@ -1109,8 +1149,17 @@ function ChatScroll({
       // message is sliced out of displayTimeline because the sticky bar above the
       // scroll container renders it — but it must stay keyboard-reachable.
       const list = timelineRef.current
-      if (list.length === 0) return
       const keys = list.map(slotKey)
+      // The pinned plan bar likewise renders outside the scroll container; it
+      // joins the sequence right after the first user message, matching the
+      // visual stacking order of the bars above the scroll container.
+      if (planKeyRef.current !== null) {
+        const firstUser = list.findIndex(
+          (it) => it.kind === 'message' && it.message.role === 'user',
+        )
+        keys.splice(firstUser >= 0 ? firstUser + 1 : 0, 0, PLAN_SLOT_KEY)
+      }
+      if (keys.length === 0) return
       const current = focusedKeyRef.current
       let nextIndex: number
       if (direction === 'first') {
@@ -1199,6 +1248,10 @@ function ChatScroll({
     handle.getFocusedText = () => {
       const key = focusedKeyRef.current
       if (!key) return undefined
+      if (key === PLAN_SLOT_KEY) {
+        const entries = session.plan.get()
+        return entries.length > 0 ? entries.map((e) => e.content).join('\n') : undefined
+      }
       const item = timelineRef.current.find((it) => slotKey(it) === key)
       return item ? timelineItemToText(item) : undefined
     }
@@ -1208,6 +1261,19 @@ function ChatScroll({
       persist()
     }
     handle.jumpToPlan = () => {
+      // Prefer the pinned plan bar: while the agent works, the plan lives on
+      // `session.plan` and never reaches the timeline, so the bar is the only
+      // place to focus. The bar is pinned above the scroll container — showing
+      // it just means scrolling to the top.
+      if (planKeyRef.current !== null) {
+        stickRef.current = false
+        setFocusedKey(PLAN_SLOT_KEY)
+        focusedKeyRef.current = PLAN_SLOT_KEY
+        const container = containerRef.current
+        if (container) container.scrollTop = 0
+        persist()
+        return
+      }
       const list = displayTimelineRef.current
       // The agent's plan reaches the timeline as an ExitPlanMode tool call
       // (kind 'switch_mode'). Jump to the most recent one — re-entering plan
