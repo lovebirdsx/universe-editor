@@ -120,15 +120,18 @@ catalog:
   '@testing-library/react': ^16.0.0
   'happy-dom': ^17.0.0
   vitest: ^3.0.0
-  '@playwright/test': ^1.50.0
+  # 1.62+ 才修复 Electron 40+ 的 electron.launch 启动问题(playwright#39008/#39922 链)
+  '@playwright/test': ^1.62.0
   pixelmatch: ^5.3.0
   pngjs: ^7.0.0
   '@types/pngjs': ^6.0.0
 
   # Electron (desktop shell for game content editor)
-  electron: ^33.0.0
+  # 42 起 electron npm 包不再在 postinstall 下载二进制,改为首次 require 时懒下载
+  # (仍走 @electron/get,尊重 ELECTRON_MIRROR,所以 CI 的镜像 env 继续有效)。
+  electron: ^43.0.0
   electron-vite: ^5.0.0
-  electron-builder: ^25.0.0
+  electron-builder: ^26.0.0
   # 注:electron-updater 在 apps/editor/package.json 里必须写显式版本(^6.3.0),不能用 catalog:。
   # electron-builder 打包时直接 semver.coerce 读源 package.json 的版本字符串,无法解析 "catalog:"。
   electron-updater: ^6.3.0

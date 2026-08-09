@@ -1,6 +1,6 @@
 # apps/editor/CLAUDE.md
 
-Electron 33 桌面应用，VSCode 范式的 workbench。本目录是项目核心，套路最多——下面 5 个"我想做 X"段落直接抄就行。
+Electron 43 桌面应用，VSCode 范式的 workbench。本目录是项目核心，套路最多——下面 5 个"我想做 X"段落直接抄就行。
 
 ## 三端边界（electron-vite）
 

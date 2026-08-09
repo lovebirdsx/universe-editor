@@ -67,4 +67,4 @@ pnpm memory:status    # 只查看链接状态
 
 开发约定、各子目录导航与常见套路详见 [CLAUDE.md](./CLAUDE.md)。
 
-技术栈：pnpm 11 · Turborepo 2 · TypeScript 5.8 · React 19 · Electron 33 (electron-vite) · Monaco · Vitest 3 · Playwright
+技术栈：pnpm 11 · Turborepo 2 · TypeScript 5.8 · React 19 · Electron 43 (electron-vite) · Monaco · Vitest 3 · Playwright

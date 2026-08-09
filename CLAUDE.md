@@ -8,7 +8,7 @@ pnpm workspace + Turborepo 的 monorepo，全部 ESM (`"type": "module"`)。
 
 ```
 apps/
-  editor/   Electron 33 + electron-vite              → apps/editor/CLAUDE.md
+  editor/   Electron 43 + electron-vite              → apps/editor/CLAUDE.md
 packages/
   platform/       VSCode 风格内核                    → packages/platform/CLAUDE.md
   config-ts/      共享 tsconfig 预设                 → packages/config-ts/CLAUDE.md
