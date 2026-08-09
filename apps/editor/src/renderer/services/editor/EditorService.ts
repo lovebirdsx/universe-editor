@@ -149,8 +149,13 @@ export class EditorService extends Disposable implements IEditorService {
           options,
         )
         // Routed away from a locked active group: make the target active so the
-        // new editor is what the user sees (unless the caller preserves focus).
-        if (group !== activeGroup && options?.activate !== false) {
+        // new editor is what the user sees — unless the caller preserves focus
+        // (a Space/click preview keeps keyboard focus on the originating view).
+        if (
+          group !== activeGroup &&
+          options?.activate !== false &&
+          options?.preserveFocus !== true
+        ) {
           this._groupsService.activateGroup(group)
         }
       }

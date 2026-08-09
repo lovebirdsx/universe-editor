@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
-import { autorun } from '@universe-editor/platform'
+import { autorun, GroupDirection } from '@universe-editor/platform'
 import { EditorService } from '../EditorService.js'
+import { EditorGroupsService } from '../EditorGroupsService.js'
 
 function makeInput(id: string) {
   return { id, type: 'text', label: id, isDirty: false }
@@ -92,5 +93,31 @@ describe('EditorService', () => {
     svc.openEditor(makeInput('a'))
     svc.openEditor(makeInput('b'))
     expect(svc.activeEditor.get()?.id).toBe('b')
+  })
+
+  it('openEditor routed to a non-active group activates it by default', () => {
+    const groups = new EditorGroupsService()
+    const svc = new EditorService(groups)
+    const first = groups.activeGroup
+    const second = groups.addGroup(first, GroupDirection.Right)
+    groups.activateGroup(first)
+    first.lock(true)
+
+    svc.openEditor(makeInput('a'))
+    expect(second.editors.map((e) => e.id)).toEqual(['a'])
+    expect(groups.activeGroup).toBe(second)
+  })
+
+  it('openEditor with preserveFocus routed to a non-active group does not activate it', () => {
+    const groups = new EditorGroupsService()
+    const svc = new EditorService(groups)
+    const first = groups.activeGroup
+    const second = groups.addGroup(first, GroupDirection.Right)
+    groups.activateGroup(first)
+    first.lock(true)
+
+    svc.openEditor(makeInput('a'), { pinned: false, preserveFocus: true })
+    expect(second.editors.map((e) => e.id)).toEqual(['a'])
+    expect(groups.activeGroup).toBe(first)
   })
 })

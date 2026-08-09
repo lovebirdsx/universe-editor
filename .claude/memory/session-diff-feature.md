@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: f6f35c5d-d60d-486e-b6f2-8a1f136ffcfd
-  modified: 2026-08-07T05:18:01.197Z
+  modified: 2026-08-09T01:27:16.031Z
 ---
 
 会话级 diff（VSCode-Copilot 式「Session Changes」），跟踪当前 ACP agent 会话改动的文件。2026-08 重构为 **pinned baseline 快照制**（替代旧「从盘上内容逆向 un-apply hunks 重建 baseline」——旧机制对 agent 未上报的改动/外部改动会误报漏报）。方案文档 `docs/plan/session-changes-baseline-snapshot-plan.md`。
@@ -17,7 +17,7 @@ metadata:
 - **路径身份（2026-08 修复）**：claude-code 在 Windows 上报**小写盘符** `d:/...`，watcher 路径继承打开工作区时的大写盘符 → tracker 曾用保 casing 的字符串作 Map 键致同文件双记录、树上冒出绝对路径顶层组。修复：tracker 注入 IUriIdentityService，Map 键走 `getPathComparisonKey`（展示 path 另存首次 casing）；`buildTree` 剥根前缀从 `startsWith` 改 `relativePathUnder`。`getHeadContent` null 区分不了 untracked（该显示）与 ignored（该过滤），所以 checkIgnore 是独立查询（契约在 `dirtyDiff.ts` DirtyDiffCapabilities，按 resolveRepo 最长前缀路由嵌套 repo）。
 - **origin/baselineSource**：`SessionFileChange` 带 `origin: 'agent'|'watched'` + `baselineSource: 'reported'|'git'|'reconstructed'|'none'`。agent record 解除 dismiss、升级 origin，但保留更早 pin 的 git baseline（first-touch-wins）。
 - **UI**：watched 行显「推测」徽标（`acp-changes-inferred`）+ hover EyeOff 忽略按钮（`dismissWatched` 置 ignored=true，记录保留防 watcher 重加）。用户文档 `docs/user/zh-CN/git/session-changes.md` 有对应节。
-- **视图**（沿革不变）：list/tree 两模式（buildTree+单链压缩）、单击预览/双击钉住（DiffEditorInput pinned:false/true）、删除项经 stat 确认后标 deleted。
+- **视图**（2026-08-09 重构）：UI 骨架与 [[commit-changes-view-graph-polish]] 共享 `workbench/changesTree/`（泛型 ChangesTree + buildChangesTreeSnapshot），SessionChangesView 只是薄 wrapper（describeFile 注入徽标/按钮/badge，DiffEditorInput 直开）；由此获得键盘导航/焦点命令 `workbench.view.sessionChanges.focus`/焦点记忆/Collapse-Expand All/虚拟化；list 排序变为 path 字母序；acp-changes-* testid 与持久化 key 全保留。list/tree、单击预览/双击钉住（pinned:false/true）语义不变。
 
 测试：`sessionChangeTracker.test.ts`（pinned baseline/watched/预算降级/v3 持久化/跨 casing 去重）、`acpSessionUpdateMeta.test.ts`（readFileChanges claude/codex 两路）、`SessionWatchedChangesContribution.test.ts`（含 gitignore 过滤与降级）、`SessionChangesView.test.tsx`（含徽标/忽略/casing 相对化）、git 扩展 `repository.test.ts`（checkIgnore 真实 temp repo）；e2e `smoke.sessionChanges.spec.ts`（@p1 全链路）。
 

@@ -3,20 +3,35 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import type { CommitChangesFileEntry } from '@universe-editor/extensions-common'
 import {
-  buildCommitChangesSnapshot,
-  findFileNode,
-  type CommitChangesNode,
+  buildChangesTreeSnapshot,
+  findChangesTreeFileNode,
+  type ChangesTreeItem,
+  type ChangesTreeNode,
 } from '../buildSnapshot.js'
 
-function entry(path: string, overrides?: Partial<CommitChangesFileEntry>): CommitChangesFileEntry {
-  return { path, oldPath: null, status: 'M', resourceUri: null, args: { path }, ...overrides }
+interface FakeEntry {
+  path: string
+  status: string
 }
 
-function flatten(snapshot: ReturnType<typeof buildCommitChangesSnapshot>): CommitChangesNode[] {
-  const out: CommitChangesNode[] = []
-  const visit = (nodes: readonly CommitChangesNode[]): void => {
+function item(path: string, overrides?: Partial<FakeEntry>): ChangesTreeItem<FakeEntry> {
+  const segments = path.split('/').filter((p) => p !== '')
+  segments.pop()
+  const i = path.lastIndexOf('/')
+  return {
+    path,
+    dirSegments: segments,
+    dir: i === -1 ? '' : path.slice(0, i),
+    entry: { path, status: 'M', ...overrides },
+  }
+}
+
+function flatten(
+  snapshot: ReturnType<typeof buildChangesTreeSnapshot<FakeEntry>>,
+): ChangesTreeNode<FakeEntry>[] {
+  const out: ChangesTreeNode<FakeEntry>[] = []
+  const visit = (nodes: readonly ChangesTreeNode<FakeEntry>[]): void => {
     for (const node of nodes) {
       out.push(node)
       visit(snapshot.childrenMap.get(node.id) ?? [])
@@ -26,17 +41,17 @@ function flatten(snapshot: ReturnType<typeof buildCommitChangesSnapshot>): Commi
   return out
 }
 
-describe('buildCommitChangesSnapshot', () => {
+describe('buildChangesTreeSnapshot', () => {
   it('flattens top-level files into root rows', () => {
-    const snapshot = buildCommitChangesSnapshot([entry('a.ts'), entry('b.ts')], new Set())
+    const snapshot = buildChangesTreeSnapshot([item('a.ts'), item('b.ts')], new Set())
 
     expect(snapshot.roots.map((n) => n.id)).toEqual(['file:a.ts', 'file:b.ts'])
     expect(snapshot.childrenMap.size).toBe(0)
   })
 
   it('builds a folder tree for nested paths, folders first and alphabetical', () => {
-    const snapshot = buildCommitChangesSnapshot(
-      [entry('z.ts'), entry('src/b.ts'), entry('src/a.ts'), entry('lib/c.ts')],
+    const snapshot = buildChangesTreeSnapshot(
+      [item('z.ts'), item('src/b.ts'), item('src/a.ts'), item('lib/c.ts')],
       new Set(),
     )
 
@@ -47,7 +62,7 @@ describe('buildCommitChangesSnapshot', () => {
   })
 
   it('compacts a single-subfolder chain into one folder row', () => {
-    const snapshot = buildCommitChangesSnapshot([entry('a/b/c/file.ts')], new Set())
+    const snapshot = buildChangesTreeSnapshot([item('a/b/c/file.ts')], new Set())
 
     expect(snapshot.roots).toHaveLength(1)
     const folder = snapshot.roots[0]!
@@ -59,10 +74,7 @@ describe('buildCommitChangesSnapshot', () => {
   })
 
   it('keeps chain levels separate when an intermediate folder holds files', () => {
-    const snapshot = buildCommitChangesSnapshot(
-      [entry('a/keep.ts'), entry('a/b/c/file.ts')],
-      new Set(),
-    )
+    const snapshot = buildChangesTreeSnapshot([item('a/keep.ts'), item('a/b/c/file.ts')], new Set())
 
     const a = snapshot.roots[0]!
     expect(a.id).toBe('folder:a')
@@ -71,26 +83,21 @@ describe('buildCommitChangesSnapshot', () => {
     expect(aChildren.map((n) => n.id)).toEqual(['folder:a/b/c', 'file:a/keep.ts'])
   })
 
-  it('carries the original entry (status / oldPath / resourceUri / args) on file rows', () => {
-    const renamed = entry('src/new.ts', {
-      oldPath: 'src/old.ts',
-      status: 'R',
-      resourceUri: 'file:///ws/src/new.ts',
-      args: { commit: 'a1b2c3d', path: 'src/new.ts' },
-    })
-    const snapshot = buildCommitChangesSnapshot([renamed], new Set())
+  it('carries the original entry on file rows', () => {
+    const renamed = item('src/new.ts', { status: 'R' })
+    const snapshot = buildChangesTreeSnapshot([renamed], new Set())
 
     const folder = snapshot.roots[0]!
     expect(folder.id).toBe('folder:src')
     const row = snapshot.childrenMap.get(folder.id)![0]!
     expect(row.kind).toBe('file')
     if (row.kind !== 'file') return
-    expect(row.entry).toBe(renamed)
-    expect(row.entry.oldPath).toBe('src/old.ts')
+    expect(row.item).toBe(renamed)
+    expect(row.item.entry.status).toBe('R')
   })
 
   it('omits the dir suffix in tree mode — the folder rows already express the path', () => {
-    const snapshot = buildCommitChangesSnapshot([entry('src/a.ts'), entry('b.ts')], new Set())
+    const snapshot = buildChangesTreeSnapshot([item('src/a.ts'), item('b.ts')], new Set())
 
     for (const node of flatten(snapshot)) {
       if (node.kind === 'file') expect(node.dir).toBeUndefined()
@@ -98,8 +105,8 @@ describe('buildCommitChangesSnapshot', () => {
   })
 
   it('list mode flattens all files into sorted roots with a dir suffix', () => {
-    const snapshot = buildCommitChangesSnapshot(
-      [entry('z.ts'), entry('src/b.ts'), entry('src/a.ts'), entry('lib/c.ts')],
+    const snapshot = buildChangesTreeSnapshot(
+      [item('z.ts'), item('src/b.ts'), item('src/a.ts'), item('lib/c.ts')],
       new Set(),
       'list',
     )
@@ -118,8 +125,8 @@ describe('buildCommitChangesSnapshot', () => {
   })
 
   it('list mode ignores the collapsed set', () => {
-    const snapshot = buildCommitChangesSnapshot(
-      [entry('src/a.ts'), entry('src/b.ts')],
+    const snapshot = buildChangesTreeSnapshot(
+      [item('src/a.ts'), item('src/b.ts')],
       new Set(['src']),
       'list',
     )
@@ -128,8 +135,8 @@ describe('buildCommitChangesSnapshot', () => {
   })
 
   it('omits children of collapsed folders but keeps the folder row', () => {
-    const snapshot = buildCommitChangesSnapshot(
-      [entry('src/a.ts'), entry('src/deep/b.ts'), entry('top.ts')],
+    const snapshot = buildChangesTreeSnapshot(
+      [item('src/a.ts'), item('src/deep/b.ts'), item('top.ts')],
       new Set(['src']),
     )
 
@@ -139,8 +146,8 @@ describe('buildCommitChangesSnapshot', () => {
   })
 
   it('collapses only the named folder, nested folders stay expandable', () => {
-    const snapshot = buildCommitChangesSnapshot(
-      [entry('src/deep/a.ts'), entry('src/deep/deeper/b.ts')],
+    const snapshot = buildChangesTreeSnapshot(
+      [item('src/deep/a.ts'), item('src/deep/deeper/b.ts')],
       new Set(['src/deep']),
     )
 
@@ -151,8 +158,8 @@ describe('buildCommitChangesSnapshot', () => {
   })
 
   it('sorts files alphabetically within a folder', () => {
-    const snapshot = buildCommitChangesSnapshot(
-      [entry('src/z.ts'), entry('src/a.ts'), entry('src/m.ts')],
+    const snapshot = buildChangesTreeSnapshot(
+      [item('src/z.ts'), item('src/a.ts'), item('src/m.ts')],
       new Set(),
     )
 
@@ -163,21 +170,21 @@ describe('buildCommitChangesSnapshot', () => {
     ])
   })
 
-  it('findFileNode locates a file row by entry path', () => {
-    const snapshot = buildCommitChangesSnapshot([entry('src/a.ts'), entry('lib/b.ts')], new Set())
+  it('findChangesTreeFileNode locates a file row by item path', () => {
+    const snapshot = buildChangesTreeSnapshot([item('src/a.ts'), item('lib/b.ts')], new Set())
 
-    expect(findFileNode(snapshot, 'lib/b.ts')?.entry.path).toBe('lib/b.ts')
-    expect(findFileNode(snapshot, 'missing.ts')).toBeUndefined()
+    expect(findChangesTreeFileNode(snapshot, 'lib/b.ts')?.item.path).toBe('lib/b.ts')
+    expect(findChangesTreeFileNode(snapshot, 'missing.ts')).toBeUndefined()
   })
 
-  it('findFileNode locates a file row in list mode', () => {
-    const snapshot = buildCommitChangesSnapshot(
-      [entry('src/a.ts'), entry('lib/b.ts')],
+  it('findChangesTreeFileNode locates a file row in list mode', () => {
+    const snapshot = buildChangesTreeSnapshot(
+      [item('src/a.ts'), item('lib/b.ts')],
       new Set(),
       'list',
     )
 
-    expect(findFileNode(snapshot, 'lib/b.ts')?.entry.path).toBe('lib/b.ts')
-    expect(findFileNode(snapshot, 'missing.ts')).toBeUndefined()
+    expect(findChangesTreeFileNode(snapshot, 'lib/b.ts')?.item.path).toBe('lib/b.ts')
+    expect(findChangesTreeFileNode(snapshot, 'missing.ts')).toBeUndefined()
   })
 })

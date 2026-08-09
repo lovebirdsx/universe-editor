@@ -4,8 +4,32 @@
  *  the list/tree view-mode toggle (grouping changed files by directory).
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// happy-dom has no layout engine so @tanstack/react-virtual renders 0 visible
+// items. Mock it so every row mounts and can be clicked / asserted.
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: (opts: { count: number; estimateSize: (index: number) => number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: opts.count }, (_, i) => ({
+        index: i,
+        key: i,
+        start: i * opts.estimateSize(i),
+        size: opts.estimateSize(i),
+        lane: 0,
+        end: (i + 1) * opts.estimateSize(i),
+      })),
+    getTotalSize: () =>
+      Array.from({ length: opts.count }, (_, i) => opts.estimateSize(i)).reduce(
+        (total, height) => total + height,
+        0,
+      ),
+    scrollToIndex: () => undefined,
+    measureElement: () => undefined,
+  }),
+}))
+
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   Emitter,
   IEditorGroupsService,
@@ -156,15 +180,19 @@ function renderView(
   return { ...result, editor, resolver, editorGroup, tracker }
 }
 
-beforeEach(() => sessionChangesViewState.setViewMode('list'))
-afterEach(() => cleanup())
+beforeEach(() => sessionChangesViewState._resetForTests())
+afterEach(() => {
+  cleanup()
+  sessionChangesViewState._resetForTests()
+})
 
 describe('SessionChangesView — preview vs pin', () => {
-  it('single-click opens the diff as a preview (pinned:false)', async () => {
+  it('single-click opens the diff as a preview (pinned:false, preserveFocus)', async () => {
     const { editor } = renderView([change('/ws/src/a.ts')])
     fireEvent.click(await screen.findByText('a.ts'))
     await waitFor(() => expect(editor.opened).toHaveLength(1))
     expect(editor.opened[0]?.options?.pinned).toBe(false)
+    expect(editor.opened[0]?.options?.preserveFocus).toBe(true)
   })
 
   it('double-click pins the diff (pinned:true)', async () => {
@@ -310,5 +338,97 @@ describe('SessionChangesView — list/tree mode', () => {
     fireEvent.click(screen.getByText('src'))
     await waitFor(() => expect(screen.queryByText('a.ts')).toBeNull())
     expect(screen.getByText('b.ts')).toBeTruthy()
+  })
+})
+
+describe('SessionChangesView — focus landing and keyboard navigation', () => {
+  it('focusing the tree lands on the first file row (alphabetical order)', async () => {
+    renderView([change('/ws/src/b.ts'), change('/ws/src/a.ts')])
+    await screen.findByText('a.ts')
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    fireEvent.focusIn(tree)
+    expect(
+      document.querySelector('[data-row-key="file:/ws/src/a.ts"]')?.getAttribute('aria-selected'),
+    ).toBe('true')
+  })
+
+  it('ArrowDown moves the selection to the next row', async () => {
+    renderView([change('/ws/src/a.ts'), change('/ws/src/b.ts')])
+    await screen.findByText('a.ts')
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    fireEvent.focusIn(tree)
+    fireEvent.keyDown(tree, { key: 'ArrowDown' })
+    expect(
+      document.querySelector('[data-row-key="file:/ws/src/b.ts"]')?.getAttribute('aria-selected'),
+    ).toBe('true')
+    expect(
+      document.querySelector('[data-row-key="file:/ws/src/a.ts"]')?.getAttribute('aria-selected'),
+    ).toBe('false')
+  })
+
+  it('Space on the focused row previews the diff and keeps tree focus (pinned:false, preserveFocus:true)', async () => {
+    const { editor } = renderView([change('/ws/src/a.ts')])
+    await screen.findByText('a.ts')
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    fireEvent.focusIn(tree)
+    fireEvent.keyDown(tree, { key: ' ' })
+    await waitFor(() => expect(editor.opened).toHaveLength(1))
+    expect(editor.opened[0]?.options?.pinned).toBe(false)
+    expect(editor.opened[0]?.options?.preserveFocus).toBe(true)
+  })
+
+  it('Enter on the focused row pins the diff (pinned:true, no preserveFocus)', async () => {
+    const { editor } = renderView([change('/ws/src/a.ts')])
+    await screen.findByText('a.ts')
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    fireEvent.focusIn(tree)
+    fireEvent.keyDown(tree, { key: 'Enter' })
+    await waitFor(() => expect(editor.opened).toHaveLength(1))
+    expect(editor.opened[0]?.options?.pinned).toBe(true)
+    expect(editor.opened[0]?.options?.preserveFocus).not.toBe(true)
+  })
+})
+
+describe('SessionChangesView — collapse/expand-all signals', () => {
+  it('collapse-all folds every folder and expand-all restores the rows', async () => {
+    renderView([change('/ws/src/a.ts'), change('/ws/lib/b.ts')])
+    act(() => {
+      sessionChangesViewState.setViewMode('tree')
+    })
+    await screen.findByText('a.ts')
+    expect(document.querySelector('[data-row-key="file:/ws/src/a.ts"]')).toBeTruthy()
+
+    act(() => {
+      sessionChangesViewState.requestCollapseAll()
+    })
+    expect(document.querySelector('[data-row-key="file:/ws/src/a.ts"]')).toBeNull()
+    expect(document.querySelector('[data-row-key="file:/ws/lib/b.ts"]')).toBeNull()
+    expect(document.querySelector('[data-row-key="folder:src"]')).toBeTruthy()
+    expect(document.querySelector('[data-row-key="folder:lib"]')).toBeTruthy()
+
+    act(() => {
+      sessionChangesViewState.requestExpandAll()
+    })
+    expect(document.querySelector('[data-row-key="file:/ws/src/a.ts"]')).toBeTruthy()
+    expect(document.querySelector('[data-row-key="file:/ws/lib/b.ts"]')).toBeTruthy()
+  })
+})
+
+describe('SessionChangesView — focus memory', () => {
+  it('restores the remembered file when the view remounts and regains focus', async () => {
+    const first = renderView([change('/ws/src/a.ts'), change('/ws/src/b.ts')])
+    await screen.findByText('a.ts')
+    // Clicking a row focuses it; the focused path is remembered under the
+    // session key (the stub keeps the same sessionIdOnAgent across mounts).
+    fireEvent.click(document.querySelector('[data-row-key="file:/ws/src/b.ts"]')!)
+    first.unmount()
+
+    renderView([change('/ws/src/a.ts'), change('/ws/src/b.ts')])
+    await screen.findByText('a.ts')
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    fireEvent.focusIn(tree)
+    expect(
+      document.querySelector('[data-row-key="file:/ws/src/b.ts"]')?.getAttribute('aria-selected'),
+    ).toBe('true')
   })
 })

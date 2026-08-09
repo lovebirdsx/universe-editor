@@ -10,6 +10,7 @@
 import { Disposable, IWorkbenchContribution, localize } from '@universe-editor/platform'
 import { registerViewWithComponent } from '../services/views/ViewComponentRegistry.js'
 import { COMMIT_CHANGES_VIEW_ID } from '../actions/commitChangesActions.js'
+import { SESSION_CHANGES_VIEW_ID } from '../actions/agentTimelineActions.js'
 import { ExplorerView } from '../workbench/explorer/ExplorerView.js'
 import { ExplorerViewToolbar } from '../workbench/explorer/ExplorerViewToolbar.js'
 import { OutlineView } from '../workbench/outline/OutlineView.js'
@@ -107,7 +108,7 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
     this._register(
       registerViewWithComponent(
         {
-          id: 'workbench.view.sessionChanges.main',
+          id: SESSION_CHANGES_VIEW_ID,
           name: localize('view.sessionChanges', 'Session Changes'),
           containerId: 'workbench.view.sessionChanges',
           icon: 'diff',

@@ -11,8 +11,9 @@
 
 import { observableValue, type IObservable } from '@universe-editor/platform'
 import type { ShowCommitChangesPayload } from '@universe-editor/extensions-common'
+import type { ChangesTreeViewMode } from '../../changesTree/buildSnapshot.js'
 
-export type CommitChangesViewMode = 'tree' | 'list'
+export type CommitChangesViewMode = ChangesTreeViewMode
 
 /** GLOBAL-storage key for the view mode; mirrors ScmView's 'scm.viewMode'. */
 export const COMMIT_CHANGES_VIEW_MODE_STORAGE_KEY = 'scm.commitChanges.viewMode'

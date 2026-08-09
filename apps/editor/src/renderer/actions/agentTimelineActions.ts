@@ -8,6 +8,8 @@
 
 import {
   Action2,
+  ILayoutService,
+  IViewDescriptorService,
   IViewsService,
   MenuId,
   localize2,
@@ -181,6 +183,40 @@ export class ShowAcpSessionChangesAction extends Action2 {
   }
   override run(accessor: ServicesAccessor): void {
     accessor.get(IViewsService).openViewContainer('workbench.view.sessionChanges')
+  }
+}
+
+/** View id of the Session Changes view; shared by the view registration
+ *  (BuiltInViewsContribution) and the focus action. Lives here rather than in
+ *  the view component so neither side imports the other's React tree. */
+export const SESSION_CHANGES_VIEW_ID = 'workbench.view.sessionChanges.main'
+
+/**
+ * Focus the Session Changes view: reveal its container, expand the view and
+ * move DOM focus into its file tree. No default keybinding — the command
+ * palette (f1) finds it, same as FocusCommitChangesAction.
+ */
+export class FocusSessionChangesAction extends Action2 {
+  static readonly ID = 'workbench.view.sessionChanges.focus'
+
+  constructor() {
+    super({
+      id: FocusSessionChangesAction.ID,
+      title: localize2('action.sessionChanges.focus', 'Focus on Session Changes View'),
+      category: localize2('command.category.view', 'View'),
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    // Snapshot every service synchronously — the accessor dies past the first await.
+    const layoutService = accessor.get(ILayoutService)
+    const viewsService = accessor.get(IViewsService)
+    const viewDescriptorService = accessor.get(IViewDescriptorService)
+
+    viewsService.openViewContainer('workbench.view.sessionChanges')
+    viewDescriptorService.setViewCollapsed(SESSION_CHANGES_VIEW_ID, false)
+    await layoutService.focusView(SESSION_CHANGES_VIEW_ID, { source: 'command' })
   }
 }
 
