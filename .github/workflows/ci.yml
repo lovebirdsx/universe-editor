@@ -22,20 +22,21 @@ jobs:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
+          package-manager-cache: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -78,20 +79,21 @@ jobs:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
+          package-manager-cache: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -121,20 +123,21 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
+          package-manager-cache: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -168,22 +171,23 @@ jobs:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
+          package-manager-cache: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -191,13 +195,13 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Cache agent vendor deps
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: vendor/claude-agent-acp/node_modules
           key: agent-deps-${{ runner.os }}-${{ hashFiles('vendor/claude-agent-acp/package-lock.json') }}
 
       - name: Cache codex agent vendor deps
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: vendor/codex-acp/node_modules
           key: codex-agent-deps-${{ runner.os }}-${{ hashFiles('vendor/codex-acp/package-lock.json') }}
@@ -237,17 +241,18 @@ jobs:
       package-windows: ${{ steps.detect.outputs.package-windows }}
       acp-contract: ${{ steps.detect.outputs.acp-contract }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # affected diffing needs history back to the merge base with main.
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
+          package-manager-cache: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -277,20 +282,21 @@ jobs:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
+          package-manager-cache: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -355,7 +361,7 @@ jobs:
 
       - name: Upload perf metrics
         if: always() && runner.os == 'Linux' && matrix.shard == 1
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: perf-metrics
           path: |
@@ -394,7 +400,7 @@ jobs:
 
       - name: Upload visual diff artifacts
         if: failure() && runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: visual-diff-${{ matrix.os }}-${{ matrix.shard }}
           path: apps/editor/e2e/test-results
@@ -403,7 +409,7 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-report-${{ matrix.os }}-${{ matrix.shard }}
           path: apps/editor/e2e/playwright-report
@@ -412,7 +418,7 @@ jobs:
 
       - name: Upload Playwright test results (traces / videos / screenshots)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-traces-${{ matrix.os }}-${{ matrix.shard }}
           path: apps/editor/e2e/test-results
@@ -437,20 +443,21 @@ jobs:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
+          package-manager-cache: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -484,7 +491,7 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-report-${{ steps.suite.outputs.short }}-${{ strategy.job-index }}
           path: ${{ matrix.suite.dir }}/e2e/playwright-report
@@ -493,7 +500,7 @@ jobs:
 
       - name: Upload Playwright test results (traces / videos / screenshots)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-traces-${{ steps.suite.outputs.short }}-${{ strategy.job-index }}
           path: ${{ matrix.suite.dir }}/e2e/test-results
@@ -520,18 +527,19 @@ jobs:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
+          package-manager-cache: false
 
       - name: Cache Excel npm downloads
         if: matrix.suite.prep == 'xlsx'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.npm
           key: npm-excel-${{ runner.os }}-node22-${{ hashFiles('extensions-external/excel-diff/package-lock.json') }}
@@ -553,7 +561,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -590,7 +598,7 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-report-external-${{ matrix.suite.name }}
           path: ${{ matrix.suite.dir }}/e2e/playwright-report
@@ -599,7 +607,7 @@ jobs:
 
       - name: Upload Playwright test results (traces / videos / screenshots)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-traces-external-${{ matrix.suite.name }}
           path: ${{ matrix.suite.dir }}/e2e/test-results
@@ -608,7 +616,7 @@ jobs:
 
       - name: Upload Excel npm logs
         if: failure() && matrix.suite.prep == 'xlsx'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: npm-logs-${{ matrix.suite.name }}
           path: ~/.npm/_logs/
@@ -625,20 +633,21 @@ jobs:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
+          package-manager-cache: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -662,7 +671,7 @@ jobs:
 
       - name: Upload benchmark results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: bench-results
           path: apps/editor/bench/baselines/
@@ -679,22 +688,23 @@ jobs:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
+          package-manager-cache: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -702,13 +712,13 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Cache agent vendor deps
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: vendor/claude-agent-acp/node_modules
           key: agent-deps-${{ runner.os }}-${{ hashFiles('vendor/claude-agent-acp/package-lock.json') }}
 
       - name: Cache codex agent vendor deps
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: vendor/codex-acp/node_modules
           key: codex-agent-deps-${{ runner.os }}-${{ hashFiles('vendor/codex-acp/package-lock.json') }}
@@ -717,7 +727,7 @@ jobs:
         run: pnpm --filter @universe-editor/editor package:win
 
       - name: Upload Windows release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: universe-editor-windows-release
           path: apps/editor/release
