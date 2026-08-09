@@ -12,12 +12,14 @@ import {
   IConfigurationService,
   IDialogService,
   IEditorService,
+  ILoggerService,
   INotificationService,
   IOpenerService,
   IStorageService,
   IUriIdentityService,
   IWorkspaceService,
   InstantiationService,
+  NullLogger,
   ServiceCollection,
   Severity,
   UriIdentityService,
@@ -194,6 +196,10 @@ function renderReview(configValues: Record<string, unknown> = {}) {
     closeEditor: vi.fn(),
   }
   services.set(IEditorService, editorService as unknown as IEditorService)
+  services.set(ILoggerService, {
+    _serviceBrand: undefined,
+    createLogger: () => new NullLogger(),
+  } as unknown as ILoggerService)
   const notifications = {
     _serviceBrand: undefined,
     notify: vi.fn(),
@@ -306,8 +312,8 @@ describe('SwarmReviewEditor restore', () => {
       SwarmCommands.getFileContent,
       (_accessor, request: unknown) =>
         (request as { revision: string }).revision === '#1'
-          ? 'export const a = 1\n'
-          : 'export const a = 2\n',
+          ? { content: 'export const a = 1\n' }
+          : { content: 'export const a = 2\n' },
     )
     const { commands, editorService } = renderReview()
     try {
@@ -348,13 +354,15 @@ describe('SwarmReviewEditor restore', () => {
       () => FILES_WITH_SPREADSHEET,
     )
     // Text print must not be used for a binary xlsx (UTF-8 decoding corrupts bytes).
-    const getFileContent = registerCommand(SwarmCommands.getFileContent, () => 'CORRUPTED')
+    const getFileContent = registerCommand(SwarmCommands.getFileContent, () => ({
+      content: 'CORRUPTED',
+    }))
     const getFileContentBytes = registerCommand(
       SwarmCommands.getFileContentBytes,
       (_accessor, request: unknown) =>
         (request as { revision: string }).revision === '#3'
-          ? Buffer.from('LEFT-BYTES').toString('base64')
-          : Buffer.from('RIGHT-BYTES').toString('base64'),
+          ? { content: Buffer.from('LEFT-BYTES').toString('base64') }
+          : { content: Buffer.from('RIGHT-BYTES').toString('base64') },
     )
     const { commands, editorService } = renderReview()
     try {
@@ -406,15 +414,20 @@ describe('SwarmReviewEditor restore', () => {
     )
     // Both sides decode past the 1MB cap — the Excel viewer's whole-table LCS
     // would OOM the extension host, so a csv degrades to the plain text diff.
+    const leftText = `LEFT-LINE\n${'x'.repeat(2 * 1024 * 1024)}`
+    const rightText = `RIGHT-LINE\n${'y'.repeat(2 * 1024 * 1024)}`
     const getFileContentBytes = registerCommand(
       SwarmCommands.getFileContentBytes,
-      () => OVERSIZED_BASE64,
-    )
-    const getFileContent = registerCommand(
-      SwarmCommands.getFileContent,
       (_accessor, request: unknown) =>
-        (request as { revision: string }).revision === '#3' ? 'LEFT-TEXT\n' : 'RIGHT-TEXT\n',
+        (request as { revision: string }).revision === '#3'
+          ? { content: Buffer.from(leftText).toString('base64') }
+          : { content: Buffer.from(rightText).toString('base64') },
     )
+    // The byte probe already holds the full payload: the text fallback must reuse
+    // it, not print both sides a second time via getFileContent.
+    const getFileContent = registerCommand(SwarmCommands.getFileContent, () => ({
+      content: 'SHOULD-NOT-BE-FETCHED',
+    }))
     const { commands, editorService } = renderReview()
     try {
       await act(async () => Promise.resolve())
@@ -424,21 +437,81 @@ describe('SwarmReviewEditor restore', () => {
       expect(
         commands.executeCommand.mock.calls.some(([id]) => id === '_workbench.openWebviewDiff'),
       ).toBe(false)
-      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getFileContent, {
-        depotFile: '//depot/tables/big.csv',
-        revision: '#3',
-      })
-      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getFileContent, {
-        depotFile: '//depot/tables/big.csv',
-        revision: '@=2001',
-      })
+      expect(commands.executeCommand).not.toHaveBeenCalledWith(
+        SwarmCommands.getFileContent,
+        expect.anything(),
+      )
       const diffInput = editorService.openEditor.mock.calls[0]?.[0] as SwarmDiffEditorInput
       expect(diffInput).toBeInstanceOf(SwarmDiffEditorInput)
-      expect(diffInput.originalContent).toBe('LEFT-TEXT\n')
-      expect(diffInput.modifiedContent).toBe('RIGHT-TEXT\n')
+      expect(diffInput.originalContent).toBe(leftText)
+      expect(diffInput.modifiedContent).toBe(rightText)
     } finally {
       getFileContent.dispose()
       getFileContentBytes.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('shows the error page when the byte probe fails, never routing anywhere', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const describeVersion = registerCommand(
+      SwarmCommands.describeVersion,
+      () => FILES_WITH_SPREADSHEET,
+    )
+    // A failed p4 print comes back as empty bytes + a structured error. Feeding
+    // the empty payload to the size-based routing would read as a 0-byte file and
+    // misroute to the Excel webview — the error must short-circuit everything.
+    const getFileContentBytes = registerCommand(SwarmCommands.getFileContentBytes, () => ({
+      content: '',
+      error: 'p4 print failed (exit 1)',
+    }))
+    const getFileContent = registerCommand(SwarmCommands.getFileContent, () => ({
+      content: 'SHOULD-NOT-BE-FETCHED',
+    }))
+    const { commands, editorService } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      fireEvent.click(screen.getByText('buff.xlsx'))
+      await act(async () => Promise.resolve())
+
+      expect(
+        commands.executeCommand.mock.calls.some(([id]) => id === '_workbench.openWebviewDiff'),
+      ).toBe(false)
+      expect(commands.executeCommand).not.toHaveBeenCalledWith(
+        SwarmCommands.getFileContent,
+        expect.anything(),
+      )
+      expect(editorService.openEditor).not.toHaveBeenCalled()
+      expect(screen.getByText('p4 print failed (exit 1)')).toBeTruthy()
+    } finally {
+      getFileContent.dispose()
+      getFileContentBytes.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('shows the error page when a text-side fetch fails instead of opening an empty diff', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const getFileContent = registerCommand(
+      SwarmCommands.getFileContent,
+      (_accessor, request: unknown) =>
+        (request as { revision: string }).revision === '#1'
+          ? { content: '', error: 'p4 print failed (exit 1)' }
+          : { content: 'export const a = 2\n' },
+    )
+    const { editorService } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      fireEvent.click(screen.getByText('a.ts'))
+      await act(async () => Promise.resolve())
+
+      expect(editorService.openEditor).not.toHaveBeenCalled()
+      expect(screen.getByText('p4 print failed (exit 1)')).toBeTruthy()
+    } finally {
+      getFileContent.dispose()
       describeVersion.dispose()
       getReview.dispose()
     }
@@ -450,13 +523,14 @@ describe('SwarmReviewEditor restore', () => {
       SwarmCommands.describeVersion,
       () => FILES_WITH_LARGE_XLSX,
     )
-    const getFileContentBytes = registerCommand(
-      SwarmCommands.getFileContentBytes,
-      () => OVERSIZED_BASE64,
-    )
+    const getFileContentBytes = registerCommand(SwarmCommands.getFileContentBytes, () => ({
+      content: OVERSIZED_BASE64,
+    }))
     // A binary workbook past the cap has no readable fallback: the utf8 text
     // print must stay untouched and no editor opens.
-    const getFileContent = registerCommand(SwarmCommands.getFileContent, () => 'CORRUPTED')
+    const getFileContent = registerCommand(SwarmCommands.getFileContent, () => ({
+      content: 'CORRUPTED',
+    }))
     const { commands, editorService, notifications } = renderReview()
     try {
       await act(async () => Promise.resolve())
@@ -515,8 +589,8 @@ describe('SwarmReviewEditor restore', () => {
       SwarmCommands.getFileContent,
       (_accessor, request: unknown) =>
         (request as { revision: string }).revision === '#1'
-          ? 'export const a = 1\n'
-          : 'export const a = 2\n',
+          ? { content: 'export const a = 1\n' }
+          : { content: 'export const a = 2\n' },
     )
     const { commands, editorService } = renderReview()
     try {
@@ -853,7 +927,7 @@ describe('SwarmReviewEditor restore', () => {
     let contentFetches = 0
     const getFileContent = registerCommand(SwarmCommands.getFileContent, () => {
       contentFetches++
-      return 'export const a = 1\n'
+      return { content: 'export const a = 1\n' }
     })
     const { editorService } = renderReview()
     try {
@@ -888,7 +962,7 @@ describe('SwarmReviewEditor restore', () => {
     let contentFetches = 0
     const getFileContent = registerCommand(SwarmCommands.getFileContent, () => {
       contentFetches++
-      return 'export const a = 1\n'
+      return { content: 'export const a = 1\n' }
     })
     const { commands, editorService } = renderReview()
     try {

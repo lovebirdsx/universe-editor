@@ -312,6 +312,15 @@ export interface SwarmFileContentRequest {
   immutable?: boolean
 }
 
+/** Result of `perforce.swarm.getFileContent` / `perforce.swarm.getFileContentBytes`.
+ *  A genuinely empty file comes back as `content: ''` with NO `error` key; a failed
+ *  `p4 print` sets `error` (first stderr line) so callers never mistake an empty
+ *  fetch for an empty file. */
+export interface SwarmFileContentResult {
+  content: string
+  error?: string
+}
+
 /** Argument for `perforce.swarm.describeVersion`. */
 export interface SwarmDescribeVersionRequest {
   change: string

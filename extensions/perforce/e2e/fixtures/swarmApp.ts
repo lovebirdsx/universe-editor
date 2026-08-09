@@ -146,10 +146,20 @@ export const test = base.extend<SwarmFixtures>({
     const bigCsvDepot = '//depot/w.文本库/大数据表.csv'
     const bigCsvRows = (marker: string, value: string): string =>
       `编号,名称,${marker}\n` +
-      Array.from({ length: 70_000 }, (_, i) => `${i + 1},row-${i + 1},${value}`).join('\n') +
+      Array.from({ length: 52_000 }, (_, i) => `${i + 1},row-${i + 1},${value}`).join('\n') +
       '\n'
     const bigCsvBase = bigCsvRows('数据表基线', 'alpha')
     const bigCsvShelf = bigCsvRows('数据表改动', 'beta')
+    for (const [name, csv] of [
+      ['bigCsvBase', bigCsvBase],
+      ['bigCsvShelf', bigCsvShelf],
+    ] as const) {
+      if (Buffer.byteLength(csv, 'utf8') <= 1024 * 1024) {
+        throw new Error(
+          `${name} must exceed the 1MB spreadsheet-diff cap, or the oversized csv mis-routes to the webview and the test asserts nothing`,
+        )
+      }
+    }
 
     // Seed a minimal p4 depot so discovery succeeds + shelve has something.
     mkdirSync(join(workspaceDir, 'src', 'editor'), { recursive: true })

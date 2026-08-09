@@ -441,6 +441,76 @@ describe('PerforceClient Swarm diff files', () => {
     })
   }
 
+  function spawnPrintFailing(stderr: string, exitCode = 1): void {
+    spawnMock.mockImplementation((...args: unknown[]) => {
+      const argv = (args[1] as string[]) ?? []
+      const child = new FakeChildProcess()
+      queueMicrotask(() => {
+        const cmd = subcommand(argv)
+        if (cmd === 'info') {
+          child.stdout.emit(
+            'data',
+            Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),
+          )
+          child.emit('close', 0)
+        } else if (cmd === 'print') {
+          child.stderr.emit('data', Buffer.from(stderr))
+          child.emit('close', exitCode)
+        } else {
+          child.emit('close', 0)
+        }
+      })
+      return child
+    })
+  }
+
+  it('reports a failed text print as an error and never caches it', async () => {
+    spawnPrintFailing('//depot/src/a.ts@=2999 - no such file(s).\n')
+    const client = await PerforceClient.create(ROOT, {}, new ConcurrencyGate(4), {
+      enabled: true,
+      workspaceTtlMs: 4000,
+    })
+
+    const first = await client!.printRevisionResult('//depot/src/a.ts@=2999', true)
+    expect(first).toEqual({
+      content: '',
+      error: '//depot/src/a.ts@=2999 - no such file(s).',
+    })
+    // A transient failure must not be cached — the next call retries p4.
+    const second = await client!.printRevisionResult('//depot/src/a.ts@=2999', true)
+    expect(second.error).toBeDefined()
+    expect(printCount()).toBe(2)
+    client!.dispose()
+  })
+
+  it('reports a failed byte print as an error and never caches it', async () => {
+    spawnPrintFailing('no translation for parameter\n')
+    const client = await PerforceClient.create(ROOT, {}, new ConcurrencyGate(4), {
+      enabled: true,
+      workspaceTtlMs: 4000,
+    })
+
+    const first = await client!.printRevisionBytesResult('//depot/x.xlsx@=2999', true)
+    expect(first.error).toBe('no translation for parameter')
+    expect(first.bytes).toEqual(Buffer.alloc(0))
+    const second = await client!.printRevisionBytesResult('//depot/x.xlsx@=2999', true)
+    expect(second.error).toBeDefined()
+    expect(printCount()).toBe(2)
+    client!.dispose()
+  })
+
+  it('synthesizes an error when a failed print emits no stderr', async () => {
+    spawnPrintFailing('', 1)
+    const client = await PerforceClient.create(ROOT, {}, new ConcurrencyGate(4), {
+      enabled: true,
+      workspaceTtlMs: 4000,
+    })
+
+    const result = await client!.printRevisionResult('//depot/src/a.ts@=2999', true)
+    expect(result).toEqual({ content: '', error: 'p4 print failed (exit 1)' })
+    client!.dispose()
+  })
+
   const printCount = () =>
     spawnMock.mock.calls.filter((call) => subcommand((call[1] as string[]) ?? []) === 'print')
       .length

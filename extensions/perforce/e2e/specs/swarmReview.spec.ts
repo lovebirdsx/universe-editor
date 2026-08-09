@@ -108,7 +108,10 @@ test.describe('@p1 swarm reviews', () => {
       // view (unmapped by `p4 where`). Its diff sides come from `p4 print` read
       // with no client, so both sides must carry real content — a regression would
       // show a blank diff (the bug this guards).
-      await expect(review.getByText('c.ts')).toBeVisible()
+      // First click on this review = cold detail load (describe + transitions +
+      // comments, each a fake-p4 spawn over the multi-MB state) — outlives the
+      // default expect timeout under load.
+      await expect(review.getByText('c.ts')).toBeVisible({ timeout: 15_000 })
       await review.getByText('c.ts').click()
       await expect(diff).toBeVisible()
 
@@ -167,10 +170,15 @@ test.describe('@p1 swarm reviews', () => {
       // through the `-x` argfile (the path is non-ASCII).
       await expect(review.getByText('大数据表.csv')).toBeVisible()
       await review.getByText('大数据表.csv').click()
-      // Four 1.5MB `p4 print` round-trips (bytes probe + text fetch, both sides)
-      // precede the editor mount — allow more than the default timeout.
-      await expect(diff).toBeVisible({ timeout: 20_000 })
-      await expect(page.locator('[data-testid="webview-frame"]')).toHaveCount(0)
+      // Two 1.1MB `p4 print` round-trips (bytes probe, both sides; the text diff
+      // reuses the probed bytes) precede the editor mount. Poll for EITHER editor
+      // kind first so a mis-route to the webview fails loud instead of timing out.
+      const webviewFrame = page.locator('[data-testid="webview-frame"]')
+      await expect
+        .poll(async () => (await diff.count()) + (await webviewFrame.count()), { timeout: 25_000 })
+        .toBeGreaterThan(0)
+      await expect(diff).toBeVisible()
+      await expect(webviewFrame).toHaveCount(0)
 
       await expect
         .poll(

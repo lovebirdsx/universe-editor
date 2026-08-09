@@ -10,7 +10,7 @@
  * shadowing guardrail in memory `renderer-action-shadowed-by-extension-command-decl`).
  */
 import { commands, window, workspace, type Disposable } from '@universe-editor/extension-api'
-import type { SwarmCommandId } from '@universe-editor/extensions-common'
+import type { SwarmCommandId, SwarmFileContentResult } from '@universe-editor/extensions-common'
 import type { ClientManager } from '../clientManager.js'
 import { changelistIdFromGroupId } from '../changelist.js'
 import { SwarmClient, type SwarmReviewFilter } from './swarmClient.js'
@@ -749,16 +749,27 @@ export function registerSwarmCommands(
     // Print a depot file at either its review-base revision (`#<rev>`) or an
     // immutable version snapshot (`@=<change>`). The suffix is deliberately
     // constrained before it reaches p4 so this data command cannot become a
-    // general filespec escape hatch.
+    // general filespec escape hatch. The result carries a structured `error` —
+    // an empty string alone would read as a 0-byte file to the renderer's
+    // size-based diff routing.
     commands.registerCommand(Cmd.getFileContent, async (req: unknown) => {
       const r = req as { depotFile: string; revision: string; immutable?: boolean }
       const active = mgr.active
-      if (!active || !r?.depotFile || !/^#\d+$|^@=\d+$/.test(r.revision)) return ''
+      if (!r?.depotFile || !/^#\d+$|^@=\d+$/.test(r.revision)) {
+        return { content: '', error: 'invalid revision' } satisfies SwarmFileContentResult
+      }
+      if (!active) {
+        return { content: '', error: 'no active Perforce client' } satisfies SwarmFileContentResult
+      }
       logger.debug(
         'cmd',
         `getFileContent ${r.depotFile}${r.revision} (p4 print${r.immutable === true ? ', immutable' : ''})`,
       )
-      return active.printRevision(`${r.depotFile}${r.revision}`, r.immutable === true)
+      const result = await active.printRevisionResult(
+        `${r.depotFile}${r.revision}`,
+        r.immutable === true,
+      )
+      return result satisfies SwarmFileContentResult
     }),
 
     // Same as getFileContent but returns raw bytes base64-encoded, for binary
@@ -767,16 +778,24 @@ export function registerSwarmCommands(
     commands.registerCommand(Cmd.getFileContentBytes, async (req: unknown) => {
       const r = req as { depotFile: string; revision: string; immutable?: boolean }
       const active = mgr.active
-      if (!active || !r?.depotFile || !/^#\d+$|^@=\d+$/.test(r.revision)) return ''
+      if (!r?.depotFile || !/^#\d+$|^@=\d+$/.test(r.revision)) {
+        return { content: '', error: 'invalid revision' } satisfies SwarmFileContentResult
+      }
+      if (!active) {
+        return { content: '', error: 'no active Perforce client' } satisfies SwarmFileContentResult
+      }
       logger.debug(
         'cmd',
         `getFileContentBytes ${r.depotFile}${r.revision} (p4 print, binary${r.immutable === true ? ', immutable' : ''})`,
       )
-      const bytes = await active.printRevisionBytes(
+      const result = await active.printRevisionBytesResult(
         `${r.depotFile}${r.revision}`,
         r.immutable === true,
       )
-      return bytes.toString('base64')
+      if (result.error !== undefined) {
+        return { content: '', error: result.error } satisfies SwarmFileContentResult
+      }
+      return { content: result.bytes.toString('base64') } satisfies SwarmFileContentResult
     }),
   ]
 

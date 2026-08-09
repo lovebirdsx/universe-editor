@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   getTransitions: vi.fn(),
   obliterateReview: vi.fn(),
-  printRevisionBytes: vi.fn(),
+  printRevisionResult: vi.fn(),
+  printRevisionBytesResult: vi.fn(),
   dashboard: vi.fn(),
   showErrorMessage: vi.fn(),
   invalidateCredential: vi.fn(),
@@ -64,7 +65,8 @@ describe('registerSwarmCommands review operations', () => {
     mocks.handlers.clear()
     mocks.getTransitions.mockReset()
     mocks.obliterateReview.mockReset()
-    mocks.printRevisionBytes.mockReset()
+    mocks.printRevisionResult.mockReset()
+    mocks.printRevisionBytesResult.mockReset()
     mocks.dashboard.mockReset()
     mocks.showErrorMessage.mockReset()
     logger.debug.mockClear()
@@ -77,7 +79,8 @@ describe('registerSwarmCommands review operations', () => {
         active: {
           user: 'songxiao',
           p4Service: {},
-          printRevisionBytes: mocks.printRevisionBytes,
+          printRevisionResult: mocks.printRevisionResult,
+          printRevisionBytesResult: mocks.printRevisionBytesResult,
         },
       } as never,
       logger,
@@ -134,20 +137,20 @@ describe('registerSwarmCommands review operations', () => {
   it('base64-encodes raw revision bytes without utf8 corruption', async () => {
     // Bytes that are NOT valid UTF-8 (0xff 0xfe 0x00) — the xlsx-zip failure mode.
     const raw = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff, 0xfe, 0x00, 0x01])
-    mocks.printRevisionBytes.mockResolvedValue(raw)
+    mocks.printRevisionBytesResult.mockResolvedValue({ bytes: raw })
 
     const result = await mocks.handlers.get('perforce.swarm.getFileContentBytes')?.({
       depotFile: '//depot/x.xlsx',
       revision: '@=900',
     })
 
-    expect(mocks.printRevisionBytes).toHaveBeenCalledWith('//depot/x.xlsx@=900', false)
-    expect(result).toBe(raw.toString('base64'))
-    expect(Buffer.from(result as string, 'base64')).toEqual(raw)
+    expect(mocks.printRevisionBytesResult).toHaveBeenCalledWith('//depot/x.xlsx@=900', false)
+    expect(result).toEqual({ content: raw.toString('base64') })
+    expect(Buffer.from((result as { content: string }).content, 'base64')).toEqual(raw)
   })
 
-  it('passes the immutable flag through to printRevisionBytes', async () => {
-    mocks.printRevisionBytes.mockResolvedValue(Buffer.from('x'))
+  it('passes the immutable flag through to printRevisionBytesResult', async () => {
+    mocks.printRevisionBytesResult.mockResolvedValue({ bytes: Buffer.from('x') })
 
     await mocks.handlers.get('perforce.swarm.getFileContentBytes')?.({
       depotFile: '//depot/x.xlsx',
@@ -155,7 +158,7 @@ describe('registerSwarmCommands review operations', () => {
       immutable: true,
     })
 
-    expect(mocks.printRevisionBytes).toHaveBeenCalledWith('//depot/x.xlsx@=900', true)
+    expect(mocks.printRevisionBytesResult).toHaveBeenCalledWith('//depot/x.xlsx@=900', true)
   })
 
   it('rejects a revision that is not a bare #rev or @=change (filespec guard)', async () => {
@@ -164,9 +167,75 @@ describe('registerSwarmCommands review operations', () => {
         depotFile: '//depot/x.xlsx',
         revision,
       })
-      expect(result).toBe('')
+      expect(result).toEqual({ content: '', error: 'invalid revision' })
     }
-    expect(mocks.printRevisionBytes).not.toHaveBeenCalled()
+    expect(mocks.printRevisionBytesResult).not.toHaveBeenCalled()
+  })
+
+  it('propagates a print failure as a structured error instead of empty content', async () => {
+    mocks.printRevisionBytesResult.mockResolvedValue({
+      bytes: Buffer.alloc(0),
+      error: 'p4 print failed (exit 1)',
+    })
+
+    const result = await mocks.handlers.get('perforce.swarm.getFileContentBytes')?.({
+      depotFile: '//depot/x.xlsx',
+      revision: '@=900',
+    })
+
+    expect(result).toEqual({ content: '', error: 'p4 print failed (exit 1)' })
+  })
+
+  it('propagates a text print failure as a structured error', async () => {
+    mocks.printRevisionResult.mockResolvedValue({
+      content: '',
+      error: 'p4 print failed (exit 1)',
+    })
+
+    const result = await mocks.handlers.get('perforce.swarm.getFileContent')?.({
+      depotFile: '//depot/a.txt',
+      revision: '#3',
+    })
+
+    expect(result).toEqual({ content: '', error: 'p4 print failed (exit 1)' })
+  })
+
+  it('returns a structured error when there is no active Perforce client', async () => {
+    mocks.handlers.clear()
+    registerSwarmCommands({ active: undefined } as never, logger)
+
+    const bytesResult = await mocks.handlers.get('perforce.swarm.getFileContentBytes')?.({
+      depotFile: '//depot/x.xlsx',
+      revision: '@=900',
+    })
+    const textResult = await mocks.handlers.get('perforce.swarm.getFileContent')?.({
+      depotFile: '//depot/a.txt',
+      revision: '#3',
+    })
+
+    expect(bytesResult).toEqual({ content: '', error: 'no active Perforce client' })
+    expect(textResult).toEqual({ content: '', error: 'no active Perforce client' })
+    expect(mocks.printRevisionResult).not.toHaveBeenCalled()
+    expect(mocks.printRevisionBytesResult).not.toHaveBeenCalled()
+  })
+
+  it('a genuinely empty revision comes back with content and NO error key', async () => {
+    mocks.printRevisionResult.mockResolvedValue({ content: '' })
+    mocks.printRevisionBytesResult.mockResolvedValue({ bytes: Buffer.alloc(0) })
+
+    const textResult = (await mocks.handlers.get('perforce.swarm.getFileContent')?.({
+      depotFile: '//depot/empty.txt',
+      revision: '#1',
+    })) as Record<string, unknown>
+    const bytesResult = (await mocks.handlers.get('perforce.swarm.getFileContentBytes')?.({
+      depotFile: '//depot/empty.txt',
+      revision: '#1',
+    })) as Record<string, unknown>
+
+    expect(textResult.content).toBe('')
+    expect(textResult).not.toHaveProperty('error')
+    expect(bytesResult.content).toBe('')
+    expect(bytesResult).not.toHaveProperty('error')
   })
 })
 

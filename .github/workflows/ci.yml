@@ -469,6 +469,14 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # Playwright resolves outputDir / html outputFolder relative to the config
+      # file's directory (e2e/), so artifacts land under <dir>/e2e/ — upload paths
+      # must include that layer. `prep` is meaningless for naming (mostly 'none'),
+      # so name artifacts after the suite dir basename instead.
+      - name: Resolve suite short name
+        id: suite
+        run: echo "short=$(basename "${{ matrix.suite.dir }}")" >> "$GITHUB_OUTPUT"
+
       # `e2ea` (not `e2e`) folds the @regression bug-guard specs back into the pass;
       # extensions have no @serial/@flaky specs, so a single pass covers everything.
       - name: Run extension E2E (xvfb)
@@ -478,8 +486,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-${{ matrix.suite.prep }}-${{ strategy.job-index }}
-          path: ${{ matrix.suite.dir }}/playwright-report
+          name: playwright-report-${{ steps.suite.outputs.short }}-${{ strategy.job-index }}
+          path: ${{ matrix.suite.dir }}/e2e/playwright-report
           retention-days: 14
           if-no-files-found: ignore
 
@@ -487,8 +495,8 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-traces-${{ matrix.suite.prep }}-${{ strategy.job-index }}
-          path: ${{ matrix.suite.dir }}/test-results
+          name: playwright-traces-${{ steps.suite.outputs.short }}-${{ strategy.job-index }}
+          path: ${{ matrix.suite.dir }}/e2e/test-results
           retention-days: 14
           if-no-files-found: ignore
 
@@ -585,7 +593,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-external-${{ matrix.suite.name }}
-          path: ${{ matrix.suite.dir }}/playwright-report
+          path: ${{ matrix.suite.dir }}/e2e/playwright-report
           retention-days: 14
           if-no-files-found: ignore
 
@@ -594,7 +602,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-traces-external-${{ matrix.suite.name }}
-          path: ${{ matrix.suite.dir }}/test-results
+          path: ${{ matrix.suite.dir }}/e2e/test-results
           retention-days: 14
           if-no-files-found: ignore
 

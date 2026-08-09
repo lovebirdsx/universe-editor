@@ -14,6 +14,7 @@ import {
   IConfigurationService,
   IDialogService,
   IEditorService,
+  ILoggerService,
   INotificationService,
   IOpenerService,
   IStorageService,
@@ -34,6 +35,7 @@ import {
   type SwarmCommentDto,
   type SwarmDescribeVersionRequest,
   type SwarmFileContentRequest,
+  type SwarmFileContentResult,
   type SwarmGetReviewRequest,
   type SwarmListCommentsRequest,
   type SwarmObliterateReviewRequest,
@@ -101,6 +103,15 @@ function base64DecodedBytes(base64: string): number {
   return Math.floor(base64.length * 0.75)
 }
 
+/** Decode a base64 payload as UTF-8 text (no spread — a multi-MB payload would
+ *  blow the call stack, see diffActions' decoder). */
+const decodeBase64Utf8 = (base64: string): string => {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return new TextDecoder().decode(bytes)
+}
+
 const STATE_CLASS: Record<string, string | undefined> = {
   needsReview: styles['stateNeedsReview'],
   needsRevision: styles['stateNeedsRevision'],
@@ -125,6 +136,11 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   const configuration = useService(IConfigurationService)
   const dialog = useService(IDialogService)
   const editorService = useService(IEditorService)
+  const loggerService = useService(ILoggerService)
+  const logger = useMemo(
+    () => loggerService.createLogger({ id: 'swarmReview', name: 'Swarm Review' }),
+    [loggerService],
+  )
   const notifications = useService(INotificationService)
   const opener = useService(IOpenerService)
   const storage = useService(IStorageService)
@@ -670,27 +686,47 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       // than gating on the editor resolver's `supportsDiff` — the custom editor
       // registers asynchronously and an older Excel extension may not declare the
       // flag, either of which would silently drop us back to the empty text diff.
+      let spreadsheetText: { original: string; modified: string } | undefined
       if (isSpreadsheetPath(file.path)) {
         try {
-          const getBytes = async (revision: string | null, immutable: boolean): Promise<string> => {
-            if (!revision) return ''
+          const getBytes = async (
+            revision: string | null,
+            immutable: boolean,
+          ): Promise<SwarmFileContentResult> => {
+            if (!revision) return { content: '' }
             return (
-              (await commands.executeCommand<string>(SwarmCommands.getFileContentBytes, {
-                depotFile: file.depotFile,
-                revision,
-                ...(immutable ? { immutable: true } : {}),
-              } satisfies SwarmFileContentRequest)) ?? ''
+              (await commands.executeCommand<SwarmFileContentResult>(
+                SwarmCommands.getFileContentBytes,
+                {
+                  depotFile: file.depotFile,
+                  revision,
+                  ...(immutable ? { immutable: true } : {}),
+                } satisfies SwarmFileContentRequest,
+              )) ?? { content: '' }
             )
           }
-          const [leftBase64, rightBase64] = await Promise.all([
+          const [left, right] = await Promise.all([
             getBytes(added ? null : originalRevision, originalImmutable),
             getBytes(deleted ? null : modifiedRevision, modifiedImmutable),
           ])
+          // A failed print comes back as empty bytes — never let it reach the
+          // size-based routing below, where 0 bytes would read as a tiny file.
+          const fetchError = left.error ?? right.error
+          if (fetchError !== undefined) {
+            logger.debug(
+              `openFileDiff ${file.path}: byte probe failed, route=error (${fetchError})`,
+            )
+            setError(fetchError)
+            return
+          }
           const largestSide = Math.max(
-            base64DecodedBytes(leftBase64),
-            base64DecodedBytes(rightBase64),
+            base64DecodedBytes(left.content),
+            base64DecodedBytes(right.content),
           )
           if (largestSide <= SPREADSHEET_DIFF_MAX_BYTES) {
+            logger.debug(
+              `openFileDiff ${file.path}: largestSide=${largestSide} cap=${SPREADSHEET_DIFF_MAX_BYTES}, route=webview`,
+            )
             // Distinct left/right URIs carrying the backing-change pair keep the
             // diff tab's identity unique per comparison (WebviewDiffInput ids by
             // both URIs) — pending versions share a rev, so only the change
@@ -707,8 +743,8 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
               title: `${file.path.split('/').pop() ?? file.path} (Swarm)`,
               leftUri: sideUri('l', added ? null : leftChange),
               rightUri: sideUri('r', deleted ? null : rightChange),
-              leftBase64,
-              rightBase64,
+              leftBase64: left.content,
+              rightBase64: right.content,
               pinned: false,
               preserveFocus: false,
             } satisfies OpenWebviewDiffPayload)
@@ -716,6 +752,9 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
           }
           if (!file.path.toLowerCase().endsWith('.csv')) {
             // A binary workbook past the cap has no readable fallback.
+            logger.debug(
+              `openFileDiff ${file.path}: largestSide=${largestSide} cap=${SPREADSHEET_DIFF_MAX_BYTES}, route=too-large`,
+            )
             notifications.notify({
               severity: Severity.Warning,
               message: localize(
@@ -726,7 +765,16 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
             })
             return
           }
-          // Oversized CSV: fall through to the Monaco text diff below.
+          // Oversized CSV: decode the bytes already probed above and diff them as
+          // text below — re-printing both sides via getFileContent would double
+          // the p4 traffic for the largest files we handle.
+          logger.debug(
+            `openFileDiff ${file.path}: largestSide=${largestSide} cap=${SPREADSHEET_DIFF_MAX_BYTES}, route=monaco-text`,
+          )
+          spreadsheetText = {
+            original: added ? '' : decodeBase64Utf8(left.content),
+            modified: deleted ? '' : decodeBase64Utf8(right.content),
+          }
         } catch (e: unknown) {
           setError(e instanceof Error ? e.message : String(e))
           return
@@ -760,29 +808,44 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
           return
         }
       }
-      const getContent = async (revision: string | null, immutable: boolean): Promise<string> => {
-        if (!revision) return ''
+      const getContent = async (
+        revision: string | null,
+        immutable: boolean,
+      ): Promise<SwarmFileContentResult> => {
+        if (!revision) return { content: '' }
         return recordPerfPhaseAsync(
           'swarm.openFileDiff.fetchSide',
           async () =>
-            (await commands.executeCommand<string>(SwarmCommands.getFileContent, {
+            (await commands.executeCommand<SwarmFileContentResult>(SwarmCommands.getFileContent, {
               depotFile: file.depotFile,
               revision,
               ...(immutable ? { immutable: true } : {}),
-            } satisfies SwarmFileContentRequest)) ?? '',
+            } satisfies SwarmFileContentRequest)) ?? { content: '' },
         )
       }
       try {
         await recordPerfPhaseAsync('swarm.openFileDiff.total', async () => {
-          const [original, modified] = await recordPerfPhaseAsync('swarm.openFileDiff.fetch', () =>
-            Promise.all([
-              getContent(added ? null : originalRevision, originalImmutable),
-              getContent(deleted ? null : modifiedRevision, modifiedImmutable),
-            ]),
-          )
-          await editorService.openEditor(
-            new SwarmDiffEditorInput(context, original ?? '', modified ?? ''),
-          )
+          let original: string
+          let modified: string
+          if (spreadsheetText) {
+            ;({ original, modified } = spreadsheetText)
+          } else {
+            const [left, right] = await recordPerfPhaseAsync('swarm.openFileDiff.fetch', () =>
+              Promise.all([
+                getContent(added ? null : originalRevision, originalImmutable),
+                getContent(deleted ? null : modifiedRevision, modifiedImmutable),
+              ]),
+            )
+            const fetchError = left.error ?? right.error
+            if (fetchError !== undefined) {
+              logger.debug(`openFileDiff ${file.path}: fetch failed, route=error (${fetchError})`)
+              setError(fetchError)
+              return
+            }
+            original = left.content
+            modified = right.content
+          }
+          await editorService.openEditor(new SwarmDiffEditorInput(context, original, modified))
         })
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : String(e))
@@ -792,6 +855,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       commands,
       editorService,
       detail,
+      logger,
       notifications,
       selectedVersionIdx,
       compareVersionIdx,

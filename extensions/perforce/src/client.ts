@@ -1843,6 +1843,19 @@ export class PerforceClient {
    */
   async printRevision(spec: string | null, immutable = false): Promise<string> {
     if (!spec) return ''
+    return (await this.printRevisionResult(spec, immutable)).content
+  }
+
+  /**
+   * {@link printRevision} variant that reports WHY the content is empty, for the
+   * Swarm review diff: a genuinely empty revision and a failed print must not be
+   * indistinguishable (an empty string fed to the renderer's size-based routing
+   * reads as a 0-byte file).
+   */
+  async printRevisionResult(
+    spec: string,
+    immutable = false,
+  ): Promise<{ content: string; error?: string }> {
     // Read via depot syntax with no client (`noClient`), so a file not mapped in
     // the current client's view still prints — the out-of-workspace Swarm diff
     // case. A shelf spec (`@=change`) can be re-shelved in place, so it bypasses
@@ -1851,20 +1864,28 @@ export class PerforceClient {
       const res = await this._p4.exec(['print', '-q', spec], { noClient: true })
       if (res.exitCode !== 0) {
         this._log?.(`[perforce] print ${spec} failed (exit ${res.exitCode}): ${res.stderr.trim()}`)
-        return ''
+        return {
+          content: '',
+          error: firstStderrLine(res.stderr) ?? `p4 print failed (exit ${res.exitCode})`,
+        }
       }
-      return res.stdout
+      return { content: res.stdout }
     }
+    let fetchError: string | undefined
     const value = await this._cache.wrap(P4CacheNs.print, spec, async () => {
       this._log?.(`[perforce] print ${spec} (cache miss, p4 print)`)
       const res = await this._p4.exec(['print', '-q', spec], { noClient: true })
       if (res.exitCode !== 0) {
         this._log?.(`[perforce] print ${spec} failed (exit ${res.exitCode}): ${res.stderr.trim()}`)
+        // Failures stay out of the print cache — a transient p4 failure must be
+        // retried on the next request, not replayed forever.
+        fetchError = firstStderrLine(res.stderr) ?? `p4 print failed (exit ${res.exitCode})`
         return undefined
       }
       return res.stdout
     })
-    return value ?? ''
+    if (value !== undefined) return { content: value }
+    return { content: '', error: fetchError ?? 'p4 print failed' }
   }
 
   /**
@@ -1877,22 +1898,42 @@ export class PerforceClient {
    */
   async printRevisionBytes(spec: string | null, immutable = false): Promise<Buffer> {
     if (!spec) return Buffer.alloc(0)
+    return (await this.printRevisionBytesResult(spec, immutable)).bytes
+  }
+
+  /**
+   * {@link printRevisionBytes} variant that reports WHY the bytes are empty — see
+   * {@link printRevisionResult}.
+   */
+  async printRevisionBytesResult(
+    spec: string,
+    immutable = false,
+  ): Promise<{ bytes: Buffer; error?: string }> {
+    let fetchError: string | undefined
     const fetch = async (): Promise<Buffer | undefined> => {
       const res = await this._p4.execBinary(['print', '-q', spec], { noClient: true })
       if (res.exitCode !== 0) {
         this._log?.(`[perforce] print ${spec} failed (exit ${res.exitCode}): ${res.stderr.trim()}`)
+        // Failures stay out of the print cache — a transient p4 failure must be
+        // retried on the next request, not replayed forever.
+        fetchError = firstStderrLine(res.stderr) ?? `p4 print failed (exit ${res.exitCode})`
         return undefined
       }
       return res.stdout
     }
     if (!immutable && spec.includes('@=')) {
-      return (await fetch()) ?? Buffer.alloc(0)
+      const bytes = await fetch()
+      if (bytes === undefined)
+        return { bytes: Buffer.alloc(0), error: fetchError ?? 'p4 print failed' }
+      return { bytes }
     }
     const value = await this._cache.wrap(P4CacheNs.print, `bytes:${spec}`, async () => {
       this._log?.(`[perforce] print ${spec} (cache miss, p4 print bytes)`)
       return (await fetch())?.toString('base64')
     })
-    return value === undefined ? Buffer.alloc(0) : Buffer.from(value, 'base64')
+    if (value === undefined)
+      return { bytes: Buffer.alloc(0), error: fetchError ?? 'p4 print failed' }
+    return { bytes: Buffer.from(value, 'base64') }
   }
 
   /**
