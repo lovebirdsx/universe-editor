@@ -333,15 +333,21 @@ export interface LaunchAppOptions {
   readonly extraArgs?: readonly string[]
 }
 
-// CI Windows runners intermittently hold a lock on the Electron dist files
-// (Defender scanning electron.exe / icudtl.dat): the process dies before
-// Playwright's pipe connects — "Process failed to launch!" with an ICU-load or
-// "file is being used by another process" stderr. No app code has run at that
-// point, so retrying with the SAME userDataDir is safe (seeded state is
-// untouched); the backoff rides out the scan window, which was observed to
-// outlast a single Playwright test retry.
-const LAUNCH_ATTEMPTS = 3
-const LAUNCH_RETRY_DELAY_MS = 5_000
+// CI runners intermittently fail the spawn itself, before any app code runs:
+//  - Windows: Defender scans electron.exe / icudtl.dat and holds a lock — the
+//    process dies before Playwright's pipe connects ("Process failed to
+//    launch!" with an ICU-load or "file is being used by another process"
+//    stderr). The scan window was observed to outlast 3×5s retries AND a full
+//    Playwright test retry, so the backoff escalates to ride out ~40s.
+//  - Linux: `spawn ETXTBSY` — a concurrently forking worker briefly holds a
+//    write fd on the electron binary; the window is milliseconds, any retry
+//    clears it.
+// Retrying with the SAME userDataDir is safe in both cases (seeded state is
+// untouched). The escalating delays stay within the 60s fixture timeout; a
+// self-launching spec's 30s test timeout may cut the tail attempts short,
+// which is no worse than failing immediately.
+const TRANSIENT_LAUNCH_ERROR = /Process failed to launch|spawn ETXTBSY/i
+const LAUNCH_RETRY_DELAYS_MS = [5_000, 10_000, 20_000]
 
 /**
  * `electron.launch` with transient-failure retry. Use this instead of the bare
@@ -355,11 +361,12 @@ export async function launchElectron(
     try {
       return await electron.launch(options)
     } catch (err) {
-      if (attempt >= LAUNCH_ATTEMPTS || !/Process failed to launch/i.test(String(err))) throw err
+      const delay = LAUNCH_RETRY_DELAYS_MS[attempt - 1]
+      if (delay === undefined || !TRANSIENT_LAUNCH_ERROR.test(String(err))) throw err
       console.warn(
-        `[e2e] electron.launch failed (attempt ${attempt}/${LAUNCH_ATTEMPTS}), retrying in ${LAUNCH_RETRY_DELAY_MS}ms: ${String(err).split('\n', 1)[0]}`,
+        `[e2e] electron.launch failed (attempt ${attempt}/${LAUNCH_RETRY_DELAYS_MS.length + 1}), retrying in ${delay}ms: ${String(err).split('\n', 1)[0]}`,
       )
-      await new Promise((resolve) => setTimeout(resolve, LAUNCH_RETRY_DELAY_MS))
+      await new Promise((resolve) => setTimeout(resolve, delay))
     }
   }
 }

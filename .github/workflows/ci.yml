@@ -284,6 +284,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Defender's real-time scan intermittently locks the Electron dist
+      # (electron.exe / icudtl.dat) right as Playwright spawns it — the process
+      # dies before the CDP pipe connects ("Process failed to launch!"), and the
+      # scan window can outlast both the harness launch retry and a Playwright
+      # test retry. Exclude the workspace to remove the lock at the source; the
+      # launch-level retry in e2e-harness stays as the safety net.
+      - name: Exclude workspace from Defender (Electron launch file locks)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE"
+
       - uses: pnpm/action-setup@v4.4.0
 
       - uses: actions/setup-node@v5

@@ -48,7 +48,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 元素 visible 但 click 超时+`intercepts pointer events`、本地全绿=en-US+1280 窗口溢出遮挡 → 案例 42；点击超高 Monaco `.view-lines` 容器中心、CI relayout 后中心滑出可见区被 Welcome/标签栏挡 → 案例 54
 - `toBeFocused` 恒 inactive+无 workspace 冷启动=bootstrap 一次性焦点恢复抢焦 → 案例 43；测试中途 openWorkspace 后编辑器区内焦点被抢=workspace restore 窗口 editor 分支裸抢 → 案例 53
 - 纯黑页+probe 恒无+业务无关 spec 同轮随机挂=bootstrap RPC 被 gate 丢弃 → 案例 33
-- 本机裸 `electron.launch` 报 `Process failed to launch!`（exitCode=9）、CI 正常=本机环境 → 案例 28；**CI Windows** 同报错+ICU 加载失败/文件被占用+同窗口多 worker 齐挂=runner 文件锁窗口，harness `launchElectron` 已内建重试 → 案例 72
+- 本机裸 `electron.launch` 报 `Process failed to launch!`（exitCode=9）、CI 正常=本机环境 → 案例 28；**CI Windows** 同报错+ICU 加载失败/文件被占用+同窗口多 worker 齐挂=runner 文件锁窗口，harness `launchElectron` 已内建重试 → 案例 72；**CI Linux** 报 `spawn ETXTBSY` 栈在 launchElectron 内=瞬时守卫正则不匹配新变体 / Windows 重试耗尽仍挂=锁窗口超预算（Defender 排除根治）→ 案例 72b
 - 失败仅集中 DnD 类且重跑能过=headless 手势时序 → 案例 46；锁屏时剪贴板用例必败 → 案例 47
 - chord 用例卡 `defocusEditor` 等 focus 变 false+retry 秒过=defocus 时序噪声（观察中）→ 案例 48
 - 列表相等断言 received 是 expected 前缀子集+采样点为固定 sleep=增量渲染截半，poll 到收敛 → 案例 49

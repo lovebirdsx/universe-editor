@@ -337,6 +337,12 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 修（harness 层，不动产品、不弱化断言——app 根本没启动过，seeded userData 未被触碰，原地重试同一 userDataDir 安全）：`packages/e2e-harness/src/launch.ts` 新增 `launchElectron(options)` = `_electron.launch` 包装，仅对 `/Process failed to launch/` 重试（3 次、间隔 5s，console.warn 留痕），其它错误原样抛；`launchApp` 内部走它（覆盖 cold/shared/扩展全部 fixture），并从 index.ts 导出给自启动 spec。10 个裸 `_electron.launch` 的自启动 spec（viewSizes/viewMove/terminalRestore/quickOpenRestart/outputRestore/maximizedSecondarySidebarRestore/layoutPersistence/editorRestore/agentsEmptySessionRestore/agentOnboarding）全部改用 `launchElectron`；e2e/CLAUDE.md「自启动 spec」约定同步改为禁止再裸调。验证：`pnpm check` + acpEditorTitle/editorRestore 定向 + `e2e:smoke` 66/66 全绿。
 教训：a) 「launch 阶段死、同窗口多 worker 齐挂、窗口外全部正常」= runner 级文件锁，别当产品回归追；b) 环境窗口可长过单次 test retry，靠 Playwright retries 不够，要在更细粒度（launch 调用本身）重试；c) 新增自启动 spec 一律用 `launchElectron`，别裸 `_electron.launch`。锚：`packages/e2e-harness/src/launch.ts`（launchElectron）；`apps/editor/e2e/CLAUDE.md`（自启动 spec 约定）。
 
+**案例 72b — 上条修复后同族复发（同一 CI run 四分片齐挂）：Linux 变体 `spawn ETXTBSY` 不进重试守卫 + Windows 锁窗口超过 3×5s 重试预算；修=守卫扩到 ETXTBSY + 递增退避 + CI Defender 排除根治**
+信号：同一 run 里 ubuntu 分片报 `Error: electron.launch: spawn ETXTBSY`（栈就在 launchElectron 的 `electron.launch` 调用行——说明包装生效但正则不匹配直接抛）；windows 分片报 `Process failed to launch!` 且 initial+Playwright retry 双挂（3 次×5s 重试留痕后耗尽）。四个分片跨 OS 同 run 齐挂看似回归，实际是两个独立的启动层环境窗口同时命中——失败点全部收敛在 launch、且 spec 互不相干，即可定性。
+根因：a) `spawn ETXTBSY` 是 Linux 上 posix_spawn 撞上并发 fork 短暂持有 electron 二进制写 fd（多 worker 下的经典 Node spawn 竞态），窗口毫秒级，任何重试都能过——但旧守卫 `/Process failed to launch/i` 不匹配它；b) Defender 扫描窗口实测可超过 10s 重试总预算 + 单次 test retry，launch 层固定间隔重试兜不满。
+修（三点）：`launch.ts` 守卫改 `TRANSIENT_LAUNCH_ERROR = /Process failed to launch|spawn ETXTBSY/i`；重试改递增退避 `LAUNCH_RETRY_DELAYS_MS = [5s, 10s, 20s]`（总覆盖 ~35s+，fixture timeout 60s 内安全；自启动 spec 受 30s test timeout 截尾，不劣于原状）；`.github/workflows/ci.yml` e2e job checkout 后加 `Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE"`（仅 Windows）从源头消掉 Defender 锁，launch 重试降级为保险。
+教训：a) 包装重试的错误匹配正则是白名单——新变体(ETXTBSY/EBUSY/EAGAIN)出现时栈若落在包装内说明只差匹配，扩正则即可，别再包一层；b) 环境窗口长度要拿失败时间线实测（initial+retry 双挂=窗口>单 test 生命周期），重试预算按实测窗口定而不是拍脑袋；c) hosted runner 有 admin 权限，Defender 排除(`Add-MpPreference`)是比重试更根本的手段，两者叠加：排除治本、重试兜底。锚：同上 + `.github/workflows/ci.yml`（e2e job Defender 排除步骤）。
+
 ---
 
 ## 根治 TODO
