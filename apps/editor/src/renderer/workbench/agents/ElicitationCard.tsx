@@ -102,8 +102,9 @@ function buildContent(
  * notes/"Other" input. Two suffix conventions are recognized: claude's fork
  * emits `<name>_custom` per question, codex's fork emits `<name>__other` for
  * request_user_input's other-answer; on submit both values travel together and
- * each agent bridge interprets them (claude folds the text into notes on the
- * selection, codex treats it as a replacement answer). The two controls keep
+ * each agent bridge folds the text into a note on the selection (claude as
+ * annotations, codex as `<label>（补充：<note>）`), standing alone as the
+ * answer only when nothing is picked. The two controls keep
  * their values independently — clearing either on the other's edit would
  * silently destroy user input.
  */
