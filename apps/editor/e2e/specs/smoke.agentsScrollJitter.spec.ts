@@ -40,6 +40,27 @@ const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', '
 
 const TIMELINE = '[data-testid="acp-timeline"]'
 
+// 采样前先等时间线布局收敛：可滚动高度已超过阈值（内容真实挂载）且连续两次采样不变
+// （挂载期的批量 size-change 校正已结束）。固定 sleep 会把「挂载期正常校正」留进采样
+// 窗口造成假阳性，或在慢机器上等不够；收敛判据健康路径几百 ms 即通过。
+async function waitForTimelineSettled(page: Page): Promise<void> {
+  let prev = -1
+  await expect
+    .poll(
+      async () => {
+        const h = await page.evaluate((sel) => {
+          const el = document.querySelector(sel)?.parentElement
+          return el ? el.scrollHeight - el.clientHeight : 0
+        }, TIMELINE)
+        const settled = h > 800 && h === prev
+        prev = h
+        return settled
+      },
+      { timeout: 20_000, message: 'timeline 高度应超过 800 并收敛稳定' },
+    )
+    .toBe(true)
+}
+
 // The renderer's timelineVirtualScroll predicate pushes each TanStack size-change
 // correction here (E2E only); the spec reads it as ground truth for the loop.
 declare global {
@@ -134,16 +155,7 @@ test.describe('@p1 agents — virtualized timeline scroll jitter', () => {
 
     // 展开所有卡片，让 TerminalOutput 真正挂载（默认 execute 卡是折叠的，body 不渲染）。
     await page.evaluate(() => window.__E2E__!.setAcpCollapseMode('expanded'))
-    await page.waitForTimeout(2500)
-
-    await expect
-      .poll(() =>
-        page.evaluate((sel) => {
-          const el = document.querySelector(sel)?.parentElement
-          return el ? el.scrollHeight - el.clientHeight : 0
-        }, TIMELINE),
-      )
-      .toBeGreaterThan(800)
+    await waitForTimelineSettled(page)
 
     // 从底部真滚轮向上采样；健康时每段滚动只有一次性 settle。
     const worst = await sampleWorstSettleWhileWheelingUp(page)
@@ -203,16 +215,7 @@ test.describe('@p1 agents — virtualized timeline scroll jitter', () => {
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages().length), { timeout: 20000 })
       .toBeGreaterThanOrEqual(COUNT * 2)
-    await page.waitForTimeout(2500)
-
-    await expect
-      .poll(() =>
-        page.evaluate((sel) => {
-          const el = document.querySelector(sel)?.parentElement
-          return el ? el.scrollHeight - el.clientHeight : 0
-        }, TIMELINE),
-      )
-      .toBeGreaterThan(800)
+    await waitForTimelineSettled(page)
 
     const worst = await sampleWorstSettleWhileWheelingUp(page)
 

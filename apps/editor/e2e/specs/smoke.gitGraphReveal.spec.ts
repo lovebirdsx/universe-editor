@@ -88,7 +88,10 @@ test.describe('@p1 git graph reveal', () => {
     const userDataDir = makeUserDataDir()
     const { repoDir, firstHash } = makeRepo()
 
-    const app = await launchCoreGitApp({ userDataDir })
+    // Launch with the repo pinned as the workspace (positional arg → openWindowForFolder):
+    // a post-boot openWorkspace would re-pin the workspace + flip trust, restarting the
+    // extension host twice and re-activating git — pure startup waste.
+    const app = await launchCoreGitApp({ userDataDir, extraArgs: [repoDir] })
 
     try {
       const page = await app.firstWindow()
@@ -98,7 +101,6 @@ test.describe('@p1 git graph reveal', () => {
       )
       await evaluateWhenRestored(page)
 
-      await page.evaluate((p) => window.__E2E__!.openWorkspace(p), repoDir)
       await expect
         .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
           timeout: 60_000,
@@ -134,7 +136,10 @@ test.describe('@p1 git graph reveal', () => {
     // reveal must page in more history before it can select + scroll.
     const { repoDir, oldestHash } = makeManyCommitsRepo(520)
 
-    const app = await launchCoreGitApp({ userDataDir })
+    // Launch with the repo pinned as the workspace (positional arg → openWindowForFolder):
+    // a post-boot openWorkspace would re-pin the workspace + flip trust, restarting the
+    // extension host twice and re-activating git — pure startup waste.
+    const app = await launchCoreGitApp({ userDataDir, extraArgs: [repoDir] })
 
     try {
       const page = await app.firstWindow()
@@ -144,7 +149,6 @@ test.describe('@p1 git graph reveal', () => {
       )
       await evaluateWhenRestored(page)
 
-      await page.evaluate((p) => window.__E2E__!.openWorkspace(p), repoDir)
       await expect
         .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
           timeout: 60_000,
@@ -174,7 +178,10 @@ test.describe('@p1 git graph reveal', () => {
     const userDataDir = makeUserDataDir()
     const { repoDir, firstHash, secondHash } = makeRepo()
 
-    const app = await launchCoreGitApp({ userDataDir })
+    // Launch with the repo pinned as the workspace (positional arg → openWindowForFolder):
+    // a post-boot openWorkspace would re-pin the workspace + flip trust, restarting the
+    // extension host twice and re-activating git — pure startup waste.
+    const app = await launchCoreGitApp({ userDataDir, extraArgs: [repoDir] })
 
     try {
       const page = await app.firstWindow()
@@ -184,7 +191,6 @@ test.describe('@p1 git graph reveal', () => {
       )
       await evaluateWhenRestored(page)
 
-      await page.evaluate((p) => window.__E2E__!.openWorkspace(p), repoDir)
       await expect
         .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
           timeout: 60_000,
@@ -226,7 +232,10 @@ test.describe('@p1 git graph reveal', () => {
     const userDataDir = makeUserDataDir()
     const { repoDir, firstHash, secondHash } = makeRepo()
 
-    const app = await launchCoreGitApp({ userDataDir })
+    // Launch with the repo pinned as the workspace (positional arg → openWindowForFolder):
+    // a post-boot openWorkspace would re-pin the workspace + flip trust, restarting the
+    // extension host twice and re-activating git — pure startup waste.
+    const app = await launchCoreGitApp({ userDataDir, extraArgs: [repoDir] })
 
     try {
       const page = await app.firstWindow()
@@ -236,7 +245,6 @@ test.describe('@p1 git graph reveal', () => {
       )
       await evaluateWhenRestored(page)
 
-      await page.evaluate((p) => window.__E2E__!.openWorkspace(p), repoDir)
       await expect
         .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
           timeout: 60_000,

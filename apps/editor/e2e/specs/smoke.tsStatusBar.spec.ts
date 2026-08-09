@@ -25,39 +25,37 @@ function writeWorkspace(): { dir: string; aPath: string } {
 }
 
 test.describe('@p1 typescript status bar', () => {
-  // @serial: same cold-tsserver + parcel-watcher constraints as smoke.outline.
-  test(
-    'keeps a persistent entry naming the server implementation once ready',
-    { tag: '@serial' },
-    async ({ page, workbench }) => {
-      test.slow()
-      await workbench.waitForRestored()
+  test('keeps a persistent entry naming the server implementation once ready', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
 
-      const { dir, aPath } = writeWorkspace()
-      await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
-      await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), aPath)
+    const { dir, aPath } = writeWorkspace()
+    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), aPath)
 
-      const statusbar = page.getByTestId('part-statusbar')
-      // Mirrors the main-process preference chain: env override, else the
-      // shared default (there's no settings.json in the e2e profile).
-      const native =
-        process.env.UNIVERSE_TS_SERVER !== undefined
-          ? process.env.UNIVERSE_TS_SERVER === 'native'
-          : DEFAULT_TS_SERVER_IMPLEMENTATION === 'native'
-      const expectedServer = native
-        ? 'TypeScript Native (tsgo)'
-        : 'typescript-language-server (tsserver)'
-      // The tooltip lives in `data-tooltip` (TooltipProvider replaces native
-      // `title`); it disambiguates from the Editor Language entry which is also
-      // labelled "TypeScript".
-      const entry = statusbar.locator(`button[data-tooltip*="${expectedServer}"]`)
-      await expect(entry).toBeVisible({ timeout: 30000 })
-      // Icon-only text: the accessible name falls back to the tooltip.
-      await expect(entry).toHaveAttribute(
-        'aria-label',
-        new RegExp(expectedServer.replace(/[()]/g, '\\$&')),
-      )
-      await expect(entry).toHaveAttribute('data-tooltip', /\d+\.\d+\.\d+/)
-    },
-  )
+    const statusbar = page.getByTestId('part-statusbar')
+    // Mirrors the main-process preference chain: env override, else the
+    // shared default (there's no settings.json in the e2e profile).
+    const native =
+      process.env.UNIVERSE_TS_SERVER !== undefined
+        ? process.env.UNIVERSE_TS_SERVER === 'native'
+        : DEFAULT_TS_SERVER_IMPLEMENTATION === 'native'
+    const expectedServer = native
+      ? 'TypeScript Native (tsgo)'
+      : 'typescript-language-server (tsserver)'
+    // The tooltip lives in `data-tooltip` (TooltipProvider replaces native
+    // `title`); it disambiguates from the Editor Language entry which is also
+    // labelled "TypeScript".
+    const entry = statusbar.locator(`button[data-tooltip*="${expectedServer}"]`)
+    await expect(entry).toBeVisible({ timeout: 30000 })
+    // Icon-only text: the accessible name falls back to the tooltip.
+    await expect(entry).toHaveAttribute(
+      'aria-label',
+      new RegExp(expectedServer.replace(/[()]/g, '\\$&')),
+    )
+    await expect(entry).toHaveAttribute('data-tooltip', /\d+\.\d+\.\d+/)
+  })
 })

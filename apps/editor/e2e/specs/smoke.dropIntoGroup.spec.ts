@@ -101,114 +101,112 @@ async function dragTabToOwnRightEdge(
 }
 
 test.describe('@p1 drop into a specific group', () => {
-  test(
-    'dropping onto the right group opens the file there, not in the active left group',
-    { tag: '@serial' },
-    async ({ page, workbench }) => {
-      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-dropgrp-'))
-      await fs.writeFile(path.join(tmpDir, 'left.ts'), 'const l = 1\n')
-      await fs.writeFile(path.join(tmpDir, 'right.ts'), 'const r = 1\n')
-      await fs.writeFile(path.join(tmpDir, 'target.ts'), 'const t = 2\n')
-      const rootFs = tmpDir.replace(/\\/g, '/')
+  test('dropping onto the right group opens the file there, not in the active left group', async ({
+    page,
+    workbench,
+  }) => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-dropgrp-'))
+    await fs.writeFile(path.join(tmpDir, 'left.ts'), 'const l = 1\n')
+    await fs.writeFile(path.join(tmpDir, 'right.ts'), 'const r = 1\n')
+    await fs.writeFile(path.join(tmpDir, 'target.ts'), 'const t = 2\n')
+    const rootFs = tmpDir.replace(/\\/g, '/')
 
-      await workbench.waitForRestored()
-      await workbench.openWorkspace(tmpDir)
+    await workbench.waitForRestored()
+    await workbench.openWorkspace(tmpDir)
 
-      // left.ts in the left group; split (right group active); replace the right
-      // group's cloned left.ts with right.ts so the two groups are distinguishable,
-      // then re-activate the left group. Drop target lands on the non-active right.
-      await page.evaluate(
-        (p) => window.__E2E__!.openFileUri(p, { pinned: true }),
-        `${rootFs}/left.ts`,
+    // left.ts in the left group; split (right group active); replace the right
+    // group's cloned left.ts with right.ts so the two groups are distinguishable,
+    // then re-activate the left group. Drop target lands on the non-active right.
+    await page.evaluate(
+      (p) => window.__E2E__!.openFileUri(p, { pinned: true }),
+      `${rootFs}/left.ts`,
+    )
+    await workbench.runCommand('workbench.action.splitEditorRight')
+    await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(2)
+    await page.evaluate(
+      (p) => window.__E2E__!.openFileUri(p, { pinned: true }),
+      `${rootFs}/right.ts`,
+    )
+    await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.focusFirstGroup'))
+    await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(2)
+
+    const bodies = page.locator('[data-testid="editor-group-body"]')
+    await expect(bodies).toHaveCount(2, { timeout: 5000 })
+
+    // Drop target.ts onto the right (index 1) group.
+    await dropUriOntoGroup(page, 1, `file:///${rootFs}/target.ts`)
+
+    // target.ts must become the active editor (it opened in the right group and
+    // that group activated), NOT silently open in the left group.
+    await expect
+      .poll(() => workbench.getActiveEditorUri(), { timeout: 5000 })
+      .toContain('target.ts')
+    // The active group must be the RIGHT one: it holds right.ts + target.ts.
+    // Were the drop opened in the (previously active) left group instead, the
+    // active group would be left.ts's group and would NOT contain right.ts.
+    // (The right group also carries left.ts cloned by the split — expected.)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveGroupEditorUris()), {
+        timeout: 5000,
+      })
+      .toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('right.ts'),
+          expect.stringContaining('target.ts'),
+        ]),
       )
-      await workbench.runCommand('workbench.action.splitEditorRight')
-      await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(2)
-      await page.evaluate(
-        (p) => window.__E2E__!.openFileUri(p, { pinned: true }),
-        `${rootFs}/right.ts`,
+
+    await tryCleanup(tmpDir)
+  })
+
+  test('a file already open in the active group still opens when dropped on another group', async ({
+    page,
+    workbench,
+  }) => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-dropgrp2-'))
+    await fs.writeFile(path.join(tmpDir, 'shared.ts'), 'const s = 1\n')
+    await fs.writeFile(path.join(tmpDir, 'other.ts'), 'const o = 1\n')
+    const rootFs = tmpDir.replace(/\\/g, '/')
+
+    await workbench.waitForRestored()
+    await workbench.openWorkspace(tmpDir)
+
+    // shared.ts open in the left group; split (right group now active).
+    await page.evaluate(
+      (p) => window.__E2E__!.openFileUri(p, { pinned: true }),
+      `${rootFs}/shared.ts`,
+    )
+    await workbench.runCommand('workbench.action.splitEditorRight')
+    await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(2)
+    // Replace the right group's cloned shared.ts with other.ts so the right group
+    // is non-empty but does NOT already contain shared.ts; then re-activate left.
+    await page.evaluate(
+      (p) => window.__E2E__!.openFileUri(p, { pinned: true }),
+      `${rootFs}/other.ts`,
+    )
+    await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.focusFirstGroup'))
+    await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(2)
+
+    const bodies = page.locator('[data-testid="editor-group-body"]')
+    await expect(bodies).toHaveCount(2, { timeout: 5000 })
+
+    // Drop shared.ts (already open in the active left group) onto the right group.
+    await dropUriOntoGroup(page, 1, `file:///${rootFs}/shared.ts`)
+
+    // It must open in the right group (now active) alongside other.ts, not no-op.
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveGroupEditorUris()), {
+        timeout: 5000,
+      })
+      .toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('other.ts'),
+          expect.stringContaining('shared.ts'),
+        ]),
       )
-      await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.focusFirstGroup'))
-      await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(2)
 
-      const bodies = page.locator('[data-testid="editor-group-body"]')
-      await expect(bodies).toHaveCount(2, { timeout: 5000 })
-
-      // Drop target.ts onto the right (index 1) group.
-      await dropUriOntoGroup(page, 1, `file:///${rootFs}/target.ts`)
-
-      // target.ts must become the active editor (it opened in the right group and
-      // that group activated), NOT silently open in the left group.
-      await expect
-        .poll(() => workbench.getActiveEditorUri(), { timeout: 5000 })
-        .toContain('target.ts')
-      // The active group must be the RIGHT one: it holds right.ts + target.ts.
-      // Were the drop opened in the (previously active) left group instead, the
-      // active group would be left.ts's group and would NOT contain right.ts.
-      // (The right group also carries left.ts cloned by the split — expected.)
-      await expect
-        .poll(() => page.evaluate(() => window.__E2E__!.getActiveGroupEditorUris()), {
-          timeout: 5000,
-        })
-        .toEqual(
-          expect.arrayContaining([
-            expect.stringContaining('right.ts'),
-            expect.stringContaining('target.ts'),
-          ]),
-        )
-
-      await tryCleanup(tmpDir)
-    },
-  )
-
-  test(
-    'a file already open in the active group still opens when dropped on another group',
-    { tag: '@serial' },
-    async ({ page, workbench }) => {
-      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-dropgrp2-'))
-      await fs.writeFile(path.join(tmpDir, 'shared.ts'), 'const s = 1\n')
-      await fs.writeFile(path.join(tmpDir, 'other.ts'), 'const o = 1\n')
-      const rootFs = tmpDir.replace(/\\/g, '/')
-
-      await workbench.waitForRestored()
-      await workbench.openWorkspace(tmpDir)
-
-      // shared.ts open in the left group; split (right group now active).
-      await page.evaluate(
-        (p) => window.__E2E__!.openFileUri(p, { pinned: true }),
-        `${rootFs}/shared.ts`,
-      )
-      await workbench.runCommand('workbench.action.splitEditorRight')
-      await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(2)
-      // Replace the right group's cloned shared.ts with other.ts so the right group
-      // is non-empty but does NOT already contain shared.ts; then re-activate left.
-      await page.evaluate(
-        (p) => window.__E2E__!.openFileUri(p, { pinned: true }),
-        `${rootFs}/other.ts`,
-      )
-      await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.focusFirstGroup'))
-      await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(2)
-
-      const bodies = page.locator('[data-testid="editor-group-body"]')
-      await expect(bodies).toHaveCount(2, { timeout: 5000 })
-
-      // Drop shared.ts (already open in the active left group) onto the right group.
-      await dropUriOntoGroup(page, 1, `file:///${rootFs}/shared.ts`)
-
-      // It must open in the right group (now active) alongside other.ts, not no-op.
-      await expect
-        .poll(() => page.evaluate(() => window.__E2E__!.getActiveGroupEditorUris()), {
-          timeout: 5000,
-        })
-        .toEqual(
-          expect.arrayContaining([
-            expect.stringContaining('other.ts'),
-            expect.stringContaining('shared.ts'),
-          ]),
-        )
-
-      await tryCleanup(tmpDir)
-    },
-  )
+    await tryCleanup(tmpDir)
+  })
 
   // Repro of the reported bug: open a, open b, drag b's tab to the right to split
   // into two groups, then drag c (a file) onto a tab/body. The split unmounts b's
@@ -216,50 +214,49 @@ test.describe('@p1 drop into a specific group', () => {
   // ({editor,sourceGroupId}) lingers in the DragSessionProvider. The subsequent
   // file drop then reads that stale payload, takes the "tab move" branch instead
   // of openDroppedResource — the open silently no-ops (nothing in the output).
-  test(
-    'a file dropped after a tab-split still opens (stale drag payload cleared)',
-    { tag: '@serial' },
-    async ({ page, workbench }) => {
-      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-dropgrp3-'))
-      await fs.writeFile(path.join(tmpDir, 'a.ts'), 'const a = 1\n')
-      await fs.writeFile(path.join(tmpDir, 'b.ts'), 'const b = 1\n')
-      await fs.writeFile(path.join(tmpDir, 'c.ts'), 'const c = 1\n')
-      const rootFs = tmpDir.replace(/\\/g, '/')
+  test('a file dropped after a tab-split still opens (stale drag payload cleared)', async ({
+    page,
+    workbench,
+  }) => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-dropgrp3-'))
+    await fs.writeFile(path.join(tmpDir, 'a.ts'), 'const a = 1\n')
+    await fs.writeFile(path.join(tmpDir, 'b.ts'), 'const b = 1\n')
+    await fs.writeFile(path.join(tmpDir, 'c.ts'), 'const c = 1\n')
+    const rootFs = tmpDir.replace(/\\/g, '/')
 
-      await workbench.waitForRestored()
-      await workbench.openWorkspace(tmpDir)
+    await workbench.waitForRestored()
+    await workbench.openWorkspace(tmpDir)
 
-      // Open a then b in the single (left) group.
-      await page.evaluate((p) => window.__E2E__!.openFileUri(p, { pinned: true }), `${rootFs}/a.ts`)
-      await page.evaluate((p) => window.__E2E__!.openFileUri(p, { pinned: true }), `${rootFs}/b.ts`)
-      await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(1)
+    // Open a then b in the single (left) group.
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p, { pinned: true }), `${rootFs}/a.ts`)
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p, { pinned: true }), `${rootFs}/b.ts`)
+    await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(1)
 
-      const bodies = page.locator('[data-testid="editor-group-body"]')
-      await expect(bodies).toHaveCount(1, { timeout: 5000 })
-      // Body needs a real layout box before the edge-split drop.
-      await expect
-        .poll(
-          async () => {
-            const box = await bodies.nth(0).boundingBox()
-            return box ? Math.min(box.width, box.height) : 0
-          },
-          { timeout: 5000 },
-        )
-        .toBeGreaterThan(0)
+    const bodies = page.locator('[data-testid="editor-group-body"]')
+    await expect(bodies).toHaveCount(1, { timeout: 5000 })
+    // Body needs a real layout box before the edge-split drop.
+    await expect
+      .poll(
+        async () => {
+          const box = await bodies.nth(0).boundingBox()
+          return box ? Math.min(box.width, box.height) : 0
+        },
+        { timeout: 5000 },
+      )
+      .toBeGreaterThan(0)
 
-      // Drag b's tab to the right edge → splits into a second group. No `dragend`
-      // fires on the (now unmounted) source tab, so the payload would linger.
-      await dragTabToOwnRightEdge(page, 0, 'b.ts')
-      await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(2)
-      await expect(bodies).toHaveCount(2, { timeout: 5000 })
+    // Drag b's tab to the right edge → splits into a second group. No `dragend`
+    // fires on the (now unmounted) source tab, so the payload would linger.
+    await dragTabToOwnRightEdge(page, 0, 'b.ts')
+    await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(2)
+    await expect(bodies).toHaveCount(2, { timeout: 5000 })
 
-      // Now drop c.ts onto the (left, index 0) group. Before the fix this hit the
-      // stale-payload "tab move" branch and no-op'd; c.ts would never open.
-      await dropUriOntoGroup(page, 0, `file:///${rootFs}/c.ts`)
+    // Now drop c.ts onto the (left, index 0) group. Before the fix this hit the
+    // stale-payload "tab move" branch and no-op'd; c.ts would never open.
+    await dropUriOntoGroup(page, 0, `file:///${rootFs}/c.ts`)
 
-      await expect.poll(() => workbench.getActiveEditorUri(), { timeout: 5000 }).toContain('c.ts')
+    await expect.poll(() => workbench.getActiveEditorUri(), { timeout: 5000 }).toContain('c.ts')
 
-      await tryCleanup(tmpDir)
-    },
-  )
+    await tryCleanup(tmpDir)
+  })
 })

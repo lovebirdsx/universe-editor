@@ -68,7 +68,9 @@ test.describe('@p1 dirty diff peek', () => {
     git(repoDir, 'add', '-A')
     git(repoDir, 'commit', '-m', 'init')
 
-    const app = await launchCoreGitApp({ userDataDir })
+    // Launch with the repo pinned as the workspace — avoids the double extension-host
+    // restart a post-boot openWorkspace incurs (workspace re-pin + trust flip).
+    const app = await launchCoreGitApp({ userDataDir, extraArgs: [repoDir] })
 
     try {
       const page = await app.firstWindow()
@@ -78,8 +80,7 @@ test.describe('@p1 dirty diff peek', () => {
       )
       await evaluateWhenRestored(page)
 
-      // Open the git workspace and wait for the git extension's source control.
-      await page.evaluate((p) => window.__E2E__!.openWorkspace(p), repoDir)
+      // Wait for the git extension's source control against the pinned workspace.
       await expect
         .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
           timeout: 60_000,

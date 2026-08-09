@@ -59,7 +59,9 @@ test.describe('@p1 git view commit', () => {
     const userDataDir = makeUserDataDir()
     const { repoDir, secondHash } = makeRepo()
 
-    const app = await launchCoreGitApp({ userDataDir })
+    // Launch with the repo pinned as the workspace — avoids the double extension-host
+    // restart a post-boot openWorkspace incurs (workspace re-pin + trust flip).
+    const app = await launchCoreGitApp({ userDataDir, extraArgs: [repoDir] })
 
     try {
       const page = await app.firstWindow()
@@ -69,7 +71,6 @@ test.describe('@p1 git view commit', () => {
       )
       await evaluateWhenRestored(page)
 
-      await page.evaluate((p) => window.__E2E__!.openWorkspace(p), repoDir)
       await expect
         .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
           timeout: 60_000,
@@ -128,7 +129,9 @@ test.describe('@p1 git view commit', () => {
     const userDataDir = makeUserDataDir()
     const { repoDir, secondHash } = makeRepo()
 
-    const app = await launchCoreGitApp({ userDataDir })
+    // Launch with the repo pinned as the workspace — avoids the double extension-host
+    // restart a post-boot openWorkspace incurs (workspace re-pin + trust flip).
+    const app = await launchCoreGitApp({ userDataDir, extraArgs: [repoDir] })
 
     try {
       const page = await app.firstWindow()
@@ -138,7 +141,6 @@ test.describe('@p1 git view commit', () => {
       )
       await evaluateWhenRestored(page)
 
-      await page.evaluate((p) => window.__E2E__!.openWorkspace(p), repoDir)
       await expect
         .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
           timeout: 60_000,
@@ -172,7 +174,9 @@ test.describe('@p1 git view commit', () => {
     const userDataDir = makeUserDataDir()
     const { repoDir, firstHash, secondHash } = makeRepo()
 
-    const app = await launchCoreGitApp({ userDataDir })
+    // Launch with the repo pinned as the workspace — avoids the double extension-host
+    // restart a post-boot openWorkspace incurs (workspace re-pin + trust flip).
+    const app = await launchCoreGitApp({ userDataDir, extraArgs: [repoDir] })
 
     try {
       const page = await app.firstWindow()
@@ -182,7 +186,6 @@ test.describe('@p1 git view commit', () => {
       )
       await evaluateWhenRestored(page)
 
-      await page.evaluate((p) => window.__E2E__!.openWorkspace(p), repoDir)
       await expect
         .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
           timeout: 60_000,

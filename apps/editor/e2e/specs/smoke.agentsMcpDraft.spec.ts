@@ -134,43 +134,48 @@ test.describe('@p1 agents MCP reload preserves prompt draft', () => {
     await expectDraftRestored(page, 'follow-up in progress')
   })
 
-  test('a pasted image attachment survives the reload @regression', async ({
-    page,
-    electronApp,
-    workbench,
-  }) => {
-    await workbench.waitForRestored()
-    await workbench.waitForBootstrapFocusSettled()
-    await setupEchoSession(page, { ECHO_AGENT_IMAGE: '1' })
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getActiveAcpSessionImageSupported()), {
-        timeout: 10000,
-      })
-      .toBe(true)
+  // @serial: seeds the OS clipboard — a global resource. Another worker writing
+  // the clipboard concurrently (smoke.acpPasteImage) races this test's
+  // write→paste sequence and flakes both.
+  test(
+    'a pasted image attachment survives the reload @regression',
+    { tag: '@serial' },
+    async ({ page, electronApp, workbench }) => {
+      await workbench.waitForRestored()
+      await workbench.waitForBootstrapFocusSettled()
+      await setupEchoSession(page, { ECHO_AGENT_IMAGE: '1' })
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveAcpSessionImageSupported()), {
+          timeout: 10000,
+        })
+        .toBe(true)
 
-    // Seed the OS clipboard with a PNG and paste it for real.
-    await electronApp.evaluate(({ clipboard, nativeImage }, b64) => {
-      const img = nativeImage.createFromBuffer(Buffer.from(b64, 'base64'))
-      if (img.isEmpty()) throw new Error('Failed to create test nativeImage')
-      clipboard.writeImage(img)
-    }, PNG_BASE64)
-    await page.evaluate(() => void window.__E2E__!.runCommand('workbench.action.agent.focusInput'))
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('editorTextFocus')), {
+      // Seed the OS clipboard with a PNG and paste it for real.
+      await electronApp.evaluate(({ clipboard, nativeImage }, b64) => {
+        const img = nativeImage.createFromBuffer(Buffer.from(b64, 'base64'))
+        if (img.isEmpty()) throw new Error('Failed to create test nativeImage')
+        clipboard.writeImage(img)
+      }, PNG_BASE64)
+      await page.evaluate(
+        () => void window.__E2E__!.runCommand('workbench.action.agent.focusInput'),
+      )
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('editorTextFocus')), {
+          timeout: 5000,
+        })
+        .toBe(true)
+      await page.keyboard.press('Control+V')
+      await expect(page.locator('[data-testid="acp-prompt-image-chips"]')).toBeVisible({
         timeout: 5000,
       })
-      .toBe(true)
-    await page.keyboard.press('Control+V')
-    await expect(page.locator('[data-testid="acp-prompt-image-chips"]')).toBeVisible({
-      timeout: 5000,
-    })
 
-    const beforeId = await page.evaluate(() => window.__E2E__!.getActiveAcpSessionId())
-    await toggleMcpAndWaitReload(page, beforeId)
+      const beforeId = await page.evaluate(() => window.__E2E__!.getActiveAcpSessionId())
+      await toggleMcpAndWaitReload(page, beforeId)
 
-    // The replacement session must re-render the attached image chip.
-    await expect(page.locator('[data-testid="acp-prompt-image-chips"]')).toBeVisible({
-      timeout: 10000,
-    })
-  })
+      // The replacement session must re-render the attached image chip.
+      await expect(page.locator('[data-testid="acp-prompt-image-chips"]')).toBeVisible({
+        timeout: 10000,
+      })
+    },
+  )
 })

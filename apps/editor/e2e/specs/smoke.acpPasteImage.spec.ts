@@ -27,53 +27,58 @@ const PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAE0lEQVR4AWP8z8DwnwEImBigAAAfFwICgH3ifwAAAABJRU5ErkJggg=='
 
 test.describe('@p1 acp paste image', () => {
-  test('pasting an image into the prompt attaches it as a chip @regression', async ({
-    page,
-    electronApp,
-    workbench,
-  }) => {
-    await workbench.waitForRestored()
+  // @serial: seeds the OS clipboard — a global resource. Another worker writing
+  // the clipboard concurrently (smoke.agentsMcpDraft's pasted-image case) races
+  // this test's write→read sequence and flakes both.
+  test(
+    'pasting an image into the prompt attaches it as a chip @regression',
+    { tag: '@serial' },
+    async ({ page, electronApp, workbench }) => {
+      await workbench.waitForRestored()
 
-    // Echo agent with image capability so the paste path is not gated off.
-    await page.evaluate(
-      ([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p, { ECHO_AGENT_IMAGE: '1' }),
-      ['echo', ECHO_AGENT_PATH] as const,
-    )
+      // Echo agent with image capability so the paste path is not gated off.
+      await page.evaluate(
+        ([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p, { ECHO_AGENT_IMAGE: '1' }),
+        ['echo', ECHO_AGENT_PATH] as const,
+      )
 
-    await page.evaluate(() => {
-      void window.__E2E__!.runCommand('workbench.action.agent.newSession')
-    })
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10000 })
-      .toBe(1)
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getActiveAcpSessionImageSupported()), {
-        timeout: 10000,
+      await page.evaluate(() => {
+        void window.__E2E__!.runCommand('workbench.action.agent.newSession')
       })
-      .toBe(true)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10000 })
+        .toBe(1)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveAcpSessionImageSupported()), {
+          timeout: 10000,
+        })
+        .toBe(true)
 
-    // Seed the OS clipboard with a PNG via the main-process clipboard module.
-    await electronApp.evaluate(({ clipboard, nativeImage }, b64) => {
-      const img = nativeImage.createFromBuffer(Buffer.from(b64, 'base64'))
-      if (img.isEmpty()) throw new Error('Failed to create test nativeImage')
-      clipboard.writeImage(img)
-    }, PNG_BASE64)
-    expect(await electronApp.evaluate(({ clipboard }) => !clipboard.readImage().isEmpty())).toBe(
-      true,
-    )
+      // Seed the OS clipboard with a PNG via the main-process clipboard module.
+      await electronApp.evaluate(({ clipboard, nativeImage }, b64) => {
+        const img = nativeImage.createFromBuffer(Buffer.from(b64, 'base64'))
+        if (img.isEmpty()) throw new Error('Failed to create test nativeImage')
+        clipboard.writeImage(img)
+      }, PNG_BASE64)
+      expect(await electronApp.evaluate(({ clipboard }) => !clipboard.readImage().isEmpty())).toBe(
+        true,
+      )
 
-    // Focus the prompt editor (native-edit-context) and paste for real.
-    await page.evaluate(() => void window.__E2E__!.runCommand('workbench.action.agent.focusInput'))
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('editorTextFocus')), {
+      // Focus the prompt editor (native-edit-context) and paste for real.
+      await page.evaluate(
+        () => void window.__E2E__!.runCommand('workbench.action.agent.focusInput'),
+      )
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('editorTextFocus')), {
+          timeout: 5000,
+        })
+        .toBe(true)
+      await page.keyboard.press('Control+V')
+
+      // The chip container appears once the pasted image is attached.
+      await expect(page.locator('[data-testid="acp-prompt-image-chips"]')).toBeVisible({
         timeout: 5000,
       })
-      .toBe(true)
-    await page.keyboard.press('Control+V')
-
-    // The chip container appears once the pasted image is attached.
-    await expect(page.locator('[data-testid="acp-prompt-image-chips"]')).toBeVisible({
-      timeout: 5000,
-    })
-  })
+    },
+  )
 })
