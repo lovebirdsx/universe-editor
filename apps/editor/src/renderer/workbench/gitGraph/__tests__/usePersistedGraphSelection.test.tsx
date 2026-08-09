@@ -81,10 +81,14 @@ function setup(
 }
 
 async function flush(): Promise<void> {
-  for (let i = 0; i < 8; i++) await Promise.resolve()
-  // Storage-settle setStates land outside act(): React's concurrent scheduler
-  // flushes them on a macrotask, not a microtask.
-  await new Promise((resolve) => setTimeout(resolve, 0))
+  // Storage-settle setStates land outside act(): each state → render → passive
+  // effect link needs its own macrotask (React's concurrent scheduler does not
+  // flush them on microtasks), so pump several rounds to let loaded CI
+  // runners settle the whole chain.
+  for (let round = 0; round < 3; round++) {
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
   for (let i = 0; i < 8; i++) await Promise.resolve()
 }
 
