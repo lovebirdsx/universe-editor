@@ -316,6 +316,13 @@ perforce e2e `swarmReview.spec.ts`「routes an oversized Chinese-path csv to the
 
 ---
 
+**案例 70 — 焦点交付后异步 payload 触发 keyed remount 换掉被聚焦的树节点：toBeFocused 恒 inactive（同 spec 家族与案例 64 同族，Commit Changes 视图侧）**
+信号：`expect(tree).toBeFocused()` received 恒 `data-focused="false"`（**稳定卡值**，63 采样全卡、retry 同形态救不回），但 error-context aria 快照显示树**内容已正确**（数据落地、焦点没落上）=「焦点交付 → 异步数据落地 → keyed remount 把被聚焦的 DOM 节点换掉」竞态；时序特征=断言焦点前一步刚触发了一次**异步**数据推送（本例 ArrowDown 改选中 → 异步拉 commit 变更），慢机上数据必然晚于焦点交付。
+`smoke.gitGraphReveal`「focus lands on the commit list on open, arrows move, Enter focuses Commit Changes」CI ubuntu 挂、本地 Windows 稳过——trace 时间线：ArrowDown(41160ms) → rowSelected 断言过(41212) → **Enter(41213)**。Enter 走 `useGraphKeyboardNav.openCommitChanges` → `FocusCommitChangesAction` → `LayoutService.focusView(commitChanges)` 把 DOM 焦点放到 Commit Changes 树的 `[role=tree]` div；与此同时 ArrowDown 的 `applySelection` 还在异步拉 firstHash 的 `getCommitDetails`（2 次 git spawn，必然晚于 Enter）→ resolve 后 `commitChangesViewState.show()` bump `tick` → `CommitChangesView` 的 `<CommitChangesContent key={tick}>` **整体重挂载**，被聚焦的旧树 div 在同一 commit 被换掉、焦点掉 `<body>` 且永不归还（新树无人再 focus）→ `data-focused=false` 恒稳定。与案例 64 同族（同一 spec、同一「graph 选中 → 异步推 Commit Changes」桥）：64 是 reveal 与初始 load 竞态抹**选中**，本条是 remount 抹**焦点**；区别=64 修在 graph 编辑器侧（pendingReveal 入队），本条病灶在共享视图侧，Git/Perforce 两编辑器经同一 `FocusCommitChangesAction` 链路自动同愈。
+修（产品侧，spec 断言不动）：`ChangesTree`（Commit/Session Changes 共用抽象）加「同 commit 换树保焦」——模块级 `remountFocusIntent: Set<viewId>`；卸载的 layout cleanup 里若旧树 `contains(document.activeElement)` 则记录 viewId 并 `queueMicrotask` 过期（孤立卸载/关视图不泄漏焦点意图），新实例的 mount layout effect 命中即 `treeRef.current.focus({preventScroll:true})`（`onTreeFocus` 接管落行）。**必须用 layout effect**：microtask 过期先于 passive effect 执行，passive effect 消费不到同 commit 的意图。回归单测（`CommitChangesView.test.tsx`）：「keeps DOM focus on the tree when a show() remount swaps it」（focus 旧树 → show() 换 tick → 断言新树取得焦点，先红后绿）+「an unfocused tree does not steal focus…」（焦点在外部按钮时 remount 不抢焦）。整类扫：8 个 `useViewFocusable` 消费方（Timeline/Search/Scm/Outline/Explorer/Extensions/Session Changes）均原地更新、无 keyed remount，唯一病灶即 Commit Changes 的 `key={tick}`；Session Changes 的 Empty↔树切换跨 commit，microtask 过期保证不被误恢复。验证：相关 52 文件 559 单测 + `pnpm check` + 该 spec `--repeat-each=5` 20/20 + `e2e:smoke` 65/65 全绿。锚：`workbench/changesTree/ChangesTree.tsx`（remountFocusIntent）；`workbench/scm/commitChanges/CommitChangesView.tsx:233`（`key={tick}` remount 源）；`actions/commitChangesActions.ts`（FocusCommitChangesAction）；`services/layout/LayoutService.ts`（focusView 2s 元素轮询）。
+
+---
+
 ## 根治 TODO
 
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。

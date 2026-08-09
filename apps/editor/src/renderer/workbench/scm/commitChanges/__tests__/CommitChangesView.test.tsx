@@ -305,6 +305,46 @@ describe('CommitChangesView', () => {
     expect(executeCommand).toHaveBeenCalledWith('git-graph.openFileDiff', { path: 'src/a.ts' })
   })
 
+  it('keeps DOM focus on the tree when a show() remount swaps it', () => {
+    renderView()
+    act(() => {
+      commitChangesViewState.show(payload())
+    })
+
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    tree.focus()
+    expect(document.activeElement).toBe(tree)
+
+    // The next payload lands asynchronously after the focus hand-off (Enter in
+    // the graph, then the selected commit's details resolve) and remounts the
+    // content — the hand-off must survive the swap.
+    act(() => {
+      commitChangesViewState.show(payload({ title: 'b2c3d4e — follow-up', commitRef: 'b2c3d4e' }))
+    })
+
+    const remounted = document.querySelector('[role="tree"]') as HTMLElement
+    expect(remounted).not.toBe(tree)
+    expect(document.activeElement).toBe(remounted)
+  })
+
+  it('an unfocused tree does not steal focus when show() remounts it', () => {
+    renderView()
+    act(() => {
+      commitChangesViewState.show(payload())
+    })
+
+    const elsewhere = document.createElement('button')
+    document.body.appendChild(elsewhere)
+    elsewhere.focus()
+
+    act(() => {
+      commitChangesViewState.show(payload({ title: 'b2c3d4e — follow-up', commitRef: 'b2c3d4e' }))
+    })
+
+    expect(document.activeElement).toBe(elsewhere)
+    elsewhere.remove()
+  })
+
   it('Enter on a folder row toggles it instead of opening a diff', () => {
     renderView()
     act(() => {

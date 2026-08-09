@@ -68,6 +68,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 探针抛 `[E2E] no durable active ACP session` / echo agent `session/load` 拒 `session not found`、失败点在「发送 prompt 后立刻依赖 durable id/agent 落账」=user 消息本地乐观上屏不等握手；就位信号=agent 回复进 timeline，poll `status==='idle'` 有假窗口不充分 → 案例 67
 - 大 fixture 多次 print 往返+裸 toBeVisible 等满不出现、initial+retry 同形态=「纯慢 vs 静默 '' 误路由」双假设同修（失败结构化传播+断言先 poll 任一终态）；artifact `if-no-files-found: ignore` 把上传路径错位静默吞掉致无现场 → 案例 68（**真根因后来定案在案例 69**）
 - 案例 68 修后同形态再挂、仅 CI Linux 偶发本地 Windows 全绿+失败截图恒黑+aria 快照只剩 alert 空壳=fake CLI 大 stdout 后 `process.exit()` 在 POSIX 截断 → 尺寸路由翻转 → providerless webview 静默超时；修=`process.exitCode` 自然退出+poll 终态补 custom-editor+失败自动收集 userData/logs → 案例 69
+- `toBeFocused` 恒 `data-focused="false"`（稳定卡值）但 aria 快照树内容已正确、断言前一步刚触发异步数据推送=焦点交付后 payload 落地触发 keyed remount 换掉被聚焦节点；修=ChangesTree 同 commit 换树保焦（模块级 viewId 意图集+microtask 过期）→ 案例 70（与案例 64 同族互参）
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

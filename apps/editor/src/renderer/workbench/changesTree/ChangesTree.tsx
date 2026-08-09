@@ -97,6 +97,15 @@ function rowClassName(base: string, isSelected: boolean, isFocused: boolean): st
     .join(' ')
 }
 
+// The owning views remount this tree per async payload (Commit Changes keys its
+// content by the show() tick): the focused tree div is swapped out in a single
+// commit and DOM focus falls to <body>, silently dropping a focus hand-off
+// (e.g. Enter in the graph) that landed just before the payload resolved. The
+// outgoing instance flags its viewId here and the incoming one re-focuses on
+// mount; the microtask expiry keeps a lone unmount (view closed, not replaced)
+// from leaking a stale focus intent.
+const remountFocusIntent = new Set<string>()
+
 /** Plain click selects and runs `onPlain`; shift/ctrl follow the shared tree
  *  selection semantics (same helper shape as ScmView's rows). */
 function rowClick<TEntry>(
@@ -332,6 +341,22 @@ export function ChangesTree<TEntry>({
   useViewFocusable(
     viewId,
     useCallback(() => treeRef.current, []),
+  )
+
+  // Layout effects on purpose: the intent expires on a microtask, which runs
+  // before passive effects — only a layout effect consumes it within the same
+  // commit that swapped the DOM.
+  useLayoutEffect(() => {
+    if (remountFocusIntent.delete(viewId)) treeRef.current?.focus({ preventScroll: true })
+  }, [viewId])
+  useLayoutEffect(
+    () => () => {
+      if (treeRef.current !== null && treeRef.current.contains(document.activeElement)) {
+        remountFocusIntent.add(viewId)
+        queueMicrotask(() => remountFocusIntent.delete(viewId))
+      }
+    },
+    [viewId],
   )
 
   // Remember the focused file so a remount (fresh TreeModel) can restore it
