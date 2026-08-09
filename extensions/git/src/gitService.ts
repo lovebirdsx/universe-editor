@@ -76,6 +76,11 @@ export function gitExec(
       resolve(result)
     })
     if (options?.input !== undefined) {
+      // git 可能在读完 stdin 前退出（如快速失败），此时写入报 EPIPE/EOF；
+      // 结果语义由 exitCode 承载，这里只记录不抛出
+      proc.stdin.on('error', (err: NodeJS.ErrnoException) => {
+        log?.(`  stdin write failed: ${err.code ?? err.message}`)
+      })
       proc.stdin.end(options.input)
     }
   })
