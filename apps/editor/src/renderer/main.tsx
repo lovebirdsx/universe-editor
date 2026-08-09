@@ -54,6 +54,7 @@ import {
   localize,
   mark,
   markAsSingleton,
+  onUnexpectedError,
   setDisposableTracker,
   setErrorTelemetryHook,
   setUnexpectedErrorHandler,
@@ -908,7 +909,26 @@ async function bootstrapWorkbench(): Promise<void> {
   const [{ Workbench }, { WorkbenchErrorBoundary }] = await workbenchModulesPromise
 
   mark(PerfMarks.rendererWillMountReact)
-  reactRoot = createRoot(rootEl)
+  reactRoot = createRoot(rootEl, {
+    // React 19 unmounts the whole root when an error escapes every boundary
+    // (e.g. a second throw while swapping in the boundary's fallback). The
+    // default handler only funnels through reportError → window.onerror, where
+    // the benign-error filter can swallow it without a trace — a black window
+    // with live services and zero log lines (CI case 71). Log unconditionally
+    // here so a dead tree always leaves a record, then keep the standard
+    // handler chain (toast + telemetry) running.
+    onUncaughtError: (error, info) => {
+      const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
+      rootLogger.error(
+        `[react] uncaught error — root unmounted: ${detail}${info.componentStack ?? ''}`,
+      )
+      onUnexpectedError(error)
+    },
+    onRecoverableError: (error) => {
+      const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
+      rootLogger.warn(`[react] recoverable error: ${detail}`)
+    },
+  })
   reactRoot.render(
     <StrictMode>
       <WorkbenchErrorBoundary logger={rootLogger}>

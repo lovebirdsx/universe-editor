@@ -130,24 +130,42 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
       this._persistTimer = null
     }
     this._suspendPersist = true
+    // Editors open right now belong to the outgoing scope. Anything opened
+    // while the storage read below is in flight arrived after the workspace
+    // swap (e.g. openFolder resolved, then the user opened a file) and belongs
+    // to the new scope — detach it first and re-admit it after the teardown,
+    // never wipe it.
+    const baseline = new Set(this._groups.groups.flatMap((g) => g.editors))
     try {
       const raw = await this._storage.get<PersistedWorkspaceState>(
         WORKSPACE_STATE_STORAGE_KEY,
         StorageScope.WORKSPACE,
       )
+      const groups = this._groups as EditorGroupsService
+      const newcomers = groups.groups.flatMap((g) => g.editors).filter((e) => !baseline.has(e))
+      const activeNewcomer = newcomers.find((e) => groups.groups.some((g) => g.activeEditor === e))
+      for (const group of groups.groups) {
+        for (const editor of newcomers) group.detachEditor(editor)
+      }
       if (!raw || !raw.groups) {
         // No state for this workspace (or no workspace open) — tear down to a
         // single empty group so the previous workspace's editors don't leak.
-        ;(this._groups as EditorGroupsService).clearAll()
+        groups.clearAll()
         this._logger.debug('cleared workspace state (no persisted data)')
-        return
+      } else {
+        this._instantiation.invokeFunction((accessor) => {
+          groups.restore(raw.groups, accessor)
+        })
+        this._logger.debug(`restored workspace state groups=${groups.groups.length}`)
       }
-      this._instantiation.invokeFunction((accessor) => {
-        ;(this._groups as EditorGroupsService).restore(raw.groups, accessor)
-      })
-      this._logger.debug(
-        `restored workspace state groups=${(this._groups as EditorGroupsService).groups.length}`,
-      )
+      if (newcomers.length > 0) {
+        const target = groups.activeGroup
+        for (const editor of newcomers) target.openEditor(editor, { activate: false })
+        if (activeNewcomer) target.setActive(activeNewcomer)
+        this._logger.info(
+          `preserved ${newcomers.length} editor(s) opened during workspace state restore`,
+        )
+      }
     } catch (err) {
       this._logger.warn(
         'failed to restore workspace state',

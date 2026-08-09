@@ -69,6 +69,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 大 fixture 多次 print 往返+裸 toBeVisible 等满不出现、initial+retry 同形态=「纯慢 vs 静默 '' 误路由」双假设同修（失败结构化传播+断言先 poll 任一终态）；artifact `if-no-files-found: ignore` 把上传路径错位静默吞掉致无现场 → 案例 68（**真根因后来定案在案例 69**）
 - 案例 68 修后同形态再挂、仅 CI Linux 偶发本地 Windows 全绿+失败截图恒黑+aria 快照只剩 alert 空壳=fake CLI 大 stdout 后 `process.exit()` 在 POSIX 截断 → 尺寸路由翻转 → providerless webview 静默超时；修=`process.exitCode` 自然退出+poll 终态补 custom-editor+失败自动收集 userData/logs → 案例 69
 - `toBeFocused` 恒 `data-focused="false"`（稳定卡值）但 aria 快照树内容已正确、断言前一步刚触发异步数据推送=焦点交付后 payload 落地触发 keyed remount 换掉被聚焦节点；修=ChangesTree 同 commit 换树保焦（模块级 viewId 意图集+microtask 过期）→ 案例 70（与案例 64 同族互参）
+- poll context key 恒 `""`+截图纯黑+aria 只剩 alert 空壳+bootstrap 日志完整走完后静默（探针活着）=workspace-swap restore 竞态擦掉 swap 窗口内新开的编辑器；修=restore 读期间新进 editor 先 detach 再 re-admit 永不擦；React 19 逃逸边界错误静默 unmount root 且被 isBenignError 吞掉零留痕，createRoot 须显式 onUncaughtError 落盘 → 案例 71（与案例 33/69 的黑屏形态区分见详情）
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

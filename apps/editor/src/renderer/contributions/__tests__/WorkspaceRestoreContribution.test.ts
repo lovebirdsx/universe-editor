@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   Event,
+  EditorInput,
   EditorRegistry,
   IEditorGroupsService,
   IFileService,
@@ -141,13 +142,45 @@ function buildContribution(
 describe('WorkspaceRestoreContribution', () => {
   let providerDispose: (() => void) | undefined
 
+  let swapTestSeq = 0
+
+  // Distinct-identity inputs: WelcomeEditorInput instances all share one id
+  // (resource-derived) and would collide under the model's matches() equality.
+  class SwapTestInput extends EditorInput {
+    static readonly TYPE_ID = 'swap-test'
+    constructor(readonly path: string = `/${swapTestSeq++}`) {
+      super()
+    }
+    get typeId(): string {
+      return SwapTestInput.TYPE_ID
+    }
+    get resource(): URI {
+      return URI.from({ scheme: 'swap-test', path: this.path })
+    }
+    getName(): string {
+      return this.path
+    }
+    override serialize(): unknown {
+      return { path: this.path }
+    }
+  }
+
   beforeEach(() => {
+    swapTestSeq = 0
     const d = EditorRegistry.registerEditorProvider({
       typeId: WelcomeEditorInput.TYPE_ID,
       componentKey: 'welcome-test',
       deserialize: () => WelcomeEditorInput.deserialize(),
     })
-    providerDispose = () => d.dispose()
+    const d2 = EditorRegistry.registerEditorProvider({
+      typeId: SwapTestInput.TYPE_ID,
+      componentKey: 'swap-test',
+      deserialize: (data) => new SwapTestInput((data as { path: string }).path),
+    })
+    providerDispose = () => {
+      d.dispose()
+      d2.dispose()
+    }
   })
 
   afterEach(() => {
@@ -246,6 +279,113 @@ describe('WorkspaceRestoreContribution', () => {
     expect(groups.groups).toHaveLength(1)
     expect(groups.groups[0]?.count).toBe(0)
 
+    contribution.dispose()
+    groups.dispose()
+  })
+
+  it('keeps an editor opened while a fresh-workspace restore read is in flight', async () => {
+    // CI race (case 71): openFolder resolves, the e2e/user opens a file, and
+    // only then does the scope-swap restore finish its storage read. With no
+    // persisted state the restore used to clearAll() and wipe the just-opened
+    // editor — activeEditorLanguageId stuck at '' forever.
+    const groups = new EditorGroupsService()
+    const storage = makeStorage()
+    let resolveGet: ((v: unknown) => void) | undefined
+    vi.spyOn(storage, 'get').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveGet = resolve
+        }),
+    )
+    const { contribution } = buildContribution(storage, groups)
+
+    // The boot/swap restore is parked on the deferred read. The editor opened
+    // now belongs to the new workspace scope.
+    const newcomer = new SwapTestInput()
+    groups.activeGroup.openEditor(newcomer)
+
+    resolveGet?.(undefined)
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(groups.groups).toHaveLength(1)
+    expect(groups.groups[0]?.count).toBe(1)
+    expect(groups.groups[0]?.activeEditor).toBe(newcomer)
+    contribution.dispose()
+    groups.dispose()
+  })
+
+  it('closes outgoing-scope editors but keeps swap-window newcomers', async () => {
+    const groups = new EditorGroupsService()
+    const seed = new EditorGroupsService()
+    seed.activeGroup.openEditor(new SwapTestInput())
+    const initial: ISerializedEditorGroupsState = seed.toJSON()
+    seed.dispose()
+    const storage = makeStorage({ [WORKSPACE_STATE_STORAGE_KEY]: { groups: initial } })
+    const { contribution } = buildContribution(storage, groups)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(groups.groups[0]?.count).toBe(1)
+    const restored = groups.groups[0]!.editors[0]!
+
+    let resolveGet: ((v: unknown) => void) | undefined
+    vi.spyOn(storage, 'get').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveGet = resolve
+        }),
+    )
+    storage.fireScopeChange()
+    const newcomer = new SwapTestInput()
+    groups.activeGroup.openEditor(newcomer)
+
+    resolveGet?.(undefined)
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(groups.groups).toHaveLength(1)
+    expect(groups.groups[0]?.contains(restored)).toBe(false)
+    expect(groups.groups[0]?.contains(newcomer)).toBe(true)
+    expect(groups.groups[0]?.activeEditor).toBe(newcomer)
+    contribution.dispose()
+    groups.dispose()
+  })
+
+  it('keeps swap-window newcomers on top of restored persisted state', async () => {
+    const groups = new EditorGroupsService()
+    const storage = makeStorage()
+    const { contribution } = buildContribution(storage, groups)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const seed = new EditorGroupsService()
+    seed.activeGroup.openEditor(new SwapTestInput())
+    const incoming: ISerializedEditorGroupsState = seed.toJSON()
+    seed.dispose()
+
+    let resolveGet: ((v: unknown) => void) | undefined
+    vi.spyOn(storage, 'get').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveGet = resolve
+        }),
+    )
+    storage.fireScopeChange()
+    const newcomer = new SwapTestInput()
+    groups.activeGroup.openEditor(newcomer)
+
+    resolveGet?.({ groups: incoming })
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(groups.groups).toHaveLength(1)
+    expect(groups.groups[0]?.count).toBe(2)
+    expect(groups.groups[0]?.contains(newcomer)).toBe(true)
+    expect(groups.groups[0]?.activeEditor).toBe(newcomer)
     contribution.dispose()
     groups.dispose()
   })
