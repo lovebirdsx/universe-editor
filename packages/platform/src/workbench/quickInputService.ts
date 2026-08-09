@@ -38,6 +38,29 @@ export interface IQuickPickItem {
    */
   readonly keywords?: readonly string[]
   readonly highlights?: IQuickPickItemHighlights
+  /**
+   * Inline buttons rendered at the right edge of the item row, revealed on
+   * hover/focus (VSCode parity: the command palette's "Configure Keybinding"
+   * gear). Triggering one fires the picker's `onDidTriggerItemButton`; the
+   * picker does NOT dismiss itself — the handler owns the lifecycle (hide,
+   * rewrite `items`, ...).
+   */
+  readonly buttons?: readonly IQuickPickItemButton[]
+}
+
+/**
+ * A button rendered inside a quick pick item row. `iconId` is resolved to a
+ * concrete icon by the renderer, same contract as `IQuickPickItem.iconId`.
+ */
+export interface IQuickPickItemButton {
+  readonly iconId: string
+  readonly tooltip?: string
+}
+
+export interface IQuickPickItemButtonEvent<T extends IQuickPickItem = IQuickPickItem> {
+  readonly button: IQuickPickItemButton
+  readonly item: T
+  readonly keyMods: IKeyMods
 }
 
 export interface IQuickPickSeparator {
@@ -132,6 +155,11 @@ export interface IPickOptions {
    * the item is also removed from the visible list locally.
    */
   readonly onItemRemove?: (item: IQuickPickItem) => void
+  /**
+   * Fires when an item-level button (`IQuickPickItem.buttons`) is triggered.
+   * The picker stays open; the handler owns the lifecycle.
+   */
+  readonly onDidTriggerItemButton?: (event: IQuickPickItemButtonEvent) => void
   /**
    * Buttons shown at the right edge of the input row. Triggering one dismisses
    * the picker (so `pick` resolves `undefined`) and invokes `onDidTriggerButton`.
@@ -254,6 +282,14 @@ export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
   readonly onDidChangeActive: Event<T | undefined>
   /** Fires when a toolbar button is triggered. */
   readonly onDidTriggerButton: Event<IQuickInputButton>
+  /**
+   * Fires when an item-level button (`IQuickPickItem.buttons`) is triggered.
+   * Does NOT dismiss the picker — the handler owns the lifecycle (`hide()`,
+   * rewriting `items`, ...). Deviation from VSCode's `TriggerAction` enum:
+   * providers here hold the picker directly, so CLOSE_PICKER = `hide()` and
+   * REMOVE_ITEM = rewriting `items` need no intermediate enum.
+   */
+  readonly onDidTriggerItemButton: Event<IQuickPickItemButtonEvent<T>>
   /** Fires when the confirm (OK) button is clicked. Distinct from accepting an item. */
   readonly onDidTriggerOk: Event<void>
 

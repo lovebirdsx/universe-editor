@@ -11,7 +11,10 @@ import { CommandsRegistry, IContextKeyService, localize } from '@universe-editor
 import { Badge, IconButton, Input } from '@universe-editor/workbench-ui'
 import { ArrowDownWideNarrow, CircleDot, X } from 'lucide-react'
 import { useService } from '../useService.js'
-import { KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT } from '../preferences/preferencesFocus.js'
+import {
+  consumePendingKeybindingsSearchQuery,
+  KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT,
+} from '../preferences/preferencesFocus.js'
 import {
   IUserKeybindingsService,
   type IKeybindingRowTarget,
@@ -158,9 +161,17 @@ export function KeybindingsEditor(): JSX.Element {
     searchInputRef.current?.select()
   }, [])
   useEffect(() => {
-    focusSearch()
-    document.addEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
-    return () => document.removeEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
+    const applyFocusSearch = (): void => {
+      focusSearch()
+      const pending = consumePendingKeybindingsSearchQuery()
+      if (pending !== undefined) setQuery(pending)
+    }
+    // Mount covers the freshly-opened editor (the microtask event fired before
+    // the listener existed); the event covers the reused-tab path.
+    applyFocusSearch()
+    document.addEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, applyFocusSearch)
+    return () =>
+      document.removeEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, applyFocusSearch)
   }, [focusSearch])
 
   // -- record keys mode ---------------------------------------------------------

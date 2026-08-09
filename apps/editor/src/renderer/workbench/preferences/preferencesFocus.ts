@@ -14,8 +14,20 @@ export function dispatchSettingsEditorFocusSearch(): void {
   dispatchPreferencesFocusEvent(SETTINGS_EDITOR_FOCUS_SEARCH_EVENT)
 }
 
-export function dispatchKeybindingsEditorFocusSearch(): void {
+// The microtask event only reaches an already-mounted keybindings editor (the
+// "reuse open tab" path). A freshly opened editor mounts after the event fired,
+// so the query also travels through this slot, consumed once on mount.
+let pendingKeybindingsQuery: string | undefined
+
+export function dispatchKeybindingsEditorFocusSearch(query?: string): void {
+  pendingKeybindingsQuery = query
   dispatchPreferencesFocusEvent(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT)
+}
+
+export function consumePendingKeybindingsSearchQuery(): string | undefined {
+  const query = pendingKeybindingsQuery
+  pendingKeybindingsQuery = undefined
+  return query
 }
 
 export function dispatchSettingsEditorSwitchTarget(

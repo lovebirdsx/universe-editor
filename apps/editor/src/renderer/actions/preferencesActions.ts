@@ -197,7 +197,8 @@ export class OpenKeybindingsEditorAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
+  override run(accessor: ServicesAccessor, ...args: unknown[]): void {
+    const query = (args[0] as { query?: string } | undefined)?.query
     const groups = accessor.get(IEditorGroupsService)
 
     for (const group of groups.groups) {
@@ -205,14 +206,14 @@ export class OpenKeybindingsEditorAction extends Action2 {
         if (editor instanceof KeybindingsEditorInput) {
           groups.activateGroup(group)
           group.setActive(editor)
-          dispatchKeybindingsEditorFocusSearch()
+          dispatchKeybindingsEditorFocusSearch(query)
           return
         }
       }
     }
 
     openInLockAwareGroup(groups, new KeybindingsEditorInput())
-    dispatchKeybindingsEditorFocusSearch()
+    dispatchKeybindingsEditorFocusSearch(query)
   }
 }
 

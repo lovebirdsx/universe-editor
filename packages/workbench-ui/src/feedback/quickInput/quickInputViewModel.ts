@@ -8,6 +8,7 @@ import type {
   IKeyMods,
   IQuickInputButton,
   IQuickPickItem,
+  IQuickPickItemButton,
   QuickPickFilterMode,
   QuickPickInput,
   QuickPickPresentation,
@@ -59,6 +60,10 @@ export interface QuickPickState {
   onActiveChange?: (item: IQuickPickItem | undefined) => void
   /** Fires when a toolbar button is triggered. */
   onTriggerButton?: ((button: IQuickInputButton) => void) | undefined
+  /** Fires when an item-level button (`IQuickPickItem.buttons`) is clicked. */
+  onTriggerItemButton?:
+    | ((item: IQuickPickItem, button: IQuickPickItemButton, mods: IKeyMods) => void)
+    | undefined
   /** Fires when the confirm (OK) button is clicked. */
   onOk?: (() => void) | undefined
   onInput?: (value: string) => void

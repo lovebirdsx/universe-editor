@@ -20,6 +20,7 @@ import type {
   IKeyMods,
   IPickOptions,
   IInputOptions,
+  IQuickPickItemButtonEvent,
   QuickPickFilterMode,
   QuickPickInput,
   QuickPickPresentation,
@@ -69,6 +70,7 @@ export class QuickInputService implements IQuickInputService {
     const onDidChangeValue = new Emitter<string>()
     const onDidChangeActive = new Emitter<T | undefined>()
     const onDidTriggerButton = new Emitter<IQuickInputButton>()
+    const onDidTriggerItemButton = new Emitter<IQuickPickItemButtonEvent<T>>()
     const onDidTriggerOk = new Emitter<void>()
     let _items: readonly QuickPickInput<T>[] = []
     let _placeholder: string | undefined
@@ -134,6 +136,8 @@ export class QuickInputService implements IQuickInputService {
         },
         onActiveChange: (item) => onDidChangeActive.fire(item as T | undefined),
         onTriggerButton: (button) => onDidTriggerButton.fire(button),
+        onTriggerItemButton: (item, button, mods) =>
+          onDidTriggerItemButton.fire({ item: item as T, button, keyMods: mods }),
         onOk: () => onDidTriggerOk.fire(),
         onHide: () => onDidHide.fire(),
       })
@@ -288,6 +292,7 @@ export class QuickInputService implements IQuickInputService {
       onDidChangeValue: onDidChangeValue.event,
       onDidChangeActive: onDidChangeActive.event,
       onDidTriggerButton: onDidTriggerButton.event,
+      onDidTriggerItemButton: onDidTriggerItemButton.event,
       onDidTriggerOk: onDidTriggerOk.event,
       show: () => {
         _visible = true
@@ -304,6 +309,7 @@ export class QuickInputService implements IQuickInputService {
         onDidChangeValue.dispose()
         onDidChangeActive.dispose()
         onDidTriggerButton.dispose()
+        onDidTriggerItemButton.dispose()
         onDidTriggerOk.dispose()
       },
     }
@@ -338,6 +344,10 @@ export class QuickInputService implements IQuickInputService {
         quickNavigate: options?.quickNavigate,
         busy: options?.busy,
         onItemRemove: options?.onItemRemove,
+        onTriggerItemButton: options?.onDidTriggerItemButton
+          ? (item, button, mods) =>
+              options.onDidTriggerItemButton?.({ item, button, keyMods: mods })
+          : undefined,
         buttons: options?.buttons,
         onTriggerButton: options?.onDidTriggerButton
           ? (button) => {

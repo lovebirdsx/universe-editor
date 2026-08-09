@@ -23,8 +23,10 @@ import {
   type IDisposable,
   type IQuickAccessProviderRunOptions,
   type IQuickInputButton,
+  type IQuickPickItemButtonEvent,
   type IQuickPick,
   type IQuickPickItem,
+  type IQuickPickItemButton,
   type QuickPickInput,
   type QuickPickPresentation,
 } from '@universe-editor/platform'
@@ -43,8 +45,10 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   readonly onDidChangeActive = this._onDidChangeActive.event
 
   private readonly _onDidTriggerButton = new Emitter<IQuickInputButton>()
+  private readonly _onDidTriggerItemButton = new Emitter<IQuickPickItemButtonEvent<T>>()
   private readonly _onDidTriggerOk = new Emitter<void>()
   readonly onDidTriggerButton = this._onDidTriggerButton.event
+  readonly onDidTriggerItemButton = this._onDidTriggerItemButton.event
   readonly onDidTriggerOk = this._onDidTriggerOk.event
   valueSelection: [number, number] | undefined
   activeItems: readonly T[] = []
@@ -69,6 +73,10 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
     this._onDidAccept.fire(items)
   }
 
+  fireItemButton(button: IQuickPickItemButton, item: T): void {
+    this._onDidTriggerItemButton.fire({ button, item, keyMods: { ctrl: false, alt: false } })
+  }
+
   show(): void {}
   hide(): void {
     this._onDidHide.fire()
@@ -79,6 +87,7 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
     this._onDidChangeValue.dispose()
     this._onDidChangeActive.dispose()
     this._onDidTriggerButton.dispose()
+    this._onDidTriggerItemButton.dispose()
     this._onDidTriggerOk.dispose()
   }
 }
@@ -103,9 +112,9 @@ class FakeStorageService implements IStorageService {
 
 class FakeCommandService implements Partial<ICommandService> {
   declare readonly _serviceBrand: undefined
-  readonly executed: string[] = []
-  async executeCommand<T = unknown>(id: string): Promise<T | undefined> {
-    this.executed.push(id)
+  readonly executed: { id: string; args: unknown[] }[] = []
+  async executeCommand<T = unknown>(id: string, ...args: unknown[]): Promise<T | undefined> {
+    this.executed.push({ id, args })
     return undefined
   }
 }
@@ -124,10 +133,14 @@ class FakeContextKeyService implements Partial<IContextKeyService> {
   }
 }
 
-function setup(storage: FakeStorageService): CommandsQuickAccessProvider {
+function setup(storage: FakeStorageService): {
+  provider: CommandsQuickAccessProvider
+  commands: FakeCommandService
+} {
+  const commands = new FakeCommandService()
   const services = new ServiceCollection()
   services.set(IStorageService, storage as unknown as IStorageService)
-  services.set(ICommandService, new FakeCommandService() as unknown as ICommandService)
+  services.set(ICommandService, commands as unknown as ICommandService)
   services.set(
     IEditorGroupsService,
     new FakeEditorGroupsService() as unknown as IEditorGroupsService,
@@ -135,7 +148,7 @@ function setup(storage: FakeStorageService): CommandsQuickAccessProvider {
   services.set(IContextKeyService, new FakeContextKeyService() as unknown as IContextKeyService)
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst as unknown as IInstantiationService)
-  return inst.createInstance(CommandsQuickAccessProvider)
+  return { provider: inst.createInstance(CommandsQuickAccessProvider), commands }
 }
 
 function runOptions(disposables: IDisposable[]): IQuickAccessProviderRunOptions {
@@ -171,7 +184,7 @@ describe('CommandsQuickAccessProvider MRU', () => {
   it('seeds the picker mruIds from stored history', async () => {
     const storage = new FakeStorageService()
     storage.store.set(MRU_KEY, ['cmd.b'])
-    const provider = setup(storage)
+    const { provider } = setup(storage)
     const picker = new FakeQuickPick<IQuickPickItem>()
 
     provider.provide(picker, runOptions(runDisposables))
@@ -185,7 +198,7 @@ describe('CommandsQuickAccessProvider MRU', () => {
   it('persists the accepted command to the front of the MRU list', async () => {
     const storage = new FakeStorageService()
     storage.store.set(MRU_KEY, ['cmd.b'])
-    const provider = setup(storage)
+    const { provider } = setup(storage)
     const picker = new FakeQuickPick<IQuickPickItem>()
 
     provider.provide(picker, runOptions(runDisposables))
@@ -195,5 +208,66 @@ describe('CommandsQuickAccessProvider MRU', () => {
     picker.fireAccept([{ id: 'cmd.a', label: 'Alpha' }])
 
     expect(storage.setSpy).toHaveBeenCalledWith(MRU_KEY, ['cmd.a', 'cmd.b'])
+  })
+
+  it('offers a gear button on every command and close on recently used rows', async () => {
+    const storage = new FakeStorageService()
+    storage.store.set(MRU_KEY, ['cmd.b'])
+    const { provider } = setup(storage)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+
+    provider.provide(picker, runOptions(runDisposables))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const itemOf = (id: string): IQuickPickItem =>
+      picker.items.find((i): i is IQuickPickItem => !('type' in i) && i.id === id)!
+    expect(itemOf('cmd.a').buttons?.map((b) => b.iconId)).toEqual(['settings-gear'])
+    expect(itemOf('cmd.b').buttons?.map((b) => b.iconId)).toEqual(['settings-gear', 'x'])
+  })
+
+  it('gear hides the picker and opens the keybindings editor filtered to the command', async () => {
+    const storage = new FakeStorageService()
+    const { provider, commands } = setup(storage)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    let hidden = false
+    picker.onDidHide(() => {
+      hidden = true
+    })
+
+    provider.provide(picker, runOptions(runDisposables))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const alpha = picker.items.find((i): i is IQuickPickItem => !('type' in i) && i.id === 'cmd.a')!
+    picker.fireItemButton(alpha.buttons![0]!, alpha)
+
+    expect(hidden).toBe(true)
+    // The command run is deferred past hide's synchronous tail via queueMicrotask.
+    await Promise.resolve()
+    expect(commands.executed).toEqual([
+      { id: 'workbench.action.openGlobalKeybindings', args: [{ query: '@command:cmd.a' }] },
+    ])
+  })
+
+  it('close removes the row from MRU history and the visible list', async () => {
+    const storage = new FakeStorageService()
+    storage.store.set(MRU_KEY, ['cmd.b'])
+    const { provider } = setup(storage)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+
+    provider.provide(picker, runOptions(runDisposables))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const bravo = picker.items.find((i): i is IQuickPickItem => !('type' in i) && i.id === 'cmd.b')!
+    picker.fireItemButton(bravo.buttons![1]!, bravo)
+
+    expect(storage.setSpy).toHaveBeenCalledWith(MRU_KEY, [])
+    expect(picker.mruIds).toEqual([])
+    expect(picker.items.some((i) => !('type' in i) && i.id === 'cmd.b')).toBe(false)
+    // The plain command row remains, and without a stored MRU entry a reopen
+    // would render it without the close button.
+    expect(picker.items.some((i) => !('type' in i) && i.id === 'cmd.a')).toBe(true)
   })
 })

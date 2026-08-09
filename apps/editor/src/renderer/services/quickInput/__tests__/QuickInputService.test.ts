@@ -13,6 +13,7 @@ import {
   IStorageService,
   InstantiationService,
   ServiceCollection,
+  type IQuickPickItemButtonEvent,
 } from '@universe-editor/platform'
 import { QuickInputService, type QuickPickState } from '../QuickInputService.js'
 
@@ -225,5 +226,49 @@ describe('QuickInputService — onDidChangeState', () => {
     expect(qp.keyMods).toEqual({ ctrl: true, alt: false })
 
     qp.dispose()
+  })
+
+  it('state.onTriggerItemButton forwards item, button and modifiers to onDidTriggerItemButton', () => {
+    const { svc } = createService()
+    const qp = svc.createQuickPick<{ id: string; label: string }>()
+    qp.show()
+
+    let fired: IQuickPickItemButtonEvent<{ id: string; label: string }> | undefined
+    qp.onDidTriggerItemButton((e) => (fired = e))
+    const button = { iconId: 'settings-gear' }
+    svc.currentState?.onTriggerItemButton?.({ id: 'a', label: 'A' }, button, {
+      ctrl: false,
+      alt: true,
+    })
+
+    expect(fired).toEqual({
+      item: { id: 'a', label: 'A' },
+      button,
+      keyMods: { ctrl: false, alt: true },
+    })
+    // Triggering an item button does not dismiss the picker.
+    expect(svc.currentState).not.toBeNull()
+
+    qp.dispose()
+  })
+
+  it('pick() forwards options.onDidTriggerItemButton', async () => {
+    const { svc } = createService()
+    const spy = vi.fn()
+    const promise = svc.pick([{ id: 'a', label: 'A' }], { onDidTriggerItemButton: spy })
+
+    const button = { iconId: 'settings-gear' }
+    svc.currentState?.onTriggerItemButton?.({ id: 'a', label: 'A' }, button, {
+      ctrl: true,
+      alt: false,
+    })
+    expect(spy).toHaveBeenCalledWith({
+      item: { id: 'a', label: 'A' },
+      button,
+      keyMods: { ctrl: true, alt: false },
+    })
+
+    svc.hide()
+    await expect(promise).resolves.toBeUndefined()
   })
 })

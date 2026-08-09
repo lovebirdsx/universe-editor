@@ -336,6 +336,35 @@
   color: var(--vscode-foreground, #c8c8c8);
 }
 
+.itemButton {
+  margin-left: 6px;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  color: var(--vscode-descriptionForeground, #8a8a92);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.item:hover .itemButton,
+.item.focused .itemButton {
+  opacity: 0.8;
+}
+
+.itemButton:hover {
+  opacity: 1;
+  background: var(--vscode-list-hoverBackground, #3a3a40);
+  color: var(--vscode-foreground, #c8c8c8);
+}
+
+.itemButtonIcon {
+  display: block;
+}
+
 .empty {
   padding: 12px;
   text-align: center;

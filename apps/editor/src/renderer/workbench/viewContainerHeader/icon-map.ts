@@ -46,6 +46,7 @@ import {
   Tag,
   Trash2,
   Undo2,
+  X,
   type LucideIcon,
 } from 'lucide-react'
 import { CONTAINER_ICON_MAP } from '../icons/containerIcons.js'
@@ -121,6 +122,8 @@ const ICON_MAP: Record<string, LucideIcon> = {
   'compare-changes': FileDiff,
   'diff-previous-change': ArrowUp,
   'diff-next-change': ArrowDown,
+  // Quick pick item buttons (command palette "remove from recently used").
+  x: X,
 }
 
 export function resolveHeaderIcon(name: string | undefined): LucideIcon | undefined {

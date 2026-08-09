@@ -847,6 +847,29 @@ export function QuickPickPanel({
                       {item.statusIconId
                         ? renderStatusIcon?.(item.statusIconId, 14, styles['itemStatusIcon'])
                         : null}
+                      {(item.buttons ?? []).map((btn, i) => (
+                        <span
+                          key={`ib-${i}`}
+                          role="button"
+                          aria-label={
+                            btn.tooltip ??
+                            localize('quickInput.itemButton.ariaLabel', 'Item action')
+                          }
+                          data-tooltip={btn.tooltip}
+                          className={styles['itemButton']}
+                          data-testid="quick-input-item-button"
+                          data-icon-id={btn.iconId}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            state.onTriggerItemButton?.(item, btn, {
+                              ctrl: e.ctrlKey,
+                              alt: e.altKey,
+                            })
+                          }}
+                        >
+                          {renderIcon?.(btn.iconId, 14, styles['itemButtonIcon'])}
+                        </span>
+                      ))}
                       {onItemRemove && (
                         <span
                           role="button"

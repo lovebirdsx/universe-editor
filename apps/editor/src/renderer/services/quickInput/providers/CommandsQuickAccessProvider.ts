@@ -14,12 +14,14 @@ import {
   IEditorGroupsService,
   IStorageService,
   isSubmenuEntry,
+  localize,
   MenuId,
   MenuRegistry,
   type IQuickAccessProvider,
   type IQuickAccessProviderRunOptions,
   type IQuickPick,
   type IQuickPickItem,
+  type IQuickPickItemButton,
 } from '@universe-editor/platform'
 import {
   collectMonacoCommands,
@@ -33,6 +35,17 @@ import { resolveShortcut } from '../../../workbench/titlebar/keybindingFormat.js
 const MRU_STORAGE_KEY = 'quickinput.mru.workbench.commandPalette'
 const MRU_LIMIT = 20
 
+// Module-level singletons: trigger dispatch compares by reference (VSCode parity:
+// gear on every command, close appended for recently-used rows).
+const GEAR_BUTTON: IQuickPickItemButton = {
+  iconId: 'settings-gear',
+  tooltip: localize('commandPalette.configureKeybinding', 'Configure Keybinding'),
+}
+const CLOSE_BUTTON: IQuickPickItemButton = {
+  iconId: 'x',
+  tooltip: localize('commandPalette.removeFromRecentlyUsed', 'Remove from Recently Used'),
+}
+
 export class CommandsQuickAccessProvider implements IQuickAccessProvider {
   constructor(
     @ICommandService private readonly _commands: ICommandService,
@@ -44,13 +57,38 @@ export class CommandsQuickAccessProvider implements IQuickAccessProvider {
   provide(picker: IQuickPick<IQuickPickItem>, _options: IQuickAccessProviderRunOptions): void {
     picker.filterMode = 'word'
 
+    // Assigned once below after the registry/monaco de-dupe; `let` (not const)
+    // because the declaration must precede applyItems' closure.
+    let baseItems: readonly IQuickPickItem[] = []
     let mruIds: string[] = []
+    // Items the user removed via the row's × button this session.
+    const removedIds = new Set<string>()
+
+    const applyItems = (): void => {
+      picker.items = baseItems
+        .filter((i) => !removedIds.has(i.id))
+        .map((i) => {
+          // Monaco commands aren't in KeybindingsRegistry, so the gear (which
+          // opens the keybindings editor) would land on an empty search.
+          const isMru = mruIds.includes(i.id)
+          const buttons = isMonacoCommandItem(i)
+            ? isMru
+              ? [CLOSE_BUTTON]
+              : []
+            : isMru
+              ? [GEAR_BUTTON, CLOSE_BUTTON]
+              : [GEAR_BUTTON]
+          return buttons.length > 0 ? { ...i, buttons } : i
+        })
+    }
+
     // Seed the recently-used ranking asynchronously; bail if the picker was torn
     // down (prefix switch / hide) before storage resolved.
     void this._storage.get<string[]>(MRU_STORAGE_KEY).then((stored) => {
       if (_options.token.isCancellationRequested) return
       mruIds = stored ?? []
       picker.mruIds = mruIds
+      applyItems()
     })
 
     const seenRegistryIds = new Set<string>()
@@ -85,7 +123,31 @@ export class CommandsQuickAccessProvider implements IQuickAccessProvider {
     // De-dupe: a Monaco action id can collide with a project command id; prefer
     // the project command (project intent wins, Monaco is a fallback source).
     const projectIds = new Set(registryItems.map((i) => i.id))
-    picker.items = [...registryItems, ...monacoItems.filter((m) => !projectIds.has(m.id))]
+    baseItems = [...registryItems, ...monacoItems.filter((m) => !projectIds.has(m.id))]
+    applyItems()
+
+    _options.disposables.add(
+      picker.onDidTriggerItemButton(({ button, item }) => {
+        if (button === GEAR_BUTTON) {
+          picker.hide()
+          // Same deferral as the accept path below: let hide's synchronous tail
+          // (service teardown) finish before opening the keybindings editor.
+          queueMicrotask(() => {
+            void this._commands.executeCommand('workbench.action.openGlobalKeybindings', {
+              query: `@command:${item.id}`,
+            })
+          })
+          return
+        }
+        if (button === CLOSE_BUTTON) {
+          mruIds = mruIds.filter((id) => id !== item.id)
+          void this._storage.set(MRU_STORAGE_KEY, mruIds)
+          picker.mruIds = mruIds
+          removedIds.add(item.id)
+          applyItems()
+        }
+      }),
+    )
 
     _options.disposables.add(
       picker.onDidAccept((items) => {

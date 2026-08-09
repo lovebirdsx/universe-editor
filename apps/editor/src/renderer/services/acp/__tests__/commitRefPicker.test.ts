@@ -15,6 +15,7 @@ import {
   type INotificationService,
   type IPickOptions,
   type IQuickInputButton,
+  type IQuickPickItemButtonEvent,
   type IQuickInputService,
   type IQuickPick,
   type IQuickPickItem,
@@ -33,6 +34,7 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   private readonly _onDidChangeValue = new Emitter<string>()
   private readonly _onDidChangeActive = new Emitter<T | undefined>()
   private readonly _onDidTriggerButton = new Emitter<IQuickInputButton>()
+  private readonly _onDidTriggerItemButton = new Emitter<IQuickPickItemButtonEvent<T>>()
   private readonly _onDidTriggerOk = new Emitter<void>()
 
   readonly onDidAccept = this._onDidAccept.event
@@ -40,6 +42,7 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   readonly onDidChangeValue = this._onDidChangeValue.event
   readonly onDidChangeActive = this._onDidChangeActive.event
   readonly onDidTriggerButton = this._onDidTriggerButton.event
+  readonly onDidTriggerItemButton = this._onDidTriggerItemButton.event
   readonly onDidTriggerOk = this._onDidTriggerOk.event
 
   valueSelection: [number, number] | undefined
@@ -84,6 +87,7 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
     this._onDidChangeValue.dispose()
     this._onDidChangeActive.dispose()
     this._onDidTriggerButton.dispose()
+    this._onDidTriggerItemButton.dispose()
     this._onDidTriggerOk.dispose()
   }
 }

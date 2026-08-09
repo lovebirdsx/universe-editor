@@ -19,7 +19,10 @@ import {
   type IUserKeybindingsService as IUserKeybindingsServiceType,
   type IUserKeybindingEntry,
 } from '../../../services/keybindings/UserKeybindingsService.js'
-import { KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT } from '../../preferences/preferencesFocus.js'
+import {
+  dispatchKeybindingsEditorFocusSearch,
+  KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT,
+} from '../../preferences/preferencesFocus.js'
 
 // happy-dom has no layout engine, so @tanstack/react-virtual would render 0
 // items (container height stays 0). Stub the virtualizer to lay out every row
@@ -158,6 +161,27 @@ describe('KeybindingsEditor', () => {
 
     await waitFor(() => expect(document.activeElement).toBe(search))
     other.remove()
+  })
+
+  it('applies a pending query dispatched before mount (freshly opened editor)', async () => {
+    registerTestCommands()
+    dispatchKeybindingsEditorFocusSearch('@command:test.kb.alpha')
+    const { container } = mount()
+    const search = container.querySelector('input[type=search]') as HTMLInputElement
+    await waitFor(() => expect(search.value).toBe('@command:test.kb.alpha'))
+  })
+
+  it('applies a query dispatched to an already-mounted editor (tab reuse)', async () => {
+    registerTestCommands()
+    const { container } = mount()
+    const search = container.querySelector('input[type=search]') as HTMLInputElement
+    expect(search.value).toBe('')
+
+    act(() => {
+      dispatchKeybindingsEditorFocusSearch('@command:test.kb.beta')
+    })
+    // dispatch is deferred via queueMicrotask
+    await waitFor(() => expect(search.value).toBe('@command:test.kb.beta'))
   })
 
   it('filters rows by the debounced search text', async () => {

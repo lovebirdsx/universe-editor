@@ -613,6 +613,46 @@ describe('QuickPickPanel item removal', () => {
   })
 })
 
+describe('QuickPickPanel item buttons', () => {
+  const buttonedItems = [
+    {
+      id: 'cmd.format',
+      label: 'Format Document',
+      buttons: [{ iconId: 'settings-gear', tooltip: 'Configure Keybinding' }],
+    },
+    { id: 'cmd.line', label: 'Go to Line' },
+  ]
+
+  it('renders an inline button per item only for items carrying buttons', () => {
+    render(<QuickPickPanel state={makeState({ items: buttonedItems })} onClose={() => undefined} />)
+    const buttons = screen.getAllByTestId('quick-input-item-button')
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0]!.getAttribute('data-icon-id')).toBe('settings-gear')
+  })
+
+  it('clicking an item button fires onTriggerItemButton without accepting the row', () => {
+    const onTriggerItemButton = vi.fn()
+    const onAccept = vi.fn()
+    const onClose = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ items: buttonedItems, onTriggerItemButton, onAccept })}
+        onClose={onClose}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('quick-input-item-button'), { altKey: true })
+    expect(onTriggerItemButton).toHaveBeenCalledWith(
+      buttonedItems[0],
+      buttonedItems[0]!.buttons![0]!,
+      { ctrl: false, alt: true },
+    )
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+    // The row stays in the list — the handler owns the lifecycle.
+    expect(screen.getByText('Format Document')).toBeTruthy()
+  })
+})
+
 describe('QuickPickPanel active item (live preview)', () => {
   it('reports the first item on mount and the new item on navigation', () => {
     const onActiveChange = vi.fn()

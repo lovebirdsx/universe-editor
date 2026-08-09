@@ -26,6 +26,7 @@ import {
 import { KeybindingsEditorInput } from '../../services/editor/KeybindingsEditorInput.js'
 import { SettingsEditorInput } from '../../services/editor/SettingsEditorInput.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
+import { consumePendingKeybindingsSearchQuery } from '../../workbench/preferences/preferencesFocus.js'
 import { DISPLAY_LANGUAGE_SETTING_KEY } from '../../../shared/i18n/availableLocales.js'
 
 function runAction(groups: EditorGroupsService, id: string = OpenSettingsAction.ID): void {
@@ -35,6 +36,16 @@ function runAction(groups: EditorGroupsService, id: string = OpenSettingsAction.
   inst.invokeFunction((accessor) => {
     const cmd = CommandsRegistry.getCommand(id)!
     cmd.handler(accessor)
+  })
+}
+
+function runActionWithArgs(groups: EditorGroupsService, id: string, ...args: unknown[]): void {
+  const services = new ServiceCollection()
+  services.set(IEditorGroupsService, groups)
+  const inst = new InstantiationService(services)
+  inst.invokeFunction((accessor) => {
+    const cmd = CommandsRegistry.getCommand(id)!
+    cmd.handler(accessor, ...args)
   })
 }
 
@@ -171,6 +182,28 @@ describe('OpenKeybindingsEditorAction', () => {
     expect(g2.editors).toHaveLength(0)
     expect(g1.editors).toHaveLength(1)
     expect(g1.editors[0]).toBeInstanceOf(KeybindingsEditorInput)
+  })
+
+  it('hands a query arg to the editor via the pending-query slot (fresh open)', () => {
+    disposables.push(registerAction2(OpenKeybindingsEditorAction))
+    const groups = new EditorGroupsService()
+    runActionWithArgs(groups, OpenKeybindingsEditorAction.ID, { query: '@command:cmd.a' })
+    expect(groups.activeGroup.editors[0]).toBeInstanceOf(KeybindingsEditorInput)
+    expect(consumePendingKeybindingsSearchQuery()).toBe('@command:cmd.a')
+    // The slot is consumed once.
+    expect(consumePendingKeybindingsSearchQuery()).toBeUndefined()
+  })
+
+  it('hands a query arg to the editor via the pending-query slot (tab reuse)', () => {
+    disposables.push(registerAction2(OpenKeybindingsEditorAction))
+    const groups = new EditorGroupsService()
+    runAction(groups, OpenKeybindingsEditorAction.ID)
+    // A plain open leaves nothing pending.
+    expect(consumePendingKeybindingsSearchQuery()).toBeUndefined()
+
+    runActionWithArgs(groups, OpenKeybindingsEditorAction.ID, { query: '@command:cmd.b' })
+    expect(groups.activeGroup.editors).toHaveLength(1)
+    expect(consumePendingKeybindingsSearchQuery()).toBe('@command:cmd.b')
   })
 
   it('contributes to MenubarFileMenu under group 5_preferences', () => {
