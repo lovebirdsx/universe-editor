@@ -70,9 +70,14 @@ jobs:
       - name: Build
         run: pnpm build
 
+  # Job DAG note: jobs fan out in parallel from the start. The only real data
+  # dependency is detect-affected → the e2e/package matrix jobs (affected
+  # outputs); every job builds what it needs itself via the turbo cache. There
+  # is deliberately no `needs: ci` fail-fast gate — it serialized ~6 min of
+  # wall time per run while lint/type errors are already caught by local
+  # `pnpm check` + PR flow, and ci-gate remains the single aggregation point.
   integration:
     name: Integration Tests
-    needs: ci
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -115,7 +120,6 @@ jobs:
   # excluded — it needs an installed editor, covered by e2e instead).
   external-consumer-smoke:
     name: External Consumer Smoke
-    needs: ci
     strategy:
       fail-fast: false
       matrix:
@@ -229,7 +233,6 @@ jobs:
   # `e2e` (core) gate and the `e2e-extensions` matrix below.
   detect-affected:
     name: Detect affected E2E
-    needs: ci
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -636,7 +639,6 @@ jobs:
 
   bench:
     name: Benchmark
-    needs: ci
     runs-on: ubuntu-latest
     timeout-minutes: 25
     continue-on-error: true
