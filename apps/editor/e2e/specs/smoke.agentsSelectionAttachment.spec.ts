@@ -58,6 +58,12 @@ test.describe('@p0 agents selection attachment', () => {
       .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('editorTextFocus')))
       .toBe(true)
     await page.keyboard.type('Explain this selection')
+    // EditContext delivers typed text to the Monaco model asynchronously; on a
+    // slow runner Enter's keydown can submit before the tail lands (truncated
+    // "Explain this s" was sent on CI). Wait for the full draft first.
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()))
+      .toBe('Explain this selection')
     await page.keyboard.press('Enter')
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages()), { timeout: 5000 })

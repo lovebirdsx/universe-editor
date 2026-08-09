@@ -159,4 +159,10 @@ patchedDependencies:
   # NaN 绕过边界检查后读 isVisible 崩溃。移植上游 PR #325646 + #326669;
   # monaco 0.56.0 仍未携带,升级时须按上方流程处理。
   monaco-editor@0.55.1: patches/monaco-editor@0.55.1.patch
+  # electron.launch 进程早夭时(CI 文件锁窗口),内部 4 个 waitForLine promise 全部
+  # reject 同一个 "Process failed to launch!",仅 nodeMatchPromise 被 await——其余
+  # 3 个游离 rejection 在 in-process test worker 里触发 unhandledRejection,先于
+  # launch 重试守卫把测试判死。补 .catch(()=>{}) 标记 handled(错误仍经 await 链
+  # 正常传给 launchElectron 的重试)。升级 playwright 时按上方流程核对。
+  playwright-core@1.62.1: patches/playwright-core@1.62.1.patch
   vscode-markdown-languageservice@0.5.0-alpha.13: patches/vscode-markdown-languageservice@0.5.0-alpha.13.patch

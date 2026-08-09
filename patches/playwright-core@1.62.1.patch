@@ -1,0 +1,21 @@
+diff --git a/lib/coreBundle.js b/lib/coreBundle.js
+index d9041dd0f009072511a7d808dec83121ff29e127..5955c85b514d8f04c5fb63f2e4598fcf1ecdc991 100644
+--- a/lib/coreBundle.js
++++ b/lib/coreBundle.js
+@@ -44043,6 +44043,16 @@ var init_electron = __esm({
+         const nodeMatchPromise = waitForLine(progress2, launchedProcess, /^Debugger listening on (ws:\/\/.*)$/);
+         const chromeMatchPromise = waitForLine(progress2, launchedProcess, /^DevTools listening on (ws:\/\/.*)$/);
+         const debuggerDisconnectPromise = waitForLine(progress2, launchedProcess, /Waiting for the debugger to disconnect\.\.\./);
++        // PATCH(universe-editor): when the electron process dies before the
++        // debugger lines appear, every waitForLine promise above rejects with
++        // "Process failed to launch!". Only nodeMatchPromise is awaited on that
++        // path — the other three float and surface as unhandledRejection in the
++        // (in-process) test worker, failing the test before the caller's launch
++        // retry can run. Mark them handled; the awaited/raced originals still
++        // propagate the error to electron.launch's caller.
++        waitForXserverError.catch(() => {});
++        chromeMatchPromise.catch(() => {});
++        debuggerDisconnectPromise.catch(() => {});
+         try {
+           const nodeMatch = await nodeMatchPromise;
+           const nodeTransport = await WebSocketTransport.connect(progress2, nodeMatch[1]);

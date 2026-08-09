@@ -201,6 +201,7 @@ catalogs:
 
 patchedDependencies:
   monaco-editor@0.55.1: b0e2d579336ad1e44c50badcc1a68f79cc11bf3e168cd089bcce197ebc21ac00
+  playwright-core@1.62.1: fbbc098f61fe4063f66941a5dec787f34e85ebe62743c185ffda0820239b4325
   vscode-markdown-languageservice@0.5.0-alpha.13: 352c1a4172115d38431c0aaaade5dd08833a22f2cde87684040e3a5fbd2b3b6c
 
 importers:
@@ -5943,7 +5944,7 @@ snapshots:
     dependencies:
       '@types/http-cache-semantics': 4.2.0
       '@types/keyv': 3.1.4
-      '@types/node': 22.19.17
+      '@types/node': 24.13.3
       '@types/responselike': 1.0.3
 
   '@types/chai@5.2.3':
@@ -6080,7 +6081,7 @@ snapshots:
 
   '@types/fs-extra@9.0.13':
     dependencies:
-      '@types/node': 22.19.17
+      '@types/node': 24.13.3
 
   '@types/geojson@7946.0.16': {}
 
@@ -6090,7 +6091,7 @@ snapshots:
 
   '@types/keyv@3.1.4':
     dependencies:
-      '@types/node': 22.19.17
+      '@types/node': 24.13.3
 
   '@types/linkify-it@5.0.0': {}
 
@@ -6127,7 +6128,7 @@ snapshots:
 
   '@types/responselike@1.0.3':
     dependencies:
-      '@types/node': 22.19.17
+      '@types/node': 24.13.3
 
   '@types/trusted-types@2.0.7':
     optional: true
@@ -8032,11 +8033,11 @@ snapshots:
       pvutils: 1.2.0
       tslib: 2.8.1
 
-  playwright-core@1.62.1: {}
+  playwright-core@1.62.1(patch_hash=fbbc098f61fe4063f66941a5dec787f34e85ebe62743c185ffda0820239b4325): {}
 
   playwright@1.62.1:
     dependencies:
-      playwright-core: 1.62.1
+      playwright-core: 1.62.1(patch_hash=fbbc098f61fe4063f66941a5dec787f34e85ebe62743c185ffda0820239b4325)
     optionalDependencies:
       fsevents: 2.3.2
 

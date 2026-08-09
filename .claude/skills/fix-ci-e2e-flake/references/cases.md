@@ -345,6 +345,22 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 
 ---
 
+**案例 72c — 72b 修完 Windows 仍挂：launch 内部游离 promise 的 unhandledRejection 先于重试守卫把测试判死（post-spawn 早夭模式重试从未生效过）**
+信号：test 报**裸** `Error: Process failed to launch!`（**无 `electron.launch:` 前缀**）；trace 里错误条目是 `{"type":"error","stack":[]}` 且时间戳**早于** stderr 里的 `[e2e] electron.launch failed (attempt 1/4)` 重试留痕——测试在重试守卫刚 catch 到、还没睡完退避时就已被判死。与 72/72b 区分：那两条的报错带 `electron.launch:` 前缀（走 await 链正常抛出）；本条是 worker 的 unhandledRejection 通道（`workerProcessEntry` 对 unhandledRejection 无条件 fail 当前 test）。
+根因：playwright-core `Electron.launch` 内部创建 4 个 `waitForLine` promise（Xserver 错误哨、node debugger 行、DevTools 行、debugger disconnect 行），进程 post-spawn 早夭（Defender 锁 ICU/二进制）时**四个同时 reject 同一个 failError**，但只有 `nodeMatchPromise` 被 await——其余 3 个游离，在 in-process test worker 里触发 unhandledRejection → 立即 fail 当前 test；随后被 await 的那条才进 `launchElectron` 的 catch（守卫本身工作正常但为时已晚）。**spawn 级失败（Linux ETXTBSY）不受影响**——它发生在 `launchProcess` 阶段、`waitForLine` 还没创建，无游离 promise，所以 72b 的重试在 ubuntu 上真实有效（同 run 实证：ubuntu 的 ETXTBSY attempt 1 重试即过）；也解释了 72 时代「activityBar 被 retry 救回」其实是 **Playwright test 级** retry 救的，launch 级重试对 Windows 这种 post-spawn 死亡从未生效过。
+修：pnpm patch `playwright-core@1.62.1`（`patches/playwright-core@1.62.1.patch`）——在三个游离 promise 创建后补 `.catch(() => {})` 标记 handled（错误仍经 await/race 原链传给调用方，不吞）；`pnpm-workspace.yaml` patchedDependencies 带注释，升级 playwright 时按该文件头部流程核对（上游若修复则删 patch）。另实证：本 run 里 72b 的 Defender 排除已执行（10:43:43）仍在 10:45:19 出现锁窗口——排除不是完全根治，launch 层重试才是必须生效的兜底。
+教训：a) 「重试守卫加了却像没加」先查错误到达通道——对比报错有无 API 前缀 + trace 里 error 条目与重试留痕的时间序，unhandledRejection 通道会绕过一切 await 层守卫；b) Playwright 库模式 server 与 test worker 同进程，server 内部游离 rejection 会直接击穿当前 test，这类修复只能 patch 到库里；c) 同一环境窗口的两种失败模式（spawn 级 vs post-spawn 级）对重试守卫的可达性不同，验证守卫时要分模式看实证，别拿一种模式的成功推断另一种。锚：`patches/playwright-core@1.62.1.patch`；`pnpm-workspace.yaml`（patchedDependencies 注释）；playwright-core `lib/coreBundle.js` `Electron.launch`/`waitForLine`。
+
+---
+
+**案例 73 — EditContext 异步落字赛跑 Enter 提交：ACP prompt 真键盘打字被截断发送（received 是 expected 的前缀）**
+信号：断言完整消息的 `toContainEqual` 失败，received 里 user 消息 text 是期望文本的**前缀**（如 `"Explain this s"`，retry 截断点还不同=竞态非确定），echo agent 回声同样截断=发送时模型里就只有这些字。失败点前的操作序列 = `keyboard.type(<text>)` 直接 `keyboard.press('Enter')`，目标是 **Monaco 输入框**（EditContext）。
+根因：monaco 0.55 EditContext 下，CDP 派发的字符经 EditContext `textupdate` **异步**落进 model，而 Enter 的 keydown 走 keybinding 同步读 model 提交——CI 慢机上尾部字符还在途，发送即截断（HTML input 无此问题，quick input/find widget 不受影响）。
+修：type 后、Enter 前补 `expect.poll(() => getAcpPromptText()).toBe(<全文>)`（`smoke.agentsSelectionAttachment.spec.ts`）；`smoke.agentsPromptHistory.spec.ts` 第三用例的裸 type 后同款补齐（防迟到字符污染 popover 交互）。同族加固先例：`agentsPromptHistory` 的 `typeAndSend`、`agentsMcpDraft` 的 `typeDraft`（delay 20 + 双 poll）——本条正是「同文件族有的步骤已加固、有的还裸」的遗留薄弱点形态。
+教训：真键盘往 **Monaco**（EditContext）输入后要做结构性操作（Enter 提交/ArrowUp 弹层/光标移动依赖内容时），必须先 poll 模型内容到位；对 HTML input 则无需。新写 ACP prompt 相关 spec 直接抄 `typeAndSend` 模式。锚：`smoke.agentsSelectionAttachment.spec.ts`（poll 后 Enter）；`smoke.agentsPromptHistory.spec.ts`（typeAndSend）；`smoke.agentsMcpDraft.spec.ts`（typeDraft）。
+
+---
+
 ## 根治 TODO
 
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。

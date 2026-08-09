@@ -124,6 +124,9 @@ test.describe('@p1 agents prompt history', () => {
       .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('editorTextFocus')))
       .toBe(true)
     await page.keyboard.type('draft in progress')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()))
+      .toBe('draft in progress')
     await page.keyboard.press('Control+Home')
     await page.keyboard.press('ArrowUp')
 
