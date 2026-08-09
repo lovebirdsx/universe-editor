@@ -47,7 +47,14 @@ export function createWatcherUtilityTransportFactory(
       post: (msg: WatcherHostRequest) => child.postMessage(msg),
       onMessage: onMessage.event,
       onExit: onExit.event,
-      kill: () => void child.kill(),
+      // kill 时同步摘除登记：主进程退出路径上 child 的 'exit' 事件来不及
+      // 派发（进程已死但事件循环不再 tick），仅靠 'exit' 回调会把登记句柄
+      // 留成泄漏。'exit' 里的再 dispose 靠 toDisposable 幂等兜底。
+      kill: () => {
+        roleRegistration?.dispose()
+        roleRegistration = undefined
+        void child.kill()
+      },
     }
   }
 }
