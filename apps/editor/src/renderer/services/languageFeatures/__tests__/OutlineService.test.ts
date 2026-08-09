@@ -42,6 +42,17 @@ import {
 } from '../../acp/session/acpSessionOutlineRegistry.js'
 import { ACP_OUTLINE_LANGUAGE_ID } from '../../acp/session/acpTimelineOutline.js'
 import type { TimelineItem } from '../../acp/session/acpSessionModel.js'
+import { GitGraphEditorInput } from '../../editor/GitGraphEditorInput.js'
+import { PerforceGraphEditorInput } from '../../editor/PerforceGraphEditorInput.js'
+import {
+  GIT_GRAPH_OUTLINE_LANGUAGE_ID,
+  PERFORCE_GRAPH_OUTLINE_LANGUAGE_ID,
+  GRAPH_COMMIT_KIND,
+  GRAPH_PENDING_KIND,
+  GraphOutlineRegistry,
+  type GraphOutlineCommit,
+  type IGraphOutlineController,
+} from '../../gitGraph/graphOutline.js'
 import type { ILanguageFeaturesService } from '../LanguageFeaturesService.js'
 import { OutlineService } from '../OutlineService.js'
 
@@ -193,6 +204,7 @@ describe('OutlineService', () => {
     FileEditorRegistry._resetForTests()
     MarkdownPreviewRegistry._resetForTests()
     AcpSessionOutlineRegistry._resetForTests()
+    GraphOutlineRegistry._resetForTests()
     initUserDocsForTests({})
     previewModels.clear()
     markerListeners.length = 0
@@ -1156,6 +1168,193 @@ describe('OutlineService', () => {
     expect(svc.outline.get()).toBeDefined()
     activeEditor.set(undefined, undefined)
     expect(svc.outline.get()).toBeUndefined()
+    svc.dispose()
+  })
+
+  // ---- git / perforce graph ---------------------------------------------------
+
+  function graphCommit(hash: string, overrides: Partial<GraphOutlineCommit> = {}) {
+    return { hash, label: `subject of ${hash}`, detail: `${hash} · alice`, ...overrides }
+  }
+
+  function setupGraph(input: GitGraphEditorInput | PerforceGraphEditorInput) {
+    const activeEditor = observableValue<
+      GitGraphEditorInput | PerforceGraphEditorInput | undefined
+    >('t', undefined)
+    const editorService = { activeEditor } as unknown as IEditorService
+    const facade = {
+      onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+      getDocumentSymbolProviders: () => [],
+    } as unknown as ILanguageFeaturesService
+    const svc = new OutlineService(editorService, facade, undefined as never)
+    return { svc, input, activeEditor }
+  }
+
+  function makeGraphController(initial: readonly GraphOutlineCommit[]) {
+    const commits = observableValue<readonly GraphOutlineCommit[]>('t.commits', initial)
+    const onDidChangeSelection = new Emitter<void>()
+    const selected: string[] = []
+    const scrolled: string[] = []
+    let selectedHash: string | undefined
+    const controller: IGraphOutlineController = {
+      commits,
+      selectCommit: (hash) => selected.push(hash),
+      scrollToCommit: (hash) => scrolled.push(hash),
+      getSelectedHash: () => selectedHash,
+      onDidChangeSelection: onDidChangeSelection.event,
+    }
+    return {
+      controller,
+      commits,
+      onDidChangeSelection,
+      selected,
+      scrolled,
+      setSelectedHash: (h: string | undefined) => {
+        selectedHash = h
+      },
+    }
+  }
+
+  it('publishes an outline synthesized from the git graph commit list', async () => {
+    const { svc, input, activeEditor } = setupGraph(new GitGraphEditorInput())
+    const { controller } = makeGraphController([
+      graphCommit('aaa111'),
+      graphCommit('*', { label: 'Uncommitted changes', detail: '', pending: true }),
+      graphCommit('bbb222'),
+    ])
+    GraphOutlineRegistry.register(GIT_GRAPH_OUTLINE_LANGUAGE_ID, controller)
+    activeEditor.set(input, undefined)
+    await flush()
+
+    const outline = svc.outline.get()
+    expect(outline?.languageId).toBe(GIT_GRAPH_OUTLINE_LANGUAGE_ID)
+    expect(outline?.uri).toBe(input.resource.toString())
+    expect(svc.sourceKind.get()).toBe('graph')
+    const roots = outline?.roots ?? []
+    expect(roots.map((r) => r.name)).toEqual([
+      'subject of aaa111',
+      'Uncommitted changes',
+      'subject of bbb222',
+    ])
+    expect(roots.map((r) => r.kind)).toEqual([
+      GRAPH_COMMIT_KIND,
+      GRAPH_PENDING_KIND,
+      GRAPH_COMMIT_KIND,
+    ])
+    svc.dispose()
+  })
+
+  it('attaches once the graph controller registers after activation (editor active first)', async () => {
+    const { svc, input, activeEditor } = setupGraph(new GitGraphEditorInput())
+    // Graph editor active but the React tree not mounted yet: outline empty.
+    activeEditor.set(input, undefined)
+    await flush()
+    expect(svc.outline.get()).toBeUndefined()
+
+    const { controller } = makeGraphController([graphCommit('late01')])
+    GraphOutlineRegistry.register(GIT_GRAPH_OUTLINE_LANGUAGE_ID, controller)
+    await flush()
+    expect(svc.outline.get()?.roots.map((r) => r.name)).toEqual(['subject of late01'])
+    svc.dispose()
+  })
+
+  it('rebuilds the outline when the commit list changes', async () => {
+    const { svc, input, activeEditor } = setupGraph(new GitGraphEditorInput())
+    const { controller, commits } = makeGraphController([graphCommit('aaa111')])
+    GraphOutlineRegistry.register(GIT_GRAPH_OUTLINE_LANGUAGE_ID, controller)
+    activeEditor.set(input, undefined)
+    await flush()
+    expect(svc.outline.get()?.roots).toHaveLength(1)
+
+    commits.set([graphCommit('new999'), graphCommit('aaa111')], undefined)
+    await flush()
+    expect(svc.outline.get()?.roots.map((r) => r.name)).toEqual([
+      'subject of new999',
+      'subject of aaa111',
+    ])
+    svc.dispose()
+  })
+
+  it('tracks the active symbol from the singly-selected row on selection change', async () => {
+    const { svc, input, activeEditor } = setupGraph(new GitGraphEditorInput())
+    const { controller, onDidChangeSelection, setSelectedHash } = makeGraphController([
+      graphCommit('aaa111'),
+      graphCommit('bbb222'),
+    ])
+    setSelectedHash('aaa111')
+    GraphOutlineRegistry.register(GIT_GRAPH_OUTLINE_LANGUAGE_ID, controller)
+    activeEditor.set(input, undefined)
+    await flush()
+    expect(svc.activeSymbol.get()?.name).toBe('subject of aaa111')
+
+    setSelectedHash('bbb222')
+    onDidChangeSelection.fire()
+    expect(svc.activeSymbol.get()?.name).toBe('subject of bbb222')
+
+    // A range selection (or none) clears the active symbol.
+    setSelectedHash(undefined)
+    onDidChangeSelection.fire()
+    expect(svc.activeSymbol.get()).toBeUndefined()
+    svc.dispose()
+  })
+
+  it('revealSymbol selects the commit through the controller (full row-click semantics)', async () => {
+    const { svc, input, activeEditor } = setupGraph(new GitGraphEditorInput())
+    const { controller, selected, scrolled } = makeGraphController([
+      graphCommit('aaa111'),
+      graphCommit('bbb222'),
+    ])
+    GraphOutlineRegistry.register(GIT_GRAPH_OUTLINE_LANGUAGE_ID, controller)
+    activeEditor.set(input, undefined)
+    await flush()
+
+    svc.revealSymbol(svc.outline.get()!.roots[1]!)
+    expect(selected).toEqual(['bbb222'])
+    expect(scrolled).toEqual([]) // reveal goes through selectCommit, not the preview path
+    svc.dispose()
+  })
+
+  it('previewSymbol scrolls to the row without selecting it', async () => {
+    const { svc, input, activeEditor } = setupGraph(new GitGraphEditorInput())
+    const { controller, selected, scrolled } = makeGraphController([
+      graphCommit('aaa111'),
+      graphCommit('bbb222'),
+    ])
+    GraphOutlineRegistry.register(GIT_GRAPH_OUTLINE_LANGUAGE_ID, controller)
+    activeEditor.set(input, undefined)
+    await flush()
+
+    svc.previewSymbol(svc.outline.get()!.roots[0]!)
+    expect(scrolled).toEqual(['aaa111'])
+    expect(selected).toEqual([])
+    svc.dispose()
+  })
+
+  it('clears the outline when leaving the graph editor', async () => {
+    const { svc, input, activeEditor } = setupGraph(new GitGraphEditorInput())
+    const { controller } = makeGraphController([graphCommit('aaa111')])
+    GraphOutlineRegistry.register(GIT_GRAPH_OUTLINE_LANGUAGE_ID, controller)
+    activeEditor.set(input, undefined)
+    await flush()
+    expect(svc.outline.get()).toBeDefined()
+    activeEditor.set(undefined, undefined)
+    expect(svc.outline.get()).toBeUndefined()
+    expect(svc.sourceKind.get()).toBeUndefined()
+    svc.dispose()
+  })
+
+  it('uses the perforce registry + language id for the perforce graph editor', async () => {
+    const { svc, input, activeEditor } = setupGraph(new PerforceGraphEditorInput())
+    const { controller, selected } = makeGraphController([
+      graphCommit('12345', { label: 'fix the thing' }),
+    ])
+    GraphOutlineRegistry.register(PERFORCE_GRAPH_OUTLINE_LANGUAGE_ID, controller)
+    activeEditor.set(input, undefined)
+    await flush()
+
+    expect(svc.outline.get()?.languageId).toBe(PERFORCE_GRAPH_OUTLINE_LANGUAGE_ID)
+    svc.revealSymbol(svc.outline.get()!.roots[0]!)
+    expect(selected).toEqual(['12345'])
     svc.dispose()
   })
 

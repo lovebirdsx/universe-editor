@@ -64,10 +64,14 @@ function symbolPickItem(
   languageId: string | undefined,
   indent: boolean,
 ): IQuickPickItem {
+  // The detail rides along as a (non-rendered) keyword so non-text outlines can
+  // be searched by it — e.g. a graph commit is findable by hash or author.
+  const detail = entry.symbol.detail
   return {
     id: entry.id,
     label: indent ? `${'  '.repeat(entry.depth)}${entry.symbol.name}` : entry.symbol.name,
     iconId: symbolIconId(entry.symbol.kind, languageId),
+    ...(detail !== '' ? { description: detail, keywords: [detail] } : {}),
   }
 }
 

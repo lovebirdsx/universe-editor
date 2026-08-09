@@ -27,11 +27,13 @@ import {
 } from 'react'
 import {
   autorun,
+  Emitter,
   ICommandService,
   ILoggerService,
   IStorageService,
   IViewDescriptorService,
   IViewsService,
+  observableValue,
   StorageScope,
   localize,
   type IEditorInput,
@@ -49,6 +51,12 @@ import {
 import { useService, useObservable, useOptionalService } from '../useService.js'
 import { IScmService } from '../../services/extensions/ScmService.js'
 import { computeGraphLayout, type GraphGrid } from '../../services/gitGraph/graphLayout.js'
+import {
+  PERFORCE_GRAPH_OUTLINE_LANGUAGE_ID,
+  GraphOutlineRegistry,
+  type GraphOutlineCommit,
+  type IGraphOutlineController,
+} from '../../services/gitGraph/graphOutline.js'
 import {
   perforceGraphViewState,
   PERFORCE_GRAPH_PAGE_SIZE,
@@ -747,6 +755,62 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     rowAttribute: 'data-id',
     rowHeight: ROW_HEIGHT,
   })
+
+  // Go to Symbol / Outline bridge: publish the loaded changes (the unfiltered
+  // display list, so a search filter can't shrink the symbol list) and select /
+  // scroll rows on demand. selectCommit deliberately reuses applySelection so
+  // accepting a symbol carries full row-click semantics — pushing COMMIT
+  // CHANGES and expanding the SCM sidebar.
+  const outlineCommits = useMemo(
+    () => observableValue<readonly GraphOutlineCommit[]>('perforceGraph.outlineCommits', []),
+    [],
+  )
+  useEffect(() => {
+    outlineCommits.set(
+      displayChanges.map((c) =>
+        c.id === PENDING_ID
+          ? { hash: c.id, label: c.message, detail: '', pending: true }
+          : {
+              hash: c.id,
+              label: c.message,
+              detail: `${shortId(c.id)} · ${c.author} · ${formatDate(c.date)}`,
+            },
+      ),
+      undefined,
+    )
+  }, [outlineCommits, displayChanges])
+
+  const onDidChangeOutlineSelection = useMemo(() => new Emitter<void>(), [])
+  useEffect(() => {
+    onDidChangeOutlineSelection.fire()
+  }, [onDidChangeOutlineSelection, selection])
+
+  useEffect(() => {
+    const controller: IGraphOutlineController = {
+      commits: outlineCommits,
+      selectCommit: (id) => {
+        // A search filter would hide the target row.
+        setSearchQuery('')
+        applySelection([id])
+        pendingScrollRef.current = id
+        scrollPendingReveal()
+        scrollRef.current?.focus()
+      },
+      scrollToCommit: (id) => {
+        pendingScrollRef.current = id
+        scrollPendingReveal()
+      },
+      getSelectedHash: () => {
+        const current = selectionRef.current
+        return current.length === 1 ? current[0] : undefined
+      },
+      onDidChangeSelection: onDidChangeOutlineSelection.event,
+    }
+    GraphOutlineRegistry.register(PERFORCE_GRAPH_OUTLINE_LANGUAGE_ID, controller)
+    return () => {
+      GraphOutlineRegistry.unregister(PERFORCE_GRAPH_OUTLINE_LANGUAGE_ID, controller)
+    }
+  }, [outlineCommits, onDidChangeOutlineSelection, applySelection, scrollPendingReveal])
 
   return (
     <div className={styles['gitGraph']} data-testid="perforceGraph-editor">

@@ -73,6 +73,10 @@ const SYMBOL_ICONS: Record<number, SymbolIconSpec> = {
   23: { codicon: 'symbol-event', color: CALLABLE }, // Event
   24: { codicon: 'symbol-operator', color: CALLABLE }, // Operator
   25: { codicon: 'symbol-type-parameter', color: TYPE }, // TypeParameter
+  // Sentinel kinds beyond Monaco's SymbolKind range, synthesized by non-text
+  // outline sources: git/perforce graph rows (see services/gitGraph/graphOutline).
+  200: { codicon: 'git-commit', color: DEFAULT }, // Graph commit / changelist
+  201: { codicon: 'primitive-dot', color: DEFAULT }, // Graph uncommitted / pending row
 }
 
 const FALLBACK: SymbolIconSpec = { codicon: 'symbol-misc', color: DEFAULT }

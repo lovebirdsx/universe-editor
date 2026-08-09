@@ -85,10 +85,10 @@ export class PerforceGraphRefreshAction extends Action2 {
       id: PerforceGraphRefreshAction.ID,
       title: localize2('action.perforceGraph.refresh', 'Refresh'),
       category: CATEGORY,
-      // Outranks the unscoped Open Recent (ctrl+r) binding — resolution is
-      // weight-first, when-clauses only filter, they don't boost priority.
+      // Scoped refresh binding; plain ctrl+r stays with Go to Symbol in Editor
+      // (unscoped) so the graph's change list is reachable through it.
       keybinding: {
-        primary: 'ctrl+r',
+        primary: 'ctrl+shift+r',
         when: "activeEditorId == 'universe:/perforceGraph'",
         weight: KeybindingWeight.WorkbenchContrib + 50,
       },

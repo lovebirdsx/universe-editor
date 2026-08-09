@@ -183,4 +183,20 @@ describe('FileSymbolQuickAccessProvider', () => {
     expect(stub.revealSymbol).toHaveBeenCalledWith(s2)
     expect(picker.hidden).toBe(true)
   })
+
+  it('surfaces a symbol detail as description + keyword (graph commits search by hash/author)', () => {
+    const withDetail = { ...sym('fix the crash'), detail: 'aaa111 · alice · 2026-08-01' }
+    const { outline, stub } = makeOutline()
+    outline.set(model([withDetail, sym('plain')], 1), undefined)
+    const provider = new FileSymbolQuickAccessProvider(stub)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+
+    const [detailed, plain] = picker.items as IQuickPickItem[]
+    expect(detailed!.description).toBe('aaa111 · alice · 2026-08-01')
+    expect(detailed!.keywords).toEqual(['aaa111 · alice · 2026-08-01'])
+    // An empty detail stays off the item entirely (no stray description rendering).
+    expect(plain!.description).toBeUndefined()
+    expect(plain!.keywords).toBeUndefined()
+  })
 })

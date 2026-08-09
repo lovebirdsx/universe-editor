@@ -11,6 +11,7 @@ import {
 import { gitGraphViewState } from '../../services/gitGraph/gitGraphViewState.js'
 import { perforceGraphViewState } from '../../services/perforceGraph/perforceGraphViewState.js'
 import { GitGraphRefreshAction } from '../gitGraphActions.js'
+import { GoToFileSymbolAction } from '../gotoSymbolActions.js'
 import { PerforceGraphRefreshAction } from '../perforceGraphActions.js'
 import { OpenRecentAction } from '../workspaceActions.js'
 
@@ -51,37 +52,42 @@ describe('graph refresh actions', () => {
     expect(refresh).toHaveBeenCalledTimes(1)
   })
 
-  it('ctrl+r resolves to the refresh command of the active graph editor only', () => {
+  it('ctrl+shift+r resolves to the refresh command of the active graph editor only', () => {
     disposables.push(registerAction2(GitGraphRefreshAction))
     disposables.push(registerAction2(PerforceGraphRefreshAction))
     const ctx = new ContextKeyService()
     ctx.createKey('activeEditorId', 'universe:/gitGraph')
     try {
-      expect(KeybindingsRegistry.resolveKeystroke('ctrl+r', ctx)).toMatchObject({
+      expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+r', ctx)).toMatchObject({
         kind: 'execute',
         command: GitGraphRefreshAction.ID,
       })
       ctx.createKey('activeEditorId', 'universe:/perforceGraph')
-      expect(KeybindingsRegistry.resolveKeystroke('ctrl+r', ctx)).toMatchObject({
+      expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+r', ctx)).toMatchObject({
         kind: 'execute',
         command: PerforceGraphRefreshAction.ID,
       })
       ctx.createKey('activeEditorId', 'default')
-      expect(KeybindingsRegistry.resolveKeystroke('ctrl+r', ctx).kind).not.toBe('execute')
+      expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+r', ctx).kind).not.toBe('execute')
     } finally {
       ctx.dispose()
     }
   })
 
-  it('graph-scoped ctrl+r wins over the global Open Recent binding', () => {
-    disposables.push(registerAction2(GitGraphRefreshAction))
+  it('graph-scoped ctrl+r resolves to Go to Symbol, elsewhere to Open Recent', () => {
+    disposables.push(registerAction2(GoToFileSymbolAction))
     disposables.push(registerAction2(OpenRecentAction))
     const ctx = new ContextKeyService()
     ctx.createKey('activeEditorId', 'universe:/gitGraph')
     try {
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+r', ctx)).toMatchObject({
         kind: 'execute',
-        command: GitGraphRefreshAction.ID,
+        command: GoToFileSymbolAction.ID,
+      })
+      ctx.createKey('activeEditorId', 'universe:/perforceGraph')
+      expect(KeybindingsRegistry.resolveKeystroke('ctrl+r', ctx)).toMatchObject({
+        kind: 'execute',
+        command: GoToFileSymbolAction.ID,
       })
       ctx.createKey('activeEditorId', 'default')
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+r', ctx)).toMatchObject({

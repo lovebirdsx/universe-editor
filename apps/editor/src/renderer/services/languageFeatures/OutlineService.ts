@@ -36,6 +36,16 @@ import {
   timelineToOutline,
   type TimelineOutline,
 } from '../acp/session/acpTimelineOutline.js'
+import { GitGraphEditorInput } from '../editor/GitGraphEditorInput.js'
+import { PerforceGraphEditorInput } from '../editor/PerforceGraphEditorInput.js'
+import {
+  GIT_GRAPH_OUTLINE_LANGUAGE_ID,
+  PERFORCE_GRAPH_OUTLINE_LANGUAGE_ID,
+  GraphOutlineRegistry,
+  graphCommitsToOutline,
+  type GraphOutline,
+  type GraphOutlineKind,
+} from '../gitGraph/graphOutline.js'
 import { ILanguageFeaturesService } from './LanguageFeaturesService.js'
 import { findSymbolAtLine } from './symbolTree.js'
 
@@ -56,7 +66,7 @@ export interface OutlineViewState {
 }
 
 /** Which kind of editor the current outline is derived from (undefined when none). */
-export type OutlineSourceKind = 'file' | 'preview' | 'doc' | 'session'
+export type OutlineSourceKind = 'file' | 'preview' | 'doc' | 'session' | 'graph'
 
 export interface IOutlineService {
   readonly _serviceBrand: undefined
@@ -154,6 +164,10 @@ export class OutlineService extends Disposable implements IOutlineService {
   private _currentSession: AcpSessionEditorInput | undefined
   /** Key↔pseudo-line maps for the current session outline, bridging slot keys to lines. */
   private _sessionOutline: TimelineOutline | undefined
+  /** Which graph editor (git / perforce) the current outline is derived from. */
+  private _currentGraph: GraphOutlineKind | undefined
+  /** Hash↔pseudo-line maps for the current graph outline. */
+  private _graphOutline: GraphOutline | undefined
   private _currentModel: monaco.editor.ITextModel | undefined
   private _version = 0
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined
@@ -236,6 +250,14 @@ export class OutlineService extends Disposable implements IOutlineService {
       }),
     )
 
+    // Same late-mount story for the graph editors: the React tree registers its
+    // outline controller after the input is already active.
+    this._register(
+      GraphOutlineRegistry.onDidChange((kind) => {
+        if (this._currentGraph === kind) this._attachActiveEditor()
+      }),
+    )
+
     // Providers register at AfterRestore — possibly after the first editor is
     // already active — and a freshly-registered server still needs a moment to
     // analyse the file, so its first pull may be empty. Recompute WITH retries.
@@ -258,6 +280,16 @@ export class OutlineService extends Disposable implements IOutlineService {
     const previewInput = input instanceof MarkdownPreviewInput ? input : undefined
     const docInput = input instanceof DocEditorInput ? input : undefined
     const sessionInput = input instanceof AcpSessionEditorInput ? input : undefined
+    const graphInput =
+      input instanceof GitGraphEditorInput || input instanceof PerforceGraphEditorInput
+        ? input
+        : undefined
+    const graphKind: GraphOutlineKind | undefined =
+      input instanceof GitGraphEditorInput
+        ? GIT_GRAPH_OUTLINE_LANGUAGE_ID
+        : input instanceof PerforceGraphEditorInput
+          ? PERFORCE_GRAPH_OUTLINE_LANGUAGE_ID
+          : undefined
     const sameInput = fileInput !== undefined && fileInput === this._currentInput
 
     this._attachListeners.clear()
@@ -291,11 +323,19 @@ export class OutlineService extends Disposable implements IOutlineService {
     this._currentPreview = previewInput
     this._currentDoc = docInput
     this._currentSession = sessionInput
+    this._currentGraph = graphKind
     if (!sessionInput) this._sessionOutline = undefined
+    if (graphKind === undefined) this._graphOutline = undefined
 
     if (sessionInput) {
       this._sourceKind.set('session', undefined)
       this._attachSession(sessionInput)
+      return
+    }
+
+    if (graphKind !== undefined && graphInput !== undefined) {
+      this._sourceKind.set('graph', undefined)
+      this._attachGraph(graphKind, graphInput.resource.toString())
       return
     }
 
@@ -472,6 +512,46 @@ export class OutlineService extends Disposable implements IOutlineService {
     const uri = session.resource.toString()
     this._outline.set(
       { uri, roots: built.roots, languageId: ACP_OUTLINE_LANGUAGE_ID, version: ++this._version },
+      undefined,
+    )
+    this._recomputeActiveSymbol()
+  }
+
+  /**
+   * Attach to a git/perforce graph editor: the outline is the graph's loaded
+   * commit list, exposed by the mounted editor's controller (the graph is a
+   * plain React tree, so there is no model and no retry chain — the commits
+   * observable drives recomputes). Selection tracking and reveal go through
+   * the same controller, mirroring the session branch.
+   */
+  private _attachGraph(kind: GraphOutlineKind, uri: string): void {
+    this._currentModel = undefined
+    this._clearRetry()
+
+    const controller = GraphOutlineRegistry.get(kind)
+    if (!controller) {
+      // Graph component not mounted yet; GraphOutlineRegistry.onDidChange re-attaches.
+      this._graphOutline = undefined
+      this._publish(undefined, undefined)
+      return
+    }
+
+    this._attachListeners.add(
+      autorun((r) => {
+        controller.commits.read(r)
+        this._recomputeGraphOutline(kind, uri)
+      }),
+    )
+    this._attachListeners.add(controller.onDidChangeSelection(() => this._recomputeActiveSymbol()))
+  }
+
+  private _recomputeGraphOutline(kind: GraphOutlineKind, uri: string): void {
+    const controller = GraphOutlineRegistry.get(kind)
+    if (!controller || this._currentGraph !== kind) return
+    const built = graphCommitsToOutline(controller.commits.get())
+    this._graphOutline = built
+    this._outline.set(
+      { uri, roots: built.roots, languageId: kind, version: ++this._version },
       undefined,
     )
     this._recomputeActiveSymbol()
@@ -655,6 +735,22 @@ export class OutlineService extends Disposable implements IOutlineService {
       return
     }
 
+    // Graph editor: the "cursor" is the singly-selected commit row.
+    if (this._currentGraph !== undefined) {
+      const built = this._graphOutline
+      if (!roots || !built) {
+        this._activeSymbol.set(undefined, undefined)
+        return
+      }
+      const hash = GraphOutlineRegistry.get(this._currentGraph)?.getSelectedHash()
+      const line = hash !== undefined ? built.lineByKey.get(hash) : undefined
+      this._activeSymbol.set(
+        line !== undefined ? findSymbolAtLine(roots, line) : undefined,
+        undefined,
+      )
+      return
+    }
+
     const model = this._currentModel
     if (!roots) {
       this._activeSymbol.set(undefined, undefined)
@@ -706,6 +802,15 @@ export class OutlineService extends Disposable implements IOutlineService {
       controller?.focus()
       return
     }
+    if (this._currentGraph !== undefined) {
+      // Map the symbol's pseudo-line back to its commit hash, then select the
+      // row with full click semantics — the controller pushes COMMIT CHANGES
+      // and moves focus back to the graph.
+      const hash = this._graphOutline?.keyByLine.get(symbol.selectionRange.startLineNumber)
+      if (hash === undefined) return
+      GraphOutlineRegistry.get(this._currentGraph)?.selectCommit(hash)
+      return
+    }
     const readerUri = this._currentPreview?.sourceUri ?? this._currentDoc?.resource
     if (readerUri !== undefined) {
       const controller = MarkdownPreviewRegistry.get(readerUri)
@@ -733,6 +838,14 @@ export class OutlineService extends Disposable implements IOutlineService {
   }
 
   previewSymbol(symbol: monaco.languages.DocumentSymbol): void {
+    if (this._currentGraph !== undefined) {
+      // Live picker preview: scroll the row into view without selecting it,
+      // so browsing the list never fires a changes-payload fetch.
+      const hash = this._graphOutline?.keyByLine.get(symbol.selectionRange.startLineNumber)
+      if (hash === undefined) return
+      GraphOutlineRegistry.get(this._currentGraph)?.scrollToCommit(hash)
+      return
+    }
     const input = this._currentInput
     if (!input) return
     const editor = FileEditorRegistry.get(input)

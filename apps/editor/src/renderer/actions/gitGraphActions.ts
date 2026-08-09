@@ -88,10 +88,10 @@ export class GitGraphRefreshAction extends Action2 {
       id: GitGraphRefreshAction.ID,
       title: localize2('action.gitGraph.refresh', 'Refresh'),
       category: CATEGORY,
-      // Outranks the unscoped Open Recent (ctrl+r) binding — resolution is
-      // weight-first, when-clauses only filter, they don't boost priority.
+      // Scoped refresh binding; plain ctrl+r stays with Go to Symbol in Editor
+      // (unscoped) so the graph's commit list is reachable through it.
       keybinding: {
-        primary: 'ctrl+r',
+        primary: 'ctrl+shift+r',
         when: "activeEditorId == 'universe:/gitGraph'",
         weight: KeybindingWeight.WorkbenchContrib + 50,
       },

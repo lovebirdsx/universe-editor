@@ -27,6 +27,7 @@ import {
 import {
   autorun,
   CommandsRegistry,
+  Emitter,
   ICommandService,
   IDialogService,
   ILoggerService,
@@ -36,6 +37,7 @@ import {
   IStorageService,
   IViewDescriptorService,
   IViewsService,
+  observableValue,
   ProgressLocation,
   Severity,
   StorageScope,
@@ -62,6 +64,12 @@ import {
 } from '../useService.js'
 import { IScmService } from '../../services/extensions/ScmService.js'
 import { computeGraphLayout, type GraphGrid } from '../../services/gitGraph/graphLayout.js'
+import {
+  GIT_GRAPH_OUTLINE_LANGUAGE_ID,
+  GraphOutlineRegistry,
+  type GraphOutlineCommit,
+  type IGraphOutlineController,
+} from '../../services/gitGraph/graphOutline.js'
 import {
   gitGraphViewState,
   GIT_GRAPH_PAGE_SIZE,
@@ -1704,6 +1712,62 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     rowAttribute: 'data-hash',
     rowHeight: ROW_HEIGHT,
   })
+
+  // Go to Symbol / Outline bridge: publish the loaded commits (the unfiltered
+  // display list, so a search filter can't shrink the symbol list) and select /
+  // scroll rows on demand. selectCommit deliberately reuses applySelection so
+  // accepting a symbol carries full row-click semantics — pushing COMMIT
+  // CHANGES and expanding the SCM sidebar.
+  const outlineCommits = useMemo(
+    () => observableValue<readonly GraphOutlineCommit[]>('gitGraph.outlineCommits', []),
+    [],
+  )
+  useEffect(() => {
+    outlineCommits.set(
+      displayCommits.map((c) =>
+        c.hash === UNCOMMITTED_HASH
+          ? { hash: c.hash, label: c.message, detail: '', pending: true }
+          : {
+              hash: c.hash,
+              label: c.message,
+              detail: `${shortHash(c.hash)} · ${c.author} · ${formatDate(c.date)}`,
+            },
+      ),
+      undefined,
+    )
+  }, [outlineCommits, displayCommits])
+
+  const onDidChangeOutlineSelection = useMemo(() => new Emitter<void>(), [])
+  useEffect(() => {
+    onDidChangeOutlineSelection.fire()
+  }, [onDidChangeOutlineSelection, selection])
+
+  useEffect(() => {
+    const controller: IGraphOutlineController = {
+      commits: outlineCommits,
+      selectCommit: (hash) => {
+        // A search filter would hide the target row.
+        setSearchQuery('')
+        applySelection([hash])
+        pendingScrollRef.current = hash
+        scrollPendingReveal()
+        scrollRef.current?.focus()
+      },
+      scrollToCommit: (hash) => {
+        pendingScrollRef.current = hash
+        scrollPendingReveal()
+      },
+      getSelectedHash: () => {
+        const current = selectionRef.current
+        return current.length === 1 ? current[0] : undefined
+      },
+      onDidChangeSelection: onDidChangeOutlineSelection.event,
+    }
+    GraphOutlineRegistry.register(GIT_GRAPH_OUTLINE_LANGUAGE_ID, controller)
+    return () => {
+      GraphOutlineRegistry.unregister(GIT_GRAPH_OUTLINE_LANGUAGE_ID, controller)
+    }
+  }, [outlineCommits, onDidChangeOutlineSelection, applySelection, scrollPendingReveal])
 
   return (
     <div className={styles['gitGraph']} data-testid="gitGraph-editor">

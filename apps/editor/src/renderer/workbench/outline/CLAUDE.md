@@ -21,13 +21,14 @@ OutlineService  ── outline / activeSymbol (两条 observable，抽象主干)
   │  ① 定位编辑器（唯一的类型分支）
   │     ├─ FileEditorInput   → FileEditorRegistry.get() → Monaco editor
   │     ├─ MarkdownPreviewInput → MarkdownPreviewRegistry.get() → IMarkdownPreviewController
-  │     └─ AcpSessionEditorInput → AcpSessionOutlineRegistry.get() → IAcpSessionOutlineController
+  │     ├─ AcpSessionEditorInput → AcpSessionOutlineRegistry.get() → IAcpSessionOutlineController
+  │     └─ GitGraphEditorInput / PerforceGraphEditorInput → GraphOutlineRegistry.get(kind) → IGraphOutlineController
   ▼
 OutlineView (Tree) ──读 outlineViewState（排序/过滤/折叠/跟随光标）
   │  点击/回车 → outlineService.revealSymbol(symbol)
   ▼
   ① 分支回写：file → editor.setPosition+reveal+focus；preview → controller.scrollToLine+focus；
-     session → controller.scrollToKey+focus
+     session → controller.scrollToKey+focus；graph → controller.selectCommit（内含 focus）
 
 姊妹消费者（同样吃 outline / DocumentSymbol，但不是大纲视图）：
   Breadcrumbs.tsx（symbolTree 查询）、FileSymbolQuickAccessProvider（@ / @: 快速选择）
@@ -43,9 +44,10 @@ OutlineView (Tree) ──读 outlineViewState（排序/过滤/折叠/跟随光�
   - `activeSymbol: IObservable<DocumentSymbol | undefined>`——光标/视口顶部所在符号。
   - `revealSymbol(symbol)` / `captureViewState()` / `previewSymbol(symbol)` / `restoreViewState(state)`——后三个给 @ 快速选择用（见下）。
 - **唯一类型分支**：
-  - `_attachActiveEditor()`——按输入类型分流到 `_attachFileEditor`（Monaco）或 `_attachPreview`（预览）。
+  - `_attachActiveEditor()`——按输入类型分流到 `_attachFileEditor`（Monaco）/ `_attachPreview`（预览）/ session / `_attachGraph`（git/p4 图谱）。
   - 文件分支：`FileEditorRegistry.get(input)` 拿编辑器，符号从 `editor.getModel()`/markers 拉，活动符号靠 `editor.getPosition()` + `onDidChangeCursorPosition`。
   - 预览分支：`MonacoModelRegistry.peek(preview.sourceUri)` 拿**源文件共享 model**（预览本身无 Monaco），活动符号靠 `controller.getTopVisibleLine()` + `controller.onDidScroll`。
+  - graph 分支：`GraphOutlineRegistry.get(kind)` 拿 controller，符号由 `controller.commits` observable 合成，活动符号靠 `controller.getSelectedHash()` + `onDidChangeSelection`。
 - **`revealSymbol` 两分支必须对称**：file 分支 `setPosition + revealLineInCenterIfOutsideViewport + focus`；preview 分支 `controller.scrollToLine + controller.focus`。**任一分支漏掉 focus 都是「点了大纲焦点不回编辑器」的 bug**（已修，勿回退）。
 - **冷启动重试退避**：语言服务器冷启动时 `roots` 可能暂时为空。`_attachGeneration` 计数器 + 指数退避（`INITIAL_PULL_RETRY_MS=250` → `MAX_PULL_RETRY_MS=2000`，总预算 `PULL_RETRY_BUDGET_MS=180_000`）。切文件时 generation 递增以作废旧的重试链。`onDidChangeMarkers`（诊断到达 ≈ 语言服务器就绪）也会触发重拉。
 - **DI 注册**：`renderer/main.tsx`——`createInstance(OutlineService)` → `services.set(IOutlineService, …)`。
@@ -120,7 +122,7 @@ workbench/editor/previewScrollMap.ts           纯函数：源行号↔预览像
 `services/quickInput/providers/FileSymbolQuickAccessProvider.ts`——`@`（文档顺序）/ `@:`（按 kind 分组）。
 打开时 `outline.captureViewState()` 存快照；`onDidChangeActive` → `previewSymbol`（实时高亮不移光标）；
 `onDidAccept` → `revealSymbol`；取消 → `restoreViewState`。
-**这三个方法目前只有文件编辑器分支有实质行为**（preview 分支里 capture/preview/restore 基本是 no-op，因为预览无 Monaco 装饰/选区）。改这三个方法时记得这一点。
+**这三个方法目前只有文件编辑器分支有实质行为**（preview 分支里 capture/preview/restore 基本是 no-op，因为预览无 Monaco 装饰/选区；graph 分支 previewSymbol 有实质行为——`scrollToCommit` 只滚动预览，capture/restore 为 no-op）。改这三个方法时记得这一点。
 
 ### 关键架构决策与「为什么」
 
@@ -136,6 +138,7 @@ workbench/editor/previewScrollMap.ts           纯函数：源行号↔预览像
 - **改活动符号（高亮/跟随）的判定**：`_recomputeActiveSymbol` + `symbolTree.findSymbolAtLine`（注意面包屑同源）。
 - **新增一类编辑器的大纲支持**：仿照预览/会话分支——给该编辑器建一个 Registry + controller 接口，在 `_attachActiveEditor` 加分支、`revealSymbol`/`_recomputeActiveSymbol` 加分支。主干不动。
 - **AI 会话大纲**（`AcpSessionEditorInput`，仅整页 tab 模式）：非 Monaco 宿主，走 `AcpSessionOutlineRegistry` + `IAcpSessionOutlineController`（controller 直接暴露 `session.timeline` observable，所以 OutlineService **不注入任何 ACP service**——避开 main.tsx 里 OutlineService 早于 ACP service 注册的 DI 顺序问题）。纯函数 `acpTimelineOutline.ts::timelineToOutline` 把 timeline 合成 `DocumentSymbol` 树：每个 slot 一个符号（子 agent = `children` 天然折叠），按 DFS 分配**伪行号**并返回 `keyByLine`/`lineByKey` 双向映射，桥接 line-based 大纲与 key-based timeline（`m:<id>`/`t:<id>`，子项 `/`-拼）。reveal：symbol 行→slotKey→`controller.scrollToKey`；active：`controller.getTopVisibleKey`→line→`findSymbolAtLine`。languageId 用 `ACP_OUTLINE_LANGUAGE_ID='acp.session'`，`symbolIcon.tsx` 据此 `decodeAcpOutlineKind` 画 role/tool 图标。ChatBody（ChatScroll）挂载时 register controller，`handleScroll` fire `onDidScroll`。**sidebar 停靠模式不支持**（会话不占 activeEditor）。
+- **Git/P4 图谱大纲**（`GitGraphEditorInput` / `PerforceGraphEditorInput`）：非 Monaco 宿主，走 `GraphOutlineRegistry` + `IGraphOutlineController`（`services/gitGraph/graphOutline.ts`，两图谱共用，仿 session 分支形态）。纯函数 `graphCommitsToOutline` 把提交列表合成扁平 `DocumentSymbol` 树：每个提交一个符号，伪行号=序号+1，`keyByLine`/`lineByKey` 桥接 line-based 大纲与 hash-based 提交；kind 哨兵 `GRAPH_COMMIT_KIND=200` / `GRAPH_PENDING_KIND=201`（git uncommitted / p4 pending 行），`symbolIcon.tsx` 按哨兵画 git-commit/primitive-dot 图标。reveal：symbol 行→hash→`controller.selectCommit`（等同点击行的完整语义：拉改动 → COMMIT CHANGES + 滚动 + focus）；preview：`controller.scrollToCommit` 只滚动不选中；active：`controller.getSelectedHash`→line→`findSymbolAtLine`。GitGraphEditor / PerforceGraphEditor 组件挂载时 register controller（commits 从 displayCommits/displayChanges 同步）。这正是 Go to Symbol（ctrl+r）在图谱编辑器里列出提交的机理。
 - **给预览大纲加新交互**（如 hover 预览、双向滚动同步增强）：扩 `IMarkdownPreviewController`（三处同步），见上。
 - **某语言不显示大纲**：不是大纲的问题——去给它加 `DocumentSymbolProvider`（[extend-language-plugin] / markdown 见 `apps/editor/src/renderer/workbench/markdown/CLAUDE.md`）。先用 e2e probe `getOutlineSymbols()` 确认 service 层有没有拿到符号，再判断是 provider 缺失还是视图问题。
 - **改符号图标/颜色**：`workbench/symbols/symbolIcon.tsx`。
@@ -173,6 +176,7 @@ e2e 探针（`renderer/e2e/probe.ts`）：`getOutlineSymbols()`（递归扁平�
 - `apps/editor/src/renderer/contributions/{BuiltInViewContainers,BuiltInViews,ViewComponents,OutlineViewState}Contribution.ts` —— 注册三件套 + 持久化
 - `apps/editor/src/renderer/actions/layoutActions.ts` —— `FocusOutlineAction`（outline.focus / ctrl+shift+q）
 - `apps/editor/src/renderer/services/editor/{FileEditorRegistry,MarkdownPreviewRegistry}.ts` —— 两类编辑器句柄
+- `apps/editor/src/renderer/services/gitGraph/graphOutline.ts` —— graph 分支（GraphOutlineRegistry + IGraphOutlineController + graphCommitsToOutline，git/p4 图谱共用）
 - `apps/editor/src/renderer/workbench/editor/monaco/MonacoModelRegistry.ts` —— 共享 model（peek）
 - `apps/editor/src/renderer/workbench/editor/previewScrollMap.ts` —— 源行↔预览像素纯函数
 - `apps/editor/src/renderer/services/languageFeatures/{symbolTree,outlineFlatten}.ts` —— 纯树查询（symbolTree 面包屑同源）
