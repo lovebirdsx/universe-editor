@@ -12,6 +12,8 @@ import {
   IViewDescriptorService,
   IViewsService,
   MenuId,
+  PartId,
+  ViewContainerLocation,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -181,15 +183,43 @@ export class ShowAcpSessionChangesAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    accessor.get(IViewsService).openViewContainer('workbench.view.sessionChanges')
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    // Snapshot every service synchronously — the accessor dies past the first await.
+    const layoutService = accessor.get(ILayoutService)
+    const viewsService = accessor.get(IViewsService)
+    const viewDescriptorService = accessor.get(IViewDescriptorService)
+
+    // Explorer-style toggle: re-invoking while the view holds focus hides the sidebar.
+    if (
+      layoutService.getVisible(PartId.SideBar) &&
+      viewsService.getActiveViewContainerId(ViewContainerLocation.SideBar) ===
+        SESSION_CHANGES_CONTAINER_ID &&
+      layoutService.getPart(PartId.SideBar)?.isFocused()
+    ) {
+      layoutService.setVisible(PartId.SideBar, false)
+      return
+    }
+    await showSessionChangesView(layoutService, viewsService, viewDescriptorService)
   }
 }
+
+/** Container id of the Session Changes view; toggled by ShowAcpSessionChangesAction. */
+export const SESSION_CHANGES_CONTAINER_ID = 'workbench.view.sessionChanges'
 
 /** View id of the Session Changes view; shared by the view registration
  *  (BuiltInViewsContribution) and the focus action. Lives here rather than in
  *  the view component so neither side imports the other's React tree. */
 export const SESSION_CHANGES_VIEW_ID = 'workbench.view.sessionChanges.main'
+
+async function showSessionChangesView(
+  layoutService: ILayoutService,
+  viewsService: IViewsService,
+  viewDescriptorService: IViewDescriptorService,
+): Promise<void> {
+  viewsService.openViewContainer(SESSION_CHANGES_CONTAINER_ID)
+  viewDescriptorService.setViewCollapsed(SESSION_CHANGES_VIEW_ID, false)
+  await layoutService.focusView(SESSION_CHANGES_VIEW_ID, { source: 'command' })
+}
 
 /**
  * Focus the Session Changes view: reveal its container, expand the view and
@@ -214,9 +244,7 @@ export class FocusSessionChangesAction extends Action2 {
     const viewsService = accessor.get(IViewsService)
     const viewDescriptorService = accessor.get(IViewDescriptorService)
 
-    viewsService.openViewContainer('workbench.view.sessionChanges')
-    viewDescriptorService.setViewCollapsed(SESSION_CHANGES_VIEW_ID, false)
-    await layoutService.focusView(SESSION_CHANGES_VIEW_ID, { source: 'command' })
+    await showSessionChangesView(layoutService, viewsService, viewDescriptorService)
   }
 }
 
