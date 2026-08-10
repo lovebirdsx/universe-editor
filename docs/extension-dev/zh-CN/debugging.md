@@ -84,12 +84,12 @@ universe-editor --extension-development-path=<ext-a> --extension-development-pat
 ## 迭代循环
 
 ```
-改 src/extension.ts → watch 自动重编 → 命令面板「重启扩展宿主」→ 重新验证
+改 src/extension.ts 并保存 → watch 自动重编 → 开发宿主自动重启扩展宿主 → 重新验证
 ```
 
-「重启扩展宿主」（命令面板搜索 *Restart Extension Host*，命令 id `workbench.action.restartExtensionHost`）会停掉扩展宿主进程并重启，从磁盘重新加载新产物——不需要重开编辑器窗口。
+开发宿主默认开启自动重启：监听扩展 `main` 入口产物（`dist/extension.js`）所在目录的变更，产物更新后自动重启扩展宿主、从磁盘重新加载新代码（防抖约半秒）——保存源码后稍等片刻即可，全程不用重开编辑器窗口。该行为由设置 `extensions.autoRestartOnChange` 控制（默认 `true`，仅在扩展开发窗口生效）。
 
-注意：**重启后调试器会断开**（原进程已退出），需要重新 attach。用 brk 调激活路径时，重启后同样要等新进程起来再 attach。
+注意：**每次重启（含自动重启）后调试器都会断开**（原进程已退出），需要重新 attach。用 brk 调激活路径时，重启后同样要等新进程起来再 attach。如果你在调试 `activate()` 本身、或希望重启时机完全可控，建议把 `extensions.autoRestartOnChange` 关掉，改用手动命令「重启扩展宿主」（命令面板搜索 *Restart Extension Host*，命令 id `workbench.action.restartExtensionHost`）——产物分散在多目录等监听覆盖不到的罕见形态也走这条兜底路径。
 
 ## 日志
 
@@ -106,7 +106,7 @@ sourcemap 缺失或产物过期。确认 `npm run watch` 在跑、`dist/extensio
 端口被占或开发宿主根本没起来。`uex dev` 启动时会打印 `attach your debugger to 127.0.0.1:<port>`，先确认这行输出与 launch.json 的 `port` 一致；端口被占就换一个（`--inspect=<新端口>` 与 launch.json 同步改）。
 
 **改了代码不生效**
-忘了重启扩展宿主。watch 只负责重编产物，宿主进程里跑的还是旧代码——命令面板执行「重启扩展宿主」再验证。
+默认情况下开发宿主会在产物更新后自动重启（`extensions.autoRestartOnChange`，默认开启），稍等防抖窗口（约半秒）再验证即可。若你已把该设置关掉，宿主进程里跑的还是旧代码——手动执行「重启扩展宿主」再验证。若产物分散在入口文件所在目录之外（自动监听只覆盖该目录），同样需手动重启。
 
 **扩展没激活**
 两类典型原因：`activationEvents` 没触发（懒加载——先做出触发动作，如运行声明的命令）；或 `engines.universe` 区间不满足当前宿主的 API 版本被扫描阶段拒载。两者都只看日志即可分辨，宿主扫描被拒的扩展会记日志且不影响其他扩展。

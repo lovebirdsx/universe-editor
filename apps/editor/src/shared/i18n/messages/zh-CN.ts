@@ -59,6 +59,13 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'extensions.development': '开发中',
   'extDev.statusBar': '扩展开发宿主 ({count})',
   'extDev.statusBar.tooltip': '扩展开发宿主：从源码目录加载了 {count} 个开发中的扩展\n{paths}',
+  'extDev.autoReload.restarting': '正在重启扩展宿主…',
+  'extDev.autoReload.restarting.tooltip': '开发中扩展的产物发生变更，正在重启扩展宿主。',
+  'extDev.autoReload.debuggerDetached':
+    '扩展宿主已因开发中扩展的产物变更而自动重启。已附加的调试器会断开——继续调试请重新 attach。将 "extensions.autoRestartOnChange" 设为 false 可关闭自动重启。',
+  'settings.extensions': '扩展',
+  'settings.extensions.autoRestartOnChange':
+    '开发中扩展的产物变更时自动重启扩展宿主。仅在扩展开发宿主窗口中生效。',
   'windowTitle.extDevHost': '[扩展开发宿主]',
   'extensions.activation.failed': '扩展"{name}"激活失败：{error}',
   'extHost.crash.restarting': '扩展宿主已崩溃（代码 {code}），正在重启…',

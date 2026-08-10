@@ -688,6 +688,13 @@ export interface E2EProbe {
    * (the host's `extensionIsUnderDevelopment` DTO flag). Empty outside ext-dev mode.
    */
   getDevExtensionIds(): Promise<readonly string[]>
+  /**
+   * Number of times IExtensionHostClientService has fired onDidChangeContributions
+   * since probe install (starts at 0). A host restart re-scans and re-fires, so a
+   * spec can assert the auto-restart actually happened even though the pre/post
+   * contribution DTOs are identical.
+   */
+  getExtensionHostGeneration(): number
   /** Effective disabled identifiers (global ∪ workspace, workspace overrides applied). */
   getDisabledExtensionIds(): Promise<readonly string[]>
   /** Enable / disable an extension, globally (default) or for the current workspace. */

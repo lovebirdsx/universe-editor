@@ -28,6 +28,7 @@ import { RecentFilesContribution } from '../RecentFilesContribution.js'
 import { NotificationStatusContribution } from '../NotificationStatusContribution.js'
 import { WorkspaceTrustContribution } from '../WorkspaceTrustContribution.js'
 import { ExtensionDevelopmentContribution } from '../ExtensionDevelopmentContribution.js'
+import { ExtensionDevelopmentAutoReloadContribution } from '../ExtensionDevelopmentAutoReloadContribution.js'
 import { UpdateContribution } from '../UpdateContribution.js'
 import { ReleaseNotesContribution } from '../ReleaseNotesContribution.js'
 import { LogTailContribution } from '../LogTailContribution.js'
@@ -256,6 +257,16 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.extensionDevelopment',
   ExtensionDevelopmentContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Auto-restart the extension host when a development extension's build output
+// changes (debounced; gated on `extensions.autoRestartOnChange`). AfterRestore
+// alongside the dev-mode status entry; the contribution self-gates on the
+// extension-development window flag.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.extensionDevelopmentAutoReload',
+  ExtensionDevelopmentAutoReloadContribution,
   WorkbenchPhase.AfterRestore,
 )
 

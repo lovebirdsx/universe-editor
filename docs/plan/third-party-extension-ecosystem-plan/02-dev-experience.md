@@ -63,7 +63,7 @@
 ## 6. 重启命令与自动重载
 
 - **命令 `workbench.action.restartExtensionHost`**（id 对齐 VSCode，仓库红线）：Action2（套路 A，`extensionsActions.ts`，f1: true，title "重启扩展宿主"/localize）→ `ExtensionHostClientService` 暴露公有 `restartHost()` 包装现有私有 `_restart('manual')`。重启机制（stop → start → 重 translate → replay 激活）是现成的、被崩溃/信任撤销/enablement 三条链路验证过的——本命令只是给它第四个入口。**顺手收益**：这个命令对所有用户有价值（扩展卡死自救），不只 dev。
-- **自动重载（可选增强，MVP 不做）**：watch dev path 的 `dist/` 变更 → debounce → `restartHost()`。基建现成（UtilityProcess watcher），但 watcher 曾是 win32 崩溃重灾区（memory 有案底），且 esbuild watch 的多文件写入需要 debounce 调参。手动命令先跑通，自动化按需求追加。
+- **自动重载（已落地，2026-08）**：watch dev 扩展 manifest `main` 入口产物变更 → debounce → `restartHost()`。最终选型：只 watch **入口文件所在目录**（非递归），复用 `watchOutOfWorkspace` 的 node:fs 目录 watch 通道——刻意不走 parcel 递归 watcher（win32 崩溃重灾区的案底依然有效）；debounce 500ms + in-flight 串行（重启中再变更则尾随补一次）+ armTime stat 确认（`mtime > armTime` 才算真变更，防 esbuild watch 首写产物时的误触发）。开关为 setting `extensions.autoRestartOnChange`（boolean，默认 `true`，仅在扩展开发窗口生效）；首次自动重启弹一次性通知说明它会断开已 attach 的调试器。手动命令保留作兜底（产物分散多目录等监听覆盖不到的形态）。
 - **`--disable-extensions`（可选增强）**：隔离调试用（只跑 dev 扩展）。机制现成——把全部已装+内置 id 灌进 `ExtHostStartSpec.disabledIds` 即可，dev 扩展不在其列天然存活。VSCode 同名 flag。
 
 ## 7. E2E 与验证

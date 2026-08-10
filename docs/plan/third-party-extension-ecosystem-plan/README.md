@@ -45,7 +45,7 @@
 | 拿到 API 类型 | `@types/vscode`（npm） | `@universe-editor/extension-api`（npm 公开发布） | ✅ 发布就绪（手册 + tarball 验证通过，待 org 注册后 publish） |
 | 起项目 | `yo code` / `generator-code` | `npm create @universe-editor/extension` | 无（仓库内 skill 不对外） |
 | 开发调试 | F5 → Extension Development Host + 断点 | `--extension-development-path` + `--inspect-extensions` + launch.json 模板 | 无（仅 e2e env hack） |
-| 快速迭代 | Reload Window / restartExtensionHost | `workbench.action.restartExtensionHost` 命令 + 可选 watch 自动重载 | host 重启机制已有，无命令入口 |
+| 快速迭代 | Reload Window / restartExtensionHost | `workbench.action.restartExtensionHost` 命令 + watch 产物变更自动重启（`extensions.autoRestartOnChange`） | ✅ 均已落地 |
 | 打包 | `vsce package` → .vsix | `uex package` | `createVsix` 逻辑已有（`extension-packaging`），无对外 CLI |
 | 发布 | `vsce publish`（PAT token） | `uex publish`（Bearer token） | ✅ 已落地（token 认证 API + 联调测试） |
 | 市场侧账号 | Marketplace publisher 注册 | 内部阶段运维发 token；公开阶段自助注册（Phase F） | 无 |
@@ -94,7 +94,7 @@
 | API 包对外分发 ✅ | `@types/vscode` | extension-api 发 npm：deps 修正（`vscode-languageserver-types` 须进 `dependencies`，见 01 §2）、LICENSE/README、发布流程 | [01](./01-sdk-and-api.md) |
 | 扩展开发模式 | `--extensionDevelopmentPath` | 新 CLI 参数（附加语义 + id 冲突 dev 胜）、单实例锁豁免、窗口标识、trust 豁免 | [02](./02-dev-experience.md) |
 | host 断点调试 | `--inspect-extensions` | spawn 时注入 `--inspect=<port>`、sourcemap 约定、launch.json attach 模板 | [02](./02-dev-experience.md) |
-| 重启 host 命令 | `workbench.action.restartExtensionHost` | Action2 包一层现成 `_restart`；可选 dev path watch 自动重载 | [02](./02-dev-experience.md) |
+| 重启 host 命令 | `workbench.action.restartExtensionHost` | Action2 包一层现成 `_restart`；dev 扩展产物变更自动重启（watch 入口目录 + debounce，`extensions.autoRestartOnChange` 默认开） | [02](./02-dev-experience.md) |
 | 脚手架 ✅ | `yo code` | `@universe-editor/create-extension`：basic / webview 两模板，含 launch.json、esbuild、watch | [03](./03-toolchain.md) |
 | 打包/发布 CLI ✅ | `vsce` | `@universe-editor/uex`：`package`（复用 extension-packaging）、`dev`（定位并拉起编辑器）、`login`/`publish` | [03](./03-toolchain.md) |
 | 自助发布后端 ✅ | Marketplace publish API | server 加 `gallery/api/publish` 等端点 + publisher/token 模型 + 服务端防投毒校验 + 版本不可变 | [04](./04-publishing-backend.md) |
@@ -156,7 +156,7 @@ samples/hello-world/           🆕✅     外部形态样例（不进 workspace
   │   → 开发宿主窗口（标题带 [扩展开发宿主]，dev 扩展豁免 trust）
   │   → VSCode 里 F5 attach，断点命中 host 进程
   │
-  ▼ 改代码 → watch 重编 → 命令面板 "重启扩展宿主"   # Phase B
+  ▼ 改代码 → watch 重编 → 宿主自动重启（产物变更监听）   # Phase B
   │
   ▼ uex package                                  # Phase C：产出 <publisher>.<name>-<version>.vsix
   │
@@ -193,7 +193,7 @@ samples/hello-world/           🆕✅     外部形态样例（不进 workspace
 - dev 模式实例：跳过单实例锁 + userData 默认隔离 + 窗口标题/状态栏 "[扩展开发宿主]" 标识
 - dev 扩展豁免 Workspace Trust 门控（同 builtin 待遇，scanner 打 `isUnderDevelopment`）
 - `--inspect-extensions=<port>`：spawn host 时 argv 注入 `--inspect`
-- 命令 `workbench.action.restartExtensionHost`（id 对齐 VSCode）；可选增强：watch dev path 产物变更自动重启
+- 命令 `workbench.action.restartExtensionHost`（id 对齐 VSCode）；watch dev 扩展 `main` 入口产物变更自动重启（`extensions.autoRestartOnChange` 默认开，02 §6 已记录最终选型）
 - **验证**：手工目录 → dev path 启动 → 命令生效 → VSCode attach 断点命中 → 重启命令后新代码生效；e2e 补 dev path 加载冒烟
 
 ### Phase C — 工具链（[03](./03-toolchain.md)）✅ 已完成（2026-08-01）

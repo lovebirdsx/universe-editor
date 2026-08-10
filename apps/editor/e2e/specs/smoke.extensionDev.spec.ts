@@ -90,4 +90,50 @@ test.describe('@p1 extension development mode', () => {
     //    by the fixture, so the English fallback text shows).
     await expect.poll(() => workbench.page.title()).toContain('[Extension Development Host]')
   })
+
+  test('restarts the extension host automatically when the dev extension output changes @p1', async ({
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+    await expect
+      .poll(() => workbench.page.evaluate((id) => window.__E2E__!.hasCommand(id), COMMAND_ID), {
+        timeout: 10000,
+      })
+      .toBe(true)
+
+    const generationBefore = await workbench.page.evaluate(() =>
+      window.__E2E__!.getExtensionHostGeneration(),
+    )
+
+    // Touch the manifest `main` entry the auto-reload contribution watches. The
+    // appended line keeps the module valid, and the original content is restored
+    // in finally so a Playwright retry in the same worker re-arms cleanly.
+    const entryPath = path.join(devExtDir, 'dist', 'extension.js')
+    const original = fs.readFileSync(entryPath, 'utf8')
+    fs.appendFileSync(entryPath, '\n// touch')
+
+    try {
+      // The generation counter only moves when the host re-scans after a restart,
+      // which pins the auto-restart even though the contributions DTO is unchanged.
+      await expect
+        .poll(() => workbench.page.evaluate(() => window.__E2E__!.getExtensionHostGeneration()), {
+          timeout: 15000,
+        })
+        .toBeGreaterThan(generationBefore)
+
+      // After the automatic restart the dev extension's command is registered again.
+      await expect
+        .poll(() => workbench.page.evaluate((id) => window.__E2E__!.hasCommand(id), COMMAND_ID), {
+          timeout: 15000,
+        })
+        .toBe(true)
+    } finally {
+      // Disable the setting first so the restore write cannot schedule another
+      // restart racing the fixture teardown.
+      await workbench.page.evaluate(() =>
+        window.__E2E__!.updateConfigValue('extensions.autoRestartOnChange', false),
+      )
+      fs.writeFileSync(entryPath, original)
+    }
+  })
 })

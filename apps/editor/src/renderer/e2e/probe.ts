@@ -250,6 +250,15 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
   })
   ds.add(d)
 
+  // Counts onDidChangeContributions so a spec can observe a host restart even
+  // when the pre/post contribution DTOs are identical.
+  let extensionHostGeneration = 0
+  ds.add(
+    services.extensionHostClientService.onDidChangeContributions(() => {
+      extensionHostGeneration += 1
+    }),
+  )
+
   const probe: E2EProbe = {
     whenReady: () => services.lifecycleService.when(LifecyclePhase.Ready),
     whenRestored: () => services.lifecycleService.when(LifecyclePhase.Restored),
@@ -716,6 +725,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const contributions = await services.extensionHostClientService.getContributions()
       return contributions.filter((c) => c.extensionIsUnderDevelopment === true).map((c) => c.id)
     },
+    getExtensionHostGeneration: (): number => extensionHostGeneration,
     getDisabledExtensionIds: (): Promise<readonly string[]> =>
       services.extensionEnablementService.getEffectiveDisabledIds(),
     setExtensionEnablement: (

@@ -14,7 +14,7 @@ npm install && npm run watch            # ② 装依赖（API 包来自公开 np
 npx uex dev --inspect=9229              # ③ 拉起扩展开发宿主：直接加载本目录的扩展
         │                                #    VSCode 里 F5 attach，断点命中扩展宿主进程
         ▼
-改代码 → watch 重编 → 命令面板「重启扩展宿主」  # ④ 迭代循环
+改代码 → watch 重编 → 宿主自动重启          # ④ 迭代循环（autoRestartOnChange 可关）
         │
         ▼
 npx uex package                          # ⑤ 产出 <publisher>.<name>-<version>.vsix
