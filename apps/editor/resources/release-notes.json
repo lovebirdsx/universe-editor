@@ -1,5 +1,38 @@
 [
   {
+    "version": "0.1.62",
+    "date": "2026-08-10",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "用户首条消息的折叠按钮常驻，其它消息如果过长，底部始终有折叠按钮。",
+          "加入进程管理器",
+          "session中的计划卡片支持键盘导航与 Alt+F 折叠",
+          "命令面板支持快捷绑定快捷键",
+          "p4/git graph支持 go to symbol 快速跳转",
+          "Git/Perforce Graph 打开时自动选中首行并展示提交变更",
+          "快捷键的编辑体验，对齐vscode",
+          "支持在 blame 和 timeline 中打开 commit 的多文件 diff 视图",
+          "新增 AI 一键修复代码问题功能",
+          "会话恢复时可恢复plan执行进行",
+          "session editor右键和tab加入打开session位置支持"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "统一通知图标样式并替换错误图标为 SVG 避免误认关闭按钮",
+          "codex session历史回放时确保图片块在文本块之前渲染",
+          "会话可以保留选区上下文在用户的输入消息中",
+          "本地化查漏补缺"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.61",
     "date": "2026-08-07",
     "groups": [
