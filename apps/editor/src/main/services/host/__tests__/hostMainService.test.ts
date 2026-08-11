@@ -7,16 +7,22 @@
 
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { nativeTheme } from 'electron'
 import { ShutdownReason } from '@universe-editor/platform'
 
-vi.mock('electron', () => ({
-  app: { getName: () => 'Test', getVersion: () => '1.0.0', getPath: () => '/tmp' },
-  dialog: {},
-  shell: {},
-  nativeImage: {},
-  nativeTheme: { shouldUseDarkColors: true, on: () => {}, removeListener: () => {} },
-  Notification: { isSupported: () => false },
-}))
+vi.mock('electron', async () => {
+  const { EventEmitter } = await import('node:events')
+  const nativeTheme = new EventEmitter() as EventEmitter & { shouldUseDarkColors: boolean }
+  nativeTheme.shouldUseDarkColors = true
+  return {
+    app: { getName: () => 'Test', getVersion: () => '1.0.0', getPath: () => '/tmp' },
+    dialog: {},
+    shell: {},
+    nativeImage: {},
+    nativeTheme,
+    Notification: { isSupported: () => false },
+  }
+})
 
 const { MainHostService } = await import('../hostMainService.js')
 
@@ -89,6 +95,30 @@ describe('MainHostService', () => {
     win.emit('unmaximize')
     expect(seen).toEqual([true, false])
     svc.dispose()
+  })
+
+  it('shares a single nativeTheme subscription across any number of windows', () => {
+    const baseline = nativeTheme.listenerCount('updated')
+    const services = Array.from({ length: 11 }, () => new MainHostService(new FakeWindow().asWin()))
+    expect(nativeTheme.listenerCount('updated')).toBe(1)
+    for (const svc of services) svc.dispose()
+    expect(nativeTheme.listenerCount('updated')).toBe(baseline)
+  })
+
+  it('fans OS scheme flips out to every live window host service', () => {
+    const svcA = new MainHostService(new FakeWindow().asWin())
+    const svcB = new MainHostService(new FakeWindow().asWin())
+    const seenA: boolean[] = []
+    const seenB: boolean[] = []
+    svcA.onDidChangeColorScheme((v) => seenA.push(v))
+    svcB.onDidChangeColorScheme((v) => seenB.push(v))
+
+    nativeTheme.emit('updated')
+    expect(seenA).toEqual([true])
+    expect(seenB).toEqual([true])
+
+    svcA.dispose()
+    svcB.dispose()
   })
 
   it('openNewWindow delegates to the injected factory', async () => {

@@ -20,6 +20,7 @@ import {
   Emitter,
   NullLogger,
   ShutdownReason,
+  toDisposable,
   URI,
   type Event,
   type ExternalTerminalKind,
@@ -59,6 +60,32 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
+// nativeTheme is process-global while host services are per-window: subscribing
+// per window stacks one 'updated' listener per window and trips Node's
+// MaxListenersExceededWarning past 10 windows. Share one upstream subscription
+// and fan out to the per-window listeners (ref-counted so teardown is exact).
+const nativeThemeUpdatedListeners = new Set<() => void>()
+let nativeThemeSubscription: (() => void) | undefined
+
+const dispatchNativeThemeUpdated = (): void => {
+  for (const listener of nativeThemeUpdatedListeners) listener()
+}
+
+function subscribeNativeThemeUpdated(listener: () => void): IDisposable {
+  if (!nativeThemeSubscription) {
+    nativeTheme.on('updated', dispatchNativeThemeUpdated)
+    nativeThemeSubscription = dispatchNativeThemeUpdated
+  }
+  nativeThemeUpdatedListeners.add(listener)
+  return toDisposable(() => {
+    nativeThemeUpdatedListeners.delete(listener)
+    if (nativeThemeUpdatedListeners.size === 0 && nativeThemeSubscription) {
+      nativeTheme.removeListener('updated', nativeThemeSubscription)
+      nativeThemeSubscription = undefined
+    }
+  })
+}
+
 export class MainHostService implements IHostServiceWire, IDisposable {
   declare readonly _serviceBrand: undefined
 
@@ -75,6 +102,9 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   // OS scheme flips to its renderer (VSCode IHostColorSchemeService 的对等物）。
   private readonly _onNativeThemeUpdated = (): void =>
     this._onDidChangeColorScheme.fire(nativeTheme.shouldUseDarkColors)
+  private readonly _nativeThemeSubscription = subscribeNativeThemeUpdated(
+    this._onNativeThemeUpdated,
+  )
 
   constructor(
     private readonly _win: BrowserWindow,
@@ -84,7 +114,6 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   ) {
     _win.on('maximize', this._onMaximize)
     _win.on('unmaximize', this._onUnmaximize)
-    nativeTheme.on('updated', this._onNativeThemeUpdated)
   }
 
   isDarkColorScheme(): Promise<boolean> {
@@ -455,7 +484,7 @@ export class MainHostService implements IHostServiceWire, IDisposable {
       this._win.removeListener('maximize', this._onMaximize)
       this._win.removeListener('unmaximize', this._onUnmaximize)
     }
-    nativeTheme.removeListener('updated', this._onNativeThemeUpdated)
+    this._nativeThemeSubscription.dispose()
     this._onDidChangeMaximized.dispose()
     this._onDidChangeColorScheme.dispose()
   }
