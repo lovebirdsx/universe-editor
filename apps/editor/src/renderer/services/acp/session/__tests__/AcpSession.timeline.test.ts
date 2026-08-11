@@ -56,6 +56,11 @@ import {
 } from '@agentclientprotocol/sdk'
 import { stripSelectionReplayChunk } from '../acpSession.js'
 import {
+  DIFF_SIDE_CAP,
+  MEDIA_DATA_CAP,
+  MESSAGE_TEXT_CAP,
+  MESSAGE_TEXT_REBUILD_AT,
+  MESSAGE_TEXT_TRUNCATED_MARKER,
   RAW_INPUT_CAP,
   TERMINAL_OUTPUT_CAP,
   TERMINAL_OUTPUT_REBUILD_AT,
@@ -84,6 +89,7 @@ import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import type { SelectionContext } from '../../promptContext.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
+import { stubWindowsService } from './stubWindowsService.js'
 
 const FAKE_URI_IDENTITY = new UriIdentityService('linux')
 
@@ -378,6 +384,7 @@ function makeService(
     new StubFileService(),
     new StubExtensionMcpServersService(),
     new StubMcpServerEnablementService(),
+    stubWindowsService(),
   )
   attachmentStores.set(service, messageAttachments)
   return service
@@ -751,6 +758,74 @@ describe('AcpSession.timeline', () => {
       },
     })
     expect(find('tc-small-raw').rawInput).toBeUndefined()
+  })
+
+  it('inbound caps: streamed message text, media chunks, and diff sides are bounded on ingest', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    // Message accumulator: stream one oversized chunk, then a follow-up chunk
+    // that trips the hysteresis gate on merge.
+    const bigChunk = 'a'.repeat(MESSAGE_TEXT_REBUILD_AT + 100)
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: bigChunk },
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'END' },
+      },
+    })
+    const msg = s.messages.get()[0]
+    if (!msg) throw new Error('expected an agent message')
+    expect(msg.text.startsWith(MESSAGE_TEXT_TRUNCATED_MARKER)).toBe(true)
+    expect(msg.text.endsWith('END')).toBe(true)
+    expect(msg.text.length).toBe(MESSAGE_TEXT_TRUNCATED_MARKER.length + MESSAGE_TEXT_CAP)
+    // The blocks and the derived text stay consistent (no double residency of
+    // the dropped head).
+    expect(msg.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('')).toBe(msg.text)
+
+    // Media chunk in the message stream: oversized base64 data is emptied but
+    // the block survives with its mimeType.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'image', data: 'A'.repeat(MEDIA_DATA_CAP + 1), mimeType: 'image/png' },
+      },
+    })
+    const msg2 = s.messages.get()[0]
+    const imageBlock = msg2?.blocks.find((b) => b.type === 'image')
+    if (imageBlock?.type !== 'image') throw new Error('expected an image block')
+    expect(imageBlock.data).toBe('')
+    expect(imageBlock.mimeType).toBe('image/png')
+
+    // Diff sides: oversized old/new text are truncated on ingest.
+    const bigSide = 'd'.repeat(DIFF_SIDE_CAP + 1)
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-diff',
+        title: 'Edit',
+        kind: 'edit',
+        status: 'completed',
+        content: [{ type: 'diff', path: '/a.ts', oldText: bigSide, newText: bigSide }],
+      },
+    })
+    const diffSlot = s.timeline.get().find((it) => it.kind === 'toolCall' && it.id === 'tc-diff')
+    if (!diffSlot || diffSlot.kind !== 'toolCall') throw new Error('expected toolCall')
+    const diff = diffSlot.call.diffs[0]
+    if (!diff) throw new Error('expected a diff entry')
+    expect(diff.oldText).toContain('chars truncated')
+    expect(diff.newText).toContain('chars truncated')
+    expect(diff.oldText.length).toBeLessThan(bigSide.length)
   })
 
   it('a full terminal_output snapshot replaces accumulated deltas', async () => {

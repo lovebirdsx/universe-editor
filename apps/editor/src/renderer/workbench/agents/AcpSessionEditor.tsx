@@ -5,12 +5,13 @@
  *  a session that exists in history but isn't live yet.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertCircle, KeyRound, Loader2, RotateCw } from 'lucide-react'
 import {
   ICommandService,
   IEditorInput,
   IEditorService,
+  IWindowsService,
   IWorkspaceService,
   IUriIdentityService,
   localize,
@@ -21,6 +22,7 @@ import { IAcpSessionHistoryService } from '../../services/acp/session/acpSession
 import type { AcpSessionHistoryEntry } from '../../services/acp/session/acpSessionHistory.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { isAuthRequiredError } from '../../services/acp/session/acpAuthError.js'
+import { shouldPauseAcpAutoResume } from '../../services/acp/session/acpAutoResumeGuard.js'
 import { ChatBody } from './ChatBody.js'
 import { ForeignSessionPreview } from './ForeignSessionPreview.js'
 import styles from './agents.module.css'
@@ -28,6 +30,7 @@ import styles from './agents.module.css'
 type ResumePhase =
   | { kind: 'idle' }
   | { kind: 'pending' }
+  | { kind: 'paused' }
   | { kind: 'error'; message: string; needsAuth: boolean }
 
 export function AcpSessionEditor({ input }: { input: IEditorInput }) {
@@ -131,33 +134,84 @@ function AcpSessionResumer({ input }: { input: AcpSessionEditorInput }) {
   const history = useService(IAcpSessionHistoryService)
   const editor = useService(IEditorService)
   const commands = useService(ICommandService)
+  const windows = useService(IWindowsService)
   const sessionId = input.sessionId
   const [phase, setPhase] = useState<ResumePhase>({ kind: 'idle' })
+  // Set when the user clicks "load anyway" on the OOM-paused placeholder — the
+  // guard must not re-pause the manual retry.
+  const resumeAnywayRef = useRef(false)
 
   useEffect(() => {
     if (phase.kind !== 'idle') return
-    setPhase({ kind: 'pending' })
-    service.resumeSession(sessionId).then(
-      () => {
-        // 成功路径：service.sessions 的变更驱动父组件 useObservable 重渲，渲染分支自动
-        // 切到 <ChatBody />（本组件随即卸载），无需在此 setPhase。
-      },
-      (err: unknown) => {
-        // 若 session 已从 history 消失，说明它是一个「创建了但从未发过消息」的空会话：
-        // 重启后 agent 没能恢复它，已被静默丢弃。此时不显示加载失败，直接关闭本 tab。
-        // 真正的失败（agent 崩溃等）会保留 history 条目 → 落到下面的 error 分支并提供重试。
-        if (history.get(sessionId) === undefined) {
-          editor.closeEditor(input.id)
-          return
-        }
-        setPhase({
-          kind: 'error',
-          message: (err as Error).message,
-          needsAuth: isAuthRequiredError(err),
-        })
-      },
+    let cancelled = false
+    const kick = () => {
+      setPhase({ kind: 'pending' })
+      service.resumeSession(sessionId).then(
+        () => {
+          // 成功路径：service.sessions 的变更驱动父组件 useObservable 重渲，渲染分支自动
+          // 切到 <ChatBody />（本组件随即卸载），无需在此 setPhase。
+        },
+        (err: unknown) => {
+          if (cancelled) return
+          // 若 session 已从 history 消失，说明它是一个「创建了但从未发过消息」的空会话：
+          // 重启后 agent 没能恢复它，已被静默丢弃。此时不显示加载失败，直接关闭本 tab。
+          // 真正的失败（agent 崩溃等）会保留 history 条目 → 落到下面的 error 分支并提供重试。
+          if (history.get(sessionId) === undefined) {
+            editor.closeEditor(input.id)
+            return
+          }
+          setPhase({
+            kind: 'error',
+            message: (err as Error).message,
+            needsAuth: isAuthRequiredError(err),
+          })
+        },
+      )
+    }
+    if (resumeAnywayRef.current) {
+      kick()
+      return
+    }
+    // Crash-loop guard: if this window's renderer just died of OOM (typically
+    // while replaying a huge history), don't immediately re-trigger the same
+    // replay — park on a paused placeholder until the user asks to continue.
+    shouldPauseAcpAutoResume(windows).then((pause) => {
+      if (cancelled) return
+      if (pause) setPhase({ kind: 'paused' })
+      else kick()
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [service, history, editor, windows, input, sessionId, phase.kind])
+
+  if (phase.kind === 'paused') {
+    return (
+      <div className={styles['sessionLoading']} data-testid="acp-session-resume-paused">
+        <div className={styles['sessionLoadingHeader']}>
+          <AlertCircle size={20} strokeWidth={1.75} aria-hidden="true" />
+          <p className={styles['sessionLoadingMessage']}>
+            {localize(
+              'acp.session.resumePausedAfterOom',
+              'Automatic resume is paused because this window ran out of memory while loading this session last time.',
+            )}
+          </p>
+        </div>
+        <button
+          type="button"
+          className={styles['sessionRetryButton']}
+          onClick={() => {
+            resumeAnywayRef.current = true
+            setPhase({ kind: 'idle' })
+          }}
+          data-testid="acp-session-resume-anyway"
+        >
+          <RotateCw size={14} strokeWidth={1.75} aria-hidden="true" />
+          {localize('acp.session.resumeAnyway', 'Load Anyway')}
+        </button>
+      </div>
     )
-  }, [service, history, editor, input, sessionId, phase.kind])
+  }
 
   if (phase.kind === 'error') {
     return (

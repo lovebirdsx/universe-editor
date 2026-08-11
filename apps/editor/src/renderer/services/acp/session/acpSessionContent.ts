@@ -7,6 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { ContentBlock, ToolCallContent, ToolCallLocation } from '@agentclientprotocol/sdk'
+import { capContentBlock, truncateDiffSideText } from './acpContentLimits.js'
 import type {
   AcpToolCall,
   AcpToolCallDiff,
@@ -111,13 +112,13 @@ export function splitToolCallContent(content: readonly ToolCallContent[]): {
   for (const item of content) {
     switch (item.type) {
       case 'content':
-        blocks.push(item.content)
+        blocks.push(capContentBlock(item.content))
         break
       case 'diff':
         diffs.push({
           path: item.path,
-          oldText: item.oldText ?? '',
-          newText: item.newText,
+          oldText: truncateDiffSideText(item.oldText ?? ''),
+          newText: truncateDiffSideText(item.newText),
         })
         break
       case 'terminal':
@@ -160,6 +161,7 @@ export function mergeStreamingBlock(
     if (last && last.type === 'text') {
       return [...blocks.slice(0, -1), { type: 'text', text: last.text + chunk.text }]
     }
+    return [...blocks, chunk]
   }
-  return [...blocks, chunk]
+  return [...blocks, capContentBlock(chunk)]
 }

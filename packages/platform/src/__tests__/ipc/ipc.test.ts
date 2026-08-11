@@ -2,14 +2,16 @@
  *  Tests for packages/platform/src/ipc/ipc.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   ChannelClient,
   ChannelServer,
   createChannelFromObject,
   InMemoryMessagePassingProtocol,
   IpcChannelDisposedError,
+  type IMessagePassingProtocol,
 } from '../../ipc/ipc.js'
+import { Emitter, Event } from '../../base/event.js'
 import { URI } from '../../base/uri.js'
 import { CancellationToken, CancellationTokenSource } from '../../base/cancellation.js'
 import { CancellationError } from '../../base/errors.js'
@@ -498,5 +500,86 @@ describe('request cancellation', () => {
     } finally {
       setDisposableTracker(null)
     }
+  })
+})
+
+describe('protocol close tears down server event subscriptions', () => {
+  class ClosableProtocol implements IMessagePassingProtocol {
+    private readonly _onMessage = new Emitter<Uint8Array>()
+    readonly onMessage = this._onMessage.event
+    private readonly _onDidClose = new Emitter<void>()
+    readonly onDidClose = this._onDidClose.event
+    private _closed = false
+    readonly sent: Uint8Array[] = []
+    send(data: Uint8Array): void {
+      // Mirror ElectronProtocol: once the peer is gone, sends are dropped at
+      // the gate — the interesting cost is everything upstream of send().
+      if (!this._closed) this.sent.push(data)
+    }
+    close(): void {
+      this._closed = true
+      this._onDidClose.fire()
+    }
+    reopen(): void {
+      this._closed = false
+    }
+  }
+
+  it('clears subscriptions on close so a firing emitter no longer reaches encode', async () => {
+    const protocol = new ClosableProtocol()
+    const server = new ChannelServer(protocol)
+    const emitter = new Emitter<number>()
+    server.registerChannel('chan', {
+      call: () => Promise.reject(new Error('no calls')),
+      listen: <T>(): Event<T> => emitter.event as unknown as Event<T>,
+    })
+
+    server.handleMessage({ type: 'subscribe', channel: 'chan', event: 'changed' })
+    emitter.fire(1)
+    expect(protocol.sent).toHaveLength(1)
+
+    // Count listener invocations as a proxy for the encode work the
+    // subscription callback performs (encode happens between the listener
+    // firing and the protocol gate dropping the bytes).
+    const listener = vi.fn()
+    emitter.event(listener)
+
+    protocol.close()
+    emitter.fire(2)
+    emitter.fire(3)
+    // The direct listener still fires; the torn-down subscription's does not.
+    expect(listener).toHaveBeenCalledTimes(2)
+    expect(protocol.sent).toHaveLength(1)
+    const subscriptions = (server as unknown as { _eventSubscriptions: Map<string, unknown> })
+      ._eventSubscriptions
+    expect(subscriptions.size).toBe(0)
+
+    server.dispose()
+    emitter.dispose()
+  })
+
+  it('a re-subscribe after close rebuilds the subscription (reload recovery)', async () => {
+    const protocol = new ClosableProtocol()
+    const server = new ChannelServer(protocol)
+    const emitter = new Emitter<number>()
+    server.registerChannel('chan', {
+      call: () => Promise.reject(new Error('no calls')),
+      listen: <T>(): Event<T> => emitter.event as unknown as Event<T>,
+    })
+
+    server.handleMessage({ type: 'subscribe', channel: 'chan', event: 'changed' })
+    protocol.close()
+    emitter.fire(1)
+    expect(protocol.sent).toHaveLength(0)
+
+    // The recovered frame re-subscribes; sending is possible again in this
+    // test double (production: ElectronProtocol reopens its own gate).
+    protocol.reopen()
+    server.handleMessage({ type: 'subscribe', channel: 'chan', event: 'changed' })
+    emitter.fire(2)
+    expect(protocol.sent).toHaveLength(1)
+
+    server.dispose()
+    emitter.dispose()
   })
 })

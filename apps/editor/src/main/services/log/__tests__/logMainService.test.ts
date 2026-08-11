@@ -326,6 +326,46 @@ describe('LogMainService', () => {
     expect(content).not.toContain('[truncated')
     expect(content).toContain(exact)
   })
+
+  it('drops from the head when the write queue exceeds the 16MB byte budget', async () => {
+    const svc = new LogMainService()
+    const logger = svc.createLogger({ id: 'bytecap', name: 'ByteCap' })
+    // 300 x ~64KB lines ≈ 19MB — over the 16MB queue byte budget but far under
+    // the 10000-line cap, so only the byte budget can be responsible for drops.
+    // The enqueue loop is synchronous, so no debounced flush can drain mid-way.
+    const big = 'z'.repeat(64 * 1024)
+    for (let i = 0; i < 300; i++) {
+      logger.info(`flood-${i} ${big}`)
+    }
+
+    const inner = logger as unknown as {
+      _writeQueue: Array<{ line: string }>
+      _queuedBytes: number
+    }
+    expect(inner._queuedBytes).toBeLessThanOrEqual(16 * 1024 * 1024)
+
+    logger.flush()
+    const logFile = join(tmpDir, 'logs', svc.getSessionId(), 'bytecap.log')
+    const content = await waitForFileContains(logFile, 'dropped')
+    expect(content).toMatch(/dropped \d+ buffered log entries, \d+ bytes/)
+    // The oldest lines were sacrificed; the newest survived.
+    expect(content).not.toContain('flood-0 ')
+    expect(content).toContain('flood-299 ')
+  })
+
+  it('normal log volume stays below the byte budget and drops nothing', async () => {
+    const svc = new LogMainService()
+    const logger = svc.createLogger({ id: 'byteok', name: 'ByteOk' })
+    for (let i = 0; i < 50; i++) {
+      logger.info(`ordinary line ${i}`)
+    }
+    logger.flush()
+
+    const logFile = join(tmpDir, 'logs', svc.getSessionId(), 'byteok.log')
+    const content = await waitForFileContains(logFile, 'ordinary line 49')
+    expect(content).toContain('ordinary line 0')
+    expect(content).not.toContain('dropped')
+  })
 })
 
 describe('MainLogChannelService', () => {

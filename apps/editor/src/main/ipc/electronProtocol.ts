@@ -44,6 +44,17 @@ export function installMainProtocolDispatcher(): void {
 export class ElectronProtocol implements IMessagePassingProtocol {
   private readonly _emitter = new Emitter<Uint8Array>()
   readonly onMessage: Event<Uint8Array> = this._emitter.event
+  // Fired when the frame can no longer receive anything (crash / window gone).
+  // ChannelServer listens and tears down its event subscriptions, so a firing
+  // service emitter no longer encodes a payload the gate below would drop.
+  // Not fired for a reload navigation: the new frame's own subscriptions would
+  // be cleared again while it is mid re-subscribe (subscribe replaces by key),
+  // and reload re-subscriptions land AFTER the new frame's acceptMessage reopens
+  // the gate — a close signal here could clear them with no later signal to
+  // rebuild. A reload flood is bounded (new frame quickly reopens the gate); a
+  // crash flood is not (48s+ before the OS notices), so only the latter fires.
+  private readonly _closeEmitter = new Emitter<void>()
+  readonly onDidClose: Event<void> = this._closeEmitter.event
   private _disposed = false
   private readonly _senderId: number
   // Gate that tracks whether the renderer frame can currently receive messages.
@@ -78,6 +89,7 @@ export class ElectronProtocol implements IMessagePassingProtocol {
     // frame is dead until an explicit reload rebuilds it.
     bind('render-process-gone', () => {
       this._frameAlive = false
+      this._closeEmitter.fire()
     })
     // Close the gate only for a MAIN-frame navigation (a reload). `did-start-loading`
     // was tempting but is WebContents-wide: an extension webview <iframe> navigating
@@ -132,6 +144,7 @@ export class ElectronProtocol implements IMessagePassingProtocol {
     if (this._disposed) return
     this._disposed = true
     this._frameAlive = false
+    this._closeEmitter.fire()
     if (!this._webContents.isDestroyed()) {
       const wc = this._webContents as unknown as {
         removeListener(e: string, h: (...args: unknown[]) => void): void
@@ -143,6 +156,7 @@ export class ElectronProtocol implements IMessagePassingProtocol {
     this._frameListeners.length = 0
     senderProtocols.delete(this._senderId)
     this._emitter.dispose()
+    this._closeEmitter.dispose()
   }
 }
 

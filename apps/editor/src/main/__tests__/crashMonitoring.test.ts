@@ -10,7 +10,15 @@ vi.mock('electron', () => ({
   crashReporter: { start: vi.fn() },
 }))
 
-const { formatMainHeapSample, MAIN_HEAP_WARN_BYTES } = await import('../crashMonitoring.js')
+const {
+  formatMainHeapSample,
+  MAIN_HEAP_WARN_BYTES,
+  MAIN_HEAP_BUSY_BYTES,
+  PROCESS_METRICS_NORMAL_INTERVAL_MS,
+  PROCESS_METRICS_BUSY_INTERVAL_MS,
+  processMetricsIntervalMs,
+  installProcessMetricsLogging,
+} = await import('../crashMonitoring.js')
 
 describe('formatMainHeapSample', () => {
   it('formats heapUsed/heapTotal/external/rss in rounded MB', () => {
@@ -37,5 +45,48 @@ describe('formatMainHeapSample', () => {
 describe('MAIN_HEAP_WARN_BYTES', () => {
   it('is 1.5GB — the agreed pre-OOM warn threshold', () => {
     expect(MAIN_HEAP_WARN_BYTES).toBe(1536 * 1024 * 1024)
+  })
+})
+
+describe('processMetricsIntervalMs', () => {
+  it('uses the normal 30s interval well below the busy threshold', () => {
+    expect(processMetricsIntervalMs(100 * 1024 * 1024)).toBe(30_000)
+    expect(PROCESS_METRICS_NORMAL_INTERVAL_MS).toBe(30_000)
+  })
+
+  it('switches to the 10s busy interval once heapUsed exceeds 512MB', () => {
+    expect(processMetricsIntervalMs(MAIN_HEAP_BUSY_BYTES + 1)).toBe(10_000)
+    expect(PROCESS_METRICS_BUSY_INTERVAL_MS).toBe(10_000)
+    expect(MAIN_HEAP_BUSY_BYTES).toBe(512 * 1024 * 1024)
+  })
+
+  it('stays on the normal interval at exactly the threshold (strictly over means busy)', () => {
+    expect(processMetricsIntervalMs(MAIN_HEAP_BUSY_BYTES)).toBe(PROCESS_METRICS_NORMAL_INTERVAL_MS)
+  })
+
+  it('recovers to the normal interval after the heap falls back', () => {
+    expect(processMetricsIntervalMs(MAIN_HEAP_BUSY_BYTES - 1)).toBe(
+      PROCESS_METRICS_NORMAL_INTERVAL_MS,
+    )
+  })
+})
+
+describe('installProcessMetricsLogging', () => {
+  it('takes the first sample synchronously at install (a fast crash still leaves a data point)', () => {
+    const lines: string[] = []
+    const disposable = installProcessMetricsLogging({
+      createLogger: () =>
+        ({
+          info: (line: string) => lines.push(line),
+          warn: (line: string) => lines.push(line),
+        }) as never,
+    })
+    try {
+      // No timer advance: the app-metrics line and the heap line are written
+      // by the synchronous first sample.
+      expect(lines.some((l) => l.startsWith('main-heap '))).toBe(true)
+    } finally {
+      disposable.dispose()
+    }
   })
 })

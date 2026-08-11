@@ -368,6 +368,7 @@ interface BuildOptions {
   readonly whenWorkspaceReady?: Promise<void>
   readonly getLiveSessionIds?: () => ReadonlySet<string>
   readonly getHistoryScope?: () => SessionHistoryScope
+  readonly shouldSkipAutoResume?: () => Promise<boolean>
 }
 
 interface BuildResult {
@@ -413,6 +414,9 @@ function build(opts: BuildOptions = {}): BuildResult {
     whenWorkspaceReady: () => whenWorkspaceReady,
     getLiveSessionIds: opts.getLiveSessionIds ?? (() => new Set<string>()),
     getHistoryScope: opts.getHistoryScope ?? (() => 'workspace'),
+    ...(opts.shouldSkipAutoResume !== undefined
+      ? { shouldSkipAutoResume: opts.shouldSkipAutoResume }
+      : {}),
   }
   const coordinator = new AcpSessionRestoreCoordinator(
     client,
@@ -508,6 +512,37 @@ describe('AcpSessionRestoreCoordinator — pending restore load', () => {
     coordinator = built.coordinator
     coordinator.start()
     await expect(coordinator.tryRestoreActiveSession()).resolves.toBeUndefined()
+  })
+
+  it('skips the pending restore when shouldSkipAutoResume says so (recent OOM crash)', async () => {
+    const storage = new FakeStorage()
+    await storage.set(ACP_ACTIVE_SESSION_STORAGE_KEY, 'h-abc')
+    const built = build({
+      storage,
+      agentIds: [],
+      shouldSkipAutoResume: async () => true,
+    })
+    coordinator = built.coordinator
+    coordinator.start()
+    await coordinator.tryRestoreActiveSession()
+    expect(built.callbacks.resumeCalls).toEqual([])
+    // The pending id was consumed — a later trigger does not resume either.
+    await coordinator.tryRestoreActiveSession()
+    expect(built.callbacks.resumeCalls).toEqual([])
+  })
+
+  it('resumes normally when shouldSkipAutoResume says no', async () => {
+    const storage = new FakeStorage()
+    await storage.set(ACP_ACTIVE_SESSION_STORAGE_KEY, 'h-abc')
+    const built = build({
+      storage,
+      agentIds: [],
+      shouldSkipAutoResume: async () => false,
+    })
+    coordinator = built.coordinator
+    coordinator.start()
+    await coordinator.tryRestoreActiveSession()
+    expect(built.callbacks.resumeCalls).toEqual(['h-abc'])
   })
 })
 

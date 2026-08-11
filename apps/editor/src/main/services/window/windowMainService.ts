@@ -21,6 +21,7 @@ import {
   type Event,
   type IDisposable,
   type IOpenWindowInfo,
+  type IWindowRenderCrashInfo,
   type ShutdownConfirmationContext,
   type IWorkspace,
 } from '@universe-editor/platform'
@@ -112,6 +113,13 @@ export class WindowMainService implements IWindowMainService {
   /** Window ids with a crash-recovery dialog currently showing, so a crash storm
    *  never stacks multiple prompts. Cleared when the dialog resolves. */
   private readonly _crashHandled = new Set<number>()
+  /**
+   * Most recent unexpected renderer exit per window (any render-process-gone
+   * reason except clean-exit). Read back by the reloaded renderer through
+   * `IWindowsService.getLastRenderCrash` so it can break crash loops (e.g. an
+   * OOMing session restore). In-memory only — a real app restart resets it.
+   */
+  private readonly _lastRenderCrash = new Map<number, IWindowRenderCrashInfo>()
   private readonly _sessionStore = new WindowSessionStore(() => this._windows.values())
   private _hasCreatedFirstWindow = false
 
@@ -243,6 +251,7 @@ export class WindowMainService implements IWindowMainService {
     // it would block the driver; a crash there must fail the test, not stall it.
     win.webContents.on('render-process-gone', (_event, details) => {
       if (details.reason === 'clean-exit') return
+      this._lastRenderCrash.set(win.id, { reason: details.reason, at: Date.now() })
       roleRegistration?.dispose()
       roleRegistration = undefined
       const line = `render-process-gone id=${win.id} reason=${details.reason} exitCode=${details.exitCode ?? 'n/a'}`
@@ -374,6 +383,7 @@ export class WindowMainService implements IWindowMainService {
       this._windows.delete(win.id)
       this._allowClose.delete(win.id)
       this._crashHandled.delete(win.id)
+      this._lastRenderCrash.delete(win.id)
       this._opts.appServices.sessionSwitcher.unregisterWindow(win.id)
       logger.info(`closed id=${win.id}`)
       this._onDidChangeWindows.fire()
@@ -495,6 +505,10 @@ export class WindowMainService implements IWindowMainService {
       })
     }
     return infos
+  }
+
+  getLastRenderCrash(windowId: number): IWindowRenderCrashInfo | null {
+    return this._lastRenderCrash.get(windowId) ?? null
   }
 
   /**

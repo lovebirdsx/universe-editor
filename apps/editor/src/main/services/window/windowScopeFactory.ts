@@ -129,7 +129,9 @@ export async function createWindowScopedServices(opts: {
     fileWatcher,
   }
 
-  const windowsService = disposables.add(new MainWindowsService(windowsServiceHost, isFirstWindow))
+  const windowsService = disposables.add(
+    new MainWindowsService(windowsServiceHost, isFirstWindow, win.id),
+  )
   const ipc = bootstrapWindowIpc(win, appServices, windowServices, windowsService)
   disposables.add(ipc.disposable)
 

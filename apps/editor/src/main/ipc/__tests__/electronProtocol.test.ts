@@ -144,4 +144,33 @@ describe('ElectronProtocol dead-frame gate', () => {
     protocol.send(new Uint8Array([1]))
     expect(wc.sent).toHaveLength(0)
   })
+
+  it('fires onDidClose on render-process-gone so ChannelServer drops event subscriptions', () => {
+    const { wc, protocol } = make()
+    const onClose = vi.fn()
+    protocol.onDidClose(onClose)
+    wc.emit('render-process-gone', {}, { reason: 'crashed' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    protocol.disconnect()
+  })
+
+  it('does NOT fire onDidClose on a main-frame reload navigation', () => {
+    // Reload re-subscriptions land AFTER the new frame reopens the gate; a
+    // close signal here could clear them with nothing to rebuild them. Only
+    // the unbounded crash flood fires the signal.
+    const { wc, protocol } = make()
+    const onClose = vi.fn()
+    protocol.onDidClose(onClose)
+    wc.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })
+    expect(onClose).not.toHaveBeenCalled()
+    protocol.disconnect()
+  })
+
+  it('fires onDidClose on disconnect (window destroyed)', () => {
+    const { protocol } = make()
+    const onClose = vi.fn()
+    protocol.onDidClose(onClose)
+    protocol.disconnect()
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
 })

@@ -231,6 +231,59 @@ describe('WindowMainService', () => {
     })
   })
 
+  describe('getLastRenderCrash', () => {
+    function grabClosedHandler(): () => void {
+      const win = vi.mocked(BrowserWindow).mock.results.at(-1)?.value as {
+        on: { mock: { calls: Array<[string, (...args: never[]) => void]> } }
+      }
+      const call = win.on.mock.calls.find(([event]) => event === 'closed')
+      if (!call) throw new Error('no closed handler registered')
+      return call[1] as () => void
+    }
+
+    it('returns null for a window that never crashed', async () => {
+      const svc = new WindowMainService(makeOpts())
+      const id = await svc.createWindow()
+      expect(svc.getLastRenderCrash(id)).toBeNull()
+    })
+
+    it('records reason and timestamp for an oom crash', async () => {
+      const svc = new WindowMainService(makeOpts())
+      const id = await svc.createWindow()
+      const before = Date.now()
+      grabRenderProcessGoneHandler()(undefined, { reason: 'oom' })
+      const info = svc.getLastRenderCrash(id)
+      expect(info?.reason).toBe('oom')
+      expect(info?.at).toBeGreaterThanOrEqual(before)
+      expect(info?.at).toBeLessThanOrEqual(Date.now())
+    })
+
+    it('does not record a clean-exit', async () => {
+      const svc = new WindowMainService(makeOpts())
+      const id = await svc.createWindow()
+      grabRenderProcessGoneHandler()(undefined, { reason: 'clean-exit' })
+      expect(svc.getLastRenderCrash(id)).toBeNull()
+    })
+
+    it('a later crash overwrites the earlier record', async () => {
+      const svc = new WindowMainService(makeOpts())
+      const id = await svc.createWindow()
+      const handler = grabRenderProcessGoneHandler()
+      handler(undefined, { reason: 'crashed' })
+      handler(undefined, { reason: 'oom' })
+      expect(svc.getLastRenderCrash(id)?.reason).toBe('oom')
+    })
+
+    it('drops the record when the window closes', async () => {
+      const svc = new WindowMainService(makeOpts())
+      const id = await svc.createWindow()
+      grabRenderProcessGoneHandler()(undefined, { reason: 'oom' })
+      expect(svc.getLastRenderCrash(id)).not.toBeNull()
+      grabClosedHandler()()
+      expect(svc.getLastRenderCrash(id)).toBeNull()
+    })
+  })
+
   it('createWindow returns a numeric window id', async () => {
     const svc = new WindowMainService(makeOpts())
     const id = await svc.createWindow()

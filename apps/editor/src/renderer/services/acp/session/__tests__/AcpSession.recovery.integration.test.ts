@@ -58,6 +58,7 @@ import {
 } from '../../acpClientService.js'
 import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
+import { stubWindowsService } from './stubWindowsService.js'
 
 const FAKE_URI_IDENTITY = new UriIdentityService('linux')
 
@@ -324,6 +325,7 @@ function makeService(client: IAcpClientService, config: ConfigurationService): A
     new StubFileService(),
     new StubExtensionMcpServersService(),
     new StubMcpServerEnablementService(),
+    stubWindowsService(),
   )
 }
 

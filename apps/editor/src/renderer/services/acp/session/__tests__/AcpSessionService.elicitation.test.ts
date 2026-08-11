@@ -75,6 +75,7 @@ import {
 import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
+import { stubWindowsService } from './stubWindowsService.js'
 
 const FAKE_URI_IDENTITY = new UriIdentityService('linux')
 const AGENT_SESSION_ID = 'agent-1'
@@ -319,6 +320,7 @@ function makeService(client: FakeAcpClientService): AcpSessionService {
     new StubFileService(),
     new StubExtensionMcpServersService(),
     new StubMcpServerEnablementService(),
+    stubWindowsService(),
   )
 }
 

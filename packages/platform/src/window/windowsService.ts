@@ -19,6 +19,17 @@ export interface IOpenWindowInfo {
 }
 
 /**
+ * The most recent unexpected renderer-process exit of a window (Electron
+ * `render-process-gone` with any reason other than `clean-exit`). Used by the
+ * renderer to break crash loops — e.g. pausing auto-resume of a session whose
+ * reload just OOMed. `at` is epoch milliseconds.
+ */
+export interface IWindowRenderCrashInfo {
+  readonly reason: string
+  readonly at: number
+}
+
+/**
  * App-singleton window orchestration, served from the main process and consumed
  * by the renderer via `ProxyChannel.toService`. Unlike `IHostService` (per-window),
  * this covers cross-window concerns: which windows are open, switching between
@@ -37,6 +48,12 @@ export interface IWindowsService {
 
   /** Whether the renderer using this service belongs to the first window in this app session. */
   isCurrentWindowFirst(): Promise<boolean>
+
+  /**
+   * The most recent unexpected renderer exit of the calling window, or null
+   * when it has not crashed (or the record aged out with the window).
+   */
+  getLastRenderCrash(): Promise<IWindowRenderCrashInfo | null>
 
   /** Bring the window with the given id to the foreground. */
   focusWindow(id: number): Promise<void>

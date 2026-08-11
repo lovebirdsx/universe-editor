@@ -49,11 +49,24 @@ export function installChildProcessGoneLogging(
   })
 }
 
-/** How often per-process memory/CPU snapshots are logged. */
-export const PROCESS_METRICS_INTERVAL_MS = 120_000
+/** How often per-process memory/CPU snapshots are logged while the heap is calm. */
+export const PROCESS_METRICS_NORMAL_INTERVAL_MS = 30_000
+
+/** Denser sampling once the heap is climbing — fast OOMs need a curve, not a point. */
+export const PROCESS_METRICS_BUSY_INTERVAL_MS = 10_000
+
+/** heapUsed above this switches sampling to the busy interval. */
+export const MAIN_HEAP_BUSY_BYTES = 512 * 1024 * 1024
 
 /** heapUsed above this logs at warn — the clearest pre-OOM signal we get. */
 export const MAIN_HEAP_WARN_BYTES = 1536 * 1024 * 1024
+
+/** Sampling interval for the cycle AFTER a reading of `heapUsed` bytes. */
+export function processMetricsIntervalMs(heapUsed: number): number {
+  return heapUsed > MAIN_HEAP_BUSY_BYTES
+    ? PROCESS_METRICS_BUSY_INTERVAL_MS
+    : PROCESS_METRICS_NORMAL_INTERVAL_MS
+}
 
 /**
  * `app.getAppMetrics()` only reports OS working-set — the main process can sit
@@ -84,7 +97,10 @@ export function installProcessMetricsLogging(loggerService: {
     id: 'processMetrics',
     name: 'Process Metrics',
   })
-  const timer = setInterval(() => {
+  let disposed = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const sample = (): void => {
+    let heapUsed = 0
     try {
       const line = app
         .getAppMetrics()
@@ -95,6 +111,7 @@ export function installProcessMetricsLogging(loggerService: {
         .join(' | ')
       logger.info(line)
       const mem = process.memoryUsage()
+      heapUsed = mem.heapUsed
       const heapLine = formatMainHeapSample(mem)
       if (mem.heapUsed > MAIN_HEAP_WARN_BYTES) {
         logger.warn(
@@ -106,7 +123,17 @@ export function installProcessMetricsLogging(loggerService: {
     } catch {
       // Metrics are best-effort diagnostics; never let sampling kill the main process.
     }
-  }, PROCESS_METRICS_INTERVAL_MS)
-  timer.unref()
-  return toDisposable(() => clearInterval(timer))
+    // Self-rescheduling timeout (not setInterval): the next cycle's delay
+    // depends on THIS sample's heap, and the first sample runs synchronously
+    // at install so a fast crash still leaves at least one data point.
+    if (!disposed) {
+      timer = setTimeout(sample, processMetricsIntervalMs(heapUsed))
+      timer.unref()
+    }
+  }
+  sample()
+  return toDisposable(() => {
+    disposed = true
+    if (timer !== undefined) clearTimeout(timer)
+  })
 }

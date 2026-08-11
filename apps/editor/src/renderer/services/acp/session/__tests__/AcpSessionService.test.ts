@@ -94,6 +94,7 @@ import {
 import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
+import { stubWindowsService } from './stubWindowsService.js'
 
 class FakeAgentRegistry implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
@@ -530,6 +531,7 @@ describe('AcpSessionService', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+      stubWindowsService(),
     )
   })
 
@@ -618,6 +620,7 @@ describe('AcpSessionService', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+      stubWindowsService(),
     )
     const s = await slowSvc.createSession()
     await s.whenConnected()
@@ -742,6 +745,7 @@ describe('AcpSessionService', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+      stubWindowsService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -997,6 +1001,7 @@ describe('AcpSessionService', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+      stubWindowsService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1057,6 +1062,7 @@ describe('AcpSessionService', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+      stubWindowsService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1109,6 +1115,7 @@ describe('AcpSessionService', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+      stubWindowsService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1177,6 +1184,7 @@ describe('AcpSessionService', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+      stubWindowsService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1240,6 +1248,7 @@ describe('AcpSessionService', () => {
         new StubFileService(),
         new StubExtensionMcpServersService(),
         new StubMcpServerEnablementService(),
+        stubWindowsService(),
       )
     }
 
@@ -1556,6 +1565,7 @@ describe('AcpSessionService — rewind / fork', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+      stubWindowsService(),
     )
     return { svc, history }
   }
@@ -2325,6 +2335,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+      stubWindowsService(),
     )
     // createSession returns synchronously now; the handshake fails in the
     // background after the startup timeout fires, sealing the session via
@@ -2375,6 +2386,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+      stubWindowsService(),
     )
     const s = await svc.createSession()
     // Submit a prompt while still connecting — it is buffered by the connection
@@ -2433,6 +2445,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       new StubFileService(),
       extensionMcp,
       enablement,
+      stubWindowsService(),
     )
   }
 
@@ -3098,6 +3111,7 @@ describe('AcpSessionService — session MCP selection', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       enablement,
+      stubWindowsService(),
     )
     return { svc, history, agentDefaults, enablement }
   }
@@ -3433,6 +3447,7 @@ describe('AcpSessionService — AI session title push-back', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+      stubWindowsService(),
     )
     return { svc, history }
   }
@@ -3689,6 +3704,7 @@ describe('AcpSessionService — first prompt history mirror', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+      stubWindowsService(),
     )
     return { svc, history }
   }
@@ -3806,6 +3822,7 @@ describe('AcpSessionService — configOptions history snapshot', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+      stubWindowsService(),
     )
     return { svc, history }
   }
@@ -3865,6 +3882,7 @@ describe('AcpSessionService — stall watchdog', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+      stubWindowsService(),
     )
   }
 

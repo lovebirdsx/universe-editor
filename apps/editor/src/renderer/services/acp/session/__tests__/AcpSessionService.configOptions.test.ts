@@ -77,6 +77,7 @@ import {
 import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
+import { stubWindowsService } from './stubWindowsService.js'
 
 class FakeAgentRegistry implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
@@ -447,6 +448,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     new StubFileService(),
     new StubExtensionMcpServersService(),
     new StubMcpServerEnablementService(),
+    stubWindowsService(),
   )
   return { svc, client, history, agentDefaults, configOptionsCache }
 }

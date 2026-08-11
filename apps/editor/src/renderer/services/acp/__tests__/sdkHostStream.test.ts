@@ -10,14 +10,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { AnyMessage } from '@agentclientprotocol/sdk'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Emitter, type IDisposable } from '@universe-editor/platform'
 import type {
   AcpExitEvent,
   AcpStdioChunk,
   IAcpHostService,
 } from '../../../../shared/ipc/acpHostService.js'
-import { createSdkHostStream } from '../sdkHostStream.js'
+import { createSdkHostStream, StdoutLineGuard } from '../sdkHostStream.js'
 
 interface InMemoryHostHarness extends IDisposable {
   readonly host: IAcpHostService
@@ -209,6 +209,82 @@ describe('createSdkHostStream', () => {
     expect(JSON.parse(stdoutSeen[0]!.trim())).toEqual(inbound)
     expect(stdinSeen).toHaveLength(1)
     expect(JSON.parse(stdinSeen[0]!.trim())).toEqual(outbound)
+
+    adapter.dispose()
+    harness.dispose()
+  })
+})
+
+describe('StdoutLineGuard', () => {
+  const enc = (s: string): Uint8Array => new TextEncoder().encode(s)
+  const dec = (parts: Uint8Array[]): string =>
+    parts.map((p) => new TextDecoder().decode(p)).join('')
+
+  it('passes short lines through, splitting multi-line chunks correctly', () => {
+    const guard = new StdoutLineGuard(() => {}, 16)
+    const out = guard.push(enc('ab\ncd\nef'))
+    expect(dec(out)).toBe('ab\ncd\n')
+    expect(dec(guard.push(enc('gh\n')))).toBe('efgh\n')
+  })
+
+  it('drops an over-long line arriving in a single chunk, keeping the lines around it', () => {
+    const onWarn = vi.fn()
+    const guard = new StdoutLineGuard(onWarn, 16)
+    const out = guard.push(enc('ok1\n' + 'x'.repeat(100) + '\nok2\n'))
+    // The oversized line collapses to a bare newline (SDK skips empty lines);
+    // its neighbours are byte-identical.
+    expect(dec(out)).toBe('ok1\n\nok2\n')
+    expect(onWarn).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops an over-long line spanning multiple chunks and warns only once per line', () => {
+    const onWarn = vi.fn()
+    const guard = new StdoutLineGuard(onWarn, 16)
+    expect(dec(guard.push(enc('pre\n' + 'x'.repeat(10))))).toBe('pre\n')
+    // Still under budget: nothing forwarded yet, nothing dropped.
+    expect(dec(guard.push(enc('y'.repeat(10))))).toBe('')
+    expect(onWarn).toHaveBeenCalledTimes(1)
+    // In drop mode the rest of the line is discarded, however many chunks it takes.
+    expect(dec(guard.push(enc('z'.repeat(50))))).toBe('')
+    expect(dec(guard.push(enc('tail\nnext\n')))).toBe('\nnext\n')
+    expect(onWarn).toHaveBeenCalledTimes(1)
+  })
+
+  it('accepts a line at exactly the budget', () => {
+    const onWarn = vi.fn()
+    const guard = new StdoutLineGuard(onWarn, 16)
+    const line = 'x'.repeat(16)
+    expect(dec(guard.push(enc(line + '\n')))).toBe(line + '\n')
+    expect(onWarn).not.toHaveBeenCalled()
+  })
+
+  it('flush returns a trailing unterminated line, and nothing after a dropped line', () => {
+    const guard = new StdoutLineGuard(() => {}, 16)
+    expect(dec(guard.push(enc('partial')))).toBe('')
+    expect(dec(guard.flush())).toBe('partial')
+
+    const guard2 = new StdoutLineGuard(() => {}, 4)
+    guard2.push(enc('toolong'))
+    expect(guard2.flush()).toEqual([])
+  })
+})
+
+describe('createSdkHostStream line guard integration', () => {
+  it('a >16MB stdout line is dropped wholesale; the following message still decodes', async () => {
+    const harness = createInMemoryHost()
+    const adapter = createSdkHostStream(harness.host, harness.handle)
+
+    const hugeLine = JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'bloated',
+      params: { blob: 'x'.repeat(17 * 1024 * 1024) },
+    })
+    const followUp: AnyMessage = { jsonrpc: '2.0', id: 9, result: { alive: true } }
+    harness.inject(hugeLine + '\n' + JSON.stringify(followUp) + '\n')
+
+    const { value, done } = await readNextMessage(adapter.stream.readable)
+    expect(done).toBe(false)
+    expect(value).toEqual(followUp)
 
     adapter.dispose()
     harness.dispose()

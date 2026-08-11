@@ -55,7 +55,16 @@ import { composeImageBlocks, type PromptImage } from '../promptImage.js'
 import { composePromptBlocksFromRefs, type PlacedRef } from '../promptRef.js'
 import { estimateClaudeCostUSD } from '../../../../shared/ai/claudePricing.js'
 import { getAgentCostStrategy, type AcpAgentCostStrategy } from './acpAgentCostStrategy.js'
-import { capRawInput, capTerminalOutputTail, capToolCallBlocks } from './acpContentLimits.js'
+import {
+  MESSAGE_TEXT_REBUILD_AT,
+  REPLAY_INGESTION_BUDGET,
+  capContentBlock,
+  capMessageBlocksTail,
+  capRawInput,
+  capTerminalOutputTail,
+  capToolCallBlocks,
+  estimateUpdateResidentBytes,
+} from './acpContentLimits.js'
 import {
   blocksToText,
   isBlankContentBlock,
@@ -168,6 +177,18 @@ export function recoveryContinuePromptText(): string {
   return localize(
     'acp.recovery.continueAfterInterrupt',
     'Continue. Note: the previous turn was aborted by a connection interruption, not by me. If you had a question or confirmation waiting for my answer at that moment, do not treat it as answered, skipped, or declined — re-ask it now.',
+  )
+}
+
+/**
+ * Timeline notice appended when a history replay blew the ingestion budget and
+ * the remaining updates were dropped. Function rather than a module constant:
+ * `localize` reads the NLS state at call time.
+ */
+export function replayHistoryOverflowNotice(): string {
+  return localize(
+    'acp.session.historyOverflow',
+    'Session history is too large; only the first part of the history was loaded.',
   )
 }
 
@@ -544,6 +565,16 @@ export class AcpSession extends Disposable implements IAcpSession {
   private _suppressReplayToTimeline = false
 
   /**
+   * Replay ingestion accounting (session/load, rewind): tallies the resident
+   * cost of replayed updates against `_replayIngestionBudget`. Past the budget
+   * the remaining replayed updates are dropped (`_replayOverflow`) so a
+   * multi-GB restored history cannot OOM the renderer; `endHistoryReplay`
+   * marks the truncation with a timeline notice.
+   */
+  private _replayIngestedBytes = 0
+  private _replayOverflow = false
+
+  /**
    * Replay boundary paired with {@link _suppressReplayToTimeline}: the side
    * task's first own user prompt id. The replayed user chunk carrying this id
    * lifts the suppression so the side task's own turns (from that message on)
@@ -629,6 +660,11 @@ export class AcpSession extends Disposable implements IAcpSession {
      * per-agent defaults. Threaded into the config-option state machine.
      */
     suppressConfigDefaults: boolean = false,
+    /**
+     * Resident-cost budget for one history replay (session/load, rewind).
+     * Injectable so tests can exercise the overflow path with tiny payloads.
+     */
+    private readonly _replayIngestionBudget: number = REPLAY_INGESTION_BUDGET,
   ) {
     super()
     this._costStrategy = getAgentCostStrategy(agentId)
@@ -1074,12 +1110,18 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   beginHistoryReplay(): void {
     this.isReplayingHistory.set(true, undefined)
+    this._replayIngestedBytes = 0
+    this._replayOverflow = false
   }
 
   endHistoryReplay(): void {
     this._suppressReplayToTimeline = false
     this._suppressAnchorMessageId = undefined
     this.isReplayingHistory.set(false, undefined)
+    if (this._replayOverflow) {
+      this._replayOverflow = false
+      this._appendMessage('agent', replayHistoryOverflowNotice())
+    }
   }
 
   suppressReplayToTimeline(anchorMessageId?: string): void {
@@ -2091,6 +2133,23 @@ export class AcpSession extends Disposable implements IAcpSession {
           return
       }
     }
+    if (this.isReplayingHistory.get()) {
+      // Budget gate for history replays: updates suppressed above never reach
+      // the timeline so they are not tallied; everything else counts against
+      // the budget, and once it overflows the remaining replay is dropped
+      // (only counted) instead of swelling the view model without bound.
+      this._replayIngestedBytes += estimateUpdateResidentBytes(update)
+      if (this._replayOverflow) return
+      if (this._replayIngestedBytes > this._replayIngestionBudget) {
+        this._replayOverflow = true
+        console.warn(
+          `[acp] session ${this.id}: history replay exceeded the ingestion budget ` +
+            `(${this._replayIngestedBytes}/${this._replayIngestionBudget} chars resident); ` +
+            'dropping the remaining replayed updates',
+        )
+        return
+      }
+    }
     const parentId = readParentToolUseId(update)
     if (AGENT_OUTPUT_UPDATE_KINDS.has(update.sessionUpdate)) this._agentOutputCount++
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
@@ -2481,7 +2540,11 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Anchorless chunks (agent/thought paths never pass one) keep the old
     // merge-anything behavior — undefined === undefined.
     if (last && last.role === role && this._isStreaming(last.id) && last.messageId === messageId) {
-      const blocks = mergeStreamingBlock(last.blocks, block)
+      const merged = mergeStreamingBlock(last.blocks, block)
+      // Bound the text a single streaming message keeps resident (hysteresis:
+      // only rebuild once past the threshold so per-chunk appends stay cheap).
+      const blocks =
+        last.text.length > MESSAGE_TEXT_REBUILD_AT ? capMessageBlocksTail(merged) : merged
       next = {
         id: last.id,
         role,
@@ -2515,7 +2578,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       const closed = this._closePriorStreaming()
       const id = `m${++this._msgCounter}`
       this._streamingIds.add(id)
-      const blocks: readonly ContentBlock[] = [block]
+      const blocks: readonly ContentBlock[] = [capContentBlock(block)]
       next = {
         id,
         role,
@@ -2817,7 +2880,9 @@ export class AcpSession extends Disposable implements IAcpSession {
       // Merge into the trailing child message. No streaming-flag bookkeeping:
       // an interleaved child tool call makes `last` a toolCall, which naturally
       // breaks the merge and opens a fresh message — same for a role switch.
-      const blocks = mergeStreamingBlock(last.message.blocks, block)
+      const merged = mergeStreamingBlock(last.message.blocks, block)
+      const blocks =
+        last.message.text.length > MESSAGE_TEXT_REBUILD_AT ? capMessageBlocksTail(merged) : merged
       const message: AcpMessage = {
         ...last.message,
         blocks,
@@ -2827,7 +2892,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     } else {
       if (isBlankContentBlock(block)) return
       const id = `m${++this._msgCounter}`
-      const blocks: readonly ContentBlock[] = [block]
+      const blocks: readonly ContentBlock[] = [capContentBlock(block)]
       // Child messages never show a streaming caret (folded by default), so they
       // stay out of `_streamingIds` and the top-level seal/flush machinery.
       const message: AcpMessage = { id, role, blocks, text: blocksToText(blocks), streaming: false }

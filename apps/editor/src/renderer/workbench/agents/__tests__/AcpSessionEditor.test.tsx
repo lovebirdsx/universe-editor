@@ -27,6 +27,8 @@ import type {
   IEditorService as IEditorServiceType,
   IWorkspaceService as IWorkspaceServiceType,
   IHostService as IHostServiceType,
+  IWindowsService as IWindowsServiceType,
+  IWindowRenderCrashInfo,
 } from '@universe-editor/platform'
 import {
   IAcpSessionService,
@@ -159,15 +161,30 @@ function makeHost(): IHostServiceType {
   } as unknown as IHostServiceType
 }
 
+function makeWindows(crash: IWindowRenderCrashInfo | null = null): IWindowsServiceType {
+  return {
+    _serviceBrand: undefined,
+    onDidChangeWindows: () => ({ dispose: () => {} }),
+    getWindows: async () => [],
+    isCurrentWindowFirst: async () => true,
+    getLastRenderCrash: async () => crash,
+    focusWindow: async () => {},
+    openWindow: async () => {},
+    quit: async () => {},
+  }
+}
+
 const stubEditor = makeEditor()
 const stubWorkspace = makeWorkspace()
 const stubHost = makeHost()
+const stubWindows = makeWindows()
 
 function makeCollection(
   service: FakeAcpSessionService,
   history?: IAcpSessionHistoryServiceType,
   editor: IEditorServiceType = stubEditor,
   workspace: IWorkspaceServiceType = stubWorkspace,
+  windows: IWindowsServiceType = stubWindows,
 ) {
   const services = new ServiceCollection()
   services.set(IAcpSessionService, service)
@@ -183,10 +200,7 @@ function makeCollection(
     _serviceBrand: undefined,
     // No getForWorkspaceCwd → the preview short-circuits config to [].
   } as never)
-  services.set(IWindowsService, {
-    _serviceBrand: undefined,
-    openWindow: vi.fn().mockResolvedValue(undefined),
-  } as never)
+  services.set(IWindowsService, windows)
   services.set(ILifecycleService, {
     _serviceBrand: undefined,
     confirmBeforeShutdown: vi.fn().mockResolvedValue(false),
@@ -319,6 +333,71 @@ describe('AcpSessionEditor — auto-resume after editor restart', () => {
     // No error UI — the tab is being closed instead.
     expect(screen.queryByTestId('acp-session-resume-error')).toBeNull()
     expect(editor.closeEditor).toHaveBeenCalledWith(input.id)
+  })
+})
+
+describe('AcpSessionEditor — OOM crash-loop guard (paused auto-resume)', () => {
+  const recentOom = (): IWindowRenderCrashInfo => ({ reason: 'oom', at: Date.now() - 60_000 })
+
+  it('parks on the paused placeholder instead of auto-resuming after a recent OOM crash', async () => {
+    const service = makeService()
+    const inst = new InstantiationService(
+      makeCollection(service, undefined, stubEditor, stubWorkspace, makeWindows(recentOom())),
+    )
+    const input = inst.createInstance(AcpSessionEditorInput, 'sess-oom', 'fake', undefined)
+    await act(async () => {
+      render(
+        <ServicesContext.Provider value={inst}>
+          <AcpSessionEditor input={input} />
+        </ServicesContext.Provider>,
+      )
+    })
+    expect(await screen.findByTestId('acp-session-resume-paused')).toBeTruthy()
+    expect(service.resumeSession).not.toHaveBeenCalled()
+  })
+
+  it('resumes when the user clicks "load anyway" on the paused placeholder', async () => {
+    const service = makeService()
+    const inst = new InstantiationService(
+      makeCollection(service, undefined, stubEditor, stubWorkspace, makeWindows(recentOom())),
+    )
+    const input = inst.createInstance(AcpSessionEditorInput, 'sess-oom', 'fake', undefined)
+    await act(async () => {
+      render(
+        <ServicesContext.Provider value={inst}>
+          <AcpSessionEditor input={input} />
+        </ServicesContext.Provider>,
+      )
+    })
+    const button = await screen.findByTestId('acp-session-resume-anyway')
+    await act(async () => {
+      fireEvent.click(button)
+    })
+    expect(service.resumeSession).toHaveBeenCalledTimes(1)
+    expect(service.resumeSession).toHaveBeenCalledWith('sess-oom')
+  })
+
+  it('auto-resumes normally when the crash was not an OOM', async () => {
+    const service = makeService()
+    const inst = new InstantiationService(
+      makeCollection(
+        service,
+        undefined,
+        stubEditor,
+        stubWorkspace,
+        makeWindows({ reason: 'crashed', at: Date.now() - 60_000 }),
+      ),
+    )
+    const input = inst.createInstance(AcpSessionEditorInput, 'sess-crashed', 'fake', undefined)
+    await act(async () => {
+      render(
+        <ServicesContext.Provider value={inst}>
+          <AcpSessionEditor input={input} />
+        </ServicesContext.Provider>,
+      )
+    })
+    expect(service.resumeSession).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('acp-session-resume-paused')).toBeNull()
   })
 })
 

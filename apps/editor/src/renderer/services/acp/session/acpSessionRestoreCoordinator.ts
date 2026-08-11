@@ -75,6 +75,13 @@ export interface RestoreCoordinatorCallbacks {
    * how strictly history merges by cwd.
    */
   getHistoryScope(): SessionHistoryScope
+  /**
+   * Crash-loop guard: when it resolves true (this window's renderer recently
+   * died of OOM), `tryRestoreActiveSession` consumes the pending restore
+   * without resuming — the user can still resume manually from the session
+   * list. Absent = never skip.
+   */
+  shouldSkipAutoResume?(): Promise<boolean>
 }
 
 export class AcpSessionRestoreCoordinator extends Disposable {
@@ -228,6 +235,13 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     // (e.g. autorun firing twice for visibility + active container) restore once.
     const sessionId = this._pendingRestoreSessionId
     this._pendingRestoreSessionId = undefined
+
+    if (await this._callbacks.shouldSkipAutoResume?.()) {
+      this._logger.info(
+        `skipping auto-restore of session ${sessionId}: recent OOM crash in this window`,
+      )
+      return
+    }
 
     try {
       await this._callbacks.resumeSession(sessionId)

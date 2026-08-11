@@ -42,6 +42,7 @@ function windowsStub(isFirst = true): WindowsStub {
     onDidChangeWindows: vi.fn(() => ({ dispose: vi.fn() })),
     getWindows: vi.fn(() => Promise.resolve([])),
     isCurrentWindowFirst: vi.fn(() => Promise.resolve(isFirst)),
+    getLastRenderCrash: vi.fn(() => Promise.resolve(null)),
     focusWindow: vi.fn(() => Promise.resolve()),
     openWindow: vi.fn(() => Promise.resolve()),
     quit: vi.fn(() => Promise.resolve()),

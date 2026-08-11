@@ -9,6 +9,7 @@ import {
   type Event,
   type IDisposable,
   type IOpenWindowInfo,
+  type IWindowRenderCrashInfo,
   type IWindowsService,
   URI,
   type UriComponents,
@@ -21,6 +22,7 @@ export class MainWindowsService implements IWindowsService, IDisposable {
   constructor(
     private readonly _windows: WindowMainService,
     private readonly _isCurrentWindowFirst: boolean,
+    private readonly _windowId: number,
   ) {}
 
   get onDidChangeWindows(): Event<void> {
@@ -33,6 +35,10 @@ export class MainWindowsService implements IWindowsService, IDisposable {
 
   isCurrentWindowFirst(): Promise<boolean> {
     return Promise.resolve(this._isCurrentWindowFirst)
+  }
+
+  getLastRenderCrash(): Promise<IWindowRenderCrashInfo | null> {
+    return Promise.resolve(this._windows.getLastRenderCrash(this._windowId))
   }
 
   focusWindow(id: number): Promise<void> {

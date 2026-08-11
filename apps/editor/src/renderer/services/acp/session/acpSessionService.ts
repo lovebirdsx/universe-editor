@@ -29,6 +29,7 @@ import {
   IStorageService,
   ITelemetryService,
   IUriIdentityService,
+  IWindowsService,
   IWorkspaceService,
   Severity,
   StorageScope,
@@ -145,6 +146,7 @@ export {
   type TimelineItem,
 } from './acpSession.js'
 import { AcpForeignWorktreeError } from './acpErrors.js'
+import { shouldPauseAcpAutoResume } from './acpAutoResumeGuard.js'
 import { selectOptionHasValue, snapshotConfigSelections } from '../configOptionLabel.js'
 import { IExtensionMcpServersService } from '../../extensions/extensionMcpServersService.js'
 import { IMcpServerEnablementService } from '../mcpServerEnablementService.js'
@@ -488,6 +490,7 @@ export class AcpSessionService
     private readonly _extensionMcpServers: IExtensionMcpServersService,
     @IMcpServerEnablementService
     private readonly _mcpEnablement: IMcpServerEnablementService,
+    @IWindowsService private readonly _windows: IWindowsService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
@@ -521,6 +524,7 @@ export class AcpSessionService
           whenWorkspaceReady: () => this._workspace.whenReady,
           getLiveSessionIds: () => this._sessionStore.liveIds(),
           getHistoryScope: () => this._historyScope(),
+          shouldSkipAutoResume: () => shouldPauseAcpAutoResume(this._windows),
         },
       ),
     )

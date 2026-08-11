@@ -43,7 +43,14 @@ import { AcpSessionService } from '../acpSessionService.js'
 // can answer isEnabled/whenReady/onDidChange for it. The facade needs all
 // three to annotate the definition pool and keep it fresh; writes go straight
 // to IMcpServerEnablementService from the UI (no facade method).
-const MAX_INJECTED = 18
+// +1 IWindowsService (OOM crash-loop guard): the "skip auto-resume after a
+// recent OOM crash" decision needs this window's last render-process-gone
+// record, which lives in the main process behind IWindowsService
+// (getLastRenderCrash). The facade injects it only to hand the query to the
+// restore coordinator's shouldSkipAutoResume callback — the coordinator
+// itself is constructed with plain callbacks and stays IPC-free, so the
+// dependency cannot move there without leaking the proxy into its tests.
+const MAX_INJECTED = 19
 
 describe('AcpSessionService dependency budget', () => {
   it('does not exceed the injected-dependency ceiling', () => {

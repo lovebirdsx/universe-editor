@@ -27,6 +27,14 @@ export interface IMessagePassingProtocol {
   send(data: Uint8Array): void
   /** Fired when the other side sends data. */
   readonly onMessage: Event<Uint8Array>
+  /**
+   * Optional: fired once when the transport can no longer deliver messages to
+   * the other side (e.g. the renderer frame died). ChannelServer clears all
+   * event subscriptions on this signal so a firing emitter does not keep
+   * encoding payloads that can never arrive; a recovered peer re-subscribes
+   * and the subscriptions are rebuilt.
+   */
+  readonly onDidClose?: Event<void>
   /** Optional: disconnect / close the transport. */
   disconnect?(): void
 }
@@ -421,6 +429,14 @@ export class ChannelServer extends Disposable implements IChannelServer {
     if (autoDispatch) {
       this._register(_protocol.onMessage((data) => this.handleMessage(decode(data))))
     }
+    // A dead peer (renderer frame gone) cannot receive anything, but every
+    // firing emitter would still encode its payload only for the protocol's
+    // liveness gate to drop the bytes — pure allocation churn. Tear the
+    // subscriptions down instead: a recovered peer re-subscribes through the
+    // replace path in _handleSubscribe.
+    if (_protocol.onDidClose) {
+      this._register(_protocol.onDidClose(() => this._clearEventSubscriptions()))
+    }
   }
 
   registerChannel(channelName: string, channel: IChannel): void {
@@ -512,6 +528,13 @@ export class ChannelServer extends Disposable implements IChannelServer {
     this._eventSubscriptions.delete(key)
   }
 
+  private _clearEventSubscriptions(): void {
+    for (const sub of this._eventSubscriptions.values()) {
+      sub.dispose()
+    }
+    this._eventSubscriptions.clear()
+  }
+
   override dispose(): void {
     // Cancel in-flight handlers first: a torn-down window must not leave
     // long-running work (e.g. a workspace walk) running in this process.
@@ -520,10 +543,7 @@ export class ChannelServer extends Disposable implements IChannelServer {
       cts.dispose()
     }
     this._pendingCancellations.clear()
-    for (const sub of this._eventSubscriptions.values()) {
-      sub.dispose()
-    }
-    this._eventSubscriptions.clear()
+    this._clearEventSubscriptions()
     super.dispose()
   }
 }

@@ -40,6 +40,11 @@ export interface LogAppendEvent {
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 const FLUSH_DEBOUNCE_MS = 150
 const MAX_BUFFER_LINES = 10000
+// Line count alone does not bound memory: 10000 lines x 64KB truncation cap is
+// 640MB resident in the write queue (and a flush join copies it again). A byte
+// budget caps the queue's real footprint; overflow drops oldest-first exactly
+// like the line-count path.
+const MAX_BUFFER_BYTES = 16 * 1024 * 1024
 // A single unbounded message (e.g. a renderer relaying a multi-MB agent
 // transcript) would pin that string in the write queue and fan it out over
 // IPC; cap it the same way MAX_BUFFER_LINES caps the queue depth.
@@ -102,6 +107,7 @@ class FileLogger extends AbstractLogger {
     windowId: number | undefined,
   ) => void
   private _writeQueue: Array<{ readonly level: LogLevel; readonly line: string }> = []
+  private _queuedBytes = 0
   private _pendingFlush: ReturnType<typeof setTimeout> | null = null
   private _flushChain: Promise<void> = Promise.resolve()
   private _estimatedSize = 0
@@ -153,19 +159,39 @@ class FileLogger extends AbstractLogger {
     const label = LOG_LEVEL_LABELS[level] ?? 'log'
     const line = `[${ts}] [${label}] ${truncateMessage(message)}\n`
     this._writeQueue.push({ level, line })
+    this._queuedBytes += line.length
     this._estimatedSize += line.length
     if (this._writeQueue.length > MAX_BUFFER_LINES) {
       const dropped = this._writeQueue.length - MAX_BUFFER_LINES + 1
-      this._writeQueue.splice(0, dropped)
-      const warnTs = formatLogTimestamp(new Date(), this._timestampFormat)
-      const warnLine = `[${warnTs}] [warn] dropped ${dropped} buffered log entries\n`
-      this._writeQueue.push({ level: LogLevel.Warning, line: warnLine })
-      this._estimatedSize += warnLine.length
+      for (const entry of this._writeQueue.splice(0, dropped)) {
+        this._queuedBytes -= entry.line.length
+      }
+      this._pushDropMarker(`dropped ${dropped} buffered log entries`)
+    }
+    if (this._queuedBytes > MAX_BUFFER_BYTES) {
+      let droppedLines = 0
+      let droppedBytes = 0
+      while (this._queuedBytes > MAX_BUFFER_BYTES) {
+        const head = this._writeQueue.shift()
+        if (!head) break
+        this._queuedBytes -= head.line.length
+        droppedLines++
+        droppedBytes += head.line.length
+      }
+      this._pushDropMarker(`dropped ${droppedLines} buffered log entries, ${droppedBytes} bytes`)
     }
     // Error entries are the ones most likely to precede a crash — the debounce
     // window would lose exactly the evidence we need. Flush them immediately.
     if (level >= LogLevel.Error) this.flush()
     else this._scheduleFlush()
+  }
+
+  private _pushDropMarker(text: string): void {
+    const warnTs = formatLogTimestamp(new Date(), this._timestampFormat)
+    const warnLine = `[${warnTs}] [warn] ${text}\n`
+    this._writeQueue.push({ level: LogLevel.Warning, line: warnLine })
+    this._queuedBytes += warnLine.length
+    this._estimatedSize += warnLine.length
   }
 
   private _scheduleFlush(): void {
@@ -194,6 +220,7 @@ class FileLogger extends AbstractLogger {
   private async _flushNow(): Promise<void> {
     if (this._writeQueue.length === 0) return
     const entries = this._writeQueue.splice(0)
+    this._queuedBytes = 0
     const content = entries.map((entry) => entry.line).join('')
     const maxLevel = entries.reduce(
       (highest, entry) => Math.max(highest, entry.level),
