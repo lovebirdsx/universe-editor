@@ -222,6 +222,14 @@ describe('MarkdownView', () => {
     expect(screen.getByText(/子项2/).closest('ol')).toBe(container.querySelector('ol'))
   })
 
+  it('preserves the start number of a list separated by paragraphs', () => {
+    const { container } = renderMarkdown('1. title1\n\nContent1\n\n2. title2\n\nContent2')
+    const ols = container.querySelectorAll('ol')
+    expect(ols).toHaveLength(2)
+    expect(ols[0]!.hasAttribute('start')).toBe(false)
+    expect(ols[1]!.getAttribute('start')).toBe('2')
+  })
+
   it('renders an indented sublist nested inside its parent list item', () => {
     const { container } = renderMarkdown('1. 子项1\n   - a\n   - b\n\n2. 子项2')
     // Exactly one top-level ordered list with two items; no stray sibling lists.

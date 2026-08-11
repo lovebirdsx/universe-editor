@@ -132,6 +132,7 @@ describe('parseMarkdown — block layer', () => {
       {
         type: 'list',
         ordered: true,
+        start: 1,
         items: [
           { inline: [text('a')], checked: null },
           { inline: [text('b')], checked: null },
@@ -141,11 +142,33 @@ describe('parseMarkdown — block layer', () => {
     ])
   })
 
+  it('keeps the start number of an ordered list not beginning at 1', () => {
+    expect(parseMarkdown('3. a\n4. b')).toEqual<readonly MdNode[]>([
+      {
+        type: 'list',
+        ordered: true,
+        start: 3,
+        items: [
+          { inline: [text('a')], checked: null },
+          { inline: [text('b')], checked: null },
+        ],
+        line: 0,
+      },
+    ])
+  })
+
+  it('tracks the start of each list split apart by intervening paragraphs', () => {
+    const nodes = parseMarkdown('1. title1\n\nContent1\n\n2. title2\n\nContent2')
+    const lists = nodes.filter((n) => n.type === 'list')
+    expect(lists.map((l) => (l.type === 'list' ? l.start : undefined))).toEqual([1, 2])
+  })
+
   it('keeps loose ordered lists as one list', () => {
     expect(parseMarkdown('1. a\n\n2. b\n\n3. c')).toEqual<readonly MdNode[]>([
       {
         type: 'list',
         ordered: true,
+        start: 1,
         items: [
           { inline: [text('a')], checked: null },
           { inline: [text('b')], checked: null },
@@ -161,6 +184,7 @@ describe('parseMarkdown — block layer', () => {
       {
         type: 'list',
         ordered: true,
+        start: 1,
         items: [
           { inline: [text('a'), { type: 'softbreak' }, text('plain')], checked: null },
           { inline: [text('b'), { type: 'softbreak' }, text('plain')], checked: null },
@@ -175,6 +199,7 @@ describe('parseMarkdown — block layer', () => {
       {
         type: 'list',
         ordered: true,
+        start: 1,
         items: [
           {
             inline: [text('子项1')],

@@ -46,6 +46,9 @@ export type MdNode =
   | {
       readonly type: 'list'
       readonly ordered: boolean
+      // First item's number for ordered lists (a separated `2. …` list keeps its
+      // start); omitted for unordered lists.
+      readonly start?: number
       readonly items: readonly MdListItem[]
       readonly line?: number
     }
@@ -214,6 +217,7 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
     if (ul || ol) {
       const ordered = ol
       const markerRe = ordered ? /^(\d+\.\s+)/ : /^([-*+]\s+)/
+      const startMatch = ordered ? /^\s*(\d+)\./.exec(line) : null
       const baseIndent = indentOf(line)
       const isSibling = (l: string): boolean =>
         indentOf(l) === baseIndent && markerRe.test(l.slice(baseIndent))
@@ -282,7 +286,13 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
           ...(children !== undefined ? { children } : {}),
         })
       }
-      out.push({ type: 'list', ordered, items, line: blockStart })
+      out.push({
+        type: 'list',
+        ordered,
+        ...(startMatch ? { start: Number(startMatch[1]) } : {}),
+        items,
+        line: blockStart,
+      })
       continue
     }
 

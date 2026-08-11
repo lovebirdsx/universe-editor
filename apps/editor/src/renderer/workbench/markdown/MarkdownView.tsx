@@ -242,7 +242,10 @@ function Block({ node }: { node: MdNode }): ReactNode {
       )
     case 'list':
       return node.ordered ? (
-        <ol {...lineAttr}>
+        <ol
+          {...lineAttr}
+          {...(node.start !== undefined && node.start !== 1 ? { start: node.start } : {})}
+        >
           {node.items.map((item, i) => (
             <ListItem key={i} item={item} />
           ))}
