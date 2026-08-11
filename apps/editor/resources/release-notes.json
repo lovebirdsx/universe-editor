@@ -1,5 +1,26 @@
 [
   {
+    "version": "0.1.63",
+    "date": "2026-08-11",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "加入外部插件开发时，插件源码修改自动reload功能",
+          "会话更改视图支持 Explorer 式显隐切换并聚焦文件列表"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复codex因为中途发了消息，而导致session状态一直不结束的bug"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.62",
     "date": "2026-08-10",
     "groups": [
