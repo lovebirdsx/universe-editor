@@ -101,20 +101,26 @@ export class UsageMainService extends Disposable implements IUsageService {
   }
 }
 
-function toSnapshot(data: RawUsageData): UsageSnapshot {
+// 用量接口在未产生消费时会省略字段或返回 null/字符串，数值一律收敛为有限数，避免渲染 NaN
+function toFiniteNumber(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(n) ? n : 0
+}
+
+export function toSnapshot(data: RawUsageData): UsageSnapshot {
   return {
     date: data.date,
     periodBucket: data.period_bucket,
-    periodUsedCny: data.period_used_cny,
-    periodLimitCny: data.period_limit_cny,
-    periodRemainingCny: data.period_remaining_cny,
-    requests: data.requests,
-    rawTokens: data.raw_tokens,
+    periodUsedCny: toFiniteNumber(data.period_used_cny),
+    periodLimitCny: toFiniteNumber(data.period_limit_cny),
+    periodRemainingCny: toFiniteNumber(data.period_remaining_cny),
+    requests: toFiniteNumber(data.requests),
+    rawTokens: toFiniteNumber(data.raw_tokens),
     models: (data.models ?? []).map((m) => ({
       model: m.model,
-      requests: m.requests,
-      rawTokens: m.raw_tokens,
-      costCny: m.cost_cny,
+      requests: toFiniteNumber(m.requests),
+      rawTokens: toFiniteNumber(m.raw_tokens),
+      costCny: toFiniteNumber(m.cost_cny),
     })),
   }
 }
