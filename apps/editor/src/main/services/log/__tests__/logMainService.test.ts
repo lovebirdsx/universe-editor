@@ -294,6 +294,38 @@ describe('LogMainService', () => {
     expect(content.indexOf('first info')).toBeGreaterThanOrEqual(0)
     expect(content.indexOf('first info')).toBeLessThan(content.indexOf('then error'))
   })
+
+  it('truncates a message over 64KB with a marker, leaving normal lines untouched', async () => {
+    const svc = new LogMainService()
+    const logger = svc.createLogger({ id: 'trunc', name: 'Trunc' })
+    const huge = 'x'.repeat(100 * 1024)
+    logger.info(huge)
+    logger.info('normal line')
+    logger.flush()
+
+    const logFile = join(tmpDir, 'logs', svc.getSessionId(), 'trunc.log')
+    const content = await waitForFileContains(logFile, 'normal line')
+    const hugeLine = content.split('\n').find((l) => l.includes('[truncated'))
+    expect(hugeLine).toBeDefined()
+    // Head retained, tail cut, marker reports the dropped char count.
+    expect(hugeLine).toContain('x'.repeat(1000))
+    expect(hugeLine).toContain(`[truncated ${100 * 1024 - 64 * 1024} chars]`)
+    expect(hugeLine!.length).toBeLessThan(huge.length)
+    expect(content).toContain('[info] normal line')
+  })
+
+  it('a message at exactly 64KB is not truncated', async () => {
+    const svc = new LogMainService()
+    const logger = svc.createLogger({ id: 'exact', name: 'Exact' })
+    const exact = 'y'.repeat(64 * 1024)
+    logger.info(exact)
+    logger.flush()
+
+    const logFile = join(tmpDir, 'logs', svc.getSessionId(), 'exact.log')
+    const content = await waitForFileContains(logFile, 'y'.repeat(1000))
+    expect(content).not.toContain('[truncated')
+    expect(content).toContain(exact)
+  })
 })
 
 describe('MainLogChannelService', () => {

@@ -51,8 +51,15 @@ export function createStorage(filePath: string, options: StorageOptions = {}): S
   const bakPath = `${filePath}.bak`
   const corruptPath = `${filePath}.corrupt`
   let cache: Record<string, unknown> | null = null
-  // Serialize all writes so concurrent set() calls never race on disk.
-  let writeChain: Promise<void> = Promise.resolve()
+  let loadPromise: Promise<Record<string, unknown>> | null = null
+  // Coalesced writes: set/remove mutate `cache` and schedule ONE mergeable
+  // write; serialization happens lazily inside that write from the latest
+  // cache. At most one full-bucket string exists on the heap (the in-flight
+  // write) — the old per-set writeChain froze a serialized copy of the whole
+  // bucket into every queued closure, so a 32MB bucket × K queued writes
+  // pinned the main-process heap until V8 aborted with OOM.
+  let lastWrite: Promise<void> | null = null
+  let mergeableWrite: Promise<void> | null = null
 
   const tryParse = (raw: string): Record<string, unknown> | null => {
     try {
@@ -65,35 +72,43 @@ export function createStorage(filePath: string, options: StorageOptions = {}): S
 
   const readAll = async (): Promise<Record<string, unknown>> => {
     if (cache) return cache
-    let raw: string | null = null
-    try {
-      raw = await fs.readFile(filePath, 'utf8')
-    } catch {
-      raw = null
-    }
-    if (raw !== null) {
-      const parsed = tryParse(raw)
-      if (parsed) {
-        cache = parsed
-        return cache
-      }
-      // File exists but is unparseable: preserve it for diagnostics, then fall
-      // back to the last-good backup instead of silently starting empty (which
-      // would let the next write erase everything that survived).
+    if (loadPromise) return loadPromise
+    loadPromise = (async (): Promise<Record<string, unknown>> => {
+      let raw: string | null = null
       try {
-        await fs.rename(filePath, corruptPath)
+        raw = await fs.readFile(filePath, 'utf8')
       } catch {
-        // best-effort
+        raw = null
       }
-    }
-    let bakRaw: string | null = null
+      if (raw !== null) {
+        const parsed = tryParse(raw)
+        if (parsed) {
+          cache = parsed
+          return cache
+        }
+        // File exists but is unparseable: preserve it for diagnostics, then fall
+        // back to the last-good backup instead of silently starting empty (which
+        // would let the next write erase everything that survived).
+        try {
+          await fs.rename(filePath, corruptPath)
+        } catch {
+          // best-effort
+        }
+      }
+      let bakRaw: string | null = null
+      try {
+        bakRaw = await fs.readFile(bakPath, 'utf8')
+      } catch {
+        bakRaw = null
+      }
+      cache = (bakRaw !== null ? tryParse(bakRaw) : null) ?? {}
+      return cache
+    })()
     try {
-      bakRaw = await fs.readFile(bakPath, 'utf8')
-    } catch {
-      bakRaw = null
+      return await loadPromise
+    } finally {
+      loadPromise = null
     }
-    cache = (bakRaw !== null ? tryParse(bakRaw) : null) ?? {}
-    return cache
   }
 
   // Atomic promotion: write a temp file, rotate the current file to .bak, then
@@ -119,6 +134,50 @@ export function createStorage(filePath: string, options: StorageOptions = {}): S
     await fs.rename(tmpPath, filePath)
   }
 
+  /**
+   * Resolves once a write carrying every cache mutation made so far has
+   * landed on disk. Mutations made while a write is in-flight (or while no
+   * write has started yet) merge into one queued write — its serialization
+   * runs only when the write actually begins, off the latest cache.
+   * A failed write rejects this call but never wedges the queue; the cache
+   * keeps the mutation so the next scheduled write re-persists it.
+   */
+  const scheduleWrite = (): Promise<void> => {
+    if (mergeableWrite) return mergeableWrite
+    const previous = lastWrite ?? Promise.resolve()
+    const write = previous
+      .catch(() => {})
+      .then(async () => {
+        // Close the merge window the moment serialization begins: a mutation
+        // landing while the disk write is in flight needs a fresh follow-up
+        // write, or its set() promise would resolve against a stale snapshot
+        // and the value would sit unpersisted until some later write.
+        if (mergeableWrite === write) mergeableWrite = null
+        const snapshot = cache
+        if (snapshot === null) return
+        await writeAll(JSON.stringify(snapshot, null, 2))
+      })
+    mergeableWrite = write
+    lastWrite = write
+    void write.then(
+      () => {
+        if (lastWrite === write) lastWrite = null
+      },
+      () => {
+        if (lastWrite === write) lastWrite = null
+      },
+    )
+    return write
+  }
+
+  const flushPendingWrites = async (): Promise<void> => {
+    // Await the current tail, then re-check: the awaited write itself may
+    // have scheduled a follow-up (mutations that arrived mid-flight).
+    for (let current = lastWrite; current !== null; current = lastWrite) {
+      await current.catch(() => {})
+    }
+  }
+
   return {
     async get<T>(key: string): Promise<T | undefined> {
       const all = await readAll()
@@ -133,23 +192,19 @@ export function createStorage(filePath: string, options: StorageOptions = {}): S
       }
       const all = await readAll()
       all[key] = value
-      const content = JSON.stringify(all, null, 2)
-      writeChain = writeChain.catch(() => {}).then(() => writeAll(content))
-      return writeChain
+      await scheduleWrite()
     },
     async remove(key: string): Promise<void> {
       const all = await readAll()
       if (!(key in all)) return
       delete all[key]
-      const content = JSON.stringify(all, null, 2)
-      writeChain = writeChain.catch(() => {}).then(() => writeAll(content))
-      return writeChain
+      await scheduleWrite()
     },
     flush(): Promise<void> {
-      return writeChain
+      return flushPendingWrites()
     },
     async reloadFromDisk(): Promise<void> {
-      await writeChain.catch(() => {})
+      await flushPendingWrites()
       cache = null
     },
     flushSync(): void {

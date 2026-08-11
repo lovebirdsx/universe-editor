@@ -51,6 +51,10 @@ export abstract class PersistedStateBase<TState> extends Disposable {
   private _loaded = false
   private _loadPromise: Promise<void> | undefined
   private _writeTimer: ReturnType<typeof setTimeout> | undefined
+  /** In-flight `_writeNow`; new schedules must not stack IPC writes on top of it. */
+  private _writeInFlight: Promise<void> | undefined
+  /** Set when state changed while a write was in flight → one follow-up write. */
+  private _writeDirty = false
   /** Set while `_reload` is mid-swap so the debounced write doesn't fire into a half-built state. */
   private _writeSuspended = false
   /** The scope our current `_state` snapshot was loaded from; flush writes go here. */
@@ -202,22 +206,45 @@ export abstract class PersistedStateBase<TState> extends Disposable {
 
   protected _scheduleWrite(): void {
     if (this._writeSuspended) return
+    // Backpressure: a write is already on the wire. Mark dirty and let its
+    // completion schedule exactly one follow-up — otherwise a hot producer
+    // (e.g. ACP session state) stacks unbounded set() IPC calls on main.
+    if (this._writeInFlight) {
+      this._writeDirty = true
+      return
+    }
     if (this._writeTimer) return
     this._writeTimer = setTimeout(() => {
       this._writeTimer = undefined
+      if (this._writeInFlight) {
+        this._writeDirty = true
+        return
+      }
       void this._writeNow()
     }, this._writeDebounceMs)
   }
 
   private async _writeNow(): Promise<void> {
     const scope = this._currentLoadedScope ?? this._currentScope()
+    const write = (async () => {
+      try {
+        await this._storage.set(this._storageKey, this._serialize(this._state), scope)
+      } catch (err) {
+        this._telemetry.publicLogError(this._persistFailureEvent, {
+          error: (err as Error).message,
+        })
+        this._logger.warn(`failed to persist ${this._storageKey}: ${(err as Error).message}`)
+      }
+    })()
+    this._writeInFlight = write
     try {
-      await this._storage.set(this._storageKey, this._serialize(this._state), scope)
-    } catch (err) {
-      this._telemetry.publicLogError(this._persistFailureEvent, {
-        error: (err as Error).message,
-      })
-      this._logger.warn(`failed to persist ${this._storageKey}: ${(err as Error).message}`)
+      await write
+    } finally {
+      this._writeInFlight = undefined
+      if (this._writeDirty) {
+        this._writeDirty = false
+        this._scheduleWrite()
+      }
     }
   }
 }

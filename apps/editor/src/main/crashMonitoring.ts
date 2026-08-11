@@ -52,6 +52,25 @@ export function installChildProcessGoneLogging(
 /** How often per-process memory/CPU snapshots are logged. */
 export const PROCESS_METRICS_INTERVAL_MS = 120_000
 
+/** heapUsed above this logs at warn — the clearest pre-OOM signal we get. */
+export const MAIN_HEAP_WARN_BYTES = 1536 * 1024 * 1024
+
+/**
+ * `app.getAppMetrics()` only reports OS working-set — the main process can sit
+ * at 160MB working set while its V8 heap is 2.6GB and seconds from aborting.
+ * Sample our own `process.memoryUsage()` alongside so a diagnostic bundle
+ * shows the real heap growth curve.
+ */
+export function formatMainHeapSample(mem: {
+  heapUsed: number
+  heapTotal: number
+  external: number
+  rss: number
+}): string {
+  const mb = (bytes: number): number => Math.round(bytes / 1024 / 1024)
+  return `main-heap heapUsed=${mb(mem.heapUsed)}MB heapTotal=${mb(mem.heapTotal)}MB external=${mb(mem.external)}MB rss=${mb(mem.rss)}MB`
+}
+
 /**
  * Periodic per-process memory/CPU snapshot. A native crash cuts the log
  * mid-stream with no memory evidence at all; these compact lines are the only
@@ -75,6 +94,15 @@ export function installProcessMetricsLogging(loggerService: {
         )
         .join(' | ')
       logger.info(line)
+      const mem = process.memoryUsage()
+      const heapLine = formatMainHeapSample(mem)
+      if (mem.heapUsed > MAIN_HEAP_WARN_BYTES) {
+        logger.warn(
+          `${heapLine} — main V8 heap above ${Math.round(MAIN_HEAP_WARN_BYTES / 1024 / 1024)}MB, OOM risk`,
+        )
+      } else {
+        logger.info(heapLine)
+      }
     } catch {
       // Metrics are best-effort diagnostics; never let sampling kill the main process.
     }

@@ -40,6 +40,10 @@ export interface LogAppendEvent {
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 const FLUSH_DEBOUNCE_MS = 150
 const MAX_BUFFER_LINES = 10000
+// A single unbounded message (e.g. a renderer relaying a multi-MB agent
+// transcript) would pin that string in the write queue and fan it out over
+// IPC; cap it the same way MAX_BUFFER_LINES caps the queue depth.
+const MAX_MESSAGE_CHARS = 64 * 1024
 // A healthy channel never rotates a 10 MB file more than a handful of times a
 // minute. A tight rotate burst means something is writing pathologically fast —
 // classically a feedback loop where an append fans out over IPC, fails against a
@@ -79,6 +83,11 @@ function parseSessionId(name: string): number | null {
 
 function formatSessionStartedAt(d: Date): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+}
+
+function truncateMessage(message: string): string {
+  if (message.length <= MAX_MESSAGE_CHARS) return message
+  return `${message.slice(0, MAX_MESSAGE_CHARS)}…[truncated ${message.length - MAX_MESSAGE_CHARS} chars]`
 }
 
 class FileLogger extends AbstractLogger {
@@ -142,7 +151,7 @@ class FileLogger extends AbstractLogger {
   private _enqueue(level: LogLevel, message: string, timestampMs: number): void {
     const ts = formatLogTimestamp(new Date(timestampMs), this._timestampFormat)
     const label = LOG_LEVEL_LABELS[level] ?? 'log'
-    const line = `[${ts}] [${label}] ${message}\n`
+    const line = `[${ts}] [${label}] ${truncateMessage(message)}\n`
     this._writeQueue.push({ level, line })
     this._estimatedSize += line.length
     if (this._writeQueue.length > MAX_BUFFER_LINES) {

@@ -94,6 +94,7 @@ renderer 未捕获异常 / 服务埋点                main 进程异常
 - **连续崩溃计数与跳过恢复**：哨兵 JSON 带 `priorAbnormalExits`（arm 时写入当前 streak），残留被读出时 `consecutiveAbnormalExits = prior + 1`，正常退出删哨兵即归零——无额外状态文件。`shouldOfferRestoreSkip`（阈值 2）判定命中且会话列表有待恢复工作区时，main 在 `restoreSession` 前弹原生对话框提供「跳过恢复（打开空窗口）」，选跳过则清空 sessionList 以空窗口启动（recent 列表不动，目录仍可重进）；默认按钮为正常恢复，**E2E 下跳过弹框**（原生模态会卡死驱动）。用于打破「恢复的工作区本身导致崩溃（如海量文件目录 OOM）」的死循环。
 - **renderer 崩溃**：`render-process-gone`（非 clean-exit）→ 记 errors.jsonl（`renderProcessGone`，source=`renderer:<id>`）+ 模态对话框「重新加载 / 关闭窗口」，`._crashHandled` 去抖防崩溃风暴叠弹窗；**E2E 跳过模态框**（崩溃直接挂测试，不挡驱动）。GPU/utility 进程死亡走 `child-process-gone` 同样入 sink。
 - **unresponsive**：仅日志（Windows 锁屏会误报，不弹窗）。
+- **内存增长曲线**：`processMetrics` 日志通道每 120s 采一行 `pid=… type=… mem=…MB cpu=…%`（`app.getAppMetrics()`，OS 工作集）+ 一行 `main-heap heapUsed=…MB heapTotal=…MB external=…MB rss=…MB`（main 自身 `process.memoryUsage()`；工作集看不到 V8 堆膨胀——main OOM 时工作集可能只有百余 MB）。`heapUsed` 超 1.5GB 时该行升级为 warn。
 
 ## 「报告问题」链路
 
