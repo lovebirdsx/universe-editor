@@ -55,6 +55,13 @@ import {
   type SessionUpdate,
 } from '@agentclientprotocol/sdk'
 import { stripSelectionReplayChunk } from '../acpSession.js'
+import {
+  RAW_INPUT_CAP,
+  TERMINAL_OUTPUT_CAP,
+  TERMINAL_OUTPUT_REBUILD_AT,
+  TERMINAL_OUTPUT_TRUNCATED_MARKER,
+  TOOL_TEXT_BLOCK_CAP,
+} from '../acpContentLimits.js'
 import { AcpSessionService } from '../acpSessionService.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
@@ -627,6 +634,123 @@ describe('AcpSession.timeline', () => {
     expect(slot.call.text).toBe('line1\nline2\n')
     expect(slot.call.text).not.toContain('[terminal:')
     expect(slot.call.status).toBe('completed')
+  })
+
+  it('inbound caps: terminal output, tool text blocks, and rawInput are bounded on ingest', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    // Terminal accumulator: stream past the rebuild threshold in one delta.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'term-cap',
+        title: 'spam',
+        kind: 'execute',
+        status: 'in_progress',
+        content: [{ type: 'terminal', terminalId: 'term-cap' }],
+      },
+    })
+    const tailMarker = 'END-OF-OUTPUT'
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'term-cap',
+        _meta: {
+          terminal_output_delta: {
+            data: 'x'.repeat(TERMINAL_OUTPUT_REBUILD_AT + 1) + tailMarker,
+            terminal_id: 'term-cap',
+          },
+        },
+      },
+    })
+
+    const termSlot = s.timeline.get().find((it) => it.kind === 'toolCall' && it.id === 'term-cap')
+    if (!termSlot || termSlot.kind !== 'toolCall') throw new Error('expected execute toolCall')
+    expect(termSlot.call.text.startsWith(TERMINAL_OUTPUT_TRUNCATED_MARKER)).toBe(true)
+    expect(termSlot.call.text.length).toBe(
+      TERMINAL_OUTPUT_TRUNCATED_MARKER.length + TERMINAL_OUTPUT_CAP,
+    )
+    expect(termSlot.call.text.endsWith(tailMarker)).toBe(true)
+
+    // Hysteresis: a small follow-up delta appends without rebuilding again.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'term-cap',
+        _meta: { terminal_output_delta: { data: 'more', terminal_id: 'term-cap' } },
+      },
+    })
+    const termSlot2 = s.timeline.get().find((it) => it.kind === 'toolCall' && it.id === 'term-cap')
+    if (!termSlot2 || termSlot2.kind !== 'toolCall') throw new Error('expected execute toolCall')
+    expect(termSlot2.call.text.endsWith(`${tailMarker}more`)).toBe(true)
+
+    // Tool-call content: an oversized text block is capped on ingest.
+    const bigText = 'b'.repeat(TOOL_TEXT_BLOCK_CAP + 10)
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-big',
+        title: 'Read',
+        kind: 'read',
+        status: 'completed',
+        content: [{ type: 'content', content: { type: 'text', text: bigText } }],
+      },
+    })
+    const bigSlot = s.timeline.get().find((it) => it.kind === 'toolCall' && it.id === 'tc-big')
+    if (!bigSlot || bigSlot.kind !== 'toolCall') throw new Error('expected toolCall')
+    const block = bigSlot.call.blocks[0]
+    if (block?.type !== 'text') throw new Error('expected text block')
+    expect(block.text).toContain('chars truncated')
+    expect(block.text.length).toBeLessThan(bigText.length)
+
+    // rawInput: small inputs land; oversized ones are dropped (undefined).
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-small-raw',
+        title: 'R1',
+        kind: 'read',
+        status: 'completed',
+        rawInput: { command: 'ls' },
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-big-raw',
+        title: 'R2',
+        kind: 'read',
+        status: 'completed',
+        rawInput: { blob: 'x'.repeat(RAW_INPUT_CAP) },
+      },
+    })
+    const find = (id: string) => {
+      const slot = s.timeline.get().find((it) => it.kind === 'toolCall' && it.id === id)
+      if (!slot || slot.kind !== 'toolCall') throw new Error(`expected toolCall ${id}`)
+      return slot.call
+    }
+    expect(find('tc-small-raw').rawInput).toEqual({ command: 'ls' })
+    expect(find('tc-big-raw').rawInput).toBeUndefined()
+
+    // A fresh oversized rawInput on an update clears the stored one outright —
+    // it must not fall back to the previous value.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tc-small-raw',
+        rawInput: { blob: 'x'.repeat(RAW_INPUT_CAP) },
+      },
+    })
+    expect(find('tc-small-raw').rawInput).toBeUndefined()
   })
 
   it('a full terminal_output snapshot replaces accumulated deltas', async () => {

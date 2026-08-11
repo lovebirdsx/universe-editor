@@ -19,6 +19,11 @@ const SENTINEL_FILE = 'session-sentinel.json'
 // one-off external kill — from then on the user is offered a restore-free start.
 const RESTORE_SKIP_OFFER_THRESHOLD = 2
 
+// At two exits we only ask; by four the user has already picked "restore" and
+// crashed again often enough that asking no longer helps — flip the default to
+// skipping restore so pressing Enter alone breaks the crash loop.
+const RESTORE_SKIP_DEFAULT_THRESHOLD = 4
+
 interface SessionSentinel {
   readonly sessionId: string
   readonly startedAt: number
@@ -42,6 +47,11 @@ export interface AbnormalExitReport {
 /** Whether the crash streak is long enough to offer skipping workspace restore. */
 export function shouldOfferRestoreSkip(consecutiveAbnormalExits: number): boolean {
   return consecutiveAbnormalExits >= RESTORE_SKIP_OFFER_THRESHOLD
+}
+
+/** Whether the dialog should default to skipping restore instead of restoring. */
+export function shouldDefaultToRestoreSkip(consecutiveAbnormalExits: number): boolean {
+  return consecutiveAbnormalExits >= RESTORE_SKIP_DEFAULT_THRESHOLD
 }
 
 // Only the process that wrote the sentinel may delete it: a second instance

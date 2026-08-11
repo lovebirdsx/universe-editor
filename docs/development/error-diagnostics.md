@@ -103,7 +103,7 @@ renderer 未捕获异常 / 服务埋点                main 进程异常
 2. provider 支持附件时（iLoop）QuickPick 询问是否附带诊断包；随后 `buildIssueUrl(providerId, payload)` 在 **main 端**完成上传与拼 URL，renderer 只负责 `opener.open(url)`。URL 超 7500 字符时两个 provider 都降级为粘贴提示（VSCode 同款）。
 3. **iLoop provider**（`main/services/issueReporter/providers/iloopProvider.ts`）：附带时先 `createDiagnosticsZip()`（与 `exportDiagnosticsZip()` 同产物但不弹文件管理器），再按 go-fastdfs 协议 POST `{serverUrl}/upload`，拼 `{appUrl}/addPost?board=&category=&content=&attachments=name@path` 预填 URL（标题留空由用户在页面填）。端点与板块走 `issueReporter.iloop.serverUrl/appUrl/board/category` 设置（默认值见 `shared/issueReporter.ts` 的 `ILoopDefaults`），由 renderer 读配置经 `providerOptions` 传给 main。上传失败 → 错误通知 +「不附带诊断包直接打开」降级 action。
 4. **GitHub provider**：纯拼 `issues/new?body=...`，不支持附件。
-5. `exportDiagnosticsZip()`（独立命令 `workbench.action.exportDiagnostics`）：`<userData>/diagnostics/universe-diagnostics-<ts>.zip`，含 `sysinfo.md` + 最近 2 session 的 `errors-*.jsonl` + 各日志文件**尾部 512KB** + `crash-dumps.txt`（dump 清单，不含 dump 本体）。E2E 下不弹系统文件管理器（`revealInShell`）。
+5. `exportDiagnosticsZip()`（独立命令 `workbench.action.exportDiagnostics`）：`<userData>/diagnostics/universe-diagnostics-<ts>.zip`，含 `sysinfo.md` + 最近 2 session 的 `errors-*.jsonl` + 各日志文件**尾部 512KB** + `crash-dumps.txt`（dump 清单，行尾标注 included/skipped）+ `crashes/` 下**最新最多 2 个 dump 本体**（单文件 64MB 上限，读失败静默跳过）。E2E 下不弹系统文件管理器（`revealInShell`）。
 
 **加新上报目标**：实现 `IIssueReporterProvider`（platform `issueReporter/`），在 `IssueReporterMainService` 构造函数里加一行 `registerProvider`；若需要设置项，在 `shared/issueReporter.ts` 加键 + `SettingsContribution` 的 `issueReporter` 节点加 schema + `reportIssue.ts` 的 payload 组装处补 `providerOptions`。
 

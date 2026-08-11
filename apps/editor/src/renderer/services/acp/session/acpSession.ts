@@ -55,6 +55,7 @@ import { composeImageBlocks, type PromptImage } from '../promptImage.js'
 import { composePromptBlocksFromRefs, type PlacedRef } from '../promptRef.js'
 import { estimateClaudeCostUSD } from '../../../../shared/ai/claudePricing.js'
 import { getAgentCostStrategy, type AcpAgentCostStrategy } from './acpAgentCostStrategy.js'
+import { capRawInput, capTerminalOutputTail, capToolCallBlocks } from './acpContentLimits.js'
 import {
   blocksToText,
   isBlankContentBlock,
@@ -1992,7 +1993,8 @@ export class AcpSession extends Disposable implements IAcpSession {
     const chunk = readTerminalOutput(update)
     if (chunk !== undefined) {
       const prev = this._terminalOutput.get(toolCallId) ?? ''
-      this._terminalOutput.set(toolCallId, chunk.mode === 'append' ? prev + chunk.data : chunk.data)
+      const next = chunk.mode === 'append' ? prev + chunk.data : chunk.data
+      this._terminalOutput.set(toolCallId, capTerminalOutputTail(next))
     }
     return this._terminalOutput.get(toolCallId)
   }
@@ -2115,11 +2117,13 @@ export class AcpSession extends Disposable implements IAcpSession {
         // parent card and never touch the top-level streaming chain.
         const effectiveParent = this._resolveParent(update.toolCallId, parentId)
         if (effectiveParent == null) this._sealStreamingMessages()
-        const { blocks, diffs } = splitToolCallContent(update.content ?? [])
+        const { blocks: splitBlocks, diffs } = splitToolCallContent(update.content ?? [])
+        const blocks = capToolCallBlocks(splitBlocks)
         const locations = readToolCallLocations(update.locations)
         const mcpServer = readMcpServer(update)
         const mcpTool = readMcpTool(update)
         const terminalText = this._accumulateTerminalOutput(update.toolCallId, update)
+        const rawInput = capRawInput(update.rawInput)
         // Stamp a wall-clock start on top-level cards so the UI can show a run
         // duration (settled at completion). Child tool calls run inside a parent
         // card and don't get their own timer.
@@ -2134,7 +2138,7 @@ export class AcpSession extends Disposable implements IAcpSession {
             blocks,
             diffs,
             text: terminalText ?? blocksToText(blocks),
-            ...(update.rawInput !== undefined ? { rawInput: update.rawInput } : {}),
+            ...(rawInput !== undefined ? { rawInput } : {}),
             ...(locations !== undefined ? { locations } : {}),
             ...(mcpServer !== undefined ? { mcpServer } : {}),
             ...(mcpTool !== undefined ? { mcpTool } : {}),
@@ -2156,7 +2160,8 @@ export class AcpSession extends Disposable implements IAcpSession {
             ? this._findChildToolCall(effectiveParent, update.toolCallId)
             : this._toolCalls.find((t) => t.id === update.toolCallId)
         const split = update.content != null ? splitToolCallContent(update.content) : undefined
-        const blocks = split?.blocks ?? existing?.blocks ?? []
+        const blocks =
+          split !== undefined ? capToolCallBlocks(split.blocks) : (existing?.blocks ?? [])
         const diffs = split?.diffs ?? existing?.diffs ?? []
         const mcpServer = readMcpServer(update) ?? existing?.mcpServer
         const mcpTool = readMcpTool(update) ?? existing?.mcpTool
@@ -2165,7 +2170,11 @@ export class AcpSession extends Disposable implements IAcpSession {
         // a late `_meta`-only update doesn't drop the clickable path.
         const locations = readToolCallLocations(update.locations) ?? existing?.locations
         const terminalText = this._accumulateTerminalOutput(update.toolCallId, update)
-        const rawInput = update.rawInput !== undefined ? update.rawInput : existing?.rawInput
+        // An oversized fresh raw input is dropped outright — no fallback to the
+        // previously stored one (which was capped on the way in anyway); an
+        // update that omits rawInput carries the existing value forward.
+        const rawInput =
+          update.rawInput !== undefined ? capRawInput(update.rawInput) : existing?.rawInput
         // Sub-agent stats ride on late `_meta`-only updates; merge the fresh tally
         // over the last one (carry it forward when this update omits it) so the
         // running readout doesn't blink off between chunks.

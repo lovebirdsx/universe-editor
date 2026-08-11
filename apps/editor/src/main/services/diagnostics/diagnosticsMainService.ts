@@ -11,7 +11,7 @@ import AdmZip from 'adm-zip'
 import { app, shell } from 'electron'
 import { promises as fs } from 'node:fs'
 import { cpus, freemem, release as osRelease, totalmem } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import {
   Disposable,
   type ILogger,
@@ -46,12 +46,19 @@ export interface DiagnosticsMainServiceOptions {
    * E2E: popping an Explorer/Finder window mid-test serves no one.
    */
   readonly revealInShell?: boolean
+  /** How many of the newest dumps get packed into the zip; injected so tests stay small. */
+  readonly crashDumpMaxFiles?: number
+  /** Per-dump size cap in bytes; larger dumps are listed but not packed. */
+  readonly crashDumpMaxBytes?: number
 }
 
 /** How many recent log sessions feed the report and the zip. */
 const REPORT_SESSION_COUNT = 2
 /** Per-file tail cap for logs packed into the zip. */
 const LOG_TAIL_BYTES = 512 * 1024
+/** Minidumps are a few MB; anything past this is abnormal and bloats the zip. */
+const CRASH_DUMP_MAX_FILES = 2
+const CRASH_DUMP_MAX_BYTES = 64 * 1024 * 1024
 
 function formatGB(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)}GB`
@@ -128,8 +135,13 @@ export class DiagnosticsMainService extends Disposable implements IDiagnosticsSe
     }
 
     const dumps = await this._listCrashDumps()
+    const dumpStatus = await this._packCrashDumps(zip, dumps)
     const dumpListing = dumps.length
-      ? dumps.map((d) => `${new Date(d.mtime).toISOString()}  ${d.path}`).join('\n') + '\n'
+      ? dumps
+          .map(
+            (d) => `${new Date(d.mtime).toISOString()}  ${d.path}${dumpStatus.get(d.path) ?? ''}`,
+          )
+          .join('\n') + '\n'
       : '(no crash dumps)\n'
     zip.addFile('crash-dumps.txt', Buffer.from(dumpListing, 'utf8'))
 
@@ -219,6 +231,42 @@ export class DiagnosticsMainService extends Disposable implements IDiagnosticsSe
     }
     await collectFrom(sessionDir, '')
     return out
+  }
+
+  /**
+   * Packs the newest dump files (up to the configured cap) into `crashes/`;
+   * returns per-path status suffixes for the crash-dumps.txt listing.
+   * Oversized dumps are listed but skipped; unreadable ones are skipped silently.
+   */
+  private async _packCrashDumps(
+    zip: AdmZip,
+    dumps: { path: string; mtime: number }[],
+  ): Promise<Map<string, string>> {
+    const status = new Map<string, string>()
+    const maxFiles = this._options.crashDumpMaxFiles ?? CRASH_DUMP_MAX_FILES
+    const maxBytes = this._options.crashDumpMaxBytes ?? CRASH_DUMP_MAX_BYTES
+    let packed = 0
+    for (const dump of dumps) {
+      if (packed >= maxFiles) break
+      const stat = await fs.stat(dump.path).catch(() => null)
+      if (!stat) {
+        this._logger.warn(`crash dump vanished, skipped: ${dump.path}`)
+        continue
+      }
+      if (stat.size > maxBytes) {
+        status.set(dump.path, ' (skipped: too large)')
+        continue
+      }
+      const buf = await this._readFileIfExists(dump.path)
+      if (buf === null) {
+        this._logger.warn(`crash dump unreadable, skipped: ${dump.path}`)
+        continue
+      }
+      zip.addFile(`crashes/${basename(dump.path)}`, buf)
+      status.set(dump.path, ' (included)')
+      packed++
+    }
+    return status
   }
 
   private async _listCrashDumps(): Promise<{ path: string; mtime: number }[]> {

@@ -11,6 +11,7 @@ import {
   disarmSessionSentinel,
   findCrashDumpsSince,
   readAbnormalExitReport,
+  shouldDefaultToRestoreSkip,
   shouldOfferRestoreSkip,
   SENTINEL_HEARTBEAT_INTERVAL_MS,
   _resetSentinelForTests,
@@ -162,5 +163,18 @@ describe('shouldOfferRestoreSkip', () => {
   it('offers from the second consecutive abnormal exit on (likely restore loop)', () => {
     expect(shouldOfferRestoreSkip(2)).toBe(true)
     expect(shouldOfferRestoreSkip(3)).toBe(true)
+  })
+})
+
+describe('shouldDefaultToRestoreSkip', () => {
+  it('keeps restore as the default while the streak is short (2-3 exits)', () => {
+    expect(shouldDefaultToRestoreSkip(1)).toBe(false)
+    expect(shouldDefaultToRestoreSkip(2)).toBe(false)
+    expect(shouldDefaultToRestoreSkip(3)).toBe(false)
+  })
+
+  it('defaults to skipping restore from the fourth consecutive abnormal exit on', () => {
+    expect(shouldDefaultToRestoreSkip(4)).toBe(true)
+    expect(shouldDefaultToRestoreSkip(8)).toBe(true)
   })
 })

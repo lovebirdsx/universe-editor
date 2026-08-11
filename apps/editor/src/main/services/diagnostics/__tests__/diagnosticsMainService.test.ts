@@ -3,7 +3,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import AdmZip from 'adm-zip'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  promises as fsp,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -58,6 +67,13 @@ describe('DiagnosticsMainService', () => {
     mkdirSync(dir, { recursive: true })
     if (errorsJsonl !== undefined) writeFileSync(join(dir, 'errors.jsonl'), errorsJsonl)
     for (const [name, content] of Object.entries(logs)) writeFileSync(join(dir, name), content)
+  }
+
+  function seedDump(name: string, content: string, mtime: Date) {
+    const path = join(crashDir, name)
+    writeFileSync(path, content)
+    utimesSync(path, mtime, mtime)
+    return path
   }
 
   it('consumeAbnormalExitReport returns the report once, then null', async () => {
@@ -205,5 +221,74 @@ describe('DiagnosticsMainService', () => {
   it('createDiagnosticsZip degrades processes.txt when collectProcesses is not injected', async () => {
     const zip = new AdmZip(await service.createDiagnosticsZip())
     expect(zip.readAsText('processes.txt')).toBe('(process list unavailable)\n')
+  })
+
+  it('createDiagnosticsZip packs the newest 2 dumps into crashes/ and annotates the listing', async () => {
+    seedDump('oldest.dmp', 'old', new Date('2026-08-01T00:00:00Z'))
+    seedDump('middle.dmp', 'mid', new Date('2026-08-02T00:00:00Z'))
+    seedDump('newest.dmp', 'new', new Date('2026-08-03T00:00:00Z'))
+
+    const zip = new AdmZip(await service.createDiagnosticsZip())
+    const names = zip.getEntries().map((e) => e.entryName)
+    expect(names).toContain('crashes/newest.dmp')
+    expect(names).toContain('crashes/middle.dmp')
+    expect(names).not.toContain('crashes/oldest.dmp')
+    expect(zip.readAsText('crashes/newest.dmp')).toBe('new')
+
+    const listing = zip.readAsText('crash-dumps.txt')
+    expect(listing).toMatch(/newest\.dmp \(included\)/)
+    expect(listing).toMatch(/middle\.dmp \(included\)/)
+    expect(listing).toContain('oldest.dmp')
+    expect(listing).not.toMatch(/oldest\.dmp \(/)
+  })
+
+  it('createDiagnosticsZip skips oversized dumps without consuming the pack quota', async () => {
+    const capped = new DiagnosticsMainService({
+      crashDumpsDir: crashDir,
+      logRoot,
+      diagnosticsDir,
+      mode: 'release',
+      crashDumpMaxBytes: 4,
+    })
+    try {
+      seedDump('huge.dmp', 'way-too-big', new Date('2026-08-03T00:00:00Z'))
+      seedDump('newer-small.dmp', 'bb', new Date('2026-08-02T00:00:00Z'))
+      seedDump('older-small.dmp', 'aa', new Date('2026-08-01T00:00:00Z'))
+
+      const zip = new AdmZip(await capped.createDiagnosticsZip())
+      const names = zip.getEntries().map((e) => e.entryName)
+      expect(names).not.toContain('crashes/huge.dmp')
+      expect(names).toContain('crashes/newer-small.dmp')
+      expect(names).toContain('crashes/older-small.dmp')
+
+      const listing = zip.readAsText('crash-dumps.txt')
+      expect(listing).toMatch(/huge\.dmp \(skipped: too large\)/)
+      expect(listing).toMatch(/newer-small\.dmp \(included\)/)
+      expect(listing).toMatch(/older-small\.dmp \(included\)/)
+    } finally {
+      capped.dispose()
+    }
+  })
+
+  it('createDiagnosticsZip tolerates a dump that cannot be read', async () => {
+    seedDump('gone.dmp', 'x', new Date('2026-08-03T00:00:00Z'))
+    seedDump('ok.dmp', 'ok', new Date('2026-08-02T00:00:00Z'))
+    const original = fsp.readFile
+    const spy = vi.spyOn(fsp, 'readFile').mockImplementation(((
+      path: unknown,
+      options?: unknown,
+    ) => {
+      if (String(path).endsWith('gone.dmp')) return Promise.reject(new Error('ENOENT'))
+      return original.call(fsp, path as never, options as never)
+    }) as typeof fsp.readFile)
+    try {
+      const zip = new AdmZip(await service.createDiagnosticsZip())
+      const names = zip.getEntries().map((e) => e.entryName)
+      expect(names).not.toContain('crashes/gone.dmp')
+      expect(names).toContain('crashes/ok.dmp')
+      expect(zip.readAsText('crash-dumps.txt')).toMatch(/ok\.dmp \(included\)/)
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

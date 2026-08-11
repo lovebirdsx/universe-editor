@@ -76,13 +76,18 @@ import { IDocsService } from '../shared/ipc/docsService.js'
 import { ISessionSwitcherService } from '../shared/ipc/sessionSwitcher.js'
 import { ITextSearchMainService } from '../shared/ipc/textSearchService.js'
 import { installMainErrorHandlers } from './errors.js'
-import { installCrashReporter, installChildProcessGoneLogging } from './crashMonitoring.js'
+import {
+  installCrashReporter,
+  installChildProcessGoneLogging,
+  installProcessMetricsLogging,
+} from './crashMonitoring.js'
 import { ErrorSinkMainService } from './services/telemetry/errorSinkMainService.js'
 import { DiagnosticsMainService } from './services/diagnostics/diagnosticsMainService.js'
 import {
   armSessionSentinel,
   disarmSessionSentinel,
   readAbnormalExitReport,
+  shouldDefaultToRestoreSkip,
   shouldOfferRestoreSkip,
 } from './sessionSentinel.js'
 import { collectWindowsCrashForensics } from './werForensics.js'
@@ -270,6 +275,7 @@ const consoleLogger = logMainService.createLogger({ id: 'console', name: 'Consol
 const consoleInterceptor = installConsoleInterceptor({ logger: consoleLogger })
 
 installChildProcessGoneLogging(mainLogger, (event, error) => errorSink.recordLocal(event, error))
+const processMetricsLogging = installProcessMetricsLogging(logMainService)
 
 const e2eEnabled = environmentService.isE2E
 // Extension-development mode (--extension-development-path): like E2E, each dev
@@ -616,14 +622,15 @@ void app.whenReady().then(async () => {
     sessionList.some((w) => w.workspace) &&
     !e2eEnabled
   ) {
+    const defaultToSkip = shouldDefaultToRestoreSkip(abnormalExit.consecutiveAbnormalExits)
     const { response } = await dialog.showMessageBox({
       type: 'warning',
       buttons: [
         localize('crashLoop.restore', 'Start Normally (Restore Workspace)'),
         localize('crashLoop.skip', 'Skip Restore (Open Empty Window)'),
       ],
-      defaultId: 0,
-      cancelId: 0,
+      defaultId: defaultToSkip ? 1 : 0,
+      cancelId: defaultToSkip ? 1 : 0,
       noLink: true,
       title: localize('crashLoop.title', 'Repeated Abnormal Exits'),
       message: localize(
@@ -741,6 +748,7 @@ app.on('will-quit', () => {
   // the latest in-memory state atomically before we return.
   getDefaultStorage().flushSync()
   consoleInterceptor.dispose()
+  processMetricsLogging.dispose()
   logMainService.dispose()
   // Last synchronous mark before the process exits and the NSIS installer takes
   // over: the gap from here to the next launch's process-creation time is the

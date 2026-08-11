@@ -8,7 +8,13 @@
 
 import { app, crashReporter } from 'electron'
 import { join } from 'node:path'
-import type { ILogger } from '@universe-editor/platform'
+import {
+  createNamedLogger,
+  toDisposable,
+  type IDisposable,
+  type ILogChannel,
+  type ILogger,
+} from '@universe-editor/platform'
 
 /**
  * Keep minidumps locally under <userData>/Crashes. Must run after
@@ -41,4 +47,38 @@ export function installChildProcessGoneLogging(
       record?.('childProcessGone', line)
     }
   })
+}
+
+/** How often per-process memory/CPU snapshots are logged. */
+export const PROCESS_METRICS_INTERVAL_MS = 120_000
+
+/**
+ * Periodic per-process memory/CPU snapshot. A native crash cuts the log
+ * mid-stream with no memory evidence at all; these compact lines are the only
+ * way to reconstruct a memory growth curve (e.g. a workspace walk leaking)
+ * from a diagnostic bundle after the fact.
+ */
+export function installProcessMetricsLogging(loggerService: {
+  createLogger(channel: ILogChannel): ILogger
+}): IDisposable {
+  const logger = createNamedLogger(loggerService, {
+    id: 'processMetrics',
+    name: 'Process Metrics',
+  })
+  const timer = setInterval(() => {
+    try {
+      const line = app
+        .getAppMetrics()
+        .map(
+          (metric) =>
+            `pid=${metric.pid} type=${metric.type} mem=${Math.round(metric.memory.workingSetSize / 1024)}MB cpu=${Math.round(metric.cpu.percentCPUUsage)}%`,
+        )
+        .join(' | ')
+      logger.info(line)
+    } catch {
+      // Metrics are best-effort diagnostics; never let sampling kill the main process.
+    }
+  }, PROCESS_METRICS_INTERVAL_MS)
+  timer.unref()
+  return toDisposable(() => clearInterval(timer))
 }
