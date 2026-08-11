@@ -66,6 +66,7 @@ const EXPECTED_METHOD_NAMES = {
   compaction: '_universe/compaction',
   sessionResurrection: '_universe/sessionResurrection',
   livenessPing: '_universe/liveness_ping',
+  backgroundActivity: '_universe/background_activity',
   sdkMessage: '_claude/sdkMessage',
 } as const
 
@@ -96,6 +97,7 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
     EXPECTED_METHOD_NAMES.rewindSession,
     EXPECTED_METHOD_NAMES.compaction,
     EXPECTED_METHOD_NAMES.sessionResurrection,
+    EXPECTED_METHOD_NAMES.backgroundActivity,
     EXPECTED_METHOD_NAMES.sdkMessage,
     // Both forks advertise universe-editor/* capabilities under the same key.
     'universe-editor/capabilities',

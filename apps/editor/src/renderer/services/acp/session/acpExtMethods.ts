@@ -44,6 +44,17 @@ export const ACP_EXT_METHODS = {
    * window, no timeline entry.
    */
   livenessPing: '_universe/liveness_ping',
+  /**
+   * agent->client notification: background-activity snapshot. When a turn ends
+   * with `run_in_background` tasks still in flight the prompt RPC settles while
+   * work continues, so the fork reports `{ sessionId, backgroundTasks,
+   * autonomousTurn }` — the editor keeps the session visibly active instead of
+   * declaring it idle. `autonomousTurn` marks a follow-up turn (started by a
+   * task-completion wakeup) that occupies no prompt RPC; it must count as
+   * running. Value-deduplicated by the fork; a forced snapshot follows
+   * session/load and session/resume.
+   */
+  backgroundActivity: '_universe/background_activity',
   /** agent->client notification: raw Claude SDK message passthrough (init snapshot). */
   sdkMessage: '_claude/sdkMessage',
 } as const

@@ -4105,4 +4105,157 @@ describe('AcpSessionService — stall watchdog', () => {
     expect(stallSpy).toHaveBeenCalled()
     svc.dispose()
   })
+
+  it('routes _universe/background_activity to the session, flipping autonomous turns to running', async () => {
+    const svc = makeService()
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    expect(session.status.get()).toBe('idle')
+    expect(session.backgroundTaskCount.get()).toBe(0)
+
+    const agentSessionId = session.sessionIdOnAgent.get()
+    if (agentSessionId === undefined) throw new Error('expected an attached session')
+    svc.onExtNotification('_universe/background_activity', {
+      sessionId: agentSessionId,
+      backgroundTasks: 2,
+      autonomousTurn: false,
+    })
+    // Background tasks alone keep the core status idle — the display layer
+    // folds them into 'background'.
+    expect(session.status.get()).toBe('idle')
+    expect(session.backgroundTaskCount.get()).toBe(2)
+
+    // An autonomous follow-up turn occupies no prompt RPC yet must count as
+    // running (its own segment starts here).
+    svc.onExtNotification('_universe/background_activity', {
+      sessionId: agentSessionId,
+      backgroundTasks: 1,
+      autonomousTurn: true,
+    })
+    expect(session.status.get()).toBe('running')
+    expect(session.runningStartedAt.get()).toBeTypeOf('number')
+
+    svc.onExtNotification('_universe/background_activity', {
+      sessionId: agentSessionId,
+      backgroundTasks: 0,
+      autonomousTurn: false,
+    })
+    expect(session.status.get()).toBe('idle')
+    expect(session.backgroundTaskCount.get()).toBe(0)
+    expect(session.runningStartedAt.get()).toBeUndefined()
+    expect(session.accumulatedRunningMs.get()).toBeGreaterThanOrEqual(0)
+    svc.dispose()
+  })
+
+  it('routes a real-wire _universe/background_activity notification from agent to the session', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(STALL_TIMEOUT_MS, client)
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+
+    const agentSessionId = session.sessionIdOnAgent.get()
+    if (agentSessionId === undefined) throw new Error('expected an attached session')
+    const agentConn = client.connected[0]?.agentConn
+    if (!agentConn) throw new Error('expected a connected agent')
+    await agentConn.notify('_universe/background_activity', {
+      sessionId: agentSessionId,
+      backgroundTasks: 1,
+      autonomousTurn: true,
+    })
+    // Notifications have no response — flush the transform hops.
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(session.status.get()).toBe('running')
+    expect(session.backgroundTaskCount.get()).toBe(1)
+    svc.dispose()
+  })
+
+  it('ignores malformed _universe/background_activity payloads', async () => {
+    const svc = makeService()
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+
+    const agentSessionId = session.sessionIdOnAgent.get()
+    if (agentSessionId === undefined) throw new Error('expected an attached session')
+    svc.onExtNotification('_universe/background_activity', { sessionId: agentSessionId })
+    svc.onExtNotification('_universe/background_activity', {
+      sessionId: agentSessionId,
+      backgroundTasks: 'two',
+      autonomousTurn: false,
+    })
+    svc.onExtNotification('_universe/background_activity', {
+      sessionId: agentSessionId,
+      backgroundTasks: 1,
+    })
+    svc.onExtNotification('_universe/background_activity', {
+      backgroundTasks: 1,
+      autonomousTurn: true,
+    })
+    expect(session.status.get()).toBe('idle')
+    expect(session.backgroundTaskCount.get()).toBe(0)
+    svc.dispose()
+  })
+
+  it('applyBackgroundActivity is a no-op once the session is closed', async () => {
+    const svc = makeService()
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    await session.close()
+
+    session.applyBackgroundActivity({ backgroundTasks: 3, autonomousTurn: true })
+    expect(session.status.get()).toBe('closed')
+    expect(session.backgroundTaskCount.get()).toBe(0)
+    svc.dispose()
+  })
+
+  it('resets background activity when the connection is lost', async () => {
+    const { svc, session } = await makeRunningSession()
+    session.applyBackgroundActivity({ backgroundTasks: 2, autonomousTurn: true })
+    expect(session.status.get()).toBe('running')
+    expect(session.backgroundTaskCount.get()).toBe(2)
+
+    session.handleStall()
+    expect(session.isReconnecting).toBe(true)
+    expect(session.backgroundTaskCount.get()).toBe(0)
+    expect(session.autonomousTurnActive).toBe(false)
+    svc.dispose()
+  })
+
+  it('watchdog skips a session running only on an autonomous turn', async () => {
+    const stallMs = 90_000
+    const svc = makeService(stallMs)
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    session.applyBackgroundActivity({ backgroundTasks: 1, autonomousTurn: true })
+    expect(session.status.get()).toBe('running')
+    expect(session.autonomousTurnActive).toBe(true)
+    const stallSpy = vi.spyOn(session, 'handleStall')
+
+    // Far past the stall window with zero wire traffic — the watchdog must not
+    // kill a turn that holds no prompt RPC to abort and resume.
+    await vi.advanceTimersByTimeAsync(stallMs + 120_000)
+    expect(stallSpy).not.toHaveBeenCalled()
+    expect(session.isReconnecting).toBe(false)
+    svc.dispose()
+  })
+
+  it('handleStall itself refuses an autonomous-only running session (belt-and-braces)', async () => {
+    const svc = makeService()
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    session.applyBackgroundActivity({ backgroundTasks: 1, autonomousTurn: true })
+    expect(session.status.get()).toBe('running')
+
+    session.handleStall()
+    expect(session.status.get()).toBe('running')
+    expect(session.isReconnecting).toBe(false)
+    svc.dispose()
+  })
 })

@@ -33,7 +33,9 @@ export class SessionStatusCountsContribution extends Disposable implements IWork
         let ask = 0
         for (const session of this._sessions.sessions.read(r)) {
           const status = computeSessionDisplayStatus(session, r)
-          if (status === 'running') running++
+          // Background tasks keep real work going past the prompt RPC — the
+          // pill (and the quit guard it feeds) must count them as active.
+          if (status === 'running' || status === 'background') running++
           else if (status === 'ask') ask++
         }
         void this._switcher

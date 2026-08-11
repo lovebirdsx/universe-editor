@@ -28,6 +28,8 @@ export function AgentStatusIndicator() {
 
   // Primitives keep the deriveds' default strictEquals from firing on every
   // recompute (an object snapshot would never compare equal).
+  // 'background' counts as running: background tasks are real work that
+  // outlived the prompt RPC, and the pill must not read zero while they run.
   const runningCountObs = useMemo(
     () =>
       sessionsService
@@ -36,9 +38,10 @@ export function AgentStatusIndicator() {
              * @description titlebar.agentStatus.runningCount
              */
             (r) =>
-              sessionsService.sessions
-                .read(r)
-                .filter((s) => computeSessionDisplayStatus(s, r) === 'running').length,
+              sessionsService.sessions.read(r).filter((s) => {
+                const status = computeSessionDisplayStatus(s, r)
+                return status === 'running' || status === 'background'
+              }).length,
           )
         : constObservable(0),
     [sessionsService],

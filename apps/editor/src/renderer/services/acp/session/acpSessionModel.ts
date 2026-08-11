@@ -350,6 +350,17 @@ export const RESURRECTION_METHOD = ACP_EXT_METHODS.sessionResurrection
  */
 export const LIVENESS_PING_METHOD = ACP_EXT_METHODS.livenessPing
 
+/**
+ * Custom ACP extension notification the claude agent fork sends whenever the
+ * session's background-activity snapshot changes (`{ sessionId, backgroundTasks,
+ * autonomousTurn }`). A turn that ends with `run_in_background` tasks in flight
+ * settles its prompt RPC while work continues — without this signal the editor
+ * would mark the session idle (and "finished") while e.g. a robocopy mirror is
+ * still running. Shared verbatim with the fork's `acp-agent.ts`
+ * (`BACKGROUND_ACTIVITY_METHOD`) — keep both in sync.
+ */
+export const BACKGROUND_ACTIVITY_METHOD = ACP_EXT_METHODS.backgroundActivity
+
 /** Result the agent returns from {@link REWIND_SESSION_METHOD} (mirrors the SDK's RewindFilesResult). */
 export interface RewindFilesResult {
   readonly canRewind: boolean
@@ -518,6 +529,14 @@ export interface IAcpSession {
   readonly accumulatedRunningMs: IObservable<number>
   /** Timestamp (epoch ms) when the current running segment started, or undefined if not running. */
   readonly runningStartedAt: IObservable<number | undefined>
+  /**
+   * Number of `run_in_background` tasks the agent reports still in flight for
+   * this session (`0` when none / unknown). Background work outlives the prompt
+   * RPC that spawned it, so the core status stays `idle` while this is > 0 —
+   * the display layer folds it into the `'background'` status and shutdown
+   * guards treat the session as still busy.
+   */
+  readonly backgroundTaskCount: IObservable<number>
   /**
    * Whether the connected agent advertised `promptCapabilities.image`. The
    * prompt input gates its paste/drop/pick entry points on this. Arrives async

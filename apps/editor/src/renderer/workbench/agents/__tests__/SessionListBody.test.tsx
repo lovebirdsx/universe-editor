@@ -163,6 +163,7 @@ function makeFakeSession(opts: {
 }): IAcpSession & {
   status: ISettableObservable<AcpSessionStatus>
   sessionIdOnAgent: ISettableObservable<string | undefined>
+  backgroundTaskCount: ISettableObservable<number>
 } {
   const status = observableValue<AcpSessionStatus>(
     'test.session.status',
@@ -183,6 +184,9 @@ function makeFakeSession(opts: {
     usage: observableValue('test.session.usage', undefined),
     accumulatedRunningMs: observableValue('test.session.accumulated', 0),
     runningStartedAt: observableValue<number | undefined>('test.session.startedAt', undefined),
+    backgroundTaskCount: observableValue<number>('test.session.btc', 0),
+    pendingElicitation: observableValue('test.session.pe', undefined),
+    pendingPermission: observableValue('test.session.pp', undefined),
   } as never
 }
 
@@ -578,5 +582,25 @@ describe('SessionListBody — optimistic pending rows', () => {
     })
     pushSession(makeFakeSession({ id: 'local-1' }))
     expect(rowOrder()).toEqual(['local-1', 'pinned-1'])
+  })
+
+  it('buckets a background-waiting session as in_progress for the status filter', () => {
+    const { history, filterService } = harness
+    addEntry(history, 'agent-bg', 'background session', 1000)
+    const session = makeFakeSession({ id: 'agent-bg', status: 'idle' })
+    session.backgroundTaskCount.set(1, undefined)
+    pushSession(session)
+
+    // Idle + background tasks → display status 'background' → in_progress
+    // bucket, so excluding in_progress hides the row while the agent still works.
+    act(() => {
+      filterService.toggleStatus('in_progress')
+    })
+    expect(rowOrder()).toEqual([])
+
+    act(() => {
+      filterService.toggleStatus('in_progress')
+    })
+    expect(rowOrder()).toEqual(['agent-bg'])
   })
 })

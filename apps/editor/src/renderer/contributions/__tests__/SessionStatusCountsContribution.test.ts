@@ -20,6 +20,7 @@ interface FakeSession {
   status: ISettableObservable<AcpSessionStatus>
   pendingElicitation: ISettableObservable<unknown>
   pendingPermission: ISettableObservable<unknown>
+  backgroundTaskCount: ISettableObservable<number>
 }
 
 function makeSession(status: AcpSessionStatus): FakeSession {
@@ -27,6 +28,7 @@ function makeSession(status: AcpSessionStatus): FakeSession {
     status: observableValue<AcpSessionStatus>('test.status', status),
     pendingElicitation: observableValue<unknown>('test.elicitation', undefined),
     pendingPermission: observableValue<unknown>('test.permission', undefined),
+    backgroundTaskCount: observableValue<number>('test.backgroundTaskCount', 0),
   }
 }
 
@@ -80,6 +82,18 @@ describe('SessionStatusCountsContribution', () => {
     expect(reports[reports.length - 1]).toEqual({ running: 2, ask: 0 })
 
     setSessions([])
+    expect(reports[reports.length - 1]).toEqual({ running: 0, ask: 0 })
+  })
+
+  it('counts a background-waiting session as running', () => {
+    const { reports, setSessions } = setup()
+    const background = makeSession('idle')
+    background.backgroundTaskCount.set(2, undefined)
+
+    setSessions([background])
+    expect(reports[reports.length - 1]).toEqual({ running: 1, ask: 0 })
+
+    background.backgroundTaskCount.set(0, undefined)
     expect(reports[reports.length - 1]).toEqual({ running: 0, ask: 0 })
   })
 })

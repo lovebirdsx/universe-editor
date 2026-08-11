@@ -60,6 +60,7 @@ describe('statusBucketFor', () => {
   it('folds display statuses into coarse buckets', () => {
     expect(statusBucketFor('running')).toBe('in_progress')
     expect(statusBucketFor('connecting')).toBe('in_progress')
+    expect(statusBucketFor('background')).toBe('in_progress')
     expect(statusBucketFor('ask')).toBe('input_needed')
     expect(statusBucketFor('errored')).toBe('failed')
     expect(statusBucketFor('idle')).toBe('completed')

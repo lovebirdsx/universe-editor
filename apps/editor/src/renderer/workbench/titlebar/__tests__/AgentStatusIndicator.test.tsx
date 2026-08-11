@@ -32,6 +32,7 @@ function makeSession(id: string, status: AcpSessionStatus) {
     status: statusObs,
     pendingElicitation,
     pendingPermission: observableValue<unknown>(`test.permission.${id}`, undefined),
+    backgroundTaskCount: observableValue<number>(`test.btc.${id}`, 0),
   } as unknown as IAcpSession
   return { session, statusObs, pendingElicitation }
 }

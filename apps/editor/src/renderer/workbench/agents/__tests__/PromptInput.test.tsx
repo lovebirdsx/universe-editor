@@ -448,6 +448,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     collapseMode: observableValue('test.collapseMode', 'default' as const),
     accumulatedRunningMs: observableValue('test.arm', 0),
     runningStartedAt: observableValue<number | undefined>('test.rsa', undefined),
+    backgroundTaskCount: observableValue<number>('test.btc', 0),
     imageSupported: observableValue<boolean>('test.imageSupported', opts.imageSupported ?? false),
     forkSupported: observableValue<boolean>('test.forkSupported', false),
     rewindSupported: observableValue<boolean>('test.rewindSupported', false),

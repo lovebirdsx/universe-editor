@@ -14,8 +14,11 @@ import { SessionShutdownParticipant } from '../SessionShutdownParticipant.js'
 import { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
 import type { AcpSessionStatus, IAcpSession } from '../../services/acp/session/acpSession.js'
 
-function sessionWithStatus(status: AcpSessionStatus): IAcpSession {
-  return { status: observableValue('status', status) } as unknown as IAcpSession
+function sessionWithStatus(status: AcpSessionStatus, backgroundTasks = 0): IAcpSession {
+  return {
+    status: observableValue('status', status),
+    backgroundTaskCount: observableValue('backgroundTaskCount', backgroundTasks),
+  } as unknown as IAcpSession
 }
 
 function makeSessionService(sessions: IAcpSession[]): IAcpSessionService {
@@ -108,5 +111,25 @@ describe('SessionShutdownParticipant', () => {
 
     expect(vetoed).toBe(false)
     expect(dialog.confirm).not.toHaveBeenCalled()
+  })
+
+  it('prompts for a session whose turn settled but background tasks are still in flight', async () => {
+    // Closing kills the agent process, and with it any `run_in_background`
+    // work (e.g. a robocopy mirror) — an idle-status session with
+    // backgroundTaskCount > 0 must still gate the shutdown.
+    const lifecycle: ILifecycleService = new LifecycleService()
+    const dialog = makeDialog(false)
+    new SessionShutdownParticipant(
+      lifecycle,
+      makeSessionService([sessionWithStatus('idle', 1), sessionWithStatus('closed')]),
+      dialog,
+    )
+
+    const vetoed = await lifecycle.confirmBeforeShutdown(ShutdownReason.CloseWindow)
+    expect(vetoed).toBe(true)
+    expect(dialog.confirm).toHaveBeenCalledTimes(1)
+    expect(dialog.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('1') }),
+    )
   })
 })

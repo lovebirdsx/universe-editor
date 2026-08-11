@@ -16,11 +16,13 @@ function fakeSession(opts: {
   status: AcpSessionStatus
   elicitation?: AcpPendingElicitation
   permission?: AcpPendingPermission
+  backgroundTasks?: number
 }): IAcpSession {
   return {
     status: observableValue<AcpSessionStatus>('s', opts.status),
     pendingElicitation: observableValue<AcpPendingElicitation | undefined>('e', opts.elicitation),
     pendingPermission: observableValue<AcpPendingPermission | undefined>('p', opts.permission),
+    backgroundTaskCount: observableValue<number>('b', opts.backgroundTasks ?? 0),
   } as unknown as IAcpSession
 }
 
@@ -60,5 +62,37 @@ describe('computeSessionDisplayStatus', () => {
     expect(
       computeSessionDisplayStatus(fakeSession({ status: 'closed', elicitation: ELICITATION })),
     ).toBe('closed')
+  })
+
+  it("derives 'background' when idle with background tasks in flight", () => {
+    expect(computeSessionDisplayStatus(fakeSession({ status: 'idle', backgroundTasks: 2 }))).toBe(
+      'background',
+    )
+  })
+
+  it('never overrides closed with background', () => {
+    expect(computeSessionDisplayStatus(fakeSession({ status: 'closed', backgroundTasks: 2 }))).toBe(
+      'closed',
+    )
+  })
+
+  it('ask outranks background', () => {
+    expect(
+      computeSessionDisplayStatus(
+        fakeSession({ status: 'idle', elicitation: ELICITATION, backgroundTasks: 1 }),
+      ),
+    ).toBe('ask')
+  })
+
+  it('running outranks background (background is idle-only)', () => {
+    expect(
+      computeSessionDisplayStatus(fakeSession({ status: 'running', backgroundTasks: 1 })),
+    ).toBe('running')
+  })
+
+  it('idle with zero background tasks stays idle', () => {
+    expect(computeSessionDisplayStatus(fakeSession({ status: 'idle', backgroundTasks: 0 }))).toBe(
+      'idle',
+    )
   })
 })

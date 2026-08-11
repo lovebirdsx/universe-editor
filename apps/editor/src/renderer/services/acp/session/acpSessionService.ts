@@ -98,6 +98,7 @@ import type { AcpPromptDraft } from './acpPromptDraftCache.js'
 import { AcpElicitationDraftCache } from './acpElicitationDraftCache.js'
 import {
   AcpSession,
+  BACKGROUND_ACTIVITY_METHOD,
   COMPACTION_METHOD,
   LIVENESS_PING_METHOD,
   PLAN_AUTO_EXECUTE_DELAY_MS,
@@ -1291,6 +1292,11 @@ export class AcpSessionService
       // via ext-notifications rather than session/update, so it never bumps
       // lastActivityAt mid-run no matter how long it takes.
       if (session.compactionInProgress) continue
+      // An autonomous follow-up turn (background-task wakeup) holds no prompt
+      // RPC, so there is nothing to abort and resume — declaring it stalled
+      // would kill a working turn. `_universe/background_activity` snapshots
+      // keep lastActivityAt fresh while it runs.
+      if (session.autonomousTurnActive) continue
       const silentMs = now - session.lastActivityAt
       if (silentMs < stallMs) continue
       this._logger.warn(
@@ -1665,6 +1671,20 @@ export class AcpSessionService
       const sessionId = params['sessionId']
       if (typeof sessionId !== 'string') return
       this._findSession(sessionId)?.applyLivenessPing()
+      return
+    }
+    if (method === BACKGROUND_ACTIVITY_METHOD) {
+      const sessionId = params['sessionId']
+      const backgroundTasks = params['backgroundTasks']
+      const autonomousTurn = params['autonomousTurn']
+      if (
+        typeof sessionId !== 'string' ||
+        typeof backgroundTasks !== 'number' ||
+        typeof autonomousTurn !== 'boolean'
+      ) {
+        return
+      }
+      this._findSession(sessionId)?.applyBackgroundActivity({ backgroundTasks, autonomousTurn })
       return
     }
     if (method !== SDK_MESSAGE_EXT_METHOD) return

@@ -34,7 +34,7 @@ export type SessionSortMode = 'created' | 'updated'
 /**
  * The coarse status buckets the filter menu offers, folding the finer
  * {@link AcpSessionDisplayStatus} down to the four states VSCode surfaces:
- *  - `in_progress`: connecting / running
+ *  - `in_progress`: connecting / running / background tasks still executing
  *  - `input_needed`: waiting on the user (a pending question or permission → `ask`)
  *  - `failed`: errored
  *  - `completed`: idle / closed, and any non-live history row (no live status)
@@ -53,6 +53,7 @@ export function statusBucketFor(status: AcpSessionDisplayStatus): SessionStatusB
   switch (status) {
     case 'connecting':
     case 'running':
+    case 'background':
       return 'in_progress'
     case 'ask':
       return 'input_needed'

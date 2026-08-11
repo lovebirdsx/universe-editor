@@ -575,8 +575,10 @@ export class WindowMainService implements IWindowMainService {
       const requestingWindow = this._windows.get(requestingWindowId)
       if (requestingWindow && !requestingWindow.win.isDestroyed()) {
         const sessions = await this._opts.appServices.sessionSwitcher.getAllSessions()
+        // 'background' = turn settled but run_in_background tasks still executing;
+        // quitting kills the agent process and that work with it, so count it.
         const runningSessionCount = sessions.filter(
-          (session) => session.status === 'running',
+          (session) => session.status === 'running' || session.status === 'background',
         ).length
         this._opts.logService
           .createLogger({ id: 'window', name: 'Window' })

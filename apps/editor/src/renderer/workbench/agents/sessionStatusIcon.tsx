@@ -9,6 +9,7 @@ import {
   Circle,
   CircleDashed,
   CircleX,
+  Hourglass,
   Loader2,
   MessageCircleQuestion,
   type LucideIcon,
@@ -39,6 +40,7 @@ const ICON_MAP: Record<string, SessionStatusIconComponent> = {
   idle: plain(Circle),
   errored: plain(CircleX),
   ask: plain(MessageCircleQuestion),
+  background: plain(Hourglass),
   closed: plain(CircleDashed),
 }
 

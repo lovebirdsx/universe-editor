@@ -69,6 +69,7 @@ function makeSession(selection: readonly string[] | null = null, readOnly = fals
     collapseMode: observableValue('cm', 'default' as const),
     accumulatedRunningMs: observableValue('arm', 0),
     runningStartedAt: observableValue<number | undefined>('rsa', undefined),
+    backgroundTaskCount: observableValue<number>('btc', 0),
     imageSupported: observableValue<boolean>('imageSupported', false),
     forkSupported: observableValue<boolean>('forkSupported', false),
     rewindSupported: observableValue<boolean>('rewindSupported', false),

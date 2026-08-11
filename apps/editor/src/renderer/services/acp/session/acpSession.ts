@@ -104,6 +104,7 @@ import {
 // many `from '.../acpSession.js'` import sites across the renderer keep working.
 export {
   AcpAbortError,
+  BACKGROUND_ACTIVITY_METHOD,
   COMPACTION_METHOD,
   LIVENESS_PING_METHOD,
   PLAN_AUTO_EXECUTE_DELAY_MS,
@@ -359,6 +360,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly collapseMode: ISettableObservable<CollapseMode>
   readonly accumulatedRunningMs: ISettableObservable<number>
   readonly runningStartedAt: ISettableObservable<number | undefined>
+  readonly backgroundTaskCount: ISettableObservable<number>
 
   private readonly _onDidRequireAuth = this._register(new Emitter<void>())
   readonly onDidRequireAuth: Event<void> = this._onDidRequireAuth.event
@@ -377,6 +379,12 @@ export class AcpSession extends Disposable implements IAcpSession {
   private readonly _inFlight = new Set<AbortController>()
   /** Latches 'errored' once all in-flight settle if any of them failed. */
   private _sawError = false
+  /**
+   * True while the agent runs an autonomous follow-up turn (task-completion
+   * wakeup) — such a turn occupies no prompt RPC, so it must keep the session
+   * 'running' on its own. Reported via `_universe/background_activity`.
+   */
+  private _autonomousTurnActive = false
 
   // 16ms batching: collapse bursts of session/update chunks into one
   // observer notification per frame. Underlying values still update
@@ -667,6 +675,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       `acp.session.runningStartedAt.${id}`,
       undefined,
     )
+    this.backgroundTaskCount = observableValue<number>(`acp.session.backgroundTaskCount.${id}`, 0)
     this.imageSupported = observableValue<boolean>(`acp.session.imageSupported.${id}`, false)
     this.forkSupported = observableValue<boolean>(`acp.session.forkSupported.${id}`, false)
     this.rewindSupported = observableValue<boolean>(`acp.session.rewindSupported.${id}`, false)
@@ -762,6 +771,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       this.status.set('closed', undefined)
       this._cancelPending()
       this._abortAllInFlight()
+      this._resetBackgroundActivity()
     }
     if (conn.conn.signal.aborted) {
       // The pooled connection is already dead at attach time. With a live phase
@@ -802,6 +812,7 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   failConnection(message: string): void {
     if (!this._connection.fail(message)) return
+    this._resetBackgroundActivity()
     if (this.status.get() === 'connecting') {
       this._appendMessage('agent', `[error] ${message}`)
       this.status.set('errored', undefined)
@@ -840,6 +851,36 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   /**
+   * True while the agent runs an autonomous follow-up turn (background-task
+   * wakeup). Read by the stall watchdog: such a turn occupies no prompt RPC,
+   * so the watchdog's silence window must not fire on it.
+   */
+  get autonomousTurnActive(): boolean {
+    return this._autonomousTurnActive
+  }
+
+  /**
+   * Background-activity snapshot from the agent (`_universe/background_activity`).
+   * Background tasks outlive the prompt RPC that spawned them; an autonomous
+   * turn never has one. Both feed the status derivation so the session doesn't
+   * read as "finished" while out-of-band work is still going. No-op once closed
+   * (a snapshot landing after close() must not resurrect anything).
+   */
+  applyBackgroundActivity(params: { backgroundTasks: number; autonomousTurn: boolean }): void {
+    if (this.status.get() === 'closed') return
+    this._lastActivityAt = Date.now() // the notification itself is proof of life
+    this.backgroundTaskCount.set(params.backgroundTasks, undefined)
+    this._autonomousTurnActive = params.autonomousTurn
+    this._recomputeStatus()
+  }
+
+  /** Drop the background-activity inputs on any connection teardown path. */
+  private _resetBackgroundActivity(): void {
+    this._autonomousTurnActive = false
+    this.backgroundTaskCount.set(0, undefined)
+  }
+
+  /**
    * The agent process died (or was declared stalled, or threw internally
    * mid-turn) while this session was live. Instead of sealing, park the
    * session back in `connecting`: the timeline is kept, in-flight prompts are
@@ -860,6 +901,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._turnInterrupted = this._inFlight.size > 0
     this._interruptedWithPendingInteraction = hadPendingInteraction
     this._abortAllInFlight()
+    this._resetBackgroundActivity()
     this._sawError = false
     this._connection.beginReconnect()
     // Return the dead lease to the pool. The pool entry is already evicted on
@@ -888,10 +930,12 @@ export class AcpSession extends Disposable implements IAcpSession {
     // not a wedged turn. The service-level watchdog already skips these; guard
     // here too so future callers can't bypass the exemption. A running
     // compaction is likewise expected silence (its lifecycle travels via
-    // ext-notifications, never session/update).
+    // ext-notifications, never session/update) — and so is an autonomous
+    // follow-up turn, which holds no in-flight prompt RPC at all.
     if (this.pendingElicitation.get() !== undefined) return
     if (this.pendingPermission.get() !== undefined) return
     if (this.compactionInProgress) return
+    if (this._autonomousTurnActive && this._inFlight.size === 0) return
     this._handleConnectionLost('stalled')
   }
 
@@ -956,6 +1000,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._reconnecting = false
     this._turnInterrupted = false
     this._interruptedWithPendingInteraction = false
+    this._resetBackgroundActivity()
     this.recovery.set({
       phase: 'exhausted',
       attempt: MAX_RECOVERY_ATTEMPTS,
@@ -982,6 +1027,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       this._reconnecting = false
       this._turnInterrupted = false
       this._interruptedWithPendingInteraction = false
+      this._resetBackgroundActivity()
       this._connection.fail('reconnect cancelled')
       this._settleOrphanCompactions('cancelled')
       if (this.status.get() !== 'closed') this.status.set('errored', undefined)
@@ -1782,7 +1828,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     // path; aborted in-flight prompts settling must not flip it to idle.
     if (this._reconnecting) return
     const prev = this.status.get()
-    if (this._inFlight.size > 0) {
+    if (this._inFlight.size > 0 || this._autonomousTurnActive) {
       if (prev !== 'running') this.runningStartedAt.set(Date.now(), undefined)
       this.status.set('running', undefined)
       return
@@ -1962,6 +2008,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._reconnecting = false
     this._turnInterrupted = false
     this._interruptedWithPendingInteraction = false
+    this._resetBackgroundActivity()
     this.recovery.dispose()
     // Unblock anyone awaiting the handshake and reject any still-queued prompts
     // — a session closed mid-connect never reaches attach/fail, so settle the

@@ -2,7 +2,8 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Guards running ACP sessions across shutdown-like transitions. Participates in
  *  the lifecycle veto chain (quit / close window / reload / switch workspace):
- *  if any session is still running, it prompts the user before letting the action
+ *  if any session is still running — or still executing `run_in_background`
+ *  tasks past its settled turn — it prompts the user before letting the action
  *  interrupt them. Modelled on VSCode's WorkingCopyBackupTracker.
  *--------------------------------------------------------------------------------------------*/
 
@@ -45,9 +46,14 @@ export class SessionShutdownParticipant extends Disposable implements IWorkbench
     skipPrompt = false,
   ): Promise<boolean> {
     if (skipPrompt) return false
+    // Closing kills the agent process — and with it any still-running
+    // `run_in_background` task (e.g. a robocopy mirror), so a session whose
+    // turn settled but whose background work is in flight counts as busy too.
     const runningCount =
       aggregateRunningCount ??
-      this._sessions.sessions.get().filter((s) => s.status.get() === 'running').length
+      this._sessions.sessions
+        .get()
+        .filter((s) => s.status.get() === 'running' || s.backgroundTaskCount.get() > 0).length
     if (runningCount === 0) return false
 
     // E2E runs headless: a modal confirm has no one to answer it and would hang

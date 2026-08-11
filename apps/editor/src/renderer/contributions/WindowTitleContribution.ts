@@ -8,7 +8,9 @@
  *  with none it falls back to "<folder name> - <parent directory>". Electron
  *  mirrors `document.title` onto the native window title, surfaced even with
  *  `frame: false`. The status symbol maps AcpSessionStatus to a geometric shape:
- *  ● running · ○ idle · ◌ connecting · ✕ errored (closed → no session segment).
+ *  ● running · ○ idle · ◌ connecting · ✕ errored · ◆ ask (closed → no session
+ *  segment); background (agent still executing run_in_background tasks) shares
+ *  running's ● because the session is still busy.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -39,6 +41,7 @@ const STATUS_SYMBOL: Record<AcpSessionDisplayStatus, string> = {
   connecting: '◌',
   errored: '✕',
   ask: '◆',
+  background: '●',
   closed: '',
 }
 
