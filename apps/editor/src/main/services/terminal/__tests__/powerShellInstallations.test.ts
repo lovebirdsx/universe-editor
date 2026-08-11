@@ -119,10 +119,12 @@ describe('enumeratePowerShellCandidates', () => {
     )
   })
 
-  it('always appends dotnet-tool / scoop / Windows PowerShell fallbacks', async () => {
+  it('always appends dotnet-tool / scoop / PATH / Windows PowerShell fallbacks', async () => {
     const candidates = await enumeratePowerShellCandidates(makeDeps(new FakeFs()))
     expect(candidates).toContain('C:\\Users\\tester\\.dotnet\\tools\\pwsh.exe')
     expect(candidates).toContain('C:\\Users\\tester\\scoop\\apps\\pwsh\\current\\pwsh.exe')
+    // bare-name PATH candidate sits between scoop and the last resort
+    expect(candidates[candidates.length - 2]).toBe('pwsh.exe')
     expect(candidates[candidates.length - 1]).toBe(
       'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     )

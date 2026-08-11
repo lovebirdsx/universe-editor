@@ -124,9 +124,10 @@ async function findPSCoreMsix(
 
 /**
  * Enumerate all well-known pwsh.exe candidates in priority order (stable →
- * x86 → Store → dotnet tool → preview → Store preview → x86 preview → scoop),
- * mirroring VSCode's enumerateDefaultPowerShellInstallations. Paths are NOT
- * verified to exist; the caller's fallback-chain validation does that.
+ * x86 → Store → dotnet tool → preview → Store preview → x86 preview → scoop →
+ * PATH), mirroring VSCode's enumerateDefaultPowerShellInstallations plus a PATH
+ * lookup. Paths are NOT verified to exist; the caller's fallback-chain
+ * validation does that.
  * Windows PowerShell (System32) is appended as the last-resort candidate so
  * the "PowerShell" profile still resolves on machines without pwsh.
  */
@@ -160,6 +161,11 @@ export async function enumeratePowerShellCandidates(
   if (previewAltBitness) candidates.push(previewAltBitness)
 
   if (home) candidates.push(`${home}\\scoop\\apps\\pwsh\\current\\pwsh.exe`)
+
+  // Bare name resolved against PATH by the caller's fallback-chain validation:
+  // catches installs outside the well-known roots (e.g. pwsh on another drive)
+  // as long as the installer added it to PATH.
+  candidates.push('pwsh.exe')
 
   // Last resort: the Windows-builtin Windows PowerShell, so the "PowerShell"
   // profile resolves even when no pwsh is installed. Sysnative redirects a

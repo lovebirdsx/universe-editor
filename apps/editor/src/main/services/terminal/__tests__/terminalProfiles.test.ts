@@ -138,6 +138,22 @@ describe('detectAvailableProfiles — Windows', () => {
     expect(profiles.map((p) => p.profileName)).toEqual(['Command Prompt'])
   })
 
+  it('resolves the PowerShell profile from a pwsh that is only on PATH', async () => {
+    // pwsh installed outside the well-known roots (e.g. another drive), with
+    // only the installer-added PATH entry pointing at it.
+    const fs = new FakeFs()
+      .addFile('D:\\Program Files\\PowerShell\\7\\pwsh.exe')
+      .addFile('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+      .addFile('C:\\Windows\\System32\\cmd.exe')
+    const deps = winDeps(fs, {
+      env: { ...WIN_ENV, PATH: 'C:\\Windows\\System32;D:\\Program Files\\PowerShell\\7' },
+    })
+    const profiles = await detectAvailableProfiles(NO_PROFILES, deps)
+    const pwsh = profiles.find((p) => p.profileName === 'PowerShell')
+    expect(pwsh?.path).toBe('D:\\Program Files\\PowerShell\\7\\pwsh.exe')
+    expect(pwsh?.isFromPath).toBe(true)
+  })
+
   it('uses Sysnative instead of System32 for a 32-bit process on 64-bit Windows', async () => {
     const fs = new FakeFs()
       .addFile('C:\\Windows\\Sysnative\\cmd.exe')
