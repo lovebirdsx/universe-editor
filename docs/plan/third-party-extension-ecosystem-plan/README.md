@@ -48,7 +48,7 @@
 | 快速迭代 | Reload Window / restartExtensionHost | `workbench.action.restartExtensionHost` 命令 + watch 产物变更自动重启（`extensions.autoRestartOnChange`） | ✅ 均已落地 |
 | 打包 | `vsce package` → .vsix | `uex package` | `createVsix` 逻辑已有（`extension-packaging`），无对外 CLI |
 | 发布 | `vsce publish`（PAT token） | `uex publish`（Bearer token） | ✅ 已落地（token 认证 API + 联调测试） |
-| 市场侧账号 | Marketplace publisher 注册 | 内部阶段运维发 token；公开阶段自助注册（Phase F） | 无 |
+| 市场侧账号 | Marketplace publisher 注册 | 内部阶段双通道拿 token——运维签发 + 网页注册页（2026-08-11 修订：网页注册改**审批制**，管理页批准后方可发布）；token 自服务页属公开阶段（Phase F） | 无 |
 | 学习资料 | code.visualstudio.com/api + samples 仓库 | `docs/extension-dev/` + 外部形态 hello-world 样例 | 无 |
 
 ---
@@ -60,7 +60,7 @@
 | # | 决策项 | 选择 | 含义 |
 |---|---|---|---|
 | 1 | **生态范围** | 先内部后公开 | 架构按公开生态设计（认证、签名留好接口不实现），运营先从公司内团队/受邀开发者起步；公开阶段前置项集中登记在 [06](./06-public-phase-roadmap.md) |
-| 2 | **发布通路** | 自助 token 发布 | 市场后端加 publisher + token 认证，`uex publish` 直传。**两步走**匹配决策 1：内部阶段 token 由运维脚本签发（无注册页面），公开阶段才建自助注册 |
+| 2 | **发布通路** | 自助 token 发布 | 市场后端加 publisher + token 认证，`uex publish` 直传。**两步走**匹配决策 1：内部阶段双通道拿 token——运维脚本签发 + 网页注册页（无登录态一次性表单，2026-08-10 修订提前落地）。**2026-08-11 修订：网页注册改审批制**——注册落 `pending`，publish 一律 403 直至管理员在最小审批页（`gallery/admin`）批准；运维签发直接 `active`。token 自服务管理页/邮箱验证/验证码等仍属公开阶段（Phase F） |
 | 3 | **调试体验** | 完整对标 VSCode | `--extension-development-path` 开发宿主 + host `--inspect` 断点 + 脚手架自带 launch.json（F5）+ 重启 host 命令 |
 | 4 | **VSCode 兼容策略** | 移植指南 + API 对齐 | 不做 `vscode` 模块 shim、不承诺兼容；API 命名/语义持续对齐 VSCode 压低移植成本，文档给对照表 |
 | 5 | API 包分发方式（推荐） | 公开 npm（`@universe-editor` scope） | 包本身无机密，公开发布不影响内部阶段；完全离线内网场景 fallback：市场服务器托管 tarball（`npm i <url>`）。scope 若被占用需运营侧先注册 npm org |
@@ -160,7 +160,7 @@ samples/hello-world/           🆕✅     外部形态样例（不进 workspace
   │
   ▼ uex package                                  # Phase C：产出 <publisher>.<name>-<version>.vsix
   │
-  ▼ uex login（贴运维签发的 token）→ uex publish    # Phase D
+  ▼ uex login（贴 token：运维签发或注册页一次性获取）→ uex publish    # Phase D
   │   POST /api/gallery/publish（Bearer token + vsix 流）
   │   服务端：验 token→亲自读 VSIX manifest→publisher 一致性→版本不可变
   │         →落 assets→upsert registry.json（先 assets 后 registry）
@@ -207,6 +207,8 @@ samples/hello-world/           🆕✅     外部形态样例（不进 workspace
 > 目标：拿到 token 的第三方 `uex publish` 直达市场。
 
 - server：publisher/token 模型（`<authDir>/publishers.json`，存 token 哈希）+ `POST gallery/api/publish`（Bearer + vsix 流）+ `unpublish` + `whoami`；auth-dir 落入静态根启动自检硬拒
+- 2026-08-10 修订追加：网页注册页（`GET gallery/register` 一次性表单 + `POST gallery/api/register`，注册即建 publisher 并签发 token，IP 节流 + 保留名单 + 审计日志）与**服务端发布时签名**（publish 流水线落资产阶段 signVsix 写 sha256+signature，未配密钥 publish 503）
+- 2026-08-11 修订追加：**注册审批制**——网页注册落 `status: 'pending'`，publish/unpublish 一律 403 直至批准；最小审批页 `GET gallery/admin` + `gallery/api/admin/*`（独立管理令牌 `--admin-token-file`，批准/拒绝/删除，串行写队列 + 审计日志）；被拒绝 publisher 的 token 与无效 token 不可区分（一律 401）；whoami 透出 status 供 `uex whoami` 查审批进度；运维签发直接 `active`
 - 服务端防投毒：**亲自**读 VSIX 的 `extension/package.json`（extension-packaging 的 zod 校验，与宿主同 schema），publisher 必须等于 token 归属，同版本 409 不可变；流式落盘 + `--max-vsix-size` 413
 - registry 原子更新（`writeJsonAtomic` + 缓存显式失效）沿用"先 assets 后 registry"约定；`scripts/gallery/token.mjs` 运维签发/吊销（与签发能力同批交付）
 - 部署升级：esbuild 单文件产物（`pnpm server:bundle` → `dist/server.js`），`setup.mjs` 部署产物；`uex login/publish/unpublish` 全链路联调通过
@@ -221,9 +223,9 @@ samples/hello-world/           🆕✅     外部形态样例（不进 workspace
 - **验证**：docs:check 通过；找一位未参与实施的同事按文档从零 dogfood 走通
 
 ### Phase F — 公开阶段前置（[06](./06-public-phase-roadmap.md)）⏸️ 只登记不实施
-- publisher 自助注册 + 邮箱验证 + token 自管理（轮换/吊销）
-- VSIX 签名（复活 marketplace-plan 的 Phase E）
-- 审核队列 / 恶意上报响应 SOP / 生态运营
+- publisher 注册防滥用加固（邮箱验证/验证码/命名防仿冒）+ token 自管理网页（轮换/吊销）
+- VSIX 签名硬化（2026-08-10 修订：服务端发布时签名已随内部阶段落地，公开阶段剩余密钥轮换/吊销链等运营管理）
+- 运营视角完整管理台（2026-08-11 修订：仅审批的最小管理页已提前到内部阶段落地，Phase F 只做运营视角完整版）、恶意上报响应 SOP、生态运营
 - API 1.0 稳定承诺 + proposed API 机制、文档英文化与文档站
 
 ---

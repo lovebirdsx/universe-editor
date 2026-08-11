@@ -7,4 +7,10 @@ export const GALLERY_API = {
   publish: 'gallery/api/publish',
   unpublish: 'gallery/api/unpublish',
   whoami: 'gallery/api/whoami',
+  register: 'gallery/api/register',
 } as const
+
+/** Self-serve page where an author registers a publisher and gets a one-time token. */
+export function registerPageUrl(registryBase: string): string {
+  return `${registryBase.replace(/\/+$/, '')}/gallery/register`
+}

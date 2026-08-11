@@ -14,12 +14,18 @@
  *
  *  token 形如 uet_<base64url>，明文只在 issue 时打印一次（此后不可再查，只能吊销重发）；
  *  publishers.json 只存 sha256 哈希。server.mjs 按 mtime 自动重载，无需重启。
+ *  运维签发的 publisher 直接落 status: 'active'（不受网页注册的审批门控约束）。
  *--------------------------------------------------------------------------------------------*/
 
-import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { writeJsonAtomic } from './lib.mjs'
+import {
+  PUBLISHER_MAX_LEN,
+  PUBLISHER_RE,
+  issueToken,
+  publisherStatus,
+  writeJsonAtomic,
+} from './lib.mjs'
 
 function parseArgs(argv) {
   const out = { _: [] }
@@ -64,13 +70,11 @@ function load() {
   }
 }
 
-const PUBLISHER_RE = /^[a-z0-9][a-z0-9-]*$/
-
 function requirePublisher() {
   const publisher = args.publisher
   if (!publisher) die('缺少 --publisher <name>')
-  if (!PUBLISHER_RE.test(publisher)) {
-    die(`publisher 名非法: ${publisher}（须匹配 ${PUBLISHER_RE}，与 uex login 校验一致）`)
+  if (!PUBLISHER_RE.test(publisher) || publisher.length > PUBLISHER_MAX_LEN) {
+    die(`publisher 名非法: ${publisher}（须匹配 ${PUBLISHER_RE} 且 ≤${PUBLISHER_MAX_LEN} 字符，与 uex login 校验一致）`)
   }
   return publisher
 }
@@ -86,25 +90,16 @@ switch (action) {
     const publisher = requirePublisher()
     const label = requireLabel()
     const data = load()
-    let entry = data.publishers.find((p) => p.name === publisher)
-    if (!entry) {
-      entry = { name: publisher, tokens: [] }
-      data.publishers.push(entry)
-      ok(`已创建 publisher: ${publisher}`)
+    let issued
+    try {
+      issued = issueToken(data, publisher, label)
+    } catch (err) {
+      die(err.message)
     }
-    if (entry.tokens.some((t) => t.label === label && !t.revoked)) {
-      die(`publisher ${publisher} 下已存在未吊销的 label "${label}"（换 label 或先 revoke）`)
-    }
-    const token = `uet_${randomBytes(24).toString('base64url')}`
-    entry.tokens.push({
-      hash: createHash('sha256').update(token).digest('hex'),
-      label,
-      created: new Date().toISOString(),
-      revoked: null,
-    })
+    if (issued.created) ok(`已创建 publisher: ${publisher}`)
     writeJsonAtomic(publishersFile, data)
     ok(`已签发 token → ${publisher} / ${label}`)
-    console.log(`\n  ${token}\n`)
+    console.log(`\n  ${issued.token}\n`)
     console.log(`明文只打印这一次，此后不可再查（泄露只能 revoke 后重签）。`)
     console.log(`交付给开发者用于: uex login ${publisher} --registry <市场地址> --token <token>`)
     break
@@ -128,8 +123,11 @@ switch (action) {
     const rows = []
     for (const p of data.publishers) {
       if (filter && p.name !== filter) continue
+      const status = publisherStatus(p)
       for (const t of p.tokens ?? []) {
-        rows.push(`  ${p.name}  ${t.label}  created=${t.created}  revoked=${t.revoked ?? '-'}`)
+        rows.push(
+          `  ${p.name} [${status}]  ${t.label}  created=${t.created}  revoked=${t.revoked ?? '-'}`,
+        )
       }
     }
     if (rows.length === 0) console.log('（无 token）')

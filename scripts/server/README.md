@@ -30,8 +30,10 @@ Universe Editor 通过 **electron-updater 的 generic provider** 从一个**静�
 
 | 文件 | 作用 |
 |---|---|
-| `server.mjs` | 静态服务器核心。两平台共用。处理 latest.yml 禁缓存、Range/多段 Range（差分下载）、路径穿越防护；目录请求回退到同目录 `index.html`（下载页）。还挂市场路由（`/extensionquery`、`gallery/**` 静态、`gallery/api/*` 自助发布 API）。 |
-| `galleryPublish.mjs` | 自助发布 API 流水线（token 认证、解 VSIX 校验、registry 原子更新）。由 `server.mjs` 在命中 `gallery/api/*` 时 lazy import。 |
+| `server.mjs` | 静态服务器核心。两平台共用。处理 latest.yml 禁缓存、Range/多段 Range（差分下载）、路径穿越防护；目录请求回退到同目录 `index.html`（下载页）。还挂市场路由（`/extensionquery`、`gallery/**` 静态、`gallery/api/*` 自助发布 API、审批管理页 `gallery/admin`）。 |
+| `galleryPublish.mjs` | 自助发布 API 流水线（token 认证、解 VSIX 校验、registry 原子更新）+ 审批管理 API（`gallery/api/admin/*`）。由 `server.mjs` 在命中 `gallery/api/*` 时 lazy import。 |
+| `registerPage.mjs` | 自助注册网页（`GET {base}gallery/register`）的内嵌 HTML（中文一次性表单，零外部资源）。由 `server.mjs` 静态 import。 |
+| `adminPage.mjs` | 审批管理页（`GET {base}gallery/admin`）的内嵌 HTML（中文，待审批/已启用/已拒绝三分区，零外部资源）。由 `server.mjs` 静态 import。 |
 | `bundle.mjs` | 打包脚本（`pnpm server:bundle`）：把 server + 发布依赖（adm-zip/zod/extension-packaging）esbuild 成单文件产物 `dist/server.js`。**部署跑的是这个产物**（服务器上无 node_modules）。 |
 | `download-page/index.html` | 面向用户的静态下载页。纯前端，运行时读同目录 `latest.yml` / `release-notes.json`，展示最新版本、发布日期与更新日志，并提供下载按钮。发布时由 `release:upload` 同步到发布目录。 |
 | `setup.mjs` | 跨平台部署逻辑（按平台分支）：拷 `dist/server.js` / 注册服务 / 防火墙 / 启停 / 卸载。 |
@@ -81,6 +83,15 @@ cd scripts\server
 | URL 前缀（`--base`） | `/universe-editor/` | `/universe-editor/` |
 
 可用 `--root` / `--gallery-root` / `--auth-dir` / `--port` / `--base` 覆盖。**`--gallery-root` 默认 `<root>/gallery`（合并部署）**，想把扩展内容放另一块磁盘/另一套权限时指向独立目录即可（如 `--gallery-root /data/extensions`）——URL 上市场始终挂在 `{base}gallery/`，与磁盘位置无关。**`--auth-dir` 默认 `<root>/../auth`，绝不允许落在 `--root` 或 `--gallery-root` 之内**（publish token 哈希表会被静态服务公开下载；server 启动自检命中即拒绝启动）。
+
+市场相关的另三项配置（flag / 环境变量等价）：
+
+| flag | 环境变量 | 默认 | 说明 |
+|---|---|---|---|
+| `--signing-key-file` | `UE_SERVER_SIGNING_KEY_FILE` | 无 | publish 签名私钥（Ed25519 pkcs8 PEM，`pnpm gallery:keygen` 生成）。启动期解析校验，文件缺失/不可解析**拒绝启动**；不配置则 publish API 一律 503（见[第十节](#十市场自助发布publish-token-运维)） |
+| `--signing-key-id` | `UE_SERVER_SIGNING_KEY_ID` | `market-v1` | 签名 keyId，必须与编辑器内置公钥的 keyId 一致 |
+| `--register-rate-limit` | `UE_SERVER_REGISTER_RATE_LIMIT` | `10` | 注册 API 每 IP 每小时上限（内存级滑动窗口，`0` = 关闭） |
+| `--admin-token-file` | `UE_SERVER_ADMIN_TOKEN_FILE` | 无 | 审批管理令牌文件（内容为令牌明文，trim 后单行）。给了但文件不可读/为空**拒绝启动**；不配置则管理页与管理 API 一律 503（admin console disabled） |
 
 ---
 
@@ -261,6 +272,29 @@ curl -i http://localhost/universe-editor/control.json
 
 服务器还挂了 Bearer token 认证的发布 API（`POST {base}gallery/api/publish` 等），让第三方开发者用 [`uex`](../../packages/uex/README.md) 直接上架，运维不再人肉 scp。完整协议与服务端流水线见 [`docs/development/marketplace-server.md`](../../docs/development/marketplace-server.md)「自助发布 API」节，这里只列运维动作。
 
+> ⚠️ **publish 必须先配签名私钥**：未配置 `--signing-key-file` 时 server 照常启动（打 warning），但 publish 一律 503（编辑器验签 fail-closed，无签名的包上架必拒装）；whoami / register / unpublish 不受影响。私钥用 `pnpm gallery:keygen` 生成，keyId 须与编辑器内置公钥一致（`--signing-key-id`，默认 `market-v1`）。
+
+开发者拿 token 有两条路：**自助注册**（浏览器打开 `http://<IP>/universe-editor/gallery/register` 填表，token 只显示一次）与运维签发（下述 `token.mjs`）。⚠️ 自助注册写 `publishers.json` 与运维 ssh 直改该文件是两条写通道，存在与 upload 通道同级的写竞态——避免同时操作。
+
+### 注册审批制（2026-08-11 起）
+
+自助注册改为**审批制**：网页注册创建的 publisher 落 `status: 'pending'`，token 照常签发（可先 `uex login` / `uex whoami` 查状态），但 **publish / unpublish 一律 403（`pending approval`）**，直到管理员在管理页批准。运维通道 `token.mjs issue` 签发的 publisher 直接 `active`，不受门控；被拒绝（`rejected`）的 publisher 其 token 与无效 token 不可区分（一律 401，不给探测面）。
+
+**管理页**在 `http://<IP>/universe-editor/gallery/admin`：内嵌中文页面，分「待审批 / 已启用 / 已拒绝」三区，支持批准、拒绝、删除记录（仅 pending/rejected 且名下无扩展可删，删除即释放名字）。所有操作走 `gallery/api/admin/*` API（审计进 server 日志），写操作与 publish 共用进程内串行写队列。
+
+管理令牌经 **`--admin-token-file` / `UE_SERVER_ADMIN_TOKEN_FILE`** 配置（文件内容为令牌明文，trim 后单行；与 publish token 完全独立的一套凭证）：
+
+```bash
+# 生成一个足够随机的管理令牌并落盘（权限收紧，同私钥待遇）
+openssl rand -base64 32 > /srv/auth/admin-token.txt && chmod 600 /srv/auth/admin-token.txt
+# 启动参数加：--admin-token-file /srv/auth/admin-token.txt
+```
+
+- flag 给了但文件不可读/为空 → **拒绝启动**；不配置 → 启动横幅 warning（admin console disabled），管理页与管理 API 一律 **503**（fail-closed，同签名密钥语义）。
+- 校验方式：请求 Bearer 与配置值各自 sha256 后 `timingSafeEqual`，失败一律 401。
+- ⚠️ 管理令牌同样 Bearer 明文过线，公网部署必须置于 TLS 反代之后；管理页本身不存令牌（浏览器 sessionStorage 暂存，关标签即清）。
+- 管理页只服务**审批**这一件事；publisher 自视角/运营报表等完整管理台属公开阶段（Phase F）。
+
 token 数据存 **`--auth-dir`（默认 `<root>/../auth`）的 `publishers.json`**（只存 sha256 哈希；server 按 mtime 自动重载，改完免重启）。用 [`scripts/gallery/token.mjs`](../gallery/README.md) 签发/吊销——直接读写服务器上的文件（ssh 上去跑），或对本地副本跑完随 `gallery:upload` 通道上传：
 
 ```bash
@@ -275,11 +309,11 @@ pnpm gallery:token -- list --auth-dir /srv/auth
 
 - 🔴 `--auth-dir` 绝不能在 `--root` / `--gallery-root` 之内（启动自检会拒），否则 token 哈希表被静态服务公开下载。
 - ⚠️ token 走 Bearer 明文过线，**公网/跨办公网部署必须置于 TLS 反代之后**（server 自身不做 TLS）。
-- 上传体积上限 `--max-vsix-size`（默认 128MB）。限流未做（内部信任环境），公开前见公开阶段清单。
+- 上传体积上限 `--max-vsix-size`（默认 128MB）。publish 限流未做（内部信任环境；注册 API 已有内存级 IP 节流，`--register-rate-limit`），公开前见公开阶段清单。
 - 版本不可变：同版本重发一律 409，改内容必须 bump version——服务端强制，无例外。
 
 验证（token 签发后）：
 
 ```bash
-curl -i http://localhost/universe-editor/gallery/api/whoami -H "Authorization: Bearer uet_xxx"   # 200 {"publisher":"acme"}
+curl -i http://localhost/universe-editor/gallery/api/whoami -H "Authorization: Bearer uet_xxx"   # 200 {"publisher":"acme","status":"active"}
 ```

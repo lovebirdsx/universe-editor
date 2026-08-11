@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: a0b85385-def0-4754-a72c-a0ab0a8bea88
+  modified: 2026-08-10T01:59:55.094Z
 ---
 
 第三方插件生态（对标 VSCode 外部开发者体验）计划于 2026-07-29 完成规划，文档在 `docs/plan/third-party-extension-ecosystem-plan/`（README + 01–06）。核心判断：编辑器侧"跑扩展+装扩展"两条链路已就绪（见 [[extension-system-progress]]），缺口全在"仓库外开发者"一侧——SDK 未发 npm、无脚手架/CLI、无 `--extension-development-path` 开发模式、无自助发布通道、无对外文档。
@@ -15,9 +16,11 @@ metadata:
 - 落点：发布手册 `docs/development/publishing-sdk.md`；versioning 草稿 `docs/extension-dev/zh-CN/versioning.md`；内网 tarball 托管 `pnpm gallery:publish-sdk`（server 静态服务 `{base}gallery/sdk/` 零改动）；宿主 API 版本经 `--version` 与 About 对话框可查（IVersionInfo.extensionApi）。
 - **待办**：npm org `@universe-editor` 注册是运营事项，注册后按手册手动 `pnpm publish`（先手动后 CI）。
 
+**2026-08-11 修订**：网页自助注册改**审批制**（决策 2 联动修订）——注册落 `status: 'pending'`，publish/unpublish 403 直至管理员在最小审批页 `gallery/admin`（独立管理令牌 `--admin-token-file`，未配置 fail-closed 503）批准；被拒绝 publisher 的 token 一律 401 与无效 token 不可区分；whoami 透出 status（`uex whoami` 新命令查进度）；运维通道 `token.mjs issue` 直接 active。完整管理台仍封印在 Phase F（范围缩减为运营视角完整版）。详见 `docs/development/marketplace-server.md`「审批管理」节。
+
 用户已拍板的四个方向性决策（后续实施勿再议）：
 1. **生态范围**：先内部后公开——架构按公开设计（认证/签名留接口不实现），公开阶段前置项全部登记在计划 06、不提前做。
-2. **发布通路**：自助 token 发布，两步走——内部阶段运维脚本签发 token + 服务端认证 publish API（计划 04），自助注册属公开阶段。
+2. **发布通路**：自助 token 发布——**2026-08-10 修订**：内部阶段即为双通道（运维 `gallery:token` 签发 + 网页注册页 `GET {base}gallery/register` / `POST gallery/api/register`，无登录态一次性表单，注册即发 token，仅 token 模型无密码/session）；token 自服务页/邮箱验证/防仿冒仍属公开阶段。同日落地**服务端发布时签名**（server `--signing-key-file`/`UE_SERVER_SIGNING_KEY_FILE` + keyId 默认 market-v1，publish 流水线 signVsix 写 sha256+signature；未配密钥 publish 503），打通 uex publish → 编辑器 fail-closed 验签可装的闭环。uex 包已 npm 发布就绪（LICENSE/README/pack 清单验证过），实际 npm org 注册与 publish 由用户手动执行。
 3. **调试体验**：完整对标 VSCode——`--extension-development-path` + `--inspect-extensions` 断点 + `restartExtensionHost` 命令（计划 02）。
 4. **VSCode 兼容**：移植指南 + API 对齐，**不做 vscode shim、不承诺兼容**（计划 05 §3）。
 

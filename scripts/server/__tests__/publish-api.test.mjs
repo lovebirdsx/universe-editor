@@ -8,6 +8,7 @@
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { createHash, verify } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -16,6 +17,7 @@ import {
   bearer,
   demoManifest,
   httpRequest,
+  makeSigningKey,
   makeTestVsix,
   makeTokenEntry,
   postVsix,
@@ -33,6 +35,7 @@ let root
 let galleryRoot
 let authDir
 let vsixPath
+let signing
 let child
 
 before(async () => {
@@ -68,10 +71,11 @@ before(async () => {
   ])
   vsixPath = join(root, 'fixture.vsix')
   makeTestVsix(vsixPath, demoManifest())
+  signing = await makeSigningKey(root)
   ;({ child } = await spawnServer({
     root,
     port: PORT,
-    extraArgs: ['--gallery-root', galleryRoot, '--auth-dir', authDir],
+    extraArgs: ['--gallery-root', galleryRoot, '--auth-dir', authDir, ...signing.args],
   }))
 })
 
@@ -89,10 +93,10 @@ test('whoami: 无 token / 假 token 一律 401 不区分原因', async () => {
   assert.equal(noAuth.body, wrong.body)
 })
 
-test('whoami: 正确 token 返回 publisher', async () => {
+test('whoami: 正确 token 返回 publisher + status（无 status 字段的历史记录按 active）', async () => {
   const r = await httpRequest(PORT, '/gallery/api/whoami', { headers: bearer(TOKEN) })
   assert.equal(r.status, 200)
-  assert.deepEqual(JSON.parse(r.body), { publisher: 'acme' })
+  assert.deepEqual(JSON.parse(r.body), { publisher: 'acme', status: 'active' })
 })
 
 test('whoami: 已吊销 token 401（通过重启前改写 publishers.json 验证 mtime 重载）', async () => {
@@ -216,6 +220,82 @@ test('publish: 新版本可发，versions 按 semver 降序且 extensionquery �
   assert.equal(hits[0].versions[0].version, '1.1.0')
 })
 
+/*--------------------------------- publish 签名 ---------------------------------*/
+
+test('publish: 版本条目带 sha256 + ed25519 签名，公钥白盒验签通过', async () => {
+  const signedVsix = join(root, 'signed.vsix')
+  makeTestVsix(signedVsix, demoManifest({ name: 'signed' }))
+  const r = await postVsix(PORT, '/gallery/api/publish', TOKEN, signedVsix)
+  assert.equal(r.status, 201)
+
+  const registry = JSON.parse(await readFile(join(galleryRoot, 'registry.json'), 'utf8'))
+  const ext = registry.extensions.find((e) => e.publisher === 'acme' && e.name === 'signed')
+  const entry = ext?.versions?.[0]
+  assert.ok(entry, 'registry 含新扩展版本条目')
+
+  const vsixBytes = await readFile(signedVsix)
+  const expectSha = createHash('sha256').update(vsixBytes).digest('hex')
+  assert.equal(entry.sha256, expectSha, 'sha256 与上传 vsix 实算一致')
+  assert.equal(entry.signature?.algorithm, 'ed25519')
+  assert.equal(entry.signature?.keyId, signing.keyId)
+  assert.ok(
+    verify(null, vsixBytes, signing.publicKey, Buffer.from(entry.signature.value, 'base64')),
+    '公钥验签通过',
+  )
+})
+
+test('publish: extensionquery 版本 properties 带 VsixHash/VsixSignature/SignatureKeyId', async () => {
+  const hits = await queryExtension(PORT, '/', 'acme.signed')
+  assert.equal(hits.length, 1)
+  const props = new Map(hits[0].versions[0].properties.map((p) => [p.key, p.value]))
+  assert.match(props.get('Universe.Editor.VsixHash') ?? '', /^[0-9a-f]{64}$/)
+  assert.ok(props.get('Universe.Editor.VsixSignature'), '含签名值')
+  assert.equal(props.get('Universe.Editor.SignatureKeyId'), signing.keyId)
+})
+
+test('publish: 未配置签名私钥 → 503（whoami/unpublish 不受影响）', async () => {
+  const noKey = await spawnServer({
+    root,
+    port: 39225,
+    extraArgs: ['--gallery-root', galleryRoot, '--auth-dir', authDir],
+  })
+  try {
+    const r = await postVsix(39225, '/gallery/api/publish', TOKEN, vsixPath)
+    assert.equal(r.status, 503)
+    assert.match(r.body, /signing key/)
+    const who = await httpRequest(39225, '/gallery/api/whoami', { headers: bearer(TOKEN) })
+    assert.equal(who.status, 200)
+  } finally {
+    noKey.child.kill()
+  }
+})
+
+test('启动自检: --signing-key-file 不存在 / 坏内容 → 拒绝启动', async () => {
+  for (const [label, keyFile] of [
+    ['不存在', join(root, 'no-such-key.pem')],
+    ['坏内容', join(root, 'bad-key.pem')],
+  ]) {
+    if (label === '坏内容') await writeFile(keyFile, 'this is not a pem')
+    const bad = spawn(process.execPath, [
+      serverScript,
+      '--root',
+      root,
+      '--port',
+      '39226',
+      '--base',
+      '/',
+      '--signing-key-file',
+      keyFile,
+    ])
+    let output = ''
+    bad.stdout.on('data', (c) => (output += c))
+    bad.stderr.on('data', (c) => (output += c))
+    const code = await new Promise((r) => bad.on('exit', r))
+    assert.notEqual(code, 0, `${label} 的私钥必须拒绝启动`)
+    assert.match(output, /--signing-key-file/)
+  }
+})
+
 /*--------------------------------- unpublish ---------------------------------*/
 
 test('unpublish: 无 token 401 / 他人 publisher 403 / 不存在 404', async () => {
@@ -305,6 +385,7 @@ test('publish: 超过 --max-vsix-size 413', async () => {
       authDir,
       '--max-vsix-size',
       '256',
+      ...signing.args,
     ],
   })
   try {

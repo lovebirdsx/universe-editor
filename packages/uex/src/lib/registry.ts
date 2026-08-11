@@ -5,6 +5,7 @@
  */
 import { UexError } from '../errors.js'
 import type { UexConfigFile } from './configFile.js'
+import { registerPageUrl } from './galleryApi.js'
 
 export interface RegistrySources {
   readonly flag?: string | undefined
@@ -43,5 +44,6 @@ export function resolveToken(sources: {
   throw new UexError(`no publish token for ${sources.registry}`, [
     'run `uex login <publisher>` to store one',
     'or set UNIVERSE_MARKET_TOKEN (CI)',
+    `no token yet? register a publisher at ${registerPageUrl(sources.registry)}`,
   ])
 }

@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, generateKeyPairSync } from 'node:crypto'
 import AdmZip from 'adm-zip'
 import { request } from 'node:http'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -120,6 +120,27 @@ export async function postVsix(port, path, token, vsixPath) {
 export async function writePublishers(authDir, publishers) {
   await mkdir(authDir, { recursive: true })
   await writeFile(join(authDir, 'publishers.json'), JSON.stringify({ publishers }))
+}
+
+// 生成测试用 Ed25519 签名密钥：私钥 PEM 落盘（server 只认文件路径），
+// 返回的 args 直接拼进 spawnServer extraArgs；publicKey 留给验签断言。
+export async function makeSigningKey(dir, keyId = 'market-v1') {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519')
+  const keyFile = join(dir, `signing-key-${keyId}.pem`)
+  await writeFile(keyFile, privateKey.export({ type: 'pkcs8', format: 'pem' }))
+  return {
+    keyFile,
+    keyId,
+    publicKey,
+    args: ['--signing-key-file', keyFile, '--signing-key-id', keyId],
+  }
+}
+
+// 管理令牌：明文落盘（server 只认文件路径），返回的 args 直接拼进 spawnServer extraArgs。
+export async function makeAdminToken(dir, token = 'test-admin-token') {
+  const tokenFile = join(dir, 'admin-token.txt')
+  await writeFile(tokenFile, `${token}\n`)
+  return { token, tokenFile, args: ['--admin-token-file', tokenFile] }
 }
 
 // 市场搜索（按扩展名精确过滤），返回命中的扩展数组。

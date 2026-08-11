@@ -1,12 +1,12 @@
 # 发布扩展
 
-> 把打包好的 `.vsix` 上传到市场，让用户在编辑器的扩展视图里搜到并安装。当前是**内部阶段**：token 由运维签发，没有自助注册。
+> 把打包好的 `.vsix` 上传到市场，让用户在编辑器的扩展视图里搜到并安装。发布 token 在市场的自助注册页填表即可获得；注册是**审批制**——token 立即可用，但要等管理员批准后才能真正发布。
 
 ## 前置条件
 
 - 扩展已经能 `npx uex package` 打包出 vsix 并在编辑器里安装自测通过（见 [快速上手](./getting-started.md) ⑦）
 - `package.json` 里 `publisher`、`version`、`engines.universe`、`files` 都已就绪
-- 已从运维处拿到发布 token（见下文）
+- 已拿到发布 token 且审批已通过（见下文，自助注册即可获得 token，但发布需等管理员批准）
 
 ## 市场地址（registry）
 
@@ -18,14 +18,15 @@
 
 没有内置默认地址，三处都不配会直接报错并列出上面三种修法。编辑器用户侧的市场地址由管理员通过 `--gallery-url` 配置，与作者侧无关——用户能不能看到你的扩展，取决于他们的编辑器指向你发布的那个市场。
 
-## 获取 token（内部阶段）
+## 获取 token
 
-市场**没有自助注册**。找市场运维签发 token，报上两样东西：
+**自助注册（推荐）**：浏览器打开 `<市场地址>/gallery/register`，填你的 **publisher 名**（即 `package.json` 里的 `publisher` 字段：小写字母/数字/连字符，最长 64 字符）提交即可。注册成功页面会展示 token 和按该市场地址预拼好的 `uex login` 命令。**token 只显示这一次，请立即保存**——之后服务器只存它的 sha256，丢了查不回来，只能吊销重签。
 
-- **publisher 名**：你 `package.json` 里的 `publisher` 字段（小写字母/数字/连字符）
-- **用途标签（label）**：给运维做台账用，例如 `zhangsan-laptop`、`ci-release-bot`——同一 publisher 下每个有效 token 的 label 必须唯一
+表单里另有两项可选：**邮箱**（仅落库供运维联系，不公开展示）和 **token 备注（label）**（标记这张 token 的用途/设备，例如 `zhangsan-laptop`、`ci-release-bot`，便于日后吊销；留空默认为 `web-register`）。
 
-运维侧用 `node scripts/gallery/token.mjs issue --publisher <名> --label <标签>` 签发。token 形如 `uet_<base64url>`，**明文只在签发时打印一次**，之后服务器只存它的 sha256——丢了只能吊销重签，查不回来。拿到后立刻妥善保存。
+**审批制**：自助注册成功后 publisher 处于"待审批"状态——token 立即有效，可以 `uex login`，但 `uex publish` 会返回 403（消息含 `pending approval`），直到管理员在市场管理页批准。审批进度随时可用 `npx uex whoami` 查询（待审批时会显示"待审批"）；批准后无需任何额外操作即可发布。被拒绝则 token 直接失效（whoami 返回 401），可换名重新注册。
+
+**运维签发（备选）**：需要走受控流程时，联系市场运维，报上 publisher 名和 label；运维用 `node scripts/gallery/token.mjs issue --publisher <名> --label <标签>` 签发，明文同样只在签发时打印一次。同一 publisher 下每个有效 token 的 label 必须唯一。运维通道签发的 publisher 直接是已启用状态，无需审批。
 
 **token 即身份**：谁拿着这个 token，谁就能以你的 publisher 名义发布和下架任何扩展。泄露了第一时间找运维 `revoke` 该 label 并重签。责任边界的完整说明见 [安全与信任](./security-and-trust.md)。
 
@@ -52,7 +53,7 @@ npx uex publish
 
 上传前 `uex` 会读 vsix 里的 manifest 确认 `publisher` 存在；vsix 超过 20 MB 会给出体积警告（服务器有硬上限，见下文）。
 
-发布成功后，用户就能在编辑器的扩展视图里搜到并安装。
+发布时服务端会自动计算 vsix 哈希并完成签名（编辑器安装时验签），**作者无需任何签名操作**。发布成功后，用户就能在编辑器的扩展视图里搜到并安装。
 
 ## 版本不可变（红线）
 

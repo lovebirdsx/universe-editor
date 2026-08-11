@@ -59,6 +59,53 @@ git tag extension-api@0.7.1 && git push origin extension-api@0.7.1
 
 发布后验证（等同计划 Phase A 完成标准）：仓库外空目录 `npm i @universe-editor/extension-api @universe-editor/extension-manifest typescript`，写一个最小扩展（`activate` 里 `commands.registerCommand` + 导入运行时值 `FoldingRangeKind`），`npx tsc --noEmit` 不装任何额外 `@types` 即通过。
 
+## uex 的 npm 发布
+
+`@universe-editor/uex` 已发布就绪：`LICENSE` / `README.md` / `publishConfig.access: public` / `files`（`dist`、排除 `__tests__`）齐备，`cd packages/uex && npm pack --dry-run` 可自检产物内容。npm org（见上面「前置」节）就绪后与三件套同流程手动 `pnpm publish`（已并入上面「发布步骤」）。发布后外部用户即可 `npx uex ...` 或 `npm i -g @universe-editor/uex` 使用完整工具链（打包 / 登录 / 发布 / 下架），无需克隆本仓库。
+
+## uex 本地验证（发 npm 前）
+
+`npx uex` 的本地对等测法，由快到接近真实安装分三档：
+
+```bash
+# 1. 直接跑构建产物（改动源码后先构建；`...` 后缀连同依赖包一起）
+pnpm --filter @universe-editor/uex... build
+node packages/uex/dist/cli.js --help
+
+# 2. 全局 link 出 uex 命令（对等 npx 使用体验；link 指向仓库包目录，
+#    workspace:* 依赖经 pnpm 已装好的 node_modules 符号链接解析，无需发布）
+cd packages/uex && npm link
+cd <任意扩展目录> && uex ls
+npm unlink -g @universe-editor/uex    # 测完清理
+
+# 3. tarball 检查"将要发布的内容"（files 白名单、bin 指向）
+cd packages/uex && pnpm pack
+```
+
+⚠️ 第 3 档的坑：`pnpm pack` 会把 `workspace:*` 改写成真实版本号，`npm i -g <tgz>` 会真去 npm registry 拉 `@universe-editor/extension-manifest` / `extension-packaging`——**这两个依赖包发布之前，tarball 全局安装必然失败**。真正的 npx 等价验证只能在依赖包发布后做；在此之前用第 2 档。
+
+端到端联调（对着本地市场服务器跑完整发布流，server 起法见 [配置扩展市场服务器](marketplace-server.md)）：
+
+```bash
+# 1. 签发 active token（明文只打印一次；网页注册的 token 是 pending，publish 会 403，
+#    本地测完备性直接走运维签发通道；server 按 mtime 自动重载 publishers.json，无需重启）
+node scripts/gallery/token.mjs issue --publisher <name> --label local-test --auth-dir <auth目录>
+
+# 2. 测试扩展的 package.json：publisher 必须与 token 归属一致，且有 files 白名单
+#    （可直接用 extensions-external/pdf，或 create-extension 脚手架一个）
+
+# 3. 完整流程（registry = server 地址含 base，如 --base / 即 http://localhost:8788）
+uex login <name> --registry http://localhost:8788 --token uet_<明文>
+uex whoami --registry http://localhost:8788        # 应显示 active
+uex ls                                             # 确认进包文件清单
+uex publish --registry http://localhost:8788
+uex unpublish <name>.<ext> --yes --registry http://localhost:8788
+```
+
+凭据落 `~/.uex/config.json`（按 registry 分桶）；不想污染环境用 `UNIVERSE_MARKET_TOKEN` 环境变量替代 `login`。
+
+自动化对照：`scripts/server/__tests__/uex-publish.integration.test.mjs` 用真 server + 真 dist 跑 login → publish → extensionquery → 同版本 409 → unpublish 全链路（经 `pnpm test:release` 触发），手动验证之外由它兜底。
+
 ## 内网 fallback：市场托管 tarball
 
 完全离线内网拉不到公网 npm 时，SDK tarball 由市场服务器静态托管（**不建私有 registry**）：

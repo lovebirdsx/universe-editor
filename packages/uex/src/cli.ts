@@ -20,6 +20,7 @@ commands:
   login       store a marketplace publish token
   publish     package (if needed) and upload to the marketplace
   unpublish   remove a version or the whole extension
+  whoami      show the token's publisher and approval status
 
 run \`uex <command> --help\` for command-specific options.`
 
@@ -44,6 +45,8 @@ async function main(argv: string[]): Promise<number> {
       return (await import('./commands/publish.js')).run(rest)
     case 'unpublish':
       return (await import('./commands/unpublish.js')).run(rest)
+    case 'whoami':
+      return (await import('./commands/whoami.js')).run(rest)
     case '--version':
     case '-v':
       printVersion()

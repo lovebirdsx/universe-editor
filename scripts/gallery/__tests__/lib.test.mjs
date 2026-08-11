@@ -20,6 +20,8 @@ import {
   writeJsonAtomic,
   signVsix,
   resolveSigningKeyFile,
+  issueToken,
+  publisherStatus,
 } from '../lib.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -160,6 +162,64 @@ test('signVsix 产出 sha256 + 可用公钥验证的 Ed25519 签名', () => {
     verify(null, readFileSync(vsix), publicKey, Buffer.from(signature.value, 'base64')),
     '签名须能被对应公钥验证',
   )
+})
+
+test('issueToken 隐式创建 publisher，data 只落能对上明文的 sha256 哈希', () => {
+  const data = { publishers: [] }
+  const { token, created } = issueToken(data, 'acme', 'laptop')
+  assert.equal(created, true)
+  assert.match(token, /^uet_[A-Za-z0-9_-]+$/)
+  assert.equal(data.publishers.length, 1)
+  assert.equal(data.publishers[0].name, 'acme')
+  // 审批制：运维通道（默认参数）签发的 publisher 直接 active + created 时间戳
+  assert.equal(data.publishers[0].status, 'active')
+  assert.ok(!Number.isNaN(Date.parse(data.publishers[0].created)), 'created 须为 ISO 时间戳')
+  const entry = data.publishers[0].tokens[0]
+  assert.equal(entry.label, 'laptop')
+  assert.equal(entry.hash, createHash('sha256').update(token).digest('hex'))
+  assert.equal(entry.revoked, null)
+  assert.ok(entry.created)
+  assert.ok(!JSON.stringify(data).includes(token), 'data 不得含明文 token')
+})
+
+test('issueToken 支持 pending 初始状态（自助注册审批制）；已有 publisher 不改状态', () => {
+  const data = { publishers: [] }
+  issueToken(data, 'acme', 'web', { status: 'pending' })
+  assert.equal(data.publishers[0].status, 'pending')
+
+  // 运维通道给 pending publisher 追加 token：状态维持 pending，由审批动作翻转
+  issueToken(data, 'acme', 'ops')
+  assert.equal(data.publishers[0].status, 'pending')
+  assert.equal(data.publishers[0].tokens.length, 2)
+})
+
+test('publisherStatus 缺失字段视为 active（兼容审批制之前的记录）', () => {
+  assert.equal(publisherStatus({ name: 'acme' }), 'active')
+  assert.equal(publisherStatus({ name: 'acme', status: 'pending' }), 'pending')
+  assert.equal(publisherStatus({ name: 'acme', status: 'rejected' }), 'rejected')
+  assert.equal(publisherStatus({ name: 'acme', status: 'bogus' }), 'rejected')
+})
+
+test('issueToken 已有 publisher 追加 token（created=false）', () => {
+  const data = { publishers: [{ name: 'acme', tokens: [] }] }
+  const first = issueToken(data, 'acme', 'laptop')
+  const second = issueToken(data, 'acme', 'desktop')
+  assert.equal(first.created, false)
+  assert.equal(second.created, false)
+  assert.equal(data.publishers.length, 1)
+  assert.equal(data.publishers[0].tokens.length, 2)
+  assert.notEqual(first.token, second.token)
+})
+
+test('issueToken 未吊销同 label 抛错；已吊销同 label 可重发', () => {
+  const data = { publishers: [] }
+  issueToken(data, 'acme', 'laptop')
+  assert.throws(() => issueToken(data, 'acme', 'laptop'), /label/)
+
+  data.publishers[0].tokens[0].revoked = new Date().toISOString()
+  const { token } = issueToken(data, 'acme', 'laptop')
+  assert.equal(data.publishers[0].tokens.length, 2)
+  assert.equal(data.publishers[0].tokens[1].hash, createHash('sha256').update(token).digest('hex'))
 })
 
 test('resolveSigningKeyFile 优先级：arg > env > 默认路径（存在才用）', () => {

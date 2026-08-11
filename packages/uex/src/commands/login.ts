@@ -6,6 +6,7 @@ import { parseCommandArgs } from '../args.js'
 import { uexConfigPath, readUexConfig, writeUexConfig } from '../lib/configFile.js'
 import { resolveRegistry, normalizeRegistry } from '../lib/registry.js'
 import { createGalleryClient } from '../lib/httpClient.js'
+import { registerPageUrl } from '../lib/galleryApi.js'
 
 const PUBLISHER_ID = /^[a-z0-9][a-z0-9-]*$/
 
@@ -28,6 +29,7 @@ export async function run(argv: string[]): Promise<number> {
     info('usage: uex login <publisher> [--registry <url>] [--token <token>]')
     info('')
     info('verify a marketplace publish token and store it in ~/.uex/config.json.')
+    info('no token yet? register a publisher at <registry>/gallery/register — shown once.')
     return 0
   }
   try {
@@ -51,6 +53,7 @@ export async function run(argv: string[]): Promise<number> {
       if (!process.stdin.isTTY) {
         throw new UexError('no token supplied and stdin is not interactive', [
           'pass --token <token> or set UNIVERSE_MARKET_TOKEN',
+          `no token yet? register a publisher at ${registerPageUrl(registry)}`,
         ])
       }
       token = await askSecret(`publish token for ${publisher} @ ${registry}: `)
@@ -71,6 +74,9 @@ export async function run(argv: string[]): Promise<number> {
     }
     await writeUexConfig(configPath, config)
     info(`logged in as ${publisher} @ ${registry}`)
+    if (who.status === 'pending') {
+      info('note: this publisher is pending approval — publishing unlocks once an admin approves')
+    }
     info(
       `token stored in plain text at ${configPath} (same as ~/.vsce) — prefer UNIVERSE_MARKET_TOKEN on shared machines`,
     )

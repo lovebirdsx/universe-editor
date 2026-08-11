@@ -4,7 +4,18 @@
  *
  *    POST gallery/api/publish    Bearer + vsix 二进制流 → 201 { id, version }
  *    POST gallery/api/unpublish  Bearer + JSON { id, version|null } → 200 { removed }
- *    GET  gallery/api/whoami     Bearer → 200 { publisher }
+ *    GET  gallery/api/whoami     Bearer → 200 { publisher, status }
+ *    POST gallery/api/register   无认证 JSON { publisher, email?, label? } → 201 { publisher, token, label, status }
+ *
+ *  管理端点（--admin-token-file 配置的管理令牌，独立于 publish token）：
+ *
+ *    GET  gallery/api/admin/publishers           → 200 [ { name, email, status, created, tokenCount, extensions } ]
+ *    POST gallery/api/admin/publishers/approve   { name } → pending → active
+ *    POST gallery/api/admin/publishers/reject    { name } → pending → rejected
+ *    POST gallery/api/admin/publishers/remove    { name } → 删除 pending/rejected 且名下无扩展的记录
+ *
+ *  注册审批制：自助注册落 status 'pending'，publish/unpublish 一律 403（whoami 放行便于查进度）；
+ *  rejected 与无效 token 不可区分（一律 401，不给探测面）；运维通道 token.mjs 签发直接 active。
  *
  *  防投毒对称另一半：registry 元数据只从服务端亲自解开的 VSIX 里抽取（zod 校验与宿主同一份
  *  schema），客户端声称什么一概不信；版本不可变（409）是供应链安全地基，无例外。
@@ -21,9 +32,15 @@ import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { readVsixManifest } from '@universe-editor/extension-packaging'
 import {
+  issueToken,
   metadataFromManifest,
+  PUBLISHER_MAX_LEN,
+  PUBLISHER_RE,
+  publisherStatus,
   readVsixEntry,
   removeFromRegistry,
+  RESERVED_PUBLISHERS,
+  signVsix,
   upsertVersion,
   writeJsonAtomic,
 } from '../gallery/lib.mjs'
@@ -37,9 +54,22 @@ class ApiError extends Error {
 
 class SizeLimitError extends Error {}
 
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
+
 export function createGalleryApi(deps) {
-  const { galleryRoot, authDir, maxVsixSize, send, logLine, readJsonCached, invalidateJsonCache, readBody } =
-    deps
+  const {
+    galleryRoot,
+    authDir,
+    maxVsixSize,
+    signingKey,
+    adminToken = null,
+    send,
+    logLine,
+    readJsonCached,
+    invalidateJsonCache,
+    readBody,
+    registerRateLimit = 0,
+  } = deps
   const registryPath = join(galleryRoot, 'registry.json')
   const publishersPath = join(authDir, 'publishers.json')
 
@@ -62,6 +92,7 @@ export function createGalleryApi(deps) {
   }
 
   // Bearer → sha256 → publishers.json 查归属。401 一律不区分原因（不给探测面）。
+  // 命中返回 { name, status }；status 经 publisherStatus 归一（缺省 active，审批制门控）。
   function authenticate(req) {
     const header = req.headers.authorization
     if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null
@@ -73,10 +104,123 @@ export function createGalleryApi(deps) {
       for (const t of p.tokens ?? []) {
         if (t.revoked) continue
         const stored = Buffer.from(String(t.hash ?? ''), 'hex')
-        if (stored.length === hash.length && timingSafeEqual(stored, hash)) return p.name
+        if (stored.length === hash.length && timingSafeEqual(stored, hash)) {
+          return { name: p.name, status: publisherStatus(p) }
+        }
       }
     }
     return null
+  }
+
+  // 写操作（publish/unpublish）的审批门控：pending 告知在等审批（403，作者能看懂）；
+  // rejected 一律 401（与无效 token 不可区分，不给探测面）。
+  function requireActive(auth) {
+    if (auth.status === 'pending') {
+      throw new ApiError(
+        403,
+        `publisher "${auth.name}" is pending approval — publishing is enabled after an admin approves the registration`,
+      )
+    }
+    if (auth.status === 'rejected') throw new ApiError(401, 'unauthorized')
+  }
+
+  // 管理令牌（--admin-token-file 注入）：与 publish token 独立的一套凭证。
+  // 未配置时管理面整体 503（fail-closed，同签名密钥语义）；配置了则比对 sha256。
+  const adminTokenHash = adminToken ? createHash('sha256').update(adminToken).digest() : null
+  function adminAuthorized(req) {
+    const header = req.headers.authorization
+    if (typeof header !== 'string' || !header.startsWith('Bearer ')) return false
+    const token = header.slice('Bearer '.length).trim()
+    if (!token) return false
+    const hash = createHash('sha256').update(token).digest()
+    return hash.length === adminTokenHash.length && timingSafeEqual(hash, adminTokenHash)
+  }
+
+  function requireAdmin(req) {
+    if (!adminTokenHash) {
+      throw new ApiError(503, 'admin console is disabled — configure --admin-token-file')
+    }
+    if (!adminAuthorized(req)) throw new ApiError(401, 'unauthorized')
+  }
+
+  // 注册 IP 节流：内存级滑动窗口（1 小时），懒清理过期记录。
+  // 进程重启即清零——防的是脚本批量占名，不需要持久化精度；0 = 关闭。
+  const registerHits = new Map() // ip → 时间戳（ms）数组
+  function registerLimited(ip) {
+    if (!registerRateLimit) return false
+    const now = Date.now()
+    const floor = now - 3_600_000
+    const hits = (registerHits.get(ip) ?? []).filter((t) => t > floor)
+    if (hits.length >= registerRateLimit) {
+      registerHits.set(ip, hits)
+      return true
+    }
+    hits.push(now)
+    registerHits.set(ip, hits)
+    return false
+  }
+
+  // publisher 自助注册：无认证（注册即签发首个 token），按 IP 节流。
+  async function register(req, res) {
+    let body
+    try {
+      body = JSON.parse((await readBody(req)) || '{}')
+    } catch {
+      throw new ApiError(400, 'invalid JSON body')
+    }
+    // 节流判在进串行队列之前：占名脚本不该占用写队列
+    if (registerLimited(req.socket.remoteAddress ?? 'unknown')) {
+      throw new ApiError(429, 'too many registration attempts from this IP — try again later')
+    }
+    const publisher = body?.publisher
+    if (typeof publisher !== 'string' || !publisher) {
+      throw new ApiError(400, '"publisher" is required')
+    }
+    if (publisher.length > PUBLISHER_MAX_LEN) {
+      throw new ApiError(400, `"publisher" must be at most ${PUBLISHER_MAX_LEN} characters`)
+    }
+    if (!PUBLISHER_RE.test(publisher)) {
+      throw new ApiError(
+        400,
+        '"publisher" must match ^[a-z0-9][a-z0-9-]*$ (lowercase letters, digits, hyphens; no leading hyphen)',
+      )
+    }
+    if (RESERVED_PUBLISHERS.has(publisher)) {
+      throw new ApiError(400, `"publisher" "${publisher}" is reserved`)
+    }
+    let email
+    if (body?.email !== undefined && body.email !== null && body.email !== '') {
+      if (typeof body.email !== 'string' || body.email.length > 254 || !EMAIL_RE.test(body.email)) {
+        throw new ApiError(400, '"email" must be a valid email address (at most 254 characters)')
+      }
+      email = body.email
+    }
+    let label = body?.label
+    if (label === undefined || label === null || label === '') label = 'web-register'
+    if (typeof label !== 'string' || label.length > 64) {
+      throw new ApiError(400, '"label" must be a non-empty string of at most 64 characters')
+    }
+
+    await enqueue(async () => {
+      // 与 publish 处理 registry 同一约定：直接改 readJsonCached 返回的对象，写盘后显式失效。
+      // 失效在这里是关键正确性点：authenticate 走 mtime 缓存，同秒内写入 mtime 可能不变，
+      // 不失效的话新 token 紧接着 whoami/publish 会 401。
+      const data = readJsonCached(publishersPath, { publishers: [] })
+      if (!Array.isArray(data.publishers)) data.publishers = []
+      // 已存在一律 409，不区分原因（不给占名探测面；含潜在的 label 冲突场景）
+      if (data.publishers.some((p) => p.name === publisher)) {
+        throw new ApiError(409, 'publisher name is taken')
+      }
+      // 审批制：自助注册落 pending，管理端 approve 后才能 publish（token 照常签发，先可 whoami）
+      const { token } = issueToken(data, publisher, label, { status: 'pending' })
+      if (email !== undefined) {
+        data.publishers.find((p) => p.name === publisher).email = email
+      }
+      writeJsonAtomic(publishersPath, data)
+      invalidateJsonCache(publishersPath)
+      logLine(req, 201, `register ${publisher} (pending)`)
+      sendJson(res, 201, { publisher, token, label, status: 'pending' })
+    })
   }
 
   // 流式落盘，边写边计体积（不整包进内存）。超限中断并清理。
@@ -101,8 +245,18 @@ export function createGalleryApi(deps) {
   }
 
   async function publish(req, res) {
-    const publisher = authenticate(req)
-    if (!publisher) throw new ApiError(401, 'unauthorized')
+    const auth = authenticate(req)
+    if (!auth) throw new ApiError(401, 'unauthorized')
+    requireActive(auth)
+    const publisher = auth.name
+    // 编辑器验签 fail-closed：服务端无签名能力时上架的包必然拒装，直接在入口处拒绝。
+    // 判在 401 之后：不经验证的请求连服务端配置面都不该探到。
+    if (!signingKey) {
+      throw new ApiError(
+        503,
+        'server is not configured with a signing key — contact the marketplace operator',
+      )
+    }
     const declared = Number(req.headers['content-length'])
     if (Number.isFinite(declared) && declared > maxVsixSize) {
       throw new ApiError(413, `vsix exceeds the ${maxVsixSize}-byte upload limit`)
@@ -181,6 +335,8 @@ export function createGalleryApi(deps) {
             engine: meta.engine,
             assetDir,
             files,
+            // 签 staging 内的规范名落盘文件——客户端下载的就是这份字节（与运维通道 publish.mjs 同约定）
+            ...signVsix(join(staging, vsixName), signingKey),
           }
           // ⑦ 先 assets 后 registry 的既有原子约定
           const finalDir = join(galleryRoot, assetDir)
@@ -205,8 +361,10 @@ export function createGalleryApi(deps) {
   }
 
   async function unpublish(req, res) {
-    const publisher = authenticate(req)
-    if (!publisher) throw new ApiError(401, 'unauthorized')
+    const auth = authenticate(req)
+    if (!auth) throw new ApiError(401, 'unauthorized')
+    requireActive(auth)
+    const publisher = auth.name
     let body
     try {
       body = JSON.parse((await readBody(req)) || '{}')
@@ -249,15 +407,96 @@ export function createGalleryApi(deps) {
     })
   }
 
+  /*--------------------------------- 管理端点（审批制） ---------------------------------*/
+
+  // publisher 列表 + registry 汇总（每行的 extensions 是该名下已上架的扩展 id）。
+  function listPublishers(req, res) {
+    const data = readJsonCached(publishersPath, { publishers: [] })
+    const registry = readJsonCached(registryPath, { extensions: [] })
+    const extByPublisher = new Map()
+    for (const e of registry.extensions ?? []) {
+      if (!e?.publisher || !e?.name) continue
+      const list = extByPublisher.get(e.publisher) ?? []
+      list.push(`${e.publisher}.${e.name}`)
+      extByPublisher.set(e.publisher, list)
+    }
+    const publishers = (data.publishers ?? []).map((p) => ({
+      name: p.name,
+      email: p.email ?? null,
+      status: publisherStatus(p),
+      created: p.created ?? null,
+      tokenCount: (p.tokens ?? []).filter((t) => !t.revoked).length,
+      extensions: extByPublisher.get(p.name) ?? [],
+    }))
+    logLine(req, 200, `admin list ${publishers.length} publishers`)
+    sendJson(res, 200, { publishers })
+  }
+
+  async function readAdminName(req) {
+    let body
+    try {
+      body = JSON.parse((await readBody(req)) || '{}')
+    } catch {
+      throw new ApiError(400, 'invalid JSON body')
+    }
+    const name = body?.name
+    if (typeof name !== 'string' || !name) throw new ApiError(400, '"name" is required')
+    return name
+  }
+
+  // approve / reject 共用：仅 pending 可翻转，其余一律 409。
+  async function setPublisherStatus(req, res, action, target) {
+    const name = await readAdminName(req)
+    await enqueue(async () => {
+      const data = readJsonCached(publishersPath, { publishers: [] })
+      const entry = (data.publishers ?? []).find((p) => p.name === name)
+      if (!entry) throw new ApiError(404, `publisher "${name}" not found`)
+      if (publisherStatus(entry) !== 'pending') {
+        throw new ApiError(409, `publisher "${name}" is not pending approval`)
+      }
+      entry.status = target
+      writeJsonAtomic(publishersPath, data)
+      invalidateJsonCache(publishersPath)
+      logLine(req, 200, `admin ${action} ${name}`)
+      sendJson(res, 200, { publisher: name, status: target })
+    })
+  }
+
+  // 仅允许删除 pending/rejected 且名下无扩展的记录（释放名字）；active 或有扩展一律 409。
+  async function removePublisher(req, res) {
+    const name = await readAdminName(req)
+    await enqueue(async () => {
+      const data = readJsonCached(publishersPath, { publishers: [] })
+      if (!Array.isArray(data.publishers)) data.publishers = []
+      const entry = data.publishers.find((p) => p.name === name)
+      if (!entry) throw new ApiError(404, `publisher "${name}" not found`)
+      const status = publisherStatus(entry)
+      if (status !== 'pending' && status !== 'rejected') {
+        throw new ApiError(409, `publisher "${name}" is active — only pending/rejected records can be removed`)
+      }
+      const registry = readJsonCached(registryPath, { extensions: [] })
+      if ((registry.extensions ?? []).some((e) => e.publisher === name)) {
+        throw new ApiError(409, `publisher "${name}" still owns extensions — unpublish them first`)
+      }
+      data.publishers.splice(data.publishers.indexOf(entry), 1)
+      writeJsonAtomic(publishersPath, data)
+      invalidateJsonCache(publishersPath)
+      logLine(req, 200, `admin remove ${name}`)
+      sendJson(res, 200, { removed: name })
+    })
+  }
+
   return {
     async handle(req, res, rel) {
       try {
         switch (rel) {
           case 'gallery/api/whoami': {
-            const publisher = authenticate(req)
-            if (!publisher) throw new ApiError(401, 'unauthorized')
-            logLine(req, 200, `whoami ${publisher}`)
-            sendJson(res, 200, { publisher })
+            const auth = authenticate(req)
+            if (!auth) throw new ApiError(401, 'unauthorized')
+            // rejected 与无效 token 不可区分（401）；pending 放行——作者靠 whoami 查审批进度
+            if (auth.status === 'rejected') throw new ApiError(401, 'unauthorized')
+            logLine(req, 200, `whoami ${auth.name} (${auth.status})`)
+            sendJson(res, 200, { publisher: auth.name, status: auth.status })
             return true
           }
           case 'gallery/api/publish':
@@ -265,6 +504,25 @@ export function createGalleryApi(deps) {
             return true
           case 'gallery/api/unpublish':
             await unpublish(req, res)
+            return true
+          case 'gallery/api/register':
+            await register(req, res)
+            return true
+          case 'gallery/api/admin/publishers':
+            requireAdmin(req)
+            listPublishers(req, res)
+            return true
+          case 'gallery/api/admin/publishers/approve':
+            requireAdmin(req)
+            await setPublisherStatus(req, res, 'approve', 'active')
+            return true
+          case 'gallery/api/admin/publishers/reject':
+            requireAdmin(req)
+            await setPublisherStatus(req, res, 'reject', 'rejected')
+            return true
+          case 'gallery/api/admin/publishers/remove':
+            requireAdmin(req)
+            await removePublisher(req, res)
             return true
           default:
             return false

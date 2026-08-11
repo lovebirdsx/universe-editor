@@ -13,6 +13,13 @@
  *    POST <base>/gallery/api/publish       自助发布（Bearer token，见 galleryPublish.mjs）
  *    POST <base>/gallery/api/unpublish     自助下架
  *    GET  <base>/gallery/api/whoami        验证 token 归属
+ *    POST <base>/gallery/api/register      publisher 自助注册（无认证，IP 节流；审批制 pending）
+ *    GET  <base>/gallery/register          自助注册网页（内嵌 HTML，见 registerPage.mjs）
+ *    GET  <base>/gallery/admin             审批管理页（内嵌 HTML，见 adminPage.mjs）
+ *    GET  <base>/gallery/api/admin/publishers           管理 API：publisher 列表（管理令牌）
+ *    POST <base>/gallery/api/admin/publishers/approve   批准 pending → active
+ *    POST <base>/gallery/api/admin/publishers/reject    拒绝 pending → rejected
+ *    POST <base>/gallery/api/admin/publishers/remove    删除 pending/rejected 记录（释放名字）
  *
  *  用法（在仓库根目录，本地联调）:
  *    node scripts/server/server.mjs --root apps/editor/release --port 8788 --base /
@@ -23,13 +30,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createServer } from 'node:http'
+import { createPrivateKey } from 'node:crypto'
 import { createReadStream, statSync, readFileSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { resolve, join, normalize, extname, sep } from 'node:path'
+import { registerPageHtml } from './registerPage.mjs'
+import { adminPageHtml } from './adminPage.mjs'
 
 // 服务器自身版本，手动维护：改了 server.mjs / galleryPublish.mjs 的行为就 +1。
 // 启动横幅与健康检查响应都会带上，用来确认服务器上跑的到底是哪版代码。
-const SERVER_VERSION = '1'
+const SERVER_VERSION = '3'
 
 function parseArgs(argv) {
   const out = {}
@@ -75,9 +85,19 @@ const config = {
   authDir: resolve(args['auth-dir'] ?? process.env.UE_SERVER_AUTH_DIR ?? resolve(root, '..', 'auth')),
   // publish 上传体积上限（字节）。
   maxVsixSize: Number(args['max-vsix-size'] ?? process.env.UE_SERVER_MAX_VSIX_SIZE ?? 128 << 20),
+  // 注册 API 每 IP 每小时上限（0 = 关闭）。
+  registerRateLimit: Number(
+    args['register-rate-limit'] ?? process.env.UE_SERVER_REGISTER_RATE_LIMIT ?? 10,
+  ),
   port: Number(args.port ?? process.env.UE_SERVER_PORT ?? 80),
   host: args.host ?? process.env.UE_SERVER_HOST ?? '0.0.0.0',
   base: normalizeBase(args.base ?? process.env.UE_SERVER_BASE ?? '/universe-editor/'),
+  // publish 签名私钥（Ed25519 pkcs8 PEM）：不配置则无签名能力，publish API 拒绝请求（503）。
+  signingKeyFile: args['signing-key-file'] ?? process.env.UE_SERVER_SIGNING_KEY_FILE,
+  // 与编辑器内置公钥 keyId 对齐（packages/extension-packaging signature.ts）。
+  signingKeyId: args['signing-key-id'] ?? process.env.UE_SERVER_SIGNING_KEY_ID ?? 'market-v1',
+  // 审批管理令牌（明文文件，trim 后单行）：不配置则管理页与管理 API 一律 503（fail-closed）。
+  adminTokenFile: args['admin-token-file'] ?? process.env.UE_SERVER_ADMIN_TOKEN_FILE,
 }
 
 if (!Number.isInteger(config.port) || config.port <= 0 || config.port > 65535) {
@@ -86,10 +106,45 @@ if (!Number.isInteger(config.port) || config.port <= 0 || config.port > 65535) {
 if (!Number.isFinite(config.maxVsixSize) || config.maxVsixSize <= 0) {
   die(`--max-vsix-size 非法: ${config.maxVsixSize}`)
 }
+if (!Number.isInteger(config.registerRateLimit) || config.registerRateLimit < 0) {
+  die(`--register-rate-limit 非法: ${config.registerRateLimit}`)
+}
 for (const staticRoot of [config.root, config.galleryRoot]) {
   if (config.authDir === staticRoot || config.authDir.startsWith(staticRoot + sep)) {
     die(`--auth-dir 不能落在静态服务目录（${staticRoot}）之内: ${config.authDir}`)
   }
+}
+
+// 签名私钥启动期即解析校验：配置错了要早失败，而不是等第一个 publish 请求才 503。
+let signingKey = null
+if (config.signingKeyFile) {
+  const keyFile = resolve(config.signingKeyFile)
+  let pem
+  try {
+    pem = readFileSync(keyFile, 'utf8')
+  } catch {
+    die(`--signing-key-file 不存在或不可读: ${keyFile}`)
+  }
+  try {
+    signingKey = { privateKey: createPrivateKey(pem), keyId: config.signingKeyId }
+  } catch (err) {
+    die(`--signing-key-file 不是可解析的私钥 PEM: ${keyFile}（${err?.message ?? err}）`)
+  }
+}
+
+// 管理令牌启动期即读取校验（与签名私钥同一约定：配置错了要早失败）。
+// 明文只留内存，不落日志；给管理端点做 sha256 + timingSafeEqual 比对（galleryPublish.mjs）。
+let adminToken = null
+if (config.adminTokenFile) {
+  const tokenFile = resolve(config.adminTokenFile)
+  let raw
+  try {
+    raw = readFileSync(tokenFile, 'utf8')
+  } catch {
+    die(`--admin-token-file 不存在或不可读: ${tokenFile}`)
+  }
+  adminToken = raw.trim()
+  if (!adminToken) die(`--admin-token-file 内容为空: ${tokenFile}`)
 }
 
 const MIME = {
@@ -461,21 +516,65 @@ let galleryApiPromise
 async function handleGallery(req, res, pathname) {
   const rel = pathname.slice(config.base.length) // base 命中后的相对路径
 
+  // 自助注册网页：纯内嵌 HTML（registerPage.mjs），静态 import 即可，不走 lazy API。
+  if (rel === 'gallery/register') {
+    if (req.method !== 'GET') return false // 静态处理会给 405/404
+    const html = registerPageHtml(config.base)
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Length': Buffer.byteLength(html),
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+    })
+    res.end(html)
+    logLine(req, 200, 'register page')
+    return true
+  }
+
+  // 审批管理页：同样内嵌 HTML（adminPage.mjs）。未配置管理令牌时 503 先于页面（fail-closed，
+  // 与管理 API 同语义）；页面本身不校验令牌（JS 内 sessionStorage 暂存后打管理 API 验证）。
+  if (rel === 'gallery/admin') {
+    if (req.method !== 'GET') return false
+    if (!adminToken) {
+      send(req, res, 503, 'admin console is disabled — configure --admin-token-file')
+      return true
+    }
+    const html = adminPageHtml(config.base)
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Length': Buffer.byteLength(html),
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+    })
+    res.end(html)
+    logLine(req, 200, 'admin page')
+    return true
+  }
+
   // 自助发布 API（Bearer token；流水线在 galleryPublish.mjs）。
-  if (rel === 'gallery/api/publish' || rel === 'gallery/api/unpublish' || rel === 'gallery/api/whoami') {
-    if (rel !== 'gallery/api/whoami' && req.method !== 'POST') return false // 静态处理会给 405/404
-    if (rel === 'gallery/api/whoami' && req.method !== 'GET') return false
+  if (
+    rel === 'gallery/api/publish' ||
+    rel === 'gallery/api/unpublish' ||
+    rel === 'gallery/api/whoami' ||
+    rel === 'gallery/api/register' ||
+    rel.startsWith('gallery/api/admin/')
+  ) {
+    // 仅 whoami 与 admin 列表端点是 GET，其余全部 POST；方法不符交回静态处理（405/404）。
+    const isGetEndpoint =
+      rel === 'gallery/api/whoami' || rel === 'gallery/api/admin/publishers'
+    if (isGetEndpoint ? req.method !== 'GET' : req.method !== 'POST') return false
     // lazy：静态/更新服务在源码态保持零依赖，命中 API 才需要 extension-packaging dist。
     galleryApiPromise ??= import('./galleryPublish.mjs').then((m) =>
       m.createGalleryApi({
         galleryRoot: config.galleryRoot,
         authDir: config.authDir,
         maxVsixSize: config.maxVsixSize,
+        signingKey,
+        adminToken,
         send,
         logLine,
         readJsonCached,
         invalidateJsonCache,
         readBody,
+        registerRateLimit: config.registerRateLimit,
       }),
     )
     try {
@@ -692,6 +791,25 @@ server.listen(config.port, config.host, () => {
     `   市场根: ${config.galleryRoot}${galleryExists ? '' : ' (暂不存在，市场搜索将为空)'}`,
   )
   console.log(`   认证目录: ${config.authDir}（publish API；token 用 scripts/gallery/token.mjs 签发）`)
+  console.log(
+    `   注册页: http://${config.host}:${config.port}${config.base}gallery/register（每 IP 每小时限 ${config.registerRateLimit} 次；审批制，批准后方能发布）`,
+  )
+  if (adminToken) {
+    console.log(
+      `   管理台: http://${config.host}:${config.port}${config.base}gallery/admin（enabled，令牌文件 ${resolve(config.adminTokenFile)}）`,
+    )
+  } else {
+    console.warn(`\x1b[33m⚠ 未配置管理令牌，审批管理页与管理 API 将返回 503（admin console disabled）！
+   自助注册处于审批制，不配置则注册全部堆积待审批无法放行。
+   配置方式：--admin-token-file <path> 或 UE_SERVER_ADMIN_TOKEN_FILE（文件内容为令牌明文，trim 后单行）。\x1b[0m`)
+  }
+  if (signingKey) {
+    console.log(`   发布签名: Ed25519 keyId=${signingKey.keyId}（${config.signingKeyFile}）`)
+  } else {
+    console.warn(`\x1b[33m⚠ 未配置发布签名私钥，publish API 将拒绝发布请求（503）！
+   静态托管与更新分发不受影响；uex publish 上架的包必须带签名，否则编辑器验签拒装。
+   配置方式：--signing-key-file <pem> 或 UE_SERVER_SIGNING_KEY_FILE（私钥用 pnpm gallery:keygen 生成）。\x1b[0m`)
+  }
   console.log(`   路径段: ${config.base}`)
   console.log(`   node:   ${process.version}\n`)
 })

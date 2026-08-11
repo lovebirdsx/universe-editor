@@ -15,6 +15,7 @@ import {
   bearer,
   demoManifest,
   httpRequest,
+  makeSigningKey,
   makeTestVsix,
   makeTokenEntry,
   postVsix,
@@ -42,11 +43,12 @@ before(async () => {
   await writeFile(join(galleryRoot, 'registry.json'), JSON.stringify({ extensions: [] }))
   await writePublishers(authDir, [{ name: 'acme', tokens: [makeTokenEntry(TOKEN, 'ci')] }])
   makeTestVsix(join(root, 'fixture.vsix'), demoManifest())
+  const signing = await makeSigningKey(root)
   ;({ child } = await spawnServer({
     root,
     port: PORT,
     script: bundleOut,
-    extraArgs: ['--gallery-root', galleryRoot, '--auth-dir', authDir],
+    extraArgs: ['--gallery-root', galleryRoot, '--auth-dir', authDir, ...signing.args],
   }))
 })
 
@@ -59,7 +61,7 @@ test('bundle 产物: whoami 401（无 token）/ 200（正确 token）', async ()
   assert.equal(noAuth.status, 401)
   const ok = await httpRequest(PORT, '/gallery/api/whoami', { headers: bearer(TOKEN) })
   assert.equal(ok.status, 200)
-  assert.deepEqual(JSON.parse(ok.body), { publisher: 'acme' })
+  assert.deepEqual(JSON.parse(ok.body), { publisher: 'acme', status: 'active' })
 })
 
 test('bundle 产物: publish happy path 201（zod/adm-zip 已内联）', async () => {

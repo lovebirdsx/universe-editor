@@ -43,6 +43,28 @@ describe('createGalleryClient.publish', () => {
     expect((err as UexError).hints.join(' ')).toContain(hintText)
   })
 
+  it('points 401s at the self-serve register page', async () => {
+    const fetchImpl = mockFetch(401)
+    const err = await createGalleryClient({ ...OPTS, fetchImpl })
+      .publish(Buffer.from('x'))
+      .catch((e: unknown) => e)
+    expect((err as UexError).hints.join(' ')).toContain('https://m.example.com/gallery/register')
+  })
+
+  it('maps a 403 pending-approval body to approval guidance (server message passes through)', async () => {
+    const fetchImpl = mockFetch(
+      403,
+      'publisher "acme" is pending approval — publishing is enabled after an admin approves the registration',
+    )
+    const err = await createGalleryClient({ ...OPTS, fetchImpl })
+      .publish(Buffer.from('x'))
+      .catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(UexError)
+    expect((err as UexError).message).toContain('pending approval')
+    expect((err as UexError).message).toContain('after an admin approves')
+    expect((err as UexError).hints.join(' ')).toContain('uex whoami')
+  })
+
   it('maps connection failures to a registry-config hint', async () => {
     const fetchImpl = vi.fn(async () => {
       throw new TypeError('fetch failed')
@@ -72,6 +94,14 @@ describe('createGalleryClient.whoami', () => {
     const fetchImpl = mockFetch(200, { publisher: 'acme' })
     await expect(createGalleryClient({ ...OPTS, fetchImpl }).whoami()).resolves.toEqual({
       publisher: 'acme',
+    })
+  })
+
+  it('passes the approval status through', async () => {
+    const fetchImpl = mockFetch(200, { publisher: 'acme', status: 'pending' })
+    await expect(createGalleryClient({ ...OPTS, fetchImpl }).whoami()).resolves.toEqual({
+      publisher: 'acme',
+      status: 'pending',
     })
   })
 })

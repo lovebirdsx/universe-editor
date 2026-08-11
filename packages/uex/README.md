@@ -6,6 +6,16 @@ The command-line toolchain for [Universe Editor](https://github.com/lovebirdsx/u
 npm install --save-dev @universe-editor/uex
 ```
 
+## Quickstart
+
+```bash
+npm install --global @universe-editor/uex   # or: npx @universe-editor/uex ...
+```
+
+1. Open `<registry>/gallery/register` in a browser and register your publisher. The publish token is shown **once** — copy it immediately. Registrations are reviewed by an admin: publishing unlocks once approved (check anytime with `uex whoami`).
+2. `uex login <publisher> --registry <url> --token <token>`
+3. `uex publish`
+
 ## Commands
 
 | Command | Purpose |
@@ -16,6 +26,7 @@ npm install --save-dev @universe-editor/uex
 | `uex login <publisher>` | Store a marketplace publish token (verified against `whoami` before saving) |
 | `uex publish [--package-path <vsix>] [--registry <url>]` | Package (unless `--package-path` is given) and upload to the marketplace |
 | `uex unpublish <publisher.name>[@<version>] [--yes]` | Remove one version, or the whole extension when no version is given |
+| `uex whoami [--registry <url>]` | Show which publisher the token belongs to, and its approval status (`pending` = awaiting admin approval) |
 
 ## Packaging rules
 
@@ -27,6 +38,7 @@ npm install --save-dev @universe-editor/uex
 
 - Registry URL: `--registry` flag → `UNIVERSE_GALLERY_URL` env → `~/.uex/config.json`. No default.
 - Token: `UNIVERSE_MARKET_TOKEN` env (CI) → `~/.uex/config.json` (written by `uex login`, stored per registry).
+- **Getting a token:** open `<registry>/gallery/register` and register your publisher — the token is displayed once at the end of the form. If the self-serve page is disabled on your registry, ask the registry operator to issue one with `scripts/gallery/token.mjs`.
 - **The config file stores the token in plain text** (`~/.vsce` does the same). Prefer the environment variable on shared machines.
 
 ## Versioning policy (0.x)

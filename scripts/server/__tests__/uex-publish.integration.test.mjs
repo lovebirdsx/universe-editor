@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   demoManifest,
+  makeSigningKey,
   makeTestVsix,
   makeTokenEntry,
   queryExtension,
@@ -55,10 +56,11 @@ before(async () => {
   await writePublishers(authDir, [{ name: 'acme', tokens: [makeTokenEntry(TOKEN, 'ci')] }])
   vsixPath = join(root, 'fixture.vsix')
   makeTestVsix(vsixPath, demoManifest())
+  const signing = await makeSigningKey(root)
   ;({ child } = await spawnServer({
     root,
     port: PORT,
-    extraArgs: ['--gallery-root', galleryRoot, '--auth-dir', authDir],
+    extraArgs: ['--gallery-root', galleryRoot, '--auth-dir', authDir, ...signing.args],
   }))
 })
 

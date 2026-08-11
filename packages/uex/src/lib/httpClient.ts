@@ -4,12 +4,12 @@
  * token, never any client-claimed metadata (it re-reads the manifest itself).
  */
 import { UexError } from '../errors.js'
-import { GALLERY_API } from './galleryApi.js'
+import { GALLERY_API, registerPageUrl } from './galleryApi.js'
 
 export interface GalleryClient {
   publish(vsix: Buffer): Promise<{ id: string; version: string }>
   unpublish(id: string, version: string | null): Promise<void>
-  whoami(): Promise<{ publisher: string }>
+  whoami(): Promise<{ publisher: string; status?: string }>
 }
 
 export interface GalleryClientOptions {
@@ -38,23 +38,32 @@ async function request(
     ])
   }
   if (!res.ok) {
-    throw await toUexError(res)
+    throw await toUexError(res, opts.baseUrl)
   }
   return res
 }
 
-async function toUexError(res: Response): Promise<UexError> {
+async function toUexError(res: Response, baseUrl: string): Promise<UexError> {
   const body = await res.text().catch(() => '')
   const detail = body.trim() !== '' ? `: ${body.trim().slice(0, 200)}` : ''
   switch (res.status) {
     case 401:
       return new UexError(`the marketplace rejected the token (401)${detail}`, [
         'run `uex login <publisher>` with a fresh token',
+        `no token yet? register a publisher at ${registerPageUrl(baseUrl)}`,
       ])
-    case 403:
+    case 403: {
+      // 审批制：pending 的 403 不是 publisher 拼错，单独给等待审批的指引
+      if (/pending approval/.test(body)) {
+        return new UexError(`publisher pending approval (403)${detail}`, [
+          'your registration is awaiting admin approval — publishing unlocks once approved',
+          'check the status anytime with `uex whoami`',
+        ])
+      }
       return new UexError(`publisher mismatch (403)${detail}`, [
         'the VSIX manifest publisher must equal the publisher your token belongs to',
       ])
+    }
     case 409:
       return new UexError(`version already exists (409)${detail}`, [
         'versions are immutable — bump "version" in package.json and publish again',
@@ -90,7 +99,7 @@ export function createGalleryClient(opts: GalleryClientOptions): GalleryClient {
     },
     async whoami() {
       const res = await request(opts, GALLERY_API.whoami, { method: 'GET' })
-      return (await res.json()) as { publisher: string }
+      return (await res.json()) as { publisher: string; status?: string }
     },
   }
 }

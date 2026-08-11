@@ -10,6 +10,8 @@
   - [发布与下架](#发布与下架)
   - [本地端到端联调](#本地端到端联调)
 - [自助发布 API：uex publish 直达](#自助发布-apiuex-publish-直达)
+  - [自助注册（审批制）](#自助注册审批制)
+  - [审批管理：admin API 与管理页](#审批管理admin-api-与管理页)
   - [token 签发与吊销](#token-签发与吊销)
   - [服务端发布流水线](#服务端发布流水线)
 - [把客户端指向你的服务器](#把客户端指向你的服务器)
@@ -157,15 +159,16 @@ UNIVERSE_GALLERY_SIGNING_KEYS='{"market-test":"<keygen 打印的 x>"}' pnpm dev 
 
 ## 自助发布 API：uex publish 直达
 
-内置服务器在静态市场之外还提供一套 **Bearer token 认证的自助发布 API**，让仓库外的开发者不依赖运维 scp 即可上架（对标 `vsce publish`）。三个端点（与 [`uex` CLI](../../packages/uex/README.md) 的 `login/publish/unpublish` 一一对应）：
+内置服务器在静态市场之外还提供一套 **Bearer token 认证的自助发布 API**，让仓库外的开发者不依赖运维 scp 即可上架（对标 `vsce publish`）。前三个端点与 [`uex` CLI](../../packages/uex/README.md) 的 `login/publish/unpublish` 一一对应，外加一个**无认证**的自助注册端点：
 
 | 端点 | 方法 / 认证 | 行为 |
 | --- | --- | --- |
 | `{base}gallery/api/publish` | POST；`Authorization: Bearer <token>` | body 为 **VSIX 二进制流**（`application/octet-stream`）。成功 `201` 返回 `{ "id", "version" }` |
 | `{base}gallery/api/unpublish` | POST；Bearer | body JSON `{ "id": "<publisher>.<name>", "version": "1.2.3" \| null }`（`null` = 整扩展下架）。只能下架 token 归属 publisher 名下的条目 |
-| `{base}gallery/api/whoami` | GET；Bearer | `200 { "publisher": "acme" }`——`uex login` 用它验证 token 有效性 |
+| `{base}gallery/api/whoami` | GET；Bearer | `200 { "publisher": "acme", "status": "active" }`——`uex login` 用它验证 token 有效性；`status` 为审批状态（`pending` 也返回 200，作者靠 `uex whoami` 查审批进度） |
+| `{base}gallery/api/register` | POST；**无认证**（IP 节流） | body JSON `{ "publisher", "email?", "label?" }`。成功 `201` 返回 `{ "publisher", "token", "label", "status": "pending" }`——**token 明文只在这次响应里出现** |
 
-状态码约定：认证失败一律 `401`（不区分 token 不存在/已吊销，不给探测面）；manifest publisher 与 token 归属不符 `403`；**同版本已存在 `409`（版本不可变——改内容必须 bump version，这是供应链安全地基，无例外）**；包体超限 `413`（默认 128MB，`--max-vsix-size` 字节数可配）。
+状态码约定：认证失败一律 `401`（不区分 token 不存在/已吊销/**已拒绝**，不给探测面）；manifest publisher 与 token 归属不符 `403`；**publisher 待审批（pending）时 publish/unpublish 返回 `403`（消息含 `pending approval`，作者能看懂在等审批）**；**同版本已存在 `409`（版本不可变——改内容必须 bump version，这是供应链安全地基，无例外）**；包体超限 `413`（默认 128MB，`--max-vsix-size` 字节数可配）；**未配置签名私钥时 publish `503`**。注册端点的失败码：`400`（publisher 名非法——须匹配 `^[a-z0-9][a-z0-9-]*$`、≤64 字符、非保留名，或 email 非法）、`409 publisher name is taken`（一律不区分原因，不给占名探测面）、`429`（IP 节流，见下节）。
 
 > **`uex --registry` 的地址是服务器 base、不带 `gallery`**：例如 server 以 `--base /universe-editor/` 部署在 `https://market.example.com`，则 `uex login acme --registry https://market.example.com/universe-editor`。uex 会自行拼 `gallery/api/...` 后缀；编辑器侧 `GALLERY_URL` 同理（两者指向同一个 base）。
 
@@ -177,9 +180,37 @@ uex publish                                  # 打包 + 上传；CI 里用 UNIVE
 uex unpublish acme.demo@1.0.0                # 下架某个版本
 ```
 
+### 自助注册（审批制）
+
+开发者无需运维经手即可拿到 token：浏览器打开 **`GET {base}gallery/register`**（内嵌中文一次性表单，零外部资源），填 publisher 名提交，页面调上面的 register API 并展示 token 与按本站地址预拼好的 `uex login` 命令。**token 只显示这一次**，丢失只能吊销重签。
+
+**2026-08-11 起注册为审批制**：网页注册创建的 publisher 落 `status: 'pending'`（写入 `publishers.json`），token 照常签发——作者可以立即 `uex login`、`uex whoami` 查状态，但 **publish/unpublish 一律 403（消息含 `pending approval`）**，直到管理员在管理页批准（见下节）。审批通过（`active`）后无需任何客户端改动即可发布；被拒绝（`rejected`）后其 token 一律 401，与无效 token 不可区分（不给探测面）。`status` 字段缺失的历史记录一律按 `active` 处理（向后兼容）；运维通道 `token.mjs issue` 签发的 publisher 直接 `active`。
+
+- `publisher` 规则：小写字母/数字/连字符、不能以连字符开头、≤64 字符、非保留名；首次注册即隐式创建该 publisher。
+- `email` 可选：仅落库（`publishers.json` 条目的可选字段）备公开阶段联系用，不公开展示。
+- `label` 可选：标记 token 用途/设备，默认 `web-register`。
+
+节流由 **`--register-rate-limit` / `UE_SERVER_REGISTER_RATE_LIMIT`** 控制（每 IP 每小时，默认 `10`，`0` = 关闭）。实现是**内存级滑动窗口**（进程重启即清零），且取 socket 对端 IP——反代部署下同源 IP 共享额度是其固有局限；`x-forwarded-for` 解析与持久限流属公开阶段清单。
+
+> ⚠️ register 与运维 ssh 直改 `publishers.json`（`token.mjs`）是同文件两条 read-modify-write 写通道，存在与既有 scp upload 通道对 registry **同级的写竞态**——避免同时操作。
+
+### 审批管理：admin API 与管理页
+
+管理端点挂在同一进程（`galleryPublish.mjs` 内），认证用**独立的管理令牌**（与 publish token 不同一套凭证）：经 **`--admin-token-file` / `UE_SERVER_ADMIN_TOKEN_FILE`** 配置文件路径，内容为令牌明文（trim 后单行）。启动期即读取：flag 给了但文件不可读/为空**拒绝启动**；不配置则启动横幅打 warning（admin console disabled），管理页与管理 API 一律 **`503`（fail-closed，同签名密钥语义）**。请求侧校验为 Bearer 与配置值各自 sha256 后 `timingSafeEqual`，失败一律 `401`。
+
+| 端点 | 方法 / 认证 | 行为 |
+| --- | --- | --- |
+| `{base}gallery/admin` | GET；无认证（页面） | 审批管理页（内嵌中文 HTML，零外部资源）：令牌输入（sessionStorage 暂存）→ 待审批/已启用/已拒绝三分区 → 批准/拒绝/删除行内操作。未配置管理令牌时页面本身 503 |
+| `{base}gallery/api/admin/publishers` | GET；管理令牌 | publisher 列表 `200 { "publishers": [ { "name", "email", "status", "created", "tokenCount", "extensions": [...] } ] }`（`extensions` 从 registry.json 汇总） |
+| `{base}gallery/api/admin/publishers/approve` | POST；管理令牌 | body `{ "name" }`：`pending → active`；非 pending `409`，不存在 `404` |
+| `{base}gallery/api/admin/publishers/reject` | POST；管理令牌 | body `{ "name" }`：`pending → rejected`；非 pending `409`，不存在 `404` |
+| `{base}gallery/api/admin/publishers/remove` | POST；管理令牌 | body `{ "name" }`：删除记录（释放名字，可重新注册）。仅允许 **pending/rejected 且名下无扩展**；否则 `409` |
+
+所有管理写操作与 publish 共用进程内串行写队列、写后显式失效 mtime 缓存，并走 logLine 审计日志。管理页只覆盖**审批**这一件事——publisher 自视角报表/运营视角完整管理台属公开阶段（计划 06）。
+
 ### token 签发与吊销
 
-认证数据存 **`--auth-dir`（默认 `<root>/../auth`）下的 `publishers.json`**，只存 token 的 sha256 哈希与 label/时间戳。🔴 **红线：`--auth-dir` 绝不允许落在任何静态服务目录（`--root` / `--gallery-root`）之内**——`gallery/**` 整个是公开静态命名空间，落进去等于把哈希表公开下载；server 启动时自检，命中直接拒绝启动。
+认证数据存 **`--auth-dir`（默认 `<root>/../auth`）下的 `publishers.json`**，只存 token 的 sha256 哈希与 label/时间戳，外加 publisher 级字段：`email`（可选）、`status`（`pending`/`active`/`rejected`，缺省按 `active` 兼容历史记录）、`created`（ISO 时间戳）。🔴 **红线：`--auth-dir` 绝不允许落在任何静态服务目录（`--root` / `--gallery-root`）之内**——`gallery/**` 整个是公开静态命名空间，落进去等于把哈希表公开下载；server 启动时自检，命中直接拒绝启动。
 
 签发/吊销用 [`scripts/gallery/token.mjs`](../../scripts/gallery/README.md)（直接读写服务器上的 `publishers.json`：ssh 上去跑，或对本地副本跑完随既有 scp 通道上传；server 按 mtime 自动重载，**无需重启**）：
 
@@ -197,7 +228,7 @@ pnpm gallery:token -- list --auth-dir /srv/auth
 
 发布侧是[客户端防投毒校验](#防投毒客户端会做的一致性校验)的对称另一半：**registry 元数据只从服务端亲自解开的 VSIX 里抽取，客户端上传时声称什么一概不信**。一次 publish 的处理顺序：
 
-1. Bearer token → sha256 → `publishers.json` 查归属（revoked 拒）；
+1. Bearer token → sha256 → `publishers.json` 查归属（revoked 拒）；**审批门控**：pending 一律 `403 pending approval`，rejected 一律 `401`（与无效 token 不可区分）；
 2. 请求体**流式落盘**临时文件，边写边计体积（超限中断 `413`，不整包进内存）；
 3. 亲自读包内 `extension/package.json` 并过 **zod 校验**（与宿主同一份 schema）；
 4. manifest `publisher` 必须等于 token 归属，否则 `403`；
@@ -205,6 +236,13 @@ pnpm gallery:token -- list --auth-dir /srv/auth
 6. 抽 icon/README/CHANGELOG 落 `assets/<id>/<version>/`（zip entry 名一律 basename 化后落地，zip-slip 免疫；staging 目录写完原子 rename）；
 7. 原子更新 `registry.json`（先 assets 后 registry 的既有约定；写后显式失效进程内缓存，紧随其后的搜索立即可见）；
 8. 审计日志记录 publish/unpublish（who/id/version）——日志即内部阶段的审计面。
+
+**发布签名在服务端自动完成**（落资产时对暂存的 VSIX 跑 `signVsix` 写 `sha256` + `signature`，产物与运维通道 `publish.mjs` 一致），扩展作者无感。配置：
+
+- **`--signing-key-file` / `UE_SERVER_SIGNING_KEY_FILE`**：Ed25519 私钥（pkcs8 PEM，用 `pnpm gallery:keygen` 生成）。启动期即解析校验，文件缺失或不可解析直接拒绝启动。
+- **`--signing-key-id` / `UE_SERVER_SIGNING_KEY_ID`**：默认 `market-v1`，必须与编辑器内置公钥的 keyId 一致（见 `packages/extension-packaging` 的 signature 模块）。
+
+**未配置签名私钥时 server 照常启动**（启动横幅打 warning），静态托管 / 更新分发 / whoami / register / unpublish 均不受影响，但 publish 一律 `503`——编辑器验签 fail-closed，无签名的包上架也必然拒装，因此在入口处直接拒绝。
 
 发布实现依赖解 zip 与 zod，因此部署形态是 **esbuild 打包的单文件产物**（`scripts/server/dist/server.js`，仓库内 `pnpm server:bundle` 生成），而非直接跑源码 `server.mjs`——部署流程仍是"一个文件 + node"，见 [`scripts/server/README.md`](../../scripts/server/README.md)。
 

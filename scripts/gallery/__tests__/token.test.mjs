@@ -72,7 +72,7 @@ test('revoke: 打吊销时间戳；未知 label 报错；list 不列哈希', asy
 
   const listed = runToken(['list', '--auth-dir', authDir])
   assert.equal(listed.status, 0, listed.stderr)
-  assert.match(listed.stdout, /acme\s+laptop/)
+  assert.match(listed.stdout, /acme \[active\]\s+laptop/)
   assert.match(listed.stdout, /revoked=-/)
   assert.ok(!/[0-9a-f]{64}/.test(listed.stdout), 'list 不得输出哈希')
 

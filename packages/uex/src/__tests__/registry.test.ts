@@ -59,6 +59,13 @@ describe('resolveToken', () => {
   })
 
   it('throws when no token is available', () => {
-    expect(() => resolveToken({ env: {}, config: {}, registry })).toThrow(UexError)
+    let err: unknown
+    try {
+      resolveToken({ env: {}, config: {}, registry })
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(UexError)
+    expect((err as UexError).hints.join(' ')).toContain(`${registry}/gallery/register`)
   })
 })

@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import AdmZip from 'adm-zip'
-import { createHash, randomUUID, sign } from 'node:crypto'
+import { createHash, randomBytes, randomUUID, sign } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs'
 import { dirname, resolve, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -182,6 +182,63 @@ export function signVsix(vsixPath, { privateKey, keyId }) {
       value: sign(null, bytes, privateKey).toString('base64'),
     },
   }
+}
+
+/** publisher 名合法性（token.mjs 运维签发与注册 API 共用，与 uex login 校验一致）。 */
+export const PUBLISHER_RE = /^[a-z0-9][a-z0-9-]*$/
+export const PUBLISHER_MAX_LEN = 64
+
+/** 注册 API 需拦截的官方保留名（运维 token.mjs 签发官方名属合法，不拦）。 */
+export const RESERVED_PUBLISHERS = new Set([
+  'universe',
+  'universe-editor',
+  'universeeditor',
+  'official',
+  'admin',
+  'administrator',
+  'marketplace',
+  'gallery',
+  'microsoft',
+  'vscode',
+])
+
+/**
+ * publisher 审批状态。缺失视为 active（兼容审批制之前签发的既有记录）；
+ * 非法值按 rejected 处理（fail-closed）。
+ */
+export function publisherStatus(entry) {
+  if (entry.status === undefined) return 'active'
+  return entry.status === 'active' || entry.status === 'pending' || entry.status === 'rejected'
+    ? entry.status
+    : 'rejected'
+}
+
+/**
+ * 签发 publish token（纯数据变换，不落盘）：publisher 不存在则隐式创建；
+ * 同 publisher 下已存在未吊销的同 label token 抛错（换 label 或先 revoke）。
+ * 明文只返回给调用方这一次，data 里只落 sha256 哈希。
+ * 返回 { token, created }，created 标记 publisher 是否为本次新建。
+ * 新建的 publisher 记 created 时间戳；status 默认 'active'（运维签发直接可用），
+ * 自助注册通道显式传 'pending'（审批制，approve 前 publish/unpublish 403）。
+ */
+export function issueToken(data, publisher, label, { status = 'active' } = {}) {
+  let entry = data.publishers.find((p) => p.name === publisher)
+  const created = !entry
+  if (!entry) {
+    entry = { name: publisher, status, created: new Date().toISOString(), tokens: [] }
+    data.publishers.push(entry)
+  }
+  if (entry.tokens.some((t) => t.label === label && !t.revoked)) {
+    throw new Error(`publisher ${publisher} 下已存在未吊销的 label "${label}"（换 label 或先 revoke）`)
+  }
+  const token = `uet_${randomBytes(24).toString('base64url')}`
+  entry.tokens.push({
+    hash: createHash('sha256').update(token).digest('hex'),
+    label,
+    created: new Date().toISOString(),
+    revoked: null,
+  })
+  return { token, created }
 }
 
 export { basename }
