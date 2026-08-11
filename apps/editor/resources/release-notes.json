@@ -1,5 +1,19 @@
 [
   {
+    "version": "0.1.64",
+    "date": "2026-08-11",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "支持 background_activity 状态，后台任务运行时避免误判session结束",
+          "PowerShell 候选列表支持从 PATH 查找 pwsh"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.63",
     "date": "2026-08-11",
     "groups": [
