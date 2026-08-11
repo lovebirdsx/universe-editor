@@ -314,6 +314,35 @@ describe('AcpSessionEditor — auto-resume after editor restart', () => {
     expect(service.resumeSession).toHaveBeenCalledTimes(2)
   })
 
+  it('still closes the tab when the resume failure arrives after the pending re-render', async () => {
+    // Regression: kick()'s setPhase(pending) changes the phase.kind dep, so the
+    // effect re-runs and its cleanup cancels the closure that issued the resume.
+    // A cancelled-gated failure handler would drop the rejection entirely,
+    // leaving the tab on the spinner forever (real IPC failures always arrive
+    // after the pending re-render; only same-tick mock rejections beat it).
+    let rejectResume!: (err: Error) => void
+    const service = makeService({
+      resumeResult: () =>
+        new Promise<IAcpSession>((_resolve, reject) => {
+          rejectResume = reject
+        }),
+    })
+    const { input } = buildInput(service, 'sess-empty-late', 'fake')
+    const editor = makeEditor()
+    const history = makeHistory(() => undefined)
+    await act(async () => {
+      renderEditor(service, input, history, editor)
+    })
+    // The pending re-render has committed; the resume is still in flight.
+    expect(service.resumeSession).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('acp-session-resuming')).toBeTruthy()
+    await act(async () => {
+      rejectResume(new Error('Unknown agent session id'))
+    })
+    expect(screen.queryByTestId('acp-session-resume-error')).toBeNull()
+    expect(editor.closeEditor).toHaveBeenCalledWith(input.id)
+  })
+
   it('closes its own tab silently (no error UI) when resume fails and the session vanished from history', async () => {
     // Repro for bug2: an empty session (created but never messaged) cannot be
     // resumed after a restart — the agent never persisted it. resumeSession

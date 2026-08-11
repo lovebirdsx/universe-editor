@@ -152,7 +152,9 @@ function AcpSessionResumer({ input }: { input: AcpSessionEditorInput }) {
           // 切到 <ChatBody />（本组件随即卸载），无需在此 setPhase。
         },
         (err: unknown) => {
-          if (cancelled) return
+          // 此处不查 cancelled：kick 里的 setPhase(pending) 改变 phase.kind 依赖，
+          // effect 立即重跑并 cancel 掉发起 resume 的那个闭包——失败处理必须照常
+          // 执行，否则 resume 失败的 tab 会永远停在 spinner 上。
           // 若 session 已从 history 消失，说明它是一个「创建了但从未发过消息」的空会话：
           // 重启后 agent 没能恢复它，已被静默丢弃。此时不显示加载失败，直接关闭本 tab。
           // 真正的失败（agent 崩溃等）会保留 history 条目 → 落到下面的 error 分支并提供重试。
