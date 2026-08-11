@@ -76,6 +76,46 @@ describe('matchFilePathAt', () => {
     expect(m).toEqual({ full: 'src/a.ts(10,5)', path: 'src/a.ts', line: 10, col: 5 })
   })
 
+  it('matches a bare Windows directory path without a known extension', () => {
+    // A drive prefix is unambiguous filesystem intent and the target may be a
+    // directory, so no known extension is required (mirrors looksLikeFilePath).
+    expect(matchFilePathAt('E:\\git_project\\task1\\apps\\editor\\release', 0)?.path).toBe(
+      'E:\\git_project\\task1\\apps\\editor\\release',
+    )
+    expect(matchFilePathAt('E:/git_project/task1/release', 0)?.path).toBe(
+      'E:/git_project/task1/release',
+    )
+  })
+
+  it('stops a bare Windows directory path at full-width punctuation', () => {
+    expect(matchFilePathAt('E:\\repo\\auth（publish API；token）', 0)?.path).toBe('E:\\repo\\auth')
+    expect(matchFilePathAt('E:\\repo\\release 目录', 0)?.path).toBe('E:\\repo\\release')
+  })
+
+  it('links a directory whole when a segment looks like an extension', () => {
+    // `b.md` is a directory name here; the drive-dir grammar must not truncate
+    // at the pseudo-extension.
+    expect(matchFilePathAt('E:\\a\\b.md\\release', 0)?.path).toBe('E:\\a\\b.md\\release')
+  })
+
+  it('still resolves a :line suffix on a drive path', () => {
+    expect(matchFilePathAt('E:\\a\\b.txt:10', 0)).toEqual({
+      full: 'E:\\a\\b.txt:10',
+      path: 'E:\\a\\b.txt',
+      line: 10,
+      col: undefined,
+    })
+  })
+
+  it('still rejects extension-less relative paths', () => {
+    expect(matchFilePathAt('src/foo/bar', 0)).toBeNull()
+    expect(matchFilePathAt('个人考核/2026q2', 0)).toBeNull()
+  })
+
+  it('matches a Unix absolute directory path without a known extension', () => {
+    expect(matchFilePathAt('/etc/app/config', 0)?.path).toBe('/etc/app/config')
+  })
+
   it('does NOT match a bare filename without a dir separator', () => {
     expect(matchFilePathAt('package.json', 0)).toBeNull()
     expect(matchFilePathAt('index.ts', 0)).toBeNull()

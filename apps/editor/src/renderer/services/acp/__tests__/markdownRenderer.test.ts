@@ -614,6 +614,31 @@ describe('parseInline — inline layer', () => {
     ])
   })
 
+  it('stops a bare URL at full-width punctuation and CJK prose', () => {
+    // `（每 IP …` is prose after the URL, not part of it.
+    expect(parseInline('http://0.0.0.0:8788/gallery/register（每 IP 每小时限 10 次）')).toEqual<
+      readonly MdInline[]
+    >([
+      {
+        type: 'link',
+        href: 'http://0.0.0.0:8788/gallery/register',
+        children: [text('http://0.0.0.0:8788/gallery/register')],
+      },
+      text('（每 IP 每小时限 10 次）'),
+    ])
+  })
+
+  it('detects a bare Windows directory path (no extension) up to full-width punctuation', () => {
+    const dir = String.raw`E:\git_project\universe-editor.worktrees\task1\apps\editor\release`
+    expect(parseInline(dir)).toEqual<readonly MdInline[]>([{ type: 'filepath', path: dir }])
+    expect(
+      parseInline(String.raw`E:\git_project\task1\apps\editor\auth（publish API；token）`),
+    ).toEqual<readonly MdInline[]>([
+      { type: 'filepath', path: String.raw`E:\git_project\task1\apps\editor\auth` },
+      text('（publish API；token）'),
+    ])
+  })
+
   it('does not match URLs mid-word', () => {
     // `foohttps://x` — the leading `foo` makes this not look like a URL start.
     expect(parseInline('foohttps://x')).toEqual<readonly MdInline[]>([text('foohttps://x')])

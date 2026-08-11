@@ -141,19 +141,34 @@ const WIN_ABS_NO_EXT = `[A-Za-z]:[/\\\\](?:${CJK_SEG}+[/\\\\])*${CJK_SEG}+`
 const UNIX_ABS_NO_EXT = `\\.{0,2}/(?:${CJK_SEG}+/)*${CJK_SEG}+`
 const REL_NO_EXT = `(?:${CJK_REL_SEG}+[/\\\\])+${CJK_REL_SEG}+`
 
+// Absolute directory paths WITHOUT the known-extension requirement: a drive
+// prefix / leading slash is unambiguous filesystem intent and the target may be
+// a directory (`E:\repo\release`, `/etc/app/config`), mirroring what
+// looksLikeFilePath already accepts for explicit hrefs. Colon-free segments
+// (CJK_REL_SEG) keep a `:line` suffix from being eaten by the final segment.
+// Ordered FIRST in the grammar so a directory whose segment happens to look
+// like an extension (`E:\a\b.md\release`) links whole instead of truncating at
+// the pseudo-extension.
+const WIN_ABS_DIR = `[A-Za-z]:[/\\\\](?:${CJK_REL_SEG}+[/\\\\])*${CJK_REL_SEG}+`
+const UNIX_ABS_DIR = `\\.{0,2}/(?:${CJK_REL_SEG}+/)*${CJK_REL_SEG}+`
+
 // Optional :line:col  or  (line,col)
 const LOC = `(?::(\\d+)(?::(\\d+))?|\\((\\d+)(?:,(\\d+))?\\))?`
 
 /**
  * The path-with-optional-location pattern, for reuse (e.g. the terminal link
- * provider). Only the extension-anchored grammar — bare extension-less dirs are
- * NOT included here, since a terminal dump can't disambiguate `读/写` from prose.
+ * provider). Relative paths stay extension-anchored — a terminal dump can't
+ * disambiguate `读/写` from prose — but absolute (drive / leading-slash) paths
+ * match without an extension since they may point at a directory.
  */
-export const FILE_PATH_PATTERN = `(${WIN_ABS}|${UNIX_ABS}|${REL})${LOC}`
+export const FILE_PATH_PATTERN = `(${WIN_ABS_DIR}|${UNIX_ABS_DIR}|${WIN_ABS}|${UNIX_ABS}|${REL})${LOC}`
 
 // Anchored at the start of a slice so callers can probe position-by-position.
 // Both flavors carry NAL, so both need the `u` flag.
-const FILE_PATH_AT_RE = new RegExp(`^(${WIN_ABS}|${UNIX_ABS}|${REL})${LOC}`, 'u')
+const FILE_PATH_AT_RE = new RegExp(
+  `^(${WIN_ABS_DIR}|${UNIX_ABS_DIR}|${WIN_ABS}|${UNIX_ABS}|${REL})${LOC}`,
+  'u',
+)
 const AT_FILE_PATH_AT_RE = new RegExp(
   `^@(${WIN_ABS_NO_EXT}|${UNIX_ABS_NO_EXT}|${REL_NO_EXT})${LOC}`,
   'u',
@@ -198,6 +213,10 @@ export function matchFilePathAt(text: string, i: number): FilePathMatch | null {
   // preceding CJK letter/number (so `我的读/写` doesn't start a path at `读`).
   if (i > 0 && /[A-Za-z0-9_]/.test(text[i - 1] ?? '')) return null
   if (i > 0 && PREV_CJK_RE.test(text[i - 1] ?? '')) return null
+  // A preceding '/' means we're the tail of something already scanned past —
+  // e.g. the `/path` part of `https://host/path` — not a path start. (Interior
+  // positions of a real match are never probed: the parser jumps past a match.)
+  if (i > 0 && text[i - 1] === '/') return null
   const slice = text.slice(i)
   const atPrefixed = slice.startsWith('@')
   const m = atPrefixed ? AT_FILE_PATH_AT_RE.exec(slice) : FILE_PATH_AT_RE.exec(slice)

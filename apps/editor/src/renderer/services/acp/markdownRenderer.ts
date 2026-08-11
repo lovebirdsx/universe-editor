@@ -877,7 +877,12 @@ function splitPipes(line: string): string[] {
  */
 const EMPTY_ANCHOR_RE = /^<a\s+(?:id|name)\s*=\s*"([^"<]+)"\s*><\/a\s*>/i
 
-const BARE_URL_RE = /^(https?:\/\/[^\s<>()]+[^\s<>().,;:!?])/i
+// Bare-URL characters are printable ASCII, excluding whitespace and the
+// bracket delimiters <>() — every non-ASCII char (full-width punctuation like
+// （）， CJK prose, emoji) terminates the URL. Chinese prose commonly follows a
+// URL with no intervening space (`http://x.com（备注` / `…下载`), so letting any
+// non-ASCII through would swallow the trailing prose into the link.
+const BARE_URL_RE = /^(https?:\/\/[^\s<>()\u007f-\uffff]*[^\s<>().,;:!?\u007f-\uffff])/i
 
 function matchBareUrl(text: string, i: number): string | null {
   // Avoid matching mid-word like `foohttp://...`
