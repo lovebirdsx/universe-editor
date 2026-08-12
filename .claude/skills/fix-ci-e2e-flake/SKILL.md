@@ -72,6 +72,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - poll context key 恒 `""`+截图纯黑+aria 只剩 alert 空壳+bootstrap 日志完整走完后静默（探针活着）=workspace-swap restore 竞态擦掉 swap 窗口内新开的编辑器；修=restore 读期间新进 editor 先 detach 再 re-admit 永不擦；React 19 逃逸边界错误静默 unmount root 且被 isBenignError 吞掉零留痕，createRoot 须显式 onUncaughtError 落盘 → 案例 71（与案例 33/69 的黑屏形态区分见详情）
 - toContainEqual 的 received 里消息 text 是期望的**前缀**（echo 回声同截断、retry 截断点漂移）+失败点前是 `keyboard.type` 直接 Enter 打 Monaco 输入框=EditContext 异步落字赛跑提交，type 后先 poll `getAcpPromptText()` 全文再 Enter → 案例 73
 - palette `type→Enter` 后命令效果 poll 恒卡初值、焦点断言正常+**双平台同 run initial+retry 全灭**+插桩（type 与 Enter 间加 evaluate）后不复现=QuickInputPanel useDeferredValue 旧列表被 accept（产品竞态,慢机高概率）,修产品 accept 路径不改 spec → 案例 74
+- 复制图片后剪贴板 poll 恒无图、`toPngBase64` 快路径剥前缀未校验 payload=echo fixture 发伪 PNG 字节，main nativeImage 解出空图静默跳过写（**多 worker 各自独立 app 时不复现，serial lane 共享 app 才现**）→ 案例 75；Ctrl+V 粘贴后 chip 恒不出现、仅 CI Linux=xvfb 剪贴板 ownership 翻转不同步，seed 后先 poll 剪贴板可读回图再粘 → 案例 75b
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

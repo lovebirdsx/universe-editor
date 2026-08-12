@@ -90,6 +90,15 @@ test.describe('@p1 acp fragment copy', () => {
         if (img.isEmpty()) throw new Error('Failed to create test nativeImage')
         clipboard.writeImage(img)
       }, PNG_BASE64)
+      // Wait until the OS clipboard actually serves the image back. On Linux
+      // (X11/xvfb) the clipboard is ownership-based: flipping it from the
+      // sentinel text the previous test wrote to this image is not synchronous,
+      // so a Ctrl+V fired in the gap reads the stale text and attaches no chip.
+      await expect
+        .poll(() => electronApp.evaluate(({ clipboard }) => !clipboard.readImage().isEmpty()), {
+          timeout: 5000,
+        })
+        .toBe(true)
       await page.evaluate(
         () => void window.__E2E__!.runCommand('workbench.action.agent.focusInput'),
       )
@@ -151,6 +160,13 @@ test.describe('@p1 acp fragment copy', () => {
         if (img.isEmpty()) throw new Error('Failed to create test nativeImage')
         clipboard.writeImage(img)
       }, PNG_BASE64)
+      // Same Linux clipboard-ownership settle as the chip test above: confirm the
+      // seeded image is actually readable before driving a real Ctrl+V.
+      await expect
+        .poll(() => electronApp.evaluate(({ clipboard }) => !clipboard.readImage().isEmpty()), {
+          timeout: 5000,
+        })
+        .toBe(true)
       await page.evaluate(
         () => void window.__E2E__!.runCommand('workbench.action.agent.focusInput'),
       )

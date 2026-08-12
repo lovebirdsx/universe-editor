@@ -370,6 +370,18 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 
 ---
 
+**案例 75 — echo fixture 发伪 PNG 字节，复制图片链路在 serial lane 确定性挂：本地多 worker 全绿掩盖、CI serial 共享 app 才现（测试 fixture 数据缺陷，非产品 bug）**
+信号：复制图片用例 `expect.poll(!clipboard.readImage().isEmpty())` 恒 false（超时），**双平台同 run initial+retry 全灭**（结构性）；但本地 `e2eg` 默认多 worker 跑**全绿**——同一 spec 两种运行模式结果相反。`IMAGES` 插桩显示 timeline `<img src>` = `data:image/png;base64,AAAA…`（纯 'A' 平铺），右键复制后剪贴板仍是前置的 sentinel 文本。
+根因：echo agent fixture 的 `emit-image:<count>x<kb>` 指令用 `'A'.repeat(kb*1024)` 当 base64 payload——这不是合法 PNG 字节。渲染层 `<img>` 对坏 data-URI 静默显示占位（肉眼/截图看不出），但复制路径 `CopyAcpImageAction.run` → `toPngBase64(src)` 对 `data:image/png;base64,` **快路径只剥前缀、不校验 payload** → 把 'AAAA…' 原样传给 main `writeClipboardImage` → `nativeImage.createFromBuffer` 解出**空图** → main **静默 skip 不写剪贴板** → poll 恒 false。**为何多 worker 全绿**：本地 `e2eg` 4 workers 每个用例独立 shared app，时序宽；CI serial lane `--workers=1` 一个 app 顺序跑 4 用例，资源争抢下该路径确定性走到空图分支。探针实证：`nativeImage.createFromBuffer(Buffer.from('A'.repeat(1024),'base64')).isEmpty() === true`，真 PNG 同调用 isEmpty=false。
+修（fixture 数据改真，产品不动）：`echoAgent.cjs` 的 `emit-image` payload 改为平铺一个真实 2×2 PNG 的 base64（长度 104 且 mod4=0，平铺后按 kb*1024 切片仍是合法 base64、前缀是完整 PNG），尺寸仍随 `<kb>` 缩放——依赖大尺寸的 `smoke.agentsImageResume`（24×3MB freeze 复现）实测不受影响（worst latency 79ms）。教训：a) 「本地 e2eg 全绿 + CI serial 确定性挂」先想**运行模式差异**（多 worker 独立 app vs serial 共享 app），别直接当环境 flake；b) fixture 造的「假数据」若会被产品链路**解码/校验**（而非仅展示），就必须是真数据——占位字节只在纯展示路径安全；c) `nativeImage.createFromBuffer` 对非图字节返回空图且 main 静默 skip，这类「安静失败」要用插桩（打 src 前缀 + 剪贴板回读）才能看清。锚：`apps/editor/src/test-fixtures/echoAgent.cjs`（emit-image PNG 平铺）；`apps/editor/src/renderer/services/acp/promptImage.ts`（toPngBase64 快路径）；`apps/editor/src/main/services/host/hostMainService.ts`（writeClipboardImage 空图 skip）。
+
+**案例 75b — CI Linux 上 Ctrl+V 粘贴图片 chip 恒不出现：xvfb 剪贴板 ownership 翻转不同步，seed 后须 poll 剪贴板可读回图再粘（环境时序鲁棒化）**
+信号：粘贴用例 `expect(chip).toBeVisible()` 失败，call log `waiting for locator [data-testid="acp-prompt-image-chip"] … element(s) not found`（元素根本没渲染，非 count 波动）；**仅 CI ubuntu 挂、initial+retry 同形态**，Windows 稳过；失败点是 Ctrl+V 之后——即粘贴没产生 chip，与后续剪贴板写断言无关。
+根因：用例前置把 OS 剪贴板从 sentinel **文本**翻成 PNG **图**后立即 `Control+V`。Linux 剪贴板是 **ownership 模型**（内容属于设置它的进程，其他进程索取时才传输），xvfb 下 text→image 的所有权翻转非同步——main `readClipboardImage` 在时序窗口内读到旧 text（无图）→ 返回 null → `acceptClipboardImage` 不挂 chip。Windows 剪贴板是即写即读全局缓冲区，无此窗口（解释 OS 分裂）。与案例 47（锁屏吞剪贴板）同族但形态不同：47 是锁屏态，本条是 ownership 翻转竞态。
+修（鲁棒化，不削弱被测断言）：seed PNG 后、Ctrl+V 前补 `expect.poll(!clipboard.readImage().isEmpty()).toBe(true)`——把「剪贴板就绪」从隐式假设变显式等待，排除 ownership 翻转窗口。对齐已稳的兄弟 spec `smoke.acpPasteImage`（它 seed 后有同步 readImage 确认，故稳）。chip 的出现断言本身（被测行为）保持原样。教训：a) 凡「写 OS 剪贴板 → 立即读/粘贴」的用例，在 Linux 上写后必须先确认可读回，再驱动消费动作；b) 同文件族已鲁棒的兄弟断言（acpPasteImage 的 seed 确认）就是该抄的模式——本条是「同文件/同族有的步骤已加固、有的还裸」的遗留薄弱点；c) 仅单 OS 挂 + 该 OS 有已知子系统语义差异（剪贴板 ownership / 文件锁 / 大小写）时，优先怀疑语义差异而非断言写法。锚：`apps/editor/e2e/specs/smoke.acpFragmentCopy.spec.ts`（chip/sticky 两用例 seed 后 poll）；参照 `smoke.acpPasteImage.spec.ts:63`（seed 确认先例）。
+
+---
+
 ## 根治 TODO
 
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。

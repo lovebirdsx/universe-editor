@@ -53,6 +53,10 @@ const messagedSessions = new Set()
 const sessionPrompts = new Map() // sessionId -> [{ messageId, prompt }]
 const loadSessionEnabled = process.env.ECHO_AGENT_LOAD_SESSION === '1'
 
+// 2×2 red PNG, tiled to fill the emit-image directive's requested payload.
+const PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAE0lEQVR4AWP8z8DwnwEImBigAAAfFwICgH3ifwAAAABJRU5ErkJggg=='
+
 function send(msg) {
   process.stdout.write(JSON.stringify(msg) + '\n')
 }
@@ -99,11 +103,21 @@ async function runPrompt(id, params) {
   // image chunks of ~<kb> KB base64 each. This reproduces the resume path where
   // session/load replays stored images as full-base64 stdout lines — the case
   // that used to freeze the renderer via the protocol tracer.
+  //
+  // The payload tiles a real 2×2 PNG's base64 (never raw junk): a consumer that
+  // copies the rendered image decodes the data-URI payload with nativeImage,
+  // which yields an empty image for non-image bytes and would silently skip the
+  // clipboard write. Real PNG bytes keep that path exercisable; the size still
+  // scales with <kb> so the freeze repro is unchanged.
   const imageDirective = /^emit-image:(\d+)x(\d+)/.exec(userText)
   if (imageDirective) {
     const count = Number(imageDirective[1])
     const kb = Number(imageDirective[2])
-    const data = 'A'.repeat(kb * 1024)
+    const targetLen = kb * 1024
+    const data =
+      targetLen <= PNG_BASE64.length
+        ? PNG_BASE64.slice(0, targetLen)
+        : PNG_BASE64.repeat(Math.ceil(targetLen / PNG_BASE64.length)).slice(0, targetLen)
     for (let i = 0; i < count; i++) {
       if (turn.cancelled) break
       notify('session/update', {
