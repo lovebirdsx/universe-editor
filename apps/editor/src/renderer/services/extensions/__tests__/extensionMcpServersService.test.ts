@@ -77,6 +77,8 @@ function makeEnvSnapshot(
         userHome: '/home/u',
         cwd: '/',
         execPath: overrides.execPath ?? 'C:/app/editor.exe',
+        userDataDir: '/data/u',
+        appResourcesPath: undefined,
         env: {},
       }
     },
@@ -136,7 +138,14 @@ describe('ExtensionMcpServersService', () => {
     const service = new ExtensionMcpServersService(config, trust, gated, new StubLoggerService())
     service.setContributions([makeExt()])
     expect(service.rawRecord).toEqual({})
-    release({ userHome: '/h', cwd: '/', execPath: '/app/e', env: {} })
+    release({
+      userHome: '/h',
+      cwd: '/',
+      execPath: '/app/e',
+      userDataDir: '/data',
+      appResourcesPath: undefined,
+      env: {},
+    })
     await service.whenReady
     expect(service.rawRecord).toEqual({ bridge: { command: '/app/e' } })
     service.dispose()

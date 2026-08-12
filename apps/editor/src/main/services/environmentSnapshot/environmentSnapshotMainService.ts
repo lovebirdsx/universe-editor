@@ -11,6 +11,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { homedir } from 'node:os'
+import { app } from 'electron'
 import type {
   IEnvironmentSnapshot,
   IEnvironmentSnapshotService,
@@ -21,6 +22,8 @@ export interface EnvironmentSnapshotSources {
   readonly cwd: () => string
   readonly userHome: () => string
   readonly execPath: () => string
+  readonly userDataDir: () => string
+  readonly appResourcesPath: () => string | undefined
 }
 
 const defaultSources: EnvironmentSnapshotSources = {
@@ -28,6 +31,8 @@ const defaultSources: EnvironmentSnapshotSources = {
   cwd: () => process.cwd(),
   userHome: () => homedir(),
   execPath: () => process.execPath,
+  userDataDir: () => app.getPath('userData'),
+  appResourcesPath: () => (app.isPackaged ? process.resourcesPath : undefined),
 }
 
 export class EnvironmentSnapshotMainService implements IEnvironmentSnapshotService {
@@ -44,6 +49,8 @@ export class EnvironmentSnapshotMainService implements IEnvironmentSnapshotServi
       userHome: this._sources.userHome(),
       cwd: this._sources.cwd(),
       execPath: this._sources.execPath(),
+      userDataDir: this._sources.userDataDir(),
+      appResourcesPath: this._sources.appResourcesPath(),
       env,
     })
   }

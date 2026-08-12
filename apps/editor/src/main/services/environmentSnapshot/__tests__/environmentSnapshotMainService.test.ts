@@ -12,6 +12,8 @@ describe('EnvironmentSnapshotMainService', () => {
       cwd: () => '/work/dir',
       userHome: () => '/home/user',
       execPath: () => '/app/editor.exe',
+      userDataDir: () => '/data/user',
+      appResourcesPath: () => '/app/resources',
     })
 
     const snap = await service.getSnapshot()
@@ -19,6 +21,8 @@ describe('EnvironmentSnapshotMainService', () => {
     expect(snap.userHome).toBe('/home/user')
     expect(snap.cwd).toBe('/work/dir')
     expect(snap.execPath).toBe('/app/editor.exe')
+    expect(snap.userDataDir).toBe('/data/user')
+    expect(snap.appResourcesPath).toBe('/app/resources')
     expect(snap.env).toEqual({ FOO: 'bar', PATH: '/usr/bin' })
   })
 
@@ -28,6 +32,8 @@ describe('EnvironmentSnapshotMainService', () => {
       cwd: () => '/',
       userHome: () => '/',
       execPath: () => '/',
+      userDataDir: () => '/',
+      appResourcesPath: () => undefined,
     })
 
     const snap = await service.getSnapshot()

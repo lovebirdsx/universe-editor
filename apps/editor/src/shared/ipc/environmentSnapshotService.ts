@@ -17,6 +17,12 @@ export interface IEnvironmentSnapshot {
   readonly cwd: string
   /** The editor's Electron executable (`process.execPath`). */
   readonly execPath: string
+  /** The app-owned state directory (`app.getPath('userData')`: settings/logs/storage). */
+  readonly userDataDir: string
+  /** `process.resourcesPath` when packaged; undefined in dev, where the bundled
+   *  extensions live in the repo checkout (possibly the open workspace) and must
+   *  not be treated as app-owned. */
+  readonly appResourcesPath: string | undefined
   /** Full process environment (name → value), undefined entries dropped. */
   readonly env: Readonly<Record<string, string>>
 }

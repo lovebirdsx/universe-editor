@@ -18,8 +18,12 @@
  *        i.e. the file is new) → tracker.recordWatched
  *
  *  Editor-originated saves are excluded via the self-write registry so a user
- *  saving a file mid-turn is not misattributed to the agent. Watched entries
- *  render with an "inferred" badge and a per-row dismiss in SessionChangesView.
+ *  saving a file mid-turn is not misattributed to the agent. App-owned paths
+ *  (userData state/logs, packaged resources like the bundled theme JSONs the
+ *  theme service watches) are excluded via a blacklist — everything else,
+ *  including files outside the workspace the agent wrote via shell, is kept.
+ *  Watched entries render with an "inferred" badge and a per-row dismiss in
+ *  SessionChangesView.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -30,13 +34,14 @@ import {
   ILoggerService,
   IUriIdentityService,
   NullLogger,
+  URI,
   type IFileChangeEvent,
   type ILogger,
   type ILoggerService as ILoggerServiceType,
   type IWorkbenchContribution,
-  type URI,
 } from '@universe-editor/platform'
 import { dirtyDiffCommandId } from '@universe-editor/extensions-common'
+import { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapshotService.js'
 import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import { ISessionChangeTrackerService } from '../services/acp/session/sessionChangeTracker.js'
 import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
@@ -69,6 +74,8 @@ export class SessionWatchedChangesContribution
   private readonly _pending = new Map<string, PendingChange>()
   private _flushTimer: ReturnType<typeof setTimeout> | undefined
   private _droppedSinceFlush = 0
+  /** App-owned roots whose file events are never session edits. */
+  private _appOwnedRoots: readonly URI[] = []
 
   /** Grace window between a watcher batch and its processing. Test override. */
   flushDelayMs = FLUSH_DELAY_MS
@@ -82,6 +89,7 @@ export class SessionWatchedChangesContribution
     @IFileService private readonly _files: IFileService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @ILoggerService loggerService: ILoggerServiceType,
+    @IEnvironmentSnapshotService envSnapshot: IEnvironmentSnapshotService,
   ) {
     super()
     this._logger =
@@ -89,6 +97,14 @@ export class SessionWatchedChangesContribution
         id: 'sessionWatchedChanges',
         name: 'Session Watched Changes',
       }) ?? new NullLogger()
+    void envSnapshot
+      .getSnapshot()
+      .then((s) => {
+        const roots = [URI.file(s.userDataDir)]
+        if (s.appResourcesPath !== undefined) roots.push(URI.file(s.appResourcesPath))
+        this._appOwnedRoots = roots
+      })
+      .catch((err) => this._logger.warn('failed to resolve app-owned roots', err))
     this._register(watcher.onDidChangeFiles((events) => this._collect(events)))
   }
 
@@ -117,6 +133,17 @@ export class SessionWatchedChangesContribution
     )
     for (const ev of events) {
       if (ev.resource.scheme !== 'file') continue
+      // App-owned files (userData state/logs, packaged resources such as the
+      // bundled theme JSONs the theme service watches) fire on the same global
+      // watcher but can never belong to a session diff. Dropping them here also
+      // keeps them out of the MAX_PATHS_PER_FLUSH budget. Everything else —
+      // workspace or not — is kept: agents legitimately write outside the
+      // workspace via shell (plan files, ~/.claude, explore results).
+      if (
+        this._appOwnedRoots.some((root) => this._uriIdentity.isEqualOrParent(ev.resource, root))
+      ) {
+        continue
+      }
       const key = this._uriIdentity.getComparisonKey(ev.resource)
       if (selfKeys.has(key)) continue
       let entry = this._pending.get(key)

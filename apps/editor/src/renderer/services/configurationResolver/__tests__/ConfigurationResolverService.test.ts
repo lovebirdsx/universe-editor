@@ -68,6 +68,8 @@ const DEFAULT_SNAPSHOT: IEnvironmentSnapshot = {
   userHome: '/home/user',
   cwd: '/main/cwd',
   execPath: '/app/editor.exe',
+  userDataDir: '/data/user',
+  appResourcesPath: undefined,
   env: { FOO: 'bar' },
 }
 

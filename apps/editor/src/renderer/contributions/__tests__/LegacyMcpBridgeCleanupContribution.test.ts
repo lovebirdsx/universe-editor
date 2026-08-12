@@ -66,7 +66,14 @@ class StubLoggerService implements ILoggerService {
 
 const envSnapshot: IEnvironmentSnapshotService = {
   async getSnapshot(): Promise<IEnvironmentSnapshot> {
-    return { userHome: '/h', cwd: '/', execPath: EXEC_PATH, env: {} }
+    return {
+      userHome: '/h',
+      cwd: '/',
+      execPath: EXEC_PATH,
+      userDataDir: '/data',
+      appResourcesPath: undefined,
+      env: {},
+    }
   },
 } as IEnvironmentSnapshotService
 
