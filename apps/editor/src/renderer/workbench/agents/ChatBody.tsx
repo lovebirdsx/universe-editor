@@ -50,6 +50,7 @@ import {
 } from '../../services/acp/session/acpSession.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { IAcpSessionHistoryService } from '../../services/acp/session/acpSessionHistory.js'
+import { resolveChatContextTarget } from '../../services/acp/chatContextTarget.js'
 import {
   IAcpChatWidgetService,
   type AcpChatWidget,
@@ -765,7 +766,16 @@ function ChatScroll({
     // Gates the "Ask in Side Chat" menu item: read-only foreign previews and
     // agents without fork support must not offer it.
     widgetService.setForkSupported(!readOnly && session.forkSupported.get())
-    setMenu({ x: e.clientX, y: e.clientY, args: [{ sessionId: session.id }] })
+    // Resolve the copy-able fragment under the cursor (image / resource link /
+    // selection chip) — flips the acpChatContext* contextKeys and rides along in
+    // the menu args so the copy actions know exactly what to copy.
+    const target = resolveChatContextTarget(e.target as HTMLElement)
+    widgetService.setContextTarget(target?.kind)
+    setMenu({
+      x: e.clientX,
+      y: e.clientY,
+      args: [{ sessionId: session.id, ...(target ? { target } : {}) }],
+    })
   }
 
   // Pin to the very bottom. A single `scrollTop = scrollHeight` lands short in
@@ -1466,6 +1476,7 @@ function ChatScroll({
               setMenu(null)
               widgetService.setHasSelection(false)
               widgetService.setForkSupported(false)
+              widgetService.setContextTarget(undefined)
             }}
           />
         )}

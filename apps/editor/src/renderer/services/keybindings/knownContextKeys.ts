@@ -31,6 +31,7 @@ const ALL_MENU_IDS: readonly MenuId[] = [
   MenuId.EditorTabContext,
   MenuId.ExplorerContext,
   MenuId.AcpChatContext,
+  MenuId.AcpPromptContext,
   MenuId.TitleBar,
   MenuId.StatusBar,
   MenuId.SideBarTitle,

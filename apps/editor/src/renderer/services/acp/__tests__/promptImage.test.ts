@@ -9,6 +9,8 @@ import {
   composeImageBlocks,
   isSupportedImageMime,
   mimeTypeForFileName,
+  parseDataUri,
+  toPngBase64,
   validateImage,
   type ImageLimits,
   type PromptImage,
@@ -61,6 +63,40 @@ describe('validateImage', () => {
     expect(validateImage({ mimeType: 'image/bmp', byteSize: LIMITS.maxBytes + 1 }, 5, LIMITS)).toBe(
       'unsupported-type',
     )
+  })
+})
+
+describe('parseDataUri', () => {
+  it('parses a base64 data URI into mime + bytes', () => {
+    const parsed = parseDataUri('data:image/jpeg;base64,QUJD')
+    expect(parsed).toBeDefined()
+    expect(parsed!.mimeType).toBe('image/jpeg')
+    expect([...parsed!.bytes]).toEqual([0x41, 0x42, 0x43])
+  })
+
+  it('tolerates a missing media type', () => {
+    const parsed = parseDataUri('data:;base64,QUJD')
+    expect(parsed).toEqual({ mimeType: '', bytes: new Uint8Array([0x41, 0x42, 0x43]) })
+  })
+
+  it('returns undefined for non-data URIs and non-base64 payloads', () => {
+    expect(parseDataUri('https://example.com/a.jpg')).toBeUndefined()
+    expect(parseDataUri('data:image/png,%89PNG')).toBeUndefined()
+    expect(parseDataUri('')).toBeUndefined()
+    expect(parseDataUri('data:image/png;base64,')).toBeUndefined()
+  })
+
+  it('returns undefined for invalid base64', () => {
+    expect(parseDataUri('data:image/png;base64,!!!')).toBeUndefined()
+  })
+})
+
+describe('toPngBase64', () => {
+  // The canvas re-encode path needs createImageBitmap (unavailable in node);
+  // only the passthrough branch is exercised here — parseDataUri above covers
+  // the data-URI decoding that feeds it.
+  it('passes a PNG data URI through untouched, without fetch', async () => {
+    await expect(toPngBase64('data:image/png;base64,QUJD')).resolves.toBe('QUJD')
   })
 })
 

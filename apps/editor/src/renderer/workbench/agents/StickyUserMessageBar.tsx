@@ -23,6 +23,7 @@ import { ICommandService, IContextKeyService } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import type { IAcpSession, TimelineItem } from '../../services/acp/session/acpSessionService.js'
 import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
+import { resolveChatContextTarget } from '../../services/acp/chatContextTarget.js'
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
 import { SelectionContextChips, useSelectionContextReveal } from './SelectionContextChips.js'
@@ -109,7 +110,13 @@ export function StickyUserMessageBar({
     widgetService.setHasSelection(!!window.getSelection()?.toString())
     // Mirrors ChatBody's context menu: gates "Ask in Side Chat".
     widgetService.setForkSupported(!session.readOnly && session.forkSupported.get())
-    setMenu({ x: e.clientX, y: e.clientY, args: [{ sessionId: session.id }] })
+    const target = resolveChatContextTarget(e.target as HTMLElement)
+    widgetService.setContextTarget(target?.kind)
+    setMenu({
+      x: e.clientX,
+      y: e.clientY,
+      args: [{ sessionId: session.id, ...(target ? { target } : {}) }],
+    })
   }
 
   return (
@@ -152,6 +159,7 @@ export function StickyUserMessageBar({
             setMenu(null)
             widgetService.setHasSelection(false)
             widgetService.setForkSupported(false)
+            widgetService.setContextTarget(undefined)
           }}
         />
       )}

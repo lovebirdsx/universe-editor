@@ -19,6 +19,8 @@ export const enum MenuId {
   ExplorerContext = 'explorerContext',
   /** ACP chat timeline right-click menu. */
   AcpChatContext = 'acpChatContext',
+  /** ACP prompt input right-click menu. */
+  AcpPromptContext = 'acpPromptContext',
   /** Process Explorer row right-click menu. */
   ProcessExplorerContext = 'processExplorerContext',
   TitleBar = 'titleBar',

@@ -345,6 +345,10 @@ import {
   SwitchSessionAction,
   CopyFocusedAcpMessageAction,
   CopySelectedTextAction,
+  CopyAcpImageAction,
+  CopyAcpResourcePathAction,
+  CopyAcpContextTextAction,
+  CopyAcpReferenceAction,
   SelectNextAcpPromptSuggestionAction,
   SelectPreviousAcpPromptSuggestionAction,
   AcceptAcpPromptSuggestionAction,
@@ -760,6 +764,10 @@ registerAction2(CycleAcpTimelineCollapseAction)
 registerAction2(SwitchSessionAction)
 registerAction2(CopyFocusedAcpMessageAction)
 registerAction2(CopySelectedTextAction)
+registerAction2(CopyAcpImageAction)
+registerAction2(CopyAcpResourcePathAction)
+registerAction2(CopyAcpContextTextAction)
+registerAction2(CopyAcpReferenceAction)
 // Prompt suggestion popover — its `escape` / `enter` / `tab` / `ctrl+j` /
 // `ctrl+n` / `ctrl+p` bindings carry an explicit higher weight so they win over
 // global shortcuts whenever `acpPromptPopupVisible` is set, regardless of order.

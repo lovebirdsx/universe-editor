@@ -7,11 +7,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
+import { URI } from '@universe-editor/platform'
 import {
   composePromptBlocksFromRefs,
   composeRefBlock,
   extractActiveToken,
   mentionEntryToRef,
+  refCopyText,
   refDisplay,
   suggestionItemToRef,
   type PlacedRef,
@@ -314,5 +316,65 @@ describe('suggestionItemToRef / mentionEntryToRef', () => {
       iconId: 'git-commit',
     }
     expect(() => suggestionItemToRef(item)).toThrow()
+  })
+})
+
+describe('refCopyText', () => {
+  it('returns the fs path for file/folder/openEditor resource_link refs', () => {
+    const uri = URI.file('/workspace/src/a.ts')
+    for (const kind of ['file', 'folder', 'openEditor'] as const) {
+      const ref: PromptRef = { id: 'x', kind, label: 'a.ts', uri: uri.toString() }
+      expect(refCopyText(ref)).toBe(uri.fsPath)
+    }
+  })
+
+  it('returns the fs path for a scmChange ref', () => {
+    const uri = URI.file('/workspace/src/a.ts')
+    const ref: PromptRef = {
+      id: 'x',
+      kind: 'scmChange',
+      label: 'a.ts',
+      uri: uri.toString(),
+      meta: { scmStatus: 'M' },
+    }
+    expect(refCopyText(ref)).toBe(uri.fsPath)
+  })
+
+  it('returns the composed text for symbol refs', () => {
+    const ref: PromptRef = {
+      id: 'x',
+      kind: 'symbol',
+      label: 'Student',
+      uri: 'file:///hello.ts',
+      meta: { line: 12, column: 5, symbolKind: 4, description: 'hello.ts' },
+    }
+    expect(refCopyText(ref)).toBe('`Student` (hello.ts:12:5)')
+  })
+
+  it('returns the composed text for commit refs', () => {
+    const ref: PromptRef = {
+      id: 'x',
+      kind: 'commit',
+      label: 'a1b2c3d fix login bug',
+      uri: 'file:///repo',
+      meta: {
+        commitHash: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+        description: 'fix login bug',
+      },
+    }
+    expect(refCopyText(ref)).toBe('`a1b2c3d4e5f60718293a4b5c6d7e8f9012345678` (fix login bug)')
+  })
+
+  it('returns the composed text for docs refs', () => {
+    const ref: PromptRef = {
+      id: 'x',
+      kind: 'docs',
+      label: 'Guide',
+      uri: 'file:///docs/zh-CN',
+      meta: { dirPath: '/docs/zh-CN' },
+    }
+    const text = refCopyText(ref)
+    expect(text).toContain('Guide')
+    expect(text).toContain('/docs/zh-CN')
   })
 })

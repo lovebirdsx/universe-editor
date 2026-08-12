@@ -27,7 +27,12 @@ export function PromptImageChips({
         const label = img.name ?? formatBytes(img.byteSize)
         return (
           <span key={img.id} className={styles['imageChip']} data-tooltip={label}>
-            <ChatImage src={src} alt={label} mimeType={img.mimeType} />
+            <ChatImage
+              src={src}
+              alt={label}
+              mimeType={img.mimeType}
+              testId="acp-prompt-image-chip"
+            />
             <button
               type="button"
               className={styles['imageChipRemove']}

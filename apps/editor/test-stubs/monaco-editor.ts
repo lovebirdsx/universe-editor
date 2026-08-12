@@ -276,6 +276,13 @@ const listen = (set: Set<() => void>, cb: () => void) => {
   return { dispose: () => set.delete(cb) }
 }
 
+// happy-dom has no layout, so Monaco's viewport-point → model-position hit
+// test can't run. Tests pin the returned position directly (null = no hit).
+let targetAtClientPoint: { position: Position } | null = null
+export function _setTargetAtClientPointForTests(position: Position | null): void {
+  targetAtClientPoint = position === null ? null : { position }
+}
+
 // PromptMonacoEditor-flavoured fake editor: mounts a real textarea so component
 // tests can fireEvent against it, and bridges to a provided/created model.
 function makePromptEditor(
@@ -357,6 +364,7 @@ function makePromptEditor(
     getContentHeight: () => 60,
     getTopForPosition: (lineNumber: number) => (lineNumber - 1) * 18,
     getTopForLineNumber: (lineNumber: number) => (lineNumber - 1) * 18,
+    getTargetAtClientPoint: () => targetAtClientPoint,
     trigger: (_src: string, _handler: string, payload?: { text?: string }) => {
       if (payload?.text) model._setValueDirect(model.getValue() + payload.text)
     },

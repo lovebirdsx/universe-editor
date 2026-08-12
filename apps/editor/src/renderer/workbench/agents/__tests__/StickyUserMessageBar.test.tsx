@@ -7,13 +7,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
+  Action2,
+  ContextKeyService,
   ICommandService,
   IContextKeyService,
   IOpenerService,
   InstantiationService,
+  localize2,
+  MenuId,
   ServiceCollection,
   URI,
   observableValue,
+  registerAction2,
+  type ServicesAccessor,
 } from '@universe-editor/platform'
 import type {
   IAcpSession,
@@ -51,6 +57,8 @@ function message(
 function makeSession(id: string, items: TimelineItem[]): IAcpSession {
   return {
     id,
+    readOnly: false,
+    forkSupported: observableValue<boolean>(`fork:${id}`, false),
     timeline: observableValue<readonly TimelineItem[]>(`tl:${id}`, items),
   } as unknown as IAcpSession
 }
@@ -67,6 +75,7 @@ function renderWithServices(node: React.ReactNode) {
   services.set(IAcpChatWidgetService, {
     setHasSelection: () => {},
     setForkSupported: () => {},
+    setContextTarget: () => {},
   } as unknown as IAcpChatWidgetService)
   services.set(IOpenerService, { open } as unknown as IOpenerService)
   const inst = new InstantiationService(services)
@@ -140,5 +149,78 @@ describe('StickyUserMessageBar', () => {
     expect(open).toHaveBeenCalledWith(URI.parse('file:///workspace/src/a.ts#12,1-12,1'), {
       fromUserGesture: true,
     })
+  })
+})
+
+class CaptureStickyContextArgAction extends Action2 {
+  static readonly ID = 'test.acpStickyChatContext.captureArg'
+  constructor() {
+    super({
+      id: CaptureStickyContextArgAction.ID,
+      title: localize2('test.acpStickyChatContext.captureArg', 'Capture Session Arg'),
+      menu: [{ id: MenuId.AcpChatContext, group: 'z_test', order: 1 }],
+    })
+  }
+
+  override run(_accessor: ServicesAccessor): void {}
+}
+
+// Mirrors ChatBody's "context menu fragment targets" suite: the pinned first
+// user message lives outside the chat scroll container, so it needs the same
+// copy-target wiring on its own context-menu handler.
+describe('StickyUserMessageBar — context menu fragment targets', () => {
+  it('resolves an image block in the pinned first message as an image target', () => {
+    const disposable = registerAction2(CaptureStickyContextArgAction)
+    try {
+      const src = 'data:image/png;base64,QUJD'
+      const session = makeSession('s-sticky-menu', [
+        {
+          kind: 'message',
+          id: 'u1',
+          message: {
+            id: 'u1',
+            role: 'user',
+            text: '',
+            blocks: [{ type: 'image', data: 'QUJD', mimeType: 'image/png' }],
+            streaming: false,
+          },
+        },
+      ])
+      const command = vi.fn()
+      const setContextTarget = vi.fn()
+      const services = new ServiceCollection()
+      services.set(IContextKeyService, new ContextKeyService())
+      services.set(ICommandService, {
+        executeCommand: (id: string, ...args: unknown[]) => {
+          command(id, ...args)
+          return Promise.resolve(undefined)
+        },
+      } as unknown as ICommandService)
+      services.set(IAcpChatWidgetService, {
+        setHasSelection: () => {},
+        setForkSupported: () => {},
+        setContextTarget,
+      } as unknown as IAcpChatWidgetService)
+      services.set(IOpenerService, { open: vi.fn() } as unknown as IOpenerService)
+      const inst = new InstantiationService(services)
+      const { container, getByText } = render(
+        <ServicesContext.Provider value={inst}>
+          <StickyUserMessageBar session={session} />
+        </ServicesContext.Provider>,
+      )
+
+      fireEvent.contextMenu(container.querySelector('[data-testid="acp-image-block"]')!)
+      fireEvent.click(getByText('Capture Session Arg'))
+
+      expect(setContextTarget).toHaveBeenCalledWith('image')
+      // The menu's onClose runs before the command executes and resets the keys.
+      expect(setContextTarget).toHaveBeenLastCalledWith(undefined)
+      expect(command).toHaveBeenCalledWith(CaptureStickyContextArgAction.ID, {
+        sessionId: 's-sticky-menu',
+        target: { kind: 'image', src },
+      })
+    } finally {
+      disposable.dispose()
+    }
   })
 })

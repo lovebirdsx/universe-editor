@@ -91,6 +91,11 @@ export interface PromptEditorHandle {
   insertRef(ref: PromptRef, start: number, end: number, trailingSpace?: boolean): void
   /** Live placed refs (range-tracked), ordered by start offset. */
   listRefs(): PlacedRef[]
+  /**
+   * The ref whose tracked pill range contains the given viewport point
+   * (context-menu hit test), or undefined when the point hits no pill.
+   */
+  refAtClientPoint(x: number, y: number): PromptRef | undefined
   /** Rebuild pills over already-present display text (draft restore). */
   restoreRefs(placed: readonly PlacedRef[]): void
   /** Drop all pills + tracking (after submit clears the buffer). */
@@ -276,6 +281,15 @@ export function PromptMonacoEditor({
           ed.setPosition(model.getPositionAt(caret))
         }),
       listRefs: () => trackerRef.current?.list() ?? [],
+      refAtClientPoint: (x, y) => {
+        const ed = editorRef.current
+        const model = modelRef.current
+        if (!ed || !model) return undefined
+        const position = ed.getTargetAtClientPoint(x, y)?.position
+        if (!position) return undefined
+        const offset = model.getOffsetAt(position)
+        return trackerRef.current?.list().find((p) => p.start <= offset && offset < p.end)?.ref
+      },
       restoreRefs: (placed) => runProgrammatic(() => trackerRef.current?.restore(placed)),
       clearRefs: () => runProgrammatic(() => trackerRef.current?.clear()),
       peek: () => {

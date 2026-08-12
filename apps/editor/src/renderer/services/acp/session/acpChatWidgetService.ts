@@ -100,6 +100,18 @@ export interface IAcpChatWidgetService {
    * advertises fork support. Gates the "Ask in Side Chat" menu item.
    */
   setForkSupported(forkSupported: boolean): void
+  /**
+   * Set the `acpChatContextImage` / `acpChatContextPath` / `acpChatContextChipText`
+   * group in one call — the timeline context menu resolves exactly one target
+   * kind, so the keys always flip as a set and never show two items at once.
+   */
+  setContextTarget(kind: 'image' | 'path' | 'text' | undefined): void
+  /**
+   * Set the `acpPromptContextImage` / `acpPromptContextRef` /
+   * `acpPromptContextChipText` group in one call — same one-of-N semantics as
+   * {@link setContextTarget}, for the prompt input's attachment chips.
+   */
+  setPromptContextTarget(kind: 'image' | 'ref' | 'text' | undefined): void
 }
 
 export const IAcpChatWidgetService = createDecorator<IAcpChatWidgetService>('acpChatWidgetService')
@@ -125,6 +137,12 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   private readonly _runningKey: IContextKey<boolean>
   private readonly _selectionKey: IContextKey<boolean>
   private readonly _forkSupportedKey: IContextKey<boolean>
+  private readonly _contextImageKey: IContextKey<boolean>
+  private readonly _contextPathKey: IContextKey<boolean>
+  private readonly _contextChipTextKey: IContextKey<boolean>
+  private readonly _promptContextImageKey: IContextKey<boolean>
+  private readonly _promptContextRefKey: IContextKey<boolean>
+  private readonly _promptContextChipTextKey: IContextKey<boolean>
 
   // Roots every registration's cleanup under this (singleton-rooted) service so
   // the leak detector doesn't report a still-mounted ChatBody's registration
@@ -139,6 +157,18 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     this._runningKey = contextKeyService.createKey<boolean>('acpChatTurnRunning', false)
     this._selectionKey = contextKeyService.createKey<boolean>('acpChatHasSelection', false)
     this._forkSupportedKey = contextKeyService.createKey<boolean>('acpChatForkSupported', false)
+    this._contextImageKey = contextKeyService.createKey<boolean>('acpChatContextImage', false)
+    this._contextPathKey = contextKeyService.createKey<boolean>('acpChatContextPath', false)
+    this._contextChipTextKey = contextKeyService.createKey<boolean>('acpChatContextChipText', false)
+    this._promptContextImageKey = contextKeyService.createKey<boolean>(
+      'acpPromptContextImage',
+      false,
+    )
+    this._promptContextRefKey = contextKeyService.createKey<boolean>('acpPromptContextRef', false)
+    this._promptContextChipTextKey = contextKeyService.createKey<boolean>(
+      'acpPromptContextChipText',
+      false,
+    )
   }
 
   get lastFocusedWidget(): AcpChatWidget | undefined {
@@ -235,6 +265,18 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
 
   setForkSupported(forkSupported: boolean): void {
     this._forkSupportedKey.set(forkSupported)
+  }
+
+  setContextTarget(kind: 'image' | 'path' | 'text' | undefined): void {
+    this._contextImageKey.set(kind === 'image')
+    this._contextPathKey.set(kind === 'path')
+    this._contextChipTextKey.set(kind === 'text')
+  }
+
+  setPromptContextTarget(kind: 'image' | 'ref' | 'text' | undefined): void {
+    this._promptContextImageKey.set(kind === 'image')
+    this._promptContextRefKey.set(kind === 'ref')
+    this._promptContextChipTextKey.set(kind === 'text')
   }
 
   private _unregister(widget: AcpChatWidget): void {

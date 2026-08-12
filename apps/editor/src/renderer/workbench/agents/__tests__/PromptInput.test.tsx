@@ -16,7 +16,9 @@ import {
 } from '@testing-library/react'
 import type { GitGraphCommitDto, GitGraphLoadResult } from '@universe-editor/extensions-common'
 import { GitGraphCommands } from '@universe-editor/extensions-common'
+import * as monacoStub from 'monaco-editor'
 import {
+  Action2,
   Emitter,
   Event,
   ICommandService,
@@ -35,9 +37,13 @@ import {
   IQuickInputService,
   IUriIdentityService,
   IWorkspaceService,
+  localize2,
+  MenuId,
   observableValue,
+  registerAction2,
   ServiceCollection,
   URI,
+  type IDisposable,
 } from '@universe-editor/platform'
 import type {
   ICommandService as ICommandServiceType,
@@ -86,6 +92,15 @@ import { ServicesContext } from '../../useService.js'
 import { IExcludeService } from '../../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../../services/exclude/testing/fakeExcludeService.js'
 import { IAcpPromptHistoryService } from '../../../services/acp/session/acpPromptHistoryService.js'
+import {
+  AcpChatWidgetService,
+  IAcpChatWidgetService,
+} from '../../../services/acp/session/acpChatWidgetService.js'
+import {
+  CopyAcpContextTextAction,
+  CopyAcpImageAction,
+  CopyAcpReferenceAction,
+} from '../../../actions/agentTimelineActions.js'
 import { MonacoLoader } from '../../editor/monaco/MonacoLoader.js'
 import { initUserDocsForTests } from '../../../services/editor/docRegistry.js'
 import styles from '../agents.module.css'
@@ -362,9 +377,11 @@ function renderWithServices(
     quickInput?: IQuickInputServiceType
     config?: IConfigurationServiceType
     dialog?: IDialogServiceType
+    widget?: IAcpChatWidgetService
   } = {},
 ) {
   const services = new ServiceCollection()
+  const contextKeyService = opts.contextKeyService ?? new ContextKeyService()
   services.set(IFileSearchService, opts.fileSearch ?? stubFileSearch)
   services.set(IWorkspaceService, opts.workspace ?? stubWorkspaceService)
   services.set(IExcludeService, new FakeExcludeService())
@@ -381,9 +398,10 @@ function renderWithServices(
   services.set(IScmService, opts.scm ?? makeScmService([]))
   services.set(IDocsService, opts.docs ?? makeDocsService())
   services.set(IEditorService, opts.editorService ?? makeEditorService())
-  services.set(IContextKeyService, opts.contextKeyService ?? new ContextKeyService())
+  services.set(IContextKeyService, contextKeyService)
   services.set(ICommandService, opts.commands ?? stubCommandService)
   services.set(IQuickInputService, opts.quickInput ?? stubQuickInputServiceDefault)
+  services.set(IAcpChatWidgetService, opts.widget ?? new AcpChatWidgetService(contextKeyService))
   const inst = new InstantiationService(services)
   const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
@@ -1000,6 +1018,22 @@ function typeAt(ta: HTMLTextAreaElement, value: string, caret = value.length): v
   // Force a caret position so the mention parser sees an in-progress token.
   ta.setSelectionRange(caret, caret)
   fireEvent.keyUp(ta, { key: 'a' })
+}
+
+function makeImageFile(name = 'shot.png', type = 'image/png', size = 128): File {
+  const file = new File([new Uint8Array(size)], name, { type })
+  // happy-dom's File doesn't always reflect byte length in `size`; force it.
+  Object.defineProperty(file, 'size', { value: size })
+  return file
+}
+
+function pasteImage(ta: HTMLTextAreaElement, file: File): void {
+  fireEvent.paste(ta, {
+    clipboardData: {
+      items: [{ kind: 'file', type: file.type, getAsFile: () => file }],
+      files: [file],
+    },
+  })
 }
 
 const FILES = ['/repo/src/main.ts', '/repo/src/index.ts', '/repo/README.md']
@@ -1719,22 +1753,6 @@ describe('PromptInput — draft persistence', () => {
   })
 
   describe('image attachments', () => {
-    function makeImageFile(name = 'shot.png', type = 'image/png', size = 128): File {
-      const file = new File([new Uint8Array(size)], name, { type })
-      // happy-dom's File doesn't always reflect byte length in `size`; force it.
-      Object.defineProperty(file, 'size', { value: size })
-      return file
-    }
-
-    function pasteImage(ta: HTMLTextAreaElement, file: File): void {
-      fireEvent.paste(ta, {
-        clipboardData: {
-          items: [{ kind: 'file', type: file.type, getAsFile: () => file }],
-          files: [file],
-        },
-      })
-    }
-
     it('pasting an image attaches a chip when the agent supports images', async () => {
       const session = makeSession({ imageSupported: true })
       renderWithServices(<PromptInput session={session} />)
@@ -1900,5 +1918,174 @@ describe('PromptInput — drop highlight lifecycle', () => {
     // drop/leave; the highlight must still reset.
     fireEvent.dragEnd(window)
     expect(dropHost().className).not.toContain(styles['dropActive'] as string)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Prompt-area context menu — right-click on an attachment image chip or an
+// @/# ref pill opens MenuId.AcpPromptContext (Copy Image / Copy Reference)
+// instead of the timeline's menu. The pill hit test runs through
+// refAtClientPoint; the monaco stub's getTargetAtClientPoint is pinned per
+// test via _setTargetAtClientPointForTests.
+// ---------------------------------------------------------------------------
+
+const setTargetAtClientPoint = (
+  monacoStub as unknown as {
+    _setTargetAtClientPointForTests(position: { lineNumber: number; column: number } | null): void
+  }
+)._setTargetAtClientPointForTests
+
+class CapturePromptContextArgAction extends Action2 {
+  static readonly ID = 'test.acpPromptContext.captureArg'
+  constructor() {
+    super({
+      id: CapturePromptContextArgAction.ID,
+      title: localize2('test.acpPromptContext.captureArg', 'Capture Session Arg'),
+      menu: [{ id: MenuId.AcpPromptContext, group: 'z_test', order: 1 }],
+    })
+  }
+  override run(): void {}
+}
+
+describe('PromptInput — context menu', () => {
+  const disposables: IDisposable[] = []
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+    setTargetAtClientPoint(null)
+  })
+
+  function renderForMenu(
+    session: FakeSession,
+    handleRef: { current: WidgetHandle },
+    opts: Parameters<typeof renderWithServices>[1] = {},
+  ) {
+    const command = vi.fn()
+    const contextKeyService = new ContextKeyService()
+    const widget = new AcpChatWidgetService(contextKeyService)
+    const setPromptContextTarget = vi.spyOn(widget, 'setPromptContextTarget')
+    const result = renderWithServices(<PromptInput session={session} handleRef={handleRef} />, {
+      ...opts,
+      contextKeyService,
+      widget,
+      commands: makeFakeCommandService({
+        [CapturePromptContextArgAction.ID]: (arg) => command(arg),
+      }),
+    })
+    return { command, setPromptContextTarget, ...result }
+  }
+
+  it('right-clicking an image chip opens the prompt menu with Copy Image and the image target', async () => {
+    disposables.push(registerAction2(CapturePromptContextArgAction))
+    disposables.push(registerAction2(CopyAcpImageAction))
+    const session = makeSession({ imageSupported: true })
+    const { command, setPromptContextTarget } = renderForMenu(session, makeHandleRef())
+    pasteImage(getTextarea(), makeImageFile())
+    const chip = await screen.findByTestId('acp-prompt-image-chip')
+
+    fireEvent.contextMenu(chip)
+
+    expect(setPromptContextTarget).toHaveBeenCalledWith('image')
+    // The Copy Image item gates on `acpPromptContextImage` — its presence
+    // proves both the context-key flip and the AcpPromptContext menu wiring.
+    expect(screen.getByText('Copy Image')).toBeTruthy()
+    fireEvent.click(screen.getByText('Capture Session Arg'))
+    expect(command).toHaveBeenCalledWith({
+      sessionId: 's1',
+      target: { kind: 'image', src: expect.stringContaining('data:image/png;base64,') },
+    })
+  })
+
+  it('right-clicking a ref pill opens the menu with Copy Reference and the reference text', async () => {
+    disposables.push(registerAction2(CapturePromptContextArgAction))
+    disposables.push(registerAction2(CopyAcpReferenceAction))
+    const session = makeSession({ id: 's1' })
+    const handleRef = makeHandleRef()
+    const { command, setPromptContextTarget } = renderForMenu(session, handleRef, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      fileSearch: makeFileSearch(['/repo/src/main.ts']),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '@')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    typeAt(ta, '@main')
+    act(() => handleRef.current.popoverAccept()) // accept mention → tracked pill
+    expect(ta.value).toContain('@src/main.ts')
+
+    // The pill spans offsets [0, 12); pin the hit test at offset 1 (column 2).
+    setTargetAtClientPoint({ lineNumber: 1, column: 2 })
+    fireEvent.contextMenu(ta)
+
+    expect(setPromptContextTarget).toHaveBeenCalledWith('ref')
+    expect(screen.getByText('Copy Reference')).toBeTruthy()
+    fireEvent.click(screen.getByText('Capture Session Arg'))
+    expect(command).toHaveBeenCalledWith({
+      sessionId: 's1',
+      target: { kind: 'text', text: URI.file('/repo/src/main.ts').fsPath },
+    })
+  })
+
+  it('right-clicking a selection-context chip opens the menu with Copy Text and the chip text', async () => {
+    disposables.push(registerAction2(CapturePromptContextArgAction))
+    disposables.push(registerAction2(CopyAcpContextTextAction))
+    const session = makeSession({ id: 's1' })
+    const context: SelectionContext = {
+      uri: 'file:///repo/src/a.ts',
+      relPath: 'src/a.ts',
+      text: 'const answer = 42',
+      startLine: 7,
+      endLine: 7,
+      languageId: 'typescript',
+    }
+    // Seed the draft cache so the chips render from the initial mount.
+    AcpPromptDraftCache.save('s1', { text: '', contexts: [context] })
+    const { command, setPromptContextTarget } = renderForMenu(session, makeHandleRef())
+    const chip = await screen.findByTestId('acp-selection-context-chip')
+
+    fireEvent.contextMenu(chip)
+
+    expect(setPromptContextTarget).toHaveBeenCalledWith('text')
+    // The Copy Text item gates on `acpPromptContextChipText`.
+    expect(screen.getByText('Copy Text')).toBeTruthy()
+    fireEvent.click(screen.getByText('Capture Session Arg'))
+    expect(command).toHaveBeenCalledWith({
+      sessionId: 's1',
+      target: { kind: 'text', text: 'const answer = 42' },
+    })
+  })
+
+  it('leaves right-click outside any pill untouched (no menu, default not prevented)', async () => {
+    disposables.push(registerAction2(CapturePromptContextArgAction))
+    const session = makeSession({ id: 's1' })
+    const handleRef = makeHandleRef()
+    const { setPromptContextTarget } = renderForMenu(session, handleRef, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      fileSearch: makeFileSearch(['/repo/src/main.ts']),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '@')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    typeAt(ta, '@main')
+    act(() => handleRef.current.popoverAccept())
+
+    // Past the pill (end-exclusive offset 12) and its trailing space.
+    setTargetAtClientPoint({ lineNumber: 1, column: 14 })
+    const notPrevented = fireEvent.contextMenu(ta)
+    expect(notPrevented).toBe(true)
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(setPromptContextTarget).not.toHaveBeenCalled()
+  })
+
+  it('does not open the menu when the hit test returns no position', () => {
+    disposables.push(registerAction2(CapturePromptContextArgAction))
+    const session = makeSession({ id: 's1' })
+    const { setPromptContextTarget } = renderForMenu(session, makeHandleRef())
+    setTargetAtClientPoint(null)
+    fireEvent.contextMenu(getTextarea())
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(setPromptContextTarget).not.toHaveBeenCalled()
   })
 })

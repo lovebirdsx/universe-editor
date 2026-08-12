@@ -16,6 +16,7 @@ import {
   ContextKeyService,
   IEditorGroupsService,
   type IEditorGroupsService as IEditorGroupsServiceType,
+  IEditorResolverService,
   IFileSearchService,
   IFileService,
   InstantiationService,
@@ -40,6 +41,7 @@ import type {
   AcpToolCall,
   AcpUsage,
   IAcpSession,
+  SelectionContext,
   TimelineItem,
 } from '../../../services/acp/session/acpSessionService.js'
 import { IAcpSessionService } from '../../../services/acp/session/acpSessionService.js'
@@ -229,10 +231,15 @@ function makeInstantiation(
     focusSessionInput: () => false,
     setHasSelection: () => {},
     setForkSupported: () => {},
+    setContextTarget: () => {},
     setPopoverOpen: () => {},
     setFindVisible: () => {},
     ...overrides.widget,
   } as unknown as IAcpChatWidgetService)
+  services.set(IEditorResolverService, {
+    _serviceBrand: undefined,
+    openEditor: () => Promise.resolve(undefined),
+  } as unknown as IEditorResolverService)
   services.set(IFileService, stubFileService)
   services.set(IFileSearchService, stubFileSearch)
   services.set(IWorkspaceService, stubWorkspaceService)
@@ -378,6 +385,153 @@ describe('ChatBody — click to focus a timeline item', () => {
 function scrollEl(container: HTMLElement): HTMLElement {
   return container.querySelector<HTMLElement>('[data-testid="acp-timeline"]')!.parentElement!
 }
+
+describe('ChatBody — context menu fragment targets', () => {
+  const CHIP_CONTEXT: SelectionContext = {
+    uri: 'file:///w/src/a.ts',
+    relPath: 'src/a.ts',
+    text: 'const x = 1',
+    startLine: 12,
+    endLine: 40,
+    languageId: 'typescript',
+  }
+
+  function makeUserMessage(id: string, text: string): AcpMessage {
+    return { id, role: 'user', text, blocks: [{ type: 'text', text }], streaming: false }
+  }
+
+  function renderWithCapture(session: IAcpSession, setContextTarget = vi.fn()) {
+    const command = vi.fn()
+    const inst = makeInstantiation(undefined, command, { widget: { setContextTarget } })
+    const result = render(
+      <ServicesContext.Provider value={inst}>
+        <ChatBody session={session} />
+      </ServicesContext.Provider>,
+    )
+    return { command, setContextTarget, ...result }
+  }
+
+  it('resolves an image block as an image target', () => {
+    const disposable = registerAction2(CaptureChatContextArgAction)
+    try {
+      const src = 'data:image/png;base64,QUJD'
+      const items: readonly TimelineItem[] = [
+        {
+          kind: 'message',
+          id: 'a',
+          message: {
+            id: 'a',
+            role: 'agent',
+            text: '',
+            blocks: [{ type: 'image', data: 'QUJD', mimeType: 'image/png' }],
+            streaming: false,
+          },
+        },
+      ]
+      const { container, getByText, command, setContextTarget } = renderWithCapture(
+        makeSession('s-menu', items),
+      )
+
+      fireEvent.contextMenu(container.querySelector('[data-testid="acp-image-block"]')!)
+      fireEvent.click(getByText('Capture Session Arg'))
+
+      expect(setContextTarget).toHaveBeenCalledWith('image')
+      expect(command).toHaveBeenCalledWith(CaptureChatContextArgAction.ID, {
+        sessionId: 's-menu',
+        target: { kind: 'image', src },
+      })
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  it('resolves a resource link as a path target', () => {
+    const disposable = registerAction2(CaptureChatContextArgAction)
+    try {
+      const items: readonly TimelineItem[] = [
+        {
+          kind: 'message',
+          id: 'a',
+          message: {
+            id: 'a',
+            role: 'agent',
+            text: '',
+            blocks: [{ type: 'resource_link', uri: 'file:///w/src/a.ts', name: 'a.ts' }],
+            streaming: false,
+          },
+        },
+      ]
+      const { container, getByText, command, setContextTarget } = renderWithCapture(
+        makeSession('s-menu', items),
+      )
+
+      fireEvent.contextMenu(container.querySelector('[data-testid="acp-resource-link"]')!)
+      fireEvent.click(getByText('Capture Session Arg'))
+
+      expect(setContextTarget).toHaveBeenCalledWith('path')
+      expect(command).toHaveBeenCalledWith(CaptureChatContextArgAction.ID, {
+        sessionId: 's-menu',
+        target: { kind: 'path', uri: 'file:///w/src/a.ts' },
+      })
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  it('resolves a selection-context chip as a text target', () => {
+    const disposable = registerAction2(CaptureChatContextArgAction)
+    try {
+      // The first user message renders in the StickyUserMessageBar (outside the
+      // scroll container that owns the context-menu handler), so the chip lives
+      // on a follow-up user message.
+      const items: readonly TimelineItem[] = [
+        { kind: 'message', id: 'u1', message: makeUserMessage('u1', 'first') },
+        { kind: 'message', id: 'a1', message: makeMessage('a1', 'answer') },
+        {
+          kind: 'message',
+          id: 'u2',
+          message: { ...makeUserMessage('u2', 'follow up'), selectionContexts: [CHIP_CONTEXT] },
+        },
+      ]
+      const { container, getByText, command, setContextTarget } = renderWithCapture(
+        makeSession('s-menu', items),
+      )
+
+      fireEvent.contextMenu(container.querySelector('[data-testid="acp-selection-context-chip"]')!)
+      fireEvent.click(getByText('Capture Session Arg'))
+
+      expect(setContextTarget).toHaveBeenCalledWith('text')
+      expect(command).toHaveBeenCalledWith(CaptureChatContextArgAction.ID, {
+        sessionId: 's-menu',
+        target: { kind: 'text', text: CHIP_CONTEXT.text },
+      })
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  it('clears the fragment keys when the cursor is on plain text', () => {
+    const disposable = registerAction2(CaptureChatContextArgAction)
+    try {
+      const items: readonly TimelineItem[] = [
+        { kind: 'message', id: 'a', message: makeMessage('a', 'plain') },
+      ]
+      const { container, getByText, command, setContextTarget } = renderWithCapture(
+        makeSession('s-menu', items),
+      )
+
+      fireEvent.contextMenu(slotEl(container, 'm:a'))
+      fireEvent.click(getByText('Capture Session Arg'))
+
+      expect(setContextTarget).toHaveBeenCalledWith(undefined)
+      expect(command).toHaveBeenCalledWith(CaptureChatContextArgAction.ID, {
+        sessionId: 's-menu',
+      })
+    } finally {
+      disposable.dispose()
+    }
+  })
+})
 
 // Drives the content-growth ResizeObserver: happy-dom's built-in RO never emits,
 // so a test captures each live observer's callback + observed node and fires it

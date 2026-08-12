@@ -57,6 +57,7 @@ export function SelectionContextChips({
             className={styles['contextChip']}
             data-testid="acp-selection-context-chip"
             data-tooltip={`${label}\n\n${ctx.text}`}
+            data-context-text={ctx.text}
             onClick={() => onReveal(ctx)}
           >
             <FileCode size={12} strokeWidth={1.75} aria-hidden="true" />

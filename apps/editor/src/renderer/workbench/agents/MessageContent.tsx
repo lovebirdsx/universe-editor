@@ -197,6 +197,7 @@ function ResourceLink({
       onClick={onClick}
       disabled={!isFile}
       data-tooltip={description ?? uri}
+      data-uri={uri}
       data-testid="acp-resource-link"
     >
       <span className={styles['resourceIcon']} aria-hidden>

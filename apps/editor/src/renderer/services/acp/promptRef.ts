@@ -21,7 +21,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { ContentBlock } from '@agentclientprotocol/sdk'
-import { generateUuid, localize } from '@universe-editor/platform'
+import { generateUuid, localize, URI } from '@universe-editor/platform'
 import type { ContextSuggestionItem } from './contextSuggestions.js'
 
 export type PromptRefKind =
@@ -223,6 +223,24 @@ export function composePromptBlocksFromRefs(
   }
   if (cursor < text.length) blocks.push({ type: 'text', text: text.slice(cursor) })
   return blocks
+}
+
+/**
+ * Plain-text clipboard payload for a ref: `text` blocks pass through verbatim,
+ * a `resource_link` degrades to its fs path (falling back to the raw uri when
+ * it doesn't parse as one).
+ */
+export function refCopyText(ref: PromptRef): string {
+  const block = composeRefBlock(ref)
+  if (block.type === 'text') return block.text
+  if (block.type === 'resource_link') {
+    try {
+      return URI.parse(block.uri).fsPath
+    } catch {
+      return block.uri
+    }
+  }
+  return ref.label
 }
 
 // A symbol suggestion's `description` already bakes in `:line` for display, but

@@ -25,10 +25,12 @@ import {
   useState,
   type FormEvent,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type MutableRefObject,
 } from 'react'
 import {
   CancellationTokenSource,
+  ICommandService,
   IConfigurationService,
   IContextKeyService,
   IFileDialogService,
@@ -40,6 +42,7 @@ import {
   IEditorService,
   IInstantiationService,
   INotificationService,
+  MenuId,
   Severity,
   generateUuid,
   localize,
@@ -81,7 +84,13 @@ import {
   type ContextSuggestionItem,
 } from '../../services/acp/contextSuggestions.js'
 import { CommitRefPicker } from '../../services/acp/commitRefPicker.js'
-import { mentionEntryToRef, suggestionItemToRef } from '../../services/acp/promptRef.js'
+import {
+  mentionEntryToRef,
+  refCopyText,
+  suggestionItemToRef,
+} from '../../services/acp/promptRef.js'
+import type { AcpContextMenuTarget } from '../../services/acp/chatContextTarget.js'
+import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
 import {
   collectActiveSelectionContexts,
   formatSelectionLabel,
@@ -95,6 +104,7 @@ import { MentionPopover } from './MentionPopover.js'
 import { ContextPopover, type ContextPopoverEntry } from './ContextPopover.js'
 import { SelectionContextChips } from './SelectionContextChips.js'
 import { PromptImageChips } from './PromptImageChips.js'
+import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
 import {
   PromptMonacoEditor,
   type PromptEditorHandle,
@@ -167,6 +177,9 @@ export function PromptInput({
     refs: AcpPromptDraftCache.load(session.id)?.refs ?? [],
   })
   const [dropActive, setDropActive] = useState(false)
+  // Prompt-area context menu (Copy Image on attachment chips, Copy Reference
+  // on @/# pills) — separate MenuId from the timeline's menu.
+  const [ctxMenu, setCtxMenu] = useState<AgentChatContextMenuState | null>(null)
   const [slashIndex, setSlashIndex] = useState(0)
   const [mentionIndex, setMentionIndex] = useState(0)
   const [hashIndex, setHashIndex] = useState(0)
@@ -234,6 +247,8 @@ export function PromptInput({
   const fileService = useService(IFileService)
   const contextKeyService = useService(IContextKeyService)
   const hostService = useService(IHostService)
+  const commandService = useService(ICommandService)
+  const widgetService = useService(IAcpChatWidgetService)
   const workspaceRoot = workspace.current?.folder
 
   const status = useObservable(session.status)
@@ -1107,6 +1122,50 @@ export function PromptInput({
     return true
   }
 
+  // Right-click in the prompt area: attachment image chips, selection-context
+  // chips and @/# ref pills get their own copy menu (MenuId.AcpPromptContext).
+  // Anything else falls
+  // through untouched — no preventDefault — so the enclosing ChatBody's
+  // timeline menu (or native behaviour) still applies. Monaco's own menu is
+  // already disabled (`contextmenu: false`), so the event bubbles up here.
+  const onPromptContextMenu = (e: ReactMouseEvent): void => {
+    const el = e.target as HTMLElement
+    // The chip testid lands on the <img> itself (ChatImage); the querySelector
+    // fallback keeps the lookup robust if that ever moves to a wrapper.
+    const imageChip = el.closest('[data-testid="acp-prompt-image-chip"]')
+    const contextChip = el.closest('[data-testid="acp-selection-context-chip"]')
+    // The menu kind comes from the hit source, not target.kind: ref pills also
+    // carry kind:'text' (their copy text is pre-resolved via refCopyText).
+    let target: AcpContextMenuTarget | undefined
+    let menuKind: 'image' | 'text' | 'ref' | undefined
+    if (imageChip) {
+      const src =
+        imageChip.getAttribute('src') ?? imageChip.querySelector('img')?.getAttribute('src')
+      if (src) {
+        target = { kind: 'image', src }
+        menuKind = 'image'
+      }
+    } else if (contextChip) {
+      const text = contextChip.getAttribute('data-context-text')
+      if (text) {
+        target = { kind: 'text', text }
+        menuKind = 'text'
+      }
+    } else {
+      const ref = editorHandleRef.current?.refAtClientPoint(e.clientX, e.clientY)
+      if (ref) {
+        target = { kind: 'text', text: refCopyText(ref) }
+        menuKind = 'ref'
+      }
+    }
+    if (!target || !menuKind) return
+    e.preventDefault()
+    // Keep ChatBody's timeline context menu from opening on top of ours.
+    e.stopPropagation()
+    widgetService.setPromptContextTarget(menuKind)
+    setCtxMenu({ x: e.clientX, y: e.clientY, args: [{ sessionId: session.id, target }] })
+  }
+
   const onPromptDragOver = (e: React.DragEvent<HTMLDivElement>): void => {
     if (!dragContainsResources(e.dataTransfer)) return
     e.preventDefault()
@@ -1295,7 +1354,7 @@ export function PromptInput({
   }, [onPromptPaste])
 
   return (
-    <form className={styles['promptForm']} onSubmit={submit}>
+    <form className={styles['promptForm']} onSubmit={submit} onContextMenu={onPromptContextMenu}>
       <SelectionContextChips
         contexts={contexts}
         onRemove={(i) => setContexts((prev) => prev.filter((_, idx) => idx !== i))}
@@ -1389,6 +1448,18 @@ export function PromptInput({
           }}
         />
       </div>
+      {ctxMenu && (
+        <AgentChatContextMenu
+          menuId={MenuId.AcpPromptContext}
+          state={ctxMenu}
+          commandService={commandService}
+          contextKeyService={contextKeyService}
+          onClose={() => {
+            setCtxMenu(null)
+            widgetService.setPromptContextTarget(undefined)
+          }}
+        />
+      )}
     </form>
   )
 }

@@ -8,17 +8,21 @@
 
 import {
   Action2,
+  IHostService,
   ILayoutService,
   IViewDescriptorService,
   IViewsService,
   MenuId,
   PartId,
+  URI,
   ViewContainerLocation,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
+import { readContextTarget } from '../services/acp/chatContextTarget.js'
+import { toPngBase64 } from '../services/acp/promptImage.js'
 import { ACP_NAV_WHEN, ACP_SCOPED_KEY_WEIGHT, CATEGORY, resolveNavWidget } from './_agentShared.js'
 
 // ---------------------------------------------------------------------------
@@ -595,5 +599,109 @@ export class CopySelectedTextAction extends Action2 {
   override async run(): Promise<void> {
     const text = window.getSelection()?.toString()
     if (text) await navigator.clipboard.writeText(text)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fragment-targeted copy actions. The timeline context menu (and the prompt
+// input's attachment-chip menu) resolves the fragment under the cursor into a
+// typed target carried on the menu args; each action gates on its own
+// contextKey so exactly one shows per fragment kind. No keybindings, no f1 —
+// these exist only as context-menu entries.
+// ---------------------------------------------------------------------------
+
+export class CopyAcpImageAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.copyImage'
+  constructor() {
+    super({
+      id: CopyAcpImageAction.ID,
+      title: localize2('action.agent.copyImage', 'Copy Image'),
+      category: CATEGORY,
+      menu: [
+        { id: MenuId.AcpChatContext, group: '1_copy', order: 2, when: 'acpChatContextImage' },
+        { id: MenuId.AcpPromptContext, group: '1_copy', order: 1, when: 'acpPromptContextImage' },
+      ],
+    })
+  }
+  override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
+    const target = readContextTarget(arg)
+    if (target?.kind !== 'image') return
+    // Snapshot before the first await — the accessor dies past it.
+    const hostService = accessor.get(IHostService)
+    try {
+      const base64 = await toPngBase64(target.src)
+      await hostService.writeClipboardImage(base64)
+    } catch (err) {
+      // Best-effort, same as the ChatImage preview overlay's copy button.
+      console.warn('[acp] copy image failed', err)
+    }
+  }
+}
+
+export class CopyAcpResourcePathAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.copyResourcePath'
+  constructor() {
+    super({
+      id: CopyAcpResourcePathAction.ID,
+      title: localize2('action.agent.copyResourcePath', 'Copy Path'),
+      category: CATEGORY,
+      menu: [{ id: MenuId.AcpChatContext, group: '1_copy', order: 3, when: 'acpChatContextPath' }],
+    })
+  }
+  override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
+    const target = readContextTarget(arg)
+    if (target?.kind !== 'path') return
+    let text = target.uri
+    try {
+      const parsed = URI.parse(target.uri)
+      if (parsed.scheme === 'file') text = parsed.fsPath
+    } catch {
+      // Malformed agent output — fall back to the raw uri string.
+    }
+    await navigator.clipboard.writeText(text)
+  }
+}
+
+export class CopyAcpContextTextAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.copyContextText'
+  constructor() {
+    super({
+      id: CopyAcpContextTextAction.ID,
+      title: localize2('action.agent.copyContextText', 'Copy Text'),
+      category: CATEGORY,
+      menu: [
+        { id: MenuId.AcpChatContext, group: '1_copy', order: 4, when: 'acpChatContextChipText' },
+        {
+          id: MenuId.AcpPromptContext,
+          group: '1_copy',
+          order: 3,
+          when: 'acpPromptContextChipText',
+        },
+      ],
+    })
+  }
+  override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
+    const target = readContextTarget(arg)
+    if (target?.kind !== 'text') return
+    await navigator.clipboard.writeText(target.text)
+  }
+}
+
+export class CopyAcpReferenceAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.copyReference'
+  constructor() {
+    super({
+      id: CopyAcpReferenceAction.ID,
+      title: localize2('action.agent.copyReference', 'Copy Reference'),
+      category: CATEGORY,
+      menu: [
+        { id: MenuId.AcpPromptContext, group: '1_copy', order: 2, when: 'acpPromptContextRef' },
+      ],
+    })
+  }
+  override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
+    const target = readContextTarget(arg)
+    if (target?.kind !== 'text') return
+    await navigator.clipboard.writeText(target.text)
   }
 }

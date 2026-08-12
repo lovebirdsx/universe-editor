@@ -28,6 +28,7 @@ import {
 import { createPortal } from 'react-dom'
 import { Check, Copy, X } from 'lucide-react'
 import { IHostService, localize } from '@universe-editor/platform'
+import { toPngBase64 } from '../../services/acp/promptImage.js'
 import { useOptionalService } from '../useService.js'
 import styles from './agents.module.css'
 
@@ -440,25 +441,4 @@ function ImagePreviewPopover({
 
 function clamp(v: number, min: number, max: number): number {
   return v < min ? min : v > max ? max : v
-}
-
-/** Turn an image `src` (a `data:` URI or a fetchable URL) into raw base64 PNG
- *  bytes for the host clipboard: strip the `data:` prefix when already a PNG
- *  data URI, otherwise fetch/decode and re-encode via a canvas. */
-async function toPngBase64(src: string): Promise<string> {
-  const pngPrefix = 'data:image/png;base64,'
-  if (src.startsWith(pngPrefix)) {
-    return src.slice(pngPrefix.length)
-  }
-  const blob = await (await fetch(src)).blob()
-  const bitmap = await createImageBitmap(blob)
-  const canvas = document.createElement('canvas')
-  canvas.width = bitmap.width
-  canvas.height = bitmap.height
-  const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('2d context unavailable')
-  ctx.drawImage(bitmap, 0, 0)
-  bitmap.close()
-  const dataUrl = canvas.toDataURL('image/png')
-  return dataUrl.slice(dataUrl.indexOf(',') + 1)
 }

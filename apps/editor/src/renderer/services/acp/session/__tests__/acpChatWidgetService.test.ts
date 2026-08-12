@@ -267,6 +267,58 @@ describe('AcpChatWidgetService', () => {
     expect(cks.get('acpChatTurnRunning')).toBe(false)
   })
 
+  it('setContextTarget flips the acpChatContext* group as a set', () => {
+    expect(cks.get('acpChatContextImage')).toBe(false)
+    expect(cks.get('acpChatContextPath')).toBe(false)
+    expect(cks.get('acpChatContextChipText')).toBe(false)
+
+    svc.setContextTarget('image')
+    expect(cks.get('acpChatContextImage')).toBe(true)
+    expect(cks.get('acpChatContextPath')).toBe(false)
+    expect(cks.get('acpChatContextChipText')).toBe(false)
+
+    svc.setContextTarget('path')
+    expect(cks.get('acpChatContextImage')).toBe(false)
+    expect(cks.get('acpChatContextPath')).toBe(true)
+    expect(cks.get('acpChatContextChipText')).toBe(false)
+
+    svc.setContextTarget('text')
+    expect(cks.get('acpChatContextImage')).toBe(false)
+    expect(cks.get('acpChatContextPath')).toBe(false)
+    expect(cks.get('acpChatContextChipText')).toBe(true)
+
+    svc.setContextTarget(undefined)
+    expect(cks.get('acpChatContextImage')).toBe(false)
+    expect(cks.get('acpChatContextPath')).toBe(false)
+    expect(cks.get('acpChatContextChipText')).toBe(false)
+  })
+
+  it('setPromptContextTarget flips the acpPromptContext* group as a set', () => {
+    expect(cks.get('acpPromptContextImage')).toBe(false)
+    expect(cks.get('acpPromptContextRef')).toBe(false)
+    expect(cks.get('acpPromptContextChipText')).toBe(false)
+
+    svc.setPromptContextTarget('image')
+    expect(cks.get('acpPromptContextImage')).toBe(true)
+    expect(cks.get('acpPromptContextRef')).toBe(false)
+    expect(cks.get('acpPromptContextChipText')).toBe(false)
+
+    svc.setPromptContextTarget('ref')
+    expect(cks.get('acpPromptContextImage')).toBe(false)
+    expect(cks.get('acpPromptContextRef')).toBe(true)
+    expect(cks.get('acpPromptContextChipText')).toBe(false)
+
+    svc.setPromptContextTarget('text')
+    expect(cks.get('acpPromptContextImage')).toBe(false)
+    expect(cks.get('acpPromptContextRef')).toBe(false)
+    expect(cks.get('acpPromptContextChipText')).toBe(true)
+
+    svc.setPromptContextTarget(undefined)
+    expect(cks.get('acpPromptContextImage')).toBe(false)
+    expect(cks.get('acpPromptContextRef')).toBe(false)
+    expect(cks.get('acpPromptContextChipText')).toBe(false)
+  })
+
   it('disposing the service detaches listeners', () => {
     const a = makeWidget('a')
     svc.register(a.widget)

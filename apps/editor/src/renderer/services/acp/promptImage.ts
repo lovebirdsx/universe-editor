@@ -46,6 +46,63 @@ export function isSupportedImageMime(mimeType: string): boolean {
   return SUPPORTED_IMAGE_MIME.includes(mimeType)
 }
 
+/** Decoded parts of a base64 `data:` URI. */
+export interface ParsedDataUri {
+  /** The media type, e.g. `image/jpeg`. Empty when the URI omits it. */
+  readonly mimeType: string
+  /** The decoded payload bytes. */
+  readonly bytes: Uint8Array
+}
+
+/**
+ * Decode a base64 `data:<mime>;base64,<payload>` URI without touching the
+ * network. Pure — returns `undefined` for anything that is not a base64 data
+ * URI (the caller falls back to fetch for real URLs). The renderer CSP's
+ * `connect-src` does not allow `data:`, so `fetch(dataUri)` is blocked; this
+ * path keeps data URIs working without loosening the CSP.
+ */
+export function parseDataUri(src: string): ParsedDataUri | undefined {
+  const match = /^data:([^,]*?),(.*)$/s.exec(src)
+  if (!match) return undefined
+  const [meta, payload] = [match[1]!, match[2]!]
+  if (!/(?:^|;)base64$/i.test(meta)) return undefined
+  if (payload.length === 0) return undefined
+  const mimeType = meta.slice(0, meta.length - ';base64'.length)
+  let bytes: Uint8Array
+  try {
+    const binary = atob(payload)
+    bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0))
+  } catch {
+    return undefined
+  }
+  return { mimeType, bytes }
+}
+
+/** Turn an image `src` (a `data:` URI or a fetchable URL) into raw base64 PNG
+ *  bytes for the host clipboard: strip the `data:` prefix when already a PNG
+ *  data URI, decode other data URIs in-process, otherwise fetch/decode and
+ *  re-encode via a canvas. */
+export async function toPngBase64(src: string): Promise<string> {
+  const pngPrefix = 'data:image/png;base64,'
+  if (src.startsWith(pngPrefix)) {
+    return src.slice(pngPrefix.length)
+  }
+  const parsed = parseDataUri(src)
+  const blob = parsed
+    ? new Blob([parsed.bytes as Uint8Array<ArrayBuffer>], { type: parsed.mimeType })
+    : await (await fetch(src)).blob()
+  const bitmap = await createImageBitmap(blob)
+  const canvas = document.createElement('canvas')
+  canvas.width = bitmap.width
+  canvas.height = bitmap.height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('2d context unavailable')
+  ctx.drawImage(bitmap, 0, 0)
+  bitmap.close()
+  const dataUrl = canvas.toDataURL('image/png')
+  return dataUrl.slice(dataUrl.indexOf(',') + 1)
+}
+
 export type ImageRejectReason = 'unsupported-type' | 'too-large' | 'too-many'
 
 /**

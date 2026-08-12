@@ -17,13 +17,22 @@ interface Props {
   readonly state: AgentChatContextMenuState
   readonly commandService: ICommandService
   readonly contextKeyService?: IContextKeyService
+  /** Menu to populate from — defaults to the timeline menu; the prompt input's
+   *  attachment chips use `MenuId.AcpPromptContext` instead. */
+  readonly menuId?: MenuId
   readonly onClose: () => void
 }
 
-export function AgentChatContextMenu({ state, commandService, contextKeyService, onClose }: Props) {
+export function AgentChatContextMenu({
+  state,
+  commandService,
+  contextKeyService,
+  menuId,
+  onClose,
+}: Props) {
   return (
     <ContextMenu
-      menuId={MenuId.AcpChatContext}
+      menuId={menuId ?? MenuId.AcpChatContext}
       anchor={{ x: state.x, y: state.y }}
       {...(state.args !== undefined ? { args: state.args } : {})}
       commandService={commandService}
