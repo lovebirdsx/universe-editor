@@ -14,13 +14,23 @@ import {
   IpcChannelDisposedError,
   type IAiModelService,
   type ICommandService,
+  type IConfigurationChangeEvent,
+  type IConfigurationService,
   type IDialogService,
+  type IEditorGroupsService,
   type IEditorService,
+  type IFileDialogService,
+  type IFileSearchService,
   type IFileService,
+  type IFileWatcherService,
+  type IHostService,
+  type IInstantiationService,
   type ILayoutService,
   type ILoggerService,
   type INotificationService,
+  type IOpenerService,
   type IOutputService,
+  type IProgressService,
   type IQuickInputService,
   type IStatusBarService,
   type IStorageService,
@@ -34,6 +44,7 @@ import type { IExtensionHostService } from '../../../../shared/ipc/extensionHost
 import type { IExtensionManagementService } from '../../../../shared/ipc/extensionManagementService.js'
 import type { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeaturesService.js'
 import type { IAcpPathPolicy } from '../../acp/acpPathPolicy.js'
+import type { IExcludeService } from '../../exclude/ExcludeService.js'
 import type { IScmService } from '../ScmService.js'
 import type { ITimelineService } from '../../timeline/TimelineService.js'
 import type { IWebviewService } from '../WebviewService.js'
@@ -55,6 +66,8 @@ const CONTRIBUTIONS: IExtensionDescriptionDto[] = [
 // drive the restart path without prototype-chain spying on inherited Disposable.dispose.
 const disposed: string[] = []
 const activationCalls: string[] = []
+/** Keys pushed via `$acceptConfigurationChanged`, per push, across all fakes. */
+const configPushes: string[][] = []
 /** Handle whose first `$activateByEvent` stays pending until released (or disposed). */
 let holdActivationFor: string | undefined
 const activatedOnce = new Set<string>()
@@ -88,7 +101,12 @@ vi.mock('../HostConnection.js', () => {
         return Promise.resolve()
       }),
       $initializeWorkspaceTrust: vi.fn().mockResolvedValue(undefined),
+      $initializeEnvironment: vi.fn().mockResolvedValue(undefined),
       $onDidGrantWorkspaceTrust: vi.fn().mockResolvedValue(undefined),
+      $acceptConfigurationChanged: vi.fn().mockImplementation((keys: readonly string[]) => {
+        configPushes.push([...keys])
+        return Promise.resolve()
+      }),
     }
     constructor(kind: string, handle: string, workspaceRoot?: string) {
       this.kind = kind
@@ -146,6 +164,7 @@ function makeServiceWith(
     builtinIds?: string[]
     installedIds?: string[]
   },
+  configChange: Event<IConfigurationChangeEvent> = Event.None,
 ) {
   const nullLogger = {
     info: vi.fn(),
@@ -209,6 +228,20 @@ function makeServiceWith(
       workspaceTrustInitialized: Promise.resolve(),
       isWorkspaceTrusted: () => true,
     } as unknown as IWorkspaceTrustManagementService,
+    {
+      getVersionInfo: vi
+        .fn()
+        .mockResolvedValue({ productName: 'Universe Editor', version: '0.0.0' }),
+    } as unknown as IHostService,
+    { open: vi.fn().mockResolvedValue(false) } as unknown as IOpenerService,
+    {} as IProgressService,
+    {} as IFileDialogService,
+    {} as IEditorGroupsService,
+    {} as IInstantiationService,
+    { onDidChangeConfiguration: configChange } as unknown as IConfigurationService,
+    {} as IFileSearchService,
+    {} as IExcludeService,
+    {} as IFileWatcherService,
   )
 }
 
@@ -447,6 +480,38 @@ describe('ExtensionHostClientService', () => {
     expect(host.start).toHaveBeenCalledOnce()
     expect(host.stop).not.toHaveBeenCalled()
     expect(disposed).toHaveLength(0)
+
+    svc.dispose()
+  })
+
+  it('forwards configuration changes to the live host only', async () => {
+    // `workspace.onDidChangeConfiguration`: renderer config changes are pushed to
+    // the host with the changed keys; changes before a connection exists are lost
+    // (the host re-reads current values on (re)start anyway).
+    configPushes.length = 0
+    const host = fakeHost()
+    const configChange = new Emitter<IConfigurationChangeEvent>()
+    const svc = makeServiceWith(
+      host,
+      vi.fn(),
+      Event.None,
+      Event.None,
+      { current: undefined },
+      undefined,
+      configChange.event,
+    )
+
+    // No host yet — dropped silently.
+    configChange.fire({ keys: ['early.key'], affectsConfiguration: () => true })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(configPushes).toEqual([])
+
+    await svc.start()
+    configChange.fire({
+      keys: ['editor.fontSize', 'files.exclude'],
+      affectsConfiguration: () => true,
+    })
+    await vi.waitFor(() => expect(configPushes).toEqual([['editor.fontSize', 'files.exclude']]))
 
     svc.dispose()
   })

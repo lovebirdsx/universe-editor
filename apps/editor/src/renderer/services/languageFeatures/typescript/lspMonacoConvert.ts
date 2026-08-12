@@ -21,6 +21,8 @@ import type {
   DocumentSymbol,
   FoldingRange,
   Hover,
+  InlayHint,
+  InlayHintLabelPart,
   Location,
   LocationLink,
   Position,
@@ -54,6 +56,14 @@ export function textEditsToMonaco(edits: TextEdit[] | null): monaco.languages.Te
 /** Monaco 1-based position → LSP 0-based position. */
 export function monacoPositionToLsp(p: monaco.IPosition): Position {
   return { line: p.lineNumber - 1, character: p.column - 1 }
+}
+
+/** Monaco 1-based range → LSP 0-based range. */
+export function monacoRangeToLsp(r: monaco.IRange): Range {
+  return {
+    start: { line: r.startLineNumber - 1, character: r.startColumn - 1 },
+    end: { line: r.endLineNumber - 1, character: r.endColumn - 1 },
+  }
 }
 
 /** LSP SymbolKind (1-based) → Monaco SymbolKind (0-based) — a simple offset. */
@@ -680,4 +690,48 @@ export function resolvedCodeLensToMonaco(
 ): monaco.languages.CodeLens {
   if (!resolved?.command) return original
   return { ...original, command: commandToMonaco(resolved.command, monacoNs) }
+}
+
+/** LSP InlayHintLabelPart (field `value`) → Monaco InlayHintLabelPart (field `label`). */
+function inlayHintLabelPartToMonaco(
+  part: InlayHintLabelPart,
+  monacoNs: typeof monaco,
+): monaco.languages.InlayHintLabelPart {
+  const tooltip = documentationToMonaco(part.tooltip)
+  return {
+    label: part.value,
+    ...(tooltip !== undefined ? { tooltip } : {}),
+    ...(part.location ? { location: locationToMonaco(part.location, monacoNs) } : {}),
+    ...(part.command ? { command: commandToMonaco(part.command, monacoNs) } : {}),
+  }
+}
+
+/**
+ * LSP InlayHint[] → Monaco InlayHintList. Kinds share the LSP/Monaco numeric
+ * values (1 = Type, 2 = Parameter), so the kind passes through with a cast. The
+ * LSP `data` field (the resolve-request payload) is dropped — hints are one-shot
+ * this iteration, their label/tooltip arrive complete.
+ */
+export function inlayHintsToMonaco(
+  hints: InlayHint[] | null,
+  monacoNs: typeof monaco,
+): monaco.languages.InlayHintList {
+  if (!hints) return { hints: [], dispose: () => undefined }
+  return {
+    hints: hints.map((h) => {
+      const tooltip = documentationToMonaco(h.tooltip)
+      return {
+        position: { lineNumber: h.position.line + 1, column: h.position.character + 1 },
+        label: Array.isArray(h.label)
+          ? h.label.map((p) => inlayHintLabelPartToMonaco(p, monacoNs))
+          : h.label,
+        ...(h.kind !== undefined ? { kind: h.kind as monaco.languages.InlayHintKind } : {}),
+        ...(tooltip !== undefined ? { tooltip } : {}),
+        ...(h.textEdits ? { textEdits: h.textEdits.map(textEditToMonaco) } : {}),
+        ...(h.paddingLeft !== undefined ? { paddingLeft: h.paddingLeft } : {}),
+        ...(h.paddingRight !== undefined ? { paddingRight: h.paddingRight } : {}),
+      }
+    }),
+    dispose: () => undefined,
+  }
 }

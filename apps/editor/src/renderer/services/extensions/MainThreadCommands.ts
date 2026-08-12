@@ -73,6 +73,10 @@ export class MainThreadCommands extends Disposable implements IMainThreadCommand
     return Promise.resolve()
   }
 
+  $getCommands(): Promise<string[]> {
+    return Promise.resolve([...CommandsRegistry.getCommands().keys()])
+  }
+
   $executeCommand(id: string, args: unknown[]): Promise<unknown> {
     if (!isHostInvokableCommand(id)) {
       return Promise.reject(

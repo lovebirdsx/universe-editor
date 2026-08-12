@@ -115,6 +115,74 @@
 
 - `0.7.1` — patch：无 API 表面改动（仅注释/内部实现修正），契约测试快照不变。
 
+- `0.8.0` — 新增 manifest 贡献点 `contributes.mcpServers`（由 `c98dea28` 引入）：
+  扩展在 `package.json` 里声明式注册 MCP server，替代以往在 settings.json 手写
+  `ai.mcpServers` 的配置方式；宿主在激活时收集各扩展的声明并注入 ACP 会话。
+  `extension-api` 的导出表面本身无变化，版本 bump 供使用该贡献点的扩展把
+  `engines.universe` 下界抬到 `>=0.8.0`。
+
+- `0.9.0` — 大批向后兼容的新增（minor），对标 `vscode.d.ts` 补齐通用表面。
+  除注明外均为纯新增，不改既有签名：
+  - 工具类（纯本地实现，不过 RPC）：`Disposable` 由 interface 变为 class——新增
+    `constructor(callOnDispose)` 与 `static from(...)`，dispose 幂等；保持结构兼容，
+    任何实现 `dispose(): void` 的对象字面量仍满足该类型，既有代码无需改动。新增
+    `EventEmitter<T>`、`CancellationTokenSource`（配既有 `Event` / `CancellationToken`
+    类型）与 `Uri`（`file` / `parse` / `from` / `joinPath` / `fsPath` / `toString` /
+    `toJSON`，`UriComponents` 可 JSON 序列化直达 RPC）。
+  - 新 namespace `env`：`appName` / `appVersion` / `language` / `sessionId` /
+    `uriScheme` 只读属性，`clipboard.readText` / `writeText`（纯文本），
+    `openExternal(target)`（http(s) 走系统浏览器，file URI/路径在工作台打开）。
+  - 新 namespace `extensions`：`all` / `getExtension(id)` / `onDidChange` +
+    `Extension<T>` 接口（`isActive` / `exports` 为实时视图，`activate()` 可触发
+    激活）。注意：本产品通过重启扩展宿主应用扩展的装/卸/启停，单个宿主生命周期内
+    集合固定，`onDidChange` 不会 fire。
+  - `commands.getCommands(filterInternal?)`：列出全部已注册命令 id；
+    `filterInternal` 为真时排除下划线前缀的内部命令。
+  - `window`：
+    - `withProgress(options, task)` + `ProgressLocation` 枚举 + `ProgressOptions` /
+      `Progress`：`cancellable` 时 UI 提供取消控件并翻转 task 的 token；
+      `ProgressLocation.SourceControl` 当前按 `Window` 渲染。
+    - `setStatusBarMessage` 三重载（Disposable / 超时自动隐藏 / Promise settle 自动
+      隐藏）。每次调用相互独立，不是 VSCode 的消息栈。
+    - `showOpenDialog` / `showSaveDialog` + `OpenDialogOptions` / `SaveDialogOptions`：
+      当前对话框实现为单选（`canSelectMany` 仅为兼容保留，结果至多一个 Uri），
+      `filters` 不过滤列出的条目。
+    - `showTextDocument(target, options?)` + `TextDocumentShowOptions`
+      （`preserveFocus` / `preview` / `selection`）。
+    - `onDidChangeTextEditorSelection` + `TextEditorSelectionChangeKind` 枚举 +
+      `TextEditorSelectionChangeEvent`：防抖派发（一波输入只投递最新选区一次）；
+      后台编辑器的选区变化不触发；程序化 `setSelections` 时 `kind` 为 undefined。
+  - `workspace`：
+    - `openTextDocument(target)`：按 Uri/路径打开文档进编辑器文档模型（不显示），
+      已打开的复用不重读磁盘；返回的文档与编辑器共用实时镜像，跟踪后续编辑。
+    - `workspaceFolders` / `name` / `asRelativePath` + `WorkspaceFolder`：
+      单文件夹模型，`workspaceFolders` 至多一项且 `index` 恒为 0。
+    - `findFiles(include, exclude?, maxResults?, token?)`：返回 `Uri[]`；glob 仅
+      支持 string（无 RelativePattern）；`exclude` 省略用配置排除项、传 `null`
+      完全不排除；取消为 best-effort——跨 RPC 不中止在途搜索，迟到结果被丢弃并
+      以空列表 resolve。
+    - `onDidSaveTextDocument`：当前仅文件编辑器的保存路径会触发。
+    - `applyEdit(edit)`：仅支持文本编辑；含文件级 create/rename/delete 操作的
+      `WorkspaceEdit` 整体被拒绝（resolve false）。
+    - `onDidChangeConfiguration` + `ConfigurationChangeEvent`
+      （`affectsConfiguration(section)` 前缀匹配）。扩展宿主重启期间的配置变更
+      会丢失，激活后需重读。
+    - `createFileSystemWatcher(globPattern, ...)` + `FileSystemWatcher`：仅观察
+      工作区文件夹内部；glob 仅支持 string（无 RelativePattern）。
+    - `fs.rename` / `fs.copy`：`target` 已存在且未设 `overwrite` 时 reject；
+      两者同样走路径策略管控。
+  - `languages`：
+    - `getLanguages()`：编辑器当前已知的全部语言 id。
+    - `registerDocumentRangeFormattingEditProvider`（Format Selection）。
+    - `registerOnTypeFormattingEditProvider`：仅在用户开启 `editor.formatOnType`
+      （本产品默认关）时生效。
+    - `registerInlayHintsProvider`：一次性返回完整 hint，无 resolve 阶段（LSP hint
+      的 `data` 字段被丢弃）；同时 re-export `InlayHint` / `InlayHintLabelPart` /
+      `InlayHintKind`。
+  - 宿主协议配套：新增 RPC 通道 `extHostWindow`（回推 progress 取消）与
+    `extHostFileEvents` / `mainThreadFileEvents`（文件监听事件）；其余能力挂既有
+    通道。协议为内部实现细节，不影响扩展侧表面。
+
 ## 激活事件清单（activation events）
 
 扩展在 `package.json` 的 `activationEvents` 声明唤醒时机。手写字符串易拼错（拼错则

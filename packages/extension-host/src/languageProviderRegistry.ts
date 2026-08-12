@@ -19,12 +19,15 @@ import type {
   DocumentFormattingEditProvider,
   DocumentHighlightProvider,
   DocumentLinkProvider,
+  DocumentRangeFormattingEditProvider,
   DocumentSelector,
   DocumentSemanticTokensProvider,
   DocumentSymbolProvider,
   FoldingRangeProvider,
   HoverProvider,
   ImplementationProvider,
+  InlayHintsProvider,
+  OnTypeFormattingEditProvider,
   ReferenceProvider,
   RenameProvider,
   SelectionRangeProvider,
@@ -57,6 +60,7 @@ import type {
   DocumentSymbol,
   FoldingRange,
   Hover,
+  InlayHint,
   Location,
   Position,
   Range,
@@ -91,6 +95,9 @@ type AnyLanguageProvider =
   | DocumentFormattingEditProvider
   | CodeLensProvider
   | DocumentSemanticTokensProvider
+  | DocumentRangeFormattingEditProvider
+  | OnTypeFormattingEditProvider
+  | InlayHintsProvider
 
 interface RegisteredProvider {
   readonly type: LanguageProviderType
@@ -273,6 +280,28 @@ export class LanguageProviderRegistry {
     return this._register('documentFormatting', selector, provider)
   }
 
+  registerDocumentRangeFormattingEditProvider(
+    selector: DocumentSelector,
+    provider: DocumentRangeFormattingEditProvider,
+  ): Disposable {
+    return this._register('documentRangeFormatting', selector, provider)
+  }
+
+  registerOnTypeFormattingEditProvider(
+    selector: DocumentSelector,
+    provider: OnTypeFormattingEditProvider,
+    triggerCharacters: readonly string[],
+  ): Disposable {
+    return this._register(
+      'onTypeFormatting',
+      selector,
+      provider,
+      triggerCharacters.length > 0
+        ? { onTypeFormattingTriggerCharacters: triggerCharacters }
+        : undefined,
+    )
+  }
+
   registerDocumentSemanticTokensProvider(
     selector: DocumentSelector,
     provider: DocumentSemanticTokensProvider,
@@ -295,6 +324,27 @@ export class LanguageProviderRegistry {
     void languages.$registerProvider(handle, 'codeLens', toSelector(selector))
     const changeSub = provider.onDidChangeCodeLenses?.(() => {
       languages.$emitCodeLensDidChange(handle)
+    })
+    return {
+      dispose: () => {
+        changeSub?.dispose()
+        if (this._providers.delete(handle)) void languages.$unregisterProvider(handle)
+      },
+    }
+  }
+
+  /**
+   * Inlay hints carry the same server-driven refresh signal as CodeLens
+   * (`onDidChangeInlayHints`), so registration follows the same inline shape:
+   * capture the handle and forward the signal as `$emitInlayHintsDidChange(handle)`.
+   */
+  registerInlayHintsProvider(selector: DocumentSelector, provider: InlayHintsProvider): Disposable {
+    const languages = this._languages()
+    const handle = this._languageHandle++
+    this._providers.set(handle, { type: 'inlayHints', provider })
+    void languages.$registerProvider(handle, 'inlayHints', toSelector(selector))
+    const changeSub = provider.onDidChangeInlayHints?.(() => {
+      languages.$emitInlayHintsDidChange(handle)
     })
     return {
       dispose: () => {
@@ -549,6 +599,55 @@ export class LanguageProviderRegistry {
         options,
       )) ?? null
     )
+  }
+
+  async provideDocumentRangeFormattingEdits(
+    handle: number,
+    uri: UriComponents,
+    range: Range,
+    options: IFormattingOptionsDto,
+  ): Promise<TextEdit[] | null> {
+    const provider = this._provider<DocumentRangeFormattingEditProvider>(
+      handle,
+      'documentRangeFormatting',
+    )
+    if (!provider) return null
+    return (
+      (await provider.provideDocumentRangeFormattingEdits(
+        this._documents.getOrSynthesize(uri),
+        range,
+        options,
+      )) ?? null
+    )
+  }
+
+  async provideOnTypeFormattingEdits(
+    handle: number,
+    uri: UriComponents,
+    position: Position,
+    ch: string,
+    options: IFormattingOptionsDto,
+  ): Promise<TextEdit[] | null> {
+    const provider = this._provider<OnTypeFormattingEditProvider>(handle, 'onTypeFormatting')
+    if (!provider) return null
+    return (
+      (await provider.provideOnTypeFormattingEdits(
+        this._documents.getOrSynthesize(uri),
+        position,
+        ch,
+        options,
+      )) ?? null
+    )
+  }
+
+  async provideInlayHints(
+    handle: number,
+    uri: UriComponents,
+    range: Range,
+  ): Promise<InlayHint[] | null> {
+    const provider = this._provider<InlayHintsProvider>(handle, 'inlayHints')
+    if (!provider) return null
+    return (await provider.provideInlayHints(this._documents.getOrSynthesize(uri), range)) ?? null
   }
 
   async provideDocumentSemanticTokens(

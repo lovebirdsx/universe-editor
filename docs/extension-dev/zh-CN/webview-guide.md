@@ -1,6 +1,6 @@
 # 自定义编辑器与 Webview
 
-> 给某类文件做图形化界面（PDF 预览、表格、图片、自定义二进制格式……）的完整指南：声明、激活、provider 两阶段、资源加载、CSP、消息通信与 diff。以扩展 API 0.8.0 为准。
+> 给某类文件做图形化界面（PDF 预览、表格、图片、自定义二进制格式……）的完整指南：声明、激活、provider 两阶段、资源加载、CSP、消息通信与 diff。以扩展 API 0.9.0 为准。
 
 ## 整体形态
 
@@ -94,7 +94,7 @@ const cssUrl = webview.asWebviewUri(fileUri(joinPath(extensionRoot, 'assets', 'v
 // 填进 HTML：<link rel="stylesheet" href="${cssUrl}">
 ```
 
-两个要点：这套 API 表面**没有 `Uri` 类**，入参出参都是普通对象/字符串；只有落在 allow-list（扩展目录 + `localResourceRoots`）内的路径才会真正解析，越界路径得到的是一个必然 403 的 URL。手写 `file:` UriComponents 时 `path` 要带前导斜杠（Windows 盘符形如 `/C:/...`）。
+两个要点：webview 这部分表面（`CustomDocument.uri`、`asWebviewUri` 的入参出参）仍是普通对象/字符串——`Uri` 类（0.9.0 起存在于包级导出）在此不出现，手写 `file:` UriComponents 时 `path` 要带前导斜杠（Windows 盘符形如 `/C:/...`）；只有落在 allow-list（扩展目录 + `localResourceRoots`）内的路径才会真正解析，越界路径得到的是一个必然 403 的 URL。
 
 ## 消息通信：扩展 ↔ webview 脚本
 

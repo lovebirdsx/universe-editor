@@ -192,4 +192,31 @@ describe('ExtensionActivationService', () => {
     await svc.replayFiredEvents()
     expect(activatedCount()).toBe(1) // the earlier event is replayed
   })
+
+  it('captures the activate return value as exports', async () => {
+    const exportsMain = join(dir, 'exports.mjs')
+    await writeFile(exportsMain, `export function activate() { return { answer: 42 } }`, 'utf8')
+    const ext = scanned(['*'], { mainPath: exportsMain })
+    const svc = new ExtensionActivationService([ext], () => true)
+    expect(svc.isActivated(ext.id)).toBe(false)
+    expect(svc.getExports(ext.id)).toBeUndefined()
+
+    await svc.activateByEvent('onStartupFinished')
+    expect(svc.isActivated(ext.id)).toBe(true)
+    expect(svc.getExports(ext.id)).toEqual({ answer: 42 })
+  })
+
+  it('activateById activates on demand, regardless of declared events', async () => {
+    const svc = new ExtensionActivationService([scanned(['onCommand:test.cmd'])], () => true)
+    const exportsValue = await svc.activateById('test.ext')
+    expect(activatedCount()).toBe(1)
+    expect(exportsValue).toBeUndefined() // the default fixture returns nothing
+  })
+
+  it('activateById resolves undefined for unknown or trust-gated extensions', async () => {
+    const svc = new ExtensionActivationService([scanned(['*'])], () => false)
+    await expect(svc.activateById('no.such')).resolves.toBeUndefined()
+    await expect(svc.activateById('test.ext')).resolves.toBeUndefined()
+    expect(activatedCount()).toBe(0)
+  })
 })

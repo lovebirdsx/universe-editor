@@ -16,32 +16,45 @@ import { ExtHostDocuments } from '../hostDocuments.js'
 
 function recording(): {
   impl: IMainThreadLanguages
-  registered: Array<{ handle: number; type: LanguageProviderType; selector: DocumentSelector }>
+  registered: Array<{
+    handle: number
+    type: LanguageProviderType
+    selector: DocumentSelector
+    metadata?: ILanguageProviderMetadata
+  }>
   unregistered: number[]
   diagnostics: Array<{ owner: string; uri?: UriComponents; count?: number }>
   codeLensRefreshes: number[]
+  inlayHintsRefreshes: number[]
 } {
   const registered: Array<{
     handle: number
     type: LanguageProviderType
     selector: DocumentSelector
+    metadata?: ILanguageProviderMetadata
   }> = []
   const unregistered: number[] = []
   const diagnostics: Array<{ owner: string; uri?: UriComponents; count?: number }> = []
   const codeLensRefreshes: number[] = []
+  const inlayHintsRefreshes: number[] = []
   return {
     registered,
     unregistered,
     diagnostics,
     codeLensRefreshes,
+    inlayHintsRefreshes,
     impl: {
       $registerProvider: (
         handle: number,
         type: LanguageProviderType,
         selector: DocumentSelector,
-        _metadata?: ILanguageProviderMetadata,
+        metadata?: ILanguageProviderMetadata,
       ) => {
-        registered.push({ handle, type, selector })
+        registered.push(
+          metadata !== undefined
+            ? { handle, type, selector, metadata }
+            : { handle, type, selector },
+        )
         return Promise.resolve()
       },
       $unregisterProvider: (handle: number) => {
@@ -59,7 +72,11 @@ function recording(): {
       $emitCodeLensDidChange: (handle: number) => {
         codeLensRefreshes.push(handle)
       },
+      $emitInlayHintsDidChange: (handle: number) => {
+        inlayHintsRefreshes.push(handle)
+      },
       $setLanguageServerStatus: () => {},
+      $getLanguages: () => Promise.resolve([]),
     },
   }
 }
@@ -151,6 +168,113 @@ describe('LanguageProviderRegistry', () => {
     })
     disposable.dispose()
     expect(disposed).toBe(true)
+  })
+
+  it('registers a range-formatting provider and routes provideDocumentRangeFormattingEdits', async () => {
+    const mt = recording()
+    const reg = new LanguageProviderRegistry(() => mt.impl, new ExtHostDocuments())
+    const range = { start: { line: 1, character: 0 }, end: { line: 2, character: 0 } }
+    const edits = [{ range, newText: 'formatted' }]
+    const disposable = reg.registerDocumentRangeFormattingEditProvider('typescript', {
+      provideDocumentRangeFormattingEdits: (_doc, r, options) => {
+        expect(r).toEqual(range)
+        expect(options).toEqual({ tabSize: 2, insertSpaces: true })
+        return edits
+      },
+    })
+    expect(mt.registered).toEqual([
+      { handle: 0, type: 'documentRangeFormatting', selector: ['typescript'] },
+    ])
+    await expect(
+      reg.provideDocumentRangeFormattingEdits(0, uri, range, { tabSize: 2, insertSpaces: true }),
+    ).resolves.toEqual(edits)
+    disposable.dispose()
+    expect(mt.unregistered).toEqual([0])
+  })
+
+  it('ships on-type trigger characters as metadata and routes provideOnTypeFormattingEdits', async () => {
+    const mt = recording()
+    const reg = new LanguageProviderRegistry(() => mt.impl, new ExtHostDocuments())
+    const edits = [
+      {
+        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+        newText: '}',
+      },
+    ]
+    reg.registerOnTypeFormattingEditProvider(
+      'typescript',
+      {
+        provideOnTypeFormattingEdits: (_doc, _position, ch) => {
+          expect(ch).toBe('}')
+          return edits
+        },
+      },
+      ['}', ';'],
+    )
+    expect(mt.registered).toEqual([
+      {
+        handle: 0,
+        type: 'onTypeFormatting',
+        selector: ['typescript'],
+        metadata: { onTypeFormattingTriggerCharacters: ['}', ';'] },
+      },
+    ])
+    await expect(
+      reg.provideOnTypeFormattingEdits(0, uri, { line: 0, character: 1 }, '}', {
+        tabSize: 4,
+        insertSpaces: false,
+      }),
+    ).resolves.toEqual(edits)
+  })
+
+  it('registers an inlay-hints provider and routes provideInlayHints', async () => {
+    const mt = recording()
+    const reg = new LanguageProviderRegistry(() => mt.impl, new ExtHostDocuments())
+    const range = { start: { line: 0, character: 0 }, end: { line: 5, character: 0 } }
+    const hints = [{ position: { line: 0, character: 3 }, label: ': string', kind: 1 as const }]
+    reg.registerInlayHintsProvider('typescript', {
+      provideInlayHints: (_doc, r) => {
+        expect(r).toEqual(range)
+        return hints
+      },
+    })
+    expect(mt.registered).toEqual([{ handle: 0, type: 'inlayHints', selector: ['typescript'] }])
+    await expect(reg.provideInlayHints(0, uri, range)).resolves.toEqual(hints)
+  })
+
+  it('bridges an inlay-hints provider onDidChangeInlayHints to $emitInlayHintsDidChange', () => {
+    const mt = recording()
+    const reg = new LanguageProviderRegistry(() => mt.impl, new ExtHostDocuments())
+    const listeners: Array<() => void> = []
+    const disposable = reg.registerInlayHintsProvider('typescript', {
+      onDidChangeInlayHints: (listener) => {
+        listeners.push(listener)
+        return { dispose: () => undefined }
+      },
+      provideInlayHints: () => [],
+    })
+    expect(mt.registered).toEqual([{ handle: 0, type: 'inlayHints', selector: ['typescript'] }])
+    listeners.forEach((l) => l())
+    expect(mt.inlayHintsRefreshes).toEqual([0])
+    disposable.dispose()
+    expect(mt.unregistered).toEqual([0])
+  })
+
+  it('returns null from the new provide* routes when the handle type does not match', async () => {
+    const mt = recording()
+    const reg = new LanguageProviderRegistry(() => mt.impl, new ExtHostDocuments())
+    reg.registerHoverProvider('typescript', { provideHover: () => null })
+    const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }
+    await expect(
+      reg.provideDocumentRangeFormattingEdits(0, uri, range, { tabSize: 2, insertSpaces: true }),
+    ).resolves.toBeNull()
+    await expect(
+      reg.provideOnTypeFormattingEdits(0, uri, { line: 0, character: 0 }, '}', {
+        tabSize: 2,
+        insertSpaces: true,
+      }),
+    ).resolves.toBeNull()
+    await expect(reg.provideInlayHints(0, uri, range)).resolves.toBeNull()
   })
 
   it('throws when language features are unavailable', () => {

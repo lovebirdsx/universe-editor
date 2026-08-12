@@ -79,7 +79,7 @@ function makeConfig(initial?: Record<string, unknown>): {
     get: (key: string) => store.get(key),
     update: (key: string, value: unknown) => {
       store.set(key, value)
-      emitter.fire({ affectsConfiguration: (k: string) => k === key })
+      emitter.fire({ keys: [key], affectsConfiguration: (k: string) => k === key })
     },
     onDidChangeConfiguration: emitter.event,
   } as unknown as IConfigurationService

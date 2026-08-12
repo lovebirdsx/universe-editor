@@ -58,7 +58,7 @@ class FakeConfigurationService {
     const layer = { ...(this.layers.get(target ?? ConfigurationTarget.User) ?? {}) }
     layer[key] = value
     this.layers.set(target ?? ConfigurationTarget.User, layer)
-    this._onDidChange.fire({ affectsConfiguration: (k: string) => k === key })
+    this._onDidChange.fire({ keys: [key], affectsConfiguration: (k: string) => k === key })
   }
 
   serversOf(target: ConfigurationTarget): Record<string, unknown> {

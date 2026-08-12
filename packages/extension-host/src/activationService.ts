@@ -16,6 +16,8 @@ import { createExtensionContext, type IExtensionStorage } from './apiFactory.js'
 
 interface ActivatedExtension {
   readonly context: ExtensionContext
+  /** The value the extension's `activate` returned (its public exports), if any. */
+  readonly exports: unknown
   readonly deactivate?: () => unknown
 }
 
@@ -69,6 +71,28 @@ export class ExtensionActivationService {
     await Promise.all([...this._firedEvents].map((event) => this.activateByEvent(event)))
   }
 
+  /** Whether the extension's `activate` has completed successfully. */
+  isActivated(id: string): boolean {
+    return this._activated.has(id)
+  }
+
+  /** The exports an extension's `activate` returned; undefined while not activated. */
+  getExports(id: string): unknown {
+    return this._activated.get(id)?.exports
+  }
+
+  /**
+   * Activate one extension by id and resolve its exports (backs the public
+   * `Extension.activate()`). No-op when already active; resolves undefined for
+   * unknown ids and for extensions gated off by Workspace Trust.
+   */
+  async activateById(id: string): Promise<unknown> {
+    const ext = this._extensions.find((e) => e.id === id)
+    if (!ext || !this._isActivatable(ext)) return undefined
+    await this._activate(ext)
+    return this.getExports(id)
+  }
+
   /**
    * VSCode `DisabledByTrustRequirement`: an extension whose untrusted-workspace
    * support is `false` is not activated at all in an untrusted workspace. A
@@ -111,14 +135,16 @@ export class ExtensionActivationService {
   private async _doActivate(ext: IScannedExtension): Promise<void> {
     const context = await createExtensionContext(ext, this._storage, this._globalStorageHome)
     try {
+      let exports: unknown
       let deactivate: (() => unknown) | undefined
       if (ext.mainPath) {
         const mod = (await import(pathToFileURL(ext.mainPath).href)) as ExtensionModule
-        await mod.activate?.(context)
+        exports = await mod.activate?.(context)
         deactivate = mod.deactivate
       }
       this._activated.set(ext.id, {
         context,
+        exports,
         ...(deactivate !== undefined ? { deactivate } : {}),
       })
       console.info(`[ext-host] activated ${ext.id}`)

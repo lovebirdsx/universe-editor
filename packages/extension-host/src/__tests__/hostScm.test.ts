@@ -16,6 +16,7 @@ import { ExtensionService } from '../extensionService.js'
 const noopCommands: IMainThreadCommands = {
   $registerCommand: () => Promise.resolve(),
   $unregisterCommand: () => Promise.resolve(),
+  $getCommands: () => Promise.resolve([]),
   $executeCommand: () => Promise.resolve(undefined),
 }
 const noopWindow: IMainThreadWindow = {
@@ -24,6 +25,14 @@ const noopWindow: IMainThreadWindow = {
   $showInputBox: () => Promise.resolve(undefined),
   $setStatusBarEntry: () => Promise.resolve(),
   $disposeStatusBarEntry: () => Promise.resolve(),
+  $clipboardReadText: () => Promise.resolve(''),
+  $clipboardWriteText: () => Promise.resolve(),
+  $openExternal: () => Promise.resolve(false),
+  $startProgress: () => Promise.resolve(),
+  $reportProgress: () => Promise.resolve(),
+  $endProgress: () => Promise.resolve(),
+  $showOpenDialog: () => Promise.resolve(undefined),
+  $showSaveDialog: () => Promise.resolve(undefined),
 }
 const noopTimeline: IMainThreadTimeline = {
   $registerTimelineProvider: () => Promise.resolve(),

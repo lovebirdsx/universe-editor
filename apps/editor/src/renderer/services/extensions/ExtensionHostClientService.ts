@@ -18,13 +18,22 @@ import {
   Emitter,
   IAiModelService,
   ICommandService,
+  IConfigurationService,
   IDialogService,
+  IEditorGroupsService,
   IEditorService,
+  IFileDialogService,
+  IFileSearchService,
   IFileService,
+  IFileWatcherService,
+  IHostService,
+  IInstantiationService,
   ILayoutService,
   ILoggerService,
   INotificationService,
+  IOpenerService,
   IOutputService,
+  IProgressService,
   IQuickInputService,
   IStatusBarService,
   IStorageService,
@@ -53,7 +62,9 @@ import {
 import { IExtensionManagementService } from '../../../shared/ipc/extensionManagementService.js'
 import { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
+import { IExcludeService } from '../exclude/ExcludeService.js'
 import { getCurrentLocale } from '../../../shared/i18n/availableLocales.js'
+import { DEEP_LINK_PROTOCOL } from '../../../shared/deepLink.js'
 import { IScmService } from './ScmService.js'
 import { ITimelineService } from '../timeline/TimelineService.js'
 import { IWebviewService } from './WebviewService.js'
@@ -103,6 +114,12 @@ export const IExtensionHostClientService = createDecorator<IExtensionHostClientS
 const MAX_RESTARTS = 3
 const RESTART_WINDOW_MS = 60_000
 const RESTART_BASE_DELAY_MS = 1_000
+
+/**
+ * Unique per renderer session, backing `env.sessionId`. Module-level so it stays
+ * stable across extension-host restarts within the same editor session.
+ */
+const EXTENSION_SESSION_ID = crypto.randomUUID()
 
 interface RestartState {
   windowStart: number
@@ -181,6 +198,16 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @IExtensionEnablementService private readonly _enablement: IExtensionEnablementService,
     @IWorkspaceTrustManagementService
     private readonly _workspaceTrust: IWorkspaceTrustManagementService,
+    @IHostService private readonly _hostService: IHostService,
+    @IOpenerService private readonly _opener: IOpenerService,
+    @IProgressService private readonly _progressService: IProgressService,
+    @IFileDialogService private readonly _fileDialogs: IFileDialogService,
+    @IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
+    @IInstantiationService private readonly _instantiation: IInstantiationService,
+    @IConfigurationService private readonly _configuration: IConfigurationService,
+    @IFileSearchService private readonly _fileSearch: IFileSearchService,
+    @IExcludeService private readonly _exclude: IExcludeService,
+    @IFileWatcherService private readonly _fileWatcher: IFileWatcherService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'extHostClient', name: 'Extension Host' })
@@ -197,6 +224,20 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       this._workspaceTrust.onDidChangeTrust((t) => {
         void this._onTrustChanged(t).catch((err: unknown) => {
           this._logger.warn(`workspace trust change handling failed: ${(err as Error).message}`)
+        })
+      }),
+    )
+    // Forward configuration changes to the host (`workspace.onDidChangeConfiguration`).
+    // Changes landing while no host is connected are simply lost — the host reads
+    // current values through its configuration snapshot on (re)start anyway.
+    this._register(
+      this._configuration.onDidChangeConfiguration((e) => {
+        if (e.keys.length === 0) return
+        const conn = this._conn
+        if (!conn || conn.dead) return
+        void conn.extensions.$acceptConfigurationChanged([...e.keys]).catch((err: unknown) => {
+          if (conn.dead) return
+          this._logger.warn(`configuration change push failed: ${(err as Error).message}`)
         })
       }),
     )
@@ -275,8 +316,16 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       statusBar: this._statusBar,
       dialog: this._dialog,
       files: this._files,
+      fileSearch: this._fileSearch,
+      exclude: this._exclude,
+      fileWatcher: this._fileWatcher,
       pathPolicy: this._pathPolicy,
       commandService: this._commandService,
+      opener: this._opener,
+      progress: this._progressService,
+      fileDialogs: this._fileDialogs,
+      editorGroups: this._editorGroups,
+      instantiation: this._instantiation,
       storage: this._storage,
       webview: this._webview,
       scm: this._scm,
@@ -304,6 +353,17 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     // correct inside extensions' `activate`.
     await this._workspaceTrust.workspaceTrustInitialized
     await connection.extensions.$initializeWorkspaceTrust(this._workspaceTrust.isWorkspaceTrusted())
+    // Seed the `env` namespace (product identity, per-session id, deep-link
+    // scheme, display language) alongside, so `env.*` reads correctly inside
+    // extensions' `activate` too.
+    const versionInfo = await this._hostService.getVersionInfo()
+    await connection.extensions.$initializeEnvironment({
+      appName: versionInfo.productName,
+      appVersion: versionInfo.version,
+      sessionId: EXTENSION_SESSION_ID,
+      uriScheme: DEEP_LINK_PROTOCOL,
+      language: getCurrentLocale(),
+    })
     this._logger.info(`extension host connected handle=${handle}`)
   }
 

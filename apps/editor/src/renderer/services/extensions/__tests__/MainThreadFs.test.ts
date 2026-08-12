@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { bytesToBase64 } from '@universe-editor/extensions-common'
-import { URI, relativePathUnder, type IFileService } from '@universe-editor/platform'
+import {
+  NullLogger,
+  URI,
+  relativePathUnder,
+  type IFileSearchComplete,
+  type IFileSearchService,
+  type IFileService,
+} from '@universe-editor/platform'
 import { MainThreadFs } from '../MainThreadFs.js'
 import type { IAcpPathPolicy } from '../../acp/acpPathPolicy.js'
 
@@ -16,28 +23,39 @@ function fakeFiles(overrides: Partial<IFileService>): IFileService {
   return overrides as IFileService
 }
 
+const noSearch: IFileSearchService = {
+  _serviceBrand: undefined,
+  search: () => Promise.reject(new Error('unexpected search call')),
+}
+
+function makeFs(
+  cwd: string | undefined,
+  policy: IAcpPathPolicy,
+  files: IFileService,
+  fileSearch: IFileSearchService = noSearch,
+  defaultExcludes: () => readonly string[] = () => [],
+): MainThreadFs {
+  return new MainThreadFs(cwd, policy, files, fileSearch, defaultExcludes, new NullLogger())
+}
+
 describe('MainThreadFs', () => {
   it('reads a file and base64-encodes its bytes', async () => {
     const bytes = new Uint8Array([1, 2, 3, 250])
-    const fs = new MainThreadFs(
-      '/repo',
-      allowPolicy,
-      fakeFiles({ readFile: () => Promise.resolve(bytes) }),
-    )
+    const fs = makeFs('/repo', allowPolicy, fakeFiles({ readFile: () => Promise.resolve(bytes) }))
     expect(await fs.$readFile('/repo/a.bin')).toBe(bytesToBase64(bytes))
   })
 
   it('decodes base64 before writing', async () => {
     const bytes = new Uint8Array([9, 8, 7])
     const writeFile = vi.fn((_resource: unknown, _content: unknown) => Promise.resolve())
-    const fs = new MainThreadFs('/repo', allowPolicy, fakeFiles({ writeFile }))
+    const fs = makeFs('/repo', allowPolicy, fakeFiles({ writeFile }))
     await fs.$writeFile('/repo/a.bin', bytesToBase64(bytes))
     const written = writeFile.mock.calls[0]?.[1] as Uint8Array
     expect(Array.from(written)).toEqual([9, 8, 7])
   })
 
   it('maps stat and directory entries to the wire shape', async () => {
-    const fs = new MainThreadFs(
+    const fs = makeFs(
       '/repo',
       allowPolicy,
       fakeFiles({
@@ -64,7 +82,7 @@ describe('MainThreadFs', () => {
   })
 
   it('rejects paths the policy denies', async () => {
-    const fs = new MainThreadFs(
+    const fs = makeFs(
       '/repo',
       allowPolicy,
       fakeFiles({ readFile: () => Promise.resolve(new Uint8Array()) }),
@@ -73,14 +91,14 @@ describe('MainThreadFs', () => {
   })
 
   it('rejects when no workspace folder is open', async () => {
-    const fs = new MainThreadFs(undefined, allowPolicy, fakeFiles({}))
+    const fs = makeFs(undefined, allowPolicy, fakeFiles({}))
     await expect(fs.$readFile('/anything')).rejects.toThrow(/open workspace/)
   })
 
   it('rejects a workspace-internal symlink whose real path escapes to a sensitive prefix', async () => {
     // The literal path passes the text policy (no "secret" in it), but realpath
     // resolves the symlink to a sensitive location the policy then denies.
-    const fs = new MainThreadFs(
+    const fs = makeFs(
       '/repo',
       allowPolicy,
       fakeFiles({
@@ -93,7 +111,7 @@ describe('MainThreadFs', () => {
 
   it('allows a symlink whose real path stays inside the workspace', async () => {
     const bytes = new Uint8Array([1, 2])
-    const fs = new MainThreadFs(
+    const fs = makeFs(
       '/repo',
       allowPolicy,
       fakeFiles({
@@ -117,7 +135,7 @@ describe('MainThreadFs', () => {
       check: (_cwd, target) =>
         target ? { ok: true, normalized: target } : { ok: false, reason: 'empty path' },
     }
-    const fs = new MainThreadFs(
+    const fs = makeFs(
       '/repo',
       emptyAwarePolicy,
       fakeFiles({
@@ -146,7 +164,7 @@ describe('MainThreadFs', () => {
           ? { ok: true, normalized: target }
           : { ok: false, reason: `path escapes workspace root (${cwd})` },
     }
-    const fs = new MainThreadFs(
+    const fs = makeFs(
       shortCwd,
       containmentPolicy,
       fakeFiles({
@@ -166,11 +184,107 @@ describe('MainThreadFs', () => {
 
   it('falls back to the text decision when the file service has no realpath', async () => {
     const bytes = new Uint8Array([7])
-    const fs = new MainThreadFs(
-      '/repo',
-      allowPolicy,
-      fakeFiles({ readFile: () => Promise.resolve(bytes) }),
-    )
+    const fs = makeFs('/repo', allowPolicy, fakeFiles({ readFile: () => Promise.resolve(bytes) }))
     expect(await fs.$readFile('/repo/a.bin')).toBe(bytesToBase64(bytes))
+  })
+
+  describe('$rename / $copy', () => {
+    it('guards both source and target before delegating', async () => {
+      const rename = vi.fn((_from: URI, _to: URI, _opts: { overwrite: boolean }) =>
+        Promise.resolve(),
+      )
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({ rename }))
+      await fs.$rename('/repo/a.ts', '/repo/b.ts', false)
+      expect(rename).toHaveBeenCalledTimes(1)
+      const call = rename.mock.calls[0]
+      expect(call?.[0]?.fsPath).toBe('/repo/a.ts')
+      expect(call?.[1]?.fsPath).toBe('/repo/b.ts')
+      expect(call?.[2]).toEqual({ overwrite: false })
+    })
+
+    it('denies a rename whose target hits a sensitive prefix', async () => {
+      const rename = vi.fn(() => Promise.resolve())
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({ rename }))
+      await expect(fs.$rename('/repo/a.ts', '/repo/secret/a.ts', true)).rejects.toThrow(/denied/)
+      expect(rename).not.toHaveBeenCalled()
+    })
+
+    it('copies with the overwrite flag forwarded', async () => {
+      const copy = vi.fn((_from: URI, _to: URI, _opts: { overwrite: boolean }) => Promise.resolve())
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({ copy }))
+      await fs.$copy('/repo/a.ts', '/repo/b.ts', true)
+      const call = copy.mock.calls[0]
+      expect(call?.[0]?.fsPath).toBe('/repo/a.ts')
+      expect(call?.[1]?.fsPath).toBe('/repo/b.ts')
+      expect(call?.[2]).toEqual({ overwrite: true })
+    })
+  })
+
+  describe('$findFiles', () => {
+    function fakeSearch(
+      matches: Array<{ fsPath: string; relativePath: string }>,
+    ): IFileSearchService & { lastQueryExcludes: () => readonly string[] | undefined } {
+      let excludes: readonly string[] | undefined
+      return {
+        _serviceBrand: undefined,
+        search: (query) => {
+          excludes = query.excludes
+          const complete: IFileSearchComplete = {
+            results: matches.map((m) => ({
+              resource: URI.file(m.fsPath),
+              fsPath: m.fsPath,
+              relativePath: m.relativePath,
+              basename: m.relativePath.split('/').pop() ?? '',
+              score: 0,
+            })),
+            limitHit: false,
+            filesWalked: matches.length,
+            directoriesWalked: 0,
+            durationMs: 0,
+          }
+          return Promise.resolve(complete)
+        },
+        lastQueryExcludes: () => excludes,
+      }
+    }
+
+    it('filters the live enumeration by the include glob', async () => {
+      const search = fakeSearch([
+        { fsPath: '/repo/src/a.ts', relativePath: 'src/a.ts' },
+        { fsPath: '/repo/src/a.css', relativePath: 'src/a.css' },
+        { fsPath: '/repo/README.md', relativePath: 'README.md' },
+      ])
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      expect(await fs.$findFiles('**/*.ts', null, null)).toEqual(['/repo/src/a.ts'])
+    })
+
+    it('uses the default search excludes when exclude is null', async () => {
+      const search = fakeSearch([])
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search, () => ['**/node_modules/**'])
+      await fs.$findFiles('**/*.ts', null, null)
+      expect(search.lastQueryExcludes()).toEqual(['**/node_modules/**'])
+    })
+
+    it('passes an empty exclude list through as "no excludes"', async () => {
+      const search = fakeSearch([])
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search, () => ['**/node_modules/**'])
+      await fs.$findFiles('**/*.ts', [], null)
+      expect(search.lastQueryExcludes()).toEqual([])
+    })
+
+    it('truncates at maxResults after glob filtering', async () => {
+      const search = fakeSearch([
+        { fsPath: '/repo/a.ts', relativePath: 'a.ts' },
+        { fsPath: '/repo/b.md', relativePath: 'b.md' },
+        { fsPath: '/repo/c.ts', relativePath: 'c.ts' },
+      ])
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      expect(await fs.$findFiles('*.ts', [], 1)).toEqual(['/repo/a.ts'])
+    })
+
+    it('rejects when no workspace folder is open', async () => {
+      const fs = makeFs(undefined, allowPolicy, fakeFiles({}))
+      await expect(fs.$findFiles('**/*.ts', null, null)).rejects.toThrow(/open workspace/)
+    })
   })
 })

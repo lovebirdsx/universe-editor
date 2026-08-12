@@ -5,15 +5,24 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import {
+  ProgressLocation,
   Severity,
   StatusBarAlignment,
   type IDialogService,
+  type IFileDialogService,
   type INotificationService,
+  type IOpenerService,
+  type IProgress,
+  type IProgressOptions,
+  type IProgressService,
+  type IProgressStep,
   type IQuickInputService,
   type IStatusBarService,
   type IStatusBarEntry,
   type IStatusBarEntryAccessor,
+  URI,
 } from '@universe-editor/platform'
+import type { IExtHostWindow } from '@universe-editor/extensions-common'
 import { MainThreadWindow } from '../MainThreadWindow.js'
 
 function fakeNotification(): {
@@ -58,16 +67,39 @@ function fakeStatusBar(): {
   return { service, entries, disposed }
 }
 
+const noopExtHostWindow: IExtHostWindow = {
+  $acceptProgressCanceled: () => Promise.resolve(),
+}
+
+function makeWindow(
+  overrides: Partial<{
+    notification: INotificationService
+    quickInput: IQuickInputService
+    statusBar: IStatusBarService
+    dialog: IDialogService
+    opener: IOpenerService
+    progress: IProgressService
+    fileDialogs: IFileDialogService
+    extHostWindow: IExtHostWindow
+  }> = {},
+): MainThreadWindow {
+  return new MainThreadWindow(
+    overrides.notification ?? ({} as INotificationService),
+    overrides.quickInput ?? ({} as IQuickInputService),
+    overrides.statusBar ?? ({} as IStatusBarService),
+    overrides.dialog ?? ({} as IDialogService),
+    overrides.opener ?? ({} as IOpenerService),
+    overrides.progress ?? ({} as IProgressService),
+    overrides.fileDialogs ?? ({} as IFileDialogService),
+    overrides.extHostWindow ?? noopExtHostWindow,
+  )
+}
+
 describe('MainThreadWindow', () => {
   it('shows a plain notification and resolves undefined when no items', async () => {
     const notif = fakeNotification()
     const dialog = fakeDialog()
-    const mt = new MainThreadWindow(
-      notif.service,
-      {} as IQuickInputService,
-      {} as IStatusBarService,
-      dialog.service,
-    )
+    const mt = makeWindow({ notification: notif.service, dialog: dialog.service })
     await expect(mt.$showMessage('warning', 'heads up', [])).resolves.toBeUndefined()
     expect(notif.notify).toHaveBeenCalledWith({ severity: Severity.Warning, message: 'heads up' })
     expect(dialog.confirm).not.toHaveBeenCalled()
@@ -76,12 +108,7 @@ describe('MainThreadWindow', () => {
   it('resolves to the primary item label when confirmed', async () => {
     const notif = fakeNotification()
     const dialog = fakeDialog(true)
-    const mt = new MainThreadWindow(
-      notif.service,
-      {} as IQuickInputService,
-      {} as IStatusBarService,
-      dialog.service,
-    )
+    const mt = makeWindow({ notification: notif.service, dialog: dialog.service })
     await expect(mt.$showMessage('error', 'pick one', ['Yes', 'No'])).resolves.toBe('Yes')
     expect(dialog.confirm).toHaveBeenCalledWith(
       expect.objectContaining({ primaryButton: 'Yes', cancelButton: 'No', type: 'error' }),
@@ -90,24 +117,13 @@ describe('MainThreadWindow', () => {
 
   it('resolves to undefined when dialog is dismissed', async () => {
     const dialog = fakeDialog(false)
-    const mt = new MainThreadWindow(
-      {} as INotificationService,
-      {} as IQuickInputService,
-      {} as IStatusBarService,
-      dialog.service,
-    )
+    const mt = makeWindow({ dialog: dialog.service })
     await expect(mt.$showMessage('warning', 'confirm?', ['Do it'])).resolves.toBeUndefined()
   })
 
   it('maps quick pick selection back to its index', async () => {
     const pick = vi.fn().mockResolvedValue({ id: '1', label: 'second' })
-    const quick = { pick } as unknown as IQuickInputService
-    const mt = new MainThreadWindow(
-      {} as INotificationService,
-      quick,
-      {} as IStatusBarService,
-      {} as IDialogService,
-    )
+    const mt = makeWindow({ quickInput: { pick } as unknown as IQuickInputService })
     await expect(mt.$showQuickPick(['first', 'second'], { placeHolder: 'choose' })).resolves.toBe(1)
     expect(pick).toHaveBeenCalledWith(
       [
@@ -120,12 +136,7 @@ describe('MainThreadWindow', () => {
 
   it('passes $(icon) text through untouched and tracks the entry by handle', async () => {
     const sb = fakeStatusBar()
-    const mt = new MainThreadWindow(
-      {} as INotificationService,
-      {} as IQuickInputService,
-      sb.service,
-      {} as IDialogService,
-    )
+    const mt = makeWindow({ statusBar: sb.service })
 
     await mt.$setStatusBarEntry(7, {
       text: '$(git-branch) main $(edit) 3',
@@ -145,5 +156,177 @@ describe('MainThreadWindow', () => {
 
     await mt.$disposeStatusBarEntry(7)
     expect(sb.entries.size).toBe(0)
+  })
+
+  it('reads and writes clipboard text through navigator.clipboard', async () => {
+    const readText = vi.fn().mockResolvedValue('clip-text')
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { readText, writeText } })
+    try {
+      const mt = makeWindow()
+      await expect(mt.$clipboardReadText()).resolves.toBe('clip-text')
+      await mt.$clipboardWriteText('hello')
+      expect(writeText).toHaveBeenCalledWith('hello')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('$openExternal delegates to the opener service and returns its result', async () => {
+    const open = vi.fn().mockResolvedValue(true)
+    const mt = makeWindow({ opener: { open } as unknown as IOpenerService })
+    await expect(mt.$openExternal('https://example.com')).resolves.toBe(true)
+    expect(open).toHaveBeenCalledWith('https://example.com')
+  })
+})
+
+describe('MainThreadWindow progress', () => {
+  interface FakeProgressRun {
+    options: IProgressOptions
+    progress: IProgress<IProgressStep>
+    taskPromise: Promise<unknown>
+    cancel: () => void
+  }
+
+  function fakeProgress(): { service: IProgressService; runs: FakeProgressRun[] } {
+    const runs: FakeProgressRun[] = []
+    const service = {
+      withProgress<R>(
+        options: IProgressOptions,
+        task: (progress: IProgress<IProgressStep>, token: unknown) => Promise<R>,
+      ): Promise<R> {
+        const progress: IProgress<IProgressStep> = { report: () => undefined }
+        let cancelListener: (() => void) | undefined
+        const token = {
+          isCancellationRequested: false,
+          onCancellationRequested: (listener: () => void) => {
+            cancelListener = listener
+            return { dispose: () => undefined }
+          },
+        }
+        const run: FakeProgressRun = {
+          options,
+          progress,
+          taskPromise: undefined as unknown as Promise<unknown>,
+          cancel: () => cancelListener?.(),
+        }
+        runs.push(run)
+        run.taskPromise = task(progress, token)
+        return run.taskPromise as Promise<R>
+      },
+    } as unknown as IProgressService
+    return { service, runs }
+  }
+
+  it('holds the progress open until $endProgress and forwards reports', async () => {
+    const progress = fakeProgress()
+    const mt = makeWindow({ progress: progress.service })
+
+    await mt.$startProgress(1, { location: 15, title: 'Indexing', cancellable: true })
+    expect(progress.runs).toHaveLength(1)
+    const run = progress.runs[0]!
+    expect(run.options.location).toBe(ProgressLocation.Notification)
+    expect(run.options.title).toBe('Indexing')
+    expect(run.options.cancellable).toBe(true)
+
+    const reported: IProgressStep[] = []
+    vi.spyOn(run.progress, 'report').mockImplementation((step) => reported.push(step))
+    await mt.$reportProgress(1, { message: 'half', increment: 50 })
+    expect(reported).toEqual([{ message: 'half', increment: 50 }])
+
+    let settled = false
+    void run.taskPromise.then(() => {
+      settled = true
+    })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    await mt.$endProgress(1)
+    await run.taskPromise
+    expect(settled).toBe(true)
+  })
+
+  it('maps unknown locations to the Window status-bar spinner', async () => {
+    const progress = fakeProgress()
+    const mt = makeWindow({ progress: progress.service })
+    await mt.$startProgress(1, { location: 1 })
+    expect(progress.runs[0]?.options.location).toBe(ProgressLocation.Window)
+    await mt.$endProgress(1)
+  })
+
+  it('pushes a user cancel back to the host', async () => {
+    const progress = fakeProgress()
+    const cancelPush = vi.fn().mockResolvedValue(undefined)
+    const mt = makeWindow({
+      progress: progress.service,
+      extHostWindow: { $acceptProgressCanceled: cancelPush },
+    })
+    await mt.$startProgress(3, { location: 15, cancellable: true })
+    progress.runs[0]!.cancel()
+    expect(cancelPush).toHaveBeenCalledWith(3)
+    await mt.$endProgress(3)
+  })
+
+  it('dispose settles every held-open progress', async () => {
+    const progress = fakeProgress()
+    const mt = makeWindow({ progress: progress.service })
+    await mt.$startProgress(1, { location: 10 })
+    await mt.$startProgress(2, { location: 10 })
+    mt.dispose()
+    await expect(progress.runs[0]!.taskPromise).resolves.toBeUndefined()
+    await expect(progress.runs[1]!.taskPromise).resolves.toBeUndefined()
+  })
+})
+
+describe('MainThreadWindow file dialogs', () => {
+  function fakeFileDialogs(
+    open: URI | undefined,
+    save: URI | undefined,
+  ): {
+    service: IFileDialogService
+    showOpenDialog: ReturnType<typeof vi.fn>
+    showSaveDialog: ReturnType<typeof vi.fn>
+  } {
+    const showOpenDialog = vi.fn().mockResolvedValue(open)
+    const showSaveDialog = vi.fn().mockResolvedValue(save)
+    return {
+      service: { showOpenDialog, showSaveDialog } as unknown as IFileDialogService,
+      showOpenDialog,
+      showSaveDialog,
+    }
+  }
+
+  it('returns the picked fsPath as a single-entry array', async () => {
+    const dialogs = fakeFileDialogs(URI.file('/ws/a.ts'), undefined)
+    const mt = makeWindow({ fileDialogs: dialogs.service })
+    await expect(
+      mt.$showOpenDialog({ title: 'Open', defaultUri: '/ws', canSelectFiles: true }),
+    ).resolves.toEqual([URI.file('/ws/a.ts').fsPath])
+    expect(dialogs.showOpenDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Open',
+        canSelectFiles: true,
+        canSelectFolders: false,
+        defaultUri: expect.objectContaining({ scheme: 'file' }),
+      }),
+    )
+  })
+
+  it('resolves undefined when the open dialog is cancelled', async () => {
+    const dialogs = fakeFileDialogs(undefined, undefined)
+    const mt = makeWindow({ fileDialogs: dialogs.service })
+    await expect(mt.$showOpenDialog({})).resolves.toBeUndefined()
+    await expect(mt.$showSaveDialog({})).resolves.toBeUndefined()
+  })
+
+  it('maps saveLabel to the dialog openLabel and returns the fsPath', async () => {
+    const dialogs = fakeFileDialogs(undefined, URI.file('/ws/out.txt'))
+    const mt = makeWindow({ fileDialogs: dialogs.service })
+    await expect(mt.$showSaveDialog({ saveLabel: 'Save', title: 'Save As' })).resolves.toBe(
+      URI.file('/ws/out.txt').fsPath,
+    )
+    expect(dialogs.showSaveDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ openLabel: 'Save', title: 'Save As' }),
+    )
   })
 })

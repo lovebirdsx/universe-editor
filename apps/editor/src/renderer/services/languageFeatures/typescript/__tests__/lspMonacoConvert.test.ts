@@ -15,6 +15,7 @@ import type {
   DocumentLink,
   DocumentSymbol,
   Hover,
+  InlayHint,
   Location,
   SelectionRange,
   SignatureHelp,
@@ -30,6 +31,7 @@ import {
   documentLinksToMonaco,
   documentSymbolsToMonaco,
   hoverToMonaco,
+  inlayHintsToMonaco,
   monacoPositionToLsp,
   rangeToMonaco,
   resolvedCodeLensToMonaco,
@@ -509,5 +511,64 @@ describe('resolvedCodeLensToMonaco', () => {
     expect(resolvedCodeLensToMonaco({ range: range(0, 0, 0, 1) }, original, fakeMonaco)).toBe(
       original,
     )
+  })
+})
+
+describe('inlayHintsToMonaco', () => {
+  it('shifts positions, passes kind/padding through and drops the resolve payload', () => {
+    const hint: InlayHint = {
+      position: { line: 4, character: 9 },
+      label: ': string',
+      kind: 1, // LSP Type — same numeric value as Monaco's InlayHintKind.Type
+      tooltip: { kind: 'markdown', value: 'the inferred type' },
+      paddingLeft: true,
+      textEdits: [{ range: range(4, 9, 4, 9), newText: ': string' }],
+      data: { file: 'a.ts' },
+    }
+    const out = inlayHintsToMonaco([hint], fakeMonaco)
+    expect(out.hints).toHaveLength(1)
+    const converted = out.hints[0]!
+    expect(converted.position).toEqual({ lineNumber: 5, column: 10 })
+    expect(converted.label).toBe(': string')
+    expect(converted.kind).toBe(1)
+    expect(converted.tooltip).toEqual({ value: 'the inferred type' })
+    expect(converted.paddingLeft).toBe(true)
+    expect(converted.paddingRight).toBeUndefined()
+    expect(converted.textEdits?.[0]).toEqual({
+      range: rangeToMonaco(range(4, 9, 4, 9)),
+      text: ': string',
+    })
+    // `data` exists only for the resolve round trip, which this iteration omits.
+    expect('data' in converted).toBe(false)
+  })
+
+  it('maps label parts (value → label) with location and command', () => {
+    const hint: InlayHint = {
+      position: { line: 0, character: 0 },
+      label: [
+        {
+          value: 'count',
+          tooltip: 'parameter',
+          location: { uri: 'file:///a.ts', range: range(1, 0, 1, 5) },
+          command: { title: 'Go', command: 'ext.go', arguments: [1] },
+        },
+      ],
+      kind: 2, // Parameter
+    }
+    const out = inlayHintsToMonaco([hint], fakeMonaco)
+    const parts = out.hints[0]?.label
+    expect(Array.isArray(parts)).toBe(true)
+    const part = (parts as monaco.languages.InlayHintLabelPart[])[0]!
+    expect(part.label).toBe('count')
+    expect(part.tooltip).toBe('parameter')
+    expect(part.location?.range).toEqual(rangeToMonaco(range(1, 0, 1, 5)))
+    expect(part.command?.id).toBe('ext.go')
+    expect(part.command?.arguments).toEqual([1])
+  })
+
+  it('returns an empty, disposable list for null', () => {
+    const out = inlayHintsToMonaco(null, fakeMonaco)
+    expect(out.hints).toEqual([])
+    expect(() => out.dispose()).not.toThrow()
   })
 })

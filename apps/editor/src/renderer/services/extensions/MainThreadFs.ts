@@ -13,15 +13,25 @@
  *  text-only decision if the file service has no realpath.
  *--------------------------------------------------------------------------------------------*/
 
-import { URI, type IFileService } from '@universe-editor/platform'
+import {
+  URI,
+  type IFileSearchService,
+  type IFileService,
+  type ILogger,
+} from '@universe-editor/platform'
 import {
   base64ToBytes,
   bytesToBase64,
+  compileGlobMatcher,
   type ExtHostFileType,
   type IExtHostFileStatDto,
   type IMainThreadFs,
 } from '@universe-editor/extensions-common'
 import type { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
+
+/** Upper bound for the `rg --files` enumeration behind `workspace.findFiles`;
+ *  the include-glob filter and the caller's `maxResults` apply on top. */
+const FIND_FILES_ENUMERATION_CAP = 100_000
 
 export class MainThreadFs implements IMainThreadFs {
   /** Lazily resolved, symlink-followed form of `_cwd` (see `_getCanonicalCwd`). */
@@ -32,6 +42,10 @@ export class MainThreadFs implements IMainThreadFs {
     private readonly _cwd: string | undefined,
     private readonly _policy: IAcpPathPolicy,
     private readonly _files: IFileService,
+    private readonly _fileSearch: IFileSearchService,
+    /** The configured default search excludes (files.exclude ∪ search.exclude). */
+    private readonly _defaultExcludes: () => readonly string[],
+    private readonly _logger: ILogger,
   ) {}
 
   private async _guard(path: string): Promise<URI> {
@@ -120,5 +134,51 @@ export class MainThreadFs implements IMainThreadFs {
 
   async $delete(path: string, recursive: boolean): Promise<void> {
     return this._files.delete(await this._guard(path), { recursive })
+  }
+
+  async $rename(source: string, target: string, overwrite: boolean): Promise<void> {
+    const [from, to] = await Promise.all([this._guard(source), this._guard(target)])
+    return this._files.rename(from, to, { overwrite })
+  }
+
+  async $copy(source: string, target: string, overwrite: boolean): Promise<void> {
+    const [from, to] = await Promise.all([this._guard(source), this._guard(target)])
+    return this._files.copy(from, to, { overwrite })
+  }
+
+  /**
+   * `workspace.findFiles`: enumerate the workspace live (matchAll walks with rg,
+   * never the stale listing cache), then apply the include glob to each match's
+   * workspace-relative path. No path policy here — the enumeration is rooted at
+   * the workspace and only fsPaths inside it come back.
+   */
+  async $findFiles(
+    include: string,
+    exclude: readonly string[] | null,
+    maxResults: number | null,
+  ): Promise<string[]> {
+    if (this._cwd === undefined) {
+      throw new Error('workspace.findFiles requires an open workspace folder')
+    }
+    const complete = await this._fileSearch.search({
+      root: URI.file(this._cwd),
+      pattern: '',
+      matchAll: true,
+      excludes: exclude === null ? [...this._defaultExcludes()] : [...exclude],
+      maxResults: FIND_FILES_ENUMERATION_CAP,
+    })
+    if (complete.limitHit) {
+      this._logger.warn(
+        `findFiles enumeration truncated at ${FIND_FILES_ENUMERATION_CAP} entries; results may be incomplete`,
+      )
+    }
+    const matches = compileGlobMatcher(include)
+    const out: string[] = []
+    for (const match of complete.results) {
+      if (!matches(match.relativePath)) continue
+      out.push(match.fsPath)
+      if (maxResults !== null && out.length >= maxResults) break
+    }
+    return out
   }
 }

@@ -18,13 +18,22 @@ import * as api from '../index.js'
  *  at runtime, so they're covered indirectly via the namespace-method checks. */
 const RUNTIME_EXPORTS = [
   'AiMessageRole',
+  'CancellationTokenSource',
+  'Disposable',
+  'EventEmitter',
   'FileType',
   'FoldingRangeKind',
+  'InlayHintKind',
   'OverviewRulerLane',
+  'ProgressLocation',
   'StatusBarAlignment',
   'TextDocumentSaveReason',
+  'TextEditorSelectionChangeKind',
+  'Uri',
   'ai',
   'commands',
+  'env',
+  'extensions',
   'languages',
   'scm',
   'version',
@@ -46,7 +55,9 @@ describe('extension-api surface', () => {
 /** A namespace and the methods it must expose. Adding a method here without
  *  shipping it (or vice versa) fails the test. */
 const NAMESPACE_METHODS: Record<string, readonly string[]> = {
-  commands: ['registerCommand', 'executeCommand'],
+  commands: ['registerCommand', 'executeCommand', 'getCommands'],
+  env: ['openExternal'],
+  extensions: ['getExtension'],
   window: [
     'showInformationMessage',
     'showWarningMessage',
@@ -55,8 +66,14 @@ const NAMESPACE_METHODS: Record<string, readonly string[]> = {
     'showInputBox',
     'createStatusBarItem',
     'createOutputChannel',
+    'setStatusBarMessage',
+    'withProgress',
+    'showOpenDialog',
+    'showSaveDialog',
     'getActiveTextEditor',
     'onDidChangeActiveTextEditor',
+    'showTextDocument',
+    'onDidChangeTextEditorSelection',
     'createTextEditorDecorationType',
     'registerCustomEditorProvider',
   ],
@@ -83,17 +100,28 @@ const NAMESPACE_METHODS: Record<string, readonly string[]> = {
     'registerFoldingRangeProvider',
     'registerCodeActionsProvider',
     'registerDocumentFormattingEditProvider',
+    'registerDocumentRangeFormattingEditProvider',
+    'registerOnTypeFormattingEditProvider',
+    'registerInlayHintsProvider',
     'registerCodeLensProvider',
     'createDiagnosticCollection',
     'setLanguageServerStatus',
+    'getLanguages',
   ],
   workspace: [
     'getConfiguration',
+    'openTextDocument',
     'onDidOpenTextDocument',
     'onDidChangeTextDocument',
     'onDidCloseTextDocument',
     'onWillSaveTextDocument',
+    'onDidSaveTextDocument',
+    'onDidChangeConfiguration',
     'registerTimelineProvider',
+    'asRelativePath',
+    'findFiles',
+    'applyEdit',
+    'createFileSystemWatcher',
   ],
 }
 
@@ -110,6 +138,19 @@ describe.each(Object.entries(NAMESPACE_METHODS))('%s namespace', (name, methods)
   })
 })
 
+describe('env.clipboard', () => {
+  it('is an object on env', () => {
+    expect(typeof api.env.clipboard).toBe('object')
+  })
+
+  const CLIPBOARD_METHODS = ['readText', 'writeText'] as const
+
+  it.each(CLIPBOARD_METHODS)('exposes %s as a function', (method) => {
+    const clipboard = api.env.clipboard as unknown as Record<string, unknown>
+    expect(typeof clipboard[method]).toBe('function')
+  })
+})
+
 describe('workspace.fs', () => {
   it('is an object on workspace', () => {
     expect(typeof api.workspace.fs).toBe('object')
@@ -122,12 +163,25 @@ describe('workspace.fs', () => {
     'readDirectory',
     'createDirectory',
     'delete',
+    'rename',
+    'copy',
   ] as const
 
   it.each(FS_METHODS)('exposes %s as a function', (method) => {
     const fs = api.workspace.fs as unknown as Record<string, unknown>
     expect(typeof fs[method]).toBe('function')
   })
+})
+
+describe('workspace properties', () => {
+  // Property presence is asserted via `in` (not a read): every getter delegates
+  // to the host bridge, which throws when no host is installed.
+  it.each(['rootPath', 'workspaceFolders', 'name', 'isTrusted'] as const)(
+    'exposes %s as a property',
+    (prop) => {
+      expect(prop in api.workspace).toBe(true)
+    },
+  )
 })
 
 describe('workspace.getConfiguration', () => {
@@ -164,6 +218,18 @@ describe('enums hold their wire values', () => {
     expect(api.OverviewRulerLane.Center).toBe(2)
     expect(api.OverviewRulerLane.Right).toBe(4)
     expect(api.OverviewRulerLane.Full).toBe(7)
+  })
+
+  it('ProgressLocation', () => {
+    expect(api.ProgressLocation.SourceControl).toBe(1)
+    expect(api.ProgressLocation.Window).toBe(10)
+    expect(api.ProgressLocation.Notification).toBe(15)
+  })
+
+  it('TextEditorSelectionChangeKind', () => {
+    expect(api.TextEditorSelectionChangeKind.Keyboard).toBe(1)
+    expect(api.TextEditorSelectionChangeKind.Mouse).toBe(2)
+    expect(api.TextEditorSelectionChangeKind.Command).toBe(3)
   })
 })
 

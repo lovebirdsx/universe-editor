@@ -1,13 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { URI } from '@universe-editor/platform'
-import type { TextEditor, UriComponents } from '@universe-editor/extension-api'
+import { Uri } from '@universe-editor/extension-api'
+import type {
+  TextEditor,
+  TextEditorSelectionChangeEvent,
+  UriComponents,
+} from '@universe-editor/extension-api'
 import type {
   IActiveTextEditorDto,
   IMainThreadEditor,
   IMainThreadCommands,
+  IMainThreadFileEvents,
+  IMainThreadFs,
   IMainThreadScm,
   IMainThreadTimeline,
   IMainThreadWindow,
@@ -61,6 +68,7 @@ function recordingMainThread(): {
         unregistered.push(id)
         return Promise.resolve()
       },
+      $getCommands: () => Promise.resolve([]),
       $executeCommand: (id, args) => {
         executed.push({ id, args })
         return Promise.resolve(`forwarded:${id}`)
@@ -75,6 +83,14 @@ const noopWindow: IMainThreadWindow = {
   $showInputBox: () => Promise.resolve(undefined),
   $setStatusBarEntry: () => Promise.resolve(),
   $disposeStatusBarEntry: () => Promise.resolve(),
+  $clipboardReadText: () => Promise.resolve(''),
+  $clipboardWriteText: () => Promise.resolve(),
+  $openExternal: () => Promise.resolve(false),
+  $startProgress: () => Promise.resolve(),
+  $reportProgress: () => Promise.resolve(),
+  $endProgress: () => Promise.resolve(),
+  $showOpenDialog: () => Promise.resolve(undefined),
+  $showSaveDialog: () => Promise.resolve(undefined),
 }
 
 const noopScm: IMainThreadScm = {
@@ -306,6 +322,97 @@ describe('ExtensionService', () => {
   })
 })
 
+describe('ExtensionService env / extensions namespaces', () => {
+  it('environment info defaults to empty strings until the renderer seeds it', () => {
+    const mt = recordingMainThread()
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+    )
+    expect(service.getEnvironmentInfo()).toEqual({
+      appName: '',
+      appVersion: '',
+      sessionId: '',
+      uriScheme: '',
+      language: '',
+    })
+
+    service.initializeEnvironment({
+      appName: 'Universe Editor',
+      appVersion: '1.2.3',
+      sessionId: 'session-1',
+      uriScheme: 'universe-editor',
+      language: 'zh-CN',
+    })
+    expect(service.getEnvironmentInfo().appName).toBe('Universe Editor')
+    expect(service.getEnvironmentInfo().language).toBe('zh-CN')
+  })
+
+  it('clipboard and openExternal delegate to mainThreadWindow', async () => {
+    const written: string[] = []
+    const opened: string[] = []
+    const window: IMainThreadWindow = {
+      ...noopWindow,
+      $clipboardReadText: () => Promise.resolve('clip'),
+      $clipboardWriteText: (value) => {
+        written.push(value)
+        return Promise.resolve()
+      },
+      $openExternal: (target) => {
+        opened.push(target)
+        return Promise.resolve(true)
+      },
+    }
+    const mt = recordingMainThread()
+    const service = new ExtensionService([scanned(['*'])], mt.impl, window, noopScm, noopTimeline)
+    await expect(service.clipboardReadText()).resolves.toBe('clip')
+    await service.clipboardWriteText('hello')
+    expect(written).toEqual(['hello'])
+    await expect(service.openExternal('https://example.com')).resolves.toBe(true)
+    expect(opened).toEqual(['https://example.com'])
+  })
+
+  it('getCommands returns the renderer registry ids', async () => {
+    const mt = recordingMainThread()
+    const window: IMainThreadWindow = { ...noopWindow }
+    const commands: IMainThreadCommands = {
+      ...mt.impl,
+      $getCommands: () => Promise.resolve(['a.cmd', '_internal.cmd']),
+    }
+    const service = new ExtensionService([scanned(['*'])], commands, window, noopScm, noopTimeline)
+    await expect(service.getCommands()).resolves.toEqual(['a.cmd', '_internal.cmd'])
+  })
+
+  it('extensions handles expose scanned metadata and live activation state', async () => {
+    const exportsMain = join(dir, 'withExports.mjs')
+    await writeFile(exportsMain, `export function activate() { return { ok: true } }`, 'utf8')
+    const ext: IScannedExtension = {
+      ...scanned(['onCommand:test.cmd']),
+      mainPath: exportsMain,
+    }
+    const mt = recordingMainThread()
+    const service = new ExtensionService([ext], mt.impl, noopWindow, noopScm, noopTimeline)
+
+    expect(service.getExtensions()).toHaveLength(1)
+    const handle = service.getExtension('test.ext')
+    expect(handle).toBeDefined()
+    expect(service.getExtension('no.such')).toBeUndefined()
+    expect(handle?.id).toBe('test.ext')
+    expect(handle?.extensionPath).toBe(dir)
+    expect(handle?.packageJSON.name).toBe('ext')
+    // Live getters: inactive until activated through the handle.
+    expect(handle?.isActive).toBe(false)
+    expect(handle?.exports).toBeUndefined()
+
+    await handle?.activate()
+    expect(handle?.isActive).toBe(true)
+    expect(handle?.exports).toEqual({ ok: true })
+  })
+})
+
 /**
  * Active-editor mirror: the wire DTO carries no document text (a 15MB buffer
  * re-crossing the wire per tab switch froze the renderer); the document must be
@@ -320,6 +427,9 @@ describe('ExtensionService active editor mirror', () => {
     $createDecorationType: () => Promise.resolve(),
     $disposeDecorationType: () => Promise.resolve(),
     $setDecorations: () => Promise.resolve(),
+    $openTextDocument: () => Promise.resolve(),
+    $showTextDocument: () => Promise.resolve(null),
+    $applyWorkspaceEdit: () => Promise.resolve(true),
   }
 
   function editorService(): ExtensionService {
@@ -379,5 +489,442 @@ describe('ExtensionService active editor mirror', () => {
     service.acceptDocumentOpen(docUri, 'typescript', 3, 'too late')
     await new Promise((r) => setTimeout(r, 0))
     expect(fired).toEqual([undefined])
+  })
+})
+
+describe('ExtensionService window additions', () => {
+  const docUri = URI.file('/ws/doc.md')
+  const docComponents = docUri.toJSON() as UriComponents
+
+  function serviceWith(
+    window: Partial<IMainThreadWindow> = {},
+    editor: Partial<IMainThreadEditor> = {},
+  ): ExtensionService {
+    const mt = recordingMainThread()
+    return new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      { ...noopWindow, ...window },
+      noopScm,
+      noopTimeline,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        $getActiveTextEditor: () => Promise.resolve(null),
+        $applyEdits: () => Promise.resolve(true),
+        $setSelections: () => Promise.resolve(),
+        $createDecorationType: () => Promise.resolve(),
+        $disposeDecorationType: () => Promise.resolve(),
+        $setDecorations: () => Promise.resolve(),
+        $openTextDocument: () => Promise.resolve(),
+        $showTextDocument: () => Promise.resolve(null),
+        $applyWorkspaceEdit: () => Promise.resolve(true),
+        ...editor,
+      },
+    )
+  }
+
+  it('withProgress starts, reports and ends the renderer progress', async () => {
+    const events: string[] = []
+    const service = serviceWith({
+      $startProgress: (handle, options) => {
+        events.push(`start:${handle}:${options.location}:${options.title ?? ''}`)
+        return Promise.resolve()
+      },
+      $reportProgress: (handle, value) => {
+        events.push(`report:${handle}:${value.message ?? ''}:${value.increment ?? ''}`)
+        return Promise.resolve()
+      },
+      $endProgress: (handle) => {
+        events.push(`end:${handle}`)
+        return Promise.resolve()
+      },
+    })
+    const result = await service.withProgress(
+      { location: 15, title: 'Working', cancellable: true },
+      (progress, token) => {
+        progress.report({ message: 'half', increment: 50 })
+        expect(token.isCancellationRequested).toBe(false)
+        return Promise.resolve('done')
+      },
+    )
+    expect(result).toBe('done')
+    expect(events).toEqual(['start:0:15:Working', 'report:0:half:50', 'end:0'])
+  })
+
+  it('withProgress ends the progress even when the task throws', async () => {
+    const ended: number[] = []
+    const service = serviceWith({
+      $endProgress: (handle) => {
+        ended.push(handle)
+        return Promise.resolve()
+      },
+    })
+    await expect(
+      service.withProgress({ location: 10 }, () => Promise.reject(new Error('boom'))),
+    ).rejects.toThrow('boom')
+    expect(ended).toEqual([0])
+  })
+
+  it('acceptProgressCanceled flips the task token', async () => {
+    const service = serviceWith()
+    let observed: boolean | undefined
+    const run = service.withProgress({ location: 15, cancellable: true }, (_progress, token) => {
+      return new Promise<string>((resolve) => {
+        token.onCancellationRequested(() => {
+          observed = token.isCancellationRequested
+          resolve('cancelled')
+        })
+      })
+    })
+    // Let $startProgress land so the cancel source is registered.
+    await new Promise((r) => setTimeout(r, 0))
+    service.acceptProgressCanceled(0)
+    await expect(run).resolves.toBe('cancelled')
+    expect(observed).toBe(true)
+  })
+
+  it('setStatusBarMessage hides after the timeout', () => {
+    vi.useFakeTimers()
+    try {
+      const entries = new Map<number, { text: string; alignment: number; priority: number }>()
+      const service = serviceWith({
+        $setStatusBarEntry: (handle, entry) => {
+          entries.set(handle, entry)
+          return Promise.resolve()
+        },
+        $disposeStatusBarEntry: (handle) => {
+          entries.delete(handle)
+          return Promise.resolve()
+        },
+      })
+      const disposable = service.setStatusBarMessage('saved', 1000)
+      expect(entries.size).toBe(1)
+      expect([...entries.values()][0]).toMatchObject({ text: 'saved', alignment: 0 })
+      vi.advanceTimersByTime(1000)
+      expect(entries.size).toBe(0)
+      disposable.dispose() // idempotent after auto-hide
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('setStatusBarMessage hides when the promise settles', async () => {
+    const entries = new Map<number, unknown>()
+    const service = serviceWith({
+      $setStatusBarEntry: (handle, entry) => {
+        entries.set(handle, entry)
+        return Promise.resolve()
+      },
+      $disposeStatusBarEntry: (handle) => {
+        entries.delete(handle)
+        return Promise.resolve()
+      },
+    })
+    let resolveDone!: () => void
+    const done = new Promise<void>((resolve) => {
+      resolveDone = resolve
+    })
+    service.setStatusBarMessage('building', done)
+    expect(entries.size).toBe(1)
+    resolveDone()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(entries.size).toBe(0)
+  })
+
+  it('showOpenDialog maps wire fsPaths back to Uri components', async () => {
+    let captured: { defaultUri?: string; title?: string } | undefined
+    const service = serviceWith({
+      $showOpenDialog: (options) => {
+        captured = options
+        return Promise.resolve(['/ws/a.ts', '/ws/b.ts'])
+      },
+    })
+    const uris = await service.showOpenDialog({
+      defaultUri: URI.file('/ws').toJSON(),
+      title: 'Open',
+    })
+    // The wire form is the extension-api fsPath (backslash-normalized on win32).
+    expect(captured?.defaultUri).toBe(Uri.file('/ws').fsPath)
+    expect(captured?.title).toBe('Open')
+    expect(uris).toEqual([Uri.file('/ws/a.ts').toJSON(), Uri.file('/ws/b.ts').toJSON()])
+  })
+
+  it('showSaveDialog returns undefined when cancelled', async () => {
+    const service = serviceWith({ $showSaveDialog: () => Promise.resolve(undefined) })
+    await expect(service.showSaveDialog()).resolves.toBeUndefined()
+  })
+
+  it('openTextDocument reuses an already-mirrored document (no RPC)', async () => {
+    const openRpc = vi.fn().mockResolvedValue(undefined)
+    const service = serviceWith({}, { $openTextDocument: openRpc })
+    service.acceptDocumentOpen(docComponents, 'markdown', 1, 'live')
+    const doc = await service.openTextDocument(docComponents)
+    expect(doc.getText()).toBe('live')
+    expect(openRpc).not.toHaveBeenCalled()
+  })
+
+  it('openTextDocument asks the renderer and waits for the mirror push', async () => {
+    const openRpc = vi.fn().mockResolvedValue(undefined)
+    const service = serviceWith({}, { $openTextDocument: openRpc })
+    const pending = service.openTextDocument(docComponents)
+    // The renderer's mirror push lands a tick after the RPC resolves.
+    setTimeout(() => service.acceptDocumentOpen(docComponents, 'markdown', 1, 'from disk'), 0)
+    const doc = await pending
+    expect(openRpc).toHaveBeenCalledOnce()
+    expect(doc.getText()).toBe('from disk')
+  })
+
+  it('showTextDocument returns the editor snapshot over the mirrored document', async () => {
+    const sels = [{ anchor: { line: 2, character: 1 }, active: { line: 2, character: 5 } }]
+    let shownOptions: unknown
+    const service = serviceWith(
+      {},
+      {
+        $showTextDocument: (uri, options) => {
+          shownOptions = options
+          return Promise.resolve({ uri, languageId: 'markdown', version: 1, selections: sels })
+        },
+      },
+    )
+    const pending = service.showTextDocument(docComponents, { preview: true })
+    service.acceptDocumentOpen(docComponents, 'markdown', 1, 'shown')
+    const editor = await pending
+    expect(shownOptions).toMatchObject({ preview: true })
+    expect(editor.document.getText()).toBe('shown')
+    expect(editor.selections[0]?.active.character).toBe(5)
+  })
+
+  it('fires onDidChangeTextEditorSelection with the mirrored document', () => {
+    const service = serviceWith()
+    service.acceptDocumentOpen(docComponents, 'markdown', 1, 'x')
+    const fired: TextEditorSelectionChangeEvent[] = []
+    service.onDidChangeTextEditorSelection((e) => fired.push(e))
+    // `kind` crosses the JSON wire as null when undefined.
+    service.acceptSelectionChange(
+      docComponents,
+      [{ anchor: { line: 1, character: 2 }, active: { line: 1, character: 2 } }],
+      null as unknown as undefined,
+    )
+    expect(fired).toHaveLength(1)
+    expect(fired[0]?.kind).toBeUndefined()
+    expect(fired[0]?.selections[0]?.active).toEqual({ line: 1, character: 2 })
+    expect(fired[0]?.textEditor.document.getText()).toBe('x')
+  })
+
+  it('drops selection changes for documents the mirror does not know', () => {
+    const service = serviceWith()
+    const fired: TextEditorSelectionChangeEvent[] = []
+    service.onDidChangeTextEditorSelection((e) => fired.push(e))
+    service.acceptSelectionChange(docComponents, [], 1)
+    expect(fired).toHaveLength(0)
+  })
+})
+
+describe('ExtensionService workspace additions', () => {
+  it('acceptDocumentSave fans out to onDidSaveTextDocument only for mirrored documents', () => {
+    const mt = recordingMainThread()
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+    )
+    const saved: string[] = []
+    service.onDidSaveTextDocument((doc) => saved.push(doc.getText()))
+
+    service.acceptDocumentSave(URI.file('/ws/never-opened.ts'))
+    expect(saved).toEqual([])
+
+    service.acceptDocumentOpen(URI.file('/ws/a.ts'), 'typescript', 1, 'const a = 1')
+    service.acceptDocumentSave(URI.file('/ws/a.ts'))
+    expect(saved).toEqual(['const a = 1'])
+  })
+
+  it('applyWorkspaceEdit forwards to mainThreadEditor', async () => {
+    const mt = recordingMainThread()
+    let applied: unknown
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        $getActiveTextEditor: () => Promise.resolve(null),
+        $applyEdits: () => Promise.resolve(true),
+        $setSelections: () => Promise.resolve(),
+        $createDecorationType: () => Promise.resolve(),
+        $disposeDecorationType: () => Promise.resolve(),
+        $setDecorations: () => Promise.resolve(),
+        $openTextDocument: () => Promise.resolve(),
+        $showTextDocument: () => Promise.resolve(null),
+        $applyWorkspaceEdit: (edit) => {
+          applied = edit
+          return Promise.resolve(true)
+        },
+      },
+    )
+    const edit = { changes: { 'file:///ws/a.ts': [] } }
+    await expect(service.applyWorkspaceEdit(edit)).resolves.toBe(true)
+    expect(applied).toBe(edit)
+  })
+
+  it('findFiles maps API exclude semantics onto the wire', async () => {
+    const mt = recordingMainThread()
+    const calls: Array<{ exclude: readonly string[] | null; maxResults: number | null }> = []
+    const fs: IMainThreadFs = {
+      $readFile: () => Promise.resolve(''),
+      $writeFile: () => Promise.resolve(),
+      $stat: () => Promise.resolve({ type: 'file', size: 0, mtime: 0 }),
+      $readDirectory: () => Promise.resolve([]),
+      $createDirectory: () => Promise.resolve(),
+      $delete: () => Promise.resolve(),
+      $rename: () => Promise.resolve(),
+      $copy: () => Promise.resolve(),
+      $findFiles: (_include, exclude, maxResults) => {
+        calls.push({ exclude, maxResults })
+        return Promise.resolve(['/ws/a.ts'])
+      },
+    }
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+      '/ws',
+      fs,
+    )
+    await expect(service.findFiles('**/*.ts', undefined, undefined)).resolves.toEqual(['/ws/a.ts'])
+    await service.findFiles('**/*.ts', null, 10)
+    await service.findFiles('**/*.ts', '**/dist/**', undefined)
+    expect(calls).toEqual([
+      { exclude: null, maxResults: null },
+      { exclude: [], maxResults: 10 },
+      { exclude: ['**/dist/**'], maxResults: null },
+    ])
+  })
+
+  it('fs.rename/fs.copy forward the overwrite flag', async () => {
+    const mt = recordingMainThread()
+    const calls: Array<[string, string, boolean]> = []
+    const fs: IMainThreadFs = {
+      $readFile: () => Promise.resolve(''),
+      $writeFile: () => Promise.resolve(),
+      $stat: () => Promise.resolve({ type: 'file', size: 0, mtime: 0 }),
+      $readDirectory: () => Promise.resolve([]),
+      $createDirectory: () => Promise.resolve(),
+      $delete: () => Promise.resolve(),
+      $rename: (s, t, o) => {
+        calls.push(['rename', `${s}->${t}`, o])
+        return Promise.resolve()
+      },
+      $copy: (s, t, o) => {
+        calls.push(['copy', `${s}->${t}`, o])
+        return Promise.resolve()
+      },
+      $findFiles: () => Promise.resolve([]),
+    }
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+      '/ws',
+      fs,
+    )
+    await service.fsRename('/ws/a', '/ws/b', true)
+    await service.fsCopy('/ws/a', '/ws/c', false)
+    expect(calls).toEqual([
+      ['rename', '/ws/a->/ws/b', true],
+      ['copy', '/ws/a->/ws/c', false],
+    ])
+  })
+
+  it('acceptConfigurationChanged fires affectsConfiguration with prefix semantics', () => {
+    const mt = recordingMainThread()
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+    )
+    const fired: boolean[][] = []
+    service.onDidChangeConfiguration((e) => {
+      fired.push([
+        e.affectsConfiguration('git'),
+        e.affectsConfiguration('git.autofetch'),
+        e.affectsConfiguration('git.autofetch.period'),
+        e.affectsConfiguration('gitlab'),
+        e.affectsConfiguration('other'),
+      ])
+    })
+    // Prefix matching is bidirectional: the changed key may sit under the asked
+    // section ('git') or prefix it ('git.autofetch.period').
+    service.acceptConfigurationChanged(['git.autofetch'])
+    expect(fired).toEqual([[true, true, true, false, false]])
+    service.acceptConfigurationChanged(['git'])
+    expect(fired[1]).toEqual([true, true, true, false, false])
+    // An empty change set never fires.
+    service.acceptConfigurationChanged([])
+    expect(fired).toHaveLength(2)
+  })
+
+  it('createFileSystemWatcher wires the registry and relays matched events', () => {
+    const mt = recordingMainThread()
+    const subscribed: string[] = []
+    const fileEvents: IMainThreadFileEvents = {
+      $subscribeFileEvents: () => {
+        subscribed.push('sub')
+        return Promise.resolve()
+      },
+      $unsubscribeFileEvents: () => {
+        subscribed.push('unsub')
+        return Promise.resolve()
+      },
+    }
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+      '/ws',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      fileEvents,
+    )
+    const watcher = service.createFileSystemWatcher('**/*.ts', false, false, false)
+    expect(watcher.ignoreCreateEvents).toBe(false)
+    expect(subscribed).toEqual(['sub'])
+
+    const seen: string[] = []
+    watcher.onDidChange((u) => seen.push(u.path ?? ''))
+    service.acceptFileEvents([
+      { type: 'changed', uri: URI.file('/ws/src/a.ts').toJSON() },
+      { type: 'changed', uri: URI.file('/ws/src/a.md').toJSON() },
+    ])
+    expect(seen).toEqual(['/ws/src/a.ts'])
+
+    watcher.dispose()
+    expect(subscribed).toEqual(['sub', 'unsub'])
+    service.dispose()
   })
 })

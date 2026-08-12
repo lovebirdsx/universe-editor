@@ -14,30 +14,40 @@
  */
 import { Emitter, type Event } from '@universe-editor/platform'
 import {
+  CancellationTokenSource,
+  Disposable,
   FileType,
+  Uri,
   type AiApi,
+  type CancellationToken,
   type CodeActionProvider,
   type CodeLensProvider,
   type CompletionItemProvider,
+  type ConfigurationChangeEvent,
   type CustomEditorOptions,
   type CustomReadonlyEditorProvider,
   type DecorationRenderOptions,
   type DefinitionProvider,
   type DiagnosticCollection,
-  type Disposable,
   type DocumentFormattingEditProvider,
   type DocumentSelector,
   type DocumentSemanticTokensProvider,
   type DocumentHighlightProvider,
   type DocumentLinkProvider,
+  type DocumentRangeFormattingEditProvider,
   type DocumentSymbolProvider,
+  type Extension,
   type FileStat,
   type FoldingRangeProvider,
   type HoverProvider,
   type ImplementationProvider,
+  type InlayHintsProvider,
   type InputBoxOptions,
   type LanguageServerStatus,
+  type OnTypeFormattingEditProvider,
   type OutputChannel,
+  type Progress,
+  type ProgressOptions,
   type QuickPickItem,
   type QuickPickOptions,
   type ReferenceProvider,
@@ -46,11 +56,14 @@ import {
   type SignatureHelpProvider,
   type SignatureHelpProviderMetadata,
   type SourceControl,
-  type StatusBarAlignment,
+  StatusBarAlignment,
   type StatusBarItem,
   type TextDocument,
+  type TextDocumentShowOptions,
   type TextEditor,
   type TextEditorDecorationType,
+  type TextEditorSelectionChangeEvent,
+  type TextEditorSelectionChangeKind,
   type TimelineProvider,
   type TypeDefinitionProvider,
   type UriComponents,
@@ -64,17 +77,25 @@ import {
   type ICodeActionContext,
   type ICompletionContext,
   type IFormattingOptionsDto,
+  type IExtHostEnvironmentDto,
   type IExtHostFileStatDto,
   type IExtensionDescriptionDto,
+  type IFileChangeEventDto,
+  type IOpenDialogOptionsDto,
+  type IProgressStepDto,
   type IReferenceContext,
+  type ISaveDialogOptionsDto,
+  type ISelectionDto,
   type ISignatureHelpContext,
   type IMainThreadCommands,
+  type IMainThreadFileEvents,
   type IMainThreadFs,
   type IMainThreadEditor,
   type IMainThreadLanguages,
   type IMainThreadOutput,
   type IMainThreadScm,
   type IMainThreadTimeline,
+  type ITextDocumentShowOptionsDto,
   type ITimelineDto,
   type ITimelineOptionsDto,
   type IMainThreadWindow,
@@ -98,6 +119,7 @@ import type {
   DocumentSymbol,
   FoldingRange,
   Hover,
+  InlayHint,
   Location,
   Position,
   Range,
@@ -111,11 +133,17 @@ import type {
 } from 'vscode-languageserver-types'
 import type { IScannedExtension } from './extensionScanner.js'
 import { installApiBridge, type IExtensionHostBridge } from './apiFactory.js'
+import type {
+  FileSystemWatcherBridge,
+  OpenDialogOptionsBridge,
+  SaveDialogOptionsBridge,
+} from './apiFactory.js'
 import { HostSourceControl } from './hostScm.js'
 import { ExtHostTimelineRegistry } from './hostTimeline.js'
 import { HostWebviewManager } from './hostWebviews.js'
 import { HostAi } from './hostAi.js'
 import { ExtHostDocuments } from './hostDocuments.js'
+import { HostFileWatcherRegistry } from './hostFileWatchers.js'
 import {
   HostOutputChannel,
   HostStatusBarItem,
@@ -135,10 +163,47 @@ function toFileStat(dto: IExtHostFileStatDto): FileStat {
   return { type: toFileType(dto.type), size: dto.size, mtime: dto.mtime }
 }
 
+/** Bridge options → wire DTO: `defaultUri` crosses as an fsPath string. */
+function toOpenDialogDto(options?: OpenDialogOptionsBridge): IOpenDialogOptionsDto {
+  return {
+    ...(options?.defaultUri !== undefined
+      ? { defaultUri: Uri.from(options.defaultUri).fsPath }
+      : {}),
+    ...(options?.openLabel !== undefined ? { openLabel: options.openLabel } : {}),
+    ...(options?.canSelectFiles !== undefined ? { canSelectFiles: options.canSelectFiles } : {}),
+    ...(options?.canSelectFolders !== undefined
+      ? { canSelectFolders: options.canSelectFolders }
+      : {}),
+    ...(options?.canSelectMany !== undefined ? { canSelectMany: options.canSelectMany } : {}),
+    ...(options?.filters !== undefined ? { filters: options.filters } : {}),
+    ...(options?.title !== undefined ? { title: options.title } : {}),
+  }
+}
+
+/** Bridge options → wire DTO: `defaultUri` crosses as an fsPath string. */
+function toSaveDialogDto(options?: SaveDialogOptionsBridge): ISaveDialogOptionsDto {
+  return {
+    ...(options?.defaultUri !== undefined
+      ? { defaultUri: Uri.from(options.defaultUri).fsPath }
+      : {}),
+    ...(options?.saveLabel !== undefined ? { saveLabel: options.saveLabel } : {}),
+    ...(options?.filters !== undefined ? { filters: options.filters } : {}),
+    ...(options?.title !== undefined ? { title: options.title } : {}),
+  }
+}
+
 /** How long an active-editor change may wait for its document's didOpen to land
  *  (first activation pushes the full text after plugin activation — seconds for
  *  a huge file). Past this, the change is dropped rather than fired docless. */
 const ACTIVE_EDITOR_DOC_WAIT_MS = 15_000
+
+/** How long `openTextDocument` waits for the renderer's mirror push after its
+ *  `$openTextDocument` RPC returned (language activation runs in between). */
+const OPEN_TEXT_DOCUMENT_WAIT_MS = 15_000
+
+/** Status-bar priority for `window.setStatusBarMessage`: higher sorts further
+ *  from center, so a very negative value keeps transient messages closest. */
+const STATUS_MESSAGE_PRIORITY = -1000
 
 export class ExtensionService implements IExtensionHostBridge {
   private readonly _commands: ExtensionCommandRegistry
@@ -152,6 +217,9 @@ export class ExtensionService implements IExtensionHostBridge {
   private _scmHandle = 0
   private _outputHandle = 0
   private _decorationTypeHandle = 0
+  private _progressHandle = 0
+  /** Cancellation sources of in-flight `withProgress` tasks, keyed by handle. */
+  private readonly _progressCancels = new Map<number, CancellationTokenSource>()
   /** Bumped per active-editor change; a held-back (doc-pending) change only
    *  fires if no newer change arrived while it waited. */
   private _activeEditorGeneration = 0
@@ -160,14 +228,41 @@ export class ExtensionService implements IExtensionHostBridge {
   readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined> =
     this._onDidChangeActiveTextEditor.event
 
+  private readonly _onDidChangeTextEditorSelection = new Emitter<TextEditorSelectionChangeEvent>()
+  readonly onDidChangeTextEditorSelection: Event<TextEditorSelectionChangeEvent> =
+    this._onDidChangeTextEditorSelection.event
+
   /** Workspace Trust state; seeded via `$initializeWorkspaceTrust`, flipped by a grant. */
   private _trusted = false
   private readonly _onDidGrantWorkspaceTrust = new Emitter<void>()
+
+  /** `env` namespace data; seeded via `$initializeEnvironment` before activation. */
+  private _environment: IExtHostEnvironmentDto = {
+    appName: '',
+    appVersion: '',
+    sessionId: '',
+    uriScheme: '',
+    language: '',
+  }
+
+  /** Memoized `extensions` namespace handles, keyed by extension id. */
+  private readonly _extensionApis = new Map<string, Extension<unknown>>()
+  /** Never fires within a host lifetime: extension-set changes restart the host. */
+  private readonly _onDidChangeExtensions = new Emitter<void>()
+  readonly onDidChangeExtensions: Event<void> = this._onDidChangeExtensions.event
 
   readonly onDidOpenTextDocument = this._documents.onDidOpen
   readonly onDidChangeTextDocument = this._documents.onDidChange
   readonly onDidCloseTextDocument = this._documents.onDidClose
   readonly onWillSaveTextDocument = this._documents.onWillSave
+  readonly onDidSaveTextDocument = this._documents.onDidSave
+
+  private readonly _onDidChangeConfiguration = new Emitter<ConfigurationChangeEvent>()
+  readonly onDidChangeConfiguration: Event<ConfigurationChangeEvent> =
+    this._onDidChangeConfiguration.event
+
+  /** Lazily created so a host without the file-events channel still works. */
+  private _fileWatchers?: HostFileWatcherRegistry
 
   constructor(
     private readonly _extensions: readonly IScannedExtension[],
@@ -185,6 +280,7 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _mainThreadWebviews?: IMainThreadWebviews,
     private readonly _globalStorageHome?: string,
     private readonly _mainThreadExtensions?: IMainThreadExtensions,
+    private readonly _mainThreadFileEvents?: IMainThreadFileEvents,
   ) {
     this._commands = new ExtensionCommandRegistry(_mainThreadCommands)
     this._languageRegistry = new LanguageProviderRegistry(() => this._languages(), this._documents)
@@ -210,6 +306,53 @@ export class ExtensionService implements IExtensionHostBridge {
 
   executeCommand(command: string, args: unknown[]): Promise<unknown> {
     return this._commands.execute(command, args)
+  }
+
+  getCommands(): Promise<string[]> {
+    return this._commands.getCommands()
+  }
+
+  // --- IExtensionHostBridge: env ---
+
+  /** IExtHostExtensions.$initializeEnvironment — pushed once by the renderer at connect. */
+  initializeEnvironment(env: IExtHostEnvironmentDto): void {
+    this._environment = env
+  }
+
+  getEnvironmentInfo(): IExtHostEnvironmentDto {
+    return this._environment
+  }
+
+  clipboardReadText(): Promise<string> {
+    return this._mainThreadWindow.$clipboardReadText()
+  }
+
+  clipboardWriteText(value: string): Promise<void> {
+    return this._mainThreadWindow.$clipboardWriteText(value)
+  }
+
+  openExternal(target: string): Promise<boolean> {
+    return this._mainThreadWindow.$openExternal(target)
+  }
+
+  // --- IExtensionHostBridge: extensions ---
+
+  getExtensions(): readonly Extension<unknown>[] {
+    return this._extensions.map((ext) => this._extensionApiFor(ext))
+  }
+
+  getExtension(extensionId: string): Extension<unknown> | undefined {
+    const ext = this._extensions.find((e) => e.id === extensionId)
+    return ext ? this._extensionApiFor(ext) : undefined
+  }
+
+  private _extensionApiFor(ext: IScannedExtension): Extension<unknown> {
+    let api = this._extensionApis.get(ext.id)
+    if (!api) {
+      api = new HostExtension(ext, this._activation)
+      this._extensionApis.set(ext.id, api)
+    }
+    return api
   }
 
   // --- IExtensionHostBridge: window ---
@@ -252,6 +395,88 @@ export class ExtensionService implements IExtensionHostBridge {
       priority,
       this._mainThreadWindow,
     )
+  }
+
+  /**
+   * `window.setStatusBarMessage`: pure host-side sugar over the status-bar item
+   * bridge (left, closest to center). Each call is an independent entry.
+   */
+  setStatusBarMessage(text: string, arg?: number | Promise<unknown>): Disposable {
+    const item = this.createStatusBarItem(StatusBarAlignment.Left, STATUS_MESSAGE_PRIORITY)
+    item.text = text
+    item.show()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let disposed = false
+    const dispose = (): void => {
+      if (disposed) return
+      disposed = true
+      if (timer !== undefined) clearTimeout(timer)
+      item.dispose()
+    }
+    if (typeof arg === 'number') {
+      timer = setTimeout(dispose, arg)
+    } else if (arg !== undefined) {
+      void arg.then(dispose, dispose)
+    }
+    return new Disposable(dispose)
+  }
+
+  /**
+   * `window.withProgress`: mount the renderer's progress UI for the duration of
+   * `task`. Steps go out as they are reported; a user cancel rides back over
+   * the `extHostWindow` channel and flips the task's token.
+   */
+  async withProgress<R>(
+    options: ProgressOptions,
+    task: (
+      progress: Progress<{ message?: string; increment?: number }>,
+      token: CancellationToken,
+    ) => Promise<R>,
+  ): Promise<R> {
+    const handle = this._progressHandle++
+    const cts = new CancellationTokenSource()
+    this._progressCancels.set(handle, cts)
+    try {
+      await this._mainThreadWindow.$startProgress(handle, {
+        location: options.location,
+        ...(options.title !== undefined ? { title: options.title } : {}),
+        ...(options.cancellable !== undefined ? { cancellable: options.cancellable } : {}),
+      })
+      const progress: Progress<{ message?: string; increment?: number }> = {
+        report: (value) => {
+          const step: IProgressStepDto = {
+            ...(value.message !== undefined ? { message: value.message } : {}),
+            ...(value.increment !== undefined ? { increment: value.increment } : {}),
+          }
+          void this._mainThreadWindow.$reportProgress(handle, step)
+        },
+      }
+      return await task(progress, cts.token)
+    } finally {
+      this._progressCancels.delete(handle)
+      cts.dispose()
+      try {
+        await this._mainThreadWindow.$endProgress(handle)
+      } catch (err) {
+        // A dead channel (host teardown) must not mask the task's own outcome.
+        console.warn(`[ext-host] $endProgress(${handle}) failed: ${(err as Error).message}`)
+      }
+    }
+  }
+
+  /** IExtHostWindow.$acceptProgressCanceled — the user cancelled the progress UI. */
+  acceptProgressCanceled(handle: number): void {
+    this._progressCancels.get(handle)?.cancel()
+  }
+
+  async showOpenDialog(options?: OpenDialogOptionsBridge): Promise<UriComponents[] | undefined> {
+    const picked = await this._mainThreadWindow.$showOpenDialog(toOpenDialogDto(options))
+    return picked?.map((fsPath) => Uri.file(fsPath).toJSON())
+  }
+
+  async showSaveDialog(options?: SaveDialogOptionsBridge): Promise<UriComponents | undefined> {
+    const picked = await this._mainThreadWindow.$showSaveDialog(toSaveDialogDto(options))
+    return picked !== undefined ? Uri.file(picked).toJSON() : undefined
   }
 
   createOutputChannel(name: string): OutputChannel {
@@ -400,6 +625,79 @@ export class ExtensionService implements IExtensionHostBridge {
     return this._fs().$delete(path, recursive)
   }
 
+  fsRename(source: string, target: string, overwrite: boolean): Promise<void> {
+    return this._fs().$rename(source, target, overwrite)
+  }
+
+  fsCopy(source: string, target: string, overwrite: boolean): Promise<void> {
+    return this._fs().$copy(source, target, overwrite)
+  }
+
+  /**
+   * `workspace.findFiles`: the renderer enumerates the workspace and glob-filters
+   * there. API `exclude` semantics map onto the wire as: undefined → null (the
+   * renderer's configured default excludes), null → [] (no exclusion), a string
+   * → a one-element list.
+   */
+  findFiles(
+    include: string,
+    exclude: string | null | undefined,
+    maxResults: number | undefined,
+  ): Promise<string[]> {
+    const wireExclude = exclude === undefined ? null : exclude === null ? [] : [exclude]
+    return this._fs().$findFiles(include, wireExclude, maxResults ?? null)
+  }
+
+  /**
+   * `workspace.applyEdit`. The renderer resolves false for edits it cannot
+   * apply (this iteration: anything carrying file create/rename/delete
+   * operations), which is the public contract as well.
+   */
+  applyWorkspaceEdit(edit: WorkspaceEdit): Promise<boolean> {
+    return this._editor().$applyWorkspaceEdit(edit)
+  }
+
+  createFileSystemWatcher(
+    globPattern: string,
+    ignoreCreateEvents: boolean,
+    ignoreChangeEvents: boolean,
+    ignoreDeleteEvents: boolean,
+  ): FileSystemWatcherBridge {
+    if (!this._fileWatchers) {
+      if (!this._mainThreadFileEvents) {
+        throw new Error('file system watchers are not available in this extension host')
+      }
+      this._fileWatchers = new HostFileWatcherRegistry(
+        this._mainThreadFileEvents,
+        this._workspaceRoot,
+      )
+    }
+    return this._fileWatchers.createWatcher(
+      globPattern,
+      ignoreCreateEvents,
+      ignoreChangeEvents,
+      ignoreDeleteEvents,
+    )
+  }
+
+  /** IExtHostFileEvents.$acceptFileEvents */
+  acceptFileEvents(events: readonly IFileChangeEventDto[]): void {
+    this._fileWatchers?.acceptFileEvents(events)
+  }
+
+  /** IExtHostExtensions.$acceptConfigurationChanged — renderer pushed a config change. */
+  acceptConfigurationChanged(changedKeys: readonly string[]): void {
+    if (changedKeys.length === 0) return
+    const keys = [...changedKeys]
+    this._onDidChangeConfiguration.fire({
+      affectsConfiguration: (section) =>
+        keys.some(
+          (key) =>
+            key === section || key.startsWith(`${section}.`) || section.startsWith(`${key}.`),
+        ),
+    })
+  }
+
   getConfiguration(
     section: string | undefined,
     key: string,
@@ -420,6 +718,45 @@ export class ExtensionService implements IExtensionHostBridge {
 
   getTextDocuments(): readonly TextDocument[] {
     return this._documents.all()
+  }
+
+  /**
+   * `workspace.openTextDocument`: reuse the mirror when the document is already
+   * open; otherwise have the renderer load it into the sync pipeline and wait
+   * for its `didOpen` to arrive.
+   */
+  async openTextDocument(target: UriComponents | string): Promise<TextDocument> {
+    const uri = typeof target === 'string' ? Uri.file(target) : Uri.from(target)
+    const components = uri.toJSON()
+    const existing = this._documents.get(components)
+    if (existing) return existing
+    await this._editor().$openTextDocument(components)
+    const document = await this._documents.whenOpen(components, OPEN_TEXT_DOCUMENT_WAIT_MS)
+    if (!document) {
+      throw new Error(`openTextDocument: document mirror never arrived for ${uri.toString()}`)
+    }
+    return document
+  }
+
+  /**
+   * `window.showTextDocument`: the document enters the mirror first (so the
+   * returned editor's document is live), then the renderer opens the editor.
+   */
+  async showTextDocument(
+    target: UriComponents | string,
+    options?: TextDocumentShowOptions,
+  ): Promise<TextEditor> {
+    const document = await this.openTextDocument(target)
+    const showOptions: ITextDocumentShowOptionsDto = {
+      ...(options?.preserveFocus !== undefined ? { preserveFocus: options.preserveFocus } : {}),
+      ...(options?.preview !== undefined ? { preview: options.preview } : {}),
+      ...(options?.selection !== undefined ? { selection: options.selection } : {}),
+    }
+    const snapshot = await this._editor().$showTextDocument(document.uri, showOptions)
+    if (!snapshot) {
+      throw new Error('showTextDocument: the editor did not open')
+    }
+    return this._editorFromSnapshot(snapshot, document)
   }
 
   // --- IExtensionHostBridge: editor (trusted-only) ---
@@ -468,6 +805,29 @@ export class ExtensionService implements IExtensionHostBridge {
     void this._documents.whenOpen(snapshot.uri, ACTIVE_EDITOR_DOC_WAIT_MS).then((lateDoc) => {
       if (generation !== this._activeEditorGeneration || !lateDoc) return
       this._onDidChangeActiveTextEditor.fire(this._editorFromSnapshot(snapshot, lateDoc))
+    })
+  }
+
+  /**
+   * IExtHostEditor.$acceptSelectionChange — renderer mirrors selection changes of
+   * the active editor (debounced there). The document comes from the mirror; a
+   * change for an unmirrored document is dropped.
+   */
+  acceptSelectionChange(
+    uri: UriComponents,
+    selections: readonly ISelectionDto[],
+    kind: number | undefined,
+  ): void {
+    if (!this._mainThreadEditor) return
+    const document = this._documents.get(uri)
+    if (!document) return
+    const sels = selections.map((s) => ({ anchor: s.anchor, active: s.active }))
+    const editor = new HostTextEditor(document, sels, document.version, this._mainThreadEditor)
+    this._onDidChangeTextEditorSelection.fire({
+      textEditor: editor,
+      selections: sels,
+      // `undefined` crosses the JSON wire as null; normalize back.
+      kind: (kind ?? undefined) as TextEditorSelectionChangeKind | undefined,
     })
   }
 
@@ -583,6 +943,29 @@ export class ExtensionService implements IExtensionHostBridge {
     return this._languageRegistry.registerDocumentFormattingEditProvider(selector, provider)
   }
 
+  registerDocumentRangeFormattingEditProvider(
+    selector: DocumentSelector,
+    provider: DocumentRangeFormattingEditProvider,
+  ): Disposable {
+    return this._languageRegistry.registerDocumentRangeFormattingEditProvider(selector, provider)
+  }
+
+  registerOnTypeFormattingEditProvider(
+    selector: DocumentSelector,
+    provider: OnTypeFormattingEditProvider,
+    triggerCharacters: readonly string[],
+  ): Disposable {
+    return this._languageRegistry.registerOnTypeFormattingEditProvider(
+      selector,
+      provider,
+      triggerCharacters,
+    )
+  }
+
+  registerInlayHintsProvider(selector: DocumentSelector, provider: InlayHintsProvider): Disposable {
+    return this._languageRegistry.registerInlayHintsProvider(selector, provider)
+  }
+
   registerDocumentSemanticTokensProvider(
     selector: DocumentSelector,
     provider: DocumentSemanticTokensProvider,
@@ -600,6 +983,10 @@ export class ExtensionService implements IExtensionHostBridge {
 
   setLanguageServerStatus(id: string, status: LanguageServerStatus): void {
     this._languages().$setLanguageServerStatus(id, status)
+  }
+
+  getLanguages(): Promise<string[]> {
+    return this._languages().$getLanguages()
   }
 
   // --- IExtensionHostBridge: ai (trusted-only) ---
@@ -637,6 +1024,11 @@ export class ExtensionService implements IExtensionHostBridge {
   /** IExtHostDocuments.$provideWillSaveEdits */
   provideWillSaveEdits(uri: UriComponents, reason: WillSaveReason): Promise<TextEdit[]> {
     return this._documents.provideWillSaveEdits(uri, reason)
+  }
+
+  /** IExtHostDocuments.$acceptDocumentSave */
+  acceptDocumentSave(uri: UriComponents): void {
+    this._documents.acceptSave(uri)
   }
 
   // --- RPC surface: languages (delegated to the registry) ---
@@ -772,6 +1164,29 @@ export class ExtensionService implements IExtensionHostBridge {
     return this._languageRegistry.provideDocumentFormattingEdits(handle, uri, options)
   }
 
+  provideDocumentRangeFormattingEdits(
+    handle: number,
+    uri: UriComponents,
+    range: Range,
+    options: IFormattingOptionsDto,
+  ): Promise<TextEdit[] | null> {
+    return this._languageRegistry.provideDocumentRangeFormattingEdits(handle, uri, range, options)
+  }
+
+  provideOnTypeFormattingEdits(
+    handle: number,
+    uri: UriComponents,
+    position: Position,
+    ch: string,
+    options: IFormattingOptionsDto,
+  ): Promise<TextEdit[] | null> {
+    return this._languageRegistry.provideOnTypeFormattingEdits(handle, uri, position, ch, options)
+  }
+
+  provideInlayHints(handle: number, uri: UriComponents, range: Range): Promise<InlayHint[] | null> {
+    return this._languageRegistry.provideInlayHints(handle, uri, range)
+  }
+
   provideDocumentSemanticTokens(
     handle: number,
     uri: UriComponents,
@@ -843,6 +1258,43 @@ export class ExtensionService implements IExtensionHostBridge {
   dispose(): void {
     this._webviews?.dispose()
     this._timelines.dispose()
+    this._fileWatchers?.dispose()
     this._activation.disposeAll()
+  }
+}
+
+/**
+ * The handle behind `extensions.getExtension()`. `isActive`/`exports` are live
+ * getters over the activation service, so a handle obtained before activation
+ * reflects the state change afterwards (no snapshot).
+ */
+class HostExtension implements Extension<unknown> {
+  constructor(
+    private readonly _scanned: IScannedExtension,
+    private readonly _activation: ExtensionActivationService,
+  ) {}
+
+  get id(): string {
+    return this._scanned.id
+  }
+
+  get extensionPath(): string {
+    return this._scanned.extensionPath
+  }
+
+  get isActive(): boolean {
+    return this._activation.isActivated(this._scanned.id)
+  }
+
+  get packageJSON(): Record<string, unknown> {
+    return this._scanned.manifest as unknown as Record<string, unknown>
+  }
+
+  get exports(): unknown {
+    return this._activation.getExports(this._scanned.id)
+  }
+
+  activate(): Promise<unknown> {
+    return this._activation.activateById(this._scanned.id)
   }
 }

@@ -24,6 +24,7 @@ import type {
   DocumentSymbol,
   FoldingRange,
   Hover,
+  InlayHint,
   Location,
   Position,
   Range,
@@ -48,12 +49,18 @@ export const ExtHostChannels = {
   mainThreadCommands: 'mainThreadCommands',
   /** Ext host → renderer: `window.*` UI (messages, quick input, status bar). */
   mainThreadWindow: 'mainThreadWindow',
+  /** Renderer → ext host: window-scoped callbacks (progress cancellation). */
+  extHostWindow: 'extHostWindow',
   /** Ext host → renderer: the SCM model feeding the built-in source-control view. */
   mainThreadScm: 'mainThreadScm',
   /** Renderer → ext host: SCM view interactions (commit-box edits). */
   extHostScm: 'extHostScm',
   /** Ext host → renderer: gated filesystem access (path policy + IFileService). */
   mainThreadFs: 'mainThreadFs',
+  /** Renderer → ext host: filesystem event batches feeding `workspace.createFileSystemWatcher`. */
+  extHostFileEvents: 'extHostFileEvents',
+  /** Ext host → renderer: declares/drops interest in filesystem events (watcher count). */
+  mainThreadFileEvents: 'mainThreadFileEvents',
   /** Ext host → renderer: output channels shown in the Output panel. */
   mainThreadOutput: 'mainThreadOutput',
   /** Renderer → ext host: language `provide*` requests routed to a plugin's registered providers. */
@@ -111,11 +118,40 @@ export interface IExtHostExtensions {
    */
   $initializeWorkspaceTrust(trusted: boolean): Promise<void>
   /**
+   * Seed the `env` namespace data before any activation. The renderer calls this
+   * once, right after connecting (alongside `$initializeWorkspaceTrust`).
+   */
+  $initializeEnvironment(env: IExtHostEnvironmentDto): Promise<void>
+  /**
    * Trust was granted for the current workspace (untrusted → trusted). Flips
    * `workspace.isTrusted` and fires `onDidGrantWorkspaceTrust`. A revoke is not
    * sent here — it restarts the whole host (activated extensions can't unload).
    */
   $onDidGrantWorkspaceTrust(): Promise<void>
+  /**
+   * Configuration values changed in the renderer; `changedKeys` carries every
+   * effective key that changed (e.g. `git.autofetch`). The host fans this out as
+   * `workspace.onDidChangeConfiguration`. Events fired while the host restarts
+   * are lost — extensions re-read configuration after activation anyway.
+   */
+  $acceptConfigurationChanged(changedKeys: readonly string[]): Promise<void>
+}
+
+/**
+ * Environment info the renderer pushes to the host once at connect, backing the
+ * extension-facing `env` namespace. All values are plain strings (JSON-safe).
+ */
+export interface IExtHostEnvironmentDto {
+  /** Product name (e.g. `Universe Editor`). */
+  readonly appName: string
+  /** Editor version. */
+  readonly appVersion: string
+  /** Unique per editor session; survives host restarts within the session. */
+  readonly sessionId: string
+  /** The OS-level deep-link scheme (e.g. `universe-editor`). */
+  readonly uriScheme: string
+  /** Display locale, e.g. `zh-CN`. */
+  readonly language: string
 }
 
 /** An extension's `activate` threw. Reported host → renderer so the failure is
@@ -149,6 +185,8 @@ export interface IMainThreadExtensions {
 export interface IMainThreadCommands {
   $registerCommand(id: string): Promise<void>
   $unregisterCommand(id: string): Promise<void>
+  /** Every command id the renderer's registry currently holds (built-in + contributed). */
+  $getCommands(): Promise<string[]>
   /**
    * Run a renderer-side built-in command (host → renderer direction). Used when
    * an extension's `commands.executeCommand` targets a command the host doesn't
@@ -189,6 +227,42 @@ export interface IExtHostStatusBarEntryDto {
 }
 
 /**
+ * Options for a `window.withProgress` run, crossing the wire on
+ * `mainThreadWindow`. `location` carries the public `ProgressLocation` value
+ * (1 = SourceControl, 10 = Window, 15 = Notification).
+ */
+export interface IProgressOptionsDto {
+  readonly location: number
+  readonly title?: string
+  readonly cancellable?: boolean
+}
+
+/** One progress step an extension task reports (message and/or percent delta). */
+export interface IProgressStepDto {
+  readonly message?: string
+  readonly increment?: number
+}
+
+/** `window.showOpenDialog` options. `defaultUri` crosses as an fsPath string. */
+export interface IOpenDialogOptionsDto {
+  readonly defaultUri?: string
+  readonly openLabel?: string
+  readonly canSelectFiles?: boolean
+  readonly canSelectFolders?: boolean
+  readonly canSelectMany?: boolean
+  readonly filters?: Record<string, readonly string[]>
+  readonly title?: string
+}
+
+/** `window.showSaveDialog` options. `defaultUri` crosses as an fsPath string. */
+export interface ISaveDialogOptionsDto {
+  readonly defaultUri?: string
+  readonly saveLabel?: string
+  readonly filters?: Record<string, readonly string[]>
+  readonly title?: string
+}
+
+/**
  * Renderer → exposed to the ext host: the `window.*` namespace. Backs messages,
  * quick input and status-bar items an extension creates programmatically.
  * Status-bar items are keyed by a host-allocated `handle`.
@@ -213,6 +287,43 @@ export interface IMainThreadWindow {
   /** Create or update the status-bar entry for `handle`. */
   $setStatusBarEntry(handle: number, entry: IExtHostStatusBarEntryDto): Promise<void>
   $disposeStatusBarEntry(handle: number): Promise<void>
+  /** Read the OS clipboard's current text. */
+  $clipboardReadText(): Promise<string>
+  /** Write text onto the OS clipboard. */
+  $clipboardWriteText(value: string): Promise<void>
+  /**
+   * Open a target through the workbench's opener service (external URLs go to
+   * the OS browser; files open in an editor). Resolves to whether some opener
+   * handled it. The target is a URI string (`Uri.toString()` or a raw URL/path).
+   */
+  $openExternal(target: string): Promise<boolean>
+  /**
+   * Mount the progress UI for `handle` (host-allocated). The indicator stays
+   * up until `$endProgress`; steps arrive via `$reportProgress`. When the user
+   * cancels a cancellable progress, the renderer pushes
+   * `IExtHostWindow.$acceptProgressCanceled` back to the host.
+   */
+  $startProgress(handle: number, options: IProgressOptionsDto): Promise<void>
+  $reportProgress(handle: number, value: IProgressStepDto): Promise<void>
+  $endProgress(handle: number): Promise<void>
+  /**
+   * Workbench file picker; resolves to the picked fsPaths, or undefined when
+   * cancelled. `canSelectMany`/`filters` ride the wire for API compatibility —
+   * the current dialog picks a single entry and does not filter.
+   */
+  $showOpenDialog(options: IOpenDialogOptionsDto): Promise<string[] | undefined>
+  /** Save-location picker; resolves to the chosen fsPath, or undefined when cancelled. */
+  $showSaveDialog(options: ISaveDialogOptionsDto): Promise<string | undefined>
+}
+
+/**
+ * Ext host → exposed to the renderer (host's ChannelServer): window-scoped
+ * callbacks the renderer pushes back for `window.*` operations — currently the
+ * cancellation of a `withProgress` task's token.
+ */
+export interface IExtHostWindow {
+  /** The user cancelled the progress UI for `handle`; the host cancels the task token. */
+  $acceptProgressCanceled(handle: number): Promise<void>
 }
 
 /** A filesystem entry's kind. Mirrors the subset of `IFileStat` extensions need. */
@@ -240,6 +351,50 @@ export interface IMainThreadFs {
   $readDirectory(path: string): Promise<Array<[name: string, type: ExtHostFileType]>>
   $createDirectory(path: string): Promise<void>
   $delete(path: string, recursive: boolean): Promise<void>
+  /** Both paths pass the same path policy as every other call. Without
+   *  `overwrite`, an existing target rejects. */
+  $rename(source: string, target: string, overwrite: boolean): Promise<void>
+  $copy(source: string, target: string, overwrite: boolean): Promise<void>
+  /**
+   * Enumerate workspace files matching the `include` glob (VSCode glob
+   * semantics over workspace-relative paths) and return their fsPaths.
+   * `exclude`: null → the renderer's configured search excludes
+   * (files.exclude ∪ search.exclude); an empty array → no excludes at all.
+   * `maxResults`: null → unbounded (still internally capped at enumeration).
+   */
+  $findFiles(
+    include: string,
+    exclude: readonly string[] | null,
+    maxResults: number | null,
+  ): Promise<string[]>
+}
+
+/** One filesystem event batch entry, renderer → ext host, for
+ *  `workspace.createFileSystemWatcher`. `uri` is a `file:` UriComponents. */
+export interface IFileChangeEventDto {
+  readonly type: 'created' | 'changed' | 'deleted'
+  readonly uri: UriComponents
+}
+
+/**
+ * Renderer → exposed to the ext host: filesystem event batches pushed only
+ * while the host declared interest via {@link IMainThreadFileEvents}. Events
+ * cover the recursive workspace watch (plus any out-of-workspace paths the
+ * workbench watches); the host filters by each watcher's glob.
+ */
+export interface IExtHostFileEvents {
+  $acceptFileEvents(events: readonly IFileChangeEventDto[]): Promise<void>
+}
+
+/**
+ * Ext host → exposed to the renderer: the host declares interest in filesystem
+ * events while at least one extension-created FileSystemWatcher is alive. The
+ * renderer forwards `IFileWatcherService.onDidChangeFiles` batches only between
+ * subscribe and unsubscribe, so a host with no watchers costs zero RPC traffic.
+ */
+export interface IMainThreadFileEvents {
+  $subscribeFileEvents(): Promise<void>
+  $unsubscribeFileEvents(): Promise<void>
 }
 
 /**
@@ -278,6 +433,9 @@ export type LanguageProviderType =
   | 'documentFormatting'
   | 'documentSemanticTokens'
   | 'codeLens'
+  | 'documentRangeFormatting'
+  | 'onTypeFormatting'
+  | 'inlayHints'
 
 /** Language ids a provider applies to. Empty for workspace-wide providers. */
 export type DocumentSelector = readonly string[]
@@ -298,6 +456,9 @@ export interface ILanguageProviderMetadata {
    *  Monaco's `getLegend()` must return it synchronously, so it rides along at
    *  registration time rather than being fetched per request. */
   readonly semanticTokensLegend?: ISemanticTokensLegend
+  /** On-type formatting trigger characters (first + more). Monaco exposes them
+   *  synchronously as `autoFormatTriggerCharacters`, so they cross at registration. */
+  readonly onTypeFormattingTriggerCharacters?: readonly string[]
 }
 
 /** Names for the numeric token-type / modifier indices in `SemanticTokens.data`. */
@@ -429,6 +590,25 @@ export interface IExtHostLanguages {
     uri: UriComponents,
     options: IFormattingOptionsDto,
   ): Promise<TextEdit[] | null>
+  $provideDocumentRangeFormattingEdits(
+    handle: number,
+    uri: UriComponents,
+    range: Range,
+    options: IFormattingOptionsDto,
+  ): Promise<TextEdit[] | null>
+  $provideOnTypeFormattingEdits(
+    handle: number,
+    uri: UriComponents,
+    position: Position,
+    ch: string,
+    options: IFormattingOptionsDto,
+  ): Promise<TextEdit[] | null>
+  /**
+   * Inlay hints for `range`. One-shot: hints carry their full label/tooltip
+   * (no `inlayHint/resolve` round trip this iteration), so an LSP hint's `data`
+   * field is dropped on return.
+   */
+  $provideInlayHints(handle: number, uri: UriComponents, range: Range): Promise<InlayHint[] | null>
   $provideDocumentSemanticTokens(handle: number, uri: UriComponents): Promise<SemanticTokens | null>
   $provideCodeLenses(handle: number, uri: UriComponents): Promise<CodeLens[] | null>
   $resolveCodeLens(handle: number, lens: CodeLens): Promise<CodeLens | null>
@@ -475,6 +655,13 @@ export interface IExtHostDocuments {
    * (1 = manual, 2 = after delay, 3 = focus out).
    */
   $provideWillSaveEdits(uri: UriComponents, reason: WillSaveReason): Promise<TextEdit[]>
+  /**
+   * Renderer → host push (fire-and-forget): the document at `uri` was written
+   * to disk. The renderer flushes its debounced mirror changes first, so the
+   * host's mirrored document already holds the saved text when this arrives.
+   * Backs `workspace.onDidSaveTextDocument`.
+   */
+  $acceptDocumentSave(uri: UriComponents): Promise<void>
 }
 
 /** Why a save is happening. Mirrors LSP `TextDocumentSaveReason`. */
@@ -507,6 +694,14 @@ export interface IMainThreadLanguages {
    * `provide*` feature with a server-driven refresh signal).
    */
   $emitCodeLensDidChange(handle: number): void
+  /**
+   * An inlay-hints provider's hints changed (its `onDidChangeInlayHints` fired):
+   * tell the renderer to re-request hints for that provider. Same push direction
+   * and per-handle emitter wiring as `$emitCodeLensDidChange`.
+   */
+  $emitInlayHintsDidChange(handle: number): void
+  /** Every language id the editor currently knows (Monaco's language registry). */
+  $getLanguages(): Promise<string[]>
   /**
    * A plugin reported its language server's lifecycle state (starting/ready/error),
    * keyed by `id` (e.g. `'typescript'`). Provider → renderer push; the renderer
@@ -563,6 +758,14 @@ export interface IActiveTextEditorDto {
   readonly selections: readonly ISelectionDto[]
 }
 
+/** Options for {@link IMainThreadEditor.$showTextDocument}; mirrors the public
+ *  `TextDocumentShowOptions`. `selection` is LSP-shaped (0-based). */
+export interface ITextDocumentShowOptionsDto {
+  readonly preserveFocus?: boolean
+  readonly preview?: boolean
+  readonly selection?: Range
+}
+
 /**
  * Ext host → exposed to the renderer: inspect and drive the active text editor.
  * Backs `window.activeTextEditor` and `TextEditor.edit()`. Coordinates are
@@ -572,6 +775,24 @@ export interface IActiveTextEditorDto {
 export interface IMainThreadEditor {
   /** Snapshot of the focused editor, or null when no text editor is active. */
   $getActiveTextEditor(): Promise<IActiveTextEditorDto | null>
+  /**
+   * Ensure the document at `uri` enters the renderer→host document mirror (its
+   * `$acceptDocumentOpen` follows asynchronously, once language activation has
+   * run). A document already mirrored (open in an editor) is reused as-is;
+   * otherwise the file is read from disk into a model that joins the same sync
+   * pipeline. Rejects when the file can't be read or the scheme isn't `file`.
+   */
+  $openTextDocument(uri: UriComponents): Promise<void>
+  /**
+   * Open the document at `uri` in a text editor and resolve its snapshot (same
+   * shape as `$getActiveTextEditor`; null when the editor never mounted).
+   * `selection` is revealed; `preview` opens into the group's unpinned preview
+   * slot; `preserveFocus` shows the editor without moving keyboard focus.
+   */
+  $showTextDocument(
+    uri: UriComponents,
+    options: ITextDocumentShowOptionsDto,
+  ): Promise<IActiveTextEditorDto | null>
   /**
    * Apply edits to the document at `uri` as one undo step. Edits are
    * non-overlapping; the renderer sorts and applies them bottom-up. Returns
@@ -593,6 +814,13 @@ export interface IMainThreadEditor {
     typeHandle: number,
     ranges: readonly IDecorationRangeDto[],
   ): Promise<void>
+  /**
+   * Apply an LSP-shaped WorkspaceEdit across files (live models get undoable
+   * model edits; unopened files are read/patched/written on disk). This
+   * iteration supports TEXT edits only: a `documentChanges` entry that is a
+   * create/rename/delete file operation rejects the whole edit with `false`.
+   */
+  $applyWorkspaceEdit(edit: WorkspaceEdit): Promise<boolean>
 }
 
 /**
@@ -603,6 +831,18 @@ export interface IMainThreadEditor {
  */
 export interface IExtHostEditor {
   $acceptActiveEditorChange(editor: IActiveTextEditorDto | null): Promise<void>
+  /**
+   * Selection changes in the ACTIVE text editor, debounced (~30ms trailing) by
+   * the renderer so a typing burst arrives as a single event carrying the latest
+   * selections. `kind` mirrors the public `TextEditorSelectionChangeKind`
+   * (1 = keyboard, 2 = mouse, 3 = command); undefined when the change was
+   * programmatic (e.g. the host's own `$setSelections`).
+   */
+  $acceptSelectionChange(
+    uri: UriComponents,
+    selections: readonly ISelectionDto[],
+    kind: number | undefined,
+  ): Promise<void>
 }
 
 /** Storage scope mirroring the platform's `StorageScope`: 0 = global (all

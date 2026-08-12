@@ -9,7 +9,13 @@ import { describe, expect, it, vi } from 'vitest'
 import { DisposableStore, Emitter } from '@universe-editor/platform'
 import type { IExtHostLanguages } from '@universe-editor/extensions-common'
 import type { monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
-import { createCodeLensProxy, createDocumentSymbolProxy } from '../languageProviderProxy.js'
+import {
+  createCodeLensProxy,
+  createDocumentRangeFormattingProxy,
+  createDocumentSymbolProxy,
+  createInlayHintsProxy,
+  createOnTypeFormattingProxy,
+} from '../languageProviderProxy.js'
 
 vi.mock('../../../workbench/editor/monaco/MonacoLoader.js', () => ({
   MonacoLoader: { get: () => ({}), peek: () => undefined },
@@ -30,6 +36,14 @@ const lspSymbol = {
 }
 
 const lspLens = { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } } }
+
+/** Monaco 1-based IRange → the LSP 0-based shape expected on the wire. */
+function rangeToLsp(r: monaco.IRange) {
+  return {
+    start: { line: r.startLineNumber - 1, character: r.startColumn - 1 },
+    end: { line: r.endLineNumber - 1, character: r.endColumn - 1 },
+  }
+}
 
 describe('createDocumentSymbolProxy pull cache', () => {
   it('serves an unchanged model version from cache (one wire pull)', async () => {
@@ -118,5 +132,87 @@ describe('createCodeLensProxy pull cache', () => {
     changeEmitter.fire()
     await proxy.provideCodeLenses(model, null as never)
     expect(pull).toHaveBeenCalledTimes(2)
+  })
+})
+
+const lspEdit = {
+  range: { start: { line: 0, character: 0 }, end: { line: 0, character: 2 } },
+  newText: 'x',
+}
+
+describe('createDocumentRangeFormattingProxy', () => {
+  it('forwards handle/uri/range/options and converts the edits (1-based ranges out)', async () => {
+    const pull = vi.fn().mockResolvedValue([lspEdit])
+    const proxy = createDocumentRangeFormattingProxy(3, {
+      $provideDocumentRangeFormattingEdits: pull,
+    } as unknown as IExtHostLanguages)
+
+    const model = makeModel('file:///a.ts')
+    const monacoRange = { startLineNumber: 2, startColumn: 1, endLineNumber: 3, endColumn: 5 }
+    const out = await proxy.provideDocumentRangeFormattingEdits(
+      model,
+      monacoRange as monaco.Range,
+      { tabSize: 2, insertSpaces: true } as monaco.languages.FormattingOptions,
+      null as never,
+    )
+    // Monaco 1-based range in → LSP 0-based range on the wire.
+    expect(pull).toHaveBeenCalledWith(3, model.uri, rangeToLsp(monacoRange), {
+      tabSize: 2,
+      insertSpaces: true,
+    })
+    expect(out).toEqual([
+      { range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 3 }, text: 'x' },
+    ])
+  })
+})
+
+describe('createOnTypeFormattingProxy', () => {
+  it('exposes the trigger characters synchronously and forwards ch/position/options', async () => {
+    const pull = vi.fn().mockResolvedValue([lspEdit])
+    const proxy = createOnTypeFormattingProxy(
+      4,
+      { $provideOnTypeFormattingEdits: pull } as unknown as IExtHostLanguages,
+      ['}', ';'],
+    )
+    expect(proxy.autoFormatTriggerCharacters).toEqual(['}', ';'])
+
+    const model = makeModel('file:///a.ts')
+    await proxy.provideOnTypeFormattingEdits(
+      model,
+      { lineNumber: 3, column: 8 } as monaco.Position,
+      '}',
+      { tabSize: 4, insertSpaces: false } as monaco.languages.FormattingOptions,
+      null as never,
+    )
+    expect(pull).toHaveBeenCalledWith(4, model.uri, { line: 2, character: 7 }, '}', {
+      tabSize: 4,
+      insertSpaces: false,
+    })
+  })
+})
+
+describe('createInlayHintsProxy', () => {
+  it('wires onDidChangeInlayHints to the given event and converts hints', async () => {
+    const pull = vi
+      .fn()
+      .mockResolvedValue([{ position: { line: 1, character: 4 }, label: ': number', kind: 1 }])
+    const changeEmitter = new Emitter<void>()
+    const proxy = createInlayHintsProxy(
+      5,
+      { $provideInlayHints: pull } as unknown as IExtHostLanguages,
+      changeEmitter.event,
+    )
+
+    let fired = 0
+    proxy.onDidChangeInlayHints?.(() => fired++)
+    changeEmitter.fire()
+    expect(fired).toBe(1)
+
+    const model = makeModel('file:///a.ts')
+    const monacoRange = { startLineNumber: 1, startColumn: 1, endLineNumber: 6, endColumn: 1 }
+    const out = await proxy.provideInlayHints(model, monacoRange as monaco.Range, null as never)
+    expect(pull).toHaveBeenCalledWith(5, model.uri, rangeToLsp(monacoRange))
+    expect(out?.hints[0]?.position).toEqual({ lineNumber: 2, column: 5 })
+    expect(out?.hints[0]?.label).toBe(': number')
   })
 })

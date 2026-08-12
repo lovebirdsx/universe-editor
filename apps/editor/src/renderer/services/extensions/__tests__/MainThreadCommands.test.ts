@@ -58,6 +58,15 @@ describe('MainThreadCommands', () => {
     root.dispose()
   })
 
+  it('$getCommands enumerates the renderer registry', async () => {
+    const mt = new MainThreadCommands(fakeExtHost().service, {} as ICommandService)
+    await mt.$registerCommand('ext.listed')
+    const ids = await mt.$getCommands()
+    expect(ids).toContain('ext.listed')
+    mt.dispose()
+    expect(await mt.$getCommands()).not.toContain('ext.listed')
+  })
+
   it('allows VSCode-compatible built-in commands from the host', async () => {
     const executeCommand = vi.fn().mockResolvedValue('ok')
     const mt = new MainThreadCommands(fakeExtHost().service, {

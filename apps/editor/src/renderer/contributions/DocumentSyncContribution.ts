@@ -32,6 +32,10 @@ import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js
 import { basenameOfResource, extensionOfBasename } from '../workbench/files/resourceInfo.js'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 import { PendingDocumentSync } from '../services/extensions/PendingDocumentSync.js'
+import {
+  DocumentMirrorTracking,
+  type IDocumentMirrorTracker,
+} from '../services/extensions/DocumentMirrorTracking.js'
 import { monacoChangesToContentChanges } from '../services/extensions/documentSyncChanges.js'
 
 const DIDCHANGE_DEBOUNCE_MS = 200
@@ -72,7 +76,10 @@ interface OpenDoc {
   pendingFlush: boolean
 }
 
-export class DocumentSyncContribution extends Disposable implements IWorkbenchContribution {
+export class DocumentSyncContribution
+  extends Disposable
+  implements IWorkbenchContribution, IDocumentMirrorTracker
+{
   /** Synced documents, keyed by model URI string. Kept open across editor switches. */
   private readonly _open = new Map<string, OpenDoc>()
   /** Languages already activated this host generation; reset on host relaunch. */
@@ -87,6 +94,7 @@ export class DocumentSyncContribution extends Disposable implements IWorkbenchCo
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'docSync', name: 'Document Sync' })
+    DocumentMirrorTracking.register(this)
     this._register(
       autorun((r) => {
         this._editorService.activeEditor.read(r)
@@ -102,6 +110,25 @@ export class DocumentSyncContribution extends Disposable implements IWorkbenchCo
     // The host pins the workspace at launch and relaunches on a folder swap; its
     // fresh ExtHostDocuments is empty, so re-push every open document afterwards.
     this._register(this._workspace.onDidChangeWorkspace(() => this._resyncAll()))
+  }
+
+  /**
+   * IDocumentMirrorTracker: attach `model` (the model for `resource`) to the sync
+   * pipeline unless it is already tracked. Used by `MainThreadEditor.$openTextDocument`
+   * so a document opened via `workspace.openTextDocument` mirrors like one opened
+   * in an editor.
+   */
+  trackModel(resource: URI, model: monaco.editor.ITextModel): boolean {
+    const key = model.uri.toString()
+    if (this._open.has(key)) return true
+    this._attach(key, model, resolveLanguageId(resource, model))
+    return true
+  }
+
+  /** IDocumentMirrorTracker: whether the document for `resource` is already mirrored. */
+  isTracked(resource: URI): boolean {
+    const model = MonacoModelRegistry.peek(resource)
+    return model !== undefined && this._open.has(model.uri.toString())
   }
 
   private _sync(): void {
@@ -278,6 +305,7 @@ export class DocumentSyncContribution extends Disposable implements IWorkbenchCo
   }
 
   override dispose(): void {
+    DocumentMirrorTracking.unregister(this)
     for (const key of [...this._open.keys()]) this._detach(key)
     super.dispose()
   }

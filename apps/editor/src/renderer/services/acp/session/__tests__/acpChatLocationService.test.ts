@@ -85,6 +85,7 @@ class FakeConfig {
     if (this._sidebarEnabled === enabled) return
     this._sidebarEnabled = enabled
     this._onDidChange.fire({
+      keys: ['acp.chat.enableSidebarLocation'],
       affectsConfiguration: (k) => k === 'acp.chat.enableSidebarLocation',
     })
   }

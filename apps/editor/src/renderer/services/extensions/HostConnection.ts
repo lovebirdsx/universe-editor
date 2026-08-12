@@ -20,13 +20,20 @@ import {
   ProxyChannel,
   type ICommandService,
   type IDialogService,
+  type IEditorGroupsService,
   type IEditorService,
+  type IFileDialogService,
+  type IFileSearchService,
   type IFileService,
+  type IFileWatcherService,
+  type IInstantiationService,
   type ILayoutService,
   type ILogger,
   type INotificationService,
+  type IOpenerService,
   type IOutputChannel,
   type IOutputService,
+  type IProgressService,
   type IQuickInputService,
   type IStatusBarService,
   type IStorageService,
@@ -40,10 +47,12 @@ import {
   type IExtHostDocuments,
   type IExtHostEditor,
   type IExtHostExtensions,
+  type IExtHostFileEvents,
   type IExtHostLanguages,
   type IExtHostScm,
   type IExtHostTimeline,
   type IExtHostWebviews,
+  type IExtHostWindow,
   type IExtensionActivationErrorDto,
 } from '@universe-editor/extensions-common'
 import type {
@@ -51,11 +60,13 @@ import type {
   IExtensionHostService,
 } from '../../../shared/ipc/extensionHostService.js'
 import type { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
+import type { IExcludeService } from '../exclude/ExcludeService.js'
 import { slowPhaseInstrument } from '../performance/perfPhases.js'
 import { MainThreadCommands, type CommandOwnershipLedger } from './MainThreadCommands.js'
 import { MainThreadAi } from './MainThreadAi.js'
 import { MainThreadEditor } from './MainThreadEditor.js'
 import { MainThreadExtensions } from './MainThreadExtensions.js'
+import { MainThreadFileEvents } from './MainThreadFileEvents.js'
 import { MainThreadFs } from './MainThreadFs.js'
 import { MainThreadLanguages } from './MainThreadLanguages.js'
 import { MainThreadOutput } from './MainThreadOutput.js'
@@ -74,8 +85,24 @@ export interface HostConnectionDeps {
   readonly statusBar: IStatusBarService
   readonly dialog: IDialogService
   readonly files: IFileService
+  /** Backs `workspace.findFiles` (live workspace enumeration). */
+  readonly fileSearch: IFileSearchService
+  /** Backs `workspace.findFiles` default excludes (files.exclude ∪ search.exclude). */
+  readonly exclude: IExcludeService
+  /** Backs `workspace.createFileSystemWatcher` (existing recursive workspace watch). */
+  readonly fileWatcher: IFileWatcherService
   readonly pathPolicy: IAcpPathPolicy
   readonly commandService: ICommandService
+  /** Backs `env.openExternal` (external URLs → OS browser, files → editor). */
+  readonly opener: IOpenerService
+  /** Backs `window.withProgress` (workbench progress UI). */
+  readonly progress: IProgressService
+  /** Backs `window.showOpenDialog` / `window.showSaveDialog`. */
+  readonly fileDialogs: IFileDialogService
+  /** Backs `window.showTextDocument` (open/reveal a text editor). */
+  readonly editorGroups: IEditorGroupsService
+  /** Creates FileEditorInput instances with their DI deps satisfied. */
+  readonly instantiation: IInstantiationService
   readonly scm: IScmService
   readonly timeline: ITimelineService
   readonly languageFeatures: ILanguageFeaturesService
@@ -163,8 +190,20 @@ export class HostConnection extends Disposable {
       ProxyChannel.fromService(mainThreadExtensions),
     )
 
+    const extHostWindow = ProxyChannel.toService<IExtHostWindow>(
+      client.getChannel(ExtHostChannels.extHostWindow),
+    )
     const mainThreadWindow = store.add(
-      new MainThreadWindow(deps.notification, deps.quickInput, deps.statusBar, deps.dialog),
+      new MainThreadWindow(
+        deps.notification,
+        deps.quickInput,
+        deps.statusBar,
+        deps.dialog,
+        deps.opener,
+        deps.progress,
+        deps.fileDialogs,
+        extHostWindow,
+      ),
     )
     server.registerChannel(
       ExtHostChannels.mainThreadWindow,
@@ -202,7 +241,15 @@ export class HostConnection extends Disposable {
       client.getChannel(ExtHostChannels.extHostEditor),
     )
     const mainThreadEditor = store.add(
-      new MainThreadEditor(deps.editorService, deps.uriIdentity, extHostEditor),
+      new MainThreadEditor(
+        deps.editorService,
+        deps.uriIdentity,
+        extHostEditor,
+        deps.files,
+        deps.editorGroups,
+        deps.instantiation,
+        deps.logger,
+      ),
     )
     server.registerChannel(
       ExtHostChannels.mainThreadEditor,
@@ -212,8 +259,26 @@ export class HostConnection extends Disposable {
     const mainThreadAi = store.add(new MainThreadAi(deps.aiModel))
     server.registerChannel(ExtHostChannels.mainThreadAi, ProxyChannel.fromService(mainThreadAi))
 
-    const mainThreadFs = new MainThreadFs(workspaceRoot, deps.pathPolicy, deps.files)
+    const mainThreadFs = new MainThreadFs(
+      workspaceRoot,
+      deps.pathPolicy,
+      deps.files,
+      deps.fileSearch,
+      () => deps.exclude.getSearchExcludeGlobs(),
+      deps.logger,
+    )
     server.registerChannel(ExtHostChannels.mainThreadFs, ProxyChannel.fromService(mainThreadFs))
+
+    const extHostFileEvents = ProxyChannel.toService<IExtHostFileEvents>(
+      client.getChannel(ExtHostChannels.extHostFileEvents),
+    )
+    const mainThreadFileEvents = store.add(
+      new MainThreadFileEvents(deps.fileWatcher, extHostFileEvents, deps.logger),
+    )
+    server.registerChannel(
+      ExtHostChannels.mainThreadFileEvents,
+      ProxyChannel.fromService(mainThreadFileEvents),
+    )
 
     const mainThreadOutput = store.add(new MainThreadOutput(deps.output, deps.layout, deps.views))
     server.registerChannel(

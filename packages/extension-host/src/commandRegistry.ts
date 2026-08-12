@@ -39,4 +39,9 @@ export class ExtensionCommandRegistry {
     // host-invokable namespace, so this can't loop back into extension commands.
     return this._mainThreadCommands.$executeCommand(command, args)
   }
+
+  /** Every command id the renderer's registry currently holds (built-in + contributed). */
+  getCommands(): Promise<string[]> {
+    return this._mainThreadCommands.$getCommands()
+  }
 }

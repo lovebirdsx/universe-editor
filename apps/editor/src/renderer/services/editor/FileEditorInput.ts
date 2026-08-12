@@ -18,6 +18,7 @@ import { basenameOfResource } from '../../workbench/files/resourceInfo.js'
 import { languageForResource } from '../../workbench/files/resourceLanguage.js'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
 import { SaveParticipant } from '../extensions/SaveParticipant.js'
+import { DidSaveNotification } from '../extensions/DidSaveNotification.js'
 import { applyMinimalTextEdit } from './minimalModelEdit.js'
 import { noteSelfWrite } from './selfWriteRegistry.js'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
@@ -167,6 +168,7 @@ export class FileEditorInput extends EditorInput {
     await this._fileService.writeFile(this._resource, this._hasLeadingBom ? UTF8_BOM + text : text)
     this.markModelClean(model)
     await this._refreshMtime()
+    DidSaveNotification.notify(this._resource)
     return true
   }
 

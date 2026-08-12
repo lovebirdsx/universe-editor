@@ -37,11 +37,14 @@ import {
   createDocumentFormattingProxy,
   createDocumentHighlightProxy,
   createDocumentLinkProxy,
+  createDocumentRangeFormattingProxy,
   createDocumentSemanticTokensProxy,
   createDocumentSymbolProxy,
   createFoldingRangeProxy,
   createHoverProxy,
   createImplementationProxy,
+  createInlayHintsProxy,
+  createOnTypeFormattingProxy,
   createReferenceProxy,
   createRenameProxy,
   createSelectionRangeProxy,
@@ -56,6 +59,9 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
    *  `$emitCodeLensDidChange(handle)` and we fire the Emitter the provider's
    *  `onDidChange` is wired to, making Monaco re-request that provider's lenses. */
   private readonly _codeLensChange = new Map<number, Emitter<void>>()
+  /** Per-handle refresh signal for inlay-hints providers — same wiring as
+   *  `_codeLensChange`, driven by `$emitInlayHintsDidChange(handle)`. */
+  private readonly _inlayHintsChange = new Map<number, Emitter<void>>()
 
   constructor(
     private readonly _extHost: IExtHostLanguages,
@@ -118,6 +124,15 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
 
   $emitCodeLensDidChange(handle: number): void {
     this._codeLensChange.get(handle)?.fire()
+  }
+
+  $emitInlayHintsDidChange(handle: number): void {
+    this._inlayHintsChange.get(handle)?.fire()
+  }
+
+  async $getLanguages(): Promise<string[]> {
+    const monacoNs = await MonacoLoader.ensureInitialized()
+    return monacoNs.languages.getLanguages().map((l) => l.id)
   }
 
   $setLanguageServerStatus(id: string, status: LanguageServerStatus): void {
@@ -238,6 +253,33 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
       case 'documentFormatting': {
         const p = createDocumentFormattingProxy(handle, ext)
         for (const lang of selector) store.add(lf.registerDocumentFormattingEditProvider(lang, p))
+        break
+      }
+      case 'documentRangeFormatting': {
+        const p = createDocumentRangeFormattingProxy(handle, ext)
+        for (const lang of selector) {
+          store.add(lf.registerDocumentRangeFormattingEditProvider(lang, p))
+        }
+        break
+      }
+      case 'onTypeFormatting': {
+        // Trigger characters ride the registration metadata: Monaco reads
+        // autoFormatTriggerCharacters synchronously off the provider object.
+        const p = createOnTypeFormattingProxy(
+          handle,
+          ext,
+          metadata?.onTypeFormattingTriggerCharacters ?? [],
+        )
+        for (const lang of selector) store.add(lf.registerOnTypeFormattingEditProvider(lang, p))
+        break
+      }
+      case 'inlayHints': {
+        const changeEmitter = new Emitter<void>()
+        this._inlayHintsChange.set(handle, changeEmitter)
+        store.add(toDisposable(() => this._inlayHintsChange.delete(handle)))
+        store.add(changeEmitter)
+        const p = createInlayHintsProxy(handle, ext, changeEmitter.event)
+        for (const lang of selector) store.add(lf.registerInlayHintsProvider(lang, p))
         break
       }
       case 'documentSemanticTokens': {

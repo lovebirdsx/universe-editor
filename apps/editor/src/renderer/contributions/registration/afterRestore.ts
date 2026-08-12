@@ -49,6 +49,7 @@ import { MonacoKeybindingSyncContribution } from '../MonacoKeybindingSyncContrib
 import { MonacoDefaultKeybindingOverrideContribution } from '../MonacoDefaultKeybindingOverrideContribution.js'
 import { DocumentSyncContribution } from '../DocumentSyncContribution.js'
 import { WillSaveParticipantContribution } from '../WillSaveParticipantContribution.js'
+import { DidSaveNotificationContribution } from '../DidSaveNotificationContribution.js'
 import { MarkdownPasteContribution } from '../MarkdownPasteContribution.js'
 import { MarkdownDropContribution } from '../MarkdownDropContribution.js'
 import { MarkdownUpdateLinksOnRenameContribution } from '../MarkdownUpdateLinksOnRenameContribution.js'
@@ -424,6 +425,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.willSaveParticipant',
   WillSaveParticipantContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Bridge the save flow to the host's onDidSaveTextDocument listeners: after each
+// file save lands on disk, flush the document mirror and push the notification.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.didSaveNotification',
+  DidSaveNotificationContribution,
   WorkbenchPhase.AfterRestore,
 )
 

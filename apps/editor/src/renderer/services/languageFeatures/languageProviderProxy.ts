@@ -23,8 +23,10 @@ import {
   documentSymbolsToMonaco,
   foldingRangesToMonaco,
   hoverToMonaco,
+  inlayHintsToMonaco,
   locationsToMonaco,
   monacoPositionToLsp,
+  monacoRangeToLsp,
   resolvedCodeLensToMonaco,
   resolvedDocumentLinkToMonaco,
   selectionRangesToMonaco,
@@ -325,15 +327,9 @@ export function createCodeActionProxy(
   return {
     provideCodeActions: async (model, range, context) =>
       codeActionsToMonaco(
-        await extHost.$provideCodeActions(
-          handle,
-          model.uri,
-          {
-            start: { line: range.startLineNumber - 1, character: range.startColumn - 1 },
-            end: { line: range.endLineNumber - 1, character: range.endColumn - 1 },
-          },
-          { ...(context.only ? { only: [context.only] } : {}) },
-        ),
+        await extHost.$provideCodeActions(handle, model.uri, monacoRangeToLsp(range), {
+          ...(context.only ? { only: [context.only] } : {}),
+        }),
         MonacoLoader.get(),
       ),
   }
@@ -350,6 +346,43 @@ export function createDocumentFormattingProxy(
           tabSize: options.tabSize,
           insertSpaces: options.insertSpaces,
         }),
+      ),
+  }
+}
+
+export function createDocumentRangeFormattingProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+): monaco.languages.DocumentRangeFormattingEditProvider {
+  return {
+    provideDocumentRangeFormattingEdits: async (model, range, options) =>
+      textEditsToMonaco(
+        await extHost.$provideDocumentRangeFormattingEdits(
+          handle,
+          model.uri,
+          monacoRangeToLsp(range),
+          { tabSize: options.tabSize, insertSpaces: options.insertSpaces },
+        ),
+      ),
+  }
+}
+
+export function createOnTypeFormattingProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+  triggerCharacters: readonly string[],
+): monaco.languages.OnTypeFormattingEditProvider {
+  return {
+    autoFormatTriggerCharacters: [...triggerCharacters],
+    provideOnTypeFormattingEdits: async (model, position, ch, options) =>
+      textEditsToMonaco(
+        await extHost.$provideOnTypeFormattingEdits(
+          handle,
+          model.uri,
+          monacoPositionToLsp(position),
+          ch,
+          { tabSize: options.tabSize, insertSpaces: options.insertSpaces },
+        ),
       ),
   }
 }
@@ -406,5 +439,20 @@ export function createCodeLensProxy(
         MonacoLoader.get(),
       )
     },
+  }
+}
+
+export function createInlayHintsProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+  onDidChange: Event<void>,
+): monaco.languages.InlayHintsProvider {
+  return {
+    onDidChangeInlayHints: onDidChange,
+    provideInlayHints: async (model, range) =>
+      inlayHintsToMonaco(
+        await extHost.$provideInlayHints(handle, model.uri, monacoRangeToLsp(range)),
+        MonacoLoader.get(),
+      ),
   }
 }

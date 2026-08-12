@@ -235,6 +235,7 @@ class FakeConfigurationService {
   fire(...keys: string[]): void {
     for (const listener of this._listeners) {
       listener({
+        keys,
         affectsConfiguration: (key) => keys.includes(key),
       })
     }

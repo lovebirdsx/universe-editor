@@ -24,6 +24,7 @@ function recording(): {
         unregistered.push(id)
         return Promise.resolve()
       },
+      $getCommands: () => Promise.resolve([]),
       $executeCommand: (id, args) => {
         executed.push({ id, args })
         return Promise.resolve(`forwarded:${id}`)

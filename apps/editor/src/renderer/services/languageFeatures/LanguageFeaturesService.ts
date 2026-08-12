@@ -109,6 +109,18 @@ export interface ILanguageFeaturesService {
     languageId: string,
     provider: monaco.languages.DocumentFormattingEditProvider,
   ): IDisposable
+  registerDocumentRangeFormattingEditProvider(
+    languageId: string,
+    provider: monaco.languages.DocumentRangeFormattingEditProvider,
+  ): IDisposable
+  registerOnTypeFormattingEditProvider(
+    languageId: string,
+    provider: monaco.languages.OnTypeFormattingEditProvider,
+  ): IDisposable
+  registerInlayHintsProvider(
+    languageId: string,
+    provider: monaco.languages.InlayHintsProvider,
+  ): IDisposable
   registerDocumentSemanticTokensProvider(
     languageId: string,
     provider: monaco.languages.DocumentSemanticTokensProvider,
@@ -449,6 +461,33 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
     // Not mirrored (no Outline consumer); forward straight to Monaco, which owns
     // the format-document command dispatch.
     return MonacoLoader.get().languages.registerDocumentFormattingEditProvider(languageId, provider)
+  }
+
+  registerDocumentRangeFormattingEditProvider(
+    languageId: string,
+    provider: monaco.languages.DocumentRangeFormattingEditProvider,
+  ): IDisposable {
+    return MonacoLoader.get().languages.registerDocumentRangeFormattingEditProvider(
+      languageId,
+      provider,
+    )
+  }
+
+  registerOnTypeFormattingEditProvider(
+    languageId: string,
+    provider: monaco.languages.OnTypeFormattingEditProvider,
+  ): IDisposable {
+    // Monaco only consults this while the editor's formatOnType option is on.
+    return MonacoLoader.get().languages.registerOnTypeFormattingEditProvider(languageId, provider)
+  }
+
+  registerInlayHintsProvider(
+    languageId: string,
+    provider: monaco.languages.InlayHintsProvider,
+  ): IDisposable {
+    // Not mirrored; Monaco's inlay-hints controller owns rendering + the
+    // onDidChangeInlayHints re-request loop.
+    return MonacoLoader.get().languages.registerInlayHintsProvider(languageId, provider)
   }
 
   registerDocumentSemanticTokensProvider(

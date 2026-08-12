@@ -91,3 +91,22 @@ describe('ExtHostDocuments.whenOpen', () => {
     await expect(docs.whenOpen(uri, 10)).resolves.toBeUndefined()
   })
 })
+
+describe('ExtHostDocuments did-save', () => {
+  it('fires onDidSave with the mirrored document', () => {
+    const docs = new ExtHostDocuments()
+    docs.acceptOpen(uri, 'typescript', 1, 'const a = 1\n')
+    const saved: string[] = []
+    docs.onDidSave((doc) => saved.push(doc.getText()))
+    docs.acceptSave(uri)
+    expect(saved).toEqual(['const a = 1\n'])
+  })
+
+  it('ignores a save for a document that is not mirrored', () => {
+    const docs = new ExtHostDocuments()
+    let fired = 0
+    docs.onDidSave(() => fired++)
+    docs.acceptSave(uri)
+    expect(fired).toBe(0)
+  })
+})

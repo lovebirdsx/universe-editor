@@ -67,11 +67,13 @@ export class ExtHostDocuments {
   private readonly _onDidChange = new Emitter<TextDocumentChangeEvent>()
   private readonly _onDidClose = new Emitter<TextDocument>()
   private readonly _onWillSave = new Emitter<WillSaveTextDocumentEvent>()
+  private readonly _onDidSave = new Emitter<TextDocument>()
 
   readonly onDidOpen: Event<TextDocument> = this._onDidOpen.event
   readonly onDidChange: Event<TextDocumentChangeEvent> = this._onDidChange.event
   readonly onDidClose: Event<TextDocument> = this._onDidClose.event
   readonly onWillSave: Event<WillSaveTextDocumentEvent> = this._onWillSave.event
+  readonly onDidSave: Event<TextDocument> = this._onDidSave.event
 
   private _key(uri: UriComponents): string {
     return URI.revive(uri)?.toString() ?? ''
@@ -144,6 +146,17 @@ export class ExtHostDocuments {
     const doc = this._docs.get(key)
     this._docs.delete(key)
     if (doc) this._onDidClose.fire(doc)
+  }
+
+  /**
+   * The document at `uri` was written to disk (renderer pushed after the write).
+   * Only fires for documents in the mirror — a save of an unmirrored file is
+   * dropped, matching `acceptChange`'s no-prior-open guard.
+   */
+  acceptSave(uri: UriComponents): void {
+    const doc = this._docs.get(this._key(uri))
+    if (!doc) return
+    this._onDidSave.fire(doc)
   }
 
   /**

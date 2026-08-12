@@ -27,6 +27,8 @@ export const enum ConfigurationTarget {
 }
 
 export interface IConfigurationChangeEvent {
+  /** Every key whose effective value changed in this event. */
+  readonly keys: readonly string[]
   /** Returns true if the change affects the given configuration key. */
   affectsConfiguration(key: string): boolean
 }
@@ -178,6 +180,7 @@ export class ConfigurationService extends Disposable implements IConfigurationSe
       // observe the removal to delete the key from the settings file.
       if (hadOwn) {
         this._onDidChangeConfiguration.fire({
+          keys: [key],
           affectsConfiguration: (k) => k === key,
         })
       }
@@ -188,6 +191,7 @@ export class ConfigurationService extends Disposable implements IConfigurationSe
     // Only fire if the effective value changed
     if (oldValue !== value) {
       this._onDidChangeConfiguration.fire({
+        keys: [key],
         affectsConfiguration: (k) => k === key,
       })
     }
@@ -218,6 +222,7 @@ export class ConfigurationService extends Disposable implements IConfigurationSe
 
     if (changedKeys.size > 0) {
       this._onDidChangeConfiguration.fire({
+        keys: [...changedKeys],
         affectsConfiguration: (k) => changedKeys.has(k),
       })
     }

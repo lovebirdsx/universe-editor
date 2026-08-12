@@ -6,9 +6,11 @@
  */
 import type {
   AiApi,
+  CancellationToken,
   CodeActionProvider,
   CodeLensProvider,
   CompletionItemProvider,
+  ConfigurationChangeEvent,
   CustomEditorOptions,
   CustomReadonlyEditorProvider,
   DecorationRenderOptions,
@@ -18,20 +20,26 @@ import type {
   DocumentFormattingEditProvider,
   DocumentHighlightProvider,
   DocumentLinkProvider,
+  DocumentRangeFormattingEditProvider,
   DocumentSelector,
   DocumentSemanticTokensProvider,
   DocumentSymbolProvider,
   Event,
+  Extension,
   ExtensionContext,
   FileStat,
   FileType,
   FoldingRangeProvider,
   HoverProvider,
   ImplementationProvider,
+  InlayHintsProvider,
   InputBoxOptions,
   LanguageServerStatus,
   Memento,
+  OnTypeFormattingEditProvider,
   OutputChannel,
+  Progress,
+  ProgressOptions,
   QuickPickItem,
   QuickPickOptions,
   ReferenceProvider,
@@ -44,15 +52,23 @@ import type {
   StatusBarItem,
   TextDocument,
   TextDocumentChangeEvent,
+  TextDocumentShowOptions,
   TextEditor,
   TextEditorDecorationType,
+  TextEditorSelectionChangeEvent,
   TimelineProvider,
   TypeDefinitionProvider,
+  UriComponents,
   WillSaveTextDocumentEvent,
+  WorkspaceEdit,
   WorkspaceSymbolProvider,
 } from '@universe-editor/extension-api'
 import type { IScannedExtension } from './extensionScanner.js'
-import type { ExtHostStorageScope, IMainThreadStorage } from '@universe-editor/extensions-common'
+import type {
+  ExtHostStorageScope,
+  IExtHostEnvironmentDto,
+  IMainThreadStorage,
+} from '@universe-editor/extensions-common'
 import { join } from 'node:path'
 
 /** The slice of the storage RPC the context factory needs (whole-object get/set). */
@@ -64,10 +80,57 @@ export type IExtensionStorage = IMainThreadStorage
  */
 const BRIDGE_KEY = '__universeExtensionHostBridge__'
 
+/**
+ * Dialog options as they arrive over the bridge: `defaultUri` is decomposed
+ * into `UriComponents` by the extension-api wrapper, so the host never touches
+ * an extension's bundled `Uri` class instance. KEEP IN SYNC with the consumer
+ * types in `packages/extension-api/src/index.ts`.
+ */
+export interface OpenDialogOptionsBridge {
+  defaultUri?: UriComponents
+  openLabel?: string
+  canSelectFiles?: boolean
+  canSelectFolders?: boolean
+  canSelectMany?: boolean
+  filters?: Record<string, string[]>
+  title?: string
+}
+
+/** See {@link OpenDialogOptionsBridge}. */
+export interface SaveDialogOptionsBridge {
+  defaultUri?: UriComponents
+  saveLabel?: string
+  filters?: Record<string, string[]>
+  title?: string
+}
+
+/**
+ * The watcher handle handed back over the in-process bridge. Events carry raw
+ * `UriComponents`; the extension-api wrapper re-wraps them into the extension's
+ * own `Uri` class. KEEP IN SYNC with the consumer types in
+ * `packages/extension-api/src/index.ts`.
+ */
+export interface FileSystemWatcherBridge extends Disposable {
+  readonly ignoreCreateEvents: boolean
+  readonly ignoreChangeEvents: boolean
+  readonly ignoreDeleteEvents: boolean
+  readonly onDidCreate: Event<UriComponents>
+  readonly onDidChange: Event<UriComponents>
+  readonly onDidDelete: Event<UriComponents>
+}
+
 /** The bridge the extension-api delegates to. Matches `IExtensionHostBridge` there. */
 export interface IExtensionHostBridge {
   registerCommand(command: string, handler: (...args: unknown[]) => unknown): Disposable
   executeCommand(command: string, args: unknown[]): Promise<unknown>
+  getCommands(): Promise<string[]>
+  getEnvironmentInfo(): IExtHostEnvironmentDto
+  clipboardReadText(): Promise<string>
+  clipboardWriteText(value: string): Promise<void>
+  openExternal(target: string): Promise<boolean>
+  getExtensions(): readonly Extension<unknown>[]
+  getExtension(extensionId: string): Extension<unknown> | undefined
+  readonly onDidChangeExtensions: Event<void>
   showMessage(
     severity: 'info' | 'warning' | 'error',
     message: string,
@@ -79,6 +142,22 @@ export interface IExtensionHostBridge {
   ): Promise<string | QuickPickItem | undefined>
   showInputBox(options?: InputBoxOptions): Promise<string | undefined>
   createStatusBarItem(alignment: StatusBarAlignment, priority: number): StatusBarItem
+  setStatusBarMessage(text: string, arg?: number | Promise<unknown>): Disposable
+  withProgress<R>(
+    options: ProgressOptions,
+    task: (
+      progress: Progress<{ message?: string; increment?: number }>,
+      token: CancellationToken,
+    ) => Promise<R>,
+  ): Promise<R>
+  showOpenDialog(options?: OpenDialogOptionsBridge): Promise<UriComponents[] | undefined>
+  showSaveDialog(options?: SaveDialogOptionsBridge): Promise<UriComponents | undefined>
+  showTextDocument(
+    target: UriComponents | string,
+    options?: TextDocumentShowOptions,
+  ): Promise<TextEditor>
+  openTextDocument(target: UriComponents | string): Promise<TextDocument>
+  readonly onDidChangeTextEditorSelection: Event<TextEditorSelectionChangeEvent>
   createSourceControl(id: string, label: string, rootUri?: string): SourceControl
   registerTimelineProvider(scheme: string[], provider: TimelineProvider): Disposable
   getActiveTextEditor(): Promise<TextEditor | undefined>
@@ -96,6 +175,25 @@ export interface IExtensionHostBridge {
   fsReadDirectory(path: string): Promise<[string, FileType][]>
   fsCreateDirectory(path: string): Promise<void>
   fsDelete(path: string, recursive: boolean): Promise<void>
+  fsRename(source: string, target: string, overwrite: boolean): Promise<void>
+  fsCopy(source: string, target: string, overwrite: boolean): Promise<void>
+  /**
+   * `exclude` carries API semantics: undefined → the renderer's configured
+   * default search excludes; null → no exclusion at all; a string → that glob.
+   * Returns fsPaths.
+   */
+  findFiles(
+    include: string,
+    exclude: string | null | undefined,
+    maxResults: number | undefined,
+  ): Promise<string[]>
+  applyWorkspaceEdit(edit: WorkspaceEdit): Promise<boolean>
+  createFileSystemWatcher(
+    globPattern: string,
+    ignoreCreateEvents: boolean,
+    ignoreChangeEvents: boolean,
+    ignoreDeleteEvents: boolean,
+  ): FileSystemWatcherBridge
   getConfiguration(
     section: string | undefined,
     key: string,
@@ -150,6 +248,16 @@ export interface IExtensionHostBridge {
     selector: DocumentSelector,
     provider: DocumentFormattingEditProvider,
   ): Disposable
+  registerDocumentRangeFormattingEditProvider(
+    selector: DocumentSelector,
+    provider: DocumentRangeFormattingEditProvider,
+  ): Disposable
+  registerOnTypeFormattingEditProvider(
+    selector: DocumentSelector,
+    provider: OnTypeFormattingEditProvider,
+    triggerCharacters: readonly string[],
+  ): Disposable
+  registerInlayHintsProvider(selector: DocumentSelector, provider: InlayHintsProvider): Disposable
   registerDocumentSemanticTokensProvider(
     selector: DocumentSelector,
     provider: DocumentSemanticTokensProvider,
@@ -157,11 +265,14 @@ export interface IExtensionHostBridge {
   registerCodeLensProvider(selector: DocumentSelector, provider: CodeLensProvider): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
   setLanguageServerStatus(id: string, status: LanguageServerStatus): void
+  getLanguages(): Promise<string[]>
   getTextDocuments(): readonly TextDocument[]
   readonly onDidOpenTextDocument: Event<TextDocument>
   readonly onDidChangeTextDocument: Event<TextDocumentChangeEvent>
   readonly onDidCloseTextDocument: Event<TextDocument>
   readonly onWillSaveTextDocument: Event<WillSaveTextDocumentEvent>
+  readonly onDidSaveTextDocument: Event<TextDocument>
+  readonly onDidChangeConfiguration: Event<ConfigurationChangeEvent>
   /** The `ai` namespace. */
   readonly ai: AiApi
 }

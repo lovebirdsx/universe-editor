@@ -1,6 +1,6 @@
 # 语言特性
 
-> 用 `languages` namespace 给编辑器注册语言 provider（补全、跳转、诊断……），以及进阶形态「扩展内自 spawn 语言服务器」。以 API 0.8.0 为准。
+> 用 `languages` namespace 给编辑器注册语言 provider（补全、跳转、诊断……），以及进阶形态「扩展内自 spawn 语言服务器」。以 API 0.9.0 为准。
 
 语言支持分两层：
 
@@ -41,7 +41,7 @@ import { languages, type Hover, type Diagnostic } from '@universe-editor/extensi
 
 ## provider 清单
 
-`languages` namespace 当前（0.8.0）的全部方法：18 个 `register*` 加诊断与状态上报两个工具方法。
+`languages` namespace 当前（0.9.0）的全部方法：21 个 `register*` 加诊断、状态上报、语言清单三个工具方法。
 
 | 方法 | 用途 | 备注 |
 |---|---|---|
@@ -61,10 +61,14 @@ import { languages, type Hover, type Diagnostic } from '@universe-editor/extensi
 | `registerSelectionRangeProvider` | 智能扩选（Shift+Alt+→） | |
 | `registerCodeActionsProvider` | 灯泡 quick fix / 重构 | |
 | `registerDocumentFormattingEditProvider` | 格式化文档 | options 带编辑器缩进设置 `tabSize`/`insertSpaces` |
+| `registerDocumentRangeFormattingEditProvider` | 格式化选中范围（Format Selection） | 传入 range 是提示，provider 可扩到完整语法节点 |
+| `registerOnTypeFormattingEditProvider` | 键入触发字符即格式化 | 至少一个触发字符；仅用户开启 `editor.formatOnType`（默认关）时生效 |
+| `registerInlayHintsProvider` | 行内注解（参数名、推断类型） | 一次性返回完整 hint，**无惰性 resolve 阶段**；可选 `onDidChangeInlayHints` 让编辑器重取 |
 | `registerDocumentSemanticTokensProvider` | 语义着色 | provider 以字段形式携带 `legend`（注册时同步返回给编辑器） |
 | `registerCodeLensProvider` | 行上方可操作注解（"3 references"） | 两阶段 `resolveCodeLens`；可选 `onDidChangeCodeLenses` 事件让编辑器重取 |
 | `createDiagnosticCollection` | 建一组诊断（编辑器里的红/黄波浪线） | 见下节 |
 | `setLanguageServerStatus` | 上报语言服务器生命周期状态 | 见「语言服务器状态」节 |
+| `getLanguages` | 列出编辑器已知的全部语言 id | |
 
 逐方法签名与 JSDoc 以编辑器里的类型提示为准。
 

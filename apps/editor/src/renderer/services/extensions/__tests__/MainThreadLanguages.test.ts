@@ -23,7 +23,15 @@ let monacoGate: Promise<void> = Promise.resolve()
 
 vi.mock('../../../workbench/editor/monaco/MonacoLoader.js', () => ({
   MonacoLoader: {
-    ensureInitialized: () => monacoGate.then(() => ({}) as never),
+    ensureInitialized: () =>
+      monacoGate.then(
+        () =>
+          ({
+            languages: {
+              getLanguages: () => [{ id: 'typescript' }, { id: 'markdown' }],
+            },
+          }) as never,
+      ),
     peek: () => undefined,
     get: () => {
       throw new Error('[MonacoLoader] not initialized; call ensureInitialized() first')
@@ -35,36 +43,51 @@ function fakeLanguageFeatures(): {
   service: ILanguageFeaturesService
   disposed: () => number
   live: () => number
+  registeredProviders: () => ReadonlyMap<string, unknown[]>
 } {
   let created = 0
   let disposedCount = 0
-  const register = (): IDisposable => {
-    created++
-    return toDisposable(() => {
-      disposedCount++
-    })
-  }
+  const providers = new Map<string, unknown[]>()
+  const register =
+    (kind: string) =>
+    (_languageId: string, provider: unknown): IDisposable => {
+      created++
+      const list = providers.get(kind) ?? []
+      list.push(provider)
+      providers.set(kind, list)
+      return toDisposable(() => {
+        disposedCount++
+      })
+    }
   const service = {
-    registerDefinitionProvider: register,
-    registerReferenceProvider: register,
-    registerImplementationProvider: register,
-    registerTypeDefinitionProvider: register,
-    registerHoverProvider: register,
-    registerCompletionProvider: register,
-    registerSignatureHelpProvider: register,
-    registerDocumentSymbolProvider: register,
-    registerRenameProvider: register,
-    registerWorkspaceSymbolProvider: register,
-    registerFoldingRangeProvider: register,
-    registerDocumentLinkProvider: register,
-    registerDocumentHighlightProvider: register,
-    registerSelectionRangeProvider: register,
-    registerCodeActionProvider: register,
-    registerDocumentFormattingEditProvider: register,
-    registerDocumentSemanticTokensProvider: register,
-    registerCodeLensProvider: register,
+    registerDefinitionProvider: register('definition'),
+    registerReferenceProvider: register('references'),
+    registerImplementationProvider: register('implementation'),
+    registerTypeDefinitionProvider: register('typeDefinition'),
+    registerHoverProvider: register('hover'),
+    registerCompletionProvider: register('completion'),
+    registerSignatureHelpProvider: register('signatureHelp'),
+    registerDocumentSymbolProvider: register('documentSymbol'),
+    registerRenameProvider: register('rename'),
+    registerWorkspaceSymbolProvider: register('workspaceSymbol'),
+    registerFoldingRangeProvider: register('foldingRange'),
+    registerDocumentLinkProvider: register('documentLink'),
+    registerDocumentHighlightProvider: register('documentHighlight'),
+    registerSelectionRangeProvider: register('selectionRange'),
+    registerCodeActionProvider: register('codeAction'),
+    registerDocumentFormattingEditProvider: register('documentFormatting'),
+    registerDocumentRangeFormattingEditProvider: register('documentRangeFormatting'),
+    registerOnTypeFormattingEditProvider: register('onTypeFormatting'),
+    registerInlayHintsProvider: register('inlayHints'),
+    registerDocumentSemanticTokensProvider: register('documentSemanticTokens'),
+    registerCodeLensProvider: register('codeLens'),
   } as unknown as ILanguageFeaturesService
-  return { service, disposed: () => disposedCount, live: () => created - disposedCount }
+  return {
+    service,
+    disposed: () => disposedCount,
+    live: () => created - disposedCount,
+    registeredProviders: () => providers,
+  }
 }
 
 beforeEach(() => {
@@ -170,6 +193,60 @@ describe('MainThreadLanguages', () => {
     expect(lf.live()).toBe(0)
     expect(warn).toHaveBeenCalledOnce()
     warn.mockRestore()
+  })
+
+  it('registers range-formatting / on-type-formatting / inlay-hints providers per language', async () => {
+    const lf = fakeLanguageFeatures()
+    const mt = new MainThreadLanguages({} as IExtHostLanguages, lf.service)
+
+    await mt.$registerProvider(1, 'documentRangeFormatting', ['typescript', 'javascript'])
+    await mt.$registerProvider(2, 'onTypeFormatting', ['typescript'], {
+      onTypeFormattingTriggerCharacters: ['}'],
+    })
+    await mt.$registerProvider(3, 'inlayHints', ['typescript'])
+    expect(lf.live()).toBe(4)
+
+    const onType = lf.registeredProviders().get('onTypeFormatting')?.[0] as {
+      autoFormatTriggerCharacters: string[]
+    }
+    expect(onType.autoFormatTriggerCharacters).toEqual(['}'])
+
+    await mt.$unregisterProvider(1)
+    await mt.$unregisterProvider(2)
+    await mt.$unregisterProvider(3)
+    expect(lf.live()).toBe(0)
+    mt.dispose()
+  })
+
+  it('$emitInlayHintsDidChange fires the provider onDidChangeInlayHints so Monaco re-requests', async () => {
+    const lf = fakeLanguageFeatures()
+    const mt = new MainThreadLanguages({} as IExtHostLanguages, lf.service)
+
+    await mt.$registerProvider(7, 'inlayHints', ['typescript'])
+    const provider = lf.registeredProviders().get('inlayHints')?.[0] as {
+      onDidChangeInlayHints: (listener: () => void) => IDisposable
+    }
+    let fired = 0
+    const sub = provider.onDidChangeInlayHints(() => fired++)
+
+    mt.$emitInlayHintsDidChange(7)
+    expect(fired).toBe(1)
+    // An unknown handle is a no-op (the host may emit after an unregister raced).
+    mt.$emitInlayHintsDidChange(99)
+    expect(fired).toBe(1)
+
+    sub.dispose()
+    mt.dispose()
+    // The emitter is released with the provider store: a late emit finds nothing.
+    mt.$emitInlayHintsDidChange(7)
+    expect(fired).toBe(1)
+  })
+
+  it('$getLanguages enumerates the Monaco language registry ids', async () => {
+    const lf = fakeLanguageFeatures()
+    const mt = new MainThreadLanguages({} as IExtHostLanguages, lf.service)
+    await expect(mt.$getLanguages()).resolves.toEqual(['typescript', 'markdown'])
+    mt.dispose()
   })
 })
 

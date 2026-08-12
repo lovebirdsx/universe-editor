@@ -811,6 +811,7 @@ describe('SwarmReviewEditor restore', () => {
       configValues['perforce.swarm.autoRefresh.enabled'] = false
       await act(async () => {
         configChange.fire({
+          keys: ['perforce.swarm.autoRefresh.enabled'],
           affectsConfiguration: (k) => k === 'perforce.swarm.autoRefresh.enabled',
         })
       })

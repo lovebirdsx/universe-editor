@@ -26,13 +26,16 @@ import {
   type IExtHostDocuments,
   type IExtHostEditor,
   type IExtHostExtensions,
+  type IExtHostFileEvents,
   type IExtHostLanguages,
   type IExtHostScm,
   type IExtHostTimeline,
   type IExtHostWebviews,
+  type IExtHostWindow,
   type IMainThreadAi,
   type IMainThreadCommands,
   type IMainThreadEditor,
+  type IMainThreadFileEvents,
   type IMainThreadFs,
   type IMainThreadLanguages,
   type IMainThreadOutput,
@@ -112,6 +115,9 @@ const mainThreadTimeline = ProxyChannel.toService<IMainThreadTimeline>(
 const mainThreadFs = ProxyChannel.toService<IMainThreadFs>(
   client.getChannel(ExtHostChannels.mainThreadFs),
 )
+const mainThreadFileEvents = ProxyChannel.toService<IMainThreadFileEvents>(
+  client.getChannel(ExtHostChannels.mainThreadFileEvents),
+)
 const mainThreadOutput = ProxyChannel.toService<IMainThreadOutput>(
   client.getChannel(ExtHostChannels.mainThreadOutput),
 )
@@ -179,8 +185,14 @@ const extHostExtensions: IExtHostExtensions = {
   $initializeWorkspaceTrust: async (trusted) => {
     ;(await serviceReady).initializeWorkspaceTrust(trusted)
   },
+  $initializeEnvironment: async (env) => {
+    ;(await serviceReady).initializeEnvironment(env)
+  },
   $onDidGrantWorkspaceTrust: async () => {
     await (await serviceReady).grantWorkspaceTrust()
+  },
+  $acceptConfigurationChanged: async (changedKeys) => {
+    ;(await serviceReady).acceptConfigurationChanged(changedKeys)
   },
 }
 const extHostScm: IExtHostScm = {
@@ -228,6 +240,12 @@ const extHostLanguages: IExtHostLanguages = {
     (await serviceReady).provideCodeActions(handle, uri, range, context),
   $provideDocumentFormattingEdits: async (handle, uri, options) =>
     (await serviceReady).provideDocumentFormattingEdits(handle, uri, options),
+  $provideDocumentRangeFormattingEdits: async (handle, uri, range, options) =>
+    (await serviceReady).provideDocumentRangeFormattingEdits(handle, uri, range, options),
+  $provideOnTypeFormattingEdits: async (handle, uri, position, ch, options) =>
+    (await serviceReady).provideOnTypeFormattingEdits(handle, uri, position, ch, options),
+  $provideInlayHints: async (handle, uri, range) =>
+    (await serviceReady).provideInlayHints(handle, uri, range),
   $provideDocumentSemanticTokens: async (handle, uri) =>
     (await serviceReady).provideDocumentSemanticTokens(handle, uri),
   $provideCodeLenses: async (handle, uri) => (await serviceReady).provideCodeLenses(handle, uri),
@@ -245,10 +263,26 @@ const extHostDocuments: IExtHostDocuments = {
   },
   $provideWillSaveEdits: async (uri, reason) =>
     (await serviceReady).provideWillSaveEdits(uri, reason),
+  $acceptDocumentSave: async (uri) => {
+    ;(await serviceReady).acceptDocumentSave(uri)
+  },
+}
+const extHostFileEvents: IExtHostFileEvents = {
+  $acceptFileEvents: async (events) => {
+    ;(await serviceReady).acceptFileEvents(events)
+  },
 }
 const extHostEditor: IExtHostEditor = {
   $acceptActiveEditorChange: async (editor) => {
     ;(await serviceReady).acceptActiveEditorChange(editor)
+  },
+  $acceptSelectionChange: async (uri, selections, kind) => {
+    ;(await serviceReady).acceptSelectionChange(uri, selections, kind)
+  },
+}
+const extHostWindow: IExtHostWindow = {
+  $acceptProgressCanceled: async (handle) => {
+    ;(await serviceReady).acceptProgressCanceled(handle)
   },
 }
 const extHostWebviews: IExtHostWebviews = {
@@ -275,7 +309,12 @@ server.registerChannel(
 server.registerChannel(ExtHostChannels.extHostScm, ProxyChannel.fromService(extHostScm))
 server.registerChannel(ExtHostChannels.extHostLanguages, ProxyChannel.fromService(extHostLanguages))
 server.registerChannel(ExtHostChannels.extHostDocuments, ProxyChannel.fromService(extHostDocuments))
+server.registerChannel(
+  ExtHostChannels.extHostFileEvents,
+  ProxyChannel.fromService(extHostFileEvents),
+)
 server.registerChannel(ExtHostChannels.extHostEditor, ProxyChannel.fromService(extHostEditor))
+server.registerChannel(ExtHostChannels.extHostWindow, ProxyChannel.fromService(extHostWindow))
 server.registerChannel(ExtHostChannels.extHostWebviews, ProxyChannel.fromService(extHostWebviews))
 server.registerChannel(ExtHostChannels.extHostTimeline, ProxyChannel.fromService(extHostTimeline))
 
@@ -371,6 +410,7 @@ async function main(): Promise<void> {
       mainThreadWebviews,
       globalStorageHome,
       mainThreadExtensions,
+      mainThreadFileEvents,
     ),
   )
   console.info('[ext-host] ready')

@@ -1,6 +1,6 @@
 # 从 VSCode 移植
 
-> 已有一个 VSCode 扩展，想让它跑在 Universe Editor 上：哪些只要机械替换、哪些要换写法、哪些能力根本没有。以 **API 0.8.0** 为准。
+> 已有一个 VSCode 扩展，想让它跑在 Universe Editor 上：哪些只要机械替换、哪些要换写法、哪些能力根本没有。以 **API 0.9.0** 为准。
 
 ## 决策背景：不 shim，但对齐
 
@@ -50,7 +50,7 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 |---|---|---|
 | `commands.registerCommand` | `commands.registerCommand` | 对齐 |
 | `commands.executeCommand` | `commands.executeCommand` | 对齐 |
-| `commands.getCommands` | — | 缺失（暂无计划） |
+| `commands.getCommands` | `commands.getCommands` | 对齐（`filterInternal` 为真时排除 `_` 前缀的内部命令） |
 
 ### window
 
@@ -64,11 +64,15 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | `window.createOutputChannel` | 同名 | 对齐（基础子集：`append/appendLine/clear/show`） |
 | `window.activeTextEditor`（同步属性） | `window.getActiveTextEditor()`（异步方法） | 语义差异：返回快照句柄，外部变化后需重新取，不要长期持有 |
 | `window.onDidChangeActiveTextEditor` | 同名 | 对齐 |
-| `window.visibleTextEditors` / `showTextDocument` | — | 缺失（暂无计划；文本编辑器的打开由工作台驱动） |
+| `window.showTextDocument` | 同名 | 部分对齐：`TextDocumentShowOptions` 支持 `preserveFocus/preview/selection`；无 `viewColumn`（组布局由工作台管理） |
+| `window.visibleTextEditors` | — | 缺失（暂无计划） |
+| `window.onDidChangeTextEditorSelection` | 同名 | 部分对齐：防抖派发（一波输入只投递最新一次）；仅活动编辑器触发；程序化 `setSelections` 时 `kind` 为 `undefined` |
 | `window.createTextEditorDecorationType` + `TextEditor.setDecorations` | 同名 | 部分对齐：装饰选项是子集（`gutterIconPath` 只收 data-URI；整行/颜色/边框/概览标尺可用） |
 | `window.registerCustomEditorProvider` | 同名 | 部分对齐：仅只读 `CustomReadonlyEditorProvider`（`openCustomDocument` + `resolveCustomEditor`）；可写 custom editor（save/backup/edit）**计划中** |
 | `window.createWebviewPanel`（自由面板） | — | 缺失（暂无计划；用 `registerCustomEditorProvider` + `contributes.customEditors` 绑定文件类型） |
-| `window.withProgress` | — | 缺失（暂无计划。绕行：`StatusBarItem.showProgress` 或写 OutputChannel） |
+| `window.withProgress` | 同名 | 部分对齐：`ProgressLocation` 仅 `Window/Notification/SourceControl`（SourceControl 当前按 Window 渲染）；report 载荷仅 `{message, increment}` |
+| `window.setStatusBarMessage` | 同名 | 对齐（三重载；但各条消息独立共存，不是 VSCode 的后进先出消息栈） |
+| `window.showOpenDialog` / `showSaveDialog` | 同名 | 部分对齐：当前实现单选（`canSelectMany` 仅占位）；`filters` 暂不过滤列出条目 |
 | `window.createTerminal` / `Terminal` | — | 缺失（**无计划**。绕行：扩展宿主是普通 Node 进程，可 `node:child_process` 自 spawn，输出进 OutputChannel；但没有用户可见的交互终端） |
 | `window.createTreeView` / `registerTreeDataProvider` | — | 缺失（**计划中**） |
 | `window.registerWebviewViewProvider` | — | 缺失（暂无计划） |
@@ -78,29 +82,34 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | VSCode API | Universe 等价物 | 状态 |
 |---|---|---|
 | `workspace.rootPath` | 同名 | 语义差异：仅单文件夹工作区，宿主启动时固定 |
-| `workspace.workspaceFolders` / `getWorkspaceFolder` | — | 缺失（暂无计划） |
+| `workspace.workspaceFolders` / `workspace.name` | 同名 | 部分对齐：单文件夹模型——至多一项、`index` 恒 0；无 `getWorkspaceFolder` / `onDidChangeWorkspaceFolders` |
+| `workspace.asRelativePath` | 同名 | 对齐（工作区外路径原样返回；包含性比较按 OS 大小写策略） |
 | `workspace.isTrusted` / `onDidGrantWorkspaceTrust` | 同名 | 对齐（信任不会在原地撤销——撤销会重启扩展宿主，故无 revoke 事件） |
-| `workspace.fs` | 同名 | 部分对齐：6 方法 `readFile/writeFile/stat/readDirectory/createDirectory/delete`；参数是**字符串路径**不是 `Uri`；无 `copy/rename`（用 read+write(+delete) 组合绕行）；`delete` 无 `useTrash`；每次调用过宿主路径策略（拒敏感目录、禁逃逸工作区根） |
-| `workspace.createFileSystemWatcher` | — | 缺失（**计划中**。绕行：轮询 `workspace.fs.stat` 的 `mtime`，或给用户提供手动刷新命令） |
+| `workspace.fs` | 同名 | 部分对齐：8 方法 `readFile/writeFile/stat/readDirectory/createDirectory/delete/rename/copy`；参数是**字符串路径**不是 `Uri`；`delete` 无 `useTrash`；每次调用过宿主路径策略（拒敏感目录、禁逃逸工作区根） |
+| `workspace.createFileSystemWatcher` | 同名 | 部分对齐：仅观察工作区文件夹内部；glob 仅 string 模式（无 `RelativePattern`） |
+| `workspace.findFiles` | 同名 | 部分对齐：glob 仅 string 模式；取消为 best-effort（跨 RPC 不中止在途搜索，迟到结果丢弃后以空列表 resolve） |
 | `workspace.textDocuments` / `onDidOpenTextDocument` / `onDidChangeTextDocument` / `onDidCloseTextDocument` | 同名 | 对齐（`TextDocument` 更薄：仅 `uri/languageId/version/getText()`；无 `lineAt/offsetAt/lineCount/fileName/isDirty/save()`） |
+| `workspace.openTextDocument` | 同名 | 部分对齐：仅 `Uri`/路径形式（无 `languageId`/`content` 的内存文档重载）；打开进文档模型不显示（要显示走 `window.showTextDocument`） |
 | `workspace.onWillSaveTextDocument` | 同名 | 对齐（`waitUntil(Promise<TextEdit[]>)`，宿主带超时兜底） |
-| `workspace.onDidSaveTextDocument` | — | 缺失（暂无计划；「保存后」逻辑多数可挪到 `onWillSaveTextDocument`） |
+| `workspace.onDidSaveTextDocument` | 同名 | 部分对齐：当前仅文件编辑器的保存路径会触发 |
+| `workspace.applyEdit` | 同名 | 部分对齐：仅文本编辑；含文件级 create/rename/delete 的 `WorkspaceEdit` 整体被拒绝（resolve `false`） |
 | `workspace.getConfiguration` | 同名 | 语义差异：`get` 返回 **Promise**（配置在 renderer 进程）；支持 `update(key, value)`；无 `has/inspect` |
-| `workspace.onDidChangeConfiguration` | — | 缺失（暂无计划） |
-| `workspace.openTextDocument` / `findFiles` | — | 缺失（暂无计划。`findFiles` 绕行：`workspace.fs.readDirectory` 自行遍历） |
-| `workspace.applyEdit` | — | 缺失（暂无计划；编辑器内文本改动走 `TextEditor.edit`） |
+| `workspace.onDidChangeConfiguration` | 同名 | 对齐（`affectsConfiguration` 前缀匹配；宿主重启期间的变更丢失，激活后重读） |
 | `workspace.registerTimelineProvider`（VSCode proposed API） | 同名 | 对齐（`scheme` 可单值或数组；内置 Timeline 视图消费） |
 
 ### languages
 
-18 个 `register*Provider` + `createDiagnosticCollection` + `setLanguageServerStatus`。两处整体差异先说清：
+21 个 `register*Provider` + `createDiagnosticCollection` + `setLanguageServerStatus` + `getLanguages`。两处整体差异先说清：
 
 - `DocumentSelector` 简化为 `string | string[]`（语言 id），无 `{language, scheme, pattern}` 对象形。
 - provider 签名里的类型（`Hover`、`CompletionItem`、`Diagnostic`…）是 **LSP 类型**（从 `vscode-languageserver-types` 再导出），不是 `vscode.*` 类型——字段大多同形，但构造结果时按 LSP 形状写字面量。
 
 | VSCode API | Universe 等价物 | 状态 |
 |---|---|---|
-| `registerHoverProvider` / `registerDefinitionProvider` / `registerReferenceProvider` / `registerImplementationProvider` / `registerTypeDefinitionProvider` / `registerDocumentSymbolProvider` / `registerWorkspaceSymbolProvider` / `registerDocumentHighlightProvider` / `registerSelectionRangeProvider` / `registerDocumentFormattingEditProvider` | `languages.*` 同名 | 对齐 |
+| `registerHoverProvider` / `registerDefinitionProvider` / `registerReferenceProvider` / `registerImplementationProvider` / `registerTypeDefinitionProvider` / `registerDocumentSymbolProvider` / `registerWorkspaceSymbolProvider` / `registerDocumentHighlightProvider` / `registerSelectionRangeProvider` / `registerDocumentFormattingEditProvider` / `registerDocumentRangeFormattingEditProvider` | `languages.*` 同名 | 对齐 |
+| `languages.registerOnTypeFormattingEditProvider` | 同名 | 语义差异：仅用户开启 `editor.formatOnType`（本产品默认关）时才会被调用 |
+| `languages.registerInlayHintsProvider` | 同名 | 部分对齐：一次性返回完整 hint，无惰性 `resolveInlayHint` 阶段（LSP hint 的 `data` 字段被丢弃）；支持 `onDidChangeInlayHints` |
+| `languages.getLanguages` | 同名 | 对齐 |
 | `languages.registerCompletionItemProvider` | 同名 | 对齐（triggerCharacters + 可选 `resolveCompletionItem`） |
 | `languages.registerSignatureHelpProvider` | 同名 | 语义差异：第三参是 metadata 对象 `{triggerCharacters, retriggerCharacters}`，不是可变参数 |
 | `languages.registerRenameProvider` | 同名 | 部分对齐：无 `prepareRename` |
@@ -111,7 +120,7 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | `languages.registerDocumentLinkProvider` | 同名 | 对齐（`resolveDocumentLink`） |
 | `languages.createDiagnosticCollection` | 同名 | 部分对齐：`set/delete/clear/dispose`；无 `get/forEach`；`Diagnostic` 是 LSP 类型 |
 | —（VSCode 无对应） | `languages.setLanguageServerStatus` | Universe 扩展：上报语言服务 `starting/ready/error`，状态栏显示 spinner、导航命令等待就绪而非静默阻塞 |
-| InlayHints / InlineCompletion / RangeFormatting / OnTypeFormatting / CallHierarchy / TypeHierarchy / LinkedEditing / Color / Declaration / DropEdit 等 provider | — | 缺失（暂无计划） |
+| InlineCompletion / CallHierarchy / TypeHierarchy / LinkedEditing / Color / Declaration / DropEdit 等 provider | — | 缺失（暂无计划） |
 
 ### scm
 
@@ -130,8 +139,9 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | `vscode.notebooks` | 缺失（**无计划**） |
 | `vscode.authentication` | 缺失（暂无计划） |
 | `ExtensionContext.secrets` | 缺失（暂无计划。**不要**退而用 `globalState` 明文存密钥） |
-| `vscode.Uri` 类 | 缺失（设计上以平面对象 `UriComponents` 替代——可 JSON 序列化、直接过 RPC。无 parse/join 工具函数，路径操作用字符串自理；pdf 扩展的 `joinPath/fileUri/dirUri` 可照抄） |
-| `vscode.env` / `env.openExternal` | 缺失（暂无计划） |
+| `vscode.Uri` 类 | 对齐（0.9.0 起：`Uri.file/parse/from/joinPath`，`fsPath/toString/toJSON`）。注意既有表面里 `TextDocument.uri` 等仍是平面对象 `UriComponents`，两类并存 |
+| `vscode.env` | 部分对齐（0.9.0 起）：`appName/appVersion/language/sessionId/uriScheme`、`clipboard`（纯文本）、`openExternal`（http(s) 走浏览器，file 在工作台打开）；无 `machineId/remoteName/uiKind` 等 |
+| `vscode.extensions` | 部分对齐（0.9.0 起）：`all/getExtension/activate()`/`exports` 实时视图；`onDidChange` 不 fire（扩展集变更靠重启宿主生效） |
 | `ExtensionContext.extensionUri` / `storagePath` / `environmentVariableCollection` / `logPath` / `extensionMode` | 缺失（常见用途用 `extensionPath` / `globalStoragePath` 覆盖） |
 | `Memento.keys()` / `setKeysForSync` | 缺失（`Memento` 仅 `get/update`；无同步漫游） |
 | `contributes.keybindings[].mac` 字段 | schema 接受但**未生效**：所有平台都用 `key`（见 [贡献点参考](./contribution-points.md#keybindings)） |
@@ -141,7 +151,7 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 仓库里的 [`extensions-external/pdf/`](../../../extensions-external/pdf/) 是一次真实移植——从 vscode-pdf（Apache-2.0）到 `universe-pdf`，用 Mozilla pdf.js 在 webview 里渲染 `.pdf`，`src/extension.ts` 的头注释如实标注了移植来源。相对原版，有效改动只有三处：
 
 1. **改 import（机械）**。`import * as vscode from 'vscode'` 换成从 `@universe-editor/extension-api` 具名导入 `window` 与类型；`vscode.ExtensionContext` 等类型注解换成具名 `type` 导入。主体逻辑（`openCustomDocument` / `resolveCustomEditor` 两方法、CSP 注入、`asWebviewUri` 重写资产 URL）原样保留。
-2. **砍掉自动重载（缺失能力）**。原版用 `vscode.workspace.createFileSystemWatcher` 监听文件变化自动重载；当前（0.8.0）没有 watcher（计划中），改为打开时一次性渲染。代码里如实留了注释（`PdfDocument.dispose` 的 "auto-reload-on-change is not wired because the API has no filesystem watcher yet"），watcher 落地后可补回。
+2. **砍掉自动重载（当时的缺失能力，0.9.0 已落地）**。原版用 `vscode.workspace.createFileSystemWatcher` 监听文件变化自动重载；移植时（0.8.0）没有 watcher，改为打开时一次性渲染。0.9.0 起 `workspace.createFileSystemWatcher` 已可用（仅工作区内部、glob 仅 string 模式），代码里当时的注释（`PdfDocument.dispose` 的 "auto-reload-on-change is not wired because the API has no filesystem watcher yet"）如今可以接回——留作一个真实的最小改造练习。
 3. **`localResourceRoots` 补文档所在目录（语义差异）**。Universe 只默认放行**扩展目录**；要 `asWebviewUri(document.uri)` 能解析，必须把文档所在目录显式加进 allow-list——漏了的症状是「预览器 UI 出来了但内容空白」。
 
 **工作量锚点**：这类纯预览扩展（一个只读 custom editor + 静态资产 + 少量 postMessage）**半天内**可移植完；大头通常在 pdf.js 这类第三方资产的打包与 CSP，而不是 API 差异。写新预览扩展可直接照抄它的骨架。
