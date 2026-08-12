@@ -59,6 +59,7 @@ import { buildSwarmReviewUrl } from '../../services/swarm/swarmReviewUrl.js'
 import {
   swarmReviewDetailCache,
   swarmReviewFilesViewState,
+  fingerprintSwarmVersions,
   getSwarmReviewEditorState,
   updateSwarmReviewEditorState,
   notifyReviewMutated,
@@ -174,6 +175,13 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   const [compareVersionIdx, setCompareVersionIdx] = useState<number | null>(
     savedState?.compareVersionIdx ?? null,
   )
+  // The versions-list fingerprint the current selection was made against. A
+  // re-shelve appends a version and changes the fingerprint — a restored or
+  // long-held selection then points at a superseded version and must jump to
+  // the latest (compare resets to the depot base).
+  const selectionFingerprintRef = useRef(
+    savedState?.versionsFingerprint ?? (detail ? fingerprintSwarmVersions(detail.versions) : null),
+  )
   const [comments, setComments] = useState<SwarmCommentDto[] | null>(null)
   const [commentDraft, setCommentDraft] = useState(savedState?.commentDraft ?? '')
   const loadAbortRef = useRef<AbortController | null>(null)
@@ -266,13 +274,23 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
         setDetail(r)
         swarmReviewDetailCache.set(reviewId, r)
         const latestIdx = r.versions.length > 0 ? r.versions.length - 1 : null
-        setSelectedVersionIdx((current) => {
-          if (current === null) return latestIdx
-          return current < r.versions.length ? current : latestIdx
-        })
-        setCompareVersionIdx((current) =>
-          current === null || current < r.versions.length ? current : null,
-        )
+        const fp = fingerprintSwarmVersions(r.versions)
+        if (fp !== selectionFingerprintRef.current) {
+          // The review was re-shelved since this selection was made — the
+          // remembered indexes name superseded versions, so follow the latest.
+          setSelectedVersionIdx(latestIdx)
+          setCompareVersionIdx(null)
+        } else {
+          setSelectedVersionIdx((current) => {
+            if (current === null) return latestIdx
+            return current < r.versions.length ? current : latestIdx
+          })
+          setCompareVersionIdx((current) =>
+            current === null || current < r.versions.length ? current : null,
+          )
+        }
+        selectionFingerprintRef.current = fp
+        updateSwarmReviewEditorState(reviewId, { versionsFingerprint: fp })
       })()
         .catch((e: unknown) => {
           if (!controller.signal.aborted && !detailRef.current) {

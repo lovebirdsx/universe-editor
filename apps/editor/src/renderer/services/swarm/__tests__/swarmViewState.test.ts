@@ -6,12 +6,52 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
+import type { SwarmReviewDetailDto } from '@universe-editor/extensions-common'
 import {
+  fingerprintSwarmVersions,
   requestSwarmReviewsRefresh,
   resolveSwarmReviewsRefresh,
   swarmReviewEvents,
   trackSwarmRefreshConsumer,
 } from '../swarmViewState.js'
+
+type Versions = SwarmReviewDetailDto['versions']
+
+describe('fingerprintSwarmVersions', () => {
+  it('handles an empty versions list', () => {
+    expect(fingerprintSwarmVersions([])).toBe('0:')
+  })
+
+  it('changes when a version is appended', () => {
+    const before: Versions = [{ version: 1, change: '2001', pending: true, time: 1 }]
+    const after: Versions = [...before, { version: 2, change: '2002', pending: true, time: 2 }]
+    expect(fingerprintSwarmVersions(before)).toBe('1:2001')
+    expect(fingerprintSwarmVersions(after)).toBe('2:2002')
+    expect(fingerprintSwarmVersions(after)).not.toBe(fingerprintSwarmVersions(before))
+  })
+
+  it('prefers the immutable archiveChange over the re-shelvable author change', () => {
+    const versions: Versions = [
+      { version: 1, change: '2001', pending: true, time: 1 },
+      { version: 2, change: '2002', archiveChange: '2999', pending: true, time: 2 },
+    ]
+    expect(fingerprintSwarmVersions(versions)).toBe('2:2999')
+  })
+
+  it('never keys on the rev: same rev, different change → different fingerprint', () => {
+    // Re-shelves of an unapproved review all report the same rev (it only
+    // increments on approve), so the rev must not feed the fingerprint.
+    const a: Versions = [
+      { version: 1, change: '910', pending: true, time: 1 },
+      { version: 1, change: '911', pending: true, time: 2 },
+    ]
+    const b: Versions = [
+      { version: 1, change: '910', pending: true, time: 1 },
+      { version: 1, change: '912', pending: true, time: 2 },
+    ]
+    expect(fingerprintSwarmVersions(a)).not.toBe(fingerprintSwarmVersions(b))
+  })
+})
 
 describe('swarm refresh request acknowledgement', () => {
   it('resolves immediately when no view is consuming', async () => {

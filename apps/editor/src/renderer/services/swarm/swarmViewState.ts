@@ -78,10 +78,28 @@ export interface SwarmReviewEditorState {
   selectedVersionIdx: number | null
   /** Left-hand (compare) version index; null = the depot base. */
   compareVersionIdx: number | null
+  /** Fingerprint of the versions list the saved selection was made against; a
+   *  changed fingerprint (a re-shelve appended a version) invalidates the
+   *  remembered selection. null = no detail seen yet (legacy entry). */
+  versionsFingerprint: string | null
   /** Unsent review-level comment draft. */
   commentDraft: string
   /** Vertical scroll offset of the changed-file list. */
   filesScrollTop: number
+}
+
+/**
+ * Fingerprint of a review's versions list: the version count plus the LAST
+ * version's backing change (archiveChange preferred — the author's changelist
+ * can be re-shelved in place, the archive shelf is the immutable snapshot).
+ * Never the rev: re-shelves of an unapproved review all report the same rev.
+ * A re-shelve appends a version → the fingerprint changes → a version
+ * selection remembered against the old list must not survive (the editor
+ * resets to the latest version, compare back to the depot base).
+ */
+export function fingerprintSwarmVersions(versions: SwarmReviewDetailDto['versions']): string {
+  const last = versions[versions.length - 1]
+  return `${versions.length}:${last ? (last.archiveChange ?? last.change) : ''}`
 }
 
 const _reviewEditorStates = new Map<string, SwarmReviewEditorState>()
@@ -98,6 +116,7 @@ export function updateSwarmReviewEditorState(
   const prev = _reviewEditorStates.get(reviewId) ?? {
     selectedVersionIdx: null,
     compareVersionIdx: null,
+    versionsFingerprint: null,
     commentDraft: '',
     filesScrollTop: 0,
   }

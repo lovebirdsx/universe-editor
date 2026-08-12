@@ -43,6 +43,8 @@ import { DiffEditorInput } from '../../../services/editor/DiffEditorInput.js'
 import {
   swarmReviewDetailCache,
   clearSwarmReviewEditorStates,
+  fingerprintSwarmVersions,
+  updateSwarmReviewEditorState,
 } from '../../../services/swarm/swarmViewState.js'
 import { swarmApplyStore } from '../../../services/swarm/swarmApplyStore.js'
 import { SwarmReviewEditor } from '../SwarmReviewEditor.js'
@@ -827,7 +829,7 @@ describe('SwarmReviewEditor restore', () => {
     }
   })
 
-  it('keeps a selected version when a refresh discovers a newer version', async () => {
+  it('jumps to the latest version when a refresh discovers a newer version', async () => {
     let detailLoads = 0
     const getReview = registerCommand(SwarmCommands.getReview, () =>
       ++detailLoads === 1 ? DETAIL : DETAIL_WITH_NEW_VERSION,
@@ -845,12 +847,127 @@ describe('SwarmReviewEditor restore', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Refresh review' }))
       await act(async () => Promise.resolve())
 
-      expect(versionSelect.value).toBe('0')
+      // A re-shelve appended a version: the selection was only valid against the
+      // old versions list, so it jumps to the latest and the compare side resets
+      // to the depot base.
+      expect(versionSelect.value).toBe('1')
+      const compareSelect = screen.getAllByRole('combobox')[0] as HTMLSelectElement
+      expect(compareSelect.value).toBe('')
       // The compare (left) and selected (right) selectors both list it.
       expect(screen.getAllByRole('option', { name: 'v2 (2002)' })).toHaveLength(2)
     } finally {
       describeVersion.dispose()
       listComments.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('jumps to the latest version when the auto-refresh brings back a new version', async () => {
+    let detailLoads = 0
+    const getReview = registerCommand(SwarmCommands.getReview, () =>
+      ++detailLoads === 1 ? DETAIL : DETAIL_WITH_NEW_VERSION,
+    )
+    const listComments = registerCommand(SwarmCommands.listComments, () => [])
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    renderReview()
+    try {
+      await act(async () => Promise.resolve())
+      const versionSelect = screen.getAllByRole('combobox')[1] as HTMLSelectElement
+      expect(versionSelect.value).toBe('0')
+
+      // The minute-interval auto-refresh of an always-open tab picks up the
+      // re-shelve — the selection must follow the latest version.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000)
+      })
+
+      expect(versionSelect.value).toBe('1')
+    } finally {
+      describeVersion.dispose()
+      listComments.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('jumps to the latest version when reopening a review that gained a version', async () => {
+    // Tab state saved before the re-shelve: v1 selected, base compare, and the
+    // fingerprint of the old one-version list. The cached detail primes the
+    // first render with that stale selection.
+    swarmReviewDetailCache.set('1001', DETAIL)
+    updateSwarmReviewEditorState('1001', {
+      selectedVersionIdx: 0,
+      compareVersionIdx: null,
+      versionsFingerprint: fingerprintSwarmVersions(DETAIL.versions),
+    })
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL_WITH_ARCHIVE)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const listComments = registerCommand(SwarmCommands.listComments, () => [])
+    const getFileContent = registerCommand(SwarmCommands.getFileContent, () => ({
+      content: 'export const a = 1\n',
+    }))
+    const { commands, editorService } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+
+      // The fresh detail has a new version: the restored selection is invalid,
+      // so it jumps to the latest (index 1) and compare falls back to base.
+      const compareSelect = screen.getAllByRole('combobox')[0] as HTMLSelectElement
+      const versionSelect = screen.getAllByRole('combobox')[1] as HTMLSelectElement
+      expect(versionSelect.value).toBe('1')
+      expect(compareSelect.value).toBe('')
+      // The file list is described from the LATEST version's archive shelf.
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.describeVersion, {
+        change: '2999',
+        immutable: true,
+      })
+
+      // And a diff opened from it uses the latest version's change on the right.
+      fireEvent.click(screen.getByText('a.ts'))
+      await act(async () => Promise.resolve())
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getFileContent, {
+        depotFile: '//depot/src/editor/a.ts',
+        revision: '@=2999',
+        immutable: true,
+      })
+      const diffInput = editorService.openEditor.mock.calls[0]?.[0] as SwarmDiffEditorInput
+      expect(diffInput.context.rightVersion).toBe(2)
+    } finally {
+      getFileContent.dispose()
+      listComments.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('keeps the remembered version selection when the review has not changed', async () => {
+    // The guard for the existing memory feature: same versions list (matching
+    // fingerprint) must keep the saved non-latest selection across a reopen.
+    swarmReviewDetailCache.set('1001', DETAIL_WITH_ARCHIVE)
+    updateSwarmReviewEditorState('1001', {
+      selectedVersionIdx: 0,
+      compareVersionIdx: null,
+      versionsFingerprint: fingerprintSwarmVersions(DETAIL_WITH_ARCHIVE.versions),
+    })
+    const getReview = registerCommand(SwarmCommands.getReview, () => DETAIL_WITH_ARCHIVE)
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => FILES)
+    const listComments = registerCommand(SwarmCommands.listComments, () => [])
+    const { commands } = renderReview()
+    try {
+      await act(async () => Promise.resolve())
+
+      const versionSelect = screen.getAllByRole('combobox')[1] as HTMLSelectElement
+      expect(versionSelect.value).toBe('0')
+      // The file list stays on the remembered version, not the latest archive.
+      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.describeVersion, {
+        change: '2001',
+      })
+      expect(commands.executeCommand).not.toHaveBeenCalledWith(SwarmCommands.describeVersion, {
+        change: '2999',
+        immutable: true,
+      })
+    } finally {
+      listComments.dispose()
+      describeVersion.dispose()
       getReview.dispose()
     }
   })
