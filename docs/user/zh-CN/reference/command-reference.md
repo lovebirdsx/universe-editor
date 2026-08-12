@@ -73,7 +73,7 @@
 | 在当前编辑器中新建 Agent 会话 | 用当前会话的 Agent 类型，在当前编辑器组里新开一个会话标签页（保留原会话；即便所在组已锁定也会直接创建） | 无 |
 | 选择 Agent 并新建会话… | 换 Agent（会顺带新建会话） | 无 |
 | 聚焦 Agent 输入框 | 跳到输入框 | `Ctrl+Alt+I` |
-| 取消 Agent 回合 | 中止当前回合 | `Ctrl+Shift+Escape`；会话聚焦时也可按 `Esc` |
+| 取消 Agent 回合 | 中止当前回合 | `Ctrl+Shift+Escape`；会话聚焦时也可按 `Shift+Esc` |
 | 将选区添加到 Agent 聊天 | 把选中文本作为上下文 | `Ctrl+K Ctrl+L` |
 | 恢复 Agent 会话… | 打开历史会话 | `Ctrl+Shift+H` |
 | 切换会话… | 跨窗口切换会话 | `Alt+S` |

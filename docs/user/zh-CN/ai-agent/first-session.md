@@ -66,9 +66,9 @@ Agent 运行时，你仍然可以再发消息（此时按钮变成"运行中 · 
 
 想中止当前这一回合：
 
-- 焦点在会话输入框（或聊天区域）时按 `Esc`。
+- 焦点在会话输入框（或聊天区域）时按 `Shift+Esc`。
 - 快捷键：`Ctrl+Shift+Escape`（取消 Agent 回合，任意位置可用）。
-- 或点"停止 (Esc)"按钮。
+- 或点"停止"按钮。
 
 > 注意：取消**不会撤销已经写到磁盘上的改动**。想撤销改动，见 [审阅并采纳 Agent 的改动](./reviewing-changes.md)。
 
@@ -91,7 +91,7 @@ Agent 运行时，你仍然可以再发消息（此时按钮变成"运行中 · 
 | 新建 Agent 会话         | `Ctrl+Alt+N`                                | 开始一段新对话                                              |
 | 选择 Agent 并新建会话…  | 无                                          | 换 Agent（会新建会话）                                      |
 | 聚焦 Agent 输入框       | `Ctrl+Alt+I`                                | 跳到输入框                                                  |
-| 取消 Agent 回合         | `Ctrl+Shift+Escape`；会话聚焦时也可按 `Esc` | 中止当前回合                                                |
+| 取消 Agent 回合         | `Ctrl+Shift+Escape`；会话聚焦时也可按 `Shift+Esc` | 中止当前回合                                                |
 | 将选区添加到 Agent 聊天 | `Ctrl+K Ctrl+L`                             | 把选中文本作为上下文                                        |
 | 配置 AI 修复…           | 无                                          | 为错误悬停「使用 AI 修复」单独选择 Agent / 模型 / 思考深度 / 模式 |
 

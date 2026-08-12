@@ -23,8 +23,8 @@
  *
  *  And `acpChatTurnRunning`: true iff the *focused* widget's session is running
  *  a turn. Pushed via `setTurnRunning`, aggregated the same way; the
- *  CancelAgentTurn Escape binding gates on it so Esc stops the turn only while
- *  focus sits inside the chat of the running session.
+ *  CancelAgentTurn Shift+Escape binding gates on it so Shift+Esc stops the
+ *  turn only while focus sits inside the chat of the running session.
  *--------------------------------------------------------------------------------------------*/
 
 import {

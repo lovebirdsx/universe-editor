@@ -5,8 +5,9 @@ import styles from './agents.module.css'
 
 /**
  * Circular Stop control shown next to the Send button while a turn is running.
- * Clicking interrupts the current turn (same as pressing Esc). Kept separate
- * from SendButton so the send action stays available for mid-turn steering.
+ * Clicking interrupts the current turn (same as pressing Shift+Esc). Kept
+ * separate from SendButton so the send action stays available for mid-turn
+ * steering.
  */
 export function StopButton({ onCancel }: { onCancel: () => void }) {
   const title = localize('acp.stop', 'Stop')

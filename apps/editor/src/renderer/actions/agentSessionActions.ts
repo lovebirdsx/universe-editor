@@ -152,19 +152,16 @@ export class CancelAgentTurnAction extends Action2 {
       id: CancelAgentTurnAction.ID,
       title: localize2('action.agent.cancelTurn', 'Cancel Agent Turn'),
       category: CATEGORY,
-      // Two bindings, one command: Ctrl+Shift+Esc works from anywhere; bare Esc
-      // is scoped to the focused chat of a running session so it cancels the
-      // turn instead of stealing focus back to the editor. The scoped weight
-      // must outrank FocusActiveEditorGroupAction's global Esc binding; the
-      // popover (acpPromptPopupVisible) and find (acpChatFindVisible) Esc
-      // bindings sit at the same weight, so this when-clause excludes both —
-      // Esc closes an open popover / find widget first, and only cancels the
-      // turn once nothing else owns the key.
+      // Two bindings, one command: Ctrl+Shift+Esc works from anywhere; Shift+Esc
+      // is scoped to the focused chat of a running session. Bare Esc used to be
+      // the scoped binding but was too easy to hit by accident (it also doubles
+      // as the popover / find-widget dismiss key), so it moved to Shift+Esc —
+      // which nothing else claims, hence no popover/find exclusions needed.
       keybinding: [
         { primary: 'ctrl+shift+escape' },
         {
-          primary: 'escape',
-          when: 'acpChatFocused && acpChatTurnRunning && !acpPromptPopupVisible && !acpChatFindVisible',
+          primary: 'shift+escape',
+          when: 'acpChatFocused && acpChatTurnRunning',
           weight: ACP_SCOPED_KEY_WEIGHT,
         },
       ],

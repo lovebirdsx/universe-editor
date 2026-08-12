@@ -130,8 +130,8 @@ const SCENARIOS: readonly Scenario[] = [
     scopedId: ChatFindAction.ID,
   },
   {
-    name: 'Cancel agent turn (escape) beats global escape while the turn runs',
-    key: 'escape',
+    name: 'Cancel agent turn (shift+escape) beats global shift+escape while the turn runs',
+    key: 'shift+escape',
     context: { acpChatFocused: true, acpChatTurnRunning: true },
     scoped: CancelAgentTurnAction,
     scopedId: CancelAgentTurnAction.ID,
@@ -211,7 +211,7 @@ describe('keybinding order independence — scoped weight beats registration ord
   }
 })
 
-describe('cancel-turn escape yields to the popover and find widgets', () => {
+describe('cancel-turn moved to shift+escape (bare escape stays with the widgets)', () => {
   const disposables: IDisposable[] = []
 
   afterEach(() => {
@@ -227,13 +227,34 @@ describe('cancel-turn escape yields to the popover and find widgets', () => {
     return ctx
   }
 
-  // Same-weight Esc bindings coexist in a running chat: the popover's Hide and
-  // find's Close sit at ACP_SCOPED_KEY_WEIGHT too. The cancel binding's
-  // when-clause excludes both states, so Esc dismisses the widget first and
-  // only cancels the turn once nothing else owns the key.
-  it('escape hides the suggestion popover instead of cancelling', () => {
+  // Shift+Esc is deliberately hard to fat-finger and claims no other owner's
+  // key, so it cancels the turn even while the popover or find widget is open.
+  it('shift+escape cancels while the suggestion popover is open', () => {
     disposables.push(registerAction2(CancelAgentTurnAction))
     disposables.push(registerAction2(HideAcpPromptSuggestionAction))
+
+    const ctx = runningChatContext({ acpPromptPopupVisible: true })
+    expect(KeybindingsRegistry.resolveKeystroke('shift+escape', ctx)).toMatchObject({
+      kind: 'execute',
+      command: CancelAgentTurnAction.ID,
+    })
+  })
+
+  it('shift+escape cancels while the find widget is open', () => {
+    disposables.push(registerAction2(CancelAgentTurnAction))
+    disposables.push(registerAction2(ChatFindCloseAction))
+
+    const ctx = runningChatContext({ acpChatFindVisible: true })
+    expect(KeybindingsRegistry.resolveKeystroke('shift+escape', ctx)).toMatchObject({
+      kind: 'execute',
+      command: CancelAgentTurnAction.ID,
+    })
+  })
+
+  it('escape no longer cancels the turn — it stays with the popover/find widgets', () => {
+    disposables.push(registerAction2(CancelAgentTurnAction))
+    disposables.push(registerAction2(HideAcpPromptSuggestionAction))
+    disposables.push(registerAction2(ChatFindCloseAction))
 
     const ctx = runningChatContext({ acpPromptPopupVisible: true })
     expect(KeybindingsRegistry.resolveKeystroke('escape', ctx)).toMatchObject({
@@ -242,40 +263,30 @@ describe('cancel-turn escape yields to the popover and find widgets', () => {
     })
   })
 
-  it('escape closes the find widget instead of cancelling', () => {
+  it('escape falls through to the global binding when no widget owns it', () => {
     disposables.push(registerAction2(CancelAgentTurnAction))
-    disposables.push(registerAction2(ChatFindCloseAction))
-
-    const ctx = runningChatContext({ acpChatFindVisible: true })
-    expect(KeybindingsRegistry.resolveKeystroke('escape', ctx)).toMatchObject({
-      kind: 'execute',
-      command: ChatFindCloseAction.ID,
-    })
-  })
-
-  it('escape cancels once no widget owns the key', () => {
-    disposables.push(registerAction2(CancelAgentTurnAction))
-    disposables.push(registerAction2(HideAcpPromptSuggestionAction))
-    disposables.push(registerAction2(ChatFindCloseAction))
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({ key: 'escape', command: GLOBAL_COMMAND }),
+    )
 
     const ctx = runningChatContext({})
     expect(KeybindingsRegistry.resolveKeystroke('escape', ctx)).toMatchObject({
       kind: 'execute',
-      command: CancelAgentTurnAction.ID,
+      command: GLOBAL_COMMAND,
     })
   })
 
-  it('escape stays global when the turn is not running', () => {
+  it('shift+escape stays global when the turn is not running', () => {
     disposables.push(registerAction2(CancelAgentTurnAction))
     disposables.push(
-      KeybindingsRegistry.registerKeybinding({ key: 'escape', command: GLOBAL_COMMAND }),
+      KeybindingsRegistry.registerKeybinding({ key: 'shift+escape', command: GLOBAL_COMMAND }),
     )
 
     const ctx = new ContextKeyService()
     disposables.push(ctx)
     ctx.set('acpChatFocused', true)
 
-    expect(KeybindingsRegistry.resolveKeystroke('escape', ctx)).toMatchObject({
+    expect(KeybindingsRegistry.resolveKeystroke('shift+escape', ctx)).toMatchObject({
       kind: 'execute',
       command: GLOBAL_COMMAND,
     })
