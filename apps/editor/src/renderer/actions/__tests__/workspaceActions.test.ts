@@ -199,7 +199,7 @@ function makeFileDialogStub(result?: URI): FileDialogStub {
     openCalls,
     async showOpenDialog(opts: IFileDialogOptions) {
       openCalls.push(opts)
-      return result
+      return result === undefined ? undefined : [result]
     },
     async showSaveDialog() {
       return undefined

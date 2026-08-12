@@ -38,16 +38,19 @@ class FakeQuickPick {
   valueSelection: [number, number] | undefined
   items: readonly IQuickPickItem[] = []
   activeItems: readonly IQuickPickItem[] = []
+  selectedItems: readonly IQuickPickItem[] = []
   busy = false
   buttons: readonly unknown[] = []
   filterExternally = false
   keepOpenOnAccept = false
+  canSelectMany = false
   title: string | undefined
   okLabel: string | undefined
 
   private readonly _onAccept = new Emitter<IQuickPickItem[]>()
   private readonly _onChangeValue = new Emitter<string>()
   private readonly _onChangeActive = new Emitter<IQuickPickItem | undefined>()
+  private readonly _onChangeSelection = new Emitter<IQuickPickItem[]>()
   private readonly _onTriggerOk = new Emitter<void>()
   private readonly _onTriggerButton = new Emitter<unknown>()
   private readonly _onHide = new Emitter<void>()
@@ -55,6 +58,7 @@ class FakeQuickPick {
   readonly onDidAccept = this._onAccept.event
   readonly onDidChangeValue = this._onChangeValue.event
   readonly onDidChangeActive = this._onChangeActive.event
+  readonly onDidChangeSelection = this._onChangeSelection.event
   readonly onDidTriggerOk = this._onTriggerOk.event
   readonly onDidTriggerButton = this._onTriggerButton.event
   readonly onDidHide = this._onHide.event
@@ -80,6 +84,10 @@ class FakeQuickPick {
   triggerButton(): void {
     this._onTriggerButton.fire(this.buttons[0])
   }
+  /** Simulate the panel's checkbox toggle: propose the next checked set. */
+  fireSelection(items: IQuickPickItem[]): void {
+    this._onChangeSelection.fire(items)
+  }
 }
 
 class FakeQuickInputService {
@@ -94,16 +102,16 @@ class FakeQuickInputService {
 // In-memory filesystem keyed by URI path. Directories map to their child names;
 // files live in a separate set.
 const DIRS = new Map<string, string[]>([
-  ['/a', ['git_project', 'src', 'readme.md', '.hidden']],
+  ['/a', ['git_project', 'src', 'readme.md', 'notes.txt', 'pic.png', '.hidden']],
   ['/a/git_project', []],
-  ['/a/src', []],
+  ['/a/src', ['code.ts']],
   ['/a/.hidden', []],
   ['/b', ['foo']],
   ['/b/foo', []],
   ['/home/u', ['Documents']],
   ['/home/u/Documents', []],
 ])
-const FILES = new Set<string>(['/a/readme.md'])
+const FILES = new Set<string>(['/a/readme.md', '/a/notes.txt', '/a/pic.png', '/a/src/code.ts'])
 
 class FakeFileService implements Partial<IFileService> {
   declare readonly _serviceBrand: undefined
@@ -226,7 +234,7 @@ class FakeConfigService {
 class FakeHostService {
   openCalls: IShowOpenFileOptions[] = []
   saveCalls: IShowSaveFileOptions[] = []
-  openResult: UriComponents | null = null
+  openResult: UriComponents[] | null = null
   saveResult: UriComponents | null = null
 
   async showOpenFileDialog(opts?: IShowOpenFileOptions) {
@@ -267,6 +275,9 @@ function createDialog(
 }
 
 const labels = (qp: FakeQuickPick): string[] => qp.items.map((it) => it.label)
+
+const itemByLabel = (qp: FakeQuickPick, label: string): IQuickPickItem =>
+  qp.items.find((it) => it.label === label)!
 
 beforeEach(() => {
   ;(globalThis as { window?: unknown }).window = {
@@ -407,7 +418,7 @@ describe('SimpleFileDialog interaction', () => {
     qp.accept()
 
     const picked = await result
-    expect(picked?.path).toBe('/b')
+    expect(picked?.[0]?.path).toBe('/b')
   })
 
   it('[D] the OK button opens the trailing-separator folder too', async () => {
@@ -424,7 +435,7 @@ describe('SimpleFileDialog interaction', () => {
     qp.triggerOk()
 
     const picked = await result
-    expect(picked?.path).toBe('/a')
+    expect(picked?.[0]?.path).toBe('/a')
   })
 
   it('expands a leading ~ to the home directory and lists it', async () => {
@@ -493,7 +504,7 @@ describe('SimpleFileDialog interaction', () => {
     qp.triggerOk()
 
     const picked = await result
-    expect(picked?.path).toBe('/a/newdir')
+    expect(picked?.[0]?.path).toBe('/a/newdir')
     expect(fileService.createdDirs).toContain('/a/newdir')
   })
 
@@ -556,7 +567,7 @@ describe('SimpleFileDialog interaction', () => {
 
     release({ confirmed: true })
     const picked = await result
-    expect(picked?.path).toBe('/a/newdir')
+    expect(picked?.[0]?.path).toBe('/a/newdir')
     expect(fileService.createdDirs).toEqual(['/a/newdir'])
   })
 
@@ -582,7 +593,7 @@ describe('SimpleFileDialog interaction', () => {
     qp.triggerOk()
 
     const picked = await result
-    expect(picked?.path).toBe('/a/sub/note.txt')
+    expect(picked?.[0]?.path).toBe('/a/sub/note.txt')
     expect(fileService.createdDirs).toContain('/a/sub')
     expect(fileService.writtenFiles).toContain('/a/sub/note.txt')
   })
@@ -619,12 +630,254 @@ describe('SimpleFileDialog interaction', () => {
   })
 })
 
+describe('SimpleFileDialog multi-select', () => {
+  it('sets canSelectMany on the pick and lists files for checking', async () => {
+    const { dialog, quickInput } = createDialog()
+    void dialog.showOpenDialog({
+      title: 'Open Files',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp = quickInput.lastPick
+    expect(qp.canSelectMany).toBe(true)
+    expect(labels(qp)).toEqual(['..', 'git_project', 'src', 'notes.txt', 'pic.png', 'readme.md'])
+  })
+
+  it('accepting a file toggles its checkbox instead of closing; OK confirms the set', async () => {
+    const { dialog, quickInput } = createDialog()
+    const result = dialog.showOpenDialog({
+      title: 'Open Files',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    qp.activeItems = [itemByLabel(qp, 'notes.txt')]
+    qp.accept()
+    await flush()
+    expect(qp.selectedItems.map((it) => it.label)).toEqual(['notes.txt'])
+
+    qp.activeItems = [itemByLabel(qp, 'readme.md')]
+    qp.accept()
+    await flush()
+    expect(qp.selectedItems.map((it) => it.label)).toEqual(['notes.txt', 'readme.md'])
+
+    qp.triggerOk()
+    const picked = await result
+    expect(picked?.map((u) => u.path)).toEqual(['/a/notes.txt', '/a/readme.md'])
+  })
+
+  it('accepting a checked file again deselects it', async () => {
+    const { dialog, quickInput } = createDialog()
+    void dialog.showOpenDialog({
+      title: 'Open Files',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    qp.activeItems = [itemByLabel(qp, 'notes.txt')]
+    qp.accept()
+    await flush()
+    expect(qp.selectedItems).toHaveLength(1)
+
+    qp.accept()
+    await flush()
+    expect(qp.selectedItems).toHaveLength(0)
+  })
+
+  it('OK with an empty checked set falls back to the typed path (single pick)', async () => {
+    const { dialog, quickInput } = createDialog()
+    const result = dialog.showOpenDialog({
+      title: 'Open Files',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    qp.type('/a/notes.txt')
+    await flush()
+    qp.triggerOk()
+
+    const picked = await result
+    expect(picked?.map((u) => u.path)).toEqual(['/a/notes.txt'])
+  })
+
+  it('accepting a folder still navigates into it in multi-select mode', async () => {
+    const { dialog, quickInput } = createDialog()
+    void dialog.showOpenDialog({
+      title: 'Open Files',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    qp.activeItems = [itemByLabel(qp, 'src')]
+    qp.accept()
+    await flush()
+
+    expect(qp.value).toBe('/a/src/')
+    expect(labels(qp)).toEqual(['..', 'code.ts'])
+  })
+
+  it('keeps picks recorded in a previously visited folder (checkbox proposal)', async () => {
+    const { dialog, quickInput } = createDialog()
+    const result = dialog.showOpenDialog({
+      title: 'Open Files',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    // Check notes.txt in /a, then navigate into src/.
+    qp.activeItems = [itemByLabel(qp, 'notes.txt')]
+    qp.accept()
+    await flush()
+    qp.activeItems = [itemByLabel(qp, 'src')]
+    qp.accept()
+    await flush()
+    expect(qp.value).toBe('/a/src/')
+
+    // The panel proposes the carried snapshot plus the newly checked row.
+    qp.fireSelection([...qp.selectedItems, itemByLabel(qp, 'code.ts')])
+    await flush()
+    expect(qp.selectedItems.map((it) => it.label)).toEqual(['notes.txt', 'code.ts'])
+
+    qp.triggerOk()
+    const picked = await result
+    expect(picked?.map((u) => u.path)).toEqual(['/a/notes.txt', '/a/src/code.ts'])
+  })
+
+  it('drops non-selectable rows from a checkbox proposal', async () => {
+    const { dialog, quickInput } = createDialog()
+    void dialog.showOpenDialog({
+      title: 'Open Files',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    // '..' and folders are not pickable in a files-only picker.
+    qp.fireSelection([itemByLabel(qp, '..'), itemByLabel(qp, 'src'), itemByLabel(qp, 'notes.txt')])
+    await flush()
+    expect(qp.selectedItems.map((it) => it.label)).toEqual(['notes.txt'])
+  })
+})
+
+describe('SimpleFileDialog filters', () => {
+  const textFilters = [{ name: 'Text', extensions: ['txt', 'md'] }]
+
+  it('lists only files matching the filter groups; folders stay visible', async () => {
+    const { dialog, quickInput } = createDialog()
+    void dialog.showOpenDialog({
+      title: 'Open File',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      filters: textFilters,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp = quickInput.lastPick
+    expect(labels(qp)).toEqual(['..', 'git_project', 'src', 'notes.txt', 'readme.md'])
+  })
+
+  it('a `*` group disables filtering', async () => {
+    const { dialog, quickInput } = createDialog()
+    void dialog.showOpenDialog({
+      title: 'Open File',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      filters: [{ name: 'All Files', extensions: ['*'] }],
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    expect(labels(quickInput.lastPick)).toEqual([
+      '..',
+      'git_project',
+      'src',
+      'notes.txt',
+      'pic.png',
+      'readme.md',
+    ])
+  })
+
+  it('rejects a typed path whose extension is outside the filter', async () => {
+    const { dialog, quickInput } = createDialog()
+    const result = dialog.showOpenDialog({
+      title: 'Open File',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      filters: textFilters,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    let settled: URI[] | undefined | 'pending' = 'pending'
+    void result.then((r) => {
+      settled = r
+    })
+
+    qp.type('/a/pic.png')
+    await flush()
+    qp.triggerOk()
+    await flush()
+    expect(settled).toBe('pending')
+
+    qp.type('/a/notes.txt')
+    await flush()
+    qp.triggerOk()
+    const picked = await result
+    expect(picked?.map((u) => u.path)).toEqual(['/a/notes.txt'])
+  })
+
+  it('filters apply inside navigated subfolders too', async () => {
+    const { dialog, quickInput } = createDialog()
+    void dialog.showOpenDialog({
+      title: 'Open File',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    qp.activeItems = [itemByLabel(qp, 'src')]
+    qp.accept()
+    await flush()
+    // code.ts is filtered out; only the parent row remains
+    expect(labels(qp)).toEqual(['..'])
+  })
+})
+
 describe('SimpleFileDialog native dialog branch', () => {
   const nativeConfig = (): FakeConfigService => new FakeConfigService(true)
 
   it('delegates open to the native host dialog when files.nativeDialog.enable=true', async () => {
     const host = new FakeHostService()
-    host.openResult = URI.file('/a/src').toJSON()
+    host.openResult = [URI.file('/a/src').toJSON()]
     const { dialog, quickInput } = createDialog(
       new FakeStorageService(),
       fakeDialog,
@@ -648,7 +901,30 @@ describe('SimpleFileDialog native dialog branch', () => {
         buttonLabel: 'Choose',
       },
     ])
-    expect(picked?.fsPath).toBe('/a/src')
+    expect(picked?.[0]?.fsPath).toBe('/a/src')
+  })
+
+  it('passes canSelectMany and filters through to the native host dialog', async () => {
+    const host = new FakeHostService()
+    host.openResult = [URI.file('/a/notes.txt').toJSON(), URI.file('/a/readme.md').toJSON()]
+    const { dialog } = createDialog(new FakeStorageService(), fakeDialog, nativeConfig(), host)
+    const picked = await dialog.showOpenDialog({
+      title: 'Open',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      filters: [{ name: 'Text', extensions: ['txt', 'md'] }],
+    })
+    expect(host.openCalls).toEqual([
+      {
+        title: 'Open',
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: true,
+        filters: [{ name: 'Text', extensions: ['txt', 'md'] }],
+      },
+    ])
+    expect(picked?.map((u) => u.fsPath)).toEqual(['/a/notes.txt', '/a/readme.md'])
   })
 
   it('delegates save to the native host dialog when files.nativeDialog.enable=true', async () => {

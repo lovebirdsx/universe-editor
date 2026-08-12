@@ -26,9 +26,12 @@ const RUNTIME_EXPORTS = [
   'InlayHintKind',
   'OverviewRulerLane',
   'ProgressLocation',
+  'RelativePattern',
   'StatusBarAlignment',
   'TextDocumentSaveReason',
   'TextEditorSelectionChangeKind',
+  'TreeItem',
+  'TreeItemCollapsibleState',
   'Uri',
   'ai',
   'commands',
@@ -72,10 +75,14 @@ const NAMESPACE_METHODS: Record<string, readonly string[]> = {
     'showSaveDialog',
     'getActiveTextEditor',
     'onDidChangeActiveTextEditor',
+    'onDidChangeVisibleTextEditors',
     'showTextDocument',
     'onDidChangeTextEditorSelection',
     'createTextEditorDecorationType',
     'registerCustomEditorProvider',
+    'createWebviewPanel',
+    'registerTreeDataProvider',
+    'createTreeView',
   ],
   scm: ['createSourceControl'],
   ai: [
@@ -107,6 +114,8 @@ const NAMESPACE_METHODS: Record<string, readonly string[]> = {
     'createDiagnosticCollection',
     'setLanguageServerStatus',
     'getLanguages',
+    'getDiagnostics',
+    'onDidChangeDiagnostics',
   ],
   workspace: [
     'getConfiguration',
@@ -136,6 +145,17 @@ describe.each(Object.entries(NAMESPACE_METHODS))('%s namespace', (name, methods)
   it.each(methods)('exposes %s as a function', (method) => {
     expect(typeof ns[method]).toBe('function')
   })
+})
+
+describe('env properties', () => {
+  // Property presence is asserted via `in` (not a read): every getter delegates
+  // to the host bridge, which throws when no host is installed.
+  it.each(['appName', 'appVersion', 'language', 'sessionId', 'uriScheme', 'machineId', 'appRoot'])(
+    'exposes %s as a property',
+    (prop) => {
+      expect(prop in api.env).toBe(true)
+    },
+  )
 })
 
 describe('env.clipboard', () => {
@@ -170,6 +190,14 @@ describe('workspace.fs', () => {
   it.each(FS_METHODS)('exposes %s as a function', (method) => {
     const fs = api.workspace.fs as unknown as Record<string, unknown>
     expect(typeof fs[method]).toBe('function')
+  })
+})
+
+describe('window properties', () => {
+  // Property presence is asserted via `in` (not a read): every getter delegates
+  // to the host bridge, which throws when no host is installed.
+  it.each(['visibleTextEditors'] as const)('exposes %s as a property', (prop) => {
+    expect(prop in api.window).toBe(true)
   })
 })
 
@@ -238,5 +266,86 @@ describe('namespace methods delegate to the host bridge', () => {
     // No bridge installed on globalThis → any call must fail loudly rather than
     // silently no-op. Guards the bridge-resolution contract the whole API rests on.
     expect(() => api.commands.registerCommand('x', () => {})).toThrow(/extension host/)
+  })
+})
+
+describe('languages.getDiagnostics / onDidChangeDiagnostics', () => {
+  const BRIDGE_KEY = '__universeExtensionHostBridge__'
+
+  function withBridge<T>(stub: Record<string, unknown>, run: () => T): T {
+    const g = globalThis as Record<string, unknown>
+    const prior = g[BRIDGE_KEY]
+    g[BRIDGE_KEY] = stub
+    try {
+      return run()
+    } finally {
+      if (prior === undefined) delete g[BRIDGE_KEY]
+      else g[BRIDGE_KEY] = prior
+    }
+  }
+
+  const sampleEntries = (): Array<[ReturnType<api.Uri['toJSON']>, api.Diagnostic[]]> => [
+    [
+      api.Uri.file('/test/a.ts').toJSON(),
+      [
+        {
+          range: { start: { line: 2, character: 4 }, end: { line: 2, character: 8 } },
+          message: 'boom',
+          severity: 1,
+        },
+      ],
+    ],
+  ]
+
+  it('getDiagnostics() forwards undefined and re-wraps result uris into Uri', async () => {
+    const calls: unknown[] = []
+    const result = await withBridge(
+      {
+        getDiagnostics: (uri: unknown) => {
+          calls.push(uri)
+          return Promise.resolve(sampleEntries())
+        },
+      },
+      () => api.languages.getDiagnostics(),
+    )
+    expect(calls).toEqual([undefined])
+    expect(result).toHaveLength(1)
+    expect(result[0]![0]).toBeInstanceOf(api.Uri)
+    expect(result[0]![0].path).toBe('/test/a.ts')
+    expect(result[0]![1][0]!.message).toBe('boom')
+    expect(result[0]![1][0]!.severity).toBe(1)
+  })
+
+  it('getDiagnostics(resource) serializes the uri to components', async () => {
+    const calls: unknown[] = []
+    await withBridge(
+      {
+        getDiagnostics: (uri: unknown) => {
+          calls.push(uri)
+          return Promise.resolve([])
+        },
+      },
+      () => api.languages.getDiagnostics(api.Uri.file('/test/b.ts')),
+    )
+    expect(calls).toEqual([api.Uri.file('/test/b.ts').toJSON()])
+  })
+
+  it('onDidChangeDiagnostics re-wraps event uris into Uri', () => {
+    let captured: ((e: { uris: Array<ReturnType<api.Uri['toJSON']>> }) => void) | undefined
+    const seen: api.DiagnosticChangeEvent[] = []
+    withBridge(
+      {
+        onDidChangeDiagnostics: (listener: typeof captured) => {
+          captured = listener ?? undefined
+          return { dispose: () => {} }
+        },
+      },
+      () => api.languages.onDidChangeDiagnostics((e) => seen.push(e)),
+    )
+
+    captured!({ uris: [api.Uri.file('/test/a.ts').toJSON()] })
+    expect(seen).toHaveLength(1)
+    expect(seen[0]!.uris[0]).toBeInstanceOf(api.Uri)
+    expect(seen[0]!.uris[0]!.path).toBe('/test/a.ts')
   })
 })

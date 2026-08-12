@@ -9,9 +9,35 @@ import { EditorInput, URI } from '@universe-editor/platform'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 
+let untitledCounter = 1
+
+/** Allocate the next `Untitled-N` name (shared by the editor input and the
+ *  extension host's untitled documents, so identities never collide). */
+export function allocateUntitledName(): string {
+  return `Untitled-${untitledCounter++}`
+}
+
+/** The canonical URI for an untitled buffer name. */
+export function untitledResourceForName(name: string): URI {
+  return URI.from({ scheme: 'untitled', path: '/' + name })
+}
+
+/** The buffer name an untitled URI carries (its path without the leading slash). */
+export function untitledNameFromResource(resource: URI): string {
+  return resource.path.replace(/^\//, '')
+}
+
+/** A restored/de serialized `Untitled-N` name bumps the counter past N so a
+ *  later allocation never reuses a name that already exists on disk/session. */
+export function observeRestoredUntitledName(name: string): void {
+  const match = /^Untitled-(\d+)$/.exec(name)
+  if (!match) return
+  const n = parseInt(match[1]!, 10)
+  if (n >= untitledCounter) untitledCounter = n + 1
+}
+
 export class UntitledEditorInput extends EditorInput {
   static readonly TYPE_ID = 'untitled'
-  private static _counter = 1
 
   private readonly _resource: URI
   private readonly _name: string
@@ -20,13 +46,8 @@ export class UntitledEditorInput extends EditorInput {
 
   constructor(restoredName?: string, restoredContent?: string) {
     super()
-    if (restoredName) {
-      this._name = restoredName
-    } else {
-      const n = UntitledEditorInput._counter++
-      this._name = `Untitled-${n}`
-    }
-    this._resource = URI.from({ scheme: 'untitled', path: '/' + this._name })
+    this._name = restoredName ?? allocateUntitledName()
+    this._resource = untitledResourceForName(this._name)
     this._content = restoredContent ?? ''
   }
 
@@ -77,7 +98,7 @@ export class UntitledEditorInput extends EditorInput {
   }
 
   get language(): string {
-    return 'plaintext'
+    return this.peekModel()?.getLanguageId() ?? 'plaintext'
   }
 
   get isResolved(): boolean {
@@ -105,11 +126,7 @@ export class UntitledEditorInput extends EditorInput {
   static deserialize(data: unknown): UntitledEditorInput | null {
     const d = data as { name?: string; content?: string } | null
     if (!d?.name) return null
-    const match = /^Untitled-(\d+)$/.exec(d.name)
-    if (match) {
-      const n = parseInt(match[1]!, 10)
-      if (n >= UntitledEditorInput._counter) UntitledEditorInput._counter = n + 1
-    }
+    observeRestoredUntitledName(d.name)
     return new UntitledEditorInput(d.name, d.content ?? '')
   }
 

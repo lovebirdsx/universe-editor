@@ -87,10 +87,60 @@ test.describe('@p1 simple file dialog', () => {
     await expect(workbench.quickInput.dialog).toBeVisible()
     const note = page.getByRole('option').filter({ hasText: 'note.txt' })
     await expect(note).toBeVisible()
-    await note.click()
 
+    // Open File is multi-select: clicking a file row toggles its checkbox instead
+    // of closing the dialog; OK opens every checked file.
+    const noteCheckbox = note.getByTestId('quick-input-item-checkbox')
+    await note.click()
+    await expect(workbench.quickInput.dialog).toBeVisible()
+    await expect(noteCheckbox).toHaveAttribute('aria-checked', 'true')
+
+    await workbench.quickInput.dialog.getByTestId('quick-input-ok').click()
     await workbench.quickInput.waitForHidden()
     await expect.poll(() => workbench.getActiveEditorUri()).toContain('note.txt')
+  })
+
+  test('openFile checks files across folders and OK opens them all', async ({
+    page,
+    workbench,
+  }) => {
+    const tmpDir = await makeTree()
+    await workbench.waitForRestored()
+    await workbench.openWorkspace(tmpDir)
+    await expect.poll(() => workbench.getCurrentWorkspacePath()).toContain('ue2-sfd-')
+
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.files.openFile')
+    })
+    await workbench.quickInput.waitForVisible()
+
+    // Check note.txt inside childdir, navigate back out, then check top.txt.
+    await page.getByRole('option').filter({ hasText: 'childdir' }).click()
+    const note = page.getByRole('option').filter({ hasText: 'note.txt' })
+    await note.click()
+    await expect(note.getByTestId('quick-input-item-checkbox')).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+
+    await page.getByRole('option').filter({ hasText: '..' }).click()
+    const top = page.getByRole('option').filter({ hasText: 'top.txt' })
+    await top.click()
+    await expect(top.getByTestId('quick-input-item-checkbox')).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+
+    await workbench.quickInput.dialog.getByTestId('quick-input-ok').click()
+    await workbench.quickInput.waitForHidden()
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveGroupEditorUris()))
+      .toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('note.txt'),
+          expect.stringContaining('top.txt'),
+        ]),
+      )
   })
 
   test('the toggle button reveals hidden dotfiles', async ({ page, workbench }) => {

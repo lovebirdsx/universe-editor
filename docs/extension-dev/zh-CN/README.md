@@ -1,6 +1,6 @@
 # Universe Editor 扩展开发
 
-> 面向第三方扩展作者的开发文档：从一个空目录到一个上架市场的扩展，全部内容都在这里。当前以 **API 0.9.0** 为准（0.x 阶段 minor 版本可能携带破坏性变更，务必阅读 [API 版本与 `engines.universe`](./versioning.md)）。
+> 面向第三方扩展作者的开发文档：从一个空目录到一个上架市场的扩展，全部内容都在这里。当前以 **API 0.12.0** 为准（0.x 阶段 minor 版本可能携带破坏性变更，务必阅读 [API 版本与 `engines.universe`](./versioning.md)）。
 
 ## 开发者旅程
 
@@ -46,4 +46,4 @@ npx uex login → npx uex publish          # ⑦ 发布到市场，其他用户�
 
 ## 如实说明
 
-本套文档只写宿主**当前真实支持**的能力——贡献点清单以宿主的贡献点翻译器为准，API 清单以 `@universe-editor/extension-api` 的类型定义为准，激活事件以 `COMPATIBILITY.md` 的清单为准。每个清单都标注了对应的 API 版本；宿主没有的能力（TreeView、terminal、tasks 等）不会出现在这些清单里，移植场景请看[从 VSCode 移植](./migration-from-vscode.md)的缺失对照表。
+本套文档只写宿主**当前真实支持**的能力——贡献点清单以宿主的贡献点翻译器为准，API 清单以 `@universe-editor/extension-api` 的类型定义为准，激活事件以 `COMPATIBILITY.md` 的清单为准。每个清单都标注了对应的 API 版本；宿主没有的能力（terminal、tasks 等）不会出现在这些清单里，移植场景请看[从 VSCode 移植](./migration-from-vscode.md)的缺失对照表。

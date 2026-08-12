@@ -47,6 +47,17 @@ export interface IFileWatcherService {
   watchOutOfWorkspace(uris: readonly URI[]): Promise<void>
 
   /**
+   * Replace the set of additional (out-of-workspace) folders to watch
+   * recursively (backs `workspace.createFileSystemWatcher` with a
+   * `RelativePattern` base outside the workspace). Folders already under the
+   * active workspace root are skipped automatically — the recursive workspace
+   * watch covers them. Pass an empty array to clear all folder watches. Events
+   * for files under these folders are emitted through `onDidChangeFiles`
+   * alongside workspace events.
+   */
+  watchOutOfWorkspaceFolders(folders: readonly URI[]): Promise<void>
+
+  /**
    * Fires for every batch of debounced filesystem events. The same resource
    * may appear at most once per batch; consumers should treat ordering across
    * batches as best-effort.

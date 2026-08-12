@@ -61,12 +61,14 @@ export class InstallExtensionFromVsixAction extends Action2 {
     const management = accessor.get(IExtensionManagementService)
     const notification = accessor.get(INotificationService)
 
-    const picked = await fileDialog.showOpenDialog({
-      title: localize('action.extensions.installFromVSIX.title', 'Install from VSIX'),
-      canSelectFiles: true,
-      canSelectFolders: false,
-      openLabel: localize('action.extensions.installFromVSIX.open', 'Install'),
-    })
+    const picked = (
+      await fileDialog.showOpenDialog({
+        title: localize('action.extensions.installFromVSIX.title', 'Install from VSIX'),
+        canSelectFiles: true,
+        canSelectFolders: false,
+        openLabel: localize('action.extensions.installFromVSIX.open', 'Install'),
+      })
+    )?.[0]
     if (!picked) return
 
     const vsixPath = picked.fsPath

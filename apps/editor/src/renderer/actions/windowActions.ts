@@ -78,13 +78,15 @@ export class OpenFolderInNewWindowAction extends Action2 {
     const fileDialog = accessor.get(IFileDialogService)
     const workspace = accessor.get(IWorkspaceService)
     const windowsService = accessor.get(IWindowsService)
-    const folder = await fileDialog.showOpenDialog({
-      title: localize('fileDialog.openFolder.title', 'Open Folder'),
-      canSelectFiles: false,
-      canSelectFolders: true,
-      openLabel: localize('fileDialog.openFolderButton', 'Open'),
-      ...(workspace.current ? { defaultUri: workspace.current.folder } : {}),
-    })
+    const folder = (
+      await fileDialog.showOpenDialog({
+        title: localize('fileDialog.openFolder.title', 'Open Folder'),
+        canSelectFiles: false,
+        canSelectFolders: true,
+        openLabel: localize('fileDialog.openFolderButton', 'Open'),
+        ...(workspace.current ? { defaultUri: workspace.current.folder } : {}),
+      })
+    )?.[0]
     if (!folder) return
     await windowsService.openWindow(folder)
   }

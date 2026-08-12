@@ -1,6 +1,6 @@
 # 语言特性
 
-> 用 `languages` namespace 给编辑器注册语言 provider（补全、跳转、诊断……），以及进阶形态「扩展内自 spawn 语言服务器」。以 API 0.9.0 为准。
+> 用 `languages` namespace 给编辑器注册语言 provider（补全、跳转、诊断……），以及进阶形态「扩展内自 spawn 语言服务器」。以 API 0.12.0 为准。
 
 语言支持分两层：
 
@@ -41,7 +41,7 @@ import { languages, type Hover, type Diagnostic } from '@universe-editor/extensi
 
 ## provider 清单
 
-`languages` namespace 当前（0.9.0）的全部方法：21 个 `register*` 加诊断、状态上报、语言清单三个工具方法。
+`languages` namespace 当前（0.12.0）的全部方法：21 个 `register*` 加诊断（建集合、全源快照与变更事件）、状态上报、语言清单等工具方法。
 
 | 方法 | 用途 | 备注 |
 |---|---|---|
@@ -63,10 +63,11 @@ import { languages, type Hover, type Diagnostic } from '@universe-editor/extensi
 | `registerDocumentFormattingEditProvider` | 格式化文档 | options 带编辑器缩进设置 `tabSize`/`insertSpaces` |
 | `registerDocumentRangeFormattingEditProvider` | 格式化选中范围（Format Selection） | 传入 range 是提示，provider 可扩到完整语法节点 |
 | `registerOnTypeFormattingEditProvider` | 键入触发字符即格式化 | 至少一个触发字符；仅用户开启 `editor.formatOnType`（默认关）时生效 |
-| `registerInlayHintsProvider` | 行内注解（参数名、推断类型） | 一次性返回完整 hint，**无惰性 resolve 阶段**；可选 `onDidChangeInlayHints` 让编辑器重取 |
+| `registerInlayHintsProvider` | 行内注解（参数名、推断类型） | 可选 `resolveInlayHint` 惰性解析详情（label parts 的 tooltip/location/command、hint 级 tooltip、textEdits；`InlayHint.data` 有效）；可选 `onDidChangeInlayHints` 让编辑器重取 |
 | `registerDocumentSemanticTokensProvider` | 语义着色 | provider 以字段形式携带 `legend`（注册时同步返回给编辑器） |
 | `registerCodeLensProvider` | 行上方可操作注解（"3 references"） | 两阶段 `resolveCodeLens`；可选 `onDidChangeCodeLenses` 事件让编辑器重取 |
 | `createDiagnosticCollection` | 建一组诊断（编辑器里的红/黄波浪线） | 见下节 |
+| `getDiagnostics` / `onDidChangeDiagnostics` | 读全源诊断快照 / 订阅诊断变更 | 见下节 |
 | `setLanguageServerStatus` | 上报语言服务器生命周期状态 | 见「语言服务器状态」节 |
 | `getLanguages` | 列出编辑器已知的全部语言 id | |
 
@@ -97,6 +98,8 @@ diagnostics.set(document.uri, [
 `set` 是**整组替换**语义：同一 URI 再 `set` 一次，旧诊断被覆盖。collection 的 `name` 是这组诊断的 owner——多个扩展（或同一扩展的多个 collection）可以给同一文件打标记而互不干扰。
 
 与 provider 的分工惯例：**诊断推，provider 答**。语言服务器后台分析，发现波浪线就推给 collection；用户点灯泡、按 F12 时编辑器才来调 provider。两者共用同一个底层分析结果，但走两条路。
+
+反过来读诊断用 `languages.getDiagnostics()`（全源快照，含别的扩展推的；`getDiagnostics(resource)` 只看单个 URI）与 `languages.onDidChangeDiagnostics`（任意集合变更时触发，50ms 防抖，事件携带受影响 URI 列表）。两个与 VSCode 的差异：快照经 RPC 故返回 `Promise`（VSCode 是同步属性），且非 live 视图——变了要重取；读回的 `Diagnostic` 不含 `relatedInformation`。
 
 ## 语言服务器状态
 

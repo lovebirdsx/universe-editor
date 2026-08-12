@@ -26,8 +26,11 @@ export { languageForResource }
  * which is platform-aware (folds case on win32/darwin). Here we intentionally
  * stay case-sensitive on the path so a registry entry never claims a model that
  * Monaco considers distinct.
+ *
+ * Exported for the document-mirror pipeline, which keys entries by
+ * `model.uri.toString()` and sometimes needs that key before the model exists.
  */
-function monacoModelKey(uri: URI): string {
+export function monacoModelKey(uri: URI): string {
   const path = uri.path.replace(/^\/([A-Za-z]):/, (_m, drive: string) => `/${drive.toLowerCase()}:`)
   return uri.with({ path }).toString()
 }
@@ -112,6 +115,22 @@ class Registry {
       this._entries.delete(key)
       if (entry.owned) entry.model.dispose()
     }
+  }
+
+  /**
+   * Dispose the model for `resource` regardless of outstanding references.
+   * Used when the buffer's identity ceases to exist — Save-As of an untitled
+   * document replaces the `untitled:` buffer with a `file:` one, so the old
+   * model must die even though the extension host still holds its acquire ref.
+   * Disposing fires `onWillDispose`, which is what pushes `$acceptDocumentClose`
+   * for the old untitled mirror.
+   */
+  forceDispose(resource: URI): void {
+    const key = monacoModelKey(resource)
+    const entry = this._entries.get(key)
+    if (!entry) return
+    this._entries.delete(key)
+    entry.model.dispose()
   }
 
   /** Test-only: drop everything. */

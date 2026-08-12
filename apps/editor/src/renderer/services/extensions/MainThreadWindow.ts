@@ -215,10 +215,19 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
       title: options.title ?? '',
       canSelectFiles: options.canSelectFiles ?? true,
       canSelectFolders: options.canSelectFolders ?? false,
+      ...(options.canSelectMany !== undefined ? { canSelectMany: options.canSelectMany } : {}),
+      ...(options.filters !== undefined
+        ? {
+            filters: Object.entries(options.filters).map(([name, extensions]) => ({
+              name,
+              extensions,
+            })),
+          }
+        : {}),
       ...(options.defaultUri !== undefined ? { defaultUri: URI.file(options.defaultUri) } : {}),
       ...(options.openLabel !== undefined ? { openLabel: options.openLabel } : {}),
     })
-    return picked ? [picked.fsPath] : undefined
+    return picked?.map((uri) => uri.fsPath)
   }
 
   async $showSaveDialog(options: ISaveDialogOptionsDto): Promise<string | undefined> {

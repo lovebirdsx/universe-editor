@@ -232,6 +232,7 @@ class FakeWatcher implements IFileWatcherServiceType {
     this.unwatchCalls++
   }
   async watchOutOfWorkspace(): Promise<void> {}
+  async watchOutOfWorkspaceFolders(): Promise<void> {}
   fire(events: readonly IFileChangeEvent[]): void {
     this._emitter.fire(events)
   }

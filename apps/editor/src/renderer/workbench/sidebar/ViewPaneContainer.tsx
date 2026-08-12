@@ -11,7 +11,10 @@ import { Allotment, type AllotmentHandle } from 'allotment'
 import 'allotment/dist/style.css'
 import type { IViewDescriptor } from '@universe-editor/platform'
 import { ViewPane } from './ViewPane.js'
-import { ViewToolbarRegistry } from '../../services/views/ViewComponentRegistry.js'
+import {
+  ViewToolbarRegistry,
+  type IViewComponentProps,
+} from '../../services/views/ViewComponentRegistry.js'
 import {
   computeToggleSizes,
   initialPaneSize,
@@ -27,7 +30,7 @@ import styles from '../paneComposite/PaneComposite.module.css'
 interface Props {
   containerId: string
   views: readonly IViewDescriptor[]
-  resolve: (componentKey: string) => ComponentType | undefined
+  resolve: (componentKey: string) => ComponentType<IViewComponentProps> | undefined
   emptyMessage?: string
 }
 
@@ -301,7 +304,11 @@ export function ViewPaneContainer({
     const Component = resolve(v.componentKey)
     body = (
       <div data-view-id={v.id} className={styles['viewBody']} style={{ flex: 1, minHeight: 0 }}>
-        {Component ? <Component /> : <span className={styles['empty']}>{v.name}</span>}
+        {Component ? (
+          <Component viewId={v.id} />
+        ) : (
+          <span className={styles['empty']}>{v.name}</span>
+        )}
       </div>
     )
   } else {
@@ -379,7 +386,11 @@ export function ViewPaneContainer({
                 onDropView={(sourceViewId, position) => moveHere(sourceViewId, v.id, position)}
               >
                 <div data-view-id={v.id} className={styles['viewBody']}>
-                  {Component ? <Component /> : <span className={styles['empty']}>{v.name}</span>}
+                  {Component ? (
+                    <Component viewId={v.id} />
+                  ) : (
+                    <span className={styles['empty']}>{v.name}</span>
+                  )}
                 </div>
               </ViewPane>
             </Allotment.Pane>

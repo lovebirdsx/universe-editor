@@ -1,6 +1,6 @@
 # 自定义编辑器与 Webview
 
-> 给某类文件做图形化界面（PDF 预览、表格、图片、自定义二进制格式……）的完整指南：声明、激活、provider 两阶段、资源加载、CSP、消息通信与 diff。以扩展 API 0.9.0 为准。
+> 给某类文件做图形化界面（PDF 预览、表格、图片、自定义二进制格式……）的完整指南：声明、激活、provider 两阶段、资源加载、CSP、消息通信与 diff。以扩展 API 0.12.0 为准。
 
 ## 整体形态
 
@@ -166,6 +166,41 @@ export function activate(context: ExtensionContext): void {
 ```
 
 脚手架的 `webview` 模板（见 [快速上手](./getting-started.md)）生成的就是一个可运行的只读自定义编辑器，建议从它起步而不是从零搭。
+
+## 独立 webview 面板：`window.createWebviewPanel`（0.11.0 起）
+
+自定义编辑器由工作台拥有 tab（打开匹配文件 → 路由到你的 provider）；`window.createWebviewPanel` 则反过来——**扩展**主动创建、持有、销毁一个不绑定任何文件的 webview tab（典型的「展示型 UI」：仪表盘、预览页、向导）。不需要 manifest 声明，也不需要激活事件配合（一般由你自己的命令触发）：
+
+```ts
+import { commands, window, type ExtensionContext, type WebviewPanel } from '@universe-editor/extension-api'
+
+let panel: WebviewPanel | undefined
+
+export function activate(context: ExtensionContext): void {
+  context.subscriptions.push(
+    commands.registerCommand('myExt.showDashboard', () => {
+      if (panel) {
+        panel.reveal() // 已有面板：只是把它的 tab 带回前台
+        return
+      }
+      panel = window.createWebviewPanel('myExt.dashboard', 'Dashboard', undefined, {
+        enableScripts: true,
+      })
+      panel.webview.html = '<!DOCTYPE html><html><body><h1>Dashboard</h1></body></html>'
+      // 用户关掉 tab 时扩展收到通知——把引用清掉，下次命令重新创建
+      panel.onDidDispose(() => {
+        panel = undefined
+      })
+    }),
+  )
+}
+```
+
+- **返回的 `WebviewPanel` 与自定义编辑器拿到的是同一个类型**：`webview` 表面（`html` / `options` / `cspSource` / `asWebviewUri` / 双向消息）完全通用，上文各节照旧适用；此外 `title` 可读写（改名即改 tab 标题）、`active` / `visible` / `onDidChangeViewState` 反映 tab 的前台状态、`reveal(preserveFocus?)` 重新激活已有 tab、`dispose()` 主动关闭。
+- **与 VSCode 的差异**（如实列举）：没有 `ViewColumn` 参数——tab 开在当前活动编辑器组，showOptions 只支持 `{ preserveFocus: true }`（后台打开不抢焦点）；没有 `retainContextWhenHidden`——iframe 在隐藏期间从不重建，状态天然保留；没有 `WebviewPanelSerializer`——窗口 reload / 重启后 tab 不恢复，扩展重新激活后自行重建即可。
+- **句柄即身份**：每个面板一个 tab；扩展侧保存引用、重复调用前先判 `panel` 是否还活着（如上例），不要无脑重复创建。
+
+仓库里的 [`samples/webview-panel/`](../../../samples/webview-panel/) 是可安装的最小范例（Show / Reveal / Dispose 三个命令走完整生命周期）。
 
 ## 安全边界：webview 不是强沙箱
 

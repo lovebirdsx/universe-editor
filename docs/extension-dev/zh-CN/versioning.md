@@ -23,7 +23,7 @@
 
 你的扩展会被什么版本的宿主加载，取决于用户安装的编辑器内嵌的 API 版本：
 
-- 命令行：`universe-editor --version`（输出含 `Extension API 0.9.0` 行）
+- 命令行：`universe-editor --version`（输出含 `Extension API 0.12.0` 行）
 - 编辑器内：菜单栏 帮助 → 关于 Universe Editor（About 对话框含 Extension API 行）
 - 编辑器每次 Release Notes 都会标注本次的 API 版本
 

@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { monaco } from '../../../../workbench/editor/monaco/MonacoLoader.js'
+import type { IInlayHintDto } from '@universe-editor/extensions-common'
 import type {
   CodeAction,
   CodeLens,
@@ -32,15 +33,18 @@ import {
   documentSymbolsToMonaco,
   hoverToMonaco,
   inlayHintsToMonaco,
+  markerToLspDiagnostic,
   monacoPositionToLsp,
   rangeToMonaco,
   resolvedCodeLensToMonaco,
   resolvedDocumentLinkToMonaco,
+  resolvedInlayHintToMonaco,
   selectionRangesToMonaco,
   semanticTokensToMonaco,
   signatureHelpToMonaco,
   workspaceEditToMonaco,
   workspaceSymbolsToEntries,
+  type MonacoInlayHint,
 } from '../lspMonacoConvert.js'
 
 const range = (sl: number, sc: number, el: number, ec: number) => ({
@@ -277,6 +281,70 @@ describe('diagnosticToMarker', () => {
   })
 })
 
+describe('markerToLspDiagnostic', () => {
+  const makeMarker = (
+    severity: number,
+    extra?: Partial<monaco.editor.IMarker>,
+  ): monaco.editor.IMarker => ({
+    severity,
+    message: 'type error',
+    startLineNumber: 3,
+    startColumn: 2,
+    endLineNumber: 3,
+    endColumn: 9,
+    resource: fakeMonaco.Uri.parse('file:///a.ts'),
+    owner: 'ts',
+    ...extra,
+  })
+
+  it('maps MarkerSeverity to LSP severity', () => {
+    expect(markerToLspDiagnostic(makeMarker(8)).severity).toBe(1) // Error
+    expect(markerToLspDiagnostic(makeMarker(4)).severity).toBe(2) // Warning
+    expect(markerToLspDiagnostic(makeMarker(2)).severity).toBe(3) // Info
+    expect(markerToLspDiagnostic(makeMarker(1)).severity).toBe(4) // Hint
+  })
+
+  it('falls back to Error for an unknown severity', () => {
+    expect(markerToLspDiagnostic(makeMarker(16)).severity).toBe(1)
+  })
+
+  it('converts positions back to 0-based and carries the message', () => {
+    const d = markerToLspDiagnostic(makeMarker(8))
+    expect(d.message).toBe('type error')
+    expect(d.range).toEqual(range(2, 1, 2, 8))
+  })
+
+  it('round-trips string codes and numeric string codes', () => {
+    expect(markerToLspDiagnostic(makeMarker(8, { code: '2304' })).code).toBe(2304)
+    expect(markerToLspDiagnostic(makeMarker(8, { code: 'ts-missing' })).code).toBe('ts-missing')
+    expect(markerToLspDiagnostic(makeMarker(8)).code).toBeUndefined()
+  })
+
+  it('round-trips a { value, target } code into code + codeDescription.href', () => {
+    const d = markerToLspDiagnostic(
+      makeMarker(8, {
+        code: {
+          value: '2304',
+          target: fakeMonaco.Uri.parse('https://typescript.tv/errors/#2304') as never,
+        },
+      }),
+    )
+    expect(d.code).toBe(2304)
+    expect(d.codeDescription).toEqual({ href: 'https://typescript.tv/errors/#2304' })
+  })
+
+  it('maps MarkerTag back to LSP DiagnosticTags and drops unknown tags', () => {
+    const d = markerToLspDiagnostic(makeMarker(4, { tags: [1, 2, 4 as monaco.MarkerTag] }))
+    expect(d.tags).toEqual([1, 2])
+    expect(markerToLspDiagnostic(makeMarker(4)).tags).toBeUndefined()
+  })
+
+  it('carries source when present', () => {
+    expect(markerToLspDiagnostic(makeMarker(2, { source: 'typescript' })).source).toBe('typescript')
+    expect(markerToLspDiagnostic(makeMarker(2)).source).toBeUndefined()
+  })
+})
+
 describe('workspaceEditToMonaco', () => {
   it('flattens documentChanges with version ids', () => {
     const edit: WorkspaceEdit = {
@@ -307,6 +375,54 @@ describe('workspaceEditToMonaco', () => {
 
   it('returns empty for null', () => {
     expect(workspaceEditToMonaco(null, fakeMonaco).edits).toEqual([])
+  })
+
+  it('converts create/rename/delete documentChanges carrying their options', () => {
+    const edit: WorkspaceEdit = {
+      documentChanges: [
+        { kind: 'create', uri: 'file:///new.ts', options: { overwrite: true } },
+        {
+          kind: 'rename',
+          oldUri: 'file:///old.ts',
+          newUri: 'file:///renamed.ts',
+          options: { ignoreIfExists: true },
+        },
+        {
+          kind: 'delete',
+          uri: 'file:///gone.ts',
+          options: { recursive: true, ignoreIfNotExists: true },
+        },
+      ],
+    }
+    const out = workspaceEditToMonaco(edit, fakeMonaco)
+    expect(out.edits).toHaveLength(3)
+    const [create, rename, del] = out.edits as monaco.languages.IWorkspaceFileEdit[]
+    expect(create?.newResource?.toString()).toBe('file:///new.ts')
+    expect(create?.oldResource).toBeUndefined()
+    expect(create?.options).toEqual({ overwrite: true })
+    expect(rename?.oldResource?.toString()).toBe('file:///old.ts')
+    expect(rename?.newResource?.toString()).toBe('file:///renamed.ts')
+    expect(rename?.options).toEqual({ ignoreIfExists: true })
+    expect(del?.oldResource?.toString()).toBe('file:///gone.ts')
+    expect(del?.options).toEqual({ recursive: true, ignoreIfNotExists: true })
+  })
+
+  it('preserves documentChanges order when text edits interleave file operations', () => {
+    const edit: WorkspaceEdit = {
+      documentChanges: [
+        { kind: 'create', uri: 'file:///a.txt' },
+        {
+          textDocument: { uri: 'file:///a.txt', version: null },
+          edits: [{ range: range(0, 0, 0, 0), newText: 'hi' }],
+        },
+        { kind: 'rename', oldUri: 'file:///a.txt', newUri: 'file:///b.txt' },
+      ],
+    }
+    const out = workspaceEditToMonaco(edit, fakeMonaco)
+    expect(out.edits).toHaveLength(3)
+    expect('newResource' in out.edits[0]! && !('textEdit' in out.edits[0]!)).toBe(true)
+    expect('textEdit' in out.edits[1]!).toBe(true)
+    expect('oldResource' in out.edits[2]!).toBe(true)
   })
 })
 
@@ -515,15 +631,16 @@ describe('resolvedCodeLensToMonaco', () => {
 })
 
 describe('inlayHintsToMonaco', () => {
-  it('shifts positions, passes kind/padding through and drops the resolve payload', () => {
-    const hint: InlayHint = {
+  it('shifts positions, passes kind/padding through and carries resolve coordinates', () => {
+    const hint: IInlayHintDto = {
       position: { line: 4, character: 9 },
       label: ': string',
       kind: 1, // LSP Type — same numeric value as Monaco's InlayHintKind.Type
       tooltip: { kind: 'markdown', value: 'the inferred type' },
       paddingLeft: true,
       textEdits: [{ range: range(4, 9, 4, 9), newText: ': string' }],
-      data: { file: 'a.ts' },
+      resolveCacheId: 7,
+      resolveIndex: 2,
     }
     const out = inlayHintsToMonaco([hint], fakeMonaco)
     expect(out.hints).toHaveLength(1)
@@ -538,7 +655,11 @@ describe('inlayHintsToMonaco', () => {
       range: rangeToMonaco(range(4, 9, 4, 9)),
       text: ': string',
     })
-    // `data` exists only for the resolve round trip, which this iteration omits.
+    // Resolve coordinates ride along for the lazy resolve round trip.
+    const withCoords = converted as MonacoInlayHint
+    expect(withCoords._resolveCacheId).toBe(7)
+    expect(withCoords._resolveIndex).toBe(2)
+    // `data` is stripped host-side and never appears on the wire DTO.
     expect('data' in converted).toBe(false)
   })
 
@@ -570,5 +691,35 @@ describe('inlayHintsToMonaco', () => {
     const out = inlayHintsToMonaco(null, fakeMonaco)
     expect(out.hints).toEqual([])
     expect(() => out.dispose()).not.toThrow()
+  })
+})
+
+describe('resolvedInlayHintToMonaco', () => {
+  it('rebuilds the hint from the resolved DTO (lazy label/tooltip filled in)', () => {
+    const original: monaco.languages.InlayHint = {
+      position: { lineNumber: 5, column: 10 },
+      label: ': string',
+    }
+    const resolved: IInlayHintDto = {
+      position: { line: 4, character: 9 },
+      label: ': string',
+      tooltip: { kind: 'markdown', value: 'the inferred type' },
+      paddingLeft: true,
+    }
+    const out = resolvedInlayHintToMonaco(resolved, original, fakeMonaco)
+    expect(out.position).toEqual({ lineNumber: 5, column: 10 })
+    expect(out.label).toBe(': string')
+    expect(out.tooltip).toEqual({ value: 'the inferred type' })
+    expect(out.paddingLeft).toBe(true)
+    // A resolved hint carries no resolve coordinates (it would re-resolve).
+    expect((out as MonacoInlayHint)._resolveCacheId).toBeUndefined()
+  })
+
+  it('returns the original hint when the host cache entry is gone', () => {
+    const original: monaco.languages.InlayHint = {
+      position: { lineNumber: 5, column: 10 },
+      label: ': string',
+    }
+    expect(resolvedInlayHintToMonaco(null, original, fakeMonaco)).toBe(original)
   })
 })

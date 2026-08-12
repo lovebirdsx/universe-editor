@@ -14,14 +14,18 @@ import { useService, useObservable } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { useViewDescriptors } from '../dnd/useViewDescriptors.js'
 import { ViewPaneContainer } from '../sidebar/ViewPaneContainer.js'
-import { ViewComponentRegistry } from '../../services/views/ViewComponentRegistry.js'
+import {
+  ViewComponentRegistry,
+  type IViewComponentProps,
+} from '../../services/views/ViewComponentRegistry.js'
 import { PaneCompositeHeader } from './PaneCompositeHeader.js'
 import { TiledViews } from './TiledViews.js'
 import type { PaneCompositeConfig } from './paneCompositeConfigs.js'
 import styles from './PaneComposite.module.css'
 
-const resolveViewComponent = (componentKey: string): ComponentType | undefined =>
-  ViewComponentRegistry.get(componentKey)
+const resolveViewComponent = (
+  componentKey: string,
+): ComponentType<IViewComponentProps> | undefined => ViewComponentRegistry.get(componentKey)
 
 interface Props {
   part?: IPart | undefined

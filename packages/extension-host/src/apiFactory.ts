@@ -30,6 +30,7 @@ import type {
   FileStat,
   FileType,
   FoldingRangeProvider,
+  GlobPattern,
   HoverProvider,
   ImplementationProvider,
   InlayHintsProvider,
@@ -57,17 +58,24 @@ import type {
   TextEditorDecorationType,
   TextEditorSelectionChangeEvent,
   TimelineProvider,
+  TreeDataProvider,
+  TreeView,
+  TreeViewOptions,
   TypeDefinitionProvider,
   UriComponents,
+  WebviewOptions,
+  WebviewPanel,
   WillSaveTextDocumentEvent,
   WorkspaceEdit,
   WorkspaceSymbolProvider,
 } from '@universe-editor/extension-api'
 import type { IScannedExtension } from './extensionScanner.js'
+import type { Diagnostic } from 'vscode-languageserver-types'
 import type {
   ExtHostStorageScope,
   IExtHostEnvironmentDto,
   IMainThreadStorage,
+  IWebviewPanelShowOptionsDto,
 } from '@universe-editor/extensions-common'
 import { join } from 'node:path'
 
@@ -76,8 +84,7 @@ export type IExtensionStorage = IMainThreadStorage
 
 /**
  * Global key the bridge is installed under. KEEP IN SYNC with the consumer in
- * `packages/extension-api/src/index.ts` (same key, same method shapes).
- */
+ * `packages/extension-api/src/index.ts` (same key, same method shapes). */
 const BRIDGE_KEY = '__universeExtensionHostBridge__'
 
 /**
@@ -119,6 +126,16 @@ export interface FileSystemWatcherBridge extends Disposable {
   readonly onDidDelete: Event<UriComponents>
 }
 
+/**
+ * `languages.onDidChangeDiagnostics` payload over the bridge: raw
+ * `UriComponents`; the extension-api wrapper re-wraps them into the extension's
+ * own `Uri` class. KEEP IN SYNC with the consumer types in
+ * `packages/extension-api/src/index.ts`.
+ */
+export interface DiagnosticChangeEventBridge {
+  readonly uris: readonly UriComponents[]
+}
+
 /** The bridge the extension-api delegates to. Matches `IExtensionHostBridge` there. */
 export interface IExtensionHostBridge {
   registerCommand(command: string, handler: (...args: unknown[]) => unknown): Disposable
@@ -156,18 +173,30 @@ export interface IExtensionHostBridge {
     target: UriComponents | string,
     options?: TextDocumentShowOptions,
   ): Promise<TextEditor>
-  openTextDocument(target: UriComponents | string): Promise<TextDocument>
+  openTextDocument(
+    target: UriComponents | string | { language?: string; content?: string } | undefined,
+  ): Promise<TextDocument>
   readonly onDidChangeTextEditorSelection: Event<TextEditorSelectionChangeEvent>
   createSourceControl(id: string, label: string, rootUri?: string): SourceControl
   registerTimelineProvider(scheme: string[], provider: TimelineProvider): Disposable
   getActiveTextEditor(): Promise<TextEditor | undefined>
   readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined>
+  readonly visibleTextEditors: readonly TextEditor[]
+  readonly onDidChangeVisibleTextEditors: Event<readonly TextEditor[]>
   createTextEditorDecorationType(options: DecorationRenderOptions): TextEditorDecorationType
   registerCustomEditorProvider(
     viewType: string,
     provider: CustomReadonlyEditorProvider,
     options?: CustomEditorOptions,
   ): Disposable
+  createWebviewPanel(
+    viewType: string,
+    title: string,
+    showOptions?: IWebviewPanelShowOptionsDto,
+    options?: WebviewOptions,
+  ): WebviewPanel
+  registerTreeDataProvider(viewId: string, provider: TreeDataProvider<unknown>): Disposable
+  createTreeView(viewId: string, options: TreeViewOptions<unknown>): TreeView<unknown>
   getWorkspaceRoot(): string | undefined
   fsReadFile(path: string): Promise<Uint8Array>
   fsWriteFile(path: string, content: Uint8Array): Promise<void>
@@ -180,16 +209,18 @@ export interface IExtensionHostBridge {
   /**
    * `exclude` carries API semantics: undefined → the renderer's configured
    * default search excludes; null → no exclusion at all; a string → that glob.
-   * Returns fsPaths.
+   * Returns fsPaths. `token` rides the RPC cancel path: cancelling it stops
+   * the renderer-side enumeration, and the promise resolves with an empty list.
    */
   findFiles(
-    include: string,
-    exclude: string | null | undefined,
+    include: GlobPattern,
+    exclude: GlobPattern | null | undefined,
     maxResults: number | undefined,
+    token?: CancellationToken,
   ): Promise<string[]>
   applyWorkspaceEdit(edit: WorkspaceEdit): Promise<boolean>
   createFileSystemWatcher(
-    globPattern: string,
+    globPattern: GlobPattern,
     ignoreCreateEvents: boolean,
     ignoreChangeEvents: boolean,
     ignoreDeleteEvents: boolean,
@@ -266,6 +297,17 @@ export interface IExtensionHostBridge {
   createDiagnosticCollection(name?: string): DiagnosticCollection
   setLanguageServerStatus(id: string, status: LanguageServerStatus): void
   getLanguages(): Promise<string[]>
+  /**
+   * `languages.getDiagnostics` — every diagnostic the workbench currently
+   * shows (all owners), forwarded uncached. Returns LSP-shaped diagnostics
+   * keyed by raw `UriComponents`.
+   */
+  getDiagnostics(uri?: UriComponents): Promise<Array<[UriComponents, Diagnostic[]]>>
+  /**
+   * `languages.onDidChangeDiagnostics` — ref-counted: the first listener
+   * subscribes renderer-side marker pushes, the last dispose unsubscribes.
+   */
+  readonly onDidChangeDiagnostics: Event<DiagnosticChangeEventBridge>
   getTextDocuments(): readonly TextDocument[]
   readonly onDidOpenTextDocument: Event<TextDocument>
   readonly onDidChangeTextDocument: Event<TextDocumentChangeEvent>

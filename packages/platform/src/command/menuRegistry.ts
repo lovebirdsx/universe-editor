@@ -36,6 +36,8 @@ export const enum MenuId {
   ScmInputBox = 'scm/inputBox',
   /** Timeline view item right-click menu; `when` gates on the `timelineItem` context key. */
   TimelineItemContext = 'timeline/item/context',
+  /** Extension tree-view item right-click menu; `when` gates on `view` and `viewItem` context keys. */
+  ViewItemContext = 'view/item/context',
   /** Per-view title-bar actions, resolved by a `view == <viewId>` clause. */
   ViewTitle = 'view/title',
   // Title-bar menubar dropdowns

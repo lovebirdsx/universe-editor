@@ -53,8 +53,10 @@ function makeModel(initial: string, language: string, uri: unknown) {
   let value = normalizeModelText(initial)
   let versionId = 1
   let disposed = false
+  let currentLanguage = language
   const listeners = new Set<Listener>()
   const languageListeners = new Set<LanguageListener>()
+  const willDisposeListeners = new Set<() => void>()
   const decorations = new Map<string, StoredDecoration>()
   let decoSeq = 0
   const lines = () => value.split(/\r\n|\r|\n/)
@@ -108,7 +110,7 @@ function makeModel(initial: string, language: string, uri: unknown) {
       applyOneEdit(0, value.length, normalized)
       fire()
     },
-    getLanguageId: () => language,
+    getLanguageId: () => currentLanguage,
     getLineCount: () => lines().length,
     getLineContent: (n: number) => lines()[n - 1] ?? '',
     getLinesContent: () => lines(),
@@ -242,15 +244,22 @@ function makeModel(initial: string, language: string, uri: unknown) {
     },
     // Not part of the monaco API — driven by editor.setModelLanguage below.
     _setLanguage: (next: string) => {
-      if (next === language) return
-      const oldLanguage = language
-      language = next
+      if (next === currentLanguage) return
+      const oldLanguage = currentLanguage
+      currentLanguage = next
       for (const l of languageListeners) l({ oldLanguage, newLanguage: next })
     },
+    onWillDispose: (cb: () => void) => {
+      willDisposeListeners.add(cb)
+      return { dispose: () => willDisposeListeners.delete(cb) }
+    },
     dispose: () => {
+      if (disposed) return
+      for (const l of [...willDisposeListeners]) l()
       disposed = true
       listeners.clear()
       languageListeners.clear()
+      willDisposeListeners.clear()
       decorations.clear()
     },
   }
@@ -258,7 +267,14 @@ function makeModel(initial: string, language: string, uri: unknown) {
 }
 
 export const Uri = {
-  parse: (s: string) => ({ toString: () => s }),
+  parse: (s: string) => {
+    const scheme = s.slice(0, s.indexOf(':'))
+    return {
+      scheme,
+      toString: () => s,
+      toJSON: () => ({ scheme, path: s.slice(scheme.length + 1), $mid: 1 }),
+    }
+  },
 }
 
 export class Range {

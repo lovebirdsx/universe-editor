@@ -142,6 +142,59 @@ describe('parseManifest', () => {
     })
   })
 
+  describe('contributes.viewsContainers / views', () => {
+    it('accepts an activitybar container and views bound to it', () => {
+      const m = parseManifest({
+        ...baseManifest(),
+        activationEvents: ['onView:myExt.nodeDeps'],
+        contributes: {
+          viewsContainers: {
+            activitybar: [{ id: 'myExt.explorer', title: 'My Explorer', icon: '$(files)' }],
+          },
+          views: {
+            'myExt.explorer': [{ id: 'myExt.nodeDeps', name: 'Node Dependencies' }],
+            explorer: [{ id: 'myExt.extra', name: 'Extra', when: 'resourceExtname == .ts' }],
+          },
+        },
+      })
+      expect(m.contributes?.viewsContainers?.activitybar).toHaveLength(1)
+      expect(m.contributes?.views?.['myExt.explorer']?.[0]).toMatchObject({
+        id: 'myExt.nodeDeps',
+        name: 'Node Dependencies',
+      })
+      expect(m.contributes?.views?.['explorer']?.[0]?.when).toBe('resourceExtname == .ts')
+    })
+
+    it('rejects a container without an icon', () => {
+      expect(() =>
+        parseManifest({
+          ...baseManifest(),
+          contributes: {
+            viewsContainers: { activitybar: [{ id: 'c', title: 'C' }] },
+          },
+        }),
+      ).toThrow(/invalid manifest/)
+    })
+
+    it('rejects a view with an empty id', () => {
+      expect(() =>
+        parseManifest({
+          ...baseManifest(),
+          contributes: { views: { explorer: [{ id: '', name: 'X' }] } },
+        }),
+      ).toThrow(/invalid manifest/)
+    })
+
+    it('rejects a view without a name', () => {
+      expect(() =>
+        parseManifest({
+          ...baseManifest(),
+          contributes: { views: { explorer: [{ id: 'v' }] } },
+        }),
+      ).toThrow(/invalid manifest/)
+    })
+  })
+
   describe('forward-compat passthrough', () => {
     it('tolerates unknown contribution points', () => {
       const m = parseManifest({

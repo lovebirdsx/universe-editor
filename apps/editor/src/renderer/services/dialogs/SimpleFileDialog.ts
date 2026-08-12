@@ -31,6 +31,8 @@ import { resourceIconId } from '../quickInput/quickPickResourceIcon.js'
 import {
   endsWithSeparator,
   expandTilde,
+  collectFilterExtensions,
+  fileExtension,
   isDeletionEdit,
   prepareEntries,
   splitTrailingSegment,
@@ -77,62 +79,79 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
     this._logger = createNamedLogger(loggerService, { id: 'fileDialog', name: 'File Dialog' })
   }
 
-  showOpenDialog(opts: IFileDialogOptions): Promise<URI | undefined> {
+  showOpenDialog(opts: IFileDialogOptions): Promise<URI[] | undefined> {
     if (this._useNativeDialog()) {
-      return this._showNative(opts, 'open')
+      return this._showNativeOpen(opts)
     }
     return this._show(opts, 'open')
   }
 
   showSaveDialog(opts: IFileDialogOptions): Promise<URI | undefined> {
     if (this._useNativeDialog()) {
-      return this._showNative(opts, 'save')
+      return this._showNativeSave(opts)
     }
-    return this._show(opts, 'save')
+    // The simple dialog resolves an array internally; a save pick holds one URI.
+    return this._show(opts, 'save').then((uris) => uris?.[0])
   }
 
   private _useNativeDialog(): boolean {
     return this._config.get<boolean>(NATIVE_DIALOG_SETTING) === true
   }
 
-  private async _showNative(opts: IFileDialogOptions, mode: DialogMode): Promise<URI | undefined> {
-    this._logger.debug(`native ${mode} dialog title=${opts.title}`)
-    const picked =
-      mode === 'open'
-        ? await this._host.showOpenFileDialog({
-            title: opts.title,
-            ...(opts.defaultUri !== undefined ? { defaultPath: opts.defaultUri.fsPath } : {}),
-            canSelectFiles: opts.canSelectFiles,
-            canSelectFolders: opts.canSelectFolders,
-            ...(opts.openLabel !== undefined ? { buttonLabel: opts.openLabel } : {}),
-          })
-        : await this._host.showSaveFileDialog({
-            title: opts.title,
-            ...(opts.defaultUri !== undefined ? { defaultPath: opts.defaultUri.fsPath } : {}),
-            ...(opts.openLabel !== undefined ? { buttonLabel: opts.openLabel } : {}),
-          })
+  private async _showNativeOpen(opts: IFileDialogOptions): Promise<URI[] | undefined> {
+    this._logger.debug(`native open dialog title=${opts.title}`)
+    const picked = await this._host.showOpenFileDialog({
+      title: opts.title,
+      ...(opts.defaultUri !== undefined ? { defaultPath: opts.defaultUri.fsPath } : {}),
+      canSelectFiles: opts.canSelectFiles,
+      canSelectFolders: opts.canSelectFolders,
+      ...(opts.canSelectMany !== undefined ? { canSelectMany: opts.canSelectMany } : {}),
+      ...(opts.filters !== undefined ? { filters: opts.filters } : {}),
+      ...(opts.openLabel !== undefined ? { buttonLabel: opts.openLabel } : {}),
+    })
+    if (!picked || picked.length === 0) {
+      this._logger.debug('native open dialog cancelled')
+      return undefined
+    }
+    const uris = picked.map((p) => (p instanceof URI ? p : URI.from(p)))
+    this._logger.debug(`native open dialog picked ${uris.map((u) => u.fsPath).join(', ')}`)
+    return uris
+  }
+
+  private async _showNativeSave(opts: IFileDialogOptions): Promise<URI | undefined> {
+    this._logger.debug(`native save dialog title=${opts.title}`)
+    const picked = await this._host.showSaveFileDialog({
+      title: opts.title,
+      ...(opts.defaultUri !== undefined ? { defaultPath: opts.defaultUri.fsPath } : {}),
+      ...(opts.openLabel !== undefined ? { buttonLabel: opts.openLabel } : {}),
+    })
     if (!picked) {
-      this._logger.debug(`native ${mode} dialog cancelled`)
+      this._logger.debug('native save dialog cancelled')
       return undefined
     }
     const uri = picked instanceof URI ? picked : URI.from(picked)
-    this._logger.debug(`native ${mode} dialog picked ${uri.fsPath}`)
+    this._logger.debug(`native save dialog picked ${uri.fsPath}`)
     return uri
   }
 
-  private async _show(opts: IFileDialogOptions, mode: DialogMode): Promise<URI | undefined> {
+  private async _show(opts: IFileDialogOptions, mode: DialogMode): Promise<URI[] | undefined> {
     const allowFiles = opts.canSelectFiles
+    const canSelectMany = mode === 'open' && opts.canSelectMany === true
+    // Extension filters narrow the listed files; save mode never filters.
+    const fileExts =
+      mode === 'open' && allowFiles ? collectFilterExtensions(opts.filters) : undefined
     const start = await this._resolveStart(opts, mode)
     const initialShowDotFiles =
       (await this._storage.get<boolean>(STORAGE_KEY_SHOW_DOT_FILES)) === true
 
-    return new Promise<URI | undefined>((resolve) => {
+    return new Promise<URI[] | undefined>((resolve) => {
       const session = new DisposableStore()
       this._session.value = session
       const qp = session.add(this._quickInput.createQuickPick<IQuickPickItem>())
       qp.filterExternally = true
       qp.keepOpenOnAccept = true
       qp.autoFocusFirstItem = false
+      qp.canSelectMany = canSelectMany
       qp.title = opts.title
       qp.okLabel = opts.openLabel ?? localize('fileDialog.ok', 'OK')
 
@@ -140,6 +159,10 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
       let showDotFiles = initialShowDotFiles
       let currentItems: IQuickPickItem[] = []
       let entriesById = new Map<string, ResolvedEntry>()
+      // Checked entries in multi-select mode, keyed by item id (= entry URI).
+      // `item` is the row snapshot for re-rendering the checkbox; `entry` keeps
+      // the URI so a pick survives navigation into another folder.
+      const selected = new Map<string, { item: IQuickPickItem; entry: ResolvedEntry }>()
       let settled = false
       let lastValue = ''
       let userTypedSegment = ''
@@ -170,13 +193,13 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
       }
       syncHiddenButton()
 
-      const finish = (uri: URI | undefined): void => {
+      const finish = (uris: URI[] | undefined): void => {
         if (settled) return
         settled = true
         qp.hide()
         if (this._session.value === session) this._session.clear()
         else session.dispose()
-        resolve(uri)
+        resolve(uris)
       }
 
       const confirmAndFinish = async (target: URI): Promise<void> => {
@@ -192,7 +215,34 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
           })
           if (!confirmed) return
         }
-        finish(target)
+        finish([target])
+      }
+
+      // In multi-select mode the OK button confirms the checked set; with nothing
+      // checked it falls back to resolving the typed path (single-pick semantics).
+      const confirmSelectionOrValue = (): void => {
+        if (canSelectMany && selected.size > 0) {
+          finish([...selected.values()].map((s) => s.entry.uri))
+          return
+        }
+        void acceptValue(qp.value)
+      }
+
+      // A row is checkable when it names a real entry the picker allows picking:
+      // files in a file picker, folders in a folder picker. '..' never checks.
+      const isSelectableEntry = (id: string, entry: ResolvedEntry): boolean =>
+        id !== PARENT_ID && (entry.isDirectory ? opts.canSelectFolders : allowFiles)
+
+      const syncSelectedItems = (): void => {
+        qp.selectedItems = [...selected.values()].map((s) => s.item)
+      }
+
+      const toggleSelected = (item: IQuickPickItem): void => {
+        const entry = entriesById.get(item.id)
+        if (!entry || !isSelectableEntry(item.id, entry)) return
+        if (selected.has(item.id)) selected.delete(item.id)
+        else selected.set(item.id, { item, entry })
+        syncSelectedItems()
       }
 
       const setInputToFolder = (): void => {
@@ -232,7 +282,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
           }
           if (token !== navToken) return
           currentFolder = folder
-          const prepared = prepareEntries(entries, { allowFiles, showDotFiles })
+          const prepared = prepareEntries(entries, { allowFiles, showDotFiles, fileExts })
 
           const parent = this._parentOf(folder)
           if (parent) {
@@ -399,7 +449,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
             if (parent) await this._fileService.createDirectory(parent)
             await this._fileService.writeFile(target, '')
           }
-          finish(target)
+          finish([target])
         } catch {
           // creation failed — keep the dialog open
         } finally {
@@ -409,6 +459,8 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
 
       // Resolve the typed value directly: enter / select a folder, open a file, or
       // confirm a save target. [D] A trailing separator means "this folder itself".
+      // When a filter is active a file outside it is not openable (matches the
+      // list filtering in updateItems, which drops such rows).
       const acceptValue = async (value: string): Promise<void> => {
         if (value === '') return
         const target = this._uriFromInput(value)
@@ -420,10 +472,11 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
         try {
           const stat = await this._fileService.stat(target)
           if (stat.isDirectory) {
-            if (opts.canSelectFolders) finish(target)
+            if (opts.canSelectFolders) finish([target])
             else await updateItems(target, { resetInput: true })
           } else if (stat.isFile && allowFiles) {
-            finish(target)
+            if (fileExts && !fileExts.has(fileExtension(this._basename(target)))) return
+            finish([target])
           }
         } catch {
           // path does not exist — offer to create it
@@ -448,7 +501,14 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
               return
             }
             if (allowFiles) {
-              finish(entry.uri)
+              if (fileExts && !fileExts.has(fileExtension(active.label))) return
+              // Multi-select: accepting a file toggles its checkbox instead of
+              // closing; the OK button confirms the whole checked set.
+              if (canSelectMany) {
+                toggleSelected(active)
+                return
+              }
+              finish([entry.uri])
             }
             return
           }
@@ -462,7 +522,30 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
       qp.onDidAccept((items) => void onAccept(items), undefined, session)
       qp.onDidChangeValue((value) => void onValueChange(value), undefined, session)
       qp.onDidChangeActive((item) => onActiveChange(item), undefined, session)
-      qp.onDidTriggerOk(() => void acceptValue(qp.value), undefined, session)
+      qp.onDidTriggerOk(() => confirmSelectionOrValue(), undefined, session)
+      qp.onDidChangeSelection(
+        (items) => {
+          // The panel proposes the next checked set. Adopt it, but drop rows that
+          // are not selectable (folders in a file picker, '..') and keep picks
+          // recorded in other folders (their ids are absent from the rebuilt
+          // entriesById after navigation).
+          const next = new Map<string, { item: IQuickPickItem; entry: ResolvedEntry }>()
+          for (const item of items) {
+            const entry = entriesById.get(item.id)
+            if (entry) {
+              if (isSelectableEntry(item.id, entry)) next.set(item.id, { item, entry })
+              continue
+            }
+            const carried = selected.get(item.id)
+            if (carried) next.set(item.id, carried)
+          }
+          selected.clear()
+          for (const [id, value] of next) selected.set(id, value)
+          syncSelectedItems()
+        },
+        undefined,
+        session,
+      )
       qp.onDidTriggerButton(
         () => {
           showDotFiles = !showDotFiles

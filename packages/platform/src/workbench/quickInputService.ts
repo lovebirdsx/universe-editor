@@ -262,6 +262,18 @@ export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
    * Defaults to true (auto-highlight the first item).
    */
   autoFocusFirstItem?: boolean
+  /**
+   * When true, each row renders a checkbox and the picker tracks a checked set
+   * (mirrors VSCode's `QuickPick.canSelectMany`). Toggling a checkbox fires
+   * `onDidChangeSelection`; the consumer owns the checked state and reflects it
+   * back through `selectedItems`. Defaults to false.
+   */
+  canSelectMany: boolean
+  /**
+   * The checked rows (only meaningful with `canSelectMany`). Programmatic sets
+   * re-render the checkboxes; the panel matches rows by item id.
+   */
+  selectedItems: readonly T[]
 
   /**
    * Modifier keys held at the most recent accept (Enter / click). Read inside an
@@ -273,6 +285,12 @@ export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
   readonly onDidAccept: Event<T[]>
   readonly onDidHide: Event<void>
   readonly onDidChangeValue: Event<string>
+  /**
+   * Fires when the user toggles a row's checkbox (`canSelectMany` pickers only).
+   * Carries the proposed next checked set; the consumer validates it and writes
+   * the accepted set back to `selectedItems`.
+   */
+  readonly onDidChangeSelection: Event<T[]>
   /**
    * Fires when the focused (active) item changes — on keyboard navigation, mouse
    * hover, or list re-filtering. Carries the active item, or `undefined` when the

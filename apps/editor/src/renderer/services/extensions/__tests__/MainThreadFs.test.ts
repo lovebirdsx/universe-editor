@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
-import { bytesToBase64 } from '@universe-editor/extensions-common'
+import { bytesToBase64, type IRelativePatternDto } from '@universe-editor/extensions-common'
 import {
+  CancellationTokenSource,
   NullLogger,
   URI,
   relativePathUnder,
+  type HostPlatform,
   type IFileSearchComplete,
+  type IFileSearchQuery,
   type IFileSearchService,
   type IFileService,
+  type ILogger,
 } from '@universe-editor/platform'
 import { MainThreadFs } from '../MainThreadFs.js'
 import type { IAcpPathPolicy } from '../../acp/acpPathPolicy.js'
@@ -34,8 +38,10 @@ function makeFs(
   files: IFileService,
   fileSearch: IFileSearchService = noSearch,
   defaultExcludes: () => readonly string[] = () => [],
+  logger: ILogger = new NullLogger(),
+  platform: HostPlatform = 'linux',
 ): MainThreadFs {
-  return new MainThreadFs(cwd, policy, files, fileSearch, defaultExcludes, new NullLogger())
+  return new MainThreadFs(cwd, policy, files, fileSearch, defaultExcludes, logger, platform)
 }
 
 describe('MainThreadFs', () => {
@@ -285,6 +291,137 @@ describe('MainThreadFs', () => {
     it('rejects when no workspace folder is open', async () => {
       const fs = makeFs(undefined, allowPolicy, fakeFiles({}))
       await expect(fs.$findFiles('**/*.ts', null, null)).rejects.toThrow(/open workspace/)
+    })
+
+    it('roots the enumeration at a RelativePattern base and matches base-relative paths', async () => {
+      const roots: string[] = []
+      const search: IFileSearchService = {
+        _serviceBrand: undefined,
+        search: (query: IFileSearchQuery) => {
+          roots.push(query.root.fsPath)
+          const complete: IFileSearchComplete = {
+            results: [
+              {
+                resource: URI.file('/repo/src/a.ts'),
+                fsPath: '/repo/src/a.ts',
+                relativePath: 'a.ts',
+                basename: 'a.ts',
+                score: 0,
+              },
+              {
+                resource: URI.file('/repo/src/deep/b.ts'),
+                fsPath: '/repo/src/deep/b.ts',
+                relativePath: 'deep/b.ts',
+                basename: 'b.ts',
+                score: 0,
+              },
+            ],
+            limitHit: false,
+            filesWalked: 2,
+            directoriesWalked: 1,
+            durationMs: 0,
+          }
+          return Promise.resolve(complete)
+        },
+      }
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      const include: IRelativePatternDto = {
+        base: URI.file('/repo/src').toJSON(),
+        pattern: '*.ts',
+      }
+      const result = await fs.$findFiles(include, null, null)
+      expect(roots).toEqual(['/repo/src'])
+      // Slashless pattern matches the basename at any depth below the base.
+      expect(result).toEqual(['/repo/src/a.ts', '/repo/src/deep/b.ts'])
+    })
+
+    it('rejects a RelativePattern base outside the workspace', async () => {
+      const search = fakeSearch([])
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      await expect(
+        fs.$findFiles({ base: URI.file('/elsewhere').toJSON(), pattern: '*.ts' }, null, null),
+      ).rejects.toThrow(/escapes the workspace/)
+    })
+
+    it('rejects a RelativePattern base whose real path escapes the workspace', async () => {
+      const search = fakeSearch([])
+      const fs = makeFs(
+        '/repo',
+        allowPolicy,
+        fakeFiles({
+          realpath: (resource) => {
+            const p = (resource as URI).fsPath
+            return Promise.resolve(URI.file(p === '/repo' ? '/repo' : '/outside/target'))
+          },
+        }),
+        search,
+      )
+      await expect(
+        fs.$findFiles({ base: URI.file('/repo/link').toJSON(), pattern: '*.ts' }, null, null),
+      ).rejects.toThrow(/escapes the workspace/)
+    })
+
+    it('scopes a RelativePattern exclude to its own base', async () => {
+      const search = fakeSearch([
+        { fsPath: '/repo/generated/a.ts', relativePath: 'generated/a.ts' },
+        { fsPath: '/repo/generated/deep/b.ts', relativePath: 'generated/deep/b.ts' },
+        { fsPath: '/repo/src/generated/keep.ts', relativePath: 'src/generated/keep.ts' },
+        { fsPath: '/repo/src/c.ts', relativePath: 'src/c.ts' },
+      ])
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      const exclude: IRelativePatternDto = {
+        base: URI.file('/repo/generated').toJSON(),
+        pattern: '**',
+      }
+      const result = await fs.$findFiles('**/*.ts', [exclude], null)
+      expect(result).toEqual(['/repo/src/generated/keep.ts', '/repo/src/c.ts'])
+    })
+
+    it('forwards the RPC token to the underlying search (cancel kills the walk)', async () => {
+      let seenToken: unknown
+      const search: IFileSearchService = {
+        _serviceBrand: undefined,
+        search: (_query: IFileSearchQuery, token?: unknown) => {
+          seenToken = token
+          const complete: IFileSearchComplete = {
+            results: [],
+            limitHit: false,
+            filesWalked: 0,
+            directoriesWalked: 0,
+            durationMs: 0,
+            ...(token !== undefined ? { stopReason: 'canceled' as const } : {}),
+          }
+          return Promise.resolve(complete)
+        },
+      }
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      const cts = new CancellationTokenSource()
+      await fs.$findFiles('**/*.ts', null, null, cts.token)
+      expect(seenToken).toBe(cts.token)
+    })
+
+    it('logs the truncation details when the enumeration cap is hit', async () => {
+      const warn = vi.fn()
+      const logger = { ...new NullLogger(), warn } as unknown as ILogger
+      const search: IFileSearchService = {
+        _serviceBrand: undefined,
+        search: () => {
+          const complete: IFileSearchComplete = {
+            results: [],
+            limitHit: true,
+            filesWalked: 100_000,
+            directoriesWalked: 5_000,
+            durationMs: 0,
+            stopReason: 'maxResults',
+          }
+          return Promise.resolve(complete)
+        },
+      }
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search, () => [], logger)
+      await fs.$findFiles('**/*.ts', null, null)
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0]?.[0]).toMatch(/truncated at the 100000-entry cap/)
+      expect(warn.mock.calls[0]?.[0]).toMatch(/maxResults/)
     })
   })
 })

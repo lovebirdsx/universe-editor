@@ -12,9 +12,11 @@ import {
   DisposableMap,
   DisposableStore,
   Emitter,
+  NullLogger,
   URI,
   toDisposable,
   type IDisposable,
+  type ILogger,
   type UriComponents,
 } from '@universe-editor/platform'
 import type {
@@ -26,8 +28,11 @@ import type {
   LanguageServerStatus,
 } from '@universe-editor/extensions-common'
 import type { Diagnostic } from 'vscode-languageserver-types'
-import { MonacoLoader } from '../../workbench/editor/monaco/MonacoLoader.js'
-import { diagnosticToMarker } from '../languageFeatures/typescript/lspMonacoConvert.js'
+import { MonacoLoader, type monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
+import {
+  diagnosticToMarker,
+  markerToLspDiagnostic,
+} from '../languageFeatures/typescript/lspMonacoConvert.js'
 import type { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import {
   createCodeActionProxy,
@@ -53,6 +58,12 @@ import {
   createWorkspaceSymbolProxy,
 } from '../languageFeatures/languageProviderProxy.js'
 
+/** Marker-change pushes are debounced into one RPC per burst: a language server
+ *  publishing per-file diagnostics during a project-wide re-parse would
+ *  otherwise fire one frame per file per pass (this repo has an RPC-flood
+ *  history). 50ms matches the document-mirror change debounce. */
+const DIAGNOSTICS_CHANGE_DEBOUNCE_MS = 50
+
 export class MainThreadLanguages extends Disposable implements IMainThreadLanguages {
   private readonly _providers = this._register(new DisposableMap<number>())
   /** Per-handle refresh signal for CodeLens providers: the host calls
@@ -62,12 +73,30 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
   /** Per-handle refresh signal for inlay-hints providers — same wiring as
    *  `_codeLensChange`, driven by `$emitInlayHintsDidChange(handle)`. */
   private readonly _inlayHintsChange = new Map<number, Emitter<void>>()
+  /** Live `onDidChangeDiagnostics` listeners on the host; pushes only flow
+   *  while this is non-zero (see MainThreadFileEvents for the same pattern). */
+  private _diagnosticsInterest = 0
+  private readonly _pendingDiagnosticUris = new Map<string, UriComponents>()
+  private _diagnosticsPushTimer: ReturnType<typeof setTimeout> | undefined
+  private _markerListener: IDisposable | undefined
+
+  private readonly _logger: ILogger
 
   constructor(
     private readonly _extHost: IExtHostLanguages,
     private readonly _languageFeatures: ILanguageFeaturesService,
+    logger?: ILogger,
   ) {
     super()
+    // A self-created fallback roots through this store so the leak tracker does
+    // not report it; an injected logger stays owned by the caller.
+    this._logger = logger ?? this._register(new NullLogger())
+    this._register(
+      toDisposable(() => {
+        this._markerListener?.dispose()
+        if (this._diagnosticsPushTimer !== undefined) clearTimeout(this._diagnosticsPushTimer)
+      }),
+    )
   }
 
   async $registerProvider(
@@ -120,6 +149,84 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
     if (uri) this._setMarkers(owner, uri, [])
     else MonacoLoader.peek()?.editor.removeAllMarkers(owner)
     return Promise.resolve()
+  }
+
+  async $getDiagnostics(uri?: UriComponents): Promise<Array<[UriComponents, Diagnostic[]]>> {
+    const monacoNs = await MonacoLoader.ensureInitialized()
+    if (this._store.isDisposed) return []
+    const revived = uri ? URI.revive(uri) : undefined
+    const markers: readonly monaco.editor.IMarker[] = monacoNs.editor.getModelMarkers(
+      revived ? { resource: monacoNs.Uri.parse(revived.toString()) } : {},
+    )
+    const byResource = new Map<string, [UriComponents, Diagnostic[]]>()
+    for (const marker of markers) {
+      const key = marker.resource.toString()
+      let entry = byResource.get(key)
+      if (!entry) {
+        entry = [URI.parse(key).toJSON(), []]
+        byResource.set(key, entry)
+      }
+      entry[1].push(markerToLspDiagnostic(marker))
+    }
+    return [...byResource.values()]
+  }
+
+  $subscribeDiagnostics(): Promise<void> {
+    this._diagnosticsInterest++
+    if (this._diagnosticsInterest === 1) this._armMarkerListener()
+    return Promise.resolve()
+  }
+
+  $unsubscribeDiagnostics(): Promise<void> {
+    this._diagnosticsInterest = Math.max(0, this._diagnosticsInterest - 1)
+    if (this._diagnosticsInterest === 0) {
+      this._markerListener?.dispose()
+      this._markerListener = undefined
+      if (this._diagnosticsPushTimer !== undefined) {
+        clearTimeout(this._diagnosticsPushTimer)
+        this._diagnosticsPushTimer = undefined
+        this._pendingDiagnosticUris.clear()
+      }
+    }
+    return Promise.resolve()
+  }
+
+  private _armMarkerListener(): void {
+    if (this._markerListener || this._store.isDisposed || this._diagnosticsInterest === 0) return
+    const monacoNs = MonacoLoader.peek()
+    if (!monacoNs) {
+      // Monaco hasn't loaded yet, so no markers exist to observe. Arm once the
+      // load completes (any provider registration forces the same load); marker
+      // changes can't happen before that, so nothing is missed.
+      void MonacoLoader.ensureInitialized().then(() => this._armMarkerListener())
+      return
+    }
+    this._markerListener = monacoNs.editor.onDidChangeMarkers((resources) => {
+      for (const resource of resources) {
+        const key = resource.toString()
+        this._pendingDiagnosticUris.set(key, URI.parse(key).toJSON())
+      }
+      this._scheduleDiagnosticsPush()
+    })
+    this._logger.debug('[MainThreadLanguages] diagnostics change pushes armed')
+  }
+
+  private _scheduleDiagnosticsPush(): void {
+    if (this._diagnosticsPushTimer !== undefined) return
+    this._diagnosticsPushTimer = setTimeout(() => {
+      this._diagnosticsPushTimer = undefined
+      if (this._store.isDisposed || this._diagnosticsInterest === 0) {
+        this._pendingDiagnosticUris.clear()
+        return
+      }
+      const uris = [...this._pendingDiagnosticUris.values()]
+      this._pendingDiagnosticUris.clear()
+      void this._extHost.$acceptDiagnosticsChange(uris).catch((err: unknown) => {
+        this._logger.warn(
+          `[MainThreadLanguages] diagnostics change push failed: ${(err as Error).message}`,
+        )
+      })
+    }, DIAGNOSTICS_CHANGE_DEBOUNCE_MS)
   }
 
   $emitCodeLensDidChange(handle: number): void {
@@ -278,7 +385,14 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
         this._inlayHintsChange.set(handle, changeEmitter)
         store.add(toDisposable(() => this._inlayHintsChange.delete(handle)))
         store.add(changeEmitter)
-        const p = createInlayHintsProxy(handle, ext, changeEmitter.event)
+        // inlayHintsResolve rides the metadata: the resolve shell is only
+        // attached when the extension provider implements resolveInlayHint.
+        const p = createInlayHintsProxy(
+          handle,
+          ext,
+          changeEmitter.event,
+          metadata?.inlayHintsResolve === true,
+        )
         for (const lang of selector) store.add(lf.registerInlayHintsProvider(lang, p))
         break
       }

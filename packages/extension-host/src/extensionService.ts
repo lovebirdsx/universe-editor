@@ -39,6 +39,7 @@ import {
   type Extension,
   type FileStat,
   type FoldingRangeProvider,
+  type GlobPattern,
   type HoverProvider,
   type ImplementationProvider,
   type InlayHintsProvider,
@@ -65,8 +66,13 @@ import {
   type TextEditorSelectionChangeEvent,
   type TextEditorSelectionChangeKind,
   type TimelineProvider,
+  type TreeDataProvider,
+  type TreeView,
+  type TreeViewOptions,
   type TypeDefinitionProvider,
   type UriComponents,
+  type WebviewOptions,
+  type WebviewPanel,
   type WorkspaceSymbolProvider,
 } from '@universe-editor/extension-api'
 import {
@@ -81,9 +87,11 @@ import {
   type IExtHostFileStatDto,
   type IExtensionDescriptionDto,
   type IFileChangeEventDto,
+  type IInlayHintDto,
   type IOpenDialogOptionsDto,
   type IProgressStepDto,
   type IReferenceContext,
+  type IRelativePatternDto,
   type ISaveDialogOptionsDto,
   type ISelectionDto,
   type ISignatureHelpContext,
@@ -95,15 +103,18 @@ import {
   type IMainThreadOutput,
   type IMainThreadScm,
   type IMainThreadTimeline,
+  type IMainThreadTreeViews,
   type ITextDocumentShowOptionsDto,
   type ITimelineDto,
   type ITimelineOptionsDto,
+  type ITreeItemDto,
   type IMainThreadWindow,
   type IMainThreadAi,
   type IMainThreadStorage,
   type IMainThreadWebviews,
   type IMainThreadExtensions,
   type IWebviewDiffContextDto,
+  type IWebviewPanelShowOptionsDto,
   type WillSaveReason,
   type TextDocumentContentChangeDto,
 } from '@universe-editor/extensions-common'
@@ -114,12 +125,12 @@ import type {
   CompletionList,
   Definition,
   DefinitionLink,
+  Diagnostic,
   DocumentHighlight,
   DocumentLink,
   DocumentSymbol,
   FoldingRange,
   Hover,
-  InlayHint,
   Location,
   Position,
   Range,
@@ -134,16 +145,19 @@ import type {
 import type { IScannedExtension } from './extensionScanner.js'
 import { installApiBridge, type IExtensionHostBridge } from './apiFactory.js'
 import type {
+  DiagnosticChangeEventBridge,
   FileSystemWatcherBridge,
   OpenDialogOptionsBridge,
   SaveDialogOptionsBridge,
 } from './apiFactory.js'
 import { HostSourceControl } from './hostScm.js'
 import { ExtHostTimelineRegistry } from './hostTimeline.js'
+import { HostTreeViewRegistry } from './hostTreeViews.js'
 import { HostWebviewManager } from './hostWebviews.js'
 import { HostAi } from './hostAi.js'
 import { ExtHostDocuments } from './hostDocuments.js'
 import { HostFileWatcherRegistry } from './hostFileWatchers.js'
+import { HostDiagnostics } from './hostDiagnostics.js'
 import {
   HostOutputChannel,
   HostStatusBarItem,
@@ -205,6 +219,17 @@ const OPEN_TEXT_DOCUMENT_WAIT_MS = 15_000
  *  from center, so a very negative value keeps transient messages closest. */
 const STATUS_MESSAGE_PRIORITY = -1000
 
+/**
+ * Glob → wire shape: a plain string crosses verbatim; a `RelativePattern` is
+ * decomposed so the host never hands the renderer an extension's bundled
+ * `Uri` instance.
+ */
+function toWireGlobPattern(pattern: GlobPattern): string | IRelativePatternDto {
+  return typeof pattern === 'string'
+    ? pattern
+    : { base: Uri.file(pattern.base).toJSON(), pattern: pattern.pattern }
+}
+
 export class ExtensionService implements IExtensionHostBridge {
   private readonly _commands: ExtensionCommandRegistry
   private readonly _languageRegistry: LanguageProviderRegistry
@@ -212,6 +237,7 @@ export class ExtensionService implements IExtensionHostBridge {
   private readonly _documents = new ExtHostDocuments()
   private readonly _sourceControls = new Map<number, HostSourceControl>()
   private readonly _timelines: ExtHostTimelineRegistry
+  private readonly _treeViews?: HostTreeViewRegistry
   private readonly _webviews?: HostWebviewManager
   private _statusBarHandle = 0
   private _scmHandle = 0
@@ -228,6 +254,15 @@ export class ExtensionService implements IExtensionHostBridge {
   readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined> =
     this._onDidChangeActiveTextEditor.event
 
+  /** Latest pushed visible-editor set, as snapshot handles (one per group). */
+  private _visibleTextEditors: readonly TextEditor[] = []
+  /** Bumped per visible-set push; a held-back (doc-pending) push only fires if
+   *  no newer push arrived while it waited. */
+  private _visibleEditorsGeneration = 0
+  private readonly _onDidChangeVisibleTextEditors = new Emitter<readonly TextEditor[]>()
+  readonly onDidChangeVisibleTextEditors: Event<readonly TextEditor[]> =
+    this._onDidChangeVisibleTextEditors.event
+
   private readonly _onDidChangeTextEditorSelection = new Emitter<TextEditorSelectionChangeEvent>()
   readonly onDidChangeTextEditorSelection: Event<TextEditorSelectionChangeEvent> =
     this._onDidChangeTextEditorSelection.event
@@ -243,6 +278,8 @@ export class ExtensionService implements IExtensionHostBridge {
     sessionId: '',
     uriScheme: '',
     language: '',
+    machineId: '',
+    appRoot: '',
   }
 
   /** Memoized `extensions` namespace handles, keyed by extension id. */
@@ -263,6 +300,8 @@ export class ExtensionService implements IExtensionHostBridge {
 
   /** Lazily created so a host without the file-events channel still works. */
   private _fileWatchers?: HostFileWatcherRegistry
+  /** Lazily created so a host without the languages channel still works. */
+  private _diagnostics?: HostDiagnostics
 
   constructor(
     private readonly _extensions: readonly IScannedExtension[],
@@ -281,6 +320,7 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _globalStorageHome?: string,
     private readonly _mainThreadExtensions?: IMainThreadExtensions,
     private readonly _mainThreadFileEvents?: IMainThreadFileEvents,
+    private readonly _mainThreadTreeViews?: IMainThreadTreeViews,
   ) {
     this._commands = new ExtensionCommandRegistry(_mainThreadCommands)
     this._languageRegistry = new LanguageProviderRegistry(() => this._languages(), this._documents)
@@ -295,6 +335,7 @@ export class ExtensionService implements IExtensionHostBridge {
         : undefined,
     )
     if (_mainThreadWebviews) this._webviews = new HostWebviewManager(_mainThreadWebviews)
+    if (_mainThreadTreeViews) this._treeViews = new HostTreeViewRegistry(_mainThreadTreeViews)
     installApiBridge(this)
   }
 
@@ -520,6 +561,29 @@ export class ExtensionService implements IExtensionHostBridge {
     this._webviews?.acceptMessage(panelHandle, message)
   }
 
+  /** IExtensionHostBridge.createWebviewPanel */
+  createWebviewPanel(
+    viewType: string,
+    title: string,
+    showOptions?: IWebviewPanelShowOptionsDto,
+    options?: WebviewOptions,
+  ): WebviewPanel {
+    if (!this._webviews) {
+      throw new Error('webview panel support is not available in this extension host')
+    }
+    return this._webviews.createWebviewPanel(viewType, title, options, showOptions)
+  }
+
+  /** IExtHostWebviews.$acceptPanelDisposed */
+  acceptPanelDisposed(panelHandle: number): void {
+    this._webviews?.acceptPanelDisposed(panelHandle)
+  }
+
+  /** IExtHostWebviews.$acceptPanelViewState */
+  acceptPanelViewState(panelHandle: number, active: boolean, visible: boolean): void {
+    this._webviews?.acceptPanelViewState(panelHandle, active, visible)
+  }
+
   /** IExtHostWebviews.$disposeWebviewPanel */
   disposeWebviewPanel(panelHandle: number): void {
     this._webviews?.disposePanel(panelHandle)
@@ -556,6 +620,43 @@ export class ExtensionService implements IExtensionHostBridge {
     options: ITimelineOptionsDto,
   ): Promise<ITimelineDto | undefined> {
     return this._timelines.provideTimeline(handle, uri, options)
+  }
+
+  // --- IExtensionHostBridge: tree views ---
+
+  private _trees(): HostTreeViewRegistry {
+    if (!this._treeViews) {
+      throw new Error('tree view support is not available in this extension host')
+    }
+    return this._treeViews
+  }
+
+  registerTreeDataProvider(viewId: string, provider: TreeDataProvider<unknown>): Disposable {
+    return this._trees().registerTreeDataProvider(viewId, provider)
+  }
+
+  createTreeView(viewId: string, options: TreeViewOptions<unknown>): TreeView<unknown> {
+    return this._trees().createTreeView(viewId, options)
+  }
+
+  /** IExtHostTreeViews.$getChildren */
+  provideTreeChildren(viewId: string, parentHandle?: number): Promise<ITreeItemDto[]> {
+    return this._trees().getChildren(viewId, parentHandle)
+  }
+
+  /** IExtHostTreeViews.$acceptTreeViewVisibility */
+  acceptTreeViewVisibility(viewId: string, visible: boolean): void {
+    this._treeViews?.acceptVisibility(viewId, visible)
+  }
+
+  /** IExtHostTreeViews.$acceptSelection */
+  acceptTreeViewSelection(viewId: string, handles: number[]): void {
+    this._treeViews?.acceptSelection(viewId, handles)
+  }
+
+  /** IExtHostTreeViews.$acceptExpansionState */
+  acceptTreeViewExpansionState(viewId: string, handle: number, expanded: boolean): void {
+    this._treeViews?.acceptExpansionState(viewId, handle, expanded)
   }
 
   // --- IExtensionHostBridge: workspace ---
@@ -636,29 +737,43 @@ export class ExtensionService implements IExtensionHostBridge {
   /**
    * `workspace.findFiles`: the renderer enumerates the workspace and glob-filters
    * there. API `exclude` semantics map onto the wire as: undefined → null (the
-   * renderer's configured default excludes), null → [] (no exclusion), a string
-   * → a one-element list.
+   * renderer's configured default excludes), null → [] (no exclusion), a glob →
+   * a one-element list. The token travels via the channel's cancel path, so a
+   * cancelled request stops the renderer-side enumeration and surfaces here as
+   * a `CancellationError` rejection, normalized to the public contract's [].
    */
-  findFiles(
-    include: string,
-    exclude: string | null | undefined,
+  async findFiles(
+    include: GlobPattern,
+    exclude: GlobPattern | null | undefined,
     maxResults: number | undefined,
+    token?: CancellationToken,
   ): Promise<string[]> {
-    const wireExclude = exclude === undefined ? null : exclude === null ? [] : [exclude]
-    return this._fs().$findFiles(include, wireExclude, maxResults ?? null)
+    const wireExclude =
+      exclude === undefined ? null : exclude === null ? [] : [toWireGlobPattern(exclude)]
+    try {
+      return await this._fs().$findFiles(
+        toWireGlobPattern(include),
+        wireExclude,
+        maxResults ?? null,
+        token,
+      )
+    } catch (err) {
+      if (token?.isCancellationRequested) return []
+      throw err
+    }
   }
 
   /**
-   * `workspace.applyEdit`. The renderer resolves false for edits it cannot
-   * apply (this iteration: anything carrying file create/rename/delete
-   * operations), which is the public contract as well.
+   * `workspace.applyEdit`. Supports text edits and create/rename/delete file
+   * operations (`documentChanges` entries run in array order). The renderer
+   * resolves false when any entry fails, which is the public contract as well.
    */
   applyWorkspaceEdit(edit: WorkspaceEdit): Promise<boolean> {
     return this._editor().$applyWorkspaceEdit(edit)
   }
 
   createFileSystemWatcher(
-    globPattern: string,
+    globPattern: GlobPattern,
     ignoreCreateEvents: boolean,
     ignoreChangeEvents: boolean,
     ignoreDeleteEvents: boolean,
@@ -723,9 +838,20 @@ export class ExtensionService implements IExtensionHostBridge {
   /**
    * `workspace.openTextDocument`: reuse the mirror when the document is already
    * open; otherwise have the renderer load it into the sync pipeline and wait
-   * for its `didOpen` to arrive.
+   * for its `didOpen` to arrive. The options overload (or an `untitled:` URI)
+   * creates a never-on-disk document instead of reading one.
    */
-  async openTextDocument(target: UriComponents | string): Promise<TextDocument> {
+  async openTextDocument(
+    target?: UriComponents | string | { language?: string; content?: string },
+  ): Promise<TextDocument> {
+    if (target === undefined || (typeof target === 'object' && !('scheme' in target))) {
+      const components = await this._editor().$openUntitledDocument(target ?? {})
+      const document = await this._documents.whenOpen(components, OPEN_TEXT_DOCUMENT_WAIT_MS)
+      if (!document) {
+        throw new Error('openTextDocument: document mirror never arrived for the untitled document')
+      }
+      return document
+    }
     const uri = typeof target === 'string' ? Uri.file(target) : Uri.from(target)
     const components = uri.toJSON()
     const existing = this._documents.get(components)
@@ -805,6 +931,45 @@ export class ExtensionService implements IExtensionHostBridge {
     void this._documents.whenOpen(snapshot.uri, ACTIVE_EDITOR_DOC_WAIT_MS).then((lateDoc) => {
       if (generation !== this._activeEditorGeneration || !lateDoc) return
       this._onDidChangeActiveTextEditor.fire(this._editorFromSnapshot(snapshot, lateDoc))
+    })
+  }
+
+  /** `window.visibleTextEditors`: the latest pushed set, as snapshot handles.
+   *  Synchronous because the renderer mirrors the set on every change. */
+  get visibleTextEditors(): readonly TextEditor[] {
+    return this._visibleTextEditors
+  }
+
+  /** IExtHostEditor.$acceptVisibleEditorsChange — the renderer's whole-set
+   *  mirror of the per-group visible text editors. The cache swaps immediately so
+   *  the getter never serves a stale set; the event additionally waits for every
+   *  pushed document to be in the mirror (same first-activation race as the
+   *  active editor), unless a newer push supersedes this one meanwhile. */
+  acceptVisibleEditorsChange(snapshots: readonly IActiveTextEditorDto[]): void {
+    const generation = ++this._visibleEditorsGeneration
+    const editors: TextEditor[] = []
+    const pending: Promise<unknown>[] = []
+    for (const snapshot of snapshots) {
+      const document = this._documents.get(snapshot.uri)
+      if (document) {
+        editors.push(this._editorFromSnapshot(snapshot, document))
+        continue
+      }
+      pending.push(
+        this._documents.whenOpen(snapshot.uri, ACTIVE_EDITOR_DOC_WAIT_MS).then((lateDoc) => {
+          if (lateDoc) editors.push(this._editorFromSnapshot(snapshot, lateDoc))
+        }),
+      )
+    }
+    this._visibleTextEditors = editors
+    if (pending.length === 0) {
+      this._onDidChangeVisibleTextEditors.fire(editors)
+      return
+    }
+    void Promise.all(pending).then(() => {
+      if (generation !== this._visibleEditorsGeneration) return
+      this._visibleTextEditors = editors
+      this._onDidChangeVisibleTextEditors.fire(editors)
     })
   }
 
@@ -987,6 +1152,23 @@ export class ExtensionService implements IExtensionHostBridge {
 
   getLanguages(): Promise<string[]> {
     return this._languages().$getLanguages()
+  }
+
+  getDiagnostics(uri?: UriComponents): Promise<Array<[UriComponents, Diagnostic[]]>> {
+    return this._hostDiagnostics().getDiagnostics(uri)
+  }
+
+  get onDidChangeDiagnostics(): Event<DiagnosticChangeEventBridge> {
+    return this._hostDiagnostics().onDidChangeDiagnostics
+  }
+
+  private _hostDiagnostics(): HostDiagnostics {
+    return (this._diagnostics ??= new HostDiagnostics(this._languages()))
+  }
+
+  /** IExtHostLanguages.$acceptDiagnosticsChange — renderer push (fire-and-forget). */
+  acceptDiagnosticsChange(uris: readonly UriComponents[]): void {
+    this._diagnostics?.acceptDiagnosticsChange(uris)
   }
 
   // --- IExtensionHostBridge: ai (trusted-only) ---
@@ -1183,8 +1365,16 @@ export class ExtensionService implements IExtensionHostBridge {
     return this._languageRegistry.provideOnTypeFormattingEdits(handle, uri, position, ch, options)
   }
 
-  provideInlayHints(handle: number, uri: UriComponents, range: Range): Promise<InlayHint[] | null> {
+  provideInlayHints(
+    handle: number,
+    uri: UriComponents,
+    range: Range,
+  ): Promise<IInlayHintDto[] | null> {
     return this._languageRegistry.provideInlayHints(handle, uri, range)
+  }
+
+  resolveInlayHint(handle: number, cacheId: number, index: number): Promise<IInlayHintDto | null> {
+    return this._languageRegistry.resolveInlayHint(handle, cacheId, index)
   }
 
   provideDocumentSemanticTokens(
@@ -1258,6 +1448,7 @@ export class ExtensionService implements IExtensionHostBridge {
   dispose(): void {
     this._webviews?.dispose()
     this._timelines.dispose()
+    this._treeViews?.dispose()
     this._fileWatchers?.dispose()
     this._activation.disposeAll()
   }

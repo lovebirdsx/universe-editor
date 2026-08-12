@@ -15,6 +15,9 @@
 
 import {
   URI,
+  relativePathUnder,
+  type CancellationToken,
+  type HostPlatform,
   type IFileSearchService,
   type IFileService,
   type ILogger,
@@ -26,6 +29,7 @@ import {
   type ExtHostFileType,
   type IExtHostFileStatDto,
   type IMainThreadFs,
+  type IRelativePatternDto,
 } from '@universe-editor/extensions-common'
 import type { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 
@@ -46,6 +50,7 @@ export class MainThreadFs implements IMainThreadFs {
     /** The configured default search excludes (files.exclude ∪ search.exclude). */
     private readonly _defaultExcludes: () => readonly string[],
     private readonly _logger: ILogger,
+    private readonly _platform: HostPlatform,
   ) {}
 
   private async _guard(path: string): Promise<URI> {
@@ -149,36 +154,98 @@ export class MainThreadFs implements IMainThreadFs {
   /**
    * `workspace.findFiles`: enumerate the workspace live (matchAll walks with rg,
    * never the stale listing cache), then apply the include glob to each match's
-   * workspace-relative path. No path policy here — the enumeration is rooted at
-   * the workspace and only fsPaths inside it come back.
+   * relative path. A RelativePattern include roots the walk at its base folder
+   * (resolved through the path policy, symlink check included) and matches
+   * against base-relative paths. The token comes from the RPC cancel path and
+   * is handed to the enumeration itself, so a cancelled request kills the
+   * underlying `rg` walk instead of discarding a late result.
    */
   async $findFiles(
-    include: string,
-    exclude: readonly string[] | null,
+    include: string | IRelativePatternDto,
+    exclude: readonly (string | IRelativePatternDto)[] | null,
     maxResults: number | null,
+    token?: CancellationToken,
   ): Promise<string[]> {
     if (this._cwd === undefined) {
       throw new Error('workspace.findFiles requires an open workspace folder')
     }
-    const complete = await this._fileSearch.search({
-      root: URI.file(this._cwd),
-      pattern: '',
-      matchAll: true,
-      excludes: exclude === null ? [...this._defaultExcludes()] : [...exclude],
-      maxResults: FIND_FILES_ENUMERATION_CAP,
-    })
+    const includeBase =
+      typeof include === 'string' ? undefined : await this._resolveRelativePatternBase(include.base)
+    const excludeMatchers = exclude?.map((entry) => this._compileExclude(entry, includeBase))
+    const complete = await this._fileSearch.search(
+      {
+        root: includeBase ?? URI.file(this._cwd),
+        pattern: '',
+        matchAll: true,
+        excludes: exclude === null ? [...this._defaultExcludes()] : [],
+        maxResults: FIND_FILES_ENUMERATION_CAP,
+      },
+      token,
+    )
     if (complete.limitHit) {
       this._logger.warn(
-        `findFiles enumeration truncated at ${FIND_FILES_ENUMERATION_CAP} entries; results may be incomplete`,
+        `findFiles enumeration truncated at the ${FIND_FILES_ENUMERATION_CAP}-entry cap ` +
+          `(${complete.results.length} results walked, stopReason: ${complete.stopReason ?? 'maxResults'}); ` +
+          'results beyond the cap were dropped',
       )
     }
-    const matches = compileGlobMatcher(include)
+    const matches = compileGlobMatcher(typeof include === 'string' ? include : include.pattern)
     const out: string[] = []
     for (const match of complete.results) {
       if (!matches(match.relativePath)) continue
+      if (excludeMatchers?.some((excluded) => excluded(match.relativePath))) continue
       out.push(match.fsPath)
       if (maxResults !== null && out.length >= maxResults) break
     }
     return out
+  }
+
+  /**
+   * Resolve a RelativePattern's base URI to an enumeration root. The literal
+   * path goes through the same text policy as every other gated call; the
+   * symlink-followed real path is then re-checked for containment and becomes
+   * the search root — so a base whose real target escapes the workspace is
+   * rejected rather than silently walked.
+   */
+  private async _resolveRelativePatternBase(baseDto: IRelativePatternDto['base']): Promise<URI> {
+    const uri = URI.revive(baseDto)
+    if (!uri) {
+      throw new Error('workspace.findFiles: RelativePattern base is not a valid URI')
+    }
+    if (uri.scheme !== 'file') {
+      throw new Error(
+        `workspace.findFiles: RelativePattern base must be a file: URI (got ${uri.scheme})`,
+      )
+    }
+    await this._guard(uri.fsPath)
+    const root = this._files.realpath ? await this._files.realpath(uri) : uri
+    const canonicalCwd = await this._getCanonicalCwd()
+    if (
+      relativePathUnder(canonicalCwd ?? (this._cwd as string), root.fsPath, this._platform) === null
+    ) {
+      throw new Error('workspace.findFiles: RelativePattern base escapes the workspace folder')
+    }
+    return root
+  }
+
+  /**
+   * Compile one exclude entry against the enumeration root: a string glob
+   * matches relative paths as-is; a RelativePattern excludes only matches
+   * under its own base, with the pattern applied beneath that prefix.
+   */
+  private _compileExclude(
+    entry: string | IRelativePatternDto,
+    includeBase: URI | undefined,
+  ): (relativePath: string) => boolean {
+    if (typeof entry === 'string') return compileGlobMatcher(entry)
+    const inner = compileGlobMatcher(entry.pattern)
+    const baseUri = URI.revive(entry.base)
+    if (!baseUri) return () => false
+    const root = (includeBase ?? URI.file(this._cwd as string)).fsPath
+    const prefix = relativePathUnder(root, baseUri.fsPath, this._platform)
+    if (prefix === null) return () => false
+    if (prefix === '') return inner
+    const dir = `${prefix}/`
+    return (relativePath) => relativePath.startsWith(dir) && inner(relativePath.slice(dir.length))
   }
 }

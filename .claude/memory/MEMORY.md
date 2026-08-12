@@ -13,7 +13,7 @@
 - [AI 基础服务层](ai-service-foundation-progress.md) — platform 契约+main 实现+renderer 门面；密钥 safeStorage 红线；加 vendor 见套路 I
 - [插件系统](extension-system-progress.md) — 外部插件 Phase 0–6；2026-07 单 host+Workspace Trust（激活门控，built-in 豁免）
 - [第三方插件生态计划](third-party-extension-ecosystem-plan.md) — 注册页+服务端发布签名已落地（2026-08-10 修订决策2）；发布闭环 register→login→publish→可装已通；uex 待用户手动发 npm
-- [extension-api 0.9.0 API 面补全](extension-api-09-surface-expansion.md) — 对标 vscode.d.ts 四批补全；bump 版本须五处联动；watcher 按兴趣订阅防洪泛
+- [extension-api 0.9→0.12 API 面补全](extension-api-09-surface-expansion.md) — parity 计划 P1-P4 全落地；bump 版本须五处联动+先 build 再 drift check；事件推兴趣订阅+防抖
 - [插件 manifest NLS](extension-manifest-nls.md) — %key%+package.nls.json；nls 文件须列 files 数组否则打包丢失
 - [TypeScript 内置插件](typescript-builtin-plugin.md) — 插件自 spawn tsserver+10 类 provider；地图见 extensions/typescript/CLAUDE.md
 - [通用 UI 抽取 workbench-ui](workbench-ui-consolidation.md) — 通用件沉淀 workbench-ui，editor 留薄 wrapper；展示组件纯数据+回调
@@ -34,6 +34,7 @@
 - [链接打开机制 + 深链接](opener-service-deeplink-feature.md) — IOpenerService 三档+#L 行列；universe-editor:// 深链；套路见 services/opener/CLAUDE.md
 - [commit changes 视图 + graph 打磨](commit-changes-view-graph-polish.md) — reveal 走 pendingReveal observable 防旧实例闭包；点击延迟=回调身份致全表重渲染；silent 跟随+LRU+latest-wins
 - [快捷键编辑器对标 VSCode](keybindings-editor-vscode-parity.md) — model/视图分离+VirtualList 确定行高+行级多键 API；坑=浮层 Escape 须 window capture 自拦
+- [Tree View（contributes.views + TreeDataProvider）](tree-view-feature.md) — 拉取式懒加载+handle 单代有效；坑=undefined 过线变 null/空菜单泄漏/行点击双触发
 
 ## 性能 / 疑难根因
 

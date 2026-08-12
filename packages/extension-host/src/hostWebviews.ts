@@ -21,6 +21,7 @@ import type {
   WebviewDiffContext,
   WebviewOptions,
   WebviewPanel,
+  WebviewPanelOnDidChangeViewStateEvent,
 } from '@universe-editor/extension-api'
 import {
   fsPathToWebviewUrl,
@@ -28,6 +29,7 @@ import {
   type IMainThreadWebviews,
   type IWebviewDiffContextDto,
   type IWebviewOptionsDto,
+  type IWebviewPanelShowOptionsDto,
 } from '@universe-editor/extensions-common'
 
 interface RegisteredProvider {
@@ -44,6 +46,16 @@ function reviveDiffContext(dto: IWebviewDiffContextDto): WebviewDiffContext {
     left: new Uint8Array(Buffer.from(dto.leftBase64, 'base64')),
     right: new Uint8Array(Buffer.from(dto.rightBase64, 'base64')),
     title: dto.title,
+  }
+}
+
+/** Serialize public `WebviewOptions` into the wire DTO (URI roots → fsPath). */
+function webviewOptionsToDto(value: WebviewOptions | undefined): IWebviewOptionsDto {
+  return {
+    ...(value?.enableScripts !== undefined ? { enableScripts: value.enableScripts } : {}),
+    ...(value?.localResourceRoots !== undefined
+      ? { localResourceRoots: value.localResourceRoots.map((r) => URI.revive(r)?.fsPath ?? '') }
+      : {}),
   }
 }
 
@@ -66,15 +78,7 @@ class HostWebview implements Webview {
   }
   set options(value: WebviewOptions) {
     this._options = value
-    const dto: IWebviewOptionsDto = {
-      ...(value.enableScripts !== undefined ? { enableScripts: value.enableScripts } : {}),
-      ...(value.localResourceRoots !== undefined
-        ? {
-            localResourceRoots: value.localResourceRoots.map((r) => URI.revive(r)?.fsPath ?? ''),
-          }
-        : {}),
-    }
-    void this._rpc.$setWebviewOptions(this._panelHandle, dto)
+    void this._rpc.$setWebviewOptions(this._panelHandle, webviewOptionsToDto(value))
   }
 
   get html(): string {
@@ -105,27 +109,104 @@ class HostWebviewPanel implements WebviewPanel {
   readonly diffContext?: WebviewDiffContext
   private readonly _onDidDispose = new Emitter<void>()
   readonly onDidDispose: Event<void> = this._onDidDispose.event
+  private readonly _onDidChangeViewState = new Emitter<WebviewPanelOnDidChangeViewStateEvent>()
+  readonly onDidChangeViewState: Event<WebviewPanelOnDidChangeViewStateEvent> =
+    this._onDidChangeViewState.event
+  private readonly _rpc: IMainThreadWebviews
   private _disposed = false
+  private _title: string
+  private _active = false
+  private _visible = false
 
   constructor(
     private readonly _panelHandle: number,
     readonly viewType: string,
     rpc: IMainThreadWebviews,
-    diffContext?: WebviewDiffContext,
+    options?: {
+      title?: string
+      /** True for `window.createWebviewPanel` (extension owns the tab). */
+      hostCreated?: boolean
+      diffContext?: WebviewDiffContext
+      /** Called when the renderer confirmed the panel is gone; lets the manager drop it. */
+      onDisposed?: (panel: HostWebviewPanel) => void
+    },
   ) {
+    this._rpc = rpc
+    this._title = options?.title ?? ''
+    this._hostCreated = options?.hostCreated === true
+    this._onDisposed = options?.onDisposed
     this.webview = new HostWebview(_panelHandle, rpc)
-    if (diffContext) this.diffContext = diffContext
+    const dc = options?.diffContext
+    if (dc) this.diffContext = dc
+    // Custom-editor panels are visible the moment they resolve (their tab just
+    // opened); extension-owned panels get their real state from $acceptPanelViewState.
+    if (!this._hostCreated) {
+      this._active = true
+      this._visible = true
+    }
   }
 
-  reveal(): void {
-    // Reveal is renderer-owned; the tab already exists. A no-op host-side for now
-    // (the panel is created because the user opened the file).
+  private readonly _hostCreated: boolean
+  private readonly _onDisposed: ((panel: HostWebviewPanel) => void) | undefined
+  /** Set when the renderer confirmed the tab is gone (acceptPanelDisposed). */
+  private _rendererConfirmed = false
+
+  get panelHandle(): number {
+    return this._panelHandle
+  }
+
+  get title(): string {
+    return this._title
+  }
+  set title(value: string) {
+    if (this._title === value) return
+    this._title = value
+    if (this._hostCreated && !this._disposed) {
+      void this._rpc.$setWebviewTitle(this._panelHandle, value)
+    }
+  }
+
+  get active(): boolean {
+    return this._active
+  }
+  get visible(): boolean {
+    return this._visible
+  }
+
+  reveal(preserveFocus?: boolean): void {
+    // Custom-editor panels: reveal is renderer-owned; the tab already exists (a
+    // no-op host-side). Extension-owned panels ask the renderer to re-activate.
+    if (this._hostCreated && !this._disposed) {
+      void this._rpc.$revealWebviewPanel(this._panelHandle, preserveFocus)
+    }
   }
 
   dispose(): void {
     if (this._disposed) return
     this._disposed = true
+    // Extension-owned: tell the renderer to close the tab — unless the renderer
+    // already confirmed it's gone (acceptPanelDisposed set _rendererConfirmed).
+    if (this._hostCreated && !this._rendererConfirmed) {
+      void this._rpc.$disposeWebviewPanel(this._panelHandle)
+    }
     this._onDidDispose.fire()
+    this._onDisposed?.(this)
+  }
+
+  /** Renderer → host: the panel's tab is gone (user closed it / host disposed). */
+  acceptPanelDisposed(): void {
+    // The renderer already tore the tab down, so dispose() must not echo
+    // $disposeWebviewPanel back.
+    this._rendererConfirmed = true
+    this.dispose()
+  }
+
+  /** Renderer → host: the panel's view state changed (mount/unmount of its view). */
+  acceptPanelViewState(active: boolean, visible: boolean): void {
+    if (this._active === active && this._visible === visible) return
+    this._active = active
+    this._visible = visible
+    if (!this._disposed) this._onDidChangeViewState.fire({ webviewPanel: this })
   }
 
   acceptMessage(message: unknown): void {
@@ -143,6 +224,8 @@ export class HostWebviewManager {
   private readonly _panels = new Map<number, HostWebviewPanel>()
   private readonly _documents = new Map<number, CustomDocument>()
   private _providerHandle = 0
+  /** Negative handle space for extension-owned panels (`createWebviewPanel`). */
+  private _hostPanelHandle = 0
 
   constructor(private readonly _rpc: IMainThreadWebviews) {}
 
@@ -179,16 +262,56 @@ export class HostWebviewManager {
     if (!registered) {
       throw new Error(`no custom-editor provider registered for handle ${providerHandle}`)
     }
-    const panel = new HostWebviewPanel(
-      panelHandle,
-      viewType,
-      this._rpc,
-      diff ? reviveDiffContext(diff) : undefined,
-    )
+    const panel = new HostWebviewPanel(panelHandle, viewType, this._rpc, {
+      ...(diff ? { diffContext: reviveDiffContext(diff) } : {}),
+    })
     this._panels.set(panelHandle, panel)
     const document = await registered.provider.openCustomDocument(uri)
     this._documents.set(panelHandle, document)
     await registered.provider.resolveCustomEditor(document, panel)
+  }
+
+  /**
+   * IExtensionHostBridge.createWebviewPanel — allocate a NEGATIVE handle
+   * (disjoint from the renderer's custom-editor counter), hand back the panel
+   * synchronously, and fire-and-forget the create RPC (options ride in the DTO
+   * so the renderer can build the model in one shot, no ordering race).
+   */
+  createWebviewPanel(
+    viewType: string,
+    title: string,
+    options: WebviewOptions | undefined,
+    showOptions?: IWebviewPanelShowOptionsDto,
+  ): WebviewPanel {
+    const panelHandle = -++this._hostPanelHandle
+    const panel = new HostWebviewPanel(panelHandle, viewType, this._rpc, {
+      title,
+      hostCreated: true,
+      onDisposed: (p) => {
+        // Only drop the map entry if it's still this panel (an accept may have
+        // raced a re-create at the same handle in a pathological host).
+        if (this._panels.get(panelHandle) === p) this._panels.delete(panelHandle)
+      },
+    })
+    this._panels.set(panelHandle, panel)
+    void this._rpc.$createWebviewPanel(
+      panelHandle,
+      viewType,
+      title,
+      webviewOptionsToDto(options),
+      showOptions,
+    )
+    return panel
+  }
+
+  /** IExtHostWebviews.$acceptPanelDisposed — the renderer closed the tab. */
+  acceptPanelDisposed(panelHandle: number): void {
+    this._panels.get(panelHandle)?.acceptPanelDisposed()
+  }
+
+  /** IExtHostWebviews.$acceptPanelViewState — mount/unmount of the panel's view. */
+  acceptPanelViewState(panelHandle: number, active: boolean, visible: boolean): void {
+    this._panels.get(panelHandle)?.acceptPanelViewState(active, visible)
   }
 
   /** IExtHostWebviews.$onDidReceiveMessage */

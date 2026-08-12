@@ -7,6 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { type monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
+import type { IInlayHintDto } from '@universe-editor/extensions-common'
 import type {
   CodeAction,
   CodeLens,
@@ -21,7 +22,6 @@ import type {
   DocumentSymbol,
   FoldingRange,
   Hover,
-  InlayHint,
   InlayHintLabelPart,
   Location,
   LocationLink,
@@ -427,14 +427,49 @@ function codeForMarker(
 }
 
 /**
+ * Monaco IMarker → LSP Diagnostic — the inverse of {@link diagnosticToMarker}
+ * (MarkerSeverity 8/4/2/1 → 1/2/3/4, 1-based positions → 0-based). Unknown
+ * severities fall back to Error, matching Monaco's own marker→problem mapping. A
+ * `{ value, target }` code round-trips into `code` + `codeDescription.href`;
+ * tags round-trip into LSP DiagnosticTags. `relatedInformation` is dropped (the
+ * forward mapping never carries it).
+ */
+export function markerToLspDiagnostic(m: monaco.editor.IMarker): Diagnostic {
+  const severity =
+    m.severity === 8 ? 1 : m.severity === 4 ? 2 : m.severity === 2 ? 3 : m.severity === 1 ? 4 : 1
+  const tags = (m.tags ?? [])
+    .map((t) => (t === 1 ? 1 : t === 2 ? 2 : undefined))
+    .filter((t): t is 1 | 2 => t !== undefined)
+  // `diagnosticToMarker` stringifies a numeric code; undo that so the value
+  // round-trips into the same shape the extension originally published.
+  const rawCode =
+    m.code === undefined ? undefined : typeof m.code === 'string' ? m.code : m.code.value
+  const code = rawCode === undefined ? undefined : /^\d+$/.test(rawCode) ? Number(rawCode) : rawCode
+  return {
+    range: {
+      start: { line: m.startLineNumber - 1, character: m.startColumn - 1 },
+      end: { line: m.endLineNumber - 1, character: m.endColumn - 1 },
+    },
+    message: m.message,
+    severity,
+    ...(m.source !== undefined ? { source: m.source } : {}),
+    ...(code !== undefined ? { code } : {}),
+    ...(typeof m.code === 'object' ? { codeDescription: { href: m.code.target.toString() } } : {}),
+    ...(tags.length > 0 ? { tags } : {}),
+  }
+}
+
+/**
  * LSP WorkspaceEdit (changes map and/or documentChanges) → Monaco WorkspaceEdit.
- * Only text edits are converted (rename never emits file create/rename/delete).
+ * Text edits and create/rename/delete file operations are both converted; the
+ * `documentChanges` order is preserved so interleaved operations apply in the
+ * sequence the server listed them.
  */
 export function workspaceEditToMonaco(
   edit: WorkspaceEdit | null,
   monacoNs: typeof monaco,
 ): monaco.languages.WorkspaceEdit {
-  const edits: monaco.languages.IWorkspaceTextEdit[] = []
+  const edits: (monaco.languages.IWorkspaceTextEdit | monaco.languages.IWorkspaceFileEdit)[] = []
   if (!edit) return { edits }
 
   const pushEdits = (uri: string, textEdits: TextEdit[], version?: number | null): void => {
@@ -452,6 +487,9 @@ export function workspaceEditToMonaco(
     for (const change of edit.documentChanges) {
       if ('textDocument' in change && 'edits' in change) {
         pushEdits(change.textDocument.uri, change.edits as TextEdit[], change.textDocument.version)
+      } else if ('kind' in change) {
+        const fileEdit = resourceOperationToMonaco(change, monacoNs)
+        if (fileEdit) edits.push(fileEdit)
       }
     }
   } else if (edit.changes) {
@@ -460,6 +498,39 @@ export function workspaceEditToMonaco(
     }
   }
   return { edits }
+}
+
+type ResourceOperation = Extract<
+  NonNullable<WorkspaceEdit['documentChanges']>[number],
+  { kind: string }
+>
+
+/** LSP CreateFile/RenameFile/DeleteFile → Monaco IWorkspaceFileEdit, options
+ *  (overwrite / ignoreIfExists / ignoreIfNotExists / recursive) carried through. */
+function resourceOperationToMonaco(
+  op: ResourceOperation,
+  monacoNs: typeof monaco,
+): monaco.languages.IWorkspaceFileEdit | undefined {
+  switch (op.kind) {
+    case 'create':
+      return {
+        newResource: monacoNs.Uri.parse(op.uri),
+        options: { ...op.options },
+      }
+    case 'rename':
+      return {
+        oldResource: monacoNs.Uri.parse(op.oldUri),
+        newResource: monacoNs.Uri.parse(op.newUri),
+        options: { ...op.options },
+      }
+    case 'delete':
+      return {
+        oldResource: monacoNs.Uri.parse(op.uri),
+        options: { ...op.options },
+      }
+    default:
+      return undefined
+  }
 }
 
 /** A workspace symbol flattened for the Ctrl+T quick pick. */
@@ -707,31 +778,59 @@ function inlayHintLabelPartToMonaco(
 }
 
 /**
+ * A Monaco inlay hint carrying its host-side resolve coordinates, so
+ * `resolveInlayHint` can address the original hint object (with its `data`)
+ * in the extension host's cache (mirrors MonacoCodeLens).
+ */
+export interface MonacoInlayHint extends monaco.languages.InlayHint {
+  _resolveCacheId?: number
+  _resolveIndex?: number
+}
+
+function inlayHintToMonaco(hint: IInlayHintDto, monacoNs: typeof monaco): MonacoInlayHint {
+  const tooltip = documentationToMonaco(hint.tooltip)
+  return {
+    position: { lineNumber: hint.position.line + 1, column: hint.position.character + 1 },
+    label: Array.isArray(hint.label)
+      ? hint.label.map((p) => inlayHintLabelPartToMonaco(p, monacoNs))
+      : hint.label,
+    ...(hint.kind !== undefined ? { kind: hint.kind as monaco.languages.InlayHintKind } : {}),
+    ...(tooltip !== undefined ? { tooltip } : {}),
+    ...(hint.textEdits ? { textEdits: hint.textEdits.map(textEditToMonaco) } : {}),
+    ...(hint.paddingLeft !== undefined ? { paddingLeft: hint.paddingLeft } : {}),
+    ...(hint.paddingRight !== undefined ? { paddingRight: hint.paddingRight } : {}),
+    ...(hint.resolveCacheId !== undefined ? { _resolveCacheId: hint.resolveCacheId } : {}),
+    ...(hint.resolveIndex !== undefined ? { _resolveIndex: hint.resolveIndex } : {}),
+  }
+}
+
+/**
  * LSP InlayHint[] → Monaco InlayHintList. Kinds share the LSP/Monaco numeric
  * values (1 = Type, 2 = Parameter), so the kind passes through with a cast. The
- * LSP `data` field (the resolve-request payload) is dropped — hints are one-shot
- * this iteration, their label/tooltip arrive complete.
+ * LSP `data` field never crosses the wire — the host keeps the original hints
+ * and the DTOs carry resolve coordinates (`resolveCacheId`/`resolveIndex`) when
+ * the provider supports lazy resolve.
  */
 export function inlayHintsToMonaco(
-  hints: InlayHint[] | null,
+  hints: IInlayHintDto[] | null,
   monacoNs: typeof monaco,
 ): monaco.languages.InlayHintList {
   if (!hints) return { hints: [], dispose: () => undefined }
   return {
-    hints: hints.map((h) => {
-      const tooltip = documentationToMonaco(h.tooltip)
-      return {
-        position: { lineNumber: h.position.line + 1, column: h.position.character + 1 },
-        label: Array.isArray(h.label)
-          ? h.label.map((p) => inlayHintLabelPartToMonaco(p, monacoNs))
-          : h.label,
-        ...(h.kind !== undefined ? { kind: h.kind as monaco.languages.InlayHintKind } : {}),
-        ...(tooltip !== undefined ? { tooltip } : {}),
-        ...(h.textEdits ? { textEdits: h.textEdits.map(textEditToMonaco) } : {}),
-        ...(h.paddingLeft !== undefined ? { paddingLeft: h.paddingLeft } : {}),
-        ...(h.paddingRight !== undefined ? { paddingRight: h.paddingRight } : {}),
-      }
-    }),
+    hints: hints.map((h) => inlayHintToMonaco(h, monacoNs)),
     dispose: () => undefined,
   }
+}
+
+/** Fold a resolved inlay-hint DTO onto the Monaco hint Monaco passes to
+ *  `resolveInlayHint`, re-running the full conversion (label parts, tooltip,
+ *  textEdits…). Falls back to the original hint when the host's cache entry is
+ *  gone (a newer provide round superseded it). */
+export function resolvedInlayHintToMonaco(
+  resolved: IInlayHintDto | null,
+  original: monaco.languages.InlayHint,
+  monacoNs: typeof monaco,
+): monaco.languages.InlayHint {
+  if (!resolved) return original
+  return { ...inlayHintToMonaco(resolved, monacoNs) }
 }

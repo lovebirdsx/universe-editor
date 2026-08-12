@@ -121,6 +121,22 @@ const mcpServerContributionSchema = z
   })
   .passthrough()
 
+const viewContainerContributionSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  icon: z.string().min(1),
+})
+
+const viewContributionSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  when: z.string().optional(),
+})
+
+const viewsContainersSchema = z.object({
+  activitybar: z.array(viewContainerContributionSchema).optional(),
+})
+
 const contributesSchema = z
   .object({
     commands: z.array(commandContributionSchema).optional(),
@@ -135,6 +151,8 @@ const contributesSchema = z
     productIconThemes: z.array(productIconThemeSchema).optional(),
     grammars: z.array(grammarSchema).optional(),
     mcpServers: z.record(mcpServerContributionSchema).optional(),
+    viewsContainers: viewsContainersSchema.optional(),
+    views: z.record(z.array(viewContributionSchema)).optional(),
   })
   // Tolerate contribution points we don't understand yet (forward-compat).
   .passthrough()

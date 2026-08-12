@@ -1036,3 +1036,92 @@ describe('QuickPickPanel simple-file-dialog extras', () => {
     expect(onAccept).toHaveBeenCalledWith([folders[1]], { ctrl: false, alt: false })
   })
 })
+
+describe('QuickPickPanel multi-select (canSelectMany)', () => {
+  const multiItems = [
+    { id: 'a', label: 'Alpha' },
+    { id: 'b', label: 'Beta' },
+    { id: 'c', label: 'Gamma' },
+  ]
+
+  function makeMultiState(extra: Partial<QuickPickState> = {}): QuickPickState {
+    return {
+      type: 'pick',
+      items: multiItems,
+      prefix: undefined,
+      canSelectMany: true,
+      selectedItems: [],
+      onSelectionChange: vi.fn(),
+      onAccept: vi.fn(),
+      onHide: vi.fn(),
+      ...extra,
+    }
+  }
+
+  it('renders a checkbox per row reflecting selectedItems', () => {
+    render(
+      <QuickPickPanel
+        state={makeMultiState({ selectedItems: [multiItems[1]!] })}
+        onClose={() => undefined}
+      />,
+    )
+    const boxes = screen.getAllByTestId('quick-input-item-checkbox')
+    expect(boxes).toHaveLength(3)
+    expect(boxes.map((b) => b.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false'])
+  })
+
+  it('renders no checkboxes when canSelectMany is off', () => {
+    render(<QuickPickPanel state={makeState({ prefix: undefined })} onClose={() => undefined} />)
+    expect(screen.queryByTestId('quick-input-item-checkbox')).toBeNull()
+  })
+
+  it('clicking a checkbox proposes the toggled set without accepting the row', () => {
+    const onSelectionChange = vi.fn()
+    const onAccept = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeMultiState({ onSelectionChange, onAccept })}
+        onClose={() => undefined}
+      />,
+    )
+    fireEvent.click(screen.getAllByTestId('quick-input-item-checkbox')[0]!)
+    expect(onSelectionChange).toHaveBeenCalledWith([multiItems[0]])
+    expect(onAccept).not.toHaveBeenCalled()
+  })
+
+  it('clicking a checked checkbox proposes removing it', () => {
+    const onSelectionChange = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeMultiState({ selectedItems: [multiItems[0]!], onSelectionChange })}
+        onClose={() => undefined}
+      />,
+    )
+    fireEvent.click(screen.getAllByTestId('quick-input-item-checkbox')[0]!)
+    expect(onSelectionChange).toHaveBeenCalledWith([])
+  })
+
+  it('Space toggles the focused row in a locally-filtered multi-select picker', () => {
+    const onSelectionChange = vi.fn()
+    render(
+      <QuickPickPanel state={makeMultiState({ onSelectionChange })} onClose={() => undefined} />,
+    )
+    // autoFocusFirstItem defaults to true: the first row is focused.
+    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: ' ' })
+    expect(onSelectionChange).toHaveBeenCalledWith([multiItems[0]])
+  })
+
+  it('Space stays a typed character in externally-filtered pickers (file dialog)', () => {
+    const onSelectionChange = vi.fn()
+    const onAccept = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeMultiState({ filterExternally: true, onSelectionChange, onAccept })}
+        onClose={() => undefined}
+      />,
+    )
+    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: ' ' })
+    expect(onSelectionChange).not.toHaveBeenCalled()
+    expect(onAccept).not.toHaveBeenCalled()
+  })
+})

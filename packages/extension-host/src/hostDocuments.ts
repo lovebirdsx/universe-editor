@@ -50,6 +50,11 @@ export class HostTextDocument implements TextDocument {
     return this._doc.version
   }
 
+  /** An untitled document has no file identity yet — the scheme is the tell. */
+  get isUntitled(): boolean {
+    return this.uri.scheme === 'untitled'
+  }
+
   getText(): string {
     return this._doc.getText()
   }

@@ -288,7 +288,7 @@ class FakeHostService implements IHostServiceType {
   readonly platform = 'win32' as const
   readonly onDidChangeMaximized = new Emitter<boolean>().event
   readonly onDidChangeColorScheme = new Emitter<boolean>().event
-  openResult: URI | UriComponents | null = null
+  openResult: (URI | UriComponents)[] | null = null
   saveResult: URI | UriComponents | null = null
   readonly openCalls: IShowOpenFileOptions[] = []
   readonly saveCalls: IShowSaveFileOptions[] = []
@@ -316,6 +316,8 @@ class FakeHostService implements IHostServiceType {
       node: '20.0.0',
       chromium: '128.0.0',
       v8: '12.0.0',
+      machineId: 'machine-1',
+      appRoot: '/apps/universe',
     }
   }
   async showOpenFileDialog(opts?: IShowOpenFileOptions) {
@@ -349,12 +351,12 @@ class FakeHostService implements IHostServiceType {
 
 class FakeFileDialogService implements IFileDialogServiceType {
   declare readonly _serviceBrand: undefined
-  openResult: URI | undefined
+  openResult: URI[] | undefined
   saveResult: URI | undefined
   readonly openCalls: IFileDialogOptions[] = []
   readonly saveCalls: IFileDialogOptions[] = []
 
-  async showOpenDialog(opts: IFileDialogOptions): Promise<URI | undefined> {
+  async showOpenDialog(opts: IFileDialogOptions): Promise<URI[] | undefined> {
     this.openCalls.push(opts)
     return this.openResult
   }
@@ -419,6 +421,9 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   readonly onDidTriggerOk = this._onDidTriggerOk.event
   valueSelection: [number, number] | undefined
   activeItems: readonly T[] = []
+  selectedItems: readonly T[] = []
+  canSelectMany = false
+  readonly onDidChangeSelection = new Emitter<T[]>().event
   title: string | undefined
   buttons: readonly IQuickInputButton[] = []
   okLabel: string | undefined
@@ -743,10 +748,23 @@ describe('fileActions', () => {
     it('opens the picked file in the active group', async () => {
       const h = makeHarness()
       const picked = URI.file('/picked.txt')
-      h.fileDialog.openResult = picked
+      h.fileDialog.openResult = [picked]
       await run(h, OpenFileAction.ID)
       expect(h.group.opened).toHaveLength(1)
       expect(h.group.opened[0]?.resource?.toString()).toBe(picked.toString())
+    })
+
+    it('asks for a multi-select dialog and opens every picked file', async () => {
+      const h = makeHarness()
+      const first = URI.file('/first.txt')
+      const second = URI.file('/second.txt')
+      h.fileDialog.openResult = [first, second]
+      await run(h, OpenFileAction.ID)
+      expect(h.fileDialog.openCalls[0]?.canSelectMany).toBe(true)
+      expect(h.group.opened.map((i) => i.resource?.toString())).toEqual([
+        first.toString(),
+        second.toString(),
+      ])
     })
 
     it('does nothing when the user cancels the picker', async () => {
@@ -1044,7 +1062,7 @@ describe('fileActions', () => {
       const h = makeHarness({ root })
       h.fs.files.add(source.toString())
       h.fs.dirs.set(dest.toString(), [])
-      h.fileDialog.openResult = dest
+      h.fileDialog.openResult = [dest]
 
       await run(h, MoveFileAction.ID, { target: source, isDirectory: false })
 

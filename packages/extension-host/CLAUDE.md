@@ -148,7 +148,8 @@
 10. **DI 注册顺序**（`main.tsx`）：`ExtensionEnablementService` 必须 **先于** `ExtensionHostClientService` 与 `ExtensionsWorkbenchService`（两者都注入它）。
 11. **Action2 async run 的 accessor 首个 await 即失效**：enablement 命令在第一个 `await` 前同步取完 service（快照传后续 helper），见 [[action2-async-accessor-invalidation]]。
 12. **撤销信任必须重启 host，授予不用**：已激活扩展无法就地卸载，撤销走 `_restart`；授予是动态 `$onDidGrantWorkspaceTrust` + host `replayFiredEvents()` 重放激活事件。built-in 恒豁免门控（scanner `builtin` 标志），别给内置加信任判断。
-13. **teardown 无条件清全局能力（单 host 下是对的）**：`_teardownConnection` 里 `resetSourceControls()` + `timeline.reset()` + `webview.reset(kind)` 无条件调——单 host 只有这一个连接，teardown 时清全局状态不会误伤其它 tier。临终 host 的 `$unregisterSourceControl` fire-and-forget 消息可能随 IPC 关闭丢失，必须主动清，否则视图残留上一 workspace 的 provider。
+13. **teardown 无条件清全局能力（单 host 下是对的）**：`_teardownConnection` 里 `resetSourceControls()` + `timeline.reset()` + `treeViews.reset()` + `webview.reset(kind)` 无条件调——单 host 只有这一个连接，teardown 时清全局状态不会误伤其它 tier。临终 host 的 `$unregisterSourceControl` fire-and-forget 消息可能随 IPC 关闭丢失，必须主动清，否则视图残留上一 workspace 的 provider。
+14. **可选 wire 参数的 undefined 过 newline-JSON 变 null**：`$getChildren(viewId, undefined)` 序列化成 `["id",null]`，接收端 `!== undefined` 判定会把 null 当实参（TreeViews 根拉取曾被当 stale handle 返回 `[]`）。调用点省略该参数，接收端用 `== null` 判"未传"。
 
 ### E2E
 

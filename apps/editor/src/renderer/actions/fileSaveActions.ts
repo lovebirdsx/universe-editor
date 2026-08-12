@@ -22,6 +22,7 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
 import { parentOf } from '../services/explorer/explorerTreeUtils.js'
+import { DidSaveNotification } from '../services/extensions/DidSaveNotification.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
 
 export class SaveFileAction extends Action2 {
@@ -93,6 +94,16 @@ export class SaveFileAsAction extends Action2 {
     const newInput = inst.createInstance(FileEditorInput, picked)
     openInLockAwareGroup(groups, newInput, { activate: true })
     groups.activeGroup.closeEditor(active)
+    // An untitled buffer's identity ends at Save-As: the new file document takes
+    // over. Dispose the old model so the mirror pipeline pushes
+    // `$acceptDocumentClose(untitled)` — the extension host may still hold its
+    // acquire ref, so a plain release would leave the dead buffer alive.
+    if (active instanceof UntitledEditorInput) {
+      MonacoModelRegistry.forceDispose(active.resource)
+    }
+    // The replacement editor mounts asynchronously; the notification pipeline
+    // waits for the mirror's open push before naming the URI to the host.
+    DidSaveNotification.notify(picked)
   }
 }
 

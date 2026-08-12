@@ -4,9 +4,11 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  collectFilterExtensions,
   completePath,
   endsWithSeparator,
   expandTilde,
+  fileExtension,
   findCompletion,
   isDeletion,
   isDeletionEdit,
@@ -49,6 +51,63 @@ describe('prepareEntries', () => {
     expect(
       prepareEntries(input, { allowFiles: true, showDotFiles: true }).map((e) => e.name),
     ).toEqual(['.git', 'src'])
+  })
+
+  it('drops files whose extension is outside fileExts but keeps directories', () => {
+    const input = [entry('src', true), entry('notes.txt', false), entry('pic.png', false)]
+    const result = prepareEntries(input, {
+      allowFiles: true,
+      showDotFiles: false,
+      fileExts: new Set(['txt']),
+    })
+    expect(result.map((e) => e.name)).toEqual(['src', 'notes.txt'])
+  })
+
+  it('matches fileExts case-insensitively', () => {
+    const input = [entry('Notes.TXT', false)]
+    const result = prepareEntries(input, {
+      allowFiles: true,
+      showDotFiles: false,
+      fileExts: new Set(['txt']),
+    })
+    expect(result.map((e) => e.name)).toEqual(['Notes.TXT'])
+  })
+})
+
+describe('fileExtension', () => {
+  it('returns the lowercased extension without the dot', () => {
+    expect(fileExtension('Notes.TXT')).toBe('txt')
+    expect(fileExtension('archive.tar.gz')).toBe('gz')
+  })
+
+  it('returns empty for dotfiles and names without a dot', () => {
+    expect(fileExtension('.gitignore')).toBe('')
+    expect(fileExtension('README')).toBe('')
+  })
+})
+
+describe('collectFilterExtensions', () => {
+  it('unions all groups, lowercasing and tolerating leading dots', () => {
+    const exts = collectFilterExtensions([
+      { name: 'Images', extensions: ['PNG', '.jpg'] },
+      { name: 'Text', extensions: ['txt'] },
+    ])
+    expect(exts).toEqual(new Set(['png', 'jpg', 'txt']))
+  })
+
+  it('returns undefined when there is nothing to filter by', () => {
+    expect(collectFilterExtensions(undefined)).toBeUndefined()
+    expect(collectFilterExtensions([])).toBeUndefined()
+    expect(collectFilterExtensions([{ name: 'Empty', extensions: [] }])).toBeUndefined()
+  })
+
+  it('a `*` extension in any group disables filtering', () => {
+    expect(
+      collectFilterExtensions([
+        { name: 'Images', extensions: ['png'] },
+        { name: 'All Files', extensions: ['*'] },
+      ]),
+    ).toBeUndefined()
   })
 })
 

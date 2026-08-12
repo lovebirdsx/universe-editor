@@ -11,7 +11,13 @@
 
 import type { ScmApi, SourceControl } from './scm.js'
 import type { TimelineProvider } from './timeline.js'
-import type { CustomEditorOptions, CustomReadonlyEditorProvider } from './webview.js'
+import type { TreeDataProvider, TreeView, TreeViewOptions } from './treeView.js'
+import type {
+  CustomEditorOptions,
+  CustomReadonlyEditorProvider,
+  WebviewOptions,
+  WebviewPanel,
+} from './webview.js'
 import type { CancellationToken, Disposable, Event } from './util.js'
 import { Uri, type UriComponents } from './uri.js'
 import { asRelativePathImpl, workspaceFolderName } from './workspacePaths.js'
@@ -44,6 +50,7 @@ import type {
 
 export * from './scm.js'
 export * from './timeline.js'
+export * from './treeView.js'
 export * from './webview.js'
 
 /** Re-exported LSP types that appear in language-provider signatures, so plugin
@@ -53,8 +60,12 @@ export type {
   CompletionList,
   CodeAction,
   CodeLens,
+  CreateFile,
+  CreateFileOptions,
   Definition,
   DefinitionLink,
+  DeleteFile,
+  DeleteFileOptions,
   Diagnostic,
   DocumentHighlight,
   DocumentLink,
@@ -68,11 +79,14 @@ export type {
   MarkupContent,
   Position,
   Range,
+  RenameFile,
+  RenameFileOptions,
   SelectionRange,
   SemanticTokens,
   SemanticTokensLegend,
   SignatureHelp,
   SymbolInformation,
+  TextDocumentEdit,
   TextEdit,
   WorkspaceEdit,
   WorkspaceSymbol,
@@ -89,12 +103,15 @@ export { InlayHintKind } from 'vscode-languageserver-types'
 /** Semantic version of this API surface. The host checks `engines.universe`.
  *  Bumping this is governed by COMPATIBILITY.md — keep it in sync with the
  *  package.json version and the contract test's frozen snapshot. */
-export const version = '0.9.0'
+export const version = '0.12.0'
 
 export { CancellationTokenSource, Disposable, EventEmitter } from './util.js'
 export type { CancellationToken, Event } from './util.js'
 export { Uri } from './uri.js'
 export type { UriComponents } from './uri.js'
+export { RelativePattern } from './relativePattern.js'
+export type { GlobPattern, RelativePatternBase } from './relativePattern.js'
+import type { GlobPattern } from './relativePattern.js'
 
 /** Per-extension key/value store handed to `activate` via ExtensionContext. */
 export interface Memento {
@@ -208,14 +225,12 @@ export interface OpenDialogOptions {
   openLabel?: string
   canSelectFiles?: boolean
   canSelectFolders?: boolean
-  /**
-   * Accepted for compatibility; the current dialog picks a single entry, so
-   * the result holds at most one Uri either way.
-   */
+  /** When true, the user may pick several entries; the result holds them all. */
   canSelectMany?: boolean
   /**
-   * Accepted for compatibility; the current dialog does not filter the listed
-   * entries by extension.
+   * File-type filters shown in the dialog (`{ 'Images': ['png', 'jpg'] }`).
+   * Entries whose extension matches none of the groups are hidden; a group
+   * containing `*` matches everything.
    */
   filters?: Record<string, string[]>
   readonly title?: string
@@ -296,6 +311,17 @@ export interface WindowApi {
    *  leaves all text editors. The editor is a fresh snapshot, as from
    *  {@link WindowApi.getActiveTextEditor}. */
   readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined>
+  /** The currently visible text editors — one per editor group (its active
+   *  editor), so a split view yields one entry per side. Custom editors never
+   *  appear. Each entry is a snapshot (same semantics as
+   *  {@link WindowApi.getActiveTextEditor}): read fresh after
+   *  {@link WindowApi.onDidChangeVisibleTextEditors} rather than holding handles
+   *  long-term. */
+  readonly visibleTextEditors: readonly TextEditor[]
+  /** Fires when the set of visible text editors changes (tab switched, group
+   *  opened/closed). Content or selection edits inside an already-visible editor
+   *  do not fire this event. The array carries fresh snapshots. */
+  readonly onDidChangeVisibleTextEditors: Event<readonly TextEditor[]>
   /**
    * Open the document at `target` in a text editor and resolve its snapshot.
    * A `Uri`/string target is loaded like {@link WorkspaceApi.openTextDocument}
@@ -324,6 +350,35 @@ export interface WindowApi {
     provider: CustomReadonlyEditorProvider,
     options?: CustomEditorOptions,
   ): Disposable
+  /**
+   * Create an extension-owned webview panel (the workbench mirrors it as an
+   * editor tab). Unlike a custom editor, the extension drives the lifecycle:
+   * fill `panel.webview.html`, `reveal()` to re-activate, `dispose()` to close.
+   * Differences from VSCode: there is no `ViewColumn` argument (the tab opens in
+   * the active group); `retainContextWhenHidden` is not supported (the iframe is
+   * not rebuilt on reveal — the panel's html/options persist); and there is no
+   * `WebviewPanelSerializer`, so a panel is not restored after a window reload
+   * (recreate it on next activation).
+   */
+  createWebviewPanel(
+    viewType: string,
+    title: string,
+    showOptions?: { preserveFocus?: boolean },
+    options?: WebviewOptions,
+  ): WebviewPanel
+  /**
+   * Register a data provider for a view declared via `contributes.views`
+   * (`viewId` is the manifest view id). The workbench pulls children lazily and
+   * re-pulls the whole view when the provider fires `onDidChangeTreeData`.
+   */
+  registerTreeDataProvider<T>(viewId: string, provider: TreeDataProvider<T>): Disposable
+  /**
+   * Same registration as {@link WindowApi.registerTreeDataProvider}, plus a
+   * {@link TreeView} handle mirroring the view's visibility / selection /
+   * expansion back to the extension. Differences from VSCode: no `reveal`, no
+   * `title`/`description`/`message`, no badges, no drag & drop.
+   */
+  createTreeView<T>(viewId: string, options: TreeViewOptions<T>): TreeView<T>
 }
 
 /** A text document open in the editor. URIs/positions are LSP-shaped. */
@@ -332,6 +387,8 @@ export interface TextDocument {
   readonly languageId: string
   /** Monotonic version, bumped on every edit. */
   readonly version: number
+  /** True when the document has no file identity yet (its uri scheme is `untitled`). */
+  readonly isUntitled: boolean
   getText(): string
 }
 
@@ -514,16 +571,17 @@ export interface WorkspaceApi {
   /**
    * Find files in the workspace matching the `include` glob (matched against
    * workspace-relative paths; a pattern without a slash matches the basename at
-   * any depth). Only string glob patterns are supported this iteration — no
-   * RelativePattern. `exclude`: one glob, `null` to disable exclusion entirely,
-   * or omit to use the configured search excludes (files.exclude ∪
-   * search.exclude). Cancellation is best-effort: an in-flight search is not
-   * aborted across the RPC boundary; its late result is discarded and the
-   * promise resolves with an empty list.
+   * any depth). Pass a {@link RelativePattern} to root the enumeration at its
+   * `base` folder — which must lie inside the workspace — and match `pattern`
+   * against base-relative paths. `exclude`: one glob (a RelativePattern scopes
+   * the exclusion to its own base), `null` to disable exclusion entirely, or
+   * omit to use the configured search excludes (files.exclude ∪
+   * search.exclude). Cancelling `token` stops the underlying enumeration; the
+   * promise then resolves with an empty list.
    */
   findFiles(
-    include: string,
-    exclude?: string | null,
+    include: GlobPattern,
+    exclude?: GlobPattern | null,
     maxResults?: number,
     token?: CancellationToken,
   ): Promise<Uri[]>
@@ -549,15 +607,26 @@ export interface WorkspaceApi {
    * document model without showing it: the document joins the same live mirror
    * as any open editor, so it tracks later edits and fires
    * {@link WorkspaceApi.onDidOpenTextDocument} when it arrives. Rejects when the
-   * target can't be read or isn't a `file:` URI.
+   * target can't be read or isn't a `file:`/`untitled:` URI.
+   *
+   * An `untitled:` URI creates a never-on-disk document with that identity —
+   * note (unlike VSCode) its path is only an identifier here; it does not seed
+   * the later Save-As dialog.
+   *
+   * The options overload creates an untitled document (`isUntitled` is true,
+   * uri scheme `untitled`) with the given language and initial content.
    */
   openTextDocument(target: Uri | string): Promise<TextDocument>
+  openTextDocument(options?: { language?: string; content?: string }): Promise<TextDocument>
   /**
    * Apply a {@link WorkspaceEdit} across files. Text edits land on the live
    * editor models (undoable); files that aren't open are read, patched and
-   * written back on disk. Resolves false when the edit could not be applied.
-   * This iteration supports text edits only — an edit containing file
-   * create/rename/delete operations is rejected wholesale (resolves false).
+   * written back on disk. `documentChanges` may also carry file operations —
+   * {@link CreateFile} / {@link RenameFile} / {@link DeleteFile} entries — which
+   * run through the file system in array order together with the text edits
+   * (honouring `overwrite` / `ignoreIfExists` / `ignoreIfNotExists` /
+   * `recursive`). Resolves false when any entry fails; entries already applied
+   * are not rolled back.
    */
   applyEdit(edit: WorkspaceEdit): Promise<boolean>
   /**
@@ -577,14 +646,18 @@ export interface WorkspaceApi {
    */
   readonly onDidChangeConfiguration: Event<ConfigurationChangeEvent>
   /**
-   * Watch workspace files for changes. Only files inside the workspace folder
-   * are observed, and `globPattern` is matched against workspace-relative
-   * paths (a pattern without a slash matches the basename at any depth); only
-   * string globs are supported this iteration — no RelativePattern. Events
-   * flow only while at least one watcher is alive; dispose to unsubscribe.
+   * Watch workspace files for changes. `globPattern` is matched against
+   * workspace-relative paths (a pattern without a slash matches the basename
+   * at any depth). A {@link RelativePattern} scopes the watch to its `base`
+   * folder (`pattern` matched against base-relative paths); a base outside
+   * the workspace folder is watched too, via an out-of-workspace watch the
+   * editor arms while the watcher is alive. An absolute glob string (e.g.
+   * `D:\logs\**\*.log`) is split the same way: its literal root becomes the
+   * base. Events flow only while at least one watcher is alive; dispose to
+   * unsubscribe.
    */
   createFileSystemWatcher(
-    globPattern: string,
+    globPattern: GlobPattern,
     ignoreCreateEvents?: boolean,
     ignoreChangeEvents?: boolean,
     ignoreDeleteEvents?: boolean,
@@ -689,6 +762,13 @@ export interface EnvApi {
   readonly sessionId: string
   /** The URI scheme the OS routes to this application (its deep-link scheme). */
   readonly uriScheme: string
+  /**
+   * An anonymous id unique to this machine: a random UUID generated once and
+   * persisted, stable across restarts and updates.
+   */
+  readonly machineId: string
+  /** Absolute path of the application install root. */
+  readonly appRoot: string
   /** The OS clipboard, text only. */
   readonly clipboard: Clipboard
   /**
@@ -704,7 +784,11 @@ export interface EnvApi {
  * activation state, not a snapshot taken when the handle was obtained.
  */
 export interface Extension<T = unknown> {
-  /** The extension id, `<publisher>.<name>`. */
+  /**
+   * The extension id: `<publisher>.<name>` when the manifest declares a
+   * publisher (e.g. `'universe.universe-pdf'`), otherwise the bare `name`
+   * (e.g. `'@universe-editor/typescript'`).
+   */
   readonly id: string
   /** Absolute path of the extension's install directory. */
   readonly extensionPath: string
@@ -722,7 +806,11 @@ export interface Extension<T = unknown> {
 export interface ExtensionsApi {
   /** Every installed extension (built-in and external). */
   readonly all: readonly Extension[]
-  /** Look up an extension by id, e.g. `universe.typescript`. */
+  /**
+   * Look up an extension by id, e.g. `'universe.universe-pdf'`. The id is
+   * `<publisher>.<name>` when the manifest declares a publisher, otherwise the
+   * bare `name` (e.g. `'@universe-editor/typescript'`).
+   */
   getExtension<T = unknown>(extensionId: string): Extension<T> | undefined
   /**
    * Fires when the installed extension set changes. Note: this product applies
@@ -916,14 +1004,23 @@ export interface OnTypeFormattingEditProvider {
 
 /**
  * Provides inlay hints — inline annotations (e.g. parameter names, inferred
- * types) rendered inside the code. One-shot: a hint's label and tooltip must be
- * fully populated by `provideInlayHints`; there is no lazy resolve round trip
- * (an LSP hint's `data` field is dropped). Fire `onDidChangeInlayHints` to make
- * the editor re-request hints (e.g. after a config change).
+ * types) rendered inside the code. Two-phase like CodeLens: `provideInlayHints`
+ * may return hints with a minimal label, and the editor calls
+ * `resolveInlayHint` lazily for the hints actually shown, handing back the very
+ * object the provider returned (its `data` payload included — `data` never
+ * leaves the extension host). Fire `onDidChangeInlayHints` to make the editor
+ * re-request hints (e.g. after a config change).
  */
 export interface InlayHintsProvider {
   onDidChangeInlayHints?: Event<void>
   provideInlayHints(document: TextDocument, range: Range): ProviderResult<InlayHint[]>
+  /**
+   * Fill in the expensive parts of a hint (label parts' tooltips, `tooltip`,
+   * `textEdits`) just before it is rendered. Receives the original object
+   * returned by `provideInlayHints`; return it mutated or a new hint. Without
+   * this method hints render exactly as provided.
+   */
+  resolveInlayHint?(hint: InlayHint): ProviderResult<InlayHint>
 }
 
 /**
@@ -1052,6 +1149,15 @@ export interface AiApi {
  */
 export type LanguageServerStatus = 'starting' | 'ready' | 'error'
 
+/** Fired by {@link LanguagesApi.onDidChangeDiagnostics}. */
+export interface DiagnosticChangeEvent {
+  /**
+   * The uris of the documents whose diagnostics changed — any owner, extension
+   * collections and built-in language services alike.
+   */
+  readonly uris: readonly Uri[]
+}
+
 /** The `languages` namespace: register language feature providers with the editor. */
 export interface LanguagesApi {
   registerDefinitionProvider(selector: DocumentSelector, provider: DefinitionProvider): Disposable
@@ -1133,6 +1239,24 @@ export interface LanguagesApi {
   setLanguageServerStatus(id: string, status: LanguageServerStatus): void
   /** The ids of every language the editor currently knows (e.g. `'typescript'`). */
   getLanguages(): Promise<string[]>
+  /**
+   * Every diagnostic the editor currently shows — all owners, meaning every
+   * extension's diagnostic collections plus the built-in language services
+   * (VSCode's all-sources semantics, not just this extension's own collection).
+   * With `resource`, only that document's diagnostics are returned.
+   *
+   * Unlike VSCode's synchronous version this returns a promise: the markers
+   * live in the renderer process, so reading them crosses the extension-host
+   * bridge (the same reason {@link getLanguages} is async).
+   */
+  getDiagnostics(resource: Uri): Promise<[Uri, Diagnostic[]][]>
+  getDiagnostics(): Promise<[Uri, Diagnostic[]][]>
+  /**
+   * Fires when any document's diagnostics change, from any owner. The renderer
+   * batches a burst of marker updates into one event carrying all affected
+   * uris, and pushes only while at least one listener is registered.
+   */
+  readonly onDidChangeDiagnostics: Event<DiagnosticChangeEvent>
 }
 /**
  * Dialog options as they cross the in-process bridge: `defaultUri` is already
@@ -1173,6 +1297,15 @@ interface FileSystemWatcherBridge extends Disposable {
 }
 
 /**
+ * `languages.onDidChangeDiagnostics` payload over the bridge: raw
+ * `UriComponents` re-wrapped into this module's `Uri` before reaching the
+ * extension. KEEP IN SYNC with the producer in `extension-host/src/apiFactory.ts`.
+ */
+interface DiagnosticChangeEventBridge {
+  readonly uris: readonly UriComponents[]
+}
+
+/**
  * The host bridge contract installed on globalThis. KEEP IN SYNC with the
  * producer in `extension-host/src/apiFactory.ts` (same key, same shapes).
  */
@@ -1186,6 +1319,8 @@ interface IExtensionHostBridge {
     sessionId: string
     uriScheme: string
     language: string
+    machineId: string
+    appRoot: string
   }
   clipboardReadText(): Promise<string>
   clipboardWriteText(value: string): Promise<void>
@@ -1218,11 +1353,15 @@ interface IExtensionHostBridge {
     target: UriComponents | string,
     options?: TextDocumentShowOptions,
   ): Promise<TextEditor>
-  openTextDocument(target: UriComponents | string): Promise<TextDocument>
+  openTextDocument(
+    target: UriComponents | string | { language?: string; content?: string } | undefined,
+  ): Promise<TextDocument>
   readonly onDidChangeTextEditorSelection: Event<TextEditorSelectionChangeEvent>
   createSourceControl(id: string, label: string, rootUri?: string): SourceControl
   registerTimelineProvider(scheme: string[], provider: TimelineProvider): Disposable
   getActiveTextEditor(): Promise<TextEditor | undefined>
+  readonly visibleTextEditors: readonly TextEditor[]
+  readonly onDidChangeVisibleTextEditors: Event<readonly TextEditor[]>
   getWorkspaceRoot(): string | undefined
   isWorkspaceTrusted(): boolean
   readonly onDidGrantWorkspaceTrust: Event<void>
@@ -1239,13 +1378,14 @@ interface IExtensionHostBridge {
    * excludes; null → no exclusion at all; a string → that glob. Returns fsPaths.
    */
   findFiles(
-    include: string,
-    exclude: string | null | undefined,
+    include: GlobPattern,
+    exclude: GlobPattern | null | undefined,
     maxResults: number | undefined,
+    token?: CancellationToken,
   ): Promise<string[]>
   applyWorkspaceEdit(edit: WorkspaceEdit): Promise<boolean>
   createFileSystemWatcher(
-    globPattern: string,
+    globPattern: GlobPattern,
     ignoreCreateEvents: boolean,
     ignoreChangeEvents: boolean,
     ignoreDeleteEvents: boolean,
@@ -1264,6 +1404,14 @@ interface IExtensionHostBridge {
     provider: CustomReadonlyEditorProvider,
     options?: CustomEditorOptions,
   ): Disposable
+  createWebviewPanel(
+    viewType: string,
+    title: string,
+    showOptions?: { preserveFocus?: boolean },
+    options?: WebviewOptions,
+  ): WebviewPanel
+  registerTreeDataProvider(viewId: string, provider: TreeDataProvider<unknown>): Disposable
+  createTreeView(viewId: string, options: TreeViewOptions<unknown>): TreeView<unknown>
   registerDefinitionProvider(selector: DocumentSelector, provider: DefinitionProvider): Disposable
   registerReferenceProvider(selector: DocumentSelector, provider: ReferenceProvider): Disposable
   registerImplementationProvider(
@@ -1330,6 +1478,8 @@ interface IExtensionHostBridge {
   createDiagnosticCollection(name?: string): DiagnosticCollection
   setLanguageServerStatus(id: string, status: LanguageServerStatus): void
   getLanguages(): Promise<string[]>
+  getDiagnostics(uri?: UriComponents): Promise<Array<[UriComponents, Diagnostic[]]>>
+  readonly onDidChangeDiagnostics: Event<DiagnosticChangeEventBridge>
   getTextDocuments(): readonly TextDocument[]
   readonly onDidOpenTextDocument: Event<TextDocument>
   readonly onDidChangeTextDocument: Event<TextDocumentChangeEvent>
@@ -1376,6 +1526,12 @@ export const env: EnvApi = {
   },
   get uriScheme() {
     return bridge().getEnvironmentInfo().uriScheme
+  },
+  get machineId() {
+    return bridge().getEnvironmentInfo().machineId
+  },
+  get appRoot() {
+    return bridge().getEnvironmentInfo().appRoot
   },
   clipboard: {
     readText: () => bridge().clipboardReadText(),
@@ -1446,6 +1602,10 @@ export const window: WindowApi = {
       .then((uri) => (uri !== undefined ? Uri.from(uri) : undefined)),
   getActiveTextEditor: () => bridge().getActiveTextEditor(),
   onDidChangeActiveTextEditor: (listener) => bridge().onDidChangeActiveTextEditor(listener),
+  get visibleTextEditors() {
+    return bridge().visibleTextEditors
+  },
+  onDidChangeVisibleTextEditors: (listener) => bridge().onDidChangeVisibleTextEditors(listener),
   showTextDocument: (target, options) =>
     bridge().showTextDocument(
       typeof target === 'string' ? target : 'uri' in target ? target.uri : target.toJSON(),
@@ -1455,6 +1615,14 @@ export const window: WindowApi = {
   createTextEditorDecorationType: (options) => bridge().createTextEditorDecorationType(options),
   registerCustomEditorProvider: (viewType, provider, options) =>
     bridge().registerCustomEditorProvider(viewType, provider, options),
+  createWebviewPanel: (viewType, title, showOptions, options) =>
+    bridge().createWebviewPanel(viewType, title, showOptions, options),
+  registerTreeDataProvider: (viewId, provider) =>
+    bridge().registerTreeDataProvider(viewId, provider),
+  // Elements never cross the in-process bridge — only their host-allocated
+  // handles do — so erasing T to unknown and back is sound.
+  createTreeView: <T>(viewId: string, options: TreeViewOptions<T>): TreeView<T> =>
+    bridge().createTreeView(viewId, options) as unknown as TreeView<T>,
 }
 
 export const scm: ScmApi = {
@@ -1517,6 +1685,14 @@ export const languages: LanguagesApi = {
   createDiagnosticCollection: (name) => bridge().createDiagnosticCollection(name),
   setLanguageServerStatus: (id, status) => bridge().setLanguageServerStatus(id, status),
   getLanguages: () => bridge().getLanguages(),
+  getDiagnostics: (resource?: Uri) =>
+    bridge()
+      .getDiagnostics(resource?.toJSON())
+      .then((entries) =>
+        entries.map(([uri, diagnostics]) => [Uri.from(uri), diagnostics] as [Uri, Diagnostic[]]),
+      ),
+  onDidChangeDiagnostics: (listener) =>
+    bridge().onDidChangeDiagnostics((e) => listener({ uris: e.uris.map((u) => Uri.from(u)) })),
 }
 
 export const workspace: WorkspaceApi = {
@@ -1544,24 +1720,24 @@ export const workspace: WorkspaceApi = {
   },
   findFiles: (include, exclude, maxResults, token) => {
     if (token?.isCancellationRequested) return Promise.resolve([])
-    const pending = bridge().findFiles(include, exclude, maxResults)
+    const pending = bridge().findFiles(include, exclude, maxResults, token)
     const wrap = (paths: string[]): Uri[] => paths.map((p) => Uri.file(p))
-    if (!token) return pending.then(wrap)
-    // The RPC has no cancel channel; a late result is discarded once the token
-    // fires so the caller unblocks immediately (best-effort cancellation).
+    // The token rides the RPC's cancel path and stops the enumeration itself
+    // (see $findFiles in extensions-common); the client promise still settles
+    // immediately with an empty list once cancellation fires.
     return new Promise<Uri[]>((resolve, reject) => {
-      const sub = token.onCancellationRequested(() => {
-        sub.dispose()
+      const sub = token?.onCancellationRequested(() => {
+        sub?.dispose()
         resolve([])
       })
       pending.then(
         (paths) => {
-          sub.dispose()
+          sub?.dispose()
           resolve(wrap(paths))
         },
         (err: unknown) => {
-          sub.dispose()
-          if (token.isCancellationRequested) resolve([])
+          sub?.dispose()
+          if (token?.isCancellationRequested) resolve([])
           else reject(err instanceof Error ? err : new Error(String(err)))
         },
       )
@@ -1581,8 +1757,14 @@ export const workspace: WorkspaceApi = {
   get textDocuments() {
     return bridge().getTextDocuments()
   },
-  openTextDocument: (target) =>
-    bridge().openTextDocument(typeof target === 'string' ? target : target.toJSON()),
+  openTextDocument: (target) => {
+    // The options overload (including a bare `openTextDocument()`) passes
+    // through untouched — the bridge is in-process.
+    if (target === undefined || (typeof target === 'object' && !('scheme' in target))) {
+      return bridge().openTextDocument(target)
+    }
+    return bridge().openTextDocument(typeof target === 'string' ? target : target.toJSON())
+  },
   applyEdit: (edit) => bridge().applyWorkspaceEdit(edit),
   onDidOpenTextDocument: (listener) => bridge().onDidOpenTextDocument(listener),
   onDidChangeTextDocument: (listener) => bridge().onDidChangeTextDocument(listener),

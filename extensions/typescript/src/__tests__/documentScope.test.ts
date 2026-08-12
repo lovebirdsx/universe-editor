@@ -213,6 +213,7 @@ function makeDoc(uri: string, languageId = 'typescript'): TextDocument {
     uri: URI.parse(uri),
     languageId,
     version: 1,
+    isUntitled: false,
     getText: () => 'export const a = 1\n',
   } as TextDocument
 }

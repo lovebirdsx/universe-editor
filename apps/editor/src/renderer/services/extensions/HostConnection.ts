@@ -29,6 +29,7 @@ import {
   type IInstantiationService,
   type ILayoutService,
   type ILogger,
+  type HostPlatform,
   type INotificationService,
   type IOpenerService,
   type IOutputChannel,
@@ -51,6 +52,7 @@ import {
   type IExtHostLanguages,
   type IExtHostScm,
   type IExtHostTimeline,
+  type IExtHostTreeViews,
   type IExtHostWebviews,
   type IExtHostWindow,
   type IExtensionActivationErrorDto,
@@ -75,6 +77,7 @@ import { MainThreadWindow } from './MainThreadWindow.js'
 import type { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import type { IScmService } from './ScmService.js'
 import type { ITimelineService } from '../timeline/TimelineService.js'
+import type { ITreeViewsService } from './TreeViewsService.js'
 import type { IWebviewService } from './WebviewService.js'
 import type { IAiModelService } from '@universe-editor/platform'
 
@@ -105,6 +108,7 @@ export interface HostConnectionDeps {
   readonly instantiation: IInstantiationService
   readonly scm: IScmService
   readonly timeline: ITimelineService
+  readonly treeViews: ITreeViewsService
   readonly languageFeatures: ILanguageFeaturesService
   readonly editorService: IEditorService
   /** Wired with editorService so MainThreadEditor can compare resources. */
@@ -119,6 +123,7 @@ export interface HostConnectionDeps {
   readonly views: IViewsService
   readonly stderr: IOutputChannel
   readonly logger: ILogger
+  readonly platform: HostPlatform
   readonly ledger: CommandOwnershipLedger
   /** An extension's `activate` threw — surface it (notification + view badge). */
   readonly onActivationError: (error: IExtensionActivationErrorDto) => void
@@ -223,6 +228,16 @@ export class HostConnection extends Disposable {
       ProxyChannel.fromService(deps.timeline),
     )
 
+    deps.treeViews.setExtHost(
+      ProxyChannel.toService<IExtHostTreeViews>(
+        client.getChannel(ExtHostChannels.extHostTreeViews),
+      ),
+    )
+    server.registerChannel(
+      ExtHostChannels.mainThreadTreeViews,
+      ProxyChannel.fromService(deps.treeViews),
+    )
+
     this.languages = ProxyChannel.toService<IExtHostLanguages>(
       client.getChannel(ExtHostChannels.extHostLanguages),
     )
@@ -230,7 +245,7 @@ export class HostConnection extends Disposable {
       client.getChannel(ExtHostChannels.extHostDocuments),
     )
     const mainThreadLanguages = store.add(
-      new MainThreadLanguages(this.languages, deps.languageFeatures),
+      new MainThreadLanguages(this.languages, deps.languageFeatures, deps.logger),
     )
     server.registerChannel(
       ExtHostChannels.mainThreadLanguages,
@@ -266,6 +281,7 @@ export class HostConnection extends Disposable {
       deps.fileSearch,
       () => deps.exclude.getSearchExcludeGlobs(),
       deps.logger,
+      deps.platform,
     )
     server.registerChannel(ExtHostChannels.mainThreadFs, ProxyChannel.fromService(mainThreadFs))
 
@@ -273,7 +289,7 @@ export class HostConnection extends Disposable {
       client.getChannel(ExtHostChannels.extHostFileEvents),
     )
     const mainThreadFileEvents = store.add(
-      new MainThreadFileEvents(deps.fileWatcher, extHostFileEvents, deps.logger),
+      new MainThreadFileEvents(deps.fileWatcher, extHostFileEvents, deps.logger, deps.uriIdentity),
     )
     server.registerChannel(
       ExtHostChannels.mainThreadFileEvents,

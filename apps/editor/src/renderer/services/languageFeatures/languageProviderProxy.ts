@@ -29,6 +29,7 @@ import {
   monacoRangeToLsp,
   resolvedCodeLensToMonaco,
   resolvedDocumentLinkToMonaco,
+  resolvedInlayHintToMonaco,
   selectionRangesToMonaco,
   semanticTokensToMonaco,
   signatureHelpToMonaco,
@@ -37,6 +38,7 @@ import {
   type MonacoCodeLens,
   type MonacoCompletionItem,
   type MonacoDocumentLink,
+  type MonacoInlayHint,
 } from './typescript/lspMonacoConvert.js'
 
 export function createDefinitionProxy(
@@ -446,8 +448,9 @@ export function createInlayHintsProxy(
   handle: number,
   extHost: IExtHostLanguages,
   onDidChange: Event<void>,
+  supportsResolve: boolean,
 ): monaco.languages.InlayHintsProvider {
-  return {
+  const provider: monaco.languages.InlayHintsProvider = {
     onDidChangeInlayHints: onDidChange,
     provideInlayHints: async (model, range) =>
       inlayHintsToMonaco(
@@ -455,4 +458,24 @@ export function createInlayHintsProxy(
         MonacoLoader.get(),
       ),
   }
+  // Only attach resolveInlayHint when the extension provider implements it —
+  // otherwise Monaco would round-trip every visible hint for nothing.
+  if (supportsResolve) {
+    provider.resolveInlayHint = async (hint) => {
+      const monacoHint = hint as MonacoInlayHint
+      if (monacoHint._resolveCacheId === undefined || monacoHint._resolveIndex === undefined) {
+        return hint
+      }
+      return resolvedInlayHintToMonaco(
+        await extHost.$resolveInlayHint(
+          handle,
+          monacoHint._resolveCacheId,
+          monacoHint._resolveIndex,
+        ),
+        hint,
+        MonacoLoader.get(),
+      )
+    }
+  }
+  return provider
 }

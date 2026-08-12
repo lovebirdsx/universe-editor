@@ -8,6 +8,12 @@
 import type { URI } from '../base/uri.js'
 import { createDecorator } from '../di/instantiation.js'
 
+/** A file-type filter group (mirrors Electron's FileFilter / VSCode's dialog filters). */
+export interface IFileDialogFilter {
+  readonly name: string
+  readonly extensions: readonly string[]
+}
+
 export interface IFileDialogOptions {
   /** Title bar text (e.g. "Open Folder"). */
   readonly title: string
@@ -15,14 +21,25 @@ export interface IFileDialogOptions {
   readonly defaultUri?: URI
   readonly canSelectFiles: boolean
   readonly canSelectFolders: boolean
+  /** Allow picking several entries (open dialog only). Defaults to false. */
+  readonly canSelectMany?: boolean
+  /**
+   * File-type filter groups. A listed file must match one extension from any
+   * group (case-insensitive, leading dot optional); `*` matches every file.
+   * Folders are always listed so the user can keep navigating.
+   */
+  readonly filters?: readonly IFileDialogFilter[]
   /** Confirm button label (e.g. "Open", "Save"). */
   readonly openLabel?: string
 }
 
 export interface IFileDialogService {
   readonly _serviceBrand: undefined
-  /** Browse for a file or folder; resolves with the chosen URI, or `undefined` if cancelled. */
-  showOpenDialog(opts: IFileDialogOptions): Promise<URI | undefined>
+  /**
+   * Browse for files or folders; resolves with the chosen URIs (more than one
+   * only when `canSelectMany` is set), or `undefined` if cancelled.
+   */
+  showOpenDialog(opts: IFileDialogOptions): Promise<URI[] | undefined>
   /** Browse for a save location; resolves with the target file URI, or `undefined` if cancelled. */
   showSaveDialog(opts: IFileDialogOptions): Promise<URI | undefined>
 }

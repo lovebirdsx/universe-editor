@@ -12,12 +12,16 @@ import {
   KeybindingsRegistry,
   MenuId,
   MenuRegistry,
+  ViewContainerLocation,
+  ViewContainerRegistry,
+  ViewRegistry,
   type ICommandService,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import type { IExtensionDescriptionDto, IExtHostCommands } from '@universe-editor/extensions-common'
 import { ExtensionPointTranslator } from '../ExtensionPointTranslator.js'
 import { MainThreadCommands } from '../MainThreadCommands.js'
+import { EXTENSION_TREE_VIEW_COMPONENT_KEY } from '../../views/extensionViews.js'
 
 const accessor = {} as ServicesAccessor
 
@@ -319,6 +323,171 @@ describe('ExtensionPointTranslator', () => {
     ])
     t.dispose()
     expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
+  describe('views / viewsContainers', () => {
+    it('registers an activitybar container and its views with the shared componentKey', () => {
+      const t = new ExtensionPointTranslator(vi.fn(), vi.fn())
+      disposables.push(t)
+      t.translate([
+        dto({
+          contributes: {
+            viewsContainers: {
+              activitybar: [{ id: 'test.explorer', title: 'Test Explorer', icon: '$(files)' }],
+            },
+            views: {
+              'test.explorer': [
+                { id: 'test.view.a', name: 'A' },
+                { id: 'test.view.b', name: 'B', when: 'false' },
+              ],
+            },
+          },
+        }),
+      ])
+
+      const container = ViewContainerRegistry.getViewContainer('test.explorer')
+      expect(container).toMatchObject({
+        label: 'Test Explorer',
+        icon: 'files',
+        location: ViewContainerLocation.SideBar,
+      })
+      expect(container!.order).toBeGreaterThanOrEqual(100)
+      expect(ViewRegistry.getView('test.view.a')).toMatchObject({
+        name: 'A',
+        containerId: 'test.explorer',
+        componentKey: EXTENSION_TREE_VIEW_COMPONENT_KEY,
+        order: 0,
+      })
+      expect(ViewRegistry.getView('test.view.b')).toMatchObject({ order: 1 })
+    })
+
+    it('binds views under a built-in container alias (explorer)', () => {
+      disposables.push(
+        ViewContainerRegistry.registerViewContainer({
+          id: 'workbench.view.explorer',
+          label: 'Explorer',
+          icon: 'files',
+          order: 1,
+          location: ViewContainerLocation.SideBar,
+        }),
+      )
+      const t = new ExtensionPointTranslator(vi.fn(), vi.fn())
+      disposables.push(t)
+      t.translate([
+        dto({ contributes: { views: { explorer: [{ id: 'test.view.c', name: 'C' }] } } }),
+      ])
+
+      expect(ViewRegistry.getView('test.view.c')?.containerId).toBe('workbench.view.explorer')
+    })
+
+    it('binds views under a container referenced by its full id', () => {
+      disposables.push(
+        ViewContainerRegistry.registerViewContainer({
+          id: 'workbench.view.search',
+          label: 'Search',
+          icon: 'search',
+          order: 2,
+          location: ViewContainerLocation.SideBar,
+        }),
+      )
+      const t = new ExtensionPointTranslator(vi.fn(), vi.fn())
+      disposables.push(t)
+      t.translate([
+        dto({
+          contributes: {
+            views: { 'workbench.view.search': [{ id: 'test.view.d', name: 'D' }] },
+          },
+        }),
+      ])
+
+      expect(ViewRegistry.getView('test.view.d')?.containerId).toBe('workbench.view.search')
+    })
+
+    it('skips views whose container key resolves to nothing', () => {
+      const t = new ExtensionPointTranslator(vi.fn(), vi.fn())
+      disposables.push(t)
+      t.translate([
+        dto({
+          contributes: { views: { 'no.such.container': [{ id: 'test.view.e', name: 'E' }] } },
+        }),
+      ])
+
+      expect(ViewRegistry.getView('test.view.e')).toBeUndefined()
+    })
+
+    it('skips a duplicate container id but still binds its views to the existing container', () => {
+      disposables.push(
+        ViewContainerRegistry.registerViewContainer({
+          id: 'test.existing',
+          label: 'Existing',
+          icon: 'files',
+          order: 1,
+          location: ViewContainerLocation.SideBar,
+        }),
+      )
+      const t = new ExtensionPointTranslator(vi.fn(), vi.fn())
+      disposables.push(t)
+      t.translate([
+        dto({
+          contributes: {
+            viewsContainers: {
+              activitybar: [{ id: 'test.existing', title: 'Duplicate', icon: 'files' }],
+            },
+            views: { 'test.existing': [{ id: 'test.view.f', name: 'F' }] },
+          },
+        }),
+      ])
+
+      expect(ViewContainerRegistry.getViewContainer('test.existing')?.label).toBe('Existing')
+      expect(ViewRegistry.getView('test.view.f')?.containerId).toBe('test.existing')
+    })
+
+    it('skips a view whose id is already registered instead of shadowing it', () => {
+      disposables.push(
+        ViewContainerRegistry.registerViewContainer({
+          id: 'test.host',
+          label: 'Host',
+          icon: 'files',
+          order: 1,
+          location: ViewContainerLocation.SideBar,
+        }),
+      )
+      disposables.push(
+        ViewRegistry.registerView({
+          id: 'test.view.g',
+          name: 'Core',
+          containerId: 'test.host',
+          componentKey: 'core.view',
+          order: 0,
+        }),
+      )
+      const t = new ExtensionPointTranslator(vi.fn(), vi.fn())
+      disposables.push(t)
+      t.translate([
+        dto({ contributes: { views: { 'test.host': [{ id: 'test.view.g', name: 'Dup' }] } } }),
+      ])
+
+      expect(ViewRegistry.getView('test.view.g')?.componentKey).toBe('core.view')
+    })
+
+    it('unregisters its containers and views on dispose', () => {
+      const t = new ExtensionPointTranslator(vi.fn(), vi.fn())
+      t.translate([
+        dto({
+          contributes: {
+            viewsContainers: {
+              activitybar: [{ id: 'test.gone', title: 'Gone', icon: 'files' }],
+            },
+            views: { 'test.gone': [{ id: 'test.view.gone', name: 'Gone' }] },
+          },
+        }),
+      ])
+      expect(ViewContainerRegistry.getViewContainer('test.gone')).toBeDefined()
+      expect(ViewRegistry.getView('test.view.gone')).toBeDefined()
+      t.dispose()
+      expect(ViewContainerRegistry.getViewContainer('test.gone')).toBeUndefined()
+      expect(ViewRegistry.getView('test.view.gone')).toBeUndefined()
+    })
   })
 })
 

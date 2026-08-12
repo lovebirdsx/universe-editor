@@ -18,6 +18,7 @@ import {
   type Event,
 } from '@universe-editor/platform'
 import { basenameOfResource } from '../../workbench/files/resourceInfo.js'
+import { DidSaveNotification } from '../extensions/DidSaveNotification.js'
 
 export interface MergeEditorContents {
   /** Absolute working-tree path of the conflicted file. */
@@ -99,6 +100,7 @@ export class MergeEditorInput extends EditorInput {
 
   override async save(): Promise<boolean> {
     await this._fileService.writeFile(this.fileUri, this._result)
+    DidSaveNotification.notify(this.fileUri)
     // Staging the resolved file clears its unmerged state in git.
     await this._commandService.executeCommand('git.stage', {
       resourceUri: this._contents.path,

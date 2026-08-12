@@ -254,13 +254,15 @@ export class MoveFileAction extends Action2 {
     const dialog = accessor.get(IDialogService)
     const fileService = accessor.get(IFileService)
     const fileOps = accessor.get(IExplorerFileOperationService)
-    const destinationDir = await fileDialog.showOpenDialog({
-      title: localize('fileDialog.move.title', 'Select Destination Folder'),
-      canSelectFiles: false,
-      canSelectFolders: true,
-      openLabel: localize('fileDialog.move.openLabel', 'Move'),
-      ...(defaultUri ? { defaultUri } : {}),
-    })
+    const destinationDir = (
+      await fileDialog.showOpenDialog({
+        title: localize('fileDialog.move.title', 'Select Destination Folder'),
+        canSelectFiles: false,
+        canSelectFolders: true,
+        openLabel: localize('fileDialog.move.openLabel', 'Move'),
+        ...(defaultUri ? { defaultUri } : {}),
+      })
+    )?.[0]
     if (!destinationDir) return
     try {
       await moveWithOverwritePrompt(fileOps, fileService, dialog, resources, destinationDir)

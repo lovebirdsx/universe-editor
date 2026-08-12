@@ -33,5 +33,5 @@ node scripts/pack.mjs       # → universe.universe-pdf-0.1.0.vsix
 
 ## 与上游的差异
 
-- 去掉了 `workspace.createFileSystemWatcher` 依赖的「文件变更自动重载」——当前扩展 API 尚无文件监听能力。
+- 文件变更自动重载已接回：`workspace.createFileSystemWatcher` 监听当前打开的 pdf，变更时重建预览。
 - 资源经 `webview.asWebviewUri` + `localResourceRoots`（扩展目录）加载，CSP 由扩展在 HTML 里声明。

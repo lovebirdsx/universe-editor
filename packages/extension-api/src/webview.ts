@@ -76,8 +76,20 @@ export interface WebviewDiffContext {
 }
 
 /**
+ * Event fired when a {@link WebviewPanel}'s view state changes (its editor tab
+ * became active/hidden or was revealed). Mirrors VSCode's
+ * `WebviewPanelOnDidChangeViewStateEvent`.
+ */
+export interface WebviewPanelOnDidChangeViewStateEvent {
+  /** The panel whose view state changed. */
+  readonly webviewPanel: WebviewPanel
+}
+
+/**
  * A webview hosted as an editor. For a custom editor the workbench creates and
- * owns the panel; the extension fills it in `resolveCustomEditor`.
+ * owns the panel; the extension fills it in `resolveCustomEditor`. For
+ * `window.createWebviewPanel` the extension owns the panel's lifecycle
+ * (create/reveal/dispose) and the workbench only mirrors its tab.
  */
 export interface WebviewPanel {
   /** The custom-editor `viewType` this panel was created for. */
@@ -91,8 +103,24 @@ export interface WebviewPanel {
    * undefined, render the single document at `document.uri`.
    */
   readonly diffContext?: WebviewDiffContext
-  /** Focus the editor tab hosting this panel. */
-  reveal(): void
+  /** The panel's current title (its editor tab label). Assign to rename the tab. */
+  title: string
+  /** Whether the panel's editor tab is the active one in its group. */
+  readonly active: boolean
+  /** Whether the panel's editor tab is currently visible. */
+  readonly visible: boolean
+  /**
+   * Fires when {@link active} / {@link visible} change (tab revealed, hidden, or
+   * its view unmounted). For custom-editor panels the state stays `true` (the
+   * workbench owns their tab); only `createWebviewPanel` panels get live updates.
+   */
+  readonly onDidChangeViewState: Event<WebviewPanelOnDidChangeViewStateEvent>
+  /**
+   * Reveal the panel's editor tab (bring it to the front). Pass `preserveFocus`
+   * to avoid stealing keyboard focus. Custom-editor panels ignore this (their
+   * tab is already open); `createWebviewPanel` panels re-activate their tab.
+   */
+  reveal(preserveFocus?: boolean): void
   /** Close the panel (and its editor tab). */
   dispose(): void
   /** Fires once when the panel is disposed (tab closed by the user or by code). */

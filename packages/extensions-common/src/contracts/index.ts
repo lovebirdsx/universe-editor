@@ -4,6 +4,7 @@
 // source of truth first-party extensions alias locally (see task 04·1).
 export * from './scmWire.js'
 export * from './timelineWire.js'
+export * from './treeViewWire.js'
 export * from './aiWire.js'
 export * from './gitGraph.js'
 export * from './perforceGraph.js'

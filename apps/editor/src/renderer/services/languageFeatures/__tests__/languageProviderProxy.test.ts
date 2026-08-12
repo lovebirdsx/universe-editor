@@ -201,6 +201,7 @@ describe('createInlayHintsProxy', () => {
       5,
       { $provideInlayHints: pull } as unknown as IExtHostLanguages,
       changeEmitter.event,
+      false,
     )
 
     let fired = 0
@@ -214,5 +215,84 @@ describe('createInlayHintsProxy', () => {
     expect(pull).toHaveBeenCalledWith(5, model.uri, rangeToLsp(monacoRange))
     expect(out?.hints[0]?.position).toEqual({ lineNumber: 2, column: 5 })
     expect(out?.hints[0]?.label).toBe(': number')
+  })
+
+  it('omits resolveInlayHint when the provider has no resolve support', () => {
+    const proxy = createInlayHintsProxy(
+      5,
+      { $provideInlayHints: vi.fn() } as unknown as IExtHostLanguages,
+      new Emitter<void>().event,
+      false,
+    )
+    expect(proxy.resolveInlayHint).toBeUndefined()
+  })
+
+  it('round-trips resolve coordinates to $resolveInlayHint and folds the resolved hint', async () => {
+    const pull = vi.fn().mockResolvedValue([
+      {
+        position: { line: 1, character: 4 },
+        label: ': number',
+        kind: 1,
+        resolveCacheId: 3,
+        resolveIndex: 0,
+      },
+    ])
+    const resolve = vi.fn().mockResolvedValue({
+      position: { line: 1, character: 4 },
+      label: ': number',
+      kind: 1,
+      tooltip: 'the parameter type',
+    })
+    const proxy = createInlayHintsProxy(
+      5,
+      {
+        $provideInlayHints: pull,
+        $resolveInlayHint: resolve,
+      } as unknown as IExtHostLanguages,
+      new Emitter<void>().event,
+      true,
+    )
+
+    const model = makeModel('file:///a.ts')
+    const monacoRange = { startLineNumber: 1, startColumn: 1, endLineNumber: 6, endColumn: 1 }
+    const out = await proxy.provideInlayHints(model, monacoRange as monaco.Range, null as never)
+    const hint = out!.hints[0]!
+    const resolved = await proxy.resolveInlayHint!(hint, null as never)
+    expect(resolve).toHaveBeenCalledWith(5, 3, 0)
+    expect(resolved?.tooltip).toBe('the parameter type')
+    expect(resolved?.position).toEqual({ lineNumber: 2, column: 5 })
+  })
+
+  it('keeps the original hint when the host cache entry is gone or coords are missing', async () => {
+    const resolve = vi.fn().mockResolvedValue(null)
+    const proxy = createInlayHintsProxy(
+      5,
+      {
+        $provideInlayHints: vi.fn().mockResolvedValue([
+          {
+            position: { line: 1, character: 4 },
+            label: ': number',
+            resolveCacheId: 3,
+            resolveIndex: 0,
+          },
+        ]),
+        $resolveInlayHint: resolve,
+      } as unknown as IExtHostLanguages,
+      new Emitter<void>().event,
+      true,
+    )
+
+    const model = makeModel('file:///a.ts')
+    const monacoRange = { startLineNumber: 1, startColumn: 1, endLineNumber: 6, endColumn: 1 }
+    const out = await proxy.provideInlayHints(model, monacoRange as monaco.Range, null as never)
+    const hint = out!.hints[0]!
+    expect(await proxy.resolveInlayHint!(hint, null as never)).toBe(hint)
+
+    const bare: monaco.languages.InlayHint = {
+      position: { lineNumber: 1, column: 1 },
+      label: 'x',
+    }
+    expect(await proxy.resolveInlayHint!(bare, null as never)).toBe(bare)
+    expect(resolve).toHaveBeenCalledTimes(1)
   })
 })

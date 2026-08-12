@@ -16,6 +16,7 @@ import { BuiltInEditorProvidersContribution } from '../BuiltInEditorProvidersCon
 import { BuiltInViewContainersContribution } from '../BuiltInViewContainersContribution.js'
 import { BuiltInViewsContribution } from '../BuiltInViewsContribution.js'
 import { ExtensionsViewContribution } from '../ExtensionsViewContribution.js'
+import { ExtensionTreeViewsContribution } from '../ExtensionTreeViewsContribution.js'
 import { SwarmViewContribution } from '../SwarmViewContribution.js'
 import { SwarmConfigurationContribution } from '../SwarmConfigurationContribution.js'
 import { SettingsContribution } from '../SettingsContribution.js'
@@ -130,6 +131,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.extensionsView',
   ExtensionsViewContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// The shared componentKey extension tree views bind to (contributes.views). The
+// binding must exist before any translated extension view renders.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.extensionTreeViews',
+  ExtensionTreeViewsContribution,
   WorkbenchPhase.BlockStartup,
 )
 

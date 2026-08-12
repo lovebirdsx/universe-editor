@@ -10,6 +10,7 @@
  * Method names are dispatched verbatim by ProxyChannel; the `$` prefix marks
  * RPC-only surface that never appears in the public extension API.
  */
+import type { CancellationToken } from '@universe-editor/platform'
 import type { UriComponents } from '@universe-editor/platform'
 import type {
   CompletionItem,
@@ -85,6 +86,10 @@ export const ExtHostChannels = {
   mainThreadTimeline: 'mainThreadTimeline',
   /** Renderer → ext host: timeline page requests routed to a plugin's registered providers. */
   extHostTimeline: 'extHostTimeline',
+  /** Ext host → renderer: tree-data provider registrations + invalidations feeding contributed views. */
+  mainThreadTreeViews: 'mainThreadTreeViews',
+  /** Renderer → ext host: tree children pulls + selection/expansion/visibility callbacks. */
+  extHostTreeViews: 'extHostTreeViews',
 } as const
 
 export type ExtHostChannelName = (typeof ExtHostChannels)[keyof typeof ExtHostChannels]
@@ -152,6 +157,10 @@ export interface IExtHostEnvironmentDto {
   readonly uriScheme: string
   /** Display locale, e.g. `zh-CN`. */
   readonly language: string
+  /** Random UUID generated once on the machine and persisted under userData. */
+  readonly machineId: string
+  /** Absolute path of the application install root. */
+  readonly appRoot: string
 }
 
 /** An extension's `activate` threw. Reported host → renderer so the failure is
@@ -307,9 +316,9 @@ export interface IMainThreadWindow {
   $reportProgress(handle: number, value: IProgressStepDto): Promise<void>
   $endProgress(handle: number): Promise<void>
   /**
-   * Workbench file picker; resolves to the picked fsPaths, or undefined when
-   * cancelled. `canSelectMany`/`filters` ride the wire for API compatibility —
-   * the current dialog picks a single entry and does not filter.
+   * Workbench file picker; resolves to the picked fsPaths (several only when
+   * `canSelectMany`), or undefined when cancelled. `filters` narrows the listed
+   * files by extension.
    */
   $showOpenDialog(options: IOpenDialogOptionsDto): Promise<string[] | undefined>
   /** Save-location picker; resolves to the chosen fsPath, or undefined when cancelled. */
@@ -336,6 +345,16 @@ export interface IExtHostFileStatDto {
 }
 
 /**
+ * Wire form of the extension-api `RelativePattern`: `base` is the `file:` URI
+ * the pattern is relative to, `pattern` a glob matched against base-relative
+ * paths.
+ */
+export interface IRelativePatternDto {
+  readonly base: UriComponents
+  readonly pattern: string
+}
+
+/**
  * Renderer → exposed to the ext host: gated filesystem access backing
  * `workspace.fs`. Every call passes through the renderer's path policy
  * (denies `.ssh`/`.aws`/`.env`…, forbids escaping the workspace root) before
@@ -357,15 +376,21 @@ export interface IMainThreadFs {
   $copy(source: string, target: string, overwrite: boolean): Promise<void>
   /**
    * Enumerate workspace files matching the `include` glob (VSCode glob
-   * semantics over workspace-relative paths) and return their fsPaths.
+   * semantics over workspace-relative paths) and return their fsPaths. A
+   * `RelativePattern` include roots the enumeration at `base` (must resolve
+   * inside the workspace) and matches `pattern` against base-relative paths.
    * `exclude`: null → the renderer's configured search excludes
-   * (files.exclude ∪ search.exclude); an empty array → no excludes at all.
+   * (files.exclude ∪ search.exclude); an empty array → no excludes at all; a
+   * `RelativePattern` entry excludes matches under its own base only.
    * `maxResults`: null → unbounded (still internally capped at enumeration).
+   * The trailing token rides the channel's cancel path: cancelling it kills
+   * the underlying enumeration instead of merely discarding a late result.
    */
   $findFiles(
-    include: string,
-    exclude: readonly string[] | null,
+    include: string | IRelativePatternDto,
+    exclude: readonly (string | IRelativePatternDto)[] | null,
     maxResults: number | null,
+    token?: CancellationToken,
   ): Promise<string[]>
 }
 
@@ -388,13 +413,20 @@ export interface IExtHostFileEvents {
 
 /**
  * Ext host → exposed to the renderer: the host declares interest in filesystem
- * events while at least one extension-created FileSystemWatcher is alive. The
- * renderer forwards `IFileWatcherService.onDidChangeFiles` batches only between
- * subscribe and unsubscribe, so a host with no watchers costs zero RPC traffic.
+ * events per live extension-created FileSystemWatcher. The renderer forwards
+ * `IFileWatcherService.onDidChangeFiles` batches only while the subscription
+ * count is non-zero, so a host with no watchers costs zero RPC traffic.
+ *
+ * `base` is the watcher's anchor folder (`file:` UriComponents): a
+ * `RelativePattern` base, or the literal root of an absolute glob; undefined
+ * means a workspace-relative glob covered by the recursive workspace watch. A
+ * base outside the workspace makes the renderer arm an out-of-workspace watch
+ * for that folder (reference-counted across watchers sharing it) so its events
+ * reach the host; a base inside the workspace needs no extra watch.
  */
 export interface IMainThreadFileEvents {
-  $subscribeFileEvents(): Promise<void>
-  $unsubscribeFileEvents(): Promise<void>
+  $subscribeFileEvents(base: UriComponents | undefined): Promise<void>
+  $unsubscribeFileEvents(base: UriComponents | undefined): Promise<void>
 }
 
 /**
@@ -459,6 +491,9 @@ export interface ILanguageProviderMetadata {
   /** On-type formatting trigger characters (first + more). Monaco exposes them
    *  synchronously as `autoFormatTriggerCharacters`, so they cross at registration. */
   readonly onTypeFormattingTriggerCharacters?: readonly string[]
+  /** Inlay hints: the provider implements `resolveInlayHint`, so the renderer
+   *  shells out lazy label/tooltip resolution instead of dropping `data`. */
+  readonly inlayHintsResolve?: boolean
 }
 
 /** Names for the numeric token-type / modifier indices in `SemanticTokens.data`. */
@@ -498,6 +533,18 @@ export interface ICodeActionContext {
 export interface IFormattingOptionsDto {
   readonly tabSize: number
   readonly insertSpaces: boolean
+}
+
+/**
+ * Inlay hint crossing the wire. The LSP `data` field never crosses: it is opaque
+ * resolve payload (and may not be JSON-serializable), so the host keeps the
+ * original hint objects and tags each DTO with its cache coordinates
+ * (`resolveCacheId` + `resolveIndex`) when the provider supports lazy resolve.
+ * `$resolveInlayHint` round-trips those coordinates back.
+ */
+export type IInlayHintDto = Omit<InlayHint, 'data'> & {
+  readonly resolveCacheId?: number
+  readonly resolveIndex?: number
 }
 
 /**
@@ -604,14 +651,34 @@ export interface IExtHostLanguages {
     options: IFormattingOptionsDto,
   ): Promise<TextEdit[] | null>
   /**
-   * Inlay hints for `range`. One-shot: hints carry their full label/tooltip
-   * (no `inlayHint/resolve` round trip this iteration), so an LSP hint's `data`
-   * field is dropped on return.
+   * Inlay hints for `range`. When the provider implements `resolveInlayHint`,
+   * the host caches the returned hints (per handle, latest provide wins) and
+   * tags each DTO with its cache coordinates; `$resolveInlayHint` round-trips
+   * them to resolve label/tooltip lazily.
    */
-  $provideInlayHints(handle: number, uri: UriComponents, range: Range): Promise<InlayHint[] | null>
+  $provideInlayHints(
+    handle: number,
+    uri: UriComponents,
+    range: Range,
+  ): Promise<IInlayHintDto[] | null>
+  /**
+   * Resolve the hint at (`cacheId`, `index`) in the host-side cache of `handle`.
+   * Returns the resolved hint (still without `data`), or null when the cache
+   * entry is gone (a newer provide superseded it) — the renderer then keeps the
+   * hint as provided.
+   */
+  $resolveInlayHint(handle: number, cacheId: number, index: number): Promise<IInlayHintDto | null>
   $provideDocumentSemanticTokens(handle: number, uri: UriComponents): Promise<SemanticTokens | null>
   $provideCodeLenses(handle: number, uri: UriComponents): Promise<CodeLens[] | null>
   $resolveCodeLens(handle: number, lens: CodeLens): Promise<CodeLens | null>
+  /**
+   * Renderer → host push (fire-and-forget): the set of resources whose
+   * diagnostics changed (any owner — extension collections and built-in language
+   * services alike), backing `languages.onDidChangeDiagnostics`. Batched and
+   * debounced by the renderer; only pushed while the host declared interest via
+   * `IMainThreadLanguages.$subscribeDiagnostics`.
+   */
+  $acceptDiagnosticsChange(uris: readonly UriComponents[]): Promise<void>
 }
 
 /**
@@ -687,6 +754,22 @@ export interface IMainThreadLanguages {
     diagnostics: readonly Diagnostic[],
   ): Promise<void>
   $clearDiagnostics(owner: string, uri?: UriComponents): Promise<void>
+  /**
+   * Every diagnostic the workbench currently shows (all marker owners — every
+   * extension's collections plus the built-in language services), backing
+   * `languages.getDiagnostics`. With `uri`, only that resource's diagnostics
+   * are returned; without it, one entry per resource that has any. Diagnostics
+   * are LSP-shaped, the same shape `$publishDiagnostics` accepts.
+   */
+  $getDiagnostics(uri?: UriComponents): Promise<Array<[UriComponents, Diagnostic[]]>>
+  /**
+   * Interest declaration for `IExtHostLanguages.$acceptDiagnosticsChange`,
+   * reference-counted like the file-events pair: the renderer only pushes
+   * marker-change notifications while at least one host-side
+   * `onDidChangeDiagnostics` listener is alive.
+   */
+  $subscribeDiagnostics(): Promise<void>
+  $unsubscribeDiagnostics(): Promise<void>
   /**
    * A CodeLens provider's lenses changed (its `onDidChangeCodeLenses` fired):
    * tell the renderer to re-request lenses for that provider. Provider → renderer
@@ -772,6 +855,13 @@ export interface ITextDocumentShowOptionsDto {
  * LSP-shaped (0-based line/character) to match the document-sync convention;
  * the renderer converts to Monaco's 1-based positions internally.
  */
+/** Options for {@link IMainThreadEditor.$openUntitledDocument}; mirrors the
+ *  public `openTextDocument(options)` overload. */
+export interface IOpenUntitledDocumentOptions {
+  readonly language?: string
+  readonly content?: string
+}
+
 export interface IMainThreadEditor {
   /** Snapshot of the focused editor, or null when no text editor is active. */
   $getActiveTextEditor(): Promise<IActiveTextEditorDto | null>
@@ -780,14 +870,25 @@ export interface IMainThreadEditor {
    * `$acceptDocumentOpen` follows asynchronously, once language activation has
    * run). A document already mirrored (open in an editor) is reused as-is;
    * otherwise the file is read from disk into a model that joins the same sync
-   * pipeline. Rejects when the file can't be read or the scheme isn't `file`.
+   * pipeline. A `untitled:` URI creates a backing model without touching disk
+   * (its path seeds the later Save-As dialog). Rejects when the file can't be
+   * read or the scheme isn't `file`/`untitled`.
    */
   $openTextDocument(uri: UriComponents): Promise<void>
+  /**
+   * Create an untitled (never-on-disk) text document in the mirror and resolve
+   * its URI. No editor tab is opened — showing it is `showTextDocument`'s job.
+   * Closing an untitled model disposes the buffer outright, so a dropped
+   * document leaves the mirror immediately (an empty file document lingers
+   * until the window closes).
+   */
+  $openUntitledDocument(options: IOpenUntitledDocumentOptions): Promise<UriComponents>
   /**
    * Open the document at `uri` in a text editor and resolve its snapshot (same
    * shape as `$getActiveTextEditor`; null when the editor never mounted).
    * `selection` is revealed; `preview` opens into the group's unpinned preview
    * slot; `preserveFocus` shows the editor without moving keyboard focus.
+   * Supports `file:` and `untitled:` URIs.
    */
   $showTextDocument(
     uri: UriComponents,
@@ -816,9 +917,10 @@ export interface IMainThreadEditor {
   ): Promise<void>
   /**
    * Apply an LSP-shaped WorkspaceEdit across files (live models get undoable
-   * model edits; unopened files are read/patched/written on disk). This
-   * iteration supports TEXT edits only: a `documentChanges` entry that is a
-   * create/rename/delete file operation rejects the whole edit with `false`.
+   * model edits; unopened files are read/patched/written on disk). File
+   * operations (`documentChanges` create/rename/delete entries) run through the
+   * file service in array order. Resolves false when any entry fails; entries
+   * already applied are not rolled back.
    */
   $applyWorkspaceEdit(edit: WorkspaceEdit): Promise<boolean>
 }
@@ -831,6 +933,14 @@ export interface IMainThreadEditor {
  */
 export interface IExtHostEditor {
   $acceptActiveEditorChange(editor: IActiveTextEditorDto | null): Promise<void>
+  /**
+   * The visible text editors — one per editor group (the group's active editor,
+   * provided it is a text editor; custom editors never appear). Pushed as a whole
+   * set, coalesced by the renderer so a layout burst arrives as a single update;
+   * the latest push replaces the previous set wholesale. Backs
+   * `window.visibleTextEditors` / `onDidChangeVisibleTextEditors`.
+   */
+  $acceptVisibleEditorsChange(editors: readonly IActiveTextEditorDto[]): Promise<void>
   /**
    * Selection changes in the ACTIVE text editor, debounced (~30ms trailing) by
    * the renderer so a typing burst arrives as a single event carrying the latest
@@ -870,6 +980,12 @@ export interface IWebviewOptionsDto {
   readonly localResourceRoots?: readonly string[]
 }
 
+/** `showOptions` of `window.createWebviewPanel`, crossing the wire. */
+export interface IWebviewPanelShowOptionsDto {
+  /** Open the tab without moving focus to it. */
+  readonly preserveFocus?: boolean
+}
+
 /**
  * Two versions of a resource to compare, crossing the wire when the workbench
  * opens a custom editor as a diff (`_workbench.openWebviewDiff`). Content bytes
@@ -904,6 +1020,25 @@ export interface IMainThreadWebviews {
   $setWebviewHtml(panelHandle: number, html: string): Promise<void>
   /** Post a message to the scripts in the panel's webview. Resolves false if gone. */
   $postMessageToWebview(panelHandle: number, message: unknown): Promise<boolean>
+  /**
+   * Create an extension-owned webview panel (`window.createWebviewPanel`) and
+   * open its editor tab. `panelHandle` is allocated HOST-side and is negative,
+   * disjoint from the renderer-allocated custom-editor handles. `options` rides
+   * along so no separate `$setWebviewOptions` races the create.
+   */
+  $createWebviewPanel(
+    panelHandle: number,
+    viewType: string,
+    title: string,
+    options: IWebviewOptionsDto,
+    showOptions?: IWebviewPanelShowOptionsDto,
+  ): Promise<void>
+  /** Close the tab of an extension-owned panel (`WebviewPanel.dispose()`). */
+  $disposeWebviewPanel(panelHandle: number): Promise<void>
+  /** Bring the extension-owned panel's tab to the front. */
+  $revealWebviewPanel(panelHandle: number, preserveFocus?: boolean): Promise<void>
+  /** Retitle an extension-owned panel's tab (`WebviewPanel.title = …`). */
+  $setWebviewTitle(panelHandle: number, title: string): Promise<void>
 }
 
 /**
@@ -930,4 +1065,17 @@ export interface IExtHostWebviews {
   $onDidReceiveMessage(panelHandle: number, message: unknown): Promise<void>
   /** The editor tab hosting `panelHandle` was closed — dispose host-side state. */
   $disposeWebviewPanel(panelHandle: number): Promise<void>
+  /**
+   * The user closed an extension-owned panel's tab — the host fires
+   * `onDidDispose` and drops the panel (WITHOUT calling `$disposeWebviewPanel`
+   * back, which would be a redundant round-trip).
+   */
+  $acceptPanelDisposed(panelHandle: number): Promise<void>
+  /**
+   * An extension-owned panel's tab mounted/unmounted (or its group
+   * activated/deactivated) — drives the host-side `active`/`visible` getters
+   * and `onDidChangeViewState`. Unmount only means hidden: the panel itself
+   * stays alive until disposed.
+   */
+  $acceptPanelViewState(panelHandle: number, active: boolean, visible: boolean): Promise<void>
 }

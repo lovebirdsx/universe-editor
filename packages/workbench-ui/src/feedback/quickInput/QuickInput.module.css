@@ -310,6 +310,33 @@
   opacity: 0.6;
 }
 
+.itemCheckbox {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+  box-sizing: border-box;
+  border: 1px solid var(--vscode-descriptionForeground, #8a8a92);
+  border-radius: 3px;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.itemCheckboxChecked {
+  background: var(--vscode-workbench-accent, #0070e0);
+  border-color: var(--vscode-workbench-accent, #0070e0);
+}
+
+.itemCheckboxChecked::after {
+  content: '✓';
+  font-size: 11px;
+  line-height: 1;
+  color: var(--vscode-button-foreground, #ffffff);
+}
+
 .itemRemove {
   margin-left: 12px;
   flex-shrink: 0;

@@ -38,6 +38,7 @@ const rendererDomTests = [
   'src/renderer/services/editor/__tests__/editorFocus.test.ts',
   'src/renderer/services/focus/__tests__/workbenchFocusRestorer.test.ts',
   'src/renderer/services/editor/__tests__/UntitledEditorInput.test.ts',
+  'src/renderer/services/extensions/__tests__/MainThreadEditor.untitled.test.ts',
   'src/renderer/services/sessionSwitcher/__tests__/RendererSessionsService.test.ts',
   'src/renderer/services/terminal/__tests__/TerminalXtermService.test.ts',
   'src/renderer/services/themes/__tests__/workbenchThemeService.test.ts',

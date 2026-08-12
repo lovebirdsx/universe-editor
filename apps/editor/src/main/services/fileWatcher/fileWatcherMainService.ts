@@ -19,8 +19,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { platform } from 'node:process'
-import { watch as fsWatch } from 'node:fs'
-import { dirname } from 'node:path'
+import { existsSync, watch as fsWatch } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type { FSWatcher } from 'node:fs'
 import {
   createNamedLogger,
@@ -160,6 +160,9 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   // Extra (out-of-workspace) file watches: dirPath → { watcher, files }
   private _extraDirWatchers = new Map<string, { watcher: FSWatcher; files: Set<string> }>()
 
+  // Extra (out-of-workspace) folder watches, recursive: folderPath → watcher
+  private _extraFolderWatchers = new Map<string, FSWatcher>()
+
   async watch(folder: URI, options?: { excludes?: readonly string[] }): Promise<void> {
     const uri = reviveUri(folder)
     if (uri.scheme !== 'file') {
@@ -271,6 +274,107 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     this._onDidChangeFiles.dispose()
   }
 
+  async watchOutOfWorkspaceFolders(folders: readonly URI[]): Promise<void> {
+    const wanted = new Set<string>()
+    for (const f of folders) {
+      const uri = reviveUri(f)
+      if (uri.scheme !== 'file') continue
+      const fsPath = uri.fsPath
+      // The recursive workspace watch already covers these.
+      if (this._rootFsPath && isUnder(fsPath, this._rootFsPath)) continue
+      // Nested folders collapse into the shallowest watch: a recursive parent
+      // already delivers events for its subtree, and win32 would otherwise pin
+      // duplicate kernel handles on the same subtree.
+      let covered = false
+      for (const existing of wanted) {
+        if (isUnder(fsPath, existing)) {
+          covered = true
+          break
+        }
+        if (isUnder(existing, fsPath)) wanted.delete(existing)
+      }
+      if (!covered) wanted.add(fsPath)
+    }
+
+    for (const [dir, w] of this._extraFolderWatchers) {
+      if (!wanted.has(dir)) {
+        try {
+          w.close()
+        } catch {
+          // ignore
+        }
+        this._extraFolderWatchers.delete(dir)
+        this._logger.info(`unwatch extra folder ${dir}`)
+      }
+    }
+
+    for (const dir of wanted) {
+      if (this._extraFolderWatchers.has(dir)) continue
+      this._watchExtraFolder(dir)
+    }
+  }
+
+  private _watchExtraFolder(dir: string): void {
+    if (this._extraFolderWatchers.has(dir)) return
+    // fs.watch recursive is supported on win32/darwin (both recurse with OS
+    // support). Linux inotify has no recursive fs.watch — the fallback watch
+    // sees only the directory entry itself, not its children, so
+    // out-of-workspace folders stay effectively unwatched there (documented
+    // limitation; in-workspace watching is unaffected).
+    const recursive = platform === 'win32' || platform === 'darwin'
+    try {
+      const w = fsWatch(dir, { recursive, persistent: false }, (_event, filename) => {
+        if (!filename) return
+        this._enqueue(join(dir, filename), 'modified')
+      })
+      w.on('error', (err) => {
+        this._logger.warn(
+          `extra folder watcher error ${dir}`,
+          err instanceof Error ? err.message : String(err),
+        )
+        if (this._extraFolderWatchers.get(dir) === w) this._extraFolderWatchers.delete(dir)
+        this._watchExtraFolderPlaceholder(dir)
+      })
+      this._extraFolderWatchers.set(dir, w)
+      this._logger.info(`watch extra folder ${dir} recursive=${recursive}`)
+    } catch (err) {
+      this._logger.warn(
+        `watch extra folder failed ${dir}`,
+        err instanceof Error ? (err as Error).message : String(err),
+      )
+      this._watchExtraFolderPlaceholder(dir)
+    }
+  }
+
+  /** fs.watch throws on a missing path, so a not-yet-created folder can't be
+   *  watched directly: park a non-recursive watch on the parent and arm the
+   *  recursive watch once the folder appears. Gives up when the parent is
+   *  missing too — a later watchOutOfWorkspaceFolders replace re-arms. */
+  private _watchExtraFolderPlaceholder(dir: string): void {
+    if (this._extraFolderWatchers.has(dir)) return
+    const parent = dirname(dir)
+    if (parent === dir || !existsSync(parent)) return
+    try {
+      const w = fsWatch(parent, { persistent: false }, () => {
+        if (this._extraFolderWatchers.get(dir) !== w) return
+        this._extraFolderWatchers.delete(dir)
+        try {
+          w.close()
+        } catch {
+          // ignore
+        }
+        if (existsSync(dir)) this._watchExtraFolder(dir)
+      })
+      w.on('error', () => {
+        if (this._extraFolderWatchers.get(dir) === w) this._extraFolderWatchers.delete(dir)
+      })
+      this._extraFolderWatchers.set(dir, w)
+      this._logger.info(`watch extra folder placeholder ${dir} via ${parent}`)
+    } catch {
+      // The parent vanished between existsSync and fsWatch — give up quietly.
+    }
+  }
+
   // For tests: skip the timer and run the pending flush synchronously.
   _flushForTests(): void {
     if (this._flushTimer) {
@@ -278,6 +382,11 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
       this._flushTimer = null
     }
     this._flush()
+  }
+
+  // For tests: how many out-of-workspace folder watches are armed.
+  get _extraFolderWatcherCount(): number {
+    return this._extraFolderWatchers.size
   }
 
   private _scheduleSubscribe(target: string, ignore: string[]): Promise<void> {
@@ -395,6 +504,14 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
       }
     }
     this._extraDirWatchers.clear()
+    for (const [, w] of this._extraFolderWatchers) {
+      try {
+        w.close()
+      } catch {
+        // ignore
+      }
+    }
+    this._extraFolderWatchers.clear()
   }
 
   private _enqueue(absPath: string, type: FileChangeType): void {

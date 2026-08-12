@@ -280,7 +280,7 @@ describe('MainThreadWindow progress', () => {
 
 describe('MainThreadWindow file dialogs', () => {
   function fakeFileDialogs(
-    open: URI | undefined,
+    open: URI[] | undefined,
     save: URI | undefined,
   ): {
     service: IFileDialogService
@@ -296,8 +296,8 @@ describe('MainThreadWindow file dialogs', () => {
     }
   }
 
-  it('returns the picked fsPath as a single-entry array', async () => {
-    const dialogs = fakeFileDialogs(URI.file('/ws/a.ts'), undefined)
+  it('returns the picked fsPaths', async () => {
+    const dialogs = fakeFileDialogs([URI.file('/ws/a.ts')], undefined)
     const mt = makeWindow({ fileDialogs: dialogs.service })
     await expect(
       mt.$showOpenDialog({ title: 'Open', defaultUri: '/ws', canSelectFiles: true }),
@@ -310,6 +310,37 @@ describe('MainThreadWindow file dialogs', () => {
         defaultUri: expect.objectContaining({ scheme: 'file' }),
       }),
     )
+  })
+
+  it('passes canSelectMany and filters through to the dialog service', async () => {
+    const dialogs = fakeFileDialogs([URI.file('/ws/a.png'), URI.file('/ws/b.png')], undefined)
+    const mt = makeWindow({ fileDialogs: dialogs.service })
+    await expect(
+      mt.$showOpenDialog({
+        title: 'Pick Images',
+        canSelectFiles: true,
+        canSelectMany: true,
+        filters: { Images: ['png', 'jpg'], 'All Files': ['*'] },
+      }),
+    ).resolves.toEqual([URI.file('/ws/a.png').fsPath, URI.file('/ws/b.png').fsPath])
+    expect(dialogs.showOpenDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canSelectMany: true,
+        filters: [
+          { name: 'Images', extensions: ['png', 'jpg'] },
+          { name: 'All Files', extensions: ['*'] },
+        ],
+      }),
+    )
+  })
+
+  it('omits canSelectMany and filters when the extension did not set them', async () => {
+    const dialogs = fakeFileDialogs([URI.file('/ws/a.ts')], undefined)
+    const mt = makeWindow({ fileDialogs: dialogs.service })
+    await mt.$showOpenDialog({ title: 'Open', canSelectFiles: true })
+    const call = dialogs.showOpenDialog.mock.calls[0]![0] as Record<string, unknown>
+    expect('canSelectMany' in call).toBe(false)
+    expect('filters' in call).toBe(false)
   })
 
   it('resolves undefined when the open dialog is cancelled', async () => {

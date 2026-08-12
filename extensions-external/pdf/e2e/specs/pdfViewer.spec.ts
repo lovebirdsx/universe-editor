@@ -43,4 +43,56 @@ test.describe('@p1 pdf viewer', () => {
 
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
+
+  test('reloads the preview when the pdf changes on disk', async ({ workbench }) => {
+    test.slow()
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-pdf-watch-'))
+    const docPath = path.join(tmpDir, 'watched.pdf')
+    await fs.writeFile(docPath, '%PDF-1.4\nfirst\n%%EOF\n')
+
+    await workbench.waitForRestored()
+    await workbench.page.evaluate((p) => window.__E2E__!.openFileUri(p), docPath)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), {
+        timeout: 15000,
+      })
+      .toBe('customEditor')
+
+    // The watched file sits in a tmp dir OUTSIDE the workspace, so this also
+    // exercises the out-of-workspace watch. The extension reloads by posting
+    // `{action:'reload'}` to the webview (pdf.js's own message hook re-opens the
+    // document); a full html re-send doesn't reach the frame once pdf.js is
+    // running, so count `PDFViewerApplication.open` calls as the reload signal.
+    const frame = workbench.page.frameLocator('[data-testid="webview-frame"]')
+    await expect(frame.locator('#outerContainer')).toBeAttached({ timeout: 15000 })
+    await workbench.page.evaluate(() => {
+      const f = document.querySelector<HTMLIFrameElement>('[data-testid="webview-frame"]')
+      const w = f?.contentWindow as unknown as Record<string, unknown> | undefined
+      const app = w?.['PDFViewerApplication'] as
+        | { open?: (...a: unknown[]) => unknown }
+        | undefined
+      if (!app?.open) return
+      const orig = app.open.bind(app)
+      ;(w as Record<string, unknown>)['__openCount'] = 0
+      app.open = (...a: unknown[]) => {
+        ;(w as Record<string, unknown>)['__openCount'] =
+          ((w as Record<string, unknown>)['__openCount'] as number) + 1
+        return orig(...a)
+      }
+    })
+    await fs.writeFile(docPath, '%PDF-1.4\nsecond\n%%EOF\n')
+    await expect
+      .poll(
+        () =>
+          workbench.page.evaluate(() => {
+            const f = document.querySelector<HTMLIFrameElement>('[data-testid="webview-frame"]')
+            const w = f?.contentWindow as unknown as Record<string, unknown> | undefined
+            return w?.['__openCount'] ?? 0
+          }),
+        { timeout: 15000 },
+      )
+      .toBeGreaterThanOrEqual(1)
+
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  })
 })

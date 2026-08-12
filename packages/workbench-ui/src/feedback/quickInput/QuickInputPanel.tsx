@@ -387,6 +387,20 @@ export function QuickPickPanel({
   const onItemRemove = state.onItemRemove
   const filterExternally = state.filterExternally === true
   const autoFocusFirstItem = state.autoFocusFirstItem !== false
+  const canSelectMany = state.canSelectMany === true
+  const selectedItems = state.selectedItems ?? []
+  const checkedIds = useMemo(() => new Set(selectedItems.map((i) => i.id)), [selectedItems])
+  const onSelectionChange = state.onSelectionChange
+  const toggleChecked = useCallback(
+    (item: IQuickPickItem) => {
+      if (!onSelectionChange) return
+      const next = checkedIds.has(item.id)
+        ? selectedItems.filter((i) => i.id !== item.id)
+        : [...selectedItems, item]
+      onSelectionChange(next)
+    },
+    [onSelectionChange, checkedIds, selectedItems],
+  )
   const compact = state.presentation === 'compact'
   const preserveDescription = state.preserveDescription === true
   const hasIconColumn = useMemo(
@@ -691,6 +705,13 @@ export function QuickPickPanel({
       e.preventDefault()
       const item = sortedFiltered[focusedIdx]
       if (isSelectable(item)) removeItem(item)
+    } else if (e.key === ' ' && canSelectMany && !filterExternally) {
+      // Multi-select pickers: Space toggles the focused row's checkbox (VSCode
+      // parity). Externally-filtered pickers (the file dialog) are exempt — their
+      // input box carries data (a path), not a filter query, so Space must type.
+      e.preventDefault()
+      const item = sortedFiltered[focusedIdx]
+      if (isSelectable(item)) toggleChecked(item)
     } else if (e.key === 'Enter') {
       // preventDefault stops the native keydown from leaking to whichever element
       // receives focus after the panel closes (typically the Monaco editor), which
@@ -854,6 +875,24 @@ export function QuickPickPanel({
                       {...(autoFocusFirstItem ? { onMouseMove: () => setFocusedIdx(idx) } : {})}
                     >
                       {!query && mruIds.includes(item.id) && <span className={styles['mruDot']} />}
+                      {canSelectMany && (
+                        <span
+                          role="checkbox"
+                          aria-checked={checkedIds.has(item.id)}
+                          aria-label={localize(
+                            'quickInput.toggleSelection.ariaLabel',
+                            'Toggle selection',
+                          )}
+                          className={`${styles['itemCheckbox']} ${
+                            checkedIds.has(item.id) ? styles['itemCheckboxChecked'] : ''
+                          }`}
+                          data-testid="quick-input-item-checkbox"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            toggleChecked(item)
+                          }}
+                        />
+                      )}
                       {hasIconColumn && (
                         <span
                           className={styles['itemIconSlot']}

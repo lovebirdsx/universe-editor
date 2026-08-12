@@ -49,6 +49,15 @@ export interface QuickPickState {
    */
   keepOpenOnAccept?: boolean | undefined
   /**
+   * When true, each row renders a checkbox and the picker tracks a checked set
+   * (VSCode `QuickPick.canSelectMany` parity).
+   */
+  canSelectMany?: boolean | undefined
+  /** Currently checked rows (matched by item id); only meaningful with canSelectMany. */
+  selectedItems?: readonly IQuickPickItem[] | undefined
+  /** Fires when the user toggles a row's checkbox; payload is the proposed next set. */
+  onSelectionChange?: ((items: IQuickPickItem[]) => void) | undefined
+  /**
    * When false, the list does not auto-highlight the first item as items change;
    * focus is driven solely by `activeItems` and user arrow/mouse. Defaults to true.
    */

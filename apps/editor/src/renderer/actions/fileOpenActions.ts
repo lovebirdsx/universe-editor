@@ -56,13 +56,16 @@ export class OpenFileAction extends Action2 {
       title: localize('fileDialog.openFile.title', 'Open File'),
       canSelectFiles: true,
       canSelectFolders: false,
+      canSelectMany: true,
       openLabel: localize('fileDialog.open', 'Open'),
       ...(workspace.current ? { defaultUri: workspace.current.folder } : {}),
     })
-    if (!picked) return
-    if (!(await confirmLargeFile(picked, fileService, dialog))) return
-    const input = inst.createInstance(FileEditorInput, picked)
-    openInLockAwareGroup(groups, input, { activate: true })
+    if (!picked || picked.length === 0) return
+    for (const uri of picked) {
+      if (!(await confirmLargeFile(uri, fileService, dialog))) continue
+      const input = inst.createInstance(FileEditorInput, uri)
+      openInLockAwareGroup(groups, input, { activate: true })
+    }
   }
 }
 

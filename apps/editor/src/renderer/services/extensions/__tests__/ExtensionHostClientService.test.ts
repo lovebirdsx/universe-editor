@@ -47,6 +47,7 @@ import type { IAcpPathPolicy } from '../../acp/acpPathPolicy.js'
 import type { IExcludeService } from '../../exclude/ExcludeService.js'
 import type { IScmService } from '../ScmService.js'
 import type { ITimelineService } from '../../timeline/TimelineService.js'
+import type { ITreeViewsService } from '../TreeViewsService.js'
 import type { IWebviewService } from '../WebviewService.js'
 import type { IExtensionEnablementService } from '../ExtensionEnablementService.js'
 
@@ -68,6 +69,8 @@ const disposed: string[] = []
 const activationCalls: string[] = []
 /** Keys pushed via `$acceptConfigurationChanged`, per push, across all fakes. */
 const configPushes: string[][] = []
+/** `$initializeEnvironment` payloads, in seed order, across all fakes. */
+const environmentSeeds: Record<string, unknown>[] = []
 /** Handle whose first `$activateByEvent` stays pending until released (or disposed). */
 let holdActivationFor: string | undefined
 const activatedOnce = new Set<string>()
@@ -101,7 +104,10 @@ vi.mock('../HostConnection.js', () => {
         return Promise.resolve()
       }),
       $initializeWorkspaceTrust: vi.fn().mockResolvedValue(undefined),
-      $initializeEnvironment: vi.fn().mockResolvedValue(undefined),
+      $initializeEnvironment: vi.fn().mockImplementation((env: Record<string, unknown>) => {
+        environmentSeeds.push(env)
+        return Promise.resolve()
+      }),
       $onDidGrantWorkspaceTrust: vi.fn().mockResolvedValue(undefined),
       $acceptConfigurationChanged: vi.fn().mockImplementation((keys: readonly string[]) => {
         configPushes.push([...keys])
@@ -192,6 +198,7 @@ function makeServiceWith(
     {} as IDialogService,
     { resetSourceControls } as unknown as IScmService,
     { reset: vi.fn() } as unknown as ITimelineService,
+    { reset: vi.fn() } as unknown as ITreeViewsService,
     {
       setExtHost: vi.fn(),
       createMainThread: vi.fn(),
@@ -229,9 +236,12 @@ function makeServiceWith(
       isWorkspaceTrusted: () => true,
     } as unknown as IWorkspaceTrustManagementService,
     {
-      getVersionInfo: vi
-        .fn()
-        .mockResolvedValue({ productName: 'Universe Editor', version: '0.0.0' }),
+      getVersionInfo: vi.fn().mockResolvedValue({
+        productName: 'Universe Editor',
+        version: '0.0.0',
+        machineId: 'machine-1',
+        appRoot: '/apps/universe',
+      }),
     } as unknown as IHostService,
     { open: vi.fn().mockResolvedValue(false) } as unknown as IOpenerService,
     {} as IProgressService,
@@ -257,6 +267,26 @@ describe('ExtensionHostClientService', () => {
 
     svc.dispose()
     expect(disposed).toHaveLength(1)
+  })
+
+  it('seeds the env namespace through $initializeEnvironment, including machineId/appRoot', async () => {
+    environmentSeeds.length = 0
+    const host = fakeHost()
+    const svc = makeService(host)
+
+    await svc.start()
+    expect(environmentSeeds).toHaveLength(1)
+    expect(environmentSeeds[0]).toMatchObject({
+      appName: 'Universe Editor',
+      appVersion: '0.0.0',
+      machineId: 'machine-1',
+      appRoot: '/apps/universe',
+    })
+    expect(typeof environmentSeeds[0]!['sessionId']).toBe('string')
+    expect(typeof environmentSeeds[0]!['uriScheme']).toBe('string')
+    expect(typeof environmentSeeds[0]!['language']).toBe('string')
+
+    svc.dispose()
   })
 
   it('never forwards a dev-extension id into the spec disabledIds (owned-set intersection)', async () => {

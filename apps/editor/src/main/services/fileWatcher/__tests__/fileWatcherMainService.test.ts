@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, sep as pathSep } from 'node:path'
+import { platform } from 'node:process'
 import { Emitter, URI, type IFileChangeEvent } from '@universe-editor/platform'
 import { FileWatcherMainService } from '../fileWatcherMainService.js'
 import { WatcherProcessClient } from '../watcherProcessClient.js'
@@ -230,6 +231,90 @@ describe('FileWatcherMainService', () => {
         expect(matched).toBeDefined()
       }, WAIT)
       c.stop()
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
+
+  // fs.watch recursive exists only on win32/darwin; on linux the folder watch
+  // falls back to the directory entry itself, so nested files stay invisible.
+  it.skipIf(platform === 'linux')(
+    'emits events for files nested under an out-of-workspace folder watch',
+    async () => {
+      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+      const nested = join(outRoot, 'deep', 'deeper')
+      await fs.mkdir(nested, { recursive: true })
+      const file = join(nested, 'watched.log')
+      await fs.writeFile(file, 'initial')
+      try {
+        await svc.watch(URI.file(root)) // workspace root ≠ outRoot
+        await svc.watchOutOfWorkspaceFolders([URI.file(outRoot)])
+        const c = startCollecting(svc)
+        await fs.writeFile(file, 'modified')
+        await vi.waitFor(() => {
+          svc._flushForTests()
+          const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(file))
+          expect(matched).toBeDefined()
+        }, WAIT)
+        c.stop()
+      } finally {
+        await fs.rm(outRoot, { recursive: true, force: true })
+      }
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
+
+  it('watchOutOfWorkspaceFolders skips folders under the workspace root', async () => {
+    await svc.watch(URI.file(root))
+    // In-workspace folder: the parcel watch already covers it, so the call
+    // must not arm a redundant fs.watch (asserted by the map staying empty).
+    await svc.watchOutOfWorkspaceFolders([URI.file(join(root, 'sub'))])
+    expect(svc._extraFolderWatcherCount).toBe(0)
+  })
+
+  it('watchOutOfWorkspaceFolders drops folders nested under an already-watched folder', async () => {
+    const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+    try {
+      await svc.watchOutOfWorkspaceFolders([URI.file(outRoot), URI.file(join(outRoot, 'child'))])
+      expect(svc._extraFolderWatcherCount).toBe(1)
+    } finally {
+      await fs.rm(outRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('watchOutOfWorkspaceFolders([]) clears armed folder watches', async () => {
+    const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+    try {
+      await svc.watchOutOfWorkspaceFolders([URI.file(outRoot)])
+      expect(svc._extraFolderWatcherCount).toBe(1)
+      await svc.watchOutOfWorkspaceFolders([])
+      expect(svc._extraFolderWatcherCount).toBe(0)
+    } finally {
+      await fs.rm(outRoot, { recursive: true, force: true })
+    }
+  })
+
+  it(
+    'a folder created after the watch armed still gets watched (parent placeholder)',
+    async () => {
+      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+      const missing = join(outRoot, 'not-yet')
+      try {
+        await svc.watchOutOfWorkspaceFolders([URI.file(missing)])
+        // Placeholder on the parent until the folder appears.
+        expect(svc._extraFolderWatcherCount).toBe(1)
+        await fs.mkdir(missing, { recursive: true })
+        const file = join(missing, 'created-later.log')
+        const c = startCollecting(svc)
+        await vi.waitFor(async () => {
+          await fs.writeFile(file, String(Date.now()))
+          svc._flushForTests()
+          const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(file))
+          expect(matched).toBeDefined()
+        }, WAIT)
+        c.stop()
+      } finally {
+        await fs.rm(outRoot, { recursive: true, force: true })
+      }
     },
     WATCHER_TEST_TIMEOUT,
   )

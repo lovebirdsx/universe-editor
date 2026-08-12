@@ -25,9 +25,13 @@ import {
   type TextDocumentContentChangeDto,
 } from '@universe-editor/extensions-common'
 import { type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
-import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
+import {
+  MonacoModelRegistry,
+  monacoModelKey,
+} from '../workbench/editor/monaco/MonacoModelRegistry.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { basenameOfResource, extensionOfBasename } from '../workbench/files/resourceInfo.js'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
@@ -39,6 +43,11 @@ import {
 import { monacoChangesToContentChanges } from '../services/extensions/documentSyncChanges.js'
 
 const DIDCHANGE_DEBOUNCE_MS = 200
+
+/** Upper bound for whenOpened() waiting on a model that never mounts (e.g. an
+ *  untitled buffer saved without the editor ever rendering): give up and let
+ *  the caller skip the push rather than hang a save notification forever. */
+const MIRROR_OPEN_TIMEOUT_MS = 5_000
 
 /** Above this many characters, open/flush pushes get an info log with timings so
  *  a large-document stall is attributable in the Output panel. */
@@ -76,12 +85,19 @@ interface OpenDoc {
   pendingFlush: boolean
 }
 
+interface OpenWaiter {
+  readonly settle: (opened: boolean) => void
+  timer?: ReturnType<typeof setTimeout>
+}
+
 export class DocumentSyncContribution
   extends Disposable
   implements IWorkbenchContribution, IDocumentMirrorTracker
 {
   /** Synced documents, keyed by model URI string. Kept open across editor switches. */
   private readonly _open = new Map<string, OpenDoc>()
+  /** whenOpened() callers waiting on a document's open push, keyed the same way. */
+  private readonly _openWaiters = new Map<string, Set<OpenWaiter>>()
   /** Languages already activated this host generation; reset on host relaunch. */
   private readonly _activated = new Set<string>()
   private readonly _logger: ILogger
@@ -131,6 +147,42 @@ export class DocumentSyncContribution
     return model !== undefined && this._open.has(model.uri.toString())
   }
 
+  /**
+   * IDocumentMirrorTracker: resolve once the document's open push has landed on
+   * the host (immediately when already open). False when the document never
+   * attaches/opens within `timeoutMs`, or the pipeline tears down first.
+   */
+  whenOpened(resource: URI, timeoutMs = MIRROR_OPEN_TIMEOUT_MS): Promise<boolean> {
+    const model = MonacoModelRegistry.peek(resource)
+    // Without a model there is no attach key yet — predict it the same way the
+    // registry keys a future model so the waiter meets _attach's key.
+    const key = model ? model.uri.toString() : monacoModelKey(resource)
+    if (this._open.get(key)?.opened === true) return Promise.resolve(true)
+    return new Promise<boolean>((resolve) => {
+      const waiter: OpenWaiter = {
+        settle: (opened) => {
+          if (waiter.timer !== undefined) clearTimeout(waiter.timer)
+          const waiters = this._openWaiters.get(key)
+          if (waiters) {
+            waiters.delete(waiter)
+            if (waiters.size === 0) this._openWaiters.delete(key)
+          }
+          resolve(opened)
+        },
+      }
+      waiter.timer = setTimeout(() => waiter.settle(false), timeoutMs)
+      const waiters = this._openWaiters.get(key) ?? new Set<OpenWaiter>()
+      waiters.add(waiter)
+      this._openWaiters.set(key, waiters)
+    })
+  }
+
+  private _settleOpenWaiters(key: string, opened: boolean): void {
+    const waiters = this._openWaiters.get(key)
+    if (!waiters) return
+    for (const waiter of [...waiters]) waiter.settle(opened)
+  }
+
   private _sync(): void {
     const input = this._editorService.activeEditor.get()
 
@@ -142,6 +194,18 @@ export class DocumentSyncContribution
       const key = model.uri.toString()
       if (this._open.has(key)) return
       this._attach(key, model, resolveLanguageId(input.sourceUri, model))
+      return
+    }
+
+    // An untitled buffer mirrors too (VSCode parity: `workspace.textDocuments`
+    // lists untitled documents). Its model exists once the editor (or an earlier
+    // programmatic open) resolved it; the registry's add event retries until then.
+    if (input instanceof UntitledEditorInput) {
+      const model = MonacoModelRegistry.peek(input.resource)
+      if (!model) return
+      const key = model.uri.toString()
+      if (this._open.has(key)) return
+      this._attach(key, model, resolveLanguageId(input.resource, model))
       return
     }
 
@@ -223,6 +287,7 @@ export class DocumentSyncContribution
     try {
       await documents.$acceptDocumentOpen(entry.model.uri, entry.languageId, version, text)
     } catch {
+      this._settleOpenWaiters(entry.model.uri.toString(), false)
       return // channel closing during shutdown — nothing to sync
     }
     if (text.length > LARGE_DOC_LOG_THRESHOLD) {
@@ -231,6 +296,7 @@ export class DocumentSyncContribution
       )
     }
     entry.opened = true
+    this._settleOpenWaiters(entry.model.uri.toString(), true)
     // Deltas that arrived while activation/open were in flight apply on top now.
     if (entry.pending.length > 0 || entry.pendingFlush) {
       this._ignore(this._pushChange(entry))
@@ -287,6 +353,11 @@ export class DocumentSyncContribution
     }
   }
 
+  /** Teardown must not leave whenOpened() callers hanging until their timeout. */
+  private _settleAllOpenWaiters(): void {
+    for (const key of [...this._openWaiters.keys()]) this._settleOpenWaiters(key, false)
+  }
+
   /** Swallow IPC rejections on fire-and-forget notifications (e.g. the channel
    *  closing during shutdown) so they never surface as unhandled rejections. */
   private _ignore(p: Promise<unknown>): void {
@@ -301,12 +372,14 @@ export class DocumentSyncContribution
     PendingDocumentSync.unregister(key)
     const documents = this._client.getDocuments()
     if (documents) this._ignore(documents.$acceptDocumentClose(entry.model.uri))
+    this._settleOpenWaiters(key, false)
     entry.store.dispose()
   }
 
   override dispose(): void {
     DocumentMirrorTracking.unregister(this)
     for (const key of [...this._open.keys()]) this._detach(key)
+    this._settleAllOpenWaiters()
     super.dispose()
   }
 }

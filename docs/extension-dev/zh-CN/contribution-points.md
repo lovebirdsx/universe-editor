@@ -1,6 +1,6 @@
 # 贡献点参考
 
-> `contributes` 是扩展在 `package.json` 里声明的静态能力清单——命令、菜单、快捷键、设置、自定义编辑器等。宿主在扩展激活**之前**就把这些声明翻译成核心注册表里的条目：你的命令因此能出现在命令面板里、被点击时才触发懒激活。本文逐个列出宿主当前（API 0.9.0）真实支持的贡献点，每个一节：字段、行为、示例。
+> `contributes` 是扩展在 `package.json` 里声明的静态能力清单——命令、菜单、快捷键、设置、自定义编辑器等。宿主在扩展激活**之前**就把这些声明翻译成核心注册表里的条目：你的命令因此能出现在命令面板里、被点击时才触发懒激活。本文逐个列出宿主当前（API 0.12.0）真实支持的贡献点，每个一节：字段、行为、示例。
 
 ## 总览
 
@@ -13,6 +13,8 @@
 | `configuration` | 往设置系统注册配置项 |
 | `jsonValidation` | 给 JSON 文件关联 schema（校验/补全） |
 | `customEditors` | 为匹配的文件注册 webview 自定义编辑器 |
+| `viewsContainers` | 声明扩展自有的 ViewContainer（活动栏） |
+| `views` | 往 ViewContainer 里声明 Tree View |
 | `themes` | 颜色主题 |
 | `iconThemes` | 文件图标主题 |
 | `productIconThemes` | 产品图标主题 |
@@ -64,7 +66,7 @@
 
 每个菜单项必须有 `command` 或 `submenu` 之一——都没有则 manifest 校验失败，整个扩展被拒载。
 
-宿主当前支持的菜单位置（11 个 + 任何已声明的 submenu id）：
+宿主当前支持的菜单位置（12 个 + 任何已声明的 submenu id）：
 
 | 位置 key | 出现的地方 |
 |---|---|
@@ -79,6 +81,7 @@
 | `scm/resourceFolder/context` | SCM 文件夹条目右键 |
 | `scm/inputBox` | SCM 提交输入框区域 |
 | `timeline/item/context` | Timeline 条目右键 |
+| `view/item/context` | Tree View 条目右键（`when` 可用 `view` = 视图 id、`viewItem` = 条目 `contextValue`） |
 
 ```jsonc
 {
@@ -258,6 +261,81 @@
 ```
 
 配套激活事件是 `onCustomEditor:<viewType>`——打开匹配文件时宿主先派发它激活你的扩展，再向你索要编辑器内容。provider 注册、webview 加载、CSP 等完整细节见 [自定义编辑器与 Webview](./webview-guide.md)。
+
+## viewsContainers
+
+> 0.12.0 新增。使用该贡献点的扩展，`engines.universe` 下界需 `>=0.12.0`。
+
+声明扩展自有的 ViewContainer——活动栏上的一个标签页容器（对等 VSCode 的 `contributes.viewsContainers`）。当前仅支持 `activitybar` 一个位置，VSCode 的 `panel` 位置未支持。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `id` | string | 是 | 容器 id（建议带扩展前缀，如 `my-extension.explorer`）；`contributes.views` 的 key 引用它 |
+| `title` | string | 是 | 活动栏 hover 与侧栏标题栏显示的名称 |
+| `icon` | string | 是 | codicon 名——`$(files)` 写法自动剥壳，也可直接写 `files`；未知名回退默认字形。文件路径图标未支持 |
+
+```jsonc
+{
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "my-extension.explorer", "title": "My Explorer", "icon": "$(files)" }
+      ]
+    }
+  }
+}
+```
+
+行为：
+
+- 扩展容器在活动栏排在全部内置容器之后。
+- 容器只是壳——里面有哪些视图由 `contributes.views` 声明。
+
+## views
+
+> 0.12.0 新增。使用该贡献点的扩展，`engines.universe` 下界需 `>=0.12.0`。
+
+往 ViewContainer 里声明 Tree View（对等 VSCode 的 `contributes.views`）。结构是 `{ "<容器 key>": [ <视图>... ] }`，容器 key 三选一：
+
+- 本扩展在 `viewsContainers` 里自声明的容器 id；
+- 内置别名：`explorer` / `search` / `scm` / `outline`；
+- 内置容器全 id（如 `workbench.view.explorer`）。
+
+写了不认识的 key 不会报错：宿主 `console.warn` 一条日志后忽略该组声明（与未知菜单位置同款前向兼容）。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `id` | string | 是 | 视图 id——激活事件锚点 `onView:<id>` 与 API 注册的 `viewId` 都用它 |
+| `name` | string | 是 | 视图标题栏显示的名称 |
+| `when` | string | 否 | ContextKey 表达式。**已透传但当前版本不消费**——不门控视图可见性 |
+
+```jsonc
+{
+  "activationEvents": ["onView:my-extension.nodeDeps"],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "my-extension.explorer", "title": "My Explorer", "icon": "$(files)" }
+      ]
+    },
+    "views": {
+      "my-extension.explorer": [
+        { "id": "my-extension.nodeDeps", "name": "Node Dependencies" }
+      ],
+      "explorer": [
+        { "id": "my-extension.extra", "name": "Extra" }
+      ]
+    }
+  }
+}
+```
+
+行为：
+
+- 声明只是注册空壳视图；内容在扩展激活后由 `window.registerTreeDataProvider(viewId, provider)` 或 `window.createTreeView(viewId, { treeDataProvider })` 提供，写法见 [API 概览 · treeView](./api/README.md#treeview--树视图)。
+- 配套激活事件 `onView:<viewId>`：视图首次显示时派发（须显式声明在 `activationEvents`，宿主不做自动推导）。
+- 树为懒拉取渲染（只在用户展开节点时拉其子节点）；行点击执行 `TreeItem.command`；条目右键菜单走 `view/item/context` 菜单位置。
+- 首版裁剪（与 VSCode 的逐条差异见 [`packages/extension-api/COMPATIBILITY.md`](../../../packages/extension-api/COMPATIBILITY.md) 的 0.12.0 条目）：`onDidChangeTreeData` 恒整树失效重拉、`TreeItem.id` 不参与身份（刷新后展开态不保留）、无 `reveal`/拖拽/checkbox/badge、`TreeItem.iconPath` 仅 codicon 名。
 
 ## themes
 

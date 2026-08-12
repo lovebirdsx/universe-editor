@@ -27,7 +27,7 @@ extensions-external/<name>/
 - 用 `context.extensionPath` 拼资产路径；`asWebviewUri(fileUri(...))` 转 URL 填进 HTML。
 - 模板 HTML（如 pdf.js viewer.html）经 esbuild `.html` text loader 内联成字符串，再字符串替换：剥掉硬编码的相对 `<script>/<link>`，注入 `asWebviewUri` 后的 URL + CSP meta。
 - `localResourceRoots` **必须同时包含扩展目录和文档所在目录**（漏文档目录 → 预览器出 UI 但空内容，见基建文档坑②）。
-- 装了 API 依赖的三方扩展移植：`import "vscode"` → `@universe-editor/extension-api`，语义基本对齐；砍掉现有 API 无的能力（如 `createFileSystemWatcher` 自动重载）。
+- 装了 API 依赖的三方扩展移植：`import "vscode"` → `@universe-editor/extension-api`，语义基本对齐；砍掉现有 API 仍无的能力（对照 `packages/extension-api/COMPATIBILITY.md`）。
 
 ## 关键参考路径
 

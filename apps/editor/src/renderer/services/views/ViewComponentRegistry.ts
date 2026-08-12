@@ -17,15 +17,25 @@ import {
   toDisposable,
 } from '@universe-editor/platform'
 
+/**
+ * Props every view component receives at render time. `viewId` lets one shared
+ * component serve many views (extension tree views all bind a single
+ * componentKey and dispatch per view id); built-in single-view components
+ * simply ignore it.
+ */
+export interface IViewComponentProps {
+  readonly viewId?: string
+}
+
 export interface IViewComponentRegistry {
-  register(componentKey: string, component: ComponentType): IDisposable
-  get(componentKey: string): ComponentType | undefined
+  register(componentKey: string, component: ComponentType<IViewComponentProps>): IDisposable
+  get(componentKey: string): ComponentType<IViewComponentProps> | undefined
 }
 
 class ViewComponentRegistryImpl implements IViewComponentRegistry {
-  private readonly _components = new Map<string, ComponentType>()
+  private readonly _components = new Map<string, ComponentType<IViewComponentProps>>()
 
-  register(componentKey: string, component: ComponentType): IDisposable {
+  register(componentKey: string, component: ComponentType<IViewComponentProps>): IDisposable {
     this._components.set(componentKey, component)
     return toDisposable(() => {
       if (this._components.get(componentKey) === component) {
@@ -34,7 +44,7 @@ class ViewComponentRegistryImpl implements IViewComponentRegistry {
     })
   }
 
-  get(componentKey: string): ComponentType | undefined {
+  get(componentKey: string): ComponentType<IViewComponentProps> | undefined {
     return this._components.get(componentKey)
   }
 }
@@ -77,7 +87,7 @@ export type ViewRegistration = Omit<IViewDescriptor, 'componentKey'>
  */
 export function registerViewWithComponent(
   registration: ViewRegistration,
-  component: ComponentType,
+  component: ComponentType<IViewComponentProps>,
   toolbar?: ComponentType,
 ): IDisposable {
   return combinedDisposable(

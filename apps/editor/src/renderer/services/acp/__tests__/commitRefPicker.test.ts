@@ -47,6 +47,9 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
 
   valueSelection: [number, number] | undefined
   activeItems: readonly T[] = []
+  selectedItems: readonly T[] = []
+  canSelectMany = false
+  readonly onDidChangeSelection = new Emitter<T[]>().event
   title: string | undefined
   buttons: readonly IQuickInputButton[] = []
   okLabel: string | undefined

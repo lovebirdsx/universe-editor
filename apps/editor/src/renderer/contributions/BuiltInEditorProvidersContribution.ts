@@ -29,6 +29,7 @@ import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
 import { ExtensionEditorInput } from '../services/editor/ExtensionEditorInput.js'
 import { CustomEditorInput } from '../services/editor/CustomEditorInput.js'
+import { WebviewPanelInput } from '../services/editor/WebviewPanelInput.js'
 import { WebviewDiffInput } from '../services/editor/WebviewDiffInput.js'
 import { SchemaViewerInput } from '../services/editor/SchemaViewerInput.js'
 import { StartupPerformanceInput } from '../services/editor/StartupPerformanceInput.js'
@@ -64,6 +65,7 @@ import { SwarmReviewEditor } from '../workbench/swarm/SwarmReviewEditor.js'
 import { SwarmDiffEditor } from '../workbench/swarm/SwarmDiffEditor.js'
 import { ExtensionEditor } from '../workbench/extensions/ExtensionEditor.js'
 import { CustomEditorHost } from '../workbench/editor/CustomEditorHost.js'
+import { WebviewPanelHost } from '../workbench/editor/WebviewPanelHost.js'
 
 /** Some editors typed with their own input carry a stricter prop than the
  * registry's `{ input: IEditorInput }`; cast at the binding site. */
@@ -126,6 +128,14 @@ export class BuiltInEditorProvidersContribution
         { typeId: WebviewDiffInput.TYPE_ID, componentKey: 'customEditor' },
         CustomEditorHost,
       ),
+    )
+    // Transient like WebviewDiffInput — an extension-owned webview panel
+    // (`window.createWebviewPanel`) carries no file and there is no
+    // WebviewPanelSerializer in this first cut, so a restored window drops the
+    // tab (the extension can recreate it on next activation). Rendered by the
+    // dedicated WebviewPanelHost (no open/resolve — the model already exists).
+    this._register(
+      registerEditorWithComponent({ typeId: WebviewPanelInput.TYPE_ID }, WebviewPanelHost),
     )
     // Transient read-only schema viewer — no deserialize: it carries in-memory
     // schema text that isn't persisted, so a restored window simply drops it.

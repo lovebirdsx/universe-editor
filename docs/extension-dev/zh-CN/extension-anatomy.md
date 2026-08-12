@@ -1,6 +1,6 @@
 # 扩展的结构
 
-> 一个 Universe Editor 扩展就是一个带 `package.json` 的 npm 目录：manifest 逐字段说明、激活事件的完整清单、扩展从扫描到 deactivate 的生命周期，以及 `activate` 收到的 `ExtensionContext`。以 API 0.9.0 为准。
+> 一个 Universe Editor 扩展就是一个带 `package.json` 的 npm 目录：manifest 逐字段说明、激活事件的完整清单、扩展从扫描到 deactivate 的生命周期，以及 `activate` 收到的 `ExtensionContext`。以 API 0.12.0 为准。
 
 ## 最小形态
 
@@ -23,7 +23,7 @@ my-extension/
 |---|---|
 | `name` | 扩展 id 的下半部分（npm 小写名规则，如 `my-extension`）。 |
 | `version` | 扩展自身版本。发布时必须是纯 `x.y.z`——宿主的版本协商不认识 prerelease 标签，`uex package` 对带标签的版本直接报错。 |
-| `engines` | **整个对象必填**，且必须含 `engines.universe`。它声明的是**扩展 API 版本**区间，不是编辑器版本；推荐 `">=0.9.0 <1.0.0"`，**不要用 `^0.x`**。语义与理由见 [API 版本与 `engines.universe`](./versioning.md)，此处不重复。 |
+| `engines` | **整个对象必填**，且必须含 `engines.universe`。它声明的是**扩展 API 版本**区间，不是编辑器版本；推荐 `">=0.12.0 <1.0.0"`，**不要用 `^0.x`**。语义与理由见 [API 版本与 `engines.universe`](./versioning.md)，此处不重复。 |
 
 ### 可选（身份与入口）
 
@@ -118,7 +118,7 @@ my-extension/
 
 ## ExtensionContext
 
-`activate(context)` 收到的对象（以 API 0.9.0 的类型定义为准）：
+`activate(context)` 收到的对象（以 API 0.12.0 的类型定义为准）：
 
 ```ts
 export function activate(context: ExtensionContext) {
@@ -154,7 +154,7 @@ export function activate(context: ExtensionContext) {
   "name": "my-extension",              // id 下半部分（npm 小写名规则）
   "version": "0.1.0",                  // 纯 x.y.z，不支持 prerelease
   "engines": {
-    "universe": ">=0.9.0 <1.0.0"       // 扩展 API 版本区间（非编辑器版本）；勿用 ^0.x
+    "universe": ">=0.12.0 <1.0.0"      // 扩展 API 版本区间（非编辑器版本）；勿用 ^0.x
   },
 
   // ---- 身份与入口 ----
@@ -196,7 +196,7 @@ export function activate(context: ExtensionContext) {
     "universe:prepublish": "npm run build"
   },
   "devDependencies": {
-    "@universe-editor/extension-api": "^0.9.0"
+    "@universe-editor/extension-api": "^0.12.0"
   }
 }
 ```

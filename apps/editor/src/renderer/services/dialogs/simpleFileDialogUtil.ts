@@ -10,22 +10,57 @@ export interface DialogEntry {
   readonly isDirectory: boolean
 }
 
+/** A file-type filter group (mirrors the platform `IFileDialogFilter` shape). */
+export interface DialogFileFilter {
+  readonly name: string
+  readonly extensions: readonly string[]
+}
+
+/** Lowercased extension of a file name ('' when none; leading-dot files have none). */
+export function fileExtension(name: string): string {
+  const idx = name.lastIndexOf('.')
+  if (idx <= 0) return ''
+  return name.slice(idx + 1).toLowerCase()
+}
+
+/**
+ * Union the extensions of every filter group, lowercased (a leading dot is
+ * tolerated). `*` in any group means "all files" and collapses the result to
+ * undefined (= no filtering), as does an empty/absent filter list.
+ */
+export function collectFilterExtensions(
+  filters: readonly DialogFileFilter[] | undefined,
+): ReadonlySet<string> | undefined {
+  if (!filters || filters.length === 0) return undefined
+  const exts = new Set<string>()
+  for (const group of filters) {
+    for (const ext of group.extensions) {
+      const normalized = ext.trim().toLowerCase().replace(/^\./, '')
+      if (normalized === '*') return undefined
+      if (normalized !== '') exts.add(normalized)
+    }
+  }
+  return exts.size === 0 ? undefined : exts
+}
+
 function compareName(a: string, b: string): number {
   return a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true })
 }
 
 /**
  * Filter + order entries for display: directories first then files, each group
- * sorted by name. Drops files when `allowFiles` is false (folder-only picker) and
- * dotfiles when `showDotFiles` is false.
+ * sorted by name. Drops files when `allowFiles` is false (folder-only picker),
+ * dotfiles when `showDotFiles` is false, and files whose extension is not in
+ * `fileExts` (folders always pass so navigation stays possible).
  */
 export function prepareEntries(
   entries: readonly DialogEntry[],
-  opts: { allowFiles: boolean; showDotFiles: boolean },
+  opts: { allowFiles: boolean; showDotFiles: boolean; fileExts?: ReadonlySet<string> | undefined },
 ): DialogEntry[] {
   const visible = entries.filter((e) => {
     if (!opts.showDotFiles && e.name.startsWith('.')) return false
     if (!opts.allowFiles && !e.isDirectory) return false
+    if (!e.isDirectory && opts.fileExts && !opts.fileExts.has(fileExtension(e.name))) return false
     return true
   })
   const folders = visible.filter((e) => e.isDirectory).sort((a, b) => compareName(a.name, b.name))

@@ -77,6 +77,9 @@ function recording(): {
       },
       $setLanguageServerStatus: () => {},
       $getLanguages: () => Promise.resolve([]),
+      $getDiagnostics: () => Promise.resolve([]),
+      $subscribeDiagnostics: () => Promise.resolve(),
+      $unsubscribeDiagnostics: () => Promise.resolve(),
     },
   }
 }
@@ -258,6 +261,93 @@ describe('LanguageProviderRegistry', () => {
     expect(mt.inlayHintsRefreshes).toEqual([0])
     disposable.dispose()
     expect(mt.unregistered).toEqual([0])
+  })
+
+  it('declares resolve support in metadata and hands the original hint (with data) to resolveInlayHint', async () => {
+    const mt = recording()
+    const reg = new LanguageProviderRegistry(() => mt.impl, new ExtHostDocuments())
+    const range = { start: { line: 0, character: 0 }, end: { line: 5, character: 0 } }
+    const original = {
+      position: { line: 0, character: 3 },
+      label: ': string',
+      data: { file: 'a.ts', symbol: 42 },
+    }
+    const resolvedHint = { ...original, tooltip: 'the inferred type' }
+    const resolveCalls: unknown[] = []
+    reg.registerInlayHintsProvider('typescript', {
+      provideInlayHints: () => [original],
+      resolveInlayHint: (hint) => {
+        resolveCalls.push(hint)
+        return resolvedHint
+      },
+    })
+    expect(mt.registered).toEqual([
+      {
+        handle: 0,
+        type: 'inlayHints',
+        selector: ['typescript'],
+        metadata: { inlayHintsResolve: true },
+      },
+    ])
+
+    const dtos = await reg.provideInlayHints(0, uri, range)
+    expect(dtos).toHaveLength(1)
+    // `data` never crosses the wire; the DTO carries cache coordinates instead.
+    expect('data' in dtos![0]!).toBe(false)
+    const { resolveCacheId, resolveIndex } = dtos![0]!
+    expect(resolveCacheId).toBeTypeOf('number')
+    expect(resolveIndex).toBe(0)
+
+    const resolved = await reg.resolveInlayHint(0, resolveCacheId!, resolveIndex!)
+    // The provider received its own object back — identity, `data` included.
+    expect(resolveCalls).toEqual([original])
+    expect(resolveCalls[0]).toBe(original)
+    expect(resolved).toEqual({
+      position: { line: 0, character: 3 },
+      label: ': string',
+      tooltip: 'the inferred type',
+    })
+    expect('data' in resolved!).toBe(false)
+  })
+
+  it('invalidates the inlay-hint cache on a new provide round and on dispose', async () => {
+    const mt = recording()
+    const reg = new LanguageProviderRegistry(() => mt.impl, new ExtHostDocuments())
+    const range = { start: { line: 0, character: 0 }, end: { line: 5, character: 0 } }
+    let round = 0
+    const disposable = reg.registerInlayHintsProvider('typescript', {
+      provideInlayHints: () => [{ position: { line: 0, character: round++ }, label: 'x' }],
+      resolveInlayHint: (hint) => hint,
+    })
+
+    const first = await reg.provideInlayHints(0, uri, range)
+    const second = await reg.provideInlayHints(0, uri, range)
+    expect(second![0]!.resolveCacheId).not.toBe(first![0]!.resolveCacheId)
+    // The superseded round's coordinates no longer resolve.
+    await expect(
+      reg.resolveInlayHint(0, first![0]!.resolveCacheId!, first![0]!.resolveIndex!),
+    ).resolves.toBeNull()
+    await expect(
+      reg.resolveInlayHint(0, second![0]!.resolveCacheId!, second![0]!.resolveIndex!),
+    ).resolves.not.toBeNull()
+
+    disposable.dispose()
+    await expect(
+      reg.resolveInlayHint(0, second![0]!.resolveCacheId!, second![0]!.resolveIndex!),
+    ).resolves.toBeNull()
+  })
+
+  it('tags no resolve coordinates when the provider lacks resolveInlayHint', async () => {
+    const mt = recording()
+    const reg = new LanguageProviderRegistry(() => mt.impl, new ExtHostDocuments())
+    const range = { start: { line: 0, character: 0 }, end: { line: 5, character: 0 } }
+    reg.registerInlayHintsProvider('typescript', {
+      provideInlayHints: () => [{ position: { line: 0, character: 3 }, label: 'x' }],
+    })
+    expect(mt.registered).toEqual([{ handle: 0, type: 'inlayHints', selector: ['typescript'] }])
+    const dtos = await reg.provideInlayHints(0, uri, range)
+    expect(dtos![0]!.resolveCacheId).toBeUndefined()
+    await expect(reg.resolveInlayHint(0, 0, 0)).resolves.toBeNull()
   })
 
   it('returns null from the new provide* routes when the handle type does not match', async () => {

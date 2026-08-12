@@ -183,6 +183,111 @@
     `extHostFileEvents` / `mainThreadFileEvents`（文件监听事件）；其余能力挂既有
     通道。协议为内部实现细节，不影响扩展侧表面。
 
+- `0.10.0` — 向后兼容的新增（minor）+ 解除 0.9.0 的一批降级限制（被解除项签名不变）。
+  除注明外均为纯新增，不改既有签名：
+  - `languages`：
+    - `getDiagnostics()` / `getDiagnostics(resource)`：全源诊断快照（返回
+      Promise——VSCode 为同步返回，差异见 JSDoc）。快照非 live 视图；marker 读回
+      不含 `relatedInformation`。
+    - `onDidChangeDiagnostics` + `DiagnosticChangeEvent`（`uris`）：变更推送经
+      50ms 防抖，宿主按扩展的兴趣订阅过滤。
+  - `window`：
+    - `visibleTextEditors` + `onDidChangeVisibleTextEditors`：每个编辑器组的
+      active 文本编辑器一项；快照语义，`version`/`selection` 变化不触发事件；
+      集合按 URI 身份去重，编辑器内部编辑不触发。
+  - `workspace`：
+    - `RelativePattern` class + `GlobPattern` 类型：`findFiles` 与
+      `createFileSystemWatcher` 均接受。`RelativePattern` 的 base 在 findFiles
+      场景需为工作区内 `file:` URI（watcher 场景可在工作区外，见下）。
+    - `openTextDocument({ language?, content? })` 重载与无参形态、`untitled:` URI
+      形态 + `TextDocument.isUntitled`：untitled 文档进入 `textDocuments` 与
+      open/change/close 事件流；另存为的生命周期为 close(untitled) → open(file) →
+      didSave(file)。限制：untitled URI 的 path 不 seed 另存对话框；纯 API 创建的
+      untitled 无法被扩展主动关闭；Untitled 另存为不跑 `onWillSaveTextDocument`
+      participants。
+    - `WorkspaceEdit` 文件级操作类型导出：`CreateFile` / `RenameFile` /
+      `DeleteFile`（+ 各自 Options）、`TextDocumentEdit`。
+  - `env`：`machineId`（randomUUID 持久化于 userData/machineid，匿名无硬件指纹）、
+    `appRoot`。
+  - inlay hints：`InlayHintsProvider.resolveInlayHint?` 懒解析 label parts 的
+    tooltip/location/command、hint 级 tooltip 与 textEdits；`InlayHint.data` 现在
+    有效且不出 host 进程。
+  - 解除的限制（签名不变）：
+    - `showOpenDialog`：`canSelectMany` 与 `filters` 真正生效（自绘与原生对话框
+      两路）；save 对话框 `filters` 仍不支持。
+    - `applyEdit`：`documentChanges` 支持 create/rename/delete 文件操作，与文本
+      编辑按数组顺序交错执行；options 语义对齐 LSP（`overwrite` 优先于
+      `ignoreIfExists` 等）；失败即中止返回 false，不回滚；delete 默认走回收站；
+      文件操作不进撤销栈（与 VSCode 一致）。
+    - `onDidSaveTextDocument`：覆盖 Untitled 另存为（事件携带落盘 file URI）、
+      文件另存为、Merge 编辑器保存；didSave 保证排在镜像 open 之后。
+    - `findFiles`：`CancellationToken` 真取消（杀底层 rg 枚举），取消 resolve
+      `[]`；100k 截断日志带数量。
+    - `createFileSystemWatcher`：支持工作区外监听（`RelativePattern` base 或绝对
+      glob 落在工作区外时自动 arm 递归监听，同 base 共享，dispose 即释放）。
+      限制：Linux 下工作区外监听无效（`fs.watch` recursive 限制）；工作区外事件
+      只触发 `onDidChange`（不区分 create/delete）。
+  - 其它：`getExtension` JSDoc 示例 id 形态修正（无 publisher 时 id=name）——纯
+    注释修正，无表面变化。
+
+- `0.11.0` — 向后兼容的新增（minor，2026-08-12）：独立 webview 面板表面。
+  除注明外均为纯新增，不改既有签名：
+  - `window.createWebviewPanel(viewType, title, showOptions?, options?)`：扩展主动
+    创建并持有一个不绑定文件的独立 webview tab（同步返回 `WebviewPanel`）。与
+    VSCode 的差异（JSDoc 已注明）：无 `ViewColumn`——面板开在当前活动组，
+    `showOptions` 仅 `{ preserveFocus?: boolean }`（后台打开）；无
+    `retainContextWhenHidden` 选项——本实现 iframe 不随 tab 隐藏重建，隐藏期状态
+    天然保留；无 `WebviewPanelSerializer`——window reload/重启不恢复 panel。
+  - `WebviewPanel` 接口扩充（custom editor 的 panel 同享）：`title` 可写（改 tab
+    名）、`readonly active` / `readonly visible`（tab 挂载粒度近似）、
+    `onDidChangeViewState: Event<WebviewPanelOnDidChangeViewStateEvent>`、
+    `reveal(preserveFocus?)`；新导出类型
+    `WebviewPanelOnDidChangeViewStateEvent`。
+  - 用户关 tab 或 `panel.dispose()` 均 fire `onDidDispose`。
+  - 配套：`samples/webview-panel/` 最小范例（Show/Reveal/Dispose 三命令）；
+    `docs/extension-dev/zh-CN/webview-guide.md` 新增「独立 webview 面板（0.11.0
+    起）」小节。
+
+- `0.12.0` — 向后兼容的新增（minor，2026-08-12）：Tree View 表面（对等 VSCode 的
+  `window.registerTreeDataProvider` / `window.createTreeView`）与配套 manifest
+  贡献点。除注明外均为纯新增，不改既有签名：
+  - manifest 贡献点：
+    - `contributes.viewsContainers.activitybar`：`[{ id, title, icon }]`——扩展
+      自有 ViewContainer 进活动栏；`icon` 为 codicon 名（`$(files)` 写法自动剥壳，
+      缺省回退默认字形），文件路径图标为后期阶段。`panel` 位置未支持。
+    - `contributes.views`：`{ [containerId]: [{ id, name, when? }] }`——key 可为
+      本扩展自声明的容器 id、内置别名（`explorer` / `search` / `scm` / `outline`）
+      或任意内置容器全 id；未知 key 由 renderer 告警跳过。`when` 已透传但首版不
+      消费（不门控可见性）。
+  - `window.registerTreeDataProvider(viewId, provider)`：为已声明的 view 供数据，
+    返回 `Disposable`。
+  - `window.createTreeView(viewId, { treeDataProvider })`：同一注册，另同步返回
+    `TreeView<T>` 句柄，把 visibility / selection / expansion 回镜像给扩展：
+    `visible` / `selection` / `onDidChangeVisibility` / `onDidChangeSelection` /
+    `onDidExpandElement` / `onDidCollapseElement` / `dispose`。
+  - 新类型（`src/treeView.ts`，包级 re-export）：`TreeDataProvider<T>`
+    （`getTreeItem` / `getChildren` / `getParent?` / `onDidChangeTreeData?`）、
+    `TreeItem` class、`TreeItemLabel`、`TreeItemCollapsibleState` 枚举
+    （None/Collapsed/Expanded）、`TreeView<T>` / `TreeViewOptions<T>` /
+    `TreeViewVisibilityChangeEvent` / `TreeViewSelectionChangeEvent<T>` /
+    `TreeViewExpansionChangeEvent<T>`。
+  - 配套激活事件 `onView:<viewId>`（须显式声明在 `activationEvents`，视图首次
+    显示时触发）与菜单贡献点 `view/item/context`（when 键：`view` = viewId、
+    `viewItem` = 条目 `contextValue`）。
+  - 行为：树为懒拉取渲染（只在用户展开节点时拉其子节点）；行点击执行
+    `TreeItem.command`。
+  - 与 VSCode 的首版差异（JSDoc 已注明）：
+    - `TreeItem.id` 不参与身份 → 刷新后展开态不保留（整树回折叠）。
+    - 无 `TreeView.reveal`（`getParent` 仅为签名对齐而接受，不消费）、无
+      drag & drop / checkbox / badge / `TreeView.title`/`description`/`message`。
+    - `TreeItem.iconPath` 仅 codicon 名字符串，不支持 Uri/明暗双图标；
+      `TreeItemLabel` 只渲染纯文本（无高亮）。
+    - `onDidChangeTreeData(element)` 的 element 参数被忽略——恒整树失效重拉。
+    - `command.arguments` 仅 JSON 可克隆值（URI 自动 revive）。
+    - `TreeView.visible` 为挂载粒度近似；`views` 的 `when` 暂不生效。
+  - 配套：`docs/extension-dev/zh-CN/migration-from-vscode.md` 的 TreeView 行翻
+    「部分对齐」；`contribution-points.md` 新增 `viewsContainers` / `views` 两节。
+
 ## 激活事件清单（activation events）
 
 扩展在 `package.json` 的 `activationEvents` 声明唤醒时机。手写字符串易拼错（拼错则

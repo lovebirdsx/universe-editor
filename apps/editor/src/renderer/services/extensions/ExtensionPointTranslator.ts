@@ -24,6 +24,9 @@ import {
   KeybindingWeight,
   MenuId,
   MenuRegistry,
+  ViewContainerLocation,
+  ViewContainerRegistry,
+  ViewRegistry,
   type ICommandMetadata,
   type IJSONSchema,
   type IKeybindingItem,
@@ -45,8 +48,11 @@ import {
   type IResolvedJsonValidation,
   type ISubmenuContribution,
   type IThemeContribution,
+  type IViewContainerContribution,
+  type IViewContribution,
 } from '@universe-editor/extensions-common'
 import { registerCommandSource } from './contributedCommandSources.js'
+import { EXTENSION_TREE_VIEW_COMPONENT_KEY } from '../views/extensionViews.js'
 
 /** Maps VSCode-style manifest menu keys to our internal MenuId. */
 const MENU_ID_BY_KEY: Readonly<Record<string, MenuId>> = {
@@ -61,6 +67,7 @@ const MENU_ID_BY_KEY: Readonly<Record<string, MenuId>> = {
   'scm/resourceFolder/context': MenuId.ScmResourceFolderContext,
   'scm/inputBox': MenuId.ScmInputBox,
   'timeline/item/context': MenuId.TimelineItemContext,
+  'view/item/context': MenuId.ViewItemContext,
 }
 
 /** Splits a `group@order` string (VSCode convention) into its parts. */
@@ -71,6 +78,30 @@ function parseGroup(group: string | undefined): { group?: string; order?: number
   const order = Number(group.slice(at + 1))
   const name = group.slice(0, at)
   return { group: name, ...(Number.isFinite(order) ? { order } : {}) }
+}
+
+/**
+ * Maps the VSCode-style `contributes.views` keys for well-known built-in
+ * containers to our container ids. A key not listed here is tried verbatim as a
+ * container id (so extensions may also target any container by its full id).
+ */
+const BUILTIN_CONTAINER_ID_BY_VIEWS_KEY: Readonly<Record<string, string>> = {
+  explorer: 'workbench.view.explorer',
+  search: 'workbench.view.search',
+  scm: 'workbench.view.scm',
+  outline: 'workbench.view.outline',
+}
+
+/**
+ * Extension containers sort after every built-in one in the activity bar
+ * (built-ins use small single-digit orders).
+ */
+const EXTENSION_CONTAINER_ORDER_BASE = 100
+
+/** Strips the `$(name)` codicon-reference wrapper VSCode manifests use. */
+function normalizeContainerIcon(icon: string): string {
+  const match = /^\$\(([\w-]+)\)$/.exec(icon)
+  return match?.[1] ?? icon
 }
 
 /** Context the translator passes to the theme-registration callback. */
@@ -153,6 +184,7 @@ export class ExtensionPointTranslator extends Disposable {
       }
       this._registerConfiguration(ext.id, contributes.configuration)
       this._registerJsonValidation(ext.id, contributes.jsonValidation ?? [])
+      this._registerViews(ext, contributes.viewsContainers?.activitybar ?? [], contributes.views)
       for (const editor of contributes.customEditors ?? []) {
         this._registerCustomEditorBinding(editor)
       }
@@ -205,6 +237,72 @@ export class ExtensionPointTranslator extends Disposable {
       return
     }
     this._register(this._registerCustomEditor(editor))
+  }
+
+  /**
+   * Translate `contributes.viewsContainers` / `contributes.views` into the view
+   * registries. Every extension view shares one static componentKey; the bound
+   * component receives the view id via props and activates the owner on first
+   * reveal. A `views` key resolves to a well-known built-in alias or any
+   * registered container id verbatim (including a container this extension just
+   * declared, or one declared by another extension); anything else is skipped
+   * with a warning (mirrors the unknown menu-location policy). The view-level
+   * `when` clause is carried in the DTO but not gated on yet — visibility
+   * gating lands with the tree data phase.
+   */
+  private _registerViews(
+    ext: IExtensionDescriptionDto,
+    containers: readonly IViewContainerContribution[],
+    views: Record<string, IViewContribution[]> | undefined,
+  ): void {
+    containers.forEach((container, index) => {
+      if (ViewContainerRegistry.getViewContainer(container.id) !== undefined) {
+        this._logger.warn(
+          `${ext.id}: ignoring viewsContainer "${container.id}": id already registered`,
+        )
+        return
+      }
+      this._register(
+        ViewContainerRegistry.registerViewContainer({
+          id: container.id,
+          label: container.title,
+          icon: normalizeContainerIcon(container.icon),
+          order: EXTENSION_CONTAINER_ORDER_BASE + index,
+          location: ViewContainerLocation.SideBar,
+        }),
+      )
+    })
+    for (const [key, entries] of Object.entries(views ?? {})) {
+      const containerId = this._resolveViewsContainerKey(key)
+      if (containerId === undefined) {
+        this._logger.warn(`${ext.id}: ignoring views for unknown container: ${key}`)
+        continue
+      }
+      entries.forEach((view, index) => {
+        if (ViewRegistry.getView(view.id) !== undefined) {
+          this._logger.warn(`${ext.id}: ignoring view "${view.id}": id already registered`)
+          return
+        }
+        this._register(
+          ViewRegistry.registerView({
+            id: view.id,
+            name: view.name,
+            containerId,
+            componentKey: EXTENSION_TREE_VIEW_COMPONENT_KEY,
+            order: index,
+          }),
+        )
+      })
+    }
+  }
+
+  private _resolveViewsContainerKey(key: string): string | undefined {
+    const builtin = BUILTIN_CONTAINER_ID_BY_VIEWS_KEY[key]
+    if (builtin !== undefined && ViewContainerRegistry.getViewContainer(builtin) !== undefined) {
+      return builtin
+    }
+    if (ViewContainerRegistry.getViewContainer(key) !== undefined) return key
+    return undefined
   }
 
   private _registerCommand(

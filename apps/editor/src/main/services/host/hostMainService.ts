@@ -38,6 +38,7 @@ import {
 } from '@universe-editor/platform'
 import { version as EXTENSION_API_VERSION } from '@universe-editor/extension-api'
 import { type IRendererLifecycleService } from '../../../shared/ipc/lifecycleService.js'
+import { getMachineId } from './machineId.js'
 
 /** Hooks letting restart consult the renderer veto chain. */
 export interface RestartHooks {
@@ -202,25 +203,29 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     return Promise.resolve()
   }
 
-  async showOpenFileDialog(opts?: IShowOpenFileOptions): Promise<UriComponents | null> {
-    const properties: Array<'openFile' | 'openDirectory'> = []
+  async showOpenFileDialog(opts?: IShowOpenFileOptions): Promise<UriComponents[] | null> {
+    const properties: Array<'openFile' | 'openDirectory' | 'multiSelections'> = []
     if (opts?.canSelectFiles !== false) properties.push('openFile')
     if (opts?.canSelectFolders === true) properties.push('openDirectory')
+    if (opts?.canSelectMany === true) properties.push('multiSelections')
     if (properties.length === 0) properties.push('openFile')
     const result = await dialog.showOpenDialog(this._win, {
       properties,
       ...(opts?.title !== undefined ? { title: opts.title } : {}),
       ...(opts?.defaultPath !== undefined ? { defaultPath: path.normalize(opts.defaultPath) } : {}),
       ...(opts?.buttonLabel !== undefined ? { buttonLabel: opts.buttonLabel } : {}),
+      ...(opts?.filters !== undefined
+        ? {
+            filters: opts.filters.map((f) => ({ name: f.name, extensions: [...f.extensions] })),
+          }
+        : {}),
     })
     if (result.canceled || result.filePaths.length === 0) {
       this._logger.info(`showOpenFileDialog cancelled id=${this._win.id}`)
       return null
     }
-    const picked = result.filePaths[0]
-    if (!picked) return null
-    this._logger.info(`showOpenFileDialog picked ${picked}`)
-    return URI.file(picked).toJSON()
+    this._logger.info(`showOpenFileDialog picked ${result.filePaths.join(', ')}`)
+    return result.filePaths.map((p) => URI.file(p).toJSON())
   }
 
   async showSaveFileDialog(opts?: IShowSaveFileOptions): Promise<UriComponents | null> {
@@ -451,8 +456,8 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     return Promise.resolve()
   }
 
-  getVersionInfo(): Promise<IVersionInfo> {
-    return Promise.resolve({
+  async getVersionInfo(): Promise<IVersionInfo> {
+    return {
       productName: app.getName(),
       version: app.getVersion(),
       extensionApi: EXTENSION_API_VERSION,
@@ -460,7 +465,9 @@ export class MainHostService implements IHostServiceWire, IDisposable {
       node: process.versions.node,
       chromium: process.versions.chrome,
       v8: process.versions.v8,
-    })
+      machineId: await getMachineId(app.getPath('userData')),
+      appRoot: app.getAppPath(),
+    }
   }
 
   private _requestAttention(): void {

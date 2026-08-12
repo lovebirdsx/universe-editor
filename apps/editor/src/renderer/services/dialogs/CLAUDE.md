@@ -10,8 +10,9 @@
 
 ```
 packages/platform/src/workbench/quickInputService.ts
-  IQuickPick<T> 接口（value/items/activeItems/valueSelection/keepOpenOnAccept/
-                       autoFocusFirstItem + onDid* 事件）—— 纯类型契约
+  IQuickPick<T> 接口（value/items/activeItems/selectedItems/canSelectMany/valueSelection/
+                       keepOpenOnAccept/autoFocusFirstItem + onDid* 事件含 onDidChangeSelection）
+                       —— 纯类型契约
         │
 apps/editor/src/renderer/services/quickInput/QuickInputService.ts
   IQuickInputService 实现：createQuickPick() 用闭包 + Emitter 造出 qp；
@@ -43,8 +44,9 @@ packages/workbench-ui/src/feedback/quickInput/QuickInputPanel.tsx
 | `onDidChangeValue` | `onValueChange` | **值 → 列表**：解析输入路径，必要时切目录/切盘符列表，按尾段前缀高亮 |
 | `onDidChangeActive` | `onActiveChange` | **高亮 → 值**：把当前高亮项补全进输入框，选中未输入的尾巴 |
 | `onDidAccept` | `onAccept` | 回车/点击：优先按「选中的具体项」动作（进目录/打开/保存），否则解析输入值 |
-| `onDidTriggerOk` | `acceptValue(qp.value)` | OK 按钮：直接按输入值解析 |
+| `onDidTriggerOk` | `confirmSelectionOrValue` | OK 按钮：多选有选中集 → 确认全部选中项；否则回退 `acceptValue(qp.value)` 单选 |
 | `onDidTriggerButton` | 切 `showDotFiles` + 重列 | 显示/隐藏隐藏文件 |
+| `onDidChangeSelection` | checkbox toggle 分流 | 当前目录项校验可选性；carried（跨目录选中）项保留 |
 
 **两个核心私有动作：**
 - `updateItems(folder, { resetInput })`：拉 `fileService.list(folder)` 重建列表。`resetInput:true`（导航类）会把输入框重置为 `display(folder)+sep`；`resetInput:false`（手动改路径触发的刷新）**不动输入框**（避免 clobber 用户正在敲的字）。用 `navToken` 守卫异步 list 竞态。**也是盘符列表的入口**（见下）。
@@ -59,6 +61,13 @@ packages/workbench-ui/src/feedback/quickInput/QuickInputPanel.tsx
 - **`~` 展开主目录**：`expandTilde` 在 onValueChange 最前面处理（`~`/`~/`/`~\` → home+sep）。
 - **Windows 盘符**（见下节）。
 
+### 多选（`canSelectMany`）与过滤（`filters`）
+
+- **`canSelectMany` 只在 `mode==='open' && opts.canSelectMany===true` 时点亮**（save 永不多选）。选中集是一个按 item id（= URI string）键的 `Map`，**跨目录保留**——切走目录后旧选中项经 `onDidChangeSelection` 的 carried 分支从 Map 取回，不被丢弃。
+- **文件行 Enter/点击 = toggle checkbox**（`isSelectableEntry` 门控：`'..'`/文件夹行不可勾选）；**文件夹行 accept 保持导航**；**OK = 确认整个选中集**，空选中集回退 `acceptValue(qp.value)` 的单选语义。
+- **`filters` 只在 open 且 allowFiles 时生效**：`collectFilterExtensions` 把 `{name, extensions[]}[]` 压成小写扩展名并集（容忍前导点、大小写不敏感），含 `*` 则返回 `undefined`（不过滤）。两处守卫：列表渲染（`prepareEntries` 的 `fileExts`）+ typed-path 提交（`acceptValue`/onAccept 残留高亮里扩展名不在集合内的文件被拒）。目录永远显示。
+- **Space toggle 在 panel 侧 gate 于 `!filterExternally`**：文件对话框输入框是路径数据（空格必须可输入），所以文件对话框里 Space 不 toggle，只有非外部过滤的 QuickPick（如命令面板类多选）才用 Space 勾选。
+
 ### Windows 盘符处理（win32 专属，`this._sep === '\\'`）
 
 三个判定/构造 helper：`_driveListRoot()`（= `URI.file('/')`，盘符列表的合成根）、`_isDriveListRoot(uri)`（win32 且 path === '/'）、`_displayWithSep(uri)`（保证单尾分隔符，因盘根 fsPath 自带 `/`）。
@@ -72,16 +81,16 @@ packages/workbench-ui/src/feedback/quickInput/QuickInputPanel.tsx
 
 `apps/editor/src/renderer/services/dialogs/simpleFileDialogUtil.ts`
 
-- `prepareEntries(entries, {allowFiles, showDotFiles})` —— 目录在前文件在后各自排序；过滤 dotfile / 非目录。
+- `prepareEntries(entries, {allowFiles, showDotFiles, fileExts?})` —— 目录在前文件在后各自排序；过滤 dotfile / 非目录；`fileExts`（小写扩展名集合，含前导点）非空时按扩展名过滤文件、目录永远保留。
+- `fileExtension(name)` / `collectFilterExtensions(filters)` —— filters（`{name, extensions[]}[]`）→ 小写扩展名并集；含 `*` 时返回 `undefined`（=不过滤）。
 - `splitTrailingSegment(value)` —— 拆成 `{dir(含尾分隔符), name}`；无分隔符则 `{dir:'', name:value}`。识别 `/` 和 `\` 两种分隔符。
 - `endsWithSeparator` / `expandTilde(value, home, sep)` / `isDeletion(prev, next)`（next 是 prev 的更短前缀）/ `findCompletion` / `completePath`。
 
 ## 注册接入点 & 调用方
 
 - **DI 注册**：`SimpleFileDialog.ts` 末尾 `registerSingleton(IFileDialogService, SimpleFileDialog, InstantiationType.Delayed)`。renderer 直接注入用。
-- **接口契约**：`packages/platform/src/dialog/fileDialogService.ts` —— `IFileDialogService` + `IFileDialogOptions`（`title` / `defaultUri?` / `canSelectFiles` / `canSelectFolders` / `openLabel?`）。改接口记得在 `packages/platform/src/index.ts` re-export（已 export）。
-- **五个调用点**（都注入 `IFileDialogService` 调 `showOpenDialog`/`showSaveDialog`，取 `uri.fsPath`/`uri`）：
-  - `actions/fileOpenActions.ts`、`actions/fileSaveActions.ts`、`actions/workspaceActions.ts`、`actions/windowActions.ts`、`actions/configLocationActions.ts`（最后一个原生框已消除）。
+- **接口契约**：`packages/platform/src/dialog/fileDialogService.ts` —— `IFileDialogService` + `IFileDialogOptions`（`title` / `defaultUri?` / `canSelectFiles` / `canSelectFolders` / `canSelectMany?` / `filters?` / `openLabel?`）+ `IFileDialogFilter`。改接口记得在 `packages/platform/src/index.ts` re-export（已 export）。
+- **返回值**：`showOpenDialog → Promise<URI[] | undefined>`（多选支持后改数组；save 仍 `Promise<URI | undefined>`）。8 个调用点取 `picked?.[0]` 或遍历：`actions/fileOpenActions.ts`（多选循环打开）、`fileSaveActions.ts`、`workspaceActions.ts`、`windowActions.ts`、`configLocationActions.ts`、`extensionsActions.ts`、`fileClipboardActions.ts`、`workbench/sessions/PromptInput.tsx`；扩展链路 `services/extensions/MainThreadWindow.ts`（透传 canSelectMany/filters）。
 - **UI 下划线裁切修复**：`packages/workbench-ui/src/feedback/quickInput/QuickInput.module.css` 的 `.input`（`height:40px; line-height:40px;`）——下划线/descender 显示问题改这里，验证靠 Playwright 截图 + 人工看图。
 
 ## 常见任务 → 改哪里

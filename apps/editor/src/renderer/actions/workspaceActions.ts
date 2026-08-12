@@ -45,13 +45,15 @@ export class OpenFolderAction extends Action2 {
     const progress = accessor.get(IProgressService)
     const fileDialog = accessor.get(IFileDialogService)
 
-    const folder = await fileDialog.showOpenDialog({
-      title: localize('fileDialog.openFolder.title', 'Open Folder'),
-      canSelectFiles: false,
-      canSelectFolders: true,
-      openLabel: localize('fileDialog.openFolderButton', 'Open'),
-      ...(workspace.current ? { defaultUri: workspace.current.folder } : {}),
-    })
+    const folder = (
+      await fileDialog.showOpenDialog({
+        title: localize('fileDialog.openFolder.title', 'Open Folder'),
+        canSelectFiles: false,
+        canSelectFolders: true,
+        openLabel: localize('fileDialog.openFolderButton', 'Open'),
+        ...(workspace.current ? { defaultUri: workspace.current.folder } : {}),
+      })
+    )?.[0]
     if (!folder) return
     if (await lifecycle.confirmBeforeShutdown(ShutdownReason.SwitchWorkspace)) return
     await progress.withProgress(

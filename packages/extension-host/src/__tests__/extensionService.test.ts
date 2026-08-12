@@ -3,7 +3,11 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { URI } from '@universe-editor/platform'
-import { Uri } from '@universe-editor/extension-api'
+import {
+  CancellationTokenSource as ApiCancellationTokenSource,
+  RelativePattern,
+  Uri,
+} from '@universe-editor/extension-api'
 import type {
   TextEditor,
   TextEditorSelectionChangeEvent,
@@ -18,6 +22,7 @@ import type {
   IMainThreadScm,
   IMainThreadTimeline,
   IMainThreadWindow,
+  IRelativePatternDto,
 } from '@universe-editor/extensions-common'
 import { ExtensionService } from '../extensionService.js'
 import type { IScannedExtension } from '../extensionScanner.js'
@@ -338,6 +343,8 @@ describe('ExtensionService env / extensions namespaces', () => {
       sessionId: '',
       uriScheme: '',
       language: '',
+      machineId: '',
+      appRoot: '',
     })
 
     service.initializeEnvironment({
@@ -346,9 +353,13 @@ describe('ExtensionService env / extensions namespaces', () => {
       sessionId: 'session-1',
       uriScheme: 'universe-editor',
       language: 'zh-CN',
+      machineId: 'machine-1',
+      appRoot: '/apps/universe',
     })
     expect(service.getEnvironmentInfo().appName).toBe('Universe Editor')
     expect(service.getEnvironmentInfo().language).toBe('zh-CN')
+    expect(service.getEnvironmentInfo().machineId).toBe('machine-1')
+    expect(service.getEnvironmentInfo().appRoot).toBe('/apps/universe')
   })
 
   it('clipboard and openExternal delegate to mainThreadWindow', async () => {
@@ -428,6 +439,7 @@ describe('ExtensionService active editor mirror', () => {
     $disposeDecorationType: () => Promise.resolve(),
     $setDecorations: () => Promise.resolve(),
     $openTextDocument: () => Promise.resolve(),
+    $openUntitledDocument: () => Promise.resolve(Uri.parse('untitled:/Untitled-1').toJSON()),
     $showTextDocument: () => Promise.resolve(null),
     $applyWorkspaceEdit: () => Promise.resolve(true),
   }
@@ -492,6 +504,105 @@ describe('ExtensionService active editor mirror', () => {
   })
 })
 
+/**
+ * Visible-editors mirror: the renderer pushes the whole per-group set; the
+ * getter serves the cached snapshots synchronously, and the event waits for any
+ * not-yet-mirrored document (first-activation race, same as the active editor),
+ * superseded by a newer push.
+ */
+describe('ExtensionService visible editors mirror', () => {
+  const noopEditor: IMainThreadEditor = {
+    $getActiveTextEditor: () => Promise.resolve(null),
+    $applyEdits: () => Promise.resolve(true),
+    $setSelections: () => Promise.resolve(),
+    $createDecorationType: () => Promise.resolve(),
+    $disposeDecorationType: () => Promise.resolve(),
+    $setDecorations: () => Promise.resolve(),
+    $openTextDocument: () => Promise.resolve(),
+    $openUntitledDocument: () => Promise.resolve(Uri.parse('untitled:/Untitled-1').toJSON()),
+    $showTextDocument: () => Promise.resolve(null),
+    $applyWorkspaceEdit: () => Promise.resolve(true),
+  }
+
+  function editorService(): ExtensionService {
+    const mt = recordingMainThread()
+    return new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      noopEditor,
+    )
+  }
+
+  const uriA = URI.file('/ws/a.txt')
+  const uriB = URI.file('/ws/b.txt')
+  const snap = (uri: URI): IActiveTextEditorDto => ({
+    uri: uri.toJSON() as UriComponents,
+    languageId: 'plaintext',
+    version: 1,
+    selections: [],
+  })
+
+  it('getter returns the latest pushed set backed by the mirrored documents', () => {
+    const service = editorService()
+    service.acceptDocumentOpen(uriA, 'plaintext', 1, 'aaa')
+    service.acceptDocumentOpen(uriB, 'plaintext', 1, 'bbb')
+    service.acceptVisibleEditorsChange([snap(uriA), snap(uriB)])
+    expect(service.visibleTextEditors).toHaveLength(2)
+    expect(service.visibleTextEditors.map((e) => e.document.uri.path)).toEqual([
+      '/ws/a.txt',
+      '/ws/b.txt',
+    ])
+    expect(service.visibleTextEditors[0]?.document.getText()).toBe('aaa')
+  })
+
+  it('fires onDidChangeVisibleTextEditors with the fresh set, including the empty set', () => {
+    const service = editorService()
+    service.acceptDocumentOpen(uriA, 'plaintext', 1, 'aaa')
+    const fired: (readonly TextEditor[])[] = []
+    service.onDidChangeVisibleTextEditors((editors) => fired.push(editors))
+    service.acceptVisibleEditorsChange([snap(uriA)])
+    service.acceptVisibleEditorsChange([])
+    expect(fired.map((set) => set.length)).toEqual([1, 0])
+  })
+
+  it('drops an unmirrored document from the getter until its didOpen lands', async () => {
+    const service = editorService()
+    service.acceptDocumentOpen(uriA, 'plaintext', 1, 'aaa')
+    const fired: (readonly TextEditor[])[] = []
+    service.onDidChangeVisibleTextEditors((editors) => fired.push(editors))
+    service.acceptVisibleEditorsChange([snap(uriA), snap(uriB)])
+    expect(service.visibleTextEditors.map((e) => e.document.uri.path)).toEqual(['/ws/a.txt'])
+    expect(fired).toHaveLength(0)
+
+    service.acceptDocumentOpen(uriB, 'plaintext', 1, 'bbb')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fired).toHaveLength(1)
+    expect(fired[0]?.map((e) => e.document.uri.path)).toEqual(['/ws/a.txt', '/ws/b.txt'])
+    expect(service.visibleTextEditors).toHaveLength(2)
+  })
+
+  it('a doc-pending push is superseded by a newer push', async () => {
+    const service = editorService()
+    service.acceptDocumentOpen(uriA, 'plaintext', 1, 'aaa')
+    const fired: (readonly TextEditor[])[] = []
+    service.onDidChangeVisibleTextEditors((editors) => fired.push(editors))
+    service.acceptVisibleEditorsChange([snap(uriB)]) // B's doc never lands in time
+    service.acceptVisibleEditorsChange([snap(uriA)]) // user moved on
+    service.acceptDocumentOpen(uriB, 'plaintext', 1, 'too late')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fired).toHaveLength(1)
+    expect(fired[0]?.map((e) => e.document.uri.path)).toEqual(['/ws/a.txt'])
+    expect(service.visibleTextEditors).toHaveLength(1)
+  })
+})
+
 describe('ExtensionService window additions', () => {
   const docUri = URI.file('/ws/doc.md')
   const docComponents = docUri.toJSON() as UriComponents
@@ -519,6 +630,7 @@ describe('ExtensionService window additions', () => {
         $disposeDecorationType: () => Promise.resolve(),
         $setDecorations: () => Promise.resolve(),
         $openTextDocument: () => Promise.resolve(),
+        $openUntitledDocument: () => Promise.resolve(Uri.parse('untitled:/Untitled-1').toJSON()),
         $showTextDocument: () => Promise.resolve(null),
         $applyWorkspaceEdit: () => Promise.resolve(true),
         ...editor,
@@ -677,6 +789,65 @@ describe('ExtensionService window additions', () => {
     expect(doc.getText()).toBe('from disk')
   })
 
+  it('openTextDocument(options) creates an untitled document via the renderer', async () => {
+    const untitledComponents = Uri.parse('untitled:/Untitled-7').toJSON()
+    const openUntitledRpc = vi.fn().mockResolvedValue(untitledComponents)
+    const openRpc = vi.fn().mockResolvedValue(undefined)
+    const service = serviceWith(
+      {},
+      { $openUntitledDocument: openUntitledRpc, $openTextDocument: openRpc },
+    )
+    const pending = service.openTextDocument({ language: 'typescript', content: 'let x = 1' })
+    setTimeout(
+      () => service.acceptDocumentOpen(untitledComponents, 'typescript', 1, 'let x = 1'),
+      0,
+    )
+    const doc = await pending
+    expect(openUntitledRpc).toHaveBeenCalledWith({ language: 'typescript', content: 'let x = 1' })
+    expect(openRpc).not.toHaveBeenCalled()
+    expect(doc.isUntitled).toBe(true)
+    expect(doc.languageId).toBe('typescript')
+    expect(doc.getText()).toBe('let x = 1')
+  })
+
+  it('openTextDocument() with no argument creates an empty untitled document', async () => {
+    const untitledComponents = Uri.parse('untitled:/Untitled-8').toJSON()
+    const openUntitledRpc = vi.fn().mockResolvedValue(untitledComponents)
+    const service = serviceWith({}, { $openUntitledDocument: openUntitledRpc })
+    const pending = service.openTextDocument()
+    setTimeout(() => service.acceptDocumentOpen(untitledComponents, 'plaintext', 1, ''), 0)
+    const doc = await pending
+    expect(openUntitledRpc).toHaveBeenCalledWith({})
+    expect(doc.isUntitled).toBe(true)
+    expect(doc.getText()).toBe('')
+  })
+
+  it('openTextDocument(untitled uri) goes through $openTextDocument, not the options channel', async () => {
+    const untitledComponents = Uri.parse('untitled:/Untitled-9').toJSON()
+    const openRpc = vi.fn().mockResolvedValue(undefined)
+    const openUntitledRpc = vi.fn()
+    const service = serviceWith(
+      {},
+      { $openTextDocument: openRpc, $openUntitledDocument: openUntitledRpc },
+    )
+    const pending = service.openTextDocument(untitledComponents)
+    setTimeout(() => service.acceptDocumentOpen(untitledComponents, 'plaintext', 1, ''), 0)
+    const doc = await pending
+    expect(openRpc).toHaveBeenCalledWith(untitledComponents)
+    expect(openUntitledRpc).not.toHaveBeenCalled()
+    expect(doc.isUntitled).toBe(true)
+  })
+
+  it('a file document reports isUntitled false', async () => {
+    const fileComponents = Uri.file('/ws/a.ts').toJSON()
+    const openRpc = vi.fn().mockResolvedValue(undefined)
+    const service = serviceWith({}, { $openTextDocument: openRpc })
+    const pending = service.openTextDocument(fileComponents)
+    setTimeout(() => service.acceptDocumentOpen(fileComponents, 'typescript', 1, 'x'), 0)
+    const doc = await pending
+    expect(doc.isUntitled).toBe(false)
+  })
+
   it('showTextDocument returns the editor snapshot over the mirrored document', async () => {
     const sels = [{ anchor: { line: 2, character: 1 }, active: { line: 2, character: 5 } }]
     let shownOptions: unknown
@@ -765,6 +936,7 @@ describe('ExtensionService workspace additions', () => {
         $disposeDecorationType: () => Promise.resolve(),
         $setDecorations: () => Promise.resolve(),
         $openTextDocument: () => Promise.resolve(),
+        $openUntitledDocument: () => Promise.resolve(Uri.parse('untitled:/Untitled-1').toJSON()),
         $showTextDocument: () => Promise.resolve(null),
         $applyWorkspaceEdit: (edit) => {
           applied = edit
@@ -779,7 +951,10 @@ describe('ExtensionService workspace additions', () => {
 
   it('findFiles maps API exclude semantics onto the wire', async () => {
     const mt = recordingMainThread()
-    const calls: Array<{ exclude: readonly string[] | null; maxResults: number | null }> = []
+    const calls: Array<{
+      exclude: readonly (string | IRelativePatternDto)[] | null
+      maxResults: number | null
+    }> = []
     const fs: IMainThreadFs = {
       $readFile: () => Promise.resolve(''),
       $writeFile: () => Promise.resolve(),
@@ -811,6 +986,116 @@ describe('ExtensionService workspace additions', () => {
       { exclude: [], maxResults: 10 },
       { exclude: ['**/dist/**'], maxResults: null },
     ])
+  })
+
+  it('findFiles serializes a RelativePattern include/exclude onto the wire', async () => {
+    const mt = recordingMainThread()
+    const calls: Array<{
+      include: string | IRelativePatternDto
+      exclude: readonly (string | IRelativePatternDto)[] | null
+    }> = []
+    const fs: IMainThreadFs = {
+      $readFile: () => Promise.resolve(''),
+      $writeFile: () => Promise.resolve(),
+      $stat: () => Promise.resolve({ type: 'file', size: 0, mtime: 0 }),
+      $readDirectory: () => Promise.resolve([]),
+      $createDirectory: () => Promise.resolve(),
+      $delete: () => Promise.resolve(),
+      $rename: () => Promise.resolve(),
+      $copy: () => Promise.resolve(),
+      $findFiles: (include, exclude) => {
+        calls.push({ include, exclude })
+        return Promise.resolve([])
+      },
+    }
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+      '/ws',
+      fs,
+    )
+    await service.findFiles(new RelativePattern('/ws/src', '**/*.ts'), undefined, undefined)
+    await service.findFiles('**/*.ts', new RelativePattern('/ws/src/generated', '**'), undefined)
+    const base = (p: string): IRelativePatternDto['base'] => Uri.file(p).toJSON()
+    expect(calls).toEqual([
+      { include: { base: base('/ws/src'), pattern: '**/*.ts' }, exclude: null },
+      { include: '**/*.ts', exclude: [{ base: base('/ws/src/generated'), pattern: '**' }] },
+    ])
+  })
+
+  it('findFiles forwards the token as the RPC trailing argument', async () => {
+    const mt = recordingMainThread()
+    let seenToken: unknown
+    const fs: IMainThreadFs = {
+      $readFile: () => Promise.resolve(''),
+      $writeFile: () => Promise.resolve(),
+      $stat: () => Promise.resolve({ type: 'file', size: 0, mtime: 0 }),
+      $readDirectory: () => Promise.resolve([]),
+      $createDirectory: () => Promise.resolve(),
+      $delete: () => Promise.resolve(),
+      $rename: () => Promise.resolve(),
+      $copy: () => Promise.resolve(),
+      // The ProxyChannel envelope appends the token as the trailing argument.
+      $findFiles: (...args: unknown[]) => {
+        seenToken = args[3]
+        return Promise.resolve([])
+      },
+    }
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+      '/ws',
+      fs,
+    )
+    const cts = new ApiCancellationTokenSource()
+    await service.findFiles('**/*.ts', undefined, undefined, cts.token)
+    expect(seenToken).toBe(cts.token)
+  })
+
+  it('findFiles resolves [] when the request is cancelled mid-flight', async () => {
+    const mt = recordingMainThread()
+    let tokenSeenByRenderer: { isCancellationRequested: boolean } | undefined
+    const fs: IMainThreadFs = {
+      $readFile: () => Promise.resolve(''),
+      $writeFile: () => Promise.resolve(),
+      $stat: () => Promise.resolve({ type: 'file', size: 0, mtime: 0 }),
+      $readDirectory: () => Promise.resolve([]),
+      $createDirectory: () => Promise.resolve(),
+      $delete: () => Promise.resolve(),
+      $rename: () => Promise.resolve(),
+      $copy: () => Promise.resolve(),
+      // Mirror the RPC boundary: once the token fires, the channel rejects the
+      // pending call with a cancellation-style error.
+      $findFiles: (...args: unknown[]) => {
+        tokenSeenByRenderer = args[3] as { isCancellationRequested: boolean }
+        return new Promise((_resolve, reject) => {
+          const token = args[3] as {
+            onCancellationRequested: (listener: () => void) => void
+          }
+          token.onCancellationRequested(() => reject(new Error('canceled')))
+        })
+      },
+    }
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+      '/ws',
+      fs,
+    )
+    const cts = new ApiCancellationTokenSource()
+    const pending = service.findFiles('**/*.ts', undefined, undefined, cts.token)
+    cts.cancel()
+    await expect(pending).resolves.toEqual([])
+    expect(tokenSeenByRenderer?.isCancellationRequested).toBe(true)
   })
 
   it('fs.rename/fs.copy forward the overwrite flag', async () => {

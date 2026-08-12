@@ -61,6 +61,8 @@ export function WebviewElement({ panel }: { panel: IWebviewPanelModel }) {
   const resourceAccess = useOptionalService(IResourceAccessService)
   const contextKeyService = useService(IContextKeyService)
   const html = useObservable(panel.html)
+  // Re-render trigger for an identical html re-set (see WebviewService.htmlVersion).
+  const htmlVersion = useObservable(panel.htmlVersion)
   const options = useObservable(panel.options)
   // True once the iframe finished loading WEBVIEW_BLANK_URL (its loader listener
   // is then live). Bound to this single, never-rebuilt iframe, so it stays valid
@@ -94,7 +96,7 @@ export function WebviewElement({ panel }: { panel: IWebviewPanelModel }) {
     return () => {
       cancelled = true
     }
-  }, [resourceAccess, html, options, frameLoaded])
+  }, [resourceAccess, html, options, frameLoaded, htmlVersion])
 
   // Bridge messages: iframe → host (WebviewService → ext host), and
   // host → iframe (WebviewService.onMessageToWebview → iframe.postMessage).

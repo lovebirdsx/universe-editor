@@ -45,12 +45,15 @@ class PanelLikeQuickPick {
   filterExternally = false
   keepOpenOnAccept = false
   autoFocusFirstItem = true
+  canSelectMany = false
+  selectedItems: readonly IQuickPickItem[] = []
   title: string | undefined
   okLabel: string | undefined
 
   private readonly _onAccept = new Emitter<IQuickPickItem[]>()
   private readonly _onChangeValue = new Emitter<string>()
   private readonly _onChangeActive = new Emitter<IQuickPickItem | undefined>()
+  private readonly _onChangeSelection = new Emitter<IQuickPickItem[]>()
   private readonly _onTriggerOk = new Emitter<void>()
   private readonly _onTriggerButton = new Emitter<unknown>()
   private readonly _onHide = new Emitter<void>()
@@ -58,6 +61,7 @@ class PanelLikeQuickPick {
   readonly onDidAccept = this._onAccept.event
   readonly onDidChangeValue = this._onChangeValue.event
   readonly onDidChangeActive = this._onChangeActive.event
+  readonly onDidChangeSelection = this._onChangeSelection.event
   readonly onDidTriggerOk = this._onTriggerOk.event
   readonly onDidTriggerButton = this._onTriggerButton.event
   readonly onDidHide = this._onHide.event

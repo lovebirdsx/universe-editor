@@ -51,12 +51,14 @@ export class SetConfigLocationAction extends Action2 {
       return
     }
 
-    const picked = await fileDialog.showOpenDialog({
-      title: localize('action.setConfigLocation.title', 'Set Config Directory…'),
-      canSelectFiles: false,
-      canSelectFolders: true,
-      ...(info.dir ? { defaultUri: URI.file(info.dir) } : {}),
-    })
+    const picked = (
+      await fileDialog.showOpenDialog({
+        title: localize('action.setConfigLocation.title', 'Set Config Directory…'),
+        canSelectFiles: false,
+        canSelectFolders: true,
+        ...(info.dir ? { defaultUri: URI.file(info.dir) } : {}),
+      })
+    )?.[0]
     if (!picked) return
     const dir = picked.fsPath
     if (dir === info.dir) return

@@ -51,6 +51,7 @@ class FakeFileWatcherService implements IFileWatcherServiceType {
   async setExcludes() {}
   async unwatch() {}
   async watchOutOfWorkspace() {}
+  async watchOutOfWorkspaceFolders() {}
 }
 
 function makeFileSearch(): IFileSearchServiceType & { calls: number } {

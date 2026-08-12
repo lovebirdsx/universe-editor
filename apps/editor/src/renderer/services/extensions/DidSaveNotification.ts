@@ -8,9 +8,14 @@
  *  mirrors the SaveParticipant pattern: a module-level singleton the input
  *  calls, and a workbench contribution registers the actual listener onto.
  *
- *  Only FileEditorInput.save() is wired today — the Untitled / Merge /
- *  SchemaViewer / MarkdownPreview / HtmlPreview save paths do not notify yet
- *  (TODO when those inputs get a mirrored document identity).
+ *  Wired save paths: FileEditorInput.save() (in-place file saves, which also
+ *  covers the Markdown/Html previews — they delegate to their source
+ *  FileEditorInput), SaveFileAsAction (Save-As of a file or untitled buffer;
+ *  the notification names the picked file URI), and MergeEditorInput.save().
+ *  SchemaViewer is read-only, so no save path remains TODO. The notification
+ *  pipeline itself (DidSaveNotificationContribution) waits for the document
+ *  mirror's open push before pushing, so a Save-As that opens a brand-new file
+ *  document never races the open it depends on.
  *--------------------------------------------------------------------------------------------*/
 
 import type { URI } from '@universe-editor/platform'

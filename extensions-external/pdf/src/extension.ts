@@ -7,7 +7,9 @@
  * under the extension directory, which the host allow-lists for us).
  */
 import {
+  Uri,
   window,
+  workspace,
   type CustomDocument,
   type ExtensionContext,
   type UriComponents,
@@ -53,8 +55,7 @@ function dirUri(uri: UriComponents): UriComponents {
 class PdfDocument implements CustomDocument {
   constructor(readonly uri: UriComponents) {}
   dispose(): void {
-    // No resources held: auto-reload-on-change is not wired because the API has
-    // no filesystem watcher yet.
+    // The per-panel file watcher is tied to the panel in resolveCustomEditor.
   }
 }
 
@@ -106,6 +107,22 @@ export function activate(context: ExtensionContext): void {
         localResourceRoots: [fileUri(extensionRoot), dirUri(document.uri)],
       }
       panel.webview.html = buildHtml(panel.webview, document.uri)
+
+      // Reload the preview when the pdf changes on disk. A glob-free absolute
+      // path watches exactly this file (also outside the workspace).
+      const watcher = workspace.createFileSystemWatcher(
+        Uri.from(document.uri).fsPath,
+        true,
+        false,
+        true,
+      )
+      const subscription = watcher.onDidChange(() => {
+        void panel.webview.postMessage({ action: 'reload' })
+      })
+      panel.onDidDispose(() => {
+        subscription.dispose()
+        watcher.dispose()
+      })
     },
   }
 

@@ -41,6 +41,7 @@ import {
   type ICodeActionContext,
   type ICompletionContext,
   type IFormattingOptionsDto,
+  type IInlayHintDto,
   type ILanguageProviderMetadata,
   type IMainThreadLanguages,
   type IReferenceContext,
@@ -108,6 +109,12 @@ function toSelector(selector: DocumentSelector): readonly string[] {
   return typeof selector === 'string' ? [selector] : selector
 }
 
+/** Strip the opaque `data` resolve payload: it never crosses the wire. */
+function toInlayHintDto(hint: InlayHint): IInlayHintDto {
+  const { data: _data, ...dto } = hint
+  return dto
+}
+
 /**
  * Host-side DiagnosticCollection. `set`/`clear` push markers to the renderer
  * over `mainThreadLanguages`, keyed by the collection name (the marker owner).
@@ -145,6 +152,15 @@ export class LanguageProviderRegistry {
   private _diagnosticHandle = 0
   /** In-flight workspace-symbol queries by provider handle (for cancellation). */
   private readonly _workspaceSymbolRequests = new Map<number, CancellationTokenSource>()
+  /**
+   * Original inlay-hint objects per provider handle, keyed by a cache id that
+   * bumps on every provide round (latest-wins). The renderer only sees DTOs
+   * stripped of `data`; `$resolveInlayHint` addresses the originals through
+   * (cacheId, index) so the extension gets its own object — `data` included —
+   * back for lazy resolution.
+   */
+  private readonly _inlayHintCache = new Map<number, { cacheId: number; hints: InlayHint[] }>()
+  private _inlayHintCacheId = 0
 
   /**
    * `languages` is an accessor (not the value) so the "not available in this
@@ -337,18 +353,26 @@ export class LanguageProviderRegistry {
    * Inlay hints carry the same server-driven refresh signal as CodeLens
    * (`onDidChangeInlayHints`), so registration follows the same inline shape:
    * capture the handle and forward the signal as `$emitInlayHintsDidChange(handle)`.
+   * When the provider implements `resolveInlayHint`, that fact rides the
+   * registration metadata so the renderer attaches a lazy-resolve shell.
    */
   registerInlayHintsProvider(selector: DocumentSelector, provider: InlayHintsProvider): Disposable {
     const languages = this._languages()
     const handle = this._languageHandle++
     this._providers.set(handle, { type: 'inlayHints', provider })
-    void languages.$registerProvider(handle, 'inlayHints', toSelector(selector))
+    void languages.$registerProvider(
+      handle,
+      'inlayHints',
+      toSelector(selector),
+      provider.resolveInlayHint ? { inlayHintsResolve: true } : undefined,
+    )
     const changeSub = provider.onDidChangeInlayHints?.(() => {
       languages.$emitInlayHintsDidChange(handle)
     })
     return {
       dispose: () => {
         changeSub?.dispose()
+        this._inlayHintCache.delete(handle)
         if (this._providers.delete(handle)) void languages.$unregisterProvider(handle)
       },
     }
@@ -644,10 +668,39 @@ export class LanguageProviderRegistry {
     handle: number,
     uri: UriComponents,
     range: Range,
-  ): Promise<InlayHint[] | null> {
+  ): Promise<IInlayHintDto[] | null> {
     const provider = this._provider<InlayHintsProvider>(handle, 'inlayHints')
     if (!provider) return null
-    return (await provider.provideInlayHints(this._documents.getOrSynthesize(uri), range)) ?? null
+    const hints =
+      (await provider.provideInlayHints(this._documents.getOrSynthesize(uri), range)) ?? null
+    if (!hints || !provider.resolveInlayHint) {
+      this._inlayHintCache.delete(handle)
+      return hints?.map(toInlayHintDto) ?? null
+    }
+    const cacheId = ++this._inlayHintCacheId
+    this._inlayHintCache.set(handle, { cacheId, hints })
+    return hints.map((hint, index) => ({
+      ...toInlayHintDto(hint),
+      resolveCacheId: cacheId,
+      resolveIndex: index,
+    }))
+  }
+
+  async resolveInlayHint(
+    handle: number,
+    cacheId: number,
+    index: number,
+  ): Promise<IInlayHintDto | null> {
+    const provider = this._provider<InlayHintsProvider>(handle, 'inlayHints')
+    if (!provider?.resolveInlayHint) return null
+    const entry = this._inlayHintCache.get(handle)
+    const hint = entry?.cacheId === cacheId ? entry.hints[index] : undefined
+    if (!hint || !entry) return null
+    const resolved = (await provider.resolveInlayHint(hint)) ?? hint
+    // Re-resolving an already resolved hint must be a no-op for the provider,
+    // so the cache tracks the resolved object (a stale cacheId still misses).
+    if (this._inlayHintCache.get(handle) === entry) entry.hints[index] = resolved
+    return toInlayHintDto(resolved)
   }
 
   async provideDocumentSemanticTokens(

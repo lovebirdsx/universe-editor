@@ -77,6 +77,8 @@ class FakeHost implements IHostServiceWire {
     node: string
     chromium: string
     v8: string
+    machineId: string
+    appRoot: string
   }> {
     return Promise.resolve({
       productName: 'Universe Editor',
@@ -86,6 +88,8 @@ class FakeHost implements IHostServiceWire {
       node: '20.0.0',
       chromium: '128.0.0',
       v8: '12.0.0',
+      machineId: 'machine-1',
+      appRoot: '/apps/universe',
     })
   }
   showOpenFileDialog(): Promise<null> {

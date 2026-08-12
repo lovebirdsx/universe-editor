@@ -4,8 +4,8 @@
  * raw JSON against these with zod (`extension-host/manifest.ts`), the renderer
  * consumes the already-validated DTOs to translate contribution points.
  *
- * Kept small and additive: commands / menus / keybindings / configuration are
- * here; views land in a later phase.
+ * Kept small and additive: commands / menus / keybindings / configuration /
+ * views(Containers) and friends are declared here; each grows phase by phase.
  */
 
 /** A single `contributes.commands[]` entry. */
@@ -198,6 +198,36 @@ export interface IMcpServerContribution {
   whenConfiguration?: string
 }
 
+/**
+ * A single `contributes.viewsContainers.activitybar[]` entry — an extension-owned
+ * ViewContainer shown in the activity bar (VSCode shape). `icon` accepts a
+ * `$(codicon)`-style name or a plain icon name (resolved against the workbench's
+ * icon map, falling back to a default glyph); file-path icons are a later phase.
+ */
+export interface IViewContainerContribution {
+  id: string
+  title: string
+  icon: string
+}
+
+/**
+ * A single view entry under `contributes.views[containerId][]`. The key is either
+ * the `id` of a container the same extension declares in `viewsContainers`, or a
+ * well-known built-in container key (e.g. `explorer`); unknown keys are skipped
+ * with a warning by the renderer. `when` is carried for forward-compat — view
+ * visibility gating lands with the tree data phase.
+ */
+export interface IViewContribution {
+  id: string
+  name: string
+  when?: string
+}
+
+/** The `contributes.viewsContainers` block (VSCode shape; `panel` is a later phase). */
+export interface IViewContainersContribution {
+  activitybar?: IViewContainerContribution[]
+}
+
 /** The `contributes` block as declared in a manifest. Grows phase by phase. */
 export interface IExtensionContributions {
   commands?: ICommandContribution[]
@@ -216,6 +246,10 @@ export interface IExtensionContributions {
   grammars?: IGrammarContribution[]
   /** Declarative MCP servers, keyed by server name (stdio only in v1). */
   mcpServers?: Record<string, IMcpServerContribution>
+  /** Extension-owned view containers (activity bar). */
+  viewsContainers?: IViewContainersContribution
+  /** Tree views, keyed by the id of their home view container. */
+  views?: Record<string, IViewContribution[]>
 }
 
 /**

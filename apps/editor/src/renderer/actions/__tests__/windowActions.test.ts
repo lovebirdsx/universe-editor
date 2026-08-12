@@ -233,7 +233,7 @@ describe('windowActions', () => {
       // `accessor.get(...)` throw, reproducing the original bug.
       showOpenDialog: vi.fn(async () => {
         await Promise.resolve()
-        return picked
+        return [picked]
       }),
       showSaveDialog: vi.fn(async () => undefined),
     }

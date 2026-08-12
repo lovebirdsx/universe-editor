@@ -20,6 +20,15 @@ export interface IDocumentMirrorTracker {
   trackModel(resource: URI, model: monaco.editor.ITextModel): boolean
   /** Whether the document for `resource` is already mirrored. */
   isTracked(resource: URI): boolean
+  /**
+   * Resolve once the document's `$acceptDocumentOpen` is on the wire — i.e. the
+   * host already knows the URI. Resolves false when the open does not land
+   * within `timeoutMs` (or the tracker is gone). Lets a did-save notification
+   * wait out the async open so it never names a URI the host has not seen (an
+   * untitled buffer's Save-As opens the new file document and fires the save
+   * notification in the same tick).
+   */
+  whenOpened(resource: URI, timeoutMs?: number): Promise<boolean>
 }
 
 class DocumentMirrorTrackingImpl {
@@ -39,6 +48,10 @@ class DocumentMirrorTrackingImpl {
 
   isTracked(resource: URI): boolean {
     return this._tracker?.isTracked(resource) ?? false
+  }
+
+  whenOpened(resource: URI, timeoutMs?: number): Promise<boolean> {
+    return this._tracker?.whenOpened(resource, timeoutMs) ?? Promise.resolve(false)
   }
 }
 

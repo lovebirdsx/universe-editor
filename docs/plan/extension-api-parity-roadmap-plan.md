@@ -1,5 +1,9 @@
 # Extension API 对标 VSCode 补全路线图（0.9.0 之后）
 
+> **状态（2026-08-12）：已全部执行完毕。** P1+P2+零散 → 0.10.0；P3 → 0.11.0；P4 → 0.12.0。
+> 仅 P1.5（TextEditorSelectionChangeKind.Command 归因）按计划留待真实诉求。
+> 各版变更与限制见 `packages/extension-api/COMPATIBILITY.md` 对应条目。
+
 ## 1. 背景与基线
 
 0.9.0（2026-08-12）已对标 `vscode.d.ts` 补全一轮 API 面：工具类（`Uri`/`EventEmitter`/

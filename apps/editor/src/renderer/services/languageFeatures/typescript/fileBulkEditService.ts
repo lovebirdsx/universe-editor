@@ -15,12 +15,16 @@
  *  placeholder is inserted *and selected* (VSCode's behaviour). Non-snippet edits
  *  (rename) are untouched.
  *
+ *  File-level operations (create/rename/delete — from the extension API's
+ *  `workspace.applyEdit`) go through IFileService, executed in array order so
+ *  text edits interleaved with them apply in `documentChanges` sequence.
+ *
  *  Injected as an `overrideServices` entry at every `editor.create` call site
  *  (collected on MonacoLoader) so Monaco's rename contribution resolves this
  *  instance instead of the standalone one.
  *--------------------------------------------------------------------------------------------*/
 
-import { IFileService, URI } from '@universe-editor/platform'
+import { dirname, FileSystemError, IFileService, URI } from '@universe-editor/platform'
 import { MonacoLoader, type monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
 import { MonacoModelRegistry } from '../../../workbench/editor/monaco/MonacoModelRegistry.js'
 
@@ -32,6 +36,24 @@ interface WorkspaceTextEdit {
     readonly insertAsSnippet?: boolean
   }
   readonly versionId?: number | undefined
+}
+
+/**
+ * Monaco-shaped file operation (`monaco.languages.IWorkspaceFileEdit`). create =
+ * `newResource` only, rename = both, delete = `oldResource` only. `folder` marks
+ * a directory create (carried by Monaco's options; never set by the LSP wire).
+ */
+interface WorkspaceFileEdit {
+  readonly oldResource?: monaco.Uri
+  readonly newResource?: monaco.Uri
+  readonly options?: {
+    readonly overwrite?: boolean
+    readonly ignoreIfNotExists?: boolean
+    readonly ignoreIfExists?: boolean
+    readonly recursive?: boolean
+    readonly folder?: boolean
+    readonly skipTrashBin?: boolean
+  }
 }
 
 interface WorkspaceEdit {
@@ -70,6 +92,17 @@ function isWorkspaceTextEdit(edit: unknown): edit is WorkspaceTextEdit {
   if (typeof edit !== 'object' || edit === null) return false
   const e = edit as { resource?: unknown; textEdit?: unknown }
   return e.resource != null && typeof e.textEdit === 'object' && e.textEdit !== null
+}
+
+function isWorkspaceFileEdit(edit: unknown): edit is WorkspaceFileEdit {
+  if (typeof edit !== 'object' || edit === null || isWorkspaceTextEdit(edit)) return false
+  const e = edit as { oldResource?: unknown; newResource?: unknown }
+  return e.oldResource != null || e.newResource != null
+}
+
+/** Parent directory of `resource`, used to pre-create create-target folders. */
+function parentResource(resource: URI): URI {
+  return resource.with({ path: dirname(resource.path) })
 }
 
 /** Apply Monaco-range (1-based line/column) text edits to a plain string. Edits
@@ -153,11 +186,68 @@ export class FileBulkEditService {
     opts?: BulkEditOptions,
   ): Promise<BulkEditResult> {
     const rawEdits = Array.isArray(editsIn) ? editsIn : (editsIn as WorkspaceEdit).edits
-    const byResource = new Map<string, { resource: URI; edits: WorkspaceTextEdit[] }>()
+    if (rawEdits.some((e) => !isWorkspaceTextEdit(e))) {
+      return this._applySequential(rawEdits)
+    }
+
+    const byResource = this._groupByResource(rawEdits as readonly WorkspaceTextEdit[])
+
+    // Snippet edits (drop/paste-to-link) go through SnippetController2 on the
+    // target editor so the `${1:…}` placeholder is inserted *and selected*. This
+    // is a single-range, single-file, current-editor operation in practice.
+    const snippetResult = this._tryApplySnippet(byResource, opts?.editor)
+    if (snippetResult) return snippetResult
+
+    const { edits, files } = await this._applyTextGroups(byResource, opts)
+    return {
+      ariaSummary: `Made ${edits} edits in ${files} files`,
+      isApplied: edits > 0,
+    }
+  }
+
+  /**
+   * Ordered path for edits carrying file operations (create/rename/delete, e.g.
+   * from `workspace.applyEdit`): VSCode's `documentChanges` semantics run every
+   * entry in array order, so a text edit listed before a rename still targets
+   * the old URI and one listed after it the new. Consecutive text edits are
+   * grouped per resource and flushed as a batch whenever a file operation is
+   * reached; any failure throws, aborting the remaining entries.
+   */
+  private async _applySequential(rawEdits: readonly unknown[]): Promise<BulkEditResult> {
+    let totalEdits = 0
+    let totalFiles = 0
+    let pending: WorkspaceTextEdit[] = []
+    const flush = async (): Promise<void> => {
+      if (pending.length === 0) return
+      const { edits, files } = await this._applyTextGroups(this._groupByResource(pending))
+      totalEdits += edits
+      totalFiles += files
+      pending = []
+    }
     for (const edit of rawEdits) {
-      if (!isWorkspaceTextEdit(edit)) {
-        throw new Error('FileBulkEditService: only text edits are supported')
+      if (isWorkspaceTextEdit(edit)) {
+        pending.push(edit)
+        continue
       }
+      await flush()
+      if (!isWorkspaceFileEdit(edit)) {
+        throw new Error('FileBulkEditService: unsupported edit (neither text nor file operation)')
+      }
+      await this._applyFileEdit(edit)
+      totalEdits += 1
+    }
+    await flush()
+    return {
+      ariaSummary: `Made ${totalEdits} edits in ${totalFiles} files`,
+      isApplied: totalEdits > 0,
+    }
+  }
+
+  private _groupByResource(
+    edits: readonly WorkspaceTextEdit[],
+  ): Map<string, { resource: URI; edits: WorkspaceTextEdit[] }> {
+    const byResource = new Map<string, { resource: URI; edits: WorkspaceTextEdit[] }>()
+    for (const edit of edits) {
       const resource = URI.parse(edit.resource.toString())
       const key = resource.toString()
       let group = byResource.get(key)
@@ -167,13 +257,14 @@ export class FileBulkEditService {
       }
       group.edits.push(edit)
     }
+    return byResource
+  }
 
-    // Snippet edits (drop/paste-to-link) go through SnippetController2 on the
-    // target editor so the `${1:…}` placeholder is inserted *and selected*. This
-    // is a single-range, single-file, current-editor operation in practice.
-    const snippetResult = this._tryApplySnippet(byResource, opts?.editor)
-    if (snippetResult) return snippetResult
-
+  /** Apply grouped text edits: live models get undoable edits, the rest hit disk. */
+  private async _applyTextGroups(
+    byResource: Map<string, { resource: URI; edits: WorkspaceTextEdit[] }>,
+    opts?: BulkEditOptions,
+  ): Promise<{ edits: number; files: number }> {
     const monacoNs = MonacoLoader.get()
     let totalEdits = 0
     let totalFiles = 0
@@ -200,11 +291,74 @@ export class FileBulkEditService {
       totalFiles += 1
       totalEdits += edits.length
     }
+    return { edits: totalEdits, files: totalFiles }
+  }
 
-    return {
-      ariaSummary: `Made ${totalEdits} edits in ${totalFiles} files`,
-      isApplied: totalEdits > 0,
+  /**
+   * One file operation via IFileService, honouring the option semantics:
+   * `overwrite` wins over `ignoreIfExists`; `ignoreIfExists`/`ignoreIfNotExists`
+   * turn a would-be failure into a no-op (counted as applied). Anything else
+   * throws FileSystemError so the caller rejects the whole edit with false.
+   */
+  private async _applyFileEdit(edit: WorkspaceFileEdit): Promise<void> {
+    const options = edit.options ?? {}
+    const oldResource = edit.oldResource ? URI.parse(edit.oldResource.toString()) : undefined
+    const newResource = edit.newResource ? URI.parse(edit.newResource.toString()) : undefined
+
+    if (newResource && !oldResource) {
+      // create
+      if (options.folder === true) {
+        if (await this._fileService.exists(newResource)) {
+          if (options.overwrite !== true && options.ignoreIfExists !== true) {
+            throw new FileSystemError(`create: target already exists: ${newResource}`, 'EEXIST')
+          }
+          return
+        }
+        await this._fileService.createDirectory(newResource)
+        return
+      }
+      if (await this._fileService.exists(newResource)) {
+        if (options.overwrite !== true) {
+          if (options.ignoreIfExists === true) return
+          throw new FileSystemError(`create: target already exists: ${newResource}`, 'EEXIST')
+        }
+      } else {
+        // fs.writeFile does not create parents; VSCode's createFile does.
+        await this._fileService.createDirectory(parentResource(newResource))
+      }
+      await this._fileService.writeFile(newResource, '')
+      return
     }
+
+    if (oldResource && newResource) {
+      // rename
+      if (!(await this._fileService.exists(oldResource))) {
+        if (options.ignoreIfNotExists === true) return
+        throw new FileSystemError(`rename: source does not exist: ${oldResource}`, 'ENOENT')
+      }
+      if (options.overwrite === true && (await this._fileService.exists(newResource))) {
+        await this._fileService.delete(newResource, { recursive: true })
+      }
+      await this._fileService.rename(oldResource, newResource, {
+        overwrite: options.overwrite === true,
+      })
+      return
+    }
+
+    if (oldResource) {
+      // delete
+      if (!(await this._fileService.exists(oldResource))) {
+        if (options.ignoreIfNotExists === true) return
+        throw new FileSystemError(`delete: resource does not exist: ${oldResource}`, 'ENOENT')
+      }
+      await this._fileService.delete(oldResource, {
+        recursive: options.recursive === true,
+        useTrash: options.skipTrashBin !== true,
+      })
+      return
+    }
+
+    throw new Error('FileBulkEditService: file operation without old/new resource')
   }
 
   /** Apply edits to a live model in-place (undoable, visible in the editor). */

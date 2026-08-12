@@ -187,7 +187,9 @@ import {
   IExtensionsWorkbenchService,
 } from './services/extensionsWorkbench/ExtensionsWorkbenchService.js'
 import { IScmService, ScmService } from './services/extensions/ScmService.js'
+import { IWebviewService, WebviewService } from './services/extensions/WebviewService.js'
 import { ITimelineService, TimelineService } from './services/timeline/TimelineService.js'
+import { ITreeViewsService, TreeViewsService } from './services/extensions/TreeViewsService.js'
 import {
   IScmDecorationsService,
   ScmDecorationsService,
@@ -520,6 +522,17 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(ICommandService, commandService)
   services.set(IEditorGroupsService, editorGroupsService)
   services.set(IEditorService, editorService)
+  // WebviewService is an Eager singleton (circular with IEditorGroupsService via
+  // EditorResolverService, so no constructor injection); hand it a late lookup so
+  // host-owned webview panels (window.createWebviewPanel) can open/reveal/close
+  // their tab. Must go through the accessor — a raw services.get returns the
+  // uninstantiated SyncDescriptor at this point.
+  const webviewServiceInstance = instantiation.invokeFunction((accessor) =>
+    accessor.get(IWebviewService),
+  )
+  if (webviewServiceInstance instanceof WebviewService) {
+    webviewServiceInstance.setEditorGroupsAccessor(() => editorGroupsService)
+  }
   services.set(IOutputService, outputService)
   services.set(
     IOutputModelService,
@@ -711,6 +724,13 @@ async function bootstrapWorkbench(): Promise<void> {
   // Timeline model (file-history providers from extensions); the built-in
   // TimelineView renders it. Needs IContextKeyService (timelineHasProvider).
   services.set(ITimelineService, workbenchStore.add(instantiation.createInstance(TimelineService)))
+
+  // Extension-contributed tree views (contributes.views + TreeDataProvider);
+  // ExtensionTreeView components render the pulled item cache.
+  services.set(
+    ITreeViewsService,
+    workbenchStore.add(instantiation.createInstance(TreeViewsService)),
+  )
 
   // Git status decorations derived from the SCM model; colours Explorer rows and
   // editor tabs by file change state.

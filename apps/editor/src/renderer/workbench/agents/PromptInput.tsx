@@ -871,23 +871,25 @@ export function PromptInput({
       const withoutTrigger = before + after
       editorHandleRef.current?.setText(withoutTrigger, start)
 
-      const picked = await fileDialog.showOpenDialog(
-        kind === 'file'
-          ? {
-              title: localize('acp.mention.pickFile.title', 'Select File to Mention'),
-              canSelectFiles: true,
-              canSelectFolders: false,
-              openLabel: localize('acp.mention.pickFile.open', 'Mention'),
-              ...(workspaceRoot ? { defaultUri: workspaceRoot } : {}),
-            }
-          : {
-              title: localize('acp.mention.pickFolder.title', 'Select Folder to Mention'),
-              canSelectFiles: false,
-              canSelectFolders: true,
-              openLabel: localize('acp.mention.pickFolder.open', 'Mention'),
-              ...(workspaceRoot ? { defaultUri: workspaceRoot } : {}),
-            },
-      )
+      const picked = (
+        await fileDialog.showOpenDialog(
+          kind === 'file'
+            ? {
+                title: localize('acp.mention.pickFile.title', 'Select File to Mention'),
+                canSelectFiles: true,
+                canSelectFolders: false,
+                openLabel: localize('acp.mention.pickFile.open', 'Mention'),
+                ...(workspaceRoot ? { defaultUri: workspaceRoot } : {}),
+              }
+            : {
+                title: localize('acp.mention.pickFolder.title', 'Select Folder to Mention'),
+                canSelectFiles: false,
+                canSelectFolders: true,
+                openLabel: localize('acp.mention.pickFolder.open', 'Mention'),
+                ...(workspaceRoot ? { defaultUri: workspaceRoot } : {}),
+              },
+        )
+      )?.[0]
       if (!picked) {
         // Cancelled: leave the trigger-stripped buffer, restore focus/caret.
         requestAnimationFrame(() => {

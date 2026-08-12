@@ -212,7 +212,7 @@ const stubFileDialogService: IFileDialogServiceType = {
   _serviceBrand: undefined,
   showOpenDialog: (opts: unknown) => {
     showOpenDialogSpy(opts)
-    return Promise.resolve(nextPick)
+    return Promise.resolve(nextPick === undefined ? undefined : [nextPick])
   },
   showSaveDialog: () => Promise.resolve(undefined),
 } as unknown as IFileDialogServiceType

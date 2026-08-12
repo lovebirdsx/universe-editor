@@ -72,6 +72,7 @@ export class QuickInputService implements IQuickInputService {
     const onDidTriggerButton = new Emitter<IQuickInputButton>()
     const onDidTriggerItemButton = new Emitter<IQuickPickItemButtonEvent<T>>()
     const onDidTriggerOk = new Emitter<void>()
+    const onDidChangeSelection = new Emitter<T[]>()
     let _items: readonly QuickPickInput<T>[] = []
     let _placeholder: string | undefined
     let _value = ''
@@ -92,6 +93,8 @@ export class QuickInputService implements IQuickInputService {
     let _okLabel: string | undefined
     let _keepOpenOnAccept = false
     let _autoFocusFirstItem = true
+    let _canSelectMany = false
+    let _selectedItems: readonly T[] = []
     let _keyMods: IKeyMods = { ctrl: false, alt: false }
     let _visible = false
 
@@ -119,6 +122,9 @@ export class QuickInputService implements IQuickInputService {
         okLabel: _okLabel,
         keepOpenOnAccept: _keepOpenOnAccept,
         autoFocusFirstItem: _autoFocusFirstItem,
+        canSelectMany: _canSelectMany,
+        selectedItems: _selectedItems,
+        onSelectionChange: (items) => onDidChangeSelection.fire(items as T[]),
         onAccept: (selected, mods) => {
           if (mods) _keyMods = mods
           onDidAccept.fire(selected as T[])
@@ -284,6 +290,20 @@ export class QuickInputService implements IQuickInputService {
         _autoFocusFirstItem = v ?? true
         pushState()
       },
+      get canSelectMany() {
+        return _canSelectMany
+      },
+      set canSelectMany(v) {
+        _canSelectMany = v
+        pushState()
+      },
+      get selectedItems() {
+        return _selectedItems
+      },
+      set selectedItems(v) {
+        _selectedItems = v
+        pushState()
+      },
       get keyMods() {
         return _keyMods
       },
@@ -294,6 +314,7 @@ export class QuickInputService implements IQuickInputService {
       onDidTriggerButton: onDidTriggerButton.event,
       onDidTriggerItemButton: onDidTriggerItemButton.event,
       onDidTriggerOk: onDidTriggerOk.event,
+      onDidChangeSelection: onDidChangeSelection.event,
       show: () => {
         _visible = true
         this._currentOnHide = () => onDidHide.fire()
@@ -311,6 +332,7 @@ export class QuickInputService implements IQuickInputService {
         onDidTriggerButton.dispose()
         onDidTriggerItemButton.dispose()
         onDidTriggerOk.dispose()
+        onDidChangeSelection.dispose()
       },
     }
     return qp

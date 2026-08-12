@@ -7,16 +7,25 @@
 
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { nativeTheme } from 'electron'
-import { ShutdownReason } from '@universe-editor/platform'
+import { dialog, nativeTheme } from 'electron'
+import { ShutdownReason, URI } from '@universe-editor/platform'
 
 vi.mock('electron', async () => {
   const { EventEmitter } = await import('node:events')
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const userDataDir = mkdtempSync(join(tmpdir(), 'universe-host-test-'))
   const nativeTheme = new EventEmitter() as EventEmitter & { shouldUseDarkColors: boolean }
   nativeTheme.shouldUseDarkColors = true
   return {
-    app: { getName: () => 'Test', getVersion: () => '1.0.0', getPath: () => '/tmp' },
-    dialog: {},
+    app: {
+      getName: () => 'Test',
+      getVersion: () => '1.0.0',
+      getPath: () => userDataDir,
+      getAppPath: () => '/app/root',
+    },
+    dialog: { showOpenDialog: vi.fn() },
     shell: {},
     nativeImage: {},
     nativeTheme,
@@ -129,6 +138,15 @@ describe('MainHostService', () => {
     svc.dispose()
   })
 
+  it('getVersionInfo carries a persisted machineId and the app root', async () => {
+    const svc = new MainHostService(win.asWin())
+    const info = await svc.getVersionInfo()
+    expect(info.appRoot).toBe('/app/root')
+    expect(info.machineId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    expect((await svc.getVersionInfo()).machineId).toBe(info.machineId)
+    svc.dispose()
+  })
+
   it('restart reloads the window when the renderer does not veto', async () => {
     const confirmShutdown = vi.fn().mockResolvedValue(true)
     const svc = new MainHostService(win.asWin(), () => {}, undefined, {
@@ -205,6 +223,61 @@ describe('MainHostService', () => {
     win.zoomLevel = -8
     await svc.zoomOut()
     expect(win.zoomLevel).toBe(-8)
+    svc.dispose()
+  })
+})
+
+describe('MainHostService.showOpenFileDialog', () => {
+  let win: FakeWindow
+  const showOpenDialog = vi.mocked(dialog.showOpenDialog)
+
+  beforeEach(() => {
+    win = new FakeWindow()
+    showOpenDialog.mockReset()
+  })
+
+  it('maps canSelectMany and filters to the Electron dialog and returns every pick', async () => {
+    showOpenDialog.mockResolvedValue({
+      canceled: false,
+      filePaths: ['/a/notes.txt', '/a/readme.md'],
+    })
+    const svc = new MainHostService(win.asWin())
+    const result = await svc.showOpenFileDialog({
+      title: 'Open',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      filters: [{ name: 'Text', extensions: ['txt', 'md'] }],
+    })
+    expect(showOpenDialog).toHaveBeenCalledWith(win, {
+      properties: ['openFile', 'multiSelections'],
+      title: 'Open',
+      filters: [{ name: 'Text', extensions: ['txt', 'md'] }],
+    })
+    expect(result).toEqual([URI.file('/a/notes.txt').toJSON(), URI.file('/a/readme.md').toJSON()])
+    svc.dispose()
+  })
+
+  it('omits multiSelections and filters when not requested', async () => {
+    showOpenDialog.mockResolvedValue({ canceled: false, filePaths: ['/a/src'] })
+    const svc = new MainHostService(win.asWin())
+    const result = await svc.showOpenFileDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+    })
+    expect(showOpenDialog).toHaveBeenCalledWith(win, {
+      properties: ['openDirectory'],
+      title: 'Open Folder',
+    })
+    expect(result).toEqual([URI.file('/a/src').toJSON()])
+    svc.dispose()
+  })
+
+  it('resolves null when the user cancels', async () => {
+    showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
+    const svc = new MainHostService(win.asWin())
+    await expect(svc.showOpenFileDialog({ title: 'Open' })).resolves.toBeNull()
     svc.dispose()
   })
 })

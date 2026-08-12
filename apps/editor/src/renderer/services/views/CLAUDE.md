@@ -112,8 +112,7 @@ HTML5 DnD 在 **dragover 阶段读不到 `dataTransfer` 的 payload**（只在 d
 
 这部分**不属于运行时重映射**，是声明「系统里存在这个 view」。三处必改（详见 `apps/editor/CLAUDE.md` 套路 B）：
 1. `contributions/BuiltInViewContainersContribution.ts`（或对应文件）—— `ViewContainerRegistry` 注册容器 + `location`。
-2. `contributions/BuiltInViewsContribution.ts` —— `ViewRegistry` 注册 view + `componentKey`。
-3. `contributions/ViewComponentsContribution.ts` —— `ViewComponentRegistry.register(componentKey, Component)`。
+2. `contributions/BuiltInViewsContribution.ts` —— 用单点 `registerViewWithComponent`（`services/views/ViewComponentRegistry.ts`）一次声明描述符 + 组件绑定（componentKey 默认派生自 view id）；扩展树视图等共享组件的场景用底层 `ViewRegistry.registerView` + `ViewComponentRegistry.register`。
 
 注册描述符的能力位：`canMoveView?: boolean`（默认可移动，设 `false` 锁定不可拖走）、`order: number`（默认顺序）、容器 `generated?: boolean`（内部生成标记，业务勿手动设）。
 

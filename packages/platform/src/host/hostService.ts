@@ -6,6 +6,7 @@
 import type { Event } from '../base/event.js'
 import { createDecorator } from '../di/instantiation.js'
 import type { URI, UriComponents } from '../base/uri.js'
+import type { IFileDialogFilter } from '../dialog/fileDialogService.js'
 
 export type HostPlatform = 'win32' | 'darwin' | 'linux' | 'unknown'
 
@@ -74,11 +75,11 @@ export interface IHostService {
   showItemInFolder(fsPath: string): Promise<void>
 
   /**
-   * OS file picker. Returns the chosen file's URI, or null if the user
-   * cancelled. Implementations use the native dialog tied to the focused
-   * BrowserWindow.
+   * OS file picker. Returns the chosen URIs (several only when `canSelectMany`
+   * is set), or null if the user cancelled. Implementations use the native
+   * dialog tied to the focused BrowserWindow.
    */
-  showOpenFileDialog(opts?: IShowOpenFileOptions): Promise<URI | UriComponents | null>
+  showOpenFileDialog(opts?: IShowOpenFileOptions): Promise<readonly (URI | UriComponents)[] | null>
 
   /**
    * OS save-as picker. Returns the chosen file's URI, or null if the user
@@ -168,6 +169,10 @@ export interface IVersionInfo {
   readonly node: string
   readonly chromium: string
   readonly v8: string
+  /** Random UUID generated once and persisted at `<userData>/machineid` (VSCode 对齐）。 */
+  readonly machineId: string
+  /** Absolute path of the application install root (`app.getAppPath()`). */
+  readonly appRoot: string
 }
 
 export interface ISystemNotificationOptions {
@@ -193,6 +198,10 @@ export interface IShowOpenFileOptions {
   readonly canSelectFiles?: boolean
   /** Allow picking folders (default false). May combine with canSelectFiles. */
   readonly canSelectFolders?: boolean
+  /** Allow picking several entries (default false). */
+  readonly canSelectMany?: boolean
+  /** File-type filter groups shown by the OS dialog. */
+  readonly filters?: readonly IFileDialogFilter[]
   /** Confirm button label (e.g. "Open Folder"). */
   readonly buttonLabel?: string
 }

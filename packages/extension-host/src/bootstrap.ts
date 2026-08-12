@@ -30,6 +30,7 @@ import {
   type IExtHostLanguages,
   type IExtHostScm,
   type IExtHostTimeline,
+  type IExtHostTreeViews,
   type IExtHostWebviews,
   type IExtHostWindow,
   type IMainThreadAi,
@@ -41,6 +42,7 @@ import {
   type IMainThreadOutput,
   type IMainThreadScm,
   type IMainThreadTimeline,
+  type IMainThreadTreeViews,
   type IMainThreadWebviews,
   type IMainThreadWindow,
   type IMainThreadStorage,
@@ -111,6 +113,9 @@ const mainThreadScm = ProxyChannel.toService<IMainThreadScm>(
 )
 const mainThreadTimeline = ProxyChannel.toService<IMainThreadTimeline>(
   client.getChannel(ExtHostChannels.mainThreadTimeline),
+)
+const mainThreadTreeViews = ProxyChannel.toService<IMainThreadTreeViews>(
+  client.getChannel(ExtHostChannels.mainThreadTreeViews),
 )
 const mainThreadFs = ProxyChannel.toService<IMainThreadFs>(
   client.getChannel(ExtHostChannels.mainThreadFs),
@@ -246,10 +251,15 @@ const extHostLanguages: IExtHostLanguages = {
     (await serviceReady).provideOnTypeFormattingEdits(handle, uri, position, ch, options),
   $provideInlayHints: async (handle, uri, range) =>
     (await serviceReady).provideInlayHints(handle, uri, range),
+  $resolveInlayHint: async (handle, cacheId, index) =>
+    (await serviceReady).resolveInlayHint(handle, cacheId, index),
   $provideDocumentSemanticTokens: async (handle, uri) =>
     (await serviceReady).provideDocumentSemanticTokens(handle, uri),
   $provideCodeLenses: async (handle, uri) => (await serviceReady).provideCodeLenses(handle, uri),
   $resolveCodeLens: async (handle, lens) => (await serviceReady).resolveCodeLens(handle, lens),
+  $acceptDiagnosticsChange: async (uris) => {
+    ;(await serviceReady).acceptDiagnosticsChange(uris)
+  },
 }
 const extHostDocuments: IExtHostDocuments = {
   $acceptDocumentOpen: async (uri, languageId, version, text) => {
@@ -276,6 +286,9 @@ const extHostEditor: IExtHostEditor = {
   $acceptActiveEditorChange: async (editor) => {
     ;(await serviceReady).acceptActiveEditorChange(editor)
   },
+  $acceptVisibleEditorsChange: async (editors) => {
+    ;(await serviceReady).acceptVisibleEditorsChange(editors)
+  },
   $acceptSelectionChange: async (uri, selections, kind) => {
     ;(await serviceReady).acceptSelectionChange(uri, selections, kind)
   },
@@ -295,10 +308,29 @@ const extHostWebviews: IExtHostWebviews = {
   $disposeWebviewPanel: async (panelHandle) => {
     ;(await serviceReady).disposeWebviewPanel(panelHandle)
   },
+  $acceptPanelDisposed: async (panelHandle) => {
+    ;(await serviceReady).acceptPanelDisposed(panelHandle)
+  },
+  $acceptPanelViewState: async (panelHandle, active, visible) => {
+    ;(await serviceReady).acceptPanelViewState(panelHandle, active, visible)
+  },
 }
 const extHostTimeline: IExtHostTimeline = {
   $provideTimeline: async (handle, uri, options) =>
     (await serviceReady).provideTimeline(handle, uri, options),
+}
+const extHostTreeViews: IExtHostTreeViews = {
+  $getChildren: async (viewId, parentHandle) =>
+    (await serviceReady).provideTreeChildren(viewId, parentHandle),
+  $acceptTreeViewVisibility: async (viewId, visible) => {
+    ;(await serviceReady).acceptTreeViewVisibility(viewId, visible)
+  },
+  $acceptSelection: async (viewId, handles) => {
+    ;(await serviceReady).acceptTreeViewSelection(viewId, handles)
+  },
+  $acceptExpansionState: async (viewId, handle, expanded) => {
+    ;(await serviceReady).acceptTreeViewExpansionState(viewId, handle, expanded)
+  },
 }
 
 server.registerChannel(ExtHostChannels.extHostCommands, ProxyChannel.fromService(extHostCommands))
@@ -317,6 +349,7 @@ server.registerChannel(ExtHostChannels.extHostEditor, ProxyChannel.fromService(e
 server.registerChannel(ExtHostChannels.extHostWindow, ProxyChannel.fromService(extHostWindow))
 server.registerChannel(ExtHostChannels.extHostWebviews, ProxyChannel.fromService(extHostWebviews))
 server.registerChannel(ExtHostChannels.extHostTimeline, ProxyChannel.fromService(extHostTimeline))
+server.registerChannel(ExtHostChannels.extHostTreeViews, ProxyChannel.fromService(extHostTreeViews))
 
 async function main(): Promise<void> {
   const locale = process.env.UNIVERSE_DISPLAY_LOCALE || undefined
@@ -411,6 +444,7 @@ async function main(): Promise<void> {
       globalStorageHome,
       mainThreadExtensions,
       mainThreadFileEvents,
+      mainThreadTreeViews,
     ),
   )
   console.info('[ext-host] ready')
