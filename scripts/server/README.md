@@ -35,9 +35,10 @@ Universe Editor 通过 **electron-updater 的 generic provider** 从一个**静�
 | `registerPage.mjs` | 自助注册网页（`GET {base}gallery/register`）的内嵌 HTML（中文一次性表单，零外部资源）。由 `server.mjs` 静态 import。 |
 | `adminPage.mjs` | 审批管理页（`GET {base}gallery/admin`）的内嵌 HTML（中文，待审批/已启用/已拒绝三分区，零外部资源）。由 `server.mjs` 静态 import。 |
 | `bundle.mjs` | 打包脚本（`pnpm server:bundle`）：把 server + 发布依赖（adm-zip/zod/extension-packaging）esbuild 成单文件产物 `dist/server.js`。**部署跑的是这个产物**（服务器上无 node_modules）。 |
-| `deploy.mjs` | 一键部署脚本（`pnpm server:deploy -- --env prod`）：比对远端 `SERVER_VERSION` → 交互确认 → 打包 → scp 上传 → 免密 sudo 安装重启 → 轮询健康检查断言新版本。仅支持 Ubuntu/systemd 远端，详见[第六节](#六更新服务器程序改了-servermjs-后)。 |
+| `deploy.mjs` | 一键部署脚本（`pnpm server:deploy -- --env prod`）：比对远端 `SERVER_VERSION` → 交互确认 → 打包 → scp 上传 → 远端安装重启（Ubuntu=免密 sudo + systemctl，Windows=schtasks）→ 轮询健康检查断言新版本。按 `--app-dir` 是否为 Windows 路径自动识别远端形态，详见[第六节](#六更新服务器程序改了-servermjs-后)。 |
 | `download-page/index.html` | 面向用户的静态下载页。纯前端，运行时读同目录 `latest.yml` / `release-notes.json`，展示最新版本、发布日期与更新日志，并提供下载按钮。发布时由 `release:upload` 同步到发布目录。 |
-| `setup.mjs` | 跨平台部署逻辑（按平台分支）：拷 `dist/server.js` / 注册服务 / 防火墙 / 启停 / 卸载。 |
+| `setup.mjs` | 跨平台部署逻辑（按平台分支）：拷 `dist/server.js` / 写 `server.env` / 注册服务 / 自动生成缺失的签名私钥与管理令牌 / 防火墙 / 启停 / 卸载。 |
+| `serverEnv.mjs` | 服务端运行时配置（`UE_SERVER_*`）的单一事实源：白名单、默认值派生、`server.env` 读写。`setup.mjs` 与 `deploy.mjs` 共用。 |
 | `setup.sh` | **Ubuntu 入口**：自检 root → 装 Node（缺则装）→ 调 `setup.mjs`。 |
 | `setup.ps1` | **Windows 入口**：自检管理员 → winget 装 Node → 调 `setup.mjs`。 |
 
@@ -74,25 +75,75 @@ cd scripts\server
 
 ### 默认值
 
-| 项 | Ubuntu 默认 | Windows 默认 |
-|---|---|---|
-| 服务程序安装目录 | `/opt/universe-update-server/` | `C:\universe-editor\app\` |
-| 发布目录（更新产物落地） | `/srv/universe-editor` | `C:\universe-editor\data` |
-| 市场根（扩展内容落地） | `/srv/universe-editor/gallery` | `C:\universe-editor\data\gallery` |
-| 认证目录（publish token，静态根之外） | `/srv/auth` | `C:\universe-editor\auth` |
-| 端口 | `80` | `80` |
-| URL 前缀（`--base`） | `/universe-editor/` | `/universe-editor/` |
-
-可用 `--root` / `--gallery-root` / `--auth-dir` / `--port` / `--base` 覆盖。**`--gallery-root` 默认 `<root>/gallery`（合并部署）**，想把扩展内容放另一块磁盘/另一套权限时指向独立目录即可（如 `--gallery-root /data/extensions`）——URL 上市场始终挂在 `{base}gallery/`，与磁盘位置无关。**`--auth-dir` 默认 `<root>/../auth`，绝不允许落在 `--root` 或 `--gallery-root` 之内**（publish token 哈希表会被静态服务公开下载；server 启动自检命中即拒绝启动）。
-
-市场相关的另三项配置（flag / 环境变量等价）：
-
-| flag | 环境变量 | 默认 | 说明 |
+| 项 | 环境变量 | Ubuntu 默认 | Windows 默认 |
 |---|---|---|---|
-| `--signing-key-file` | `UE_SERVER_SIGNING_KEY_FILE` | 无 | publish 签名私钥（Ed25519 pkcs8 PEM，`pnpm gallery:keygen` 生成）。启动期解析校验，文件缺失/不可解析**拒绝启动**；不配置则 publish API 一律 503（见[第十节](#十市场自助发布publish-token-运维)） |
-| `--signing-key-id` | `UE_SERVER_SIGNING_KEY_ID` | `market-v1` | 签名 keyId，必须与编辑器内置公钥的 keyId 一致 |
-| `--register-rate-limit` | `UE_SERVER_REGISTER_RATE_LIMIT` | `10` | 注册 API 每 IP 每小时上限（内存级滑动窗口，`0` = 关闭） |
-| `--admin-token-file` | `UE_SERVER_ADMIN_TOKEN_FILE` | 无 | 审批管理令牌文件（内容为令牌明文，trim 后单行）。给了但文件不可读/为空**拒绝启动**；不配置则管理页与管理 API 一律 503（admin console disabled） |
+| 服务程序安装目录 | `--app-dir` | `/opt/universe-update-server/` | `C:\universe-editor\app\` |
+| 发布目录（更新产物落地） | `UE_SERVER_ROOT` | `/srv/universe-editor` | `C:\universe-editor\data` |
+| 市场根（扩展内容落地） | `UE_SERVER_GALLERY_ROOT` | `<root>/gallery` | `C:\universe-editor\data\gallery` |
+| 认证目录（publish token，静态根之外） | `UE_SERVER_AUTH_DIR` | `<root>/../auth` | `C:\universe-editor\auth` |
+| 端口 | `UE_SERVER_PORT` | `80` | `80` |
+| URL 前缀 | `UE_SERVER_BASE` | `/universe-editor/` | `/universe-editor/` |
+| 市场签名私钥 | `UE_SERVER_SIGNING_KEY_FILE` | `<authDir>/market-key.pem` | `<authDir>\market-key.pem` |
+| 签名 keyId | `UE_SERVER_SIGNING_KEY_ID` | `market-v1` | `market-v1` |
+| 审批管理令牌 | `UE_SERVER_ADMIN_TOKEN_FILE` | `<authDir>/admin-token.txt` | `<authDir>\admin-token.txt` |
+| 注册限流（每 IP 每小时，0=关） | `UE_SERVER_REGISTER_RATE_LIMIT` | `10` | `10` |
+
+**`--gallery-root` / `--auth-dir` 等都从 `--root` 派生**，只给 `--root` 时整套跟着走。
+**`--auth-dir` 绝不允许落在 `--root` 或 `--gallery-root` 之内**（publish token 哈希表会被静态服务公开下载；server 启动自检命中即拒绝启动）。
+
+### 配置怎么来（重要）
+
+服务的运行时配置**不烧在服务定义里**，而是集中放在安装目录下的 `server.env`（`UE_SERVER_*=值`，每行一条）：
+Ubuntu 由 systemd `EnvironmentFile=` 注入，Windows 由 `run.cmd` 逐行 `set` 加载。优先级：
+
+```
+CLI 旗标  >  server.env（--env-file > 随包同目录 > 安装目录已有的那份）  >  平台默认值
+```
+
+所以有两条改配置的路子，**日常用第一条**：
+
+1. **改开发机的 `.env.<mode>` 后重跑 `pnpm server:deploy -- --env <mode>`**（推荐）。deploy 会从
+   `.env.<mode>` 提取 `UE_SERVER_*` 白名单生成 `server.env` 一并上传，重启即生效——不必登服务器、不必重装。
+   完整变量清单见仓库根 [`.env.example`](../../.env.example)。
+2. 在服务器上重跑 `setup.sh install --port 8080`（CLI 旗标覆盖，会写回 `server.env`）。首装或换机器时用。
+
+> 不带任何旗标重跑 `install` 不会丢配置：会沿用安装目录里已有的 `server.env`。
+> 只想换程序、完全不动服务器配置时用 `pnpm server:deploy -- --env prod --skip-env`。
+
+### 首装会自动生成的机密
+
+`install` 时若 `UE_SERVER_SIGNING_KEY_FILE` / `UE_SERVER_ADMIN_TOKEN_FILE` 指向的文件不存在，setup 会**自动生成**（权限 0600，Linux 下一并 `chown www-data`），并在安装结束时**一次性打印**：
+
+- **市场签名公钥**（Ed25519 JWK `x`）——必须让客户端信任它，否则从本市场装扩展会因验签失败被拒（fail-closed）。做法见下方[「让客户端信任签名公钥」](#让客户端信任签名公钥)。
+- **审批管理令牌明文**——管理页 `{base}gallery/admin` 登录用（文件里也有一份）。
+
+私钥与令牌都是**服务器上的持久运维资产**，`server:deploy` 永远不碰它们（只搬路径，不搬内容）；重跑 `install` 检测到文件已存在也不会覆盖。
+
+### 让客户端信任签名公钥
+
+拿到 setup 打印的公钥（形如 `ygBMXrD6w96p8I0uYBejToWvqU8DUer--4cWJ676A-g`）后，二选一：
+
+**1）正式发布（推荐）**：在仓库里编辑
+`apps/editor/src/main/services/extensionManagement/marketplaceSigningKeys.ts`，
+往 `BUILTIN_MARKETPLACE_SIGNING_KEYS` 加一行（**保留已有条目，勿删旧 keyId**）：
+
+```ts
+export const BUILTIN_MARKETPLACE_SIGNING_KEYS: Readonly<Record<string, string>> = {
+  'market-v1': 'ygBMXrD6w96p8I0uYBejToWvqU8DUer--4cWJ676A-g',
+  'market-v2': '<setup 打印的公钥>',   // ← 新增
+}
+```
+
+然后重新打包发版。**旧客户端要升级到含该公钥的版本后才能装本市场的扩展**——遇到未知 keyId 一律
+`unknown-key` 拒装。所以密钥轮换的正确顺序是：生成新 key → 加进内置表并保留旧 id → 客户端铺量 →
+最后才把服务端 `UE_SERVER_SIGNING_KEY_ID` 切到新 id。
+
+**2）临时联调 / 内部试用**：客户端启动前设环境变量（叠加在内置表之上，仅适合 dev/e2e）：
+
+```bash
+UNIVERSE_GALLERY_SIGNING_KEYS='{"market-v1":"<公钥>"}'
+```
+
 
 ---
 
@@ -180,7 +231,7 @@ schtasks /Query /TN UniverseUpdateServer /V /FO LIST   # 状态
 > 和健康检查响应（`curl http://<IP>/`）都会带上它，能立刻确认服务器跑的是哪版代码。
 > `server:deploy` 部署前会自动比对远端版本：相同（疑似忘 bump）或远端更新（疑似降级）都会拦下。
 
-### 一键部署（Ubuntu，推荐）
+### 一键部署（Ubuntu / Windows 远端均支持，推荐）
 
 ```bash
 pnpm server:deploy -- --env prod    # 生产机
@@ -188,34 +239,72 @@ pnpm server:deploy -- --env test    # 测试机（预验证）
 ```
 
 一条指令走完：检查远端版本 → 交互确认 → `pnpm server:bundle` 打包 → scp 上传 `dist/server.js`
-到 `~/server.js.v<N>` → ssh 免密 sudo 拷到安装目录并 `systemctl restart universe-update-server` →
-轮询健康检查断言新版本号。必须显式指定目标环境（`--env prod` / `--env test`，或 `UE_ENV`），
-否则拒绝执行（防误发护栏）；连接参数从对应 `.env.<mode>` 读取。
+**与 `server.env`** → 远端安装并重启服务 → 轮询健康检查断言新版本号。必须显式指定目标环境（`--env prod` /
+`--env test`，或 `UE_ENV`），否则拒绝执行（防误发护栏）；连接参数与服务端运行时配置都从对应 `.env.<mode>` 读取。
+
+远端形态按 **`--app-dir` / `UE_SERVER_APP_DIR` 是否为 Windows 路径**（盘符或反斜杠）自动识别：
+
+- **Ubuntu/systemd**：上传到 `~/server.js.v<N>` → 免密 sudo 拷到安装目录 →
+  `systemctl restart universe-update-server`。
+- **Windows/计划任务**：上传到 `%USERPROFILE%\server.js.v<N>` → `copy` 到安装目录，成功后
+  `schtasks /End` + `/Run` 重启任务（copy 失败不动在跑的服务）。
+
+`server.env` 先于程序落地，所以**改配置和换程序是同一次操作**——改 `.env.<mode>` 里的 `UE_SERVER_*`
+再跑一次 deploy 即可，不必登服务器。只想换程序、完全保留服务器现有配置时加 `--skip-env`。
+⚠️ 只有 `serverEnv.mjs` 白名单里的 `UE_SERVER_*` 会被搬上服务器，`UE_RELEASE_KEY` 等部署侧机密永远留在本机。
 
 连接参数与 `release:upload` 同一套（`--host/--user/--port/--key` ← `UE_RELEASE_HOST/USER/PORT/KEY`），
 推荐按环境分别写进仓库根 `.env.prod`（生产机）与 `.env.test`（测试机）：
 
 ```bash
-# .env.prod
+# .env.prod（Ubuntu 远端示例）
 UE_RELEASE_HOST=10.0.0.5
 UE_RELEASE_USER=deploy
 UE_RELEASE_PORT=22
 #UE_RELEASE_KEY=/path/to/id_ed25519              # 缺省用 ssh 默认凭证
 #UE_SERVER_APP_DIR=/opt/universe-update-server   # 服务程序安装目录（默认即此）
 #UE_SERVER_HEALTH_URL=http://10.0.0.5/           # 默认 http://<host>/
+# 服务端运行时配置（会生成 server.env 上传，重启即生效）
+UE_SERVER_PORT=80
+UE_SERVER_BASE=/universe-editor/
+
+# .env.test（Windows 远端示例——UE_SERVER_APP_DIR 必须显式给 Windows 路径，deploy 据此识别）
+UE_RELEASE_HOST=10.0.0.6
+UE_RELEASE_USER=Administrator
+UE_SERVER_APP_DIR=C:\universe-editor\app
+UE_SERVER_HEALTH_URL=http://10.0.0.6/
+UE_SERVER_ROOT=C:\universe-editor\data
 ```
 
 完整变量清单见仓库根 [`.env.example`](../../.env.example)。常用旗标：`--dry-run`（打印全部命令零副作用）、
-`--yes`（跳过交互确认）、`--force`（远端版本 >= 本地时强制）、`--skip-bundle`（复用已有 `dist/server.js`）。
+`--yes`（跳过交互确认）、`--force`（远端版本 >= 本地时强制）、`--skip-bundle`（复用已有 `dist/server.js`）、
+`--skip-env`（不上传 `server.env`）。
 
-**前置条件：部署用户配免密 sudo**（缺失时脚本会打印精确的 sudoers 配置后退出）。在服务器上执行
+**Ubuntu 前置条件：部署用户配免密 sudo**（缺失时脚本会打印精确的 sudoers 配置后退出）。在服务器上执行
 `sudo visudo -f /etc/sudoers.d/universe-update-server`，加入（`deploy` 换成实际用户名）：
 
 ```
-deploy ALL=(root) NOPASSWD: /usr/bin/cp /home/deploy/server.js.v* /opt/universe-update-server/server.mjs, /usr/bin/systemctl restart universe-update-server
+deploy ALL=(root) NOPASSWD: /usr/bin/cp /home/deploy/server.js.v* /opt/universe-update-server/server.mjs, /usr/bin/cp /home/deploy/server.env.v* /opt/universe-update-server/server.env, /usr/bin/systemctl restart universe-update-server
 ```
 
-### 手动 fallback（无免密 sudo 或 Windows 远端时）
+> ⚠️ **已有部署需要更新这条规则**：中间的 `server.env` cp 通道是随「配置走 server.env」一起新增的，
+> 老规则只覆盖 `server.js`，不更新会在安装步骤失败。急着发版可先用 `--skip-env` 跳过配置上传。
+
+**Windows 前置条件**（部署前脚本会远端 `schtasks /Query` 预检，失败时打印下述清单）：
+
+1. 已按[第一节](#一搭建在服务器上)用 `setup.ps1` 完成首次安装（计划任务 `UniverseUpdateServer` 存在）。
+2. 远端装好 **OpenSSH Server** 并自启（管理员 PowerShell）：
+
+   ```powershell
+   Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+   Set-Service sshd -StartupType Automatic; Start-Service sshd
+   ```
+
+3. ssh 登录用户属于 **Administrators 组**（Win32-OpenSSH 对管理员默认发放提升令牌，schtasks / 写
+   `C:\universe-editor\app` 均需要）。
+4. 远端 OpenSSH 默认 shell 为 **cmd.exe**（Windows 默认即是；若改过 PowerShell 默认 shell，安装命令会解析失败）。
+
+### 手动 fallback（无法满足上述前置条件时）
 
 先在仓库侧 `pnpm server:bundle` 重新打包，让服务器拿到新产物：服务器上有仓库就 `git pull && pnpm install && pnpm server:bundle`，否则从开发机 `scp scripts/server/dist/server.js <user>@<IP>:~/`。然后：
 
@@ -234,10 +323,9 @@ Copy-Item scripts\server\dist\server.js C:\universe-editor\app\server.mjs -Force
 ./setup.ps1 restart                              # 内部 End+Run，避免旧实例抢端口
 ```
 
-> 重跑 `setup.sh install` / `setup.ps1 install` 也会重新拷文件，但对**已运行**的服务不一定重启进程
-> （systemd `enable --now` 不重启 active 服务；Windows `/Run` 可能与旧实例抢端口），所以仍需显式
-> `restart` / `End`+`Run`。只改了 `server.mjs`、没动端口/base 时，上面这套「拷文件 + 重启」最干净，
-> 不动 unit、防火墙与目录权限。
+> 重跑 `setup.sh install` / `setup.ps1 install` 也会重新拷文件并重启（Linux 侧显式 `restart`，
+> Windows 侧 `End`+`Run`），但它还会重写 `server.env` 与服务定义；只改了 `server.mjs`、
+> 没动配置时，上面这套「拷文件 + 重启」最干净，不动 unit、防火墙与目录权限。
 >
 > 若改动**新增了发布目录里的静态资源**（如下载页 `index.html`、`release-notes.json`），重启 server 只是让它
 > 能服务这些文件；文件本身要进发布目录——下次 `release:upload` 会自动同步，想立刻生效可手动 `scp` 一次。
@@ -268,7 +356,9 @@ curl -i http://localhost/universe-editor/../../etc/passwd    # 403/404（穿越�
 - **80 端口 EACCES（Ubuntu）**：unit 已配 `CAP_NET_BIND_SERVICE`；若仍失败，改用高位端口 `--port 8080`
   并同步改 `publish.url`。
 - **Windows 计划任务起不来**：`schtasks /Query /TN UniverseUpdateServer /V /FO LIST` 看上次结果；
-  任务以 SYSTEM 跑、cwd 为 system32，脚本已用全绝对路径规避。
+  任务指向 `<appDir>\run.cmd` 启动器（schtasks /TR 有 261 字符上限，启动器里先从 `server.env`
+  加载 `UE_SERVER_*` 再起 node），排查时直接手动跑 `C:\universe-editor\app\run.cmd`
+  （去掉行尾 `>nul 2>&1` 可看到输出）。配置不对时先看 `C:\universe-editor\app\server.env`。
 - **内网无外网装不了 Node**：Ubuntu 用官方 tar.xz 离线包解到 `/usr/local`；Windows 用离线 MSI。装好后
   重跑 `setup.sh` / `setup.ps1` 即可（会跳过安装步骤）。
 - **GitHub Actions 推不进内网**：CI 只产出 `release/` artifact；上传与搭建在能访问内网的机器上做。
@@ -311,7 +401,7 @@ curl -i http://localhost/universe-editor/control.json
 
 服务器还挂了 Bearer token 认证的发布 API（`POST {base}gallery/api/publish` 等），让第三方开发者用 [`uex`](../../packages/uex/README.md) 直接上架，运维不再人肉 scp。完整协议与服务端流水线见 [`docs/development/marketplace-server.md`](../../docs/development/marketplace-server.md)「自助发布 API」节，这里只列运维动作。
 
-> ⚠️ **publish 必须先配签名私钥**：未配置 `--signing-key-file` 时 server 照常启动（打 warning），但 publish 一律 503（编辑器验签 fail-closed，无签名的包上架必拒装）；whoami / register / unpublish 不受影响。私钥用 `pnpm gallery:keygen` 生成，keyId 须与编辑器内置公钥一致（`--signing-key-id`，默认 `market-v1`）。
+> ⚠️ **publish 依赖签名私钥**：未配置或文件不存在时 publish 一律 503（编辑器验签 fail-closed，无签名的包上架必拒装）；whoami / register / unpublish 不受影响。**首次 `setup install` 会自动生成私钥并打印公钥**（见[第一节](#首装会自动生成的机密)），公钥必须内置进客户端才能装扩展；也可用 `pnpm gallery:keygen` 手动生成后经 `UE_SERVER_SIGNING_KEY_FILE` 指定。keyId 须与客户端内置公钥一致（`UE_SERVER_SIGNING_KEY_ID`，默认 `market-v1`）。
 
 开发者拿 token 有两条路：**自助注册**（浏览器打开 `http://<IP>/universe-editor/gallery/register` 填表，token 只显示一次）与运维签发（下述 `token.mjs`）。⚠️ 自助注册写 `publishers.json` 与运维 ssh 直改该文件是两条写通道，存在与 upload 通道同级的写竞态——避免同时操作。
 
@@ -321,15 +411,24 @@ curl -i http://localhost/universe-editor/control.json
 
 **管理页**在 `http://<IP>/universe-editor/gallery/admin`：内嵌中文页面，分「待审批 / 已启用 / 已拒绝」三区，支持批准、拒绝、删除记录（仅 pending/rejected 且名下无扩展可删，删除即释放名字）。所有操作走 `gallery/api/admin/*` API（审计进 server 日志），写操作与 publish 共用进程内串行写队列。
 
-管理令牌经 **`--admin-token-file` / `UE_SERVER_ADMIN_TOKEN_FILE`** 配置（文件内容为令牌明文，trim 后单行；与 publish token 完全独立的一套凭证）：
+管理令牌经 **`UE_SERVER_ADMIN_TOKEN_FILE`**（默认 `<authDir>/admin-token.txt`）配置，文件内容为令牌明文（trim 后单行），与 publish token 完全独立的一套凭证。**首次 `setup install` 会自动生成并打印一次明文**，一般无需手动操作。想手动换一个：
 
 ```bash
-# 生成一个足够随机的管理令牌并落盘（权限收紧，同私钥待遇）
+# Ubuntu：换令牌 = 重写文件 + 重启服务（启动时读一次，不支持热轮换）
 openssl rand -base64 32 > /srv/auth/admin-token.txt && chmod 600 /srv/auth/admin-token.txt
-# 启动参数加：--admin-token-file /srv/auth/admin-token.txt
+sudo bash setup.sh restart
 ```
 
-- flag 给了但文件不可读/为空 → **拒绝启动**；不配置 → 启动横幅 warning（admin console disabled），管理页与管理 API 一律 **503**（fail-closed，同签名密钥语义）。
+```powershell
+# Windows（管理员 PowerShell）
+$b = [byte[]]::new(32); [Security.Cryptography.RandomNumberGenerator]::Fill($b)
+Set-Content C:\universe-editor\auth\admin-token.txt ([Convert]::ToBase64String($b)) -NoNewline
+./setup.ps1 restart
+```
+
+想把令牌文件放到别处，改 `.env.<mode>` 的 `UE_SERVER_ADMIN_TOKEN_FILE` 后重跑 `server:deploy` 即可（只改路径，不搬内容——文件本身要先在服务器上就位）。
+
+- 配了但文件不可读/为空 → **拒绝启动**；路径为空 → 启动横幅 warning（admin console disabled），管理页与管理 API 一律 **503**（fail-closed，同签名密钥语义）。
 - 校验方式：请求 Bearer 与配置值各自 sha256 后 `timingSafeEqual`，失败一律 401。
 - ⚠️ 管理令牌同样 Bearer 明文过线，公网部署必须置于 TLS 反代之后；管理页本身不存令牌（浏览器 sessionStorage 暂存，关标签即清）。
 - 管理页只服务**审批**这一件事；publisher 自视角/运营报表等完整管理台属公开阶段（Phase F）。

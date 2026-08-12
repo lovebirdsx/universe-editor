@@ -9,6 +9,7 @@ import {
   buildRemoteInstallCommand,
   extractLocalVersion,
   extractRemoteVersion,
+  isWindowsAppDir,
   parseArgs,
   sudoersHint,
 } from '../deploy.mjs'
@@ -95,10 +96,68 @@ test('buildRemoteInstallCommand 顺序为 cp 成功才 restart，最后清理临
   )
 })
 
-test('sudoersHint 包含用户与安装目录', () => {
+test('buildRemoteInstallCommand withEnv：配置先于程序落地，各自成功才继续', () => {
+  const cmd = buildRemoteInstallCommand({
+    appDir: '/opt/universe-update-server',
+    version: '4',
+    withEnv: true,
+  })
+  assert.equal(
+    cmd,
+    'sudo -n cp ~/server.env.v4 /opt/universe-update-server/server.env && rm ~/server.env.v4 && ' +
+      'sudo -n cp ~/server.js.v4 /opt/universe-update-server/server.mjs && ' +
+      'sudo -n systemctl restart universe-update-server && rm ~/server.js.v4',
+  )
+  assert.ok(cmd.indexOf('server.env.v4') < cmd.indexOf('server.js.v4'))
+})
+
+test('isWindowsAppDir 按盘符/反斜杠识别 Windows 路径', () => {
+  assert.equal(isWindowsAppDir('C:\\universe-editor\\server'), true)
+  assert.equal(isWindowsAppDir('C:/universe-editor/server'), true)
+  assert.equal(isWindowsAppDir('D:\\app'), true)
+  assert.equal(isWindowsAppDir('/opt/universe-update-server'), false)
+  assert.equal(isWindowsAppDir('/data/app'), false)
+})
+
+test('buildRemoteInstallCommand Windows 分支：copy 成功才 End+等待+Run，Run 成功才清理', () => {
+  const cmd = buildRemoteInstallCommand({
+    appDir: 'C:\\universe-editor\\app',
+    version: '4',
+    windows: true,
+  })
+  assert.equal(
+    cmd,
+    'copy /Y server.js.v4 "C:\\universe-editor\\app\\server.mjs" && ' +
+      '(schtasks /End /TN UniverseUpdateServer 2>nul & ping -n 3 127.0.0.1 >nul & ' +
+      'schtasks /Run /TN UniverseUpdateServer) && del server.js.v4',
+  )
+})
+
+test('buildRemoteInstallCommand Windows 分支归一正斜杠与尾部斜杠', () => {
+  const cmd = buildRemoteInstallCommand({
+    appDir: 'C:/universe-editor/server/',
+    version: '9',
+    windows: true,
+  })
+  assert.match(cmd, /copy \/Y server\.js\.v9 "C:\\universe-editor\\server\\server\.mjs"/)
+})
+
+test('buildRemoteInstallCommand Windows withEnv：server.env 先落地且路径归一', () => {
+  const cmd = buildRemoteInstallCommand({
+    appDir: 'C:\\universe-editor\\app',
+    version: '4',
+    windows: true,
+    withEnv: true,
+  })
+  assert.match(cmd, /^copy \/Y server\.env\.v4 "C:\\universe-editor\\app\\server\.env" && del /)
+  assert.ok(cmd.indexOf('server.env.v4') < cmd.indexOf('server.js.v4'))
+})
+
+test('sudoersHint 覆盖 server.js 与 server.env 两条 cp 通道', () => {
   const hint = sudoersHint('deploy', '/opt/universe-update-server')
   assert.match(hint, /^deploy ALL=\(root\) NOPASSWD: /)
   assert.match(hint, /\/home\/deploy\/server\.js\.v\*/)
+  assert.match(hint, /\/home\/deploy\/server\.env\.v\* \/opt\/universe-update-server\/server\.env/)
   assert.match(hint, /\/opt\/universe-update-server\/server\.mjs/)
   assert.match(hint, /systemctl restart universe-update-server/)
 })
@@ -129,6 +188,8 @@ test('dry-run 全链路只打印命令，零副作用且不触发确认', () => 
     'example.invalid',
     '--user',
     'deploy',
+    '--app-dir',
+    '/opt/universe-update-server',
     '--health-url',
     'http://127.0.0.1:9/',
   ])
@@ -149,6 +210,8 @@ test('--env test 也可部署，摘要与命令带上测试环境标识', () => 
     'example.invalid',
     '--user',
     'deploy',
+    '--app-dir',
+    '/opt/universe-update-server',
     '--health-url',
     'http://127.0.0.1:9/',
   ])
@@ -158,4 +221,100 @@ test('--env test 也可部署，摘要与命令带上测试环境标识', () => 
   assert.match(res.stdout, /\[dry-run\] scp .*server\.js\.v\d+/)
   assert.match(res.stdout, /\[dry-run\] ssh .*sudo -n cp/)
   assert.doesNotMatch(res.stdout, /继续部署\?/)
+})
+
+test('Windows 远端（app-dir 为 Windows 路径）走 schtasks 链路，不再拒绝', () => {
+  const res = runDeploy([
+    '--env',
+    'test',
+    '--dry-run',
+    '--host',
+    'example.invalid',
+    '--user',
+    'deploy',
+    '--app-dir',
+    'C:\\universe-editor\\server',
+    '--health-url',
+    'http://127.0.0.1:9/',
+  ])
+  assert.equal(res.status, 0, res.stderr)
+  assert.match(res.stdout, /检查远端计划任务/)
+  assert.match(res.stdout, /\[dry-run\] ssh .*schtasks \/Query \/TN UniverseUpdateServer/)
+  assert.match(res.stdout, /\[dry-run\] scp .*example\.invalid:server\.js\.v\d+/)
+  assert.match(res.stdout, /\[dry-run\] ssh .*copy \/Y server\.js\.v\d+/)
+  assert.match(res.stdout, /schtasks \/Run \/TN UniverseUpdateServer/)
+  assert.doesNotMatch(res.stdout, /sudo -n/)
+})
+
+test('默认生成并上传 server.env，安装命令带上配置落地步骤', () => {
+  const res = runDeploy(
+    [
+      '--env=prod',
+      '--dry-run',
+      '--host',
+      'example.invalid',
+      '--user',
+      'deploy',
+      '--app-dir',
+      '/opt/universe-update-server',
+      '--health-url',
+      'http://127.0.0.1:9/',
+    ],
+    { UE_SERVER_PORT: '8080' },
+  )
+  assert.equal(res.status, 0, res.stderr)
+  assert.match(res.stdout, /服务端配置 server\.env/)
+  assert.match(res.stdout, /UE_SERVER_PORT/)
+  assert.match(res.stdout, /\[dry-run\] scp .*server\.env\.v\d+/)
+  assert.match(res.stdout, /\[dry-run\] ssh .*cp ~\/server\.env\.v\d+/)
+})
+
+test('server.env 只含白名单键，部署侧机密不进（UE_RELEASE_* 仅用于 ssh 连接）', () => {
+  const res = runDeploy(
+    [
+      '--env=prod',
+      '--dry-run',
+      '--host',
+      'example.invalid',
+      '--user',
+      'deploy',
+      '--app-dir',
+      '/opt/universe-update-server',
+      '--health-url',
+      'http://127.0.0.1:9/',
+    ],
+    {
+      UE_RELEASE_KEY: '/home/me/.ssh/id_ed25519',
+      UE_SERVER_APP_DIR: '/opt/universe-update-server',
+    },
+  )
+  assert.equal(res.status, 0, res.stderr)
+  const summary = res.stdout.split(/\r?\n/).find((l) => l.includes('服务端配置 server.env'))
+  assert.ok(summary, '缺少 server.env 摘要行')
+  assert.doesNotMatch(summary, /UE_RELEASE/)
+  // UE_SERVER_APP_DIR 前缀相同但属部署侧参数，不搬上服务器。
+  assert.doesNotMatch(summary, /UE_SERVER_APP_DIR/)
+  for (const key of summary.slice(summary.indexOf(':') + 1).split(',')) {
+    assert.match(key.trim(), /^UE_SERVER_/)
+  }
+})
+
+test('--skip-env 保留服务器现有配置，不上传也不安装 server.env', () => {
+  const res = runDeploy([
+    '--env=prod',
+    '--dry-run',
+    '--skip-env',
+    '--host',
+    'example.invalid',
+    '--user',
+    'deploy',
+    '--app-dir',
+    '/opt/universe-update-server',
+    '--health-url',
+    'http://127.0.0.1:9/',
+  ])
+  assert.equal(res.status, 0, res.stderr)
+  assert.match(res.stdout, /保留服务器上现有 server\.env/)
+  assert.doesNotMatch(res.stdout, /scp .*server\.env\.v/)
+  assert.match(res.stdout, /\[dry-run\] ssh .*sudo -n cp ~\/server\.js/)
 })

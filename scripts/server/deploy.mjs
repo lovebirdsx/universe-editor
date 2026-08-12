@@ -13,29 +13,40 @@
  *    --app-dir                             ← UE_SERVER_APP_DIR（默认 /opt/universe-update-server）
  *    --health-url                          ← UE_SERVER_HEALTH_URL（默认 http://<host>/）
  *
+ *  服务端运行时配置（UE_SERVER_ROOT / PORT / BASE / SIGNING_KEY_FILE …，白名单见 serverEnv.mjs）
+ *  也从 .env.<mode> 读取，每次部署生成 server.env 一并上传到 <app-dir>，服务重启即生效——
+ *  改服务器参数只需改 .env.<mode> 后重跑本命令，不必登服务器重装。
+ *
  *  旗标:
  *    --dry-run       打印将执行的命令与版本比对，零副作用
  *    --yes           跳过交互确认（脚本化场景）
  *    --force         远端版本 >= 本地时仍强制部署（默认拦下，提醒 bump SERVER_VERSION）
  *    --skip-bundle   复用已有 dist/server.js，跳过重新打包
+ *    --skip-env      不上传 server.env（只换程序，完全保留服务器上现有配置）
  *
- *  前置条件：远端为 Ubuntu/systemd，且部署用户配好免密 sudo（规则见 scripts/server/README.md
- *  第六节；缺失时本脚本会打印精确的 sudoers 配置后退出）。Windows 远端请按 README 手动步骤。
+ *  远端支持两种形态（按 --app-dir 是否为 Windows 路径自动识别）:
+ *    Ubuntu/systemd   前置条件=部署用户免密 sudo（缺失时打印精确 sudoers 配置后退出）
+ *    Windows/计划任务  前置条件=远端装好 OpenSSH Server、ssh 用户属 Administrators、
+ *                     默认 shell 为 cmd.exe（Windows 默认），且已用 setup.ps1 完成首次安装
+ *  详见 scripts/server/README.md 第六节。
  *--------------------------------------------------------------------------------------------*/
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { loadEnv } from '../lib/env.mjs'
+import { SERVER_ENV_FILE, buildServerEnv, serializeServerEnv } from './serverEnv.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '..', '..')
 const serverSource = join(__dirname, 'server.mjs')
 const bundleOutput = join(__dirname, 'dist', 'server.js')
+const stagedEnvOutput = join(__dirname, 'dist', SERVER_ENV_FILE)
 const SERVICE_NAME = 'universe-update-server'
+const TASK_NAME = 'UniverseUpdateServer'
 
 export function parseArgs(argv) {
   const out = {}
@@ -45,6 +56,7 @@ export function parseArgs(argv) {
     else if (a === '--yes') out.yes = true
     else if (a === '--force') out.force = true
     else if (a === '--skip-bundle') out.skipBundle = true
+    else if (a === '--skip-env') out.skipEnv = true
     else if (a.startsWith('--')) {
       const key = a.slice(2)
       const next = argv[i + 1]
@@ -72,6 +84,7 @@ export function buildConfig(args, env) {
     yes: args.yes ?? false,
     force: args.force ?? false,
     skipBundle: args.skipBundle ?? false,
+    skipEnv: args.skipEnv ?? false,
   }
 }
 
@@ -107,15 +120,47 @@ export function assessVersions(localVersion, remoteVersion) {
   return { needsForce: false, message: `远端 v${remote} → 本地 v${localVersion}` }
 }
 
-// cp 成功才 restart，最后清理临时文件；sudo -n 保证非交互失败可确定诊断。
-export function buildRemoteInstallCommand({ appDir, version }) {
+// Windows 远端的识别依据：--app-dir / UE_SERVER_APP_DIR 是 Windows 路径（盘符或反斜杠）。
+export function isWindowsAppDir(appDir) {
+  return /^[A-Za-z]:[\\/]/.test(appDir) || appDir.includes('\\')
+}
+
+// Linux: cp 成功才 restart，最后清理临时文件；sudo -n 保证非交互失败可确定诊断。
+// Windows: copy 成功才 End+Run（copy 失败不动在跑的服务；End 在未运行时失败无害，静默），
+//   Run 成功才清理。End 杀实例是异步的，紧跟 /Run 会撞旧实例未释放的端口，用 ping 垫 ~2s
+//   （timeout /t 在 ssh 的重定向 stdin 下会报错）。staged 文件走 scp 相对路径落在
+//   %USERPROFILE%，ssh 命令 cwd 亦在此，相对引用即可；目标路径归一成反斜杠（cmd 的 copy
+//   会把正斜杠当开关）。假定远端默认 shell 为 cmd.exe（Windows OpenSSH 默认）。
+// withEnv=true 时先落 server.env 再落 server.mjs——配置比程序先到，重启后一次性生效。
+export function buildRemoteInstallCommand({ appDir, version, windows = false, withEnv = false }) {
+  if (windows) {
+    const staged = `server.js.v${version}`
+    const stagedEnv = `${SERVER_ENV_FILE}.v${version}`
+    const dir = appDir.replace(/\//g, '\\').replace(/[\\]+$/, '')
+    const envStep = withEnv
+      ? `copy /Y ${stagedEnv} "${dir}\\${SERVER_ENV_FILE}" && del ${stagedEnv} && `
+      : ''
+    return (
+      `${envStep}copy /Y ${staged} "${dir}\\server.mjs" && ` +
+      `(schtasks /End /TN ${TASK_NAME} 2>nul & ping -n 3 127.0.0.1 >nul & ` +
+      `schtasks /Run /TN ${TASK_NAME}) && del ${staged}`
+    )
+  }
   const staged = `~/server.js.v${version}`
-  return `sudo -n cp ${staged} ${appDir}/server.mjs && sudo -n systemctl restart ${SERVICE_NAME} && rm ${staged}`
+  const stagedEnv = `~/${SERVER_ENV_FILE}.v${version}`
+  const envStep = withEnv
+    ? `sudo -n cp ${stagedEnv} ${appDir}/${SERVER_ENV_FILE} && rm ${stagedEnv} && `
+    : ''
+  return (
+    `${envStep}sudo -n cp ${staged} ${appDir}/server.mjs && ` +
+    `sudo -n systemctl restart ${SERVICE_NAME} && rm ${staged}`
+  )
 }
 
 export function sudoersHint(user, appDir) {
   return (
     `${user} ALL=(root) NOPASSWD: /usr/bin/cp /home/${user}/server.js.v* ${appDir}/server.mjs, ` +
+    `/usr/bin/cp /home/${user}/${SERVER_ENV_FILE}.v* ${appDir}/${SERVER_ENV_FILE}, ` +
     `/usr/bin/systemctl restart ${SERVICE_NAME}`
   )
 }
@@ -154,12 +199,7 @@ async function main() {
   if (!config.host) die(`缺少 --host（或 UE_RELEASE_HOST，可放 .env.${mode}）`)
   if (!config.user) die(`缺少 --user（或 UE_RELEASE_USER，可放 .env.${mode}）`)
 
-  const isWindowsTarget = /^[A-Za-z]:[\\/]/.test(config.appDir) || config.appDir.includes('\\')
-  if (isWindowsTarget) {
-    die(
-      'server:deploy 暂只支持 Ubuntu/systemd 远端；Windows 远端请按 scripts/server/README.md 第六节手动更新',
-    )
-  }
+  const isWindowsTarget = isWindowsAppDir(config.appDir)
 
   const localVersion = extractLocalVersion(readFileSync(serverSource, 'utf8'))
   if (!localVersion) die(`无法从 ${serverSource} 读到 SERVER_VERSION——确认该常量声明未被改动`)
@@ -203,12 +243,23 @@ async function main() {
     if (answer !== 'y' && answer !== 'yes') die('已取消')
   }
 
-  console.log('🔐 检查远端免密 sudo')
-  run('ssh', [...sshBase, remote, 'sudo -n true'], {
-    hint:
-      `\n  部署用户缺免密 sudo。在服务器上执行 sudo visudo -f /etc/sudoers.d/${SERVICE_NAME}，加入：\n` +
-      `    ${sudoersHint(config.user, config.appDir)}`,
-  })
+  if (isWindowsTarget) {
+    console.log('🔐 检查远端计划任务与权限')
+    run('ssh', [...sshBase, remote, `schtasks /Query /TN ${TASK_NAME}`], {
+      hint:
+        `\n  远端查询计划任务 ${TASK_NAME} 失败。请确认：\n` +
+        `    1) 测试机已按 scripts/server/README.md 用 setup.ps1 完成首次安装\n` +
+        `    2) ssh 登录用户属于 Administrators 组（Win32-OpenSSH 对管理员默认发放提升令牌）\n` +
+        `    3) 远端 OpenSSH 默认 shell 为 cmd.exe（Windows 默认即是）`,
+    })
+  } else {
+    console.log('🔐 检查远端免密 sudo')
+    run('ssh', [...sshBase, remote, 'sudo -n true'], {
+      hint:
+        `\n  部署用户缺免密 sudo。在服务器上执行 sudo visudo -f /etc/sudoers.d/${SERVICE_NAME}，加入：\n` +
+        `    ${sudoersHint(config.user, config.appDir)}`,
+    })
+  }
 
   if (config.skipBundle) {
     if (!existsSync(bundleOutput))
@@ -221,15 +272,59 @@ async function main() {
     })
   }
 
-  console.log(`⬆️  上传 dist/server.js → ${remote}:~/server.js.v${localVersion}`)
-  run('scp', [...scpBase, bundleOutput, `${remote}:~/server.js.v${localVersion}`])
+  const stagedName = `server.js.v${localVersion}`
+  const stagedRemotePath = isWindowsTarget ? stagedName : `~/${stagedName}`
 
-  console.log(`🔁 安装并重启 ${SERVICE_NAME}`)
-  run('ssh', [
-    ...sshBase,
-    remote,
-    buildRemoteInstallCommand({ appDir: config.appDir, version: localVersion }),
-  ])
+  // 服务端运行时配置：从 .env.<mode> 提取白名单，生成 server.env 一并上传。
+  // 白名单外的键（UE_RELEASE_KEY 等部署侧机密）绝不上服务器。
+  let serverEnvText = null
+  if (!config.skipEnv) {
+    serverEnvText = serializeServerEnv(
+      buildServerEnv({ windows: isWindowsTarget, overrides: process.env }),
+      { windows: isWindowsTarget },
+    )
+    const keys = serverEnvText
+      .split(/\r?\n/)
+      .filter((l) => l && !l.startsWith('#'))
+      .map((l) => l.slice(0, l.indexOf('=')))
+    console.log(`⚙️  服务端配置 server.env（${keys.length} 项）: ${keys.join(', ')}`)
+    if (!config.dryRun) writeFileSync(stagedEnvOutput, serverEnvText)
+  } else {
+    console.log('⏭️  --skip-env：保留服务器上现有 server.env')
+  }
+
+  console.log(`⬆️  上传 dist/server.js → ${remote}:${stagedRemotePath}`)
+  run('scp', [...scpBase, bundleOutput, `${remote}:${stagedRemotePath}`])
+  if (serverEnvText !== null) {
+    const stagedEnvName = `${SERVER_ENV_FILE}.v${localVersion}`
+    const stagedEnvRemote = isWindowsTarget ? stagedEnvName : `~/${stagedEnvName}`
+    console.log(`⬆️  上传 server.env → ${remote}:${stagedEnvRemote}`)
+    run('scp', [...scpBase, stagedEnvOutput, `${remote}:${stagedEnvRemote}`])
+  }
+
+  console.log(`🔁 安装并重启 ${isWindowsTarget ? `计划任务 ${TASK_NAME}` : SERVICE_NAME}`)
+  run(
+    'ssh',
+    [
+      ...sshBase,
+      remote,
+      buildRemoteInstallCommand({
+        appDir: config.appDir,
+        version: localVersion,
+        windows: isWindowsTarget,
+        withEnv: serverEnvText !== null,
+      }),
+    ],
+    {
+      hint:
+        !isWindowsTarget && serverEnvText !== null
+          ? `\n  若失败在 cp server.env 一步：老的 sudoers 规则没覆盖这条通道（本次新增）。\n` +
+            `  在服务器上执行 sudo visudo -f /etc/sudoers.d/${SERVICE_NAME}，整行替换为：\n` +
+            `    ${sudoersHint(config.user, config.appDir)}\n` +
+            `  或本次先用 --skip-env 跳过配置上传。`
+          : '',
+    },
+  )
 
   if (config.dryRun) {
     console.log(
@@ -252,7 +347,9 @@ async function main() {
   }
   die(
     `健康验证超时：${config.healthUrl} 未返回 v${localVersion}。\n` +
-      `  上服务器看日志：ssh ${remote} journalctl -u ${SERVICE_NAME} -n 50`,
+      (isWindowsTarget
+        ? `  上服务器查看：ssh ${remote} "schtasks /Query /TN ${TASK_NAME} /V /FO LIST"`
+        : `  上服务器看日志：ssh ${remote} journalctl -u ${SERVICE_NAME} -n 50`),
   )
 }
 

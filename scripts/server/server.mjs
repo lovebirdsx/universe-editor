@@ -39,7 +39,7 @@ import { adminPageHtml } from './adminPage.mjs'
 
 // 服务器自身版本，手动维护：改了 server.mjs / galleryPublish.mjs 的行为就 +1。
 // 启动横幅与健康检查响应都会带上，用来确认服务器上跑的到底是哪版代码。
-const SERVER_VERSION = '3'
+const SERVER_VERSION = '4'
 
 function parseArgs(argv) {
   const out = {}
@@ -82,7 +82,9 @@ const config = {
   ),
   // publish API 认证数据（publishers.json）。🔴 绝不允许落在任何静态根之内——
   // gallery/** 整个是公开静态命名空间，进去等于把 token 哈希表公开下载。
-  authDir: resolve(args['auth-dir'] ?? process.env.UE_SERVER_AUTH_DIR ?? resolve(root, '..', 'auth')),
+  authDir: resolve(
+    args['auth-dir'] ?? process.env.UE_SERVER_AUTH_DIR ?? resolve(root, '..', 'auth'),
+  ),
   // publish 上传体积上限（字节）。
   maxVsixSize: Number(args['max-vsix-size'] ?? process.env.UE_SERVER_MAX_VSIX_SIZE ?? 128 << 20),
   // 注册 API 每 IP 每小时上限（0 = 关闭）。
@@ -558,8 +560,7 @@ async function handleGallery(req, res, pathname) {
     rel.startsWith('gallery/api/admin/')
   ) {
     // 仅 whoami 与 admin 列表端点是 GET，其余全部 POST；方法不符交回静态处理（405/404）。
-    const isGetEndpoint =
-      rel === 'gallery/api/whoami' || rel === 'gallery/api/admin/publishers'
+    const isGetEndpoint = rel === 'gallery/api/whoami' || rel === 'gallery/api/admin/publishers'
     if (isGetEndpoint ? req.method !== 'GET' : req.method !== 'POST') return false
     // lazy：静态/更新服务在源码态保持零依赖，命中 API 才需要 extension-packaging dist。
     galleryApiPromise ??= import('./galleryPublish.mjs').then((m) =>
@@ -769,50 +770,72 @@ const server = createServer((req, res) => {
   })
 })
 
+// 重启场景（systemd restart / schtasks End+Run）旧实例释放端口可能滞后一拍，
+// EADDRINUSE 先重试再放弃，避免新实例秒退（Windows 计划任务不会自动拉起）。
+const LISTEN_RETRY_LIMIT = 20
+const LISTEN_RETRY_DELAY_MS = 500
+let listenAttempts = 0
+
 server.on('error', (err) => {
   if (err.code === 'EACCES')
     die(`端口 ${config.port} 需要更高权限（80 端口需 root/管理员或 CAP_NET_BIND_SERVICE）`)
-  if (err.code === 'EADDRINUSE') die(`端口 ${config.port} 已被占用`)
+  if (err.code === 'EADDRINUSE') {
+    if (++listenAttempts <= LISTEN_RETRY_LIMIT) {
+      console.warn(
+        `\x1b[33m⚠ 端口 ${config.port} 暂被占用（可能是旧实例正在退出），` +
+          `${LISTEN_RETRY_DELAY_MS}ms 后重试 ${listenAttempts}/${LISTEN_RETRY_LIMIT}\x1b[0m`,
+      )
+      setTimeout(startListen, LISTEN_RETRY_DELAY_MS)
+      return
+    }
+    die(`端口 ${config.port} 已被占用（重试 ${LISTEN_RETRY_LIMIT} 次后放弃）`)
+  }
   die(`服务器错误: ${err.message}`)
 })
 
-server.listen(config.port, config.host, () => {
-  console.log(`\n📡 Universe 更新服务器已启动 (v${SERVER_VERSION})`)
-  console.log(`   监听:   http://${config.host}:${config.port}`)
-  console.log(`   更新根: ${config.root}`)
-  const galleryExists = (() => {
-    try {
-      return statSync(config.galleryRoot).isDirectory()
-    } catch {
-      return false
-    }
-  })()
-  console.log(
-    `   市场根: ${config.galleryRoot}${galleryExists ? '' : ' (暂不存在，市场搜索将为空)'}`,
-  )
-  console.log(`   认证目录: ${config.authDir}（publish API；token 用 scripts/gallery/token.mjs 签发）`)
-  console.log(
-    `   注册页: http://${config.host}:${config.port}${config.base}gallery/register（每 IP 每小时限 ${config.registerRateLimit} 次；审批制，批准后方能发布）`,
-  )
-  if (adminToken) {
+function startListen() {
+  server.listen(config.port, config.host, () => {
+    console.log(`\n📡 Universe 更新服务器已启动 (v${SERVER_VERSION})`)
+    console.log(`   监听:   http://${config.host}:${config.port}`)
+    console.log(`   更新根: ${config.root}`)
+    const galleryExists = (() => {
+      try {
+        return statSync(config.galleryRoot).isDirectory()
+      } catch {
+        return false
+      }
+    })()
     console.log(
-      `   管理台: http://${config.host}:${config.port}${config.base}gallery/admin（enabled，令牌文件 ${resolve(config.adminTokenFile)}）`,
+      `   市场根: ${config.galleryRoot}${galleryExists ? '' : ' (暂不存在，市场搜索将为空)'}`,
     )
-  } else {
-    console.warn(`\x1b[33m⚠ 未配置管理令牌，审批管理页与管理 API 将返回 503（admin console disabled）！
+    console.log(
+      `   认证目录: ${config.authDir}（publish API；token 用 scripts/gallery/token.mjs 签发）`,
+    )
+    console.log(
+      `   注册页: http://${config.host}:${config.port}${config.base}gallery/register（每 IP 每小时限 ${config.registerRateLimit} 次；审批制，批准后方能发布）`,
+    )
+    if (adminToken) {
+      console.log(
+        `   管理台: http://${config.host}:${config.port}${config.base}gallery/admin（enabled，令牌文件 ${resolve(config.adminTokenFile)}）`,
+      )
+    } else {
+      console.warn(`\x1b[33m⚠ 未配置管理令牌，审批管理页与管理 API 将返回 503（admin console disabled）！
    自助注册处于审批制，不配置则注册全部堆积待审批无法放行。
    配置方式：--admin-token-file <path> 或 UE_SERVER_ADMIN_TOKEN_FILE（文件内容为令牌明文，trim 后单行）。\x1b[0m`)
-  }
-  if (signingKey) {
-    console.log(`   发布签名: Ed25519 keyId=${signingKey.keyId}（${config.signingKeyFile}）`)
-  } else {
-    console.warn(`\x1b[33m⚠ 未配置发布签名私钥，publish API 将拒绝发布请求（503）！
+    }
+    if (signingKey) {
+      console.log(`   发布签名: Ed25519 keyId=${signingKey.keyId}（${config.signingKeyFile}）`)
+    } else {
+      console.warn(`\x1b[33m⚠ 未配置发布签名私钥，publish API 将拒绝发布请求（503）！
    静态托管与更新分发不受影响；uex publish 上架的包必须带签名，否则编辑器验签拒装。
    配置方式：--signing-key-file <pem> 或 UE_SERVER_SIGNING_KEY_FILE（私钥用 pnpm gallery:keygen 生成）。\x1b[0m`)
-  }
-  console.log(`   路径段: ${config.base}`)
-  console.log(`   node:   ${process.version}\n`)
-})
+    }
+    console.log(`   路径段: ${config.base}`)
+    console.log(`   node:   ${process.version}\n`)
+  })
+}
+
+startListen()
 
 let closing = false
 function shutdown(signal) {

@@ -8,6 +8,9 @@
 #    sudo bash setup.sh status          # 查看服务状态
 #    sudo bash setup.sh restart         # 重启服务（如替换 server.mjs 后）
 #    sudo bash setup.sh install --root /data/ue --port 8080 --base /ue/   # 自定义
+#
+#  配置优先级：CLI 旗标 > server.env（本目录 / 安装目录） > 平台默认值。install 会把最终配置
+#  写进 <appDir>/server.env，由 systemd EnvironmentFile 注入；日常改配置走 pnpm server:deploy。
 #-----------------------------------------------------------------------------------------------
 set -euo pipefail
 

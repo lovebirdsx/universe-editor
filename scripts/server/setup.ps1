@@ -8,6 +8,9 @@
 #    ./setup.ps1 restart                 # 重启任务（如替换 server.mjs 后）
 #    ./setup.ps1 install --port 8080 --base /ue/   # 自定义
 #
+#  配置优先级：CLI 旗标 > server.env（本目录 / 安装目录） > 平台默认值。install 会把最终配置
+#  写进 <appDir>\server.env，由 run.cmd 逐行 set 加载；日常改配置走 pnpm server:deploy。
+#
 #  若提示脚本被禁止运行: PowerShell 里先跑
 #    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 # -----------------------------------------------------------------------------------------------
