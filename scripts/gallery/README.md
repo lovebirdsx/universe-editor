@@ -47,6 +47,13 @@
 
 > 自助发布通道（`uex publish` 经服务器的 `gallery/api/*` 端点直达）与本目录的 stage+scp 通道写**同一份** registry（格式由 `lib.mjs` 单点保证）。启用 API 后约定 scp 通道仅灾备/代传用，两者不要并发写。详见 [`docs/development/marketplace-server.md`](../../docs/development/marketplace-server.md)「自助发布 API」节。
 
+## .env 配置
+
+发布类脚本启动时会自动加载仓库根的 `.env` 文件，所以 `UE_GALLERY_*` / `UE_RELEASE_*` 等变量可以写进
+`.env` 一次配置，不必每次导出或带参。分层优先级（高 → 低）：shell 环境变量 > `.env.<mode>.local` >
+`.env.<mode>` > `.env.local` > `.env`；mode 由 `--env <mode>` 旗标或 `UE_ENV` 决定，默认 `dev`。
+变量清单见仓库根 [`.env.example`](../../.env.example)；`.env*` 已 gitignore，不会误提交。
+
 ## 发布一个扩展
 
 > 发布 `extensions-external/*` 里的自研扩展，**首选 [`pnpm ext:release`](../../docs/development/publishing-extensions.md)**——它自动 build + 打包 + 调用本目录的 `publish.mjs`/`upload.mjs`，支持自动发现与增量。下面是本目录脚本的**底层手动流程**，用于第三方 `.vsix` 或需要精细控制 stage 的场景。
@@ -67,7 +74,7 @@ pnpm gallery:publish -- --stage ./market-stage --signing-key-file ./market-key.p
 pnpm gallery:upload -- --stage ./market-stage --host iloop.aki.kuro.com  --user deploy --dir /srv/universe-editor/gallery
 ```
 
-`--stage` 也可用环境变量 `UE_GALLERY_STAGE`；`upload.mjs` 的 `--host/--user` 与 `scripts/release/upload.mjs` 共用 `UE_RELEASE_*`，而**市场根用独立的 `--dir`（或 `UE_GALLERY_DIR`）**，与更新目录 `UE_RELEASE_DIR` 解耦。
+`--stage` 也可用环境变量 `UE_GALLERY_STAGE`；`upload.mjs` 的 `--host/--user` 与 `scripts/release/upload.mjs` 共用 `UE_RELEASE_*`，而**市场根用独立的 `--dir`（或 `UE_GALLERY_DIR`）**，与更新目录 `UE_RELEASE_DIR` 解耦。这些变量都可统一写进仓库根 `.env`（见下文「.env 配置」）。
 
 发布多个：`pnpm gallery:publish -- --stage ./market-stage --signing-key-file ./market-key.pem a.vsix b.vsix c.vsix`。
 

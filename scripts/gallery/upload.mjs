@@ -20,6 +20,9 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { resolve, join, relative } from 'node:path'
+import { loadEnv } from '../lib/env.mjs'
+
+loadEnv()
 
 function parseArgs(argv) {
   const out = {}

@@ -21,6 +21,9 @@ import {
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { verifyPackagedRuntimeResources } from './runtime-resources.mjs'
+import { loadEnv } from '../lib/env.mjs'
+
+loadEnv()
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '../..')

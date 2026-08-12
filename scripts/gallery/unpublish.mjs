@@ -13,6 +13,9 @@
 import { rmSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { readRegistry, writeRegistry, removeFromRegistry } from './lib.mjs'
+import { loadEnv } from '../lib/env.mjs'
+
+loadEnv()
 
 function parseArgs(argv) {
   const out = { _: [] }

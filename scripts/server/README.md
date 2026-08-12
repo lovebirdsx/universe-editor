@@ -35,6 +35,7 @@ Universe Editor 通过 **electron-updater 的 generic provider** 从一个**静�
 | `registerPage.mjs` | 自助注册网页（`GET {base}gallery/register`）的内嵌 HTML（中文一次性表单，零外部资源）。由 `server.mjs` 静态 import。 |
 | `adminPage.mjs` | 审批管理页（`GET {base}gallery/admin`）的内嵌 HTML（中文，待审批/已启用/已拒绝三分区，零外部资源）。由 `server.mjs` 静态 import。 |
 | `bundle.mjs` | 打包脚本（`pnpm server:bundle`）：把 server + 发布依赖（adm-zip/zod/extension-packaging）esbuild 成单文件产物 `dist/server.js`。**部署跑的是这个产物**（服务器上无 node_modules）。 |
+| `deploy.mjs` | 一键部署脚本（`pnpm server:deploy -- --env prod`）：比对远端 `SERVER_VERSION` → 交互确认 → 打包 → scp 上传 → 免密 sudo 安装重启 → 轮询健康检查断言新版本。仅支持 Ubuntu/systemd 远端，详见[第六节](#六更新服务器程序改了-servermjs-后)。 |
 | `download-page/index.html` | 面向用户的静态下载页。纯前端，运行时读同目录 `latest.yml` / `release-notes.json`，展示最新版本、发布日期与更新日志，并提供下载按钮。发布时由 `release:upload` 同步到发布目录。 |
 | `setup.mjs` | 跨平台部署逻辑（按平台分支）：拷 `dist/server.js` / 注册服务 / 防火墙 / 启停 / 卸载。 |
 | `setup.sh` | **Ubuntu 入口**：自检 root → 装 Node（缺则装）→ 调 `setup.mjs`。 |
@@ -177,10 +178,46 @@ schtasks /Query /TN UniverseUpdateServer /V /FO LIST   # 状态
 
 > 改了服务器行为时，顺手把 `server.mjs` 顶部的 `SERVER_VERSION` +1（手动维护）。启动横幅
 > 和健康检查响应（`curl http://<IP>/`）都会带上它，能立刻确认服务器跑的是哪版代码。
+> `server:deploy` 部署前会自动比对远端版本：相同（疑似忘 bump）或远端更新（疑似降级）都会拦下。
+
+### 一键部署（Ubuntu，推荐）
+
+```bash
+pnpm server:deploy -- --env prod
+```
+
+一条指令走完：检查远端版本 → 交互确认 → `pnpm server:bundle` 打包 → scp 上传 `dist/server.js`
+到 `~/server.js.v<N>` → ssh 免密 sudo 拷到安装目录并 `systemctl restart universe-update-server` →
+轮询健康检查断言新版本号。必须显式 `--env prod`（或 `UE_ENV=prod`），否则拒绝执行（防误发护栏）。
+
+连接参数与 `release:upload` 同一套（`--host/--user/--port/--key` ← `UE_RELEASE_HOST/USER/PORT/KEY`），
+推荐写进仓库根 `.env.prod`：
+
+```bash
+# .env.prod
+UE_RELEASE_HOST=10.0.0.5
+UE_RELEASE_USER=deploy
+UE_RELEASE_PORT=22
+#UE_RELEASE_KEY=/path/to/id_ed25519              # 缺省用 ssh 默认凭证
+#UE_SERVER_APP_DIR=/opt/universe-update-server   # 服务程序安装目录（默认即此）
+#UE_SERVER_HEALTH_URL=http://10.0.0.5/           # 默认 http://<host>/
+```
+
+完整变量清单见仓库根 [`.env.example`](../../.env.example)。常用旗标：`--dry-run`（打印全部命令零副作用）、
+`--yes`（跳过交互确认）、`--force`（远端版本 >= 本地时强制）、`--skip-bundle`（复用已有 `dist/server.js`）。
+
+**前置条件：部署用户配免密 sudo**（缺失时脚本会打印精确的 sudoers 配置后退出）。在服务器上执行
+`sudo visudo -f /etc/sudoers.d/universe-update-server`，加入（`deploy` 换成实际用户名）：
+
+```
+deploy ALL=(root) NOPASSWD: /usr/bin/cp /home/deploy/server.js.v* /opt/universe-update-server/server.mjs, /usr/bin/systemctl restart universe-update-server
+```
+
+### 手动 fallback（无免密 sudo 或 Windows 远端时）
 
 先在仓库侧 `pnpm server:bundle` 重新打包，让服务器拿到新产物：服务器上有仓库就 `git pull && pnpm install && pnpm server:bundle`，否则从开发机 `scp scripts/server/dist/server.js <user>@<IP>:~/`。然后：
 
-### Ubuntu
+#### Ubuntu
 
 ```bash
 sudo cp scripts/server/dist/server.js /opt/universe-update-server/server.mjs
@@ -188,7 +225,7 @@ sudo bash setup.sh restart
 systemctl status universe-update-server          # 确认 active (running)
 ```
 
-### Windows（管理员 PowerShell）
+#### Windows（管理员 PowerShell）
 
 ```powershell
 Copy-Item scripts\server\dist\server.js C:\universe-editor\app\server.mjs -Force
@@ -203,7 +240,7 @@ Copy-Item scripts\server\dist\server.js C:\universe-editor\app\server.mjs -Force
 > 若改动**新增了发布目录里的静态资源**（如下载页 `index.html`、`release-notes.json`），重启 server 只是让它
 > 能服务这些文件；文件本身要进发布目录——下次 `release:upload` 会自动同步，想立刻生效可手动 `scp` 一次。
 
-完成后用下一节的 `curl` 验证。
+手动方式完成后用下一节的 `curl` 验证（`server:deploy` 已内置健康检查，无需再验）。
 
 ---
 

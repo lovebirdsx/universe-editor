@@ -33,7 +33,7 @@ pnpm ext:release -- --dry-run
 | `--key-id <id>` | 签名 keyId（默认 `market-v1`，轮换时用） |
 | `[ext ...]` | 只处理指定扩展（目录名或 `publisher.name`），默认全部合法扩展 |
 
-上传所需的连接信息与市场运维脚本共用（见 [`scripts/gallery/README.md`](../../scripts/gallery/README.md)）：`UE_RELEASE_HOST` / `UE_RELEASE_USER` / `UE_GALLERY_DIR`。
+上传所需的连接信息与市场运维脚本共用（见 [`scripts/gallery/README.md`](../../scripts/gallery/README.md)）：`UE_RELEASE_HOST` / `UE_RELEASE_USER` / `UE_GALLERY_DIR`。这些变量可统一写进仓库根 `.env`（见 [`.env.example`](../../.env.example)），不必每次导出。
 
 **签名私钥**（`--signing-key-file`）只存运维机/CI secret，绝不进 repo；没有就用 `pnpm gallery:keygen -- --out market-key.pem` 生成——生成到仓库根默认路径后 `ext:release` 会自动读取，之后无需再传参（该文件已 gitignore）。客户端对市场安装**强制验签**——未签名的 registry 条目会被拒装，所以发布链路必带私钥。模型与轮换详见 [`scripts/gallery/README.md`](../../scripts/gallery/README.md#市场签名发布必配)。
 

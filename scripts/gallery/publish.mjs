@@ -25,6 +25,9 @@ import {
   resolveSigningKeyFile,
   DEFAULT_SIGNING_KEY_FILE,
 } from './lib.mjs'
+import { loadEnv } from '../lib/env.mjs'
+
+loadEnv()
 
 function parseArgs(argv) {
   const out = { _: [] }

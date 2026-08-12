@@ -29,6 +29,9 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readRegistry, resolveSigningKeyFile, DEFAULT_SIGNING_KEY_FILE } from '../gallery/lib.mjs'
 import { discoverExtensions, depsInstallPlan, filterIncremental, selectExtensions } from './lib.mjs'
+import { loadEnv } from '../lib/env.mjs'
+
+loadEnv()
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '..', '..')
@@ -56,7 +59,13 @@ function parseArgs(argv) {
   return out
 }
 
-const c = { red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m', dim: '\x1b[2m', reset: '\x1b[0m' }
+const c = {
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  dim: '\x1b[2m',
+  reset: '\x1b[0m',
+}
 function die(msg) {
   console.error(`${c.red}✗ ${msg}${c.reset}`)
   process.exit(1)
@@ -87,7 +96,9 @@ if (args.help) {
   process.exit(0)
 }
 
-const stageDir = resolve(args.stage ?? process.env.UE_GALLERY_STAGE ?? join(repoRoot, 'market-stage'))
+const stageDir = resolve(
+  args.stage ?? process.env.UE_GALLERY_STAGE ?? join(repoRoot, 'market-stage'),
+)
 const dryRun = args['dry-run'] ?? false
 const force = args.force ?? false
 const doUpload = !(args['no-upload'] ?? false)
@@ -126,14 +137,17 @@ if (sel.error) die(sel.error)
 
 const registry = readRegistry(stageDir)
 const { toPublish, skipped: unchanged } = filterIncremental(registry, sel.selected, force)
-for (const ext of unchanged) info(`  skip ${ext.id}@${ext.version} (registry 已有，用 --force 重发)`)
+for (const ext of unchanged)
+  info(`  skip ${ext.id}@${ext.version} (registry 已有，用 --force 重发)`)
 
 if (toPublish.length === 0) {
   ok('没有需要发布的扩展（全部已是最新，或用 --force 强制）')
   process.exit(0)
 }
 
-console.log(`\n待发布 (${toPublish.length}): ${toPublish.map((e) => `${e.id}@${e.version}`).join(', ')}`)
+console.log(
+  `\n待发布 (${toPublish.length}): ${toPublish.map((e) => `${e.id}@${e.version}`).join(', ')}`,
+)
 
 const vsixPaths = []
 for (const ext of toPublish) {

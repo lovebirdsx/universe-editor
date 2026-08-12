@@ -117,7 +117,7 @@ publish:
 ## 三、发布一个新版本
 
 ```bash
-# 环境变量也可以改用命令参数 --host/--user/--dir 传入。
+# 环境变量也可以改用命令参数 --host/--user/--dir 传入，或统一写进仓库根 .env（见下文「.env 配置」）。
 $env:UE_RELEASE_HOST = '<服务器IP>'
 $env:UE_RELEASE_USER = 'deploy'
 $env:UE_RELEASE_DIR = '/srv/universe-editor'
@@ -213,6 +213,14 @@ export UE_RELEASE_USER=deploy
 export UE_RELEASE_DIR=/srv/universe-editor
 pnpm release:upload          # 不必再带参数
 ```
+
+### .env 配置
+
+发布类脚本（`release:upload`、`release`、`gallery:upload/publish/unpublish`、`ext:release`、`server:deploy`）
+启动时会自动加载仓库根的 `.env` 文件，所以 `UE_RELEASE_*` 等变量可以写进 `.env` 一次配置，不必每次导出。
+分层优先级（高 → 低）：shell 环境变量 > `.env.<mode>.local` > `.env.<mode>` > `.env.local` > `.env`；
+mode 由 `--env <mode>` 旗标或 `UE_ENV` 决定，默认 `dev`。变量清单见仓库根 [`.env.example`](../../.env.example)；
+`.env*` 已 gitignore，不会误提交。
 
 先看会执行什么，不实际传：
 
