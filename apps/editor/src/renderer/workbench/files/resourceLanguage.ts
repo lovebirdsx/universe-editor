@@ -1,10 +1,11 @@
 import type { URI } from '@universe-editor/platform'
 import { extensionOfBasename, basenameOfResource } from './resourceInfo.js'
 
-// Maps file extensions to Monaco language ids. Monaco ships tokenizers for all
-// of these out of the box (see monaco-editor/esm/vs/basic-languages); the ids
-// below are taken verbatim from each language's `.contribution.js`. Keys are
-// lowercase to match `extensionOfBasename`, which lowercases its result.
+// Maps file extensions to Monaco language ids. Most ids ship Monaco tokenizers
+// out of the box (monaco-editor/esm/vs/basic-languages); a few (dotenv / ignore /
+// makefile / diff) are TextMate grammar-only, contributed by the built-in
+// extensions/textmate-grammars extension. Keys are lowercase to match
+// `extensionOfBasename`, which lowercases its result.
 const LANG_BY_EXT: Record<string, string> = {
   // data / config / markup
   '.json': 'json',
@@ -32,6 +33,9 @@ const LANG_BY_EXT: Record<string, string> = {
   '.toml': 'toml',
   '.graphql': 'graphql',
   '.gql': 'graphql',
+  '.env': 'dotenv',
+  '.diff': 'diff',
+  '.patch': 'diff',
 
   // web / scripting
   '.ts': 'typescript',
@@ -95,12 +99,15 @@ const LANG_BY_EXT: Record<string, string> = {
   // shell / infra / data
   '.sh': 'shell',
   '.bash': 'shell',
+  '.zsh': 'shell',
   '.ps1': 'powershell',
   '.psm1': 'powershell',
   '.psd1': 'powershell',
   '.bat': 'bat',
   '.cmd': 'bat',
   '.dockerfile': 'dockerfile',
+  '.mk': 'makefile',
+  '.mak': 'makefile',
   '.tf': 'hcl',
   '.tfvars': 'hcl',
   '.hcl': 'hcl',
@@ -116,18 +123,45 @@ const LANG_BY_FILENAME: Record<string, string> = {
   gemfile: 'ruby',
   rakefile: 'ruby',
   jakefile: 'javascript',
+  makefile: 'makefile',
+  gnumakefile: 'makefile',
   '.gitattributes': 'ini',
   '.gitconfig': 'ini',
+  '.gitmodules': 'ini',
   '.editorconfig': 'ini',
+  '.npmrc': 'ini',
+  '.env': 'dotenv',
+  '.flaskenv': 'dotenv',
+  '.gitignore': 'ignore',
+  '.npmignore': 'ignore',
+  '.dockerignore': 'ignore',
+  '.eslintignore': 'ignore',
+  '.prettierignore': 'ignore',
+  '.vscodeignore': 'ignore',
+  '.bashrc': 'shell',
+  '.bash_profile': 'shell',
+  '.bash_aliases': 'shell',
+  '.zshrc': 'shell',
+  '.zshenv': 'shell',
+  '.zprofile': 'shell',
+  '.profile': 'shell',
   'cargo.lock': 'toml',
   pipfile: 'toml',
   'poetry.lock': 'toml',
 }
 
+// Basename patterns checked after exact filename matches, before extensions.
+// Tested against the lowercased basename.
+const LANG_BY_BASENAME_PATTERN: readonly [RegExp, string][] = [[/^\.env\./, 'dotenv']]
+
 export function languageForResource(resource: URI): string {
   const basename = basenameOfResource(resource)
-  const byName = LANG_BY_FILENAME[basename.toLowerCase()]
+  const lowerBasename = basename.toLowerCase()
+  const byName = LANG_BY_FILENAME[lowerBasename]
   if (byName) return byName
+  for (const [pattern, language] of LANG_BY_BASENAME_PATTERN) {
+    if (pattern.test(lowerBasename)) return language
+  }
   const ext = extensionOfBasename(basename)
   return ext ? (LANG_BY_EXT[ext] ?? 'plaintext') : 'plaintext'
 }

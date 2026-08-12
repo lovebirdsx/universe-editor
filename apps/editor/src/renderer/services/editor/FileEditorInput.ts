@@ -5,7 +5,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  DisposableStore,
   EditorInput,
+  Emitter,
   IDialogService,
   IFileService,
   IInstantiationService,
@@ -53,6 +55,11 @@ export class FileEditorInput extends EditorInput {
   private _modelRefAcquired = false
   /** VSCode-style clean model version; avoids false dirty from Monaco EOL normalization. */
   private _savedAlternativeVersionId: number | undefined
+  private readonly _onDidChangeLanguage = this._register(new Emitter<string>())
+  readonly onDidChangeLanguage = this._onDidChangeLanguage.event
+  /** The model whose onDidChangeLanguage we currently mirror into `_language`. */
+  private _boundLanguageModel: monaco.editor.ITextModel | undefined
+  private readonly _languageBindingStore = this._register(new DisposableStore())
 
   constructor(
     private readonly _resource: URI,
@@ -122,17 +129,43 @@ export class FileEditorInput extends EditorInput {
   async resolveModel(): Promise<monaco.editor.ITextModel> {
     if (this._modelRefAcquired) {
       const existing = MonacoModelRegistry.peek(this._resource)
-      if (existing) return existing
+      if (existing) {
+        this._bindModelLanguage(existing)
+        return existing
+      }
       this._modelRefAcquired = false
     }
     const hadPendingDirtyContent = this._pendingDirtyContent !== undefined
     const text = await this.resolve().catch(() => '')
     const model = MonacoModelRegistry.acquire(this._resource, text)
     this._modelRefAcquired = true
+    this._bindModelLanguage(model)
     if (!hadPendingDirtyContent) {
       this._acceptModelClean(model)
     }
     return model
+  }
+
+  /**
+   * Mirror the model's language into `_language`. Re-binds when the registry
+   * hands us a different model instance (release + re-acquire), and syncs once
+   * up front because another input sharing the model may have switched the
+   * language while we were not bound.
+   */
+  private _bindModelLanguage(model: monaco.editor.ITextModel): void {
+    if (this._boundLanguageModel === model) return
+    this._boundLanguageModel = model
+    this._languageBindingStore.clear()
+    this._syncLanguage(model.getLanguageId())
+    this._languageBindingStore.add(
+      model.onDidChangeLanguage((e) => this._syncLanguage(e.newLanguage)),
+    )
+  }
+
+  private _syncLanguage(language: string): void {
+    if (this._language === language) return
+    this._language = language
+    this._onDidChangeLanguage.fire(language)
   }
 
   /**

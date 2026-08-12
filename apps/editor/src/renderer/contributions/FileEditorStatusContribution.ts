@@ -5,7 +5,9 @@
  *  language / encoding) in sync with the active editor. Entries appear only
  *  while a FileEditorInput is active; switching away (Welcome / Settings / no
  *  editor) disposes them. The cursor entry updates on every cursor move via
- *  the Monaco editor instance registered in FileEditorRegistry.
+ *  the Monaco editor instance registered in FileEditorRegistry; the language
+ *  entry follows the model's language (Change Language Mode can switch it at
+ *  any time) and opens that picker on click.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -21,19 +23,8 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
-
-function languageLabel(id: string): string {
-  if (id === 'plaintext') return 'Plain Text'
-  if (id === 'json') return 'JSON'
-  if (id === 'markdown') return 'Markdown'
-  if (id === 'typescript') return 'TypeScript'
-  if (id === 'javascript') return 'JavaScript'
-  if (id === 'html') return 'HTML'
-  if (id === 'css') return 'CSS'
-  if (id === 'xml') return 'XML'
-  if (id === 'yaml') return 'YAML'
-  return id.charAt(0).toUpperCase() + id.slice(1)
-}
+import { ChangeLanguageModeAction } from '../actions/languageModeActions.js'
+import { languageDisplayName } from '../workbench/files/languageDisplay.js'
 
 export class FileEditorStatusContribution extends Disposable implements IWorkbenchContribution {
   private _cursorEntry: IStatusBarEntryAccessor | undefined
@@ -41,6 +32,7 @@ export class FileEditorStatusContribution extends Disposable implements IWorkben
   private _encodingEntry: IStatusBarEntryAccessor | undefined
   private readonly _cursorStore = this._register(new DisposableStore())
   private readonly _registryStore = this._register(new DisposableStore())
+  private readonly _languageStore = this._register(new DisposableStore())
 
   constructor(
     @IEditorService editorService: IEditorService,
@@ -65,27 +57,28 @@ export class FileEditorStatusContribution extends Disposable implements IWorkben
   }
 
   private _showFor(input: FileEditorInput): void {
-    // Language + encoding don't change for a given input; recreate on input
-    // switch but skip work when re-firing for the same input.
+    // Encoding doesn't change for a given input; the language can (Change
+    // Language Mode), so the entry also follows onDidChangeLanguage.
     this._ensureLanguageAndEncoding(input)
+    this._bindLanguage(input)
     this._bindCursor(input)
+  }
+
+  private _languageEntryData(language: string) {
+    return {
+      text: languageDisplayName(language),
+      tooltip: localize('status.selectLanguageMode', 'Select Language Mode'),
+      command: ChangeLanguageModeAction.ID,
+      alignment: StatusBarAlignment.Right,
+      priority: 90,
+    }
   }
 
   private _ensureLanguageAndEncoding(input: FileEditorInput): void {
     if (!this._languageEntry) {
-      this._languageEntry = this._statusBarService.addEntry({
-        text: languageLabel(input.language),
-        tooltip: localize('status.editorLanguage', 'Editor Language'),
-        alignment: StatusBarAlignment.Right,
-        priority: 90,
-      })
+      this._languageEntry = this._statusBarService.addEntry(this._languageEntryData(input.language))
     } else {
-      this._languageEntry.update({
-        text: languageLabel(input.language),
-        tooltip: localize('status.editorLanguage', 'Editor Language'),
-        alignment: StatusBarAlignment.Right,
-        priority: 90,
-      })
+      this._languageEntry.update(this._languageEntryData(input.language))
     }
     if (!this._encodingEntry) {
       this._encodingEntry = this._statusBarService.addEntry({
@@ -95,6 +88,15 @@ export class FileEditorStatusContribution extends Disposable implements IWorkben
         priority: 80,
       })
     }
+  }
+
+  private _bindLanguage(input: FileEditorInput): void {
+    this._languageStore.clear()
+    this._languageStore.add(
+      input.onDidChangeLanguage((language) => {
+        this._languageEntry?.update(this._languageEntryData(language))
+      }),
+    )
   }
 
   private _bindCursor(input: FileEditorInput): void {
@@ -149,6 +151,7 @@ export class FileEditorStatusContribution extends Disposable implements IWorkben
   private _hide(): void {
     this._cursorStore.clear()
     this._registryStore.clear()
+    this._languageStore.clear()
     this._cursorEntry?.dispose()
     this._cursorEntry = undefined
     this._languageEntry?.dispose()

@@ -341,6 +341,29 @@
         "language": "toml",
         "scopeName": "source.toml",
         "path": "./syntaxes/toml.tmLanguage.json"
+      },
+      {
+        "language": "dotenv",
+        "scopeName": "source.dotenv",
+        "path": "./syntaxes/dotenv.tmLanguage.json"
+      },
+      {
+        "language": "ignore",
+        "scopeName": "source.ignore",
+        "path": "./syntaxes/ignore.tmLanguage.json"
+      },
+      {
+        "language": "makefile",
+        "scopeName": "source.makefile",
+        "path": "./syntaxes/make.tmLanguage.json",
+        "tokenTypes": {
+          "string.interpolated": "other"
+        }
+      },
+      {
+        "language": "diff",
+        "scopeName": "source.diff",
+        "path": "./syntaxes/diff.tmLanguage.json"
       }
     ]
   },

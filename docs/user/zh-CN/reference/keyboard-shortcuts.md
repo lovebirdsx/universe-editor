@@ -64,6 +64,7 @@
 | 最近使用的编辑器（MRU） | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
 | 向右拆分编辑器 | `Ctrl+\` |
 | 切换自动换行 | `Alt+Z` |
+| 更改语言模式（当前文件的语法高亮语言） | `Ctrl+K M` |
 | 后退 / 前进（导航历史） | `Alt+←` / `Alt+→` |
 
 > 更多见 [编辑与文件 · 标签页与分屏](../editing/tabs-and-split.md) 与 [搜索与导航 · 导航历史](../search-navigation/history.md)。

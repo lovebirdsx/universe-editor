@@ -10,6 +10,7 @@
 
 type ContentChangedEvent = { changes: ReadonlyArray<unknown> }
 type Listener = (e: ContentChangedEvent) => void
+type LanguageListener = (e: { oldLanguage: string; newLanguage: string }) => void
 
 function normalizeModelText(initial: string): string {
   const crlf = initial.match(/\r\n/g)?.length ?? 0
@@ -53,6 +54,7 @@ function makeModel(initial: string, language: string, uri: unknown) {
   let versionId = 1
   let disposed = false
   const listeners = new Set<Listener>()
+  const languageListeners = new Set<LanguageListener>()
   const decorations = new Map<string, StoredDecoration>()
   let decoSeq = 0
   const lines = () => value.split(/\r\n|\r|\n/)
@@ -234,9 +236,21 @@ function makeModel(initial: string, language: string, uri: unknown) {
       listeners.add(cb)
       return { dispose: () => listeners.delete(cb) }
     },
+    onDidChangeLanguage: (cb: LanguageListener) => {
+      languageListeners.add(cb)
+      return { dispose: () => languageListeners.delete(cb) }
+    },
+    // Not part of the monaco API — driven by editor.setModelLanguage below.
+    _setLanguage: (next: string) => {
+      if (next === language) return
+      const oldLanguage = language
+      language = next
+      for (const l of languageListeners) l({ oldLanguage, newLanguage: next })
+    },
     dispose: () => {
       disposed = true
       listeners.clear()
+      languageListeners.clear()
       decorations.clear()
     },
   }
@@ -404,6 +418,8 @@ function makePromptEditor(
 
 export const editor = {
   createModel: (text: string, language: string, uri: unknown) => makeModel(text, language, uri),
+  setModelLanguage: (model: ReturnType<typeof makeModel>, languageId: string) =>
+    model._setLanguage(languageId),
   create: (container: HTMLElement, options?: { model?: ReturnType<typeof makeModel> }) =>
     makePromptEditor(container, options ?? {}),
   getModel: () => null,
@@ -434,6 +450,7 @@ export const languages = {
   register: () => {},
   setMonarchTokensProvider: () => ({ dispose: () => {} }),
   registerTokensProviderFactory: () => ({ dispose: () => {} }),
+  getLanguages: () => [] as { id: string; aliases?: string[] }[],
 }
 
 // monaco 0.55 moved these language-service namespaces from `monaco.languages.*`

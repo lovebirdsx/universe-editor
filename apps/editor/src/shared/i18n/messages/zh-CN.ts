@@ -132,7 +132,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'layoutControls.configureLayout': '配置布局',
   'status.cursorPosition': '光标位置',
   'status.editorEncoding': '编辑器编码',
-  'status.editorLanguage': '编辑器语言',
+  'status.selectLanguageMode': '选择语言模式',
   'status.notifications': '通知',
   'status.cursorPositionText': '行 {line}，列 {column}',
   'status.unreadNotifications': '{count} 条未读通知',
@@ -221,6 +221,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.ai.pickModel': '选择 AI 模型',
   'action.ai.sessionTitle.pickModel': '选择会话标题模型',
   'action.ai.setApiKey': '设置 AI 提供方 API 密钥',
+  'action.changeLanguageMode': '更改语言模式',
   'action.clearHistory.title': '清除导航历史',
   'action.clearOutput.title': '清空输出',
   'action.clearRecentFiles.title': '清除最近打开的文件',
@@ -1995,6 +1996,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'editor.externallyModified.detail': '是否放弃当前更改并从磁盘重新加载？',
   'editor.externallyModified.reload': '重新加载',
   'editor.externallyModified.keepChanges': '保留当前更改',
+  'languageMode.autoDetect': '自动检测',
+  'languageMode.configured': '配置的语言',
+  'languageMode.placeholder': '选择语言模式',
   'doc.notFound': '# 文档不存在\n\n文档 "{docId}" 不存在。',
 
   // --- Notifications center ---

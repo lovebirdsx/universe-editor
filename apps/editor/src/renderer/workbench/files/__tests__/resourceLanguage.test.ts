@@ -63,6 +63,44 @@ describe('languageForResource', () => {
     expect(lang('/proj/poetry.lock')).toBe('toml')
   })
 
+  it('maps dotenv files to the dotenv language', () => {
+    expect(lang('/proj/.env')).toBe('dotenv')
+    expect(lang('/proj/.env.local')).toBe('dotenv')
+    expect(lang('/proj/.env.production')).toBe('dotenv')
+    expect(lang('/proj/dev.env')).toBe('dotenv')
+    expect(lang('/proj/.flaskenv')).toBe('dotenv')
+  })
+
+  it('maps ignore files to the ignore language', () => {
+    expect(lang('/proj/.gitignore')).toBe('ignore')
+    expect(lang('/proj/.dockerignore')).toBe('ignore')
+  })
+
+  it('maps makefiles to the makefile language', () => {
+    expect(lang('/proj/Makefile')).toBe('makefile')
+    expect(lang('/proj/gnumakefile')).toBe('makefile')
+    expect(lang('/proj/build.mk')).toBe('makefile')
+  })
+
+  it('maps diff and patch files to the diff language', () => {
+    expect(lang('/proj/changes.diff')).toBe('diff')
+    expect(lang('/proj/fix.patch')).toBe('diff')
+  })
+
+  it('maps shell rc files to the shell language', () => {
+    expect(lang('/proj/.bashrc')).toBe('shell')
+    expect(lang('/proj/.zshrc')).toBe('shell')
+  })
+
+  it('maps ini-style dotfiles to the ini language', () => {
+    expect(lang('/proj/.npmrc')).toBe('ini')
+    expect(lang('/proj/.gitmodules')).toBe('ini')
+  })
+
+  it('does not let the dotenv pattern swallow similar names', () => {
+    expect(lang('/proj/.environment')).toBe('plaintext')
+  })
+
   it('falls back to plaintext for unknown or extension-less files', () => {
     expect(lang('/proj/notes.unknownext')).toBe('plaintext')
     expect(lang('/proj/LICENSE')).toBe('plaintext')

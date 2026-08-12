@@ -140,8 +140,45 @@ describe('FileEditorStatusContribution', () => {
     const { statusBar, active, inst } = setup()
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.md'))
     active.set(input, undefined)
-    const lang = statusBar.entries.get().find((e) => e.entry.tooltip === 'Editor Language')
+    const lang = statusBar.entries.get().find((e) => e.entry.tooltip === 'Select Language Mode')
       ?.entry.text
     expect(lang).toBe('Markdown')
+  })
+
+  it('language entry opens the Change Language Mode picker on click', () => {
+    const { statusBar, active, inst } = setup()
+    const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.md'))
+    active.set(input, undefined)
+    const lang = statusBar.entries.get().find((e) => e.entry.tooltip === 'Select Language Mode')
+    expect(lang?.entry.command).toBe('workbench.action.editor.changeLanguageMode')
+  })
+
+  it('language entry updates when the model language changes', () => {
+    const { statusBar, active, inst } = setup()
+    const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.md'))
+    active.set(input, undefined)
+    const langText = () =>
+      statusBar.entries.get().find((e) => e.entry.tooltip === 'Select Language Mode')?.entry.text
+    expect(langText()).toBe('Markdown')
+    // Simulate the model-side language switch: FileEditorInput fires after its
+    // onDidChangeLanguage binding syncs `_language` (covered in the
+    // FileEditorInput tests); here we drive the emitter directly.
+    ;(input as unknown as { _onDidChangeLanguage: Emitter<string> })._onDidChangeLanguage.fire(
+      'python',
+    )
+    expect(langText()).toBe('Python')
+  })
+
+  it('language entry stops following a previous input after switching editors', () => {
+    const { statusBar, active, inst } = setup()
+    const first = inst.createInstance(FileEditorInput, URI.file('/ws/a.md'))
+    const second = inst.createInstance(FileEditorInput, URI.file('/ws/b.json'))
+    active.set(first, undefined)
+    active.set(second, undefined)
+    ;(first as unknown as { _onDidChangeLanguage: Emitter<string> })._onDidChangeLanguage.fire(
+      'python',
+    )
+    const lang = statusBar.entries.get().find((e) => e.entry.tooltip === 'Select Language Mode')
+    expect(lang?.entry.text).toBe('JSON')
   })
 })

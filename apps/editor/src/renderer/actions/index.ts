@@ -184,6 +184,7 @@ import {
   QuickTextSearchAction,
 } from './searchActions.js'
 import { FindWordAtCursorNextAction, FindWordAtCursorPreviousAction } from './findWordActions.js'
+import { ChangeLanguageModeAction } from './languageModeActions.js'
 import { CloseQuickInputAction } from './quickInputActions.js'
 import { FocusNextPartAction, FocusPreviousPartAction } from './focusActions.js'
 import { ClearHistoryAction, GoBackAction, GoForwardAction } from './historyActions.js'
@@ -411,6 +412,7 @@ registerAction2(FocusOutlineAction)
 // Editor — view
 registerAction2(ToggleMinimapAction)
 registerAction2(ToggleWordWrapAction)
+registerAction2(ChangeLanguageModeAction)
 
 // Editor — close
 registerAction2(CloseActiveEditorAction)

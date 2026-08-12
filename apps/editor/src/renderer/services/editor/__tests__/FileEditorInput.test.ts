@@ -3,7 +3,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { editor as monacoEditor } from 'monaco-editor'
 import {
+  Emitter,
   IFileService,
   InstantiationService,
   ServiceCollection,
@@ -220,6 +222,97 @@ describe('FileEditorInput', () => {
     expect(ok).toBe(true)
     expect(fs.writes).toEqual([])
     input.dispose()
+  })
+
+  describe('language binding', () => {
+    // The monaco test stub model has no language events; `_bindModelLanguage`
+    // is exercised against a minimal fake that mimics the two members used.
+    interface FakeModel {
+      language: string
+      emitter: import('@universe-editor/platform').Emitter<{ newLanguage: string }>
+      getLanguageId(): string
+      onDidChangeLanguage(
+        cb: (e: { newLanguage: string }) => void,
+      ): import('@universe-editor/platform').IDisposable
+    }
+    const makeFakeModel = (language: string): FakeModel => {
+      const emitter = new Emitter<{ newLanguage: string }>()
+      return {
+        language,
+        emitter,
+        getLanguageId() {
+          return this.language
+        },
+        onDidChangeLanguage: (cb) => emitter.event(cb),
+      }
+    }
+    const bind = (input: FileEditorInput, model: FakeModel) =>
+      (
+        input as unknown as {
+          _bindModelLanguage(m: unknown): void
+        }
+      )._bindModelLanguage(model)
+
+    it('syncs the current language immediately on bind', () => {
+      const input = inst.createInstance(FileEditorInput, uri)
+      bind(input, makeFakeModel('python'))
+      expect(input.language).toBe('python')
+      input.dispose()
+    })
+
+    it('fires onDidChangeLanguage and updates language when the model switches', () => {
+      const input = inst.createInstance(FileEditorInput, uri)
+      const model = makeFakeModel('json')
+      bind(input, model)
+      const seen: string[] = []
+      input.onDidChangeLanguage((l) => seen.push(l))
+      model.language = 'markdown'
+      model.emitter.fire({ newLanguage: 'markdown' })
+      expect(input.language).toBe('markdown')
+      expect(seen).toEqual(['markdown'])
+      input.dispose()
+    })
+
+    it('re-binding the same model does not double-subscribe', () => {
+      const input = inst.createInstance(FileEditorInput, uri)
+      const model = makeFakeModel('json')
+      bind(input, model)
+      bind(input, model)
+      const seen: string[] = []
+      input.onDidChangeLanguage((l) => seen.push(l))
+      model.language = 'yaml'
+      model.emitter.fire({ newLanguage: 'yaml' })
+      expect(seen).toEqual(['yaml'])
+      input.dispose()
+    })
+
+    it('re-binding a different model resyncs and drops the old subscription', () => {
+      const input = inst.createInstance(FileEditorInput, uri)
+      const first = makeFakeModel('json')
+      const second = makeFakeModel('ini')
+      bind(input, first)
+      bind(input, second)
+      expect(input.language).toBe('ini')
+      const seen: string[] = []
+      input.onDidChangeLanguage((l) => seen.push(l))
+      first.language = 'yaml'
+      first.emitter.fire({ newLanguage: 'yaml' })
+      expect(input.language).toBe('ini')
+      expect(seen).toEqual([])
+      input.dispose()
+    })
+
+    it('resolveModel binds the acquired model', async () => {
+      const input = inst.createInstance(FileEditorInput, uri)
+      const model = await input.resolveModel()
+      expect(input.language).toBe('json')
+      const seen: string[] = []
+      input.onDidChangeLanguage((l) => seen.push(l))
+      monacoEditor.setModelLanguage(model, 'python')
+      expect(input.language).toBe('python')
+      expect(seen).toEqual(['python'])
+      input.dispose()
+    })
   })
 
   // unused import guard — vi is used by test framework hooks elsewhere

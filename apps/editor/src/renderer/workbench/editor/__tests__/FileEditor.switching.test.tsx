@@ -28,6 +28,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
         for (const listener of listeners) listener({ changes: [] })
       },
       getLanguageId: () => language,
+      onDidChangeLanguage: () => disposable(),
       onDidChangeContent: (listener: Listener) => {
         listeners.add(listener)
         return disposable(() => listeners.delete(listener))
