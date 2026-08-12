@@ -38,6 +38,7 @@ import type {
   WaitForTerminalExitResponse,
 } from '@agentclientprotocol/sdk'
 import { buildChildEnv } from '../process/env.js'
+import { spawnViaCmd } from '../process/cmdSpawn.js'
 import { ManagedChildProcess } from '../process/managedChildProcess.js'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
 import type {
@@ -54,16 +55,23 @@ export type AcpTerminalSpawner = (
   },
 ) => ChildProcessWithoutNullStreams
 
-const defaultSpawner: AcpTerminalSpawner = (command, args, options) =>
-  spawn(command, [...args], {
+const defaultSpawner: AcpTerminalSpawner = (command, args, options) => {
+  // `.cmd` shims (npx, pnpm, yarn) need a cmd.exe wrapper on Windows so
+  // PATHEXT resolution picks them up — same reasoning as AcpHostMainService.
+  // Explicit wrapper, not `shell: true` (whose unescaped args trip DEP0190).
+  if (process.platform === 'win32') {
+    return spawnViaCmd(command, args, {
+      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+      env: options.env,
+    })
+  }
+  return spawn(command, [...args], {
     cwd: options.cwd,
     env: options.env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
-    // `.cmd` shims (npx, pnpm, yarn) need the shell on Windows so PATHEXT
-    // resolution picks them up — same reasoning as AcpHostMainService.
-    shell: process.platform === 'win32',
   })
+}
 
 function envArrayToRecord(env: readonly EnvVariable[] | undefined): Record<string, string> {
   if (!env) return {}

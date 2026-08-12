@@ -49,6 +49,14 @@ function formatArgs(args: unknown[]): string {
 export interface ConsoleInterceptorOptions {
   /** Destination logger. Required. */
   readonly logger: ILogger
+  /**
+   * Optional hook to reclassify the log level of a formatted console entry
+   * before it reaches the logger (e.g. demote Node's own `(node:pid) [DEPxxxx]`
+   * process warnings, which arrive via console.error in the Electron main
+   * process, so they don't trip error-level consumers like log auto-reveal).
+   * The original console output (stdout/DevTools) is never affected.
+   */
+  readonly reclassify?: (text: string, level: LogLevel) => LogLevel
 }
 
 /**
@@ -81,7 +89,8 @@ export function installConsoleInterceptor(options: ConsoleInterceptorOptions): I
       reentrant = true
       try {
         const text = formatArgs(args)
-        switch (level) {
+        const effective = options.reclassify?.(text, level) ?? level
+        switch (effective) {
           case LogLevel.Trace:
             logger.trace(text)
             break

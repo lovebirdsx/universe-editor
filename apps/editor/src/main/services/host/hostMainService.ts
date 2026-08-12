@@ -5,6 +5,7 @@
 
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { spawnViaCmd } from '../process/cmdSpawn.js'
 import {
   app,
   clipboard,
@@ -261,14 +262,13 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   }
 
   openInVSCode(fsPath: string): Promise<string> {
-    // `code` is a shell launcher (code.cmd on Windows), so go through the shell
-    // to resolve it from PATH. Detach so VS Code outlives the spawning child.
+    // `code` is a shell launcher (code.cmd on Windows), so wrap it in cmd.exe to
+    // resolve it from PATH (not `shell: true` — its unescaped args trip DEP0190).
+    // Detach so VS Code outlives the spawning child.
     return new Promise<string>((resolve) => {
-      const child = spawn('code', [fsPath], {
-        shell: true,
+      const child = spawnViaCmd('code', [fsPath], {
         detached: true,
         stdio: 'ignore',
-        windowsHide: true,
       })
       child.on('error', (err) => {
         this._logger.error(`openInVSCode failed ${fsPath}`, err)

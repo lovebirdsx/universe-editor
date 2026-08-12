@@ -15,6 +15,7 @@ import {
   IFileService,
   isEqualOrParentResource,
   localize,
+  LogLevel,
   mark,
   normalizePlatform,
   URI,
@@ -272,7 +273,18 @@ installMainErrorHandlers(mainLogger, (event, error) => errorSink.recordLocal(eve
 // third-party library noise reach the Console channel (and therefore the
 // Output panel) without requiring stdout/DevTools to be open.
 const consoleLogger = logMainService.createLogger({ id: 'console', name: 'Console' })
-const consoleInterceptor = installConsoleInterceptor({ logger: consoleLogger })
+// Node's own process warnings arrive on console.error in the Electron main
+// process. Deprecation warnings (e.g. DEP0180 `fs.Stats`, triggered once per
+// packaged launch by Electron's asar wrapper — electron/electron#47390) are
+// diagnostic noise we cannot act on, not application errors. Demote them so
+// they don't trip error-level consumers (ErrorLogAutoRevealContribution would
+// pop the Output panel on launch).
+const NODE_DEPRECATION_RE = /^\(node:\d+\) \[DEP\d+\] DeprecationWarning:/
+const consoleInterceptor = installConsoleInterceptor({
+  logger: consoleLogger,
+  reclassify: (text, level) =>
+    level === LogLevel.Error && NODE_DEPRECATION_RE.test(text) ? LogLevel.Warning : level,
+})
 
 installChildProcessGoneLogging(mainLogger, (event, error) => errorSink.recordLocal(event, error))
 const processMetricsLogging = installProcessMetricsLogging(logMainService)

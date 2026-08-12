@@ -111,6 +111,32 @@ describe('installConsoleInterceptor', () => {
     expect(fakeLog).toHaveBeenCalledWith('visible-in-devtools')
   })
 
+  it('applies reclassify to the logger level while leaving console output untouched', () => {
+    const logger = new RecordingLogger()
+    vi.spyOn(getOriginalConsole(), 'error').mockImplementation(() => {})
+    const disposable = installConsoleInterceptor({
+      logger,
+      reclassify: (text, level) =>
+        level === LogLevel.Error && /^\(node:\d+\) \[DEP\d+\]/.test(text)
+          ? LogLevel.Warning
+          : level,
+    })
+    try {
+      console.error('(node:1234) [DEP0180] DeprecationWarning: fs.Stats constructor is deprecated.')
+      console.error('genuine app error')
+    } finally {
+      disposable.dispose()
+      vi.restoreAllMocks()
+    }
+    expect(logger.entries).toEqual([
+      {
+        level: LogLevel.Warning,
+        message: '(node:1234) [DEP0180] DeprecationWarning: fs.Stats constructor is deprecated.',
+      },
+      { level: LogLevel.Error, message: 'genuine app error' },
+    ])
+  })
+
   it('dispose restores the previous console methods', () => {
     const logger = new RecordingLogger()
     const originalLog = console.log

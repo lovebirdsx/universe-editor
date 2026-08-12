@@ -20,6 +20,7 @@ import {
   ILoggerService,
 } from '@universe-editor/platform'
 import { buildChildEnv } from '../process/env.js'
+import { spawnViaCmd } from '../process/cmdSpawn.js'
 import { decodeDiagnostic } from '../process/decode.js'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
 import { resolveFromRepo } from '../../repoPaths.js'
@@ -47,7 +48,7 @@ export type AcpSpawner = (
     cwd?: string
     env?: NodeJS.ProcessEnv
     /**
-     * Route the call through the platform shell. Defaults to win32 (so `.cmd`
+     * Route the call through a cmd.exe wrapper. Defaults to win32 (so `.cmd`
      * shims like `npx` resolve). The `runAsNode` launch sets this `false`:
      * `process.execPath` is a real binary and its path may contain spaces, so a
      * shell wrapper would mis-quote it.
@@ -69,18 +70,26 @@ export type NodeEntryResolver = (entry: 'claude' | 'codex') => string
  */
 export type AcpCommandLookup = (command: string) => Promise<boolean>
 
-const defaultSpawner: AcpSpawner = (command, args, options) =>
-  spawn(command, [...args], {
+const defaultSpawner: AcpSpawner = (command, args, options) => {
+  // On Windows, common agent entry points (`npx`, `pnpm`, `yarn`) ship as
+  // `.cmd` shims that `spawn` cannot exec directly without a shell. Route the
+  // call through an explicit cmd.exe wrapper so PATHEXT resolution kicks in —
+  // not `shell: true`, whose unescaped args concatenation trips DEP0190 and is
+  // an injection hazard. Callers may force it off (e.g. `runAsNode`, which
+  // spawns a real binary).
+  if (options.shell ?? process.platform === 'win32') {
+    return spawnViaCmd(command, args, {
+      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+      env: options.env,
+    })
+  }
+  return spawn(command, [...args], {
     cwd: options.cwd,
     env: options.env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
-    // On Windows, common agent entry points (`npx`, `pnpm`, `yarn`) ship as
-    // `.cmd` shims that `spawn` cannot exec directly without a shell. Setting
-    // `shell` routes the call through cmd.exe so PATHEXT resolution kicks in.
-    // Callers may force it off (e.g. `runAsNode`, which spawns a real binary).
-    shell: options.shell ?? process.platform === 'win32',
   })
+}
 
 /**
  * Bundled agent entries, repo-relative in the dev tree (located by walking up
@@ -184,7 +193,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
     try {
       // Tree-kill is required whenever the spawned child is not the process that
       // actually owns the agent's stdio pipes:
-      //   • shell-wrapped spawn (Windows default, for `.cmd` shims): `kill()`
+      //   • cmd-wrapped spawn (Windows default, for `.cmd` shims): `kill()`
       //     reaps only the `cmd.exe` wrapper and orphans the real grandchild.
       //   • runAsNode: the bundled agent re-spawns itself via `process.execPath`
       //     (see the ELECTRON_RUN_AS_NODE note above), so killing our direct
@@ -225,7 +234,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
         this._onStdout.fire({ handle, data: entry.stdoutDecoder.write(data) })
       }),
     )
-    // stderr is decoded per-chunk with the OEM fallback (Windows cmd.exe shim).
+    // stderr is decoded per-chunk with the OEM fallback (Windows cmd.exe wrapper).
     store.add(
       proc.onStderr((data: Buffer) => {
         this._onStderr.fire({ handle, data: decodeDiagnostic(data) })

@@ -40,11 +40,12 @@ function childProcessError(message: string, code: string): ChildProcessError {
 }
 
 /**
- * Tear down a whole process tree by PID. On Windows a `shell: true` spawn wraps
- * the real command in `cmd.exe`; `child.kill()` (TerminateProcess) then only
- * reaps the wrapper, leaving the grandchild (node/npx agent, shell command)
- * orphaned with a dangling stdin pipe. `taskkill /T` recurses the parent-PID
- * tree so the real process dies too. Injectable so unit tests don't shell out.
+ * Tear down a whole process tree by PID. On Windows a cmd-wrapped spawn
+ * (see `cmdSpawn.ts`) wraps the real command in `cmd.exe`; `child.kill()`
+ * (TerminateProcess) then only reaps the wrapper, leaving the grandchild
+ * (node/npx agent, shell command) orphaned with a dangling stdin pipe.
+ * `taskkill /T` recurses the parent-PID tree so the real process dies too.
+ * Injectable so unit tests don't shell out.
  *
  * The `sync` flag selects a blocking `execFileSync`. It matters on the app-quit
  * path (`dispose()`): Electron's `will-quit` is synchronous and does not await
@@ -87,10 +88,11 @@ export interface ManagedChildOptions {
   /** Identifier used in log lines (e.g. a handle / session id). */
   readonly label?: string
   /**
-   * When the child was spawned with `shell: true` on Windows, `kill()` only
-   * reaps the `cmd.exe` wrapper and orphans the real grandchild process. Set
-   * this so termination recurses the PID tree (`taskkill /T`) instead. No-op
-   * off Windows, where a parent SIGKILL already reaps the group.
+   * When the child was spawned through a cmd.exe wrapper (see `cmdSpawn.ts`) on
+   * Windows, `kill()` only reaps the `cmd.exe` wrapper and orphans the real
+   * grandchild process. Set this so termination recurses the PID tree
+   * (`taskkill /T`) instead. No-op off Windows, where a parent SIGKILL already
+   * reaps the group.
    */
   readonly treeKill?: boolean
   /** Injectable tree-killer for tests. Defaults to `taskkill /T /F`. */
