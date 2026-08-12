@@ -29,6 +29,8 @@ test.describe('@p0 activitybar', () => {
     // Explorer is auto-selected by default; click switches to Search.
     await activityBar.click(SEARCH)
     await expect(sideBar.root).toHaveAttribute('data-active-view-container', SEARCH)
+    // Clicking the icon also focuses the view's primary input, like ctrl+shift+f.
+    await expect(sideBar.root.getByRole('textbox', { name: 'Search' })).toBeFocused()
 
     await activityBar.click(EXPLORER)
     await expect(sideBar.root).toHaveAttribute('data-active-view-container', EXPLORER)

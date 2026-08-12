@@ -108,13 +108,21 @@ export function ActivityBar({ part }: { part?: IPart | undefined } = {}) {
         viewsService.closeViewContainer(id)
         layoutService.setVisible(PartId.SideBar, false)
       } else {
-        viewsService.openViewContainer(id)
-        if (!sidebarVisible) {
-          layoutService.setVisible(PartId.SideBar, true)
+        // Mirror FindInFilesAction / container cycling: activating a container
+        // also focuses its primary view (focusView opens the container, makes
+        // the part visible, and focuses the view's registered focusable).
+        const firstViewId = viewDescriptors.getViewsByContainer(id)[0]?.id
+        if (firstViewId) {
+          void layoutService.focusView(firstViewId, { source: 'user' })
+        } else {
+          viewsService.openViewContainer(id)
+          if (!sidebarVisible) {
+            layoutService.setVisible(PartId.SideBar, true)
+          }
         }
       }
     },
-    [viewsService, layoutService, activeId],
+    [viewsService, layoutService, activeId, viewDescriptors],
   )
 
   const dropPayload = (e: DragEvent): { kind: 'view' | 'container'; id: string } | undefined => {
