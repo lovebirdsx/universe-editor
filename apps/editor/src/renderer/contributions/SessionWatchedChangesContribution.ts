@@ -231,8 +231,8 @@ export class SessionWatchedChangesContribution
       const stat = await this._files.stat(entry.uri)
       if (!stat.isFile) return
     } catch {
-      // Truly gone — still recorded: with a git baseline the row shows as
-      // deleted; without one a created-then-deleted file nets out to nothing.
+      // Truly gone — still recorded: the tracker's self-heal rules net it out
+      // (created-then-deleted, or a watched no-baseline entry whose file vanished).
     }
 
     // A single baseline lookup serves every session that saw the change.

@@ -203,6 +203,20 @@ describe('SessionChangeTrackerService — added (Write create)', () => {
     await flush()
     expect(obs.get()).toHaveLength(0)
   })
+
+  it('does not upgrade an agent-reported create baseline', async () => {
+    // The agent's own Write-create pins null with source 'reported' — a later
+    // report for the same file must not replace it with a string baseline.
+    files.set('/work/c.ts', 'new content')
+    const obs = svc.changesFor(SID)
+    svc.record(SID, '/work/c.ts', 'tc-1', [createHunk(['x'])], { created: true, baseline: null })
+    svc.record(SID, '/work/c.ts', 'tc-2', [createHunk(['y'])], { baseline: '新建后内容' })
+    await flush()
+    const list = obs.get()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.status).toBe('added')
+    expect(list[0]?.baseline).toBe('')
+  })
 })
 
 describe('SessionChangeTrackerService — modified', () => {
@@ -706,6 +720,35 @@ describe('SessionChangeTrackerService — watched changes (fs-watch fallback)', 
     // The watched entry's earlier git baseline stays pinned (first-touch-wins).
     expect(list[0]?.baseline).toBe('head')
     expect(list[0]?.baselineSource).toBe('git')
+  })
+
+  it('drops a watched no-baseline record when the file is gone', async () => {
+    // Atomic-write tmp files (create→delete inside one tool call) only ever
+    // reach the fs-watcher — no baseline obtainable and nothing on disk.
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/tmp.ts')
+    files.remove('/work/tmp.ts')
+    await flush()
+    expect(obs.get()).toHaveLength(0)
+  })
+
+  it('upgrades a watched null baseline when the agent later reports one', async () => {
+    files.set('/work/w.ts', 'current on disk')
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/w.ts', { baseline: null })
+    svc.record(
+      SID,
+      '/work/w.ts',
+      'tc-1',
+      [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-a', '+b'] }],
+      { baseline: '真实旧全文' },
+    )
+    await flush()
+    const list = obs.get()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.status).toBe('modified')
+    expect(list[0]?.baseline).toBe('真实旧全文')
+    expect(list[0]?.baselineSource).toBe('reported')
   })
 })
 

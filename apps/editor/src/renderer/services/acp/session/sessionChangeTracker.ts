@@ -463,6 +463,24 @@ export class SessionChangeTrackerService
         rec.baselineSource = 'reported'
         bytes += baselineBytes
       }
+    } else if (
+      rec.baseline === null &&
+      rec.baselineSource !== 'reported' &&
+      typeof opts?.baseline === 'string'
+    ) {
+      // A watched entry pins null when no HEAD was available; the agent's later
+      // real baseline must win. The agent's own Write-create null (source
+      // 'reported') is never upgraded. The old null baseline accounts 0 bytes.
+      const baselineBytes = jsonSize(opts.baseline)
+      if (baselineBytes > this.maxBaselineBytes) {
+        this._logger.warn(
+          `not upgrading to a ${(baselineBytes / 1024 / 1024).toFixed(1)}MB baseline for ${key} — exceeds the per-file cap`,
+        )
+      } else {
+        rec.baseline = opts.baseline
+        rec.baselineSource = 'reported'
+        bytes += baselineBytes
+      }
     }
     const batches = rec.batches
     const idx = batches.findIndex((b) => b.toolCallId === toolCallId)
@@ -761,6 +779,9 @@ export class SessionChangeTrackerService
 
     // Created then deleted → net-zero for the session; drop the row.
     if (!existed && created) return undefined
+    // Watched entry with no obtainable baseline and the file already gone —
+    // an atomic-write tmp or create-then-delete; net-zero, drop the row.
+    if (!existed && source === 'none') return undefined
     // Changed back to the baseline (or rewound) → self-heals out of the list.
     if (source !== 'none' && baseline === current && existed && !created) return undefined
 

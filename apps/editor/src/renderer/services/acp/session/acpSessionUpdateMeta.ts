@@ -166,10 +166,12 @@ export function readTerminalOutput(
  * originalFile}`, present only for `Edit`/`Write` tools. Returns undefined for
  * any other tool / shape.
  *
- * `isCreate` is derived from the authoritative SDK signals (`type: 'create'` or
- * `originalFile: null`); when set we keep the descriptor even with zero hunks,
- * because an empty-content Write reports an empty `structuredPatch` yet still
- * created a file the tracker must surface.
+ * `isCreate` is derived from the authoritative SDK signals (`type: 'create'`,
+ * or `originalFile: null` on a Write — an Edit result carries no `type`, and
+ * claude-code ≥2.1.226 reports `originalFile: null` on the 2nd+ Edit of a
+ * file, which is a missing-baseline signal, not a create); when set we keep
+ * the descriptor even with zero hunks, because an empty-content Write reports
+ * an empty `structuredPatch` yet still created a file the tracker must surface.
  */
 export interface FileChangeDescriptor {
   readonly path: string
@@ -188,7 +190,16 @@ export interface FileChangeDescriptor {
 export function readFileChanges(update: SessionUpdate): readonly FileChangeDescriptor[] {
   const structured = readStructuredPatch(update)
   if (structured) return [structured]
+  // claude's diff content is a pre-execution optimistic preview whose oldText
+  // is an old_string fragment (or null), never a whole-file baseline — the
+  // authoritative data arrives via PostToolUse's structuredPatch.
+  if (readClaudeCodeMeta(update)) return []
   return readDiffContentChanges(update)
+}
+
+function readClaudeCodeMeta(update: SessionUpdate): Record<string, unknown> | undefined {
+  const cc = (update as { _meta?: { claudeCode?: unknown } | null })._meta?.claudeCode
+  return cc != null && typeof cc === 'object' ? (cc as Record<string, unknown>) : undefined
 }
 
 function readStructuredPatch(update: SessionUpdate): FileChangeDescriptor | undefined {
@@ -213,7 +224,8 @@ function readStructuredPatch(update: SessionUpdate): FileChangeDescriptor | unde
   const path = resp?.filePath
   const patch = resp?.structuredPatch
   if (typeof path !== 'string' || path.length === 0 || !Array.isArray(patch)) return undefined
-  const isCreate = resp?.type === 'create' || resp?.originalFile === null
+  const isCreate =
+    resp?.type === 'create' || (cc?.toolName === 'Write' && resp?.originalFile === null)
   const original = resp?.originalFile
   const baseline = typeof original === 'string' ? original : isCreate ? null : undefined
   const hunks: DiffHunk[] = []

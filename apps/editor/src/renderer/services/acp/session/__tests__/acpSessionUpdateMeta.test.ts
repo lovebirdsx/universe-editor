@@ -72,6 +72,15 @@ function codexUpdate(content: unknown[]): SessionUpdate {
   } as unknown as SessionUpdate
 }
 
+function claudeOptimisticUpdate(toolName: string, content: unknown[]): SessionUpdate {
+  return {
+    sessionUpdate: 'tool_call',
+    toolCallId: 'tc-1',
+    _meta: { claudeCode: { toolName } },
+    content,
+  } as unknown as SessionUpdate
+}
+
 describe('readFileChanges — claude structuredPatch path', () => {
   it('passes originalFile through as the baseline for an Edit', () => {
     const changes = readFileChanges(
@@ -90,9 +99,20 @@ describe('readFileChanges — claude structuredPatch path', () => {
     expect(changes[0]?.hunks).toHaveLength(1)
   })
 
-  it('reports baseline null for a create (originalFile null)', () => {
+  it('treats Edit with originalFile null as a modify with no reported baseline', () => {
+    // claude-code ≥2.1.226 reports originalFile:null on the 2nd+ Edit of a file
+    // (the Edit result carries no `type`) — not a create signal.
     const changes = readFileChanges(
-      claudeUpdate({ filePath: '/work/new.ts', structuredPatch: [], originalFile: null }),
+      claudeUpdate({ filePath: '/work/a.ts', structuredPatch: [HUNK], originalFile: null }),
+    )
+    expect(changes).toHaveLength(1)
+    expect(changes[0]?.isCreate).toBe(false)
+    expect('baseline' in changes[0]!).toBe(false)
+  })
+
+  it('reports baseline null for a Write create (originalFile null)', () => {
+    const changes = readFileChanges(
+      claudeUpdate({ filePath: '/work/new.ts', structuredPatch: [], originalFile: null }, 'Write'),
     )
     expect(changes).toHaveLength(1)
     expect(changes[0]?.isCreate).toBe(true)
@@ -122,6 +142,26 @@ describe('readFileChanges — claude structuredPatch path', () => {
       claudeUpdate({ filePath: '/work/a.ts', structuredPatch: [HUNK] }, 'Bash'),
     )
     expect(changes).toHaveLength(0)
+  })
+})
+
+describe('readFileChanges — claude optimistic tool_call diff content', () => {
+  it('ignores the pre-execution Edit preview (oldText is an old_string fragment)', () => {
+    const changes = readFileChanges(
+      claudeOptimisticUpdate('Edit', [
+        { type: 'diff', path: '/work/a.ts', oldText: 'just the old_string fragment', newText: 'x' },
+      ]),
+    )
+    expect(changes).toEqual([])
+  })
+
+  it('ignores the pre-execution Write preview (oldText null)', () => {
+    const changes = readFileChanges(
+      claudeOptimisticUpdate('Write', [
+        { type: 'diff', path: '/work/new.ts', oldText: null, newText: 'body' },
+      ]),
+    )
+    expect(changes).toEqual([])
   })
 })
 
